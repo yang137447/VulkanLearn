@@ -36,6 +36,41 @@ TEST(ScriptTressfxComponent, AcceptsHairUnderMeshAncestor)
     EXPECT_NO_THROW(VL::ValidateScriptComponents(Components()));
 }
 
+TEST(ScriptTressfxComponent, RequiresExplicitRootBoneAfterDefaultsMoveToAsset)
+{
+    auto components = Components();
+    components[2].erase("rootBone");
+    EXPECT_THROW(VL::ValidateScriptComponents(components), std::invalid_argument);
+}
+
+TEST(ScriptTressfxComponent, PreservesSimulationOverrideCollisionAndMaterialOnExpansion)
+{
+    auto blueprint = Blueprint();
+    auto& hair = blueprint["components"][2];
+    hair["simulation"] = {{"mode", "off"}, {"overrides", {{"damping", 0.05f}}}};
+    hair["hairCollision"] = {{"capsules", nlohmann::json::array()}};
+    hair["materialOverride"] = "Maps/SC_x/Materials/MI_hair.json";
+    EXPECT_NO_THROW(VL::ValidateScriptComponents(blueprint.at("components")));
+    const auto object = VL::ScriptBlueprintMeshObject(blueprint, 2);
+    EXPECT_EQ(object.at("tressfx").at("simulation"), hair.at("simulation"));
+    EXPECT_EQ(object.at("tressfx").at("hairCollision"), hair.at("hairCollision"));
+    EXPECT_EQ(object.at("tressfx").at("skinning").at("source"), "__blueprint/Hero/body");
+    EXPECT_EQ(object.at("tressfx").at("skinning").at("weights"), "mesh");
+    EXPECT_EQ(object.at("materialOverride"), hair.at("materialOverride"));
+    const auto oldKey = VL::ScriptComponentMeshTemplateKey(blueprint, hair);
+    const auto oldStructure = VL::ScriptComponentMeshStructureEntry(blueprint, hair);
+    hair["simulation"]["mode"] = "on";
+    EXPECT_NE(oldKey, VL::ScriptComponentMeshTemplateKey(blueprint, hair));
+    EXPECT_NE(oldStructure, VL::ScriptComponentMeshStructureEntry(blueprint, hair));
+}
+
+TEST(ScriptTressfxComponent, RejectsForbiddenSimulationOverrideBeforeExpansion)
+{
+    auto components = Components();
+    components[2]["simulation"] = {{"mode", "inherit"}, {"overrides", {{"enabled", false}}}};
+    EXPECT_THROW(VL::ValidateScriptComponents(components), std::invalid_argument);
+}
+
 TEST(ScriptTressfxComponent, RejectsHairWithoutMeshAncestor)
 {
     auto components = Components();
@@ -46,7 +81,7 @@ TEST(ScriptTressfxComponent, RejectsHairWithoutMeshAncestor)
 TEST(ScriptTressfxComponent, RejectsUnknownFieldAndBadWeightsAndMissingModel)
 {
     auto unknown = Components();
-    unknown[2]["materialOverride"] = "Maps/SC_x/Materials/MI_hair.json";
+    unknown[2]["unexpected"] = "Maps/SC_x/Materials/MI_hair.json";
     EXPECT_THROW(VL::ValidateScriptComponents(unknown), std::invalid_argument);
 
     auto weights = Components();
@@ -98,7 +133,7 @@ TEST(ScriptTressfxComponent, TemplateKeyAndStructureCarryBindingSource)
     const auto meshEntry = VL::ScriptComponentMeshStructureEntry(blueprint, body);
     EXPECT_EQ(meshEntry.size(), 3u);
     const auto hairEntry = VL::ScriptComponentMeshStructureEntry(blueprint, hair);
-    ASSERT_EQ(hairEntry.size(), 4u);
+    ASSERT_EQ(hairEntry.size(), 8u);
     EXPECT_EQ(hairEntry[3].get<std::string>(), "__blueprint/Hero/body");
 }
 
@@ -114,6 +149,16 @@ TEST(ScriptTressfxComponent, SpawnCloneRebasesPerPlacementHairKeyAndPlacementBin
     hair.meshKey = "cache|0|hair|instance=__blueprint/~template.0/hair";
     hair.materialKey = "mat";
     hair.materialInstanceKey = "mi";
+    hair.placementBinding.tressfx = VL::Hair::ResolveTressfxBehavior(
+        TressfxSimulationConfig(),
+        VL::Hair::ReadTressfxPlacementBehavior({
+            {"simulation", {{"mode", "on"}, {"overrides",
+                {{"backend", "gpu"}, {"damping", 0.06f}}}}},
+            {"skinning", {{"source", "__blueprint/~template.0/body"},
+                {"rootBone", "Head_M"}, {"weights", "mesh"}}},
+            {"hairCollision", {{"capsules", nlohmann::json::array({
+                {{"a", {0, 0, 0}}, {"b", {0, 1, 0}}, {"radius", 0.5f}}})}}}
+        }, "spawn-template"));
     world.AddMeshObject(hair.debugName, hair);
 
     VL::WorldMeshObject body;
@@ -128,7 +173,7 @@ TEST(ScriptTressfxComponent, SpawnCloneRebasesPerPlacementHairKeyAndPlacementBin
             {{"id", "body"}, {"type", "mesh"},
                 {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
             {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
-                {"modelPath", "Maps/SC_x/Meshes/SM_hair.json"},
+                {"modelPath", "Maps/SC_x/Meshes/TF_hair.json"},
                 {"rootBone", "Head_M"}, {"weights", "auto"}}})}};
     world.CloneScriptBlueprintMeshes("~template.0", actor);
 
@@ -144,7 +189,23 @@ TEST(ScriptTressfxComponent, SpawnCloneRebasesPerPlacementHairKeyAndPlacementBin
     EXPECT_EQ(hairIt->second.placementBinding.sourceSceneObject,
         "__blueprint/~spawn.1/body");
     EXPECT_EQ(hairIt->second.placementBinding.rootBone, "Head_M");
-    EXPECT_EQ(hairIt->second.placementBinding.weights, "auto");
+    EXPECT_EQ(hairIt->second.placementBinding.weights, "mesh");
+    const auto& effective = hairIt->second.placementBinding.tressfx;
+    ASSERT_TRUE(effective.has_value());
+    EXPECT_TRUE(effective->enabled);
+    EXPECT_EQ(effective->backend, TressfxSimulationBackend::Gpu);
+    EXPECT_FLOAT_EQ(effective->damping, 0.06f);
+    ASSERT_TRUE(effective->skinning.has_value());
+    EXPECT_EQ(effective->skinning->source, "__blueprint/~spawn.1/body");
+    EXPECT_EQ(effective->skinning->rootBone, "Head_M");
+    EXPECT_TRUE(effective->skinning->rootWeightsAuthored);
+    EXPECT_EQ(effective->skinning->rootWeights, TressfxRootWeightSource::Mesh);
+    ASSERT_EQ(effective->capsules.size(), 1u);
+    EXPECT_FLOAT_EQ(effective->capsules[0].radius, 0.5f);
+    const auto& original = objects.at("__blueprint/~template.0/hair");
+    ASSERT_TRUE(original.placementBinding.tressfx->skinning.has_value());
+    EXPECT_EQ(original.placementBinding.tressfx->skinning->source,
+        "__blueprint/~template.0/body");
 
     const auto bodyIt = objects.find("__blueprint/~spawn.1/body");
     ASSERT_NE(bodyIt, objects.end());

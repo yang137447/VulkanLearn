@@ -243,6 +243,7 @@ def import_scene(reference, resource_root):
     write_json(target / "Meshes/TF_female_hair.json", {
         "name": "Female Outside saved guide curves", "type": "tressfx",
         "modelDataPath": f"{prefix}/Source/female_guides.tfx", "strandRadius": 0.012,
+        "simulationDefaults": {"enabled": False, "backend": "gpu"},
         "materialSlots": [{"name": "hair", "materialInstancePath": f"{prefix}/Materials/MI_female_hair.json"}],
     })
     write_json(target / "Materials/MI_female_hair.json", {
@@ -254,6 +255,7 @@ def import_scene(reference, resource_root):
                 "modelPath": f"{prefix}/Meshes/{'TF' if label == 'hair' else 'SM'}_female_{label}.json",
                 "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}
                for label in ("body", "eyes", "hair")]
+    objects[2]["tressfx"] = {"simulation": {"mode": "off"}}
     objects.extend([
         {"name": "PortraitCamera", "type": "camera", "position": [50, 165, 210],
          "look_at": [0, 151, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1],

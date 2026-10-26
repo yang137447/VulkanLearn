@@ -133,6 +133,13 @@ constexpr PassBinding SdfCollideBindings[] = {
     {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
     {PenetrationStatsBinding, vk::DescriptorType::eStorageBuffer},
 };
+constexpr PassBinding SkinningBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {RestPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {BoneWeightsBinding, vk::DescriptorType::eStorageBuffer},
+    {SkinningPaletteBinding, vk::DescriptorType::eStorageBuffer},
+};
 
 constexpr PassDefinition PassDefinitions[] = {
     {"hair/tressfxSimIntegration", IntegrationBindings,
@@ -257,7 +264,8 @@ SimulationOwnerMap CollectSimulationOwners(
             for (const VL::ResolvedDrawPacket& draw : instanceGroup.draws)
             {
                 const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
-                if (object && object->UsesGpuGuideSimulation())
+                if (object && (object->UsesGpuGuideSimulation() ||
+                    object->UsesGpuHairSkinning()))
                     owners[object.get()].Observe(renderScene.drawPackets[
                         draw.drawPacketIndex].sceneObjectIdentity);
             }
@@ -314,6 +322,7 @@ HairSimulationPass::~HairSimulationPass()
     ResetDescriptorCache();
     for (std::shared_ptr<ComputePipeline>& pipeline : pipelines)
         pipeline.reset();
+    skinningPipeline.reset();
     backend = nullptr;
 }
 
@@ -328,6 +337,7 @@ void HairSimulationPass::Initialize(PipelineFactory& factory,
         pipelines[pass] = factory.CreateComputePipelineCandidate(
             PassDefinitions[pass].shaderName, &artifact);
     }
+    skinningPipeline = factory.CreateComputePipelineCandidate("hair/tressfxSkinning");
     initialized = true;
 }
 
@@ -950,6 +960,144 @@ bool HairSimulationPass::MatchesObjectDescriptors(
     return matches;
 }
 
+HairSimulationPass::SkinningDescriptors&
+HairSimulationPass::EnsureSkinningDescriptors(
+    const std::shared_ptr<RenderableObject>& object)
+{
+    auto cached = skinningDescriptors.find(object.get());
+    if (cached != skinningDescriptors.end())
+    {
+        const SkinningDescriptors& state = cached->second;
+        bool matches = state.owner.lock() == object &&
+            state.currentPositions == object->GetTressfxPositionInfo().buffer &&
+            state.restPositions == object->GetTressfxRestPositionInfo().buffer &&
+            state.boneWeights == object->GetTressfxBoneWeightsInfo().buffer;
+        for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
+            matches = state.params[slot] == object->GetTressfxParamsInfo(slot).buffer &&
+                state.palette[slot] == object->GetTressfxSkinningPaletteInfo(slot).buffer;
+        if (matches)
+            return cached->second;
+        // World 包退休后对象地址可能复用，不能仅凭地址绑定上一代 descriptor。
+        skinningDescriptors.erase(cached);
+    }
+
+    SkinningDescriptors descriptors;
+    descriptors.owner = object;
+    descriptors.currentPositions = object->GetTressfxPositionInfo().buffer;
+    descriptors.restPositions = object->GetTressfxRestPositionInfo().buffer;
+    descriptors.boneWeights = object->GetTressfxBoneWeightsInfo().buffer;
+    const vk::DescriptorPool pool =
+        AcquireDescriptorPool(GuideSimulationPassCount, GuideSimulationParamBufferCount);
+    const std::vector<vk::DescriptorSetLayout> layouts(
+        GuideSimulationParamBufferCount,
+        skinningPipeline->GetDescriptorSetLayouts().at(0));
+    vk::DescriptorSetAllocateInfo allocate;
+    allocate.setDescriptorPool(pool).setSetLayouts(layouts);
+    std::vector<vk::DescriptorSet> sets(GuideSimulationParamBufferCount);
+    backend->AllocateDescriptorSets(allocate, sets);
+
+    // 与 solver 相同，WriteDescriptorSet 引用的 BufferInfo 必须存活到批量更新完成。
+    std::array<std::array<vk::DescriptorBufferInfo, SkinningPaletteBinding + 1>,
+        GuideSimulationParamBufferCount> infos{};
+    std::vector<vk::WriteDescriptorSet> writes;
+    writes.reserve(GuideSimulationParamBufferCount * std::size(SkinningBindings));
+    for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
+    {
+        descriptors.sets[slot] = sets[slot];
+        descriptors.params[slot] = object->GetTressfxParamsInfo(slot).buffer;
+        descriptors.palette[slot] = object->GetTressfxSkinningPaletteInfo(slot).buffer;
+        infos[slot][ParamsBinding] = object->GetTressfxParamsInfo(slot);
+        infos[slot][CurrentPositionsBinding] = object->GetTressfxPositionInfo();
+        infos[slot][RestPositionsBinding] = object->GetTressfxRestPositionInfo();
+        infos[slot][BoneWeightsBinding] = object->GetTressfxBoneWeightsInfo();
+        infos[slot][SkinningPaletteBinding] = object->GetTressfxSkinningPaletteInfo(slot);
+        for (const PassBinding& binding : SkinningBindings)
+        {
+            vk::WriteDescriptorSet write;
+            write.setDstSet(sets[slot]).setDstBinding(binding.binding)
+                .setDescriptorType(binding.type)
+                .setBufferInfo(infos[slot][binding.binding]);
+            writes.push_back(write);
+        }
+    }
+    backend->UpdateDescriptorSets(writes);
+    return skinningDescriptors.emplace(object.get(), std::move(descriptors)).first->second;
+}
+
+void HairSimulationPass::RecordSkinning(vk::CommandBuffer commandBuffer,
+    const VL::ResolvedRenderScene& scene,
+    const VL::RenderScene& renderScene,
+    uint32_t frameSlot)
+{
+    if (!skinningPipeline)
+        return;
+    for (auto cached = skinningDescriptors.begin(); cached != skinningDescriptors.end();)
+    {
+        if (cached->second.owner.expired())
+            cached = skinningDescriptors.erase(cached);
+        else
+            ++cached;
+    }
+    const SimulationOwnerMap owners = CollectSimulationOwners(scene, renderScene);
+    std::unordered_set<const RenderableObject*> seen;
+    bool anyDispatch = false;
+    for (const ResolvedMaterialGroup& materialGroup : scene.materialGroups)
+        for (const ResolvedMaterialInstanceGroup& instanceGroup : materialGroup.materialInstances)
+            for (const ResolvedDrawPacket& draw : instanceGroup.draws)
+            {
+                const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                if (!object || !object->UsesGpuHairSkinning() ||
+                    !seen.insert(object.get()).second)
+                    continue;
+                const TressfxSkinningBinding& skinning = object->GetTressfxSkinningBinding();
+                const VL::RenderDrawPacket* sourceDraw =
+                    FindSkinningSourceDraw(skinning, renderScene);
+                if (!skinning.enabled || !HasRootSkinPose(sourceDraw, skinning.jointIndex))
+                    continue;
+                SkinningDescriptors& state = EnsureSkinningDescriptors(object);
+                state.simulationOwner.Merge(owners.at(object.get()));
+                if (state.simulationOwner.HasConflict())
+                {
+                    if (!state.reportedOwnerConflict)
+                    {
+                        std::cerr << "[TressFX] skinning disabled for shared RenderableObject \""
+                                  << object->GetName()
+                                  << "\": multiple placements share mutable positions" << std::endl;
+                        state.reportedOwnerConflict = true;
+                    }
+                    continue;
+                }
+                const VL::RenderDrawPacket& hairDraw =
+                    renderScene.drawPackets[draw.drawPacketIndex];
+                UpdateTressfxFrameContext(state.frameContext, hairDraw.model,
+                    sourceDraw->model, *sourceDraw->skinPose,
+                    skinning.jointIndex, sourceDraw->simulationDeltaSeconds);
+                object->WriteTressfxSkinningPalette(state.frameContext.jointMatrices, frameSlot);
+                const GuideSimulationParams params = MakeGuideSkinningParams(
+                    object->GetTressfxGuideCount(), object->GetTressfxPointsPerGuide(),
+                    state.frameContext.skinningMatrix, !skinning.strandBones.empty());
+                object->WriteTressfxSimulationParams(params, frameSlot);
+                if (!anyDispatch)
+                    RecordPreDispatchBarrier(commandBuffer);
+                skinningPipeline->Bind(commandBuffer);
+                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                    skinningPipeline->GetPipelineLayout(), 0, state.sets[frameSlot], nullptr);
+                skinningPipeline->Dispatch(commandBuffer,
+                    (params.pointCount + GuideSimulationWorkgroupSize - 1) /
+                        GuideSimulationWorkgroupSize, 1, 1);
+                anyDispatch = true;
+                if (!state.reportedFirstDispatch)
+                {
+                    std::cout << "[TressFX] GPU skinning-only dispatch: object=\""
+                              << object->GetName() << "\" guides=" << params.guideCount
+                              << " points=" << params.pointCount << std::endl;
+                    state.reportedFirstDispatch = true;
+                }
+            }
+    if (anyDispatch)
+        RecordPostDispatchBarrier(commandBuffer);
+}
+
 void HairSimulationPass::RecordPass(vk::CommandBuffer commandBuffer,
     GuideSimulationPass pass,
     vk::DescriptorSet descriptorSet,
@@ -984,6 +1132,28 @@ bool HairSimulationPass::HasWork(const VL::ResolvedRenderScene& scene,
             for (const ResolvedDrawPacket& draw : instanceGroup.draws)
             {
                 const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                if (object && object->UsesGpuHairSkinning())
+                {
+                    const TressfxSkinningBinding& skinning =
+                        object->GetTressfxSkinningBinding();
+                    if (!skinning.enabled || !HasRootSkinPose(
+                        FindSkinningSourceDraw(skinning, renderScene),
+                        skinning.jointIndex))
+                        continue;
+                    const auto cached = skinningDescriptors.find(object.get());
+                    TressfxSimulationOwner owner = cached == skinningDescriptors.end()
+                        ? TressfxSimulationOwner{} : cached->second.simulationOwner;
+                    owner.Merge(owners.at(object.get()));
+                    if (owner.HasConflict())
+                    {
+                        if (cached == skinningDescriptors.end() ||
+                            !cached->second.reportedOwnerConflict)
+                            return true;
+                        continue;
+                    }
+                    // 蒙皮没有 dt 门槛；暂停或编辑预览的 0dt 姿态也要应用到整根发丝。
+                    return true;
+                }
                 if (!object || !object->UsesGpuGuideSimulation())
                     continue;
                 const auto cached = objectDescriptors.find(object.get());
@@ -1033,6 +1203,9 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     // frameSlot 直接索引 params UBO；调用方必须传 frame-in-flight 槽（0..1）。
     if (frameSlot >= GuideSimulationParamBufferCount)
         throw std::out_of_range("TressFX guide simulation frame slot is out of range");
+
+    // 与 solver 共用同一帧入口和图形读取 barrier，但不消费模拟时钟/历史/trace。
+    RecordSkinning(commandBuffer, scene, renderScene, frameSlot);
 
     // BeginFrame 已经等过本槽的 fence，上一批同槽拷贝必然完成；先写文件并清
     // pending，再录制本帧新的拷贝，避免覆盖尚未读回的数据。
@@ -1493,6 +1666,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
 void HairSimulationPass::ResetDescriptorCache() noexcept
 {
     objectDescriptors.clear();
+    skinningDescriptors.clear();
     if (backend)
     {
         for (std::vector<DescriptorPoolBudget>& pools : descriptorPools)

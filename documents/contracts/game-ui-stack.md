@@ -692,14 +692,11 @@ has its own Tressfx kind and Content Browser category. The preview world is `SC_
 injected at scale 1, and no level context is required. The viewport never writes the
 scene or the descriptor; rotation and reset are session state of the preview World.
 
-The viewport previews only descriptors without `simulation.skinning`. An asset that
-declares skinning is not previewed: the status area states that character-bound hair is
-authored by the Blueprint TressFX component, and the request is rejected before
-`LoadWorld`. `skinning` is never stripped for preview, because stripping would also
-invalidate `collision.capsules[].bone` and would show a preview of a different asset.
-The decision comes from the catalogue summary, is re-checked against the authored
-document snapshot, and is rejected again from the `MeshAssetLoader` input in the engine
-loop.
+TF assets contain geometry and `simulationDefaults`; character skinning and external
+collision proxies belong to placements. The standalone asset preview therefore uses the
+defaults without a character binding. The existing legacy skinning guard is retained:
+an old descriptor that still declares `simulation.skinning` cannot be previewed by
+silently stripping its binding.
 
 Input: left-drag rotates the preview object (yaw from horizontal movement, pitch clamped
 to ±89°); middle/right drag keeps camera orbit/pan and the wheel keeps zoom. Rotating the
@@ -712,11 +709,11 @@ The UI only submits value-semantic `UiAction` (`RotatePreviewModel`,
 `ResetHairSimulation` runtime commands and validates that `preview_model` is still in the
 active World.
 
-The asset page also owns the `Simulation` section (only for previewable tressfx, i.e.
-descriptors without `simulation.skinning`): nine authored simulation scalars with
-ranges/units from one shared table, initialised from the asset draft. Dragging a control is
-session preview only — it submits `SetHairSimulationParameter` for `preview_model` and
-never writes the asset or the scene. `Save to Hair Asset` runs the standard `tressfx.modify`
+The asset page owns the `Simulation` defaults section: nine authored simulation values
+with ranges/units from one shared table, initialised from `simulationDefaults` in the asset
+draft. Live preview and Reset require enabled GPU simulation. Dragging an available live
+control submits `SetHairSimulationParameter` for `preview_model`; it does not write the
+asset or scene. `Save to Hair Asset` runs the standard `tressfx.modify`
 (document revision) → Save Content → `tressfx.save`; the status text states that the hair asset
 is affected for **every placement** and that reloading applies the values and resets the
 simulation.
@@ -724,12 +721,13 @@ simulation.
 The TressFX tab reuses the existing hair preview, rotation/reset controls and simulation
 control table. Its authoritative document projection and revision come from the separate
 Tressfx document owner through `tressfxDocuments`; it does not open a Mesh draft.
-Legacy `SM_` descriptors with `type: "tressfx"` use the same Tressfx route during migration.
+The document service requires a `TF_` filename; the completed migration retains no `SM_` alias.
 
-The level editor has no hair simulation entry and no writable tressfx component fields:
-`Hair Asset`/`Root Bone`/`Root Weights` are asset-owned and read-only in Scene Details, with
-a hint to edit the Blueprint asset. The tressfx component is not part of
-`componentInstanceEditable`, so no instance override path exists.
+Blueprint component Details edits this attachment's `inherit|off|on` mode and sparse
+simulation overrides. Removing an override restores inheritance. External collision author
+data remains placement-owned; hair does not register a rigid collider.
+Scene Details keeps tressfx component fields read-only and directs editing to the Blueprint
+asset. The tressfx component is not part of `componentInstanceEditable`.
 
 ## Configuration
 

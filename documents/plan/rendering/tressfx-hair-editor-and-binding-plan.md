@@ -137,9 +137,10 @@
 - 用户已授权开始执行。第一步只落实资产身份、独立文档命令与既有 Tab 的入口迁移；
   保留原有模拟/collision schema，待第二步迁移它们的归属。源码与验证落地后才更新契约。
 
-### 5.5.2 A 迁移有效配置方案（2026-10-26，只读评审稿）
+### 5.5.2 A 迁移有效配置方案（2026-10-26，已授权实施）
 
-本节是待评审的 schema 与资源方案，不描述已经实现的能力。调查发现原来的
+用户在独立完成度审核后授权继续执行，范围包括本节 schema、off 独立蒙皮与单资产收敛。
+本节记录实施方案，不代表已经全部落地；最终状态以交付证据与源码为准。调查发现原来的
 25–30 文件估算没有包含 off 时独立蒙皮与异步资产加载/导出闭包。
 
 建议作者格式：
@@ -214,7 +215,7 @@ UsesGpuGuideSimulation，关闭模拟也会停止姿态消费。建议单独 ski
 不分配 previous/prevPrev、solver 或 SDF，零模拟 dt 也处理新姿态。
 不能用 enabled=true 加 ResetPositions 冒充 off，否则仍分配全部模拟资源。
 
-建议在 schema 评审后分三批实施：A1 解析/有效配置/身份和模块测试；
+按以下批次实施：A1 解析/有效配置/身份和模块测试；
 A2 冷加载/异步加载/spawn、off 蒙皮及资源生命周期；A3 编辑器/三份 TF 收敛/
 导出闭包/契约和完整回归。预计约 30–34 个源码文件，无需改 C# 公共 API；
 超过 35 个文件或需要改帧顺序时再次停下报告。测试覆盖模式合成、错误拒绝、
@@ -234,6 +235,44 @@ A2 冷加载/异步加载/spawn、off 蒙皮及资源生命周期；A3 编辑器
   或 C# API。静态毛发 Simulation 面板门槛仍是既有待办。
 - 第二步尚未实施。按交接中“需要改资产 schema 先停下报告方案”的约定，
   §5.5.2 给出具体 schema、有效配置流和 off 独立蒙皮方案，待评审后实施。
+
+**独立审核后的执行授权。** 用户随后要求独立审核，确认第一步存在蒙皮 TF
+首次打开后无法 Reload 的缺陷；A 迁移和单资产收敛仍未实施。用户再次明确
+“继续执行”，当前实施先修复该缺陷，再落实 §5.5.2；允许本节已列出的 schema
+改动，C# 公共 API 与帧顺序仍不在授权范围内。构建由一个子代理串行运行，
+最终由主线程独立回归，不能把计划提交当作实现交付。
+
+### 5.5.4 A 迁移实施记录（2026-10-26）
+
+- 作者与加载链已迁移：TF 只保存 `simulationDefaults`，组件/场景放置保存
+  `inherit|off|on`、稀疏 overrides、绑定和 `hairCollision`；旧资产级
+  simulation/collision/skinning 被拒绝，文档服务完成迁移后只接受 TF_。
+- 正式女性毛发收敛为 `TF_female_hair.json`，删除 dynamic/skinned 两份描述符；
+  静态、动态和原生动画场景分别作者放置行为，正式 BP 改用已有蒙皮身体与
+  TressFX 子组件。静态材质通过放置级 materialOverride 保留。
+- 导入器只保存共享几何；创建 renderable 前合成有效配置并准备不可变代理/
+  权重输入。可变对象键包含完整有效配置、输入内容摘要及 placement 身份，
+  CPU/GPU 模拟与绑定 off 均隔离实例。冷加载、异步加载与 spawn 走同一配置；
+  冷加载最终提交和异步发布前复核外部输入摘要。
+- 绑定 off 使用独立 skinning-only compute 求整束 rest LBS，不创建模拟历史、
+  solver/collider/SDF GPU buffer；已有帧入口与退休顺序保持，未改 C# 公共 API。
+  实施范围共 35 个 production source 文件，测试、schema、工具及文档另计。
+- 独立审核修复了场景缺省根权重误判、冷加载提交前代理摘要复核遗漏、
+  真实文档投影丢失只读 enabled/backend，以及整数覆盖转换前截断的问题；
+  对应模块回归已经补入。TF 页编辑默认值，BP Details 编辑稀疏覆盖，
+  CPU/off 默认值仍能保存，live/Reset 只对 enabled GPU 开放。
+- 验证证据集中在 `artifacts/tressfx-behavior-migration-20261026/`（不入库）。
+  混合探针已经确认同一 TF 的静态 off、绑定 on 和绑定 off 同时可见，
+  日志分别进入 guide/SDF 与 skinning-only dispatch。
+  蓝图 Pause 后 Console seek 没有发布新身体姿态，这项既有动画控制边界
+  不能作为 off 的零 dt 实机证据；零 dt 分支由模块测试与录制入口审核覆盖。
+  原生 mesh 探针单独验证 seek 后的 off 姿态跟随，最终回归结果记在测试契约。
+- 最终主线程独立回归：hair 316/316、script 459（458 passed / 1 skipped）、
+  editor 808（803 passed / 5 skipped）、material schema 29/29、production 12/12、
+  export 20/20；模型 320 份（TF 1 份）与场景 76 份 schema 校验通过，
+  文档与架构门禁通过。双异步 Spawn 的独立对象/代理、实时目标与 Stop 退休
+  已实测（runtime 2→0，含模板的 cache 3→2→0）；原生 off 两帧完整发丝随姿态变化已截图检查。
+  三次 Vulkan 进程 stderr 均为空，未把强制结束当作正常 teardown 或零 dt 读回证据。
 
 ## 6. P1：模拟参数面板
 

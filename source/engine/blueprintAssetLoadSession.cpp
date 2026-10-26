@@ -87,10 +87,12 @@ PreparedBlueprintAsset PrepareBlueprintAsset(BlueprintCpuRequest request)
         const auto descriptor = CommonFunction::Path(mesh.node.at("modelPath").get<std::string>());
         const auto before = ContentHasher::HashFile(descriptor);
         mesh.request = MeshAssetLoader::Prepare(mesh.node.at("modelPath").get<std::string>());
+        MeshAssetLoader::PrepareTressfxPlacement(mesh.request, mesh.node);
         // 同一路径可能已经有活动 GPU 网格；动态导入按源内容区分身份，不能拿旧顶点配新 CPU 碰撞三角。
         const auto modelDigest = ContentHasher::HashFile(mesh.request.importRequest.absoluteModelPath);
         mesh.request.buildPlan.modelCacheKey += "|async=" +
-            ContentHasher::HashString(before.ToHex() + modelDigest.ToHex()).ToHex();
+            ContentHasher::HashString((mesh.request.buildPlan.assetType == "tressfx"
+                ? mesh.request.buildPlan.modelCacheKey : before.ToHex()) + modelDigest.ToHex()).ToHex();
         mesh.request.importRequest.buildPlan = mesh.request.buildPlan;
         request.preparation.meshRequest = mesh.request;
         request.preparation.materialOverride = mesh.node.value("materialOverride", "");
@@ -173,6 +175,7 @@ WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
     mesh.localBoundsMax = plan.localBoundsMax;
     mesh.collisionTriangles = plan.collisionTriangles;
     mesh.meshKey = plan.meshKey;
+    mesh.placementBinding = plan.placementBinding;
     mesh.materialKey = plan.materialKey;
     mesh.materialInstanceKey = plan.materialInstanceKey;
     mesh.speedTreeWindProfileKey = plan.speedTreeWindProfileKey;
@@ -219,7 +222,10 @@ struct BlueprintAssetLoadSession::Impl
         if (ContentHasher::HashFile(ResolveScriptAssetPath(CommonFunction::GetResourcePath(), path)).ToHex() != prepared->digest)
             throw std::runtime_error("Blueprint asset changed before publication");
         for (const auto& mesh : prepared->meshes)
+        {
             ValidatePreparedAssetSources(mesh.asset.materialDigests);
+            MeshAssetLoader::ValidateTressfxPlacementSources(mesh.request);
+        }
         for (const auto& shader : graphics.shaderBuildArtifacts)
         {
             const auto current = factory.GetShaderCompiler().ValidateCandidateSourcesStillCurrent(shader.request, shader.artifact);

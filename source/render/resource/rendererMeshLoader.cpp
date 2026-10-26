@@ -21,6 +21,7 @@
 #include "renderableObject.h"
 #include "scene/sceneAssetTypes.h"
 #include "animation/skeletalPlayback.h"
+#include "scene/placementBinding.h"
 
 namespace VL
 {
@@ -98,6 +99,14 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     auto animation = modelResource.skeletalAsset
         ? std::make_shared<Animation::SkeletalPlayback>(modelResource.skeletalAsset) : nullptr;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
+    MeshAssetLoadRequest placementRequest = meshLoadRequest;
+    if (buildPlan.assetType == "tressfx" && !placementRequest.tressfxEffective)
+        MeshAssetLoader::PrepareTressfxPlacement(placementRequest, node);
+    MeshAssetLoader::ValidateTressfxPlacementSources(placementRequest);
+    VL::PlacementBinding placementBinding = VL::ReadPlacementBindingFromComponent(node);
+    placementBinding.tressfx = placementRequest.tressfxEffective;
+    const TressfxSimulationConfig* effective = placementRequest.tressfxEffective
+        ? &*placementRequest.tressfxEffective : nullptr;
 
     RendererMeshLoadResult result;
     if (modelResource.hasSpeedTreeWind)
@@ -132,14 +141,16 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
         // 覆盖属于场景实例，不能修改按 SM 路径共享的导入缓存或源资产槽位。
         const std::string materialPath = node.value("materialOverride", sectionPlan.materialInstancePath);
-        // GPU 发丝模拟有可变的 current/previous/prevPrev 与 params UBO，不能像
-        // 静态网格那样跨 placement 共享 RenderableObject；键里追加实例身份后，
-        // 每个 placement 得到独立对象与独立模拟历史。普通网格仍按模型+section 共享。
-        const bool perPlacementState = buildPlan.assetType == "tressfx" &&
-            section.tressfxSimulation.enabled &&
-            section.tressfxSimulation.backend == TressfxSimulationBackend::Gpu;
+        // CPU/GPU 模拟和 off 骨骼跟随都有可变位置，必须按 placement 独占对象。
+        // 有效配置与不可变输入摘要也进入键，模板不能把另一放置的行为带进来。
+        const bool perPlacementState = effective &&
+            (effective->enabled || effective->skinning.has_value());
+        const std::string configurationKey = effective
+            ? "|behavior=" + Hair::MakeTressfxBehaviorKey(*effective) +
+                (placementRequest.tressfxResources ? placementRequest.tressfxResources->identity : "")
+            : std::string();
         std::string renderableObjectKey = MakeRenderableObjectKey(
-            buildPlan.modelCacheKey, sectionIndex, section.sectionName,
+            buildPlan.modelCacheKey + configurationKey, sectionIndex, section.sectionName,
             meshObjectBaseName, perPlacementState);
         if (loadContext.offlineWorldAssets != nullptr)
         {
@@ -163,7 +174,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
                 imported,
                 sectionIndex,
                 rendererBackend,
-                renderableObjectKey);
+                renderableObjectKey, effective, placementRequest.tressfxResources);
             resourceCache.BindRenderableObject(renderableObjectKey, renderableObject);
         }
         }
@@ -219,7 +230,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.localBoundsMin.array() -= section.boundsPadding;
         meshObjectPlan.localBoundsMax.array() += section.boundsPadding;
         meshObjectPlan.meshKey = renderableObjectKey;
-        meshObjectPlan.tressfxBoneAsset = section.tressfxBoneAsset;
+        meshObjectPlan.tressfxBoneAsset = placementRequest.tressfxResources
+            ? placementRequest.tressfxResources->boneAsset : nullptr;
+        meshObjectPlan.placementBinding = placementBinding;
         if (animation)
         {
             meshObjectPlan.animation = animation;

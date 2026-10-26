@@ -60,17 +60,17 @@ const Field fields[] = {
     {K::Mesh, "", "modelDataPath", ValueKind::Text, false, "source_path"},
     {K::Tressfx, "", "name", ValueKind::Text},
     {K::Tressfx, "", "modelDataPath", ValueKind::Text, false, "source_path"},
-    // TressFX 的模拟标量由独立文档拥有；一级点路径直接落在 simulation 对象下。作者值由
+    // TressFX 默认模拟标量由独立文档拥有；放置覆盖不写回这里。作者值由
     // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
-    {K::Tressfx, "", "simulation.gravity", ValueKind::Vector3, false, "cm/s^2"},
-    {K::Tressfx, "", "simulation.wind", ValueKind::Vector3},
-    {K::Tressfx, "", "simulation.damping", ValueKind::Number},
-    {K::Tressfx, "", "simulation.iterations", ValueKind::Number},
-    {K::Tressfx, "", "simulation.bendStiffness", ValueKind::Number},
-    {K::Tressfx, "", "simulation.globalShapeStiffness", ValueKind::Number},
-    {K::Tressfx, "", "simulation.globalShapeEffectiveRange", ValueKind::Number},
-    {K::Tressfx, "", "simulation.vspCoefficient", ValueKind::Number},
-    {K::Tressfx, "", "simulation.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
+    {K::Tressfx, "", "simulationDefaults.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Tressfx, "", "simulationDefaults.wind", ValueKind::Vector3},
+    {K::Tressfx, "", "simulationDefaults.damping", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.iterations", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.bendStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeEffectiveRange", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspCoefficient", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
@@ -438,6 +438,17 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
 Json ProjectEditableAsset(K kind, const Json& document)
 {
     Json result = Projection(kind, "", document);
+    if (kind == K::Tressfx && document.contains("simulationDefaults"))
+    {
+        // enabled/backend 不开放写能力，但 UI 必须用同一作者投影判断 live/Reset。
+        // 保留对象存在性与原始缺省，不能在投影时把运行期缺省值烘成作者字段。
+        if (!result.contains("simulationDefaults"))
+            result["simulationDefaults"] = Json::object();
+        const auto& defaults = document.at("simulationDefaults");
+        for (const char* field : {"enabled", "backend"})
+            if (defaults.contains(field))
+                result["simulationDefaults"][field] = defaults.at(field);
+    }
     if (kind == K::Scene)
     {
         result["worldUnit"] = document.at("worldUnit");

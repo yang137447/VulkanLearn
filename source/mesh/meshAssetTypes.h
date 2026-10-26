@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -75,7 +76,7 @@ struct TressfxSimulationSkinning
     bool rootWeightsAuthored = false;
 };
 
-// 顶层 `collision.mesh` 的作者声明。path 是资源仓库相对路径的低模 OBJ；
+// 放置 `hairCollision.mesh` 的作者声明。path 是资源仓库相对路径的低模 OBJ；
 // cellSize 是 GPU 距离场的格子边长（厘米），margin 是头发表面与代理表面之间
 // 要保持的最小距离（厘米）。运行期距离场由这份三角形汤逐帧重建，不读取
 // 预烘焙的 .sdf 文件。
@@ -123,15 +124,24 @@ struct TressfxSimulationConfig
     // min(value, 0.95)（TressFXComponent.cpp:706-710）。加载期已把 > 0.95 的
     // 作者值 clamp 到 0.95 并输出记录；空数组表示回退到 bendStiffness 标量。
     std::vector<float> localShapeStiffness;
-    // SM 描述符顶层 `collision.capsules` 的解析结果；空表示不做胶囊碰撞。
+    // 放置 `hairCollision.capsules` 的解析结果；空表示不做胶囊碰撞。
     // 位置/半径都是资产局部空间厘米，与 positions 和 solver 同一坐标系。
     std::vector<VL::Hair::TressfxCollider> capsules;
-    // 可选 `collision.mesh`。缺省时只有胶囊碰撞，行为与本字段引入前完全一致。
+    // 可选放置 `hairCollision.mesh`。缺省时只有胶囊碰撞。
     std::optional<TressfxCollisionMeshConfig> collisionMesh;
     TressfxSimulationBackend backend = TressfxSimulationBackend::Cpu;
     // 可选：根点骨骼蒙皮。仅 GPU backend 可用，因为姿态来自渲染快照而不是
     // 游戏线程；CPU 参考 solver 没有可用的 SkinPose。
     std::optional<TressfxSimulationSkinning> skinning;
+};
+
+// 运行时放置输入独立于几何导入；加载线程解析文件后，克隆只共享不可变载荷。
+struct TressfxPlacementResources
+{
+    std::shared_ptr<const VL::Hair::SdfTriangleMesh> collisionMesh;
+    std::shared_ptr<const VL::Hair::TfxBoneAsset> boneAsset;
+    std::string identity;
+    std::vector<std::pair<std::string, std::string>> sourceInputs;
 };
 
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled
@@ -270,6 +280,7 @@ struct MeshAssetBuildPlan
     std::string modelCacheKey;
     // tressfx 描述符声明局部空间半径；静态 ribbon 不把逆质量当作宽度。
     float strandRadius = 0.0f;
+    // TF simulationDefaults；不含皮肤绑定/碰撞，不能直接作为放置的最终配置。
     TressfxSimulationConfig tressfxSimulation;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
@@ -296,10 +307,6 @@ struct ModelImportRequest
 {
     MeshAssetBuildPlan buildPlan;
     std::string absoluteModelPath;
-    // tressfx `collision.mesh` 的已解析绝对路径；未声明时为空。
-    std::string absoluteCollisionMeshPath;
-    // tressfx `simulation.skinning.boneWeights` 的已解析绝对路径；未声明时为空。
-    std::string absoluteBoneWeightsPath;
 };
 
 // One imported geometry section from a model file, preserving the section and material slot names.
@@ -323,13 +330,6 @@ struct MeshSection
     float boundsPadding = 0.0f;
     bool isTressfx = false;
     uint32_t tressfxPointsPerStrand = 0;
-    TressfxSimulationConfig tressfxSimulation;
-    // 导入期解析出的碰撞代理三角形汤（与 tressfxSimulation.collisionMesh 同时
-    // 存在）。RenderableObject 只消费它，不在运行时重新读 OBJ。
-    std::shared_ptr<const VL::Hair::SdfTriangleMesh> tressfxCollisionMesh;
-    // 可选的 .tfxbone 解析结果；与 collision mesh 一样由导入期读取，
-    // RenderableObject 只消费，不在运行时读文件。
-    std::shared_ptr<const VL::Hair::TfxBoneAsset> tressfxBoneAsset;
 };
 
 // Runtime loading plan for one imported mesh section after material slot validation.

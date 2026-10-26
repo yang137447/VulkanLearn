@@ -12,6 +12,8 @@ struct MeshAssetLoadRequest
     ModelImportRequest importRequest;
     // 与已解析描述同次读取的身份；导入前后复核，防止旧模型配上新数据库统计。
     std::string descriptorIdentity;
+    std::optional<TressfxSimulationConfig> tressfxEffective;
+    std::shared_ptr<const TressfxPlacementResources> tressfxResources;
 };
 
 // Result of importing one mesh asset into CPU-side sections plus per-section material mapping.
@@ -31,6 +33,9 @@ class MeshAssetLoader
 {
 public:
     static MeshAssetLoadRequest Prepare(std::string_view meshAssetPath);
+    static void PrepareTressfxPlacement(
+        MeshAssetLoadRequest& request, const nlohmann::json& sceneObject);
+    static void ValidateTressfxPlacementSources(const MeshAssetLoadRequest& request);
     static void ValidateImportRequest(const MeshAssetLoadRequest& loadRequest);
     static void ValidateSectionLoadable(const MeshAssetLoadRequest& loadRequest);
     static MeshAssetImportResult ImportSections(const MeshAssetLoadRequest& loadRequest);

@@ -73,7 +73,7 @@ public:
     HairSimulationPass& operator=(const HairSimulationPass&) = delete;
 
     void Initialize(PipelineFactory& factory, RendererBackendVulkan& backend);
-    // 只判断本帧是否存在需要 GPU guide simulation 的对象。上层必须在写
+    // 判断本帧是否存在 GPU guide simulation 或关闭模拟后的骨骼蒙皮。上层必须在写
     // hairSimulation 的 timestamp 之前调用：没有任何 dispatch 的帧不能占用 query 槽位，
     // 否则先写 begin、再丢弃、再复用同一 query 会违反"查询必须先重置"的规则。
     bool HasWork(const VL::ResolvedRenderScene& scene,
@@ -105,6 +105,23 @@ public:
     void RequestLiveParameter(VL::Hair::HairLiveParameterRequest request);
 
 private:
+    // 关闭动力学的对象独立持有 descriptor；不借用 solver 的历史或 SDF 绑定。
+    // buffer 仍归 RenderableObject，弱引用只用于识别退休后被复用的对象地址。
+    struct SkinningDescriptors
+    {
+        std::weak_ptr<RenderableObject> owner;
+        std::array<vk::DescriptorSet, GuideSimulationParamBufferCount> sets{};
+        vk::Buffer currentPositions = nullptr;
+        vk::Buffer restPositions = nullptr;
+        vk::Buffer boneWeights = nullptr;
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> params{};
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> palette{};
+        TressfxFrameContext frameContext;
+        TressfxSimulationOwner simulationOwner;
+        bool reportedOwnerConflict = false;
+        bool reportedFirstDispatch = false;
+    };
+
     struct ObjectDescriptors
     {
         // [pass][frame-in-flight slot]。每个 pass 的 shader 只声明自己用到的 binding，
@@ -224,6 +241,12 @@ private:
         bool& anyDispatch,
         uint32_t& objectDispatchCount);
     void ResetDescriptorCache() noexcept;
+    SkinningDescriptors& EnsureSkinningDescriptors(
+        const std::shared_ptr<RenderableObject>& object);
+    void RecordSkinning(vk::CommandBuffer commandBuffer,
+        const VL::ResolvedRenderScene& scene,
+        const VL::RenderScene& renderScene,
+        uint32_t frameSlot);
 
     // trace 的录制/回读辅助。未激活时都在 Record 开头一次布尔判断后返回。
     void StartTraceObject(RenderableObject& object);
@@ -238,9 +261,11 @@ private:
 
     RendererBackendVulkan* backend = nullptr;
     std::array<std::shared_ptr<ComputePipeline>, GuideSimulationPassCount> pipelines{};
-    // 每个 pass 独立 descriptor pool 链；逐对象按 frame-in-flight 槽各分配一个 set。
-    std::array<std::vector<DescriptorPoolBudget>, GuideSimulationPassCount> descriptorPools;
+    std::shared_ptr<ComputePipeline> skinningPipeline;
+    // 最后一条池链供独立蒙皮；源 guide solver 的九阶段枚举与调度保持不变。
+    std::array<std::vector<DescriptorPoolBudget>, GuideSimulationPassCount + 1> descriptorPools;
     std::unordered_map<const RenderableObject*, ObjectDescriptors> objectDescriptors;
+    std::unordered_map<const RenderableObject*, SkinningDescriptors> skinningDescriptors;
     TraceState trace;
     // 渲染线程独占：RequestReset 在 RecordHairSimulation 内、Record 之前调用；
     // 下一帧 Record 把它展开成逐对象 resetRequested 后清空。

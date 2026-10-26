@@ -117,6 +117,8 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "mesh")
         {
+            if (object.contains("tressfx"))
+                Hair::ReadTressfxPlacementBehavior(object.at("tressfx"), name);
             for (const char* field : {"modelPath", "materialOverride"})
             {
                 if (std::string(field) == "materialOverride" && !object.contains(field)) continue;

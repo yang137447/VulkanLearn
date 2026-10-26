@@ -33,6 +33,13 @@ namespace VL
 namespace
 {
 
+void ValidatePlacementSourcesStillCurrent(const PreparedWorldTransition& prepared)
+{
+    for (const auto& input : prepared.placementSourceInputs)
+        if (ContentHasher::HashFile(std::filesystem::u8path(input.first)).ToHex() != input.second)
+            throw std::runtime_error("World placement input changed before commit: " + input.first);
+}
+
 std::vector<AtomicFileWrite>
 BuildGeneratedIncludeWrites(
     const MaterialDefinitionReloadBatch* batch)
@@ -276,6 +283,7 @@ WorldGraphTransactionCoordinator::Execute(
         // 与 shader source 一样，profile 字节身份不是路径或时间戳。
         ValidateOfflineProfilesStillCurrent(*preparedWorld.offlineWorldAssets);
         ValidateOfflineTexturesStillCurrent(*preparedWorld.offlineWorldAssets);
+        ValidatePlacementSourcesStillCurrent(preparedWorld);
         std::vector<AtomicFileWrite> additionalPublicationWrites =
             BuildGeneratedIncludeWrites(materialDefinitionReload);
         AppendPendingGeneratedResourceWrites(
@@ -321,6 +329,7 @@ WorldGraphTransactionCoordinator::Execute(
             shaderCompiler.GetShaderRoot());
         ValidateOfflineProfilesStillCurrent(*preparedWorld.offlineWorldAssets);
         ValidateOfflineTexturesStillCurrent(*preparedWorld.offlineWorldAssets);
+        ValidatePlacementSourcesStillCurrent(preparedWorld);
         if (faultInjection.failBeforeCommit)
         {
             throw std::runtime_error(

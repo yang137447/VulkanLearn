@@ -71,7 +71,11 @@ TEST(TressfxComponentUi, DetailsExposeHairFieldsAndHideTransformAndCollision)
     EXPECT_NE(markup.find("bp-component-2-modelPath-0"), std::string::npos);
     EXPECT_NE(markup.find("bp-component-2-rootBone-0"), std::string::npos);
     EXPECT_NE(markup.find("bp-component-2-weights-0"), std::string::npos);
-    // 局部 TRS 与图元碰撞不适用：与父 mesh 同一对象空间，碰撞由描述符拥有。
+    EXPECT_NE(markup.find("bp-component-2-hair-mode-0"), std::string::npos);
+    EXPECT_NE(markup.find("bp-component-2-hair-damping-0"), std::string::npos);
+    EXPECT_NE(markup.find("bp-component-2-hair-reset-damping-0"), std::string::npos);
+    EXPECT_EQ(markup.find("bp-component-instance-2-simulation"), std::string::npos);
+    // 局部 TRS 与图元碰撞不适用：挂载的外部毛发代理不产生 Jolt collider。
     EXPECT_EQ(markup.find("bp-component-2-position-0"), std::string::npos);
     EXPECT_EQ(markup.find("bp-component-2-rotation-0"), std::string::npos);
     EXPECT_EQ(markup.find("bp-component-2-scale-0"), std::string::npos);

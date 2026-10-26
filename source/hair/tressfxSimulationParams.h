@@ -81,6 +81,23 @@ inline constexpr uint32_t GuideSimulationWorkgroupSize = 64;
 // 参数 UBO 按 frame-in-flight 槽分开。数量必须等于 MAX_FRAMES_IN_FLIGHT。
 inline constexpr uint32_t GuideSimulationParamBufferCount = 2;
 
+// 关闭动力学的骨骼挂载只上传姿态与几何计数；不把风、约束、碰撞或 reset
+// 带入蒙皮路径。整根发丝每帧由 rest 直接求值，因此不需要模拟时间和历史。
+inline GuideSimulationParams MakeGuideSkinningParams(
+    uint32_t guideCount,
+    uint32_t pointsPerGuide,
+    const Eigen::Matrix4f& skinningMatrix,
+    bool hasStrandWeights)
+{
+    GuideSimulationParams params;
+    params.controls.z() = static_cast<float>(pointsPerGuide);
+    params.guideCount = guideCount;
+    params.pointCount = guideCount * pointsPerGuide;
+    params.skinning = skinningMatrix;
+    params.motion.w() = hasStrandWeights ? 4.0f : 0.0f;
+    return params;
+}
+
 // 一份 pass 参数。dt 由调用方按源 substep 固定为 0.0125；
 // simulationFrame 是仿真帧序号，用于 TressFX SetWind 的 sin(frame*0.001)² 幅值
 // 调制（同一帧的所有 substep 共用）。

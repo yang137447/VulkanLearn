@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "scene/placementBinding.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 namespace VL::Hair { struct TfxBoneAsset; }
@@ -65,4 +66,5 @@ struct MeshObjectBuildPlan
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+    VL::PlacementBinding placementBinding;
 };

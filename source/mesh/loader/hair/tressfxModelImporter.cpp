@@ -9,9 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "hair/collisionMeshObj.h"
 #include "hair/strandGeometry.h"
-#include "hair/tfxBoneLoader.h"
 
 namespace
 {
@@ -38,28 +36,6 @@ void TressfxModelImporter::ValidateImportRequest(const ModelImportRequest& reque
 {
     if (!std::filesystem::is_regular_file(std::filesystem::u8path(request.absoluteModelPath)))
         throw std::runtime_error("TressFX model source not found: " + request.buildPlan.modelDataPath);
-    // 作者声明 collision.mesh 时，代理 OBJ 是必需输入；缺失或不可读在加载期
-    // 失败，而不是运行期静默退回只有胶囊的路径。
-    if (request.buildPlan.tressfxSimulation.collisionMesh)
-    {
-        if (request.absoluteCollisionMeshPath.empty() ||
-            !std::filesystem::is_regular_file(
-                std::filesystem::u8path(request.absoluteCollisionMeshPath)))
-            throw std::runtime_error(
-                "TressFX collision mesh source not found: " +
-                request.buildPlan.tressfxSimulation.collisionMesh->path);
-    }
-    // 声明 boneWeights 时 .tfxbone 是必需输入；缺失/不可读是加载期硬错误。
-    if (request.buildPlan.tressfxSimulation.skinning &&
-        !request.buildPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
-    {
-        if (request.absoluteBoneWeightsPath.empty() ||
-            !std::filesystem::is_regular_file(
-                std::filesystem::u8path(request.absoluteBoneWeightsPath)))
-            throw std::runtime_error(
-                "TressFX bone weights source not found: " +
-                request.buildPlan.tressfxSimulation.skinning->boneWeightsPath);
-    }
 }
 
 ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
@@ -93,31 +69,7 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     section.materialSlotName = "hair";
     section.isTressfx = true;
     section.tressfxPointsPerStrand = asset.pointsPerStrand;
-    section.tressfxSimulation = request.buildPlan.tressfxSimulation;
-    if (request.buildPlan.tressfxSimulation.collisionMesh)
-    {
-        // 代理解析一次并随导入结果共享；RenderableObject 每帧只消费三角形汤，
-        // 不会重新读文件，也不会在每个场景 placement 上复制顶点。
-        auto collisionMesh = VL::Hair::LoadCollisionMeshObj(
-            std::filesystem::u8path(request.absoluteCollisionMeshPath));
-        if (collisionMesh.IsFailure())
-            throw std::runtime_error("TressFX collision mesh import failed: " +
-                collisionMesh.Error().message);
-        section.tressfxCollisionMesh = std::make_shared<const VL::Hair::SdfTriangleMesh>(
-            std::move(collisionMesh.Value()));
-    }
-    if (request.buildPlan.tressfxSimulation.skinning &&
-        !request.buildPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
-    {
-        // 与 .tfx 同次导入：运行期只消费解析后的 TfxBoneAsset，不重新读文件。
-        auto boneAsset = VL::Hair::LoadTfxBone(
-            std::filesystem::u8path(request.absoluteBoneWeightsPath));
-        if (boneAsset.IsFailure())
-            throw std::runtime_error("TressFX bone weights import failed: " +
-                boneAsset.Error().message);
-        section.tressfxBoneAsset = std::make_shared<const VL::Hair::TfxBoneAsset>(
-            std::move(boneAsset.Value()));
-    }
+    // 导入结果只保留几何；有效模拟配置、代理和权重由放置加载路径持有。
     section.tressfxInverseMass.reserve(asset.positions.size());
     section.indices = geometry.ribbonIndices;
     section.vertices.reserve(asset.positions.size() * 2);

@@ -309,6 +309,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
             object.collisionTriangles = meshObjectPlan.collisionTriangles;
             object.meshKey = meshObjectPlan.meshKey;
+            object.placementBinding = meshObjectPlan.placementBinding;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
             object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;

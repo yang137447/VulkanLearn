@@ -27,7 +27,10 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         objectPlan.objectType = objectJson.at("type").get<std::string>();
         // JSON 合同在共享入口收口；运行时计划仍由正式 loader 准备，不为资产工具另建导入路径。
         if (objectPlan.objectType == "mesh")
+        {
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
+            MeshAssetLoader::PrepareTressfxPlacement(*objectPlan.meshLoadRequest, objectJson);
+        }
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))
         for (size_t component = 0; component < objectJson.at("components").size(); ++component)
@@ -41,6 +44,7 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
             mesh.componentObject = VL::ScriptBlueprintMeshObject(objectJson, component);
             mesh.objectName = mesh.componentObject->at("name").get<std::string>();
             mesh.meshLoadRequest = MeshAssetLoader::Prepare(mesh.componentObject->at("modelPath").get<std::string>());
+            MeshAssetLoader::PrepareTressfxPlacement(*mesh.meshLoadRequest, *mesh.componentObject);
             // tressfx 组件：毛发描述符必须是 tressfx，父 mesh 必须是带骨架的角色。
             // 骨架检查放在加载计划里（需要读描述符），组件树本身的拓扑已在
             // ValidateScriptComponents 收口。

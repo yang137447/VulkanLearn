@@ -40,6 +40,7 @@ def generate(resource_root):
     write_json(folder / "Meshes/TF_guides.json", {
         "name": "TF_synthetic_guides", "type": "tressfx",
         "modelDataPath": f"{prefix}/Source/synthetic.tfx", "strandRadius": 0.11,
+        "simulationDefaults": {"enabled": False, "backend": "gpu"},
         "materialSlots": [{"name": "hair", "materialInstancePath": f"{prefix}/Materials/MI_pink.json"}],
     })
     for name, tint in (("pink", None), ("cyan", [0.05, 0.65, 0.9, 1])):
@@ -50,8 +51,10 @@ def generate(resource_root):
         write_json(folder / f"Materials/MI_{name}.json", instance)
     objects = [
         {"name": "Front", "type": "mesh", "modelPath": f"{prefix}/Meshes/TF_guides.json",
+         "tressfx": {"simulation": {"mode": "off"}},
          "position": [-44, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]},
         {"name": "Rotated", "type": "mesh", "modelPath": f"{prefix}/Meshes/TF_guides.json",
+         "tressfx": {"simulation": {"mode": "off"}},
          "materialOverride": f"{prefix}/Materials/MI_cyan.json",
          "position": [44, 0, 0], "rotation": [0, 55, 0], "scale": [1, 1, 1]},
         {"name": "ProbeCamera", "type": "camera", "position": [0, 2, 190],

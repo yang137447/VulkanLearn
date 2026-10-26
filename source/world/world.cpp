@@ -321,8 +321,7 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
             clone.meshKey = RebaseRenderableObjectKeyInstance(
                 clone.meshKey, identity, clone.sceneObjectIdentity);
             // 绑定意图用与加载期相同的展开函数生成，保证 spawn 与正式加载看到同一
-            // 语义。旧 __tressfx* 字段由 ReadPlacementBindingFromComponent 兼容读取；
-            // 新类型应让 ScriptBlueprintMeshObject 生成通用 placementBinding 对象。
+            // 语义。展开函数生成放置 tressfx；旧 __tressfx* 字段仅保留兼容读取。
             const std::string componentId = identity.size() > prefix.size() + 1
                 ? identity.substr(prefix.size() + 1) : std::string();
             const nlohmann::json components =
@@ -332,7 +331,12 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
                 if (!components[index].is_object() ||
                     components[index].value("id", "") != componentId) continue;
                 const nlohmann::json sceneObject = ScriptBlueprintMeshObject(actor, index);
+                const auto effective = clone.placementBinding.tressfx;
                 clone.placementBinding = ReadPlacementBindingFromComponent(sceneObject);
+                clone.placementBinding.tressfx = effective;
+                if (clone.placementBinding.tressfx && clone.placementBinding.tressfx->skinning)
+                    clone.placementBinding.tressfx->skinning->source =
+                        clone.placementBinding.sourceSceneObject;
                 break;
             }
         }

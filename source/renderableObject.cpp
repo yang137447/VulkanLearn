@@ -87,9 +87,12 @@ RenderableObject::RenderableObject(
     std::shared_ptr<const MeshAssetImportResult> importedResource,
     size_t sectionIndex,
     VL::RendererBackendVulkan& backend,
-    const std::string& objectName)
+    const std::string& objectName,
+    const TressfxSimulationConfig* tressfxConfig,
+    std::shared_ptr<const TressfxPlacementResources> tressfxResources)
     : imported(std::move(importedResource))
     , importedSectionIndex(sectionIndex)
+    , tressfxPlacementResources(std::move(tressfxResources))
 {
     if (!imported || sectionIndex >= imported->modelResource.sections.size())
         throw std::invalid_argument("Invalid imported mesh section");
@@ -98,9 +101,15 @@ RenderableObject::RenderableObject(
     const MeshSection& section = imported->modelResource.sections[sectionIndex];
     if (section.isTressfx)
     {
+        if (!tressfxPlacementResources)
+            tressfxPlacementResources = std::make_shared<const TressfxPlacementResources>();
         // 先复制作者参数到本对象副本，再做 GPU/CPU 资源分支：实时覆盖只写副本，
         // 共享的导入结果保持只读。
-        tressfxSimulationConfig = section.tressfxSimulation;
+        tressfxSimulationConfig = tressfxConfig ? *tressfxConfig : imported->buildPlan.tressfxSimulation;
+        for (const auto* curve : {&tressfxSimulationConfig.vspStiffness,
+                &tressfxSimulationConfig.localShapeStiffness})
+            if (!curve->empty() && curve->size() != section.tressfxPointsPerStrand)
+                throw std::runtime_error("TressFX placement stiffness curve must match pointsPerStrand: " + name);
         const size_t pointCount = section.tressfxInverseMass.size();
         const size_t pointsPerGuide = section.tressfxPointsPerStrand;
         if (pointCount != 0 && pointsPerGuide >= 2 &&
@@ -111,8 +120,8 @@ RenderableObject::RenderableObject(
             tressfxPointsPerGuide = section.tressfxPointsPerStrand;
             // GPU backend 不构造 CPU 参考 solver；位置只由 HairSimulationPass 的
             // compute dispatch 推进，避免同一份 SSBO 出现两个写入者。
-            if (section.tressfxSimulation.enabled &&
-                section.tressfxSimulation.backend == TressfxSimulationBackend::Cpu)
+            if (tressfxSimulationConfig.enabled &&
+                tressfxSimulationConfig.backend == TressfxSimulationBackend::Cpu)
             {
                 std::vector<Eigen::Vector3f> restPositions;
                 restPositions.reserve(pointCount);
@@ -120,27 +129,27 @@ RenderableObject::RenderableObject(
                     restPositions.push_back(section.vertices[point * 2].position);
 
                 VL::Hair::SimulationConfig simulationConfig;
-                simulationConfig.gravity = section.tressfxSimulation.gravity;
-                simulationConfig.wind = section.tressfxSimulation.wind;
-                simulationConfig.damping = section.tressfxSimulation.damping;
-                simulationConfig.iterations = section.tressfxSimulation.iterations;
-                simulationConfig.rootFixedPoints = section.tressfxSimulation.rootFixedPoints;
-                simulationConfig.maxDt = section.tressfxSimulation.maxDt;
-                simulationConfig.bendStiffness = section.tressfxSimulation.bendStiffness;
+                simulationConfig.gravity = tressfxSimulationConfig.gravity;
+                simulationConfig.wind = tressfxSimulationConfig.wind;
+                simulationConfig.damping = tressfxSimulationConfig.damping;
+                simulationConfig.iterations = tressfxSimulationConfig.iterations;
+                simulationConfig.rootFixedPoints = tressfxSimulationConfig.rootFixedPoints;
+                simulationConfig.maxDt = tressfxSimulationConfig.maxDt;
+                simulationConfig.bendStiffness = tressfxSimulationConfig.bendStiffness;
                 simulationConfig.globalShapeStiffness =
-                    section.tressfxSimulation.globalShapeStiffness;
+                    tressfxSimulationConfig.globalShapeStiffness;
                 simulationConfig.globalShapeEffectiveRange =
-                    section.tressfxSimulation.globalShapeEffectiveRange;
+                    tressfxSimulationConfig.globalShapeEffectiveRange;
                 simulationConfig.vspCoefficient =
-                    section.tressfxSimulation.vspCoefficient;
+                    tressfxSimulationConfig.vspCoefficient;
                 simulationConfig.vspAccelThresholdMax =
-                    section.tressfxSimulation.vspAccelThresholdMax;
+                    tressfxSimulationConfig.vspAccelThresholdMax;
                 // 4a：CPU 参考 solver 与 GPU 参数块共用同一份作者刚度曲线；
                 // 空数组保持原有“未作者”回退语义。
-                simulationConfig.vspStiffness = section.tressfxSimulation.vspStiffness;
+                simulationConfig.vspStiffness = tressfxSimulationConfig.vspStiffness;
                 simulationConfig.localShapeStiffness =
-                    section.tressfxSimulation.localShapeStiffness;
-                simulationConfig.capsules = section.tressfxSimulation.capsules;
+                    tressfxSimulationConfig.localShapeStiffness;
+                simulationConfig.capsules = tressfxSimulationConfig.capsules;
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
                     tressfxGuideCount,
@@ -206,6 +215,13 @@ bool RenderableObject::UsesGpuGuideSimulation() const
     return tressfxGpuSimulation && tressfxGuideCount != 0;
 }
 
+bool RenderableObject::UsesGpuHairSkinning() const
+{
+    return IsTressfx() && !tressfxSimulationConfig.enabled &&
+        tressfxSimulationConfig.backend == TressfxSimulationBackend::Gpu &&
+        tressfxSimulationConfig.skinning.has_value() && tressfxGuideCount != 0;
+}
+
 const TressfxSimulationConfig& RenderableObject::GetTressfxSimulationConfig() const
 {
     if (!IsTressfx())
@@ -262,7 +278,7 @@ void RenderableObject::SetTressfxSkinningBinding(
     const VL::Hair::TressfxSkinningBinding& binding)
 {
     tressfxSkinningBinding = binding;
-    if (!tressfxGpuSimulation || !tressfxBoneWeightsBuffer || tressfxGuideCount == 0)
+    if (!tressfxBoneWeightsBuffer || tressfxGuideCount == 0)
         return;
     if (!binding.strandBones.empty() &&
         binding.strandBones.size() != tressfxGuideCount)
@@ -303,7 +319,7 @@ void RenderableObject::ResetTressfxPenetrationStats(uint32_t frameSlot)
 }
 
 std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
-    const std::string& newName) const
+    const std::string& newName, const TressfxSimulationConfig* effectiveConfig) const
 {
     if (!imported || rendererBackend == nullptr)
         throw std::runtime_error(
@@ -312,7 +328,9 @@ std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
     // 仍共享。具体放置绑定（例如毛发的根点骨骼权重）由 resolver 按 Kind 应用，
     // 本方法保持类型无关。
     return std::make_shared<RenderableObject>(
-        imported, importedSectionIndex, *rendererBackend, newName);
+        imported, importedSectionIndex, *rendererBackend, newName,
+        effectiveConfig ? effectiveConfig : &tressfxSimulationConfig,
+        tressfxPlacementResources);
 }
 
 void RenderableObject::WriteTressfxColliders(
@@ -359,8 +377,9 @@ void RenderableObject::CreateTressfxPositionBuffer()
         static_cast<vk::DeviceSize>(initialPositions.size()) * sizeof(Eigen::Vector4f);
     // GPU backend 的 current 只由 compute 写、vertex shader 读，创建后放在 device-local；
     // CPU backend 仍由游戏线程逐帧写 host-coherent buffer，保持既有同步策略。
-    const bool gpuSimulation = section.tressfxSimulation.enabled &&
-        section.tressfxSimulation.backend == TressfxSimulationBackend::Gpu &&
+    const bool gpuSimulation = (tressfxSimulationConfig.enabled ||
+            tressfxSimulationConfig.skinning.has_value()) &&
+        tressfxSimulationConfig.backend == TressfxSimulationBackend::Gpu &&
         tressfxGuideCount != 0;
     if (gpuSimulation)
     {
@@ -427,8 +446,8 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     if (!IsTressfx() || tressfxSimulation)
         return;
     const auto& section = imported->modelResource.sections[importedSectionIndex];
-    if (!section.tressfxSimulation.enabled ||
-        section.tressfxSimulation.backend != TressfxSimulationBackend::Gpu ||
+    if ((!tressfxSimulationConfig.enabled && !tressfxSimulationConfig.skinning) ||
+        tressfxSimulationConfig.backend != TressfxSimulationBackend::Gpu ||
         tressfxGuideCount == 0 || tressfxPointsPerGuide < 2)
         return;
 
@@ -443,6 +462,8 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
         const Eigen::Vector3f& rest = section.vertices[point * 2].position;
         initialPoints[point] = Eigen::Vector4f(rest.x(), rest.y(), rest.z(), 1.0f);
     }
+    if (tressfxSimulationConfig.enabled)
+    {
     std::tie(tressfxPreviousPositionBuffer, tressfxPreviousPositionMemory) =
         CreateUploadedDeviceLocalStorageBuffer(
             *rendererBackend, initialPoints.data(), positionBytes,
@@ -460,6 +481,7 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     tressfxPreviousPreviousPositionInfo
         .setBuffer(tressfxPreviousPreviousPositionBuffer).setOffset(0)
         .setRange(positionBytes);
+    }
 
     // rest positions：xyz 是静止中心线，w 是导入的逆质量；integration pass 用它判断
     // 不可移动点（根前缀或逆质量 <= 0）。
@@ -478,6 +500,8 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
 
     // 静止段长：第 i 项是 i -> i+1 的 rest 长度，末项 0。LengthConstraintsWind pass
     // 每根 strand 读取，创建时上传一次。
+    if (tressfxSimulationConfig.enabled)
+    {
     std::vector<float> restLengths(pointCount, 0.0f);
     for (size_t guide = 0; guide < tressfxGuideCount; ++guide)
     {
@@ -507,6 +531,7 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
             "TressFXStrandLevel: " + name);
     tressfxStrandLevelInfo
         .setBuffer(tressfxStrandLevelBuffer).setOffset(0).setRange(strandLevelBytes);
+    }
 
     // params UBO 每帧由主机改写，保持 host-coherent；只有位置 buffer 是 device-local。
     for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
@@ -523,6 +548,8 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
             .setRange(sizeof(VL::Hair::GuideSimulationParams));
         // reset 首轮 Integration 的独立 UBO：内容只在 reset/换基帧写入，
         // 但句柄常驻，descriptor set 在对象创建时一次性绑定。
+        if (tressfxSimulationConfig.enabled)
+        {
         auto& resetTarget = tressfxResetParamsTargets[slot];
         std::tie(resetTarget.buffer, resetTarget.memory) = rendererBackend->CreateBuffer(
             sizeof(VL::Hair::GuideSimulationParams),
@@ -533,6 +560,7 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
             resetTarget.memory, sizeof(VL::Hair::GuideSimulationParams));
         resetTarget.info.setBuffer(resetTarget.buffer).setOffset(0)
             .setRange(sizeof(VL::Hair::GuideSimulationParams));
+        }
     }
     // 多骨：每 strand 4 个 (joint, weight) 槽，共 32 bytes；没有 .tfxbone 时
     // 全零，shader 用 motion.w bit2 判断是否读取。palette 每槽固定 256 mat4。
@@ -574,6 +602,9 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     }
     // 每帧碰撞前的最大穿透深度（uint 位模式；0=无穿透）。host 清零、shader
     // atomicMax、trace 通过 transfer 拷到 readback，不参与渲染。
+    // off 蒙皮只需要 current/rest/params/weights/palette，不持有求解器状态。
+    if (!tressfxSimulationConfig.enabled)
+        return;
     for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
     {
         auto& target = tressfxPenetrationStatsTargets[slot];
@@ -595,7 +626,7 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     const vk::DeviceSize colliderBytes =
         sizeof(VL::Hair::GuideColliderGpu) * VL::Hair::TressfxMaxColliders;
     std::array<VL::Hair::GuideColliderGpu, VL::Hair::TressfxMaxColliders> gpuColliders{};
-    const auto& capsules = section.tressfxSimulation.capsules;
+    const auto& capsules = tressfxSimulationConfig.capsules;
     if (capsules.size() > VL::Hair::TressfxMaxColliders)
         throw std::runtime_error("TressFX collider count exceeds the GPU limit: " + name);
     for (size_t collider = 0; collider < capsules.size(); ++collider)
@@ -623,11 +654,11 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
 void RenderableObject::CreateTressfxSdfBuffers()
 {
     const auto& section = imported->modelResource.sections[importedSectionIndex];
-    if (!section.tressfxSimulation.collisionMesh)
+    if (!tressfxSimulationConfig.collisionMesh)
         return;
     const TressfxCollisionMeshConfig& config =
-        *section.tressfxSimulation.collisionMesh;
-    if (!section.tressfxCollisionMesh)
+        *tressfxSimulationConfig.collisionMesh;
+    if (!tressfxPlacementResources->collisionMesh)
         throw std::runtime_error(
             "TressFX collision.mesh was declared but its OBJ was not imported: " +
             config.path);
@@ -635,13 +666,13 @@ void RenderableObject::CreateTressfxSdfBuffers()
     // 绑定姿态只用来确定固定分辨率（作者 cellSize 是目标格距）；域本身每帧
     // 从蒙皮后的代理包围盒重算，buffer 大小由分辨率决定、永不改变。
     const auto layoutResult = VL::Hair::MakeTressfxSdfLayout(
-        *section.tressfxCollisionMesh, config.cellSize, config.margin);
+        *tressfxPlacementResources->collisionMesh, config.cellSize, config.margin);
     if (layoutResult.IsFailure())
         throw std::runtime_error("TressFX collision mesh distance field is invalid: " +
             layoutResult.Error().message + " path=" + config.path);
     const VL::Hair::TressfxSdfLayout& layout = layoutResult.Value();
     const uint32_t triangleCount =
-        static_cast<uint32_t>(section.tressfxCollisionMesh->indices.size() / 3);
+        static_cast<uint32_t>(tressfxPlacementResources->collisionMesh->indices.size() / 3);
     const VL::Hair::TressfxSdfParams sdfParams =
         VL::Hair::MakeTressfxSdfParams(layout, triangleCount);
 
@@ -664,8 +695,8 @@ void RenderableObject::CreateTressfxSdfBuffers()
     // 代理顶点/索引：device-local，仅创建时经 staging 上传一次。splat pass 每帧
     // 重新蒙皮，因此这里存的是绑定姿态坐标。
     std::vector<Eigen::Vector4f> proxyPositions;
-    proxyPositions.reserve(section.tressfxCollisionMesh->positions.size());
-    for (const Eigen::Vector3f& position : section.tressfxCollisionMesh->positions)
+    proxyPositions.reserve(tressfxPlacementResources->collisionMesh->positions.size());
+    for (const Eigen::Vector3f& position : tressfxPlacementResources->collisionMesh->positions)
         proxyPositions.emplace_back(position.x(), position.y(), position.z(), 0.0f);
     const vk::DeviceSize triangleBytes =
         static_cast<vk::DeviceSize>(proxyPositions.size()) * sizeof(Eigen::Vector4f);
@@ -675,7 +706,7 @@ void RenderableObject::CreateTressfxSdfBuffers()
     tressfxSdfTriangleInfo
         .setBuffer(tressfxSdfTriangleBuffer).setOffset(0).setRange(triangleBytes);
 
-    const std::vector<std::uint32_t>& proxyIndices = section.tressfxCollisionMesh->indices;
+    const std::vector<std::uint32_t>& proxyIndices = tressfxPlacementResources->collisionMesh->indices;
     const vk::DeviceSize indexBytes =
         static_cast<vk::DeviceSize>(proxyIndices.size()) * sizeof(std::uint32_t);
     std::tie(tressfxSdfIndexBuffer, tressfxSdfIndexMemory) =
@@ -874,7 +905,7 @@ bool RenderableObject::WriteTressfxSdfParams(
         frameSlot >= VL::Hair::GuideSimulationParamBufferCount)
         return false;
     const auto& section = imported->modelResource.sections[importedSectionIndex];
-    if (!section.tressfxCollisionMesh || !section.tressfxSimulation.collisionMesh)
+    if (!tressfxPlacementResources->collisionMesh || !tressfxSimulationConfig.collisionMesh)
         return false;
 
     // 有转移表且本帧拿到了源 SkinPose 时，域必须与 GPU splat 使用同一套逐顶点
@@ -882,7 +913,7 @@ bool RenderableObject::WriteTressfxSdfParams(
     // 保持原来的单骨根矩阵路径，域也按同一矩阵计算。
     const bool useProxySkin =
         tressfxSdfProxySkin != nullptr && jointMatrices != nullptr;
-    const VL::Hair::SdfTriangleMesh& proxy = *section.tressfxCollisionMesh;
+    const VL::Hair::SdfTriangleMesh& proxy = *tressfxPlacementResources->collisionMesh;
 
     Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
@@ -945,7 +976,7 @@ bool RenderableObject::WriteTressfxSdfParams(
         return false;
 
     const auto domainResult = VL::Hair::MakeTressfxSdfDomain(boundsMin, boundsMax,
-        section.tressfxSimulation.collisionMesh->margin, tressfxSdfResolution);
+        tressfxSimulationConfig.collisionMesh->margin, tressfxSdfResolution);
     if (domainResult.IsFailure())
     {
         if (!reportedSdfDomainFailure)

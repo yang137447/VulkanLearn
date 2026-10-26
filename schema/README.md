@@ -6,7 +6,11 @@ Resource paths below are relative to `config/config.json -> resourcePath`. The r
 top-level directories — `Common/`, `Maps/`, `Generated/` — not a `resources/` tree.
 
 - Bind `scene.schema.json` only to `Maps/SC_*/SC_*.json`.
-- Bind `model_descriptor.schema.json` only to `Common/Meshes/SM_*.json` and `Maps/SC_*/Meshes/SM_*.json`.
+- Bind `model_descriptor.schema.json` to `Common/Meshes/SM_*.json`, `Maps/SC_*/Meshes/SM_*.json`
+  and the corresponding `TF_*.json` paths. TF keeps `type: "tressfx"` and has an independent
+  editor/document kind. `tressfx_behavior.schema.json` supplies shared definitions for
+  `simulationDefaults`, placement modes/overrides, skinning and external hairCollision;
+  it is referenced by model and scene schemas, not bound to standalone assets.
 - Bind `material_instance.schema.json` only to `Common/Materials/**/MI_*.json` and
   `Maps/SC_*/Materials/**/MI_*.json`.
 - Bind `texture-asset` JSON to `Common/Textures/T_*.json` and `Maps/SC_*/Textures/T_*.json`
@@ -81,7 +85,9 @@ Recommended VS Code workspace settings:
         {
             "fileMatch": [
                 "/Common/Meshes/SM_*.json",
-                "/Maps/SC_*/Meshes/SM_*.json"
+                "/Maps/SC_*/Meshes/SM_*.json",
+                "/Common/Meshes/TF_*.json",
+                "/Maps/SC_*/Meshes/TF_*.json"
             ],
             "url": "./schema/model_descriptor.schema.json"
         },

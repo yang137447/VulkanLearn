@@ -13,7 +13,7 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
 | `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、适用的导入选项、已有材质槽的 MI 绑定；拒绝 type 为 tressfx 的文档 |
-| `tressfx.*` | `TF_*.json`，type 为 tressfx；源 TFX 引用、已有材质槽的 MI 绑定及 `simulation.*` 模拟标量；迁移期也接受旧 SM_ 前缀，不接受 importOptions，`strandRadius`/`collision.*` 不在修改能力表内 |
+| `tressfx.*` | `TF_*.json`，type 为 tressfx；源 TFX 引用、已有材质槽的 MI 绑定及 `simulationDefaults.*` 模拟默认值；不接受旧 SM_ 前缀或 importOptions，`strandRadius` 不在修改能力表内 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
@@ -23,13 +23,19 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
 
-TressFX 能力表包含 9 个 `simulation.*` 一级字段：`gravity`、`wind`（向量）、`damping`、
+TressFX 能力表包含 9 个 `simulationDefaults.*` 一级字段：`gravity`、`wind`（向量）、`damping`、
 `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
 `vspCoefficient`、`vspAccelThresholdMax`（数值）。这些字段只对 Tressfx 文档 kind 开放，
 Mesh 能力表不包含模拟字段。值域由
 `MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
-`iterations` 必须是整数。逐顶点曲线、`collision.*`、`strandRadius`、`skinning.*` 仍不在
-能力表内，属于资产直接编辑。
+`iterations` 必须是整数。逐顶点曲线、`strandRadius` 仍不在能力表内，属于资产直接编辑。
+文档投影额外保留 `simulationDefaults` 对象存在性及显式 `enabled/backend`，供
+预览 live/Reset 判定；这两个字段只读，不扩张修改能力。整值 `8.0` 与 `8`
+均可作为整数参数，小数、非有限值、负数或超界值在转换前拒绝。
+TF 不承载角色绑定或碰撞代理。蓝图组件的 `simulation.mode` 与稀疏 `overrides`、
+`hairCollision` 属于 BP 的完整组件数组；独立场景 mesh 的同类配置在 `tressfx` 对象内，
+不属于 `scene.modify` 的逐字段能力。TF 的旧 `simulation`、`collision`、
+`collisionDefaults` 字段会被拒绝。
 BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 [C# 蓝图](csharp-blueprint-runtime.md) 的场景新增/改名/复制/删除、实例属性与 inline
 组件/物理编辑、获准的继承组件字段编辑/重置由 GT 作者适配器复用 Scene 草稿与保存 owner，

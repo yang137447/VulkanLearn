@@ -101,7 +101,9 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
 Actor 使用同一资源标签容器中的专用配置表单。
 TressFX 使用独立 kind、筛选类别与专用毛发标签页，复用单对象预览、旋转、Reset 和
-Simulation 控件；资产草稿与保存使用独立 `tressfx.*` 文档命令。
+Simulation 控件；资产草稿与保存使用独立 `tressfx.*` 文档命令。TF 页编辑
+`simulationDefaults`，BP 的组件 Details 编辑 `inherit|off|on` 与稀疏 overrides；
+重置只删除本字段覆盖。CPU/off 默认值可编辑保存，live/Reset 仅对启用的 GPU 默认值开放。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
 MI、Mesh/Texture、Blueprint 和 Retarget 的资产名、身份/路径与预览状态采用视口左上角
 `asset-viewport-info` 文字叠层，不再使用独立标题区占用视口高度。叠层及子元素不接收指针，

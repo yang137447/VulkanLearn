@@ -1607,14 +1607,14 @@ TEST(MaterialInstanceEditorProduction, TressfxPublishesIndependentDraftsAndSaveC
     ASSERT_EQ(runtime.GetSnapshot().tressfxDocuments.size(), 1u);
     const auto frozen = runtime.GetSnapshot().tressfxDocuments;
     EditorAssetFieldChange change;
-    change.field = "simulation.damping";
+    change.field = "simulationDefaults.damping";
     change.value = 0.02;
     SubmitRuntimeCommand(runtime, 802, EditorCommandType::ModifyTressfxDocument,
         ModifyAssetDocumentPayload{path, {change}}, 1);
     ASSERT_EQ(runtime.GetCommandResult(802)->status, EditorCommandStatus::Succeeded);
     ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
     EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments[0].kind, EditorUi::EditorAssetKind::Tressfx);
-    EXPECT_FALSE(frozen[0].document.contains("simulation"));
+    EXPECT_FALSE(frozen[0].document.contains("simulationDefaults"));
     SubmitRuntimeCommand(runtime, 803, EditorCommandType::SaveTressfxDocument,
         MaterialInstanceAssetPathPayload{path}, 2);
     EXPECT_EQ(runtime.GetCommandResult(803)->status, EditorCommandStatus::Succeeded);

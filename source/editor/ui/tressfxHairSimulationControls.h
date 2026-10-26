@@ -13,6 +13,13 @@
 
 namespace VL::EditorUi
 {
+inline bool TressfxGpuSimulationDefaults(const nlohmann::json& document)
+{
+    if (!document.contains("simulationDefaults")) return false;
+    const auto defaults = document.value("simulationDefaults", nlohmann::json::object());
+    return defaults.value("enabled", true) && defaults.value("backend", "cpu") == "gpu";
+}
+
 // 毛发资产视口 Simulation 段的控件表。字段名与作者字段、运行期命令完全一致；
 // 范围只服务滑条展示（精确输入仍走文本），最终值域由运行期命令与资产校验收口。
 // 默认值必须与 `TressfxSimulationConfig` 的成员初值一致，否则面板会显示一个
@@ -46,7 +53,7 @@ inline const TressfxSimulationControl* TressfxSimulationControls(std::size_t& co
     return controls;
 }
 
-// 从作者文档的 simulation 对象读取一个控件的当前值；缺字段或类型不符时回退默认值，
+// 从 simulationDefaults/overrides 的参数对象读取当前值；缺字段时回退类型默认值，
 // 让面板在“字段还没作者”时仍可编辑，而不是显示 0 或空。
 inline std::array<double, 3> TressfxSimulationValue(
     const nlohmann::json& simulation, const TressfxSimulationControl& control)

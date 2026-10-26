@@ -3320,7 +3320,8 @@ void RenderSystem::EnsurePlacementRenderables(
             }
         // 克隆本身不感知类型；绑定（毛发骨骼等）由通用 resolver 按 Kind 分派。
         std::shared_ptr<RenderableObject> clone =
-            (*templateObject)->CloneForPlacement(draw.debugName);
+            (*templateObject)->CloneForPlacement(draw.debugName,
+                draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr);
         std::string bindingError;
         if (!VL::ApplyPlacementBinding(draw.placementBinding, **templateObject,
                 sourceObject, *clone, placementBindingCache, bindingError))

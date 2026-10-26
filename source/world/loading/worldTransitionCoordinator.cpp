@@ -133,6 +133,11 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             RendererResourceCache::GetInstance();
 
         PreparedWorldTransition prepared;
+        for (const auto& object : worldBuildPlan.sceneAssetPlan.objectPlans)
+            if (object.meshLoadRequest && object.meshLoadRequest->tressfxResources)
+                for (const auto& input : object.meshLoadRequest->tressfxResources->sourceInputs)
+                    prepared.placementSourceInputs.emplace_back(
+                        CommonFunction::Path(input.first), input.second);
         prepared.offlineWorldAssets = std::make_shared<OfflineWorldAssets>();
         prepared.offlineWorldAssets->worldGeneration = worldGeneration;
         prepared.offlineWorldAssets->scenePath = scenePath;

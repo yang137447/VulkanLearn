@@ -5,6 +5,7 @@
 #include "ui/widgets/views/viewWidgets.h"
 #include "ui/widgets/text/textWidgets.h"
 #include "script/scriptComponentOverrides.h"
+#include "editor/ui/tressfxHairSimulationControls.h"
 
 namespace VL::EditorUi
 {
@@ -166,15 +167,17 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                 const auto rootBone = node.value("rootBone", "");
                 markup += UiWidgets::PropertyInfo("Hair Asset", node.value("modelPath", ""));
                 markup += UiWidgets::PropertyInfo("Root Bone",
-                    rootBone.empty() ? "(descriptor default)" : rootBone);
+                    rootBone.empty() ? "(required)" : rootBone);
                 markup += UiWidgets::PropertyInfo("Root Weights", weightsLabel);
+                markup += UiWidgets::PropertyInfo("Simulation",
+                    node.value("simulation", nlohmann::json::object()).value("mode", "inherit"));
                 markup += UiWidgets::PropertyInfo("Asset-Owned",
                     "TressFX binding is authored in the Blueprint asset. Edit it in the Blueprint tab; "
                     "level instances cannot override these fields.");
             }
             else
             {
-                // 毛发字段与 mesh 的 modelPath 控件同名同形；rootBone 留空表示沿用描述符默认。
+                // rootBone 属于挂载，必须显式作者；TF 只拥有可复用默认值。
                 // 实例白名单不暴露毛发字段：绑定/权重属于资产级编排，不是场景实例差异。
                 markup += ScriptComponentProperty(actor, index, "modelPath", "Hair Asset", UiWidgets::Input(
                     ComponentControlId(index, "modelPath", 0, prefix), {prefix + "component-modelPath", index},
@@ -187,6 +190,36 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                     UiWidgets::Option("auto", "Auto (from parent mesh)") +
                     UiWidgets::Option("rootBone", "Root Bone") + UiWidgets::Option("mesh", "From Mesh")),
                     prefix, false);
+                markup += UiWidgets::PropertyControlRow("Material Override", UiWidgets::Input(
+                    ComponentControlId(index, "materialOverride", 0, prefix),
+                    {prefix + "component-materialOverride", index}, node.value("materialOverride", "")));
+                const auto simulation = node.value("simulation", nlohmann::json::object());
+                const auto overrides = simulation.value("overrides", nlohmann::json::object());
+                markup += UiWidgets::PropertyControlRow("Simulation", UiWidgets::Select(
+                    ComponentControlId(index, "hair-mode", 0, prefix), {prefix + "hair-mode", index},
+                    UiWidgets::Option("inherit", "Inherit") + UiWidgets::Option("off", "Off") +
+                    UiWidgets::Option("on", "On")));
+                std::size_t count = 0;
+                const auto* controls = TressfxSimulationControls(count);
+                for (std::size_t parameter = 0; parameter < count; ++parameter)
+                {
+                    const auto& control = controls[parameter];
+                    const std::string field = control.field;
+                    // 空值代表继承；向量作为完整 JSON 值编辑，不能把未改的轴烘成覆盖。
+                    std::string input = UiWidgets::Input(
+                        ComponentControlId(index, "hair-" + field, 0, prefix),
+                        {prefix + "hair-value", index, static_cast<uint32_t>(parameter)},
+                        overrides.contains(field) ? overrides.at(field).dump() : "");
+                    input += "<button id=\"" +
+                        ComponentControlId(index, "hair-reset-" + field, 0, prefix) +
+                        "\" class=\"browser-icon\" data-action=\"" + prefix +
+                        "hair-reset\" data-index=\"" + std::to_string(index) +
+                        "\" data-component=\"" + std::to_string(parameter) +
+                        "\" title=\"Restore inherited value\"><img src=\"icons/refresh.png\"/></button>";
+                    input += "<span id=\"" + ComponentControlId(index, "hair-source-" + field, 0, prefix) +
+                        "\">" + (overrides.contains(field) ? "Override" : "Inherited") + "</span>";
+                    markup += UiWidgets::PropertyControlRow(control.label, input);
+                }
             }
             markup += UiWidgets::PropertyInfo("Local Transform",
                 "Follows the parent mesh object space; local TRS is disabled for TressFX components.");
@@ -259,7 +292,7 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                     UiWidgets::Option("false", "False") + UiWidgets::Option("true", "True")), prefix, separateDetails);
         }
         // 毛发组件必须与父 mesh 同对象空间，局部 TRS 与图元碰撞都不适用：
-        // 碰撞由毛发描述符的 collision 对象拥有，这里不提供第二个作者入口。
+        // 外部阻挡代理由挂载 hairCollision 作者，不产生 Jolt 图元碰撞体。
         if (!tressfx)
         {
             for (const char* field : {"position", "rotation", "scale", "color"})

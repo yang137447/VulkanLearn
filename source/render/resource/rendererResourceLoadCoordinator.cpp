@@ -98,15 +98,8 @@ std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> BuildProxySkinTransfer(
     if (!hair.result.importResult || !source.result.importResult ||
         !source.result.importResult->modelResource.skeletalAsset)
         return nullptr;
-    const VL::Hair::SdfTriangleMesh* proxy = nullptr;
-    for (const MeshSection& section : hair.result.importResult->modelResource.sections)
-    {
-        if (section.tressfxCollisionMesh)
-        {
-            proxy = section.tressfxCollisionMesh.get();
-            break;
-        }
-    }
+    const VL::Hair::SdfTriangleMesh* proxy = hair.request->tressfxResources
+        ? hair.request->tressfxResources->collisionMesh.get() : nullptr;
     if (proxy == nullptr)
         return nullptr;
 
@@ -167,9 +160,11 @@ void ResolveTressfxPlacementBindings(
     for (const LoadedSceneMesh& hair : loadedMeshes)
     {
         const MeshAssetBuildPlan& hairPlan = hair.request->buildPlan;
-        if (hairPlan.assetType != "tressfx" || !hairPlan.tressfxSimulation.skinning)
+        const TressfxSimulationConfig& hairConfig = hair.request->tressfxEffective
+            ? *hair.request->tressfxEffective : hairPlan.tressfxSimulation;
+        if (hairPlan.assetType != "tressfx" || !hairConfig.skinning)
             continue;
-        const TressfxSimulationSkinning& requested = *hairPlan.tressfxSimulation.skinning;
+        const TressfxSimulationSkinning& requested = *hairConfig.skinning;
 
         // 绑定来源：蓝图 tressfx 组件的父 mesh 身份优先；场景路径仍读
         // simulation.skinning.source。两者都没有时不能在运行期猜。
@@ -245,12 +240,12 @@ void ResolveTressfxPlacementBindings(
         // 胶囊骨骼与根骨共用同一个源对象/骨架；每个胶囊独立解析，未知骨在加载期
         // 硬错误（消息带胶囊下标），没有 bone 的槽保留 -1 的静态行为。
         binding.capsuleJointIndices.assign(
-            hairPlan.tressfxSimulation.capsules.size(), -1);
+            hairConfig.capsules.size(), -1);
         for (size_t capsuleIndex = 0;
-             capsuleIndex < hairPlan.tressfxSimulation.capsules.size(); ++capsuleIndex)
+             capsuleIndex < hairConfig.capsules.size(); ++capsuleIndex)
         {
             const VL::Hair::TressfxCollider& capsule =
-                hairPlan.tressfxSimulation.capsules[capsuleIndex];
+                hairConfig.capsules[capsuleIndex];
             if (capsule.bone.empty())
                 continue;
             binding.capsuleJointIndices[capsuleIndex] = static_cast<int32_t>(
@@ -261,7 +256,7 @@ void ResolveTressfxPlacementBindings(
         }
         // 权重来源：组件显式值 > SM 显式 weights > 组件绑定默认 mesh。mesh 派生与
         // 显式 .tfxbone 同时出现按作者冲突拒绝，不做运行期择一。
-        const int weightChoice = VL::Hair::ResolveTressfxRootWeightChoice(componentBound,
+        const int weightChoice = VL::Hair::ResolveTressfxRootWeightChoice(false,
             requested.rootWeights == TressfxRootWeightSource::Mesh,
             requested.rootWeightsAuthored, hair.placementBinding.weights,
             !requested.boneWeightsPath.empty());
@@ -361,7 +356,7 @@ void ResolveTressfxPlacementBindings(
         // `collision.mesh` 与 skinning 同时存在时，代理改用逐顶点多骨权重。
         // 转移失败/距离超限在加载期硬错误；没有 collision.mesh 的对象不创建
         // 权重 buffer，SDF splat 保持单骨根矩阵回退。
-        if (hairPlan.tressfxSimulation.collisionMesh)
+        if (hairConfig.enabled && hairConfig.collisionMesh)
         {
             const std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> transfer =
                 BuildProxySkinTransfer(hair, *source);
@@ -450,9 +445,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             // 蓝图组件把放置级绑定写在生成对象上；通用记录优先于描述符自带的
             // 绑定来源（例如 SM 的 simulation.skinning.source）。旧 __tressfx*
             // 字段由 ReadPlacementBindingFromComponent 兼容读取。
-            if (objectPlan.componentObject)
-                loaded.placementBinding =
-                    VL::ReadPlacementBindingFromComponent(*objectPlan.componentObject);
+            loaded.placementBinding = VL::ReadPlacementBindingFromComponent(obj);
             loaded.result = meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
             loadedMeshes.push_back(std::move(loaded));
         }

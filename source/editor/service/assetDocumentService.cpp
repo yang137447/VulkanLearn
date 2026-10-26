@@ -50,6 +50,16 @@ Json ReadJson(const std::filesystem::path& path)
     return ParseStrictJson(text, 4 * 1024 * 1024);
 }
 
+std::vector<std::string> TressfxPlacementReferences(const Json& placement)
+{
+    std::vector<std::string> paths;
+    if (placement.contains("hairCollision") && placement.at("hairCollision").contains("mesh"))
+        paths.push_back(placement.at("hairCollision").at("mesh").at("path").get<std::string>());
+    if (placement.contains("skinning") && placement.at("skinning").contains("boneWeights"))
+        paths.push_back(placement.at("skinning").at("boneWeights").get<std::string>());
+    return paths;
+}
+
 void ValidateKind(K kind, const Json& json, const std::string& path)
 {
     if (!json.is_object()) throw std::invalid_argument("Asset must be a JSON object");
@@ -66,9 +76,9 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     if (kind == K::Scene && foldedFilename == "sc_model_preview.json")
         throw std::invalid_argument("Preview scenes are not editable asset documents");
+    if (kind == K::Tressfx && filename.rfind("TF_", 0) != 0)
+        throw std::invalid_argument("TressFX descriptors require TF_*.json names; 请将旧 SM_ 毛发资产改为 TF_ 前缀");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
-        // 迁移期旧 SM_ 毛发只归 TressFX owner，避免同一资产出现两份独立草稿。
-        (kind == K::Tressfx && filename.rfind("TF_", 0) != 0 && filename.rfind("SM_", 0) != 0) ||
         (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
         (kind == K::Blueprint && filename.rfind("BP_", 0) != 0))
         throw std::invalid_argument("Mesh/TressFX/Texture/Blueprint descriptors require SM_/TF_/T_/BP_ JSON names");
@@ -178,6 +188,9 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         const auto effective = ResolveScriptBlueprintScene(resourceRoot, candidate, path);
         for (const auto& object : effective.at("objects"))
         {
+            if (object.contains("tressfx"))
+                for (const auto& reference : TressfxPlacementReferences(object.at("tressfx")))
+                    ResolveReference(reference);
             if (object.at("type") == "environment" && object.at("environment").at("type") == "hdri")
                 ResolveReference(object.at("environment").at("hdrPath").get<std::string>());
             for (const char* field : {"modelPath", "materialOverride"})
@@ -192,6 +205,10 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                 }
             if (object.at("type") == "blueprintInstance" && object.contains("components"))
                 for (const auto& component : object.at("components"))
+                {
+                    if (component.value("type", "") == "tressfx")
+                        for (const auto& reference : TressfxPlacementReferences(component))
+                            ResolveReference(reference);
                     for (const char* field : {"modelPath", "materialOverride"})
                         if (component.contains(field))
                         {
@@ -201,6 +218,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                                 (std::string(field) == "materialOverride" && type != "materialInstance"))
                                 throw std::invalid_argument("Invalid Actor component reference type");
                         }
+                }
         }
     }
     else if (kind == K::Blueprint)
@@ -210,6 +228,16 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         if (!blueprintComponentClasses.is_null()) ValidateScriptLogicPropertySchema(candidate, blueprintComponentClasses);
         const auto owner = Resolve(path).lexically_relative(resourceRoot);
         for (const auto& component : candidate.value("components", Json::array()))
+        {
+            // 代理已经下沉到组件；作者保存边界继续复核引用及内容归属，避免漏掉 OBJ。
+            if (component.value("type", "") == "tressfx")
+                for (const auto& path : TressfxPlacementReferences(component))
+                {
+                    const auto reference = ResolveReference(path).lexically_relative(resourceRoot);
+                    if ((ScriptContentDomain(owner) != "generated" && ScriptContentDomain(reference) == "generated") ||
+                        (ScriptContentDomain(owner) == "common" && ScriptContentDomain(reference) == "maps"))
+                        throw std::invalid_argument("Actor dependency violates content ownership");
+                }
             for (const char* field : {"modelPath", "materialOverride"})
                 if (component.contains(field))
                 {
@@ -223,6 +251,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument("Invalid Actor component reference type");
                 }
+        }
     }
     else if (kind == K::Mesh || kind == K::Tressfx)
     {

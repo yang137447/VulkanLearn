@@ -4,6 +4,7 @@
 
 #include "hair/tressfxFrameContext.h"
 #include "hair/tressfxSkinning.h"
+#include "hair/tressfxSimulationParams.h"
 
 namespace VL::Hair
 {
@@ -96,6 +97,54 @@ TEST(TressfxFrameContext, LegacyPoseUsesSectionPaletteAndPreservesFrozenIdentity
     pose.discontinuity = 7;
     EXPECT_FALSE(frame.skinningMatrix.isApprox(pose.matrices[0]));
     EXPECT_EQ(frame.discontinuity, 6u);
+}
+
+TEST(TressfxFrameContext, SkinningOnlyConsumesNewPoseAtZeroSimulationDelta)
+{
+    const Eigen::Matrix4f hairModel = Placement(
+        {12.0f, 3.0f, -7.0f}, Eigen::Vector3f::UnitY(), 0.4f);
+    const Eigen::Matrix4f sourceModel = Placement(
+        {-4.0f, 2.0f, 9.0f}, Eigen::Vector3f::UnitZ(), -0.2f);
+    Animation::SkinPose pose;
+    pose.bindToPoseMatrices.push_back(Eigen::Matrix4f::Identity());
+    TressfxFrameContext frame;
+    UpdateTressfxFrameContext(frame, hairModel, sourceModel, pose, 0, 0.0f);
+    const auto before = MakeGuideSkinningParams(1, 4, frame.skinningMatrix, false);
+    pose.bindToPoseMatrices[0] = Placement(
+        {2.0f, 7.0f, -3.0f}, Eigen::Vector3f::UnitX(), 0.6f);
+    UpdateTressfxFrameContext(frame, hairModel, sourceModel, pose, 0, 0.0f);
+    const auto after = MakeGuideSkinningParams(1, 4, frame.skinningMatrix, false);
+    // 同时检查根和梢；off 不能退化为只更新固定根点。
+    for (const Eigen::Vector4f& rest :
+        {Eigen::Vector4f(1, 150, 2, 1), Eigen::Vector4f(5, 130, -3, 1)})
+    {
+        EXPECT_FALSE((before.skinning * rest).isApprox(after.skinning * rest));
+        EXPECT_TRUE((hairModel * after.skinning * rest).isApprox(
+            sourceModel * pose.bindToPoseMatrices[0] * rest, 1.0e-5f));
+    }
+    EXPECT_FLOAT_EQ(after.controls.x(), 0.0f);
+}
+
+TEST(TressfxFrameContext, SkinningOnlyParamsDoNotActivateSolverOrCollision)
+{
+    Eigen::Matrix4f root = Eigen::Matrix4f::Identity();
+    root(1, 3) = 17.0f;
+    const auto params = MakeGuideSkinningParams(3, 8, root, true);
+    EXPECT_EQ(params.guideCount, 3u);
+    EXPECT_EQ(params.pointCount, 24u);
+    EXPECT_FLOAT_EQ(params.controls.z(), 8.0f);
+    EXPECT_TRUE(params.skinning.isApprox(root));
+    EXPECT_FLOAT_EQ(params.motion.w(), 4.0f);
+    EXPECT_FLOAT_EQ(MakeGuideSkinningParams(3, 8, root, false).motion.w(), 0.0f);
+    EXPECT_EQ(params.iterations, 0u);
+    EXPECT_EQ(params.colliderCount, 0u);
+    EXPECT_TRUE(params.gravity.isZero());
+    EXPECT_TRUE(params.wind0.isZero());
+    EXPECT_TRUE(params.wind1.isZero());
+    EXPECT_TRUE(params.wind2.isZero());
+    EXPECT_TRUE(params.wind3.isZero());
+    EXPECT_TRUE(params.shape.isZero());
+    EXPECT_TRUE(params.motion.head<3>().isZero());
 }
 
 TEST(TressfxFrameClock, RepeatedRenderSceneDoesNotAdvanceSimulationTwice)

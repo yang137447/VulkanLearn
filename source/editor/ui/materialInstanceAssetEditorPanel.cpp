@@ -2616,6 +2616,9 @@ void MaterialInstanceAssetEditorPanel::RequestHairReset()
     // 复位不是重载：渲染线程在下一个正 delta 帧走一次 ResetPositions，
     // 20 MB TFX 不会被重新解析。
     if (runtimeActionSink == nullptr || !IsActiveHairPreview()) return;
+    const auto* active = resourceEditor.ActiveTab();
+    const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+    if (!authored || !TressfxGpuSimulationDefaults(authored->document)) return;
     if (!CurrentModelPreviewGeneration()) return;
     UiAction action;
     action.type = UiActionType::ResetHairSimulation;
@@ -2709,8 +2712,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
         {
             const uint64_t previousRevision = hairSimulationBoundRevision;
             hairSimulationBoundRevision = document->documentRevision;
-            const nlohmann::json simulation = document->document.contains("simulation")
-                ? document->document.at("simulation") : nlohmann::json::object();
+            const nlohmann::json simulation = document->document.contains("simulationDefaults")
+                ? document->document.at("simulationDefaults") : nlohmann::json::object();
             std::size_t count = 0;
             const TressfxSimulationControl* controls = TressfxSimulationControls(count);
             nlohmann::json values = nlohmann::json::object();
@@ -2723,7 +2726,7 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             hairSimulationValues = std::move(values);
             // 保存成功后草稿回到 clean：明确提示要重载才会应用作者值并复位模拟。
             hairSimulationStatus = previousRevision != 0 && !document->dirty
-                ? "Saved to the hair asset; all placements are affected. Reload to apply and reset the simulation."
+                ? "Defaults saved to the hair asset. Reload to apply inherited values and reset the simulation."
                 : hairSimulationPendingSave ? hairSimulationStatus
                 : "Values loaded from the asset draft.";
         }
@@ -2732,8 +2735,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
         // 因此额外用值相等判定解锁，避免停在“正在暂存”。
         if (hairSimulationPendingSave)
         {
-            const nlohmann::json simulation = document->document.contains("simulation")
-                ? document->document.at("simulation") : nlohmann::json::object();
+            const nlohmann::json simulation = document->document.contains("simulationDefaults")
+                ? document->document.at("simulationDefaults") : nlohmann::json::object();
             const bool staged = document->documentRevision > hairSimulationSaveRevision ||
                 (document->dirty && TressfxSimulationValuesMatch(simulation, hairSimulationValues));
             if (staged)
@@ -2786,14 +2789,13 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             document != nullptr ? "Save to Hair Asset" : "Reading asset...",
             UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
         "<span class=\"hair-sim-status\">" + Text(hairSimulationStatus) + "</span></div>";
-    // 这是资产级编辑：保存写 TF_*.json，影响所有摆放该资产的实例；实时值只属于
+    // 这是资产级默认值编辑：保存写 TF_*.json，只影响未覆写这些字段的挂载；实时值只属于
     // 当前预览会话。必须写清，避免作者误以为在改关卡里的这一根头发。
     rows += "<p class=\"hair-sim-note\">Drag previews in this viewport only (not saved). "
-        "Save writes the hair asset (TF_*.json): every placement is affected, and reloading "
-        "resets the simulation. enabled / backend / rootFixedPoints / curves / collision / "
-        "skinning / strandRadius require a world reload.</p>";
+        "Save writes the hair asset defaults (TF_*.json): inherited placement values are affected, and reloading "
+        "resets the simulation. Placement overrides are edited in the Blueprint asset.</p>";
     SetMarkup("resource-hair-simulation", UiWidgets::CollapsibleSection(
-        DetailsSectionId("hair-simulation"), "hair-simulation", "Simulation", rows,
+        DetailsSectionId("hair-simulation"), "hair-simulation", "Simulation Defaults", rows,
         {"section"}, IsSectionExpanded("hair-simulation")));
 }
 
@@ -2801,6 +2803,9 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationLive(std::size_t cont
     const std::array<double, 3>& values)
 {
     if (runtimeActionSink == nullptr || runtimeView.offlineMode || !IsActiveHairPreview()) return;
+    const auto* active = resourceEditor.ActiveTab();
+    const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+    if (!authored || !TressfxGpuSimulationDefaults(authored->document)) return;
     // 预览 World 还没发布时不要投递：命令队列不绑定 World 世代，早到的值会落到
     // 之后出现的同名对象上。
     const uint64_t generation = CurrentModelPreviewGeneration();
@@ -2842,7 +2847,7 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
     {
         const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
         EditorAssetFieldChange change;
-        change.field = std::string("simulation.") + controls[index].field;
+        change.field = std::string("simulationDefaults.") + controls[index].field;
         if (controls[index].components == 1)
             change.value = values[0];
         else
@@ -3191,7 +3196,9 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     // 毛发工具只在可预览的 tressfx 资产上出现；挡预览时隐藏复位按钮，
     // 让“没有视口”和“有视口但没东西可复位”在 UI 上不混淆。
     widgetDocument.SetProperty("resource-hair-tools", "display", isHair && !hairBlocked ? "flex" : "none");
-    SetDisabled("resource-hair-reset", !previewReady);
+    const auto* hairDocument = isHair ? TressfxDocument(active->path) : nullptr;
+    SetDisabled("resource-hair-reset", !previewReady || !hairDocument ||
+        !TressfxGpuSimulationDefaults(hairDocument->document));
     widgetDocument.SetClass("resource-model-tools", "visible", isMesh);
     widgetDocument.SetClass("resource-model-info", "visible", isMesh);
     for (const char* id : {"resource-tool-select", "resource-tool-move", "resource-tool-rotate", "resource-tool-scale",
@@ -4286,7 +4293,10 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         values[component] = value;
         hairSimulationValues[controls[index].field] =
             nlohmann::json::array({values[0], values[1], values[2]});
-        hairSimulationStatus = "Live preview in this viewport (not saved).";
+        const auto* active = resourceEditor.ActiveTab();
+        const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+        hairSimulationStatus = authored && TressfxGpuSimulationDefaults(authored->document)
+            ? "Live preview in this viewport (not saved)." : "Default value edited (not saved).";
         SubmitHairSimulationLive(index, values);
         return;
     }

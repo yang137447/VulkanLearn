@@ -288,6 +288,8 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
             "title=\"Add component\"><img src=\"icons/plus.png\"/></button></div>" +
             "<div class=\"blueprint-asset-mesh-path\"><label>Mesh / Hair Asset</label>" +
             Input(Prefix + "component-mesh", {Prefix + "component-mesh"}, "") + "</div>" +
+            "<div class=\"blueprint-asset-mesh-path\"><label>Hair Root Bone</label>" +
+            Input(Prefix + "component-root-bone", {Prefix + "component-root-bone"}, "") + "</div>" +
             "<div id=\"blueprint-asset-component-tree\"><div id=\"blueprint-asset-tree-root\">" + TreeRow(root) +
             "</div>" + BlueprintComponentTree(actor.scriptComponents) + "</div>" + BlueprintLogicTree(draft) + "</div>" +
             "<div id=\"blueprint-asset-preview\"><div class=\"blueprint-asset-preview-toolbar\">"
@@ -437,7 +439,8 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
         // 毛发字段不在实例白名单表里（ScriptComponentInstanceFields 只列可覆写字段），
         // 这里单独同步控件值，避免 Details 显示缺省而草稿里已有作者值。
         if (node.value("type", "") == "tressfx")
-            for (const char* field : {"modelPath", "rootBone", "weights"})
+        {
+            for (const char* field : {"modelPath", "materialOverride", "rootBone", "weights"})
             {
                 const auto controlId = ComponentControlId(index, field, 0, Prefix);
                 if (document->GetElementById(controlId) == nullptr) continue;
@@ -447,6 +450,25 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
                 SetControlValue(controlId, value);
                 SetDisabled(controlId, disabled);
             }
+            const auto simulation = node.value("simulation", Json::object());
+            const auto overrides = simulation.value("overrides", Json::object());
+            SetControlValue(ComponentControlId(index, "hair-mode", 0, Prefix),
+                simulation.value("mode", "inherit"));
+            SetDisabled(ComponentControlId(index, "hair-mode", 0, Prefix), disabled);
+            std::size_t count = 0;
+            const auto* controls = TressfxSimulationControls(count);
+            for (std::size_t parameter = 0; parameter < count; ++parameter)
+            {
+                const std::string field = controls[parameter].field;
+                const auto id = ComponentControlId(index, "hair-" + field, 0, Prefix);
+                SetControlValue(id, overrides.contains(field) ? overrides.at(field).dump() : "");
+                SetMarkup(ComponentControlId(index, "hair-source-" + field, 0, Prefix),
+                    overrides.contains(field) ? "Override" : "Inherited");
+                SetDisabled(id, disabled);
+                SetDisabled(ComponentControlId(index, "hair-reset-" + field, 0, Prefix),
+                    disabled || !overrides.contains(field));
+            }
+        }
     }
     const auto physics = draft.value("physics", Json::object());
     const auto motion = physics.value("motion", "none"), shape = physics.value("shape", "box");
@@ -688,8 +710,58 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
             }
             node["parent"] = parent;
             node["modelPath"] = hairAsset;
+            const auto rootBone = ControlText(*document->GetElementById(Prefix + "component-root-bone"));
+            if (rootBone.empty())
+            {
+                localStatus = "A root bone is required for a TressFX component.";
+                return;
+            }
+            node["rootBone"] = rootBone;
         }
         nodes.push_back(std::move(node));
+    }
+    else if (field.rfind("hair-", 0) == 0 && index < draft.value("components", Json::array()).size())
+    {
+        auto& node = draft["components"][index];
+        if (node.value("type", "") != "tressfx") return;
+        auto simulation = node.value("simulation", Json::object());
+        if (field == "hair-mode" && !click)
+        {
+            if (text != "inherit" && text != "off" && text != "on") return;
+            if (simulation.value("mode", "inherit") == text) return;
+            if (text == "inherit") simulation.erase("mode");
+            else simulation["mode"] = text;
+        }
+        else if ((field == "hair-value" && !click) || (field == "hair-reset" && click))
+        {
+            std::size_t count = 0;
+            const auto* controls = TressfxSimulationControls(count);
+            if (axis >= count) return;
+            const auto& control = controls[axis];
+            auto overrides = simulation.value("overrides", Json::object());
+            if (field == "hair-reset" || text.empty()) overrides.erase(control.field);
+            else
+            {
+                const auto value = Json::parse(text, nullptr, false);
+                bool valid = control.components == 1 ? value.is_number() :
+                    value.is_array() && value.size() == 3;
+                if (valid && control.components == 3)
+                    for (const auto& component : value) valid = valid && component.is_number();
+                if (!valid)
+                {
+                    localStatus = control.components == 1 ? "Enter a numeric override." :
+                        "Enter a complete vector override, for example [0, -980, 0].";
+                    return;
+                }
+                overrides[control.field] = value;
+            }
+            // 重置只删除本字段；不把资产默认值复制到组件，不扩大稀疏覆盖范围。
+            if (overrides.empty()) simulation.erase("overrides");
+            else simulation["overrides"] = std::move(overrides);
+        }
+        else return;
+        if (simulation.empty()) node.erase("simulation");
+        else node["simulation"] = std::move(simulation);
     }
     else if (field == "component-remove" && click && index < draft.value("components", Json::array()).size())
     {
@@ -760,6 +832,11 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
         }
         else if (key == "modelPath" || key == "materialOverride" || key == "rootBone")
         {
+            if (tressfx && key == "rootBone" && text.empty())
+            {
+                localStatus = "A root bone is required for a TressFX component.";
+                return;
+            }
             if (tressfx && key == "modelPath" && text.empty())
             {
                 localStatus = "A hair asset path is required for a TressFX component.";

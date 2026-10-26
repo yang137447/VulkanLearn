@@ -13,6 +13,10 @@
 class MeshAssetValidator
 {
 public:
+    // 共用数值校验器；调用方负责把资产默认值或放置行为归一成内部配置块。
+    static TressfxSimulationConfig BuildTressfxSimulationConfig(
+        const nlohmann::json& configuration, std::string_view context);
+
     static MeshAssetBuildPlan BuildLoadPlan(
         std::string_view meshAssetPath,
         const nlohmann::json& effectiveMeshAssetJson);

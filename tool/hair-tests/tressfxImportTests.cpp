@@ -1,6 +1,7 @@
 #include "mesh/loader/hair/tressfxModelImporter.h"
 #include "mesh/validation/meshAssetValidator.h"
 #include "render/resource/renderableObjectKey.h"
+#include "hair/tressfxBehavior.h"
 #include "tfxFixture.h"
 
 #include <gtest/gtest.h>
@@ -11,6 +12,31 @@
 
 namespace
 {
+// 既有数值域用例同时提供默认值和挂载片段；正式资产校验只接收 TF 字段，
+// 骨骼/碰撞交给同一放置合成入口，身份断言针对有效 renderable 配置。
+MeshAssetBuildPlan BuildPlacementFixturePlan(
+    std::string_view path, nlohmann::json asset)
+{
+    nlohmann::json placement = nlohmann::json::object();
+    if (asset.contains("simulationDefaults") &&
+        asset["simulationDefaults"].contains("skinning"))
+    {
+        placement["skinning"] = asset["simulationDefaults"]["skinning"];
+        asset["simulationDefaults"].erase("skinning");
+    }
+    if (asset.contains("hairCollision"))
+    {
+        placement["hairCollision"] = asset["hairCollision"];
+        asset.erase("hairCollision");
+    }
+    auto plan = MeshAssetValidator::BuildLoadPlan(path, asset);
+    const auto behavior = VL::Hair::ReadTressfxPlacementBehavior(placement, std::string(path));
+    plan.tressfxSimulation = VL::Hair::ResolveTressfxBehavior(
+        plan.tressfxSimulation, behavior, std::string(path));
+    plan.modelCacheKey += "|behavior=" + VL::Hair::MakeTressfxBehaviorKey(plan.tressfxSimulation);
+    return plan;
+}
+
 nlohmann::json Descriptor(float radius = 0.05f)
 {
     return {{"name", "SM_guides"}, {"type", "tressfx"},
@@ -21,9 +47,93 @@ nlohmann::json Descriptor(float radius = 0.05f)
 nlohmann::json GpuDescriptor()
 {
     auto json = Descriptor();
-    json["simulation"] = {{"backend", "gpu"}};
-    json["collision"] = {{"capsules", nlohmann::json::array()}};
+    json["simulationDefaults"] = {{"backend", "gpu"}};
+    json["hairCollision"] = {{"capsules", nlohmann::json::array()}};
     return json;
+}
+
+TEST(TressfxBehavior, GeometryIdentityIgnoresSimulationDefaults)
+{
+    auto asset = Descriptor();
+    asset["simulationDefaults"] = {{"enabled", true}, {"backend", "gpu"}, {"damping", 0.03f}};
+    const auto first = MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset);
+    asset["simulationDefaults"]["damping"] = 0.05f;
+    const auto second = MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset);
+    EXPECT_EQ(first.modelCacheKey, second.modelCacheKey);
+    EXPECT_NE(VL::Hair::MakeTressfxBehaviorKey(first.tressfxSimulation),
+        VL::Hair::MakeTressfxBehaviorKey(second.tressfxSimulation));
+}
+
+TEST(TressfxBehavior, RejectsLegacyAssetBehaviorAndCharacterInputsInDefaults)
+{
+    for (const char* field : {"simulation", "collision", "collisionDefaults", "hairCollision"})
+    {
+        auto asset = Descriptor();
+        asset[field] = nlohmann::json::object();
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset), std::runtime_error);
+    }
+    auto asset = Descriptor();
+    asset["simulationDefaults"] = {{"skinning", {{"rootBone", "Head"}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset), std::runtime_error);
+}
+
+TEST(TressfxBehavior, InheritOffAndOnResolveAgainstOneDefaultConfig)
+{
+    auto asset = Descriptor();
+    asset["simulationDefaults"] = {{"enabled", true}, {"backend", "gpu"}, {"damping", 0.03f}};
+    const auto defaults = MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset).tressfxSimulation;
+    const auto inherit = VL::Hair::ResolveTressfxBehavior(defaults,
+        VL::Hair::ReadTressfxPlacementBehavior(nlohmann::json::object(), "inherit"));
+    const auto off = VL::Hair::ResolveTressfxBehavior(defaults,
+        VL::Hair::ReadTressfxPlacementBehavior(
+            {{"simulation", {{"mode", "off"}, {"overrides", {{"damping", 0.06f}}}}},
+             {"skinning", {{"source", "Body"}, {"rootBone", "Head"}, {"weights", "mesh"}}}},
+            "off"));
+    EXPECT_TRUE(inherit.enabled);
+    EXPECT_FALSE(off.enabled);
+    EXPECT_TRUE(off.skinning.has_value());
+    EXPECT_FLOAT_EQ(off.damping, 0.06f);
+    EXPECT_FLOAT_EQ(defaults.damping, 0.03f);
+    auto disabledDefaults = defaults;
+    disabledDefaults.enabled = false;
+    const auto on = VL::Hair::ResolveTressfxBehavior(disabledDefaults,
+        VL::Hair::ReadTressfxPlacementBehavior({{"simulation", {{"mode", "on"}}}}, "on"));
+    EXPECT_TRUE(on.enabled);
+    EXPECT_NE(VL::Hair::MakeTressfxBehaviorKey(on), VL::Hair::MakeTressfxBehaviorKey(off));
+}
+
+TEST(TressfxBehavior, OverridesRejectEnabledBindingCollisionAndUnknownFields)
+{
+    for (const char* field : {"enabled", "skinning", "collision", "hairCollision", "dampping"})
+        EXPECT_THROW(VL::Hair::ReadTressfxPlacementBehavior(
+            {{"simulation", {{"overrides", {{field, false}}}}}}, "bad"), std::runtime_error);
+    EXPECT_THROW(VL::Hair::ReadTressfxPlacementBehavior(
+        {{"simulation", {{"mode", "simulate"}}}}, "bad"), std::runtime_error);
+}
+
+TEST(TressfxBehavior, IntegerDefaultsAcceptIntegralFloatingPointValues)
+{
+    auto asset = Descriptor();
+    asset["simulationDefaults"] = {{"iterations", 8.0}, {"rootFixedPoints", 2.0}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", asset);
+    EXPECT_EQ(plan.tressfxSimulation.iterations, 8u);
+    EXPECT_EQ(plan.tressfxSimulation.rootFixedPoints, 2u);
+}
+
+TEST(TressfxBehavior, IntegerOverridesRejectFractionNegativeOverflowAndNonfinite)
+{
+    const std::vector<nlohmann::json> invalid = {
+        1.5, -1, 4294967296.0, std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::quiet_NaN(), "2", true};
+    for (const char* field : {"iterations", "rootFixedPoints"})
+        for (const auto& value : invalid)
+        {
+            SCOPED_TRACE(field);
+            SCOPED_TRACE(value.dump());
+            EXPECT_THROW(VL::Hair::ReadTressfxPlacementBehavior(
+                {{"simulation", {{"overrides", {{field, value}}}}}}, "TF_hair.json"),
+                std::runtime_error);
+        }
 }
 
 TEST(TressfxDescriptor, RequiresPositiveFiniteRepresentableRadius)
@@ -32,24 +142,24 @@ TEST(TressfxDescriptor, RequiresPositiveFiniteRepresentableRadius)
     {
         auto json = Descriptor();
         json["strandRadius"] = radius;
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
     }
     auto json = Descriptor();
     json.erase("strandRadius");
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
 }
 
 TEST(TressfxDescriptor, RadiusParticipatesInMeshIdentityWithoutDecimalTruncation)
 {
-    const auto first = MeshAssetValidator::BuildLoadPlan("SM_a.json", Descriptor(0.000001f));
-    const auto second = MeshAssetValidator::BuildLoadPlan("SM_b.json", Descriptor(0.0000011f));
+    const auto first = BuildPlacementFixturePlan("SM_a.json", Descriptor(0.000001f));
+    const auto second = BuildPlacementFixturePlan("SM_b.json", Descriptor(0.0000011f));
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"enabled", true},
         {"gravity", {0.0f, -980.0f, 0.0f}},
         {"wind", {10.0f, 0.0f, 3.0f}},
@@ -57,7 +167,7 @@ TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
         {"iterations", 4},
         {"rootFixedPoints", 2},
         {"maxDt", 0.016f}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_TRUE(plan.tressfxSimulation.enabled);
     EXPECT_FLOAT_EQ(plan.tressfxSimulation.gravity.y(), -980.0f);
     EXPECT_EQ(plan.tressfxSimulation.iterations, 4u);
@@ -67,14 +177,14 @@ TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
 TEST(TressfxDescriptor, SimulationRejectsInvalidControls)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"damping", 1.2f}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
-    json["simulation"] = {{"gravity", {0.0f, 1.0f}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
-    json["simulation"] = {{"iterations", 17}};
+    json["simulationDefaults"] = {{"damping", 1.2f}};
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json), std::runtime_error);
+    json["simulationDefaults"] = {{"gravity", {0.0f, 1.0f}}};
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json), std::runtime_error);
+    json["simulationDefaults"] = {{"iterations", 17}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("SM_iterations.json", json);
+        BuildPlacementFixturePlan("SM_iterations.json", json);
         FAIL() << "Out-of-range TressFX iterations were accepted";
     }
     catch (const std::runtime_error& error)
@@ -88,30 +198,30 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidControls)
 TEST(TressfxDescriptor, SimulationBackendDefaultsToCpu)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"enabled", true}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    json["simulationDefaults"] = {{"enabled", true}};
+    const auto plan = BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_EQ(plan.tressfxSimulation.backend, TressfxSimulationBackend::Cpu);
 }
 
 TEST(TressfxDescriptor, SimulationBackendAcceptsCpuAndGpu)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"backend", "cpu"}};
-    EXPECT_EQ(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+    json["simulationDefaults"] = {{"backend", "cpu"}};
+    EXPECT_EQ(BuildPlacementFixturePlan("SM_dynamic.json", json)
             .tressfxSimulation.backend, TressfxSimulationBackend::Cpu);
 
-    json["simulation"] = {{"backend", "gpu"}};
-    EXPECT_EQ(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+    json["simulationDefaults"] = {{"backend", "gpu"}};
+    EXPECT_EQ(BuildPlacementFixturePlan("SM_dynamic.json", json)
             .tressfxSimulation.backend, TressfxSimulationBackend::Gpu);
 }
 
 TEST(TressfxDescriptor, SimulationBackendRejectsUnknownValueWithAssetPath)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"backend", "cuda"}};
+    json["simulationDefaults"] = {{"backend", "cuda"}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_dynamic.json", json);
+        BuildPlacementFixturePlan("Maps/SC_probe/Meshes/SM_dynamic.json", json);
         FAIL() << "Unknown TressFX simulation backend was accepted";
     }
     catch (const std::runtime_error& error)
@@ -126,20 +236,20 @@ TEST(TressfxDescriptor, SimulationBackendRejectsUnknownValueWithAssetPath)
 TEST(TressfxDescriptor, SimulationBackendParticipatesInMeshIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"backend", "cpu"}};
-    const auto cpuPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
-    json["simulation"] = {{"backend", "gpu"}};
-    const auto gpuPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    json["simulationDefaults"] = {{"backend", "cpu"}};
+    const auto cpuPlan = BuildPlacementFixturePlan("SM_dynamic.json", json);
+    json["simulationDefaults"] = {{"backend", "gpu"}};
+    const auto gpuPlan = BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_NE(cpuPlan.modelCacheKey, gpuPlan.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SkinningAcceptsSourceAndRootBoneWithGpuBackend)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
     EXPECT_EQ(plan.tressfxSimulation.skinning->source, "FemaleCharacter");
     EXPECT_EQ(plan.tressfxSimulation.skinning->rootBone, "Head_M");
@@ -148,11 +258,11 @@ TEST(TressfxDescriptor, SkinningAcceptsSourceAndRootBoneWithGpuBackend)
 TEST(TressfxDescriptor, SkinningAcceptsOptionalBoneWeights)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"boneWeights", "Maps/SC_x/female.tfxbone"}}}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
     EXPECT_EQ(plan.tressfxSimulation.skinning->boneWeightsPath,
         "Maps/SC_x/female.tfxbone");
@@ -161,11 +271,11 @@ TEST(TressfxDescriptor, SkinningAcceptsOptionalBoneWeights)
 TEST(TressfxDescriptor, SkinningRequiresGpuBackend)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
         FAIL() << "CPU backend accepted simulation.skinning";
     }
     catch (const std::runtime_error& error)
@@ -181,33 +291,33 @@ TEST(TressfxDescriptor, SkinningRequiresGpuBackend)
 TEST(TressfxDescriptor, SkinningRequiresRootBoneAndValidSource)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"rootBone", "Head_M"}}}};
-    EXPECT_NO_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json));
+    EXPECT_NO_THROW(BuildPlacementFixturePlan("SM_hair_skinned.json", json));
 
     auto missingRoot = json;
-    missingRoot["simulation"]["skinning"].erase("rootBone");
+    missingRoot["simulationDefaults"]["skinning"].erase("rootBone");
     EXPECT_THROW(
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", missingRoot),
+        BuildPlacementFixturePlan("SM_hair_skinned.json", missingRoot),
         std::runtime_error);
 
     auto emptySource = json;
-    emptySource["simulation"]["skinning"]["source"] = "";
+    emptySource["simulationDefaults"]["skinning"]["source"] = "";
     EXPECT_THROW(
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", emptySource),
+        BuildPlacementFixturePlan("SM_hair_skinned.json", emptySource),
         std::runtime_error);
 }
 
 TEST(TressfxDescriptor, SkinningRequiresRootBone)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
         FAIL() << "simulation.skinning without rootBone was accepted";
     }
     catch (const std::runtime_error& error)
@@ -221,63 +331,63 @@ TEST(TressfxDescriptor, SkinningRequiresRootBone)
 TEST(TressfxDescriptor, SkinningRejectsUnknownKeys)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"extra", 1}}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_hair_skinned.json", json),
         std::runtime_error);
 }
 
 TEST(TressfxDescriptor, SkinBoneWeightsParticipateInMeshIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
     const auto first =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
-    json["simulation"]["skinning"]["boneWeights"] = "Maps/SC_x/female.tfxbone";
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
+    json["simulationDefaults"]["skinning"]["boneWeights"] = "Maps/SC_x/female.tfxbone";
     const auto second =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SkinningSourceParticipatesInMeshIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
     const auto first =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
-    json["simulation"]["skinning"]["source"] = "OtherCharacter";
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
+    json["simulationDefaults"]["skinning"]["source"] = "OtherCharacter";
     const auto second =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SkinningRootBoneParticipatesInMeshIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
     const auto first =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
-    json["simulation"]["skinning"]["rootBone"] = "HeadEnd_M";
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
+    json["simulationDefaults"]["skinning"]["rootBone"] = "HeadEnd_M";
     const auto second =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SkinningDefaultsToRootBoneWeights)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
     EXPECT_EQ(plan.tressfxSimulation.skinning->rootWeights,
         TressfxRootWeightSource::RootBone);
@@ -286,11 +396,11 @@ TEST(TressfxDescriptor, SkinningDefaultsToRootBoneWeights)
 TEST(TressfxDescriptor, SkinningAcceptsMeshRootWeights)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"weights", "mesh"}}}};
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
     EXPECT_EQ(plan.tressfxSimulation.skinning->rootWeights,
         TressfxRootWeightSource::Mesh);
@@ -299,13 +409,13 @@ TEST(TressfxDescriptor, SkinningAcceptsMeshRootWeights)
 TEST(TressfxDescriptor, SkinningRejectsUnknownRootWeightSource)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"weights", "auto"}}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
         FAIL() << "Unknown simulation.skinning.weights value was accepted";
     }
     catch (const std::runtime_error& error)
@@ -319,13 +429,13 @@ TEST(TressfxDescriptor, SkinningRejectsUnknownRootWeightSource)
 TEST(TressfxDescriptor, SkinningMeshWeightsRejectBoneWeightsCombination)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"weights", "mesh"}, {"boneWeights", "Maps/SC_x/female.tfxbone"}}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
         FAIL() << "mesh root weights combined with .tfxbone were accepted";
     }
     catch (const std::runtime_error& error)
@@ -339,33 +449,33 @@ TEST(TressfxDescriptor, SkinningMeshWeightsRejectBoneWeightsCombination)
 TEST(TressfxDescriptor, SkinningMeshWeightsRequireGpuBackend)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
             {"weights", "mesh"}}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_hair_skinned.json", json),
         std::runtime_error);
 }
 
 TEST(TressfxDescriptor, SkinningMeshWeightsParticipateInMeshIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "gpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
     const auto singleBone =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
-    json["simulation"]["skinning"]["weights"] = "mesh";
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
+    json["simulationDefaults"]["skinning"]["weights"] = "mesh";
     const auto meshWeights =
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     EXPECT_NE(singleBone.modelCacheKey, meshWeights.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SimulationQualityDefaults)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"enabled", true}};
+    json["simulationDefaults"] = {{"enabled", true}};
     const auto config =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json).tressfxSimulation;
+        BuildPlacementFixturePlan("SM_dynamic.json", json).tressfxSimulation;
     EXPECT_FLOAT_EQ(config.bendStiffness, 0.3f);
     // damping 是源默认 DampingCoeff；maxDt 取源 Integration 参数函数上限。
     EXPECT_FLOAT_EQ(config.damping, 0.035f);
@@ -380,22 +490,22 @@ TEST(TressfxDescriptor, SimulationQualityDefaults)
 TEST(TressfxDescriptor, VspThresholdDefaultAndExplicitValueShareEffectiveIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"vspCoefficient", 0.5f}};
-    const auto implicit = MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
-    json["simulation"]["vspAccelThresholdMax"] = 140.0f;
+    json["simulationDefaults"] = {{"vspCoefficient", 0.5f}};
+    const auto implicit = BuildPlacementFixturePlan("SM_vsp.json", json);
+    json["simulationDefaults"]["vspAccelThresholdMax"] = 140.0f;
     const auto explicitDefault =
-        MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+        BuildPlacementFixturePlan("SM_vsp.json", json);
     EXPECT_EQ(implicit.modelCacheKey, explicitDefault.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, ExplicitLegacyVspThresholdIsPreservedAndChangesIdentity)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"vspCoefficient", 0.5f}};
-    const auto implicit = MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
-    json["simulation"]["vspAccelThresholdMax"] = 5000.0f;
+    json["simulationDefaults"] = {{"vspCoefficient", 0.5f}};
+    const auto implicit = BuildPlacementFixturePlan("SM_vsp.json", json);
+    json["simulationDefaults"]["vspAccelThresholdMax"] = 5000.0f;
     const auto explicitLegacy =
-        MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+        BuildPlacementFixturePlan("SM_vsp.json", json);
     EXPECT_FLOAT_EQ(explicitLegacy.tressfxSimulation.vspAccelThresholdMax, 5000.0f);
     EXPECT_NE(implicit.modelCacheKey, explicitLegacy.modelCacheKey);
 }
@@ -403,19 +513,19 @@ TEST(TressfxDescriptor, ExplicitLegacyVspThresholdIsPreservedAndChangesIdentity)
 TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
 {
     auto baselineJson = Descriptor();
-    baselineJson["simulation"] = nlohmann::json::object();
+    baselineJson["simulationDefaults"] = nlohmann::json::object();
     const auto baseline =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+        BuildPlacementFixturePlan("SM_dynamic.json", baselineJson);
 
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"bendStiffness", 0.7f},
         {"damping", 0.05f},
         {"globalShapeStiffness", 0.4f},
         {"globalShapeEffectiveRange", 0.6f},
         {"vspCoefficient", 0.3f},
         {"vspAccelThresholdMax", 7000.0f}};
-    const auto custom = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    const auto custom = BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.bendStiffness, 0.7f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.damping, 0.05f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.globalShapeStiffness, 0.4f);
@@ -428,16 +538,16 @@ TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
 TEST(TressfxDescriptor, SimulationStiffnessCurvesAreParsedAndPartOfIdentity)
 {
     auto baselineJson = Descriptor();
-    baselineJson["simulation"] = nlohmann::json::object();
+    baselineJson["simulationDefaults"] = nlohmann::json::object();
     const auto baseline =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+        BuildPlacementFixturePlan("SM_dynamic.json", baselineJson);
 
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}},
         {"localShapeStiffness", {0.95f, 0.8f, 0.4f, 0.0f}}};
     const auto authored =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+        BuildPlacementFixturePlan("SM_dynamic.json", json);
     ASSERT_EQ(authored.tressfxSimulation.vspStiffness.size(), 4u);
     EXPECT_FLOAT_EQ(authored.tressfxSimulation.vspStiffness[1], 0.25f);
     EXPECT_FLOAT_EQ(authored.tressfxSimulation.vspStiffness[3], 0.75f);
@@ -446,16 +556,16 @@ TEST(TressfxDescriptor, SimulationStiffnessCurvesAreParsedAndPartOfIdentity)
     EXPECT_NE(authored.modelCacheKey, baseline.modelCacheKey);
 
     // 只改一个作者值也必须改变模型缓存身份。
-    json["simulation"]["vspStiffness"][2] = 0.5f + 1.0f / 1024.0f;
+    json["simulationDefaults"]["vspStiffness"][2] = 0.5f + 1.0f / 1024.0f;
     const auto changed =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+        BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_NE(authored.modelCacheKey, changed.modelCacheKey);
 
     // 两条曲线各自的省略/存在也必须区分。
     auto vspOnlyJson = Descriptor();
-    vspOnlyJson["simulation"] = {{"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}}};
+    vspOnlyJson["simulationDefaults"] = {{"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}}};
     const auto vspOnly =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", vspOnlyJson);
+        BuildPlacementFixturePlan("SM_dynamic.json", vspOnlyJson);
     EXPECT_NE(authored.modelCacheKey, vspOnly.modelCacheKey);
 }
 
@@ -464,10 +574,10 @@ TEST(TressfxDescriptor, SimulationStiffnessCurvesRejectInvalidEntries)
     const auto expectRejected = [](const nlohmann::json& curve, const char* field)
     {
         auto json = Descriptor();
-        json["simulation"] = {{field, curve}};
+        json["simulationDefaults"] = {{field, curve}};
         try
         {
-            MeshAssetValidator::BuildLoadPlan(
+            BuildPlacementFixturePlan(
                 "Maps/SC_probe/Meshes/SM_curves.json", json);
             FAIL() << "Invalid " << field << " was accepted";
         }
@@ -493,10 +603,10 @@ TEST(TressfxDescriptor, SimulationStiffnessCurvesRejectInvalidEntries)
 TEST(TressfxDescriptor, LocalShapeCurveValuesAboveLimitAreClampedAndRecorded)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"localShapeStiffness", {0.5f, 1.0f, 0.96f}}};
     testing::internal::CaptureStderr();
-    const auto plan = MeshAssetValidator::BuildLoadPlan(
+    const auto plan = BuildPlacementFixturePlan(
         "Maps/SC_probe/Meshes/SM_curves.json", json);
     const std::string log = testing::internal::GetCapturedStderr();
     ASSERT_EQ(plan.tressfxSimulation.localShapeStiffness.size(), 3u);
@@ -512,10 +622,10 @@ TEST(TressfxDescriptor, LocalShapeCurveValuesAboveLimitAreClampedAndRecorded)
 TEST(TressfxDescriptor, SimulationRejectsUnknownCurveKeys)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"vspStiffnesss", {0.0f, 1.0f, 1.0f, 1.0f}}};
+    json["simulationDefaults"] = {{"vspStiffnesss", {0.0f, 1.0f, 1.0f, 1.0f}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("SM_curves.json", json);
+        BuildPlacementFixturePlan("SM_curves.json", json);
         FAIL() << "Unknown simulation field was accepted";
     }
     catch (const std::runtime_error& error)
@@ -530,19 +640,19 @@ TEST(TressfxDescriptor, SimulationRejectsUnknownCurveKeys)
 TEST(TressfxDescriptor, SimulationGlobalShapeAndVspParticipateInIdentity)
 {
     auto baselineJson = Descriptor();
-    baselineJson["simulation"] = nlohmann::json::object();
+    baselineJson["simulationDefaults"] = nlohmann::json::object();
     const auto baseline =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+        BuildPlacementFixturePlan("SM_dynamic.json", baselineJson);
 
     auto globalShape = Descriptor();
-    globalShape["simulation"] = {{"globalShapeStiffness", 0.5f}};
+    globalShape["simulationDefaults"] = {{"globalShapeStiffness", 0.5f}};
     const auto shaped =
-        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", globalShape);
+        BuildPlacementFixturePlan("SM_dynamic.json", globalShape);
     EXPECT_NE(shaped.modelCacheKey, baseline.modelCacheKey);
 
     auto vsp = Descriptor();
-    vsp["simulation"] = {{"vspCoefficient", 0.5f}};
-    const auto vspPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", vsp);
+    vsp["simulationDefaults"] = {{"vspCoefficient", 0.5f}};
+    const auto vspPlan = BuildPlacementFixturePlan("SM_dynamic.json", vsp);
     EXPECT_NE(vspPlan.modelCacheKey, baseline.modelCacheKey);
     EXPECT_NE(vspPlan.modelCacheKey, shaped.modelCacheKey);
 }
@@ -552,15 +662,15 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndDampingControls)
     for (const float bendStiffness : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"bendStiffness", bendStiffness}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"bendStiffness", bendStiffness}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
     for (const float damping : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"damping", damping}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"damping", damping}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
 }
@@ -570,10 +680,10 @@ TEST(TressfxDescriptor, SimulationRejectsRemovedWindGustFields)
     for (const char* removed : {"windGust", "windFrequency"})
     {
         auto json = Descriptor();
-        json["simulation"] = {{removed, 0.2f}};
+        json["simulationDefaults"] = {{removed, 0.2f}};
         try
         {
-            MeshAssetValidator::BuildLoadPlan(
+            BuildPlacementFixturePlan(
                 "Maps/SC_probe/Meshes/SM_gust_legacy.json", json);
             FAIL() << "Removed VL gust field was accepted: " << removed;
         }
@@ -590,10 +700,10 @@ TEST(TressfxDescriptor, SimulationRejectsRemovedWindGustFields)
 TEST(TressfxDescriptor, SimulationRejectsTimeStepAboveTressFxClamp)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"maxDt", 0.017f}};
+    json["simulationDefaults"] = {{"maxDt", 0.017f}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("SM_dt.json", json);
+        BuildPlacementFixturePlan("SM_dt.json", json);
         FAIL() << "maxDt above the TressFX 0.016 s clamp was accepted";
     }
     catch (const std::runtime_error& error)
@@ -609,29 +719,29 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidGlobalShapeAndVspControls)
     for (const float stiffness : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"globalShapeStiffness", stiffness}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"globalShapeStiffness", stiffness}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
     for (const float range : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"globalShapeEffectiveRange", range}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"globalShapeEffectiveRange", range}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
     for (const float coefficient : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"vspCoefficient", coefficient}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"vspCoefficient", coefficient}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
     for (const float threshold : {0.0f, -1.0f, 1.0e8f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"vspAccelThresholdMax", threshold}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["simulationDefaults"] = {{"vspAccelThresholdMax", threshold}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
 }
@@ -641,10 +751,10 @@ TEST(TressfxDescriptor, SimulationRejectsRemovedFixedStepFields)
     for (const char* removed : {"fixedStep", "maxSubsteps"})
     {
         auto json = Descriptor();
-        json["simulation"] = {{removed, 1}};
+        json["simulationDefaults"] = {{removed, 1}};
         try
         {
-            MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_legacy.json", json);
+            BuildPlacementFixturePlan("Maps/SC_probe/Meshes/SM_legacy.json", json);
             FAIL() << "Legacy accumulator field was accepted: " << removed;
         }
         catch (const std::runtime_error& error)
@@ -660,18 +770,18 @@ TEST(TressfxDescriptor, SimulationRejectsRemovedFixedStepFields)
 TEST(TressfxDescriptor, CollisionAcceptsAuthoredCapsules)
 {
     auto json = Descriptor();
-    EXPECT_TRUE(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+    EXPECT_TRUE(BuildPlacementFixturePlan("SM_dynamic.json", json)
             .tressfxSimulation.capsules.empty());
 
-    json["collision"] = {{"capsules", nlohmann::json::array()}};
-    EXPECT_TRUE(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+    json["hairCollision"] = {{"capsules", nlohmann::json::array()}};
+    EXPECT_TRUE(BuildPlacementFixturePlan("SM_dynamic.json", json)
             .tressfxSimulation.capsules.empty());
 
-    json["collision"]["capsules"].push_back({
+    json["hairCollision"]["capsules"].push_back({
         {"a", {0.0f, 160.0f, 0.0f}},
         {"b", {0.0f, 174.0f, 0.0f}},
         {"radius", 8.0f}});
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_dynamic.json", json);
     ASSERT_EQ(plan.tressfxSimulation.capsules.size(), 1u);
     EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].a.y(), 160.0f);
     EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].b.y(), 174.0f);
@@ -681,14 +791,14 @@ TEST(TressfxDescriptor, CollisionAcceptsAuthoredCapsules)
 TEST(TressfxDescriptor, CollisionCapsuleAcceptsOptionalBone)
 {
     auto json = GpuDescriptor();
-    json["simulation"]["skinning"] = {
+    json["simulationDefaults"]["skinning"] = {
         {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
-    json["collision"]["capsules"].push_back({
+    json["hairCollision"]["capsules"].push_back({
         {"a", {0.0f, 160.0f, 0.0f}},
         {"b", {0.0f, 160.0f, 0.0f}},
         {"radius", 8.0f},
         {"bone", "Head_M"}});
-    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    const auto plan = BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     ASSERT_EQ(plan.tressfxSimulation.capsules.size(), 1u);
     EXPECT_EQ(plan.tressfxSimulation.capsules[0].bone, "Head_M");
 }
@@ -696,14 +806,14 @@ TEST(TressfxDescriptor, CollisionCapsuleAcceptsOptionalBone)
 TEST(TressfxDescriptor, CollisionCapsuleBoneRequiresSkinningSource)
 {
     auto json = GpuDescriptor();
-    json["collision"]["capsules"].push_back({
+    json["hairCollision"]["capsules"].push_back({
         {"a", {0.0f, 0.0f, 0.0f}},
         {"b", {0.0f, 0.0f, 0.0f}},
         {"radius", 1.0f},
         {"bone", "Head_M"}});
     try
     {
-        MeshAssetValidator::BuildLoadPlan(
+        BuildPlacementFixturePlan(
             "Maps/SC_x/Meshes/SM_hair_skinned.json", json);
         FAIL() << "Capsule bone without simulation.skinning was accepted";
     }
@@ -718,17 +828,17 @@ TEST(TressfxDescriptor, CollisionCapsuleBoneRequiresSkinningSource)
 TEST(TressfxDescriptor, CollisionCapsuleBoneRequiresGpuBackend)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"backend", "cpu"},
         {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
-    json["collision"] = {{"capsules", {{
+    json["hairCollision"] = {{"capsules", {{
         {"a", {0.0f, 0.0f, 0.0f}},
         {"b", {0.0f, 0.0f, 0.0f}},
         {"radius", 1.0f},
         {"bone", "Head_M"}}}}};
     // CPU backend + skinning 本身已在 simulation 解析期被拒绝；这里单独确认
     // 错误消息落在 backend 约束上，而不是静默忽略 bone。
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_hair_skinned.json", json),
         std::runtime_error);
 }
 
@@ -737,14 +847,14 @@ TEST(TressfxDescriptor, CollisionCapsuleBoneRejectsEmptyAndNonString)
     for (const nlohmann::json& bone : {nlohmann::json(""), nlohmann::json(1)})
     {
         auto json = GpuDescriptor();
-        json["simulation"]["skinning"] = {
+        json["simulationDefaults"]["skinning"] = {
             {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
-        json["collision"]["capsules"].push_back({
+        json["hairCollision"]["capsules"].push_back({
             {"a", {0.0f, 0.0f, 0.0f}},
             {"b", {0.0f, 0.0f, 0.0f}},
             {"radius", 1.0f},
             {"bone", bone}});
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_hair_skinned.json", json),
             std::runtime_error);
     }
 }
@@ -754,14 +864,14 @@ TEST(TressfxDescriptor, CollisionCapsuleBoneParticipatesInMeshIdentity)
     const auto plan = [](const std::string& bone)
     {
         auto json = GpuDescriptor();
-        json["simulation"]["skinning"] = {
+        json["simulationDefaults"]["skinning"] = {
             {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
-        json["collision"]["capsules"].push_back({
+        json["hairCollision"]["capsules"].push_back({
             {"a", {0.0f, 0.0f, 0.0f}},
             {"b", {0.0f, 0.0f, 0.0f}},
             {"radius", 1.0f},
             {"bone", bone}});
-        return MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        return BuildPlacementFixturePlan("SM_hair_skinned.json", json);
     };
     EXPECT_NE(plan("Head_M").modelCacheKey, plan("Neck_M").modelCacheKey);
 }
@@ -769,14 +879,14 @@ TEST(TressfxDescriptor, CollisionCapsuleBoneParticipatesInMeshIdentity)
 TEST(TressfxDescriptor, CollisionFieldsParticipateInMeshIdentity)
 {
     auto json = Descriptor();
-    json["collision"] = {{"capsules", nlohmann::json::array()}};
-    json["collision"]["capsules"].push_back({
+    json["hairCollision"] = {{"capsules", nlohmann::json::array()}};
+    json["hairCollision"]["capsules"].push_back({
         {"a", {0.0f, 0.0f, 0.0f}},
         {"b", {0.0f, 10.0f, 0.0f}},
         {"radius", 2.0f}});
-    const auto first = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
-    json["collision"]["capsules"][0]["radius"] = 2.5f;
-    const auto second = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    const auto first = BuildPlacementFixturePlan("SM_dynamic.json", json);
+    json["hairCollision"]["capsules"][0]["radius"] = 2.5f;
+    const auto second = BuildPlacementFixturePlan("SM_dynamic.json", json);
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
@@ -793,66 +903,66 @@ TEST(TressfxDescriptor, CollisionRejectsInvalidCapsules)
     for (const float radius : {0.0f, -1.0f})
     {
         auto json = Descriptor();
-        json["collision"] = {{"capsules", {capsule(radius)}}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+        json["hairCollision"] = {{"capsules", {capsule(radius)}}};
+        EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", json),
             std::runtime_error);
     }
 
     auto tooMany = Descriptor();
-    tooMany["collision"] = {{"capsules", nlohmann::json::array()}};
+    tooMany["hairCollision"] = {{"capsules", nlohmann::json::array()}};
     for (int i = 0; i < 9; ++i)
-        tooMany["collision"]["capsules"].push_back(capsule(1.0f));
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", tooMany),
+        tooMany["hairCollision"]["capsules"].push_back(capsule(1.0f));
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", tooMany),
         std::runtime_error);
 }
 
 TEST(TressfxDescriptor, CollisionRejectsInvalidCapsuleFields)
 {
     auto nonFinite = Descriptor();
-    nonFinite["collision"] = {{"capsules", {{
+    nonFinite["hairCollision"] = {{"capsules", {{
         {"a", {std::numeric_limits<float>::infinity(), 0.0f, 0.0f}},
         {"b", {0.0f, 10.0f, 0.0f}},
         {"radius", 1.0f}}}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", nonFinite),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", nonFinite),
         std::runtime_error);
 
     auto unknownCollisionField = Descriptor();
-    unknownCollisionField["collision"] = {{"capsules", nlohmann::json::array()},
+    unknownCollisionField["hairCollision"] = {{"capsules", nlohmann::json::array()},
         {"extra", 1}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", unknownCollisionField),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", unknownCollisionField),
         std::runtime_error);
 
     auto unknownCapsuleField = Descriptor();
-    unknownCapsuleField["collision"] = {{"capsules", {{
+    unknownCapsuleField["hairCollision"] = {{"capsules", {{
         {"a", {0.0f, 0.0f, 0.0f}},
         {"b", {0.0f, 10.0f, 0.0f}},
         {"radius", 1.0f},
         {"extra", 1}}}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", unknownCapsuleField),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", unknownCapsuleField),
         std::runtime_error);
 
     auto missingCapsuleField = Descriptor();
-    missingCapsuleField["collision"] = {{"capsules", {{
+    missingCapsuleField["hairCollision"] = {{"capsules", {{
         {"a", {0.0f, 0.0f, 0.0f}},
         {"b", {0.0f, 10.0f, 0.0f}}}}}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", missingCapsuleField),
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_dynamic.json", missingCapsuleField),
         std::runtime_error);
 }
 
 TEST(TressfxDescriptor, CollisionMeshAcceptsAuthoredProxyAndDefaults)
 {
     auto json = GpuDescriptor();
-    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
-    const auto defaults = MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+    json["hairCollision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
+    const auto defaults = BuildPlacementFixturePlan("SM_sdf.json", json);
     ASSERT_TRUE(defaults.tressfxSimulation.collisionMesh.has_value());
     EXPECT_EQ(defaults.tressfxSimulation.collisionMesh->path,
         "Maps/SC_probe/Collision/proxy.obj");
     EXPECT_FLOAT_EQ(defaults.tressfxSimulation.collisionMesh->cellSize, 1.0f);
     EXPECT_FLOAT_EQ(defaults.tressfxSimulation.collisionMesh->margin, 1.0f);
 
-    json["collision"]["mesh"]["cellSize"] = 1.5f;
-    json["collision"]["mesh"]["margin"] = 0.5f;
-    const auto authored = MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+    json["hairCollision"]["mesh"]["cellSize"] = 1.5f;
+    json["hairCollision"]["mesh"]["margin"] = 0.5f;
+    const auto authored = BuildPlacementFixturePlan("SM_sdf.json", json);
     ASSERT_TRUE(authored.tressfxSimulation.collisionMesh.has_value());
     EXPECT_FLOAT_EQ(authored.tressfxSimulation.collisionMesh->cellSize, 1.5f);
     EXPECT_FLOAT_EQ(authored.tressfxSimulation.collisionMesh->margin, 0.5f);
@@ -862,9 +972,9 @@ TEST(TressfxDescriptor, CollisionMeshParticipatesInMeshIdentity)
 {
     const auto plan = [](const std::string& path, double cellSize, double margin) {
         auto json = GpuDescriptor();
-        json["collision"]["mesh"] = {
+        json["hairCollision"]["mesh"] = {
             {"path", path}, {"cellSize", cellSize}, {"margin", margin}};
-        return MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+        return BuildPlacementFixturePlan("SM_sdf.json", json);
     };
     const auto base = plan("Maps/SC_probe/Collision/proxy.obj", 1.0, 1.0);
     EXPECT_NE(base.modelCacheKey,
@@ -879,8 +989,8 @@ TEST(TressfxDescriptor, CollisionMeshRejectsInvalidValues)
 {
     const auto plan = [](const nlohmann::json& mesh) {
         auto json = GpuDescriptor();
-        json["collision"]["mesh"] = mesh;
-        return MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
+        json["hairCollision"]["mesh"] = mesh;
+        return BuildPlacementFixturePlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
     };
     const nlohmann::json valid = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
 
@@ -928,12 +1038,12 @@ TEST(TressfxDescriptor, CollisionMeshRejectsInvalidValues)
 TEST(TressfxDescriptor, CollisionMeshRequiresGpuBackend)
 {
     auto json = Descriptor();
-    json["simulation"] = {{"backend", "cpu"}};
-    json["collision"] = {{"capsules", nlohmann::json::array()},
+    json["simulationDefaults"] = {{"backend", "cpu"}};
+    json["hairCollision"] = {{"capsules", nlohmann::json::array()},
         {"mesh", {{"path", "Maps/SC_probe/Collision/proxy.obj"}}}};
     try
     {
-        MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
+        BuildPlacementFixturePlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
         FAIL() << "collision.mesh was accepted with the CPU backend";
     }
     catch (const std::runtime_error& error)
@@ -948,28 +1058,28 @@ TEST(TressfxDescriptor, RejectsAssimpImportOptions)
 {
     auto json = Descriptor();
     json["importOptions"] = {{"generateSmoothNormals", false}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
 }
 
 TEST(TressfxDescriptor, RejectsMultipleMaterialSlots)
 {
     auto json = Descriptor();
     json["materialSlots"].push_back({{"name", "extra"}, {"materialInstancePath", "MI_other.json"}});
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
 }
 
 TEST(TressfxDescriptor, RejectsNonTfxSource)
 {
     auto json = Descriptor();
     json["modelDataPath"] = "hair.obj";
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
 }
 
 TEST(TressfxDescriptor, RejectsSkeletalDeclaration)
 {
     auto json = Descriptor();
     json["skinning"] = {{"clips", nlohmann::json::array()}, {"skeleton", "SK_head.json"}};
-    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_guides.json", json), std::runtime_error);
+    EXPECT_THROW(BuildPlacementFixturePlan("SM_guides.json", json), std::runtime_error);
 }
 
 class TressfxImport : public ::testing::Test
@@ -981,7 +1091,7 @@ protected:
         root = std::filesystem::temp_directory_path() / ("vl-strand-import-" + std::to_string(stamp));
         ownsRoot = std::filesystem::create_directory(root);
         ASSERT_TRUE(ownsRoot);
-        request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", Descriptor());
+        request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", Descriptor());
         request.absoluteModelPath = (root / std::filesystem::u8path(u8"发丝.tfx")).u8string();
     }
     void TearDown() override
@@ -1064,58 +1174,52 @@ TEST_F(TressfxImport, MissingOptionalAttributesUseExplicitWhiteAndZeroUv)
     EXPECT_TRUE(section.vertices[0].texCoord.isZero());
 }
 
-TEST_F(TressfxImport, ImportsCollisionProxyObjIntoSection)
+TEST_F(TressfxImport, GeometryImportDoesNotBakePlacementCollisionProxy)
 {
     auto json = GpuDescriptor();
-    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
-    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    json["hairCollision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", json);
     const std::filesystem::path objPath = root / "proxy.obj";
     {
         std::ofstream stream(objPath, std::ios::binary);
         stream << "# fixture\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
         ASSERT_TRUE(static_cast<bool>(stream));
     }
-    request.absoluteCollisionMeshPath = objPath.u8string();
-
     const ModelResource resource = Import(TfxFixture::Guides());
     ASSERT_EQ(resource.sections.size(), 1u);
-    ASSERT_TRUE(resource.sections[0].tressfxSimulation.collisionMesh.has_value());
-    ASSERT_TRUE(resource.sections[0].tressfxCollisionMesh);
-    EXPECT_EQ(resource.sections[0].tressfxCollisionMesh->positions.size(), 3u);
-    EXPECT_EQ(resource.sections[0].tressfxCollisionMesh->indices.size(), 3u);
+    EXPECT_EQ(resource.sections[0].vertices.size(), 8u);
+    EXPECT_TRUE(request.buildPlan.tressfxSimulation.collisionMesh.has_value());
 }
 
-TEST_F(TressfxImport, MissingCollisionProxyFailsBeforePublishingSection)
+TEST_F(TressfxImport, GeometryImportDoesNotReadPlacementProxyPath)
 {
     auto json = GpuDescriptor();
-    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/missing.obj"}};
-    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
-    request.absoluteCollisionMeshPath = (root / "missing.obj").u8string();
-    EXPECT_THROW(Import(TfxFixture::Guides()), std::runtime_error);
+    json["hairCollision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/missing.obj"}};
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", json);
+    EXPECT_NO_THROW(Import(TfxFixture::Guides()));
 }
 
-TEST_F(TressfxImport, CarriesMatchingAuthoredCurvesIntoSectionConfig)
+TEST_F(TressfxImport, GeometryImportDoesNotBakeMatchingDefaultCurves)
 {
     auto json = Descriptor();
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}},
         {"localShapeStiffness", {0.95f, 0.8f, 0.4f, 0.0f}}};
-    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", json);
     // TfxFixture::Guides 默认 4 points/strand，两条数组长度必须都为 4。
     const auto section = Import(TfxFixture::Guides()).sections[0];
-    ASSERT_EQ(section.tressfxSimulation.vspStiffness.size(), 4u);
-    EXPECT_FLOAT_EQ(section.tressfxSimulation.vspStiffness[2], 0.5f);
-    ASSERT_EQ(section.tressfxSimulation.localShapeStiffness.size(), 4u);
-    EXPECT_FLOAT_EQ(section.tressfxSimulation.localShapeStiffness[1], 0.8f);
+    EXPECT_EQ(section.vertices.size(), 8u);
+    EXPECT_EQ(request.buildPlan.tressfxSimulation.vspStiffness.size(), 4u);
+    EXPECT_EQ(request.buildPlan.tressfxSimulation.localShapeStiffness.size(), 4u);
 }
 
 TEST_F(TressfxImport, RejectsAuthoredCurveLengthMismatchAgainstTfxPointsPerStrand)
 {
     auto json = Descriptor();
     // 8 项曲线配 4 points/strand 的 TFX：必须在导入边界硬失败，不能截断/补零。
-    json["simulation"] = {
+    json["simulationDefaults"] = {
         {"vspStiffness", {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f}}};
-    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", json);
     try
     {
         Import(TfxFixture::Guides());

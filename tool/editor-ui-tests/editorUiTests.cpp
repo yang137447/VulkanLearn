@@ -357,6 +357,7 @@ protected:
         EditorAssetDocumentResultPayload authored;
         authored.assetPath = hair.assetPath;
         authored.documentRevision = 11;
+        authored.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"}}}};
         snapshot.tressfxDocuments = {authored};
         Refresh();
         sink.commands.clear();
@@ -1490,6 +1491,7 @@ TEST_F(EditorUiTest, BlueprintAssetTressfxComponentUsesSelectedMeshAsParent)
     SelectOption("blueprint-asset-component-kind", "tressfx");
     SetValue("blueprint-asset-component-mesh",
         "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    SetValue("blueprint-asset-component-root-bone", "Head_M");
     Click("#blueprint-asset-component-add");
     Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
@@ -1500,6 +1502,7 @@ TEST_F(EditorUiTest, BlueprintAssetTressfxComponentUsesSelectedMeshAsParent)
     EXPECT_EQ(nodes[2]["parent"], "body");
     EXPECT_EQ(nodes[2]["modelPath"], "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
     EXPECT_EQ(nodes[2]["weights"], "auto");
+    EXPECT_EQ(nodes[2]["rootBone"], "Head_M");
 }
 
 TEST_F(EditorUiTest, BlueprintAssetTressfxComponentRequiresMeshParent)
@@ -1527,7 +1530,7 @@ TEST_F(EditorUiTest, BlueprintAssetTressfxDetailsWriteHairFieldsAndHideTransform
         {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
         {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
          {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_skinned.json"},
-         {"weights", "auto"}}});
+         {"rootBone", "Head_M"}, {"weights", "auto"}}});
     snapshot.blueprintDocuments[0].documentRevision++;
     Refresh();
     Click("[data-action=blueprint-asset-select-component][data-index='1']");
@@ -1546,6 +1549,45 @@ TEST_F(EditorUiTest, BlueprintAssetTressfxDetailsWriteHairFieldsAndHideTransform
     EXPECT_EQ(nodes[1]["rootBone"], "Head_M");
     EXPECT_EQ(nodes[1]["weights"], "mesh");
     EXPECT_EQ(nodes[1]["parent"], "body");
+}
+
+TEST_F(EditorUiTest, BlueprintTressfxSimulationOverridesStaySparseAndResetToInheritance)
+{
+    OpenBlueprintAsset();
+    auto& authored = snapshot.blueprintDocuments[0];
+    authored.document["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"}, {"rootBone", "Head_M"},
+         {"modelPath", "Meshes/TF_hair.json"}}});
+    ++authored.documentRevision;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    SelectOption("blueprint-asset-component-1-hair-mode-0", "off");
+    SetValue("blueprint-asset-component-1-hair-damping-0", "0.02");
+    SetValue("blueprint-asset-component-1-hair-wind-0", "[1, 2, 3]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    EXPECT_EQ(nodes[1]["simulation"]["mode"], "off");
+    EXPECT_EQ(nodes[1]["simulation"]["overrides"].size(), 2u);
+    EXPECT_DOUBLE_EQ(nodes[1]["simulation"]["overrides"]["damping"].get<double>(), 0.02);
+    EXPECT_EQ(nodes[1]["simulation"]["overrides"]["wind"], nlohmann::json::array({1, 2, 3}));
+    EXPECT_FALSE(nodes[1]["simulation"]["overrides"].contains("gravity"));
+    authored.document["components"] = nodes;
+    ++authored.documentRevision;
+    Refresh();
+    sink.commands.clear();
+    SelectOption("blueprint-asset-component-1-hair-mode-0", "inherit");
+    Click("#blueprint-asset-component-1-hair-reset-damping-0");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto resetNodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    EXPECT_FALSE(resetNodes[1]["simulation"].contains("mode"));
+    EXPECT_EQ(resetNodes[1]["simulation"]["overrides"],
+        nlohmann::json({{"wind", nlohmann::json::array({1, 2, 3})}}));
+    EXPECT_EQ(resetNodes[1]["rootBone"], "Head_M");
 }
 
 // 关卡/资产边界：毛发绑定字段只在蓝图资产页作者。Scene Details 只读展示，
@@ -1595,7 +1637,7 @@ TEST_F(EditorUiTest, SceneTressfxComponentFieldsStayReadOnlyForInlineActors)
         {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
         {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
          {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json"},
-         {"weights", "auto"}}});
+         {"rootBone", "Head_M"}, {"weights", "auto"}}});
     snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
         std::vector<EditorSceneActorSnapshot>{actor});
     snapshot.selectedActorIdentity = actor.identity;
@@ -1606,7 +1648,7 @@ TEST_F(EditorUiTest, SceneTressfxComponentFieldsStayReadOnlyForInlineActors)
     auto* details = document->GetElementById("actor-details-content");
     ASSERT_NE(details, nullptr);
     const std::string markup = details->GetInnerRML();
-    EXPECT_NE(markup.find("(descriptor default)"), std::string::npos);
+    EXPECT_NE(markup.find("Head_M"), std::string::npos);
     EXPECT_NE(markup.find("Auto (from parent mesh)"), std::string::npos);
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
@@ -3024,6 +3066,11 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     snapshot.assetCatalog = catalog;
     Refresh();
     document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    EditorAssetDocumentResultPayload authored;
+    authored.assetPath = hair.assetPath;
+    authored.documentRevision = 1;
+    authored.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"}}}};
+    snapshot.tressfxDocuments = {authored};
     Refresh();
 
     // 新的预览 World 发布后才有可旋转的对象；generation 必须大于请求时看到的代数。
@@ -3099,7 +3146,8 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     EditorAssetDocumentResultPayload meshDocument;
     meshDocument.assetPath = "Meshes/TF_hair.json";
     meshDocument.documentRevision = 5;
-    meshDocument.document = {{"simulation", {{"damping", 0.01}, {"iterations", 5}}}};
+    meshDocument.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"},
+        {"damping", 0.01}, {"iterations", 5}}}};
     snapshot.tressfxDocuments = {meshDocument};
     Refresh();
 
@@ -3122,7 +3170,7 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     ASSERT_NE(damping, nullptr);
     EXPECT_EQ(damping->GetAttribute<Rml::String>("value", ""), "0.01");
     // 文案必须说明这是资产级保存：影响所有摆放，重载会复位模拟。
-    EXPECT_NE(section->GetInnerRML().find("every placement is affected"), std::string::npos);
+    EXPECT_NE(section->GetInnerRML().find("inherited placement values are affected"), std::string::npos);
 
     // 拖动只发实时覆盖：不写资产、不重载。
     runtimeSink.actions.clear();
@@ -3149,7 +3197,7 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     bool sawDamping = false;
     for (const auto& change : payload.changes)
     {
-        if (change.field != "simulation.damping") continue;
+        if (change.field != "simulationDefaults.damping") continue;
         sawDamping = true;
         ASSERT_TRUE(std::holds_alternative<double>(change.value));
         EXPECT_DOUBLE_EQ(std::get<double>(change.value), 0.02);
@@ -3210,6 +3258,55 @@ TEST_F(EditorUiTest, TressfxDirtyReloadKeepsTheDraftAndDoesNotRequestAPreview)
     EXPECT_TRUE(runtimeSink.actions.empty());
     EXPECT_TRUE(panel->IsResourceEditorVisible());
     EXPECT_TRUE(snapshot.tressfxDocuments[0].dirty);
+}
+
+TEST_F(EditorUiTest, TressfxStaticAndCpuDefaultsRemainEditableWithoutLiveOrResetActions)
+{
+    OpenTressfxAsset();
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    for (const auto& defaults : {nlohmann::json{{"enabled", false}, {"backend", "gpu"}},
+                                nlohmann::json{{"enabled", true}, {"backend", "cpu"}}})
+    {
+        SCOPED_TRACE(defaults.dump());
+        snapshot.tressfxDocuments[0].document = {{"simulationDefaults", defaults}};
+        ++snapshot.tressfxDocuments[0].documentRevision;
+        Refresh();
+        ASSERT_FALSE(panel->HasModal());
+        runtimeSink.actions.clear();
+        sink.commands.clear();
+        SetValue("hair-sim-2-0", "0.02");
+        Click("#resource-hair-reset");
+        EXPECT_TRUE(runtimeSink.actions.empty());
+        EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
+        EXPECT_TRUE(document->GetElementById("resource-hair-simulation")->IsVisible());
+        Click("#hair-sim-save");
+        ASSERT_EQ(sink.commands.size(), 1u);
+        EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
+        const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+        ASSERT_EQ(changes.size(), 9u);
+        EXPECT_EQ(changes[2].field, "simulationDefaults.damping");
+        ASSERT_TRUE(std::holds_alternative<double>(changes[2].value));
+        EXPECT_DOUBLE_EQ(std::get<double>(changes[2].value), 0.02);
+
+        // 模拟标准 modify 的权威回执，再取消保存确认；不能把上一轮待办带进下一种 backend。
+        auto& authored = snapshot.tressfxDocuments[0];
+        authored.document["simulationDefaults"]["damping"] = 0.02;
+        ++authored.documentRevision;
+        authored.dirty = true;
+        snapshot.modifiedDocuments = {{authored.assetPath, EditorAssetKind::Tressfx,
+            authored.documentRevision}};
+        Refresh();
+        ASSERT_TRUE(panel->HasModal());
+        Click("#save-cancel");
+        ASSERT_FALSE(panel->HasModal());
+    }
 }
 
 TEST_F(EditorUiTest, TressfxSkinnedOpenCreatesAuthorOwnerAndCleanReloadKeepsPreviewBlocked)
@@ -3283,7 +3380,7 @@ TEST_F(EditorUiTest, TressfxCloseDuringSimulationStagingWaitsForTheAuthorRevisio
     EXPECT_EQ(sink.commands.size(), 1u) << "save must wait for the staged revision";
     snapshot.tressfxDocuments[0].documentRevision = 12;
     snapshot.tressfxDocuments[0].dirty = true;
-    snapshot.tressfxDocuments[0].document = {{"simulation", {{"damping", 0.02}}}};
+    snapshot.tressfxDocuments[0].document = {{"simulationDefaults", {{"damping", 0.02}}}};
     snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 12}};
     Refresh();
     // Details 在本帧末确认暂存完成，关闭流程在下一帧消费权威 revision。

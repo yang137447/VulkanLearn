@@ -22,6 +22,17 @@ const TressfxSimulationControl* FindControl(const std::string& field)
 }
 } // namespace
 
+TEST(TressfxHairSimulationControls, LiveGateMatchesEnabledAndBackendDefaultSemantics)
+{
+    EXPECT_FALSE(TressfxGpuSimulationDefaults(nlohmann::json::object()));
+    EXPECT_FALSE(TressfxGpuSimulationDefaults({{"simulationDefaults", nlohmann::json::object()}}));
+    EXPECT_TRUE(TressfxGpuSimulationDefaults({{"simulationDefaults", {{"backend", "gpu"}}}}));
+    EXPECT_FALSE(TressfxGpuSimulationDefaults(
+        {{"simulationDefaults", {{"enabled", false}, {"backend", "gpu"}}}}));
+    EXPECT_FALSE(TressfxGpuSimulationDefaults(
+        {{"simulationDefaults", {{"enabled", true}, {"backend", "cpu"}}}}));
+}
+
 // 面板控件表必须覆盖且只覆盖可实时覆盖的 9 个作者字段，默认值与
 // TressfxSimulationConfig 的成员初值一致；多一个字段会让面板显示资产并不拥有的值，
 // 少一个字段则作者只能改 JSON。

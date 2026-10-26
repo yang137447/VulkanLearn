@@ -3,6 +3,7 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include "hair/tressfxBehavior.h"
 
 namespace VL
 {
@@ -12,7 +13,7 @@ namespace VL
 // 具体含义由 kind 决定：
 //   None            — 没有放置级绑定（普通共享对象）。
 //   TressfxSkinning — GPU 毛发的根点骨骼绑定。sourceSceneObject 是父 mesh 组件的
-//                     场景身份；rootBone / weights 是组件覆盖（空表示用描述符默认）。
+//                     场景身份；rootBone / weights 属于放置，独立场景缺省使用根骨权重。
 //
 // 新增一种类型（例如以后别的 per-placement 网格）：
 //   1. 在 Kind 里加一个枚举值；
@@ -33,6 +34,8 @@ struct PlacementBinding
     std::string sourceSceneObject;
     std::string rootBone;
     std::string weights;
+    // 已在加载边界合成的有效配置；快照与 spawn 沿用值语义，不再读 TF 文件。
+    std::optional<TressfxSimulationConfig> tressfx;
 
     bool IsEmpty() const { return kind == Kind::None; }
 };
@@ -45,6 +48,21 @@ inline PlacementBinding ReadPlacementBindingFromComponent(const nlohmann::json& 
     PlacementBinding binding;
     if (!component.is_object())
         return binding;
+    if (component.contains("tressfx"))
+    {
+        const auto behavior = Hair::ReadTressfxPlacementBehavior(
+            component.at("tressfx"), component.value("name", ""));
+        if (behavior.skinning)
+        {
+            binding.kind = PlacementBinding::Kind::TressfxSkinning;
+            binding.sourceSceneObject = behavior.skinning->source;
+            binding.rootBone = behavior.skinning->rootBone;
+            if (behavior.skinning->rootWeightsAuthored)
+                binding.weights = behavior.skinning->rootWeights == TressfxRootWeightSource::Mesh
+                    ? "mesh" : "rootBone";
+        }
+        return binding;
+    }
     if (component.contains("placementBinding") && component.at("placementBinding").is_object())
     {
         const auto& node = component.at("placementBinding");
@@ -75,6 +93,8 @@ inline void RebasePlacementBindingSource(PlacementBinding& binding,
     if (binding.sourceSceneObject.rfind(previousPrefix, 0) == 0)
         binding.sourceSceneObject =
             newPrefix + binding.sourceSceneObject.substr(previousPrefix.size());
+    if (binding.tressfx && binding.tressfx->skinning)
+        binding.tressfx->skinning->source = binding.sourceSceneObject;
 }
 
 } // namespace VL

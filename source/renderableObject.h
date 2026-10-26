@@ -31,7 +31,9 @@ public:
         std::shared_ptr<const MeshAssetImportResult> imported,
         size_t sectionIndex,
         VL::RendererBackendVulkan& rendererBackend,
-        const std::string& name = "");
+        const std::string& name = "",
+        const TressfxSimulationConfig* tressfxConfig = nullptr,
+        std::shared_ptr<const TressfxPlacementResources> tressfxResources = {});
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer);
@@ -44,22 +46,24 @@ public:
     const vk::DescriptorBufferInfo& GetVertexBufferInfo() const { return vertexBufferInfo; }
     const vk::DescriptorBufferInfo& GetSkinInfluenceInfo() const { return skinInfluenceInfo; }
     bool IsTressfx() const;
-    // 放置绑定解析器在 spawn 时需要读模板/来源的导入数据：毛发的根点、描述符
-    // （simulation/capsules）与来源骨骼资产。
+    // 放置绑定解析器在 spawn 时复用不可变几何根点和来源骨骼资产；行为另由放置携带。
     const std::shared_ptr<const MeshAssetImportResult>& GetImported() const { return imported; }
     size_t GetImportedSectionIndex() const { return importedSectionIndex; }
     const vk::DescriptorBufferInfo& GetTressfxPositionInfo() const { return tressfxPositionInfo; }
     void AdvanceTressfxSimulation(float dt);
 
     // GPU backend 的模拟资源合同。current positions 始终与 graphics Object Set 2
-    // binding 3 共用同一 buffer；previous/rest/params 只在 GPU backend 下分配。
+    // binding 3 共用同一 buffer；rest/params 也服务 off 蒙皮，previous 仅供模拟。
     bool UsesGpuGuideSimulation() const;
+    bool UsesGpuHairSkinning() const;
+    const std::shared_ptr<const TressfxPlacementResources>& GetTressfxResources() const
+    { return tressfxPlacementResources; }
     const TressfxSimulationConfig& GetTressfxSimulationConfig() const;
     // 编辑器/Console 的实时覆盖：只改本对象自己的 config 副本，下一帧组 params UBO
     // 时生效；不重建 buffer、不改模型缓存身份。仅渲染线程、仅 GPU backend。
     bool ApplyTressfxLiveParameter(const VL::Hair::HairLiveParameterRequest& request,
         std::string& error);
-    // World 构建阶段解析出的根点骨骼绑定。未声明 simulation.skinning 时 enabled=false，
+    // World 构建阶段解析出的根点骨骼绑定。未声明放置 skinning 时 enabled=false，
     // 运行时保持历史 rest pin；解析失败不会走到这里，加载期已硬错误。
     const VL::Hair::TressfxSkinningBinding& GetTressfxSkinningBinding() const
     {
@@ -70,7 +74,8 @@ public:
     // 新建自己的 GPU 资源与可变状态。具体“放置绑定”由
     // placementBindingResolver.h 按 PlacementBinding::Kind 分派，本方法不感知类型。
     // 仅在渲染线程、resolve 之前调用；失败抛 std::runtime_error。
-    std::shared_ptr<RenderableObject> CloneForPlacement(const std::string& newName) const;
+    std::shared_ptr<RenderableObject> CloneForPlacement(const std::string& newName,
+        const TressfxSimulationConfig* effectiveConfig = nullptr) const;
     // 多骨 GPU 资源：逐 strand 4×{joint,weight} 与每 frame-in-flight 的 palette。
     // 未声明 .tfxbone 时权重为 0，shader 用 motion.w bit2 判断是否读取。
     const vk::DescriptorBufferInfo& GetTressfxBoneWeightsInfo() const
@@ -314,6 +319,8 @@ private:
     // 本渲染对象自己的模拟参数副本：创建时从 section 复制，实时覆盖只改这里。
     // imported/section 是共享导入结果，写回会污染其他 placement。
     // CPU 参考 solver 在构造时另有一份副本，实时覆盖只服务 GPU backend。
-    TressfxSimulationConfig tressfxSimulationConfig;    VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
+    TressfxSimulationConfig tressfxSimulationConfig;
+    std::shared_ptr<const TressfxPlacementResources> tressfxPlacementResources;
+    VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
     std::unique_ptr<VL::Hair::GuideSimulation> tressfxSimulation;
 };

@@ -5,15 +5,35 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "hair/tressfxSourceSchedule.h"
+#include "hair/tressfxBehavior.h"
 
 namespace
 {
+    uint32_t ReadSimulationInteger(const nlohmann::json& simulation,
+        const char* field, uint32_t fallback, uint32_t minimum, uint32_t maximum,
+        std::string_view assetPath)
+    {
+        if (!simulation.contains(field))
+            return fallback;
+        const auto& authored = simulation.at(field);
+        // JSON 的 8.0 与 8 都是合法整数；必须先检查数值域，不能转换后截断或回绕。
+        const double value = authored.is_number()
+            ? authored.get<double>() : std::numeric_limits<double>::quiet_NaN();
+        if (!std::isfinite(value) || std::floor(value) != value ||
+            value < minimum || value > maximum)
+            throw std::runtime_error("TressFX simulation " + std::string(field) +
+                " must be an integer in [" + std::to_string(minimum) + ", " +
+                std::to_string(maximum) + "]: " + std::string(assetPath));
+        return static_cast<uint32_t>(value);
+    }
+
     Eigen::Vector3f ReadSimulationVector(
         const nlohmann::json& json,
         std::string_view field,
@@ -100,16 +120,6 @@ namespace
         return curve;
     }
 
-    // 模型缓存身份里的 float 必须逐位可比；默认 6 位有效数字会让只差 1 ulp 的
-    // 作者曲线错误共享缓存。用 hexfloat 输出后立即恢复默认格式。
-    void AppendStiffnessCurveIdentity(std::ostringstream& identity, const char* field,
-        const std::vector<float>& curve)
-    {
-        identity << '|' << field << '=' << curve.size();
-        for (float value : curve)
-            identity << ',' << std::hexfloat << value << std::defaultfloat;
-    }
-
     void ReadTressfxSimulation(
         const nlohmann::json& json,
         MeshAssetBuildPlan& loadPlan,
@@ -166,8 +176,10 @@ namespace
         if (simulation.contains("wind"))
             config.wind = ReadSimulationVector(simulation, "wind", meshAssetPath);
         config.damping = simulation.value("damping", config.damping);
-        config.iterations = simulation.value("iterations", config.iterations);
-        config.rootFixedPoints = simulation.value("rootFixedPoints", config.rootFixedPoints);
+        config.iterations = ReadSimulationInteger(
+            simulation, "iterations", config.iterations, 1, 16, meshAssetPath);
+        config.rootFixedPoints = ReadSimulationInteger(
+            simulation, "rootFixedPoints", config.rootFixedPoints, 0, 32, meshAssetPath);
         config.maxDt = simulation.value("maxDt", config.maxDt);
         config.bendStiffness = simulation.value("bendStiffness", config.bendStiffness);
         config.globalShapeStiffness =
@@ -272,15 +284,11 @@ namespace
             config.skinning = std::move(binding);
         }
         // GPU 上一个作者 iteration 会展开成一次长 dispatch；上限防止异常值直接 TDR。
-        if (config.iterations == 0 || config.iterations > 16)
-            throw std::runtime_error(
-                "TressFX simulation iterations must be in [1, 16]: " +
-                std::string(meshAssetPath));
         // damping 是 TressFX 的 DampingCoeff（默认 0.035，UI 0..0.07），不是保留比例；
         // maxDt 不能超过 TressFX 的硬上限 0.016 s。
         if (!std::isfinite(config.damping) || config.damping < 0.0f ||
             config.damping > 1.0f ||
-            config.rootFixedPoints > 32 || !std::isfinite(config.maxDt) ||
+            !std::isfinite(config.maxDt) ||
             config.maxDt <= 0.0f ||
             config.maxDt > VL::Hair::TressfxMaxTimeStepSeconds)
             throw std::runtime_error(
@@ -338,11 +346,11 @@ namespace
                     "TressFX collision has unknown field \"" + field.key() + "\": " +
                     std::string(meshAssetPath));
         }
-        if (!collision.contains("capsules") || !collision.at("capsules").is_array())
+        if (collision.contains("capsules") && !collision.at("capsules").is_array())
             throw std::runtime_error(
                 "TressFX collision requires a capsules array: " +
                 std::string(meshAssetPath));
-        const auto& array = collision.at("capsules");
+        const auto array = collision.value("capsules", nlohmann::json::array());
         if (array.size() > VL::Hair::TressfxMaxColliders)
             throw std::runtime_error(
                 "TressFX collision supports at most " +
@@ -736,6 +744,15 @@ namespace
     }
 }
 
+TressfxSimulationConfig MeshAssetValidator::BuildTressfxSimulationConfig(
+    const nlohmann::json& configuration, std::string_view context)
+{
+    MeshAssetBuildPlan plan;
+    ReadTressfxSimulation(configuration, plan, context);
+    ReadTressfxCollision(configuration, plan, context);
+    return plan.tressfxSimulation;
+}
+
 MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
     std::string_view meshAssetPath,
     const nlohmann::json& effectiveMeshAssetJson)
@@ -784,65 +801,11 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             throw std::runtime_error(
                 "TressFX requires a .tfx source, one material slot and no importOptions: " +
                 std::string(meshAssetPath));
-        ReadTressfxSimulation(effectiveMeshAssetJson, loadPlan, meshAssetPath);
-        ReadTressfxCollision(effectiveMeshAssetJson, loadPlan, meshAssetPath);
+        loadPlan.tressfxSimulation = VL::Hair::ReadTressfxSimulationDefaults(
+            effectiveMeshAssetJson, std::string(meshAssetPath));
         std::ostringstream identity;
-        identity << "|tressfx-static-v1|radius=" << std::hexfloat << loadPlan.strandRadius
-                 << "|sim=" << (loadPlan.tressfxSimulation.enabled ? 1 : 0)
-                 << "|g=" << loadPlan.tressfxSimulation.gravity.x() << ","
-                 << loadPlan.tressfxSimulation.gravity.y() << ","
-                 << loadPlan.tressfxSimulation.gravity.z()
-                 << "|w=" << loadPlan.tressfxSimulation.wind.x() << ","
-                 << loadPlan.tressfxSimulation.wind.y() << ","
-                 << loadPlan.tressfxSimulation.wind.z()
-                 << "|d=" << loadPlan.tressfxSimulation.damping
-                 << "|i=" << loadPlan.tressfxSimulation.iterations
-                 << "|r=" << loadPlan.tressfxSimulation.rootFixedPoints
-                 << "|dt=" << loadPlan.tressfxSimulation.maxDt
-                 << "|bend=" << loadPlan.tressfxSimulation.bendStiffness
-                 << "|gshape=" << loadPlan.tressfxSimulation.globalShapeStiffness
-                 << "," << loadPlan.tressfxSimulation.globalShapeEffectiveRange
-                 << "|vsp=" << loadPlan.tressfxSimulation.vspCoefficient
-                 << "," << loadPlan.tressfxSimulation.vspAccelThresholdMax
-                 << "|colliders=" << loadPlan.tressfxSimulation.capsules.size();
-        // 作者曲线逐项进入缓存身份；只改数值也必须重建 renderable 与 SSBO。
-        AppendStiffnessCurveIdentity(identity, "vspcurve",
-            loadPlan.tressfxSimulation.vspStiffness);
-        AppendStiffnessCurveIdentity(identity, "localshapecurve",
-            loadPlan.tressfxSimulation.localShapeStiffness);
-        for (const VL::Hair::TressfxCollider& capsule :
-             loadPlan.tressfxSimulation.capsules)
-        {
-            identity << "|cap=" << capsule.a.x() << "," << capsule.a.y() << ","
-                     << capsule.a.z() << ":" << capsule.b.x() << "," << capsule.b.y()
-                     << "," << capsule.b.z() << ":" << capsule.radius
-                     << ":" << capsule.bone;
-        }
-        // SDF 代理路径、格距和 margin 都改变运行时距离场与碰撞行为，必须进入
-        // 模型缓存身份；两个只差碰撞网格的 SM 不能共享 renderable 与 GPU 网格。
-        if (loadPlan.tressfxSimulation.collisionMesh)
-        {
-            identity << "|sdfmesh=" << loadPlan.tressfxSimulation.collisionMesh->path
-                     << "|sdfcell=" << loadPlan.tressfxSimulation.collisionMesh->cellSize
-                     << "|sdfmargin=" << loadPlan.tressfxSimulation.collisionMesh->margin;
-        }
-        identity << "|backend=" << (loadPlan.tressfxSimulation.backend ==
-                        TressfxSimulationBackend::Gpu ? "gpu" : "cpu");
-        // 源对象/根骨决定运行时上传的骨骼矩阵，必须进入模型缓存身份；否则同一
-        // .tfx 的两个不同绑定会错误共享 renderable 与 SSBO。
-        if (loadPlan.tressfxSimulation.skinning)
-        {
-            identity << "|skinsource=" << loadPlan.tressfxSimulation.skinning->source
-                     << "|skinbone=" << loadPlan.tressfxSimulation.skinning->rootBone;
-            if (!loadPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
-                identity << "|boneweights="
-                         << loadPlan.tressfxSimulation.skinning->boneWeightsPath;
-            // 派生权重改变的是同一份 GPU 多骨数据，必须与单骨/.tfxbone 缓存条目分开；
-            // 缺省 rootBone 不追加后缀，保持既有资产身份不变。
-            if (loadPlan.tressfxSimulation.skinning->rootWeights ==
-                TressfxRootWeightSource::Mesh)
-                identity << "|rootweights=mesh";
-        }
+        // 几何身份只含几何输入；默认值变更在 renderable 有效配置键中体现。
+        identity << "|tressfx-geometry-v2|radius=" << std::hexfloat << loadPlan.strandRadius;
         loadPlan.modelCacheKey += identity.str();
     }
     if (effectiveMeshAssetJson.contains("skinning"))
@@ -1023,3 +986,142 @@ std::vector<MeshSectionLoadPlan> MeshAssetValidator::BuildSectionLoadPlans(
     }
     return sectionPlans;
 }
+
+namespace VL::Hair
+{
+nlohmann::json WriteTressfxSimulationValues(const TressfxSimulationConfig& config)
+{
+    nlohmann::json value = {
+        {"enabled", config.enabled},
+        {"backend", config.backend == TressfxSimulationBackend::Gpu ? "gpu" : "cpu"},
+        {"gravity", {config.gravity.x(), config.gravity.y(), config.gravity.z()}},
+        {"wind", {config.wind.x(), config.wind.y(), config.wind.z()}},
+        {"damping", config.damping}, {"iterations", config.iterations},
+        {"rootFixedPoints", config.rootFixedPoints}, {"maxDt", config.maxDt},
+        {"bendStiffness", config.bendStiffness},
+        {"globalShapeStiffness", config.globalShapeStiffness},
+        {"globalShapeEffectiveRange", config.globalShapeEffectiveRange},
+        {"vspCoefficient", config.vspCoefficient},
+        {"vspAccelThresholdMax", config.vspAccelThresholdMax}};
+    if (!config.vspStiffness.empty())
+        value["vspStiffness"] = config.vspStiffness;
+    if (!config.localShapeStiffness.empty())
+        value["localShapeStiffness"] = config.localShapeStiffness;
+    return value;
+}
+
+nlohmann::json WriteTressfxSkinning(const TressfxSimulationSkinning& skinning)
+{
+    nlohmann::json value = {{"rootBone", skinning.rootBone}};
+    if (!skinning.source.empty())
+        value["source"] = skinning.source;
+    if (!skinning.boneWeightsPath.empty())
+        value["boneWeights"] = skinning.boneWeightsPath;
+    if (skinning.rootWeightsAuthored)
+        value["weights"] = skinning.rootWeights == TressfxRootWeightSource::Mesh
+            ? "mesh" : "rootBone";
+    return value;
+}
+
+TressfxSimulationConfig ReadTressfxSimulationDefaults(
+    const nlohmann::json& asset, const std::string& context)
+{
+    if (asset.contains("simulation") || asset.contains("collision") ||
+        asset.contains("hairCollision") || asset.contains("skinning") ||
+        asset.contains("collisionDefaults"))
+        throw std::runtime_error("TressFX asset must use simulationDefaults; "
+            "skinning and hairCollision belong to the placement: " + context);
+    if (!asset.contains("simulationDefaults"))
+        return {};
+    const auto& defaults = asset.at("simulationDefaults");
+    if (!defaults.is_object() || defaults.contains("skinning") ||
+        defaults.contains("collision") || defaults.contains("hairCollision"))
+        throw std::runtime_error("TressFX simulationDefaults must contain only "
+            "simulation values: " + context);
+    return MeshAssetValidator::BuildTressfxSimulationConfig(
+        {{"simulation", defaults}}, context);
+}
+
+TressfxPlacementBehavior ReadTressfxPlacementBehavior(
+    const nlohmann::json& node, const std::string& context)
+{
+    if (!node.is_object())
+        throw std::runtime_error("TressFX placement behavior must be an object: " + context);
+    for (auto field = node.begin(); field != node.end(); ++field)
+        if (field.key() != "simulation" && field.key() != "skinning" &&
+            field.key() != "hairCollision")
+            throw std::runtime_error("Unknown TressFX placement field: " +
+                field.key() + " " + context);
+    TressfxPlacementBehavior behavior;
+    nlohmann::json internal = {{"simulation", {{"enabled", false}, {"backend", "gpu"}}}};
+    if (node.contains("simulation"))
+    {
+        const auto& simulation = node.at("simulation");
+        if (!simulation.is_object())
+            throw std::runtime_error("TressFX placement simulation must be an object: " + context);
+        for (auto field = simulation.begin(); field != simulation.end(); ++field)
+            if (field.key() != "mode" && field.key() != "overrides")
+                throw std::runtime_error("Unknown TressFX placement simulation field: " +
+                    field.key() + " " + context);
+        const auto mode = simulation.value("mode", std::string("inherit"));
+        if (mode == "off") behavior.mode = TressfxSimulationMode::Off;
+        else if (mode == "on") behavior.mode = TressfxSimulationMode::On;
+        else if (mode != "inherit")
+            throw std::runtime_error("TressFX simulation mode must be inherit, off or on: " + context);
+        if (simulation.contains("overrides"))
+        {
+            behavior.overrides = simulation.at("overrides");
+            if (!behavior.overrides.is_object() ||
+                behavior.overrides.contains("enabled") ||
+                behavior.overrides.contains("skinning") ||
+                behavior.overrides.contains("collision"))
+                throw std::runtime_error("TressFX overrides contain forbidden fields: " + context);
+            internal["simulation"].update(behavior.overrides);
+        }
+    }
+    if (node.contains("skinning"))
+        internal["simulation"]["skinning"] = node.at("skinning");
+    if (node.contains("hairCollision"))
+    {
+        behavior.hairCollision = node.at("hairCollision");
+        internal["collision"] = behavior.hairCollision;
+    }
+    behavior.skinning = MeshAssetValidator::BuildTressfxSimulationConfig(
+        internal, context).skinning;
+    return behavior;
+}
+
+TressfxSimulationConfig ResolveTressfxBehavior(
+    const TressfxSimulationConfig& defaults,
+    const TressfxPlacementBehavior& placement,
+    const std::string& context)
+{
+    nlohmann::json simulation = WriteTressfxSimulationValues(defaults);
+    simulation.update(placement.overrides);
+    if (placement.mode != TressfxSimulationMode::Inherit)
+        simulation["enabled"] = placement.mode == TressfxSimulationMode::On;
+    if (placement.skinning)
+        simulation["skinning"] = WriteTressfxSkinning(*placement.skinning);
+    nlohmann::json internal = {{"simulation", simulation}};
+    if (!placement.hairCollision.empty())
+        internal["collision"] = placement.hairCollision;
+    return MeshAssetValidator::BuildTressfxSimulationConfig(internal, context);
+}
+
+std::string MakeTressfxBehaviorKey(const TressfxSimulationConfig& config)
+{
+    nlohmann::json identity = WriteTressfxSimulationValues(config);
+    if (config.skinning)
+        identity["skinning"] = WriteTressfxSkinning(*config.skinning);
+    identity["capsules"] = nlohmann::json::array();
+    for (const auto& capsule : config.capsules)
+        identity["capsules"].push_back({{"a", {capsule.a.x(), capsule.a.y(), capsule.a.z()}},
+            {"b", {capsule.b.x(), capsule.b.y(), capsule.b.z()}},
+            {"radius", capsule.radius}, {"bone", capsule.bone}});
+    if (config.collisionMesh)
+        identity["collisionMesh"] = {{"path", config.collisionMesh->path},
+            {"cellSize", config.collisionMesh->cellSize}, {"margin", config.collisionMesh->margin}};
+    return identity.dump();
+}
+
+} // namespace VL::Hair

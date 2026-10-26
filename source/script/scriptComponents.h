@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <nlohmann/json.hpp>
+#include "hair/tressfxBehavior.h"
 
 namespace VL
 {
@@ -85,7 +86,8 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
                 field.key() != "position" && field.key() != "rotation" && field.key() != "scale" && field.key() != "collision" &&
                 !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride")) &&
                 !(type == "tressfx" && (field.key() == "modelPath" || field.key() == "rootBone" ||
-                    field.key() == "weights")) &&
+                    field.key() == "weights" || field.key() == "simulation" ||
+                    field.key() == "hairCollision" || field.key() == "materialOverride")) &&
                 !(type == "camera" && (field.key() == "fov" || field.key() == "near_clip" ||
                     field.key() == "far_clip" || field.key() == "autoActivate" || field.key() == "priority")) &&
                 !(type == "springArm" && (field.key() == "targetArmLength" || field.key() == "socketOffset" ||
@@ -114,13 +116,20 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
                     throw std::invalid_argument("Mesh component requires non-empty asset paths");
         if (type == "tressfx")
         {
+            nlohmann::json behavior = nlohmann::json::object();
+            if (component.contains("simulation")) behavior["simulation"] = component.at("simulation");
+            if (component.contains("hairCollision")) behavior["hairCollision"] = component.at("hairCollision");
+            if (component.contains("rootBone"))
+                behavior["skinning"] = {{"rootBone", component.at("rootBone")}};
+            try { Hair::ReadTressfxPlacementBehavior(behavior, id); }
+            catch (const std::exception& error) { throw std::invalid_argument(error.what()); }
             // 毛发组件必须自带 tressfx 描述符；父级（源角色）由组件树决定，不再
             // 通过描述符里的场景对象名写死。
             if (!component.contains("modelPath") || !component.at("modelPath").is_string() ||
                 component.at("modelPath").get<std::string>().empty())
                 throw std::invalid_argument("TressFX component requires a non-empty modelPath");
-            if (component.contains("rootBone") && (!component.at("rootBone").is_string() ||
-                component.at("rootBone").get<std::string>().empty()))
+            if (!component.contains("rootBone") || !component.at("rootBone").is_string() ||
+                component.at("rootBone").get<std::string>().empty())
                 throw std::invalid_argument("TressFX component rootBone requires a non-empty string");
             if (component.contains("weights"))
             {
@@ -566,6 +575,8 @@ inline std::string ScriptComponentMeshTemplateKey(
             ScriptComponentMeshAncestor(blueprint.at("components"), component);
         key += "\n@" + (ancestor == nullptr ? std::string() :
             ScriptMeshIdentity(blueprint.at("id").get<std::string>(), *ancestor));
+        for (const char* field : {"simulation", "hairCollision", "rootBone", "weights"})
+            if (component.contains(field)) key += "\n" + std::string(field) + "=" + component.at(field).dump();
     }
     return key;
 }
@@ -582,6 +593,8 @@ inline nlohmann::json ScriptComponentMeshStructureEntry(
             ScriptComponentMeshAncestor(blueprint.at("components"), component);
         entry.push_back(ancestor == nullptr ? std::string() :
             ScriptMeshIdentity(blueprint.at("id").get<std::string>(), *ancestor));
+        for (const char* field : {"simulation", "hairCollision", "rootBone", "weights"})
+            entry.push_back(component.value(field, nlohmann::json()));
     }
     return entry;
 }

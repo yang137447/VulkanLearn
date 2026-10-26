@@ -24,6 +24,9 @@
 #include "animation/animationSequenceData.h"
 #include "animation/skeletalPlayback.h"
 #include "shader/build/contentHash.h"
+#include "hair/tressfxBehavior.h"
+#include "hair/collisionMeshObj.h"
+#include "hair/tfxBoneLoader.h"
 
 namespace
 {
@@ -118,19 +121,6 @@ ModelImportRequest BuildModelImportRequest(const MeshAssetBuildPlan& loadPlan)
     ModelImportRequest request;
     request.buildPlan = loadPlan;
     request.absoluteModelPath = CommonFunction::Path(loadPlan.modelDataPath);
-    // `collision.mesh` 与模型源同次解析成绝对路径；缺失文件在这里就失败，
-    // 与 modelDataPath 的加载期行为一致。
-    if (loadPlan.tressfxSimulation.collisionMesh)
-    {
-        request.absoluteCollisionMeshPath = CommonFunction::Path(
-            loadPlan.tressfxSimulation.collisionMesh->path);
-    }
-    if (loadPlan.tressfxSimulation.skinning &&
-        !loadPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
-    {
-        request.absoluteBoneWeightsPath = CommonFunction::Path(
-            loadPlan.tressfxSimulation.skinning->boneWeightsPath);
-    }
     return request;
 }
 
@@ -175,6 +165,68 @@ MeshAssetLoadRequest MeshAssetLoader::Prepare(std::string_view meshAssetPath)
     loadRequest.importRequest = BuildModelImportRequest(loadRequest.buildPlan);
     loadRequest.descriptorIdentity = std::move(descriptorIdentity);
     return loadRequest;
+}
+
+void MeshAssetLoader::PrepareTressfxPlacement(
+    MeshAssetLoadRequest& request, const nlohmann::json& sceneObject)
+{
+    if (request.buildPlan.assetType != "tressfx")
+    {
+        if (sceneObject.contains("tressfx"))
+            throw std::runtime_error("tressfx behavior requires a TressFX asset");
+        return;
+    }
+    const auto behavior = VL::Hair::ReadTressfxPlacementBehavior(
+        sceneObject.value("tressfx", nlohmann::json::object()),
+        request.buildPlan.meshAssetPath);
+    request.tressfxEffective = VL::Hair::ResolveTressfxBehavior(
+        request.buildPlan.tressfxSimulation, behavior, request.buildPlan.meshAssetPath);
+    const auto& config = *request.tressfxEffective;
+    auto resources = std::make_shared<TressfxPlacementResources>();
+    if (config.collisionMesh)
+    {
+        const std::string path = CommonFunction::Path(config.collisionMesh->path);
+        const auto digest = VL::ContentHasher::HashFile(path);
+        auto parsed = VL::Hair::LoadCollisionMeshObj(std::filesystem::u8path(path));
+        if (parsed.IsFailure())
+            throw std::runtime_error(parsed.Error().message);
+        if (VL::ContentHasher::HashFile(path) != digest)
+            throw std::runtime_error("TressFX collision mesh changed during preparation");
+        resources->collisionMesh = std::make_shared<const VL::Hair::SdfTriangleMesh>(
+            std::move(parsed.Value()));
+        resources->identity += "|proxyBlake3=" + digest.ToHex();
+        resources->sourceInputs.emplace_back(config.collisionMesh->path, digest.ToHex());
+    }
+    if (config.skinning && !config.skinning->boneWeightsPath.empty())
+    {
+        const std::filesystem::path logical(config.skinning->boneWeightsPath);
+        if (logical.is_absolute() || logical.has_root_directory())
+            throw std::runtime_error("TressFX boneWeights must be resource-relative");
+        for (const auto& part : logical)
+            if (part == "..")
+                throw std::runtime_error("TressFX boneWeights must not escape resource root");
+        const std::string path = CommonFunction::Path(config.skinning->boneWeightsPath);
+        const auto digest = VL::ContentHasher::HashFile(path);
+        auto parsed = VL::Hair::LoadTfxBone(std::filesystem::u8path(path));
+        if (parsed.IsFailure())
+            throw std::runtime_error(parsed.Error().message);
+        if (VL::ContentHasher::HashFile(path) != digest)
+            throw std::runtime_error("TressFX boneWeights changed during preparation");
+        resources->boneAsset = std::make_shared<const VL::Hair::TfxBoneAsset>(
+            std::move(parsed.Value()));
+        resources->identity += "|weightsBlake3=" + digest.ToHex();
+        resources->sourceInputs.emplace_back(config.skinning->boneWeightsPath, digest.ToHex());
+    }
+    request.tressfxResources = std::move(resources);
+}
+
+void MeshAssetLoader::ValidateTressfxPlacementSources(const MeshAssetLoadRequest& request)
+{
+    if (!request.tressfxResources)
+        return;
+    for (const auto& input : request.tressfxResources->sourceInputs)
+        if (VL::ContentHasher::HashFile(CommonFunction::Path(input.first)).ToHex() != input.second)
+            throw std::runtime_error("TressFX placement input changed before publication: " + input.first);
 }
 
 void MeshAssetLoader::ValidateImportRequest(const MeshAssetLoadRequest& loadRequest)
@@ -399,7 +451,15 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
     std::unique_ptr<IModelImporter> modelImporter = CreateAndValidateModelImporter(loadRequest);
     MeshAssetImportResult importResult;
     importResult.buildPlan = loadRequest.buildPlan;
+    const std::string tfxDigest = loadRequest.buildPlan.assetType == "tressfx"
+        ? VL::ContentHasher::HashFile(loadRequest.importRequest.absoluteModelPath).ToHex() : std::string();
     importResult.modelResource = modelImporter->Import(loadRequest.importRequest);
+    if (!tfxDigest.empty())
+    {
+        if (VL::ContentHasher::HashFile(loadRequest.importRequest.absoluteModelPath).ToHex() != tfxDigest)
+            throw std::runtime_error("TressFX geometry changed during import");
+        importResult.buildPlan.modelCacheKey += "|tfxBlake3=" + tfxDigest;
+    }
     importResult.sectionPlans = MeshAssetValidator::BuildSectionLoadPlans(
         importResult.buildPlan,
         importResult.modelResource);
