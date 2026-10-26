@@ -2603,7 +2603,7 @@ void MaterialInstanceAssetEditorPanel::RequestHairPreviewRotation(float deltaX, 
     if (runtimeActionSink == nullptr || hairPreviewBlocked) return;
     const uint64_t generation = CurrentModelPreviewGeneration();
     if (!generation) return;
-    // 累计角度由 UI 维护，GT 只写绝对 TRS；预览对象身份固定为 mesh|preview_model。
+    // 累计角度由 UI 维护，GT 只写绝对 TRS；World 使用原始场景身份 preview_model。
     hairRotation.Drag(deltaX, deltaY);
     UiAction action;
     action.type = UiActionType::RotatePreviewModel;
@@ -2761,7 +2761,6 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     std::string rows;
     for (std::size_t index = 0; index < count; ++index)
     {
-        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
         std::vector<UiWidgets::NumericComponent> components;
         for (uint32_t component = 0; component < controls[index].components; ++component)
         {
@@ -2769,7 +2768,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             entry.id = "hair-sim-" + std::to_string(index) + "-" + std::to_string(component);
             entry.label = controls[index].components == 1
                 ? std::string() : std::string(1, "XYZ"[component]);
-            entry.value = TressfxSimulationText(values[component]);
+            // markup 只描述固定控件结构；值在挂载后单独同步，避免编辑时替换焦点/拖动节点。
+            entry.value = TressfxSimulationText(controls[index].defaults[component]);
             entry.change = {"hair-sim", index, component};
             if (controls[index].hasRange)
             {
@@ -2786,9 +2786,9 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     }
     rows += "<div class=\"hair-sim-footer\">" +
         UiWidgets::Button("hair-sim-save", {"hair-save"},
-            document != nullptr ? "Save to Hair Asset" : "Reading asset...",
+            "Save to Hair Asset",
             UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
-        "<span class=\"hair-sim-status\">" + Text(hairSimulationStatus) + "</span></div>";
+        "<span id=\"hair-sim-status\" class=\"hair-sim-status\"></span></div>";
     // 这是资产级默认值编辑：保存写 TF_*.json，只影响未覆写这些字段的挂载；实时值只属于
     // 当前预览会话。必须写清，避免作者误以为在改关卡里的这一根头发。
     rows += "<p class=\"hair-sim-note\">Drag previews in this viewport only (not saved). "
@@ -2797,6 +2797,19 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     SetMarkup("resource-hair-simulation", UiWidgets::CollapsibleSection(
         DetailsSectionId("hair-simulation"), "hair-simulation", "Simulation Defaults", rows,
         {"section"}, IsSectionExpanded("hair-simulation")));
+    SetMarkup("hair-sim-status", Text(hairSimulationStatus));
+    SetDisabled("hair-sim-save", document == nullptr);
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        for (uint32_t component = 0; component < controls[index].components; ++component)
+        {
+            const std::string id = "hair-sim-" + std::to_string(index) + "-" + std::to_string(component);
+            SetControlValue(id, TressfxSimulationText(values[component]));
+            if (controls[index].hasRange)
+                SetControlValue(id + "-slider", TressfxSimulationText(values[component]));
+        }
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::SubmitHairSimulationLive(std::size_t controlIndex,
@@ -4274,7 +4287,8 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
 }
 
-void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
+void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action,
+    const Rml::Event* event)
 {
     if (action == "hair-sim")
     {
@@ -4284,7 +4298,13 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         const std::size_t index = element.GetAttribute<size_t>("data-index", 0);
         const std::size_t component = element.GetAttribute<size_t>("data-component", 0);
         if (index >= count || component >= controls[index].components) return;
-        const std::string text = ControlValue(element);
+        // WidgetSlider 先发 change(value)，返回后才写 value 属性；读属性会落后一拍，
+        // 下一帧同步又把滑块拉回旧值。这里只消费该事件的新值，文本仍保留半成品输入。
+        const bool sliderChange = event != nullptr &&
+            element.GetAttribute<Rml::String>("type", "") == "range" &&
+            event->GetParameters().count("value") != 0;
+        const std::string text = sliderChange
+            ? Number(event->GetParameter<float>("value", 0.0f)) : ControlValue(element);
         char* end = nullptr;
         const double value = std::strtod(text.c_str(), &end);
         // 文本控件的半成品输入不能当成 0；只接受整段都是数字的值。
@@ -4965,7 +4985,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
             if (openAssetPath) OpenBrowserAsset(*openAssetPath);
         }
         else if (event.GetType() == "click") HandleClick(*element, action);
-        else if (event.GetType() == "change") HandleChange(*element, action);
+        else if (event.GetType() == "change") HandleChange(*element, action, &event);
         else if (event.GetType() == "dblclick" &&
             (action == "outliner-actor" || action == "viewport-actor") && runtimeActionSink != nullptr)
         {

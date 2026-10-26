@@ -950,7 +950,12 @@ body {
 #resource-hair-tools { display: none; align-items: center; gap: 4px; }
 #resource-hair-tools span { color: #aeb7b2; font-size: 12px; white-space: nowrap; }
 #resource-hair-simulation { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
-#resource-hair-simulation .hair-sim-footer { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#resource-hair-simulation .property-row { align-items: flex-start; }
+#resource-hair-simulation .property-row > label { width: 38%; flex: none; padding: 5px 6px 0 0; box-sizing: border-box; white-space: normal; font-size: 12px; }
+/* 嵌套 flex 的数值列必须有确定宽度，否则轴标签的固有宽度会把输入框挤成细条。 */
+#resource-hair-simulation .horizontal-box { width: 62%; flex-shrink: 0; min-width: 0; }
+#resource-hair-simulation .hair-sim-footer { display: block; margin-top: 8px; }
+#resource-hair-simulation .hair-sim-status { display: block; margin-top: 6px; }
 #resource-hair-simulation .hair-sim-status { color: #aeb7b2; font-size: 12px; }
 #resource-hair-simulation .hair-sim-note { margin: 7px 0 0; color: #8f9893; font-size: 11px; }
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }

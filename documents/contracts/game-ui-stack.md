@@ -707,7 +707,9 @@ which resets every tressfx object in the preview world.
 The UI only submits value-semantic `UiAction` (`RotatePreviewModel`,
 `ResetHairSimulation`). The game thread converts them into `SetMeshPlacement` /
 `ResetHairSimulation` runtime commands and validates that `preview_model` is still in the
-active World.
+active World. Rotation uses the raw World identity `preview_model`; the UI actor address
+`mesh|preview_model` is not a placement identity. Rotation conversion checks the preview scene
+and World generation, and command execution checks that generation again after queueing.
 
 The asset page owns the `Simulation` defaults section: nine authored simulation values
 with ranges/units from one shared table, initialised from `simulationDefaults` in the asset
@@ -717,6 +719,12 @@ asset or scene. `Save to Hair Asset` runs the standard `tressfx.modify`
 (document revision) → Save Content → `tressfx.save`; the status text states that the hair asset
 is affected for **every placement** and that reloading applies the values and resets the
 simulation.
+
+The hair property rows explicitly size the label and numeric columns. Numeric inputs and
+sliders retain their DOM nodes during value/status refresh; values use `SetControlValue`
+so focused partial text and an active slider drag survive snapshot updates. Hair slider
+callbacks read the new `change` event value: RmlUi writes the control's value attribute only
+after dispatching that event.
 
 The TressFX tab reuses the existing hair preview, rotation/reset controls and simulation
 control table. Its authoritative document projection and revision come from the separate

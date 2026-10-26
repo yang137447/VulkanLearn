@@ -966,6 +966,14 @@ void RuntimeCommandExecutor::ApplyMeshPlacement(
         return;
     }
 
+    // UI 预览命令可能在同批 LoadWorld 之前入队；执行时再次拒绝旧代数，Console 不受此门控。
+    if (command.sourceText == "ui" &&
+        command.actorProperty.worldGeneration != activeWorld->GetGeneration())
+    {
+        diagnostics.ReportWarning("Mesh preview placement rejected because the World generation changed.");
+        return;
+    }
+
     // 绝对/增量/扫掠共用同一条身份校验：scene identity 不在当前 World 时必须拒绝并给出
     // 诊断，而不是静默改不到东西。加载中的新 World 可能同名，所以这里始终查活动 World。
     Eigen::Vector3f currentPosition = Eigen::Vector3f::Zero();

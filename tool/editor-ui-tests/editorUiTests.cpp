@@ -26,6 +26,7 @@
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/modelPreviewRotation.h"
 #include "input/mouseMotionBatch.h"
 #include "debug/drawDebug.h"
 #include "sceneNode.h"
@@ -3098,6 +3099,23 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     EXPECT_EQ(runtimeSink.actions.back().previewRotation.worldGeneration, 100u);
     EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 10.0f);
     EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.pitch, 5.0f);
+    // 继续走生产用的动作转换和真实 World 写入，不能只证明 UI 发出了动作。
+    World previewWorld(100, ModelPreviewScenePath);
+    WorldMeshObject hairObject;
+    hairObject.sceneObjectIdentity = "preview_model";
+    hairObject.model(0, 3) = 3.0f;
+    previewWorld.AddMeshObject("preview_model::guides", hairObject);
+    const auto command = BuildModelPreviewRotationCommand(runtimeSink.actions.back().previewRotation,
+        previewWorld.GetGeneration(), previewWorld.GetScenePath());
+    ASSERT_TRUE(command.has_value());
+    EXPECT_EQ(command->type, RuntimeCommandType::SetMeshPlacement);
+    EXPECT_EQ(command->meshPlacement.identity, "preview_model");
+    ASSERT_TRUE(previewWorld.SetMeshSceneObjectTransform(command->meshPlacement.identity,
+        command->meshPlacement.position, command->meshPlacement.rotation, Eigen::Vector3f::Ones()));
+    const auto& rotated = previewWorld.GetMeshObjects().at("preview_model::guides");
+    EXPECT_FLOAT_EQ(rotated.sceneRotation.x(), 5.0f);
+    EXPECT_FLOAT_EQ(rotated.sceneRotation.y(), 10.0f);
+    EXPECT_FALSE(rotated.model.isApprox(hairObject.model));
     context->ProcessMouseMove(x + 40, y + 10, 0);
     ASSERT_EQ(runtimeSink.actions.size(), 2u);
     EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 20.0f);
@@ -3118,6 +3136,140 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ResetHairSimulation);
     EXPECT_TRUE(runtimeSink.actions.back().stringValue.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairRotationRejectsOldWorldAndLevelObjectsWithTheSameName)
+{
+    ModelPreviewRotationInput input{100, 20, 5};
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 101, ModelPreviewScenePath));
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 100, "Maps/SC_level/SC_level.json"));
+    input.worldGeneration = 0;
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 0, ModelPreviewScenePath));
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationControlsHaveUsableGeometryAcrossWorkspaceSizes)
+{
+    OpenTressfxAsset();
+    for (const auto dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+                                 Rml::Vector2i(1920, 1080)})
+    {
+        SCOPED_TRACE(std::to_string(dimensions.x));
+        context->SetDimensions(dimensions);
+        Refresh(); Refresh();
+        auto* host = document->GetElementById("resource-hair-simulation");
+        ASSERT_NE(host, nullptr);
+        const auto origin = host->GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto size = host->GetBox().GetSize(Rml::BoxArea::Content);
+        for (const char* id : {"hair-sim-0-0", "hair-sim-0-1", "hair-sim-0-2",
+                               "hair-sim-2-0", "hair-sim-2-0-slider"})
+        {
+            auto* input = document->GetElementById(id);
+            ASSERT_NE(input, nullptr);
+            const auto offset = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto inputSize = input->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(inputSize.x, id[9] == '2' ? 120.0f : 30.0f) << id;
+            EXPECT_GE(offset.x, origin.x) << id;
+            EXPECT_LE(offset.x + inputSize.x, origin.x + size.x + 1.0f) << id;
+        }
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationRefreshPreservesTextFocusAndPartialInput)
+{
+    OpenTressfxAsset();
+    auto* input = Control("hair-sim-2-0");
+    ASSERT_NE(input, nullptr);
+    const auto origin = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = input->GetBox().GetSize(Rml::BoxArea::Border);
+    context->ProcessMouseMove(int(origin.x + size.x / 2), int(origin.y + size.y / 2), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_EQ(context->GetFocusElement(), input);
+    input->SetValue("0.02");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-2-0"), input);
+    ASSERT_EQ(context->GetFocusElement(), input);
+    input->SetValue("");
+    context->ProcessTextInput("-");
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-2-0"), input);
+    EXPECT_EQ(context->GetFocusElement(), input);
+    EXPECT_EQ(input->GetValue(), "-");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationSliderKeepsDraggingAcrossSnapshotRefresh)
+{
+    OpenTressfxAsset();
+    auto actor = MeshActor("preview_model", 100);
+    actor.scenePath = ModelPreviewScenePath;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    Refresh();
+    auto* slider = Control("hair-sim-2-0-slider");
+    ASSERT_NE(slider, nullptr);
+    const auto origin = slider->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = slider->GetBox().GetSize(Rml::BoxArea::Border);
+    const int y = int(origin.y + size.y / 2);
+    // 命中当前 0.035/0.1 的滑块，不是轨道（点轨道只执行单次跳转，不捕获拖动）。
+    context->ProcessMouseMove(int(origin.x + size.x * 0.35f), y, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(int(origin.x + size.x * 0.5f), y, 0);
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-2-0-slider"), slider);
+    const auto first = slider->GetAttribute<float>("value", -1);
+    const auto firstCount = runtimeSink.actions.size();
+    ASSERT_GT(firstCount, 0u);
+    context->ProcessMouseMove(int(origin.x + size.x * 0.8f), y, 0);
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-2-0-slider"), slider);
+    EXPECT_GT(slider->GetAttribute<float>("value", -1), first);
+    EXPECT_GT(runtimeSink.actions.size(), firstCount);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetHairSimulationParameter);
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.field, "damping");
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairZeroSimulationSlidersDragFromTheirMinimumAcrossRefresh)
+{
+    OpenTressfxAsset();
+    auto actor = MeshActor("preview_model", 100);
+    actor.scenePath = ModelPreviewScenePath;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    Refresh();
+    for (const int index : {5, 6, 7})
+    {
+        SCOPED_TRACE(index);
+        const std::string id = "hair-sim-" + std::to_string(index) + "-0";
+        auto* slider = Control(id + "-slider");
+        ASSERT_NE(slider, nullptr);
+        EXPECT_FLOAT_EQ(slider->GetAttribute<float>("value", -1), 0.0f);
+        const auto origin = slider->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = slider->GetBox().GetSize(Rml::BoxArea::Border);
+        const int y = int(origin.y + size.y / 2);
+        runtimeSink.actions.clear();
+        // 最小值时滑块贴在轨道左端，点击实际 knob 中心后连续向右拖动。
+        context->ProcessMouseMove(int(origin.x + 6), y, 0);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseMove(int(origin.x + size.x * 0.4f), y, 0);
+        Refresh();
+        ASSERT_EQ(document->GetElementById(id + "-slider"), slider);
+        const float first = slider->GetAttribute<float>("value", -1);
+        EXPECT_GT(first, 0.0f);
+        const auto firstCount = runtimeSink.actions.size();
+        EXPECT_GT(firstCount, 0u);
+        context->ProcessMouseMove(int(origin.x + size.x * 0.8f), y, 0);
+        Refresh();
+        EXPECT_GT(slider->GetAttribute<float>("value", -1), first);
+        EXPECT_GT(runtimeSink.actions.size(), firstCount);
+        context->ProcessMouseButtonUp(0, 0);
+        EXPECT_NE(Control(id)->GetValue(), "0");
+    }
+    EXPECT_TRUE(sink.commands.empty());
 }
 
 TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheAsset)

@@ -12,6 +12,7 @@
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/modelPreviewRotation.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "script/scriptBuildService.h"
 #include "script/scriptBuildDiagnostics.h"
@@ -1587,15 +1588,16 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::ForceSpeedTreeGust;
             break;
         case UiActionType::RotatePreviewModel:
+        {
             // 旋转的是预览对象，不是相机：毛发物理只对根点世界位置变化产生响应。
-            // UI 维护累计 yaw/pitch；执行端只核对 preview_model 仍在 active World。
-            command.type = RuntimeCommandType::SetMeshPlacement;
-            command.meshPlacementMode = MeshPlacementMode::Absolute;
-            command.meshPlacement.identity = "mesh|preview_model";
-            command.meshPlacement.position.setZero();
-            command.meshPlacement.rotation = {
-                action.previewRotation.pitch, action.previewRotation.yaw, 0.0f};
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            if (!world) continue;
+            const auto rotation = BuildModelPreviewRotationCommand(action.previewRotation,
+                world->GetGeneration(), world->GetScenePath());
+            if (!rotation) continue;
+            command = *rotation;
             break;
+        }
         case UiActionType::ResetHairSimulation:
             // 预览世界只有一个毛发对象，空目标即“所有 tressfx 对象”。
             command.type = RuntimeCommandType::ResetHairSimulation;

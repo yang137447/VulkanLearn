@@ -26,6 +26,13 @@ public:
 
     bool HasConflict() const { return conflict; }
     const std::string& OwnerIdentity() const { return ownerIdentity; }
+    // Console/编辑器传入的是冻结 draw 的 placement 身份；资源缓存名不能用于选中
+    // 实例。冲突对象拒绝定向修改；只有 reset 显式允许空目标表示当前全部对象。
+    bool MatchesCommandTarget(std::string_view target, bool allowAll = false) const
+    {
+        return initialized && !conflict &&
+            (target.empty() ? allowAll : ownerIdentity == target);
+    }
     void Merge(const TressfxSimulationOwner& observed)
     {
         if (observed.initialized)

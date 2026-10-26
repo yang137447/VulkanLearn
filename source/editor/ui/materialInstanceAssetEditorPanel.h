@@ -257,7 +257,7 @@ private:
     void ToggleSection(const std::string& key);
     void ApplySectionState();
     void HandleClick(Rml::Element& element, const std::string& action);
-    void HandleChange(Rml::Element& element, const std::string& action);
+    void HandleChange(Rml::Element& element, const std::string& action, const Rml::Event* event = nullptr);
     void CloseDocument(const std::string& path, EditorDirtyDocumentPolicy policy);
     void SelectModelMaterial(const MaterialInstanceModelSnapshot& model, size_t index);
     void OpenBrowserAsset(const std::string& path);

@@ -863,8 +863,10 @@ reason 为 `initial-state` / `first-pose` / `playback-changed` /
 不等于 GPU 三份位置的逐点读回。
 
 作者/调试可以显式请求一次复位：Console `hair reset [objectName]`，空参数表示当前
-World 里全部 GPU guide 对象。目标按渲染对象名匹配（场景对象名），不是 `mesh|...`
-身份。请求经 `RuntimeCommandType::ResetHairSimulation` 交给渲染线程，只在该对象
+World 里全部 GPU guide 对象。目标按冻结 draw 的 `sceneObjectIdentity` 精确匹配，
+不是 `mesh|...` UI 地址或含有效配置的 renderable 缓存键。同 placement 的重复材质 draw
+共用目标；不同 placement 不因几何相同而一起修改，owner 冲突的对象拒绝命令。
+请求经 `RuntimeCommandType::ResetHairSimulation` 交给渲染线程，只在该对象
 下一个**有 substep** 的帧消费；0 步/暂停帧保留请求，既不丢弃也不提前吞掉。消费时
 复用同一套 `motion.y`/resetParams 分支，强制 `reason=requested` 并关闭同帧 rebase
 （三份历史直接写回 InitialPos，换基没有意义）。它不重载 World、不重建 buffer 或
@@ -875,7 +877,8 @@ descriptor，也不修改资产文件。编辑器毛发视口的 Reset 按钮发
 
 编辑器/调试可以在不重载 World 的前提下覆盖部分模拟标量：
 
-- 命令：Console `hair set <objectName> <field> <value...>`；目标按渲染对象名匹配，
+- 命令：Console `hair set <objectName> <field> <value...>`；目标与具名 Reset 一样，
+  按冻结 draw 的正式 `sceneObjectIdentity` 匹配，不解析资源缓存键，
   **必须给名字**（没有“全部对象”语义，与 `hair reset` 不同）。
 - 可覆盖字段（单位与作者字段一致）：`gravity`、`wind`（各 3 个分量）、`damping`、
   `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
@@ -894,7 +897,7 @@ descriptor，也不修改资产文件。编辑器毛发视口的 Reset 按钮发
   World 世代：命令早于 World 加载时可能命中后续同名对象。
 - 日志：GT 成功入队打印 `Hair parameter queued: …`；渲染线程应用打印
   `[TressFX] live param: object=… field=… value=…`。未命中对象时报告“不存在”或
-  “CPU backend”，并列出本帧可用的 GPU 对象名（至多 8 个）。
+  “CPU backend”，并列出本帧可用的 GPU 放置身份（至多 8 个）。
 
 ### CPU 参考 solver
 

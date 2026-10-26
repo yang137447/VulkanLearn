@@ -264,8 +264,8 @@ SimulationOwnerMap CollectSimulationOwners(
             for (const VL::ResolvedDrawPacket& draw : instanceGroup.draws)
             {
                 const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
-                if (object && (object->UsesGpuGuideSimulation() ||
-                    object->UsesGpuHairSkinning()))
+                // CPU/off 也保留正式 placement 身份，供实时命令的拒绝诊断使用。
+                if (object && object->IsTressfx())
                     owners[object.get()].Observe(renderScene.drawPackets[
                         draw.drawPacketIndex].sceneObjectIdentity);
             }
@@ -1246,7 +1246,8 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             }
         }
     }
-    // 实时参数覆盖：按对象名匹配本帧的 GPU guide dispatch，写该渲染对象自己的
+    // 实时参数覆盖：按冻结 draw 的 placement 身份匹配本帧的 GPU guide dispatch，
+    // 不使用含有效配置的资源缓存名；写该渲染对象自己的
     // config 副本；下一段逐对象组 params 时就会读到新值。失败只报告并丢弃，
     // 不影响本帧已经规划的模拟步进。
     std::vector<VL::Hair::HairLiveParameterRequest> liveParameters;
@@ -1255,7 +1256,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     {
         RenderableObject* target = nullptr;
         for (const Dispatch& dispatch : dispatches)
-            if (dispatch.object->GetName() == request.objectName)
+            if (owners.at(dispatch.object.get()).MatchesCommandTarget(request.objectName))
             {
                 target = dispatch.object.get();
                 break;
@@ -1272,7 +1273,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                         const std::shared_ptr<RenderableObject> object =
                             draw.renderableObject.lock();
                         if (object && object->IsTressfx() &&
-                            object->GetName() == request.objectName &&
+                            owners.at(object.get()).MatchesCommandTarget(request.objectName) &&
                             !object->UsesGpuGuideSimulation())
                             cpuBackendObject = true;
                     }
@@ -1285,7 +1286,8 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                 // 名字是作者手写的，失败时列出本帧可用的 GPU 对象名，省一次猜。
                 std::cerr << " (available:";
                 for (size_t index = 0; index < dispatches.size() && index < 8; ++index)
-                    std::cerr << (index == 0 ? " " : ", ") << dispatches[index].object->GetName();
+                    std::cerr << (index == 0 ? " " : ", ")
+                              << owners.at(dispatches[index].object.get()).OwnerIdentity();
                 if (dispatches.size() > 8) std::cerr << ", ...";
                 std::cerr << ")";
             }
@@ -1372,10 +1374,10 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     {
         RenderableObject& object = *dispatch.object;
         ObjectDescriptors& state = EnsureObjectDescriptors(object);
-        // 显式复位请求按对象名展开；空名表示所有 GPU guide 对象。对象暂停/0 步
+        // 显式复位请求按 placement 身份展开；空名表示所有 GPU guide 对象。对象暂停/0 步
         // 帧时标记留在 ObjectDescriptors 上，下一个正 delta 帧才消费。
         if (pendingResetObject &&
-            (pendingResetObject->empty() || object.GetName() == *pendingResetObject))
+            owners.at(&object).MatchesCommandTarget(*pendingResetObject, true))
         {
             state.resetRequested = true;
             resetMatched = true;

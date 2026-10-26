@@ -28,9 +28,9 @@
 
 | 可执行文件 | 测试数 | 本轮增量覆盖 |
 | --- | --- | --- |
-| `hair_asset_tests` | 316 | defaults/placement 合成、错误与整数拒绝、几何/行为身份、绑定缓存、off 整束/零 delta 参数 |
+| `hair_asset_tests` | 319 | defaults/placement 合成、错误与整数拒绝、几何/行为身份、绑定缓存、off 整束/零 delta 参数；live/Reset 按放置身份寻址、共享几何实例隔离、owner 冲突拒绝 |
 | `script_tests` | 459（C# ON） | mode/override/rootBone 校验、auto 归一化、Spawn 有效配置保留及来源重写 |
-| `editor_ui_tests` | 808 | 独立 TF kind/七命令/生命周期、TF-only 前缀、真实服务只读投影与 live 门控、CPU/off 保存与 BP 稀疏覆盖 |
+| `editor_ui_tests` | 813 | 独立 TF kind/七命令/生命周期、TF-only 前缀、真实服务只读投影与 live 门控、CPU/off 保存与 BP 稀疏覆盖；毛发参数多尺寸几何、焦点/半成品输入、跨刷新滑条拖动（含三项零端点）及旋转 World 身份/代际 |
 | `material_instance_editor_production_tests` | 12 | 独立 TressFX 草稿发布与保存反馈 |
 | `game_export_tests` | 20 | 放置代理/权重依赖闭包，不把 skinning.source 当文件 |
 | `material_schema_tests` | 29 | TressFX 工厂/材质路径边界 |
@@ -1092,6 +1092,7 @@ Vulkan 取证使用既有 Console 与 Generated 输入，不新增 runtime test 
 | `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
 | 运行时 Spawn 的 per-placement 毛发 | `build/bin/main.exe --initial-scene Generated/Validation/SC_hair_spawn_probe/SC_hair_spawn_probe.json --frame-limit 60 --no-dev-ui`，Console 注入 `script play`；期望 `[Placement] instance renderable`、`binding=component`、`rootWeights … fallback=0`；`DestroyAfterDelay=true` 时再核对 `released by package` / `retired` 与 `runtime placement renderables: 0`；两个 spawner 时核对 `runtime placement renderables: 2`，且两个对象分别响应 `hair set`（互不影响） |
 | 毛发资产视口（TressFX kind、skinning 守卫、左键转模型、Reset） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairPreview.*:EditorUiTest.TressfxHairViewport*"`；GUI 烟测步骤见 `../plan/rendering/tressfx-hair-editor-and-binding-plan.md` |
+| 毛发参数可用尺寸与持续编辑、旋转正式身份 | `build/bin/editor_ui_tests.exe --gtest_filter="EditorUiTest.TressfxHair*"`；真实 RmlUi 在 960×540、1280×720、1920×1080 检查控件宽度/边界，鼠标拖动跨快照刷新保持节点，文本焦点及半成品保留；左拖继续调用生产旋转转换 helper 与真实 World TRS 写入，旧代数和非预览关卡拒绝。EngineLoop 与执行端代际复核不由此模块套件直接执行，仍需构建 main 与实窗验收 |
 | `documents/contracts/**` | `py -3 tool\validate-docs.py` |
 | 架构边界 | `pwsh -File tool/architecture-boundary-audit.ps1` |
 

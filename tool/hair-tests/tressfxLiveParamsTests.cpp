@@ -5,6 +5,7 @@
 
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxLiveParamsApply.h"
+#include "hair/tressfxSimulationOwner.h"
 
 namespace
 {
@@ -258,4 +259,51 @@ TEST(TressfxLiveParams, ParseRejectsMalformedArguments)
     EXPECT_TRUE(request.objectName.empty());
     EXPECT_TRUE(request.field.empty());
     EXPECT_EQ(request.valueCount, 0u);
+}
+
+TEST(TressfxLiveParams, PlacementTargetChangesOnlyOneInstanceOfSharedHair)
+{
+    VL::Hair::TressfxSimulationOwner firstOwner;
+    VL::Hair::TressfxSimulationOwner secondOwner;
+    firstOwner.Observe("preview_model");
+    firstOwner.Observe("preview_model"); // 同 placement 的重复材质 draw。
+    secondOwner.Observe("another_hair");
+    TressfxSimulationConfig configs[] = {MakeConfig(), MakeConfig()};
+    const VL::Hair::TressfxSimulationOwner owners[] = {firstOwner, secondOwner};
+    const HairLiveParameterRequest request =
+        MakeRequest("preview_model", "damping", {0.5f});
+    std::string error;
+    for (size_t index = 0; index < std::size(configs); ++index)
+        if (owners[index].MatchesCommandTarget(request.objectName))
+            ASSERT_TRUE(ApplyHairLiveParameter(configs[index], request, error)) << error;
+    EXPECT_FLOAT_EQ(configs[0].damping, 0.5f);
+    EXPECT_FLOAT_EQ(configs[1].damping, 0.035f);
+    EXPECT_FALSE(firstOwner.MatchesCommandTarget(
+        "female_guides.tfx|behavior={}|instance=preview_model"));
+    EXPECT_FALSE(firstOwner.MatchesCommandTarget("preview"));
+    EXPECT_FALSE(firstOwner.MatchesCommandTarget(""));
+}
+
+TEST(TressfxLiveParams, NamedResetIsPlacementScopedAndEmptyResetIncludesAll)
+{
+    VL::Hair::TressfxSimulationOwner firstOwner;
+    VL::Hair::TressfxSimulationOwner secondOwner;
+    firstOwner.Observe("first");
+    secondOwner.Observe("second");
+    EXPECT_TRUE(firstOwner.MatchesCommandTarget("first", true));
+    EXPECT_FALSE(secondOwner.MatchesCommandTarget("first", true));
+    EXPECT_TRUE(firstOwner.MatchesCommandTarget("", true));
+    EXPECT_TRUE(secondOwner.MatchesCommandTarget("", true));
+}
+
+TEST(TressfxLiveParams, ConflictingOrUnobservedPlacementCannotReceiveCommands)
+{
+    VL::Hair::TressfxSimulationOwner owner;
+    EXPECT_FALSE(owner.MatchesCommandTarget("first"));
+    EXPECT_FALSE(owner.MatchesCommandTarget("", true));
+    owner.Observe("first");
+    owner.Observe("second");
+    EXPECT_FALSE(owner.MatchesCommandTarget("first"));
+    EXPECT_FALSE(owner.MatchesCommandTarget("second"));
+    EXPECT_FALSE(owner.MatchesCommandTarget("", true));
 }
