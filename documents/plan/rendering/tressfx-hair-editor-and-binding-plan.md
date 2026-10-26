@@ -22,7 +22,7 @@
 | 权重来源 | 从**父角色绑定姿态网格**派生：每个 guide 根点取最近身体顶点，复制其完整权重列表 | 与碰撞代理同一套实现（`BuildTressfxProxySkinTransfer`），确定性已有测试 |
 | 是否插值 | **不插值**。实测发根到最近顶点最大 0.516 cm，头部顶点间距中位 0.067 cm | 见 §3；插值只会优化看不见的误差，跨接缝加权反而更假 |
 | 距离上限 | 2 cm，只作为“错空间”检测器；个别超距回退 `rootBone` 并统计，全部超距硬错误 | 与代理同一常量；本资产实测最大 0.516 cm |
-| 资产命名 | 不加 `TF_`/`GR_` 前缀，继续 `SM_*.json` + `type: "tressfx"` | `contracts/asset-organization.md` §命名、`contracts/asset-modify-api.md` mesh.* 行、SpeedTree 先例 |
+| 资产命名 | **2026-10-26 更新：毛发使用独立 `TF_*.json` + 自己的文档 kind 与专用 tab**（此前“继续 `SM_` + `type: "tressfx"`”的结论作废） | 用户决定；双击打开毛发 tab，复用已实现的视口与模拟面板 |
 | 运行时调参 | **不做**。游戏读资产固定值，任何调参入口都属于编辑器会话 | 用户决定 |
 | GPU 侧 | **零改动**：per-strand 多骨通道（binding 14/15、`motion.w` bit2、4 骨裁剪归一化、palette 上传）已就绪 | 现状可核对 `tressfxSimIntegration.comp` / `tressfxSimStrandLevel.comp` / `renderableObject.cpp` |
 
@@ -90,6 +90,34 @@
 - `simulation.skinning.source` 变为可选：组件挂载时由组件提供；场景 JSON 独立毛发仍需写，
   缺失时加载期报“缺少绑定来源”。
 - 胶囊 `bone` 的校验条件从“必须声明 `skinning`”改为“声明 `skinning` 即可”，不再要求 `source`。
+
+## 5.5 TF 独立资产与专用 Tab（2026-10-26 用户决定）
+
+毛发不再是 Mesh 的一种，而是**独立资产类型**：
+
+- 文件前缀 `TF_*.json`；`type` 仍保留 `"tressfx"`（格式标识），独立性由**文档 kind**
+  表达：新增 `EditorAssetDocumentKind::Hair` / `EditorAssetKind::Hair`，内容浏览器显示为
+  独立类别（TressFX Hair），不再归入 Mesh。
+- `AssetDocumentService` 为 Hair kind 接受 `TF_` 前缀 + `type: "tressfx"`，校验仍复用
+  `MeshAssetValidator::BuildLoadPlan` 的 tressfx 分支；迁移期可同时接受旧的 `SM_` 前缀，
+  迁移完成后收紧。
+- **双击 `TF_*.json` 直接打开专用 Tab**（不是 Mesh 的 JSON/预览页）：复用已实现的
+  `tressfxHairPreview.h`（skinning 守卫 + 旋转值类型）、`tressfxHairSimulationControls.h`
+  （9 参数表/范围/格式化）、`materialInstanceAssetEditorPanel` 里的 `#resource-hair-tools`
+  （左键转模型、Reset）与 `Simulation` 折叠段、`ui/editor-workspace.rml|.rcss` 的宿主。
+  这些代码原样复用，只把入口从“Mesh kind + type 判定”改为“Hair kind”。
+- 不改写 tab 实现：新增 Hair kind 的打开分支（`OpenResourceAsset` / content browser kind
+  映射 / 双击分发），其余沿用现有预览世界（`SC_model_preview` + 单对象注入）与保存流程。
+- 迁移顺序：**先做 TF kind + 专用 tab（资产身份）**，再做 A 迁移（行为下沉到放置）：
+  A 的默认值会写进 TF 资产，先改身份可以避免两次改文件名。
+- 迁移内容：3 个 `SM_female_hair*.json` → `TF_female_hair*.json`（A 之后收敛为 1 个），
+  更新 `SC_tressfx_female*.json` 与蓝图组件里的 `modelPath`；`asset-organization.md`
+  新增 `TF_` 行并从 `SM_` 行移除 tressfx 说明。
+- 验收：
+  - 内容浏览器中毛发是独立类别，双击打开毛发 Tab（视口 + 转模型 + Reset + Simulation 段）；
+  - Mesh 类别下不再出现 tressfx 资产，误把 `TF_` 当 Mesh 打开会被拒绝；
+  - 场景/蓝图引用 `TF_` 资产正常加载，`binding=component weights=mesh` 行为不变；
+  - `editor_ui_tests` 覆盖 kind 映射、双击分发、Tab 复用与 `TF_` 校验。
 
 ## 6. P1：模拟参数面板
 
