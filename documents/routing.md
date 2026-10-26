@@ -141,6 +141,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
 - 地形：**不存在运行时实现**。只有编辑器资产层的 `EditorAssetKind::Terrain` 与
   `objectType == "terrain"` 的 MI 导航解析；`SceneAssetValidator` 不接受 `terrain` 场景对象。
+  实现计划见 `plan/rendering/terrain-openworld-demo-plan.md`（未落地，非契约）。
 
 ## 组合规则
 
@@ -150,6 +151,12 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 ## 规划入口（非契约）
 
+- [地形系统：Open World Demo Collection 复刻计划](plan/rendering/terrain-openworld-demo-plan.md)：
+  当前地形目标。CPU 高度图网格 + 8 层 top-4 + texture array；GPU-driven/VT/LOD 明确搁置。
+  未实现，不替代当前契约；落地后再补真实源码路由与 `contracts/terrain.md`。
+- [开放世界场景栈路线图](plan/rendering/open-world-scene-stack-roadmap.md)：
+  地形碰撞/GASP、植被撒点与石头对齐、PP2 分层风、3D 风力点、LOD、自定义 shading 的依赖与阶段。
+  未实现，不替代当前契约。
 - [GASP 与 C# 动画控制开发计划](plan/architecture/gasp-csharp-animation-plan.md)：
   当前开发目标。C# 高层状态机与数据库筛选，原生 Motion Matching、轨迹/姿态历史、
   蒙皮、预览调试及障碍翻越的分阶段方案，每阶段提供可验收效果。
