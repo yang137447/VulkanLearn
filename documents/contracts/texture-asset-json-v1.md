@@ -326,6 +326,30 @@ The following fields are intentionally not part of Texture JSON V1:
 
 ## Current Implementation
 
+### CPU Array Preparation
+
+`HostImage::CombineArrayLayers` accepts a non-empty ordered list of decoded,
+single-layer, mip-0 images. Dimensions, pixel format (including transfer),
+channel metadata, semantic, swizzle and effective row stride must match.
+Each input must contain exactly one layer of pixels. The result stores layers
+contiguously in input order; `GetMipData(0, layer)` addresses that layout and
+rejects out-of-range layers or truncated non-empty storage. CPU mip chains are
+not supported.
+
+`TextureIO::LoadArray(sources, options)` reuses the single-image file decoder,
+including each layer's explicit row-orientation policy. It accepts default RGBA
+or explicit four-channel decoding and rejects CPU mip generation. Decode failure
+reports the source path and layer index; incompatible images reject the complete
+result. Single-image export rejects arrays rather than silently saving layer 0.
+
+This is a CPU preparation API only. Texture JSON still accepts only
+`type: "texture"` with one `source`; `sampler2DArray` material binding is not
+supported. `DeviceTextureFactory` rejects multi-layer input before allocating
+GPU resources. Coverage lives in `tool/texture-asset-tests/textureArrayTests.cpp`,
+registered in the existing `texture_asset_tests` target.
+
+### Runtime Texture Loading
+
 1. `textureAssetLoader.*` parses texture asset JSON and builds `TextureBindingLoadDesc`.
 2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, and `wrapMode` into Vulkan texture creation; `Texture` applies the fixed material-texture vertical row flip before upload.
 3. `RendererMaterialLoader::LoadMaterialInstance()` requires material texture entries to reference `T_*.json` files.

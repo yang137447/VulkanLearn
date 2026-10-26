@@ -11,6 +11,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -393,8 +394,42 @@ std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path)
     return Load(path, LoadOptions());
 }
 
+HostImage TextureIO::LoadArray(
+    const std::vector<std::filesystem::path>& sources,
+    const LoadOptions& options)
+{
+    if (sources.empty())
+        throw std::invalid_argument("Texture array requires at least one source");
+    // 现有文件解码器按 RGBA 格式写行跨度；不把不匹配的通道请求带入底层拷贝。
+    if ((options.forceChannels != 0 && options.forceChannels != 4) || options.genMipmaps)
+        throw std::invalid_argument("Texture array preparation requires RGBA mip 0");
+
+    std::vector<HostImage> layers;
+    layers.reserve(sources.size());
+    for (size_t index = 0; index < sources.size(); ++index)
+    {
+        try
+        {
+            auto layer = Load(sources[index], options);
+            if (!layer)
+                throw std::runtime_error("Image decoder returned no pixels");
+            layers.push_back(std::move(*layer));
+        }
+        catch (const std::exception& error)
+        {
+            throw std::runtime_error(
+                "Texture array layer " + std::to_string(index) + " (" + sources[index].string() +
+                "): " + error.what());
+        }
+    }
+    return HostImage::CombineArrayLayers(std::move(layers));
+}
+
 bool TextureIO::Save(const std::filesystem::path& path, const HostImage& image, const SaveOptions& options)
 {
+    // 单图导出没有数组容器，拒绝静默只写第 0 层。
+    if (image.arrayLayers != 1 || image.mipLevels != 1)
+        return false;
     const FileFormat format = options.format == FileFormat::Png &&
         path.has_extension() ? FileFormatFromPath(path) : options.format;
     if (format == FileFormat::Exr)

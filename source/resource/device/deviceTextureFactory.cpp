@@ -41,6 +41,9 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     {
         throw std::runtime_error("Invalid HostImage for DeviceTextureFactory::CreateFromHostImage");
     }
+    // CPU 数组准备已支持多层；当前上传仍是单层，必须在分配 GPU 资源前显式拒绝。
+    if (image.arrayLayers != 1 || image.mipLevels != 1)
+        throw std::runtime_error("DeviceTextureFactory currently accepts only single-layer mip 0 images");
 
     vk::Format format = ToVkFormat(image.format);
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(image.data.size());

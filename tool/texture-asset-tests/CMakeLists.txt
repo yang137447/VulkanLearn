@@ -1,5 +1,6 @@
 add_executable(texture_asset_tests
     textureAssetTests.cpp
+    textureArrayTests.cpp
     ${PROJECT_SOURCE_DIR}/source/textureAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp

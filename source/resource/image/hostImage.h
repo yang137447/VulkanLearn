@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+// 保存解码后的 CPU 像素，供纹理准备与上传消费；不拥有 GPU 资源。
+// 当前只存 mip 0，数组按 layer 顺序连续排列，每层保留相同的行跨度。
 struct HostImage
 {
     enum class PixelFormat
@@ -53,4 +55,7 @@ struct HostImage
     size_t GetPixelSize() const;
     void* GetMipData(uint32_t mip, uint32_t layer = 0);
     const void* GetMipData(uint32_t mip, uint32_t layer = 0) const;
+
+    // 接受同尺寸/格式的单层解码结果，在 CPU 资产边界校验后组装；不生成 mip。
+    static HostImage CombineArrayLayers(std::vector<HostImage> layers);
 };
