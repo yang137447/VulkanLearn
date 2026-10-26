@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string_view>
@@ -20,29 +19,25 @@ inline std::string_view TressfxHairPreviewBlockedMessage(bool tressfxAsset, bool
     return tressfxAsset && hasSkinning ? TressfxHairSkinnedAssetMessage : std::string_view{};
 }
 
-// 左键拖动旋转预览模型：水平改 yaw、垂直改 pitch。与场景 rotation 的 YXZ Euler
-// 一致（x=pitch、y=yaw），pitch 夹在 ±89° 以避开万向锁。角度只属于预览世界，
-// 不写 SC/SM，也不参与资产导入身份。
+// 左键拖动只绕资产原点的竖直 Y 轴改变 yaw，忽略垂直位移；不另设发根或包围盒 pivot。
+// 角度只属于预览世界，不写 SC/TF，也不参与资产导入身份。
 struct TressfxHairRotation
 {
     float yaw = 0.0f;
-    float pitch = 0.0f;
 
     void Reset()
     {
         yaw = 0.0f;
-        pitch = 0.0f;
     }
 
-    void Drag(float deltaX, float deltaY)
+    void Drag(float deltaX, float /*deltaY*/)
     {
         // 半度/像素：拖过约 720 px 转一圈，既能快速摆头又不至于抖。
         constexpr float DegreesPerPixel = 0.5f;
         yaw = std::fmod(yaw + deltaX * DegreesPerPixel, 360.0f);
         if (yaw < 0.0f) yaw += 360.0f;
-        pitch = std::clamp(pitch + deltaY * DegreesPerPixel, -89.0f, 89.0f);
     }
 
-    std::array<float, 3> Euler() const { return {pitch, yaw, 0.0f}; }
+    std::array<float, 3> Euler() const { return {0.0f, yaw, 0.0f}; }
 };
 } // namespace VL::EditorUi

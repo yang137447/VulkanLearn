@@ -2600,14 +2600,14 @@ bool MaterialInstanceAssetEditorPanel::IsActiveHairPreview() const
 
 void MaterialInstanceAssetEditorPanel::RequestHairPreviewRotation(float deltaX, float deltaY)
 {
-    if (runtimeActionSink == nullptr || hairPreviewBlocked) return;
+    if (runtimeActionSink == nullptr || hairPreviewBlocked || deltaX == 0.0f) return;
     const uint64_t generation = CurrentModelPreviewGeneration();
     if (!generation) return;
     // 累计角度由 UI 维护，GT 只写绝对 TRS；World 使用原始场景身份 preview_model。
     hairRotation.Drag(deltaX, deltaY);
     UiAction action;
     action.type = UiActionType::RotatePreviewModel;
-    action.previewRotation = {generation, hairRotation.yaw, hairRotation.pitch};
+    action.previewRotation = {generation, hairRotation.yaw, 0.0f};
     runtimeActionSink->RequestRuntimeAction(std::move(action));
 }
 

@@ -29,35 +29,31 @@ TEST(TressfxHairPreview, UnskinnedTressfxAndOtherAssetsArePreviewable)
     EXPECT_TRUE(TressfxHairPreviewBlockedMessage(false, false).empty());
 }
 
-TEST(TressfxHairPreview, HorizontalDragTurnsYawAndVerticalDragTiltsPitch)
+TEST(TressfxHairPreview, HorizontalDragTurnsYawAndVerticalDragIsIgnored)
 {
     TressfxHairRotation rotation;
     rotation.Drag(10.0f, 0.0f);
     EXPECT_FLOAT_EQ(rotation.yaw, 5.0f);
-    EXPECT_FLOAT_EQ(rotation.pitch, 0.0f);
     rotation.Drag(0.0f, -8.0f);
     EXPECT_FLOAT_EQ(rotation.yaw, 5.0f);
-    EXPECT_FLOAT_EQ(rotation.pitch, -4.0f);
     const auto euler = rotation.Euler();
-    EXPECT_FLOAT_EQ(euler[0], rotation.pitch);
+    EXPECT_FLOAT_EQ(euler[0], 0.0f);
     EXPECT_FLOAT_EQ(euler[1], rotation.yaw);
     EXPECT_FLOAT_EQ(euler[2], 0.0f);
 }
 
-TEST(TressfxHairPreview, YawWrapsIntoOneTurnAndPitchStaysAwayFromGimbalLock)
+TEST(TressfxHairPreview, YawWrapsAndReversesWithoutTilting)
 {
     TressfxHairRotation rotation;
     rotation.Drag(2000.0f, 0.0f);   // 1000 度
-    EXPECT_GE(rotation.yaw, 0.0f);
-    EXPECT_LT(rotation.yaw, 360.0f);
+    EXPECT_FLOAT_EQ(rotation.yaw, 280.0f);
     rotation.Drag(-4000.0f, 0.0f);
-    EXPECT_GE(rotation.yaw, 0.0f);
-    EXPECT_LT(rotation.yaw, 360.0f);
+    EXPECT_FLOAT_EQ(rotation.yaw, 80.0f);
 
     rotation.Drag(0.0f, 100000.0f);
-    EXPECT_FLOAT_EQ(rotation.pitch, 89.0f);
     rotation.Drag(0.0f, -100000.0f);
-    EXPECT_FLOAT_EQ(rotation.pitch, -89.0f);
+    EXPECT_FLOAT_EQ(rotation.yaw, 80.0f);
+    EXPECT_FLOAT_EQ(rotation.Euler()[0], 0.0f);
 }
 
 TEST(TressfxHairPreview, ResetReturnsToTheAuthoredPose)
@@ -65,8 +61,7 @@ TEST(TressfxHairPreview, ResetReturnsToTheAuthoredPose)
     TressfxHairRotation rotation;
     rotation.Drag(120.0f, 80.0f);
     ASSERT_NE(rotation.yaw, 0.0f);
-    ASSERT_NE(rotation.pitch, 0.0f);
     rotation.Reset();
     EXPECT_FLOAT_EQ(rotation.yaw, 0.0f);
-    EXPECT_FLOAT_EQ(rotation.pitch, 0.0f);
+    EXPECT_EQ(rotation.Euler(), (std::array<float, 3>{0.0f, 0.0f, 0.0f}));
 }

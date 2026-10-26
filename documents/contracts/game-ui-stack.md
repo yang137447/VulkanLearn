@@ -698,8 +698,11 @@ defaults without a character binding. The existing legacy skinning guard is reta
 an old descriptor that still declares `simulation.skinning` cannot be previewed by
 silently stripping its binding.
 
-Input: left-drag rotates the preview object (yaw from horizontal movement, pitch clamped
-to ±89°); middle/right drag keeps camera orbit/pan and the wheel keeps zoom. Rotating the
+Input: left-drag rotates the preview object only around the vertical Y axis (yaw from
+horizontal movement; vertical movement is ignored). Rotation keeps the authored asset
+origin fixed, without a root-center or bounds-center pivot adjustment. The preview does
+not recenter imported hair coordinates independently of its character and collision proxies.
+Middle/right drag keeps camera orbit/pan and the wheel keeps zoom. Rotating the
 object rather than the camera is deliberate: hair physics responds to root placement, not
 to view direction. The reset button queues `ResetHairSimulation` with an empty target,
 which resets every tressfx object in the preview world.

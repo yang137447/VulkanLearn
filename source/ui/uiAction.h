@@ -135,8 +135,8 @@ struct BlueprintPreviewTransformInput
     bool reset = false;
 };
 
-// 毛发视口的模型旋转：yaw/pitch 是预览世界内的累计角度（度），不是资产或场景数据。
-// pitch 在 UI 侧夹到 ±89°，避免与场景 YXZ Euler 的万向锁正面冲突。
+// 毛发视口的模型旋转：yaw 是预览世界内的累计角度（度），只绕资产原点 Y 轴转动。
+// pitch 字段保留兼容，毛发 UI 恒传 0；不改原点位置，不写资产或场景数据。
 struct ModelPreviewRotationInput
 {
     uint64_t worldGeneration = 0;

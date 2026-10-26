@@ -3091,19 +3091,18 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     context->ProcessMouseMove(x, y, 0);
     runtimeSink.actions.clear();
 
-    // 左键拖 = 转模型；动作携带 UI 累计的绝对 yaw/pitch。
+    // 斜向左拖也只转模型 Y 轴；竖向位移不改变 pitch 或原点。
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseMove(x + 20, y + 10, 0);
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::RotatePreviewModel);
     EXPECT_EQ(runtimeSink.actions.back().previewRotation.worldGeneration, 100u);
     EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 10.0f);
-    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.pitch, 5.0f);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.pitch, 0.0f);
     // 继续走生产用的动作转换和真实 World 写入，不能只证明 UI 发出了动作。
     World previewWorld(100, ModelPreviewScenePath);
     WorldMeshObject hairObject;
     hairObject.sceneObjectIdentity = "preview_model";
-    hairObject.model(0, 3) = 3.0f;
     previewWorld.AddMeshObject("preview_model::guides", hairObject);
     const auto command = BuildModelPreviewRotationCommand(runtimeSink.actions.back().previewRotation,
         previewWorld.GetGeneration(), previewWorld.GetScenePath());
@@ -3113,9 +3112,17 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     ASSERT_TRUE(previewWorld.SetMeshSceneObjectTransform(command->meshPlacement.identity,
         command->meshPlacement.position, command->meshPlacement.rotation, Eigen::Vector3f::Ones()));
     const auto& rotated = previewWorld.GetMeshObjects().at("preview_model::guides");
-    EXPECT_FLOAT_EQ(rotated.sceneRotation.x(), 5.0f);
+    EXPECT_FLOAT_EQ(rotated.sceneRotation.x(), 0.0f);
     EXPECT_FLOAT_EQ(rotated.sceneRotation.y(), 10.0f);
     EXPECT_FALSE(rotated.model.isApprox(hairObject.model));
+    EXPECT_TRUE(rotated.scenePosition.isZero());
+    EXPECT_TRUE((rotated.model.block<3, 1>(0, 3).isZero()));
+    const Eigen::Vector4f highPoint(7.0f, 170.0f, 11.0f, 1.0f);
+    const Eigen::Vector4f rotatedHighPoint = rotated.model * highPoint;
+    EXPECT_FLOAT_EQ(rotatedHighPoint.y(), highPoint.y());
+    // 纯竖拖不重复提交同一绝对旋转，也不退回相机手势。
+    context->ProcessMouseMove(x + 20, y + 35, 0);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
     context->ProcessMouseMove(x + 40, y + 10, 0);
     ASSERT_EQ(runtimeSink.actions.size(), 2u);
     EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 20.0f);
