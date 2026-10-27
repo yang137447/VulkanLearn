@@ -26,7 +26,7 @@
 | --- | --- |
 | 命名 | 场景对象 `type: "wind"`；World 成员 `Wind`；风场数据 `WindField`；阵风 `Gust` |
 | 解耦 | 风场不进入任何材质或资产。资产只保存**响应系数**（`windResponse`），不保存风 |
-| 时间 | 风时间按渲染帧固定步长推进（每帧 1/60 s），不用墙钟。其他动画按帧率取数据，两者解耦 |
+| 时间 | 风模拟固定 1/60 s 步长，但按墙钟累加器补步；与 master 的 SpeedTree 墙钟速度一致，其他动画仍按帧率取数据 |
 | 单一来源 | 每个场景只有一个风对象；场景没有放 `wind` 时，使用引擎默认值（无风） |
 | 植被迁移 | 植被不再读 `.stsdk` 的风曲线作为风场，只读 `Wind` 与自身的响应系数 |
 | 编辑器 | TF 资产 Tab 可放置一个本地 `wind` 组件用于调试，不写回场景 |
@@ -89,8 +89,8 @@
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| P0 | 固定风 tick + `SC_speedtree` 基线截图 | 同一帧两次截图逐字节一致 |
-| P1a | 场景 `wind` 对象：schema、校验、World 成员、固定 tick 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
+| P0 | 固定 1/60 s 风步长 + 墙钟 pacing + `SC_speedtree` 基线截图 | 风速度与墙钟一致；同一模拟 tick 的截图可复现 |
+| P1a | 场景 `wind` 对象：schema、校验、World 成员、固定步长/墙钟 pacing 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
 | P1b | 植被改读场景 `wind` 目标 + 每 profile 响应/gust；保留每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU` | 零风门 + 视觉门（见 §6.2） |
 | P1c | 头发改读场景 `wind`；移除 `simulationDefaults.wind` 并在加载期拒绝旧字段 | hair 测试通过，零风/有风截图符合预期 |
 | P1d | 编辑器：场景 `wind` 使用作者名、Details 方向/风力滑条/Gust 滑条，移除每物种风剖面 actor 与旧控制台/UI 风控件（已完成）；TF Tab 本地 `wind` 组件调试（未完成） | Tab 调节即时生效 |
@@ -109,7 +109,7 @@ P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改�
 
 ## 5. 风险
 
-- **时间源**：P0 已把墙钟改为固定 tick。如果 P1 之前未提交，需要保证 P0 的改动是单独可回退的。
+- **时间源**：P0 曾把墙钟改为固定 tick；后续为了与 master 的 SpeedTree 墙钟速度对齐，改成固定 1/60 s 步长 + 墙钟累加器。截图不再按渲染帧号确定，而按模拟时间确定。
 - **共享状态**：`windResponseProfiles` 是 RenderSystem 成员，并参与世界切换和 prune（`world.cpp:74-101`）。
   本次已让它跟随 World 的 stage/swap 生命周期；每条 profile 自己保存响应/gust/noise 状态，
   场级 `resolvedWind` 只供头发。

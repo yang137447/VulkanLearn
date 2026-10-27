@@ -899,6 +899,8 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     hasRenderScene = false;
     ClearSelectedMaterialInstance();
     currentWindTimeSeconds = 0.0;
+    windClockInitialized = false;
+    windTickAccumulator = 0.0;
     sceneWindRuntime.Reset();
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
@@ -1563,6 +1565,8 @@ RenderSystem::CommitPreparedRuntimeBinding(
             std::move(prepared.lightCapacity));
     hasRenderScene = true;
     currentWindTimeSeconds = 0.0;
+    windClockInitialized = false;
+    windTickAccumulator = 0.0;
     sceneWindRuntime.Reset();
     initializedRenderWorldGeneration =
         currentRenderScene.worldGeneration;
@@ -3755,10 +3759,11 @@ RenderSystem::BuildRendererDescriptorContext(
     return descriptorContext;
 }
 
-// 风时间按渲染帧固定步长推进，而不是墙钟：同一帧序列得到同一风状态，截图可逐像素复现。
-// 场景风层只产出供头发/场级消费者使用的 resolvedWind；植被读取原始作者目标，由每个
-// profile 自己的 CWindStateMgr 语义独立缓动和 gust。风源仍只有场景 wind 一个。
-void RenderSystem::AdvanceSceneWind()
+// 风时间按固定 1/60 s 步长推进，但步进由墙钟累加器驱动：master 的 SpeedTree
+// 风时钟是 steady_clock 墙钟，当前分支若每渲染帧都加 1/60，在 240 FPS 下会比
+// master 快 4 倍。这里保留固定步长（CWindStateMgr/SceneWindRuntime 的数值稳定），
+// 只让“每秒推进多少步”跟随真实时间。
+void RenderSystem::AdvanceSceneWindTick()
 {
     constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
     const VL::ResolvedSceneWind resolvedWind =
@@ -3768,6 +3773,32 @@ void RenderSystem::AdvanceSceneWind()
     windResponseProfiles.AdvanceToSceneWind(
         currentWindTimeSeconds, currentRenderScene.wind);
     currentWindTimeSeconds += kSceneWindTickSeconds;
+}
+
+void RenderSystem::AdvanceSceneWind()
+{
+    constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
+    const auto now = std::chrono::steady_clock::now();
+    if (!windClockInitialized)
+    {
+        windClockInitialized = true;
+        lastWindTickTime = now;
+        windTickAccumulator = 0.0;
+        // 首帧仍推进 time=0，让 profile 从作者目标起步；之后由墙钟补步。
+        AdvanceSceneWindTick();
+        return;
+    }
+
+    const double elapsed = std::max(0.0,
+        std::chrono::duration<double>(now - lastWindTickTime).count());
+    lastWindTickTime = now;
+    // 调试断点/长卡顿后最多追 0.25 s，避免一次补几百步。
+    windTickAccumulator = std::min(windTickAccumulator + elapsed, 0.25);
+    while (windTickAccumulator >= kSceneWindTickSeconds)
+    {
+        AdvanceSceneWindTick();
+        windTickAccumulator -= kSceneWindTickSeconds;
+    }
 }
 
 void RenderSystem::ShutdownRenderObject()

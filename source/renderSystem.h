@@ -264,10 +264,10 @@ public:
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
     ComputeShaderArtifact GetActiveComputeShaderArtifact(
         const std::string& shaderName) const;
-    // 本帧解析后的场景风（已缓动、已含阵风）。风时间与 SpeedTree 共用同一个
-    // 固定 tick 时钟（秒），由 AdvanceSceneWind 每渲染帧推进；
-    // 活动 World 换代时清零并重新从作者目标起步。GetActiveWind 返回场级解析结果
-    // （供头发/调试），植被的每物种状态在 windResponseProfiles 内。
+    // 本帧解析后的场景风（已缓动、已含阵风）。风时间以固定 1/60 s 步长推进，
+    // 但步进由墙钟累加器驱动（与 master 的 SpeedTree 墙钟速度一致）；活动 World
+    // 换代时清零并重新从作者目标起步。GetActiveWind 返回场级解析结果（供头发/调试），
+    // 植被的每物种状态在 windResponseProfiles 内。
     const VL::ResolvedSceneWind& GetActiveWind() const { return currentRenderScene.resolvedWind; }
     double GetWindTimeSeconds() const { return currentRenderScene.windTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these
@@ -349,6 +349,7 @@ private:
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
     void AdvanceSceneWind();
+    void AdvanceSceneWindTick();
     void UpdateExposureFrameTiming();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
@@ -499,6 +500,9 @@ private:
     std::chrono::steady_clock::time_point exposureLastFrameTime;
     bool hasRenderScene = false;
     double currentWindTimeSeconds = 0.0;
+    bool windClockInitialized = false;
+    std::chrono::steady_clock::time_point lastWindTickTime;
+    double windTickAccumulator = 0.0;
     VL::SceneWindRuntime sceneWindRuntime;
     WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
