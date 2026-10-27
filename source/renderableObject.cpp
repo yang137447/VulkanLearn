@@ -130,7 +130,8 @@ RenderableObject::RenderableObject(
 
                 VL::Hair::SimulationConfig simulationConfig;
                 simulationConfig.gravity = tressfxSimulationConfig.gravity;
-                simulationConfig.wind = tressfxSimulationConfig.wind;
+                // 风不在资产里：CPU config 的 wind 保持零，由
+                // AdvanceTressfxSimulation 每帧在 StepFrame 之前写入场景风向量。
                 simulationConfig.damping = tressfxSimulationConfig.damping;
                 simulationConfig.iterations = tressfxSimulationConfig.iterations;
                 simulationConfig.rootFixedPoints = tressfxSimulationConfig.rootFixedPoints;
@@ -415,11 +416,17 @@ void RenderableObject::CreateTressfxPositionBuffer()
         .setRange(size);
 }
 
-void RenderableObject::AdvanceTressfxSimulation(float dt)
+void RenderableObject::AdvanceTressfxSimulation(float dt,
+    const Eigen::Vector3f& sceneWindVelocityCmPerSec)
 {
     // GPU backend 的 tressfxSimulation 为空：位置 SSBO 只由 compute dispatch 写。
     if (!tressfxSimulation)
         return;
+
+    // 场景风只在游戏线程落到 CPU config 的 wind（direction * strength，厘米/秒）。
+    // CPU 参考 backend 不复制场景阵风：阵风相位属于渲染线程的 windTimeSeconds，
+    // GT 不拥有那个时钟，也不能在跨线程共享状态里另造一个。
+    tressfxSimulation->SetSceneWind(sceneWindVelocityCmPerSec);
 
     // CPU 参考路径同样按源原生调度推进：n 个 0.0125 s substep，而不是一帧一个变量步。
     tressfxSimulation->StepFrame(dt);

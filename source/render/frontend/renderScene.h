@@ -58,6 +58,11 @@ struct RenderScene
     std::vector<MaterialDrawGroup> materialGroups;
     std::vector<LightSnapshot> lights;
     EnvironmentSnapshot environment;
+    // 本帧冻结的场景风。头发与植被都从这里取方向和强度，避免各自读取资产或
+    // World 的另一个风源。windTimeSeconds 由 RenderSystem 在本帧推进风时钟后
+    // 写入，供阵风相位使用；GT 构建 RenderScene 时保持 0。
+    WorldWind wind;
+    double windTimeSeconds = 0.0;
     int debugViewMode = 0;
 };
 

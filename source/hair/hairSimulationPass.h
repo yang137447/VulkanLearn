@@ -59,7 +59,7 @@ inline constexpr uint32_t GuideSimulationPassCount =
 // 声明 collision.mesh 的对象还持有 uint 距离网格、代理顶点/索引和 64-byte SDF
 // 参数块（device-local，创建一次）。本类只拥有该 pass 的 compute pipeline、
 // 各自的 descriptor pool、逐对象的 per-pass descriptor set 缓存和 per-object
-// simulationFrame，不拥有对象 buffer。
+// simulationFrame（Guides.Frame 计数镜像，不参与风相位），不拥有对象 buffer。
 //
 // 生命周期与 RenderGraph 的 AutoExposure 一致：随图候选创建，SwapState 移交给活动图，
 // Shutdown 时按 GPU epoch 退休。pipeline 走 CreateComputePipelineCandidate，不注册
@@ -157,8 +157,9 @@ private:
         vk::Buffer boneWeights = nullptr;
         std::array<vk::Buffer, GuideSimulationParamBufferCount> skinningPalette{};
         std::array<vk::Buffer, GuideSimulationParamBufferCount> penetrationStats{};
-        // TressFX Guides.Frame：每渲染帧 +1（含 reset 帧），同一帧的所有 substep
-        // 共用同一个风相位（TressFXCoreSimulation.cpp:933）。
+        // TressFX Guides.Frame 的计数镜像：每渲染帧 +1（含 reset 帧），同一帧的
+        // 所有 substep 共用。运行时的风时间相位不再从这里取，而是来自
+        // renderScene.windTimeSeconds（场景阵风）。
         uint32_t simulationFrame = 0;
         // simulation.skinning 的逐对象缓存：pose/源 draw 缺失时保留上一帧矩阵继续渲染，
         // 不用单位矩阵覆盖，也不销毁 pass/descriptor。初始单位矩阵等于历史 rest pin。

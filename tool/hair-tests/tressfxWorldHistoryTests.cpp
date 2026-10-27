@@ -344,8 +344,9 @@ TEST(TressfxWorldForces, RotatedPlacementKeepsWorldGravityDown)
     TressfxSimulationConfig config;
     config.gravity = Vector3f(0, -980, 0);
     const Matrix4f model = Translation(10, 20, 30) * QuarterTurnZ();
-    const auto params = VL::Hair::MakeGuideSimulationParams(config, 1, 4, 4,
-        0.01f, 0, Matrix4f::Identity(), false, Matrix4f::Identity(), false, model);
+    const auto params = VL::Hair::MakeGuideSimulationParams(config,
+        Vector3f::Zero(), 1, 4, 4, 0.01f, Matrix4f::Identity(), false,
+        Matrix4f::Identity(), false, model);
     EXPECT_TRUE(params.gravity.head<3>().isApprox(Vector3f(-980, 0, 0)));
     const Vector3f worldDisplacement = TransformVector(model,
         params.gravity.head<3>() * 0.01f * 0.01f);
@@ -355,12 +356,14 @@ TEST(TressfxWorldForces, RotatedPlacementKeepsWorldGravityDown)
 TEST(TressfxWorldForces, ConeExpandsInWorldBeforeQuarterTurnToHairLocal)
 {
     TressfxSimulationConfig config;
-    config.wind = Vector3f(100, 0, 0);
+    // 运行时风来自场景：这里直接传入风向量（厘米/秒），无 TressFX 帧调制。
+    const Vector3f sceneWind(100, 0, 0);
     const Matrix4f model = QuarterTurnZ();
-    const auto params = VL::Hair::MakeGuideSimulationParams(config, 1, 4, 4,
-        0.01f, 0, Matrix4f::Identity(), false, Matrix4f::Identity(), false, model);
-    const float c = 50 * std::cos(40.0f * 3.14159265358979323846f / 180.0f);
-    const float s = 50 * std::sin(40.0f * 3.14159265358979323846f / 180.0f);
+    const auto params = VL::Hair::MakeGuideSimulationParams(config, sceneWind,
+        1, 4, 4, 0.01f, Matrix4f::Identity(), false, Matrix4f::Identity(),
+        false, model);
+    const float c = 100 * std::cos(40.0f * 3.14159265358979323846f / 180.0f);
+    const float s = 100 * std::sin(40.0f * 3.14159265358979323846f / 180.0f);
     EXPECT_TRUE(params.wind0.head<3>().isApprox(Vector3f(0, -c, -s)));
     EXPECT_TRUE(params.wind1.head<3>().isApprox(Vector3f(0, -c, s)));
     EXPECT_TRUE(params.wind2.head<3>().isApprox(Vector3f(s, -c, 0)));
@@ -371,13 +374,13 @@ TEST(TressfxWorldForces, AuthoredScaleOnlyGuaranteesFiniteVectorConversion)
 {
     TressfxSimulationConfig config;
     config.gravity = Vector3f(20, -980, 30);
-    config.wind = Vector3f(100, 0, 0);
     Matrix4f model = Matrix4f::Identity();
     model(0, 0) = 2;
     model(1, 1) = 4;
     model(2, 2) = 0.5f;
-    const auto params = VL::Hair::MakeGuideSimulationParams(config, 1, 4, 4,
-        0.01f, 0, Matrix4f::Identity(), false, Matrix4f::Identity(), false, model);
+    const auto params = VL::Hair::MakeGuideSimulationParams(config,
+        Vector3f(100, 0, 0), 1, 4, 4, 0.01f, Matrix4f::Identity(), false,
+        Matrix4f::Identity(), false, model);
     EXPECT_TRUE(params.gravity.head<3>().isApprox(Vector3f(10, -245, 60)));
     EXPECT_TRUE(params.wind0.allFinite());
     EXPECT_TRUE(params.wind1.allFinite());

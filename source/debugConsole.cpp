@@ -428,7 +428,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
             "Usage: hair trace <path> <frames> <guide-stride>\n"
             "       hair reset [objectName]\n"
             "       hair set <objectName> <field> <value...>\n"
-            "       fields: gravity|wind (x y z), damping, iterations, bendStiffness,\n"
+            "       fields: gravity (x y z), damping, iterations, bendStiffness,\n"
             "               globalShapeStiffness, globalShapeEffectiveRange,\n"
             "               vspCoefficient, vspAccelThresholdMax";
         std::string action;

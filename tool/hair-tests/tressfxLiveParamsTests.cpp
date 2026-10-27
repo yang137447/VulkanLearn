@@ -38,7 +38,6 @@ TressfxSimulationConfig MakeConfig()
     TressfxSimulationConfig config;
     config.enabled = true;
     config.gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    config.wind = Eigen::Vector3f(2000.0f, 0.0f, 0.0f);
     config.damping = 0.035f;
     config.iterations = 8;
     config.bendStiffness = 0.3f;
@@ -53,7 +52,6 @@ TressfxSimulationConfig MakeConfig()
 struct Snapshot
 {
     Eigen::Vector3f gravity;
-    Eigen::Vector3f wind;
     float damping = 0.0f;
     uint32_t iterations = 0;
     float bend = 0.0f;
@@ -64,7 +62,7 @@ struct Snapshot
 
     bool operator==(const Snapshot& other) const
     {
-        return gravity.isApprox(other.gravity) && wind.isApprox(other.wind) &&
+        return gravity.isApprox(other.gravity) &&
             damping == other.damping && iterations == other.iterations &&
             bend == other.bend && globalShape == other.globalShape &&
             globalShapeRange == other.globalShapeRange && vsp == other.vsp &&
@@ -76,7 +74,6 @@ Snapshot Take(const TressfxSimulationConfig& config)
 {
     Snapshot snapshot;
     snapshot.gravity = config.gravity;
-    snapshot.wind = config.wind;
     snapshot.damping = config.damping;
     snapshot.iterations = config.iterations;
     snapshot.bend = config.bendStiffness;
@@ -92,7 +89,7 @@ TEST(TressfxLiveParams, SpecCoversEveryDocumentedLiveField)
 {
     struct Case { const char* field; uint32_t count; };
     const Case cases[] = {
-        {"gravity", 3}, {"wind", 3}, {"damping", 1}, {"iterations", 1},
+        {"gravity", 3}, {"damping", 1}, {"iterations", 1},
         {"bendStiffness", 1}, {"globalShapeStiffness", 1},
         {"globalShapeEffectiveRange", 1}, {"vspCoefficient", 1},
         {"vspAccelThresholdMax", 1},
@@ -150,16 +147,16 @@ TEST(TressfxLiveParams, ValuesAreRejectedOutOfRangeInsteadOfClamped)
 
 TEST(TressfxLiveParams, ValuesRequireFiniteNumbersAndExactComponentCount)
 {
-    const auto* wind = FindHairLiveParameterSpec("wind");
-    ASSERT_NE(wind, nullptr);
+    const auto* gravity = FindHairLiveParameterSpec("gravity");
+    ASSERT_NE(gravity, nullptr);
     const float nanValues[] = {0.0f, std::nanf(""), 0.0f};
     const float infiniteValues[] = {0.0f, INFINITY, 0.0f};
     const float twoComponents[] = {1.0f, 2.0f};
     const float goodValues[] = {1.0f, 2.0f, 3.0f};
-    EXPECT_NE(ValidateHairLiveParameterValues(*wind, nanValues, 3), nullptr);
-    EXPECT_NE(ValidateHairLiveParameterValues(*wind, infiniteValues, 3), nullptr);
-    EXPECT_NE(ValidateHairLiveParameterValues(*wind, twoComponents, 2), nullptr);
-    EXPECT_EQ(ValidateHairLiveParameterValues(*wind, goodValues, 3), nullptr);
+    EXPECT_NE(ValidateHairLiveParameterValues(*gravity, nanValues, 3), nullptr);
+    EXPECT_NE(ValidateHairLiveParameterValues(*gravity, infiniteValues, 3), nullptr);
+    EXPECT_NE(ValidateHairLiveParameterValues(*gravity, twoComponents, 2), nullptr);
+    EXPECT_EQ(ValidateHairLiveParameterValues(*gravity, goodValues, 3), nullptr);
 }
 
 TEST(TressfxLiveParams, ApplyChangesOnlyTheTargetField)
@@ -181,9 +178,6 @@ TEST(TressfxLiveParams, ApplyWritesVectorsAndIntegerIterations)
     ASSERT_TRUE(ApplyHairLiveParameter(config,
         MakeRequest("hair", "gravity", {0.0f, -500.0f, 25.0f}), error)) << error;
     EXPECT_TRUE(config.gravity.isApprox(Eigen::Vector3f(0.0f, -500.0f, 25.0f)));
-    ASSERT_TRUE(ApplyHairLiveParameter(config,
-        MakeRequest("hair", "wind", {-100.0f, 0.0f, 50.0f}), error)) << error;
-    EXPECT_TRUE(config.wind.isApprox(Eigen::Vector3f(-100.0f, 0.0f, 50.0f)));
     ASSERT_TRUE(ApplyHairLiveParameter(config,
         MakeRequest("hair", "iterations", {12.0f}), error)) << error;
     EXPECT_EQ(config.iterations, 12u);
@@ -230,9 +224,9 @@ TEST(TressfxLiveParams, ParseAcceptsScalarAndVectorFields)
     ASSERT_EQ(request.valueCount, 1u);
     EXPECT_FLOAT_EQ(request.values[0], 0.02f);
 
-    ASSERT_EQ(ParseHairSetArguments("hair wind -100 0 50", request), nullptr);
+    ASSERT_EQ(ParseHairSetArguments("hair gravity -100 0 50", request), nullptr);
     EXPECT_EQ(request.objectName, "hair");
-    EXPECT_EQ(request.field, "wind");
+    EXPECT_EQ(request.field, "gravity");
     ASSERT_EQ(request.valueCount, 3u);
     EXPECT_FLOAT_EQ(request.values[0], -100.0f);
     EXPECT_FLOAT_EQ(request.values[2], 50.0f);
@@ -245,8 +239,8 @@ TEST(TressfxLiveParams, ParseRejectsMalformedArguments)
     EXPECT_NE(ParseHairSetArguments("onlyObject", request), nullptr);
     EXPECT_NE(ParseHairSetArguments("obj damping", request), nullptr);
     EXPECT_NE(ParseHairSetArguments("obj damping 0.02 extra", request), nullptr);
-    EXPECT_NE(ParseHairSetArguments("obj wind 1 2", request), nullptr);
-    EXPECT_NE(ParseHairSetArguments("obj wind 1 2 3 4", request), nullptr);
+    EXPECT_NE(ParseHairSetArguments("obj gravity 1 2", request), nullptr);
+    EXPECT_NE(ParseHairSetArguments("obj gravity 1 2 3 4", request), nullptr);
     EXPECT_NE(ParseHairSetArguments("obj damping 0.02x", request), nullptr);
     EXPECT_NE(ParseHairSetArguments("obj damping nan", request), nullptr);
     EXPECT_NE(ParseHairSetArguments("obj damping 1.5", request), nullptr);

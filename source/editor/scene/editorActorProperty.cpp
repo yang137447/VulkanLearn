@@ -232,8 +232,10 @@ bool FrameEditorActor(World& world, uint64_t generation, const std::string& iden
     for (const auto& actor : BuildEditorSceneActors(world))
     {
         if (actor.identity != identity) continue;
+        // 场景风与风剖面是全局/派生状态，没有可框选的空间位置。
         if (actor.type == EditorUi::EditorSceneActorType::Environment ||
-            actor.type == EditorUi::EditorSceneActorType::WindProfile) return false;
+            actor.type == EditorUi::EditorSceneActorType::WindProfile ||
+            actor.type == EditorUi::EditorSceneActorType::SceneWind) return false;
         Eigen::Vector3f target = actor.position;
         float radius = 150.0f;
         if (actor.type == EditorUi::EditorSceneActorType::Mesh)

@@ -76,7 +76,9 @@ TEST(TressfxDynamics, NonRootPointsRespondToAuthoredWind)
     SimulationConfig config;
     config.gravity = Eigen::Vector3f::Zero();
     // 修正后的风力带 |v|²·1e-2 量纲，作者幅值需要远大于旧的“风速”量级。
-    config.wind = Eigen::Vector3f(1.0e6f, 0.0f, 0.0f);
+    // CPU 参考 backend 不再乘 TressFX SetWind 的 sin(frame*0.001)²+0.5 调制，
+    // 因此这里用 5e5 复现此前 frame 0 的等效 wM（旧实现为 1e6 * 0.5）。
+    config.wind = Eigen::Vector3f(5.0e5f, 0.0f, 0.0f);
     config.iterations = 8;
     GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
     for (int i = 0; i < 30; ++i)
@@ -351,7 +353,6 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
 {
     TressfxSimulationConfig config;
     config.gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    config.wind = Eigen::Vector3f(100000.0f, 0.0f, 0.0f);
     config.damping = 0.035f;
     config.iterations = 3;
     config.rootFixedPoints = 2;
@@ -370,8 +371,9 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     skinning(0, 3) = 12.0f;
     skinning(1, 3) = 34.0f;
     skinning(2, 3) = 56.0f;
+    const Eigen::Vector3f sceneWind(100000.0f, 0.0f, 0.0f);
     const VL::Hair::GuideSimulationParams params =
-        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.016f, 0, skinning);
+        VL::Hair::MakeGuideSimulationParams(config, sceneWind, 7, 32, 224, 0.016f, skinning);
 
     EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 800u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, skinning), 160u);
@@ -382,8 +384,9 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     EXPECT_TRUE(params.skinning.isApprox(skinning));
     EXPECT_TRUE(params.skinningQuat.isApprox(Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f)));
     EXPECT_FLOAT_EQ(params.gravity.y(), -980.0f);
-    // frame 0 ⇒ wM = 100000 * 0.5 = 50000；四路是 ±40° 的锥角。
-    const float wM = 50000.0f;
+    // 运行时路径不再乘 TressFX 的逐帧调制：wM 就是传入的场景风幅值 100000。
+    // 四路是 ±40° 的锥角。
+    const float wM = 100000.0f;
     const float cosine = std::cos(VL::Hair::TressfxWindConeAngleRadians);
     const float sine = std::sin(VL::Hair::TressfxWindConeAngleRadians);
     EXPECT_NEAR(params.wind0.x(), wM * cosine, 1.0e-2f);
@@ -423,7 +426,8 @@ TEST(TressfxDynamics, AuthoredCurvesPackIntoStd140AndSetMotionFlags)
         config.localShapeStiffness[local] = 0.95f - static_cast<float>(local) / 128.0f;
     }
     VL::Hair::GuideSimulationParams params =
-        VL::Hair::MakeGuideSimulationParams(config, 1, 64, 64, 0.0125f, 0);
+        VL::Hair::MakeGuideSimulationParams(
+            config, Eigen::Vector3f::Zero(), 1, 64, 64, 0.0125f);
     // motion.w bit0/bit1 = 两个作者数组都存在。
     EXPECT_FLOAT_EQ(params.motion.w(), 3.0f);
     EXPECT_FLOAT_EQ(params.vspStiffness[0].x(), 0.0f);
@@ -438,7 +442,8 @@ TEST(TressfxDynamics, AuthoredCurvesPackIntoStd140AndSetMotionFlags)
     TressfxSimulationConfig vspOnly;
     vspOnly.vspStiffness = {0.0f, 0.5f, 1.0f, 1.0f};
     const VL::Hair::GuideSimulationParams vspParams =
-        VL::Hair::MakeGuideSimulationParams(vspOnly, 1, 4, 4, 0.0125f, 0);
+        VL::Hair::MakeGuideSimulationParams(
+            vspOnly, Eigen::Vector3f::Zero(), 1, 4, 4, 0.0125f);
     EXPECT_FLOAT_EQ(vspParams.motion.w(), 1.0f);
     EXPECT_FLOAT_EQ(vspParams.vspStiffness[0].y(), 0.5f);
     for (const Eigen::Vector4f& group : vspParams.localShapeStiffness)
@@ -447,7 +452,8 @@ TEST(TressfxDynamics, AuthoredCurvesPackIntoStd140AndSetMotionFlags)
     TressfxSimulationConfig localOnly;
     localOnly.localShapeStiffness = {0.25f, 0.5f, 0.75f, 0.95f};
     const VL::Hair::GuideSimulationParams localParams =
-        VL::Hair::MakeGuideSimulationParams(localOnly, 1, 4, 4, 0.0125f, 0);
+        VL::Hair::MakeGuideSimulationParams(
+            localOnly, Eigen::Vector3f::Zero(), 1, 4, 4, 0.0125f);
     EXPECT_FLOAT_EQ(localParams.motion.w(), 2.0f);
     EXPECT_FLOAT_EQ(localParams.localShapeStiffness[0].x(), 0.25f);
     EXPECT_TRUE(localParams.vspStiffness[0].isZero());
@@ -501,7 +507,7 @@ TEST(TressfxDynamics, DefaultVspThresholdUsesSourceLengthUnitConversion)
         assetConfig.vspAccelThresholdMax);
 }
 
-TEST(TressfxDynamics, WindFrameAdvancesWithEachStepAndDrivesCorners)
+TEST(TressfxDynamics, SimulationFrameAdvancesOncePerStep)
 {
     SimulationConfig config;
     config.gravity = Eigen::Vector3f::Zero();
@@ -511,10 +517,8 @@ TEST(TressfxDynamics, WindFrameAdvancesWithEachStepAndDrivesCorners)
     EXPECT_EQ(simulation.SimulationFrame(), 0u);
     simulation.Step(0.016f);
     EXPECT_EQ(simulation.SimulationFrame(), 1u);
-    // 同一作者风在不同帧号下的 wM 不同：第 0 帧是 0.5 倍，第 1000 帧约 1.208 倍。
-    const float frameZero = VL::Hair::TressfxWindFrameModulation(0);
-    const float frameThousand = VL::Hair::TressfxWindFrameModulation(1000);
-    EXPECT_LT(frameZero, frameThousand);
+    // 风幅值已不再随 frame 调制（场景阵风接管时间调制）；这里只核对计数语义，
+    // legacy 的 sin(frame*0.001)²+0.5 对照见 TressfxSolverMath 套件。
     for (int i = 0; i < 1000; ++i)
         simulation.Step(0.016f);
     EXPECT_EQ(simulation.SimulationFrame(), 1001u);
@@ -551,7 +555,7 @@ TEST(TressfxDynamics, StepFrameAdvancesSourcePhysicalTimePerFrameRate)
 
 TEST(TressfxDynamics, StepFrameMatchesTwoFixedStepsWithoutWind)
 {
-    // 无风时同一帧两个 substep 与两次固定步完全等价；区别只在 Frame 计数。
+    // 无风时同一帧两个 substep 与两次固定步完全等价；区别只在帧计数。
     SimulationConfig config;
     config.gravity = Eigen::Vector3f(0, -980, 0);
     config.iterations = 8;
@@ -564,7 +568,7 @@ TEST(TressfxDynamics, StepFrameMatchesTwoFixedStepsWithoutWind)
     for (size_t point = 0; point < native.Positions().size(); ++point)
         EXPECT_EQ(native.Positions()[point], legacy.Positions()[point]);
     EXPECT_FLOAT_EQ(native.SimulationTime(), legacy.SimulationTime());
-    // 原生路径每帧只 +1 风帧；旧 Step 每调用一次就 +1。
+    // 原生路径每帧只 +1 帧计数；旧 Step 每调用一次就 +1。
     EXPECT_EQ(native.SimulationFrame(), 1u);
     EXPECT_EQ(legacy.SimulationFrame(), 2u);
 }
@@ -614,20 +618,156 @@ TEST(TressfxDynamics, StepFrameConsumesZeroDeltaWithoutAdvancingOrUnpausing)
     EXPECT_EQ(simulation.SimulationFrame(), 0u);
 }
 
-TEST(TressfxDynamics, StepFrameAdvancesWindPhaseOncePerFrameNotPerSubstep)
+TEST(TressfxDynamics, StepFrameAdvancesSimulationFrameOncePerFrameNotPerSubstep)
 {
     SimulationConfig config;
     config.gravity = Eigen::Vector3f::Zero();
     config.wind = Eigen::Vector3f(1.0e6f, 0.0f, 0.0f);
     config.bendStiffness = 0.0f;
     GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
-    // 30 Hz 有两个 substep，但 wind frame 只 +1；60 Hz 一帧同样 +1。
+    // 30 Hz 有两个 substep，但 Guides.Frame 计数只 +1；60 Hz 一帧同样 +1。
     simulation.StepFrame(1.0f / 30.0f);
     EXPECT_EQ(simulation.SimulationFrame(), 1u);
     simulation.StepFrame(1.0f / 60.0f);
     EXPECT_EQ(simulation.SimulationFrame(), 2u);
-    // 0 步帧不消费风相位。
+    // 0 步帧不消费帧计数。
     simulation.StepFrame(0.0f);
     EXPECT_EQ(simulation.SimulationFrame(), 2u);
+}
+
+TEST(TressfxDynamics, SceneWindExpandsToFourConeCorners)
+{
+    TressfxSimulationConfig config;
+    VL::WorldWind wind;
+    wind.direction = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+    wind.strength = 1200.0f;
+    wind.gust = VL::WorldWindGust{};
+    // 阵风关闭 ⇒ gustFactor = 1；场景风向量就是 direction * strength（厘米/秒）。
+    const Eigen::Vector3f sceneWind =
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, 0.0);
+    EXPECT_TRUE(sceneWind.isApprox(Eigen::Vector3f(0.0f, 0.0f, 1200.0f)));
+
+    const VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(
+            config, sceneWind, 1, 4, 4, 0.0125f);
+    // 四路锥形风的幅值都等于传入向量的模，方向与风轴夹角都是 40°。
+    const Eigen::Vector3f corners[4] = {params.wind0.head<3>(),
+        params.wind1.head<3>(), params.wind2.head<3>(),
+        params.wind3.head<3>()};
+    const float cosine = std::cos(VL::Hair::TressfxWindConeAngleRadians);
+    for (const Eigen::Vector3f& corner : corners)
+    {
+        EXPECT_TRUE(corner.allFinite());
+        EXPECT_NEAR(corner.norm(), 1200.0f, 1.0e-2f);
+        EXPECT_NEAR(corner.normalized().dot(sceneWind.normalized()), cosine,
+            1.0e-5f);
+    }
+}
+
+TEST(TressfxDynamics, ZeroSceneWindProducesAllZeroCorners)
+{
+    TressfxSimulationConfig config;
+    VL::WorldWind wind;
+    // 默认方向是 UnitX，但强度为 0：不得归一化或放大方向。
+    wind.strength = 0.0f;
+    wind.gust.enabled = true;
+    wind.gust.amplitude = 0.8f;
+    wind.gust.frequency = 1.3f;
+    wind.gust.turbulence = 0.4f;
+    const Eigen::Vector3f sceneWind =
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, 3.25);
+    EXPECT_TRUE(sceneWind.isZero());
+
+    const VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(
+            config, sceneWind, 1, 4, 4, 0.0125f);
+    EXPECT_TRUE(params.wind0.isZero());
+    EXPECT_TRUE(params.wind1.isZero());
+    EXPECT_TRUE(params.wind2.isZero());
+    EXPECT_TRUE(params.wind3.isZero());
+    const Eigen::Vector4f corners[4] = {params.wind0, params.wind1,
+        params.wind2, params.wind3};
+    for (const Eigen::Vector4f& corner : corners)
+        EXPECT_TRUE(corner.allFinite());
+}
+
+TEST(TressfxDynamics, SceneWindAppliesSharedGustAtFrozenWindTime)
+{
+    VL::WorldWind wind;
+    wind.direction = Eigen::Vector3f::UnitX();
+    wind.strength = 1000.0f;
+    wind.gust.enabled = true;
+    wind.gust.amplitude = 0.8f;
+    wind.gust.frequency = 1.3f;
+    wind.gust.turbulence = 0.4f;
+    const double windTimeSeconds = 12.5;
+
+    // 固定风时间下共享阵风给出确定性的、非 1 的调制因子；毛发与植被同 helper。
+    const float expectedGust =
+        VL::ApplySceneWindGust(1.0f, wind.gust, windTimeSeconds);
+    ASSERT_GT(std::abs(expectedGust - 1.0f), 1.0e-3f);
+    const Eigen::Vector3f sceneWind =
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, windTimeSeconds);
+    EXPECT_NEAR(sceneWind.x(), wind.strength * expectedGust, 1.0e-3f);
+    EXPECT_FLOAT_EQ(sceneWind.y(), 0.0f);
+    EXPECT_FLOAT_EQ(sceneWind.z(), 0.0f);
+
+    TressfxSimulationConfig config;
+    const VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(
+            config, sceneWind, 1, 4, 4, 0.0125f);
+    // 四角幅值 = strength * gustFactor；不再额外乘 TressFX 的
+    // sin(frame*0.001)²+0.5，否则会与场景阵风双重调制。
+    const Eigen::Vector3f corners[4] = {params.wind0.head<3>(),
+        params.wind1.head<3>(), params.wind2.head<3>(),
+        params.wind3.head<3>()};
+    for (const Eigen::Vector3f& corner : corners)
+        EXPECT_NEAR(corner.norm(), wind.strength * expectedGust, 1.0e-2f);
+}
+
+TEST(TressfxDynamics, GuideSimulationParamsPacksExplicitWindVector)
+{
+    // 资产配置已不含 wind 字段：参数块的风只能来自显式传入的向量。
+    TressfxSimulationConfig config;
+    const Eigen::Vector3f sceneWind(300.0f, 40.0f, -50.0f);
+    const VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(
+            config, sceneWind, 1, 4, 4, 0.0125f);
+    const VL::Hair::GuideSimulationParams noWind =
+        VL::Hair::MakeGuideSimulationParams(
+            config, Eigen::Vector3f::Zero(), 1, 4, 4, 0.0125f);
+    const float magnitude = sceneWind.norm();
+    const float cosine = std::cos(VL::Hair::TressfxWindConeAngleRadians);
+    const Eigen::Vector3f corners[4] = {params.wind0.head<3>(),
+        params.wind1.head<3>(), params.wind2.head<3>(),
+        params.wind3.head<3>()};
+    for (const Eigen::Vector3f& corner : corners)
+    {
+        EXPECT_NEAR(corner.norm(), magnitude, 1.0e-2f);
+        EXPECT_NEAR(corner.normalized().dot(sceneWind.normalized()), cosine,
+            1.0e-5f);
+    }
+    // 换成零向量后同一 config 得到全零四角：风完全由参数决定。
+    EXPECT_TRUE(noWind.wind0.isZero());
+    EXPECT_TRUE(noWind.wind3.isZero());
+}
+
+TEST(TressfxDynamics, SceneWindRefreshesCpuReferenceSolverBeforeStepFrame)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f::Zero();
+    config.bendStiffness = 0.0f;
+    GuideSimulation windy(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    GuideSimulation calm(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    // GPU 路径才在 windTimeSeconds 处采样阵风；CPU 参考 backend 只接收
+    // direction * strength，并在 StepFrame 之前刷新 config.wind。
+    windy.SetSceneWind(Eigen::Vector3f(5.0e5f, 0.0f, 0.0f));
+    for (int i = 0; i < 30; ++i)
+    {
+        windy.StepFrame(1.0f / 60.0f);
+        calm.StepFrame(1.0f / 60.0f);
+    }
+    EXPECT_LT(windy.Positions()[2].x(), 0.0f);
+    EXPECT_FLOAT_EQ(calm.Positions()[2].x(), 0.0f);
 }
 } // namespace

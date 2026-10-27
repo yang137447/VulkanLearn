@@ -218,9 +218,11 @@ void GuideSimulation::LengthAndWindPass(size_t guide, float timeStep)
     const float timeStepSquared = timeStep * timeStep;
     if (config.wind.squaredNorm() > 0.0f)
     {
-        // 四路锥形风逐帧生成一次；同一帧所有 guide 共用同一组方向与 wM。
+        // 四路锥形风逐帧生成一次；同一帧所有 guide 共用同一组方向与幅值。
+        // 这里不做 TressFX SetWind 的 sin(frame*0.001)²+0.5 逐帧调制：CPU 参考
+        // backend 只消费场景方向/强度，时间调制由 GPU 路径的场景阵风施加。
         const TressfxWindCorners corners = TressfxBuildWindCorners(
-            config.wind, config.wind.norm(), simulationFrame);
+            config.wind, config.wind.norm());
         const Eigen::Vector3f wind = TressfxCombineWind(corners.wind0,
             corners.wind1, corners.wind2, corners.wind3,
             static_cast<uint32_t>(guide));

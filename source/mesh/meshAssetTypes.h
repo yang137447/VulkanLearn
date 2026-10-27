@@ -91,9 +91,8 @@ struct TressfxSimulationConfig
 {
     bool enabled = false;
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    // 单个风向量：方向归一化后作为风锥轴，长度作为 TressFX WindMagnitude
-    // 力标量，不是物理风速。
-    Eigen::Vector3f wind = Eigen::Vector3f::Zero();
+    // 风不在资产里：它由场景 `wind` 对象统一作者（scene-wind.md），
+    // 资产/放置/分组出现的 `wind` 字段在加载期显式拒绝。
     // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)；
     // 典型 0..0.07，默认 0.035，不是“每步保留的速度比例”。
     float damping = 0.035f;

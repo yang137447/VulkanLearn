@@ -43,7 +43,6 @@ inline const HairLiveParameterSpec* FindHairLiveParameterSpec(std::string_view f
 {
     static const HairLiveParameterSpec specs[] = {
         {"gravity", HairLiveParameterKind::Vector3, 3},
-        {"wind", HairLiveParameterKind::Vector3, 3},
         {"damping", HairLiveParameterKind::UnitInterval, 1},
         {"iterations", HairLiveParameterKind::Iterations, 1},
         {"bendStiffness", HairLiveParameterKind::UnitInterval, 1},

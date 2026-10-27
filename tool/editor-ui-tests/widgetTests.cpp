@@ -751,8 +751,10 @@ TEST_F(UiWidgetTest, ActorListHasOneRootRowPerActorAcrossAllTypes)
         EXPECT_FALSE(row.expanded);
         EXPECT_EQ(row.label, actors[row.actorIndex].displayName);
     }
+    // 视口高度按类型数量算：新增场景风 actor 后不能再用固定高度假设所有行都可见。
     const auto window = ComputeSceneActorWindow(
-        rows.size(), 118.0f, 0.0f, SceneActorRowHeightFallback);
+        rows.size(), SceneActorRowHeightFallback * static_cast<float>(rows.size()),
+        0.0f, SceneActorRowHeightFallback);
     EXPECT_EQ(window.begin, 0u);
     EXPECT_EQ(window.end, rows.size());
     EXPECT_FLOAT_EQ(window.top, 0.0f);
@@ -873,9 +875,10 @@ TEST_F(UiWidgetTest, OnlyRenderableActorTypesOfferAVisibilityToggle)
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::PointLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SpotLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SquareAreaLight));
-    // 相机/环境/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
+    // 相机/环境/场景风/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Camera));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Environment));
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::SceneWind));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::WindProfile));
 }
 } // namespace SceneActorTreeTests

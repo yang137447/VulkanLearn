@@ -910,12 +910,10 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
         speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
         (void)speedTreeWindProfiles.SetStrength(speedTreeStrength);
         (void)speedTreeWindProfiles.SetGustingEnabled(speedTreeGustingEnabled);
-        activeWind = activeWorld->GetWind();
     }
     else
     {
         speedTreeWindProfiles.Reset();
-        activeWind = VL::WorldWind();
     }
 }
 
@@ -1540,8 +1538,6 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         speedTreeStrength);
     (void)prepared.speedTreeWindProfiles
         .SetGustingEnabled(speedTreeGustingEnabled);
-    // 风状态跟随 World 准备，不在提交点再读取可能已换代的 activeWorld。
-    prepared.wind = prepared.world->GetWind();
     prepared.nextSnapshotFrameIndex =
         nextSnapshotFrameIndex + 1;
     return prepared;
@@ -1578,6 +1574,10 @@ RenderSystem::CommitPreparedRuntimeBinding(
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);
+    // 风随同一代 RenderScene 提交；头发从 currentRenderScene.wind 取风，
+    // 不再有 RenderSystem 单独维护的第二份 activeWind。
+    swap(currentRenderScene.wind, prepared.renderScene.wind);
+    swap(currentRenderScene.windTimeSeconds, prepared.renderScene.windTimeSeconds);
     swap(
         currentRenderScene.debugViewMode,
         prepared.renderScene.debugViewMode);
@@ -1585,8 +1585,6 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.resolvedRenderScene.materialGroups);
     speedTreeWindProfiles.Swap(
         prepared.speedTreeWindProfiles);
-    // 赋值只复制定长 Eigen 向量与 POD 字段，不分配内存，保持提交点 no-throw。
-    activeWind = prepared.wind;
     swap(csmSettings, prepared.csmSettings);
 
     std::shared_ptr<void> retiredLightBuffer =
@@ -3787,11 +3785,14 @@ RenderSystem::BuildRendererDescriptorContext(
 
 // 风时间按渲染帧固定步长推进，而不是墙钟：同一帧序列得到同一风状态，截图可逐像素复现。
 // 风是可复现的参数，与其他按帧率取数据的动画时钟解耦。首帧仍为 0，与旧行为一致。
-// 植被风强度与风向来自活动 World 的场景 wind（activeWind），物种只提供响应曲线。
+// 本帧使用的风时间先写回 currentRenderScene，头发 pass 随后消费同一份
+// (wind, windTimeSeconds)，不会比植被早一个 tick。
 void RenderSystem::AdvanceSpeedTreeWindProfiles()
 {
     constexpr double kSpeedTreeWindTickSeconds = 1.0 / 60.0;
-    speedTreeWindProfiles.AdvanceToSceneWind(currentWindTimeSeconds, activeWind);
+    currentRenderScene.windTimeSeconds = currentWindTimeSeconds;
+    speedTreeWindProfiles.AdvanceToSceneWind(
+        currentWindTimeSeconds, currentRenderScene.wind);
     currentWindTimeSeconds += kSpeedTreeWindTickSeconds;
 }
 

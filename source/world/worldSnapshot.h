@@ -15,6 +15,7 @@
 #include "environmentType.h"
 #include "render/camera/cameraExposure.h"
 #include "scene/placementBinding.h"
+#include "world/worldWind.h"
 
 namespace VL
 {
@@ -123,6 +124,10 @@ struct WorldSnapshot
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;
     EnvironmentSnapshot environment;
+    // 场景全局风与相机/环境同属一帧冻结状态。头发在 GPU 侧逐对象读取它，
+    // 不再从资产 simulationDefaults.wind 取风；植被用的风时间由 RenderSystem
+    // 在自己的渲染帧时钟上另行附加，不进入这份 GT 快照。
+    WorldWind wind;
     int debugViewMode = 0;
 };
 

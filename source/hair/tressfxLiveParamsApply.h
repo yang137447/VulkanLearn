@@ -36,11 +36,6 @@ inline bool ApplyHairLiveParameter(::TressfxSimulationConfig& config,
         config.gravity = Eigen::Vector3f(values[0], values[1], values[2]);
         return true;
     }
-    if (request.field == "wind")
-    {
-        config.wind = Eigen::Vector3f(values[0], values[1], values[2]);
-        return true;
-    }
     if (request.field == "damping")
     {
         config.damping = values[0];

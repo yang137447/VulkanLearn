@@ -131,8 +131,10 @@ inline Eigen::Vector3f TressfxCombineWind(const Eigen::Vector3f& wind0,
 }
 
 // TressFX SetWind 的逐帧幅值调制：wM = windMag * (sin(frame * 0.001)² + 0.5)。
-// frame 是仿真帧序号（不是秒），在 0.5..1.5 倍之间缓慢起伏；替换了 VL 原有的
-// windGust/windFrequency 正弦扩展，避免与 TressFX 的风力叠加成双重调制。
+// frame 是仿真帧序号（不是秒），在 0.5..1.5 倍之间缓慢起伏。VL 的偏差：运行时的
+// 时间调制已交给场景阵风（见 world/worldWindSampling.h），GPU 与 CPU 运行路径都
+// 不再调用本函数，否则会与共享阵风叠加成双重调制。只保留给 legacy/SDK 对照入口
+// TressfxBuildWindCorners(direction, magnitude, frame) 与离线/单元测试。
 inline float TressfxWindFrameModulation(uint32_t frame)
 {
     const float phase = std::sin(static_cast<float>(frame) * 0.001f);
@@ -149,9 +151,10 @@ inline Eigen::Vector3f TressfxConeAxis(
     return xAxisToWind * rotated;
 }
 
-// TressFX 的四路锥形风。资产只有一个风向量：方向取归一化方向，长度取幅值
-// （厘米/秒）。四路是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40° 的四个角，再统一
-// 乘 wM。Mixer 仍按 TressfxCombineWind 的 a/(1-a) 权重消费这四路。
+// TressFX 的四路锥形风。windDirection 只取方向（函数内归一化），windMagnitude 是
+// TressFX 的 WindMagnitude 力标量：VL 直接把场景风强度（cm/s）的数值当它用，不是
+// 物理风速。四路是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40° 的四个角，再统一乘风幅值。
+// 本重载不做时间调制：运行时的风幅值已由场景风（含共享阵风）算好。
 struct TressfxWindCorners
 {
     Eigen::Vector3f wind0 = Eigen::Vector3f::Zero();
@@ -161,13 +164,13 @@ struct TressfxWindCorners
 };
 
 inline TressfxWindCorners TressfxBuildWindCorners(
-    const Eigen::Vector3f& windDirection, float windMagnitude, uint32_t frame)
+    const Eigen::Vector3f& windDirection, float windMagnitude)
 {
     TressfxWindCorners corners;
     if (windMagnitude <= 0.0f || windDirection.squaredNorm() <= 1.0e-12f)
         return corners;
 
-    const float wM = windMagnitude * TressfxWindFrameModulation(frame);
+    const float wM = windMagnitude;
     const Eigen::Vector3f direction = windDirection.normalized();
     // 参考实现用 asin(|X × dir|) 构造 X→dir 的旋转，只对 dir.x >= 0 正确；
     // 这里用精确最短弧，二者在已校准的 +X 风上完全一致，同时不会把 -X 风翻向。
@@ -184,6 +187,16 @@ inline TressfxWindCorners TressfxBuildWindCorners(
     corners.wind3 = wM * TressfxConeAxis(xAxisToWind,
         Eigen::Vector3f::UnitZ(), -TressfxWindConeAngleRadians);
     return corners;
+}
+
+// legacy/SDK 对照入口：保留 TressFX 5.0 SetWind 的逐帧幅值调制
+// （wM = |wind| * (sin(frame*0.001)² + 0.5)）。运行时（HairSimulationPass 与
+// CPU 参考 solver）都不调用它：场景阵风已经负责时间调制，两边叠加会双重调制。
+inline TressfxWindCorners TressfxBuildWindCorners(
+    const Eigen::Vector3f& windDirection, float windMagnitude, uint32_t frame)
+{
+    return TressfxBuildWindCorners(
+        windDirection, windMagnitude * TressfxWindFrameModulation(frame));
 }
 
 // TressFX 的风力：Force = -cross(cross(v, w), v)，v 是**未归一化**的段向量

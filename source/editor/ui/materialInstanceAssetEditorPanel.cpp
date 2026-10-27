@@ -1560,11 +1560,14 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
     if (showActorVisualization && view && size.x > 0 && size.y > 0)
     {
         // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
+        // 网格/环境/风（场景级与每物种剖面）没有可投影的世界位置，不摆视口图标。
         for (size_t index = 0; index < actors.size(); ++index)
         {
             const auto& actor = actors[index];
             if (actor.type == EditorSceneActorType::Mesh ||
-                actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+                actor.type == EditorSceneActorType::Environment ||
+                actor.type == EditorSceneActorType::WindProfile ||
+                actor.type == EditorSceneActorType::SceneWind)
                 continue;
             const bool selected = actor.identity == snapshot.selectedActorIdentity;
             if (selected && actor.visible)

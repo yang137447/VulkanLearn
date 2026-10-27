@@ -11,6 +11,7 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "script/scriptComponents.h"
 
@@ -163,6 +164,28 @@ EditorSceneActorSnapshot BuildEnvironmentActor(const World& world)
     actor.environment.cubeSize = environment.cubeSize;
     actor.environment.intensity = environment.intensity;
     actor.environment.hdrPath = environment.hdrPath;
+    return actor;
+}
+
+EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
+{
+    const WorldWind& wind = world.GetWind();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::SceneWind;
+    actor.worldGeneration = world.GetGeneration();
+    actor.scenePath = world.GetScenePath();
+    // 场景风全场景至多一个且没有作者名字，身份因此是固定字符串；与每物种风剖面
+    // （"windProfile|<key>"）分属不同分组键，选择与解析不会互相命中。
+    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::SceneWind, "scene");
+    actor.displayName = "Scene Wind";
+    // 场景风是全局状态，没有渲染侧可见性开关。
+    actor.visible = true;
+    actor.worldWind.direction = wind.direction;
+    actor.worldWind.strengthCmPerSec = wind.strength;
+    actor.worldWind.gustEnabled = wind.gust.enabled;
+    actor.worldWind.gustAmplitude = wind.gust.amplitude;
+    actor.worldWind.gustFrequency = wind.gust.frequency;
+    actor.worldWind.gustTurbulence = wind.gust.turbulence;
     return actor;
 }
 
@@ -326,6 +349,12 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
         actors.push_back(BuildCameraActor(world, *world.GetCamera()));
 
     actors.push_back(BuildEnvironmentActor(world));
+
+    // 场景 JSON 没有作者标记，无法区分"没写 wind"与"写了零风"：默认零风
+    //（强度 0 且阵风关闭）不产生一行空的 Scene Wind，有风时才发布这一行。
+    const WorldWind& worldWind = world.GetWind();
+    if (worldWind.strength > 0.0f || worldWind.gust.enabled)
+        actors.push_back(BuildSceneWindActor(world));
 
     for (const auto& entry : world.GetSpeedTreeWindProfiles())
         actors.push_back(BuildWindActor(world, entry.second));

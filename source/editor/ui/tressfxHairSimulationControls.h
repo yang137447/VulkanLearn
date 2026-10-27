@@ -40,7 +40,6 @@ inline const TressfxSimulationControl* TressfxSimulationControls(std::size_t& co
 {
     static const TressfxSimulationControl controls[] = {
         {"gravity", "Gravity", "cm/s^2", 3, false, 0.0f, 0.0f, {0.0, -980.0, 0.0}},
-        {"wind", "Wind", "force", 3, false, 0.0f, 0.0f, {0.0, 0.0, 0.0}},
         {"damping", "Damping", "", 1, true, 0.0f, 0.1f, {0.035, 0.0, 0.0}},
         {"iterations", "Iterations", "", 1, true, 1.0f, 16.0f, {3.0, 0.0, 0.0}},
         {"bendStiffness", "Bend", "", 1, true, 0.0f, 1.0f, {0.3, 0.0, 0.0}},

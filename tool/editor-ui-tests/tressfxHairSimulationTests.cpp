@@ -33,17 +33,16 @@ TEST(TressfxHairSimulationControls, LiveGateMatchesEnabledAndBackendDefaultSeman
         {{"simulationDefaults", {{"enabled", true}, {"backend", "cpu"}}}}));
 }
 
-// 面板控件表必须覆盖且只覆盖可实时覆盖的 9 个作者字段，默认值与
+// 面板控件表必须覆盖且只覆盖可实时覆盖的 8 个作者字段，默认值与
 // TressfxSimulationConfig 的成员初值一致；多一个字段会让面板显示资产并不拥有的值，
 // 少一个字段则作者只能改 JSON。
 TEST(TressfxHairSimulationControls, CoverEveryLiveParameterWithAuthoredDefaults)
 {
     std::size_t count = 0;
     const TressfxSimulationControl* controls = TressfxSimulationControls(count);
-    ASSERT_EQ(count, 9u);
+    ASSERT_EQ(count, 8u);
     const std::map<std::string, std::array<double, 3>> expected = {
         {"gravity", {0.0, -980.0, 0.0}},
-        {"wind", {0.0, 0.0, 0.0}},
         {"damping", {0.035, 0.0, 0.0}},
         {"iterations", {3.0, 0.0, 0.0}},
         {"bendStiffness", {0.3, 0.0, 0.0}},
@@ -73,10 +72,10 @@ TEST(TressfxHairSimulationControls, ReadsAuthoredValuesAndFallsBackToDefaults)
 {
     const auto* damping = FindControl("damping");
     const auto* gravity = FindControl("gravity");
-    const auto* wind = FindControl("wind");
+    const auto* bend = FindControl("bendStiffness");
     ASSERT_NE(damping, nullptr);
     ASSERT_NE(gravity, nullptr);
-    ASSERT_NE(wind, nullptr);
+    ASSERT_NE(bend, nullptr);
     const nlohmann::json simulation = {
         {"damping", 0.02},
         {"gravity", {0.0, -500.0, 0.0}},
@@ -84,7 +83,7 @@ TEST(TressfxHairSimulationControls, ReadsAuthoredValuesAndFallsBackToDefaults)
     EXPECT_DOUBLE_EQ(TressfxSimulationValue(simulation, *damping)[0], 0.02);
     EXPECT_DOUBLE_EQ(TressfxSimulationValue(simulation, *gravity)[1], -500.0);
     // 未作者字段回退默认值，面板不能把“缺字段”显示成 0。
-    EXPECT_DOUBLE_EQ(TressfxSimulationValue(simulation, *wind)[0], 0.0);
+    EXPECT_DOUBLE_EQ(TressfxSimulationValue(simulation, *bend)[0], 0.3);
     EXPECT_DOUBLE_EQ(TressfxSimulationValue(nlohmann::json::object(), *damping)[0], 0.035);
     // 类型不符同样回退，而不是抛出。
     EXPECT_DOUBLE_EQ(TressfxSimulationValue(

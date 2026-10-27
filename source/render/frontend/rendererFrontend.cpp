@@ -119,6 +119,7 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
     renderScene.environment = snapshot.environment;
+    renderScene.wind = snapshot.wind;
     renderScene.debugViewMode = snapshot.debugViewMode;
 
     renderScene.drawPackets.reserve(snapshot.meshDraws.size());

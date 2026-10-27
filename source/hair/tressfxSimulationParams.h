@@ -9,6 +9,7 @@
 
 #include "hair/tressfxSolverMath.h"
 #include "mesh/meshAssetTypes.h"
+#include "world/worldWindSampling.h"
 
 namespace VL::Hair
 {
@@ -21,8 +22,9 @@ struct GuideSimulationParams
     // xyz = 世界空间重力换算到当前 hair 局部后的加速度，w 未使用（厘米/秒²）。
     Eigen::Vector4f gravity = Eigen::Vector4f::Zero();
     // TressFX 的四路锥形风（WindMagnitude 力标量，并非风速）。
-    // Host 先在世界空间从资产的单个风向量生成，再换算到当前 hair 局部：
-    // 方向绕 Y/Z 各 ±40°，每路再乘 wM = |wind| * (sin(frame*0.001)² + 0.5)。
+    // 幅值来自本帧场景风：|direction * strength|（cm/s），方向在世界空间绕 Y/Z
+    // 各 ±40° 展开后换基到当前 hair 局部。VL 偏差：不再乘 TressFX SetWind 的
+    // sin(frame*0.001)² + 0.5 逐帧调制，时间调制由场景阵风独占（避免双重调制）。
     // shader 按 a/(1-a) 权重混合（见 TressfxCombineWind）。
     Eigen::Vector4f wind0 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind1 = Eigen::Vector4f::Zero();
@@ -38,7 +40,7 @@ struct GuideSimulationParams
     // z = 只换基三份历史（历史 VL 路径保留，GPU 原生调度已不再使用：n == 0 时
     // 不录 pass，换基并入首个正 delta substep 的 Integration）；w 的 bit0/bit1
     // = VSP / LocalShape 逐顶点作者数组存在，其余位保留 0。
-    // 时间调制由 Host 烘进 wind0..3（TressFX SetWind 语义）。
+    // wind0..3 只复制已经过场景阵风调制的本帧风向量，不含额外时间调制。
     Eigen::Vector4f motion = Eigen::Vector4f::Zero();
     // x = 长度约束迭代次数, y = guideCount, z = pointCount, w = colliderCount
     uint32_t iterations = 0;
@@ -98,9 +100,8 @@ inline GuideSimulationParams MakeGuideSkinningParams(
     return params;
 }
 
-// 一份 pass 参数。dt 由调用方按源 substep 固定为 0.0125；
-// simulationFrame 是仿真帧序号，用于 TressFX SetWind 的 sin(frame*0.001)² 幅值
-// 调制（同一帧的所有 substep 共用）。
+// 把作者逐顶点 stiffness 曲线按 4 个 float 一组打包进 std140 的 vec4 数组。
+// 非空数组长度由资产校验保证 == pointsPerGuide，这里仍按容量截断。
 inline void PackGuideStiffnessCurve(const std::vector<float>& curve,
     std::array<Eigen::Vector4f, 16>& packed)
 {
@@ -117,13 +118,32 @@ inline void PackGuideStiffnessCurve(const std::vector<float>& curve,
     }
 }
 
+// 运行时场景风 -> TressFX 风向量（厘米/秒）。方向由 WorldWind 保证已归一化；
+// 幅值 = strength * gustFactor，gustFactor 用共享场景阵风在 windTimeSeconds 处
+// 采样（植被与头发同一相位、同一 helper）。强度为 0 时直接返回零向量，既不
+// 归一化零向量，也让 shader 走零风早退；阵风关闭/频率 0 时因子为 1。
+// 偏差：TressFX 5.0 的 SetWind 还会乘 sin(frame*0.001)²+0.5 的逐帧调制，这里
+// 不乘 —— 场景阵风已经负责时间调制，再乘一次就是双重调制。
+inline Eigen::Vector3f TressfxSceneWindVelocityCmPerSec(
+    const WorldWind& wind, double windTimeSeconds)
+{
+    if (!(wind.strength > 0.0f))
+        return Eigen::Vector3f::Zero();
+    const float gustFactor =
+        ApplySceneWindGust(1.0f, wind.gust, windTimeSeconds);
+    return wind.direction * (wind.strength * gustFactor);
+}
+
+// 一份 pass 参数。dt 由调用方按源 substep 固定为 0.0125；同一帧的所有 substep
+// 共用这一份参数。windVelocityCmPerSec 是本帧场景风向量（方向 * 幅值，厘米/秒，
+// 已含场景阵风），Host 只负责 TressFX 的四角展开与换基，不再做时间调制。
 inline GuideSimulationParams MakeGuideSimulationParams(
     const TressfxSimulationConfig& config,
+    const Eigen::Vector3f& windVelocityCmPerSec,
     uint32_t guideCount,
     uint32_t pointsPerGuide,
     uint32_t pointCount,
     float timeStep,
-    uint32_t simulationFrame,
     Eigen::Matrix4f skinningMatrix = Eigen::Matrix4f::Identity(),
     bool resetPositions = false,
     Eigen::Matrix4f historyToCurrentLocal = Eigen::Matrix4f::Identity(),
@@ -135,10 +155,10 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     const Eigen::Vector3f localGravity = worldToHair * config.gravity;
     params.gravity = Eigen::Vector4f(
         localGravity.x(), localGravity.y(), localGravity.z(), 0.0f);
-    // 四路风由单个作者向量展开：方向归一化、长度作为幅值，再套 TressFX 的风锥。
-    const float windMagnitude = config.wind.norm();
+    // 四路风由场景风向量展开：方向归一化、长度作为幅值，再套 TressFX 的风锥。
+    const float windMagnitude = windVelocityCmPerSec.norm();
     const TressfxWindCorners corners =
-        TressfxBuildWindCorners(config.wind, windMagnitude, simulationFrame);
+        TressfxBuildWindCorners(windVelocityCmPerSec, windMagnitude);
     // 锥角绕世界轴展开后再换基，不能先旋转单风向量再绕局部轴展开。
     // 刚体旋转时三叉积协变；scale 下沿用局部 solver 近似，不声称力/长度度量等价。
     params.wind0.head<3>() = worldToHair * corners.wind0;

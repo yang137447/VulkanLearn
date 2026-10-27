@@ -144,7 +144,7 @@ struct ModelPreviewRotationInput
     float pitch = 0.0f;
 };
 
-// 毛发视口的实时参数：field 与作者字段同名（gravity/wind/damping/...），
+// 毛发视口的实时参数：field 与作者字段同名（gravity/damping/...），
 // valueCount 决定读 1 或 3 个分量。UI 只发值语义，校验与投递都在 GT/RT。
 struct ModelPreviewHairParameterInput
 {

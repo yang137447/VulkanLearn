@@ -370,6 +370,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     }
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);
+    // 风是场景全局状态：冻结进快照后，头发/离线消费者看到的是同一代 World 的风，
+    // 不会在渲染线程重新读取可能已被换代的 World。
+    snapshot.wind = world.GetWind();
     previousViewProjection = snapshot.camera.viewProjection;
     previousObjectModels = std::move(currentObjectModels);
 

@@ -143,6 +143,24 @@ TEST(TressfxSolverMath, WindCornerMagnitudeFollowsTressFxFrameModulation)
     EXPECT_TRUE(zero.wind3.isZero());
 }
 
+TEST(TressfxSolverMath, RuntimeWindCornersSkipTressFxFrameModulation)
+{
+    // 运行时重载（无 frame 参数）直接使用传入幅值：场景阵风已经负责时间调制。
+    const TressfxWindCorners runtime =
+        TressfxBuildWindCorners(Eigen::Vector3f::UnitX(), 2000.0f);
+    EXPECT_NEAR(runtime.wind0.norm(), 2000.0f, 1.0e-3f);
+    EXPECT_NEAR(runtime.wind3.norm(), 2000.0f, 1.0e-3f);
+    // legacy/SDK 对照重载才乘 sin(frame*0.001)²+0.5：frame 0 即 0.5 倍。
+    const TressfxWindCorners legacy =
+        TressfxBuildWindCorners(Eigen::Vector3f::UnitX(), 2000.0f, 0);
+    EXPECT_NEAR(legacy.wind0.norm(), 1000.0f, 1.0e-3f);
+    // 零幅值在两种入口下都返回零向量，Host 不会把零向量归一化成 NaN。
+    const TressfxWindCorners zero =
+        TressfxBuildWindCorners(Eigen::Vector3f::Zero(), 0.0f);
+    EXPECT_TRUE(zero.wind0.isZero());
+    EXPECT_TRUE(zero.wind3.isZero());
+}
+
 TEST(TressfxSolverMath, WindMixerUsesAlternatingWeightsAndStrandPhase)
 {
     // w = a*W0 + (1-a)*W1 + a*W2 + (1-a)*W3, a = (guide % 20) / 20。

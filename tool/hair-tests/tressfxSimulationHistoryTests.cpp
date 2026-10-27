@@ -149,13 +149,15 @@ TEST(TressfxSimulationHistory, ResetFlagPreservesStd140LayoutAndPoseTarget)
     Eigen::Matrix4f skinning = Eigen::Matrix4f::Identity();
     skinning(0, 3) = 123.0f;
     const GuideSimulationParams params =
-        MakeGuideSimulationParams(config, 1, 4, 4, 0.0f, 99, skinning, true);
+        MakeGuideSimulationParams(config, Eigen::Vector3f::Zero(), 1, 4, 4,
+            0.0f, skinning, true);
     EXPECT_EQ(sizeof(params), 800u);
     EXPECT_FLOAT_EQ(params.motion.x(), 0.45f);
     EXPECT_FLOAT_EQ(params.motion.y(), 1.0f);
     EXPECT_FLOAT_EQ(params.controls.x(), 0.0f);
     EXPECT_TRUE(params.skinning.isApprox(skinning));
-    EXPECT_FLOAT_EQ(MakeGuideSimulationParams(config, 1, 4, 4, 0.016f, 99)
+    EXPECT_FLOAT_EQ(MakeGuideSimulationParams(config, Eigen::Vector3f::Zero(),
+                        1, 4, 4, 0.016f)
                         .motion.y(),
         0.0f);
 }

@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "world/worldWindSampling.h"
+
 namespace
 {
     // Fixed inspection value for the current Oak validation pass. The public
@@ -25,64 +27,6 @@ namespace
     float Interpolate(float start, float end, float amount)
     {
         return start + (end - start) * amount;
-    }
-
-    // 场景风强度到曲线横轴的换算基准。3270 cm/s（32.7 m/s）是蒲福 12 级的下界，
-    // 所以横轴 1.0 对应最强风级。曲线只在 [0, 1] 内采样，超出部分被 Clamp01 截断。
-    // 注意：这是 VulkanLearn 的换算约定，不是 SpeedTree SDK 的参数。
-    constexpr float kCurveFullScaleCmPerSec = 3270.0f;
-    // 阵风 turbulence 为 1 时，细节八度相对粗八度的频率倍率。
-    constexpr double kGustFineOctaveRatio = 4.0;
-    constexpr double kGustFineOctaveOffset = 17.0;
-
-    // 确定性整数格点哈希，返回 [-1, 1]。只依赖格点编号，不依赖运行时长或帧率，
-    // 因此同一风时间总得到同一阵风值，截图可复现。
-    float GustLatticeValue(int64_t lattice)
-    {
-        uint32_t hash = static_cast<uint32_t>(lattice) * 0x9E3779B9u;
-        hash ^= hash >> 16;
-        hash *= 0x85EBCA6Bu;
-        hash ^= hash >> 13;
-        hash *= 0xC2B2AE35u;
-        hash ^= hash >> 16;
-        return static_cast<float>(hash) / static_cast<float>(UINT32_MAX) * 2.0f - 1.0f;
-    }
-
-    // 一维 value noise，格点间 smoothstep 插值。相位用 double 保存：风时间长时间
-    // 运行后 float 的小数位会丢失，阵风会出现台阶。
-    float GustValueNoise(double phase)
-    {
-        const double cell = std::floor(phase);
-        const float fraction = static_cast<float>(phase - cell);
-        const float smooth = fraction * fraction * (3.0f - 2.0f * fraction);
-        const int64_t lattice = static_cast<int64_t>(cell);
-        return Interpolate(
-            GustLatticeValue(lattice),
-            GustLatticeValue(lattice + 1),
-            smooth);
-    }
-
-    // 阵风是连续噪声对归一化基准强度的相对调制（输入输出均为 [0, 1] 归一化强度），不是 SpeedTree 的离散
-    // 阵风事件：没有持续时间与上升/下降系数。amplitude 决定调制幅度，frequency 决定
-    // 噪声格点频率，turbulence 在平滑粗八度与细节八度之间插值。
-    // frequency 为 0 时阵风不产生调制，强度即为基准值。
-    float ApplySceneWindGust(float baseStrength, const VL::WorldWindGust& gust, double timeSeconds)
-    {
-        if (baseStrength <= 0.0f ||
-            !gust.enabled ||
-            gust.amplitude <= 0.0f ||
-            gust.frequency <= 0.0f)
-        {
-            return baseStrength;
-        }
-
-        const double phase = timeSeconds * static_cast<double>(gust.frequency);
-        const float coarse = GustValueNoise(phase);
-        const float fine = GustValueNoise(phase * kGustFineOctaveRatio + kGustFineOctaveOffset);
-        const float noise = Interpolate(coarse, fine, gust.turbulence);
-        // amplitude 限制在 [0, 1]，因此调制因子非负；噪声本身在 [-1, 1] 内。
-        const float modulation = 1.0f + gust.amplitude * noise;
-        return baseStrength * modulation;
     }
 
     float LinearSigmoid(float value, float linearity)
@@ -471,7 +415,7 @@ void SpeedTreeWindSystem::AdvanceToSceneWind(double timeSeconds, const VL::World
 
     // 基准强度先归一化到曲线的 [0, 1] 横轴，再走与 SpeedTree 相同的响应缓动；阵风在缓动之后叠加，
     // 与 SpeedTree 的 gustState 叠加位置一致。
-    const float baseStrength = Clamp01(std::max(0.0f, wind.strength) / kCurveFullScaleCmPerSec);
+    const float baseStrength = VL::SceneWindCurveAxis(std::max(0.0f, wind.strength));
     if (lastAdvanceTime < 0.0)
     {
         // 首次推进直接落到场景风强度，不从 Configure 的检视默认值缓动过来。
@@ -490,7 +434,7 @@ void SpeedTreeWindSystem::AdvanceToSceneWind(double timeSeconds, const VL::World
     UpdateEasedStrength(time);
 
     // 强度为 0 时方向置零，着色器的零风早退路径使植被保持原始位置。
-    const float strength = Clamp01(ApplySceneWindGust(currentStrength, wind.gust, time));
+    const float strength = Clamp01(VL::ApplySceneWindGust(currentStrength, wind.gust, time));
     const Eigen::Vector3f direction = strength > 0.0f
         ? wind.direction
         : Eigen::Vector3f::Zero();

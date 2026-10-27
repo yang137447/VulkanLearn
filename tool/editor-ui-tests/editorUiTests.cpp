@@ -1565,7 +1565,7 @@ TEST_F(EditorUiTest, BlueprintTressfxSimulationOverridesStaySparseAndResetToInhe
     Click("[data-action=blueprint-asset-select-component][data-index='1']");
     SelectOption("blueprint-asset-component-1-hair-mode-0", "off");
     SetValue("blueprint-asset-component-1-hair-damping-0", "0.02");
-    SetValue("blueprint-asset-component-1-hair-wind-0", "[1, 2, 3]");
+    SetValue("blueprint-asset-component-1-hair-gravity-0", "[1, 2, 3]");
     Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     const auto nodes = std::get<nlohmann::json>(
@@ -1573,8 +1573,8 @@ TEST_F(EditorUiTest, BlueprintTressfxSimulationOverridesStaySparseAndResetToInhe
     EXPECT_EQ(nodes[1]["simulation"]["mode"], "off");
     EXPECT_EQ(nodes[1]["simulation"]["overrides"].size(), 2u);
     EXPECT_DOUBLE_EQ(nodes[1]["simulation"]["overrides"]["damping"].get<double>(), 0.02);
-    EXPECT_EQ(nodes[1]["simulation"]["overrides"]["wind"], nlohmann::json::array({1, 2, 3}));
-    EXPECT_FALSE(nodes[1]["simulation"]["overrides"].contains("gravity"));
+    EXPECT_EQ(nodes[1]["simulation"]["overrides"]["gravity"], nlohmann::json::array({1, 2, 3}));
+    EXPECT_FALSE(nodes[1]["simulation"]["overrides"].contains("iterations"));
     authored.document["components"] = nodes;
     ++authored.documentRevision;
     Refresh();
@@ -1587,7 +1587,7 @@ TEST_F(EditorUiTest, BlueprintTressfxSimulationOverridesStaySparseAndResetToInhe
         std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
     EXPECT_FALSE(resetNodes[1]["simulation"].contains("mode"));
     EXPECT_EQ(resetNodes[1]["simulation"]["overrides"],
-        nlohmann::json({{"wind", nlohmann::json::array({1, 2, 3})}}));
+        nlohmann::json({{"gravity", nlohmann::json::array({1, 2, 3})}}));
     EXPECT_EQ(resetNodes[1]["rootBone"], "Head_M");
 }
 
@@ -3168,13 +3168,13 @@ TEST_F(EditorUiTest, TressfxHairSimulationControlsHaveUsableGeometryAcrossWorksp
         const auto origin = host->GetAbsoluteOffset(Rml::BoxArea::Content);
         const auto size = host->GetBox().GetSize(Rml::BoxArea::Content);
         for (const char* id : {"hair-sim-0-0", "hair-sim-0-1", "hair-sim-0-2",
-                               "hair-sim-2-0", "hair-sim-2-0-slider"})
+                               "hair-sim-1-0", "hair-sim-1-0-slider"})
         {
             auto* input = document->GetElementById(id);
             ASSERT_NE(input, nullptr);
             const auto offset = input->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto inputSize = input->GetBox().GetSize(Rml::BoxArea::Border);
-            EXPECT_GE(inputSize.x, id[9] == '2' ? 120.0f : 30.0f) << id;
+            EXPECT_GE(inputSize.x, id[9] == '1' ? 120.0f : 30.0f) << id;
             EXPECT_GE(offset.x, origin.x) << id;
             EXPECT_LE(offset.x + inputSize.x, origin.x + size.x + 1.0f) << id;
         }
@@ -3185,7 +3185,7 @@ TEST_F(EditorUiTest, TressfxHairSimulationControlsHaveUsableGeometryAcrossWorksp
 TEST_F(EditorUiTest, TressfxHairSimulationRefreshPreservesTextFocusAndPartialInput)
 {
     OpenTressfxAsset();
-    auto* input = Control("hair-sim-2-0");
+    auto* input = Control("hair-sim-1-0");
     ASSERT_NE(input, nullptr);
     const auto origin = input->GetAbsoluteOffset(Rml::BoxArea::Border);
     const auto size = input->GetBox().GetSize(Rml::BoxArea::Border);
@@ -3196,12 +3196,12 @@ TEST_F(EditorUiTest, TressfxHairSimulationRefreshPreservesTextFocusAndPartialInp
     input->SetValue("0.02");
     input->DispatchEvent("change", {});
     Refresh();
-    ASSERT_EQ(document->GetElementById("hair-sim-2-0"), input);
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0"), input);
     ASSERT_EQ(context->GetFocusElement(), input);
     input->SetValue("");
     context->ProcessTextInput("-");
     Refresh();
-    ASSERT_EQ(document->GetElementById("hair-sim-2-0"), input);
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0"), input);
     EXPECT_EQ(context->GetFocusElement(), input);
     EXPECT_EQ(input->GetValue(), "-");
     EXPECT_TRUE(sink.commands.empty());
@@ -3215,7 +3215,7 @@ TEST_F(EditorUiTest, TressfxHairSimulationSliderKeepsDraggingAcrossSnapshotRefre
     snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
         std::vector<EditorSceneActorSnapshot>{actor});
     Refresh();
-    auto* slider = Control("hair-sim-2-0-slider");
+    auto* slider = Control("hair-sim-1-0-slider");
     ASSERT_NE(slider, nullptr);
     const auto origin = slider->GetAbsoluteOffset(Rml::BoxArea::Border);
     const auto size = slider->GetBox().GetSize(Rml::BoxArea::Border);
@@ -3225,13 +3225,13 @@ TEST_F(EditorUiTest, TressfxHairSimulationSliderKeepsDraggingAcrossSnapshotRefre
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseMove(int(origin.x + size.x * 0.5f), y, 0);
     Refresh();
-    ASSERT_EQ(document->GetElementById("hair-sim-2-0-slider"), slider);
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0-slider"), slider);
     const auto first = slider->GetAttribute<float>("value", -1);
     const auto firstCount = runtimeSink.actions.size();
     ASSERT_GT(firstCount, 0u);
     context->ProcessMouseMove(int(origin.x + size.x * 0.8f), y, 0);
     Refresh();
-    ASSERT_EQ(document->GetElementById("hair-sim-2-0-slider"), slider);
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0-slider"), slider);
     EXPECT_GT(slider->GetAttribute<float>("value", -1), first);
     EXPECT_GT(runtimeSink.actions.size(), firstCount);
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetHairSimulationParameter);
@@ -3248,7 +3248,7 @@ TEST_F(EditorUiTest, TressfxHairZeroSimulationSlidersDragFromTheirMinimumAcrossR
     snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
         std::vector<EditorSceneActorSnapshot>{actor});
     Refresh();
-    for (const int index : {5, 6, 7})
+    for (const int index : {4, 5, 6})
     {
         SCOPED_TRACE(index);
         const std::string id = "hair-sim-" + std::to_string(index) + "-0";
@@ -3324,8 +3324,8 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     auto* section = document->GetElementById("resource-hair-simulation");
     ASSERT_NE(section, nullptr);
     ASSERT_TRUE(section->IsVisible());
-    // damping 是控件表第 3 项；初始值来自作者草稿，不是硬编码默认值。
-    auto* damping = document->GetElementById("hair-sim-2-0");
+    // damping 是控件表第 2 项；初始值来自作者草稿，不是硬编码默认值。
+    auto* damping = document->GetElementById("hair-sim-1-0");
     ASSERT_NE(damping, nullptr);
     EXPECT_EQ(damping->GetAttribute<Rml::String>("value", ""), "0.01");
     // 文案必须说明这是资产级保存：影响所有摆放，重载会复位模拟。
@@ -3440,7 +3440,7 @@ TEST_F(EditorUiTest, TressfxStaticAndCpuDefaultsRemainEditableWithoutLiveOrReset
         ASSERT_FALSE(panel->HasModal());
         runtimeSink.actions.clear();
         sink.commands.clear();
-        SetValue("hair-sim-2-0", "0.02");
+        SetValue("hair-sim-1-0", "0.02");
         Click("#resource-hair-reset");
         EXPECT_TRUE(runtimeSink.actions.empty());
         EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
@@ -3449,10 +3449,10 @@ TEST_F(EditorUiTest, TressfxStaticAndCpuDefaultsRemainEditableWithoutLiveOrReset
         ASSERT_EQ(sink.commands.size(), 1u);
         EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
         const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
-        ASSERT_EQ(changes.size(), 9u);
-        EXPECT_EQ(changes[2].field, "simulationDefaults.damping");
-        ASSERT_TRUE(std::holds_alternative<double>(changes[2].value));
-        EXPECT_DOUBLE_EQ(std::get<double>(changes[2].value), 0.02);
+        ASSERT_EQ(changes.size(), 8u);
+        EXPECT_EQ(changes[1].field, "simulationDefaults.damping");
+        ASSERT_TRUE(std::holds_alternative<double>(changes[1].value));
+        EXPECT_DOUBLE_EQ(std::get<double>(changes[1].value), 0.02);
 
         // 模拟标准 modify 的权威回执，再取消保存确认；不能把上一轮待办带进下一种 backend。
         auto& authored = snapshot.tressfxDocuments[0];
@@ -3524,7 +3524,7 @@ TEST_F(EditorUiTest, TressfxSkinnedOpenCreatesAuthorOwnerAndCleanReloadKeepsPrev
 TEST_F(EditorUiTest, TressfxCloseDuringSimulationStagingWaitsForTheAuthorRevision)
 {
     OpenTressfxAsset();
-    auto* damping = document->GetElementById("hair-sim-2-0");
+    auto* damping = document->GetElementById("hair-sim-1-0");
     ASSERT_NE(damping, nullptr);
     damping->SetAttribute("value", "0.02");
     damping->DispatchEvent("change", {});
@@ -8255,6 +8255,149 @@ TEST_F(EditorUiTest, MissingMeshIdentityIsStillRejectedInAMultiSectionWorld)
     // 被拒绝的写入不得产生任何副作用：只有显式下发的那一个 actor 被改了。
     EXPECT_FALSE(world.IsMeshSceneObjectVisible("SM_car_wheel_bl"));
     EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
+}
+
+// ---------------------------------------------------------------------------
+// 场景级风对象（SceneWind）：World::GetWind() 是全局状态，全场景至多一行。
+// 这里同样用真实 World + 真实 actor builder：风只由 World 构建写入，因此
+// "零风不产生空行 / 有风产生一行" 必须在 builder 这一层被证明。
+// ---------------------------------------------------------------------------
+
+World MakeSceneWindTestWorld()
+{
+    World world = MakeVisibilityTestWorld();
+    WorldWind wind;
+    // 方向沿用加载后的契约：已归一化。档位取精确可表示的浮点值，
+    // 让 Details 的 9 位有效数字格式化结果可以逐字符断言。
+    wind.direction = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+    wind.strength = 550.0f;
+    wind.gust.enabled = true;
+    wind.gust.amplitude = 0.25f;
+    wind.gust.frequency = 0.5f;
+    wind.gust.turbulence = 0.75f;
+    world.SetWind(wind);
+    return world;
+}
+
+size_t CountSceneWindActors(const std::vector<EditorSceneActorSnapshot>& actors)
+{
+    size_t count = 0;
+    for (const EditorSceneActorSnapshot& actor : actors)
+        if (actor.type == EditorSceneActorType::SceneWind) ++count;
+    return count;
+}
+
+TEST_F(EditorUiTest, DefaultZeroWindWorldPublishesNoSceneWindActor)
+{
+    World world = MakeVisibilityTestWorld();
+    // 缺省 wind 对象即无风：强度 0 且阵风关闭，World 也没有"是否作者过"的标记。
+    ASSERT_FLOAT_EQ(world.GetWind().strength, 0.0f);
+    ASSERT_FALSE(world.GetWind().gust.enabled);
+
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    EXPECT_EQ(CountSceneWindActors(built), 0u);
+    for (const EditorSceneActorSnapshot& actor : built)
+        EXPECT_NE(actor.identity, "wind|scene");
+    // 这一行缺失只说明"没有风"，不能顺手把其它 actor 一起吞掉。
+    EXPECT_FALSE(built.empty());
+}
+
+TEST_F(EditorUiTest, NonZeroSceneWindPublishesOneReadOnlyActorWithFrozenDetails)
+{
+    World world = MakeSceneWindTestWorld();
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    ASSERT_EQ(CountSceneWindActors(built), 1u);
+
+    const EditorSceneActorSnapshot* sceneWind = nullptr;
+    for (const EditorSceneActorSnapshot& actor : built)
+        if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
+    ASSERT_NE(sceneWind, nullptr);
+
+    // 身份是固定字符串：场景风没有作者名字，且必须与每物种风剖面（windProfile|<key>）
+    // 分属不同分组键，选择/解析不会互相命中。
+    EXPECT_EQ(sceneWind->identity, "wind|scene");
+    EXPECT_EQ(sceneWind->displayName, "Scene Wind");
+    EXPECT_TRUE(sceneWind->visible);
+    EXPECT_EQ(sceneWind->worldGeneration, world.GetGeneration());
+    EXPECT_EQ(sceneWind->scenePath, world.GetScenePath());
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity(sceneWind->identity, parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::SceneWind);
+    EXPECT_EQ(parsed.name, "scene");
+    ASSERT_NE(FindSceneActorGroupSpecByKey("wind"), nullptr);
+    EXPECT_EQ(FindSceneActorGroupSpecByKey("wind")->type, EditorSceneActorType::SceneWind);
+    ASSERT_NE(FindSceneActorGroupSpecByKey("windProfile"), nullptr);
+    EXPECT_EQ(FindSceneActorGroupSpecByKey("windProfile")->type, EditorSceneActorType::WindProfile);
+    EXPECT_STREQ(SceneActorGroupTitle(sceneWind->type), "Scene Wind");
+    EXPECT_STREQ(SceneActorGroupIcon(sceneWind->type), "icons/wind.png");
+
+    // 冻结的是 World 的当前值，不是默认值。
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.x(), 0.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.y(), 0.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.z(), -1.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.strengthCmPerSec, 550.0f);
+    EXPECT_TRUE(sceneWind->worldWind.gustEnabled);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustAmplitude, 0.25f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustFrequency, 0.5f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustTurbulence, 0.75f);
+
+    // 只读 actor：没有 TRS/灯光可编辑字段，也没有点了没有效果的可见性开关。
+    EXPECT_TRUE(SceneActorEditableFields(*sceneWind).empty());
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(sceneWind->type));
+
+    // Details 从同一份冻结快照渲染：分组键与字段值都由 actor 类型/值决定。
+    const std::string identity = sceneWind->identity;
+    actors = built;
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = identity;
+    SettleOutliner();
+    ASSERT_NE(document->GetElementById("details-section-actor-wind"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "Scene Wind");
+    EXPECT_EQ(document->GetElementById("actor-field-wind-direction")->GetInnerRML(), "0, 0, -1");
+    EXPECT_EQ(document->GetElementById("actor-field-wind-strength")->GetInnerRML(), "550");
+    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-amplitude")->GetInnerRML(), "0.25");
+    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-frequency")->GetInnerRML(), "0.5");
+    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-turbulence")->GetInnerRML(), "0.75");
+    // 阵风开启时没有聚合的 "off" 行；只读 actor 也不生成 Location/Rotation 控件。
+    EXPECT_EQ(document->GetElementById("actor-field-wind-gust"), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(EditorActorProperty::Position, 0)), nullptr);
+
+    // 大纲里的这一行：由真实 actor 列表构建，带 wind 图标，但没有眼睛。
+    ASSERT_NE(OutlinerRow("outliner-actor", "Scene Wind"), nullptr);
+    EXPECT_EQ(OutlinerVisibilityToggle("Scene Wind"), nullptr);
+}
+
+TEST_F(EditorUiTest, SceneWindWithoutGustReportsItAsOff)
+{
+    World world = MakeVisibilityTestWorld();
+    WorldWind wind;
+    wind.direction = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+    wind.strength = 12.5f;
+    // 有风但阵风关闭：仍发布 Scene Wind 行，只是阵风字段读作 "off"。
+    world.SetWind(wind);
+
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    ASSERT_EQ(CountSceneWindActors(built), 1u);
+    const EditorSceneActorSnapshot* sceneWind = nullptr;
+    for (const EditorSceneActorSnapshot& actor : built)
+        if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
+    ASSERT_NE(sceneWind, nullptr);
+    const std::vector<EditorSceneActorField> fields = SceneActorFields(*sceneWind);
+    std::string gust;
+    bool sawStrength = false;
+    for (const EditorSceneActorField& field : fields)
+    {
+        if (field.id == "actor-field-wind-gust") gust = field.value;
+        if (field.id == "actor-field-wind-strength") sawStrength = field.value == "12.5";
+        EXPECT_NE(field.id, "actor-field-wind-gust-amplitude");
+        EXPECT_NE(field.id, "actor-field-wind-gust-frequency");
+        EXPECT_NE(field.id, "actor-field-wind-gust-turbulence");
+    }
+    EXPECT_EQ(gust, "off");
+    EXPECT_TRUE(sawStrength);
 }
 
 TEST_F(EditorUiTest, OutlinerRowRightClickOpensAContextMenuForThatActor)

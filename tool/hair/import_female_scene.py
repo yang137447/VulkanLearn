@@ -257,6 +257,9 @@ def import_scene(reference, resource_root):
                for label in ("body", "eyes", "hair")]
     objects[2]["tressfx"] = {"simulation": {"mode": "off"}}
     objects.extend([
+        # 风由场景对象作者，不再写进 TF 资产；强度与旧资产默认值 2000 一致。
+        {"name": "MainWind", "type": "wind", "direction": [1.0, 0.0, 0.0],
+         "strength": 2000.0},
         {"name": "PortraitCamera", "type": "camera", "position": [50, 165, 210],
          "look_at": [0, 151, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1],
          "fov": 38, "near_clip": 0.5, "far_clip": 1000,

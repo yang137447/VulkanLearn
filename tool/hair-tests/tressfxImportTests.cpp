@@ -162,7 +162,6 @@ TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
     json["simulationDefaults"] = {
         {"enabled", true},
         {"gravity", {0.0f, -980.0f, 0.0f}},
-        {"wind", {10.0f, 0.0f, 3.0f}},
         {"damping", 0.98f},
         {"iterations", 4},
         {"rootFixedPoints", 2},
@@ -694,6 +693,62 @@ TEST(TressfxDescriptor, SimulationRejectsRemovedWindGustFields)
             EXPECT_NE(message.find("SetWind"), std::string::npos);
             EXPECT_NE(message.find("SM_gust_legacy.json"), std::string::npos);
         }
+    }
+}
+
+TEST(TressfxDescriptor, SimulationRejectsRemovedWindFieldAndPointsAtSceneWind)
+{
+    // 风已由场景 `wind` 对象独占：资产默认值出现旧字段必须在加载期失败，
+    // 错误消息要指向新作者位置而不是让资产静默无风。
+    auto json = Descriptor();
+    json["simulationDefaults"] = {{"wind", {2000.0f, 0.0f, 0.0f}}};
+    try
+    {
+        BuildPlacementFixturePlan("Maps/SC_probe/Meshes/TF_wind_legacy.json", json);
+        FAIL() << "Removed TressFX simulationDefaults.wind was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("wind"), std::string::npos);
+        EXPECT_NE(message.find("was removed"), std::string::npos);
+        EXPECT_NE(message.find("scene wind object"), std::string::npos);
+        EXPECT_NE(message.find("type: \"wind\""), std::string::npos);
+        EXPECT_NE(message.find("TF_wind_legacy.json"), std::string::npos);
+    }
+
+    // 放置 simulation.overrides 与资产默认值共用同一解析器，同样拒绝。
+    try
+    {
+        VL::Hair::ReadTressfxPlacementBehavior(
+            {{"simulation", {{"overrides", {{"wind", {1.0f, 0.0f, 0.0f}}}}}}},
+            "TF_wind_placement.json");
+        FAIL() << "Removed placement simulation.overrides.wind was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("was removed"), std::string::npos);
+        EXPECT_NE(message.find("scene wind object"), std::string::npos);
+        EXPECT_NE(message.find("TF_wind_placement.json"), std::string::npos);
+    }
+
+    // 分组 overrides 也不再接受 wind，并给出同一迁移提示（而不是笼统的键不允许）。
+    auto grouped = Descriptor();
+    grouped["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 2}}},
+            {"simulationOverrides", {{"wind", {1.0f, 0.0f, 0.0f}}}}}});
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("TF_wind_group.json", grouped);
+        FAIL() << "Removed group simulationOverrides.wind was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("was removed"), std::string::npos);
+        EXPECT_NE(message.find("scene wind object"), std::string::npos);
+        EXPECT_NE(message.find("TF_wind_group.json"), std::string::npos);
     }
 }
 
@@ -1343,7 +1398,7 @@ TEST(TressfxGuideGroups, RangeMustBeNonEmptyIntegerPairWithinOrder)
     }
 }
 
-TEST(TressfxGuideGroups, OverrideKeysOutsideNineParameterTableAreRejected)
+TEST(TressfxGuideGroups, OverrideKeysOutsideLiveParameterTableAreRejected)
 {
     for (const char* field : {"enabled", "skinning", "collision", "hairCollision",
              "rootFixedPoints", "maxDt", "backend", "dampping", "gravity", "wind", "iterations"})

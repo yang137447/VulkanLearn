@@ -50,7 +50,10 @@ public:
     const std::shared_ptr<const MeshAssetImportResult>& GetImported() const { return imported; }
     size_t GetImportedSectionIndex() const { return importedSectionIndex; }
     const vk::DescriptorBufferInfo& GetTressfxPositionInfo() const { return tressfxPositionInfo; }
-    void AdvanceTressfxSimulation(float dt);
+    // 游戏线程推进 CPU 参考 solver。sceneWindVelocityCmPerSec 是场景风向量
+    // （direction * strength，厘米/秒），在 StepFrame 之前写入 solver config；
+    // CPU 参考 backend 不消费场景阵风（GT 没有渲染线程的阵风时钟）。
+    void AdvanceTressfxSimulation(float dt, const Eigen::Vector3f& sceneWindVelocityCmPerSec);
 
     // GPU backend 的模拟资源合同。current positions 始终与 graphics Object Set 2
     // binding 3 共用同一 buffer；rest/params 也服务 off 蒙皮，previous 仅供模拟。

@@ -153,10 +153,17 @@ namespace
                     "(wM = |wind| * (sin(frame*0.001)^2 + 0.5)): " +
                     std::string(meshAssetPath));
         }
+        // 风已迁到场景级 `wind` 对象（documents/contracts/scene-wind.md）。资产默认值、
+        // 放置 simulation.overrides 与分组 overrides 共用本解析器，旧字段一律在
+        // 边界拒绝并指向新的作者位置，不能静默失效成无风。
+        if (simulation.contains("wind"))
+            throw std::runtime_error(
+                "TressFX simulation wind was removed; wind is authored by the scene "
+                "wind object (type: \"wind\") instead: " + std::string(meshAssetPath));
         // simulation 与 schema 一样按封闭对象处理：未知键必须是硬错误，避免拼错
         // 的新曲线字段静默落回旧近似。
         {
-            const char* known[] = {"enabled", "gravity", "wind", "damping",
+            const char* known[] = {"enabled", "gravity", "damping",
                 "iterations", "rootFixedPoints", "maxDt", "bendStiffness",
                 "localShapeStiffness", "globalShapeStiffness",
                 "globalShapeEffectiveRange", "vspCoefficient",
@@ -173,8 +180,6 @@ namespace
         config.enabled = simulation.value("enabled", true);
         if (simulation.contains("gravity"))
             config.gravity = ReadSimulationVector(simulation, "gravity", meshAssetPath);
-        if (simulation.contains("wind"))
-            config.wind = ReadSimulationVector(simulation, "wind", meshAssetPath);
         config.damping = simulation.value("damping", config.damping);
         config.iterations = ReadSimulationInteger(
             simulation, "iterations", config.iterations, 1, 16, meshAssetPath);
@@ -756,9 +761,9 @@ namespace
         return static_cast<uint32_t>(number);
     }
 
-    // 分组 overrides 的键集与值域和放置 simulation.overrides 一致。键集取编辑器九参数表；
-    // 值域不在此重写，而是交给 simulation 读取器（与放置路径同一份代码）。enabled、
-    // skinning、collision 等行为字段在键集检查中直接拒绝。
+    // 分组 overrides 的键集与值域和放置 simulation.overrides 一致。键集取编辑器实时
+    // 参数表；值域不在此重写，而是交给 simulation 读取器（与放置路径同一份代码）。
+    // enabled、skinning、collision 等行为字段在键集检查中直接拒绝。
     void ValidateGuideGroupOverrides(
         const nlohmann::json& overrides,
         const std::string& groupName,
@@ -769,8 +774,14 @@ namespace
         if (!overrides.is_object())
             throw std::runtime_error(
                 "TressFX group simulationOverrides must be an object: " + context);
-        // gravity、wind 与 iterations 是引擎公共参数，不按组覆盖；wind 将来可能变成
-        // 全局位置相关场，同样不能是组级标量。
+        // wind 已迁到场景 `wind` 对象；分组层给出与资产默认值/放置 overrides 一致的
+        // 迁移错误，而不是笼统的“键不在允许表”。
+        if (overrides.contains("wind"))
+            throw std::runtime_error(
+                "TressFX group simulationOverrides field \"wind\" was removed; wind is "
+                "authored by the scene wind object (type: \"wind\"): " + context);
+        // gravity、iterations 是引擎公共参数，不按组覆盖；wind 属于场景 `wind` 对象，
+        // 同样不会是组级标量。
         static const char* const allowed[] = {"damping", "bendStiffness",
             "globalShapeStiffness", "globalShapeEffectiveRange", "vspCoefficient",
             "vspAccelThresholdMax"};
@@ -1180,7 +1191,6 @@ nlohmann::json WriteTressfxSimulationValues(const TressfxSimulationConfig& confi
         {"enabled", config.enabled},
         {"backend", config.backend == TressfxSimulationBackend::Gpu ? "gpu" : "cpu"},
         {"gravity", {config.gravity.x(), config.gravity.y(), config.gravity.z()}},
-        {"wind", {config.wind.x(), config.wind.y(), config.wind.z()}},
         {"damping", config.damping}, {"iterations", config.iterations},
         {"rootFixedPoints", config.rootFixedPoints}, {"maxDt", config.maxDt},
         {"bendStiffness", config.bendStiffness},

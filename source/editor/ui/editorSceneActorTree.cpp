@@ -25,6 +25,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
         "icons/light-area.png"},
     {EditorSceneActorType::Camera, "camera", "Cameras", "icons/camera.png"},
     {EditorSceneActorType::Environment, "environment", "Environments", "icons/environment.png"},
+    {EditorSceneActorType::SceneWind, "wind", "Scene Wind", "icons/wind.png"},
     {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
         "icons/wind.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
@@ -201,9 +202,13 @@ bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
     case EditorSceneActorType::SpotLight:
     case EditorSceneActorType::SquareAreaLight:
         return true;
+    // 相机 / 环境 / 风剖面 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
+    //（destroyed），也没有逐 actor 的渲染开关命令。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
     case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
+    case EditorSceneActorType::Script:
         return false;
     }
     return false;
@@ -443,6 +448,30 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
         AddField(fields, "actor-field-hdr-path", "HDR Path", EmptyFallback(environment.hdrPath));
         break;
     }
+    case EditorSceneActorType::SceneWind:
+    {
+        const EditorSceneWorldWindActor& wind = actor.worldWind;
+        AddVectorField(fields, "actor-field-wind-direction", "Direction", wind.direction);
+        AddField(fields, "actor-field-wind-strength", "Strength (cm/s)",
+            SceneActorNumber(wind.strengthCmPerSec));
+        // 阵风关闭时不摆三个恒为 0 的数值行：一行 "off" 就是它的真实状态。
+        // 这会让字段集合随阵风开关变化，但风只在 World 构建时写入，换代必然改变
+        // details 分组的缓存键（worldGeneration），因此不会留下上一种字段集合的 DOM。
+        if (wind.gustEnabled)
+        {
+            AddField(fields, "actor-field-wind-gust-amplitude", "Gust Amplitude",
+                SceneActorNumber(wind.gustAmplitude));
+            AddField(fields, "actor-field-wind-gust-frequency", "Gust Frequency",
+                SceneActorNumber(wind.gustFrequency));
+            AddField(fields, "actor-field-wind-gust-turbulence", "Gust Turbulence",
+                SceneActorNumber(wind.gustTurbulence));
+        }
+        else
+        {
+            AddField(fields, "actor-field-wind-gust", "Gust", "off");
+        }
+        break;
+    }
     case EditorSceneActorType::WindProfile:
     {
         const EditorSceneWindActor& wind = actor.wind;
@@ -489,7 +518,9 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
 {
     using P = EditorActorProperty;
     std::vector<EditorSceneActorEditableField> fields;
-    if (actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+    if (actor.type == EditorSceneActorType::Environment ||
+        actor.type == EditorSceneActorType::WindProfile ||
+        actor.type == EditorSceneActorType::SceneWind)
         return fields;
     fields.push_back({P::Position, "Location (cm)", actor.position, 3});
     if (actor.type != EditorSceneActorType::SquareAreaLight)

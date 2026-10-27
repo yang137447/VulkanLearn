@@ -9,6 +9,7 @@
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/renderableObjectKey.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "world/worldWind.h"
 
 namespace VL
 {
@@ -427,15 +428,22 @@ size_t RendererResourceCache::CountPlacementScopedRenderableObjects() const
     return count;
 }
 
-void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds)
+void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds,
+    const WorldWind& sceneWind)
 {
     if (!worldLocalResources)
         return;
+    // 场景风 -> CPU 参考 solver 的向量（厘米/秒）。只取方向与强度：GT 没有渲染
+    // 线程的 windTimeSeconds，不能复制阵风相位，也不在这里另造时钟；强度为 0
+    // 时 direction * 0 即零向量，solver 走零风分支。GPU backend 完全不读这里。
+    const Eigen::Vector3f sceneWindVelocityCmPerSec =
+        sceneWind.direction * sceneWind.strength;
     for (const auto& [key, object] : worldLocalResources->renderableObjects)
     {
         // GPU backend 由 HairSimulationPass 的 compute dispatch 推进，游戏线程不步进。
         if (object && object->IsTressfx() && !object->UsesGpuGuideSimulation())
-            object->AdvanceTressfxSimulation(deltaSeconds);
+            object->AdvanceTressfxSimulation(
+                deltaSeconds, sceneWindVelocityCmPerSec);
     }
 }
 

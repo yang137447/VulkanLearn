@@ -37,6 +37,7 @@ using EditorSceneActorList = std::vector<EditorSceneActorSnapshot>;
 const EditorSceneActorList& SceneActorList(const std::shared_ptr<const EditorSceneActorList>& actors);
 
 // 稳定 actor 身份：mesh 用场景对象名，其余类型用各自的 World 名字（灯光名、风剖面 key）。
+// 场景风全场景至多一个且没有名字，用固定名字 "scene"（身份即 "wind|scene"）。
 std::string SceneActorIdentity(EditorSceneActorType type, const std::string& name);
 
 // 稳定身份的逆解析：分隔符之前是分组键（= 场景对象 type），之后是对象名。
@@ -50,7 +51,7 @@ struct EditorSceneActorIdentity
 
 bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
 
-// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境与风剖面
+// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境、场景风与风剖面
 // 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
 bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
@@ -148,7 +149,8 @@ bool SameSceneActorWindow(
 EditorSceneActorWindow ComputeSceneActorWindow(
     size_t rowCount, float clientHeight, float scrollOffset, float rowHeight);
 
-// Details 的只读字段行：id 用于逐帧刷新单项值，因此字段集合只由 actor 类型决定。
+// Details 的只读字段行：id 用于逐帧刷新单项值，因此字段集合只由 actor 类型决定
+//（场景风的阵风开关随 World 换代变化，换代同时会重建分组 DOM）。
 struct EditorSceneActorField
 {
     std::string id;
@@ -156,7 +158,7 @@ struct EditorSceneActorField
     std::string value;
 };
 
-// 只读字段：mesh 的 section key、灯光派生读数、相机基向量、环境与风剖面。
+// 只读字段：mesh 的 section key、灯光派生读数、相机基向量、环境、场景风与风剖面。
 // 主方向光的 intensity 与 CSM castShadows 由面板的可编辑控件承载
 // （SetSunIntensity / SetCsmCastShadows），因此不在只读字段里重复出现。
 std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapshot& actor);

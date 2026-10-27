@@ -822,7 +822,16 @@ void EngineLoop::Tick()
         {
             CpuFrameStageScope hairStage(cpuFrameProfiler, CpuFrameStage::HairSimulation);
             if (!RenderSystem::GetInstance().IsOfflineMode())
-                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(hairSimulationDelta);
+            {
+                // 场景风在游戏线程只读一次，随同一帧的 World 换代整体切换；没有活动
+                // World（或场景未作者 wind）时用默认 WorldWind（强度 0），CPU 参考
+                // solver 因此保持静止。阵风相位属于渲染线程的 windTimeSeconds，这里
+                // 不复制也不另造时钟。
+                const VL::WorldWind sceneWind =
+                    world ? world->GetWind() : VL::WorldWind{};
+                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(
+                    hairSimulationDelta, sceneWind);
+            }
         }
         {
             CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);

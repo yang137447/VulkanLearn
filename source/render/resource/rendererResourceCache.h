@@ -17,6 +17,7 @@ namespace VL
 {
 
 class RendererObjectResourceEntry;
+struct WorldWind;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -125,7 +126,9 @@ public:
     // Advances CPU TressFX guide solvers once per game frame. The active
     // package owns the objects, so world replacement cannot invalidate this
     // traversal while the caller is between frame publication boundaries.
-    void AdvanceTressfxSimulations(float deltaSeconds);
+    // 场景风只取 direction * strength（厘米/秒）：GT 不拥有渲染线程的阵风时钟，
+    // 阵风相位由 GPU 路径施加，CPU 参考 backend 不复制它。
+    void AdvanceTressfxSimulations(float deltaSeconds, const WorldWind& sceneWind);
 
     void BindMaterial(std::string materialKey, std::shared_ptr<Material> material);
     const std::shared_ptr<Material>* GetMaterial(std::string_view materialKey) const;

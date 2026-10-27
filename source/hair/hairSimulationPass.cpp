@@ -1370,6 +1370,13 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     bool captureTrace = false;
     bool resetMatched = false;
     HairTraceFrameInfo traceInfo;
+    // 场景风是全局对象：每个对象组只读一次，整组 dispatch 共用同一个风向量。
+    // 阵风由共享 helper 在 renderScene.windTimeSeconds 处采样，与植被同相位；
+    // 头发不再叠加 TressFX 的 sin(frame*0.001)² 逐帧调制（见
+    // tressfxSimulationParams.h / tressfxSolverMath.h 的偏差说明）。
+    const Eigen::Vector3f sceneWindVelocityCmPerSec =
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(
+            renderScene.wind, renderScene.windTimeSeconds);
     for (Dispatch& dispatch : dispatches)
     {
         RenderableObject& object = *dispatch.object;
@@ -1512,14 +1519,14 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         if (jointMatrices)
             object.WriteTressfxSkinningPalette(*jointMatrices, frameSlot);
         // 正常参数块：dt 恒为源 solver step 0.0125，motion.y = 0；同一帧所有
-        // substep 共用这一份（风相位 = frame-start simulationFrame）。
+        // substep 共用这一份。风向量已含场景阵风，不再乘仿真帧调制。
         GuideSimulationParams params = MakeGuideSimulationParams(
             config,
+            sceneWindVelocityCmPerSec,
             dispatch.guideCount,
             object.GetTressfxPointsPerGuide(),
             dispatch.pointCount,
             TressfxSourceSolverStepSeconds,
-            state.simulationFrame,
             state.frameContext.skinningMatrix,
             false,
             Eigen::Matrix4f::Identity(),
@@ -1624,8 +1631,9 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         if (traceThisObject)
             traceInfo.dispatchCount = objectDispatchCount;
 
-        // 每帧只提交一次：风相位（Guides.Frame）每渲染帧 +1、不随 substep 增加；
-        // reset/clock/history 与 modelHistory 都只在整帧录制完成后消费。
+        // 每帧只提交一次：逐对象仿真帧计数（Guides.Frame 镜像）每渲染帧 +1、
+        // 不随 substep 增加；风的时间相位来自 renderScene.windTimeSeconds，不读
+        // 这个计数。reset/clock/history 与 modelHistory 都只在整帧录制完成后消费。
         state.modelHistory.Commit(hairDraw.model);
         state.history.Commit(hasPose,
             hasPose ? sourceDraw->skinPose->playbackIdentity : 0,
