@@ -8267,6 +8267,7 @@ World MakeSceneWindTestWorld()
 {
     World world = MakeVisibilityTestWorld();
     WorldWind wind;
+    wind.name = "MainWind";
     // 方向沿用加载后的契约：已归一化。档位取精确可表示的浮点值，
     // 让 Details 的 9 位有效数字格式化结果可以逐字符断言。
     wind.direction = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
@@ -8297,12 +8298,12 @@ TEST_F(EditorUiTest, DefaultZeroWindWorldPublishesNoSceneWindActor)
     const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
     EXPECT_EQ(CountSceneWindActors(built), 0u);
     for (const EditorSceneActorSnapshot& actor : built)
-        EXPECT_NE(actor.identity, "wind|scene");
+        EXPECT_NE(actor.identity, "wind|MainWind");
     // 这一行缺失只说明"没有风"，不能顺手把其它 actor 一起吞掉。
     EXPECT_FALSE(built.empty());
 }
 
-TEST_F(EditorUiTest, NonZeroSceneWindPublishesOneReadOnlyActorWithFrozenDetails)
+TEST_F(EditorUiTest, NonZeroSceneWindPublishesEditableActorWithAuthorName)
 {
     World world = MakeSceneWindTestWorld();
     const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
@@ -8313,22 +8314,20 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesOneReadOnlyActorWithFrozenDetails)
         if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
     ASSERT_NE(sceneWind, nullptr);
 
-    // 身份是固定字符串：场景风没有作者名字，且必须与每物种风剖面（windProfile|<key>）
-    // 分属不同分组键，选择/解析不会互相命中。
-    EXPECT_EQ(sceneWind->identity, "wind|scene");
-    EXPECT_EQ(sceneWind->displayName, "Scene Wind");
+    // 身份使用场景 JSON 的作者 name；SpeedTree 每物种风剖面不再是 actor。
+    EXPECT_EQ(sceneWind->identity, "wind|MainWind");
+    EXPECT_EQ(sceneWind->displayName, "MainWind");
     EXPECT_TRUE(sceneWind->visible);
     EXPECT_EQ(sceneWind->worldGeneration, world.GetGeneration());
     EXPECT_EQ(sceneWind->scenePath, world.GetScenePath());
     EditorSceneActorIdentity parsed;
     ASSERT_TRUE(ParseSceneActorIdentity(sceneWind->identity, parsed));
     EXPECT_EQ(parsed.type, EditorSceneActorType::SceneWind);
-    EXPECT_EQ(parsed.name, "scene");
+    EXPECT_EQ(parsed.name, "MainWind");
     ASSERT_NE(FindSceneActorGroupSpecByKey("wind"), nullptr);
     EXPECT_EQ(FindSceneActorGroupSpecByKey("wind")->type, EditorSceneActorType::SceneWind);
-    ASSERT_NE(FindSceneActorGroupSpecByKey("windProfile"), nullptr);
-    EXPECT_EQ(FindSceneActorGroupSpecByKey("windProfile")->type, EditorSceneActorType::WindProfile);
-    EXPECT_STREQ(SceneActorGroupTitle(sceneWind->type), "Scene Wind");
+    EXPECT_EQ(FindSceneActorGroupSpecByKey("windProfile"), nullptr);
+    EXPECT_STREQ(SceneActorGroupTitle(sceneWind->type), "Wind");
     EXPECT_STREQ(SceneActorGroupIcon(sceneWind->type), "icons/wind.png");
 
     // 冻结的是 World 的当前值，不是默认值。
@@ -8341,11 +8340,22 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesOneReadOnlyActorWithFrozenDetails)
     EXPECT_FLOAT_EQ(sceneWind->worldWind.gustFrequency, 0.5f);
     EXPECT_FLOAT_EQ(sceneWind->worldWind.gustTurbulence, 0.75f);
 
-    // 只读 actor：没有 TRS/灯光可编辑字段，也没有点了没有效果的可见性开关。
-    EXPECT_TRUE(SceneActorEditableFields(*sceneWind).empty());
+    // 场景风在 Details 中可编辑：方向、强度、阵风三个参数。
+    const std::vector<EditorSceneActorEditableField> editable =
+        SceneActorEditableFields(*sceneWind);
+    ASSERT_EQ(editable.size(), 5u);
+    EXPECT_EQ(editable[0].property, EditorActorProperty::WindDirection);
+    EXPECT_EQ(editable[1].property, EditorActorProperty::WindStrength);
+    EXPECT_EQ(editable[2].property, EditorActorProperty::WindGustAmplitude);
+    EXPECT_EQ(editable[3].property, EditorActorProperty::WindGustFrequency);
+    EXPECT_EQ(editable[4].property, EditorActorProperty::WindGustTurbulence);
+    const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
+    ASSERT_EQ(info.size(), 1u);
+    EXPECT_EQ(info[0].id, "actor-field-name");
+    EXPECT_EQ(info[0].value, "MainWind");
     EXPECT_FALSE(SceneActorHasVisibilityToggle(sceneWind->type));
 
-    // Details 从同一份冻结快照渲染：分组键与字段值都由 actor 类型/值决定。
+    // Details 从同一份冻结快照渲染；控件值与 Outliner 行都由作者 name/值决定。
     const std::string identity = sceneWind->identity;
     actors = built;
     PublishActors();
@@ -8355,28 +8365,44 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesOneReadOnlyActorWithFrozenDetails)
     snapshot.selectedActorIdentity = identity;
     SettleOutliner();
     ASSERT_NE(document->GetElementById("details-section-actor-wind"), nullptr);
-    EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "Scene Wind");
-    EXPECT_EQ(document->GetElementById("actor-field-wind-direction")->GetInnerRML(), "0, 0, -1");
-    EXPECT_EQ(document->GetElementById("actor-field-wind-strength")->GetInnerRML(), "550");
-    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-amplitude")->GetInnerRML(), "0.25");
-    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-frequency")->GetInnerRML(), "0.5");
-    EXPECT_EQ(document->GetElementById("actor-field-wind-gust-turbulence")->GetInnerRML(), "0.75");
-    // 阵风开启时没有聚合的 "off" 行；只读 actor 也不生成 Location/Rotation 控件。
-    EXPECT_EQ(document->GetElementById("actor-field-wind-gust"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "MainWind");
+    ASSERT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 0)), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 0))->GetValue(), "0");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 2))->GetValue(), "-1");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0))->GetValue(), "550");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustAmplitude, 0))->GetValue(), "0.25");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustFrequency, 0))->GetValue(), "0.5");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustTurbulence, 0))->GetValue(), "0.75");
     EXPECT_EQ(Control(SceneActorPropertyControlId(EditorActorProperty::Position, 0)), nullptr);
 
-    // 大纲里的这一行：由真实 actor 列表构建，带 wind 图标，但没有眼睛。
-    ASSERT_NE(OutlinerRow("outliner-actor", "Scene Wind"), nullptr);
-    EXPECT_EQ(OutlinerVisibilityToggle("Scene Wind"), nullptr);
+    // 控件把编辑提交为带作者身份/World 代数的 SetActorProperty。
+    runtimeSink.actions.clear();
+    SetValue(SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0), "800");
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    const UiAction& edit = runtimeSink.actions.back();
+    EXPECT_EQ(edit.type, UiActionType::SetActorProperty);
+    EXPECT_EQ(edit.actorProperty.identity, "wind|MainWind");
+    EXPECT_EQ(edit.actorProperty.property, EditorActorProperty::WindStrength);
+    EXPECT_FLOAT_EQ(edit.actorProperty.value, 800.0f);
+
+    ASSERT_NE(OutlinerRow("outliner-actor", "MainWind"), nullptr);
+    EXPECT_EQ(OutlinerVisibilityToggle("MainWind"), nullptr);
 }
 
-TEST_F(EditorUiTest, SceneWindWithoutGustReportsItAsOff)
+TEST_F(EditorUiTest, SceneWindWithoutGustStillExposesGustControls)
 {
     World world = MakeVisibilityTestWorld();
     WorldWind wind;
+    wind.name = "MainWind";
     wind.direction = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
     wind.strength = 12.5f;
-    // 有风但阵风关闭：仍发布 Scene Wind 行，只是阵风字段读作 "off"。
     world.SetWind(wind);
 
     const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
@@ -8385,19 +8411,17 @@ TEST_F(EditorUiTest, SceneWindWithoutGustReportsItAsOff)
     for (const EditorSceneActorSnapshot& actor : built)
         if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
     ASSERT_NE(sceneWind, nullptr);
-    const std::vector<EditorSceneActorField> fields = SceneActorFields(*sceneWind);
-    std::string gust;
-    bool sawStrength = false;
-    for (const EditorSceneActorField& field : fields)
-    {
-        if (field.id == "actor-field-wind-gust") gust = field.value;
-        if (field.id == "actor-field-wind-strength") sawStrength = field.value == "12.5";
-        EXPECT_NE(field.id, "actor-field-wind-gust-amplitude");
-        EXPECT_NE(field.id, "actor-field-wind-gust-frequency");
-        EXPECT_NE(field.id, "actor-field-wind-gust-turbulence");
-    }
-    EXPECT_EQ(gust, "off");
-    EXPECT_TRUE(sawStrength);
+    // 阵风关闭时仍暴露阵风控件（全零）；用户写入非零值即开启。
+    const std::vector<EditorSceneActorEditableField> editable =
+        SceneActorEditableFields(*sceneWind);
+    ASSERT_EQ(editable.size(), 5u);
+    EXPECT_FLOAT_EQ(editable[2].value[0], 0.0f);
+    EXPECT_FLOAT_EQ(editable[3].value[0], 0.0f);
+    EXPECT_FLOAT_EQ(editable[4].value[0], 0.0f);
+    const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
+    ASSERT_EQ(info.size(), 1u);
+    EXPECT_EQ(info[0].id, "actor-field-name");
+    EXPECT_EQ(info[0].value, "MainWind");
 }
 
 TEST_F(EditorUiTest, OutlinerRowRightClickOpensAContextMenuForThatActor)

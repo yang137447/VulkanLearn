@@ -25,9 +25,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
         "icons/light-area.png"},
     {EditorSceneActorType::Camera, "camera", "Cameras", "icons/camera.png"},
     {EditorSceneActorType::Environment, "environment", "Environments", "icons/environment.png"},
-    {EditorSceneActorType::SceneWind, "wind", "Scene Wind", "icons/wind.png"},
-    {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
-        "icons/wind.png"},
+    {EditorSceneActorType::SceneWind, "wind", "Wind", "icons/wind.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
     {EditorSceneActorType::Script, "blueprintInstance", "Blueprint Instances", "icons/file-box.png"},
 };
@@ -206,7 +204,6 @@ bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
     //（destroyed），也没有逐 actor 的渲染开关命令。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
-    case EditorSceneActorType::WindProfile:
     case EditorSceneActorType::SceneWind:
     case EditorSceneActorType::Script:
         return false;
@@ -408,8 +405,6 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
                     ? std::to_string(section.materialSlotIndex)
                     : section.materialSlotName + " (#" +
                         std::to_string(section.materialSlotIndex) + ")"));
-            AddField(fields, prefix + "wind", "Wind Profile" + suffix,
-                EmptyFallback(section.windProfileKey));
         }
         break;
     case EditorSceneActorType::DirectionalLight:
@@ -450,63 +445,8 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
     }
     case EditorSceneActorType::SceneWind:
     {
-        const EditorSceneWorldWindActor& wind = actor.worldWind;
-        AddVectorField(fields, "actor-field-wind-direction", "Direction", wind.direction);
-        AddField(fields, "actor-field-wind-strength", "Strength (cm/s)",
-            SceneActorNumber(wind.strengthCmPerSec));
-        // 阵风关闭时不摆三个恒为 0 的数值行：一行 "off" 就是它的真实状态。
-        // 这会让字段集合随阵风开关变化，但风只在 World 构建时写入，换代必然改变
-        // details 分组的缓存键（worldGeneration），因此不会留下上一种字段集合的 DOM。
-        if (wind.gustEnabled)
-        {
-            AddField(fields, "actor-field-wind-gust-amplitude", "Gust Amplitude",
-                SceneActorNumber(wind.gustAmplitude));
-            AddField(fields, "actor-field-wind-gust-frequency", "Gust Frequency",
-                SceneActorNumber(wind.gustFrequency));
-            AddField(fields, "actor-field-wind-gust-turbulence", "Gust Turbulence",
-                SceneActorNumber(wind.gustTurbulence));
-        }
-        else
-        {
-            AddField(fields, "actor-field-wind-gust", "Gust", "off");
-        }
-        break;
-    }
-    case EditorSceneActorType::WindProfile:
-    {
-        const EditorSceneWindActor& wind = actor.wind;
-        AddField(fields, "actor-field-wind-key", "Profile Key", wind.key);
-        AddVectorField(fields, "actor-field-bounds-min", "Source Bounds Min", wind.sourceBoundsMin);
-        AddVectorField(fields, "actor-field-bounds-max", "Source Bounds Max", wind.sourceBoundsMax);
-        AddField(fields, "actor-field-strength-response", "Strength Response",
-            SceneActorNumber(wind.strengthResponse));
-        AddField(fields, "actor-field-direction-response", "Direction Response",
-            SceneActorNumber(wind.directionResponse));
-        AddField(fields, "actor-field-gust-frequency", "Gust Frequency",
-            SceneActorNumber(wind.gustFrequency));
-        AddField(fields, "actor-field-gust-strength-min", "Gust Strength Min",
-            SceneActorNumber(wind.gustStrengthMin));
-        AddField(fields, "actor-field-gust-strength-max", "Gust Strength Max",
-            SceneActorNumber(wind.gustStrengthMax));
-        AddField(fields, "actor-field-gust-duration-min", "Gust Duration Min",
-            SceneActorNumber(wind.gustDurationMin));
-        AddField(fields, "actor-field-gust-duration-max", "Gust Duration Max",
-            SceneActorNumber(wind.gustDurationMax));
-        AddField(fields, "actor-field-gust-rise", "Gust Rise Scalar",
-            SceneActorNumber(wind.gustRiseScalar));
-        AddField(fields, "actor-field-gust-fall", "Gust Fall Scalar",
-            SceneActorNumber(wind.gustFallScalar));
-        AddField(fields, "actor-field-shared-start-height", "Shared Start Height",
-            SceneActorNumber(wind.sharedStartHeight));
-        AddField(fields, "actor-field-branch1-limit", "Branch 1 Stretch Limit",
-            SceneActorNumber(wind.branch1StretchLimit));
-        AddField(fields, "actor-field-branch2-limit", "Branch 2 Stretch Limit",
-            SceneActorNumber(wind.branch2StretchLimit));
-        AddField(fields, "actor-field-do-shared", "Shared Wind", wind.doShared ? "on" : "off");
-        AddField(fields, "actor-field-do-branch1", "Branch 1 Wind", wind.doBranch1 ? "on" : "off");
-        AddField(fields, "actor-field-do-branch2", "Branch 2 Wind", wind.doBranch2 ? "on" : "off");
-        AddField(fields, "actor-field-do-ripple", "Ripple", wind.doRipple ? "on" : "off");
-        AddField(fields, "actor-field-do-shimmer", "Shimmer", wind.doShimmer ? "on" : "off");
+        // 场景风的值由可编辑控件展示（SceneActorEditableFields），这里不再重复
+        // 生成一组只读行；作者 name 已在大纲/分组标题中显示。
         break;
     }
     }
@@ -518,9 +458,22 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
 {
     using P = EditorActorProperty;
     std::vector<EditorSceneActorEditableField> fields;
-    if (actor.type == EditorSceneActorType::Environment ||
-        actor.type == EditorSceneActorType::WindProfile ||
-        actor.type == EditorSceneActorType::SceneWind)
+    if (actor.type == EditorSceneActorType::SceneWind)
+    {
+        // 场景风没有 TRS；方向、强度和阵风都直接编辑 World，再由场景文档暂存。
+        // 阵风字段始终可见，写入非零值即开启；全零等效关闭。
+        fields.push_back({P::WindDirection, "Direction", actor.worldWind.direction, 3});
+        fields.push_back({P::WindStrength, "Strength (cm/s)",
+            Eigen::Vector3f(actor.worldWind.strengthCmPerSec, 0, 0), 1});
+        fields.push_back({P::WindGustAmplitude, "Gust Amplitude",
+            Eigen::Vector3f(actor.worldWind.gustAmplitude, 0, 0), 1});
+        fields.push_back({P::WindGustFrequency, "Gust Frequency",
+            Eigen::Vector3f(actor.worldWind.gustFrequency, 0, 0), 1});
+        fields.push_back({P::WindGustTurbulence, "Gust Turbulence",
+            Eigen::Vector3f(actor.worldWind.gustTurbulence, 0, 0), 1});
+        return fields;
+    }
+    if (actor.type == EditorSceneActorType::Environment)
         return fields;
     fields.push_back({P::Position, "Location (cm)", actor.position, 3});
     if (actor.type != EditorSceneActorType::SquareAreaLight)

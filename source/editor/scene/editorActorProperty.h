@@ -14,7 +14,10 @@ enum class EditorActorProperty : uint8_t
     AreaSize, Normal, CameraFov, CameraNear, CameraFar, CastShadows,
     CameraExposureMode, CameraEv100, CameraExposureCompensation,
     CameraAutoMinEv100, CameraAutoMaxEv100, CameraAutoSpeedUp, CameraAutoSpeedDown,
-    CameraAutoTargetGray
+    CameraAutoTargetGray,
+    // 场景全局 wind 对象：方向、强度、阵风参数。阵风开启由“写入任一非零阵风参数”
+    // 表达，不额外引入布尔控件；全零时运行期等效关闭。
+    WindDirection, WindStrength, WindGustAmplitude, WindGustFrequency, WindGustTurbulence
 };
 
 // UI 只提交单个分量的编辑意图；GT 执行端从当前对象读取其它分量，

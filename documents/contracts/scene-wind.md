@@ -75,11 +75,13 @@
 
 ## 编辑器视图
 
-- 大纲把 World 的场景风发布为只读的 `Scene Wind` actor（稳定身份 `wind|scene`，与每物种
-  `windProfile|<key>` 分组分开）。只有 `strength > 0` 或阵风开启时出现；详情显示方向、
-  强度（cm/s）与阵风参数。它展示的是 World 作者值（非 `resolvedWind`），不写回场景。
-- 场景风没有 authored 标记；强度 0 且阵风关闭的 World 不产生该 actor（与"缺省即无风"一致）。
-- 该行没有 TRS、没有可见性开关；本地风编辑与 `SpeedTree Wind Profiles` 文案清理仍属 P1d。
+- 大纲把 World 的场景风发布为 `Wind` 分组下的作者 name（如 `MainWind`，身份 `wind|<name>`）。
+  只有 `strength > 0` 或阵风开启时出现；每物种的 SpeedTree 响应曲线属于网格资产，
+  不再作为 actor 出现在大纲。
+- Details 提供方向、强度（cm/s）与阵风三个参数的可编辑控件；编辑通过
+  `SetActorProperty` 更新 World，并由 `SceneDocumentService` 暂存回场景 JSON。
+  阵风字段始终存在，写入非零值即开启；全零等效关闭。
+- 场景风没有 TRS、没有可见性开关；本地 TF Tab 风控件仍属 P1d。
 - 风源数据只保留场景 `wind`；原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
   仍读入但只供 SDK 对照状态机，运行时缓动与阵风由 `SceneWindRuntime` 统一处理。
 

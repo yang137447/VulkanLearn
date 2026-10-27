@@ -85,7 +85,6 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.materialInstancePath = object.materialInstanceKey;
         section.materialSlotIndex = object.materialSlotIndex;
         section.materialSlotName = object.materialSlotName;
-        section.windProfileKey = object.windResponseProfileKey;
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
@@ -174,10 +173,9 @@ EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
     actor.type = EditorSceneActorType::SceneWind;
     actor.worldGeneration = world.GetGeneration();
     actor.scenePath = world.GetScenePath();
-    // 场景风全场景至多一个且没有作者名字，身份因此是固定字符串；与每物种风剖面
-    // （"windProfile|<key>"）分属不同分组键，选择与解析不会互相命中。
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::SceneWind, "scene");
-    actor.displayName = "Scene Wind";
+    // 身份使用场景 JSON 的作者 name；全场景至多一个 wind 对象，名字唯一即可稳定定位。
+    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::SceneWind, wind.name);
+    actor.displayName = wind.name;
     // 场景风是全局状态，没有渲染侧可见性开关。
     actor.visible = true;
     actor.worldWind.direction = wind.direction;
@@ -186,38 +184,6 @@ EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
     actor.worldWind.gustAmplitude = wind.gust.amplitude;
     actor.worldWind.gustFrequency = wind.gust.frequency;
     actor.worldWind.gustTurbulence = wind.gust.turbulence;
-    return actor;
-}
-
-EditorSceneActorSnapshot BuildWindActor(const World& world, const WindResponseProfile& profile)
-{
-    const WindResponse& config = profile.config;
-    EditorSceneActorSnapshot actor;
-    actor.type = EditorSceneActorType::WindProfile;
-    actor.worldGeneration = world.GetGeneration();
-    actor.scenePath = world.GetScenePath();
-    actor.displayName = profile.key;
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::WindProfile, profile.key);
-    actor.wind.key = profile.key;
-    actor.wind.sourceBoundsMin = profile.sourceBoundsMin;
-    actor.wind.sourceBoundsMax = profile.sourceBoundsMax;
-    actor.wind.strengthResponse = config.common.strengthResponse;
-    actor.wind.directionResponse = config.common.directionResponse;
-    actor.wind.gustFrequency = config.common.gustFrequency;
-    actor.wind.gustStrengthMin = config.common.gustStrengthMin;
-    actor.wind.gustStrengthMax = config.common.gustStrengthMax;
-    actor.wind.gustDurationMin = config.common.gustDurationMin;
-    actor.wind.gustDurationMax = config.common.gustDurationMax;
-    actor.wind.gustRiseScalar = config.common.gustRiseScalar;
-    actor.wind.gustFallScalar = config.common.gustFallScalar;
-    actor.wind.sharedStartHeight = config.sharedStartHeight;
-    actor.wind.branch1StretchLimit = config.branch1StretchLimit;
-    actor.wind.branch2StretchLimit = config.branch2StretchLimit;
-    actor.wind.doShared = config.doShared;
-    actor.wind.doBranch1 = config.doBranch1;
-    actor.wind.doBranch2 = config.doBranch2;
-    actor.wind.doRipple = config.doRipple;
-    actor.wind.doShimmer = config.doShimmer;
     return actor;
 }
 
@@ -355,9 +321,6 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
     const WorldWind& worldWind = world.GetWind();
     if (worldWind.strength > 0.0f || worldWind.gust.enabled)
         actors.push_back(BuildSceneWindActor(world));
-
-    for (const auto& entry : world.GetWindResponseProfiles())
-        actors.push_back(BuildWindActor(world, entry.second));
 
     return actors;
 }

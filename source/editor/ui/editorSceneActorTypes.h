@@ -13,8 +13,8 @@ namespace VL::EditorUi
 {
 
 // 大纲 actor 的类型。Mesh..Environment 与 SceneWind 和场景 JSON 的对象 type 一一对应；
-// WindProfile 是网格导入产生的每物种风剖面（不是场景对象），不要与 SceneWind 混用；
-// Script 只表达 World 里确实存在的蓝图实例状态。
+// Script 只表达 World 里确实存在的蓝图实例状态。SpeedTree 每物种的响应曲线数据
+// 属于网格资产，不作为场景 actor 出现在大纲里。
 enum class EditorSceneActorType : uint8_t
 {
     Mesh,
@@ -24,7 +24,6 @@ enum class EditorSceneActorType : uint8_t
     SquareAreaLight,
     Camera,
     Environment,
-    WindProfile,
     SceneWind,
     Script
 };
@@ -42,7 +41,6 @@ struct EditorSceneMeshSectionSnapshot
     std::string materialInstancePath;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
-    std::string windProfileKey;
 };
 
 // 相机发布 Details 的作者曝光与辅助线需要的基向量/投影参数；
@@ -78,35 +76,8 @@ struct EditorSceneEnvironmentActor
     std::string hdrPath;
 };
 
-// 风剖面的曲线表（每个 20 点 × 5 条）不属于展示字段，这里只冻结标量与开关，
-// 与 WindResponseProfile 的字段同名，便于后续编辑轮直接映射回去。
-struct EditorSceneWindActor
-{
-    std::string key;
-    Eigen::Vector3f sourceBoundsMin = Eigen::Vector3f::Zero();
-    Eigen::Vector3f sourceBoundsMax = Eigen::Vector3f::Zero();
-    float strengthResponse = 0.0f;
-    float directionResponse = 0.0f;
-    float gustFrequency = 0.0f;
-    float gustStrengthMin = 0.0f;
-    float gustStrengthMax = 0.0f;
-    float gustDurationMin = 0.0f;
-    float gustDurationMax = 0.0f;
-    float gustRiseScalar = 0.0f;
-    float gustFallScalar = 0.0f;
-    float sharedStartHeight = 0.0f;
-    float branch1StretchLimit = 0.0f;
-    float branch2StretchLimit = 0.0f;
-    bool doShared = false;
-    bool doBranch1 = false;
-    bool doBranch2 = false;
-    bool doRipple = false;
-    bool doShimmer = false;
-};
-
-// 场景级全局风（World::GetWind()）。全场景至多一个，没有每对象的作者名字，
-// 因此身份是固定字符串而不是对象名。注意：这不是上面的 EditorSceneWindActor
-//（SpeedTree 每物种风剖面），两者在大纲里是两种不同的 actor。
+// 场景级全局风（World::GetWind()）。全场景至多一个，身份使用场景 JSON 的作者 name；
+// 每物种的 SpeedTree 响应曲线属于网格资产，不再作为大纲 actor。
 struct EditorSceneWorldWindActor
 {
     // 已归一化的风向；长度由 strengthCmPerSec 单独表达。
@@ -166,8 +137,7 @@ struct EditorSceneActorSnapshot
     nlohmann::json scriptPhysics = nullptr;
     bool scriptSpawned = false;
     EditorSceneEnvironmentActor environment;
-    EditorSceneWindActor wind;
-    // 场景级全局风对象，不是 SpeedTree 每物种风剖面（上面的 wind）。
+    // 场景级全局风对象。
     EditorSceneWorldWindActor worldWind;
 };
 

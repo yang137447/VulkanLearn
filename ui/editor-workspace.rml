@@ -178,8 +178,7 @@
                         <option value="pointLight">Point Lights</option>
                         <option value="spotLight">Spot Lights</option><option value="squareAreaLight">Square Area Lights</option>
                         <option value="camera">Cameras</option><option value="environment">Environments</option>
-                        <option value="wind">Scene Wind</option>
-                        <option value="windProfile">SpeedTree Wind Profiles</option>
+                        <option value="wind">Wind</option>
                         <option value="mesh">Meshes</option>
                         <option value="blueprintInstance">Blueprint Instances</option>
                     </select>

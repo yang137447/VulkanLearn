@@ -75,7 +75,8 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     if (!std::isfinite(edit.value))
         return Reject(error, "A complete finite number is required.");
     const bool vector = edit.property == P::Position || edit.property == P::Rotation ||
-        edit.property == P::Scale || edit.property == P::Color || edit.property == P::Normal;
+        edit.property == P::Scale || edit.property == P::Color || edit.property == P::Normal ||
+        edit.property == P::WindDirection;
     if (edit.component >= (vector ? 3u : 1u))
         return Reject(error, "Unknown property component.");
     EditorUi::EditorSceneActorIdentity identity;
@@ -222,6 +223,49 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
             return true;
         }
     }
+    else if (identity.type == EditorSceneActorType::SceneWind)
+    {
+        WorldWind wind = world.GetWind();
+        // 身份解析用的是作者 name；名字不一致说明命令指向了别的场景风（或旧代 World）。
+        if (identity.name != wind.name)
+            return Reject(error, "Wind identity does not match the active scene wind.");
+        switch (edit.property)
+        {
+        case P::WindDirection:
+            wind.direction[edit.component] = edit.value;
+            if (wind.direction.squaredNorm() <= 1.0e-12f)
+                return Reject(error, "Wind direction must be non-zero.");
+            wind.direction.normalize();
+            break;
+        case P::WindStrength:
+            if (edit.value < 0.0f)
+                return Reject(error, "Wind strength must be non-negative.");
+            wind.strength = edit.value;
+            break;
+        case P::WindGustAmplitude:
+            if (edit.value < 0.0f || edit.value > 1.0f)
+                return Reject(error, "Wind gust amplitude must be in [0,1].");
+            wind.gust.amplitude = edit.value;
+            wind.gust.enabled = true;
+            break;
+        case P::WindGustFrequency:
+            if (edit.value < 0.0f)
+                return Reject(error, "Wind gust frequency must be non-negative.");
+            wind.gust.frequency = edit.value;
+            wind.gust.enabled = true;
+            break;
+        case P::WindGustTurbulence:
+            if (edit.value < 0.0f || edit.value > 1.0f)
+                return Reject(error, "Wind gust turbulence must be in [0,1].");
+            wind.gust.turbulence = edit.value;
+            wind.gust.enabled = true;
+            break;
+        default:
+            return Reject(error, "This property does not belong to Scene Wind.");
+        }
+        world.SetWind(std::move(wind));
+        return true;
+    }
     return Reject(error, "Actor is not in the active World or is read-only.");
 }
 
@@ -234,7 +278,6 @@ bool FrameEditorActor(World& world, uint64_t generation, const std::string& iden
         if (actor.identity != identity) continue;
         // 场景风与风剖面是全局/派生状态，没有可框选的空间位置。
         if (actor.type == EditorUi::EditorSceneActorType::Environment ||
-            actor.type == EditorUi::EditorSceneActorType::WindProfile ||
             actor.type == EditorUi::EditorSceneActorType::SceneWind) return false;
         Eigen::Vector3f target = actor.position;
         float radius = 150.0f;

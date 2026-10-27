@@ -79,7 +79,7 @@ MI 等待 GT 确认文档移除后再切换，Blueprint 保留权威保存/丢�
 面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
 分隔条支持拖动并受子树最小尺寸约束；普通面板切换只改变呈现。
 模型/关卡页面切换通过既有加载事务选择单活动 World，不提交资产修改。
-Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
+Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 场景风，
 带类型图标、搜索、类型过滤与全局名称排序），行集合按滚动位置窗口化，
 每个可渲染 actor 行带一个可见性开关（行尾眼睛），所有类型按名称统一排序，不生成类型文件夹；
 选中 actor 由 Details 展示其类型化参数；
@@ -314,14 +314,15 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   发布，位置与 `SetMaterialInstanceSceneModels` 并排，且都在
   `uiSubsystem->Update(snapshot)` 之前。UI 回调不访问 World。
 - **冻结快照是纯值**：`EditorSceneActorSnapshot` 只含字符串、`RuntimeId`、
-  `LightSnapshot`（与渲染快照同结构）、相机展示字段与作者 `CameraExposure`、环境与环境/风剖面标量；
+  `LightSnapshot`（与渲染快照同结构）、相机展示字段与作者 `CameraExposure`、环境与场景风标量；
   没有 World、SceneNode、MaterialInstance 或 Vulkan 句柄。列表以
   `shared_ptr<const std::vector<...>>` 进入面板快照（与资产目录同一约定），
   逐帧不深拷贝 actor 数组。
 - **覆盖范围**：网格（按 `MeshSceneObjectIdentity()` 给出的 `sceneObjectIdentity`
   聚合 section，逐 section 带
-  mesh/material/MI 路径/槽名/风剖面 key）、directionalLight / pointLight /
-  spotLight / squareAreaLight、相机、环境、SpeedTree 风剖面。
+  mesh/material/MI 路径/槽名）、directionalLight / pointLight /
+  spotLight / squareAreaLight、相机、环境、场景风。每物种 SpeedTree 响应曲线属于网格资产，
+  不进入 actor 列表。
   灯光参数复用 `WorldSnapshotBuilder` 的同一份 World→`LightSnapshot` 映射
   （`BuildWorld*LightSnapshot`），对象 `RuntimeId` 复用 `WorldObjectRuntimeId`，
   避免第二份身份规则与选择描边漂移。
@@ -364,7 +365,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   上下适应速率（1/s）与目标灰度（linear）；只在选中 Camera 时出现，没有独立后处理标签页。
   physical 配置显示只读推导 EV100，点击 Manual 才显式选择 ev100；刷新不转换模式。
   参数行固定挂载，模式只改变可见性；隐藏参数不接受 UI 编辑，焦点输入与静止帧写缓存保留。
-  环境和风剖面仍只读。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
+  环境仍只读；场景风可编辑方向、强度（cm/s）与阵风参数。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
   控件来自 `SceneActorEditableFields()`，值变化只刷新控件，不重建 DOM，保留焦点文本。
 - **对象编辑边界**：`SetActorProperty` 通过 EngineLoop → RuntimeCommandExecutor →
   `ApplyEditorActorProperty` 在 GT 写 World，payload 是稳定身份、World generation、枚举属性、
@@ -378,7 +379,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   `UiActionType::SetActorVisible`（`stringValue` = 稳定身份，`intValue` = 0/1），
   经 EngineLoop → `RuntimeCommandType::SetActorVisible` →
   `RuntimeCommandExecutor` 落到 World；没有第三条路径，UI 回调不访问 World。
-  相机 / 环境 / 风剖面没有渲染侧可见性状态，因此**不显示**眼睛
+  相机 / 环境 / 场景风没有渲染侧可见性状态，因此**不显示**眼睛
   （`SceneActorHasVisibilityToggle()`）。
   - **状态归属与渲染过滤**：可见性是 World 拥有的运行时游戏状态
     （`WorldMeshObject::visible`、`SceneNode::visible`、
@@ -751,7 +752,7 @@ Help→About 显示编辑器名称、RmlUi 说明和布局文件路径，打开�
 钉住（选中一个 actor、右键另一个、断言命令携带被右键者的身份）。
 
 **"菜单打开"蕴含"至少有一个真实条目"**：条目列表单独构建，构建后为空则不开菜单。
-没有 actor 级动作的对象（相机、环境、SpeedTree 风剖面）与只读目录节点因此不会开出空弹窗。
+没有 actor 级动作的对象（相机、环境等）与只读目录节点因此不会开出空弹窗。
 
 大纲 actor 行的四个点击靶面（`outliner-actor`、`outliner-expand`、`outliner-visible`、
 `outliner-slot`）携带同一个 actor 下标，所以在行内任意位置右键都指向同一个 actor；

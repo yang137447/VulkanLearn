@@ -879,7 +879,6 @@ TEST_F(UiWidgetTest, OnlyRenderableActorTypesOfferAVisibilityToggle)
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Camera));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Environment));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::SceneWind));
-    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::WindProfile));
 }
 } // namespace SceneActorTreeTests
 

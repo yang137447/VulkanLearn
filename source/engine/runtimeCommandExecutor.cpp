@@ -78,12 +78,11 @@ bool ApplyActorVisibility(
         return world.SetLightVisible(identity.name, visible);
     case EditorSceneActorType::SquareAreaLight:
         return world.SetSquareAreaLightVisible(identity.name, visible);
-    // 相机 / 环境 / 场景风 / 风剖面没有渲染侧可见性；蓝图实例的可见性属于脚本状态
+    // 相机 / 环境 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
     //（destroyed）。调用方已用 SceneActorHasVisibilityToggle() 挡住，这里不提供任何
     // 默认成功路径。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
-    case EditorSceneActorType::WindProfile:
     case EditorSceneActorType::SceneWind:
     case EditorSceneActorType::Script:
         return false;

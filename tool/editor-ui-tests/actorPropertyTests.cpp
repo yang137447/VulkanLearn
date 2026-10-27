@@ -90,6 +90,64 @@ TEST(EditorActorProperty, InvalidNumbersTypesAndComponentsLeaveLightUntouched)
     EXPECT_FLOAT_EQ(light->GetIntensity(), 1);
 }
 
+TEST(EditorActorProperty, SceneWindEditsDirectionStrengthAndGust)
+{
+    World world(7, "scene.json");
+    WorldWind wind;
+    wind.name = "MainWind";
+    wind.direction = Eigen::Vector3f::UnitZ();
+    wind.strength = 550.0f;
+    world.SetWind(wind);
+    std::string error;
+
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindStrength, 0, 1200), error)) << error;
+    EXPECT_FLOAT_EQ(world.GetWind().strength, 1200.0f);
+
+    // 单分量方向编辑后再归一化；作者向量长度不进入方向。
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindDirection, 0, 1), error)) << error;
+    EXPECT_NEAR(world.GetWind().direction.norm(), 1.0f, 1.0e-6f);
+    EXPECT_GT(world.GetWind().direction.x(), 0.0f);
+
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustAmplitude, 0, 0.4f), error)) << error;
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustFrequency, 0, 0.8f), error)) << error;
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustTurbulence, 0, 0.3f), error)) << error;
+    EXPECT_TRUE(world.GetWind().gust.enabled);
+    EXPECT_FLOAT_EQ(world.GetWind().gust.amplitude, 0.4f);
+    EXPECT_FLOAT_EQ(world.GetWind().gust.frequency, 0.8f);
+    EXPECT_FLOAT_EQ(world.GetWind().gust.turbulence, 0.3f);
+}
+
+TEST(EditorActorProperty, SceneWindRejectsWrongIdentityAndInvalidValues)
+{
+    World world(7, "scene.json");
+    WorldWind wind;
+    wind.name = "MainWind";
+    wind.direction = Eigen::Vector3f::UnitX();
+    wind.strength = 550.0f;
+    world.SetWind(wind);
+    std::string error;
+
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|Other", P::WindStrength, 0, 800), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindStrength, 0, -1), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindDirection, 0, 0), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustAmplitude, 0, 1.1f), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustFrequency, 0, -0.1f), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("wind|MainWind", P::WindGustTurbulence, 0, -0.1f), error));
+    EXPECT_FLOAT_EQ(world.GetWind().strength, 550.0f);
+    EXPECT_TRUE(world.GetWind().direction.isApprox(Eigen::Vector3f::UnitX()));
+}
+
 TEST(EditorActorProperty, MeshEditMovesAllSectionsAndPreservesTheirRelativeMatrices)
 {
     World world(7, "scene.json");

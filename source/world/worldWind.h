@@ -28,6 +28,9 @@ struct WorldWindGust
 // 各自用自身的响应系数决定如何摆动。默认值即"无风"（strength 为 0）。
 struct WorldWind
 {
+    // 场景对象名（场景 JSON 的 name）。它不参与风场计算，只供编辑器投影身份/
+    // 显示名使用；全场景至多一个 wind 对象，因此运行时消费者不需要它。
+    std::string name = "Wind";
     // 已归一化的风向。作者向量的长度不进入方向，只用 strength 表示强度。
     Eigen::Vector3f direction = Eigen::Vector3f::UnitX();
     // 基准风强度，单位 cm/s。
@@ -104,6 +107,7 @@ inline WorldWind ReadSceneWind(const nlohmann::json& object)
 {
     using namespace WorldWindDetail;
     WorldWind wind;
+    wind.name = object.value("name", std::string("Wind"));
     const Eigen::Vector3f direction(
         object.at("direction")[0].get<float>(),
         object.at("direction")[1].get<float>(),
