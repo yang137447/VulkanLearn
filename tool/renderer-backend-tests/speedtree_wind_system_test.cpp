@@ -59,6 +59,21 @@ TEST(SpeedTreeWindSystem, ProfileStrengthResponseControlsSceneTargetEasing)
     EXPECT_LT(fast.GetGpuState().windVector.w(), 0.005f);
 }
 
+TEST(SpeedTreeWindSystem, AuthoredStrengthResponseSettlesAtAuthoredRate)
+{
+    SpeedTreeWindSystem system;
+    Configure(system, MakeWindResponse(0.5f, 0.5f));
+    system.AdvanceToSceneWind(0.0, MakeTarget(3270.0f, Eigen::Vector3f::UnitX()));
+
+    // 60 Hz 逐帧推进，而不是一次跳到 0.5 s：逐帧 SetStrength 若以 currentStrength
+    // 为 guard 会反复重起缓动，1 s 后仍几乎停在 1.0。
+    const WorldWind still = MakeTarget(0.0f, Eigen::Vector3f::UnitX());
+    for (int frame = 1; frame <= 60; ++frame)
+        system.AdvanceToSceneWind(frame / 60.0, still);
+
+    EXPECT_LT(system.GetGpuState().windVector.w(), 0.05f);
+}
+
 TEST(SpeedTreeWindSystem, ProfileDirectionResponseInterpolatesSceneTarget)
 {
     SpeedTreeWindSystem system;

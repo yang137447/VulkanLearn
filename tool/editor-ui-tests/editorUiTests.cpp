@@ -8401,6 +8401,68 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesEditableActorWithAuthorName)
     EXPECT_EQ(OutlinerVisibilityToggle("MainWind"), nullptr);
 }
 
+TEST_F(EditorUiTest, SceneWindTextInputCommitsOnEnter)
+{
+    World world = MakeSceneWindTestWorld();
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    const std::string identity = "wind|MainWind";
+    actors = built;
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = identity;
+    SettleOutliner();
+
+    // 点击行的空白区域也应把焦点交给文本输入；否则用户会以为“直接输入没用”。
+    Rml::Element* row = document->GetElementById(
+        SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0) + "-row");
+    ASSERT_NE(row, nullptr);
+    row->DispatchEvent("click", {});
+    EXPECT_EQ(context->GetFocusElement(),
+        Control(SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0)));
+
+    auto* control = Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0));
+    ASSERT_NE(control, nullptr);
+    control->SetValue("1500");
+    Rml::Dictionary parameters;
+    parameters["key_identifier"] = static_cast<int>(Rml::Input::KI_RETURN);
+    control->DispatchEvent("keydown", parameters);
+
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    const UiAction& edit = runtimeSink.actions.back();
+    EXPECT_EQ(edit.type, UiActionType::SetActorProperty);
+    EXPECT_EQ(edit.actorProperty.identity, identity);
+    EXPECT_EQ(edit.actorProperty.property, EditorActorProperty::WindStrength);
+    EXPECT_FLOAT_EQ(edit.actorProperty.value, 1500.0f);
+}
+
+TEST_F(EditorUiTest, SceneWindSliderFollowsEditedStrength)
+{
+    World world = MakeSceneWindTestWorld();
+    actors = BuildEditorSceneActors(world);
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = "wind|MainWind";
+    SettleOutliner();
+
+    WorldWind wind = world.GetWind();
+    wind.strength = 800.0f;
+    world.SetWind(wind);
+    actors = BuildEditorSceneActors(world);
+    PublishActors();
+    snapshot.selectedActorIdentity = "wind|MainWind";
+    SettleOutliner();
+
+    auto* slider = Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0) + "-slider");
+    ASSERT_NE(slider, nullptr);
+    EXPECT_EQ(slider->GetAttribute<Rml::String>("value", ""), "800");
+}
+
 TEST_F(EditorUiTest, SceneWindWithoutGustStillExposesGustControls)
 {
     World world = MakeVisibilityTestWorld();

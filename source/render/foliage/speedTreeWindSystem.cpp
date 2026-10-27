@@ -179,7 +179,9 @@ void SpeedTreeWindSystem::Configure(
 
 void SpeedTreeWindSystem::SetStrength(float strength)
 {
-    if (strength == currentStrength)
+    // 与 SetDirection 一样比较目标值：逐帧用 currentStrength 比较会在每次
+    // AdvanceTo 之后重新起一段缓动，把 authored response 拉长到几十秒。
+    if (strength == targetStrength)
     {
         return;
     }

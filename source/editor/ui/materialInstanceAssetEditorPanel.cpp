@@ -227,6 +227,22 @@ bool ChangedFloat(float value, float currentValue)
     return std::abs(value - currentValue) > 0.0001f;
 }
 
+// actor-property 的文本输入嵌在属性行里；点击行的空白/标签区域时把焦点交给
+// 第一个文本输入，避免用户必须精确点中输入框才能编辑。
+Rml::Element* FirstActorTextInput(Rml::Element& root)
+{
+    for (int index = 0; index < root.GetNumChildren(); ++index)
+    {
+        Rml::Element* child = root.GetChild(index);
+        if (child == nullptr) continue;
+        if (child->GetTagName() == "input" &&
+            child->GetAttribute<Rml::String>("type", "") == "text")
+            return child;
+        if (Rml::Element* nested = FirstActorTextInput(*child)) return nested;
+    }
+    return nullptr;
+}
+
 // Details 强度以 lux 表示，保留物理光照迁移后的作者范围；不再受旧调试页滑条约束。
 constexpr float SunIntensityMin = 0.0f;
 constexpr float SunIntensityMax = 150000.0f;
@@ -2106,10 +2122,17 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
     for (const auto& field : SceneActorEditableFields(*actor))
         for (uint32_t component = 0; component < field.components; ++component)
         {
-            SetControlValue(SceneActorPropertyControlId(field.property, component),
-                SceneActorNumber(field.value[component]));
-            SetDisabled(SceneActorPropertyControlId(field.property, component),
-                runtimeView.scripts.state != ScriptPlayState::Editing);
+            const std::string id = SceneActorPropertyControlId(field.property, component);
+            const std::string number = SceneActorNumber(field.value[component]);
+            SetControlValue(id, number);
+            SetDisabled(id, runtimeView.scripts.state != ScriptPlayState::Editing);
+            // 数值输入与滑条共享同一属性；只刷文本会让滑条的 value 属性停在
+            // DOM 创建时的旧值，下一次点击/拖动就会用旧值覆盖刚输入的数值。
+            if (field.hasRange)
+            {
+                SetControlValue(id + "-slider", number);
+                SetDisabled(id + "-slider", runtimeView.scripts.state != ScriptPlayState::Editing);
+            }
         }
     if (actor->type == EditorSceneActorType::Script)
     {
@@ -4909,6 +4932,23 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     {
         event.StopPropagation();
         return;
+    }
+    // 属性行的文本框较窄，用户点标签/行空白时也应该进入编辑，而不是只选中行。
+    Rml::Element* eventTarget = event.GetTargetElement();
+    if (event.GetType() == "click" && eventTarget != nullptr)
+    {
+        Rml::Element* row = eventTarget;
+        while (row != nullptr && row != document)
+        {
+            const std::string id = row->GetId();
+            if (id.size() > 4 && id.compare(id.size() - 4, 4, "-row") == 0)
+            {
+                if (Rml::Element* input = FirstActorTextInput(*row))
+                    input->Focus();
+                break;
+            }
+            row = row->GetParentNode();
+        }
     }
     if (event.GetType() == "change") runtimeControlsCurrent = false;
     // 点击菜单栏以外的任何位置都收起已展开的菜单；菜单项自身的收起在下面按 action 处理。
