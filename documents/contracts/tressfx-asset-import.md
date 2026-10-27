@@ -316,7 +316,6 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 | --- | --- | --- | --- |
 | `enabled` | 无对象时 false；对象内缺省 true | bool | 作为放置 inherit 的默认开关；off 的骨架绑定仍可全丝蒙皮。 |
 | `gravity` | `[0,-980,0]` | 3 个有限数 | 重力加速度，厘米/秒²；直接作为积分力，不再套用 TressFX 的 `GravityMagnitude*(0,0,-1)`。 |
-| `wind` | `[0,0,0]` | 3 个有限数 | 单个作者风向量：方向归一化后作为 TressFX 风锥轴，长度作为幅值（厘米/秒）；它是 TressFX 风力公式的标量，不是物理风速。Host 按 `SetWind` 生成 `Wind0..3`（绕 Y/Z 各 ±40°，每路乘 `wM = |wind|*(sin(simFrame*0.001)² + 0.5)`）。 |
 | `damping` | 0.035 | `[0,1]`，典型 `0..0.07` | TressFX 的 `DampingCoeff`，直接用于 `exp(-damping*dt*60)`；不是“每步保留的速度比例”，不做 `-ln` 映射。 |
 | `iterations` | 3 | `[1,16]` | LengthConstraintsWind pass 的偶数/奇数边约束迭代次数；本资产校准为 8。 |
 | `rootFixedPoints` | 2 | `[0,32]` | 每根 guide 从根部起固定的点数，即 TressFX 的 `NumVerticesFromRootNoSimulation`。 |
@@ -333,7 +332,12 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 固定步字段已删除：`fixedStep` 与 `maxSubsteps` 不再被解析，出现即在资产边界报错
 （错误消息指向 `maxDt`），避免旧资产静默失去效果。VL 原有的 `windGust` 与
 `windFrequency` 也已删除：它们会与 TressFX `SetWind` 的帧调制叠加成双重调制。
-这两个字段出现时在资产边界报错，错误消息给出 `SetWind` 公式。默认值与 overrides
+这两个字段出现时在资产边界报错，错误消息给出 `SetWind` 公式。
+
+`simulationDefaults.wind` 同样已删除：风是场景级 `wind` 对象（`type: "wind"`，
+见 [scene-wind.md](scene-wind.md)）的职责，不再由 TF 资产、放置 `simulation.overrides`
+或分组 overrides 作者。这三个位置出现 `wind` 都在加载期硬错误，错误消息说明字段
+已移除并指向场景 `wind` 对象；头发读取当前 World 的场景风。默认值与 overrides
 按封闭对象校验，未知键直接失败。全部有效数值、两条曲线、角色绑定与碰撞配置
 共同进入 renderable 行为身份；只改默认值不重新导入 ribbon 几何。
 
@@ -356,8 +360,8 @@ TF 描述符可选 `groups` 数组，把 `.tfx` 的 guide 划分为具名组。�
   区间首尾相接（如 `[0,2)` 与 `[2,4)`）不算重叠。
 - `simulationOverrides`：可选对象，键集为 6 个按组有意义的参数：`damping`、`bendStiffness`、
   `globalShapeStiffness`、`globalShapeEffectiveRange`、`vspCoefficient`、`vspAccelThresholdMax`。
-  值域与 `simulationDefaults` 相同（复用同一校验代码）。`gravity`、`wind`、`iterations` 是引擎公共参数，
-  不允许按组覆盖；`wind` 将来可能变成全局位置相关场，同样不会成为组级标量。
+  值域与 `simulationDefaults` 相同（复用同一校验代码）。`gravity`、`iterations` 是引擎公共参数，
+  不允许按组覆盖；`wind` 属于场景 `wind` 对象，也不会成为组级标量。
   `enabled`、`skinning`、`collision`、`hairCollision` 以及其余键（例如 `rootFixedPoints`、`maxDt`、
   `backend`、曲线数组）一律拒绝。
 - `groups` 只允许出现在 `type: "tressfx"` 资产上，其他类型直接报错。
@@ -671,9 +675,11 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
    `localShapeStiffness[local/4][local%4]`，加载期已 clamp 到 0.95）；两种
    情况都乘以 TressFX 公式里的 0.5。
 5. **LengthConstraintsWind**：
-   - 风：Host 每帧把单个作者风向量展开为 TressFX `SetWind` 的四路锥形风：
-     `wM = |wind|*(sin(simFrame*0.001)² + 0.5)`；四角是风方向分别绕 Y 轴 ±40°、
-     绕 Z 轴 ±40° 后乘 `wM`。shader 仍用
+   - 风：Host 每帧把场景 `wind` 对象的方向与强度展开为 TressFX `SetWind` 的四路锥形风：
+     有效向量 = `direction * strength * gustFactor`（厘米/秒，`gustFactor` 由场景阵风在
+     本帧风时间处采样），四角是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40°。VL 不再乘
+     TressFX 的 `sin(simFrame*0.001)² + 0.5` 逐帧调制：时间调制由场景阵风独占，
+     避免双重调制；资产也不再作者 `simulationDefaults.wind`。shader 仍用
      `w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3`，`a = (strand % 20)/20`。
      对 `rootFixedPoints <= local < N-1`，`v = pos_i - pos_{i+1}` 保持**未归一化**，
      `Force = -cross(cross(v,w),v) * 1e-2`，`pos_i += Force*dt²`。1e-2 是厘米积分下
@@ -919,9 +925,10 @@ descriptor，也不修改资产文件。编辑器毛发视口的 Reset 按钮发
 - 命令：Console `hair set <objectName> <field> <value...>`；目标与具名 Reset 一样，
   按冻结 draw 的正式 `sceneObjectIdentity` 匹配，不解析资源缓存键，
   **必须给名字**（没有“全部对象”语义，与 `hair reset` 不同）。
-- 可覆盖字段（单位与作者字段一致）：`gravity`、`wind`（各 3 个分量）、`damping`、
+- 可覆盖字段（单位与作者字段一致）：`gravity`（3 个分量）、`damping`、
   `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
-  `vspCoefficient`、`vspAccelThresholdMax`。
+  `vspCoefficient`、`vspAccelThresholdMax`。`wind` 不是可覆盖字段：它来自场景 `wind`
+  对象，`simulationDefaults.wind` 与 overrides 的 `wind` 在加载期即被拒绝。
 - 值域按作者字段校验，**越界或非有限直接拒绝，不夹取**；`iterations` 必须是
   `[1,16]` 内的整数，`vspAccelThresholdMax` 属于 `(0,1e7]`。
 - 需要重载的字段一律拒绝并提示：`enabled`、`backend`、`rootFixedPoints`、`maxDt`、
@@ -964,8 +971,9 @@ CPU 参考不消费正式 Female 的根骨/SDF，不能把两者称为已做逐�
 `TressfxSimulationOwner` 保留为运行期安全网，检测同一对象被不同 identity 复用。
 CPU backend 同样拥有独立 solver 状态，但没有 GPU 的世界历史换基。
 
-作者 `gravity`/`wind` 是世界向量，Host 按当前 hair model 的线性部分换到 hair 局部
-后上传；刚体旋转 placement 不旋转世界重力方向，换基保持世界语义。
+作者 `gravity` 是世界向量，场景 `wind` 也以世界空间方向/强度进入；Host 按当前 hair
+model 的线性部分把重力与四路风换到 hair 局部后上传；刚体旋转 placement 不旋转世界
+重力方向，换基保持世界语义。
 固定源的 `ApplyVertexBoneSkinning` 在骨骼变换之后组合
 `PrimitiveData.LocalToWorld`（patch 8303..8308 行），Integration 再把 world cm
 转为 world m（8424..8425 行），三份位置历史留在该世界空间。VL 的 SSBO 是 hair
@@ -980,7 +988,7 @@ solver 等价；source model 与 hair model 不一致、hair 单独 teleport 没
 ### 单位、忠实度与显式差异
 
 TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3 m。VL 全链路使用
-**厘米**，因此所有 0.01 与 0.3 m 都省略/换成 30 cm，位置、半径、重力和风速的数值
+**厘米**，因此所有 0.01 与 0.3 m 都省略/换成 30 cm，位置、半径、重力和场景风强度的数值
 保持厘米语义。这个换算不是对所有公式都无损：
 
 - **风的三叉积与 cm→m 位移适配**：源实现在米制下把**未归一化**的段向量代入
@@ -993,10 +1001,11 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
 - **速度 clamp** 的 `delta *= 30²/|delta|²` 是源实现的既有 quirk，VL 保留。
 - **重力方向**：源实现是 `GravityMagnitude*(0,0,-1)`（Z-up）；VL 直接使用资产的
   `gravity` 向量（Y-up）。这不是通用换轴，只是不再注入源引擎的固定方向。
-- **风的四角与时间调制**：四路锥形风和 `sin(frame*0.001)²+0.5` 幅值调制是
-  TressFX `SetWind` 的语义。源实现每帧还乘 `(0.3 + FRand())` 的随机幅值抖动；
-  VL 为保证确定性省略这个随机项，其余 `SetWind` 语义一致。VL 原来的
-  `windGust`/`windFrequency` 已删除，不再有第二层正弦调制。
+- **风的四角与时间调制**：四路锥形风仍是 TressFX `SetWind` 的语义，但输入改为场景
+  `wind` 向量（方向 × 强度，含共享场景阵风）。VL 刻意不再乘 TressFX 的
+  `sin(frame*0.001)²+0.5` 幅值调制：场景阵风独占时间调制，再乘一次会双重调制。
+  源实现每帧还乘 `(0.3 + FRand())` 的随机幅值抖动；VL 为保证确定性仍省略这个随机项。
+  VL 原来的 `windGust`/`windFrequency` 已删除，资产也不再作者 `simulationDefaults.wind`。
 - **长度约束迭代**：TressFX 的资产 UI 把 `LengthConstraintsIterations` 限制在
   1..4；本资产的 32 点 guide 段长只有 0.4–1.5 cm（均值约 1.04 cm，TressFX 参考
   约 2 cm）。3 次 Gauss-Seidel 在根点姿态变化后留下明显拉伸，因此资产校准为
@@ -1226,8 +1235,9 @@ Idle 来自 GASP 重定向）+ `Female_hair_skinned`（共享 `TF_female_hair.js
 静态放置显式 off，动态放置 on 并自带无骨胶囊，角色挂载 on 并自带绑定与代理。
 四个胶囊分别绑定 `Head_M`、`Neck1_M`、`Chest_M`
 （肩线）与 `Chest_M`（上背），`hairCollision.mesh` 代理使用从该身体转移的逐顶点
-权重；共享 TF 默认值为 `gravity=[0,-980,0]`、`wind=[2000,0,0]`、
-`damping=0.035`、`maxDt=0.016`、`iterations=8`。
+权重；共享 TF 默认值为 `gravity=[0,-980,0]`、`damping=0.035`、`maxDt=0.016`、
+`iterations=8`；风来自关卡 `wind` 对象（`MainWind`，方向 `[1,0,0]`、强度 2000 cm/s），
+TF 不再作者 `simulationDefaults.wind`。
 选普通 mesh 而不是 blueprint 关卡，是因为 `SkeletalPlayback` 构造时默认 `playing=true`
 并选中 clip 0，`World::TickAnimations` 每帧推进它，加载后即自动播放 Idle；blueprint
 版本只在 `BeginPlay` 里 `Animation.Play(Walk)`，必须点 Play 才动。两者都使用同一套

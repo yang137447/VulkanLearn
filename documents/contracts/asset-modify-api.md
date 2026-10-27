@@ -23,10 +23,11 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
 
-TressFX 能力表包含 9 个 `simulationDefaults.*` 一级字段与整段 `groups` 数组（分组形状与校验见
-`tressfx-asset-import.md` 的“分组”一节）：`gravity`、`wind`（向量）、`damping`、
+TressFX 能力表包含 8 个 `simulationDefaults.*` 一级字段与整段 `groups` 数组（分组形状与校验见
+`tressfx-asset-import.md` 的“分组”一节）：`gravity`（向量）、`damping`、
 `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
-`vspCoefficient`、`vspAccelThresholdMax`（数值）。这些字段只对 Tressfx 文档 kind 开放，
+`vspCoefficient`、`vspAccelThresholdMax`（数值）。`wind` 不在能力表内：风由场景 `wind` 对象作者，
+TF 里出现的 `simulationDefaults.wind` 在加载期被拒绝。这些字段只对 Tressfx 文档 kind 开放，
 Mesh 能力表不包含模拟字段。值域由
 `MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
 `iterations` 必须是整数。逐顶点曲线、`strandRadius` 仍不在能力表内，属于资产直接编辑。

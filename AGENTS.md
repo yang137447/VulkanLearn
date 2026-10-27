@@ -282,6 +282,8 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `wind` (scene-global wind, at most one per scene; `direction`/`strength`/optional `gust`;
+  no position/rotation; see `documents/contracts/scene-wind.md`)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime
