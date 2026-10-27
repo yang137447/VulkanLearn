@@ -31,31 +31,35 @@
 - `WorldBuilder` 与 `environment` 在同一次 World 构建中写入风状态，随 World 的发布与替换整体切换。
 - 风随 `WorldSnapshot` 冻结，再由 `RendererFrontend::BuildRenderScene` 复制进 `RenderScene::wind`
   （作者目标）；`RenderSystem` 提交一代 RenderScene 时整体交换该字段。不存在单独的 `activeWind` 副本。
-- 每帧由 `SceneWindRuntime` 按固定响应时间缓动强度/方向，并施加场景阵风，结果写入
-  `RenderScene::resolvedWind`。强度/方向的指数响应时间各为 0.5 s（见 `sceneWindRuntime.h`）；
-  World 加载后的首帧直接采用目标值，避免从 0 慢启动。`RenderSystem::GetActiveWind()` 只读返回
-  该解析结果；`GetWindTimeSeconds()` 返回本帧使用的秒数。
+- 每帧由 `SceneWindRuntime` 按固定响应时间缓动场级强度/方向，并施加场景阵风，结果写入
+  `RenderScene::resolvedWind`；该结果供头发等场级消费者使用，SpeedTree 植被不读它。
+  `RenderSystem::GetActiveWind()` 只读返回该场级解析结果；`GetWindTimeSeconds()` 返回本帧
+  使用的秒数。植被读 `RenderScene::wind` 作者目标，在每物种 profile 内独立缓动/阵风。
 - `AdvanceSceneWind` 每渲染帧固定推进 1/60 s，不读墙钟；World 换代时清零风时间并
-  `Reset` 运行时，使首帧直接采用新场景目标值。
+  `Reset` 运行时，使首帧直接采用新场景目标值。同一帧同时把原始 `wind` 目标交给
+  `WindResponseProfileSet`，每条 profile 的首帧也直接采用目标值。
 - 渲染器资源加载跳过 `wind` 对象（不产生 GPU 资源）；编辑器对象类型白名单接受 `wind`。
 
 ## 植被消费（SpeedTree）
 
-- `AdvanceSceneWind` 每帧把 `currentRenderScene.wind` 交给 `SceneWindRuntime` 解析，再把
-  `resolvedWind` 与本帧风时间交给 `WindResponseProfileSet::AdvanceToSceneWind`。
-- 每个物种的 `WindResponseProfileSet` 只把解析后的强度（cm/s）除以 3270 cm/s（蒲福 12 级下界）
-  得到 `[0, 1]` 的曲线横轴，再用该物种自己的响应曲线采样（bend / oscillation / speed /
-  turbulence / flexibility 等）；方向取解析后的场景风向。缓动与阵风已经在场景风层完成，
-  不再按物种重复处理。
-- 场景强度为 0 时，GPU 风向写为零向量，着色器的零风早退使植被保持原始位置；
-  `TransformSpeedTreeWindDirectionToLocal` 对零向量显式返回零。
+- `AdvanceSceneWind` 每帧把 `currentRenderScene.wind`（作者目标，不是 `resolvedWind`）交给
+  `WindResponseProfileSet::AdvanceToSceneWind`；每个 profile 的 `SpeedTreeWindSystem` 相当于
+  一个 SpeedTree `CWindStateMgr`。
+- 场景强度除以 3270 cm/s（蒲福 12 级下界）得到 `[0, 1]` 曲线横轴。每个 profile 用自身
+  `strengthResponse`/`directionResponse` 缓动方向与强度，再用自身 `gustFrequency`、
+  `gustStrengthMin/Max`、`gustDurationMin/Max`、`gustRise/Fall` 推进离散阵风事件。
+- 场景 `gust.enabled` 控制该 profile 是否允许 gust，`gust.amplitude` 缩放 profile 的 gust
+  输出；场景 `gust.frequency`/`gust.turbulence` 只用于场级消费者（头发），不覆盖 profile
+  的 gust 参数。
+- 同一 base tree 的所有实例共享该 profile 的 live state；实例差异由世界位置和顶点
+  Branch/Ripple 权重提供，与 SpeedTree 的 base-tree 粒度一致。
+- 场景强度为 0 且没有 gust 时 GPU 强度写 0；着色器的零风早退使植被保持原始位置。
 - GPU 布局未变：`SpeedTreeWindStateGPU` 仍为 208 字节，`UBOModel.speedTreeWind` 偏移 128 不变，着色器无改动。
   `windVector.w` 仍为归一化强度 [0, 1]。
-- 响应曲线采样与 UBO 打包由 `UpdateGpuState` 共享；SDK 自驱动状态机（`SetStrength`、`ForceGust` 等）
-  只供 `tool/speedtree-wind-validation` 对照，渲染路径不调用。
+- 响应曲线采样与 UBO 打包由 `UpdateGpuState` 共享；运行时路径内部调用
+  `SetStrength`/`SetDirection`/`SetGustingEnabled`/`AdvanceTo` 推进每 profile 状态，
+  `ForceGust` 仍只供 `tool/speedtree-wind-validation` 对照。
 - 控制台 `windstrength`/`windgust` 与它们的 UI action / view-model 字段已移除；植被风完全由场景风驱动。
-  `WindResponseProfileSet::SetStrength`、`SetGustingEnabled` 与 `ForceGust` 仍保留，但只供
-  `tool/speedtree-wind-validation` 对照，渲染路径不调用。
 
 ## 头发消费（TressFX）
 
@@ -70,7 +74,8 @@
   legacy/SDK 对照与离线测试。
 - 场景强度为 0 时有效风向量为零：Host 不做零向量归一化，四个风锥全零，头发只受重力/约束/碰撞驱动。
 - CPU 参考后端（`backend: "cpu"`）在游戏线程消费 `WorldWind` 的方向与强度；GT 不拥有渲染线程的
-  `SceneWindRuntime`，因此不应用场景缓动/阵风，GPU 路径才与植被共享解析结果。
+  `SceneWindRuntime`，因此不应用场景缓动/阵风。GPU 头发读场级 `resolvedWind`；这与植被的
+  每 profile 状态不同源，植被不会读取 `resolvedWind`。
 - GPU 参数块布局未变（`wind0..3` 仍是四路锥形风），着色器无改动。
 - 编辑器 TF 资产页的 `wind` 实时参数已移除；场景风的本地调试控件属于 P1d，尚未实现。
 
@@ -81,16 +86,20 @@
   属于网格资产，不再作为 actor 出现在大纲。
 - Details 沿用旧 SpeedTree 调节方式：方向 + `Strength` 滑条（0–3270 cm/s）+ `Gust` 滑条（0–1）。
   编辑通过 `SetActorProperty` 更新 World，并由 `SceneDocumentService` 暂存回场景 JSON；
-  `Gust` 为 0 即关闭，非零时使用固定的 `frequency=0.5`、`turbulence=0.2` 默认值，
-  噪声频率/湍流不暴露在 UI。
+  `Gust` 为 0 即关闭，非零时场级消费者使用固定的 `frequency=0.5`、`turbulence=0.2` 默认值，
+  噪声频率/湍流不暴露在 UI；SpeedTree profile 的 gust 形状仍来自资产参数。
 - 场景风没有 TRS、没有可见性开关；本地 TF Tab 风控件仍属 P1d。
 - 风源数据只保留场景 `wind`；原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
-  仍读入但只供 SDK 对照状态机，运行时缓动与阵风由 `SceneWindRuntime` 统一处理。
+  由每个 SpeedTree profile 的 CWindStateMgr 语义使用。场景 `gust.amplitude` 缩放 profile
+  gust，`frequency`/`turbulence` 只服务场级消费者，不覆盖 profile 的 gust 参数。
 
 ## 验证入口
 
 - `tool/script-tests/scriptRuntimeTests.cpp` 中的 `SceneWind.*` 用例：合法解析、零方向、负强度、
   阵风越界、未知键、第二个 wind 对象、缺省无风。
+- `tool/renderer-backend-tests/speedtree_wind_system_test.cpp`：同一场景目标下不同
+  `strengthResponse`/`directionResponse` 的 profile 缓动、以及场景 gust amplitude 对
+  profile gust 的缩放。
 - `tool/hair-tests/` 中的场景风用例：`SceneWindRuntime` 的缓动/阵风/复位、解析风向量、零风、
   `MakeGuideSimulationParams` 打包；资产校验用例覆盖 `simulationDefaults.wind` 与 overrides `wind`
   的加载期拒绝。

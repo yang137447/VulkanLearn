@@ -9,9 +9,11 @@ add_executable(vl_renderer_backend_tests
     cpu_frame_profiler_test.cpp
     shadow_caster_cull_test.cpp
     skin_deform_test.cpp
+    speedtree_wind_system_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/shadow/shadowCasterCull.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/foliage/speedTreeWindSystem.cpp
 )
 target_include_directories(vl_renderer_backend_tests PRIVATE ${CMAKE_SOURCE_DIR}/source)
 target_link_libraries(vl_renderer_backend_tests PRIVATE Vulkan::Vulkan Json Eigen3)

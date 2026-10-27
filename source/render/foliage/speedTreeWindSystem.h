@@ -8,16 +8,21 @@
 
 #include "../../BaseStructs.h"
 #include "../../mesh/meshAssetTypes.h"
-#include "../../world/sceneWindRuntime.h"
+#include "../../world/worldWind.h"
 
 // Renderer-owned live state for one active Runtime SDK wind profile. The
-// authored profile remains on ModelResource; this class only samples curves
-// and produces the compact per-frame shader state.
+// authored profile remains on ModelResource; this class owns the per-species
+// CWindStateMgr-equivalent response/gust/noise state and produces the compact
+// per-frame shader state.
 //
-// 运行时路径是 AdvanceToSceneWind：方向与强度来自 SceneWindRuntime 已缓动、已含
-// 阵风的解析结果，物种只提供响应曲线的数值。SetStrength / SetDirection /
-// SetGustingEnabled / ForceGust / AdvanceTo 保留的是 SDK 自驱动参考状态机，仅供
-// tool/speedtree-wind-validation 对照 SDK 使用；渲染路径不再调用它们。
+// 运行时路径是 AdvanceToSceneWind：场景 wind 只广播作者目标（方向/基准强度/
+// gust 开关与幅度）；本类按该物种的 strengthResponse/directionResponse 缓动，
+// 按 profile 的 gustFrequency/强度与持续时间/rise-fall 推进离散 gust。所有实例
+// 共享同一 base tree 状态，实例差异由世界位置和顶点权重提供。
+//
+// SetStrength / SetDirection / SetGustingEnabled / ForceGust / AdvanceTo 仍是
+// SDK 自驱动参考状态机，tool/speedtree-wind-validation 直接对照；AdvanceToSceneWind
+// 复用同一套状态推进，但目标值来自场景风。
 class SpeedTreeWindSystem
 {
 public:
@@ -33,9 +38,10 @@ public:
     void SetGustingEnabled(bool enabled);
     void ForceGust();
     void AdvanceTo(double timeSeconds);
-    // timeSeconds 为固定 tick 的风时间（秒）；wind 是 SceneWindRuntime 已完成
-    // 缓动与阵风调制的解析结果，本类不再做时间调制。
-    void AdvanceToSceneWind(double timeSeconds, const VL::ResolvedSceneWind& wind);
+    // timeSeconds 为固定 tick 的风时间（秒）；wind 是场景作者目标。本类按该
+    // profile 的响应时间缓动，并使用 profile 的 gust 参数；场景 gust.amplitude
+    // 只作为整体阵风强度缩放，frequency/turbulence 留给场级消费者（头发）。
+    void AdvanceToSceneWind(double timeSeconds, const VL::WorldWind& wind);
 
     const SpeedTreeWindStateGPU& GetGpuState() const { return gpuState; }
     bool IsConfigured() const { return configured; }
@@ -73,6 +79,8 @@ private:
     GustState gustState;
     uint32_t gustRandomState = 137u;
     bool gustingEnabled = true;
+    // 场景 gust.amplitude 对 profile gust 输出的整体缩放；SDK 对照路径保持 1。
+    float sceneGustScale = 1.0f;
     Eigen::Vector3f sharedNoisePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f branch1NoisePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f branch2NoisePosition = Eigen::Vector3f::Zero();
@@ -80,10 +88,11 @@ private:
     double lastAdvanceTime = -1.0;
     bool configured = false;
 
+    void SetSceneGustScale(float scale);
     void ResetGustState();
     float RandomFloat(float minimum, float maximum);
-    // 把强度向 targetStrength 缓动到 time 时刻的值；只服务 SDK 参考状态机
-    // （AdvanceTo）。渲染路径的缓动在 SceneWindRuntime 统一完成。
+    // 把强度向 targetStrength 缓动到 time 时刻的值；SDK 参考状态机和场景
+    // 目标路径共用。
     void UpdateEasedStrength(double time);
     // 由风向与归一化强度生成 GPU 状态，并按 deltaTime 推进四组噪声位置。
     // 两条驱动路径共用，保证响应曲线采样与 UBO 打包只有一份实现。
@@ -91,10 +100,11 @@ private:
 };
 
 // Owns one live CPU state per imported tree species. The runtime wind input is
-// the resolved scene wind (AdvanceToSceneWind), shared by every species; draw
-// submission resolves the state by the mesh profile key and uploads it through
-// the object UBO. The SetStrength/SetDirection/Gust methods below are the SDK
-// reference controls and are not called by the renderer.
+// the authored scene target; each profile then advances its own response, gust
+// envelope and noise state like a SpeedTree CWindStateMgr. Draw submission
+// resolves the state by the mesh profile key and uploads it through the object
+// UBO. The SetStrength/SetDirection/Gust methods below are the SDK reference
+// controls and are not called by the renderer.
 class WindResponseProfileSet
 {
 public:
@@ -102,7 +112,7 @@ public:
     void Reset();
     void Swap(WindResponseProfileSet& other) noexcept;
     void AdvanceTo(double timeSeconds);
-    void AdvanceToSceneWind(double timeSeconds, const VL::ResolvedSceneWind& wind);
+    void AdvanceToSceneWind(double timeSeconds, const VL::WorldWind& wind);
     // Expects a finite normalized strength in [0, 1]. External input must be
     // validated at its source before reaching the wind simulation.
     bool SetStrength(float strength);

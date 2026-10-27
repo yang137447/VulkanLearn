@@ -63,7 +63,8 @@ inline float ValueNoise(double phase)
 // 不是 SpeedTree 的离散阵风事件：没有持续时间与上升/下降系数。amplitude 决定
 // 调制幅度，frequency 决定噪声格点频率，turbulence 在平滑粗八度与细节八度之间
 // 插值。frequency 为 0 时阵风不产生调制，强度即为基准值。
-// 植被与头发共用这一份实现，保证同一风时间下两边的阵风相位一致。
+// 场级消费者（头发）的阵风实现；SpeedTree 植被使用各 profile 自己的离散 gust，
+// 不调用这里。场级消费者共享同一风时间时，其阵风相位一致。
 inline float ApplySceneWindGust(
     float baseStrength, const WorldWindGust& gust, double timeSeconds)
 {

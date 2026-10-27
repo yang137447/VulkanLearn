@@ -266,7 +266,8 @@ public:
         const std::string& shaderName) const;
     // 本帧解析后的场景风（已缓动、已含阵风）。风时间与 SpeedTree 共用同一个
     // 固定 tick 时钟（秒），由 AdvanceSceneWind 每渲染帧推进；
-    // 活动 World 换代时清零并重新从作者目标起步。
+    // 活动 World 换代时清零并重新从作者目标起步。GetActiveWind 返回场级解析结果
+    // （供头发/调试），植被的每物种状态在 windResponseProfiles 内。
     const VL::ResolvedSceneWind& GetActiveWind() const { return currentRenderScene.resolvedWind; }
     double GetWindTimeSeconds() const { return currentRenderScene.windTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these

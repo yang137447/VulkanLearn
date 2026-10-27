@@ -152,9 +152,10 @@ struct WindResponseCurve
 
 struct WindResponseCommon
 {
-    // 这些标量来自原始 .stsdk。VL 不修改源资产，因此字段保留：strengthResponse /
-    // directionResponse / gust* 只服务 tool/speedtree-wind-validation 的 SDK 参考
-    // 状态机；运行时场景风由 SceneWindRuntime 统一缓动并施加阵风，不再读它们。
+    // 这些标量来自原始 .stsdk，渲染路径按 SpeedTree CWindStateMgr 语义使用：
+    // strengthResponse/directionResponse 控制每 profile 的缓动，gust* 控制该
+    // profile 的离散阵风包络。SceneWindRuntime 只为头发等场级消费者保留另一套
+    // 缓动/连续 gust；场景 gust.amplitude 只整体缩放 profile gust。
     float strengthResponse = 0.0f;
     float directionResponse = 0.0f;
     float gustFrequency = 0.0f;

@@ -1544,8 +1544,8 @@ RenderSystem::CommitPreparedRuntimeBinding(
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);
-    // 风与解析结果随同一代 RenderScene 提交；头发/植被消费 resolvedWind，
-    // 不再有 RenderSystem 单独维护的第二份 activeWind。
+    // 场景作者目标与场级解析结果随同一代 RenderScene 提交；头发消费 resolvedWind，
+    // 植被消费 wind 目标并在每 profile 内维护自己的响应/gust 状态。
     swap(currentRenderScene.wind, prepared.renderScene.wind);
     swap(currentRenderScene.resolvedWind, prepared.renderScene.resolvedWind);
     swap(currentRenderScene.windTimeSeconds, prepared.renderScene.windTimeSeconds);
@@ -3756,9 +3756,8 @@ RenderSystem::BuildRendererDescriptorContext(
 }
 
 // 风时间按渲染帧固定步长推进，而不是墙钟：同一帧序列得到同一风状态，截图可逐像素复现。
-// 风是可复现的参数，与其他按帧率取数据的动画时钟解耦。首帧仍为 0，与旧行为一致。
-// 本帧先由 SceneWindRuntime 完成缓动/阵风，再把解析结果同时交给植被和头发；
-// 消费方不再各自做时间调制。
+// 场景风层只产出供头发/场级消费者使用的 resolvedWind；植被读取原始作者目标，由每个
+// profile 自己的 CWindStateMgr 语义独立缓动和 gust。风源仍只有场景 wind 一个。
 void RenderSystem::AdvanceSceneWind()
 {
     constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
@@ -3767,7 +3766,7 @@ void RenderSystem::AdvanceSceneWind()
     currentRenderScene.windTimeSeconds = currentWindTimeSeconds;
     currentRenderScene.resolvedWind = resolvedWind;
     windResponseProfiles.AdvanceToSceneWind(
-        currentWindTimeSeconds, resolvedWind);
+        currentWindTimeSeconds, currentRenderScene.wind);
     currentWindTimeSeconds += kSceneWindTickSeconds;
 }
 

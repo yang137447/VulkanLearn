@@ -9,20 +9,20 @@
 namespace VL
 {
 
-// 场景风的逐帧解析结果。方向已归一化，强度是**已经过场景缓动与阵风调制**的
-// 有效值（cm/s）；消费方（植被/头发）只按这个值采样自己的响应曲线或生成风锥，
-// 不再各自做缓动、阵风或单位换算。
+// 场景风的场级解析结果。方向已归一化，强度是已经过场景缓动与场景阵风调制的
+// 有效值（cm/s）。它主要服务头发等场级消费者；SpeedTree 植被读取作者目标，
+// 由每个物种的 CWindStateMgr 语义独立缓动/阵风。
 struct ResolvedSceneWind
 {
     Eigen::Vector3f direction = Eigen::Vector3f::UnitX();
     float strength = 0.0f;
 };
 
-// 场景风的运行时平滑层。World 里的 WorldWind 是作者目标值；本类把目标值按固定
-// 响应时间缓动，再把阵风调制烘进最终强度，供植被、头发等共享消费。
+// 场景风的场级运行时平滑层。World 里的 WorldWind 是作者目标值；本类把目标值按
+// 固定响应时间缓动，再把场景阵风调制烘进最终强度，供头发等场级消费者使用。
 //
-// 响应时间属于场景风本身，不是物种/资产的参数：SpeedTree 资产里的
-// strengthResponse/directionResponse 只保留给 SDK 对照状态机，不参与运行时风源。
+// SpeedTree 植被不消费本结果：它们的 response 时间与 gust 包络属于每物种 profile，
+// 由 RenderSystem 直接把 WorldWind 目标交给 WindResponseProfileSet。
 class SceneWindRuntime
 {
 public:
@@ -75,7 +75,7 @@ public:
         }
         lastTimeSeconds = time;
 
-        // 阵风只调制已经缓动后的强度；植被和头发读取同一份结果，不再各自采样。
+        // 场级阵风只调制已经缓动后的强度；植被走自己的 profile gust，不读这份结果。
         const float gustFactor = ApplySceneWindGust(1.0f, target.gust, time);
         resolved.direction = direction;
         resolved.strength = strength * gustFactor;

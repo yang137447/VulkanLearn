@@ -127,6 +127,7 @@ void SpeedTreeWindSystem::Reset()
     ResetGustState();
     gustRandomState = 137u;
     gustingEnabled = true;
+    sceneGustScale = 1.0f;
     sharedNoisePosition.setZero();
     branch1NoisePosition.setZero();
     branch2NoisePosition.setZero();
@@ -163,6 +164,7 @@ void SpeedTreeWindSystem::Configure(
     ResetGustState();
     gustRandomState = 137u;
     gustingEnabled = true;
+    sceneGustScale = 1.0f;
     sharedNoisePosition.setZero();
     branch1NoisePosition.setZero();
     branch2NoisePosition.setZero();
@@ -225,6 +227,11 @@ void SpeedTreeWindSystem::SetGustingEnabled(bool enabled)
     {
         ResetGustState();
     }
+}
+
+void SpeedTreeWindSystem::SetSceneGustScale(float scale)
+{
+    sceneGustScale = Clamp01(scale);
 }
 
 void SpeedTreeWindSystem::ForceGust()
@@ -374,14 +381,14 @@ void SpeedTreeWindSystem::AdvanceTo(double timeSeconds)
 
     const float strength = UseFixedInspectionStrength
         ? InspectionStrength
-        : Clamp01(currentStrength + gustState.strength);
+        : Clamp01(currentStrength + gustState.strength * sceneGustScale);
     UpdateGpuState(currentWindDirection, strength, deltaTime);
 }
 
 // 强度缓动：目标在 [strengthChangeStartTime, strengthChangeEndTime] 内由 sigmoid 过渡到
 // targetStrength。零时长过渡（响应时间为 0）直接到达目标。原先的 0 因子会停在两端中点，
 // 导致强度永远停在半路，所以这里取 1。
-// 只服务 SDK 参考状态机；渲染路径的缓动已移到 SceneWindRuntime，不再按物种响应时间重复缓动。
+// SDK 参考状态机和场景目标路径共用；响应时间来自当前 profile，而不是场景风。
 void SpeedTreeWindSystem::UpdateEasedStrength(double time)
 {
     float strengthFactor = 1.0f;
@@ -399,7 +406,7 @@ void SpeedTreeWindSystem::UpdateEasedStrength(double time)
 
 void SpeedTreeWindSystem::AdvanceToSceneWind(
     double timeSeconds,
-    const VL::ResolvedSceneWind& wind)
+    const VL::WorldWind& wind)
 {
     if (!configured)
     {
@@ -412,22 +419,40 @@ void SpeedTreeWindSystem::AdvanceToSceneWind(
         return;
     }
 
-    const float deltaTime = lastAdvanceTime >= 0.0
-        ? static_cast<float>(time - lastAdvanceTime)
-        : 0.0f;
-    lastAdvanceTime = time;
+    // 场景 wind 是作者目标，不是最终风。每个 profile 在这里像 CWindStateMgr 一样
+    // 独立缓动强度/方向，并用 profile 自己的 gust 参数推进离散阵风；场景 gust 只
+    // 提供开关和整体幅度缩放，frequency/turbulence 留给场级消费者（头发）。
+    const float target = Clamp01(VL::SceneWindCurveAxis(wind.strength));
+    const Eigen::Vector3f direction = wind.direction.squaredNorm() > 1.0e-12f
+        ? wind.direction.normalized()
+        : Eigen::Vector3f::UnitX();
 
-    // 场景风已经由 SceneWindRuntime 完成强度/方向缓动与阵风调制；这里只把有效
-    // 强度映射到响应曲线横轴，并按物种自己的曲线取值。物种的 strengthResponse/
-    // directionResponse 只保留给 SDK 对照状态机，不参与渲染路径。
-    const float strength = Clamp01(VL::SceneWindCurveAxis(wind.strength));
-    const Eigen::Vector3f direction = strength > 0.0f
-        ? wind.direction
-        : Eigen::Vector3f::Zero();
-    // 同步 SDK 参考状态机的“当前值”，避免运行时路径与 tool 对照读取到旧强度。
-    currentStrength = strength;
-    targetStrength = strength;
-    UpdateGpuState(direction, strength, deltaTime);
+    if (lastAdvanceTime < 0.0)
+    {
+        // 首帧直接采用目标值，避免从 Configure 的 inspection 值慢启动。
+        targetStrength = target;
+        currentStrength = target;
+        strengthAtStart = target;
+        strengthChangeStartTime = time;
+        strengthChangeEndTime = time;
+        windDirection = direction;
+        currentWindDirection = direction;
+        windDirectionAtStart = direction;
+        windDirectionRotation = Eigen::Quaternionf::Identity();
+        directionChangeStartTime = time;
+        directionChangeEndTime = time;
+    }
+    else
+    {
+        SetStrength(target);
+        SetDirection(direction);
+    }
+
+    SetGustingEnabled(wind.gust.enabled);
+    SetSceneGustScale(wind.gust.enabled ? wind.gust.amplitude : 0.0f);
+    // AdvanceTo 仍负责 SDK 语义的 gust/响应/噪声推进和 GPU 打包；这里只是把
+    // 目标值换成场景 wind，而不是另写一套时间积分。
+    AdvanceTo(time);
 }
 
 void SpeedTreeWindSystem::UpdateGpuState(
@@ -555,9 +580,10 @@ void WindResponseProfileSet::AdvanceTo(double timeSeconds)
 
 void WindResponseProfileSet::AdvanceToSceneWind(
     double timeSeconds,
-    const VL::ResolvedSceneWind& wind)
+    const VL::WorldWind& wind)
 {
-    // 所有物种读同一个已解析场景风；差异只来自各自的响应曲线数值。
+    // 所有物种共享场景作者目标；每个 profile 仍保留自己的响应时间、gust 包络和
+    // 噪声状态，因此阵风相位/节奏可以不同。
     for (auto& [profileKey, system] : systems)
     {
         system.AdvanceToSceneWind(timeSeconds, wind);

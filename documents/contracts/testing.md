@@ -46,7 +46,7 @@
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
-| `vl_renderer_backend_tests` | 94（83 后加 10 项 CPU 阶段计时与 1 项 CPU 阶段快照/JSON） | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约，以及逐 pass GPU 计时的纯逻辑（tick→毫秒、`end < begin`、窗口平均/淘汰、名字顺序、表格字符串）；CPU+GPU 共享快照合并、部分窗口、缺失/负值样本、`valid`、副本独立、百分比、JSON 固定键序/3 位小数/`null`/拒绝 NaN；CPU 阶段 120 帧环形平均、未采样为 `null`、同一阶段多区间累加、`other = max(0, cpuMs - 已测和)` 的派生/钳制/JSON 键序；逐级联 caster 平面剔除的内/外/跨越/相切/退化/非有限/padding、skinPose 包围盒替换 bind pose，以及方向光接收面光源空间 XY 预筛 |
+| `vl_renderer_backend_tests` | 107（含 3 项 SpeedTree profile 风力状态） | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约，以及逐 pass GPU 计时的纯逻辑（tick→毫秒、`end < begin`、窗口平均/淘汰、名字顺序、表格字符串）；CPU+GPU 共享快照合并、部分窗口、缺失/负值样本、`valid`、副本独立、百分比、JSON 固定键序/3 位小数/`null`/拒绝 NaN；CPU 阶段 120 帧环形平均、未采样为 `null`、同一阶段多区间累加、`other = max(0, cpuMs - 已测和)` 的派生/钳制/JSON 键序；逐级联 caster 平面剔除的内/外/跨越/相切/退化/非有限/padding、skinPose 包围盒替换 bind pose，以及方向光接收面光源空间 XY 预筛；SpeedTree profile 的 strength/direction response 缓动与场景 gust amplitude 缩放 |
 | `engine_launch_options_tests` | 6（4 后加 2 项 `--perf-jsonl`） | `--gpu-stats` 默认关闭/可接受/与既有参数组合；`--perf-jsonl` 默认关闭、路径必填、与 `--gpu-stats` 组合；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |

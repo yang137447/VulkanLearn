@@ -59,12 +59,11 @@ struct RenderScene
     std::vector<MaterialDrawGroup> materialGroups;
     std::vector<LightSnapshot> lights;
     EnvironmentSnapshot environment;
-    // 本帧冻结的场景风。头发与植被都从这里取方向和强度，避免各自读取资产或
-    // World 的另一个风源。windTimeSeconds 由 RenderSystem 在本帧推进风时钟后
-    // 写入，供阵风相位使用；GT 构建 RenderScene 时保持 0。
+    // 本帧冻结的场景风作者目标。植被从原始目标出发，用自己的 CWindStateMgr
+    // 语义缓动/阵风；头发读取下面的 resolvedWind。windTimeSeconds 由 RenderSystem
+    // 在本帧推进风时钟后写入，供阵风相位使用；GT 构建 RenderScene 时保持 0。
     WorldWind wind;
-    // 本帧解析后的场景风：已缓动并含阵风，头发/植被共用。wind 仍是作者目标，
-    // 供编辑器显示和下一帧缓动使用。
+    // 场级解析结果：已按场景 0.5 s 响应缓动并含场景 gust，供头发等场级消费者使用。
     ResolvedSceneWind resolvedWind;
     double windTimeSeconds = 0.0;
     int debugViewMode = 0;

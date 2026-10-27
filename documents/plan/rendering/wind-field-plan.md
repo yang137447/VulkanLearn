@@ -63,8 +63,9 @@
   每层内按**响应项**组织：`bend`、`oscillation`、`speed`、`flexibility`、`turbulence`
   （`ripple` 为 `planar`/`directional`/`speed`/`flexibility`）。layer 是 WPO 形变的结构输入，
   不能压平成单一响应项。
-- 物种差异通过**各自的曲线数值**表达，风场本身不带物种信息；运行时缓动与阵风在场景风层
-  （`SceneWindRuntime`）统一完成后才外放给植被/头发。
+- 物种差异通过**各自的曲线数值 + 响应时间/gust 包络**表达，风源本身不带物种信息；
+  场景 `wind` 只广播目标，每个 SpeedTree profile 用自己的 `CWindStateMgr` 语义推进
+  响应/阵风。头发的场级缓动/连续阵风由 `SceneWindRuntime` 提供。
 - `phaseOffset`：可选相位偏移，用于同一风场下的错相（目前实例间去相关由 shader 的
   世界位置噪声种子承担，未单独作者化）。
 
@@ -73,7 +74,8 @@
 ### 3.3 GPU 侧（P1）
 
 - 一个 UBO 结构 `WindFieldGPU`：方向（vec4）、强度与阵风参数（vec4）、帧时间（float，固定 tick 累加值）。
-- 植被与头发的 draw 共享同一个 UBO，不再每个物种一份 `SpeedTreeWindStateGPU`。
+- 当前仍沿用每物种一份 `SpeedTreeWindStateGPU`（208 字节），尚未合并为单一 `WindFieldGPU`；
+  合并需要保留每 profile 的响应/gust，因此是后续独立阶段。
 - 具体偏移与 std140 布局在实施阶段由 `BaseStructs.h` 对照确定，必须有 `static_assert`。
 
 ### 3.4 空间风场（P2）
@@ -89,7 +91,7 @@
 | --- | --- | --- |
 | P0 | 固定风 tick + `SC_speedtree` 基线截图 | 同一帧两次截图逐字节一致 |
 | P1a | 场景 `wind` 对象：schema、校验、World 成员、固定 tick 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
-| P1b | 植被改读场景 `wind` + 物种响应系数；移除物种风曲线的风驱动部分（当前仍沿用每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU`） | 零风门 + 视觉门（见 §6.2） |
+| P1b | 植被改读场景 `wind` 目标 + 每 profile 响应/gust；保留每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU` | 零风门 + 视觉门（见 §6.2） |
 | P1c | 头发改读场景 `wind`；移除 `simulationDefaults.wind` 并在加载期拒绝旧字段 | hair 测试通过，零风/有风截图符合预期 |
 | P1d | 编辑器：场景 `wind` 使用作者名、Details 方向/风力滑条/Gust 滑条，移除每物种风剖面 actor 与旧控制台/UI 风控件（已完成）；TF Tab 本地 `wind` 组件调试（未完成） | Tab 调节即时生效 |
 | P2 | 体素风场 `WindVolume` | 单独立项 |
@@ -98,9 +100,10 @@
 补了场景 wind。P1b 的验收按 §6.2 执行（零风 `zero*` 截图逐字节一致，风场 `windy*` 与零风对比
 约 13.3% 像素差异，P0 基线 run1/run2 逐字节一致）。P1d 已完成场景 wind 的作者名、Details
 方向/强度/阵风编辑、每物种风剖面 actor 移除与旧 `windstrength`/`windgust` 控件退役；
-TF Tab 本地风仍待做。原始 `.stsdk` 的响应时间/阵风标量按用户决定
-保留不删，代码注释说明它们只供 SDK 对照；运行时缓动/阵风已集中到 `SceneWindRuntime`，
-SpeedTree 响应数据类型改名为 `WindResponse*`，layer 结构保持不变。
+TF Tab 本地风仍待做。原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
+由每个 SpeedTree profile 的 CWindStateMgr 语义使用；场景 `gust.amplitude` 只缩放
+profile gust，场景 `SceneWindRuntime` 的缓动/连续阵风服务头发等场级消费者。
+SpeedTree 响应数据类型为 `WindResponse*`，layer 结构保持不变。
 
 P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改了风的来源，像素级一致不一定成立，需要先定误差阈值（待你确认）。
 
@@ -108,7 +111,8 @@ P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改�
 
 - **时间源**：P0 已把墙钟改为固定 tick。如果 P1 之前未提交，需要保证 P0 的改动是单独可回退的。
 - **共享状态**：`windResponseProfiles` 是 RenderSystem 成员，并参与世界切换和 prune（`world.cpp:74-101`）。
-  本次已让它跟随 World 的 stage/swap 生命周期；场景风解析结果放在 `currentRenderScene.resolvedWind`。
+  本次已让它跟随 World 的 stage/swap 生命周期；每条 profile 自己保存响应/gust/noise 状态，
+  场级 `resolvedWind` 只供头发。
 - **GPU 布局**：`UBOModel.speedTreeWind` 固定 208 字节（`BaseStructs.h`）。改布局会影响所有材质，需要统一的 static_assert 和 descriptor 检查。
 - **双重风源**：迁移期间若资产风与场景风同时生效会叠加。P1 需要明确优先级，建议直接切换，不做兼容叠加。
 
