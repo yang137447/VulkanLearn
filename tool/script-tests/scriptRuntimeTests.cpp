@@ -757,6 +757,8 @@ TEST(SceneWind, ValidWindParsesNormalizedDirectionStrengthAndGust)
     wind["direction"] = {0, 3, 4};
     ASSERT_NO_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))));
     const WorldWind parsed = ReadSceneWind(wind);
+    EXPECT_TRUE(parsed.authored);
+    EXPECT_EQ(parsed.name, "MainWind");
     EXPECT_NEAR(parsed.direction.y(), 0.6f, 1.0e-6f);
     EXPECT_NEAR(parsed.direction.z(), 0.8f, 1.0e-6f);
     EXPECT_FLOAT_EQ(parsed.strength, 200.0f);
@@ -812,5 +814,6 @@ TEST(SceneWind, AbsentWindLeavesWorldWithZeroStrength)
     World world(1, "NoWindScene");
     EXPECT_FLOAT_EQ(world.GetWind().strength, 0.0f);
     EXPECT_FALSE(world.GetWind().gust.enabled);
+    EXPECT_FALSE(world.GetWind().authored);
 }
 } // namespace

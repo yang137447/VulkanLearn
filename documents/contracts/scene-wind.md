@@ -26,7 +26,8 @@
 
 ## 运行时状态
 
-- `World::GetWind()` 返回 `VL::WorldWind`（方向、强度、阵风参数）。没有 `wind` 对象时默认强度为 0、阵风关闭。
+- `World::GetWind()` 返回 `VL::WorldWind`（方向、强度、阵风参数、`authored`）。没有 `wind` 对象时默认强度为 0、阵风关闭、`authored=false`；
+  显式作者零风时 `authored=true`，编辑器据此保留可再次调节的行。
 - `WorldBuilder` 与 `environment` 在同一次 World 构建中写入风状态，随 World 的发布与替换整体切换。
 - 风随 `WorldSnapshot` 冻结，再由 `RendererFrontend::BuildRenderScene` 复制进 `RenderScene::wind`
   （作者目标）；`RenderSystem` 提交一代 RenderScene 时整体交换该字段。不存在单独的 `activeWind` 副本。
@@ -76,8 +77,8 @@
 ## 编辑器视图
 
 - 大纲把 World 的场景风发布为 `Wind` 分组下的作者 name（如 `MainWind`，身份 `wind|<name>`）。
-  只有 `strength > 0` 或阵风开启时出现；每物种的 SpeedTree 响应曲线属于网格资产，
-  不再作为 actor 出现在大纲。
+  只要场景作者了 `wind`（`authored=true`）就出现，包括显式零风；每物种的 SpeedTree 响应曲线
+  属于网格资产，不再作为 actor 出现在大纲。
 - Details 提供方向、强度（cm/s）与阵风三个参数的可编辑控件；编辑通过
   `SetActorProperty` 更新 World，并由 `SceneDocumentService` 暂存回场景 JSON。
   阵风字段始终存在，写入非零值即开启；全零等效关闭。

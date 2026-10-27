@@ -28,6 +28,9 @@ struct WorldWindGust
 // 各自用自身的响应系数决定如何摆动。默认值即"无风"（strength 为 0）。
 struct WorldWind
 {
+    // 场景是否真的写了 wind 对象。运行时默认值（authored=false）与"作者显式零风"
+    // （authored=true, strength=0）必须区分：编辑器要保留后者的大纲行以便再次调节。
+    bool authored = false;
     // 场景对象名（场景 JSON 的 name）。它不参与风场计算，只供编辑器投影身份/
     // 显示名使用；全场景至多一个 wind 对象，因此运行时消费者不需要它。
     std::string name = "Wind";
@@ -107,6 +110,7 @@ inline WorldWind ReadSceneWind(const nlohmann::json& object)
 {
     using namespace WorldWindDetail;
     WorldWind wind;
+    wind.authored = true;
     wind.name = object.value("name", std::string("Wind"));
     const Eigen::Vector3f direction(
         object.at("direction")[0].get<float>(),

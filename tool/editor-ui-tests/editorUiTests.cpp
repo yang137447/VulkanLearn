@@ -8267,6 +8267,7 @@ World MakeSceneWindTestWorld()
 {
     World world = MakeVisibilityTestWorld();
     WorldWind wind;
+    wind.authored = true;
     wind.name = "MainWind";
     // 方向沿用加载后的契约：已归一化。档位取精确可表示的浮点值，
     // 让 Details 的 9 位有效数字格式化结果可以逐字符断言。
@@ -8400,6 +8401,7 @@ TEST_F(EditorUiTest, SceneWindWithoutGustStillExposesGustControls)
 {
     World world = MakeVisibilityTestWorld();
     WorldWind wind;
+    wind.authored = true;
     wind.name = "MainWind";
     wind.direction = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
     wind.strength = 12.5f;

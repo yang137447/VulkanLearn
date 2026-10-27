@@ -319,7 +319,8 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
     // 场景 JSON 没有作者标记，无法区分"没写 wind"与"写了零风"：默认零风
     //（强度 0 且阵风关闭）不产生一行空的 Scene Wind，有风时才发布这一行。
     const WorldWind& worldWind = world.GetWind();
-    if (worldWind.strength > 0.0f || worldWind.gust.enabled)
+    // 作者显式写了零风也要保留行，否则把强度拖到 0 后 actor 消失、无法再调回来。
+    if (worldWind.authored)
         actors.push_back(BuildSceneWindActor(world));
 
     return actors;
