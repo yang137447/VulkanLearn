@@ -337,6 +337,45 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 按封闭对象校验，未知键直接失败。全部有效数值、两条曲线、角色绑定与碰撞配置
 共同进入 renderable 行为身份；只改默认值不重新导入 ribbon 几何。
 
+### 分组（groups）
+
+TF 描述符可选 `groups` 数组，把 `.tfx` 的 guide 划分为具名组。缺省（或不写）即无分组，
+行为与未引入该字段时完全一致。
+
+```json
+"groups": [
+  { "name": "fringe",
+    "guideRanges": [[0, 120], [340, 400]],
+    "simulationOverrides": { "globalShapeStiffness": 0.3 } }
+]
+```
+
+- `name`：非空字符串，同一资产内唯一。
+- `guideRanges`：非空数组，每项为 `[start, end]` 整数对（JSON `4.0` 与 `4` 等价，布尔与字符串拒绝），
+  半开区间 `[start, end)`，要求 `0 <= start < end`。组内区间互不重叠；跨组也不得共享 guide，
+  区间首尾相接（如 `[0,2)` 与 `[2,4)`）不算重叠。
+- `simulationOverrides`：可选对象，键集为 6 个按组有意义的参数：`damping`、`bendStiffness`、
+  `globalShapeStiffness`、`globalShapeEffectiveRange`、`vspCoefficient`、`vspAccelThresholdMax`。
+  值域与 `simulationDefaults` 相同（复用同一校验代码）。`gravity`、`wind`、`iterations` 是引擎公共参数，
+  不允许按组覆盖；`wind` 将来可能变成全局位置相关场，同样不会成为组级标量。
+  `enabled`、`skinning`、`collision`、`hairCollision` 以及其余键（例如 `rootFixedPoints`、`maxDt`、
+  `backend`、曲线数组）一律拒绝。
+- `groups` 只允许出现在 `type: "tressfx"` 资产上，其他类型直接报错。
+
+校验分两段。描述符层（`MeshAssetValidator::BuildLoadPlan`，编辑器打开/保存也走这里）检查形状、
+名称、组内与跨组重叠以及 overrides 键值。guide 上界 `end <= guideCount` 依赖 `.tfx` 解析结果，
+因此在导入期（`TressfxModelImporter::Import`）检查；错误消息包含组名与资产路径。
+
+导入成功后，`MeshSection::tressfxGuideGroupIds` 给出每根 guide 的分组号（0 = 默认组，
+k = 声明序第 k 组，从 1 起）。仅当声明了 `groups` 时填充且长度等于 guideCount；未声明时该数组为空，
+语义等同于全部 guide 属于组 0。该数组只存在于 CPU 导入结果中，不进入 GPU buffer。
+
+几何缓存身份（`modelCacheKey`）在声明 `groups` 时追加组名与区间；`simulationOverrides` 不影响导入结果，
+不进入几何身份。
+
+当前状态：分组只完成数据校验与解析。运行期尚未为各组创建独立模拟对象，`simulationOverrides`
+不参与求解，放置的 `simulation.overrides` 与资产默认值的合成规则保持不变。
+
 ### 碰撞：胶囊与逐帧 SDF 网格
 
 `hairCollision` 是放置行为：蓝图写在 tressfx 组件上，场景 mesh 写在 `tressfx` 内。

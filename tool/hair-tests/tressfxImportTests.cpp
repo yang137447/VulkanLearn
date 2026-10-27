@@ -1250,6 +1250,174 @@ TEST_F(TressfxImport, RejectsInvalidCenterlineBeforePublishingGeometry)
     EXPECT_THROW(Import(bytes), std::runtime_error);
 }
 
+nlohmann::json WithGroups(nlohmann::json groups)
+{
+    auto json = Descriptor();
+    json["groups"] = std::move(groups);
+    return json;
+}
+
+nlohmann::json TwoGroups()
+{
+    return nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 2}, {4, 6}}},
+            {"simulationOverrides", {{"globalShapeStiffness", 0.3}}}},
+        {{"name", "back"}, {"guideRanges", {{2, 4}}}}});
+}
+
+TEST(TressfxGuideGroups, ValidGroupsResolveRangesAndOverrides)
+{
+    const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(TwoGroups()));
+    ASSERT_EQ(plan.tressfxGuideGroups.size(), 2u);
+    EXPECT_EQ(plan.tressfxGuideGroups[0].name, "fringe");
+    EXPECT_EQ(plan.tressfxGuideGroups[1].name, "back");
+    ASSERT_EQ(plan.tressfxGuideGroups[0].guideRanges.size(), 2u);
+    EXPECT_EQ(plan.tressfxGuideGroups[0].guideRanges[1], (std::pair<uint32_t, uint32_t>{4u, 6u}));
+    EXPECT_DOUBLE_EQ(plan.tressfxGuideGroups[0].simulationOverrides.at("globalShapeStiffness")
+        .get<double>(), 0.3);
+    EXPECT_NE(plan.modelCacheKey.find("|groups="), std::string::npos);
+}
+
+TEST(TressfxGuideGroups, AbsentGroupsLeaveNoGroupPlanOrIdentity)
+{
+    const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", Descriptor());
+    EXPECT_TRUE(plan.tressfxGuideGroups.empty());
+    EXPECT_EQ(plan.modelCacheKey.find("|groups="), std::string::npos);
+}
+
+TEST(TressfxGuideGroups, DuplicateNameIsRejected)
+{
+    auto groups = TwoGroups();
+    groups[1]["name"] = "fringe";
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+}
+
+TEST(TressfxGuideGroups, EmptyNameIsRejected)
+{
+    auto groups = TwoGroups();
+    groups[0]["name"] = "";
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+}
+
+TEST(TressfxGuideGroups, OverlappingRangesWithinOneGroupAreRejected)
+{
+    auto groups = TwoGroups();
+    groups[0]["guideRanges"] = {{0, 4}, {3, 6}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+}
+
+TEST(TressfxGuideGroups, GuideInTwoGroupsIsRejected)
+{
+    auto groups = TwoGroups();
+    // "back" 的 [2,5) 与 "fringe" 的 [4,6) 在 4 号 guide 上重叠。
+    groups[1]["guideRanges"] = {{2, 5}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+}
+
+TEST(TressfxGuideGroups, TouchingHalfOpenRangesAcrossGroupsAreAccepted)
+{
+    auto groups = TwoGroups();
+    groups[0]["guideRanges"] = {{0, 2}};
+    groups[1]["guideRanges"] = {{2, 4}};
+    EXPECT_NO_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)));
+}
+
+TEST(TressfxGuideGroups, RangeMustBeNonEmptyIntegerPairWithinOrder)
+{
+    const std::vector<nlohmann::json> invalid = {
+        nlohmann::json::array({3, 3}), nlohmann::json::array({5, 2}),
+        nlohmann::json::array({0.5, 2}), nlohmann::json::array({-1, 2}),
+        nlohmann::json::array({"0", 2}), nlohmann::json::array({0}),
+        nlohmann::json::array({0, 2, 4})};
+    for (const auto& range : invalid)
+    {
+        SCOPED_TRACE(range.dump());
+        auto groups = TwoGroups();
+        groups[0]["guideRanges"] = nlohmann::json::array({range});
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+            std::runtime_error);
+    }
+}
+
+TEST(TressfxGuideGroups, OverrideKeysOutsideNineParameterTableAreRejected)
+{
+    for (const char* field : {"enabled", "skinning", "collision", "hairCollision",
+             "rootFixedPoints", "maxDt", "backend", "dampping", "gravity", "wind", "iterations"})
+    {
+        SCOPED_TRACE(field);
+        auto groups = TwoGroups();
+        groups[0]["simulationOverrides"] = {{field, nlohmann::json::object()}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+            std::runtime_error);
+    }
+}
+
+TEST(TressfxGuideGroups, OverrideValuesUseSimulationRanges)
+{
+    auto groups = TwoGroups();
+    groups[0]["simulationOverrides"] = {{"damping", 2.0}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+    groups[0]["simulationOverrides"] = {{"bendStiffness", 2.0}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+        std::runtime_error);
+}
+
+TEST(TressfxGuideGroups, GroupsAreOnlyAcceptedOnTressfxAssets)
+{
+    auto json = Descriptor();
+    json["type"] = "mesh";
+    json.erase("strandRadius");
+    json["groups"] = TwoGroups();
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_hair.json", json);
+        FAIL() << "groups accepted on a mesh asset";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("only supported on tressfx"), std::string::npos);
+    }
+}
+
+TEST_F(TressfxImport, ResolvesGuideGroupIdsFromDeclaredRanges)
+{
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", WithGroups(
+        nlohmann::json::array({
+            {{"name", "a"}, {"guideRanges", {{0, 1}}}},
+            {{"name", "b"}, {"guideRanges", {{2, 3}}}}})));
+    const auto section = Import(TfxFixture::Guides(3)).sections[0];
+    // 0 号为默认组；未声明的 1 号 guide 保持 0。
+    EXPECT_EQ(section.tressfxGuideGroupIds, (std::vector<uint32_t>{1u, 0u, 2u}));
+}
+
+TEST_F(TressfxImport, RangePastTfxGuideCountNamesGroupAndAsset)
+{
+    request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", WithGroups(
+        nlohmann::json::array({{{"name", "tail"}, {"guideRanges", {{2, 4}}}}})));
+    try
+    {
+        Import(TfxFixture::Guides(3));
+        FAIL() << "range past the .tfx guide count was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("\"tail\""), std::string::npos);
+        EXPECT_NE(message.find("SM_guides.json"), std::string::npos);
+    }
+}
+
+TEST_F(TressfxImport, AbsentGroupsLeaveGuideGroupIdsEmpty)
+{
+    const auto section = Import(TfxFixture::Guides(3)).sections[0];
+    EXPECT_TRUE(section.tressfxGuideGroupIds.empty());
+}
+
 TEST(TressfxRenderableKey, GpuHairPlacementAppendsInstanceButStaticMeshesShare)
 {
     // 普通网格仍按模型+section 共享，不受 placement 身份影响。

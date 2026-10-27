@@ -30,6 +30,38 @@ namespace
             " (" + modelDataPath + ") has " + std::to_string(pointsPerStrand) +
             " points per strand");
     }
+
+    // 把 groups[] 的 [start,end) 区间展开成每 guide 的分组号（0 = 默认组，k = 声明序第 k 组）。
+    // 上界依赖 .tfx 的 guideCount，只能在解析后检查；组内/跨组重叠已由描述符层拒绝，
+    // 这里再确认一次，避免后一组静默覆盖前一组的归属。未声明 groups 时返回空数组。
+    std::vector<uint32_t> ResolveGuideGroupIds(const MeshAssetBuildPlan& plan, uint32_t guideCount)
+    {
+        if (plan.tressfxGuideGroups.empty())
+            return {};
+        const std::string where = " (" + plan.meshAssetPath + ", " + plan.modelDataPath + ")";
+        std::vector<uint32_t> ids(guideCount, 0u);
+        for (size_t group = 0; group < plan.tressfxGuideGroups.size(); ++group)
+        {
+            const auto& declared = plan.tressfxGuideGroups[group];
+            for (const auto& range : declared.guideRanges)
+            {
+                if (range.second > guideCount)
+                    throw std::runtime_error(
+                        "TressFX group \"" + declared.name + "\" guideRanges [" +
+                        std::to_string(range.first) + ", " + std::to_string(range.second) +
+                        ") exceed the .tfx guide count " + std::to_string(guideCount) + where);
+                for (uint32_t guide = range.first; guide < range.second; ++guide)
+                {
+                    if (ids[guide] != 0u)
+                        throw std::runtime_error(
+                            "TressFX guide " + std::to_string(guide) +
+                            " belongs to more than one group: \"" + declared.name + "\"" + where);
+                    ids[guide] = static_cast<uint32_t>(group + 1);
+                }
+            }
+        }
+        return ids;
+    }
 } // namespace
 
 void TressfxModelImporter::ValidateImportRequest(const ModelImportRequest& request) const
@@ -116,6 +148,8 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
         section.tressfxRootPositions.push_back(
             Eigen::Vector3f(root[0], root[1], root[2]));
     }
+    // 分组号与根点同属 CPU 资产副本；GPU 侧 stage 2 再决定如何消费。
+    section.tressfxGuideGroupIds = ResolveGuideGroupIds(request.buildPlan, asset.guideCount);
     result.sections.push_back(std::move(section));
     return result;
 }

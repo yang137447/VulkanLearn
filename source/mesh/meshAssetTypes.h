@@ -266,6 +266,17 @@ struct MeshAnimationMontagePlan
     std::string digest;
 };
 
+// TressFX 分组声明（TF 描述符 groups[]）。描述符层只校验形状、名称唯一与跨组重叠；
+// guide 上界要等 .tfx 解析后由导入器检查。simulationOverrides 已通过与放置 overrides
+// 相同的数值校验，保存为作者原始对象（缺省键表示沿用资产默认值），尚未参与运行期求解。
+struct TressfxGuideGroupPlan
+{
+    std::string name;
+    // 半开区间 [start, end) 的 guide 索引，组内互不重叠，跨组也互不重叠。
+    std::vector<std::pair<uint32_t, uint32_t>> guideRanges;
+    nlohmann::json simulationOverrides = nlohmann::json::object();
+};
+
 // Validated mesh asset data needed before importing the source model file.
 // RendererMeshLoader uses this plan to select an importer and later bind section
 // material slots.
@@ -282,6 +293,8 @@ struct MeshAssetBuildPlan
     float strandRadius = 0.0f;
     // TF simulationDefaults；不含皮肤绑定/碰撞，不能直接作为放置的最终配置。
     TressfxSimulationConfig tressfxSimulation;
+    // TF groups[] 的已校验声明；空表示未声明分组（与缺省 groups 行为一致）。
+    std::vector<TressfxGuideGroupPlan> tressfxGuideGroups;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
     std::string skeletonPath;
@@ -322,6 +335,9 @@ struct MeshSection
     // 加载期从绑定姿态身体派生根点权重时需要一份主机侧可读副本；只留根点而不是
     // 全部点，正式资产 40,334 根约 0.48 MB。
     std::vector<Eigen::Vector3f> tressfxRootPositions;
+    // 每根 guide 的分组号：0 = 默认组，k = 声明序第 k 组（从 1 起）。
+    // 仅在 TF 声明了 groups 时填充（长度 == guideCount）；为空表示全部 guide 属于默认组 0。
+    std::vector<uint32_t> tressfxGuideGroupIds;
     std::vector<uint32_t> indices;
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;

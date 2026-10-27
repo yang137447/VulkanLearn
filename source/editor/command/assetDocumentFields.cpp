@@ -71,6 +71,8 @@ const Field fields[] = {
     {K::Tressfx, "", "simulationDefaults.globalShapeEffectiveRange", ValueKind::Number},
     {K::Tressfx, "", "simulationDefaults.vspCoefficient", ValueKind::Number},
     {K::Tressfx, "", "simulationDefaults.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
+    // 分组整体作为数组写入：形状、名称与区间由 MeshAssetValidator 在 modify/save 时校验。
+    {K::Tressfx, "", "groups", ValueKind::Array, true},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
