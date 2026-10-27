@@ -245,8 +245,22 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
         case P::WindGustAmplitude:
             if (edit.value < 0.0f || edit.value > 1.0f)
                 return Reject(error, "Wind gust amplitude must be in [0,1].");
+            if (edit.value > 0.0f)
+            {
+                // UI 只暴露一个 Gust 滑条；首次开启时补齐场景风层的固定频率/湍流，
+                // 让 JSON 仍满足 ValidateSceneWindJson 的完整 gust 对象。
+                if (!wind.gust.enabled)
+                {
+                    wind.gust.frequency = 0.5f;
+                    wind.gust.turbulence = 0.2f;
+                }
+                wind.gust.enabled = true;
+            }
+            else
+            {
+                wind.gust.enabled = false;
+            }
             wind.gust.amplitude = edit.value;
-            wind.gust.enabled = true;
             break;
         case P::WindGustFrequency:
             if (edit.value < 0.0f)

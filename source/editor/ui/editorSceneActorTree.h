@@ -164,12 +164,16 @@ struct EditorSceneActorField
 std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapshot& actor);
 
 // 可编辑字段的值来自冻结 actor；控件只发枚举属性与分量，不发整套旧 TRS。
+// hasRange 为真时 UI 同时生成滑条；文本输入始终保留，精确输入不依赖滑条。
 struct EditorSceneActorEditableField
 {
     EditorActorProperty property;
     std::string label;
     Eigen::Vector3f value;
     uint32_t components;
+    bool hasRange = false;
+    float minValue = 0.0f;
+    float maxValue = 0.0f;
 };
 std::vector<EditorSceneActorEditableField> SceneActorEditableFields(const EditorSceneActorSnapshot& actor);
 std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t component);

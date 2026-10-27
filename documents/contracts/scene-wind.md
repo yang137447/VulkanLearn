@@ -79,9 +79,10 @@
 - 大纲把 World 的场景风发布为 `Wind` 分组下的作者 name（如 `MainWind`，身份 `wind|<name>`）。
   只要场景作者了 `wind`（`authored=true`）就出现，包括显式零风；每物种的 SpeedTree 响应曲线
   属于网格资产，不再作为 actor 出现在大纲。
-- Details 提供方向、强度（cm/s）与阵风三个参数的可编辑控件；编辑通过
-  `SetActorProperty` 更新 World，并由 `SceneDocumentService` 暂存回场景 JSON。
-  阵风字段始终存在，写入非零值即开启；全零等效关闭。
+- Details 沿用旧 SpeedTree 调节方式：方向 + `Strength` 滑条（0–3270 cm/s）+ `Gust` 滑条（0–1）。
+  编辑通过 `SetActorProperty` 更新 World，并由 `SceneDocumentService` 暂存回场景 JSON；
+  `Gust` 为 0 即关闭，非零时使用固定的 `frequency=0.5`、`turbulence=0.2` 默认值，
+  噪声频率/湍流不暴露在 UI。
 - 场景风没有 TRS、没有可见性开关；本地 TF Tab 风控件仍属 P1d。
 - 风源数据只保留场景 `wind`；原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
   仍读入但只供 SDK 对照状态机，运行时缓动与阵风由 `SceneWindRuntime` 统一处理。

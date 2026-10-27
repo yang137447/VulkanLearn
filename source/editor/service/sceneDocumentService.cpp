@@ -432,6 +432,13 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
         object["strength"] = actor.worldWind.strengthCmPerSec;
         break;
     case P::WindGustAmplitude:
+        // Gust 滑条归零即关闭：删除整个 gust 对象，重载后才能保持关闭语义。
+        if (actor.worldWind.gustAmplitude <= 0.0f)
+        {
+            object.erase("gust");
+            break;
+        }
+        [[fallthrough]];
     case P::WindGustFrequency:
     case P::WindGustTurbulence:
     {

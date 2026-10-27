@@ -673,12 +673,25 @@ TEST_F(SceneDocumentTest, WindActorStagesAuthorNameFieldsAndSaves)
 
     std::ifstream file(windPath);
     const Json saved = Json::parse(file);
+    file.close();
     const Json& wind = saved["objects"][2];
     EXPECT_EQ(wind["strength"], 800);
     EXPECT_EQ(wind["gust"]["amplitude"], 0.4f);
     EXPECT_EQ(wind["gust"]["frequency"], 0.8f);
     EXPECT_EQ(wind["gust"]["turbulence"], 0.3f);
     EXPECT_EQ(wind["name"], "MainWind");
+
+    // Gust 滑条归零会删除 gust 对象，重载后保持关闭；再次非零编辑会补全整段对象。
+    actor.worldWind.gustAmplitude = 0.0f;
+    windService.RecordActorEdit(actor,
+        {1, actor.identity, EditorActorProperty::WindGustAmplitude, 0, 0.0f});
+    const auto zeroDocuments = windService.ModifiedDocuments();
+    ASSERT_EQ(zeroDocuments.size(), 1u);
+    command.expectedDocumentRevision = zeroDocuments.front().revision;
+    ASSERT_EQ(windService.Save(command).status, EditorCommandStatus::Succeeded);
+    std::ifstream zeroFile(windPath);
+    const Json zeroSaved = Json::parse(zeroFile);
+    EXPECT_FALSE(zeroSaved["objects"][2].contains("gust"));
 }
 
 TEST_F(SceneDocumentTest, SceneSaveProtocolRoundTripsAndRequiresRevision)

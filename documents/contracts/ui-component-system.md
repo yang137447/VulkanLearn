@@ -365,7 +365,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   上下适应速率（1/s）与目标灰度（linear）；只在选中 Camera 时出现，没有独立后处理标签页。
   physical 配置显示只读推导 EV100，点击 Manual 才显式选择 ev100；刷新不转换模式。
   参数行固定挂载，模式只改变可见性；隐藏参数不接受 UI 编辑，焦点输入与静止帧写缓存保留。
-  环境仍只读；场景风可编辑方向、强度（cm/s）与阵风参数。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
+  环境仍只读；场景风可编辑方向、风力滑条与 Gust 滑条。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
   控件来自 `SceneActorEditableFields()`，值变化只刷新控件，不重建 DOM，保留焦点文本。
 - **对象编辑边界**：`SetActorProperty` 通过 EngineLoop → RuntimeCommandExecutor →
   `ApplyEditorActorProperty` 在 GT 写 World，payload 是稳定身份、World generation、枚举属性、

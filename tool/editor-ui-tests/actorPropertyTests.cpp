@@ -112,6 +112,11 @@ TEST(EditorActorProperty, SceneWindEditsDirectionStrengthAndGust)
 
     ASSERT_TRUE(ApplyEditorActorProperty(
         world, Edit("wind|MainWind", P::WindGustAmplitude, 0, 0.4f), error)) << error;
+    EXPECT_TRUE(world.GetWind().gust.enabled);
+    EXPECT_FLOAT_EQ(world.GetWind().gust.amplitude, 0.4f);
+    // UI 只暴露 Gust 滑条；首次开启补齐固定频率/湍流。
+    EXPECT_FLOAT_EQ(world.GetWind().gust.frequency, 0.5f);
+    EXPECT_FLOAT_EQ(world.GetWind().gust.turbulence, 0.2f);
     ASSERT_TRUE(ApplyEditorActorProperty(
         world, Edit("wind|MainWind", P::WindGustFrequency, 0, 0.8f), error)) << error;
     ASSERT_TRUE(ApplyEditorActorProperty(

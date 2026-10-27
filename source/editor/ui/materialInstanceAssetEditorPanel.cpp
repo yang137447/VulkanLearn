@@ -199,6 +199,9 @@ std::string ActorPropertyRowMarkup(const EditorSceneActorEditableField& field)
             (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
         entry.value = SceneActorNumber(field.value[component]);
         entry.change = {"actor-property", static_cast<size_t>(field.property), component};
+        entry.hasRange = field.hasRange;
+        entry.minValue = field.minValue;
+        entry.maxValue = field.maxValue;
         components.push_back(std::move(entry));
     }
     return "<div class=\"actor-property-row\" id=\"" +

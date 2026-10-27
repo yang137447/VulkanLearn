@@ -460,17 +460,15 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
     std::vector<EditorSceneActorEditableField> fields;
     if (actor.type == EditorSceneActorType::SceneWind)
     {
-        // 场景风没有 TRS；方向、强度和阵风都直接编辑 World，再由场景文档暂存。
-        // 阵风字段始终可见，写入非零值即开启；全零等效关闭。
+        // 与旧 SpeedTree 调节一致：方向 + 风力滑条 + 阵风滑条，不暴露噪声内部参数。
+        // 阵风滑条为 0 即关闭；非零时使用场景风层固定的频率/湍流默认值。
         fields.push_back({P::WindDirection, "Direction", actor.worldWind.direction, 3});
         fields.push_back({P::WindStrength, "Strength (cm/s)",
-            Eigen::Vector3f(actor.worldWind.strengthCmPerSec, 0, 0), 1});
-        fields.push_back({P::WindGustAmplitude, "Gust Amplitude",
-            Eigen::Vector3f(actor.worldWind.gustAmplitude, 0, 0), 1});
-        fields.push_back({P::WindGustFrequency, "Gust Frequency",
-            Eigen::Vector3f(actor.worldWind.gustFrequency, 0, 0), 1});
-        fields.push_back({P::WindGustTurbulence, "Gust Turbulence",
-            Eigen::Vector3f(actor.worldWind.gustTurbulence, 0, 0), 1});
+            Eigen::Vector3f(actor.worldWind.strengthCmPerSec, 0, 0), 1,
+            true, 0.0f, 3270.0f});
+        fields.push_back({P::WindGustAmplitude, "Gust",
+            Eigen::Vector3f(actor.worldWind.gustAmplitude, 0, 0), 1,
+            true, 0.0f, 1.0f});
         return fields;
     }
     if (actor.type == EditorSceneActorType::Environment)

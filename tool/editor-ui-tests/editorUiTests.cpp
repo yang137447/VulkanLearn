@@ -8341,15 +8341,17 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesEditableActorWithAuthorName)
     EXPECT_FLOAT_EQ(sceneWind->worldWind.gustFrequency, 0.5f);
     EXPECT_FLOAT_EQ(sceneWind->worldWind.gustTurbulence, 0.75f);
 
-    // 场景风在 Details 中可编辑：方向、强度、阵风三个参数。
+    // 场景风在 Details 中按旧 SpeedTree 调节方式收敛：方向、风力滑条、阵风滑条。
     const std::vector<EditorSceneActorEditableField> editable =
         SceneActorEditableFields(*sceneWind);
-    ASSERT_EQ(editable.size(), 5u);
+    ASSERT_EQ(editable.size(), 3u);
     EXPECT_EQ(editable[0].property, EditorActorProperty::WindDirection);
     EXPECT_EQ(editable[1].property, EditorActorProperty::WindStrength);
+    EXPECT_TRUE(editable[1].hasRange);
+    EXPECT_FLOAT_EQ(editable[1].maxValue, 3270.0f);
     EXPECT_EQ(editable[2].property, EditorActorProperty::WindGustAmplitude);
-    EXPECT_EQ(editable[3].property, EditorActorProperty::WindGustFrequency);
-    EXPECT_EQ(editable[4].property, EditorActorProperty::WindGustTurbulence);
+    EXPECT_TRUE(editable[2].hasRange);
+    EXPECT_FLOAT_EQ(editable[2].maxValue, 1.0f);
     const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
     ASSERT_EQ(info.size(), 1u);
     EXPECT_EQ(info[0].id, "actor-field-name");
@@ -8375,12 +8377,14 @@ TEST_F(EditorUiTest, NonZeroSceneWindPublishesEditableActorWithAuthorName)
         EditorActorProperty::WindDirection, 2))->GetValue(), "-1");
     EXPECT_EQ(Control(SceneActorPropertyControlId(
         EditorActorProperty::WindStrength, 0))->GetValue(), "550");
+    EXPECT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0) + "-slider"), nullptr);
     EXPECT_EQ(Control(SceneActorPropertyControlId(
         EditorActorProperty::WindGustAmplitude, 0))->GetValue(), "0.25");
+    EXPECT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustAmplitude, 0) + "-slider"), nullptr);
     EXPECT_EQ(Control(SceneActorPropertyControlId(
-        EditorActorProperty::WindGustFrequency, 0))->GetValue(), "0.5");
-    EXPECT_EQ(Control(SceneActorPropertyControlId(
-        EditorActorProperty::WindGustTurbulence, 0))->GetValue(), "0.75");
+        EditorActorProperty::WindDirection, 0) + "-slider"), nullptr);
     EXPECT_EQ(Control(SceneActorPropertyControlId(EditorActorProperty::Position, 0)), nullptr);
 
     // 控件把编辑提交为带作者身份/World 代数的 SetActorProperty。
@@ -8413,13 +8417,12 @@ TEST_F(EditorUiTest, SceneWindWithoutGustStillExposesGustControls)
     for (const EditorSceneActorSnapshot& actor : built)
         if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
     ASSERT_NE(sceneWind, nullptr);
-    // 阵风关闭时仍暴露阵风控件（全零）；用户写入非零值即开启。
+    // 阵风关闭时仍暴露 Gust 滑条（0）；用户拖到非零即开启。
     const std::vector<EditorSceneActorEditableField> editable =
         SceneActorEditableFields(*sceneWind);
-    ASSERT_EQ(editable.size(), 5u);
+    ASSERT_EQ(editable.size(), 3u);
+    EXPECT_EQ(editable[2].property, EditorActorProperty::WindGustAmplitude);
     EXPECT_FLOAT_EQ(editable[2].value[0], 0.0f);
-    EXPECT_FLOAT_EQ(editable[3].value[0], 0.0f);
-    EXPECT_FLOAT_EQ(editable[4].value[0], 0.0f);
     const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
     ASSERT_EQ(info.size(), 1u);
     EXPECT_EQ(info[0].id, "actor-field-name");

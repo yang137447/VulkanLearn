@@ -91,7 +91,7 @@
 | P1a | 场景 `wind` 对象：schema、校验、World 成员、固定 tick 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
 | P1b | 植被改读场景 `wind` + 物种响应系数；移除物种风曲线的风驱动部分（当前仍沿用每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU`） | 零风门 + 视觉门（见 §6.2） |
 | P1c | 头发改读场景 `wind`；移除 `simulationDefaults.wind` 并在加载期拒绝旧字段 | hair 测试通过，零风/有风截图符合预期 |
-| P1d | 编辑器：场景 `wind` 使用作者名、Details 可编辑方向/强度/阵风，移除每物种风剖面 actor 与旧控制台/UI 风控件（已完成）；TF Tab 本地 `wind` 组件调试（未完成） | Tab 调节即时生效 |
+| P1d | 编辑器：场景 `wind` 使用作者名、Details 方向/风力滑条/Gust 滑条，移除每物种风剖面 actor 与旧控制台/UI 风控件（已完成）；TF Tab 本地 `wind` 组件调试（未完成） | Tab 调节即时生效 |
 | P2 | 体素风场 `WindVolume` | 单独立项 |
 
 进度（2026-10-27）：P0、P1a、P1b、P1c 已完成；P1c 同时移除了资产 wind 并在四个女性发丝场景
