@@ -667,40 +667,6 @@ void RuntimeCommandExecutor::ExecuteCommand(
             worldManager,
             diagnostics);
         break;
-    case RuntimeCommandType::SetSpeedTreeStrength:
-        if (renderSystem.SetSpeedTreeStrength(command.floatValue))
-        {
-            diagnostics.ReportInfo(
-                "SpeedTree strength target set to " + std::to_string(command.floatValue) +
-                " (range 0..1; response time applies).");
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree strength ignored because no wind-enabled tree is active.");
-        }
-        break;
-    case RuntimeCommandType::SetSpeedTreeGustingEnabled:
-        if (renderSystem.SetSpeedTreeGustingEnabled(command.intValue != 0))
-        {
-            diagnostics.ReportInfo(
-                std::string("SpeedTree gusting ") +
-                (command.intValue != 0 ? "enabled." : "disabled."));
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree gust toggle ignored because no wind-enabled tree is active.");
-        }
-        break;
-    case RuntimeCommandType::ForceSpeedTreeGust:
-        if (renderSystem.ForceSpeedTreeGust())
-        {
-            diagnostics.ReportInfo("SpeedTree gust forced.");
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree gust ignored because no wind-enabled tree is active or gusting is disabled.");
-        }
-        break;
     case RuntimeCommandType::SetToneMappingMode:
         ApplyToneMappingMode(command.intValue, renderSystem, diagnostics);
         break;

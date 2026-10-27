@@ -264,15 +264,6 @@ public:
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
     ComputeShaderArtifact GetActiveComputeShaderArtifact(
         const std::string& shaderName) const;
-    bool SetSpeedTreeStrength(float strength);
-    float GetSpeedTreeStrength() const { return speedTreeStrength; }
-    bool SetSpeedTreeGustingEnabled(bool enabled);
-    bool GetSpeedTreeGustingEnabled() const { return speedTreeGustingEnabled; }
-    uint32_t GetSpeedTreeWindProfileCount() const
-    {
-        return static_cast<uint32_t>(speedTreeWindProfiles.GetProfileCount());
-    }
-    bool ForceSpeedTreeGust();
     // 场景风的只读视图。风随时间与 SpeedTree 共用同一个固定 tick 时钟（秒），
     // 由 AdvanceSpeedTreeWindProfiles 每渲染帧推进并写回 currentRenderScene；
     // 活动 World 换代时清零。头发与植被消费同一份帧内风状态。
@@ -505,8 +496,6 @@ private:
     float exposureDeltaSeconds = 1.0f / 60.0f;
     bool exposureClockInitialized = false;
     std::chrono::steady_clock::time_point exposureLastFrameTime;
-    float speedTreeStrength = 0.35f;
-    bool speedTreeGustingEnabled = true;
     bool hasRenderScene = false;
     double currentWindTimeSeconds = 0.0;
     SpeedTreeWindProfileSet speedTreeWindProfiles;

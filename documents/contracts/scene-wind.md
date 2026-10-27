@@ -49,7 +49,9 @@
   `windVector.w` 仍为归一化强度 [0, 1]。
 - 响应曲线采样与 UBO 打包由 `UpdateGpuState` 共享；SDK 自驱动状态机（`SetStrength`、`ForceGust` 等）
   只供 `tool/speedtree-wind-validation` 对照，渲染路径不调用。
-- 控制台/UI 的 SpeedTree 强度与阵风开关仍存在于 `RenderSystem`，但不再影响渲染（待 P1d 清理）。
+- 控制台 `windstrength`/`windgust` 与它们的 UI action / view-model 字段已移除；植被风完全由场景风驱动。
+  `SpeedTreeWindProfileSet::SetStrength`、`SetGustingEnabled` 与 `ForceGust` 仍保留，但只供
+  `tool/speedtree-wind-validation` 对照，渲染路径不调用。
 
 ## 头发消费（TressFX）
 

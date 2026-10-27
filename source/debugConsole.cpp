@@ -626,62 +626,6 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
-    if (command == "windgust")
-    {
-        std::string mode;
-        if (!(commandStream >> mode))
-        {
-            std::cout << "Usage: windgust <on|off|once>" << std::endl;
-            return;
-        }
-
-        VL::RuntimeCommand runtimeCommand;
-        if (mode == "on")
-        {
-            runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeGustingEnabled;
-            runtimeCommand.intValue = 1;
-        }
-        else if (mode == "off")
-        {
-            runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeGustingEnabled;
-            runtimeCommand.intValue = 0;
-        }
-        else if (mode == "once")
-        {
-            runtimeCommand.type = VL::RuntimeCommandType::ForceSpeedTreeGust;
-        }
-        else
-        {
-            std::cout << "Usage: windgust <on|off|once>" << std::endl;
-            return;
-        }
-        runtimeCommand.sourceText = line;
-        commandBus.Queue(std::move(runtimeCommand));
-        return;
-    }
-
-    if (command == "windstrength")
-    {
-        float value = 0.0f;
-        if (!(commandStream >> value))
-        {
-            std::cout << "Usage: windstrength <0..1>" << std::endl;
-            return;
-        }
-        if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
-        {
-            std::cout << "windstrength must be a finite value in range 0..1." << std::endl;
-            return;
-        }
-
-        VL::RuntimeCommand runtimeCommand;
-        runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeStrength;
-        runtimeCommand.floatValue = value;
-        runtimeCommand.sourceText = line;
-        commandBus.Queue(std::move(runtimeCommand));
-        return;
-    }
-
     if (command == "screenshot")
     {
         std::string path;
@@ -924,8 +868,6 @@ void DebugConsole::PrintHelp() const
     std::cout << "  hair set <objectName> <field> <value...> - override one live simulation parameter (GPU only)\n";
     std::cout << "  offline <on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export>\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
-    std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
-    std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";
     std::cout << "  screenshot [file.bmp] - capture the presented swapchain image\n";
     std::cout << "  camera get - print the active camera pose\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";

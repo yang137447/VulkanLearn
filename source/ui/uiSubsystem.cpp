@@ -117,9 +117,6 @@ UiSectionMask SectionsForUiAction(UiActionType type)
     case UiActionType::SaveCsmSettingsToScene:
     case UiActionType::SetEnvironmentIntensity:
     case UiActionType::SetSunIntensity:
-    case UiActionType::SetSpeedTreeStrength:
-    case UiActionType::SetSpeedTreeGustingEnabled:
-    case UiActionType::ForceSpeedTreeGust:
         return UiSectionBit(UiSectionId::EnvironmentLighting);
     case UiActionType::SetActorVisible:
     case UiActionType::SetActorProperty:
@@ -782,9 +779,6 @@ void UiSubsystem::ApplyChangedSections(UiSectionMask changed)
         lastViewModel.environmentShGpuMs = environment.environmentShGpuMs;
         lastViewModel.environmentPrefilterGpuMs = environment.environmentPrefilterGpuMs;
         lastViewModel.environmentCommitGpuMs = environment.environmentCommitGpuMs;
-        lastViewModel.speedTreeStrength = environment.speedTreeStrength;
-        lastViewModel.speedTreeGustingEnabled = environment.speedTreeGustingEnabled;
-        lastViewModel.speedTreeWindProfileCount = environment.speedTreeWindProfileCount;
     }
     if ((changed & UiSectionBit(UiSectionId::Offline)) != 0)
     {

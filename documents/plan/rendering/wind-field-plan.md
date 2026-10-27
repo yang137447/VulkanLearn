@@ -87,13 +87,14 @@
 | P1a | 场景 `wind` 对象：schema、校验、World 成员、固定 tick 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
 | P1b | 植被改读场景 `wind` + 物种响应系数；移除物种风曲线的风驱动部分（当前仍沿用每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU`） | 零风门 + 视觉门（见 §6.2） |
 | P1c | 头发改读场景 `wind`；移除 `simulationDefaults.wind` 并在加载期拒绝旧字段 | hair 测试通过，零风/有风截图符合预期 |
-| P1d | 编辑器：场景 `wind` 只读 actor（已完成）；TF Tab 本地 `wind` 组件调试与旧 SpeedTree 控件清理（未完成） | Tab 调节即时生效 |
+| P1d | 编辑器：场景 `wind` 只读 actor 与旧控制台/UI 风控件退役（已完成）；TF Tab 本地 `wind` 组件调试与 `SpeedTree Wind Profiles` 文案清理（未完成） | Tab 调节即时生效 |
 | P2 | 体素风场 `WindVolume` | 单独立项 |
 
 进度（2026-10-27）：P0、P1a、P1b、P1c 已完成；P1c 同时移除了资产 wind 并在四个女性发丝场景
 补了场景 wind。P1b 的验收按 §6.2 执行（零风 `zero*` 截图逐字节一致，风场 `windy*` 与零风对比
-约 13.3% 像素差异，P0 基线 run1/run2 逐字节一致）。P1d 只完成编辑器只读 Scene Wind actor；
-TF Tab 本地风、`windstrength`/`windgust` 与 SpeedTree UI 控件清理仍待做。
+约 13.3% 像素差异，P0 基线 run1/run2 逐字节一致）。P1d 已完成编辑器只读 Scene Wind actor
+与 `windstrength`/`windgust`（含 UI action/view-model）退役；TF Tab 本地风与
+`SpeedTree Wind Profiles` 文案清理仍待做。
 
 P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改了风的来源，像素级一致不一定成立，需要先定误差阈值（待你确认）。
 

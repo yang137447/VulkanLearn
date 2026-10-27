@@ -90,9 +90,6 @@ enum class UiActionType
     RedoSceneEdit,
     CreateScriptBlueprintAsset,
     OpenScriptSource,
-    SetSpeedTreeStrength,
-    SetSpeedTreeGustingEnabled,
-    ForceSpeedTreeGust,
     Quit
 };
 

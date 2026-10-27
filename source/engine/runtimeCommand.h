@@ -43,9 +43,6 @@ enum class RuntimeCommandType
     // World::SetMeshSceneObjectTransform，不经过编辑器 sceneDocuments。
     SetMeshPlacement,
     SetProceduralSkyParameters,
-    SetSpeedTreeStrength,
-    SetSpeedTreeGustingEnabled,
-    ForceSpeedTreeGust,
     SetToneMappingMode,
     SetCameraExposure,
     SetOfflineMode,

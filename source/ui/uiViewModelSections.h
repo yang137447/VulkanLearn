@@ -208,9 +208,6 @@ struct UiEnvironmentLightingSection
     double environmentShGpuMs = 0.0;
     double environmentPrefilterGpuMs = 0.0;
     double environmentCommitGpuMs = 0.0;
-    float speedTreeStrength = 0.35f;
-    bool speedTreeGustingEnabled = true;
-    uint32_t speedTreeWindProfileCount = 0;
 
     bool operator==(const UiEnvironmentLightingSection& other) const;
 };
@@ -307,8 +304,7 @@ inline bool UiEnvironmentLightingSection::operator==(
                environmentPrefilterMipsCompleted, environmentPrefilterMipCount,
                environmentUsesPreviousResources, environmentGpuTimingSupported,
                environmentCubemapGpuMs, environmentShGpuMs, environmentPrefilterGpuMs,
-               environmentCommitGpuMs, speedTreeStrength, speedTreeGustingEnabled,
-               speedTreeWindProfileCount) ==
+               environmentCommitGpuMs) ==
         std::tie(other.bloomStrength, other.bloomThreshold, other.bloomKnee, other.bloomClamp,
                other.csmCastShadows, other.csmDynamicShadowDistance,
                other.csmDynamicShadowCascades, other.csmCascadeDistributionExponent,
@@ -322,8 +318,7 @@ inline bool UiEnvironmentLightingSection::operator==(
                other.environmentPrefilterMipCount, other.environmentUsesPreviousResources,
                other.environmentGpuTimingSupported, other.environmentCubemapGpuMs,
                other.environmentShGpuMs, other.environmentPrefilterGpuMs,
-               other.environmentCommitGpuMs, other.speedTreeStrength,
-               other.speedTreeGustingEnabled, other.speedTreeWindProfileCount);
+               other.environmentCommitGpuMs);
 }
 
 inline bool UiOfflineSection::operator==(const UiOfflineSection& other) const

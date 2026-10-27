@@ -1585,17 +1585,6 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::SetActorProperty;
             command.actorProperty = action.actorProperty;
             break;
-        case UiActionType::SetSpeedTreeStrength:
-            command.type = RuntimeCommandType::SetSpeedTreeStrength;
-            command.floatValue = action.floatValue;
-            break;
-        case UiActionType::SetSpeedTreeGustingEnabled:
-            command.type = RuntimeCommandType::SetSpeedTreeGustingEnabled;
-            command.intValue = action.intValue;
-            break;
-        case UiActionType::ForceSpeedTreeGust:
-            command.type = RuntimeCommandType::ForceSpeedTreeGust;
-            break;
         case UiActionType::RotatePreviewModel:
         {
             // 旋转的是预览对象，不是相机：毛发物理只对根点世界位置变化产生响应。
@@ -1880,9 +1869,6 @@ void EngineLoop::BuildUiEnvironmentLightingSection(
         .Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds;
     section.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
         .Get(EnvironmentGpuProduct::Commit).lastMilliseconds;
-    section.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
-    section.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
-    section.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
 }
 
 void EngineLoop::BuildUiOfflineSection(

@@ -908,38 +908,11 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     if (activeWorld)
     {
         speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
-        (void)speedTreeWindProfiles.SetStrength(speedTreeStrength);
-        (void)speedTreeWindProfiles.SetGustingEnabled(speedTreeGustingEnabled);
     }
     else
     {
         speedTreeWindProfiles.Reset();
     }
-}
-
-bool RenderSystem::ForceSpeedTreeGust()
-{
-    return speedTreeWindProfiles.ForceGust();
-}
-
-bool RenderSystem::SetSpeedTreeStrength(float strength)
-{
-    if (!speedTreeWindProfiles.SetStrength(strength))
-    {
-        return false;
-    }
-    speedTreeStrength = strength;
-    return true;
-}
-
-bool RenderSystem::SetSpeedTreeGustingEnabled(bool enabled)
-{
-    if (!speedTreeWindProfiles.SetGustingEnabled(enabled))
-    {
-        return false;
-    }
-    speedTreeGustingEnabled = enabled;
-    return true;
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -1534,10 +1507,6 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
 
     prepared.speedTreeWindProfiles.Configure(
         prepared.world->GetSpeedTreeWindProfiles());
-    (void)prepared.speedTreeWindProfiles.SetStrength(
-        speedTreeStrength);
-    (void)prepared.speedTreeWindProfiles
-        .SetGustingEnabled(speedTreeGustingEnabled);
     prepared.nextSnapshotFrameIndex =
         nextSnapshotFrameIndex + 1;
     return prepared;
