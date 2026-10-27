@@ -462,7 +462,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         else if (type == "directionalLight" ||
                  type == "pointLight" ||
                  type == "spotLight" ||
-                 type == "camera")
+                 type == "camera" ||
+                 type == "wind")
         {
             // WorldBuilder creates gameplay-facing cameras and lights from the
             // validated WorldBuildPlan. Renderer loaders only create resources

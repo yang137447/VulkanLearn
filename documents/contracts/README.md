@@ -46,5 +46,6 @@
 | `material-mesh-pass-composition.md`、`csm-shadow-map-m1.md` | 材质求值/pass 组合与 CSM |
 | `environment-update-scheduler.md`、`texture-asset-json-v1.md`、`asset-organization.md` | 环境更新调度、贴图资产格式、资源组织 |
 | `vl-offline-rendering.md` | 离线渲染核心的所有权与边界 |
+| `scene-wind.md` | 场景全局风对象的 JSON 合同、World 风状态与风时间 tick |
 | `debug-runtime-commands.md` | 控制台调试命令 |
 | `diagrams/` | 架构图的 IR 源与产物，见其 `README.md` |

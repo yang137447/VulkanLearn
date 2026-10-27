@@ -37,6 +37,7 @@
 #include "render/pass/passRuntime.h"
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
+#include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
 #include "render/shadow/shadowCasterCull.h"
 #include "ui/uiOverlayRendererVulkan.h"
@@ -72,6 +73,8 @@ struct PreparedRuntimeBinding
     RendererFrameResources::PreparedLightCapacity
         lightCapacity;
     SpeedTreeWindProfileSet speedTreeWindProfiles;
+    // 与 World 同代准备的风状态；提交时整体赋给 RenderSystem::activeWind。
+    WorldWind wind;
     CsmSettings csmSettings;
     uint64_t nextSnapshotFrameIndex = 0;
 };
@@ -272,6 +275,10 @@ public:
         return static_cast<uint32_t>(speedTreeWindProfiles.GetProfileCount());
     }
     bool ForceSpeedTreeGust();
+    // 场景风的只读视图。风时间与 SpeedTree 共用同一个固定 tick 时钟（秒），
+    // 由 AdvanceSpeedTreeWindProfiles 每渲染帧推进；活动 World 换代时清零。
+    const VL::WorldWind& GetActiveWind() const { return activeWind; }
+    double GetWindTimeSeconds() const { return currentWindTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
@@ -392,7 +399,6 @@ private:
     void InitializeFrameResources();
     void ShutdownFrameResources();
     void ValidateFrameResourceDescriptors();
-    double GetSpeedTreeWindTimeSeconds();
     // --gpu-stats 周期输出每级联 caster draw 的 before/after 计数。
     void LogShadowCasterCullStats() const;
 
@@ -503,9 +509,9 @@ private:
     float speedTreeStrength = 0.35f;
     bool speedTreeGustingEnabled = true;
     bool hasRenderScene = false;
-    bool windClockInitialized = false;
-    std::chrono::steady_clock::time_point windStartTime;
     double currentWindTimeSeconds = 0.0;
+    // 当前已提交 World 的风状态；渲染线程在 Commit 时整体替换，不在帧内改写。
+    VL::WorldWind activeWind;
     SpeedTreeWindProfileSet speedTreeWindProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     

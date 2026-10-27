@@ -17,6 +17,7 @@
 #include "render/shadow/csmSettings.h"
 #include "scene/placementBinding.h"
 #include "world/worldSnapshot.h"
+#include "world/worldWind.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
@@ -123,6 +124,10 @@ public:
 
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
+
+    // 场景全局风；与 environment 同属一次 World 构建，随 World 的发布/替换整体切换。
+    void SetWind(WorldWind wind);
+    const WorldWind& GetWind() const { return wind; }
 
     void SetCsmSettings(CsmSettings settings);
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
@@ -253,6 +258,7 @@ private:
     std::shared_ptr<Camera> scriptCamera;
     bool editorViewEnabled = false;
     WorldEnvironment environment;
+    WorldWind wind;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;

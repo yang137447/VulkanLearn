@@ -445,6 +445,11 @@ void World::SetEnvironment(WorldEnvironment environment)
     this->environment = std::move(environment);
 }
 
+void World::SetWind(WorldWind wind)
+{
+    this->wind = std::move(wind);
+}
+
 void World::SetCsmSettings(CsmSettings settings)
 {
     csmSettings = std::move(settings);

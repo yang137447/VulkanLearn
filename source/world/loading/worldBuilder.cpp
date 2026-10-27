@@ -217,6 +217,8 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             worldBuildPlan.scenePath);
 
         WorldEnvironment environment;
+        // 风缺省为无风；场景有 wind 对象时由校验器保证最多一个。
+        WorldWind wind;
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
         CsmSettings csmSettings;
 
@@ -270,6 +272,10 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             {
                 environment = BuildEnvironment(objectJson);
             }
+            else if (type == "wind")
+            {
+                wind = ReadSceneWind(objectJson);
+            }
         }
 
         if (!world->GetCamera())
@@ -284,6 +290,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
+        world->SetWind(wind);
         world->SetCsmSettings(std::move(csmSettings));
 
         for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)

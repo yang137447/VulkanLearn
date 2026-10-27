@@ -8,10 +8,16 @@
 
 #include "../../BaseStructs.h"
 #include "../../mesh/meshAssetTypes.h"
+#include "../../world/worldWind.h"
 
 // Renderer-owned live state for one active Runtime SDK wind profile. The
 // authored profile remains on ModelResource; this class only samples curves
 // and produces the compact per-frame shader state.
+//
+// 运行时路径是 AdvanceToSceneWind：风向与强度全部来自场景 WorldWind，物种只提供
+// 响应曲线的数值。SetStrength / SetDirection / SetGustingEnabled / ForceGust /
+// AdvanceTo 保留的是 SDK 自驱动参考状态机，仅供 tool/speedtree-wind-validation
+// 对照 SDK 使用；渲染路径不再调用它们。
 class SpeedTreeWindSystem
 {
 public:
@@ -27,6 +33,8 @@ public:
     void SetGustingEnabled(bool enabled);
     void ForceGust();
     void AdvanceTo(double timeSeconds);
+    // timeSeconds 为固定 tick 的风时间（秒）；wind 为当前活动 World 的场景风。
+    void AdvanceToSceneWind(double timeSeconds, const VL::WorldWind& wind);
 
     const SpeedTreeWindStateGPU& GetGpuState() const { return gpuState; }
     bool IsConfigured() const { return configured; }
@@ -73,11 +81,18 @@ private:
 
     void ResetGustState();
     float RandomFloat(float minimum, float maximum);
+    // 把强度向 targetStrength 缓动到 time 时刻的值，SpeedTree 与场景风路径共用。
+    void UpdateEasedStrength(double time);
+    // 由风向与归一化强度生成 GPU 状态，并按 deltaTime 推进四组噪声位置。
+    // 两条驱动路径共用，保证响应曲线采样与 UBO 打包只有一份实现。
+    void UpdateGpuState(const Eigen::Vector3f& direction, float strength, float deltaTime);
 };
 
-// Owns one live CPU state per imported tree species. Weather controls are
-// broadcast to the active profiles, while draw submission resolves the state
-// by the mesh profile key and uploads it through the object UBO.
+// Owns one live CPU state per imported tree species. The runtime wind input is
+// the scene WorldWind (AdvanceToSceneWind), shared by every species; draw
+// submission resolves the state by the mesh profile key and uploads it through
+// the object UBO. The SetStrength/SetDirection/Gust methods below are the SDK
+// reference controls and are not called by the renderer.
 class SpeedTreeWindProfileSet
 {
 public:
@@ -85,6 +100,7 @@ public:
     void Reset();
     void Swap(SpeedTreeWindProfileSet& other) noexcept;
     void AdvanceTo(double timeSeconds);
+    void AdvanceToSceneWind(double timeSeconds, const VL::WorldWind& wind);
     // Expects a finite normalized strength in [0, 1]. External input must be
     // validated at its source before reaching the wind simulation.
     bool SetStrength(float strength);

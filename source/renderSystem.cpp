@@ -898,7 +898,6 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     materialInstancePreviewOverrideMaterialKey.clear();
     hasRenderScene = false;
     ClearSelectedMaterialInstance();
-    windClockInitialized = false;
     currentWindTimeSeconds = 0.0;
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
@@ -911,10 +910,12 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
         speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
         (void)speedTreeWindProfiles.SetStrength(speedTreeStrength);
         (void)speedTreeWindProfiles.SetGustingEnabled(speedTreeGustingEnabled);
+        activeWind = activeWorld->GetWind();
     }
     else
     {
         speedTreeWindProfiles.Reset();
+        activeWind = VL::WorldWind();
     }
 }
 
@@ -1539,6 +1540,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         speedTreeStrength);
     (void)prepared.speedTreeWindProfiles
         .SetGustingEnabled(speedTreeGustingEnabled);
+    // 风状态跟随 World 准备，不在提交点再读取可能已换代的 activeWorld。
+    prepared.wind = prepared.world->GetWind();
     prepared.nextSnapshotFrameIndex =
         nextSnapshotFrameIndex + 1;
     return prepared;
@@ -1582,13 +1585,14 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.resolvedRenderScene.materialGroups);
     speedTreeWindProfiles.Swap(
         prepared.speedTreeWindProfiles);
+    // 赋值只复制定长 Eigen 向量与 POD 字段，不分配内存，保持提交点 no-throw。
+    activeWind = prepared.wind;
     swap(csmSettings, prepared.csmSettings);
 
     std::shared_ptr<void> retiredLightBuffer =
         frameResources.CommitPreparedLightCapacity(
             std::move(prepared.lightCapacity));
     hasRenderScene = true;
-    windClockInitialized = false;
     currentWindTimeSeconds = 0.0;
     initializedRenderWorldGeneration =
         currentRenderScene.worldGeneration;
@@ -3781,9 +3785,14 @@ RenderSystem::BuildRendererDescriptorContext(
     return descriptorContext;
 }
 
+// 风时间按渲染帧固定步长推进，而不是墙钟：同一帧序列得到同一风状态，截图可逐像素复现。
+// 风是可复现的参数，与其他按帧率取数据的动画时钟解耦。首帧仍为 0，与旧行为一致。
+// 植被风强度与风向来自活动 World 的场景 wind（activeWind），物种只提供响应曲线。
 void RenderSystem::AdvanceSpeedTreeWindProfiles()
 {
-    speedTreeWindProfiles.AdvanceTo(GetSpeedTreeWindTimeSeconds());
+    constexpr double kSpeedTreeWindTickSeconds = 1.0 / 60.0;
+    speedTreeWindProfiles.AdvanceToSceneWind(currentWindTimeSeconds, activeWind);
+    currentWindTimeSeconds += kSpeedTreeWindTickSeconds;
 }
 
 void RenderSystem::ShutdownRenderObject()
@@ -3877,21 +3886,6 @@ void RenderSystem::ValidateFrameResourceDescriptors()
     {
         throw std::runtime_error("RenderSystem cannot expose frame resource descriptors before frame resources are initialized");
     }
-}
-
-double RenderSystem::GetSpeedTreeWindTimeSeconds()
-{
-    if (!windClockInitialized)
-    {
-        windStartTime = std::chrono::steady_clock::now();
-        windClockInitialized = true;
-        currentWindTimeSeconds = 0.0;
-        return currentWindTimeSeconds;
-    }
-
-    currentWindTimeSeconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - windStartTime).count();
-    return currentWindTimeSeconds;
 }
 
 std::pair<float, float> RenderSystem::ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const

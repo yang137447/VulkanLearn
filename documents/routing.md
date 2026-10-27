@@ -34,6 +34,7 @@
 | `source/debug/**`、`source/ui/debugDrawOverlay.*`、`source/script/scriptDebugDraw.h`、`script/VulkanLearn.Runtime/DebugDraw.cs`、`tool/debug-draw-tests/**`、`tool/editor-ui-tests/debugDrawOverlayTests.cpp`、`tool/script-tests/scriptDebugDrawTests.cpp`、`tool/script-tests/managed/DebugDrawFixtures.cs`、`tool/debug/capture_draw_debug.py` | `contracts/debug-draw.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/world/worldWind.h` | `contracts/scene-wind.md` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md`、`contracts/testing.md` | — |
 | `source/mesh/loader/hair/**`、`shader/glsl/engine/tressfxVertexFactory.glsl`、`shader/glsl/engine/tressfxCoverage.glsl`、`shader/glsl/hair/**`、`tool/material-schema-tests/tressfxMaterialTests.cpp` | `contracts/tressfx-asset-import.md`、`contracts/material-mesh-pass-composition.md`、`contracts/testing.md` | — |
@@ -82,6 +83,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | --- | --- |
 | `contracts/asset-organization.md` | 新增/移动资源目录，或改 `resourcePath` 布局时 |
 | `contracts/lookdev-scene.md` | 改文章资产审阅场景（`SC_lookdev_article`）、UE 资源导入、固定曝光/显示预设或截图时 |
+| `contracts/scene-wind.md` | 改场景 `wind` 对象、World 风状态、风时间 tick 或风校验时 |
 | `contracts/physical-lighting-and-exposure.md` | 改厘米世界长度、光源物理单位（lux/candela）、相机 EV100 或曝光模式时 |
 | `contracts/csm-shadow-map-m1.md` | 改 CSM 阴影贴图资源、分层 framebuffer、级联设置或相关 debug view 时 |
 | `contracts/debug-runtime-commands.md` | 新增/修改控制台调试命令（含相机控制与截图）时 |
