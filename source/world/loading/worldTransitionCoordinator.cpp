@@ -170,8 +170,8 @@ WorldTransitionCoordinator::PrepareWorldLoad(
                 loadContext);
         worldBuildPlan.meshObjectPlans =
             std::move(resourceLoadResult.meshObjectPlans);
-        worldBuildPlan.speedTreeWindProfiles =
-            std::move(resourceLoadResult.speedTreeWindProfiles);
+        worldBuildPlan.windResponseProfiles =
+            std::move(resourceLoadResult.windResponseProfiles);
 
         WorldBuilder worldBuilder;
         auto worldResult =

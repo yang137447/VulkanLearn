@@ -26,14 +26,14 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.materialInstance = drawSnapshot.materialInstance;
     packet.model = drawSnapshot.model;
     packet.previousModel = drawSnapshot.previousModel;
-    if (!drawSnapshot.speedTreeWindProfileKey.empty())
+    if (!drawSnapshot.windResponseProfileKey.empty())
     {
         packet.speedTreeWorldToLocalDirection =
             BuildSpeedTreeWorldToLocalDirectionMatrix(drawSnapshot.model);
     }
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
-    packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
+    packet.windResponseProfileKey = drawSnapshot.windResponseProfileKey;
     packet.placementTemplateMeshKey = drawSnapshot.placementTemplateMeshKey;
     packet.placementBinding = drawSnapshot.placementBinding;
     return packet;
@@ -120,6 +120,11 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     renderScene.lights = snapshot.lights;
     renderScene.environment = snapshot.environment;
     renderScene.wind = snapshot.wind;
+    // 非实时消费者（编辑器缩略图/离线预检）不会经过 RenderSystem 的
+    // SceneWindRuntime；这里先给未缓动的作者值作兜底。实时路径每帧会被
+    // AdvanceSceneWind 的解析结果覆盖。
+    renderScene.resolvedWind.direction = snapshot.wind.direction;
+    renderScene.resolvedWind.strength = snapshot.wind.strength;
     renderScene.debugViewMode = snapshot.debugViewMode;
 
     renderScene.drawPackets.reserve(snapshot.meshDraws.size());

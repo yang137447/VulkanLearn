@@ -111,12 +111,12 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     RendererMeshLoadResult result;
     if (modelResource.hasSpeedTreeWind)
     {
-        SpeedTreeWindProfile profile;
+        WindResponseProfile profile;
         profile.key = buildPlan.modelCacheKey;
         profile.sourceBoundsMin = modelResource.speedTreeSourceBoundsMin;
         profile.sourceBoundsMax = modelResource.speedTreeSourceBoundsMax;
         profile.config = modelResource.speedTreeWind;
-        result.speedTreeWindProfile = std::move(profile);
+        result.windResponseProfile = std::move(profile);
     }
 
     RenderGraph& renderGraph = loadContext.renderGraph;
@@ -255,9 +255,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
                 loadContext.offlineWorldAssets->effectiveMaterialInstances.at(
                     meshObjectPlan.materialInstanceKey).at("material").get<std::string>();
         }
-        if (result.speedTreeWindProfile.has_value())
+        if (result.windResponseProfile.has_value())
         {
-            meshObjectPlan.speedTreeWindProfileKey = result.speedTreeWindProfile->key;
+            meshObjectPlan.windResponseProfileKey = result.windResponseProfile->key;
         }
 
         meshObjectPlans.push_back(std::move(meshObjectPlan));

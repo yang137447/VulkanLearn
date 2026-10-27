@@ -899,6 +899,7 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     hasRenderScene = false;
     ClearSelectedMaterialInstance();
     currentWindTimeSeconds = 0.0;
+    sceneWindRuntime.Reset();
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
     simulationDeltaSeconds = 0.0f;
@@ -907,11 +908,11 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     shadowCascadeFrameData.valid = false;
     if (activeWorld)
     {
-        speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
+        windResponseProfiles.Configure(activeWorld->GetWindResponseProfiles());
     }
     else
     {
-        speedTreeWindProfiles.Reset();
+        windResponseProfiles.Reset();
     }
 }
 
@@ -1505,8 +1506,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         candidateCache,
         prerenderSkinEnabled);
 
-    prepared.speedTreeWindProfiles.Configure(
-        prepared.world->GetSpeedTreeWindProfiles());
+    prepared.windResponseProfiles.Configure(
+        prepared.world->GetWindResponseProfiles());
     prepared.nextSnapshotFrameIndex =
         nextSnapshotFrameIndex + 1;
     return prepared;
@@ -1543,17 +1544,18 @@ RenderSystem::CommitPreparedRuntimeBinding(
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);
-    // 风随同一代 RenderScene 提交；头发从 currentRenderScene.wind 取风，
+    // 风与解析结果随同一代 RenderScene 提交；头发/植被消费 resolvedWind，
     // 不再有 RenderSystem 单独维护的第二份 activeWind。
     swap(currentRenderScene.wind, prepared.renderScene.wind);
+    swap(currentRenderScene.resolvedWind, prepared.renderScene.resolvedWind);
     swap(currentRenderScene.windTimeSeconds, prepared.renderScene.windTimeSeconds);
     swap(
         currentRenderScene.debugViewMode,
         prepared.renderScene.debugViewMode);
     currentResolvedRenderScene.materialGroups.swap(
         prepared.resolvedRenderScene.materialGroups);
-    speedTreeWindProfiles.Swap(
-        prepared.speedTreeWindProfiles);
+    windResponseProfiles.Swap(
+        prepared.windResponseProfiles);
     swap(csmSettings, prepared.csmSettings);
 
     std::shared_ptr<void> retiredLightBuffer =
@@ -1561,6 +1563,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
             std::move(prepared.lightCapacity));
     hasRenderScene = true;
     currentWindTimeSeconds = 0.0;
+    sceneWindRuntime.Reset();
     initializedRenderWorldGeneration =
         currentRenderScene.worldGeneration;
     nextSnapshotFrameIndex =
@@ -2315,7 +2318,7 @@ void RenderSystem::UpdateObjectUBOForPass(
     // addresses backend-owned object GPU resources through the resolved draw
     // packet.
     const SpeedTreeWindStateGPU* windState =
-        speedTreeWindProfiles.FindGpuState(drawPacket.speedTreeWindProfileKey);
+        windResponseProfiles.FindGpuState(drawPacket.windResponseProfileKey);
     objectResources.submittedSkin.RetainIfSubmittedAt(submittedFrameSerial);
     frameResources.UpdateObjectUniformBuffer(
         swapChainImageIndex,
@@ -3494,7 +3497,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // 读回发生在这里：backend BeginFrame 已等待本 frame slot 的 fence，上一批查询必然就绪。
         // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
         gpuPassTimer.BeginFrame(commandBuffer, frameIndex);
-        AdvanceSpeedTreeWindProfiles();
+        AdvanceSceneWind();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
         UpdateUBOGlobal(commandBuffer);
@@ -3754,15 +3757,18 @@ RenderSystem::BuildRendererDescriptorContext(
 
 // 风时间按渲染帧固定步长推进，而不是墙钟：同一帧序列得到同一风状态，截图可逐像素复现。
 // 风是可复现的参数，与其他按帧率取数据的动画时钟解耦。首帧仍为 0，与旧行为一致。
-// 本帧使用的风时间先写回 currentRenderScene，头发 pass 随后消费同一份
-// (wind, windTimeSeconds)，不会比植被早一个 tick。
-void RenderSystem::AdvanceSpeedTreeWindProfiles()
+// 本帧先由 SceneWindRuntime 完成缓动/阵风，再把解析结果同时交给植被和头发；
+// 消费方不再各自做时间调制。
+void RenderSystem::AdvanceSceneWind()
 {
-    constexpr double kSpeedTreeWindTickSeconds = 1.0 / 60.0;
+    constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
+    const VL::ResolvedSceneWind resolvedWind =
+        sceneWindRuntime.Advance(currentRenderScene.wind, currentWindTimeSeconds);
     currentRenderScene.windTimeSeconds = currentWindTimeSeconds;
-    speedTreeWindProfiles.AdvanceToSceneWind(
-        currentWindTimeSeconds, currentRenderScene.wind);
-    currentWindTimeSeconds += kSpeedTreeWindTickSeconds;
+    currentRenderScene.resolvedWind = resolvedWind;
+    windResponseProfiles.AdvanceToSceneWind(
+        currentWindTimeSeconds, resolvedWind);
+    currentWindTimeSeconds += kSceneWindTickSeconds;
 }
 
 void RenderSystem::ShutdownRenderObject()

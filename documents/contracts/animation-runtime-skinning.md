@@ -78,8 +78,9 @@ RT 不读取脚本时钟或自动曝光墙钟；同一 World/frame 快照只领�
 
 发丝根点、骨骼绑定胶囊及 SDF 代理使用统一的发丝局部 palette：
 `inverse(hairDraw.model) * sourceDraw.model * bindToPose[joint]`。
-没有骨骼绑定的胶囊仍位于作者的发丝局部空间；gravity 保留资产局部语义，风来自场景
-`wind` 对象的世界空间方向与强度，在生成四路锥形风后再换到发丝局部。
+没有骨骼绑定的胶囊仍位于作者的发丝局部空间；gravity 保留资产局部语义，风来自
+`SceneWindRuntime` 解析后的世界空间方向与强度（已缓动、已含阵风），在生成四路锥形风后
+再换到发丝局部。
 这使源对象与发丝采用不同当前 placement 时仍保持世界空间贴合，
 不额外引入共同移动产生的世界空间惯性；加载期两者绑定 placement 的一致性检查不变。
 发丝遇到 playbackIdentity/discontinuity 变化时重建模拟历史，零 delta 的 seek 也可复位；

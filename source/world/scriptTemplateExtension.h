@@ -8,7 +8,7 @@ namespace VL
 struct ScriptTemplateExtension
 {
     std::unordered_map<std::string, WorldMeshObject> meshes;
-    std::unordered_map<std::string, SpeedTreeWindProfile> windProfiles;
+    std::unordered_map<std::string, WindResponseProfile> windProfiles;
     nlohmann::json templates;
     nlohmann::json digests;
     nlohmann::json resolved;

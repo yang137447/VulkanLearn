@@ -9,7 +9,7 @@
 
 - 头发：`simulationDefaults.wind` 是资产级、位置无关的单个向量，写入 TressFX 风锥参数。
 - 植被：`.stsdk` 里带 SpeedTree 的风曲线（分支、阵风、物种级参数），挂在每个物种的
-  `SpeedTreeWindProfile` 上，由资产决定。
+  `WindResponseProfile` 上，由资产决定。
 
 问题：SpeedTree 的风参数实际是**用户调的响应系数**，而风本身只有一套。风场不应该跟物种绑定。
 
@@ -59,10 +59,14 @@
 
 - 响应曲线：`strength → response`，横轴为风场计算出的风强度，纵轴为响应系数。采样点数与
   SpeedTree 一样取 20 点，便于从现有数据迁移。
-- 响应曲线按**响应项**组织，而不是按物种/分支：`bend`（弯曲）、`oscillation`（摆动）、
-  `speed`（摆动速度）、`flexibility`（整体柔性）、`turbulence`（扰动）。
-- 物种差异通过**各自的曲线数值**表达，风场本身不带物种信息。
-- `phaseOffset`：可选相位偏移，用于同一风场下的错相。
+- 响应曲线保留 SpeedTree 的 layer 结构（`shared`、`branch1`、`branch2`、`ripple`），
+  每层内按**响应项**组织：`bend`、`oscillation`、`speed`、`flexibility`、`turbulence`
+  （`ripple` 为 `planar`/`directional`/`speed`/`flexibility`）。layer 是 WPO 形变的结构输入，
+  不能压平成单一响应项。
+- 物种差异通过**各自的曲线数值**表达，风场本身不带物种信息；运行时缓动与阵风在场景风层
+  （`SceneWindRuntime`）统一完成后才外放给植被/头发。
+- `phaseOffset`：可选相位偏移，用于同一风场下的错相（目前实例间去相关由 shader 的
+  世界位置噪声种子承担，未单独作者化）。
 
 头发的 `simulationDefaults.wind` 从资产中移除，改由场景 `wind` 提供。
 
@@ -94,14 +98,17 @@
 补了场景 wind。P1b 的验收按 §6.2 执行（零风 `zero*` 截图逐字节一致，风场 `windy*` 与零风对比
 约 13.3% 像素差异，P0 基线 run1/run2 逐字节一致）。P1d 已完成编辑器只读 Scene Wind actor
 与 `windstrength`/`windgust`（含 UI action/view-model）退役；TF Tab 本地风与
-`SpeedTree Wind Profiles` 文案清理仍待做。
+`SpeedTree Wind Profiles` 文案清理仍待做。原始 `.stsdk` 的响应时间/阵风标量按用户决定
+保留不删，代码注释说明它们只供 SDK 对照；运行时缓动/阵风已集中到 `SceneWindRuntime`，
+SpeedTree 响应数据类型改名为 `WindResponse*`，layer 结构保持不变。
 
 P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改了风的来源，像素级一致不一定成立，需要先定误差阈值（待你确认）。
 
 ## 5. 风险
 
 - **时间源**：P0 已把墙钟改为固定 tick。如果 P1 之前未提交，需要保证 P0 的改动是单独可回退的。
-- **共享状态**：`speedTreeWindProfiles` 目前是 RenderSystem 成员，并参与世界切换和 prune（`world.cpp:74-101`）。迁移到场景 `wind` 时，必须跟随 World 的 stage/swap 生命周期。
+- **共享状态**：`windResponseProfiles` 是 RenderSystem 成员，并参与世界切换和 prune（`world.cpp:74-101`）。
+  本次已让它跟随 World 的 stage/swap 生命周期；场景风解析结果放在 `currentRenderScene.resolvedWind`。
 - **GPU 布局**：`UBOModel.speedTreeWind` 固定 208 字节（`BaseStructs.h`）。改布局会影响所有材质，需要统一的 static_assert 和 descriptor 检查。
 - **双重风源**：迁移期间若资产风与场景风同时生效会叠加。P1 需要明确优先级，建议直接切换，不做兼容叠加。
 
@@ -118,9 +125,9 @@ P1b 的"前后效果不变"只能在**同一固定 tick**下比较。因为改�
 - 阵风（gust）是 `common` 里的标量：`gustFrequency`、强度与持续时间的上下限、上升/下降系数。
 - 风向由 `strengthResponse`、`directionResponse` 两个响应标量决定。
 
-结论：这些曲线混合了"风强度 → 响应"与"物种/分支 → 响应"两个维度，所以风和物种绑在了一起。
-新系统保留**风强度 → 响应**曲线这一维（§3.2），但横轴的风强度改由新风场计算，不再是作者填写的值；
-物种与分支的差异只体现在各自曲线的数值上，风场不带物种信息。
+结论：这些曲线的查表维度是"风强度 → 响应"，layer 只是 WPO 的结构输入；旧实现把
+"风强度"也写进了资产，才让风看起来和物种绑在一起。新系统保留强度→响应曲线与 layer，
+但横轴的风强度改由场景风（含缓动/阵风）计算，物种只提供曲线数值，风场不带物种信息。
 
 ### 6.2 决策
 

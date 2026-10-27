@@ -178,7 +178,7 @@ WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
     mesh.placementBinding = plan.placementBinding;
     mesh.materialKey = plan.materialKey;
     mesh.materialInstanceKey = plan.materialInstanceKey;
-    mesh.speedTreeWindProfileKey = plan.speedTreeWindProfileKey;
+    mesh.windResponseProfileKey = plan.windResponseProfileKey;
     return mesh;
 }
 
@@ -204,7 +204,7 @@ struct BlueprintAssetLoadSession::Impl
     PipelineFactory::GraphicsCandidateState graphics;
     size_t meshIndex = 0, textureIndex = 0;
     std::vector<WorldMeshObject> meshes;
-    std::vector<SpeedTreeWindProfile> windProfiles;
+    std::vector<WindResponseProfile> windProfiles;
 
     Impl(RendererBackendVulkan& backend, PipelineFactory& factory, RenderGraph& graph)
         : backend(backend), factory(factory), graph(graph) {}
@@ -357,7 +357,7 @@ bool BlueprintAssetLoadSession::Step(World& world)
             if (!context.pendingGeneratedFiles.empty())
                 throw std::runtime_error("Async Blueprint asset generated unexpected resource files");
             for (const auto& plan : loaded.objectPlans) state.meshes.push_back(ToWorldMesh(plan));
-            if (loaded.speedTreeWindProfile) state.windProfiles.push_back(*loaded.speedTreeWindProfile);
+            if (loaded.windResponseProfile) state.windProfiles.push_back(*loaded.windResponseProfile);
             ++state.meshIndex;
             state.textureIndex = 0;
             return false;

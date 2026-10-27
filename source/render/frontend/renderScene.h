@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "world/worldSnapshot.h"
+#include "world/sceneWindRuntime.h"
 
 namespace VL
 {
@@ -25,7 +26,7 @@ struct RenderDrawPacket
     Eigen::Matrix3f speedTreeWorldToLocalDirection = Eigen::Matrix3f::Identity();
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
-    std::string speedTreeWindProfileKey;
+    std::string windResponseProfileKey;
     // 放置级网格（per-placement）：非空模板键表示本帧 resolve 之前渲染线程必须为
     // mesh.key 克隆一份独立 RenderableObject，并按 placementBinding 的 Kind 解析绑定。
     // 普通共享对象两个字段为空。
@@ -62,6 +63,9 @@ struct RenderScene
     // World 的另一个风源。windTimeSeconds 由 RenderSystem 在本帧推进风时钟后
     // 写入，供阵风相位使用；GT 构建 RenderScene 时保持 0。
     WorldWind wind;
+    // 本帧解析后的场景风：已缓动并含阵风，头发/植被共用。wind 仍是作者目标，
+    // 供编辑器显示和下一帧缓动使用。
+    ResolvedSceneWind resolvedWind;
     double windTimeSeconds = 0.0;
     int debugViewMode = 0;
 };

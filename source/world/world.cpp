@@ -37,7 +37,7 @@ World::World(uint64_t generation, std::string scenePath)
 
 std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateExtension(
     const std::string& path, const std::string& digest, const nlohmann::json& declaration,
-    const std::vector<WorldMeshObject>& meshes, const std::vector<SpeedTreeWindProfile>& profiles) const
+    const std::vector<WorldMeshObject>& meshes, const std::vector<WindResponseProfile>& profiles) const
 {
     if (scriptTemplates.contains(path)) throw std::invalid_argument("Blueprint asset is already loaded");
     if (scriptTemplates.size() >= 128) throw std::invalid_argument("Too many Blueprint spawn templates");
@@ -48,12 +48,12 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateExtension(
     for (const auto& mesh : meshes)
         if (!staged.meshObjects.emplace(mesh.debugName, mesh).second)
             throw std::invalid_argument("Dynamic Blueprint mesh identity collision");
-    for (const auto& profile : profiles) staged.speedTreeWindProfiles.emplace(profile.key, profile);
+    for (const auto& profile : profiles) staged.windResponseProfiles.emplace(profile.key, profile);
     staged.ApplyScriptBlueprintVisuals(declaration, false);
     staged.AppendScriptComponentMeshTemplate(declaration);
     auto extension = std::make_unique<ScriptTemplateExtension>();
     extension->meshes = std::move(staged.meshObjects);
-    extension->windProfiles = std::move(staged.speedTreeWindProfiles);
+    extension->windProfiles = std::move(staged.windResponseProfiles);
     extension->templates = std::move(staged.scriptTemplates);
     extension->digests = std::move(staged.scriptAssetDigests);
     extension->resolved = std::move(staged.scriptResolvedBlueprints);
@@ -72,8 +72,8 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
     World staged(*this);
     std::set<std::string> removedWindProfiles;
     for (const auto& mesh : staged.meshObjects)
-        if (!mesh.second.speedTreeWindProfileKey.empty())
-            removedWindProfiles.insert(mesh.second.speedTreeWindProfileKey);
+        if (!mesh.second.windResponseProfileKey.empty())
+            removedWindProfiles.insert(mesh.second.windResponseProfileKey);
     const std::string id = staged.scriptTemplates.at(path).at("id");
     staged.RemoveScriptBlueprintMeshes(id);
     for (const auto& state : scriptBlueprintStates)
@@ -97,11 +97,11 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
     for (auto it = staged.scriptComponentMeshTemplates.begin(); it != staged.scriptComponentMeshTemplates.end();)
         if (!usedComponentTemplates.count(it->first)) it = staged.scriptComponentMeshTemplates.erase(it);
         else ++it;
-    for (const auto& mesh : staged.meshObjects) removedWindProfiles.erase(mesh.second.speedTreeWindProfileKey);
-    for (const auto& key : removedWindProfiles) staged.speedTreeWindProfiles.erase(key);
+    for (const auto& mesh : staged.meshObjects) removedWindProfiles.erase(mesh.second.windResponseProfileKey);
+    for (const auto& key : removedWindProfiles) staged.windResponseProfiles.erase(key);
     auto extension = std::make_unique<ScriptTemplateExtension>();
     extension->meshes = std::move(staged.meshObjects);
-    extension->windProfiles = std::move(staged.speedTreeWindProfiles);
+    extension->windProfiles = std::move(staged.windResponseProfiles);
     extension->templates = std::move(staged.scriptTemplates);
     extension->digests = std::move(staged.scriptAssetDigests);
     extension->resolved = std::move(staged.scriptResolvedBlueprints);
@@ -114,7 +114,7 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
 void World::CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept
 {
     meshObjects.swap(extension->meshes);
-    speedTreeWindProfiles.swap(extension->windProfiles);
+    windResponseProfiles.swap(extension->windProfiles);
     scriptTemplates.swap(extension->templates);
     scriptAssetDigests.swap(extension->digests);
     scriptResolvedBlueprints.swap(extension->resolved);
@@ -460,9 +460,9 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     meshObjects[std::move(name)] = std::move(object);
 }
 
-void World::AddSpeedTreeWindProfile(SpeedTreeWindProfile profile)
+void World::AddWindResponseProfile(WindResponseProfile profile)
 {
-    speedTreeWindProfiles[profile.key] = std::move(profile);
+    windResponseProfiles[profile.key] = std::move(profile);
 }
 
 void World::AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light)

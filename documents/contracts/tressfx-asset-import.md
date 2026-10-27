@@ -675,11 +675,11 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
    `localShapeStiffness[local/4][local%4]`，加载期已 clamp 到 0.95）；两种
    情况都乘以 TressFX 公式里的 0.5。
 5. **LengthConstraintsWind**：
-   - 风：Host 每帧把场景 `wind` 对象的方向与强度展开为 TressFX `SetWind` 的四路锥形风：
-     有效向量 = `direction * strength * gustFactor`（厘米/秒，`gustFactor` 由场景阵风在
-     本帧风时间处采样），四角是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40°。VL 不再乘
-     TressFX 的 `sin(simFrame*0.001)² + 0.5` 逐帧调制：时间调制由场景阵风独占，
-     避免双重调制；资产也不再作者 `simulationDefaults.wind`。shader 仍用
+   - 风：Host 每帧把 `SceneWindRuntime` 解析后的方向与强度展开为 TressFX `SetWind` 的四路锥形风：
+     有效向量 = `resolvedWind.direction * resolvedWind.strength`（厘米/秒，已含场景缓动与阵风），
+     四角是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40°。VL 不再乘 TressFX 的
+     `sin(simFrame*0.001)² + 0.5` 逐帧调制：时间调制由场景风层独占，避免双重调制；
+     资产也不再作者 `simulationDefaults.wind`。shader 仍用
      `w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3`，`a = (strand % 20)/20`。
      对 `rootFixedPoints <= local < N-1`，`v = pos_i - pos_{i+1}` 保持**未归一化**，
      `Force = -cross(cross(v,w),v) * 1e-2`，`pos_i += Force*dt²`。1e-2 是厘米积分下

@@ -499,10 +499,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             loadResult.meshObjectPlans.end(),
             std::make_move_iterator(loaded.result.objectPlans.begin()),
             std::make_move_iterator(loaded.result.objectPlans.end()));
-        if (loaded.result.speedTreeWindProfile.has_value())
+        if (loaded.result.windResponseProfile.has_value())
         {
-            loadResult.speedTreeWindProfiles.push_back(
-                std::move(*loaded.result.speedTreeWindProfile));
+            loadResult.windResponseProfiles.push_back(
+                std::move(*loaded.result.windResponseProfile));
         }
     }
 

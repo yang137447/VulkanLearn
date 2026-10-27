@@ -638,13 +638,11 @@ TEST(TressfxDynamics, StepFrameAdvancesSimulationFrameOncePerFrameNotPerSubstep)
 TEST(TressfxDynamics, SceneWindExpandsToFourConeCorners)
 {
     TressfxSimulationConfig config;
-    VL::WorldWind wind;
-    wind.direction = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
-    wind.strength = 1200.0f;
-    wind.gust = VL::WorldWindGust{};
-    // 阵风关闭 ⇒ gustFactor = 1；场景风向量就是 direction * strength（厘米/秒）。
+    // SceneWindRuntime 已完成缓动/阵风；这里直接给解析结果。
+    const VL::ResolvedSceneWind resolvedWind{
+        Eigen::Vector3f(0.0f, 0.0f, 1.0f), 1200.0f};
     const Eigen::Vector3f sceneWind =
-        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, 0.0);
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(resolvedWind);
     EXPECT_TRUE(sceneWind.isApprox(Eigen::Vector3f(0.0f, 0.0f, 1200.0f)));
 
     const VL::Hair::GuideSimulationParams params =
@@ -667,15 +665,10 @@ TEST(TressfxDynamics, SceneWindExpandsToFourConeCorners)
 TEST(TressfxDynamics, ZeroSceneWindProducesAllZeroCorners)
 {
     TressfxSimulationConfig config;
-    VL::WorldWind wind;
-    // 默认方向是 UnitX，但强度为 0：不得归一化或放大方向。
-    wind.strength = 0.0f;
-    wind.gust.enabled = true;
-    wind.gust.amplitude = 0.8f;
-    wind.gust.frequency = 1.3f;
-    wind.gust.turbulence = 0.4f;
+    // 零强度解析结果：不得归一化或放大方向。
+    const VL::ResolvedSceneWind resolvedWind{Eigen::Vector3f::UnitX(), 0.0f};
     const Eigen::Vector3f sceneWind =
-        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, 3.25);
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(resolvedWind);
     EXPECT_TRUE(sceneWind.isZero());
 
     const VL::Hair::GuideSimulationParams params =
@@ -691,7 +684,7 @@ TEST(TressfxDynamics, ZeroSceneWindProducesAllZeroCorners)
         EXPECT_TRUE(corner.allFinite());
 }
 
-TEST(TressfxDynamics, SceneWindAppliesSharedGustAtFrozenWindTime)
+TEST(TressfxDynamics, SceneWindRuntimeAppliesSharedGustAtFrozenWindTime)
 {
     VL::WorldWind wind;
     wind.direction = Eigen::Vector3f::UnitX();
@@ -702,12 +695,19 @@ TEST(TressfxDynamics, SceneWindAppliesSharedGustAtFrozenWindTime)
     wind.gust.turbulence = 0.4f;
     const double windTimeSeconds = 12.5;
 
-    // 固定风时间下共享阵风给出确定性的、非 1 的调制因子；毛发与植被同 helper。
+    // 固定风时间下共享阵风给出确定性的、非 1 的调制因子；场景风层统一应用，
+    // 毛发与植被读同一份解析结果。
     const float expectedGust =
         VL::ApplySceneWindGust(1.0f, wind.gust, windTimeSeconds);
     ASSERT_GT(std::abs(expectedGust - 1.0f), 1.0e-3f);
+    VL::SceneWindRuntime runtime;
+    const VL::ResolvedSceneWind resolvedWind =
+        runtime.Advance(wind, windTimeSeconds);
+    EXPECT_NEAR(resolvedWind.strength, wind.strength * expectedGust, 1.0e-3f);
+    EXPECT_NEAR(resolvedWind.direction.x(), 1.0f, 1.0e-6f);
+
     const Eigen::Vector3f sceneWind =
-        VL::Hair::TressfxSceneWindVelocityCmPerSec(wind, windTimeSeconds);
+        VL::Hair::TressfxSceneWindVelocityCmPerSec(resolvedWind);
     EXPECT_NEAR(sceneWind.x(), wind.strength * expectedGust, 1.0e-3f);
     EXPECT_FLOAT_EQ(sceneWind.y(), 0.0f);
     EXPECT_FLOAT_EQ(sceneWind.z(), 0.0f);
@@ -723,6 +723,41 @@ TEST(TressfxDynamics, SceneWindAppliesSharedGustAtFrozenWindTime)
         params.wind3.head<3>()};
     for (const Eigen::Vector3f& corner : corners)
         EXPECT_NEAR(corner.norm(), wind.strength * expectedGust, 1.0e-2f);
+}
+
+TEST(TressfxDynamics, SceneWindRuntimeEasesStrengthAndDirectionThenResets)
+{
+    VL::SceneWindRuntime runtime;
+    VL::WorldWind first;
+    first.direction = Eigen::Vector3f::UnitX();
+    first.strength = 1000.0f;
+    const auto firstResolved = runtime.Advance(first, 0.0);
+    EXPECT_FLOAT_EQ(firstResolved.strength, 1000.0f);
+    EXPECT_NEAR(firstResolved.direction.x(), 1.0f, 1.0e-6f);
+
+    // 目标变化后按响应时间缓动，不允许瞬间跳到 2000 或 +Z。
+    VL::WorldWind second;
+    second.direction = Eigen::Vector3f::UnitZ();
+    second.strength = 2000.0f;
+    const auto eased = runtime.Advance(second, 1.0 / 60.0);
+    EXPECT_GT(eased.strength, 1000.0f);
+    EXPECT_LT(eased.strength, 2000.0f);
+    EXPECT_LT(eased.direction.z(), 1.0f);
+    EXPECT_GT(eased.direction.x(), 0.0f);
+
+    // 足够长时间后收敛到目标。
+    const auto settled = runtime.Advance(second, 5.0);
+    EXPECT_NEAR(settled.strength, 2000.0f, 0.1f);
+    EXPECT_NEAR(settled.direction.z(), 1.0f, 1.0e-3f);
+
+    // Reset 后首帧直接采用新目标，不保留上一代场景的残留。
+    runtime.Reset();
+    VL::WorldWind third;
+    third.direction = Eigen::Vector3f::UnitY();
+    third.strength = 500.0f;
+    const auto reset = runtime.Advance(third, 0.0);
+    EXPECT_FLOAT_EQ(reset.strength, 500.0f);
+    EXPECT_NEAR(reset.direction.y(), 1.0f, 1.0e-6f);
 }
 
 TEST(TressfxDynamics, GuideSimulationParamsPacksExplicitWindVector)

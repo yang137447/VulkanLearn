@@ -85,7 +85,7 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.materialInstancePath = object.materialInstanceKey;
         section.materialSlotIndex = object.materialSlotIndex;
         section.materialSlotName = object.materialSlotName;
-        section.windProfileKey = object.speedTreeWindProfileKey;
+        section.windProfileKey = object.windResponseProfileKey;
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
@@ -189,9 +189,9 @@ EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
     return actor;
 }
 
-EditorSceneActorSnapshot BuildWindActor(const World& world, const SpeedTreeWindProfile& profile)
+EditorSceneActorSnapshot BuildWindActor(const World& world, const WindResponseProfile& profile)
 {
-    const SpeedTreeWindConfig& config = profile.config;
+    const WindResponse& config = profile.config;
     EditorSceneActorSnapshot actor;
     actor.type = EditorSceneActorType::WindProfile;
     actor.worldGeneration = world.GetGeneration();
@@ -356,7 +356,7 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
     if (worldWind.strength > 0.0f || worldWind.gust.enabled)
         actors.push_back(BuildSceneWindActor(world));
 
-    for (const auto& entry : world.GetSpeedTreeWindProfiles())
+    for (const auto& entry : world.GetWindResponseProfiles())
         actors.push_back(BuildWindActor(world, entry.second));
 
     return actors;

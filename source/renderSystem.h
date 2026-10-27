@@ -72,7 +72,7 @@ struct PreparedRuntimeBinding
     ResolvedRenderScene resolvedRenderScene;
     RendererFrameResources::PreparedLightCapacity
         lightCapacity;
-    SpeedTreeWindProfileSet speedTreeWindProfiles;
+    WindResponseProfileSet windResponseProfiles;
     CsmSettings csmSettings;
     uint64_t nextSnapshotFrameIndex = 0;
 };
@@ -264,10 +264,10 @@ public:
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
     ComputeShaderArtifact GetActiveComputeShaderArtifact(
         const std::string& shaderName) const;
-    // 场景风的只读视图。风随时间与 SpeedTree 共用同一个固定 tick 时钟（秒），
-    // 由 AdvanceSpeedTreeWindProfiles 每渲染帧推进并写回 currentRenderScene；
-    // 活动 World 换代时清零。头发与植被消费同一份帧内风状态。
-    const VL::WorldWind& GetActiveWind() const { return currentRenderScene.wind; }
+    // 本帧解析后的场景风（已缓动、已含阵风）。风时间与 SpeedTree 共用同一个
+    // 固定 tick 时钟（秒），由 AdvanceSceneWind 每渲染帧推进；
+    // 活动 World 换代时清零并重新从作者目标起步。
+    const VL::ResolvedSceneWind& GetActiveWind() const { return currentRenderScene.resolvedWind; }
     double GetWindTimeSeconds() const { return currentRenderScene.windTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
@@ -347,7 +347,7 @@ private:
     void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
-    void AdvanceSpeedTreeWindProfiles();
+    void AdvanceSceneWind();
     void UpdateExposureFrameTiming();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
@@ -498,7 +498,8 @@ private:
     std::chrono::steady_clock::time_point exposureLastFrameTime;
     bool hasRenderScene = false;
     double currentWindTimeSeconds = 0.0;
-    SpeedTreeWindProfileSet speedTreeWindProfiles;
+    VL::SceneWindRuntime sceneWindRuntime;
+    WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
     VL::CsmSettings csmSettings;

@@ -433,9 +433,9 @@ void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds,
 {
     if (!worldLocalResources)
         return;
-    // 场景风 -> CPU 参考 solver 的向量（厘米/秒）。只取方向与强度：GT 没有渲染
-    // 线程的 windTimeSeconds，不能复制阵风相位，也不在这里另造时钟；强度为 0
-    // 时 direction * 0 即零向量，solver 走零风分支。GPU backend 完全不读这里。
+    // 场景风作者目标 -> CPU 参考 solver 的向量（厘米/秒）。GT 不拥有渲染线程的
+    // SceneWindRuntime，所以这里只取方向与强度，不复制缓动/阵风，也不另造时钟；
+    // 强度为 0 时 direction * 0 即零向量，solver 走零风分支。GPU backend 完全不读这里。
     const Eigen::Vector3f sceneWindVelocityCmPerSec =
         sceneWind.direction * sceneWind.strength;
     for (const auto& [key, object] : worldLocalResources->renderableObjects)

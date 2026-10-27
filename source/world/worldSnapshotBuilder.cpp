@@ -118,7 +118,7 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.mesh = MakeResourceHandle(meshObject.meshKey);
     snapshot.material = MakeResourceHandle(meshObject.materialKey);
     snapshot.materialInstance = MakeResourceHandle(meshObject.materialInstanceKey);
-    snapshot.speedTreeWindProfileKey = meshObject.speedTreeWindProfileKey;
+    snapshot.windResponseProfileKey = meshObject.windResponseProfileKey;
     // 放置级网格：把模板键与通用 placementBinding 一起冻结，渲染线程在 resolve
     // 前据此克隆独立 RenderableObject；普通对象两者为空。
     snapshot.placementTemplateMeshKey = meshObject.placementTemplateMeshKey;

@@ -423,8 +423,8 @@ void RenderableObject::AdvanceTressfxSimulation(float dt,
     if (!tressfxSimulation)
         return;
 
-    // 场景风只在游戏线程落到 CPU config 的 wind（direction * strength，厘米/秒）。
-    // CPU 参考 backend 不复制场景阵风：阵风相位属于渲染线程的 windTimeSeconds，
+    // 场景风作者目标只在游戏线程落到 CPU config 的 wind（direction * strength，
+    // 厘米/秒）。CPU 参考 backend 不复制渲染线程 SceneWindRuntime 的缓动/阵风；
     // GT 不拥有那个时钟，也不能在跨线程共享状态里另造一个。
     tressfxSimulation->SetSceneWind(sceneWindVelocityCmPerSec);
 

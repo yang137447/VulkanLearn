@@ -79,7 +79,7 @@ struct EditorSceneEnvironmentActor
 };
 
 // 风剖面的曲线表（每个 20 点 × 5 条）不属于展示字段，这里只冻结标量与开关，
-// 与 SpeedTreeWindProfile 的字段同名，便于后续编辑轮直接映射回去。
+// 与 WindResponseProfile 的字段同名，便于后续编辑轮直接映射回去。
 struct EditorSceneWindActor
 {
     std::string key;

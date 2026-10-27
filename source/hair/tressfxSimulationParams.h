@@ -9,7 +9,7 @@
 
 #include "hair/tressfxSolverMath.h"
 #include "mesh/meshAssetTypes.h"
-#include "world/worldWindSampling.h"
+#include "world/sceneWindRuntime.h"
 
 namespace VL::Hair
 {
@@ -118,20 +118,15 @@ inline void PackGuideStiffnessCurve(const std::vector<float>& curve,
     }
 }
 
-// 运行时场景风 -> TressFX 风向量（厘米/秒）。方向由 WorldWind 保证已归一化；
-// 幅值 = strength * gustFactor，gustFactor 用共享场景阵风在 windTimeSeconds 处
-// 采样（植被与头发同一相位、同一 helper）。强度为 0 时直接返回零向量，既不
-// 归一化零向量，也让 shader 走零风早退；阵风关闭/频率 0 时因子为 1。
-// 偏差：TressFX 5.0 的 SetWind 还会乘 sin(frame*0.001)²+0.5 的逐帧调制，这里
-// 不乘 —— 场景阵风已经负责时间调制，再乘一次就是双重调制。
+// 运行时场景风 -> TressFX 风向量（厘米/秒）。方向由 SceneWindRuntime 保证已归一化，
+// 强度已含场景缓动与阵风；这里只做方向/幅值搬运，不再二次调制。零强度直接返回
+// 零向量，既不归一化零向量，也让 shader 走零风早退。
 inline Eigen::Vector3f TressfxSceneWindVelocityCmPerSec(
-    const WorldWind& wind, double windTimeSeconds)
+    const ResolvedSceneWind& wind)
 {
     if (!(wind.strength > 0.0f))
         return Eigen::Vector3f::Zero();
-    const float gustFactor =
-        ApplySceneWindGust(1.0f, wind.gust, windTimeSeconds);
-    return wind.direction * (wind.strength * gustFactor);
+    return wind.direction * wind.strength;
 }
 
 // 一份 pass 参数。dt 由调用方按源 substep 固定为 0.0125；同一帧的所有 substep

@@ -145,13 +145,16 @@ struct TressfxPlacementResources
 
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled
 // at twenty authored strength points in the .stsdk table.
-struct SpeedTreeWindCurve
+struct WindResponseCurve
 {
     std::array<float, 20> values{};
 };
 
-struct SpeedTreeWindCommonConfig
+struct WindResponseCommon
 {
+    // 这些标量来自原始 .stsdk。VL 不修改源资产，因此字段保留：strengthResponse /
+    // directionResponse / gust* 只服务 tool/speedtree-wind-validation 的 SDK 参考
+    // 状态机；运行时场景风由 SceneWindRuntime 统一缓动并施加阵风，不再读它们。
     float strengthResponse = 0.0f;
     float directionResponse = 0.0f;
     float gustFrequency = 0.0f;
@@ -163,33 +166,33 @@ struct SpeedTreeWindCommonConfig
     float gustFallScalar = 0.0f;
 };
 
-struct SpeedTreeWindBranchConfig
+struct WindResponseLayer
 {
-    SpeedTreeWindCurve bend;
-    SpeedTreeWindCurve oscillation;
-    SpeedTreeWindCurve speed;
-    SpeedTreeWindCurve turbulence;
-    SpeedTreeWindCurve flexibility;
+    WindResponseCurve bend;
+    WindResponseCurve oscillation;
+    WindResponseCurve speed;
+    WindResponseCurve turbulence;
+    WindResponseCurve flexibility;
     float independence = 0.0f;
 };
 
-struct SpeedTreeWindRippleConfig
+struct WindResponseRipple
 {
-    SpeedTreeWindCurve planar;
-    SpeedTreeWindCurve directional;
-    SpeedTreeWindCurve speed;
-    SpeedTreeWindCurve flexibility;
+    WindResponseCurve planar;
+    WindResponseCurve directional;
+    WindResponseCurve speed;
+    WindResponseCurve flexibility;
     float shimmer = 0.0f;
     float independence = 0.0f;
 };
 
-struct SpeedTreeWindConfig
+struct WindResponse
 {
-    SpeedTreeWindCommonConfig common;
-    SpeedTreeWindBranchConfig shared;
-    SpeedTreeWindBranchConfig branch1;
-    SpeedTreeWindBranchConfig branch2;
-    SpeedTreeWindRippleConfig ripple;
+    WindResponseCommon common;
+    WindResponseLayer shared;
+    WindResponseLayer branch1;
+    WindResponseLayer branch2;
+    WindResponseRipple ripple;
     float sharedStartHeight = 0.0f;
     float branch1StretchLimit = 0.0f;
     float branch2StretchLimit = 0.0f;
@@ -203,12 +206,12 @@ struct SpeedTreeWindConfig
 // One imported tree species' authored wind data. The key follows the mesh
 // cache identity so all sections and instances of one source asset share the
 // same live CPU wind state without sharing it with other species.
-struct SpeedTreeWindProfile
+struct WindResponseProfile
 {
     std::string key;
     Eigen::Vector3f sourceBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f sourceBoundsMax = Eigen::Vector3f::Zero();
-    SpeedTreeWindConfig config;
+    WindResponse config;
 };
 
 // Extra per-vertex SpeedTree attributes parsed from .stsdk. The raw source bytes
@@ -368,5 +371,5 @@ struct ModelResource
     bool hasSpeedTreeWind = false;
     Eigen::Vector3f speedTreeSourceBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f speedTreeSourceBoundsMax = Eigen::Vector3f::Zero();
-    SpeedTreeWindConfig speedTreeWind;
+    WindResponse speedTreeWind;
 };

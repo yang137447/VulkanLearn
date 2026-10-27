@@ -1371,12 +1371,11 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     bool resetMatched = false;
     HairTraceFrameInfo traceInfo;
     // 场景风是全局对象：每个对象组只读一次，整组 dispatch 共用同一个风向量。
-    // 阵风由共享 helper 在 renderScene.windTimeSeconds 处采样，与植被同相位；
-    // 头发不再叠加 TressFX 的 sin(frame*0.001)² 逐帧调制（见
-    // tressfxSimulationParams.h / tressfxSolverMath.h 的偏差说明）。
+    // SceneWindRuntime 已完成缓动与阵风调制，头发不再叠加 TressFX 的
+    // sin(frame*0.001)² 逐帧调制（见 tressfxSimulationParams.h 的偏差说明）。
     const Eigen::Vector3f sceneWindVelocityCmPerSec =
         VL::Hair::TressfxSceneWindVelocityCmPerSec(
-            renderScene.wind, renderScene.windTimeSeconds);
+            renderScene.resolvedWind);
     for (Dispatch& dispatch : dispatches)
     {
         RenderableObject& object = *dispatch.object;

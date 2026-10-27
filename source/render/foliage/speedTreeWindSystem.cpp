@@ -36,7 +36,7 @@ namespace
         return Interpolate(sigmoid, value, linearity);
     }
 
-    float SampleCurve(const SpeedTreeWindCurve& curve, float strength)
+    float SampleCurve(const WindResponseCurve& curve, float strength)
     {
         const float position = Clamp01(strength) * 19.0f;
         const size_t before = static_cast<size_t>(position);
@@ -108,7 +108,7 @@ void SpeedTreeWindSystem::ResetGustState()
 
 void SpeedTreeWindSystem::Reset()
 {
-    config = SpeedTreeWindConfig();
+    config = WindResponse();
     gpuState = SpeedTreeWindStateGPU();
     sourceBoundsMin.setZero();
     sourceBoundsMax.setZero();
@@ -136,7 +136,7 @@ void SpeedTreeWindSystem::Reset()
 }
 
 void SpeedTreeWindSystem::Configure(
-    const SpeedTreeWindConfig& windConfig,
+    const WindResponse& windConfig,
     const Eigen::Vector3f& boundsMin,
     const Eigen::Vector3f& boundsMax)
 {
@@ -381,6 +381,7 @@ void SpeedTreeWindSystem::AdvanceTo(double timeSeconds)
 // 强度缓动：目标在 [strengthChangeStartTime, strengthChangeEndTime] 内由 sigmoid 过渡到
 // targetStrength。零时长过渡（响应时间为 0）直接到达目标。原先的 0 因子会停在两端中点，
 // 导致强度永远停在半路，所以这里取 1。
+// 只服务 SDK 参考状态机；渲染路径的缓动已移到 SceneWindRuntime，不再按物种响应时间重复缓动。
 void SpeedTreeWindSystem::UpdateEasedStrength(double time)
 {
     float strengthFactor = 1.0f;
@@ -396,7 +397,9 @@ void SpeedTreeWindSystem::UpdateEasedStrength(double time)
         LinearSigmoid(strengthFactor, 0.0f));
 }
 
-void SpeedTreeWindSystem::AdvanceToSceneWind(double timeSeconds, const VL::WorldWind& wind)
+void SpeedTreeWindSystem::AdvanceToSceneWind(
+    double timeSeconds,
+    const VL::ResolvedSceneWind& wind)
 {
     if (!configured)
     {
@@ -412,32 +415,18 @@ void SpeedTreeWindSystem::AdvanceToSceneWind(double timeSeconds, const VL::World
     const float deltaTime = lastAdvanceTime >= 0.0
         ? static_cast<float>(time - lastAdvanceTime)
         : 0.0f;
-
-    // 基准强度先归一化到曲线的 [0, 1] 横轴，再走与 SpeedTree 相同的响应缓动；阵风在缓动之后叠加，
-    // 与 SpeedTree 的 gustState 叠加位置一致。
-    const float baseStrength = VL::SceneWindCurveAxis(std::max(0.0f, wind.strength));
-    if (lastAdvanceTime < 0.0)
-    {
-        // 首次推进直接落到场景风强度，不从 Configure 的检视默认值缓动过来。
-        targetStrength = baseStrength;
-        currentStrength = baseStrength;
-        strengthAtStart = baseStrength;
-        strengthChangeStartTime = time;
-        strengthChangeEndTime = time;
-    }
-    else
-    {
-        // 响应时间的起点是上一次推进时刻，因此必须在 lastAdvanceTime 更新之前调用。
-        SetStrength(baseStrength);
-    }
     lastAdvanceTime = time;
-    UpdateEasedStrength(time);
 
-    // 强度为 0 时方向置零，着色器的零风早退路径使植被保持原始位置。
-    const float strength = Clamp01(VL::ApplySceneWindGust(currentStrength, wind.gust, time));
+    // 场景风已经由 SceneWindRuntime 完成强度/方向缓动与阵风调制；这里只把有效
+    // 强度映射到响应曲线横轴，并按物种自己的曲线取值。物种的 strengthResponse/
+    // directionResponse 只保留给 SDK 对照状态机，不参与渲染路径。
+    const float strength = Clamp01(VL::SceneWindCurveAxis(wind.strength));
     const Eigen::Vector3f direction = strength > 0.0f
         ? wind.direction
         : Eigen::Vector3f::Zero();
+    // 同步 SDK 参考状态机的“当前值”，避免运行时路径与 tool 对照读取到旧强度。
+    currentStrength = strength;
+    targetStrength = strength;
     UpdateGpuState(direction, strength, deltaTime);
 }
 
@@ -529,8 +518,8 @@ void SpeedTreeWindSystem::UpdateGpuState(
         config.doShimmer && config.doRipple ? config.ripple.shimmer : 0.0f);
 }
 
-void SpeedTreeWindProfileSet::Configure(
-    const std::unordered_map<std::string, SpeedTreeWindProfile>& profiles)
+void WindResponseProfileSet::Configure(
+    const std::unordered_map<std::string, WindResponseProfile>& profiles)
 {
     systems.clear();
     systems.reserve(profiles.size());
@@ -545,18 +534,18 @@ void SpeedTreeWindProfileSet::Configure(
     }
 }
 
-void SpeedTreeWindProfileSet::Reset()
+void WindResponseProfileSet::Reset()
 {
     systems.clear();
 }
 
-void SpeedTreeWindProfileSet::Swap(
-    SpeedTreeWindProfileSet& other) noexcept
+void WindResponseProfileSet::Swap(
+    WindResponseProfileSet& other) noexcept
 {
     systems.swap(other.systems);
 }
 
-void SpeedTreeWindProfileSet::AdvanceTo(double timeSeconds)
+void WindResponseProfileSet::AdvanceTo(double timeSeconds)
 {
     for (auto& [profileKey, system] : systems)
     {
@@ -564,18 +553,18 @@ void SpeedTreeWindProfileSet::AdvanceTo(double timeSeconds)
     }
 }
 
-void SpeedTreeWindProfileSet::AdvanceToSceneWind(
+void WindResponseProfileSet::AdvanceToSceneWind(
     double timeSeconds,
-    const VL::WorldWind& wind)
+    const VL::ResolvedSceneWind& wind)
 {
-    // 所有物种读同一个场景风；差异只来自各自的响应曲线数值。
+    // 所有物种读同一个已解析场景风；差异只来自各自的响应曲线数值。
     for (auto& [profileKey, system] : systems)
     {
         system.AdvanceToSceneWind(timeSeconds, wind);
     }
 }
 
-bool SpeedTreeWindProfileSet::SetStrength(float strength)
+bool WindResponseProfileSet::SetStrength(float strength)
 {
     if (systems.empty())
     {
@@ -588,7 +577,7 @@ bool SpeedTreeWindProfileSet::SetStrength(float strength)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::SetDirection(const Eigen::Vector3f& direction)
+bool WindResponseProfileSet::SetDirection(const Eigen::Vector3f& direction)
 {
     if (systems.empty())
     {
@@ -601,7 +590,7 @@ bool SpeedTreeWindProfileSet::SetDirection(const Eigen::Vector3f& direction)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::SetGustingEnabled(bool enabled)
+bool WindResponseProfileSet::SetGustingEnabled(bool enabled)
 {
     if (systems.empty())
     {
@@ -614,7 +603,7 @@ bool SpeedTreeWindProfileSet::SetGustingEnabled(bool enabled)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::ForceGust()
+bool WindResponseProfileSet::ForceGust()
 {
     if (systems.empty() || !IsGustingEnabled())
     {
@@ -627,7 +616,7 @@ bool SpeedTreeWindProfileSet::ForceGust()
     return true;
 }
 
-const SpeedTreeWindStateGPU* SpeedTreeWindProfileSet::FindGpuState(
+const SpeedTreeWindStateGPU* WindResponseProfileSet::FindGpuState(
     std::string_view profileKey) const
 {
     // Current limitation: profile lookup still constructs a string and hashes
@@ -641,7 +630,7 @@ const SpeedTreeWindStateGPU* SpeedTreeWindProfileSet::FindGpuState(
     return &systemIt->second.GetGpuState();
 }
 
-bool SpeedTreeWindProfileSet::IsGustingEnabled() const
+bool WindResponseProfileSet::IsGustingEnabled() const
 {
     if (systems.empty())
     {

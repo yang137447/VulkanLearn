@@ -90,7 +90,7 @@ struct WorldMeshObject
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
-    std::string speedTreeWindProfileKey;
+    std::string windResponseProfileKey;
     // 放置级（per-placement）网格：placementTemplateMeshKey 非空表示本对象在 spawn
     // 时从该模板 RenderableObject 克隆独立实例（共享导入几何、独立 GPU 状态）；
     // placementBinding 描述如何解析自身绑定（Kind + 参数），由渲染线程按 Kind 分派。
@@ -133,7 +133,7 @@ public:
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
-    void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
+    void AddWindResponseProfile(WindResponseProfile profile);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
@@ -155,7 +155,7 @@ public:
     Debug::DrawDebug& GetDebugDraw() { return debugDraw; }
     const Debug::DrawDebug& GetDebugDraw() const { return debugDraw; }
     std::shared_ptr<const Debug::Snapshot> CaptureDebugDraw(const Animation::MotionDebugView& motion);
-    const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
+    const std::unordered_map<std::string, WindResponseProfile>& GetWindResponseProfiles() const { return windResponseProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
@@ -229,7 +229,7 @@ public:
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateExtension(
         const std::string& path, const std::string& digest, const nlohmann::json& declaration,
         const std::vector<WorldMeshObject>& meshes,
-        const std::vector<SpeedTreeWindProfile>& profiles) const;
+        const std::vector<WindResponseProfile>& profiles) const;
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateRemoval(const std::string& path) const;
     void CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept;
     void SwapScriptConfiguration(nlohmann::json& actors, nlohmann::json& templates,
@@ -261,7 +261,7 @@ private:
     WorldWind wind;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
-    std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
+    std::unordered_map<std::string, WindResponseProfile> windResponseProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;

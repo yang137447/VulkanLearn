@@ -68,7 +68,7 @@ struct MeshDrawSnapshot
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;
-    std::string speedTreeWindProfileKey;
+    std::string windResponseProfileKey;
     // 放置级网格：mesh.key 已是本实例键，模板键指向仍在缓存里的模板
     // RenderableObject；渲染线程在 resolve 前据此克隆独立对象，并按 placementBinding
     // 的 Kind 解析绑定。普通共享对象两个字段为空。

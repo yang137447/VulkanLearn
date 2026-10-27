@@ -65,6 +65,6 @@ struct MeshObjectBuildPlan
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
-    std::string speedTreeWindProfileKey;
+    std::string windResponseProfileKey;
     VL::PlacementBinding placementBinding;
 };

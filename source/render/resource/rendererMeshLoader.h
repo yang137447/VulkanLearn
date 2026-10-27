@@ -21,7 +21,7 @@ struct RendererResourceLoadContext;
 struct RendererMeshLoadResult
 {
     std::vector<MeshObjectBuildPlan> objectPlans;
-    std::optional<SpeedTreeWindProfile> speedTreeWindProfile;
+    std::optional<WindResponseProfile> windResponseProfile;
     // 同一份已发布导入结果（含骨骼 section 的绑定顶点/权重）。跨对象解析
     // `collision.mesh` 权重转移时复用，不重新读 FBX。
     std::shared_ptr<const MeshAssetImportResult> importResult;

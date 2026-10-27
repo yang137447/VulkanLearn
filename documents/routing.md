@@ -34,7 +34,7 @@
 | `source/debug/**`、`source/ui/debugDrawOverlay.*`、`source/script/scriptDebugDraw.h`、`script/VulkanLearn.Runtime/DebugDraw.cs`、`tool/debug-draw-tests/**`、`tool/editor-ui-tests/debugDrawOverlayTests.cpp`、`tool/script-tests/scriptDebugDrawTests.cpp`、`tool/script-tests/managed/DebugDrawFixtures.cs`、`tool/debug/capture_draw_debug.py` | `contracts/debug-draw.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
-| `source/world/worldWind.h`、`source/world/worldWindSampling.h` | `contracts/scene-wind.md` | — |
+| `source/world/worldWind.h`、`source/world/worldWindSampling.h`、`source/world/sceneWindRuntime.h` | `contracts/scene-wind.md` | — |
 | `source/render/foliage/speedTreeWind*` | `contracts/scene-wind.md` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md`、`contracts/testing.md` | — |
