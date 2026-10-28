@@ -2750,7 +2750,7 @@ std::string HairPreviewWindRows(const EditorUi::EditorSceneActorSnapshot* wind)
         UiWidgets::NumericComponent entry;
         entry.id = "hair-wind-direction-" + std::to_string(component);
         entry.label = std::string(1, "XYZ"[component]);
-        entry.value = SceneActorNumber(wind->worldWind.direction[component]);
+        entry.value = "0";
         entry.change = {"hair-preview-wind", 0, component};
         direction.push_back(std::move(entry));
     }
@@ -2759,7 +2759,7 @@ std::string HairPreviewWindRows(const EditorUi::EditorSceneActorSnapshot* wind)
 
     UiWidgets::NumericComponent strength;
     strength.id = "hair-wind-strength-0";
-    strength.value = SceneActorNumber(wind->worldWind.strengthCmPerSec);
+    strength.value = "0";
     strength.change = {"hair-preview-wind", 1, 0};
     strength.hasRange = true;
     strength.minValue = 0.0f;
@@ -2769,7 +2769,7 @@ std::string HairPreviewWindRows(const EditorUi::EditorSceneActorSnapshot* wind)
 
     UiWidgets::NumericComponent gust;
     gust.id = "hair-wind-gust-0";
-    gust.value = SceneActorNumber(wind->worldWind.gustAmplitude);
+    gust.value = "0";
     gust.change = {"hair-preview-wind", 2, 0};
     gust.hasRange = true;
     gust.minValue = 0.0f;
