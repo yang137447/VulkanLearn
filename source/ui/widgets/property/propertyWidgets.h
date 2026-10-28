@@ -27,6 +27,8 @@ std::string CollapsibleSection(const std::string& id, const std::string& key,
     const WidgetAction& toggle, bool expanded);
 
 // 分量值保持字符串，允许焦点控件处于未完成输入；数值解释由具体业务的输入边界负责。
+// 注意：value 会参与生成的 markup。稳态刷新应保持结构 markup 不变，再用
+// WidgetDocument::SetControlValue 更新值；不要把每帧变化的实时值拼进 markup。
 struct NumericComponent
 {
     std::string id;

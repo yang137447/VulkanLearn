@@ -282,6 +282,9 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 `WidgetDocument` 在 GT 借用已校验的 RML document：
 
 - 相同 markup 不重建 DOM，避免无意义焦点/滚动抖动。
+- markup 只承载结构、label、id 与 action；当前数值不得拼进 markup，稳态值统一走
+  `SetControlValue`。Debug 构建在替换包含焦点的子树时打印 `WidgetDocument` 诊断，
+  防止把实时值写进 markup 导致滑块/输入框被销毁重建。
 - `SetProperty` 按元素 id、属性名和值缓存；相同值不再次调用 RmlUi，
   避免静止帧重复 DirtyProperty，停靠几何与面板 display 也走此路径。
 - `SetClass` 与属性共用同一份缓存：折叠分组、选中态、disabled 样式都在静止帧写 0 次。

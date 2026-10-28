@@ -2786,9 +2786,28 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     const auto* active = resourceEditor.ActiveTab();
     const bool visible = isHair && !hairBlocked && active != nullptr;
     widgetDocument.SetProperty("resource-hair-simulation", "display", visible ? "block" : "none");
-    if (!visible) return;
+    if (!visible)
+    {
+        hairPreviewWindBound = false;
+        hairPreviewWindPath.clear();
+        return;
+    }
     if (!hairSimulationRequested || hairSimulationPath != active->path)
         RequestHairSimulationDocument(active->path);
+    const auto* previewWind = PreviewWindActor();
+    if (previewWind == nullptr)
+    {
+        hairPreviewWindBound = false;
+    }
+    else if (!hairPreviewWindBound || hairPreviewWindPath != active->path ||
+        hairPreviewWindGeneration != previewWind->worldGeneration)
+    {
+        // 只在新预览 World/资产绑定时取作者值；拖动期间快照晚一帧，不能每帧回写。
+        hairPreviewWind = previewWind->worldWind;
+        hairPreviewWindPath = active->path;
+        hairPreviewWindGeneration = previewWind->worldGeneration;
+        hairPreviewWindBound = true;
+    }
     const auto* document = TressfxDocument(active->path);
     if (document != nullptr)
     {
@@ -2896,20 +2915,19 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
                 SetControlValue(id + "-slider", TressfxSimulationText(values[component]));
         }
     }
-    const auto* previewWind = PreviewWindActor();
-    if (previewWind != nullptr)
+    if (hairPreviewWindBound)
     {
         for (uint32_t component = 0; component < 3; ++component)
             SetControlValue("hair-wind-direction-" + std::to_string(component),
-                SceneActorNumber(previewWind->worldWind.direction[component]));
+                SceneActorNumber(hairPreviewWind.direction[component]));
         SetControlValue("hair-wind-strength-0",
-            SceneActorNumber(previewWind->worldWind.strengthCmPerSec));
+            SceneActorNumber(hairPreviewWind.strengthCmPerSec));
         SetControlValue("hair-wind-strength-0-slider",
-            SceneActorNumber(previewWind->worldWind.strengthCmPerSec));
+            SceneActorNumber(hairPreviewWind.strengthCmPerSec));
         SetControlValue("hair-wind-gust-0",
-            SceneActorNumber(previewWind->worldWind.gustAmplitude));
+            SceneActorNumber(hairPreviewWind.gustAmplitude));
         SetControlValue("hair-wind-gust-0-slider",
-            SceneActorNumber(previewWind->worldWind.gustAmplitude));
+            SceneActorNumber(hairPreviewWind.gustAmplitude));
     }
 }
 
@@ -4413,6 +4431,13 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         else if (index == 1) property = EditorActorProperty::WindStrength;
         else if (index == 2) property = EditorActorProperty::WindGustAmplitude;
         else return;
+        if (hairPreviewWindBound)
+        {
+            // 本地即时值优先于晚一帧到达的 actor 快照，拖动时滑块不会被旧值拉回。
+            if (index == 0) hairPreviewWind.direction[component] = number;
+            else if (index == 1) hairPreviewWind.strengthCmPerSec = number;
+            else hairPreviewWind.gustAmplitude = number;
+        }
         UiAction request;
         request.type = UiActionType::SetActorProperty;
         request.actorProperty = {wind->worldGeneration, wind->identity, property, component, number};

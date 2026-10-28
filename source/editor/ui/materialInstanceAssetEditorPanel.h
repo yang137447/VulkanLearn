@@ -335,6 +335,13 @@ private:
     bool hairSimulationPendingSave = false;
     int hairSimulationSaveWaitTicks = 0;
     std::string hairSimulationStatus;
+    // Preview Wind 的会话值。滑块拖动时 World/actor 快照会晚一帧到达；如果每帧
+    // 都从快照回写滑块，滑块会被旧值拉回去。这里保存面板的即时值，预览 World
+    // generation 变化（重新加载预览）时才重新绑定作者值。
+    EditorSceneWorldWindActor hairPreviewWind;
+    std::string hairPreviewWindPath;
+    uint64_t hairPreviewWindGeneration = 0;
+    bool hairPreviewWindBound = false;
 
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;
