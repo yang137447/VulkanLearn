@@ -504,7 +504,7 @@ TF 不持有角色碰撞默认值；所有坐标和半径都是**绑定局部空
 - 矩阵每帧写入 std140 params UBO 的 `skinning`（mat4，offset 160）；三份历史换基
   矩阵 `historyToCurrentLocal`（mat4，offset 224）；作者曲线数组 `vspStiffness`
   （offset 288）与 `localShapeStiffness`（offset 544）各 16 个 vec4、共 256 bytes；
-  整个 UBO 800 bytes，C++ `static_assert` 固定大小、对齐与偏移。没有声明
+  整个 UBO 816 bytes（末尾 `windParams` 为 vec4），C++ `static_assert` 固定大小、对齐与偏移。没有声明
   `skinning` 时上传单位矩阵。
 - 不可移动点（`local < rootFixedPoints` 或逆质量 <= 0）每步写
   `InitialPos = M * rest`；这是 TressFX Integration 的规则。正常积分中可移动点
