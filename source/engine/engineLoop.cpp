@@ -811,6 +811,9 @@ void EngineLoop::Tick()
             scripts.ContextTime().at("deltaTime").get<float>();
         const float hairSimulationDelta = scripts.IsEditing()
             ? simulationDelta : gameSimulationDelta;
+        // 风使用 RuntimeClock 的原始 deltaTime，而不是已夹到 0.1 s 的 simulationDelta：
+        // master SpeedTree 用连续墙钟，风自身的 1/60 固定步长和 0.25 s 追帧上限会消化
+        // 长帧；这里若用夹取后的值，hitch 时风会永久变慢。
         RenderSystem::GetInstance().SetSimulationFrameDeltas(
             simulationDelta, gameSimulationDelta, hairSimulationDelta, deltaTime);
         {

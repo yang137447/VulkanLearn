@@ -109,6 +109,8 @@ public:
     void PublishSnapshotFromActiveWorld();
     // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
     // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
+    // frameDelta/gameDelta/hairDelta 是各自已夹取的模拟 delta；windDelta 是
+    // EngineLoop RuntimeClock 的原始真实 delta，专门给固定步长风时钟消费。
     void SetSimulationFrameDeltas(float frameDelta, float gameDelta, float hairDelta,
         float windDelta)
     {
@@ -117,6 +119,7 @@ public:
         hairSimulationDeltaSeconds = hairDelta;
         // EngineLoop 的 RuntimeClock 是真实时间；RenderSystem 在 RT 上不能直接读
         // GT 的 clock，因此把原始 delta 累加到这里，由风时钟在 RT 上消费。
+        // 累加而不是覆盖：RT 可能比 GT 慢一帧，丢掉任一 GT delta 都会让风变慢。
         // C++17 的 atomic<float> 没有 fetch_add，用 CAS 累加。
         float expected = windPendingDeltaSeconds.load(std::memory_order_relaxed);
         while (!windPendingDeltaSeconds.compare_exchange_weak(
@@ -510,9 +513,14 @@ private:
     bool exposureClockInitialized = false;
     std::chrono::steady_clock::time_point exposureLastFrameTime;
     bool hasRenderScene = false;
+    // 风模拟时间。严格按固定 1/60 s 步长递增；不要把它当成帧时间。
     double currentWindTimeSeconds = 0.0;
+    // true 表示已经执行过首帧 time=0 的采样；World 换代时清除，让新场景从目标值起步。
     bool windClockInitialized = false;
+    // GT RuntimeClock 原始 delta 的跨线程累加器；RT 每帧 exchange(0) 取走。
+    // 用 atomic 是因为 GT/RT 可能并行运行；CAS 累加见 SetSimulationFrameDeltas。
     std::atomic<float> windPendingDeltaSeconds{0.0f};
+    // 不足一个 1/60 s 步长的余量；超过 0.25 s 的长卡顿只追 15 步，避免 gust 一次性补发。
     double windTickAccumulator = 0.0;
     VL::SceneWindRuntime sceneWindRuntime;
     WindResponseProfileSet windResponseProfiles;

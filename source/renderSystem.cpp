@@ -3768,6 +3768,8 @@ RenderSystem::BuildRendererDescriptorContext(
 void RenderSystem::AdvanceSceneWindTick()
 {
     constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
+    // 一步同时推进场级解析（头发）和每 profile 的 CWindStateMgr（植被）。
+    // 两个消费者必须看到同一个 currentWindTimeSeconds，否则阵风相位会分叉。
     const VL::ResolvedSceneWind resolvedWind =
         sceneWindRuntime.Advance(currentRenderScene.wind, currentWindTimeSeconds);
     currentRenderScene.windTimeSeconds = currentWindTimeSeconds;
@@ -3783,17 +3785,21 @@ void RenderSystem::AdvanceSceneWind()
     if (!windClockInitialized)
     {
         windClockInitialized = true;
+        // 首帧只做 time=0 的目标采样；此时 GT 可能已经积累了一帧 delta，清零避免
+        // 同一渲染帧里立刻再走一步，导致第一帧强度从目标值跳开。
         windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
         windTickAccumulator = 0.0;
-        // 首帧仍推进 time=0，让 profile 从作者目标起步；之后消费引擎 delta。
         AdvanceSceneWindTick();
         return;
     }
 
+    // exchange 而不是 load 后清零：GT 可能在读取后立刻追加下一帧 delta；
+    // 原子交换保证每一份 GT delta 只被 RT 消费一次。
     const double elapsed = std::max(0.0, static_cast<double>(
         windPendingDeltaSeconds.exchange(0.0f, std::memory_order_relaxed)));
-    // 调试断点/长卡顿后最多追 0.25 s，避免一次补几百步。
+    // 调试断点/长卡顿后最多追 0.25 s（15 步），避免一次补几百步让 gust 连续爆发。
     windTickAccumulator = std::min(windTickAccumulator + elapsed, 0.25);
+    // 一帧内可以补多步；严格按时间顺序推进，保持 CWindStateMgr 的 RNG/gust 状态机顺序。
     while (windTickAccumulator >= kSceneWindTickSeconds)
     {
         AdvanceSceneWindTick();
