@@ -900,6 +900,7 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     ClearSelectedMaterialInstance();
     currentWindTimeSeconds = 0.0;
     windClockInitialized = false;
+    windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
     windTickAccumulator = 0.0;
     sceneWindRuntime.Reset();
     initializedRenderWorldGeneration = 0;
@@ -1566,6 +1567,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
     hasRenderScene = true;
     currentWindTimeSeconds = 0.0;
     windClockInitialized = false;
+    windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
     windTickAccumulator = 0.0;
     sceneWindRuntime.Reset();
     initializedRenderWorldGeneration =
@@ -3759,10 +3761,10 @@ RenderSystem::BuildRendererDescriptorContext(
     return descriptorContext;
 }
 
-// 风时间按固定 1/60 s 步长推进，但步进由墙钟累加器驱动：master 的 SpeedTree
-// 风时钟是 steady_clock 墙钟，当前分支若每渲染帧都加 1/60，在 240 FPS 下会比
+// 风时间按固定 1/60 s 步长推进，步进量来自 EngineLoop 的 RuntimeClock 真实 delta。
+// master 的 SpeedTree 风时钟是墙钟；当前分支若每渲染帧都加 1/60，在 240 FPS 下会比
 // master 快 4 倍。这里保留固定步长（CWindStateMgr/SceneWindRuntime 的数值稳定），
-// 只让“每秒推进多少步”跟随真实时间。
+// 只让“每秒推进多少步”跟随引擎真实时间。
 void RenderSystem::AdvanceSceneWindTick()
 {
     constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
@@ -3778,20 +3780,18 @@ void RenderSystem::AdvanceSceneWindTick()
 void RenderSystem::AdvanceSceneWind()
 {
     constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
-    const auto now = std::chrono::steady_clock::now();
     if (!windClockInitialized)
     {
         windClockInitialized = true;
-        lastWindTickTime = now;
+        windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
         windTickAccumulator = 0.0;
-        // 首帧仍推进 time=0，让 profile 从作者目标起步；之后由墙钟补步。
+        // 首帧仍推进 time=0，让 profile 从作者目标起步；之后消费引擎 delta。
         AdvanceSceneWindTick();
         return;
     }
 
-    const double elapsed = std::max(0.0,
-        std::chrono::duration<double>(now - lastWindTickTime).count());
-    lastWindTickTime = now;
+    const double elapsed = std::max(0.0, static_cast<double>(
+        windPendingDeltaSeconds.exchange(0.0f, std::memory_order_relaxed)));
     // 调试断点/长卡顿后最多追 0.25 s，避免一次补几百步。
     windTickAccumulator = std::min(windTickAccumulator + elapsed, 0.25);
     while (windTickAccumulator >= kSceneWindTickSeconds)

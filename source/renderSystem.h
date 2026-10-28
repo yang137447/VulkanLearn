@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <array>
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -108,11 +109,20 @@ public:
     void PublishSnapshotFromActiveWorld();
     // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
     // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
-    void SetSimulationFrameDeltas(float frameDelta, float gameDelta, float hairDelta)
+    void SetSimulationFrameDeltas(float frameDelta, float gameDelta, float hairDelta,
+        float windDelta)
     {
         simulationDeltaSeconds = frameDelta;
         gameSimulationDeltaSeconds = gameDelta;
         hairSimulationDeltaSeconds = hairDelta;
+        // EngineLoop 的 RuntimeClock 是真实时间；RenderSystem 在 RT 上不能直接读
+        // GT 的 clock，因此把原始 delta 累加到这里，由风时钟在 RT 上消费。
+        // C++17 的 atomic<float> 没有 fetch_add，用 CAS 累加。
+        float expected = windPendingDeltaSeconds.load(std::memory_order_relaxed);
+        while (!windPendingDeltaSeconds.compare_exchange_weak(
+            expected, expected + windDelta, std::memory_order_relaxed))
+        {
+        }
     }
     // Consumes the latest snapshot if present, otherwise reuses the previous
     // RenderScene after one has been initialized.
@@ -265,9 +275,10 @@ public:
     ComputeShaderArtifact GetActiveComputeShaderArtifact(
         const std::string& shaderName) const;
     // 本帧解析后的场景风（已缓动、已含阵风）。风时间以固定 1/60 s 步长推进，
-    // 但步进由墙钟累加器驱动（与 master 的 SpeedTree 墙钟速度一致）；活动 World
-    // 换代时清零并重新从作者目标起步。GetActiveWind 返回场级解析结果（供头发/调试），
-    // 植被的每物种状态在 windResponseProfiles 内。
+    // 步进量来自 EngineLoop 的 RuntimeClock 真实 delta（经 SetSimulationFrameDeltas
+    // 传入 RT），与 master 的 SpeedTree 墙钟速度一致；活动 World 换代时清零并重新
+    // 从作者目标起步。GetActiveWind 返回场级解析结果（供头发/调试），植被的每物种
+    // 状态在 windResponseProfiles 内。
     const VL::ResolvedSceneWind& GetActiveWind() const { return currentRenderScene.resolvedWind; }
     double GetWindTimeSeconds() const { return currentRenderScene.windTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these
@@ -501,7 +512,7 @@ private:
     bool hasRenderScene = false;
     double currentWindTimeSeconds = 0.0;
     bool windClockInitialized = false;
-    std::chrono::steady_clock::time_point lastWindTickTime;
+    std::atomic<float> windPendingDeltaSeconds{0.0f};
     double windTickAccumulator = 0.0;
     VL::SceneWindRuntime sceneWindRuntime;
     WindResponseProfileSet windResponseProfiles;

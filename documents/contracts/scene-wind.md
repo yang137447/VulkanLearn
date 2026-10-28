@@ -35,10 +35,11 @@
   `RenderScene::resolvedWind`；该结果供头发等场级消费者使用，SpeedTree 植被不读它。
   `RenderSystem::GetActiveWind()` 只读返回该场级解析结果；`GetWindTimeSeconds()` 返回本帧
   使用的秒数。植被读 `RenderScene::wind` 作者目标，在每物种 profile 内独立缓动/阵风。
-- `AdvanceSceneWind` 以固定 1/60 s 为模拟步长，但步进由墙钟累加器驱动：每渲染帧按实际
-  elapsed 补 0–N 步，使风速/阵风速度与 master 的 `steady_clock` 一致，不随渲染 FPS 变快或变慢。
-  World 换代时清零风时间、累加器和 `SceneWindRuntime`，使首帧直接采用新场景目标值。同一帧同时把原始
-  `wind` 目标交给 `WindResponseProfileSet`，每条 profile 的首帧也直接采用目标值。
+- `AdvanceSceneWind` 以固定 1/60 s 为模拟步长，步进量来自 `EngineLoop` 的 `RuntimeClock`
+  真实 delta（经 `SetSimulationFrameDeltas` 传到 RT 并由累加器消费），因此风速/阵风速度不随
+  渲染 FPS 变快或变慢。World 换代时清零风时间、累加器和 `SceneWindRuntime`，使首帧直接采用
+  新场景目标值。同一帧同时把原始 `wind` 目标交给 `WindResponseProfileSet`，每条 profile 的
+  首帧也直接采用目标值。
 - 渲染器资源加载跳过 `wind` 对象（不产生 GPU 资源）；编辑器对象类型白名单接受 `wind`。
 
 ## 植被消费（SpeedTree）

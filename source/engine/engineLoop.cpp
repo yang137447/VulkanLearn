@@ -812,7 +812,7 @@ void EngineLoop::Tick()
         const float hairSimulationDelta = scripts.IsEditing()
             ? simulationDelta : gameSimulationDelta;
         RenderSystem::GetInstance().SetSimulationFrameDeltas(
-            simulationDelta, gameSimulationDelta, hairSimulationDelta);
+            simulationDelta, gameSimulationDelta, hairSimulationDelta, deltaTime);
         {
             CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
             // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
