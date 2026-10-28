@@ -62,7 +62,7 @@
 - **Default / 默认组**：组号 0，未显式分组的 guide；不能删除，参数等于资产默认/placement 覆盖。
 - **目标组**：当前笔刷要写入的命名组；从 Groups 列表选中。
 - **发根点云**：每个 guide 的根位置、生长方向、局部法线、group id。
-- **虚拟工作面**：由笔刷附近发根拟合出的局部平面；笔刷圆环和落点都在这个平面上。
+- **虚拟工作面**：由笔刷附近发根的位置和法线拟合出的局部平面；笔刷圆环、落点和选择距离都在这个平面/世界空间里，不是屏幕空间圆形。
 - **Ghost preview**：笔刷范围内、尚未提交的整根发丝用目标色低强度 tint 显示，不写资产。
 - **提交**：松开笔刷后把选择结果写入 `groups[].guideRanges`。
 
@@ -139,6 +139,9 @@ Overrides
 Painting → fringe
 +18 guides in brush
 ```
+
+笔刷圆环绘制在发根工作面内，不是贴在屏幕上的圆形；它随 `brushNormal` 倾斜，并在平面内按
+`r_world` 缩放。移动鼠标只改变 ray 与平面的交点，不改变选择度量。
 
 操作：
 
@@ -217,7 +220,7 @@ outSceneColor.rgb = mix(shaded, tressfxTargetGroupColor, ghost);
 guideIndex
 rootPosition        // hair local，渲染时乘当前 head/model 矩阵
 rootGrowthDir       // normalize(p1 - p0)，发根生长方向
-rootNormal          // 头皮法线/局部 PCA 法线，可选但强烈建议
+rootNormal          // 头皮/发根表面法线，笔刷选择的主判据；Phase 3 必须提供
 groupIndex
 ```
 
@@ -227,7 +230,8 @@ groupIndex
 - `rootNormal` 是头皮表面法线，适合做正反面/背面剔除。
 
 `.tfx` 本身没有头皮法线；加载/预览初始化时从根点邻域 PCA 估计，或从头部三角面法线取最近值。
-如果两者都不可用，facing gate 退化为相机朝向 `-viewDir`，不能把 `p1-p0` 硬当成头皮法线。
+`rootNormal` 是笔刷 normal 的主判据，不能把 `p1-p0` 硬当成头皮法线；PCA 只能作为无头皮网格时的
+近似。两者都不可用时，笔刷 normal 使用相机朝向 `-viewDir` 兜底，并在 UI 标注这是降级行为。
 
 根点使用 rest/root 位置，保证分组是作者数据，不随每帧模拟漂移；如果角色有 pose，使用根点随 head 矩阵变换后的位置。
 
@@ -240,62 +244,71 @@ groupIndex
 
 ### 6.2 虚拟工作面
 
+原则：**屏幕只负责生成 cursor ray；笔刷 stamp、选择距离、法线判定都在发根平面/世界空间里。**
+不要用屏幕距离当 falloff，也不要用屏幕圆形决定命中。
+
 每次笔刷采样：
 
-1. 鼠标 screen position → camera ray；
-2. 在屏幕空间找候选发根（screen bin / tile）；
-3. 对候选做加权 PCA：
+1. 鼠标 screen position 生成 camera ray；
+2. 在发根点云的 **3D 空间索引**（hair local/world 的 uniform grid 或 BVH）里查询 ray 附近的候选根；
+3. 对候选做位置 + 法线加权拟合：
 
 ```text
 S = weighted average(root.position)
-N = smallest-eigenvector plane normal，朝相机方向翻转
+N = normalize(weighted average(root.normal))
+if N 退化: N = 位置 PCA 最小特征向量
+if 仍无有效平面: N = -viewDir，S = 最近根位置
 ```
 
 4. 笔刷落点 `H = ray ∩ plane(S, N)`；
-5. 候选不足或平面退化时回退：
-   - 最近发根深度 + 相机朝向平面；
-   - 或最近发根位置，`N = -viewDir`。
+5. 在平面内建立 `T/B` 基，笔刷是平面内的圆盘，不是屏幕圆；
+6. 候选不足或平面退化时才回退相机朝向平面，并显示降级提示。
 
-屏幕半径转世界半径：
+UI 可以把笔刷尺寸显示为像素半径，但必须转换成世界半径 `r_world` 后再进行选择：
 
 ```text
 r_world = r_px * 2 * tan(fovY / 2) * depth / viewportHeight
 ```
+
+转换只服务 UI 手感；实际 stamp 的 `center/normal/radius` 都是世界/hair local 值。
 
 ### 6.3 剔除
 
 对每个发根：
 
 ```text
-depthGate = abs(dot(root.position - H, N)) <= thickness
-facingGate = dot(normalize(rootGrowthDir), N) >= cos(maxAngle)
-screenDisc = distance(projectToPlane(root.position), H) <= r_world
+normalGate  = dot(normalize(rootNormal), N_brush) >= cos(maxAngle)
+planeGate   = abs(dot(root.position - H, N_brush)) <= thickness
+discGate    = distance(projectToPlane(root.position), H) <= r_world
 ```
 
-- `depthGate` 防止选到后脑/背面；
-- `facingGate` 优先用 `rootNormal` 与工作面法线同向；`rootGrowthDir` 只用于 comb 的 stroke gate；
-- 没有可靠 `rootNormal` 时用相机朝向兜底，不能把 `rootGrowthDir` 直接当头皮法线；
+- `normalGate` 是主判据：发根头皮法线必须和笔刷平面法线同向；背面、侧面发根会被剔除；
+- `planeGate` 限制在笔刷平面的薄层内，避免穿过头部选到另一侧；
+- `discGate` 是平面内距离，不是屏幕距离；`projectToPlane` 后只取平面内的 `T/B` 坐标；
+- `rootNormal` 缺失时才用相机朝向兜底；`rootGrowthDir` 不是头皮法线；
 - 笔刷的 `strokeDir` 默认不参与剔除；如果要做 comb 笔刷，再加
   `abs(dot(rootGrowthDir, strokeDir))` 作为可选 gate，不要影响普通分组笔刷。
 
 ### 6.4 权重
 
 ```text
-falloff = smoothstep(1.0, 0.55, d / r_world)
-facing  = smoothstep(cosMaxAngle, 1.0, dot(rootGrowthDir, N))
-depth   = smoothstep(thickness, 0.0, abs(dot(root.position - H, N)))
-weight  = falloff * facing * depth
+inPlane = length(projectToPlane(root.position) - H)
+falloff = smoothstep(1.0, 0.55, inPlane / r_world)
+normal  = smoothstep(cosMaxAngle, 1.0, dot(rootNormal, N_brush))
+depth   = smoothstep(thickness, 0.0, abs(dot(root.position - H, N_brush)))
+weight  = falloff * normal * depth
 ```
 
-选择阈值建议 `weight > 0.05`；ghost 强度直接使用 `weight`。
+`falloff` 用平面内世界距离，`normal` 用发根法线与笔刷平面法线；不要用屏幕距离或
+`rootGrowthDir` 代替。选择阈值建议 `weight > 0.05`；ghost 强度直接使用 `weight`。
 
 ### 6.5 笔画与性能
 
-- 鼠标移动按固定屏幕间距采样，不是每个事件都重扫全部点；
-- 屏幕 tile 索引发根；只查询笔刷覆盖的 tile；
+- 鼠标移动可以按屏幕间距决定采样频率，但每次 stamp 的选择仍在世界/hair local 平面内；
+- 发根使用 3D spatial grid/BVH；只查询 ray 附近和笔刷平面附近的候选；
 - 一次笔画维护 `guide -> weight` 的并集/差集；
 - 笔画结束才压缩成 `guideRanges` 并写资产；
-- 40,334 guide 的 CPU 选择可接受；tile 索引用于避免每帧全量扫描；
+- 40,334 guide 的 CPU 选择可接受；3D 索引用于避免每次全量扫描；
 - GPU 只接收 group id / preview weight，不需要 GPU picking。
 
 ## 7. 组件拆分
@@ -330,7 +343,8 @@ public:
 };
 ```
 
-职责：屏幕射线、局部平面拟合、落点、半径、圆环平面。不得依赖 TressFX、World 或 Vulkan。
+职责：屏幕只用于生成 ray；用发根点云的空间索引拟合世界/hair-local 平面，输出 stamp 的
+世界位置、笔刷 normal 和世界半径。选择逻辑不得依赖屏幕距离；不得依赖 TressFX、World 或 Vulkan。
 
 ### 7.2 `RootCloudSelector`（头发/毛发通用）
 
@@ -351,7 +365,8 @@ public:
 };
 ```
 
-职责：朝向、深度、平面距离、权重。
+职责：发根 normal 与 brush normal 对齐、平面层厚度、平面内距离、权重；`rootGrowthDir`
+只用于 comb 模式的 stroke gate。
 
 ### 7.3 `GroupPaintController`（编辑器业务）
 
@@ -484,9 +499,12 @@ public:
 单元测试：
 
 - 局部平面拟合退化/回退；
-- 发根法线缺失时的 facing 回退；
-- 射线-平面落点与屏幕半径换算；
-- 发根朝向/深度剔除；
+- 发根法线缺失时的 `-viewDir` 回退；
+- brush normal 来自根法线/平面拟合，而不是屏幕方向；
+- 发根 normal 与 brush normal 反向时被剔除；
+- 同一屏幕距离但不同平面内的发根按世界距离区分；
+- 射线-平面落点与世界半径换算；
+- 平面层厚度剔除；
 - 同一条笔画不重复加入；
 - guide 集合压缩成连续 range；
 - 超过 range 上限时拒绝并提示；
