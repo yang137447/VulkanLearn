@@ -215,23 +215,23 @@ void GuideSimulation::LocalShapePass(size_t guide, const StrandTransform& transf
 void GuideSimulation::LengthAndWindPass(size_t guide, float timeStep)
 {
     const size_t base = guide * pointsPerGuide;
-    const float timeStepSquared = timeStep * timeStep;
     if (config.wind.squaredNorm() > 0.0f)
     {
-        // 四路锥形风逐帧生成一次；同一帧所有 guide 共用同一组方向与幅值。
-        // 这里不做 TressFX SetWind 的 sin(frame*0.001)²+0.5 逐帧调制：CPU 参考
-        // backend 只消费场景方向/强度，时间调制由 GPU 路径的场景阵风施加。
+        // 四路锥形风逐帧生成一次；TressfxCombineWind 已把权重和 2 与 cos40
+        // 归一化，混合结果就是场景空气速度（cm/s）。
         const TressfxWindCorners corners = TressfxBuildWindCorners(
             config.wind, config.wind.norm());
         const Eigen::Vector3f wind = TressfxCombineWind(corners.wind0,
             corners.wind1, corners.wind2, corners.wind3,
             static_cast<uint32_t>(guide));
+        const float dragRatePerSpeed = TressfxHairDragRatePerSpeed(
+            config.windGain, config.strandRadius);
         for (size_t local = config.rootFixedPoints; local + 1 < pointsPerGuide; ++local)
         {
             const size_t point = base + local;
-            // TressFX: v = pos_i - pos_{i+1}（未归一化），力只加到点 i 上。
-            const Eigen::Vector3f segment = positions[point] - positions[point + 1];
-            positions[point] += TressfxWindForce(segment, wind) * timeStepSquared;
+            positions[point] += TressfxDragDisplacement(
+                positions[point], previousPositions[point], positions[point + 1],
+                wind, timeStep, dragRatePerSpeed);
         }
     }
 

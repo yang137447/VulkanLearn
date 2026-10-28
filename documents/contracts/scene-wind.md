@@ -68,17 +68,25 @@
 - `simulationDefaults.wind` 已从 TressFX 资产合同移除。资产或放置/分组 overrides 仍带 `wind` 时，
   `MeshAssetValidator` 在加载期直接失败，错误信息指向场景 `wind` 对象（`type: "wind"`）；
   不再静默落回无风。
-- `HairSimulationPass::Record` 从同一帧的 `renderScene.resolvedWind` 取风：有效风向量（cm/s）
+- `HairSimulationPass::Record` 从同一帧的 `renderScene.resolvedWind` 取空气速度（cm/s）：
   就是解析结果的 `direction * strength`；缓动与阵风已在 `SceneWindRuntime` 完成，头发不再
   自行采样阵风。
+- 头发不再把场景强度当作 TressFX `WindMagnitude`。GPU 路径对每个 guide 点算法向相对速度，
+  用半隐式线性阻力推进位置：
+  `rate = windGain * rho_air * Cd / (pi * rho_hair * r) * |u_n|`，`beta = 1 - exp(-rate * dt)`。
+  `windGain` 是 TF `simulationDefaults` 的每资产响应增益，默认 `0.01`；`strandRadius` 来自
+  mesh 资产。段长在阻力和质量中约掉，不再出现旧的 `L²` 响应。
+- 四路锥形风现在表示空气速度；`TressfxCombineWind` 乘 `1/(2*cos40°)`，混合后的幅值等于
+  场景风速，不再有隐藏的 `1.532` 增益。
 - 头发不再乘 TressFX SetWind 的 `sin(frame*0.001)² + 0.5` 逐帧调制：时间调制由场景风层独占，
   再乘一次会双重调制。这是与 TressFX 5.0 的刻意偏差，`TressfxWindFrameModulation` 只保留给
   legacy/SDK 对照与离线测试。
 - 场景强度为 0 时有效风向量为零：Host 不做零向量归一化，四个风锥全零，头发只受重力/约束/碰撞驱动。
-- CPU 参考后端（`backend: "cpu"`）在游戏线程消费 `WorldWind` 的方向与强度；GT 不拥有渲染线程的
-  `SceneWindRuntime`，因此不应用场景缓动/阵风。GPU 头发读场级 `resolvedWind`；这与植被的
-  每 profile 状态不同源，植被不会读取 `resolvedWind`。
-- GPU 参数块布局未变（`wind0..3` 仍是四路锥形风），着色器无改动。
+- CPU 参考后端（`backend: "cpu"`）在游戏线程消费 `WorldWind` 的方向与强度、`windGain` 与
+  `strandRadius`；GT 不拥有渲染线程的 `SceneWindRuntime`，因此不应用场景缓动/阵风。GPU 头发读
+  场级 `resolvedWind`；这与植被的每 profile 状态不同源，植被不会读取 `resolvedWind`。
+- GPU 参数块新增 `windParams.x`（每单位法向相对速度的阻力率，1/cm）；`wind0..3` 仍是四路
+  锥形空气速度。GPU 与 CPU 参考 solver 使用同一组物理阻力公式。
 - 编辑器 TF 资产页的 `simulationDefaults.wind` 仍不存在；头发 Tab 的预览风来自模型预览场景
   `SC_model_preview` 的 `PreviewWind` 对象，只影响当前预览，不写头发资产，也不改当前关卡。
   控件提供方向、强度（cm/s）与 Gust，切换 Tab/World 后回到预览场景作者值。
@@ -105,5 +113,5 @@
   `strengthResponse`/`directionResponse` 的 profile 缓动、以及场景 gust amplitude 对
   profile gust 的缩放。
 - `tool/hair-tests/` 中的场景风用例：`SceneWindRuntime` 的缓动/阵风/复位、解析风向量、零风、
-  `MakeGuideSimulationParams` 打包；资产校验用例覆盖 `simulationDefaults.wind` 与 overrides `wind`
-  的加载期拒绝。
+  `MakeGuideSimulationParams` 打包、物理阻力方向/段长无关性/相对速度反馈；资产校验用例覆盖
+  `simulationDefaults.wind` 与 overrides `wind` 的加载期拒绝。

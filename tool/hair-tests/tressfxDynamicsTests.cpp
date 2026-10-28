@@ -75,10 +75,9 @@ TEST(TressfxDynamics, NonRootPointsRespondToAuthoredWind)
 {
     SimulationConfig config;
     config.gravity = Eigen::Vector3f::Zero();
-    // 修正后的风力带 |v|²·1e-2 量纲，作者幅值需要远大于旧的“风速”量级。
-    // CPU 参考 backend 不再乘 TressFX SetWind 的 sin(frame*0.001)²+0.5 调制，
-    // 因此这里用 5e5 复现此前 frame 0 的等效 wM（旧实现为 1e6 * 0.5）。
-    config.wind = Eigen::Vector3f(5.0e5f, 0.0f, 0.0f);
+    // 场景 wind 现在是空气速度（cm/s）；物理阻力沿相对速度方向，单位段 +X
+    // 风应把发丝推向下游 +X，而不是旧三叉积的 -X。
+    config.wind = Eigen::Vector3f(2000.0f, 0.0f, 0.0f);
     config.iterations = 8;
     GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
     for (int i = 0; i < 30; ++i)
@@ -87,9 +86,8 @@ TEST(TressfxDynamics, NonRootPointsRespondToAuthoredWind)
     const auto& positions = simulation.Positions();
     EXPECT_EQ(positions[0], Eigen::Vector3f(0, 0, 0));
     EXPECT_EQ(positions[1], Eigen::Vector3f(0, 1, 0));
-    // TressFX 的 Force = -cross(cross(v,w),v)，单位段 +X 风给出 -X 方向的力。
-    EXPECT_LT(positions[2].x(), 0.0f);
-    EXPECT_GT(positions[2].x(), -2.0f);
+    EXPECT_GT(positions[2].x(), 0.0f);
+    EXPECT_LT(positions[2].x(), 2.0f);
 }
 
 TEST(TressfxDynamics, LongRunRemainsFinite)
@@ -375,7 +373,7 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     const VL::Hair::GuideSimulationParams params =
         VL::Hair::MakeGuideSimulationParams(config, sceneWind, 7, 32, 224, 0.016f, skinning);
 
-    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 800u);
+    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 816u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, skinning), 160u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, historyToCurrentLocal), 224u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, vspStiffness), 288u);
@@ -796,13 +794,13 @@ TEST(TressfxDynamics, SceneWindRefreshesCpuReferenceSolverBeforeStepFrame)
     GuideSimulation calm(Chain(), 1, 4, {0, 1, 1, 1}, config);
     // GPU 路径才在 windTimeSeconds 处采样阵风；CPU 参考 backend 只接收
     // direction * strength，并在 StepFrame 之前刷新 config.wind。
-    windy.SetSceneWind(Eigen::Vector3f(5.0e5f, 0.0f, 0.0f));
+    windy.SetSceneWind(Eigen::Vector3f(2000.0f, 0.0f, 0.0f));
     for (int i = 0; i < 30; ++i)
     {
         windy.StepFrame(1.0f / 60.0f);
         calm.StepFrame(1.0f / 60.0f);
     }
-    EXPECT_LT(windy.Positions()[2].x(), 0.0f);
+    EXPECT_GT(windy.Positions()[2].x(), 0.0f);
     EXPECT_FLOAT_EQ(calm.Positions()[2].x(), 0.0f);
 }
 } // namespace

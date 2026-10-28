@@ -132,6 +132,8 @@ RenderableObject::RenderableObject(
                 simulationConfig.gravity = tressfxSimulationConfig.gravity;
                 // 风不在资产里：CPU config 的 wind 保持零，由
                 // AdvanceTressfxSimulation 每帧在 StepFrame 之前写入场景风向量。
+                simulationConfig.windGain = tressfxSimulationConfig.windGain;
+                simulationConfig.strandRadius = tressfxSimulationConfig.strandRadius;
                 simulationConfig.damping = tressfxSimulationConfig.damping;
                 simulationConfig.iterations = tressfxSimulationConfig.iterations;
                 simulationConfig.rootFixedPoints = tressfxSimulationConfig.rootFixedPoints;

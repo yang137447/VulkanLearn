@@ -21,11 +21,8 @@ struct GuideSimulationParams
 {
     // xyz = 世界空间重力换算到当前 hair 局部后的加速度，w 未使用（厘米/秒²）。
     Eigen::Vector4f gravity = Eigen::Vector4f::Zero();
-    // TressFX 的四路锥形风（WindMagnitude 力标量，并非风速）。
-    // 幅值来自本帧场景风：|direction * strength|（cm/s），方向在世界空间绕 Y/Z
-    // 各 ±40° 展开后换基到当前 hair 局部。VL 偏差：不再乘 TressFX SetWind 的
-    // sin(frame*0.001)² + 0.5 逐帧调制，时间调制由场景阵风独占（避免双重调制）。
-    // shader 按 a/(1-a) 权重混合（见 TressfxCombineWind）。
+    // 场景空气速度的四路锥形分量（cm/s）。Host 在物理阻力路径中把场景风展开成
+    // 锥形方向；TressfxCombineWind 负责归一化，shader 用法向相对速度算阻力。
     Eigen::Vector4f wind0 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind1 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind2 = Eigen::Vector4f::Zero();
@@ -60,9 +57,12 @@ struct GuideSimulationParams
     // bit0/bit1 分别表示这两个数组存在；未作者时 shader 走各自的回退路径。
     std::array<Eigen::Vector4f, 16> vspStiffness = {};
     std::array<Eigen::Vector4f, 16> localShapeStiffness = {};
+    // x = 每单位法向相对速度的阻力率（1/cm），由
+    // TressfxHairDragRatePerSpeed(windGain, strandRadius) 预先算好；yzw 保留。
+    Eigen::Vector4f windParams = Eigen::Vector4f::Zero();
 };
-static_assert(sizeof(GuideSimulationParams) == 800,
-    "std140 guide simulation params must stay 800 bytes");
+static_assert(sizeof(GuideSimulationParams) == 816,
+    "std140 guide simulation params must stay 816 bytes");
 static_assert(alignof(GuideSimulationParams) == 16,
     "std140 guide simulation params require vec4 alignment");
 // std140 中 mat4 必须落在 16-byte 边界；Host 与 shader 的偏移都从这里推导。
@@ -189,6 +189,10 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     params.skinningQuat = TressfxQuaternionFromMatrix(skinningMatrix);
     params.skinning = skinningMatrix;
     params.historyToCurrentLocal = historyToCurrentLocal;
+    // 物理阻力：Host 只传预计算的 1/cm 系数，shader 用当时的法向相对速度
+    // 现算 beta；段长和发丝质量已在系数推导中约掉。
+    params.windParams.x() = TressfxHairDragRatePerSpeed(
+        config.windGain, config.strandRadius);
     return params;
 }
 

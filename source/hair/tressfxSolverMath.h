@@ -31,8 +31,24 @@ inline constexpr float TressfxMaxTimeStepSeconds = 0.016f;
 // TressFX SetWind 的风锥半角：绕 Y/Z 轴各 ±40°。
 inline constexpr float TressfxWindConeAngleRadians = 0.69813170079773179f;
 
-// 风的 cm→m 单位适配系数，推导见 TressfxWindForce。
-inline constexpr float TressfxWindForceScale = 1.0e-2f;
+// 四路锥形风的权重和是 2，纵向分量是 2*cos(40°)。物理阻力路径把
+// TressfxCombineWind 的结果乘这个系数，恢复成场景作者的风速幅值。
+inline constexpr float TressfxWindConeMixScale = 0.6527036446661393f;
+
+// 空气/头发密度和圆柱阻力系数。阻力加速度：
+//   a = (rho_air * Cd / (pi * rho_hair * r)) * |u_n| * u_n
+// 这里用 CGS：g/cm^3、cm、cm/s，结果是 cm/s^2。
+inline constexpr float TressfxAirDensityGPerCm3 = 1.225e-3f;
+inline constexpr float TressfxHairDensityGPerCm3 = 1.30f;
+inline constexpr float TressfxHairDragCoefficient = 1.5f;
+
+inline float TressfxHairDragRatePerSpeed(float windGain, float strandRadiusCm)
+{
+    if (!(windGain > 0.0f) || !(strandRadiusCm > 0.0f))
+        return 0.0f;
+    return windGain * TressfxAirDensityGPerCm3 * TressfxHairDragCoefficient /
+        (3.14159265358979323846f * TressfxHairDensityGPerCm3 * strandRadiusCm);
+}
 
 // TressFX 的 VSP 系数小于 0.9 时才乘以逐顶点 stiffness。
 inline constexpr float TressfxVspStiffnessBlendThreshold = 0.9f;
@@ -119,15 +135,16 @@ inline Eigen::Vector4f TressfxQuaternionFromMatrix(const Eigen::Matrix4f& matrix
 }
 
 // TressFX LengthConstraintsWind 的四风混合。a 只取决于 strand 下标：
-//   w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3,  a = (strand % 20) / 20
-// 权重和是 2，四路风向不同，所以混合结果既不是单一平均风，也不是把作者幅值
-// 原样乘 2；每个 strand 落在一个锥形风向上的插值里。公式逐字保留。
+//   w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3
+// 权重和是 2，四路风向不同；物理路径把结果乘 1/(2*cos40°)，让混合后的
+// 幅值回到场景空气速度，横向小分量保留为逐 strand 扰动。
 inline Eigen::Vector3f TressfxCombineWind(const Eigen::Vector3f& wind0,
     const Eigen::Vector3f& wind1, const Eigen::Vector3f& wind2,
     const Eigen::Vector3f& wind3, uint32_t guideIndex)
 {
     const float a = static_cast<float>(guideIndex % 20u) / 20.0f;
-    return a * wind0 + (1.0f - a) * wind1 + a * wind2 + (1.0f - a) * wind3;
+    return (a * wind0 + (1.0f - a) * wind1 + a * wind2 +
+        (1.0f - a) * wind3) * TressfxWindConeMixScale;
 }
 
 // TressFX SetWind 的逐帧幅值调制：wM = windMag * (sin(frame * 0.001)² + 0.5)。
@@ -151,9 +168,10 @@ inline Eigen::Vector3f TressfxConeAxis(
     return xAxisToWind * rotated;
 }
 
-// TressFX 的四路锥形风。windDirection 只取方向（函数内归一化），windMagnitude 是
-// TressFX 的 WindMagnitude 力标量：VL 直接把场景风强度（cm/s）的数值当它用，不是
-// 物理风速。四路是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40° 的四个角，再统一乘风幅值。
+// TressFX SetWind 的四路锥形风。windDirection 只取方向（函数内归一化），
+// windMagnitude 在物理阻力路径中是场景空气速度（cm/s），不再是 TressFX 的
+// WindMagnitude 力量标量。四路是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40° 的四个角，
+// 再统一乘空气速度幅值；TressfxCombineWind 会把权重和与 cos40 归一化。
 // 本重载不做时间调制：运行时的风幅值已由场景风（含共享阵风）算好。
 struct TressfxWindCorners
 {
@@ -199,20 +217,34 @@ inline TressfxWindCorners TressfxBuildWindCorners(
         windDirection, windMagnitude * TressfxWindFrameModulation(frame));
 }
 
-// TressFX 的风力：Force = -cross(cross(v, w), v)，v 是**未归一化**的段向量
-// （pos_i - pos_{i+1}）。结果垂直于 v：只把发丝段往风向上推，不沿段方向拉伸。
-//
-// 单位适配（合同里记为 deviation）：源实现在米制下积分，VL 的位置和段向量都是
-// 厘米。TressFX 的 WindMagnitude 是*力标量*，不是风速，两种单位下取同一个数：
-// v_cm = 100·v_m ⇒ |v_cm|² = 1e4·|v_m|²，而厘米位移是米位移的 100 倍，因此
-//   cross(cross(v_cm,w),v_cm) 需乘 1e-2 才等于 100·cross(cross(v_m,w),v_m)。
-// 乘 1e-2 后作者幅值与 UE 的 WindMagnitude 可直接对照；段长平方量纲必须保留，
-// 否则约 1 cm 的段会得到完全不同的风力。
-inline Eigen::Vector3f TressfxWindForce(
-    const Eigen::Vector3f& segment, const Eigen::Vector3f& wind)
+// 物理空气阻力位移。wind 是场景空气速度（cm/s），dragRatePerSpeed 是
+// TressfxHairDragRatePerSpeed 的结果（1/cm）。先求段法向相对速度，再用
+// 半隐式线性阻力 beta = 1 - exp(-rate*dt)，避免显式二次阻力在 dt=0.0125
+// 时不稳定。返回位置增量（cm），只用于 point i，与源实现的施加点一致。
+inline Eigen::Vector3f TressfxDragDisplacement(
+    const Eigen::Vector3f& currentPosition,
+    const Eigen::Vector3f& previousPosition,
+    const Eigen::Vector3f& nextPosition,
+    const Eigen::Vector3f& wind,
+    float timeStep,
+    float dragRatePerSpeed)
 {
-    const Eigen::Vector3f crossSegmentWind = segment.cross(wind);
-    return -crossSegmentWind.cross(segment) * TressfxWindForceScale;
+    if (!(timeStep > 0.0f) || !(dragRatePerSpeed > 0.0f))
+        return Eigen::Vector3f::Zero();
+    const Eigen::Vector3f segment = currentPosition - nextPosition;
+    const float segmentLength = segment.norm();
+    if (!(segmentLength > 1.0e-8f))
+        return Eigen::Vector3f::Zero();
+    const Eigen::Vector3f tangent = segment / segmentLength;
+    const Eigen::Vector3f segmentVelocity =
+        (currentPosition - previousPosition) / timeStep;
+    const Eigen::Vector3f relative = wind - segmentVelocity;
+    const Eigen::Vector3f normal = relative - tangent * relative.dot(tangent);
+    const float normalSpeed = normal.norm();
+    if (!(normalSpeed > 1.0e-8f))
+        return Eigen::Vector3f::Zero();
+    const float beta = 1.0f - std::exp(-dragRatePerSpeed * normalSpeed * timeStep);
+    return normal * (beta * timeStep);
 }
 
 // TressFX ConstraintMultiplier：movable 组合决定 0.5/0.5、1/0、0/1、0/0。

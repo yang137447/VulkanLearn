@@ -92,7 +92,7 @@ TEST(TressfxLiveParams, SpecCoversEveryDocumentedLiveField)
         {"gravity", 3}, {"damping", 1}, {"iterations", 1},
         {"bendStiffness", 1}, {"globalShapeStiffness", 1},
         {"globalShapeEffectiveRange", 1}, {"vspCoefficient", 1},
-        {"vspAccelThresholdMax", 1},
+        {"vspAccelThresholdMax", 1}, {"windGain", 1},
     };
     for (const Case& item : cases)
     {

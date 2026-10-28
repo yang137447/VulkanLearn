@@ -167,7 +167,8 @@ namespace
                 "iterations", "rootFixedPoints", "maxDt", "bendStiffness",
                 "localShapeStiffness", "globalShapeStiffness",
                 "globalShapeEffectiveRange", "vspCoefficient",
-                "vspAccelThresholdMax", "vspStiffness", "backend", "skinning"};
+                "vspAccelThresholdMax", "vspStiffness", "backend", "skinning",
+                "windGain"};
             for (auto field = simulation.begin(); field != simulation.end(); ++field)
             {
                 if (std::find(std::begin(known), std::end(known), field.key()) ==
@@ -186,6 +187,12 @@ namespace
         config.rootFixedPoints = ReadSimulationInteger(
             simulation, "rootFixedPoints", config.rootFixedPoints, 0, 32, meshAssetPath);
         config.maxDt = simulation.value("maxDt", config.maxDt);
+        config.windGain = simulation.value("windGain", config.windGain);
+        if (!std::isfinite(config.windGain) || config.windGain < 0.0f ||
+            config.windGain > 10.0f)
+            throw std::runtime_error(
+                "TressFX simulation windGain must be finite in [0, 10]: " +
+                std::string(meshAssetPath));
         config.bendStiffness = simulation.value("bendStiffness", config.bendStiffness);
         config.globalShapeStiffness =
             simulation.value("globalShapeStiffness", config.globalShapeStiffness);
@@ -983,6 +990,8 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             loadPlan.strandRadius <= 0.0f)
             throw std::runtime_error("TressFX strandRadius must be finite and positive: " +
                 std::string(meshAssetPath));
+        // 阻力的质量归一化需要半径；把它随已校验的 simulation 配置带进运行时。
+        loadPlan.tressfxSimulation.strandRadius = loadPlan.strandRadius;
         if (std::filesystem::path(loadPlan.modelDataPath).extension() != ".tfx" ||
             loadPlan.materialSlots.size() != 1 || effectiveMeshAssetJson.contains("importOptions"))
             throw std::runtime_error(
@@ -1197,7 +1206,8 @@ nlohmann::json WriteTressfxSimulationValues(const TressfxSimulationConfig& confi
         {"globalShapeStiffness", config.globalShapeStiffness},
         {"globalShapeEffectiveRange", config.globalShapeEffectiveRange},
         {"vspCoefficient", config.vspCoefficient},
-        {"vspAccelThresholdMax", config.vspAccelThresholdMax}};
+        {"vspAccelThresholdMax", config.vspAccelThresholdMax},
+        {"windGain", config.windGain}};
     if (!config.vspStiffness.empty())
         value["vspStiffness"] = config.vspStiffness;
     if (!config.localShapeStiffness.empty())

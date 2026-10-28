@@ -47,6 +47,7 @@ inline const TressfxSimulationControl* TressfxSimulationControls(std::size_t& co
         {"globalShapeEffectiveRange", "Shape Range", "", 1, true, 0.0f, 1.0f, {0.0, 0.0, 0.0}},
         {"vspCoefficient", "VSP", "", 1, true, 0.0f, 1.0f, {0.0, 0.0, 0.0}},
         {"vspAccelThresholdMax", "VSP Threshold", "cm", 1, true, 1.0f, 2000.0f, {140.0, 0.0, 0.0}},
+        {"windGain", "Wind Gain", "", 1, true, 0.0f, 1.0f, {0.01, 0.0, 0.0}},
     };
     count = sizeof(controls) / sizeof(controls[0]);
     return controls;

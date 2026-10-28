@@ -50,6 +50,7 @@ inline const HairLiveParameterSpec* FindHairLiveParameterSpec(std::string_view f
         {"globalShapeEffectiveRange", HairLiveParameterKind::UnitInterval, 1},
         {"vspCoefficient", HairLiveParameterKind::UnitInterval, 1},
         {"vspAccelThresholdMax", HairLiveParameterKind::PositiveThreshold, 1},
+        {"windGain", HairLiveParameterKind::UnitInterval, 1},
     };
     for (const HairLiveParameterSpec& spec : specs)
         if (field == spec.name) return &spec;

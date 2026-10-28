@@ -327,6 +327,7 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 | `vspCoefficient` | 0 | `[0,1]` | TressFX VSP 基础系数；0 表示关闭，Host 不录制 VSP dispatch。 |
 | `vspAccelThresholdMax` | 140 | `(0,1e7]` | 二阶位置差幅值阈值，单位厘米，未除 dt²；超过时强制 VspCoeff = 1。默认 140 对应源默认 1.4 world m；名字沿用源 `Accel`，不是厘米/秒²。 |
 | `vspStiffness` | 空（未作者） | 数组，1..64 项，每项 `[0,1]` | 可选作者逐顶点 VSPStiffness。第 i 项 = 源曲线在 `i/N` 处的采样值（`TressFXComponent.cpp:687-691`），长度必须等于该 TFX 的 `pointsPerStrand`，否则导入期硬错误。只在 `VspCoeff < 0.9` 时乘入（源 patch 10153-10160）；省略时回退到根前缀(1)→梢部(0)的线性近似。 |
+| `windGain` | 0.01 | `[0,10]` | 场景空气速度到发丝阻力的每资产响应增益；0 关闭风。它不是场景风源，不改变 `SceneWindRuntime`。物理系数 `rho_air*Cd/(pi*rho_hair*r)` 由资产半径和常量推导。 |
 | `backend` | `"cpu"` | `"cpu"` / `"gpu"` | 参考 solver 或 compute dispatch。 |
 
 固定步字段已删除：`fixedStep` 与 `maxSubsteps` 不再被解析，出现即在资产边界报错
@@ -564,10 +565,11 @@ current/rest/params/strand weights/palette，独立 `tressfxSkinning.comp` 从 r
 - rest lengths：每点一个 float，第 i 项是 i→i+1 的静止段长，末项 0；创建时上传一次。
 - strand level data：每根 strand 3 个 vec4（48 字节）：
   `VspQuat`、`VspTranslation.xyz + VspCoeff.w`、`SkinningQuat`。
-- 每个 frame-in-flight 槽一份 std140 params UBO（800 bytes），布局：
+- 每个 frame-in-flight 槽一份 std140 params UBO（816 bytes），布局：
   gravity(0)、Wind0..3(16/32/48/64)、controls(80)、shape(96)、motion(112)、
   counts(128)、skinningQuat(144)、skinning(160)、historyToCurrentLocal(224)、
-  vspStiffness 16×vec4(288)、localShapeStiffness 16×vec4(544)。
+  vspStiffness 16×vec4(288)、localShapeStiffness 16×vec4(544)、windParams(800)。
+  `windParams.x` 是每单位法向相对速度的阻力率（1/cm）。
   `motion.y` 是 ResetPositions；`motion.z` 保留但宿主不再使用（placement 换基
   已并入首轮 Integration 的独立 reset/换基参数块）；`motion.w` 的 bit0/bit1
   分别表示 VSP / LocalShape 作者数组存在（其余位保留 0）。数组按
@@ -675,15 +677,16 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
    `localShapeStiffness[local/4][local%4]`，加载期已 clamp 到 0.95）；两种
    情况都乘以 TressFX 公式里的 0.5。
 5. **LengthConstraintsWind**：
-   - 风：Host 每帧把 `SceneWindRuntime` 解析后的方向与强度展开为 TressFX `SetWind` 的四路锥形风：
-     有效向量 = `resolvedWind.direction * resolvedWind.strength`（厘米/秒，已含场景缓动与阵风），
-     四角是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40°。VL 不再乘 TressFX 的
-     `sin(simFrame*0.001)² + 0.5` 逐帧调制：时间调制由场景风层独占，避免双重调制；
-     资产也不再作者 `simulationDefaults.wind`。shader 仍用
-     `w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3`，`a = (strand % 20)/20`。
-     对 `rootFixedPoints <= local < N-1`，`v = pos_i - pos_{i+1}` 保持**未归一化**，
-     `Force = -cross(cross(v,w),v) * 1e-2`，`pos_i += Force*dt²`。1e-2 是厘米积分下
-     复现 TressFX 米制位移的换算，推导见“单位、忠实度与显式差异”。
+   - 风：Host 每帧把 `SceneWindRuntime` 解析后的方向与强度展开为四路锥形**空气速度**
+     （厘米/秒，已含场景缓动与阵风），四角是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40°；
+     `TressfxCombineWind` 乘 `1/(2*cos40°)` 把混合幅值还原为场景风速。VL 不再乘
+     TressFX 的 `sin(simFrame*0.001)² + 0.5` 逐帧调制：时间调制由场景风层独占。
+     资产也不再作者 `simulationDefaults.wind`。
+   - 对 `rootFixedPoints <= local < N-1`，取当前点法向相对速度
+     `u_n = (wind - segmentVelocity) - t*dot(...,t)`，用半隐式线性阻力
+     `beta = 1 - exp(-windParams.x * |u_n| * dt)`，`pos_i += u_n * beta * dt`。
+     `windParams.x = windGain * rho_air * Cd / (pi * rho_hair * r)`（1/cm）；
+     段长在阻力与质量中约掉，响应不再随段长平方变化。
    - 长度：`ApplyDistanceConstraint` 用可移动组合的 multiplier（0.5/0.5、1/0、0/1、0/0），
      目标长度来自 rest length buffer；偶数边后奇数边，迭代 `iterations` 次。
    - 速度 clamp：`delta = pos - prev`，`|delta| > 30 cm` 时
@@ -991,19 +994,17 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
 **厘米**，因此所有 0.01 与 0.3 m 都省略/换成 30 cm，位置、半径、重力和场景风强度的数值
 保持厘米语义。这个换算不是对所有公式都无损：
 
-- **风的三叉积与 cm→m 位移适配**：源实现在米制下把**未归一化**的段向量代入
-  `-cross(cross(v,w),v)`，位移是 `|v_m|²·|w|·dt²`（米）。`w` 是 TressFX 的
-  `WindMagnitude`，属于**力标量**而非风速，两种单位下取同一个数。VL 的位置和
-  段向量是厘米：`v_cm = 100·v_m` 使三叉积为米结果的 `10^4` 倍，而厘米位移是米
-  位移的 100 倍，因此
-  `Force_cm = -cross(cross(v_cm,w),v_cm) * 1e-2`。乘 1e-2 后作者幅值与 UE 的
-  `WindMagnitude` 数值可直接对照；段长平方量纲必须保留，不能再归一化 v。
+- **风的三叉积已替换为物理阻力**：TressFX 源实现在米制下把**未归一化**段向量代入
+  `-cross(cross(v,w),v)`，`w` 是 `WindMagnitude` 力标量而非风速。VL 现在把场景
+  `wind` 当作空气速度（cm/s），对每个点算法向相对速度并用半隐式线性阻力
+  `u_n * (1-exp(-rate*dt))` 推进；`rate = windGain * rho_air*Cd/(pi*rho_hair*r)*|u_n|`。
+  这是刻意偏差：不再保留 `1e-2` 的 TressFX 三叉积，也不再让响应随段长平方变化。
 - **速度 clamp** 的 `delta *= 30²/|delta|²` 是源实现的既有 quirk，VL 保留。
 - **重力方向**：源实现是 `GravityMagnitude*(0,0,-1)`（Z-up）；VL 直接使用资产的
   `gravity` 向量（Y-up）。这不是通用换轴，只是不再注入源引擎的固定方向。
-- **风的四角与时间调制**：四路锥形风仍是 TressFX `SetWind` 的语义，但输入改为场景
-  `wind` 向量（方向 × 强度，含共享场景阵风）。VL 刻意不再乘 TressFX 的
-  `sin(frame*0.001)²+0.5` 幅值调制：场景阵风独占时间调制，再乘一次会双重调制。
+- **风的四角与时间调制**：四路锥形方向仍是 TressFX `SetWind` 的形式，但输入改为场景
+  `wind` 向量（方向 × 强度，含共享场景阵风），并归一化为空气速度。VL 刻意不再乘
+  TressFX 的 `sin(frame*0.001)²+0.5` 幅值调制：场景阵风独占时间调制，再乘一次会双重调制。
   源实现每帧还乘 `(0.3 + FRand())` 的随机幅值抖动；VL 为保证确定性仍省略这个随机项。
   VL 原来的 `windGust`/`windFrequency` 已删除，资产也不再作者 `simulationDefaults.wind`。
 - **长度约束迭代**：TressFX 的资产 UI 把 `LengthConstraintsIterations` 限制在

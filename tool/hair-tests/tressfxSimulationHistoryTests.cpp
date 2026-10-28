@@ -151,7 +151,7 @@ TEST(TressfxSimulationHistory, ResetFlagPreservesStd140LayoutAndPoseTarget)
     const GuideSimulationParams params =
         MakeGuideSimulationParams(config, Eigen::Vector3f::Zero(), 1, 4, 4,
             0.0f, skinning, true);
-    EXPECT_EQ(sizeof(params), 800u);
+    EXPECT_EQ(sizeof(params), 816u);
     EXPECT_FLOAT_EQ(params.motion.x(), 0.45f);
     EXPECT_FLOAT_EQ(params.motion.y(), 1.0f);
     EXPECT_FLOAT_EQ(params.controls.x(), 0.0f);

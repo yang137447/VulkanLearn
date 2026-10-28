@@ -72,6 +72,11 @@ inline bool ApplyHairLiveParameter(::TressfxSimulationConfig& config,
         config.vspAccelThresholdMax = values[0];
         return true;
     }
+    if (request.field == "windGain")
+    {
+        config.windGain = values[0];
+        return true;
+    }
     // FindHairLiveParameterSpec 与这里必须同步；走到这里说明表被改漏了。
     error = "unhandled hair parameter: " + request.field;
     return false;

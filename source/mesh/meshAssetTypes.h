@@ -93,6 +93,12 @@ struct TressfxSimulationConfig
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
     // 风不在资产里：它由场景 `wind` 对象统一作者（scene-wind.md），
     // 资产/放置/分组出现的 `wind` 字段在加载期显式拒绝。
+    // 资产只保存“场景空气速度 -> 发丝阻力”的响应增益；默认 0.01 是
+    // TressFX 固定步长/约束下的艺术校准值，不是物理阻力系数。
+    float windGain = 0.01f;
+    // 发丝半径（厘米）。来自 mesh 的 strandRadius；求解器用它把阻力
+    // 归一化成加速度，避免段长变化改变响应。
+    float strandRadius = 0.012f;
     // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)；
     // 典型 0..0.07，默认 0.035，不是“每步保留的速度比例”。
     float damping = 0.035f;

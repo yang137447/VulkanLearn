@@ -57,30 +57,53 @@ TEST(TressfxSolverMath, DistanceConstraintLeavesFullyFixedPairUntouched)
     EXPECT_TRUE(pos1.isApprox(Eigen::Vector3f(2.0f, 0.0f, 0.0f)));
 }
 
-TEST(TressfxSolverMath, WindForceIsPerpendicularToSegmentAndScalesWithSegmentSquared)
+TEST(TressfxSolverMath, PhysicalDragIsDownwindAndIndependentOfSegmentLength)
 {
-    // TressFX: Force = -cross(cross(v, w), v) * 1e-2，v 是未归一化的段向量。
-    const Eigen::Vector3f segment(1.0f, 0.0f, 0.0f);
     const Eigen::Vector3f wind(0.0f, 1.0f, 0.0f);
-    const Eigen::Vector3f force = TressfxWindForce(segment, wind);
-    EXPECT_NEAR(force.dot(segment), 0.0f, kTolerance);
-    // 段与风垂直时三叉积等于 w；cm→m 适配乘 1e-2，负号使力指向 -w。
-    EXPECT_TRUE(force.isApprox(Eigen::Vector3f(0.0f, -1.0e-2f, 0.0f), 1.0e-9f));
+    const float timeStep = 0.0125f;
+    const float dragRate = TressfxHairDragRatePerSpeed(1.0f, 0.012f);
+    ASSERT_GT(dragRate, 0.0f);
 
-    // 段方向与风向不垂直时，力仍在 v 的垂直平面内，只保留风在 v 上的垂直分量。
-    const Eigen::Vector3f slanted(1.0f, 1.0f, 0.0f);
-    const Eigen::Vector3f slantedForce = TressfxWindForce(slanted, wind);
-    EXPECT_NEAR(slantedForce.dot(slanted), 0.0f, kTolerance);
-    EXPECT_NEAR(slantedForce.dot(wind), -1.0e-2f, 1.0e-9f);
-    EXPECT_NEAR(slantedForce.norm(), std::sqrt(2.0f) * 1.0e-2f, 1.0e-9f);
+    const Eigen::Vector3f shortCurrent(0.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f nextShort(1.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f shortDisplacement = TressfxDragDisplacement(
+        shortCurrent, shortCurrent, nextShort, wind, timeStep, dragRate);
+    EXPECT_GT(shortDisplacement.y(), 0.0f);
+    EXPECT_NEAR(shortDisplacement.x(), 0.0f, 1.0e-6f);
+    EXPECT_NEAR(shortDisplacement.z(), 0.0f, 1.0e-6f);
 
-    // 与合同公式逐项一致：1e-2 * -cross(cross(v, w), v)。
-    EXPECT_TRUE(force.isApprox(
-        -segment.cross(wind).cross(segment) * 1.0e-2f, 1.0e-9f));
+    // 圆柱阻力和段质量都正比于段长；加速度与段长无关，同一法向风速下
+    // 1 cm 与 5 cm 段得到相同的位移。
+    const Eigen::Vector3f nextLong(5.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f longDisplacement = TressfxDragDisplacement(
+        shortCurrent, shortCurrent, nextLong, wind, timeStep, dragRate);
+    EXPECT_TRUE(longDisplacement.isApprox(shortDisplacement, 1.0e-6f));
 
-    // 未归一化意味着段长翻 4.5 倍时力放大 4.5² = 20.25 倍。
-    EXPECT_TRUE(TressfxWindForce(4.5f * slanted, wind)
-            .isApprox(20.25f * slantedForce, 1.0e-8f));
+    // 段与风平行时没有法向相对速度，不应产生阻力位移。
+    const Eigen::Vector3f parallelWind(1.0f, 0.0f, 0.0f);
+    EXPECT_TRUE(TressfxDragDisplacement(shortCurrent, shortCurrent, nextShort,
+        parallelWind, timeStep, dragRate).isZero());
+}
+
+TEST(TressfxSolverMath, PhysicalDragUsesPreviousPositionForRelativeVelocity)
+{
+    const Eigen::Vector3f wind(0.0f, 100.0f, 0.0f);
+    const float timeStep = 0.0125f;
+    const float dragRate = TressfxHairDragRatePerSpeed(1.0f, 0.012f);
+    const Eigen::Vector3f current(0.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f next(1.0f, 0.0f, 0.0f);
+
+    const Eigen::Vector3f rest = TressfxDragDisplacement(
+        current, current, next, wind, timeStep, dragRate);
+    // 点已经以 50 cm/s 随空气运动时，相对速度只剩一半，阻力位移更小。
+    const Eigen::Vector3f moving = TressfxDragDisplacement(
+        current, current - Eigen::Vector3f(0.0f, 50.0f, 0.0f) * timeStep,
+        next, wind, timeStep, dragRate);
+    EXPECT_GT(rest.norm(), moving.norm());
+
+    // windGain 为零时整条阻力链关闭。
+    EXPECT_TRUE(TressfxDragDisplacement(current, current, next, wind,
+        timeStep, TressfxHairDragRatePerSpeed(0.0f, 0.012f)).isZero());
 }
 
 TEST(TressfxSolverMath, DampingCoefficientIsUsedDirectlyInExponentialDecay)
@@ -163,22 +186,24 @@ TEST(TressfxSolverMath, RuntimeWindCornersSkipTressFxFrameModulation)
 
 TEST(TressfxSolverMath, WindMixerUsesAlternatingWeightsAndStrandPhase)
 {
-    // w = a*W0 + (1-a)*W1 + a*W2 + (1-a)*W3, a = (guide % 20) / 20。
+    // w = (a*W0 + (1-a)*W1 + a*W2 + (1-a)*W3) / (2*cos40°)。
+    // 权重和是 2，纵向分量 2*cos40°，归一化后场景风速幅值保持不变。
     const Eigen::Vector3f w0(1.0f, 0.0f, 0.0f);
     const Eigen::Vector3f w1(0.0f, 2.0f, 0.0f);
     const Eigen::Vector3f w2(0.0f, 0.0f, 4.0f);
     const Eigen::Vector3f w3(8.0f, 0.0f, 0.0f);
+    const float scale = TressfxWindConeMixScale;
     // guide 0 ⇒ a = 0：只保留 W1 与 W3。
     EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 0)
-            .isApprox(w1 + w3));
+            .isApprox(scale * (w1 + w3)));
     // guide 10 ⇒ a = 0.5：W0/W2 各一半，W1/W3 各一半。
     EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 10)
-            .isApprox(0.5f * (w0 + w2 + w1 + w3)));
+            .isApprox(scale * 0.5f * (w0 + w2 + w1 + w3)));
     // guide 19 ⇒ a = 0.95。
     EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 19)
-            .isApprox(0.95f * (w0 + w2) + 0.05f * (w1 + w3)));
-    // 权重和是 2：四路相同的向量混合后是原值 2 倍，这是 TressFX 的既有语义。
-    EXPECT_TRUE(TressfxCombineWind(w0, w0, w0, w0, 7).isApprox(2.0f * w0));
+            .isApprox(scale * (0.95f * (w0 + w2) + 0.05f * (w1 + w3))));
+    // 四路相同向量时权重和是 2；物理解释只对真实锥形方向成立。
+    EXPECT_TRUE(TressfxCombineWind(w0, w0, w0, w0, 7).isApprox(2.0f * scale * w0));
 }
 
 TEST(TressfxSolverMath, GlobalShapeGateUsesRangeFractionAndStiffness)

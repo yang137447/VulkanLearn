@@ -22,6 +22,9 @@ struct SimulationConfig
     // 线程的阵风时钟，所以这里不复制场景阵风，也不另造一个时钟；阵风相位由
     // GPU 路径在 renderScene.windTimeSeconds 处施加。
     Eigen::Vector3f wind = Eigen::Vector3f::Zero();
+    // 物理阻力需要的作者参数：场景风只提供空气速度，gain/半径决定阻力率。
+    float windGain = 0.01f;
+    float strandRadius = 0.012f;
     // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)，典型 0..0.07。
     float damping = 0.035f;
     uint32_t iterations = 3;

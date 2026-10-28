@@ -33,6 +33,8 @@ layout(std140, set = 0, binding = 0) uniform SimulationParams
     // 第 local 项在 [local / 4][local % 4]。motion.w 的标志位决定是否使用。
     vec4 vspStiffness[16];
     vec4 localShapeStiffness[16];
+    // x = 每单位法向相对速度的阻力率（1/cm）；其余保留。
+    vec4 windParams;
 } params;
 
 // 与 source/hair/tressfxCollision.h 的 TressfxMaxColliders / GuideColliderGpu 一致。
@@ -130,12 +132,15 @@ vec4 TressfxQuatFromMatrix(mat4 matrix)
 }
 
 // TressFX LengthConstraintsWind 的四风混合。四路是 Host 按 SetWind 生成的
-// 锥形方向（WindMagnitude 力标量）；权重和为 2，混合结果逐 strand 变化。
+// 锥形空气速度；权重和为 2，纵向分量为 2*cos(40°)，这里乘回 1/(2cos40°)
+// 让混合后的幅值等于场景风速，横向分量仍作为逐 strand 扰动。
+const float TressfxWindConeMixScale = 0.6527036446661393;
 vec3 TressfxCombinedWind(uint guide)
 {
     float a = float(guide % 20u) / 20.0;
-    return a * params.wind0.xyz + (1.0 - a) * params.wind1.xyz
+    vec3 mixed = a * params.wind0.xyz + (1.0 - a) * params.wind1.xyz
         + a * params.wind2.xyz + (1.0 - a) * params.wind3.xyz;
+    return mixed * TressfxWindConeMixScale;
 }
 
 // TressFX ConstraintMultiplier 的四个分支。

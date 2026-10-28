@@ -42,24 +42,35 @@ void main()
     uint rootFixedPoints = TressfxRootFixedPoints();
     float dt = params.controls.x;
 
-    // 风：源实现只在 Wind0 非零时启用；四路锥形风由 Host 逐帧生成。
+    // 风：场景 wind 是空气速度（cm/s），不是 TressFX 的 WindMagnitude。
+    // 对每个点取法向相对速度，做半隐式线性阻力：
+    //   rate = dragRatePerSpeed * |u_n|
+    //   beta = 1 - exp(-rate * dt)
+    //   p += u_n * beta * dt
+    // 这样段长不改变响应，dt 大时也不会像显式二次阻力那样发散。
     if (dot(params.wind0.xyz, params.wind0.xyz) > 0.0)
     {
         vec3 wind = TressfxCombinedWind(guide);
+        float dragRatePerSpeed = params.windParams.x;
+        if (dt <= 0.0)
+            return;
         for (uint local = rootFixedPoints; local + 1u < pointsPerGuide; ++local)
         {
             uint point = root + local;
-            // v 是未归一化的段向量 pos_i - pos_{i+1}，与 TressFX 一致：
-            // Force = -cross(cross(v, w), v)，结果带 |v|² 量纲且垂直于段。
-            //
-            // 单位适配：TressFX 在米制下积分，VL 的位置/段向量是厘米。
-            // WindMagnitude 是力标量而非风速，两种单位取同一个数：三叉积的厘米
-            // 结果是米结果的 1e4 倍，而厘米位移是米位移的 100 倍，故乘 1e-2。
-            // 乘 1e-2 后作者幅值与 UE 属性直接可比；段长平方量纲必须保留。
-            vec3 v = currentPositions.positions[point].xyz
-                - currentPositions.positions[point + 1u].xyz;
-            vec3 force = -cross(cross(v, wind), v) * 1.0e-2;
-            currentPositions.positions[point].xyz += force * dt * dt;
+            vec3 current = currentPositions.positions[point].xyz;
+            vec3 previous = previousPositions.positions[point].xyz;
+            vec3 next = currentPositions.positions[point + 1u].xyz;
+            vec3 segment = current - next;
+            float segmentLength = length(segment);
+            if (segmentLength < 1.0e-8)
+                continue;
+            vec3 tangent = segment / segmentLength;
+            vec3 segmentVelocity = (current - previous) / dt;
+            vec3 relative = wind - segmentVelocity;
+            vec3 normal = relative - tangent * dot(relative, tangent);
+            float normalSpeed = length(normal);
+            float beta = 1.0 - exp(-dragRatePerSpeed * normalSpeed * dt);
+            currentPositions.positions[point].xyz += normal * (beta * dt);
         }
     }
 
