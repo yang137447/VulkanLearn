@@ -29,7 +29,7 @@
 | 时间 | 风模拟固定 1/60 s 步长，步进量来自 `EngineLoop` 的 `RuntimeClock` 真实 delta；与 master 的 SpeedTree 墙钟速度一致，其他动画仍按帧率取数据 |
 | 单一来源 | 每个场景只有一个风对象；场景没有放 `wind` 时，使用引擎默认值（无风） |
 | 植被迁移 | 植被不再读 `.stsdk` 的风曲线作为风场，只读 `Wind` 与自身的响应系数 |
-| 编辑器 | TF 资产 Tab 可放置一个本地 `wind` 组件用于调试，不写回场景 |
+| 编辑器 | TF 资产 Tab 的预览场景 `SC_model_preview` 自带 `PreviewWind`，Tab 暴露方向/强度/Gust，仅调当前预览，不写场景或头发资产 |
 | 单位 | 存储统一为 **cm/s**（与项目厘米制一致）。显示层只提供两种单位：cm/s 与蒲福风级（0–12）。换算只发生在显示与输入时，不改变存储值 |
 | 风级输入 | 选择风级时存入该风级区间的**中值**（如 3 级存 440 cm/s），显示时由存储值反查风级，保证往返不跳档。风级 12 的中值取 3270 cm/s 的下界 |
 
@@ -93,14 +93,14 @@
 | P1a | 场景 `wind` 对象：schema、校验、World 成员、固定步长 + `RuntimeClock` pacing 推进 | 场景无 `wind` 时行为与 P0 基线一致 |
 | P1b | 植被改读场景 `wind` 目标 + 每 profile 响应/gust；保留每物种 208 字节 GPU 状态，未合并为单一 `WindFieldGPU` | 零风门 + 视觉门（见 §6.2） |
 | P1c | 头发改读场景 `wind`；移除 `simulationDefaults.wind` 并在加载期拒绝旧字段 | hair 测试通过，零风/有风截图符合预期 |
-| P1d | 编辑器：场景 `wind` 使用作者名、Details 方向/风力滑条/Gust 滑条，移除每物种风剖面 actor 与旧控制台/UI 风控件（已完成）；TF Tab 本地 `wind` 组件调试（未完成） | Tab 调节即时生效 |
+| P1d | 编辑器：场景 `wind` 使用作者名、Details 方向/风力滑条/Gust 滑条，移除每物种风剖面 actor 与旧控制台/UI 风控件；TF Tab 预览场景 `PreviewWind` 调节（已完成，session-only） | Tab 调节即时生效，不影响关卡风 |
 | P2 | 体素风场 `WindVolume` | 单独立项 |
 
 进度（2026-10-27）：P0、P1a、P1b、P1c 已完成；P1c 同时移除了资产 wind 并在四个女性发丝场景
 补了场景 wind。P1b 的验收按 §6.2 执行（零风 `zero*` 截图逐字节一致，风场 `windy*` 与零风对比
 约 13.3% 像素差异，P0 基线 run1/run2 逐字节一致）。P1d 已完成场景 wind 的作者名、Details
 方向/强度/阵风编辑、每物种风剖面 actor 移除与旧 `windstrength`/`windgust` 控件退役；
-TF Tab 本地风仍待做。原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
+TF Tab 通过模型预览场景的 `PreviewWind` 暴露预览风（session-only）。原始 `.stsdk` 的 `strengthResponse`/`directionResponse`/`gust*`
 由每个 SpeedTree profile 的 CWindStateMgr 语义使用；场景 `gust.amplitude` 只缩放
 profile gust，场景 `SceneWindRuntime` 的缓动/连续阵风服务头发等场级消费者。
 SpeedTree 响应数据类型为 `WindResponse*`，layer 结构保持不变。

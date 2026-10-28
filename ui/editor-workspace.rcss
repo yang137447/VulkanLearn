@@ -958,6 +958,11 @@ body {
 #resource-hair-simulation .hair-sim-status { display: block; margin-top: 6px; }
 #resource-hair-simulation .hair-sim-status { color: #aeb7b2; font-size: 12px; }
 #resource-hair-simulation .hair-sim-note { margin: 7px 0 0; color: #8f9893; font-size: 11px; }
+#resource-hair-simulation .hair-wind-heading {
+    margin-top: 10px; padding-top: 8px;
+    border-top-width: 1px; border-top-color: #49494f;
+    color: #d7ddd9; font-size: 12px; font-weight: bold;
+}
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
 #resource-model-info.visible { display: block; }
 #resource-model-info h3 { margin: 0 0 7px; color: #e7e7e9; }

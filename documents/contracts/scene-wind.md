@@ -79,7 +79,9 @@
   `SceneWindRuntime`，因此不应用场景缓动/阵风。GPU 头发读场级 `resolvedWind`；这与植被的
   每 profile 状态不同源，植被不会读取 `resolvedWind`。
 - GPU 参数块布局未变（`wind0..3` 仍是四路锥形风），着色器无改动。
-- 编辑器 TF 资产页的 `wind` 实时参数已移除；场景风的本地调试控件属于 P1d，尚未实现。
+- 编辑器 TF 资产页的 `simulationDefaults.wind` 仍不存在；头发 Tab 的预览风来自模型预览场景
+  `SC_model_preview` 的 `PreviewWind` 对象，只影响当前预览，不写头发资产，也不改当前关卡。
+  控件提供方向、强度（cm/s）与 Gust，切换 Tab/World 后回到预览场景作者值。
 
 ## 编辑器视图
 

@@ -151,6 +151,8 @@ private:
     std::string PrimaryDirectionalLightControls(const EditorSceneActorSnapshot& actor) const;
     const std::vector<EditorSceneActorSnapshot>& OutlinerActors() const;
     const EditorSceneActorSnapshot* SelectedActor() const;
+    // 模型预览场景自己的 wind actor；它不是关卡风，也不写回任何资产。
+    const EditorSceneActorSnapshot* PreviewWindActor() const;
     void SelectOutlinerActor(const EditorSceneActorSnapshot& actor);
     void RefreshWorkspace();
     void RefreshMenus();

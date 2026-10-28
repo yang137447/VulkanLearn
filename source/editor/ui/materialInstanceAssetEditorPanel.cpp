@@ -1849,6 +1849,15 @@ const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedActor(
     return nullptr;
 }
 
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::PreviewWindActor() const
+{
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+        if (actor.type == EditorSceneActorType::SceneWind &&
+            actor.identity == "wind|PreviewWind")
+            return &actor;
+    return nullptr;
+}
+
 void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActorSnapshot& actor)
 {
     if (sceneSelectionSink == nullptr) return;
@@ -2724,6 +2733,54 @@ void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::
     RequestTressfxDocument(path);
 }
 
+// 预览场景 SC_model_preview 自己的 wind 参数。它只改当前模型预览 World，
+// 不写关卡或头发资产；因此不会影响其他关卡的风。
+std::string HairPreviewWindRows(const EditorUi::EditorSceneActorSnapshot* wind)
+{
+    std::string rows = "<div class=\"hair-wind-heading\">Preview Wind</div>";
+    if (wind == nullptr)
+    {
+        rows += "<p class=\"hair-sim-note\">Preview scene has no PreviewWind object.</p>";
+        return rows;
+    }
+
+    std::vector<UiWidgets::NumericComponent> direction;
+    for (uint32_t component = 0; component < 3; ++component)
+    {
+        UiWidgets::NumericComponent entry;
+        entry.id = "hair-wind-direction-" + std::to_string(component);
+        entry.label = std::string(1, "XYZ"[component]);
+        entry.value = SceneActorNumber(wind->worldWind.direction[component]);
+        entry.change = {"hair-preview-wind", 0, component};
+        direction.push_back(std::move(entry));
+    }
+    rows += UiWidgets::PropertyControlRow("Direction",
+        UiWidgets::NumericComponents(direction));
+
+    UiWidgets::NumericComponent strength;
+    strength.id = "hair-wind-strength-0";
+    strength.value = SceneActorNumber(wind->worldWind.strengthCmPerSec);
+    strength.change = {"hair-preview-wind", 1, 0};
+    strength.hasRange = true;
+    strength.minValue = 0.0f;
+    strength.maxValue = 3270.0f;
+    rows += UiWidgets::PropertyControlRow("Strength (cm/s)",
+        UiWidgets::NumericComponents({strength}));
+
+    UiWidgets::NumericComponent gust;
+    gust.id = "hair-wind-gust-0";
+    gust.value = SceneActorNumber(wind->worldWind.gustAmplitude);
+    gust.change = {"hair-preview-wind", 2, 0};
+    gust.hasRange = true;
+    gust.minValue = 0.0f;
+    gust.maxValue = 1.0f;
+    rows += UiWidgets::PropertyControlRow("Gust",
+        UiWidgets::NumericComponents({gust}));
+    rows += "<p class=\"hair-sim-note\">Preview scene wind only. "
+        "This does not change the current level or save into the hair asset.</p>";
+    return rows;
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair, bool hairBlocked)
 {
     const auto* active = resourceEditor.ActiveTab();
@@ -2812,6 +2869,7 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             label += std::string(" (") + controls[index].unit + ")";
         rows += UiWidgets::PropertyControlRow(label, UiWidgets::NumericComponents(components));
     }
+    rows += HairPreviewWindRows(PreviewWindActor());
     rows += "<div class=\"hair-sim-footer\">" +
         UiWidgets::Button("hair-sim-save", {"hair-save"},
             "Save to Hair Asset",
@@ -2837,6 +2895,21 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             if (controls[index].hasRange)
                 SetControlValue(id + "-slider", TressfxSimulationText(values[component]));
         }
+    }
+    const auto* previewWind = PreviewWindActor();
+    if (previewWind != nullptr)
+    {
+        for (uint32_t component = 0; component < 3; ++component)
+            SetControlValue("hair-wind-direction-" + std::to_string(component),
+                SceneActorNumber(previewWind->worldWind.direction[component]));
+        SetControlValue("hair-wind-strength-0",
+            SceneActorNumber(previewWind->worldWind.strengthCmPerSec));
+        SetControlValue("hair-wind-strength-0-slider",
+            SceneActorNumber(previewWind->worldWind.strengthCmPerSec));
+        SetControlValue("hair-wind-gust-0",
+            SceneActorNumber(previewWind->worldWind.gustAmplitude));
+        SetControlValue("hair-wind-gust-0-slider",
+            SceneActorNumber(previewWind->worldWind.gustAmplitude));
     }
 }
 
@@ -4318,6 +4391,34 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
 void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action,
     const Rml::Event* event)
 {
+    if (action == "hair-preview-wind" && runtimeActionSink != nullptr)
+    {
+        if (!IsActiveHairPreview() || runtimeView.offlineMode) return;
+        const auto* wind = PreviewWindActor();
+        if (wind == nullptr) return;
+        float number = 0.0f;
+        if (!ParseNumber(ControlValue(element), number))
+        {
+            localStatus = "A complete finite number is required.";
+            return;
+        }
+        const std::size_t index = element.GetAttribute<std::size_t>("data-index", 0);
+        const uint32_t component = element.GetAttribute<uint32_t>("data-component", 0);
+        EditorActorProperty property = EditorActorProperty::WindStrength;
+        if (index == 0)
+        {
+            if (component >= 3) return;
+            property = EditorActorProperty::WindDirection;
+        }
+        else if (index == 1) property = EditorActorProperty::WindStrength;
+        else if (index == 2) property = EditorActorProperty::WindGustAmplitude;
+        else return;
+        UiAction request;
+        request.type = UiActionType::SetActorProperty;
+        request.actorProperty = {wind->worldGeneration, wind->identity, property, component, number};
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+        return;
+    }
     if (action == "hair-sim")
     {
         // 拖动/输入只更新会话值并投递实时覆盖；保存是独立动作，不会自动写资产。
