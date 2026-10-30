@@ -72,6 +72,26 @@ int TerrainLayerMipForUv(
     return clamp(int(floor(lod + 0.5)), 0, maxMip);
 }
 
+// L4e：调试用强制目标 mip。forceMip < 0 表示按导数自动选择；0..4 直接
+// 覆盖自动结果，再按该层实际 mip 链 clamp。M_terrain 采样与 feedback pass
+// 必须用同一份覆盖规则，否则 feedback 报告的页和真正采样的页会错位。
+int TerrainLayerTargetMip(int autoMip, float forceMip, int maxMip)
+{
+    if (forceMip < 0.0)
+        return autoMip;
+    return clamp(int(forceMip + 0.5), 0, maxMip);
+}
+
+// L4e：目标 mip 的页没有驻留、shader 向更粗 mip 回退时的混合系数。
+// 每差一级混入 20%，上限 60%：差 0 级为 0（完整驻留，行为不变），
+// 差 1/2/3+ 级为 0.2/0.4/0.6。CPU 参考实现是
+// terrain/terrainLayerVT.h 的 FallbackBlendForMipGap，测试锁定同一公式。
+float TerrainLayerFallbackBlend(int targetMip, int usedMip)
+{
+    const float gap = float(max(0, usedMip - targetMip));
+    return clamp(0.2 * gap, 0.0, 0.6);
+}
+
 // 层纹理是 repeat 平铺：先 fract 到 [0,1)，再按该 mip 的页数切页。
 // side 与 CPU 的 TerrainLayerPagesPerSide(sourceResolution, mip) 一致。
 TerrainLayerVTAddress TerrainLayerAddressAtMip(

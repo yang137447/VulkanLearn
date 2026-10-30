@@ -603,8 +603,7 @@ catalog row3 的 `avgColor`。L4c 让 CPU 在目标页缺页时同时预取粗�
   上界估计，不是测量值）、`targetMips=0..4`（有效 feedback texel 的目标 mip
   分布）。这些值只在手动执行 `terrainlayer stats` 时打印，不逐帧刷屏。
 
-本阶段**没有**实现 shader 侧的 `avgColor` 淡入/混合：目标 mip 缺页时仍是
-“有粗页就采样粗页、没有就整页 `avgColor`”的硬切换。视觉淡入留在后续阶段。
+本阶段的 shader 仍是硬切换；L4e 才加入按 mip 差的 `avgColor` 混合（见下一节）。
 
 ## 精确 feedback 饥饿保护（L4d）
 
@@ -636,6 +635,63 @@ L4d 在 `TerrainLayerVisibilityResolver` 里增加饥饿保护：
   不会永久放大 idle 窗口。
 - 统计：`terrainlayerstats` 新增 `starvedFrames` / `lastValidEpoch` /
   `usedCoverFallback` / `idleGrace`，只在手动执行命令时打印。
+
+## 层纹理质量：强制 mip、回退混合与相机预取（L4e）
+
+### 强制目标 mip（调试入口）
+
+- `M_terrain` 与 `M_terrainFeedback` 都有 `u_layerForceMip`（float，默认 `-1`，
+  范围 `-1..4`）。`-1` 表示按屏幕导数自动选 mip；`0..4` 直接覆盖自动结果，
+  再按该层实际 mip 链（`min(pagesPerSide 推导, u_layerMaxMip)`）clamp。
+- Console：`terrainlayer forcemip N`，`N` 只接受 `-1` 或 `0..4`，其余打印
+  usage 且不排队；`-1` 恢复自动。命令只写
+  `TerrainStreamingState::layerForceMip`（atomic），渲染线程在帧首把值写入
+  已登记的 `M_terrain` 实例与 feedback pass 材质。
+- 一致性：shader 的目标 mip 覆盖规则在
+  `materialFunction/terrainLayerVTMath.glsl::TerrainLayerTargetMip`，materials
+  与 feedback pass 共用；feedback 报告的是**覆盖后的目标 mip**，不是回退后
+  的粗 mip，否则 CPU 驻留会与 GPU 采样错位。CPU 参考实现是
+  `terrain/terrainLayerVT.h::ResolveTargetMip`。
+- 只影响 `u_terrainLayerMode = 1`；mode 0 不读该参数，像素不变。
+
+### 回退混合
+
+- 当实际采到的 `usedMip` 比 `targetMip` 更粗时，按 mip 差混合：
+  `blend = clamp(0.2 * (usedMip - targetMip), 0, 0.6)`。差 0/1/2/3+ 级为
+  `0/0.2/0.4/0.6`；完整驻留时 blend 为 0，采样路径与 L4b 逐字节一致。
+- 混合对象：albedo → catalog row3 `avgColor`；pbr → 中性值
+  `roughness 0.9 / metallic 0 / AO 1`（与无效页一致）；normal → 几何法线
+  （粗 mip 不存在的细节按同一比例丢弃）。混合后的法线仍归一化。
+- 目标 mip 与所有更粗 mip 都无效时仍整页 `avgColor`（混合等价于 1），
+  绝不回落到 layer 0。`fallbackBlendPages` / `avgColorPages` 分别统计这两类
+  目标缺页页数。
+- CPU 参考：`terrainLayerVT.h::FallbackBlendForMipGap`；shader 为
+  `TerrainLayerFallbackBlend`。测试锁定 0/1/2/3 级与上限。
+
+### 相机前向预取
+
+- 触发：渲染线程每帧比较本帧与上一提交帧的相机位置。前向位移
+  `dot(delta, forward) > 0.5 * |delta|` 且 `|delta| > layerPrefetchMinForwardCm`
+  （默认 5 cm）时置 `layerPrefetchMoving`；横向平移/转头不触发。
+- 规则：`TerrainLayerVisibilityResolver::PrefetchFinerMipPages` 对本帧精确
+  feedback 里**已驻留**的可见层页 `(layer, mip, x, y)`，请求细一级 mip
+  `mip-1` 的 2×2 子页 `(2x+dx, 2y+dy)`。相机靠近时目标 mip 只会变细，
+  提前一帧把子页放进 atlas 可以避免掉到粗页。
+- 有界：每帧最多 `maxLayerPrefetchPagesPerFrame`（默认 4）个请求，名额独立
+  于 feedback 的 `maxLayerPageRequestsPerFrame`，并且放在可见页提交之后执行，
+  不会挤掉本帧真正要采样的页。每个请求仍走 `RequestPageAtEpoch` 的容量、
+  quarantine 与 GPU 安全窗，不绕过预算。
+- 当前页本身缺页时不预取细页（本帧已经在回退，细页会先占掉目标/粗页需要的
+  物理槽位）；`mip == 0` 或达到该层最大 mip 时没有更细级别，直接跳过。
+- 这是“细一级”的近似，不是基于视锥/距离的完整预取：不做地形 tile 级预测，
+  也不按世界方向旋转到各层的 `uvRotation` 空间。
+
+### 统计
+
+`terrainlayer stats`（手动执行）新增一行：
+`forceMip` / `prefetchMoving` / `prefetchPages` / `prefetchRequests` /
+`prefetchAccepted` / `fallbackBlendPages` / `avgColorPages`。预取请求不计入
+`mipRequests`（那是本帧可见页请求），也不计入 `feedbackHits`。
 
 ## Feedback pass（P2/P3）
 
@@ -696,8 +752,8 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   `terrain capacity N` 只把预算写入 streaming state 的 atomic，由渲染线程在帧首消费；
   它不在 Console/GT 线程直接修改 page manager。
 
-P3/P3.1/L1/L2/L3/L4a/L4b/L4c **没有**实现：低分辨率 fallback/淡入（含 shader
-侧 `avgColor` 混合）、相机/视锥预取、
+P3/P3.1/L1/L2/L3/L4a/L4b/L4c/L4e **没有**实现：低分辨率 fallback 页（L4e 只做
+`avgColor` 混合与细一级 mip 预取，没有降采样兜底页）、视锥/地形 tile 级预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
 地形 chunk 卸载、地形编辑。地形碰撞的 heightfield 模块已接入 World/Play

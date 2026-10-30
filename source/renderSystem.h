@@ -121,6 +121,9 @@ public:
     // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。
     void RequestTerrainLayerResidentCapacity(uint32_t capacity);
     void RequestTerrainLayerPreload();
+    // L4e：调试用强制目标 mip（-1 = 自动，0..4 = 覆盖）。只影响 mode 1；
+    // 写入 streaming state 的 atomic，渲染线程帧首应用到 M_terrain/feedback。
+    void RequestTerrainLayerForceMip(int forceMip);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
@@ -422,6 +425,13 @@ private:
         const VL::TerrainLayerFeedbackFrameSummary& summary,
         uint64_t completedEpoch,
         uint32_t frameIndex);
+    // L4e：把 console 的强制 mip 写进已登记的 M_terrain 实例；只在值或
+    // 实例集合变化时写，避免每帧改材质 UBO。
+    void ApplyTerrainLayerForceMip(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
+    // L4e：用相机本帧位移更新“前向移动”标志，驱动细一级 mip 预取。
+    void UpdateTerrainCameraPrefetch(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
     void PrepareTerrainFeedbackPass(uint8_t frameTag);
     void StoreTerrainFeedbackSummary(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
@@ -439,6 +449,10 @@ private:
     };
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
+    // L4e：相机预取用的上一帧相机位置；只反映真正提交的帧。
+    Eigen::Vector3f lastTerrainPrefetchCameraPosition =
+        Eigen::Vector3f::Zero();
+    bool hasTerrainPrefetchCameraPosition = false;
     uint64_t nextSnapshotFrameIndex = 0;
     bool hasSelectedDraw = false;
     bool selectedAllMaterialSlots = false;

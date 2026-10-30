@@ -72,7 +72,9 @@ enum class RuntimeCommandType
     SetTerrainResidentCapacity,
     // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
     SetTerrainLayerResidentCapacity,
-    RequestTerrainLayerPreload
+    RequestTerrainLayerPreload,
+    // L4e：强制目标 mip（-1 = 自动），只影响 mode 1，用于复现缺页回退。
+    SetTerrainLayerForceMip
 };
 
 enum class RuntimeShaderReloadScope

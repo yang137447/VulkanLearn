@@ -1,7 +1,11 @@
 #include "terrain/terrainLayerVisibility.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <set>
+
+#include "terrain/terrainLayerVT.h"
 
 namespace VL
 {
@@ -407,7 +411,34 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
         // L4c：目标页缺页就是 shader 会走更粗 mip 混合的 texel。按 texel
         // 计数（不按 distinct 页），控制台据此估算“本帧多少像素在混合”。
         if (!layerPages.IsResident(centerKey))
+        {
             ++stats.fallbackSlots;
+            // L4e：区分“有粗页可混”和“只能纯 avgColor”。shader 从
+            // target+1 逐级向粗找第一个有效页，因此任一更粗祖先驻留即
+            // 可产生渐变。
+            bool hasCoarser = false;
+            const uint32_t maxMip = MaxMipForLayer(layerPages, layerId, config);
+            for (uint32_t coarser = record.mip + 1;
+                 coarser <= maxMip && !hasCoarser;
+                 ++coarser)
+            {
+                const uint32_t ancestorSide =
+                    layerPages.PagesPerSide(layerId, coarser);
+                if (ancestorSide == 0) continue;
+                const uint32_t shift = coarser - record.mip;
+                TerrainLayerPageKey ancestorKey;
+                ancestorKey.layerId = layerId;
+                ancestorKey.mip = coarser;
+                ancestorKey.pageX = pageX >> shift;
+                ancestorKey.pageY = pageY >> shift;
+                if (ancestorKey.pageX >= ancestorSide ||
+                    ancestorKey.pageY >= ancestorSide)
+                    continue;
+                hasCoarser = layerPages.IsResident(ancestorKey);
+            }
+            if (hasCoarser) ++stats.fallbackBlendPages;
+            else ++stats.avgColorPages;
+        }
         stats.targetMipSlots[record.mip] += record.sampleCount;
         const uint32_t radius = layerPages.IsResident(centerKey)
             ? 0u
@@ -442,6 +473,10 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
     // 只把扩展前的候选计入 feedback hit；粗页是预取，不是本帧可见页。
     const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
         visibleCandidates(candidates.begin(), candidates.end());
+    // L4e：预取候选必须在可见页请求提交之前收集：此时目标页还没被本帧
+    // 请求成驻留页，“当前页是否已驻留”才是真正的前置条件。
+    const std::vector<PrefetchCandidate> prefetchCandidates =
+        CollectFinerMipPrefetch(summary, layerPages, config, stats);
     ExpandCoarserFallbackCandidates(
         candidates,
         layerPages,
@@ -479,7 +514,96 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
     stats.evictedPages = committed.evictedPages;
     stats.mipRequestCounts = committed.mipRequestCounts;
     stats.pendingRequests = static_cast<uint32_t>(pendingRequests.size());
+    // L4e：可见页提交之后再发预取请求，使用独立名额且不挤占本帧采样页。
+    for (const PrefetchCandidate& candidate : prefetchCandidates)
+    {
+        if (layerPages.IsResident(candidate.key))
+            continue;
+        ++stats.prefetchRequests;
+        if (layerPages.RequestPageAtEpoch(
+                candidate.key,
+                frame,
+                candidate.priority,
+                completedEpoch))
+        {
+            ++stats.prefetchAccepted;
+        }
+    }
     return stats;
+}
+
+std::vector<TerrainLayerVisibilityResolver::PrefetchCandidate>
+TerrainLayerVisibilityResolver::CollectFinerMipPrefetch(
+    const TerrainLayerFeedbackFrameSummary& summary,
+    const TerrainLayerPageManager& layerPages,
+    const TerrainLayerVisibilityConfig& config,
+    TerrainLayerExactFeedbackStats& stats)
+{
+    std::vector<PrefetchCandidate> result;
+    if (!config.prefetchFinerMipEnabled || config.prefetchPagesPerFrame == 0)
+        return result;
+    std::set<TerrainLayerPageKey> seen;
+    for (const TerrainLayerFeedbackRecord& record : summary.pages)
+    {
+        if (result.size() >= config.prefetchPagesPerFrame)
+            break;
+        const uint32_t layerId = record.layerId;
+        if (layerId >= config.layerCount)
+            continue;
+        // mip0 已经是最细一级；越界 mip 由可见页路径统计。
+        if (record.mip == 0 || record.mip > TerrainLayerMaxMipLevel)
+            continue;
+        if (record.mip >= config.sourceMipLevels)
+            continue;
+        const uint32_t side = layerPages.PagesPerSide(layerId, record.mip);
+        if (side == 0 || record.pageIndex >= side * side)
+            continue;
+        const uint32_t pageX = record.pageIndex % side;
+        const uint32_t pageY = record.pageIndex / side;
+        TerrainLayerPageKey centerKey;
+        centerKey.layerId = layerId;
+        centerKey.mip = record.mip;
+        centerKey.pageX = pageX;
+        centerKey.pageY = pageY;
+        // 当前页缺页时不预取更细一级：本帧已经在向粗回退，细页会先占掉
+        // 目标页/粗页需要的物理槽位，反而拉长缺页窗口。
+        if (!layerPages.IsResident(centerKey))
+            continue;
+        const uint32_t finerMip = record.mip - 1;
+        const uint32_t finerSide =
+            layerPages.PagesPerSide(layerId, finerMip);
+        if (finerSide == 0)
+            continue;
+        // shader 的 mip 是“每像素纹素数”的连续函数，相机靠近时只会往
+        // 更细一级走；预取 2×2 子页正好覆盖该页在下一级上的全部区域。
+        const std::array<VL::TerrainLayerVT::LayerChildPage, 4> children =
+            VL::TerrainLayerVT::FinerMipChildren(pageX, pageY);
+        bool prefetchedAny = false;
+        for (const VL::TerrainLayerVT::LayerChildPage& child : children)
+        {
+            if (result.size() >= config.prefetchPagesPerFrame)
+                break;
+            if (child.pageX >= finerSide || child.pageY >= finerSide)
+                continue;
+            TerrainLayerPageKey key;
+            key.layerId = layerId;
+            key.mip = finerMip;
+            key.pageX = child.pageX;
+            key.pageY = child.pageY;
+            if (!seen.insert(key).second)
+                continue;
+            prefetchedAny = true;
+            if (layerPages.IsResident(key))
+                continue;
+            // 预取优先级低于任何可见页：同一帧里可见页先拿槽位，
+            // 预取只填剩余。
+            result.push_back(PrefetchCandidate{
+                key, std::max<uint32_t>(1, record.priority / 3)});
+        }
+        if (prefetchedAny)
+            ++stats.prefetchPages;
+    }
+    return result;
 }
 
 TerrainLayerVisibilityResolver::CandidateCommitResult

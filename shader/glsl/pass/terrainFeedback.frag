@@ -135,12 +135,17 @@ void main()
             int(u_layerMaxMip + 0.5));
         const vec2 layerUv =
             TerrainLayerUvForSlot(inMaterialUv, u_uvScale, uvRow);
-        const int mip = TerrainLayerMipForUv(
+        // L4e：与 M_terrain 共用同一份强制 mip 覆盖。feedback 必须报告
+        // shader 真正想采的目标 mip，而不是自动导数结果，否则 console
+        // `terrainlayer forcemip` 后 CPU 驻留与 GPU 采样会错位。
+        const int autoMip = TerrainLayerMipForUv(
             layerUv,
             pagesPerSide,
             maxMip,
             u_layerPageResolution,
             max(vec2(1.0), vec2(u_feedbackScaleX, u_feedbackScaleY)));
+        const int mip =
+            TerrainLayerTargetMip(autoMip, u_layerForceMip, maxMip);
         const TerrainLayerVTAddress address =
             TerrainLayerAddressAtMip(layerUv, pagesPerSide, mip);
         encodedSlots[slot] =

@@ -19,6 +19,7 @@
 
 class PipelineFactory;
 class Texture;
+class MaterialInstance;
 struct MeshObjectBuildPlan;
 
 namespace VL
@@ -215,6 +216,14 @@ struct TerrainStreamingStats
     uint64_t layerLastValidFeedbackEpoch = 0;
     bool layerUsedCoverFallback = false;
     uint64_t layerIdleGraceEpochs = 0;
+    // L4e：强制目标 mip 与相机前向预取/回退混合的实时值。
+    float layerForceMip = -1.0f;
+    bool layerPrefetchMoving = false;
+    uint32_t layerFallbackBlendPages = 0;
+    uint32_t layerAvgColorPages = 0;
+    uint32_t layerPrefetchPages = 0;
+    uint32_t layerPrefetchRequests = 0;
+    uint32_t layerPrefetchAccepted = 0;
     // L4c：目标 mip 缺页、shader 向更粗 mip 回退并混合的 texel/页数。
     // fallbackPixels 由控制台按当前渲染分辨率换算，避免每帧写统计。
     uint32_t layerFallbackSlots = 0;
@@ -250,6 +259,21 @@ struct TerrainStreamingState
     // 任一 layer-table MI 把 u_terrainLayerMode 设为 1 时置位；加载期据此
     // 建立反馈驱动的驻留策略（L4a）。mode 0 不会创建层页上传 ring。
     bool layerVTRequested = false;
+    // L4e：mode 1 的 M_terrain 实例。console `terrainlayer forcemip` 只写
+    // layerForceMip 原子，渲染线程帧首把值写进这些实例；weak_ptr 不会让
+    // MI 的生命周期越过 World 资源包。
+    std::vector<std::weak_ptr<MaterialInstance>> layerVTMaterials;
+    // -1 = 自动 mip；0..4 = 强制目标 mip。Console 写、渲染线程读。
+    std::atomic<int32_t> layerForceMip{-1};
+    // 渲染线程最后写入 M_terrain 的值，避免每帧重复 SetParameter。
+    float lastAppliedLayerForceMip = -1.0f;
+    // 新登记的 MI 需要补写一次当前值（World 加载后 console 已设置过的情况）。
+    size_t lastAppliedLayerMaterialCount = 0;
+    // L4e：相机前向预取。渲染线程按相机位移设置；每帧名额独立于
+    // feedback 请求预算，但仍走 RequestPageAtEpoch 的容量/安全窗。
+    bool layerPrefetchMoving = false;
+    uint32_t maxLayerPrefetchPagesPerFrame = 4;
+    float layerPrefetchMinForwardCm = 5.0f;
     // L4a：覆盖页 feedback -> 可见层 -> mip -> 层页请求。pending 跨帧保留，
     // 失败项下一帧按 priority/deferred 重新排序后重试。
     TerrainLayerVisibilityResolver layerVisibilityResolver;

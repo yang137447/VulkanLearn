@@ -849,9 +849,9 @@ Basis/Zstd 转码与运行时 BC mip 生成；边界见
 
 地形运行时使用 `terrain_tests` 与外部场景：
 `ctest --test-dir build -R "^Terrain" --output-on-failure`（2026-10-30 Jolt 碰撞 + CPU LOD +
-运行时 LOD + L4b + L4c + L4d + World/Play 碰撞接入后通过；`terrain_tests` 177 项；同时构建
+运行时 LOD + L4b + L4c + L4d + L4e + World/Play 碰撞接入后通过；`terrain_tests` 185 项；同时构建
 `vl_renderer_backend_tests` 时还会纳入其 `TerrainFeedback*` 与
-`TerrainLayerAtlasGpu.*` GPU 用例，合计 189 项）。
+`TerrainLayerAtlasGpu.*` GPU 用例，合计 193 项）。
 CPU 几何 LOD/skirt 与运行时选择还由 `editor_ui_tests` 的
 `TerrainLodSnapshot.*`（4 项）覆盖；`lodLevels=1` 的 B32/M3/BC7
 截图必须与基线逐字节一致，多级 LOD 用工作区
@@ -876,6 +876,17 @@ L4d（精确 feedback 饥饿保护）同样在 `terrainLayerVisibilityTests.cpp`
 饥饿时 `Apply` 覆盖页推导被标记 `usedCoverFallback`、恢复后 `starvedFrames` 清零且
 `lastValidFeedbackEpoch` 前进、超过 `starvationGraceFrames` 后每帧最多淘汰
 `starvationEvictionPagesPerFrame`（默认 2）页并最终清空。
+L4e（force-mip + 回退混合 + 相机预取）在 `terrainLayerStreamingQualityTests.cpp` 新增八项：
+`ResolveTargetMip` 的 -1 自动/0..4 覆盖/按层 mip 链 clamp、`FallbackBlendForMipGap`
+的 0/0.2/0.4/0.6 阶梯与上限、`FinerMipChildren` 的 2×2 子页几何、相机移动时对已驻留
+可见页预取细一级子页且不计入 feedback hit/可见页请求分布、未启用时不请求、目标页缺页
+时不预取细页、每帧预取名額上限、缺页分类（有粗页 → `fallbackBlendPages`，无粗页 →
+`avgColorPages`）。`material_schema_tests` 增加 `u_layerForceMip` 默认 -1 / 范围 -1..4
+的 schema 断言。
+L4e 的 mode 1 冒烟：`SC_terrain_vt_mode1.json` 稳定后 `terrainlayer stats` 最后一行必须
+打印 `forceMip=-1 prefetchMoving=0 prefetchPages/Requests/Accepted=0`，且
+`fallbackBlendPages=0`、`avgColorPages=0`；`terrainlayer forcemip 0` 用于在只有粗页
+驻留时制造目标缺页，验证混合曲线。mode 0 的 B32/M3/BC7 截图仍要求逐字节一致。
 冒烟口径：`SC_terrain_vt_mode1.json` 把相机放进地形内部（`camera pose 0 200 4700 0 0 4300`，
 主视图与 feedback pass 都不再光栅化地形），连续 300+ 帧后 `terrainlayerstats` 必须显示
 `exactSlots=0`、`usedCoverFallback=1`、`starvedFrames>300`、`idleGrace=starvedFrames`，

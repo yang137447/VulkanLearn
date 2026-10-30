@@ -91,13 +91,17 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         // stride(mip) * 256（最大层数），因此 texel 总数 / 256 就是 CPU stride。
         const vec2 layerUv =
             TerrainLayerUvForSlot(context.texCoord, u_uvScale, uvRow);
-        const int mip = TerrainLayerMipForUv(
+        const int autoMip = TerrainLayerMipForUv(
             layerUv,
             pagesPerSide,
             maxMip,
             u_layerPageResolution,
             vec2(1.0));
-        int usedMip = mip;
+        // L4e：`u_layerForceMip` 是 console 的调试覆盖（-1 = 自动）。
+        // targetMip 是"想采哪一级"，usedMip 是缺页回退后实际采到的级别。
+        const int targetMip =
+            TerrainLayerTargetMip(autoMip, u_layerForceMip, maxMip);
+        int usedMip = targetMip;
         TerrainLayerVTAddress address =
             TerrainLayerAddressAtMip(layerUv, pagesPerSide, usedMip);
         ivec2 tableSize = TerrainLayerPageTableSize(usedMip);
@@ -109,7 +113,7 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
             ivec2(virtualPage % tableSize.x, virtualPage / tableSize.x));
         // L4a：层页按 mip 逐帧收敛，更细的 mip 可能尚未驻留。此时回退到
         // 更粗的 mip（同一层的页表项有效），而不是直接把整页显示成 avgColor。
-        for (int coarser = mip + 1;
+        for (int coarser = targetMip + 1;
              coarser <= maxMip && entry.b < 0.5;
              ++coarser)
         {
@@ -131,6 +135,11 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         vec4 albedoLayer;
         vec4 pbrLayer;
         vec3 normalLayer;
+        // L4e：向粗回退时混向 avgColor / 中性 pbr / 几何法线，避免页级 pop。
+        // 完整驻留（gap=0）时系数为 0，与之前的采样路径逐字节一致。
+        // normal 的混合方向是"丢掉粗 mip 不存在的细节"，回到几何法线。
+        const float coarseBlend =
+            TerrainLayerFallbackBlend(targetMip, usedMip);
         if (entry.b < 0.5)
         {
             // 缺页必须用 catalog 的平均色，不能回落到 layer 0。
@@ -169,6 +178,15 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
             normalLayer =
                 TransformMaterialNormalToWorld(context, normalTS);
         }
+        albedoLayer.rgb =
+            mix(albedoLayer.rgb, colorRow.rgb, coarseBlend);
+        // pbr 约定 x=roughness / y=metallic / z=AO；缺页的中性值是
+        // roughness 0.9、metallic 0、AO 1，与 L3 的无效页一致。
+        pbrLayer = mix(pbrLayer, vec4(0.9, 0.0, 1.0, 0.0), coarseBlend);
+        const vec3 blendedNormal =
+            mix(normalLayer, worldNormal, coarseBlend);
+        normalLayer = dot(blendedNormal, blendedNormal) > 1.0e-8
+            ? normalize(blendedNormal) : worldNormal;
 
         const float weight = topWeights[slot];
         result.albedo += albedoLayer * weight;

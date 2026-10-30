@@ -1812,6 +1812,19 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                     "bound layer texture extent: " + plan.desc.assetPath);
             }
             streamingState.layerVTRequested = true;
+            // L4e：登记 mode 1 实例，console 强制 mip 时逐帧写入。
+            bool alreadyRegistered = false;
+            for (const std::weak_ptr<MaterialInstance>& existing :
+                 streamingState.layerVTMaterials)
+            {
+                if (existing.lock() == materialInstance)
+                {
+                    alreadyRegistered = true;
+                    break;
+                }
+            }
+            if (!alreadyRegistered)
+                streamingState.layerVTMaterials.push_back(materialInstance);
         }
         // L2 的 atlas 依赖实际 MI 绑定到的层数组，因此只能在首个地形 MI
         // 载入后创建；创建后本函数立刻绑定，不能留到对象遍历结束再回填。

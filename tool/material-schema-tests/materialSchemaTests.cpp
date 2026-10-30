@@ -400,6 +400,7 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
     bool sawTerrainLayerMode = false;
     bool sawLayerPageResolution = false;
     bool sawLayerMaxMip = false;
+    bool sawLayerForceMip = false;
     for (const VL::MaterialParameterSchemaEntry& parameter :
          schema.GetParameters())
     {
@@ -427,10 +428,28 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
                     .get<float>(),
                 4.0f);
         }
+        if (parameter.name == "u_layerForceMip")
+        {
+            // L4e：默认必须是自动 mip；console 覆盖范围 -1..4。
+            sawLayerForceMip = true;
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["default"]
+                    .get<float>(),
+                -1.0f);
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["range"]["min"]
+                    .get<float>(),
+                -1.0f);
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["range"]["max"]
+                    .get<float>(),
+                4.0f);
+        }
     }
     EXPECT_TRUE(sawTerrainLayerMode);
     EXPECT_TRUE(sawLayerPageResolution);
     EXPECT_TRUE(sawLayerMaxMip);
+    EXPECT_TRUE(sawLayerForceMip);
     // VT 纹理默认必须是可加载的占位资源，否则使用旧 MI（未覆盖新 binding）
     // 时 ValidateInstanceValues 会因“shader 使用但 MI 未提供纹理”失败。
     for (const char* textureName : {

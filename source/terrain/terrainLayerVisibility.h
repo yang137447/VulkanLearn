@@ -71,6 +71,11 @@ struct TerrainLayerVisibilityConfig
     // idle 阈值，不设速率上限就会一次性清空；2 页/帧让降级是渐进的。
     // 0 表示不限速（退化为普通 idle 淘汰）。
     uint32_t starvationEvictionPagesPerFrame = 2;
+    // L4e：相机前向预取。相机本帧沿前向的位移超过阈值时，把可见层页在
+    // 细一级 mip 的 2×2 子页提前请求。使用独立于 feedback 的每帧名额，
+    // 不挤占本帧可见页请求；每个请求仍走 RequestPageAtEpoch 的容量/安全窗。
+    bool prefetchFinerMipEnabled = false;
+    uint32_t prefetchPagesPerFrame = 4;
 };
 
 struct TerrainLayerVisibilityStats
@@ -122,6 +127,16 @@ struct TerrainLayerExactFeedbackStats
     // 有效 feedback texel 按“目标 mip”的分布：确认 shader 实际想采哪一级，
     // 以及回退是否集中在某几级（回退级分布）。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> targetMipSlots{};
+    // L4e：目标页缺页时是否存在可采的更粗驻留页。
+    //   fallbackBlendPages = 有粗页，shader 按 mip 差做 avgColor 渐变；
+    //   avgColorPages      = 目标与所有更粗 mip 都缺页，整页 avgColor。
+    uint32_t fallbackBlendPages = 0;
+    uint32_t avgColorPages = 0;
+    // L4e：相机前向预取的可见页数（产生过细一级子页的 feedback 页）、
+    // 请求尝试数与成功数。不计入 mipRequestCounts（那是可见页请求）。
+    uint32_t prefetchPages = 0;
+    uint32_t prefetchRequests = 0;
+    uint32_t prefetchAccepted = 0;
     // 本帧精确 feedback 饥饿：没有（或低于阈值）有效 texel。此时驻留集
     // 保持上一帧状态，调用方应回退到覆盖页推导继续估计可见层。
     bool starved = false;
@@ -236,6 +251,22 @@ private:
         const TerrainLayerPageManager& layerPages,
         uint32_t layerId,
         const TerrainLayerVisibilityConfig& config);
+
+    struct PrefetchCandidate
+    {
+        TerrainLayerPageKey key;
+        uint32_t priority = 1;
+    };
+
+    // L4e：相机前向移动时，为本帧精确 feedback 的可见层页预取细一级 mip
+    // 的 2×2 子页。收集必须在可见页请求提交**之前**：以“本帧开始时该页
+    // 是否驻留”判定，否则同帧刚请求的目标页会被误认为已驻留。实际请求
+    // 在可见页提交之后发出，保证不挤占本帧采样页的物理槽位。
+    static std::vector<PrefetchCandidate> CollectFinerMipPrefetch(
+        const TerrainLayerFeedbackFrameSummary& summary,
+        const TerrainLayerPageManager& layerPages,
+        const TerrainLayerVisibilityConfig& config,
+        TerrainLayerExactFeedbackStats& stats);
 
     // 页内容是静态的，因此一个覆盖页的层集合只需烘焙/统计一次；缓存按
     // (placementId, tileX, tileZ) 索引，数量上限就是 World 的虚拟页数。
