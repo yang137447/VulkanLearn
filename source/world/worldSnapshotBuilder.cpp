@@ -100,6 +100,17 @@ std::string BuildLightRuntimeKey(const World& world, const std::string& lightNam
     return world.GetScenePath() + "|light|" + lightName;
 }
 
+// 取位图里最高的置位级；空位图返回 TerrainMaxLodLevels（表示“没有任何级”）。
+uint32_t HighestResidentLevel(uint32_t mask)
+{
+    for (uint32_t level = TerrainMaxLodLevels; level > 0; --level)
+    {
+        if ((mask & (1u << (level - 1))) != 0)
+            return level - 1;
+    }
+    return TerrainMaxLodLevels;
+}
+
 MeshDrawSnapshot BuildMeshDrawSnapshot(
     const std::string& objectName,
     RuntimeId objectId,
@@ -332,6 +343,23 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     std::unordered_set<std::string> visitedLodGroups;
     // 选择级缺失时的兜底代表（优先 LOD0）；正常情况下不会用到。
     std::unordered_map<std::string, const WorldMeshObject*> lodGroupRepresentatives;
+    // 加载期几何驻留会让窗口外的细 LOD 根本不存在。先扫一遍收集每个组
+    // 实际存在的级位图：它是“resident”的唯一事实来源（World 里没有的级
+    // 就是没驻留），既能决定兜底级，也能给 stats 报各级对象数。
+    std::unordered_map<std::string, uint32_t> lodGroupLevelMasks;
+    std::array<uint32_t, TerrainMaxLodLevels> residentObjectsByLevel{};
+    for (const auto& [objectName, meshObject] : world.GetMeshObjects())
+    {
+        if (!meshObject.visible || meshObject.lodGroupId.empty())
+            continue;
+        if (meshObject.lodLevel >= TerrainMaxLodLevels)
+            continue;
+        lodGroupLevelMasks[meshObject.lodGroupId] |=
+            1u << meshObject.lodLevel;
+        ++residentObjectsByLevel[meshObject.lodLevel];
+    }
+    uint32_t drawnChunks = 0;
+    std::array<uint32_t, TerrainMaxLodLevels> drawnByLevel{};
     uint32_t lodSwitchedLastFrame = 0;
     for (const auto& [objectName, meshObject] : world.GetMeshObjects())
     {
@@ -418,10 +446,30 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             lodGroupRepresentatives[meshObject.lodGroupId] = &meshObject;
         }
 
-        if (meshObject.lodLevel != state.level)
+        // 目标级没驻留时不能留空洞：沿更粗方向找最近的 resident 级。
+        // 加载期驻留保证最粗一级一定存在，因此这个循环最坏也会停在
+        // coarsest；若 World 因资产缺陷一级都没有，才走下面的代表兜底。
+        const uint32_t residentMask =
+            lodGroupLevelMasks[meshObject.lodGroupId];
+        uint32_t drawnLevel = std::min(state.level, TerrainMaxLodLevels);
+        while (drawnLevel < TerrainMaxLodLevels &&
+            (residentMask & (1u << drawnLevel)) == 0)
+        {
+            ++drawnLevel;
+        }
+        if (drawnLevel >= TerrainMaxLodLevels)
+            drawnLevel = HighestResidentLevel(residentMask);
+        if (drawnLevel >= TerrainMaxLodLevels)
+            continue;
+        state.drawnLevel = drawnLevel;
+        state.residentLevelMask = residentMask;
+
+        if (meshObject.lodLevel != drawnLevel)
             continue;
 
         emittedLodGroups.insert(meshObject.lodGroupId);
+        ++drawnChunks;
+        ++drawnByLevel[drawnLevel];
         snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
             objectName,
             objectId,
@@ -441,6 +489,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         groupStats.groupId = groupId;
         groupStats.level = state.level;
         groupStats.levelCount = state.levelCount;
+        groupStats.residentLevelMask = state.residentLevelMask;
+        groupStats.drawnLevel = state.drawnLevel;
         groupStats.distanceCm = state.lastDistanceCm;
         groupStats.switchCount = state.switchCount;
         lodGroupStats.push_back(std::move(groupStats));
@@ -474,6 +524,10 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             *representative,
             previousModel,
             selected));
+        // 代表兜底也算一次出图；它的级以实际网格为准。
+        ++drawnChunks;
+        if (representative->lodLevel < TerrainMaxLodLevels)
+            ++drawnByLevel[representative->lodLevel];
         currentObjectModels[objectId] = representative->model;
     }
 
@@ -525,6 +579,11 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     lodStats.groupCount =
         static_cast<uint32_t>(lodGroupStats.size());
     lodStats.switchedLastFrame = lodSwitchedLastFrame;
+    lodStats.drawnChunks = drawnChunks;
+    lodStats.totalMeshDraws =
+        static_cast<uint32_t>(snapshot.meshDraws.size());
+    lodStats.drawnByLevel = drawnByLevel;
+    lodStats.residentObjectsByLevel = residentObjectsByLevel;
     lodStats.groups = std::move(lodGroupStats);
 
     return RuntimeResult<WorldSnapshot>::Success(std::move(snapshot));

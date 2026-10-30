@@ -760,6 +760,24 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "terrainchunk")
+    {
+        // 只读诊断：加载期几何 residency 的 chunk/顶点/索引字节基线，
+        // 叠加最近一帧的实际 draw 数与级分布。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terrainchunk stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainChunkStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "terraincollision")
     {
         // 只读诊断：输出 Play 中已创建的地形 heightfield body 与 placement；
@@ -861,6 +879,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainlayer forcemip N - force target layer mip (-1 auto, 0..4)\n";
     std::cout << "  terraincollision stats - report play-mode terrain collision bodies\n";
     std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
+    std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

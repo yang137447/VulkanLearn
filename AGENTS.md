@@ -361,13 +361,21 @@ in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor
 Current limits: no dedicated low-resolution fallback page or temporal fade (the L4e path only
 blends a coarser mip toward `avgColor`), no frustum/tile-level prefetch (only forward-motion
 prefetch), no terrain chunk unloading, terrain editing, or per-chunk/edit-time collision rebuild.
-CPU geometry LOD/skirt generation and runtime selection are
-wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride)`,
-TR `lodLevels`/`lodDistances`) the loader generates every level (LOD0 also gets a skirt) and
-`WorldSnapshotBuilder` picks one level per `lodGroupId = placementId|chunkX|chunkZ` from the
-camera's distance to the chunk world AABB, with a 10% hysteresis band. The snapshot is the single
+CPU geometry LOD/skirt generation, load-time chunk residency and runtime selection are
+wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride,
+filter)`, TR `lodLevels`/`lodDistances`/`chunkResidencyDistances`) the loader computes chunk
+AABBs from the heightmap (`ComputeChunkBounds`), keeps only the (chunk, LOD) pairs inside the
+residency window (`TerrainChunkResidencyDistancesCm`, default `lodDistances × 1.1`, coarsest
+always resident) and generates those meshes (LOD0 also gets a skirt). The window comes from the
+scene JSON camera at load time; a later `camera pose` does not refill fine levels. Runtime has no
+async build/upload/unload yet. `WorldSnapshotBuilder` picks one level per
+`lodGroupId = placementId|chunkX|chunkZ` from the camera's distance to the chunk world AABB with a
+10% hysteresis band; if the target level was never resident it falls back to the nearest coarser
+resident level (worst case coarsest) instead of leaving a hole. The snapshot is the single
 source for color, shadow, picking and MaterialInstance context; all levels of a group share one
-RuntimeId. `terrainlod stats` reports per-group level/distance/switch count.
+RuntimeId. `terrainlod stats` reports per-group level/distance/switch count and
+`terrainchunk stats` reports load-time geometry bytes, created/skipped chunks, per-level
+vertices/indices and the current frame's draws.
 `lodLevels=1` old assets still generate and bind LOD0 only, byte-identical to the legacy path.
 `source/terrain/terrainCollision.*` turns a `TerrainBuildPlan` plus placement into a static
 Jolt `HeightFieldShape` body in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression,

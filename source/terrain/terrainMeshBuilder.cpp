@@ -78,6 +78,19 @@ float TerrainChunkSkirtDepthCm(const TerrainAssetDesc& desc)
     return depth > 1.0f ? depth : 1.0f;
 }
 
+bool TerrainChunkBuildFilter::Accepts(
+    uint32_t chunkX,
+    uint32_t chunkZ,
+    uint32_t chunksPerSide) const
+{
+    if (chunkMask.empty())
+        return true;
+    const size_t index =
+        static_cast<size_t>(chunkZ) * chunksPerSide + chunkX;
+    // 长度不匹配属于调用方错误：宁可整块不生成，也不要越界读 mask。
+    return index < chunkMask.size() && chunkMask[index] != 0;
+}
+
 std::string TerrainChunkResourceKey(
     const TerrainBuildPlan& plan,
     uint32_t chunkX,
@@ -112,7 +125,8 @@ std::string TerrainChunkResourceKey(
 std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     const TerrainBuildPlan& plan,
     uint32_t lodLevel,
-    std::optional<bool> buildSkirtOverride)
+    std::optional<bool> buildSkirtOverride,
+    const TerrainChunkBuildFilter* filter)
 {
     if (!plan.heightmap)
         throw std::runtime_error("Terrain mesh build requires a decoded heightmap");
@@ -154,6 +168,14 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     {
         for (uint32_t chunkX = 0; chunkX < chunkCount; ++chunkX)
         {
+            // 加载期驻留窗口：窗口外的细 LOD 连 CPU 网格都不生成。
+            // 顺序（chunkZ 外层）必须与 ComputeChunkBounds 完全一致。
+            if (filter != nullptr &&
+                !filter->Accepts(chunkX, chunkZ, chunkCount))
+            {
+                continue;
+            }
+
             TerrainMeshChunk chunk;
             chunk.chunkX = chunkX;
             chunk.chunkZ = chunkZ;
@@ -255,6 +277,70 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
         }
     }
     return chunks;
+}
+
+std::vector<TerrainChunkBounds> TerrainMeshBuilder::ComputeChunkBounds(
+    const TerrainBuildPlan& plan)
+{
+    if (!plan.heightmap)
+        throw std::runtime_error("Terrain chunk bounds require a decoded heightmap");
+    const TerrainAssetDesc& desc = plan.desc;
+    if (desc.gridResolution == 0 || desc.chunkQuads == 0 ||
+        desc.gridResolution % desc.chunkQuads != 0)
+        throw std::runtime_error(
+            "Terrain chunk bounds require gridResolution divisible by chunkQuads");
+    if (desc.size.x() <= 0.0f || desc.size.y() <= 0.0f)
+        throw std::runtime_error("Terrain chunk bounds require positive size");
+
+    const uint32_t chunkCount = desc.gridResolution / desc.chunkQuads;
+    const float grid = static_cast<float>(desc.gridResolution);
+
+    std::vector<TerrainChunkBounds> bounds;
+    bounds.reserve(static_cast<size_t>(chunkCount) * chunkCount);
+    for (uint32_t chunkZ = 0; chunkZ < chunkCount; ++chunkZ)
+    {
+        for (uint32_t chunkX = 0; chunkX < chunkCount; ++chunkX)
+        {
+            TerrainChunkBounds chunk;
+            chunk.chunkX = chunkX;
+            chunk.chunkZ = chunkZ;
+            bool first = true;
+            // 只需要高度范围与水平范围：不算法线，也不写顶点/索引。
+            // LOD0 的顶点位置由同一 u/v 网格采样，因此这里与 BuildChunks(0)
+            // 的 AABB 完全一致（BuildChunks 的额外 skirt 属于更粗一级的
+            // 包络，不参与 LOD 组距离）。
+            for (uint32_t localZ = 0; localZ <= desc.chunkQuads; ++localZ)
+            {
+                for (uint32_t localX = 0; localX <= desc.chunkQuads; ++localX)
+                {
+                    const uint32_t globalX =
+                        chunkX * desc.chunkQuads + localX;
+                    const uint32_t globalZ =
+                        chunkZ * desc.chunkQuads + localZ;
+                    const float u = static_cast<float>(globalX) / grid;
+                    const float v = static_cast<float>(globalZ) / grid;
+                    const Eigen::Vector3f position(
+                        (u - 0.5f) * desc.size.x(),
+                        TerrainHeightmap::SampleHeightCm(
+                            desc, *plan.heightmap, u, v),
+                        (v - 0.5f) * desc.size.y());
+                    if (first)
+                    {
+                        chunk.boundsMin = position;
+                        chunk.boundsMax = position;
+                        first = false;
+                    }
+                    else
+                    {
+                        chunk.boundsMin = chunk.boundsMin.cwiseMin(position);
+                        chunk.boundsMax = chunk.boundsMax.cwiseMax(position);
+                    }
+                }
+            }
+            bounds.push_back(std::move(chunk));
+        }
+    }
+    return bounds;
 }
 
 } // namespace VL

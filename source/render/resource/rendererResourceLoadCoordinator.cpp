@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "commonFunction.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
@@ -23,6 +24,42 @@
 
 namespace VL
 {
+namespace
+{
+
+// 几何 chunk 驻留的初始窗口来自作者相机。加载后才执行的 `camera pose`
+// 不会改变窗口：第一版没有运行时异步重传，窗口外的细 LOD 永远不存在，
+// 运行时只会在“目标级缺失”时回退到 resident 的更粗一级。
+TerrainChunkResidencyDesc ReadInitialTerrainChunkResidency(
+    const WorldBuildPlan& worldBuildPlan)
+{
+    TerrainChunkResidencyDesc residency;
+    const nlohmann::json& sceneJson = worldBuildPlan.sceneJson;
+    if (!sceneJson.is_object() || !sceneJson.contains("objects") ||
+        !sceneJson.at("objects").is_array())
+    {
+        return residency;
+    }
+    for (const nlohmann::json& objectJson : sceneJson.at("objects"))
+    {
+        if (!objectJson.is_object() ||
+            !objectJson.contains("type") ||
+            !objectJson.at("type").is_string() ||
+            objectJson.at("type").get<std::string>() != "camera" ||
+            !objectJson.contains("position"))
+        {
+            continue;
+        }
+        residency.cameraPositionCm =
+            JsonParser::ParseValue<Eigen::Vector3f>(
+                objectJson.at("position"));
+        residency.cameraKnown = true;
+        break;
+    }
+    return residency;
+}
+
+} // namespace
 
 RendererResourceLoadCoordinator::RendererResourceLoadCoordinator()
 {
@@ -168,11 +205,14 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    const TerrainChunkResidencyDesc initialChunkResidency =
+        ReadInitialTerrainChunkResidency(worldBuildPlan);
     RendererTerrainLoader terrainLoader(
         *pipelineFactory,
         *rendererBackend,
         loadContext,
-        *terrainStreaming);
+        *terrainStreaming,
+        initialChunkResidency);
     RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();

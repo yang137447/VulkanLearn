@@ -1694,11 +1694,13 @@ RendererTerrainLoader::RendererTerrainLoader(
     PipelineFactory& pipelineFactory,
     RendererBackendVulkan& rendererBackend,
     RendererResourceLoadContext& loadContext,
-    TerrainStreamingState& streamingState)
+    TerrainStreamingState& streamingState,
+    const TerrainChunkResidencyDesc& chunkResidency)
     : pipelineFactory(pipelineFactory)
     , rendererBackend(rendererBackend)
     , loadContext(loadContext)
     , streamingState(streamingState)
+    , chunkResidency(chunkResidency)
 {
 }
 
@@ -2091,8 +2093,10 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
 
     RendererResourceCache& resourceCache = loadContext.resourceCache;
     RendererTerrainLoadResult result;
-    // 运行时 LOD：这里一次性生成 0..lodLevels-1 级网格并全部注册为
-    // WorldMeshObject；每帧由 WorldSnapshotBuilder 按相机距离只挑一级输出。
+    // 运行时 LOD：生成 0..lodLevels-1 级网格并注册为 WorldMeshObject；
+    // 每帧由 WorldSnapshotBuilder 按相机距离只挑一级输出。第一版几何驻留
+    // 在加载期生效：窗口外的细 LOD（0..N-2）不生成，最粗一级永远生成，
+    // 因此运行时相机移动只会改变“选择/兜底”，不会再补传细网格。
     // lodLevels=1 保持历史路径（无 skirt、无 LOD 组、名字/mesh key 不变）。
     // TR 预检保证 1..4；这里不做静默钳制，越界让 BuildChunks 明确失败。
     const uint32_t lodLevelCount =
@@ -2100,47 +2104,112 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
     const bool multiLod = lodLevelCount > 1;
     const std::vector<float> lodDistancesCm =
         TerrainLodDistancesCm(plan.desc);
-    struct ChunkGroupBounds
-    {
-        Eigen::Vector3f min = Eigen::Vector3f::Zero();
-        Eigen::Vector3f max = Eigen::Vector3f::Zero();
-    };
-    // LOD0 的 AABB 是整组的选择依据；各 LOD 的包围盒因 skirt 略有不同，
-    // 用同一个盒避免“当前级影响距离”造成选择反馈。
-    std::unordered_map<uint64_t, ChunkGroupBounds> groupBounds;
-    std::vector<TerrainMeshChunk> lod0Chunks;
-    if (multiLod)
-    {
-        // LOD0 只生成一次：既用于组 AABB，也直接作为第 0 级的网格来源。
-        lod0Chunks = TerrainMeshBuilder::BuildChunks(plan, 0, true);
-        groupBounds.reserve(lod0Chunks.size());
-        for (const TerrainMeshChunk& chunk : lod0Chunks)
-        {
-            const uint64_t groupKey =
-                (static_cast<uint64_t>(chunk.chunkX) << 32) |
-                static_cast<uint64_t>(chunk.chunkZ);
-            groupBounds[groupKey] = {chunk.boundsMin, chunk.boundsMax};
-        }
-    }
-
     const size_t chunksPerSide = plan.desc.chunkQuads == 0
         ? 0
         : plan.desc.gridResolution / plan.desc.chunkQuads;
-    const size_t chunkCount = multiLod
-        ? groupBounds.size() * lodLevelCount
-        : chunksPerSide * chunksPerSide;
-    result.objectPlans.reserve(chunkCount);
+    const std::vector<float> residencyDistancesCm =
+        multiLod ? TerrainChunkResidencyDistancesCm(plan.desc)
+                 : std::vector<float>();
+    const bool residencyActive =
+        multiLod && chunkResidency.cameraKnown &&
+        chunksPerSide != 0;
+
+    // 组的距离口径必须与运行时选择完全一致：LOD0 顶点范围（多级资产还要
+    // 叠加 LOD0 的 skirt 下移）。先算一遍不含法线的 AABB，再用它决定哪些
+    // 细 LOD 进入驻留窗口；窗口外的 chunk 连顶点/法线都不生成。
+    std::vector<TerrainChunkBounds> chunkBounds;
+    if (multiLod)
+    {
+        chunkBounds = TerrainMeshBuilder::ComputeChunkBounds(plan);
+        const float skirtDepthCm = TerrainChunkSkirtDepthCm(plan.desc);
+        for (TerrainChunkBounds& bounds : chunkBounds)
+            bounds.boundsMin.y() -= skirtDepthCm;
+    }
+
+    TerrainChunkPlacementStats placementStats;
+    placementStats.placementId = TerrainPlacementIdentity(plan);
+    placementStats.assetPath = plan.desc.assetPath;
+    placementStats.chunksPerSide = static_cast<uint32_t>(chunksPerSide);
+    placementStats.lodLevelCount = lodLevelCount;
+    placementStats.residencyEnabled = residencyActive;
+    placementStats.residencyDistancesCm = residencyDistancesCm;
+    placementStats.levels.resize(lodLevelCount);
+
+    std::vector<TerrainChunkBuildFilter> levelFilters(lodLevelCount);
+    const uint32_t totalChunks =
+        static_cast<uint32_t>(chunksPerSide) *
+        static_cast<uint32_t>(chunksPerSide);
     for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
     {
-        const std::vector<TerrainMeshChunk> chunks =
-            multiLod && lodLevel == 0
-                ? std::move(lod0Chunks)
-                : TerrainMeshBuilder::BuildChunks(
-                    plan,
+        TerrainChunkLevelStats& levelStats = placementStats.levels[lodLevel];
+        levelStats.lodLevel = lodLevel;
+        // 多级地形的 LOD0 也带 skirt（与更粗一级互相遮挡），单级旧资产不带。
+        levelStats.skirt = multiLod || lodLevel > 0;
+        TerrainChunkBuildFilter& filter = levelFilters[lodLevel];
+        if (!residencyActive)
+            continue;
+        filter.chunkMask.assign(totalChunks, 0);
+        for (const TerrainChunkBounds& bounds : chunkBounds)
+        {
+            const size_t maskIndex =
+                static_cast<size_t>(bounds.chunkZ) * chunksPerSide +
+                bounds.chunkX;
+            if (maskIndex >= filter.chunkMask.size())
+                continue;
+            if (TerrainChunkLevelIsResident(
+                    chunkResidency,
+                    residencyDistancesCm,
+                    model,
+                    bounds.boundsMin,
+                    bounds.boundsMax,
                     lodLevel,
-                    multiLod ? std::optional<bool>(true) : std::nullopt);
+                    lodLevelCount))
+            {
+                filter.chunkMask[maskIndex] = 1;
+            }
+        }
+    }
+
+    uint64_t createdChunks = 0;
+    for (const TerrainChunkBuildFilter& filter : levelFilters)
+    {
+        if (filter.Empty())
+        {
+            createdChunks += totalChunks;
+            continue;
+        }
+        for (uint8_t accepted : filter.chunkMask)
+            createdChunks += accepted != 0 ? 1u : 0u;
+    }
+    result.objectPlans.reserve(static_cast<size_t>(createdChunks));
+    for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
+    {
+        const TerrainChunkBuildFilter* filter =
+            residencyActive ? &levelFilters[lodLevel] : nullptr;
+        const std::vector<TerrainMeshChunk> chunks =
+            TerrainMeshBuilder::BuildChunks(
+                plan,
+                lodLevel,
+                multiLod ? std::optional<bool>(true) : std::nullopt,
+                filter);
+        TerrainChunkLevelStats& levelStats = placementStats.levels[lodLevel];
+        levelStats.chunkCount = static_cast<uint32_t>(chunks.size());
+        levelStats.skippedChunkCount =
+            totalChunks - static_cast<uint32_t>(chunks.size());
+        levelStats.skippedVertexCount =
+            static_cast<uint64_t>(levelStats.skippedChunkCount) *
+            TerrainChunkVertexCount(plan.desc, lodLevel, levelStats.skirt);
+        levelStats.skippedIndexCount =
+            static_cast<uint64_t>(levelStats.skippedChunkCount) *
+            TerrainChunkIndexCount(plan.desc, lodLevel, levelStats.skirt);
+        levelStats.skippedVertexBytes =
+            levelStats.skippedVertexCount * sizeof(Vertex);
+        levelStats.skippedIndexBytes =
+            levelStats.skippedIndexCount * sizeof(uint32_t);
         for (const TerrainMeshChunk& chunk : chunks)
         {
+            levelStats.vertexCount += chunk.vertices.size();
+            levelStats.indexCount += chunk.indices.size();
             // key 包含 placementId 与 LOD：同一 TR 的多处摆放不能共享/覆盖
             // chunk 缓冲，同一 chunk 的不同级也必须是独立网格。
             const std::string chunkKey =
@@ -2196,19 +2265,31 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                 objectPlan.lodLevel = lodLevel;
                 objectPlan.lodLevelCount = lodLevelCount;
                 objectPlan.lodDistancesCm = lodDistancesCm;
-                const uint64_t groupKey =
-                    (static_cast<uint64_t>(chunk.chunkX) << 32) |
-                    static_cast<uint64_t>(chunk.chunkZ);
-                const auto boundsIt = groupBounds.find(groupKey);
-                if (boundsIt == groupBounds.end())
+                const size_t boundsIndex =
+                    static_cast<size_t>(chunk.chunkZ) * chunksPerSide +
+                    chunk.chunkX;
+                if (boundsIndex >= chunkBounds.size())
                     throw std::runtime_error(
                         "Terrain LOD group bounds are missing for a chunk");
-                objectPlan.lodGroupBoundsMin = boundsIt->second.min;
-                objectPlan.lodGroupBoundsMax = boundsIt->second.max;
+                objectPlan.lodGroupBoundsMin =
+                    chunkBounds[boundsIndex].boundsMin;
+                objectPlan.lodGroupBoundsMax =
+                    chunkBounds[boundsIndex].boundsMax;
             }
             result.objectPlans.push_back(std::move(objectPlan));
         }
+        levelStats.vertexBytes =
+            levelStats.vertexCount * sizeof(Vertex);
+        levelStats.indexBytes =
+            levelStats.indexCount * sizeof(uint32_t);
     }
+
+    // 加载期一次性发布：多次地形加载时按 placement 追加，运行时不改。
+    TerrainChunkResidencyStats chunkStats =
+        streamingState.SnapshotChunkStats();
+    chunkStats.valid = true;
+    chunkStats.placements.push_back(std::move(placementStats));
+    streamingState.PublishChunkStats(std::move(chunkStats));
     return result;
 }
 

@@ -13,6 +13,7 @@
 
 #include "scene/sceneAssetTypes.h"
 #include "terrain/terrainFeedback.h"
+#include "terrain/terrainChunkResidency.h"
 #include "terrain/terrainLayerPageManager.h"
 #include "terrain/terrainLayerSources.h"
 #include "terrain/terrainLayerVisibility.h"
@@ -321,6 +322,10 @@ struct TerrainStreamingState
     // 统计快照：渲染线程发布，Console 只读，不共享可变 page manager。
     mutable std::mutex statsMutex;
     TerrainStreamingStats statsSnapshot;
+    // 几何 chunk 驻留基线：加载期写入一次、之后只读。与页统计分开存放，
+    // 避免每帧把 per-level 明细复制进 PublishStats。
+    mutable std::mutex chunkStatsMutex;
+    TerrainChunkResidencyStats chunkStats;
 
     void NotifyContentChanged() noexcept
     {
@@ -358,6 +363,19 @@ struct TerrainStreamingState
     {
         std::lock_guard<std::mutex> lock(statsMutex);
         return statsSnapshot;
+    }
+
+    // 加载期一次性发布（多次地形加载时在 loader 内累加后整体发布）。
+    void PublishChunkStats(TerrainChunkResidencyStats stats)
+    {
+        std::lock_guard<std::mutex> lock(chunkStatsMutex);
+        chunkStats = std::move(stats);
+    }
+
+    TerrainChunkResidencyStats SnapshotChunkStats() const
+    {
+        std::lock_guard<std::mutex> lock(chunkStatsMutex);
+        return chunkStats;
     }
 };
 
@@ -505,7 +523,9 @@ public:
         PipelineFactory& pipelineFactory,
         RendererBackendVulkan& rendererBackend,
         RendererResourceLoadContext& loadContext,
-        TerrainStreamingState& streamingState);
+        TerrainStreamingState& streamingState,
+        const TerrainChunkResidencyDesc& chunkResidency =
+            TerrainChunkResidencyDesc());
 
     RendererTerrainLoadResult LoadTerrainObject(
         const nlohmann::json& node,
@@ -516,6 +536,8 @@ private:
     RendererBackendVulkan& rendererBackend;
     RendererResourceLoadContext& loadContext;
     TerrainStreamingState& streamingState;
+    // 第一版只在加载期使用：窗口外的细 LOD 不创建，运行时不做异步重传。
+    TerrainChunkResidencyDesc chunkResidency;
 };
 
 } // namespace VL

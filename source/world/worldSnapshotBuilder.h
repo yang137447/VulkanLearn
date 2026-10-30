@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -8,6 +9,7 @@
 #include <Eigen/Dense>
 
 #include "core/runtimeResult.h"
+#include "terrain/terrainAssetTypes.h"
 #include "world/world.h"
 #include "world/worldSnapshot.h"
 
@@ -32,6 +34,11 @@ struct TerrainLodGroupStats
     std::string groupId;
     uint32_t level = 0;
     uint32_t levelCount = 1;
+    // 本组实际驻留（World 中存在网格）的级位图；加载期几何驻留会把窗口外
+    // 的细 LOD 直接省掉，因此它可能不含低位的级。
+    uint32_t residentLevelMask = 0;
+    // 本帧真正输出的级。目标级不驻留时会回退到 resident 的更粗一级。
+    uint32_t drawnLevel = 0;
     float distanceCm = 0.0f;
     uint64_t switchCount = 0;
 };
@@ -43,6 +50,15 @@ struct TerrainLodStatsSnapshot
     uint64_t frameIndex = 0;
     uint32_t groupCount = 0;
     uint32_t switchedLastFrame = 0;
+    // 本帧实际出图的 chunk 数（每组一个）与按级分布。
+    uint32_t drawnChunks = 0;
+    // 本帧全部 mesh draw 数（含非地形、无 LOD 组的地形 chunk）。单级地形
+    // 没有 LOD 组，drawnChunks 会是 0，这一项用于对照“确实画了”。
+    uint32_t totalMeshDraws = 0;
+    std::array<uint32_t, TerrainMaxLodLevels> drawnByLevel{};
+    // World 里各级 mesh 对象数（= 加载期实际创建的 chunk 数），与“全部创建”
+    // 的差值由 terrainchunk stats 的加载期统计给出。
+    std::array<uint32_t, TerrainMaxLodLevels> residentObjectsByLevel{};
     std::vector<TerrainLodGroupStats> groups;
 };
 
@@ -93,6 +109,9 @@ private:
     {
         uint32_t level = 0;
         uint32_t levelCount = 1;
+        // 本组实际驻留的级位图与本帧输出的级（目标级缺失时为更粗一级）。
+        uint32_t residentLevelMask = 0;
+        uint32_t drawnLevel = 0;
         uint64_t switchCount = 0;
         float lastDistanceCm = 0.0f;
         bool initialized = false;

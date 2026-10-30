@@ -2022,6 +2022,121 @@ void RenderSystem::ReportTerrainLodStatistics() const
     }
 }
 
+void RenderSystem::ReportTerrainChunkStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainChunk] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+
+    // 加载期快照：只在 World 加载时写一次，运行时不会再变。
+    const VL::TerrainChunkResidencyStats chunkStats =
+        streaming->SnapshotChunkStats();
+    if (!chunkStats.valid)
+    {
+        std::cout
+            << "[TerrainChunk] No terrain chunk residency was recorded."
+            << std::endl;
+        return;
+    }
+
+    uint32_t groupCount = 0;
+    for (const VL::TerrainChunkPlacementStats& placement :
+         chunkStats.placements)
+    {
+        groupCount += placement.chunksPerSide * placement.chunksPerSide;
+    }
+    std::cout
+        << "[TerrainChunk] placements=" << chunkStats.placements.size()
+        << " groups=" << groupCount
+        << " chunks=" << chunkStats.TotalChunks()
+        << " skippedChunks=" << chunkStats.TotalSkippedChunks()
+        << " vertexBytes=" << chunkStats.TotalVertexBytes()
+        << " indexBytes=" << chunkStats.TotalIndexBytes()
+        << " skippedVertexBytes=" << chunkStats.TotalSkippedVertexBytes()
+        << " skippedIndexBytes=" << chunkStats.TotalSkippedIndexBytes()
+        << " totalIfAllBytes="
+        << chunkStats.TotalVertexBytes() + chunkStats.TotalIndexBytes() +
+            chunkStats.TotalSkippedVertexBytes() +
+            chunkStats.TotalSkippedIndexBytes()
+        << std::endl;
+
+    for (const VL::TerrainChunkPlacementStats& placement :
+         chunkStats.placements)
+    {
+        std::cout
+            << "[TerrainChunk] placement=" << placement.placementId
+            << " asset=" << placement.assetPath
+            << " groups="
+            << placement.chunksPerSide * placement.chunksPerSide
+            << " chunksPerSide=" << placement.chunksPerSide
+            << " levels=" << placement.lodLevelCount
+            << " residency=" << (placement.residencyEnabled ? "on" : "off");
+        if (!placement.residencyDistancesCm.empty())
+        {
+            std::cout << " windowsCm=";
+            for (size_t index = 0;
+                 index < placement.residencyDistancesCm.size();
+                 ++index)
+            {
+                if (index != 0) std::cout << ",";
+                std::cout << static_cast<long long>(
+                    std::llround(placement.residencyDistancesCm[index]));
+            }
+        }
+        std::cout << std::endl;
+        for (const VL::TerrainChunkLevelStats& level : placement.levels)
+        {
+            std::cout
+                << "[TerrainChunk]   level=" << level.lodLevel
+                << " skirt=" << (level.skirt ? 1 : 0)
+                << " chunks=" << level.chunkCount
+                << "/" << level.chunkCount + level.skippedChunkCount
+                << " vertices=" << level.vertexCount
+                << " indices=" << level.indexCount
+                << " bytes=" << level.vertexBytes + level.indexBytes
+                << " skippedBytes="
+                << level.skippedVertexBytes + level.skippedIndexBytes
+                << std::endl;
+        }
+    }
+
+    const VL::TerrainLodStatsSnapshot& lodStats =
+        worldSnapshotBuilder.GetTerrainLodStats();
+    if (!lodStats.valid)
+    {
+        std::cout
+            << "[TerrainChunk] draw stats not published yet."
+            << std::endl;
+        return;
+    }
+    std::cout
+        << "[TerrainChunk] draw groups=" << lodStats.groupCount
+        << " drawnChunks=" << lodStats.drawnChunks
+        << " meshDraws=" << lodStats.totalMeshDraws
+        << " switchedLastFrame=" << lodStats.switchedLastFrame
+        << " frame=" << lodStats.frameIndex
+        << std::endl;
+    std::cout << "[TerrainChunk] drawnByLevel=";
+    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
+    {
+        if (level != 0) std::cout << ",";
+        std::cout << level << ":" << lodStats.drawnByLevel[level];
+    }
+    std::cout << " objectsByLevel=";
+    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
+    {
+        if (level != 0) std::cout << ",";
+        std::cout << level << ":" << lodStats.residentObjectsByLevel[level];
+    }
+    std::cout << std::endl;
+}
+
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
 {
     // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。

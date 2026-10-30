@@ -47,6 +47,15 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
             for (const auto& distanceJson : asset.at("lodDistances"))
                 desc.lodDistancesCm.push_back(distanceJson.get<float>());
         }
+        if (asset.contains("chunkResidencyDistances"))
+        {
+            for (const auto& distanceJson :
+                 asset.at("chunkResidencyDistances"))
+            {
+                desc.chunkResidencyDistancesCm.push_back(
+                    distanceJson.get<float>());
+            }
+        }
         desc.pageTilesPerSide = asset.value("pageTilesPerSide", 8u);
         if (asset.contains("pageOrigin"))
         {

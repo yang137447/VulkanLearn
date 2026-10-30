@@ -555,6 +555,10 @@ void EngineLoop::Tick()
     {
         RenderSystem::GetInstance().ReportTerrainLodStatistics();
     }
+    if (commandResult.terrainChunkStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainChunkStatistics();
+    }
     if (commandResult.terrainCollisionStatisticsRequested)
     {
         GetSubsystems().GetScriptRuntime().ReportTerrainCollisionStatistics();
