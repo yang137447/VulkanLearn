@@ -450,10 +450,11 @@ L1 实现 CPU 数据与决策；L2 把层页真正送进 GPU；L3 让 shader 在
   `TerrainLayerPageKey { layerId, mip, pageX, pageY }` 到物理页号的映射：
   - 虚拟页号（设计 §4.4 的按 mip 分表）：
     `layerId * mipStride(mip) + pageY * pagesPerSide(mip) + pageX`。
-    `mipStride(mip)` 是该 mip 下所有已配置层的最大 `pagesPerMip`：全同分辨率时
-    等于设计公式（1K 的 mip0 stride 64、2K 256），512/1K/2K 混用时取最大值，
-    因此不同层的页号不会别名。`VirtualPagesPerLayer`/`VirtualPageTableSize`
-    给出 L2 建页表所需的槽位数。
+    `mipStride(mip)` 是该 mip 下所有已配置层的最大 `pagesPerMip`，但当前实现
+    按 256 层容量计算页表宽度/stride；全同分辨率时页表可能比“仅实际层数”的
+    最小布局更大（例如全 512² 仍按 256 层布局）。CPU 与 shader 使用同一 stride，
+    不同层的页号不会别名，只是页表内存不是最小。512/1K/2K 混用时取最大值。
+    `VirtualPagesPerLayer`/`VirtualPageTableSize` 给出 L2 建页表所需的槽位数。
     另有 `FlatPageIndex` = `pageTableBase + mipBase + pageY * side + pageX`，
     对应 catalog 的扁平基址，供 L2 选择单表变体。
   - 物理页池可配置（默认 1024），最后一个槽位固定为 fallback，

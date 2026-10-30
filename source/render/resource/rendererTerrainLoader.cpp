@@ -1717,7 +1717,8 @@ void RegisterTerrainSourceSets(
     const TerrainBuildPlan& plan,
     const std::shared_ptr<Texture>& layerAlbedo,
     const std::shared_ptr<Texture>& layerNormal,
-    const std::shared_ptr<Texture>& layerPbr)
+    const std::shared_ptr<Texture>& layerPbr,
+    bool vtRequested)
 {
     const std::string placementId = TerrainPlacementIdentity(plan);
     const std::vector<uint8_t>& layerIdMap =
@@ -1851,6 +1852,16 @@ void RegisterTerrainSourceSets(
                     " localLayer=" + std::to_string(local) +
                     " arrayLayers=" + std::to_string(arrayLayers));
             }
+            if (!vtRequested && globalId >= arrayLayers)
+            {
+                throw std::runtime_error(
+                    "Terrain mode 0 requires the layer array slice to match "
+                    "the global layer id; use mode 1 or expand the array: "
+                    "assetPath=" + plan.desc.assetPath +
+                    " localLayer=" + std::to_string(local) +
+                    " globalLayer=" + std::to_string(globalId) +
+                    " arrayLayers=" + std::to_string(arrayLayers));
+            }
             if (!sourceExtentConsistent ||
                 layer.sourceResolution != albedoExtent.width)
             {
@@ -1934,18 +1945,21 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const std::shared_ptr<Texture> layerPbr = materialInstance->GetTexture("layerPbr");
         if (!layerAlbedo || !layerNormal || !layerPbr)
             throw std::runtime_error("Terrain layer arrays are not bound");
+        const bool vtRequested =
+            materialInstance->HasParameter("u_terrainLayerMode") &&
+            materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
         // S1/S2：按 layer.sourceSet 分组登记源数组；同一 set 共享同一组
         // shared_ptr，不同 set 允许不同数组但共享同一组 atlas。
+        // mode 0 直接用 globalId 作为数组 slice，因此必须显式校验全局 ID
+        // 落在该 MI 的数组层数内；否则会按 repeat 静默采到错误层。
         RegisterTerrainSourceSets(
             rendererBackend,
             streamingState,
             plan,
             layerAlbedo,
             layerNormal,
-            layerPbr);
-        const bool vtRequested =
-            materialInstance->HasParameter("u_terrainLayerMode") &&
-            materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
+            layerPbr,
+            vtRequested);
         // L4b：层页 feedback pass 只有一个 u_uvScale，必须与所有 layer-table
         // 地形的 M_terrain 实例一致，否则 feedback 会报告错误的层 UV/页号。
         const float uvScale = materialInstance->HasParameter("u_uvScale")
