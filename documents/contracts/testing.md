@@ -946,9 +946,11 @@ main.exe --initial-scene Generated/Validation/TerrainLayerVT/SC_terrain_vt_mode1
 L4a 把同一 mode 1 场景改为 feedback 驱动：加载期只请求每层尾页，之后由覆盖页
 feedback 推导可见层/mip 并逐帧请求/上传/淘汰。稳定后 `terrainlayerstats` 的第二行
 应显示 `visibleLayers>0`、`pending=0`、`dirtyPages=0`、`quarantined=0`，
-第一行 `resident` 明显小于 672 且 `<= capacity`（2026-10-30 实测 248–268/512，
-`evictions` 只有启动期少量）；截图与
-`l3_final_mode1.bmp` 的平均通道差 0.167、0.79% 像素 >8、最大 34，不允许整页平均色块。
+第一行 `resident` 明显小于 672 且 `<= capacity`。L4a 初版实测 248–268/512；
+L4b 精确 feedback + 导数尺度修正后稳定在 20/512（`evictions` 只回收 12 个
+不在可见集里的初始尾页，需约 180 epoch 才收敛；120–150 帧看到 32/512 属正常）。
+截图与 `l3_final_mode1.bmp` 的平均通道差 0.002、>8 像素 <0.01%、最大 15，
+不允许整页平均色块。
 `terrainlayer preload` 会关闭 idle 淘汰并请求全部层页（`resident=672/672`），
 此时截图与 L3 基线最大差 1；`terrainlayer capacity N` 重新启用 feedback 语义。
 mode 0 的三张基线截图（B32/M3/BC7）在 L4a 后仍必须逐字节一致。

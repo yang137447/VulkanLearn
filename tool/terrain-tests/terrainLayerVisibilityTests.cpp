@@ -550,12 +550,16 @@ TEST(TerrainLayerVisibility, CoarserPrefetchLevelCountIsClamped)
     const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 0, 8);
 
     VL::TerrainLayerPageManager layerPages;
-    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    std::vector<VL::TerrainLayerDesc> layers = MakeLayerDesc(1);
+    // 2048² 有 mip0..4；配置请求 16 级时必须被夹到统计数组的 3 项。
+    layers[0].sourceResolution = 2048;
+    layerPages.ConfigureLayers(layers);
     layerPages.SetGpuEpochContext(10, 0, 2);
 
     VL::TerrainLayerVisibilityResolver resolver;
     std::vector<VL::TerrainLayerPageRequest> pending;
     VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.sourceMipLevels = 5;
     config.exactFeedbackNeighborhoodRadius = 0;
     config.fallbackPrefetchMipLevels = 16;
     const VL::TerrainLayerExactFeedbackStats stats =

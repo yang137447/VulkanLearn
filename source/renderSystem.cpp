@@ -1672,7 +1672,7 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerExactFeedbackPages = 0;
         stats.layerFallbackSlots = 0;
         stats.layerFallbackTargetPages = cover.fallbackTargetPages;
-        stats.layerFallbackLevelPages = {};
+        stats.layerFallbackLevelPages = cover.fallbackLevelPages;
         stats.layerTargetMipSlots = {};
     }
     stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
