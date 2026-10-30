@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionGroup.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
 #include <Jolt/Physics/Collision/RayCast.h>
@@ -261,6 +262,11 @@ TerrainCollisionBody CreateTerrainCollisionBody(
     // 静态地形不参与睡眠/唤醒；摩擦取 1.0 让角色/刚体在坡面上不无限滑动。
     bodySettings.mAllowSleeping = false;
     bodySettings.mFriction = 1.0f;
+    // 脚本 body 用 CollisionGroup(collisionLayer, collisionMask) 过滤；地形属于
+    // 组 0 且对所有子组开放，才能被任意 collisionLayer/Mask 的脚本查询命中。
+    // 不设置会得到 Jolt 的 cInvalidGroup，GroupFilter 的位移运算可能出现未定义行为。
+    bodySettings.mCollisionGroup = JPH::CollisionGroup(
+        nullptr, 0, JPH::CollisionGroup::cInvalidSubGroup);
 
     const JPH::BodyID id = world.GetBodyInterface().CreateAndAddBody(
         bodySettings, JPH::EActivation::DontActivate);

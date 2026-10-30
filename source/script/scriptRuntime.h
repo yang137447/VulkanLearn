@@ -71,6 +71,10 @@ public:
     ScriptRuntimeView View(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
+    // 只有 Play 才创建 ScriptPhysicsWorld；编辑器/普通预览保持 false。
+    bool HasPhysicsWorld() const;
+    // 只读诊断：Play 中输出已创建的地形 heightfield body 数量与 placement。
+    void ReportTerrainCollisionStatistics() const;
     const nlohmann::json& Classes() const { return classes; }
     const nlohmann::json& ComponentClasses() const { return componentClasses; }
     bool SetTimeScale(float value, std::string& error);

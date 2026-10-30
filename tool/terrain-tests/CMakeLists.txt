@@ -5,8 +5,10 @@ add_executable(terrain_tests
     terrainLayerPageManagerTests.cpp
     terrainLayerVisibilityTests.cpp
     terrainCollisionTests.cpp
+    terrainCollisionInstanceTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
+    ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp

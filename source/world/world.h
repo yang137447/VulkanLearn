@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -15,6 +16,7 @@
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
+#include "terrain/terrainCollisionTypes.h"
 #include "world/worldSnapshot.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
@@ -135,8 +137,13 @@ public:
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
+    // 地形碰撞摆放是 World 的只读加载期数据：WorldBuilder 从场景计划一次性写入，
+    // Play 时 ScriptPhysicsWorld 读取它创建静态 heightfield；渲染路径不消费。
+    void AddTerrainCollisionInstance(TerrainCollisionInstance instance);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    const std::vector<TerrainCollisionInstance>& GetTerrainCollisionInstances() const
+    { return terrainCollisionInstances; }
     void TickAnimations(float deltaSeconds);
     // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
     bool ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value);
@@ -255,6 +262,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
     std::unordered_map<std::string, WorldSquareAreaLight> squareAreaLights;
+    // 每个 terrain placement 一份；同一 TR 多摆放按 placementId 区分。
+    std::vector<TerrainCollisionInstance> terrainCollisionInstances;
     nlohmann::json scriptBlueprints = nlohmann::json::array();
     nlohmann::json scriptBlueprintSources = nlohmann::json::array();
     // 运行时 TRS 与作者声明分离；逻辑 Actor 没有网格时仍能在 Details 回显。

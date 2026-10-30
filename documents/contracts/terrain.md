@@ -1,7 +1,7 @@
 # Terrain Runtime
 
 > 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；地形
-> chunk 卸载、低分辨率 fallback/淡入、World 级碰撞接入与地形编辑等未来能力
+> chunk 卸载、低分辨率 fallback/淡入、分块/编辑后碰撞重建与地形编辑等未来能力
 > 不在这里承诺。运行时几何 LOD 选择已接入。
 
 ## 数据流
@@ -667,8 +667,8 @@ P3/P3.1/L1/L2/L3/L4a/L4b/L4c **没有**实现：低分辨率 fallback/淡入（�
 侧 `avgColor` 混合）、相机/视锥预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
-地形 chunk 卸载、地形编辑。地形碰撞只有独立 heightfield 模块，尚未接入 World
-（见下节）。
+地形 chunk 卸载、地形编辑。地形碰撞的 heightfield 模块已接入 World/Play
+（见下节），但仍是整张地形一个 body，没有分块/编辑重建。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
 每帧 8 页是数量预算，不是时间预算，重载/快速移动时单帧仍可能出现烘焙耗时峰值。
 
@@ -715,10 +715,27 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   Factory/类型注册；任何入口都不得自行调用 `RegisterTypes()`。Jolt 的
   `Allocate()` 依赖 `RegisterDefaultAllocator()` 写入的函数指针，因此持有 Jolt
   分配器的对象必须保证注册先于任何成员分配完成。
-- 集成边界：**场景 `terrain` 对象目前不会自动生成碰撞体**。World 不保留
-  `TerrainBuildPlan`，物理世界只在脚本 Play 时由 `ScriptPhysicsWorld` 创建，
-  所以编辑器预览和普通运行时加载地形都没有物理表面。需要碰撞的调用方必须自己
-  把 `CreateTerrainCollisionBody` 接到已有的 PhysicsSystem 上。
+- World 数据：`WorldBuilder` 用
+  `BuildTerrainCollisionInstances(SceneAssetBuildPlan, sceneJson)`
+  （`source/world/loading/terrainCollisionInstances.*`）从每个 `terrain`
+  对象计划取 `TerrainBuildPlan`，并从作者场景 JSON 取 position/rotation/scale，
+  写入 `World::GetTerrainCollisionInstances()`。同一 TR 多次摆放按
+  `placementId = terrain|<name>` 各保留一份。缺少地形计划、TRS 非有限、
+  scale 非正或 placementId 重复都会让 World 加载失败，不会拖到 Play。
+- Play 生命周期：`ScriptRuntimeSubsystem::Control` 在每次 Play 创建
+  `ScriptPhysicsWorld` 后调用 `SetTerrainCollisions(World instances)`；
+  Stop / 重新 Play / World 换代都会销毁旧 body 再重建。编辑器与普通加载
+  不创建物理世界，所以不会生成地形碰撞。`ScriptPhysicsWorld` 内
+  `TerrainCollisionBody` 声明在 `JPH::PhysicsSystem` 之后，析构时先于物理世界。
+  `SetTerrainCollisions` 是替换语义，空集合只清空；创建失败时旧集合保持有效。
+- 查询身份：`ScriptPhysicsWorld::Raycast` / `ProbeGround` 命中地形时返回
+  placementId（Raycast 额外带 `terrain=true`），不伪装成蓝图 id。接触/触发
+  列表仍只发布脚本实体对。
+- 碰撞分组：地形 body 使用 group `0`、subgroup 全开，脚本默认的
+  `collisionLayer/collisionMask` 能查询和碰撞它；`QueryBodyFilter` 对
+  Jolt 的 `cInvalidGroup/cInvalidSubGroup` 按全放行处理，避免移位越界。
+- 可观测：Console `terraincollision stats` 只在手动输入时打印 Play 中的
+  terrain body 数与 placement；非 Play 输出 “No physics world”。
 - 构建：Jolt 已从 C# hosting 的 `if()` 中移出，是核心 CPU 依赖
   （`script/CMakeLists.txt` 无条件 FetchContent，锁定同一 commit）；
   `main` 与 `terrain_tests` 都链接 `Jolt`。
@@ -729,6 +746,12 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - Jolt 碰撞：`terrain_tests --gtest_filter=TerrainCollision.*` 覆盖平地/斜坡
   射线命中与 CPU 采样误差、heightScale/heightOffset、placement 的平移/旋转/缩放、
   32 次销毁/重建无残留 body、非法输入拒绝与越界射线，以及动态球落到地表。
+- World/Play 接入：`terrain_tests --gtest_filter=TerrainCollisionInstances.*` 覆盖
+  每个 terrain placement 的计划/TRS/placementId 提取与非法记录在加载期失败；
+  `script_tests --gtest_filter=WorldBuilderTerrainCollision.*:ScriptTerrainCollision.*`
+  覆盖 WorldBuilder 生成的实例、`SetTerrainCollisions` 替换/清空、
+  Raycast/ProbeGround 命中 heightfield 并与 `SampleHeightCm` 比较、普通 World
+  不创建物理世界。当前 worktree 未开 C#，没有完整 Play 冒烟。
 - CPU LOD/skirt：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无 skirt）、
   LOD1..3 的格子数与 skirt 环顶点数、基础顶点在 LOD0 同名网格点的位置/法线/UV、
   skirt 的竖直下移与 AABB 覆盖、skirt 三角形朝内绕序、粗 LOD 跨 chunk 边界法线连续、

@@ -72,11 +72,13 @@ SDK 未进入 PATH 时使用 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.
 宿主优先显式使用该私有根；没有该子目录时使用配置期 SDK 根。
 程序和完整 managed 目录可一起搬移，C# 宿主不要求目标机器安装 SDK。
 完整游戏导出使用下文 `vl_export_game`，同时收集配置、资源、shader 与原生依赖 DLL。
-开启时同时下载并构建锁定的 Jolt 5.6.0 CPU 库（提交
+Jolt 5.6.0 CPU 库（提交
 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`，归档 SHA256 在
-`script/CMakeLists.txt`）。不构建 samples、GPU compute、毛发模拟、debug renderer
+`script/CMakeLists.txt`）现在无条件下载并构建，因为地形碰撞是核心 CPU 依赖；
+关闭 C# hosting 只停止查找 .NET SDK，不停止 Jolt。不构建 samples、GPU compute、毛发模拟、debug renderer
 或 profiler；x64 使用 SSE2 基线，不要求 AVX2。第三方编译选项隔离在子目录，
-不覆盖工程的 Debug/Release 配置。关闭时不获取 Jolt，不依赖 Bullet。
+不覆盖工程的 Debug/Release 配置。`ScriptPhysicsWorld` 的 Jolt 实现也随核心依赖
+无条件编译；Play 入口仍只在 C# hosting 开启时可用。不依赖 Bullet。
 
 `config/config.json` 的可选 `scripts` 对象包含 `enabled`、
 `runtimeDirectory`、`assembly`、`autoPlay`，两个路径相对项目根解析。

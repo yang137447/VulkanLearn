@@ -3,9 +3,9 @@
 #include <exception>
 
 #include "commonFunction.h"
-#include "render/resource/rendererResourceCache.h"
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
+#include "world/loading/terrainCollisionInstances.h"
 #include "render/lighting/physicalLighting.h"
 
 namespace VL
@@ -207,7 +207,6 @@ void AddSpotLightIfFirst(World& world, std::shared_ptr<SpotLight> light)
 RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
     uint64_t generation,
     const WorldBuildPlan& worldBuildPlan,
-    const RendererResourceCache& resourceCache,
     uint32_t shadowCascadeCount) const
 {
     try
@@ -278,6 +277,20 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 "WorldBuilder.NoCamera",
                 "Cannot build a World because the build plan has no camera.",
                 worldBuildPlan.scenePath));
+        }
+
+        // 地形碰撞只保留作者计划与 TRS；渲染 chunk 计划不参与，Play 时再创建 body。
+        auto terrainInstances = BuildTerrainCollisionInstances(
+            worldBuildPlan.sceneAssetPlan,
+            worldBuildPlan.sceneJson);
+        if (terrainInstances.IsFailure())
+        {
+            return RuntimeResult<std::shared_ptr<World>>::Failure(
+                terrainInstances.Error());
+        }
+        for (TerrainCollisionInstance& instance : terrainInstances.Value())
+        {
+            world->AddTerrainCollisionInstance(std::move(instance));
         }
 
         if (primaryDirectionalLight)

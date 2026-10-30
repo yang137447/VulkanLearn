@@ -170,7 +170,6 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             worldBuilder.BuildFromLoadedScene(
                 worldGeneration,
                 worldBuildPlan,
-                *prepared.resourceCache,
                 shadowCascadeCount);
         if (worldResult.IsFailure())
         {

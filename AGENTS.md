@@ -58,9 +58,11 @@ Current implemented areas include:
 - Material and material instance loading
 - BC7/BC5 block-compressed textures from DDS/KTX2 (offline mip chains; no runtime BC mip
   generation or Basis/zstd supercompression); see `documents/contracts/texture-asset-json-v1.md`
-- Standalone Jolt heightfield terrain collision module (`source/terrain/terrainCollision.*`):
-  creates static bodies in an existing PhysicsSystem from a `TerrainBuildPlan`; scene `terrain`
-  objects do **not** create collision automatically yet
+- Jolt heightfield terrain collision (`source/terrain/terrainCollision.*`,
+  `source/world/loading/terrainCollisionInstances.*`): WorldBuilder retains one plan+TRS per
+  `terrain` placement; every script Play creates static bodies in the existing
+  `ScriptPhysicsWorld`, and Stop/World replacement destroys them. Editor/preview loads create
+  no physics world
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
@@ -344,7 +346,7 @@ temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` m
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no
 low-resolution fallback/fade, camera prefetch, terrain chunk unloading, terrain editing, or
-World-level terrain collision wiring. CPU geometry LOD/skirt generation and runtime selection are
+per-chunk/edit-time collision rebuild. CPU geometry LOD/skirt generation and runtime selection are
 wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride)`,
 TR `lodLevels`/`lodDistances`) the loader generates every level (LOD0 also gets a skirt) and
 `WorldSnapshotBuilder` picks one level per `lodGroupId = placementId|chunkX|chunkZ` from the
@@ -352,9 +354,11 @@ camera's distance to the chunk world AABB, with a 10% hysteresis band. The snaps
 source for color, shadow, picking and MaterialInstance context; all levels of a group share one
 RuntimeId. `terrainlod stats` reports per-group level/distance/switch count.
 `lodLevels=1` old assets still generate and bind LOD0 only, byte-identical to the legacy path.
-`source/terrain/terrainCollision.*` can
-already turn a `TerrainBuildPlan` plus placement into a static Jolt `HeightFieldShape` body
-in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression, Y*X*Z degrees rotation);
+`source/terrain/terrainCollision.*` turns a `TerrainBuildPlan` plus placement into a static
+Jolt `HeightFieldShape` body in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression,
+Y*X*Z degrees rotation); `ScriptPhysicsWorld::SetTerrainCollisions` owns those RAII bodies and
+`ScriptRuntimeSubsystem` feeds the World's instances on every Play (cm/degree/scale validation
+happens at World build). `terraincollision stats` prints the Play-mode body count and placements;
 `source/physics/joltRegistration.*` is the shared process-wide Jolt registration, and
 `TerrainCollisionWorld` is only a test/offline fixture. `TerrainLayerPageManager`
 (`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
