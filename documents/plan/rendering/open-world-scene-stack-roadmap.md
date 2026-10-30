@@ -358,6 +358,8 @@
 3. Jolt 是否从 `VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS` 拆出来，让地形碰撞独立？
 4. 植被目标数量：多少树/石头/草？这决定 instancing 和 LOD 的预算。
 5. PP2 的 DCC 管线：3ds Max / Houdini 哪条？有没有可用的树资产？先做几层？
+   倾向 Houdini；Pegasus 的资产/管线接入评估见
+   [houdini-pegasus-integration-feasibility.md](houdini-pegasus-integration-feasibility.md)。
 6. 3D 风点：作者用 `W_*.json` 还是场景对象？最多多少个点？每顶点采样几个？
 7. LOD：树用 3 级 mesh + impostor，还是直接 billboard？网格简化用 meshoptimizer 还是源资产多 LOD？
 8. 自定义 shading 的优先级：TwoSidedFoliage 先做，还是先做草的 subsurface？
