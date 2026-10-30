@@ -37,6 +37,8 @@ PRIVATE
     stb_image
     assimp
     Json
+    # 地形 Jolt 碰撞是核心 CPU 功能，不再只通过 C# hosting 传递。
+    Jolt
     MikkTSpace
     Spirv_Reflect
     BLAKE3::blake3

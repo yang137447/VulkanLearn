@@ -531,13 +531,66 @@ P3/P3.1/L1/L2/L3/L4a **没有**实现：低分辨率 fallback/淡入、相机/�
 逐页层 feedback（L4b：当前只按覆盖页推导可见层，没有层号+mip 的专用 feedback）、
 硬预算淘汰（可见 working set 大于预算时允许暂时超预算）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、LOD/skirt、
-地形 chunk 卸载、地形碰撞/编辑。
+地形 chunk 卸载、地形编辑。地形碰撞只有独立 heightfield 模块，尚未接入 World
+（见下节）。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
 每帧 8 页是数量预算，不是时间预算，重载/快速移动时单帧仍可能出现烘焙耗时峰值。
+
+## Jolt 碰撞（heightfield）
+
+`source/terrain/terrainCollision.h/.cpp` 把一份已解码的 `TerrainBuildPlan` 变成
+静态 Jolt `HeightFieldShape` body，加入**调用方已有的** `JPH::PhysicsSystem`；
+它不创建第二套物理世界，也不改动渲染路径。
+
+- 入口：`CreateTerrainCollisionBody(JPH::PhysicsSystem&, const TerrainBuildPlan&,
+  const TerrainCollisionPlacement&, const TerrainCollisionSettings&)`。
+  `TerrainCollisionPlacement.position` 单位 cm，`rotation` 单位度，顺序
+  `Y*X*Z`（与 `CommonFunction::RotationToQuat` 一致），`scale` 无量纲；
+  模块内部统一乘 `0.01` 进入 Jolt 米制。
+- 局部空间：X/Z 以地形中心为原点，范围 `±size*scale/2`；高度为
+  `heightmap * heightScale * scale.y + heightOffset`，与 `TerrainMeshBuilder`
+  的顶点口径一致（u 对应 +X、v 对应 +Z）。placement 的旋转/平移由 body
+  transform 承担，缩放烘焙进 heightfield 的 offset/scale，避免依赖 Jolt
+  非均匀 body scale。
+- 采样：默认 `sampleCount = TR.gridResolution + 1`（与渲染网格同分辨率），
+  向上取整到 Jolt `blockSize(2)` 的倍数，保证覆盖范围不因向上取整而多出一圈样本；
+  允许 `[4, 4096]`。样本经 `TerrainHeightmap::SampleHeightCm` 双线性读取，
+  与 CPU 采样同源。高度压缩用 `mBitsPerSample=16`、`mBlockSize=2`。
+- body 固定为 `EMotionType::Static` + `EActivation::DontActivate`，
+  `mAllowSleeping=false`、`mFriction=1.0`。object layer 默认 `0`
+  （与 `ScriptPhysicsWorld::StaticLayer` 对齐），调用方必须保证该层已在
+  PhysicsSystem 的 `ObjectLayerPairFilter` 中注册。
+- `TerrainCollisionBody` 是 RAII：析构/`Reset()` 先 `RemoveBody` 再 `DestroyBody`，
+  重复调用安全；句柄必须早于对应 PhysicsSystem 销毁。
+  `GetBodyIdValue()` 返回 Jolt BodyID 的索引+序列号打包值（索引会被复用，
+  序列号保证同一 world 内不重复），只用于日志/断言。
+- 输入错误在创建 body 之前抛出 `std::invalid_argument`（空高度图、
+  `<2x2` 高度图、非正/非有限 size 或 scale、`sampleCount` 越界、
+  `bitsPerSample` 越界、非有限高度）；不会留下半创建的 body。
+- 已知三角化差异：Jolt heightfield 每个 quad 沿 `(x,y)-(x+1,y+1)` 对角线切分，
+  渲染网格沿另一条对角线；非平面 quad 内两者表面存在细微差异（平面/斜坡为 0）。
+- `TerrainCollisionWorld` 是独立测试/离线夹具，内部持有唯一一个 PhysicsSystem
+  （静态/移动两层配置与 `ScriptPhysicsWorld` 相同），提供 `AddTerrain`、
+  `RaycastDown`、`Step`，只服务于模块测试和尚未接入 World 的工具。
+- Jolt 注册：`source/physics/joltRegistration.h/.cpp` 提供进程级
+  `Physics::EnsureJoltRegistered()`，地形碰撞与 `ScriptPhysicsWorld` 共用同一份
+  Factory/类型注册；任何入口都不得自行调用 `RegisterTypes()`。Jolt 的
+  `Allocate()` 依赖 `RegisterDefaultAllocator()` 写入的函数指针，因此持有 Jolt
+  分配器的对象必须保证注册先于任何成员分配完成。
+- 集成边界：**场景 `terrain` 对象目前不会自动生成碰撞体**。World 不保留
+  `TerrainBuildPlan`，物理世界只在脚本 Play 时由 `ScriptPhysicsWorld` 创建，
+  所以编辑器预览和普通运行时加载地形都没有物理表面。需要碰撞的调用方必须自己
+  把 `CreateTerrainCollisionBody` 接到已有的 PhysicsSystem 上。
+- 构建：Jolt 已从 C# hosting 的 `if()` 中移出，是核心 CPU 依赖
+  （`script/CMakeLists.txt` 无条件 FetchContent，锁定同一 commit）；
+  `main` 与 `terrain_tests` 都链接 `Jolt`。
 
 ## 验证
 
 - 纯 CPU：`terrain_tests`（采样、chunk 计数、法线、chunk 边界、TR 校验、加载器）。
+- Jolt 碰撞：`terrain_tests --gtest_filter=TerrainCollision.*` 覆盖平地/斜坡
+  射线命中与 CPU 采样误差、heightScale/heightOffset、placement 的平移/旋转/缩放、
+  32 次销毁/重建无残留 body、非法输入拒绝与越界射线，以及动态球落到地表。
 - 运行时：`Generated/Validation/TerrainSmoke/SC_terrain_smoke.json` 加载 64×64 quad、
   2×2 chunk 地形并截图；见 [testing](testing.md)。
 - Phase B/C1 32 层数组 + 256 层上限：`Generated/Validation/TerrainB32/SC_terrain_b32.json`，

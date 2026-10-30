@@ -38,6 +38,11 @@ if(MINGW)
     set_source_files_properties(scriptAnimationTests.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_link_libraries(script_tests PRIVATE vl_script_host vl_animation_assets vl_debug_draw assimp Eigen3 Json Vulkan::Vulkan vl_offline_core BLAKE3::blake3)
+# 脚本物理只在 C# hosting 开启时引用 Jolt；关闭时 scriptPhysics.cpp 走空实现，
+# 不能把共享注册 TU 编进来，否则缺少 Jolt include。
+if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
+    target_sources(script_tests PRIVATE "${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp")
+endif()
 if(TARGET vl_gameplay)
     add_custom_target(vl_script_fixtures
         COMMAND "${VULKANLEARN_DOTNET_EXECUTABLE}" build

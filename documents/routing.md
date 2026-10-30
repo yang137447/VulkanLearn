@@ -31,7 +31,7 @@
 | `source/debug/**`、`source/ui/debugDrawOverlay.*`、`source/script/scriptDebugDraw.h`、`script/VulkanLearn.Runtime/DebugDraw.cs`、`tool/debug-draw-tests/**`、`tool/editor-ui-tests/debugDrawOverlayTests.cpp`、`tool/script-tests/scriptDebugDrawTests.cpp`、`tool/script-tests/managed/DebugDrawFixtures.cs`、`tool/debug/capture_draw_debug.py` | `contracts/debug-draw.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/resource/image/hostImage.*`、`source/resource/image/textureIO.*`、`source/resource/image/ddsTexture.cpp`、`source/resource/image/ktx2Texture.cpp`、`source/resource/image/hostImageVulkanPlan.h`、`source/resource/device/deviceTextureFactory.*`、`tool/texture-asset-tests/**` | `contracts/texture-asset-json-v1.md`、`contracts/testing.md` | — |
-| `source/terrain/**`、`source/render/resource/rendererTerrainLoader.*`、`source/render/resource/terrainFeedbackGpu.*`、`shader/glsl/M_terrain*.json`、`shader/glsl/M_terrain.*.glsl`、`shader/glsl/materialFunction/mf_terrainLayer*.glsl`、`shader/glsl/pass/M_terrainFeedback.json`、`shader/glsl/pass/terrainFeedback.*`、`tool/terrain-tests/**` | `contracts/terrain.md`、`contracts/testing.md`、`contracts/texture-asset-json-v1.md`（VT atlas/压缩格式） | — |
+| `source/terrain/**`、`source/physics/joltRegistration.*`、`source/render/resource/rendererTerrainLoader.*`、`source/render/resource/terrainFeedbackGpu.*`、`shader/glsl/M_terrain*.json`、`shader/glsl/M_terrain.*.glsl`、`shader/glsl/materialFunction/mf_terrainLayer*.glsl`、`shader/glsl/pass/M_terrainFeedback.json`、`shader/glsl/pass/terrainFeedback.*`、`tool/terrain-tests/**` | `contracts/terrain.md`、`contracts/testing.md`、`contracts/texture-asset-json-v1.md`（VT atlas/压缩格式） | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/terrain.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
@@ -164,7 +164,12 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   `source/terrain/terrainLayerVisibility.*` 把覆盖页 feedback 推导成
   “可见层 → mip → 该 mip 全部页”，逐帧限量请求/上传/淘汰；mode 1 不再加载期
   全量预取（`terrainlayer preload` 只作对照）。默认视觉路径仍与 L1/L2 逐字节一致。
-  当前没有低分辨率 fallback/淡入、相机/视锥预取、LOD/skirt、地形碰撞/编辑。行为见
+  `source/terrain/terrainCollision.*` 提供 Jolt 静态 heightfield 碰撞的 RAII body：cm→m、
+  placement 平移/旋转/缩放、16 位高度压缩，并复用调用方已有的 PhysicsSystem；
+  `source/physics/joltRegistration.*` 是地形与 `ScriptPhysicsWorld` 共用的进程级
+  Jolt 注册。场景 `terrain` 对象**尚未**自动生成碰撞体，`TerrainCollisionWorld`
+  只是测试/离线夹具。当前没有低分辨率 fallback/淡入、相机/视锥预取、LOD/skirt、
+  地形编辑，也没有 World 级碰撞接入。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
   `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
 

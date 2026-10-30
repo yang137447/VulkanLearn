@@ -2,15 +2,10 @@
 #include "script/scriptComponents.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
 #include <map>
 #include <set>
 #ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
 #include <Jolt/Jolt.h>
-#include <Jolt/RegisterTypes.h>
-#include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -34,6 +29,7 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include "physics/joltRegistration.h"
 #endif
 
 namespace VL
@@ -49,46 +45,6 @@ constexpr float MaxCharacterIteration = 0.05f;
 constexpr int MaxCharacterIterations = 8;
 constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
 
-void PhysicsTrace(const char* format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    std::vfprintf(stderr, format, args);
-    va_end(args);
-    std::fputc('\n', stderr);
-}
-#ifdef JPH_ENABLE_ASSERTS
-bool PhysicsAssert(const char* expression, const char* message, const char* file, JPH::uint line)
-{
-    std::fprintf(stderr, "Jolt assertion: %s (%s) at %s:%u\n",
-        expression, message ? message : "", file, line);
-    std::abort();
-}
-#endif
-
-// Jolt 的注册表属于进程；候选/活动 World 可同时存活，不能在某个 Stop 中注销其它 World 的类型。
-struct JoltRegistration
-{
-    JoltRegistration()
-    {
-        JPH::RegisterDefaultAllocator();
-        JPH::Trace = PhysicsTrace;
-        JPH_IF_ENABLE_ASSERTS(JPH::AssertFailed = PhysicsAssert;)
-        JPH::Factory::sInstance = new JPH::Factory();
-        JPH::RegisterTypes();
-    }
-    ~JoltRegistration()
-    {
-        JPH::UnregisterTypes();
-        delete JPH::Factory::sInstance;
-        JPH::Factory::sInstance = nullptr;
-    }
-};
-std::shared_ptr<JoltRegistration> RegisterJolt()
-{
-    static const auto registration = std::make_shared<JoltRegistration>();
-    return registration;
-}
 JPH::Vec3 PhysicsVector(const nlohmann::json& node, const char* field, float factor = 0.01f)
 {
     const Eigen::Vector3f value = ScriptVector(node, field) * factor;
@@ -169,7 +125,7 @@ struct ScriptPhysicsWorld::Impl
         uint32_t layer = 0, mask = 65535;
         std::string compoundSignature;
     };
-    std::shared_ptr<JoltRegistration> registration = RegisterJolt();
+    // 与地形碰撞共享同一份进程级 Jolt 注册，避免二次 RegisterTypes()。
     JPH::BroadPhaseLayerInterfaceTable layers{2, 2};
     JPH::ObjectLayerPairFilterTable pairs{2};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broadphaseFilter;
@@ -192,6 +148,7 @@ struct ScriptPhysicsWorld::Impl
 
     Impl()
     {
+        Physics::EnsureJoltRegistered();
         layers.MapObjectToBroadPhaseLayer(StaticLayer, JPH::BroadPhaseLayer(0));
         layers.MapObjectToBroadPhaseLayer(MovingLayer, JPH::BroadPhaseLayer(1));
         pairs.EnableCollision(StaticLayer, MovingLayer);

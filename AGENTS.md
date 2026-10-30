@@ -58,6 +58,9 @@ Current implemented areas include:
 - Material and material instance loading
 - BC7/BC5 block-compressed textures from DDS/KTX2 (offline mip chains; no runtime BC mip
   generation or Basis/zstd supercompression); see `documents/contracts/texture-asset-json-v1.md`
+- Standalone Jolt heightfield terrain collision module (`source/terrain/terrainCollision.*`):
+  creates static bodies in an existing PhysicsSystem from a `TerrainBuildPlan`; scene `terrain`
+  objects do **not** create collision automatically yet
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
@@ -337,7 +340,11 @@ temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` m
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no
 low-resolution fallback/fade, camera prefetch, LOD, skirts, terrain chunk unloading, terrain
-collision/heightfield physics, terrain editing. `TerrainLayerPageManager`
+editing, or World-level terrain collision wiring. `source/terrain/terrainCollision.*` can
+already turn a `TerrainBuildPlan` plus placement into a static Jolt `HeightFieldShape` body
+in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression, Y*X*Z degrees rotation);
+`source/physics/joltRegistration.*` is the shared process-wide Jolt registration, and
+`TerrainCollisionWorld` is only a test/offline fixture. `TerrainLayerPageManager`
 (`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
 RGBA32F page table per mip (width capped at 4096), and three 4096²/slice `sampler2DArray`
 atlases (no mip) are created World-locally and the per-layer tail pages are copied GPU→GPU
