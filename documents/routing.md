@@ -164,7 +164,9 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   `source/terrain/terrainLayerVisibility.*` 把覆盖页 feedback 推导成
   “可见层 → mip → 该 mip 全部页”，逐帧限量请求/上传/淘汰；mode 1 不再加载期
   全量预取（`terrainlayer preload` 只作对照）。默认视觉路径仍与 L1/L2 逐字节一致。
-  当前没有低分辨率 fallback/淡入、相机/视锥预取、LOD/skirt、地形碰撞/编辑。行为见
+  CPU 侧已有几何 LOD + skirt 生成与 `TerrainLodDistancesCm` / `TerrainSelectLodLevel`
+  距离选择接口，但 renderer 运行时选择未接、出图仍只有 LOD0。当前没有低分辨率
+  fallback/淡入、相机/视锥预取、地形碰撞/编辑。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
   `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
 

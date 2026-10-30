@@ -306,6 +306,318 @@ TEST(TerrainMeshBuilder, ChunkEdgeNormalsStayContinuous)
     EXPECT_TRUE(leftEdge.normal.isApprox(rightEdge.normal, 1.0e-5f));
 }
 
+TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
+{
+    // 线性坡面让中心差分法线有闭式解，便于逐值钉住 LOD0 语义。
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
+    {
+        // LOD0 没有 skirt：3×3 顶点、4 个格子各 2 个三角形。
+        EXPECT_EQ(chunk.lodLevel, 0u);
+        EXPECT_EQ(chunk.vertices.size(), 9u);
+        EXPECT_EQ(chunk.indices.size(), 24u);
+    }
+
+    // 索引顺序必须仍是历史循环的 a,b,c / b,d,c。
+    const std::vector<uint32_t> expectedIndices = {
+        0, 1, 3, 1, 4, 3,
+        1, 2, 4, 2, 5, 4,
+        3, 4, 6, 4, 7, 6,
+        4, 5, 7, 5, 8, 7};
+    EXPECT_EQ(chunks.front().indices, expectedIndices);
+
+    const VL::TerrainMeshChunk& first = chunks.front();
+    EXPECT_TRUE(first.vertices[0].position.isApprox(
+        Eigen::Vector3f(-500.0f, 0.0f, -500.0f)));
+    EXPECT_TRUE(first.vertices[1].position.isApprox(
+        Eigen::Vector3f(-250.0f, 10.0f, -500.0f)));
+    EXPECT_TRUE(first.vertices[3].position.isApprox(
+        Eigen::Vector3f(-500.0f, 10.0f, -250.0f)));
+    EXPECT_TRUE(first.vertices[4].position.isApprox(
+        Eigen::Vector3f(-250.0f, 20.0f, -250.0f)));
+    // 中心顶点（u=v=0.25）避开边界钳制，两个方向都有梯度。
+    EXPECT_TRUE(first.vertices[4].normal.isApprox(
+        Eigen::Vector3f(-0.04f, 1.0f, -0.04f).normalized(), 1.0e-5f))
+        << "actual=" << first.vertices[4].normal.transpose();
+    EXPECT_TRUE(first.vertices[3].texCoord.isApprox(
+        Eigen::Vector2f(0.0f, 0.25f)));
+    // 没有任何顶点被 skirt 拉到地表以下。
+    EXPECT_FLOAT_EQ(first.boundsMin.y(), 0.0f);
+}
+
+TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendSkirtRing)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 8;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(lod0.size(), 1u);
+    EXPECT_EQ(lod0.front().vertices.size(), 81u);
+
+    // lod1: 4×4 格子 + 4*4 个 skirt；lod2: 2×2；lod3: 1×1。
+    const uint32_t expectedQuads[] = {0u, 4u, 2u, 1u};
+    for (uint32_t lod = 1; lod <= 3; ++lod)
+    {
+        const uint32_t quads = expectedQuads[lod];
+        const uint32_t baseVertices = (quads + 1) * (quads + 1);
+        const uint32_t skirtVertices = quads * 4;
+        const std::vector<VL::TerrainMeshChunk> chunks =
+            VL::TerrainMeshBuilder::BuildChunks(plan, lod);
+        ASSERT_EQ(chunks.size(), 1u);
+        const VL::TerrainMeshChunk& chunk = chunks.front();
+        EXPECT_EQ(chunk.lodLevel, lod);
+        EXPECT_EQ(chunk.vertices.size(), baseVertices + skirtVertices);
+        EXPECT_EQ(
+            chunk.indices.size(),
+            static_cast<size_t>(quads) * quads * 6 +
+                static_cast<size_t>(skirtVertices) * 6);
+        for (uint32_t index : chunk.indices)
+            EXPECT_LT(index, chunk.vertices.size());
+
+        // 每个 LOD 的基础顶点都落在 LOD0 的同名网格点上（步长 2^lod），
+        // 位置与法线一致 —— 这是“法线连续、无 T 形接缝”的 CPU 证据。
+        const uint32_t lodStep = 1u << lod;
+        const uint32_t lod0Row = (8 + 1);
+        for (uint32_t localZ = 0; localZ <= quads; ++localZ)
+        {
+            for (uint32_t localX = 0; localX <= quads; ++localX)
+            {
+                const uint32_t lodVertexIndex = localZ * (quads + 1) + localX;
+                const uint32_t lod0VertexIndex =
+                    (localZ * lodStep) * lod0Row + localX * lodStep;
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].position.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].position, 1.0e-4f));
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].normal.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].normal, 1.0e-5f));
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].texCoord.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].texCoord, 1.0e-7f));
+            }
+        }
+    }
+}
+
+TEST(TerrainMeshBuilder, SkirtExtendsBelowAndBoundsCoverIt)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    const uint32_t quads = 2;
+    const uint32_t baseVertices = (quads + 1) * (quads + 1);
+    ASSERT_EQ(chunk.vertices.size(), baseVertices + quads * 4);
+
+    const float skirtDepthCm = VL::TerrainChunkSkirtDepthCm(plan.desc);
+    EXPECT_FLOAT_EQ(skirtDepthCm, 10.0f);
+
+    Eigen::Vector3f baseMin = chunk.vertices[0].position;
+    Eigen::Vector3f baseMax = baseMin;
+    for (uint32_t index = 1; index < baseVertices; ++index)
+    {
+        baseMin = baseMin.cwiseMin(chunk.vertices[index].position);
+        baseMax = baseMax.cwiseMax(chunk.vertices[index].position);
+    }
+
+    for (uint32_t index = baseVertices; index < chunk.vertices.size(); ++index)
+    {
+        const Vertex& skirt = chunk.vertices[index];
+        // skirt 只在竖直方向下移；X/Z 与边界顶点对齐，UV 沿用边界顶点。
+        EXPECT_TRUE(
+            skirt.position.x() >= baseMin.x() - 1.0e-4f &&
+            skirt.position.x() <= baseMax.x() + 1.0e-4f);
+        EXPECT_TRUE(
+            skirt.position.z() >= baseMin.z() - 1.0e-4f &&
+            skirt.position.z() <= baseMax.z() + 1.0e-4f);
+        bool matched = false;
+        for (uint32_t baseIndex = 0; baseIndex < baseVertices; ++baseIndex)
+        {
+            const Vertex& base = chunk.vertices[baseIndex];
+            if (std::abs(base.position.x() - skirt.position.x()) < 1.0e-4f &&
+                std::abs(base.position.z() - skirt.position.z()) < 1.0e-4f)
+            {
+                EXPECT_FLOAT_EQ(skirt.position.y(), base.position.y() - skirtDepthCm);
+                EXPECT_TRUE(skirt.normal.isApprox(base.normal));
+                matched = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(matched);
+    }
+
+    // AABB 必须覆盖 skirt，否则视锥/阴影裁剪会切掉裙边。
+    float skirtMinY = baseMin.y();
+    for (uint32_t index = baseVertices; index < chunk.vertices.size(); ++index)
+        skirtMinY = std::min(skirtMinY, chunk.vertices[index].position.y());
+    EXPECT_FLOAT_EQ(chunk.boundsMin.y(), baseMin.y() - skirtDepthCm);
+    EXPECT_FLOAT_EQ(chunk.boundsMin.y(), skirtMinY);
+    EXPECT_FLOAT_EQ(chunk.boundsMin.x(), baseMin.x());
+    EXPECT_FLOAT_EQ(chunk.boundsMax.x(), baseMax.x());
+    EXPECT_FLOAT_EQ(chunk.boundsMin.z(), baseMin.z());
+    EXPECT_FLOAT_EQ(chunk.boundsMax.z(), baseMax.z());
+    EXPECT_FLOAT_EQ(chunk.boundsMax.y(), baseMax.y());
+}
+
+TEST(TerrainMeshBuilder, SkirtTrianglesFaceOutwardForBackCulling)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    const uint32_t quads = 2;
+    const uint32_t baseVertices = (quads + 1) * (quads + 1);
+    const size_t baseTriangleIndices =
+        static_cast<size_t>(quads) * quads * 6;
+    ASSERT_EQ(chunk.indices.size(), baseTriangleIndices + quads * 4 * 6);
+
+    const Eigen::Vector3f center(
+        0.5f * (chunk.boundsMin.x() + chunk.boundsMax.x()),
+        0.0f,
+        0.5f * (chunk.boundsMin.z() + chunk.boundsMax.z()));
+    for (size_t index = baseTriangleIndices; index < chunk.indices.size(); index += 3)
+    {
+        const Eigen::Vector3f& a = chunk.vertices[chunk.indices[index]].position;
+        const Eigen::Vector3f& b = chunk.vertices[chunk.indices[index + 1]].position;
+        const Eigen::Vector3f& c = chunk.vertices[chunk.indices[index + 2]].position;
+        const Eigen::Vector3f normal = (b - a).cross(c - a);
+        ASSERT_GT(normal.norm(), 1.0e-6f);
+        const Eigen::Vector3f centroid = (a + b + c) / 3.0f;
+        // 引擎 front face 为顺时针；地形自身的几何法线朝下仍从上方可见，
+        // 说明“可见侧”对应几何法线背离观察者。因此裙边朝向地形内部的
+        // 法线才是外侧正面，Back culling 不会把裙边剔掉。
+        const Eigen::Vector3f inward(center.x() - centroid.x(), 0.0f,
+            center.z() - centroid.z());
+        EXPECT_GT(normal.x() * inward.x() + normal.z() * inward.z(), 0.0f);
+        EXPECT_NEAR(normal.y(), 0.0f, 1.0e-4f);
+    }
+    EXPECT_EQ(chunk.vertices.size(), baseVertices + quads * 4);
+}
+
+TEST(TerrainMeshBuilder, CoarseLodNormalsMatchAcrossChunkBoundary)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 4u);
+    // chunks 顺序 (0,0),(1,0),(0,1),(1,1)；lod1 每 chunk 3×3 基础顶点，
+    // 右边界与右邻居的左边界采样同一世界位置。
+    constexpr uint32_t row = 3;
+    for (uint32_t localZ = 0; localZ < row; ++localZ)
+    {
+        const Vertex& leftEdge = chunks[0].vertices[localZ * row + (row - 1)];
+        const Vertex& rightEdge = chunks[1].vertices[localZ * row];
+        EXPECT_TRUE(leftEdge.position.isApprox(rightEdge.position, 1.0e-4f));
+        EXPECT_TRUE(leftEdge.normal.isApprox(rightEdge.normal, 1.0e-5f));
+    }
+}
+
+TEST(TerrainMeshBuilder, RejectsLodStepLargerThanChunkQuads)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+    // lod2 的步长是 4，chunkQuads=2 无法整除。
+    EXPECT_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 2), std::exception);
+    EXPECT_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 4), std::exception);
+    EXPECT_NO_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 1));
+}
+
+TEST(TerrainLod, SelectsLevelAtAscendingThresholds)
+{
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+    EXPECT_EQ(VL::TerrainSelectLodLevel(-10.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(0.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(999.0f, distances), 0u);
+    // 到达阈值即切到下一级（闭区间左端属于更粗一级）。
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1000.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1999.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(2000.0f, distances), 2u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1.0e9f, distances), 2u);
+
+    const std::vector<float> none;
+    EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, none), 0u);
+}
+
+TEST(TerrainLod, DerivesDefaultDistancesFromTerrainSize)
+{
+    VL::TerrainAssetDesc desc = MakeDesc();
+    desc.size = Eigen::Vector2f(1000.0f, 2000.0f);
+
+    // 默认只有 LOD0 -> 空阈值表。
+    EXPECT_TRUE(VL::TerrainLodDistancesCm(desc).empty());
+
+    desc.lodLevels = 3;
+    const std::vector<float> derived = VL::TerrainLodDistancesCm(desc);
+    ASSERT_EQ(derived.size(), 2u);
+    EXPECT_FLOAT_EQ(derived[0], 2000.0f);
+    EXPECT_FLOAT_EQ(derived[1], 4000.0f);
+
+    // 显式距离优先于推导值。
+    desc.lodDistancesCm = {1234.0f, 5678.0f};
+    EXPECT_EQ(VL::TerrainLodDistancesCm(desc), desc.lodDistancesCm);
+}
+
+TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 8;
+
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1));
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 2));
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1));
+    // 默认参数仍是 LOD0。
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0));
+
+    // lodDistances 只影响运行时选择，不得改变单级网格的资源 key。
+    VL::TerrainBuildPlan retuned = plan;
+    retuned.desc.lodLevels = 3;
+    retuned.desc.lodDistancesCm = {100.0f, 200.0f};
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(retuned, 0, 0, 1));
+}
+
 TEST(TerrainAssetTypes, OnlyLayeredTerrainUsesVirtualPages)
 {
     VL::TerrainBuildPlan plan = MakePlan(
@@ -1642,6 +1954,85 @@ TEST(TerrainValidator, RejectsInvalidOptionalLayerCatalogFields)
         asset, "TR_terrain_tests.json"), std::exception);
 }
 
+TEST(TerrainValidator, AcceptsLodLevelsAndAscendingDistances)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = {500.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 4 级需要 chunkQuads 能被最粗步长 8 整除。
+    asset = BuildTerrainJson();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 8;
+    asset["lodLevels"] = 4;
+    asset["lodDistances"] = {100.0, 200.0, 300.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 只有 LOD0 时允许显式空距离表。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["lodDistances"] = nlohmann::json::array();
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, RejectsInvalidLodFields)
+{
+    // 级数必须在 1..4。
+    for (const int levels : {0, 5})
+    {
+        nlohmann::json asset = BuildTerrainJson();
+        asset["lodLevels"] = levels;
+        EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+            asset, "TR_terrain_tests.json"), std::exception);
+    }
+
+    // 距离表长度必须严格等于 lodLevels-1。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = nlohmann::json::array();
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["lodDistances"] = {500.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 非升序、非正数、非有限数都必须拒绝。
+    asset = BuildTerrainJson();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 8;
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {200.0, 100.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = {200.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = {0.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = nlohmann::json::array();
+    asset["lodDistances"].push_back("near");
+    asset["lodDistances"].push_back(200.0);
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // chunkQuads 不能被最粗步长整除时必须在预检期失败，而不是等到烘焙网格。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 3;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
 TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
 {
     HostImage heightmap;
@@ -1705,6 +2096,84 @@ TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
     EXPECT_EQ(plan.heightmap->width, 2u);
     EXPECT_EQ(plan.heightmap->height, 2u);
     EXPECT_EQ(plan.heightmap->format, HostImage::PixelFormat::RGBA32_FLOAT);
+}
+
+TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)
+{
+    HostImage heightmap;
+    heightmap.width = 2;
+    heightmap.height = 2;
+    heightmap.channels = 4;
+    // EXR 走 half 通道；0x3800 = 0.5。
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = heightmap.width * heightmap.GetPixelSize();
+    heightmap.data.resize(
+        static_cast<size_t>(heightmap.rowStrideBytes) * heightmap.height);
+    uint16_t* halfPixels = reinterpret_cast<uint16_t*>(heightmap.data.data());
+    for (size_t index = 0; index < heightmap.data.size() / sizeof(uint16_t); ++index)
+        halfPixels[index] = 0x3800;
+
+    const auto heightmapPath = directory / "heightmap_lod.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto materialPath = directory / "MI_terrain_lod.json";
+    std::ofstream materialStream(materialPath);
+    materialStream << nlohmann::json({
+        {"name", "MI_terrain_lod"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    materialStream.close();
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = materialPath.string();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 4;
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {1234.5, 5678.0};
+    const auto terrainPath = directory / "TR_terrain_lod.json";
+    std::ofstream terrainStream(terrainPath);
+    terrainStream << asset.dump(2);
+    terrainStream.close();
+
+    const VL::TerrainBuildPlan plan =
+        VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    EXPECT_EQ(plan.desc.lodLevels, 3u);
+    ASSERT_EQ(plan.desc.lodDistancesCm.size(), 2u);
+    EXPECT_FLOAT_EQ(plan.desc.lodDistancesCm[0], 1234.5f);
+    EXPECT_FLOAT_EQ(plan.desc.lodDistancesCm[1], 5678.0f);
+
+    // 旧 TR 不写 LOD 字段：级数 1、距离表为空，默认推导也为空。
+    asset.erase("lodLevels");
+    asset.erase("lodDistances");
+    const auto legacyPath = directory / "TR_terrain_lod_legacy.json";
+    std::ofstream legacyStream(legacyPath);
+    legacyStream << asset.dump(2);
+    legacyStream.close();
+    const VL::TerrainBuildPlan legacy =
+        VL::TerrainAssetLoader::Prepare(legacyPath.string());
+    EXPECT_EQ(legacy.desc.lodLevels, 1u);
+    EXPECT_TRUE(legacy.desc.lodDistancesCm.empty());
+    EXPECT_TRUE(VL::TerrainLodDistancesCm(legacy.desc).empty());
+
+    // 只写级数时按地形最长边推导：1000cm -> {1000, 2000}。
+    asset["lodLevels"] = 3;
+    const auto derivedPath = directory / "TR_terrain_lod_derived.json";
+    std::ofstream derivedStream(derivedPath);
+    derivedStream << asset.dump(2);
+    derivedStream.close();
+    const VL::TerrainBuildPlan derived =
+        VL::TerrainAssetLoader::Prepare(derivedPath.string());
+    const std::vector<float> distances = VL::TerrainLodDistancesCm(derived.desc);
+    ASSERT_EQ(distances.size(), 2u);
+    EXPECT_FLOAT_EQ(distances[0], 1000.0f);
+    EXPECT_FLOAT_EQ(distances[1], 2000.0f);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(999.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1500.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, distances), 2u);
 }
 
 TEST(TerrainSceneSchema, AcceptsTerrainSceneObject)

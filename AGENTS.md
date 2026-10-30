@@ -336,8 +336,11 @@ change consumed at frame start; lowering it only evicts pages outside the safety
 temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no
-low-resolution fallback/fade, camera prefetch, LOD, skirts, terrain chunk unloading, terrain
-collision/heightfield physics, terrain editing. `TerrainLayerPageManager`
+low-resolution fallback/fade, camera prefetch, terrain chunk unloading, terrain
+collision/heightfield physics, terrain editing. CPU geometry LOD/skirt generation exists
+(`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`, TR `lodLevels`/`lodDistances`, see
+`documents/contracts/terrain.md`), but runtime LOD selection is not wired: the renderer still
+generates and binds LOD0 only. `TerrainLayerPageManager`
 (`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
 RGBA32F page table per mip (width capped at 4096), and three 4096²/slice `sampler2DArray`
 atlases (no mip) are created World-locally and the per-layer tail pages are copied GPU→GPU

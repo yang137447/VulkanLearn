@@ -138,7 +138,8 @@ SC_*.json (terrain object)
 - 切线：`T=(1,0,0)`、`B=(0,0,1)`、handedness `+1`；坡面切向后置。
 - UV：整块 `[0,1]`；shader 里乘 `u_uvScale`。
 - bounds：每 chunk 从顶点算 AABB，供 CPU 视锥剔除和阴影裁剪。
-- 不做 LOD、不做 skirt。
+- M2 当时的范围不含 LOD/skirt；2026-10-30 已补 CPU 侧 LOD/skirt 原型（见 §6 状态记录），
+  但运行时选择仍未接入，出图仍只有 LOD0。
 
 ### 3.3 材质
 
@@ -400,6 +401,16 @@ layer table 共享/数组层数校验已落地；GPU 侧新增 dirty page 子区
 layerless 地形误驱动 feedback、epoch-aware LRU 不看 feedback recency、降预算绕过安全窗、
 quarantine 计数惰性、页范围末端采到邻居页等问题。当前仍未接几何 LOD、几何 streaming、
 低分辨率 fallback/淡入、碰撞/编辑与完整三张层纹理 VT。
+
+2026-10-30 CPU 几何 LOD/skirt 原型：TR 新增可选 `lodLevels`（1..4，默认 1）与
+`lodDistances`（cm，严格升序，长度 `lodLevels-1`，缺省按地形最长边推导）。
+`TerrainMeshBuilder::BuildChunks(plan, lodLevel)` 按步长 `2^lod` 合并格子，LOD0 顶点/索引
+逐字节不变；`lod>=1` 在边界环追加竖直下移的 skirt（`max(1cm, 10%|heightScale|)`），
+AABB 覆盖裙边，chunk key 含 LOD 与步长但不含 `lodDistances`。`TerrainLodDistancesCm`
+与 `TerrainSelectLodLevel` 提供纯 CPU 的距离→级别选择。**运行时选择尚未接入**：
+`RendererTerrainLoader` 仍只生成/绑定 LOD0，所以 B32/M3/BC7 截图逐字节不变。
+下一步是选 LOD 的接入点（按 chunk 距离、与阴影 pass 共享选择）以及 LOD 级 chunk
+资源的缓存/显存预算。
 
 总计约 **2–3 周**（按本仓库的测试/文档标准）。
 

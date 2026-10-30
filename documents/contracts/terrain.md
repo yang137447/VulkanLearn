@@ -1,7 +1,8 @@
 # Terrain Runtime
 
-> 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；LOD、地形
-> chunk 卸载、低分辨率 fallback/淡入、碰撞与地形编辑等未来能力不在这里承诺。
+> 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为。CPU 几何
+> LOD 与 skirt 已能生成并可测，但 renderer 的运行时 LOD 选择尚未接入，场景里仍只
+> 出现 LOD0；地形 chunk 卸载、低分辨率 fallback/淡入、碰撞与地形编辑不在这里承诺。
 
 ## 数据流
 
@@ -13,7 +14,7 @@ SC_*.json (type: "terrain")
        -> 高度图解码为 HostImage
   -> RendererResourceLoadCoordinator
   -> RendererTerrainLoader
-       -> TerrainMeshBuilder::BuildChunks
+       -> TerrainMeshBuilder::BuildChunks(plan, lodLevel)
        -> RenderableObject / MeshObjectBuildPlan
   -> WorldBuilder -> World mesh objects -> geometry pass
   -> terrainFeedback pass (可见页反馈，驱动驻留) -> frame-fenced readback ring
@@ -50,6 +51,13 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   退化为 layer 0。几何高度仍是 `sample*heightScale+heightOffset`，不受该钳制影响。
 - `gridResolution` 是总 quad 数，`chunkQuads` 是每块 quad 数；两者必须为正整数，
   `chunkQuads <= gridResolution` 且 `gridResolution % chunkQuads == 0`。
+- `lodLevels`（可选，1..4，默认 1）声明该 TR 允许生成的几何 LOD 级数；1 表示只有
+  LOD0，与旧资产完全一致。第 n 级把每个方向的 quad 数除以 `2^n`，因此
+  `chunkQuads` 必须能被最粗一级的步长 `2^(lodLevels-1)` 整除，否则预检失败。
+- `lodDistances`（可选）是 LOD 切换距离，单位 cm，严格升序，长度必须等于
+  `lodLevels-1`（每个值表示“到达该距离改用下一级”）；只有 LOD0 时只允许空数组。
+  不写时由 `TerrainLodDistancesCm` 按地形最长边推导为 1×、2×…；距离表只服务
+  运行时选择，不改变任何一级网格的内容。
 - `pageOrigin`（可选，默认 `[0,0]`）和 `pageTilesPerSide`（可选，默认 8）决定该地形
   在全局 32×32 page table 中占用的 tile 区域；`pageOrigin + pageTilesPerSide <= 32`。
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
@@ -79,14 +87,43 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 
 ## 网格
 
-- 每块有 `(chunkQuads+1)²` 个顶点、`chunkQuads²×2` 个三角形、uint32 索引。
+- 每块有 `(chunkQuads+1)²` 个顶点、`chunkQuads²×2` 个三角形、uint32 索引（LOD0）。
 - 顶点 UV 是整块地形的 `[0,1]` 全局坐标，留给材质乘 `uvScale`；切线为 `(1,0,0,1)`。
 - 法线用全局高度图中心差分：`n = normalize(-dh/dx, 1, -dh/dz)`。相邻 chunk 共享的
   边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。
 - 每个 chunk 计算局部 AABB，交给 World/渲染快照做视锥与阴影裁剪。
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
-- 没有 LOD、没有 skirt、没有地形 chunk 卸载；所有几何 chunk 在加载期一次性生成。
-  地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
+- 所有几何 chunk 仍在加载期一次性生成；地表 ID/权重 atlas 的页内容已按需流式
+  驻留，top-4 混合已实现，但几何本身不流式、也没有 chunk 卸载。
+
+## CPU 几何 LOD 与 skirt
+
+`TerrainMeshBuilder::BuildChunks(plan, lodLevel)` 能为同一 chunk 生成 0..`lodLevels-1`
+级网格；renderer 的运行时选择尚未接入，当前只调用默认的 `lodLevel=0`。
+
+- 第 `lod` 级的合并步长是 `2^lod`：一个 chunk 变成
+  `quadsPerChunk = chunkQuads / 2^lod` 个格子，基础顶点
+  `(quadsPerChunk+1)²`、三角形 `quadsPerChunk²×2`。
+- 基础顶点的世界位置、`texCoord`/`texCoord1`、法线公式与 LOD0 相同，只是采样点
+  落在每 `2^lod` 个 LOD0 网格点上；中心差分的采样间距同步乘 `2^lod`，因此相邻
+  chunk 的共享边界仍用同一全局采样，不会出现法线接缝。
+- LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
+- `lod >= 1` 的 chunk 在边界环（四条边、每个角点一次）追加一圈 skirt：位置沿
+  -Y 下移 `max(1cm, 10% × |heightScale|)`，法线/UV/`texCoord1` 沿用边界顶点。
+  skirt 顶点排在基础顶点之后，基础顶点与索引完全不动。深度只取决于 TR 的
+  heightScale，因此各级一致、相邻 LOD 能互相覆盖。
+- chunk 的 AABB 覆盖 skirt 的最低点，视锥/阴影裁剪不会切掉裙边。
+- skirt 三角形按引擎的顺时针 front face 约定朝地形内侧写绕序；从上向下看地形
+  自身的几何法线朝下仍可见，说明可见侧对应几何法线背离观察者，因此裙边必须
+  “几何法线朝内”才是外侧正面，不会被 Back culling 剔除。
+- 只有更粗的 LOD 需要裙边：LOD0 与 LOD1 的裂缝由更粗一侧的裙边遮挡。
+- chunk 资源 key 含 `lod` 与合并步长；`lodDistances` 不影响单级网格，因此不进 key。
+- 运行时选择接口（纯 CPU、无副作用）：
+  - `TerrainLodDistancesCm(desc)`：显式距离表，或按地形最长边推导 `{1×, 2×, …}`；
+  - `TerrainSelectLodLevel(distanceCm, distances)`：达到第 i 个阈值返回 `i+1`，
+    超过最后一个阈值用最粗一级，负距离按 0 处理。
+  真正接入时应在 loader/帧更新里按 chunk 到相机的距离选择并分别缓存各级 chunk，
+  而不是在 `BuildChunks` 内部隐式决定。
 
 ## 场景对象
 
@@ -538,6 +575,12 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 ## 验证
 
 - 纯 CPU：`terrain_tests`（采样、chunk 计数、法线、chunk 边界、TR 校验、加载器）。
+- CPU LOD/skirt：`terrain_tests` 钉住 LOD0 的 3×3 顶点/24 索引与索引顺序（无 skirt）、
+  LOD1..3 的格子数与 skirt 环顶点数、基础顶点在 LOD0 同名网格点的位置/法线/UV、
+  skirt 的竖直下移与 AABB 覆盖、skirt 三角形朝内绕序、粗 LOD 跨 chunk 边界法线连续、
+  `chunkQuads` 无法被步长整除与 `lodLevel` 越界时抛错、`lodLevels`/`lodDistances`
+  的校验与加载器往返、默认距离按地形最长边推导、距离→级别边界（含负距离）、
+  chunk key 区分 LOD 且不受 `lodDistances` 影响。
 - 运行时：`Generated/Validation/TerrainSmoke/SC_terrain_smoke.json` 加载 64×64 quad、
   2×2 chunk 地形并截图；见 [testing](testing.md)。
 - Phase B/C1 32 层数组 + 256 层上限：`Generated/Validation/TerrainB32/SC_terrain_b32.json`，

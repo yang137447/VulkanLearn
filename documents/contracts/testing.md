@@ -34,7 +34,7 @@
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `texture_asset_tests` | 58 | 单图字段/方向合同；CPU 数组的逐层顺序/寻址、行跨度、元数据与完整像素校验、逐源解码/翻转、混合格式拒绝、数组单图导出拒绝；`textureArray` 描述符的源顺序/cache key、`source` 与 `sources` 互斥及空源拒绝；BC7/BC5 的 DDS/KTX2 容器、离线 mip 链、层序重排与 GPU 上传 |
 | `material_schema_tests` | 11 | 材质定义默认值/稀疏 override、参数通道与 std140 布局、`color→vec4`、`sampler2DArray` schema/描述符类型及非法贴图类型拒绝、`M_terrain` 旧三数组 + L3 catalog/页表/atlas 共 15 个 binding 与默认参数、离线模型身份 |
-| `terrain_tests` | 125 | 高度图双线性采样/缩放偏移/非有限样本拒绝、chunk 顶点/索引计数与 AABB、平地法线、坡度法线、chunk 边界法线连续、网格最后列/行半 texel 内缩、TR 字段/范围/层数/pageOrigin 校验、256 层 LUT 打包与层定义一致性、tile 候选层、RGBA8 ID/权重图与 global page table/atlas 寻址、跨地形 page 累积/重叠拒绝、per-tile page 烘焙/request-hit-miss/LRU/priority/refcount/eviction、fallback 仅保留物理槽位/虚拟 (31,31) 普通页、虚拟页与物理槽位分离/槽位复用/容量上限、dirty page/子区域上传描述与提交前重试、batch Build/Commit/Abort 的 pin 计数与 revision 保留、重叠批次独立 pin、maxAtlasPages 一致性截断、epoch 安全窗/新页起算/pin/revision 幂等、`RequestPageAtEpoch` 安全窗与旧 `RequestPage` LRU 隔离、feedback 命中 recency/epoch-aware LRU、动态 `max(2, framesInFlight+1)` 安全窗、按 epoch 降预算与暂时超预算、quarantine 到期主动回收/分配时复用/fallback 不回收、capacity 1/8 压测终止、layerTable 与 layers 双条件 eligibility 纯函数、layerless 与分层地形同 World 不污染 feedback、32×32 单地形注册与 preload deferred、同一 TR 双 placement 的独立页与淘汰、placementId 回退 assetPath、chunk key 含 placementId、heightScale=0/负值归一化、EXR 高度图加载、scene `terrain` 与 page 区域覆盖 schema、feedback texel 编解码/frameTag 回绕/无效与过期 texel 丢弃/distinct+miss 页聚合、ring 未完成不消费/完成后只消费一次/槽位复用/tag 范围、`ApplyFeedback` 命中/miss 请求/未注册页跳过/每帧上限与 deferred 轮转/离开视野的 pending 清理、上传批限流收敛、preload=false 空 batch 与初始集合、MI 预览候选保留 active `TerrainStreamingState`；L1 新增 256×4 catalog 行布局/未使用层全零/`pageTableBase` 与 `avgColor`/`flags` 往返、TR 可选层字段（sourceResolution/avgColor/sourceSet/flags）校验与加载器往返、512/1K/2K 的 mip 页数（21/85/341）与 256 层 2K 87,296 项、per-mip/扁平虚拟页公式、512/1K/2K 混用时的统一 stride 无别名（穷举 447 页）、layer/mip/page 越界拒绝、物理页分配/fallback 保留/quarantine 复用、安全窗内外淘汰、priority/lastTouched LRU、refcount/pin 阻止淘汰、重叠批次独立 pin、revision 变化后 Commit 拒绝、上传批截断续传、按 epoch 降预算与回收；L2 新增 4096 宽上限/混合分辨率页表布局、页表 texel 编码/无效项全零、淘汰失效项与 Commit 清理、Abort 保留失效项、maxPages 截断时页表延后、槽位复用时失效项+新映射同批输出、每个 mip 的虚拟页→texel 越界检查；L3 新增 maxMip/pagesPerSide、mip round/clamp、页表 texel 总数/256 = CPU stride、虚拟页号、页表 texel 坐标、atlas slice/tile/半 texel UV、repeat u=1.0/负 UV、无效页表项全零、catalog sourceResolution 与真实源边长一致性；L4a 新增覆盖页 priority→mip 阶梯、top-4→可见层、每层请求该 mip 全部页、未注册页跳过、跨覆盖页去重、每帧预算与 deferred 收敛、层/源 mip 钳制、layerCount 越界跳过、常驻页不重建、离开视野后 idle 淘汰 |
+| `terrain_tests` | 137 | 高度图双线性采样/缩放偏移/非有限样本拒绝、chunk 顶点/索引计数与 AABB、平地法线、坡度法线、chunk 边界法线连续、网格最后列/行半 texel 内缩、CPU LOD0 逐值不变/LOD1..3 格子数与 skirt 环/skirt 竖直下移与 AABB 覆盖/裙边朝内绕序/粗 LOD 跨 chunk 法线连续/`lodLevels`+`lodDistances` 校验与默认推导/距离→级别边界/chunk key 含 LOD 且不含距离表、TR 字段/范围/层数/pageOrigin 校验、256 层 LUT 打包与层定义一致性、tile 候选层、RGBA8 ID/权重图与 global page table/atlas 寻址、跨地形 page 累积/重叠拒绝、per-tile page 烘焙/request-hit-miss/LRU/priority/refcount/eviction、fallback 仅保留物理槽位/虚拟 (31,31) 普通页、虚拟页与物理槽位分离/槽位复用/容量上限、dirty page/子区域上传描述与提交前重试、batch Build/Commit/Abort 的 pin 计数与 revision 保留、重叠批次独立 pin、maxAtlasPages 一致性截断、epoch 安全窗/新页起算/pin/revision 幂等、`RequestPageAtEpoch` 安全窗与旧 `RequestPage` LRU 隔离、feedback 命中 recency/epoch-aware LRU、动态 `max(2, framesInFlight+1)` 安全窗、按 epoch 降预算与暂时超预算、quarantine 到期主动回收/分配时复用/fallback 不回收、capacity 1/8 压测终止、layerTable 与 layers 双条件 eligibility 纯函数、layerless 与分层地形同 World 不污染 feedback、32×32 单地形注册与 preload deferred、同一 TR 双 placement 的独立页与淘汰、placementId 回退 assetPath、chunk key 含 placementId、heightScale=0/负值归一化、EXR 高度图加载、scene `terrain` 与 page 区域覆盖 schema、feedback texel 编解码/frameTag 回绕/无效与过期 texel 丢弃/distinct+miss 页聚合、ring 未完成不消费/完成后只消费一次/槽位复用/tag 范围、`ApplyFeedback` 命中/miss 请求/未注册页跳过/每帧上限与 deferred 轮转/离开视野的 pending 清理、上传批限流收敛、preload=false 空 batch 与初始集合、MI 预览候选保留 active `TerrainStreamingState`；L1 新增 256×4 catalog 行布局/未使用层全零/`pageTableBase` 与 `avgColor`/`flags` 往返、TR 可选层字段（sourceResolution/avgColor/sourceSet/flags）校验与加载器往返、512/1K/2K 的 mip 页数（21/85/341）与 256 层 2K 87,296 项、per-mip/扁平虚拟页公式、512/1K/2K 混用时的统一 stride 无别名（穷举 447 页）、layer/mip/page 越界拒绝、物理页分配/fallback 保留/quarantine 复用、安全窗内外淘汰、priority/lastTouched LRU、refcount/pin 阻止淘汰、重叠批次独立 pin、revision 变化后 Commit 拒绝、上传批截断续传、按 epoch 降预算与回收；L2 新增 4096 宽上限/混合分辨率页表布局、页表 texel 编码/无效项全零、淘汰失效项与 Commit 清理、Abort 保留失效项、maxPages 截断时页表延后、槽位复用时失效项+新映射同批输出、每个 mip 的虚拟页→texel 越界检查；L3 新增 maxMip/pagesPerSide、mip round/clamp、页表 texel 总数/256 = CPU stride、虚拟页号、页表 texel 坐标、atlas slice/tile/半 texel UV、repeat u=1.0/负 UV、无效页表项全零、catalog sourceResolution 与真实源边长一致性；L4a 新增覆盖页 priority→mip 阶梯、top-4→可见层、每层请求该 mip 全部页、未注册页跳过、跨覆盖页去重、每帧预算与 deferred 收敛、层/源 mip 钳制、layerCount 越界跳过、常驻页不重建、离开视野后 idle 淘汰 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
@@ -848,14 +848,19 @@ Basis/Zstd 转码与运行时 BC mip 生成；边界见
 [纹理合同](texture-asset-json-v1.md#block-compressed-containers-dds--ktx2)。
 
 地形运行时使用 `terrain_tests` 与外部场景：
-`ctest --test-dir build -R "^Terrain" --output-on-failure`（2026-10-30 L4a 后通过；
-其中 `terrain_tests` 125 项，另 8 项来自 `vl_renderer_backend_tests` 的
+`ctest --test-dir build -R "^Terrain" --output-on-failure`（2026-10-30 CPU LOD/skirt 后
+145/145 通过；其中 `terrain_tests` 137 项，另 8 项来自 `vl_renderer_backend_tests` 的
 `TerrainFeedback*` 与 `TerrainLayerAtlasGpu.*`）。
+CPU 几何 LOD/skirt 只由 `terrain_tests` 覆盖：LOD0 顶点/索引不变、LOD1..3 的格子数与
+skirt 环、skirt 的竖直下移与 AABB、跨 chunk 法线连续、`lodLevels`/`lodDistances`
+校验与默认推导、距离→级别选择、chunk key 含 LOD 且不含距离表。renderer 的
+运行时选择未接，所以没有 LOD 画面的冒烟要求；B32/M3/BC7 截图必须继续与基线
+逐字节一致（默认仍只生成 LOD0）。
 GPU/World 冒烟使用
 `<resourcePath>/Generated/Validation/TerrainSmoke/SC_terrain_smoke.json`
 （64×64 quad、2×2 chunk、高度图 + M_pbr 材质）；启动后执行
 `screenshot terrain_smoke.bmp`，World 事务提交且地形出图即通过。该场景不覆盖
-LOD/streaming/碰撞/top-4 层混合；边界见 [terrain 契约](terrain.md)。
+几何 LOD 画面/碰撞/top-4 层混合；边界见 [terrain 契约](terrain.md)。
 
 M3 地表混合冒烟使用
 `<resourcePath>/Generated/Validation/TerrainM3/SC_terrain_m3.json`：8 层三张

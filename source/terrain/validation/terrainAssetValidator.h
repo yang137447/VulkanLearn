@@ -76,6 +76,7 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             entry.key() != "heightmapPath" && entry.key() != "size" &&
             entry.key() != "heightScale" && entry.key() != "heightOffset" &&
             entry.key() != "gridResolution" && entry.key() != "chunkQuads" &&
+            entry.key() != "lodLevels" && entry.key() != "lodDistances" &&
             entry.key() != "pageOrigin" && entry.key() != "pageTilesPerSide" &&
             entry.key() != "materialInstancePath" && entry.key() != "layers")
         {
@@ -118,6 +119,46 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
     if (chunkQuads > gridResolution || gridResolution % chunkQuads != 0)
         throw std::invalid_argument(
             "Terrain gridResolution must be a positive multiple of chunkQuads: " + assetPath);
+
+    // CPU 几何 LOD：只声明可生成的级数，运行时选择尚未接入。最粗一级的
+    // 合并步长必须整除 chunkQuads，否则该级网格无法生成，必须在预检期拒绝，
+    // 而不是等 World 加载时才抛错。
+    const uint32_t lodLevels = asset.contains("lodLevels")
+        ? OptionalBoundedInteger(
+            asset, "lodLevels", "Terrain " + assetPath,
+            1u, 1u, TerrainMaxLodLevels)
+        : 1u;
+    const uint32_t coarsestLodStep = TerrainLodStepQuads(lodLevels - 1);
+    if (chunkQuads % coarsestLodStep != 0)
+        throw std::invalid_argument(
+            "Terrain chunkQuads must be divisible by the coarsest LOD step: " + assetPath);
+    if (asset.contains("lodDistances"))
+    {
+        const auto& distances = asset.at("lodDistances");
+        if (!distances.is_array())
+            throw std::invalid_argument(
+                "Terrain lodDistances must be a number array: " + assetPath);
+        // 每个阈值都是“进入下一级”的距离，因此级数 N 只有 N-1 个阈值；
+        // 只有 LOD0 时不允许写非空距离表。
+        if (distances.size() != static_cast<size_t>(lodLevels - 1))
+            throw std::invalid_argument(
+                "Terrain lodDistances requires lodLevels-1 ascending distances: " + assetPath);
+        double previous = 0.0;
+        for (const auto& entry : distances)
+        {
+            if (!entry.is_number())
+                throw std::invalid_argument(
+                    "Terrain lodDistances must be numeric: " + assetPath);
+            const double value = entry.get<double>();
+            if (!std::isfinite(value) || value <= 0.0)
+                throw std::invalid_argument(
+                    "Terrain lodDistances must be positive finite cm: " + assetPath);
+            if (value <= previous)
+                throw std::invalid_argument(
+                    "Terrain lodDistances must be strictly ascending: " + assetPath);
+            previous = value;
+        }
+    }
 
     const uint32_t pageTilesPerSide = asset.contains("pageTilesPerSide")
         ? RequirePositiveInteger(asset, "pageTilesPerSide", "Terrain " + assetPath)
