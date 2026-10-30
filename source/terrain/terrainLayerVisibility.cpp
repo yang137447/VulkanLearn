@@ -18,6 +18,20 @@ uint32_t ScaleLayerPriority(uint8_t coverPriority, float weight)
     return static_cast<uint32_t>(std::lround(std::clamp(scaled, 0.0f, 255.0f)));
 }
 
+// 粗 mip 预取页的优先级衰减：+1 级 3/4、+2 级 1/2、其余 1/4。
+// 粗页只是“让 shader 的回退有内容可采”，不该抢细页的请求名额。
+uint32_t ScaleFallbackPriority(uint32_t priority, uint32_t level)
+{
+    uint32_t scaled = priority;
+    if (level <= 1)
+        scaled = priority * 3u / 4u;
+    else if (level == 2)
+        scaled = priority / 2u;
+    else
+        scaled = priority / 4u;
+    return std::max(1u, scaled);
+}
+
 } // namespace
 
 void TerrainLayerVisibilityResolver::Reset()
@@ -34,6 +48,74 @@ uint32_t TerrainLayerVisibilityResolver::MipForPriority(uint8_t priority)
     if (priority >= 64) return 2;
     if (priority >= 32) return 3;
     return 4;
+}
+
+uint32_t TerrainLayerVisibilityResolver::MaxMipForLayer(
+    const TerrainLayerPageManager& layerPages,
+    uint32_t layerId,
+    const TerrainLayerVisibilityConfig& config)
+{
+    const uint32_t mipCount =
+        TerrainLayerMipCount(layerPages.LayerSourceResolution(layerId));
+    uint32_t maxMip = mipCount == 0 ? 0u : mipCount - 1;
+    if (config.sourceMipLevels != 0)
+        maxMip = std::min(maxMip, config.sourceMipLevels - 1);
+    return maxMip;
+}
+
+void TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates(
+    std::map<TerrainLayerPageKey, uint32_t>& candidates,
+    const TerrainLayerPageManager& layerPages,
+    const TerrainLayerVisibilityConfig& config,
+    uint32_t& fallbackTargetPages,
+    std::array<uint32_t, 3>& fallbackLevelPages)
+{
+    if (config.fallbackPrefetchMipLevels == 0 || candidates.empty())
+        return;
+
+    // 先快照当前候选再插入粗页：粗页本身也可能是缺页，但不能因为
+    // “刚插入的粗页又缺页”而继续向更粗级联，否则遍历中扩容且级数失控。
+    std::vector<std::pair<TerrainLayerPageKey, uint32_t>> targets;
+    targets.reserve(candidates.size());
+    for (const auto& entry : candidates)
+        targets.push_back(entry);
+
+    for (const auto& [key, priority] : targets)
+    {
+        if (key.layerId >= config.layerCount)
+            continue;
+        // 只对“会真的触发 shader 回退”的缺页页扩容；已驻留页不需要粗页。
+        if (layerPages.IsResident(key))
+            continue;
+
+        const uint32_t maxMip =
+            MaxMipForLayer(layerPages, key.layerId, config);
+        ++fallbackTargetPages;
+        const uint32_t levels = std::min(
+            config.fallbackPrefetchMipLevels,
+            maxMip > key.mip ? maxMip - key.mip : 0u);
+        for (uint32_t level = 1; level <= levels; ++level)
+        {
+            TerrainLayerPageKey coarser;
+            coarser.layerId = key.layerId;
+            coarser.mip = key.mip + level;
+            // 每粗一级页数减半：同一 UV 区域落在 (pageX >> 1, pageY >> 1)。
+            coarser.pageX = key.pageX >> level;
+            coarser.pageY = key.pageY >> level;
+            const uint32_t coarserPriority =
+                ScaleFallbackPriority(priority, level);
+            auto inserted =
+                candidates.emplace(coarser, coarserPriority);
+            if (inserted.second)
+            {
+                ++fallbackLevelPages[level - 1];
+            }
+            else if (inserted.first->second < coarserPriority)
+            {
+                inserted.first->second = coarserPriority;
+            }
+        }
+    }
 }
 
 TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
@@ -142,6 +224,15 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
             }
         }
     }
+    // L4c：目标 mip 缺页时，把同一 UV 区域的更粗 mip 页一起入队，保证
+    // shader 的回退 mip 有内容可采（否则回退后仍是 avgColor）。
+    std::array<uint32_t, 3> ignoredFallbackLevels{};
+    ExpandCoarserFallbackCandidates(
+        candidates,
+        layerPages,
+        config,
+        stats.fallbackTargetPages,
+        ignoredFallbackLevels);
     stats.candidatePages = static_cast<uint32_t>(candidates.size());
 
     const uint64_t seenEpoch =
@@ -225,6 +316,11 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
         centerKey.mip = record.mip;
         centerKey.pageX = pageX;
         centerKey.pageY = pageY;
+        // L4c：目标页缺页就是 shader 会走更粗 mip 混合的 texel。按 texel
+        // 计数（不按 distinct 页），控制台据此估算“本帧多少像素在混合”。
+        if (!layerPages.IsResident(centerKey))
+            ++stats.fallbackSlots;
+        stats.targetMipSlots[record.mip] += record.sampleCount;
         const uint32_t radius = layerPages.IsResident(centerKey)
             ? 0u
             : config.exactFeedbackNeighborhoodRadius;
@@ -253,6 +349,14 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
             }
         }
     }
+    // L4c：缺页的反馈页同时把同一 UV 区域的更粗 mip 页加入候选。粗页优先
+    // 级略低，且仍受 maxRequestsPerFrame 限制。
+    ExpandCoarserFallbackCandidates(
+        candidates,
+        layerPages,
+        config,
+        stats.fallbackTargetPages,
+        stats.fallbackLevelPages);
     stats.candidatePages = static_cast<uint32_t>(candidates.size());
     for (uint32_t layerId = 0; layerId < layerSeen.size(); ++layerId)
     {

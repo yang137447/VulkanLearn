@@ -163,7 +163,10 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   一致性校验，并在选中 mip 无效时回退到更粗的 mip。L4a 由
   `source/terrain/terrainLayerVisibility.*` 把覆盖页 feedback 推导成
   “可见层 → mip → 该 mip 全部页”，逐帧限量请求/上传/淘汰；mode 1 不再加载期
-  全量预取（`terrainlayer preload` 只作对照）。默认视觉路径仍与 L1/L2 逐字节一致。
+  全量预取（`terrainlayer preload` 只作对照）。L4c 在同一 resolver 里对目标 mip
+  缺页的页追加 +1/+2 级粗 mip 预取（优先级递减、受层最大 mip 与每帧预算约束），
+  `terrainlayer stats` 输出 `fallbackSlots/fallbackPages/fallbackLevels/targetMips`
+  等回退分布；shader 侧 `avgColor` 淡入仍未实现。默认视觉路径仍与 L1/L2 逐字节一致。
   `source/terrain/terrainCollision.*` 提供 Jolt 静态 heightfield 碰撞的 RAII body：cm→m、
   placement 平移/旋转/缩放、16 位高度压缩，并复用调用方已有的 PhysicsSystem；
   `source/physics/joltRegistration.*` 是地形与 `ScriptPhysicsWorld` 共用的进程级

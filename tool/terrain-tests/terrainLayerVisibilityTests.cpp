@@ -158,10 +158,14 @@ TEST(TerrainLayerVisibility, RequestsEveryPageOfEachVisibleLayerMip)
     EXPECT_EQ(stats.resolvedCoverPages, 1u);
     EXPECT_EQ(stats.rebuiltCoverPages, 1u);
     EXPECT_EQ(stats.visibleLayers, 2u);
-    // 512² 层 mip0 是 4×4=16 页；两个可见层共 32 页候选。
-    EXPECT_EQ(stats.candidatePages, 32u);
-    EXPECT_EQ(stats.acceptedRequests, 32u);
+    // 512² 层 mip0 是 4×4=16 页；两个可见层共 32 个目标页。L4c 再为缺页
+    // 补 mip1（4 页/层）与 mip2（1 页/层），共 32+8+2=42。
+    EXPECT_EQ(stats.candidatePages, 42u);
+    EXPECT_EQ(stats.acceptedRequests, 42u);
     EXPECT_EQ(stats.mipRequestCounts[0], 32u);
+    EXPECT_EQ(stats.mipRequestCounts[1], 8u);
+    EXPECT_EQ(stats.mipRequestCounts[2], 2u);
+    EXPECT_EQ(stats.fallbackTargetPages, 32u);
     EXPECT_TRUE(pending.empty());
 
     // 同一层在多个覆盖页重复出现时，候选页必须去重。
@@ -206,10 +210,10 @@ TEST(TerrainLayerVisibility, HonorsPerFrameBudgetAndConverges)
         totalAccepted += stats.acceptedRequests;
         if (pending.empty()) break;
     }
-    // 32 页 / 每帧 5 个 = 7 帧左右收敛。
-    EXPECT_EQ(totalAccepted, 32u);
+    // 42 页 / 每帧 5 个 = 9 帧左右收敛（目标页先来，粗页随后）。
+    EXPECT_EQ(totalAccepted, 42u);
     EXPECT_TRUE(pending.empty());
-    EXPECT_EQ(layerPages.ResidentCount(), 32u);
+    EXPECT_EQ(layerPages.ResidentCount(), 42u);
 }
 
 // 远 mip 的请求必须 clamp 到层自身 mip 链与源数组 mip 数。
@@ -396,4 +400,150 @@ TEST(TerrainLayerVisibility, CapacityReclaimsUnselectedMipPages)
     EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 0, 0)));
     EXPECT_FALSE(layerPages.IsResident(Key(0, 2, 0, 0)));
     EXPECT_LE(layerPages.ResidentCount(), 4u);
+}
+
+namespace
+{
+
+// 4 张 128×128 RGBA8 层页 feedback，写一个 (layer,mip,pageIndex) texel。
+std::vector<uint8_t> MakeLayerFeedback(
+    uint32_t layerId,
+    uint32_t mip,
+    uint32_t pageIndex,
+    uint8_t frameTag)
+{
+    std::vector<uint8_t> buffer(VL::TerrainLayerFeedbackBufferBytes, 0);
+    VL::TerrainLayerFeedbackTexel texel;
+    texel.layerId = layerId;
+    texel.mip = mip;
+    texel.pageIndex = pageIndex;
+    texel.valid = true;
+    texel.frameTag = frameTag;
+    VL::EncodeTerrainLayerFeedbackTexel(texel, buffer.data());
+    return buffer;
+}
+
+VL::TerrainLayerFeedbackFrameSummary SummarizeLayerFeedback(
+    const std::vector<uint8_t>& buffer,
+    uint8_t frameTag,
+    uint64_t copiedEpoch)
+{
+    VL::TerrainLayerFeedbackFrameSummary summary =
+        VL::SummarizeTerrainLayerFeedback(
+            buffer.data(), buffer.size(), frameTag);
+    summary.copiedEpoch = copiedEpoch;
+    return summary;
+}
+
+} // namespace
+
+// L4c：目标 mip 页缺页时，同一 UV 区域的更粗 1–2 级 mip 页必须一起进候选，
+// 否则 shader 回退到粗 mip 后仍然没有页可采，只能显示 avgColor。
+TEST(TerrainLayerVisibility, PrefetchesCoarserMipsWhenTargetPageMissing)
+{
+    // 512² 层 mip0 是 4×4；pageIndex 5 == (pageX=1, pageY=1)。
+    const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 5, 8);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.exactFeedbackNeighborhoodRadius = 0;
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(buffer, 8, 10),
+            layerPages,
+            pending,
+            10,
+            10,
+            config);
+
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 1, 1)));
+    // +1 级 mip1 (1>>1=0, 1>>1=0)，+2 级 mip2 只有 1 页。
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 1, 0, 0)));
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 2, 0, 0)));
+    EXPECT_EQ(stats.fallbackTargetPages, 1u);
+    EXPECT_EQ(stats.fallbackLevelPages[0], 1u);
+    EXPECT_EQ(stats.fallbackLevelPages[1], 1u);
+    EXPECT_TRUE(pending.empty());
+
+    // 请求名额必须先给目标 mip，粗 mip 只做兜底。
+    const VL::TerrainLayerPageManager::PageState* target =
+        layerPages.FindPage(Key(0, 0, 1, 1));
+    const VL::TerrainLayerPageManager::PageState* coarse =
+        layerPages.FindPage(Key(0, 1, 0, 0));
+    ASSERT_NE(target, nullptr);
+    ASSERT_NE(coarse, nullptr);
+    EXPECT_GT(target->priority, coarse->priority);
+}
+
+// 目标页已驻留时不能再扩粗 mip：否则候选集会凭空变大，capacity 被
+// “假可见”页撑爆。
+TEST(TerrainLayerVisibility, SkipsCoarserPrefetchWhenTargetResident)
+{
+    const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 5, 4);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(20, 0, 2);
+    ASSERT_TRUE(layerPages.RequestPageAtEpoch(
+        Key(0, 0, 1, 1), 1, 60, 20));
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.exactFeedbackNeighborhoodRadius = 0;
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(buffer, 4, 24),
+            layerPages,
+            pending,
+            24,
+            24,
+            config);
+
+    EXPECT_EQ(stats.candidatePages, 1u);
+    EXPECT_EQ(stats.markedPages, 1u);
+    EXPECT_EQ(stats.acceptedRequests, 0u);
+    EXPECT_EQ(stats.fallbackTargetPages, 0u);
+    EXPECT_EQ(stats.fallbackLevelPages[0], 0u);
+    EXPECT_EQ(stats.fallbackLevelPages[1], 0u);
+    EXPECT_FALSE(layerPages.IsResident(Key(0, 1, 0, 0)));
+    EXPECT_TRUE(pending.empty());
+}
+
+// 粗 mip 预取只能排在目标页之后使用同一份请求预算，不能绕过每帧上限。
+TEST(TerrainLayerVisibility, CoarserPrefetchStaysWithinRequestBudget)
+{
+    const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 5, 6);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(30, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.exactFeedbackNeighborhoodRadius = 0;
+    config.maxRequestsPerFrame = 1;
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(buffer, 6, 30),
+            layerPages,
+            pending,
+            30,
+            30,
+            config);
+
+    // 3 个候选（目标 + mip1 + mip2）但每帧只允许 1 次请求。
+    EXPECT_EQ(stats.candidatePages, 3u);
+    EXPECT_EQ(stats.attemptedRequests, 1u);
+    EXPECT_EQ(stats.acceptedRequests, 1u);
+    EXPECT_EQ(pending.size(), 2u);
+    // 第一帧必须优先请求目标 mip 页。
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 1, 1)));
+    EXPECT_FALSE(layerPages.IsResident(Key(0, 1, 0, 0)));
 }

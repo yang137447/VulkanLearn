@@ -209,6 +209,13 @@ struct TerrainStreamingStats
     // L4b：精确层页 feedback 的 slot/页计数（0 表示本帧走了覆盖页回退路径）。
     uint32_t layerExactFeedbackSlots = 0;
     uint32_t layerExactFeedbackPages = 0;
+    // L4c：目标 mip 缺页、shader 向更粗 mip 回退并混合的 texel/页数。
+    // fallbackPixels 由控制台按当前渲染分辨率换算，避免每帧写统计。
+    uint32_t layerFallbackSlots = 0;
+    uint32_t layerFallbackTargetPages = 0;
+    std::array<uint32_t, 3> layerFallbackLevelPages{};
+    // 有效 feedback texel 的目标 mip 分布（回退级分布的基准）。
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerTargetMipSlots{};
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerMipRequestCounts{};
     uint32_t layerDirtyPages = 0;
     uint32_t layerDirtyPageTableEntries = 0;

@@ -552,6 +552,35 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - 精确 feedback 可用时它就是唯一驱动层页驻留的路径；L4a 的覆盖页推导只在
   ring 还没产出（启动、回读延迟）时作为回退/prefetch，不与精确路径同时写驻留。
 
+## 目标 mip 缺页时的粗 mip 预取（L4c）
+
+`M_terrain` 在目标 mip 的页表项无效时会向更粗 mip 回退（L4a 已有行为）；
+但只有更粗 mip 的页也在驻留集里，回退才真的有内容可采，否则仍然是
+catalog row3 的 `avgColor`。L4c 让 CPU 在目标页缺页时同时预取粗页：
+
+- 入口是 `TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates`，
+  L4a（覆盖页推导）与 L4b（精确 feedback）两条路径共用。
+- 只对**缺页**的目标页扩容：目标页已驻留时不加粗页，否则候选集会凭空
+  变大、capacity 被“假可见”页撑爆。
+- 每粗一级的页坐标是 `(pageX >> level, pageY >> level)`，与 shader 在
+  `TerrainLayerAddressAtMip` 里按 `pagesPerSide >> mip` 切页的结果一致。
+- 级数与优先级：`TerrainLayerVisibilityConfig::fallbackPrefetchMipLevels`
+  （默认 2，0 关闭）；`+1` 级 priority ×3/4、`+2` 级 ×1/2、更粗 ×1/4，
+  最低 1。粗页只保证回退有内容可采，不得抢占细页的请求名额。
+- 级数还会被该层允许的最大 mip 夹住（层自身 mip 链与源数组 mip 数取小），
+  因此 mip 已经是最粗一级时不会产生额外候选。
+- 预算不变：扩容只增加候选/pending 队列长度，每帧 `maxRequestsPerFrame`
+  与 `maxLayerPageUploadsPerFrame` 仍严格生效。
+- `terrainlayer stats` 新增回退与 mip 分布统计：`fallbackSlots`（本帧目标页
+  缺页的 feedback texel 数）、`fallbackPages`（缺页目标页的 distinct 页数）、
+  `fallbackLevels=+1/+2/+3`（本帧新加入的粗 mip 页数）、`fallbackPixels~`
+  （`fallbackSlots / exactSlots × 当前渲染分辨率`，是“会走回退路径的像素数”
+  上界估计，不是测量值）、`targetMips=0..4`（有效 feedback texel 的目标 mip
+  分布）。这些值只在手动执行 `terrainlayer stats` 时打印，不逐帧刷屏。
+
+本阶段**没有**实现 shader 侧的 `avgColor` 淡入/混合：目标 mip 缺页时仍是
+“有粗页就采样粗页、没有就整页 `avgColor`”的硬切换。视觉淡入留在后续阶段。
+
 ## Feedback pass（P2/P3）
 
 P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 端
@@ -611,7 +640,8 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   `terrain capacity N` 只把预算写入 streaming state 的 atomic，由渲染线程在帧首消费；
   它不在 Console/GT 线程直接修改 page manager。
 
-P3/P3.1/L1/L2/L3/L4a/L4b **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
+P3/P3.1/L1/L2/L3/L4a/L4b/L4c **没有**实现：低分辨率 fallback/淡入（含 shader
+侧 `avgColor` 混合）、相机/视锥预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、运行时 LOD 选择、
 地形 chunk 卸载、地形编辑。地形碰撞只有独立 heightfield 模块，尚未接入 World
@@ -788,3 +818,20 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - L4b mode 0 回归：`SC_terrain_b32.json` 截图仍与 L2/L3 基线逐字节一致
   （`1D30D8…3F54`）；`SC_terrain_b32_two.json` 与 P3 基线相比平均通道差 0.001、
   无 >8 像素，差异来自逐帧流式的到达时刻。两者 stderr 均为空。
+- L4c：`tool/terrain-tests/terrainLayerVisibilityTests.cpp` 覆盖
+  “目标页缺页时 +1/+2 级粗 mip 页入队且优先级低于目标页”“目标页已驻留时不扩粗页”
+  “粗页预取不绕过每帧请求预算（3 个候选 / budget 1 时只请求目标页、剩 2 个 pending）”。
+  既有 L4a/L4b 用例的期望值同步改成含粗页的候选数（例如 512² mip0 两层：
+  32 目标页 + 8 张 mip1 + 2 张 mip2 = 42）。
+- L4c 冒烟（`SC_terrain_vt_mode1.json`，排除左侧 UI 后逐像素比较）：
+  - 默认相机稳定态：`resident=20/512`、`fallbackSlots=0`、`fallbackPages=0`、
+    `fallbackLevels=0/0/0`、`targetMips=0/0/2044/0/0`（20 层全部落在最粗 mip，
+    每层 1 页且已驻留，因此不触发粗页预取）。
+  - 与 L4b 基线二进制（同一份源码去掉 L4c）对比：mode 1、`SC_terrain_b32`、
+    `SC_terrain_m3`、`SC_terrain_b32_bc7` 四张截图 **最大通道差 0**（逐字节一致）。
+  - `terrainlayer capacity 8` / `16`：`resident=20/8`、`resident=20/16`，
+    没有新增淘汰或回退像素。可见页每帧都被 feedback 看到，落在 GPU 安全窗内，
+    capacity 不能淘汰它们——因此在这个场景里 `capacity 8/16` **无法制造缺页**，
+    只能证明“降预算不动可见集”。真正的缺页回退需要目标 mip 比最粗 mip 更细，
+    该验证场景的 `u_uvScale=32` 使所有可见片元都停在该层最粗 mip。
+  - 三次冒烟 stderr 均为 0 字节，无 Vulkan validation error。

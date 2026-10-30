@@ -241,11 +241,17 @@ TEST(TerrainLayerExactFeedback, RequestsExactPageAndMip)
 
     EXPECT_EQ(stats.validSlots, 1u);
     EXPECT_EQ(stats.distinctPages, 1u);
-    EXPECT_EQ(stats.candidatePages, 1u);
-    EXPECT_EQ(stats.acceptedRequests, 1u);
+    // L4c：目标页缺页时同时预取更粗 mip（此处 mip1 -> mip2 一页；
+    // 512² 的 maxMip 是 2，所以没有 +2 级）。
+    EXPECT_EQ(stats.candidatePages, 2u);
+    EXPECT_EQ(stats.acceptedRequests, 2u);
     EXPECT_EQ(stats.mipRequestCounts[1], 1u);
+    EXPECT_EQ(stats.mipRequestCounts[2], 1u);
+    EXPECT_EQ(stats.fallbackTargetPages, 1u);
+    EXPECT_EQ(stats.fallbackLevelPages[0], 1u);
     EXPECT_TRUE(pending.empty());
     EXPECT_TRUE(layerPages.IsResident(Key(1, 1, 1, 1)));
+    EXPECT_TRUE(layerPages.IsResident(Key(1, 2, 0, 0)));
     // 不能把 pageIndex 误当成 (pageX=pageY=pageIndex) 或请求别的 mip。
     EXPECT_FALSE(layerPages.IsResident(Key(1, 1, 3, 0)));
     EXPECT_FALSE(layerPages.IsResident(Key(1, 0, 1, 1)));
@@ -278,16 +284,24 @@ TEST(TerrainLayerExactFeedback, ExpandsNeighborhoodAsPrefetch)
         4,
         config);
 
-    // 邻域扩展到 2×2 全部页，但中心页保留更高 priority。
-    EXPECT_EQ(stats.candidatePages, 4u);
-    EXPECT_EQ(stats.acceptedRequests, 4u);
+    // 邻域扩展到 2×2 全部页，但中心页保留更高 priority。L4c 再为这 4 个
+    // 缺页各加一张更粗 mip 页（mip2 每层只有 1 页，去重后 1 页）。
+    EXPECT_EQ(stats.candidatePages, 5u);
+    EXPECT_EQ(stats.acceptedRequests, 5u);
+    EXPECT_EQ(stats.fallbackTargetPages, 4u);
+    EXPECT_EQ(stats.fallbackLevelPages[0], 1u);
     const VL::TerrainLayerPageManager::PageState* center =
         layerPages.FindPage(Key(0, 1, 0, 0));
     const VL::TerrainLayerPageManager::PageState* neighbor =
         layerPages.FindPage(Key(0, 1, 1, 1));
+    const VL::TerrainLayerPageManager::PageState* fallback =
+        layerPages.FindPage(Key(0, 2, 0, 0));
     ASSERT_NE(center, nullptr);
     ASSERT_NE(neighbor, nullptr);
+    ASSERT_NE(fallback, nullptr);
     EXPECT_GT(center->priority, neighbor->priority);
+    // 粗 mip 页只保证“回退有内容可采”，优先级必须低于目标 mip 页。
+    EXPECT_LT(fallback->priority, center->priority);
 }
 
 TEST(TerrainLayerExactFeedback, DropsOutOfRangePageIndex)
@@ -392,9 +406,10 @@ TEST(TerrainLayerExactFeedback, HonorsBudgetAndConvergesAcrossFrames)
         config);
     EXPECT_EQ(stats.attemptedRequests, 5u);
     EXPECT_EQ(stats.acceptedRequests, 5u);
-    EXPECT_EQ(pending.size(), 11u);
+    // 16 个目标页 + mip1 4 页 + mip2 1 页 = 21 个候选。
+    EXPECT_EQ(pending.size(), 16u);
 
-    // 后续帧继续消费同一批候选，直到全部 16 页驻留、队列清空。
+    // 后续帧继续消费同一批候选，直到 21 页全部驻留、队列清空。
     uint64_t epoch = 50;
     uint32_t acceptedAfterFirstFrame = 0;
     for (uint32_t iteration = 0; iteration < 4; ++iteration)
@@ -411,8 +426,8 @@ TEST(TerrainLayerExactFeedback, HonorsBudgetAndConvergesAcrossFrames)
         acceptedAfterFirstFrame += stats.acceptedRequests;
     }
     EXPECT_TRUE(pending.empty());
-    EXPECT_EQ(layerPages.ResidentCount(), 16u);
-    EXPECT_EQ(acceptedAfterFirstFrame, 11u);
+    EXPECT_EQ(layerPages.ResidentCount(), 21u);
+    EXPECT_EQ(acceptedAfterFirstFrame, 16u);
 }
 
 TEST(TerrainLayerExactFeedback, RequestsEachMipReportedByDifferentSlots)

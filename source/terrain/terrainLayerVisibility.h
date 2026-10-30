@@ -50,6 +50,11 @@ struct TerrainLayerVisibilityConfig
     // 候选。128×128 feedback 对细长/远处的层页会欠采样，邻域扩展避免
     // 永远不请求漏掉的页。
     uint32_t exactFeedbackNeighborhoodRadius = 1;
+    // L4c：目标 mip 的页未驻留时，额外把更粗 1..N 级 mip 的同一 UV 区域页
+    // 加入候选（优先级递减）。shader 在目标页缺页时会向更粗 mip 回退
+    // （L4a 已有行为），但只有粗页也在驻留集里才真的有内容可采，否则回退
+    // 之后仍然是 catalog 的 avgColor。0 关闭该行为；生产路径取 2。
+    uint32_t fallbackPrefetchMipLevels = 2;
 };
 
 struct TerrainLayerVisibilityStats
@@ -67,6 +72,8 @@ struct TerrainLayerVisibilityStats
     uint32_t deferredRequests = 0;
     uint32_t pendingRequests = 0;
     uint32_t evictedPages = 0;
+    // L4c：目标页缺页、shader 会向更粗 mip 回退的候选页数。
+    uint32_t fallbackTargetPages = 0;
     // 本帧成功请求的页按 mip 分布，用于确认 LOD/预算策略符合预期。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
 };
@@ -85,7 +92,15 @@ struct TerrainLayerExactFeedbackStats
     uint32_t deferredRequests = 0;
     uint32_t pendingRequests = 0;
     uint32_t evictedPages = 0;
+    // L4c：需要回退的 feedback texel 数（用于估算回退像素占比）、目标页
+    // 缺页的 distinct 页数，以及额外加入的 +1/+2/+3 级粗 mip 页数。
+    uint32_t fallbackSlots = 0;
+    uint32_t fallbackTargetPages = 0;
+    std::array<uint32_t, 3> fallbackLevelPages{};
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
+    // 有效 feedback texel 按“目标 mip”的分布：确认 shader 实际想采哪一级，
+    // 以及回退是否集中在某几级（回退级分布）。
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> targetMipSlots{};
 };
 
 // 覆盖页 feedback -> 可见层 -> mip -> 该 mip 的全部层页。纯 CPU，绝不读 GPU
@@ -157,6 +172,22 @@ private:
         uint64_t frame,
         uint64_t completedEpoch,
         uint64_t seenEpoch,
+        const TerrainLayerVisibilityConfig& config);
+
+    // L4c：目标页缺页 -> 把同一 UV 区域的更粗 mip 页加入候选。粗页优先级
+    // 略低（+1 级 3/4、+2 级 1/2、再往粗 1/4），避免粗页抢占细页的请求
+    // 名额；请求总量仍由 maxRequestsPerFrame 限制，扩容不会绕过预算。
+    static void ExpandCoarserFallbackCandidates(
+        std::map<TerrainLayerPageKey, uint32_t>& candidates,
+        const TerrainLayerPageManager& layerPages,
+        const TerrainLayerVisibilityConfig& config,
+        uint32_t& fallbackTargetPages,
+        std::array<uint32_t, 3>& fallbackLevelPages);
+
+    // 该层允许请求的最大 mip：层自身 mip 链与源数组 mip 数取小。
+    static uint32_t MaxMipForLayer(
+        const TerrainLayerPageManager& layerPages,
+        uint32_t layerId,
         const TerrainLayerVisibilityConfig& config);
 
     // 页内容是静态的，因此一个覆盖页的层集合只需烘焙/统计一次；缓存按
