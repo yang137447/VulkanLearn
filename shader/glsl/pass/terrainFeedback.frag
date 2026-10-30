@@ -94,60 +94,69 @@ void main()
         float(packedA)) / 255.0;
 
     // ---- L4b 层页 feedback ----
-    // 关闭时（mode 0 / 未请求 VT）四张 attachment 全部保持 invalid。
-    vec4 slot0 = vec4(0.0);
-    vec4 slot1 = vec4(0.0);
-    vec4 slot2 = vec4(0.0);
-    vec4 slot3 = vec4(0.0);
-    if (u_layerFeedbackEnabled > 0.5 && !miss)
-    {
-        // 覆盖页命中后，用与 mf_terrainLayerBlend 完全相同的 atlas UV 取
-        // top-4 层。rawPageUv 不 clamp：全局 UV 恰为 1.0 时要选该页最后一列。
-        const vec2 rawPageUv = inPageUv * float(pageTableSize);
-        vec2 localUv = fract(rawPageUv);
-        localUv = clamp(
-            localUv,
-            vec2(0.5 / u_pageResolution),
-            vec2(1.0 - 0.5 / u_pageResolution));
-        localUv = mix(
-            localUv,
-            vec2(1.0 - 0.5 / u_pageResolution),
-            step(vec2(float(pageTableSize)), rawPageUv));
-        const float atlasResolution = u_pageTableSize * u_pageResolution;
-        const vec2 atlasUv = (vec2(page) * u_pageResolution +
-            localUv * u_pageResolution) / atlasResolution;
+    //
+    // 导数必须在 uniform control flow 里：`u_layerFeedbackEnabled` 是 uniform、
+    // 但 `miss` 是逐片元值，`if (weight <= 0) continue` 也是逐片元发散。
+    // 因此这里**无条件**算完 4 个 slot 的 layerUv / mip / 页号，最后只用
+    // 权重与 enabled/miss 掩码选择写出的 slot——不能把 dFdx/dFdy 放进分支。
+    //
+    // 覆盖页命中后，用与 mf_terrainLayerBlend 完全相同的 atlas UV 取 top-4 层。
+    // rawPageUv 不 clamp：全局 UV 恰为 1.0 时要选该页最后一列。
+    const vec2 rawPageUv = inPageUv * float(pageTableSize);
+    vec2 localUv = fract(rawPageUv);
+    localUv = clamp(
+        localUv,
+        vec2(0.5 / u_pageResolution),
+        vec2(1.0 - 0.5 / u_pageResolution));
+    localUv = mix(
+        localUv,
+        vec2(1.0 - 0.5 / u_pageResolution),
+        step(vec2(float(pageTableSize)), rawPageUv));
+    const float atlasResolution = u_pageTableSize * u_pageResolution;
+    const vec2 atlasUv = (vec2(page) * u_pageResolution +
+        localUv * u_pageResolution) / atlasResolution;
 
-        const ivec4 ids =
-            ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
-        const vec4 weights = texture(layerWeights, atlasUv);
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            const float weight = weights[slot];
-            if (weight <= 0.0)
-                continue;
-            const int layer = ids[slot];
-            const vec4 uvRow = TerrainFeedbackCatalogRow(layer, 1);
-            const vec4 pageRow = TerrainFeedbackCatalogRow(layer, 2);
-            const int pagesPerSide = max(1, int(pageRow.x + 0.5));
-            const int maxMip = min(
-                TerrainLayerMaxMipForPagesPerSide(pagesPerSide),
-                int(u_layerMaxMip + 0.5));
-            const vec2 layerUv =
-                TerrainLayerUvForSlot(inMaterialUv, u_uvScale, uvRow);
-            const int mip = TerrainLayerMipForUv(
-                layerUv, pagesPerSide, maxMip, u_layerPageResolution);
-            const TerrainLayerVTAddress address =
-                TerrainLayerAddressAtMip(layerUv, pagesPerSide, mip);
-            const vec4 encoded =
-                EncodeLayerSlot(layer, address.pageIndex, mip, frameTag);
-            if (slot == 0) slot0 = encoded;
-            else if (slot == 1) slot1 = encoded;
-            else if (slot == 2) slot2 = encoded;
-            else slot3 = encoded;
-        }
+    // atlas 只有 1 级 mip：显式 LOD 0，避免隐式导数再引入一次发散风险。
+    const ivec4 ids =
+        ivec4(round(textureLod(layerIds, atlasUv, 0.0).rgba * 255.0));
+    const vec4 weights = textureLod(layerWeights, atlasUv, 0.0);
+
+    // 固定 4 次迭代、无 break/continue：动态 uniform 的循环，导数有定义。
+    // 每层 catalog/页计算都是无条件的，slot 只影响最终是否写出。
+    vec4 encodedSlots[4];
+    for (int slot = 0; slot < 4; ++slot)
+    {
+        const int layer = ids[slot];
+        const vec4 uvRow = TerrainFeedbackCatalogRow(layer, 1);
+        const vec4 pageRow = TerrainFeedbackCatalogRow(layer, 2);
+        const int pagesPerSide = max(1, int(pageRow.x + 0.5));
+        const int maxMip = min(
+            TerrainLayerMaxMipForPagesPerSide(pagesPerSide),
+            int(u_layerMaxMip + 0.5));
+        const vec2 layerUv =
+            TerrainLayerUvForSlot(inMaterialUv, u_uvScale, uvRow);
+        const int mip = TerrainLayerMipForUv(
+            layerUv,
+            pagesPerSide,
+            maxMip,
+            u_layerPageResolution,
+            max(vec2(1.0), vec2(u_feedbackScaleX, u_feedbackScaleY)));
+        const TerrainLayerVTAddress address =
+            TerrainLayerAddressAtMip(layerUv, pagesPerSide, mip);
+        encodedSlots[slot] =
+            EncodeLayerSlot(layer, address.pageIndex, mip, frameTag);
     }
-    outLayerSlot0 = slot0;
-    outLayerSlot1 = slot1;
-    outLayerSlot2 = slot2;
-    outLayerSlot3 = slot3;
+
+    // 关闭时（mode 0 / 未请求 VT）或覆盖页 miss 时四张附件全部写 invalid；
+    // 权重为 0 的 slot 也不写出。
+    const bool layerFeedbackValid =
+        (u_layerFeedbackEnabled > 0.5) && !miss;
+    outLayerSlot0 = (layerFeedbackValid && weights.x > 0.0)
+        ? encodedSlots[0] : vec4(0.0);
+    outLayerSlot1 = (layerFeedbackValid && weights.y > 0.0)
+        ? encodedSlots[1] : vec4(0.0);
+    outLayerSlot2 = (layerFeedbackValid && weights.z > 0.0)
+        ? encodedSlots[2] : vec4(0.0);
+    outLayerSlot3 = (layerFeedbackValid && weights.w > 0.0)
+        ? encodedSlots[3] : vec4(0.0);
 }

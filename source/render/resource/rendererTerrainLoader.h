@@ -166,6 +166,9 @@ private:
 
 struct TerrainStreamingStats
 {
+    // 渲染线程第一次 PublishStats 之前为 false：此时全部计数都是构造默认值，
+    // 控制台必须报告“尚未发布”而不是打印一整行 0。
+    bool statsPublished = false;
     uint32_t residentPages = 0;
     uint32_t residentCapacity = 0;
     uint32_t virtualPages = 0;

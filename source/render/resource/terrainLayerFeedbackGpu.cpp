@@ -138,11 +138,13 @@ TerrainLayerFeedbackGpuRing::TryConsume(
     uint32_t frameIndex,
     uint64_t completedEpoch)
 {
+    // 先确认该槽真的有可读映射，再消费 ring 的 pending 状态：否则映射缺失时
+    // TryConsume 已经把 pending 清掉，这一帧的 feedback 会被静默丢弃。
+    if (frameIndex >= mapped.size() || mapped[frameIndex] == nullptr)
+        return std::nullopt;
     const std::optional<TerrainFeedbackRingState::CompletedFrame> completed =
         ringState.TryConsume(frameIndex, completedEpoch);
     if (!completed.has_value())
-        return std::nullopt;
-    if (frameIndex >= mapped.size() || mapped[frameIndex] == nullptr)
         return std::nullopt;
 
     TerrainLayerFeedbackFrameSummary summary =

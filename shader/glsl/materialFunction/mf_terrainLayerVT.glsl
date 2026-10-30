@@ -92,7 +92,11 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         const vec2 layerUv =
             TerrainLayerUvForSlot(context.texCoord, u_uvScale, uvRow);
         const int mip = TerrainLayerMipForUv(
-            layerUv, pagesPerSide, maxMip, u_layerPageResolution);
+            layerUv,
+            pagesPerSide,
+            maxMip,
+            u_layerPageResolution,
+            vec2(1.0));
         int usedMip = mip;
         TerrainLayerVTAddress address =
             TerrainLayerAddressAtMip(layerUv, pagesPerSide, usedMip);
