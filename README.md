@@ -1,7 +1,7 @@
 # VulkanLearn
 
 ## 简介
-这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
+这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。地形已包含 CPU 几何 LOD/skirt 生成与独立的 Jolt heightfield 碰撞模块；运行时 LOD 选择和 World 级碰撞接入尚未完成。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
 
 ## 文档分工
 

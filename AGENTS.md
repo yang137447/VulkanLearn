@@ -513,8 +513,10 @@ If asked to add or change a terrain:
   `source/render/resource/rendererResourceLoadCoordinator.cpp`
 - inspect `source/scene/validation/sceneJsonValidator.h` and `sceneAssetValidator.cpp`
 
-Heightmap/TR/geometry changes are runtime changes; LOD, streaming, collision, terrain editing and
-top-4 layer blending are still feature requests, not fixes.
+Heightmap/TR/geometry changes are runtime changes; runtime LOD selection, World-level collision
+integration, terrain chunk unloading and terrain editing are still feature requests, not fixes.
+CPU LOD/skirt generation (`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`) and the standalone
+Jolt heightfield collision module already exist; treat bugs in those paths as fixes.
 
 If asked to add or change a render pass:
 

@@ -95,6 +95,28 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   或显式 skirt 参数。没有地形 chunk 卸载。
   地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
 
+### CPU 几何 LOD 与 skirt
+
+- 第 `lod` 级的合并步长是 `2^lod`：一个 chunk 变成
+  `quadsPerChunk = chunkQuads / 2^lod` 个格子，基础顶点
+  `(quadsPerChunk+1)²`、三角形 `quadsPerChunk²×2`。
+- 基础顶点的世界位置、UV、`texCoord1` 与法线公式和 LOD0 相同，只是采样点落在
+  每 `2^lod` 个 LOD0 网格点上；中心差分间距同步乘 `2^lod`，相邻 chunk 的共享边界
+  仍使用同一全局采样。
+- LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
+- `lod >= 1` 在边界环追加一圈 skirt：位置沿 -Y 下移
+  `max(1cm, 10% × |heightScale|)`，法线/UV/`texCoord1` 沿用边界顶点；skirt 顶点排在
+  基础顶点之后，基础顶点与索引不动。深度只取决于 TR 的 `heightScale`，因此各级一致；
+  它只是经验值，未做裂缝上界证明，且只覆盖“细边低于粗边”的一半情况。接入运行时
+  选择前需要补 LOD0 skirt 或显式 skirt 参数。
+- chunk 的 AABB 覆盖 skirt 的最低点；skirt 绕序按引擎顺时针 front face 写成
+  “几何法线朝内”，不会被 Back culling 剔除。
+- chunk 资源 key 含 `lod` 与合并步长；`lodDistances` 只影响运行时选择，不进 key。
+- `TerrainLodDistancesCm(desc)`：显式距离表，或按地形最长边按级数均分
+  （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
+  在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
+  renderer 尚未接入运行时选择。
+
 ## 场景对象
 
 ```json
@@ -255,11 +277,12 @@ World 中摆放多次，只要对象名不同。
   `0` 正常着色，`1` top-4 权重，`2` top-4 层号，`3` 混合 albedo，
   `4` VT 物理页号，`5` VT mip（4/5 在 mode 0 下输出 0）。
 - 当前地形只支持 realtime 渲染；offline-only 渲染遇到 terrain 直接失败。
-- 没有地形碰撞、没有 heightfield 物理体、没有地形编辑和绘制工具。
+- 地形碰撞只有独立的 Jolt heightfield 模块（`source/terrain/terrainCollision.*`），
+  尚未接入 World/场景对象；没有地形编辑和绘制工具。
 - page manager/GPU page 资源由 world-local `TerrainStreamingState` 管理；chunk 资源 key
   （`TerrainChunkResourceKey`）包含 `placementId`、TR 路径、高度图路径、size、
-  heightScale/offset、grid/chunk 参数与 chunk 坐标。同一 TR 的两处摆放因此不会共享或
-  覆盖彼此的顶点/索引缓冲。
+  heightScale/offset、grid/chunk 参数、`lod`/`lodStep` 与 chunk 坐标。同一 TR 的两处
+  摆放因此不会共享或覆盖彼此的顶点/索引缓冲。
 
 ## 层 catalog v2 与 CPU 层页管理器（L1）
 
@@ -537,7 +560,7 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
 P3/P3.1/L1/L2/L3/L4a **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
 逐页层 feedback（L4b：当前只按覆盖页推导可见层，没有层号+mip 的专用 feedback）、
 硬预算淘汰（可见 working set 大于预算时允许暂时超预算）、
-同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、LOD/skirt、
+同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、运行时 LOD 选择、
 地形 chunk 卸载、地形编辑。地形碰撞只有独立 heightfield 模块，尚未接入 World
 （见下节）。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
