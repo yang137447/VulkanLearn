@@ -67,6 +67,7 @@ enum class RuntimeCommandType
     ReportTerrainFeedbackStatistics,
     ReportTerrainStatistics,
     ReportTerrainLayerStatistics,
+    ReportTerrainLodStatistics,
     SetTerrainResidentCapacity,
     // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
     SetTerrainLayerResidentCapacity,

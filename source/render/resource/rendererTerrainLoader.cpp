@@ -1,5 +1,6 @@
 #include "render/resource/rendererTerrainLoader.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -7,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "commonFunction.h"
@@ -1909,51 +1911,123 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
 
     RendererResourceCache& resourceCache = loadContext.resourceCache;
     RendererTerrainLoadResult result;
-    // 运行时 LOD 选择尚未接入：这里仍只生成/绑定 LOD0 网格。CPU 侧已能
-    // 按 TerrainLodDistancesCm / TerrainSelectLodLevel 生成并选择各级网格，
-    // 接入点应在本函数之上按 chunk 距离选择，而不是在 BuildChunks 内隐式决定。
-    const std::vector<TerrainMeshChunk> chunks = TerrainMeshBuilder::BuildChunks(plan);
-    result.objectPlans.reserve(chunks.size());
-    for (const TerrainMeshChunk& chunk : chunks)
+    // 运行时 LOD：这里一次性生成 0..lodLevels-1 级网格并全部注册为
+    // WorldMeshObject；每帧由 WorldSnapshotBuilder 按相机距离只挑一级输出。
+    // lodLevels=1 保持历史路径（无 skirt、无 LOD 组、名字/mesh key 不变）。
+    // TR 预检保证 1..4；这里不做静默钳制，越界让 BuildChunks 明确失败。
+    const uint32_t lodLevelCount =
+        plan.desc.lodLevels == 0 ? 1u : plan.desc.lodLevels;
+    const bool multiLod = lodLevelCount > 1;
+    const std::vector<float> lodDistancesCm =
+        TerrainLodDistancesCm(plan.desc);
+    struct ChunkGroupBounds
     {
-        // key 包含 placementId：同一 TR 的多处摆放不能共享/覆盖 chunk 缓冲。
-        const std::string chunkKey =
-            TerrainChunkResourceKey(plan, chunk.chunkX, chunk.chunkZ);
-        const std::shared_ptr<RenderableObject>* cached =
-            resourceCache.GetRenderableObject(chunkKey);
-        if (cached == nullptr || *cached == nullptr)
+        Eigen::Vector3f min = Eigen::Vector3f::Zero();
+        Eigen::Vector3f max = Eigen::Vector3f::Zero();
+    };
+    // LOD0 的 AABB 是整组的选择依据；各 LOD 的包围盒因 skirt 略有不同，
+    // 用同一个盒避免“当前级影响距离”造成选择反馈。
+    std::unordered_map<uint64_t, ChunkGroupBounds> groupBounds;
+    std::vector<TerrainMeshChunk> lod0Chunks;
+    if (multiLod)
+    {
+        // LOD0 只生成一次：既用于组 AABB，也直接作为第 0 级的网格来源。
+        lod0Chunks = TerrainMeshBuilder::BuildChunks(plan, 0, true);
+        groupBounds.reserve(lod0Chunks.size());
+        for (const TerrainMeshChunk& chunk : lod0Chunks)
         {
-            resourceCache.BindRenderableObject(
-                chunkKey,
-                std::make_shared<RenderableObject>(
-                    chunk.vertices,
-                    chunk.indices,
-                    rendererBackend,
-                    chunkKey));
+            const uint64_t groupKey =
+                (static_cast<uint64_t>(chunk.chunkX) << 32) |
+                static_cast<uint64_t>(chunk.chunkZ);
+            groupBounds[groupKey] = {chunk.boundsMin, chunk.boundsMax};
         }
+    }
 
-        MeshObjectBuildPlan objectPlan;
-        objectPlan.objectName =
-            objectName + "::chunk_" +
-            std::to_string(chunk.chunkX) + "_" + std::to_string(chunk.chunkZ);
-        objectPlan.sceneObjectIdentity = objectName;
-        objectPlan.materialSlotIndex = 0;
-        objectPlan.materialSlotName = "Terrain";
-        objectPlan.debugName = objectPlan.objectName;
-        objectPlan.model = model;
-        objectPlan.scenePosition = position;
-        objectPlan.sceneRotation = rotation;
-        objectPlan.sceneScale = scale;
-        objectPlan.localBoundsMin = chunk.boundsMin;
-        objectPlan.localBoundsMax = chunk.boundsMax;
-        objectPlan.meshKey = chunkKey;
-        objectPlan.materialKey = materialKey;
-        objectPlan.materialInstanceKey = materialInstance->GetName();
-        // feedback 只回读共享 VT 页表：没有 layers 的普通地形既没有虚拟页，
-        // 也不该把自己的页坐标写进其他分层地形的 feedback。
-        objectPlan.terrainFeedbackEligible =
-            TerrainParticipatesInFeedback(plan, usesLayerTable);
-        result.objectPlans.push_back(std::move(objectPlan));
+    const size_t chunksPerSide = plan.desc.chunkQuads == 0
+        ? 0
+        : plan.desc.gridResolution / plan.desc.chunkQuads;
+    const size_t chunkCount = multiLod
+        ? groupBounds.size() * lodLevelCount
+        : chunksPerSide * chunksPerSide;
+    result.objectPlans.reserve(chunkCount);
+    for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
+    {
+        const std::vector<TerrainMeshChunk> chunks =
+            multiLod && lodLevel == 0
+                ? std::move(lod0Chunks)
+                : TerrainMeshBuilder::BuildChunks(
+                    plan,
+                    lodLevel,
+                    multiLod ? std::optional<bool>(true) : std::nullopt);
+        for (const TerrainMeshChunk& chunk : chunks)
+        {
+            // key 包含 placementId 与 LOD：同一 TR 的多处摆放不能共享/覆盖
+            // chunk 缓冲，同一 chunk 的不同级也必须是独立网格。
+            const std::string chunkKey =
+                TerrainChunkResourceKey(
+                    plan,
+                    chunk.chunkX,
+                    chunk.chunkZ,
+                    lodLevel);
+            const std::shared_ptr<RenderableObject>* cached =
+                resourceCache.GetRenderableObject(chunkKey);
+            if (cached == nullptr || *cached == nullptr)
+            {
+                resourceCache.BindRenderableObject(
+                    chunkKey,
+                    std::make_shared<RenderableObject>(
+                        chunk.vertices,
+                        chunk.indices,
+                        rendererBackend,
+                        chunkKey));
+            }
+
+            MeshObjectBuildPlan objectPlan;
+            const std::string chunkBaseName =
+                objectName + "::chunk_" +
+                std::to_string(chunk.chunkX) + "_" +
+                std::to_string(chunk.chunkZ);
+            objectPlan.objectName = multiLod
+                ? chunkBaseName + "::lod" + std::to_string(lodLevel)
+                : chunkBaseName;
+            objectPlan.sceneObjectIdentity = objectName;
+            objectPlan.materialSlotIndex = 0;
+            objectPlan.materialSlotName = "Terrain";
+            objectPlan.debugName = objectPlan.objectName;
+            objectPlan.model = model;
+            objectPlan.scenePosition = position;
+            objectPlan.sceneRotation = rotation;
+            objectPlan.sceneScale = scale;
+            objectPlan.localBoundsMin = chunk.boundsMin;
+            objectPlan.localBoundsMax = chunk.boundsMax;
+            objectPlan.meshKey = chunkKey;
+            objectPlan.materialKey = materialKey;
+            objectPlan.materialInstanceKey = materialInstance->GetName();
+            // feedback 只回读共享 VT 页表：没有 layers 的普通地形既没有虚拟页，
+            // 也不该把自己的页坐标写进其他分层地形的 feedback。
+            objectPlan.terrainFeedbackEligible =
+                TerrainParticipatesInFeedback(plan, usesLayerTable);
+            if (multiLod)
+            {
+                objectPlan.lodGroupId =
+                    TerrainPlacementIdentity(plan) + "|" +
+                    std::to_string(chunk.chunkX) + "|" +
+                    std::to_string(chunk.chunkZ);
+                objectPlan.lodLevel = lodLevel;
+                objectPlan.lodLevelCount = lodLevelCount;
+                objectPlan.lodDistancesCm = lodDistancesCm;
+                const uint64_t groupKey =
+                    (static_cast<uint64_t>(chunk.chunkX) << 32) |
+                    static_cast<uint64_t>(chunk.chunkZ);
+                const auto boundsIt = groupBounds.find(groupKey);
+                if (boundsIt == groupBounds.end())
+                    throw std::runtime_error(
+                        "Terrain LOD group bounds are missing for a chunk");
+                objectPlan.lodGroupBoundsMin = boundsIt->second.min;
+                objectPlan.lodGroupBoundsMax = boundsIt->second.max;
+            }
+            result.objectPlans.push_back(std::move(objectPlan));
+        }
     }
     return result;
 }

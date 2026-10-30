@@ -344,9 +344,14 @@ temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` m
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no
 low-resolution fallback/fade, camera prefetch, terrain chunk unloading, terrain editing, or
-World-level terrain collision wiring. CPU geometry LOD/skirt generation exists
-(`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`, TR `lodLevels`/`lodDistances`), but runtime
-LOD selection is not wired: the renderer still generates and binds LOD0 only.
+World-level terrain collision wiring. CPU geometry LOD/skirt generation and runtime selection are
+wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride)`,
+TR `lodLevels`/`lodDistances`) the loader generates every level (LOD0 also gets a skirt) and
+`WorldSnapshotBuilder` picks one level per `lodGroupId = placementId|chunkX|chunkZ` from the
+camera's distance to the chunk world AABB, with a 10% hysteresis band. The snapshot is the single
+source for color, shadow, picking and MaterialInstance context; all levels of a group share one
+RuntimeId. `terrainlod stats` reports per-group level/distance/switch count.
+`lodLevels=1` old assets still generate and bind LOD0 only, byte-identical to the legacy path.
 `source/terrain/terrainCollision.*` can
 already turn a `TerrainBuildPlan` plus placement into a static Jolt `HeightFieldShape` body
 in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression, Y*X*Z degrees rotation);
@@ -524,9 +529,9 @@ If asked to add or change a terrain:
   `source/render/resource/rendererResourceLoadCoordinator.cpp`
 - inspect `source/scene/validation/sceneJsonValidator.h` and `sceneAssetValidator.cpp`
 
-Heightmap/TR/geometry changes are runtime changes; runtime LOD selection, World-level collision
-integration, terrain chunk unloading and terrain editing are still feature requests, not fixes.
-CPU LOD/skirt generation (`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`) and the standalone
+Heightmap/TR/geometry changes are runtime changes; World-level collision integration, terrain
+chunk unloading and terrain editing are still feature requests, not fixes. CPU LOD/skirt
+generation, runtime LOD selection (`WorldSnapshotBuilder` + `terrainlod stats`) and the standalone
 Jolt heightfield collision module already exist; treat bugs in those paths as fixes.
 
 If asked to add or change a render pass:

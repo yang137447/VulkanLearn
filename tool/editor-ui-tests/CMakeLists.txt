@@ -1,5 +1,6 @@
 add_executable(editor_ui_tests
     editorUiTests.cpp
+    terrainLodSnapshotTests.cpp
     actorPropertyTests.cpp
     sceneDocumentTests.cpp
     assetDocumentTests.cpp

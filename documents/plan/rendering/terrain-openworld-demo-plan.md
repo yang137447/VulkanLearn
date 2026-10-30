@@ -26,7 +26,8 @@
    top-4 的前提是 `sampler2DArray`，这是本计划唯一的新引擎能力。
 3. 权重先用**程序化 height/slope/noise**，零绘制资产；以后要画 splat，再加权重贴图覆盖，
    运行时接口不变。
-4. GPU-driven 几何、VT/clipmap、LOD、streaming 全部搁置；CPU 逐 chunk 提交。
+4. GPU-driven 几何、VT/clipmap、几何 streaming 搁置；CPU 逐 chunk 提交。
+   CPU 几何 LOD/skirt 与运行时按距离选择已接入（见 §6 状态记录）。
 5. 当前只复刻 **Open World Demo Collection** 的林地/岩石/草地貌；其他 UE 场景记录为后续候选。
 6. 世界单位是 cm；1km = 100000cm。所有 `size` / `heightScale` 按 cm 写。
 
@@ -138,8 +139,8 @@ SC_*.json (terrain object)
 - 切线：`T=(1,0,0)`、`B=(0,0,1)`、handedness `+1`；坡面切向后置。
 - UV：整块 `[0,1]`；shader 里乘 `u_uvScale`。
 - bounds：每 chunk 从顶点算 AABB，供 CPU 视锥剔除和阴影裁剪。
-- M2 当时的范围不含 LOD/skirt；2026-10-30 已补 CPU 侧 LOD/skirt 原型（见 §6 状态记录），
-  但运行时选择仍未接入，出图仍只有 LOD0。
+- M2 当时的范围不含 LOD/skirt；2026-10-30 已补 CPU 侧 LOD/skirt 与运行时选择
+  （见 §6 状态记录）。`lodLevels=1` 仍只出 LOD0 且逐字节不变。
 
 ### 3.3 材质
 
@@ -399,7 +400,7 @@ layer table 共享/数组层数校验已落地；GPU 侧新增 dirty page 子区
 2026-10-30 P3/P3.1：renderer 改为 `preload=false`，feedback 命中/miss 驱动
 `RequestPageAtEpoch`、上传 ring 与 quarantine 淘汰；默认预算 512。P3.1 又修掉
 layerless 地形误驱动 feedback、epoch-aware LRU 不看 feedback recency、降预算绕过安全窗、
-quarantine 计数惰性、页范围末端采到邻居页等问题。当前仍未接几何 LOD、几何 streaming、
+quarantine 计数惰性、页范围末端采到邻居页等问题。当前仍未接几何 streaming、
 低分辨率 fallback/淡入、碰撞/编辑与完整三张层纹理 VT。
 
 2026-10-30 CPU 几何 LOD/skirt 原型：TR 新增可选 `lodLevels`（1..4，默认 1）与
@@ -407,10 +408,16 @@ quarantine 计数惰性、页范围末端采到邻居页等问题。当前仍未
 `TerrainMeshBuilder::BuildChunks(plan, lodLevel)` 按步长 `2^lod` 合并格子，LOD0 顶点/索引
 逐字节不变；`lod>=1` 在边界环追加竖直下移的 skirt（`max(1cm, 10%|heightScale|)`），
 AABB 覆盖裙边，chunk key 含 LOD 与步长但不含 `lodDistances`。`TerrainLodDistancesCm`
-与 `TerrainSelectLodLevel` 提供纯 CPU 的距离→级别选择。**运行时选择尚未接入**：
-`RendererTerrainLoader` 仍只生成/绑定 LOD0，所以 B32/M3/BC7 截图逐字节不变。
-下一步是选 LOD 的接入点（按 chunk 距离、与阴影 pass 共享选择）以及 LOD 级 chunk
-资源的缓存/显存预算。
+与 `TerrainSelectLodLevel` 提供纯 CPU 的距离→级别选择。
+
+2026-10-30 运行时 LOD 选择：`lodLevels>1` 时 loader 为每个 chunk 生成全部级
+（LOD0 也带 skirt），`MeshObjectBuildPlan`/`WorldMeshObject` 携带
+`lodGroupId = placementId|chunkX|chunkZ`、级号和 LOD0 组 AABB。唯一选择点是
+`WorldSnapshotBuilder::Build`：相机到组世界 AABB 的最近距离 + 10% 双向滞回，
+同一组只输出一个 draw；阴影/拾取/MaterialInstance 上下文都消费同一快照。
+各级共享由 `lodGroupId` 派生的 RuntimeId，`terrainlod stats` 输出每组当前级/距离/
+切换次数。`lodLevels=1` 的 B32/M3/BC7 截图 SHA-256 与基线逐字节一致。
+剩余是 LOD 级 chunk 资源缓存/显存预算、几何 streaming 与更细的 skirt 裂缝上界。
 
 总计约 **2–3 周**（按本仓库的测试/文档标准）。
 
@@ -507,4 +514,5 @@ Definition of Done。
 - [ ] 3 张验证图通过构图/过渡检查。
 - [ ] GTest、现有场景回归、`validate-docs` 全通过。
 - [ ] 新 `contracts/terrain.md` 落地，`routing.md` / `AGENTS.md` 更新。
-- [ ] 明确记录未做项：LOD/streaming/VT/GPU-driven/grass；碰撞按 P1 的 Jolt heightfield 计划推进。
+- [ ] 明确记录未做项：几何 streaming/VT/GPU-driven/grass；CPU 几何 LOD 已接运行时
+  选择，碰撞按 P1 的 Jolt heightfield 计划推进。

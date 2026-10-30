@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -97,6 +98,59 @@ inline uint32_t TerrainSelectLodLevel(
     return level;
 }
 
+// 运行时 LOD 切换的滞回比例。相机在阈值附近抖动时，10% 的带宽可以避免
+// 相邻级每帧来回切换；带宽以阈值本身为基准，远近两侧各 10%。
+inline constexpr float TerrainLodHysteresisFraction = 0.10f;
+
+// 点到世界 AABB 的最近距离（cm）。相机在盒内返回 0；地形 LOD 选择用
+// chunk 的完整 AABB 而不是中心点，避免超大 chunk 在近处被错误地当成远景。
+inline float TerrainLodDistanceToAabbCm(
+    const Eigen::Vector3f& point,
+    const Eigen::Vector3f& boundsMin,
+    const Eigen::Vector3f& boundsMax)
+{
+    const Eigen::Vector3f outside(
+        std::max(std::max(boundsMin.x() - point.x(), point.x() - boundsMax.x()), 0.0f),
+        std::max(std::max(boundsMin.y() - point.y(), point.y() - boundsMax.y()), 0.0f),
+        std::max(std::max(boundsMin.z() - point.z(), point.z() - boundsMax.z()), 0.0f));
+    return outside.norm();
+}
+
+// 带滞回的运行时选择：第一次选择（hasPreviousLevel=false）与纯函数一致；
+// 之后只有越过阈值 ±hysteresisFraction 的带宽才换级。返回级号范围
+// [0, lodDistancesCm.size()]。
+inline uint32_t TerrainSelectLodLevelHysteresis(
+    float distanceCm,
+    const std::vector<float>& lodDistancesCm,
+    bool hasPreviousLevel,
+    uint32_t previousLevel,
+    float hysteresisFraction = TerrainLodHysteresisFraction)
+{
+    const uint32_t maxLevel =
+        static_cast<uint32_t>(lodDistancesCm.size());
+    if (!hasPreviousLevel)
+        return std::min(TerrainSelectLodLevel(distanceCm, lodDistancesCm), maxLevel);
+
+    const float distance = distanceCm > 0.0f ? distanceCm : 0.0f;
+    const float hysteresis =
+        hysteresisFraction > 0.0f ? hysteresisFraction : 0.0f;
+    uint32_t level = std::min(previousLevel, maxLevel);
+
+    // 变粗：必须超过“阈值 + 10%”才升级，防止边界抖动。
+    while (level < maxLevel &&
+        distance >= lodDistancesCm[level] * (1.0f + hysteresis))
+    {
+        ++level;
+    }
+    // 变细：必须低于“阈值 - 10%”才降级。
+    while (level > 0 &&
+        distance < lodDistancesCm[level - 1] * (1.0f - hysteresis))
+    {
+        --level;
+    }
+    return level;
+}
+
 // 一层地表调色板的作者数据。M2 只校验并携带，M3 的 top-4 材质才开始消费。
 struct TerrainLayerDesc
 {
@@ -145,8 +199,9 @@ struct TerrainAssetDesc
     std::vector<float> lodDistancesCm;
 };
 
-// 运行时选择尚未接入：renderer 目前只生成/绑定 LOD0。本函数提供可测的
-// 距离→阈值推导，供后续按相机距离选择时复用；返回值不参与 chunk 资源 key。
+// 距离→阈值推导。renderer 用它在加载期把阈值写进每个 chunk 的 LOD 组，
+// WorldSnapshotBuilder 每帧按相机到 chunk AABB 的距离选择级；返回值不参与
+// chunk 资源 key（同一级网格与相机位置无关）。
 inline std::vector<float> TerrainLodDistancesCm(const TerrainAssetDesc& desc)
 {
     if (!desc.lodDistancesCm.empty())

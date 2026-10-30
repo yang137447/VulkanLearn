@@ -100,15 +100,19 @@ std::string TerrainChunkResourceKey(
         std::to_string(desc.pageOrigin.y()) +
         "|pageTiles=" + std::to_string(desc.pageTilesPerSide) +
         // lod 决定合并步长与是否带 skirt，必须进入 key；lodDistances
-        // 只影响运行时选择，不影响单级网格。
+        // 只影响运行时选择，不影响单级网格。LOD0 的 skirt 由 lodLevels>1
+        // 决定，也要进入 key，否则单级与多级资产的 LOD0 会错误共享缓冲。
         "|lod=" + std::to_string(lodLevel) +
         "|lodStep=" + std::to_string(TerrainLodStepQuads(lodLevel)) +
+        "|lod0Skirt=" +
+            (lodLevel == 0 && desc.lodLevels > 1 ? "1" : "0") +
         "|chunk=" + std::to_string(chunkX) + "," + std::to_string(chunkZ);
 }
 
 std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     const TerrainBuildPlan& plan,
-    uint32_t lodLevel)
+    uint32_t lodLevel,
+    std::optional<bool> buildSkirtOverride)
 {
     if (!plan.heightmap)
         throw std::runtime_error("Terrain mesh build requires a decoded heightmap");
@@ -136,7 +140,8 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     const float worldDx = 2.0f * du * desc.size.x();
     const float worldDz = 2.0f * dv * desc.size.y();
     const float skirtDepthCm = TerrainChunkSkirtDepthCm(desc);
-    const bool buildSkirt = lodLevel > 0;
+    const bool buildSkirt =
+        buildSkirtOverride.value_or(lodLevel > 0);
     // 全局页 UV 是 [0,1] 的归一化坐标；最后一列/行的顶点恰好落在页边界上，
     // 直接采样会落进邻居页。按半个页 texel 内缩，内部顶点保持精确值。
     const float pageEdgeInset =

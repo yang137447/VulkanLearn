@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,9 +45,12 @@ public:
     // 生成指定 LOD 的全部 chunk。LOD0 与历史实现逐字节一致（无 skirt）；
     // LOD>=1 把每方向 chunkQuads/2^lod 个格子合并一格，并在 chunk 边界
     // 追加一圈向下延伸的 skirt，用于遮挡与更粗 LOD 相邻时的裂缝。
+    // buildSkirtOverride 为空时沿用历史规则（仅 LOD>=1 带裙边）；多级地形
+    // 需要给 LOD0 也带裙边，否则与相邻 LOD1 chunk 的边界无法完全遮挡。
     static std::vector<TerrainMeshChunk> BuildChunks(
         const TerrainBuildPlan& plan,
-        uint32_t lodLevel = 0);
+        uint32_t lodLevel = 0,
+        std::optional<bool> buildSkirtOverride = std::nullopt);
 };
 
 // skirt 向下延伸的深度（cm）。当前按地形总高度尺度取 10%，下限 1cm；
