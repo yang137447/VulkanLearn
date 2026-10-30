@@ -1360,6 +1360,9 @@ bool RenderSystem::ApplyTerrainLayerExactFeedback(
     config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
     config.idleEvictionEnabled =
         streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
+    // L4e：相机前向移动时预取细一级 mip 的子页，使用独立每帧名额。
+    config.prefetchFinerMipEnabled = streaming->layerPrefetchMoving;
+    config.prefetchPagesPerFrame = streaming->maxLayerPrefetchPagesPerFrame;
 
     streaming->latestLayerExactFeedback =
         streaming->layerVisibilityResolver.ApplyExact(
@@ -1434,6 +1437,16 @@ void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
                 "u_layerMaxMip",
                 static_cast<float>(
                     VL::TerrainLayerPageManager::MaxMipLevel));
+        }
+        // L4e：feedback 与 M_terrain 必须报告同一目标 mip；console 的
+        // forcemip 两边都从这里取值。
+        if (passMaterial->HasParameter("u_layerForceMip") && streaming)
+        {
+            passMaterial->SetParameter(
+                "u_layerForceMip",
+                static_cast<float>(
+                    streaming->layerForceMip.load(
+                        std::memory_order_relaxed)));
         }
         if (passMaterial->HasParameter("u_layerFeedbackEnabled"))
         {
@@ -1591,6 +1604,88 @@ void RenderSystem::RequestTerrainLayerPreload()
         << std::endl;
 }
 
+void RenderSystem::RequestTerrainLayerForceMip(int forceMip)
+{
+    if (forceMip < -1 || forceMip > 4)
+    {
+        std::cout
+            << "[TerrainLayer] forceMip must be -1 (auto) or 0..4."
+            << std::endl;
+        return;
+    }
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    // 只写 atomic；渲染线程帧首把值同步到 M_terrain 与 feedback pass。
+    streaming->layerForceMip.store(forceMip, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Forced target mip: "
+        << (forceMip < 0 ? std::string("auto") : std::to_string(forceMip))
+        << std::endl;
+}
+
+void RenderSystem::ApplyTerrainLayerForceMip(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return;
+    const float forceMip = static_cast<float>(
+        streaming->layerForceMip.load(std::memory_order_relaxed));
+    // 只在值变化或有新实例登记时写入：SetParameter 会标脏材质 UBO。
+    if (forceMip == streaming->lastAppliedLayerForceMip &&
+        streaming->layerVTMaterials.size() ==
+            streaming->lastAppliedLayerMaterialCount)
+    {
+        return;
+    }
+    for (const std::weak_ptr<MaterialInstance>& weakMaterial :
+         streaming->layerVTMaterials)
+    {
+        const std::shared_ptr<MaterialInstance> material = weakMaterial.lock();
+        if (material && material->HasParameter("u_layerForceMip"))
+            material->SetParameter("u_layerForceMip", forceMip);
+    }
+    streaming->lastAppliedLayerForceMip = forceMip;
+    streaming->lastAppliedLayerMaterialCount =
+        streaming->layerVTMaterials.size();
+}
+
+void RenderSystem::UpdateTerrainCameraPrefetch(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
+{
+    if (!streaming)
+        return;
+    if (!streaming->layerVTRequested)
+    {
+        streaming->layerPrefetchMoving = false;
+        return;
+    }
+    const Eigen::Vector3f position = currentRenderScene.camera.position;
+    if (!hasTerrainPrefetchCameraPosition)
+    {
+        lastTerrainPrefetchCameraPosition = position;
+        hasTerrainPrefetchCameraPosition = true;
+        streaming->layerPrefetchMoving = false;
+        return;
+    }
+    const Eigen::Vector3f delta = position - lastTerrainPrefetchCameraPosition;
+    lastTerrainPrefetchCameraPosition = position;
+    const float distance = delta.norm();
+    // 只有“向前走”才提高细一级 mip 的需求：横向平移/转头不会让目标
+    // mip 变细，预取反而会和当前可见页抢槽位。
+    const float forwardDistance =
+        delta.dot(currentRenderScene.camera.forward);
+    streaming->layerPrefetchMoving =
+        distance > streaming->layerPrefetchMinForwardCm &&
+        forwardDistance > 0.5f * distance;
+}
+
 void RenderSystem::PublishTerrainStreamingStats(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming,
     uint64_t completedEpoch)
@@ -1661,6 +1756,12 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerFallbackTargetPages = exact.fallbackTargetPages;
         stats.layerFallbackLevelPages = exact.fallbackLevelPages;
         stats.layerTargetMipSlots = exact.targetMipSlots;
+        // L4e：区分“有粗页可混”和“只能 avgColor”，以及相机前向预取量。
+        stats.layerFallbackBlendPages = exact.fallbackBlendPages;
+        stats.layerAvgColorPages = exact.avgColorPages;
+        stats.layerPrefetchPages = exact.prefetchPages;
+        stats.layerPrefetchRequests = exact.prefetchRequests;
+        stats.layerPrefetchAccepted = exact.prefetchAccepted;
     }
     else
     {
@@ -1677,6 +1778,13 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerFallbackTargetPages = cover.fallbackTargetPages;
         stats.layerFallbackLevelPages = cover.fallbackLevelPages;
         stats.layerTargetMipSlots = {};
+        // 覆盖页路径没有精确的“目标 mip 页”信息，混合分类保持 0；
+        // 预取量同样只由精确路径统计。
+        stats.layerFallbackBlendPages = 0;
+        stats.layerAvgColorPages = 0;
+        stats.layerPrefetchPages = 0;
+        stats.layerPrefetchRequests = 0;
+        stats.layerPrefetchAccepted = 0;
     }
     stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
     stats.layerDirtyPages = layerPages.DirtyPageCount();
@@ -1698,6 +1806,9 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.layerUsedCoverFallback =
         feedbackHealth.starvedFrames != 0;
     stats.layerIdleGraceEpochs = feedbackHealth.starvationCreditEpochs;
+    stats.layerForceMip = static_cast<float>(
+        streaming->layerForceMip.load(std::memory_order_relaxed));
+    stats.layerPrefetchMoving = streaming->layerPrefetchMoving;
     streaming->PublishStats(stats);
     // 本帧上传数只显示一帧；累计值继续保留。
     streaming->lastUploadedPages = 0;
@@ -1853,6 +1964,18 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " albedo=" << vk::to_string(resources.albedoFormat)
         << " normal=" << vk::to_string(resources.normalFormat)
         << " pbr=" << vk::to_string(resources.pbrFormat)
+        << std::endl;
+    // L4e：强制 mip 与相机前向预取。fallbackBlendPages 表示目标页缺页但
+    // 有更粗驻留页（shader 按 mip 差渐变）；avgColorPages 表示连粗页都
+    // 没有，整页显示 avgColor。prefetchMoving=1 才会产生 prefetchRequests。
+    std::cout
+        << "[TerrainLayer] forceMip=" << stats.layerForceMip
+        << " prefetchMoving=" << (stats.layerPrefetchMoving ? 1 : 0)
+        << " prefetchPages=" << stats.layerPrefetchPages
+        << " prefetchRequests=" << stats.layerPrefetchRequests
+        << " prefetchAccepted=" << stats.layerPrefetchAccepted
+        << " fallbackBlendPages=" << stats.layerFallbackBlendPages
+        << " avgColorPages=" << stats.layerAvgColorPages
         << std::endl;
 }
 
@@ -3829,6 +3952,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
     if (terrainFeedbackStreaming)
     {
+        // L4e：相机位移只在本帧提交时推进，确保预取方向与真正渲染的帧一致。
+        UpdateTerrainCameraPrefetch(terrainFeedbackStreaming);
+        // console 的强制 mip 在 feedback 消费之前写进材质，feedback 与
+        // M_terrain 才会在同帧使用同一个目标 mip。
+        ApplyTerrainLayerForceMip(terrainFeedbackStreaming);
         terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
             feedbackSubmittedEpoch,
             terrainFeedbackStreaming->lastConsumedFeedbackEpoch,

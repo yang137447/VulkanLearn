@@ -412,6 +412,17 @@ resident set is preserved. `ApplyTerrainLayerExactFeedback` then returns false s
 resident set decays at `starvationEvictionPagesPerFrame` (default 2) pages/frame, so a long
 feedback outage never locks memory. `terrainlayerstats` prints `starvedFrames` /
 `lastValidEpoch` / `usedCoverFallback` / `idleGrace`.
+L4e adds `u_layerForceMip` (-1 auto, 0..4 console override via
+`terrainlayer forcemip N`) on both `M_terrain` and `M_terrainFeedback`; the shader and
+feedback share `TerrainLayerTargetMip` in `terrainLayerVTMath.glsl`. When the sampled
+`usedMip` is coarser than the target, `TerrainLayerFallbackBlend` mixes albedo toward catalog
+`avgColor`, pbr toward the neutral value and normal toward the geometric normal at
+`0.2 × mip-gap` (cap 0.6, gap 0 unchanged). Camera forward motion above 5 cm/frame makes
+`TerrainLayerVisibilityResolver` prefetch the four finer-mip children of resident visible
+pages, at most 4 requests/frame, outside the feedback request budget but still through
+`RequestPageAtEpoch`. `terrainlayer stats` additionally prints `forceMip` / `prefetchMoving` /
+`prefetchPages` / `prefetchRequests` / `prefetchAccepted` / `fallbackBlendPages` /
+`avgColorPages`.
 CPU page baking is still
 synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
 `documents/contracts/terrain.md`.

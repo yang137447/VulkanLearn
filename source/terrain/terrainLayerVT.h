@@ -6,6 +6,7 @@
 // 不依赖 GPU。
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -71,6 +72,50 @@ inline uint32_t SelectMip(
         0,
         static_cast<int>(std::min(maxMip, MaxMipForPagesPerSide(pagesPerSide))));
     return static_cast<uint32_t>(clamped);
+}
+
+// L4e：console `terrainlayer forcemip` 的 CPU 参考。forcedMip < 0 表示自动；
+// 0..4 覆盖自动结果后再按该层实际 mip 链 clamp。shader 的
+// TerrainLayerTargetMip（terrainLayerVTMath.glsl）必须与此完全一致。
+inline uint32_t ResolveTargetMip(
+    uint32_t autoMip,
+    int forcedMip,
+    uint32_t maxMip)
+{
+    if (forcedMip < 0)
+        return std::min(autoMip, maxMip);
+    return std::min(static_cast<uint32_t>(forcedMip), maxMip);
+}
+
+// L4e：目标 mip 缺页、shader 向更粗 mip 回退时的混合系数。
+// 每差一级混入 20%，上限 60%；gap = 0 必须为 0（完整驻留不改变像素）。
+inline float FallbackBlendForMipGap(
+    uint32_t targetMip,
+    uint32_t usedMip)
+{
+    if (usedMip <= targetMip)
+        return 0.0f;
+    const float gap = static_cast<float>(usedMip - targetMip);
+    return std::min(0.2f * gap, 0.6f);
+}
+
+// L4e：相机前向预取的单位。mip N 的页 (x,y) 在 mip N-1 上覆盖 2×2 个
+// 子页；按子页提前请求，相机靠近时更细的 mip 已经驻留，不会先掉到粗页。
+// 纯几何：调用方保证 pageX/pageY 在 mip 的 pagesPerSide 内。
+struct LayerChildPage
+{
+    uint32_t pageX = 0;
+    uint32_t pageY = 0;
+};
+
+inline std::array<LayerChildPage, 4> FinerMipChildren(
+    uint32_t pageX,
+    uint32_t pageY)
+{
+    return {LayerChildPage{pageX * 2, pageY * 2},
+            LayerChildPage{pageX * 2 + 1, pageY * 2},
+            LayerChildPage{pageX * 2, pageY * 2 + 1},
+            LayerChildPage{pageX * 2 + 1, pageY * 2 + 1}};
 }
 
 // L2 的页表布局把“每个 mip 的最大 stride * 256 层”展开成 2D texel；

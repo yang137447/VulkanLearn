@@ -4,6 +4,7 @@ add_executable(terrain_tests
     terrainLayerFeedbackTests.cpp
     terrainLayerPageManagerTests.cpp
     terrainLayerVisibilityTests.cpp
+    terrainLayerStreamingQualityTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp

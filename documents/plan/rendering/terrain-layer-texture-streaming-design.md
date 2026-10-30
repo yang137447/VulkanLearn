@@ -1265,6 +1265,37 @@ TerrainStreamingState
   fallback/淡入；语义上仍无法区分“相机看向天空”和“相机被裁切”，只能靠
   宽限期与限速降级兜底。
 
+**L4e 状态（2026-10-30，强制 mip + 回退混合 + 相机预取已完成）**
+
+- 强制 mip：`M_terrain` / `M_terrainFeedback` 新增 `u_layerForceMip`（-1 自动、
+  0..4 覆盖，按层 mip 链 clamp）；console `terrainlayer forcemip N` 只写
+  streaming state 的 atomic，渲染线程帧首写入已登记的 M_terrain 实例与
+  feedback pass 材质。shader 覆盖规则在 `terrainLayerVTMath.glsl`，feedback
+  报告覆盖后的目标 mip。
+- 回退混合：`usedMip > targetMip` 时按 `0.2 × gap`（上限 0.6）把 albedo 混向
+  catalog `avgColor`、pbr 混向中性值、normal 混向几何法线；gap=0 时路径不变。
+  目标与所有更粗 mip 都缺页时仍是整页 avgColor，不回退 layer 0。
+- 相机预取：渲染线程比较本帧/上一提交帧相机位置，前向位移超过 5cm 且主要沿
+  forward 时，对已驻留的可见层页请求细一级 mip 的 2×2 子页；每帧 4 页、
+  独立于 feedback 请求名额、仍走容量与安全窗。它不是视锥/tile 级预取。
+- 统计：`terrainlayer stats` 新增 `forceMip` / `prefetchMoving` /
+  `prefetchPages` / `prefetchRequests` / `prefetchAccepted` /
+  `fallbackBlendPages` / `avgColorPages`。
+- 强制 mip 的用途：上一轮无法构造“粗 mip 回退”的可复现画面，因为自动 mip
+  会随着相机贴近一直停在已有页上；`forcemip 0` 在只驻留粗页时能稳定制造
+  目标缺页，从而验证混合曲线。
+- 证据（2026-10-30）：`terrain_tests` 185/185、`ctest -R "^Terrain"` 193/193、
+  backend 61/61、material schema 11/11、texture 58/58。`SC_terrain_vt_mode1.json`
+  自动相机第 38 epoch：`resident=32/512`、`targetMips=0/0/2044/0/0`、
+  `fallbackBlendPages=0`、`avgColorPages=0`、`forceMip=-1`、`prefetchMoving=0`。
+  `terrainlayer forcemip 0` 后第一帧（目标 mip0 尚未驻留、只有粗页）截图与自动
+  基线相比：平均通道差 3.07、最大 28、4.38% 像素 >8，画面没有整页纯色块，
+  过渡更柔和——符合“粗页 + 0.2/0.4 混合”的预期，而不是硬切 `avgColor`。
+  mode 0 的 `SC_terrain_b32.json` 截图 SHA-256 仍为 `1D30D8B3…3F54`，与基线
+  逐字节一致。
+- 未完成：没有低分辨率兜底页，也没有基于视锥/tile 距离或相机转向的预取；
+  `forcemip` 之后的 stats 只能在下一次 GT 命令 tick 打印，冒烟中不追加这一行。
+
 ---
 
 ## 7. 风险与备选

@@ -901,6 +901,10 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::RequestTerrainLayerPreload:
         renderSystem.RequestTerrainLayerPreload();
         break;
+    case RuntimeCommandType::SetTerrainLayerForceMip:
+        // 只写 streaming state 的 atomic；M_terrain/feedback 在渲染线程帧首同步。
+        renderSystem.RequestTerrainLayerForceMip(command.intValue);
+        break;
     }
 }
 

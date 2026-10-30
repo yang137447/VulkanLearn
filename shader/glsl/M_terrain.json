@@ -97,6 +97,15 @@
                 "max": 4.0
             },
             "description": "maximum VT layer page-table mip; per-layer effective max is derived from catalog pagesPerSide"
+        },
+        "u_layerForceMip": {
+            "type": "float",
+            "default": -1.0,
+            "range": {
+                "min": -1.0,
+                "max": 4.0
+            },
+            "description": "-1 = auto mip from derivatives; 0..4 = console debug override (terrainlayer forcemip) applied to mode 1 only"
         }
     },
     "textures": {
