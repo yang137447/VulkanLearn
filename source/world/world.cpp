@@ -434,6 +434,11 @@ void World::AddSquareAreaLight(std::string name, WorldSquareAreaLight light)
     squareAreaLights[std::move(name)] = std::move(light);
 }
 
+void World::AddTerrainCollisionInstance(TerrainCollisionInstance instance)
+{
+    terrainCollisionInstances.push_back(std::move(instance));
+}
+
 template <typename ApplyFn>
 bool World::ForEachMeshObjectInSceneObject(const std::string& sceneObjectIdentity, ApplyFn&& apply)
 {

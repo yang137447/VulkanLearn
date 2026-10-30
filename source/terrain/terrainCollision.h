@@ -7,6 +7,8 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
 
+#include "terrain/terrainCollisionTypes.h"
+
 namespace JPH
 {
 class PhysicsSystem;
@@ -14,18 +16,6 @@ class PhysicsSystem;
 
 namespace VL
 {
-
-struct TerrainBuildPlan;
-
-// 一次地形摆放的世界变换，字段与场景对象的 position/rotation/scale 一一对应：
-// position 单位 cm、rotation 单位度（Y*X*Z，与 CommonFunction::RotationToQuat 一致）、
-// scale 是无量纲乘数。Jolt 世界本身用米，换算只发生在 terrainCollision 内部。
-struct TerrainCollisionPlacement
-{
-    Eigen::Vector3f position = Eigen::Vector3f::Zero();
-    Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
-    Eigen::Vector3f scale = Eigen::Vector3f::Ones();
-};
 
 struct TerrainCollisionSettings
 {

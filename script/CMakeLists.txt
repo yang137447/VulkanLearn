@@ -35,7 +35,6 @@ endfunction()
 vl_add_jolt_cpu()
 
 if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
-    target_link_libraries(vl_script_host PUBLIC Jolt)
     if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR "C# Blueprint hosting currently requires Windows x64.")
     endif()
@@ -125,3 +124,7 @@ if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
         VL_SCRIPT_BUILD_CONFIGURATION="${VULKANLEARN_SCRIPT_CONFIGURATION}")
     target_compile_definitions(vl_script_host PRIVATE VL_DOTNET_ROOT="${dotnet_root}")
 endif()
+
+# 地形碰撞的 ScriptPhysicsWorld 实现不再依赖 C# hosting；Jolt 是核心 CPU 依赖，
+# 物理翻译单元在关闭 C# 时也要能编译和测试。
+target_link_libraries(vl_script_host PUBLIC Jolt)

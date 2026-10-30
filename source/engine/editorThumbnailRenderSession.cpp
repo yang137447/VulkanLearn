@@ -227,7 +227,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
 
     void ConfigureScene()
     {
-        auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, cache, 4));
+        auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, 4));
         ModelPreviewCamera camera;
         if (!camera.Synchronize(*world, 1.0f)) throw std::runtime_error("Thumbnail model has no bounds");
         auto& projection = *world->GetCamera();

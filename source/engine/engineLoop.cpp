@@ -555,6 +555,10 @@ void EngineLoop::Tick()
     {
         RenderSystem::GetInstance().ReportTerrainLodStatistics();
     }
+    if (commandResult.terrainCollisionStatisticsRequested)
+    {
+        GetSubsystems().GetScriptRuntime().ReportTerrainCollisionStatistics();
+    }
     if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
     {
         const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};

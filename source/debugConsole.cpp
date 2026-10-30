@@ -743,6 +743,24 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "terraincollision")
+    {
+        // 只读诊断：输出 Play 中已创建的地形 heightfield body 与 placement；
+        // 非 Play 时明确报告没有物理世界。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terraincollision stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainCollisionStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -823,6 +841,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
     std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
     std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
+    std::cout << "  terraincollision stats - report play-mode terrain collision bodies\n";
     std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
 }
 
