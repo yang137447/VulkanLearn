@@ -74,6 +74,8 @@ struct TerrainLayerVisibilityStats
     uint32_t evictedPages = 0;
     // L4c：目标页缺页、shader 会向更粗 mip 回退的候选页数。
     uint32_t fallbackTargetPages = 0;
+    // +1/+2/+3 级粗 mip 页数；覆盖页路径也保留这一遥测。
+    std::array<uint32_t, 3> fallbackLevelPages{};
     // 本帧成功请求的页按 mip 分布，用于确认 LOD/预算策略符合预期。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
 };

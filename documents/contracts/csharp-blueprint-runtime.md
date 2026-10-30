@@ -572,7 +572,9 @@ Spawn 模板不接受外部约束。销毁目标移除约束并唤醒相关刚�
 
 `Physics.Raycast(from, to, callback, includeTriggers: false)` 是异步有界线段查询。
 默认忽略所属 Blueprint 与 Trigger，返回最近命中的 BlueprintHandle、cm 点/距离和世界单位法线，
-未命中传 null。凸体内部起点的距离为零，法线约定为逆射线方向。
+未命中传 null。命中地形时 `Terrain` 为 placementId（`terrain|<name>`），
+`HasBlueprint` 为 false、`Blueprint` 为默认句柄；不会把地形伪装成蓝图。
+凸体内部起点的距离为零，法线约定为逆射线方向。
 Tick/BeginPlay 请求在物理之后、LateTick 之前交付；LateTick 请求在下一帧交付。
 回调仍走所属 Blueprint 的故障隔离与变换回滚边界；失败、Destroy 或 Stop 清理未交付请求。
 一个上下文最多 256 条未完成查询。

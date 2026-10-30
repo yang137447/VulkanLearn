@@ -232,13 +232,12 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
     // 只把扩展前的候选计入 feedback hit；粗页是预取，不是本帧可见页。
     const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
         visibleCandidates(candidates.begin(), candidates.end());
-    std::array<uint32_t, 3> ignoredFallbackLevels{};
     ExpandCoarserFallbackCandidates(
         candidates,
         layerPages,
         config,
         stats.fallbackTargetPages,
-        ignoredFallbackLevels);
+        stats.fallbackLevelPages);
     stats.candidatePages = static_cast<uint32_t>(candidates.size());
 
     const uint64_t seenEpoch =
