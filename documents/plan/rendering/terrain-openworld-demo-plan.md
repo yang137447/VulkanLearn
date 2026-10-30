@@ -5,13 +5,14 @@
 | 项目 | 内容 |
 | --- | --- |
 | 类型 | 地形运行时与首个复刻场景的**实施计划**（未来工作，不是契约） |
-| 状态 | 未实现。`source/` 没有 terrain 运行时，`SceneAssetValidator` 仍拒绝 `terrain`；本计划取代 World Creator 路线 |
+| 状态 | 部分实现：CPU heightmap terrain、层表、ID/权重图、global page table/atlas、feedback 驱动驻留与 P3.1 流式收口已落地（见 `contracts/terrain.md`）；本文件保留 8 层 demo 的复刻目标与未完成项 |
 | 修订 | 2026-10-19 第 1 版 |
 | 目标 | 1km 林地地形；8 层、top-4、texture array；复刻 Open World Demo Collection 的地表与构图 |
-| 非目标 | GPU-driven、indirect draw、GPU 四叉树、LOD、streaming、VT/clipmap、编辑器绘制、草地系统；地形碰撞不在 M1，P1 见开放世界栈路线图 |
+| 非目标 | GPU-driven、indirect draw、GPU 四叉树、几何 LOD/几何 streaming、完整三张层纹理 VT/clipmap、编辑器绘制、草地系统；地形碰撞不在 M1，P1 见开放世界栈路线图 |
 | 当前参考 | Open World Demo Collection（§1） |
 | 后续候选 | Landscape Mountains、Kite Demo、Project Titan（§9） |
 | 关联路线图 | [open-world-scene-stack-roadmap.md](open-world-scene-stack-roadmap.md)（碰撞/GASP/植被/风/LOD/shading 的整套顺序） |
+| 大世界层数架构 | [terrain-large-world-layers-plan.md](terrain-large-world-layers-plan.md)（上百层、tile 候选层、VT/流式；8 层 demo 只是 Phase A 前冒烟） |
 | 取代 | `terrain-worldcreator-mvp.md`（World Creator 高度图路线，未实施；保留为历史） |
 
 > 本文件是计划，不是契约。运行时落地后，行为写进 `documents/contracts/terrain.md`（新文件）；
@@ -356,9 +357,49 @@ for k in 0..3: top[k] /= sum
 `GetMipData(0, layer)` 支持逐层寻址。覆盖归入现有 `texture_asset_tests`；
 已落地行为见 [纹理合同](../../contracts/texture-asset-json-v1.md#cpu-array-preparation)。
 
-M1 尚未完成：GPU 多层上传、2D_ARRAY view/mip、`textureArray` JSON、
-`sampler2DArray` schema/反射/MI 类型校验及画面验收仍待实现。
-M0 素材未冻结，M2–M5 未开始；本批不修改运行时资源或默认场景。
+2026-10-29 M1 运行时链路补齐：`DeviceTextureFactory` 按 `arrayLayers` 建图、逐层拷贝并
+为每层生成 mip，`Texture` 在 `CreateDesc::textureArray` 下建 2D_ARRAY view；
+Texture JSON 接受 `type: "textureArray"` + 有序 `sources`，cache key 含类型与层序；
+材质 `textures` 接受 `sampler2DArray`，schema 将其写进生成 include。
+同日用 `M_textureArraySmoke` 与两层红/绿 scene 完成 GPU 冒烟：左球 layer 0 红、右球
+layer 1 绿，确认建图/逐层上传/2D_ARRAY view/材质绑定/层索引整条链路。
+
+M1 仍未完成：真实 8 层资产生成与地形出图验收；编辑器缩略图与 MI 贴图选择器
+仍把数组视为不支持。M0 素材未冻结，M3–M5 未开始；本批不修改运行时资源或默认场景。
+
+2026-10-29 M2 基础运行时落地：TR_*.json 预检/高度图解码、全局中心差分法线、
+CPU chunk 网格、`terrain` 场景对象、World mesh 计划与 `RendererTerrainLoader` 已接通。
+当前行为写入 [terrain 契约](../../contracts/terrain.md)；M2 范围没有 LOD/streaming/碰撞/top-4，
+`layers` 只做结构校验。
+
+同日 M3 功能冒烟完成：`M_terrain` + 三张 8 层 texture array + TR.layers 生成的 32×2 LUT
+top-4 已能出图；debug 0/1/2/3 分别输出正常着色/权重/层号/albedo。M4 的真实素材、调色和
+画面验收仍未开始。
+
+2026-10-29 Phase B 数据通路：TR.layers 扩到 1..256；`TerrainWeightMapBuilder` 按 tile
+候选层烘焙 ID/权重图，M_terrain 直接读 top-4；32 层 GPU 数组场景已出图。
+权重图近景块状明显，VT/更高分辨率属于 Phase C；per-tile MI 身份仍未解决。
+
+同日 Phase C2b：`TerrainPageManager` 把同一 World 的多个 terrain 累积到 32×32 global page
+table + 4096×4096 atlas，pageOrigin 写进顶点 `texCoord1`；双地形共享页表已出图。
+页面仍全量常驻，feedback/eviction/按需驻留未实现。
+
+C2c CPU 侧：per-tile page 烘焙、resident set、LRU/priority/refcount、fallback page 和
+layer table 共享/数组层数校验已落地；GPU 侧新增 dirty page 子区域上传，renderer 仍 preload
+全部页，GPU feedback/真实淘汰未接。
+
+2026-10-29 P2/P2.5：独立 `terrainFeedback` pass + frame fence 回读 ring 已落地；
+每帧提交 epoch 回灌 `TerrainPageManager::SetGpuEpochContext`，feedback 只更新命中页
+`lastSeenEpoch`；新增 `RequestPageAtEpoch` 安全窗入口、上传 pin 计数、MI 预览共享
+`TerrainStreamingState`、heightScale=0/负值归一化与缺页中性表面。当时 renderer 仍
+`preload=true`，尚未用 feedback 驱动驻留/淘汰；这部分由后续 P3 完成，见
+[VT 流式设计](terrain-vt-streaming-design.md)。
+
+2026-10-30 P3/P3.1：renderer 改为 `preload=false`，feedback 命中/miss 驱动
+`RequestPageAtEpoch`、上传 ring 与 quarantine 淘汰；默认预算 512。P3.1 又修掉
+layerless 地形误驱动 feedback、epoch-aware LRU 不看 feedback recency、降预算绕过安全窗、
+quarantine 计数惰性、页范围末端采到邻居页等问题。当前仍未接几何 LOD、几何 streaming、
+低分辨率 fallback/淡入、碰撞/编辑与完整三张层纹理 VT。
 
 总计约 **2–3 周**（按本仓库的测试/文档标准）。
 

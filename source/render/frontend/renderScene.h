@@ -25,6 +25,8 @@ struct RenderDrawPacket
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
     std::string speedTreeWindProfileKey;
+    // 显式地形标记：feedback pass 用 draw packet 层过滤，而不是遍历材质/名字。
+    bool terrainFeedbackEligible = false;
 };
 
 struct MaterialInstanceDrawGroup

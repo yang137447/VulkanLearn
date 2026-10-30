@@ -36,6 +36,7 @@
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
+#include "terrain/terrainFeedback.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -50,6 +51,7 @@ namespace VL
 {
 class World;
 struct OfflineWorldAssets;
+struct TerrainStreamingState;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
 }
@@ -105,6 +107,14 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 控制台只读诊断：打印最近一次已完成 feedback 回读的页统计。
+    // 不触发 RequestPage/Evict，也不改变 preload=true 的驻留行为。
+    void ReportTerrainFeedbackStatistics() const;
+    // P3 控制台：打印驻留/预算/淘汰/上传统计（渲染线程发布的快照）。
+    void ReportTerrainStatistics() const;
+    void ReportTerrainLayerStatistics() const;
+    // 预算命令由 GT 写 atomic，渲染线程帧首消费；不直接跨线程改 page manager。
+    void RequestTerrainResidentCapacity(uint32_t capacity);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
@@ -388,6 +398,25 @@ private:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
+    void ConsumeTerrainFeedback(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        uint64_t completedEpoch,
+        uint32_t frameIndex);
+    void PrepareTerrainFeedbackPass(uint8_t frameTag);
+    void StoreTerrainFeedbackSummary(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        const VL::TerrainFeedbackFrameSummary& summary);
+    void PublishTerrainStreamingStats(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        uint64_t completedEpoch);
+
+    struct TerrainFeedbackReport
+    {
+        VL::TerrainFeedbackFrameSummary summary;
+        bool hasPendingFrameTagRange = false;
+        uint8_t oldestPendingFrameTag = 0;
+        uint8_t newestPendingFrameTag = 0;
+    };
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
@@ -468,6 +497,8 @@ private:
     bool sceneViewportRequested = false;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
+    mutable std::mutex terrainFeedbackStatisticsMutex;
+    std::optional<TerrainFeedbackReport> latestTerrainFeedbackReport;
     std::string uiVertexShaderPath;
     std::string uiFragmentShaderPath;
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，

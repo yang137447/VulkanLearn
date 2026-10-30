@@ -1,15 +1,21 @@
 #include "render/resource/rendererResourceLoadCoordinator.h"
 
+#include <algorithm>
 #include <iterator>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
 
+#include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/resource/terrainFeedbackGpu.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "terrain/terrainPageManager.h"
+#include "terrain/terrainLayerTable.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
@@ -44,6 +50,88 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         throw std::runtime_error("RendererBackendVulkan is not set in RendererResourceLoadCoordinator");
     }
 
+    // C2b/P3：先注册本 World 的全部 terrain page，再创建共享 page table/atlas；
+    // 生产路径不再全量 preload，只建立身份并预取每个 placement 的中心 2×2 页。
+    // P0：这些状态必须活到 World 退休，因此挂在 candidate package 的
+    // TerrainStreamingState 上，而不是 coordinator 的函数局部变量。
+    std::shared_ptr<TerrainStreamingState> terrainStreaming =
+        std::make_shared<TerrainStreamingState>();
+    TerrainPageManager& terrainPageManager = terrainStreaming->pageManager;
+    // page table 与 feedback ring 始终存在：即使 World 没有地形，feedback pass
+    // 仍需要一个合法 worldTexture，并清空一张 128×128 RT 产出 0 页统计。
+    terrainStreaming->pageResources.pageTable =
+        CreateTerrainPageTableGpuResource(*rendererBackend);
+    terrainStreaming->feedbackRing =
+        std::make_shared<TerrainFeedbackGpuRing>(*rendererBackend);
+    std::vector<TerrainLayerDesc> worldTerrainLayers;
+    bool hasTerrainLayers = false;
+    for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
+    {
+        if (objectPlan.objectType != "terrain")
+            continue;
+        if (!objectPlan.terrainBuildPlan.has_value())
+            throw std::runtime_error(
+                "Scene terrain object missing terrain build plan before page registration: " +
+                worldBuildPlan.scenePath + " object=" + objectPlan.objectName);
+        const TerrainBuildPlan& terrainPlan = *objectPlan.terrainBuildPlan;
+        // M_pbr/M_unlit 等地形不必有 layer table；只有带 layer 的地形参与共享 VT。
+        if (!TerrainUsesVirtualPages(terrainPlan))
+            continue;
+        if (!hasTerrainLayers)
+        {
+            worldTerrainLayers = terrainPlan.desc.layers;
+            hasTerrainLayers = true;
+        }
+        else if (!TerrainLayerTable::AreLayersIdentical(worldTerrainLayers, terrainPlan.desc.layers))
+        {
+            throw std::runtime_error(
+                "All layer-table terrains in a World must share identical layer definitions: " +
+                terrainPlan.desc.assetPath);
+        }
+        // P3：不再全量 preload。注册只建立虚拟页/槽位身份，驻留由初始集合
+        // 与 feedback 驱动；否则 32×32 地形会在加载期烘焙所有页并互相淘汰。
+        terrainPageManager.RegisterTerrain(terrainPlan, false);
+    }
+    if (!terrainPageManager.Registrations().empty())
+    {
+        terrainPageManager.SetResidentCapacity(
+            TerrainPageManager::DefaultResidentCapacity);
+        CreateTerrainPageAtlasGpuResources(
+            *rendererBackend,
+            terrainStreaming->pageResources);
+        terrainStreaming->uploadRing =
+            std::make_shared<TerrainUploadGpuRing>(
+                *rendererBackend,
+                TerrainPageManager::MaxUploadPagesPerFrame);
+        for (const TerrainPageManager::Registration& registration :
+             terrainPageManager.Registrations())
+        {
+            terrainPageManager.RequestInitialTerrainPages(registration);
+        }
+        // 初始 2×2 页会写脏页表和 atlas；这一整批就是 streaming state 的初始版本。
+        terrainStreaming->NotifyContentChanged();
+        ApplyTerrainStreamingUploads(*rendererBackend, *terrainStreaming);
+    }
+    if (hasTerrainLayers)
+    {
+        terrainStreaming->layerDefinitions = worldTerrainLayers;
+        // 层页虚拟编号依赖各层源分辨率，必须在创建页表/请求页之前配置。
+        terrainStreaming->layerPageManager.ConfigureLayers(worldTerrainLayers);
+        terrainStreaming->layerPageManager.SetResidentCapacity(
+            TerrainLayerPageManager::DefaultResidentCapacity);
+        terrainStreaming->layerResources =
+            CreateTerrainLayerGpuResources(
+                *rendererBackend,
+                worldTerrainLayers,
+                terrainStreaming->layerPageManager);
+    }
+    // candidate 拥有新 state；提交时随 package 一起发布，失败时随 candidate 析构。
+    loadContext.resourceCache.BindTerrainStreaming(terrainStreaming);
+    // feedback pass 的 worldTexture 输入；与 M_terrain 使用同一张 page table。
+    loadContext.resourceCache.BindWorldTexture(
+        "terrainPageTable",
+        terrainStreaming->pageResources.pageTable);
+
     RendererEnvironmentLoader environmentLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -56,6 +144,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    RendererTerrainLoader terrainLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext,
+        *terrainStreaming);
     RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();
@@ -93,6 +186,21 @@ RendererResourceLoadCoordinator::LoadRendererResources(
                     std::move(*meshLoadResult.speedTreeWindProfile));
             }
         }
+        else if (type == "terrain")
+        {
+            if (!objectPlan.terrainBuildPlan.has_value())
+            {
+                throw std::runtime_error(
+                    "Scene terrain object missing terrain build plan: " + worldBuildPlan.scenePath +
+                    " object=" + objectPlan.objectName);
+            }
+            RendererTerrainLoadResult terrainLoadResult =
+                terrainLoader.LoadTerrainObject(obj, *objectPlan.terrainBuildPlan);
+            loadResult.meshObjectPlans.insert(
+                loadResult.meshObjectPlans.end(),
+                std::make_move_iterator(terrainLoadResult.objectPlans.begin()),
+                std::make_move_iterator(terrainLoadResult.objectPlans.end()));
+        }
         else if (type == "environment")
         {
             if (!loadContext.offlineOnly)
@@ -127,6 +235,35 @@ RendererResourceLoadCoordinator::LoadRendererResources(
                 "Renderer resource load received unsupported validated object type: " +
                 type + " object=" + objectPlan.objectName);
         }
+    }
+
+    if (hasTerrainLayers && terrainStreaming->layerSources.albedo)
+    {
+        // L3：atlas 依赖真实 MI 的层数组，已在首个地形 MI 载入时创建；这里
+        // 只做兜底。mode 0 上传每层尾页的映射验证集合，mode 1 预取全部层页
+        // （L3 验证路径，L4 会改成 feedback）。
+        if (!terrainStreaming->layerResources.atlasesCreated)
+        {
+            CreateTerrainLayerAtlasGpuResources(
+                *rendererBackend,
+                *terrainStreaming);
+        }
+        if (terrainStreaming->layerVTRequested)
+        {
+            RequestAllTerrainLayerPages(
+                *terrainStreaming,
+                0,
+                rendererBackend->GetFrameFenceCount());
+        }
+        else
+        {
+            RequestInitialTerrainLayerPages(
+                *terrainStreaming,
+                0,
+                rendererBackend->GetFrameFenceCount());
+        }
+        terrainStreaming->NotifyContentChanged();
+        ApplyTerrainLayerStreamingUploads(*rendererBackend, *terrainStreaming);
     }
 
     return loadResult;

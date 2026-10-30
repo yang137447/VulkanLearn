@@ -17,6 +17,7 @@ namespace VL
 {
 
 class RendererObjectResourceEntry;
+struct TerrainStreamingState;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -33,6 +34,10 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+        // World-local 地形流式状态（page manager + GPU page/layer 资源）。
+        // 完整 World 候选拥有独立实例；扩展候选与 MI 预览只读共享同一实例；
+        // 候选失败时随 package 析构。
+        std::shared_ptr<TerrainStreamingState> terrainStreaming;
         // 动态资源身份随 package 传递；A 引入、B 复用的键在 B 最后释放时仍可回收。
         std::set<std::string> dynamicMeshes, dynamicMaterials, dynamicInstances, dynamicTextures;
 
@@ -129,6 +134,10 @@ public:
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
+
+    // 只对 candidate package 写入；提交后随 package 一起发布。
+    void BindTerrainStreaming(std::shared_ptr<TerrainStreamingState> streamingState);
+    std::shared_ptr<TerrainStreamingState> GetTerrainStreaming() const;
 
 private:
     RendererResourceCache();

@@ -539,6 +539,18 @@ void EngineLoop::Tick()
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
+    if (commandResult.terrainFeedbackStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainFeedbackStatistics();
+    }
+    if (commandResult.terrainStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainStatistics();
+    }
+    if (commandResult.terrainLayerStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainLayerStatistics();
+    }
     if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
     {
         const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};

@@ -27,6 +27,8 @@
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainFeedbackGpu.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
@@ -38,6 +40,7 @@
 #include "vulkanDebug.h"
 #include "world/world.h"
 #include "scene/sceneAssetTypes.h"
+#include "terrain/terrainPageManager.h"
 
 namespace
 {
@@ -1238,6 +1241,300 @@ void RenderSystem::Render()
 void RenderSystem::RequestScreenshot(std::string path)
 {
     pendingScreenshotPath = std::move(path);
+}
+
+void RenderSystem::ConsumeTerrainFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->feedbackRing)
+        return;
+
+    // BeginFrame 已经等待过该 frameIndex 的 fence；TryConsume 再用 epoch
+    // 复核一次，避免 swapchain/frame ring 重建后误读尚未完成的槽。
+    std::optional<VL::TerrainFeedbackFrameSummary> summary =
+        streaming->feedbackRing->TryConsume(frameIndex, completedEpoch);
+    if (!summary.has_value())
+        return;
+
+    streaming->lastConsumedFeedbackEpoch = std::max(
+        streaming->lastConsumedFeedbackEpoch,
+        summary->copiedEpoch);
+    // P3：feedback -> 命中页推进 lastSeenEpoch；miss 页按 priority 进入请求队列。
+    // 请求在本帧 BuildUploadBatch 之前完成，所以同帧就能把新页写进 GPU。
+    streaming->latestFeedbackApply = streaming->pageManager.ApplyFeedback(
+        *summary,
+        completedEpoch,
+        streaming->maxPageRequestsPerFrame,
+        streaming->pendingPageRequests);
+    StoreTerrainFeedbackSummary(streaming, *summary);
+}
+
+void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
+{
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
+    for (const auto& [passName, renderpass] :
+         renderGraph.GetRenderpasses())
+    {
+        (void)passName;
+        if (renderpass.type != VL::RenderGraphPassType::TerrainFeedback)
+            continue;
+        const std::shared_ptr<MaterialInstance> passMaterial =
+            renderpass.materialInstance.lock();
+        if (!passMaterial)
+            continue;
+        // 这里只写 MI 参数；真正的 UBO 上传发生在 feedback pass 录制时。
+        if (passMaterial->HasParameter("u_pageTableSize"))
+        {
+            passMaterial->SetParameter(
+                "u_pageTableSize",
+                static_cast<float>(VL::TerrainPageManager::PageTableSize));
+        }
+        if (passMaterial->HasParameter("u_frameTag"))
+        {
+            passMaterial->SetParameter(
+                "u_frameTag",
+                static_cast<float>(frameTag));
+        }
+        // 与 M_terrain 共用同一半 texel 内缩；分辨率必须来自 page manager。
+        if (passMaterial->HasParameter("u_pageResolution"))
+        {
+            passMaterial->SetParameter(
+                "u_pageResolution",
+                static_cast<float>(VL::TerrainPageManager::PageResolution));
+        }
+    }
+}
+
+void RenderSystem::StoreTerrainFeedbackSummary(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainFeedbackFrameSummary& summary)
+{
+    TerrainFeedbackReport report;
+    report.summary = summary;
+
+    if (streaming && streaming->feedbackRing)
+    {
+        report.hasPendingFrameTagRange =
+            streaming->feedbackRing->PendingTagRange(
+                report.oldestPendingFrameTag,
+                report.newestPendingFrameTag);
+    }
+
+    std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
+    latestTerrainFeedbackReport = std::move(report);
+}
+
+void RenderSystem::ReportTerrainFeedbackStatistics() const
+{
+    TerrainFeedbackReport report;
+    {
+        std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
+        if (!latestTerrainFeedbackReport.has_value())
+        {
+            std::cout
+                << "[TerrainFeedback] No completed feedback frame yet."
+                << std::endl;
+            return;
+        }
+        report = *latestTerrainFeedbackReport;
+    }
+
+    const VL::TerrainFeedbackFrameSummary& summary = report.summary;
+    std::cout
+        << "[TerrainFeedback] epoch=" << summary.copiedEpoch
+        << " tag=" << static_cast<uint32_t>(summary.frameTag)
+        << " validTexels=" << summary.validTexelCount
+        << " distinctPages=" << summary.distinctPageCount
+        << " missPages=" << summary.missPageCount
+        << " maxPriority=" << static_cast<uint32_t>(summary.maxPriority)
+        << " staleTexels=" << summary.staleTexelCount;
+    if (report.hasPendingFrameTagRange)
+    {
+        std::cout
+            << " pendingTags=["
+            << static_cast<uint32_t>(report.oldestPendingFrameTag)
+            << ".."
+            << static_cast<uint32_t>(report.newestPendingFrameTag)
+            << "]";
+    }
+    std::cout << std::endl;
+
+    // 只打印前几个高优先级页，避免 32×32 全量刷屏；miss 页单独标出。
+    const size_t pageCount =
+        std::min<size_t>(summary.pages.size(), 8);
+    for (size_t index = 0; index < pageCount; ++index)
+    {
+        const VL::TerrainFeedbackPageRecord& page =
+            summary.pages[index];
+        std::cout
+            << "  page(" << page.virtualPageX << ","
+            << page.virtualPageY << ")"
+            << " priority=" << static_cast<uint32_t>(page.priority)
+            << " miss=" << (page.miss ? 1 : 0)
+            << " samples=" << page.sampleCount
+            << std::endl;
+    }
+}
+
+void RenderSystem::RequestTerrainResidentCapacity(uint32_t capacity)
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[Terrain] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    streaming->RequestResidentCapacity(capacity);
+    std::cout
+        << "[Terrain] Resident capacity request queued: "
+        << capacity << std::endl;
+}
+
+void RenderSystem::PublishTerrainStreamingStats(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    uint64_t completedEpoch)
+{
+    if (!streaming)
+        return;
+    VL::TerrainStreamingStats stats;
+    VL::TerrainPageManager& pageManager = streaming->pageManager;
+    // 统计刷新时顺带回收已过隔离期的槽位：free/quarantine 必须反映当前
+    // completedEpoch，而不是“等下一次分配才更新”的惰性值。
+    pageManager.ReclaimExpiredQuarantines(completedEpoch);
+    stats.residentPages = pageManager.ResidentCount();
+    stats.residentCapacity = pageManager.ResidentCapacity();
+    stats.virtualPages = static_cast<uint32_t>(pageManager.Pages().size());
+    stats.registrations =
+        static_cast<uint32_t>(pageManager.Registrations().size());
+    stats.freePhysicalSlots =
+        pageManager.ImmediatelyAllocatablePhysicalSlotCount();
+    stats.quarantinedPhysicalSlots =
+        pageManager.QuarantinedPhysicalSlotCount();
+    stats.requestCount = pageManager.RequestCount();
+    stats.hitCount = pageManager.PageHitCount();
+    stats.missCount = pageManager.PageMissCount();
+    stats.evictionCount = pageManager.EvictionCount();
+    stats.preloadDeferredCount = pageManager.PreloadDeferredCount();
+    stats.uploadedPagesTotal = streaming->uploadedPagesTotal;
+    stats.lastUploadedPages = streaming->lastUploadedPages;
+    stats.lastFeedbackEpoch = streaming->lastConsumedFeedbackEpoch;
+    stats.lastFeedbackApply = streaming->latestFeedbackApply;
+    // L2 层页：与覆盖页完全独立的一组驻留/上传计数。
+    VL::TerrainLayerPageManager& layerPages = streaming->layerPageManager;
+    const VL::TerrainLayerPageManager::Stats layerStats =
+        layerPages.SnapshotStats();
+    stats.layerResidentPages = layerStats.residentPageCount;
+    stats.layerResidentCapacity = layerStats.residentCapacity;
+    stats.layerPhysicalPages = layerPages.PhysicalPageCount();
+    stats.layerFreePhysicalPages = layerStats.freePhysicalPageCount;
+    stats.layerQuarantinedPhysicalPages =
+        layerStats.quarantinedPhysicalPageCount;
+    stats.layerRequestCount = layerStats.requestCount;
+    stats.layerHitCount = layerStats.hitCount;
+    stats.layerMissCount = layerStats.missCount;
+    stats.layerEvictionCount = layerStats.evictionCount;
+    stats.layerUploadedPagesTotal = streaming->layerUploadedPagesTotal;
+    stats.layerUploadedBytesTotal = streaming->layerUploadedBytesTotal;
+    stats.layerDirtyPages = layerPages.DirtyPageCount();
+    stats.layerDirtyPageTableEntries =
+        layerPages.DirtyPageTableEntryCount();
+    stats.layerAtlasSlices = streaming->layerResources.atlasSlices;
+    stats.layerAtlasBytesPerMap =
+        streaming->layerResources.atlasBytesPerMap;
+    stats.layerAtlasBytesTotal =
+        streaming->layerResources.atlasBytesTotal;
+    stats.layerAtlasReady = streaming->layerResources.atlasesCreated;
+    streaming->PublishStats(stats);
+    // 本帧上传数只显示一帧；累计值继续保留。
+    streaming->lastUploadedPages = 0;
+}
+
+void RenderSystem::ReportTerrainStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[Terrain] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+
+    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
+    const VL::TerrainFeedbackApplyStats& apply = stats.lastFeedbackApply;
+    std::cout
+        << "[Terrain] resident=" << stats.residentPages
+        << "/" << stats.residentCapacity
+        << " virtualPages=" << stats.virtualPages
+        << " registrations=" << stats.registrations
+        << " freeSlots=" << stats.freePhysicalSlots
+        << " quarantined=" << stats.quarantinedPhysicalSlots
+        << " requests=" << stats.requestCount
+        // requestHits 只统计 RequestPage 命中；feedbackHits 才是 GPU 可见页命中。
+        << " requestHits=" << stats.hitCount
+        << " misses=" << stats.missCount
+        << " evictions=" << stats.evictionCount
+        << " preloadDeferred=" << stats.preloadDeferredCount
+        << " uploadedPages=" << stats.uploadedPagesTotal
+        << " lastUploaded=" << stats.lastUploadedPages
+        << " lastFeedbackEpoch=" << stats.lastFeedbackEpoch
+        << std::endl;
+    std::cout
+        << "[Terrain] feedbackHits=" << apply.markedPages
+        << " missPages=" << apply.missPagesSeen
+        << " queued=" << apply.queuedRequests
+        << " attempted=" << apply.attemptedRequests
+        << " accepted=" << apply.succeededRequests
+        << " deferred=" << apply.deferredRequests
+        << " unregistered=" << apply.unregisteredPages
+        << " pending=" << apply.pendingRequests
+        << std::endl;
+}
+
+void RenderSystem::ReportTerrainLayerStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
+    const VL::TerrainLayerGpuResources& resources =
+        streaming->layerResources;
+    std::cout
+        << "[TerrainLayer] resident=" << stats.layerResidentPages
+        << "/" << stats.layerResidentCapacity
+        << " physical=" << stats.layerPhysicalPages
+        << " free=" << stats.layerFreePhysicalPages
+        << " quarantined=" << stats.layerQuarantinedPhysicalPages
+        << " requests=" << stats.layerRequestCount
+        << " hits=" << stats.layerHitCount
+        << " misses=" << stats.layerMissCount
+        << " evictions=" << stats.layerEvictionCount
+        << " uploadedPages=" << stats.layerUploadedPagesTotal
+        << " uploadedBytes=" << stats.layerUploadedBytesTotal
+        << " dirtyPages=" << stats.layerDirtyPages
+        << " dirtyPageTable=" << stats.layerDirtyPageTableEntries
+        << std::endl;
+    std::cout
+        << "[TerrainLayer] atlasReady=" << (stats.layerAtlasReady ? 1 : 0)
+        << " slices=" << stats.layerAtlasSlices
+        << " bytesPerMap=" << stats.layerAtlasBytesPerMap
+        << " atlasBytes=" << stats.layerAtlasBytesTotal
+        << " albedo=" << vk::to_string(resources.albedoFormat)
+        << " normal=" << vk::to_string(resources.normalFormat)
+        << " pbr=" << vk::to_string(resources.pbrFormat)
+        << std::endl;
 }
 
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
@@ -3130,6 +3427,68 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
+    // 每帧固定同一个 World-local streaming state；不要让世界交换发生在
+    // BeginFrame 消费和帧末回读之间时出现两份 ring/page table。
+    const std::shared_ptr<VL::TerrainStreamingState> terrainFeedbackStreaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    // 本帧提交 epoch 必须与 SubmitFrame 记录的 epoch 相同（currentFrame + 1），
+    // feedback frameTag 也由它推导。先把 GPU 上下文回灌给 page manager，
+    // 新驻留页才能以“本帧提交”而不是过期 feedback epoch 起算安全窗。
+    const uint64_t feedbackSubmittedEpoch =
+        static_cast<uint64_t>(currentFrame) + 1;
+    // Console 的预算命令只写 atomic；这里在渲染线程、任何驻留变更之前消费，
+    // 保证本帧 feedback/淘汰/上传都看到同一个 residentCapacity。
+    if (terrainFeedbackStreaming)
+    {
+        const uint32_t requestedCapacity =
+            terrainFeedbackStreaming->ConsumeRequestedResidentCapacity();
+        if (requestedCapacity != 0)
+        {
+            // 降预算也必须遵守 GPU 安全窗：窗口内的可见页暂时允许超预算，
+            // 不能为了立刻回到预算而淘汰本帧/上一帧仍在采样的页。
+            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
+                requestedCapacity,
+                frameContext.completedEpoch);
+        }
+        else if (terrainFeedbackStreaming->pageManager.ResidentCount() >
+                 terrainFeedbackStreaming->pageManager.ResidentCapacity())
+        {
+            // 上一次降预算若因安全窗暂时超预算，后续帧继续尝试收敛；
+            // 没有安全候选时该方法仍是 no-op，不会形成死循环。
+            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
+                terrainFeedbackStreaming->pageManager.ResidentCapacity(),
+                frameContext.completedEpoch);
+        }
+    }
+    // epoch 上下文必须先于 ApplyFeedback：ApplyFeedback 内新驻留的页要用
+    // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
+    if (terrainFeedbackStreaming)
+    {
+        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+    }
+    // P3：消费已完成回读 -> ApplyFeedback（命中推进 epoch、miss 入请求队列）。
+    ConsumeTerrainFeedback(
+        terrainFeedbackStreaming,
+        frameContext.completedEpoch,
+        frameIndex);
+    if (terrainFeedbackStreaming)
+    {
+        // Consume 可能推进 lastConsumedFeedbackEpoch；再次写回上下文，使
+        // page manager 的统计/加载期回退值与本帧实际消费进度一致。
+        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+    }
+    const uint8_t feedbackFrameTag =
+        VL::TerrainFeedbackFrameTagForEpoch(feedbackSubmittedEpoch);
+    // 本帧上传事务：只有 SubmitFrame 成功后才 Commit；任何提前返回/异常
+    // 都会在析构里 Abort，保留 dirty 与 pin，避免 GPU 与 CPU 内容错位。
+    VL::TerrainUploadTransaction terrainUploadTransaction;
+    uint32_t terrainUploadPageCount = 0;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport
         ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
@@ -3171,6 +3530,47 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // Generate the procedural sky cubemap and write environmentSH before graphics
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
+
+        // scene pass 之前提交本帧地形页：Build -> 打包进 staging ring ->
+        // 同一个主帧 command buffer 录制。剩余 dirty 页下一帧继续。
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->uploadRing)
+        {
+            VL::TerrainUploadBatch uploadBatch =
+                terrainFeedbackStreaming->pageManager.BuildUploadBatch(
+                    terrainFeedbackStreaming->maxUploadPagesPerFrame);
+            if (!uploadBatch.Empty())
+            {
+                try
+                {
+                    const VL::TerrainUploadStagingOffsets offsets =
+                        terrainFeedbackStreaming->uploadRing->Write(
+                            frameIndex,
+                            uploadBatch);
+                    VL::RecordTerrainPageUploads(
+                        commandBuffer,
+                        terrainFeedbackStreaming->pageResources,
+                        uploadBatch,
+                        terrainFeedbackStreaming->uploadRing->Buffer(frameIndex),
+                        offsets);
+                    terrainUploadPageCount =
+                        static_cast<uint32_t>(uploadBatch.atlasUploads.size());
+                    terrainUploadTransaction.Begin(
+                        terrainFeedbackStreaming,
+                        std::move(uploadBatch));
+                }
+                catch (...)
+                {
+                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
+                    terrainFeedbackStreaming->pageManager.AbortUploadBatch(
+                        uploadBatch);
+                    throw;
+                }
+            }
+        }
+
+        // feedback pass 的 u_frameTag 必须与下面回读登记的 epoch tag 一致。
+        PrepareTerrainFeedbackPass(feedbackFrameTag);
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
@@ -3258,6 +3658,30 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    if (!offlineMode)
+    {
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->feedbackRing)
+        {
+            // terrainFeedback 是 graph-owned 的 per-swapchain-image RT；
+            // 帧末把当前 image 拷进该 frameIndex 的 host-visible ring 槽。
+            const auto& resolveResources =
+                renderGraph.GetResourcesResolve();
+            const auto feedbackIt =
+                resolveResources.find("terrainFeedback");
+            if (feedbackIt != resolveResources.end() &&
+                swapChainImageIndex < feedbackIt->second.size())
+            {
+                terrainFeedbackStreaming->feedbackRing->RecordCopy(
+                    commandBuffer,
+                    feedbackIt->second[swapChainImageIndex].image,
+                    frameIndex,
+                    feedbackSubmittedEpoch,
+                    feedbackFrameTag);
+            }
+        }
+    }
+
     const std::optional<std::string> screenshotPath =
         std::move(pendingScreenshotPath);
     pendingScreenshotPath.reset();
@@ -3280,6 +3704,16 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
+    // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
+    terrainUploadTransaction.Commit();
+    if (terrainFeedbackStreaming)
+    {
+        terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;
+        terrainFeedbackStreaming->lastUploadedPages = terrainUploadPageCount;
+        PublishTerrainStreamingStats(
+            terrainFeedbackStreaming,
+            frameContext.completedEpoch);
+    }
     ++submittedFrameSerial;
     submittedCameraGeneration = currentRenderScene.worldGeneration;
     submittedViewProjection = currentRenderScene.camera.viewProjection;

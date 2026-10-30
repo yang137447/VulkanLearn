@@ -1,5 +1,6 @@
 #include "engine/runtimeCommandExecutor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <exception>
@@ -871,6 +872,21 @@ void RuntimeCommandExecutor::ExecuteCommand(
         break;
     case RuntimeCommandType::ReportShaderCacheStatistics:
         executionResult.shaderCacheStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainFeedbackStatistics:
+        executionResult.terrainFeedbackStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainStatistics:
+        executionResult.terrainStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainLayerStatistics:
+        executionResult.terrainLayerStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::SetTerrainResidentCapacity:
+        // 只写 active streaming state 的 atomic；真正的 page manager 变更在
+        // 渲染线程帧首消费，避免 GT 与渲染线程同时改驻留状态。
+        renderSystem.RequestTerrainResidentCapacity(
+            static_cast<uint32_t>(std::max(command.intValue, 0)));
         break;
     }
 }

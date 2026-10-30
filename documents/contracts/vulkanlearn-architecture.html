@@ -683,7 +683,7 @@
                         <td>Asset / Content</td>
                         <td>统一 JSON、mesh、terrain、texture、material instance 的解析、校验、缓存 key。</td>
                         <td><code>AssetManager</code>、<code>AssetRegistry</code>、<code>AssetLoadPlan</code></td>
-                        <td><code>rendererResourceLoadCoordinator.*</code>、<code>textureAssetLoader.*</code>、mesh/terrain loaders</td>
+                        <td><code>rendererResourceLoadCoordinator.*</code>、<code>textureAssetLoader.*</code>、<code>rendererMeshLoader.*</code>、<code>rendererTerrainLoader.*</code></td>
                     </tr>
                     <tr>
                         <td>Material / Shader</td>
@@ -1180,7 +1180,7 @@
                         <td>临时构建上下文、Actor/Component 树、WorldSubsystem 实例</td>
                         <td>AssetManager、WorldResourceCache、PipelineFactory 的抽象入口</td>
                         <td>修改旧 activeWorld、把半成品对象暴露给渲染线程</td>
-                        <td><code>WorldBuilder</code> 已接管 camera/light/environment metadata；mesh/material 创建拆到 renderer resource loaders。</td>
+                        <td><code>WorldBuilder</code> 已接管 camera/light/environment metadata；mesh/terrain chunk/material 创建拆到 renderer resource loaders。</td>
                     </tr>
                     <tr>
                         <td>RendererFrontend</td>
@@ -2539,7 +2539,7 @@ struct RuntimeResult {
                 <tbody>
                     <tr>
                         <td>World / Load</td>
-                        <td><code>WorldManager</code>、<code>WorldTransitionCoordinator</code>、<code>WorldBuilder</code>、<code>RuntimeResult</code> 已形成 scene load / rollback 事务边界；mesh runtime 已进入 <code>WorldMeshObject</code>，mesh section 计划通过 <code>MeshObjectBuildPlan</code> 汇入 <code>WorldBuildPlan</code>；unknown scene object type、mesh <code>materialSlots</code> 缺失或无法按源 slot 映射都会在 load/validation 边界失败，不再流入 renderer 侧 fallback；load failure 已按 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code> 分类。</td>
+                        <td><code>WorldManager</code>、<code>WorldTransitionCoordinator</code>、<code>WorldBuilder</code>、<code>RuntimeResult</code> 已形成 scene load / rollback 事务边界；mesh runtime 已进入 <code>WorldMeshObject</code>，mesh section 与 terrain chunk 计划都通过 <code>MeshObjectBuildPlan</code> 汇入 <code>WorldBuildPlan</code>；unknown scene object type、mesh <code>materialSlots</code> 缺失或无法按源 slot 映射都会在 load/validation 边界失败，不再流入 renderer 侧 fallback；load failure 已按 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code> 分类。</td>
                         <td>terrain、material、texture、shader reflection 的 plan/result 仍需继续统一到 Asset 构建计划边界。</td>
                     </tr>
                     <tr>

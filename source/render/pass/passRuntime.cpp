@@ -68,6 +68,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::EditorGrid:
         RecordEditorGridPass(context);
         return;
+    case RenderGraphPassType::TerrainFeedback:
+        RecordTerrainFeedbackPass(context);
+        return;
     case RenderGraphPassType::Unknown:
     case RenderGraphPassType::AutoExposure:
         break;
@@ -275,6 +278,76 @@ void PassRuntime::RecordEditorGridPass(PassRuntimeContext& context) const
 
     context.services.DrawEditorGridGeometry(context.commandBuffer);
     context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordTerrainFeedbackPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+
+    std::shared_ptr<MaterialInstance> passMaterialInstance =
+        renderPass.materialInstance.lock();
+    if (!passMaterialInstance)
+    {
+        throw std::runtime_error(
+            "TerrainFeedback pass '" + renderPass.name +
+            "' has no pass material instance");
+    }
+    std::shared_ptr<Material> baseMaterial =
+        passMaterialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial)
+    {
+        throw std::runtime_error(
+            "TerrainFeedback pass material has expired: " +
+            renderPass.name);
+    }
+
+    const PipelineBase& passPipeline =
+        *baseMaterial->GetRenderPipeline();
+    // u_frameTag/u_pageTableSize 由 RenderSystem 在录制前写入 pass MI；
+    // 这里统一上传 UBO，保证 shader 与 CPU ring 使用同一个 epoch tag。
+    context.services.UpdateMaterialInstanceUBOForPass(passMaterialInstance);
+    if (drawExecutor.PipelineUsesDescriptorSet(passPipeline, GlobalSetIndex))
+        UpdateSceneGlobalUBO(context);
+
+    BeginConfiguredRenderPass(context);
+    commandBuffer.bindPipeline(
+        passPipeline.GetBindPoint(),
+        passPipeline.GetPipeline());
+
+    // Set 2 是逐对象 UBOModel，必须由下面每个 terrain draw 重新绑定；
+    // 其余 set（0 global、1 feedback 材质参数、3 page table）属于 pass。
+    const auto& passSets =
+        renderPass.GetDescriptorSets()[context.swapChainImageIndex];
+    for (uint32_t setIndex = 0; setIndex < passSets.size(); ++setIndex)
+    {
+        if (setIndex == ObjectSetIndex)
+            continue;
+        if (!drawExecutor.PipelineUsesDescriptorSet(
+                passPipeline,
+                setIndex))
+        {
+            continue;
+        }
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            passPipeline.GetPipelineLayout(),
+            setIndex,
+            passSets[setIndex],
+            nullptr);
+    }
+
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+    drawExecutor.DrawTerrainFeedbackScene(passPipeline, drawContext);
+    commandBuffer.endRenderPass();
 }
 
 bool PassRuntime::BindPassMaterialPipeline(PassRuntimeContext& context) const

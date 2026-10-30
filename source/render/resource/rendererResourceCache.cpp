@@ -17,7 +17,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         materials.empty() &&
         materialInstances.empty() &&
         objectResources.empty() &&
-        textures.empty();
+        textures.empty() &&
+        terrainStreaming == nullptr;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -65,6 +66,9 @@ RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
     // Object descriptor layouts depend on the candidate Material. Reusing the
     // active entries would mutate live Vulkan state during prepare.
     candidate.worldLocalResources->objectResources.clear();
+    // MI 预览只替换材质/MI，不改地形页；继续持有 active World 的同一个
+    // TerrainStreamingState，提交后 feedback ring、页表和驻留状态才不会丢失。
+    // 若未来预览路径需要改页，必须显式创建新 state，不能在这里原地修改。
     return candidate;
 }
 
@@ -79,6 +83,9 @@ RendererResourceCache RendererResourceCache::BeginWorldExtensionCandidate(uint64
     RendererResourceCache candidate(globalTextures, ownerGeneration);
     candidate.worldLocalResources = std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
     candidate.worldLocalResources->ownerGeneration = ownerGeneration;
+    // Blueprint 扩展只新增 mesh/material/texture，不修改地形页；共享同一 state
+    // 可让提交后的新 package 继续拥有原 World 的驻留/GPU 页资源。任何未来
+    // 改地形页的扩展路径都必须改为创建新 state。
     return candidate;
 }
 
@@ -521,5 +528,18 @@ const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_vi
     return nullptr;
 }
 
+void RendererResourceCache::BindTerrainStreaming(
+    std::shared_ptr<TerrainStreamingState> streamingState)
+{
+    GetMutableWorldLocalResources().terrainStreaming =
+        std::move(streamingState);
+}
+
+std::shared_ptr<TerrainStreamingState>
+RendererResourceCache::GetTerrainStreaming() const
+{
+    if (!worldLocalResources) return nullptr;
+    return worldLocalResources->terrainStreaming;
+}
 
 } // namespace VL

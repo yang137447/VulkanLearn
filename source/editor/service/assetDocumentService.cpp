@@ -242,7 +242,15 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
     else
     {
         ValidateTextureAssetJson(candidate);
-        ResolveReference(candidate.at("source").get<std::string>());
+        if (candidate.value("type", std::string()) == "textureArray")
+        {
+            for (const auto& source : candidate.at("sources"))
+                ResolveReference(source.get<std::string>());
+        }
+        else
+        {
+            ResolveReference(candidate.at("source").get<std::string>());
+        }
     }
 }
 

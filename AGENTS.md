@@ -51,8 +51,13 @@ Current implemented areas include:
 - Vulkan device / swapchain initialization
 - Shader compilation and SPIR-V loading
 - Data-driven scene loading
+- CPU heightmap terrain runtime: `terrain` scene objects, TR asset preflight, chunked mesh generation,
+  material binding through the existing geometry pass; implemented subset and limits:
+  `documents/contracts/terrain.md`
 - Data-driven render graph loading
 - Material and material instance loading
+- BC7/BC5 block-compressed textures from DDS/KTX2 (offline mip chains; no runtime BC mip
+  generation or Basis/zstd supercompression); see `documents/contracts/texture-asset-json-v1.md`
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
@@ -107,6 +112,9 @@ Start any source change from `documents/routing.md`. The design documents themse
 - `documents/plan/ui/rmlui-editor-plan.md`
   - completed RmlUi migration/docking/independent viewport versus future scene documents and asset workflows
 - `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/terrain.md`
+  - current CPU heightmap terrain runtime: TR schema, heightmap sampling, chunk mesh/normals,
+    scene object integration, material limit and explicit non-goals
 - `documents/contracts/material-param-authoring-and-reflection.md`
 - `documents/contracts/descriptor-imageinfo-management.md`
 - `documents/contracts/gbuffer-channel-ownership.md`
@@ -203,7 +211,8 @@ If a change affects boot behavior, verify it against this order.
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
 - `<resourcePath>/Maps/SC_<scene-name>/Meshes/`: mesh description JSON and source model data
-- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON, **editor asset layer only** — no runtime terrain support exists
+- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON consumed by the runtime terrain loader;
+  geometry/LOD/collision limits are in `documents/contracts/terrain.md`
 - `<resourcePath>/Maps/SC_<scene-name>/Materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
@@ -251,7 +260,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 ### Resource naming patterns
 
 - `SM_*.json`: mesh descriptor files
-- `TR_*.json`: terrain descriptor files (**editor asset layer only**; no runtime terrain support)
+- `TR_*.json`: terrain descriptor files (heightmap geometry + material instance; see `contracts/terrain.md`)
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
@@ -282,16 +291,69 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `terrain` (TR heightmap mesh; CPU chunks rendered through the geometry pass)
 
-`terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
-accept it, the world loader/builder has no terrain path, and no terrain runtime
-code exists anywhere in `source/`. Terrain survives only in the editor's asset
-layer, where `Terrains/TR_*.json` is recognized as an `EditorAssetKind` and
-`objectType == "terrain"` participates in material-instance navigation
-resolution. Do not author a `terrain` scene object and do not reference
-`source/terrain.h` / `source/terrain.cpp` — those files never existed in this
-repository. Any task that appears to require terrain runtime support is a
-feature request, not a fix.
+`terrain` requires `terrainPath` and is preflighted by `TerrainAssetLoader::Prepare`, which decodes
+the heightmap before a World candidate is committed. Optional scene-object `pageOrigin` /
+`pageTilesPerSide` override the TR's virtual page region; each terrain object gets
+`placementId = terrain|<name>`, so the same TR may be placed several times in one World
+(empty `placementId` falls back to `assetPath`). The renderer expands it into chunk
+`MeshObjectBuildPlan`s; there is still no separate World terrain type. `M_terrain` implements Phase C2c + P3 streaming:
+up to 256 layers in the layer table; `TerrainPageManager` registers all terrains in a World into one
+32×32 global page table and 4096×4096 ID/weight atlases (top-4 per texel); terrain meshes carry global
+page coordinates in `texCoord1`, and the shader uses `texelFetch(pageTable)` then samples the atlases
+and three texture arrays. `TerrainLayerTable::BuildImage` packs a 256×4 RGBA32F LUT for
+per-layer metadata (row0 height/slope, row1 noise/blendEdge/uv, row2 pagesPerSide/pageTableBase/
+sourceSet/flags, row3 avgColor/reserved; the shader still reads only row1). The page table/atlases
+and layer table are World-level shared resources; all
+layer-table terrains must use identical layer definitions, and `TR.layers.size()` is checked against
+the bound arrays. `TerrainPageManager` has CPU-side resident/eviction/LRU/priority/refcount APIs.
+Registration is keyed by `placementId`, not `assetPath`; fallback reserves only the physical atlas
+slot `(31,31)`, so virtual `(31,31)` is an ordinary page and a 32×32 single terrain registers; a
+missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry normal) instead of
+sampling layer 0.
+`RegisterTerrain(preload=true)` records `preloadDeferredCount` and keeps going when capacity
+cannot evict. The renderer creates zero page table/atlas textures, then `BuildUploadBatch` /
+`RecordTerrainPageUploads` records the page-table and atlas subregion copies into one command
+buffer and commits dirty only after successful upload. Production streaming uses
+`RegisterTerrain(preload=false)`: each placement
+prefetches only a 2×2 center set, then `TerrainPageManager::ApplyFeedback` consumes the dedicated
+128×128 `terrainFeedback` pass (color + 128×128 depth, so only the nearest page wins) through a
+host-visible, frame-fence-gated readback ring
+(`source/terrain/terrainFeedback.*`, `source/render/resource/terrainFeedbackGpu.*`). Feedback hits
+advance `lastSeenEpoch` and `lastTouchedEpoch`; misses enter a cross-frame request queue (priority desc, deferred
+rotation), at most 8 `RequestPageAtEpoch` calls per frame. `TerrainUploadGpuRing`
+(`source/render/resource/rendererTerrainLoader.*`) has one preallocated staging slot per frame
+fence; at most 8 atlas pages are recorded into the main frame command buffer before scene passes,
+and `TerrainUploadTransaction` commits only after `SubmitFrame` succeeds. Eviction no longer clears
+the atlas: the physical slot is quarantined until
+`max(lastSeenEpoch, lastSubmittedEpoch) + framesInFlight + 1 <= completedEpoch`, then
+`ReclaimExpiredQuarantines` returns it to the immediately-allocatable pool. The effective CPU
+eviction window is `max(2, framesInFlight + 1)`. The default resident budget is 512 because the
+measured 32×32 wide-view working set is about 415 pages. `terrain stats` reports residency/eviction/upload
+counters (`requestHits` vs `feedbackHits` are distinct) and `terrain capacity N` queues a budget
+change consumed at frame start; lowering it only evicts pages outside the safety window and may
+temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
+in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
+Current limits: no
+low-resolution fallback/fade, camera prefetch, LOD, skirts, terrain chunk unloading, terrain
+collision/heightfield physics, terrain editing. `TerrainLayerPageManager`
+(`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
+RGBA32F page table per mip (width capped at 4096), and three 4096²/slice `sampler2DArray`
+atlases (no mip) are created World-locally and the per-layer tail pages are copied GPU→GPU
+at load. Page-table texels are `R=physicalPage/G=mip/B=valid/A=priority`; eviction emits an
+all-zero invalidation in the same upload batch. BC atlases cannot use `vkCmdClearColorImage`,
+so they are zeroed with a 16 KiB zero-page staging copy. L3 adds the optional shader path:
+`M_terrain` keeps `u_terrainLayerMode=0` sampling `layerAlbedo/Normal/Pbr` directly
+(byte-identical legacy path), while mode 1 resolves top-4 IDs through the catalog, per-mip
+page table (stride = page-table texel count / 256), physical page, and 4096² atlas with
+half-texel page inset; invalid entries use catalog row3 `avgColor`, never layer 0.
+`sourceResolution` must match the real square source extent; mode 0 only warns, mode 1
+fails at load. Mode 1 prefetches every layer page at load (672 pages for 32×512²) because
+layer-page feedback is still L4. `terrainlayerstats` reports layer residency/atlas format/bytes.
+CPU page baking is still
+synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
+`documents/contracts/terrain.md`.
 
 If adding a new type, update both loader logic and documentation.
 The historical `SC_scene01` `sunLight` object was migrated to
@@ -324,6 +386,8 @@ Be careful when changing these files or systems:
   - render pass attachment ordering, MSAA resolve behavior, framebuffer construction
 - `source/scene/validation/sceneAssetValidator.cpp` and `source/world/loading/worldLoader.cpp` / `worldBuilder.cpp`
   - scene JSON contract, per-object field validation, world build plan (the scene-data contract lives here)
+- `source/terrain/**` and `source/render/resource/rendererTerrainLoader.*`
+  - TR/heightmap preflight, vertex/index winding, chunk bounds/normals, and chunk resource keys
 - `source/renderSystem.cpp`
   - frame rendering flow and descriptor usage
 - `source/shaderCompiler.cpp` and `source/shader/build/*`
@@ -418,21 +482,16 @@ If asked to add or change a scene:
 
 If asked to add or change a terrain:
 
-Terrain has **no runtime implementation** in this repository. Do not look for
-`source/terrain.h` / `source/terrain.cpp`; they never existed here, and
-`SceneAssetValidator` rejects a `terrain` scene object. Only the editor asset
-layer knows about terrain:
+- read `documents/contracts/terrain.md` first
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
+- inspect `source/terrain/validation/terrainAssetValidator.h`, `terrainAssetLoader.*`,
+  `terrainHeightmap.*` and `terrainMeshBuilder.*`
+- inspect `source/render/resource/rendererTerrainLoader.*` and
+  `source/render/resource/rendererResourceLoadCoordinator.cpp`
+- inspect `source/scene/validation/sceneJsonValidator.h` and `sceneAssetValidator.cpp`
 
-- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json` (descriptor JSON,
-  recognized as `EditorAssetKind::Terrain` by `source/editor/assets/editorJsonAssetLibrary.cpp`)
-- inspect `source/editor/assets/editorJsonAssetTypes.{h,cpp}` and
-  `source/editor/service/materialInstanceDocumentService.cpp` for the
-  `objectType == "terrain"` navigation-resolution path
-- inspect `source/scene/validation/sceneAssetValidator.cpp` to confirm what the
-  runtime actually accepts before promising anything
-
-A request to render, load, or edit terrain geometry is a feature request, not a
-fix; scope it as such and say so rather than treating the missing files as a bug.
+Heightmap/TR/geometry changes are runtime changes; LOD, streaming, collision, terrain editing and
+top-4 layer blending are still feature requests, not fixes.
 
 If asked to add or change a render pass:
 

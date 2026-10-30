@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "../terrain/terrainAssetTypes.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 
@@ -22,6 +23,9 @@ struct SceneAssetObjectPlan
     std::string objectName;
     std::string objectType;
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
+    // 地形对象在场景预检阶段完成 TR 解析与高度图解码；WorldBuilder 仍只消费
+    // 渲染器派生的 MeshObjectBuildPlan，不引入第二个 World 地形类型。
+    std::optional<VL::TerrainBuildPlan> terrainBuildPlan;
     // Actor 根网格的派生声明；作者 JSON 不增加合成对象，正式 mesh loader 仍只读网格计划。
     std::optional<nlohmann::json> componentObject;
 };
@@ -62,4 +66,7 @@ struct MeshObjectBuildPlan
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+    // rendererTerrainLoader 显式写入：feedback pass 只绘制这些对象，
+    // 不能依赖材质名/资产路径猜测地形。
+    bool terrainFeedbackEligible = false;
 };

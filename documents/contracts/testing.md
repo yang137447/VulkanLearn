@@ -30,9 +30,11 @@
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
-| `vl_renderer_backend_tests` | 44 | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果及同 World 新增绘制对象的资源发布契约 |
+| `vl_renderer_backend_tests` | 61 | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约、批量 buffer→image 子区域上传（含 record-only 三种 API 共用单 command buffer）、frame epoch ring 的单次消费/分槽隔离、terrainFeedback 编译合同（128×128 单颜色 + 128×128 D32_SFLOAT 深度/禁 MSAA/swapChain/GBuffer/非 D32 格式）、color attachment → transferSrc → image→buffer 的 headless 回读与 CPU summary，以及 L2 层 atlas 的单次提交 clear→0 + RGBA32F 页表 texel + 源 layer→atlas 子区域 copy |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
-| `texture_asset_tests` | 32 | 单图字段/方向合同；CPU 数组的逐层顺序/寻址、行跨度、元数据与完整像素校验、逐源解码/翻转、混合格式拒绝及数组单图导出拒绝 |
+| `texture_asset_tests` | 58 | 单图字段/方向合同；CPU 数组的逐层顺序/寻址、行跨度、元数据与完整像素校验、逐源解码/翻转、混合格式拒绝、数组单图导出拒绝；`textureArray` 描述符的源顺序/cache key、`source` 与 `sources` 互斥及空源拒绝；BC7/BC5 的 DDS/KTX2 容器、离线 mip 链、层序重排与 GPU 上传 |
+| `material_schema_tests` | 11 | 材质定义默认值/稀疏 override、参数通道与 std140 布局、`color→vec4`、`sampler2DArray` schema/描述符类型及非法贴图类型拒绝、`M_terrain` 旧三数组 + L3 catalog/页表/atlas 共 15 个 binding 与默认参数、离线模型身份 |
+| `terrain_tests` | 119 | 高度图双线性采样/缩放偏移/非有限样本拒绝、chunk 顶点/索引计数与 AABB、平地法线、坡度法线、chunk 边界法线连续、网格最后列/行半 texel 内缩、TR 字段/范围/层数/pageOrigin 校验、256 层 LUT 打包与层定义一致性、tile 候选层、RGBA8 ID/权重图与 global page table/atlas 寻址、跨地形 page 累积/重叠拒绝、per-tile page 烘焙/request-hit-miss/LRU/priority/refcount/eviction、fallback 仅保留物理槽位/虚拟 (31,31) 普通页、虚拟页与物理槽位分离/槽位复用/容量上限、dirty page/子区域上传描述与提交前重试、batch Build/Commit/Abort 的 pin 计数与 revision 保留、重叠批次独立 pin、maxAtlasPages 一致性截断、epoch 安全窗/新页起算/pin/revision 幂等、`RequestPageAtEpoch` 安全窗与旧 `RequestPage` LRU 隔离、feedback 命中 recency/epoch-aware LRU、动态 `max(2, framesInFlight+1)` 安全窗、按 epoch 降预算与暂时超预算、quarantine 到期主动回收/分配时复用/fallback 不回收、capacity 1/8 压测终止、layerTable 与 layers 双条件 eligibility 纯函数、layerless 与分层地形同 World 不污染 feedback、32×32 单地形注册与 preload deferred、同一 TR 双 placement 的独立页与淘汰、placementId 回退 assetPath、chunk key 含 placementId、heightScale=0/负值归一化、EXR 高度图加载、scene `terrain` 与 page 区域覆盖 schema、feedback texel 编解码/frameTag 回绕/无效与过期 texel 丢弃/distinct+miss 页聚合、ring 未完成不消费/完成后只消费一次/槽位复用/tag 范围、`ApplyFeedback` 命中/miss 请求/未注册页跳过/每帧上限与 deferred 轮转/离开视野的 pending 清理、上传批限流收敛、preload=false 空 batch 与初始集合、MI 预览候选保留 active `TerrainStreamingState`；L1 新增 256×4 catalog 行布局/未使用层全零/`pageTableBase` 与 `avgColor`/`flags` 往返、TR 可选层字段（sourceResolution/avgColor/sourceSet/flags）校验与加载器往返、512/1K/2K 的 mip 页数（21/85/341）与 256 层 2K 87,296 项、per-mip/扁平虚拟页公式、512/1K/2K 混用时的统一 stride 无别名（穷举 447 页）、layer/mip/page 越界拒绝、物理页分配/fallback 保留/quarantine 复用、安全窗内外淘汰、priority/lastTouched LRU、refcount/pin 阻止淘汰、重叠批次独立 pin、revision 变化后 Commit 拒绝、上传批截断续传、按 epoch 降预算与回收；L2 新增 4096 宽上限/混合分辨率页表布局、页表 texel 编码/无效项全零、淘汰失效项与 Commit 清理、Abort 保留失效项、maxPages 截断时页表延后、槽位复用时失效项+新映射同批输出、每个 mip 的虚拟页→texel 越界检查；L3 新增 maxMip/pagesPerSide、mip round/clamp、页表 texel 总数/256 = CPU stride、虚拟页号、页表 texel 坐标、atlas slice/tile/半 texel UV、repeat u=1.0/负 UV、无效页表项全零、catalog sourceResolution 与真实源边长一致性 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
@@ -819,11 +821,159 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 
 ## 改动 → 验证
 
-纹理 CPU 准备使用既有 `texture_asset_tests`：
+纹理资产与数组准备使用既有 `texture_asset_tests`：
 构建目标后运行
 `ctest --test-dir build -R "^(TextureAssetTest|TextureArrayTest|HostImageArray)\." --output-on-failure`。
-2026-10-22 此选择集 32/32 通过；不构成 GPU 数组上传或地形出图验收。
-边界见 [纹理合同](texture-asset-json-v1.md#cpu-array-preparation)。
+2026-10-29 此选择集 36/36 通过；`material_schema_tests` 10/10 通过。
+这覆盖 CPU 层序、资产描述与 Set 1 描述符推导；GPU 数组上传/采样仍需场景截图验收，
+不构成地形出图验收。边界见 [纹理合同](texture-asset-json-v1.md#cpu-array-preparation)。
+
+GPU 数组采样使用 `shader/glsl/M_textureArraySmoke.*` 与
+`<resourcePath>/Generated/Validation/TextureArraySmoke/` 的两层红/绿冒烟场景：
+启动 `main.exe --initial-scene Generated/Validation/TextureArraySmoke/SC_texture_array_smoke.json`
+后执行 `screenshot texture_array_smoke.bmp`；左球红（layer 0）、右球绿（layer 1）即通过。
+该场景验证 `arrayLayers` 建图、逐层上传、2D_ARRAY view、`sampler2DArray` 绑定与层索引，
+不在 CTest 中；2026-10-29 已人工验证。
+
+块压缩纹理（BC7/BC5）在同一 `texture_asset_tests` 中覆盖：
+`ctest --test-dir build -R "^(HostImageBlockLayout|CompressedTextureDds|CompressedTextureKtx2|CompressedTextureVulkanPlan|CompressedTextureGpu)\."`
+2026-10-30 该选择集与既有用例合计 58/58 通过。DDS/KTX2 夹具全部在内存里构造
+（4x4/8x8、2 mip、2 array layer，含 BC7/BC5、sRGB 选择、截断/立方体/体积/
+超压缩拒绝），仓库不提交二进制资产；`CompressedTextureGpu` 需要支持 BC7
+transfer copy 的 headless 设备，否则 `GTEST_SKIP`，通过时逐 mip/逐层回读并做
+字节比较。视觉冒烟：`Generated/Validation/TerrainB32/SC_terrain_b32_bc7.json`
+把 32 层 albedo 数组换成离线 BC7 DDS（4 级 mip），与同一相机下的 BMP 基线相比，
+除左下角运行时 UI 文字外最大通道差 2、平均 0.14。这些用例不覆盖编码器、
+Basis/Zstd 转码与运行时 BC mip 生成；边界见
+[纹理合同](texture-asset-json-v1.md#block-compressed-containers-dds--ktx2)。
+
+地形运行时使用 `terrain_tests` 与外部场景：
+`ctest --test-dir build -R "^Terrain" --output-on-failure`（2026-10-30 L3 后 127/127 通过；
+其中 `terrain_tests` 119 项，另 8 项来自 `vl_renderer_backend_tests` 的
+`TerrainFeedback*` 与 `TerrainLayerAtlasGpu.*`）。
+GPU/World 冒烟使用
+`<resourcePath>/Generated/Validation/TerrainSmoke/SC_terrain_smoke.json`
+（64×64 quad、2×2 chunk、高度图 + M_pbr 材质）；启动后执行
+`screenshot terrain_smoke.bmp`，World 事务提交且地形出图即通过。该场景不覆盖
+LOD/streaming/碰撞/top-4 层混合；边界见 [terrain 契约](terrain.md)。
+
+M3 地表混合冒烟使用
+`<resourcePath>/Generated/Validation/TerrainM3/SC_terrain_m3.json`：8 层三张
+texture array、TR.layers 生成的 LUT、512×512 ID/权重图、M_terrain top-4 与 debug 0..3。启动后分别以
+`u_debugMode` 0/1/2/3 截图，确认正常着色、权重、top-4 层号和混合 albedo 均有变化；
+该验证是功能冒烟，不承诺最终画面/调色。
+
+Phase B 32 层冒烟使用
+`<resourcePath>/Generated/Validation/TerrainB32/SC_terrain_b32.json`：32 层三张数组、
+tile 候选层、32×32 global page table + 4096×4096 ID/权重 atlas（层表上限 256）；
+`u_debugMode=2` 截图确认层号会超过 8。
+L1 把 catalog 从 256×2 改成 256×4 并只把 shader 的 row1 采样 v 从 0.75 改到 0.375：
+`SC_terrain_b32.json` 与 `SC_terrain_m3.json` 的截图必须与改动前逐字节一致
+（2026-10-30 实测两张 SHA-256 分别保持 `1D30D8…3F54` / `0E5D5F…BAAE`）。
+128 page 在近景仍有块状；P2 已加入 feedback 回读，P3 已加入按需驻留/淘汰，
+P3.1 修正了非 VT 地形误驱动 feedback、epoch-aware LRU、按 epoch 降预算和 quarantine 主动回收；
+更高分辨率仍属于后续 Phase。
+
+Phase C2b 双地形共享使用 `<resourcePath>/Generated/Validation/TerrainB32/SC_terrain_b32_two.json`：
+两个地形 `pageOrigin [0,0]` / `[8,0]` 注册到同一张 global page table/4096 atlas，并同时出图。
+P4 后注册身份改为场景 `placementId`，同一 `assetPath` 可以多次注册；fallback 只占物理
+atlas 槽位 `(31,31)`，虚拟 `(31,31)` 恢复为普通页。
+`TerrainPageManager` 已把虚拟页映射到独立分配的物理 atlas 槽位，
+renderer 通过批量 region 上传页表/ID/权重。P0 已把 page manager 与 GPU page 资源提升为
+World-local `TerrainStreamingState`，并把 `completedEpoch` 接入 `RendererFrameContext`；
+P2 已增加 feedback pass 与回读 ring；P3 改为 `preload=false`，feedback miss 驱动
+`RequestPageAtEpoch`，每帧最多请求 8 页、上传 8 个 atlas 页，淘汰槽位进入 CPU
+quarantine 后才可复用。
+
+P4 同 TR 双摆放使用 `<resourcePath>/Generated/Validation/TerrainB32/SC_terrain_b32_same_tr.json`：
+同一个 `TR_terrain_b32.json` 摆放两次，场景级 `pageOrigin` 覆盖为 `[0,0]` / `[8,0]`；
+两处地形同时出图即通过。它验证 `placementId` 注册、场景覆盖写入 `TerrainBuildPlan::desc`、
+同一 TR 的 chunk 资源 key 不共享；不在 CTest 中，2026-10-29 已人工截图验证。
+
+L2 层 atlas 的运行时冒烟与覆盖页相同，额外排队 `terrainlayerstats`：
+
+```powershell
+main.exe --initial-scene Generated/Validation/TerrainB32/SC_terrain_b32.json `
+  --no-dev-ui --console-command "terrainlayerstats" `
+  --console-command "screenshot l2_b32.bmp" `
+  --console-command-delay 120 --frame-limit 60
+```
+
+L2 **不改变视觉路径**，所以 `SC_terrain_b32.json` / `SC_terrain_m3.json` 截图必须与
+L1 基线逐字节一致（2026-10-30：`1D30D8…3F54` / `0E5D5F…BAAE`）；BC7 场景
+`SC_terrain_b32_bc7.json` 与 `bc7_smoke2.bmp` 一致（`C3E77E…2BDB`）。stderr 必须为空。
+B32 的 `terrainlayerstats` 应显示 `resident=32/512`、`uploadedPages=32`、
+`uploadedBytes=6291456`、`dirtyPages=0`、`dirtyPageTable=0`、`atlasReady=1`、
+`slices=1`、`atlasBytes=201326592`、`albedo=R8G8B8A8Srgb`。BC7 场景应显示
+`albedo=Bc7SrgbBlock`、`bytesPerMap=16777216`、`atlasBytes=150994944`。
+若截图出现任何差异，说明 L2 误改了材质/采样路径或 atlas 初始化影响了共享资源。
+
+L3 层纹理 VT 的 mode 0 回归沿用上面三条命令；三张截图必须继续与 L2 基线逐字节
+一致。mode 1 使用 512²、32 层源数组的专用场景：
+
+```powershell
+main.exe --initial-scene Generated/Validation/TerrainLayerVT/SC_terrain_vt_mode1.json `
+  --no-dev-ui --console-command "terrainlayerstats" `
+  --console-command "screenshot l3_vt_mode1.bmp" `
+  --console-command-delay 120
+```
+
+`SC_terrain_vt_mode0.json` / `SC_terrain_vt_mode1.json` 使用同一 TR 几何与层定义，
+只切换 MI 的 `u_terrainLayerMode`。L3 没有 feedback 驱动层页，所以 mode 1 在加载期
+全量预取：`terrainlayerstats` 应显示 `resident=672/672`、`uploadedPages=672`、
+`uploadedBytes=132120576`、`dirtyPages=0`、`dirtyPageTable=0`、`atlasReady=1`、
+`slices=1`、`atlasBytes=201326592`。2026-10-30 实测 mode 0/mode 1 截图（排除左侧 UI
+标题区）8-bit 通道平均绝对差 2.40、35.3% 像素 >2、3.83% >8、0.37% >16、最大 41；
+这是 mip 取整与页内过滤差异，不能出现整页错位、黑块或 layer 0 回退。
+把 B32 的 32² 源数组 MI 设为 mode 1 时，加载必须报
+`Terrain layer VT requires sourceResolution to match the bound layer texture extent`
+并以非零退出；mode 0 只打印 warning 并继续。
+
+feedback 冒烟使用同一组场景，启动时排队：
+
+```powershell
+main.exe --initial-scene Generated/Validation/TerrainB32/SC_terrain_b32_two.json `
+  --no-dev-ui --console-command "terrainfeedback" `
+  --console-command "screenshot terrain_p2_two.bmp" `
+  --console-command-delay 120 --frame-limit 60
+```
+
+`terrainfeedback` 应打印 `validTexels/distinctPages/missPages/maxPriority` 与前几个页；
+单地形 `SC_terrain_b32.json` 的页数应与双地形不同，说明统计确实来自 GPU feedback 而非固定值。
+非层表地形 `SC_terrain_smoke.json`（M_pbr）在 P3.1 后不会设置
+`terrainFeedbackEligible`，因此 `terrainfeedback` 应显示 `validTexels=0`、
+`distinctPages=0`，而不是把它的页全部记成 miss；这验证非 VT 地形不会污染同 World
+的分层地形驻留。
+P3 后 preload=false，首帧集合与 P4 截图不再要求逐字节一致；验收口径是：
+stderr/validation layer 无错误，在反馈安全窗收敛后 `terrain stats` 的 `resident <= capacity`
+（所有驻留页持续可见时允许暂时超预算）、
+`virtualPages` 与场景页数一致、`requests/misses` 随可见页增长而收敛，
+稳定后截图无整块灰/黑。2026-10-30 实测：
+
+- 双地形默认 budget 512：resident=120/512、requests=120、uploadedPages=120、
+  evictions=0、missPages=0、feedbackHits=120、quarantined=0、无缺页块；
+- 同一场景 `terrain capacity 48`：evictions=40，但 48 页小于可见集合（73 miss），
+  截图会出现大块中性表面——这是预算不足的预期行为，不是 streaming 失效；
+- `terrain capacity 110` + `camera pose -6000 3000 10000 -6000 0 0`：
+  resident=110/110、evictions=10、quarantined=0（到期已回收）、missPages=0、
+  pending=0、feedbackHits=62，截图无缺页块；
+  （无深度 feedback 版本会在这里留下一个永久中性页块；给 feedback pass 加
+  128×128 深度后消失，这是深度测试必须保留的证据。）
+- `SC_terrain_b32_32x32.json`（1024 虚拟页）：加载后 `preloadDeferred=0`、
+  resident 从 4 页初始集合开始按 feedback 增长，不再出现 46 秒全量 preload。
+  默认 budget 512 下，该 2km 走查场景收敛到 resident=415/512、missPages=0、
+  pending=0、feedbackHits=415，截图无缺页块。
+
+批量 buffer→image 子区域上传由 `vl_renderer_backend_tests` 的
+`BufferToImageRegions.*` 覆盖（空列表/零 extent 拒绝，以及一次 submit 写入多个 region
+后的回读校验）；`RecordTransitionImageLayout`/`RecordCopyBufferToImageRegions`/
+`RecordCopyImageToBuffer` 另覆盖空列表/零 array layer 拒绝与同一 command buffer
+内“布局转换 + 两段 copy + 回读”；frame epoch ring 的“完成后只消费一次、空槽为 0、分槽独立”由
+`FrameEpochRing.*` 纯逻辑覆盖（`RendererBackendVulkan::BeginFrame` 需要窗口/SDL，
+不在无头套件里伪造 Vulkan）。P2 的 terrain feedback 编译合同与
+`ColorAttachmentOptimal -> TransferSrcOptimal -> ColorAttachmentOptimal` 往返回读
+也在该套件；L2 的 `TerrainLayerAtlasGpu.*` 在一次 submit 内验证 clear→0、
+RGBA32F 页表 texel 与两条源 layer→atlas 子区域 copy。2026-10-30 L2 后 61/61 通过。
 
 公共 [DrawDebug](debug-draw.md) 的 CPU 套件为 `debug_draw_tests`：
 几何、生命周期/帧命令时序、key/句柄、过滤、预算、投影和 Console 解析。

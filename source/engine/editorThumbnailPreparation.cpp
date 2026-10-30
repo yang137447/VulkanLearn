@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <vector>
 
 #include "commonFunction.h"
 #include "material/compiler/materialShaderComposer.h"
@@ -9,6 +10,7 @@
 #include "materialInstanceValidator.h"
 #include "pipeline/pipelineFactory.h"
 #include "shaderCompiler.h"
+#include "texture.h"
 
 namespace VL
 {
@@ -102,17 +104,54 @@ void PrepareMaterial(
         for (const auto& texture : result.textures)
             if (texture.cacheKey == key) { prepared = true; break; }
         if (prepared) continue;
-        const auto sourcePath = CommonFunction::Path(description.source);
-        const auto sourceDigest = ContentHasher::HashFile(sourcePath);
-        result.materialDigests.emplace(sourcePath, sourceDigest);
+        std::vector<std::filesystem::path> sourcePaths;
+        std::vector<VL::ContentDigest> sourceDigests;
+        sourcePaths.reserve(description.sources.size());
+        sourceDigests.reserve(description.sources.size());
+        for (const std::string& source : description.sources)
+        {
+            const auto sourcePath = CommonFunction::Path(source);
+            const auto sourceDigest = ContentHasher::HashFile(sourcePath);
+            result.materialDigests.emplace(sourcePath, sourceDigest);
+            sourcePaths.push_back(sourcePath);
+            sourceDigests.push_back(sourceDigest);
+        }
         // 与同步 Texture 入口共用解码合同，保持 sRGB/linear、RGBA 与一次 V 翻转一致。
-        auto image = TextureIO::Load(CommonFunction::Path(description.source),
-            Texture::MaterialLoadOptions(ToTextureCreateDesc(description)));
-        if (!image) throw std::runtime_error("Failed to load texture: " + description.source);
-        if (ContentHasher::HashFile(sourcePath) != sourceDigest ||
-            ContentHasher::HashFile(descriptorPath) != descriptorDigest)
+        HostImage image;
+        try
+        {
+            if (description.textureArray)
+            {
+                image = TextureIO::LoadArray(
+                    sourcePaths,
+                    Texture::MaterialLoadOptionsForPath(
+                        ToTextureCreateDesc(description),
+                        sourcePaths.front()));
+            }
+            else
+            {
+                auto loaded = TextureIO::Load(
+                    sourcePaths.front(),
+                    Texture::MaterialLoadOptionsForPath(
+                        ToTextureCreateDesc(description),
+                        sourcePaths.front()));
+                if (!loaded) throw std::runtime_error("Image decoder returned no pixels");
+                image = std::move(*loaded);
+            }
+        }
+        catch (const std::exception& error)
+        {
+            throw std::runtime_error(
+                "Failed to load texture: " + texturePath + ": " + error.what());
+        }
+        for (size_t sourceIndex = 0; sourceIndex < sourcePaths.size(); ++sourceIndex)
+        {
+            if (ContentHasher::HashFile(sourcePaths[sourceIndex]) != sourceDigests[sourceIndex])
+                throw std::runtime_error("Texture changed during CPU preparation: " + texturePath);
+        }
+        if (ContentHasher::HashFile(descriptorPath) != descriptorDigest)
             throw std::runtime_error("Texture changed during CPU preparation: " + texturePath);
-        result.textures.push_back({std::move(description), key, std::move(*image)});
+        result.textures.push_back({std::move(description), key, std::move(image)});
     }
 }
 

@@ -26,6 +26,8 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp"
+    "${PROJECT_SOURCE_DIR}/source/resource/image/ddsTexture.cpp"
+    "${PROJECT_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorContentBrowserController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorDockingController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorLogPanel.cpp"

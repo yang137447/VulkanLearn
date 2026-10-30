@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 #include "texture.h"
 
@@ -9,7 +10,9 @@
 struct TextureBindingLoadDesc
 {
     std::string assetPath;
-    std::string source;
+    // 单图为 1 个 source；数组按 assets.sources 的原顺序保存，顺序就是 GPU 层序。
+    std::vector<std::string> sources;
+    bool textureArray = false;
     HostImage::TextureSemantic semantic = HostImage::TextureSemantic::Color;
     TextureIO::LoadOptions::Transfer transfer = TextureIO::LoadOptions::Transfer::SRGB;
     bool generateMipmaps = true;

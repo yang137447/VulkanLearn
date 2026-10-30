@@ -89,6 +89,7 @@ struct WorldMeshObject
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+    bool terrainFeedbackEligible = false;
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh

@@ -63,7 +63,11 @@ enum class RuntimeCommandType
     ReloadShaders,
     ReloadAssembly,
     InjectInput,
-    ReportShaderCacheStatistics
+    ReportShaderCacheStatistics,
+    ReportTerrainFeedbackStatistics,
+    ReportTerrainStatistics,
+    ReportTerrainLayerStatistics,
+    SetTerrainResidentCapacity
 };
 
 enum class RuntimeShaderReloadScope

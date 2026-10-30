@@ -64,6 +64,7 @@ struct MeshDrawSnapshot
     ResourceHandle material;
     ResourceHandle materialInstance;
     std::string speedTreeWindProfileKey;
+    bool terrainFeedbackEligible = false;
 };
 
 enum class LightSnapshotType

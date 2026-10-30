@@ -1,5 +1,6 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "terrain/terrainAssetLoader.h"
 
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,23 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         // JSON 合同在共享入口收口；运行时计划仍由正式 loader 准备，不为资产工具另建导入路径。
         if (objectPlan.objectType == "mesh")
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
+        else if (objectPlan.objectType == "terrain")
+        {
+            objectPlan.terrainBuildPlan = VL::TerrainAssetLoader::Prepare(
+                objectJson.at("terrainPath").get<std::string>());
+            VL::TerrainBuildPlan& terrainPlan = *objectPlan.terrainBuildPlan;
+            // 场景对象身份（type|name）就是摆放身份：同一 TR 可以有多个不同名字的对象，
+            // 它们共享 assetPath，但页表注册与 chunk 资源必须彼此独立。
+            terrainPlan.placementId = objectPlan.objectType + "|" + objectPlan.objectName;
+            // 可选覆盖让同一 TR 的多处摆放占用不同虚拟页区域；未提供时保留 TR 原值。
+            if (objectJson.contains("pageOrigin"))
+                terrainPlan.desc.pageOrigin = Eigen::Vector2i(
+                    objectJson.at("pageOrigin")[0].get<int>(),
+                    objectJson.at("pageOrigin")[1].get<int>());
+            if (objectJson.contains("pageTilesPerSide"))
+                terrainPlan.desc.pageTilesPerSide =
+                    objectJson.at("pageTilesPerSide").get<uint32_t>();
+        }
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))
         for (size_t component = 0; component < objectJson.at("components").size(); ++component)

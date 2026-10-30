@@ -1,5 +1,7 @@
 #include "textureIO.h"
 
+#include "compressedTextureDecoder.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -20,6 +22,63 @@
 
 namespace
 {
+    std::vector<uint8_t> ReadWholeFile(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.is_open())
+            throw std::runtime_error("Failed to open texture file: " + path.string());
+        stream.seekg(0, std::ios::end);
+        const std::streamoff length = stream.tellg();
+        if (length < 0)
+            throw std::runtime_error("Failed to read texture file size: " + path.string());
+        stream.seekg(0, std::ios::beg);
+        std::vector<uint8_t> bytes(static_cast<size_t>(length));
+        if (!bytes.empty())
+            stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!stream)
+            throw std::runtime_error("Failed to read texture file: " + path.string());
+        return bytes;
+    }
+
+    HostImage DecodeCompressedContainer(
+        const void* data,
+        size_t size,
+        const std::string& sourceLabel,
+        HostImage::TextureSemantic semantic,
+        TextureIO::LoadOptions::Transfer transfer)
+    {
+        const bool srgb = transfer == TextureIO::LoadOptions::Transfer::SRGB;
+        try
+        {
+            if (CompressedTextureDecoder::MatchesKtx2(data, size))
+                return CompressedTextureDecoder::DecodeKtx2(data, size, semantic, srgb);
+            if (CompressedTextureDecoder::MatchesDds(data, size))
+                return CompressedTextureDecoder::DecodeDds(data, size, semantic, srgb);
+        }
+        catch (const std::exception& error)
+        {
+            throw std::runtime_error(sourceLabel + ": " + error.what());
+        }
+        throw std::runtime_error(sourceLabel + ": not a DDS or KTX2 container");
+    }
+
+    // BC 块只能在离线编码时完成 V 方向翻转；运行时翻转会破坏块内行顺序，
+    // 因此这里直接拒绝 ForceOn，要求资产管线预先烘焙引擎朝向。
+    void RejectCompressedRowFlip(
+        const HostImage& image,
+        TextureIO::LoadOptions::FlipYMode flipY,
+        const std::string& sourceLabel)
+    {
+        if (HostImage::IsBlockCompressed(image.format) &&
+            flipY == TextureIO::LoadOptions::FlipYMode::ForceOn)
+        {
+            throw std::runtime_error(
+                sourceLabel +
+                ": block-compressed textures cannot be vertically flipped at runtime; "
+                "bake the engine V orientation offline or load with FlipYMode::ForceOff");
+        }
+    }
+
     bool ShouldFlipY(TextureIO::LoadOptions::FlipYMode mode)
     {
         return mode == TextureIO::LoadOptions::FlipYMode::ForceOn;
@@ -336,6 +395,21 @@ std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path, cons
 {
     const std::string pathString = path.string();
     const auto fileFormat = FileFormatFromPath(path);
+
+    // DDS/KTX2 只走块压缩容器解码；stb 不支持这两类容器。
+    if (fileFormat == FileFormat::Dds || fileFormat == FileFormat::Ktx2)
+    {
+        const std::vector<uint8_t> bytes = ReadWholeFile(path);
+        HostImage image = DecodeCompressedContainer(
+            bytes.data(),
+            bytes.size(),
+            pathString,
+            options.semantic,
+            options.transfer);
+        RejectCompressedRowFlip(image, options.flipY, pathString);
+        return image;
+    }
+
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -447,6 +521,25 @@ bool TextureIO::Save(const std::filesystem::path& path, const HostImage& image)
 std::optional<HostImage> TextureIO::LoadFromMemory(const void* data, size_t size, const LoadOptions& options)
 {
     const std::optional<FileFormat>& formatHint = options.formatHint;
+
+    const bool compressedHint = formatHint.has_value() &&
+        (*formatHint == FileFormat::Dds || *formatHint == FileFormat::Ktx2);
+    // 显式给了非压缩 hint 时以 hint 为准；没有 hint 时按魔数识别容器。
+    if (compressedHint ||
+        (!formatHint.has_value() &&
+         (CompressedTextureDecoder::MatchesDds(data, size) ||
+          CompressedTextureDecoder::MatchesKtx2(data, size))))
+    {
+        HostImage image = DecodeCompressedContainer(
+            data,
+            size,
+            "texture memory",
+            options.semantic,
+            options.transfer);
+        RejectCompressedRowFlip(image, options.flipY, "texture memory");
+        return image;
+    }
+
     int width = 0;
     int height = 0;
     int channels = 0;

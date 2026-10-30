@@ -20,7 +20,10 @@ enum class RenderGraphPassType
     // 编辑器参考网格：世界空间线条几何，和 sky 一样只向 sceneColor 合成；
     // 区别是它保留深度测试以复用场景 sceneDepth 做遮挡，因此需要独立行为类型。
     EditorGrid,
-    AutoExposure
+    AutoExposure,
+    // 独立 128×128 feedback RT：只遍历 terrain draw packet，不碰 GBuffer。
+    // 当前只产出可见页统计与回读 ring，不驱动驻留/淘汰。
+    TerrainFeedback
 };
 
 struct RenderGraphPassTypeName
@@ -29,9 +32,9 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 七个：编辑器网格与自动曝光是两个分支各自追加的，合并后必须都在表里，
+// 八个：编辑器网格、自动曝光和地形 feedback 是各自追加的分支，合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 7>
+inline constexpr std::array<RenderGraphPassTypeName, 8>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -39,7 +42,8 @@ inline constexpr std::array<RenderGraphPassTypeName, 7>
         {RenderGraphPassType::ForwardTransparent, "forwardTransparent"},
         {RenderGraphPassType::PostProcess, "postProcess"},
         {RenderGraphPassType::EditorGrid, "editorGrid"},
-        {RenderGraphPassType::AutoExposure, "autoExposure"}
+        {RenderGraphPassType::AutoExposure, "autoExposure"},
+        {RenderGraphPassType::TerrainFeedback, "terrainFeedback"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

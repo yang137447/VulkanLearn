@@ -63,6 +63,7 @@ const Field fields[] = {
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
     {K::Texture, "", "name", ValueKind::Text},
     {K::Texture, "", "source", ValueKind::Text, false, "source_path"},
+    {K::Texture, "", "sources", ValueKind::Strings, false, "source_path"},
     {K::Texture, "", "colorSpace", ValueKind::Text, false, "", "linear|srgb"},
     {K::Texture, "", "mipmaps", ValueKind::Boolean, true},
     {K::Texture, "", "filter", ValueKind::Text, true, "", "linear|nearest"},

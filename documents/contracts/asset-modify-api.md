@@ -13,7 +13,7 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
 | `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、导入选项、已有材质槽的 MI 绑定 |
-| `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
+| `texture.*` | `T_*.json`；`source`（单图）或 `sources`（数组层序）、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
 场景中的模型变换属于 Scene，共享模型的槽绑定属于 Mesh；MI 参数和贴图槽由原 MI 服务拥有。

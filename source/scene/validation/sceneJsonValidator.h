@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "render/camera/cameraExposure.h"
 #include "render/lighting/physicalLighting.h"
+#include "terrain/terrainAssetTypes.h"
 #include "world/environmentType.h"
 #include "script/scriptScene.h"
 
@@ -89,14 +90,14 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         if (!identities.insert(type + "|" + (type == "blueprintInstance"
             ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
-        if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
+        if (type != "mesh" && type != "terrain" && type != "directionalLight" && type != "pointLight" &&
             type != "spotLight" && type != "squareAreaLight" && type != "camera" && type != "environment" && type != "blueprintInstance")
             throw std::invalid_argument("Unknown scene object type: " + type);
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
             const bool required = (std::string(field) == "position" && type != "environment") ||
                 (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight") ||
-                (std::string(field) == "scale" && (type == "mesh" || type == "camera" || type == "blueprintInstance")) ||
+                (std::string(field) == "scale" && (type == "mesh" || type == "terrain" || type == "camera" || type == "blueprintInstance")) ||
                 (std::string(field) == "normal" && type == "squareAreaLight");
             if (!required && !object.contains(field)) continue;
             if (!object.contains(field) || !object.at(field).is_array() || object.at(field).size() != 3)
@@ -123,6 +124,55 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 if (!object.contains(field) || !object.at(field).is_string() ||
                     object.at(field).get<std::string>().empty())
                     throw std::invalid_argument(std::string("Mesh requires path: ") + field);
+            }
+        }
+        if (type == "terrain")
+        {
+            if (!object.contains("terrainPath") || !object.at("terrainPath").is_string() ||
+                object.at("terrainPath").get<std::string>().empty())
+                throw std::invalid_argument("Terrain requires path: terrainPath");
+            // 场景级 pageOrigin/pageTilesPerSide 覆盖 TR 默认值，用于同一 TR 的
+            // 多处摆放；两者最终都必须落在 32×32 全局虚拟页表内。
+            int64_t originX = 0;
+            int64_t originY = 0;
+            bool hasOrigin = false;
+            if (object.contains("pageOrigin"))
+            {
+                const auto& origin = object.at("pageOrigin");
+                if (!origin.is_array() || origin.size() != 2 ||
+                    !origin[0].is_number_integer() || !origin[1].is_number_integer())
+                    throw std::invalid_argument("Terrain pageOrigin requires two integers");
+                originX = origin[0].get<int64_t>();
+                originY = origin[1].get<int64_t>();
+                if (originX < 0 || originY < 0 ||
+                    originX >= static_cast<int64_t>(TerrainPageTableSize) ||
+                    originY >= static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin must be within [0, " +
+                        std::to_string(TerrainPageTableSize - 1) + "]");
+                hasOrigin = true;
+            }
+            if (object.contains("pageTilesPerSide"))
+            {
+                const auto& tiles = object.at("pageTilesPerSide");
+                if (!tiles.is_number_integer())
+                    throw std::invalid_argument("Terrain pageTilesPerSide must be an integer");
+                const int64_t tilesPerSide = tiles.get<int64_t>();
+                if (tilesPerSide < 1 ||
+                    tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageTilesPerSide must be within [1, " +
+                        std::to_string(TerrainPageTableSize) + "]");
+                // 只覆盖 tile 数时，TR 自己的 pageOrigin 在场景预检阶段还不可见；
+                // 这种组合由 TerrainPageManager::RegisterTerrain 按最终区域拒绝。
+                if (hasOrigin &&
+                    originX + tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin + pageTilesPerSide exceeds the global page table");
+                if (hasOrigin &&
+                    originY + tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin + pageTilesPerSide exceeds the global page table");
             }
         }
         if (type == "directionalLight" || type == "pointLight" ||

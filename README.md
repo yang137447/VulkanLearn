@@ -1,7 +1,7 @@
 # VulkanLearn
 
 ## 简介
-这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载等功能。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
+这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
 
 ## 文档分工
 
@@ -37,6 +37,7 @@
 - `documents/contracts/vulkanlearn-architecture.html`
 - `documents/contracts/game-ui-stack.md`
 - `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/terrain.md`
 - `documents/contracts/asset-modify-api.md`
 - `documents/contracts/material-param-authoring-and-reflection.md`
 - `documents/contracts/descriptor-imageinfo-management.md`

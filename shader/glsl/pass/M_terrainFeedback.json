@@ -1,0 +1,40 @@
+{
+    "name": "M_terrainFeedback",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_pageTableSize": {
+            "type": "float",
+            "default": 32.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "must match TerrainPageManager::PageTableSize; feedback page coords are 5+5 bits"
+        },
+        "u_frameTag": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 1.0,
+                "max": 255.0
+            },
+            "description": "8-bit submitted-epoch tag written into feedback alpha; 0 is reserved for invalid"
+        },
+        "u_pageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "must match TerrainPageManager::PageResolution; used for the same half-texel page inset as M_terrain"
+        }
+    },
+    "textures": {}
+}

@@ -612,6 +612,82 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "terrain")
+    {
+        // P3 可观测/验收入口：stats 只读快照；capacity 通过 atomic 排队到
+        // 渲染线程帧首生效，不在 Console 线程直接改 page manager。
+        std::string action;
+        if (!(commandStream >> action))
+        {
+            std::cout
+                << "Usage: terrain <stats|capacity N>"
+                << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.sourceText = line;
+        if (action == "stats")
+        {
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportTerrainStatistics;
+        }
+        else if (action == "capacity")
+        {
+            int capacity = 0;
+            if (!(commandStream >> capacity) || capacity <= 0)
+            {
+                std::cout
+                    << "Usage: terrain capacity <positive page count>"
+                    << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::SetTerrainResidentCapacity;
+            runtimeCommand.intValue = capacity;
+        }
+        else
+        {
+            std::cout
+                << "Usage: terrain <stats|capacity N>"
+                << std::endl;
+            return;
+        }
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainfeedback")
+    {
+        // P2 只读诊断：打印最近一次已完成 fence 的 feedback 页统计，
+        // 不触发驻留请求，也不进入 runtime test flag。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainFeedbackStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainlayerstats" || command == "terrainlayer")
+    {
+        // L2 只读诊断：层页驻留/上传计数与 atlas 格式/估算字节。
+        if (command == "terrainlayer")
+        {
+            std::string action;
+            if (!(commandStream >> action) || action != "stats")
+            {
+                std::cout << "Usage: terrainlayerstats" << std::endl;
+                return;
+            }
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainLayerStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -685,6 +761,10 @@ void DebugConsole::PrintHelp() const
     std::cout << "  injectinput <action> <down|up> - inject a gameplay action for automation (no OS focus required)\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
+    std::cout << "  terrain stats - report terrain residency/upload statistics\n";
+    std::cout << "  terrain capacity N - set resident page budget for the active World\n";
+    std::cout << "  terrainfeedback - report completed terrain feedback page statistics (read-only)\n";
+    std::cout << "  terrainlayerstats - report layer-page atlas residency/format statistics\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

@@ -290,20 +290,117 @@ The texture asset JSON should map to runtime options as follows:
 
 | JSON field | Runtime meaning |
 | --- | --- |
-| `source` | image file passed to `TextureIO::Load` |
+| `type` | `texture` loads one image; `textureArray` loads ordered layers |
+| `source` | single-image file passed to `TextureIO::Load` |
+| `sources` | ordered layer files passed to `TextureIO::LoadArray` |
 | `colorSpace` | `TextureIO::LoadOptions::Transfer` |
 | `mipmaps` | device mip generation |
 | `filter` | Vulkan sampler filter |
 | `wrapMode` | Vulkan sampler address mode |
 | `channelsDescription` | no runtime effect in V1 |
+| container (`.dds` / `.ktx2`) | decoded into `HostImage` BC7/BC5 blocks; the container supplies the mip chain |
+| `mipmaps` with a BC payload | ignored; the container chain is authoritative |
 
 The texture cache key must include all fields that affect GPU resource creation or sampler state:
 
 ```txt
-assetPath + source + colorSpace + mipmaps + filter + wrapMode
+assetPath + type + source(s) + colorSpace + mipmaps + filter + wrapMode
 ```
 
 Without these fields in the cache key, the loader could incorrectly reuse one texture object for different sampling settings. `assetPath` is included so debug object names continue to point at the texture JSON that the material actually referenced.
+
+## Texture Array
+
+Texture arrays use the same descriptor fields as a single texture, except that
+`type` is `"textureArray"` and the layer order is carried by `sources`:
+
+```json
+{
+    "name": "T_terrain_albedo_array",
+    "type": "textureArray",
+    "sources": [
+        "Maps/SC_terrain/Source/Textures/T_leaf_litter_albedo.png",
+        "Maps/SC_terrain/Source/Textures/T_grass_albedo.png"
+    ],
+    "colorSpace": "srgb",
+    "mipmaps": true,
+    "filter": "linear",
+    "wrapMode": "repeat"
+}
+```
+
+`sources` is non-empty, `source` is forbidden, and array order is the GPU layer
+order. Every decoded source must have the same dimensions, pixel format,
+semantic, swizzle and row stride; otherwise the whole asset is rejected. CPU mip
+chains are not supported, and single-image export rejects arrays instead of
+silently writing layer 0.
+
+Material JSON declares the matching slot type, and the generated parameter
+include uses it verbatim:
+
+```json
+"textures": {
+    "layerAlbedo": { "type": "sampler2DArray", "default": null }
+}
+```
+
+Descriptor layout stays a single `VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`
+binding; only the image view is `VK_IMAGE_VIEW_TYPE_2D_ARRAY`.
+
+## Block-Compressed Containers (DDS / KTX2)
+
+`source` / `sources` may point at a DDS or KTX2 container that already holds
+BC7 or BC5 blocks. The container is detected from the file extension for file
+loads and from the magic bytes for `TextureIO::LoadFromMemory`; no extra JSON
+field is required, so V1 stays backward compatible.
+
+Supported payloads:
+
+- DDS: legacy `ATI2` / `BC5U` FourCC for `BC5_UNORM`, or a `DX10` header with
+  `DXGI_FORMAT_BC7_UNORM` (98), `DXGI_FORMAT_BC7_UNORM_SRGB` (99) or
+  `DXGI_FORMAT_BC5_UNORM` (83). 2D only; each array element carries its full
+  mip chain (DDS array order already matches the engine layout).
+- KTX2: `vkFormat` BC5_UNORM (141), BC7_UNORM (145) or BC7_SRGB (146) with
+  `supercompressionScheme = 0`, `faceCount = 1` and `pixelDepth = 0`.
+  A KTX2 level stores its array layers contiguously, so the loader reorders
+  the file into the engine's layer-major / mip-major CPU layout.
+
+Rejected explicitly, with an error naming the reason:
+
+- cubemap (`faceCount = 6`, DDS `miscFlag & TEXTURECUBE`) and volume/3D data;
+- any other FourCC / DXGI / vkFormat value (BC1–BC6, RGBA8, ...);
+- BasisLZ / Zstandard / ZLIB supercompression; the source must be transcoded
+  to BC7/BC5 offline;
+- KTX2 `levelCount = 0` (load-time mip generation) and mip counts beyond the
+  full chain;
+- truncated level or pixel data, a mismatched `pitchOrLinearSize`, a DFD that
+  does not describe a 4x4/16-byte BC block, or a base level whose width or
+  height is not a multiple of 4.
+
+`sRGB` follows `colorSpace`, not the container tag: a BC7 payload uploads as
+`VK_FORMAT_BC7_SRGB_BLOCK` for `"colorSpace": "srgb"` and
+`VK_FORMAT_BC7_UNORM_BLOCK` for `"colorSpace": "linear"`. BC5 is always
+`VK_FORMAT_BC5_UNORM_BLOCK`. The DFD transfer function is only checked for
+container self-consistency with `vkFormat`.
+
+`mipmaps` has no effect on block-compressed payloads. BC mips cannot be
+generated on the device, so the container must carry the chain; a single-mip
+DDS yields a single-mip texture and a `maxLod = 0` sampler.
+
+Orientation: `TextureIO` cannot reverse rows of a BC block. Loading a
+block-compressed container with `FlipYMode::ForceOn` is rejected, and the
+material / thumbnail entry points select `ForceOff` for `.dds` / `.ktx2`
+sources. The usual "flip once at load" step must be baked into the offline
+encode, so a BC texture that must match an uncompressed source is encoded from
+the engine-oriented image.
+
+CPU layout: compressed images are layer-major, then mip-major inside each
+layer. One texel is a 4x4 block of 16 bytes, so a mip row stride is
+`ceil(width / 4) * 16` bytes and a mip has `ceil(height / 4)` block rows.
+`GetPixelSize()` is invalid for block formats; use `GetMipRowStride()`,
+`GetMipRowCount()` and `GetMipOffset()`. Data must be tightly packed (no row
+padding). `HostImage::CombineArrayLayers` accepts a mip chain when every layer
+has the same mip count, per-mip dimensions and row strides.
 
 ## Explicitly Out Of V1
 
@@ -316,7 +413,7 @@ The following fields are intentionally not part of Texture JSON V1:
 - full `sampler`
   - too low-level and too easy to misuse
 - compression settings
-  - should wait for a DDS/KTX2 or offline compression pipeline
+  - the DDS/KTX2 container decides BC5 vs BC7; there is no per-asset codec or encoder choice
 - texture group, LOD group, or streaming settings
   - should wait until the renderer needs asset memory policy
 - normal green-channel flipping
@@ -342,21 +439,38 @@ or explicit four-channel decoding and rejects CPU mip generation. Decode failure
 reports the source path and layer index; incompatible images reject the complete
 result. Single-image export rejects arrays rather than silently saving layer 0.
 
-This is a CPU preparation API only. Texture JSON still accepts only
-`type: "texture"` with one `source`; `sampler2DArray` material binding is not
-supported. `DeviceTextureFactory` rejects multi-layer input before allocating
-GPU resources. Coverage lives in `tool/texture-asset-tests/textureArrayTests.cpp`,
-registered in the existing `texture_asset_tests` target.
+Texture JSON accepts `type: "texture"` with one `source` or
+`type: "textureArray"` with ordered `sources`. `DeviceTextureFactory` allocates
+an `arrayLayers` image, copies each layer into its own subresource, builds the
+mip chain for every layer, and `Texture` creates a `2D_ARRAY` view when
+`CreateDesc::textureArray` is set. Coverage lives in
+`tool/texture-asset-tests/textureArrayTests.cpp`, registered in the existing
+`texture_asset_tests` target. Editor thumbnails and the material-instance
+texture picker still treat arrays as unsupported; runtime material loading does
+not.
+
+### Block-Compressed Loading
+
+`source/resource/image/ddsTexture.cpp` and `ktx2Texture.cpp` implement the
+container parsers behind `source/resource/image/compressedTextureDecoder.h`.
+`HostImage` owns the CPU layout (`IsBlockCompressed`, `GetMipRowStride`,
+`GetMipOffset`), `source/resource/image/hostImageVulkanPlan.h` maps
+`PixelFormat -> vk::Format` and builds one `vk::BufferImageCopy` per
+`(mip, layer)`, and `DeviceTextureFactory` records those regions into a single
+staging buffer before the `TransferDst -> ShaderReadOnly` transition. Texture
+creation clears `CreateDesc::generateMipmaps` for BC payloads and enables
+sampler mip selection from the real mip count.
 
 ### Runtime Texture Loading
 
-1. `textureAssetLoader.*` parses texture asset JSON and builds `TextureBindingLoadDesc`.
-2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, and `wrapMode` into Vulkan texture creation; `Texture` applies the fixed material-texture vertical row flip before upload.
+1. `textureAssetLoader.*` parses texture asset JSON and builds `TextureBindingLoadDesc` with an ordered `sources` list and a `textureArray` flag.
+2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, `wrapMode`, and `textureArray` into Vulkan texture creation; `Texture` applies the fixed material-texture vertical row flip before upload.
 3. `RendererMaterialLoader::LoadMaterialInstance()` requires material texture entries to reference `T_*.json` files.
-4. Texture cache keys include the asset path plus source, transfer, mipmap, filter, and wrap mode state.
+4. Texture cache keys include the asset path, type, ordered sources, transfer, mipmap, filter, and wrap mode state.
 5. Texture asset preflight rejects unknown fields such as `flipY`; orientation is deliberately absent from the texture cache identity because every file-backed material texture uses the same engine policy.
 6. Raw image files live under the owning `Source/Textures/` directory.
 7. Material instances bind shader slots to texture asset JSON files, not direct image paths.
+8. Material texture entries may declare `sampler2D` or `sampler2DArray`; `MaterialDescriptorSchema` copies that type into the generated GLSL include and the validator rejects any other type.
 
 ## Design Boundary
 

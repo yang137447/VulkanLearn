@@ -1,35 +1,13 @@
 #include "deviceTextureFactory.h"
 
 #include "../../commonFunction.h"
+#include "../image/hostImageVulkanPlan.h"
 #include "render/backend/rendererBackendVulkan.h"
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
-
-namespace
-{
-    vk::Format ToVkFormat(HostImage::PixelFormat format)
-    {
-        switch (format)
-        {
-        case HostImage::PixelFormat::RGBA8_UNORM:
-            return vk::Format::eR8G8B8A8Unorm;
-        case HostImage::PixelFormat::RGBA8_SRGB:
-            return vk::Format::eR8G8B8A8Srgb;
-        case HostImage::PixelFormat::RGBA16_FLOAT:
-            return vk::Format::eR16G16B16A16Sfloat;
-        case HostImage::PixelFormat::RG16_FLOAT:
-            return vk::Format::eR16G16Sfloat;
-        case HostImage::PixelFormat::R16_FLOAT:
-            return vk::Format::eR16Sfloat;
-        case HostImage::PixelFormat::RGBA32_FLOAT:
-            return vk::Format::eR32G32B32A32Sfloat;
-        default:
-            throw std::runtime_error("Unsupported HostImage::PixelFormat for Vulkan upload");
-        }
-    }
-}
 
 DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     VL::RendererBackendVulkan& rendererBackend,
@@ -41,11 +19,18 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     {
         throw std::runtime_error("Invalid HostImage for DeviceTextureFactory::CreateFromHostImage");
     }
-    // CPU 数组准备已支持多层；当前上传仍是单层，必须在分配 GPU 资源前显式拒绝。
-    if (image.arrayLayers != 1 || image.mipLevels != 1)
-        throw std::runtime_error("DeviceTextureFactory currently accepts only single-layer mip 0 images");
+    image.ValidateStorage();
 
-    vk::Format format = ToVkFormat(image.format);
+    const bool blockCompressed = HostImage::IsBlockCompressed(image.format);
+    if (blockCompressed && options.generateMipmapsOnDevice)
+    {
+        // 块格式的 mip 必须离线编码；Texture 在调用本函数前会把该标志清掉。
+        throw std::invalid_argument(
+            "Block-compressed textures cannot generate mips on the device; "
+            "provide an offline mip chain in the container");
+    }
+
+    vk::Format format = HostImageVulkan::ToVulkanFormat(image.format);
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(image.data.size());
     vk::DeviceSize stagingSize = imageSize;
     vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -60,28 +45,38 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     std::memcpy(mapped, image.data.data(), static_cast<size_t>(imageSize));
     rendererBackend.UnmapMemory(stagingMemory);
 
-    uint32_t mipLevels = 1;
-    if (options.generateMipmapsOnDevice)
+    // 容器自带 mip 链时直接使用；只有单 mip 的非块格式才在设备端生成。
+    const bool generateMipmaps =
+        !blockCompressed && image.mipLevels == 1 && options.generateMipmapsOnDevice;
+    uint32_t mipLevels = image.mipLevels;
+    if (generateMipmaps)
     {
         mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(image.width, image.height)))) + 1;
     }
 
-    vk::ImageUsageFlags usageFlags = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
-    if (options.generateMipmapsOnDevice)
-    {
-        usageFlags |= vk::ImageUsageFlagBits::eTransferSrc;
-    }
+    // TransferSrc 始终保留：层 atlas 需要在 GPU 内从源层纹理切页，
+    // 而源图在创建时无法预知是否会被 L2 消费。该 flag 不额外分配显存。
+    vk::ImageUsageFlags usageFlags =
+        vk::ImageUsageFlagBits::eTransferDst |
+        vk::ImageUsageFlagBits::eTransferSrc |
+        vk::ImageUsageFlagBits::eSampled;
 
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
     vk::MemoryPropertyFlags imageMemoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+    vk::ImageCreateInfo imageCreateInfo;
+    imageCreateInfo
+        .setImageType(vk::ImageType::e2D)
+        .setExtent(vk::Extent3D{ image.width, image.height, 1 })
+        .setMipLevels(mipLevels)
+        .setArrayLayers(image.arrayLayers)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setFormat(format)
+        .setTiling(tiling)
+        .setUsage(usageFlags)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setInitialLayout(vk::ImageLayout::eUndefined);
     auto [deviceImage, deviceImageMemory] = rendererBackend.CreateImage(
-        image.width,
-        image.height,
-        mipLevels,
-        vk::SampleCountFlagBits::e1,
-        format,
-        tiling,
-        usageFlags,
+        imageCreateInfo,
         imageMemoryFlags,
         "Texture: " + debugName);
 
@@ -90,11 +85,24 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
         mipLevels,
         format,
         vk::ImageLayout::eUndefined,
-        vk::ImageLayout::eTransferDstOptimal);
-    rendererBackend.CopyBufferToImage(stagingBuffer, deviceImage, image.width, image.height);
-    if (options.generateMipmapsOnDevice)
+        vk::ImageLayout::eTransferDstOptimal,
+        0,
+        image.arrayLayers);
+    // 逐 mip/逐层 region 共享同一个 staging buffer；块格式的 extent 是纹素尺寸，
+    // 行跨度由驱动按 4×4 块推导。
+    rendererBackend.CopyBufferToImageRegions(
+        stagingBuffer,
+        deviceImage,
+        HostImageVulkan::BuildUploadRegions(image));
+    if (generateMipmaps)
     {
-        rendererBackend.GenerateMipmaps(deviceImage, image.width, image.height, mipLevels);
+        rendererBackend.GenerateMipmaps(
+            deviceImage,
+            image.width,
+            image.height,
+            mipLevels,
+            0,
+            image.arrayLayers);
     }
     else
     {
@@ -103,7 +111,9 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
             mipLevels,
             format,
             vk::ImageLayout::eTransferDstOptimal,
-            vk::ImageLayout::eShaderReadOnlyOptimal);
+            vk::ImageLayout::eShaderReadOnlyOptimal,
+            0,
+            image.arrayLayers);
     }
 
     rendererBackend.DestroyBuffer(stagingBuffer, stagingMemory);
@@ -113,6 +123,7 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     textureResource.image = deviceImage;
     textureResource.imageMemory = deviceImageMemory;
     textureResource.mipLevels = mipLevels;
+    textureResource.arrayLayers = image.arrayLayers;
     textureResource.format = format;
     return textureResource;
 }

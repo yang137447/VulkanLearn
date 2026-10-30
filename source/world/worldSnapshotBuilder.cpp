@@ -113,6 +113,8 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.material = MakeResourceHandle(meshObject.materialKey);
     snapshot.materialInstance = MakeResourceHandle(meshObject.materialInstanceKey);
     snapshot.speedTreeWindProfileKey = meshObject.speedTreeWindProfileKey;
+    snapshot.terrainFeedbackEligible =
+        meshObject.terrainFeedbackEligible;
 
     const std::array<Eigen::Vector3f, 8> worldCorners = BuildWorldCorners(
         meshObject.localBoundsMin,

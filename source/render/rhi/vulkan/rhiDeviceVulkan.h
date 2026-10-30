@@ -153,7 +153,9 @@ public:
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout);
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     RHIImageViewHandle Create2DImageView(
         RHIImageHandle imageHandle,
         uint32_t mipLevels,
@@ -204,7 +206,73 @@ public:
         RHIBufferHandle bufferHandle,
         RHIImageHandle imageHandle,
         uint32_t width,
-        uint32_t height);
+        uint32_t height,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0,
+        uint32_t bufferRowLength = 0);
+    // 只更新目标 image 的一个子矩形，用于 terrain atlas 这类整图已存在的增量写页。
+    // 调用方负责把 image 预置为 eTransferDstOptimal。
+    void CopyBufferToImageRegion(
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        vk::DeviceSize bufferOffset,
+        uint32_t bufferRowLength,
+        uint32_t imageOffsetX,
+        uint32_t imageOffsetY,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevel,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0);
+    // 批量版本：同一 buffer/image 上的多个 region 合并成一次 submit；
+    // region 语义与校验规则完全由 CommonFunction::CopyBufferToImageRegions 负责。
+    void CopyBufferToImageRegions(
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // record-only 版本：只把 transition/copy 写入调用方提供的 command buffer，
+    // 不 submit、不 wait；用于主帧内批量写入 terrain 页表/atlas。
+    void RecordTransitionImageLayout(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        uint32_t mipLevels,
+        vk::Format format,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyBufferToImageRegions(
+        vk::CommandBuffer commandBuffer,
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // 层 atlas：record-only clear 与 image->image 子区域切页。
+    void RecordClearColorImage(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        vk::ImageLayout layout,
+        vk::ClearColorValue clearValue,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyImageRegions(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle sourceHandle,
+        RHIImageHandle destinationHandle,
+        const std::vector<vk::ImageCopy>& regions);
+    void CopyImageRegions(
+        RHIImageHandle sourceHandle,
+        RHIImageHandle destinationHandle,
+        const std::vector<vk::ImageCopy>& regions);
+    void RecordCopyImageToBuffer(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        RHIBufferHandle bufferHandle,
+        uint32_t width,
+        uint32_t height,
+        bool flipY = false,
+        vk::DeviceSize rowBytes = 0);
     void CopyImageToBuffer(
         RHIImageHandle imageHandle,
         RHIBufferHandle bufferHandle,
@@ -216,7 +284,9 @@ public:
         RHIImageHandle imageHandle,
         uint32_t width,
         uint32_t height,
-        uint32_t mipLevels);
+        uint32_t mipLevels,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     void DestroyImageResource(
         RHIImageHandle imageHandle,
         RHIImageViewHandle imageViewHandle,

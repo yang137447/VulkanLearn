@@ -30,8 +30,9 @@
 | `source/animation/motionRuntimeDatabase.*` | `contracts/animation-asset-import.md`、`contracts/animation-motion-features.md`、`contracts/testing.md` | — |
 | `source/debug/**`、`source/ui/debugDrawOverlay.*`、`source/script/scriptDebugDraw.h`、`script/VulkanLearn.Runtime/DebugDraw.cs`、`tool/debug-draw-tests/**`、`tool/editor-ui-tests/debugDrawOverlayTests.cpp`、`tool/script-tests/scriptDebugDrawTests.cpp`、`tool/script-tests/managed/DebugDrawFixtures.cs`、`tool/debug/capture_draw_debug.py` | `contracts/debug-draw.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
-| `source/resource/image/hostImage.*`、`source/resource/image/textureIO.*`、`source/resource/device/deviceTextureFactory.*`、`tool/texture-asset-tests/**` | `contracts/texture-asset-json-v1.md`、`contracts/testing.md` | — |
-| `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/resource/image/hostImage.*`、`source/resource/image/textureIO.*`、`source/resource/image/ddsTexture.cpp`、`source/resource/image/ktx2Texture.cpp`、`source/resource/image/hostImageVulkanPlan.h`、`source/resource/device/deviceTextureFactory.*`、`tool/texture-asset-tests/**` | `contracts/texture-asset-json-v1.md`、`contracts/testing.md` | — |
+| `source/terrain/**`、`source/render/resource/rendererTerrainLoader.*`、`source/render/resource/terrainFeedbackGpu.*`、`shader/glsl/M_terrain*.json`、`shader/glsl/M_terrain.*.glsl`、`shader/glsl/materialFunction/mf_terrainLayer*.glsl`、`shader/glsl/pass/M_terrainFeedback.json`、`shader/glsl/pass/terrainFeedback.*`、`tool/terrain-tests/**` | `contracts/terrain.md`、`contracts/testing.md`、`contracts/texture-asset-json-v1.md`（VT atlas/压缩格式） | — |
+| `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/terrain.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
@@ -140,9 +141,29 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 - `source/engine/testing/**`（runtime validation services）
 - `source/core/**`
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
-- 地形：**不存在运行时实现**。只有编辑器资产层的 `EditorAssetKind::Terrain` 与
-  `objectType == "terrain"` 的 MI 导航解析；`SceneAssetValidator` 不接受 `terrain` 场景对象。
-  实现计划见 `plan/rendering/terrain-openworld-demo-plan.md`（未落地，非契约）。
+- 地形：运行时已支持 `terrain` 场景对象、TR 高度图网格与 chunk mesh 渲染；
+  M_terrain 已支持最多 256 层的层表、tile 候选层、World 级 32×32 global page table + ID/权重
+  atlas 与 top-4 数组混合；page manager 已有 CPU resident/eviction、虚拟页到物理
+  atlas 槽位的分配与批量 region 上传；注册身份是场景 `placementId`，同一 TR 可多处摆放，
+  场景级 `pageOrigin`/`pageTilesPerSide` 可覆盖虚拟区域，fallback 只占物理槽位且缺页
+  输出中性表面。P3 后 renderer 使用 `preload=false`：feedback miss 驱动
+  `RequestPageAtEpoch`，每帧限流请求/上传，物理槽位淘汰后进入 CPU quarantine 并到期回收；
+  `terrain stats`/`terrain capacity N` 提供驻留与预算观测。P3.1 起只有同时具备
+  `TR.layers` 与 `layerTable` 材质的地形进入 feedback，epoch-aware LRU 使用
+  `lastTouchedEpoch`，降预算遵守 `max(2, framesInFlight+1)` 安全窗。独立的 128×128
+  `terrainFeedback` pass（D32 depth）与 host-visible 回读 ring 仍在。
+  L1 已把层 catalog 扩成 256×4（row2 页数/页表基址、row3 平均色）并新增纯 CPU 的
+  `source/terrain/terrainLayerPageManager.*`：层页 `(layerId, mip, pageX, pageY)` 的
+  物理页分配/淘汰/quarantine/上传批次。L2 已把 catalog、每 mip 的 RGBA32F 页表与
+  三张 4096² atlas（4096²/slice、无 mip）建进 GPU，加载期用 GPU→GPU `vkCmdCopyImage`
+  上传每层尾页，并输出淘汰失效项；`terrainlayerstats` 提供层页/atlas 观测。
+  L3 已给 `M_terrain` 加 `u_terrainLayerMode`（默认 0）：mode 0 保持旧三数组
+  快速路径；mode 1 走 top-4 → catalog → 每 mip 页表 → atlas 的采样，含 mip
+  选择、页内半 texel inset、catalog avgColor 缺页 fallback 与 sourceResolution
+  一致性校验。默认视觉路径仍与 L1/L2 逐字节一致；mode 1 在加载期全量预取层页。
+  当前没有低分辨率 fallback/淡入、相机预取、LOD/skirt、地形碰撞/编辑。行为见
+  [terrain 契约](contracts/terrain.md)；后续计划见
+  `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
 
 ## 组合规则
 
@@ -153,11 +174,31 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 ## 规划入口（非契约）
 
 - [地形系统：Open World Demo Collection 复刻计划](plan/rendering/terrain-openworld-demo-plan.md)：
-  当前地形目标。CPU 高度图网格 + 8 层 top-4 + texture array；GPU-driven/VT/LOD 明确搁置。
-  未实现，不替代当前契约；落地后再补真实源码路由与 `contracts/terrain.md`。
+  当前地形目标。CPU 高度图网格 + 最多 32 层 + tile 候选层 + ID/权重图 top-4；
+  GPU-driven/VT/LOD 仍搁置（大世界层表另见下一项）。
+  M2 的基础 TR/场景/网格/World 渲染已落地并写入 `contracts/terrain.md`；M3+ 的层混合与
+  画面复刻仍未实现。计划不替代当前契约。
+- [地形大世界与上百层地表架构](plan/rendering/terrain-large-world-layers-plan.md)：
+  从上百层/大世界目标倒推的层表、tile 候选层、ID/权重图、VT 与流式阶段。未实现，
+  不替代 `contracts/terrain.md`；先用于确认层数、世界尺寸和显存预算。
+- [地形 VT 流式闭环设计](plan/rendering/terrain-vt-streaming-design.md)：
+  GPU feedback → CPU 驻留/LRU → 子区域上传的下一阶段闭环；含 feedback 载体对比、
+  texel/ring 格式、frame fence/epoch 保护和分步验收。P0/P1/P2/P4 的 World-local state、
+  batch 上传、feedback pass/回读统计、placementId/fallback 解耦已落地；P3 的
+  `ApplyFeedback`、feedback 驱动请求/淘汰、每帧上传 ring 与 quarantine 也已落地。
+  仍不替代 `contracts/terrain.md`。
+- [地形层纹理流式设计](plan/rendering/terrain-layer-texture-streaming-design.md)：
+  256 层 albedo/normal/pbr 的显存预算、layer catalog、第二级 VT/数组页方案对比与
+  L0–L4 分步实施。L0（BC7/BC5）、L1（catalog v2 + CPU 层页管理器）与 L2
+  （GPU 层 atlas/页表/加载期上传）与 L3（`u_terrainLayerMode=1` 的 shader VT
+  采样、材质 schema、sourceResolution 校验）已落地；L4 的 feedback 驱动层页驻留
+  仍未实现，不替代 `contracts/terrain.md`。
 - [开放世界场景栈路线图](plan/rendering/open-world-scene-stack-roadmap.md)：
   地形碰撞/GASP、植被撒点与石头对齐、PP2 分层风、3D 风力点、LOD、自定义 shading 的依赖与阶段。
   未实现，不替代当前契约。
+- [艺术地球仪 Demo 计划](plan/rendering/artistic-globe-demo-plan.md)：
+  经典支架与浮雕地球、冰雪、云和水汽的艺术展示方向。以整件摆件的观赏效果为目标，
+  不做地表近景；包含功能缺口、阶段验收与生图提示词，尚未实施。
 - [GASP 与 C# 动画控制开发计划](plan/architecture/gasp-csharp-animation-plan.md)：
   当前开发目标。C# 高层状态机与数据库筛选，原生 Motion Matching、轨迹/姿态历史、
   蒙皮、预览调试及障碍翻越的分阶段方案，每阶段提供可验收效果。

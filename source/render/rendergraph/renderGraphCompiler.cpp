@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "terrain/terrainFeedback.h"
+
 namespace VL
 {
 namespace
@@ -781,6 +783,109 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             }
         }
         pass.outputResources = std::move(outputResult.Value());
+        if (pass.type == RenderGraphPassType::TerrainFeedback)
+        {
+            // feedback 合同：一个 worldTexture（page table）输入、一个固定
+            // 128×128 RGBA8 颜色输出 + 一个 128×128 深度输出。深度测试让
+            // 最近的地形页赢得 feedback texel，避免后绘制的远页覆盖近页 miss。
+            // 禁止 MSAA/swapChain/GBuffer；回读始终是 64 KiB。
+            const auto& outputs = pass.outputResources;
+            const auto& inputs = pass.inputDescriptors;
+            if (pass.needMsaa ||
+                !pass.needCreateMaterial ||
+                pass.materialInstancePath.empty() ||
+                !pass.pipelineState.useVertexInput ||
+                !pass.pipelineState.depthTestEnable ||
+                !pass.pipelineState.depthWriteEnable ||
+                pass.pipelineState.depthCompareOp !=
+                    CompiledDepthCompareOp::Less ||
+                inputs.size() != 1 ||
+                inputs[0].source != "worldTexture" ||
+                inputs[0].binding != 0 ||
+                outputs.size() != 2)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidTerrainFeedback",
+                    "TerrainFeedback requires one worldTexture input, one fixed color output and one fixed depth output with depth test.",
+                    pass.name));
+            }
+
+            const CompiledRenderGraphResource* colorTarget = nullptr;
+            const CompiledRenderGraphResource* depthTarget = nullptr;
+            for (const CompiledRenderGraphPassOutput& output : outputs)
+            {
+                if (output.layer != 0 ||
+                    output.loadOp != "clear" ||
+                    output.storeOp != "store")
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidTerrainFeedback",
+                        "TerrainFeedback outputs must be layer 0 with clear/store.",
+                        pass.name + ":" + output.resource));
+                }
+                const CompiledRenderGraphResource* resource = nullptr;
+                for (const auto& candidate : compiledGraph.resources)
+                {
+                    if (candidate.name == output.resource)
+                    {
+                        resource = &candidate;
+                        break;
+                    }
+                }
+                if (resource == nullptr)
+                    continue;
+                if (IsDepthFormatString(resource->format))
+                    depthTarget = resource;
+                else
+                    colorTarget = resource;
+            }
+            if (colorTarget == nullptr ||
+                depthTarget == nullptr ||
+                colorTarget == depthTarget ||
+                colorTarget->isSwapchain ||
+                colorTarget->type != "texture2D" ||
+                colorTarget->format != "R8G8B8A8_UNORM" ||
+                !colorTarget->hasFixedWidth ||
+                !colorTarget->hasFixedHeight ||
+                colorTarget->widthValue !=
+                    static_cast<float>(TerrainFeedbackResolution) ||
+                colorTarget->heightValue !=
+                    static_cast<float>(TerrainFeedbackResolution) ||
+                std::find(
+                    colorTarget->usage.begin(),
+                    colorTarget->usage.end(),
+                    "colorAttachment") == colorTarget->usage.end() ||
+                std::find(
+                    colorTarget->usage.begin(),
+                    colorTarget->usage.end(),
+                    "transferSrc") == colorTarget->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidTerrainFeedback",
+                    "TerrainFeedback output must be a fixed 128x128 R8G8B8A8_UNORM colorAttachment+transferSrc texture.",
+                    pass.name));
+            }
+            if (depthTarget->isSwapchain ||
+                depthTarget->type != "texture2D" ||
+                depthTarget->format != "D32_SFLOAT" ||
+                !depthTarget->hasFixedWidth ||
+                !depthTarget->hasFixedHeight ||
+                depthTarget->widthValue !=
+                    static_cast<float>(TerrainFeedbackResolution) ||
+                depthTarget->heightValue !=
+                    static_cast<float>(TerrainFeedbackResolution) ||
+                std::find(
+                    depthTarget->usage.begin(),
+                    depthTarget->usage.end(),
+                    "depthStencilAttachment") == depthTarget->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidTerrainFeedback",
+                    "TerrainFeedback depth output must be a fixed 128x128 D32_SFLOAT "
+                    "depthStencilAttachment texture.",
+                    pass.name));
+            }
+        }
         for (const std::string& inputResource : pass.inputResources)
         {
             if (previousResourceUses[inputResource] == ResourcePreviousUse::Attachment)

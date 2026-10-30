@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -8,8 +9,10 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include "resource/image/textureIO.h"
+#include "textureAssetLoader.h"
 
 namespace
 {
@@ -64,6 +67,24 @@ protected:
         const auto path = directory / name;
         std::ofstream stream(path, std::ios::binary);
         stream.write(reinterpret_cast<const char*>(bytes.data()), singleRow ? 58 : bytes.size());
+        return path;
+    }
+
+    std::filesystem::path WriteTextureArrayAsset(
+        const std::string& name,
+        const nlohmann::json& sources)
+    {
+        nlohmann::json asset = {
+            {"name", "T_textureArrayAssetGate"},
+            {"type", "textureArray"},
+            {"sources", sources},
+            {"colorSpace", "linear"},
+            {"mipmaps", false},
+            {"filter", "nearest"},
+            {"wrapMode", "clamp"}};
+        const auto path = directory / name;
+        std::ofstream stream(path);
+        stream << asset.dump(2);
         return path;
     }
 
@@ -319,4 +340,69 @@ TEST_F(TextureArrayTest, SingleImageExportRejectsArrayWithoutWriting)
     options.format = TextureIO::FileFormat::Exr;
     EXPECT_FALSE(TextureIO::Save(output, image, options));
     EXPECT_FALSE(std::filesystem::exists(output));
+}
+
+TEST_F(TextureArrayTest, LoadsArrayDescriptorInSourceOrder)
+{
+    const auto first = WriteBmp("first.bmp");
+    const auto second = WriteBmp("second.bmp");
+    const auto assetPath = WriteTextureArrayAsset(
+        "T_textureArrayAsset.json",
+        {first.string(), second.string()});
+
+    const TextureBindingLoadDesc description =
+        LoadTextureAssetDesc(assetPath.string());
+    ASSERT_EQ(description.sources.size(), 2u);
+    EXPECT_TRUE(description.textureArray);
+    EXPECT_EQ(description.sources[0], first.string());
+    EXPECT_EQ(description.sources[1], second.string());
+    EXPECT_EQ(description.transfer, TextureIO::LoadOptions::Transfer::Linear);
+    EXPECT_FALSE(description.generateMipmaps);
+
+    const Texture::CreateDesc createDesc = ToTextureCreateDesc(description);
+    EXPECT_TRUE(createDesc.textureArray);
+    EXPECT_FALSE(createDesc.generateMipmaps);
+    EXPECT_EQ(createDesc.filter, vk::Filter::eNearest);
+    EXPECT_EQ(createDesc.wrapMode, vk::SamplerAddressMode::eClampToEdge);
+
+    const std::string key = BuildTextureCacheKey(description);
+    EXPECT_LT(key.find(first.string()), key.find(second.string()));
+    TextureBindingLoadDesc reversed = description;
+    std::reverse(reversed.sources.begin(), reversed.sources.end());
+    EXPECT_NE(key, BuildTextureCacheKey(reversed));
+}
+
+TEST_F(TextureArrayTest, RejectsMixedSourceAndSourcesFields)
+{
+    const auto source = WriteBmp("mixed.bmp");
+    const auto assetPath = directory / "T_mixed.json";
+    std::ofstream stream(assetPath);
+    stream << nlohmann::json({
+        {"name", "T_mixed"},
+        {"type", "textureArray"},
+        {"source", source.string()},
+        {"sources", {source.string()}},
+        {"colorSpace", "linear"}}).dump(2);
+    stream.close();
+    EXPECT_THROW(LoadTextureAssetDesc(assetPath.string()), std::exception);
+}
+
+TEST_F(TextureArrayTest, RejectsEmptyArraySources)
+{
+    const auto assetPath = WriteTextureArrayAsset("T_empty_sources.json", nlohmann::json::array());
+    EXPECT_THROW(LoadTextureAssetDesc(assetPath.string()), std::exception);
+}
+
+TEST_F(TextureArrayTest, RejectsSingleTextureWithSourcesField)
+{
+    const auto source = WriteBmp("single.bmp");
+    const auto assetPath = directory / "T_single_sources.json";
+    std::ofstream stream(assetPath);
+    stream << nlohmann::json({
+        {"name", "T_single_sources"},
+        {"type", "texture"},
+        {"sources", {source.string()}},
+        {"colorSpace", "srgb"}}).dump(2);
+    stream.close();
+    EXPECT_THROW(LoadTextureAssetDesc(assetPath.string()), std::exception);
 }

@@ -50,6 +50,9 @@ struct RuntimeCommandExecutionResult
     RuntimeShaderReloadScope shaderReloadScope =
         RuntimeShaderReloadScope::Changed;
     bool shaderCacheStatisticsRequested = false;
+    bool terrainFeedbackStatisticsRequested = false;
+    bool terrainStatisticsRequested = false;
+    bool terrainLayerStatisticsRequested = false;
     std::optional<OfflineModeCommandFeedback> offlineUiModeFeedback;
 };
 

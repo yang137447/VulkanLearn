@@ -440,9 +440,12 @@ reflection 决定各 Pass 的 active 使用子集。
 - 自动生成整套 pipeline state
 - 复杂材质编辑器
 
-参数类型支持 `float`、`vec2`、`vec3`、`vec4`、`color`，贴图只支持
-`sampler2D`。更多 descriptor 类型、Bindless Material Table 与动态数组不在
-当前合同内。
+参数类型支持 `float`、`vec2`、`vec3`、`vec4`、`color`；贴图支持
+`sampler2D` 与 `sampler2DArray`。两者的材质绑定点都是单个
+`VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER`，区别只在 image view 是否为
+`VK_IMAGE_VIEW_TYPE_2D_ARRAY`；材质 JSON 的 `type` 会原样写进生成的 GLSL
+声明，validator 拒绝其他贴图类型。更多 descriptor 类型、Bindless Material
+Table 与运行时动态数组不在当前合同内。
 
 `color` 是编辑器 authoring 语义，不是新的 GLSL 类型：它在 JSON、编辑器和
 持久化层保持独立类型，但 GPU UBO 与 shader 侧映射为 `vec4`。RGB 运行时和 MI

@@ -312,6 +312,8 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
             object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
+            object.terrainFeedbackEligible =
+                meshObjectPlan.terrainFeedbackEligible;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 
