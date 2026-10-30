@@ -516,6 +516,62 @@ TEST(TerrainLayerVisibility, SkipsCoarserPrefetchWhenTargetResident)
 }
 
 // 粗 mip 预取只能排在目标页之后使用同一份请求预算，不能绕过每帧上限。
+// 粗 mip 页是预取，不是本帧可见页；它已驻留时不能把 feedbackHits 抬高。
+TEST(TerrainLayerVisibility, CoarserPrefetchDoesNotCountAsFeedbackHit)
+{
+    const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 5, 4);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(20, 0, 2);
+    // 只让粗 mip1 页驻留，目标 mip0 页仍缺页。
+    ASSERT_TRUE(layerPages.RequestPageAtEpoch(Key(0, 1, 0, 0), 1, 60, 20));
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.exactFeedbackNeighborhoodRadius = 0;
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(buffer, 4, 24),
+            layerPages,
+            pending,
+            24,
+            24,
+            config);
+
+    EXPECT_EQ(stats.markedPages, 0u);
+    EXPECT_EQ(stats.fallbackLevelPages[0], 1u);
+}
+
+// fallbackLevelPages 只有 3 个槽位；过大的配置必须被夹住而不是越界写。
+TEST(TerrainLayerVisibility, CoarserPrefetchLevelCountIsClamped)
+{
+    const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 0, 8);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.exactFeedbackNeighborhoodRadius = 0;
+    config.fallbackPrefetchMipLevels = 16;
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(buffer, 8, 10),
+            layerPages,
+            pending,
+            10,
+            10,
+            config);
+
+    EXPECT_EQ(stats.fallbackLevelPages.size(), 3u);
+    EXPECT_LE(stats.fallbackLevelPages[0] + stats.fallbackLevelPages[1] +
+        stats.fallbackLevelPages[2], 3u);
+}
+
 TEST(TerrainLayerVisibility, CoarserPrefetchStaysWithinRequestBudget)
 {
     const std::vector<uint8_t> buffer = MakeLayerFeedback(0, 0, 5, 6);

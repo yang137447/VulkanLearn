@@ -70,7 +70,10 @@ void TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates(
     uint32_t& fallbackTargetPages,
     std::array<uint32_t, 3>& fallbackLevelPages)
 {
-    if (config.fallbackPrefetchMipLevels == 0 || candidates.empty())
+    // fallbackLevelPages 固定 3 项；超出部分没有统计槽位，也远超回退收益。
+    const uint32_t fallbackLevels = std::min(
+        config.fallbackPrefetchMipLevels, 3u);
+    if (fallbackLevels == 0 || candidates.empty())
         return;
 
     // 先快照当前候选再插入粗页：粗页本身也可能是缺页，但不能因为
@@ -92,7 +95,7 @@ void TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates(
             MaxMipForLayer(layerPages, key.layerId, config);
         ++fallbackTargetPages;
         const uint32_t levels = std::min(
-            config.fallbackPrefetchMipLevels,
+            fallbackLevels,
             maxMip > key.mip ? maxMip - key.mip : 0u);
         for (uint32_t level = 1; level <= levels; ++level)
         {
@@ -226,6 +229,9 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
     }
     // L4c：目标 mip 缺页时，把同一 UV 区域的更粗 mip 页一起入队，保证
     // shader 的回退 mip 有内容可采（否则回退后仍是 avgColor）。
+    // 只把扩展前的候选计入 feedback hit；粗页是预取，不是本帧可见页。
+    const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
+        visibleCandidates(candidates.begin(), candidates.end());
     std::array<uint32_t, 3> ignoredFallbackLevels{};
     ExpandCoarserFallbackCandidates(
         candidates,
@@ -238,7 +244,7 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
     const uint64_t seenEpoch =
         summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
     // 候选页里已经驻留的那部分就是本帧真正的 feedback hit。
-    for (const auto& [key, priority] : candidates)
+    for (const auto& [key, priority] : visibleCandidates)
     {
         if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
             ++stats.markedPages;
@@ -351,6 +357,9 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
     }
     // L4c：缺页的反馈页同时把同一 UV 区域的更粗 mip 页加入候选。粗页优先
     // 级略低，且仍受 maxRequestsPerFrame 限制。
+    // 只把扩展前的候选计入 feedback hit；粗页是预取，不是本帧可见页。
+    const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
+        visibleCandidates(candidates.begin(), candidates.end());
     ExpandCoarserFallbackCandidates(
         candidates,
         layerPages,
@@ -365,7 +374,7 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
 
     const uint64_t seenEpoch =
         summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
-    for (const auto& [key, priority] : candidates)
+    for (const auto& [key, priority] : visibleCandidates)
     {
         if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
             ++stats.markedPages;

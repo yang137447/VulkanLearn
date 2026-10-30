@@ -739,7 +739,7 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - 运行时选择：`editor_ui_tests --gtest_filter=TerrainLodSnapshot.*` 用真实
   `World` + `WorldSnapshotBuilder` 钉住“每组只输出一个 draw”、近/远级切换、
   RuntimeId 跨级稳定、两个组独立选择、无 LOD 组对象保持原 draw 与 RuntimeId。
-- LOD 冒烟：工作区 `artifacts/terrain-lod-smoke/` 的
+- LOD 冒烟：`Generated/Validation/TerrainLod/` 的
   `TR_terrain_lod_smoke.json`（3 级、4×4 chunk、距离 3000/8000cm）配
   `SC_terrain_lod_near|mid|far.json`；`terrainlod stats` 分别出现 LOD0/LOD1/LOD2，
   stderr 为空、无 Vulkan validation error。B32/M3/BC7 旧场景截图 SHA-256 与改动前
