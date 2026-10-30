@@ -580,8 +580,8 @@ TEST(TerrainLod, DerivesDefaultDistancesFromTerrainSize)
     desc.lodLevels = 3;
     const std::vector<float> derived = VL::TerrainLodDistancesCm(desc);
     ASSERT_EQ(derived.size(), 2u);
-    EXPECT_FLOAT_EQ(derived[0], 2000.0f);
-    EXPECT_FLOAT_EQ(derived[1], 4000.0f);
+    EXPECT_FLOAT_EQ(derived[0], 2000.0f / 3.0f);
+    EXPECT_FLOAT_EQ(derived[1], 4000.0f / 3.0f);
 
     // 显式距离优先于推导值。
     desc.lodDistancesCm = {1234.0f, 5678.0f};
@@ -616,6 +616,9 @@ TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
     EXPECT_EQ(
         VL::TerrainChunkResourceKey(plan, 0, 0, 1),
         VL::TerrainChunkResourceKey(retuned, 0, 0, 1));
+    EXPECT_THROW(
+        VL::TerrainChunkResourceKey(plan, 0, 0, VL::TerrainMaxLodLevels),
+        std::invalid_argument);
 }
 
 TEST(TerrainAssetTypes, OnlyLayeredTerrainUsesVirtualPages)
@@ -2159,7 +2162,7 @@ TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)
     EXPECT_TRUE(legacy.desc.lodDistancesCm.empty());
     EXPECT_TRUE(VL::TerrainLodDistancesCm(legacy.desc).empty());
 
-    // 只写级数时按地形最长边推导：1000cm -> {1000, 2000}。
+    // 只写级数时按地形最长边均分：1000cm、3 级 -> {333.33, 666.67}。
     asset["lodLevels"] = 3;
     const auto derivedPath = directory / "TR_terrain_lod_derived.json";
     std::ofstream derivedStream(derivedPath);
@@ -2169,10 +2172,10 @@ TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)
         VL::TerrainAssetLoader::Prepare(derivedPath.string());
     const std::vector<float> distances = VL::TerrainLodDistancesCm(derived.desc);
     ASSERT_EQ(distances.size(), 2u);
-    EXPECT_FLOAT_EQ(distances[0], 1000.0f);
-    EXPECT_FLOAT_EQ(distances[1], 2000.0f);
-    EXPECT_EQ(VL::TerrainSelectLodLevel(999.0f, distances), 0u);
-    EXPECT_EQ(VL::TerrainSelectLodLevel(1500.0f, distances), 1u);
+    EXPECT_FLOAT_EQ(distances[0], 1000.0f / 3.0f);
+    EXPECT_FLOAT_EQ(distances[1], 2000.0f / 3.0f);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(333.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(500.0f, distances), 1u);
     EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, distances), 2u);
 }
 

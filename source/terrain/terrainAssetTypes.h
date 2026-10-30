@@ -153,12 +153,13 @@ inline std::vector<float> TerrainLodDistancesCm(const TerrainAssetDesc& desc)
     const uint32_t levels = desc.lodLevels == 0 ? 1u : desc.lodLevels;
     if (levels <= 1)
         return distances;
-    // 默认档位：1×、2×…地形最长边。缺少测量数据时的保守占位，
-    // 运行时应按投影误差/三角形像素尺寸重新标定。
+    // 默认档位：按级数均分最长边（2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）。
+    // 缺少测量数据时的保守占位，运行时应按投影误差/三角形像素尺寸重新标定。
     const float span = desc.size.x() > desc.size.y() ? desc.size.x() : desc.size.y();
     distances.reserve(levels - 1);
     for (uint32_t index = 0; index + 1 < levels; ++index)
-        distances.push_back(span * static_cast<float>(index + 1));
+        distances.push_back(
+            span * static_cast<float>(index + 1) / static_cast<float>(levels));
     return distances;
 }
 

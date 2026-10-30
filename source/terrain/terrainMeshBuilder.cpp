@@ -84,6 +84,8 @@ std::string TerrainChunkResourceKey(
     uint32_t chunkZ,
     uint32_t lodLevel)
 {
+    if (lodLevel >= TerrainMaxLodLevels)
+        throw std::invalid_argument("Terrain chunk resource key lodLevel is out of range");
     const TerrainAssetDesc& desc = plan.desc;
     return "placement=" + TerrainPlacementIdentity(plan) +
         "|asset=" + desc.assetPath +

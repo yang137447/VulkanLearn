@@ -52,6 +52,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   `chunkQuads <= gridResolution` 且 `gridResolution % chunkQuads == 0`。
 - `pageOrigin`（可选，默认 `[0,0]`）和 `pageTilesPerSide`（可选，默认 8）决定该地形
   在全局 32×32 page table 中占用的 tile 区域；`pageOrigin + pageTilesPerSide <= 32`。
+- `lodLevels`（可选，1..4，默认 1）与 `lodDistances`（可选，cm、严格升序、
+  长度 `lodLevels-1`）是 CPU 几何 LOD 的生成/选择参数；缺省距离按地形最长边
+  按级数均分（2 级 = 0.5×，4 级 = 0.25/0.5/0.75×）。renderer 运行时选择尚未接入。
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
   覆盖只改该次摆放的虚拟页区域，不修改 TR 资产本身。
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
@@ -87,7 +90,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
 - 默认只有 LOD0；TR 可选 `lodLevels`/`lodDistances` 可生成 LOD1..3 与 skirt
   （`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`），但 renderer 运行时选择尚未接入，
-  出图仍只生成/绑定 LOD0。没有地形 chunk 卸载。
+  出图仍只生成/绑定 LOD0。LOD0 不带 skirt；LOD>=1 的 skirt 深度是经验值，
+  只保证覆盖“细边低于粗边”的一半情况，接入运行时选择前需要补 LOD0 skirt
+  或显式 skirt 参数。没有地形 chunk 卸载。
   地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
 
 ## 场景对象
