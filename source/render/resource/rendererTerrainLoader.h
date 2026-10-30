@@ -209,6 +209,12 @@ struct TerrainStreamingStats
     // L4b：精确层页 feedback 的 slot/页计数（0 表示本帧走了覆盖页回退路径）。
     uint32_t layerExactFeedbackSlots = 0;
     uint32_t layerExactFeedbackPages = 0;
+    // 饥饿保护：连续没有有效精确 feedback 的帧数、最近一次有效 feedback 的
+    // epoch、本帧可见性是否来自覆盖页回退，以及当前 idle 窗口补偿 epoch。
+    uint32_t layerStarvedFrames = 0;
+    uint64_t layerLastValidFeedbackEpoch = 0;
+    bool layerUsedCoverFallback = false;
+    uint64_t layerIdleGraceEpochs = 0;
     // L4c：目标 mip 缺页、shader 向更粗 mip 回退并混合的 texel/页数。
     // fallbackPixels 由控制台按当前渲染分辨率换算，避免每帧写统计。
     uint32_t layerFallbackSlots = 0;

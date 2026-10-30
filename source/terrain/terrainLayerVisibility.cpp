@@ -37,6 +37,7 @@ uint32_t ScaleFallbackPriority(uint32_t priority, uint32_t level)
 void TerrainLayerVisibilityResolver::Reset()
 {
     coverPageCache.clear();
+    feedbackHealth = TerrainLayerFeedbackHealth{};
 }
 
 uint32_t TerrainLayerVisibilityResolver::MipForPriority(uint8_t priority)
@@ -132,6 +133,9 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
 {
     TerrainLayerVisibilityStats stats;
     stats.coverPages = static_cast<uint32_t>(summary.pages.size());
+    // 精确路径饥饿时，这一帧的可见层估计完全来自覆盖页推导。标记出来，
+    // 让统计能区分“正常的 L4a 启动/prefetch”与“精确 feedback 断流后的回退”。
+    stats.usedCoverFallback = feedbackHealth.starvedFrames != 0;
     if (config.layerCount == 0 || config.sourceMipLevels == 0)
         return stats;
 
@@ -257,6 +261,17 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
         frame,
         completedEpoch,
         seenEpoch,
+        // 饥饿期间延长 idle 窗口，避免“没有 feedback”被当成“所有页都不可见”。
+        feedbackHealth.starvationCreditEpochs,
+        // 饥饿超过宽限期后限速淘汰；正常恢复后不限速。
+        (feedbackHealth.starvedFrames != 0 &&
+         feedbackHealth.starvedFrames > config.starvationGraceFrames)
+            ? config.starvationEvictionPagesPerFrame
+            : 0,
+        // 饥饿宽限期内不做预算淘汰；保持上一帧驻留集。超过宽限期后才允许
+        // 慢速降级，避免长时间无 feedback 时永久锁死显存。
+        !(feedbackHealth.starvedFrames != 0 &&
+          feedbackHealth.starvedFrames <= config.starvationGraceFrames),
         config);
     stats.attemptedRequests = committed.attemptedRequests;
     stats.acceptedRequests = committed.acceptedRequests;
@@ -281,6 +296,74 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
     stats.distinctPages = summary.distinctPageCount;
     if (config.layerCount == 0)
         return stats;
+
+    const uint64_t seenEpoch =
+        summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
+
+    // 饥饿保护：精确反馈本帧没有（或少于阈值的）有效 texel。典型场景是
+    // 相机贴地/极端陡视角、地形被近裁剪面裁掉，或覆盖页整帧缺页导致
+    // shader 只能写 invalid。此时绝不能把“没有反馈”当成“全部不可见”：
+    //   - 不续命、不入队、不淘汰，驻留集保持上一帧；
+    //   - lastSeen/lastTouched 一律不动（不伪造成当前帧）；
+    //   - 调用方回退到覆盖页推导（L4a）继续估计可见层。
+    // 连续饥饿超过 starvationGraceFrames 后补偿封顶，idle 窗口恢复推进，
+    // 驻留集按正常规则慢速降级，不会永久锁死。
+    if (summary.validTexelCount < config.minValidFeedbackTexels)
+    {
+        ++feedbackHealth.starvedFrames;
+        feedbackHealth.starvationCreditEpochs = std::min<uint64_t>(
+            feedbackHealth.starvedFrames, config.starvationGraceFrames);
+        stats.starved = true;
+        stats.idleGraceEpochs = feedbackHealth.starvationCreditEpochs;
+        // pending 队列保持原样：恢复后按原优先级继续请求，不做丢弃。
+        stats.pendingRequests = static_cast<uint32_t>(pendingRequests.size());
+        // 宽限期外允许降级：补偿已经封顶，idle 窗口重新随时间推进。这里仍然
+        // 走同一份 CommitCandidates（空候选），保证即使调用方没有覆盖页回退
+        // 可用，驻留集也会按限速规则缓慢缩减，不会永久锁死。
+        if (feedbackHealth.starvedFrames > config.starvationGraceFrames)
+        {
+            const std::map<TerrainLayerPageKey, uint32_t> noCandidates;
+            const std::array<bool, 256> noLayersSeen{};
+            const CandidateCommitResult committed = CommitCandidates(
+                noCandidates,
+                noLayersSeen,
+                layerPages,
+                pendingRequests,
+                frame,
+                completedEpoch,
+                seenEpoch,
+                feedbackHealth.starvationCreditEpochs,
+                config.starvationEvictionPagesPerFrame,
+                true,
+                config);
+            stats.attemptedRequests = committed.attemptedRequests;
+            stats.acceptedRequests = committed.acceptedRequests;
+            stats.deferredRequests = committed.deferredRequests;
+            stats.evictedPages = committed.evictedPages;
+            stats.pendingRequests =
+                static_cast<uint32_t>(pendingRequests.size());
+        }
+        return stats;
+    }
+
+    // 恢复：饥饿计数清零，最近有效 epoch 前进；补偿按配置逐帧衰减，
+    // 让一次长时间饥饿留下的宽限窗口平滑退回正常值。
+    feedbackHealth.starvedFrames = 0;
+    feedbackHealth.lastValidFeedbackEpoch = seenEpoch;
+    const uint64_t creditDecay = config.starvationCreditDecayPerFrame;
+    if (creditDecay == 0)
+    {
+        // 0 表示不衰减：保留补偿，直到下一次饥饿重新覆盖。
+    }
+    else if (feedbackHealth.starvationCreditEpochs > creditDecay)
+    {
+        feedbackHealth.starvationCreditEpochs -= creditDecay;
+    }
+    else
+    {
+        feedbackHealth.starvationCreditEpochs = 0;
+    }
+    stats.idleGraceEpochs = feedbackHealth.starvationCreditEpochs;
 
     std::map<TerrainLayerPageKey, uint32_t> candidates;
     std::array<bool, 256> layerSeen{};
@@ -372,8 +455,6 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
         if (layerSeen[layerId]) ++stats.visibleLayers;
     }
 
-    const uint64_t seenEpoch =
-        summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
     for (const auto& [key, priority] : visibleCandidates)
     {
         if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
@@ -388,6 +469,10 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
         frame,
         completedEpoch,
         seenEpoch,
+        // 恢复后的残留补偿只影响“离开视野”的页，不影响本帧命中页续命。
+        feedbackHealth.starvationCreditEpochs,
+        0,
+        true,
         config);
     stats.attemptedRequests = committed.attemptedRequests;
     stats.acceptedRequests = committed.acceptedRequests;
@@ -407,6 +492,9 @@ TerrainLayerVisibilityResolver::CommitCandidates(
     uint64_t frame,
     uint64_t completedEpoch,
     uint64_t seenEpoch,
+    uint64_t extraIdleGraceEpochs,
+    uint32_t maxIdleEvictions,
+    bool allowBudgetEviction,
     const TerrainLayerVisibilityConfig& config)
 {
     CandidateCommitResult result;
@@ -489,11 +577,16 @@ TerrainLayerVisibilityResolver::CommitCandidates(
     // 6. 淘汰：先清掉离开视野很久且已过 GPU 安全窗的层页，再按预算做 LRU。
     //    idle 淘汰使用 lastSeenEpoch（feedback 真正看到它的 epoch），而不是
     //    只升不降的 priority，避免近景页离开视野后永远压住新页。
+    //    maxIdleEvictions 是饥饿降级的限速器：0 表示不限速（正常路径），
+    //    非 0 时 idle 淘汰与预算淘汰共享同一份每帧名额。
+    uint32_t evictionBudget =
+        maxIdleEvictions == 0 ? 0xFFFFFFFFu : maxIdleEvictions;
     std::vector<TerrainLayerPageKey> idlePages;
     if (config.idleEvictionEnabled)
     {
         for (const auto& entry : layerPages.Pages())
         {
+            if (evictionBudget == 0) break;
             const TerrainLayerPageManager::PageState& page = entry.second;
             if (!page.resident) continue;
             const uint32_t layerId = entry.first.layerId;
@@ -507,21 +600,27 @@ TerrainLayerVisibilityResolver::CommitCandidates(
             {
                 idleWindow = config.unselectedMipIdleEvictionEpochs;
             }
-            if (page.lastSeenEpoch + idleWindow >= seenEpoch)
+            // 饥饿补偿等价于“把 idle 时钟暂停”：窗口随饥饿帧数增长，
+            // 因此没有 feedback 的帧不会把页推到淘汰阈值。
+            if (page.lastSeenEpoch + idleWindow + extraIdleGraceEpochs >=
+                seenEpoch)
                 continue;
             if (!layerPages.CanEvictPageAt(entry.first, completedEpoch))
                 continue;
             idlePages.push_back(entry.first);
+            --evictionBudget;
         }
     }
     for (const TerrainLayerPageKey& key : idlePages)
     {
         if (layerPages.EvictPage(key)) ++result.evictedPages;
     }
-    while (layerPages.ResidentCount() > layerPages.ResidentCapacity())
+    while (allowBudgetEviction && evictionBudget != 0 &&
+           layerPages.ResidentCount() > layerPages.ResidentCapacity())
     {
         if (!layerPages.EvictLeastRecentlyUsed(completedEpoch)) break;
         ++result.evictedPages;
+        --evictionBudget;
     }
 
     return result;

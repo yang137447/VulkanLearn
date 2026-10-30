@@ -400,6 +400,18 @@ layer's maximum mip and the per-frame request budget; pages that are already res
 `terrainlayer stats` adds `fallbackSlots`, `fallbackPages`, `fallbackLevels` and `targetMips`. Shader-side
 `avgColor` fade-in is still **not** implemented — a missing target mip still hard-switches to the coarser
 page, or to `avgColor` when no coarser page exists.
+L4d adds starvation protection: when the exact layer feedback has fewer than
+`minValidFeedbackTexels` (default 1) valid texels — camera inside/clipped by terrain, or all
+cover pages missing — the resolver only bumps `starvedFrames`, never touches
+`lastSeenEpoch`/`lastTouchedEpoch`, and adds `starvationCreditEpochs`
+(`min(starvedFrames, starvationGraceFrames)`, default grace 480) to the idle window so the
+resident set is preserved. `ApplyTerrainLayerExactFeedback` then returns false so
+`RenderSystem` runs the L4a cover-page derivation in the same frame; recovery clears
+`starvedFrames`, advances `lastValidFeedbackEpoch` and decays the credit by
+`starvationCreditDecayPerFrame` (default 1). Past the grace window the credit is capped and the
+resident set decays at `starvationEvictionPagesPerFrame` (default 2) pages/frame, so a long
+feedback outage never locks memory. `terrainlayerstats` prints `starvedFrames` /
+`lastValidEpoch` / `usedCoverFallback` / `idleGrace`.
 CPU page baking is still
 synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
 `documents/contracts/terrain.md`.

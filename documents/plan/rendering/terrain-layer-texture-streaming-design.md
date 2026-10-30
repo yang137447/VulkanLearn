@@ -1236,6 +1236,35 @@ TerrainStreamingState
   （粗 mip 回退没有更粗页可退）。这是 L4a/L4b 继承行为，与 L4c 无关；修它需要
   单独排查覆盖页 `miss` 与 feedback 抑制条件。
 
+**L4d 状态（2026-10-30，饥饿保护已完成）**
+
+- 复现：`SC_terrain_vt_mode1.json` 把相机放进地形内部
+  （`camera pose 0 200 4700 0 0 4300`）后，feedback pass 不再光栅化任何地形，
+  `terrainfeedback` 与层页 feedback 都是 `validTexels=0`。修复前
+  （`minValidFeedbackTexels=0`）约 180 epoch 后 `resident` 从 20 降到 0，
+  `requests`/`evictions` 各 +20；修复后同样时长仍是 `resident=20`。
+- 机制：`TerrainLayerVisibilityResolver` 维护 `TerrainLayerFeedbackHealth`
+  （`lastValidFeedbackEpoch` / `starvedFrames` / `starvationCreditEpochs`）。
+  有效 texel 少于 `minValidFeedbackTexels`（默认 1）时只累加饥饿帧，不续命、
+  不入队、不淘汰、不改 `lastSeenEpoch`；`starvationCreditEpochs`（封顶
+  `starvationGraceFrames`，默认 480）直接加到 idle 窗口上，等于暂停老化。
+- 回退：`ApplyTerrainLayerExactFeedback` 在饥饿帧返回 false，`RenderSystem`
+  继续执行 L4a 的覆盖页推导，`TerrainLayerVisibilityStats::usedCoverFallback`
+  标记该帧可见性来自回退；覆盖页恢复 resident 后精确路径自动接管。
+- 降级：超过宽限期后补偿封顶，idle 重新推进，并按
+  `starvationEvictionPagesPerFrame`（默认 2）限速淘汰；恢复后每个有效帧把
+  补偿按 `starvationCreditDecayPerFrame`（默认 1）衰减。
+- 统计：`terrainlayerstats` 新增 `starvedFrames` / `lastValidEpoch` /
+  `usedCoverFallback` / `idleGrace`（仅手动命令打印）。
+- 证据：`terrain_tests` 177/177、`ctest -R "^Terrain"` 185/185；mode 1
+  饥饿 352 帧时 `resident=20/512`、`requests=312`、`evictions=292` 与饥饿前
+  完全一致；恢复后 `exactPages=20`、截图与饥饿前基线最大通道差 1；mode 0
+  B32/M3 截图 SHA-256 与基线逐字节一致（`1D30D8…3F54` / `0E5D5F…BAAE`），
+  stderr 为空。
+- 未完成：超过宽限期后仍是“整页 id 失效 + 硬切 avgColor”，没有低分辨率
+  fallback/淡入；语义上仍无法区分“相机看向天空”和“相机被裁切”，只能靠
+  宽限期与限速降级兜底。
+
 ---
 
 ## 7. 风险与备选

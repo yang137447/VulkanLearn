@@ -607,3 +607,265 @@ TEST(TerrainLayerVisibility, CoarserPrefetchStaysWithinRequestBudget)
     EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 1, 1)));
     EXPECT_FALSE(layerPages.IsResident(Key(0, 1, 0, 0)));
 }
+
+namespace
+{
+
+// 预驻留 512² 层 mip0 的全部 16 页，用于饥饿场景。
+void FillLayerMip0(VL::TerrainLayerPageManager& layerPages)
+{
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetResidentCapacity(512);
+    layerPages.SetGpuEpochContext(100, 100, 2);
+    for (uint32_t pageY = 0; pageY < 4; ++pageY)
+    {
+        for (uint32_t pageX = 0; pageX < 4; ++pageX)
+            ASSERT_TRUE(layerPages.RequestPage(Key(0, 0, pageX, pageY)));
+    }
+}
+
+// 全零 feedback（tag 不匹配/未写出）就是精确路径的“饥饿帧”。
+VL::TerrainLayerFeedbackFrameSummary EmptyLayerFeedback(uint64_t epoch)
+{
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.copiedEpoch = epoch;
+    summary.frameTag = 1;
+    return summary;
+}
+
+} // namespace
+
+// 精确 feedback 整帧没有有效 texel 时，不能按 idle 阈值清空驻留页；也不能
+// 把页的 lastSeen 伪造成当前帧（那会让“没看见”变成“刚看见”）。
+TEST(TerrainLayerVisibility, EmptyExactFeedbackPreservesResidency)
+{
+    VL::TerrainLayerPageManager layerPages;
+    FillLayerMip0(layerPages);
+    ASSERT_EQ(layerPages.ResidentCount(), 16u);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    // idle 窗口 4：没有饥饿保护时 5 个 epoch 就会把 mip0 全部清掉。
+    config.idleEvictionEpochs = 4;
+    config.starvationGraceFrames = 480;
+
+    // 先给一帧有效 feedback，建立 lastSeenEpoch=100 与 lastValidFeedbackEpoch。
+    const std::vector<uint8_t> valid = MakeLayerFeedback(0, 0, 0, 9);
+    const VL::TerrainLayerExactFeedbackStats applied =
+        resolver.ApplyExact(
+            SummarizeLayerFeedback(valid, 9, 100),
+            layerPages,
+            pending,
+            0,
+            100,
+            config);
+    EXPECT_FALSE(applied.starved);
+    EXPECT_EQ(applied.markedPages, 1u);
+    ASSERT_EQ(resolver.FeedbackHealth().lastValidFeedbackEpoch, 100u);
+
+    for (uint64_t frame = 1; frame <= 30; ++frame)
+    {
+        const uint64_t epoch = 100 + frame;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        const VL::TerrainLayerExactFeedbackStats stats =
+            resolver.ApplyExact(
+                EmptyLayerFeedback(epoch),
+                layerPages,
+                pending,
+                frame,
+                epoch,
+                config);
+        EXPECT_TRUE(stats.starved);
+        EXPECT_EQ(stats.evictedPages, 0u);
+        EXPECT_EQ(stats.acceptedRequests, 0u);
+        EXPECT_EQ(layerPages.ResidentCount(), 16u);
+    }
+
+    const VL::TerrainLayerFeedbackHealth& health =
+        resolver.FeedbackHealth();
+    EXPECT_EQ(health.starvedFrames, 30u);
+    EXPECT_EQ(health.lastValidFeedbackEpoch, 100u);
+    // 补偿随饥饿帧数增长（封顶前 1:1），idle 时钟因此不会推进。
+    EXPECT_EQ(health.starvationCreditEpochs, 30u);
+
+    const VL::TerrainLayerPageManager::PageState* page =
+        layerPages.FindPage(Key(0, 0, 0, 0));
+    ASSERT_NE(page, nullptr);
+    EXPECT_EQ(page->lastSeenEpoch, 100u);
+}
+
+// 饥饿时调用方要回退到覆盖页推导，并把它标记成 usedCoverFallback；
+// 可见层估计仍然来自覆盖页 top-4，不受精确 feedback 断流影响。
+TEST(TerrainLayerVisibility, CoverFallbackEstimatesLayersWhileStarved)
+{
+    VL::TerrainPageManager coverPages;
+    VL::TerrainBuildPlan plan = MakeTwoLayerPlan();
+    coverPages.RegisterTerrain(plan, false);
+
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(2));
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(2);
+    // 只验证估计，不发请求，避免候选页掩盖“可见层来自回退”这一点。
+    config.maxRequestsPerFrame = 0;
+
+    ASSERT_TRUE(
+        resolver
+            .ApplyExact(EmptyLayerFeedback(10), layerPages, pending, 0, 10, config)
+            .starved);
+
+    VL::TerrainFeedbackFrameSummary cover;
+    cover.copiedEpoch = 11;
+    cover.pages = {{0, 0, 255, false, 16}};
+    const VL::TerrainLayerVisibilityStats stats = resolver.Apply(
+        cover, coverPages, layerPages, pending, 1, 11, config);
+
+    EXPECT_TRUE(stats.usedCoverFallback);
+    EXPECT_EQ(stats.resolvedCoverPages, 1u);
+    EXPECT_EQ(stats.visibleLayers, 2u);
+    EXPECT_EQ(stats.evictedPages, 0u);
+
+    // 覆盖页推导在饥饿期间也不能提前清空已驻留页。
+    for (uint64_t frame = 2; frame <= 20; ++frame)
+    {
+        const uint64_t epoch = 9 + frame;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        ASSERT_TRUE(
+            resolver
+                .ApplyExact(
+                    EmptyLayerFeedback(epoch),
+                    layerPages,
+                    pending,
+                    frame,
+                    epoch,
+                    config)
+                .starved);
+        cover.copiedEpoch = epoch;
+        resolver.Apply(
+            cover, coverPages, layerPages, pending, frame, epoch, config);
+    }
+    EXPECT_EQ(resolver.FeedbackHealth().starvedFrames, 20u);
+}
+
+// 精确 feedback 恢复后，饥饿计数清零、lastValidEpoch 前进，精确路径重新
+// 接管（下一帧不再标记 usedCoverFallback）。
+TEST(TerrainLayerVisibility, ExactFeedbackResumesAfterStarvation)
+{
+    VL::TerrainLayerPageManager layerPages;
+    FillLayerMip0(layerPages);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.idleEvictionEpochs = 4;
+
+    for (uint64_t frame = 0; frame < 12; ++frame)
+    {
+        const uint64_t epoch = 100 + frame;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        ASSERT_TRUE(
+            resolver
+                .ApplyExact(
+                    EmptyLayerFeedback(epoch),
+                    layerPages,
+                    pending,
+                    frame,
+                    epoch,
+                    config)
+                .starved);
+    }
+    ASSERT_EQ(resolver.FeedbackHealth().starvedFrames, 12u);
+    ASSERT_EQ(layerPages.ResidentCount(), 16u);
+
+    // 恢复：pageIndex 5 == (pageX=1, pageY=1)，且该页原本就驻留。
+    const std::vector<uint8_t> valid = MakeLayerFeedback(0, 0, 5, 41);
+    const VL::TerrainLayerExactFeedbackStats resumed = resolver.ApplyExact(
+        SummarizeLayerFeedback(valid, 41, 112),
+        layerPages,
+        pending,
+        12,
+        112,
+        config);
+
+    EXPECT_FALSE(resumed.starved);
+    EXPECT_EQ(resumed.markedPages, 1u);
+    EXPECT_EQ(resolver.FeedbackHealth().starvedFrames, 0u);
+    EXPECT_EQ(resolver.FeedbackHealth().lastValidFeedbackEpoch, 112u);
+    // 恢复后补偿开始逐帧衰减，但这一帧仍保留大部分宽限窗口。
+    EXPECT_EQ(resolver.FeedbackHealth().starvationCreditEpochs, 11u);
+    EXPECT_EQ(layerPages.ResidentCount(), 16u);
+}
+
+// 饥饿超过宽限期后必须允许慢速降级：先保持完整驻留集，之后按 idle 窗口
+// 逐帧推进淘汰，最终不会永久锁死显存。
+TEST(TerrainLayerVisibility, StarvationBeyondGraceAllowsSlowDecay)
+{
+    VL::TerrainLayerPageManager layerPages;
+    FillLayerMip0(layerPages);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.idleEvictionEpochs = 4;
+    config.starvationGraceFrames = 6;
+    config.starvationCreditDecayPerFrame = 1;
+
+    // lastSeenEpoch=100、idle=4、补偿封顶 6：epoch 111 之前都不能淘汰。
+    for (uint64_t frame = 1; frame <= 10; ++frame)
+    {
+        const uint64_t epoch = 100 + frame;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        const VL::TerrainLayerExactFeedbackStats stats =
+            resolver.ApplyExact(
+                EmptyLayerFeedback(epoch),
+                layerPages,
+                pending,
+                frame,
+                epoch,
+                config);
+        EXPECT_TRUE(stats.starved);
+        EXPECT_EQ(stats.evictedPages, 0u);
+        EXPECT_EQ(layerPages.ResidentCount(), 16u);
+    }
+    EXPECT_EQ(resolver.FeedbackHealth().starvationCreditEpochs, 6u);
+
+    // 超过宽限窗口后恢复老化，但按 starvationEvictionPagesPerFrame（默认 2）
+    // 限速：不能因为所有页同时越过 idle 阈值而一次性清空。
+    uint64_t frame = 10;
+    uint64_t epoch = 110;
+    ++frame;
+    ++epoch;
+    layerPages.SetGpuEpochContext(epoch, epoch, 2);
+    const VL::TerrainLayerExactFeedbackStats firstDecay =
+        resolver.ApplyExact(
+            EmptyLayerFeedback(epoch),
+            layerPages,
+            pending,
+            frame,
+            epoch,
+            config);
+    EXPECT_TRUE(firstDecay.starved);
+    EXPECT_EQ(firstDecay.evictedPages, 2u);
+    EXPECT_EQ(layerPages.ResidentCount(), 14u);
+
+    // 持续饥饿会让驻留集继续按每帧 2 页降级，最终清空而不是永久保留。
+    for (uint32_t step = 0; step < 10; ++step)
+    {
+        ++frame;
+        ++epoch;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        resolver.ApplyExact(
+            EmptyLayerFeedback(epoch),
+            layerPages,
+            pending,
+            frame,
+            epoch,
+            config);
+        if (layerPages.ResidentCount() == 0) break;
+    }
+    EXPECT_EQ(layerPages.ResidentCount(), 0u);
+}
