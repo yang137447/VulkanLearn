@@ -449,7 +449,7 @@ py -3 tool\validate-docs.py
 | 8-bit 高度图 | 台阶 | 用 EXR；16-bit PNG 后置 |
 | 没有草/密林 | 画面比参考空 | 用现有树/石；草后置 |
 | 没有 height fog | 远景偏"干净" | M2 可选加简单雾；或靠天空/曝光 |
-| 没有碰撞 | 只能看不能走 | 明确非目标；Jolt heightfield 后置 |
+| 没有碰撞 | 只能看不能走 | M1/M2 非目标；Jolt heightfield 模块已在 P1 前置落地，见下 |
 | 世界单位 cm | 尺度错 | TR 全部按 cm；场景 `worldUnit: "cm"` |
 | 许可 | 不能分发 | 只参考；素材用 CC0/确认许可 |
 
@@ -465,12 +465,26 @@ py -3 tool\validate-docs.py
 整套顺序（地形 → 碰撞 → 角色 → 植被/撒点 → PP2/风 → LOD → shading）见
 [open-world-scene-stack-roadmap.md](open-world-scene-stack-roadmap.md)。
 
+### 8.1 Jolt 碰撞现状（2026-10-30）
+
+P1 的 CPU 部分已经落地：`source/terrain/terrainCollision.*` 能从
+`TerrainBuildPlan` + placement 创建静态 Jolt `HeightFieldShape` body，
+`source/physics/joltRegistration.*` 与 `ScriptPhysicsWorld` 共用进程级注册。
+cm→m、heightScale/offset、placement 平移/旋转/缩放和 8 项 `TerrainCollision.*`
+模块测试见 [terrain 契约](../../contracts/terrain.md#jolt-碰撞heightfield)。
+
+仍未完成的是**运行时接入**：场景 `terrain` 对象不会自动生成碰撞体，World 也不保留
+`TerrainBuildPlan`；接 GASP 前需要先把地形计划发布给 `ScriptPhysicsWorld`
+（或等价的 World 物理拥有者）。在完成这一步之前，本文档不把碰撞计入 M1/M2 的
+Definition of Done。
+
 ## 10. 开放问题
 
 1. 权重来源：程序化（推荐 M1）还是先画 splat？如果画，权重贴图放 2 张 RGBA，仍然 top-4。
 2. 规模：1km / 1024² / 256² / 4×4 是否 OK？
 3. 高度图：EXR（推荐）还是补 16-bit PNG 解码？
-4. 碰撞：M1 不做渲染期碰撞；P1 用 Jolt heightfield 接 GASP，这个分期是否 OK？
+4. 碰撞：M1 不做渲染期碰撞；P1 的 Jolt heightfield 模块已落地，剩余是把它接进
+   `ScriptPhysicsWorld` 并让 World 发布地形计划；接 GASP 仍按 P1 顺序。
 5. 每层独立 uvScale：M1 先全局，还是一步到位？
 6. 法线混合：M1 whiteout，M2 是否换 RNM？
 

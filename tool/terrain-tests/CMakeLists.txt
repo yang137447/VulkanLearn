@@ -3,7 +3,9 @@ add_executable(terrain_tests
     terrainPageManagerP31Tests.cpp
     terrainLayerPageManagerTests.cpp
     terrainLayerVisibilityTests.cpp
+    terrainCollisionTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerTable.cpp
@@ -12,6 +14,7 @@ add_executable(terrain_tests
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPageManager.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp
+    ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/resourceRetireQueue.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
@@ -32,6 +35,7 @@ target_link_libraries(terrain_tests
         Json
         stb_image
         OpenEXR::OpenEXR
+        Jolt
 )
 
 vulkanlearn_add_gtest(terrain_tests)
