@@ -385,6 +385,12 @@ startup/backpressure fallback. `terrainlayerstats` reports layer residency/atlas
 visibleLayers, `feedbackHits`, `exactSlots`/`exactPages`, `requested`/`accepted`, uploads, pending and
 the mip request distribution; `terrainlayer capacity N` and `terrainlayer preload` (full-preload
 comparison, disables idle eviction) are console-only.
+L4c adds coarser-mip prefetch on the same resolver: a missing target page also queues the
+`+1`/`+2` mip pages of the same UV region (`pageX >> level`), priority ×3/4 and ×1/2, clamped by the
+layer's maximum mip and the per-frame request budget; pages that are already resident do not expand.
+`terrainlayer stats` adds `fallbackSlots`, `fallbackPages`, `fallbackLevels` and `targetMips`. Shader-side
+`avgColor` fade-in is still **not** implemented — a missing target mip still hard-switches to the coarser
+page, or to `avgColor` when no coarser page exists.
 CPU page baking is still
 synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
 `documents/contracts/terrain.md`.

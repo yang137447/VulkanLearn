@@ -1211,6 +1211,31 @@ TerrainStreamingState
   同一 TR 多摆放的页内容去重；不同 `sourceSet` 的多组源纹理；CPU 页烘焙仍在请求
   路径同步执行。
 
+**L4c 状态（2026-10-30，CPU 预取已完成；shader 淡入未做）**
+
+- 已完成：`TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates`
+  在目标 mip 页缺页时把同一 UV 区域的更粗 1..2 级 mip 页加入候选
+  （`pageX >> level`、`pageY >> level`），优先级 +1 级 ×3/4、+2 级 ×1/2
+  （更粗 ×1/4），受该层最大 mip 与每帧请求预算约束；目标页已驻留时不扩粗页。
+  L4a（覆盖页推导）与 L4b（精确 feedback）共用这一入口。
+- 已完成：`terrainlayer stats` 增加 `fallbackSlots`、`fallbackPages`、
+  `fallbackLevels=+1/+2/+3`、`fallbackPixels~`（上界估计）与
+  `targetMips=0..4` 分布，仅手动命令时打印。
+- 证据：`terrain_tests` 163/163、`vl_renderer_backend_tests` 61/61、
+  `material_schema_tests` 11/11、`texture_asset_tests` 58/58；mode 1、
+  B32、M3、BC7 四张截图与去掉 L4c 的基线二进制 **逐字节一致**（最大通道差 0）。
+- 未完成（本轮不做）：shader 侧 `avgColor` 淡入/混合。当前仍是“有粗页就采样
+  粗页、没有就整页 avgColor”的硬切换。尝试过的方案是“按 mip 差线性混合
+  albedo/pbr 到 avgColor（每级 0.2、上限 0.6）”，代码可编译且完整驻留时
+  分支不执行，但该验证场景的 32×32 层数组无法在受控条件下制造“目标 mip 缺页
+  且粗页驻留”的中间态（`u_uvScale=32` 使所有可见片元都停在最粗 mip；
+  `terrainlayer capacity 8/16` 也因 GPU 安全窗无法淘汰可见页），因此没有
+  得到可信的视觉证据，按“未验证不提交”处理。
+- 该验证场景的补充观察：相机切到极近距离/陡视角时层页 feedback 会一度全无
+  有效 texel，驻留随后按 180 epoch idle 清空，画面退化成成片 `avgColor`
+  （粗 mip 回退没有更粗页可退）。这是 L4a/L4b 继承行为，与 L4c 无关；修它需要
+  单独排查覆盖页 `miss` 与 feedback 抑制条件。
+
 ---
 
 ## 7. 风险与备选

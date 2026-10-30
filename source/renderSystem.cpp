@@ -1653,6 +1653,11 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerMipRequestCounts = exact.mipRequestCounts;
         stats.layerExactFeedbackSlots = exact.validSlots;
         stats.layerExactFeedbackPages = exact.distinctPages;
+        // L4c：粗 mip 回退的估算输入（比例由控制台换成像素数）。
+        stats.layerFallbackSlots = exact.fallbackSlots;
+        stats.layerFallbackTargetPages = exact.fallbackTargetPages;
+        stats.layerFallbackLevelPages = exact.fallbackLevelPages;
+        stats.layerTargetMipSlots = exact.targetMipSlots;
     }
     else
     {
@@ -1665,6 +1670,10 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerMipRequestCounts = cover.mipRequestCounts;
         stats.layerExactFeedbackSlots = 0;
         stats.layerExactFeedbackPages = 0;
+        stats.layerFallbackSlots = 0;
+        stats.layerFallbackTargetPages = cover.fallbackTargetPages;
+        stats.layerFallbackLevelPages = {};
+        stats.layerTargetMipSlots = {};
     }
     stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
     stats.layerDirtyPages = layerPages.DirtyPageCount();
@@ -1784,6 +1793,36 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         std::cout << stats.layerMipRequestCounts[mip];
     }
     std::cout << std::endl;
+    // L4c：粗 mip 回退。exactSlots 是有效 feedback texel 数，fallbackSlots 是
+    // 其中目标 mip 缺页的部分（shader 会退到更粗 mip；若没有更粗页则显示
+    // avgColor）。因此 fallbackSlots/exactSlots × 渲染分辨率是“本帧会走
+    // 回退路径的像素数”的上界估计；fallbackLevels=+1/+2/+3 是本帧新增的
+    // 粗 mip 预取页数；targetMips 是 feedback texel 的目标 mip 分布。
+    const vk::Extent2D fallbackExtent = GetSceneRenderExtent();
+    const double fallbackPixels =
+        stats.layerExactFeedbackSlots == 0
+            ? 0.0
+            : static_cast<double>(stats.layerFallbackSlots) /
+                static_cast<double>(stats.layerExactFeedbackSlots) *
+                static_cast<double>(fallbackExtent.width) *
+                static_cast<double>(fallbackExtent.height);
+    std::cout
+        << "[TerrainLayer] fallbackSlots=" << stats.layerFallbackSlots
+        << " fallbackPages=" << stats.layerFallbackTargetPages
+        << " fallbackLevels=" << stats.layerFallbackLevelPages[0] << "/"
+        << stats.layerFallbackLevelPages[1] << "/"
+        << stats.layerFallbackLevelPages[2]
+        << " fallbackPixels~=" << static_cast<uint64_t>(fallbackPixels)
+        << " targetMips=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerTargetMipSlots[mip];
+    }
+    std::cout
+        << std::endl;
     std::cout
         << "[TerrainLayer] atlasReady=" << (stats.layerAtlasReady ? 1 : 0)
         << " slices=" << stats.layerAtlasSlices
