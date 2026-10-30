@@ -781,8 +781,8 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `resident=20/512`、`visibleLayers=20`、`feedbackHits=20`、`exactSlots=2044`、
   `exactPages=20`、`requested=0`、`pending=0`、`dirtyPages=0`；该相机下 20 层的
   目标 mip 都已是该层最粗一级（每层 1 页），驻留集因此正好等于可见集。
-  与 L3 全量预取基线 `l3_final_mode1.bmp` 相比（排除左侧 UI）最大通道差 11、
-  平均 0.002、无 >8 像素，无整页缺失块。`terrainlayer capacity 8` 后为 `20/8`
+  与 L3 全量预取基线 `l3_final_mode1.bmp` 相比（排除左侧 UI）最大通道差 15、
+  平均 0.002、>8 像素占比 <0.01%，无整页缺失块。`terrainlayer capacity 8` 后为 `20/8`
   并持续（可见集大于预算的软预算行为，`accepted=0`、`pending=0`），不再像 L4a
   那样停在 248。
 - L4b mode 0 回归：`SC_terrain_b32.json` 截图仍与 L2/L3 基线逐字节一致
