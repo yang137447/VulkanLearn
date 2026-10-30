@@ -172,6 +172,13 @@ TEST(AudioClipLoading, RejectsTruncatedAndCompressedWaveFiles)
     EXPECT_FALSE(LoadWavFile(compressedPath, clip, error));
     EXPECT_FALSE(error.empty());
     std::filesystem::remove(compressedPath);
+
+    const std::filesystem::path tooManyChannelsPath = WriteTempWav(
+        "too_many_channels.wav",
+        MakeWav(1, 9, 48000, 16, std::vector<std::uint8_t>(36, 0)));
+    EXPECT_FALSE(LoadWavFile(tooManyChannelsPath, clip, error));
+    EXPECT_FALSE(error.empty());
+    std::filesystem::remove(tooManyChannelsPath);
 }
 
 TEST(AudioClipProcessing, ResamplingProducesExpectedLengthAndEndpoints)

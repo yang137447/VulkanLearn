@@ -13,7 +13,6 @@ option(VULKANLEARN_BUILD_ANIMATION_TOOLS
     OFF)
 
 option(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS "Build and host C# gameplay Blueprints (requires .NET 8 SDK)." OFF)
-option(VULKANLEARN_ENABLE_NATIVE_PHYSICS "Build native Jolt soft-body impact support." ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,9 +22,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 find_package(Threads REQUIRED)
 
 include(cmake/VulkanLearnJolt.cmake)
-if(VULKANLEARN_ENABLE_NATIVE_PHYSICS OR VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
-    vl_add_jolt_cpu()
-endif()
+vl_add_jolt_cpu()
 
 add_subdirectory(extern)
 add_subdirectory(source/physics)

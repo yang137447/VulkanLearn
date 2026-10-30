@@ -9,7 +9,9 @@
 | 职责 | 所有者 | 位置 |
 | --- | --- | --- |
 | 2D Voronoi 冲击布局与凸多边形裁剪 | `VL::Physics::Fracture` | `source/physics/fracture/planarFracture.*` |
+| 材质 profile、阈值/音频/预算键 | `VL::Physics::Fracture` | `source/physics/fracture/destructibleProfile.*` |
 | 玻璃“开裂 → 破碎”累计损伤策略 | `VL::Physics::Fracture` | `source/physics/fracture/glassDamagePolicy.*` |
+| 板面伤害半径、attached、二次碎裂与支撑岛纯策略 | `VL::Physics::Fracture` | `source/physics/fracture/plateFracturePolicy.*` |
 | 平面碎片挤出为封闭凸棱柱、凸包点和面法线 | `VL::Physics::Fracture` | `source/physics/fracture/fragmentMesh.*` |
 | 球面 Voronoi 冲击布局与薄壳碎片挤出 | `VL::Physics::Fracture` | `source/physics/fracture/sphericalFracture.*` |
 | 运行时 icosphere、XPBD 橡皮膜、压力、软片拆分和渲染数据 | `VL::Physics::Softbody` | `source/physics/softbody/rubberShell.*` |

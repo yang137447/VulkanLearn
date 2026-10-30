@@ -11,37 +11,44 @@
 `vl_fracture_core`，不依赖 Vulkan、Jolt 或 `World`：
 
 - `FractureBudget` 只保存按 owner 分类的计数和可回收候选，不持有网格、刚体或场景对象；
-- `FractureEvictionDispatcher` 是回收接口，由 `EngineLoop` 实现；
+- `FractureEvictionDispatcher` 是回收接口，由 `DestructibleRuntimeRegistry` 实现；
 - `AcquireFractureBudget` 是“先查询、再回收”的便捷入口；需要先判断是否值得
   回收的路径（初次断裂缩小图案、二次碎裂、气球裁剪）直接调用 `Request`，
   确认额度后再执行 dispatcher。
 
 `EngineLoop` 持有唯一 `FractureBudget` 实例，并在构造 `GlassRuntime` /
-`SoftBodyRuntime` 时按引用注入。不存在进程级可变单例；同一进程内的多个
-`FractureBudget` 互不影响，测试可直接构造。
+`SoftBodyRuntime` 时通过 `DestructibleRuntimeRegistry` 注入。不存在进程级
+可变单例；同一进程内的多个 `FractureBudget` 互不影响，测试可直接构造。
 
 ## 参数
 
-| 常量 | 值 | 含义 |
-| --- | --- | --- |
-| `GlobalLimit` | 320 | 全场景碎片总数上限 |
-| `GlassPaneLimit` | 96 | 单块玻璃（动态碎片 + attached 板片）上限 |
-| `BalloonLimit` | 48 | 单个气球软片上限 |
-| `MinimumBalloonShards` | 4 | 气球爆裂的视觉下限 |
-| `SettledSecondsToReclaim` | 1.5 s | 动态碎片可被回收前需要静止的时间 |
+预算类别是可注册的字符串 key，不再用材料枚举和 switch：
+
+| 内置 key | ownerGroup | 单 owner 上限 | 视觉下限 | 可回收 |
+| --- | --- | --- | --- | --- |
+| `glass.dynamic` | `glass.pane` | 96 | 0 | 是 |
+| `glass.attached` | `glass.pane` | 96 | 0 | 否 |
+| `balloon.shard` | `balloon` | 48 | 4 | 是 |
+
+`GlobalLimit=320`、`SettledSecondsToReclaim=1.5 s` 仍是全局策略常量。
+`RegisterClass` 可以注册新材质类别；未知类别会抛 `invalid_argument`，不会
+静默落到玻璃账上。`DestructibleProfile` 通过 `dynamicBudgetClass`、
+`attachedBudgetClass`、`shardBudgetClass` 选择类别。
 
 计数对象是运行时创建的碎片：
 
 - 玻璃：每个动态碎片计 1，每个 attached 板片计 1；
 - 气球：每个软片计 1（渲染网格与 Jolt body 同属一片，不重复计数）。
 
-attached 板片与没有 Jolt 刚体的气球软片（neck 锚定片或代理注册失败）只计数，不进入
-可回收候选。因此回收永远不会把玻璃拆出一个缺口，也不会把气球底部的
-锚定片单独抽走。
+attached 板片与没有 Jolt 刚体的 neck 锚定气球软片只计数，不进入可回收候选。
+因此回收永远不会把玻璃拆出一个缺口，也不会把气球底部的锚定片单独抽走。
+碎片 Jolt 代理创建失败时，`GlassRuntime` 会退回 mesh 并放弃该片，不把
+“没有 body 的悬空网格”记进账本。
 
 ## 请求与降级顺序
 
-`FractureBudget::Request` 是纯查询：不执行回收，也不改账本。可用额度为
+`FractureBudgetRequest` 可带 `excludeShardIds`，防止回收正在被切分的父碎片。
+`Request` 是纯查询：不执行回收，也不改账本。可用额度为
 
 ```
 capacity = 剩余全局额度 + 已静止的可回收候选数
@@ -74,13 +81,14 @@ capacity = 剩余全局额度 + 已静止的可回收候选数
   凸包、`WorldMeshObject` 和碎片记录，网格进入既有 GPU epoch 池。
 - `SoftBodyRuntime`：爆裂前按剩余额度裁剪 `siteCount`；每帧只对拥有 Jolt
   刚体的软片刷新回收候选。回收时移除刚体、网格和并行的粒子/姿态/预算数组。
-- `EngineLoop::EvictFractureBudgetShards` 把同一批候选同时交给两个运行时，
-  各自按 owner 过滤，因此候选可以跨玻璃与气球混合。
+- `DestructibleRuntimeRegistry` 把同一批候选同时交给所有可破坏运行时，
+  各自按 owner 过滤，因此候选可以跨材质混合。
 
 ## World 换代
 
 `EngineLoop` 在成功提交新 World、且 generation 与上次预算归属不同时调用
-`Reset()`；材质定义重载等同代事务不清空账本。`Shutdown` 同样重置。
+`Reset()`；从 Play 进入 Editing 时 registry 重置运行时并清空预算。材质定义
+重载等同代事务不清空账本。
 
 ## 当前边界
 
@@ -93,6 +101,7 @@ capacity = 剩余全局额度 + 已静止的可回收候选数
 
 ## 测试
 
-`tool/fracture-core-tests/fractureBudgetTests.cpp` 覆盖全局上限、跨对象回收
-排序、未静止碎片不可回收、attached 整块掉落降级、单板上限、气球裁剪与
-视觉下限、账本重置和 dispatcher 只执行一次。
+`tool/fracture-core-tests/fractureBudgetTests.cpp` 覆盖全局上限、共享 ownerGroup、
+跨对象回收排序、未静止碎片不可回收、attached 整块掉落降级、气球视觉下限、
+`excludeShardIds` 保护父碎片、未知类别拒绝、自定义类别、账本重置和
+dispatcher 只执行一次。

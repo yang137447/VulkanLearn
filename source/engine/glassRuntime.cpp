@@ -12,6 +12,7 @@
 #include "audio/audioRuntime.h"
 #include "debug/drawDebug.h"
 #include "engine/diagnosticsSubsystem.h"
+#include "physics/fracture/plateFracturePolicy.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderableObject.h"
@@ -23,18 +24,6 @@ namespace VL
 namespace
 {
 
-// 初次碎裂后动态碎片通常只有几到几十平方厘米；箭头命中用小阈值保证
-// “地上还能继续打碎”，地面/碎片互撞用较高阈值，避免落地时提前把可打碎的
-// 大块全部耗成小块。
-constexpr int MaxSubfractureDepth = 2;
-constexpr double MinProjectileSubfractureArea = 8.0;
-constexpr double MinImpactSubfractureArea = 60.0;
-constexpr float MinSubfractureSpeed = 1.8f;
-// 没有真实窗框时，只靠板面外框“挂着”的小残余岛也应当掉落，
-// 否则整块玻璃消失后它们会停在原板面高度。
-constexpr double MinAnchoredIslandArea = 300.0;
-// 玻璃密度约 2.5 g/cm³；场景单位是厘米，所以 kg/cm³ = 2.5e-3。
-constexpr double GlassDensityKgPerCm3 = 0.0025;
 // 裂纹占位使用独立的 category/publisher，结束时按 key 精确移除。
 constexpr const char* CrackCategory = "GlassCrack";
 constexpr const char* CrackPublisher = "GlassRuntime";
@@ -75,13 +64,11 @@ Eigen::Quaternionf RotationFromModel(const Eigen::Matrix4f& model, float scale)
 // 完整破碎的伤害半径：冲击越强越大，并夹在板面最大边的 4%..22%。
 // 开裂路径复用同一半径再乘 0.5..0.8，保证“先裂后碎”的空间关系一致。
 double ComputeDamageRadius(
-    const WorldGlassObject& descriptor, float impactSpeed)
+    const WorldGlassObject& descriptor, float impactSpeed,
+    const Physics::Fracture::DestructibleProfile& profile)
 {
-    const double maxDimension = std::max(descriptor.width, descriptor.height);
-    const float speedScale = std::clamp(impactSpeed / 8.0f, 0.0f, 1.0f);
-    return std::clamp(
-        maxDimension * (0.06 + 0.14 * speedScale),
-        maxDimension * 0.04, maxDimension * 0.22);
+    return Physics::Fracture::ComputePlateDamageRadius(
+        descriptor.width, descriptor.height, impactSpeed, profile);
 }
 
 void ComputeBounds(
@@ -209,6 +196,42 @@ void GlassRuntime::SynchronizeWorld(World& world)
     }
 }
 
+bool GlassRuntime::ContainsTarget(
+    const std::string& name,
+    Physics::FractureMaterialProfile material) const
+{
+    return material == Physics::FractureMaterialProfile::Glass &&
+        instances.find(name) != instances.end();
+}
+
+void GlassRuntime::Reset(World& world)
+{
+    currentWorld = &world;
+    for (auto& [name, instance] : instances)
+    {
+        for (const Shard& shard : instance.shards)
+        {
+            impactWorld.RemoveShard(name, shard.name);
+            RemoveMeshObject(world, shard.name, shard.meshKey, true);
+        }
+        ClearCrackMarks(world, instance);
+        if (!instance.intactMeshKey.empty())
+            RemoveMeshObject(world, name, instance.intactMeshKey);
+        impactWorld.UnregisterPane(name);
+    }
+    instances.clear();
+    generation = 0;
+    // 作者场景里的 WorldGlassObject 仍在 World 中；重新走一次初始化即可
+    // 恢复整板网格、静态 proxy 和 damage 状态。
+    SynchronizeWorld(world);
+}
+
+void GlassRuntime::LaunchDebugImpact(
+    const std::string& target, float speed)
+{
+    LaunchImpact(target, speed);
+}
+
 void GlassRuntime::HandleImpacts(
     World& world, const std::vector<Physics::FractureImpact>& impacts)
 {
@@ -220,8 +243,8 @@ void GlassRuntime::HandleImpacts(
         const auto found = instances.find(impact.objectName);
         if (found == instances.end()) continue;
         Instance& instance = found->second;
-        if (impact.type == Physics::FractureImpactType::BalloonHit) continue;
-        if (impact.type == Physics::FractureImpactType::PaneHit)
+        if (impact.targetRole == Physics::FractureBodyRole::StaticTarget &&
+            impact.contact == Physics::FractureContactKind::Impact)
         {
             if (instance.fractured) continue;
             diagnostics.ReportInfo(
@@ -237,8 +260,7 @@ void GlassRuntime::HandleImpacts(
                 world, instance, impact.point, damageSpeed);
             continue;
         }
-        if (impact.type == Physics::FractureImpactType::ShardLanding ||
-            impact.type == Physics::FractureImpactType::ShardHit)
+        if (impact.targetRole == Physics::FractureBodyRole::FreeShard)
         {
             if (impact.projectileId != 0)
             {
@@ -255,23 +277,46 @@ void GlassRuntime::HandleImpacts(
                         " attached=" + (hitShard.attached ? "true" : "false"));
                 }
             }
-            if (audioRuntime)
-                audioRuntime->PlayGlassShardLanding(
-                    impact.relativeSpeed / 4.0f, impact.point);
-            SplitShard(world, instance, impact.shardName,
+            const bool split = SplitShard(world, instance, impact.shardName,
                 impact.relativeSpeed, impact.projectileId != 0);
+            if (audioRuntime)
+            {
+                ImpactAudioEvent event;
+                event.audioProfile = instance.profile.audioProfile;
+                event.kind = split ? ImpactAudioKind::Subfracture
+                    : ImpactAudioKind::Landing;
+                event.position = impact.point;
+                event.intensity = std::clamp(
+                    impact.relativeSpeed / 4.0f, 0.02f, 1.0f);
+                event.sizeScale = 1.0f;
+                audioRuntime->PlayImpact(event);
+            }
             continue;
         }
-        if (impact.type == Physics::FractureImpactType::AttachedHit)
+        if (impact.targetRole == Physics::FractureBodyRole::AttachedPart &&
+            impact.contact == Physics::FractureContactKind::Impact)
         {
-            if (FindShard(instance, impact.shardName) < instance.shards.size())
+            const size_t attachedIndex =
+                FindShard(instance, impact.shardName);
+            if (attachedIndex < instance.shards.size())
             {
-                ShatterAttachedShard(
-                    world, instance, impact.shardName, impact.point);
+                if (instance.descriptor.subfracture)
+                    ShatterAttachedShard(
+                        world, instance, impact.shardName, impact.point);
+                else
+                    // subfracture=false 仍允许整块脱落，但不继续产生新碎片。
+                    DropAttachedPlate(world, instance, attachedIndex);
                 UpdateSupportIslands(world, instance);
             }
             if (audioRuntime)
-                audioRuntime->PlayGlassShatter(0.7f, impact.point);
+            {
+                ImpactAudioEvent event;
+                event.audioProfile = instance.profile.audioProfile;
+                event.kind = ImpactAudioKind::Shatter;
+                event.position = impact.point;
+                event.intensity = 0.7f;
+                audioRuntime->PlayImpact(event);
+            }
         }
     }
 }
@@ -332,6 +377,18 @@ void GlassRuntime::InitializeInstance(
 {
     Instance instance;
     instance.descriptor = descriptor;
+    const auto* profile = descriptor.profileKey.empty()
+        ? &Physics::Fracture::DefaultGlassProfile()
+        : Physics::Fracture::FindDestructibleProfile(descriptor.profileKey);
+    if (profile == nullptr ||
+        profile->materialProfile != Physics::FractureMaterialProfile::Glass)
+    {
+        diagnostics.ReportWarning(
+            "Glass profile unavailable or mismatched: " +
+            descriptor.profileKey + " object=" + descriptor.name);
+        profile = &Physics::Fracture::DefaultGlassProfile();
+    }
+    instance.profile = *profile;
     instance.scale = std::max(0.001f,
         descriptor.model.block<3, 3>(0, 0).col(0).norm());
     instance.rotation = RotationFromModel(descriptor.model, instance.scale);
@@ -405,8 +462,14 @@ void GlassRuntime::HandlePaneImpact(
         world, instance, worldImpactPoint, impactSpeed, decision);
     // 专用开裂 transient：0.14 s 高频 click + 两个短模态，比落地 ping 更像裂纹起始。
     if (audioRuntime)
-        audioRuntime->PlayGlassCrack(
-            0.22f + 0.35f * decision.normalizedEnergy, worldImpactPoint);
+    {
+        ImpactAudioEvent event;
+        event.audioProfile = instance.profile.audioProfile;
+        event.kind = ImpactAudioKind::Crack;
+        event.position = worldImpactPoint;
+        event.intensity = 0.22f + 0.35f * decision.normalizedEnergy;
+        audioRuntime->PlayImpact(event);
+    }
     diagnostics.ReportInfo(
         "Glass pane cracked: " + instance.descriptor.name +
         " speed=" + std::to_string(impactSpeed) +
@@ -434,7 +497,8 @@ void GlassRuntime::DrawCrackPattern(
 
     // 开裂只覆盖完整伤害半径的 0.5..0.8；累计能量越高，
     // stopRadius、母裂纹数和环数一起增长，而不是每次都用同一个图案。
-    const double fullDamageRadius = ComputeDamageRadius(descriptor, impactSpeed);
+    const double fullDamageRadius = ComputeDamageRadius(
+        descriptor, impactSpeed, instance.profile);
     const double stopRadius = std::max(
         std::min(descriptor.width, descriptor.height) * 0.015,
         fullDamageRadius * decision.crackRadiusScale);
@@ -678,24 +742,28 @@ void GlassRuntime::FractureInstance(
     // 玻璃通常只在冲击区碎裂：伤害半径随冲击能量增长，外圈保留为“裂而不掉”的
     // 静态板片。这样低能量命中只破一个洞，而不是整块玻璃消失。
     const double minDimension = std::min(descriptor.width, descriptor.height);
-    const double damageRadius = ComputeDamageRadius(descriptor, impactSpeed);
+    const double damageRadius =
+        ComputeDamageRadius(descriptor, impactSpeed, instance.profile);
 
     // 玻璃更接近 FEM 的形态：冲击点细碎区 + 放射状主裂纹 + 少量同心环，
     // 而不是各向同性 Voronoi。siteCount 作为碎片预算提示，推导径向裂纹数。
     Physics::Fracture::RadialFractureSettings settings;
     settings.seed = descriptor.seed;
-    settings.coreRadius = minDimension * 0.03;
-    settings.ringGrowth = 1.55;
+    settings.coreRadius = minDimension * instance.profile.coreRadiusFraction;
+    settings.ringGrowth = instance.profile.ringGrowth;
     // 伤害半径处强制收口；半径外的板片只保留裂纹边界、不参与运动。
     settings.stopRadius = damageRadius;
-    settings.angularJitter = 0.38;
-    settings.ringJitter = 0.28;
-    settings.dicingProbability = 0.70;
+    settings.angularJitter = instance.profile.angularJitter;
+    settings.ringJitter = instance.profile.ringJitter;
+    settings.dicingProbability = instance.profile.dicingProbability;
 
     // 全场景预算不足时先缩小初始图案（少一环、少几条母裂纹），再退化为
     // “至少打出一个洞”。Request 是纯查询；回收只在最终图案确定后执行一次。
-    int radialCracks = std::clamp(descriptor.siteCount / 4, 6, 14);
-    int ringCount = 3;
+    int radialCracks = std::clamp(
+        descriptor.siteCount / 4,
+        instance.profile.radialCracksMin,
+        instance.profile.radialCracksMax);
+    int ringCount = instance.profile.ringCount;
     Physics::Fracture::PlanarPattern pattern;
     Physics::Fracture::FractureBudgetDecision budgetDecision;
     for (int attempt = 0; attempt < 3; ++attempt)
@@ -707,7 +775,7 @@ void GlassRuntime::FractureInstance(
 
         Physics::Fracture::FractureBudgetRequest request;
         request.owner = descriptor.name;
-        request.kind = Physics::Fracture::FractureBudgetKind::GlassDynamic;
+        request.budgetClass = instance.profile.dynamicBudgetClass;
         request.count = pattern.shards.size();
         budgetDecision = budget.Request(request);
         if (budgetDecision.grantedCount >= pattern.shards.size()) break;
@@ -735,8 +803,9 @@ void GlassRuntime::FractureInstance(
         // 只表现为裂纹边界（“裂而不掉”）。
         // 外圈两到三环保留：内层 attached 只靠相邻板片连通到边框，
         // 打掉支撑它的外圈板片后就会掉落（支撑岛）。
-        const bool attached =
-            (shard.centroid - impact).norm() >= damageRadius * 0.55;
+        const bool attached = Physics::Fracture::IsPlateShardAttached(
+            (shard.centroid - impact).norm(), damageRadius,
+            instance.profile);
         if (attached) ++attachedCount;
         else ++dynamicCount;
         Physics::Fracture::Polygon2 localOutline = shard.outline;
@@ -767,8 +836,14 @@ void GlassRuntime::FractureInstance(
             0, attached);
     }
     if (audioRuntime)
-        audioRuntime->PlayGlassShatter(
-            0.9f + 0.3f * speedScale, worldImpactPoint);
+    {
+        ImpactAudioEvent event;
+        event.audioProfile = instance.profile.audioProfile;
+        event.kind = ImpactAudioKind::Shatter;
+        event.position = worldImpactPoint;
+        event.intensity = 0.9f + 0.3f * speedScale;
+        audioRuntime->PlayImpact(event);
+    }
     diagnostics.ReportInfo(
         "Glass pane shattered: " + descriptor.name +
         " fragments=" + std::to_string(pattern.shards.size()) +
@@ -862,7 +937,7 @@ void GlassRuntime::SpawnShard(
         Physics::Fracture::SignedArea(outlineLocal.outline) *
         instance.descriptor.thickness;
     const float mass = std::max(0.01f,
-        static_cast<float>(volumeCm3 * GlassDensityKgPerCm3 *
+        static_cast<float>(volumeCm3 * instance.profile.densityKgPerCm3 *
             instance.scale * instance.scale * instance.scale));
     bool hasBody = true;
     try
@@ -870,18 +945,25 @@ void GlassRuntime::SpawnShard(
         impactWorld.RegisterShard(instance.descriptor.name, shardName,
             worldCenter, orientation, velocity, mass, hullPoints,
             Physics::FractureMaterialProfile::Glass,
+            static_cast<float>(instance.profile.friction),
+            static_cast<float>(instance.profile.restitution),
             angularVelocity, !attached);
     }
     catch (const std::exception& error)
     {
-        hasBody = false;
         diagnostics.ReportWarning(
             "Glass shard proxy failed: " + shardName + " error=" + error.what());
+        // body 创建失败时不要把网格留在 World 里：它会停在原地、占预算，
+        // 并且永远不会进入 Transform/回收更新。直接退回 mesh 池并放弃该片。
+        RemoveMeshObject(world, shardName, meshKey, true);
+        return;
     }
 
     Shard shard;
     shard.name = shardName;
     shard.outline = outlineLocal;
+    shard.worldArea =
+        outlineLocal.area * instance.scale * instance.scale;
     shard.thickness = instance.descriptor.thickness;
     shard.depth = depth;
     shard.hasBody = hasBody;
@@ -899,16 +981,16 @@ void GlassRuntime::SpawnShard(
     instance.shards.push_back(std::move(shard));
 
     // 记账与可回收候选：attached 板片只计数，动态碎片才会进入回收候选。
-    const Physics::Fracture::FractureBudgetKind kind = attached
-        ? Physics::Fracture::FractureBudgetKind::GlassAttached
-        : Physics::Fracture::FractureBudgetKind::GlassDynamic;
-    budget.OnShardsCreated(instance.descriptor.name, kind);
+    const std::string& budgetClass = attached
+        ? instance.profile.attachedBudgetClass
+        : instance.profile.dynamicBudgetClass;
+    budget.OnShardsCreated(instance.descriptor.name, budgetClass);
     if (!attached)
     {
         Physics::Fracture::FractureBudgetCandidate candidate;
         candidate.owner = instance.descriptor.name;
         candidate.shardId = budgetId;
-        candidate.kind = Physics::Fracture::FractureBudgetKind::GlassDynamic;
+        candidate.budgetClass = instance.profile.dynamicBudgetClass;
         candidate.boundingRadius =
             instance.shards.back().boundingRadius;
         candidate.cameraDistance = CameraDistance(worldCenter);
@@ -944,9 +1026,12 @@ void GlassRuntime::ShatterAttachedShard(
     Physics::Fracture::RadialFractureSettings crackSettings;
     crackSettings.seed = seed;
     crackSettings.radialCracks = std::clamp(
-        static_cast<int>(extent / 6.0), 4, 10);
-    crackSettings.ringCount = 1;
-    crackSettings.coreRadius = std::max(1.0, extent * 0.10);
+        static_cast<int>(extent / 6.0),
+        instance.profile.attachedRadialCracksMin,
+        instance.profile.attachedRadialCracksMax);
+    crackSettings.ringCount = instance.profile.attachedRingCount;
+    crackSettings.coreRadius = std::max(
+        1.0, extent * instance.profile.attachedCoreRadiusFraction);
     crackSettings.ringGrowth = 1.7;
     crackSettings.angularJitter = 0.55;
     crackSettings.ringJitter = 0.30;
@@ -960,7 +1045,7 @@ void GlassRuntime::ShatterAttachedShard(
     // 保证“只要还有 attached 板片就一定打得动”。
     Physics::Fracture::FractureBudgetRequest request;
     request.owner = instance.descriptor.name;
-    request.kind = Physics::Fracture::FractureBudgetKind::GlassAttached;
+    request.budgetClass = instance.profile.attachedBudgetClass;
     request.count = pattern.shards.size() - 1;
     request.allowWholePlateDrop = true;
     const Physics::Fracture::FractureBudgetDecision decision =
@@ -999,7 +1084,7 @@ void GlassRuntime::ShatterAttachedShard(
             RandomAngularVelocity(seed + index, 1.0f), 0, false);
     }
     impactWorld.RemoveShard(instance.descriptor.name, parentName);
-    RemoveMeshObject(world, parentName, parentMeshKey);
+    RemoveMeshObject(world, parentName, parentMeshKey, true);
     for (size_t index = 0; index < instance.shards.size(); ++index)
         if (instance.shards[index].name == parentName)
         {
@@ -1009,7 +1094,7 @@ void GlassRuntime::ShatterAttachedShard(
         }
     budget.OnShardsRemoved(
         instance.descriptor.name,
-        Physics::Fracture::FractureBudgetKind::GlassAttached);
+        instance.profile.attachedBudgetClass);
     diagnostics.ReportInfo(
         "Glass attached plate shattered: " + parentName +
         " children=" + std::to_string(pattern.shards.size()));
@@ -1037,7 +1122,7 @@ void GlassRuntime::DropAttachedPlate(
     const double volume = Physics::Fracture::SignedArea(shard.outline.outline) *
         instance.descriptor.thickness;
     const float mass = std::max(0.01f,
-        static_cast<float>(volume * GlassDensityKgPerCm3 *
+        static_cast<float>(volume * instance.profile.densityKgPerCm3 *
             instance.scale * instance.scale * instance.scale));
     impactWorld.RemoveShard(instance.descriptor.name, shard.name);
     try
@@ -1045,6 +1130,8 @@ void GlassRuntime::DropAttachedPlate(
         impactWorld.RegisterShard(instance.descriptor.name, shard.name, center,
             rotation, Eigen::Vector3f::Zero(), mass, hull,
             Physics::FractureMaterialProfile::Glass,
+            static_cast<float>(instance.profile.friction),
+            static_cast<float>(instance.profile.restitution),
             RandomAngularVelocity(MixBits(shardIndex + 77), 0.8f), true);
     }
     catch (const std::exception& error)
@@ -1060,14 +1147,14 @@ void GlassRuntime::DropAttachedPlate(
     // attached → 动态碎片：总量不变，但从此进入可回收候选。
     budget.OnShardsRemoved(
         instance.descriptor.name,
-        Physics::Fracture::FractureBudgetKind::GlassAttached);
+        instance.profile.attachedBudgetClass);
     budget.OnShardsCreated(
         instance.descriptor.name,
-        Physics::Fracture::FractureBudgetKind::GlassDynamic);
+        instance.profile.dynamicBudgetClass);
     Physics::Fracture::FractureBudgetCandidate candidate;
     candidate.owner = instance.descriptor.name;
     candidate.shardId = shard.budgetId;
-    candidate.kind = Physics::Fracture::FractureBudgetKind::GlassDynamic;
+    candidate.budgetClass = instance.profile.dynamicBudgetClass;
     candidate.settledSeconds = 0.0f;
     candidate.boundingRadius = shard.boundingRadius;
     candidate.cameraDistance = CameraDistance(center);
@@ -1083,107 +1170,49 @@ void GlassRuntime::UpdateSupportIslands(World& world, Instance& instance)
     for (size_t index = 0; index < instance.shards.size(); ++index)
         if (instance.shards[index].attached) plates.push_back(index);
     if (plates.empty()) return;
-    const double halfWidth = instance.descriptor.width * 0.5;
-    const double halfHeight = instance.descriptor.height * 0.5;
-    auto onBorder = [&](const Physics::Fracture::Polygon2& polygon)
+    std::vector<Physics::Fracture::Polygon2> outlines;
+    std::vector<double> worldAreas;
+    outlines.reserve(plates.size());
+    worldAreas.reserve(plates.size());
+    for (size_t index : plates)
     {
-        for (const Eigen::Vector2d& point : polygon)
-            if (std::abs(point.x()) >= halfWidth - 0.5 ||
-                std::abs(point.y()) >= halfHeight - 0.5)
-                return true;
-        return false;
-    };
-    auto segmentDistance = [](const Eigen::Vector2d& point,
-        const Eigen::Vector2d& first, const Eigen::Vector2d& second)
-    {
-        const Eigen::Vector2d edge = second - first;
-        const double lengthSquared = edge.squaredNorm();
-        if (lengthSquared <= 1e-12) return (point - first).norm();
-        const double t = std::clamp(
-            (point - first).dot(edge) / lengthSquared, 0.0, 1.0);
-        return (point - (first + edge * t)).norm();
-    };
-    auto adjacent = [&](const Physics::Fracture::Polygon2& first,
-        const Physics::Fracture::Polygon2& second)
-    {
-        for (size_t i = 0; i < first.size(); ++i)
-            for (size_t j = 0; j < second.size(); ++j)
-            {
-                if ((first[i] - second[j]).norm() < 0.75) return true;
-                if (segmentDistance(first[i], second[j],
-                        second[(j + 1) % second.size()]) < 0.75) return true;
-                if (segmentDistance(second[j], first[i],
-                        first[(i + 1) % first.size()]) < 0.75) return true;
-            }
-        return false;
-    };
-
-    std::vector<bool> visited(plates.size(), false);
-    std::vector<size_t> queue;
-    int dropped = 0;
-    for (size_t start = 0; start < plates.size(); ++start)
-    {
-        if (visited[start]) continue;
-        std::vector<size_t> component;
-        visited[start] = true;
-        queue.clear();
-        queue.push_back(start);
-        for (size_t head = 0; head < queue.size(); ++head)
-        {
-            const size_t current = queue[head];
-            component.push_back(current);
-            for (size_t candidate = 0; candidate < plates.size(); ++candidate)
-            {
-                if (visited[candidate]) continue;
-                if (!adjacent(
-                        instance.shards[plates[current]].paneOutline,
-                        instance.shards[plates[candidate]].paneOutline))
-                    continue;
-                visited[candidate] = true;
-                queue.push_back(candidate);
-            }
-        }
-
-        bool anchored = false;
-        double componentArea = 0.0;
-        for (size_t index : component)
-        {
-            const Shard& plate = instance.shards[plates[index]];
-            componentArea += plate.outline.area;
-            anchored = anchored || onBorder(plate.paneOutline);
-        }
-        // 未接触外框，或只剩一小块挂在虚拟边框上的残余，都转为动态掉落。
-        if (!anchored || componentArea < MinAnchoredIslandArea)
-        {
-            for (auto it = component.rbegin(); it != component.rend(); ++it)
-            {
-                DropAttachedPlate(world, instance, plates[*it]);
-                ++dropped;
-            }
-        }
+        const Shard& plate = instance.shards[index];
+        outlines.push_back(plate.paneOutline);
+        worldAreas.push_back(plate.worldArea > 0.0
+            ? plate.worldArea
+            : plate.outline.area * instance.scale * instance.scale);
     }
-    if (dropped > 0)
+    const std::vector<size_t> dropped =
+        Physics::Fracture::FindUnsupportedPlateIndices(
+            outlines, worldAreas, instance.descriptor.width,
+            instance.descriptor.height, instance.scale, instance.profile);
+    for (auto it = dropped.rbegin(); it != dropped.rend(); ++it)
+        DropAttachedPlate(world, instance, plates[*it]);
+    if (!dropped.empty())
     {
         diagnostics.ReportInfo(
             "Glass support islands dropped: " +
-            std::to_string(dropped) + " plates");
+            std::to_string(dropped.size()) + " plates");
     }
 }
 
-void GlassRuntime::SplitShard(
+bool GlassRuntime::SplitShard(
     World& world, Instance& instance, const std::string& shardName,
     float impactSpeed, bool projectileImpact)
 {
-    if (!instance.descriptor.subfracture) return;
+    if (!instance.descriptor.subfracture) return false;
     const size_t shardIndex = FindShard(instance, shardName);
-    if (shardIndex >= instance.shards.size()) return;
+    if (shardIndex >= instance.shards.size()) return false;
     const Shard& parent = instance.shards[shardIndex];
-    if (parent.attached) return;
-    if (parent.depth >= MaxSubfractureDepth) return;
-    const double minimumArea = projectileImpact
-        ? MinProjectileSubfractureArea : MinImpactSubfractureArea;
-    if (parent.outline.area < minimumArea) return;
-    if (impactSpeed < MinSubfractureSpeed) return;
+    if (parent.attached) return false;
+    const double shardArea = parent.worldArea > 0.0
+        ? parent.worldArea
+        : parent.outline.area * instance.scale * instance.scale;
+    const Physics::Fracture::SubfractureDecision subfracture =
+        Physics::Fracture::EvaluateSubfracture(
+            shardArea, parent.depth, impactSpeed, projectileImpact,
+            instance.profile);
+    if (!subfracture.split) return false;
 
     // 预算回收可能 erase instance.shards；先拷贝父碎片数据，再申请预算。
     Physics::Fracture::PlanarShard input = parent.outline;
@@ -1192,32 +1221,30 @@ void GlassRuntime::SplitShard(
     const std::string parentMeshKey = parent.meshKey;
     const std::uint64_t parentBudgetId = parent.budgetId;
     const int parentDepth = parent.depth;
+    const auto meshFound = world.GetMeshObjects().find(parentName);
+    if (meshFound == world.GetMeshObjects().end()) return false;
+    const Eigen::Matrix4f parentModel = meshFound->second.model;
     const uint64_t splitSeed = instance.descriptor.seed ^
         MixBits(parentBudgetId + 0x51ED270Bull);
     // 二次碎裂用直线弦切成尖片，保持玻璃的锐利轮廓；小块只切一刀，
     // 避免地上碎片被切成看不清的粉尘。
-    const int crackCount = parent.outline.area < 60.0 ? 1 : 2;
     const Physics::Fracture::PlanarPattern pattern =
         Physics::Fracture::SplitPlanarShardByCracks(
-            input, crackCount, splitSeed);
-    if (pattern.shards.size() < 2) return;
+            input, subfracture.crackCount, splitSeed);
+    if (pattern.shards.size() < 2) return false;
 
     Physics::Fracture::FractureBudgetRequest request;
     request.owner = instance.descriptor.name;
-    request.kind = Physics::Fracture::FractureBudgetKind::GlassDynamic;
+    request.budgetClass = instance.profile.dynamicBudgetClass;
     request.count = pattern.shards.size() - 1;
+    request.excludeShardIds = {parentBudgetId};
     // 先查询：预算不足时直接放弃切分，不执行无意义的回收。
     const Physics::Fracture::FractureBudgetDecision decision =
-        budget.Request(request);
+        AcquireFractureBudget(budget, evictionDispatcher, request);
     if (!decision.granted ||
         decision.grantedCount < pattern.shards.size() - 1)
-        return;
-    if (!decision.evictions.empty())
-        evictionDispatcher.EvictFractureBudgetShards(decision.evictions);
+        return false;
 
-    const auto meshFound = world.GetMeshObjects().find(parentName);
-    if (meshFound == world.GetMeshObjects().end()) return;
-    const Eigen::Matrix4f parentModel = meshFound->second.model;
     const Eigen::Vector3f parentVelocity =
         impactWorld.GetShardVelocity(instance.descriptor.name, parentName)
             .value_or(Eigen::Vector3f::Zero());
@@ -1248,7 +1275,7 @@ void GlassRuntime::SplitShard(
             childDepth);
     }
     impactWorld.RemoveShard(instance.descriptor.name, parentName);
-    RemoveMeshObject(world, parentName, parentMeshKey);
+    RemoveMeshObject(world, parentName, parentMeshKey, true);
     for (size_t index = 0; index < instance.shards.size(); ++index)
         if (instance.shards[index].name == parentName)
         {
@@ -1258,11 +1285,12 @@ void GlassRuntime::SplitShard(
         }
     budget.OnShardsRemoved(
         instance.descriptor.name,
-        Physics::Fracture::FractureBudgetKind::GlassDynamic);
+        instance.profile.dynamicBudgetClass);
     budget.UntrackReclaimable(instance.descriptor.name, parentBudgetId);
     diagnostics.ReportInfo(
         "Glass shard split: " + parentName +
         " children=" + std::to_string(pattern.shards.size()));
+    return true;
 }
 
 void GlassRuntime::UpdateShardTransforms(
@@ -1283,7 +1311,7 @@ void GlassRuntime::UpdateShardTransforms(
         Physics::Fracture::FractureBudgetCandidate candidate;
         candidate.owner = instance.descriptor.name;
         candidate.shardId = shard.budgetId;
-        candidate.kind = Physics::Fracture::FractureBudgetKind::GlassDynamic;
+        candidate.budgetClass = instance.profile.dynamicBudgetClass;
         candidate.settledSeconds = shard.settledTime;
         candidate.boundingRadius = shard.boundingRadius;
         candidate.cameraDistance = CameraDistance(pose->position);
@@ -1298,7 +1326,7 @@ void GlassRuntime::UpdateShardTransforms(
 
 void GlassRuntime::RemoveMeshObject(
     World& world, const std::string& meshObjectName,
-    const std::string& meshKey)
+    const std::string& meshKey, bool returnToShardPool)
 {
     world.RemoveMeshObject(meshObjectName);
     RendererResourceCache& cache = RendererResourceCache::GetInstance();
@@ -1308,9 +1336,9 @@ void GlassRuntime::RemoveMeshObject(
     cache.BindRenderableObject(meshKey, {});
     if (retired)
     {
-        // 池化网格不销毁：等 GPU epoch 完成后回到空闲池。整板/其他网格仍走退休队列。
-        if (retired->GetIndexCapacity() > 0)
+        if (returnToShardPool)
         {
+            // 只有调用方明确声明“这是碎片池 mesh”时才复用；不再用容量反推类型。
             pendingShardMeshes.push_back({
                 ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(),
                 std::move(retired)});
@@ -1411,11 +1439,11 @@ void GlassRuntime::EvictFractureBudgetShards(
         const std::string shardName = shard.name;
         const std::string shardKey = shard.meshKey;
         impactWorld.RemoveShard(instance.descriptor.name, shardName);
-        RemoveMeshObject(*currentWorld, shardName, shardKey);
+        RemoveMeshObject(*currentWorld, shardName, shardKey, true);
         instance.shards.erase(
             instance.shards.begin() + static_cast<std::ptrdiff_t>(shardIndex));
-        budget.OnShardsRemoved(instance.descriptor.name,
-            Physics::Fracture::FractureBudgetKind::GlassDynamic);
+        budget.OnShardsRemoved(
+            instance.descriptor.name, candidate.budgetClass);
         budget.UntrackReclaimable(candidate.owner, candidate.shardId);
     }
 }

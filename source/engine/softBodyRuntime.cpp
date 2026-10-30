@@ -143,6 +143,40 @@ void SoftBodyRuntime::SynchronizeWorld(World& world)
     }
 }
 
+bool SoftBodyRuntime::ContainsTarget(
+    const std::string& name,
+    Physics::FractureMaterialProfile material) const
+{
+    return material == Physics::FractureMaterialProfile::Balloon &&
+        instances.find(name) != instances.end();
+}
+
+void SoftBodyRuntime::Reset(World& world)
+{
+    currentWorld = &world;
+    for (auto& [name, instance] : instances)
+    {
+        for (size_t index = 0; index < instance.meshObjectNames.size(); ++index)
+        {
+            if (index < instance.meshKeys.size())
+                RemoveMeshObject(world, instance.meshObjectNames[index],
+                    instance.meshKeys[index]);
+            impactWorld.RemoveShard(name, instance.meshObjectNames[index]);
+        }
+        impactWorld.UnregisterSphereProxy(name);
+    }
+    instances.clear();
+    airPuffs.clear();
+    generation = 0;
+    SynchronizeWorld(world);
+}
+
+void SoftBodyRuntime::LaunchDebugImpact(
+    const std::string& target, float speed)
+{
+    LaunchImpact(target, speed);
+}
+
 void SoftBodyRuntime::HandleImpacts(
     World& world, const std::vector<Physics::FractureImpact>& impacts)
 {
@@ -154,18 +188,30 @@ void SoftBodyRuntime::HandleImpacts(
         {
             continue;
         }
-        const auto found = instances.find(impact.objectName);
-        if (found == instances.end()) continue;
-        if (impact.type == Physics::FractureImpactType::PaneHit) continue;
-        if (impact.type == Physics::FractureImpactType::ShardLanding ||
-            impact.type == Physics::FractureImpactType::ShardHit)
+        if (impact.targetRole == Physics::FractureBodyRole::FreeShard)
         {
             if (audioRuntime)
-                audioRuntime->PlayShardLanding(
-                    // Jolt 速度单位是 m/s；这里把常见落地速度映射到 0..1 强度。
-                    impact.relativeSpeed / 5.0f, impact.point);
+            {
+                const auto owner = instances.find(impact.objectName);
+                const std::string audioProfile = owner != instances.end()
+                    ? owner->second.profile.audioProfile : "balloon";
+                ImpactAudioEvent event;
+                event.audioProfile = audioProfile;
+                event.kind = ImpactAudioKind::Landing;
+                event.position = impact.point;
+                event.intensity = std::clamp(
+                    impact.relativeSpeed / 5.0f, 0.02f, 1.0f);
+                audioRuntime->PlayImpact(event);
+            }
             continue;
         }
+        if (impact.targetRole != Physics::FractureBodyRole::StaticTarget ||
+            impact.contact != Physics::FractureContactKind::Impact)
+        {
+            continue;
+        }
+        const auto found = instances.find(impact.objectName);
+        if (found == instances.end()) continue;
         if (found->second.burst) continue;
         diagnostics.ReportInfo(
             "SoftBody Jolt impact: " + impact.objectName +
@@ -173,8 +219,7 @@ void SoftBodyRuntime::HandleImpacts(
                 impact.materialProfile) +
             " speed=" + std::to_string(impact.relativeSpeed));
         // 低于爆裂阈值的命中只扎破一个洞：泄压塌陷，不产生碎片。
-        constexpr float BurstSpeedMetersPerSecond = 4.0f;
-        if (impact.relativeSpeed < BurstSpeedMetersPerSecond)
+        if (impact.relativeSpeed < found->second.profile.burstSpeedMps)
         {
             if (!found->second.leaking)
                 DeflateInstance(found->second, impact.relativeSpeed, impact.point);
@@ -198,20 +243,27 @@ void SoftBodyRuntime::Tick(World& world, float deltaSeconds)
                 instance.leakAge += deltaSeconds;
                 // 破口喷气反冲：随压力下降迅速减弱，同时给一点刚性自旋。
                 const float thrustRemaining = std::clamp(
-                    1.0f - instance.leakAge / 1.4f, 0.0f, 1.0f);
+                    1.0f - static_cast<float>(instance.leakAge /
+                        instance.profile.deflateThrustDuration),
+                    0.0f, 1.0f);
                 if (thrustRemaining > 0.0f)
                     instance.shells[0].ApplyAerodynamicThrust(
                         instance.leakThrustLocal.cast<double>(),
-                        950.0 * thrustRemaining * thrustRemaining,
+                        instance.profile.deflateThrust *
+                            thrustRemaining * thrustRemaining,
                         instance.leakSpinAxisLocal.cast<double>(),
-                        7.0 * thrustRemaining, deltaSeconds);
-                // 可见破口随泄压缓慢扩大（0.12 → 0.22 rad）。
-                const double holeAngle = 0.12 + 0.10 *
-                    std::min(static_cast<double>(instance.leakAge) / 1.2, 1.0);
+                        instance.profile.deflateSpin * thrustRemaining,
+                        deltaSeconds);
+                const double holeAngle =
+                    instance.profile.deflateHoleStart +
+                    (instance.profile.deflateHoleEnd -
+                        instance.profile.deflateHoleStart) *
+                    std::min(static_cast<double>(instance.leakAge) /
+                        instance.profile.deflateDuration, 1.0);
                 instance.shells[0].SetRenderHole(
                     instance.leakHoleDirection.cast<double>(), holeAngle);
                 // 前 1.2 秒持续抽气；dt 缩放让结果与帧率无关。
-                if (instance.leakAge < 1.2f)
+                if (instance.leakAge < instance.profile.deflateDuration)
                     instance.shells[0].ApplyDeflateImpulse(
                         Eigen::Vector3d::Zero(),
                         30.0 * deltaSeconds, 8.0 * deltaSeconds,
@@ -226,6 +278,24 @@ void SoftBodyRuntime::Tick(World& world, float deltaSeconds)
                 instance.leaking ? 0.0 : instance.descriptor.pressure);
             UpdateSoftMesh(world, instance.meshObjectNames[0],
                 instance.meshKeys[0], instance.shells[0]);
+            if (instance.leaking && !instance.shells[0].Particles().empty())
+            {
+                // 漏气后软壳会平移/塌陷，静态球代理必须跟随当前包围中心，
+                // 否则箭会命中旧位置并产生“打空气”的破口。
+                Eigen::Vector3d localCenter = Eigen::Vector3d::Zero();
+                for (const auto& particle : instance.shells[0].Particles())
+                    localCenter += particle.position;
+                localCenter /= static_cast<double>(
+                    instance.shells[0].Particles().size());
+                const Eigen::Vector3f worldCenter = (
+                    instance.descriptor.model *
+                    Eigen::Vector4f(
+                        static_cast<float>(localCenter.x()),
+                        static_cast<float>(localCenter.y()),
+                        static_cast<float>(localCenter.z()), 1.0f)).head<3>();
+                impactWorld.SetSphereProxyPose(
+                    instance.descriptor.name, worldCenter);
+            }
             if (!instance.leaking && instance.shells[0].ShouldBurst())
                 BurstInstance(world, instance, 0.0f);
             continue;
@@ -269,8 +339,8 @@ void SoftBodyRuntime::Tick(World& world, float deltaSeconds)
                         Physics::Fracture::FractureBudgetCandidate candidate;
                         candidate.owner = instance.descriptor.name;
                         candidate.shardId = instance.shardBudgetIds[index];
-                        candidate.kind =
-                            Physics::Fracture::FractureBudgetKind::BalloonShard;
+                        candidate.budgetClass =
+                            instance.profile.shardBudgetClass;
                         candidate.settledSeconds =
                             instance.shardSettledSeconds[index];
                         candidate.boundingRadius =
@@ -370,6 +440,18 @@ void SoftBodyRuntime::InitializeInstance(
         Physics::Softbody::RubberShell::BuildIcosphere(settings);
     Instance instance;
     instance.descriptor = descriptor;
+    const auto* profile = descriptor.profileKey.empty()
+        ? &Physics::Fracture::DefaultBalloonProfile()
+        : Physics::Fracture::FindDestructibleProfile(descriptor.profileKey);
+    if (profile == nullptr ||
+        profile->materialProfile != Physics::FractureMaterialProfile::Balloon)
+    {
+        diagnostics.ReportWarning(
+            "Balloon profile unavailable or mismatched: " +
+            descriptor.profileKey + " object=" + descriptor.name);
+        profile = &Physics::Fracture::DefaultBalloonProfile();
+    }
+    instance.profile = *profile;
     AddSoftMesh(world, instance, std::move(shell), "intact");
     const Eigen::Vector3f center = descriptor.model.block<3, 1>(0, 3);
     const float scale = std::max(0.001f, descriptor.model.block<3, 3>(0, 0).col(0).norm());
@@ -454,7 +536,8 @@ void SoftBodyRuntime::DeflateInstance(Instance& instance, float impactSpeed,
         thrust = -instance.leakHoleDirection;
     }
     instance.shells[0].SetRenderHole(
-        instance.leakHoleDirection.cast<double>(), 0.12);
+        instance.leakHoleDirection.cast<double>(),
+        instance.profile.deflateHoleStart);
     const float wobble = UnitFromBits(
         MixBits(instance.descriptor.seed + 0x2545F491ull)) * 0.5f - 0.25f;
     thrust = (thrust + Eigen::Vector3f(wobble, wobble * 0.6f, wobble * 0.4f)).normalized();
@@ -469,8 +552,8 @@ void SoftBodyRuntime::DeflateInstance(Instance& instance, float impactSpeed,
     instance.leakSpinAxisLocal.normalize();
     Physics::Softbody::RubberShell& shell = instance.shells[0];
     // 漏气后气球不再悬浮：开始下落，由地面钳制接住。
-    shell.SetGravity(Eigen::Vector3d(0.0, -981.0, 0.0));
-    shell.SetDamping(3.0);
+    shell.SetGravity(Eigen::Vector3d(0.0, instance.profile.deflateGravity, 0.0));
+    shell.SetDamping(instance.profile.deflateDamping);
     const double speedScale =
         std::clamp(static_cast<double>(impactSpeed) / 4.0, 0.2, 1.0);
     shell.ApplyDeflateImpulse(Eigen::Vector3d::Zero(),
@@ -478,8 +561,12 @@ void SoftBodyRuntime::DeflateInstance(Instance& instance, float impactSpeed,
         instance.descriptor.seed + 0x51ED270Bull);
     if (audioRuntime)
     {
-        audioRuntime->PlayBalloonLeak(1.0f - 0.4f * static_cast<float>(speedScale),
-            instance.descriptor.model.block<3, 1>(0, 3));
+        ImpactAudioEvent event;
+        event.audioProfile = instance.profile.audioProfile;
+        event.kind = ImpactAudioKind::Leak;
+        event.position = instance.descriptor.model.block<3, 1>(0, 3);
+        event.intensity = 1.0f - 0.4f * static_cast<float>(speedScale);
+        audioRuntime->PlayImpact(event);
     }
     diagnostics.ReportInfo(
         "SoftBody leak: " + instance.descriptor.name +
@@ -507,7 +594,7 @@ void SoftBodyRuntime::BurstInstance(World& world, Instance& instance,
     // 已静止的旧碎片。Request 是纯查询，回收在决策返回后统一执行。
     Physics::Fracture::FractureBudgetRequest budgetRequest;
     budgetRequest.owner = instance.descriptor.name;
-    budgetRequest.kind = Physics::Fracture::FractureBudgetKind::BalloonShard;
+    budgetRequest.budgetClass = instance.profile.shardBudgetClass;
     budgetRequest.count = std::min<std::size_t>(
         static_cast<std::size_t>(instance.descriptor.siteCount),
         Physics::Fracture::FractureBudget::BalloonLimit);
@@ -545,14 +632,22 @@ void SoftBodyRuntime::BurstInstance(World& world, Instance& instance,
             instance.shells[0], pattern, tear);
     // 破裂后橡胶软片才进入自由落体；完整气球保持悬浮。
     const float energyScale = std::clamp(
-        0.75f + std::max(0.0f, impactSpeed) / 12.0f, 0.75f, 1.45f);
-    const double radialImpulse = 220.0 * energyScale;
-    const double tangentialImpulse = 28.0 + 32.0 * energyScale;
+        static_cast<float>(instance.profile.burstEnergyBase +
+            std::max(0.0f, impactSpeed) *
+                instance.profile.burstEnergySpeedScale),
+        static_cast<float>(instance.profile.burstEnergyMin),
+        static_cast<float>(instance.profile.burstEnergyMax));
+    const double radialImpulse =
+        instance.profile.burstRadialImpulse * energyScale;
+    const double tangentialImpulse =
+        instance.profile.burstTangentialBase +
+        instance.profile.burstTangentialScale * energyScale;
     for (size_t index = 0; index < fragments.size(); ++index)
     {
         Physics::Softbody::RubberShell& fragment = fragments[index];
-        fragment.SetGravity(Eigen::Vector3d(0.0, -981.0, 0.0));
-        fragment.SetDamping(4.0);
+        fragment.SetGravity(Eigen::Vector3d(
+            0.0, instance.profile.deflateGravity, 0.0));
+        fragment.SetDamping(instance.profile.burstDamping);
         fragment.ApplyBurstImpulse(
             Eigen::Vector3d::Zero(), radialImpulse, tangentialImpulse,
             instance.descriptor.seed + index * 0x9E3779B9ull,
@@ -592,8 +687,15 @@ void SoftBodyRuntime::BurstInstance(World& world, Instance& instance,
         instance.descriptor.model.block<3, 1>(0, 3);
     const float scale = std::max(0.001f,
         instance.descriptor.model.block<3, 3>(0, 0).col(0).norm());
-    if (audioRuntime) audioRuntime->PlayBalloonBurst(
-        std::clamp(energyScale, 0.75f, 1.45f), burstCenter);
+    if (audioRuntime)
+    {
+        ImpactAudioEvent event;
+        event.audioProfile = instance.profile.audioProfile;
+        event.kind = ImpactAudioKind::Burst;
+        event.position = burstCenter;
+        event.intensity = std::clamp(energyScale, 0.75f, 1.45f);
+        audioRuntime->PlayImpact(event);
+    }
     AirPuff puff;
     puff.owner = instance.descriptor.name;
     // 有真实命中点时，气团从破口喷出；压力自爆则从气球中心向外泄压。
@@ -668,6 +770,8 @@ void SoftBodyRuntime::BurstInstance(World& world, Instance& instance,
                     std::max(0.05f, static_cast<float>(localRadius * localRadius) * 0.001f),
                     hullPoints,
                     Physics::FractureMaterialProfile::Balloon,
+                    static_cast<float>(instance.profile.friction),
+                    static_cast<float>(instance.profile.restitution),
                     ShardAngularVelocity(
                         instance.descriptor.seed, index, energyScale));
                 const auto pose = impactWorld.GetShardPose(
@@ -696,7 +800,7 @@ void SoftBodyRuntime::BurstInstance(World& world, Instance& instance,
             static_cast<float>(localRadius) * scale);
     }
     budget.OnShardsCreated(instance.descriptor.name,
-        Physics::Fracture::FractureBudgetKind::BalloonShard, fragmentCount);
+        instance.profile.shardBudgetClass, fragmentCount);
     if (fragmentCount > budgetDecision.grantedCount)
     {
         diagnostics.ReportWarning(
@@ -796,7 +900,7 @@ void SoftBodyRuntime::EvictFractureBudgetShards(
 
         RemoveShardAt(*currentWorld, instance, shardIndex);
         budget.OnShardsRemoved(instance.descriptor.name,
-            Physics::Fracture::FractureBudgetKind::BalloonShard);
+            instance.profile.shardBudgetClass);
         budget.UntrackReclaimable(candidate.owner, candidate.shardId);
     }
 }

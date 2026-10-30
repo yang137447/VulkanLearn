@@ -215,6 +215,10 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         std::shared_ptr<World> world = std::make_shared<World>(
             generation,
             worldBuildPlan.scenePath);
+        world->SetNativeGameplay(
+            worldBuildPlan.sceneJson.value("runtimeMode", "authoring") ==
+            "gameplay");
+        world->SetProjectileSettings(worldBuildPlan.projectileSettings);
 
         WorldEnvironment environment;
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
@@ -319,6 +323,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         {
             WorldSoftBodyObject object;
             object.name = softBodyPlan.objectName;
+            object.profileKey = softBodyPlan.profileKey;
             object.model = softBodyPlan.model;
             object.scenePosition = softBodyPlan.scenePosition;
             object.sceneRotation = softBodyPlan.sceneRotation;
@@ -340,6 +345,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         {
             WorldGlassObject object;
             object.name = glassPlan.objectName;
+            object.profileKey = glassPlan.profileKey;
             object.model = glassPlan.model;
             object.scenePosition = glassPlan.scenePosition;
             object.sceneRotation = glassPlan.sceneRotation;

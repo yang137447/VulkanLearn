@@ -1,7 +1,6 @@
 #include "engine/runtimeCommandExecutor.h"
 
-#include "engine/softBodyRuntime.h"
-#include "engine/glassRuntime.h"
+#include "engine/destructibleRuntime.h"
 #include "engine/projectileRuntime.h"
 #include <cmath>
 #include <filesystem>
@@ -244,8 +243,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
     Editor::SceneDocumentService* sceneDocuments,
-    SoftBodyRuntime* softBodyRuntime,
-    GlassRuntime* glassRuntime,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
     RuntimeCommandExecutionResult executionResult;
@@ -264,8 +262,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             input,
             scripts,
             sceneDocuments,
-            softBodyRuntime,
-            glassRuntime,
+            destructibleRuntimes,
             projectileRuntime);
     }
     return executionResult;
@@ -283,8 +280,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
     Editor::SceneDocumentService* sceneDocuments,
-    SoftBodyRuntime* softBodyRuntime,
-    GlassRuntime* glassRuntime,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
     switch (command.type)
@@ -354,22 +350,26 @@ void RuntimeCommandExecutor::ExecuteCommand(
         break;
     }
     case RuntimeCommandType::ImpactSoftBody:
-        if (softBodyRuntime == nullptr)
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Balloon))
         {
             diagnostics.ReportWarning(
-                "softbody impact command ignored because soft-body runtime is unavailable");
+                "softbody impact target not found: " + command.stringValue);
             break;
         }
-        softBodyRuntime->LaunchImpact(command.stringValue, command.floatValue);
         break;
     case RuntimeCommandType::ImpactGlassPane:
-        if (glassRuntime == nullptr)
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Glass))
         {
             diagnostics.ReportWarning(
-                "glass impact command ignored because glass runtime is unavailable");
+                "glass impact target not found: " + command.stringValue);
             break;
         }
-        glassRuntime->LaunchImpact(command.stringValue, command.floatValue);
         break;
     case RuntimeCommandType::FireProjectile:
     {

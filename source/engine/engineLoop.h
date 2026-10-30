@@ -44,8 +44,7 @@ class BlueprintAssetLoadSession;
 class ScriptWorldContext;
 class RuntimeValidationServices;
 class AudioRuntime;
-class SoftBodyRuntime;
-class GlassRuntime;
+class DestructibleRuntimeRegistry;
 class ProjectileRuntime;
 namespace Physics { class FractureImpactWorld; }
 class SubsystemCollection;
@@ -58,8 +57,7 @@ struct WorldHandle;
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
 // PlatformApplication hides SDL startup/window/event details; EngineLoop owns
 // engine init, per-frame event/update/render dispatch, and renderer shutdown.
-class EngineLoop : public ShaderReloadRuntimeHost,
-    public Physics::Fracture::FractureEvictionDispatcher
+class EngineLoop : public ShaderReloadRuntimeHost
 {
 public:
     EngineLoop();
@@ -79,11 +77,6 @@ public:
     void QueueLaunchConsoleCommands(
         const std::vector<std::string>& lines,
         int delayFrames);
-
-    // 全局碎片预算的跨 owner 回收入口：按 owner 转发给玻璃/气球运行时。
-    void EvictFractureBudgetShards(
-        const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates)
-        override;
 
 private:
     friend class RuntimeValidationServices;
@@ -163,13 +156,13 @@ private:
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<ScriptBuildService> scriptBuild;
     std::unique_ptr<AudioRuntime> audioRuntime;
-    std::unique_ptr<SoftBodyRuntime> softBodyRuntime;
-    std::unique_ptr<GlassRuntime> glassRuntime;
+    std::unique_ptr<DestructibleRuntimeRegistry> destructibleRuntimes;
     std::unique_ptr<ProjectileRuntime> projectileRuntime;
     std::unique_ptr<Physics::FractureImpactWorld> fractureWorld;
     std::unique_ptr<Physics::Fracture::FractureBudget> fractureBudget;
     // 预算账本与运行时碎片同属一个 World 代；换代时归零。
     uint64_t fractureBudgetGeneration = 0;
+    bool destructibleSessionActive = false;
     void TickBlueprintAssets();
     std::unique_ptr<BlueprintAssetLoadSession> blueprintAssetLoad;
     nlohmann::json blueprintAssetRequests = nlohmann::json::array();

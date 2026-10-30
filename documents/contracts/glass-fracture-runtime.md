@@ -19,10 +19,19 @@ XY 平面，厚度沿局部 Z，中心在对象原点。必填字段：
 | `thickness` | number | `0 < thickness < min(width, height)` |
 | `siteCount` | integer | `[4, 64]` |
 | `seed` | unsigned integer | 断裂拓扑的确定性种子 |
-| `subfracture` | boolean | 可选，默认 `true`；关闭后落地/再命中不再切分 |
+| `subfracture` | boolean | 可选，默认 `true`；关闭后落地/再命中不再新增碎片，attached 命中只整块脱落 |
+| `profile` | string | 可选；缺省 `glass.default`，支持 `glass.tempered` 等内置 profile |
 
 `HasSupportedSceneObjectTypes` 认可 `glassPane`，场景选择器不会把它当成未知对象。
 离线渲染路径拒绝 glassPane；当前只有实时路径创建玻璃运行时。
+
+## 破坏 profile
+
+`DestructibleProfile` 是运行时唯一的调参入口。内置 `glass.default` 保持原行为，
+`glass.tempered` 通过更长二次碎裂深度、更小碎片面积和更多径向裂纹演示“同一
+solver 的材质变体”。profile 同时提供密度、摩擦/恢复、伤害半径曲线、支撑岛
+容差、`glass.dynamic`/`glass.attached` 预算类和 `audioProfile`。未知 profile
+在场景校验阶段被拒绝；运行时缺省使用 `glass.default`。
 
 ## 资源与 World 数据
 
@@ -62,7 +71,7 @@ XY 平面，厚度沿局部 Z，中心在对象原点。必填字段：
    的四边形，累加进该玻璃唯一的 `<pane>~cracks` 动态网格；材质来自固定 MI
    `Common/Materials/MI_glass_crack.json`（深色、高粗糙），双面绕序，避免背面剔除；
    没有裂纹 MI 时才回退到 DebugDraw 折线（category `GlassCrack`）；
-4. 播放专用的 0.14 秒 `PlayGlassCrack`（高频 click + 两个短模态，Impact 优先级），
+4. 通过 `PlayImpact` 发送 `Crack` 事件（高频 click + 两个短模态，Impact 优先级），
    与整块破碎声区分；
 5. 累计能量达到阈值后，先移除 `<pane>~cracks` 网格（及其 debug 回退），再调用既有
    `FractureInstance` 完成破碎。
@@ -104,7 +113,8 @@ XY 平面，厚度沿局部 Z，中心在对象原点。必填字段：
 
 attached 板片不是纯视觉网格：它们有静态凸包碰撞体。投射物命中任一块时：
 
-1. `FractureImpactWorld` 产出 `AttachedHit`（objectName + shardName）；
+1. `FractureImpactWorld` 产出 `targetRole=AttachedPart`、`contact=Impact`
+   （objectName + shardName + projectileId）；
 2. `GlassRuntime` 用 `GenerateRadialImpactPattern` 以**新命中点**为极点、把该板片
    多边形作为域重新生成径向裂纹（母裂纹 4–10 条、1 圈环、核心粉碎区），
    与第一次破碎保持同一形态；不再使用随机直线切三片；
@@ -168,8 +178,9 @@ attached 板片保留板面局部多边形。每次打掉一块后做一次连�
 - 静态球体 proxy 表示 balloon，静态盒 proxy 表示 glassPane；注册时显式标记
   `FractureMaterialProfile::Balloon` / `Glass`，玻璃碎片也继承 `Glass`；
 - 动态投射物使用 `LinearCast` 连续碰撞检测，薄玻璃板不会被高速弹丸穿透；
-  投射物命中动态碎片会产生 `ShardHit`（带 `projectileId`），这是地上碎片继续
-  被打碎的入口；`landingBodies` 只抑制落地/碎片互撞重复事件，不会吞掉后续箭矢；
+  投射物命中动态碎片会产生 `targetRole=FreeShard`、`contact=Impact` 的事件
+  （带 `projectileId`），这是地上碎片继续被打碎的入口；物理世界不再维护
+  `landingBodies` 终身去重，消费方按自己的冷却和阈值处理重复接触；
 - 凸包碎片、地面、接触事件和投射物生命周期与气球共用同一套实现；
 - `GlassRuntime::HandleImpacts` 只消费 `materialProfile == Glass` 的事件；
   事件中的 `type` 只描述接触形态，不负责选择玻璃/气球效果。
@@ -179,14 +190,15 @@ attached 板片保留板面局部多边形。每次打掉一块后做一次连�
 
 ## 声音
 
-玻璃声音提交到 48 kHz stereo、32 voice 的块混音器
+玻璃声音通过 `ImpactAudioEvent { audioProfile, kind, position, intensity }`
+提交到 48 kHz stereo、32 voice 的块混音器
 （预算、pan、距离低通见 `audio-runtime.md`）：
 
-- `PlayGlassCrack`：优先用 `glass_break.wav` 的 0.16 秒 attack 切片，叠高频
+- `Crack`：优先用 `glass_break.wav` 的 0.16 秒 attack 切片，叠高频
   click 和短模态；资产缺失时回退 0.14 秒程序化 click；
-- `PlayGlassShatter`：优先用 `glass_break.wav` 的 0.58 秒片段（3 个播放速率变体），
+- `Shatter`：优先用 `glass_break.wav` 的 0.58 秒片段（3 个播放速率变体），
   叠同步 click 和 118 Hz 低频冲击；资产缺失时回退 0.48 秒程序化破碎音；
-- `PlayGlassShardLanding`：优先用破碎尾音的 4 个位置 × 3 个速率切片；
+- `Landing`：优先用破碎尾音的 4 个位置 × 3 个速率切片；
   资产缺失时回退 0.12 秒单模态 ping；30 ms 冷却，与气球落地音独立。
 
 ## 当前边界
@@ -198,9 +210,12 @@ attached 板片保留板面局部多边形。每次打掉一块后做一次连�
 - 裂纹 debug 几何受 `DrawDebug` 全局预算限制（1024 项 / 16384 条线）。
   超出时保留已有裂纹、停止本次提交并记录 warning；裂纹不会随时间自行消散。
 - cracked 阶段不申请碎片预算；达到阈值后的破碎继续走 `FractureBudget`。
-- 碎片之间由 Jolt 解析接触并产出 `ShardHit`，会按 60 cm² 阈值触发二次碎裂；
-  箭命中动态碎片同样产出 `ShardHit`，但使用 8 cm² 阈值。
+- 碎片之间由 Jolt 解析接触并产出 `FreeShard × Impact/Resting` 事件，按
+  60 cm² 世界面积阈值触发二次碎裂；箭命中动态碎片使用 8 cm² 阈值。
 - 二次碎裂的碎片布局受落地/命中顺序影响；初始 71 片布局本身由 seed 决定且可复现。
+- `PlateFracturePolicy` 现在承担伤害半径、attached 判定、二次碎裂阈值/刀数、
+  支撑岛连通性；阈值面积使用 `Shard.worldArea`，支撑容差从世界厘米除以
+  `scale` 后与局部 polygon 比较。
 - 碎片网格按容量进入玻璃运行时私有池，但每片仍是独立 `RenderableObject`
   和独立 draw；没有跨对象批量上传。
 - 全场景预算与屏幕占比降级由 `fracture-budget.md` 描述；视觉下限允许玻璃

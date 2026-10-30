@@ -2,21 +2,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace VL::Physics::Fracture
 {
 namespace
 {
 
-// 屏幕占比的近似：包围球半径 / 相机距离。不引入真正的投影计算，
-// 只用于“先回收看不见的小碎片”这一启发式。
 float ScreenFootprint(const FractureBudgetCandidate& candidate)
 {
     const float distance = std::max(candidate.cameraDistance, 1.0f);
     return candidate.boundingRadius / distance;
 }
 
-// 回收顺序：屏幕占比小 → 距离远 → 静止更久 → owner/id（保证可复现）。
 bool HigherPriority(const FractureBudgetCandidate& first,
     const FractureBudgetCandidate& second)
 {
@@ -29,10 +27,48 @@ bool HigherPriority(const FractureBudgetCandidate& first,
     if (first.settledSeconds != second.settledSeconds)
         return first.settledSeconds > second.settledSeconds;
     if (first.owner != second.owner) return first.owner < second.owner;
+    if (first.budgetClass != second.budgetClass)
+        return first.budgetClass < second.budgetClass;
     return first.shardId < second.shardId;
 }
 
+bool Excluded(
+    const FractureBudgetRequest& request,
+    const FractureBudgetCandidate& candidate)
+{
+    if (candidate.owner != request.owner) return false;
+    return std::find(request.excludeShardIds.begin(),
+        request.excludeShardIds.end(), candidate.shardId) !=
+        request.excludeShardIds.end();
+}
+
 } // namespace
+
+std::size_t FractureBudget::Usage::Total() const
+{
+    std::size_t result = 0;
+    for (const auto& entry : byClass) result += entry.second;
+    return result;
+}
+
+FractureBudget::FractureBudget()
+{
+    RegisterClass({"glass.dynamic", "glass.pane", GlassPaneLimit, 0, true});
+    RegisterClass({"glass.attached", "glass.pane", GlassPaneLimit, 0, false});
+    RegisterClass({"balloon.shard", "balloon", BalloonLimit,
+        MinimumBalloonShards, true});
+}
+
+void FractureBudget::RegisterClass(const FractureBudgetClass& budgetClass)
+{
+    if (budgetClass.key.empty() || budgetClass.ownerGroup.empty() ||
+        budgetClass.perOwnerLimit == 0)
+        throw std::invalid_argument(
+            "FractureBudget class requires key, owner group and positive limit");
+    classes[budgetClass.key] = {
+        budgetClass.ownerGroup, budgetClass.perOwnerLimit,
+        budgetClass.floorCount, budgetClass.reclaimable};
+}
 
 void FractureBudget::Reset()
 {
@@ -41,40 +77,41 @@ void FractureBudget::Reset()
     totalShards = 0;
 }
 
-std::size_t& FractureBudget::CounterFor(
-    Usage& usage, FractureBudgetKind kind)
+const FractureBudget::RegisteredClass& FractureBudget::ClassFor(
+    const std::string& key) const
 {
-    switch (kind)
-    {
-    case FractureBudgetKind::GlassAttached:
-        return usage.glassAttached;
-    case FractureBudgetKind::BalloonShard:
-        return usage.balloonShards;
-    case FractureBudgetKind::GlassDynamic:
-    default:
-        return usage.glassDynamic;
-    }
+    const auto found = classes.find(key);
+    if (found == classes.end())
+        throw std::invalid_argument(
+            "Unknown fracture budget class: " + key);
+    return found->second;
 }
 
 void FractureBudget::OnShardsCreated(
-    const std::string& owner, FractureBudgetKind kind, std::size_t count)
+    const std::string& owner, const std::string& budgetClass,
+    std::size_t count)
 {
     if (count == 0) return;
+    ClassFor(budgetClass);
     Usage& usage = usageByOwner[owner];
-    CounterFor(usage, kind) += count;
+    usage.byClass[budgetClass] += count;
     totalShards += count;
 }
 
 void FractureBudget::OnShardsRemoved(
-    const std::string& owner, FractureBudgetKind kind, std::size_t count)
+    const std::string& owner, const std::string& budgetClass,
+    std::size_t count)
 {
     if (count == 0) return;
+    ClassFor(budgetClass);
     const auto found = usageByOwner.find(owner);
     if (found == usageByOwner.end()) return;
     Usage& usage = found->second;
-    std::size_t& counter = CounterFor(usage, kind);
-    const std::size_t removed = std::min(counter, count);
-    counter -= removed;
+    const auto counter = usage.byClass.find(budgetClass);
+    if (counter == usage.byClass.end()) return;
+    const std::size_t removed = std::min(counter->second, count);
+    counter->second -= removed;
+    if (counter->second == 0) usage.byClass.erase(counter);
     totalShards = removed > totalShards ? 0 : totalShards - removed;
     if (usage.Total() == 0) usageByOwner.erase(found);
 }
@@ -82,8 +119,7 @@ void FractureBudget::OnShardsRemoved(
 void FractureBudget::UpdateReclaimable(
     const FractureBudgetCandidate& candidate)
 {
-    // attached 板片是玻璃结构的一部分，永远不能作为回收候选。
-    if (candidate.kind == FractureBudgetKind::GlassAttached) return;
+    if (!ClassFor(candidate.budgetClass).reclaimable) return;
     std::vector<FractureBudgetCandidate>& candidates =
         reclaimableByOwner[candidate.owner];
     for (FractureBudgetCandidate& existing : candidates)
@@ -117,6 +153,22 @@ std::size_t FractureBudget::OwnerShards(const std::string& owner) const
     return found == usageByOwner.end() ? 0 : found->second.Total();
 }
 
+std::size_t FractureBudget::OwnerGroupShards(
+    const std::string& owner, const std::string& group) const
+{
+    const auto found = usageByOwner.find(owner);
+    if (found == usageByOwner.end()) return 0;
+    std::size_t count = 0;
+    for (const auto& entry : found->second.byClass)
+    {
+        const auto registered = classes.find(entry.first);
+        if (registered != classes.end() &&
+            registered->second.ownerGroup == group)
+            count += entry.second;
+    }
+    return count;
+}
+
 std::size_t FractureBudget::ReclaimableShards() const
 {
     std::size_t count = 0;
@@ -143,62 +195,62 @@ std::vector<FractureBudgetCandidate> FractureBudget::ReclaimableByPriority() con
 FractureBudgetDecision FractureBudget::Request(
     const FractureBudgetRequest& request) const
 {
-    FractureBudgetDecision decision;
-    if (request.count == 0)
-    {
-        decision.granted = true;
-        return decision;
-    }
+    if (request.count == 0) return FractureBudgetDecision{true, 0, false, false, {}};
+    const RegisteredClass& requestedClass = ClassFor(request.budgetClass);
 
-    const std::size_t ownerTotal = OwnerShards(request.owner);
-    const std::size_t ownerLimit =
-        request.kind == FractureBudgetKind::BalloonShard
-            ? BalloonLimit
-            : GlassPaneLimit;
-    const std::size_t ownerRemaining =
-        ownerTotal < ownerLimit ? ownerLimit - ownerTotal : 0;
+    const std::size_t ownerUsed =
+        OwnerGroupShards(request.owner, requestedClass.ownerGroup);
+    const std::size_t ownerRemaining = ownerUsed < requestedClass.perOwnerLimit
+        ? requestedClass.perOwnerLimit - ownerUsed : 0;
     const std::size_t globalRemaining =
         totalShards < GlobalLimit ? GlobalLimit - totalShards : 0;
 
-    // 只有“已落地静止足够久”的动态碎片能被回收；attached 板片不在候选里。
-    const std::vector<FractureBudgetCandidate> reclaimable =
-        ReclaimableByPriority();
+    std::vector<FractureBudgetCandidate> reclaimable = ReclaimableByPriority();
+    reclaimable.erase(std::remove_if(reclaimable.begin(), reclaimable.end(),
+        [&request](const FractureBudgetCandidate& candidate)
+        {
+            return Excluded(request, candidate);
+        }), reclaimable.end());
     std::size_t reclaimableInOwner = 0;
     for (const FractureBudgetCandidate& candidate : reclaimable)
-        if (candidate.owner == request.owner) ++reclaimableInOwner;
+    {
+        const auto registered = classes.find(candidate.budgetClass);
+        if (candidate.owner == request.owner && registered != classes.end() &&
+            registered->second.ownerGroup == requestedClass.ownerGroup)
+            ++reclaimableInOwner;
+    }
 
     const std::size_t globalCapacity = globalRemaining + reclaimable.size();
     const std::size_t ownerCapacity = ownerRemaining + reclaimableInOwner;
     std::size_t granted =
         std::min(request.count, std::min(globalCapacity, ownerCapacity));
 
-    // 玻璃 attached 板片不存在“少生成一点”的合理形态：要么切碎，要么整块掉落。
-    if (granted < request.count &&
-        request.kind == FractureBudgetKind::GlassAttached &&
-        request.allowWholePlateDrop)
+    if (granted < request.count && request.allowWholePlateDrop)
     {
+        FractureBudgetDecision decision;
         decision.dropWholePlate = true;
         return decision;
     }
 
-    // 气球爆裂至少保留 MinimumBalloonShards 片，避免“炸开以后什么都不剩”。
-    if (request.kind == FractureBudgetKind::BalloonShard)
+    if (requestedClass.floorCount > 0)
     {
         const std::size_t floorCount =
-            std::min(request.count, MinimumBalloonShards);
+            std::min(request.count, requestedClass.floorCount);
         if (granted < floorCount)
         {
             granted = floorCount;
-            decision.exceededLimit = true;
         }
     }
 
+    FractureBudgetDecision decision;
     decision.grantedCount = granted;
     decision.granted = granted > 0;
+    decision.exceededLimit =
+        requestedClass.floorCount > 0 &&
+        granted > std::min(request.count,
+            std::min(globalCapacity, ownerCapacity));
     if (granted == 0) return decision;
 
-    // 需要回收多少片：全局与单对象容量都要补足。只取静止候选，
-    // 因此“刚落地”的碎片不会被瞬间抹掉。
     const std::size_t requiredGlobal =
         granted > globalRemaining ? granted - globalRemaining : 0;
     const std::size_t requiredOwner =
@@ -209,7 +261,6 @@ FractureBudgetDecision FractureBudget::Request(
     {
         if (evictedTotal >= requiredGlobal && evictedInOwner >= requiredOwner)
             break;
-        // 全局额度已经补足时，不再牺牲其他对象的碎片去凑单对象额度。
         if (evictedTotal >= requiredGlobal && candidate.owner != request.owner)
             continue;
         decision.evictions.push_back(candidate);

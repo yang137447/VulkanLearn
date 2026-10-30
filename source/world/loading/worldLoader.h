@@ -20,6 +20,7 @@ struct WorldBuildPlan
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
     std::vector<SoftBodyObjectBuildPlan> softBodyObjectPlans;
     std::vector<GlassObjectBuildPlan> glassObjectPlans;
+    ProjectileSettings projectileSettings;
     std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
 };
 

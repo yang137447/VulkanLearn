@@ -34,10 +34,12 @@
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/physics/**` | `contracts/fracture-core.md` | — |
 | `source/physics/fracture/fractureBudget.*` | `contracts/fracture-budget.md` | — |
+| `source/physics/fracture/destructibleProfile.*`、`plateFracturePolicy.*` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/glass-fracture-runtime.md` | — |
 | `tool/fracture-core-tests/**` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/testing.md` | — |
 | `source/engine/softBodyRuntime.*` | `contracts/softbody-runtime.md`、`contracts/fracture-budget.md` | — |
 | `source/engine/glassRuntime.*` | `contracts/glass-fracture-runtime.md`、`contracts/fracture-budget.md` | — |
 | `source/engine/projectileRuntime.*` | `contracts/projectile-shooting-runtime.md` | — |
+| `source/engine/destructibleRuntime.*` | `contracts/projectile-shooting-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/softbody-runtime.md` | — |
 | `source/physics/runtime/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
 | `source/audio/**` | `contracts/audio-runtime.md`、`contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
 | `tool/physics-runtime-tests/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/testing.md` | — |

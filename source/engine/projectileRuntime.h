@@ -45,6 +45,7 @@ private:
         std::string meshKey;
         bool stuck = false;
         float stuckTimer = 0.0f;
+        float age = 0.0f;
         Eigen::Vector3f lastVelocity = Eigen::Vector3f::Zero();
         Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     };
@@ -65,6 +66,7 @@ private:
     std::vector<uint32_t> arrowIndices;
     std::string arrowMaterialKey;
     std::string arrowMaterialInstanceKey;
+    ProjectileSettings settings;
 };
 
 } // namespace VL

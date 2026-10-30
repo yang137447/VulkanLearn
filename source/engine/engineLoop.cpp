@@ -21,6 +21,7 @@
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
 #include "audio/audioRuntime.h"
+#include "engine/destructibleRuntime.h"
 #include "engine/softBodyRuntime.h"
 #include "engine/glassRuntime.h"
 #include "engine/projectileRuntime.h"
@@ -216,21 +217,6 @@ void EngineLoop::Shutdown()
     BlueprintAssetLoadSession::WaitForWorkers();
     loadedBlueprintAssets.clear();
     GetSubsystems().GetScriptRuntime().Shutdown();
-    if (softBodyRuntime)
-    {
-        softBodyRuntime->Shutdown();
-        softBodyRuntime.reset();
-    }
-    if (glassRuntime)
-    {
-        glassRuntime->Shutdown();
-        glassRuntime.reset();
-    }
-    if (projectileRuntime)
-    {
-        projectileRuntime->Shutdown();
-        projectileRuntime.reset();
-    }
     if (fractureWorld)
     {
         fractureWorld->Clear();
@@ -261,6 +247,21 @@ void EngineLoop::Shutdown()
         }
 
         rendererBackend->WaitIdle();
+        // 碎片池/箭矢网格可能仍被上一帧 command buffer 引用；必须等 WaitIdle
+        // 之后再销毁，不能跟随 CPU/物理对象一起提前释放。
+        if (destructibleRuntimes)
+        {
+            destructibleRuntimes->Shutdown();
+            destructibleRuntimes.reset();
+        }
+        if (projectileRuntime)
+        {
+            if (const auto activeWorld =
+                    GetSubsystems().GetWorldManager().GetActiveWorld())
+                projectileRuntime->Clear(*activeWorld);
+            projectileRuntime->Shutdown();
+            projectileRuntime.reset();
+        }
         thumbnailSession.reset();
         thumbnailRequest.reset();
         if (uiSubsystem)
@@ -394,20 +395,22 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     fractureWorld = std::make_unique<Physics::FractureImpactWorld>();
     // 全场景碎片预算也是单实例：玻璃/气球通过它统一降级，World 换代归零。
     fractureBudget = std::make_unique<Physics::Fracture::FractureBudget>();
-    softBodyRuntime = std::make_unique<SoftBodyRuntime>(
+    destructibleRuntimes = std::make_unique<DestructibleRuntimeRegistry>(
+        GetSubsystems().GetDiagnosticsSubsystem());
+    destructibleRuntimes->Add(std::make_unique<SoftBodyRuntime>(
         *rendererBackend,
         GetSubsystems().GetDiagnosticsSubsystem(),
         audioRuntime.get(),
         *fractureWorld,
         *fractureBudget,
-        *this);
-    glassRuntime = std::make_unique<GlassRuntime>(
+        *destructibleRuntimes));
+    destructibleRuntimes->Add(std::make_unique<GlassRuntime>(
         *rendererBackend,
         GetSubsystems().GetDiagnosticsSubsystem(),
         audioRuntime.get(),
         *fractureWorld,
         *fractureBudget,
-        *this);
+        *destructibleRuntimes));
     projectileRuntime = std::make_unique<ProjectileRuntime>(
         *rendererBackend,
         GetSubsystems().GetDiagnosticsSubsystem(),
@@ -597,8 +600,7 @@ void EngineLoop::Tick()
         &GetSubsystems().GetInputSubsystem(),
         &GetSubsystems().GetScriptRuntime(),
         uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr,
-        softBodyRuntime.get(),
-        glassRuntime.get(),
+        destructibleRuntimes.get(),
         projectileRuntime.get());
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
@@ -780,11 +782,37 @@ void EngineLoop::Tick()
         scripts.Tick(world, simulationDelta,
             GetSubsystems().GetInputSubsystem().GetActionState(),
             GetSubsystems().GetDiagnosticsSubsystem());
-        if (world && !RenderSystem::GetInstance().IsOfflineMode() && fractureWorld)
+        const bool offline = RenderSystem::GetInstance().IsOfflineMode();
+        const bool nativeGameplay = world && world->IsNativeGameplay();
+        const bool sessionActive = world && !offline &&
+            (nativeGameplay || !scripts.IsEditing());
+        const bool gameplayActive = sessionActive &&
+            (nativeGameplay || !scripts.IsPaused());
+        const bool editingNow =
+            world && !offline && !nativeGameplay && scripts.IsEditing();
+        if (editingNow && destructibleSessionActive)
         {
-            // 共享冲击世界每帧只步进一次；事件再分发给各破碎运行时。
-            const std::vector<Physics::FractureImpact> impacts =
-                fractureWorld->Step(simulationDelta);
+            // Stop 进入 Editing 时恢复作者场景；Pause 只冻结，不重置。
+            if (destructibleRuntimes) destructibleRuntimes->Reset(*world);
+            if (fractureBudget) fractureBudget->Reset();
+            if (projectileRuntime) projectileRuntime->Clear(*world);
+        }
+        destructibleSessionActive = sessionActive;
+
+        std::vector<Physics::FractureImpact> impacts;
+        if (gameplayActive && fractureWorld)
+        {
+            try
+            {
+                // 共享冲击世界每帧只步进一次；事件再分发给 registry。
+                impacts = fractureWorld->Step(simulationDelta);
+            }
+            catch (const std::exception& error)
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+                    std::string("Fracture physics step failed: ") +
+                    error.what());
+            }
             const auto& input = GetSubsystems().GetInputSubsystem().GetActionState();
             if (projectileRuntime && world->GetRenderCamera() &&
                 input.gameplay.contains("actions") &&
@@ -793,17 +821,13 @@ void EngineLoop::Tick()
             {
                 projectileRuntime->Fire(*world, *world->GetRenderCamera());
             }
-            if (softBodyRuntime) softBodyRuntime->HandleImpacts(*world, impacts);
-            if (glassRuntime) glassRuntime->HandleImpacts(*world, impacts);
-            if (softBodyRuntime) softBodyRuntime->Tick(*world, simulationDelta);
-            if (glassRuntime) glassRuntime->Tick(*world, simulationDelta);
+            if (destructibleRuntimes)
+            {
+                destructibleRuntimes->HandleImpacts(*world, impacts);
+                destructibleRuntimes->Tick(*world, simulationDelta);
+            }
             if (projectileRuntime)
                 projectileRuntime->Tick(*world, simulationDelta, impacts);
-        }
-        else
-        {
-            if (world && softBodyRuntime) softBodyRuntime->Tick(*world, simulationDelta);
-            if (world && glassRuntime) glassRuntime->Tick(*world, simulationDelta);
         }
         if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode())
@@ -1931,17 +1955,6 @@ void EngineLoop::ProcessAutomaticShaderReloads()
         GetSubsystems().GetDiagnosticsSubsystem());
 }
 
-void EngineLoop::EvictFractureBudgetShards(
-    const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates)
-{
-    // 候选可能同时属于玻璃和气球；两个运行时各自按 owner 过滤，
-    // 因此这里不需要预先分组，也不会把别人的碎片误删。
-    if (glassRuntime)
-        glassRuntime->EvictFractureBudgetShards(candidates);
-    if (softBodyRuntime)
-        softBodyRuntime->EvictFractureBudgetShards(candidates);
-}
-
 RuntimeResult<WorldHandle>
 EngineLoop::ExecuteWorldGraphTransaction(
     const std::string& scenePath,
@@ -1998,8 +2011,8 @@ EngineLoop::ExecuteWorldGraphTransaction(
         if (projectileRuntime && activeWorld) projectileRuntime->Clear(*activeWorld);
         if (activeWorld)
         {
-            if (softBodyRuntime) softBodyRuntime->SynchronizeWorld(*activeWorld);
-            if (glassRuntime) glassRuntime->SynchronizeWorld(*activeWorld);
+            if (destructibleRuntimes)
+                destructibleRuntimes->SynchronizeWorld(*activeWorld);
             if (projectileRuntime) projectileRuntime->SynchronizeWorld(*activeWorld);
         }
         GetSubsystems().GetScriptRuntime().SynchronizeWorld(

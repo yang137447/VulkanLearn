@@ -16,6 +16,7 @@
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
 #include "world/worldSnapshot.h"
+#include "world/projectileSettings.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
@@ -96,6 +97,7 @@ struct WorldMeshObject
 struct WorldSoftBodyObject
 {
     std::string name;
+    std::string profileKey;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
@@ -118,6 +120,7 @@ struct WorldSoftBodyObject
 struct WorldGlassObject
 {
     std::string name;
+    std::string profileKey;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
@@ -145,6 +148,16 @@ public:
 
     uint64_t GetGeneration() const { return generation; }
     const std::string& GetScenePath() const { return scenePath; }
+    bool IsNativeGameplay() const { return nativeGameplay; }
+    void SetNativeGameplay(bool value) { nativeGameplay = value; }
+    const ProjectileSettings& GetProjectileSettings() const
+    {
+        return projectileSettings;
+    }
+    void SetProjectileSettings(ProjectileSettings value)
+    {
+        projectileSettings = std::move(value);
+    }
 
     void SetViewTarget(std::shared_ptr<SceneNode> viewTarget);
     std::weak_ptr<SceneNode> GetViewTarget() const { return viewTarget; }
@@ -285,6 +298,9 @@ private:
 
     uint64_t generation = 0;
     std::string scenePath;
+    // 无 C# Play 状态的 native 试玩场景；编辑器场景保持 authoring。
+    bool nativeGameplay = false;
+    ProjectileSettings projectileSettings;
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     std::shared_ptr<Camera> editorCamera;

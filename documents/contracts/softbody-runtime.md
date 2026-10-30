@@ -20,9 +20,17 @@
 | `burstStrain` | number | `> 0` |
 | `restContraction` | number | `(0, 1]` |
 | `seed` | unsigned integer | 破裂拓扑的确定性种子 |
+| `profile` | string | 可选；缺省 `balloon.default` |
 
 `HasSupportedSceneObjectTypes` 认可 `balloon`，因此 UI 场景选择器不会把它当成未知场景。
 离线渲染路径拒绝 balloon；当前只有实时路径创建软体。
+
+## 破坏 profile
+
+`DestructibleProfile` 提供爆裂速度阈值、径向/切向冲量、软片阻尼、漏气重力/
+阻尼/喷气自旋/破口扩张、摩擦恢复和 `balloon.shard` 预算类。运行时缺省使用
+`balloon.default`，新增气球材质只需注册 profile，不再改 `SoftBodyRuntime`
+常量。
 
 ## 资源与 World 数据
 
@@ -75,7 +83,8 @@
 
 ## 漏气（低能量命中）
 
-Jolt 冲击的相对速度低于 `4.0 m/s` 时不爆裂，而是进入漏气状态：
+Jolt 冲击的相对速度低于 profile 的 `burstSpeedMps`（默认 `4.0 m/s`）时不爆裂，
+而是进入漏气状态：
 
 1. 壳的重力设为 `(0,-981,0)`，气球开始下落；
 2. 阻尼设为 `3 s^-1`，并施加整体向内的 `ApplyDeflateImpulse`；
@@ -87,6 +96,8 @@ Jolt 冲击的相对速度低于 `4.0 m/s` 时不爆裂，而是进入漏气状�
 5. 渲染破口：`SetRenderHole` 在 `BuildRenderMesh` 中跳过命中点附近的三角面
    （0.12 → 0.22 rad 随泄压扩大）；只是渲染挖洞，粒子与约束仍保持闭合；
 6. 播放 1.15 秒资产嘶声 + 反向充气膜层；资产缺失时回退 0.9 秒程序化嘶声。
+
+漏气时静态球 proxy 每帧跟随软壳包围中心移动，避免箭命中气球旧位置。
 
 漏气状态不参与 `ShouldBurst`，因此不会在塌陷过程中意外二次爆裂。
 
@@ -101,12 +112,12 @@ Jolt 冲击的相对速度低于 `4.0 m/s` 时不爆裂，而是进入漏气状�
 - 爆裂后每个软片注册一个动态 Jolt convex hull proxy，同样标记 `Balloon`；
   点集不足时回退球体，初始速度和中心来自软片粒子平均；
 - 调试/游戏投射物是动态球体，位置/速度从厘米边界换算成米；
-- `ContactListener::OnContactAdded` 产出 `FractureImpact`（balloon name、接触点、法线、
-  相对速度、material profile）；
+- `ContactListener::OnContactAdded` 产出 `FractureImpact`（targetRole、contact、
+  接触点、法线、相对速度、material profile）；
 - `SoftBodyRuntime::HandleImpacts` 只消费 `materialProfile == Balloon` 的事件，
   再按命中速度调用 `BurstInstance` 或漏气；
 - 调 `softbody impact <name> [speed]` 时从 `+Z` 方向发射球体，默认速度 800 cm/s；
-- shard 与地面接触产出 `ShardLanding` 事件，驱动软片落地音；
+- shard 与地面接触产出 `targetRole=FreeShard, contact=Resting` 事件，驱动软片落地音；
 - 球面碎片使用 `impactBias=0.88` 的环状种子分布；单气球最多 48 片；
 - 调试地面是 Jolt 静态盒，顶面位于 `y=-100 cm`；World 换代、`Shutdown` 或 `Clear`
   会移除 balloon/shard/projectile body。
@@ -122,7 +133,7 @@ Jolt 注册由 `physics/runtime/joltRuntime.*` 的进程级 token 统一拥有�
 - 爆裂优先使用 `Common/Audio/balloon_pop.wav`（CC0）的真实录音，再叠加
   压力脉冲、橡胶回弹和尾部 flutter；
 - 漏气优先使用 `gas_leak.wav` + 反向 `balloon_inflate.wav`；资产缺失时回退
-  分层程序化样本；
+  分层程序化样本；`ImpactAudioEvent` 统一选择 Burst/Leak/Landing；
 - 软片落地音是 0.10 秒的衰减共振/噪声点击，按距离/方向做衰减与 pan，
   最近邻事件有 24 ms 冷却；
 - 资产在启动时预加载并重采样到 48 kHz，播放时只复制样本，不阻塞 GT；
@@ -130,7 +141,8 @@ Jolt 注册由 `physics/runtime/joltRuntime.*` 的进程级 token 统一拥有�
 
 ## 当前边界
 
-- 软片 Jolt 代理是凸包；软片之间的接触由 Jolt 解析，并产出 `ShardHit` 声音事件；
+- 软片 Jolt 代理是凸包；软片之间的接触由 Jolt 解析，并产出 FreeShard 事件，
+  驱动橡胶落地音；
 - 非 neck shard 的 XPBD 粒子由 Jolt body 的世界姿态增量驱动，再做局部软体求解；
   这不是统一的 deformable-hull 求解器，neck shard 仍是纯 XPBD。
 - 地面是固定 `y=-100 cm` 的调试平面，不是场景网格碰撞。

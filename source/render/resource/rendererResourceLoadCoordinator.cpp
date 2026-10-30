@@ -88,6 +88,30 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     // Delegate renderer-facing resource creation by scene object type.
     // Gameplay-facing camera/light/environment metadata is owned by WorldBuilder.
     const nlohmann::json& scnJson = worldBuildPlan.sceneJson;
+    if (scnJson.contains("projectile"))
+    {
+        const auto& projectile = scnJson.at("projectile");
+        const std::string materialPath =
+            projectile.at("materialInstance").get<std::string>();
+        const std::shared_ptr<MaterialInstance> materialInstance =
+            materialLoader.LoadSceneMaterialInstance(materialPath);
+        if (!materialInstance)
+            throw std::runtime_error(
+                "Projectile material instance was not created: " +
+                materialPath);
+        loadResult.projectileSettings.materialKey =
+            materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
+        loadResult.projectileSettings.materialInstanceKey =
+            materialInstance->GetName();
+        loadResult.projectileSettings.speedCmPerSecond =
+            projectile.value("speed", 3500.0f);
+        loadResult.projectileSettings.radiusCm =
+            projectile.value("radius", 1.5f);
+        loadResult.projectileSettings.massKg =
+            projectile.value("mass", 0.08f);
+        loadResult.projectileSettings.cooldownSeconds =
+            projectile.value("cooldown", 0.15f);
+    }
     for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
     {
         const auto& obj = objectPlan.componentObject ? *objectPlan.componentObject :
@@ -132,6 +156,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             SoftBodyObjectBuildPlan plan;
             plan.objectName = objectPlan.objectName;
             plan.sceneObjectIdentity = objectPlan.objectName;
+            plan.profileKey = obj.value("profile", "");
             plan.scenePosition = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("position"));
             plan.sceneRotation = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("rotation"));
             plan.sceneScale = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("scale"));
@@ -167,6 +192,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             GlassObjectBuildPlan plan;
             plan.objectName = objectPlan.objectName;
             plan.sceneObjectIdentity = objectPlan.objectName;
+            plan.profileKey = obj.value("profile", "");
             plan.scenePosition = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("position"));
             plan.sceneRotation = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("rotation"));
             plan.sceneScale = JsonParser::ParseValue<Eigen::Vector3f>(obj.at("scale"));

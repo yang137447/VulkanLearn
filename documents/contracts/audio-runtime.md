@@ -56,10 +56,9 @@ bit depth 会被拒绝。
 
 优先级从高到低：
 
-1. `Impact`：气球爆裂（`PlayBalloonBurst`）与玻璃破碎（`PlayGlassShatter`）；
-2. `Leak`：气球漏气（`PlayBalloonLeak`）；
-3. `Landing`：气球碎片落地（`PlayShardLanding`）与玻璃碎片落地
-   （`PlayGlassShardLanding`）。
+1. `Impact`：`Burst` / `Shatter` / `Crack`；
+2. `Leak`：`Leak`；
+3. `Landing`：`Landing` / `Subfracture`。
 
 池满时按以下顺序挑选被抢占的 voice：
 
@@ -86,8 +85,9 @@ bit depth 会被拒绝。
 - 输出做硬限幅到 `[-1, 1]`，并拦截非有限值。
 
 `EngineLoop::Tick` 每帧调用一次 `AudioRuntime::Update()`。`Update` 以
-128 帧为单位把 SDL 流补到约 `2048` 帧（≈42.7 ms）的排队深度；单次最多补
-`24` 个 block（3072 帧）。事件提交时也会立即 `Pump` 一次以降低延迟。
+128 帧为单位把 SDL 流补到约 `1024` 帧（≈21 ms）的排队深度；在 60 FPS
+下至少覆盖一帧，单次最多补 `24` 个 block 只作为掉帧保护。事件提交后会立即
+`Pump`，但已经排队的旧样本不会被缩短，实时延迟由目标队列深度决定。
 没有活动 voice 时仍然写静音块，保持设备流连续。
 
 混音在 GT 上同步完成，不使用 SDL 回调线程；因此 GT 长时间卡顿时音频可能
@@ -139,23 +139,27 @@ block 重算，listener 在一个 block 内视为静止。
 
 ## 设备不可用
 
-SDL 音频子系统或播放设备打开失败时只报告一次 warning，之后所有 `Play*`
+SDL 音频子系统或播放设备打开失败时只报告一次 warning，之后 `PlayImpact`
 静默跳过；渲染、物理和 GT 循环不受影响。
 
 ## 声音内容
 
+运行时只发 `ImpactAudioEvent { audioProfile, kind, position, intensity,
+sizeScale, seed }`。`audioProfile` 选择玻璃/气球，`kind` 选择 Crack/Shatter/
+Leak/Burst/Landing/Subfracture；具体采样选择留在 `AudioRuntime` 内部。
 资产存在时，录音负责提供材质与尾音，程序化层只补齐命中同步和低频体感：
 
-| API | 资产路径 | 程序化叠加 |
+| audioProfile + kind | 资产路径 | 程序化叠加 |
 | --- | --- | --- |
-| `PlayBalloonBurst` | `balloon_pop.wav` 的 0.56 s 片段，3 个播放速率变体 | 78 Hz 压力脉冲 + 橡胶回弹 + 尾部 flutter |
-| `PlayBalloonLeak` | `gas_leak.wav` 1.15 s + 反向 `balloon_inflate.wav` 0.55 混音增益 | 150 Hz 轻微橡胶抖动 |
-| `PlayGlassShatter` | `glass_break.wav` 截掉前 52 ms 的 0.58 s 片段，3 个速率变体 | 同步高通 click + 118 Hz 低频冲击 |
-| `PlayGlassCrack` | 同一录音的 0.16 s 攻击切片 | 高频 click + 5200/7800 Hz 短模态 |
-| `PlayGlassShardLanding` | 破碎尾音的 4 个位置 × 3 个速率切片 | 同步噪声 click |
-| `PlayShardLanding` | 无（橡胶碎片保持程序化） | 衰减共振 + 噪声点击 |
+| `balloon` + `Burst` | `balloon_pop.wav` 的 0.56 s 片段，3 个播放速率变体 | 78 Hz 压力脉冲 + 橡胶回弹 + 尾部 flutter |
+| `balloon` + `Leak` | `gas_leak.wav` 1.15 s + 反向 `balloon_inflate.wav` 0.55 混音增益 | 150 Hz 轻微橡胶抖动 |
+| `balloon` + `Landing` | 无（橡胶碎片保持程序化） | 衰减共振 + 噪声点击 |
+| `glass` + `Shatter` | `glass_break.wav` 截掉前 52 ms 的 0.58 s 片段，3 个速率变体 | 同步高通 click + 118 Hz 低频冲击 |
+| `glass` + `Crack` | 同一录音的 0.16 s 攻击切片 | 高频 click + 5200/7800 Hz 短模态 |
+| `glass` + `Landing` | 破碎尾音的 4 个位置 × 3 个速率切片 | 同步噪声 click |
+| `glass` + `Subfracture` | 同 Crack 切片，降低强度 | 高频 click |
 
-任一路径缺失时，对应 API 完整回退到原有程序化合成（气球爆裂 0.55 s、
+任一路径缺失时，对应事件完整回退到原有程序化合成（气球爆裂 0.55 s、
 漏气 0.90 s、玻璃破碎 0.48 s、开裂 0.14 s、玻璃落地 0.12 s）。
 
 ## 测试

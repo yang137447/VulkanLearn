@@ -8,39 +8,22 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+#include "physics/fracture/fractureTypes.h"
+
 namespace VL::Physics
 {
 
-enum class FractureImpactType
-{
-    BalloonHit,
-    PaneHit,
-    // 命中“裂而不掉”的玻璃板片：该板片随后转成动态碎片。
-    AttachedHit,
-    ShardLanding,
-    ShardHit
-};
-
-// 目标材质 profile。冲击世界把 proxy 注册时的 profile 写进每个事件，
-// 气球/玻璃运行时据此选择破坏策略和音频，而不是靠对象名或事件顺序猜。
-// Generic 留给尚未接入专用运行时的目标。
-enum class FractureMaterialProfile
-{
-    Generic = 0,
-    Glass,
-    Balloon
-};
-
-const char* FractureMaterialProfileName(FractureMaterialProfile profile);
-
-// 一次原生 Jolt 接触事件。objectName 是 balloon 或 glassPane 的场景对象名；
-// shardName 只在碎片事件里有值。位置/法线是项目厘米单位；
+// 一次原生 Jolt 接触事件。targetRole 描述被撞对象在结构中的角色，contact
+// 描述接触形态；materialProfile 才是材质分派键。objectName 是场景对象名，
+// shardName 只在 attached/free shard 事件里有值。位置/法线是项目厘米单位；
 // relativeSpeed 是接触时的速度大小（米/秒，与 Jolt 一致）。
 struct FractureImpact
 {
-    FractureImpactType type = FractureImpactType::BalloonHit;
+    FractureBodyRole targetRole = FractureBodyRole::StaticTarget;
+    FractureContactKind contact = FractureContactKind::Impact;
     FractureMaterialProfile materialProfile =
         FractureMaterialProfile::Generic;
+    uint32_t targetBodyId = 0;
     std::string objectName;
     std::string shardName;
     Eigen::Vector3f point = Eigen::Vector3f::Zero();
@@ -88,6 +71,7 @@ public:
         const Eigen::Quaternionf& rotation, const Eigen::Vector3f& velocity,
         float mass, const std::vector<Eigen::Vector3f>& localHullPoints,
         FractureMaterialProfile profile,
+        float friction = 0.35f, float restitution = 0.12f,
         const Eigen::Vector3f& angularVelocity = Eigen::Vector3f::Zero(),
         bool dynamic = true);
     void RemoveShard(const std::string& objectName, const std::string& shardName);
@@ -103,9 +87,14 @@ public:
     // 在命中点冻结姿态。
     uint32_t LaunchProjectile(const Eigen::Vector3f& position,
         const Eigen::Vector3f& velocity, float radius, float mass);
+    // 主动取消未命中的投射物；TTL/越界/数量上限都应由投射物 owner 调用。
+    void CancelProjectile(uint32_t projectileId);
     bool HasProjectile(uint32_t projectileId) const;
     std::optional<FractureShardPose> GetProjectilePose(uint32_t projectileId) const;
     std::optional<Eigen::Vector3f> GetProjectileVelocity(uint32_t projectileId) const;
+    // 漏气/移动中的静态球代理需要跟随软壳；只移动 body，不改变形状。
+    void SetSphereProxyPose(
+        const std::string& name, const Eigen::Vector3f& center);
 
     // 输入输出均为厘米；内部只在 Jolt 边界换算成米。
     std::vector<FractureImpact> Step(float deltaSeconds);

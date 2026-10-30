@@ -65,6 +65,24 @@
             "type": "string",
             "const": "cm",
             "description": "场景位置、尺寸、裁剪面和导入后的世界长度均使用厘米。"
+        },
+        "runtimeMode": {
+            "type": "string",
+            "enum": ["authoring", "gameplay"],
+            "description": "gameplay 表示没有 C# Play 状态的 native 试玩场景，进入 World 后直接推进破碎/投射物物理；缺省 authoring。"
+        },
+        "projectile": {
+            "type": "object",
+            "description": "可选投射物配方；配置后 projectileRuntime 使用显式材质和弹道参数，不再扫描场景对象猜材质。",
+            "properties": {
+                "materialInstance": {"type": "string", "minLength": 1},
+                "speed": {"type": "number", "exclusiveMinimum": 0},
+                "radius": {"type": "number", "exclusiveMinimum": 0},
+                "mass": {"type": "number", "exclusiveMinimum": 0},
+                "cooldown": {"type": "number", "minimum": 0}
+            },
+            "required": ["materialInstance"],
+            "additionalProperties": false
         }
     },
     "required": [
@@ -390,6 +408,11 @@
                     "type": "string",
                     "minLength": 1
                 },
+                "profile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选破坏 profile；空/缺省使用 balloon.default。"
+                },
                 "radius": {
                     "type": "number",
                     "exclusiveMinimum": 0
@@ -465,6 +488,11 @@
                 "materialInstance": {
                     "type": "string",
                     "minLength": 1
+                },
+                "profile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选破坏 profile；空/缺省使用 glass.default。"
                 },
                 "width": {
                     "type": "number",

@@ -10,10 +10,12 @@
 #include <Eigen/Geometry>
 
 #include "physics/fracture/fractureBudget.h"
+#include "physics/fracture/destructibleProfile.h"
 #include "physics/fracture/fragmentMesh.h"
 #include "physics/fracture/glassDamagePolicy.h"
 #include "physics/fracture/planarFracture.h"
 #include "physics/runtime/fractureImpactWorld.h"
+#include "engine/destructibleRuntime.h"
 #include "world/world.h"
 
 class RenderableObject;
@@ -28,7 +30,7 @@ class RendererBackendVulkan;
 
 // GT 侧玻璃破碎运行时。完整板、冲击点局部 Voronoi 碎片、Jolt 凸包代理和
 // 落地二次碎裂都在运行时生成；不读取任何预制断裂图案。
-class GlassRuntime
+class GlassRuntime : public DestructibleRuntime
 {
 public:
     GlassRuntime(
@@ -41,16 +43,21 @@ public:
     ~GlassRuntime();
 
     void SynchronizeWorld(World& world);
+    bool ContainsTarget(const std::string& name,
+        Physics::FractureMaterialProfile material) const override;
     // 共享冲击世界由 EngineLoop 每帧步进一次；这里只消费与 glassPane 有关的事件。
     void HandleImpacts(World& world,
         const std::vector<Physics::FractureImpact>& impacts);
     void Tick(World& world, float deltaSeconds);
+    void Reset(World& world) override;
+    void LaunchDebugImpact(const std::string& target, float speed) override;
     // 调试/游戏冲击入口：从板面法线方向发射一个动态球体。
     void LaunchImpact(const std::string& paneName, float speed);
     // 全局预算的回收入口：只处理属于本运行时的候选，其余候选忽略。
     void EvictFractureBudgetShards(
-        const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates);
-    void Shutdown();
+        const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates)
+        override;
+    void Shutdown() override;
 
 private:
     struct Shard
@@ -58,6 +65,8 @@ private:
         std::string name;
         // 碎片自身局部平面轮廓，质心在原点；二次碎裂直接用它。
         Physics::Fracture::PlanarShard outline;
+        // 轮廓面积是世界尺度还是局部尺度必须明确；破坏阈值使用 worldArea。
+        double worldArea = 0.0;
         double thickness = 0.6;
         int depth = 0;
         bool hasBody = false;
@@ -87,6 +96,7 @@ private:
         };
 
         WorldGlassObject descriptor;
+        Physics::Fracture::DestructibleProfile profile;
         Eigen::Quaternionf rotation = Eigen::Quaternionf::Identity();
         float scale = 1.0f;
         bool fractured = false;
@@ -137,7 +147,7 @@ private:
     void CollectShardMeshes();
     void AddIntactMesh(World& world, Instance& instance);
     void RemoveMeshObject(World& world, const std::string& meshObjectName,
-        const std::string& meshKey);
+        const std::string& meshKey, bool returnToShardPool = false);
     std::string BuildMeshKey(
         const World& world, const std::string& paneName,
         const std::string& suffix) const;
@@ -147,7 +157,7 @@ private:
     void ShatterAttachedShard(
         World& world, Instance& instance, const std::string& shardName,
         const Eigen::Vector3f& worldImpactPoint);
-    void SplitShard(
+    bool SplitShard(
         World& world, Instance& instance, const std::string& shardName,
         float impactSpeed, bool projectileImpact);
     float CameraDistance(const Eigen::Vector3f& worldPosition) const;

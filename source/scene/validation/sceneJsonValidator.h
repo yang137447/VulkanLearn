@@ -9,6 +9,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "world/environmentType.h"
 #include "script/scriptScene.h"
+#include "physics/fracture/destructibleProfile.h"
 
 namespace VL
 {
@@ -36,6 +37,24 @@ inline void ValidateSceneEnvironmentJson(const nlohmann::json& object)
             throw std::invalid_argument(std::string("Sky requires finite number: ") + field);
 }
 
+inline void ValidateDestructibleProfileKey(
+    const nlohmann::json& object, VL::Physics::FractureMaterialProfile expected)
+{
+    if (!object.contains("profile")) return;
+    if (!object.at("profile").is_string() ||
+        object.at("profile").get<std::string>().empty())
+        throw std::invalid_argument("Destructible profile must be a non-empty string");
+    const auto* profile = VL::Physics::Fracture::FindDestructibleProfile(
+        object.at("profile").get<std::string>());
+    if (!profile)
+        throw std::invalid_argument(
+            "Unknown destructible profile: " +
+            object.at("profile").get<std::string>());
+    if (profile->materialProfile != expected)
+        throw std::invalid_argument(
+            "Destructible profile material does not match object type");
+}
+
 // loader 与资产草稿共用的作者数据校验；不读模型、不创建 World 或 GPU 资源。
 inline void ValidateSceneAssetJson(const nlohmann::json& scene)
 {
@@ -45,6 +64,33 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         !scene.at("description").is_string() || scene.at("description").get<std::string>().empty() ||
         !scene.contains("objects") || !scene.at("objects").is_array())
         throw std::invalid_argument("Scene requires non-empty description and objects array");
+    if (scene.contains("runtimeMode"))
+    {
+        const std::string mode = scene.at("runtimeMode").is_string()
+            ? scene.at("runtimeMode").get<std::string>() : "";
+        if (mode != "authoring" && mode != "gameplay")
+            throw std::invalid_argument(
+                "Scene runtimeMode must be authoring or gameplay");
+    }
+    if (scene.contains("projectile"))
+    {
+        const auto& projectile = scene.at("projectile");
+        if (!projectile.is_object())
+            throw std::invalid_argument("Scene projectile must be an object");
+        if (!projectile.contains("materialInstance") ||
+            !projectile.at("materialInstance").is_string() ||
+            projectile.at("materialInstance").get<std::string>().empty())
+            throw std::invalid_argument(
+                "Scene projectile requires materialInstance path");
+        if (projectile.contains("speed"))
+            ReadPhysicalNumber(projectile, "speed", 0, 1.0e6);
+        if (projectile.contains("radius"))
+            ReadPhysicalNumber(projectile, "radius", 0, 1.0e6);
+        if (projectile.contains("mass"))
+            ReadPhysicalNumber(projectile, "mass", 0, 1.0e6);
+        if (projectile.contains("cooldown"))
+            ReadPhysicalNumber(projectile, "cooldown", 0, 1.0e6);
+    }
     if (scene.contains("spawnAssets"))
     {
         const auto& paths = scene.at("spawnAssets");
@@ -130,6 +176,8 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "balloon")
         {
+            ValidateDestructibleProfileKey(
+                object, VL::Physics::FractureMaterialProfile::Balloon);
             if (!object.contains("materialInstance") ||
                 !object.at("materialInstance").is_string() ||
                 object.at("materialInstance").get<std::string>().empty())
@@ -157,6 +205,8 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "glassPane")
         {
+            ValidateDestructibleProfileKey(
+                object, VL::Physics::FractureMaterialProfile::Glass);
             if (!object.contains("materialInstance") ||
                 !object.at("materialInstance").is_string() ||
                 object.at("materialInstance").get<std::string>().empty())

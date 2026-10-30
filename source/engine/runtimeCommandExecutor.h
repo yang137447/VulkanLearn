@@ -19,8 +19,7 @@ class DiagnosticsSubsystem;
 class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
-class SoftBodyRuntime;
-class GlassRuntime;
+class DestructibleRuntimeRegistry;
 class ProjectileRuntime;
 class WorldTransitionCoordinator;
 class ScriptRuntimeSubsystem;
@@ -76,8 +75,7 @@ public:
         InputSubsystem* input = nullptr,
         ScriptRuntimeSubsystem* scripts = nullptr,
         Editor::SceneDocumentService* sceneDocuments = nullptr,
-        SoftBodyRuntime* softBodyRuntime = nullptr,
-        GlassRuntime* glassRuntime = nullptr,
+        DestructibleRuntimeRegistry* destructibleRuntimes = nullptr,
         ProjectileRuntime* projectileRuntime = nullptr) const;
 
 private:
@@ -93,8 +91,7 @@ private:
         InputSubsystem* input,
         ScriptRuntimeSubsystem* scripts,
         Editor::SceneDocumentService* sceneDocuments,
-        SoftBodyRuntime* softBodyRuntime,
-        GlassRuntime* glassRuntime,
+        DestructibleRuntimeRegistry* destructibleRuntimes,
         ProjectileRuntime* projectileRuntime) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,

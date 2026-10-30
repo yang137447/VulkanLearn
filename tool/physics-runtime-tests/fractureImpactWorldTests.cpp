@@ -34,7 +34,8 @@ TEST(FractureImpactWorld, ProjectileContactReportsNamedSphere)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::BalloonHit);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::StaticTarget);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Balloon);
     EXPECT_EQ(impacts.front().objectName, "RubberBalloon");
@@ -58,7 +59,8 @@ TEST(FractureImpactWorld, ProjectileContactReportsNamedPane)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::PaneHit);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::StaticTarget);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Glass);
     EXPECT_EQ(impacts.front().objectName, "WindowGlass");
@@ -86,14 +88,15 @@ TEST(FractureImpactWorld, ShardContactWithGroundReportsLanding)
     world.RegisterShard("WindowGlass", "WindowGlass~shard0",
         Eigen::Vector3f(0.0f, -90.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f(0.0f, -500.0f, 0.0f), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Glass);
+        FractureMaterialProfile::Glass, 0.35f, 0.12f);
 
     std::vector<FractureImpact> impacts;
     for (int step = 0; step < 60 && impacts.empty(); ++step)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::ShardLanding);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::FreeShard);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Resting);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Glass);
     EXPECT_EQ(impacts.front().objectName, "WindowGlass");
@@ -107,14 +110,15 @@ TEST(FractureImpactWorld, BalloonShardLandingKeepsBalloonProfile)
     world.RegisterShard("RubberBalloon", "RubberBalloon~shard0",
         Eigen::Vector3f(0.0f, -90.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f(0.0f, -500.0f, 0.0f), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Balloon);
+        FractureMaterialProfile::Balloon, 0.35f, 0.12f);
 
     std::vector<FractureImpact> impacts;
     for (int step = 0; step < 60 && impacts.empty(); ++step)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::ShardLanding);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::FreeShard);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Resting);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Balloon);
     EXPECT_EQ(impacts.front().objectName, "RubberBalloon");
@@ -126,18 +130,19 @@ TEST(FractureImpactWorld, ConvexShardPairResolvesMutualContact)
     world.RegisterShard("WindowGlass", "shardA",
         Eigen::Vector3f(-20.0f, 0.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f(120.0f, 0.0f, 0.0f), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Glass);
+        FractureMaterialProfile::Glass, 0.35f, 0.12f);
     world.RegisterShard("WindowGlass", "shardB",
         Eigen::Vector3f(20.0f, 0.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f(-120.0f, 0.0f, 0.0f), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Glass);
+        FractureMaterialProfile::Glass, 0.35f, 0.12f);
 
     std::vector<FractureImpact> impacts;
     for (int step = 0; step < 60 && impacts.empty(); ++step)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::ShardHit);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::FreeShard);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
     EXPECT_GE(impacts.front().relativeSpeed, 0.0f);
 }
 
@@ -147,7 +152,7 @@ TEST(FractureImpactWorld, ShardAngularVelocityRotatesTheBody)
     world.RegisterShard("balloon", "balloon~spin",
         Eigen::Vector3f(0.0f, 200.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f::Zero(), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Balloon,
+        FractureMaterialProfile::Balloon, 0.35f, 0.12f,
         Eigen::Vector3f(0.0f, 8.0f, 0.0f));
     for (int step = 0; step < 10; ++step) world.Step(1.0f / 60.0f);
 
@@ -163,7 +168,7 @@ TEST(FractureImpactWorld, ProjectileHitsStaticAttachedPlate)
     world.RegisterShard("WindowGlass", "WindowGlass~frag0",
         Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f::Zero(), 0.2f, CubePoints(10.0f),
-        FractureMaterialProfile::Glass,
+        FractureMaterialProfile::Glass, 0.35f, 0.12f,
         Eigen::Vector3f::Zero(), false);
     world.LaunchProjectile(
         Eigen::Vector3f(0.0f, 0.0f, 80.0f),
@@ -175,7 +180,8 @@ TEST(FractureImpactWorld, ProjectileHitsStaticAttachedPlate)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::AttachedHit);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::AttachedPart);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Glass);
     EXPECT_EQ(impacts.front().objectName, "WindowGlass");
@@ -188,7 +194,7 @@ TEST(FractureImpactWorld, ProjectileHitsDynamicShardReportsShardHit)
     world.RegisterShard("WindowGlass", "WindowGlass~groundShard",
         Eigen::Vector3f::Zero(), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f::Zero(), 0.2f, CubePoints(10.0f),
-        FractureMaterialProfile::Glass);
+        FractureMaterialProfile::Glass, 0.35f, 0.12f);
     const uint32_t id = world.LaunchProjectile(
         Eigen::Vector3f(0.0f, 0.0f, 80.0f),
         Eigen::Vector3f(0.0f, 0.0f, -900.0f),
@@ -199,7 +205,8 @@ TEST(FractureImpactWorld, ProjectileHitsDynamicShardReportsShardHit)
         impacts = world.Step(1.0f / 60.0f);
 
     ASSERT_FALSE(impacts.empty());
-    EXPECT_EQ(impacts.front().type, FractureImpactType::ShardHit);
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::FreeShard);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
     EXPECT_EQ(impacts.front().materialProfile,
         FractureMaterialProfile::Glass);
     EXPECT_EQ(impacts.front().objectName, "WindowGlass");
@@ -223,6 +230,28 @@ TEST(FractureImpactWorld, ProjectileHandleTracksFlyingBody)
     ASSERT_TRUE(pose.has_value());
     EXPECT_LT(pose->position.z(), 200.0f);
     EXPECT_TRUE(world.GetProjectileVelocity(id).has_value());
+}
+
+TEST(FractureImpactWorld, ProjectileGroundContactReportsGroundRoleAndConsumesBody)
+{
+    FractureImpactWorld world;
+    world.SetGroundPlane(-100.0f);
+    const uint32_t id = world.LaunchProjectile(
+        Eigen::Vector3f(0.0f, 0.0f, 0.0f),
+        Eigen::Vector3f(0.0f, -900.0f, 0.0f),
+        1.5f, 0.1f);
+
+    std::vector<FractureImpact> impacts;
+    for (int step = 0; step < 60 && impacts.empty(); ++step)
+        impacts = world.Step(1.0f / 60.0f);
+
+    ASSERT_FALSE(impacts.empty());
+    EXPECT_EQ(impacts.front().targetRole, FractureBodyRole::Ground);
+    EXPECT_EQ(impacts.front().contact, FractureContactKind::Impact);
+    EXPECT_EQ(impacts.front().projectileId, id);
+    EXPECT_EQ(impacts.front().materialProfile,
+        FractureMaterialProfile::Generic);
+    EXPECT_FALSE(world.HasProjectile(id));
 }
 
 TEST(FractureImpactWorld, HitReportCarriesProjectileHandle)
@@ -251,7 +280,7 @@ TEST(FractureImpactWorld, RemoveShardDropsBody)
     world.RegisterShard("WindowGlass", "WindowGlass~shard0",
         Eigen::Vector3f(0.0f, 200.0f, 0.0f), Eigen::Quaternionf::Identity(),
         Eigen::Vector3f::Zero(), 0.2f, CubePoints(5.0f),
-        FractureMaterialProfile::Glass);
+        FractureMaterialProfile::Glass, 0.35f, 0.12f);
     ASSERT_TRUE(world.GetShardPose("WindowGlass", "WindowGlass~shard0").has_value());
 
     world.RemoveShard("WindowGlass", "WindowGlass~shard0");

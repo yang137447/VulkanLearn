@@ -266,7 +266,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 
 ### Scene JSON top-level fields
 
-`SC_*.json` (and any other asset with `"type": "scene"`) carries four top-level fields:
+`SC_*.json` (and any other asset with `"type": "scene"`) carries four required top-level fields:
 
 - `name`: display label (the UI scene selector uses it as the list label)
 - `type`: must be `"scene"`
@@ -276,6 +276,14 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
   without it, so a new scene cannot silently ship undocumented; runtime-test fixtures that build a scene
   in code must write one too. Written in Chinese, same as the planning documents.
 - `objects`: array of scene objects (see below)
+- `runtimeMode`: optional `"authoring"` (default) or `"gameplay"`. `gameplay` marks a
+  native试玩 scene that advances fracture/projectile physics without a C# Play state;
+  authoring scenes remain gated by Play/Pause/Editing.
+- `projectile`: optional projectile recipe (`materialInstance`, `speed`, `radius`,
+  `mass`, `cooldown`). Runtime uses this explicitly instead of scanning scene objects.
+
+`balloon` and `glassPane` additionally accept an optional `profile` string selecting a
+registered `DestructibleProfile` (`balloon.default`, `glass.default`, `glass.tempered`).
 
 ### Current scene object types
 

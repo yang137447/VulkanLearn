@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -9,6 +10,26 @@ namespace VL
 {
 
 class DiagnosticsSubsystem;
+
+enum class ImpactAudioKind
+{
+    Crack,
+    Shatter,
+    Leak,
+    Burst,
+    Landing,
+    Subfracture
+};
+
+struct ImpactAudioEvent
+{
+    std::string audioProfile = "glass";
+    ImpactAudioKind kind = ImpactAudioKind::Landing;
+    Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    float intensity = 1.0f;
+    float sizeScale = 1.0f;
+    uint64_t seed = 0;
+};
 
 // 轻量音频运行时。优先加载资源目录中的 WAV 录音（气球、玻璃、漏气），
 // 缺失时回退到程序化合成。使用 SDL3 双声道音频流；所有 Play* 只登记
@@ -27,17 +48,8 @@ public:
         const Eigen::Vector3f& forward, const Eigen::Vector3f& up);
     // 每帧补足 SDL 流队列；音效事件本身也会立即 Pump 一次，降低延迟。
     void Update();
-    void PlayBalloonBurst(float intensity = 1.0f,
-        const Eigen::Vector3f& position = Eigen::Vector3f::Zero());
-    void PlayShardLanding(float intensity, const Eigen::Vector3f& position);
-    // 气球漏气：持续嘶嘶声 + 低频塌陷，与爆裂音区分。
-    void PlayBalloonLeak(float intensity, const Eigen::Vector3f& position);
-    // 玻璃破碎：高频脆裂 transient + 多模态 tinkle 尾音。
-    void PlayGlassShatter(float intensity, const Eigen::Vector3f& position);
-    // 玻璃碎片落地：短促高频 ping；与气球落地音使用独立冷却。
-    void PlayGlassShardLanding(float intensity, const Eigen::Vector3f& position);
-    // 玻璃开裂（未碎）：短促高频 click + 2 个模态，区别于整块破碎。
-    void PlayGlassCrack(float intensity, const Eigen::Vector3f& position);
+    // 统一冲击音频入口；具体采样/合成由 audioProfile + kind 决定。
+    void PlayImpact(const ImpactAudioEvent& event);
     void Shutdown();
 
 private:

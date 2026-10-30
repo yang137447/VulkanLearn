@@ -20,10 +20,11 @@ namespace VL
 namespace
 {
 
-constexpr float ArrowSpeed = 3500.0f;
 constexpr float ArrowTipOffset = 30.0f;
 constexpr float ArrowStuckSeconds = 2.5f;
 constexpr float ArrowSpawnOffset = 45.0f;
+constexpr float ArrowMaxLifetimeSeconds = 6.0f;
+constexpr std::size_t MaxArrows = 48;
 
 void AppendTriangle(
     std::vector<Vertex>& vertices,
@@ -145,37 +146,15 @@ void ProjectileRuntime::SynchronizeWorld(World& world)
     generation = world.GetGeneration();
     arrowMaterialKey.clear();
     arrowMaterialInstanceKey.clear();
-    for (const auto& [name, glass] : world.GetGlassObjects())
-    {
-        if (!glass.visible) continue;
-        arrowMaterialKey = glass.materialKey;
-        arrowMaterialInstanceKey = glass.materialInstanceKey;
-        break;
-    }
-    if (arrowMaterialKey.empty())
-    {
-        for (const auto& [name, softBody] : world.GetSoftBodyObjects())
-        {
-            if (!softBody.visible) continue;
-            arrowMaterialKey = softBody.materialKey;
-            arrowMaterialInstanceKey = softBody.materialInstanceKey;
-            break;
-        }
-    }
-    if (arrowMaterialKey.empty())
-    {
-        for (const auto& [name, mesh] : world.GetMeshObjects())
-        {
-            arrowMaterialKey = mesh.materialKey;
-            arrowMaterialInstanceKey = mesh.materialInstanceKey;
-            break;
-        }
-    }
-    if (!arrowMaterialKey.empty())
-    {
+    settings = world.GetProjectileSettings();
+    arrowMaterialKey = settings.materialKey;
+    arrowMaterialInstanceKey = settings.materialInstanceKey;
+    if (settings.IsConfigured())
         diagnostics.ReportInfo(
-            "Projectile ready: Left click fires an arrow (Esc mouse look, WASD move)");
-    }
+            "Projectile ready: scene projectile recipe configured");
+    else if (world.IsNativeGameplay())
+        diagnostics.ReportWarning(
+            "Projectile disabled: scene has no projectile recipe");
 }
 
 void ProjectileRuntime::Tick(World& world, float deltaSeconds,
@@ -184,14 +163,23 @@ void ProjectileRuntime::Tick(World& world, float deltaSeconds,
     if (deltaSeconds <= 0.0f) return;
     if (fireCooldown > 0.0f)
         fireCooldown = std::max(0.0f, fireCooldown - deltaSeconds);
+    for (Arrow& arrow : arrows) arrow.age += deltaSeconds;
     for (const Physics::FractureImpact& impact : impacts)
     {
-        // 气球/玻璃整板、attached 板片和地面动态碎片都可能消耗箭矢；
-        // 碎片与地面/碎片之间的 ShardLanding/ShardHit 没有 projectileId。
+        // 投射物与任意目标/地面接触都可能消费箭矢；没有 projectileId 的
+        // 自由碎片互撞事件不属于投射物生命周期。
         if (impact.projectileId == 0) continue;
-        for (Arrow& arrow : arrows)
+        for (std::size_t index = 0; index < arrows.size(); ++index)
         {
+            Arrow& arrow = arrows[index];
             if (arrow.id != impact.projectileId || arrow.stuck) continue;
+            if (impact.targetRole == Physics::FractureBodyRole::Ground)
+            {
+                // 射向地面/天空的箭不再永久保留；命中地面直接回收可见箭。
+                RemoveArrowMesh(world, arrow);
+                arrows.erase(arrows.begin() + static_cast<std::ptrdiff_t>(index));
+                break;
+            }
             arrow.stuck = true;
             arrow.stuckTimer = ArrowStuckSeconds;
             Eigen::Vector3f direction = arrow.lastVelocity;
@@ -220,6 +208,13 @@ void ProjectileRuntime::Tick(World& world, float deltaSeconds,
                 continue;
             }
             ++it;
+            continue;
+        }
+        if (it->age >= ArrowMaxLifetimeSeconds)
+        {
+            impactWorld.CancelProjectile(it->id);
+            RemoveArrowMesh(world, *it);
+            it = arrows.erase(it);
             continue;
         }
         if (const auto velocity = impactWorld.GetProjectileVelocity(it->id))
@@ -274,12 +269,21 @@ bool ProjectileRuntime::Fire(World& world, const Camera& camera)
     Eigen::Vector3f forward = camera.GetForwardVector();
     if (forward.norm() <= 1e-4f) return false;
     forward.normalize();
+    if (arrows.size() >= MaxArrows)
+    {
+        // 保险丝：即使输入/外部命令绕过冷却，也保持可见箭和 Jolt body 有界。
+        impactWorld.CancelProjectile(arrows.front().id);
+        RemoveArrowMesh(world, arrows.front());
+        arrows.erase(arrows.begin());
+    }
     const Eigen::Vector3f position = camera.GetPosition() + forward * ArrowSpawnOffset;
-    const Eigen::Vector3f velocity = forward * ArrowSpeed;
+    const Eigen::Vector3f velocity =
+        forward * settings.speedCmPerSecond;
     uint32_t id = 0;
     try
     {
-        id = impactWorld.LaunchProjectile(position, velocity, 1.5f, 0.08f);
+        id = impactWorld.LaunchProjectile(
+            position, velocity, settings.radiusCm, settings.massKg);
     }
     catch (const std::exception& error)
     {
@@ -302,7 +306,7 @@ bool ProjectileRuntime::Fire(World& world, const Camera& camera)
     AddArrowMesh(world, arrow);
     arrows.push_back(std::move(arrow));
     // 防止输入状态异常时一帧多箭；正常点射不受影响。
-    fireCooldown = 0.15f;
+    fireCooldown = settings.cooldownSeconds;
     diagnostics.ReportInfo("Arrow fired");
     return true;
 }
@@ -362,7 +366,11 @@ void ProjectileRuntime::RemoveArrowMesh(World& world, const Arrow& arrow)
 
 void ProjectileRuntime::Clear(World& world)
 {
-    for (const Arrow& arrow : arrows) RemoveArrowMesh(world, arrow);
+    for (const Arrow& arrow : arrows)
+    {
+        impactWorld.CancelProjectile(arrow.id);
+        RemoveArrowMesh(world, arrow);
+    }
     arrows.clear();
 }
 

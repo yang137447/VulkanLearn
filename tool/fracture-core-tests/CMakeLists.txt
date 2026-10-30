@@ -1,6 +1,8 @@
 add_executable(fracture_core_tests
+    destructibleProfileTests.cpp
     fractureBudgetTests.cpp
     glassDamagePolicyTests.cpp
+    plateFracturePolicyTests.cpp
     planarFractureTests.cpp
     fragmentMeshTests.cpp
     sphericalFractureTests.cpp

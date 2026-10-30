@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "physics/fracture/fractureBudget.h"
+#include "physics/fracture/destructibleProfile.h"
 #include "physics/softbody/rubberShell.h"
 #include "physics/runtime/fractureImpactWorld.h"
+#include "engine/destructibleRuntime.h"
 #include "world/world.h"
 
 namespace VL
@@ -23,7 +25,7 @@ class RendererBackendVulkan;
 // GT 侧橡皮软体运行时。它把 World 中的 balloon 描述变成 RubberShell，
 // 创建/更新 host-visible 动态 RenderableObject，并把结果作为普通
 // WorldMeshObject 发布；RT 和音频线程都不直接接触粒子数组。
-class SoftBodyRuntime
+class SoftBodyRuntime : public DestructibleRuntime
 {
 public:
     SoftBodyRuntime(
@@ -37,21 +39,27 @@ public:
 
     // 只在 World 换代时重建；material reload 等同代调用直接返回。
     void SynchronizeWorld(World& world);
+    bool ContainsTarget(const std::string& name,
+        Physics::FractureMaterialProfile material) const override;
     // 共享冲击世界由 EngineLoop 每帧步进一次；这里只消费与 balloon 有关的事件。
     void HandleImpacts(World& world,
         const std::vector<Physics::FractureImpact>& impacts);
     void Tick(World& world, float deltaSeconds);
+    void Reset(World& world) override;
+    void LaunchDebugImpact(const std::string& target, float speed) override;
     // 调试/游戏冲击入口：从 +Z 向指定气球发射一个动态球体。
     void LaunchImpact(const std::string& balloonName, float speed);
     // 全局预算的回收入口：只处理属于本运行时的候选，其余候选忽略。
     void EvictFractureBudgetShards(
-        const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates);
-    void Shutdown();
+        const std::vector<Physics::Fracture::FractureBudgetCandidate>& candidates)
+        override;
+    void Shutdown() override;
 
 private:
     struct Instance
     {
         WorldSoftBodyObject descriptor;
+        Physics::Fracture::DestructibleProfile profile;
         std::vector<Physics::Softbody::RubberShell> shells;
         std::vector<std::string> meshObjectNames;
         std::vector<std::string> meshKeys;

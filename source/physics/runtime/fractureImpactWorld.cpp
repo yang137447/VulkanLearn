@@ -72,7 +72,7 @@ struct FractureImpactWorld::Impl
 {
     struct BodyIdentity
     {
-        enum class Kind
+        enum class Shape
         {
             Sphere,
             Pane,
@@ -81,7 +81,8 @@ struct FractureImpactWorld::Impl
             Projectile,
             Ground
         };
-        Kind kind = Kind::Projectile;
+        Shape shape = Shape::Projectile;
+        FractureBodyRole role = FractureBodyRole::Projectile;
         FractureMaterialProfile profile = FractureMaterialProfile::Generic;
         std::string objectName;
         std::string shardName;
@@ -120,7 +121,6 @@ struct FractureImpactWorld::Impl
     std::map<uint32_t, JPH::BodyID> projectileIds;
     std::map<std::string, JPH::BodyID> shardIds;
     std::set<uint32_t> impactedProjectiles;
-    std::set<uint32_t> landingBodies;
     std::vector<FractureImpact> impacts;
     double accumulated = 0.0;
     JPH::BodyID groundBody;
@@ -174,12 +174,11 @@ struct FractureImpactWorld::Impl
         shardBodies.clear();
         shardIds.clear();
         impactedProjectiles.clear();
-        landingBodies.clear();
         identities.clear();
         if (groundBody.IsInvalid()) CreateGround();
         else identities[BodyKey(groundBody)] = {
-            BodyIdentity::Kind::Ground, FractureMaterialProfile::Generic,
-            "", "" };
+            BodyIdentity::Shape::Ground, FractureBodyRole::Ground,
+            FractureMaterialProfile::Generic, "", "" };
         impacts.clear();
     }
 
@@ -199,8 +198,8 @@ struct FractureImpactWorld::Impl
         if (groundBody.IsInvalid())
             throw std::runtime_error("Jolt ground body budget exhausted");
         identities[BodyKey(groundBody)] = {
-            BodyIdentity::Kind::Ground, FractureMaterialProfile::Generic,
-            "", "" };
+            BodyIdentity::Shape::Ground, FractureBodyRole::Ground,
+            FractureMaterialProfile::Generic, "", "" };
     }
 
     void ReplaceGround()
@@ -224,18 +223,10 @@ struct FractureImpactWorld::Impl
             return;
         const BodyIdentity& firstBody = firstIdentity->second;
         const BodyIdentity& secondBody = secondIdentity->second;
-        const bool firstSphere = firstBody.kind == BodyIdentity::Kind::Sphere;
-        const bool secondSphere = secondBody.kind == BodyIdentity::Kind::Sphere;
-        const bool firstPane = firstBody.kind == BodyIdentity::Kind::Pane;
-        const bool secondPane = secondBody.kind == BodyIdentity::Kind::Pane;
-        const bool firstShard = firstBody.kind == BodyIdentity::Kind::Shard;
-        const bool secondShard = secondBody.kind == BodyIdentity::Kind::Shard;
-        const bool firstAttached = firstBody.kind == BodyIdentity::Kind::AttachedShard;
-        const bool secondAttached = secondBody.kind == BodyIdentity::Kind::AttachedShard;
-        const bool firstGround = firstBody.kind == BodyIdentity::Kind::Ground;
-        const bool secondGround = secondBody.kind == BodyIdentity::Kind::Ground;
-        const bool firstProjectile = firstBody.kind == BodyIdentity::Kind::Projectile;
-        const bool secondProjectile = secondBody.kind == BodyIdentity::Kind::Projectile;
+        const bool firstProjectile =
+            firstBody.role == FractureBodyRole::Projectile;
+        const bool secondProjectile =
+            secondBody.role == FractureBodyRole::Projectile;
 
         FractureImpact impact;
         const JPH::Vec3 normal = manifold.mWorldSpaceNormal;
@@ -246,112 +237,74 @@ struct FractureImpactWorld::Impl
         impact.normal = ToCentimeters(normal);
         impact.normal.normalize();
 
-        if ((firstSphere && secondProjectile) || (secondSphere && firstProjectile))
+        // 投射物与任意目标接触：角色只影响 targetRole，消费方按 profile 处理。
+        if (firstProjectile != secondProjectile)
         {
-            const JPH::Body& projectile = firstSphere ? second : first;
+            const JPH::Body& projectile = firstProjectile ? first : second;
+            const BodyIdentity& target = firstProjectile ? secondBody : firstBody;
             const uint32_t projectileKey = BodyKey(projectile.GetID());
             if (!impactedProjectiles.insert(projectileKey).second) return;
-            impact.type = FractureImpactType::BalloonHit;
-            impact.objectName = firstSphere ? firstBody.objectName : secondBody.objectName;
-            impact.materialProfile = firstSphere
-                ? firstBody.profile : secondBody.profile;
-            impact.relativeSpeed = projectile.GetLinearVelocity().Length();
-            impact.normalSpeed = std::abs(
-                projectile.GetLinearVelocity().Dot(manifold.mWorldSpaceNormal));
-            impact.projectileId = projectileKey;
-            impacts.push_back(std::move(impact));
-            return;
-        }
-
-        if ((firstPane && secondProjectile) || (secondPane && firstProjectile))
-        {
-            const JPH::Body& projectile = firstPane ? second : first;
-            const uint32_t projectileKey = BodyKey(projectile.GetID());
-            if (!impactedProjectiles.insert(projectileKey).second) return;
-            impact.type = FractureImpactType::PaneHit;
-            impact.objectName = firstPane ? firstBody.objectName : secondBody.objectName;
-            impact.materialProfile = firstPane
-                ? firstBody.profile : secondBody.profile;
-            impact.relativeSpeed = projectile.GetLinearVelocity().Length();
-            impact.normalSpeed = std::abs(
-                projectile.GetLinearVelocity().Dot(manifold.mWorldSpaceNormal));
-            impact.projectileId = projectileKey;
-            impacts.push_back(std::move(impact));
-            return;
-        }
-
-        if ((firstAttached && secondProjectile) || (secondAttached && firstProjectile))
-        {
-            const JPH::Body& projectile = firstAttached ? second : first;
-            const uint32_t projectileKey = BodyKey(projectile.GetID());
-            if (!impactedProjectiles.insert(projectileKey).second) return;
-            const BodyIdentity& plate = firstAttached ? firstBody : secondBody;
-            impact.type = FractureImpactType::AttachedHit;
-            impact.materialProfile = plate.profile;
-            impact.objectName = plate.objectName;
-            impact.shardName = plate.shardName;
-            impact.relativeSpeed = projectile.GetLinearVelocity().Length();
-            impact.projectileId = projectileKey;
-            impacts.push_back(std::move(impact));
-            return;
-        }
-
-        if ((firstShard && secondProjectile) || (secondShard && firstProjectile))
-        {
-            // 箭命中已经掉到地上的动态碎片：这是“继续打碎”的入口。
-            // 不能复用 landingBodies 去重，否则碎片落地后后续箭矢永远无效；
-            // 每支投射物只允许产生一次命中，由 impactedProjectiles 负责。
-            const JPH::Body& projectile = firstShard ? second : first;
-            const JPH::Body& shardBody = firstShard ? first : second;
-            const uint32_t projectileKey = BodyKey(projectile.GetID());
-            if (!impactedProjectiles.insert(projectileKey).second) return;
-            const BodyIdentity& shard = firstShard ? firstBody : secondBody;
+            const JPH::Body& targetBody = firstProjectile ? second : first;
             const JPH::Vec3 relativeVelocity =
-                projectile.GetLinearVelocity() - shardBody.GetLinearVelocity();
-            impact.type = FractureImpactType::ShardHit;
-            impact.materialProfile = shard.profile;
-            impact.objectName = shard.objectName;
-            impact.shardName = shard.shardName;
+                projectile.GetLinearVelocity() - targetBody.GetLinearVelocity();
+            impact.targetRole = target.role;
+            impact.contact = FractureContactKind::Impact;
+            impact.materialProfile = target.profile;
+            impact.targetBodyId = BodyKey(targetBody.GetID());
+            impact.objectName = target.objectName;
+            impact.shardName = target.shardName;
             impact.relativeSpeed = relativeVelocity.Length();
-            impact.normalSpeed = std::abs(
-                relativeVelocity.Dot(manifold.mWorldSpaceNormal));
+            impact.normalSpeed =
+                std::abs(relativeVelocity.Dot(manifold.mWorldSpaceNormal));
             impact.projectileId = projectileKey;
             impacts.push_back(std::move(impact));
             return;
         }
 
-        if ((firstShard && secondGround) || (secondShard && firstGround))
+        // 自由碎片与地面/另一自由碎片：每次新接触都上报，节流归消费方。
+        const bool firstFree = firstBody.role == FractureBodyRole::FreeShard;
+        const bool secondFree = secondBody.role == FractureBodyRole::FreeShard;
+        if (firstFree && secondBody.role == FractureBodyRole::Ground)
         {
-            const JPH::BodyID shardId = firstShard ? first.GetID() : second.GetID();
-            if (!landingBodies.insert(BodyKey(shardId)).second) return;
-            const BodyIdentity& shard = firstShard ? firstBody : secondBody;
-            impact.type = FractureImpactType::ShardLanding;
-            impact.materialProfile = shard.profile;
-            impact.objectName = shard.objectName;
-            impact.shardName = shard.shardName;
-            impact.relativeSpeed = firstShard
-                ? first.GetLinearVelocity().Length()
-                : second.GetLinearVelocity().Length();
+            impact.targetRole = FractureBodyRole::FreeShard;
+            impact.contact = FractureContactKind::Resting;
+            impact.materialProfile = firstBody.profile;
+            impact.targetBodyId = BodyKey(first.GetID());
+            impact.objectName = firstBody.objectName;
+            impact.shardName = firstBody.shardName;
+            impact.relativeSpeed = first.GetLinearVelocity().Length();
             impacts.push_back(std::move(impact));
             return;
         }
-
-        if (firstShard && secondShard)
+        if (secondFree && firstBody.role == FractureBodyRole::Ground)
         {
-            const JPH::BodyID firstShardId = first.GetID();
-            const JPH::BodyID secondShardId = second.GetID();
-            const JPH::BodyID shardId = BodyKey(firstShardId) < BodyKey(secondShardId)
-                ? firstShardId : secondShardId;
-            if (!landingBodies.insert(BodyKey(shardId)).second) return;
-            const BodyIdentity& shard = BodyKey(firstShardId) < BodyKey(secondShardId)
-                ? firstBody : secondBody;
-            impact.type = FractureImpactType::ShardHit;
-            impact.materialProfile = shard.profile;
-            impact.objectName = shard.objectName;
-            impact.shardName = shard.shardName;
-            impact.relativeSpeed = std::max(
-                first.GetLinearVelocity().Length(),
-                second.GetLinearVelocity().Length());
+            impact.targetRole = FractureBodyRole::FreeShard;
+            impact.contact = FractureContactKind::Resting;
+            impact.materialProfile = secondBody.profile;
+            impact.targetBodyId = BodyKey(second.GetID());
+            impact.objectName = secondBody.objectName;
+            impact.shardName = secondBody.shardName;
+            impact.relativeSpeed = second.GetLinearVelocity().Length();
+            impacts.push_back(std::move(impact));
+            return;
+        }
+        if (firstFree && secondFree)
+        {
+            const bool firstIsTarget = BodyKey(first.GetID()) < BodyKey(second.GetID());
+            const BodyIdentity& target = firstIsTarget ? firstBody : secondBody;
+            const JPH::Body& targetBody = firstIsTarget ? first : second;
+            const JPH::Body& otherBody = firstIsTarget ? second : first;
+            impact.targetRole = FractureBodyRole::FreeShard;
+            impact.contact = FractureContactKind::Impact;
+            impact.materialProfile = target.profile;
+            impact.targetBodyId = BodyKey(targetBody.GetID());
+            impact.objectName = target.objectName;
+            impact.shardName = target.shardName;
+            const JPH::Vec3 relativeVelocity =
+                targetBody.GetLinearVelocity() - otherBody.GetLinearVelocity();
+            impact.relativeSpeed = relativeVelocity.Length();
+            impact.normalSpeed =
+                std::abs(relativeVelocity.Dot(manifold.mWorldSpaceNormal));
             impacts.push_back(std::move(impact));
         }
     }
@@ -382,7 +335,8 @@ void FractureImpactWorld::RegisterSphereProxy(const std::string& name,
     if (id.IsInvalid())
         throw std::runtime_error("Jolt sphere proxy body budget exhausted");
     impl->identities[BodyKey(id)] = {
-        Impl::BodyIdentity::Kind::Sphere, profile, name, "" };
+        Impl::BodyIdentity::Shape::Sphere, FractureBodyRole::StaticTarget,
+        profile, name, "" };
     impl->sphereBodies.push_back(id);
 }
 
@@ -400,6 +354,22 @@ void FractureImpactWorld::UnregisterSphereProxy(const std::string& name)
             it = impl->sphereBodies.erase(it);
         }
         else ++it;
+    }
+}
+
+void FractureImpactWorld::SetSphereProxyPose(
+    const std::string& name, const Eigen::Vector3f& center)
+{
+    for (const JPH::BodyID& id : impl->sphereBodies)
+    {
+        const auto identity = impl->identities.find(BodyKey(id));
+        if (identity == impl->identities.end() ||
+            identity->second.objectName != name)
+            continue;
+        impl->world.GetBodyInterface().SetPositionAndRotation(
+            id, ToMeters(center), JPH::Quat::sIdentity(),
+            JPH::EActivation::Activate);
+        return;
     }
 }
 
@@ -424,7 +394,8 @@ void FractureImpactWorld::RegisterPane(const std::string& name,
     if (id.IsInvalid())
         throw std::runtime_error("Jolt pane proxy body budget exhausted");
     impl->identities[BodyKey(id)] = {
-        Impl::BodyIdentity::Kind::Pane, profile, name, "" };
+        Impl::BodyIdentity::Shape::Pane, FractureBodyRole::StaticTarget,
+        profile, name, "" };
     impl->paneBodies.push_back(id);
 }
 
@@ -449,7 +420,7 @@ void FractureImpactWorld::RegisterShard(const std::string& objectName,
     const std::string& shardName, const Eigen::Vector3f& center,
     const Eigen::Quaternionf& rotation, const Eigen::Vector3f& velocity,
     float mass, const std::vector<Eigen::Vector3f>& localHullPoints,
-    FractureMaterialProfile profile,
+    FractureMaterialProfile profile, float friction, float restitution,
     const Eigen::Vector3f& angularVelocity,
     bool dynamic)
 {
@@ -489,8 +460,8 @@ void FractureImpactWorld::RegisterShard(const std::string& objectName,
     {
         settings.mAngularVelocity =
             JPH::Vec3(angularVelocity.x(), angularVelocity.y(), angularVelocity.z());
-        settings.mFriction = 0.35f;
-        settings.mRestitution = 0.12f;
+        settings.mFriction = friction;
+        settings.mRestitution = restitution;
         settings.mAllowSleeping = true;
         settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
         settings.mMassPropertiesOverride.mMass = mass;
@@ -500,7 +471,10 @@ void FractureImpactWorld::RegisterShard(const std::string& objectName,
     if (id.IsInvalid())
         throw std::runtime_error("Jolt shard body budget exhausted");
     impl->identities[BodyKey(id)] = {
-        dynamic ? Impl::BodyIdentity::Kind::Shard : Impl::BodyIdentity::Kind::AttachedShard,
+        dynamic ? Impl::BodyIdentity::Shape::Shard
+                : Impl::BodyIdentity::Shape::AttachedShard,
+        dynamic ? FractureBodyRole::FreeShard
+                : FractureBodyRole::AttachedPart,
         profile, objectName, shardName };
     impl->shardBodies.push_back(id);
     impl->shardIds[objectName + "/" + shardName] = id;
@@ -589,7 +563,7 @@ uint32_t FractureImpactWorld::LaunchProjectile(const Eigen::Vector3f& position,
         throw std::runtime_error("Jolt projectile body budget exhausted");
     impl->projectiles.push_back(id);
     impl->identities[BodyKey(id)] = {
-        Impl::BodyIdentity::Kind::Projectile,
+        Impl::BodyIdentity::Shape::Projectile, FractureBodyRole::Projectile,
         FractureMaterialProfile::Generic, "", "" };
     impl->projectileIds[BodyKey(id)] = id;
     return BodyKey(id);
@@ -599,7 +573,22 @@ bool FractureImpactWorld::HasProjectile(uint32_t projectileId) const
 {
     const auto found = impl->identities.find(projectileId);
     return found != impl->identities.end() &&
-        found->second.kind == Impl::BodyIdentity::Kind::Projectile;
+        found->second.role == FractureBodyRole::Projectile;
+}
+
+void FractureImpactWorld::CancelProjectile(uint32_t projectileId)
+{
+    const auto found = impl->projectileIds.find(projectileId);
+    if (found == impl->projectileIds.end()) return;
+    const JPH::BodyID id = found->second;
+    impl->world.GetBodyInterface().RemoveBody(id);
+    impl->world.GetBodyInterface().DestroyBody(id);
+    impl->identities.erase(projectileId);
+    impl->projectileIds.erase(found);
+    impl->impactedProjectiles.erase(projectileId);
+    impl->projectiles.erase(
+        std::remove(impl->projectiles.begin(), impl->projectiles.end(), id),
+        impl->projectiles.end());
 }
 
 std::optional<FractureShardPose> FractureImpactWorld::GetProjectilePose(
@@ -661,7 +650,6 @@ std::vector<FractureImpact> FractureImpactWorld::Step(float deltaSeconds)
             }),
         impl->projectiles.end());
     impl->impactedProjectiles.clear();
-    impl->landingBodies.clear();
     return result;
 }
 

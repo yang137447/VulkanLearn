@@ -19,6 +19,8 @@ constexpr std::uint16_t FormatPcm = 0x0001;
 constexpr std::uint16_t FormatFloat = 0x0003;
 constexpr std::uint16_t FormatExtensible = 0xFFFE;
 constexpr std::size_t MaxWavBytes = 256ull * 1024ull * 1024ull;
+constexpr std::size_t MaxDecodedFrames = 48000ull * 60ull;
+constexpr std::uint16_t MaxChannels = 8;
 
 std::uint16_t ReadU16(const std::uint8_t* data)
 {
@@ -128,9 +130,9 @@ bool DecodeWaveData(
     std::uint16_t bitsPerSample, int sampleRate,
     AudioClip& clip, std::string& error)
 {
-    if (channels == 0)
+    if (channels == 0 || channels > MaxChannels)
     {
-        error = "WAV has zero channels";
+        error = "WAV has unsupported channel count";
         return false;
     }
     if (bitsPerSample == 0 || bitsPerSample % 8 != 0)
@@ -164,6 +166,11 @@ bool DecodeWaveData(
     if (frameCount == 0)
     {
         error = "WAV data chunk has no complete frame";
+        return false;
+    }
+    if (frameCount > MaxDecodedFrames)
+    {
+        error = "WAV exceeds decoded frame limit";
         return false;
     }
 

@@ -54,9 +54,7 @@ PRIVATE
     ws2_32 dbghelp advapi32 user32 secur32
     )
 
-if(TARGET vl_physics_runtime)
-    target_link_libraries(main PRIVATE vl_physics_runtime)
-endif()
+target_link_libraries(main PRIVATE vl_physics_runtime)
 
 if(TARGET vl_gameplay)
     add_dependencies(main vl_gameplay)

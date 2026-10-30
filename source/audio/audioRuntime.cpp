@@ -27,9 +27,9 @@ constexpr double DurationShardLanding = 0.10;
 constexpr double DurationGlassShardLanding = 0.12;
 constexpr double DurationGlassCrack = 0.14;
 
-// 每次 Update 把流补到约 42.7 ms 的排队深度。这个值大于一帧 60 FPS
-// 所需样本，又足够小，避免事件音延迟到下一个 block 才被听见。
-constexpr int TargetQueuedFrames = 2048;
+// 没有音频回调线程时，排队深度至少要覆盖一帧 60 FPS；1024 帧约 21 ms，
+// 比原先 2048 帧（约 43 ms）明显降低命中拖尾，同时仍留出一帧余量。
+constexpr int TargetQueuedFrames = 1024;
 // 掉帧后一次最多补 3072 帧（64 ms），防止长时间 hitch 后一次性灌满整段音频。
 constexpr int MaxMixBlocksPerPump = 24;
 
@@ -740,34 +740,50 @@ void AudioRuntime::Update()
     if (impl) impl->Pump();
 }
 
-void AudioRuntime::PlayBalloonBurst(float intensity, const Eigen::Vector3f& position)
+void AudioRuntime::PlayImpact(const ImpactAudioEvent& event)
 {
-    if (impl) impl->PlayBalloonBurst(intensity, position);
-}
-
-void AudioRuntime::PlayShardLanding(float intensity, const Eigen::Vector3f& position)
-{
-    if (impl) impl->PlayShardLanding(intensity, position);
-}
-
-void AudioRuntime::PlayBalloonLeak(float intensity, const Eigen::Vector3f& position)
-{
-    if (impl) impl->PlayBalloonLeak(intensity, position);
-}
-
-void AudioRuntime::PlayGlassShatter(float intensity, const Eigen::Vector3f& position)
-{
-    if (impl) impl->PlayGlassShatter(intensity, position);
-}
-
-void AudioRuntime::PlayGlassShardLanding(float intensity, const Eigen::Vector3f& position)
-{
-    if (impl) impl->PlayGlassShardLanding(intensity, position);
-}
-
-void AudioRuntime::PlayGlassCrack(float intensity, const Eigen::Vector3f& position)
-{
-    if (impl) impl->PlayGlassCrack(intensity, position);
+    if (!impl) return;
+    if (event.audioProfile == "glass")
+    {
+        switch (event.kind)
+        {
+        case ImpactAudioKind::Crack:
+            impl->PlayGlassCrack(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Shatter:
+            impl->PlayGlassShatter(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Subfracture:
+            impl->PlayGlassCrack(
+                event.intensity * 0.75f, event.position);
+            return;
+        case ImpactAudioKind::Landing:
+            impl->PlayGlassShardLanding(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Burst:
+        case ImpactAudioKind::Leak:
+            return;
+        }
+    }
+    if (event.audioProfile == "balloon")
+    {
+        switch (event.kind)
+        {
+        case ImpactAudioKind::Burst:
+            impl->PlayBalloonBurst(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Leak:
+            impl->PlayBalloonLeak(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Landing:
+        case ImpactAudioKind::Subfracture:
+            impl->PlayShardLanding(event.intensity, event.position);
+            return;
+        case ImpactAudioKind::Crack:
+        case ImpactAudioKind::Shatter:
+            return;
+        }
+    }
 }
 
 void AudioRuntime::Shutdown()

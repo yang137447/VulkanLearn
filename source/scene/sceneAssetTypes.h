@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "world/projectileSettings.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 
@@ -70,6 +71,7 @@ struct SoftBodyObjectBuildPlan
 {
     std::string objectName;
     std::string sceneObjectIdentity;
+    std::string profileKey;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
@@ -92,6 +94,7 @@ struct GlassObjectBuildPlan
 {
     std::string objectName;
     std::string sceneObjectIdentity;
+    std::string profileKey;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
