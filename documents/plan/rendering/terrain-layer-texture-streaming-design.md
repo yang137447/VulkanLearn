@@ -1191,14 +1191,20 @@ TerrainStreamingState
   丢弃、覆盖率归一 priority）+ `TerrainLayerVisibilityResolver::ApplyExact`
   （pageIndex 还原、缺页邻域扩圈、命中续命、同一跨帧预算/淘汰）。
   精确 feedback 可用时它是唯一驱动层页驻留的路径，L4a 只作为回退/prefetch。
+- hardening（2026-10-30）：层 feedback 的 4 个 slot 改为**无条件**计算
+  layerUv/导数/页号，再用权重与 enabled/miss 掩码选输出，消除
+  `dFdx/dFdy` 落在非 uniform 控制流里的未定义行为；新增
+  `u_feedbackScaleX/Y = screen/128`，把 128×128 feedback 的每像素变化换算回
+  主视图尺度，避免 mip 系统性选粗。
 - 同时修掉 L4a 独立验收的 3 个 MEDIUM：续命收紧到本帧候选页（不再刷新整层所有
   历史 mip）、非候选页走 16 epoch 短 idle；`avgColor` 默认 0.18；`MipForPriority`
   增加 mip4 档（2K 远景可请求）；`terrainlayerstats` 区分
   `feedbackHits`/`requested`/`accepted`，去掉恒为 0 的 `hits`。
 - 证据：`terrain_tests` 139/139、`vl_renderer_backend_tests` 61/61、
   `material_schema_tests` 11/11、`texture_asset_tests` 58/58；
-  mode 1 稳定态 `resident=119/512`、`visibleLayers=20`、`feedbackHits=119`、
-  `exactPages=119`、`pending=0`，与 L3 全量预取基线平均通道差 0.122、无整页缺失；
+  mode 1 稳定态 `resident=20/512`、`visibleLayers=20`、`feedbackHits=20`、
+  `exactPages=20`（该相机下 20 层的目标 mip 都已是每层 1 页）、`pending=0`，
+  与 L3 全量预取基线最大通道差 11、平均 0.002、无整页缺失；
   mode 0 截图仍逐字节一致，stderr 为空且无 Vulkan validation error。
 - 未实现（留给后续）：低分辨率 fallback/淡入；相机/视锥预取；硬预算淘汰
   （可见 working set 大于预算时仍是软预算，`accepted=0` 的请求饥饿沿用 P3 行为）；

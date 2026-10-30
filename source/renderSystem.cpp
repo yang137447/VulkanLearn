@@ -1438,6 +1438,24 @@ void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
                 "u_layerFeedbackEnabled",
                 layerFeedbackEnabled ? 1.0f : 0.0f);
         }
+        // feedback pass 固定 128×128，而 M_terrain 在全屏分辨率上取导数。
+        // 不换算的话 feedback 的每像素变化被放大 screen/128 倍，mip 会系统性
+        // 选粗（1280 宽时约 3.3 级），层页驻留就会欠配。
+        const vk::Extent2D renderExtent = GetSceneRenderExtent();
+        if (passMaterial->HasParameter("u_feedbackScaleX"))
+        {
+            passMaterial->SetParameter(
+                "u_feedbackScaleX",
+                static_cast<float>(std::max(1u, renderExtent.width)) /
+                    static_cast<float>(VL::TerrainFeedbackResolution));
+        }
+        if (passMaterial->HasParameter("u_feedbackScaleY"))
+        {
+            passMaterial->SetParameter(
+                "u_feedbackScaleY",
+                static_cast<float>(std::max(1u, renderExtent.height)) /
+                    static_cast<float>(VL::TerrainFeedbackResolution));
+        }
     }
 }
 
@@ -1577,6 +1595,7 @@ void RenderSystem::PublishTerrainStreamingStats(
     if (!streaming)
         return;
     VL::TerrainStreamingStats stats;
+    stats.statsPublished = true;
     VL::TerrainPageManager& pageManager = streaming->pageManager;
     // 统计刷新时顺带回收已过隔离期的槽位：free/quarantine 必须反映当前
     // completedEpoch，而不是“等下一次分配才更新”的惰性值。
@@ -1718,6 +1737,14 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         return;
     }
     const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
+    // 首帧之前渲染线程还没发布快照，整行 0 会被误读成“没有驻留页”。
+    if (!stats.statsPublished)
+    {
+        std::cout
+            << "[TerrainLayer] stats not published yet."
+            << std::endl;
+        return;
+    }
     const VL::TerrainLayerGpuResources& resources =
         streaming->layerResources;
     std::cout

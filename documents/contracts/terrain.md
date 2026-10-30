@@ -223,7 +223,8 @@ World 中摆放多次，只要对象名不同。
   `SetGpuEpochContext`，再消费 feedback 并调用 `ApplyFeedback`；这样本帧新驻留页
   拿到的始终是本帧提交 epoch，而不是上一帧已消费值。
   `terrain capacity N` 在帧首通过 `SetResidentCapacityAtEpoch` 消费：降预算只淘汰
-  已过安全窗的页；窗口内没有安全候选时允许暂时超预算，后续帧继续尝试收敛。
+  已过安全窗的页；窗口内没有安全候选时保持超预算，不会为了回到预算淘汰仍在
+  in-flight 帧里被采样的页。
   旧 `SetResidentCapacity` 仍保留无窗口 LRU 语义，只供加载期/测试使用。
   本帧请求页在 `BuildUploadBatch` 中被 pin，不会同帧被淘汰；淘汰出的物理槽位
   始终走 quarantine，不会让 in-flight 帧采样到被覆盖的 atlas。
@@ -448,9 +449,10 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - 淘汰：`idleEvictionEpochs`（默认 180 epoch）之外未再被看到的层页在
   `EvictPage` 前先过 `CanEvictPageAt`（GPU 安全窗）；随后若
   `ResidentCount() > ResidentCapacity()` 再做 epoch-aware LRU 淘汰。
-  与覆盖页一致：可见页都还在安全窗内时允许暂时超过预算，不会为了立刻回到预算
-  制造可见空洞。`terrainlayer preload` 会关闭 idle 淘汰，`terrainlayer capacity N`
-  重新打开。
+  这是软预算：**只要可见 working set 大于预算就持续超预算**（实测可见集 20，
+  `capacity 8` 时为 `20/8` 并保持不变），capacity 只约束不再被本帧 feedback
+  命中的页；不会为了立刻回到预算淘汰仍在采样或 in-flight 的页。
+  `terrainlayer preload` 会关闭 idle 淘汰，`terrainlayer capacity N` 重新打开。
 - 已驻留页如果不是本帧候选、但所属层仍在视野内（同层其它 mip、同 mip 未被采样的
   页），使用更短的 `unselectedMipIdleEvictionEpochs`（默认 16 epoch）而不是 180；
   完全离开视野的层仍走长 idle，避免相机小幅移动就丢掉整层。
@@ -505,6 +507,13 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   `TerrainFeedbackRingState`。`SummarizeTerrainLayerFeedback` 丢弃 valid=0 与
   frameTag 不匹配的 texel，按 `(layerId, mip, pageIndex)` 去重，用帧内最大
   sampleCount 归一到 1..255 的 priority。
+- 导数作用域：GLSL 规定 `dFdx/dFdy` 在非 uniform 控制流里未定义，而
+  `miss` 与 top-4 权重都是逐片元值。shader **无条件**算完 4 个 slot 的
+  layerUv/mip/页号（固定 4 次迭代、无 break/continue），最后只用权重与
+  enabled/miss 掩码选择写出的 slot；sampler 不做动态索引。
+- 导数分辨率换算：feedback pass 固定 128×128，而 `M_terrain` 在全屏分辨率上
+  取导数。`u_feedbackScaleX/Y = screen/128` 把 feedback 的每像素变化换算回主视图
+  尺度（1280 宽时约 3.3 级 mip），否则层页 mip 会被系统性选粗、驻留欠配。
 - `TerrainLayerVisibilityResolver::ApplyExact` 把 pageIndex 还原成 `(pageX,pageY)`，
   越界项计入 `outOfRangePages`；中心页已驻留时不扩邻域，缺页时才按
   `exactFeedbackNeighborhoodRadius`（默认 1）扩一圈做 prefetch（邻域 priority 减半）。
@@ -573,7 +582,7 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   它不在 Console/GT 线程直接修改 page manager。
 
 P3/P3.1/L1/L2/L3/L4a/L4b **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
-硬预算淘汰（可见 working set 大于预算时允许暂时超预算）、
+硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、LOD/skirt、
 地形 chunk 卸载、地形碰撞/编辑。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
@@ -651,7 +660,7 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   逐字节一致，验收改为稳定后无缺页块且 validation 无错误。
 - P3.1 覆盖：feedback 命中同时推进 `lastSeenEpoch`/`lastTouchedEpoch` 并改变
   epoch-aware 淘汰顺序；有效安全窗按 `max(2, framesInFlight+1)` 计算；
-  `SetResidentCapacityAtEpoch` 在窗口内允许暂时超预算、窗口过后收敛；隔离槽位到期后
+  `SetResidentCapacityAtEpoch` 在窗口内/持续可见时保持超预算，只回收窗口外的页；隔离槽位到期后
   不分配也会被回收、分配时也会先回收再复用且 fallback 永不回收；capacity=1/8 压测终止；
   `materialUsesLayerTable && TerrainUsesVirtualPages` 的四组合 eligibility 纯函数；
   layerless 地形与分层地形同 World 时只计入 unregistered、不污染页驻留；
@@ -678,12 +687,13 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `terrainLayerVisibilityTests.cpp` 另覆盖 2K 层 mip4 请求和“capacity 只回收非候选页”。
   `vl_renderer_backend_tests` 的 `TerrainFeedbackGraph.*` 已按 5 颜色 + 1 深度合同更新。
 - L4b 冒烟：`SC_terrain_vt_mode1.json` 稳定后 `terrainlayerstats` 报告
-  `resident=119/512`、`visibleLayers=20`、`feedbackHits=119`、`exactSlots=2084`、
-  `exactPages=119`、`requested=0`、`pending=0`、`dirtyPages=0`；与 L3 全量预取基线
-  `l3_final_mode1.bmp` 相比（排除左侧 UI）平均通道差 0.122、1.47% 像素 >2、
-  0.01% >8、最大 24，无整页缺失块。`terrainlayer capacity 130` 后仍为 `119/130`；
-  降到 64 再移动相机时为 `80/64`（可见集 78 > 预算的软预算行为，`accepted=0`），
-  不再像 L4a 那样停在 248。
+  `resident=20/512`、`visibleLayers=20`、`feedbackHits=20`、`exactSlots=2044`、
+  `exactPages=20`、`requested=0`、`pending=0`、`dirtyPages=0`；该相机下 20 层的
+  目标 mip 都已是该层最粗一级（每层 1 页），驻留集因此正好等于可见集。
+  与 L3 全量预取基线 `l3_final_mode1.bmp` 相比（排除左侧 UI）最大通道差 11、
+  平均 0.002、无 >8 像素，无整页缺失块。`terrainlayer capacity 8` 后为 `20/8`
+  并持续（可见集大于预算的软预算行为，`accepted=0`、`pending=0`），不再像 L4a
+  那样停在 248。
 - L4b mode 0 回归：`SC_terrain_b32.json` 截图仍与 L2/L3 基线逐字节一致
   （`1D30D8…3F54`）；`SC_terrain_b32_two.json` 与 P3 基线相比平均通道差 0.001、
   无 >8 像素，差异来自逐帧流式的到达时刻。两者 stderr 均为空。

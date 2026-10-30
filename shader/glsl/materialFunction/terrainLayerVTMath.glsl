@@ -52,14 +52,18 @@ vec2 TerrainLayerUvForSlot(
 
 // 按层自身的纹素密度选 mip。导数必须在 fract 之前取；调用点必须在
 // uniform control flow（固定 4 次的 slot 循环）内，否则导数未定义。
+// derivativeScale 把“当前渲染目标的每像素变化”换算成主视图的每像素变化：
+// M_terrain 传 (1,1)；128×128 的 feedback pass 传 (screen/128)，否则它的
+// 导数比主视图大一个屏幕/feedback 比例，mip 会被系统性选粗。
 int TerrainLayerMipForUv(
     vec2 layerUv,
     int pagesPerSide,
     int maxMip,
-    float pageResolution)
+    float pageResolution,
+    vec2 derivativeScale)
 {
-    const vec2 layerDdx = dFdx(layerUv);
-    const vec2 layerDdy = dFdy(layerUv);
+    const vec2 layerDdx = dFdx(layerUv) / max(derivativeScale.x, 1.0e-6);
+    const vec2 layerDdy = dFdy(layerUv) / max(derivativeScale.y, 1.0e-6);
     const float sourceResolution =
         float(pagesPerSide) * pageResolution;
     const float texelsPerPixel =
