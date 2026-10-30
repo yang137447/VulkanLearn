@@ -37,6 +37,9 @@ struct TerrainCollisionSettings
     // Jolt object layer；默认 0，与 ScriptPhysicsWorld 的 StaticLayer 对齐。
     // 该层必须已由调用方在 PhysicsSystem 的 ObjectLayerPairFilter 中注册。
     uint32_t objectLayer = 0;
+    // 调用方 PhysicsSystem 实际注册的 object layer 数量；用于在创建前拒绝越界层。
+    // 默认 2 与 TerrainCollisionWorld / ScriptPhysicsWorld 的静态+移动两层一致。
+    uint32_t objectLayerCount = 2;
 };
 
 // 地形静态 body 的 RAII 句柄。析构时从创建它的 PhysicsSystem 移除并销毁 body。

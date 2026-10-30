@@ -253,7 +253,33 @@ TEST(TerrainCollision, RejectsInvalidInputsWithoutLeavingBodies)
     tooManySamples.sampleCount = 5000;
     EXPECT_THROW(world.AddTerrain(valid, {}, tooManySamples), std::invalid_argument);
 
+    VL::TerrainCollisionSettings badObjectLayer;
+    badObjectLayer.objectLayer = 2;
+    EXPECT_THROW(world.AddTerrain(valid, {}, badObjectLayer), std::invalid_argument);
+
     EXPECT_EQ(world.GetPhysicsSystem().GetNumBodies(), 0u);
+}
+
+TEST(TerrainCollision, NonSquareHeightmapMapsXAndZIndependently)
+{
+    VL::TerrainCollisionWorld world;
+    // u 沿 +X 线性升高：x=+5000cm（u=0.75）应为 375cm，z 不改变高度。
+    const std::shared_ptr<const HostImage> rampX =
+        std::make_shared<const HostImage>(MakeHeightmap(8, 8,
+            [](uint32_t x, uint32_t)
+            {
+                return static_cast<float>(x) / 7.0f;
+            }));
+    const VL::TerrainBuildPlan plan =
+        MakePlan(rampX, 20000.0f, 10000.0f, 500.0f);
+    VL::TerrainCollisionBody body = world.AddTerrain(plan);
+    ASSERT_TRUE(body.IsValid());
+
+    float height = 0.0f;
+    ASSERT_TRUE(RaycastDownCm(world, 5000.0f, 0.0f, 1000.0f, 2000.0f, height));
+    EXPECT_NEAR(height, 375.0f, 1.0f);
+    ASSERT_TRUE(RaycastDownCm(world, 0.0f, 2500.0f, 1000.0f, 2000.0f, height));
+    EXPECT_NEAR(height, 250.0f, 1.0f);
 }
 
 TEST(TerrainCollision, MissesWhenRayIsOutOfBoundsOrTooShort)

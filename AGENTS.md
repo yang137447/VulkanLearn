@@ -147,6 +147,10 @@ Configure:
 cmake -S . -B build -G "MinGW Makefiles"
 ```
 
+Configure fetches Jolt through `FetchContent` because terrain collision is a core CPU
+dependency. Offline builds must pre-populate `build/_deps/vl_jolt-src` or provide a reachable
+mirror; this is the only third-party download in the default configure path.
+
 Build:
 
 ```powershell

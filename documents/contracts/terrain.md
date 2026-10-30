@@ -554,14 +554,16 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   的顶点口径一致（u 对应 +X、v 对应 +Z）。placement 的旋转/平移由 body
   transform 承担，缩放烘焙进 heightfield 的 offset/scale，避免依赖 Jolt
   非均匀 body scale。
-- 采样：默认 `sampleCount = TR.gridResolution + 1`（与渲染网格同分辨率），
-  向上取整到 Jolt `blockSize(2)` 的倍数，保证覆盖范围不因向上取整而多出一圈样本；
+- 采样：默认 `sampleCount = TR.gridResolution + 1`，向上取整到 Jolt
+  `blockSize(2)` 的倍数，保证覆盖范围不因向上取整而多出一圈样本；它与渲染网格
+  **近似**同分辨率，采样点可能错开半格，起伏地形上碰撞表面与可见网格可有厘米级差异。
   允许 `[4, 4096]`。样本经 `TerrainHeightmap::SampleHeightCm` 双线性读取，
   与 CPU 采样同源。高度压缩用 `mBitsPerSample=16`、`mBlockSize=2`。
 - body 固定为 `EMotionType::Static` + `EActivation::DontActivate`，
   `mAllowSleeping=false`、`mFriction=1.0`。object layer 默认 `0`
-  （与 `ScriptPhysicsWorld::StaticLayer` 对齐），调用方必须保证该层已在
-  PhysicsSystem 的 `ObjectLayerPairFilter` 中注册。
+  （与 `ScriptPhysicsWorld::StaticLayer` 对齐）；`TerrainCollisionSettings`
+  的 `objectLayerCount` 默认 2，`objectLayer >= objectLayerCount` 在创建前拒绝，
+  调用方仍必须保证该层已在 PhysicsSystem 的 `ObjectLayerPairFilter` 中注册。
 - `TerrainCollisionBody` 是 RAII：析构/`Reset()` 先 `RemoveBody` 再 `DestroyBody`，
   重复调用安全；句柄必须早于对应 PhysicsSystem 销毁。
   `GetBodyIdValue()` 返回 Jolt BodyID 的索引+序列号打包值（索引会被复用，

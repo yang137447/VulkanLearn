@@ -66,6 +66,9 @@ void ValidateInputs(
         throw std::invalid_argument("Terrain collision requires positive finite scale");
     if (settings.bitsPerSample < 1 || settings.bitsPerSample > 16)
         throw std::invalid_argument("Terrain collision bitsPerSample must be in [1, 16]");
+    if (settings.objectLayerCount == 0 || settings.objectLayer >= settings.objectLayerCount)
+        throw std::invalid_argument(
+            "Terrain collision objectLayer must be inside the registered layer count");
 }
 
 uint32_t ResolveSampleCount(
