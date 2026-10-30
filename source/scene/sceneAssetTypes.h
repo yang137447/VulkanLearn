@@ -69,4 +69,14 @@ struct MeshObjectBuildPlan
     // rendererTerrainLoader 显式写入：feedback pass 只绘制这些对象，
     // 不能依赖材质名/资产路径猜测地形。
     bool terrainFeedbackEligible = false;
+    // 地形几何 LOD 组：同一 chunk 的各 LOD 级共享该身份，空表示无 LOD 组。
+    // 快照构建器按组只输出一个网格，非地形/单级地形保持空组和旧行为。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
+    uint32_t lodLevelCount = 1;
+    // 该组（chunk）的切换距离（cm，升序）与 LOD0 局部 AABB；所有级共用，
+    // 保证距离计算不随当前级变化，避免选择反馈。
+    std::vector<float> lodDistancesCm;
+    Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
 };

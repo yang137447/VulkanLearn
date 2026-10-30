@@ -725,6 +725,24 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "terrainlod")
+    {
+        // 只读诊断：输出最近一帧每个 chunk LOD 组的选择级、相机距离和
+        // 累计切换次数；不排队任何渲染状态修改。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terrainlod stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainLodStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -805,6 +823,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
     std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
     std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
+    std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

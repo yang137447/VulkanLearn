@@ -90,6 +90,13 @@ struct WorldMeshObject
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
     bool terrainFeedbackEligible = false;
+    // 地形几何 LOD 组与级号；非地形/单级地形为空组、级号 0。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
+    uint32_t lodLevelCount = 1;
+    std::vector<float> lodDistancesCm;
+    Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh

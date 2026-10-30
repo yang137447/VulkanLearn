@@ -77,8 +77,9 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         const WorldMeshObject& object = *entry.second;
         EditorUi::EditorSceneMeshSectionSnapshot section;
         section.objectName = entry.first;
-        // RuntimeId 必须由 WorldObjectRuntimeId 派生：它是选择描边命中 draw packet 的唯一依据。
-        section.objectId = WorldObjectRuntimeId(world, entry.first);
+        // RuntimeId 必须与快照 draw packet 同源：地形 LOD 组的各级共享
+        // lodGroupId 派生的 id，级切换不会让编辑器描边失配。
+        section.objectId = WorldMeshObjectRuntimeId(world, entry.first, object);
         section.meshKey = object.meshKey;
         section.materialKey = object.materialKey;
         section.materialInstancePath = object.materialInstanceKey;

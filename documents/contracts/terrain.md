@@ -1,7 +1,8 @@
 # Terrain Runtime
 
-> 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；LOD、地形
-> chunk 卸载、低分辨率 fallback/淡入、碰撞与地形编辑等未来能力不在这里承诺。
+> 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；地形
+> chunk 卸载、低分辨率 fallback/淡入、World 级碰撞接入与地形编辑等未来能力
+> 不在这里承诺。运行时几何 LOD 选择已接入。
 
 ## 数据流
 
@@ -13,9 +14,10 @@ SC_*.json (type: "terrain")
        -> 高度图解码为 HostImage
   -> RendererResourceLoadCoordinator
   -> RendererTerrainLoader
-       -> TerrainMeshBuilder::BuildChunks
+       -> TerrainMeshBuilder::BuildChunks(每级)
        -> RenderableObject / MeshObjectBuildPlan
   -> WorldBuilder -> World mesh objects -> geometry pass
+  -> WorldSnapshotBuilder (按 chunk AABB 距离选一级，滞回)
   -> terrainFeedback pass (可见页反馈，驱动驻留) -> frame-fenced readback ring
 ```
 
@@ -54,13 +56,15 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   在全局 32×32 page table 中占用的 tile 区域；`pageOrigin + pageTilesPerSide <= 32`。
 - `lodLevels`（可选，1..4，默认 1）与 `lodDistances`（可选，cm、严格升序、
   长度 `lodLevels-1`）是 CPU 几何 LOD 的生成/选择参数；缺省距离按地形最长边
-  按级数均分（2 级 = 0.5×，4 级 = 0.25/0.5/0.75×）。renderer 运行时选择尚未接入。
+  按级数均分（2 级 = 0.5×，4 级 = 0.25/0.5/0.75×）。`chunkQuads` 必须能被
+  最粗步长 `2^(lodLevels-1)` 整除。renderer 生成全部级，运行时由
+  `WorldSnapshotBuilder` 选择。
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
   覆盖只改该次摆放的虚拟页区域，不修改 TR 资产本身。
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
 - `layers` 可选：1..256 层。每层必有 `name`、`heightRange`、`slopeRange`；可选
   `noise`、`uvScale`、`uvRotation` 与 L1 新增的 `sourceResolution`（512/1024/2048，
-  默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认 0）、`sourceSet`（0..255，
+  默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认中性 0.18）、`sourceSet`（0..255，
   默认 0）、`flags`（0..65535，默认 0）。未知字段、越界值与非有限数都会被拒绝；
   旧 TR 不写新字段时行为与默认值不变。
 - `M_terrain` 使用这些层生成 256×4 `RGBA32F` layer table（catalog），未使用的层
@@ -88,11 +92,10 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。
 - 每个 chunk 计算局部 AABB，交给 World/渲染快照做视锥与阴影裁剪。
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
-- 默认只有 LOD0；TR 可选 `lodLevels`/`lodDistances` 可生成 LOD1..3 与 skirt
-  （`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`），但 renderer 运行时选择尚未接入，
-  出图仍只生成/绑定 LOD0。LOD0 不带 skirt；LOD>=1 的 skirt 深度是经验值，
-  只保证覆盖“细边低于粗边”的一半情况，接入运行时选择前需要补 LOD0 skirt
-  或显式 skirt 参数。没有地形 chunk 卸载。
+- `lodLevels=1` 的旧资产仍只生成/绑定 LOD0，且 LOD0 无 skirt、顶点/索引与历史
+  实现逐字节一致。`lodLevels>1` 时 renderer 为每个 chunk 生成 0..lodLevels-1 级，
+  每一级（包括 LOD0）都追加 skirt；运行时每帧按相机到 chunk 世界 AABB 的距离
+  只输出一级。skirt 深度是经验值，未做裂缝上界证明。没有地形 chunk 卸载。
   地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
 
 ### CPU 几何 LOD 与 skirt
@@ -103,19 +106,39 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - 基础顶点的世界位置、UV、`texCoord1` 与法线公式和 LOD0 相同，只是采样点落在
   每 `2^lod` 个 LOD0 网格点上；中心差分间距同步乘 `2^lod`，相邻 chunk 的共享边界
   仍使用同一全局采样。
-- LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
-- `lod >= 1` 在边界环追加一圈 skirt：位置沿 -Y 下移
+- `lodLevels=1` 时 LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
+- `lodLevels>1` 时 LOD0 也带 skirt（否则与相邻 LOD1 的边界约一半情况无法遮挡）；
+  `BuildChunks(plan, lodLevel, buildSkirtOverride=true)` 显式打开。
+- `lod >= 1`（或无 override 的 LOD0）在边界环追加一圈 skirt：位置沿 -Y 下移
   `max(1cm, 10% × |heightScale|)`，法线/UV/`texCoord1` 沿用边界顶点；skirt 顶点排在
   基础顶点之后，基础顶点与索引不动。深度只取决于 TR 的 `heightScale`，因此各级一致；
-  它只是经验值，未做裂缝上界证明，且只覆盖“细边低于粗边”的一半情况。接入运行时
-  选择前需要补 LOD0 skirt 或显式 skirt 参数。
+  它只是经验值，未做裂缝上界证明。
 - chunk 的 AABB 覆盖 skirt 的最低点；skirt 绕序按引擎顺时针 front face 写成
   “几何法线朝内”，不会被 Back culling 剔除。
-- chunk 资源 key 含 `lod` 与合并步长；`lodDistances` 只影响运行时选择，不进 key。
+- chunk 资源 key 含 `lod`、合并步长与 LOD0 的 skirt 开关；`lodDistances`
+  只影响运行时选择，不进 key。
 - `TerrainLodDistancesCm(desc)`：显式距离表，或按地形最长边按级数均分
   （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
   在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
-  renderer 尚未接入运行时选择。
+
+### 运行时选择
+
+- `RendererTerrainLoader` 为每个 chunk 生成全部级，`MeshObjectBuildPlan` /
+  `WorldMeshObject` 携带 `lodGroupId`、`lodLevel`、`lodLevelCount`、
+  `lodDistancesCm` 和 LOD0 组 AABB。组 id 是
+  `placementId|chunkX|chunkZ`；非地形/单级地形为空组，行为不变。
+- 唯一选择点是 `WorldSnapshotBuilder::Build`。它每帧用相机位置到组世界 AABB 的
+  最近距离调用 `TerrainSelectLodLevelHysteresis`，同一组只向 `meshDraws` 输出
+  一个 draw。阴影、拾取、MaterialInstance 上下文都消费这一份快照。
+- 滞回比例是 10%：从 LOD `n` 变粗要 `distance >= lodDistances[n] * 1.1`，
+  变细要 `distance < lodDistances[n-1] * 0.9`。首次选择没有历史时与
+  `TerrainSelectLodLevel` 相同。每组的当前级、切换次数和 `previousObjectModels`
+  一样只缓存在 builder，不写回 World。
+- 组内各级共享同一个 `RuntimeId`（由 `lodGroupId` 派生），级切换不会让编辑器
+  选择/描边失配；非地形对象仍由 `objectName` 派生。若某组缺少当前级的可见网格，
+  builder 会输出 LOD0 代表兜底而不是留空洞。
+- 控制台 `terrainlod stats` 打印每个组的当前级/总级数、相机距离和累计切换次数；
+  只在命令执行时输出，不每帧刷屏。
 
 ## 场景对象
 
@@ -643,7 +666,7 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
 P3/P3.1/L1/L2/L3/L4a/L4b/L4c **没有**实现：低分辨率 fallback/淡入（含 shader
 侧 `avgColor` 混合）、相机/视锥预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
-同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、运行时 LOD 选择、
+同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
 地形 chunk 卸载、地形编辑。地形碰撞只有独立 heightfield 模块，尚未接入 World
 （见下节）。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
@@ -711,7 +734,16 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   skirt 的竖直下移与 AABB 覆盖、skirt 三角形朝内绕序、粗 LOD 跨 chunk 边界法线连续、
   `chunkQuads` 无法被步长整除与 `lodLevel` 越界时抛错、`lodLevels`/`lodDistances`
   的校验与加载器往返、默认距离按地形最长边推导、距离→级别边界（含负距离）、
+  距离 AABB 最近点、10% 双向滞回带、LOD0 显式 skirt override、
   chunk key 区分 LOD 且不受 `lodDistances` 影响。
+- 运行时选择：`editor_ui_tests --gtest_filter=TerrainLodSnapshot.*` 用真实
+  `World` + `WorldSnapshotBuilder` 钉住“每组只输出一个 draw”、近/远级切换、
+  RuntimeId 跨级稳定、两个组独立选择、无 LOD 组对象保持原 draw 与 RuntimeId。
+- LOD 冒烟：工作区 `artifacts/terrain-lod-smoke/` 的
+  `TR_terrain_lod_smoke.json`（3 级、4×4 chunk、距离 3000/8000cm）配
+  `SC_terrain_lod_near|mid|far.json`；`terrainlod stats` 分别出现 LOD0/LOD1/LOD2，
+  stderr 为空、无 Vulkan validation error。B32/M3/BC7 旧场景截图 SHA-256 与改动前
+  基线一致。
 - 运行时：`Generated/Validation/TerrainSmoke/SC_terrain_smoke.json` 加载 64×64 quad、
   2×2 chunk 地形并截图；见 [testing](testing.md)。
 - Phase B/C1 32 层数组 + 256 层上限：`Generated/Validation/TerrainB32/SC_terrain_b32.json`，

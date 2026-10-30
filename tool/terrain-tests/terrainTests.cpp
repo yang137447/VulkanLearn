@@ -588,6 +588,89 @@ TEST(TerrainLod, DerivesDefaultDistancesFromTerrainSize)
     EXPECT_EQ(VL::TerrainLodDistancesCm(desc), desc.lodDistancesCm);
 }
 
+TEST(TerrainLod, HysteresisKeepsLevelInsideTheBand)
+{
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+
+    // 首次选择没有历史级，与纯函数一致。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            990.0f, distances, false, 0),
+        0u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            1000.0f, distances, false, 0),
+        1u);
+
+    // 当前在 LOD1：变粗要越过 distances[1]=2000 的 +10%，变细要低于
+    // distances[0]=1000 的 -10%。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            1050.0f, distances, true, 1),
+        1u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            2201.0f, distances, true, 1),
+        2u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            950.0f, distances, true, 1),
+        1u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            899.0f, distances, true, 1),
+        0u);
+
+    // 超过最后一个阈值后保持最粗一级。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            100000.0f, distances, true, 2),
+        2u);
+}
+
+TEST(TerrainLod, AabbDistanceUsesTheNearestPoint)
+{
+    const Eigen::Vector3f boundsMin(-100.0f, -10.0f, -100.0f);
+    const Eigen::Vector3f boundsMax(100.0f, 10.0f, 100.0f);
+
+    // 点在盒内：距离为 0，而不是到中心的距离。
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f::Zero(), boundsMin, boundsMax),
+        0.0f);
+    // 单轴、三轴最近点距离。
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f(0.0f, 0.0f, 500.0f), boundsMin, boundsMax),
+        400.0f);
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f(300.0f, 0.0f, 500.0f), boundsMin, boundsMax),
+        std::sqrt(200.0f * 200.0f + 400.0f * 400.0f));
+}
+
+TEST(TerrainMeshBuilder, SkirtOverrideAddsSkirtToLod0)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+
+    const std::vector<VL::TerrainMeshChunk> legacy =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    const std::vector<VL::TerrainMeshChunk> skirted =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0, true);
+    ASSERT_EQ(legacy.size(), skirted.size());
+    for (size_t index = 0; index < legacy.size(); ++index)
+    {
+        // 2x2 quad 的 LOD0 基础网格是 3x3 顶点；边界环共 8 个顶点。
+        EXPECT_EQ(legacy[index].vertices.size(), 9u);
+        EXPECT_EQ(skirted[index].vertices.size(), 9u + 8u);
+        EXPECT_EQ(legacy[index].indices.size(), 24u);
+        EXPECT_EQ(skirted[index].indices.size(), 24u + 8u * 6u);
+    }
+}
+
 TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
 {
     VL::TerrainBuildPlan plan = MakePlan(
@@ -608,6 +691,13 @@ TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
     EXPECT_EQ(
         VL::TerrainChunkResourceKey(plan, 0, 0),
         VL::TerrainChunkResourceKey(plan, 0, 0, 0));
+
+    // LOD0 是否带 skirt 由 lodLevels 决定；单级与多级资产的 LOD0 不能共享 key。
+    VL::TerrainBuildPlan multiLodPlan = plan;
+    multiLodPlan.desc.lodLevels = 3;
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0),
+        VL::TerrainChunkResourceKey(multiLodPlan, 0, 0, 0));
 
     // lodDistances 只影响运行时选择，不得改变单级网格的资源 key。
     VL::TerrainBuildPlan retuned = plan;

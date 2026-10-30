@@ -5,9 +5,12 @@
 #include <limits>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 #include "commonFunction.h"
 #include "sceneNode.h"
+#include "terrain/terrainAssetTypes.h"
 
 namespace VL
 {
@@ -80,6 +83,13 @@ void ComputeWorldBounds(
     }
 }
 
+bool TerrainLodGroupStatsLess(
+    const TerrainLodGroupStats& left,
+    const TerrainLodGroupStats& right)
+{
+    return left.groupId < right.groupId;
+}
+
 std::string BuildObjectRuntimeKey(const World& world, const std::string& objectName)
 {
     return world.GetScenePath() + "|object|" + objectName;
@@ -115,6 +125,8 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.speedTreeWindProfileKey = meshObject.speedTreeWindProfileKey;
     snapshot.terrainFeedbackEligible =
         meshObject.terrainFeedbackEligible;
+    snapshot.lodGroupId = meshObject.lodGroupId;
+    snapshot.lodLevel = meshObject.lodLevel;
 
     const std::array<Eigen::Vector3f, 8> worldCorners = BuildWorldCorners(
         meshObject.localBoundsMin,
@@ -222,6 +234,18 @@ RuntimeId WorldObjectRuntimeId(const World& world, const std::string& objectName
     return StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
 }
 
+RuntimeId WorldMeshObjectRuntimeId(
+    const World& world,
+    const std::string& objectName,
+    const WorldMeshObject& meshObject)
+{
+    return StableRuntimeId(BuildObjectRuntimeKey(
+        world,
+        meshObject.lodGroupId.empty()
+            ? objectName
+            : meshObject.lodGroupId));
+}
+
 LightSnapshot BuildWorldDirectionalLightSnapshot(
     const World& world, const std::string& lightName, const DirectionalLight& light)
 {
@@ -270,6 +294,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     {
         previousViewProjection.reset();
         previousObjectModels.clear();
+        lodGroupStates.clear();
+        lodStats = TerrainLodStatsSnapshot{};
         previousWorldGeneration = world.GetGeneration();
     }
 
@@ -301,11 +327,21 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     snapshot.meshDraws.reserve(world.GetMeshObjects().size());
     std::unordered_map<RuntimeId, Eigen::Matrix4f> currentObjectModels;
     currentObjectModels.reserve(world.GetMeshObjects().size());
+    std::vector<TerrainLodGroupStats> lodGroupStats;
+    std::unordered_set<std::string> emittedLodGroups;
+    std::unordered_set<std::string> visitedLodGroups;
+    // 选择级缺失时的兜底代表（优先 LOD0）；正常情况下不会用到。
+    std::unordered_map<std::string, const WorldMeshObject*> lodGroupRepresentatives;
+    uint32_t lodSwitchedLastFrame = 0;
     for (const auto& [objectName, meshObject] : world.GetMeshObjects())
     {
         if (!meshObject.visible) continue;
 
-        const RuntimeId objectId = StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
+        // 同一 LOD 组的各级共用 RuntimeId：级切换不会改变编辑器选择/描边，
+        // 也避免 previousObjectModels 把同一 chunk 的多级当成不同对象。
+        const bool hasLodGroup = !meshObject.lodGroupId.empty();
+        const RuntimeId objectId =
+            WorldMeshObjectRuntimeId(world, objectName, meshObject);
 
         const auto previousModelIt = previousObjectModels.find(objectId);
         const Eigen::Matrix4f previousModel =
@@ -313,16 +349,132 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
                 ? previousModelIt->second
                 : meshObject.model;
 
+        bool selected = desc.hasSelectedDraw &&
+            desc.selectedObjectId == objectId &&
+            (desc.selectedAllMaterialSlots ||
+             desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex);
+
+        if (!hasLodGroup)
+        {
+            snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
+                objectName,
+                objectId,
+                meshObject,
+                previousModel,
+                selected));
+            currentObjectModels[objectId] = meshObject.model;
+            continue;
+        }
+
+        auto stateIt = lodGroupStates.find(meshObject.lodGroupId);
+        if (stateIt == lodGroupStates.end())
+        {
+            LodGroupState state;
+            state.levelCount = meshObject.lodLevelCount > 0
+                ? meshObject.lodLevelCount
+                : 1;
+            stateIt = lodGroupStates.emplace(
+                meshObject.lodGroupId,
+                state).first;
+        }
+        LodGroupState& state = stateIt->second;
+        visitedLodGroups.insert(meshObject.lodGroupId);
+
+        // 组 AABB 来自 LOD0，与当前级无关；每帧重新投影，因此 World 内
+        // 的对象变换（若有）不需要额外通知。
+        const std::array<Eigen::Vector3f, 8> groupCorners = BuildWorldCorners(
+            meshObject.lodGroupBoundsMin,
+            meshObject.lodGroupBoundsMax,
+            meshObject.model);
+        Eigen::Vector3f groupWorldMin;
+        Eigen::Vector3f groupWorldMax;
+        ComputeWorldBounds(groupCorners, groupWorldMin, groupWorldMax);
+        const float distanceCm = TerrainLodDistanceToAabbCm(
+            snapshot.camera.position,
+            groupWorldMin,
+            groupWorldMax);
+        const uint32_t previousLevel =
+            state.initialized ? state.level : 0;
+        const uint32_t nextLevel = TerrainSelectLodLevelHysteresis(
+            distanceCm,
+            meshObject.lodDistancesCm,
+            state.initialized,
+            previousLevel);
+        if (state.initialized && nextLevel != state.level)
+        {
+            ++state.switchCount;
+            ++lodSwitchedLastFrame;
+        }
+        state.level = nextLevel;
+        state.lastDistanceCm = distanceCm;
+        state.initialized = true;
+
+        // 兜底代表优先 LOD0：遍历顺序不确定，所以只要见到 LOD0 就覆盖。
+        const auto representativeIt =
+            lodGroupRepresentatives.find(meshObject.lodGroupId);
+        if (representativeIt == lodGroupRepresentatives.end() ||
+            meshObject.lodLevel == 0)
+        {
+            lodGroupRepresentatives[meshObject.lodGroupId] = &meshObject;
+        }
+
+        if (meshObject.lodLevel != state.level)
+            continue;
+
+        emittedLodGroups.insert(meshObject.lodGroupId);
         snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
             objectName,
             objectId,
             meshObject,
             previousModel,
-            desc.hasSelectedDraw &&
-                desc.selectedObjectId == objectId &&
-                (desc.selectedAllMaterialSlots ||
-                 desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex)));
+            selected));
         currentObjectModels[objectId] = meshObject.model;
+    }
+
+    for (const std::string& groupId : visitedLodGroups)
+    {
+        const auto stateIt = lodGroupStates.find(groupId);
+        if (stateIt == lodGroupStates.end())
+            continue;
+        const LodGroupState& state = stateIt->second;
+        TerrainLodGroupStats groupStats;
+        groupStats.groupId = groupId;
+        groupStats.level = state.level;
+        groupStats.levelCount = state.levelCount;
+        groupStats.distanceCm = state.lastDistanceCm;
+        groupStats.switchCount = state.switchCount;
+        lodGroupStats.push_back(std::move(groupStats));
+    }
+
+    // 防御性兜底：如果某组缺少当前级的可见网格（资产/加载缺陷），输出
+    // LOD0 代表而不是留下空洞。统计仍记录选择级，便于从命令行发现异常。
+    for (const auto& [groupId, representative] : lodGroupRepresentatives)
+    {
+        if (emittedLodGroups.find(groupId) != emittedLodGroups.end())
+            continue;
+        if (representative == nullptr || !representative->visible)
+            continue;
+        const RuntimeId objectId = WorldMeshObjectRuntimeId(
+            world,
+            representative->debugName,
+            *representative);
+        const auto previousModelIt = previousObjectModels.find(objectId);
+        const Eigen::Matrix4f previousModel =
+            previousModelIt != previousObjectModels.end()
+                ? previousModelIt->second
+                : representative->model;
+        const bool selected = desc.hasSelectedDraw &&
+            desc.selectedObjectId == objectId &&
+            (desc.selectedAllMaterialSlots ||
+             desc.selectedMaterialSlotIndex ==
+                 representative->materialSlotIndex);
+        snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
+            representative->debugName,
+            objectId,
+            *representative,
+            previousModel,
+            selected));
+        currentObjectModels[objectId] = representative->model;
     }
 
     const size_t lightCount =
@@ -363,6 +515,18 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     previousViewProjection = snapshot.camera.viewProjection;
     previousObjectModels = std::move(currentObjectModels);
 
+    std::sort(
+        lodGroupStats.begin(),
+        lodGroupStats.end(),
+        TerrainLodGroupStatsLess);
+    lodStats.valid = true;
+    lodStats.worldGeneration = world.GetGeneration();
+    lodStats.frameIndex = desc.frameIndex;
+    lodStats.groupCount =
+        static_cast<uint32_t>(lodGroupStats.size());
+    lodStats.switchedLastFrame = lodSwitchedLastFrame;
+    lodStats.groups = std::move(lodGroupStats);
+
     return RuntimeResult<WorldSnapshot>::Success(std::move(snapshot));
 }
 
@@ -371,6 +535,8 @@ void WorldSnapshotBuilder::Reset()
     previousWorldGeneration.reset();
     previousViewProjection.reset();
     previousObjectModels.clear();
+    lodGroupStates.clear();
+    lodStats = TerrainLodStatsSnapshot{};
 }
 
 void WorldSnapshotBuilder::Swap(
@@ -382,6 +548,9 @@ void WorldSnapshotBuilder::Swap(
         other.previousViewProjection);
     previousObjectModels.swap(
         other.previousObjectModels);
+    lodGroupStates.swap(
+        other.lodGroupStates);
+    std::swap(lodStats, other.lodStats);
 }
 
 } // namespace VL

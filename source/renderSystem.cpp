@@ -1834,6 +1834,36 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << std::endl;
 }
 
+void RenderSystem::ReportTerrainLodStatistics() const
+{
+    const VL::TerrainLodStatsSnapshot& stats =
+        worldSnapshotBuilder.GetTerrainLodStats();
+    if (!stats.valid)
+    {
+        std::cout
+            << "[TerrainLOD] stats not published yet."
+            << std::endl;
+        return;
+    }
+
+    std::cout
+        << "[TerrainLOD] groups=" << stats.groupCount
+        << " switchedLastFrame=" << stats.switchedLastFrame
+        << " frame=" << stats.frameIndex
+        << " generation=" << stats.worldGeneration
+        << std::endl;
+    for (const VL::TerrainLodGroupStats& group : stats.groups)
+    {
+        std::cout
+            << "[TerrainLOD] group=" << group.groupId
+            << " level=" << group.level << "/" << group.levelCount
+            << " distCm="
+            << static_cast<long long>(std::llround(group.distanceCm))
+            << " switches=" << group.switchCount
+            << std::endl;
+    }
+}
+
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
 {
     // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。

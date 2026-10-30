@@ -314,6 +314,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
             object.terrainFeedbackEligible =
                 meshObjectPlan.terrainFeedbackEligible;
+            object.lodGroupId = meshObjectPlan.lodGroupId;
+            object.lodLevel = meshObjectPlan.lodLevel;
+            object.lodLevelCount = meshObjectPlan.lodLevelCount;
+            object.lodDistancesCm = meshObjectPlan.lodDistancesCm;
+            object.lodGroupBoundsMin = meshObjectPlan.lodGroupBoundsMin;
+            object.lodGroupBoundsMax = meshObjectPlan.lodGroupBoundsMax;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

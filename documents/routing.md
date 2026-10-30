@@ -171,9 +171,11 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   placement 平移/旋转/缩放、16 位高度压缩，并复用调用方已有的 PhysicsSystem；
   `source/physics/joltRegistration.*` 是地形与 `ScriptPhysicsWorld` 共用的进程级
   Jolt 注册。场景 `terrain` 对象**尚未**自动生成碰撞体，`TerrainCollisionWorld`
-  只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成与 `TerrainLodDistancesCm` /
-  `TerrainSelectLodLevel` 距离选择接口，但 renderer 运行时选择未接、出图仍只有
-  LOD0。当前没有低分辨率 fallback/淡入、相机/视锥预取、地形编辑，也没有
+  只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成；`lodLevels>1` 时
+  `RendererTerrainLoader` 生成全部级，`WorldSnapshotBuilder` 每帧按相机到
+  chunk 世界 AABB 的距离与 10% 滞回选择一级，阴影/拾取/材质上下文共享同一快照，
+  `terrainlod stats` 可观测。`lodLevels=1` 旧资产仍逐字节等同 LOD0。
+  当前没有低分辨率 fallback/淡入、相机/视锥预取、地形编辑，也没有
   World 级碰撞接入。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
   `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
@@ -188,7 +190,8 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 - [地形系统：Open World Demo Collection 复刻计划](plan/rendering/terrain-openworld-demo-plan.md)：
   当前地形目标。CPU 高度图网格 + 最多 32 层 + tile 候选层 + ID/权重图 top-4；
-  GPU-driven/VT/LOD 仍搁置（大世界层表另见下一项）。
+  GPU-driven/VT 与几何 streaming 仍搁置；CPU 几何 LOD 已接运行时选择
+  （大世界层表另见下一项）。
   M2 的基础 TR/场景/网格/World 渲染已落地并写入 `contracts/terrain.md`；M3+ 的层混合与
   画面复刻仍未实现。计划不替代当前契约。
 - [地形大世界与上百层地表架构](plan/rendering/terrain-large-world-layers-plan.md)：
