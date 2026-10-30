@@ -141,6 +141,14 @@ public:
     // preload=true 保持 C2b 的“注册即全量常驻”；false 时页面由 RequestPage 按需生成。
     // 容量不足时 preload 会尽量驻留并在每次失败后继续，不会死循环；失败数记在
     // Stats::preloadDeferredCount，剩余页保持非驻留。
+    //
+    // layerIdMap 是 local layer -> World 全局 layerId；空映射等价恒等映射
+    // （单 TR/旧调用点）。非空时长度必须等于 plan.desc.layers.size()，
+    // 否则说明 registry 与计划不同步，注册期直接失败。
+    void RegisterTerrain(
+        const TerrainBuildPlan& plan,
+        const std::vector<uint8_t>& layerIdMap,
+        bool preload = true);
     void RegisterTerrain(const TerrainBuildPlan& plan, bool preload = true);
 
     // P3 流式加载的初始可见集合：只请求 placement 中心 tilesPerSide² 页，
@@ -326,6 +334,9 @@ public:
     const std::vector<uint8_t>& IdAtlas() const { return idAtlas; }
     const std::vector<uint8_t>& WeightAtlas() const { return weightAtlas; }
     const std::vector<Registration>& Registrations() const { return registrations; }
+    // 一次摆放的 local -> global 层映射；未注册/无层时返回空 vector（恒等语义）。
+    const std::vector<uint8_t>& PlacementLayerIdMap(
+        const std::string& placementId) const;
 
     // 取走自上次消费以来的所有变更页，按页表槽位升序输出；返回是否非空。
     // 输出 vector 会先被清空，但不会清 dirty；调用方在 GPU 上传成功后再 Commit。
@@ -387,6 +398,8 @@ private:
     PageState* FindPageByVirtualMutable(uint32_t virtualPageX, uint32_t virtualPageY);
     PageState* FindPageByPhysicalMutable(uint32_t physicalPageX, uint32_t physicalPageY);
     const TerrainBuildPlan* FindPlan(const std::string& placementId) const;
+    const std::vector<uint8_t>& LayerIdMapForPlanIndex(
+        size_t planIndex) const;
     void CopyAtlasPage(
         uint32_t physicalPageX,
         uint32_t physicalPageY,
@@ -415,6 +428,8 @@ private:
     std::vector<uint64_t> physicalSlotReleaseEpoch;
     std::vector<Registration> registrations;
     std::vector<TerrainBuildPlan> plans;
+    // registrations/plans/layerIdMaps 三者索引一一对应。
+    std::vector<std::vector<uint8_t>> layerIdMaps;
     std::vector<PageState> pages;
     Stats stats;
     uint32_t residentCount = 0;

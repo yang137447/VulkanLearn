@@ -173,6 +173,11 @@ struct TerrainLayerDesc
     // 未来层 atlas 分组与 sRGB/alpha/biome 等保留位；L1 只透传。
     uint32_t sourceSet = 0;
     uint32_t flags = 0;
+    // 跨 TR 共享层的显式身份。为空时由 TerrainLayerRegistry 回退成
+    // "<assetPath>#<name>"；同一 key 必须参数完全一致，否则 World 加载失败。
+    // key 只是身份，不参与 catalog 采样；参数哈希不作为 ID（内容一改 ID 就漂移）。
+    // 放在结构体末尾，保持既有聚合初始化（name/height/... 顺序）源码兼容。
+    std::string key;
 };
 
 // TR_*.json 解析后的几何/材质描述。size、heightScale、heightOffset 的单位都是 cm，

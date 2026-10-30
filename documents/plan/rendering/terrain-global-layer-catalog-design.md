@@ -5,8 +5,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 类型 | 架构设计 / 未来工作（**非契约**） |
-| 状态 | 未实现。当前行为以 `documents/contracts/terrain.md` 与源码为准 |
-| 基线 | `codex/terrain-openworld` @ `bf07d42`（2026-10-30） |
+| 状态 | S1/S2 已实现；S3–S5 未实现。当前行为以 `documents/contracts/terrain.md` 与源码为准 |
+| 基线 | `codex/terrain-openworld` @ `8593b00`（2026-10-30） |
 | 目标 | 16km 级世界、256+ 全局层、多 biome、每 tile 32 候选、多 `sourceSet`、显存预算 |
 | 非目标 | 编辑器绘制工具、GPU-driven 几何、最终美术资产、跨进程层注册服务 |
 | 关联 | [层纹理流式设计](terrain-layer-texture-streaming-design.md)、[大世界与上百层计划](terrain-large-world-layers-plan.md)、[terrain 契约](../../contracts/terrain.md) |
@@ -638,6 +638,15 @@ for (slot = 0; slot < 4; ++slot) {
 
 **依赖**：无。**不需要 descriptor 变更。**
 
+**状态（2026-10-31）**：已实现，分支 `codex/terrain-global-catalog-impl`。
+`TerrainLayerRegistry`、`TerrainLayerDesc::key`、local→global 映射、
+`TerrainWeightMapBuilder` 写 globalId、coordinator 替换
+`AreLayersIdentical` 均已落地；单 TR 恒等映射与 B32/M3/BC7 mode 0 截图
+逐字节不变由测试/冒烟验证。实际冒烟用 mode 1 双 biome 场景
+（`SC_terrain_vt_two_sets.json`）覆盖“两个 TR 不同层定义同时出图”，
+因为 mode 0 的 `sampler2DArray` 仍按 globalId 直接索引每个 MI 的数组：
+多 biome mode 0 要求数组按 globalId 排布，否则应使用 mode 1。
+
 ### S2：多 sourceSet 的源纹理注册 + 统一 atlas 上传
 
 **目标**：两个以上 biome 各自绑定不同源数组，但共享同一组层 atlas。
@@ -659,6 +668,15 @@ for (slot = 0; slot < 4; ++slot) {
 两套源图都能出图；BC 与 RGBA8 各跑一次。
 
 **依赖**：S1。**不需要 descriptor 变更。**
+
+**状态（2026-10-31）**：已实现。
+`source/terrain/terrainLayerSources.*` 引入
+`map<sourceSet, TerrainSourceSetRecord>` 与 `layerSlices`（globalId → 源 slice），
+层页上传按层所在 set 选源数组，三张 atlas 仍只有一组并要求格式一致；
+`TerrainLayerVisibilityConfig::sourceSets` 按层使用各自 set 的 mip 上限。
+冒烟 `SC_terrain_vt_two_sets.json`：A=32 层 set 0、B=8 层 set 1，
+`terrainlayerstats` 输出 `globalLayers=40 sourceSets=2 dedupedLayers=0`、
+`missPages=0`，两套源数组各自出图。多格式组（S5）与逐 set 独立 atlas 未做。
 
 ### S3：>256 层的位宽与 stride 显式化（可选，按目标决定）
 

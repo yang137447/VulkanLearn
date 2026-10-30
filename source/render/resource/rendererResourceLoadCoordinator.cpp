@@ -16,6 +16,7 @@
 #include "render/resource/terrainLayerFeedbackGpu.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "terrain/terrainPageManager.h"
+#include "terrain/terrainLayerRegistry.h"
 #include "terrain/terrainLayerTable.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
@@ -66,8 +67,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         std::make_shared<TerrainFeedbackGpuRing>(*rendererBackend);
     terrainStreaming->layerFeedbackRing =
         std::make_shared<TerrainLayerFeedbackGpuRing>(*rendererBackend);
-    std::vector<TerrainLayerDesc> worldTerrainLayers;
-    bool hasTerrainLayers = false;
+    // S1：先在整个 World 上建立全局层注册表。多个 TR 可以有不同层定义；
+    // 同 key 且参数一致的去重成同一个 globalId，冲突在注册任何页之前失败。
+    TerrainLayerRegistry layerRegistry;
+    std::vector<const TerrainBuildPlan*> layerTerrains;
     for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
     {
         if (objectPlan.objectType != "terrain")
@@ -80,20 +83,22 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         // M_pbr/M_unlit 等地形不必有 layer table；只有带 layer 的地形参与共享 VT。
         if (!TerrainUsesVirtualPages(terrainPlan))
             continue;
-        if (!hasTerrainLayers)
-        {
-            worldTerrainLayers = terrainPlan.desc.layers;
-            hasTerrainLayers = true;
-        }
-        else if (!TerrainLayerTable::AreLayersIdentical(worldTerrainLayers, terrainPlan.desc.layers))
-        {
-            throw std::runtime_error(
-                "All layer-table terrains in a World must share identical layer definitions: " +
-                terrainPlan.desc.assetPath);
-        }
+        layerRegistry.RegisterTerrain(terrainPlan);
+        layerTerrains.push_back(&terrainPlan);
+    }
+    const std::vector<TerrainLayerDesc> worldTerrainLayers =
+        layerRegistry.LayerDescriptions();
+    const bool hasTerrainLayers = !layerTerrains.empty();
+    for (const TerrainBuildPlan* terrainPlan : layerTerrains)
+    {
+        const std::vector<uint8_t>* layerIdMap =
+            layerRegistry.FindLayerIdMap(TerrainPlacementIdentity(*terrainPlan));
         // P3：不再全量 preload。注册只建立虚拟页/槽位身份，驻留由初始集合
         // 与 feedback 驱动；否则 32×32 地形会在加载期烘焙所有页并互相淘汰。
-        terrainPageManager.RegisterTerrain(terrainPlan, false);
+        terrainPageManager.RegisterTerrain(
+            *terrainPlan,
+            layerIdMap == nullptr ? std::vector<uint8_t>() : *layerIdMap,
+            false);
     }
     if (!terrainPageManager.Registrations().empty())
     {
@@ -118,6 +123,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     if (hasTerrainLayers)
     {
         terrainStreaming->layerDefinitions = worldTerrainLayers;
+        // S1 统计：registry 已把跨 TR 同 key 的层去重；这个数字是省下的
+        // 局部层总数，供 terrainlayerstats 验证去重效果。
+        terrainStreaming->layerDedupedLayerCount =
+            layerRegistry.DedupedLayerCount();
         // 层页虚拟编号依赖各层源分辨率，必须在创建页表/请求页之前配置。
         terrainStreaming->layerPageManager.ConfigureLayers(worldTerrainLayers);
         terrainStreaming->layerPageManager.SetResidentCapacity(
@@ -252,7 +261,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         }
     }
 
-    if (hasTerrainLayers && terrainStreaming->layerSources.albedo)
+    if (hasTerrainLayers && !terrainStreaming->layerSources.empty())
     {
         // L3：atlas 依赖真实 MI 的层数组，已在首个地形 MI 载入时创建；这里
         // 只做兜底。mode 0 上传每层尾页的映射验证集合；mode 1 也只请求

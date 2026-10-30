@@ -10,6 +10,7 @@
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerFeedback.h"
 #include "terrain/terrainLayerPageManager.h"
+#include "terrain/terrainLayerSources.h"
 #include "terrain/terrainPageManager.h"
 
 namespace VL
@@ -34,6 +35,9 @@ struct TerrainLayerVisibilityConfig
     uint32_t layerCount = 0;
     // 三张源数组的最小 mip 级数；层自身 mip 链也会参与 clamp。
     uint32_t sourceMipLevels = 1;
+    // S2：按层所在 sourceSet 取各自的源 mip 上限；非空时优先于
+    // sourceMipLevels，避免不同 set 的 mip 数不同导致多请求/少请求。
+    const TerrainLayerSourceSets* sourceSets = nullptr;
     // 每帧最多发出的层页请求数，以及本帧最多重建多少张非驻留覆盖页。
     uint32_t maxRequestsPerFrame = 16;
     uint32_t maxCoverPageRebuildsPerFrame = 4;

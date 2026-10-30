@@ -42,6 +42,7 @@
 #include "world/world.h"
 #include "scene/sceneAssetTypes.h"
 #include "terrain/terrainPageManager.h"
+#include "terrain/terrainLayerTable.h"
 
 namespace
 {
@@ -1312,11 +1313,10 @@ void RenderSystem::ApplyTerrainLayerFeedback(
     config.layerCount =
         static_cast<uint32_t>(streaming->layerDefinitions.size());
     // 三张源数组的 mip 链可能不同，只请求三张都能 copy 的级别。
-    const uint32_t sourceMipLevels = std::min(
-        {streaming->layerSources.albedoMipLevels,
-         streaming->layerSources.normalMipLevels,
-         streaming->layerSources.pbrMipLevels});
+    const uint32_t sourceMipLevels =
+        VL::TerrainSourceMinMipLevels(streaming->layerSources);
     config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.sourceSets = &streaming->layerSources;
     config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
     config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
     config.idleEvictionEnabled =
@@ -1351,11 +1351,10 @@ bool RenderSystem::ApplyTerrainLayerExactFeedback(
     VL::TerrainLayerVisibilityConfig config;
     config.layerCount =
         static_cast<uint32_t>(streaming->layerDefinitions.size());
-    const uint32_t sourceMipLevels = std::min(
-        {streaming->layerSources.albedoMipLevels,
-         streaming->layerSources.normalMipLevels,
-         streaming->layerSources.pbrMipLevels});
+    const uint32_t sourceMipLevels =
+        VL::TerrainSourceMinMipLevels(streaming->layerSources);
     config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.sourceSets = &streaming->layerSources;
     config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
     config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
     config.idleEvictionEnabled =
@@ -1735,6 +1734,12 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.layerEvictionCount = layerStats.evictionCount;
     stats.layerUploadedPagesTotal = streaming->layerUploadedPagesTotal;
     stats.layerUploadedBytesTotal = streaming->layerUploadedBytesTotal;
+    // S1/S2：全局层数 / sourceSet 数 / 去重掉的局部层数。
+    stats.layerGlobalLayers =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    stats.layerSourceSetCount =
+        static_cast<uint32_t>(streaming->layerSources.size());
+    stats.layerDedupedLayers = streaming->layerDedupedLayerCount;
     // L4a：可见层推导与逐帧预算的实时值。
     stats.layerVisibleLayers =
         streaming->latestLayerVisibility.visibleLayers;
@@ -1904,6 +1909,14 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " lastValidEpoch=" << stats.layerLastValidFeedbackEpoch
         << " usedCoverFallback=" << (stats.layerUsedCoverFallback ? 1 : 0)
         << " idleGrace=" << stats.layerIdleGraceEpochs
+        << std::endl;
+    // S1/S2：全局层 / sourceSet / 去重统计。globalLayers 是 catalog 的真实
+    // 层数（globalId 0..N-1）；deduped 是跨 TR 复用同一个 key 省下的层数。
+    std::cout
+        << "[TerrainLayer] globalLayers=" << stats.layerGlobalLayers
+        << " sourceSets=" << stats.layerSourceSetCount
+        << " dedupedLayers=" << stats.layerDedupedLayers
+        << " capacity=" << VL::TerrainLayerTable::MaxLayers
         << std::endl;
     // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
     std::cout

@@ -268,6 +268,9 @@ std::vector<vk::BufferImageCopy> BuildTerrainLayerPageTableCopyRegions(
 // 源偏移由页坐标决定，目标偏移由物理页的 (slice,tileX,tileY) 决定。
 std::vector<vk::ImageCopy> BuildTerrainLayerAtlasImageCopies(
     const TerrainLayerUploadBatch& batch,
+    const TerrainLayerPageManager& layerPageManager,
+    const TerrainSourceSetRecord& sources,
+    uint32_t sourceSet,
     uint32_t sourceWidth,
     uint32_t sourceHeight)
 {
@@ -275,6 +278,9 @@ std::vector<vk::ImageCopy> BuildTerrainLayerAtlasImageCopies(
     regions.reserve(batch.uploads.size());
     for (const TerrainLayerPageManager::PageUpload& upload : batch.uploads)
     {
+        // 多 sourceSet：只有属于本组的层页才从这个源数组 copy。
+        if (layerPageManager.LayerSourceSet(upload.key.layerId) != sourceSet)
+            continue;
         // catalog 的 sourceResolution 可能与实际纹理尺寸不一致（现有验证资产
         // 就是 32² 图 + 默认 1K catalog）。L2 按源 mip 的真实尺寸裁剪 extent：
         // 源小于一页时只复制左上角，其余像素保持 atlas clear 的零值。
@@ -301,12 +307,20 @@ std::vector<vk::ImageCopy> BuildTerrainLayerAtlasImageCopies(
             mipHeight - sourceY));
         const TerrainLayerPageManager::PhysicalPageAddress address =
             TerrainLayerPageManager::DecodePhysicalPage(upload.physicalPage);
+        // 全局层号不等于源数组 slice：源集合内部仍按 MI 的局部层顺序。
+        uint32_t sourceLayer = 0;
+        if (!sources.TryGetLayerSlice(upload.key.layerId, sourceLayer))
+        {
+            throw std::runtime_error(
+                "Terrain layer is not registered in its source set: layerId=" +
+                std::to_string(upload.key.layerId));
+        }
         vk::ImageCopy region;
         region
             .setSrcSubresource(vk::ImageSubresourceLayers()
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setMipLevel(upload.key.mip)
-                .setBaseArrayLayer(upload.key.layerId)
+                .setBaseArrayLayer(sourceLayer)
                 .setLayerCount(1))
             .setDstSubresource(vk::ImageSubresourceLayers()
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
@@ -484,7 +498,7 @@ void RecordTerrainLayerUploads(
     vk::CommandBuffer commandBuffer,
     TerrainLayerPageManager& layerPageManager,
     TerrainLayerGpuResources& layerResources,
-    const TerrainLayerSourceTextures& sources,
+    const TerrainLayerSourceSets& sources,
     const TerrainLayerUploadBatch& batch,
     vk::Buffer stagingBuffer,
     vk::DeviceSize pageTableStagingOffset)
@@ -524,34 +538,52 @@ void RecordTerrainLayerUploads(
 
     if (batch.uploads.empty())
         return;
-    if (!sources.albedo || !sources.normal || !sources.pbr)
+    if (sources.empty())
         throw std::runtime_error("Terrain layer source textures are not bound");
-    // 三张源图允许尺寸/格式不同（BC7 albedo + RGBA8 normal/pbr），因此
-    // 每个 atlas 必须用自己的源尺寸生成 region，不能共用一份。
-    RecordTerrainLayerAtlasCopies(
-        commandBuffer,
-        *layerResources.albedoAtlas,
-        *sources.albedo,
-        BuildTerrainLayerAtlasImageCopies(
-            batch,
-            sources.albedoWidth,
-            sources.albedoHeight));
-    RecordTerrainLayerAtlasCopies(
-        commandBuffer,
-        *layerResources.normalAtlas,
-        *sources.normal,
-        BuildTerrainLayerAtlasImageCopies(
-            batch,
-            sources.normalWidth,
-            sources.normalHeight));
-    RecordTerrainLayerAtlasCopies(
-        commandBuffer,
-        *layerResources.pbrAtlas,
-        *sources.pbr,
-        BuildTerrainLayerAtlasImageCopies(
-            batch,
-            sources.pbrWidth,
-            sources.pbrHeight));
+    // S2：本批可能来自多个 sourceSet；按 set 分组，各自从自己的源数组
+    // copy 到同一组 atlas。三张源图允许尺寸/格式不同（BC7 albedo +
+    // RGBA8 normal/pbr），因此每个 atlas 用自己的源尺寸生成 region。
+    for (const auto& entry : sources)
+    {
+        const TerrainSourceSetRecord& record = entry.second;
+        if (!record.HasTextures())
+            throw std::runtime_error(
+                "Terrain layer source set is incomplete: set=" +
+                std::to_string(record.sourceSet));
+        RecordTerrainLayerAtlasCopies(
+            commandBuffer,
+            *layerResources.albedoAtlas,
+            *record.albedo,
+            BuildTerrainLayerAtlasImageCopies(
+                batch,
+                layerPageManager,
+                record,
+                record.sourceSet,
+                record.albedoWidth,
+                record.albedoHeight));
+        RecordTerrainLayerAtlasCopies(
+            commandBuffer,
+            *layerResources.normalAtlas,
+            *record.normal,
+            BuildTerrainLayerAtlasImageCopies(
+                batch,
+                layerPageManager,
+                record,
+                record.sourceSet,
+                record.normalWidth,
+                record.normalHeight));
+        RecordTerrainLayerAtlasCopies(
+            commandBuffer,
+            *layerResources.pbrAtlas,
+            *record.pbr,
+            BuildTerrainLayerAtlasImageCopies(
+                batch,
+                layerPageManager,
+                record,
+                record.sourceSet,
+                record.pbrWidth,
+                record.pbrHeight));
+    }
 }
 
 } // namespace
@@ -597,7 +629,7 @@ void RecordTerrainLayerPageUploads(
     vk::CommandBuffer commandBuffer,
     TerrainLayerPageManager& layerPageManager,
     TerrainLayerGpuResources& layerResources,
-    const TerrainLayerSourceTextures& sources,
+    const TerrainLayerSourceSets& sources,
     const TerrainLayerUploadBatch& batch,
     vk::Buffer stagingBuffer,
     vk::DeviceSize pageTableStagingOffset)
@@ -1233,12 +1265,18 @@ void CreateTerrainLayerAtlasGpuResources(
     RendererBackendVulkan& rendererBackend,
     TerrainStreamingState& streamingState)
 {
-    const TerrainLayerSourceTextures& sources = streamingState.layerSources;
-    if (!sources.albedo || !sources.normal || !sources.pbr)
+    // 单一格式组（S5 之前的固定语义）：所有 sourceSet 必须共享三张图的
+    // 格式，才能写进同一组 atlas。取第一个 set 作为 atlas 格式来源。
+    if (streamingState.layerSources.empty())
     {
         throw std::runtime_error(
             "Terrain layer atlas requires bound albedo/normal/pbr layer arrays");
     }
+    const TerrainSourceSetRecord& sources =
+        streamingState.layerSources.begin()->second;
+    if (!sources.HasTextures())
+        throw std::runtime_error(
+            "Terrain layer atlas requires bound albedo/normal/pbr layer arrays");
 
     TerrainLayerGpuResources& resources = streamingState.layerResources;
     resources.physicalPageCount =
@@ -1359,16 +1397,7 @@ void RequestInitialTerrainLayerPages(
     uint32_t framesInFlight)
 {
     TerrainLayerPageManager& pageManager = streamingState.layerPageManager;
-    const TerrainLayerSourceTextures& sources = streamingState.layerSources;
-    if (!sources.albedo || !sources.normal || !sources.pbr)
-        return;
-    // L2 只取每层尾页（page 0,0）作为映射验证集合；不请求 85/341 页全链。
-    // 源纹理可能只有部分 mip（例如 BC7 4 mip），尾页必须夹到可用范围。
-    const uint32_t sourceMipCount = std::min(
-        {sources.albedoMipLevels,
-         sources.normalMipLevels,
-         sources.pbrMipLevels});
-    if (sourceMipCount == 0)
+    if (streamingState.layerSources.empty())
         return;
     // 请求前先建立 epoch 上下文；加载期没有提交过帧时 completedEpoch 为 0。
     pageManager.SetGpuEpochContext(completedEpoch, framesInFlight);
@@ -1376,6 +1405,14 @@ void RequestInitialTerrainLayerPages(
         static_cast<uint32_t>(streamingState.layerDefinitions.size());
     for (uint32_t layerId = 0; layerId < layerCount; ++layerId)
     {
+        // L2 只取每层尾页（page 0,0）作为映射验证集合；不请求 85/341 页全链。
+        // 源纹理可能只有部分 mip（例如 BC7 4 mip），尾页必须夹到该层所在
+        // sourceSet 的可用范围。
+        const uint32_t sourceMipCount = TerrainSourceMipLevelsForLayer(
+            streamingState.layerSources,
+            pageManager.LayerSourceSet(layerId));
+        if (sourceMipCount == 0)
+            continue;
         const uint32_t mipCount =
             TerrainLayerMipCount(pageManager.LayerSourceResolution(layerId));
         const uint32_t mip = std::min(
@@ -1399,14 +1436,7 @@ void RequestAllTerrainLayerPages(
     // 页都请求并上传，否则缺失页只能显示 catalog avgColor。L4 会用
     // feedback 取代这个全量预取。
     TerrainLayerPageManager& pageManager = streamingState.layerPageManager;
-    const TerrainLayerSourceTextures& sources = streamingState.layerSources;
-    if (!sources.albedo || !sources.normal || !sources.pbr)
-        return;
-    const uint32_t sourceMipCount = std::min(
-        {sources.albedoMipLevels,
-         sources.normalMipLevels,
-         sources.pbrMipLevels});
-    if (sourceMipCount == 0)
+    if (streamingState.layerSources.empty())
         return;
 
     const uint32_t layerCount =
@@ -1414,6 +1444,9 @@ void RequestAllTerrainLayerPages(
     uint32_t totalPages = 0;
     for (uint32_t layerId = 0; layerId < layerCount; ++layerId)
     {
+        const uint32_t sourceMipCount = TerrainSourceMipLevelsForLayer(
+            streamingState.layerSources,
+            pageManager.LayerSourceSet(layerId));
         const uint32_t mipCount = std::min(
             TerrainLayerMipCount(pageManager.LayerSourceResolution(layerId)),
             sourceMipCount);
@@ -1430,6 +1463,9 @@ void RequestAllTerrainLayerPages(
     uint32_t requestedPages = 0;
     for (uint32_t layerId = 0; layerId < layerCount; ++layerId)
     {
+        const uint32_t sourceMipCount = TerrainSourceMipLevelsForLayer(
+            streamingState.layerSources,
+            pageManager.LayerSourceSet(layerId));
         const uint32_t mipCount = std::min(
             TerrainLayerMipCount(pageManager.LayerSourceResolution(layerId)),
             sourceMipCount);
@@ -1481,7 +1517,7 @@ size_t ApplyTerrainLayerPageUploads(
     RendererBackendVulkan& rendererBackend,
     TerrainLayerPageManager& layerPageManager,
     TerrainLayerGpuResources& layerResources,
-    const TerrainLayerSourceTextures& sources)
+    const TerrainLayerSourceSets& sources)
 {
     TerrainLayerUploadBatch batch = layerPageManager.BuildUploadBatch();
     if (batch.Empty())
@@ -1494,13 +1530,25 @@ size_t ApplyTerrainLayerPageUploads(
         layerPageManager.AbortUploadBatch(batch);
         throw std::runtime_error("Terrain layer atlas is not initialized");
     }
-    if (sources.albedoWidth == 0 || sources.albedoHeight == 0 ||
-        sources.normalWidth == 0 || sources.normalHeight == 0 ||
-        sources.pbrWidth == 0 || sources.pbrHeight == 0)
+    if (sources.empty())
     {
         layerPageManager.AbortUploadBatch(batch);
         throw std::runtime_error(
             "Terrain layer source texture extent is unknown");
+    }
+    for (const auto& entry : sources)
+    {
+        const TerrainSourceSetRecord& record = entry.second;
+        if (!record.HasTextures() ||
+            record.albedoWidth == 0 || record.albedoHeight == 0 ||
+            record.normalWidth == 0 || record.normalHeight == 0 ||
+            record.pbrWidth == 0 || record.pbrHeight == 0)
+        {
+            layerPageManager.AbortUploadBatch(batch);
+            throw std::runtime_error(
+                "Terrain layer source set has no usable texture extent: set=" +
+                std::to_string(record.sourceSet));
+        }
     }
     for (uint32_t mip = 0; mip <= TerrainLayerPageManager::MaxMipLevel; ++mip)
     {
@@ -1516,19 +1564,28 @@ size_t ApplyTerrainLayerPageUploads(
     // 若出现越界应显式失败，而不是留下一个指向空内容的页表项。
     for (const TerrainLayerPageManager::PageUpload& upload : batch.uploads)
     {
-        uint32_t mipLevels = 0;
-        if (upload.key.layerId >= sources.arrayLayers)
+        const TerrainSourceSetRecord* record = FindTerrainSourceSet(
+            sources,
+            layerPageManager.LayerSourceSet(upload.key.layerId));
+        if (record == nullptr)
         {
             layerPageManager.AbortUploadBatch(batch);
             throw std::runtime_error(
-                "Terrain layer id exceeds the source texture array layers");
+                "Terrain layer has no bound source set: layerId=" +
+                std::to_string(upload.key.layerId));
+        }
+        uint32_t sourceLayer = 0;
+        if (!record->TryGetLayerSlice(upload.key.layerId, sourceLayer) ||
+            sourceLayer >= record->arrayLayers)
+        {
+            layerPageManager.AbortUploadBatch(batch);
+            throw std::runtime_error(
+                "Terrain layer id is not present in the source texture array: "
+                "layerId=" + std::to_string(upload.key.layerId) +
+                " sourceSet=" + std::to_string(record->sourceSet));
         }
         // 三张源图的 mip 数可能不同，取最小值保证三张都能 copy。
-        mipLevels = std::min(
-            {sources.albedoMipLevels,
-             sources.normalMipLevels,
-             sources.pbrMipLevels});
-        if (upload.key.mip >= mipLevels)
+        if (upload.key.mip >= record->MinMipLevels())
         {
             layerPageManager.AbortUploadBatch(batch);
             throw std::runtime_error(
@@ -1645,6 +1702,186 @@ RendererTerrainLoader::RendererTerrainLoader(
 {
 }
 
+namespace
+{
+
+// S2：把一个地形 MI 绑定的三张层数组登记到它用到的每个 sourceSet。
+// 同一 set 必须始终指向同一组 shared_ptr（否则 atlas 内容来源不确定）；
+// 不同 set 可以指向不同数组，但仍共享同一组 atlas，因此格式必须一致。
+// layerSlices 记录 globalId -> 该 MI 数组的 slice，上传时按它取源层。
+void RegisterTerrainSourceSets(
+    RendererBackendVulkan& rendererBackend,
+    TerrainStreamingState& streamingState,
+    const TerrainBuildPlan& plan,
+    const std::shared_ptr<Texture>& layerAlbedo,
+    const std::shared_ptr<Texture>& layerNormal,
+    const std::shared_ptr<Texture>& layerPbr)
+{
+    const std::string placementId = TerrainPlacementIdentity(plan);
+    const std::vector<uint8_t>& layerIdMap =
+        streamingState.pageManager.PlacementLayerIdMap(placementId);
+    if (layerIdMap.size() != plan.desc.layers.size())
+    {
+        throw std::runtime_error(
+            "Terrain layer id map is missing before source set registration: " +
+            plan.desc.assetPath);
+    }
+    const std::vector<TerrainLayerDesc>& worldLayers =
+        streamingState.layerDefinitions;
+
+    const uint32_t arrayLayers = layerAlbedo->GetArrayLayers();
+    if (layerNormal->GetArrayLayers() != arrayLayers ||
+        layerPbr->GetArrayLayers() != arrayLayers)
+    {
+        throw std::runtime_error(
+            "Terrain layer albedo/normal/pbr arrays must have identical "
+            "layer counts: " + plan.desc.assetPath);
+    }
+    const vk::Extent2D albedoExtent =
+        rendererBackend.GetImageExtent(layerAlbedo->getImage());
+    const vk::Extent2D normalExtent =
+        rendererBackend.GetImageExtent(layerNormal->getImage());
+    const vk::Extent2D pbrExtent =
+        rendererBackend.GetImageExtent(layerPbr->getImage());
+    const bool sourceExtentConsistent =
+        albedoExtent.width == albedoExtent.height &&
+        albedoExtent.width != 0 &&
+        normalExtent.width == albedoExtent.width &&
+        normalExtent.height == albedoExtent.height &&
+        pbrExtent.width == albedoExtent.width &&
+        pbrExtent.height == albedoExtent.height;
+    const vk::Format albedoFormat = layerAlbedo->GetFormat();
+    const vk::Format normalFormat = layerNormal->GetFormat();
+    const vk::Format pbrFormat = layerPbr->GetFormat();
+
+    // 本 TR 用到的 set（按层顺序去重）。
+    std::vector<uint32_t> usedSets;
+    for (size_t local = 0; local < plan.desc.layers.size(); ++local)
+    {
+        const uint32_t sourceSet = worldLayers[layerIdMap[local]].sourceSet;
+        if (std::find(usedSets.begin(), usedSets.end(), sourceSet) ==
+            usedSets.end())
+        {
+            usedSets.push_back(sourceSet);
+        }
+    }
+
+    for (uint32_t sourceSet : usedSets)
+    {
+        const auto found = streamingState.layerSources.find(sourceSet);
+        if (found == streamingState.layerSources.end())
+        {
+            TerrainSourceSetRecord record;
+            record.sourceSet = sourceSet;
+            record.albedo = layerAlbedo;
+            record.normal = layerNormal;
+            record.pbr = layerPbr;
+            record.arrayLayers = arrayLayers;
+            record.albedoMipLevels = layerAlbedo->getMipLevels();
+            record.normalMipLevels = layerNormal->getMipLevels();
+            record.pbrMipLevels = layerPbr->getMipLevels();
+            record.albedoWidth = albedoExtent.width;
+            record.albedoHeight = albedoExtent.height;
+            record.normalWidth = normalExtent.width;
+            record.normalHeight = normalExtent.height;
+            record.pbrWidth = pbrExtent.width;
+            record.pbrHeight = pbrExtent.height;
+            record.albedoFormat = static_cast<int32_t>(albedoFormat);
+            record.normalFormat = static_cast<int32_t>(normalFormat);
+            record.pbrFormat = static_cast<int32_t>(pbrFormat);
+            streamingState.layerSources.emplace(sourceSet, std::move(record));
+        }
+        else
+        {
+            const TerrainSourceSetRecord& existing = found->second;
+            if (existing.albedo != layerAlbedo ||
+                existing.normal != layerNormal ||
+                existing.pbr != layerPbr)
+            {
+                throw std::runtime_error(
+                    "All layer-table terrains must share the same "
+                    "albedo/normal/pbr arrays within one sourceSet: "
+                    "sourceSet=" + std::to_string(sourceSet) +
+                    " assetPath=" + plan.desc.assetPath);
+            }
+            if (existing.albedoFormat != static_cast<int32_t>(albedoFormat) ||
+                existing.normalFormat != static_cast<int32_t>(normalFormat) ||
+                existing.pbrFormat != static_cast<int32_t>(pbrFormat))
+            {
+                throw std::runtime_error(
+                    "All sourceSets must share atlas formats before "
+                    "multi-format groups exist: sourceSet=" +
+                    std::to_string(sourceSet) +
+                    " assetPath=" + plan.desc.assetPath);
+            }
+        }
+
+        TerrainSourceSetRecord& record = streamingState.layerSources[sourceSet];
+        // 单一 atlas 格式组：所有 set 的三张图格式必须一致（S5 才扩展）。
+        for (const auto& other : streamingState.layerSources)
+        {
+            const TerrainSourceSetRecord& reference = other.second;
+            if (reference.albedoFormat != record.albedoFormat ||
+                reference.normalFormat != record.normalFormat ||
+                reference.pbrFormat != record.pbrFormat)
+            {
+                throw std::runtime_error(
+                    "Terrain sourceSets must share the same layer texture "
+                    "formats (single atlas group): set=" +
+                    std::to_string(reference.sourceSet) + " vs set=" +
+                    std::to_string(sourceSet));
+            }
+        }
+
+        bool resolutionConsistent = sourceExtentConsistent;
+        for (size_t local = 0; local < plan.desc.layers.size(); ++local)
+        {
+            const uint32_t globalId = layerIdMap[local];
+            const TerrainLayerDesc& layer = worldLayers[globalId];
+            if (layer.sourceSet != sourceSet)
+                continue;
+            // 源数组按 MI 的局部层顺序排列；越界必须在加载期失败。
+            if (local >= arrayLayers)
+            {
+                throw std::runtime_error(
+                    "Terrain layer index exceeds the bound source texture "
+                    "array layers: assetPath=" + plan.desc.assetPath +
+                    " localLayer=" + std::to_string(local) +
+                    " arrayLayers=" + std::to_string(arrayLayers));
+            }
+            if (!sourceExtentConsistent ||
+                layer.sourceResolution != albedoExtent.width)
+            {
+                resolutionConsistent = false;
+            }
+            const auto inserted =
+                record.layerSlices.emplace(globalId, static_cast<uint32_t>(local));
+            if (!inserted.second && inserted.first->second != local)
+            {
+                throw std::runtime_error(
+                    "Global terrain layer maps to two different source "
+                    "slices in one sourceSet: layerId=" +
+                    std::to_string(globalId) +
+                    " sourceSet=" + std::to_string(sourceSet));
+            }
+        }
+        if (!resolutionConsistent)
+        {
+            record.catalogResolutionMatches = false;
+            std::cout
+                << "Warning: terrain layer sourceResolution does not match "
+                << "the bound layer texture extent (sourceSet=" << sourceSet
+                << ", source=" << albedoExtent.width << "x"
+                << albedoExtent.height
+                << "); VT layer mode 1 requires a matching source extent; "
+                << "mode 0 remains available: "
+                << plan.desc.assetPath << std::endl;
+        }
+    }
+}
+
+} // namespace
+
 RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
     const nlohmann::json& node,
     const TerrainBuildPlan& plan) const
@@ -1695,91 +1932,15 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const std::shared_ptr<Texture> layerPbr = materialInstance->GetTexture("layerPbr");
         if (!layerAlbedo || !layerNormal || !layerPbr)
             throw std::runtime_error("Terrain layer arrays are not bound");
-        if (layerAlbedo->GetArrayLayers() < plan.desc.layers.size() ||
-            layerNormal->GetArrayLayers() < plan.desc.layers.size() ||
-            layerPbr->GetArrayLayers() < plan.desc.layers.size())
-        {
-            throw std::runtime_error(
-                "Terrain layer table has more layers than the bound texture arrays: " +
-                plan.desc.assetPath);
-        }
-        // L2：层 atlas 的源纹理按 World 共享一套。不同 MI 指向不同纹理时
-        // 先拒绝，而不是让多个地形悄悄写入错误的 atlas 内容。
-        if (!streamingState.layerSources.albedo)
-        {
-            streamingState.layerSources.albedo = layerAlbedo;
-            streamingState.layerSources.normal = layerNormal;
-            streamingState.layerSources.pbr = layerPbr;
-            streamingState.layerSources.arrayLayers =
-                layerAlbedo->GetArrayLayers();
-            streamingState.layerSources.albedoMipLevels =
-                layerAlbedo->getMipLevels();
-            streamingState.layerSources.normalMipLevels =
-                layerNormal->getMipLevels();
-            streamingState.layerSources.pbrMipLevels =
-                layerPbr->getMipLevels();
-            const vk::Extent2D albedoExtent =
-                rendererBackend.GetImageExtent(layerAlbedo->getImage());
-            const vk::Extent2D normalExtent =
-                rendererBackend.GetImageExtent(layerNormal->getImage());
-            const vk::Extent2D pbrExtent =
-                rendererBackend.GetImageExtent(layerPbr->getImage());
-            streamingState.layerSources.albedoWidth = albedoExtent.width;
-            streamingState.layerSources.albedoHeight = albedoExtent.height;
-            streamingState.layerSources.normalWidth = normalExtent.width;
-            streamingState.layerSources.normalHeight = normalExtent.height;
-            streamingState.layerSources.pbrWidth = pbrExtent.width;
-            streamingState.layerSources.pbrHeight = pbrExtent.height;
-            if (layerNormal->GetArrayLayers() !=
-                    streamingState.layerSources.arrayLayers ||
-                layerPbr->GetArrayLayers() !=
-                    streamingState.layerSources.arrayLayers)
-            {
-                throw std::runtime_error(
-                    "Terrain layer albedo/normal/pbr arrays must have identical layer counts");
-            }
-            // L3：catalog 的 sourceResolution 是页表布局的唯一来源。真实源图
-            // 尺寸不一致时页号会指向错误区域，因此禁止 VT；mode 0 继续可用。
-            // 现有 B32/M3 验证资产是 32²、catalog 默认 1K，会走到这条警告。
-            const bool sourceExtentConsistent =
-                albedoExtent.width == albedoExtent.height &&
-                albedoExtent.width != 0 &&
-                normalExtent.width == albedoExtent.width &&
-                normalExtent.height == albedoExtent.height &&
-                pbrExtent.width == albedoExtent.width &&
-                pbrExtent.height == albedoExtent.height;
-            const bool sourceResolutionConsistent =
-                sourceExtentConsistent &&
-                TerrainLayerVT::CatalogMatchesSourceExtent(
-                    plan.desc.layers,
-                    albedoExtent.width,
-                    albedoExtent.height);
-            streamingState.layerSources.catalogResolutionMatches =
-                sourceResolutionConsistent;
-            if (!sourceResolutionConsistent)
-            {
-                std::cout
-                    << "Warning: terrain layer sourceResolution does not match "
-                    << "the bound layer texture extent (catalog="
-                    << (plan.desc.layers.empty()
-                            ? 0u
-                            : plan.desc.layers.front().sourceResolution)
-                    << ", source=" << albedoExtent.width << "x"
-                    << albedoExtent.height
-                    << "); VT layer mode 1 requires a matching source extent; "
-                    << "mode 0 remains available: "
-                    << plan.desc.assetPath << std::endl;
-            }
-        }
-        else if (streamingState.layerSources.albedo != layerAlbedo ||
-                 streamingState.layerSources.normal != layerNormal ||
-                 streamingState.layerSources.pbr != layerPbr)
-        {
-            throw std::runtime_error(
-                "All layer-table terrains in a World must share the same "
-                "albedo/normal/pbr layer texture arrays: " +
-                plan.desc.assetPath);
-        }
+        // S1/S2：按 layer.sourceSet 分组登记源数组；同一 set 共享同一组
+        // shared_ptr，不同 set 允许不同数组但共享同一组 atlas。
+        RegisterTerrainSourceSets(
+            rendererBackend,
+            streamingState,
+            plan,
+            layerAlbedo,
+            layerNormal,
+            layerPbr);
         const bool vtRequested =
             materialInstance->HasParameter("u_terrainLayerMode") &&
             materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
@@ -1805,7 +1966,13 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         {
             // 作者显式请求 VT 时不能静默退回 mode 0；源图与 catalog 不一致
             // 会让每个页号都采到错误内容，必须在加载期失败。
-            if (!streamingState.layerSources.catalogResolutionMatches)
+            bool allSourceResolutionsMatch = true;
+            for (const auto& entry : streamingState.layerSources)
+            {
+                if (!entry.second.catalogResolutionMatches)
+                    allSourceResolutionsMatch = false;
+            }
+            if (!allSourceResolutionsMatch)
             {
                 throw std::runtime_error(
                     "Terrain layer VT requires sourceResolution to match the "

@@ -2048,6 +2048,44 @@ TEST(TerrainValidator, RejectsInvalidOptionalLayerCatalogFields)
         asset, "TR_terrain_tests.json"), std::exception);
 }
 
+TEST(TerrainValidator, AcceptsAndRejectsLayerKey)
+{
+    // 显式 key 是跨 TR 共享层的身份；非空、<=256 字符。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["key"] = "biome/leaf";
+    asset["layers"][1]["key"] = "biome/rock";
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    nlohmann::json probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = "";
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = 7;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    // 超过 256 字符的 key 拒绝，避免诊断/日志被超长身份撑爆。
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = std::string(257, 'k');
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    // 同一个 TR 内显式 key 重复（缺省 key 也会因重名重复）。
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = "biome/same";
+    probe["layers"][1]["key"] = "biome/same";
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    probe = BuildTerrainJson();
+    probe["layers"][1]["name"] = probe["layers"][0]["name"];
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+}
+
 TEST(TerrainValidator, AcceptsLodLevelsAndAscendingDistances)
 {
     nlohmann::json asset = BuildTerrainJson();
@@ -2161,6 +2199,7 @@ TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
     asset["layers"][0]["avgColor"] = {0.25, 0.5, 0.75};
     asset["layers"][0]["sourceSet"] = 3;
     asset["layers"][0]["flags"] = 9;
+    asset["layers"][0]["key"] = "biome/leaf";
     asset["heightmapPath"] = heightmapPath.string();
     asset["materialInstancePath"] = materialPath.string();
     asset["gridResolution"] = 2;
@@ -2179,6 +2218,9 @@ TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
     EXPECT_EQ(plan.desc.layers[0].sourceResolution, 2048u);
     EXPECT_EQ(plan.desc.layers[0].sourceSet, 3u);
     EXPECT_EQ(plan.desc.layers[0].flags, 9u);
+    // S1：显式 key 往返；未写 key 的层保持空串，由 registry 回退缺省身份。
+    EXPECT_EQ(plan.desc.layers[0].key, "biome/leaf");
+    EXPECT_TRUE(plan.desc.layers[1].key.empty());
     EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.x(), 0.25f);
     EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.y(), 0.5f);
     EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.z(), 0.75f);

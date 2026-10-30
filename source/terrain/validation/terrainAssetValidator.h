@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 #include <nlohmann/json.hpp>
@@ -184,11 +185,39 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
     const auto& layers = asset.at("layers");
     if (!layers.is_array() || layers.empty() || layers.size() > 256)
         throw std::invalid_argument("Terrain layers requires 1..256 entries: " + assetPath);
+    // 缺省 layerKey 是 "<assetPath>#<name>"，同 TR 内重名会让两层争同一个
+    // globalId；显式 key 重复同理。这里在资产预检期就拒绝。
+    std::vector<std::string> layerKeys;
+    layerKeys.reserve(layers.size());
     for (const auto& layer : layers)
     {
         if (!layer.is_object() || !layer.contains("name") || !layer.at("name").is_string() ||
             layer.at("name").get<std::string>().empty())
             throw std::invalid_argument("Terrain layer requires non-empty name: " + assetPath);
+        // 可选跨 TR 共享身份：非空、不超过 256 字节；sourceSet 不参与 key。
+        std::string layerKey;
+        if (layer.contains("key"))
+        {
+            if (!layer.at("key").is_string())
+                throw std::invalid_argument(
+                    "Terrain layer key must be a string: " + assetPath);
+            layerKey = layer.at("key").get<std::string>();
+            if (layerKey.empty() || layerKey.size() > 256)
+                throw std::invalid_argument(
+                    "Terrain layer key requires 1..256 characters: " + assetPath);
+        }
+        else
+        {
+            layerKey = assetPath + "#" + layer.at("name").get<std::string>();
+        }
+        for (const std::string& existing : layerKeys)
+        {
+            if (existing == layerKey)
+                throw std::invalid_argument(
+                    "Terrain layer key is duplicated: key=" + layerKey +
+                    " in " + assetPath);
+        }
+        layerKeys.push_back(std::move(layerKey));
         for (const char* field : {"heightRange", "slopeRange"})
         {
             if (!layer.contains(field) || !layer.at(field).is_array() || layer.at(field).size() != 2)
@@ -255,7 +284,8 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
         static_cast<void>(OptionalBoundedInteger(
             layer, "flags", "Terrain layer " + assetPath, 0u, 0u, 65535u));
         for (const auto& entry : layer.items())
-            if (entry.key() != "name" && entry.key() != "heightRange" &&
+            if (entry.key() != "name" && entry.key() != "key" &&
+                entry.key() != "heightRange" &&
                 entry.key() != "slopeRange" && entry.key() != "noise" &&
                 entry.key() != "uvScale" && entry.key() != "uvRotation" &&
                 entry.key() != "sourceResolution" && entry.key() != "avgColor" &&

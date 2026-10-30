@@ -68,6 +68,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认中性 0.18）、`sourceSet`（0..255，
   默认 0）、`flags`（0..65535，默认 0）。未知字段、越界值与非有限数都会被拒绝；
   旧 TR 不写新字段时行为与默认值不变。
+- 每层还可选 `key`（1..256 字符）：跨 TR 共享层的显式身份。缺省为
+  `"<assetPath>#<name>"`；同一个 TR 内重复的 `key`（含同名导致的缺省 key
+  重复）在资产校验期失败。
 - `M_terrain` 使用这些层生成 256×4 `RGBA32F` layer table（catalog），未使用的层
   四行全零；布局与 CPU accessor 见“层 catalog v2”。
 - 未知字段、缺失字段、非有限数值、非法范围都会在场景预检阶段失败。
@@ -309,6 +312,50 @@ World 中摆放多次，只要对象名不同。
   （`TerrainChunkResourceKey`）包含 `placementId`、TR 路径、高度图路径、size、
   heightScale/offset、grid/chunk 参数、`lod`/`lodStep` 与 chunk 坐标。同一 TR 的两处
   摆放因此不会共享或覆盖彼此的顶点/索引缓冲。
+
+## 全局 layer catalog 与多 sourceSet（S1/S2）
+
+S1 把“一个 World 只能有一套完全相同层定义”的限制换成 World 级全局层注册表；
+S2 允许不同 biome 绑定各自的层源数组，但共享同一组层 atlas。
+
+- `TerrainLayerRegistry`（`source/terrain/terrainLayerRegistry.*`）按场景对象顺序
+  遍历所有带 `layers` 的 terrain placement：
+  - 身份是 `layer.key`，缺省 `"<assetPath>#<name>"`；`sourceSet` 不参与 key；
+  - 同 key 且参数一致 → 复用同一个 globalId（跨 TR 去重）；
+  - 同 key 但参数不一致 → 加载失败，错误里同时给出两个 `assetPath`；
+  - 不同 key 即使内容相同也不合并；
+  - 分配顺序 = 场景对象顺序 × 每 TR `layers` 顺序首次出现，因此单 TR World
+    的 `globalId` 恰好等于局部下标，旧 catalog/ID 图/截图逐字节不变；
+  - 全局层上限 256（ID/权重图是 RGBA8）；超出、同 TR 内 key 重复、
+    同一 placement 重复注册都会在加载期失败。
+- `TerrainPageManager::RegisterTerrain(plan, layerIdMap, preload)` 保存每个
+  placement 的 `local -> global` 映射。`TerrainWeightMapBuilder::Build/BuildPage/
+  BuildVirtualTexture` 接受同一映射：权重与 top-4 排序仍按局部层（层参数与噪声
+  种子是局部语义），写进 ID 图的层号与对外暴露的候选层列表是 **globalId**。
+  空映射等价恒等映射，旧调用点行为不变。
+- `RendererResourceLoadCoordinator` 用 registry 替换旧的
+  `AreLayersIdentical` 直接抛错：registry 在注册任何页之前构建，冲突不会留下
+  半注册状态。catalog、`TerrainLayerPageManager::ConfigureLayers`、
+  `TerrainLayerVisibilityConfig::layerCount` 都使用全局层列表。
+- `TerrainLayerSourceSets`（`source/terrain/terrainLayerSources.*`）是
+  `map<sourceSet, TerrainSourceSetRecord>`。每个 record 保存
+  albedo/normal/pbr `shared_ptr`、array layer 数、各图 mip 数/尺寸/格式，以及
+  `layerSlices`：**global layerId → 该源数组的 slice 下标**。
+  - 同一 `sourceSet` 必须始终指向同一组 `shared_ptr`，否则加载失败；
+  - 不同 `sourceSet` 允许不同数组与不同 `sourceResolution`；
+  - 层页上传按 `TerrainLayerPageManager::LayerSourceSet(layerId)` 选 record，
+    再用 `layerSlices` 取源 slice；三张 atlas 仍只有一组，因此所有 set 的
+    三张图格式必须一致（多格式组留给 S5）；
+  - `TerrainLayerVisibilityConfig::sourceSets` 让每层按自己那一组源的 mip
+    上限 clamp，而不是用全 World 的最小 mip。
+- `terrainlayerstats` 增加
+  `globalLayers / sourceSets / dedupedLayers / capacity`。
+
+当前边界（S1/S2 不做）：>256 层与 16-bit ID（S3）、跨 World 持久化
+registry / 页内容去重 / 编辑器全局层列表（S4）、多 atlas 格式组（S5）。
+mode 0 仍按 globalId 直接采样每个 MI 绑定的 `sampler2DArray`：多 biome
+mode 0 要求该 MI 的数组按 globalId 排布，否则应使用 mode 1；mode 1 的
+source slice 由 `layerSlices` 还原，不受该限制。
 
 ## 层 catalog v2 与 CPU 层页管理器（L1）
 
