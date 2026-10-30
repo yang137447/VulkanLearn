@@ -301,8 +301,9 @@ World 中摆放多次，只要对象名不同。
   `0` 正常着色，`1` top-4 权重，`2` top-4 层号，`3` 混合 albedo，
   `4` VT 物理页号，`5` VT mip（4/5 在 mode 0 下输出 0）。
 - 当前地形只支持 realtime 渲染；offline-only 渲染遇到 terrain 直接失败。
-- 地形碰撞只有独立的 Jolt heightfield 模块（`source/terrain/terrainCollision.*`），
-  尚未接入 World/场景对象；没有地形编辑和绘制工具。
+- 地形碰撞已接入 World/Play：`WorldBuilder` 为每个 terrain placement 保留 plan+TRS，
+  脚本 Play 在既有 `ScriptPhysicsWorld` 里创建静态 heightfield；编辑器/普通预览
+  不创建物理世界。当前仍是整张地形一个 body，没有分块/编辑重建；没有地形编辑和绘制工具。
 - page manager/GPU page 资源由 world-local `TerrainStreamingState` 管理；chunk 资源 key
   （`TerrainChunkResourceKey`）包含 `placementId`、TR 路径、高度图路径、size、
   heightScale/offset、grid/chunk 参数、`lod`/`lodStep` 与 chunk 坐标。同一 TR 的两处
@@ -709,7 +710,7 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   渲染网格沿另一条对角线；非平面 quad 内两者表面存在细微差异（平面/斜坡为 0）。
 - `TerrainCollisionWorld` 是独立测试/离线夹具，内部持有唯一一个 PhysicsSystem
   （静态/移动两层配置与 `ScriptPhysicsWorld` 相同），提供 `AddTerrain`、
-  `RaycastDown`、`Step`，只服务于模块测试和尚未接入 World 的工具。
+  `RaycastDown`、`Step`，只服务于模块测试和离线工具。
 - Jolt 注册：`source/physics/joltRegistration.h/.cpp` 提供进程级
   `Physics::EnsureJoltRegistered()`，地形碰撞与 `ScriptPhysicsWorld` 共用同一份
   Factory/类型注册；任何入口都不得自行调用 `RegisterTypes()`。Jolt 的
