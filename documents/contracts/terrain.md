@@ -574,7 +574,8 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   命中页推进 `lastSeenEpoch`/`lastTouchedEpoch`，未驻留页进入与 L4a 相同的跨帧队列，
   每帧请求/上传预算、quarantine、Commit/Abort 语义完全一致。
 - 精确 feedback 可用时它就是唯一驱动层页驻留的路径；L4a 的覆盖页推导只在
-  ring 还没产出（启动、回读延迟）时作为回退/prefetch，不与精确路径同时写驻留。
+  ring 还没产出（启动、回读延迟）或精确 feedback 饥饿（见下一节）时作为
+  回退/prefetch，不与精确路径同时写驻留。
 
 ## 目标 mip 缺页时的粗 mip 预取（L4c）
 
@@ -604,6 +605,37 @@ catalog row3 的 `avgColor`。L4c 让 CPU 在目标页缺页时同时预取粗�
 
 本阶段**没有**实现 shader 侧的 `avgColor` 淡入/混合：目标 mip 缺页时仍是
 “有粗页就采样粗页、没有就整页 `avgColor`”的硬切换。视觉淡入留在后续阶段。
+
+## 精确 feedback 饥饿保护（L4d）
+
+精确层 feedback 只有在覆盖页 resident（`pageTable.a >= 0.5`）时才会写出有效
+texel。相机贴地/极端陡视角、地形被近裁剪面裁掉、或覆盖页整帧缺页时，一整帧
+可能**没有任何有效 texel**。旧实现把它当成“所有层页都不可见”，180 epoch 后
+把驻留集清空，覆盖页恢复后要重新请求/上传，这段时间里缺失页显示 `avgColor`。
+L4d 在 `TerrainLayerVisibilityResolver` 里增加饥饿保护：
+
+- 判定：`summary.validTexelCount < TerrainLayerVisibilityConfig::minValidFeedbackTexels`
+  （默认 1，即只有完全空的精确 feedback 才算饥饿；调大可以覆盖只剩几个有效
+  texel 的欠采样帧）。
+- 饥饿帧：`ApplyExact` 只累加 `TerrainLayerFeedbackHealth::starvedFrames`，
+  **不**续命、不入队、不淘汰；`lastSeenEpoch`/`lastTouchedEpoch` 一律不动，
+  不会把“没看见”伪造成当前帧。pending 请求队列原样保留，恢复后按原优先级继续。
+- idle 时钟：`starvationCreditEpochs = min(starvedFrames, starvationGraceFrames)`
+  （默认 480 帧）直接加到 idle 窗口上，等于在宽限期内暂停老化；
+  `CommitCandidates` 同时跳过 budget 淘汰，驻留集保持上一帧。
+- 覆盖页回退：`ApplyTerrainLayerExactFeedback` 在饥饿时返回 false，
+  `RenderSystem` 继续执行 L4a 的 `Apply`，用覆盖页 RT 重新估计可见层；
+  `TerrainLayerVisibilityStats::usedCoverFallback` 标记这一帧的可见性来自回退。
+  覆盖页重新 resident 后 shader 会再次写出有效 slot，精确路径自动接管。
+- 慢速降级：连续饥饿超过 `starvationGraceFrames` 后补偿封顶，于是
+  `idleEvictionEpochs + starvationGraceFrames` 之后驻留集开始老化；淘汰按
+  `starvationEvictionPagesPerFrame`（默认 2 页/帧，idle 与预算淘汰共享名额）
+  限速，既不会一次性清空，也不会永久锁死显存。
+- 恢复：任一有效帧把 `starvedFrames` 清零、推进 `lastValidFeedbackEpoch`，并按
+  `starvationCreditDecayPerFrame`（默认 1）逐帧衰减残留补偿；一次长时间饥饿
+  不会永久放大 idle 窗口。
+- 统计：`terrainlayerstats` 新增 `starvedFrames` / `lastValidEpoch` /
+  `usedCoverFallback` / `idleGrace`，只在手动执行命令时打印。
 
 ## Feedback pass（P2/P3）
 

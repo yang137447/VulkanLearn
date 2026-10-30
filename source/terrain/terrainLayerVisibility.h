@@ -55,6 +55,22 @@ struct TerrainLayerVisibilityConfig
     // （L4a 已有行为），但只有粗页也在驻留集里才真的有内容可采，否则回退
     // 之后仍然是 catalog 的 avgColor。0 关闭该行为；生产路径取 2。
     uint32_t fallbackPrefetchMipLevels = 2;
+    // 饥饿保护：有效 texel 少于该值就认为“本帧没有任何可信可见性”，
+    // 不推进 idle epoch、不改 lastSeen、不做预算淘汰。默认 1 表示只有
+    // 完全空的精确 feedback 才算饥饿；调大可以覆盖“只剩几个有效 texel”
+    // 的欠采样帧。
+    uint32_t minValidFeedbackTexels = 1;
+    // 连续饥饿帧数上限。饥饿期间 idle 窗口按“等效 epoch 补偿”保持不老化，
+    // 补偿每秒最多增长到该帧数；超过后不再增长，驻留集开始按正常窗口
+    // 慢速降级，保证长时间没有 feedback 时不会永久锁死显存。
+    uint32_t starvationGraceFrames = 480;
+    // 恢复精确 feedback 后，每个有效帧抵消多少补偿 epoch（>=1）。一次
+    // 长时间饥饿不会永久放大 idle 窗口。
+    uint64_t starvationCreditDecayPerFrame = 1;
+    // 饥饿超过宽限期后，每帧最多淘汰多少页。补偿封顶后所有页会同时越过
+    // idle 阈值，不设速率上限就会一次性清空；2 页/帧让降级是渐进的。
+    // 0 表示不限速（退化为普通 idle 淘汰）。
+    uint32_t starvationEvictionPagesPerFrame = 2;
 };
 
 struct TerrainLayerVisibilityStats
@@ -76,6 +92,9 @@ struct TerrainLayerVisibilityStats
     uint32_t fallbackTargetPages = 0;
     // +1/+2/+3 级粗 mip 页数；覆盖页路径也保留这一遥测。
     std::array<uint32_t, 3> fallbackLevelPages{};
+    // 本帧是“精确 feedback 饥饿”触发的覆盖页回退估计。只有回退时才有意义：
+    // 它表示 visibleLayers/candidates 来自覆盖页推导，而不是精确层页。
+    bool usedCoverFallback = false;
     // 本帧成功请求的页按 mip 分布，用于确认 LOD/预算策略符合预期。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
 };
@@ -103,6 +122,24 @@ struct TerrainLayerExactFeedbackStats
     // 有效 feedback texel 按“目标 mip”的分布：确认 shader 实际想采哪一级，
     // 以及回退是否集中在某几级（回退级分布）。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> targetMipSlots{};
+    // 本帧精确 feedback 饥饿：没有（或低于阈值）有效 texel。此时驻留集
+    // 保持上一帧状态，调用方应回退到覆盖页推导继续估计可见层。
+    bool starved = false;
+    // 本帧生效的 idle 窗口补偿 epoch（饥饿期间随饥饿帧数增长并封顶）。
+    uint64_t idleGraceEpochs = 0;
+};
+
+// 层页 feedback 的健康状态，跨帧保存在 resolver 里。它只描述“精确 feedback
+// 这一路是否可信”，不改变页本身的 lastSeen/lastTouched 语义。
+struct TerrainLayerFeedbackHealth
+{
+    // 最近一次收到可信精确 feedback 的 epoch；饥饿期间保持不变。
+    uint64_t lastValidFeedbackEpoch = 0;
+    // 连续饥饿帧数；任何一帧有效 feedback 立即清零。
+    uint32_t starvedFrames = 0;
+    // 加到 idle 窗口上的补偿 epoch。饥饿时随 starvedFrames 增长并封顶，
+    // 恢复后按 starvationCreditDecayPerFrame 逐帧衰减。
+    uint64_t starvationCreditEpochs = 0;
 };
 
 // 覆盖页 feedback -> 可见层 -> mip -> 该 mip 的全部层页。纯 CPU，绝不读 GPU
@@ -139,6 +176,11 @@ public:
 
     static uint32_t MipForPriority(uint8_t priority);
 
+    const TerrainLayerFeedbackHealth& FeedbackHealth() const noexcept
+    {
+        return feedbackHealth;
+    }
+
 private:
     struct CoverPageLayerSet
     {
@@ -174,6 +216,9 @@ private:
         uint64_t frame,
         uint64_t completedEpoch,
         uint64_t seenEpoch,
+        uint64_t extraIdleGraceEpochs,
+        uint32_t maxIdleEvictions,
+        bool allowBudgetEviction,
         const TerrainLayerVisibilityConfig& config);
 
     // L4c：目标页缺页 -> 把同一 UV 区域的更粗 mip 页加入候选。粗页优先级
@@ -196,6 +241,9 @@ private:
     // (placementId, tileX, tileZ) 索引，数量上限就是 World 的虚拟页数。
     std::map<std::tuple<std::string, uint32_t, uint32_t>, CoverPageLayerSet>
         coverPageCache;
+
+    // 精确 feedback 的饥饿状态。只在渲染线程的 feedback 消费点更新。
+    TerrainLayerFeedbackHealth feedbackHealth;
 };
 
 } // namespace VL

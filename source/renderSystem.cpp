@@ -1370,7 +1370,10 @@ bool RenderSystem::ApplyTerrainLayerExactFeedback(
             completedEpoch,
             config);
     streaming->latestLayerFeedbackExact = true;
-    return true;
+    // 饥饿帧（没有任何可信的有效 texel）不能当作“全部不可见”：驻留集在
+    // resolver 内保持不变，这里返回 false 让调用方继续走覆盖页推导（L4a），
+    // 用覆盖页反馈重新估计可见层，等覆盖页恢复后精确路径自动接管。
+    return !streaming->latestLayerExactFeedback.starved;
 }
 
 void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
@@ -1685,6 +1688,16 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.layerAtlasBytesTotal =
         streaming->layerResources.atlasBytesTotal;
     stats.layerAtlasReady = streaming->layerResources.atlasesCreated;
+    // 饥饿状态直接来自 resolver 的跨帧健康记录：精确路径与覆盖页回退
+    // 都会写同一份状态，控制台读数与实际驻留策略一致。
+    const VL::TerrainLayerFeedbackHealth& feedbackHealth =
+        streaming->layerVisibilityResolver.FeedbackHealth();
+    stats.layerStarvedFrames = feedbackHealth.starvedFrames;
+    stats.layerLastValidFeedbackEpoch =
+        feedbackHealth.lastValidFeedbackEpoch;
+    stats.layerUsedCoverFallback =
+        feedbackHealth.starvedFrames != 0;
+    stats.layerIdleGraceEpochs = feedbackHealth.starvationCreditEpochs;
     streaming->PublishStats(stats);
     // 本帧上传数只显示一帧；累计值继续保留。
     streaming->lastUploadedPages = 0;
@@ -1771,6 +1784,15 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " uploadedBytes=" << stats.layerUploadedBytesTotal
         << " dirtyPages=" << stats.layerDirtyPages
         << " dirtyPageTable=" << stats.layerDirtyPageTableEntries
+        << std::endl;
+    // 饥饿保护：starvedFrames 是连续没有有效精确 feedback 的帧数；
+    // usedCoverFallback=1 表示本帧可见层来自覆盖页推导；idleGrace 是
+    // 当前加到 idle 窗口上的补偿 epoch（饥饿期间随帧数增长并封顶）。
+    std::cout
+        << "[TerrainLayer] starvedFrames=" << stats.layerStarvedFrames
+        << " lastValidEpoch=" << stats.layerLastValidFeedbackEpoch
+        << " usedCoverFallback=" << (stats.layerUsedCoverFallback ? 1 : 0)
+        << " idleGrace=" << stats.layerIdleGraceEpochs
         << std::endl;
     // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
     std::cout
