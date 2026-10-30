@@ -90,13 +90,16 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
         if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
-            type != "spotLight" && type != "squareAreaLight" && type != "camera" && type != "environment" && type != "blueprintInstance")
+            type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
+            type != "environment" && type != "blueprintInstance" && type != "balloon" &&
+            type != "glassPane")
             throw std::invalid_argument("Unknown scene object type: " + type);
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
             const bool required = (std::string(field) == "position" && type != "environment") ||
                 (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight") ||
-                (std::string(field) == "scale" && (type == "mesh" || type == "camera" || type == "blueprintInstance")) ||
+                (std::string(field) == "scale" && (type == "mesh" || type == "camera" ||
+                    type == "blueprintInstance" || type == "balloon" || type == "glassPane")) ||
                 (std::string(field) == "normal" && type == "squareAreaLight");
             if (!required && !object.contains(field)) continue;
             if (!object.contains(field) || !object.at(field).is_array() || object.at(field).size() != 3)
@@ -124,6 +127,58 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                     object.at(field).get<std::string>().empty())
                     throw std::invalid_argument(std::string("Mesh requires path: ") + field);
             }
+        }
+        if (type == "balloon")
+        {
+            if (!object.contains("materialInstance") ||
+                !object.at("materialInstance").is_string() ||
+                object.at("materialInstance").get<std::string>().empty())
+                throw std::invalid_argument("Balloon requires materialInstance path");
+            const double radius = ReadPhysicalNumber(object, "radius", 0, 1.0e6);
+            const double thickness = ReadPhysicalNumber(object, "thickness", 0, radius);
+            const double pressure = ReadPhysicalNumber(object, "pressure", 0, 1.0e6);
+            const double burstStrain = ReadPhysicalNumber(object, "burstStrain", 0, 10.0);
+            const double restContraction = ReadPhysicalNumber(object, "restContraction", 0, 1.0);
+            if (radius <= 0.0 || thickness <= 0.0 || thickness >= radius)
+                throw std::invalid_argument("Balloon requires 0 < thickness < radius");
+            if (pressure < 0.0 || burstStrain <= 0.0 || restContraction <= 0.0)
+                throw std::invalid_argument("Balloon pressure/strain/contraction must be positive");
+            if (!object.contains("subdivisions") || !object.at("subdivisions").is_number_integer() ||
+                object.at("subdivisions").get<int>() < 0 ||
+                object.at("subdivisions").get<int>() > 3)
+                throw std::invalid_argument("Balloon subdivisions must be in [0, 3]");
+            if (!object.contains("siteCount") || !object.at("siteCount").is_number_integer() ||
+                object.at("siteCount").get<int>() < 4 ||
+                object.at("siteCount").get<int>() > 64)
+                throw std::invalid_argument("Balloon siteCount must be in [4, 64]");
+            if (!object.contains("seed") || !object.at("seed").is_number_integer() ||
+                object.at("seed").get<long long>() < 0)
+                throw std::invalid_argument("Balloon requires non-negative integer seed");
+        }
+        if (type == "glassPane")
+        {
+            if (!object.contains("materialInstance") ||
+                !object.at("materialInstance").is_string() ||
+                object.at("materialInstance").get<std::string>().empty())
+                throw std::invalid_argument("Glass pane requires materialInstance path");
+            const double width = ReadPhysicalNumber(object, "width", 0, 1.0e6);
+            const double height = ReadPhysicalNumber(object, "height", 0, 1.0e6);
+            const double thickness = ReadPhysicalNumber(
+                object, "thickness", 0, std::min(width, height));
+            if (width <= 0.0 || height <= 0.0)
+                throw std::invalid_argument("Glass pane requires positive width and height");
+            if (thickness <= 0.0 || thickness >= std::min(width, height))
+                throw std::invalid_argument(
+                    "Glass pane requires 0 < thickness < min(width, height)");
+            if (!object.contains("siteCount") || !object.at("siteCount").is_number_integer() ||
+                object.at("siteCount").get<int>() < 4 ||
+                object.at("siteCount").get<int>() > 64)
+                throw std::invalid_argument("Glass pane siteCount must be in [4, 64]");
+            if (!object.contains("seed") || !object.at("seed").is_number_integer() ||
+                object.at("seed").get<long long>() < 0)
+                throw std::invalid_argument("Glass pane requires non-negative integer seed");
+            if (object.contains("subfracture") && !object.at("subfracture").is_boolean())
+                throw std::invalid_argument("Glass pane subfracture must be boolean");
         }
         if (type == "directionalLight" || type == "pointLight" ||
             type == "spotLight" || type == "squareAreaLight") ReadCanonicalLightIntensity(object);

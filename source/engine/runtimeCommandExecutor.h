@@ -19,6 +19,9 @@ class DiagnosticsSubsystem;
 class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
+class SoftBodyRuntime;
+class GlassRuntime;
+class ProjectileRuntime;
 class WorldTransitionCoordinator;
 class ScriptRuntimeSubsystem;
 namespace Editor { class SceneDocumentService; }
@@ -72,7 +75,10 @@ public:
         const DiagnosticsSubsystem& diagnostics,
         InputSubsystem* input = nullptr,
         ScriptRuntimeSubsystem* scripts = nullptr,
-        Editor::SceneDocumentService* sceneDocuments = nullptr) const;
+        Editor::SceneDocumentService* sceneDocuments = nullptr,
+        SoftBodyRuntime* softBodyRuntime = nullptr,
+        GlassRuntime* glassRuntime = nullptr,
+        ProjectileRuntime* projectileRuntime = nullptr) const;
 
 private:
     void ExecuteCommand(
@@ -86,7 +92,10 @@ private:
         RuntimeCommandExecutionResult& executionResult,
         InputSubsystem* input,
         ScriptRuntimeSubsystem* scripts,
-        Editor::SceneDocumentService* sceneDocuments) const;
+        Editor::SceneDocumentService* sceneDocuments,
+        SoftBodyRuntime* softBodyRuntime,
+        GlassRuntime* glassRuntime,
+        ProjectileRuntime* projectileRuntime) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,

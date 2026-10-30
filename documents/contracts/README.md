@@ -46,5 +46,11 @@
 | `material-mesh-pass-composition.md`、`csm-shadow-map-m1.md` | 材质求值/pass 组合与 CSM |
 | `environment-update-scheduler.md`、`texture-asset-json-v1.md`、`asset-organization.md` | 环境更新调度、贴图资产格式、资源组织 |
 | `vl-offline-rendering.md` | 离线渲染核心的所有权与边界 |
+| `fracture-core.md` | 纯 CPU 平面/球面破碎、橡皮膜软壳、碎片挤出与体积校验 |
+| `fracture-budget.md` | 全场景碎片预算账本、回收优先级与玻璃/气球降级策略 |
+| `softbody-runtime.md` | `balloon` 场景对象、GT 橡皮软体、动态网格发布与爆裂软片 |
+| `glass-fracture-runtime.md` | `glassPane` 场景对象、命中点局部 Voronoi 碎片、Jolt 凸包与落地二次碎裂 |
+| `projectile-shooting-runtime.md` | 共享冲击世界、可见箭矢、发射输入与 `SC_fracture_playground` 试玩关卡 |
+| `audio-runtime.md` | 32 voice 全局预算、块混音、等功率 pan、距离衰减与距离低通；WAV 资产加载、重采样与程序化回退 |
 | `debug-runtime-commands.md` | 控制台调试命令 |
 | `diagrams/` | 架构图的 IR 源与产物，见其 `README.md` |

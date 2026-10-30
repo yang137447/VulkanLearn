@@ -18,6 +18,8 @@ struct WorldBuildPlan
     nlohmann::json authoredSceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
+    std::vector<SoftBodyObjectBuildPlan> softBodyObjectPlans;
+    std::vector<GlassObjectBuildPlan> glassObjectPlans;
     std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
 };
 

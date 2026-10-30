@@ -30,6 +30,12 @@
                         "$ref": "#/$defs/meshObject"
                     },
                     {
+                        "$ref": "#/$defs/balloonObject"
+                    },
+                    {
+                        "$ref": "#/$defs/glassPaneObject"
+                    },
+                    {
                         "$ref": "#/$defs/directionalLightObject"
                     },
                     {
@@ -359,6 +365,144 @@
                 "position",
                 "rotation",
                 "scale"
+            ]
+        },
+        "balloonObject": {
+            "type": "object",
+            "description": "运行时橡皮膜气球。球壳、压力、破裂拓扑和软片都在运行时生成；materialInstance 必须是可加载的 MI 资源路径。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "balloon"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "materialInstance": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "thickness": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "subdivisions": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                },
+                "siteCount": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 64
+                },
+                "pressure": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "burstStrain": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "restContraction": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                },
+                "seed": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "scale",
+                "materialInstance",
+                "radius",
+                "thickness",
+                "subdivisions",
+                "siteCount",
+                "pressure",
+                "burstStrain",
+                "restContraction",
+                "seed"
+            ]
+        },
+        "glassPaneObject": {
+            "type": "object",
+            "description": "运行时玻璃板。完整板、冲击点局部 Voronoi 碎片和落地二次碎裂都在运行时生成；width/height 是板面尺寸，thickness 是板厚，单位与场景一致。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "glassPane"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "materialInstance": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "thickness": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "siteCount": {
+                    "type": "integer",
+                    "minimum": 4,
+                    "maximum": 64
+                },
+                "seed": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "subfracture": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "scale",
+                "materialInstance",
+                "width",
+                "height",
+                "thickness",
+                "siteCount",
+                "seed"
             ]
         },
         "directionalLightObject": {
