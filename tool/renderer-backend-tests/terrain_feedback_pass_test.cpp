@@ -41,12 +41,19 @@ nlohmann::json& FeedbackResource(nlohmann::json& graph)
 
 nlohmann::json& FeedbackDepthResource(nlohmann::json& graph)
 {
-    const std::string name =
-        FeedbackPass(graph).at("output").at(1).at("resource")
-            .get<std::string>();
-    for (auto& resource : graph.at("resources"))
-        if (resource.at("name") == name)
-            return resource;
+    // L4b 起 output 是 1..5 张颜色 + 最后一张深度，不能再用固定下标。
+    for (auto& output : FeedbackPass(graph).at("output"))
+    {
+        const std::string name = output.at("resource").get<std::string>();
+        for (auto& resource : graph.at("resources"))
+        {
+            if (resource.at("name") != name) continue;
+            const std::string format =
+                resource.value("format", std::string());
+            if (format.rfind("D", 0) == 0)
+                return resource;
+        }
+    }
     throw std::runtime_error("Missing terrainFeedback depth resource");
 }
 
@@ -66,13 +73,20 @@ TEST(TerrainFeedbackGraph, CompilesDedicatedColorAndDepthPass)
     EXPECT_TRUE(feedbackPass->needCreateMaterial);
     EXPECT_FALSE(feedbackPass->needMsaa);
     EXPECT_TRUE(feedbackPass->outputsDepth);
-    EXPECT_EQ(feedbackPass->colorOutputCount, 1u);
-    ASSERT_EQ(feedbackPass->outputResources.size(), 2u);
+    // 覆盖页 1 张 + L4b 层页 4 张；深度固定在最后。
+    EXPECT_EQ(feedbackPass->colorOutputCount, 5u);
+    ASSERT_EQ(feedbackPass->outputResources.size(), 6u);
     EXPECT_EQ(
         feedbackPass->outputResources[0].resource,
         "terrainFeedback");
     EXPECT_EQ(
         feedbackPass->outputResources[1].resource,
+        "terrainLayerFeedback0");
+    EXPECT_EQ(
+        feedbackPass->outputResources[4].resource,
+        "terrainLayerFeedback3");
+    EXPECT_EQ(
+        feedbackPass->outputResources[5].resource,
         "terrainFeedbackDepth");
 
     bool foundResource = false;
@@ -131,7 +145,9 @@ TEST(TerrainFeedbackGraph, RejectsMsaaMissingDepthAndExtraOutputs)
     }
     {
         nlohmann::json graph = LoadGraph();
-        FeedbackPass(graph)["output"].erase(1);
+        // 去掉最后一项（深度）后只剩颜色附件。
+        nlohmann::json& outputs = FeedbackPass(graph)["output"];
+        outputs.erase(outputs.size() - 1);
         EXPECT_TRUE(VL::RenderGraphCompiler{}.Compile(graph).IsFailure());
     }
     {

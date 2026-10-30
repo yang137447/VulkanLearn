@@ -201,6 +201,46 @@
             ]
         },
         {
+            "name": "terrainLayerFeedback0",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback1",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback2",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback3",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
             "name": "terrainFeedbackDepth",
             "format": "D32_SFLOAT",
             "widthSize": 128,
@@ -450,11 +490,46 @@
                     "resource": "terrainPageTable",
                     "source": "worldTexture",
                     "binding": 0
+                },
+                {
+                    "resource": "terrainLayerCatalog",
+                    "source": "worldTexture",
+                    "binding": 1
+                },
+                {
+                    "resource": "terrainLayerIds",
+                    "source": "worldTexture",
+                    "binding": 2
+                },
+                {
+                    "resource": "terrainLayerWeights",
+                    "source": "worldTexture",
+                    "binding": 3
                 }
             ],
             "output": [
                 {
                     "resource": "terrainFeedback",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback0",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback1",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback2",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback3",
                     "loadOp": "clear",
                     "storeOp": "store"
                 },

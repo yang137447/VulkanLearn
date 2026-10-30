@@ -13,6 +13,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/terrainFeedbackGpu.h"
+#include "render/resource/terrainLayerFeedbackGpu.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "terrain/terrainPageManager.h"
 #include "terrain/terrainLayerTable.h"
@@ -63,6 +64,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         CreateTerrainPageTableGpuResource(*rendererBackend);
     terrainStreaming->feedbackRing =
         std::make_shared<TerrainFeedbackGpuRing>(*rendererBackend);
+    terrainStreaming->layerFeedbackRing =
+        std::make_shared<TerrainLayerFeedbackGpuRing>(*rendererBackend);
     std::vector<TerrainLayerDesc> worldTerrainLayers;
     bool hasTerrainLayers = false;
     for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
@@ -130,6 +133,18 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     // feedback pass 的 worldTexture 输入；与 M_terrain 使用同一张 page table。
     loadContext.resourceCache.BindWorldTexture(
         "terrainPageTable",
+        terrainStreaming->pageResources.pageTable);
+    // L4b 层页 feedback 的 3 个附加输入。World 没有分层地形时先用 page table
+    // 占位（shader 由 u_layerFeedbackEnabled=0 保证不采样），有层地形时在
+    // 下方被真实的 catalog / ID / 权重纹理覆盖。
+    loadContext.resourceCache.BindWorldTexture(
+        "terrainLayerCatalog",
+        terrainStreaming->pageResources.pageTable);
+    loadContext.resourceCache.BindWorldTexture(
+        "terrainLayerIds",
+        terrainStreaming->pageResources.pageTable);
+    loadContext.resourceCache.BindWorldTexture(
+        "terrainLayerWeights",
         terrainStreaming->pageResources.pageTable);
 
     RendererEnvironmentLoader environmentLoader(
@@ -259,6 +274,17 @@ RendererResourceLoadCoordinator::LoadRendererResources(
                     terrainStreaming->layerPageManager,
                     terrainStreaming->maxLayerPageUploadsPerFrame);
         }
+        // L4b：层页 feedback 的 worldTexture 必须指向真实的 catalog/ID/权重，
+        // 并且要在 pass descriptor 建立之前绑定（本函数返回后才建 descriptor）。
+        loadContext.resourceCache.BindWorldTexture(
+            "terrainLayerCatalog",
+            terrainStreaming->layerResources.layerTable);
+        loadContext.resourceCache.BindWorldTexture(
+            "terrainLayerIds",
+            terrainStreaming->pageResources.layerIds);
+        loadContext.resourceCache.BindWorldTexture(
+            "terrainLayerWeights",
+            terrainStreaming->pageResources.layerWeights);
         RequestInitialTerrainLayerPages(
             *terrainStreaming,
             0,

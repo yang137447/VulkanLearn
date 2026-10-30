@@ -29,6 +29,7 @@
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "render/resource/terrainFeedbackGpu.h"
+#include "render/resource/terrainLayerFeedbackGpu.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
@@ -1268,8 +1269,30 @@ void RenderSystem::ConsumeTerrainFeedback(
         completedEpoch,
         streaming->maxPageRequestsPerFrame,
         streaming->pendingPageRequests);
-    // L4a：同一份覆盖页 feedback 继续推导可见层/mip，驱动层页驻留。
-    ApplyTerrainLayerFeedback(streaming, *summary, completedEpoch, frameIndex);
+    // L4b：层号+层页+mip 的专用 feedback 是主路径；只有它本帧不可用时才
+    // 退回 L4a 的覆盖页推导（启动/首帧/backpressure）。
+    bool appliedExactLayerFeedback = false;
+    if (streaming->layerVTRequested && streaming->layerFeedbackRing)
+    {
+        const std::optional<VL::TerrainLayerFeedbackFrameSummary>
+            layerSummary = streaming->layerFeedbackRing->TryConsume(
+                frameIndex,
+                completedEpoch);
+        if (layerSummary.has_value())
+        {
+            appliedExactLayerFeedback = ApplyTerrainLayerExactFeedback(
+                streaming,
+                *layerSummary,
+                completedEpoch,
+                frameIndex);
+        }
+    }
+    if (!appliedExactLayerFeedback)
+    {
+        // L4a：覆盖页推导只作为回退/prefetch，不再与精确路径同时写驻留。
+        ApplyTerrainLayerFeedback(
+            streaming, *summary, completedEpoch, frameIndex);
+    }
     StoreTerrainFeedbackSummary(streaming, *summary);
 }
 
@@ -1308,10 +1331,55 @@ void RenderSystem::ApplyTerrainLayerFeedback(
             frameIndex,
             completedEpoch,
             config);
+    streaming->latestLayerFeedbackExact = false;
+}
+
+bool RenderSystem::ApplyTerrainLayerExactFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainLayerFeedbackFrameSummary& summary,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return false;
+    if (!streaming->layerResources.atlasesCreated ||
+        streaming->layerDefinitions.empty())
+        return false;
+    // 精确 feedback 本帧没有任何有效 texel（例如地形完全不在屏幕内）时
+    // 仍要走精确路径：空集合表示“没有可见层”，不能退回覆盖页推导去
+    // 复活整层页。
+    VL::TerrainLayerVisibilityConfig config;
+    config.layerCount =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    const uint32_t sourceMipLevels = std::min(
+        {streaming->layerSources.albedoMipLevels,
+         streaming->layerSources.normalMipLevels,
+         streaming->layerSources.pbrMipLevels});
+    config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
+    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
+    config.idleEvictionEnabled =
+        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
+
+    streaming->latestLayerExactFeedback =
+        streaming->layerVisibilityResolver.ApplyExact(
+            summary,
+            streaming->layerPageManager,
+            streaming->pendingLayerPageRequests,
+            frameIndex,
+            completedEpoch,
+            config);
+    streaming->latestLayerFeedbackExact = true;
+    return true;
 }
 
 void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
 {
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    const bool layerFeedbackEnabled =
+        streaming && streaming->layerVTRequested &&
+        streaming->layerResources.atlasesCreated;
     const RenderGraph& renderGraph = RenderGraph::GetInstance();
     for (const auto& [passName, renderpass] :
          renderGraph.GetRenderpasses())
@@ -1342,6 +1410,33 @@ void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
             passMaterial->SetParameter(
                 "u_pageResolution",
                 static_cast<float>(VL::TerrainPageManager::PageResolution));
+        }
+        // L4b：层页 feedback 与 M_terrain 共享同一套层 UV/页公式参数。
+        if (passMaterial->HasParameter("u_uvScale") && streaming)
+        {
+            passMaterial->SetParameter(
+                "u_uvScale",
+                streaming->layerUvScale);
+        }
+        if (passMaterial->HasParameter("u_layerPageResolution"))
+        {
+            passMaterial->SetParameter(
+                "u_layerPageResolution",
+                static_cast<float>(
+                    VL::TerrainLayerPageManager::PageResolution));
+        }
+        if (passMaterial->HasParameter("u_layerMaxMip"))
+        {
+            passMaterial->SetParameter(
+                "u_layerMaxMip",
+                static_cast<float>(
+                    VL::TerrainLayerPageManager::MaxMipLevel));
+        }
+        if (passMaterial->HasParameter("u_layerFeedbackEnabled"))
+        {
+            passMaterial->SetParameter(
+                "u_layerFeedbackEnabled",
+                layerFeedbackEnabled ? 1.0f : 0.0f);
         }
     }
 }
@@ -1526,12 +1621,32 @@ void RenderSystem::PublishTerrainStreamingStats(
     // L4a：可见层推导与逐帧预算的实时值。
     stats.layerVisibleLayers =
         streaming->latestLayerVisibility.visibleLayers;
-    stats.layerLastRequestedPages =
-        streaming->latestLayerVisibility.acceptedRequests;
-    stats.layerPendingRequests =
-        streaming->latestLayerVisibility.pendingRequests;
-    stats.layerMipRequestCounts =
-        streaming->latestLayerVisibility.mipRequestCounts;
+    if (streaming->latestLayerFeedbackExact)
+    {
+        // L4b 精确路径：命中/请求/挂起都来自层号+层页+mip 的专用 feedback。
+        const VL::TerrainLayerExactFeedbackStats& exact =
+            streaming->latestLayerExactFeedback;
+        stats.layerVisibleLayers = exact.visibleLayers;
+        stats.layerFeedbackHits = exact.markedPages;
+        stats.layerRequestedPages = exact.attemptedRequests;
+        stats.layerAcceptedPages = exact.acceptedRequests;
+        stats.layerPendingRequests = exact.pendingRequests;
+        stats.layerMipRequestCounts = exact.mipRequestCounts;
+        stats.layerExactFeedbackSlots = exact.validSlots;
+        stats.layerExactFeedbackPages = exact.distinctPages;
+    }
+    else
+    {
+        const VL::TerrainLayerVisibilityStats& cover =
+            streaming->latestLayerVisibility;
+        stats.layerFeedbackHits = cover.markedPages;
+        stats.layerRequestedPages = cover.attemptedRequests;
+        stats.layerAcceptedPages = cover.acceptedRequests;
+        stats.layerPendingRequests = cover.pendingRequests;
+        stats.layerMipRequestCounts = cover.mipRequestCounts;
+        stats.layerExactFeedbackSlots = 0;
+        stats.layerExactFeedbackPages = 0;
+    }
     stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
     stats.layerDirtyPages = layerPages.DirtyPageCount();
     stats.layerDirtyPageTableEntries =
@@ -1612,7 +1727,8 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " free=" << stats.layerFreePhysicalPages
         << " quarantined=" << stats.layerQuarantinedPhysicalPages
         << " requests=" << stats.layerRequestCount
-        << " hits=" << stats.layerHitCount
+        // 旧 `hits` 是 RequestPage 命中已驻留页的次数；调用方在请求前就会
+        // 过滤常驻页，因此它恒为 0。真正的命中看第二行 feedbackHits。
         << " misses=" << stats.layerMissCount
         << " evictions=" << stats.layerEvictionCount
         << " uploadedPages=" << stats.layerUploadedPagesTotal
@@ -1623,7 +1739,13 @@ void RenderSystem::ReportTerrainLayerStatistics() const
     // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
     std::cout
         << "[TerrainLayer] visibleLayers=" << stats.layerVisibleLayers
-        << " requestedLast=" << stats.layerLastRequestedPages
+        // feedbackHits 才是“本帧 GPU 真的看到并续命的层页”；requested 是
+        // 本帧尝试请求数（含失败/deferred），accepted 是其中成功的部分。
+        << " feedbackHits=" << stats.layerFeedbackHits
+        << " exactSlots=" << stats.layerExactFeedbackSlots
+        << " exactPages=" << stats.layerExactFeedbackPages
+        << " requested=" << stats.layerRequestedPages
+        << " accepted=" << stats.layerAcceptedPages
         << " uploadedLast=" << stats.layerLastUploadedPages
         << " pending=" << stats.layerPendingRequests
         << " mipRequests=";
@@ -3854,6 +3976,39 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                     frameIndex,
                     feedbackSubmittedEpoch,
                     feedbackFrameTag);
+            }
+            // L4b：4 张层页 attachment 与覆盖页 RT 在同一次录制里回读。
+            // 只有真正使用 layer mode 1 时才记录，mode 0 不产生额外拷贝。
+            if (terrainFeedbackStreaming->layerVTRequested &&
+                terrainFeedbackStreaming->layerFeedbackRing)
+            {
+                std::array<vk::Image, VL::TerrainLayerFeedbackSlotCount>
+                    layerImages{};
+                bool allPresent = true;
+                for (uint32_t slot = 0;
+                     slot < VL::TerrainLayerFeedbackSlotCount;
+                     ++slot)
+                {
+                    const auto layerIt = resolveResources.find(
+                        "terrainLayerFeedback" + std::to_string(slot));
+                    if (layerIt == resolveResources.end() ||
+                        swapChainImageIndex >= layerIt->second.size())
+                    {
+                        allPresent = false;
+                        break;
+                    }
+                    layerImages[slot] =
+                        layerIt->second[swapChainImageIndex].image;
+                }
+                if (allPresent)
+                {
+                    terrainFeedbackStreaming->layerFeedbackRing->RecordCopy(
+                        commandBuffer,
+                        layerImages,
+                        frameIndex,
+                        feedbackSubmittedEpoch,
+                        feedbackFrameTag);
+                }
             }
         }
     }

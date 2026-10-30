@@ -1,12 +1,14 @@
 add_executable(terrain_tests
     terrainTests.cpp
     terrainPageManagerP31Tests.cpp
+    terrainLayerFeedbackTests.cpp
     terrainLayerPageManagerTests.cpp
     terrainLayerVisibilityTests.cpp
     terrainCollisionTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerTable.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPageManager.cpp

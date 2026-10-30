@@ -34,6 +34,42 @@
                 "max": 512.0
             },
             "description": "must match TerrainPageManager::PageResolution; used for the same half-texel page inset as M_terrain"
+        },
+        "u_uvScale": {
+            "type": "float",
+            "default": 64.0,
+            "range": {
+                "min": 0.1,
+                "max": 1024.0
+            },
+            "description": "M_terrain u_uvScale; the layer feedback must reproduce the same layer UV as the material"
+        },
+        "u_layerPageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "VT layer page resolution; must match TerrainLayerPageManager::PageResolution"
+        },
+        "u_layerMaxMip": {
+            "type": "float",
+            "default": 4.0,
+            "range": {
+                "min": 0.0,
+                "max": 4.0
+            },
+            "description": "maximum VT layer page-table mip, same value as M_terrain"
+        },
+        "u_layerFeedbackEnabled": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "1 when the active World uses layer mode 1 and the 4 layer attachments carry L4b feedback; 0 keeps them invalid"
         }
     },
     "textures": {}

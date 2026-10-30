@@ -785,12 +785,27 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         pass.outputResources = std::move(outputResult.Value());
         if (pass.type == RenderGraphPassType::TerrainFeedback)
         {
-            // feedback 合同：一个 worldTexture（page table）输入、一个固定
-            // 128×128 RGBA8 颜色输出 + 一个 128×128 深度输出。深度测试让
-            // 最近的地形页赢得 feedback texel，避免后绘制的远页覆盖近页 miss。
-            // 禁止 MSAA/swapChain/GBuffer；回读始终是 64 KiB。
+            // feedback 合同：1..4 个 worldTexture 输入（覆盖页 page table，
+            // L4b 起再加层 catalog / ID / 权重），每个输入对应一张固定
+            // 128×128 RGBA8 颜色输出，最后再加一张 128×128 深度输出。
+            // 深度测试让最近的地形页赢得 feedback texel，避免后绘制的远页
+            // 覆盖近页 miss。禁止 MSAA/swapChain/GBuffer。
             const auto& outputs = pass.outputResources;
             const auto& inputs = pass.inputDescriptors;
+            bool invalidInputs = inputs.empty() ||
+                inputs.size() > 4 ||
+                // 输出 = 1..5 张颜色附件 + 1 张深度；覆盖页 RT 不需要
+                // 对应的 worldTexture 输入，所以不能把颜色数钉在输入数上。
+                outputs.size() < 2 ||
+                outputs.size() > 6;
+            for (size_t inputIndex = 0;
+                 !invalidInputs && inputIndex < inputs.size();
+                 ++inputIndex)
+            {
+                invalidInputs =
+                    inputs[inputIndex].source != "worldTexture" ||
+                    inputs[inputIndex].binding != inputIndex;
+            }
             if (pass.needMsaa ||
                 !pass.needCreateMaterial ||
                 pass.materialInstancePath.empty() ||
@@ -799,18 +814,16 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 !pass.pipelineState.depthWriteEnable ||
                 pass.pipelineState.depthCompareOp !=
                     CompiledDepthCompareOp::Less ||
-                inputs.size() != 1 ||
-                inputs[0].source != "worldTexture" ||
-                inputs[0].binding != 0 ||
-                outputs.size() != 2)
+                invalidInputs)
             {
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidTerrainFeedback",
-                    "TerrainFeedback requires one worldTexture input, one fixed color output and one fixed depth output with depth test.",
+                    "TerrainFeedback requires 1..4 worldTexture inputs with bindings 0..N-1, "
+                    "1..5 fixed color outputs and one fixed depth output with depth test.",
                     pass.name));
             }
 
-            const CompiledRenderGraphResource* colorTarget = nullptr;
+            std::vector<const CompiledRenderGraphResource*> colorTargets;
             const CompiledRenderGraphResource* depthTarget = nullptr;
             for (const CompiledRenderGraphPassOutput& output : outputs)
             {
@@ -837,33 +850,44 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 if (IsDepthFormatString(resource->format))
                     depthTarget = resource;
                 else
-                    colorTarget = resource;
+                    colorTargets.push_back(resource);
             }
-            if (colorTarget == nullptr ||
-                depthTarget == nullptr ||
-                colorTarget == depthTarget ||
-                colorTarget->isSwapchain ||
-                colorTarget->type != "texture2D" ||
-                colorTarget->format != "R8G8B8A8_UNORM" ||
-                !colorTarget->hasFixedWidth ||
-                !colorTarget->hasFixedHeight ||
-                colorTarget->widthValue !=
-                    static_cast<float>(TerrainFeedbackResolution) ||
-                colorTarget->heightValue !=
-                    static_cast<float>(TerrainFeedbackResolution) ||
-                std::find(
-                    colorTarget->usage.begin(),
-                    colorTarget->usage.end(),
-                    "colorAttachment") == colorTarget->usage.end() ||
-                std::find(
-                    colorTarget->usage.begin(),
-                    colorTarget->usage.end(),
-                    "transferSrc") == colorTarget->usage.end())
+            if (colorTargets.empty() ||
+                colorTargets.size() > 5 ||
+                depthTarget == nullptr)
             {
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidTerrainFeedback",
-                    "TerrainFeedback output must be a fixed 128x128 R8G8B8A8_UNORM colorAttachment+transferSrc texture.",
+                    "TerrainFeedback requires 1..5 color outputs plus one depth output.",
                     pass.name));
+            }
+            for (const CompiledRenderGraphResource* colorTarget :
+                 colorTargets)
+            {
+                if (colorTarget == depthTarget ||
+                    colorTarget->isSwapchain ||
+                    colorTarget->type != "texture2D" ||
+                    colorTarget->format != "R8G8B8A8_UNORM" ||
+                    !colorTarget->hasFixedWidth ||
+                    !colorTarget->hasFixedHeight ||
+                    colorTarget->widthValue !=
+                        static_cast<float>(TerrainFeedbackResolution) ||
+                    colorTarget->heightValue !=
+                        static_cast<float>(TerrainFeedbackResolution) ||
+                    std::find(
+                        colorTarget->usage.begin(),
+                        colorTarget->usage.end(),
+                        "colorAttachment") == colorTarget->usage.end() ||
+                    std::find(
+                        colorTarget->usage.begin(),
+                        colorTarget->usage.end(),
+                        "transferSrc") == colorTarget->usage.end())
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidTerrainFeedback",
+                        "TerrainFeedback color outputs must be fixed 128x128 R8G8B8A8_UNORM colorAttachment+transferSrc textures.",
+                        pass.name + ":" + colorTarget->name));
+                }
             }
             if (depthTarget->isSwapchain ||
                 depthTarget->type != "texture2D" ||

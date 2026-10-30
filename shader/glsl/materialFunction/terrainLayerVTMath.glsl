@@ -1,0 +1,93 @@
+#ifndef VL_MATERIAL_FUNCTION_TERRAIN_LAYER_VT_MATH_GLSL
+#define VL_MATERIAL_FUNCTION_TERRAIN_LAYER_VT_MATH_GLSL
+
+// L3/L4b 共享的层 VT 地址数学：层 UV -> mip -> 页坐标。
+// M_terrain 的采样路径（mf_terrainLayerVT.glsl）与层页 feedback
+// （pass/terrainFeedback.frag）必须用同一份实现，否则 feedback 报告的
+// 页/mip 会和真正采样的页错位。CPU 参考实现是 terrain/terrainLayerVT.h。
+const int TERRAIN_VT_MAX_LAYERS = 256;
+const int TERRAIN_VT_MAX_MIP = 4;
+
+struct TerrainLayerVTAddress
+{
+    int mip;
+    int side;
+    int pageX;
+    int pageY;
+    // pageY * side + pageX；feedback 的 G 通道就是它（0..255）。
+    int pageIndex;
+    vec2 localUv;
+};
+
+// catalog 的 pagesPerSide 是 mip0 的每边页数（512 -> 4、1K -> 8、2K -> 16）。
+// 尾页是 128²，因此最大 mip = log2(pagesPerSide)，例如 1K 为 mip0..3。
+int TerrainLayerMaxMipForPagesPerSide(int pagesPerSide)
+{
+    int maxMip = 0;
+    int side = pagesPerSide;
+    while (side > 1 && maxMip < TERRAIN_VT_MAX_MIP)
+    {
+        side >>= 1;
+        ++maxMip;
+    }
+    return maxMip;
+}
+
+int TerrainLayerPagesPerSideAtMip(int pagesPerSide, int mip)
+{
+    return max(1, pagesPerSide >> mip);
+}
+
+// 层 UV 与 mode 0 完全一致：uvScale/uvRotation 来自 catalog row1。
+vec2 TerrainLayerUvForSlot(
+    vec2 meshUv,
+    float globalUvScale,
+    vec4 catalogUvRow)
+{
+    const float angle = catalogUvRow.w;
+    const mat2 rotation =
+        mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
+    return rotation * (meshUv * globalUvScale * catalogUvRow.z);
+}
+
+// 按层自身的纹素密度选 mip。导数必须在 fract 之前取；调用点必须在
+// uniform control flow（固定 4 次的 slot 循环）内，否则导数未定义。
+int TerrainLayerMipForUv(
+    vec2 layerUv,
+    int pagesPerSide,
+    int maxMip,
+    float pageResolution)
+{
+    const vec2 layerDdx = dFdx(layerUv);
+    const vec2 layerDdy = dFdy(layerUv);
+    const float sourceResolution =
+        float(pagesPerSide) * pageResolution;
+    const float texelsPerPixel =
+        max(length(layerDdx), length(layerDdy)) * sourceResolution;
+    const float lod = log2(max(texelsPerPixel, 1.0e-8));
+    return clamp(int(floor(lod + 0.5)), 0, maxMip);
+}
+
+// 层纹理是 repeat 平铺：先 fract 到 [0,1)，再按该 mip 的页数切页。
+// side 与 CPU 的 TerrainLayerPagesPerSide(sourceResolution, mip) 一致。
+TerrainLayerVTAddress TerrainLayerAddressAtMip(
+    vec2 layerUv,
+    int pagesPerSide,
+    int mip)
+{
+    TerrainLayerVTAddress address;
+    address.mip = mip;
+    address.side = TerrainLayerPagesPerSideAtMip(pagesPerSide, mip);
+    const vec2 scaledUv = fract(layerUv) * float(address.side);
+    const ivec2 pageXY = clamp(
+        ivec2(floor(scaledUv)),
+        ivec2(0),
+        ivec2(address.side - 1));
+    address.pageX = pageXY.x;
+    address.pageY = pageXY.y;
+    address.pageIndex = address.pageY * address.side + address.pageX;
+    address.localUv = fract(scaledUv);
+    return address;
+}
+
+#endif

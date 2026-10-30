@@ -25,6 +25,7 @@ namespace VL
 {
 class RendererBackendVulkan;
 class TerrainFeedbackGpuRing;
+class TerrainLayerFeedbackGpuRing;
 struct RendererResourceLoadContext;
 
 struct TerrainPageGpuResources
@@ -195,9 +196,16 @@ struct TerrainStreamingStats
     uint64_t layerUploadedBytesTotal = 0;
     // L4a：可见层推导与逐帧预算的实时值。
     uint32_t layerVisibleLayers = 0;
-    uint32_t layerLastRequestedPages = 0;
+    // feedback 命中（已驻留页被本帧看到）与请求尝试/成功必须分开统计：
+    // 旧字段名 requestedLast 实际是 accepted，容易把“请求未成功”读成 0 命中。
+    uint32_t layerFeedbackHits = 0;
+    uint32_t layerRequestedPages = 0;
+    uint32_t layerAcceptedPages = 0;
     uint32_t layerLastUploadedPages = 0;
     uint32_t layerPendingRequests = 0;
+    // L4b：精确层页 feedback 的 slot/页计数（0 表示本帧走了覆盖页回退路径）。
+    uint32_t layerExactFeedbackSlots = 0;
+    uint32_t layerExactFeedbackPages = 0;
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerMipRequestCounts{};
     uint32_t layerDirtyPages = 0;
     uint32_t layerDirtyPageTableEntries = 0;
@@ -233,6 +241,10 @@ struct TerrainStreamingState
     std::shared_ptr<TerrainLayerUploadGpuRing> layerUploadRing;
     // 最近一帧的可见层推导统计，由渲染线程写、PublishStats 复制。
     TerrainLayerVisibilityStats latestLayerVisibility;
+    // L4b：最近一帧的精确层页 feedback 统计；latestLayerFeedbackExact
+    // 标记本帧使用的是精确路径还是覆盖页回退路径。
+    TerrainLayerExactFeedbackStats latestLayerExactFeedback;
+    bool latestLayerFeedbackExact = false;
     uint32_t maxLayerPageRequestsPerFrame = 16;
     uint32_t maxLayerPageUploadsPerFrame = 8;
     uint64_t layerIdleEvictionEpochs = 180;
@@ -245,6 +257,13 @@ struct TerrainStreamingState
     // P2/P3 feedback 回读 ring：World-local，随 package 退休；P3 起其 summary
     // 经 ApplyFeedback 驱动命中/miss/RequestPageAtEpoch。
     std::shared_ptr<TerrainFeedbackGpuRing> feedbackRing;
+    // L4b：4 张层页 feedback attachment 的回读 ring；只有 layerVTRequested
+    // 时才记录/消费，mode 0 完全不参与。
+    std::shared_ptr<TerrainLayerFeedbackGpuRing> layerFeedbackRing;
+    // M_terrain 的 u_uvScale；层页 feedback 必须用同一个值才能复现层 UV。
+    // 同一 World 的所有 layer-table 地形必须一致（加载期校验）。
+    float layerUvScale = 64.0f;
+    bool layerUvScaleInitialized = false;
     // 每帧上传 ring；BuildUploadBatch 的 CPU 快照写进当前 frameIndex 的槽位，
     // 在 scene pass 前随主帧提交。
     std::shared_ptr<TerrainUploadGpuRing> uploadRing;

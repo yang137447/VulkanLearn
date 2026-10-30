@@ -74,7 +74,22 @@ VL::TerrainLayerVisibilityConfig MakeConfig(uint32_t layerCount)
     config.maxRequestsPerFrame = 64;
     config.maxCoverPageRebuildsPerFrame = 4;
     config.idleEvictionEpochs = 4;
+    config.unselectedMipIdleEvictionEpochs = 4;
     return config;
+}
+
+VL::TerrainLayerPageKey Key(
+    uint32_t layerId,
+    uint32_t mip,
+    uint32_t pageX,
+    uint32_t pageY)
+{
+    VL::TerrainLayerPageKey key;
+    key.layerId = layerId;
+    key.mip = mip;
+    key.pageX = pageX;
+    key.pageY = pageY;
+    return key;
 }
 
 std::vector<VL::TerrainLayerDesc> MakeLayerDesc(uint32_t count)
@@ -102,7 +117,10 @@ TEST(TerrainLayerVisibility, MapsCoverPagePriorityToMipLadder)
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(127), 2u);
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(64), 2u);
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(63), 3u);
-    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(0), 3u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(32), 3u);
+    // 2K 层 mip4 只有 1 页/层，远景必须能请求到，不能再停在上限 3。
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(31), 4u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(0), 4u);
 }
 
 // 一个覆盖页有 top-4 层时，每个可见层都要请求该 mip 的**全部**页；未注册
@@ -294,4 +312,88 @@ TEST(TerrainLayerVisibility, ResidentCoverPageSkipsRebuild)
     EXPECT_EQ(stats.resolvedCoverPages, 1u);
     EXPECT_EQ(stats.rebuiltCoverPages, 0u);
     EXPECT_GT(stats.candidatePages, 0u);
+}
+
+// L4a 验收 MEDIUM 3：2K 层的 mip4 只有 1 页，远景必须也能请求到；
+// 旧阶梯把上限钉在 mip3，导致远景永远停在 avgColor。
+TEST(TerrainLayerVisibility, RequestsMip4ForDistantLayers)
+{
+    VL::TerrainPageManager coverPages;
+    VL::TerrainBuildPlan plan = MakeTwoLayerPlan();
+    coverPages.RegisterTerrain(plan, false);
+
+    std::vector<VL::TerrainLayerDesc> layers = MakeLayerDesc(2);
+    for (VL::TerrainLayerDesc& layer : layers)
+        layer.sourceResolution = 2048;
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(layers);
+    layerPages.SetGpuEpochContext(1, 0, 2);
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 6;
+    // priority 0 = 最远；2K 层 mip4 是 1 页/层。
+    summary.pages = {{0, 0, 0, false, 16}};
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(2);
+    config.sourceMipLevels = 5;
+    const VL::TerrainLayerVisibilityStats stats = resolver.Apply(
+        summary, coverPages, layerPages, pending, 0, 6, config);
+
+    EXPECT_EQ(stats.mipRequestCounts[4], 2u);
+    EXPECT_EQ(stats.acceptedRequests, 2u);
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 4, 0, 0)));
+    EXPECT_TRUE(layerPages.IsResident(Key(1, 4, 0, 0)));
+}
+
+// L4a 验收 MEDIUM 1：不能把“可见层所有已驻留 mip”每帧续命，否则 capacity
+// 对可见集完全无效。只有本帧 feedback 真正命中的页保持新鲜，其余走短 idle。
+TEST(TerrainLayerVisibility, CapacityReclaimsUnselectedMipPages)
+{
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetResidentCapacity(512);
+    layerPages.SetGpuEpochContext(100, 100, 2);
+
+    // 预驻留 mip0 全部 16 页 + mip2 的 1 页。
+    for (uint32_t pageY = 0; pageY < 4; ++pageY)
+        for (uint32_t pageX = 0; pageX < 4; ++pageX)
+            ASSERT_TRUE(layerPages.RequestPage(Key(0, 0, pageX, pageY)));
+    ASSERT_TRUE(layerPages.RequestPage(Key(0, 2, 0, 0)));
+    ASSERT_EQ(layerPages.ResidentCount(), 17u);
+
+    std::vector<uint8_t> buffer(VL::TerrainLayerFeedbackBufferBytes, 0);
+    VL::TerrainLayerFeedbackTexel texel;
+    texel.layerId = 0;
+    texel.mip = 0;
+    texel.pageIndex = 0;
+    texel.valid = true;
+    texel.frameTag = 21;
+    VL::EncodeTerrainLayerFeedbackTexel(
+        texel, buffer.data());
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.idleEvictionEpochs = 4;
+    config.unselectedMipIdleEvictionEpochs = 2;
+    config.maxRequestsPerFrame = 0;
+
+    uint64_t epoch = 100;
+    for (uint32_t iteration = 0; iteration < 12; ++iteration)
+    {
+        ++epoch;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        layerPages.SetResidentCapacityAtEpoch(4, epoch);
+        VL::TerrainLayerFeedbackFrameSummary summary =
+            VL::SummarizeTerrainLayerFeedback(buffer.data(), buffer.size(), 21);
+        summary.copiedEpoch = epoch;
+        resolver.ApplyExact(summary, layerPages, pending, epoch, epoch, config);
+    }
+
+    // 唯一被 feedback 命中的 mip0 page0 必须存活；其余 16 页必须被回收。
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 0, 0)));
+    EXPECT_FALSE(layerPages.IsResident(Key(0, 2, 0, 0)));
+    EXPECT_LE(layerPages.ResidentCount(), 4u);
 }

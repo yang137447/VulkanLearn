@@ -27,10 +27,13 @@ void TerrainLayerVisibilityResolver::Reset()
 
 uint32_t TerrainLayerVisibilityResolver::MipForPriority(uint8_t priority)
 {
+    // 五档阶梯：2K 层的 mip4 只有 1 页，成本很低，远景必须也能请求，
+    // 否则会永久停在 avgColor。
     if (priority >= 192) return 0;
     if (priority >= 128) return 1;
     if (priority >= 64) return 2;
-    return 3;
+    if (priority >= 32) return 3;
+    return 4;
 }
 
 TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
@@ -51,9 +54,6 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
     //    每帧限流，避免一次 feedback 触发上百次全页采样。
     std::map<TerrainLayerPageKey, uint32_t> candidates;
     std::array<bool, 256> layerSeen{};
-    // 每个可见层本帧拿到的最高优先级；用于给该层所有已驻留 mip 续命，
-    // 避免 priority 在 mip 阈值附近抖动时把上一层 mip 的页反复淘汰/重烘焙。
-    std::array<uint8_t, 256> layerPriority{};
     uint32_t rebuildBudget = config.maxCoverPageRebuildsPerFrame;
 
     for (const TerrainFeedbackPageRecord& record : summary.pages)
@@ -140,31 +140,169 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
                 layerSeen[layerId] = true;
                 ++stats.visibleLayers;
             }
-            layerPriority[layerId] = static_cast<uint8_t>(std::min<uint32_t>(
-                255u, std::max<uint32_t>(layerPriority[layerId], priority)));
         }
     }
     stats.candidatePages = static_cast<uint32_t>(candidates.size());
 
-    // 2. 本帧可见的常驻页推进 lastSeen/lastTouched；必须在淘汰之前做，
-    //    否则刚被采样到的页会在同一帧进入 idle 候选。
+    const uint64_t seenEpoch =
+        summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
+    // 候选页里已经驻留的那部分就是本帧真正的 feedback hit。
+    for (const auto& [key, priority] : candidates)
+    {
+        if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
+            ++stats.markedPages;
+    }
+    const CandidateCommitResult committed = CommitCandidates(
+        candidates,
+        layerSeen,
+        layerPages,
+        pendingRequests,
+        frame,
+        completedEpoch,
+        seenEpoch,
+        config);
+    stats.attemptedRequests = committed.attemptedRequests;
+    stats.acceptedRequests = committed.acceptedRequests;
+    stats.deferredRequests = committed.deferredRequests;
+    stats.evictedPages = committed.evictedPages;
+    stats.mipRequestCounts = committed.mipRequestCounts;
+    stats.pendingRequests =
+        static_cast<uint32_t>(pendingRequests.size());
+    return stats;
+}
+
+TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
+    const TerrainLayerFeedbackFrameSummary& summary,
+    TerrainLayerPageManager& layerPages,
+    std::vector<TerrainLayerPageRequest>& pendingRequests,
+    uint64_t frame,
+    uint64_t completedEpoch,
+    const TerrainLayerVisibilityConfig& config)
+{
+    TerrainLayerExactFeedbackStats stats;
+    stats.validSlots = summary.validTexelCount;
+    stats.distinctPages = summary.distinctPageCount;
+    if (config.layerCount == 0)
+        return stats;
+
+    std::map<TerrainLayerPageKey, uint32_t> candidates;
+    std::array<bool, 256> layerSeen{};
+
+    // 1. 逐条精确页记录：pageIndex 还原成 (pageX,pageY)。只有中心页**缺页**
+    //    时才按 radius 扩一圈邻域作为 prefetch：128×128 feedback 会漏采样
+    //    细长/远处的页，邻域能补上；已驻留页不需要邻域，否则候选集会凭空
+    //    膨胀到可见页的数倍，capacity 又会被“假可见”撑爆。
+    //    中心页保留原 priority，邻域降档，避免邻域抢占请求名额。
+    for (const TerrainLayerFeedbackRecord& record : summary.pages)
+    {
+        const uint32_t layerId = record.layerId;
+        if (layerId >= config.layerCount)
+        {
+            ++stats.outOfRangePages;
+            continue;
+        }
+        if (record.mip > TerrainLayerMaxMipLevel ||
+            record.mip >= config.sourceMipLevels)
+        {
+            ++stats.outOfRangePages;
+            continue;
+        }
+        const uint32_t side = layerPages.PagesPerSide(layerId, record.mip);
+        if (side == 0 || record.pageIndex >= side * side)
+        {
+            ++stats.outOfRangePages;
+            continue;
+        }
+        const uint32_t pageX = record.pageIndex % side;
+        const uint32_t pageY = record.pageIndex / side;
+        const uint32_t priority = std::max<uint32_t>(1, record.priority);
+        const uint32_t prefetchPriority = std::max<uint32_t>(1, priority / 2);
+
+        layerSeen[layerId] = true;
+
+        TerrainLayerPageKey centerKey;
+        centerKey.layerId = layerId;
+        centerKey.mip = record.mip;
+        centerKey.pageX = pageX;
+        centerKey.pageY = pageY;
+        const uint32_t radius = layerPages.IsResident(centerKey)
+            ? 0u
+            : config.exactFeedbackNeighborhoodRadius;
+        const uint32_t minX = radius > pageX ? 0 : pageX - radius;
+        const uint32_t minY = radius > pageY ? 0 : pageY - radius;
+        const uint32_t maxX = std::min(pageX + radius, side - 1);
+        const uint32_t maxY = std::min(pageY + radius, side - 1);
+        for (uint32_t y = minY; y <= maxY; ++y)
+        {
+            for (uint32_t x = minX; x <= maxX; ++x)
+            {
+                TerrainLayerPageKey key;
+                key.layerId = layerId;
+                key.mip = record.mip;
+                key.pageX = x;
+                key.pageY = y;
+                const bool center = x == pageX && y == pageY;
+                const uint32_t candidatePriority =
+                    center ? priority : prefetchPriority;
+                auto inserted = candidates.emplace(key, candidatePriority);
+                if (!inserted.second)
+                {
+                    inserted.first->second = std::max(
+                        inserted.first->second, candidatePriority);
+                }
+            }
+        }
+    }
+    stats.candidatePages = static_cast<uint32_t>(candidates.size());
+    for (uint32_t layerId = 0; layerId < layerSeen.size(); ++layerId)
+    {
+        if (layerSeen[layerId]) ++stats.visibleLayers;
+    }
+
     const uint64_t seenEpoch =
         summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
     for (const auto& [key, priority] : candidates)
     {
-        layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority);
-    }
-    // 可见层的其它 mip 也属于“仍在视野内”的页：shader 的近/远像素会分别
-    // 采样不同 mip，只给本帧选中的那一级续命会让相邻 mip 无谓抖动。
-    for (const auto& entry : layerPages.Pages())
-    {
-        if (!entry.second.resident) continue;
-        const uint32_t layerId = entry.first.layerId;
-        if (layerId >= layerSeen.size() || !layerSeen[layerId]) continue;
-        layerPages.MarkPageUsedAtEpoch(
-            entry.first, seenEpoch, layerPriority[layerId]);
+        if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
+            ++stats.markedPages;
     }
 
+    const CandidateCommitResult committed = CommitCandidates(
+        candidates,
+        layerSeen,
+        layerPages,
+        pendingRequests,
+        frame,
+        completedEpoch,
+        seenEpoch,
+        config);
+    stats.attemptedRequests = committed.attemptedRequests;
+    stats.acceptedRequests = committed.acceptedRequests;
+    stats.deferredRequests = committed.deferredRequests;
+    stats.evictedPages = committed.evictedPages;
+    stats.mipRequestCounts = committed.mipRequestCounts;
+    stats.pendingRequests = static_cast<uint32_t>(pendingRequests.size());
+    return stats;
+}
+
+TerrainLayerVisibilityResolver::CandidateCommitResult
+TerrainLayerVisibilityResolver::CommitCandidates(
+    const std::map<TerrainLayerPageKey, uint32_t>& candidates,
+    const std::array<bool, 256>& layerSeen,
+    TerrainLayerPageManager& layerPages,
+    std::vector<TerrainLayerPageRequest>& pendingRequests,
+    uint64_t frame,
+    uint64_t completedEpoch,
+    uint64_t seenEpoch,
+    const TerrainLayerVisibilityConfig& config)
+{
+    CandidateCommitResult result;
+
+    // 2. 续命只覆盖本帧 feedback 真正命中的页（调用方已在 CommitCandidates
+    //    之前对 candidates 调用 MarkPageUsedAtEpoch）。覆盖页路径里 candidates
+    //    就是选中 mip 的全部页，因此这条规则等价于“选中的 mip”；精确路径里
+    //    它是屏幕真正采样到的层页。不再刷新“可见层的所有历史 mip”，否则
+    //    每帧都会把 248 页刷成最新，capacity 永远压不下来。
     // 3. 新候选合并进跨帧 pending 队列；已驻留页不需要再请求。
     std::map<TerrainLayerPageKey, size_t> pendingIndex;
     for (size_t index = 0; index < pendingRequests.size(); ++index)
@@ -211,18 +349,24 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
         if (attempted < config.maxRequestsPerFrame)
         {
             ++attempted;
-            ++stats.attemptedRequests;
+            ++result.attemptedRequests;
             if (layerPages.RequestPageAtEpoch(
                     request.key,
                     frame,
                     request.priority,
                     completedEpoch))
             {
-                ++stats.acceptedRequests;
-                ++stats.mipRequestCounts[request.key.mip];
+                ++result.acceptedRequests;
+                ++result.mipRequestCounts[request.key.mip];
+                // 新驻留页的 lastSeenEpoch 来自 GPU epoch 上下文；如果帧首
+                // 上下文落后于本帧 feedback epoch（加载期或测试里会发生），
+                // 它会在同一帧的 idle 淘汰里被当成过期页。请求的理由就是
+                // “本帧看到它”，这里直接按 seenEpoch 续命。
+                layerPages.MarkPageUsedAtEpoch(
+                    request.key, seenEpoch, request.priority);
                 continue;
             }
-            ++stats.deferredRequests;
+            ++result.deferredRequests;
             ++request.deferredRequestCount;
         }
         survivors.push_back(request);
@@ -239,7 +383,18 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
         {
             const TerrainLayerPageManager::PageState& page = entry.second;
             if (!page.resident) continue;
-            if (page.lastSeenEpoch + config.idleEvictionEpochs >= seenEpoch)
+            const uint32_t layerId = entry.first.layerId;
+            uint64_t idleWindow = config.idleEvictionEpochs;
+            const bool candidate =
+                candidates.find(entry.first) != candidates.end();
+            // 可见层里不是本帧候选的页（同层其它 mip、同 mip 未被采样的页）
+            // 走短 idle，让容量预算真正生效；完全离开视野的层仍走长 idle，
+            // 避免相机小幅移动就丢掉整层。
+            if (layerId < layerSeen.size() && layerSeen[layerId] && !candidate)
+            {
+                idleWindow = config.unselectedMipIdleEvictionEpochs;
+            }
+            if (page.lastSeenEpoch + idleWindow >= seenEpoch)
                 continue;
             if (!layerPages.CanEvictPageAt(entry.first, completedEpoch))
                 continue;
@@ -248,17 +403,15 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
     }
     for (const TerrainLayerPageKey& key : idlePages)
     {
-        if (layerPages.EvictPage(key)) ++stats.evictedPages;
+        if (layerPages.EvictPage(key)) ++result.evictedPages;
     }
     while (layerPages.ResidentCount() > layerPages.ResidentCapacity())
     {
         if (!layerPages.EvictLeastRecentlyUsed(completedEpoch)) break;
-        ++stats.evictedPages;
+        ++result.evictedPages;
     }
 
-    stats.pendingRequests =
-        static_cast<uint32_t>(pendingRequests.size());
-    return stats;
+    return result;
 }
 
 TerrainLayerVisibilityResolver::CoverPageLayerSet

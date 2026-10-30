@@ -367,13 +367,24 @@ fails at load. L4a drives mode 1 residency from the existing 128×128 coverage-p
 `TerrainLayerVisibilityResolver` (`source/terrain/terrainLayerVisibility.*`) turns each visible
 cover page's top-4 layers into (layer, mip, that mip's full page set), limited to 16
 `RequestPageAtEpoch` calls and 8 atlas-page uploads per frame through
-`TerrainLayerUploadGpuRing`; pages of a visible layer that are not sampled this frame still get
-their `lastSeenEpoch` refreshed so mip thresholds cannot thrash, and pages that leave view are
-evicted after a 180-epoch idle window plus the GPU safety window. The shader falls back to a
-coarser mip when the selected one is not resident, instead of showing `avgColor`.
-`terrainlayerstats` reports layer residency/atlas format/bytes plus visibleLayers, per-frame
-requests/uploads, pending and the mip request distribution; `terrainlayer capacity N` and
-`terrainlayer preload` (full-preload comparison, disables idle eviction) are console-only.
+`TerrainLayerUploadGpuRing`. Only pages that the current frame's feedback actually hit are refreshed:
+pages of a visible layer that are not candidates use a short 16-epoch idle window, so residency
+tracks the visible working set instead of every historical mip; pages that leave view are evicted
+after a 180-epoch idle window plus the GPU safety window. `MipForPriority` has five levels
+(`>=192/>=128/>=64/>=32/else` → mip0..4) so 2K mip4 is reachable, and `TerrainLayerDesc::avgColor`
+defaults to neutral 0.18 instead of black. L4b adds a precise per-slot layer feedback on the same
+pass: four fixed 128×128 `R8G8B8A8_UNORM` attachments (`terrainLayerFeedback0..3`) encode
+`R=layerId, G=pageIndex, B=mip|valid, A=frameTag`, sharing the cover RT's D32 depth. The pass now
+takes 4 `worldTexture` inputs (page table, layer catalog, layer IDs, layer weights) and writes 5
+color outputs; `TerrainLayerFeedbackGpuRing` reads the four images back into one 64 KiB ring slot per
+frame, `SummarizeTerrainLayerFeedback` dedupes/stales them, and `ApplyExact` drives
+`RequestPageAtEpoch`/`MarkPageUsedAtEpoch`; layer UV/mip/page math lives in
+`shader/glsl/materialFunction/terrainLayerVTMath.glsl` and is shared by `mf_terrainLayerVT.glsl`
+and `pass/terrainFeedback.frag`. Exact feedback is the primary driver; L4a derivation is only the
+startup/backpressure fallback. `terrainlayerstats` reports layer residency/atlas format/bytes plus
+visibleLayers, `feedbackHits`, `exactSlots`/`exactPages`, `requested`/`accepted`, uploads, pending and
+the mip request distribution; `terrainlayer capacity N` and `terrainlayer preload` (full-preload
+comparison, disables idle eviction) are console-only.
 CPU page baking is still
 synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
 `documents/contracts/terrain.md`.

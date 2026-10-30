@@ -1405,13 +1405,15 @@ namespace CommonFunction
         uint32_t width,
         uint32_t height,
         bool flipY = false,
-        vk::DeviceSize rowBytes = 0)
+        vk::DeviceSize rowBytes = 0,
+        // 多张图像写进同一个回读 buffer 时用；4 字节对齐由调用方保证。
+        vk::DeviceSize bufferOffset = 0)
     {
         if (!flipY)
         {
             vk::BufferImageCopy region;
             region
-                .setBufferOffset(0)
+                .setBufferOffset(bufferOffset)
                 .setBufferRowLength(0)
                 .setBufferImageHeight(0)
                 .setImageSubresource(vk::ImageSubresourceLayers()
@@ -1426,6 +1428,11 @@ namespace CommonFunction
         else
         {
             std::vector<vk::BufferImageCopy> regions = MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+            if (bufferOffset != 0)
+            {
+                for (vk::BufferImageCopy& region : regions)
+                    region.bufferOffset += bufferOffset;
+            }
             commandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer, static_cast<uint32_t>(regions.size()), regions.data());
         }
     }

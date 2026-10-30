@@ -113,7 +113,9 @@ struct TerrainLayerDesc
     // catalog 的 pagesPerSide 由它与 128 页分辨率推导。
     uint32_t sourceResolution = 1024;
     // 缺页/低 mip 回退色（线性空间）。L1 只写进 catalog，L2 起由 VT 消费。
-    Eigen::Vector3f avgColor = Eigen::Vector3f::Zero();
+    // 默认取与覆盖页缺页中性表面一致的中性灰（0.18）；全黑会让 mode 1 的
+    // 缺页块在光照下像空洞，因此旧 TR 不写该字段时也不能是 0。
+    Eigen::Vector3f avgColor = Eigen::Vector3f(0.18f, 0.18f, 0.18f);
     // 未来层 atlas 分组与 sRGB/alpha/biome 等保留位；L1 只透传。
     uint32_t sourceSet = 0;
     uint32_t flags = 0;

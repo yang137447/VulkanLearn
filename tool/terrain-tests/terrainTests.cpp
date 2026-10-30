@@ -713,11 +713,12 @@ TEST(TerrainLayerTable, PacksHeightSlopeAndNoiseIntoFourRows)
     EXPECT_FLOAT_EQ(pixels[row2 + 1], 3.0f * 85.0f);
     EXPECT_FLOAT_EQ(pixels[row2 + 2], 0.0f);
     EXPECT_FLOAT_EQ(pixels[row2 + 3], 0.0f);
-    // row3：未写 avgColor 时保持零。
+    // row3：未写 avgColor 时取中性灰 0.18。全黑会让 mode 1 的缺页块
+    // 在光照下像空洞，因此默认值必须是中性回退色而不是 0。
     const size_t row3 = static_cast<size_t>(256) * 12 + 3 * 4;
-    EXPECT_FLOAT_EQ(pixels[row3 + 0], 0.0f);
-    EXPECT_FLOAT_EQ(pixels[row3 + 1], 0.0f);
-    EXPECT_FLOAT_EQ(pixels[row3 + 2], 0.0f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 0], 0.18f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 1], 0.18f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 2], 0.18f);
     EXPECT_FLOAT_EQ(pixels[row3 + 3], 0.0f);
 }
 
@@ -2094,7 +2095,7 @@ TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
     EXPECT_EQ(plan.desc.layers[1].sourceResolution, 1024u);
     EXPECT_EQ(plan.desc.layers[1].sourceSet, 0u);
     EXPECT_EQ(plan.desc.layers[1].flags, 0u);
-    EXPECT_FLOAT_EQ(plan.desc.layers[1].avgColor.x(), 0.0f);
+    EXPECT_FLOAT_EQ(plan.desc.layers[1].avgColor.x(), 0.18f);
     ASSERT_TRUE(plan.heightmap != nullptr);
     EXPECT_EQ(plan.heightmap->width, 2u);
     EXPECT_EQ(plan.heightmap->height, 2u);
