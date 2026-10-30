@@ -1284,6 +1284,17 @@ TerrainStreamingState
 - 强制 mip 的用途：上一轮无法构造“粗 mip 回退”的可复现画面，因为自动 mip
   会随着相机贴近一直停在已有页上；`forcemip 0` 在只驻留粗页时能稳定制造
   目标缺页，从而验证混合曲线。
+- 证据（2026-10-30）：`terrain_tests` 185/185、`ctest -R "^Terrain"` 193/193、
+  backend 61/61、material schema 11/11、texture 58/58。`SC_terrain_vt_mode1.json`
+  自动相机第 38 epoch：`resident=32/512`、`targetMips=0/0/2044/0/0`、
+  `fallbackBlendPages=0`、`avgColorPages=0`、`forceMip=-1`、`prefetchMoving=0`。
+  `terrainlayer forcemip 0` 后第一帧（目标 mip0 尚未驻留、只有粗页）截图与自动
+  基线相比：平均通道差 3.07、最大 28、4.38% 像素 >8，画面没有整页纯色块，
+  过渡更柔和——符合“粗页 + 0.2/0.4 混合”的预期，而不是硬切 `avgColor`。
+  mode 0 的 `SC_terrain_b32.json` 截图 SHA-256 仍为 `1D30D8B3…3F54`，与基线
+  逐字节一致。
+- 未完成：没有低分辨率兜底页，也没有基于视锥/tile 距离或相机转向的预取；
+  `forcemip` 之后的 stats 只能在下一次 GT 命令 tick 打印，冒烟中不追加这一行。
 
 ---
 
