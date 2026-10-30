@@ -851,7 +851,7 @@ Basis/Zstd 转码与运行时 BC mip 生成；边界见
 `ctest --test-dir build -R "^Terrain" --output-on-failure`（2026-10-30 Jolt 碰撞 + CPU LOD +
 运行时 LOD + L4b + L4c + L4d + L4e + World/Play 碰撞接入后通过；`terrain_tests` 185 项；同时构建
 `vl_renderer_backend_tests` 时还会纳入其 `TerrainFeedback*` 与
-`TerrainLayerAtlasGpu.*` GPU 用例，合计 193 项）。
+`TerrainLayerAtlasGpu.*` GPU 用例，合计 197 项）。
 CPU 几何 LOD/skirt 与运行时选择还由 `editor_ui_tests` 的
 `TerrainLodSnapshot.*`（4 项）覆盖；`lodLevels=1` 的 B32/M3/BC7
 截图必须与基线逐字节一致，多级 LOD 用工作区
