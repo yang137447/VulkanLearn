@@ -39,6 +39,14 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         desc.heightOffset = asset.at("heightOffset").get<float>();
         desc.gridResolution = asset.at("gridResolution").get<uint32_t>();
         desc.chunkQuads = asset.at("chunkQuads").get<uint32_t>();
+        // CPU 几何 LOD：validator 已保证级数与步长/距离表合法。旧 TR 不写时
+        // lodLevels=1、距离表为空，网格生成与历史行为完全一致。
+        desc.lodLevels = asset.value("lodLevels", 1u);
+        if (asset.contains("lodDistances"))
+        {
+            for (const auto& distanceJson : asset.at("lodDistances"))
+                desc.lodDistancesCm.push_back(distanceJson.get<float>());
+        }
         desc.pageTilesPerSide = asset.value("pageTilesPerSide", 8u);
         if (asset.contains("pageOrigin"))
         {

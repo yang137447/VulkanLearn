@@ -1891,6 +1891,9 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
 
     RendererResourceCache& resourceCache = loadContext.resourceCache;
     RendererTerrainLoadResult result;
+    // 运行时 LOD 选择尚未接入：这里仍只生成/绑定 LOD0 网格。CPU 侧已能
+    // 按 TerrainLodDistancesCm / TerrainSelectLodLevel 生成并选择各级网格，
+    // 接入点应在本函数之上按 chunk 距离选择，而不是在 BuildChunks 内隐式决定。
     const std::vector<TerrainMeshChunk> chunks = TerrainMeshBuilder::BuildChunks(plan);
     result.objectPlans.reserve(chunks.size());
     for (const TerrainMeshChunk& chunk : chunks)

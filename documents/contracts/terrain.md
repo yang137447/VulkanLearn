@@ -85,7 +85,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。
 - 每个 chunk 计算局部 AABB，交给 World/渲染快照做视锥与阴影裁剪。
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
-- 没有 LOD、没有 skirt、没有地形 chunk 卸载；所有几何 chunk 在加载期一次性生成。
+- 默认只有 LOD0；TR 可选 `lodLevels`/`lodDistances` 可生成 LOD1..3 与 skirt
+  （`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`），但 renderer 运行时选择尚未接入，
+  出图仍只生成/绑定 LOD0。没有地形 chunk 卸载。
   地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
 
 ## 场景对象
@@ -591,6 +593,12 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - Jolt 碰撞：`terrain_tests --gtest_filter=TerrainCollision.*` 覆盖平地/斜坡
   射线命中与 CPU 采样误差、heightScale/heightOffset、placement 的平移/旋转/缩放、
   32 次销毁/重建无残留 body、非法输入拒绝与越界射线，以及动态球落到地表。
+- CPU LOD/skirt：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无 skirt）、
+  LOD1..3 的格子数与 skirt 环顶点数、基础顶点在 LOD0 同名网格点的位置/法线/UV、
+  skirt 的竖直下移与 AABB 覆盖、skirt 三角形朝内绕序、粗 LOD 跨 chunk 边界法线连续、
+  `chunkQuads` 无法被步长整除与 `lodLevel` 越界时抛错、`lodLevels`/`lodDistances`
+  的校验与加载器往返、默认距离按地形最长边推导、距离→级别边界（含负距离）、
+  chunk key 区分 LOD 且不受 `lodDistances` 影响。
 - 运行时：`Generated/Validation/TerrainSmoke/SC_terrain_smoke.json` 加载 64×64 quad、
   2×2 chunk 地形并截图；见 [testing](testing.md)。
 - Phase B/C1 32 层数组 + 256 层上限：`Generated/Validation/TerrainB32/SC_terrain_b32.json`，

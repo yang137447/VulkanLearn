@@ -72,6 +72,31 @@ inline uint32_t TerrainLayerTotalPages(uint32_t sourceResolution)
         sourceResolution, TerrainLayerMipCount(sourceResolution));
 }
 
+// CPU 几何 LOD 的级数上限。lod 0 是完整网格（每 quad 一个格子），
+// 第 n 级把每个方向的 quad 数除以 2^n；超过 3 级时 chunkQuads 很快退化到
+// 1~2 个格子，再细分不会再有可见收益。
+inline constexpr uint32_t TerrainMaxLodLevels = 4;
+
+// 第 lodLevel 级在 X/Z 方向合并的 quad 数（lod 0 = 1）。
+inline uint32_t TerrainLodStepQuads(uint32_t lodLevel)
+{
+    return 1u << lodLevel;
+}
+
+// 距离 → LOD 级（CPU 侧，纯函数）：distance 达到第 i 个阈值就切到 i+1，
+// 超过最后一个阈值用最粗一级。负距离按 0 处理；空阈值表恒为 LOD0。
+// 阈值来源见 TerrainAssetDesc::lodDistancesCm / TerrainLodDistancesCm。
+inline uint32_t TerrainSelectLodLevel(
+    float distanceCm,
+    const std::vector<float>& lodDistancesCm)
+{
+    const float distance = distanceCm > 0.0f ? distanceCm : 0.0f;
+    uint32_t level = 0;
+    while (level < lodDistancesCm.size() && distance >= lodDistancesCm[level])
+        ++level;
+    return level;
+}
+
 // 一层地表调色板的作者数据。M2 只校验并携带，M3 的 top-4 材质才开始消费。
 struct TerrainLayerDesc
 {
@@ -111,7 +136,31 @@ struct TerrainAssetDesc
     uint32_t pageTilesPerSide = 8;
     std::string materialInstancePath;
     std::vector<TerrainLayerDesc> layers;
+    // CPU 几何 LOD：1 表示只有 LOD0（旧资产默认），最多 4 级。
+    uint32_t lodLevels = 1;
+    // LOD 切换距离（cm，严格升序，长度 = lodLevels-1）。为空时由
+    // TerrainLodDistancesCm 按地形尺寸推导。
+    std::vector<float> lodDistancesCm;
 };
+
+// 运行时选择尚未接入：renderer 目前只生成/绑定 LOD0。本函数提供可测的
+// 距离→阈值推导，供后续按相机距离选择时复用；返回值不参与 chunk 资源 key。
+inline std::vector<float> TerrainLodDistancesCm(const TerrainAssetDesc& desc)
+{
+    if (!desc.lodDistancesCm.empty())
+        return desc.lodDistancesCm;
+    std::vector<float> distances;
+    const uint32_t levels = desc.lodLevels == 0 ? 1u : desc.lodLevels;
+    if (levels <= 1)
+        return distances;
+    // 默认档位：1×、2×…地形最长边。缺少测量数据时的保守占位，
+    // 运行时应按投影误差/三角形像素尺寸重新标定。
+    const float span = desc.size.x() > desc.size.y() ? desc.size.x() : desc.size.y();
+    distances.reserve(levels - 1);
+    for (uint32_t index = 0; index + 1 < levels; ++index)
+        distances.push_back(span * static_cast<float>(index + 1));
+    return distances;
+}
 
 // 已解码的高度图与描述一起随场景计划传递；shared_ptr 避免在候选/World 计划复制时
 // 复制整张 1024² float 图。高度图只读，运行时网格生成消费同一份像素。

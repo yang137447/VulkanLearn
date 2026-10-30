@@ -339,8 +339,11 @@ change consumed at frame start; lowering it only evicts pages outside the safety
 temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no
-low-resolution fallback/fade, camera prefetch, LOD, skirts, terrain chunk unloading, terrain
-editing, or World-level terrain collision wiring. `source/terrain/terrainCollision.*` can
+low-resolution fallback/fade, camera prefetch, terrain chunk unloading, terrain editing, or
+World-level terrain collision wiring. CPU geometry LOD/skirt generation exists
+(`TerrainMeshBuilder::BuildChunks(plan, lodLevel)`, TR `lodLevels`/`lodDistances`), but runtime
+LOD selection is not wired: the renderer still generates and binds LOD0 only.
+`source/terrain/terrainCollision.*` can
 already turn a `TerrainBuildPlan` plus placement into a static Jolt `HeightFieldShape` body
 in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression, Y*X*Z degrees rotation);
 `source/physics/joltRegistration.*` is the shared process-wide Jolt registration, and

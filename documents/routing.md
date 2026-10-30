@@ -168,8 +168,10 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   placement 平移/旋转/缩放、16 位高度压缩，并复用调用方已有的 PhysicsSystem；
   `source/physics/joltRegistration.*` 是地形与 `ScriptPhysicsWorld` 共用的进程级
   Jolt 注册。场景 `terrain` 对象**尚未**自动生成碰撞体，`TerrainCollisionWorld`
-  只是测试/离线夹具。当前没有低分辨率 fallback/淡入、相机/视锥预取、LOD/skirt、
-  地形编辑，也没有 World 级碰撞接入。行为见
+  只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成与 `TerrainLodDistancesCm` /
+  `TerrainSelectLodLevel` 距离选择接口，但 renderer 运行时选择未接、出图仍只有
+  LOD0。当前没有低分辨率 fallback/淡入、相机/视锥预取、地形编辑，也没有
+  World 级碰撞接入。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
   `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
 
