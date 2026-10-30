@@ -210,8 +210,12 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   256 层 albedo/normal/pbr 的显存预算、layer catalog、第二级 VT/数组页方案对比与
   L0–L4 分步实施。L0（BC7/BC5）、L1（catalog v2 + CPU 层页管理器）与 L2
   （GPU 层 atlas/页表/加载期上传）与 L3（`u_terrainLayerMode=1` 的 shader VT
-  采样、材质 schema、sourceResolution 校验）已落地；L4 的 feedback 驱动层页驻留
-  仍未实现，不替代 `contracts/terrain.md`。
+  采样、材质 schema、sourceResolution 校验）已落地；L4a/b/c 的覆盖页+精确层
+  feedback、逐帧上传/淘汰、粗 mip 预取与 feedback 饥饿保护也已落地。多 biome
+  `sourceSet`/全局 layer catalog 仍未实现，不替代 `contracts/terrain.md`。
+- [全局 layer catalog / 多 biome sourceSet 设计](plan/rendering/terrain-global-layer-catalog-design.md)：
+  把 `layerId = TR.layers` 下标、World 单组源纹理的限制扩展到全局稳定 ID、
+  source set table、统一 atlas 与分步迁移。未实现，不替代 `contracts/terrain.md`。
 - [开放世界场景栈路线图](plan/rendering/open-world-scene-stack-roadmap.md)：
   地形碰撞/GASP、植被撒点与石头对齐、PP2 分层风、3D 风力点、LOD、自定义 shading 的依赖与阶段。
   未实现，不替代当前契约。
