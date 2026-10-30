@@ -174,10 +174,14 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   Jolt 注册。World 通过 `world/loading/terrainCollisionInstances.*` 保留每个
   terrain placement 的计划与 TRS，Play 时 `ScriptPhysicsWorld::SetTerrainCollisions`
   创建/替换 body，Stop/World 换代销毁；编辑器与普通加载不创建物理世界。
-  `TerrainCollisionWorld` 只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成；`lodLevels>1` 时
-  `RendererTerrainLoader` 生成全部级，`WorldSnapshotBuilder` 每帧按相机到
-  chunk 世界 AABB 的距离与 10% 滞回选择一级，阴影/拾取/材质上下文共享同一快照，
-  `terrainlod stats` 可观测。`lodLevels=1` 旧资产仍逐字节等同 LOD0。
+  `TerrainCollisionWorld` 只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成；
+  `lodLevels>1` 时 `RendererTerrainLoader` 按**加载期几何驻留窗口**生成
+  (chunk, LOD)（`source/terrain/terrainChunkResidency.*` +
+  `TerrainMeshBuilder::ComputeChunkBounds`/`TerrainChunkBuildFilter`），窗口外只建
+  coarsest；`WorldSnapshotBuilder` 每帧按相机到 chunk 世界 AABB 的距离与 10% 滞回
+  选目标级，目标级未驻留时回退到 resident 的更粗一级，阴影/拾取/材质上下文共享同一
+  快照，`terrainlod stats` 与 `terrainchunk stats` 可观测。运行时不做异步补传/卸载，
+  相机移出窗口只会走兜底。`lodLevels=1` 旧资产仍逐字节等同 LOD0。
   S1 新增 World 级 `source/terrain/terrainLayerRegistry.*`：层身份是
   `layer.key`（缺省 `<assetPath>#<name>`），同 key 参数一致跨 TR 去重成同一个
   globalId，参数冲突/同 TR 重复/超过 256 层都在加载期失败；单 TR 的

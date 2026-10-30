@@ -54,6 +54,7 @@ struct RuntimeCommandExecutionResult
     bool terrainStatisticsRequested = false;
     bool terrainLayerStatisticsRequested = false;
     bool terrainLodStatisticsRequested = false;
+    bool terrainChunkStatisticsRequested = false;
     bool terrainCollisionStatisticsRequested = false;
     std::optional<OfflineModeCommandFeedback> offlineUiModeFeedback;
 };

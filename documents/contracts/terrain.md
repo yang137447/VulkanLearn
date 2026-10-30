@@ -58,8 +58,11 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - `lodLevels`（可选，1..4，默认 1）与 `lodDistances`（可选，cm、严格升序、
   长度 `lodLevels-1`）是 CPU 几何 LOD 的生成/选择参数；缺省距离按地形最长边
   按级数均分（2 级 = 0.5×，4 级 = 0.25/0.5/0.75×）。`chunkQuads` 必须能被
-  最粗步长 `2^(lodLevels-1)` 整除。renderer 生成全部级，运行时由
-  `WorldSnapshotBuilder` 选择。
+  最粗步长 `2^(lodLevels-1)` 整除。renderer 按加载期驻留窗口生成
+  (chunk, LOD)，运行时由 `WorldSnapshotBuilder` 选择。
+- `chunkResidencyDistances`（可选，cm、严格升序、长度 `lodLevels-1`）是几何
+  chunk 的加载期驻留窗口，见“几何 chunk 驻留（第一版）”；不写时取
+  `lodDistances × 1.1`。只有 `lodLevels=1` 时允许空数组。
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
   覆盖只改该次摆放的虚拟页区域，不修改 TR 资产本身。
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
@@ -125,9 +128,72 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
   在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
 
+### 几何 chunk 驻留（第一版）
+
+第一版的目标是“用距离窗口省掉窗口外的细 LOD 几何”，不是运行时异步分页。
+边界必须按下面的措辞理解：
+
+- **只做加载期驻留**：`RendererTerrainLoader::LoadTerrainObject` 在 World 加载时
+  决定创建哪些 (chunk, LOD) 网格；窗口外的细 LOD 连 CPU 顶点/法线都不生成，
+  也不会 `BindRenderableObject` 到 `RendererResourceCache`。
+- **运行时不重传**：相机之后移动到窗口外区域，只会改变 `WorldSnapshotBuilder`
+  的选择并回退到已驻留的更粗一级；已经创建的细 LOD 也不会在运行时卸载。
+  真正的异步构建/上传、运行时退休和卸载是后续工作。
+- **最粗一级永远驻留**：`lodLevels-1` 不受窗口约束，因此任何组都至少有一份
+  可绘制网格，不会出现空洞。
+
+窗口与公式：
+
+- TR 可选 `chunkResidencyDistances`（cm，长度必须是 `lodLevels-1`，严格升序正数），
+  第 l 级（`0..lodLevels-2`）在“相机到 chunk AABB 最近距离 `<= window[l]`”时创建。
+  未写时由 `TerrainChunkResidencyDistancesCm(desc)` 取
+  `lodDistances[l] × (1 + 10%)`，与运行时“变粗”阈值同源，避免加载期漏掉刚处在
+  滞回带内的目标级。作者显式给出更小的窗口时，初始视角就可能走兜底。
+- 距离口径与运行时选择完全一致：chunk 的 LOD0 局部 AABB 变换到世界空间，
+  多级资产再叠加 LOD0 skirt 的下移量，然后取到相机位置的最近点距离
+  （`TerrainChunkWorldBounds` / `TerrainChunkLevelIsResident`）。
+- 判定只需要高度范围，不生成法线：`TerrainMeshBuilder::ComputeChunkBounds`
+  直接从高度图采样 LOD0 顶点位置范围；`TerrainChunkBuildFilter::chunkMask`
+  再让 `BuildChunks` 只生成窗口内的 chunk。mask 只影响“生成哪些 chunk”，
+  不影响任何 chunk 的顶点/索引内容，因此不进入资源 key。
+- 加载期相机来自场景 JSON 的 camera 对象（`ReadInitialTerrainChunkResidency`）。
+  加载后才执行的 `camera pose` 不改变窗口。没有 camera / 离线 / 单级地形时
+  驻留判定关闭，行为回到“全部创建”。
+- `WorldSnapshotBuilder` 仍是唯一选择点：先按距离 + 滞回选目标级；目标级不在
+  World 里（加载期没驻留）就沿更粗方向找最近的 resident 级，最坏停在 coarsest。
+  组内 resident 级位图直接由“World 里存在哪些 `lodLevel`”得到，不另存一份状态。
+  阴影、拾取、MaterialInstance 上下文继续消费同一份快照。
+
+控制台 `terrainchunk stats` 输出加载期基线与当前帧绘制：
+
+- `placements / groups / chunks / skippedChunks`，以及实测的
+  `vertexBytes / indexBytes / skippedVertexBytes / skippedIndexBytes /
+  totalIfAllBytes`（`totalIfAllBytes` = 实际 + 被跳过，等价于不做驻留的全量值；
+  被跳过的顶点/索引数是按 `TerrainChunkVertexCount/IndexCount` 的确定性公式估算，
+  与 `BuildChunks` 实际输出逐级对齐）。
+- 每个 placement 一行：`chunksPerSide / levels / residency / windowsCm`。
+- 每级一行：`chunks=实际/总数`、`vertices / indices / bytes / skippedBytes`。
+- `draw` 行：`groups`、`drawnChunks`（本帧 LOD 组 draw 数）、`meshDraws`
+  （全部 mesh draw，含单级地形）、`drawnByLevel`、`objectsByLevel`。
+  单级地形没有 LOD 组，`drawnChunks=0` 而 `meshDraws` 非零是正常的。
+
+2026-10-31 实测（Debug，`--frame-limit 60`，`terrainchunk stats`）：
+
+| 场景 | 组 | 创建/全量 chunk | 实际几何 | 全量几何 | 帧内 draw |
+| --- | --- | --- | --- | --- | --- |
+| `SC_terrain_lod_near`（20km，3 级，4×4） | 16 | 32/48 | 1 462 272 B | 3 618 048 B | 0:4, 1:8, 2:4 |
+| `SC_terrain_lod_mid` | 16 | 20/48 | 428 224 B | 3 618 048 B | 1:4, 2:12 |
+| `SC_terrain_lod_far` | 16 | 16/48 | 239 360 B | 3 618 048 B | 2:16 |
+| `SC_terrain_chunk16k`（16km，4 级，8×8，512 网格） | 64 | 128/256 | 7 616 512 B | 53 276 672 B | 0:4, 2:32, 3:28 |
+| `SC_terrain_b32_32x32`（`lodLevels=1`） | 4 | 4/4 | 586 176 B | 586 176 B | `residency=off` |
+
+16km 场景把 `chunkResidencyDistances` 全部调到 1e9 后得到 `256/256`、
+53 276 672 B 的全量基线；两张截图（排除左侧场景名 UI）最大通道差 8、平均
+5e-5、无 >8 的采样，说明驻留只改内存不改画面。
+
 ### 运行时选择
 
-- `RendererTerrainLoader` 为每个 chunk 生成全部级，`MeshObjectBuildPlan` /
+- `RendererTerrainLoader` 按加载期驻留窗口生成 (chunk, LOD)，`MeshObjectBuildPlan` /
   `WorldMeshObject` 携带 `lodGroupId`、`lodLevel`、`lodLevelCount`、
   `lodDistancesCm` 和 LOD0 组 AABB。组 id 是
   `placementId|chunkX|chunkZ`；非地形/单级地形为空组，行为不变。
@@ -139,10 +205,12 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   `TerrainSelectLodLevel` 相同。每组的当前级、切换次数和 `previousObjectModels`
   一样只缓存在 builder，不写回 World。
 - 组内各级共享同一个 `RuntimeId`（由 `lodGroupId` 派生），级切换不会让编辑器
-  选择/描边失配；非地形对象仍由 `objectName` 派生。若某组缺少当前级的可见网格，
-  builder 会输出 LOD0 代表兜底而不是留空洞。
-- 控制台 `terrainlod stats` 打印每个组的当前级/总级数、相机距离和累计切换次数；
-  只在命令执行时输出，不每帧刷屏。
+  选择/描边失配；非地形对象仍由 `objectName` 派生。若某组缺少当前级的可见网格
+  （加载期驻留窗口外），builder 回退到 resident 中最接近的更粗一级；只剩
+  coarsest 时就画 coarsest，不会留空洞，也不会偷偷把级号报成目标级。
+- 控制台 `terrainlod stats` 打印每个组的目标级/总级数、相机距离和累计切换次数；
+  `terrainchunk stats` 额外给出 resident 位图、实际绘制级和几何字节基线。
+  两者都只在命令执行时输出，不每帧刷屏。
 
 ## 场景对象
 
@@ -898,12 +966,30 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   chunk key 区分 LOD 且不受 `lodDistances` 影响。
 - 运行时选择：`editor_ui_tests --gtest_filter=TerrainLodSnapshot.*` 用真实
   `World` + `WorldSnapshotBuilder` 钉住“每组只输出一个 draw”、近/远级切换、
-  RuntimeId 跨级稳定、两个组独立选择、无 LOD 组对象保持原 draw 与 RuntimeId。
+  RuntimeId 跨级稳定、两个组独立选择、无 LOD 组对象保持原 draw 与 RuntimeId，
+  以及“目标级未驻留时回退到 resident 的更粗一级 / 只剩 coarsest 仍出图”
+  和 `drawnChunks / drawnByLevel / residentObjectsByLevel / totalMeshDraws` 计数。
+- 几何 chunk 驻留：`terrain_tests --gtest_filter=TerrainChunkResidency.*`
+  覆盖窗口默认推导（`lodDistances × 1.1`）、显式窗口优先、最粗一级恒驻留、
+  闭区间边界、世界空间 AABB 距离、无相机时回到全量；
+  `TerrainMeshBuilder.ComputedBoundsMatchLod0Geometry` /
+  `TerrainMeshBuilder.FilterSkipsChunksWithoutChangingTheRest` /
+  `TerrainChunkResidency.EstimatesMatchBuiltChunkCounts` 钉住“bounds 与 LOD0
+  一致、过滤不改顶点/索引内容、跳过量估算与真实网格逐级一致”；
+  `TerrainValidator.AcceptsChunkResidencyDistances` /
+  `RejectsInvalidChunkResidencyDistances` 钉住资产校验。
 - LOD 冒烟：`Generated/Validation/TerrainLod/` 的
   `TR_terrain_lod_smoke.json`（3 级、4×4 chunk、距离 3000/8000cm）配
-  `SC_terrain_lod_near|mid|far.json`；`terrainlod stats` 分别出现 LOD0/LOD1/LOD2，
-  stderr 为空、无 Vulkan validation error。B32/M3/BC7 旧场景截图 SHA-256 与改动前
-  基线一致。
+  `SC_terrain_lod_near|mid|far.json`；`terrainchunk stats` 分别报告
+  32/20/16 个 chunk 对象（全量 48）、`drawnByLevel` 0:4/1:8/2:4、1:4/2:12、
+  2:16，与改动前截图相比（排除左侧 UI）最大通道差 ≤9、平均 0.0、无 >8 的采样；
+  stderr 为空、无 Vulkan validation error。B32/M3/BC7 旧场景截图逐字节不变。
+- 16km 几何驻留冒烟：`SC_terrain_chunk16k.json`（16km、512 网格、8×8 chunk、
+  4 级、距离 600/2000/6000m）报告 128/256 对象、7 616 512 B（全量
+  53 276 672 B）；把 `chunkResidencyDistances` 调到 1e9 的
+  `SC_terrain_chunk16k_all.json` 得到 256/256 全量基线，两张截图排除 UI 后
+  最大通道差 8、平均 5e-5。运行时 `camera position 600000 20000 600000`
+  把相机移到窗口外，画面连续、无空洞（回退到 resident 的 coarsest）。
 - 运行时：`Generated/Validation/TerrainSmoke/SC_terrain_smoke.json` 加载 64×64 quad、
   2×2 chunk 地形并截图；见 [testing](testing.md)。
 - Phase B/C1 32 层数组 + 256 层上限：`Generated/Validation/TerrainB32/SC_terrain_b32.json`，

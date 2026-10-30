@@ -202,6 +202,11 @@ struct TerrainAssetDesc
     // LOD 切换距离（cm，严格升序，长度 = lodLevels-1）。为空时由
     // TerrainLodDistancesCm 按地形尺寸推导。
     std::vector<float> lodDistancesCm;
+    // 几何 chunk 驻留窗口（cm，严格升序，长度 = lodLevels-1）。第 l 级
+    // （0..lodLevels-2）只有在相机到 chunk AABB 距离 <= 该值时才创建/驻留；
+    // 最粗一级永远驻留，不进入该表。为空时由 TerrainChunkResidencyDistancesCm
+    // 从 lodDistances 推导（×1.1 覆盖滞回带上沿）。
+    std::vector<float> chunkResidencyDistancesCm;
 };
 
 // 距离→阈值推导。renderer 用它在加载期把阈值写进每个 chunk 的 LOD 组，
@@ -223,6 +228,40 @@ inline std::vector<float> TerrainLodDistancesCm(const TerrainAssetDesc& desc)
         distances.push_back(
             span * static_cast<float>(index + 1) / static_cast<float>(levels));
     return distances;
+}
+
+// 几何 chunk 驻留窗口。返回长度 = lodLevels-1，与 lodDistances 一一对应：
+// 第 l 级在该距离内视为 resident；最粗一级不查表（永远 resident）。
+// 缺省值取 lodDistances[l] × (1 + 滞回比例)，与运行时“变粗”阈值同源，
+// 保证加载期不会把“刚好处在滞回带内”的目标级漏建。
+inline std::vector<float> TerrainChunkResidencyDistancesCm(
+    const TerrainAssetDesc& desc)
+{
+    if (!desc.chunkResidencyDistancesCm.empty())
+        return desc.chunkResidencyDistancesCm;
+    std::vector<float> distances = TerrainLodDistancesCm(desc);
+    for (float& distance : distances)
+        distance *= 1.0f + TerrainLodHysteresisFraction;
+    return distances;
+}
+
+// 几何 chunk residency 的纯函数判定：最粗一级恒为 resident；其余级看距离
+// 窗口（闭区间，等于窗口值仍算 resident）。表长度不足时按“不驻留”处理，
+// 由调用方保证资产校验已经拒绝了这种输入。
+inline bool TerrainChunkLodIsResident(
+    uint32_t lodLevel,
+    uint32_t lodLevelCount,
+    float distanceCm,
+    const std::vector<float>& residencyDistancesCm)
+{
+    if (lodLevelCount == 0)
+        return true;
+    if (lodLevel >= lodLevelCount - 1)
+        return true;
+    if (lodLevel >= residencyDistancesCm.size())
+        return false;
+    const float distance = distanceCm > 0.0f ? distanceCm : 0.0f;
+    return distance <= residencyDistancesCm[lodLevel];
 }
 
 // 已解码的高度图与描述一起随场景计划传递；shared_ptr 避免在候选/World 计划复制时

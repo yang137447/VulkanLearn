@@ -211,6 +211,103 @@ TEST(TerrainLodSnapshot, GroupsWithoutLodKeepLegacyDraws)
     EXPECT_EQ(builder.GetTerrainLodStats().switchedLastFrame, 0u);
 }
 
+TEST(TerrainLodSnapshot, MissingFineLevelFallsBackToResidentLevel)
+{
+    World world = MakeLodWorld(0.0f);
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+    const std::string groupId = "terrain|TerrainA|0|0";
+    // 加载期只驻留了 LOD1/LOD2（相机初始很远），运行时相机飞到 chunk 内部。
+    for (uint32_t level = 1; level < 3; ++level)
+    {
+        world.AddMeshObject(
+            "TerrainA::chunk_0_0::lod" + std::to_string(level),
+            MakeLodChunk(groupId, level, 3, distances));
+    }
+
+    WorldSnapshotBuilder builder;
+    const WorldSnapshot snapshot = BuildSnapshot(builder, world, 1);
+    ASSERT_EQ(snapshot.meshDraws.size(), 1u);
+    // 目标级是 LOD0（距离 0），但 LOD0 不驻留：回退到 resident 中最接近的
+    // 更粗一级，而不是留下空洞。
+    EXPECT_EQ(snapshot.meshDraws[0].lodLevel, 1u);
+
+    const TerrainLodStatsSnapshot& stats = builder.GetTerrainLodStats();
+    ASSERT_TRUE(stats.valid);
+    ASSERT_EQ(stats.groups.size(), 1u);
+    EXPECT_EQ(stats.groups[0].level, 0u);
+    EXPECT_EQ(stats.groups[0].drawnLevel, 1u);
+    EXPECT_EQ(stats.groups[0].residentLevelMask, 0x6u);
+    EXPECT_EQ(stats.drawnChunks, 1u);
+    EXPECT_EQ(stats.drawnByLevel[0], 0u);
+    EXPECT_EQ(stats.drawnByLevel[1], 1u);
+    EXPECT_EQ(stats.residentObjectsByLevel[0], 0u);
+    EXPECT_EQ(stats.residentObjectsByLevel[1], 1u);
+    EXPECT_EQ(stats.residentObjectsByLevel[2], 1u);
+}
+
+TEST(TerrainLodSnapshot, OnlyCoarsestResidentIsStillDrawn)
+{
+    World world = MakeLodWorld(0.0f);
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+    const std::string groupId = "terrain|TerrainA|0|0";
+    world.AddMeshObject(
+        "TerrainA::chunk_0_0::lod2",
+        MakeLodChunk(groupId, 2, 3, distances));
+
+    WorldSnapshotBuilder builder;
+    const WorldSnapshot snapshot = BuildSnapshot(builder, world, 1);
+    ASSERT_EQ(snapshot.meshDraws.size(), 1u);
+    EXPECT_EQ(snapshot.meshDraws[0].lodLevel, 2u);
+    EXPECT_EQ(
+        snapshot.meshDraws[0].mesh.key,
+        groupId + "|lod=2");
+    const TerrainLodStatsSnapshot& stats = builder.GetTerrainLodStats();
+    ASSERT_EQ(stats.groups.size(), 1u);
+    EXPECT_EQ(stats.groups[0].level, 0u);
+    EXPECT_EQ(stats.groups[0].drawnLevel, 2u);
+    EXPECT_EQ(stats.groups[0].residentLevelMask, 0x4u);
+}
+
+TEST(TerrainLodSnapshot, StatsCountDrawsAndResidentObjectsPerLevel)
+{
+    World world = MakeLodWorld(5000.0f);
+    const std::vector<float> distances = {1000.0f};
+    // 近组两级都驻留；远组只驻留 LOD1（加载期窗口外）。
+    const std::string nearGroup = "terrain|TerrainA|0|0";
+    const std::string farGroup = "terrain|TerrainA|0|1";
+    for (uint32_t level = 0; level < 2; ++level)
+    {
+        WorldMeshObject object =
+            MakeLodChunk(nearGroup, level, 2, distances);
+        object.localBoundsMin = Eigen::Vector3f(-50.0f, -10.0f, 4950.0f);
+        object.localBoundsMax = Eigen::Vector3f(50.0f, 10.0f, 5050.0f);
+        object.lodGroupBoundsMin = object.localBoundsMin;
+        object.lodGroupBoundsMax = object.localBoundsMax;
+        world.AddMeshObject(
+            "TerrainA::chunk_0_0::lod" + std::to_string(level),
+            std::move(object));
+    }
+    WorldMeshObject farObject =
+        MakeLodChunk(farGroup, 1, 2, distances);
+    farObject.localBoundsMin = Eigen::Vector3f(-50.0f, -10.0f, -50.0f);
+    farObject.localBoundsMax = Eigen::Vector3f(50.0f, 10.0f, 50.0f);
+    farObject.lodGroupBoundsMin = farObject.localBoundsMin;
+    farObject.lodGroupBoundsMax = farObject.localBoundsMax;
+    world.AddMeshObject("TerrainA::chunk_0_1::lod1", std::move(farObject));
+
+    WorldSnapshotBuilder builder;
+    const WorldSnapshot snapshot = BuildSnapshot(builder, world, 1);
+    ASSERT_EQ(snapshot.meshDraws.size(), 2u);
+    const TerrainLodStatsSnapshot& stats = builder.GetTerrainLodStats();
+    EXPECT_EQ(stats.groupCount, 2u);
+    EXPECT_EQ(stats.drawnChunks, 2u);
+    EXPECT_EQ(stats.totalMeshDraws, 2u);
+    EXPECT_EQ(stats.drawnByLevel[0], 1u);
+    EXPECT_EQ(stats.drawnByLevel[1], 1u);
+    EXPECT_EQ(stats.residentObjectsByLevel[0], 1u);
+    EXPECT_EQ(stats.residentObjectsByLevel[1], 2u);
+}
+
 TEST(TerrainLodSnapshot, TwoGroupsSelectIndependently)
 {
     World world = MakeLodWorld(5000.0f);

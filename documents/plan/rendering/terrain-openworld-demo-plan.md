@@ -417,7 +417,21 @@ AABB 覆盖裙边，chunk key 含 LOD 与步长但不含 `lodDistances`。`Terra
 同一组只输出一个 draw；阴影/拾取/MaterialInstance 上下文都消费同一快照。
 各级共享由 `lodGroupId` 派生的 RuntimeId，`terrainlod stats` 输出每组当前级/距离/
 切换次数。`lodLevels=1` 的 B32/M3/BC7 截图 SHA-256 与基线逐字节一致。
-剩余是 LOD 级 chunk 资源缓存/显存预算、几何 streaming 与更细的 skirt 裂缝上界。
+
+2026-10-31 几何 chunk 驻留第一版（**加载期窗口 + 运行时兜底，不是异步分页**）：
+TR 新增可选 `chunkResidencyDistances`（长度 `lodLevels-1`，缺省
+`lodDistances × 1.1`）。`TerrainMeshBuilder::ComputeChunkBounds` 只用高度图算
+LOD0 AABB，`TerrainChunkBuildFilter` 让 `BuildChunks` 只生成窗口内的 (chunk, LOD)；
+窗口外的细 LOD 连 CPU 顶点都不生成，最粗一级永远创建。`RendererTerrainLoader`
+的窗口来自场景 JSON 的 camera，加载后的 `camera pose` 不改变窗口；
+`WorldSnapshotBuilder` 仍是唯一选择点：目标级未驻留时沿更粗方向回退到最近
+resident 级（最坏 coarsest），不留空洞。`terrainchunk stats` 输出加载期
+chunks/顶点/索引字节（含“如果不驻留”的 skipped 估算）、当前帧 draw 与级分布。
+实测 16km/8×8/4 级：128/256 对象、7.6 MB vs 全量 53.3 MB；20km 3 级近景
+32/48 对象；`lodLevels=1` 的 B32/M3/BC7 截图逐字节不变。
+
+剩余是运行时异步构建/上传与细 LOD 卸载（当前只做 load-time residency）、
+LOD 级 chunk 资源缓存/显存预算、更细的 skirt 裂缝上界与碰撞分块。
 
 总计约 **2–3 周**（按本仓库的测试/文档标准）。
 
@@ -521,5 +535,6 @@ World 换代销毁，编辑器与普通预览不创建物理世界。Console `te
 - [ ] 3 张验证图通过构图/过渡检查。
 - [ ] GTest、现有场景回归、`validate-docs` 全通过。
 - [ ] 新 `contracts/terrain.md` 落地，`routing.md` / `AGENTS.md` 更新。
-- [ ] 明确记录未做项：几何 streaming/VT/GPU-driven/grass；CPU 几何 LOD 已接运行时
-  选择，Play 碰撞已接（分块/编辑重建未做）。
+- [ ] 明确记录未做项：运行时异步几何 streaming（只做了加载期驻留窗口 +
+  运行时兜底）、GPU-driven、grass；CPU 几何 LOD 已接运行时选择，Play 碰撞已接
+  （分块/编辑重建未做）。

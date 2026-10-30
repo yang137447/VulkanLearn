@@ -8,6 +8,7 @@ add_executable(terrain_tests
 terrainLayerRegistryTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
+    terrainChunkResidencyTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
     ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
@@ -20,6 +21,7 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPageManager.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerVisibility.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainChunkResidency.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPageManager.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp
     ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp

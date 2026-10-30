@@ -2111,6 +2111,49 @@ TEST(TerrainValidator, AcceptsLodLevelsAndAscendingDistances)
         asset, "TR_terrain_tests.json"));
 }
 
+TEST(TerrainValidator, AcceptsChunkResidencyDistances)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = {500.0};
+    asset["chunkResidencyDistances"] = {600.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 只有 LOD0 时允许显式空驻留表（最粗一级永远驻留）。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["chunkResidencyDistances"] = nlohmann::json::array();
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, RejectsInvalidChunkResidencyDistances)
+{
+    // 长度必须等于 lodLevels-1。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {100.0, 200.0};
+    asset["chunkResidencyDistances"] = {150.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 必须严格升序。
+    asset["chunkResidencyDistances"] = {300.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 必须为正有限数。
+    asset["chunkResidencyDistances"] = {0.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 非数组。
+    asset["chunkResidencyDistances"] = 100.0;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
 TEST(TerrainValidator, RejectsInvalidLodFields)
 {
     // 级数必须在 1..4。

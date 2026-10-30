@@ -78,6 +78,7 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             entry.key() != "heightScale" && entry.key() != "heightOffset" &&
             entry.key() != "gridResolution" && entry.key() != "chunkQuads" &&
             entry.key() != "lodLevels" && entry.key() != "lodDistances" &&
+            entry.key() != "chunkResidencyDistances" &&
             entry.key() != "pageOrigin" && entry.key() != "pageTilesPerSide" &&
             entry.key() != "materialInstancePath" && entry.key() != "layers")
         {
@@ -157,6 +158,38 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             if (value <= previous)
                 throw std::invalid_argument(
                     "Terrain lodDistances must be strictly ascending: " + assetPath);
+            previous = value;
+        }
+    }
+    // 几何 chunk 驻留窗口：可选，长度必须是 lodLevels-1，严格升序正数。
+    // 语义是“该级在距离内才创建”，最粗一级永远创建、不进入这张表。
+    if (asset.contains("chunkResidencyDistances"))
+    {
+        const auto& distances = asset.at("chunkResidencyDistances");
+        if (!distances.is_array())
+            throw std::invalid_argument(
+                "Terrain chunkResidencyDistances must be a number array: " +
+                assetPath);
+        if (distances.size() != static_cast<size_t>(lodLevels - 1))
+            throw std::invalid_argument(
+                "Terrain chunkResidencyDistances requires lodLevels-1 ascending distances: " +
+                assetPath);
+        double previous = 0.0;
+        for (const auto& entry : distances)
+        {
+            if (!entry.is_number())
+                throw std::invalid_argument(
+                    "Terrain chunkResidencyDistances must be numeric: " +
+                    assetPath);
+            const double value = entry.get<double>();
+            if (!std::isfinite(value) || value <= 0.0)
+                throw std::invalid_argument(
+                    "Terrain chunkResidencyDistances must be positive finite cm: " +
+                    assetPath);
+            if (value <= previous)
+                throw std::invalid_argument(
+                    "Terrain chunkResidencyDistances must be strictly ascending: " +
+                    assetPath);
             previous = value;
         }
     }

@@ -39,6 +39,31 @@ std::string TerrainChunkResourceKey(
 
 // 高度图在加载期一次性生成 CPU chunk 网格；法线使用全局高度采样中心差分，
 // 因此相邻 chunk 的共享边界不会出现法线接缝。
+// 单个 chunk 的 LOD0 AABB（不含 skirt），由 ComputeChunkBounds 直接从高度图
+// 采样得到，用于加载期决定哪些细 LOD 需要真正生成。
+struct TerrainChunkBounds
+{
+    uint32_t chunkX = 0;
+    uint32_t chunkZ = 0;
+    Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
+};
+
+// 按 chunk 过滤生成。chunkMask 为空表示“生成全部”，保持历史行为；
+// 非空时长度必须是 chunksPerSide²，只生成 mask 为真的 chunk。
+// 顶点/索引内容与过滤无关（未生成的 chunk 只是不出现），因此不能把窗口
+// 写进资源 key。
+struct TerrainChunkBuildFilter
+{
+    std::vector<uint8_t> chunkMask;
+
+    bool Empty() const noexcept { return chunkMask.empty(); }
+    bool Accepts(
+        uint32_t chunkX,
+        uint32_t chunkZ,
+        uint32_t chunksPerSide) const;
+};
+
 class TerrainMeshBuilder
 {
 public:
@@ -50,7 +75,14 @@ public:
     static std::vector<TerrainMeshChunk> BuildChunks(
         const TerrainBuildPlan& plan,
         uint32_t lodLevel = 0,
-        std::optional<bool> buildSkirtOverride = std::nullopt);
+        std::optional<bool> buildSkirtOverride = std::nullopt,
+        const TerrainChunkBuildFilter* filter = nullptr);
+
+    // 只计算 LOD0 的 chunk AABB（顶点位置的范围），不生成法线/索引。
+    // 加载期先用它确定窗口，再按窗口生成真正需要的网格；返回顺序与
+    // BuildChunks 一致（chunkZ 外层、chunkX 内层）。
+    static std::vector<TerrainChunkBounds> ComputeChunkBounds(
+        const TerrainBuildPlan& plan);
 };
 
 // skirt 向下延伸的深度（cm）。当前按地形总高度尺度取 10%，下限 1cm；

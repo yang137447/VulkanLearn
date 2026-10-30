@@ -885,6 +885,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::ReportTerrainLodStatistics:
         executionResult.terrainLodStatisticsRequested = true;
         break;
+    case RuntimeCommandType::ReportTerrainChunkStatistics:
+        executionResult.terrainChunkStatisticsRequested = true;
+        break;
     case RuntimeCommandType::ReportTerrainCollisionStatistics:
         executionResult.terrainCollisionStatisticsRequested = true;
         break;

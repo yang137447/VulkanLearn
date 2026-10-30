@@ -116,6 +116,7 @@ public:
     void ReportTerrainLayerStatistics() const;
     // 运行时几何 LOD：读取最近一帧 WorldSnapshotBuilder 的组状态。
     void ReportTerrainLodStatistics() const;
+    void ReportTerrainChunkStatistics() const;
     // 预算命令由 GT 写 atomic，渲染线程帧首消费；不直接跨线程改 page manager。
     void RequestTerrainResidentCapacity(uint32_t capacity);
     // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。

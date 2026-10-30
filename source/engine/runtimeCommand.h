@@ -68,6 +68,9 @@ enum class RuntimeCommandType
     ReportTerrainStatistics,
     ReportTerrainLayerStatistics,
     ReportTerrainLodStatistics,
+    // 几何 chunk 驻留/显存基线：加载期创建的级与 chunk 数、顶点/索引字节、
+    // 当前帧实际出图数。只读诊断，不改渲染状态。
+    ReportTerrainChunkStatistics,
     ReportTerrainCollisionStatistics,
     SetTerrainResidentCapacity,
     // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
