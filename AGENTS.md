@@ -344,9 +344,10 @@ counters (`requestHits` vs `feedbackHits` are distinct) and `terrain capacity N`
 change consumed at frame start; lowering it only evicts pages outside the safety window and may
 temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
-Current limits: no
-low-resolution fallback/fade, camera prefetch, terrain chunk unloading, terrain editing, or
-per-chunk/edit-time collision rebuild. CPU geometry LOD/skirt generation and runtime selection are
+Current limits: no dedicated low-resolution fallback page or temporal fade (the L4e path only
+blends a coarser mip toward `avgColor`), no frustum/tile-level prefetch (only forward-motion
+prefetch), no terrain chunk unloading, terrain editing, or per-chunk/edit-time collision rebuild.
+CPU geometry LOD/skirt generation and runtime selection are
 wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride)`,
 TR `lodLevels`/`lodDistances`) the loader generates every level (LOD0 also gets a skirt) and
 `WorldSnapshotBuilder` picks one level per `lodGroupId = placementId|chunkX|chunkZ` from the
