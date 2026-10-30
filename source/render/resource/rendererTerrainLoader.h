@@ -14,6 +14,7 @@
 #include "scene/sceneAssetTypes.h"
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerPageManager.h"
+#include "terrain/terrainLayerSources.h"
 #include "terrain/terrainLayerVisibility.h"
 #include "terrain/terrainPageManager.h"
 
@@ -59,30 +60,6 @@ struct TerrainLayerGpuResources
     uint64_t pbrBytes = 0;
     uint64_t atlasBytesTotal = 0;
     bool atlasesCreated = false;
-};
-
-// 层源数组纹理：L2 要求一个 World 内所有 layer-table 地形共享同一套层纹理。
-// 源纹理可能带完整 mip 链；页内 copy 只在源 mip 存在时执行。
-struct TerrainLayerSourceTextures
-{
-    std::shared_ptr<Texture> albedo;
-    std::shared_ptr<Texture> normal;
-    std::shared_ptr<Texture> pbr;
-    uint32_t arrayLayers = 0;
-    uint32_t albedoMipLevels = 0;
-    uint32_t normalMipLevels = 0;
-    uint32_t pbrMipLevels = 0;
-    // 实际源图尺寸（来自 backend 创建记录）；catalog 的 sourceResolution
-    // 可能与之不一致，L2 按真实尺寸裁剪 copy extent。
-    uint32_t albedoWidth = 0;
-    uint32_t albedoHeight = 0;
-    uint32_t normalWidth = 0;
-    uint32_t normalHeight = 0;
-    uint32_t pbrWidth = 0;
-    uint32_t pbrHeight = 0;
-    // L3：catalog 的 sourceResolution 必须等于真实源图边长，否则页表页号
-    // 与实际像素区域不一致。校验失败只禁用 VT，不影响 mode 0。
-    bool catalogResolutionMatches = true;
 };
 
 // 一个 staging buffer 内三段数据的 base offset；RecordTerrainPageUploads 用它们
@@ -187,6 +164,10 @@ struct TerrainStreamingStats
     uint64_t lastFeedbackEpoch = 0;
     TerrainFeedbackApplyStats lastFeedbackApply;
     // L2 层页统计：atlas 已创建但 shader 尚未消费，用于确认布局/预算。
+    // S1/S2：全局层数与 sourceSet 数；dedupedLayers 是跨 TR 复用的层数。
+    uint32_t layerGlobalLayers = 0;
+    uint32_t layerSourceSetCount = 0;
+    uint32_t layerDedupedLayers = 0;
     uint32_t layerResidentPages = 0;
     uint32_t layerResidentCapacity = 0;
     uint32_t layerPhysicalPages = 0;
@@ -254,7 +235,9 @@ struct TerrainStreamingState
     // L2：层页驻留与 GPU atlas/页表。与覆盖页完全独立；当前只做加载期
     // 小批上传，不接 feedback 驱动（L4）。
     TerrainLayerPageManager layerPageManager;
-    TerrainLayerSourceTextures layerSources;
+    // S2：多个 sourceSet 各自绑定一组 albedo/normal/pbr 数组，共享同一组
+    // 层 atlas。同一 set 内必须指向同一组 shared_ptr；不同 set 允许不同。
+    TerrainLayerSourceSets layerSources;
     TerrainLayerGpuResources layerResources;
     // 任一 layer-table MI 把 u_terrainLayerMode 设为 1 时置位；加载期据此
     // 建立反馈驱动的驻留策略（L4a）。mode 0 不会创建层页上传 ring。
@@ -308,7 +291,11 @@ struct TerrainStreamingState
     // 在 scene pass 前随主帧提交。
     std::shared_ptr<TerrainUploadGpuRing> uploadRing;
     // World 级共享层表定义；GPU layerResources.layerTable 由它生成。
+    // S1 起这是 registry 的全局层列表（globalId == 下标），不再是首个 TR 的
+    // 局部层列表。
     std::vector<TerrainLayerDesc> layerDefinitions;
+    // 跨 TR 复用掉的局部层数（registry 统计；0 表示没有任何共享 key）。
+    uint32_t layerDedupedLayerCount = 0;
     // pendingUploadRevision 表示 CPU 内容最后变更的版本；
     // uploadedRevision 表示已经成功写入 GPU 的版本。两者相等才没有待上传内容。
     uint64_t pendingUploadRevision = 0;
@@ -460,7 +447,7 @@ size_t ApplyTerrainLayerPageUploads(
     RendererBackendVulkan& rendererBackend,
     TerrainLayerPageManager& layerPageManager,
     TerrainLayerGpuResources& layerResources,
-    const TerrainLayerSourceTextures& sources);
+    const TerrainLayerSourceSets& sources);
 
 // 加载期入口：成功后推进 streaming state 的 uploadedRevision。
 void ApplyTerrainLayerStreamingUploads(
@@ -493,7 +480,7 @@ void RecordTerrainLayerPageUploads(
     vk::CommandBuffer commandBuffer,
     TerrainLayerPageManager& layerPageManager,
     TerrainLayerGpuResources& layerResources,
-    const TerrainLayerSourceTextures& sources,
+    const TerrainLayerSourceSets& sources,
     const TerrainLayerUploadBatch& batch,
     vk::Buffer stagingBuffer,
     vk::DeviceSize pageTableStagingOffset);

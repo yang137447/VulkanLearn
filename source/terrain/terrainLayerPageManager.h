@@ -170,6 +170,8 @@ public:
         uint32_t priority);
 
     uint32_t LayerSourceResolution(uint32_t layerId) const;
+    // catalog row2.z 的 CPU 对应值：该全局层从哪一组源数组上传。
+    uint32_t LayerSourceSet(uint32_t layerId) const;
     uint32_t PagesPerSide(uint32_t layerId, uint32_t mip) const;
     uint32_t PagesPerMip(uint32_t layerId, uint32_t mip) const;
     uint32_t TotalPagesForLayer(uint32_t layerId) const;
@@ -313,6 +315,7 @@ private:
 
     // 每个 layerId 的源分辨率；默认 1024。
     std::vector<uint32_t> layerSourceResolution;
+    std::vector<uint32_t> layerSourceSet;
     // 每个 layerId 的总页数前缀和（catalog pageTableBase）。
     std::vector<uint32_t> layerPageTableBase;
     // 每个 mip 的统一页号 stride（所有已配置层该 mip 的最大 pagesPerMip）。

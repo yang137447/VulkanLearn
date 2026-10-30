@@ -68,10 +68,27 @@ void TerrainPageManager::EnsureStorage()
     physicalOccupancy[fallbackSlot] = 1;
 }
 
-void TerrainPageManager::RegisterTerrain(const TerrainBuildPlan& plan, bool preload)
+void TerrainPageManager::RegisterTerrain(
+    const TerrainBuildPlan& plan,
+    bool preload)
+{
+    RegisterTerrain(plan, std::vector<uint8_t>(), preload);
+}
+
+void TerrainPageManager::RegisterTerrain(
+    const TerrainBuildPlan& plan,
+    const std::vector<uint8_t>& layerIdMap,
+    bool preload)
 {
     EnsureStorage();
     const std::string& placementId = TerrainPlacementIdentity(plan);
+    // 空映射是恒等映射；非空映射必须覆盖每一层，避免 ID 图出现未定义层号。
+    if (!layerIdMap.empty() && layerIdMap.size() != plan.desc.layers.size())
+    {
+        throw std::runtime_error(
+            "Terrain layer id map does not cover every layer: assetPath=" +
+            plan.desc.assetPath + " placementId=" + placementId);
+    }
     const uint32_t tilesPerSide = plan.desc.pageTilesPerSide;
     const int originX = plan.desc.pageOrigin.x();
     const int originY = plan.desc.pageOrigin.y();
@@ -130,6 +147,7 @@ void TerrainPageManager::RegisterTerrain(const TerrainBuildPlan& plan, bool prel
     registration.tilesPerSide = tilesPerSide;
     registrations.push_back(std::move(registration));
     plans.push_back(plan);
+    layerIdMaps.push_back(layerIdMap);
 
     // C2b 兼容：默认注册即全量常驻；测试和多地形按需加载可以关闭 preload。
     if (!preload) return;
@@ -257,6 +275,25 @@ const TerrainBuildPlan* TerrainPageManager::FindPlan(
     return nullptr;
 }
 
+const std::vector<uint8_t>& TerrainPageManager::LayerIdMapForPlanIndex(
+    size_t planIndex) const
+{
+    static const std::vector<uint8_t> EmptyMap;
+    if (planIndex >= plans.size() || planIndex >= layerIdMaps.size())
+        return EmptyMap;
+    return layerIdMaps[planIndex];
+}
+
+const std::vector<uint8_t>& TerrainPageManager::PlacementLayerIdMap(
+    const std::string& placementId) const
+{
+    const size_t index = FindRegistrationIndex(placementId);
+    static const std::vector<uint8_t> EmptyMap;
+    if (index == InvalidIndex)
+        return EmptyMap;
+    return LayerIdMapForPlanIndex(index);
+}
+
 bool TerrainPageManager::ReadPageLayers(
     const PageKey& key,
     bool allowRebuild,
@@ -284,7 +321,8 @@ bool TerrainPageManager::ReadPageLayers(
         registrations[registrationIndex].tilesPerSide,
         PageResolution,
         key.tileX,
-        key.tileZ);
+        key.tileZ,
+        LayerIdMapForPlanIndex(registrationIndex));
     ids = data.ids;
     weights = data.weights;
     return true;
@@ -401,7 +439,8 @@ bool TerrainPageManager::MakeResident(
         registration.tilesPerSide,
         PageResolution,
         page.key.tileX,
-        page.key.tileZ);
+        page.key.tileZ,
+        LayerIdMapForPlanIndex(registrationIndex));
 
     // 烘焙成功后再占用物理槽位，避免烘焙抛异常时泄漏槽位。
     uint32_t physicalPageX = 0;

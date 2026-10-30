@@ -61,6 +61,9 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
             {
                 TerrainLayerDesc layer;
                 layer.name = layerJson.at("name").get<std::string>();
+                // 可选跨 TR 共享身份；缺省在 registry 里回退成
+                // "<assetPath>#<name>"，旧 TR 不写该字段时行为不变。
+                layer.key = layerJson.value("key", std::string());
                 layer.heightMin = layerJson.at("heightRange")[0].get<float>();
                 layer.heightMax = layerJson.at("heightRange")[1].get<float>();
                 layer.slopeMin = layerJson.at("slopeRange")[0].get<float>();

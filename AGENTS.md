@@ -314,9 +314,23 @@ page coordinates in `texCoord1`, and the shader uses `texelFetch(pageTable)` the
 and three texture arrays. `TerrainLayerTable::BuildImage` packs a 256×4 RGBA32F LUT for
 per-layer metadata (row0 height/slope, row1 noise/blendEdge/uv, row2 pagesPerSide/pageTableBase/
 sourceSet/flags, row3 avgColor/reserved; the shader still reads only row1). The page table/atlases
-and layer table are World-level shared resources; all
-layer-table terrains must use identical layer definitions, and `TR.layers.size()` is checked against
-the bound arrays. `TerrainPageManager` has CPU-side resident/eviction/LRU/priority/refcount APIs.
+and layer table are World-level shared resources. Since S1 the catalog is built from a World-level
+`TerrainLayerRegistry` (`source/terrain/terrainLayerRegistry.*`): layer identity is `layer.key`
+(default `"<assetPath>#<name>"`), identical keys with identical parameters dedupe to one globalId,
+conflicting keys / duplicate keys inside one TR / more than 256 global layers fail at load. Assignment
+follows scene-object order × first appearance, so a single-TR World keeps `globalId == local index`
+and its catalog/ID images are byte-identical. `TerrainWeightMapBuilder` takes the placement's
+local→global map and writes globalId into the ID image and candidate lists; `TerrainPageManager`
+stores that map per registration. Each MI's `TR.layers.size()` is checked against its own bound
+arrays. S2 replaces the single source-texture triple with
+`TerrainLayerSourceSets = map<sourceSet, TerrainSourceSetRecord>` (`source/terrain/terrainLayerSources.h`):
+one set must always point at the same albedo/normal/pbr shared_ptrs, different sets may bind different
+arrays (and different `sourceResolution`), uploads pick the record by `layer.sourceSet` and the source
+slice through `layerSlices` (globalId → slice), and all sets still share one atlas so their three
+formats must match. `TerrainPageManager` has CPU-side resident/eviction/LRU/priority/refcount APIs.
+`terrainlayerstats` prints `globalLayers / sourceSets / dedupedLayers / capacity`. Multi-biome mode 0
+still indexes each MI's `sampler2DArray` by globalId, so mode 0 arrays must be laid out per globalId;
+mode 1 is not affected.
 Registration is keyed by `placementId`, not `assetPath`; fallback reserves only the physical atlas
 slot `(31,31)`, so virtual `(31,31)` is an ordinary page and a 32×32 single terrain registers; a
 missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry normal) instead of

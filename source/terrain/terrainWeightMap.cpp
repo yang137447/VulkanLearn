@@ -64,6 +64,21 @@ struct SampleState
     Eigen::Vector2f noiseUv = Eigen::Vector2f::Zero();
 };
 
+// 局部层号 -> World 全局层号。空映射是恒等映射（单 TR/旧调用点）；
+// 非空时必须覆盖每个局部层，否则说明 registry 与 plan 不同步。
+uint8_t GlobalLayerId(
+    const std::vector<uint8_t>& layerIdMap,
+    size_t localLayer,
+    size_t localLayerCount)
+{
+    if (layerIdMap.empty())
+        return static_cast<uint8_t>(localLayer);
+    if (layerIdMap.size() != localLayerCount)
+        throw std::runtime_error(
+            "Terrain layer id map must cover every local layer");
+    return layerIdMap[localLayer];
+}
+
 SampleState SampleAt(
     const TerrainBuildPlan& plan,
     float u,
@@ -232,6 +247,7 @@ void BakeTile(
     uint32_t tileX,
     uint32_t tileZ,
     const TerrainTileCandidateList& tile,
+    const std::vector<uint8_t>& layerIdMap,
     uint32_t outputRowStrideTexels,
     uint32_t outputStartX,
     uint32_t outputStartY,
@@ -264,11 +280,26 @@ void BakeTile(
                  static_cast<size_t>(outputStartX + x)) * 4;
             for (uint32_t slot = 0; slot < TopLayerCount; ++slot)
             {
-                outIds[offset + slot] = ids[slot];
+                // 权重/排序按局部层计算（层参数与噪声种子都是局部语义），
+                // 写进 ID 图的是全局层号；空映射时二者相同，旧输出不变。
+                outIds[offset + slot] = GlobalLayerId(
+                    layerIdMap,
+                    ids[slot],
+                    plan.desc.layers.size());
                 outWeights[offset + slot] = texelWeights[slot];
             }
         }
     }
+}
+
+// 暴露给调用方的候选层列表也用全局层号，避免调试工具把局部下标当全局 ID。
+void RemapCandidateList(
+    TerrainTileCandidateList& tile,
+    const std::vector<uint8_t>& layerIdMap,
+    size_t localLayerCount)
+{
+    for (uint8_t& layerId : tile.layerIds)
+        layerId = GlobalLayerId(layerIdMap, layerId, localLayerCount);
 }
 
 } // namespace
@@ -276,7 +307,8 @@ void BakeTile(
 TerrainWeightMap TerrainWeightMapBuilder::Build(
     const TerrainBuildPlan& plan,
     uint32_t resolution,
-    uint32_t tilesPerSide)
+    uint32_t tilesPerSide,
+    const std::vector<uint8_t>& layerIdMap)
 {
     if (!plan.heightmap || plan.desc.layers.empty() || plan.desc.layers.size() > 256)
         throw std::runtime_error("Terrain weight map requires a heightmap and 1..256 layers");
@@ -313,6 +345,7 @@ TerrainWeightMap TerrainWeightMapBuilder::Build(
                 tileX,
                 tileZ,
                 tile,
+                layerIdMap,
                 resolution,
                 tileX * tileResolution,
                 tileZ * tileResolution,
@@ -320,6 +353,8 @@ TerrainWeightMap TerrainWeightMapBuilder::Build(
                 result.weights.data());
         }
     }
+    for (TerrainTileCandidateList& tile : result.tiles)
+        RemapCandidateList(tile, layerIdMap, plan.desc.layers.size());
     return result;
 }
 
@@ -328,7 +363,8 @@ TerrainPageData TerrainWeightMapBuilder::BuildPage(
     uint32_t tilesPerSide,
     uint32_t pageResolution,
     uint32_t tileX,
-    uint32_t tileZ)
+    uint32_t tileZ,
+    const std::vector<uint8_t>& layerIdMap)
 {
     if (!plan.heightmap || plan.desc.layers.empty() || plan.desc.layers.size() > 256)
         throw std::runtime_error("Terrain page requires a heightmap and 1..256 layers");
@@ -354,11 +390,16 @@ TerrainPageData TerrainWeightMapBuilder::BuildPage(
         tileX,
         tileZ,
         result.candidates,
+        layerIdMap,
         pageResolution,
         0,
         0,
         result.ids.data(),
         result.weights.data());
+    RemapCandidateList(
+        result.candidates,
+        layerIdMap,
+        plan.desc.layers.size());
     return result;
 }
 
@@ -366,7 +407,8 @@ TerrainVirtualTexture TerrainWeightMapBuilder::BuildVirtualTexture(
     const TerrainBuildPlan& plan,
     uint32_t tilesPerSide,
     uint32_t pageResolution,
-    uint32_t pageTableSize)
+    uint32_t pageTableSize,
+    const std::vector<uint8_t>& layerIdMap)
 {
     if (tilesPerSide == 0 || pageResolution == 0 || tilesPerSide > 32 ||
         pageTableSize == 0 || pageTableSize > 32)
@@ -391,7 +433,7 @@ TerrainVirtualTexture TerrainWeightMapBuilder::BuildVirtualTexture(
         {
             // 逐 tile 烘焙与 BuildPage 走同一条路径，保证运行时按需加载和预烘焙结果一致。
             const TerrainPageData page = BuildPage(
-                plan, tilesPerSide, pageResolution, tileX, tileZ);
+                plan, tilesPerSide, pageResolution, tileX, tileZ, layerIdMap);
             result.tiles.push_back(page.candidates);
 
             const uint32_t globalX = static_cast<uint32_t>(plan.desc.pageOrigin.x()) + tileX;

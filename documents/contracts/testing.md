@@ -1032,6 +1032,23 @@ stderr/validation layer 无错误，在反馈安全窗收敛后 `terrain stats` 
 也在该套件；L2 的 `TerrainLayerAtlasGpu.*` 在一次 submit 内验证 clear→0、
 RGBA32F 页表 texel 与两条源 layer→atlas 子区域 copy。2026-10-30 L2 后 61/61 通过。
 
+S1/S2 的全局 layer catalog 与多 sourceSet 由 `terrain_tests` 的
+`TerrainLayerRegistry.*` / `TerrainSourceSets.*` 覆盖：
+单 TR 恒等映射、同 key 跨 TR 去重、同 key 不同参数时错误同时带两个
+`assetPath`、同名不同 key 共存、256 层边界与 257 失败、同 TR 内 key 重复、
+同一 placement 重复注册、ID/权重页写 globalId（`BuildPage` 与
+`TerrainPageManager::ReadPageLayers`），以及 `TerrainSourceSetRecord` 的
+mip/slice helper。`TerrainValidator.AcceptsAndRejectsLayerKey` 覆盖 `key`
+的往返与拒绝规则。2026-10-31 S2 后 `terrain_tests` 196/196 通过。
+
+冒烟入口：`Generated/Validation/TerrainLayerVT/SC_terrain_vt_two_sets.json`
+（A=32 层 sourceSet 0，B=8 层 sourceSet 1，两个 TR 不同层定义、B 位置
+`x=+12000`）。预期 `terrainlayerstats` 显示
+`globalLayers=40 sourceSets=2 dedupedLayers=0`、`missPages=0`，
+stderr/validation layer 为空；B 组的层页从它自己的 512² 源数组上传。
+mode 0 回归仍以 B32/M3/BC7 截图 SHA-256 逐字节不变为准
+（`1D30D8B3…3F54` / `0E5D5F81…87BAAE` / `C3E77EEC…22BDB`）。
+
 公共 [DrawDebug](debug-draw.md) 的 CPU 套件为 `debug_draw_tests`：
 几何、生命周期/帧命令时序、key/句柄、过滤、预算、投影和 Console 解析。
 `ScriptDebugDrawTest` 使用真实 CLR 验证 API、回滚、发布者、

@@ -63,8 +63,18 @@ uint32_t TerrainLayerVisibilityResolver::MaxMipForLayer(
     const uint32_t mipCount =
         TerrainLayerMipCount(layerPages.LayerSourceResolution(layerId));
     uint32_t maxMip = mipCount == 0 ? 0u : mipCount - 1;
-    if (config.sourceMipLevels != 0)
-        maxMip = std::min(maxMip, config.sourceMipLevels - 1);
+    uint32_t sourceMipLevels = config.sourceMipLevels;
+    if (config.sourceSets != nullptr)
+    {
+        // 多 sourceSet：每层只能请求它自己那组源数组实际拥有的 mip。
+        const uint32_t recordMips = TerrainSourceMipLevelsForLayer(
+            *config.sourceSets,
+            layerPages.LayerSourceSet(layerId));
+        if (recordMips != 0)
+            sourceMipLevels = recordMips;
+    }
+    if (sourceMipLevels != 0)
+        maxMip = std::min(maxMip, sourceMipLevels - 1);
     return maxMip;
 }
 

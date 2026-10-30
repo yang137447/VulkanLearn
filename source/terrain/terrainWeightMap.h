@@ -53,10 +53,14 @@ struct TerrainVirtualTexture
 class TerrainWeightMapBuilder
 {
 public:
+    // layerIdMap 是 local layer 下标 -> World 全局 layerId 的映射；为空表示
+    // 恒等映射（单 TR / 旧调用点）。ID/权重页写的是全局 ID，候选层列表
+    // 同样重映射，保证 shader 与 feedback 看到同一套层号。
     static TerrainWeightMap Build(
         const TerrainBuildPlan& plan,
         uint32_t resolution,
-        uint32_t tilesPerSide);
+        uint32_t tilesPerSide,
+        const std::vector<uint8_t>& layerIdMap = {});
 
     // 只烘焙指定 tile；kernel 与 Build/BuildVirtualTexture 使用同一套采样和 top-4 规则。
     static TerrainPageData BuildPage(
@@ -64,13 +68,15 @@ public:
         uint32_t tilesPerSide,
         uint32_t pageResolution,
         uint32_t tileX,
-        uint32_t tileZ);
+        uint32_t tileZ,
+        const std::vector<uint8_t>& layerIdMap = {});
 
     static TerrainVirtualTexture BuildVirtualTexture(
         const TerrainBuildPlan& plan,
         uint32_t tilesPerSide,
         uint32_t pageResolution,
-        uint32_t pageTableSize);
+        uint32_t pageTableSize,
+        const std::vector<uint8_t>& layerIdMap = {});
 };
 
 } // namespace VL

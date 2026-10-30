@@ -44,6 +44,7 @@ void TerrainLayerPageManager::ConfigureLayers(
             "TerrainLayerPageManager::ConfigureLayers must run before any page request");
 
     layerSourceResolution.assign(MaxLayers, 1024u);
+    layerSourceSet.assign(MaxLayers, 0u);
     for (size_t index = 0; index < layers.size(); ++index)
     {
         const uint32_t resolution = layers[index].sourceResolution;
@@ -52,6 +53,7 @@ void TerrainLayerPageManager::ConfigureLayers(
                 "Terrain layer sourceResolution must be 512, 1024 or 2048; got " +
                 std::to_string(resolution));
         layerSourceResolution[index] = resolution;
+        layerSourceSet[index] = layers[index].sourceSet;
     }
     RebuildLayerLayout();
 }
@@ -151,6 +153,11 @@ uint32_t TerrainLayerPageManager::LayerSourceResolution(uint32_t layerId) const
     if (layerId >= MaxLayers)
         throw std::out_of_range("Terrain layer id must be < 256");
     return layerSourceResolution[layerId];
+}
+
+uint32_t TerrainLayerPageManager::LayerSourceSet(uint32_t layerId) const
+{
+    return layerId < layerSourceSet.size() ? layerSourceSet[layerId] : 0u;
 }
 
 uint32_t TerrainLayerPageManager::PagesPerSide(

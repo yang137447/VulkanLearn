@@ -178,6 +178,16 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   `RendererTerrainLoader` 生成全部级，`WorldSnapshotBuilder` 每帧按相机到
   chunk 世界 AABB 的距离与 10% 滞回选择一级，阴影/拾取/材质上下文共享同一快照，
   `terrainlod stats` 可观测。`lodLevels=1` 旧资产仍逐字节等同 LOD0。
+  S1 新增 World 级 `source/terrain/terrainLayerRegistry.*`：层身份是
+  `layer.key`（缺省 `<assetPath>#<name>`），同 key 参数一致跨 TR 去重成同一个
+  globalId，参数冲突/同 TR 重复/超过 256 层都在加载期失败；单 TR 的
+  globalId == 局部下标，旧输出逐字节不变。ID/权重页写 globalId，
+  `TerrainPageManager::RegisterTerrain` 保存 placement 的 local→global 映射。
+  S2 把层源数组改成 `source/terrain/terrainLayerSources.h` 的
+  `map<sourceSet, TerrainSourceSetRecord>`：同 set 共享同一组 shared_ptr，
+  不同 set 可绑定不同数组，层页上传按 `layerSlices` 还原源 slice，三张 atlas
+  仍只有一组（格式必须一致）。`terrainlayerstats` 输出
+  `globalLayers/sourceSets/dedupedLayers/capacity`。
   当前没有低分辨率 fallback/淡入、相机/视锥预取、地形编辑，也没有
   分块或编辑后的碰撞重建。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
