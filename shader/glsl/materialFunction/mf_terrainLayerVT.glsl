@@ -3,6 +3,7 @@
 
 #include "../engine/materialContext.glsl"
 #include "mf_normal.glsl"
+#include "terrainLayerVTMath.glsl"
 
 // L3 层纹理 VT：top-4 层号仍来自覆盖页的 ID/权重图，但像素改为
 //   layerId -> catalog page 参数 -> 每 mip 页表 -> 物理页 -> atlas 采样。
@@ -12,9 +13,6 @@
 //   row3 = avgColor.rgb/reserved
 // 所有页表/atlas 都是 L2 在 World 级创建的共享资源。L4a 起页驻留由覆盖页
 // feedback 逐帧驱动，本文件在选中 mip 缺页时回退到更粗的 mip。
-const int TERRAIN_VT_MAX_LAYERS = 256;
-const int TERRAIN_VT_MAX_MIP = 4;
-
 struct TerrainLayerVTResult
 {
     vec4 albedo;
@@ -63,25 +61,6 @@ ivec2 TerrainLayerPageTableSize(int mip)
     return textureSize(layerPageTable4, 0);
 }
 
-// catalog 的 pagesPerSide 是 mip0 的每边页数（512 -> 4、1K -> 8、2K -> 16）。
-// 尾页是 128²，因此最大 mip = log2(pagesPerSide)，例如 1K 为 mip0..3。
-int TerrainLayerMaxMipForPagesPerSide(int pagesPerSide)
-{
-    int maxMip = 0;
-    int side = pagesPerSide;
-    while (side > 1 && maxMip < TERRAIN_VT_MAX_MIP)
-    {
-        side >>= 1;
-        ++maxMip;
-    }
-    return maxMip;
-}
-
-int TerrainLayerPagesPerSideAtMip(int pagesPerSide, int mip)
-{
-    return max(1, pagesPerSide >> mip);
-}
-
 TerrainLayerVTResult AccumulateTerrainLayerVT(
     in MaterialFunctionContext context,
     ivec4 topIds,
@@ -106,41 +85,21 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
             TerrainLayerMaxMipForPagesPerSide(pagesPerSide),
             int(u_layerMaxMip + 0.5));
 
-        // 层 UV 与 mode 0 完全一致：uvScale/uvRotation 来自 catalog row1。
-        // 导数必须在 fract 之前取，mip 依据层自身的纹素密度选择。
-        const float angle = uvRow.w;
-        const mat2 rotation =
-            mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
-        const vec2 layerUv =
-            rotation * (context.texCoord * u_uvScale * uvRow.z);
-        const vec2 layerDdx = dFdx(layerUv);
-        const vec2 layerDdy = dFdy(layerUv);
-        const float sourceResolution =
-            float(pagesPerSide) * u_layerPageResolution;
-        const float texelsPerPixel =
-            max(length(layerDdx), length(layerDdy)) * sourceResolution;
-        const float lod = log2(max(texelsPerPixel, 1.0e-8));
-        const int mip = clamp(
-            int(floor(lod + 0.5)),
-            0,
-            maxMip);
-        // 层纹理是 repeat 平铺：先 fract 到 [0,1)，再按该 mip 的页数切页。
-        // side 与 CPU 的 TerrainLayerPagesPerSide(sourceResolution, mip) 一致。
+        // 层 UV/mip/页号一律走 terrainLayerVTMath.glsl：feedback pass 用
+        // 同一份实现，页号才能与真正采样的页一一对应。
         // 虚拟页 = layerId * stride(mip) + pageY * side + pageX；页表大小正好是
         // stride(mip) * 256（最大层数），因此 texel 总数 / 256 就是 CPU stride。
+        const vec2 layerUv =
+            TerrainLayerUvForSlot(context.texCoord, u_uvScale, uvRow);
+        const int mip = TerrainLayerMipForUv(
+            layerUv, pagesPerSide, maxMip, u_layerPageResolution);
         int usedMip = mip;
-        int side = TerrainLayerPagesPerSideAtMip(pagesPerSide, usedMip);
-        vec2 scaledUv = fract(layerUv) * float(side);
-        ivec2 pageXY = clamp(
-            ivec2(floor(scaledUv)),
-            ivec2(0),
-            ivec2(side - 1));
-        vec2 localUv = fract(scaledUv);
+        TerrainLayerVTAddress address =
+            TerrainLayerAddressAtMip(layerUv, pagesPerSide, usedMip);
         ivec2 tableSize = TerrainLayerPageTableSize(usedMip);
         int perLayerStride =
             (tableSize.x * tableSize.y) / TERRAIN_VT_MAX_LAYERS;
-        int virtualPage =
-            layer * perLayerStride + pageXY.y * side + pageXY.x;
+        int virtualPage = layer * perLayerStride + address.pageIndex;
         vec4 entry = TerrainLayerPageTableFetch(
             usedMip,
             ivec2(virtualPage % tableSize.x, virtualPage / tableSize.x));
@@ -151,18 +110,13 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
              ++coarser)
         {
             usedMip = coarser;
-            side = TerrainLayerPagesPerSideAtMip(pagesPerSide, usedMip);
-            scaledUv = fract(layerUv) * float(side);
-            pageXY = clamp(
-                ivec2(floor(scaledUv)),
-                ivec2(0),
-                ivec2(side - 1));
-            localUv = fract(scaledUv);
+            address =
+                TerrainLayerAddressAtMip(layerUv, pagesPerSide, usedMip);
             tableSize = TerrainLayerPageTableSize(usedMip);
             perLayerStride =
                 (tableSize.x * tableSize.y) / TERRAIN_VT_MAX_LAYERS;
             virtualPage =
-                layer * perLayerStride + pageXY.y * side + pageXY.x;
+                layer * perLayerStride + address.pageIndex;
             entry = TerrainLayerPageTableFetch(
                 usedMip,
                 ivec2(virtualPage % tableSize.x, virtualPage / tableSize.x));
@@ -194,7 +148,7 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
             // 半 texel 内缩，防止双线性 tap 跨到相邻物理页。
             const float pageResolution = u_layerPageResolution;
             const vec2 clampedLocal = clamp(
-                localUv,
+                address.localUv,
                 vec2(0.5 / pageResolution),
                 vec2(1.0 - 0.5 / pageResolution));
             const vec2 atlasUv =

@@ -1781,6 +1781,24 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const bool vtRequested =
             materialInstance->HasParameter("u_terrainLayerMode") &&
             materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
+        // L4b：层页 feedback pass 只有一个 u_uvScale，必须与所有 layer-table
+        // 地形的 M_terrain 实例一致，否则 feedback 会报告错误的层 UV/页号。
+        const float uvScale = materialInstance->HasParameter("u_uvScale")
+            ? materialInstance->GetParameter<float>("u_uvScale")
+            : 64.0f;
+        if (!streamingState.layerUvScaleInitialized)
+        {
+            streamingState.layerUvScale = uvScale;
+            streamingState.layerUvScaleInitialized = true;
+        }
+        else if (vtRequested &&
+                 std::abs(streamingState.layerUvScale - uvScale) > 1.0e-4f)
+        {
+            throw std::runtime_error(
+                "All layer-VT terrains in a World must share the same "
+                "u_uvScale so layer feedback matches the material: " +
+                plan.desc.assetPath);
+        }
         if (vtRequested)
         {
             // 作者显式请求 VT 时不能静默退回 mode 0；源图与 catalog 不一致

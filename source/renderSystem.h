@@ -37,6 +37,7 @@
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
 #include "terrain/terrainFeedback.h"
+#include "terrain/terrainLayerFeedback.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -410,6 +411,13 @@ private:
     void ApplyTerrainLayerFeedback(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
         const VL::TerrainFeedbackFrameSummary& summary,
+        uint64_t completedEpoch,
+        uint32_t frameIndex);
+    // L4b：层号 + 层页 + mip 的精确 feedback。返回 true 表示本帧使用了
+    // 精确路径，覆盖页推导不再参与层页驻留（只保留覆盖页自身的驻留）。
+    bool ApplyTerrainLayerExactFeedback(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        const VL::TerrainLayerFeedbackFrameSummary& summary,
         uint64_t completedEpoch,
         uint32_t frameIndex);
     void PrepareTerrainFeedbackPass(uint8_t frameTag);

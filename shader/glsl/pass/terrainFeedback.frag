@@ -1,19 +1,54 @@
 #version 450
 
 #include "../common/commonUbo.glsl"
+#include "../materialFunction/terrainLayerVTMath.glsl"
 #include "generate/M_terrainFeedbackParamter.glsl"
 
 layout(location = 0) in vec2 inPageUv;
+layout(location = 1) in vec2 inMaterialUv;
 layout(location = 0) out vec4 outFeedback;
+// L4b：top-4 slot 各一张 RGBA8，编码见 terrain/terrainLayerFeedback.h：
+// R=layerId, G=pageIndex, B=mip|valid(bit7), A=frameTag。
+layout(location = 1) out vec4 outLayerSlot0;
+layout(location = 2) out vec4 outLayerSlot1;
+layout(location = 3) out vec4 outLayerSlot2;
+layout(location = 4) out vec4 outLayerSlot3;
 
 // Set 3 来自 RenderGraph worldTexture 输入，与 M_terrain 采样的是同一张页表。
 layout(set = 3, binding = 0) uniform sampler2D pageTable;
+// L4b 输入：层 catalog（256×4）与 top-4 ID/权重 atlas，全部与 M_terrain 共享。
+layout(set = 3, binding = 1) uniform sampler2D layerCatalog;
+layout(set = 3, binding = 2) uniform sampler2D layerIds;
+layout(set = 3, binding = 3) uniform sampler2D layerWeights;
+
+vec4 TerrainFeedbackCatalogRow(int layer, int row)
+{
+    // nearest + 无 mip：texel 中心严格落在指定 catalog 行内。
+    return texture(
+        layerCatalog,
+        vec2(
+            (float(layer) + 0.5) / float(TERRAIN_VT_MAX_LAYERS),
+            (float(row) + 0.5) / 4.0));
+}
+
+vec4 EncodeLayerSlot(int layerId, int pageIndex, int mip, uint frameTag)
+{
+    // layerId/pageIndex 各 8 bit，mip 3 bit + valid(bit7)，tag 8 bit。
+    const uint packedMip = uint(mip) | 128u;
+    return vec4(
+        float(layerId),
+        float(pageIndex),
+        float(packedMip),
+        float(frameTag)) / 255.0;
+}
 
 // 编码格式版本 1（与 terrain/terrainFeedback.h 保持一致）：
 // R[0..4]=pageX, bit5=miss, bit6=valid, bit7=0
 // G[0..4]=pageY, B=priority, A=frameTag（0 保留）
 // 本 pass 挂 128×128 depth 且 depthCompareOp=less：深度只用于近页优先，
 // 让最近的地形页赢得 feedback texel，避免后绘制的远页覆盖近页 miss。
+// 同一 pass 另外输出 4 张层页 attachment；层页 mip 报告的是 shader 按导数
+// 选出的目标 mip，不是缺页回退后的粗 mip。
 void main()
 {
     const int pageTableSize = int(u_pageTableSize + 0.5);
@@ -50,10 +85,69 @@ void main()
         uint(page.x) | (miss ? 32u : 0u) | 64u;
     const uint packedY = uint(page.y);
     const uint packedB = min(priority, 255u);
-    const uint packedA = uint(round(clamp(u_frameTag, 1.0, 255.0)));
+    const uint frameTag = uint(round(clamp(u_frameTag, 1.0, 255.0)));
+    const uint packedA = frameTag;
     outFeedback = vec4(
         float(packedX),
         float(packedY),
         float(packedB),
         float(packedA)) / 255.0;
+
+    // ---- L4b 层页 feedback ----
+    // 关闭时（mode 0 / 未请求 VT）四张 attachment 全部保持 invalid。
+    vec4 slot0 = vec4(0.0);
+    vec4 slot1 = vec4(0.0);
+    vec4 slot2 = vec4(0.0);
+    vec4 slot3 = vec4(0.0);
+    if (u_layerFeedbackEnabled > 0.5 && !miss)
+    {
+        // 覆盖页命中后，用与 mf_terrainLayerBlend 完全相同的 atlas UV 取
+        // top-4 层。rawPageUv 不 clamp：全局 UV 恰为 1.0 时要选该页最后一列。
+        const vec2 rawPageUv = inPageUv * float(pageTableSize);
+        vec2 localUv = fract(rawPageUv);
+        localUv = clamp(
+            localUv,
+            vec2(0.5 / u_pageResolution),
+            vec2(1.0 - 0.5 / u_pageResolution));
+        localUv = mix(
+            localUv,
+            vec2(1.0 - 0.5 / u_pageResolution),
+            step(vec2(float(pageTableSize)), rawPageUv));
+        const float atlasResolution = u_pageTableSize * u_pageResolution;
+        const vec2 atlasUv = (vec2(page) * u_pageResolution +
+            localUv * u_pageResolution) / atlasResolution;
+
+        const ivec4 ids =
+            ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
+        const vec4 weights = texture(layerWeights, atlasUv);
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const float weight = weights[slot];
+            if (weight <= 0.0)
+                continue;
+            const int layer = ids[slot];
+            const vec4 uvRow = TerrainFeedbackCatalogRow(layer, 1);
+            const vec4 pageRow = TerrainFeedbackCatalogRow(layer, 2);
+            const int pagesPerSide = max(1, int(pageRow.x + 0.5));
+            const int maxMip = min(
+                TerrainLayerMaxMipForPagesPerSide(pagesPerSide),
+                int(u_layerMaxMip + 0.5));
+            const vec2 layerUv =
+                TerrainLayerUvForSlot(inMaterialUv, u_uvScale, uvRow);
+            const int mip = TerrainLayerMipForUv(
+                layerUv, pagesPerSide, maxMip, u_layerPageResolution);
+            const TerrainLayerVTAddress address =
+                TerrainLayerAddressAtMip(layerUv, pagesPerSide, mip);
+            const vec4 encoded =
+                EncodeLayerSlot(layer, address.pageIndex, mip, frameTag);
+            if (slot == 0) slot0 = encoded;
+            else if (slot == 1) slot1 = encoded;
+            else if (slot == 2) slot2 = encoded;
+            else slot3 = encoded;
+        }
+    }
+    outLayerSlot0 = slot0;
+    outLayerSlot1 = slot1;
+    outLayerSlot2 = slot2;
+    outLayerSlot3 = slot3;
 }

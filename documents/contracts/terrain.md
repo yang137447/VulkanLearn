@@ -430,8 +430,9 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - 一个覆盖页的层集合按 `(placementId, tileX, tileZ)` 缓存——地形内容静态，同一页
   只需烘焙/统计一次；缓存上限是 World 的虚拟页数。
 - mip 规则：覆盖页 `priority` 是“每页占多少屏幕像素”的对数压缩，越高越近。
-  `>=192 → mip0`、`>=128 → mip1`、`>=64 → mip2`、其余 `mip3`，再按该层
-  `TerrainLayerMipCount(sourceResolution)` 与三张源数组的最小 mip 数 clamp。
+  `>=192 → mip0`、`>=128 → mip1`、`>=64 → mip2`、`>=32 → mip3`、其余 `mip4`，
+  再按该层 `TerrainLayerMipCount(sourceResolution)` 与三张源数组的最小 mip 数
+  clamp。2K 层的 mip4 只有 1 页，远景必须能请求到，否则会永久停在 avgColor。
 - 层纹理是平铺资产，选定 mip 后必须请求该 mip 的**全部**页
   （512² mip0 = 4×4 = 16 页）；否则 shader 的 UV 采样会落到未请求页。
   同一（layer, mip, page）在多个覆盖页重复出现时按最大 priority 去重。
@@ -440,15 +441,20 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - 每帧最多 `maxLayerPageRequestsPerFrame`（16）个 `RequestPageAtEpoch`；失败项进入
   跨帧 `pendingLayerPageRequests`，按 priority 降序、同优先级按 `deferredRequestCount`
   轮转，不会丢失。
-- 已驻留页每帧 `MarkPageUsedAtEpoch` 推进 `lastSeenEpoch`/`lastTouchedEpoch`。可见层的
-  **所有已驻留 mip** 也会续命：priority 在 mip 阈值附近抖动时，避免相邻 mip 被
-  反复淘汰/重烘焙。
+- 续命范围只覆盖本帧 feedback 真正命中的候选页：覆盖页路径里就是“选中 mip 的全部
+  页”，精确路径里就是屏幕真正采样到的层页。不再刷新“可见层的所有历史 mip”——
+  那会让每帧把整层所有 mip 刷成最新，capacity 对可见集完全失效（实测
+  capacity 64 时 resident 长期停在 248）。
 - 淘汰：`idleEvictionEpochs`（默认 180 epoch）之外未再被看到的层页在
   `EvictPage` 前先过 `CanEvictPageAt`（GPU 安全窗）；随后若
   `ResidentCount() > ResidentCapacity()` 再做 epoch-aware LRU 淘汰。
   与覆盖页一致：可见页都还在安全窗内时允许暂时超过预算，不会为了立刻回到预算
   制造可见空洞。`terrainlayer preload` 会关闭 idle 淘汰，`terrainlayer capacity N`
   重新打开。
+- 已驻留页如果不是本帧候选、但所属层仍在视野内（同层其它 mip、同 mip 未被采样的
+  页），使用更短的 `unselectedMipIdleEvictionEpochs`（默认 16 epoch）而不是 180；
+  完全离开视野的层仍走长 idle，避免相机小幅移动就丢掉整层。
+- `TerrainLayerDesc::avgColor` 默认中性灰 0.18（旧默认是 0，mode 1 缺页会出纯黑块）。
 - 逐帧上传：`TerrainLayerUploadGpuRing`（`source/render/resource/rendererTerrainLoader.*`）
   槽数 = frame fence 数，host-visible/coherent、常驻映射、预分配，只打包页表 texel
   （16 B/项，容量按所有 mip 页表项总数上界）。`RenderSystem` 在 scene pass 之前
@@ -464,9 +470,48 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - shader 侧：选中 mip 的页表项无效时，`mf_terrainLayerVT.glsl` 会向更粗的 mip
   回退（最多到该层 `maxMip`），用第一条有效映射采样；全部无效才使用 catalog
   `avgColor`。这样逐帧收敛期间只是分辨率暂时偏低，不会整页变平均色。
-- `terrainlayerstats` 增加 `visibleLayers`、本帧 `requestedLast`/`uploadedLast`、
-  `pending` 与 mip0..4 的请求分布；`terrainlayer capacity N` / `terrainlayer preload`
-  都由 Console 写 atomic/flag，渲染线程帧首消费。
+- `terrainlayerstats` 第二行区分 `feedbackHits`（本帧命中并续命的已驻留页）、
+  `requested`（本帧尝试请求数，含失败/deferred）、`accepted`（其中成功数）、
+  `uploadedLast`、`pending` 与 mip0..4 的请求分布；第一行不再打印恒为 0 的
+  `hits`（那是 `RequestPage` 命中已驻留页的次数，调用方在请求前已过滤）。
+  `terrainlayer capacity N` / `terrainlayer preload` 都由 Console 写 atomic/flag，
+  渲染线程帧首消费。
+
+## 层页精确 feedback（L4b）
+
+覆盖页 feedback 只能给出“页坐标 + priority”，mip 只能按 priority 近似。L4b 在同一个
+`terrainFeedback` pass 上增加 4 张颜色附件，按 top-4 slot 逐像素报告真正的层页身份。
+
+- 资源：`terrainLayerFeedback0..3`，各固定 128×128 `R8G8B8A8_UNORM`、
+  `colorAttachment + transferSrc`；与覆盖页 RT 共用同一张 128×128 `D32_SFLOAT`
+  深度（`less`），因此同一 texel 仍只记录最近的地形页。
+- 编码（`source/terrain/terrainLayerFeedback.h`）：
+  `R = layerId`、`G = pageIndex`（`pageY * side + pageX`，0..255；2K mip0 正好 256 页）、
+  `B = bit0..2 mip | bit7 valid`、`A = frameTag`（与覆盖页同源，`(epoch % 255) + 1`，
+  0 保留）。无效/关闭时四通道写 0。
+- shader 与 `M_terrain` 共用 `shader/glsl/materialFunction/terrainLayerVTMath.glsl`：
+  层 UV、导数选 mip、`fract` 切页、`pageIndex` 全部是同一份实现（CPU 参考是
+  `terrain/terrainLayerVT.h`）。feedback 报告的是 shader **想要**的 mip，不是缺页
+  回退后的粗 mip，否则更细的 mip 永远不会被请求。覆盖页缺失（`pageTable.a < 0.5`）
+  时四张附件保持 invalid，层页驻留先由覆盖页驻留建立。
+- 输入：pass 现在有 4 个 `worldTexture` 输入——`terrainPageTable`（binding 0）、
+  `terrainLayerCatalog`（1）、`terrainLayerIds`（2）、`terrainLayerWeights`（3）。
+  World 没有分层地形时后三者临时指向 page table，由 `u_layerFeedbackEnabled=0`
+  保证不被采样。编译器合同：1..4 个 worldTexture 输入（binding 0..N-1）、
+  1..5 张固定 128×128 RGBA8 颜色输出、恰好 1 张 D32 深度输出。
+- CPU：`TerrainLayerFeedbackGpuRing`（`source/render/resource/terrainLayerFeedbackGpu.*`）
+  每帧一张 host-visible/coherent buffer（4×16 KiB），4 张图在一次录制里
+  `ColorAttachment → TransferSrc → copy → ColorAttachment`，epoch 门禁复用
+  `TerrainFeedbackRingState`。`SummarizeTerrainLayerFeedback` 丢弃 valid=0 与
+  frameTag 不匹配的 texel，按 `(layerId, mip, pageIndex)` 去重，用帧内最大
+  sampleCount 归一到 1..255 的 priority。
+- `TerrainLayerVisibilityResolver::ApplyExact` 把 pageIndex 还原成 `(pageX,pageY)`，
+  越界项计入 `outOfRangePages`；中心页已驻留时不扩邻域，缺页时才按
+  `exactFeedbackNeighborhoodRadius`（默认 1）扩一圈做 prefetch（邻域 priority 减半）。
+  命中页推进 `lastSeenEpoch`/`lastTouchedEpoch`，未驻留页进入与 L4a 相同的跨帧队列，
+  每帧请求/上传预算、quarantine、Commit/Abort 语义完全一致。
+- 精确 feedback 可用时它就是唯一驱动层页驻留的路径；L4a 的覆盖页推导只在
+  ring 还没产出（启动、回读延迟）时作为回退/prefetch，不与精确路径同时写驻留。
 
 ## Feedback pass（P2/P3）
 
@@ -527,8 +572,7 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   `terrain capacity N` 只把预算写入 streaming state 的 atomic，由渲染线程在帧首消费；
   它不在 Console/GT 线程直接修改 page manager。
 
-P3/P3.1/L1/L2/L3/L4a **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
-逐页层 feedback（L4b：当前只按覆盖页推导可见层，没有层号+mip 的专用 feedback）、
+P3/P3.1/L1/L2/L3/L4a/L4b **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
 硬预算淘汰（可见 working set 大于预算时允许暂时超预算）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、LOD/skirt、
 地形 chunk 卸载、地形碰撞/编辑。
@@ -627,3 +671,19 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `SC_terrain_b32_bc7.json` 截图仍与 L2/L3 基线逐字节一致
   （`1D30D8…3F54` / `0E5D5F…BAAE` / `C3E77E…2BDB`），stderr 为空且无
   Vulkan validation error。
+- L4b：`tool/terrain-tests/terrainLayerFeedbackTests.cpp` 覆盖 8/8/3+valid 位编解码、
+  越界字段拒绝、跨 slot 去重、frameTag 过期丢弃、按覆盖率排序、pageIndex→
+  (pageX,pageY) 还原、精确 mip 请求、缺页邻域扩圈（已驻留不扩）、越界 pageIndex、
+  命中续命、每帧预算与跨帧收敛、同一层不同 mip 各自请求，以及 avgColor 默认 0.18。
+  `terrainLayerVisibilityTests.cpp` 另覆盖 2K 层 mip4 请求和“capacity 只回收非候选页”。
+  `vl_renderer_backend_tests` 的 `TerrainFeedbackGraph.*` 已按 5 颜色 + 1 深度合同更新。
+- L4b 冒烟：`SC_terrain_vt_mode1.json` 稳定后 `terrainlayerstats` 报告
+  `resident=119/512`、`visibleLayers=20`、`feedbackHits=119`、`exactSlots=2084`、
+  `exactPages=119`、`requested=0`、`pending=0`、`dirtyPages=0`；与 L3 全量预取基线
+  `l3_final_mode1.bmp` 相比（排除左侧 UI）平均通道差 0.122、1.47% 像素 >2、
+  0.01% >8、最大 24，无整页缺失块。`terrainlayer capacity 130` 后仍为 `119/130`；
+  降到 64 再移动相机时为 `80/64`（可见集 78 > 预算的软预算行为，`accepted=0`），
+  不再像 L4a 那样停在 248。
+- L4b mode 0 回归：`SC_terrain_b32.json` 截图仍与 L2/L3 基线逐字节一致
+  （`1D30D8…3F54`）；`SC_terrain_b32_two.json` 与 P3 基线相比平均通道差 0.001、
+  无 >8 像素，差异来自逐帧流式的到达时刻。两者 stderr 均为空。

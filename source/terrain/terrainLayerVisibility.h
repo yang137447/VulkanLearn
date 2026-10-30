@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "terrain/terrainFeedback.h"
+#include "terrain/terrainLayerFeedback.h"
 #include "terrain/terrainLayerPageManager.h"
 #include "terrain/terrainPageManager.h"
 
@@ -38,9 +39,17 @@ struct TerrainLayerVisibilityConfig
     uint32_t maxCoverPageRebuildsPerFrame = 4;
     // 层页离开 feedback 视野后，超过这么多 epoch 才允许 idle 淘汰。
     uint64_t idleEvictionEpochs = 180;
+    // 层仍在视野内、但该 mip 没被本帧选中（且不在相邻一档）时，用更短的
+    // idle 窗口淘汰。否则“可见层所有已驻留 mip 续命”会让 capacity 对
+    // 可见集完全失效（实测 capacity 64 时 resident 长期停在 248）。
+    uint64_t unselectedMipIdleEvictionEpochs = 16;
     // debug console `terrainlayer preload` 的对照路径会关闭 idle 淘汰，
     // 让全量预取集合保持驻留，便于和 L3 基线做画面对比。
     bool idleEvictionEnabled = true;
+    // L4b：精确 feedback 每命中一页，额外把该页周围 radius 圈页作为 prefetch
+    // 候选。128×128 feedback 对细长/远处的层页会欠采样，邻域扩展避免
+    // 永远不请求漏掉的页。
+    uint32_t exactFeedbackNeighborhoodRadius = 1;
 };
 
 struct TerrainLayerVisibilityStats
@@ -51,12 +60,31 @@ struct TerrainLayerVisibilityStats
     uint32_t skippedCoverPages = 0;
     uint32_t visibleLayers = 0;
     uint32_t candidatePages = 0;
+    // 本帧 feedback 命中且已驻留的页数（真正的 feedback hit）。
+    uint32_t markedPages = 0;
     uint32_t attemptedRequests = 0;
     uint32_t acceptedRequests = 0;
     uint32_t deferredRequests = 0;
     uint32_t pendingRequests = 0;
     uint32_t evictedPages = 0;
     // 本帧成功请求的页按 mip 分布，用于确认 LOD/预算策略符合预期。
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
+};
+
+struct TerrainLayerExactFeedbackStats
+{
+    uint32_t validSlots = 0;
+    uint32_t distinctPages = 0;
+    uint32_t visibleLayers = 0;
+    uint32_t markedPages = 0;
+    // pageIndex 超出该层该 mip 的实际页数：格式损坏或层配置在运行期变了。
+    uint32_t outOfRangePages = 0;
+    uint32_t candidatePages = 0;
+    uint32_t attemptedRequests = 0;
+    uint32_t acceptedRequests = 0;
+    uint32_t deferredRequests = 0;
+    uint32_t pendingRequests = 0;
+    uint32_t evictedPages = 0;
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
 };
 
@@ -81,6 +109,17 @@ public:
         uint64_t completedEpoch,
         const TerrainLayerVisibilityConfig& config);
 
+    // L4b：层号 + 层页 + mip 的精确 feedback。命中页推进 lastSeen/lastTouched；
+    // 未驻留页进入同一跨帧队列。优先级由屏幕覆盖率（sampleCount）给出，
+    // 不再依赖覆盖页 priority 的 mip 近似。
+    TerrainLayerExactFeedbackStats ApplyExact(
+        const TerrainLayerFeedbackFrameSummary& summary,
+        TerrainLayerPageManager& layerPages,
+        std::vector<TerrainLayerPageRequest>& pendingRequests,
+        uint64_t frame,
+        uint64_t completedEpoch,
+        const TerrainLayerVisibilityConfig& config);
+
     static uint32_t MipForPriority(uint8_t priority);
 
 private:
@@ -97,6 +136,28 @@ private:
         const std::vector<uint8_t>& ids,
         const std::vector<uint8_t>& weights,
         float minLayerWeight);
+
+    // 两条推导路径共用的尾部：续命 -> 入队 -> 排序 -> 限量请求 -> idle/预算淘汰。
+    // 抽出共享实现是为了让 L4a（覆盖页）与 L4b（精确层页）永远不会在预算、
+    // quarantine 或淘汰规则上分叉。
+    struct CandidateCommitResult
+    {
+        uint32_t attemptedRequests = 0;
+        uint32_t acceptedRequests = 0;
+        uint32_t deferredRequests = 0;
+        uint32_t evictedPages = 0;
+        std::array<uint32_t, TerrainLayerMaxMipLevel + 1> mipRequestCounts{};
+    };
+
+    CandidateCommitResult CommitCandidates(
+        const std::map<TerrainLayerPageKey, uint32_t>& candidates,
+        const std::array<bool, 256>& layerSeen,
+        TerrainLayerPageManager& layerPages,
+        std::vector<TerrainLayerPageRequest>& pendingRequests,
+        uint64_t frame,
+        uint64_t completedEpoch,
+        uint64_t seenEpoch,
+        const TerrainLayerVisibilityConfig& config);
 
     // 页内容是静态的，因此一个覆盖页的层集合只需烘焙/统计一次；缓存按
     // (placementId, tileX, tileZ) 索引，数量上限就是 World 的虚拟页数。
