@@ -758,6 +758,12 @@ TerrainStreamingState
 - 近景 tile 的 32 候选优先，远景只保留 mip2/3；
 - 不依赖逐像素层 feedback，先验证页表/atlas 正确性与预算。
 
+> 实施时的取舍（2026-10-30）：实际 L4a 没有新增 CPU 视锥/相机距离输入，而是直接复用
+> P2/P3 已经落地的 128×128 覆盖页 feedback（页坐标 + priority），再由覆盖页的
+> top-4 ID/权重推导可见层。这样不新增 pass/RT，也不会出现“同一地形被两套可见性
+> 判断分别驱动”的第二份真值；代价是 mip 只能按覆盖页 priority 近似，精确到
+> 层号 + 层页 + mip 的 feedback 仍是 L4b。
+
 **进阶（L4b）：feedback 驱动的页级驻留**
 
 - 当前 `terrainFeedback` 只能容纳覆盖页坐标（5+5 bit），
@@ -1141,6 +1147,34 @@ TerrainStreamingState
 
 **依赖**：L3、P3（覆盖页的 feedback 驱动驻留）。
 在 P3 完成前，L4a 可以用 CPU 预取先行验证，但不能宣称“流式闭环完成”。
+
+**L4a 状态（2026-10-30，已完成）**
+
+- 已实现：`source/terrain/terrainLayerVisibility.*` 把 P2/P3 的覆盖页 feedback
+  推导成“可见层 → mip → 该 mip 全部页”，不新增 pass/RT，也不新增 runtime flag。
+  覆盖页 top-4 来自 CPU atlas 镜像或 `TerrainWeightMapBuilder::BuildPage` 重建
+  （每帧限流并缓存）；priority 阶梯 `>=192/>=128/>=64` 映射 mip0/1/2/3，
+  再按层 mip 链与源数组 mip 数 clamp。
+- 已实现：跨帧 `pendingLayerPageRequests`，按 priority 降序 + deferred 轮转，
+  每帧最多 16 个 `RequestPageAtEpoch`；可见层的所有已驻留 mip 每帧续命，
+  离开视野后先过 GPU 安全窗，再按 idle（180 epoch）与 budget 淘汰。
+- 已实现：`TerrainLayerUploadGpuRing`（槽数 = frame fence 数、常驻映射、只打包
+  16 B 页表项）与 `TerrainLayerUploadTransaction`；每帧 scene pass 之前
+  `BuildUploadBatch(8)` + `RecordTerrainLayerPageUploads`（页表 copy + 三张 atlas
+  的 GPU→GPU copy）录制进主帧，`SubmitFrame` 成功后才 Commit。
+- 已实现：mode 1 加载期只请求每层尾页；`terrainlayer stats|capacity N|preload`
+  提供观测、预算与全量对照。`terrainlayerstats` 增加 visibleLayers / 本帧请求/上传 /
+  pending / mip 分布。
+- 已实现：shader 在选中 mip 无效时回退到更粗 mip，避免收敛期间整页 avgColor。
+- 证据：`terrain_tests` 125/125、`vl_renderer_backend_tests` 61/61、
+  `material_schema_tests` 11/11、`texture_asset_tests` 58/58；
+  mode 1 稳定态 `resident≈248–268/512`、`pending=0`、`evictions` 仅启动期少量；
+  `terrainlayer preload` 后 `resident=672/672` 且截图与 L3 基线最大差 1；
+  mode 0 三张截图仍逐字节一致，stderr 为空且无 Vulkan validation error。
+- 未实现（留给 L4b）：层号+mip+层页的专用 feedback 格式（当前只按覆盖页推导，
+  层页 mip 是“覆盖页 priority → mip”的近似）；硬预算淘汰（可见 working set 大于
+  预算时允许暂时超预算）；低分辨率 fallback/淡入；相机/视锥预取；同一 TR 多摆放的
+  页内容去重；不同 `sourceSet` 的多组源纹理。
 
 ---
 

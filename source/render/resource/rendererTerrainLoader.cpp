@@ -484,7 +484,8 @@ void RecordTerrainLayerUploads(
     TerrainLayerGpuResources& layerResources,
     const TerrainLayerSourceTextures& sources,
     const TerrainLayerUploadBatch& batch,
-    vk::Buffer stagingBuffer)
+    vk::Buffer stagingBuffer,
+    vk::DeviceSize pageTableStagingOffset)
 {
     // 页表：按 mip 分组；每张表一次 layout 往返，所有 texel 合并成一次 copy。
     for (uint32_t mip = 0; mip <= TerrainLayerPageManager::MaxMipLevel; ++mip)
@@ -494,7 +495,7 @@ void RecordTerrainLayerUploads(
                 batch,
                 layerPageManager,
                 mip,
-                0);
+                pageTableStagingOffset);
         if (regions.empty())
             continue;
         Texture& pageTable = *layerResources.pageTables[mip];
@@ -588,6 +589,31 @@ void RecordTerrainPageUploads(
         BuildTerrainAtlasCopyRegions(
             batch.atlasUploads,
             stagingOffsets.layerWeights));
+}
+
+void RecordTerrainLayerPageUploads(
+    vk::CommandBuffer commandBuffer,
+    TerrainLayerPageManager& layerPageManager,
+    TerrainLayerGpuResources& layerResources,
+    const TerrainLayerSourceTextures& sources,
+    const TerrainLayerUploadBatch& batch,
+    vk::Buffer stagingBuffer,
+    vk::DeviceSize pageTableStagingOffset)
+{
+    if (batch.Empty())
+        return;
+    if (!layerResources.atlasesCreated)
+        throw std::runtime_error("Terrain layer atlas is not initialized");
+    // 逐帧路径与加载期共用同一套 region 生成/录制逻辑；区别只在于
+    // staging 来自 ring 槽位、command buffer 属于主帧。
+    RecordTerrainLayerUploads(
+        commandBuffer,
+        layerPageManager,
+        layerResources,
+        sources,
+        batch,
+        stagingBuffer,
+        pageTableStagingOffset);
 }
 
 TerrainUploadGpuRing::TerrainUploadGpuRing(
@@ -777,6 +803,172 @@ TerrainUploadTransaction::~TerrainUploadTransaction()
         return;
     // 录制没走到 SubmitFrame 或提交抛异常：不清 dirty，只解除本批 pin。
     streaming->pageManager.AbortUploadBatch(batch);
+}
+
+TerrainLayerUploadGpuRing::TerrainLayerUploadGpuRing(
+    RendererBackendVulkan& backend,
+    const TerrainLayerPageManager& layerPageManager,
+    uint32_t maxLayerPagesPerFrame)
+    : rendererBackend(&backend)
+    , maxLayerPages(maxLayerPagesPerFrame)
+{
+    slotCount = backend.GetFrameFenceCount();
+    if (slotCount == 0)
+    {
+        throw std::runtime_error(
+            "TerrainLayerUploadGpuRing requires at least one frame fence");
+    }
+    if (maxLayerPages == 0)
+    {
+        throw std::invalid_argument(
+            "TerrainLayerUploadGpuRing requires a positive page budget");
+    }
+
+    // 一帧的页表项可能跨多个 mip；按所有 mip 页表项总数上界分配，
+    // 保证任何 dirty 子集都能一次性打包。2K/256 层约 1.4 MiB/槽。
+    vk::DeviceSize maxPageTableEntries = 0;
+    for (uint32_t mip = 0; mip <= TerrainLayerPageManager::MaxMipLevel; ++mip)
+    {
+        maxPageTableEntries += layerPageManager.VirtualPageTableSize(mip);
+    }
+    slotBytes = AlignTerrainUploadOffset(maxPageTableEntries * 16);
+
+    buffers.reserve(slotCount);
+    memories.reserve(slotCount);
+    mapped.reserve(slotCount);
+    try
+    {
+        for (uint32_t slot = 0; slot < slotCount; ++slot)
+        {
+            const std::pair<vk::Buffer, vk::DeviceMemory> created =
+                backend.CreateBuffer(
+                    slotBytes,
+                    vk::BufferUsageFlagBits::eTransferSrc,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "TerrainLayerUploadRing" + std::to_string(slot));
+            buffers.push_back(created.first);
+            memories.push_back(created.second);
+            mapped.push_back(backend.MapMemory(created.second, slotBytes));
+        }
+    }
+    catch (...)
+    {
+        for (size_t slot = 0; slot < buffers.size(); ++slot)
+        {
+            if (slot < memories.size() && slot < mapped.size() &&
+                mapped[slot] != nullptr)
+                backend.UnmapMemory(memories[slot]);
+            backend.DestroyBuffer(
+                buffers[slot],
+                slot < memories.size() ? memories[slot] : vk::DeviceMemory{});
+        }
+        buffers.clear();
+        memories.clear();
+        mapped.clear();
+        throw;
+    }
+}
+
+TerrainLayerUploadGpuRing::~TerrainLayerUploadGpuRing()
+{
+    if (rendererBackend == nullptr)
+        return;
+    for (size_t slot = 0; slot < buffers.size(); ++slot)
+    {
+        if (mapped[slot] != nullptr)
+            rendererBackend->UnmapMemory(memories[slot]);
+        rendererBackend->DestroyBuffer(buffers[slot], memories[slot]);
+    }
+}
+
+bool TerrainLayerUploadGpuRing::Fits(
+    const TerrainLayerUploadBatch& batch) const noexcept
+{
+    if (batch.uploads.size() > maxLayerPages)
+        return false;
+    return static_cast<vk::DeviceSize>(batch.pageTableUpdates.size()) * 16 <=
+        slotBytes;
+}
+
+vk::DeviceSize TerrainLayerUploadGpuRing::Write(
+    uint32_t frameIndex,
+    const TerrainLayerUploadBatch& batch)
+{
+    if (frameIndex >= slotCount)
+        throw std::out_of_range(
+            "TerrainLayerUploadGpuRing frame index is out of range");
+    if (!Fits(batch))
+        throw std::runtime_error(
+            "TerrainLayerUploadGpuRing batch exceeds the slot budget");
+    uint8_t* base = static_cast<uint8_t*>(mapped[frameIndex]);
+    for (size_t index = 0; index < batch.pageTableUpdates.size(); ++index)
+    {
+        std::memcpy(
+            base + index * 16,
+            batch.pageTableUpdates[index].entry.data(),
+            16);
+    }
+    return 0;
+}
+
+vk::Buffer TerrainLayerUploadGpuRing::Buffer(uint32_t frameIndex) const
+{
+    if (frameIndex >= slotCount)
+        throw std::out_of_range(
+            "TerrainLayerUploadGpuRing frame index is out of range");
+    return buffers[frameIndex];
+}
+
+void TerrainLayerUploadTransaction::Begin(
+    std::shared_ptr<TerrainStreamingState> streamingState,
+    TerrainLayerUploadBatch uploadBatch)
+{
+    // 与覆盖页上传相同：生产路径同一时刻只允许一个 in-flight 层页批次。
+    if (active)
+        throw std::logic_error(
+            "TerrainLayerUploadTransaction is already active");
+    streaming = std::move(streamingState);
+    batch = std::move(uploadBatch);
+    uploadedPageCount = static_cast<uint32_t>(batch.uploads.size());
+    active = !batch.Empty();
+}
+
+void TerrainLayerUploadTransaction::Commit()
+{
+    if (!active)
+        return;
+    streaming->layerPageManager.CommitUploadBatch(batch);
+    // 统计只在提交成功后累计；失败/未提交路径不虚报带宽。
+    streaming->layerUploadedPagesTotal += uploadedPageCount;
+    const TerrainLayerGpuResources& resources = streaming->layerResources;
+    const uint64_t pageBytes = EstimateTextureBytes(
+        resources.albedoFormat,
+        TerrainLayerPageManager::PageResolution,
+        TerrainLayerPageManager::PageResolution,
+        1) +
+        EstimateTextureBytes(
+            resources.normalFormat,
+            TerrainLayerPageManager::PageResolution,
+            TerrainLayerPageManager::PageResolution,
+            1) +
+        EstimateTextureBytes(
+            resources.pbrFormat,
+            TerrainLayerPageManager::PageResolution,
+            TerrainLayerPageManager::PageResolution,
+            1);
+    streaming->layerUploadedBytesTotal += uploadedPageCount * pageBytes;
+    streaming->lastLayerUploadedPages = uploadedPageCount;
+    active = false;
+    batch = TerrainLayerUploadBatch{};
+}
+
+TerrainLayerUploadTransaction::~TerrainLayerUploadTransaction()
+{
+    if (!active)
+        return;
+    // 录制没走到 SubmitFrame 或提交抛异常：不清 dirty，只解除本批 pin。
+    streaming->layerPageManager.AbortUploadBatch(batch);
 }
 
 namespace
@@ -1272,6 +1464,17 @@ void RequestAllTerrainLayerPages(
     }
 }
 
+void RequestTerrainLayerPreload(TerrainStreamingState& streamingState)
+{
+    // 对照路径：一次性请求所有层页，用来和 feedback 驱动的驻留做画面对比。
+    // 这里沿用加载期入口（不做 GPU 安全窗检查），因为命令在渲染线程帧首
+    // 消费，此刻没有进行中的层页请求；像素仍由逐帧 ring 分批上传。
+    RequestAllTerrainLayerPages(
+        streamingState,
+        streamingState.layerPageManager.LastSubmittedEpoch(),
+        streamingState.layerPageManager.FramesInFlight());
+}
+
 size_t ApplyTerrainLayerPageUploads(
     RendererBackendVulkan& rendererBackend,
     TerrainLayerPageManager& layerPageManager,
@@ -1371,7 +1574,8 @@ size_t ApplyTerrainLayerPageUploads(
                 layerResources,
                 sources,
                 batch,
-                stagingBuffer);
+                stagingBuffer,
+                0);
         }
         catch (...)
         {

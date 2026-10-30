@@ -304,6 +304,16 @@ public:
     const PageState* FindPageByVirtual(uint32_t virtualPageX, uint32_t virtualPageY) const;
     const std::vector<PageState>& Pages() const { return pages; }
 
+    // L4a：读取一个覆盖页的 top-4 层 ID/权重（RGBA8，PageResolution²）。
+    // 常驻页直接读 CPU atlas 镜像；allowRebuild=true 且页未驻留时用与
+    // RequestPage 完全相同的烘焙 kernel 临时重建，不写 atlas、不改变驻留
+    // 状态。找不到注册/计划时返回 false。
+    bool ReadPageLayers(
+        const PageKey& key,
+        bool allowRebuild,
+        std::vector<uint8_t>& ids,
+        std::vector<uint8_t>& weights) const;
+
     uint32_t ResidentCount() const { return residentCount; }
     uint64_t RequestCount() const { return stats.requestCount; }
     uint64_t PageHitCount() const { return stats.hitCount; }
@@ -376,6 +386,7 @@ private:
     void MarkAtlasPageDirty(uint32_t physicalPageX, uint32_t physicalPageY);
     PageState* FindPageByVirtualMutable(uint32_t virtualPageX, uint32_t virtualPageY);
     PageState* FindPageByPhysicalMutable(uint32_t physicalPageX, uint32_t physicalPageY);
+    const TerrainBuildPlan* FindPlan(const std::string& placementId) const;
     void CopyAtlasPage(
         uint32_t physicalPageX,
         uint32_t physicalPageY,

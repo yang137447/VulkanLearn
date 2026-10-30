@@ -349,8 +349,17 @@ so they are zeroed with a 16 KiB zero-page staging copy. L3 adds the optional sh
 page table (stride = page-table texel count / 256), physical page, and 4096² atlas with
 half-texel page inset; invalid entries use catalog row3 `avgColor`, never layer 0.
 `sourceResolution` must match the real square source extent; mode 0 only warns, mode 1
-fails at load. Mode 1 prefetches every layer page at load (672 pages for 32×512²) because
-layer-page feedback is still L4. `terrainlayerstats` reports layer residency/atlas format/bytes.
+fails at load. L4a drives mode 1 residency from the existing 128×128 coverage-page feedback:
+`TerrainLayerVisibilityResolver` (`source/terrain/terrainLayerVisibility.*`) turns each visible
+cover page's top-4 layers into (layer, mip, that mip's full page set), limited to 16
+`RequestPageAtEpoch` calls and 8 atlas-page uploads per frame through
+`TerrainLayerUploadGpuRing`; pages of a visible layer that are not sampled this frame still get
+their `lastSeenEpoch` refreshed so mip thresholds cannot thrash, and pages that leave view are
+evicted after a 180-epoch idle window plus the GPU safety window. The shader falls back to a
+coarser mip when the selected one is not resident, instead of showing `avgColor`.
+`terrainlayerstats` reports layer residency/atlas format/bytes plus visibleLayers, per-frame
+requests/uploads, pending and the mip request distribution; `terrainlayer capacity N` and
+`terrainlayer preload` (full-preload comparison, disables idle eviction) are console-only.
 CPU page baking is still
 synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
 `documents/contracts/terrain.md`.

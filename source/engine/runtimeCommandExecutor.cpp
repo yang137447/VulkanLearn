@@ -888,6 +888,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.RequestTerrainResidentCapacity(
             static_cast<uint32_t>(std::max(command.intValue, 0)));
         break;
+    case RuntimeCommandType::SetTerrainLayerResidentCapacity:
+        renderSystem.RequestTerrainLayerResidentCapacity(
+            static_cast<uint32_t>(std::max(command.intValue, 0)));
+        break;
+    case RuntimeCommandType::RequestTerrainLayerPreload:
+        renderSystem.RequestTerrainLayerPreload();
+        break;
     }
 }
 

@@ -160,8 +160,11 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   L3 已给 `M_terrain` 加 `u_terrainLayerMode`（默认 0）：mode 0 保持旧三数组
   快速路径；mode 1 走 top-4 → catalog → 每 mip 页表 → atlas 的采样，含 mip
   选择、页内半 texel inset、catalog avgColor 缺页 fallback 与 sourceResolution
-  一致性校验。默认视觉路径仍与 L1/L2 逐字节一致；mode 1 在加载期全量预取层页。
-  当前没有低分辨率 fallback/淡入、相机预取、LOD/skirt、地形碰撞/编辑。行为见
+  一致性校验，并在选中 mip 无效时回退到更粗的 mip。L4a 由
+  `source/terrain/terrainLayerVisibility.*` 把覆盖页 feedback 推导成
+  “可见层 → mip → 该 mip 全部页”，逐帧限量请求/上传/淘汰；mode 1 不再加载期
+  全量预取（`terrainlayer preload` 只作对照）。默认视觉路径仍与 L1/L2 逐字节一致。
+  当前没有低分辨率 fallback/淡入、相机/视锥预取、LOD/skirt、地形碰撞/编辑。行为见
   [terrain 契约](contracts/terrain.md)；后续计划见
   `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
 

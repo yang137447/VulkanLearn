@@ -115,6 +115,9 @@ public:
     void ReportTerrainLayerStatistics() const;
     // 预算命令由 GT 写 atomic，渲染线程帧首消费；不直接跨线程改 page manager。
     void RequestTerrainResidentCapacity(uint32_t capacity);
+    // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。
+    void RequestTerrainLayerResidentCapacity(uint32_t capacity);
+    void RequestTerrainLayerPreload();
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
@@ -400,6 +403,13 @@ private:
     void RefreshEnvironmentUpdateDiagnostics();
     void ConsumeTerrainFeedback(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        uint64_t completedEpoch,
+        uint32_t frameIndex);
+    // L4a：覆盖页 feedback -> 可见层/mip -> 层页请求与淘汰。只在 mode 1
+    // 且层页上传资源就绪时执行；mode 0 不进入本函数。
+    void ApplyTerrainLayerFeedback(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        const VL::TerrainFeedbackFrameSummary& summary,
         uint64_t completedEpoch,
         uint32_t frameIndex);
     void PrepareTerrainFeedbackPass(uint8_t frameTag);

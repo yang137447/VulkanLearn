@@ -240,28 +240,29 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     if (hasTerrainLayers && terrainStreaming->layerSources.albedo)
     {
         // L3：atlas 依赖真实 MI 的层数组，已在首个地形 MI 载入时创建；这里
-        // 只做兜底。mode 0 上传每层尾页的映射验证集合，mode 1 预取全部层页
-        // （L3 验证路径，L4 会改成 feedback）。
+        // 只做兜底。mode 0 上传每层尾页的映射验证集合；mode 1 也只请求
+        // 这个小集合，其余层页由覆盖页 feedback 逐帧驱动（L4a）。
         if (!terrainStreaming->layerResources.atlasesCreated)
         {
             CreateTerrainLayerAtlasGpuResources(
                 *rendererBackend,
                 *terrainStreaming);
         }
-        if (terrainStreaming->layerVTRequested)
+        if (terrainStreaming->layerVTRequested &&
+            !terrainStreaming->layerUploadRing)
         {
-            RequestAllTerrainLayerPages(
-                *terrainStreaming,
-                0,
-                rendererBackend->GetFrameFenceCount());
+            // 逐帧层页上传 ring：槽数 = frame fence 数，只打包页表 texel；
+            // atlas 像素走 GPU→GPU copy，不占 staging。
+            terrainStreaming->layerUploadRing =
+                std::make_shared<TerrainLayerUploadGpuRing>(
+                    *rendererBackend,
+                    terrainStreaming->layerPageManager,
+                    terrainStreaming->maxLayerPageUploadsPerFrame);
         }
-        else
-        {
-            RequestInitialTerrainLayerPages(
-                *terrainStreaming,
-                0,
-                rendererBackend->GetFrameFenceCount());
-        }
+        RequestInitialTerrainLayerPages(
+            *terrainStreaming,
+            0,
+            rendererBackend->GetFrameFenceCount());
         terrainStreaming->NotifyContentChanged();
         ApplyTerrainLayerStreamingUploads(*rendererBackend, *terrainStreaming);
     }

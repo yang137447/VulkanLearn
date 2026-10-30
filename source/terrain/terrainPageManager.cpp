@@ -244,6 +244,52 @@ const TerrainPageManager::PageState* TerrainPageManager::FindPageByVirtual(
     return nullptr;
 }
 
+const TerrainBuildPlan* TerrainPageManager::FindPlan(
+    const std::string& placementId) const
+{
+    // registrations 与 plans 在 RegisterTerrain 中同步追加，索引一一对应。
+    const size_t count = std::min(registrations.size(), plans.size());
+    for (size_t index = 0; index < count; ++index)
+    {
+        if (registrations[index].placementId == placementId)
+            return &plans[index];
+    }
+    return nullptr;
+}
+
+bool TerrainPageManager::ReadPageLayers(
+    const PageKey& key,
+    bool allowRebuild,
+    std::vector<uint8_t>& ids,
+    std::vector<uint8_t>& weights) const
+{
+    const PageState* page = FindPage(key);
+    if (page == nullptr) return false;
+    if (page->resident)
+    {
+        // 常驻页的 CPU atlas 镜像与 GPU 上传内容同源，避免再采样一次高度图。
+        CopyAtlasPage(page->physicalPageX, page->physicalPageY, idAtlas, ids);
+        CopyAtlasPage(page->physicalPageX, page->physicalPageY, weightAtlas, weights);
+        return true;
+    }
+    if (!allowRebuild) return false;
+
+    const TerrainBuildPlan* plan = FindPlan(key.placementId);
+    if (plan == nullptr) return false;
+    const size_t registrationIndex = FindRegistrationIndex(key.placementId);
+    if (registrationIndex == InvalidIndex) return false;
+    // 非驻留页只做 CPU 重建，供可见层推导使用；不改变驻留/脏状态。
+    const TerrainPageData data = TerrainWeightMapBuilder::BuildPage(
+        *plan,
+        registrations[registrationIndex].tilesPerSide,
+        PageResolution,
+        key.tileX,
+        key.tileZ);
+    ids = data.ids;
+    weights = data.weights;
+    return true;
+}
+
 TerrainPageManager::PageState* TerrainPageManager::FindPageByPhysicalMutable(
     uint32_t physicalPageX,
     uint32_t physicalPageY)

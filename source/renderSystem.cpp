@@ -1268,7 +1268,46 @@ void RenderSystem::ConsumeTerrainFeedback(
         completedEpoch,
         streaming->maxPageRequestsPerFrame,
         streaming->pendingPageRequests);
+    // L4a：同一份覆盖页 feedback 继续推导可见层/mip，驱动层页驻留。
+    ApplyTerrainLayerFeedback(streaming, *summary, completedEpoch, frameIndex);
     StoreTerrainFeedbackSummary(streaming, *summary);
+}
+
+void RenderSystem::ApplyTerrainLayerFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainFeedbackFrameSummary& summary,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return;
+    if (!streaming->layerResources.atlasesCreated ||
+        streaming->layerDefinitions.empty())
+        return;
+
+    VL::TerrainLayerVisibilityConfig config;
+    config.layerCount =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    // 三张源数组的 mip 链可能不同，只请求三张都能 copy 的级别。
+    const uint32_t sourceMipLevels = std::min(
+        {streaming->layerSources.albedoMipLevels,
+         streaming->layerSources.normalMipLevels,
+         streaming->layerSources.pbrMipLevels});
+    config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
+    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
+    config.idleEvictionEnabled =
+        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
+
+    streaming->latestLayerVisibility =
+        streaming->layerVisibilityResolver.Apply(
+            summary,
+            streaming->pageManager,
+            streaming->layerPageManager,
+            streaming->pendingLayerPageRequests,
+            frameIndex,
+            completedEpoch,
+            config);
 }
 
 void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
@@ -1395,6 +1434,47 @@ void RenderSystem::RequestTerrainResidentCapacity(uint32_t capacity)
         << capacity << std::endl;
 }
 
+void RenderSystem::RequestTerrainLayerResidentCapacity(uint32_t capacity)
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    streaming->requestedLayerResidentCapacity.store(
+        capacity, std::memory_order_relaxed);
+    // 设置预算意味着回到 streaming 语义：重新启用 idle 淘汰。
+    streaming->layerIdleEvictionEnabled.store(true, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Resident capacity request queued: "
+        << capacity << std::endl;
+}
+
+void RenderSystem::RequestTerrainLayerPreload()
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    // 对照路径：请求全部层页；像素仍由逐帧上传 ring 分批写进 atlas。
+    streaming->requestedLayerPreload.store(true, std::memory_order_relaxed);
+    // 关闭 idle 淘汰，否则非可见层会在 3 秒后被清掉，失去对照意义。
+    streaming->layerIdleEvictionEnabled.store(false, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Full layer preload request queued "
+        << "(idle eviction disabled until 'terrainlayer capacity N')."
+        << std::endl;
+}
+
 void RenderSystem::PublishTerrainStreamingStats(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming,
     uint64_t completedEpoch)
@@ -1426,6 +1506,9 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.lastFeedbackApply = streaming->latestFeedbackApply;
     // L2 层页：与覆盖页完全独立的一组驻留/上传计数。
     VL::TerrainLayerPageManager& layerPages = streaming->layerPageManager;
+    // 与覆盖页一致：统计必须反映当前 completedEpoch，而不是等下次分配
+    // 才惰性回收隔离槽位。
+    layerPages.ReclaimExpiredQuarantines(completedEpoch);
     const VL::TerrainLayerPageManager::Stats layerStats =
         layerPages.SnapshotStats();
     stats.layerResidentPages = layerStats.residentPageCount;
@@ -1440,6 +1523,16 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.layerEvictionCount = layerStats.evictionCount;
     stats.layerUploadedPagesTotal = streaming->layerUploadedPagesTotal;
     stats.layerUploadedBytesTotal = streaming->layerUploadedBytesTotal;
+    // L4a：可见层推导与逐帧预算的实时值。
+    stats.layerVisibleLayers =
+        streaming->latestLayerVisibility.visibleLayers;
+    stats.layerLastRequestedPages =
+        streaming->latestLayerVisibility.acceptedRequests;
+    stats.layerPendingRequests =
+        streaming->latestLayerVisibility.pendingRequests;
+    stats.layerMipRequestCounts =
+        streaming->latestLayerVisibility.mipRequestCounts;
+    stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
     stats.layerDirtyPages = layerPages.DirtyPageCount();
     stats.layerDirtyPageTableEntries =
         layerPages.DirtyPageTableEntryCount();
@@ -1452,6 +1545,7 @@ void RenderSystem::PublishTerrainStreamingStats(
     streaming->PublishStats(stats);
     // 本帧上传数只显示一帧；累计值继续保留。
     streaming->lastUploadedPages = 0;
+    streaming->lastLayerUploadedPages = 0;
 }
 
 void RenderSystem::ReportTerrainStatistics() const
@@ -1526,6 +1620,21 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " dirtyPages=" << stats.layerDirtyPages
         << " dirtyPageTable=" << stats.layerDirtyPageTableEntries
         << std::endl;
+    // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
+    std::cout
+        << "[TerrainLayer] visibleLayers=" << stats.layerVisibleLayers
+        << " requestedLast=" << stats.layerLastRequestedPages
+        << " uploadedLast=" << stats.layerLastUploadedPages
+        << " pending=" << stats.layerPendingRequests
+        << " mipRequests=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerMipRequestCounts[mip];
+    }
+    std::cout << std::endl;
     std::cout
         << "[TerrainLayer] atlasReady=" << (stats.layerAtlasReady ? 1 : 0)
         << " slices=" << stats.layerAtlasSlices
@@ -3459,12 +3568,34 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 terrainFeedbackStreaming->pageManager.ResidentCapacity(),
                 frameContext.completedEpoch);
         }
+
+        // L4a 层页预算/命令：与覆盖页相同，只在渲染线程消费 atomic。
+        const uint32_t requestedLayerCapacity =
+            terrainFeedbackStreaming->requestedLayerResidentCapacity.exchange(
+                0, std::memory_order_relaxed);
+        if (requestedLayerCapacity != 0)
+        {
+            terrainFeedbackStreaming->layerPageManager
+                .SetResidentCapacityAtEpoch(
+                    requestedLayerCapacity, frameContext.completedEpoch);
+        }
+        if (terrainFeedbackStreaming->requestedLayerPreload.exchange(
+                false, std::memory_order_relaxed))
+        {
+            VL::RequestTerrainLayerPreload(*terrainFeedbackStreaming);
+        }
     }
     // epoch 上下文必须先于 ApplyFeedback：ApplyFeedback 内新驻留的页要用
     // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
     if (terrainFeedbackStreaming)
     {
         terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+        // 层页页表/atlas 的物理槽位复用也走同一安全窗；feedback 命中与
+        // RequestPageAtEpoch 都在本函数之后发生。
+        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
             feedbackSubmittedEpoch,
             terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
             rendererBackend->GetFrameFenceCount());
@@ -3482,12 +3613,17 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             feedbackSubmittedEpoch,
             terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
             rendererBackend->GetFrameFenceCount());
+        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
     }
     const uint8_t feedbackFrameTag =
         VL::TerrainFeedbackFrameTagForEpoch(feedbackSubmittedEpoch);
     // 本帧上传事务：只有 SubmitFrame 成功后才 Commit；任何提前返回/异常
     // 都会在析构里 Abort，保留 dirty 与 pin，避免 GPU 与 CPU 内容错位。
     VL::TerrainUploadTransaction terrainUploadTransaction;
+    VL::TerrainLayerUploadTransaction terrainLayerUploadTransaction;
     uint32_t terrainUploadPageCount = 0;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport
@@ -3564,6 +3700,46 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                     // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
                     terrainFeedbackStreaming->pageManager.AbortUploadBatch(
                         uploadBatch);
+                    throw;
+                }
+            }
+        }
+
+        // L4a：层页上传与覆盖页上传同一时机（scene pass 之前）。页表 texel
+        // 走 staging ring；albedo/normal/pbr atlas 是 GPU→GPU copy，不需要
+        // staging。剩余 dirty 页下一帧继续，Commit 在 SubmitFrame 之后。
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->layerVTRequested &&
+            terrainFeedbackStreaming->layerUploadRing)
+        {
+            VL::TerrainLayerUploadBatch layerBatch =
+                terrainFeedbackStreaming->layerPageManager.BuildUploadBatch(
+                    terrainFeedbackStreaming->maxLayerPageUploadsPerFrame);
+            if (!layerBatch.Empty())
+            {
+                try
+                {
+                    const vk::DeviceSize stagingOffset =
+                        terrainFeedbackStreaming->layerUploadRing->Write(
+                            frameIndex, layerBatch);
+                    VL::RecordTerrainLayerPageUploads(
+                        commandBuffer,
+                        terrainFeedbackStreaming->layerPageManager,
+                        terrainFeedbackStreaming->layerResources,
+                        terrainFeedbackStreaming->layerSources,
+                        layerBatch,
+                        terrainFeedbackStreaming->layerUploadRing->Buffer(
+                            frameIndex),
+                        stagingOffset);
+                    terrainLayerUploadTransaction.Begin(
+                        terrainFeedbackStreaming,
+                        std::move(layerBatch));
+                }
+                catch (...)
+                {
+                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
+                    terrainFeedbackStreaming->layerPageManager
+                        .AbortUploadBatch(layerBatch);
                     throw;
                 }
             }
@@ -3706,6 +3882,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     rendererBackend->SubmitFrame(frameContext, currentFrame);
     // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
     terrainUploadTransaction.Commit();
+    terrainLayerUploadTransaction.Commit();
     if (terrainFeedbackStreaming)
     {
         terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;

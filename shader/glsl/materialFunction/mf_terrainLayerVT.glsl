@@ -10,8 +10,8 @@
 //   row1 = noise/blendEdge/uvScale/uvRotation（L2 之前已有）
 //   row2 = pagesPerSide(mip0)/pageTableBase/sourceSet/flags
 //   row3 = avgColor.rgb/reserved
-// 所有页表/atlas 都是 L2 在 World 级创建的共享资源；本文件不接 L4 feedback，
-// 页驻留仍由加载期请求决定。
+// 所有页表/atlas 都是 L2 在 World 级创建的共享资源。L4a 起页驻留由覆盖页
+// feedback 逐帧驱动，本文件在选中 mip 缺页时回退到更粗的 mip。
 const int TERRAIN_VT_MAX_LAYERS = 256;
 const int TERRAIN_VT_MAX_MIP = 4;
 
@@ -124,30 +124,51 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
             int(floor(lod + 0.5)),
             0,
             maxMip);
-        if (slot == 0)
-            result.debugMip = float(mip);
-
         // 层纹理是 repeat 平铺：先 fract 到 [0,1)，再按该 mip 的页数切页。
         // side 与 CPU 的 TerrainLayerPagesPerSide(sourceResolution, mip) 一致。
-        const int side = TerrainLayerPagesPerSideAtMip(pagesPerSide, mip);
-        const vec2 scaledUv = fract(layerUv) * float(side);
-        const ivec2 pageXY = clamp(
+        // 虚拟页 = layerId * stride(mip) + pageY * side + pageX；页表大小正好是
+        // stride(mip) * 256（最大层数），因此 texel 总数 / 256 就是 CPU stride。
+        int usedMip = mip;
+        int side = TerrainLayerPagesPerSideAtMip(pagesPerSide, usedMip);
+        vec2 scaledUv = fract(layerUv) * float(side);
+        ivec2 pageXY = clamp(
             ivec2(floor(scaledUv)),
             ivec2(0),
             ivec2(side - 1));
-        const vec2 localUv = fract(scaledUv);
-
-        // 虚拟页 = layerId * stride(mip) + pageY * side + pageX。
-        // 页表大小正好是 stride(mip) * 256（最大层数），因此不需要额外
-        // stride uniform：texel 总数 / 256 就是 CPU 的 layerMipStride。
-        const ivec2 tableSize = TerrainLayerPageTableSize(mip);
-        const int perLayerStride =
+        vec2 localUv = fract(scaledUv);
+        ivec2 tableSize = TerrainLayerPageTableSize(usedMip);
+        int perLayerStride =
             (tableSize.x * tableSize.y) / TERRAIN_VT_MAX_LAYERS;
-        const int virtualPage =
+        int virtualPage =
             layer * perLayerStride + pageXY.y * side + pageXY.x;
-        const vec4 entry = TerrainLayerPageTableFetch(
-            mip,
+        vec4 entry = TerrainLayerPageTableFetch(
+            usedMip,
             ivec2(virtualPage % tableSize.x, virtualPage / tableSize.x));
+        // L4a：层页按 mip 逐帧收敛，更细的 mip 可能尚未驻留。此时回退到
+        // 更粗的 mip（同一层的页表项有效），而不是直接把整页显示成 avgColor。
+        for (int coarser = mip + 1;
+             coarser <= maxMip && entry.b < 0.5;
+             ++coarser)
+        {
+            usedMip = coarser;
+            side = TerrainLayerPagesPerSideAtMip(pagesPerSide, usedMip);
+            scaledUv = fract(layerUv) * float(side);
+            pageXY = clamp(
+                ivec2(floor(scaledUv)),
+                ivec2(0),
+                ivec2(side - 1));
+            localUv = fract(scaledUv);
+            tableSize = TerrainLayerPageTableSize(usedMip);
+            perLayerStride =
+                (tableSize.x * tableSize.y) / TERRAIN_VT_MAX_LAYERS;
+            virtualPage =
+                layer * perLayerStride + pageXY.y * side + pageXY.x;
+            entry = TerrainLayerPageTableFetch(
+                usedMip,
+                ivec2(virtualPage % tableSize.x, virtualPage / tableSize.x));
+        }
+        if (slot == 0)
+            result.debugMip = float(usedMip);
 
         vec4 albedoLayer;
         vec4 pbrLayer;

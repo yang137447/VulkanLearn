@@ -670,20 +670,57 @@ void DebugConsole::ProcessCommand(const std::string& line)
 
     if (command == "terrainlayerstats" || command == "terrainlayer")
     {
-        // L2 只读诊断：层页驻留/上传计数与 atlas 格式/估算字节。
+        // L2/L4a：stats 只读；capacity 排队层页预算；preload 是 feedback
+        // 驱动驻留的全量对照路径。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.sourceText = line;
         if (command == "terrainlayer")
         {
             std::string action;
-            if (!(commandStream >> action) || action != "stats")
+            if (!(commandStream >> action))
             {
-                std::cout << "Usage: terrainlayerstats" << std::endl;
+                std::cout
+                    << "Usage: terrainlayer <stats|capacity N|preload>"
+                    << std::endl;
+                return;
+            }
+            if (action == "stats")
+            {
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::ReportTerrainLayerStatistics;
+            }
+            else if (action == "preload")
+            {
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::RequestTerrainLayerPreload;
+            }
+            else if (action == "capacity")
+            {
+                int capacity = 0;
+                if (!(commandStream >> capacity) || capacity <= 0)
+                {
+                    std::cout
+                        << "Usage: terrainlayer capacity <positive page count>"
+                        << std::endl;
+                    return;
+                }
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::SetTerrainLayerResidentCapacity;
+                runtimeCommand.intValue = capacity;
+            }
+            else
+            {
+                std::cout
+                    << "Usage: terrainlayer <stats|capacity N|preload>"
+                    << std::endl;
                 return;
             }
         }
-        VL::RuntimeCommand runtimeCommand;
-        runtimeCommand.type =
-            VL::RuntimeCommandType::ReportTerrainLayerStatistics;
-        runtimeCommand.sourceText = line;
+        else
+        {
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportTerrainLayerStatistics;
+        }
         commandBus.Queue(std::move(runtimeCommand));
         return;
     }
@@ -765,6 +802,9 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrain capacity N - set resident page budget for the active World\n";
     std::cout << "  terrainfeedback - report completed terrain feedback page statistics (read-only)\n";
     std::cout << "  terrainlayerstats - report layer-page atlas residency/format statistics\n";
+    std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
+    std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
+    std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

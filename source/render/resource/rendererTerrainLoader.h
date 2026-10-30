@@ -14,6 +14,7 @@
 #include "scene/sceneAssetTypes.h"
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerPageManager.h"
+#include "terrain/terrainLayerVisibility.h"
 #include "terrain/terrainPageManager.h"
 
 class PipelineFactory;
@@ -126,6 +127,42 @@ private:
     std::vector<void*> mapped;
 };
 
+// L4a：层页每帧上传 ring。层页上传只需要页表 texel 走 staging；atlas 像素
+// 是 GPU→GPU copy，不占 staging。槽数等于 frame fence 数，常驻映射。
+class TerrainLayerUploadGpuRing
+{
+public:
+    TerrainLayerUploadGpuRing(
+        RendererBackendVulkan& rendererBackend,
+        const TerrainLayerPageManager& layerPageManager,
+        uint32_t maxLayerPagesPerFrame);
+    ~TerrainLayerUploadGpuRing();
+
+    TerrainLayerUploadGpuRing(const TerrainLayerUploadGpuRing&) = delete;
+    TerrainLayerUploadGpuRing& operator=(const TerrainLayerUploadGpuRing&) =
+        delete;
+
+    uint32_t SlotCount() const noexcept { return slotCount; }
+    uint32_t MaxLayerPages() const noexcept { return maxLayerPages; }
+    bool Fits(const TerrainLayerUploadBatch& batch) const noexcept;
+
+    // 把本批全部页表项（16 B/项）打包进该 frameIndex 的槽位，返回 base offset。
+    // 调用方保证该槽的 fence 已在 BeginFrame 等待过。
+    vk::DeviceSize Write(
+        uint32_t frameIndex,
+        const TerrainLayerUploadBatch& batch);
+    vk::Buffer Buffer(uint32_t frameIndex) const;
+
+private:
+    RendererBackendVulkan* rendererBackend = nullptr;
+    uint32_t slotCount = 0;
+    uint32_t maxLayerPages = 0;
+    vk::DeviceSize slotBytes = 0;
+    std::vector<vk::Buffer> buffers;
+    std::vector<vk::DeviceMemory> memories;
+    std::vector<void*> mapped;
+};
+
 struct TerrainStreamingStats
 {
     uint32_t residentPages = 0;
@@ -156,6 +193,12 @@ struct TerrainStreamingStats
     uint64_t layerEvictionCount = 0;
     uint64_t layerUploadedPagesTotal = 0;
     uint64_t layerUploadedBytesTotal = 0;
+    // L4a：可见层推导与逐帧预算的实时值。
+    uint32_t layerVisibleLayers = 0;
+    uint32_t layerLastRequestedPages = 0;
+    uint32_t layerLastUploadedPages = 0;
+    uint32_t layerPendingRequests = 0;
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerMipRequestCounts{};
     uint32_t layerDirtyPages = 0;
     uint32_t layerDirtyPageTableEntries = 0;
     uint32_t layerAtlasSlices = 0;
@@ -181,8 +224,24 @@ struct TerrainStreamingState
     TerrainLayerSourceTextures layerSources;
     TerrainLayerGpuResources layerResources;
     // 任一 layer-table MI 把 u_terrainLayerMode 设为 1 时置位；加载期据此
-    // 预取全部层页（L3 验证路径）。L4 feedback 接入后由驻留策略替代。
+    // 建立反馈驱动的驻留策略（L4a）。mode 0 不会创建层页上传 ring。
     bool layerVTRequested = false;
+    // L4a：覆盖页 feedback -> 可见层 -> mip -> 层页请求。pending 跨帧保留，
+    // 失败项下一帧按 priority/deferred 重新排序后重试。
+    TerrainLayerVisibilityResolver layerVisibilityResolver;
+    std::vector<TerrainLayerPageRequest> pendingLayerPageRequests;
+    std::shared_ptr<TerrainLayerUploadGpuRing> layerUploadRing;
+    // 最近一帧的可见层推导统计，由渲染线程写、PublishStats 复制。
+    TerrainLayerVisibilityStats latestLayerVisibility;
+    uint32_t maxLayerPageRequestsPerFrame = 16;
+    uint32_t maxLayerPageUploadsPerFrame = 8;
+    uint64_t layerIdleEvictionEpochs = 180;
+    // `terrainlayer preload` 的对照路径关闭 idle 淘汰；`terrainlayer capacity`
+    // 重新打开，恢复 feedback 驱动的驻留语义。
+    std::atomic<bool> layerIdleEvictionEnabled{true};
+    // Console 排队、渲染线程帧首消费的层页预算。
+    std::atomic<uint32_t> requestedLayerResidentCapacity{0};
+    std::atomic<bool> requestedLayerPreload{false};
     // P2/P3 feedback 回读 ring：World-local，随 package 退休；P3 起其 summary
     // 经 ApplyFeedback 驱动命中/miss/RequestPageAtEpoch。
     std::shared_ptr<TerrainFeedbackGpuRing> feedbackRing;
@@ -205,6 +264,8 @@ struct TerrainStreamingState
     uint32_t lastUploadedPages = 0;
     uint64_t layerUploadedPagesTotal = 0;
     uint64_t layerUploadedBytesTotal = 0;
+    // 本帧成功 Commit 的层页数；PublishStats 后清零，只显示一帧。
+    uint32_t lastLayerUploadedPages = 0;
     uint32_t maxPageRequestsPerFrame =
         TerrainPageManager::MaxPageRequestsPerFrame;
     uint32_t maxUploadPagesPerFrame =
@@ -272,6 +333,25 @@ private:
     bool active = false;
 };
 
+// L4a：层页上传事务，语义与 TerrainUploadTransaction 相同，但提交到
+// TerrainLayerPageManager，并累计层页上传统计。
+class TerrainLayerUploadTransaction
+{
+public:
+    void Begin(
+        std::shared_ptr<TerrainStreamingState> streamingState,
+        TerrainLayerUploadBatch batch);
+    void Commit();
+    bool Active() const noexcept { return active; }
+    ~TerrainLayerUploadTransaction();
+
+private:
+    std::shared_ptr<TerrainStreamingState> streaming;
+    TerrainLayerUploadBatch batch;
+    uint32_t uploadedPageCount = 0;
+    bool active = false;
+};
+
 // page table 始终创建（即使 World 没有地形），feedback pass 的
 // worldTexture 输入需要一张稳定的 32×32 零页表。
 std::shared_ptr<Texture> CreateTerrainPageTableGpuResource(
@@ -304,11 +384,15 @@ void RequestInitialTerrainLayerPages(
     uint32_t framesInFlight);
 
 // L3 的 VT 验证路径：每层每个 mip 的全部页一次性请求。没有 feedback 驱动，
-// 因此加载期必须建立完整映射；L4 会用驻留策略替代。
+// 因此加载期必须建立完整映射。L4a 起只保留 debug console 的对照入口。
 void RequestAllTerrainLayerPages(
     TerrainStreamingState& streamingState,
     uint64_t completedEpoch,
     uint32_t framesInFlight);
+
+// L4a：debug console `terrainlayer preload` 的对照入口。请求不受每帧预算
+// 限制；像素仍由逐帧上传 ring 分批写进 atlas，不回到加载期一次 submit。
+void RequestTerrainLayerPreload(TerrainStreamingState& streamingState);
 
 // 同步版：BuildUploadBatch -> 页表 staging -> 页表 copy + 源->atlas copy
 // 全部录制进同一个 command buffer，一次 submit + wait 后 Commit。
@@ -342,6 +426,18 @@ void RecordTerrainPageUploads(
     const TerrainUploadBatch& batch,
     vk::Buffer stagingBuffer,
     const TerrainUploadStagingOffsets& stagingOffsets);
+
+// L4a：只录制层页上传（页表 + 三张 atlas 的 GPU→GPU copy），不 submit。
+// 调用方负责 staging 内容已填充并存活到提交后；本函数会在页表写入前后
+// 各做一次 layout 往返（ShaderReadOnly → TransferDst → ShaderReadOnly）。
+void RecordTerrainLayerPageUploads(
+    vk::CommandBuffer commandBuffer,
+    TerrainLayerPageManager& layerPageManager,
+    TerrainLayerGpuResources& layerResources,
+    const TerrainLayerSourceTextures& sources,
+    const TerrainLayerUploadBatch& batch,
+    vk::Buffer stagingBuffer,
+    vk::DeviceSize pageTableStagingOffset);
 
 // 加载期同步上传入口：上传成功后把 streaming state 的 uploadedRevision
 // 推进到本次内容版本；失败时保持 pending，便于下次整批重试。

@@ -364,8 +364,8 @@ L2 **没有**实现：shader 的层 VT 采样（由 L3 补齐）、层页 feedba
 ## 层纹理 VT 采样（L3）
 
 L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍走旧数组路径，
-1 走 `top-4 ID → catalog → 每 mip 页表 → 物理页 → atlas`。这是可选的正确性/可视化
-路径，不是 L4 的 feedback 驻留策略。
+1 走 `top-4 ID → catalog → 每 mip 页表 → 物理页 → atlas`。L4a 起 mode 1 的页驻留
+由覆盖页 feedback 驱动（见下一节）；L3 的加载期全量预取只保留为调试对照命令。
 
 - 材质 schema：`M_terrain.json` 保留 `layerTable` 与旧
   `layerAlbedo/layerNormal/layerPbr`，新增 `layerPageTable0..4`（`sampler2D`）、
@@ -409,10 +409,64 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
   的真实边长，且三张源图必须是同尺寸正方形。默认 mode 0 下不一致只打印一次
   warning（现有 B32/M3 的 32² 资产就是这种情况）；若 MI 设置
   `u_terrainLayerMode=1`，加载期直接抛错并指出 TR 路径，禁止把 32² 当成 1K 采样。
-- L3 验证路径没有 L4 feedback：当任一 MI 请求 mode 1 时，加载期
-  `RequestAllTerrainLayerPages` 会请求每层每个 mip 的全部页，并把层页容量提升到
-  `min(可用物理页, max(总页数, 默认 512))`，随后一次 `ApplyTerrainLayerStreamingUploads`
-  上传。mode 0 仍只请求每层尾页。全量预取是 L3 的验证行为，不是生产 streaming 策略。
+- mode 1 的加载期只请求每层尾页（与 mode 0 相同的初始集合），随后由覆盖页
+  feedback 逐帧请求；`terrainlayer preload` 仍可显式请求每层每个 mip 的全部页，
+  作为与 L3 全量预取基线对照的调试路径。
+
+## 层页 feedback 驱动驻留（L4a）
+
+L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime test flag。
+可见层推导是纯 CPU 的 `TerrainLayerVisibilityResolver`
+（`source/terrain/terrainLayerVisibility.*`）：
+
+- 对每个有效覆盖页记录，`TerrainPageManager::FindPageByVirtual` 找到 placement/tile；
+  未注册虚拟页跳过并计入 `skippedCoverPages`。
+- 覆盖页的 top-4 ID/权重来自 `TerrainPageManager::ReadPageLayers`：常驻页直接读
+  CPU atlas 镜像；非驻留页用同一 `TerrainWeightMapBuilder::BuildPage` kernel 临时
+  重建（不写 atlas、不改变驻留状态）。重建每帧最多
+  `maxCoverPageRebuildsPerFrame`（默认 4）张，其余下一帧再试。
+- 每个 texel 的 4 个槽位按层号累加权重并除以 texel 数，得到该层的页内平均覆盖率；
+  低于 `minLayerWeight`（0.05）的层丢弃，最多保留覆盖率最高的 4 层。
+- 一个覆盖页的层集合按 `(placementId, tileX, tileZ)` 缓存——地形内容静态，同一页
+  只需烘焙/统计一次；缓存上限是 World 的虚拟页数。
+- mip 规则：覆盖页 `priority` 是“每页占多少屏幕像素”的对数压缩，越高越近。
+  `>=192 → mip0`、`>=128 → mip1`、`>=64 → mip2`、其余 `mip3`，再按该层
+  `TerrainLayerMipCount(sourceResolution)` 与三张源数组的最小 mip 数 clamp。
+- 层纹理是平铺资产，选定 mip 后必须请求该 mip 的**全部**页
+  （512² mip0 = 4×4 = 16 页）；否则 shader 的 UV 采样会落到未请求页。
+  同一（layer, mip, page）在多个覆盖页重复出现时按最大 priority 去重。
+- 层页 priority = 覆盖页 priority × `(0.5 + 0.5 × 层覆盖率)`，压回 0..255；
+  大面积近景层优先驻留。
+- 每帧最多 `maxLayerPageRequestsPerFrame`（16）个 `RequestPageAtEpoch`；失败项进入
+  跨帧 `pendingLayerPageRequests`，按 priority 降序、同优先级按 `deferredRequestCount`
+  轮转，不会丢失。
+- 已驻留页每帧 `MarkPageUsedAtEpoch` 推进 `lastSeenEpoch`/`lastTouchedEpoch`。可见层的
+  **所有已驻留 mip** 也会续命：priority 在 mip 阈值附近抖动时，避免相邻 mip 被
+  反复淘汰/重烘焙。
+- 淘汰：`idleEvictionEpochs`（默认 180 epoch）之外未再被看到的层页在
+  `EvictPage` 前先过 `CanEvictPageAt`（GPU 安全窗）；随后若
+  `ResidentCount() > ResidentCapacity()` 再做 epoch-aware LRU 淘汰。
+  与覆盖页一致：可见页都还在安全窗内时允许暂时超过预算，不会为了立刻回到预算
+  制造可见空洞。`terrainlayer preload` 会关闭 idle 淘汰，`terrainlayer capacity N`
+  重新打开。
+- 逐帧上传：`TerrainLayerUploadGpuRing`（`source/render/resource/rendererTerrainLoader.*`）
+  槽数 = frame fence 数，host-visible/coherent、常驻映射、预分配，只打包页表 texel
+  （16 B/项，容量按所有 mip 页表项总数上界）。`RenderSystem` 在 scene pass 之前
+  `BuildUploadBatch(maxLayerPageUploadsPerFrame)`（默认 8 页）→ 写入当前槽位 →
+  `RecordTerrainLayerPageUploads` 把页表 copy 与三张 atlas 的 GPU→GPU copy 录制进
+  主帧 command buffer；`SubmitFrame` 成功后 `TerrainLayerUploadTransaction::Commit`，
+  异常/未提交由析构 `Abort` 保留 dirty 与 pin。不使用 `device.waitIdle()`，
+  不每帧创建/销毁 buffer。
+- 加载期同步入口 `ApplyTerrainLayerPageUploads` 仍保留给初始小集合与测试；它和逐帧
+  路径共用同一套 region 生成与记录函数。
+- 页表失效项与截断不变量沿用 L2：`maxPages` 截断时，指向被截断物理槽位的有效页表项
+  一起延后，GPU 页表不会指向尚未上传的 atlas 页。
+- shader 侧：选中 mip 的页表项无效时，`mf_terrainLayerVT.glsl` 会向更粗的 mip
+  回退（最多到该层 `maxMip`），用第一条有效映射采样；全部无效才使用 catalog
+  `avgColor`。这样逐帧收敛期间只是分辨率暂时偏低，不会整页变平均色。
+- `terrainlayerstats` 增加 `visibleLayers`、本帧 `requestedLast`/`uploadedLast`、
+  `pending` 与 mip0..4 的请求分布；`terrainlayer capacity N` / `terrainlayer preload`
+  都由 Console 写 atomic/flag，渲染线程帧首消费。
 
 ## Feedback pass（P2/P3）
 
@@ -473,9 +527,11 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   `terrain capacity N` 只把预算写入 streaming state 的 atomic，由渲染线程在帧首消费；
   它不在 Console/GT 线程直接修改 page manager。
 
-P3/P3.1/L1/L2/L3 **没有**实现：低分辨率 fallback/淡入、相机预取、LOD/skirt、
-地形 chunk 卸载、层页 feedback 驱动的驻留（L4；L3 只有加载期全量预取）、
-同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、地形碰撞/编辑。
+P3/P3.1/L1/L2/L3/L4a **没有**实现：低分辨率 fallback/淡入、相机/视锥预取、
+逐页层 feedback（L4b：当前只按覆盖页推导可见层，没有层号+mip 的专用 feedback）、
+硬预算淘汰（可见 working set 大于预算时允许暂时超预算）、
+同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、LOD/skirt、
+地形 chunk 卸载、地形碰撞/编辑。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
 每帧 8 页是数量预算，不是时间预算，重载/快速移动时单帧仍可能出现烘焙耗时峰值。
 
@@ -556,3 +612,18 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `materialUsesLayerTable && TerrainUsesVirtualPages` 的四组合 eligibility 纯函数；
   layerless 地形与分层地形同 World 时只计入 unregistered、不污染页驻留；
   网格最后列/行半 texel 内缩；编译器拒绝非 D32 feedback 深度。
+- L4a：`tool/terrain-tests/terrainLayerVisibilityTests.cpp` 覆盖 priority→mip 阶梯、
+  覆盖页 top-4→可见层、每个可见层请求该 mip 全部页、未注册页跳过、跨覆盖页去重、
+  每帧请求预算与 deferred 轮转收敛、层 mip 链/源数组 mip 钳制、layerCount 越界跳过、
+  常驻覆盖页不重建、离开视野后 idle 淘汰。逐帧上传 ring 复用 L2 已有的
+  Commit/Abort、失效项与 `maxPages` 截断测试。
+- L4a 冒烟：`SC_terrain_vt_mode1.json` 稳定后 `terrainlayerstats` 报告
+  `resident≈248–268/512`、`visibleLayers=12`、`pending=0`、`dirtyPages=0`、
+  `quarantined=0`，只有启动期少量 `evictions`；`terrainlayer preload` 后
+  `resident=672/672`，与 L3 全量预取集合一致。两张截图对比 L3 基线
+  `l3_final_mode1.bmp`：流式状态平均通道差 0.167、0.79% 像素 >8、最大 34；
+  全量预取状态最大差 1（只剩 UI 文本），说明流式差异来自 mip/过滤，不是页号错位。
+- L4a mode 0 回归：`SC_terrain_b32.json`、`SC_terrain_m3.json`、
+  `SC_terrain_b32_bc7.json` 截图仍与 L2/L3 基线逐字节一致
+  （`1D30D8…3F54` / `0E5D5F…BAAE` / `C3E77E…2BDB`），stderr 为空且无
+  Vulkan validation error。
