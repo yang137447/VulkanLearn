@@ -3,6 +3,7 @@ add_library(vl_animation_assets STATIC
     animationSkeleton.cpp
     animationSequenceData.cpp
     animationMontage.cpp
+    animationRetarget.cpp
     animationScriptData.cpp
     skeletalPlayback.cpp
     inertialization.cpp

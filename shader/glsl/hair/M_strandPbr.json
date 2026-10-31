@@ -1,0 +1,43 @@
+{
+    "name": "M_strandPbr",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {"renderMode": "TransparentAlphaBlendWriteDepth", "cullMode": "None"},
+    "macros": {"VL_TRESSFX_STRANDS": 1},
+    "parameters": {
+        "u_edgeFeather": {
+            "type": "float",
+            "default": 0.15,
+            "description": "ribbon 两侧各自的 UV1 渐隐宽度，0 为硬边；沿用随机覆盖预览",
+            "range": {"min": 0, "max": 0.5}
+        },
+        "u_roughness": {
+            "type": "float",
+            "default": 0.45,
+            "description": "DefaultLit 的感知粗糙度；简单 PBR 预览，不代表发丝散射模型",
+            "range": {"min": 0, "max": 1}
+        },
+        "u_specular": {
+            "type": "float",
+            "default": 0.5,
+            "description": "非金属 DefaultLit 镜面量，F0 = 0.08 * specular",
+            "range": {"min": 0, "max": 1}
+        },
+        "u_tintColor": {
+            "type": "color",
+            "default": [0.055, 0.025, 0.012, 1.0],
+            "description": "作者指定的线性底色与覆盖率，不解释源 TFX 顶点色的颜色空间",
+            "channels": {
+                "x": {"name": "red", "description": "线性红色底色", "range": {"min": 0, "max": 1}},
+                "y": {"name": "green", "description": "线性绿色底色", "range": {"min": 0, "max": 1}},
+                "z": {"name": "blue", "description": "线性蓝色底色", "range": {"min": 0, "max": 1}},
+                "w": {"name": "opacity", "description": "随机覆盖保留概率，保留样本由 Base Pass 统一写 alpha=1", "range": {"min": 0, "max": 1}}
+            }
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "hair/M_strandPbr.vertex.glsl",
+        "surface": "hair/M_strandPbr.surface.glsl"
+    }
+}

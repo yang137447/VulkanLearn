@@ -70,7 +70,14 @@ public:
         uint32_t swapChainImageIndex,
         RendererObjectGpuResources& objectResources,
         const RenderDrawPacket& drawPacket,
-        const SpeedTreeWindStateGPU* speedTreeWindState);
+        const SpeedTreeWindStateGPU* speedTreeWindState,
+        bool uploadSkinPalette = true);
+    // GPU 预蒙皮帧前上传：只写 current/previous palette，不碰对象 UBO。
+    // 必须在 pre-skin compute dispatch 之前、且在本帧所有 draw 之前调用。
+    void UpdateObjectSkinPalette(
+        uint32_t swapChainImageIndex,
+        RendererObjectGpuResources& objectResources,
+        const RenderDrawPacket& drawPacket);
 
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
@@ -88,6 +95,10 @@ private:
         RendererBackendVulkan& rendererBackend);
     void CreateLightBuffer(size_t requestedLightCount, RendererBackendVulkan& rendererBackend);
     void DestroyLightBuffer(RendererBackendVulkan& rendererBackend);
+    void WriteObjectSkinPalette(
+        uint32_t swapChainImageIndex,
+        RendererObjectGpuResources& objectResources,
+        const RenderDrawPacket& drawPacket);
 
     Buffer globalUniformBuffer;
     Buffer lightBuffer;

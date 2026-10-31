@@ -46,7 +46,9 @@ public:
     void Shutdown() noexcept;
 
     // 在固定的 UI/game-thread 边界执行本帧命令，并更新只读面板快照。
-    void Tick();
+    // 返回本帧是否执行过编辑器命令：UiSubsystem 据此对面板数据做一次强制刷新，
+    // 使保存/撤销/参数编辑的回馈不必等待 10 Hz 节拍。
+    bool Tick();
 
     // World 换代不关闭 Asset Document；当前 preview adapter 未接入时只更新诊断。
     // WorldHandle 的 generation 是唯一权威代际；path 仅用于同代诊断和定位。

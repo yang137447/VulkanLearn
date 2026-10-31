@@ -16,6 +16,9 @@ struct WorldSnapshotBuildDesc
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    float simulationDeltaSeconds = 0.0f;
+    float gameSimulationDeltaSeconds = 0.0f;
+    float hairSimulationDeltaSeconds = 0.0f;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     bool hasSelectedDraw = false;

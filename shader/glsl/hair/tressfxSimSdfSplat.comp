@@ -1,0 +1,121 @@
+#version 450
+
+// 逐帧碰撞距离场 splat pass：一个 invocation 一个代理三角形。
+//
+// 与 TressFXSimulationSDFGenConstruct.usf 的 PERMUTATION_SDF_VISUALIZATION == 0
+// 分支对应：三角形顶点先蒙皮，再对“三角形 AABB 每侧外扩 truncation”覆盖的格子
+// 写 atomicMin(cell, SdfFloatFlip(signedDistance))。蒙皮有两条路径：
+// - sdf.counts.y == 1：逐顶点多骨 LBS。代理自身没有作者权重，权重由加载期从
+//   最近绑定姿态身体顶点复制并归一化（binding 12）；矩阵来自 hair pass 每帧
+//   上传的全骨架 bind→pose palette（binding 13）。不能直接复用图形 VS 的
+//   per-section palette：未参与该 section 的关节没有有效 inverseBind。
+// - sdf.counts.y == 0：回退到 params.skinning 的单骨刚性矩阵（历史行为）。
+// 源实现把顶点乘 0.01 转米，VL 全链路厘米，因此不缩放。SdfFloatFlip 是
+// magnitude-first key：先按 |d| 选最近三角形，最低位保留符号；采样时
+// SdfIFloatFlip 还原。稠密 uint 网格是 TressFX 生产分支的直接沿用；源的稀疏
+// distance/direction 链表只在 SDF 可视化 permutation 里存在。
+#include "tressfxSimCommon.glsl"
+#include "tressfxSdfCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+// xyz = 绑定姿态代理顶点；w 保留。
+layout(set = 0, binding = 9, std430) readonly buffer SdfProxyPositions
+{
+    vec4 positions[];
+} proxyPositions;
+
+// 每 3 个一个三角形，与 MeshRestIndicesBuffer 同义。
+layout(set = 0, binding = 10, std430) readonly buffer SdfProxyIndices
+{
+    uint indices[];
+} proxyIndices;
+
+// 代理逐顶点权重 CSR，布局与 Animation::PackSkinInfluences 相同：
+// words[0..N] = 每顶点绝对 word 偏移，随后 (joint, floatBits(weight)) 成对。
+layout(set = 0, binding = 12, std430) readonly buffer SdfProxyInfluences
+{
+    uint words[];
+} proxyInfluences;
+
+// 全骨架 bind→pose palette（每 frame-in-flight 槽一份）。每个关节 128 bytes：
+// current 矩阵后跟 previous 矩阵；这里只消费 current。布局与
+// shader/glsl/engine/skinnedVertexMath.glsl 的 SkinJoint 相同，但数据源是
+// SkinPose::bindToPoseMatrices（不能换成 per-section palette）。
+struct SdfSkinJoint
+{
+    mat4 current;
+    mat4 previous;
+};
+layout(set = 0, binding = 13, std430) readonly buffer SdfSkinPalette
+{
+    SdfSkinJoint joints[];
+} sdfSkinPalette;
+
+vec3 SkinProxyPosition(uint vertexIndex, vec3 bindPosition)
+{
+    if (sdf.counts.y == 0u)
+        return (params.skinning * vec4(bindPosition, 1.0)).xyz;
+    mat4 blended = mat4(0.0);
+    const uint end = proxyInfluences.words[vertexIndex + 1u];
+    for (uint i = proxyInfluences.words[vertexIndex]; i < end; i += 2u)
+    {
+        const uint joint = proxyInfluences.words[i];
+        const float weight = uintBitsToFloat(proxyInfluences.words[i + 1u]);
+        blended += weight * sdfSkinPalette.joints[joint].current;
+    }
+    return (blended * vec4(bindPosition, 1.0)).xyz;
+}
+
+void main()
+{
+    uint triangle = gl_GlobalInvocationID.x;
+    if (triangle >= sdf.counts.x)
+        return;
+
+    const uint i0 = proxyIndices.indices[triangle * 3u + 0u];
+    const uint i1 = proxyIndices.indices[triangle * 3u + 1u];
+    const uint i2 = proxyIndices.indices[triangle * 3u + 2u];
+    const vec3 a = SkinProxyPosition(i0, proxyPositions.positions[i0].xyz);
+    const vec3 b = SkinProxyPosition(i1, proxyPositions.positions[i1].xyz);
+    const vec3 c = SkinProxyPosition(i2, proxyPositions.positions[i2].xyz);
+
+    const float truncation = sdf.range.y;
+    const vec3 expansion = vec3(truncation);
+    const vec3 boundsMin = min(a, min(b, c)) - expansion;
+    const vec3 boundsMax = max(a, max(b, c)) + expansion;
+    const vec3 gridMin = (boundsMin - sdf.originCell.xyz) / sdf.originCell.w;
+    const vec3 gridMax = (boundsMax - sdf.originCell.xyz) / sdf.originCell.w;
+    if (gridMax.x < 0.0 || gridMax.y < 0.0 || gridMax.z < 0.0 ||
+        gridMin.x > float(sdf.dims.x - 1u) || gridMin.y > float(sdf.dims.y - 1u) ||
+        gridMin.z > float(sdf.dims.z - 1u))
+        return;
+
+    // TressFX 的 GridMin/GridMax 先按 NumGridOffset 扩再 clamp 到网格范围；这里
+    // 的偏移量就是 truncation，clamp 规则相同（整条三角形都在域外时直接跳过）。
+    ivec3 cellMin = clamp(ivec3(floor(gridMin)), ivec3(0),
+        ivec3(sdf.dims.xyz) - ivec3(1));
+    ivec3 cellMax = clamp(ivec3(floor(gridMax)), ivec3(0),
+        ivec3(sdf.dims.xyz) - ivec3(1));
+
+    for (int z = cellMin.z; z <= cellMax.z; ++z)
+    {
+        for (int y = cellMin.y; y <= cellMax.y; ++y)
+        {
+            for (int x = cellMin.x; x <= cellMax.x; ++x)
+            {
+                const ivec3 coordinate = ivec3(x, y, z);
+                const vec3 center = sdf.originCell.xyz +
+                    (vec3(coordinate) + vec3(0.5)) * sdf.originCell.w;
+                const float distance = SdfSignedDistanceToTriangle(center, a, b, c);
+                // 只存 ±truncation 带内的值：AABB 角可能让真实距离超过 band 的
+                // 三角形覆盖到该格，写入它的另一侧符号会压过带内最近表面。
+                if (!(abs(distance) <= sdf.range.y))
+                    continue;
+                // FloatFlip 后的位模式在带内按 |d| 排序。
+                atomicMin(sdfGrid.cells[SdfCellIndex(coordinate)],
+                    SdfFloatFlip(distance));
+            }
+        }
+    }
+}

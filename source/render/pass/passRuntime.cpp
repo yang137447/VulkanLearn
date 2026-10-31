@@ -170,6 +170,25 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         renderPass.shadowCascadeIndex);
     BeginConfiguredRenderPass(context);
 
+    // 与刚刚上传的 cascade UBO 使用同一份 light view-projection。拿不到或矩阵
+    // 退化时 Build 返回 false，drawContext 不携带剔除体，行为等同于剔除前。
+    ShadowCasterCullFrustum casterCullFrustum;
+    Eigen::Matrix4f cascadeLightViewProjection = Eigen::Matrix4f::Identity();
+    const bool hasCasterCullFrustum =
+        context.services.GetShadowCascadeLightViewProjection(
+            renderPass.shadowCascadeIndex,
+            cascadeLightViewProjection) &&
+        casterCullFrustum.Build(cascadeLightViewProjection);
+
+    ShadowCasterReceiverBounds casterReceiverBounds;
+    const bool hasCasterReceiverBounds =
+        context.services.GetShadowCascadeCasterReceiverBounds(
+            renderPass.shadowCascadeIndex,
+            casterReceiverBounds);
+
+    ShadowCasterCullStats casterCullStats;
+    casterCullStats.cascadeIndex = renderPass.shadowCascadeIndex;
+
     RendererDrawContext drawContext{
         commandBuffer,
         renderPass,
@@ -178,7 +197,24 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         context.resolvedRenderScene,
         context.services
     };
+    if (hasCasterCullFrustum)
+    {
+        drawContext.shadowCasterCullFrustum = &casterCullFrustum;
+    }
+    if (hasCasterReceiverBounds)
+    {
+        drawContext.shadowCasterReceiverBounds = &casterReceiverBounds;
+    }
+    if (context.shadowCasterCullStats != nullptr)
+    {
+        drawContext.shadowCasterCullStats = &casterCullStats;
+    }
     drawExecutor.DrawShadowScene(commonOpaquePipeline, drawContext);
+
+    if (context.shadowCasterCullStats != nullptr)
+    {
+        *context.shadowCasterCullStats = casterCullStats;
+    }
 
     commandBuffer.endRenderPass();
 }

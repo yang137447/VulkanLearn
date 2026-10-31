@@ -5,6 +5,7 @@
 #include "../../common/function.glsl"
 #include "../materialContext.glsl"
 #include "../skinnedVertexFactory.glsl"
+#include "../tressfxVertexFactory.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -17,6 +18,15 @@ layout(location = 5) in vec4 inSpeedTreeWindBranch1;
 layout(location = 6) in vec4 inSpeedTreeWindBranch2;
 
 layout(location = 0) out MaterialVaryings v2f;
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+// MaterialVaryings 占用 0..7；独立 flat 数据只服务发丝覆盖，不污染共享材质上下文。
+layout(location = 8) flat out uint strandCoverageSeed;
+// 分组只影响 forward 输出的 RGB tint；沿 coverage seed 的同一 flat 通道传递，
+// 不进入共享 MaterialVaryings，也不改变顶点布局。
+layout(location = 9) flat out uint tressfxGroupId;
+layout(location = 10) flat out float tressfxBrushWeight;
+layout(location = 11) flat out uint tressfxBrushTargetGroup;
+#endif
 
 void main()
 {
@@ -33,6 +43,14 @@ void main()
     vec3 previousLocalPosition = vertexInput.localPosition;
 #if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
     previousLocalPosition = ApplySkinnedVertexFactory(vertexInput);
+#endif
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+    ApplyTressfxVertexFactory(vertexInput);
+    strandCoverageSeed = uint(gl_VertexIndex) / 2u;
+    tressfxGroupId = TressfxGuideGroupIdForPoint(strandCoverageSeed);
+    tressfxBrushWeight = TressfxBrushWeightForPoint(strandCoverageSeed);
+    // 笔刷只作用于当前选中组；组号单独占 z，避免和 flags 打包进 float 丢精度。
+    tressfxBrushTargetGroup = uint(max(uboM.selectionData.z, 0.0));
 #endif
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
     mat4 modelMatrix = uboM.model;

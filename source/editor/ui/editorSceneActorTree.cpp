@@ -25,8 +25,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
         "icons/light-area.png"},
     {EditorSceneActorType::Camera, "camera", "Cameras", "icons/camera.png"},
     {EditorSceneActorType::Environment, "environment", "Environments", "icons/environment.png"},
-    {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
-        "icons/wind.png"},
+    {EditorSceneActorType::SceneWind, "wind", "Wind", "icons/wind.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
     {EditorSceneActorType::Script, "blueprintInstance", "Blueprint Instances", "icons/file-box.png"},
 };
@@ -201,9 +200,12 @@ bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
     case EditorSceneActorType::SpotLight:
     case EditorSceneActorType::SquareAreaLight:
         return true;
+    // 相机 / 环境 / 风剖面 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
+    //（destroyed），也没有逐 actor 的渲染开关命令。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
-    case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
+    case EditorSceneActorType::Script:
         return false;
     }
     return false;
@@ -403,8 +405,6 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
                     ? std::to_string(section.materialSlotIndex)
                     : section.materialSlotName + " (#" +
                         std::to_string(section.materialSlotIndex) + ")"));
-            AddField(fields, prefix + "wind", "Wind Profile" + suffix,
-                EmptyFallback(section.windProfileKey));
         }
         break;
     case EditorSceneActorType::DirectionalLight:
@@ -443,41 +443,10 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
         AddField(fields, "actor-field-hdr-path", "HDR Path", EmptyFallback(environment.hdrPath));
         break;
     }
-    case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
     {
-        const EditorSceneWindActor& wind = actor.wind;
-        AddField(fields, "actor-field-wind-key", "Profile Key", wind.key);
-        AddVectorField(fields, "actor-field-bounds-min", "Source Bounds Min", wind.sourceBoundsMin);
-        AddVectorField(fields, "actor-field-bounds-max", "Source Bounds Max", wind.sourceBoundsMax);
-        AddField(fields, "actor-field-strength-response", "Strength Response",
-            SceneActorNumber(wind.strengthResponse));
-        AddField(fields, "actor-field-direction-response", "Direction Response",
-            SceneActorNumber(wind.directionResponse));
-        AddField(fields, "actor-field-gust-frequency", "Gust Frequency",
-            SceneActorNumber(wind.gustFrequency));
-        AddField(fields, "actor-field-gust-strength-min", "Gust Strength Min",
-            SceneActorNumber(wind.gustStrengthMin));
-        AddField(fields, "actor-field-gust-strength-max", "Gust Strength Max",
-            SceneActorNumber(wind.gustStrengthMax));
-        AddField(fields, "actor-field-gust-duration-min", "Gust Duration Min",
-            SceneActorNumber(wind.gustDurationMin));
-        AddField(fields, "actor-field-gust-duration-max", "Gust Duration Max",
-            SceneActorNumber(wind.gustDurationMax));
-        AddField(fields, "actor-field-gust-rise", "Gust Rise Scalar",
-            SceneActorNumber(wind.gustRiseScalar));
-        AddField(fields, "actor-field-gust-fall", "Gust Fall Scalar",
-            SceneActorNumber(wind.gustFallScalar));
-        AddField(fields, "actor-field-shared-start-height", "Shared Start Height",
-            SceneActorNumber(wind.sharedStartHeight));
-        AddField(fields, "actor-field-branch1-limit", "Branch 1 Stretch Limit",
-            SceneActorNumber(wind.branch1StretchLimit));
-        AddField(fields, "actor-field-branch2-limit", "Branch 2 Stretch Limit",
-            SceneActorNumber(wind.branch2StretchLimit));
-        AddField(fields, "actor-field-do-shared", "Shared Wind", wind.doShared ? "on" : "off");
-        AddField(fields, "actor-field-do-branch1", "Branch 1 Wind", wind.doBranch1 ? "on" : "off");
-        AddField(fields, "actor-field-do-branch2", "Branch 2 Wind", wind.doBranch2 ? "on" : "off");
-        AddField(fields, "actor-field-do-ripple", "Ripple", wind.doRipple ? "on" : "off");
-        AddField(fields, "actor-field-do-shimmer", "Shimmer", wind.doShimmer ? "on" : "off");
+        // 场景风的值由可编辑控件展示（SceneActorEditableFields），这里不再重复
+        // 生成一组只读行；作者 name 已在大纲/分组标题中显示。
         break;
     }
     }
@@ -489,7 +458,20 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
 {
     using P = EditorActorProperty;
     std::vector<EditorSceneActorEditableField> fields;
-    if (actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+    if (actor.type == EditorSceneActorType::SceneWind)
+    {
+        // 与旧 SpeedTree 调节一致：方向 + 风力滑条 + 阵风滑条，不暴露噪声内部参数。
+        // 阵风滑条为 0 即关闭；非零时使用场景风层固定的频率/湍流默认值。
+        fields.push_back({P::WindDirection, "Direction", actor.worldWind.direction, 3});
+        fields.push_back({P::WindStrength, "Strength (cm/s)",
+            Eigen::Vector3f(actor.worldWind.strengthCmPerSec, 0, 0), 1,
+            true, 0.0f, 3270.0f});
+        fields.push_back({P::WindGustAmplitude, "Gust",
+            Eigen::Vector3f(actor.worldWind.gustAmplitude, 0, 0), 1,
+            true, 0.0f, 1.0f});
+        return fields;
+    }
+    if (actor.type == EditorSceneActorType::Environment)
         return fields;
     fields.push_back({P::Position, "Location (cm)", actor.position, 3});
     if (actor.type != EditorSceneActorType::SquareAreaLight)

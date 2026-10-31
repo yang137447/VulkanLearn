@@ -13,7 +13,7 @@ namespace VL::Animation
 {
 const Montage* SkeletalAsset::FindMontage(std::string_view idOrPath) const
 {
-    for (const Montage& montage : montages)
+    for (const Montage& montage : AnimationAsset().montages)
     {
         if (montage.id == idOrPath || montage.sourcePath == idOrPath)
         {
@@ -132,6 +132,59 @@ LocalPose Crossfade(const LocalPose& source, LocalPose target, float alpha, cons
     return mixed;
 }
 }
+namespace
+{
+// 把绑定空间 AABB 的 8 个角点用关节 palette 矩阵变换后并入并集。
+// 保守性来自“盒子包含顶点 + 仿射变换保持包含关系”，不依赖权重分布。
+void MergeJointBounds(const Eigen::Matrix4f& matrix, const JointBindBounds& bounds,
+    Eigen::Vector3f& min, Eigen::Vector3f& max)
+{
+    const Eigen::Matrix3f linear = matrix.block<3, 3>(0, 0);
+    const Eigen::Vector3f translation = matrix.block<3, 1>(0, 3);
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        const Eigen::Vector3f point(
+            (corner & 1) ? bounds.max.x() : bounds.min.x(),
+            (corner & 2) ? bounds.max.y() : bounds.min.y(),
+            (corner & 4) ? bounds.max.z() : bounds.min.z());
+        const Eigen::Vector3f transformed = linear * point + translation;
+        min = min.cwiseMin(transformed);
+        max = max.cwiseMax(transformed);
+    }
+}
+
+// 权重和偏差修正：LBS 的精确位置是 Σ w_i M_i p，而 Σ w_i 只保证在
+// [1-e,1+e]（导入器按 WeightTolerance 校验）。把凸组合按该区间绕原点缩放后
+// 取包围盒，保证权重未严格归一化时精确结果仍在盒内。
+void ExpandForWeightSum(Eigen::Vector3f& min, Eigen::Vector3f& max, float error)
+{
+    if (!(error > 0)) return;
+    const float low = 1.0f - error;
+    const float high = 1.0f + error;
+    min = min.cwiseMin(min * low).cwiseMin(min * high);
+    max = max.cwiseMax(max * low).cwiseMax(max * high);
+}
+
+// 全骨架 bind→pose：与 section 无关，跨 section 的代理权重可以直接使用。
+// section 的 inverseBind 只对该 section 实际引用的关节有效；其余关节在
+// SkinPose::matrices 里退化为绝对 model 矩阵。这里用 restModel 的逆重建。
+void FillBindToPoseMatrices(SkinPose& pose,
+    const std::vector<Eigen::Matrix4f>& models, const std::vector<Joint>* joints)
+{
+    if (joints == nullptr || joints->size() != models.size())
+        return;
+    pose.bindToPoseMatrices.reserve(models.size());
+    for (size_t joint = 0; joint < models.size(); ++joint)
+    {
+        const Eigen::Matrix4f bindInverse = joints->at(joint).restModel.inverse();
+        const Eigen::Matrix4f bindToPose = models[joint] * bindInverse;
+        if (!bindToPose.allFinite())
+            throw std::runtime_error("Skin pose has a non-finite bind-to-pose matrix");
+        pose.bindToPoseMatrices.push_back(bindToPose);
+    }
+}
+}
+
 Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
     const std::vector<Eigen::Matrix4f>& palette)
 {
@@ -145,8 +198,9 @@ Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
     return blended;
 }
 
-std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
-    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity)
+std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& section,
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity,
+    uint64_t playbackIdentity, const std::vector<Joint>* joints)
 {
     if (models.size() != section.inverseBinds.size() || section.vertices.empty())
         throw std::invalid_argument("Skin pose requires a matching skeleton and nonempty section");
@@ -155,6 +209,7 @@ std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
     pose->playbackIdentity = playbackIdentity;
     for (size_t i = 0; i < models.size(); ++i)
         pose->matrices.push_back(models[i] * section.inverseBinds[i]);
+    FillBindToPoseMatrices(*pose, models, joints);
     pose->boundsMin = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
     pose->boundsMax = -pose->boundsMin;
     for (size_t vertex = 0; vertex < section.vertices.size(); ++vertex)
@@ -189,6 +244,48 @@ std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
     return pose;
 }
 
+std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity,
+    uint64_t playbackIdentity, const std::vector<Joint>* joints)
+{
+    if (models.size() != section.inverseBinds.size() || section.vertices.empty())
+        throw std::invalid_argument("Skin pose requires a matching skeleton and nonempty section");
+    // 直接构造的 section（测试/离线工具）没有预计算数据：退回逐顶点精确参考路径，
+    // 行为与引入快路径前完全一致。
+    if (section.jointBindBounds.size() != section.inverseBinds.size())
+        return BuildSkinPoseReference(section, models, discontinuity,
+            playbackIdentity, joints);
+    auto pose = std::make_shared<SkinPose>();
+    pose->discontinuity = discontinuity;
+    pose->playbackIdentity = playbackIdentity;
+    pose->matrices.reserve(models.size());
+    FillBindToPoseMatrices(*pose, models, joints);
+    Eigen::Vector3f min = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
+    Eigen::Vector3f max = -min;
+    bool hasGeometry = false;
+    for (size_t joint = 0; joint < models.size(); ++joint)
+    {
+        const Eigen::Matrix4f matrix = models[joint] * section.inverseBinds[joint];
+        pose->matrices.push_back(matrix);
+        const JointBindBounds& bounds = section.jointBindBounds[joint];
+        if (bounds.vertexCount == 0) continue;
+        // 快路径不再逐顶点混合，改为逐关节检查 palette 仿射行列式：旧路径对
+        // 完全归属该关节的顶点会算出同一个矩阵，非有限/奇异仍在这里被拒绝。
+        const float determinant = matrix.block<3, 3>(0, 0).determinant();
+        if (!matrix.allFinite() || !std::isfinite(determinant) || std::abs(determinant) < 1.0e-8f)
+            throw std::runtime_error("Skin pose has a singular or nonfinite blended transform");
+        MergeJointBounds(matrix, bounds, min, max);
+        hasGeometry = true;
+    }
+    // 有顶点却没有任何影响引用属于资产契约破坏；导入器已拒绝，这里保留明确失败。
+    if (!hasGeometry)
+        throw std::runtime_error("Skin pose has vertices without joint influences");
+    ExpandForWeightSum(min, max, section.jointBindWeightSumError);
+    pose->boundsMin = min;
+    pose->boundsMax = max;
+    return pose;
+}
+
 std::vector<uint32_t> PackSkinInfluences(const SkinSection& section)
 {
     const size_t header = section.influenceOffsets.size();
@@ -215,6 +312,17 @@ SkeletalPlayback::SkeletalPlayback(std::shared_ptr<const SkeletalAsset> input)
 {
     if (!asset || asset->mesh.sections.empty() || asset->mesh.joints.empty() || !asset->mesh.runtime)
         throw std::invalid_argument("Playback requires a skeletal mesh");
+    // loader 和直接构造资产的调用方共用此边界：动作源/profile 必须成对，
+    // 且不能把多层重定向或目标自带片段藏在播放器后面。
+    if (static_cast<bool>(asset->animationSource) != static_cast<bool>(asset->retargetProfile) ||
+        (asset->IsRetargeted() &&
+            (asset->animationSource->IsRetargeted() ||
+                asset->animationSource->clips.empty() || !asset->animationSource->mesh.runtime ||
+                !asset->clips.empty() || !asset->montages.empty())))
+        throw std::invalid_argument("Retargeted playback requires a valid animation source and profile");
+    if (asset->IsRetargeted())
+        compiledRetarget = std::make_shared<const CompiledRetarget>(
+            asset->animationSource->mesh, asset->mesh, *asset->retargetProfile);
     playbackIdentity = nextPlaybackIdentity.fetch_add(1);
     displayedLocals = Sample(selected, time);
     poses = Evaluate(displayedLocals, discontinuity, jointModels);
@@ -225,7 +333,8 @@ SkeletalPlayback::SkeletalPlayback(std::shared_ptr<const SkeletalAsset> input)
 
 float SkeletalPlayback::ClipDuration() const
 {
-    return asset->clips.empty() ? 0.0f : asset->clips.at(selected).runtime->duration();
+    const auto& animation = asset->AnimationAsset();
+    return animation.clips.empty() ? 0.0f : animation.clips.at(selected).runtime->duration();
 }
 
 float SkeletalPlayback::PlaybackRangeEnd() const
@@ -245,8 +354,9 @@ float SkeletalPlayback::Duration() const
 
 Eigen::Vector3f SkeletalPlayback::RootMotionTotal() const
 {
-    if (asset->clips.empty()) return Eigen::Vector3f::Zero();
-    const auto& clip = asset->clips.at(selected);
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty()) return Eigen::Vector3f::Zero();
+    const auto& clip = animation.clips.at(selected);
     // 根位移积分同样限制在播放范围：Montage 截断后不能把 section 之后的根轨迹算进来，
     // 否则 subtractRemainingRootMotion 会消费到范围外的位移。
     return RootTranslation(clip, PlaybackRangeEnd()) - RootTranslation(clip, playbackRangeStart);
@@ -254,8 +364,9 @@ Eigen::Vector3f SkeletalPlayback::RootMotionTotal() const
 
 Eigen::Vector3f SkeletalPlayback::RootMotionRemaining() const
 {
-    if (asset->clips.empty()) return Eigen::Vector3f::Zero();
-    const auto& clip = asset->clips.at(selected);
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty()) return Eigen::Vector3f::Zero();
+    const auto& clip = animation.clips.at(selected);
     return RootTranslation(clip, PlaybackRangeEnd()) -
         RootTranslation(clip, std::min(time, PlaybackRangeEnd()));
 }
@@ -263,11 +374,12 @@ Eigen::Vector3f SkeletalPlayback::RootMotionRemaining() const
 void SkeletalPlayback::RebuildNotifyEvents()
 {
     notifyEvents.clear();
-    if (!asset->clips.empty())
+    const auto& animation = asset->AnimationAsset();
+    if (!animation.clips.empty())
     {
         // Sequence notify 没有 kind 字段：duration==0 是 UE 瞬时 notify，duration>0 是
         // notifyState。time/duration 已经由解析器保留作者原值（可越过片段末尾），这里不裁剪。
-        for (const auto& notify : asset->clips.at(selected).sequence.notifies)
+        for (const auto& notify : animation.clips.at(selected).sequence.notifies)
         {
             NotifyEvent event;
             event.name = notify.name;
@@ -491,7 +603,8 @@ std::vector<std::shared_ptr<const SkinPose>> SkeletalPlayback::Evaluate(
     // 所有 section 完成后才发布时钟、选择与姿态，异常时保持同一个旧状态。
     std::vector<std::shared_ptr<const SkinPose>> next;
     for (const auto& section : asset->mesh.sections)
-        next.push_back(BuildSkinPose(section, models, epoch, playbackIdentity));
+        next.push_back(BuildSkinPose(section, models, epoch, playbackIdentity,
+            &asset->mesh.joints));
     outputModels = std::make_shared<const std::vector<Eigen::Matrix4f>>(std::move(models));
     return next;
 }
@@ -499,8 +612,20 @@ std::vector<std::shared_ptr<const SkinPose>> SkeletalPlayback::Evaluate(
 LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
 {
     const auto rest = asset->mesh.runtime->joint_rest_poses();
-    LocalPose locals = asset->clips.empty() ? LocalPose(rest.begin(), rest.end()) :
-        SampleLocals(asset->mesh, asset->clips.at(clipIndex), sampleTime);
+    const auto& animation = asset->AnimationAsset();
+    LocalPose locals;
+    if (animation.clips.empty())
+    {
+        locals = LocalPose(rest.begin(), rest.end());
+    }
+    else
+    {
+        locals = SampleLocals(animation.mesh, animation.clips.at(clipIndex), sampleTime);
+        // 先在 source skeleton 上采样，再转换模型空间旋转增量；普通资产复用
+        // 原采样结果，target 骨长/未映射骨骼不被动作源的比例污染。
+        if (compiledRetarget)
+            locals = compiledRetarget->Apply(locals);
+    }
     if (inPlace)
     {
         // 根是唯一的骨架入口；只替换 lane 0 的完整绑定 TRS，等价于旧模型空间
@@ -607,7 +732,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     displayedLocals.swap(locals);
     if (epoch == discontinuity)
     {
-        const auto& clip = asset->clips.at(selected);
+        const auto& clip = asset->AnimationAsset().clips.at(selected);
         rootMotionDelta = RootTranslation(clip, sampleTime) - RootTranslation(clip, time);
         const auto rotation = RootRotation(clip, sampleTime) *
             RootRotation(clip, time).inverse();
@@ -620,7 +745,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         if (!motionWarp.Empty())
         {
             if (meshTransform && actorPosition)
-                rootMotionDelta = motionWarp.Apply(asset->mesh, clip, time, sampleTime,
+                rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip, time, sampleTime,
                     rootMotionDelta, *meshTransform, *actorPosition, actorYaw, &yawDelta);
             motionWarpState = motionWarp.DebugState(time);
         }
@@ -661,7 +786,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
 void SkeletalPlayback::TickMontageSections(float deltaSeconds,
     const Eigen::Matrix4f* meshTransform, const Eigen::Vector3f* actorPosition, float actorYaw)
 {
-    const auto& clip = asset->clips.at(selected);
+    const auto& clip = asset->AnimationAsset().clips.at(selected);
     const float previousTime = time;
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     double remaining = static_cast<double>(deltaSeconds) * rate;
@@ -750,7 +875,7 @@ void SkeletalPlayback::TickMontageSections(float deltaSeconds,
     if (!motionWarp.Empty())
     {
         if (meshTransform && actorPosition)
-            rootMotionDelta = motionWarp.Apply(asset->mesh, clip, previousTime, position,
+            rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip, previousTime, position,
                 translation, *meshTransform, *actorPosition, actorYaw, &yawDelta);
         motionWarpState = motionWarp.DebugState(previousTime);
     }
@@ -772,9 +897,10 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     float blendSeconds, bool removeRoot)
 {
     size_t index = 0;
-    while (index < asset->clips.size() && asset->clips[index].id != clipId) ++index;
-    if (index == asset->clips.size()) throw std::invalid_argument("Unknown animation clip: " + clipId);
-    if (!std::isfinite(seconds) || seconds < 0 || seconds > asset->clips[index].runtime->duration())
+    const auto& animation = asset->AnimationAsset();
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size()) throw std::invalid_argument("Unknown animation clip: " + clipId);
+    if (!std::isfinite(seconds) || seconds < 0 || seconds > animation.clips[index].runtime->duration())
         throw std::invalid_argument("Transition time must be inside the clip");
     if (!std::isfinite(blendSeconds) || blendSeconds < 0)
         throw std::invalid_argument("Transition duration must be finite and nonnegative");
@@ -855,8 +981,9 @@ void SkeletalPlayback::Play(const std::string& clipId, bool loop, float speed, b
     if (!std::isfinite(speed) || speed <= 0 || speed > 4)
         throw std::invalid_argument("Animation rate must be in (0,4]");
     size_t index = 0;
-    while (index < asset->clips.size() && asset->clips[index].id != clipId) ++index;
-    if (index == asset->clips.size()) throw std::invalid_argument("Unknown animation clip: " + clipId);
+    const auto& animation = asset->AnimationAsset();
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size()) throw std::invalid_argument("Unknown animation clip: " + clipId);
     // 请求先在候选值上完成全部采样，失败不改变活动时钟/根策略。
     SkeletalPlayback candidate(*this);
     candidate.inPlace = removeRoot;
@@ -1061,7 +1188,8 @@ void SkeletalPlayback::Seek(float seconds)
 
 void SkeletalPlayback::Select(size_t clipIndex)
 {
-    if (clipIndex >= asset->clips.size()) throw std::out_of_range("Unknown animation clip");
+    if (clipIndex >= asset->AnimationAsset().clips.size())
+        throw std::out_of_range("Unknown animation clip");
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
     auto locals = Sample(clipIndex, 0);
     auto next = Evaluate(locals, discontinuity + 1, nextModels);

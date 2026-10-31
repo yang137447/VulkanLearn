@@ -1,0 +1,16 @@
+#version 450
+
+// 逐帧碰撞距离场 clear pass：把每个格子写成 TressFX 的 INITIAL_DISTANCE
+// 等价哨兵 0xFFFFFFFF（比任何有限距离的 FloatFlip3 编码都大）。一个 invocation
+// 一个格子；dispatch = ceil(cellCount/64)。只在对象声明了 collision.mesh 时录制。
+#include "tressfxSdfCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    uint cell = gl_GlobalInvocationID.x;
+    if (cell >= sdf.dims.w)
+        return;
+    sdfGrid.cells[cell] = SdfInitialBits;
+}

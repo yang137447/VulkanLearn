@@ -67,7 +67,9 @@ void PrepareMaterial(
     const RenderMode mode = MaterialInstanceValidator::ResolveRenderMode(resolved.effectiveMaterialInstanceJson);
     const auto plan = MaterialInstanceValidator::BuildLoadPlan(
         path, input.surfaceContracts.at(mode), resolved.effectiveMaterialInstanceJson,
-        resolved.materialPath, resolved.materialJson, input.supportsDualSourceBlend);
+        resolved.materialPath, resolved.materialJson, input.supportsDualSourceBlend,
+        // 缩略图只渲染一帧且不录制 pre-skin pass，始终使用原有混合路径。
+        false);
     PrepareShader(compiler, input, result, plan.shaderVariantKey, plan.baseShaderCompileRequest);
 
     // 与 BuildMaterialShadowPipeline 相同的路由：完整 override 优先，否则仅为有需求的非透明材质装配。

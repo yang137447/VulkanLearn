@@ -8,6 +8,39 @@
 
 namespace VL
 {
+TEST(RetargetPreviewRequest, PairPreservesCentimeterScaleAndProfileIdentity)
+{
+    const auto objects = BuildRetargetPreviewObjects("SM_target.json", "SM_source.json", "RT_pair.json");
+    ASSERT_EQ(objects.size(), 2u);
+    EXPECT_EQ(objects[0].at("name"), "preview_model");
+    EXPECT_EQ(objects[1].at("name"), "preview_retarget_source|RT_pair.json");
+    EXPECT_EQ(objects[0].at("modelPath"), "SM_target.json");
+    EXPECT_EQ(objects[1].at("modelPath"), "SM_source.json");
+    for (const auto& object : objects) EXPECT_EQ(object.at("scale"), nlohmann::json::array({1, 1, 1}));
+    EXPECT_EQ(objects[0].at("position")[0], 65);
+    EXPECT_EQ(objects[1].at("position")[0], -65);
+}
+
+TEST(RetargetPreviewCamera, FramesBothModelsIncludingSourceExtent)
+{
+    World world{10, ModelPreviewScenePath};
+    world.SetCamera(std::make_shared<Camera>());
+    WorldMeshObject target;
+    target.sceneObjectIdentity = "preview_model";
+    target.localBoundsMin = {55, 0, -10};
+    target.localBoundsMax = {75, 180, 10};
+    world.AddMeshObject("target", target);
+    auto source = target;
+    source.sceneObjectIdentity = "preview_retarget_source|RT_pair.json";
+    source.localBoundsMin = {-100, 0, -10};
+    source.localBoundsMax = {-50, 180, 10};
+    world.AddMeshObject("source", source);
+    ModelPreviewCamera camera;
+    ASSERT_TRUE(camera.Synchronize(world, 1.5f));
+    EXPECT_NEAR(world.GetCamera()->GetPosition().x(), -12.5f, 1e-4f);
+    EXPECT_NEAR(world.GetCamera()->GetPosition().y(), 90, 1e-4f);
+}
+
 TEST(BlueprintPreviewRequest, UsesAcceptedVisualDraftAndPreservesComponentHierarchy)
 {
     const nlohmann::json draft{{"class", "Gameplay.Test"}, {"properties", {{"Secret", 42}}},

@@ -133,6 +133,11 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             RendererResourceCache::GetInstance();
 
         PreparedWorldTransition prepared;
+        for (const auto& object : worldBuildPlan.sceneAssetPlan.objectPlans)
+            if (object.meshLoadRequest && object.meshLoadRequest->tressfxResources)
+                for (const auto& input : object.meshLoadRequest->tressfxResources->sourceInputs)
+                    prepared.placementSourceInputs.emplace_back(
+                        CommonFunction::Path(input.first), input.second);
         prepared.offlineWorldAssets = std::make_shared<OfflineWorldAssets>();
         prepared.offlineWorldAssets->worldGeneration = worldGeneration;
         prepared.offlineWorldAssets->scenePath = scenePath;
@@ -154,6 +159,9 @@ WorldTransitionCoordinator::PrepareWorldLoad(
         loadContext.offlineWorldAssets =
             prepared.offlineWorldAssets.get();
         loadContext.offlineOnly = RenderSystem::GetInstance().IsOfflineMode();
+        // 预蒙皮是启动级开关：候选 World 的材质变体与对象 buffer 必须与
+        // RenderSystem 后续帧录制使用同一个值。
+        loadContext.prerenderSkin = RenderSystem::GetInstance().IsPrerenderSkinEnabled();
         prepared.offlineWorldAssets->realtimePrepared = !loadContext.offlineOnly;
 
         RendererWorldResourceLoadResult resourceLoadResult =
@@ -162,14 +170,14 @@ WorldTransitionCoordinator::PrepareWorldLoad(
                 loadContext);
         worldBuildPlan.meshObjectPlans =
             std::move(resourceLoadResult.meshObjectPlans);
+        worldBuildPlan.windResponseProfiles =
+            std::move(resourceLoadResult.windResponseProfiles);
         worldBuildPlan.softBodyObjectPlans =
             std::move(resourceLoadResult.softBodyObjectPlans);
         worldBuildPlan.glassObjectPlans =
             std::move(resourceLoadResult.glassObjectPlans);
         worldBuildPlan.projectileSettings =
             std::move(resourceLoadResult.projectileSettings);
-        worldBuildPlan.speedTreeWindProfiles =
-            std::move(resourceLoadResult.speedTreeWindProfiles);
 
         WorldBuilder worldBuilder;
         auto worldResult =

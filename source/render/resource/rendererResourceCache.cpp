@@ -1,11 +1,15 @@
 #include "render/resource/rendererResourceCache.h"
 
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 
 #include "materialInstance.h"
+#include "renderableObject.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/resource/renderableObjectKey.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "world/worldWind.h"
 
 namespace VL
 {
@@ -23,6 +27,7 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
 RendererResourceCache::RendererResourceCache()
     : worldLocalResources(
           std::make_shared<WorldLocalResourcePackage>())
+    , tressfxGeometryCache(std::make_shared<TressfxGeometryCache>())
 {
 }
 
@@ -33,6 +38,7 @@ RendererResourceCache::RendererResourceCache(
     : globalTextures(std::move(inheritedGlobalTextures)),
       worldLocalResources(
           std::make_shared<WorldLocalResourcePackage>()),
+      tressfxGeometryCache(std::make_shared<TressfxGeometryCache>()),
       retireWorldLocalResourcesOnClear(false)
 {
     worldLocalResources->ownerGeneration = ownerGeneration;
@@ -41,15 +47,20 @@ RendererResourceCache::RendererResourceCache(
 void RendererResourceCache::Clear()
 {
     globalTextures.clear();
+    // Tressfx 几何缓存是进程级内容寻址缓存，候选包/缩略图会话共享同一实例。
+    // 这里不能清空：任意一次缩略图 Reset/Clear 都会让主预览的组编辑缓存失效。
+    // 条目在进程退出时随实例释放。
     ClearWorldLocalResources();
 }
 
 RendererResourceCache RendererResourceCache::BeginCandidate(
     uint64_t ownerGeneration) const
 {
-    return RendererResourceCache(
+    RendererResourceCache candidate = RendererResourceCache(
         globalTextures,
         ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
+    return candidate;
 }
 
 RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
@@ -58,6 +69,7 @@ RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
     RendererResourceCache candidate(
         globalTextures,
         ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
     candidate.worldLocalResources =
         std::make_shared<WorldLocalResourcePackage>(
             *worldLocalResources);
@@ -77,6 +89,7 @@ RendererResourceCache::CaptureActiveWorldLocalResources() const noexcept
 RendererResourceCache RendererResourceCache::BeginWorldExtensionCandidate(uint64_t ownerGeneration) const
 {
     RendererResourceCache candidate(globalTextures, ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
     candidate.worldLocalResources = std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
     candidate.worldLocalResources->ownerGeneration = ownerGeneration;
     return candidate;
@@ -122,6 +135,10 @@ void PruneDynamicMap(Map& resources, std::set<std::string>& dynamicKeys, const s
     for (auto it = dynamicKeys.begin(); it != dynamicKeys.end();)
         if (!used.count(*it))
         {
+            // 只给 placement-scoped 资源留退休证据；共享/常驻资源不刷日志。
+            if (IsPlacementScopedRenderableKey(*it))
+                std::cout << "[Placement] instance renderable released by package: key="
+                          << *it << std::endl;
             resources.erase(*it);
             it = dynamicKeys.erase(it);
         }
@@ -396,6 +413,49 @@ const std::shared_ptr<RenderableObject>* RendererResourceCache::GetRenderableObj
     return nullptr;
 }
 
+std::shared_ptr<RenderableObject> RendererResourceCache::TakeRenderableObject(
+    std::string_view objectKey)
+{
+    WorldLocalResourcePackage& resources = GetMutableWorldLocalResources();
+    auto objectIt = resources.renderableObjects.find(std::string(objectKey));
+    if (objectIt == resources.renderableObjects.end())
+        return nullptr;
+    std::shared_ptr<RenderableObject> object = std::move(objectIt->second);
+    resources.renderableObjects.erase(objectIt);
+    resources.dynamicMeshes.erase(std::string(objectKey));
+    return object;
+}
+
+size_t RendererResourceCache::CountPlacementScopedRenderableObjects() const
+{
+    if (!worldLocalResources)
+        return 0;
+    size_t count = 0;
+    for (const auto& [key, object] : worldLocalResources->renderableObjects)
+        if (object && IsPlacementScopedRenderableKey(key))
+            ++count;
+    return count;
+}
+
+void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds,
+    const WorldWind& sceneWind)
+{
+    if (!worldLocalResources)
+        return;
+    // 场景风作者目标 -> CPU 参考 solver 的向量（厘米/秒）。GT 不拥有渲染线程的
+    // SceneWindRuntime，所以这里只取方向与强度，不复制缓动/阵风，也不另造时钟；
+    // 强度为 0 时 direction * 0 即零向量，solver 走零风分支。GPU backend 完全不读这里。
+    const Eigen::Vector3f sceneWindVelocityCmPerSec =
+        sceneWind.direction * sceneWind.strength;
+    for (const auto& [key, object] : worldLocalResources->renderableObjects)
+    {
+        // GPU backend 由 HairSimulationPass 的 compute dispatch 推进，游戏线程不步进。
+        if (object && object->IsTressfx() && !object->UsesGpuGuideSimulation())
+            object->AdvanceTressfxSimulation(
+                deltaSeconds, sceneWindVelocityCmPerSec);
+    }
+}
+
 void RendererResourceCache::BindMaterial(std::string materialKey, std::shared_ptr<Material> material)
 {
     WorldLocalResourcePackage& resources =
@@ -506,6 +566,12 @@ void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<
 
     resources.textures[std::move(textureKey)] =
         std::move(texture);
+}
+
+TressfxGeometryCache& RendererResourceCache::GetTressfxGeometryCache() const
+{
+    // 所有实例（含候选包）共享同一份进程级缓存。
+    return *tressfxGeometryCache;
 }
 
 const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_view textureKey) const

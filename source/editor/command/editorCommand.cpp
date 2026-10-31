@@ -43,6 +43,13 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::SaveMeshDocument, "mesh.save", 1, true, true, false},
     {EditorCommandType::RevertMeshDocument, "mesh.revert", 1, true, true, false},
     {EditorCommandType::ReloadMeshDocument, "mesh.reload", 1, true, true, false},
+    {EditorCommandType::GetTressfxDocument, "tressfx.get_document", 1, false, false, false},
+    {EditorCommandType::GetTressfxCapabilities, "tressfx.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyTressfxDocument, "tressfx.modify", 1, true, true, false},
+    {EditorCommandType::ValidateTressfxDocument, "tressfx.validate", 1, false, false, false},
+    {EditorCommandType::SaveTressfxDocument, "tressfx.save", 1, true, true, false},
+    {EditorCommandType::RevertTressfxDocument, "tressfx.revert", 1, true, true, false},
+    {EditorCommandType::ReloadTressfxDocument, "tressfx.reload", 1, true, true, false},
     {EditorCommandType::GetTextureDocument, "texture.get_document", 1, false, false, false},
     {EditorCommandType::GetTextureCapabilities, "texture.get_capabilities", 1, false, false, false},
     {EditorCommandType::ModifyTextureDocument, "texture.modify", 1, true, true, false},
@@ -574,6 +581,8 @@ std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandT
         return EditorAssetDocumentKind::Scene;
     if (type >= EditorCommandType::GetMeshDocument && type <= EditorCommandType::ReloadMeshDocument)
         return EditorAssetDocumentKind::Mesh;
+    if (type >= EditorCommandType::GetTressfxDocument && type <= EditorCommandType::ReloadTressfxDocument)
+        return EditorAssetDocumentKind::Tressfx;
     if (type >= EditorCommandType::GetTextureDocument && type <= EditorCommandType::ReloadTextureDocument)
         return EditorAssetDocumentKind::Texture;
     if (type >= EditorCommandType::GetBlueprintDocument && type <= EditorCommandType::RedoBlueprintDocument)
@@ -586,18 +595,25 @@ std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType ty
     switch (type)
     {
     case EditorCommandType::GetSceneDocument: case EditorCommandType::GetMeshDocument:
+    case EditorCommandType::GetTressfxDocument:
     case EditorCommandType::GetTextureDocument: case EditorCommandType::GetBlueprintDocument: return EditorAssetOperation::GetDocument;
     case EditorCommandType::GetSceneCapabilities: case EditorCommandType::GetMeshCapabilities:
+    case EditorCommandType::GetTressfxCapabilities:
     case EditorCommandType::GetTextureCapabilities: case EditorCommandType::GetBlueprintCapabilities: return EditorAssetOperation::GetCapabilities;
     case EditorCommandType::ModifySceneDocument: case EditorCommandType::ModifyMeshDocument:
+    case EditorCommandType::ModifyTressfxDocument:
     case EditorCommandType::ModifyTextureDocument: case EditorCommandType::ModifyBlueprintDocument: return EditorAssetOperation::Modify;
     case EditorCommandType::ValidateSceneDocument: case EditorCommandType::ValidateMeshDocument:
+    case EditorCommandType::ValidateTressfxDocument:
     case EditorCommandType::ValidateTextureDocument: case EditorCommandType::ValidateBlueprintDocument: return EditorAssetOperation::Validate;
     case EditorCommandType::SaveSceneDocument: case EditorCommandType::SaveMeshDocument:
+    case EditorCommandType::SaveTressfxDocument:
     case EditorCommandType::SaveTextureDocument: case EditorCommandType::SaveBlueprintDocument: return EditorAssetOperation::Save;
     case EditorCommandType::RevertSceneDocument: case EditorCommandType::RevertMeshDocument:
+    case EditorCommandType::RevertTressfxDocument:
     case EditorCommandType::RevertTextureDocument: case EditorCommandType::RevertBlueprintDocument: return EditorAssetOperation::Revert;
     case EditorCommandType::ReloadSceneDocument: case EditorCommandType::ReloadMeshDocument:
+    case EditorCommandType::ReloadTressfxDocument:
     case EditorCommandType::ReloadTextureDocument: case EditorCommandType::ReloadBlueprintDocument: return EditorAssetOperation::Reload;
     case EditorCommandType::UndoBlueprintDocument: return EditorAssetOperation::Undo;
     case EditorCommandType::RedoBlueprintDocument: return EditorAssetOperation::Redo;

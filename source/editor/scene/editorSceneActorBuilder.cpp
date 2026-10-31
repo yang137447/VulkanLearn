@@ -11,6 +11,7 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "script/scriptComponents.h"
 
@@ -84,7 +85,10 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.materialInstancePath = object.materialInstanceKey;
         section.materialSlotIndex = object.materialSlotIndex;
         section.materialSlotName = object.materialSlotName;
-        section.windProfileKey = object.speedTreeWindProfileKey;
+        section.tressfxRootCloud = object.tressfxRootCloud;
+        section.tressfxGroupBinding = object.tressfxGroupBinding;
+        section.tressfxGroupConfigs = object.tressfxGroupConfigs;
+        section.tressfxRootLocalToWorld = object.model;
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
@@ -166,35 +170,24 @@ EditorSceneActorSnapshot BuildEnvironmentActor(const World& world)
     return actor;
 }
 
-EditorSceneActorSnapshot BuildWindActor(const World& world, const SpeedTreeWindProfile& profile)
+EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
 {
-    const SpeedTreeWindConfig& config = profile.config;
+    const WorldWind& wind = world.GetWind();
     EditorSceneActorSnapshot actor;
-    actor.type = EditorSceneActorType::WindProfile;
+    actor.type = EditorSceneActorType::SceneWind;
     actor.worldGeneration = world.GetGeneration();
     actor.scenePath = world.GetScenePath();
-    actor.displayName = profile.key;
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::WindProfile, profile.key);
-    actor.wind.key = profile.key;
-    actor.wind.sourceBoundsMin = profile.sourceBoundsMin;
-    actor.wind.sourceBoundsMax = profile.sourceBoundsMax;
-    actor.wind.strengthResponse = config.common.strengthResponse;
-    actor.wind.directionResponse = config.common.directionResponse;
-    actor.wind.gustFrequency = config.common.gustFrequency;
-    actor.wind.gustStrengthMin = config.common.gustStrengthMin;
-    actor.wind.gustStrengthMax = config.common.gustStrengthMax;
-    actor.wind.gustDurationMin = config.common.gustDurationMin;
-    actor.wind.gustDurationMax = config.common.gustDurationMax;
-    actor.wind.gustRiseScalar = config.common.gustRiseScalar;
-    actor.wind.gustFallScalar = config.common.gustFallScalar;
-    actor.wind.sharedStartHeight = config.sharedStartHeight;
-    actor.wind.branch1StretchLimit = config.branch1StretchLimit;
-    actor.wind.branch2StretchLimit = config.branch2StretchLimit;
-    actor.wind.doShared = config.doShared;
-    actor.wind.doBranch1 = config.doBranch1;
-    actor.wind.doBranch2 = config.doBranch2;
-    actor.wind.doRipple = config.doRipple;
-    actor.wind.doShimmer = config.doShimmer;
+    // 身份使用场景 JSON 的作者 name；全场景至多一个 wind 对象，名字唯一即可稳定定位。
+    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::SceneWind, wind.name);
+    actor.displayName = wind.name;
+    // 场景风是全局状态，没有渲染侧可见性开关。
+    actor.visible = true;
+    actor.worldWind.direction = wind.direction;
+    actor.worldWind.strengthCmPerSec = wind.strength;
+    actor.worldWind.gustEnabled = wind.gust.enabled;
+    actor.worldWind.gustAmplitude = wind.gust.amplitude;
+    actor.worldWind.gustFrequency = wind.gust.frequency;
+    actor.worldWind.gustTurbulence = wind.gust.turbulence;
     return actor;
 }
 
@@ -327,8 +320,12 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
 
     actors.push_back(BuildEnvironmentActor(world));
 
-    for (const auto& entry : world.GetSpeedTreeWindProfiles())
-        actors.push_back(BuildWindActor(world, entry.second));
+    // 场景 JSON 没有作者标记，无法区分"没写 wind"与"写了零风"：默认零风
+    //（强度 0 且阵风关闭）不产生一行空的 Scene Wind，有风时才发布这一行。
+    const WorldWind& worldWind = world.GetWind();
+    // 作者显式写了零风也要保留行，否则把强度拖到 0 后 actor 消失、无法再调回来。
+    if (worldWind.authored)
+        actors.push_back(BuildSceneWindActor(world));
 
     return actors;
 }

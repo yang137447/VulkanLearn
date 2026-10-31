@@ -757,35 +757,60 @@ bool ScriptRuntimeSubsystem::PollBlueprintAssetChanges(const World& world, float
     return true;
 }
 
+nlohmann::json ScriptRuntimeSubsystem::PerformanceView() const
+{
+    // Log 的 Scripts 页只消费这些随帧变化的时间/计数器；它们不再进入
+    // 事件驱动的脚本分节，而是随性能分节按 10 Hz 采样。
+    nlohmann::json result = performance;
+    if (!result.contains("blueprints")) result["blueprints"] = nlohmann::json::array();
+    if (!result.contains("pending"))
+        result["pending"] = {{"timers", 0}, {"subscriptions", 0}, {"events", 0}, {"rays", 0},
+            {"assets", 0}, {"commands", 0}, {"componentCommands", 0}};
+    result["time"] = ContextTime();
+    result["physicsMs"] = physicsMilliseconds;
+    result["detailsAgeSeconds"] = performanceDetailElapsed;
+    const auto metrics = host ? host->Metrics() : ScriptBridgeMetrics{};
+    result["pipeline"] = {{"serializeMs", metrics.serializeMs}, {"managedMs", metrics.managedMs},
+        {"parseMs", metrics.parseMs}, {"applyMs", applyMilliseconds}, {"snapshotMs", snapshotMilliseconds},
+        {"requestBytes", metrics.requestBytes}, {"responseBytes", metrics.responseBytes},
+        {"calls", metrics.calls}, {"updates", appliedUpdates}};
+    result["pipeline"]["detailSamples"] = detailSamples;
+    return result;
+}
+
 ScriptRuntimeView ScriptRuntimeSubsystem::View(uint64_t generation) const
 {
     ScriptRuntimeView result{host != nullptr, state, generation, classes, feedback};
     result.componentClasses = componentClasses;
     result.timeScale = time.scale;
-    result.performance = performance;
-    if (!result.performance.contains("blueprints")) result.performance["blueprints"] = nlohmann::json::array();
-    if (!result.performance.contains("pending"))
-        result.performance["pending"] = {{"timers", 0}, {"subscriptions", 0}, {"events", 0}, {"rays", 0},
-            {"assets", 0}, {"commands", 0}, {"componentCommands", 0}};
-    result.performance["time"] = ContextTime();
-    result.performance["physicsMs"] = physicsMilliseconds;
-    result.performance["detailsAgeSeconds"] = performanceDetailElapsed;
+    result.performance = PerformanceView();
+    AppendHudLines(result, generation);
+    return result;
+}
+
+ScriptRuntimeView ScriptRuntimeSubsystem::HudView(uint64_t generation) const
+{
+    // HUD 路径刻意不复制 classes/componentClasses/performance：那些只服务编辑器面板，
+    // 在 `--no-dev-ui` 下会被完整跳过；这里保留每帧文本刷新能力。
+    ScriptRuntimeView result;
+    result.available = host != nullptr;
+    result.state = state;
+    result.worldGeneration = generation;
+    AppendHudLines(result, generation);
+    return result;
+}
+
+void ScriptRuntimeSubsystem::AppendHudLines(ScriptRuntimeView& view, uint64_t generation) const
+{
     // HUD 是 GT 运行值的冻结副本；UI 只消费文本，不获得托管对象、委托或 DOM 权限。
     if (activeWorld && state != ScriptPlayState::Editing && activeWorld->GetGeneration() == generation)
         for (const auto& blueprint : activeWorld->GetScriptBlueprintStates())
             if (blueprint.contains("hud") && !blueprint.value("destroyed", false) &&
                 !blueprint.value("failed", false) && blueprint.value("enabled", true))
                 for (const auto& line : blueprint.at("hud"))
-                    result.hudLines.push_back({blueprint.at("id").get<std::string>(),
+                    view.hudLines.push_back({blueprint.at("id").get<std::string>(),
                         line.at("component").get<std::string>(), line.at("key").get<std::string>(),
                         line.at("text").get<std::string>()});
-    const auto metrics = host ? host->Metrics() : ScriptBridgeMetrics{};
-    result.performance["pipeline"] = {{"serializeMs", metrics.serializeMs}, {"managedMs", metrics.managedMs},
-        {"parseMs", metrics.parseMs}, {"applyMs", applyMilliseconds}, {"snapshotMs", snapshotMilliseconds},
-        {"requestBytes", metrics.requestBytes}, {"responseBytes", metrics.responseBytes},
-        {"calls", metrics.calls}, {"updates", appliedUpdates}};
-    result.performance["pipeline"]["detailSamples"] = detailSamples;
-    return result;
 }
 
 bool ScriptRuntimeSubsystem::SetTimeScale(float value, std::string& error)

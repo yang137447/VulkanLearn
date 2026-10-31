@@ -55,9 +55,14 @@ Maps/SC_car_showcase/
 目录名使用 PascalCase；资产文件继续使用现有类型前缀：
 
 - `SC_*.json`：场景定义
-- `SM_*.json`：模型/网格描述
+- `SM_*.json`：模型/网格描述，type 为 mesh/speedtree
+- `TF_*.json`：独立 TressFX 毛发资产，type 为 tressfx；`.tfx` 放所属内容域的
+  `Source/`，没有 GR_ 类型。现有 Female TF 描述符保留在地图的 `Meshes/` 目录，
+  编辑器身份由 type/kind 决定，不由该目录名决定；迁移期文档服务仍接受旧 SM_ 前缀
 - `MI_*.json`：材质实例
 - `T_*.json`：纹理描述
+- `RT_*.json`：显式骨名映射及可选 source/target 校准参考姿态，放在所属内容域的
+  `Retarget/`；编辑器预览可引用正式 `Skeletons/SK_*.json` 清单，运行时来源仍由 SM 拥有
 - `BP_*.json`：C# 蓝图 资产，class/属性/组件树/可选根刚体；场景实例保存 blueprintPath 与属性覆写，
   spawnAssets 声明预加载模板。资产不继承其它 BP
 - `*.blueprint.cs`：用户 C# 蓝图源码，与 BP 配置同属 Common 或对应地图的内容域；

@@ -366,7 +366,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     const nlohmann::json& materialInstanceJson,
     std::string_view materialPath,
     const nlohmann::json& materialJson,
-    bool supportsDualSourceBlend)
+    bool supportsDualSourceBlend,
+    bool prerenderSkin)
 {
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
@@ -391,6 +392,35 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
+    // 预蒙皮是引擎拥有的变体维度：材质不能自行声明，离线/编辑器预览路径
+    // 也走同一个 BuildLoadPlan，因此 flag 必须显式传入而不是读全局。
+    if (HasMaterialMacroName(loadPlan.shaderVariantKey.macros, "VL_SKINNED_PRERENDERED"))
+    {
+        throw std::runtime_error(
+            "VL_SKINNED_PRERENDERED is engine-owned and cannot be authored by a material: " +
+            std::string(materialInstancePath));
+    }
+    if (prerenderSkin && HasMaterialMacroValue(
+            loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
+    {
+        loadPlan.shaderVariantKey.macros.push_back("VL_SKINNED_PRERENDERED=1");
+        loadPlan.shaderVariantKey.macros = NormalizeMaterialMacros(
+            std::move(loadPlan.shaderVariantKey.macros));
+    }
+    const bool strandFactory = HasMaterialMacroValue(
+        loadPlan.shaderVariantKey.macros, "VL_TRESSFX_STRANDS", "1");
+    if (strandFactory)
+    {
+        // 探针与简单 PBR 共用发丝工厂；保留的 Hair ID 没有求值器，不能静默回退。
+        if ((shadingModel != "Unlit" && shadingModel != "DefaultLit") ||
+              loadPlan.shaderVariantKey.renderMode != RenderMode::TransparentAlphaBlendWriteDepth ||
+            loadPlan.cullMode != vk::CullModeFlagBits::eNone ||
+            !materialJson.contains("shaderEvaluation") ||
+            HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1") ||
+            materialJson.value("features", nlohmann::json::object()).value("modifiesMeshPosition", false))
+            throw std::runtime_error(
+                "TressFXStrands requires composed Unlit or DefaultLit AlphaBlendWriteDepth two-sided material without skinning or WPO");
+    }
 
     if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent)
     {
@@ -428,6 +458,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         request.shaderVariantKey = loadPlan.shaderVariantKey;
         request.pass = VL::MaterialPass::Base;
         request.features = loadPlan.materialFeatureKey;
+        if (strandFactory)
+            request.vertexFactoryKey = "TressFXStrands";
         if (HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
         {
             if (loadPlan.materialFeatureKey.modifiesMeshPosition)

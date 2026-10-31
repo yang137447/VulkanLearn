@@ -77,6 +77,7 @@
                 <button id="workspace-content-tab" data-workspace-panel="content" data-action="workspace-content">Content Browser</button>
                 <button id="workspace-renderer-tab" data-workspace-panel="renderer" data-action="workspace-renderer">Renderer</button>
                 <button id="workspace-log-tab" data-workspace-panel="log">Log</button>
+                <button id="workspace-performance-tab" data-workspace-panel="performance">Performance</button>
                 <button id="workspace-resource-tab" data-workspace-panel="resource" title="Asset Editor">
                     <img id="workspace-resource-icon" src="icons/file-box.png"/>
                     <span id="workspace-resource-label">Asset Editor</span>
@@ -177,7 +178,7 @@
                         <option value="pointLight">Point Lights</option>
                         <option value="spotLight">Spot Lights</option><option value="squareAreaLight">Square Area Lights</option>
                         <option value="camera">Cameras</option><option value="environment">Environments</option>
-                        <option value="windProfile">SpeedTree Wind Profiles</option>
+                        <option value="wind">Wind</option>
                         <option value="mesh">Meshes</option>
                         <option value="blueprintInstance">Blueprint Instances</option>
                     </select>
@@ -259,8 +260,9 @@
                     <select id="browser-type" data-action="browser-type">
                         <option value="all">All Assets</option><option value="material">Materials</option>
                         <option value="blueprint">Blueprints</option>
+                        <option value="retarget">Retargets</option>
                         <option value="csharp">C# Blueprint Classes</option>
-                        <option value="mesh">Meshes</option><option value="scene">Levels</option>
+                        <option value="mesh">Meshes</option><option value="tressfx">TressFX</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
                     </select>
                     <label class="browser-recursive-label"><input id="browser-recursive" type="checkbox" data-action="browser-recursive" checked="checked"/><span>Subfolders</span></label>
@@ -348,12 +350,49 @@
                     <div id="log-scripts-rows"></div>
                 </div>
             </div>
+            <div id="performance-page" class="dock-panel">
+                <!-- Performance 页只消费 EngineLoop 冻结的 CPU+GPU 快照；
+                     数字与 perf json/JSONL 共用同一序列化规则。 -->
+                <div class="performance-summary">
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">FPS</span>
+                        <span id="performance-fps" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">CPU frame</span>
+                        <span id="performance-cpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">GPU timed total</span>
+                        <span id="performance-gpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                </div>
+                <div id="performance-status" class="performance-status">Waiting for GPU samples...</div>
+                <!-- CPU 阶段表与 GPU pass 表共用行/条形样式，但用独立标题和表头分开；
+                     other 是派生行，保证各行之和与摘要里的 CPU frame 对得上。 -->
+                <div class="performance-section-title">CPU stages (game thread)</div>
+                <div id="performance-cpu-status" class="performance-status">Waiting for CPU samples...</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Stage</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% CPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-cpu-stages" class="performance-passes performance-cpu-stages"></div>
+                <div class="performance-section-title">GPU passes</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Pass</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% GPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-passes" class="performance-passes"></div>
+            </div>
             <div id="material-editor" class="dock-panel">
                 <div class="material-editor-toolbar">
                     <button id="material-frame" class="browser-icon" data-action="material-frame" title="Frame Preview Ball">
                         <img src="icons/camera.png"/><span class="browser-tooltip">Frame Preview Ball</span>
                     </button>
-                    <h3 id="document-title">Material Instance</h3>
                     <div class="toolbar-spacer"></div>
                     <button id="material-save" data-action="save" title="Save Material Instance">Save</button>
                     <button id="apply-preview" data-action="apply-preview">Apply Preview</button>
@@ -362,7 +401,10 @@
                 <div id="material-editor-body">
                     <div id="material-preview-surface">
                         <img id="material-preview-image" src="vl://scene-viewport"/>
-                        <p id="material-preview-status" class="muted"></p>
+                        <div class="asset-viewport-info">
+                            <h3 id="document-title">Material Instance</h3>
+                            <p id="material-preview-status" class="notice"></p>
+                        </div>
                     </div>
                     <div id="material-properties" class="inspector-body">
                     <p id="document-status" class="muted"></p>
@@ -388,6 +430,12 @@
                         <button id="resource-space-world" class="viewport-tool" data-action="resource-space" data-space="world" title="World space">World</button>
                         <button id="resource-space-local" class="viewport-tool" data-action="resource-space" data-space="local" title="Local space">Local</button>
                     </div>
+                    <div id="resource-hair-tools">
+                        <button id="resource-hair-reset" class="browser-icon" data-action="hair-reset" title="Reset hair simulation">
+                            <img src="icons/refresh.png"/><span class="browser-tooltip">Reset Hair</span>
+                        </button>
+                        <span>Left-drag rotates the model</span>
+                    </div>
                     <div class="toolbar-spacer"></div>
                     <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
                         <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
@@ -398,27 +446,120 @@
                     <button id="blueprint-asset-revert" class="browser-icon" data-action="blueprint-asset-revert" title="Revert Blueprint Draft">
                         <img src="icons/refresh.png"/>
                     </button>
-                    <button id="resource-close" class="browser-icon" data-action="resource-close" title="Close Asset">
-                        <img src="icons/arrow-left.png"/><span class="browser-tooltip">Close Asset</span>
-                    </button>
                 </div>
                 <div id="resource-editor-body">
                     <div id="blueprint-asset-editor"></div>
-                    <div id="resource-preview-panel">
-                        <div class="resource-panel-heading">
-                            <h2 id="resource-preview-title"></h2>
-                            <span id="resource-preview-kind"></span>
+                    <div id="retarget-asset-editor">
+                        <div class="retarget-toolbar retarget-mode-toolbar">
+                            <div class="viewport-tool-group">
+                                <button id="retarget-animation" class="viewport-tool" data-action="retarget-animation">Animation</button>
+                                <button id="retarget-reference" class="viewport-tool" data-action="retarget-reference">Reference Pose</button>
+                            </div>
                         </div>
+                        <div id="retarget-editor-workspace">
+                        <div id="retarget-hierarchy-panel">
+                            <div class="retarget-panel-title">Hierarchy</div>
+                            <div class="retarget-hierarchy-tools">
+                                <button id="retarget-hierarchy-source" class="viewport-tool" data-action="retarget-hierarchy-source">Source</button>
+                                <button id="retarget-hierarchy-target" class="viewport-tool" data-action="retarget-hierarchy-target">Target</button>
+                            </div>
+                            <div id="retarget-hierarchy"></div>
+                        </div>
+                        <div id="retarget-center">
+                        <div id="retarget-animation-workspace">
+                            <div id="retarget-preview-surface">
+                                <img id="retarget-preview-image" src="vl://scene-viewport"/>
+                                <div class="asset-viewport-info">
+                                    <h2 id="retarget-title">Retarget</h2>
+                                    <p id="retarget-identity"></p>
+                                    <p id="retarget-status"></p>
+                                    <p id="retarget-animation-status"></p>
+                                    <p id="retarget-preview-status" class="notice">Loading animation preview...</p>
+                                </div>
+                                <div id="retarget-animation-labels"><span class="retarget-source">Source</span><span class="retarget-target">Target</span></div>
+                            </div>
+                            <div id="retarget-animation-tools">
+                                <button id="retarget-animation-play" class="browser-icon" data-action="animation-play" title="Play both models"><img src="icons/play.png"/></button>
+                                <button id="retarget-animation-pause" class="browser-icon" data-action="animation-pause" title="Pause both models"><img src="icons/pause.png"/></button>
+                                <input id="retarget-animation-time" type="range" min="0" max="1" step="0.001" value="0" data-action="animation-time" title="Animation time"/>
+                                <button id="retarget-animation-frame" class="browser-icon" data-action="resource-frame" title="Frame both models"><img src="icons/camera.png"/></button>
+                            </div>
+                        </div>
+                        <div id="retarget-reference-toolbar" class="retarget-toolbar">
+                            <div class="viewport-tool-group">
+                                <button id="retarget-bind" class="viewport-tool" data-action="retarget-bind" title="Original skeleton bind poses">Bind</button>
+                                <button id="retarget-calibrated" class="viewport-tool" data-action="retarget-calibrated" title="Reference poses used by runtime retargeting">Calibrated</button>
+                            </div>
+                            <div class="viewport-tool-group">
+                                <button id="retarget-front" class="viewport-tool" data-action="retarget-front" title="XY projection, looking along -Z">Front</button>
+                                <button id="retarget-side" class="viewport-tool" data-action="retarget-side" title="ZY projection, looking along -X">Side</button>
+                                <button id="retarget-top" class="viewport-tool" data-action="retarget-top" title="XZ projection, looking along -Y">Top</button>
+                            </div>
+                            <select id="retarget-anchor" data-action="retarget-anchor" title="Translate both skeletons to this mapped joint; original bone lengths are preserved"></select>
+                        </div>
+                        <div id="retarget-reference-workspace" class="retarget-workspace">
+                            <div class="retarget-visual">
+                                <div id="retarget-legend">
+                                    <span class="retarget-source">Source</span><span class="retarget-target">Target</span><span>cm / Y-up</span>
+                                    <button id="retarget-focus" class="browser-icon" data-action="retarget-focus" title="Focus selected joint pair"><img src="icons/camera.png"/></button>
+                                    <button id="retarget-fit" class="browser-icon" data-action="retarget-fit" title="Fit both skeletons"><img src="icons/refresh.png"/></button>
+                                    <input id="retarget-zoom" type="range" min="1" max="6" step="0.1" value="1" data-action="retarget-zoom" title="Reference view zoom"/>
+                                    <label class="retarget-all-label" title="Include unmapped helper, IK, eye and finger branches"><input id="retarget-all-bones" type="checkbox" data-action="retarget-all-bones"/><span>All bones</span></label>
+                                </div>
+                                <div id="retarget-surface">
+                                    <div id="retarget-lines"></div>
+                                    <div class="asset-viewport-info">
+                                        <h2 id="retarget-reference-title">Retarget</h2>
+                                        <p id="retarget-reference-identity"></p>
+                                        <p id="retarget-reference-status"></p>
+                                        <p id="retarget-selection"></p>
+                                        <p id="retarget-measurement"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        </div>
+                        <div id="retarget-sidebar">
+                            <div class="retarget-panel-title">Details</div>
+                            <div id="retarget-details"></div>
+                            <div class="retarget-mapping">
+                                <div class="retarget-panel-title">Bone Mapping</div>
+                                <div class="retarget-table-heading"><span>Source / Target</span><span title="Position difference after translation at the anchor, without height scaling">Delta cm</span><span title="Direction difference from the nearest common mapped ancestor; not joint-axis rotation">Chain deg</span></div>
+                                <div id="retarget-mappings"></div>
+                                <div class="json-pager">
+                                    <button id="retarget-prev" class="browser-icon" data-action="retarget-prev" title="Previous mappings"><img src="icons/arrow-left.png"/></button>
+                                    <span id="retarget-page"></span>
+                                    <button id="retarget-next" class="browser-icon" data-action="retarget-next" title="Next mappings"><img src="icons/arrow-right.png"/></button>
+                                </div>
+                            </div>
+                            <div id="retarget-asset-browser">
+                                <div class="retarget-panel-title">Asset Browser</div>
+                                <select id="retarget-animation-clip" data-action="animation-clip" title="Source animation"></select>
+                                <div id="retarget-animation-assets"></div>
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+                    <div id="resource-preview-panel">
                         <div id="resource-animation-tools">
                             <button id="resource-animation-play" class="browser-icon" data-action="animation-play" title="Play animation"><img src="icons/play.png"/></button>
                             <button id="resource-animation-pause" class="browser-icon" data-action="animation-pause" title="Pause animation"><img src="icons/pause.png"/></button>
                             <select id="resource-animation-clip" data-action="animation-clip"></select>
                             <input id="resource-animation-time" type="range" min="0" max="1" step="0.001" value="0" data-action="animation-time"/>
-                            <span id="resource-animation-status"></span>
                         </div>
                         <div id="resource-preview-surface">
                             <img id="resource-preview-image" src="vl://scene-viewport"/>
+                            <div id="hair-group-legend-overlay"></div>
+                            <div id="hair-brush-overlay">
+                                <div id="hair-brush-hud"></div>
+                                <div id="hair-brush-ring"></div>
+                            </div>
                             <img id="resource-texture-image"/>
+                            <div class="asset-viewport-info">
+                                <h2 id="resource-preview-title"></h2>
+                                <p id="resource-preview-kind"></p>
+                                <p id="resource-animation-status"></p>
+                            </div>
                             <img id="resource-preview-icon" src="icons/mesh.png"/>
                             <h3 id="resource-preview-status"></h3>
                             <p id="resource-preview-path"></p>
@@ -439,6 +580,8 @@
                                 <p id="resource-motion-status"></p>
                                 <div id="resource-motion-values"></div>
                             </div>
+                            <div id="resource-hair-simulation"></div>
+                            <div id="resource-hair-groups"></div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

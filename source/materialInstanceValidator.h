@@ -43,13 +43,16 @@ public:
 
     // 在 MI override 合并完成后推导 Feature，确保 OpaqueClip/TwoSided 使用 effective state。
     // supportsDualSourceBlend 同时决定 Thin Translucent 的 shader 能力宏与固定混合状态。
+    // prerenderSkin 为启动 flag：只对 VL_SKINNED_MESH 材质追加引擎拥有的
+    // VL_SKINNED_PRERENDERED 宏，使 shader variant/cache 身份区分两条蒙皮路径。
     static MaterialInstanceBuildPlan BuildLoadPlan(
         std::string_view materialInstancePath,
         const PassPipelineContractKey& passPipelineContractKey,
         const nlohmann::json& materialInstanceJson,
         std::string_view materialPath,
         const nlohmann::json& materialJson,
-        bool supportsDualSourceBlend);
+        bool supportsDualSourceBlend,
+        bool prerenderSkin);
 
     // 用完整 schema 校验参数，并按已选 Base/ShadowDepth reflection 并集校验必需贴图。
     static void Validate(

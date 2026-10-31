@@ -323,6 +323,9 @@ SkinSection ReadSection(
     {
         std::swap(section.indices[face], section.indices[face + 2]);
     }
+    // 导入期一次算好按关节聚类的绑定空间 AABB；运行期姿态包围盒只需变换
+    // O(joints×8) 个角点，不再逐顶点蒙皮。失败会直接拒绝资产。
+    ComputeJointBindBounds(section);
     return section;
 }
 

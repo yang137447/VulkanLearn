@@ -26,8 +26,11 @@ struct EditorJsonAssetLimits
 
 // 纯解析入口，不读取引用路径。true 表示支持的候选（包括有诊断的损坏 JSON），
 // false 表示路径不合法或非支持类型；输出 diagnostic 区分失败原因。
+// tressfxModelDataPath 非空时接收顶层 modelDataPath，供 worker 后续读取 .tfx 头，
+// 本函数本身仍不访问任何被引用的文件。
 bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
-    EditorUi::EditorJsonDocumentSnapshot& document, bool includeFields = true);
+    EditorUi::EditorJsonDocumentSnapshot& document, bool includeFields = true,
+    std::string* tressfxModelDataPath = nullptr);
 
 // 仅检查相对路径的词法约束；实际文件的 canonical 越界检查另由 worker 在读取前执行。
 bool ValidateEditorJsonAssetPath(std::string_view assetPath, std::string& error);

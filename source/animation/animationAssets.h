@@ -32,6 +32,16 @@ struct Influence
     float weight = 0;
 };
 
+// 单关节的绑定空间 AABB，包含所有把该关节作为影响之一的顶点。
+// 运行时只把这些盒子变换到模型空间求并集（O(joints×8)），不再逐顶点蒙皮。
+struct JointBindBounds
+{
+    Eigen::Vector3f min = Eigen::Vector3f::Zero();
+    Eigen::Vector3f max = Eigen::Vector3f::Zero();
+    // 归属该关节的顶点数；0 表示该关节没有顶点，姿态包围盒计算时跳过。
+    uint32_t vertexCount = 0;
+};
+
 // 每个顶点保留全部正权重；CSR 范围随 MikkTSpace 的源顶点映射复制，不截断或重新归一化。
 struct SkinSection
 {
@@ -43,6 +53,12 @@ struct SkinSection
     std::vector<uint32_t> influenceOffsets;
     std::vector<Influence> influences;
     std::vector<Eigen::Matrix4f> inverseBinds;
+    // 导入期一次的保守包围盒数据；下标与 inverseBinds 相同。运行期只读、不再分配。
+    // 空数组表示调用方（测试/离线工具）直接构造了 section，BuildSkinPose 退回逐顶点精确路径。
+    std::vector<JointBindBounds> jointBindBounds;
+    // 生成 jointBindBounds 时统计的 max|Σw-1|。LBS 不归一化权重，混合位置会按
+    // 权重和绕原点缩放；保守包围盒据此扩张，保证仍包含精确蒙皮结果。
+    float jointBindWeightSumError = 0;
     Eigen::Matrix4f meshToModel = Eigen::Matrix4f::Identity();
     float maxBindPositionErrorCm = 0;
     float maxBindLinearError = 0;
@@ -50,6 +66,11 @@ struct SkinSection
     float maxWeightSumError = 0;
     uint32_t maxInfluences = 0;
 };
+
+// 由 vertices/influenceOffsets/influences 重新生成 jointBindBounds 与
+// jointBindWeightSumError。导入器在 section 构建完成后调用一次；测试/离线工具
+// 手动构造 SkinSection 后也应调用，才能命中运行期的 O(joints×8) 快路径。
+void ComputeJointBindBounds(SkinSection& section);
 
 // 网格导入结果共同拥有参考骨架、section 与 ozz 骨架，供片段映射和 CPU 求值使用。
 struct SkeletonMesh

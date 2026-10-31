@@ -173,11 +173,15 @@
                         "properties": {
                             "id": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\|\\u0000]+$"},
                             "parent": {"type": "string"},
-                            "type": { "enum": ["scene", "mesh", "camera", "springArm", "pointLight", "spotLight", "directionalLight"] },
+                            "type": { "enum": ["scene", "mesh", "tressfx", "camera", "springArm", "pointLight", "spotLight", "directionalLight"] },
                             "position": {"$ref": "#/$defs/vec3"},
                             "rotation": {"$ref": "#/$defs/vec3"},
                             "scale": {"$ref": "#/$defs/vec3"},
                             "modelPath": { "type": "string", "minLength": 1 },
+                            "rootBone": {"type": "string", "minLength": 1},
+                            "weights": {"enum": ["auto", "rootBone", "mesh"]},
+                            "simulation": {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxSimulation"},
+                            "hairCollision": {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxHairCollision"},
                             "materialOverride": { "type": "string", "minLength": 1 },
                             "fov": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 179},
                             "near_clip": {"type": "number", "exclusiveMinimum": 0},
@@ -215,6 +219,8 @@
                         "if": {"type": "object", "properties": {"type": {"const": "mesh"}}},
                         "then": {"required": ["modelPath"]},
                         "allOf": [
+                            {"if": {"properties": {"type": {"const": "tressfx"}}, "required": ["type"]},
+                             "then": {"required": ["modelPath", "rootBone"]}},
                             {"if": {"type": "object", "properties": {"type": {"enum": ["pointLight", "spotLight"]}}},
                              "then": {"type": "object", "required": ["intensityUnit"], "properties": {"intensityUnit": {"const": "cd"}}}},
                             {"if": {"type": "object", "properties": {"type": {"const": "directionalLight"}}},
@@ -351,6 +357,7 @@
             "type": "object",
             "description": "网格实例。sceneObjectIdentity 在运行期用于把同一场景对象的多个 section 聚合成大纲的一行。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
             "properties": {
+                "tressfx": {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxPlacement"},
                 "name": {
                     "type": "string"
                 },

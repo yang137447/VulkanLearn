@@ -56,11 +56,32 @@ const Field fields[] = {
     {K::Scene, "camera", "exposure.autoSpeedUp", ValueKind::Number, true, "1/s"},
     {K::Scene, "camera", "exposure.autoSpeedDown", ValueKind::Number, true, "1/s"},
     {K::Scene, "camera", "exposure.autoTargetGray", ValueKind::Number, true, "linear"},
+    {K::Scene, "wind", "direction", ValueKind::Vector3},
+    {K::Scene, "wind", "strength", ValueKind::Number, false, "cm/s"},
+    {K::Scene, "wind", "gust.amplitude", ValueKind::Number},
+    {K::Scene, "wind", "gust.frequency", ValueKind::Number},
+    {K::Scene, "wind", "gust.turbulence", ValueKind::Number},
     {K::Mesh, "", "name", ValueKind::Text},
     {K::Mesh, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    {K::Tressfx, "", "name", ValueKind::Text},
+    {K::Tressfx, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    // TressFX 默认模拟标量由独立文档拥有；放置覆盖不写回这里。作者值由
+    // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
+    {K::Tressfx, "", "simulationDefaults.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Tressfx, "", "simulationDefaults.damping", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.iterations", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.bendStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeEffectiveRange", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspCoefficient", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
+    {K::Tressfx, "", "simulationDefaults.windGain", ValueKind::Number},
+    // 分组整体作为数组写入：形状、名称与区间由 MeshAssetValidator 在 modify/save 时校验。
+    {K::Tressfx, "", "groups", ValueKind::Array, true},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
+    {K::Tressfx, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
     {K::Texture, "", "name", ValueKind::Text},
     {K::Texture, "", "source", ValueKind::Text, false, "source_path"},
     {K::Texture, "", "colorSpace", ValueKind::Text, false, "", "linear|srgb"},
@@ -105,7 +126,7 @@ const Field& FindField(K kind, const EditorAssetFieldChange& change)
     if (change.objectIdentity && (kind != K::Scene || change.slotIndex || change.expectedSlotName))
         throw std::invalid_argument("objectIdentity is only valid for scene object fields");
     if (change.slotIndex.has_value() != change.expectedSlotName.has_value() ||
-        (change.slotIndex && kind != K::Mesh) ||
+        (change.slotIndex && kind != K::Mesh && kind != K::Tressfx) ||
         (change.expectedSlotName && change.expectedSlotName->empty()))
         throw std::invalid_argument("Mesh slots require slotIndex and non-empty expectedSlotName");
     const auto scope = Scope(change);
@@ -410,7 +431,7 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
         result["cameraRotationClearsLookAt"] = true;
         result["intensitySemantics"] = "authored_value_in_final_intensityUnit";
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["slots"] = Json::array();
         const auto& slots = document.at("materialSlots");
@@ -424,6 +445,17 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
 Json ProjectEditableAsset(K kind, const Json& document)
 {
     Json result = Projection(kind, "", document);
+    if (kind == K::Tressfx && document.contains("simulationDefaults"))
+    {
+        // enabled/backend 不开放写能力，但 UI 必须用同一作者投影判断 live/Reset。
+        // 保留对象存在性与原始缺省，不能在投影时把运行期缺省值烘成作者字段。
+        if (!result.contains("simulationDefaults"))
+            result["simulationDefaults"] = Json::object();
+        const auto& defaults = document.at("simulationDefaults");
+        for (const char* field : {"enabled", "backend"})
+            if (defaults.contains(field))
+                result["simulationDefaults"][field] = defaults.at(field);
+    }
     if (kind == K::Scene)
     {
         result["worldUnit"] = document.at("worldUnit");
@@ -435,7 +467,7 @@ Json ProjectEditableAsset(K kind, const Json& document)
             result["objects"].push_back(std::move(projected));
         }
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["materialSlots"] = Json::array();
         for (const auto& slot : document.at("materialSlots"))

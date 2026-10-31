@@ -52,6 +52,8 @@ enum class EditorCommandType
     ValidateSceneDocument, RevertSceneDocument, ReloadSceneDocument,
     GetMeshDocument, GetMeshCapabilities, ModifyMeshDocument,
     ValidateMeshDocument, SaveMeshDocument, RevertMeshDocument, ReloadMeshDocument,
+    GetTressfxDocument, GetTressfxCapabilities, ModifyTressfxDocument,
+    ValidateTressfxDocument, SaveTressfxDocument, RevertTressfxDocument, ReloadTressfxDocument,
     GetTextureDocument, GetTextureCapabilities, ModifyTextureDocument,
     ValidateTextureDocument, SaveTextureDocument, RevertTextureDocument, ReloadTextureDocument,
     GetBlueprintDocument, GetBlueprintCapabilities, ModifyBlueprintDocument,
@@ -229,7 +231,7 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
-enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint };
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, Tressfx };
 enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Undo, Redo };
 using EditorAssetFieldValue = std::variant<std::string, bool, double,
     std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>, nlohmann::json>;

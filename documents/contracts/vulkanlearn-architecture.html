@@ -987,6 +987,7 @@
                 </tbody>
             </table>
             <h3>材质与 shader 数据流</h3>
+            <p>TressFX guide 通过 <code>SM_*.json type=tressfx</code> 与 <code>TressfxModelImporter</code> 进入既有 MeshAssetLoader、World 候选与快照链；GPU 的 <code>TressFXStrands</code> 顶点工厂从对象级中心线 SSBO 读取位置并展开相机朝向 ribbon。当前支持 Unlit 探针与复用 DefaultLit 的简单 PBR；simulation 按资产选择 CPU 参考 solver 或独立 GPU compute pass，后者位于预蒙皮和图形 pass 之前，支持骨骼根点、绑定胶囊及 SDF 代理。尚未接入独立 groom 场景对象或 Hair 闭包，详见 <a href="tressfx-asset-import.md">TressFX 资产导入合同</a>。</p>
             <pre><code>shader/glsl + material JSON
   -> MaterialParameterIncludeGenerator
   -> ShaderCompiler + ShaderReflection
@@ -1298,6 +1299,7 @@
             <h2>12) WorldSnapshot 生成与消费（GT -> RT）</h2>
             <p class="summary"><code>WorldSnapshot</code> 可以理解为 GT 给 RT 的一帧只读渲染订单。它不是复制整个 <code>World</code>，而是在 GT 仍然拥有 mutable <code>World</code> 的时刻，把渲染需要的 camera、draw、light、environment 和逻辑资源句柄导出成不可变 DTO，再通过一个 latest-wins mailbox 交给渲染侧消费。</p>
             <p class="rule">关键点：RT 不是“安全地读 World”，而是“完全不读 World”。RT 只读 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>，再把它翻译成自己的 <code>RenderScene</code>。</p>
+            <p>模拟时间也随姿态冻结：每个 draw 携带所属普通动画或蓝图的 <code>simulationDeltaSeconds</code>，场景另携带未绑定发丝的 <code>hairSimulationDeltaSeconds</code>。骨骼绑定发丝继承源 draw 时钟，RT 不从脚本宿主或曝光墙钟获取 delta。同一 World/frame 的物理时间只消费一次，重绘最近有效快照不重复步进；resize/图重建的纯刷新使用零 delta，正常帧发布成功后领取待发布时间片。具体时钟和相对模型空间约定见 <a href="animation-runtime-skinning.md">动画播放与 GPU 蒙皮</a>。</p>
 
             <h3>先用代码视角理解 snapshot</h3>
             <p class="muted">这里的 snapshot 更像相机快门，而不是存档系统：GT 在一个确定时刻按下快门，把“这一帧渲染要用的数据”拍成不可变结构；之后 GT 可以继续 tick、移动物体、切换 World，RT 手里的旧 snapshot 仍然是一份完整、独立、只读的渲染输入。</p>

@@ -221,6 +221,8 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         world->SetProjectileSettings(worldBuildPlan.projectileSettings);
 
         WorldEnvironment environment;
+        // 风缺省为无风；场景有 wind 对象时由校验器保证最多一个。
+        WorldWind wind;
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
         CsmSettings csmSettings;
 
@@ -274,6 +276,10 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             {
                 environment = BuildEnvironment(objectJson);
             }
+            else if (type == "wind")
+            {
+                wind = ReadSceneWind(objectJson);
+            }
         }
 
         if (!world->GetCamera())
@@ -288,11 +294,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
+        world->SetWind(wind);
         world->SetCsmSettings(std::move(csmSettings));
 
-        for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)
+        for (const WindResponseProfile& profile : worldBuildPlan.windResponseProfiles)
         {
-            world->AddSpeedTreeWindProfile(profile);
+            world->AddWindResponseProfile(profile);
         }
 
         for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
@@ -313,9 +320,14 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
             object.collisionTriangles = meshObjectPlan.collisionTriangles;
             object.meshKey = meshObjectPlan.meshKey;
+            object.tressfxGroupBinding = meshObjectPlan.tressfxGroupBinding;
+            object.tressfxGroupConfigs = meshObjectPlan.tressfxGroupConfigs;
+            object.placementBinding = meshObjectPlan.placementBinding;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
-            object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
+            object.windResponseProfileKey = meshObjectPlan.windResponseProfileKey;
+            object.tressfxPointsPerGuide = meshObjectPlan.tressfxPointsPerGuide;
+            object.tressfxRootCloud = meshObjectPlan.tressfxRootCloud;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

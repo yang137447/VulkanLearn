@@ -8,6 +8,7 @@
 #include "render/camera/cameraExposure.h"
 #include "render/lighting/physicalLighting.h"
 #include "world/environmentType.h"
+#include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "physics/fracture/destructibleProfile.h"
 
@@ -101,6 +102,9 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 throw std::invalid_argument("spawnAssets requires non-empty asset paths");
     }
     bool hasCamera = false;
+    // 风是全场景唯一的全局对象；计数放在循环外，报错时能指出是哪个场景。
+    size_t windCount = 0;
+    const std::string sceneName = scene.value("name", std::string("<unnamed>"));
     std::set<std::string> identities;
     std::set<std::string> actorIds;
     for (const auto& object : scene.at("objects"))
@@ -132,18 +136,25 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 (!environment.contains("hdrPath") || environment.at("hdrPath").get<std::string>().empty()))
                 throw std::invalid_argument("HDRI requires hdrPath");
         }
+        if (type == "wind")
+        {
+            if (++windCount > 1)
+                throw std::invalid_argument("Scene has more than one wind object: " + sceneName);
+            ValidateSceneWindJson(object);
+        }
         if (!identities.insert(type + "|" + (type == "blueprintInstance"
             ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
         if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
             type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
-            type != "environment" && type != "blueprintInstance" && type != "balloon" &&
-            type != "glassPane")
+            type != "environment" && type != "blueprintInstance" && type != "wind" &&
+            type != "balloon" && type != "glassPane")
             throw std::invalid_argument("Unknown scene object type: " + type);
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
-            const bool required = (std::string(field) == "position" && type != "environment") ||
-                (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight") ||
+            // wind 是全场景全局对象，没有位置与朝向；其字段由 ValidateSceneWindJson 单独收口。
+            const bool required = (std::string(field) == "position" && type != "environment" && type != "wind") ||
+                (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight" && type != "wind") ||
                 (std::string(field) == "scale" && (type == "mesh" || type == "camera" ||
                     type == "blueprintInstance" || type == "balloon" || type == "glassPane")) ||
                 (std::string(field) == "normal" && type == "squareAreaLight");
@@ -166,6 +177,8 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "mesh")
         {
+            if (object.contains("tressfx"))
+                Hair::ReadTressfxPlacementBehavior(object.at("tressfx"), name);
             for (const char* field : {"modelPath", "materialOverride"})
             {
                 if (std::string(field) == "materialOverride" && !object.contains(field)) continue;

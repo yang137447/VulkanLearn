@@ -65,8 +65,8 @@
 - 适用场景：任何脚本化启动 `main.exe` 的流程（截图、手工核对、冒烟验证）
 - 失败表现：进程泄漏；`build\bin\main.exe` 被锁住，**下一次构建报 `Permission denied`**
 - 根因：应用没有退出路径 —— `source/debugConsole.cpp` 没有 `exit`/`quit` 命令（只有
-  debugview / tonemap / bloom / help / offline / loadworld / environment / windgust /
-  windstrength / screenshot / camera / shaderreload / shadercache），`Quit` 只是 `UiAction`
+  debugview / tonemap / bloom / help / offline / loadworld / environment / screenshot /
+  camera / shaderreload / shadercache），`Quit` 只是 `UiAction`
 - 规避动作：启动后**必须自己终止进程**；等待截图落盘再 `Stop-Process`。
   报告时区分"渲染证据"与"正常关闭流程证据"——强制终止**不构成** teardown 证据
 - 证据：本分支一次真实事故 —— 泄漏的进程存活约 25 分钟并锁住输出文件，使并发 agent 的构建失败

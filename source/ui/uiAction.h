@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "editor/scene/editorActorProperty.h"
 #include "debug/debugDrawControl.h"
+#include "hair/tressfxGroupPaint.h"
 
 namespace VL
 {
@@ -18,9 +19,26 @@ enum class UiActionType
     LoadWorld,
     // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
     PreviewModel,
+    PreviewRetarget,
     PreviewMaterial,
     PreviewBlueprint,
     NavigateModelPreview,
+    // 毛发资产视口：左键拖动旋转预览对象。只作用于预览 World，不写 SC/SM；
+    // GT 把它转成绝对的 SetMeshPlacement，累计角度由 UI 维护。
+    RotatePreviewModel,
+    // 毛发资产视口的复位：排队一次 ResetPositions（stringValue 空 = 所有 tressfx 对象）。
+    ResetHairSimulation,
+    // 毛发资产视口的模拟参数实时覆盖：只在当前预览 World 生效，不写资产。
+    // 字段名与值域由运行期命令边界再次校验。
+    SetHairSimulationParameter,
+    // 毛发分组预览（Group Colors / Selected / Solo）：只改当前预览 World 的会话状态，
+    // 不写资产，也不直接接触 GPU buffer。
+    SetTressfxGroupPreview,
+    // Groups 草稿绑定的预览同步：只在草稿结构/预览 generation 变化时发送；
+    // 由运行时队列交给 RT 原地更新 group id/颜色/参数 buffer。
+    SetTressfxGroupBindingPreview,
+    // 分组笔刷 ghost：只更新 per-object preview buffer，不写资产或 GPU group id。
+    SetTressfxBrushPreview,
     ControlAnimationPreview,
     // 被聚焦脚本控制器的时间轴：stringValue=组件身份，intValue 0=seek/1=play，floatValue=秒。
     ControlScriptAnimation,
@@ -81,9 +99,6 @@ enum class UiActionType
     RedoSceneEdit,
     CreateScriptBlueprintAsset,
     OpenScriptSource,
-    SetSpeedTreeStrength,
-    SetSpeedTreeGustingEnabled,
-    ForceSpeedTreeGust,
     Quit
 };
 
@@ -126,14 +141,74 @@ struct BlueprintPreviewTransformInput
     bool reset = false;
 };
 
+// 毛发视口的模型旋转：yaw 是预览世界内的累计角度（度），只绕资产原点 Y 轴转动。
+// pitch 字段保留兼容，毛发 UI 恒传 0；不改原点位置，不写资产或场景数据。
+struct ModelPreviewRotationInput
+{
+    uint64_t worldGeneration = 0;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+
+// 毛发视口的实时参数：field 与作者字段同名（gravity/damping/...），
+// valueCount 决定读 1 或 3 个分量。UI 只发值语义，校验与投递都在 GT/RT。
+struct ModelPreviewHairParameterInput
+{
+    uint64_t worldGeneration = 0;
+    std::string field;
+    std::array<float, 3> values{0.0f, 0.0f, 0.0f};
+    uint32_t valueCount = 0;
+};
+
+struct ModelPreviewTressfxGroupInput
+{
+    uint64_t worldGeneration = 0;
+    // -1 = 无选中；0 = 隐式 Default；k = 声明序第 k 个命名组。
+    int32_t selectedGroup = -1;
+    // 与 shader 的 uboM.selectionData.w 一致：bit0 Group Colors，bit1 Solo。
+    uint32_t flags = 0;
+};
+
+struct ModelPreviewTressfxGroupBindingInput
+{
+    uint64_t worldGeneration = 0;
+    uint64_t draftRevision = 0;
+    std::string objectName;
+    std::vector<uint32_t> guideGroupIds;
+    std::vector<std::string> groupNames;
+    std::string bindingKey;
+};
+
+struct ModelPreviewTressfxBrushInput
+{
+    uint64_t worldGeneration = 0;
+    std::string objectName;
+    // 0 = Default（不允许作为绘画目标）；k = 声明序第 k 个命名组。
+    uint32_t targetGroupId = 0;
+    VL::Hair::GroupPaintMode mode = VL::Hair::GroupPaintMode::Add;
+    std::vector<VL::Hair::TressfxBrushGuideWeight> weights;
+    // 世界空间笔刷圆环；正常路径由 World DebugDraw 绘制，UI 的屏幕圆环只做降级提示。
+    bool ringVisible = false;
+    Eigen::Vector3f ringCenter = Eigen::Vector3f::Zero();
+    Eigen::Vector3f ringNormal = Eigen::Vector3f::UnitY();
+    float ringRadiusWorld = 0.0f;
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
     int intValue = 0;
     float floatValue = 0.0f;
     std::string stringValue;
+    // PreviewRetarget: stringValue 为 RT 身份，此字段为作者指定的目标 SM；GT 核对二者绑定。
+    std::string retargetPreviewModel;
     uint64_t blueprintPreviewRevision = 0;
     ModelPreviewCameraInput previewCamera;
+    ModelPreviewRotationInput previewRotation;
+    ModelPreviewHairParameterInput previewHairParameter;
+    ModelPreviewTressfxGroupInput previewTressfxGroup;
+    ModelPreviewTressfxGroupBindingInput previewTressfxGroupBinding;
+    ModelPreviewTressfxBrushInput previewTressfxBrush;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;

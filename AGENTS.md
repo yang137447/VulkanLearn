@@ -299,6 +299,8 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `wind` (scene-global wind, at most one per scene; `direction`/`strength`/optional `gust`;
+  no position/rotation; see `documents/contracts/scene-wind.md`)
 - `balloon` (runtime rubber soft body; current scope and limits are in `documents/contracts/softbody-runtime.md`; Jolt impact, convex-hull shards, shard-shard contact, neck anchoring, approximate Jolt-pose coupling and asset-backed audio with procedural fallback are connected; advanced spatial audio/material are not)
 - `glassPane` (runtime glass plate; current scope and limits are in `documents/contracts/glass-fracture-runtime.md`; impact-point radial fracture, Jolt convex-hull shards, attached plates, support islands, CCD projectiles, landing secondary fracture and asset-backed glass audio with procedural fallback are connected; transparent material is not)
 

@@ -45,6 +45,17 @@ schema 标注 `post-blend-pre-ik`；实际姿态历史与搜索前临时观察�
 
 `motionRuntimeDatabase.*` 是工具和运行时共用的输入捕获、缓存和加载入口；
 `tool/animation/motionDatabaseBuild.*` 只保留工具命名空间适配。
+当前 `LoadMotionRuntimeDatabase()` 对 `asset.IsRetargeted()` 直接拒绝，并返回：
+
+```text
+Motion Matching on retargeted assets requires a source-space pose history
+```
+
+原因是现有 feature schema、pose history 和数据库 joint indices 按绑定骨架记录；
+把 source database 直接套到 target pose 会把关节索引和统计空间混用。普通非
+retarget asset 的数据库捕获、绑定和搜索行为不变。当前没有 retarget 的 source-space
+pose history/查询，普通片段与 Montage retarget 不代表 Motion Matching 已可用。
+
 首次请求按正式资源相对路径加载，核对模型、片段输入字节与骨架名字/父关系，
 拒绝把同路径下已经改变的 FBX 与旧播放器混合。World 缓存持有 const 资源，
 数据库的输入身份、payload 身份、schema、统计和片段映射一起保持存活。

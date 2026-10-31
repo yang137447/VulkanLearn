@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "core/runtimeResult.h"
+#include "core/cpuFrameProfiler.h"
+#include "core/performanceJsonlWriter.h"
 #include "platform/platformEvent.h"
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
@@ -53,6 +55,8 @@ enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
 struct WorldHandle;
+// 引擎内部的动画预览派生数据缓存；定义在 engineLoop.cpp，UI 侧不接触。
+struct UiAnimationPreviewCache;
 
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
 // PlatformApplication hides SDL startup/window/event details; EngineLoop owns
@@ -88,9 +92,47 @@ private:
     void UpdateUiViewModel(
         float deltaTime,
         const RuntimeCommandExecutionResult& commandResult);
+    // 只填充逐帧变化的轻量字段（世界路径、离线标记、调试绘制、相机、HUD 文本）。
+    void FillUiViewModelLiveFrame(
+        UiViewModelFrameValues& frame,
+        UiViewModelBuildMode buildMode,
+        const WorldHandle& activeWorld);
+    // 只在到期窗口/事件强制时调用：按掩码重建对应的分节载荷；未重建的节
+    // 在 UiViewModelSectionUpdate 里保持 nullopt，UiSubsystem 保留旧版本。
+    void BuildUiViewModelSections(
+        UiViewModelSectionUpdate& sections,
+        UiSectionMask rebuild,
+        const UiViewModelFrameValues& frameValues,
+        const WorldHandle& activeWorld,
+        const RuntimeCommandExecutionResult& commandResult);
+    void BuildUiScriptsSection(UiScriptsSection& section, const WorldHandle& activeWorld);
+    void BuildUiAnimationSection(UiAnimationPreviewSection& section, const WorldHandle& activeWorld);
+    void BuildUiPerformanceSection(UiPerformanceSection& section);
+    void BuildUiViewportCameraSection(
+        UiViewportCameraSection& section,
+        const UiViewModelFrameValues& frameValues);
+    void BuildUiEnvironmentLightingSection(
+        UiEnvironmentLightingSection& section,
+        const WorldHandle& activeWorld);
+    void BuildUiOfflineSection(
+        UiOfflineSection& section,
+        const RuntimeCommandExecutionResult& commandResult);
+    // 大纲/MI 模型列表按“内容变化”重建：未声明重建时复用同一份 shared_ptr，
+    // 大纲节版本因此不会因为 10 Hz 轮询而推进。
+    void BuildUiSceneOutlinerContent();
+    // 动画预览的派生数据按“世界代数 + 播放器身份”缓存；每帧只重算随播放时间
+    // 变化的值，不重复分配 clip 列表/特征通道/schema。
+    void CaptureUiAnimationPreview(
+        UiAnimationPreviewSection& section,
+        const World& world,
+        uint64_t generation);
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
+    // --perf-jsonl：按墙钟每秒把同一份 Performance 快照追加一行。
+    void TickPerformanceJsonl();
+    // --gpu-stats：每秒输出分节重建/面板构建计数，证明门禁生效。
+    void TickUiSectionStats();
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;
@@ -187,9 +229,35 @@ private:
     uint64_t thumbnailSessionEpoch = 0;
     EditorThumbnailScheduler thumbnailScheduler;
     uint64_t uiFrameIndex = 0;
+    // 视图模型可见性/刷新节拍：隐藏时不构建编辑器分节；可见时按 10 Hz 重新采样
+    // 时间/进度驱动的节，事件只强制自己声明的节（见 UiSectionMask）。
+    UiViewModelRefreshSchedule uiViewModelRefresh;
+    UiViewModelBuildMode uiViewModelBuildMode = UiViewModelBuildMode::None;
+    bool uiViewModelScriptBuildPending = false;
+    uint64_t lastUiViewModelWorldGeneration = 0;
+    std::string lastUiViewModelWorldPath;
+    bool lastUiViewModelOfflineMode = false;
+    ScriptPlayState lastUiViewModelScriptState = ScriptPlayState::Editing;
+    // GT 拥有的六节（脚本/动画/性能/相机/环境/离线）；资产/大纲/状态由 UiSubsystem 发布。
+    UiViewModelSectionStore uiViewModelSections;
+    bool uiViewModelSectionFirstRefresh = true;
+    // 脚本节输入版本：由已有代数/状态组合，不引入第二份权威状态。
+    uint64_t uiScriptsSectionRevision = 0;
+    // 大纲节内容缓存：只在 World 换代/命令/选中事件重建，静止帧复用同一份指针。
+    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> uiSceneActors;
+    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> uiSceneModels;
+    // --gpu-stats：每秒读取一次 UiSubsystem 的分节/面板计数。
+    std::chrono::steady_clock::time_point nextUiSectionStats{};
+    bool gpuStatsEnabled = false;
+    std::unique_ptr<UiAnimationPreviewCache> uiAnimationPreviewCache;
     std::string pendingScriptBlueprintSelection;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;
+    // 时间序列由 GT 写盘，避免渲染线程做文件 I/O；未开启时 IsOpen() 为 false。
+    PerformanceJsonlWriter perfJsonl;
+    std::chrono::steady_clock::time_point nextPerfJsonlWrite{};
+    // GT 独占的 CPU 阶段计时器；每帧 CommitFrame 后交给 RenderSystem 的唯一快照。
+    CpuFrameProfiler cpuFrameProfiler;
 };
 
 } // namespace VL

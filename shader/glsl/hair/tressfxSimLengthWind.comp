@@ -1,0 +1,117 @@
+#version 450
+
+// TressFXSimulationLengthConstraintsWind.usf -> LengthConstraintsWindAndCollision
+// 的长度/风部分（源 shader 的 SDF 碰撞不在此 pass，VL 的胶囊投影是额外 pass）。
+// 一个 invocation 处理一根 strand，串行执行；dispatch = ceil(guideCount / 64)。
+//
+// 与源实现的 groupshared 布局不同：TressFX 把同一 workgroup 的多根 strand 交错
+// 放进 SharedPos，每根 strand 仍是单线程顺序执行的。VL 按 strand 独立串行，等价，
+// 但少了同组内 strand 的并行度。偶数边/奇数边的分组和先后顺序保持不变：
+// 每组内部的边互不共享顶点，因此组内串行与并行结果相同。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 2, std430) buffer PreviousPositions
+{
+    vec4 positions[];
+} previousPositions;
+
+// 第 i 项是 i -> i+1 的静止长度，末项 0（TressFX 的 GuidesRestLengthBuffer）。
+layout(set = 0, binding = 5, std430) readonly buffer RestLengths
+{
+    float lengths[];
+} restLengths;
+
+// TressFX 的 ClampPositionDelta = 0.3 m；VL 使用厘米，对应 30 cm。
+const float TressfxClampPositionDeltaCm = 30.0;
+
+void main()
+{
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
+        return;
+
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    uint root = guide * pointsPerGuide;
+    uint rootFixedPoints = TressfxRootFixedPoints();
+    float dt = params.controls.x;
+
+    // 风：场景 wind 是空气速度（cm/s），不是 TressFX 的 WindMagnitude。
+    // 对每个点取法向相对速度，做半隐式线性阻力：
+    //   rate = dragRatePerSpeed * |u_n|
+    //   beta = 1 - exp(-rate * dt)
+    //   p += u_n * beta * dt
+    // 这样段长不改变响应，dt 大时也不会像显式二次阻力那样发散。
+    if (dot(params.wind0.xyz, params.wind0.xyz) > 0.0)
+    {
+        vec3 wind = TressfxCombinedWind(guide);
+        float dragRatePerSpeed = params.windParams.x;
+        if (dt <= 0.0)
+            return;
+        for (uint local = rootFixedPoints; local + 1u < pointsPerGuide; ++local)
+        {
+            uint point = root + local;
+            vec3 current = currentPositions.positions[point].xyz;
+            vec3 previous = previousPositions.positions[point].xyz;
+            vec3 next = currentPositions.positions[point + 1u].xyz;
+            vec3 segment = current - next;
+            float segmentLength = length(segment);
+            if (segmentLength < 1.0e-8)
+                continue;
+            vec3 tangent = segment / segmentLength;
+            vec3 segmentVelocity = (current - previous) / dt;
+            vec3 relative = wind - segmentVelocity;
+            vec3 normal = relative - tangent * dot(relative, tangent);
+            float normalSpeed = length(normal);
+            float beta = 1.0 - exp(-dragRatePerSpeed * normalSpeed * dt);
+            currentPositions.positions[point].xyz += normal * (beta * dt);
+        }
+    }
+
+    // TressFX 偶数边/奇数边分组的位置约束迭代。
+    uint evenEdgeCount = pointsPerGuide / 2u;
+    uint oddEdgeCount = (pointsPerGuide - 1u) / 2u;
+    for (uint iteration = 0; iteration < params.counts.x; ++iteration)
+    {
+        for (uint edge = 0; edge < evenEdgeCount; ++edge)
+        {
+            uint point = root + 2u * edge;
+            vec4 pos0 = currentPositions.positions[point];
+            vec4 pos1 = currentPositions.positions[point + 1u];
+            TressfxApplyDistanceConstraint(pos0, pos1, restLengths.lengths[point]);
+            currentPositions.positions[point] = pos0;
+            currentPositions.positions[point + 1u] = pos1;
+        }
+        for (uint edge = 0; edge < oddEdgeCount; ++edge)
+        {
+            uint point = root + 2u * edge + 1u;
+            vec4 pos0 = currentPositions.positions[point];
+            vec4 pos1 = currentPositions.positions[point + 1u];
+            TressfxApplyDistanceConstraint(pos0, pos1, restLengths.lengths[point]);
+            currentPositions.positions[point] = pos0;
+            currentPositions.positions[point + 1u] = pos1;
+        }
+    }
+
+    // 速度 clamp：不改当前位置，只在超限时重写 previous 位置。
+    float maxDelta = TressfxClampPositionDeltaCm;
+    for (uint local = 0; local < pointsPerGuide; ++local)
+    {
+        uint point = root + local;
+        vec4 pos = currentPositions.positions[point];
+        vec4 old = previousPositions.positions[point];
+        vec3 delta = pos.xyz - old.xyz;
+        float speedSquared = dot(delta, delta);
+        if (speedSquared > maxDelta * maxDelta)
+        {
+            delta *= maxDelta * maxDelta / speedSquared;
+            previousPositions.positions[point] = vec4(pos.xyz - delta, pos.w);
+        }
+    }
+}

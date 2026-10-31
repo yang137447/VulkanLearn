@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "core/logStore.h"
+#include "core/performanceSnapshot.h"
 
 #include "editor/command/editorCommand.h"
 #include "editor/selection/materialInstanceSelection.h"
@@ -190,6 +191,9 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
     std::vector<EditorAssetDocumentResultPayload> blueprintDocuments;
+    // 毛发视口读取独立 TressFX 草稿的 simulation 字段与 revision。与 blueprintDocuments
+    // 同一投影方式：服务独占草稿，UI 只见只读快照。
+    std::vector<EditorAssetDocumentResultPayload> tressfxDocuments;
     std::vector<EditorBlueprintCommandFeedback> blueprintCommandFeedback;
     std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;
@@ -204,6 +208,9 @@ struct MaterialInstanceEditorSnapshot
     std::optional<MaterialInstanceDocumentSnapshot> activeDocument;
     std::optional<MaterialInstanceModelSnapshot> selectedModel;
     std::optional<uint32_t> selectedMaterialSlotIndex;
+    // EngineLoop 在稳定帧边界从渲染侧复制的 CPU+GPU 性能快照；
+    // Performance 页只消费它，不访问 RenderSystem、World 或 Vulkan。
+    PerformanceSnapshot performance;
 };
 
 } // namespace VL::EditorUi

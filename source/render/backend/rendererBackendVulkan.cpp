@@ -553,6 +553,11 @@ uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
     return rhiDevice->GetGraphicsTimestampValidBits();
 }
 
+bool RendererBackendVulkan::SupportsTimestampQueries()
+{
+    return rhiDevice->SupportsTimestampQueries();
+}
+
 bool RendererBackendVulkan::SupportsDualSourceBlend() const
 {
     // 材质加载只读取 backend 的能力快照，避免把 Vulkan 设备细节泄漏到资源层。
@@ -577,6 +582,14 @@ void RendererBackendVulkan::ReadTimestampQueryPair(
     std::array<uint64_t, 2>& timestamps)
 {
     rhiDevice->ReadTimestampQueryPair(queryPool, firstQuery, timestamps);
+}
+
+bool RendererBackendVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    return rhiDevice->TryReadTimestampQueryPair(queryPool, firstQuery, timestamps);
 }
 
 RHIBufferHandle RendererBackendVulkan::RequireBufferHandle(vk::Buffer buffer) const
@@ -667,7 +680,8 @@ void RendererBackendVulkan::CreatePerSwapchainBufferSet(
     vk::DeviceSize bufferSize,
     vk::BufferUsageFlags usage,
     vk::MemoryPropertyFlags memoryPropertyFlags,
-    const std::string& debugNamePrefix)
+    const std::string& debugNamePrefix,
+    bool mapMemory)
 {
     if (bufferSize == 0)
     {
@@ -701,9 +715,46 @@ void RendererBackendVulkan::CreatePerSwapchainBufferSet(
         bufferSet.bufferHandles[i] = bufferHandle;
         bufferSet.buffers[i] = bufferResource.buffer;
         bufferSet.bufferMemories[i] = bufferResource.memory;
-        bufferSet.buffersMapped[i] = rhiDevice->MapBufferMemory(bufferHandle, bufferSize);
+        // device-local 内存不可 map；调用方按用途选择是否保留主机映射。
+        bufferSet.buffersMapped[i] = mapMemory
+            ? rhiDevice->MapBufferMemory(bufferHandle, bufferSize)
+            : nullptr;
     }
 
+    SetupDescriptorBufferInfos(bufferSet);
+}
+
+void RendererBackendVulkan::CreateBufferSet(
+    Buffer& bufferSet,
+    vk::DeviceSize bufferSize,
+    vk::BufferUsageFlags usage,
+    vk::MemoryPropertyFlags memoryPropertyFlags,
+    const std::string& debugName,
+    bool mapMemory)
+{
+    if (bufferSize == 0)
+    {
+        throw std::invalid_argument(
+            "RendererBackendVulkan cannot create a zero-sized buffer set: " +
+            debugName);
+    }
+
+    if (!bufferSet.buffers.empty())
+    {
+        DestroyBufferSet(bufferSet);
+    }
+
+    RHIBufferHandle bufferHandle = rhiDevice->CreateBuffer(
+        bufferSize, usage, memoryPropertyFlags, debugName);
+    BindBufferHandle(bufferHandle);
+    const VulkanBufferResource& bufferResource = rhiDevice->GetVulkanBufferResource(bufferHandle);
+
+    bufferSet.bufferHandles = { bufferHandle };
+    bufferSet.buffers = { bufferResource.buffer };
+    bufferSet.bufferMemories = { bufferResource.memory };
+    bufferSet.buffersMapped = {
+        mapMemory ? rhiDevice->MapBufferMemory(bufferHandle, bufferSize) : nullptr };
+    bufferSet.bufferSize = static_cast<uint32_t>(bufferSize);
     SetupDescriptorBufferInfos(bufferSet);
 }
 

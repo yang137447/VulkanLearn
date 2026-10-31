@@ -25,12 +25,27 @@ DefaultLevel 的静态 LOD0、源贴图、重建材质、静态高度网格与 L
 
 ```json
 "skinning": {
-  "root": "root",
+  "skeleton": "Maps/SC_gasp/Skeletons/SK_UEFN_Mannequin.json",
   "clips": [{"id": "Walk", "path": "Maps/SC_gasp/Source/M_Neutral_Walk_Loop_F.fbx"}]
 }
 ```
 
-clips 是有序数组，id 不可重复，空数组表示绑定姿态。静态 section 过滤及补法线
+clips 是有序数组，id 不可重复，空数组表示绑定姿态。retarget 目标资产的
+sections、render skeleton、palette、IK 和 bounds 始终属于目标网格；播放时由
+`player.Asset().AnimationAsset()` 读取 source asset 的 clips/montages，再由预编译的
+`CompiledRetarget` 把 source 局部姿态转换到目标骨架。该转换支持不同骨长和不同
+rest axes，并消费 profile 可选的 `sourcePose` / `targetPose` 局部旋转校准。
+省略时沿用两侧 bind pose；未映射的目标 joint 保持目标校准参考的局部 TRS 并继承父骨动作。
+原始 bind/inverse bind 不改写；格式、右乘约定与根限制见
+[资产导入契约](animation-asset-import.md)。它不等价于 IK 或接触修正，
+后两者仍是独立的后处理阶段。
+
+retarget 目标的 `skinning` 声明 `skeleton`、空 `clips`、可选空 `montages`、
+`sourceModel` 和 `retarget`。source clip、Montage、catalog、预览片段选择均来自
+source asset。Motion warp 的 Bone provider 仍按 source skeleton 和 source clip
+解释；retarget 只改变渲染/目标 palette，不改变 source root-motion 和 warp 的语义。
+
+静态 section 过滤及补法线
 选项不能用于此路径。文档校验检查源文件与 clip 引用，完整骨架/权重校验在正式导入时执行。
 标准资产修改 API 保留该扩展但不开放 skinning 字段编辑。
 实时加载要求材质 `VL_SKINNED_MESH=1` 与模型蒙皮类型一致。
@@ -46,12 +61,60 @@ Seek、Select、Play 与零时长 TransitionTo 增加 discontinuity；
 Console/UI 的 seek 暂停，Select 保持播放开关；Play 与 TransitionTo 开启播放。
 采样及所有 section 的 CPU 姿态完成后才发布选择、时钟与不可变 `SkinPose`。
 
-`SkinPose` 包含模型局部 palette、变形顶点的精确 AABB、discontinuity 和 playbackIdentity。
+`SkinPose` 包含模型局部 palette、全骨架 bind→pose palette
+（`bindToPoseMatrices = models[joint] * inverse(restModel[joint])`，供跨 section 的
+TressFX 碰撞使用）、姿态 AABB（保守包围盒）、discontinuity 和 playbackIdentity。
 World、WorldSnapshot、RenderScene 仅共享其 const 所有权；旧快照不会被后续采样改写。
 单帧局部采样创建独立 ozz context；批量 `SampleModels` 在同一片段内复用 context，
-先验证整批时刻，空批次仍校验资产。姿态按全部顶点/权重求 AABB；
-AABB 采用列优先 3×4 标量仿射累加，避免 Debug 的逐顶点 Eigen 表达式开销。
-尚未提供大规模角色性能保证。
+先验证整批时刻，空批次仍校验资产。
+
+GT 同时冻结每个 draw 的 `simulationDeltaSeconds`：普通 mesh 使用 GT 帧 delta，
+`__blueprint/` 组件使用本帧脚本 scaled delta（Pause 为零），与两条动画推进路径一致。
+TressFX 骨骼绑定发丝继承源 draw 的冻结 delta；未绑定发丝使用场景
+`hairSimulationDeltaSeconds`（Editing 使用 GT delta，Playing 使用脚本倍率，Paused 为零）。
+RT 不读取脚本时钟或自动曝光墙钟；同一 World/frame 快照只领取一次物理 delta，
+重绘最近有效 RenderScene 不再推进模拟。resize/图重建的纯快照刷新使用零 delta，
+不领取下一正常帧的时间片；普通帧成功发布后清空待发布 delta。
+
+发丝根点、骨骼绑定胶囊及 SDF 代理使用统一的发丝局部 palette：
+`inverse(hairDraw.model) * sourceDraw.model * bindToPose[joint]`。
+没有骨骼绑定的胶囊仍位于作者的发丝局部空间；gravity 保留资产局部语义，风来自
+`SceneWindRuntime` 解析后的世界空间方向与强度（已缓动、已含阵风），在生成四路锥形风后
+再换到发丝局部。
+这使源对象与发丝采用不同当前 placement 时仍保持世界空间贴合，
+不额外引入共同移动产生的世界空间惯性；加载期两者绑定 placement 的一致性检查不变。
+发丝遇到 playbackIdentity/discontinuity 变化时重建模拟历史，零 delta 的 seek 也可复位；
+普通 placement 变化不隐式触发传送复位。完整碰撞与复位边界见
+[TressFX 资产导入](tressfx-asset-import.md)。
+
+姿态 AABB 不再逐顶点求精确值，而是由导入期预计算的逐关节绑定空间 AABB 推导：
+
+- `SkinSection::jointBindBounds` 与 `inverseBinds` 同下标、同长度；由
+  `ComputeJointBindBounds()` 在 `AssimpSkeletalImporter::ReadSection()` 末尾一次生成，
+  导入失败即拒绝资产。直接构造 `SkinSection` 的测试/离线调用方必须自行调用它，
+  否则 `BuildSkinPose()` 退回逐顶点路径。
+- 每个关节的盒子收集所有把该关节作为**任一**影响的顶点，而不是只收权重最大的主影响。
+  只收主影响在 `0.5/0.5` 这类跨关节混合上不保守：两个关节反向平移时精确位置可以
+  落在主影响盒子的另一侧。
+- 求姿态时对每个有顶点的关节，把绑定空间 AABB 的 8 个角点用
+  `models[joint] * inverseBinds[joint]` 变换后并入并集，代价 O(joints×8)；
+  没有顶点的关节直接跳过。palette 的内容、顺序与逐顶点路径完全相同。
+- 精确蒙皮位置是各 `M_i p` 的凸组合，而并集 AABB 是凸集，因此快路径边界始终包含
+  精确结果，可用于保守剔除；它可能明显松于逐个变形顶点的精确 AABB，紧致度取决于
+  相邻关节盒子的重叠程度，不承诺与旧精确值相等。
+- 权重未严格归一化时按 `jointBindWeightSumError` 绕原点扩张：LBS 直接累加
+  `Σw·M_i p`，`Σw ∈ [1-e, 1+e]` 会把凸组合按同一比例缩放。导入器仍按
+  `WeightTolerance` 拒绝越界权重。
+- 单精度舍入使“包含”只在约 `1e-4 cm` 量级内成立；不额外添加经验裕量。
+
+消费方（视锥/阴影剔除、模型预览取景）看到的是保守范围：剔除最多多画，不会漏画；
+预览相机会按更松的边界取景。CSM 的 light-space Z 范围由 caster 的 world bounds 拟合，
+更松的边界会让该范围变宽、轻微改变阴影深度量化（同姿态截图约 0.03% 像素、最大
+±26/255 的差异），但不会让几何消失。需要精确边界的离线统计应改用
+`BuildSkinPoseReference()`。
+
+逐顶点精确 AABB 与逐顶点奇异拒绝保留在 `BuildSkinPoseReference()`，供测试对照和
+缺少预计算数据的 section 回退使用；运行时每帧路径不再走它。
 
 ## 原生交叉混合
 
@@ -176,17 +239,73 @@ Pause/零 delta 冻结求值；自然 Completed 与显式暂停分开记录。
 | --- | --- | --- |
 | Set 2 binding 1 | current/previous mat4 交错，每骨 128 bytes | 对象 GPU 资源包，逐 swapchain image |
 | Set 2 binding 2 | CSR offsets + joint/floatBits(weight) words | Renderable 的不可变权重流 |
+| Set 2 binding 4 | 预蒙皮输出：position/previousPosition/normal/tangent 各一个 vec4，64 B/顶点 | 对象 GPU 资源包，单份 device-local |
 
 CSR 头是每个展开顶点的绝对 word 起止偏移，尾部每条影响占两个 uint。
 shader 根据 gl_VertexIndex 遍历全部影响，包括九影响顶点；不截断为四或八骨。
 palette 为 `modelJoint * inverseBind`，保留全部原始正权重。
-法线取混合线性矩阵逆转置，切线变换后正交化并保留 determinant handedness；
-奇异/非有限混合在 CPU 求姿态时拒绝，shader 不作逐顶点兜底。
+法线取混合线性矩阵逆转置，切线变换后正交化并保留 determinant handedness。
+palette 非有限、或任一带顶点的关节仿射 3×3 行列式接近零时，在 CPU 求姿态时拒绝；
+shader 不作逐顶点兜底。快路径按关节检查，而旧逐顶点路径按混合后的矩阵检查，
+因此“两个各自非奇异的关节在单个顶点上混合出奇异矩阵”不再被单独识别；
+该情形不改变 palette 内容，只放宽了拒绝边界。
+
+### 逐帧 GPU 预蒙皮（默认开启，`--no-prerender-skin` 关闭）
+
+预蒙皮默认开启；`--no-prerender-skin` 关闭后既不分配预蒙皮 buffer、不创建 compute pipeline、
+不录制预蒙皮 pass，蒙皮材质也不带 `VL_SKINNED_PRERENDERED`；Base 与 ShadowDepth 继续在
+各自顶点着色器里混合。启动期 shader 构建仍会编译 `engine/skinnedDeform.comp`（编译器扫描
+全部 compute 源），但不会创建 pipeline，也不产生任何 dispatch。开启时，同一蒙皮网格
+每帧只做一次骨骼混合，geometry 与每个 shadow cascade 都读同一份结果，不再随消费者数量重复支付混合成本。
+
+- **共享数学**：`shader/glsl/engine/skinnedVertexMath.glsl` 是唯一的混合/变换实现，
+  `skinnedVertexFactory.glsl` 的混合路径与 `shader/glsl/engine/skinnedDeform.comp` 都
+  include 它。palette/influences 的 Set 索引由包含方在 include 前用 `VL_SKIN_SET_INDEX`
+  指定；图形路径是 Set 2，compute 路径是 Set 0，buffer layout 相同。修改蒙皮公式时
+  必须同时覆盖两条路径，不能只改 compute 或只改顶点工厂。
+- **输出布局**：每顶点 `vec4 currentPosition; vec4 previousPosition; vec4 normal;
+  vec4 tangent;`，共 64 B；compute 与顶点读取端用同一结构体。normal/tangent 存的是
+  已经归一化/正交化的最终值，读取端不再做第二次归一化，保证与混合路径逐位一致。
+- **compute pass**：`engine/skinnedDeform`，`local_size_x = 64`，dispatch 为
+  `ceil(vertexCount / 64)`。Set 0 binding 0 是 `uvec4 counts`（x = vertexCount），
+  binding 1/2 复用 CSR palette/influence，binding 3 把 Renderable 的顶点缓冲按紧排
+  float 流读取（112 B/顶点，position 0、normal 3、tangent 16），binding 4 写输出。
+  尾部 invocation 用 counts.x 早退，避免越界读源顶点或 influence。
+- **顺序与同步**：`RenderSystem::RecordAndSubmitCurrentRenderScene()` 在 hair simulation
+  之后、pass 循环之前上传本帧 palette（预蒙皮开启时 draw 路径不再逐 draw 重复上传），
+  然后录制 compute。dispatch 前用 `HOST_WRITE|VERTEX_SHADER -> COMPUTE_SHADER` 屏障
+  覆盖 palette 主机写和上一帧顶点读取；dispatch 后用
+  `COMPUTE_SHADER -> VERTEX_SHADER` 覆盖本帧读取。因此单个对象只需要一份输出 buffer，
+  不需要逐 frame-in-flight 或逐 swapchain image 复制。
+- **顶点变体**：`VL_SKINNED_PRERENDERED=1` 由引擎在材质加载时追加，只作用于
+  `VL_SKINNED_MESH=1` 的材质；材质资产不得自行声明该宏。它进入
+  `ShaderVariantKey::macros`，因此 shader 缓存、Material 缓存和 pipeline 身份都与
+  混合路径分开。打开时 `skinnedVertexFactory.glsl` 读 Set 2 binding 4 并返回
+  previousPosition，Base 仍用它计算 `previousViewProjection` 运动矢量；
+  ShadowDepth 只消费 position/normal/tangent。
+- **所有权与生命周期**：输出 buffer 位于对象 GPU 资源包
+  （`RendererObjectGpuResources::skinDeform`），在 `InitializeObjectResources` 中按
+  Renderable 的顶点数创建；随对象资源包一起在 World/RenderGraph 事务中重写，
+  并按既有 GPU epoch 退休。`SkinDeformPass` 只拥有 pipeline、descriptor pool 和
+  逐对象 descriptor set 缓存，与 `HairSimulationPass` 同生命周期：候选图创建、
+  SwapState 移交、Shutdown 按 epoch 退休。
+- **内存与 dispatch**：当前审阅资产 `SC_tressfx_female_skinned` 有 4 个蒙皮对象、
+  1,377,429 个顶点，输出 buffer 合计 88,155,456 B（84.07 MiB），每帧 21,523 个
+  workgroup。内存公式是 `vertices × 64 B`，与 cascade 数量无关。
+- **A/B 实测**（Release，1280×720，冻结姿态）：`SC_tressfx_female_skinned`
+  的 geometry 2.260→0.156 ms、shadowCascade1 2.366→0.081 ms，新增 skinnedDeform
+  2.262 ms，GPU pass 合计 4.753→2.640 ms。`SC_tressfx_female_hair_animated`
+  （hairSimulation 保持约 1.0 ms）的 cascade0 2.374→0.094 ms、cascade1
+  2.331→0.072 ms、geometry 2.276→0.156 ms，新增 skinnedDeform 2.285 ms，合计
+  8.581→4.143 ms。冻结姿态截图在 skinned 场景与关闭 hair simulation 的 hair 场景上
+  逐像素一致（921,600 像素，0 差异）；启用 hair simulation 时两次同参数运行的
+  Verlet 状态本身就会因可变 dt 不同而分叉，不构成蒙皮差异。
 
 Base 与 ShadowDepth 先执行同一 `skinnedVertexFactory.glsl`，再执行材质求值。
 SkinnedMesh key 参与组合 shader 身份，并强制专用 ShadowDepth；
 当前拒绝材质 WPO、standalone Base 和完整 standalone shadow override。
-buffer 写入发生在对应 image fence 完成后，资源随现有对象包/GPU epoch 退休。
+palette 写入发生在对应 image fence 完成后，资源随现有对象包/GPU epoch 退休。
+
 
 ## 已提交历史
 
@@ -324,6 +443,17 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 双击骨骼 SM 使用既有模型资源标签和独立预览 World，标题显示 Skeletal Mesh，
 提供播放/暂停图标、有序片段选择与时间 slider。静态标签隐藏这些控件。
+双击 `RT_*.json` 则打开只读 Retarget 参考姿态页，按显式 SK 预览引用显示绑定/
+校准骨架、关键关节局部轴和位置/方向测量；计算复用 `CompiledRetarget` 的
+`SourceReference()` / `TargetReference()`。
+配置 `preview.targetModelPath` 后默认进入 Animation，源/目标真实网格在同一预览
+World 内按厘米尺度并排显示；目标 SM 必须绑定当前 RT，源从其 `sourceModel` 取得。
+片段、播放/暂停和 seek 同时控制两边，各 section 共享所属模型的原生播放器；
+`previewClip` 使用正式 `Play(..., inPlace=true)`，避免根运动使模型走出视野。
+该命令只接受带成对源身份的 `SC_model_preview`；普通 `clip` 的根运动语义不变。
+Reference Pose 切换保留参考检查，静态测量不随动画变化，也不冒充动态关节误差。
+预览不执行足底 IK/接触修正；源与目标各自一个时钟，使用同一 World delta 与控制请求同步。
+具体输入与测量边界见 [UI 组件体系](ui-component-system.md#retarget-参考姿态标签)。
 UI 只发 generation-gated 值请求，GT 验证；刷新控件不产生业务命令。
 预览按厘米 scale=1 放置，静态预览的既有比例不变。
 关卡内动画可通过 [调试命令](debug-runtime-commands.md) 暂停、seek、切片段。

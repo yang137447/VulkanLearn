@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+
+#include "world/worldWindSampling.h"
 
 namespace
 {
@@ -33,7 +36,7 @@ namespace
         return Interpolate(sigmoid, value, linearity);
     }
 
-    float SampleCurve(const SpeedTreeWindCurve& curve, float strength)
+    float SampleCurve(const WindResponseCurve& curve, float strength)
     {
         const float position = Clamp01(strength) * 19.0f;
         const size_t before = static_cast<size_t>(position);
@@ -105,7 +108,7 @@ void SpeedTreeWindSystem::ResetGustState()
 
 void SpeedTreeWindSystem::Reset()
 {
-    config = SpeedTreeWindConfig();
+    config = WindResponse();
     gpuState = SpeedTreeWindStateGPU();
     sourceBoundsMin.setZero();
     sourceBoundsMax.setZero();
@@ -124,6 +127,7 @@ void SpeedTreeWindSystem::Reset()
     ResetGustState();
     gustRandomState = 137u;
     gustingEnabled = true;
+    sceneGustScale = 1.0f;
     sharedNoisePosition.setZero();
     branch1NoisePosition.setZero();
     branch2NoisePosition.setZero();
@@ -133,7 +137,7 @@ void SpeedTreeWindSystem::Reset()
 }
 
 void SpeedTreeWindSystem::Configure(
-    const SpeedTreeWindConfig& windConfig,
+    const WindResponse& windConfig,
     const Eigen::Vector3f& boundsMin,
     const Eigen::Vector3f& boundsMax)
 {
@@ -160,18 +164,24 @@ void SpeedTreeWindSystem::Configure(
     ResetGustState();
     gustRandomState = 137u;
     gustingEnabled = true;
+    sceneGustScale = 1.0f;
     sharedNoisePosition.setZero();
     branch1NoisePosition.setZero();
     branch2NoisePosition.setZero();
     rippleNoisePosition.setZero();
     lastAdvanceTime = -1.0;
     configured = true;
-    AdvanceTo(0.0);
+    // 不能调用 AdvanceTo(0.0)：它会把 lastAdvanceTime 置为 0，使随后的场景风推进
+    // 在 t=0 被早退，GPU 状态停留在 SDK 参考值。这里直接写入零风状态（方向为零，
+    // 着色器不形变），首次推进会覆盖它。
+    UpdateGpuState(Eigen::Vector3f::Zero(), 0.0f, 0.0f);
 }
 
 void SpeedTreeWindSystem::SetStrength(float strength)
 {
-    if (strength == currentStrength)
+    // 与 SetDirection 一样比较目标值：逐帧用 currentStrength 比较会在每次
+    // AdvanceTo 之后重新起一段缓动，把 authored response 拉长到几十秒。
+    if (strength == targetStrength)
     {
         return;
     }
@@ -219,6 +229,11 @@ void SpeedTreeWindSystem::SetGustingEnabled(bool enabled)
     {
         ResetGustState();
     }
+}
+
+void SpeedTreeWindSystem::SetSceneGustScale(float scale)
+{
+    sceneGustScale = Clamp01(scale);
 }
 
 void SpeedTreeWindSystem::ForceGust()
@@ -364,6 +379,20 @@ void SpeedTreeWindSystem::AdvanceTo(double timeSeconds)
             windDirectionAtStart);
     }
 
+    UpdateEasedStrength(time);
+
+    const float strength = UseFixedInspectionStrength
+        ? InspectionStrength
+        : Clamp01(currentStrength + gustState.strength * sceneGustScale);
+    UpdateGpuState(currentWindDirection, strength, deltaTime);
+}
+
+// 强度缓动：目标在 [strengthChangeStartTime, strengthChangeEndTime] 内由 sigmoid 过渡到
+// targetStrength。零时长过渡（响应时间为 0）直接到达目标。原先的 0 因子会停在两端中点，
+// 导致强度永远停在半路，所以这里取 1。
+// SDK 参考状态机和场景目标路径共用；响应时间来自当前 profile，而不是场景风。
+void SpeedTreeWindSystem::UpdateEasedStrength(double time)
+{
     float strengthFactor = 1.0f;
     if (strengthChangeEndTime != strengthChangeStartTime)
     {
@@ -371,38 +400,87 @@ void SpeedTreeWindSystem::AdvanceTo(double timeSeconds)
             (time - strengthChangeStartTime) /
             (strengthChangeEndTime - strengthChangeStartTime)));
     }
-    else
-    {
-        strengthFactor = 0.0f;
-    }
     currentStrength = Interpolate(
         strengthAtStart,
         targetStrength,
         LinearSigmoid(strengthFactor, 0.0f));
+}
 
-    const float strength = UseFixedInspectionStrength
-        ? InspectionStrength
-        : Clamp01(currentStrength + gustState.strength);
+void SpeedTreeWindSystem::AdvanceToSceneWind(
+    double timeSeconds,
+    const VL::WorldWind& wind)
+{
+    if (!configured)
+    {
+        return;
+    }
 
+    const double time = std::max(0.0, timeSeconds);
+    if (time == lastAdvanceTime)
+    {
+        return;
+    }
+
+    // 场景 wind 是作者目标，不是最终风。每个 profile 在这里像 CWindStateMgr 一样
+    // 独立缓动强度/方向，并用 profile 自己的 gust 参数推进离散阵风；场景 gust 只
+    // 提供开关和整体幅度缩放，frequency/turbulence 留给场级消费者（头发）。
+    const float target = Clamp01(VL::SceneWindCurveAxis(wind.strength));
+    const Eigen::Vector3f direction = wind.direction.squaredNorm() > 1.0e-12f
+        ? wind.direction.normalized()
+        : Eigen::Vector3f::UnitX();
+
+    if (lastAdvanceTime < 0.0)
+    {
+        // 首帧直接采用目标值，避免从 Configure 的 inspection 值慢启动。
+        targetStrength = target;
+        currentStrength = target;
+        strengthAtStart = target;
+        strengthChangeStartTime = time;
+        strengthChangeEndTime = time;
+        windDirection = direction;
+        currentWindDirection = direction;
+        windDirectionAtStart = direction;
+        windDirectionRotation = Eigen::Quaternionf::Identity();
+        directionChangeStartTime = time;
+        directionChangeEndTime = time;
+    }
+    else
+    {
+        SetStrength(target);
+        SetDirection(direction);
+    }
+
+    SetGustingEnabled(wind.gust.enabled);
+    SetSceneGustScale(wind.gust.enabled ? wind.gust.amplitude : 0.0f);
+    // AdvanceTo 仍负责 SDK 语义的 gust/响应/噪声推进和 GPU 打包；这里只是把
+    // 目标值换成场景 wind，而不是另写一套时间积分。
+    AdvanceTo(time);
+}
+
+void SpeedTreeWindSystem::UpdateGpuState(
+    const Eigen::Vector3f& direction,
+    float strength,
+    float deltaTime)
+{
     const float sharedSpeed = SampleCurve(config.shared.speed, strength);
     const float branch1Speed = SampleCurve(config.branch1.speed, strength);
     const float branch2Speed = SampleCurve(config.branch2.speed, strength);
     const float rippleSpeed = SampleCurve(config.ripple.speed, strength);
 
     const float noiseDelta = FreezeInspectionTime ? 0.0f : deltaTime;
-    sharedNoisePosition -= currentWindDirection *
+    sharedNoisePosition -= direction *
         noiseDelta * RuntimeSdkGuiSpeedScale * sharedSpeed;
-    branch1NoisePosition -= currentWindDirection *
+    branch1NoisePosition -= direction *
         noiseDelta * RuntimeSdkGuiSpeedScale * branch1Speed;
-    branch2NoisePosition -= currentWindDirection *
+    branch2NoisePosition -= direction *
         noiseDelta * RuntimeSdkGuiSpeedScale * branch2Speed;
-    rippleNoisePosition -= currentWindDirection *
+    rippleNoisePosition -= direction *
         noiseDelta * RuntimeSdkGuiSpeedScale * rippleSpeed;
 
     gpuState.windVector = Eigen::Vector4f(
-        currentWindDirection.x(),
-        currentWindDirection.y(),
-        currentWindDirection.z(),
+        direction.x(),
+        direction.y(),
+        direction.z(),
         strength);
     gpuState.treeExtentsSharedHeightStart = Eigen::Vector4f(
         treeExtents.x(),
@@ -467,8 +545,8 @@ void SpeedTreeWindSystem::AdvanceTo(double timeSeconds)
         config.doShimmer && config.doRipple ? config.ripple.shimmer : 0.0f);
 }
 
-void SpeedTreeWindProfileSet::Configure(
-    const std::unordered_map<std::string, SpeedTreeWindProfile>& profiles)
+void WindResponseProfileSet::Configure(
+    const std::unordered_map<std::string, WindResponseProfile>& profiles)
 {
     systems.clear();
     systems.reserve(profiles.size());
@@ -483,18 +561,18 @@ void SpeedTreeWindProfileSet::Configure(
     }
 }
 
-void SpeedTreeWindProfileSet::Reset()
+void WindResponseProfileSet::Reset()
 {
     systems.clear();
 }
 
-void SpeedTreeWindProfileSet::Swap(
-    SpeedTreeWindProfileSet& other) noexcept
+void WindResponseProfileSet::Swap(
+    WindResponseProfileSet& other) noexcept
 {
     systems.swap(other.systems);
 }
 
-void SpeedTreeWindProfileSet::AdvanceTo(double timeSeconds)
+void WindResponseProfileSet::AdvanceTo(double timeSeconds)
 {
     for (auto& [profileKey, system] : systems)
     {
@@ -502,7 +580,19 @@ void SpeedTreeWindProfileSet::AdvanceTo(double timeSeconds)
     }
 }
 
-bool SpeedTreeWindProfileSet::SetStrength(float strength)
+void WindResponseProfileSet::AdvanceToSceneWind(
+    double timeSeconds,
+    const VL::WorldWind& wind)
+{
+    // 所有物种共享场景作者目标；每个 profile 仍保留自己的响应时间、gust 包络和
+    // 噪声状态，因此阵风相位/节奏可以不同。
+    for (auto& [profileKey, system] : systems)
+    {
+        system.AdvanceToSceneWind(timeSeconds, wind);
+    }
+}
+
+bool WindResponseProfileSet::SetStrength(float strength)
 {
     if (systems.empty())
     {
@@ -515,7 +605,7 @@ bool SpeedTreeWindProfileSet::SetStrength(float strength)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::SetDirection(const Eigen::Vector3f& direction)
+bool WindResponseProfileSet::SetDirection(const Eigen::Vector3f& direction)
 {
     if (systems.empty())
     {
@@ -528,7 +618,7 @@ bool SpeedTreeWindProfileSet::SetDirection(const Eigen::Vector3f& direction)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::SetGustingEnabled(bool enabled)
+bool WindResponseProfileSet::SetGustingEnabled(bool enabled)
 {
     if (systems.empty())
     {
@@ -541,7 +631,7 @@ bool SpeedTreeWindProfileSet::SetGustingEnabled(bool enabled)
     return true;
 }
 
-bool SpeedTreeWindProfileSet::ForceGust()
+bool WindResponseProfileSet::ForceGust()
 {
     if (systems.empty() || !IsGustingEnabled())
     {
@@ -554,7 +644,7 @@ bool SpeedTreeWindProfileSet::ForceGust()
     return true;
 }
 
-const SpeedTreeWindStateGPU* SpeedTreeWindProfileSet::FindGpuState(
+const SpeedTreeWindStateGPU* WindResponseProfileSet::FindGpuState(
     std::string_view profileKey) const
 {
     // Current limitation: profile lookup still constructs a string and hashes
@@ -568,7 +658,7 @@ const SpeedTreeWindStateGPU* SpeedTreeWindProfileSet::FindGpuState(
     return &systemIt->second.GetGpuState();
 }
 
-bool SpeedTreeWindProfileSet::IsGustingEnabled() const
+bool WindResponseProfileSet::IsGustingEnabled() const
 {
     if (systems.empty())
     {

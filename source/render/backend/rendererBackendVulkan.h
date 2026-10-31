@@ -123,6 +123,7 @@ public:
     bool CompleteSwapchainScreenshot(std::string& outError);
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    bool SupportsTimestampQueries();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
     vk::QueryPool CreateTimestampQueryPool(
@@ -130,6 +131,10 @@ public:
         const std::string& debugName);
     void DestroyQueryPool(vk::QueryPool& queryPool);
     void ReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
+    bool TryReadTimestampQueryPair(
         vk::QueryPool queryPool,
         uint32_t firstQuery,
         std::array<uint64_t, 2>& timestamps);
@@ -147,7 +152,17 @@ public:
         vk::DeviceSize bufferSize,
         vk::BufferUsageFlags usage,
         vk::MemoryPropertyFlags memoryPropertyFlags,
-        const std::string& debugNamePrefix);
+        const std::string& debugNamePrefix,
+        bool mapMemory = true);
+    // 单个 buffer 的资源包，供不需要逐 swapchain 分槽的 device-local 输出使用；
+    // handle/raw/info 的存放方式与 CreatePerSwapchainBufferSet 一致。
+    void CreateBufferSet(
+        Buffer& bufferSet,
+        vk::DeviceSize bufferSize,
+        vk::BufferUsageFlags usage,
+        vk::MemoryPropertyFlags memoryPropertyFlags,
+        const std::string& debugName,
+        bool mapMemory = true);
     void DestroyBufferSet(Buffer& bufferSet);
     void SetupDescriptorBufferInfos(Buffer& bufferSet);
     std::pair<vk::Image, vk::DeviceMemory> CreateImage(

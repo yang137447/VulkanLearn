@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <array>
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -15,6 +16,7 @@
 #include <nlohmann/json.hpp>
 #include "baseStructs.h"
 #include "render/backend/rendererDescriptorContext.h"
+#include "render/backend/gpuPassTimer.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/environment/environmentIblBaker.h"
@@ -28,6 +30,7 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
+#include "render/resource/placementBindingResolver.h"
 #include "render/offline/offlineCameraMotionPolicy.h"
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
@@ -35,11 +38,16 @@
 #include "render/pass/passRuntime.h"
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
+#include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/shadowCasterCull.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
 #include "editor/preview/materialInstancePreviewAdapter.h"
+#include "hair/hairTraceFormat.h"
+#include "hair/tressfxLiveParams.h"
+#include "hair/tressfxGroupBinding.h"
 
 class Material;
 class MaterialInstance;
@@ -66,7 +74,7 @@ struct PreparedRuntimeBinding
     ResolvedRenderScene resolvedRenderScene;
     RendererFrameResources::PreparedLightCapacity
         lightCapacity;
-    SpeedTreeWindProfileSet speedTreeWindProfiles;
+    WindResponseProfileSet windResponseProfiles;
     CsmSettings csmSettings;
     uint64_t nextSnapshotFrameIndex = 0;
 };
@@ -100,11 +108,72 @@ public:
     // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
     // immediately; in workerThreadCount=2 RenderThread consumes it later.
     void PublishSnapshotFromActiveWorld();
+    // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
+    // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
+    // frameDelta/gameDelta/hairDelta 是各自已夹取的模拟 delta；windDelta 是
+    // EngineLoop RuntimeClock 的原始真实 delta，专门给固定步长风时钟消费。
+    void SetSimulationFrameDeltas(float frameDelta, float gameDelta, float hairDelta,
+        float windDelta)
+    {
+        simulationDeltaSeconds = frameDelta;
+        gameSimulationDeltaSeconds = gameDelta;
+        hairSimulationDeltaSeconds = hairDelta;
+        // EngineLoop 的 RuntimeClock 是真实时间；RenderSystem 在 RT 上不能直接读
+        // GT 的 clock，因此把原始 delta 累加到这里，由风时钟在 RT 上消费。
+        // 累加而不是覆盖：RT 可能比 GT 慢一帧，丢掉任一 GT delta 都会让风变慢。
+        // C++17 的 atomic<float> 没有 fetch_add，用 CAS 累加。
+        float expected = windPendingDeltaSeconds.load(std::memory_order_relaxed);
+        while (!windPendingDeltaSeconds.compare_exchange_weak(
+            expected, expected + windDelta, std::memory_order_relaxed))
+        {
+        }
+    }
     // Consumes the latest snapshot if present, otherwise reuses the previous
     // RenderScene after one has been initialized.
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 正常 Console `hair trace` 的 GT 侧入口：只记录值语义请求，由渲染线程在
+    // RecordHairSimulation 中转发给 HairSimulationPass。GT 与渲染线程在
+    // workerThreadCount=2 时并发，因此用互斥量保护这唯一一个待消费槽。
+    void RequestHairTrace(std::string path, uint32_t frames, uint32_t guideStride);
+    // 正常 Console `hair reset` / 毛发视口复位按钮的 GT 侧入口：只记录目标对象名
+    // （空 = 所有 GPU guide 对象），由渲染线程在 RecordHairSimulation 中转发一次。
+    void RequestHairSimulationReset(std::string objectName);
+    // `hair set` 的 GT 侧入口：字段/值域已在执行端校验，这里只把请求交给渲染线程；
+    // 由 HairSimulationPass 在 Record 中按对象名应用到该渲染对象的 config 副本。
+    void RequestHairSimulationParameter(const VL::Hair::HairLiveParameterRequest& request);
+    // 分组笔刷 ghost：GT 只登记值语义；渲染线程在下一帧按对象名整表更新 buffer。
+    void RequestTressfxBrushPreview(
+        const VL::Hair::TressfxBrushPreviewRequest& request);
+    // Groups 草稿 binding：只在结构/预览 generation 变化时入队；RT 在
+    // BeginFrame 后原地更新 group id/颜色/参数表，不重建 renderable。
+    void RequestTressfxGroupBindingPreview(
+        const VL::Hair::TressfxGroupBindingPreviewRequest& request);
+    // --gpu-stats：开启后逐 pass 采集并按 120 帧打印一次；关闭时不创建 query pool。
+    void SetGpuPassStatsLoggingEnabled(bool enabled)
+    {
+        gpuPassStatsLoggingEnabled = enabled;
+        gpuPassTimer.SetLoggingEnabled(enabled);
+    }
+    // 控制台 gpustats：立即打印当前表，并在未开启时启动采集。
+    void PrintGpuPassStats();
+    // 控制台 perf json：打印与 Performance 页同源的单行 JSON，并启动采集。
+    void PrintPerformanceJson();
+    // GT 每帧复制一份冻结快照给 UI；读锁只覆盖一次值拷贝。
+    VL::PerformanceSnapshot CapturePerformanceSnapshot() const
+    {
+        return gpuPassTimer.Snapshot();
+    }
+    // GT 把 CpuFrameProfiler 冻结的 CPU 阶段并入同一份快照；只在 GT 调用。
+    void PublishCpuStageSamples(
+        const std::vector<VL::PerformancePassSample>& stages,
+        size_t windowFrameCount)
+    {
+        gpuPassTimer.PublishCpuStageSamples(stages, windowFrameCount);
+    }
+    // --perf-jsonl 需要时间序列，即使没有 --gpu-stats 也开启采集。
+    void EnableGpuPassCollection() { gpuPassTimer.RequestCollection(); }
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
@@ -159,6 +228,10 @@ public:
     CaptureOfflineWorldAssets() const noexcept { return activeOfflineWorldAssets; }
     bool IsOfflineMode() const noexcept { return offlineMode; }
     void SetInitialOfflineMode(bool enabled) noexcept { offlineMode = enabled; }
+    // --prerender-skin：启动时固定，必须在加载初始 World 之前设置，因为材质
+    // shader variant 与对象 GPU 资源都按它选择。
+    void SetPrerenderSkinEnabled(bool enabled) noexcept { prerenderSkinEnabled = enabled; }
+    bool IsPrerenderSkinEnabled() const noexcept { return prerenderSkinEnabled; }
     bool SetOfflineMode(bool enabled, std::string& message);
     bool SetOfflineSetting(const std::string& name, int value, std::string& message);
     void SetOfflineAov(VL::OfflineAov aov) noexcept { offlineAov = aov; }
@@ -212,15 +285,13 @@ public:
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
     ComputeShaderArtifact GetActiveComputeShaderArtifact(
         const std::string& shaderName) const;
-    bool SetSpeedTreeStrength(float strength);
-    float GetSpeedTreeStrength() const { return speedTreeStrength; }
-    bool SetSpeedTreeGustingEnabled(bool enabled);
-    bool GetSpeedTreeGustingEnabled() const { return speedTreeGustingEnabled; }
-    uint32_t GetSpeedTreeWindProfileCount() const
-    {
-        return static_cast<uint32_t>(speedTreeWindProfiles.GetProfileCount());
-    }
-    bool ForceSpeedTreeGust();
+    // 本帧解析后的场景风（已缓动、已含阵风）。风时间以固定 1/60 s 步长推进，
+    // 步进量来自 EngineLoop 的 RuntimeClock 真实 delta（经 SetSimulationFrameDeltas
+    // 传入 RT），与 master 的 SpeedTree 墙钟速度一致；活动 World 换代时清零并重新
+    // 从作者目标起步。GetActiveWind 返回场级解析结果（供头发/调试），植被的每物种
+    // 状态在 windResponseProfiles 内。
+    const VL::ResolvedSceneWind& GetActiveWind() const { return currentRenderScene.resolvedWind; }
+    double GetWindTimeSeconds() const { return currentRenderScene.windTimeSeconds; }
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
@@ -285,11 +356,22 @@ private:
         uint32_t passSizeHeight,
         uint32_t cascadeIndex);
     void RefreshRenderSceneFromActiveWorld();
+    void PublishSnapshotFromActiveWorld(bool advanceSimulation);
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
+    // 放置级（per-placement）网格：resolve 之前确保每个实例键都有独立
+    // RenderableObject（从模板克隆、共享导入几何），并按 placementBinding 的 Kind
+    // 交给通用 resolver 应用绑定。当前唯一 provider 是 GPU 毛发，但流程不含
+    // 类型分支；新增类型只需加 PlacementBinding::Kind 与 resolver 的一个 case。
+    void EnsurePlacementRenderables(const VL::RenderScene& renderScene,
+        VL::RendererResourceCache& resourceCache);
+    // actor 销毁后（快照里连续两帧不再出现）把放置级 renderable 从活动 World 包
+    // 摘除并交给 ResourceRetireQueue；与其它资源共用同一套 cache/epoch 回收。
+    void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
-    void AdvanceSpeedTreeWindProfiles();
+    void AdvanceSceneWind();
+    void AdvanceSceneWindTick();
     void UpdateExposureFrameTiming();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
@@ -320,30 +402,46 @@ private:
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
+    bool GetShadowCascadeLightViewProjection(
+        uint32_t cascadeIndex,
+        Eigen::Matrix4f& outLightViewProjection) const override;
+    bool GetShadowCascadeCasterReceiverBounds(
+        uint32_t cascadeIndex,
+        VL::ShadowCasterReceiverBounds& outBounds) const override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
     void ValidateFrameResourceDescriptors();
-    double GetSpeedTreeWindTimeSeconds();
+    // --gpu-stats 周期输出每级联 caster draw 的 before/after 计数。
+    void LogShadowCasterCullStats() const;
 
         // 用于使用boundingbox加速
     std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
-        // 遍历场景物体，在lightspace确定 minZ 和 maxZ
+        // 遍历场景物体，在lightspace确定 minZ 和 maxZ（每帧只投影一次，见下）
     std::optional<std::pair<float, float>> ComputeCascadeLightSpaceZBounds(
         const Eigen::Matrix3f& worldToShadowMatrix,
         float minX,
         float maxX,
         float minY,
-        float maxY) const;
+        float maxY);
+    // caster 在光源空间的包围盒。投影只取决于光源朝向，同一帧的四个级联完全相同；
+    // 因此每帧投影一次缓存，逐级联只做 XY 过滤与 Z 合并，避免 N 级 × 全部 draw 的重复计算。
+    struct ShadowCasterLightSpaceBounds
+    {
+        float minX = 0.0f;
+        float maxX = 0.0f;
+        float minY = 0.0f;
+        float maxY = 0.0f;
+        float minZ = 0.0f;
+        float maxZ = 0.0f;
+    };
+    std::vector<ShadowCasterLightSpaceBounds> casterLightSpaceBounds;
+    bool casterLightSpaceBoundsValid = false;
         // 将局部空间的aabb变换到世界空间
     std::array<Eigen::Vector3f, 8> BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix) const;
         // 计算某个空间下的aabb
     void ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& corners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
-        // 计算view空间下的aabb
-    void ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
-        // 用于筛选出实际落入当前级联范围内的 drawPacket
-    bool IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding);
 
     // 阴影计算策略
     enum class ShadowStrategy {
@@ -355,12 +453,16 @@ private:
     struct ShadowProjectionParams {
         Eigen::Matrix4f viewMatrix;
         Eigen::Matrix4f projectionMatrix;
+        // 该级联接收面（相机 split）的光源空间 XY 范围，供 caster 预筛。
+        VL::ShadowCasterReceiverBounds casterReceiverBounds;
     };
 
     struct ShadowCascadeFrameData {
         std::array<Eigen::Matrix4f, 4> view{};
         std::array<Eigen::Matrix4f, 4> projection{};
         std::array<Eigen::Matrix4f, 4> lightViewProj{};
+        // 逐级联接收面 XY 范围；与 lightViewProj 同帧同源。
+        std::array<VL::ShadowCasterReceiverBounds, 4> casterReceiverBounds{};
         Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
         std::array<Eigen::Vector4f, 4> bias{};
         Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
@@ -387,10 +489,24 @@ private:
     void RecordEnvironmentIbl(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
+    // 在 renderPassOrdered 之前推进所有 GPU backend 的 TressFX guide 位置。
+    void RecordHairSimulation(
+        vk::CommandBuffer commandBuffer,
+        uint32_t frameSlot);
+    void ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex);
+    void ApplyTressfxGroupBindingPreviewRequests();
+    // 在 renderPassOrdered 之前：上传本帧 palette，再录制 GPU 预蒙皮 dispatch。
+    // 关闭 --prerender-skin 时 renderGraph 没有该 pass，本函数直接返回。
+    void RecordSkinDeform(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
+    float simulationDeltaSeconds = 0.0f;
+    float gameSimulationDeltaSeconds = 0.0f;
+    float hairSimulationDeltaSeconds = 0.0f;
     bool hasSelectedDraw = false;
     bool selectedAllMaterialSlots = false;
     VL::RuntimeId selectedObjectId = 0;
@@ -406,13 +522,18 @@ private:
     float exposureDeltaSeconds = 1.0f / 60.0f;
     bool exposureClockInitialized = false;
     std::chrono::steady_clock::time_point exposureLastFrameTime;
-    float speedTreeStrength = 0.35f;
-    bool speedTreeGustingEnabled = true;
     bool hasRenderScene = false;
-    bool windClockInitialized = false;
-    std::chrono::steady_clock::time_point windStartTime;
+    // 风模拟时间。严格按固定 1/60 s 步长递增；不要把它当成帧时间。
     double currentWindTimeSeconds = 0.0;
-    SpeedTreeWindProfileSet speedTreeWindProfiles;
+    // true 表示已经执行过首帧 time=0 的采样；World 换代时清除，让新场景从目标值起步。
+    bool windClockInitialized = false;
+    // GT RuntimeClock 原始 delta 的跨线程累加器；RT 每帧 exchange(0) 取走。
+    // 用 atomic 是因为 GT/RT 可能并行运行；CAS 累加见 SetSimulationFrameDeltas。
+    std::atomic<float> windPendingDeltaSeconds{0.0f};
+    // 不足一个 1/60 s 步长的余量；超过 0.25 s 的长卡顿只追 15 步，避免 gust 一次性补发。
+    double windTickAccumulator = 0.0;
+    VL::SceneWindRuntime sceneWindRuntime;
+    WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
     VL::CsmSettings csmSettings;
@@ -426,6 +547,20 @@ private:
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
     VL::RenderScene currentRenderScene;
+    // 放置级 renderable 键 → 连续缺失帧数。只在 RT 访问；World 换代时清空
+    // （整包由 transaction 退休）。
+    std::unordered_map<std::string, int> placementAbsentFrames;
+    // 放置级 renderable 键 → debugName；退休日志需要对象身份，不能只报键。
+    std::unordered_map<std::string, std::string> placementObjectNames;
+    // 上一帧放置级 draw 数；只在变化时打一条日志，兼作 spawn/destroy 的存活计数。
+    size_t placementLiveCount = 0;
+    // 活动包里 placement-scoped renderable 数；变化时打一条，作为无泄漏核对。
+    size_t placementCacheCount = 0;
+    // Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后应回到 0。
+    size_t placementRuntimeCount = 0;
+    // 放置绑定解析结果的跨实例缓存，键见 MakePlacementBindingCacheKey。
+    VL::PlacementBindingCache placementBindingCache;
+    uint64_t placementWorldGeneration = 0;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;
     uint64_t submittedFrameSerial = 0;
@@ -437,6 +572,7 @@ private:
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
     bool offlineMode = false;
+    bool prerenderSkinEnabled = false;
     VL::OfflineRenderSettings offlineSettings{0, 0, 32, 2, 1, 0};
     VL::OfflineAov offlineAov = VL::OfflineAov::Combined;
     float offlineExposure = 1.0f;
@@ -458,6 +594,13 @@ private:
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
+    // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
+    VL::GpuPassTimer gpuPassTimer;
+    // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。
+    std::array<VL::ShadowCasterCullStats, VL::CsmSettings::MaxCascadeCount>
+        frameShadowCasterCullStats{};
+    bool gpuPassStatsLoggingEnabled = false;
+    uint32_t shadowCasterCullStatsFramesSinceLog = 0;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
     std::shared_ptr<Texture> environmentUpdateSourceCube;
@@ -473,6 +616,23 @@ private:
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
     // 确保回读不会与仍在录制的 command buffer 交叉。
     std::optional<std::string> pendingScreenshotPath;
+    // hair trace 请求跨 GT/渲染线程；渲染线程每帧只取一次，取走后由
+    // HairSimulationPass 在 Record 中消费。未请求时只有一次加锁读取。
+    std::mutex hairTraceRequestMutex;
+    std::optional<VL::Hair::HairTraceRequest> pendingHairTraceRequest;
+    // 复位请求与 trace 同构：GT 只写这里，渲染线程每帧取走一次；未请求时
+    // 只有一次加锁读取。空字符串表示所有 GPU guide 对象。
+    std::mutex hairResetRequestMutex;
+    std::optional<std::string> pendingHairResetRequest;
+    // 实时参数覆盖：一帧可能有多条（滑杆拖动），用小队列而不是单槽；队列有界，
+    // 过期意图先丢弃，避免无渲染帧时无限累积。
+    std::mutex hairLiveParameterMutex;
+    std::vector<VL::Hair::HairLiveParameterRequest> pendingHairLiveParameters;
+    std::mutex tressfxBrushPreviewMutex;
+    std::vector<VL::Hair::TressfxBrushPreviewRequest> pendingTressfxBrushPreviews;
+    std::mutex tressfxGroupBindingPreviewMutex;
+    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest>
+        pendingTressfxGroupBindingPreviews;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

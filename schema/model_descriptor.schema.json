@@ -9,11 +9,24 @@
             "type": "string",
             "description": "模型描述名称，通常用于说明这个 SM 文件对应的资源。"
         },
+        "description": {
+            "type": "string",
+            "description": "作者提供的资源用途说明。"
+        },
         "type": {
             "type": "string",
-            "enum": ["mesh", "speedtree"],
-            "description": "mesh 表示普通 Assimp 网格资源，speedtree 表示 SpeedTree 源资产。"
+            "enum": ["mesh", "speedtree", "tressfx"],
+            "description": "mesh 为 Assimp，speedtree 为 SpeedTree，tressfx 为独立 TF 毛发几何资产。"
         },
+        "strandRadius": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "tressfx 局部空间半径，使用作者坐标单位；不自动换轴或换算单位。"
+        },
+        "simulationDefaults": {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxSimulationValues"},
+        "simulation": false,
+        "collision": false,
+        "collisionDefaults": false,
         "modelDataPath": {
             "type": "string",
             "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"
@@ -34,6 +47,54 @@
                     }
                 }
             },
+            "additionalProperties": false
+        },
+        "skinning": {
+            "type": "object",
+            "properties": {
+                "skeleton": {"type": "string", "minLength": 1, "pattern": "\\.json$"},
+                "sourceModel": {"type": "string", "minLength": 1, "pattern": "\\.json$"},
+                "retarget": {"type": "string", "minLength": 1, "pattern": "\\.json$"},
+                "clips": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "path": {"type": "string", "minLength": 1},
+                            "sequence": {"type": "string", "minLength": 1, "pattern": "\\.json$"}
+                        },
+                        "required": ["id", "path"],
+                        "additionalProperties": false
+                    }
+                },
+                "montages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "path": {"type": "string", "minLength": 1, "pattern": "\\.json$"}
+                        },
+                        "required": ["id", "path"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["skeleton", "clips"],
+            "dependencies": {
+                "sourceModel": ["retarget"],
+                "retarget": ["sourceModel"]
+            },
+            "allOf": [{
+                "if": {"required": ["sourceModel"]},
+                "then": {
+                    "properties": {
+                        "clips": {"maxItems": 0},
+                        "montages": {"maxItems": 0}
+                    }
+                }
+            }],
             "additionalProperties": false
         },
         "materialSlots": {
@@ -67,6 +128,23 @@
         "type",
         "modelDataPath",
         "materialSlots"
+    ],
+    "allOf": [
+        {
+            "if": {"required": ["skinning"]},
+            "then": {"properties": {"type": {"const": "mesh"}}}
+        },
+        {
+            "if": {"properties": {"type": {"const": "tressfx"}}, "required": ["type"]},
+            "then": {
+                "required": ["strandRadius"],
+                "properties": {
+                    "modelDataPath": {"pattern": "\\.tfx$"},
+                    "materialSlots": {"maxItems": 1},
+                    "importOptions": false
+                }
+            }
+        }
     ],
     "additionalProperties": false
 }

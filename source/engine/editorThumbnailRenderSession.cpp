@@ -364,7 +364,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 if (!LoadPreviewMesh(plan.sceneJson.at("objects").at(object.objectIndex),
                     *object.meshLoadRequest, context, loaded)) break;
                 plan.meshObjectPlans.insert(plan.meshObjectPlans.end(), loaded.objectPlans.begin(), loaded.objectPlans.end());
-                if (loaded.speedTreeWindProfile) plan.speedTreeWindProfiles.push_back(*loaded.speedTreeWindProfile);
+                if (loaded.windResponseProfile) plan.windResponseProfiles.push_back(*loaded.windResponseProfile);
                 ++objectIndex;
             }
             else ++stage;

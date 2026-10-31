@@ -17,6 +17,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "renderSystem.h"
 #include "renderGraph.h"
 #include "scene/sceneAssetTypes.h"
 #include "script/scriptBlueprintAsset.h"
@@ -77,16 +78,21 @@ PreparedBlueprintAsset PrepareBlueprintAsset(BlueprintCpuRequest request)
     const auto components = declaration.value("components", nlohmann::json::array());
     for (size_t index = 0; index < components.size(); ++index)
     {
-        if (components[index].at("type") != "mesh") continue;
+        // tressfx 组件在场景加载侧就是 mesh 对象（type 收敛 + 放置级绑定字段）。
+        // 预准备必须与正式加载同集合，否则带毛发的蓝图资产只准备身体、不准备毛发；
+        // 绑定字段由 ScriptBlueprintMeshObject 生成，父 mesh 组件按 id 顺序先被准备。
+        if (!IsScriptMeshComponent(components[index].at("type").get<std::string>())) continue;
         PreparedBlueprintMesh mesh;
         mesh.node = ScriptBlueprintMeshObject(declaration, index);
         const auto descriptor = CommonFunction::Path(mesh.node.at("modelPath").get<std::string>());
         const auto before = ContentHasher::HashFile(descriptor);
         mesh.request = MeshAssetLoader::Prepare(mesh.node.at("modelPath").get<std::string>());
+        MeshAssetLoader::PrepareTressfxPlacement(mesh.request, mesh.node);
         // 同一路径可能已经有活动 GPU 网格；动态导入按源内容区分身份，不能拿旧顶点配新 CPU 碰撞三角。
         const auto modelDigest = ContentHasher::HashFile(mesh.request.importRequest.absoluteModelPath);
         mesh.request.buildPlan.modelCacheKey += "|async=" +
-            ContentHasher::HashString(before.ToHex() + modelDigest.ToHex()).ToHex();
+            ContentHasher::HashString((mesh.request.buildPlan.assetType == "tressfx"
+                ? mesh.request.buildPlan.modelCacheKey : before.ToHex()) + modelDigest.ToHex()).ToHex();
         mesh.request.importRequest.buildPlan = mesh.request.buildPlan;
         request.preparation.meshRequest = mesh.request;
         request.preparation.materialOverride = mesh.node.value("materialOverride", "");
@@ -151,6 +157,12 @@ BlueprintAssetCpuWorkers& BlueprintWorkers()
 WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
 {
     WorldMeshObject mesh;
+    // 异步蓝图模板也要携带动画播放器与当前 pose：spawn 克隆出来的骨骼网格
+    // 若首帧没有 pose，逐对象 pre-deform 资源会在首次初始化时被建缺，之后
+    // 无法补齐（对象资源包 Initialize 是一次性的）。
+    mesh.animation = plan.animation;
+    mesh.skinPose = plan.skinPose;
+    mesh.skinSection = plan.skinSection;
     mesh.debugName = plan.debugName;
     mesh.sceneObjectIdentity = plan.sceneObjectIdentity;
     mesh.materialSlotIndex = plan.materialSlotIndex;
@@ -163,9 +175,14 @@ WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
     mesh.localBoundsMax = plan.localBoundsMax;
     mesh.collisionTriangles = plan.collisionTriangles;
     mesh.meshKey = plan.meshKey;
+    mesh.placementBinding = plan.placementBinding;
     mesh.materialKey = plan.materialKey;
     mesh.materialInstanceKey = plan.materialInstanceKey;
-    mesh.speedTreeWindProfileKey = plan.speedTreeWindProfileKey;
+    mesh.windResponseProfileKey = plan.windResponseProfileKey;
+    mesh.tressfxPointsPerGuide = plan.tressfxPointsPerGuide;
+    mesh.tressfxRootCloud = plan.tressfxRootCloud;
+    mesh.tressfxGroupBinding = plan.tressfxGroupBinding;
+    mesh.tressfxGroupConfigs = plan.tressfxGroupConfigs;
     return mesh;
 }
 
@@ -191,7 +208,7 @@ struct BlueprintAssetLoadSession::Impl
     PipelineFactory::GraphicsCandidateState graphics;
     size_t meshIndex = 0, textureIndex = 0;
     std::vector<WorldMeshObject> meshes;
-    std::vector<SpeedTreeWindProfile> windProfiles;
+    std::vector<WindResponseProfile> windProfiles;
 
     Impl(RendererBackendVulkan& backend, PipelineFactory& factory, RenderGraph& graph)
         : backend(backend), factory(factory), graph(graph) {}
@@ -209,7 +226,10 @@ struct BlueprintAssetLoadSession::Impl
         if (ContentHasher::HashFile(ResolveScriptAssetPath(CommonFunction::GetResourcePath(), path)).ToHex() != prepared->digest)
             throw std::runtime_error("Blueprint asset changed before publication");
         for (const auto& mesh : prepared->meshes)
+        {
             ValidatePreparedAssetSources(mesh.asset.materialDigests);
+            MeshAssetLoader::ValidateTressfxPlacementSources(mesh.request);
+        }
         for (const auto& shader : graphics.shaderBuildArtifacts)
         {
             const auto current = factory.GetShaderCompiler().ValidateCandidateSourcesStillCurrent(shader.request, shader.artifact);
@@ -333,12 +353,15 @@ bool BlueprintAssetLoadSession::Step(World& world)
             state.Validate();
             RendererResourceLoadContext context{*state.candidate, state.graph, &state.graphics};
             context.preparedMaterialSources = &mesh.asset.materialSources;
+            // 异步 Spawn 的蒙皮材质必须与主渲染选择同一条蒙皮路径，否则同一
+            // 场景会同时存在两种 vertex variant / 对象资源包。
+            context.prerenderSkin = RenderSystem::GetInstance().IsPrerenderSkinEnabled();
             auto loaded = RendererMeshLoader(state.factory, state.backend, context).LoadMeshObject(
                 mesh.node, mesh.request, mesh.asset.mesh);
             if (!context.pendingGeneratedFiles.empty())
                 throw std::runtime_error("Async Blueprint asset generated unexpected resource files");
             for (const auto& plan : loaded.objectPlans) state.meshes.push_back(ToWorldMesh(plan));
-            if (loaded.speedTreeWindProfile) state.windProfiles.push_back(*loaded.speedTreeWindProfile);
+            if (loaded.windResponseProfile) state.windProfiles.push_back(*loaded.windResponseProfile);
             ++state.meshIndex;
             state.textureIndex = 0;
             return false;

@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -15,12 +16,15 @@
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
+#include "scene/placementBinding.h"
 #include "world/worldSnapshot.h"
+#include "world/worldWind.h"
 #include "world/projectileSettings.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
 #include "debug/drawDebug.h"
+#include "hair/tressfxGroupPreviewState.h"
 #include <map>
 
 class Camera;
@@ -32,6 +36,8 @@ class SpotLight;
 namespace VL
 {
 namespace Animation { class SkeletalPlayback; struct SkinPose; }
+namespace Hair { class TressfxRootCloud; }
+namespace Hair { struct TressfxGroupBinding; }
 class ScriptWorldContext;
 struct ScriptTemplateExtension;
 
@@ -89,7 +95,21 @@ struct WorldMeshObject
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
-    std::string speedTreeWindProfileKey;
+    std::string windResponseProfileKey;
+    // TressFX 顶点工厂反推 guideIndex 用的每根 guide 点数；非头发为 0。
+    uint32_t tressfxPointsPerGuide = 0;
+    // 发根选择缓存只读共享；编辑器快照按 object.model 变换到世界空间。
+    std::shared_ptr<const Hair::TressfxRootCloud> tressfxRootCloud;
+    // 已保存资产的 guide->group 映射与组名；组编辑只替换这份只读绑定。
+    std::shared_ptr<const Hair::TressfxGroupBinding> tressfxGroupBinding;
+    // placement 解析后的每组模拟配置（0 = Default，k = 第 k 个命名组）。
+    // 编辑器只读它显示 asset default；求解器仍从 placementBinding 消费。
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> tressfxGroupConfigs;
+    // 放置级（per-placement）网格：placementTemplateMeshKey 非空表示本对象在 spawn
+    // 时从该模板 RenderableObject 克隆独立实例（共享导入几何、独立 GPU 状态）；
+    // placementBinding 描述如何解析自身绑定（Kind + 参数），由渲染线程按 Kind 分派。
+    std::string placementTemplateMeshKey;
+    PlacementBinding placementBinding;
 };
 
 // 场景里声明的橡皮软体对象。它只保存作者参数和已解析的材质 key；
@@ -175,17 +195,30 @@ public:
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
+    // 场景全局风；与 environment 同属一次 World 构建，随 World 的发布/替换整体切换。
+    void SetWind(WorldWind wind);
+    const WorldWind& GetWind() const { return wind; }
+    // 头发分组预览是 World 的会话状态，不写资产；快照构建时冻结到每个 mesh draw。
+    void SetTressfxGroupPreview(TressfxGroupPreviewState state)
+    {
+        tressfxGroupPreview = state;
+    }
+    const TressfxGroupPreviewState& GetTressfxGroupPreview() const
+    {
+        return tressfxGroupPreview;
+    }
+
     void SetCsmSettings(CsmSettings settings);
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
+    void AddWindResponseProfile(WindResponseProfile profile);
     void AddSoftBodyObject(std::string name, WorldSoftBodyObject object);
     void AddGlassObject(std::string name, WorldGlassObject object);
     bool RemoveMeshObject(const std::string& name);
     bool SetMeshObjectLocalBounds(const std::string& name,
         const Eigen::Vector3f& minimum, const Eigen::Vector3f& maximum);
     bool SetMeshObjectModel(const std::string& name, const Eigen::Matrix4f& model);
-    void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
@@ -209,7 +242,7 @@ public:
     Debug::DrawDebug& GetDebugDraw() { return debugDraw; }
     const Debug::DrawDebug& GetDebugDraw() const { return debugDraw; }
     std::shared_ptr<const Debug::Snapshot> CaptureDebugDraw(const Animation::MotionDebugView& motion);
-    const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
+    const std::unordered_map<std::string, WindResponseProfile>& GetWindResponseProfiles() const { return windResponseProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
@@ -233,6 +266,12 @@ public:
     bool SetMeshSceneObjectTransform(const std::string& identity,
         const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
         const Eigen::Vector3f& scale);
+    // 只读读回该 actor 的根 TRS（度数与场景 JSON 语义一致）。同一 identity 的所有
+    // section 共享 scene TRS，因此取第一个命中项即可；返回 false 表示身份不在当前
+    // World。Console 的增量位移/sweep 起点用它读当前 placement，不复制 World 表。
+    bool GetMeshSceneObjectTransform(const std::string& identity,
+        Eigen::Vector3f& position, Eigen::Vector3f& rotation,
+        Eigen::Vector3f& scale) const;
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
     // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
@@ -263,7 +302,9 @@ public:
         uint32_t component, float value);
     void ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visible = true);
     void CloneScriptBlueprintMeshes(const std::string& templateId, const nlohmann::json& actor);
-    void RemoveScriptBlueprintMeshes(const std::string& id);
+    // removeTemplateEntries=false 供 SynchronizeScriptComponentMeshes 内部使用：
+    // 重建同一个 actor 的网格时不能把它自己的模板条目一并删掉。
+    void RemoveScriptBlueprintMeshes(const std::string& id, bool removeTemplateEntries = true);
     void PrepareScriptComponentMeshTemplates();
     void SynchronizeScriptComponentMeshes(const nlohmann::json& actor);
     void SetScriptTemplates(nlohmann::json templates) { scriptTemplates = std::move(templates); }
@@ -275,7 +316,7 @@ public:
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateExtension(
         const std::string& path, const std::string& digest, const nlohmann::json& declaration,
         const std::vector<WorldMeshObject>& meshes,
-        const std::vector<SpeedTreeWindProfile>& profiles) const;
+        const std::vector<WindResponseProfile>& profiles) const;
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateRemoval(const std::string& path) const;
     void CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept;
     void SwapScriptConfiguration(nlohmann::json& actors, nlohmann::json& templates,
@@ -307,11 +348,13 @@ private:
     std::shared_ptr<Camera> scriptCamera;
     bool editorViewEnabled = false;
     WorldEnvironment environment;
+    WorldWind wind;
+    TressfxGroupPreviewState tressfxGroupPreview;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
+    std::unordered_map<std::string, WindResponseProfile> windResponseProfiles;
     std::unordered_map<std::string, WorldSoftBodyObject> softBodyObjects;
     std::unordered_map<std::string, WorldGlassObject> glassObjects;
-    std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
@@ -329,6 +372,10 @@ private:
     std::unordered_map<std::string, Eigen::Matrix4f> scriptComponentMatrices;
     std::unordered_map<std::string, std::vector<WorldMeshObject>> scriptComponentMeshTemplates;
     std::unordered_map<std::string, std::string> scriptComponentMeshStructures;
+    // 运行时 spawn 创建的逐 actor 模板键：模板键对 tressfx 组件包含父组件身份，
+    // 因此每个 spawn 都有新键；actor 销毁时按这张表回收，避免模板池随 spawn 增长。
+    // 共享网格的模板键是 actor 无关的，不会记录在这里。
+    std::unordered_map<std::string, std::vector<std::string>> scriptActorTemplateKeys;
     // 派生组件灯只持有规范物理值，不进入作者灯表，也不替换 CSM 主方向光。
     std::unordered_map<std::string, LightSnapshot> scriptLights;
     bool motionDebugEnabled = false;

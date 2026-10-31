@@ -5,17 +5,27 @@ add_executable(editor_ui_tests
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
+    tressfxHairPreviewTests.cpp
+    tressfxHairSimulationTests.cpp
+    tressfxComponentUiTests.cpp
+    tressfxGroupEditorTests.cpp
     debugDrawOverlayTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/debugDrawOverlay.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
     resourceEditorControllerTests.cpp
     widgetTests.cpp
     dockingTests.cpp
+    performancePanelTests.cpp
+    uiViewModelRefreshTests.cpp
+    uiViewModelSectionsTests.cpp
+    uiUpdateSchedulerTests.cpp
+    "${PROJECT_SOURCE_DIR}/source/ui/uiRenderSnapshotQueue.cpp"
     logPanelTests.cpp
     gameplayHudTests.cpp
     contentBrowserTests.cpp
     contentBrowserPerformanceTests.cpp
     jsonAssetLibraryTests.cpp
+    retargetPreviewTests.cpp
     thumbnailLibraryTests.cpp
     rmlUiTextureTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/rmlUiInterfaces.cpp"
@@ -29,12 +39,16 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorContentBrowserController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorDockingController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorLogPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/editorPerformancePanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorJsonInspectorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorResourceEditorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorSceneActorTree.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/assets/editorRetargetPreview.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/retargetAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/tressfxGroupEditor.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintLogicComponentsPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/sceneLogicComponentsPanel.cpp"
@@ -49,6 +63,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetJsonCommandHost.cpp"
     "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     # 逐 actor 可见性的 World/快照回归（editorUiTests.cpp）：渲染侧过滤发生在
     # WorldSnapshotBuilder，因此这里要编进真实的 World 与快照构建器，
@@ -73,5 +88,5 @@ endif()
 target_compile_definitions(editor_ui_tests PRIVATE
     VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
 target_link_libraries(editor_ui_tests PRIVATE
-    vl_ui_widgets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
+    vl_ui_widgets vl_hair_assets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

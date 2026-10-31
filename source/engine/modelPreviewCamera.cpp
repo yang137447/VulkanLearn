@@ -22,7 +22,9 @@ bool ModelPreviewCamera::Synchronize(World& world, float aspect)
     for (const auto& entry : world.GetMeshObjects())
     {
         const auto& object = entry.second;
-        if (object.sceneObjectIdentity != "preview_model" && object.sceneObjectIdentity != "preview_material" &&
+        if (object.sceneObjectIdentity != "preview_model" &&
+            object.sceneObjectIdentity.rfind("preview_retarget_source|", 0) != 0 &&
+            object.sceneObjectIdentity != "preview_material" &&
             object.sceneObjectIdentity.rfind("__blueprint/~preview.", 0) != 0) continue;
         active = true;
         // 合并所有 section 的变换后包围盒；环境背板不参与模型取景。

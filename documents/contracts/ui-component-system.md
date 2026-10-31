@@ -893,7 +893,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorPerformancePanelTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|EditorRetargetPreview|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

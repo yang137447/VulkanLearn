@@ -52,7 +52,9 @@ public:
     bool IsPanelActive(const std::string& panel) const
     {
         const uint32_t stack = workspace.FindStack(panel);
+        const uint32_t expanded = ExpandedAssetStack();
         return stack != 0 && IsPanelVisible(panel) &&
+            (expanded == 0 || expanded == stack) &&
             workspace.State().nodes.at(stack).active == panel;
     }
     // 可见性由停靠视图拥有：DockWorkspace 只保留布局树，隐藏面板仍占树中的位置。
@@ -67,12 +69,14 @@ public:
     size_t PropertyWriteCount() const { return widgets.PropertyWriteCount(); }
     void Activate(const std::string& panel);
     std::string ResourcePathForPanel(const std::string& panel) const;
+    std::string PanelAfterClose(const std::string& panel) const;
     void Reset();
 
 private:
     void RebuildShell();
     void ApplyGeometry();
     void ApplyTabs();
+    uint32_t ExpandedAssetStack() const;
     void Save();
     void UpdateDrag(float x, float y);
     void FinishDrag(float x, float y);
@@ -100,6 +104,7 @@ private:
     bool savePending = false;
     bool suppressClick = false;
     std::string activatedPanel;
+    std::string activeWorkspacePanel = "viewport";
     std::string pendingPanel;
     std::string dragPanel;
     uint32_t dragSplit = 0;

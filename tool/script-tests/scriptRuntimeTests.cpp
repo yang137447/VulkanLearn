@@ -508,6 +508,78 @@ TEST_F(ScriptRuntimeTest, TransformPublishesIntoNewSnapshotWithoutChangingFrozen
     EXPECT_TRUE(before.Value().meshDraws[0].model.isApprox(Eigen::Matrix4f::Identity()));
 }
 
+TEST_F(ScriptRuntimeTest, SnapshotFreezesScaledAndOrdinaryAnimationTimeSeparately)
+{
+    Prepare(Json::array({Blueprint("a", 90)}));
+    WorldMeshObject ordinary;
+    ordinary.sceneObjectIdentity = "OrdinaryCharacter";
+    world->AddMeshObject("OrdinaryCharacter", ordinary);
+    world->SetCamera(std::make_shared<Camera>());
+    std::string error;
+    ASSERT_TRUE(runtime.SetTimeScale(0.25f, error)) << error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Playing, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+
+    WorldSnapshotBuildDesc desc;
+    desc.simulationDeltaSeconds = 0.04f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    WorldSnapshotBuilder builder;
+    const auto frozen = builder.Build(*world, desc);
+    ASSERT_TRUE(frozen.IsSuccess());
+    ASSERT_EQ(frozen.Value().meshDraws.size(), 2u);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.01f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.01f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+
+    ASSERT_TRUE(runtime.SetTimeScale(1.0f, error)) << error;
+    runtime.Tick(world, 0.08f, {}, diagnostics);
+    desc.simulationDeltaSeconds = 0.08f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    const auto next = builder.Build(*world, desc);
+    ASSERT_TRUE(next.IsSuccess());
+    EXPECT_FLOAT_EQ(next.Value().hairSimulationDeltaSeconds, 0.08f);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.01f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.01f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+}
+
+TEST_F(ScriptRuntimeTest, SnapshotFreezesPausedGameplayWithoutStoppingOrdinaryAnimation)
+{
+    Prepare(Json::array({Blueprint("a", 90)}));
+    WorldMeshObject ordinary;
+    ordinary.sceneObjectIdentity = "OrdinaryCharacter";
+    world->AddMeshObject("OrdinaryCharacter", ordinary);
+    world->SetCamera(std::make_shared<Camera>());
+    std::string error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Playing, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Paused, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+
+    WorldSnapshotBuildDesc desc;
+    desc.simulationDeltaSeconds = 0.04f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    WorldSnapshotBuilder builder;
+    const auto frozen = builder.Build(*world, desc);
+    ASSERT_TRUE(frozen.IsSuccess());
+    ASSERT_EQ(frozen.Value().meshDraws.size(), 2u);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.0f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.0f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+}
+
 TEST_F(ScriptRuntimeTest, PauseFreezesAndStopRestoresAuthoredTransform)
 {
     Prepare(Json::array({Blueprint("a", 90)}));
@@ -722,4 +794,94 @@ TEST_F(ScriptRuntimeTest, DestroyHidesMeshAndStopRestoresIt)
     EXPECT_TRUE(world->GetMeshObjects().at("__blueprint/a").visible);
 }
 #endif
+
+// 场景 wind 对象的合同测试：只验证作者数据与 World 默认值，不创建 GPU 资源。
+namespace SceneWindFixture
+{
+Json WindObject()
+{
+    return {{"type", "wind"}, {"name", "MainWind"}, {"direction", {1, 0, 0}}, {"strength", 200.0},
+        {"gust", {{"amplitude", 0.3}, {"frequency", 0.5}, {"turbulence", 0.2}}}};
+}
+
+Json CameraObject()
+{
+    Json camera{{"name", "Camera"}, {"type", "camera"}, {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}, {"near_clip", 1}, {"far_clip", 100}, {"fov", 60}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    return camera;
+}
+
+Json SceneWith(const Json& objects)
+{
+    return {{"worldUnit", "cm"}, {"description", "Wind contract fixture"}, {"objects", objects}};
+}
+} // namespace SceneWindFixture
+
+TEST(SceneWind, ValidWindParsesNormalizedDirectionStrengthAndGust)
+{
+    using namespace SceneWindFixture;
+    Json wind = WindObject();
+    wind["direction"] = {0, 3, 4};
+    ASSERT_NO_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))));
+    const WorldWind parsed = ReadSceneWind(wind);
+    EXPECT_TRUE(parsed.authored);
+    EXPECT_EQ(parsed.name, "MainWind");
+    EXPECT_NEAR(parsed.direction.y(), 0.6f, 1.0e-6f);
+    EXPECT_NEAR(parsed.direction.z(), 0.8f, 1.0e-6f);
+    EXPECT_FLOAT_EQ(parsed.strength, 200.0f);
+    EXPECT_TRUE(parsed.gust.enabled);
+    EXPECT_FLOAT_EQ(parsed.gust.amplitude, 0.3f);
+}
+
+TEST(SceneWind, RejectsZeroDirection)
+{
+    using namespace SceneWindFixture;
+    Json wind = WindObject();
+    wind["direction"] = {0, 0, 0};
+    EXPECT_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))), std::invalid_argument);
+}
+
+TEST(SceneWind, RejectsNegativeStrength)
+{
+    using namespace SceneWindFixture;
+    Json wind = WindObject();
+    wind["strength"] = -1.0;
+    EXPECT_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))), std::invalid_argument);
+}
+
+TEST(SceneWind, RejectsGustAmplitudeOutOfRange)
+{
+    using namespace SceneWindFixture;
+    Json wind = WindObject();
+    wind["gust"]["amplitude"] = 1.5;
+    EXPECT_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))), std::invalid_argument);
+}
+
+TEST(SceneWind, RejectsUnknownWindKey)
+{
+    using namespace SceneWindFixture;
+    Json wind = WindObject();
+    wind["spin"] = 1.0;
+    EXPECT_THROW(ValidateSceneAssetJson(SceneWith(Json::array({wind, CameraObject()}))), std::invalid_argument);
+}
+
+TEST(SceneWind, RejectsSecondWindObjectInScene)
+{
+    using namespace SceneWindFixture;
+    Json second = WindObject();
+    second["name"] = "SecondWind";
+    EXPECT_THROW(ValidateSceneAssetJson(SceneWith(Json::array({WindObject(), second, CameraObject()}))),
+        std::invalid_argument);
+}
+
+TEST(SceneWind, AbsentWindLeavesWorldWithZeroStrength)
+{
+    using namespace SceneWindFixture;
+    ASSERT_NO_THROW(ValidateSceneAssetJson(SceneWith(Json::array({CameraObject()}))));
+    World world(1, "NoWindScene");
+    EXPECT_FLOAT_EQ(world.GetWind().strength, 0.0f);
+    EXPECT_FALSE(world.GetWind().gust.enabled);
+    EXPECT_FALSE(world.GetWind().authored);
+}
 } // namespace

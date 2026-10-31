@@ -10,7 +10,9 @@ in this snapshot does not read.
 """
 import glob
 import json
+import math
 import os
+import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,8 +30,8 @@ INTENTIONAL_EXCEPTIONS = {
 }
 
 
-def load_schema():
-    with open(os.path.join(REPO, 'schema', 'scene.schema.json'), encoding='utf-8') as handle:
+def load_schema(filename='scene.schema.json'):
+    with open(os.path.join(REPO, 'schema', filename), encoding='utf-8') as handle:
         return json.load(handle)
 
 
@@ -42,11 +44,20 @@ def check(instance, schema, root, path='$'):
     def fail(message):
         problems.append('%s: %s' % (path, message))
 
+    if schema is True:
+        return []
+    if schema is False:
+        return ['%s: matched forbidden field' % path]
     if '$ref' in schema:
         ref = schema['$ref']
-        assert ref.startswith('#/'), 'only local refs supported'
+        filename, _, fragment = ref.partition('#')
+        # 只读仓库 schema 同级引用，不访问网络；共享 TressFX 定义也走同一 checker。
+        if filename:
+            assert os.path.basename(filename) == filename, 'only sibling schema refs supported'
+            root = load_schema(filename)
+        assert fragment.startswith('/'), 'only JSON-pointer schema refs supported'
         target = root
-        for step in ref[2:].split('/'):
+        for step in fragment[1:].split('/'):
             target = target[step]
         merged = dict(target)
         for key, value in schema.items():
@@ -93,13 +104,18 @@ def check(instance, schema, root, path='$'):
             if name not in instance:
                 fail('missing required field %r' % name)
 
+    if 'const' in schema and instance != schema['const']:
+        fail('expected const %r' % schema['const'])
+    if 'enum' in schema and instance not in schema['enum']:
+        fail('not one of %s' % schema['enum'])
     expected = schema.get('type')
     if isinstance(expected, list):
         rest = {key: value for key, value in schema.items() if key != 'type'}
         if not any(not check(instance, dict(rest, type=kind), root, path) for kind in expected):
             fail('did not match any allowed type')
         return problems
-    if expected == 'object':
+    if expected == 'object' or (isinstance(instance, dict) and
+                                ('properties' in schema or 'additionalProperties' in schema)):
         if not isinstance(instance, dict):
             fail('expected object')
             return problems
@@ -119,7 +135,8 @@ def check(instance, schema, root, path='$'):
                     problems.extend(check(value, extra, root, '%s.%s' % (path, name)))
         return problems
 
-    if expected == 'array':
+    if expected == 'array' or (isinstance(instance, list) and
+                               any(key in schema for key in ('items', 'minItems', 'maxItems'))):
         if not isinstance(instance, list):
             fail('expected array')
             return problems
@@ -132,16 +149,14 @@ def check(instance, schema, root, path='$'):
                 problems.extend(check(item, schema['items'], root, '%s[%d]' % (path, index)))
         return problems
 
-    if expected == 'string':
+    if expected == 'string' or (isinstance(instance, str) and
+                                any(key in schema for key in ('minLength', 'pattern'))):
         if not isinstance(instance, str):
             fail('expected string')
         elif 'minLength' in schema and len(instance) < schema['minLength']:
             fail('shorter than minLength %d' % schema['minLength'])
-        return problems
-
-    if expected == 'integer':
-        if not isinstance(instance, int) or isinstance(instance, bool):
-            fail('expected integer')
+        elif 'pattern' in schema and not re.search(schema['pattern'], instance):
+            fail('did not match pattern %r' % schema['pattern'])
         return problems
 
     if expected == 'boolean':
@@ -149,20 +164,24 @@ def check(instance, schema, root, path='$'):
             fail('expected boolean')
         return problems
 
-    if expected == 'number':
-        if not isinstance(instance, (int, float)) or isinstance(instance, bool):
-            fail('expected number')
+    if expected in ('number', 'integer'):
+        valid_type = isinstance(instance, (int, float)) and not isinstance(instance, bool)
+        # JSON Schema 的 integer 表示数学整值；作者 UI 的 double 8.0 仍是合法整数。
+        if isinstance(instance, float):
+            valid_type = math.isfinite(instance) and (expected != 'integer' or instance.is_integer())
+        if not valid_type:
+            fail('expected %s' % expected)
             return problems
         if 'minimum' in schema and instance < schema['minimum']:
             fail('below minimum %s' % schema['minimum'])
         if 'exclusiveMinimum' in schema and instance <= schema['exclusiveMinimum']:
             fail('not above exclusiveMinimum %s' % schema['exclusiveMinimum'])
+        if 'maximum' in schema and instance > schema['maximum']:
+            fail('above maximum %s' % schema['maximum'])
+        if 'exclusiveMaximum' in schema and instance >= schema['exclusiveMaximum']:
+            fail('not below exclusiveMaximum %s' % schema['exclusiveMaximum'])
         return problems
 
-    if 'const' in schema and instance != schema['const']:
-        fail('expected const %r' % schema['const'])
-    if 'enum' in schema and instance not in schema['enum']:
-        fail('not one of %s' % schema['enum'])
     return problems
 
 

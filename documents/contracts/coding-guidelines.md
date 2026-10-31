@@ -78,7 +78,7 @@ Validate external or authored input once at the boundary that owns its interpret
 - Every new producer of the same runtime data must perform the required validation before handing the data to shared downstream consumers.
 - Add a downstream check only when the code crosses a new independent trust boundary or when it protects memory safety from corrupted state; do not add redundant defensive checks by default.
 
-For example, the SpeedTree `windstrength` console command validates that its value is finite and inside `[0, 1]` before creating a runtime command. `SpeedTreeWindProfileSet` then consumes the normalized value under that contract without checking the same range again.
+For example, a console command validates that its numeric value is finite and inside the documented range before publishing a runtime command. The downstream consumer then trusts that established contract instead of repeating the same range check in every layer or frame update.
 
 ## Test Governance
 

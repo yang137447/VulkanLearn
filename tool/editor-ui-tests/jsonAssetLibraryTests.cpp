@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -21,17 +22,61 @@ using ValueKind = EditorJsonValueKind;
 using Document = EditorJsonDocumentSnapshot;
 using Limits = EditorJsonAssetLimits;
 
+TEST(EditorJsonAssetParsing, TressfxSkinningIsSummarizedForTheHairViewportGuard)
+{
+    // 毛发视口靠这两个摘要决定“是不是毛发、要不要挡预览”，不在 UI 里读文件。
+    Document skinnedHair;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_hair.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.012,)"
+        R"("simulation":{"backend":"gpu","skinning":{"source":"FemaleCharacter","rootBone":"Head_M"}}})",
+        skinnedHair));
+    EXPECT_EQ(skinnedHair.type, "tressfx");
+    EXPECT_EQ(skinnedHair.kind, Kind::Tressfx);
+    EXPECT_TRUE(skinnedHair.tressfxSkinning);
+
+    Document staticHair;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_hair_static.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.012})",
+        staticHair));
+    EXPECT_EQ(staticHair.type, "tressfx");
+    EXPECT_FALSE(staticHair.tressfxSkinning);
+
+    // 顶层 skinning（骨骼网格自己的字段）和别处的同名键都不能冒充 tressfx 绑定。
+    Document skeletalMesh;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_body.json",
+        R"({"type":"mesh","skinning":{"clips":[]}})", skeletalMesh));
+    EXPECT_FALSE(skeletalMesh.tressfxSkinning);
+
+    Document nestedElsewhere;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_other.json",
+        R"({"type":"tressfx","collision":{"simulation":{"skinning":{}}}})", nestedElsewhere));
+    EXPECT_FALSE(nestedElsewhere.tressfxSkinning);
+}
+
+TEST(EditorJsonAssetParsing, TressfxSkinningSurvivesJSONSyntaxErrorsAsACandidate)
+{
+    // 损坏的候选仍要能按类型呈现；标记过宽只会让视口挡住预览，不会加载错误资产。
+    Document document;
+    ParseEditorJsonAsset("SM_broken.json",
+        R"({"type":"tressfx","simulation":{"skinning":{})", document);
+    EXPECT_EQ(document.type, "tressfx");
+    EXPECT_TRUE(document.tressfxSkinning);
+    EXPECT_FALSE(document.diagnostic.empty());
+}
+
 TEST(EditorJsonAssetParsing, RecognizesAllFilenamePrefixesAndMixedCaseExtensions)
 {
     const std::vector<std::pair<std::string, Kind>> cases{
         {"Common/MI_existing.json", Kind::MaterialInstance},
         {"Common/sM_model.JsOn", Kind::Mesh},
+        {"Common/tF_guides.JsOn", Kind::Tressfx},
         {"Maps/SC_level.JSON", Kind::Scene},
         {"Maps/scene01.json", Kind::Scene},
         {"Common/T_albedo.jSoN", Kind::Texture},
         {"Maps/TR_ground.json", Kind::Terrain},
         {"Common/Blueprints/BP_rotator.json", Kind::Blueprint},
-        {"Common/Blueprints/bP_rotator.JsOn", Kind::Blueprint}
+        {"Common/Blueprints/bP_rotator.JsOn", Kind::Blueprint},
+        {"Maps/Retarget/RT_profile.json", Kind::Retarget}
     };
     for (const auto& item : cases)
     {
@@ -48,7 +93,7 @@ TEST(EditorJsonAssetParsing, RecognizesTopLevelTypeWithoutFilenameConvention)
     const std::vector<std::pair<std::string, Kind>> cases{
         {"materialInstance", Kind::MaterialInstance}, {"mesh", Kind::Mesh},
         {"scene", Kind::Scene}, {"texture", Kind::Texture}, {"terrain", Kind::Terrain},
-        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"blueprint", Kind::Blueprint},
+        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"tressfx", Kind::Tressfx}, {"blueprint", Kind::Blueprint},
         {"BLUEPRINT", Kind::Blueprint}
     };
     for (const auto& item : cases)
@@ -323,6 +368,7 @@ TEST(EditorJsonAssetTypes, UsesExpectedNamesAndGeneratedIconLocations)
     EXPECT_STREQ(EditorAssetKindName(Kind::Scene), "Scene");
     EXPECT_STREQ(EditorAssetKindName(Kind::Texture), "Texture");
     EXPECT_STREQ(EditorAssetKindName(Kind::Terrain), "Terrain");
+    EXPECT_STREQ(EditorAssetKindName(Kind::Retarget), "Retarget");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::MaterialInstance), "icons/material-instance.png");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::Mesh), "icons/mesh.png");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::Scene), "icons/scene.png");
@@ -394,6 +440,61 @@ protected:
     std::filesystem::path root;
     EditorJsonAssetLibrary library;
 };
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewRejectsOutsideRootReferences)
+{
+    Write("RT_test.json", R"({"format":"vl.retarget.v1","preview":{
+        "sourceSkeletonPath":"../SK_outside.json","targetSkeletonPath":"SK_inside.json"}})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    const auto document = library.GetDocument();
+    EXPECT_EQ(document->kind, Kind::Retarget);
+    EXPECT_EQ(document->retargetPreview, nullptr);
+    EXPECT_NE(document->previewDiagnostic.find("Parent traversal"), std::string::npos);
+    EXPECT_TRUE(document->diagnostic.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewMissingMetadataDoesNotRetainPreviousValues)
+{
+    Write("RT_test.json", R"({"format":"vl.retarget.v1"})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->retargetPreview, nullptr);
+    EXPECT_NE(library.GetDocument()->previewDiagnostic.find("requires preview"), std::string::npos);
+    EXPECT_FALSE(library.GetDocument()->fields.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewPublishesFrozenValuesAndClearsOnFailedReload)
+{
+    const std::string skeleton = R"({"format":"vl.skeleton.v1","skeleton":"Shared",
+        "root":"root","slots":["DefaultSlot"],"joints":[{"name":"root","parent":-1,
+        "restLocal":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}]})";
+    const std::string profile = R"({"format":"vl.retarget.v1","sourceSkeleton":"Shared",
+        "targetSkeleton":"Shared","sourceRoot":"root","targetRoot":"root",
+        "joints":[{"source":"root","target":"root"}],
+        "preview":{"sourceSkeletonPath":"SK_source.json","targetSkeletonPath":"SK_target.json",
+        "targetModelPath":"SM_target.json"}})";
+    Write("SK_source.json", skeleton);
+    Write("SK_target.json", skeleton);
+    Write("RT_test.json", profile);
+    Write("SM_target.json", R"({"type":"mesh"})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    const auto frozen = library.GetDocument()->retargetPreview;
+    ASSERT_NE(frozen, nullptr) << library.GetDocument()->previewDiagnostic;
+    EXPECT_EQ(frozen->sourceSkeleton, "Shared");
+    EXPECT_EQ(frozen->targetModelPath, "SM_target.json");
+    EXPECT_EQ(frozen->mappings.size(), 1u);
+    Write("SK_target.json", "{}");
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->retargetPreview, nullptr);
+    EXPECT_FALSE(library.GetDocument()->previewDiagnostic.empty());
+    EXPECT_EQ(frozen->target[0].name, "root");
+}
 
 TEST_F(JsonAssetLibraryTest, TexturePreviewDecodesRgbWithTopLeftOrientation)
 {
@@ -511,6 +612,59 @@ TEST_F(JsonAssetLibraryTest, PublishesDocumentOnlyThroughGtPoll)
     EXPECT_FALSE(library.GetDocument()->fields.empty());
 }
 
+TEST_F(JsonAssetLibraryTest, TressfxGuideCountIsReadFromTheTfxHeader)
+{
+    // Groups 编辑器需要 guideCount 才能在保存前拦截 end > guideCount；
+    // 目录扫描与显式打开都必须带上同一份头信息。
+    // 12 字节是 editor worker 读取的最小头：version、guideCount、pointsPerStrand。
+    std::string tfx(12, '\0');
+    const float version = 4.0f;
+    std::memcpy(&tfx[0], &version, sizeof(version));
+    const uint32_t guideCount = 40334;
+    const uint32_t pointsPerStrand = 16;
+    std::memcpy(&tfx[8], &pointsPerStrand, sizeof(pointsPerStrand));
+    tfx[4] = static_cast<char>(guideCount & 0xff);
+    tfx[5] = static_cast<char>((guideCount >> 8) & 0xff);
+    tfx[6] = static_cast<char>((guideCount >> 16) & 0xff);
+    tfx[7] = static_cast<char>((guideCount >> 24) & 0xff);
+    Write("Maps/SC_x/Source/hair.tfx", tfx);
+    Write("Maps/SC_x/Meshes/TF_hair.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.05})");
+    Start();
+    ASSERT_TRUE(WaitCatalog());
+    ASSERT_EQ(library.GetCatalog()->assets.size(), 1u);
+    EXPECT_EQ(library.GetCatalog()->assets[0].tressfxGuideCount, guideCount);
+
+    library.RequestOpen("Maps/SC_x/Meshes/TF_hair.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->tressfxGuideCount, guideCount);
+    EXPECT_TRUE(library.GetDocument()->diagnostic.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, TressfxGuideCountStaysUnknownOnMissingOrShortSource)
+{
+    // 头不足 12 字节时不能越界读；任何失败都只把 guideCount 留 0。
+    Write("Maps/SC_y/Source/short.tfx", std::string(5, '\0'));
+    Write("Maps/SC_y/Meshes/TF_short.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/short.tfx","strandRadius":0.05})");
+    Write("Maps/SC_y/Meshes/TF_missing.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/missing.tfx","strandRadius":0.05})");
+    // 未拉取的 Git LFS 指针或任意文本都不是合法 TFX 头，不能把 ASCII 字节拼成伪 count。
+    Write("Maps/SC_y/Source/lfs.tfx", "version https://git-lfs.github.com/spec/v1\n");
+    Write("Maps/SC_y/Meshes/TF_lfs.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/lfs.tfx","strandRadius":0.05})");
+    Start();
+    ASSERT_TRUE(WaitCatalog());
+    for (const auto& entry : library.GetCatalog()->assets)
+        EXPECT_EQ(entry.tressfxGuideCount, 0u) << entry.assetPath;
+
+    library.RequestOpen("Maps/SC_y/Meshes/TF_missing.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->tressfxGuideCount, 0u);
+    EXPECT_TRUE(library.GetDocument()->diagnostic.empty());
+    EXPECT_FALSE(library.GetDocument()->fields.empty());
+}
+
 TEST_F(JsonAssetLibraryTest, CatalogExcludesPayloadAndUnsupportedJsonButKeepsBrokenCandidate)
 {
     Write("Common/SM_mesh.json", R"({"type":"mesh","modelDataPath":"Data/missing.bin"})");
@@ -543,7 +697,8 @@ TEST_F(JsonAssetLibraryTest, CatalogExcludesPayloadAndUnsupportedJsonButKeepsBro
     EXPECT_EQ(broken, 1u);
 }
 
-TEST_F(JsonAssetLibraryTest, OpeningMetadataNeverFollowsAnyResourceReferences)
+// TressFX 的 .tfx 头读取是显式例外；其他资产的引用路径仍只作为元数据。
+TEST_F(JsonAssetLibraryTest, OpeningMetadataDoesNotFollowNonTressfxReferences)
 {
     Write("SM_mesh.json", R"({
         "type":"mesh","modelDataPath":"../outside.bin",

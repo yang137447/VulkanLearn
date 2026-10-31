@@ -13,6 +13,19 @@
 #endif
 
 layout(location = 0) in MaterialVaryings v2f;
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+#include "../tressfxCoverage.glsl"
+layout(location = 8) flat in uint strandCoverageSeed;
+layout(location = 9) flat in uint tressfxGroupId;
+layout(location = 10) flat in float tressfxBrushWeight;
+layout(location = 11) flat in uint tressfxBrushTargetGroup;
+// 与 vertex factory 的 binding 5 同布局；片元只需颜色表读取，
+// 不重复声明 group id buffer，避免把顶点函数带进 fragment stage。
+layout(set = 2, binding = 6, std430) readonly buffer TressfxGuideGroupColors
+{
+    vec4 groupColors[];
+} tressfxGuideGroupColors;
+#endif
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
 layout(location = 0) out vec4 outGBufferA;
@@ -37,6 +50,25 @@ void main()
 {
     MaterialFunctionContext context = CreateMaterialFunctionContext(v2f);
     MaterialInputs inputs = EvaluateMaterialInputs(context);
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+    // 分组色直接顶掉材质基色（等价于改 M_strandPbr 的 u_tintColor），
+    // 让 roughness/specular/AO/阴影继续参与 PBR；默认组保持原材质基色。
+    // 调色板按 sRGB 存储，进入线性光照前在这里转线性。
+    const uint basePreviewFlags = uint(max(uboM.selectionData.w, 0.0));
+    if ((basePreviewFlags & 1u) != 0u && tressfxGroupId != 0u &&
+        tressfxGuideGroupColors.groupColors.length() != 0u)
+    {
+        const uint baseGroupId = min(
+            tressfxGroupId, tressfxGuideGroupColors.groupColors.length() - 1u);
+        inputs.baseColor = pow(
+            tressfxGuideGroupColors.groupColors[baseGroupId].rgb, vec3(2.2));
+    }
+    // 裁除在 Pass 中统一执行；失败的样本不写深度或选中标记。
+    // 保留样本是全覆盖，不能再 alpha 混合一次，否则期望颜色会被重复乘覆盖率。
+    if (inputs.opacity <= TressfxCoverageThreshold(uvec2(gl_FragCoord.xy), strandCoverageSeed))
+        discard;
+    inputs.opacity = 1.0;
+#endif
     MaterialSurface surface = ResolveMaterialSurface(inputs, context);
 
     // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。
@@ -63,6 +95,51 @@ void main()
 #else
     outSceneColor = BuildMaterialForwardOutput(surface);
     outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+    // 分组预览只改 forward RGB：strand 的 coverage/opacity 已在上方统一为 1，
+    // 这里不能碰 alpha，否则会破坏 coverage discard 的保留语义。
+    const uint previewFlags = uint(max(uboM.selectionData.w, 0.0));
+    const int selectedGroup = int(uboM.selectionData.z);
+    uint groupId = tressfxGroupId;
+    if (tressfxGuideGroupColors.groupColors.length() == 0u)
+    {
+        // 无颜色表时不改变材质外观；正常情况下默认组 0 始终存在。
+    }
+    else
+    {
+        if (groupId >= tressfxGuideGroupColors.groupColors.length())
+            groupId = 0u;
+        if ((previewFlags & 2u) != 0u && selectedGroup >= 0 && int(groupId) != selectedGroup)
+            discard;
+        // Ghost 只改 RGB；alpha/coverage 已在上面统一为 1，不能被这里重新解释。
+        if ((previewFlags & 4u) != 0u && tressfxBrushWeight > 0.0 &&
+            tressfxBrushTargetGroup < tressfxGuideGroupColors.groupColors.length())
+        {
+            const bool removeMode = (previewFlags & 8u) != 0u;
+            const vec3 brushColor = removeMode
+                ? vec3(1.0, 0.32, 0.14)
+                : pow(tressfxGuideGroupColors.groupColors[tressfxBrushTargetGroup].rgb,
+                    vec3(2.2));
+            if (removeMode)
+            {
+                if (groupId == tressfxBrushTargetGroup)
+                    outSceneColor.rgb = mix(outSceneColor.rgb, brushColor,
+                        tressfxBrushWeight * 0.22);
+            }
+            else if (groupId == tressfxBrushTargetGroup)
+            {
+                // 已在目标组的 guide 只做目标色 tint；Group Colors 关闭时也保持材质层次。
+                const vec3 tint = mix(vec3(1.0), brushColor, 0.35);
+                outSceneColor.rgb *= tint;
+            }
+            else
+            {
+                outSceneColor.rgb = mix(outSceneColor.rgb, brushColor,
+                    tressfxBrushWeight * 0.22);
+            }
+        }
+    }
+#endif
 #endif
 }
 

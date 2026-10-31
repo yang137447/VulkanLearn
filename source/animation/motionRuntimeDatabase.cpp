@@ -89,6 +89,10 @@ std::shared_ptr<const MotionRuntimeDatabase> LoadMotionRuntimeDatabase(
     const std::filesystem::path& root, const std::string& sourcePath,
     const std::string& modelPath, const SkeletalAsset& asset)
 {
+    // MM 观察历史当前仍按目标骨架记录；先拒绝，不能拿源索引读取目标姿态。
+    // 此检查必须早于缓存构建/磁盘写入。
+    if (asset.IsRetargeted())
+        throw std::invalid_argument("Motion Matching on retargeted assets requires a source-space pose history");
     const auto report = BuildMotionDatabaseReport(root, sourcePath);
     const auto capture = CaptureMotionDatabaseInputs(root, sourcePath);
     if (report.at("identity") != capture.at("identity") || capture.at("source").at("model") != modelPath)

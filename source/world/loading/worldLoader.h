@@ -18,10 +18,10 @@ struct WorldBuildPlan
     nlohmann::json authoredSceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
+    std::vector<WindResponseProfile> windResponseProfiles;
     std::vector<SoftBodyObjectBuildPlan> softBodyObjectPlans;
     std::vector<GlassObjectBuildPlan> glassObjectPlans;
     ProjectileSettings projectileSettings;
-    std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
 };
 
 // IO and validation stage for loading a World. It produces a pure build plan;

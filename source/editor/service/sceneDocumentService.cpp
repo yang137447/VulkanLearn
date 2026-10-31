@@ -425,6 +425,32 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     case P::CameraNear: object["near_clip"] = actor.camera.clipNear; break;
     case P::CameraFar: object["far_clip"] = actor.camera.clipFar; break;
     case P::CastShadows: object["shadow"]["castShadows"] = actor.castShadows; break;
+    case P::WindDirection:
+        object["direction"] = Vector(actor.worldWind.direction);
+        break;
+    case P::WindStrength:
+        object["strength"] = actor.worldWind.strengthCmPerSec;
+        break;
+    case P::WindGustAmplitude:
+        // Gust 滑条归零即关闭：删除整个 gust 对象，重载后才能保持关闭语义。
+        if (actor.worldWind.gustAmplitude <= 0.0f)
+        {
+            object.erase("gust");
+            break;
+        }
+        [[fallthrough]];
+    case P::WindGustFrequency:
+    case P::WindGustTurbulence:
+    {
+        // 场景风只有作者了 gust 才会被读取；从无到有编辑时补齐三个字段，
+        // 保证保存后的 JSON 仍通过 ValidateSceneWindJson 的封闭校验。
+        auto& gust = object["gust"];
+        if (!gust.is_object()) gust = nlohmann::json::object();
+        gust["amplitude"] = actor.worldWind.gustAmplitude;
+        gust["frequency"] = actor.worldWind.gustFrequency;
+        gust["turbulence"] = actor.worldWind.gustTurbulence;
+        break;
+    }
     default: break; // 曝光字段已由上方具名映射处理。
     }
     if (actor.type == EditorUi::EditorSceneActorType::Camera &&
@@ -445,7 +471,8 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     {
         // API 草稿可能尚未应用到 live World；UI 单分量编辑不能用旧 World 的其它分量覆盖它。
         const char* field = edit.property == P::Position ? "position" : edit.property == P::Rotation ? "rotation"
-            : edit.property == P::Scale ? "scale" : edit.property == P::Color ? "color" : nullptr;
+            : edit.property == P::Scale ? "scale" : edit.property == P::Color ? "color"
+            : edit.property == P::WindDirection ? "direction" : nullptr;
         if (field)
         {
             const auto component = object.at(field).at(edit.component);

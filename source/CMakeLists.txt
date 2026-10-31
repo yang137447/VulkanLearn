@@ -6,6 +6,17 @@ list(FILTER sources EXCLUDE REGEX "/physics/")
 # 动画 CPU 资产和播放器由独立库拥有，避免递归源收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/animation/")
 list(FILTER sources EXCLUDE REGEX "/debug/")
+# 发丝 CPU 导入由独立库拥有，工具和 main 共用同一份实现。
+list(FILTER sources EXCLUDE REGEX "/source/hair/")
+# GPU 模拟 pass 依赖 PipelineFactory 与 Vulkan backend，不能进纯 CPU 的 vl_hair_assets
+# （否则 hair_asset_tests 会被迫链接 Vulkan 运行时），因此只补编进 main。
+list(APPEND sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.h"
+    # 分组模拟解析依赖 TF 资产结构（含 Vulkan 顶点类型头），不能放进纯 CPU
+    # 的 vl_hair_assets；模块测试单独编译同一份实现。
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/tressfxGroupSimulation.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/tressfxGroupSimulation.h")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
 list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")
@@ -13,10 +24,11 @@ add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
-# 候选事务、组件空间与 UI 内联模板在 MinGW Debug 下超过 COFF 旧 section 上限。
+# 候选事务、组件空间、UI 内联模板与 hair trace/曲线参数在 MinGW Debug 下
+# 超过 COFF 旧 section 上限。
 if(MINGW)
     set_source_files_properties(renderSystem.cpp engine/engineLoop.cpp editor/ui/blueprintViewportPanel.cpp
-        editor/ui/materialInstanceAssetEditorPanel.cpp
+        editor/ui/materialInstanceAssetEditorPanel.cpp hair/hairSimulationPass.cpp
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 
@@ -50,6 +62,7 @@ PRIVATE
     vl_fracture_core
     vl_animation_assets
     vl_debug_draw
+    vl_hair_assets
     vl_script_host
     ws2_32 dbghelp advapi32 user32 secur32
     )

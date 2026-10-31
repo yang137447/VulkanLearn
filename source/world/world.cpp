@@ -9,6 +9,7 @@
 #include "script/scriptScene.h"
 #include "world/scriptTemplateExtension.h"
 #include "animation/skeletalPlayback.h"
+#include "render/resource/renderableObjectKey.h"
 
 namespace VL
 {
@@ -36,7 +37,7 @@ World::World(uint64_t generation, std::string scenePath)
 
 std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateExtension(
     const std::string& path, const std::string& digest, const nlohmann::json& declaration,
-    const std::vector<WorldMeshObject>& meshes, const std::vector<SpeedTreeWindProfile>& profiles) const
+    const std::vector<WorldMeshObject>& meshes, const std::vector<WindResponseProfile>& profiles) const
 {
     if (scriptTemplates.contains(path)) throw std::invalid_argument("Blueprint asset is already loaded");
     if (scriptTemplates.size() >= 128) throw std::invalid_argument("Too many Blueprint spawn templates");
@@ -47,12 +48,12 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateExtension(
     for (const auto& mesh : meshes)
         if (!staged.meshObjects.emplace(mesh.debugName, mesh).second)
             throw std::invalid_argument("Dynamic Blueprint mesh identity collision");
-    for (const auto& profile : profiles) staged.speedTreeWindProfiles.emplace(profile.key, profile);
+    for (const auto& profile : profiles) staged.windResponseProfiles.emplace(profile.key, profile);
     staged.ApplyScriptBlueprintVisuals(declaration, false);
     staged.AppendScriptComponentMeshTemplate(declaration);
     auto extension = std::make_unique<ScriptTemplateExtension>();
     extension->meshes = std::move(staged.meshObjects);
-    extension->windProfiles = std::move(staged.speedTreeWindProfiles);
+    extension->windProfiles = std::move(staged.windResponseProfiles);
     extension->templates = std::move(staged.scriptTemplates);
     extension->digests = std::move(staged.scriptAssetDigests);
     extension->resolved = std::move(staged.scriptResolvedBlueprints);
@@ -71,8 +72,8 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
     World staged(*this);
     std::set<std::string> removedWindProfiles;
     for (const auto& mesh : staged.meshObjects)
-        if (!mesh.second.speedTreeWindProfileKey.empty())
-            removedWindProfiles.insert(mesh.second.speedTreeWindProfileKey);
+        if (!mesh.second.windResponseProfileKey.empty())
+            removedWindProfiles.insert(mesh.second.windResponseProfileKey);
     const std::string id = staged.scriptTemplates.at(path).at("id");
     staged.RemoveScriptBlueprintMeshes(id);
     for (const auto& state : scriptBlueprintStates)
@@ -91,17 +92,16 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
     std::set<std::string> usedComponentTemplates;
     for (const auto& blueprint : resolved)
         for (const auto& component : blueprint.value("components", nlohmann::json::array()))
-            if (component.at("type") == "mesh")
-                usedComponentTemplates.insert(component.at("modelPath").get<std::string>() + "\n" +
-                    component.value("materialOverride", ""));
+            if (IsScriptMeshComponent(component.at("type").get<std::string>()))
+                usedComponentTemplates.insert(ScriptComponentMeshTemplateKey(blueprint, component));
     for (auto it = staged.scriptComponentMeshTemplates.begin(); it != staged.scriptComponentMeshTemplates.end();)
         if (!usedComponentTemplates.count(it->first)) it = staged.scriptComponentMeshTemplates.erase(it);
         else ++it;
-    for (const auto& mesh : staged.meshObjects) removedWindProfiles.erase(mesh.second.speedTreeWindProfileKey);
-    for (const auto& key : removedWindProfiles) staged.speedTreeWindProfiles.erase(key);
+    for (const auto& mesh : staged.meshObjects) removedWindProfiles.erase(mesh.second.windResponseProfileKey);
+    for (const auto& key : removedWindProfiles) staged.windResponseProfiles.erase(key);
     auto extension = std::make_unique<ScriptTemplateExtension>();
     extension->meshes = std::move(staged.meshObjects);
-    extension->windProfiles = std::move(staged.speedTreeWindProfiles);
+    extension->windProfiles = std::move(staged.windResponseProfiles);
     extension->templates = std::move(staged.scriptTemplates);
     extension->digests = std::move(staged.scriptAssetDigests);
     extension->resolved = std::move(staged.scriptResolvedBlueprints);
@@ -114,7 +114,7 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
 void World::CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept
 {
     meshObjects.swap(extension->meshes);
-    speedTreeWindProfiles.swap(extension->windProfiles);
+    windResponseProfiles.swap(extension->windProfiles);
     scriptTemplates.swap(extension->templates);
     scriptAssetDigests.swap(extension->digests);
     scriptResolvedBlueprints.swap(extension->resolved);
@@ -179,7 +179,7 @@ void World::ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visibl
             scriptLights[identity] = std::move(light);
             continue;
         }
-        if (components[index].at("type") != "mesh") continue;
+        if (!IsScriptMeshComponent(components[index].at("type").get<std::string>())) continue;
         const auto identity = ScriptMeshIdentity(id, components[index]);
         const Eigen::Matrix4f next = ScriptComponentMatrix(actor, index);
         auto previous = scriptComponentMatrices.find(identity);
@@ -205,6 +205,7 @@ void World::PrepareScriptComponentMeshTemplates()
 {
     scriptComponentMeshTemplates.clear();
     scriptComponentMeshStructures.clear();
+    scriptActorTemplateKeys.clear();
     for (const auto& actor : scriptResolvedBlueprints) AppendScriptComponentMeshTemplate(actor);
 }
 
@@ -213,14 +214,15 @@ void World::AppendScriptComponentMeshTemplate(const nlohmann::json& actor)
         const auto components = actor.value("components", nlohmann::json::array());
         nlohmann::json structure = nlohmann::json::array();
         for (const auto& node : components)
-            if (node.at("type") == "mesh")
-                structure.push_back({ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")});
-        scriptComponentMeshStructures[actor.at("id").get<std::string>()] = structure.dump();
+            if (IsScriptMeshComponent(node.at("type").get<std::string>()))
+                structure.push_back(ScriptComponentMeshStructureEntry(actor, node));
+        const std::string actorId = actor.at("id").get<std::string>();
+        scriptComponentMeshStructures[actorId] = structure.dump();
         for (size_t index = 0; index < components.size(); ++index)
         {
             const auto& node = components[index];
-            if (node.at("type") != "mesh") continue;
-            const auto key = node.at("modelPath").get<std::string>() + "\n" + node.value("materialOverride", "");
+            if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+            const auto key = ScriptComponentMeshTemplateKey(actor, node);
             if (scriptComponentMeshTemplates.count(key)) continue;
             const auto identity = ScriptMeshIdentity(actor.at("id"), node);
             std::vector<WorldMeshObject> sections;
@@ -233,6 +235,8 @@ void World::AppendScriptComponentMeshTemplate(const nlohmann::json& actor)
                     sections.push_back(std::move(section));
                 }
             scriptComponentMeshTemplates.emplace(key, std::move(sections));
+            // 只记录“本次新建”的键：共享网格的键 actor 无关，不能跟着某个 actor 回收。
+            scriptActorTemplateKeys[actorId].push_back(key);
         }
 }
 
@@ -242,8 +246,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     nlohmann::json structure = nlohmann::json::array();
     const auto components = actor.value("components", nlohmann::json::array());
     for (const auto& node : components)
-        if (node.at("type") == "mesh")
-            structure.push_back({ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")});
+        if (IsScriptMeshComponent(node.at("type").get<std::string>()))
+            structure.push_back(ScriptComponentMeshStructureEntry(actor, node));
     const auto signature = structure.dump();
     if (scriptComponentMeshStructures[id] == signature) return;
     std::vector<std::pair<std::string, WorldMeshObject>> candidates;
@@ -253,8 +257,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         nlohmann::json::array() : nlohmann::json::parse(scriptComponentMeshStructures[id]);
     for (const auto& node : components)
     {
-        if (node.at("type") != "mesh") continue;
-        const nlohmann::json item = {ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")};
+        if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+        nlohmann::json item = ScriptComponentMeshStructureEntry(actor, node);
         if (std::find(previousStructure.begin(), previousStructure.end(), item) == previousStructure.end()) continue;
         const auto identity = ScriptMeshIdentity(id, node);
         for (const auto& entry : meshObjects)
@@ -264,8 +268,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     for (size_t index = 0; index < components.size(); ++index)
     {
         const auto& node = components[index];
-        if (node.at("type") != "mesh") continue;
-        const auto key = node.at("modelPath").get<std::string>() + "\n" + node.value("materialOverride", "");
+        if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+        const auto key = ScriptComponentMeshTemplateKey(actor, node);
         const auto source = scriptComponentMeshTemplates.find(key);
         if (source == scriptComponentMeshTemplates.end())
             throw std::invalid_argument("Script.ComponentMeshNotPreloaded");
@@ -285,10 +289,11 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         }
     }
     // 所有池命中后才移除旧对象；没有文件/Vulkan工作，RT 只看到下一份冻结快照。
-    RemoveScriptBlueprintMeshes(id);
+    // 保留该 actor 自己的模板条目：重建网格时还要从池里再取一次。
+    RemoveScriptBlueprintMeshes(id, false);
     for (auto& entry : candidates) meshObjects.emplace(std::move(entry));
     for (size_t index = 0; index < components.size(); ++index)
-        if (components[index].at("type") == "mesh")
+        if (IsScriptMeshComponent(components[index].at("type").get<std::string>()))
             scriptComponentMatrices[ScriptMeshIdentity(id, components[index])] = ScriptComponentMatrix(actor, index);
     scriptComponentMeshStructures[id] = signature;
 }
@@ -305,7 +310,46 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
         if (identity != prefix && identity.rfind(prefix + "/", 0) != 0) continue;
         auto clone = entry.second;
         clone.sceneObjectIdentity = destination + identity.substr(prefix.size());
+        // 放置级（Placement）对象持有可变的 GPU 状态（例如 GPU 毛发的
+        // current/previous/prevPrev 与 params UBO），键里带 |instance=<组件身份>。
+        // 只改 sceneObjectIdentity 会让新演员继续借用模板的 RenderableObject，
+        // 因此这里换成本实例的键，并把模板键与通用 placementBinding 交给渲染线程
+        // 在 resolve 前克隆独立对象。
+        if (IsPlacementScopedRenderableKey(clone.meshKey))
+        {
+            clone.placementTemplateMeshKey = clone.meshKey;
+            clone.meshKey = RebaseRenderableObjectKeyInstance(
+                clone.meshKey, identity, clone.sceneObjectIdentity);
+            // 绑定意图用与加载期相同的展开函数生成，保证 spawn 与正式加载看到同一
+            // 语义。展开函数生成放置 tressfx；旧 __tressfx* 字段仅保留兼容读取。
+            const std::string componentId = identity.size() > prefix.size() + 1
+                ? identity.substr(prefix.size() + 1) : std::string();
+            const nlohmann::json components =
+                actor.value("components", nlohmann::json::array());
+            for (size_t index = 0; index < components.size(); ++index)
+            {
+                if (!components[index].is_object() ||
+                    components[index].value("id", "") != componentId) continue;
+                const nlohmann::json sceneObject = ScriptBlueprintMeshObject(actor, index);
+                const auto effective = clone.placementBinding.tressfx;
+                const auto groupConfigs = clone.placementBinding.tressfxGroupConfigs;
+                clone.placementBinding = ReadPlacementBindingFromComponent(sceneObject);
+                clone.placementBinding.tressfx = effective;
+                // per-group 配置与 effective 来自同一次加载期分层解析；spawn 只
+                // 重写来源身份，不重新读 TF/放置字段。
+                clone.placementBinding.tressfxGroupConfigs = groupConfigs;
+                if (clone.placementBinding.tressfx && clone.placementBinding.tressfx->skinning)
+                    clone.placementBinding.tressfx->skinning->source =
+                        clone.placementBinding.sourceSceneObject;
+                break;
+            }
+        }
         CloneAnimation(clone, players);
+        // spawn 后的第一帧可能还没有播放器 pose（BeginPlay/clip 尚未 tick）；骨骼材质
+        // 的逐对象 pre-deform 资源在首次初始化时就要求 pose，否则对象资源包会以
+        // “无 pose”形态建立且不会补 buffer。这里用模板当前 pose 兜底，避免首帧空 pose。
+        if (clone.skinPose == nullptr && entry.second.skinPose != nullptr)
+            clone.skinPose = entry.second.skinPose;
         clone.debugName = destination + entry.first.substr(prefix.size());
         clones.emplace_back(clone.debugName, std::move(clone));
         const auto matrix = scriptComponentMatrices.find(identity);
@@ -315,9 +359,14 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
     // 不在遍历 unordered_map 时插入；所有克隆只共享只读资源键，不创建 Vulkan 对象。
     for (auto& entry : clones) meshObjects.emplace(std::move(entry));
     ApplyScriptBlueprintVisuals(actor);
+    // 为新 actor 建立组件模板条目。tressfx 的模板键包含父组件身份，spawn 后是新键；
+    // 不补这一步，SynchronizeScriptComponentMeshes 会抛 Script.ComponentMeshNotPreloaded。
+    // 必须在 ApplyScriptBlueprintVisuals 之后：模板保存的是相对 actor 根矩阵的
+    // section 局部矩阵，要用新 actor 的世界矩阵反推。共享网格的键已存在，不会重复插入。
+    AppendScriptComponentMeshTemplate(actor);
 }
 
-void World::RemoveScriptBlueprintMeshes(const std::string& id)
+void World::RemoveScriptBlueprintMeshes(const std::string& id, bool removeTemplateEntries)
 {
     const auto prefix = ScriptBlueprintMeshIdentity(id);
     for (auto it = meshObjects.begin(); it != meshObjects.end();)
@@ -330,6 +379,18 @@ void World::RemoveScriptBlueprintMeshes(const std::string& id)
     for (auto it = scriptLights.begin(); it != scriptLights.end();)
         if (it->first == prefix || it->first.rfind(prefix + "/", 0) == 0) it = scriptLights.erase(it);
         else ++it;
+    if (!removeTemplateEntries)
+        return;
+    // actor 销毁：回收它自己创建过的逐 actor 模板条目（tressfx 的键带父组件身份）。
+    // 共享网格的键不在这张表里，因此不会误删别的 actor 还在用的模板。
+    if (const auto templates = scriptActorTemplateKeys.find(id);
+        templates != scriptActorTemplateKeys.end())
+    {
+        for (const std::string& key : templates->second)
+            scriptComponentMeshTemplates.erase(key);
+        scriptActorTemplateKeys.erase(templates);
+    }
+    scriptComponentMeshStructures.erase(id);
 }
 
 void World::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
@@ -388,6 +449,11 @@ void World::SetEnvironment(WorldEnvironment environment)
     this->environment = std::move(environment);
 }
 
+void World::SetWind(WorldWind wind)
+{
+    this->wind = std::move(wind);
+}
+
 void World::SetCsmSettings(CsmSettings settings)
 {
     csmSettings = std::move(settings);
@@ -434,9 +500,9 @@ bool World::SetMeshObjectModel(const std::string& name, const Eigen::Matrix4f& m
     return true;
 }
 
-void World::AddSpeedTreeWindProfile(SpeedTreeWindProfile profile)
+void World::AddWindResponseProfile(WindResponseProfile profile)
 {
-    speedTreeWindProfiles[profile.key] = std::move(profile);
+    windResponseProfiles[profile.key] = std::move(profile);
 }
 
 void World::AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light)
@@ -540,6 +606,24 @@ bool World::SetSquareAreaLight(const std::string& name, const WorldSquareAreaLig
     if (it == squareAreaLights.end()) return false;
     it->second = light;
     return true;
+}
+
+bool World::GetMeshSceneObjectTransform(const std::string& identity,
+    Eigen::Vector3f& position, Eigen::Vector3f& rotation,
+    Eigen::Vector3f& scale) const
+{
+    // scene TRS 是 actor 级的：同一 identity 的每个 section 都保存同一份根 TRS，
+    // 所以这里读第一个命中项就够，不需要像写入那样遍历所有 section。
+    for (const auto& entry : meshObjects)
+    {
+        const WorldMeshObject& object = entry.second;
+        if (MeshSceneObjectIdentity(object, entry.first) != identity) continue;
+        position = object.scenePosition;
+        rotation = object.sceneRotation;
+        scale = object.sceneScale;
+        return true;
+    }
+    return false;
 }
 
 bool World::SetMeshSceneObjectTransform(const std::string& identity,

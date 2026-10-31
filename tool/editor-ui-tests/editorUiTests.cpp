@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +27,7 @@
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/modelPreviewRotation.h"
 #include "input/mouseMotionBatch.h"
 #include "debug/drawDebug.h"
 #include "sceneNode.h"
@@ -33,6 +35,8 @@
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
 #include "animation/motionDebug.h"
+#include "hair/tressfxRootCloud.h"
+#include "hair/tressfxGroupBinding.h"
 
 namespace
 {
@@ -61,6 +65,35 @@ EditorSceneActorSnapshot MeshActor(const std::string& name, uint64_t generation,
     section.materialSlotName = "Surface";
     actor.sections.push_back(std::move(section));
     return actor;
+}
+
+std::shared_ptr<const VL::Hair::TressfxRootCloud> HairBrushRootCloud(size_t count = 200)
+{
+    std::vector<Eigen::Vector3f> positions;
+    std::vector<Eigen::Vector3f> growthDirections;
+    positions.reserve(count);
+    growthDirections.reserve(count);
+    const float goldenAngle = 3.14159265358979323846f * (3.0f - std::sqrt(5.0f));
+    for (size_t index = 0; index < count; ++index)
+    {
+        const float y = 1.0f - 2.0f * (static_cast<float>(index) + 0.5f) /
+            static_cast<float>(count);
+        const float ring = std::sqrt(std::max(0.0f, 1.0f - y * y));
+        const float theta = goldenAngle * static_cast<float>(index);
+        positions.emplace_back(10.0f * ring * std::cos(theta), 10.0f * y,
+            10.0f * ring * std::sin(theta));
+        growthDirections.push_back(Eigen::Vector3f::UnitY());
+    }
+    return VL::Hair::TressfxRootCloud::Build(positions, growthDirections);
+}
+
+// 已保存资产的 guide->group 绑定；20 根 guide 时 fringe=[0,10)、side=[10,20)。
+std::shared_ptr<const VL::Hair::TressfxGroupBinding> HairGroupBinding(
+    size_t guideCount = 200, uint32_t split = 100)
+{
+    return VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, split}}}, {"side", {{split, static_cast<uint32_t>(guideCount)}}}},
+        static_cast<uint32_t>(guideCount), "test-binding", "test");
 }
 
 EditorSceneActorSnapshot SunActor(float intensity, bool primary)
@@ -270,8 +303,103 @@ protected:
         panel->Build(snapshot);
         context->Update();
     }
+    std::shared_ptr<EditorJsonDocumentSnapshot> OpenRetargetAsset(bool animated = false)
+    {
+        ShowContentBrowser();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 2;
+        catalog->assets.push_back({"Retarget/RT_test.json", EditorAssetKind::Retarget, "Retarget Test"});
+        snapshot.assetCatalog = catalog;
+        Refresh(); Refresh();
+        document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+        auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+        json->revision = 3;
+        json->assetPath = "Retarget/RT_test.json";
+        json->kind = EditorAssetKind::Retarget;
+        json->name = "Retarget Test";
+        auto preview = std::make_shared<EditorRetargetPreview>();
+        preview->sourceSkeleton = "Source";
+        preview->targetSkeleton = "Target";
+        preview->sourcePose = "Bind";
+        preview->targetPose = "Aligned";
+        if (animated) preview->targetModelPath = "Meshes/SM_target.json";
+        EditorRetargetJoint root, shoulder, wrist;
+        root.name = "root";
+        root.bindAxes = root.referenceAxes = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+        shoulder = wrist = root;
+        shoulder.name = "shoulder";
+        shoulder.parent = 0;
+        shoulder.bindPosition = shoulder.referencePosition = {0, 10, 0};
+        wrist.name = "wrist";
+        wrist.parent = 1;
+        wrist.bindPosition = wrist.referencePosition = {0, 20, 0};
+        preview->source = {root, shoulder, wrist};
+        wrist.referencePosition = {-10, 10, 0};
+        preview->target = {root, shoulder, wrist};
+        preview->mappings = {{0, 0, -1}, {1, 1, 0}, {2, 2, 1}};
+        preview->defaultAnchor = 1;
+        preview->targetOffsets = 1;
+        json->retargetPreview = preview;
+        snapshot.jsonDocument = json;
+        Refresh();
+        Refresh();
+        return json;
+    }
+    void PublishRetargetAnimation(uint64_t generation = 7, const std::string& profile = "Retarget/RT_test.json")
+    {
+        EditorSceneActorSnapshot target;
+        target.worldGeneration = generation;
+        target.scenePath = ModelPreviewScenePath;
+        target.sceneObjectIdentity = "preview_model";
+        target.identity = "mesh|preview_model";
+        auto source = target;
+        source.sceneObjectIdentity = "preview_retarget_source|" + profile;
+        source.identity = "mesh|" + source.sceneObjectIdentity;
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{target, source});
+        UiViewModelSnapshot view;
+        view.activeWorldPath = ModelPreviewScenePath;
+        view.animationWorldGeneration = generation;
+        view.animationClips = {"Idle", "Walk"};
+        view.animationJointCount = 105;
+        view.animationDuration = 4;
+        view.animationPlaying = true;
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        Refresh();
+    }
+    void OpenTressfxAsset()
+    {
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 20;
+        EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
+        hair.type = "tressfx";
+        catalog->assets = {hair};
+        snapshot.assetCatalog = catalog;
+        ShowContentBrowser();
+        Refresh();
+        auto* tile = BrowserItem(hair.assetPath);
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+        json->assetPath = hair.assetPath;
+        json->kind = hair.kind;
+        json->type = hair.type;
+        json->revision = 1;
+        snapshot.jsonDocument = json;
+        EditorAssetDocumentResultPayload authored;
+        authored.assetPath = hair.assetPath;
+        authored.documentRevision = 11;
+        authored.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"}}}};
+        snapshot.tressfxDocuments = {authored};
+        Refresh();
+        sink.commands.clear();
+        runtimeSink.actions.clear();
+    }
+
     void OpenBlueprintAsset(const std::string& levelPath = {})
     {
+        ShowContentBrowser();
         snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear();
         auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
         catalog->revision = 10;
@@ -513,6 +641,28 @@ protected:
     {
         context->ProcessMouseMove(static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), 0);
     }
+    void ExpectViewportInfoFits(const std::string& surfaceId)
+    {
+        auto* surface = document->GetElementById(surfaceId);
+        ASSERT_NE(surface, nullptr);
+        auto* info = surface->QuerySelector(".asset-viewport-info");
+        ASSERT_NE(info, nullptr);
+        ASSERT_TRUE(info->IsVisible(true));
+        const auto origin = info->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = info->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto surfaceOrigin = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
+        const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
+        EXPECT_GT(size.x, 100);
+        EXPECT_GE(origin.x, surfaceOrigin.x);
+        EXPECT_GE(origin.y, surfaceOrigin.y);
+        EXPECT_LE(origin.x + size.x, surfaceOrigin.x + surfaceSize.x);
+        EXPECT_LE(origin.y + size.y, surfaceOrigin.y + surfaceSize.y);
+        // 在标题文字上命中测试，保证子元素也不会截获视口手势。
+        auto* hit = context->GetElementAtPoint(origin + Rml::Vector2f(10, 8));
+        ASSERT_NE(hit, nullptr);
+        for (auto* element = hit; element; element = element->GetParentNode())
+            EXPECT_NE(element, info);
+    }
     void BeginBlueprintMove()
     {
         Click("[data-action=blueprint-asset-select-component][data-index='0']");
@@ -644,10 +794,12 @@ protected:
     }
     void SettleOutliner(int frames = 4)
     {
+        if (!document->GetElementById("editor-navigation")->IsVisible(true)) ShowContentBrowser();
         for (int frame = 0; frame < frames; ++frame) Refresh();
     }
     void SelectActorInOutliner(EditorSceneActorSnapshot actor)
     {
+        ShowContentBrowser();
         const std::string identity = actor.identity;
         AddActor(std::move(actor));
         panel->Build(snapshot);
@@ -747,8 +899,16 @@ protected:
         auto* title = document->GetElementById("editor-context-menu-title");
         return title == nullptr ? std::string() : title->GetInnerRML();
     }
-    Rml::Element* BrowserItem(const std::string& path) const
+    void ShowContentBrowser()
     {
+        Click("#workspace-viewport-tab");
+        Refresh(); Refresh();
+    }
+    Rml::Element* BrowserItem(const std::string& path)
+    {
+        // 资产工作区隐藏关卡浏览器；测试必须先走真实返回路径，再等待可见列表刷新。
+        if (!document->GetElementById("content-browser-page")->IsVisible(true)) ShowContentBrowser();
+        Refresh();
         Rml::ElementList items;
         document->GetElementById("asset-list")->QuerySelectorAll(items, "[data-action=browser-item]");
         for (auto* item : items)
@@ -1195,6 +1355,7 @@ TEST_F(EditorUiTest, ScriptComponentCreationAndSubtreeRemovalProduceValuesOnly)
 TEST_F(EditorUiTest, BlueprintAssetOpensDedicatedTabWithEditableDefaultsComponentsAndInstanceCheckboxes)
 {
     OpenBlueprintAsset();
+    ExpectViewportInfoFits("blueprint-asset-preview-surface");
     ASSERT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
     EXPECT_STREQ(EditorAssetKindName(EditorAssetKind::Blueprint), "Blueprint");
     EXPECT_NE(document->GetElementById("blueprint-asset-component-tree")->GetInnerRML().find("Blueprint (Self)"),
@@ -1348,6 +1509,183 @@ TEST_F(EditorUiTest, BlueprintAssetCameraCreationAndSubtreeRemovalUseDocumentCom
         std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value).empty());
 }
 
+// 毛发组件的作者入口：父级必须来自组件树里的 mesh，绑定来源不需要作者再写场景对象名。
+TEST_F(EditorUiTest, BlueprintAssetTressfxComponentUsesSelectedMeshAsParent)
+{
+    OpenBlueprintAsset();
+    auto& blueprint = snapshot.blueprintDocuments[0].document;
+    blueprint["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "head"}, {"type", "mesh"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_x/Meshes/SM_head.json"}}});
+    snapshot.blueprintDocuments[0].documentRevision++;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='0']");
+    SelectOption("blueprint-asset-component-kind", "tressfx");
+    SetValue("blueprint-asset-component-mesh",
+        "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    SetValue("blueprint-asset-component-root-bone", "Head_M");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 3u);
+    EXPECT_EQ(nodes[2]["type"], "tressfx");
+    EXPECT_EQ(nodes[2]["parent"], "body");
+    EXPECT_EQ(nodes[2]["modelPath"], "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    EXPECT_EQ(nodes[2]["weights"], "auto");
+    EXPECT_EQ(nodes[2]["rootBone"], "Head_M");
+}
+
+TEST_F(EditorUiTest, BlueprintAssetTressfxComponentRequiresMeshParent)
+{
+    // 默认蓝图只有 scene + camera 组件：没有绑定来源时 UI 必须拒绝，而不是交给加载期报错。
+    OpenBlueprintAsset();
+    Click("[data-action=blueprint-asset-select-component][data-index='0']");
+    SelectOption("blueprint-asset-component-kind", "tressfx");
+    SetValue("blueprint-asset-component-mesh",
+        "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    auto* notice = document->GetElementById("editor-notice");
+    ASSERT_NE(notice, nullptr);
+    EXPECT_NE(notice->GetInnerRML().find("TressFX component"), std::string::npos);
+    EXPECT_NE(notice->GetInnerRML().find("Mesh component"), std::string::npos);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetTressfxDetailsWriteHairFieldsAndHideTransform)
+{
+    OpenBlueprintAsset();
+    auto& blueprint = snapshot.blueprintDocuments[0].document;
+    blueprint["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_skinned.json"},
+         {"rootBone", "Head_M"}, {"weights", "auto"}}});
+    snapshot.blueprintDocuments[0].documentRevision++;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    Refresh();
+    // 毛发没有局部 TRS / 图元碰撞 / 实例白名单控件。
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-1-position-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-1-collisionShape-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-instance-1-weights"), nullptr);
+    SetValue("blueprint-asset-component-1-rootBone-0", "Head_M");
+    SelectOption("blueprint-asset-component-1-weights-0", "mesh");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 2u);
+    EXPECT_EQ(nodes[1]["rootBone"], "Head_M");
+    EXPECT_EQ(nodes[1]["weights"], "mesh");
+    EXPECT_EQ(nodes[1]["parent"], "body");
+}
+
+TEST_F(EditorUiTest, BlueprintTressfxSimulationOverridesStaySparseAndResetToInheritance)
+{
+    OpenBlueprintAsset();
+    auto& authored = snapshot.blueprintDocuments[0];
+    authored.document["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"}, {"rootBone", "Head_M"},
+         {"modelPath", "Meshes/TF_hair.json"}}});
+    ++authored.documentRevision;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    SelectOption("blueprint-asset-component-1-hair-mode-0", "off");
+    SetValue("blueprint-asset-component-1-hair-damping-0", "0.02");
+    SetValue("blueprint-asset-component-1-hair-gravity-0", "[1, 2, 3]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    EXPECT_EQ(nodes[1]["simulation"]["mode"], "off");
+    EXPECT_EQ(nodes[1]["simulation"]["overrides"].size(), 2u);
+    EXPECT_DOUBLE_EQ(nodes[1]["simulation"]["overrides"]["damping"].get<double>(), 0.02);
+    EXPECT_EQ(nodes[1]["simulation"]["overrides"]["gravity"], nlohmann::json::array({1, 2, 3}));
+    EXPECT_FALSE(nodes[1]["simulation"]["overrides"].contains("iterations"));
+    authored.document["components"] = nodes;
+    ++authored.documentRevision;
+    Refresh();
+    sink.commands.clear();
+    SelectOption("blueprint-asset-component-1-hair-mode-0", "inherit");
+    Click("#blueprint-asset-component-1-hair-reset-damping-0");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto resetNodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    EXPECT_FALSE(resetNodes[1]["simulation"].contains("mode"));
+    EXPECT_EQ(resetNodes[1]["simulation"]["overrides"],
+        nlohmann::json({{"gravity", nlohmann::json::array({1, 2, 3})}}));
+    EXPECT_EQ(resetNodes[1]["rootBone"], "Head_M");
+}
+
+// 关卡/资产边界：毛发绑定字段只在蓝图资产页作者。Scene Details 只读展示，
+// 不生成可编辑控件，也不产生 componentOverrides 或运行时动作。
+TEST_F(EditorUiTest, SceneTressfxComponentFieldsAreReadOnly)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|hero";
+    actor.worldGeneration = 42; actor.displayName = "Hero";
+    actor.scriptClass = "Gameplay.HeroBlueprint";
+    actor.scriptBlueprintPath = "Maps/SC_x/Blueprints/BP_hero.json";
+    actor.scriptComponents = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json"},
+         {"rootBone", "Head_M"}, {"weights", "mesh"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_EQ(document->GetElementById("script-component-1-modelPath-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-rootBone-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-weights-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-instance-1-weights"), nullptr);
+    auto* details = document->GetElementById("actor-details-content");
+    ASSERT_NE(details, nullptr);
+    const std::string markup = details->GetInnerRML();
+    EXPECT_NE(markup.find("Hair Asset"), std::string::npos);
+    EXPECT_NE(markup.find("SM_female_hair_dynamic.json"), std::string::npos);
+    EXPECT_NE(markup.find("Head_M"), std::string::npos);
+    EXPECT_NE(markup.find("From Mesh"), std::string::npos);
+    EXPECT_NE(markup.find("Blueprint tab"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+// 内联 actor 的组件虽然属于场景数据，毛发绑定仍不在关卡侧作者：控件保持只读，
+// 否则会出现“看起来能改、实际被 handler 丢弃”的假编辑。
+TEST_F(EditorUiTest, SceneTressfxComponentFieldsStayReadOnlyForInlineActors)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|inline";
+    actor.worldGeneration = 7; actor.displayName = "Inline";
+    actor.scriptClass = "Gameplay.InlineBlueprint";
+    actor.scriptComponents = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json"},
+         {"rootBone", "Head_M"}, {"weights", "auto"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_EQ(document->GetElementById("script-component-1-modelPath-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-rootBone-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-weights-0"), nullptr);
+    auto* details = document->GetElementById("actor-details-content");
+    ASSERT_NE(details, nullptr);
+    const std::string markup = details->GetInnerRML();
+    EXPECT_NE(markup.find("Head_M"), std::string::npos);
+    EXPECT_NE(markup.find("Auto (from parent mesh)"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
 TEST_F(EditorUiTest, ActorLightCreationAndPhotometryEditUseAtomicDocumentDraft)
 {
     OpenBlueprintAsset();
@@ -1411,12 +1749,12 @@ TEST_F(EditorUiTest, BlueprintAssetDirtyCloseCancelsThenSavesAtCurrentRevision)
     snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 12});
     Refresh();
     EXPECT_NE(document->QuerySelector(".workspace-resource-tab")->GetInnerRML().find("*"), std::string::npos);
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_TRUE(panel->HasModal());
     Click("[data-action=close-cancel]"); Refresh();
     EXPECT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
     EXPECT_TRUE(sink.commands.empty());
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveBlueprintDocument);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 12);
@@ -1434,7 +1772,7 @@ TEST_F(EditorUiTest, BlueprintAssetFailedSaveKeepsDraftTabAndAllowsRetry)
     snapshot.blueprintDocuments[0].dirty = true;
     snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 11});
     Refresh();
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", false, "Source changed"});
     snapshot.statusMessage = "Source changed";
@@ -1455,7 +1793,7 @@ TEST_F(EditorUiTest, BlueprintAssetDiscardRevertsOnlyBlueprintDocumentWithoutSav
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("[data-action=close-discard]"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("[data-action=close-discard]"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::RevertBlueprintDocument);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11);
@@ -1473,7 +1811,7 @@ TEST_F(EditorUiTest, BlueprintAssetSaveFeedbackCannotCloseANewerDirtyDraft)
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.blueprintDocuments[0].documentRevision = 13;
     snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", true, "Saved older revision"});
@@ -1487,7 +1825,7 @@ TEST_F(EditorUiTest, BlueprintAssetImmediateDiscardWaitsForPendingEditRevisionAn
 {
     OpenBlueprintAsset();
     SetValue("blueprint-asset-property-0", "90");
-    Click("#resource-close"); Click("#close-discard");
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-discard");
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyBlueprintDocument);
     snapshot.blueprintDocuments[0].dirty = true;
@@ -1510,7 +1848,7 @@ TEST_F(EditorUiTest, BlueprintAssetRejectedDiscardKeepsDialogAndRetriesWithAutho
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("#close-discard"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-discard"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.blueprintDocuments[0].documentRevision = 12;
     snapshot.statusMessage = "The document revision changed";
@@ -1535,7 +1873,8 @@ TEST_F(EditorUiTest, BlueprintAssetFormScrollsAndInstanceCheckboxHasVisibleCheck
         auto* checked = document->GetElementById("blueprint-asset-instance-0");
         auto* unchecked = document->GetElementById("blueprint-asset-instance-1");
         EXPECT_GT(form->GetClientWidth(), 200);
-        EXPECT_GT(form->GetScrollHeight(), form->GetClientHeight());
+        EXPECT_GE(form->GetScrollHeight(), form->GetClientHeight());
+        if (size.y <= 720) EXPECT_GT(form->GetScrollHeight(), form->GetClientHeight());
         const auto checkboxSize = checked->GetBox().GetSize(Rml::BoxArea::Border);
         EXPECT_FLOAT_EQ(checkboxSize.x, 16);
         EXPECT_FLOAT_EQ(checkboxSize.y, 16);
@@ -1788,7 +2127,7 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionDoesNotLeakToAnotherAssetWithSameCom
     other.document["name"] = "Other";
     snapshot.blueprintDocuments.push_back(other);
     Refresh();
-    auto* tile = document->QuerySelector("#asset-list button[data-path='Blueprints/BP_other.json']");
+    auto* tile = BrowserItem("Blueprints/BP_other.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     Refresh();
@@ -2424,6 +2763,7 @@ TEST_F(EditorUiTest, WorkspaceParsesAndRendersWithoutWarnings)
 
 TEST_F(EditorUiTest, WorkspaceTabsKeepVisibleTitlesAfterDockShellRebuild)
 {
+    ShowContentBrowser();
     const std::vector<std::pair<std::string, std::string>> tabs = {
         {"workspace-viewport-tab", "Viewport"},
         {"workspace-outliner-tab", "Scene Outliner"},
@@ -2441,6 +2781,7 @@ TEST_F(EditorUiTest, WorkspaceTabsKeepVisibleTitlesAfterDockShellRebuild)
 
 TEST_F(EditorUiTest, OutlinerAndDetailsShareTheRightColumnWithoutOverlap)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {
         Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
     {
@@ -2520,6 +2861,7 @@ TEST_F(EditorUiTest, WorkspaceRefreshAndReattachKeepTheSelectedPage)
 
 TEST_F(EditorUiTest, BrowserTilesHaveStableDimensions)
 {
+    ShowContentBrowser();
     auto* row = document->QuerySelector("#asset-list button");
     ASSERT_NE(row, nullptr);
     EXPECT_NEAR(row->GetBox().GetSize(Rml::BoxArea::Border).x, 92.0f, 1.0f);
@@ -2528,6 +2870,7 @@ TEST_F(EditorUiTest, BrowserTilesHaveStableDimensions)
 
 TEST_F(EditorUiTest, BrowserRecursiveControlKeepsItsCheckboxAndLabelVisible)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
     {
         context->SetDimensions(dimensions);
@@ -2547,6 +2890,7 @@ TEST_F(EditorUiTest, BrowserRecursiveControlKeepsItsCheckboxAndLabelVisible)
 
 TEST_F(EditorUiTest, DefaultBrowserDockShowsTheCompleteFirstTileAtSmallWindowSizes)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
     {
         context->SetDimensions(dimensions);
@@ -2565,6 +2909,7 @@ TEST_F(EditorUiTest, DefaultBrowserDockShowsTheCompleteFirstTileAtSmallWindowSiz
 
 TEST_F(EditorUiTest, BrowserTileSelectsOnClickAndOpensOnDoubleClick)
 {
+    ShowContentBrowser();
     auto* row = document->QuerySelector("#asset-list button");
     ASSERT_NE(row, nullptr);
     const auto origin = row->GetAbsoluteOffset(Rml::BoxArea::Content);
@@ -2583,6 +2928,7 @@ TEST_F(EditorUiTest, BrowserTileSelectsOnClickAndOpensOnDoubleClick)
 
 TEST_F(EditorUiTest, BrowserGridPlacesMultipleTilesOnTheSameRow)
 {
+    ShowContentBrowser();
     snapshot.assets.push_back({"Maps/SC_test/Materials/MI_other_one.json", false});
     snapshot.assets.push_back({"Maps/SC_test/Materials/MI_other_two.json", false});
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
@@ -2616,6 +2962,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
     context->Update();
     for (const auto& asset : catalog->assets)
     {
+        ShowContentBrowser();
         if (asset.kind == EditorAssetKind::Scene)
             ASSERT_TRUE(panel->SetPanelVisible("viewport", false));
         Rml::Element* tile = nullptr;
@@ -2675,8 +3022,644 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
     EXPECT_EQ(runtimeSink.actions[1].stringValue, "Maps/SC_test.json");
 }
 
+TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedOnes)
+{
+    // 毛发视口只接受无 simulation.skinning 的 tressfx 资产；带 skinning 的资产
+    // 不请求预览，并在状态区说明它由蓝图 TressFX 组件承载。
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 3;
+    EditorJsonAssetEntry skinned{"Meshes/TF_hair_skinned.json", EditorAssetKind::Tressfx, "Skinned hair"};
+    skinned.type = "tressfx";
+    skinned.tressfxSkinning = true;
+    EditorJsonAssetEntry dynamic{"Meshes/TF_hair_dynamic.json", EditorAssetKind::Tressfx, "Dynamic hair"};
+    dynamic.type = "tressfx";
+    catalog->assets = {skinned, dynamic};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    ShowContentBrowser();
+    runtimeSink.actions.clear();
+
+    auto* tile = BrowserItem("Meshes/TF_hair_skinned.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty())
+        << "skinned tressfx assets must not request a model preview";
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+
+    // 工作线程发布作者文档后，守卫说明成为权威状态（目录过期时也能挡住）。
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/TF_hair_skinned.json";
+    json->kind = EditorAssetKind::Tressfx;
+    json->type = "tressfx";
+    json->tressfxSkinning = true;
+    snapshot.jsonDocument = json;
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_NE(document->GetElementById("resource-preview-status")->GetInnerRML().find(
+        "Blueprint TressFX component"), std::string::npos);
+
+    // 无 skinning 的毛发：进入单对象预览并显示毛发工具条。
+    runtimeSink.actions.clear();
+    ShowContentBrowser();
+    tile = BrowserItem("Meshes/TF_hair_dynamic.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewModel);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/TF_hair_dynamic.json");
+    EXPECT_TRUE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
+
+    // 作者文档是权威：目录说 tressfx、文档 type=mesh 时，工具条回到隐藏状态，
+    // 也不会留着上一条资产的守卫文案。
+    runtimeSink.actions.clear();
+    auto mesh = std::make_shared<EditorJsonDocumentSnapshot>();
+    mesh->revision = 2;
+    mesh->assetPath = "Meshes/TF_hair_dynamic.json";
+    mesh->kind = EditorAssetKind::Mesh;
+    mesh->type = "mesh";
+    snapshot.jsonDocument = mesh;
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_TRUE(document->GetElementById("resource-preview-status")->GetInnerRML().find(
+        "Blueprint TressFX component") == std::string::npos);
+}
+
+TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 4;
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    EditorAssetDocumentResultPayload authored;
+    authored.assetPath = hair.assetPath;
+    authored.documentRevision = 1;
+    authored.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"}}}};
+    snapshot.tressfxDocuments = {authored};
+    Refresh();
+
+    // 新的预览 World 发布后才有可旋转的对象；generation 必须大于请求时看到的代数。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    Refresh();
+
+    const auto rect = panel->GetSceneViewportRect();
+    const int x = int(rect.x + rect.width / 2);
+    const int y = int(rect.y + rect.height / 2);
+    context->ProcessMouseMove(x, y, 0);
+    runtimeSink.actions.clear();
+
+    // 斜向左拖也只转模型 Y 轴；竖向位移不改变 pitch 或原点。
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(x + 20, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::RotatePreviewModel);
+    EXPECT_EQ(runtimeSink.actions.back().previewRotation.worldGeneration, 100u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 10.0f);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.pitch, 0.0f);
+    // 继续走生产用的动作转换和真实 World 写入，不能只证明 UI 发出了动作。
+    World previewWorld(100, ModelPreviewScenePath);
+    WorldMeshObject hairObject;
+    hairObject.sceneObjectIdentity = "preview_model";
+    previewWorld.AddMeshObject("preview_model::guides", hairObject);
+    const auto command = BuildModelPreviewRotationCommand(runtimeSink.actions.back().previewRotation,
+        previewWorld.GetGeneration(), previewWorld.GetScenePath());
+    ASSERT_TRUE(command.has_value());
+    EXPECT_EQ(command->type, RuntimeCommandType::SetMeshPlacement);
+    EXPECT_EQ(command->meshPlacement.identity, "preview_model");
+    ASSERT_TRUE(previewWorld.SetMeshSceneObjectTransform(command->meshPlacement.identity,
+        command->meshPlacement.position, command->meshPlacement.rotation, Eigen::Vector3f::Ones()));
+    const auto& rotated = previewWorld.GetMeshObjects().at("preview_model::guides");
+    EXPECT_FLOAT_EQ(rotated.sceneRotation.x(), 0.0f);
+    EXPECT_FLOAT_EQ(rotated.sceneRotation.y(), 10.0f);
+    EXPECT_FALSE(rotated.model.isApprox(hairObject.model));
+    EXPECT_TRUE(rotated.scenePosition.isZero());
+    EXPECT_TRUE((rotated.model.block<3, 1>(0, 3).isZero()));
+    const Eigen::Vector4f highPoint(7.0f, 170.0f, 11.0f, 1.0f);
+    const Eigen::Vector4f rotatedHighPoint = rotated.model * highPoint;
+    EXPECT_FLOAT_EQ(rotatedHighPoint.y(), highPoint.y());
+    // 纯竖拖不重复提交同一绝对旋转，也不退回相机手势。
+    context->ProcessMouseMove(x + 20, y + 35, 0);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    context->ProcessMouseMove(x + 40, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 20.0f);
+    context->ProcessMouseButtonUp(0, 0);
+
+    // 中键仍是相机平移：毛发视口不能把两种手势合并。
+    runtimeSink.actions.clear();
+    context->ProcessMouseButtonDown(2, 0);
+    context->ProcessMouseMove(x + 60, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Pan);
+    context->ProcessMouseButtonUp(2, 0);
+
+    // 复位按钮只排队一次 ResetPositions；不重载预览世界。
+    runtimeSink.actions.clear();
+    Click("#resource-hair-reset");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ResetHairSimulation);
+    EXPECT_TRUE(runtimeSink.actions.back().stringValue.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairRotationRejectsOldWorldAndLevelObjectsWithTheSameName)
+{
+    ModelPreviewRotationInput input{100, 20, 5};
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 101, ModelPreviewScenePath));
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 100, "Maps/SC_level/SC_level.json"));
+    input.worldGeneration = 0;
+    EXPECT_FALSE(BuildModelPreviewRotationCommand(input, 0, ModelPreviewScenePath));
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationControlsHaveUsableGeometryAcrossWorkspaceSizes)
+{
+    OpenTressfxAsset();
+    for (const auto dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+                                 Rml::Vector2i(1920, 1080)})
+    {
+        SCOPED_TRACE(std::to_string(dimensions.x));
+        context->SetDimensions(dimensions);
+        Refresh(); Refresh();
+        auto* host = document->GetElementById("resource-hair-simulation");
+        ASSERT_NE(host, nullptr);
+        const auto origin = host->GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto size = host->GetBox().GetSize(Rml::BoxArea::Content);
+        for (const char* id : {"hair-sim-0-0", "hair-sim-0-1", "hair-sim-0-2",
+                               "hair-sim-1-0", "hair-sim-1-0-slider"})
+        {
+            auto* input = document->GetElementById(id);
+            ASSERT_NE(input, nullptr);
+            const auto offset = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto inputSize = input->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(inputSize.x, id[9] == '1' ? 120.0f : 30.0f) << id;
+            EXPECT_GE(offset.x, origin.x) << id;
+            EXPECT_LE(offset.x + inputSize.x, origin.x + size.x + 1.0f) << id;
+        }
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationRefreshPreservesTextFocusAndPartialInput)
+{
+    OpenTressfxAsset();
+    auto* input = Control("hair-sim-1-0");
+    ASSERT_NE(input, nullptr);
+    const auto origin = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = input->GetBox().GetSize(Rml::BoxArea::Border);
+    context->ProcessMouseMove(int(origin.x + size.x / 2), int(origin.y + size.y / 2), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_EQ(context->GetFocusElement(), input);
+    input->SetValue("0.02");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0"), input);
+    ASSERT_EQ(context->GetFocusElement(), input);
+    input->SetValue("");
+    context->ProcessTextInput("-");
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0"), input);
+    EXPECT_EQ(context->GetFocusElement(), input);
+    EXPECT_EQ(input->GetValue(), "-");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairSimulationSliderKeepsDraggingAcrossSnapshotRefresh)
+{
+    OpenTressfxAsset();
+    auto actor = MeshActor("preview_model", 100);
+    actor.scenePath = ModelPreviewScenePath;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    Refresh();
+    auto* slider = Control("hair-sim-1-0-slider");
+    ASSERT_NE(slider, nullptr);
+    const auto origin = slider->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = slider->GetBox().GetSize(Rml::BoxArea::Border);
+    const int y = int(origin.y + size.y / 2);
+    // 命中当前 0.035/0.1 的滑块，不是轨道（点轨道只执行单次跳转，不捕获拖动）。
+    context->ProcessMouseMove(int(origin.x + size.x * 0.35f), y, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(int(origin.x + size.x * 0.5f), y, 0);
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0-slider"), slider);
+    const auto first = slider->GetAttribute<float>("value", -1);
+    const auto firstCount = runtimeSink.actions.size();
+    ASSERT_GT(firstCount, 0u);
+    context->ProcessMouseMove(int(origin.x + size.x * 0.8f), y, 0);
+    Refresh();
+    ASSERT_EQ(document->GetElementById("hair-sim-1-0-slider"), slider);
+    EXPECT_GT(slider->GetAttribute<float>("value", -1), first);
+    EXPECT_GT(runtimeSink.actions.size(), firstCount);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetHairSimulationParameter);
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.field, "damping");
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairZeroSimulationSlidersDragFromTheirMinimumAcrossRefresh)
+{
+    OpenTressfxAsset();
+    auto actor = MeshActor("preview_model", 100);
+    actor.scenePath = ModelPreviewScenePath;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    Refresh();
+    for (const int index : {4, 5, 6})
+    {
+        SCOPED_TRACE(index);
+        const std::string id = "hair-sim-" + std::to_string(index) + "-0";
+        auto* slider = Control(id + "-slider");
+        ASSERT_NE(slider, nullptr);
+        EXPECT_FLOAT_EQ(slider->GetAttribute<float>("value", -1), 0.0f);
+        const auto origin = slider->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = slider->GetBox().GetSize(Rml::BoxArea::Border);
+        const int y = int(origin.y + size.y / 2);
+        runtimeSink.actions.clear();
+        // 最小值时滑块贴在轨道左端，点击实际 knob 中心后连续向右拖动。
+        context->ProcessMouseMove(int(origin.x + 6), y, 0);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseMove(int(origin.x + size.x * 0.4f), y, 0);
+        Refresh();
+        ASSERT_EQ(document->GetElementById(id + "-slider"), slider);
+        const float first = slider->GetAttribute<float>("value", -1);
+        EXPECT_GT(first, 0.0f);
+        const auto firstCount = runtimeSink.actions.size();
+        EXPECT_GT(firstCount, 0u);
+        context->ProcessMouseMove(int(origin.x + size.x * 0.8f), y, 0);
+        Refresh();
+        EXPECT_GT(slider->GetAttribute<float>("value", -1), first);
+        EXPECT_GT(runtimeSink.actions.size(), firstCount);
+        context->ProcessMouseButtonUp(0, 0);
+        EXPECT_NE(Control(id)->GetValue(), "0");
+    }
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheAsset)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 6;
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* tile = BrowserItem("Meshes/TF_hair.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/TF_hair.json";
+    json->kind = EditorAssetKind::Tressfx;
+    json->type = "tressfx";
+    json->name = "Hair";
+    snapshot.jsonDocument = json;
+    Refresh();
+
+    // 作者文档快照提供当前值与 revision；面板只读这份投影。
+    EditorAssetDocumentResultPayload meshDocument;
+    meshDocument.assetPath = "Meshes/TF_hair.json";
+    meshDocument.documentRevision = 5;
+    meshDocument.document = {{"simulationDefaults", {{"enabled", true}, {"backend", "gpu"},
+        {"damping", 0.01}, {"iterations", 5}}}};
+    snapshot.tressfxDocuments = {meshDocument};
+    Refresh();
+
+    // 实时覆盖只投递给已经发布的预览 World；没有代数时不排队（队列不绑定世界世代）。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-simulation");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+    // damping 是控件表第 2 项；初始值来自作者草稿，不是硬编码默认值。
+    auto* damping = document->GetElementById("hair-sim-1-0");
+    ASSERT_NE(damping, nullptr);
+    EXPECT_EQ(damping->GetAttribute<Rml::String>("value", ""), "0.01");
+    // 文案必须说明这是资产级保存：影响所有摆放，重载会复位模拟。
+    EXPECT_NE(section->GetInnerRML().find("inherited placement values are affected"), std::string::npos);
+
+    // 拖动只发实时覆盖：不写资产、不重载。
+    runtimeSink.actions.clear();
+    sink.commands.clear();
+    damping->SetAttribute("value", "0.02");
+    damping->DispatchEvent("change", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetHairSimulationParameter);
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.field, "damping");
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.valueCount, 1u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewHairParameter.values[0], 0.02f);
+    EXPECT_TRUE(sink.commands.empty()) << "live preview must not stage asset writes";
+    Refresh();
+    EXPECT_NE(section->GetInnerRML().find("Live preview in this viewport"), std::string::npos);
+
+    // 保存走标准 tressfx.modify，revision 取自同一份文档快照。
+    sink.commands.clear();
+    Click("#hair-sim-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 5u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    EXPECT_EQ(payload.assetPath, "Meshes/TF_hair.json");
+    bool sawDamping = false;
+    for (const auto& change : payload.changes)
+    {
+        if (change.field != "simulationDefaults.damping") continue;
+        sawDamping = true;
+        ASSERT_TRUE(std::holds_alternative<double>(change.value));
+        EXPECT_DOUBLE_EQ(std::get<double>(change.value), 0.02);
+    }
+    EXPECT_TRUE(sawDamping);
+}
+
+TEST_F(EditorUiTest, HairSimulationEditorStaysInsideTheHairAssetTab)
+{
+    // 资产级编辑不能泄漏到关卡侧：Simulation 段只属于毛发资产 tab，
+    // 关卡 Details 与资产页之外没有参数入口。
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 6;
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* tile = BrowserItem("Meshes/TF_hair.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/TF_hair.json";
+    json->kind = EditorAssetKind::Tressfx;
+    json->type = "tressfx";
+    json->name = "Hair";
+    snapshot.jsonDocument = json;
+    Refresh();
+    auto* section = document->GetElementById("resource-hair-simulation");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+
+    // 回到关卡页面：资产页隐藏，毛发参数入口随之消失；关卡 Details 从未出现它。
+    Click("#workspace-viewport-tab");
+    Refresh();
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+    auto* save = document->GetElementById("hair-sim-save");
+    auto* actorDetails = document->GetElementById("actor-details-content");
+    ASSERT_NE(actorDetails, nullptr);
+    EXPECT_EQ(actorDetails->GetInnerRML().find("hair-sim"), std::string::npos);
+    EXPECT_EQ(actorDetails->GetInnerRML().find("simulation."), std::string::npos);
+    for (Rml::Element* parent = save == nullptr ? nullptr : save->GetParentNode();
+         parent != nullptr; parent = parent->GetParentNode())
+        EXPECT_NE(parent, actorDetails);
+}
+
+TEST_F(EditorUiTest, TressfxDirtyReloadKeepsTheDraftAndDoesNotRequestAPreview)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    Click("#resource-reload");
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_TRUE(snapshot.tressfxDocuments[0].dirty);
+}
+
+TEST_F(EditorUiTest, TressfxStaticAndCpuDefaultsRemainEditableWithoutLiveOrResetActions)
+{
+    OpenTressfxAsset();
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    for (const auto& defaults : {nlohmann::json{{"enabled", false}, {"backend", "gpu"}},
+                                nlohmann::json{{"enabled", true}, {"backend", "cpu"}}})
+    {
+        SCOPED_TRACE(defaults.dump());
+        snapshot.tressfxDocuments[0].document = {{"simulationDefaults", defaults}};
+        ++snapshot.tressfxDocuments[0].documentRevision;
+        Refresh();
+        ASSERT_FALSE(panel->HasModal());
+        runtimeSink.actions.clear();
+        sink.commands.clear();
+        SetValue("hair-sim-1-0", "0.02");
+        Click("#resource-hair-reset");
+        EXPECT_TRUE(runtimeSink.actions.empty());
+        EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
+        EXPECT_TRUE(document->GetElementById("resource-hair-simulation")->IsVisible());
+        Click("#hair-sim-save");
+        ASSERT_EQ(sink.commands.size(), 1u);
+        EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
+        const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+        ASSERT_EQ(changes.size(), 9u);
+        EXPECT_EQ(changes[1].field, "simulationDefaults.damping");
+        ASSERT_TRUE(std::holds_alternative<double>(changes[1].value));
+        EXPECT_DOUBLE_EQ(std::get<double>(changes[1].value), 0.02);
+        EXPECT_EQ(changes[8].field, "simulationDefaults.windGain");
+
+        // 模拟标准 modify 的权威回执，再取消保存确认；不能把上一轮待办带进下一种 backend。
+        auto& authored = snapshot.tressfxDocuments[0];
+        authored.document["simulationDefaults"]["damping"] = 0.02;
+        ++authored.documentRevision;
+        authored.dirty = true;
+        snapshot.modifiedDocuments = {{authored.assetPath, EditorAssetKind::Tressfx,
+            authored.documentRevision}};
+        Refresh();
+        ASSERT_TRUE(panel->HasModal());
+        Click("#save-cancel");
+        ASSERT_FALSE(panel->HasModal());
+    }
+}
+
+TEST_F(EditorUiTest, TressfxSkinnedOpenCreatesAuthorOwnerAndCleanReloadKeepsPreviewBlocked)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 21;
+    EditorJsonAssetEntry hair{"Meshes/TF_skinned.json", EditorAssetKind::Tressfx, "Skinned hair"};
+    hair.type = "tressfx";
+    hair.tressfxSkinning = true;
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    auto* tile = BrowserItem(hair.assetPath);
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::GetTressfxDocument);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(sink.commands[0].payload).assetPath,
+        hair.assetPath);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("resource-hair-simulation")->IsVisible());
+
+    auto metadata = std::make_shared<EditorJsonDocumentSnapshot>();
+    metadata->revision = 1;
+    metadata->assetPath = hair.assetPath;
+    metadata->kind = hair.kind;
+    metadata->type = hair.type;
+    metadata->tressfxSkinning = true;
+    snapshot.jsonDocument = metadata;
+    EditorAssetDocumentResultPayload authored;
+    authored.assetPath = hair.assetPath;
+    authored.documentRevision = 7;
+    authored.document = {{"type", "tressfx"}, {"simulation", {{"skinning", {{"source", "body"}}}}}};
+    snapshot.tressfxDocuments = {authored};
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u) << "hidden Simulation must not own document opening";
+    const auto metadataRequests = jsonAssetSink.opened.size();
+    sink.commands.clear();
+    Click("#resource-reload");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ReloadTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 7u);
+    EXPECT_EQ(jsonAssetSink.opened.size(), metadataRequests + 1);
+    EXPECT_EQ(jsonAssetSink.opened.back(), hair.assetPath);
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_FALSE(document->GetElementById("resource-hair-simulation")->IsVisible());
+}
+
+TEST_F(EditorUiTest, TressfxCloseDuringSimulationStagingWaitsForTheAuthorRevision)
+{
+    OpenTressfxAsset();
+    auto* damping = document->GetElementById("hair-sim-1-0");
+    ASSERT_NE(damping, nullptr);
+    damping->SetAttribute("value", "0.02");
+    damping->DispatchEvent("change", {});
+    Click("#hair-sim-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
+    Click(".workspace-resource-tab.selected .tab-close");
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    Click("#close-save");
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u) << "save must wait for the staged revision";
+    snapshot.tressfxDocuments[0].documentRevision = 12;
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.tressfxDocuments[0].document = {{"simulationDefaults", {{"damping", 0.02}}}};
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 12}};
+    Refresh();
+    // Details 在本帧末确认暂存完成，关闭流程在下一帧消费权威 revision。
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 12u);
+    EXPECT_FALSE(document->GetElementById("save-dialog")->IsVisible());
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, TressfxDirtyCloseSavesAtTheAuthoritativeRevisionAndKeepsFailedDraft)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 11}};
+    Refresh();
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab.selected")->GetInnerRML().find("*"),
+        std::string::npos);
+    Click(".workspace-resource-tab.selected .tab-close");
+    EXPECT_TRUE(panel->HasModal());
+    Click("#close-save");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", false, "Source changed"}};
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    Click("#close-save");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{2, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, TressfxDiscardWaitsForItsOwnRevertedDraft)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    Refresh();
+    Click(".workspace-resource-tab.selected .tab-close");
+    Click("#close-discard");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::RevertTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    EXPECT_TRUE(panel->HasModal());
+    snapshot.tressfxDocuments[0].dirty = false;
+    ++snapshot.tressfxDocuments[0].documentRevision;
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, TressfxSaveContentUsesItsOwnCommandAndCompletion)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 11}};
+    Refresh();
+    panel->RequestSave();
+    Refresh();
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("save-dialog")->IsVisible());
+}
+
 TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 2;
     catalog->assets.push_back({"Textures/T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2732,8 +3715,435 @@ TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
     EXPECT_FALSE(document->GetElementById("editor-viewport-image")->IsVisible(true));
 }
 
+TEST_F(EditorUiTest, AssetKindsShareFullWorkspaceAndRestoreTheLevelLayout)
+{
+    OpenBlueprintAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->revision++;
+    catalog->assets.push_back({"SM_test.json", EditorAssetKind::Mesh, "Mesh"});
+    catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
+    catalog->assets.push_back({"TR_test.json", EditorAssetKind::Terrain, "Terrain"});
+    catalog->assets.push_back({"RT_test.json", EditorAssetKind::Retarget, "Retarget"});
+    snapshot.assetCatalog = catalog;
+    snapshot.activeDocument.emplace();
+    snapshot.activeDocument->assetPath = "MI_test.json";
+    snapshot.selectedDocumentPath = "MI_test.json";
+    snapshot.documentTabs.push_back({"MI_test.json", false});
+    Refresh();
+    for (const auto& asset : catalog->assets)
+    {
+        Click("#workspace-viewport-tab");
+        Refresh();
+        BrowserItem(asset.assetPath)->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Click("#workspace-viewport-tab");
+        Refresh();
+        const auto level = panel->GetSceneViewportRect();
+        Rml::ElementList tabs;
+        document->QuerySelectorAll(tabs, ".workspace-asset-tab");
+        ASSERT_EQ(tabs.size(), 6u);
+        for (auto* tab : tabs)
+        {
+            SCOPED_TRACE(tab->GetAttribute<std::string>("title", ""));
+            tab->DispatchEvent("click", {});
+            Refresh();
+            auto* stack = tab->GetParentNode()->GetParentNode();
+            auto* workspace = document->GetElementById("editor-content");
+            EXPECT_NEAR(stack->GetAbsoluteOffset().x, workspace->GetAbsoluteOffset().x, 1);
+            EXPECT_NEAR(stack->GetAbsoluteOffset().y, workspace->GetAbsoluteOffset().y, 1);
+            EXPECT_NEAR(stack->GetBox().GetSize().x, workspace->GetBox().GetSize().x, 1);
+            EXPECT_NEAR(stack->GetBox().GetSize().y, workspace->GetBox().GetSize().y, 1);
+            auto* close = tab->QuerySelector(".tab-close");
+            ASSERT_NE(close, nullptr);
+            EXPECT_TRUE(close->IsVisible(true));
+            EXPECT_FALSE(document->GetElementById("editor-navigation")->IsVisible(true));
+            EXPECT_FALSE(document->GetElementById("content-browser-page")->IsVisible(true));
+            Click("#workspace-viewport-tab");
+            Refresh();
+            const auto restored = panel->GetSceneViewportRect();
+            EXPECT_EQ(restored.x, level.x); EXPECT_EQ(restored.y, level.y);
+            EXPECT_EQ(restored.width, level.width); EXPECT_EQ(restored.height, level.height);
+        }
+    }
+    EXPECT_EQ(document->GetElementById("resource-close"), nullptr);
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, PointerCloseOfInactiveResourceKeepsTheActivePreview)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_first.json", EditorAssetKind::Mesh, "First"},
+        {"SM_second.json", EditorAssetKind::Mesh, "Second"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    for (const auto& asset : catalog->assets)
+    {
+        BrowserItem(asset.assetPath)->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+    runtimeSink.actions.clear();
+    auto* close = document->QuerySelector(".workspace-resource-tab .tab-close");
+    ASSERT_NE(close, nullptr);
+    const auto point = close->GetAbsoluteOffset() + close->GetBox().GetSize() * 0.5f;
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-resource-tab");
+    ASSERT_EQ(tabs.size(), 1u);
+    EXPECT_NE(tabs[0]->GetInnerRML().find("SM_second.json"), std::string::npos);
+    EXPECT_TRUE(tabs[0]->IsClassSet("selected"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ResourceCloseSelectsAdjacentMaterialAndMaterialCloseReturnsToLevel)
+{
+    snapshot.documentTabs[0].dirty = false;
+    snapshot.activeDocument->status = EditorDocumentStatus::Clean;
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_test.json", EditorAssetKind::Mesh, "Mesh"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    BrowserItem("SM_test.json")->DispatchEvent("dblclick", {});
+    Refresh();
+    Click(".workspace-resource-tab .tab-close");
+    Refresh();
+    ASSERT_FALSE(sink.commands.empty());
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SelectMaterialInstanceDocument);
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    Click(".workspace-material-tab .tab-close");
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::CloseMaterialInstanceAsset);
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    snapshot.documentTabs.clear(); snapshot.activeDocument.reset(); snapshot.selectedDocumentPath.clear();
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("content-browser-page")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, MaterialCloseConfirmationSelectsAdjacentResourceBeforeServiceMaterialSelection)
+{
+    snapshot.documentTabs[0].dirty = false;
+    snapshot.activeDocument->status = EditorDocumentStatus::Clean;
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_test.json", EditorAssetKind::Mesh, "Mesh"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    BrowserItem("SM_test.json")->DispatchEvent("dblclick", {});
+    Refresh();
+    // 让服务关闭后还有另一个 MI 可选，UI 仍须选择实际标签栏里的 Mesh 邻居。
+    snapshot.documentTabs.push_back({"MI_other.json", false});
+    Refresh();
+    Click(".workspace-material-tab");
+    Refresh();
+    Click(".workspace-material-tab.selected .tab-close");
+    snapshot.documentTabs.erase(snapshot.documentTabs.begin());
+    snapshot.selectedDocumentPath = snapshot.activeDocument->assetPath = "MI_other.json";
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector(".workspace-resource-tab")->IsClassSet("selected"));
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, RetargetAssetOpensIndependentTabWithoutWorldRequest)
+{
+    OpenRetargetAsset();
+    EXPECT_TRUE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("resource-preview-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-editor")->IsVisible(true));
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab")->GetInnerRML().find("RT_test.json"),
+        std::string::npos);
+    EXPECT_EQ(jsonAssetSink.opened.back(), "Retarget/RT_test.json");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("retarget-lines")->GetInnerRML().empty());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAnimationRequestsPairOnceAndWaitsForMatchingPublishedProfile)
+{
+    OpenRetargetAsset(true);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewRetarget);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Retarget/RT_test.json");
+    EXPECT_EQ(runtimeSink.actions[0].retargetPreviewModel, "Meshes/SM_target.json");
+    auto* image = document->GetElementById("retarget-preview-image");
+    EXPECT_FALSE(image->IsVisible(true));
+    const auto loadingRect = panel->GetSceneViewportRect();
+    EXPECT_GT(loadingRect.width, 100u);
+    EXPECT_GE(loadingRect.height, 120u);
+    EXPECT_TRUE(document->GetElementById("retarget-animation-play")->HasAttribute("disabled"));
+    PublishRetargetAnimation(7, "Retarget/RT_other.json");
+    EXPECT_FALSE(image->IsVisible(true));
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    PublishRetargetAnimation();
+    EXPECT_TRUE(image->IsVisible(true));
+    EXPECT_EQ(panel->GetSceneViewportRect().width, loadingRect.width);
+    EXPECT_EQ(panel->GetSceneViewportRect().height, loadingRect.height);
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "previewClip");
+    Refresh(); Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_GT(panel->GetSceneViewportRect().width, 100u);
+    EXPECT_FALSE(panel->IsSceneViewportElement(image));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAnimationControlsUseSharedGenerationAndSeekingSeconds)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#retarget-animation-pause");
+    auto* clips = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("retarget-animation-clip"));
+    ASSERT_NE(clips, nullptr);
+    clips->SetSelection(1);
+    Control("retarget-animation-time")->SetValue("0.75");
+    std::string requests;
+    for (const auto& action : runtimeSink.actions)
+        requests += action.stringValue + "=" + std::to_string(action.floatValue) + " ";
+    ASSERT_EQ(runtimeSink.actions.size(), 3u) << requests;
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "play");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 0);
+    EXPECT_EQ(runtimeSink.actions[1].stringValue, "previewClip");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[1].floatValue, 1);
+    EXPECT_EQ(runtimeSink.actions[2].stringValue, "seek");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[2].floatValue, 0.75f);
+    for (const auto& action : runtimeSink.actions)
+    {
+        EXPECT_EQ(action.type, UiActionType::ControlAnimationPreview);
+        EXPECT_EQ(action.previewCamera.worldGeneration, 7u);
+    }
+    runtimeSink.actions.clear();
+    Click("#retarget-animation-assets [data-index='1']");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "previewClip");
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 7u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 1);
+}
+
+TEST_F(EditorUiTest, RetargetAnimationCanSwitchReferenceAndReturnWithoutReloadingModels)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#retarget-reference");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-surface")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#retarget-animation");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#retarget-animation-frame");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 7u);
+}
+
+TEST_F(EditorUiTest, RetargetAnimationReloadHidesPreviousImageAndRejectsOldControlEvents)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#resource-reload");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    Click("#retarget-animation-pause");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAnimationFitsSupportedWorkspaceSizes)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    for (const Rml::Vector2i size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+        Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh(); Refresh();
+        const auto rect = panel->GetSceneViewportRect();
+        EXPECT_GT(rect.width, 250u);
+        EXPECT_GE(rect.height, 300u);
+        ExpectViewportInfoFits("retarget-preview-surface");
+        auto* tools = document->GetElementById("retarget-animation-tools");
+        EXPECT_NEAR(rect.y + rect.height, tools->GetAbsoluteOffset(Rml::BoxArea::Border).y, 1);
+        auto* hierarchy = document->GetElementById("retarget-hierarchy-panel");
+        auto* sidebar = document->GetElementById("retarget-sidebar");
+        EXPECT_GE(rect.x, hierarchy->GetAbsoluteOffset().x + hierarchy->GetBox().GetSize().x);
+        EXPECT_LE(rect.x + rect.width, sidebar->GetAbsoluteOffset().x);
+        EXPECT_TRUE(document->GetElementById("retarget-mappings")->IsVisible(true));
+        EXPECT_TRUE(document->GetElementById("retarget-animation-assets")->IsVisible(true));
+        EXPECT_FALSE(document->GetElementById("editor-navigation")->IsVisible(true));
+        EXPECT_FALSE(document->GetElementById("content-browser-page")->IsVisible(true));
+        for (const char* id : {"retarget-animation-play", "retarget-animation-pause",
+            "retarget-animation-clip", "retarget-animation-time", "retarget-animation-frame"})
+        {
+            auto* control = document->GetElementById(id);
+            EXPECT_TRUE(control->IsVisible(true)) << id;
+            const auto origin = control->GetAbsoluteOffset();
+            const auto bounds = control->GetBox().GetSize();
+            EXPECT_LE(origin.x + bounds.x, size.x) << id;
+        }
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAssetSelectionShowsAnchoredDistanceAndChainDirection)
+{
+    OpenRetargetAsset();
+    Click("#retarget-hierarchy [data-action=retarget-select][data-index='2']");
+    EXPECT_TRUE(document->GetElementById("retarget-row-2")->IsClassSet("selected"));
+    const auto measurement = document->GetElementById("retarget-measurement")->GetInnerRML();
+    EXPECT_NE(measurement.find("14.14 cm"), std::string::npos);
+    EXPECT_NE(measurement.find("90.00 deg"), std::string::npos);
+    EXPECT_NE(measurement.find("shoulder / shoulder"), std::string::npos);
+    const auto drawing = document->GetElementById("retarget-lines")->GetInnerRML();
+    EXPECT_NE(drawing.find("retarget-axis-x"), std::string::npos);
+    EXPECT_NE(drawing.find("retarget-delta"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetBindAndProjectionControlsChangeOnlyPresentation)
+{
+    OpenRetargetAsset();
+    Click("#retarget-row-2");
+    auto* selected = document->GetElementById("retarget-row-2");
+    const auto calibrated = document->GetElementById("retarget-lines")->GetInnerRML();
+    Click("#retarget-bind");
+    EXPECT_TRUE(document->GetElementById("retarget-bind")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-measurement")->GetInnerRML().find("Delta 0.00 cm"),
+        std::string::npos);
+    const auto bind = document->GetElementById("retarget-lines")->GetInnerRML();
+    EXPECT_NE(bind, calibrated);
+    Click("#retarget-side");
+    EXPECT_TRUE(document->GetElementById("retarget-side")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), bind);
+    auto* row = document->GetElementById("retarget-row-2");
+    Refresh();
+    Refresh();
+    EXPECT_EQ(row, document->GetElementById("retarget-row-2"));
+    EXPECT_NE(selected, nullptr);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetReloadClearsOldSkeletonAndDisplaysFailure)
+{
+    auto json = OpenRetargetAsset();
+    auto failure = std::make_shared<EditorJsonDocumentSnapshot>(*json);
+    failure->revision++;
+    failure->retargetPreview.reset();
+    failure->previewDiagnostic = "Preview skeleton identity differs from retarget profile";
+    snapshot.jsonDocument = failure;
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-lines")->GetInnerRML().empty());
+    EXPECT_TRUE(document->GetElementById("retarget-mappings")->GetInnerRML().empty());
+    EXPECT_NE(document->GetElementById("retarget-status")->GetInnerRML().find("identity differs"),
+        std::string::npos);
+    EXPECT_TRUE(document->GetElementById("retarget-bind")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("resource-reload")->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, RetargetAssetFocusAndFitChangeViewWithoutChangingReference)
+{
+    auto json = OpenRetargetAsset();
+    Click("#retarget-row-2");
+    const auto original = document->GetElementById("retarget-lines")->GetInnerRML();
+    Click("#retarget-focus");
+    EXPECT_TRUE(document->GetElementById("retarget-focus")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    Click("#retarget-fit");
+    EXPECT_FALSE(document->GetElementById("retarget-focus")->IsClassSet("active"));
+    EXPECT_EQ(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    EXPECT_EQ(json->retargetPreview->target[2].referencePosition[0], -10);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetAllBonesIncludesUnmappedBranchesOnlyWhenEnabled)
+{
+    auto json = OpenRetargetAsset();
+    auto preview = std::make_shared<EditorRetargetPreview>(*json->retargetPreview);
+    auto helper = preview->source.back();
+    helper.name = "IK helper";
+    helper.parent = 0;
+    helper.bindPosition = helper.referencePosition = {12, 2, 0};
+    preview->source.push_back(helper);
+    json->retargetPreview = preview;
+    Refresh();
+    const auto original = document->GetElementById("retarget-lines")->GetInnerRML();
+    auto* checkbox = document->GetElementById("retarget-all-bones");
+    checkbox->SetAttribute("checked", "checked");
+    checkbox->DispatchEvent("change", {});
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    checkbox->RemoveAttribute("checked");
+    checkbox->DispatchEvent("change", {});
+    EXPECT_EQ(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+}
+
+TEST_F(EditorUiTest, RetargetAssetSurfaceHasRoomAtSupportedWorkspaceSizes)
+{
+    OpenRetargetAsset();
+    for (const Rml::Vector2i size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+        Rml::Vector2i(1920, 1080)})
+    {
+        SCOPED_TRACE(std::to_string(size.x) + "x" + std::to_string(size.y));
+        context->SetDimensions(size);
+        Refresh();
+        Refresh();
+        const auto surface = document->GetElementById("retarget-surface")->GetBox().GetSize(Rml::BoxArea::Content);
+        EXPECT_GE(surface.x, 64);
+        EXPECT_GE(surface.y, 64);
+        ExpectViewportInfoFits("retarget-surface");
+        const auto zoom = document->GetElementById("retarget-zoom")->GetBox().GetSize(Rml::BoxArea::Content);
+        EXPECT_GE(zoom.x, 40);
+        EXPECT_TRUE(document->GetElementById("retarget-row-0")->IsVisible(true));
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAssetKeepsSelectedJointAcrossLevelTabSwitch)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    const auto originalRect = panel->GetSceneViewportRect();
+    OpenRetargetAsset();
+    Click("#retarget-row-2");
+    EXPECT_NE(document->GetElementById("retarget-details")->GetInnerRML().find("wrist"), std::string::npos);
+    Click("#retarget-hierarchy-target");
+    EXPECT_TRUE(document->GetElementById("retarget-hierarchy-target")->IsClassSet("active"));
+    Click("#retarget-hierarchy [data-action=retarget-hierarchy-toggle][data-index='0']");
+    EXPECT_EQ(document->QuerySelector("#retarget-hierarchy [data-action=retarget-select][data-index='2']"), nullptr);
+    Click("#retarget-row-2");
+    EXPECT_NE(document->QuerySelector("#retarget-hierarchy [data-action=retarget-select][data-index='2']"), nullptr);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#workspace-viewport-tab");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    const auto restoredRect = panel->GetSceneViewportRect();
+    EXPECT_EQ(originalRect.x, restoredRect.x);
+    EXPECT_EQ(originalRect.y, restoredRect.y);
+    EXPECT_EQ(originalRect.width, restoredRect.width);
+    EXPECT_EQ(originalRect.height, restoredRect.height);
+    EXPECT_TRUE(document->GetElementById("editor-navigation")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("content-browser-page")->IsVisible(true));
+    Click(".workspace-resource-tab");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("retarget-row-2")->IsClassSet("selected"));
+}
+
 TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
@@ -2774,6 +4184,7 @@ TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
 
 TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2801,6 +4212,7 @@ TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
     EXPECT_GT(size.y, 0);
     EXPECT_NEAR(size.x / size.y, 2.0f, 0.02f);
     auto* surface = document->GetElementById("resource-preview-surface");
+    ExpectViewportInfoFits("resource-preview-surface");
     const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
     const auto imagePosition = image->GetAbsoluteOffset(Rml::BoxArea::Border);
     const auto surfacePosition = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
@@ -2819,6 +4231,7 @@ TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
 
 TEST_F(EditorUiTest, TexturePreviewZoomPanAndFitStayInUi)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2885,6 +4298,7 @@ protected:
     void SetUp() override
     {
         EditorUiTest::SetUp();
+        ShowContentBrowser();
         auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
         catalog->revision = 1;
         catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
@@ -3684,7 +5098,7 @@ TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
     Refresh();
     for (const auto& asset : catalog->assets)
     {
-        auto* tile = document->QuerySelector("#asset-list [data-path='" + asset.assetPath + "']");
+        auto* tile = BrowserItem(asset.assetPath);
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
         Refresh();
@@ -3710,6 +5124,7 @@ TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
 
 TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
 {
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear();
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -3722,7 +5137,7 @@ TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
     context->Update();
     for (const char* path : {"SM_first.json", "SM_second.json"})
     {
-        auto* tile = document->QuerySelector(std::string("#asset-list [data-path='") + path + "']");
+        auto* tile = BrowserItem(path);
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
         panel->Build(snapshot);
@@ -3750,12 +5165,12 @@ TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
     Click(".workspace-resource-tab");
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::PreviewModel);
     EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_first.json");
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_second.json");
     panel->Build(snapshot);
     context->Update();
     EXPECT_TRUE(panel->IsResourceEditorVisible());
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
     EXPECT_EQ(runtimeSink.actions.back().stringValue, view.activeWorldPath);
     panel->Build(snapshot);
@@ -3777,6 +5192,7 @@ TEST_F(EditorUiTest, ImmersiveButtonRequestsPresentationToggleNotQuit)
 
 TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
 {
+    ShowContentBrowser();
     // 基础夹具现在会请求材质球；显式打开关卡，建立本用例要求的非预览状态。
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->assets.push_back({"Maps/SC_test/SC_test.json", EditorAssetKind::Scene, "Level"});
@@ -3795,6 +5211,7 @@ TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
 
 TEST_F(EditorUiTest, ImmersivePreparationReturnsRememberedLevelInsteadOfPreviewWorld)
 {
+    ShowContentBrowser();
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -3840,6 +5257,7 @@ TEST_F(EditorUiTest, RefreshAssetsRequestsOneWorkerRefreshWithoutMiCommands)
 
 TEST_F(EditorUiTest, JsonInspectorEscapesFieldsAndBoundsExpandedArrayPages)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"Maps/SC_test.json", EditorAssetKind::Scene});
@@ -3871,6 +5289,7 @@ TEST_F(EditorUiTest, JsonInspectorEscapesFieldsAndBoundsExpandedArrayPages)
 
 TEST_F(EditorUiTest, TenThousandAssetsKeepWholeEditorGeometryAndWarmWorkBounded)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     for (size_t index = 0; index < 10000; ++index)
@@ -3904,6 +5323,7 @@ TEST_F(EditorUiTest, TenThousandAssetsKeepWholeEditorGeometryAndWarmWorkBounded)
 
 TEST_F(EditorUiTest, OverflowingBrowserGridKeepsColumnsForEveryTileSize)
 {
+    ShowContentBrowser();
     for (int index = 0; index < 60; ++index)
         snapshot.assets.push_back({"Maps/SC_test/Materials/MI_grid_" + std::to_string(index) + ".json", false});
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
@@ -4264,6 +5684,7 @@ TEST_F(EditorUiTest, OutlinerTypeFilterOptionsMatchTheGroupSpecs)
 
 TEST_F(EditorUiTest, OutlinerEmptyStateDistinguishesNoWorldFromNoMatch)
 {
+    ShowContentBrowser();
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(OutlinerCount(), "0 actors");
@@ -5881,7 +7302,7 @@ TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
         EXPECT_LE(height, 33.0f)
             << "document tab " << childIndex << " is " << height
             << "px tall; a one-line tab should not wrap. Inner RML: " << tab->GetInnerRML();
-        auto* label = tab->QuerySelector(".resource-tab-label");
+        auto* label = tab->QuerySelector(".tab-label");
         auto* close = tab->QuerySelector(".tab-close");
         ASSERT_NE(label, nullptr);
         ASSERT_NE(close, nullptr);
@@ -6052,6 +7473,7 @@ TEST_F(EditorUiTest, MaterialSphereNavigatesAndReappliesDirtyDraftOncePerWorld)
     EXPECT_EQ(sink.commands.size(), 1u);
     auto* image = document->GetElementById("material-preview-image");
     const auto origin = image->GetAbsoluteOffset();
+    ExpectViewportInfoFits("material-preview-surface");
     context->ProcessMouseMove(int(origin.x + 50), int(origin.y + 50), 0);
     context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
     ASSERT_FALSE(runtimeSink.actions.empty());
@@ -6146,9 +7568,9 @@ TEST_F(EditorUiTest, FileMenuDocumentCommandsShareTheToolbarAvailability)
     catalog->assets.push_back({"Maps/SC_test.json", EditorAssetKind::Scene, "Level"});
     snapshot.assetCatalog = catalog;
     Refresh();
-    auto* list = document->GetElementById("asset-list");
-    ASSERT_NE(list->GetChild(0), nullptr);
-    list->GetChild(0)->DispatchEvent("dblclick", {});
+    auto* levelTile = BrowserItem("Maps/SC_test.json");
+    ASSERT_NE(levelTile, nullptr);
+    levelTile->DispatchEvent("dblclick", {});
     Refresh();
     EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
     EXPECT_TRUE(document->GetElementById("menu-edit-validate")->HasAttribute("disabled"));
@@ -6868,6 +8290,240 @@ TEST_F(EditorUiTest, MissingMeshIdentityIsStillRejectedInAMultiSectionWorld)
     EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
 }
 
+// ---------------------------------------------------------------------------
+// 场景级风对象（SceneWind）：World::GetWind() 是全局状态，全场景至多一行。
+// 这里同样用真实 World + 真实 actor builder：风只由 World 构建写入，因此
+// "零风不产生空行 / 有风产生一行" 必须在 builder 这一层被证明。
+// ---------------------------------------------------------------------------
+
+World MakeSceneWindTestWorld()
+{
+    World world = MakeVisibilityTestWorld();
+    WorldWind wind;
+    wind.authored = true;
+    wind.name = "MainWind";
+    // 方向沿用加载后的契约：已归一化。档位取精确可表示的浮点值，
+    // 让 Details 的 9 位有效数字格式化结果可以逐字符断言。
+    wind.direction = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+    wind.strength = 550.0f;
+    wind.gust.enabled = true;
+    wind.gust.amplitude = 0.25f;
+    wind.gust.frequency = 0.5f;
+    wind.gust.turbulence = 0.75f;
+    world.SetWind(wind);
+    return world;
+}
+
+size_t CountSceneWindActors(const std::vector<EditorSceneActorSnapshot>& actors)
+{
+    size_t count = 0;
+    for (const EditorSceneActorSnapshot& actor : actors)
+        if (actor.type == EditorSceneActorType::SceneWind) ++count;
+    return count;
+}
+
+TEST_F(EditorUiTest, DefaultZeroWindWorldPublishesNoSceneWindActor)
+{
+    World world = MakeVisibilityTestWorld();
+    // 缺省 wind 对象即无风：强度 0 且阵风关闭，World 也没有"是否作者过"的标记。
+    ASSERT_FLOAT_EQ(world.GetWind().strength, 0.0f);
+    ASSERT_FALSE(world.GetWind().gust.enabled);
+
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    EXPECT_EQ(CountSceneWindActors(built), 0u);
+    for (const EditorSceneActorSnapshot& actor : built)
+        EXPECT_NE(actor.identity, "wind|MainWind");
+    // 这一行缺失只说明"没有风"，不能顺手把其它 actor 一起吞掉。
+    EXPECT_FALSE(built.empty());
+}
+
+TEST_F(EditorUiTest, NonZeroSceneWindPublishesEditableActorWithAuthorName)
+{
+    World world = MakeSceneWindTestWorld();
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    ASSERT_EQ(CountSceneWindActors(built), 1u);
+
+    const EditorSceneActorSnapshot* sceneWind = nullptr;
+    for (const EditorSceneActorSnapshot& actor : built)
+        if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
+    ASSERT_NE(sceneWind, nullptr);
+
+    // 身份使用场景 JSON 的作者 name；SpeedTree 每物种风剖面不再是 actor。
+    EXPECT_EQ(sceneWind->identity, "wind|MainWind");
+    EXPECT_EQ(sceneWind->displayName, "MainWind");
+    EXPECT_TRUE(sceneWind->visible);
+    EXPECT_EQ(sceneWind->worldGeneration, world.GetGeneration());
+    EXPECT_EQ(sceneWind->scenePath, world.GetScenePath());
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity(sceneWind->identity, parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::SceneWind);
+    EXPECT_EQ(parsed.name, "MainWind");
+    ASSERT_NE(FindSceneActorGroupSpecByKey("wind"), nullptr);
+    EXPECT_EQ(FindSceneActorGroupSpecByKey("wind")->type, EditorSceneActorType::SceneWind);
+    EXPECT_EQ(FindSceneActorGroupSpecByKey("windProfile"), nullptr);
+    EXPECT_STREQ(SceneActorGroupTitle(sceneWind->type), "Wind");
+    EXPECT_STREQ(SceneActorGroupIcon(sceneWind->type), "icons/wind.png");
+
+    // 冻结的是 World 的当前值，不是默认值。
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.x(), 0.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.y(), 0.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.direction.z(), -1.0f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.strengthCmPerSec, 550.0f);
+    EXPECT_TRUE(sceneWind->worldWind.gustEnabled);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustAmplitude, 0.25f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustFrequency, 0.5f);
+    EXPECT_FLOAT_EQ(sceneWind->worldWind.gustTurbulence, 0.75f);
+
+    // 场景风在 Details 中按旧 SpeedTree 调节方式收敛：方向、风力滑条、阵风滑条。
+    const std::vector<EditorSceneActorEditableField> editable =
+        SceneActorEditableFields(*sceneWind);
+    ASSERT_EQ(editable.size(), 3u);
+    EXPECT_EQ(editable[0].property, EditorActorProperty::WindDirection);
+    EXPECT_EQ(editable[1].property, EditorActorProperty::WindStrength);
+    EXPECT_TRUE(editable[1].hasRange);
+    EXPECT_FLOAT_EQ(editable[1].maxValue, 3270.0f);
+    EXPECT_EQ(editable[2].property, EditorActorProperty::WindGustAmplitude);
+    EXPECT_TRUE(editable[2].hasRange);
+    EXPECT_FLOAT_EQ(editable[2].maxValue, 1.0f);
+    const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
+    ASSERT_EQ(info.size(), 1u);
+    EXPECT_EQ(info[0].id, "actor-field-name");
+    EXPECT_EQ(info[0].value, "MainWind");
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(sceneWind->type));
+
+    // Details 从同一份冻结快照渲染；控件值与 Outliner 行都由作者 name/值决定。
+    const std::string identity = sceneWind->identity;
+    actors = built;
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = identity;
+    SettleOutliner();
+    ASSERT_NE(document->GetElementById("details-section-actor-wind"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "MainWind");
+    ASSERT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 0)), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 0))->GetValue(), "0");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 2))->GetValue(), "-1");
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0))->GetValue(), "550");
+    EXPECT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0) + "-slider"), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustAmplitude, 0))->GetValue(), "0.25");
+    EXPECT_NE(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindGustAmplitude, 0) + "-slider"), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindDirection, 0) + "-slider"), nullptr);
+    EXPECT_EQ(Control(SceneActorPropertyControlId(EditorActorProperty::Position, 0)), nullptr);
+
+    // 控件把编辑提交为带作者身份/World 代数的 SetActorProperty。
+    runtimeSink.actions.clear();
+    SetValue(SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0), "800");
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    const UiAction& edit = runtimeSink.actions.back();
+    EXPECT_EQ(edit.type, UiActionType::SetActorProperty);
+    EXPECT_EQ(edit.actorProperty.identity, "wind|MainWind");
+    EXPECT_EQ(edit.actorProperty.property, EditorActorProperty::WindStrength);
+    EXPECT_FLOAT_EQ(edit.actorProperty.value, 800.0f);
+
+    ASSERT_NE(OutlinerRow("outliner-actor", "MainWind"), nullptr);
+    EXPECT_EQ(OutlinerVisibilityToggle("MainWind"), nullptr);
+}
+
+TEST_F(EditorUiTest, SceneWindTextInputCommitsOnEnter)
+{
+    World world = MakeSceneWindTestWorld();
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    const std::string identity = "wind|MainWind";
+    actors = built;
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = identity;
+    SettleOutliner();
+
+    // 点击行的空白区域也应把焦点交给文本输入；否则用户会以为“直接输入没用”。
+    Rml::Element* row = document->GetElementById(
+        SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0) + "-row");
+    ASSERT_NE(row, nullptr);
+    row->DispatchEvent("click", {});
+    EXPECT_EQ(context->GetFocusElement(),
+        Control(SceneActorPropertyControlId(EditorActorProperty::WindStrength, 0)));
+
+    auto* control = Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0));
+    ASSERT_NE(control, nullptr);
+    control->SetValue("1500");
+    Rml::Dictionary parameters;
+    parameters["key_identifier"] = static_cast<int>(Rml::Input::KI_RETURN);
+    control->DispatchEvent("keydown", parameters);
+
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    const UiAction& edit = runtimeSink.actions.back();
+    EXPECT_EQ(edit.type, UiActionType::SetActorProperty);
+    EXPECT_EQ(edit.actorProperty.identity, identity);
+    EXPECT_EQ(edit.actorProperty.property, EditorActorProperty::WindStrength);
+    EXPECT_FLOAT_EQ(edit.actorProperty.value, 1500.0f);
+}
+
+TEST_F(EditorUiTest, SceneWindSliderFollowsEditedStrength)
+{
+    World world = MakeSceneWindTestWorld();
+    actors = BuildEditorSceneActors(world);
+    PublishActors();
+    ShowContentBrowser();
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.selectedActorIdentity = "wind|MainWind";
+    SettleOutliner();
+
+    WorldWind wind = world.GetWind();
+    wind.strength = 800.0f;
+    world.SetWind(wind);
+    actors = BuildEditorSceneActors(world);
+    PublishActors();
+    snapshot.selectedActorIdentity = "wind|MainWind";
+    SettleOutliner();
+
+    auto* slider = Control(SceneActorPropertyControlId(
+        EditorActorProperty::WindStrength, 0) + "-slider");
+    ASSERT_NE(slider, nullptr);
+    EXPECT_EQ(slider->GetAttribute<Rml::String>("value", ""), "800");
+}
+
+TEST_F(EditorUiTest, SceneWindWithoutGustStillExposesGustControls)
+{
+    World world = MakeVisibilityTestWorld();
+    WorldWind wind;
+    wind.authored = true;
+    wind.name = "MainWind";
+    wind.direction = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+    wind.strength = 12.5f;
+    world.SetWind(wind);
+
+    const std::vector<EditorSceneActorSnapshot> built = BuildEditorSceneActors(world);
+    ASSERT_EQ(CountSceneWindActors(built), 1u);
+    const EditorSceneActorSnapshot* sceneWind = nullptr;
+    for (const EditorSceneActorSnapshot& actor : built)
+        if (actor.type == EditorSceneActorType::SceneWind) sceneWind = &actor;
+    ASSERT_NE(sceneWind, nullptr);
+    // 阵风关闭时仍暴露 Gust 滑条（0）；用户拖到非零即开启。
+    const std::vector<EditorSceneActorEditableField> editable =
+        SceneActorEditableFields(*sceneWind);
+    ASSERT_EQ(editable.size(), 3u);
+    EXPECT_EQ(editable[2].property, EditorActorProperty::WindGustAmplitude);
+    EXPECT_FLOAT_EQ(editable[2].value[0], 0.0f);
+    const std::vector<EditorSceneActorField> info = SceneActorFields(*sceneWind);
+    ASSERT_EQ(info.size(), 1u);
+    EXPECT_EQ(info[0].id, "actor-field-name");
+    EXPECT_EQ(info[0].value, "MainWind");
+}
+
 TEST_F(EditorUiTest, OutlinerRowRightClickOpensAContextMenuForThatActor)
 {
     AddActor(SunActor(3.0f, true));
@@ -7027,6 +8683,7 @@ TEST_F(EditorUiTest, BrowserAssetContextMenuOpensTheAssetThroughTheExistingOpenC
 // 而不是拿"打开目录"这类与双击重复的条目把菜单填满。
 TEST_F(EditorUiTest, BrowserFolderRightClickDoesNotOpenAContextMenu)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->assets = {
         {"Maps/SC_alpha/MI_a.json", EditorAssetKind::MaterialInstance, "A"}};
@@ -7729,6 +9386,1006 @@ TEST_F(EditorUiTest, RecursiveBlueprintControlsRemainInsideDetailsAtWindowSizes)
         }
         EXPECT_TRUE(system.errors.empty()) << Errors();
     }
+}
+
+// 独立的 suite 名让计划的验收过滤 `TressfxGroups*` 能命中这些用例；沿用
+// EditorUiTest 会得到 `EditorUiTest.TressfxGroups...`，通配符前缀不会匹配。
+class TressfxGroups : public EditorUiTest
+{
+};
+
+TEST_F(TressfxGroups, TressfxGroupsCreateRenameAndStagesSingleGroupsChange)
+{
+    OpenTressfxAsset();
+    // guideCount 与目录/文档快照同源；10 让 end=11 之类的越界在保存前就能被 UI 挡住。
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+    EXPECT_NE(section->GetInnerRML().find("Default"), std::string::npos);
+    EXPECT_NE(section->GetInnerRML().find("10 guides"), std::string::npos);
+    Click("#details-section-hair-groups-title");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("details-section-hair-groups")->IsClassSet("collapsed"));
+    Click("#details-section-hair-groups-title");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("details-section-hair-groups")->IsClassSet("collapsed"));
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    auto* create = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(create, nullptr);
+    EXPECT_FALSE(create->HasAttribute("disabled"));
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+
+    std::string rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("fringe"), std::string::npos);
+    // 新组从空开始，Default 仍是全部 10 根 guide。
+    EXPECT_NE(rml.find("0 guides"), std::string::npos);
+    EXPECT_NE(rml.find("10 guides"), std::string::npos);
+    auto* row = document->GetElementById("hair-group-row-0");
+    ASSERT_NE(row, nullptr);
+    auto* swatch = row->QuerySelector(".hair-group-swatch");
+    ASSERT_NE(swatch, nullptr);
+    EXPECT_NE(swatch->GetProperty("background-color"), nullptr);
+    EXPECT_FLOAT_EQ(swatch->GetBox().GetSize(Rml::BoxArea::Content).x, 14.0f);
+
+    SetValue("hair-group-name", "fringeA");
+    Refresh();
+    rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("fringeA"), std::string::npos);
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 11u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    EXPECT_EQ(payload.assetPath, "Meshes/TF_hair.json");
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_FALSE(payload.changes[0].reset);
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_TRUE(groups.is_array());
+    ASSERT_EQ(groups.size(), 1u);
+    EXPECT_EQ(groups[0]["name"], "fringeA");
+    EXPECT_EQ(groups[0]["guideRanges"], nlohmann::json::array());
+    EXPECT_FALSE(groups[0].contains("simulationOverrides"));
+}
+
+TEST_F(TressfxGroups, TressfxGroupsRejectPaddedReservedAndDuplicateNames)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    const auto rowCount = [&]() {
+        Rml::ElementList rows;
+        section->QuerySelectorAll(rows, "[data-action=hair-group-select]");
+        return rows.size();
+    };
+    const auto createDisabled = [&]() {
+        auto* button = document->GetElementById("hair-group-create-submit");
+        return button == nullptr || button->HasAttribute("disabled");
+    };
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", " fringe ");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    // 行内表单保持打开；逐个替换名称，验证保留名与空名称都不可创建。
+    SetValue("hair-group-create-name", "Default");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "unassigned");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    EXPECT_FALSE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    ASSERT_EQ(rowCount(), 1u);
+
+    // 重名（大小写不敏感）也不能追加第二个组或产生任何资产命令。
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "FRINGE");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 1u);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsOverrideToggleAndDeleteGroup)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    const auto createGroup = [&](const std::string& name) {
+        Click("#hair-group-create-open");
+        Refresh();
+        SetValue("hair-group-create-name", name);
+        Refresh();
+        Click("#hair-group-create-submit");
+        Refresh();
+        Refresh();
+    };
+    createGroup("fringe");
+    createGroup("side");
+
+    Click("[data-action=hair-group-select][data-index='0']");
+    Refresh();
+    ASSERT_NE(Control("hair-group-name"), nullptr);
+    EXPECT_EQ(Control("hair-group-name")->GetValue(), "fringe");
+
+    auto* toggle = document->GetElementById("hair-group-override-damping");
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->HasAttribute("checked"));
+    auto* value = Control("hair-group-override-damping-value");
+    ASSERT_NE(value, nullptr);
+    EXPECT_TRUE(value->HasAttribute("disabled"));
+
+    toggle->SetAttribute("checked", "checked");
+    toggle->DispatchEvent("change", {});
+    Refresh();
+    toggle = document->GetElementById("hair-group-override-damping");
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->HasAttribute("checked"));
+    value = Control("hair-group-override-damping-value");
+    ASSERT_NE(value, nullptr);
+    EXPECT_FALSE(value->HasAttribute("disabled"));
+
+    SetValue("hair-group-override-damping-value", "0.02");
+    Refresh();
+    EXPECT_EQ(Control("hair-group-override-damping-value")->GetValue(), "0.02");
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_EQ(groups.size(), 2u);
+    EXPECT_EQ(groups[0]["name"], "fringe");
+    ASSERT_TRUE(groups[0].contains("simulationOverrides"));
+    EXPECT_DOUBLE_EQ(groups[0]["simulationOverrides"]["damping"].get<double>(), 0.02);
+
+    // 关闭暂存成功后可能出现的 Save Content 弹窗，再删除当前组。
+    Click("#save-cancel");
+    Refresh();
+    Click("#hair-group-delete");
+    Refresh();
+    Refresh();
+
+    Rml::ElementList rows;
+    document->GetElementById("resource-hair-groups")
+        ->QuerySelectorAll(rows, "[data-action=hair-group-select]");
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0]->GetAttribute<std::string>("data-index", ""), "0");
+    EXPECT_NE(rows[0]->GetInnerRML().find("side"), std::string::npos);
+    // 删除当前选中组后回到 Default，选中索引不越界。
+    EXPECT_EQ(document->GetElementById("hair-group-name"), nullptr);
+    auto* defaultRow = document->GetElementById("hair-group-default");
+    ASSERT_NE(defaultRow, nullptr);
+    EXPECT_TRUE(defaultRow->IsClassSet("selected"));
+}
+
+TEST_F(TressfxGroups, TressfxGroupsCreateErrorIsVisibleWithoutSubmit)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    auto* submit = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(submit, nullptr);
+    EXPECT_FALSE(submit->HasAttribute("disabled"));
+
+    // 前后空白必须是行内错误，而不是静默 Trim 后创建成功。
+    SetValue("hair-group-create-name", " fringe ");
+    Refresh();
+    submit = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(submit, nullptr);
+    EXPECT_TRUE(submit->HasAttribute("disabled"));
+    auto* error = document->GetElementById("hair-group-create-error");
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(error->GetInnerRML().find("whitespace"), std::string::npos);
+
+    SetValue("hair-group-create-name", "Default");
+    Refresh();
+    error = document->GetElementById("hair-group-create-error");
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(error->GetInnerRML().find("reserved"), std::string::npos);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsDraftSurvivesTheOtherSectionSaving)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    ASSERT_NE(document->GetElementById("hair-group-row-0"), nullptr);
+
+    // Simulation 保存只改 simulationDefaults；Groups 的文档节没变，不能覆盖本地组草稿。
+    auto savedSimulation = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    savedSimulation->documentRevision = 12;
+    savedSimulation->document["simulationDefaults"]["damping"] = 0.02;
+    snapshot.tressfxDocuments = {*savedSimulation};
+    Refresh();
+    Refresh();
+    EXPECT_NE(document->GetElementById("hair-group-row-0"), nullptr)
+        << "saving Simulation must not discard an unsaved Groups draft";
+
+    // 反向：先编辑 Simulation 草稿，再由 Groups 的 revision 前进触发刷新。
+    SetValue("hair-sim-1-0", "0.011");
+    Refresh();
+    auto savedGroups = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    savedGroups->documentRevision = 13;
+    savedGroups->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}}});
+    snapshot.tressfxDocuments = {*savedGroups};
+    Refresh();
+    Refresh();
+    ASSERT_NE(Control("hair-sim-1-0"), nullptr);
+    EXPECT_EQ(Control("hair-sim-1-0")->GetValue(), "0.011")
+        << "saving Groups must not discard an unsaved Simulation draft";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLoadFailureDisablesSaveAndProtectsTheDocument)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    // 运行期/编辑器无法解析的名称；此时保存空控制器会删除整份 groups。
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "Default"}, {"guideRanges", {{0, 2}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+
+    auto* status = document->GetElementById("hair-group-status");
+    ASSERT_NE(status, nullptr);
+    EXPECT_NE(status->GetInnerRML().find("Groups unavailable"), std::string::npos);
+    auto* save = document->GetElementById("hair-group-save");
+    ASSERT_NE(save, nullptr);
+    EXPECT_TRUE(save->HasAttribute("disabled"));
+    sink.commands.clear();
+    Click("#hair-group-save");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsEmptyArraySavesAsKeyRemoval)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array();
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_TRUE(payload.changes[0].reset);
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPreviewControlsEmitOneRuntimeAction)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}},
+        {{"name", "side"}, {"guideRanges", {{4, 8}}}}});
+    snapshot.tressfxDocuments = {*authored};
+
+    // 发布新的预览 World 后 generation 才可用；UI 只发值语义，不直接写 World/GPU。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot previewSection;
+    previewSection.objectName = "preview_model";
+    previewSection.tressfxRootCloud = HairBrushRootCloud();
+    previewSection.tressfxGroupBinding = HairGroupBinding();
+    actor.sections.push_back(std::move(previewSection));
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    runtimeSink.actions.clear();
+
+    auto takePreviewAction = [&]() -> const UiAction* {
+        const UiAction* preview = nullptr;
+        for (const auto& action : runtimeSink.actions)
+            if (action.type == UiActionType::SetTressfxGroupPreview) preview = &action;
+        return preview;
+    };
+
+    // 选中 fringe：Default=-1 之外的组号是 index+1，默认 Group Colors 为开。
+    Click("#hair-group-row-0");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const UiAction* action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.worldGeneration, 100u);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 1u, 1u);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 0u);
+
+    runtimeSink.actions.clear();
+    Click("#hair-group-colors");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 1u, 0u);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 0u);
+
+    runtimeSink.actions.clear();
+    Click("#hair-group-solo");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 2u);
+
+    // 预览开关是会话状态，不能产生任何资产文档命令。
+    EXPECT_TRUE(sink.commands.empty());
+    // 同一状态重复刷新不得每帧重发。
+    runtimeSink.actions.clear();
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPaintUsesPreviewGenerationAndStagesOnlyTheDraft)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 200;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 200}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+    // Default 是隐式组 0，不能作为笔刷目标。
+    EXPECT_TRUE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    Click("#hair-group-row-0");
+    Refresh();
+    // 预览 World 尚未发布：Paint 必须禁用，任何点击都不能生成 ghost 命令。
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = "preview_model";
+    section.tressfxRootCloud = HairBrushRootCloud();
+    section.tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    section.tressfxGroupBinding = HairGroupBinding();
+    actor.sections.push_back(std::move(section));
+    actors->push_back(std::move(actor));
+    snapshot.sceneActors = actors;
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    SetValue("hair-brush-radius", "120");
+    Refresh();
+    auto* replace = document->GetElementById("hair-brush-replace");
+    ASSERT_NE(replace, nullptr);
+    replace->SetAttribute("checked", "checked");
+    replace->DispatchEvent("change", {});
+    Refresh();
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    Click("#hair-group-paint");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    ASSERT_TRUE(image->IsVisible(true));
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    const int centerX = static_cast<int>(offset.x + size.x * 0.5f);
+    const int centerY = static_cast<int>(offset.y + size.y * 0.5f);
+    context->ProcessMouseMove(centerX, centerY, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const auto brushAction = std::find_if(runtimeSink.actions.begin(), runtimeSink.actions.end(),
+        [](const UiAction& action)
+        {
+            return action.type == UiActionType::SetTressfxBrushPreview &&
+                !action.previewTressfxBrush.weights.empty();
+        });
+    ASSERT_NE(brushAction, runtimeSink.actions.end());
+    EXPECT_EQ(brushAction->previewTressfxBrush.worldGeneration, 100u);
+    EXPECT_EQ(brushAction->previewTressfxBrush.objectName, "preview_model");
+    EXPECT_EQ(brushAction->previewTressfxBrush.targetGroupId, 1u);
+    EXPECT_TRUE(sink.commands.empty());
+
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty())
+        << "a brush commit must only change the local Groups draft";
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_TRUE(sink.commands.back().expectedDocumentRevision >= authored->documentRevision);
+}
+
+TEST_F(TressfxGroups, TressfxGroupPreviewStateFreezesIntoEveryMeshDraw)
+{
+    World world = MakeVisibilityTestWorld();
+    world.SetTressfxGroupPreview({1, true, true});
+
+    const WorldSnapshot snapshot = BuildVisibilityTestSnapshot(world);
+    ASSERT_FALSE(snapshot.meshDraws.empty());
+    for (const MeshDrawSnapshot& draw : snapshot.meshDraws)
+    {
+        EXPECT_EQ(draw.tressfxSelectedGroup, 1);
+        EXPECT_EQ(draw.tressfxGroupFlags,
+            VL::TressfxGroupPreviewColors | VL::TressfxGroupPreviewSolo);
+    }
+
+    // 预览状态只是世界会话值；关闭后快照必须回到无选中、无 flags。
+    world.SetTressfxGroupPreview({-1, false, false});
+    const WorldSnapshot cleared = BuildVisibilityTestSnapshot(world);
+    for (const MeshDrawSnapshot& draw : cleared.meshDraws)
+    {
+        EXPECT_EQ(draw.tressfxSelectedGroup, -1);
+        EXPECT_EQ(draw.tressfxGroupFlags, 0u);
+    }
+}
+
+// 发布一个带发根点云的预览 World；Groups/笔刷只消费冻结快照。
+EditorSceneActorSnapshot HairPreviewActor(
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> binding,
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> groupConfigs = nullptr)
+{
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = "preview_model";
+    section.tressfxRootCloud = HairBrushRootCloud();
+    section.tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    section.tressfxGroupBinding = std::move(binding);
+    section.tressfxGroupConfigs = std::move(groupConfigs);
+    actor.sections.push_back(std::move(section));
+    return actor;
+}
+
+const UiAction* LastBrushPreviewAction(const std::vector<UiAction>& actions)
+{
+    const UiAction* result = nullptr;
+    for (const UiAction& action : actions)
+        if (action.type == UiActionType::SetTressfxBrushPreview) result = &action;
+    return result;
+}
+
+const UiAction* LastGroupBindingPreviewAction(const std::vector<UiAction>& actions)
+{
+    const UiAction* result = nullptr;
+    for (const UiAction& action : actions)
+        if (action.type == UiActionType::SetTressfxGroupBindingPreview) result = &action;
+    return result;
+}
+
+TEST_F(TressfxGroups, TressfxGroupsNewDraftGroupSyncsAndPaintsWithoutSaving)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 100}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    const auto saved = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 50}}}, {"side", {{50, 100}}}},
+        200, "saved-two", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(saved)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    runtimeSink.actions.clear();
+    sink.commands.clear();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "crown");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+
+    const UiAction* binding = LastGroupBindingPreviewAction(runtimeSink.actions);
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.worldGeneration, 100u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.objectName, "preview_model");
+    EXPECT_EQ(binding->previewTressfxGroupBinding.groupNames,
+        (std::vector<std::string>{"fringe", "side", "crown"}));
+    ASSERT_EQ(binding->previewTressfxGroupBinding.guideGroupIds.size(), 200u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[0], 1u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[50], 2u);
+    // 新组是空组，笔刷填充前不覆盖任何 guide。
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[100], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[120], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[199], 0u);
+    // 结构同步只发一次；静帧 Refresh 不能重发 40k 数组。
+    runtimeSink.actions.clear();
+    Refresh();
+    EXPECT_EQ(LastGroupBindingPreviewAction(runtimeSink.actions), nullptr);
+
+    // 新建组尚未保存，但已经可以直接作为选中/笔刷目标。
+    EXPECT_EQ(document->GetElementById("hair-group-row-2")->GetAttribute<std::string>(
+        "data-action", ""), "hair-group-select");
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const UiAction* ghost = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ghost, nullptr);
+    EXPECT_EQ(ghost->previewTressfxBrush.targetGroupId, 3u)
+        << "ghost must use the draft group index, not the saved asset index";
+    EXPECT_FALSE(ghost->previewTressfxBrush.weights.empty());
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty())
+        << "preview binding and paint must not stage or save the asset";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsDeletedGroupRemapsDraftPaintTarget)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 100}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    const auto saved = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 50}}}, {"side", {{50, 100}}}},
+        200, "saved-two", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(saved)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-row-0");
+    Refresh();
+    runtimeSink.actions.clear();
+    Click("#hair-group-delete");
+    Refresh();
+    Refresh();
+
+    const UiAction* binding = LastGroupBindingPreviewAction(runtimeSink.actions);
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.groupNames,
+        (std::vector<std::string>{"side"}));
+    ASSERT_EQ(binding->previewTressfxGroupBinding.guideGroupIds.size(), 200u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[0], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[50], 1u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[199], 0u);
+
+    Click("#hair-group-row-0");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const UiAction* ghost = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ghost, nullptr);
+    EXPECT_EQ(ghost->previewTressfxBrush.targetGroupId, 1u);
+    EXPECT_FALSE(ghost->previewTressfxBrush.weights.empty());
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPaintEmitsWorldRingAndClearsOnExit)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 200}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(HairGroupBinding())});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    runtimeSink.actions.clear();
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    Refresh();
+
+    const UiAction* ring = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ring, nullptr);
+    EXPECT_TRUE(ring->previewTressfxBrush.ringVisible);
+    EXPECT_TRUE(ring->previewTressfxBrush.ringCenter.allFinite());
+    EXPECT_NEAR(ring->previewTressfxBrush.ringNormal.norm(), 1.0f, 1.0e-3f);
+    EXPECT_GT(ring->previewTressfxBrush.ringRadiusWorld, 0.0f);
+    EXPECT_TRUE(ring->previewTressfxBrush.weights.empty())
+        << "hover must move the world ring without starting a ghost stroke";
+
+    // 退出 Paint 必须显式清除固定 key，不能等 duration 过期。
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    const UiAction* clear = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(clear, nullptr);
+    EXPECT_FALSE(clear->previewTressfxBrush.ringVisible);
+    EXPECT_TRUE(clear->previewTressfxBrush.weights.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLassoStagesGuidesOnRelease)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 40}}}},
+        {{"name", "side"}, {"guideRanges", {{40, 120}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 40}}}, {"side", {{40, 120}}}}, 200, "lasso-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    Click("#hair-lasso");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-lasso")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    // 从右下角开始，避开左上角的视口图例叠层（它会拦截 mousedown）。
+    const int left = static_cast<int>(offset.x + size.x * 0.2f);
+    const int right = static_cast<int>(offset.x + size.x * 0.8f);
+    const int top = static_cast<int>(offset.y + size.y * 0.2f);
+    const int bottom = static_cast<int>(offset.y + size.y * 0.8f);
+
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(right, top, 0);
+    context->ProcessMouseMove(left, top, 0);
+    context->ProcessMouseMove(left, bottom, 0);
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty())
+        << "lasso release only stages the local groups draft";
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_GE(groups.size(), 2u);
+    uint32_t fringeCount = 0;
+    for (const auto& range : groups[0]["guideRanges"])
+        fringeCount += range[1].get<uint32_t>() - range[0].get<uint32_t>();
+    EXPECT_GT(fringeCount, 40u) << "lasso should add default-group roots to fringe";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLassoEscapeLeavesDraftUntouched)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 40}}}},
+        {{"name", "side"}, {"guideRanges", {{40, 120}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 40}}}, {"side", {{40, 120}}}}, 200, "lasso-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    Click("#hair-lasso");
+    Refresh();
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    const int left = static_cast<int>(offset.x + size.x * 0.2f);
+    const int right = static_cast<int>(offset.x + size.x * 0.8f);
+    const int top = static_cast<int>(offset.y + size.y * 0.2f);
+    const int bottom = static_cast<int>(offset.y + size.y * 0.8f);
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(right, top, 0);
+    context->ProcessMouseMove(left, top, 0);
+    context->ProcessMouseMove(left, bottom, 0);
+
+    // Esc 在松开前放弃手势并退出 Paint；draft 与资产都不能变化。
+    Rml::Dictionary keydown;
+    keydown["key_identifier"] = static_cast<int>(Rml::Input::KI_ESCAPE);
+    document->DispatchEvent("keydown", keydown);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    EXPECT_TRUE(sink.commands.empty()) << "Esc must not stage a lasso commit";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsAssetDefaultUsesResolvedPlacementValue)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["simulationDefaults"]["damping"] = 0.035;
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}},
+        {{"name", "side"}, {"guideRanges", {{4, 8}}}}});
+    snapshot.tressfxDocuments = {*authored};
+
+    // placement 把 fringe 的 damping 覆盖为 0.02；组 0 仍是文档默认 0.035。
+    auto configs = std::make_shared<std::vector<TressfxSimulationConfig>>(3);
+    configs->at(0).damping = 0.035f;
+    configs->at(1).damping = 0.02f;
+    configs->at(2).damping = 0.035f;
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 4}}}, {"side", {{4, 8}}}}, 10, "default-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding, configs)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    std::string rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("asset default 0.02"), std::string::npos)
+        << "saved group must show the placement-resolved value";
+
+    // 新建但仍未保存的组没有解析结果：回退文档值并明确标注。
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "draft");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("asset default 0.035"), std::string::npos);
+    EXPECT_NE(rml.find("draft group"), std::string::npos);
 }
 
 } // namespace

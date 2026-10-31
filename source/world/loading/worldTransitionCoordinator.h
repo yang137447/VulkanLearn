@@ -52,6 +52,8 @@ struct PreparedWorldTransition
     PipelineFactory::GraphicsCandidateState
         graphicsCandidateState;
     std::shared_ptr<OfflineWorldAssets> offlineWorldAssets;
+    // 绝对输入路径与捕获摘要；在候选提交前复核，不能在活动 owner 交换后补验。
+    std::vector<std::pair<std::string, std::string>> placementSourceInputs;
 };
 
 // Coordinates the world-load transaction boundary. Renderer resource loaders

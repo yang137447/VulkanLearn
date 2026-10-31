@@ -6,10 +6,12 @@
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
+#include <Eigen/Dense>
 
 #include "render/backend/rendererDrawExecutor.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/frontend/renderScene.h"
+#include "render/shadow/shadowCasterCull.h"
 
 class MaterialInstance;
 class PipelineBase;
@@ -43,6 +45,21 @@ public:
         const std::vector<LightSnapshot>& lights) = 0;
     virtual bool IsCsmEnabled() const = 0;
     virtual bool IsShadowCascadeActive(uint32_t cascadeIndex) const = 0;
+    // 返回该级联实际用于渲染的 light view-projection；没有 CSM 的调用方返回 false。
+    // 阴影 pass 用它构造与 shadow map 逐 texel 对齐的 caster 剔除体。
+    virtual bool GetShadowCascadeLightViewProjection(
+        uint32_t,
+        Eigen::Matrix4f&) const
+    {
+        return false;
+    }
+    // 返回该级联接收面在光源空间的 XY 范围；没有 CSM 的调用方返回 false。
+    virtual bool GetShadowCascadeCasterReceiverBounds(
+        uint32_t,
+        ShadowCasterReceiverBounds&) const
+    {
+        return false;
+    }
     // 编辑器参考网格的几何与缓冲归 RenderSystem 所有；pass 流程只请求提交一次
     // 网格绘制，因此网格顶点生命周期不会泄漏到 pass 层。
     virtual void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) = 0;
@@ -61,6 +78,8 @@ struct PassRuntimeContext
     // 仅重定向输出 swapChain 的 pass，其他图资源和完整 backing extent 不变。
     // LOAD 前调用方必须保证目标已有有效内容并处于 ColorAttachmentOptimal。
     bool renderToViewport = false;
+    // 可选诊断输出：只有阴影 pass 会写，渲染系统聚合后按 --gpu-stats 周期打印。
+    ShadowCasterCullStats* shadowCasterCullStats = nullptr;
 };
 
 // Records one compiled Renderpass using render-domain data. FrameGraph and

@@ -4,7 +4,7 @@
 
 ## 入口与归属
 
-Scene、Mesh、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
+Scene、Mesh、TressFX、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
 通过 `MaterialInstanceEditorRuntime::SubmitJson` 投递到现有 `EditorCommandBus`；
 无窗口工具 `vl_asset_edit` 使用同一 codec、bus、`AssetCommandExecutor` 与文档服务。
 Console 只借用 facade，不操作 World 或文件。运行中入口需要启用编辑器。
@@ -12,7 +12,8 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | 命令前缀 | 文档归属与可编辑内容 |
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
-| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、导入选项、已有材质槽的 MI 绑定 |
+| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、适用的导入选项、已有材质槽的 MI 绑定；拒绝 type 为 tressfx 的文档 |
+| `tressfx.*` | `TF_*.json`，type 为 tressfx；源 TFX 引用、已有材质槽的 MI 绑定及 `simulationDefaults.*` 模拟默认值；不接受旧 SM_ 前缀或 importOptions，`strandRadius` 不在修改能力表内 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
@@ -21,6 +22,22 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 环境/风参数、terrain、通用跨资产历史。临时 `SC_model_preview.json` 不能成为可编辑资产文档。
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
+
+TressFX 能力表包含 8 个 `simulationDefaults.*` 一级字段与整段 `groups` 数组（分组形状与校验见
+`tressfx-asset-import.md` 的“分组”一节）：`gravity`（向量）、`damping`、
+`iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
+`vspCoefficient`、`vspAccelThresholdMax`（数值）。`wind` 不在能力表内：风由场景 `wind` 对象作者，
+TF 里出现的 `simulationDefaults.wind` 在加载期被拒绝。这些字段只对 Tressfx 文档 kind 开放，
+Mesh 能力表不包含模拟字段。值域由
+`MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
+`iterations` 必须是整数。逐顶点曲线、`strandRadius` 仍不在能力表内，属于资产直接编辑。
+文档投影额外保留 `simulationDefaults` 对象存在性及显式 `enabled/backend`，供
+预览 live/Reset 判定；这两个字段只读，不扩张修改能力。整值 `8.0` 与 `8`
+均可作为整数参数，小数、非有限值、负数或超界值在转换前拒绝。
+TF 不承载角色绑定或碰撞代理。蓝图组件的 `simulation.mode` 与稀疏 `overrides`、
+`hairCollision` 属于 BP 的完整组件数组；独立场景 mesh 的同类配置在 `tressfx` 对象内，
+不属于 `scene.modify` 的逐字段能力。TF 的旧 `simulation`、`collision`、
+`collisionDefaults` 字段会被拒绝。
 BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 [C# 蓝图](csharp-blueprint-runtime.md) 的场景新增/改名/复制/删除、实例属性与 inline
 组件/物理编辑、获准的继承组件字段编辑/重置由 GT 作者适配器复用 Scene 草稿与保存 owner，
@@ -30,7 +47,7 @@ BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 
 ## 生命周期
 
-四种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
+五种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
 `save`、`revert`、`reload`。已有 `scene.save` 复用同一 Scene owner。
 Blueprint 另支持 `undo`、`redo`，都要求当前 revision；文档投影的 `canUndo` / `canRedo` 标明可用性。
 两个历史栈合计最多 32 步、16 MiB 序列化 JSON，保存保留、revert/reload 清空，新编辑清空 redo。
@@ -88,6 +105,9 @@ UI 的保持亮度换算仍属于 UI actor adapter。Camera rotation 明确清�
 校验检查文档及引用文件存在/类型/资源根边界，结果标记
 `validationLevel:"document_and_references"`、`contentPreflight:false`。
 这不导入模型、不验证源材质槽与几何对应关系、不解码图片，也不准备 Vulkan 资源。
+retarget 骨骼 SM 的文档验证检查 `sourceModel`/`retarget` 引用存在，
+sourceModel 的 descriptor 规划合法且为非 retarget 的骨骼 SM；profile 内容和两套 SK 的
+identity/骨名映射由正式导入验证。`skinning` 不在标准修改能力表内，普通字段保存保留它。
 正式 World 加载仍执行完整导入与资源事务；加载失败不回滚已经明确保存的作者文件。
 旧 UI actor 保存沿用已有轻量验证，不为了保存一个灯光重新导入未修改的模型。
 
@@ -104,9 +124,11 @@ Scene 草稿与已有 UI actor 编辑使用同一 baseline/draft/revision，进�
 可读取最新草稿继续编辑，不必等待前一个分量触发的重载。标准 API 改写使历史不匹配时，
 仍受上述 staged Scene 门禁约束；该例外不授权对旧 World 做 live 参数补丁。
 
-Mesh/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save。
+Mesh/TressFX/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/tressfx.save/texture.save。
 本接口没有 GPU 热替换，保存后需经正式资源重建/World 加载消费新描述；
-texture.reload/mesh.reload 只重读作者文档。API 没有新增模型/贴图 Details 编辑控件。
+texture.reload/mesh.reload/tressfx.reload 只重读作者文档。TressFX 拥有独立草稿 owner，
+通过冻结的 `tressfxDocuments` 快照向其资产页提供投影和 revision；同一文件不会同时进入
+Mesh 与 TressFX 两份草稿。API 没有新增模型/贴图 Details 编辑控件。
 MI 的现有预览协议保持独立。
 
 BP 标签页有独立草稿与 revision，也进入 Save Content，提交 `blueprint.save`。
@@ -131,7 +153,7 @@ cmake --build build --target vl_asset_edit -j6
 
 省略 `--input` 从 stdin 持续读 JSON Lines。整次读/改/校验/保存放在同一进程中，
 每行一个请求、stdout 每行一个结果。退出码 0 表示所有命令成功，2 表示有命令拒绝/失败，
-1 表示配置或输入文件错误。CLI 仅支持上述四种标准资产命令。
+1 表示配置或输入文件错误。CLI 仅支持上述五种标准资产命令。
 
 ```jsonl
 {"protocolVersion":1,"commandId":1,"source":"ai","command":"texture.get_document","payload":{"assetPath":"Maps/SC_example/Textures/T_example.json"}}
