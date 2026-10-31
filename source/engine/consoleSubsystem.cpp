@@ -26,17 +26,17 @@ void ConsoleSubsystem::Update()
         return;
     }
 
-    // 启动脚本只在画面稳定后提交一次。计时按 Update() 调用次数（即渲染帧）推进，
-    // 提交顺序与命令行给出的顺序一致，保证同一组参数产生同一份截图。
+    // 启动脚本在画面稳定后每帧提交一条。命令之间需要跨帧生效的场景
+    //（例如 particlespawn 后立刻 particlestats）因此能按参数顺序观察到
+    // 上一帧结果；提交顺序仍与命令行完全一致。
     if (!pendingLaunchCommands.empty())
     {
         if (elapsedFrames >= launchCommandDelayFrames)
         {
-            for (const std::string& line : pendingLaunchCommands)
-            {
-                debugConsole->SubmitCommandLine(line);
-            }
-            pendingLaunchCommands.clear();
+            debugConsole->SubmitCommandLine(
+                pendingLaunchCommands.front());
+            pendingLaunchCommands.erase(
+                pendingLaunchCommands.begin());
         }
         ++elapsedFrames;
     }

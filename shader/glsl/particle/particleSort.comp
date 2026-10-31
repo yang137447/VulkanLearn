@@ -1,0 +1,37 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+
+layout(std430, set = 0, binding = 1) readonly buffer InputPairs
+{
+    vec4 pairs[];
+} inputPairs;
+
+layout(std430, set = 0, binding = 2) writeonly buffer OutputPairs
+{
+    vec4 pairs[];
+} outputPairs;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    uint k = uint(frame.sortPass.x);
+    uint j = uint(frame.sortPass.y);
+    uint capacity = uint(frame.sortPass.z);
+    uint ixj = i ^ j;
+    if (i >= capacity || ixj <= i)
+    {
+        return;
+    }
+
+    vec4 a = inputPairs.pairs[i];
+    vec4 b = inputPairs.pairs[ixj];
+    // 标准 bitonic 的 ascending 网络在这里整体翻转：最终得到 depth 降序，
+    // 即最远粒子先画，满足 alpha billboard 的 back-to-front 要求。
+    bool descendingBlock = ((i & k) == 0u);
+    bool swap = descendingBlock ? (a.x < b.x) : (a.x > b.x);
+    outputPairs.pairs[i] = swap ? b : a;
+    outputPairs.pairs[ixj] = swap ? a : b;
+}

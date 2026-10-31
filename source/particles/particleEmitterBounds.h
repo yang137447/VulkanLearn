@@ -1,0 +1,107 @@
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+
+#include <Eigen/Dense>
+
+#include "particles/particleAsset.h"
+
+namespace VL
+{
+
+// 发射器包围球半径的纯 CPU 估算。剔除、距离淡出、minScreenSize 与跨发射器
+// 透明排序都消费同一个值，因此必须把“粒子能走多远”和“billboard 有多大”
+// 一起算进去，否则大尺寸低速烟雾会提前消失。
+inline float ComputeParticleEmitterLocalRadius(
+    const ParticleEmitterAsset& asset,
+    float meshLocalBoundsRadius = 0.0f)
+{
+    // 速度区间逐轴取绝对值最大者再求范数：非对称区间
+    // (例如 [-400, 20]) 也必须按最远可达速度外扩。
+    const Eigen::Vector3f maxSpeed(
+        std::max(
+            std::abs(asset.velocityMin.x()),
+            std::abs(asset.velocityMax.x())),
+        std::max(
+            std::abs(asset.velocityMin.y()),
+            std::abs(asset.velocityMax.y())),
+        std::max(
+            std::abs(asset.velocityMin.z()),
+            std::abs(asset.velocityMax.z())));
+
+    float maxBillboardHalfSize =
+        std::max(asset.sizeStart, asset.sizeEnd);
+    for (const ParticleSizeKey& key : asset.sizeKeys)
+    {
+        maxBillboardHalfSize =
+            std::max(maxBillboardHalfSize, key.size);
+    }
+
+    const float lifetime = std::max(asset.lifetimeMax, 0.0f);
+    // ribbon 条带在切线两侧各外扩 ribbonWidth；历史点都在运动轨迹内，
+    // 因此只需要额外加上横向半宽。mesh 的视觉半径来自导入网格顶点，
+    // 而不是 billboard size 曲线。
+    const float ribbonHalfWidth = asset.renderMode == "ribbon"
+        ? std::max(asset.ribbonWidth, 0.0f)
+        : 0.0f;
+    const float visualRadius =
+        asset.renderMode == "mesh" && meshLocalBoundsRadius > 0.0f
+        ? std::max(meshLocalBoundsRadius, 0.0f)
+        : maxBillboardHalfSize;
+    return asset.shapeRadius +
+        lifetime *
+            (maxSpeed.norm() +
+             0.5f * asset.gravity.norm() * lifetime) +
+        visualRadius +
+        ribbonHalfWidth;
+}
+
+inline float ComputeParticleEmitterBoundsRadius(
+    const ParticleEmitterAsset& asset,
+    const Eigen::Matrix4f& model,
+    float meshLocalBoundsRadius = 0.0f)
+{
+    const Eigen::Matrix3f linear = model.block<3, 3>(0, 0);
+    float maximumScale = 0.0f;
+    for (int column = 0; column < 3; ++column)
+    {
+        maximumScale =
+            std::max(maximumScale, linear.col(column).norm());
+    }
+    return ComputeParticleEmitterLocalRadius(
+        asset, meshLocalBoundsRadius) * maximumScale;
+}
+
+// 统一的发射器世界包围球：剔除、距离淡出、minScreenSize 与跨发射器透明
+// 排序都消费这一份 center/radius。fixed 模式仍以发射器局部空间作者化，
+// 由 model 变换到世界；半径使用半尺寸向量长度近似外接球。
+inline void ComputeParticleEmitterBounds(
+    const ParticleEmitterAsset& asset,
+    const Eigen::Matrix4f& model,
+    Eigen::Vector3f& worldCenter,
+    float& worldRadius,
+    float meshLocalBoundsRadius = 0.0f)
+{
+    const Eigen::Matrix3f linear = model.block<3, 3>(0, 0);
+    float maximumScale = 0.0f;
+    for (int column = 0; column < 3; ++column)
+    {
+        maximumScale =
+            std::max(maximumScale, linear.col(column).norm());
+    }
+
+    const Eigen::Vector3f localCenter = asset.useFixedBounds
+        ? asset.fixedBoundsCenter
+        : Eigen::Vector3f::Zero();
+    worldCenter =
+        (model * Eigen::Vector4f(localCenter.x(),
+             localCenter.y(), localCenter.z(), 1.0f)).head<3>();
+    const float localRadius = asset.useFixedBounds
+        ? asset.fixedBoundsExtent.norm()
+        : ComputeParticleEmitterLocalRadius(
+            asset, meshLocalBoundsRadius);
+    worldRadius = localRadius * maximumScale;
+}
+
+} // namespace VL

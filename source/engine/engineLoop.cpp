@@ -11,6 +11,7 @@
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/particlePreviewRequest.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "script/scriptBuildService.h"
 #include "script/scriptBuildDiagnostics.h"
@@ -240,6 +241,7 @@ void EngineLoop::Shutdown()
         GetSubsystems().GetWorldManager().ClearActiveWorld();
         RendererResourceCache::GetInstance().Clear();
         ResourceRetireQueue::GetInstance().ForceReleaseAll();
+        RenderSystem::GetInstance().SetRenderThreadIdleCallback({});
         RenderSystem::GetInstance().SetRendererBackend(nullptr);
         RenderSystem::GetInstance().SetPipelineFactory(nullptr);
 
@@ -327,6 +329,10 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
     rendererBackendInitialized = true;
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
+    RenderSystem::GetInstance().SetResourceRoot(
+        GetRuntimeConfig().GetResourcePath());
+    RenderSystem::GetInstance().SetRenderThreadIdleCallback(
+        [this]() { WaitForRenderThreadIdle(); });
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
     pipelineFactory->SetShaderCompiler(shaderCompiler.get());
@@ -708,6 +714,10 @@ void EngineLoop::Tick()
         scripts.Tick(world, simulationDelta,
             GetSubsystems().GetInputSubsystem().GetActionState(),
             GetSubsystems().GetDiagnosticsSubsystem());
+        // 粒子模拟跟随脚本时钟：Pause 冻结，Playing 使用 timeScale 后的 delta，
+        // Editing 保持编辑器时间。必须在 Tick 之后、发布快照之前写入。
+        RenderSystem::GetInstance().SetPendingSimulationDelta(
+            scripts.ParticleDeltaOr(simulationDelta));
         if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode())
             world->TickAnimations(simulationDelta);
@@ -1156,6 +1166,20 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
             command.extraSceneObjects = BuildMaterialPreviewObjects(action.stringValue);
+            break;
+        case UiActionType::PreviewParticle:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ParticlePreviewScenePath;
+            command.extraSceneObjects =
+                BuildParticlePreviewObjects(action.stringValue);
+            command.particleDocumentPath = action.stringValue;
+            command.particleDocument = action.particleDocument;
+            break;
+        case UiActionType::UpdateParticlePreview:
+            command.type = RuntimeCommandType::UpdateParticlePreview;
+            command.stringValue = action.stringValue;
+            command.particleDocumentPath = action.stringValue;
+            command.particleDocument = action.particleDocument;
             break;
         case UiActionType::PreviewModel:
             command.type = RuntimeCommandType::LoadWorld;
@@ -1628,7 +1652,21 @@ void EngineLoop::TickEditorThumbnails()
     }
     if (thumbnailSession->Step())
     {
+        const bool particleThumbnail =
+            thumbnailRequest->kind == EditorUi::EditorAssetKind::ParticleSystem;
+        const std::string assetPath = thumbnailRequest->path;
         library->CompleteRenderRequest(*thumbnailRequest, thumbnailSession->Image(), thumbnailSession->Error());
+        // 粒子缩略图走独立 World/管线；保留一条结果日志，便于无像素比对的运行时冒烟确认。
+        if (particleThumbnail)
+        {
+            const std::string& error = thumbnailSession->Error();
+            if (error.empty())
+                GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+                    "Particle thumbnail rendered: " + assetPath, "Editor Thumbnail");
+            else
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                    "Particle thumbnail failed: " + assetPath + ": " + error, "Editor Thumbnail");
+        }
         thumbnailRequest.reset();
     }
 }
@@ -1836,7 +1874,9 @@ EngineLoop::ExecuteWorldGraphTransaction(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch*
         materialDefinitionReload,
-    const nlohmann::json& extraSceneObjects)
+    const nlohmann::json& extraSceneObjects,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments)
 {
     if (!rendererBackend || !rendererBackendInitialized)
     {
@@ -1869,7 +1909,8 @@ EngineLoop::ExecuteWorldGraphTransaction(
         scenePath,
         materialDefinitionReload,
         extraSceneObjects,
-        sceneDocument);
+        sceneDocument,
+        particleDocuments);
     if (result.IsSuccess())
     {
         GetSubsystems().GetScriptRuntime().SynchronizeWorld(
@@ -1920,7 +1961,8 @@ void EngineLoop::ProcessRequestedWorldTransition(
             commandResult
                 .loadWorldResolvedPath,
             nullptr,
-            commandResult.loadWorldExtraSceneObjects);
+            commandResult.loadWorldExtraSceneObjects,
+            commandResult.loadWorldParticleDocuments);
     if (transactionResult.IsFailure())
     {
         commandResult.loadWorldError =

@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -26,6 +27,7 @@
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
+#include "render/particles/particleGpuTimer.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
 #include "render/offline/offlineCameraMotionPolicy.h"
@@ -36,6 +38,8 @@
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
+#include "particles/particleFrameStats.h"
+#include "particles/particleRenderer.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -105,7 +109,26 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 调试回读：先停住可选的渲染线程并等待设备空闲，再把当前发射器池
+    // 回读到 CPU。输出固定落在 <resourceRoot>/Generated/ParticleDumps/。
+    bool DumpParticles(
+        const std::string& fileName,
+        uint32_t maxPerEmitter,
+        std::string& outMessage);
+    // 调试快照：先让出渲染线程，再按值拷贝上一帧的 CPU 侧粒子预算。
+    // 不等待设备空闲、不读取 GPU，也不是 GPU 计时。
+    VL::ParticleFrameStats GetParticleFrameStats() const;
+    // 运行时 restart：只重置该场景对象名下发射器的模拟时间/预热/清池/剔除
+    // 状态；不重新加载 PS 资产，也不重建纹理或 GPU 池。
+    void RestartParticleSystems(const std::string& sceneObjectName);
+    // 由 EngineLoop 在 scripts.Tick 之后写入；快照构建与粒子模拟只消费它。
+    void SetPendingSimulationDelta(float seconds);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
+    void SetResourceRoot(std::string root) { resourceRoot = std::move(root); }
+    void SetRenderThreadIdleCallback(std::function<void()> callback)
+    {
+        renderThreadIdleCallback = std::move(callback);
+    }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
     vk::Extent2D GetSceneRenderExtent() const;
@@ -321,6 +344,10 @@ private:
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
+    void RecordParticlePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
@@ -405,6 +432,8 @@ private:
     float bloomClamp = 12.0f;
     float exposureDeltaSeconds = 1.0f / 60.0f;
     bool exposureClockInitialized = false;
+    // 最近一次逻辑模拟帧间隔，默认 1/60 保持首帧行为不变。
+    float pendingSimulationDeltaSeconds = 1.0f / 60.0f;
     std::chrono::steady_clock::time_point exposureLastFrameTime;
     float speedTreeStrength = 0.35f;
     bool speedTreeGustingEnabled = true;
@@ -425,6 +454,7 @@ private:
     VL::PassRuntime passRuntime;
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
+    VL::ParticleRenderer particleRenderer;
     VL::RenderScene currentRenderScene;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;
@@ -447,6 +477,9 @@ private:
     VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
+    std::string resourceRoot;
+    // EngineLoop 注入；RenderSystem 不拥有渲染线程，只借用其停靠点。
+    std::function<void()> renderThreadIdleCallback;
     PipelineFactory* pipelineFactory = nullptr;
     VL::AutoExposureReloadParticipant exposureHistogramReloadParticipant{0};
     VL::AutoExposureReloadParticipant exposureAdaptReloadParticipant{1};
@@ -458,6 +491,9 @@ private:
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
+    // particle graphics pass 的 GPU timestamp；与 environment timer 各自持有
+    // 独立 query pool，避免 pass 跳过时互相覆盖槽位。
+    VL::ParticleGpuTimer particleGpuTimer;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
     std::shared_ptr<Texture> environmentUpdateSourceCube;

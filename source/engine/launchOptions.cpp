@@ -344,7 +344,7 @@ void PrintLaunchUsage()
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
-        << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
+        << "  --console-command-delay <frames>    Frames before submitting launch commands; then one command per frame (default 60).\n"
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
         << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
         << "  --focus-window                      Request OS keyboard focus at startup (input automation).\n"

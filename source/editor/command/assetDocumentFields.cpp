@@ -1,6 +1,9 @@
 #include "editor/command/assetDocumentFields.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cctype>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -68,6 +71,78 @@ const Field fields[] = {
     {K::Texture, "", "filter", ValueKind::Text, true, "", "linear|nearest"},
     {K::Texture, "", "wrapMode", ValueKind::Text, true, "", "repeat|clamp"},
     {K::Texture, "", "channelsDescription", ValueKind::Channels, true},
+    {K::ParticleSystem, "", "name", ValueKind::Text},
+    {K::ParticleSystem, "", "position", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "localSpace", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "renderMode", ValueKind::Text, false, "", "billboard|ribbon|mesh"},
+    {K::ParticleSystem, "", "ribbonWidth", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
+    {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},
+    {K::ParticleSystem, "", "mesh.path", ValueKind::Text, true, "asset_path"},
+    {K::ParticleSystem, "", "mesh.scale", ValueKind::Vector3, true},
+    {K::ParticleSystem, "", "mesh.alignment", ValueKind::Text, true, "", "world|camera|velocity"},
+    {K::ParticleSystem, "", "useFixedBounds", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "fixedBounds.center", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "fixedBounds.extent", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "maxParticles", ValueKind::Number},
+    {K::ParticleSystem, "", "burst", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "burstInterval", ValueKind::Number, true, "s"},
+    {K::ParticleSystem, "", "spawnRate", ValueKind::Number},
+    {K::ParticleSystem, "", "lodDistance", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "lodSpawnRateScale", ValueKind::Number, true},
+    {K::ParticleSystem, "", "lod.tiers", ValueKind::Array, true},
+    {K::ParticleSystem, "", "lifetime", ValueKind::Array},
+    {K::ParticleSystem, "", "shape.type", ValueKind::Text, false, "", "sphere"},
+    {K::ParticleSystem, "", "shape.radius", ValueKind::Number, false, "cm"},
+    {K::ParticleSystem, "", "velocity.min", ValueKind::Vector3, false, "cm/s"},
+    {K::ParticleSystem, "", "velocity.max", ValueKind::Vector3, false, "cm/s"},
+    {K::ParticleSystem, "", "gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::ParticleSystem, "", "drag", ValueKind::Number},
+    {K::ParticleSystem, "", "size", ValueKind::Array, false, "cm"},
+    {K::ParticleSystem, "", "rotation", ValueKind::Number, true, "degrees"},
+    {K::ParticleSystem, "", "rotationSpeed", ValueKind::Number, true, "degrees/s"},
+    {K::ParticleSystem, "", "rotationRandom", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "softness", ValueKind::Number},
+    {K::ParticleSystem, "", "softParticles", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "softParticleDistance", ValueKind::Number, false, "cm"},
+    {K::ParticleSystem, "", "sortParticles", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "opacity", ValueKind::Number},
+    {K::ParticleSystem, "", "maxDrawDistance", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "fadeDistance", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "minScreenSize", ValueKind::Number, true, "px"},
+    {K::ParticleSystem, "", "maxScreenSize", ValueKind::Number, true, "px"},
+    {K::ParticleSystem, "", "collision.type", ValueKind::Text, true, "", "none|plane|box|capsule"},
+    {K::ParticleSystem, "", "collision.bounce", ValueKind::Number, true},
+    {K::ParticleSystem, "", "collision.friction", ValueKind::Number, true},
+    {K::ParticleSystem, "", "collision.radius", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "collision.killOnCollision", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "collision.ccd", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "collision.plane.normal", ValueKind::Vector3, true},
+    {K::ParticleSystem, "", "collision.plane.offset", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "collision.box.min", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "collision.box.max", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "collision.capsule.a", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "collision.capsule.b", ValueKind::Vector3, true, "cm"},
+    {K::ParticleSystem, "", "collision.capsule.radius", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "colorStart", ValueKind::Array},
+    {K::ParticleSystem, "", "colorEnd", ValueKind::Array},
+    {K::ParticleSystem, "", "texture", ValueKind::Text, true, "asset_path"},
+    {K::ParticleSystem, "", "blend", ValueKind::Text, false, "", "additive|alpha"},
+    {K::ParticleSystem, "", "flipbook.columns", ValueKind::Number},
+    {K::ParticleSystem, "", "flipbook.rows", ValueKind::Number},
+    {K::ParticleSystem, "", "flipbook.fps", ValueKind::Number},
+    {K::ParticleSystem, "", "flipbook.startFrame", ValueKind::Number},
+    {K::ParticleSystem, "", "flipbook.endFrame", ValueKind::Number},
+    {K::ParticleSystem, "", "flipbook.loop", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "flipbook.randomStartFrame", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "flipbook.frameDurations", ValueKind::Array, true},
+    {K::ParticleSystem, "", "flipbook.framePivots", ValueKind::Array, true},
+    {K::ParticleSystem, "", "flipbook.frameUVs", ValueKind::Array, true},
+    {K::ParticleSystem, "", "flipbook.frameRotations", ValueKind::Array, true},
+    {K::ParticleSystem, "", "colorKeys", ValueKind::Array, true},
+    {K::ParticleSystem, "", "sizeKeys", ValueKind::Array, true},
+    // 受控的结构字段：不属于任何编辑模块，只用于整条发射器数组增删/重排。
+    {K::ParticleSystem, "", "emitters", ValueKind::Array},
     {K::Blueprint, "", "name", ValueKind::Text},
     {K::Blueprint, "", "description", ValueKind::Text, true},
     {K::Blueprint, "", "class", ValueKind::Text},
@@ -100,17 +175,66 @@ std::string Scope(const EditorAssetFieldChange& change)
     return change.slotIndex ? "slot" : "";
 }
 
+struct ParticleFieldPath
+{
+    bool hasEmitter = false;
+    size_t emitterIndex = 0;
+    std::string field;
+};
+
+// PS 的多发射器路径是 emitters.<index>.<field>。这里只做语法与 v1 上限
+// 检查；索引是否落在当前文档内由 ApplyAssetChanges 对照候选数组判断。
+ParticleFieldPath ParseParticleFieldPath(const std::string& path)
+{
+    ParticleFieldPath result;
+    result.field = path;
+    if (path.rfind("emitters.", 0) != 0) return result;
+
+    const size_t indexStart = std::string("emitters.").size();
+    const size_t separator = path.find('.', indexStart);
+    if (separator == std::string::npos || separator == indexStart ||
+        separator + 1 == path.size())
+        throw std::invalid_argument("Particle emitter path requires emitters.<index>.<field>");
+    size_t index = 0;
+    for (size_t cursor = indexStart; cursor < separator; ++cursor)
+    {
+        const unsigned char character = static_cast<unsigned char>(path[cursor]);
+        if (!std::isdigit(character))
+            throw std::invalid_argument("Particle emitter path index must be numeric");
+        index = index * 10 + static_cast<size_t>(character - '0');
+        if (index >= 16)
+            throw std::invalid_argument("Particle emitter path index exceeds the 16-emitter limit");
+    }
+    result.hasEmitter = true;
+    result.emitterIndex = index;
+    result.field = path.substr(separator + 1);
+    return result;
+}
+
 const Field& FindField(K kind, const EditorAssetFieldChange& change)
 {
-    if (change.objectIdentity && (kind != K::Scene || change.slotIndex || change.expectedSlotName))
+    if (change.objectIdentity && (kind != K::Scene || change.slotIndex ||
+        change.expectedSlotName || change.expectedEmitterName))
         throw std::invalid_argument("objectIdentity is only valid for scene object fields");
     if (change.slotIndex.has_value() != change.expectedSlotName.has_value() ||
         (change.slotIndex && kind != K::Mesh) ||
         (change.expectedSlotName && change.expectedSlotName->empty()))
         throw std::invalid_argument("Mesh slots require slotIndex and non-empty expectedSlotName");
+    ParticleFieldPath particlePath;
+    if (kind == K::ParticleSystem)
+        particlePath = ParseParticleFieldPath(change.field);
+    if (change.expectedEmitterName &&
+        (kind != K::ParticleSystem || !particlePath.hasEmitter ||
+         change.expectedEmitterName->empty() || change.slotIndex ||
+         change.expectedSlotName))
+        throw std::invalid_argument(
+            "Particle emitter identity requires emitters.<index>.<field> and a non-empty expectedEmitterName");
     const auto scope = Scope(change);
+    const std::string fieldName = kind == K::ParticleSystem
+        ? particlePath.field
+        : change.field;
     for (const auto& field : fields)
-        if (field.kind == kind && change.field == field.name && MatchesScope(scope, field.scope))
+        if (field.kind == kind && fieldName == field.name && MatchesScope(scope, field.scope))
             return field;
     throw std::invalid_argument("Unsupported asset field: " + scope + "." + change.field);
 }
@@ -242,6 +366,94 @@ void SetField(Json& target, const EditorAssetFieldChange& change)
     else target[parent][leaf] = ValueJson(change.value);
 }
 
+void SetDottedField(
+    Json& target,
+    const std::string& path,
+    const EditorAssetFieldChange& change)
+{
+    Json* node = &target;
+    size_t start = 0;
+    while (true)
+    {
+        const size_t separator = path.find('.', start);
+        const bool last = separator == std::string::npos;
+        const std::string segment = path.substr(
+            start, last ? std::string::npos : separator - start);
+        if (segment.empty())
+            throw std::invalid_argument("Particle field path contains an empty segment");
+        if (!node->is_object())
+            throw std::invalid_argument("Particle field path parent is not an object");
+        if (last)
+        {
+            if (change.reset) node->erase(segment);
+            else (*node)[segment] = ValueJson(change.value);
+            return;
+        }
+        if (!node->contains(segment))
+        {
+            if (change.reset) return;
+            (*node)[segment] = Json::object();
+        }
+        node = &node->at(segment);
+        start = separator + 1;
+    }
+}
+
+void SetParticleField(
+    Json& target,
+    const EditorAssetFieldChange& change,
+    const std::map<size_t, std::string>* originalNames)
+{
+    const ParticleFieldPath path = ParseParticleFieldPath(change.field);
+    if (!path.hasEmitter)
+    {
+        const bool explicitEmitters =
+            target.is_object() && target.contains("emitters") &&
+            target.at("emitters").is_array();
+        if (explicitEmitters)
+        {
+            // 显式多发射器文档的根对象只拥有系统名和结构数组；
+            // 其余字段写到根会被 ParseJson 忽略，必须明确拒绝。
+            if (change.field != "name" && change.field != "emitters")
+                throw std::invalid_argument(
+                    "Particle field requires emitters.<index>.<field>: " +
+                    change.field);
+            SetField(target, change);
+            return;
+        }
+        // 旧资产没有 emitters 数组；根字段必须保持原有写入语义。
+        // position 只属于显式 emitter，静默写到根对象会被解析器忽略。
+        if (change.field == "position")
+            throw std::invalid_argument("Particle position requires an explicit emitters array");
+        // 旧文档的根字段同样可能有多级路径（例如 collision.plane.normal），
+        // 不能退回只支持两级的 SetField。
+        SetDottedField(target, change.field, change);
+        return;
+    }
+    if (!target.is_object() || !target.contains("emitters") ||
+        !target.at("emitters").is_array())
+        throw std::invalid_argument("Particle emitters array is missing");
+    Json& emitters = target.at("emitters");
+    if (path.emitterIndex >= emitters.size())
+        throw std::invalid_argument("Particle emitter index is out of range");
+    Json& emitter = emitters.at(path.emitterIndex);
+    if (change.expectedEmitterName)
+    {
+        std::string identity = emitter.value(
+            "name", "emitter" + std::to_string(path.emitterIndex));
+        if (originalNames != nullptr)
+        {
+            const auto found =
+                originalNames->find(path.emitterIndex);
+            if (found != originalNames->end())
+                identity = found->second;
+        }
+        if (identity != *change.expectedEmitterName)
+            throw std::invalid_argument("Particle emitter identity changed");
+    }
+    SetDottedField(emitter, path.field, change);
+}
+
 Json FieldDescription(const Field& field)
 {
     Json result{{"field", field.name}, {"type", TypeName(field.type)}, {"resettable", field.reset},
@@ -291,9 +503,50 @@ Json Projection(K kind, const std::string& scope, const Json& source)
         }
         else
         {
-            const auto parent = name.substr(0, dot), leaf = name.substr(dot + 1);
-            if (source.contains(parent) && source.at(parent).contains(leaf))
-                result[parent][leaf] = source.at(parent).at(leaf);
+            const Json* value = &source;
+            size_t start = 0;
+            bool found = true;
+            while (true)
+            {
+                const size_t separator = name.find('.', start);
+                const bool last = separator == std::string::npos;
+                const std::string segment = name.substr(
+                    start,
+                    last
+                        ? std::string::npos
+                        : separator - start);
+                if (!value->is_object() || !value->contains(segment))
+                {
+                    found = false;
+                    break;
+                }
+                value = &value->at(segment);
+                if (last) break;
+                start = separator + 1;
+            }
+            if (!found) continue;
+
+            Json* target = &result;
+            start = 0;
+            while (true)
+            {
+                const size_t separator = name.find('.', start);
+                const bool last = separator == std::string::npos;
+                const std::string segment = name.substr(
+                    start,
+                    last
+                        ? std::string::npos
+                        : separator - start);
+                if (last)
+                {
+                    (*target)[segment] = *value;
+                    break;
+                }
+                if (!target->contains(segment))
+                    (*target)[segment] = Json::object();
+                target = &target->at(segment);
+                start = separator + 1;
+            }
         }
     }
     return result;
@@ -312,6 +565,7 @@ Json EncodeAssetChanges(const std::vector<EditorAssetFieldChange>& changes, K ki
         if (change.objectIdentity) item["objectIdentity"] = *change.objectIdentity;
         if (change.slotIndex) item["slotIndex"] = *change.slotIndex;
         if (change.expectedSlotName) item["expectedSlotName"] = *change.expectedSlotName;
+        if (change.expectedEmitterName) item["expectedEmitterName"] = *change.expectedEmitterName;
         if (!targets.insert(item.dump()).second) throw std::invalid_argument("Duplicate target field");
         if (change.reset)
         {
@@ -339,7 +593,8 @@ std::vector<EditorAssetFieldChange> DecodeAssetChanges(const Json& changes, K ki
         if (!item.is_object()) throw std::invalid_argument("Asset change must be object");
         for (const auto& entry : item.items())
             if (entry.key() != "field" && entry.key() != "value" && entry.key() != "reset" &&
-                entry.key() != "objectIdentity" && entry.key() != "slotIndex" && entry.key() != "expectedSlotName")
+                entry.key() != "objectIdentity" && entry.key() != "slotIndex" &&
+                entry.key() != "expectedSlotName" && entry.key() != "expectedEmitterName")
                 throw std::invalid_argument("Unknown change property: " + entry.key());
         EditorAssetFieldChange change;
         change.field = item.at("field").get<std::string>();
@@ -352,6 +607,7 @@ std::vector<EditorAssetFieldChange> DecodeAssetChanges(const Json& changes, K ki
             change.slotIndex = index.get<uint32_t>();
         }
         if (item.contains("expectedSlotName")) change.expectedSlotName = item.at("expectedSlotName").get<std::string>();
+        if (item.contains("expectedEmitterName")) change.expectedEmitterName = item.at("expectedEmitterName").get<std::string>();
         if (item.contains("reset"))
         {
             if (item.at("reset") != true || item.contains("value"))
@@ -369,6 +625,26 @@ std::vector<EditorAssetFieldChange> DecodeAssetChanges(const Json& changes, K ki
 Json ApplyAssetChanges(Json& candidate, K kind, const std::vector<EditorAssetFieldChange>& changes)
 {
     const auto wire = EncodeAssetChanges(changes, kind);
+    // 同一 batch 可能先改发射器名、再改其他字段；身份校验必须对照
+    // 本 batch 开始前的名字，而不是已被前一条 change 改写的中间值。
+    std::map<size_t, std::string> particleOriginalNames;
+    if (kind == K::ParticleSystem &&
+        candidate.contains("emitters") &&
+        candidate.at("emitters").is_array())
+    {
+        for (const auto& change : changes)
+        {
+            if (!change.expectedEmitterName) continue;
+            const auto path = ParseParticleFieldPath(change.field);
+            if (!path.hasEmitter ||
+                path.emitterIndex >= candidate.at("emitters").size())
+                continue;
+            particleOriginalNames[path.emitterIndex] =
+                candidate.at("emitters").at(path.emitterIndex).value(
+                    "name",
+                    "emitter" + std::to_string(path.emitterIndex));
+        }
+    }
     Json changed = Json::array();
     size_t changeIndex = 0;
     for (const auto& change : changes)
@@ -383,7 +659,11 @@ Json ApplyAssetChanges(Json& candidate, K kind, const std::vector<EditorAssetFie
             // 作者 rotation 优先选择显式 TRS，不能被旧 look_at 在下次加载时覆盖。
             target.erase("look_at");
         }
-        SetField(target, change);
+        if (kind == K::ParticleSystem)
+            SetParticleField(target, change,
+                particleOriginalNames.empty()
+                    ? nullptr : &particleOriginalNames);
+        else SetField(target, change);
         if (target != before) changed.push_back(wire.at(changeIndex));
         if (kind == K::Scene && target.at("type") == "camera" && change.field == "rotation" &&
             before.contains("look_at"))
@@ -418,12 +698,94 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
             result["slots"].push_back({{"slotIndex", index}, {"expectedSlotName", slots[index].at("name")},
                 {"fields", FieldList(kind, "slot")}});
     }
+    if (kind == K::ParticleSystem)
+    {
+        const bool explicitEmitters =
+            document.contains("emitters") &&
+            document.at("emitters").is_array();
+        const Json allFields = FieldList(kind, "");
+        Json emitterFields = allFields;
+        emitterFields.erase(
+            std::remove_if(
+                emitterFields.begin(), emitterFields.end(),
+                [](const Json& field)
+                {
+                    return field.value("field", std::string()) ==
+                        "emitters";
+                }),
+            emitterFields.end());
+        if (!explicitEmitters)
+        {
+            // 隐式 emitter 没有局部 position；能力表不能 advertise 一个
+            // 会被 ParseJson 忽略的字段。
+            result["fields"] = allFields;
+            result["fields"].erase(
+                std::remove_if(
+                    result["fields"].begin(), result["fields"].end(),
+                    [](const Json& field)
+                    {
+                        return field.value("field", std::string()) ==
+                            "position";
+                    }),
+                result["fields"].end());
+        }
+        else
+        {
+            // 显式多发射器文档的根只拥有系统名和结构数组；emitter 字段
+            // 只能通过 emitters.<index>.<field> 写入。
+            result["fields"] = Json::array();
+            for (const auto& field : allFields)
+            {
+                const std::string name =
+                    field.value("field", std::string());
+                if (name == "name" || name == "emitters")
+                    result["fields"].push_back(field);
+            }
+        }
+        result["emitters"] = Json::array();
+        if (explicitEmitters)
+        {
+            const auto& emitters = document.at("emitters");
+            for (size_t index = 0; index < emitters.size(); ++index)
+            {
+                const std::string name = emitters.at(index).value(
+                    "name", "emitter" + std::to_string(index));
+                result["emitters"].push_back({{"index", index}, {"name", name},
+                    {"fields", emitterFields}});
+            }
+        }
+        else
+        {
+            // 旧 PS 的隐式发射器仍需要出现在选择器里，但字段路径保持根路径。
+            Json implicitFields = emitterFields;
+            implicitFields.erase(
+                std::remove_if(
+                    implicitFields.begin(), implicitFields.end(),
+                    [](const Json& field)
+                    {
+                        return field.value("field", std::string()) ==
+                            "position";
+                    }),
+                implicitFields.end());
+            result["emitters"].push_back({{"index", 0}, {"name", "emitter0"},
+                {"fields", implicitFields}});
+        }
+    }
     return result;
 }
 
 Json ProjectEditableAsset(K kind, const Json& document)
 {
     Json result = Projection(kind, "", document);
+    if (kind == K::ParticleSystem &&
+        document.contains("emitters") &&
+        document.at("emitters").is_array())
+    {
+        // 系统级 name 来自根对象；每个 emitter 只投影自己的作者字段。
+        result["emitters"] = Json::array();
+        for (const auto& emitter : document.at("emitters"))
+            result["emitters"].push_back(Projection(kind, "", emitter));
+    }
     if (kind == K::Scene)
     {
         result["worldUnit"] = document.at("worldUnit");

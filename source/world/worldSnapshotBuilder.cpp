@@ -90,6 +90,13 @@ std::string BuildLightRuntimeKey(const World& world, const std::string& lightNam
     return world.GetScenePath() + "|light|" + lightName;
 }
 
+std::string BuildParticleRuntimeKey(
+    const World& world,
+    const std::string& particleSystemName)
+{
+    return world.GetScenePath() + "|particle|" + particleSystemName;
+}
+
 MeshDrawSnapshot BuildMeshDrawSnapshot(
     const std::string& objectName,
     RuntimeId objectId,
@@ -274,6 +281,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     WorldSnapshot snapshot;
     snapshot.worldGeneration = world.GetGeneration();
     snapshot.frameIndex = desc.frameIndex;
+    snapshot.simulationDeltaSeconds = desc.simulationDeltaSeconds;
     snapshot.debugViewMode = desc.debugViewMode;
 
     Camera& camera = *world.GetRenderCamera();
@@ -355,6 +363,22 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         auto frozen = light;
         frozen.lightId = StableRuntimeId(BuildLightRuntimeKey(world, identity));
         snapshot.lights.push_back(std::move(frozen));
+    }
+
+    snapshot.particleSystems.reserve(
+        world.GetParticleSystems().size());
+    for (const auto& [name, particleSystem] :
+         world.GetParticleSystems())
+    {
+        ParticleSystemSnapshot snapshotSystem;
+        snapshotSystem.particleSystemId =
+            StableRuntimeId(BuildParticleRuntimeKey(world, name));
+        snapshotSystem.name = name;
+        snapshotSystem.assetPath = particleSystem.assetPath;
+        snapshotSystem.asset = particleSystem.asset;
+        snapshotSystem.model = particleSystem.model;
+        snapshot.particleSystems.push_back(
+            std::move(snapshotSystem));
     }
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);

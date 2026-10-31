@@ -90,8 +90,20 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
         if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
-            type != "spotLight" && type != "squareAreaLight" && type != "camera" && type != "environment" && type != "blueprintInstance")
+            type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
+            type != "environment" && type != "blueprintInstance" &&
+            type != "particleSystem")
             throw std::invalid_argument("Unknown scene object type: " + type);
+        if (type == "particleSystem")
+        {
+            if (!object.contains("particlePath") ||
+                !object.at("particlePath").is_string() ||
+                object.at("particlePath").get<std::string>().empty())
+            {
+                throw std::invalid_argument(
+                    "Particle system requires path: particlePath");
+            }
+        }
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
             const bool required = (std::string(field) == "position" && type != "environment") ||

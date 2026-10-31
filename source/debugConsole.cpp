@@ -1,16 +1,20 @@
 #include "debugConsole.h"
 #include "engine/modelPreviewRequest.h"
 
+#include <algorithm>
 #include <conio.h>
 #include <cctype>
 #include <cmath>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 #include "engine/runtimeCommand.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/command/editorCommandJsonCodec.h"
+#include "particles/particleDump.h"
+#include "particles/particleRuntimeCommand.h"
 
 DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
     : commandBus(commandBus), editorRuntime(runtime)
@@ -469,6 +473,182 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "particledump")
+    {
+        std::string fileName = "particles.json";
+        std::string token;
+        long long maxPerEmitter = VL::kParticleDumpDefaultDetails;
+        if (commandStream >> token)
+        {
+            fileName = token;
+            if (commandStream >> token)
+            {
+                try
+                {
+                    size_t consumed = 0;
+                    maxPerEmitter = std::stoll(token, &consumed);
+                    if (consumed != token.size())
+                    {
+                        throw std::invalid_argument("trailing characters");
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    std::cout
+                        << "Usage: particledump [file.json] [maxPerEmitter]"
+                        << std::endl;
+                    return;
+                }
+                std::string extra;
+                if (commandStream >> extra)
+                {
+                    std::cout
+                        << "Usage: particledump [file.json] [maxPerEmitter]"
+                        << std::endl;
+                    return;
+                }
+            }
+        }
+        maxPerEmitter = std::clamp(
+            maxPerEmitter,
+            0LL,
+            static_cast<long long>(VL::kParticleDumpMaxDetails));
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::DumpParticles;
+        runtimeCommand.stringValue = std::move(fileName);
+        runtimeCommand.intValue = static_cast<int>(maxPerEmitter);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle dump queued: " << runtimeCommand.stringValue
+            << " (max " << maxPerEmitter << " particles/emitter)"
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlestats")
+    {
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << "Usage: particlestats" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportParticleStats;
+        runtimeCommand.sourceText = line;
+        std::cout << "Particle stats queued." << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlespawn")
+    {
+        std::string name;
+        std::string assetPath;
+        if (!(commandStream >> name >> assetPath))
+        {
+            std::cout
+                << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                << std::endl;
+            return;
+        }
+
+        Eigen::Vector3f position = Eigen::Vector3f::Zero();
+        float x = 0.0f;
+        if (commandStream >> x)
+        {
+            if (!(commandStream >> position.y() >> position.z()))
+            {
+                std::cout
+                    << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                    << std::endl;
+                return;
+            }
+            position.x() = x;
+        }
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout
+                << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                << std::endl;
+            return;
+        }
+
+        std::string validationError;
+        if (!VL::ValidateParticleSpawnRequest(
+                name,
+                assetPath,
+                position,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SpawnParticleSystem;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.secondaryStringValue = assetPath;
+        runtimeCommand.particleSpawnPosition = position;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle spawn queued: " << name << " -> " << assetPath
+            << " at (" << position.x() << ", " << position.y() << ", "
+            << position.z() << ")" << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particledestroy")
+    {
+        std::string name;
+        std::string extra;
+        if (!(commandStream >> name) || (commandStream >> extra))
+        {
+            std::cout << "Usage: particledestroy <name>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::DestroyParticleSystem;
+        runtimeCommand.stringValue = std::move(name);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle destroy queued: " << runtimeCommand.stringValue
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlerestart")
+    {
+        std::string name;
+        std::string extra;
+        if (!(commandStream >> name) || (commandStream >> extra))
+        {
+            std::cout << "Usage: particlerestart <name>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::RestartParticleSystem;
+        runtimeCommand.stringValue = std::move(name);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle restart queued: " << runtimeCommand.stringValue
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "camera")
     {
         std::string mode;
@@ -676,6 +856,11 @@ void DebugConsole::PrintHelp() const
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
     std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";
     std::cout << "  screenshot [file.bmp] - capture the presented swapchain image\n";
+    std::cout << "  particledump [file.json] [maxPerEmitter] - read back GPU particle pools into Generated/ParticleDumps\n";
+    std::cout << "  particlestats - print last frame particle emitter/draw/sort budget plus particle pass GPU ms\n";
+    std::cout << "  particlespawn <name> <PS_asset_path> [x y z] - add a particle system instance to the active World\n";
+    std::cout << "  particledestroy <name> - remove a particle system instance from the active World\n";
+    std::cout << "  particlerestart <name> - reset one particle system instance (simulation time, prewarm, cull)\n";
     std::cout << "  camera get - print the active camera pose\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";

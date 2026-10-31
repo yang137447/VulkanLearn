@@ -1,9 +1,11 @@
 #include "engine/runtimeCommandExecutor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <exception>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -18,6 +20,8 @@
 #include "engine/runtimeTestHooks.h"
 #include "input/inputSubsystem.h"
 #include "materialInstance.h"
+#include "particles/particleAsset.h"
+#include "particles/particleRuntimeCommand.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
@@ -280,6 +284,178 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::LoadWorld:
         ApplyLoadWorld(command, worldTransitionCoordinator, runtimeConfig, diagnostics, executionResult);
         break;
+    case RuntimeCommandType::UpdateParticlePreview:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle preview update ignored because no active World exists.");
+            break;
+        }
+        if (!command.particleDocument.is_object())
+        {
+            diagnostics.ReportWarning(
+                "Particle preview update ignored because the draft document is not a JSON object.");
+            break;
+        }
+        try
+        {
+            ParticleSystemAsset asset =
+                ParticleAssetLoader::ParseJson(
+                    command.particleDocument,
+                    command.stringValue);
+            const size_t replaced =
+                world->UpdateParticleSystemAsset(
+                    command.stringValue,
+                    std::move(asset));
+            if (replaced == 0)
+            {
+                diagnostics.ReportWarning(
+                    "Particle preview update found no matching particle system: " +
+                    command.stringValue);
+            }
+            else
+            {
+                diagnostics.ReportInfo(
+                    "Particle preview updated in place: " +
+                    command.stringValue + " (" +
+                    std::to_string(replaced) + " object(s))");
+            }
+        }
+        catch (const std::exception& error)
+        {
+            diagnostics.ReportWarning(
+                std::string("Particle preview update rejected: ") +
+                error.what());
+        }
+        break;
+    }
+    case RuntimeCommandType::DumpParticles:
+    {
+        const uint32_t maxPerEmitter = static_cast<uint32_t>(
+            std::clamp(command.intValue, 0, 4096));
+        std::string message;
+        if (renderSystem.DumpParticles(
+                command.stringValue,
+                maxPerEmitter,
+                message))
+        {
+            diagnostics.ReportInfo(message);
+        }
+        else
+        {
+            diagnostics.ReportWarning(message);
+        }
+        break;
+    }
+    case RuntimeCommandType::ReportParticleStats:
+    {
+        const ParticleFrameStats stats =
+            renderSystem.GetParticleFrameStats();
+        std::cout << stats.FormatLine() << std::endl;
+        std::cout << stats.ToJson().dump() << std::endl;
+        diagnostics.ReportInfo(stats.FormatLine());
+        break;
+    }
+    case RuntimeCommandType::SpawnParticleSystem:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle spawn ignored because no active World exists.");
+            break;
+        }
+
+        std::string validationError;
+        if (!ValidateParticleSpawnRequest(
+                command.stringValue,
+                command.secondaryStringValue,
+                command.particleSpawnPosition,
+                validationError))
+        {
+            diagnostics.ReportWarning(validationError);
+            break;
+        }
+
+        try
+        {
+            ParticleSystemAsset asset =
+                ParticleAssetLoader::Prepare(
+                    command.secondaryStringValue);
+            const bool replacing =
+                world->FindParticleSystem(command.stringValue) != nullptr;
+            WorldParticleSystem system;
+            system.name = command.stringValue;
+            system.assetPath = command.secondaryStringValue;
+            system.asset = std::move(asset);
+            system.model = BuildParticleSpawnModel(
+                command.particleSpawnPosition);
+            world->AddParticleSystem(
+                command.stringValue,
+                std::move(system));
+            diagnostics.ReportInfo(
+                std::string("Particle system ") +
+                (replacing ? "replaced: " : "spawned: ") +
+                command.stringValue + " (" +
+                command.secondaryStringValue + ")");
+        }
+        catch (const std::exception& error)
+        {
+            diagnostics.ReportWarning(
+                std::string("Particle spawn rejected: ") +
+                error.what());
+        }
+        break;
+    }
+    case RuntimeCommandType::DestroyParticleSystem:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle destroy ignored because no active World exists.");
+            break;
+        }
+        if (!world->RemoveParticleSystem(command.stringValue))
+        {
+            diagnostics.ReportWarning(
+                "Particle destroy found no system named: " +
+                command.stringValue);
+            break;
+        }
+        // 逻辑 World 立即移除；GPU 池由下一帧 Synchronize 交给 retire queue。
+        diagnostics.ReportInfo(
+            "Particle system destroyed: " + command.stringValue);
+        break;
+    }
+    case RuntimeCommandType::RestartParticleSystem:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle restart ignored because no active World exists.");
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle restart found no system named: " +
+                command.stringValue);
+            break;
+        }
+        // 只重置当前 World 实例的 CPU 侧模拟状态；不重新加载 PS 资产或纹理。
+        renderSystem.RestartParticleSystems(command.stringValue);
+        diagnostics.ReportInfo(
+            "Particle system restarted: " + command.stringValue);
+        break;
+    }
     case RuntimeCommandType::RunShaderReloadTest:
         ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
@@ -887,6 +1063,14 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
     executionResult.loadWorldCommandPath = command.stringValue;
     executionResult.loadWorldResolvedPath.clear();
     executionResult.loadWorldExtraSceneObjects = command.extraSceneObjects;
+    executionResult.loadWorldParticleDocuments.clear();
+    if (command.particleDocument.is_object() &&
+        !command.particleDocumentPath.empty())
+    {
+        executionResult.loadWorldParticleDocuments.emplace(
+            command.particleDocumentPath,
+            command.particleDocument);
+    }
     executionResult.rendererResourcesBeforeLoad = CaptureRuntimeRendererResourceFingerprint();
 
     if (command.stringValue.empty())

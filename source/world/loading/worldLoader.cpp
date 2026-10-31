@@ -73,7 +73,9 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(const std::string& scenePath) co
 RuntimeResult<WorldBuildPlan> WorldLoader::Load(
     const std::string& scenePath,
     const nlohmann::json& extraObjects,
-    const nlohmann::json& sceneDocument) const
+    const nlohmann::json& sceneDocument,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments) const
 {
     try
     {
@@ -107,7 +109,8 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
         buildPlan.authoredSceneJson = buildPlan.sceneJson;
         // 资产只在隔离准备中解析一次；网格计划与托管实例消费完全相同的有效声明。
         buildPlan.sceneJson = ResolveScriptBlueprintScene(CommonFunction::GetResourcePath(), buildPlan.sceneJson, scenePath);
-        buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(scenePath, buildPlan.sceneJson);
+        buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(
+            scenePath, buildPlan.sceneJson, particleDocuments);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
         return RuntimeResult<WorldBuildPlan>::Success(std::move(buildPlan));
     }

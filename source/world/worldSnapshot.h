@@ -13,6 +13,7 @@
 
 #include "baseStructs.h"
 #include "environmentType.h"
+#include "particles/particleAsset.h"
 #include "render/camera/cameraExposure.h"
 
 namespace VL
@@ -101,15 +102,28 @@ struct EnvironmentSnapshot
     SkyParametersGPU skyParameters;
 };
 
+struct ParticleSystemSnapshot
+{
+    RuntimeId particleSystemId = 0;
+    std::string name;
+    std::string assetPath;
+    ParticleSystemAsset asset;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+};
+
 // Immutable render-facing copy of one World frame. The renderer may keep this
 // after the game thread has already advanced to a newer mutable World state.
 struct WorldSnapshot
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    // 逻辑模拟时间（已乘 timeScale，Pause 时为 0）；粒子等逐帧模拟消费它，
+    // 而不是渲染器的 wall-clock delta。
+    float simulationDeltaSeconds = 1.0f / 60.0f;
     CameraSnapshot camera;
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;
+    std::vector<ParticleSystemSnapshot> particleSystems;
     EnvironmentSnapshot environment;
     int debugViewMode = 0;
 };

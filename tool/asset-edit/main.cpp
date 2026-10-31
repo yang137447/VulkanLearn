@@ -16,8 +16,9 @@ int main(int argc, char** argv)
             {
                 std::cout << "vl_asset_edit [--resource-root PATH] [--input REQUESTS.jsonl]\n"
                     "One editor protocol JSON request per line; results are JSON Lines on stdout.\n"
-                    "Read scene/mesh/texture.get_document, then modify with expectedDocumentRevision,\n"
-                    "validate, and explicitly save. No window or GPU is initialized.\n";
+                    "Read scene/mesh/texture/blueprint/particle.get_document, then modify with\n"
+                    "expectedDocumentRevision, validate, and explicitly save. Blueprint and particle\n"
+                    "documents also expose undo/redo. No window or GPU is initialized.\n";
                 return 0;
             }
             if ((option != "--resource-root" && option != "--input") || index + 1 == argc)

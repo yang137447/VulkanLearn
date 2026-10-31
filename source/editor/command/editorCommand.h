@@ -57,6 +57,10 @@ enum class EditorCommandType
     GetBlueprintDocument, GetBlueprintCapabilities, ModifyBlueprintDocument,
     ValidateBlueprintDocument, SaveBlueprintDocument, RevertBlueprintDocument, ReloadBlueprintDocument,
     UndoBlueprintDocument, RedoBlueprintDocument,
+    GetParticleDocument, GetParticleCapabilities, ModifyParticleDocument,
+    ValidateParticleDocument, SaveParticleDocument, RevertParticleDocument, ReloadParticleDocument,
+    CloseParticleDocument,
+    UndoParticleDocument, RedoParticleDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,
@@ -229,8 +233,8 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
-enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint };
-enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Undo, Redo };
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, ParticleSystem };
+enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Close, Undo, Redo };
 using EditorAssetFieldValue = std::variant<std::string, bool, double,
     std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>, nlohmann::json>;
 
@@ -241,6 +245,7 @@ struct EditorAssetFieldChange
     std::optional<std::string> objectIdentity;
     std::optional<uint32_t> slotIndex;
     std::optional<std::string> expectedSlotName;
+    std::optional<std::string> expectedEmitterName;
     bool reset = false;
     EditorAssetFieldValue value = std::string{};
 };

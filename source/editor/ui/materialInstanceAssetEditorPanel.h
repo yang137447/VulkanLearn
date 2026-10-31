@@ -97,7 +97,7 @@ public:
         actorDragPath.clear();
         CancelBlueprintViewportDrag();
     }
-    bool HasModal() const { return !pendingClosePath.empty() || aboutVisible || saveDialogVisible; }
+    bool HasModal() const { return !pendingClosePath.empty() || !pendingParticleRevertPath.empty() || aboutVisible || saveDialogVisible; }
     void ProcessEvent(Rml::Event& event) override;
 
 private:
@@ -204,6 +204,31 @@ private:
     void QueueBlueprintAssetDraft(nlohmann::json candidate);
     void FlushBlueprintAssetEdits();
     void SubmitBlueprintAssetCommand(EditorCommandType type, const std::string& path);
+    const EditorAssetDocumentResultPayload* ParticleDocument(const std::string& path) const;
+    bool RequestParticleHistory(bool redo);
+    void RefreshParticleHistoryControls();
+    void QueueParticleAssetDraft(EditorAssetFieldChange change);
+    void FlushParticleAssetEdits();
+    void SubmitParticleAssetCommand(EditorCommandType type, const std::string& path);
+    std::string ParticleFieldsMarkup() const;
+    std::string ParticleCurveMarkup(const nlohmann::json& keys, const std::string& curve) const;
+    nlohmann::json ParticleCurveKeys(const nlohmann::json& emitter,
+        const std::string& curve, const std::string& fieldPath) const;
+    const nlohmann::json* ActiveParticleEmitter(std::string& fieldPrefix) const;
+    void HandleParticleFieldEvent(Rml::Element& element);
+    void HandleParticleCurveKeyEvent(Rml::Element& element);
+    void HandleParticleCurveAdd(const std::string& curve);
+    void HandleParticleCurveRemove(const std::string& curve, size_t index);
+    std::string ParticleFlipbookTableMarkup() const;
+    void HandleParticleFlipbookTableEdit(Rml::Element& element);
+    void HandleParticleFlipbookTableAction(const std::string& action);
+    void HandleParticleEmitterStructure(const std::string& action);
+    bool ProcessParticleKeyboard(Rml::Event& event);
+    void HandleParticleFieldReset(Rml::Element& element);
+    void MergeParticleInFlightChanges();
+    std::string ParticleEmitterNameForField(const std::string& field) const;
+    void RequestParticlePreview(const std::string& path);
+    bool HasParticlePreview() const;
     std::string blueprintAssetIdentity;
     std::string blueprintAssetSelectionPath;
     std::string blueprintAssetSelectedComponent;
@@ -211,9 +236,35 @@ private:
     std::string pendingBlueprintPath;
     uint64_t pendingBlueprintRevision = 0;
     nlohmann::json pendingBlueprintDraft = nullptr;
+    std::string pendingParticlePath;
+    uint64_t pendingParticleRevision = 0;
+    std::vector<EditorAssetFieldChange> pendingParticleChanges;
+    bool particleCommandAwaitingSnapshot = false;
+    std::string particleCommandPath;
+    uint64_t particleCommandRevision = 0;
+    std::vector<EditorAssetFieldChange> inFlightParticleChanges;
+    uint64_t particleCommandFeedbackSequence = 0;
+    bool particleHistoryCommandAwaitingSnapshot = false;
+    std::string particleHistoryCommandPath;
+    uint64_t particleHistoryCommandRevision = 0;
+    uint64_t particlePreviewRevision = 0;
+    std::string particlePreviewPath;
+    std::string particleModule = "emitter";
+    // 多发射器 PS 的当前选择；按文档路径持久化，关闭标签后清理。
+    size_t particleEmitterIndex = 0;
+    std::string particleEmitterDocumentPath;
+    std::unordered_map<std::string, size_t> particleEmitterSelectionByPath;
+    std::unordered_map<std::string, std::string> particleModuleByPath;
+    std::string particleEmitterMarkupCache;
+    std::string particleFieldsMarkupCache;
+    // 结构命令在下一帧快照才可见；期间保留目标选择，避免按旧 count 永久夹回。
+    std::optional<size_t> pendingParticleEmitterSelection;
+    std::string pendingParticleEmitterSelectionPath;
     EditorAssetKind pendingCloseKind = EditorAssetKind::MaterialInstance;
     bool discardBlueprintThenClose = false;
     bool discardBlueprintCloseSubmitted = false;
+    bool discardParticleThenClose = false;
+    bool discardParticleCloseSubmitted = false;
     bool scriptPlacementVisible = false;
     bool scriptPlacementCreateAsset = false;
     void OpenBlueprintClassSource(const std::string& className);
@@ -285,6 +336,7 @@ private:
     uint64_t requestedPreviewGeneration = 0;
     bool requestedPreviewMaterial = false;
     bool requestedPreviewBlueprint = false;
+    bool requestedPreviewParticle = false;
     uint64_t appliedMaterialPreviewGeneration = 0;
 
     IEditorCommandSink* commandSink = nullptr;
@@ -385,6 +437,7 @@ private:
     bool activateMaterialDocument = false;
     std::string localStatus;
     std::string pendingClosePath;
+    std::string pendingParticleRevertPath;
     bool saveThenClose = false;
     bool saveCloseSubmitted = false;
     bool refreshingControls = false;

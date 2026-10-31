@@ -158,6 +158,28 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node)
     return environment;
 }
 
+Eigen::Matrix4f BuildParticleSystemModel(
+    const nlohmann::json& node)
+{
+    const Eigen::Vector3f position =
+        JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    const Eigen::Vector3f rotation =
+        JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    const Eigen::Vector3f scale = node.contains("scale")
+        ? JsonParser::ParseValue<Eigen::Vector3f>(node["scale"])
+        : Eigen::Vector3f::Ones();
+
+    Eigen::Matrix4f scaleMatrix = Eigen::Matrix4f::Identity();
+    scaleMatrix(0, 0) = scale.x();
+    scaleMatrix(1, 1) = scale.y();
+    scaleMatrix(2, 2) = scale.z();
+    Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+    translation.block<3, 1>(0, 3) = position;
+    return translation *
+        CommonFunction::RotationToMatrix(rotation) *
+        scaleMatrix;
+}
+
 void SetSkySunDirection(WorldEnvironment& environment, const Eigen::Vector3f& sceneToSunDirection)
 {
     const Eigen::Vector3f normalizedDirection = sceneToSunDirection.normalized();
@@ -269,6 +291,25 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             else if (type == "environment")
             {
                 environment = BuildEnvironment(objectJson);
+            }
+            else if (type == "particleSystem")
+            {
+                if (!objectPlan.particleAsset)
+                {
+                    throw std::runtime_error(
+                        "Particle system plan is missing its prepared asset: " +
+                        objectPlan.objectName);
+                }
+                WorldParticleSystem particleSystem;
+                particleSystem.name = objectPlan.objectName;
+                particleSystem.assetPath =
+                    objectJson.at("particlePath").get<std::string>();
+                particleSystem.asset = *objectPlan.particleAsset;
+                particleSystem.model =
+                    BuildParticleSystemModel(objectJson);
+                world->AddParticleSystem(
+                    objectPlan.objectName,
+                    std::move(particleSystem));
             }
         }
 

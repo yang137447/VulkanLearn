@@ -4,7 +4,7 @@
 
 ## 入口与归属
 
-Scene、Mesh、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
+Scene、Mesh、Texture、Blueprint、ParticleSystem 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
 通过 `MaterialInstanceEditorRuntime::SubmitJson` 投递到现有 `EditorCommandBus`；
 无窗口工具 `vl_asset_edit` 使用同一 codec、bus、`AssetCommandExecutor` 与文档服务。
 Console 只借用 facade，不操作 World 或文件。运行中入口需要启用编辑器。
@@ -15,6 +15,7 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、导入选项、已有材质槽的 MI 绑定 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
+| `particle.*` | `PS_*.json`；系统名称、`emitters[]` 容器，以及每个 emitter 的名称/局部 position、localSpace、renderMode/ribbonWidth/ribbonSegments/ribbonFade、mesh.path/mesh.scale/mesh.alignment、useFixedBounds/fixedBounds.center/fixedBounds.extent、池大小、连续发射/burst（burstInterval 周期重触发）、寿命、球形发射半径、初速度、重力、阻力、size/color 端点与曲线 key、rotation/rotationSpeed/rotationRandom、softness/softParticles/softParticleDistance/sortParticles/opacity、blend、maxDrawDistance/fadeDistance/minScreenSize/maxScreenSize、lod.tiers 与兼容 lodDistance/lodSpawnRateScale、collision（type/plane.normal/plane.offset/box.min/box.max/capsule.a/capsule.b/capsule.radius/bounce/friction/radius/killOnCollision/ccd）、texture 与 flipbook（columns/rows/fps/startFrame/endFrame/loop/randomStartFrame/frameDurations/framePivots/frameUVs/frameRotations） |
 
 场景中的模型变换属于 Scene，共享模型的槽绑定属于 Mesh；MI 参数和贴图槽由原 MI 服务拥有。
 接口不编辑几何或图片像素，不支持 Scene 对象增删/改名/类型转换、槽增删/重排、任意 JSON Pointer、
@@ -25,16 +26,21 @@ BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 [C# 蓝图](csharp-blueprint-runtime.md) 的场景新增/改名/复制/删除、实例属性与 inline
 组件/物理编辑、获准的继承组件字段编辑/重置由 GT 作者适配器复用 Scene 草稿与保存 owner，
 不在此 JSON facade 的能力表内。
-编辑器的 Scene Undo/Redo 也属于该作者路径；本 facade 只为 BP 提供 `blueprint.undo` / `blueprint.redo`。
+编辑器的 Scene Undo/Redo 也属于该作者路径；本 facade 为 BP 与 ParticleSystem 分别提供
+`blueprint.undo` / `blueprint.redo` 和 `particle.undo` / `particle.redo`。
 标准修改导致草稿与 Scene 历史当前值不符时，旧历史不可回放。
 
 ## 生命周期
 
-四种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
+五种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
 `save`、`revert`、`reload`。已有 `scene.save` 复用同一 Scene owner。
-Blueprint 另支持 `undo`、`redo`，都要求当前 revision；文档投影的 `canUndo` / `canRedo` 标明可用性。
+`particle.close` 只关闭已打开的内存文档，不写盘；草稿仍脏时以 `document_dirty` 拒绝，
+编辑器“丢弃并关闭”先提交 `particle.revert` 再提交 `particle.close`。
+Blueprint 与 ParticleSystem 另支持各自的 `undo`、`redo`，都要求当前 revision；文档投影的
+`canUndo` / `canRedo` 标明可用性。
 两个历史栈合计最多 32 步、16 MiB 序列化 JSON，保存保留、revert/reload 清空，新编辑清空 redo。
 历史只修改草稿，候选引用/类校验失败不消耗记录；保存后的撤销重新变脏，不自动改磁盘。
+粒子的一次 `modify` 就是一个历史步骤，因此整条 `emitters` 增删/重排结构变更也可整体撤销。
 
 读取命令打开文档并返回 `assetPath`、`documentRevision`、`dirty`、BLAKE3 `sourceDigest`、
 完整可编辑投影及能力。投影不展开未管理字段或内嵌 `data`；原始 JSON 草稿保留未管理内容，
@@ -85,6 +91,14 @@ UI 的保持亮度换算仍属于 UI actor adapter。Camera rotation 明确清�
 
 场景 JSON 与 Texture JSON 分别由 `sceneJsonValidator.h`、`textureAssetValidation.h`
 共享给正式 loader 和标准资产候选；Mesh 使用现有 `MeshAssetValidator`。
+ParticleSystem 复用 `ParticleAssetLoader::ParseJson`，因此编辑器草稿与 World 加载共用同一套
+曲线 key、flipbook、碰撞和发射器字段边界。
+多发射器 PS 的字段路径是 `emitters.<index>.<field>`；数组下标不参与身份猜测，越界立即拒绝。
+显式多发射器文档的根 `fields` 只发布系统 `name` 与受控 `emitters`，每个
+`emitters[i]` 另带完整 `fields`；根级 emitter 字段写入被拒绝，必须使用
+`emitters.<index>.<field>`。字段变更可带 `expectedEmitterName`，服务按本批修改开始前的
+发射器名校验，名字变化即拒绝；同一批次内先改名再改其他字段仍按原名通过。
+没有 `emitters` 数组的旧 PS 继续使用根字段路径，保持向后兼容。
 校验检查文档及引用文件存在/类型/资源根边界，结果标记
 `validationLevel:"document_and_references"`、`contentPreflight:false`。
 这不导入模型、不验证源材质槽与几何对应关系、不解码图片，也不准备 Vulkan 资源。
@@ -104,7 +118,7 @@ Scene 草稿与已有 UI actor 编辑使用同一 baseline/draft/revision，进�
 可读取最新草稿继续编辑，不必等待前一个分量触发的重载。标准 API 改写使历史不匹配时，
 仍受上述 staged Scene 门禁约束；该例外不授权对旧 World 做 live 参数补丁。
 
-Mesh/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save。
+Mesh/Texture/ParticleSystem 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save/particle.save。
 本接口没有 GPU 热替换，保存后需经正式资源重建/World 加载消费新描述；
 texture.reload/mesh.reload 只重读作者文档。API 没有新增模型/贴图 Details 编辑控件。
 MI 的现有预览协议保持独立。
@@ -131,7 +145,7 @@ cmake --build build --target vl_asset_edit -j6
 
 省略 `--input` 从 stdin 持续读 JSON Lines。整次读/改/校验/保存放在同一进程中，
 每行一个请求、stdout 每行一个结果。退出码 0 表示所有命令成功，2 表示有命令拒绝/失败，
-1 表示配置或输入文件错误。CLI 仅支持上述四种标准资产命令。
+1 表示配置或输入文件错误。CLI 仅支持上述五种标准资产命令。
 
 ```jsonl
 {"protocolVersion":1,"commandId":1,"source":"ai","command":"texture.get_document","payload":{"assetPath":"Maps/SC_example/Textures/T_example.json"}}

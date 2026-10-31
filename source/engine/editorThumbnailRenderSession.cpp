@@ -7,9 +7,11 @@
 #include "engine/editorThumbnailPreparation.h"
 #include "engine/modelPreviewCamera.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/particlePreviewRequest.h"
 #include "material.h"
 #include "materialInstance.h"
 #include "mesh/loader/common/meshAssetLoader.h"
+#include "particles/particleRenderer.h"
 #include "sceneNode.h"
 #include "pipeline/pipelineFactory.h"
 #include "profiler.h"
@@ -35,6 +37,8 @@ namespace VL
 {
 namespace
 {
+constexpr uint32_t ThumbnailSide = 256;
+
 template<class T> T Require(RuntimeResult<T> result)
 {
     if (result.IsFailure()) throw std::runtime_error(FormatRuntimeError(result.Error()));
@@ -54,6 +58,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     PipelineFactory::GraphicsCandidateState baseGraphics;
     RendererFrameResources frames;
     EnvironmentIblBaker ibl;
+    ParticleRenderer particleRenderer;
     WorldBuildPlan plan;
     RendererMeshLoadResult materialPreviewMesh;
     EditorThumbnailJob<EditorThumbnailPreparationResult> preparation;
@@ -69,6 +74,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     uint32_t mip = 0;
     int stage = 0;
     bool descriptorsReady = false;
+    bool particleAssetThumbnail = false;
 
     Impl(RendererBackendVulkan& backend, PipelineFactory& factory) : backend(backend), factory(factory) {}
     ~Impl()
@@ -76,6 +82,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         // 退出先收口唯一 CPU worker，再销毁会话 GPU 资源。
         preparation.Wait();
         // 每个提交都已等本任务的 fence；这些私有资源从未进入主帧，无需全局 waitIdle。
+        particleRenderer.Shutdown(backend);
         resolved = {};
         cache.Clear();
         baseCache.reset();
@@ -224,16 +231,33 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     bool IsCsmEnabled() const override { return false; }
     bool IsShadowCascadeActive(uint32_t) const override { return false; }
     void DrawEditorGridGeometry(vk::CommandBuffer&) override {}
+    void RecordParticlePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override
+    {
+        particleRenderer.RecordGraphics(
+            commandBuffer,
+            swapChainImageIndex,
+            renderPass);
+    }
 
     void ConfigureScene()
     {
         auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, cache, 4));
-        ModelPreviewCamera camera;
-        if (!camera.Synchronize(*world, 1.0f)) throw std::runtime_error("Thumbnail model has no bounds");
+        // 粒子预览使用 SC_particle_preview 自带相机；ModelPreviewCamera 只认识
+        // SC_model_preview 的模型包围盒，不能套到固定粒子预览场景上。
+        if (!particleAssetThumbnail)
+        {
+            ModelPreviewCamera camera;
+            if (!camera.Synchronize(*world, 1.0f)) throw std::runtime_error("Thumbnail model has no bounds");
+        }
         auto& projection = *world->GetCamera();
         projection.SetProjection(projection.GetHFOV(), 1.0f, projection.GetClipNear(), projection.GetClipFar());
         WorldSnapshotBuilder snapshots;
         scene = Require(RendererFrontend().BuildRenderScene(Require(snapshots.Build(*world, {}))));
+        // 缩略图只推进一次固定步长；prewarm 在其中填满发射器池。
+        scene.simulationDeltaSeconds = 1.0f / 60.0f;
         resolved = Require(ResolvedRenderSceneBuilder().Build(scene, cache));
         frames.EnsureLightCapacity(scene.lights.size(), backend);
         RendererDescriptorContext descriptors;
@@ -244,6 +268,13 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         if (descriptorsReady) graph.RefreshRuntimeDescriptors(backend, descriptors);
         else { graph.RenderInitialize(backend, descriptors); descriptorsReady = true; }
         RendererObjectResourceRegistry().InitializeResolvedSceneResources(backend, descriptors, scene, resolved, cache);
+        if (particleAssetThumbnail)
+        {
+            particleRenderer.EnsureInitialized(factory, backend, graph);
+            if (!particleRenderer.IsInitialized())
+                throw std::runtime_error("Particle thumbnail requires a particle pass");
+            particleRenderer.Synchronize(scene);
+        }
         // 统一固定曝光，与中央预览的相机契约一致；不读取活动图上用户正编辑的参数。
         const float exposure = ExposureScale(scene.camera.exposure);
         for (auto& pair : graph.GetRenderpasses())
@@ -273,6 +304,12 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         try
         {
             command = backend.BeginSingleTimeCommands();
+            // compute 必须早于 particle pass；图形 pass 只消费本帧模拟结果。
+            particleRenderer.RecordSimulation(
+                command,
+                0,
+                scene,
+                vk::Extent2D{ThumbnailSide, ThumbnailSide});
             size_t index = 0;
             for (const auto& name : graph.GetRenderpassesOrdered())
             {
@@ -290,7 +327,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eTransfer,
                 {}, {}, {}, barrier);
             // 成图必须复制到独立槽位，下一资产会覆盖 graph 输出；CPU/UI 只接收逻辑 token。
-            auto completedImage = backend.RecordThumbnailImage(command, output.image, 256, 256);
+            auto completedImage = backend.RecordThumbnailImage(
+                command, output.image, ThumbnailSide, ThumbnailSide);
             backend.EndSingleTimeCommands(command);
             image = std::move(completedImage);
         }
@@ -390,8 +428,13 @@ void EditorThumbnailRenderSession::Reset()
 }
 void EditorThumbnailRenderSession::Begin(const std::string& path, EditorUi::EditorAssetKind kind, const nlohmann::json& graph)
 {
-    if (!impl->baseCache || impl->graphJson != BuildEditorThumbnailGraph(graph))
+    const bool particleThumbnail = kind == EditorUi::EditorAssetKind::ParticleSystem;
+    const auto thumbnailGraph = BuildEditorThumbnailGraph(graph);
+    // 模型/材质与粒子预览使用不同的固定场景和 HDRI，不能复用对方的会话基底。
+    if (!impl->baseCache || impl->particleAssetThumbnail != particleThumbnail ||
+        impl->graphJson != thumbnailGraph)
         Reset();
+    impl->particleAssetThumbnail = particleThumbnail;
     impl->preparation.Invalidate();
     impl->preparedAsset.reset();
     impl->objectIndex = 0;
@@ -408,9 +451,12 @@ void EditorThumbnailRenderSession::Begin(const std::string& path, EditorUi::Edit
     }
     try
     {
-        impl->graphJson = BuildEditorThumbnailGraph(graph);
-        impl->plan = Require(WorldLoader().Load(CommonFunction::Path(ModelPreviewScenePath),
-            kind == EditorUi::EditorAssetKind::MaterialInstance ? BuildMaterialPreviewObjects(path) : BuildModelPreviewObjects(path)));
+        impl->graphJson = thumbnailGraph;
+        impl->plan = Require(WorldLoader().Load(
+            CommonFunction::Path(particleThumbnail ? ParticlePreviewScenePath : ModelPreviewScenePath),
+            particleThumbnail ? BuildParticlePreviewObjects(path) :
+                kind == EditorUi::EditorAssetKind::MaterialInstance ?
+                    BuildMaterialPreviewObjects(path) : BuildModelPreviewObjects(path)));
     }
     catch (const std::exception& error) { impl->error = error.what(); impl->stage = 8; }
 }

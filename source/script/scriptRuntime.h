@@ -71,6 +71,16 @@ public:
     ScriptRuntimeView View(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
+    // 粒子等 GPU 模拟消费的逻辑帧间隔：Pause=0，Playing 用已乘 timeScale 的
+    // time.delta，Editing/未加载脚本时回退到调用方的编辑器时间。
+    float ParticleDeltaOr(float fallback) const
+    {
+        return SelectParticleSimulationDelta(
+            state,
+            host != nullptr,
+            static_cast<float>(time.delta),
+            fallback);
+    }
     const nlohmann::json& Classes() const { return classes; }
     const nlohmann::json& ComponentClasses() const { return componentClasses; }
     bool SetTimeScale(float value, std::string& error);

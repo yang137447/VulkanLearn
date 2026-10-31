@@ -50,6 +50,13 @@ std::filesystem::path ResolveSource(const std::filesystem::path& root, const std
     return physical;
 }
 
+bool UsesGpuThumbnail(EditorUi::EditorAssetKind kind)
+{
+    return kind == EditorUi::EditorAssetKind::Mesh ||
+        kind == EditorUi::EditorAssetKind::MaterialInstance ||
+        kind == EditorUi::EditorAssetKind::ParticleSystem;
+}
+
 std::vector<uint8_t> ReadBounded(const std::filesystem::path& path, size_t limit)
 {
     const auto size = std::filesystem::file_size(path);
@@ -281,13 +288,12 @@ struct EditorThumbnailLibrary::Impl
                 const auto bytes = ReadBounded(ResolveSource(root, path), EditorJsonAssetLimits::MaxFileBytes);
                 EditorUi::EditorJsonDocumentSnapshot parsed;
                 if (ParseEditorJsonAsset(path, {reinterpret_cast<const char*>(bytes.data()), bytes.size()}, parsed) &&
-                    parsed.diagnostic.empty() && (parsed.kind == EditorUi::EditorAssetKind::Mesh ||
-                    parsed.kind == EditorUi::EditorAssetKind::MaterialInstance)) renderKind = parsed.kind;
+                    parsed.diagnostic.empty() && UsesGpuThumbnail(parsed.kind)) renderKind = parsed.kind;
                 else value = Generate(root, cacheRoot, path);
             }
             catch (const std::exception& error) { value.diagnostic = error.what(); }
             lock.lock();
-            // Mesh/MI 只排队路径，不占用贴图完成槽；GPU 仍然只领取一个请求。
+            // Mesh/MI/PS 只排队路径，不占用贴图完成槽；GPU 仍然只领取一个请求。
             // 队列受可见集合上限约束，快速滚动/刷新期间的旧任务不能覆盖当前页。
             if (generation == epoch && Wanted(path))
             {

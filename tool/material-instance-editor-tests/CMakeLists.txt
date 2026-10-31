@@ -133,6 +133,29 @@ vulkanlearn_add_gtest(
 
 add_executable(material_instance_editor_production_tests
     materialInstanceEditorProductionTests.cpp
+    particleAssetTests.cpp
+    particleBurstTests.cpp
+    particleCollisionTests.cpp
+    particleCurveEditTests.cpp
+    particleDocumentHistoryTests.cpp
+    particleDumpTests.cpp
+    particleFlipbookEditTests.cpp
+    particleFrameStatsTests.cpp
+    particleEmitterBoundsTests.cpp
+    particleEmitterCullingTests.cpp
+    particleEmitterEditTests.cpp
+    particleEmitterKeyTests.cpp
+    particleEmitterOrderTests.cpp
+    particleFlipbookTests.cpp
+    particleLodTests.cpp
+    particleMeshTests.cpp
+    particleMeshReferenceTests.cpp
+    particlePreviewUpdateTests.cpp
+    particleRenderIdentityTests.cpp
+    particleRibbonTests.cpp
+    particleRuntimeCommandTests.cpp
+    particleSimulationDeltaTests.cpp
+    particleTextureReferenceTests.cpp
     "${VULKANLEARN_SOURCE_DIR}/source/material/materialDescriptorSchema.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/material/validation/materialAssetValidator.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
@@ -151,6 +174,7 @@ target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp")

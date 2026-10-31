@@ -59,6 +59,16 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::ReloadBlueprintDocument, "blueprint.reload", 1, true, true, false},
     {EditorCommandType::UndoBlueprintDocument, "blueprint.undo", 1, true, true, false},
     {EditorCommandType::RedoBlueprintDocument, "blueprint.redo", 1, true, true, false},
+    {EditorCommandType::GetParticleDocument, "particle.get_document", 1, false, false, false},
+    {EditorCommandType::GetParticleCapabilities, "particle.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyParticleDocument, "particle.modify", 1, true, true, false},
+    {EditorCommandType::ValidateParticleDocument, "particle.validate", 1, false, false, false},
+    {EditorCommandType::SaveParticleDocument, "particle.save", 1, true, true, false},
+    {EditorCommandType::RevertParticleDocument, "particle.revert", 1, true, true, false},
+    {EditorCommandType::ReloadParticleDocument, "particle.reload", 1, true, true, false},
+    {EditorCommandType::CloseParticleDocument, "particle.close", 1, false, false, false},
+    {EditorCommandType::UndoParticleDocument, "particle.undo", 1, true, true, false},
+    {EditorCommandType::RedoParticleDocument, "particle.redo", 1, true, true, false},
     {EditorCommandType::ConnectMaterialInstancePreview, "material.preview.connect", 1, false, false, true},
     {EditorCommandType::DisconnectMaterialInstancePreview, "material.preview.disconnect", 1, false, false, false},
     {EditorCommandType::ApplyMaterialInstancePreview, "material.preview.apply", 1, false, false, true},
@@ -578,6 +588,8 @@ std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandT
         return EditorAssetDocumentKind::Texture;
     if (type >= EditorCommandType::GetBlueprintDocument && type <= EditorCommandType::RedoBlueprintDocument)
         return EditorAssetDocumentKind::Blueprint;
+    if (type >= EditorCommandType::GetParticleDocument && type <= EditorCommandType::RedoParticleDocument)
+        return EditorAssetDocumentKind::ParticleSystem;
     return std::nullopt;
 }
 
@@ -586,19 +598,29 @@ std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType ty
     switch (type)
     {
     case EditorCommandType::GetSceneDocument: case EditorCommandType::GetMeshDocument:
-    case EditorCommandType::GetTextureDocument: case EditorCommandType::GetBlueprintDocument: return EditorAssetOperation::GetDocument;
+    case EditorCommandType::GetTextureDocument: case EditorCommandType::GetBlueprintDocument:
+    case EditorCommandType::GetParticleDocument: return EditorAssetOperation::GetDocument;
     case EditorCommandType::GetSceneCapabilities: case EditorCommandType::GetMeshCapabilities:
-    case EditorCommandType::GetTextureCapabilities: case EditorCommandType::GetBlueprintCapabilities: return EditorAssetOperation::GetCapabilities;
+    case EditorCommandType::GetTextureCapabilities: case EditorCommandType::GetBlueprintCapabilities:
+    case EditorCommandType::GetParticleCapabilities: return EditorAssetOperation::GetCapabilities;
     case EditorCommandType::ModifySceneDocument: case EditorCommandType::ModifyMeshDocument:
-    case EditorCommandType::ModifyTextureDocument: case EditorCommandType::ModifyBlueprintDocument: return EditorAssetOperation::Modify;
+    case EditorCommandType::ModifyTextureDocument: case EditorCommandType::ModifyBlueprintDocument:
+    case EditorCommandType::ModifyParticleDocument: return EditorAssetOperation::Modify;
     case EditorCommandType::ValidateSceneDocument: case EditorCommandType::ValidateMeshDocument:
-    case EditorCommandType::ValidateTextureDocument: case EditorCommandType::ValidateBlueprintDocument: return EditorAssetOperation::Validate;
+    case EditorCommandType::ValidateTextureDocument: case EditorCommandType::ValidateBlueprintDocument:
+    case EditorCommandType::ValidateParticleDocument: return EditorAssetOperation::Validate;
     case EditorCommandType::SaveSceneDocument: case EditorCommandType::SaveMeshDocument:
-    case EditorCommandType::SaveTextureDocument: case EditorCommandType::SaveBlueprintDocument: return EditorAssetOperation::Save;
+    case EditorCommandType::SaveTextureDocument: case EditorCommandType::SaveBlueprintDocument:
+    case EditorCommandType::SaveParticleDocument: return EditorAssetOperation::Save;
     case EditorCommandType::RevertSceneDocument: case EditorCommandType::RevertMeshDocument:
-    case EditorCommandType::RevertTextureDocument: case EditorCommandType::RevertBlueprintDocument: return EditorAssetOperation::Revert;
+    case EditorCommandType::RevertTextureDocument: case EditorCommandType::RevertBlueprintDocument:
+    case EditorCommandType::RevertParticleDocument: return EditorAssetOperation::Revert;
     case EditorCommandType::ReloadSceneDocument: case EditorCommandType::ReloadMeshDocument:
-    case EditorCommandType::ReloadTextureDocument: case EditorCommandType::ReloadBlueprintDocument: return EditorAssetOperation::Reload;
+    case EditorCommandType::ReloadTextureDocument: case EditorCommandType::ReloadBlueprintDocument:
+    case EditorCommandType::ReloadParticleDocument: return EditorAssetOperation::Reload;
+    case EditorCommandType::CloseParticleDocument: return EditorAssetOperation::Close;
+    case EditorCommandType::UndoParticleDocument: return EditorAssetOperation::Undo;
+    case EditorCommandType::RedoParticleDocument: return EditorAssetOperation::Redo;
     case EditorCommandType::UndoBlueprintDocument: return EditorAssetOperation::Undo;
     case EditorCommandType::RedoBlueprintDocument: return EditorAssetOperation::Redo;
     default: return std::nullopt;

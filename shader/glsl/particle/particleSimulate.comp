@@ -1,0 +1,406 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+#include "particleStorageRW.glsl"
+
+// 轻量 PCG hash：同一 index 在时间推进后得到不连续随机流，
+// 避免 CPU 维护逐粒子随机种子 buffer。
+uint Hash(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+float Random(inout uint state)
+{
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    word = (word >> 22u) ^ word;
+    return float(word & 0x00ffffffu) / 16777215.0;
+}
+
+// 世界空间解析碰撞：粒子球与无限平面/轴对齐 AABB/线段胶囊。
+// 与 source/particles/particleCollision.h 的 CPU 镜像保持同一套公式。
+void ResolveCollision(
+    inout vec3 position,
+    inout vec3 velocity,
+    inout float age,
+    float lifetime)
+{
+    int collisionType = int(frame.collisionParams.x + 0.5);
+    if (collisionType == 0)
+    {
+        return;
+    }
+
+    float bounce = clamp(frame.collisionParams.y, 0.0, 1.0);
+    float friction = clamp(frame.collisionParams.z, 0.0, 1.0);
+    float radius = max(frame.collisionParams.w, 0.0);
+    bool hit = false;
+
+    if (collisionType == 1)
+    {
+        vec3 normal = frame.collisionPlane.xyz;
+        float distance =
+            dot(position, normal) - frame.collisionPlane.w - radius;
+        if (distance < 0.0)
+        {
+            position -= normal * distance;
+            float normalSpeed = dot(velocity, normal);
+            if (normalSpeed < 0.0)
+            {
+                vec3 normalVelocity = normal * normalSpeed;
+                vec3 tangentVelocity = velocity - normalVelocity;
+                velocity = tangentVelocity * (1.0 - friction) -
+                    normalVelocity * bounce;
+            }
+            hit = true;
+        }
+    }
+    else if (collisionType == 2)
+    {
+        vec3 expandedMin = frame.collisionBoxMin.xyz - vec3(radius);
+        vec3 expandedMax = frame.collisionBoxMax.xyz + vec3(radius);
+        if (any(lessThan(position, expandedMin)) ||
+            any(greaterThan(position, expandedMax)))
+        {
+            return;
+        }
+
+        int axis = 0;
+        bool minimumSide = true;
+        float best = 3.402823466e+38;
+        for (int candidate = 0; candidate < 3; ++candidate)
+        {
+            float toMinimum = position[candidate] - expandedMin[candidate];
+            float toMaximum = expandedMax[candidate] - position[candidate];
+            if (toMinimum < best)
+            {
+                best = toMinimum;
+                axis = candidate;
+                minimumSide = true;
+            }
+            if (toMaximum < best)
+            {
+                best = toMaximum;
+                axis = candidate;
+                minimumSide = false;
+            }
+        }
+
+        vec3 normal = vec3(0.0);
+        if (minimumSide)
+        {
+            position[axis] = expandedMin[axis];
+            normal[axis] = -1.0;
+        }
+        else
+        {
+            position[axis] = expandedMax[axis];
+            normal[axis] = 1.0;
+        }
+
+        float normalSpeed = dot(velocity, normal);
+        vec3 normalVelocity = normal * normalSpeed;
+        vec3 tangentVelocity = velocity - normalVelocity;
+        float reflectedNormalSpeed = normalSpeed < 0.0
+            ? -bounce * normalSpeed
+            : normalSpeed;
+        velocity = tangentVelocity * (1.0 - friction) +
+            normal * reflectedNormalSpeed;
+        hit = true;
+    }
+    else if (collisionType == 3)
+    {
+        // 胶囊：把 p 投影到线段 AB 得到最近点，再按球-球推出。
+        // A/B 重合时 t=0，退化为球。
+        vec3 a = frame.collisionCapsuleA.xyz;
+        vec3 segment = frame.collisionCapsuleB.xyz - a;
+        float segmentLengthSquared = dot(segment, segment);
+        float t = 0.0;
+        if (segmentLengthSquared > 1.0e-12)
+        {
+            t = clamp(
+                dot(position - a, segment) / segmentLengthSquared,
+                0.0,
+                1.0);
+        }
+        vec3 closest = a + segment * t;
+        float surfaceDistance =
+            max(frame.collisionParams2.y, 0.0) + radius;
+        vec3 offset = position - closest;
+        float distance = length(offset);
+        if (distance < surfaceDistance)
+        {
+            // 圆心恰在轴线上时方向未定义；沿用 +Y 稳定轴避免 NaN。
+            vec3 normal = distance > 1.0e-6
+                ? offset / distance
+                : vec3(0.0, 1.0, 0.0);
+            position = closest + normal * surfaceDistance;
+
+            float normalSpeed = dot(velocity, normal);
+            if (normalSpeed < 0.0)
+            {
+                vec3 normalVelocity = normal * normalSpeed;
+                vec3 tangentVelocity = velocity - normalVelocity;
+                velocity = tangentVelocity * (1.0 - friction) -
+                    normalVelocity * bounce;
+            }
+            hit = true;
+        }
+    }
+
+    if (hit && frame.collisionBoxMin.w > 0.5)
+    {
+        age = lifetime;
+    }
+}
+
+void SpawnParticle(
+    uint index,
+    inout Particle particle,
+    inout uint randomState,
+    bool prewarm)
+{
+    // 球体体积采样：方向均匀，半径按 cbrt 分布，避免粒子堆在球心。
+    float cosTheta = 1.0 - 2.0 * Random(randomState);
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi = 6.28318530718 * Random(randomState);
+    vec3 direction = vec3(
+        sinTheta * cos(phi),
+        cosTheta,
+        sinTheta * sin(phi));
+
+    float radius =
+        frame.shape.x * pow(Random(randomState), 1.0 / 3.0);
+    vec3 localPosition = direction * radius;
+    vec3 localVelocity = mix(
+        frame.velocityMinLifetimeMin.xyz,
+        frame.velocityMaxLifetimeMax.xyz,
+        vec3(Random(randomState),
+             Random(randomState),
+             Random(randomState)));
+
+    float lifetime = mix(
+        frame.velocityMinLifetimeMin.w,
+        frame.velocityMaxLifetimeMax.w,
+        Random(randomState));
+    bool burst = frame.shape.y > 0.5;
+    float age = (prewarm && !burst)
+        ? Random(randomState) * lifetime * 0.95
+        : 0.0;
+
+    // localSpace=true 时粒子状态保存在发射器局部空间，spawn 不做变换；
+    // gravity/drag 也按局部空间作者化并在局部空间积分。其余发射器保持
+    // 原来的世界空间模拟，只有顶点阶段才做 billboard 处理。
+    bool localSpace = frame.shape.z > 0.5;
+    vec3 simulationPosition = localSpace
+        ? localPosition
+        : (frame.localToWorld * vec4(localPosition, 1.0)).xyz;
+    vec3 simulationVelocity = localSpace
+        ? localVelocity
+        : mat3(frame.localToWorld) * localVelocity;
+
+    // prewarm: 根据随机年龄把粒子积分到“已经存在 age 秒”的状态，
+    // 避免首帧整池粒子挤在发射球附近。运行时每帧仍走下面的半隐式积分。
+    // 解析解：dv/dt = g - k v
+    //   v(t) = g/k + (v0 - g/k) * e^{-kt}
+    //   p(t) = g/k * t + (v0 - g/k) * (1 - e^{-kt}) / k
+    if (prewarm && age > 0.0)
+    {
+        vec3 gravity = frame.gravityDrag.xyz;
+        float drag = max(frame.gravityDrag.w, 0.0);
+        if (drag <= 1.0e-5)
+        {
+            simulationPosition +=
+                simulationVelocity * age + 0.5 * gravity * age * age;
+            simulationVelocity += gravity * age;
+        }
+        else
+        {
+            vec3 terminal = gravity / drag;
+            float decay = exp(-drag * age);
+            simulationPosition += terminal * age +
+                (simulationVelocity - terminal) * (1.0 - decay) / drag;
+            simulationVelocity =
+                terminal + (simulationVelocity - terminal) * decay;
+        }
+    }
+
+    // 资产校验拒绝 localSpace + collision；这里仍显式跳过，保证局部
+    // 坐标不会被误当成世界坐标求交。
+    if (!localSpace)
+    {
+        ResolveCollision(
+            simulationPosition,
+            simulationVelocity,
+            age,
+            lifetime);
+    }
+
+    particle.positionAge = vec4(
+        simulationPosition,
+        age);
+    particle.velocityLife = vec4(
+        simulationVelocity,
+        lifetime);
+    // 新生成（含 prewarm）的历史点全部等于生成位置：首帧 ribbon 会退化成
+    // 零长度条带，随后由每帧的历史右移逐渐拉开。
+    particle.history0 = particle.positionAge;
+    particle.history1 = particle.positionAge;
+    particle.history2 = particle.positionAge;
+    particleBuffer.particles[index] = particle;
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint count =
+        uint(particleBuffer.particles.length());
+    if (index >= count)
+    {
+        return;
+    }
+
+    uint randomState = Hash(
+        index * 0x9e3779b9u ^
+        uint(frame.simulation.z * 1000.0) ^
+        uint(frame.simulation.w > 0.5 ? 0x51ed270bu : 0u));
+
+    Particle particle = particleBuffer.particles[index];
+    if (frame.simulation.w > 0.5)
+    {
+        // 首帧预热只填稳态存活量：spawnRate * 平均寿命；burst 仍整池喷发。
+        // spawnRate=0 的连续发射器预热后保持全池死亡，不能凭空填满。
+        bool burst = frame.shape.y > 0.5;
+        if (!burst)
+        {
+            float averageLifetime = 0.5 *
+                (frame.velocityMinLifetimeMin.w +
+                 frame.velocityMaxLifetimeMax.w);
+            // screenParams.z 是未经过 LOD 缩放的作者 spawnRate；
+            // LOD 只改连续发射。
+            uint target = uint(clamp(
+                frame.screenParams.z * averageLifetime,
+                0.0, float(count)));
+            if (index >= target)
+            {
+                particle.positionAge = vec4(0.0);
+                particle.velocityLife = vec4(0.0);
+                particle.history0 = vec4(0.0);
+                particle.history1 = vec4(0.0);
+                particle.history2 = vec4(0.0);
+                particleBuffer.particles[index] = particle;
+                return;
+            }
+        }
+        SpawnParticle(index, particle, randomState, true);
+        return;
+    }
+
+    // burst 重触发：interval>0 时跨周期整池重生；非跨周期帧保持粒子状态，
+    // 已死亡的粒子不会复活。interval<=0 继续沿用一次性 burst 语义。
+    bool burstEmitter = frame.shape.y > 0.5;
+    float burstInterval = frame.burstParams.x;
+    if (burstEmitter && burstInterval > 0.0)
+    {
+        float time = frame.simulation.z;
+        float previousTime =
+            max(time - frame.simulation.y, 0.0);
+        if (floor(time / burstInterval) >
+            floor(previousTime / burstInterval))
+        {
+            SpawnParticle(
+                index,
+                particle,
+                randomState,
+                false);
+            return;
+        }
+    }
+
+    if (!IsParticleAlive(particle))
+    {
+        // 一次性 burst 只在 prewarm 帧整池喷发；粒子死亡后保持死亡。
+        // interval>0 的 burst 已在上面处理跨周期重触发，同样不补发。
+        if (burstEmitter)
+        {
+            return;
+        }
+        // 发射预算按整池大小归一化；只有死亡粒子参与抽样，
+        // 因此稳态存活数约为 spawnRate * averageLifetime。
+        float spawnChance = clamp(
+            frame.simulation.x * frame.simulation.y /
+                max(float(count), 1.0),
+            0.0,
+            1.0);
+        if (Random(randomState) < spawnChance)
+        {
+            SpawnParticle(
+                index,
+                particle,
+                randomState,
+                false);
+        }
+        return;
+    }
+
+    float deltaSeconds = frame.simulation.y;
+    particle.positionAge.w += deltaSeconds;
+    if (particle.positionAge.w >= particle.velocityLife.w)
+    {
+        particle.positionAge.w = particle.velocityLife.w;
+        particleBuffer.particles[index] = particle;
+        return;
+    }
+
+    // 历史右移必须在积分之前：history0 记录本帧起点，当前位置经过积分后
+    // 成为下一帧的 history0。死亡分支不更新历史，避免把尸体位置写进条带。
+    particle.history2 = particle.history1;
+    particle.history1 = particle.history0;
+    particle.history0 = particle.positionAge;
+
+    // 模拟空间积分：世界空间发射器使用世界坐标；localSpace 发射器使用
+    // 局部坐标，重力与 drag 也按局部空间解释。
+    // CCD 按一帧扫过的距离拆分子步，最多 8 步；每个子步使用 dt/steps
+    // 的重力与指数 drag，保持总时间一致（子步近似）。
+    int collisionType = int(frame.collisionParams.x + 0.5);
+    bool ccd = frame.collisionParams2.x > 0.5 && collisionType != 0;
+    int steps = 1;
+    if (ccd)
+    {
+        float stepDistance = max(frame.collisionParams.w, 0.5);
+        float swept = length(particle.velocityLife.xyz) * deltaSeconds;
+        steps = int(clamp(ceil(swept / stepDistance), 1.0, 8.0));
+    }
+    float stepSeconds = deltaSeconds / float(steps);
+    float damping = exp(-frame.gravityDrag.w * stepSeconds);
+    vec3 position = particle.positionAge.xyz;
+    vec3 velocity = particle.velocityLife.xyz;
+    float age = particle.positionAge.w;
+    float lifetime = particle.velocityLife.w;
+    for (int step = 0; step < steps; ++step)
+    {
+        velocity += frame.gravityDrag.xyz * stepSeconds;
+        velocity *= damping;
+        position += velocity * stepSeconds;
+        ResolveCollision(
+            position,
+            velocity,
+            age,
+            lifetime);
+        if (age >= lifetime)
+        {
+            break;
+        }
+    }
+    particle.positionAge = vec4(position, age);
+    particle.velocityLife = vec4(velocity, lifetime);
+    particleBuffer.particles[index] = particle;
+}

@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "particles/particleAsset.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 
@@ -22,6 +23,8 @@ struct SceneAssetObjectPlan
     std::string objectName;
     std::string objectType;
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
+    // particleSystem 的 PS_*.json 在场景校验阶段冻结，WorldBuilder 不再重新读盘。
+    std::optional<VL::ParticleSystemAsset> particleAsset;
     // Actor 根网格的派生声明；作者 JSON 不增加合成对象，正式 mesh loader 仍只读网格计划。
     std::optional<nlohmann::json> componentObject;
 };

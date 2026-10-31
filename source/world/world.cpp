@@ -398,6 +398,39 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     meshObjects[std::move(name)] = std::move(object);
 }
 
+void World::AddParticleSystem(
+    std::string name,
+    WorldParticleSystem system)
+{
+    particleSystems[std::move(name)] = std::move(system);
+}
+
+bool World::RemoveParticleSystem(const std::string& name)
+{
+    return particleSystems.erase(name) > 0;
+}
+
+const WorldParticleSystem* World::FindParticleSystem(
+    const std::string& name) const
+{
+    const auto systemIt = particleSystems.find(name);
+    return systemIt != particleSystems.end() ? &systemIt->second : nullptr;
+}
+
+size_t World::UpdateParticleSystemAsset(
+    const std::string& assetPath,
+    ParticleSystemAsset asset)
+{
+    size_t replaced = 0;
+    for (auto& [name, particleSystem] : particleSystems)
+    {
+        if (particleSystem.assetPath != assetPath) continue;
+        particleSystem.asset = asset;
+        ++replaced;
+    }
+    return replaced;
+}
+
 void World::AddSpeedTreeWindProfile(SpeedTreeWindProfile profile)
 {
     speedTreeWindProfiles[profile.key] = std::move(profile);

@@ -1,12 +1,15 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "particles/particleAssetOverride.h"
 
 #include <stdexcept>
 #include <string>
 
 SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
     std::string_view scenePath,
-    const nlohmann::json& sceneJson)
+    const nlohmann::json& sceneJson,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments)
 {
     try { VL::ValidateSceneAssetJson(sceneJson); }
     catch (const std::exception& error)
@@ -28,6 +31,13 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         // JSON 合同在共享入口收口；运行时计划仍由正式 loader 准备，不为资产工具另建导入路径。
         if (objectPlan.objectType == "mesh")
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
+        else if (objectPlan.objectType == "particleSystem")
+        {
+            const std::string particlePath =
+                objectJson.at("particlePath").get<std::string>();
+            objectPlan.particleAsset = VL::PrepareParticleAssetWithOverride(
+                particlePath, particleDocuments);
+        }
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))
         for (size_t component = 0; component < objectJson.at("components").size(); ++component)

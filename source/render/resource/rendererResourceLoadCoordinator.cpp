@@ -103,6 +103,12 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             // Actor 声明归脚本上下文；它的网格已有独立派生计划，不能再次按声明加载。
             continue;
         }
+        else if (type == "particleSystem")
+        {
+            // 粒子资产已由 SceneAssetValidator 冻结；GPU 池和管线由
+            // ParticleRenderer 按 RenderScene 管理，这里不创建材质/网格资源。
+            continue;
+        }
         else if (type == "directionalLight" ||
                  type == "pointLight" ||
                  type == "spotLight" ||

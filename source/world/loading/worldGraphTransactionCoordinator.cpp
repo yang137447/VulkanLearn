@@ -179,7 +179,9 @@ WorldGraphTransactionCoordinator::Execute(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch* materialDefinitionReload,
     const nlohmann::json& extraSceneObjects,
-    const nlohmann::json& sceneDocument)
+    const nlohmann::json& sceneDocument,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments)
 {
     try
     {
@@ -196,7 +198,8 @@ WorldGraphTransactionCoordinator::Execute(
                 candidateGraph->GetGraph(),
                 materialDefinitionReload,
                 extraSceneObjects,
-                sceneDocument);
+                sceneDocument,
+                particleDocuments);
         if (preparedWorldResult.IsFailure())
         {
             return RuntimeResult<WorldHandle>::Failure(

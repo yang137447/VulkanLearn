@@ -74,7 +74,9 @@ public:
         RenderGraph& pipelineContractGraph,
         const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
         const nlohmann::json& extraSceneObjects = nlohmann::json::array(),
-        const nlohmann::json& sceneDocument = nullptr);
+        const nlohmann::json& sceneDocument = nullptr,
+        const std::unordered_map<std::string, nlohmann::json>&
+            particleDocuments = {});
     void SetScriptRuntime(ScriptRuntimeSubsystem* scripts) { scriptRuntime = scripts; }
 
 private:

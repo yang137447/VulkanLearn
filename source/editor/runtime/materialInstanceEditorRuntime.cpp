@@ -237,6 +237,8 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
     saveFeedback.clear();
     blueprintCommandSequence = 0;
     blueprintCommandFeedback.clear();
+    particleCommandSequence = 0;
+    particleCommandFeedback.clear();
     diagnostic.clear();
     lastCommandMessage.clear();
     initialized = false;
@@ -293,6 +295,7 @@ void MaterialInstanceEditorRuntime::Tick()
 
             RecordSaveFeedback(command, result);
             RecordBlueprintCommandFeedback(command, result);
+            RecordParticleCommandFeedback(command, result);
             if (!commandBus->PublishResult(std::move(result)))
             {
                 diagnostic =
@@ -414,6 +417,7 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitInternal(
         SetStatus(submission.result.message);
         RecordSaveFeedback(command, submission.result);
         RecordBlueprintCommandFeedback(command, submission.result);
+        RecordParticleCommandFeedback(command, submission.result);
     }
     return submission;
 }
@@ -1419,6 +1423,7 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
 {
     snapshot.saveFeedback = saveFeedback;
     snapshot.blueprintCommandFeedback = blueprintCommandFeedback;
+    snapshot.particleCommandFeedback = particleCommandFeedback;
     snapshot.modifiedDocuments.clear();
     // 文档条目直接来自 GT service，不依赖当前活动页；保存关卡不切换 MI 或预览 World。
     if (service)
@@ -1441,6 +1446,8 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
     if (assetDocuments)
     {
         snapshot.blueprintDocuments = assetDocuments->BlueprintDocuments().DocumentSnapshots();
+        snapshot.particleDocuments =
+            assetDocuments->ParticleDocuments().DocumentSnapshots();
         const auto scenes = assetDocuments->ModifiedDocuments();
         // GT 作者适配器绕过命令执行修改 Scene 草稿；发布保存列表时必须同步总线版本，
         // 否则上一次 Save 留下的 revision 会拒绝之后的合法保存。
@@ -1457,6 +1464,7 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
         command.type != EditorCommandType::SaveMeshDocument &&
         command.type != EditorCommandType::SaveTextureDocument &&
         command.type != EditorCommandType::SaveBlueprintDocument &&
+        command.type != EditorCommandType::SaveParticleDocument &&
         command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
     const auto path = GetEditorCommandAssetPath(command);
     if (!path) return;
@@ -1481,6 +1489,40 @@ void MaterialInstanceEditorRuntime::RecordBlueprintCommandFeedback(
     for (auto& previous : blueprintCommandFeedback)
         if (previous.assetPath == *path) { previous = std::move(feedback); return; }
     blueprintCommandFeedback.push_back(std::move(feedback));
+}
+
+void MaterialInstanceEditorRuntime::RecordParticleCommandFeedback(
+    const EditorCommandEnvelope& command,
+    const EditorCommandResult& result)
+{
+    switch (command.type)
+    {
+    case EditorCommandType::ModifyParticleDocument:
+    case EditorCommandType::SaveParticleDocument:
+    case EditorCommandType::RevertParticleDocument:
+    case EditorCommandType::ReloadParticleDocument:
+    case EditorCommandType::ValidateParticleDocument:
+    case EditorCommandType::CloseParticleDocument:
+    case EditorCommandType::UndoParticleDocument:
+    case EditorCommandType::RedoParticleDocument:
+        break;
+    default:
+        return;
+    }
+    const auto path = GetEditorCommandAssetPath(command);
+    if (!path) return;
+    EditorUi::EditorParticleCommandFeedback feedback{
+        ++particleCommandSequence, *path, command.type,
+        result.status == EditorCommandStatus::Succeeded,
+        result.message};
+    for (auto& previous : particleCommandFeedback)
+        if (previous.assetPath == *path &&
+            previous.type == command.type)
+        {
+            previous = std::move(feedback);
+            return;
+        }
+    particleCommandFeedback.push_back(std::move(feedback));
 }
 
 void MaterialInstanceEditorRuntime::UpdateBusRevision(

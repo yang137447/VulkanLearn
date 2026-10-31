@@ -15,9 +15,21 @@ namespace VL
 enum class RuntimeCommandType
 {
     LoadWorld,
+    // 同一粒子预览 World 内替换作者资产；不重新执行场景加载事务。
+    UpdateParticlePreview,
     RunShaderReloadTest,
     RunShaderComputeReloadTest,
     RunWorldGraphTransactionTest,
+    // stringValue=相对资源根的文件名，intValue=每个 emitter 的最大明细粒子数。
+    DumpParticles,
+    // 打印上一帧粒子发射器/绘制/排序预算；不改变渲染状态。
+    ReportParticleStats,
+    // 运行时粒子实例管理：stringValue=场景对象名。
+    // Spawn 另用 secondaryStringValue=PS_*.json 路径、particleSpawnPosition=位置；
+    // Destroy/Restart 只按名字作用于当前 World 实例。
+    SpawnParticleSystem,
+    DestroyParticleSystem,
+    RestartParticleSystem,
     SetDebugViewMode,
     CaptureScreenshot,
     SetCameraPosition,
@@ -95,6 +107,10 @@ struct RuntimeCommand
     Eigen::Vector3f cameraLookAtValue = Eigen::Vector3f::Zero();
     Eigen::Vector3f cameraUpValue = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     std::string stringValue;
+    // particlespawn 的资产路径；与 stringValue 分开，避免两种语义挤进一个字段。
+    std::string secondaryStringValue;
+    // particlespawn 的世界空间摆放位置。
+    Eigen::Vector3f particleSpawnPosition = Eigen::Vector3f::Zero();
     std::string sourceText;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;
@@ -102,6 +118,9 @@ struct RuntimeCommand
     // 并入中性预览环境，从而不必生成临时场景文件 —— 临时文件会在磁盘上留下第二份真相，
     // 并且在异常退出时残留。普通场景加载这里是空数组。
     nlohmann::json extraSceneObjects = nlohmann::json::array();
+    // PreviewParticle 首次加载/UpdateParticlePreview 携带的草稿及其资源路径。
+    std::string particleDocumentPath;
+    nlohmann::json particleDocument = nullptr;
 };
 
 // Single-thread command queue for runtime console/debug requests. The console

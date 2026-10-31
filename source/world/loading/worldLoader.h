@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -46,7 +47,10 @@ public:
         const std::string& scenePath,
         const nlohmann::json& extraObjects,
         // 冻结的作者草稿；为空时读磁盘，同样进入完整场景/模型校验。
-        const nlohmann::json& sceneDocument = nullptr) const;
+        const nlohmann::json& sceneDocument = nullptr,
+        // 粒子预览草稿：命中路径时用内存文档代替磁盘 PS_*.json。
+        const std::unordered_map<std::string, nlohmann::json>&
+            particleDocuments = {}) const;
 };
 
 } // namespace VL

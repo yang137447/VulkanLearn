@@ -15,6 +15,7 @@ add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests
     "${PROJECT_SOURCE_DIR}/source/editor/scene/scriptBlueprintAuthoring.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"

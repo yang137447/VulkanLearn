@@ -46,10 +46,13 @@ struct RenderScene
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    // 逻辑模拟时间；粒子 compute 用它推进，Pause 时保持 0。
+    float simulationDeltaSeconds = 1.0f / 60.0f;
     CameraSnapshot camera;
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;
     std::vector<LightSnapshot> lights;
+    std::vector<ParticleSystemSnapshot> particleSystems;
     EnvironmentSnapshot environment;
     int debugViewMode = 0;
 };

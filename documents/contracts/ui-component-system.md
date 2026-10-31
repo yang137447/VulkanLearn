@@ -83,8 +83,28 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 布局校验因此只要求常驻面板齐备，**不要求**存在资产编辑器面板。
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
-当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
-Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
+当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain、ParticleSystem JSON 元数据，
+Mesh、Texture、Terrain、ParticleSystem 双击后进入资源标签页，右侧为只读 JSON Details
+（ParticleSystem 另提供模块表单和 `SC_particle_preview.json` 真实粒子预览）；
+ParticleSystem 预览消费未保存草稿：首次加载把文档作为粒子覆盖注入固定预览场景，
+后续 revision 通过 `UpdateParticlePreview` 就地替换 World 中的粒子资产，不重载场景、
+不重置相机/环境/粒子摆放；
+ParticleSystem 的 Curves 模块提供时间轴、24 段颜色/尺寸预览和 1..8 个关键帧的结构化增删与数值编辑；
+Flipbook 模块在普通字段下方提供 1..256 行的逐帧表格，可编辑相对时长、`[u,v]` 轴心、
+`(u0,v0,u1,v1)` sprite UV rect 与逐帧旋转角；UV 列、旋转列及其 Seed/Reset 按钮只在
+64 帧以内的区间显示。表格提供 Seed/Uniform/Reset 批量操作；缺失数组显示默认值，
+首次逐行编辑才物化完整数组；
+Collision 模块编辑 `collision.type`、plane/box/capsule 参数、`ccd`、bounce/friction/radius 与
+`killOnCollision`，字段路径与其他 emitter 字段一致；
+Emitter 模块还编辑 `localSpace`、`renderMode/ribbonWidth/ribbonSegments/ribbonFade`、
+`mesh.path/mesh.scale/mesh.alignment`、
+`useFixedBounds`、`fixedBounds.center/extent`、`lod.tiers` 与逐粒子
+`rotation/rotationSpeed/rotationRandom`；
+发射器选择器另有复制新增、删除与上下移动按钮（1..16 个），结构变更提交整条 `emitters` 数组；
+System 模块编辑 PS 根名称，Emitter 模块的 name 只改当前发射器；资源标签标题对脏粒子文档追加 `*`；
+可重置字段旁显示 Reset 并提交 `reset=true`；工具栏提供 Undo/Redo/Validate/Revert，
+Undo/Redo 与 Edit 菜单共用当前粒子标签的有界历史，脏文档关闭走保存/丢弃/取消，
+丢弃时先 revert 再 close。修改命令带 emitter 身份与在途门禁，失败终态会把未提交输入合并回草稿供重试；
 Actor 使用同一资源标签容器中的专用配置表单。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
 骨骼 SM 复用模型资源标签，按冻结快照显示播放/暂停、片段选择和时间 slider；
@@ -102,15 +122,18 @@ Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/B
 预览区滚轮以鼠标位置为中心缩放（适应窗口倍率的 0.1 到 32 倍），左/中/右键拖动平移，
 双击图片区域或 Fit Image 按钮复位。切换/重载贴图重置视图，失焦取消拖动。
 缩放只改裁剪区域内的 UI 几何，不重新解码或上传图片；放大仍使用有界预览，不是原图 1:1 检视。
-缺失、损坏、越界或未支持格式显示诊断，不沿用旧图。Terrain 仍为类型预览占位。
+缺失、损坏、越界或未支持格式显示诊断，不沿用旧图。Terrain 仍为类型预览占位；
+ParticleSystem 使用 draft-live 真实粒子预览（未保存草稿直接进入预览 World，后续
+revision 就地替换），预览场景 `SC_particle_preview.json` 与模型预览场景一样不可作为
+普通 Scene 文档编辑保存。
 它不再使用平铺文件名列表：左侧目录树由 worker 发布的只读 JSON 目录派生，
 上方提供前进/后退、父目录、面包屑与搜索，资产区支持网格/列表、
 名称排序、类型筛选、尺寸档位、子目录开关与显式 Refresh，底部显示数量和完整选中路径。
 单击只改变浏览选择；双击 MI 提交原有打开命令并激活中央材质文档页，保持可编辑，
 双击 Scene 复用 `UiActionType::LoadWorld` 请求切换 World，并同步打开只读 JSON inspector；
-Scene 仍请求 World 切换并使用主工作区 JSON inspector；Mesh、Texture、Terrain
+Scene 仍请求 World 切换并使用主工作区 JSON inspector；Mesh、Texture、Terrain、ParticleSystem
 使用资源编辑器标签页。资源标签支持重复打开去重、切换、关闭、返回 World 和重新读取 JSON。
-目录与搜索不提交业务命令；贴图、实时模型与材质实例网格有真实缩略图，场景仍是类型占位。
+目录与搜索不提交业务命令；贴图、实时模型、材质实例网格与粒子系统有真实缩略图，场景仍是类型占位。
 Viewport 使用 RenderGraph 拥有的离屏场景纹理，完整 UV 显示，不拷贝或裁剪 swapchain。
 GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺寸跟随面板逻辑尺寸。
 关卡左键拾取只更新对象描边、大纲选择与 Details，不创建或激活 MI 文档，不切换预览 World。
@@ -197,7 +220,7 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 - gizmo 只在蓝图组件预览页提供；除 C# Blueprint 外，没有通用场景对象增/删/复制/改名；
   Transform 可在 Details 数值编辑。
-- `Edit` 的 Undo/Redo 按活动页作用于 Scene 或 BP；没有跨资产历史或文件操作撤销。
+- `Edit` 的 Undo/Redo 按活动页作用于 Scene、BP 或 ParticleSystem；没有跨资产历史或文件操作撤销。
 - 逐 actor 可见性只有**运行时**语义：开关不写进场景 JSON，`SceneAssetValidator`
   不认识它，也没有 `SaveVisibilityToScene` 之类的动作；重新加载场景后所有 actor
   都是可见的。Transform/灯光/相机参数编辑形成独立场景草稿，确认后写回场景资产。
@@ -206,7 +229,7 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
   模型树与 Sources 树也仍整棵挂载。
 - 大纲仍是单选：没有多选、没有 Actor 拖放/重父级；C# Actor 改名通过 Details。
-- 贴图、实时模型与材质实例网格有缓存缩略图，场景没有真实缩略图，也没有纹理逐像素读数；Mesh 预览目前复用中性场景视口，
+- 贴图、实时模型、材质实例网格与粒子系统有缓存缩略图，场景没有真实缩略图，也没有纹理逐像素读数；Mesh 预览目前复用中性场景视口，
   模型标签通过 `resource-preview-image` 显示当前 renderer-owned 离屏图像。
   工具条变换按钮目前仅切换本地状态，不提供 gizmo；模型信息 Details 中
   `Metadata ready` 仅表示 JSON 已读取，不表示模型渲染成功。发布后按模型所有 section 的世界包围盒自动取景。
@@ -461,7 +484,7 @@ Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光编辑只改接�
 
 图标为 Lucide 的已提交 PNG，许可位于 `ui/icons/LUCIDE-LICENSE.txt`，
 没有运行时下载、SVG 解码或额外图标字体依赖。统一材质球及其他类型图标仅是类型图示，
-贴图网格异步替换为真实 RGB 缩略图；模型与材质实例在独立离屏渲染完成后替换类型图标。
+贴图网格异步替换为真实 RGB 缩略图；模型、材质实例与粒子系统在独立离屏渲染完成后替换类型图标。
 场景和不支持实时渲染的资产仍保留占位，不能把统一球图标视为真实资产内容。
 资产生成入口为 `tool/editor-ui-assets/generate-content-browser.cjs`，
 需要已安装的 `lucide` 与 `sharp` 模块目录作为参数，不参与引擎构建。
@@ -489,9 +512,9 @@ Rml 回调只消费已发布像素，UI/GPU 纹理离开可见窗口便经既有
 结果完成只更新原节点的 img src、角标和悬停提示，不替换卡片 DOM；静止帧不重复写图片属性。
 卡片名称和类型行固定高度且不参与 flex 压缩，完整名称与路径放在悬停提示中。
 
-### 模型与材质缩略图
+### 模型、材质与粒子缩略图
 
-`EditorThumbnailLibrary` 通过有界值语义队列交出 Mesh/MI 请求，CPU worker 不调用 Vulkan。
+`EditorThumbnailLibrary` 通过有界值语义队列交出 Mesh/MI/ParticleSystem 请求，CPU worker 不调用 Vulkan。
 队列最多覆盖 192 个可见路径；GT 同时只领取一个请求，结果轮询发布后才领取下一个。
 `EngineLoop::TickEditorThumbnails` 在上一帧 RT 归还所有权后推进 `EditorThumbnailRenderSession`；
 滚动、点击、键盘/文本输入或 resize 结束 750 ms 后，每帧至多推进一个准备阶段或一个 IBL mip。
@@ -513,6 +536,9 @@ GT 使用 shader 候选前复核源摘要，绑定材质前复核 M_/MI_/T_ 描�
 缩略图禁用 CSM，保留 HDRI 的 SH/镜面 IBL、材质真实 shader 与固定曝光。
 使用 `SC_model_preview` 的 HDRI 与相机曝光，隐藏背板；模型按全部 section 包围盒取景。
 MI 使用正式 `SM_material_preview_ball`，通过实例级 materialOverride 绑定目标材质。
+粒子缩略图使用 `SC_particle_preview.json` 的固定相机、HDRI 与灯光，注入当前 PS 资产；
+会话内 `ParticleRenderer` 只录制一次 `1/60` 秒 prewarm simulation，随后在同一 particle pass
+绘制 billboard。它不复用模型取景，也不改写活动 World 的粒子池。
 
 同一批请求复用离屏图、pass 材质和 HDRI 烘焙；材质缩略图还复用固定预览球的不可变
 CPU/GPU 几何与包围盒，只导入并生成切线一次。每个 MI 在独立候选中重新绑定。
@@ -534,7 +560,8 @@ RmlUi 发布/加载只注册 token；UI renderer 借用成图 view/sampler 并�
 不取得图像销毁权。sRGB 成图有兼容的 sRGB/UNORM 两种 view：线性 UI 混合采样 sRGB view，
 编码域 UI 采样 UNORM view，不做 CPU gamma 转换。普通贴图缩略图仍沿原 CPU 像素路径。
 GT 的材质资源绑定、GPU 上传与管线创建仍是同步阶段，750 ms 是输入退避而非严格帧耗时预算。
-离线专用材质、无效资产显示类型图标和悬停诊断，不降级成近似着色。场景截图缩略图尚未接入。
+离线专用材质、无效资产与粒子预览失败都显示类型图标和悬停诊断，不降级成近似着色。
+场景截图缩略图尚未接入。
 
 ## JSON 元数据与输入边界
 
@@ -545,8 +572,8 @@ GT 每帧 `Poll()` 使用非阻塞邮箱发布结果，不扫描目录、不读�
 worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择。
 目录和文档使用 `shared_ptr<const ...>` 进入编辑器快照，逐帧不深拷贝目录或字段数组。
 
-目录识别 MI、Mesh（含顶层 `speedtree`）、Scene、Texture、Terrain、Actor（`blueprintAsset`）；
-支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`/`BP_`
+目录识别 MI、Mesh（含顶层 `speedtree`）、Scene、Texture、Terrain、ParticleSystem、Actor（`blueprintAsset`）；
+支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`/`PS_`/`BP_`
 和旧 `scene*` basename 识别，非字符串 type 另附诊断。
 显式不支持的字符串类型排除；可识别的损坏候选保留诊断，
 不展示半棵字段树。扫描跳过 `.git`、`Generated`、`data` 目录（ASCII 大小写不敏感），

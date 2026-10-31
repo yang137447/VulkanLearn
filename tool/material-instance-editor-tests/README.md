@@ -5,7 +5,8 @@ Material Instance Asset Editor baseline, numeric live-preview boundary, and
 render-state preview value boundary. It covers command transport,
 persistence, preview-value/controller contracts, and production
 document/runtime behavior without claiming Vulkan renderer integration from
-the focused targets.
+the focused targets. The production target also hosts the CPU-side Particle
+System asset and authoring contracts.
 
 The harness deliberately uses three layers:
 
@@ -92,6 +93,29 @@ Single-thread and double-thread application smoke tests passed on
 2026-08-27 for both workerThreadCount=1 and workerThreadCount=2, with developer
 UI disabled and enabled. Manual interactive RmlUi acceptance remains
 outstanding.
+
+## Particle System Coverage
+
+`material_instance_editor_production_tests` owns the CPU-only particle
+regression suite. It covers:
+
+- `ParticleAssetLoader`: legacy single-emitter documents, explicit multi-emitter
+  containers, field range/finiteness/integer validation, texture reference
+  policy, and `Prepare` error context including the source path.
+- Authoring helpers: `assetDocumentFields` paths, emitter add/remove/move,
+  curve key editing, Flipbook duration/pivot/UV tables, collision, bounds,
+  culling, LOD, texture source keys, emitter ordering keys, and render identity.
+- Document history: field and structure undo/redo/revert with the shared
+  bounded history, plus `particle.undo`/`particle.redo` protocol round-trips.
+- CPU mirrors of renderer decisions: emitter bounds/culling/order, collision
+  resolution, flipbook timing, and simulation delta.
+- Particle dump document building: emitter totals, alive filtering, per-emitter
+  detail truncation, and safe `Generated/ParticleDumps` path resolution.
+
+These targets still do not instantiate Vulkan or `RenderSystem`; GPU pipeline
+rebuild, descriptor changes, frame retirement, shader reload, and real particle
+draw output require the runtime validation smoke described in
+`documents/contracts/particle-system.md`.
 
 ## Renderer Owner/Session Design
 

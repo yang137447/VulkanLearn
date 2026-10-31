@@ -5,6 +5,7 @@ add_executable(editor_ui_tests
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
+    particleWorldRuntimeTests.cpp
     debugDrawOverlayTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/debugDrawOverlay.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
@@ -44,6 +45,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"

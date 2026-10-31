@@ -19,6 +19,9 @@ enum class UiActionType
     // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
     PreviewModel,
     PreviewMaterial,
+    PreviewParticle,
+    // 同一粒子预览 World 内就地替换作者草稿；不重载场景，不重置相机/环境。
+    UpdateParticlePreview,
     PreviewBlueprint,
     NavigateModelPreview,
     ControlAnimationPreview,
@@ -139,6 +142,8 @@ struct UiAction
     Debug::Control debugDrawControl;
     // 脚本作者请求只带值；class/name/modelPath 或 property/value 在 GT 校验。
     nlohmann::json script = nlohmann::json::object();
+    // PreviewParticle/UpdateParticlePreview 携带未保存的作者文档；null 表示没有草稿。
+    nlohmann::json particleDocument = nullptr;
 };
 
 } // namespace VL

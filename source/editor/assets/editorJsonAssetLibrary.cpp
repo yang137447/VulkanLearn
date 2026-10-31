@@ -74,6 +74,7 @@ std::optional<Kind> FilenameKind(std::string_view assetPath)
     if (name.compare(0, 2, "t_") == 0) return Kind::Texture;
     if (name.compare(0, 3, "tr_") == 0) return Kind::Terrain;
     if (name.compare(0, 3, "bp_") == 0) return Kind::Blueprint;
+    if (name.compare(0, 3, "ps_") == 0) return Kind::ParticleSystem;
     // 兼容旧场景文件名；只看 basename，不能把 SC_ 目录下的其他 JSON 当场景。
     if (name.compare(0, 5, "scene") == 0) return Kind::Scene;
     return std::nullopt;
@@ -89,6 +90,7 @@ std::optional<Kind> TypeKind(const std::string& text)
     if (lower == "texture") return Kind::Texture;
     if (lower == "terrain") return Kind::Terrain;
     if (lower == "blueprint") return Kind::Blueprint;
+    if (lower == "particlesystem") return Kind::ParticleSystem;
     return std::nullopt;
 }
 

@@ -56,6 +56,8 @@ Current implemented areas include:
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
+- GPU particle system: data-driven `PS_*.json` with optional `emitters[]` container, compute simulation and billboard pass;
+  current schema, ownership and limits: `documents/contracts/particle-system.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -199,6 +201,7 @@ If a change affects boot behavior, verify it against this order.
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
+- `source/particles/`: `particleSystem` asset loading/validation and the GPU compute + billboard runtime
 - `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
@@ -282,6 +285,9 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `particleSystem` (`particlePath` references a `PS_*.json`; a PS file may contain up to 16
+  `emitters[]`, each expanded into its own GPU emitter; current schema and limits are in
+  `documents/contracts/particle-system.md`)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime

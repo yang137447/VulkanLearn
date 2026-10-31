@@ -39,6 +39,7 @@
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
+| `source/particles/**`、`shader/glsl/particle/**` | `contracts/particle-system.md` | — |
 | `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |

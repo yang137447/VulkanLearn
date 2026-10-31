@@ -9,6 +9,7 @@ add_executable(vl_asset_edit
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
     "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp")

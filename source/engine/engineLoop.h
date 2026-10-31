@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 #include <vector>
@@ -111,7 +112,10 @@ private:
             materialDefinitionReload = nullptr,
         // 本次加载附加的场景对象（JSON 对象数组，可为空）。模型编辑器靠它把打开的模型
         // 放进中性预览环境，而不生成临时场景文件。
-        const nlohmann::json& extraSceneObjects = nlohmann::json::array());
+        const nlohmann::json& extraSceneObjects = nlohmann::json::array(),
+        // 本次加载的粒子草稿覆盖（资源根相对路径 → 作者 JSON）。
+        const std::unordered_map<std::string, nlohmann::json>&
+            particleDocuments = {});
     RuntimeResult<WorldHandle>
         ExecuteMaterialDefinitionWorldGraphTransactionForTest(
             const std::set<std::string>& sourceIdentities,

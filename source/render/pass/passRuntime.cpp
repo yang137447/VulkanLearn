@@ -68,6 +68,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::EditorGrid:
         RecordEditorGridPass(context);
         return;
+    case RenderGraphPassType::Particle:
+        RecordParticlePass(context);
+        return;
     case RenderGraphPassType::Unknown:
     case RenderGraphPassType::AutoExposure:
         break;
@@ -274,6 +277,19 @@ void PassRuntime::RecordEditorGridPass(PassRuntimeContext& context) const
     }
 
     context.services.DrawEditorGridGeometry(context.commandBuffer);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordParticlePass(
+    PassRuntimeContext& context) const
+{
+    // 粒子与透明表面同属合成阶段：load 已有 sceneColor，sceneDepth 通过
+    // set 3 作为只读输入；pass 本身不挂深度附件，避免采样/写入反馈环。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordParticlePass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
     context.commandBuffer.endRenderPass();
 }
 

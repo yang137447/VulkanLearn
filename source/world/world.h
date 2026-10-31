@@ -16,6 +16,7 @@
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
 #include "world/worldSnapshot.h"
+#include "particles/particleAsset.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
@@ -91,6 +92,16 @@ struct WorldMeshObject
     std::string speedTreeWindProfileKey;
 };
 
+// 粒子发射器是 World 级渲染对象；粒子缓冲本身归渲染器所有，
+// World 只冻结作者资产与摆放矩阵，避免把 GPU 生命周期混进逻辑世界。
+struct WorldParticleSystem
+{
+    std::string name;
+    std::string assetPath;
+    ParticleSystemAsset asset;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+};
+
 // Runtime view of the active game world. Camera, light, environment, and mesh
 // object state is owned by World. Object GPU resources and descriptors live in
 // renderer-owned backend entries and are referenced from snapshots by key.
@@ -122,6 +133,15 @@ public:
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
+    void AddParticleSystem(std::string name, WorldParticleSystem system);
+    // 运行时 spawn/destroy 只改逻辑 World；同名 spawn 覆盖既有对象，
+    // 被替换/移除的 GPU 池由下一次 Render 的 ParticleRenderer::Synchronize 退休。
+    bool RemoveParticleSystem(const std::string& name);
+    const WorldParticleSystem* FindParticleSystem(const std::string& name) const;
+    // 粒子预览的原地更新：只替换匹配资产路径的作者数据，不动摆放/相机/环境，
+    // 也不推进 World 代数；渲染快照下一帧自然读取新资产。
+    size_t UpdateParticleSystemAsset(const std::string& assetPath,
+        ParticleSystemAsset asset);
     void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
@@ -129,6 +149,7 @@ public:
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    const std::unordered_map<std::string, WorldParticleSystem>& GetParticleSystems() const { return particleSystems; }
     void TickAnimations(float deltaSeconds);
     // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
     bool ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value);
@@ -241,6 +262,7 @@ private:
     WorldEnvironment environment;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
+    std::unordered_map<std::string, WorldParticleSystem> particleSystems;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;

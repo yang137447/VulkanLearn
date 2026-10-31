@@ -46,6 +46,13 @@ public:
     // 编辑器参考网格的几何与缓冲归 RenderSystem 所有；pass 流程只请求提交一次
     // 网格绘制，因此网格顶点生命周期不会泄漏到 pass 层。
     virtual void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) = 0;
+    // 粒子发射器资源归 RenderSystem/ParticleRenderer 所有；pass 只提供已开始的
+    // sceneColor 合成窗口和 sceneDepth 输入描述符集，避免在 RenderGraph 里
+    // 再建一套材质合同。
+    virtual void RecordParticlePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) = 0;
 };
 
 struct PassRuntimeContext
@@ -77,6 +84,7 @@ private:
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
     void RecordEditorGridPass(PassRuntimeContext& context) const;
+    void RecordParticlePass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;
     void BeginConfiguredRenderPass(PassRuntimeContext& context) const;

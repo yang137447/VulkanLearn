@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include "editor/command/assetJsonCommandHost.h"
 #include "editor/command/editorCommandJsonCodec.h"
 #include "render/camera/cameraExposure.h"
@@ -738,9 +739,138 @@ TEST_F(AssetDocumentTest, SymlinkAliasesShareDraftAndRetargetCannotSave)
 TEST_F(AssetDocumentTest, PreviewSceneCannotBecomeStandardEditableDocument)
 {
     Write("SC_model_preview.json", scene);
+    Write("SC_particle_preview.json", scene);
     EXPECT_NE(Get("scene", "SC_model_preview.json")["status"], "succeeded");
     EXPECT_NE(Get("scene", "SC_MODEL_PREVIEW.json")["status"], "succeeded");
+    EXPECT_NE(Get("scene", "SC_particle_preview.json")["status"], "succeeded");
+    EXPECT_NE(Get("scene", "SC_PARTICLE_PREVIEW.json")["status"], "succeeded");
     EXPECT_EQ(Run(Request("scene.save", "SC_model_preview.json", 1))["errorCode"], "document_not_open");
+}
+
+TEST_F(AssetDocumentTest, ParticleCapabilitiesSeparateSystemAndEmitterFields)
+{
+    Write("PS_test.json", Json{
+        {"name", "PS_test"}, {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"}, {"maxParticles", 512}, {"spawnRate", 120.0},
+                {"position", {5.0, 0.0, 0.0}}},
+            Json{{"name", "smoke"}, {"maxParticles", 2048}, {"spawnRate", 30.0}}})}});
+    const auto result = Get("particle", "PS_test.json");
+    ASSERT_EQ(result["status"], "succeeded") << result;
+    const auto& capabilities = result["payload"]["capabilities"];
+    std::set<std::string> rootFields;
+    for (const auto& field : capabilities["fields"])
+        rootFields.insert(field.at("field").get<std::string>());
+    EXPECT_EQ(rootFields, (std::set<std::string>{"name", "emitters"}));
+    ASSERT_EQ(capabilities["emitters"].size(), 2u);
+    for (const auto& emitter : capabilities["emitters"])
+    {
+        std::set<std::string> fields;
+        for (const auto& field : emitter["fields"])
+            fields.insert(field.at("field").get<std::string>());
+        EXPECT_TRUE(fields.count("name"));
+        EXPECT_TRUE(fields.count("position"));
+        EXPECT_TRUE(fields.count("maxParticles"));
+        EXPECT_TRUE(fields.count("spawnRate"));
+        EXPECT_TRUE(fields.count("colorKeys"));
+        EXPECT_FALSE(fields.count("emitters"));
+    }
+    EXPECT_EQ(capabilities["emitters"][0]["name"], "fire");
+}
+
+TEST_F(AssetDocumentTest, ParticleImplicitCapabilitiesKeepRootPaths)
+{
+    Write("PS_legacy.json", Json{
+        {"name", "PS_legacy"}, {"type", "particleSystem"},
+        {"maxParticles", 512}, {"spawnRate", 120.0}});
+    const auto result = Get("particle", "PS_legacy.json");
+    ASSERT_EQ(result["status"], "succeeded") << result;
+    const auto& capabilities = result["payload"]["capabilities"];
+    std::set<std::string> rootFields;
+    for (const auto& field : capabilities["fields"])
+        rootFields.insert(field.at("field").get<std::string>());
+    EXPECT_TRUE(rootFields.count("name"));
+    EXPECT_TRUE(rootFields.count("emitters"));
+    EXPECT_TRUE(rootFields.count("spawnRate"));
+    EXPECT_FALSE(rootFields.count("position"));
+    ASSERT_EQ(capabilities["emitters"].size(), 1u);
+    std::set<std::string> emitterFields;
+    for (const auto& field : capabilities["emitters"][0]["fields"])
+        emitterFields.insert(field.at("field").get<std::string>());
+    EXPECT_TRUE(emitterFields.count("name"));
+    EXPECT_TRUE(emitterFields.count("spawnRate"));
+    EXPECT_FALSE(emitterFields.count("position"));
+    EXPECT_FALSE(emitterFields.count("emitters"));
+    EXPECT_EQ(Modify("particle", "PS_legacy.json", 1,
+        Json::array({{{"field", "spawnRate"}, {"value", 150.0}}}))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, ParticleExplicitRootEmitterFieldsAreRejected)
+{
+    Write("PS_test.json", Json{
+        {"name", "PS_test"}, {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"}, {"maxParticles", 512}, {"spawnRate", 120.0}},
+            Json{{"name", "smoke"}, {"maxParticles", 2048}, {"spawnRate", 30.0}}})}});
+    ASSERT_EQ(Get("particle", "PS_test.json")["status"], "succeeded");
+    const auto rejected = Modify("particle", "PS_test.json", 1,
+        Json::array({{{"field", "spawnRate"}, {"value", 300.0}}}));
+    EXPECT_EQ(rejected["status"], "rejected") << rejected;
+    EXPECT_EQ(rejected["errorCode"], "validation_failed");
+    EXPECT_NE(rejected["message"].get<std::string>().find(
+        "requires emitters.<index>.<field>"), std::string::npos);
+    EXPECT_EQ(Get("particle", "PS_test.json")["documentRevision"], 1);
+    EXPECT_EQ(Modify("particle", "PS_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "PS_renamed"}}}))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, ParticleEmitterIdentityGuardsAndBatchRename)
+{
+    Write("PS_test.json", Json{
+        {"name", "PS_test"}, {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"}, {"maxParticles", 512}, {"spawnRate", 120.0}},
+            Json{{"name", "smoke"}, {"maxParticles", 2048}, {"spawnRate", 30.0}}})}});
+    ASSERT_EQ(Get("particle", "PS_test.json")["status"], "succeeded");
+    const auto wrong = Modify("particle", "PS_test.json", 1, Json::array({
+        {{"field", "emitters.0.spawnRate"}, {"expectedEmitterName", "smoke"},
+         {"value", 200.0}}}));
+    EXPECT_EQ(wrong["status"], "rejected") << wrong;
+    EXPECT_NE(wrong["message"].get<std::string>().find(
+        "identity changed"), std::string::npos);
+    const auto right = Modify("particle", "PS_test.json", 1, Json::array({
+        {{"field", "emitters.0.spawnRate"}, {"expectedEmitterName", "fire"},
+         {"value", 200.0}}}));
+    ASSERT_EQ(right["status"], "succeeded") << right;
+    // 同一 batch 先改名再改字段：身份仍按 batch 开始前的名字校验。
+    const auto batch = Modify("particle", "PS_test.json", 2, Json::array({
+        {{"field", "emitters.0.name"}, {"expectedEmitterName", "fire"},
+         {"value", "flame"}},
+        {{"field", "emitters.0.spawnRate"}, {"expectedEmitterName", "fire"},
+         {"value", 250.0}}}));
+    ASSERT_EQ(batch["status"], "succeeded") << batch;
+    EXPECT_EQ(batch["payload"]["document"]["emitters"][0]["name"], "flame");
+    EXPECT_EQ(batch["payload"]["document"]["emitters"][0]["spawnRate"], 250.0);
+}
+
+TEST_F(AssetDocumentTest, ParticleCloseRequiresCleanDocumentAndErasesOwner)
+{
+    Write("PS_test.json", Json{
+        {"name", "PS_test"}, {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"}, {"maxParticles", 512}, {"spawnRate", 120.0}}})}});
+    ASSERT_EQ(Get("particle", "PS_test.json")["status"], "succeeded");
+    ASSERT_EQ(Run(Request("particle.close", "PS_test.json"))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("particle.validate", "PS_test.json"))["errorCode"], "document_not_open");
+    ASSERT_EQ(Get("particle", "PS_test.json")["status"], "succeeded");
+    ASSERT_EQ(Modify("particle", "PS_test.json", 1, Json::array({
+        {{"field", "emitters.0.spawnRate"}, {"value", 150.0}}}))["status"], "succeeded");
+    const auto dirtyClose = Run(Request("particle.close", "PS_test.json"));
+    EXPECT_EQ(dirtyClose["status"], "rejected") << dirtyClose;
+    EXPECT_EQ(dirtyClose["errorCode"], "document_dirty");
+    ASSERT_EQ(Run(Request("particle.revert", "PS_test.json", 2))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("particle.close", "PS_test.json"))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("particle.validate", "PS_test.json"))["errorCode"], "document_not_open");
 }
 
 TEST_F(AssetDocumentTest, SavedSceneStillRequiresWorldLoadBeforeLiveActorEdits)

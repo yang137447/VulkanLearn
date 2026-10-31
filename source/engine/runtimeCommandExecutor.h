@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include "core/runtimeResult.h"
 #include "engine/runtimeCommand.h"
@@ -40,6 +41,9 @@ struct RuntimeCommandExecutionResult
     // 环境；普通场景加载这里是空数组。命令只在执行器里**记录意图**，真正的加载发生在
     // 游戏线程的 world/graph 事务里，因此这份数据必须随结果一起携带，而不是就地展开。
     nlohmann::json loadWorldExtraSceneObjects = nlohmann::json::array();
+    // 粒子预览首次加载时把未保存草稿带入场景资产校验，避免首帧读到磁盘旧版本。
+    std::unordered_map<std::string, nlohmann::json>
+        loadWorldParticleDocuments;
     std::optional<RuntimeError> loadWorldError;
     WorldHandle loadedWorld;
     WorldHandle activeWorldBeforeCommand;

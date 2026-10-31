@@ -128,6 +128,7 @@ private:
     void RefreshModifiedDocuments();
     void RecordSaveFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
     void RecordBlueprintCommandFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
+    void RecordParticleCommandFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
     void UpdateBusRevision(const MaterialEditorServiceResult& result);
     void SetStatus(std::string message);
 
@@ -169,6 +170,8 @@ private:
     std::vector<EditorUi::EditorSaveFeedback> saveFeedback;
     uint64_t blueprintCommandSequence = 0;
     std::vector<EditorUi::EditorBlueprintCommandFeedback> blueprintCommandFeedback;
+    uint64_t particleCommandSequence = 0;
+    std::vector<EditorUi::EditorParticleCommandFeedback> particleCommandFeedback;
     bool initialized = false;
 };
 

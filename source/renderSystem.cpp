@@ -31,6 +31,7 @@
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
+#include "particles/particleDump.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "shaderReflect.h"
 #include "profiler.h"
@@ -1240,6 +1241,115 @@ void RenderSystem::RequestScreenshot(std::string path)
     pendingScreenshotPath = std::move(path);
 }
 
+bool RenderSystem::DumpParticles(
+    const std::string& fileName,
+    uint32_t maxPerEmitter,
+    std::string& outMessage)
+{
+    if (rendererBackend == nullptr)
+    {
+        outMessage =
+            "Particle dump failed: renderer backend is unavailable.";
+        return false;
+    }
+    if (resourceRoot.empty())
+    {
+        outMessage =
+            "Particle dump failed: resource root is unavailable.";
+        return false;
+    }
+
+    // GT 与 RT 分线程时，dump 必须等上一帧完全归还所有权；没有渲染线程时
+    // 回调为空，下面的 device wait 仍然覆盖同步模式下已提交的命令。
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    try
+    {
+        rendererBackend->WaitIdle();
+    }
+    catch (const std::exception& exception)
+    {
+        outMessage =
+            "Particle dump failed while waiting for the device: " +
+            std::string(exception.what());
+        return false;
+    }
+
+    std::filesystem::path outputPath;
+    std::string pathError;
+    if (!VL::ResolveParticleDumpPath(
+            resourceRoot,
+            fileName,
+            outputPath,
+            pathError))
+    {
+        outMessage = "Particle dump failed: " + pathError;
+        return false;
+    }
+
+    // dump 根部的 GPU 字段与 particlestats 同源，避免两套口径。
+    const VL::ParticleFrameStats frameStats = GetParticleFrameStats();
+    std::string dumpError;
+    if (!particleRenderer.DumpParticles(
+            *rendererBackend,
+            outputPath,
+            std::min(maxPerEmitter, VL::kParticleDumpMaxDetails),
+            frameStats,
+            dumpError))
+    {
+        outMessage =
+            "Particle dump failed: " +
+            (dumpError.empty() ? "unknown error" : dumpError);
+        return false;
+    }
+
+    outMessage =
+        "Particle dump written: " + outputPath.string();
+    return true;
+}
+
+VL::ParticleFrameStats RenderSystem::GetParticleFrameStats() const
+{
+    // 分线程渲染时只做线程让渡，避免 GT 读到 RT 正在写的统计；
+    // 这里不 WaitIdle、不碰 Vulkan 对象；GPU 字段只是上一次 BeginFrame
+    // 已回收完成的样本，不是即时查询。
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    VL::ParticleFrameStats stats = particleRenderer.GetFrameStats();
+    const VL::ParticleGpuTimingSnapshot gpu =
+        particleGpuTimer.GetSnapshot();
+    stats.gpuTimingSupported = gpu.supported;
+    stats.gpuMilliseconds = gpu.lastMilliseconds;
+    stats.gpuAverageMilliseconds = gpu.averageMilliseconds;
+    stats.gpuMaxMilliseconds = gpu.maxMilliseconds;
+    stats.gpuSampleCount = gpu.sampleCount;
+    return stats;
+}
+
+void RenderSystem::RestartParticleSystems(
+    const std::string& sceneObjectName)
+{
+    // emitter 的 elapsed/prewarm/needsClear 由 RecordSimulation 在渲染线程
+    // 上读取并推进；分线程时先停住 RT，避免在帧中途改这些字段。
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    particleRenderer.RestartParticleSystems(sceneObjectName);
+}
+
+void RenderSystem::SetPendingSimulationDelta(float seconds)
+{
+    // NaN/负值按 0 处理；上限与 EngineLoop 的 MaxSimulationDelta 一致。
+    pendingSimulationDeltaSeconds = std::isfinite(seconds)
+        ? std::clamp(seconds, 0.0f, 0.1f)
+        : 0.0f;
+}
+
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
 {
     // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。
@@ -1312,6 +1422,12 @@ void RenderSystem::RefreshResolvedSceneAfterShaderReload()
     if (hasRenderScene && !offlineMode)
     {
         BuildResolvedRenderScene();
+    }
+    if (!offlineMode && rendererBackend != nullptr)
+    {
+        // 粒子管线没有注册成 shader reload participant；reload 提交后丢弃
+        // 旧 artifact，下一次 Render 的 EnsureInitialized/Synchronize 重建。
+        particleRenderer.InvalidatePipelines(*rendererBackend);
     }
 }
 
@@ -1481,6 +1597,8 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.renderScene.materialGroups);
     currentRenderScene.lights.swap(
         prepared.renderScene.lights);
+    currentRenderScene.particleSystems.swap(
+        prepared.renderScene.particleSystems);
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);
@@ -2285,6 +2403,23 @@ void RenderSystem::DrawEditorGridGeometry(
     editorViewportGrid.Draw(commandBuffer);
 }
 
+void RenderSystem::RecordParticlePass(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex)
+{
+    // 粒子管线与描述符完全独立于 Material/RenderGraph pass material；
+    // 该调用发生在 particle pass 已绑定的 sceneColor 窗口内，sceneDepth
+    // 由 renderPass 的 set 3 输入描述符集提供。
+    // timestamp 只包住图形绘制，不含 RecordSimulation 的 compute 与排序 dispatch。
+    particleGpuTimer.BeginPass(commandBuffer, swapChainImageIndex);
+    particleRenderer.RecordGraphics(
+        commandBuffer,
+        swapChainImageIndex,
+        renderPass);
+    particleGpuTimer.EndPass(commandBuffer, swapChainImageIndex);
+}
+
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     UpdateUBOGlobalWithProjectionTransform(
@@ -2955,6 +3090,7 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();
     buildDesc.frameIndex = nextSnapshotFrameIndex++;
+    buildDesc.simulationDeltaSeconds = pendingSimulationDeltaSeconds;
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
     buildDesc.hasSelectedDraw =
@@ -3051,6 +3187,17 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         throw std::runtime_error("RenderSystem has no RenderScene to render");
     }
 
+    if (!offlineMode)
+    {
+        // World 事务提交路径会直接设置 initializedRenderWorldGeneration，
+        // 因此粒子同步不能只挂在 generation 变化的初始化分支上；这里按冻结
+        // RenderScene 做幂等同步，新增/移除发射器才创建或销毁 GPU 池。
+        particleRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            RenderGraph::GetInstance());
+        particleRenderer.Synchronize(currentRenderScene);
+    }
     RecordAndSubmitCurrentRenderScene();
 }
 
@@ -3095,6 +3242,10 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
         currentRenderScene,
         currentResolvedRenderScene,
         resourceCache);
+
+    // 粒子同步统一由 RenderLatestSnapshotOrLastGood 在每帧 Consume 之后执行：
+    // 这里再调一次会在 World 换代的第一帧重复 Ensure/Synchronize。resize 与
+    // 图重载后的第一次 Render 仍会经过同一条每帧路径重建或复用资源。
 
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
 }
@@ -3171,6 +3322,18 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // Generate the procedural sky cubemap and write environmentSH before graphics
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
+
+        // 该 image 的 fence 已在 BeginFrame 内等待；这里回收上一轮 GPU 计时，
+        // 并在录制 particle pass 之前 reset 本帧查询槽位。
+        particleGpuTimer.BeginFrame(commandBuffer, swapChainImageIndex);
+
+        // compute 必须在 particle pass 之前完成；这里录制的是本帧唯一一次
+        // 模拟推进，图形 pass 只消费其结果。
+        particleRenderer.RecordSimulation(
+            commandBuffer,
+            swapChainImageIndex,
+            currentRenderScene,
+            GetSceneRenderExtent());
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
@@ -3408,6 +3571,7 @@ void RenderSystem::InitializeFrameResources()
         shaderReloadCoordinator->RegisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
+    particleGpuTimer.Initialize(*rendererBackend);
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -3418,6 +3582,7 @@ void RenderSystem::ShutdownFrameResources()
     }
 
     environmentGpuTimer.Shutdown(*rendererBackend);
+    particleGpuTimer.Shutdown(*rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->UnregisterComputeParticipant(
@@ -3433,6 +3598,7 @@ void RenderSystem::ShutdownFrameResources()
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();
+    particleRenderer.Shutdown(*rendererBackend);
     
     frameResources.Shutdown(*rendererBackend);
     editorViewportGrid.Shutdown(*rendererBackend);
