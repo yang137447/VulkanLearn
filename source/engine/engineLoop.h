@@ -22,6 +22,7 @@
 #include "ui/uiSubsystem.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
 #include "shader/reload/shaderReloadRuntime.h"
+#include "physics/fracture/fractureBudget.h"
 
 class Controller;
 class PipelineFactory;
@@ -42,6 +43,10 @@ class ScriptBuildService;
 class BlueprintAssetLoadSession;
 class ScriptWorldContext;
 class RuntimeValidationServices;
+class AudioRuntime;
+class DestructibleRuntimeRegistry;
+class ProjectileRuntime;
+namespace Physics { class FractureImpactWorld; }
 class SubsystemCollection;
 class WorldTransitionCoordinator;
 enum class RenderGraphReleaseMode;
@@ -150,6 +155,14 @@ private:
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<ScriptBuildService> scriptBuild;
+    std::unique_ptr<AudioRuntime> audioRuntime;
+    std::unique_ptr<DestructibleRuntimeRegistry> destructibleRuntimes;
+    std::unique_ptr<ProjectileRuntime> projectileRuntime;
+    std::unique_ptr<Physics::FractureImpactWorld> fractureWorld;
+    std::unique_ptr<Physics::Fracture::FractureBudget> fractureBudget;
+    // 预算账本与运行时碎片同属一个 World 代；换代时归零。
+    uint64_t fractureBudgetGeneration = 0;
+    bool destructibleSessionActive = false;
     void TickBlueprintAssets();
     std::unique_ptr<BlueprintAssetLoadSession> blueprintAssetLoad;
     nlohmann::json blueprintAssetRequests = nlohmann::json::array();

@@ -34,6 +34,9 @@
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
+| `fracture_core_tests` | 73 | CPU 平面/球面破碎、橡皮膜、玻璃损伤、通用 `DestructibleProfile`、可注册 budget class、`PlateFracturePolicy` 支撑岛/阈值 |
+| `physics_runtime_tests` | 13 | Jolt 静态 proxy、投射物/attached/free shard/ground 的 role/contact/profile 事件、投射物生命周期与碎片落地 |
+| `audio_runtime_tests` | 21 | 32 voice、pan/距离/低通、WAV 解码边界、重采样/切片与混音 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
 | `animation_preflight_tests` | 255（P26 Chooser 家族/采样窗口版；动画工具 ON） | SK/Sequence/Montage 三层资产与播放：SK 拓扑/槽位/曲线注册表、`skinning.root` 拒绝与强制 `skeleton`（`AnimationSkeleton` 17）、sidecar 帧信息/曲线/notify/采样（`AnimationSequenceData` 14）、Montage 解析/跨文件绑定/缓存键/`rotationMethod`（`AnimationMontage` 24）、catalog/窗口装配/`PlayMontage` 拒绝矩阵/旋转透传/Static pose/section link/入口 startTime（`AnimationScriptData` 30）、notify/notifyState 区间执行/feedback（`NotifyPlayback` 11）、旋转与 Static warp point（`MotionWarping` 28）、完整权重导入 30；ozz 采样、只读 UE 盘点、FBX 审计、动态 bounds、播放/暂停/seek/循环、原地根 TRS 消除、一次性完成、无效请求保持、独立时钟、冻结姿态及实际渲染提交历史；Motion 特征空间/速度/SE(3) 循环/完整窗口、总体统计、输入身份/失效、固定频率历史/epoch/重置与预测；精确搜索、继续/重选策略、运行时关节速度搬运、局部姿态交叉混合、原根周期均速与有界步频、按实际速率采样的继续候选；两骨 IK、ball/heel 双参考点、静态锚点/坡面法线、走跑滚动支点/释放、Auto/Ball/Ankle 显式支点与重置、摆动脚骨盆间隙、pre-IK/混合源/旧快照隔离；有限时惯性化 C1/端点/重复中断、有界视觉根偏移与查询隔离 |
 
@@ -48,6 +51,9 @@ ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTrans
 
 # 材质实例编辑器全套（当前 28 项）
 ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
+
+# 破碎/物理/音频纵切（当前 73+13+21 项）
+ctest --test-dir build -R "^(Audio|Fracture|GlassDamagePolicy|PlateFracturePolicy|DestructibleProfile|RubberShell|PlanarFracture|SphericalFracture|FractureBudget)" --output-on-failure
 ```
 
 `JsonAssetLibraryTest` 有 4 项按设计 skip（符号链接用例，需要权限）。

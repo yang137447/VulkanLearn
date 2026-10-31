@@ -162,6 +162,12 @@ WorldTransitionCoordinator::PrepareWorldLoad(
                 loadContext);
         worldBuildPlan.meshObjectPlans =
             std::move(resourceLoadResult.meshObjectPlans);
+        worldBuildPlan.softBodyObjectPlans =
+            std::move(resourceLoadResult.softBodyObjectPlans);
+        worldBuildPlan.glassObjectPlans =
+            std::move(resourceLoadResult.glassObjectPlans);
+        worldBuildPlan.projectileSettings =
+            std::move(resourceLoadResult.projectileSettings);
         worldBuildPlan.speedTreeWindProfiles =
             std::move(resourceLoadResult.speedTreeWindProfiles);
 

@@ -1,5 +1,7 @@
 #include "engine/runtimeCommandExecutor.h"
 
+#include "engine/destructibleRuntime.h"
+#include "engine/projectileRuntime.h"
 #include <cmath>
 #include <filesystem>
 #include <exception>
@@ -240,7 +242,9 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     const DiagnosticsSubsystem& diagnostics,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments) const
+    Editor::SceneDocumentService* sceneDocuments,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
+    ProjectileRuntime* projectileRuntime) const
 {
     RuntimeCommandExecutionResult executionResult;
     std::vector<RuntimeCommand> commands = commandBus.Drain();
@@ -257,7 +261,9 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             executionResult,
             input,
             scripts,
-            sceneDocuments);
+            sceneDocuments,
+            destructibleRuntimes,
+            projectileRuntime);
     }
     return executionResult;
 }
@@ -273,7 +279,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
     RuntimeCommandExecutionResult& executionResult,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments) const
+    Editor::SceneDocumentService* sceneDocuments,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
+    ProjectileRuntime* projectileRuntime) const
 {
     switch (command.type)
     {
@@ -339,6 +347,40 @@ void RuntimeCommandExecutor::ExecuteCommand(
         { diagnostics.ReportWarning("DrawDebug rejected for stale World"); break; }
         try { diagnostics.ReportInfo(Debug::ApplyControl(world->GetDebugDraw(), command.debugDrawControl)); }
         catch (const std::invalid_argument& error) { diagnostics.ReportWarning(error.what()); }
+        break;
+    }
+    case RuntimeCommandType::ImpactSoftBody:
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Balloon))
+        {
+            diagnostics.ReportWarning(
+                "softbody impact target not found: " + command.stringValue);
+            break;
+        }
+        break;
+    case RuntimeCommandType::ImpactGlassPane:
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Glass))
+        {
+            diagnostics.ReportWarning(
+                "glass impact target not found: " + command.stringValue);
+            break;
+        }
+        break;
+    case RuntimeCommandType::FireProjectile:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (projectileRuntime == nullptr || !world || !world->GetRenderCamera())
+        {
+            diagnostics.ReportWarning(
+                "shoot command ignored because the projectile runtime is unavailable");
+            break;
+        }
+        projectileRuntime->Fire(*world, *world->GetRenderCamera());
         break;
     }
     case RuntimeCommandType::ControlMotionReplay:

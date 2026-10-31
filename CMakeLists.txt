@@ -12,6 +12,8 @@ option(VULKANLEARN_BUILD_ANIMATION_TOOLS
     "Build animation asset import and preflight tools."
     OFF)
 
+option(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS "Build and host C# gameplay Blueprints (requires .NET 8 SDK)." OFF)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -19,7 +21,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(Threads REQUIRED)
 
+include(cmake/VulkanLearnJolt.cmake)
+vl_add_jolt_cpu()
+
 add_subdirectory(extern)
+add_subdirectory(source/physics)
 add_subdirectory(script)
 add_subdirectory(source/render/offline/core)
 add_subdirectory(source/animation)
@@ -73,6 +79,11 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/script-tests)
     add_subdirectory(tool/debug-draw-tests)
     add_subdirectory(tool/game-export-tests)
+    add_subdirectory(tool/fracture-core-tests)
+    add_subdirectory(tool/audio-runtime-tests)
+    if(TARGET vl_physics_runtime)
+        add_subdirectory(tool/physics-runtime-tests)
+    endif()
     if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
         add_subdirectory(tool/animation-tests)
     endif()
