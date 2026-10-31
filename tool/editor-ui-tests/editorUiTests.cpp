@@ -3481,10 +3481,11 @@ TEST_F(EditorUiTest, TressfxStaticAndCpuDefaultsRemainEditableWithoutLiveOrReset
         ASSERT_EQ(sink.commands.size(), 1u);
         EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
         const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
-        ASSERT_EQ(changes.size(), 8u);
+        ASSERT_EQ(changes.size(), 9u);
         EXPECT_EQ(changes[1].field, "simulationDefaults.damping");
         ASSERT_TRUE(std::holds_alternative<double>(changes[1].value));
         EXPECT_DOUBLE_EQ(std::get<double>(changes[1].value), 0.02);
+        EXPECT_EQ(changes[8].field, "simulationDefaults.windGain");
 
         // 模拟标准 modify 的权威回执，再取消保存确认；不能把上一轮待办带进下一种 backend。
         auto& authored = snapshot.tressfxDocuments[0];
