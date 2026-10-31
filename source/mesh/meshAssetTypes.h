@@ -15,6 +15,7 @@
 
 namespace VL::Animation { struct SkeletalAsset; }
 namespace VL::Hair { struct TfxBoneAsset; }
+namespace VL::Hair { class TressfxRootCloud; }
 
 // Result of resolving one mesh asset JSON into the effective JSON consumed by mesh validation.
 // It keeps resolver output separate from runtime loading so later defaults or platform overrides can
@@ -304,6 +305,10 @@ struct MeshAssetBuildPlan
     TressfxSimulationConfig tressfxSimulation;
     // TF groups[] 的已校验声明；空表示未声明分组（与缺省 groups 行为一致）。
     std::vector<TressfxGuideGroupPlan> tressfxGuideGroups;
+    // 分组绑定身份（组名 + 区间），与几何身份 modelCacheKey 分离。
+    // 它只用于构造每 guide 的 TressfxGroupBinding 与判断是否需要原地更新；
+    // 不进入几何缓存键，也不进入 renderable 键（键只记录组数）。未声明 groups 时为空。
+    std::string tressfxGroupBindingKey;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
     std::string skeletonPath;
@@ -344,9 +349,13 @@ struct MeshSection
     // 加载期从绑定姿态身体派生根点权重时需要一份主机侧可读副本；只留根点而不是
     // 全部点，正式资产 40,334 根约 0.48 MB。
     std::vector<Eigen::Vector3f> tressfxRootPositions;
-    // 每根 guide 的分组号：0 = 默认组，k = 声明序第 k 组（从 1 起）。
-    // 仅在 TF 声明了 groups 时填充（长度 == guideCount）；为空表示全部 guide 属于默认组 0。
-    std::vector<uint32_t> tressfxGuideGroupIds;
+    // 发根选择缓存：rest/head-local 根点、生长方向、PCA 法与 3D uniform grid。
+    // 只含几何派生量；分组号由独立的 TressfxGroupBinding 持有，组编辑不重建点云。
+    // 导入/预览准备期构建一次；场景快照只共享指针，不逐帧复制点云。
+    std::shared_ptr<const VL::Hair::TressfxRootCloud> tressfxRootCloud;
+    // .tfx 头里的 guide 数。分组绑定在导入后按它展开；几何导入缓存因此
+    // 不保存任何 guide->group 映射。
+    uint32_t tressfxGuideCount = 0;
     std::vector<uint32_t> indices;
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;

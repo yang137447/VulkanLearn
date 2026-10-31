@@ -8,6 +8,42 @@ layout(set = 2, binding = 3, std430) readonly buffer TressfxCurrentPositions
 {
     vec4 positions[];
 } tressfxCurrentPositions;
+// 分组数据按对象冻结：每 guide 一个 group id，另有 index 0 = 默认灰的颜色表。
+// 两者都不是顶点属性，因此编辑分组不需要重建 ribbon 顶点布局。
+layout(set = 2, binding = 5, std430) readonly buffer TressfxGuideGroupIds
+{
+    uint groupIds[];
+} tressfxGuideGroupIds;
+layout(set = 2, binding = 6, std430) readonly buffer TressfxGuideGroupColors
+{
+    vec4 groupColors[];
+} tressfxGuideGroupColors;
+// 笔刷 ghost：每 guide 一个 [0,1] 权重；UI 命令整表覆盖，渲染线程只读。
+layout(set = 2, binding = 7, std430) readonly buffer TressfxBrushWeights
+{
+    float brushWeights[];
+} tressfxBrushWeights;
+
+// pointIndex 是中心线点索引（gl_VertexIndex / 2）；pointsPerGuide 由对象 UBO
+// selectionData.y 冻结。无效/越界都回退到默认组 0，避免索引到颜色表外。
+uint TressfxGuideGroupIdForPoint(uint pointIndex)
+{
+    const uint pointsPerGuide = uint(max(uboM.selectionData.y, 0.0));
+    if (pointsPerGuide == 0u)
+        return 0u;
+    const uint guideIndex = pointIndex / pointsPerGuide;
+    if (guideIndex >= tressfxGuideGroupIds.groupIds.length())
+        return 0u;
+    return tressfxGuideGroupIds.groupIds[guideIndex];
+}
+float TressfxBrushWeightForPoint(uint pointIndex)
+{
+    const uint pointsPerGuide = uint(max(uboM.selectionData.y, 0.0));
+    if (pointsPerGuide == 0u) return 0.0;
+    const uint guideIndex = pointIndex / pointsPerGuide;
+    if (guideIndex >= tressfxBrushWeights.brushWeights.length()) return 0.0;
+    return tressfxBrushWeights.brushWeights[guideIndex];
+}
 // 参考 TressFX5-5.4.4 TressFXVertexFactory.ush 的 ComputeViewAlignedWorldPosition。
 // 保留统一 ViewForward 展开语义，不用每点的透视射线；VL 从局部中心线变换到世界，
 // 不照搬 UE 已预变换的 PositionBuffer，也不交换“法线=发丝切线”的 UE 材质约定。

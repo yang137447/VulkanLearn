@@ -47,6 +47,7 @@
 #include "editor/preview/materialInstancePreviewAdapter.h"
 #include "hair/hairTraceFormat.h"
 #include "hair/tressfxLiveParams.h"
+#include "hair/tressfxGroupBinding.h"
 
 class Material;
 class MaterialInstance;
@@ -142,6 +143,13 @@ public:
     // `hair set` 的 GT 侧入口：字段/值域已在执行端校验，这里只把请求交给渲染线程；
     // 由 HairSimulationPass 在 Record 中按对象名应用到该渲染对象的 config 副本。
     void RequestHairSimulationParameter(const VL::Hair::HairLiveParameterRequest& request);
+    // 分组笔刷 ghost：GT 只登记值语义；渲染线程在下一帧按对象名整表更新 buffer。
+    void RequestTressfxBrushPreview(
+        const VL::Hair::TressfxBrushPreviewRequest& request);
+    // Groups 草稿 binding：只在结构/预览 generation 变化时入队；RT 在
+    // BeginFrame 后原地更新 group id/颜色/参数表，不重建 renderable。
+    void RequestTressfxGroupBindingPreview(
+        const VL::Hair::TressfxGroupBindingPreviewRequest& request);
     // --gpu-stats：开启后逐 pass 采集并按 120 帧打印一次；关闭时不创建 query pool。
     void SetGpuPassStatsLoggingEnabled(bool enabled)
     {
@@ -485,6 +493,8 @@ private:
     void RecordHairSimulation(
         vk::CommandBuffer commandBuffer,
         uint32_t frameSlot);
+    void ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex);
+    void ApplyTressfxGroupBindingPreviewRequests();
     // 在 renderPassOrdered 之前：上传本帧 palette，再录制 GPU 预蒙皮 dispatch。
     // 关闭 --prerender-skin 时 renderGraph 没有该 pass，本函数直接返回。
     void RecordSkinDeform(
@@ -618,6 +628,11 @@ private:
     // 过期意图先丢弃，避免无渲染帧时无限累积。
     std::mutex hairLiveParameterMutex;
     std::vector<VL::Hair::HairLiveParameterRequest> pendingHairLiveParameters;
+    std::mutex tressfxBrushPreviewMutex;
+    std::vector<VL::Hair::TressfxBrushPreviewRequest> pendingTressfxBrushPreviews;
+    std::mutex tressfxGroupBindingPreviewMutex;
+    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest>
+        pendingTressfxGroupBindingPreviews;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

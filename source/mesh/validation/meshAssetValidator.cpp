@@ -1,6 +1,7 @@
 #include "meshAssetValidator.h"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <cmath>
 #include <iomanip>
@@ -819,9 +820,38 @@ namespace
         return left.start != right.start ? left.start < right.start : left.end < right.end;
     }
 
+    // 名称规则必须与编辑器 Groups 控制器一致：Trim 后非空、大小写不敏感唯一，
+    // 且 `Default`/`unassigned` 保留给隐式组 0。否则运行期合法的资产会在编辑器
+    // 里加载失败，随后一次保存就可能把整份 groups 清空。
+    std::string TrimGroupName(std::string_view text)
+    {
+        size_t begin = 0;
+        size_t end = text.size();
+        while (begin < end && std::isspace(static_cast<unsigned char>(text[begin]))) ++begin;
+        while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
+        return std::string(text.substr(begin, end - begin));
+    }
+
+    std::string FoldGroupName(std::string_view text)
+    {
+        std::string result(text);
+        for (char& ch : result)
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+        return result;
+    }
+
+    bool IsReservedGroupName(std::string_view name)
+    {
+        const std::string folded = FoldGroupName(name);
+        return folded == "default" || folded == "unassigned";
+    }
+
     // TF groups[] 的描述符层校验：名称非空且唯一，每组 guideRanges 为非空的 [start,end) 对且
     // 组内不重叠，跨组也不重叠。guide 上界（end <= guideCount）依赖 .tfx 解析结果，
     // 由 TressfxModelImporter 在导入时检查。
+    // 总区间上限必须与编辑器 TressfxGroupEditor::MaxGuideRanges 一致；笔刷一次可能产生
+    // 大量不连续区间，资产层若放宽会让编辑器保存后的结果反而无法通过下一次导入。
+    constexpr size_t MaxTressfxGuideRanges = 4096;
     std::vector<TressfxGuideGroupPlan> ReadTressfxGuideGroups(
         const nlohmann::json& json, std::string_view meshAssetPath)
     {
@@ -829,10 +859,14 @@ namespace
         if (!json.contains("groups"))
             return groups;
         const auto& array = json.at("groups");
-        if (!array.is_array() || array.empty())
+        if (!array.is_array())
             throw std::runtime_error(
-                "TressFX groups must be a non-empty array when present: " +
+                "TressFX groups must be an array when present: " +
                 std::string(meshAssetPath));
+        // 空数组与未声明 groups 语义相同（全部 guide 属于默认组 0）；
+        // 编辑器也把“删除最后一个组”写成移除键，两条路径保持一致。
+        if (array.empty())
+            return groups;
 
         std::vector<OwnedGuideRange> ranges;
         std::vector<std::string> names;
@@ -850,25 +884,34 @@ namespace
                         "TressFX group has unknown field \"" + field.key() +
                         "\": " + std::string(meshAssetPath));
             }
-            if (!node.contains("name") || !node.at("name").is_string() ||
-                node.at("name").get<std::string>().empty())
+            if (!node.contains("name") || !node.at("name").is_string())
                 throw std::runtime_error(
                     "TressFX group requires a non-empty string name: " +
                     std::string(meshAssetPath));
             TressfxGuideGroupPlan group;
             group.name = node.at("name").get<std::string>();
-            if (std::find(names.begin(), names.end(), group.name) != names.end())
+            const std::string trimmed = TrimGroupName(group.name);
+            if (trimmed.empty() || trimmed != group.name)
+                throw std::runtime_error(
+                    "TressFX group name must be non-empty without leading or trailing "
+                    "whitespace: \"" + group.name + "\": " + std::string(meshAssetPath));
+            if (IsReservedGroupName(trimmed))
+                throw std::runtime_error(
+                    "TressFX group name \"" + trimmed + "\" is reserved for the implicit "
+                    "default group: " + std::string(meshAssetPath));
+            const std::string folded = FoldGroupName(trimmed);
+            if (std::find(names.begin(), names.end(), folded) != names.end())
                 throw std::runtime_error(
                     "TressFX group name is duplicated: \"" + group.name + "\": " +
                     std::string(meshAssetPath));
-            names.push_back(group.name);
+            names.push_back(folded);
 
             const std::string context = "TressFX group \"" + group.name + "\": " +
                 std::string(meshAssetPath);
-            if (!node.contains("guideRanges") || !node.at("guideRanges").is_array() ||
-                node.at("guideRanges").empty())
+            // 空组是合法作者状态：新建组可以先没有 guide，之后用笔刷填充。
+            if (!node.contains("guideRanges") || !node.at("guideRanges").is_array())
                 throw std::runtime_error(
-                    "TressFX group guideRanges must be a non-empty array of [start, end] pairs: " +
+                    "TressFX group guideRanges must be an array of [start, end] pairs: " +
                     context);
             for (const auto& pair : node.at("guideRanges"))
             {
@@ -892,6 +935,13 @@ namespace
             }
             groups.push_back(std::move(group));
         }
+
+        if (ranges.size() > MaxTressfxGuideRanges)
+            throw std::runtime_error(
+                "TressFX groups contain " + std::to_string(ranges.size()) +
+                " guide ranges; the limit is " +
+                std::to_string(MaxTressfxGuideRanges) + ": " +
+                std::string(meshAssetPath));
 
         // 按起点扫描并记录已出现区间的最大终点；半开区间首尾相接不算重叠。
         std::sort(ranges.begin(), ranges.end(), OwnedGuideRangeStartsBefore);
@@ -922,8 +972,10 @@ namespace
         return groups;
     }
 
-    // 分组几何身份：名称与区间都会改变导入后每根 guide 的分组号，因此进入 modelCacheKey。
-    // overrides 不影响导入结果，不进入几何身份。
+    // 分组绑定身份：名称与区间决定每根 guide 的分组号，但 ribbon 顶点/索引与它们无关。
+    // 因此这份身份不进入几何 modelCacheKey，避免一次组编辑触发整份 .tfx 重新导入；
+    // RendererMeshLoader 把它拼进 renderable key，Phase 2 后组只更新 group buffer。
+    // overrides 不影响导入结果，也不进入绑定身份。
     std::string TressfxGuideGroupIdentity(const std::vector<TressfxGuideGroupPlan>& groups)
     {
         nlohmann::json identity = nlohmann::json::array();
@@ -1006,7 +1058,7 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         identity << "|tressfx-geometry-v2|radius=" << std::hexfloat << loadPlan.strandRadius;
         loadPlan.modelCacheKey += identity.str();
         if (!loadPlan.tressfxGuideGroups.empty())
-            loadPlan.modelCacheKey += "|groups=" +
+            loadPlan.tressfxGroupBindingKey =
                 TressfxGuideGroupIdentity(loadPlan.tressfxGuideGroups);
     }
     else if (effectiveMeshAssetJson.contains("groups"))
@@ -1301,7 +1353,19 @@ TressfxSimulationConfig ResolveTressfxBehavior(
     const TressfxPlacementBehavior& placement,
     const std::string& context)
 {
+    return ResolveTressfxBehaviorLayers(defaults, nlohmann::json::object(), placement, context);
+}
+
+TressfxSimulationConfig ResolveTressfxBehaviorLayers(
+    const TressfxSimulationConfig& defaults, const nlohmann::json& overrides,
+    const TressfxPlacementBehavior& placement,
+    const std::string& context)
+{
+    if (!overrides.is_object())
+        throw std::runtime_error("TressFX simulation overrides must be an object" +
+            (context.empty() ? std::string() : ": " + context));
     nlohmann::json simulation = WriteTressfxSimulationValues(defaults);
+    simulation.update(overrides);
     simulation.update(placement.overrides);
     if (placement.mode != TressfxSimulationMode::Inherit)
         simulation["enabled"] = placement.mode == TressfxSimulationMode::On;

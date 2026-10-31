@@ -150,7 +150,7 @@ inline Eigen::Vector3f TressfxCombineWind(const Eigen::Vector3f& wind0,
 // TressFX SetWind 的逐帧幅值调制：wM = windMag * (sin(frame * 0.001)² + 0.5)。
 // frame 是仿真帧序号（不是秒），在 0.5..1.5 倍之间缓慢起伏。VL 的偏差：运行时的
 // 时间调制已交给场景阵风（见 world/worldWindSampling.h），GPU 与 CPU 运行路径都
-// 不再调用本函数，否则会与共享阵风叠加成双重调制。只保留给 legacy/SDK 对照入口
+// 不再调用本函数，否则会与共享阵风叠加成双重调制。只保留给旧 SDK 对照入口
 // TressfxBuildWindCorners(direction, magnitude, frame) 与离线/单元测试。
 inline float TressfxWindFrameModulation(uint32_t frame)
 {
@@ -207,7 +207,7 @@ inline TressfxWindCorners TressfxBuildWindCorners(
     return corners;
 }
 
-// legacy/SDK 对照入口：保留 TressFX 5.0 SetWind 的逐帧幅值调制
+// 旧 SDK 对照入口：保留 TressFX 5.0 SetWind 的逐帧幅值调制
 // （wM = |wind| * (sin(frame*0.001)² + 0.5)）。运行时（HairSimulationPass 与
 // CPU 参考 solver）都不调用它：场景阵风已经负责时间调制，两边叠加会双重调制。
 inline TressfxWindCorners TressfxBuildWindCorners(

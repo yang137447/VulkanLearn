@@ -5,6 +5,7 @@
 // 用前两个顶点的 previous/current/previous-previous 位置求刚体变换和 VspCoeff，
 // 并写入 LocalShape pass 需要的 SkinningQuat。即使 VSP 关闭也会执行。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGroupCommon.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -50,6 +51,7 @@ void main()
     if (guide >= params.counts.y)
         return;
 
+    TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
     uint root = guide * TressfxPointsPerGuide();
 
     vec4 posOldOld0 = previousPreviousPositions.positions[root];
@@ -72,10 +74,10 @@ void main()
     }
     // 退化（前两点重合）时保持单位旋转；资产导入已拒绝相邻重合点，这里只防 NaN。
 
-    float vspCoeff = params.shape.z;
+    float vspCoeff = group.vspCoefficient;
     // 伪加速度：length(new - 2*old + old_old)，超过阈值时强制完全跟随。
     float accel = length(posNew1.xyz - 2.0 * posOld1.xyz + posOldOld1.xyz);
-    if (accel > params.shape.w)
+    if (accel > group.vspAccelThresholdMax)
         vspCoeff = 1.0;
 
     uint base = guide * 3u;

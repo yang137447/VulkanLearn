@@ -1615,6 +1615,45 @@ void EngineLoop::ApplyQueuedUiActions()
                 command.hairLiveParameter.values[component] =
                     action.previewHairParameter.values[component];
             break;
+        case UiActionType::SetTressfxGroupPreview:
+            command.type = RuntimeCommandType::SetTressfxGroupPreview;
+            command.actorProperty.worldGeneration = action.previewTressfxGroup.worldGeneration;
+            command.tressfxSelectedGroup = action.previewTressfxGroup.selectedGroup;
+            command.tressfxGroupFlags = action.previewTressfxGroup.flags;
+            break;
+        case UiActionType::SetTressfxGroupBindingPreview:
+            command.type = RuntimeCommandType::SetTressfxGroupBindingPreview;
+            command.actorProperty.worldGeneration =
+                action.previewTressfxGroupBinding.worldGeneration;
+            command.tressfxGroupBindingPreview.objectName =
+                action.previewTressfxGroupBinding.objectName;
+            command.tressfxGroupBindingPreview.worldGeneration =
+                action.previewTressfxGroupBinding.worldGeneration;
+            command.tressfxGroupBindingPreview.draftRevision =
+                action.previewTressfxGroupBinding.draftRevision;
+            command.tressfxGroupBindingPreview.guideGroupIds =
+                action.previewTressfxGroupBinding.guideGroupIds;
+            command.tressfxGroupBindingPreview.groupNames =
+                action.previewTressfxGroupBinding.groupNames;
+            command.tressfxGroupBindingPreview.bindingKey =
+                action.previewTressfxGroupBinding.bindingKey;
+            break;
+        case UiActionType::SetTressfxBrushPreview:
+            command.type = RuntimeCommandType::SetTressfxBrushPreview;
+            command.actorProperty.worldGeneration =
+                action.previewTressfxBrush.worldGeneration;
+            command.tressfxBrushPreview.objectName = action.previewTressfxBrush.objectName;
+            command.tressfxBrushPreview.worldGeneration =
+                action.previewTressfxBrush.worldGeneration;
+            command.tressfxBrushPreview.targetGroupId =
+                action.previewTressfxBrush.targetGroupId;
+            command.tressfxBrushPreview.mode = action.previewTressfxBrush.mode;
+            command.tressfxBrushPreview.weights = action.previewTressfxBrush.weights;
+            command.tressfxBrushPreview.ringVisible = action.previewTressfxBrush.ringVisible;
+            command.tressfxBrushPreview.ringCenter = action.previewTressfxBrush.ringCenter;
+            command.tressfxBrushPreview.ringNormal = action.previewTressfxBrush.ringNormal;
+            command.tressfxBrushPreview.ringRadiusWorld = action.previewTressfxBrush.ringRadiusWorld;
+            break;
         default:
             continue;
         }

@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "editor/scene/editorActorProperty.h"
 #include "debug/debugDrawControl.h"
+#include "hair/tressfxGroupPaint.h"
 
 namespace VL
 {
@@ -30,6 +31,14 @@ enum class UiActionType
     // 毛发资产视口的模拟参数实时覆盖：只在当前预览 World 生效，不写资产。
     // 字段名与值域由运行期命令边界再次校验。
     SetHairSimulationParameter,
+    // 毛发分组预览（Group Colors / Selected / Solo）：只改当前预览 World 的会话状态，
+    // 不写资产，也不直接接触 GPU buffer。
+    SetTressfxGroupPreview,
+    // Groups 草稿绑定的预览同步：只在草稿结构/预览 generation 变化时发送；
+    // 由运行时队列交给 RT 原地更新 group id/颜色/参数 buffer。
+    SetTressfxGroupBindingPreview,
+    // 分组笔刷 ghost：只更新 per-object preview buffer，不写资产或 GPU group id。
+    SetTressfxBrushPreview,
     ControlAnimationPreview,
     // 被聚焦脚本控制器的时间轴：stringValue=组件身份，intValue 0=seek/1=play，floatValue=秒。
     ControlScriptAnimation,
@@ -151,6 +160,40 @@ struct ModelPreviewHairParameterInput
     uint32_t valueCount = 0;
 };
 
+struct ModelPreviewTressfxGroupInput
+{
+    uint64_t worldGeneration = 0;
+    // -1 = 无选中；0 = 隐式 Default；k = 声明序第 k 个命名组。
+    int32_t selectedGroup = -1;
+    // 与 shader 的 uboM.selectionData.w 一致：bit0 Group Colors，bit1 Solo。
+    uint32_t flags = 0;
+};
+
+struct ModelPreviewTressfxGroupBindingInput
+{
+    uint64_t worldGeneration = 0;
+    uint64_t draftRevision = 0;
+    std::string objectName;
+    std::vector<uint32_t> guideGroupIds;
+    std::vector<std::string> groupNames;
+    std::string bindingKey;
+};
+
+struct ModelPreviewTressfxBrushInput
+{
+    uint64_t worldGeneration = 0;
+    std::string objectName;
+    // 0 = Default（不允许作为绘画目标）；k = 声明序第 k 个命名组。
+    uint32_t targetGroupId = 0;
+    VL::Hair::GroupPaintMode mode = VL::Hair::GroupPaintMode::Add;
+    std::vector<VL::Hair::TressfxBrushGuideWeight> weights;
+    // 世界空间笔刷圆环；正常路径由 World DebugDraw 绘制，UI 的屏幕圆环只做降级提示。
+    bool ringVisible = false;
+    Eigen::Vector3f ringCenter = Eigen::Vector3f::Zero();
+    Eigen::Vector3f ringNormal = Eigen::Vector3f::UnitY();
+    float ringRadiusWorld = 0.0f;
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
@@ -163,6 +206,9 @@ struct UiAction
     ModelPreviewCameraInput previewCamera;
     ModelPreviewRotationInput previewRotation;
     ModelPreviewHairParameterInput previewHairParameter;
+    ModelPreviewTressfxGroupInput previewTressfxGroup;
+    ModelPreviewTressfxGroupBindingInput previewTressfxGroupBinding;
+    ModelPreviewTressfxBrushInput previewTressfxBrush;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;

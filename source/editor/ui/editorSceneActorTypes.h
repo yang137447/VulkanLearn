@@ -9,6 +9,9 @@
 
 #include "world/worldSnapshot.h"
 
+namespace VL::Hair { class TressfxRootCloud; }
+namespace VL::Hair { struct TressfxGroupBinding; }
+
 namespace VL::EditorUi
 {
 
@@ -41,6 +44,16 @@ struct EditorSceneMeshSectionSnapshot
     std::string materialInstancePath;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
+    // 根点云保持 model/head-local；worldFromLocal 是当前 actor 的完整模型矩阵，
+    // 由 SurfaceBrush 在采样时用于世界空间 ray/平面。两者都是只读快照。
+    std::shared_ptr<const VL::Hair::TressfxRootCloud> tressfxRootCloud;
+    Eigen::Matrix4f tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    // 已保存资产的 guide->group 映射与组名；草稿组按名称映射到 GPU group id，
+    // 不能直接用草稿下标。点云不再携带组号。
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> tressfxGroupBinding;
+    // placement 解析后的每组模拟配置；Groups 检查器的 asset default 从这里读取。
+    // 为空表示该 section 没有 TressFX 求解或预览快照未发布。
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> tressfxGroupConfigs;
 };
 
 // 相机发布 Details 的作者曝光与辅助线需要的基向量/投影参数；

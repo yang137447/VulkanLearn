@@ -332,8 +332,12 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
                     components[index].value("id", "") != componentId) continue;
                 const nlohmann::json sceneObject = ScriptBlueprintMeshObject(actor, index);
                 const auto effective = clone.placementBinding.tressfx;
+                const auto groupConfigs = clone.placementBinding.tressfxGroupConfigs;
                 clone.placementBinding = ReadPlacementBindingFromComponent(sceneObject);
                 clone.placementBinding.tressfx = effective;
+                // per-group 配置与 effective 来自同一次加载期分层解析；spawn 只
+                // 重写来源身份，不重新读 TF/放置字段。
+                clone.placementBinding.tressfxGroupConfigs = groupConfigs;
                 if (clone.placementBinding.tressfx && clone.placementBinding.tressfx->skinning)
                     clone.placementBinding.tressfx->skinning->source =
                         clone.placementBinding.sourceSceneObject;

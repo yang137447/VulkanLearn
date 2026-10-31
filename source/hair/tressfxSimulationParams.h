@@ -27,13 +27,16 @@ struct GuideSimulationParams
     Eigen::Vector4f wind1 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind2 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind3 = Eigen::Vector4f::Zero();
-    // x = dt（秒，源调度恒为 0.0125）, y = DampingCoeff（作者值直接使用）,
-    // z = pointsPerGuide, w = rootFixedPoints
+    // x = dt（秒，源调度恒为 0.0125）, y = base DampingCoeff（仅供诊断；
+    // 分组模拟以 binding 17 的 per-guide 配置为准）, z = pointsPerGuide,
+    // w = rootFixedPoints
     Eigen::Vector4f controls = Eigen::Vector4f::Zero();
-    // x = globalShapeStiffness, y = globalShapeEffectiveRange,
-    // z = vspCoefficient, w = vspAccelThresholdMax（二阶位置差阈值，厘米，未除 dt²）
+    // x = base globalShapeStiffness, y = base globalShapeEffectiveRange,
+    // z = base vspCoefficient, w = base vspAccelThresholdMax（二阶位置差阈值，
+    // 厘米，未除 dt²）。Phase 4 起这 4 项由 binding 17 的组配置驱动；此处保留
+    // 816-byte 布局与 base 镜像，便于 ABI 对照和非分组诊断。
     Eigen::Vector4f shape = Eigen::Vector4f::Zero();
-    // x = bendStiffness（映射到 LocalShape 的 Stiffness 标量），y = ResetPositions；
+    // x = base bendStiffness（分组时以 binding 17 的组配置为准），y = ResetPositions；
     // z = 只换基三份历史（历史 VL 路径保留，GPU 原生调度已不再使用：n == 0 时
     // 不录 pass，换基并入首个正 delta substep 的 Integration）；w 的 bit0/bit1
     // = VSP / LocalShape 逐顶点作者数组存在，其余位保留 0。

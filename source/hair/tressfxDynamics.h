@@ -64,13 +64,35 @@ public:
         size_t pointsPerGuide,
         std::vector<float> inverseMass,
         SimulationConfig config);
+    // 分组求解入口：groupConfigs[i] 已按 base -> group i -> placement 合成，
+    // guideGroupIds[guide] 选择配置；缺项/越界回退索引 0。
+    GuideSimulation(
+        std::vector<Eigen::Vector3f> restPositions,
+        size_t guideCount,
+        size_t pointsPerGuide,
+        std::vector<float> inverseMass,
+        std::vector<SimulationConfig> groupConfigs,
+        std::vector<uint32_t> guideGroupIds);
 
     void Reset();
+    // 组编辑后复用对象：只替换配置表与 guide->group 映射，不重置求解历史、
+    // 当前/上一帧位置或模拟帧计数。configs 必须非空，ids 必须与 guide 数一致。
+    void RebindGroups(std::vector<SimulationConfig> configs,
+        std::vector<uint32_t> guideGroupIds);
+    // 诊断/测试读取：返回该 guide 实际使用的组配置（越界回退索引 0）。
+    const SimulationConfig& ConfigForGuide(size_t guide) const
+    {
+        return GuideConfig(guide);
+    }
     // 每帧在 StepFrame 之前刷新场景风向量（厘米/秒）。只改方向/强度，不触碰
     // 历史位置或仿真帧计数；调用方是 RenderableObject 的游戏线程步进入口。
     void SetSceneWind(const Eigen::Vector3f& windVelocityCmPerSec)
     {
         config.wind = windVelocityCmPerSec;
+        // 风是对象级输入，但每个组配置都保存一份标量副本；只改 base 会让
+        // 分组求解读到旧风向量。
+        for (SimulationConfig& groupConfig : groupConfigs)
+            groupConfig.wind = windVelocityCmPerSec;
     }
     // 旧的可变步长入口：dt 被 clamp 到 [0, maxDt]，一帧只推进一次。
     // 保留给现有测试/逐变量步长调用；运行时改走 StepFrame。
@@ -106,6 +128,7 @@ private:
     void LocalShapePass(size_t guide, const StrandTransform& transform);
     void LengthAndWindPass(size_t guide, float timeStep);
     void CollisionPass(size_t guide);
+    const SimulationConfig& GuideConfig(size_t guide) const;
 
     std::vector<Eigen::Vector3f> restPositions;
     std::vector<Eigen::Vector3f> positions;
@@ -118,6 +141,9 @@ private:
     std::vector<uint8_t> movable;
     size_t guideCount = 0;
     size_t pointsPerGuide = 0;
+    // index 0 同时是对象级参数（maxDt 等）的基准；组差异只允许 6 个组字段。
+    std::vector<SimulationConfig> groupConfigs;
+    std::vector<uint32_t> guideGroupIds;
     SimulationConfig config;
     bool paused = false;
     // 每个 substep 结束后累加 solver step；StepFrame 一帧可累加 0/1/2 次。

@@ -917,6 +917,111 @@ void RuntimeCommandExecutor::ExecuteCommand(
             " field=" + request.field + " value=" + values);
         break;
     }
+    case RuntimeCommandType::SetTressfxGroupPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        if (command.sourceText == "ui" &&
+            command.actorProperty.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("TressFX group preview rejected for stale World");
+            break;
+        }
+        TressfxGroupPreviewState preview;
+        preview.selectedGroup = command.tressfxSelectedGroup;
+        preview.groupColors =
+            (command.tressfxGroupFlags & TressfxGroupPreviewColors) != 0u;
+        preview.solo = (command.tressfxGroupFlags & TressfxGroupPreviewSolo) != 0u;
+        world->SetTressfxGroupPreview(preview);
+        diagnostics.ReportInfo(
+            "TressFX group preview: selected=" +
+            std::to_string(preview.selectedGroup) +
+            " colors=" + std::to_string(preview.groupColors) +
+            " solo=" + std::to_string(preview.solo));
+        break;
+    }
+    case RuntimeCommandType::SetTressfxGroupBindingPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        VL::Hair::TressfxGroupBindingPreviewRequest request =
+            command.tressfxGroupBindingPreview;
+        if (command.sourceText == "ui" &&
+            request.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning(
+                "TressFX group binding preview rejected for stale World");
+            break;
+        }
+        std::string rejection;
+        if (!VL::Hair::ValidateTressfxGroupBindingPreviewRequest(request, rejection))
+        {
+            diagnostics.ReportWarning(
+                "TressFX group binding preview rejected: " + rejection);
+            break;
+        }
+        renderSystem.RequestTressfxGroupBindingPreview(request);
+        diagnostics.ReportInfo(
+            "TressFX group binding preview queued: object=" + request.objectName +
+            " groups=" + std::to_string(request.groupNames.size()) +
+            " revision=" + std::to_string(request.draftRevision));
+        break;
+    }
+    case RuntimeCommandType::SetTressfxBrushPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        VL::Hair::TressfxBrushPreviewRequest request = command.tressfxBrushPreview;
+        if (command.sourceText == "ui" &&
+            request.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("TressFX brush preview rejected for stale World");
+            break;
+        }
+        std::string rejection;
+        if (!VL::Hair::ValidateTressfxBrushPreviewRequest(request, rejection))
+        {
+            diagnostics.ReportWarning("TressFX brush preview rejected: " + rejection);
+            break;
+        }
+        // 世界空间圆环属于 active World 的 GT 会话状态：固定 owner/publisher/category/key
+        // 让每次 hover 覆盖上一帧，不累积 debug item。退出笔刷或 stamp 无效时显式移除。
+        Debug::Style ringStyle;
+        ringStyle.owner = "Editor";
+        ringStyle.publisher = "TressfxBrush";
+        ringStyle.category = "TressfxBrush";
+        ringStyle.key = "cursor";
+        ringStyle.depth = Debug::DepthMode::DepthTest;
+        ringStyle.thickness = 2.0f;
+        // 预览状态持续到显式清除；不由 duration 过期，避免鼠标静止时圆环闪烁。
+        ringStyle.duration = -1.0f;
+        ringStyle.color = request.mode == VL::Hair::GroupPaintMode::Remove
+            ? Debug::Color{1.0f, 0.32f, 0.18f, 1.0f}
+            : Debug::Color{0.95f, 0.83f, 0.37f, 1.0f};
+        if (request.ringVisible)
+        {
+            const Eigen::Vector3f normal = request.ringNormal.normalized();
+            const Eigen::Quaternionf orientation =
+                Eigen::Quaternionf::FromTwoVectors(Eigen::Vector3f::UnitY(), normal);
+            world->GetDebugDraw().DrawDebugCircle(
+                request.ringCenter, request.ringRadiusWorld, orientation, ringStyle);
+        }
+        else
+        {
+            world->GetDebugDraw().RemoveKey(
+                ringStyle.owner, ringStyle.publisher, ringStyle.category, ringStyle.key);
+        }
+        // 纯圆环清除没有对象名（切到非头发预览时），不应进入 RT 的对象查找。
+        if (!request.objectName.empty())
+            renderSystem.RequestTressfxBrushPreview(request);
+        // hover 只更新圆环；按鼠标频率打印会淹没诊断输出，只在 ghost 变化时记录。
+        if (!request.weights.empty() || !request.ringVisible)
+            diagnostics.ReportInfo("TressFX brush preview queued: object=" +
+                request.objectName + " target=" + std::to_string(request.targetGroupId) +
+                " guides=" + std::to_string(request.weights.size()) +
+                " ring=" + std::to_string(request.ringVisible));
+        break;
+    }
     }
 }
 

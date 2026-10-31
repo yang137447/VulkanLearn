@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -34,6 +35,8 @@
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
 #include "animation/motionDebug.h"
+#include "hair/tressfxRootCloud.h"
+#include "hair/tressfxGroupBinding.h"
 
 namespace
 {
@@ -62,6 +65,35 @@ EditorSceneActorSnapshot MeshActor(const std::string& name, uint64_t generation,
     section.materialSlotName = "Surface";
     actor.sections.push_back(std::move(section));
     return actor;
+}
+
+std::shared_ptr<const VL::Hair::TressfxRootCloud> HairBrushRootCloud(size_t count = 200)
+{
+    std::vector<Eigen::Vector3f> positions;
+    std::vector<Eigen::Vector3f> growthDirections;
+    positions.reserve(count);
+    growthDirections.reserve(count);
+    const float goldenAngle = 3.14159265358979323846f * (3.0f - std::sqrt(5.0f));
+    for (size_t index = 0; index < count; ++index)
+    {
+        const float y = 1.0f - 2.0f * (static_cast<float>(index) + 0.5f) /
+            static_cast<float>(count);
+        const float ring = std::sqrt(std::max(0.0f, 1.0f - y * y));
+        const float theta = goldenAngle * static_cast<float>(index);
+        positions.emplace_back(10.0f * ring * std::cos(theta), 10.0f * y,
+            10.0f * ring * std::sin(theta));
+        growthDirections.push_back(Eigen::Vector3f::UnitY());
+    }
+    return VL::Hair::TressfxRootCloud::Build(positions, growthDirections);
+}
+
+// 已保存资产的 guide->group 绑定；20 根 guide 时 fringe=[0,10)、side=[10,20)。
+std::shared_ptr<const VL::Hair::TressfxGroupBinding> HairGroupBinding(
+    size_t guideCount = 200, uint32_t split = 100)
+{
+    return VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, split}}}, {"side", {{split, static_cast<uint32_t>(guideCount)}}}},
+        static_cast<uint32_t>(guideCount), "test-binding", "test");
 }
 
 EditorSceneActorSnapshot SunActor(float intensity, bool primary)
@@ -9353,6 +9385,1006 @@ TEST_F(EditorUiTest, RecursiveBlueprintControlsRemainInsideDetailsAtWindowSizes)
         }
         EXPECT_TRUE(system.errors.empty()) << Errors();
     }
+}
+
+// 独立的 suite 名让计划的验收过滤 `TressfxGroups*` 能命中这些用例；沿用
+// EditorUiTest 会得到 `EditorUiTest.TressfxGroups...`，通配符前缀不会匹配。
+class TressfxGroups : public EditorUiTest
+{
+};
+
+TEST_F(TressfxGroups, TressfxGroupsCreateRenameAndStagesSingleGroupsChange)
+{
+    OpenTressfxAsset();
+    // guideCount 与目录/文档快照同源；10 让 end=11 之类的越界在保存前就能被 UI 挡住。
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+    EXPECT_NE(section->GetInnerRML().find("Default"), std::string::npos);
+    EXPECT_NE(section->GetInnerRML().find("10 guides"), std::string::npos);
+    Click("#details-section-hair-groups-title");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("details-section-hair-groups")->IsClassSet("collapsed"));
+    Click("#details-section-hair-groups-title");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("details-section-hair-groups")->IsClassSet("collapsed"));
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    auto* create = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(create, nullptr);
+    EXPECT_FALSE(create->HasAttribute("disabled"));
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+
+    std::string rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("fringe"), std::string::npos);
+    // 新组从空开始，Default 仍是全部 10 根 guide。
+    EXPECT_NE(rml.find("0 guides"), std::string::npos);
+    EXPECT_NE(rml.find("10 guides"), std::string::npos);
+    auto* row = document->GetElementById("hair-group-row-0");
+    ASSERT_NE(row, nullptr);
+    auto* swatch = row->QuerySelector(".hair-group-swatch");
+    ASSERT_NE(swatch, nullptr);
+    EXPECT_NE(swatch->GetProperty("background-color"), nullptr);
+    EXPECT_FLOAT_EQ(swatch->GetBox().GetSize(Rml::BoxArea::Content).x, 14.0f);
+
+    SetValue("hair-group-name", "fringeA");
+    Refresh();
+    rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("fringeA"), std::string::npos);
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 11u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    EXPECT_EQ(payload.assetPath, "Meshes/TF_hair.json");
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_FALSE(payload.changes[0].reset);
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_TRUE(groups.is_array());
+    ASSERT_EQ(groups.size(), 1u);
+    EXPECT_EQ(groups[0]["name"], "fringeA");
+    EXPECT_EQ(groups[0]["guideRanges"], nlohmann::json::array());
+    EXPECT_FALSE(groups[0].contains("simulationOverrides"));
+}
+
+TEST_F(TressfxGroups, TressfxGroupsRejectPaddedReservedAndDuplicateNames)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    const auto rowCount = [&]() {
+        Rml::ElementList rows;
+        section->QuerySelectorAll(rows, "[data-action=hair-group-select]");
+        return rows.size();
+    };
+    const auto createDisabled = [&]() {
+        auto* button = document->GetElementById("hair-group-create-submit");
+        return button == nullptr || button->HasAttribute("disabled");
+    };
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", " fringe ");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    // 行内表单保持打开；逐个替换名称，验证保留名与空名称都不可创建。
+    SetValue("hair-group-create-name", "Default");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "unassigned");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 0u);
+
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    EXPECT_FALSE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    ASSERT_EQ(rowCount(), 1u);
+
+    // 重名（大小写不敏感）也不能追加第二个组或产生任何资产命令。
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "FRINGE");
+    Refresh();
+    EXPECT_TRUE(createDisabled());
+    Click("#hair-group-create-submit");
+    Refresh();
+    EXPECT_EQ(rowCount(), 1u);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsOverrideToggleAndDeleteGroup)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 10;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    const auto createGroup = [&](const std::string& name) {
+        Click("#hair-group-create-open");
+        Refresh();
+        SetValue("hair-group-create-name", name);
+        Refresh();
+        Click("#hair-group-create-submit");
+        Refresh();
+        Refresh();
+    };
+    createGroup("fringe");
+    createGroup("side");
+
+    Click("[data-action=hair-group-select][data-index='0']");
+    Refresh();
+    ASSERT_NE(Control("hair-group-name"), nullptr);
+    EXPECT_EQ(Control("hair-group-name")->GetValue(), "fringe");
+
+    auto* toggle = document->GetElementById("hair-group-override-damping");
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->HasAttribute("checked"));
+    auto* value = Control("hair-group-override-damping-value");
+    ASSERT_NE(value, nullptr);
+    EXPECT_TRUE(value->HasAttribute("disabled"));
+
+    toggle->SetAttribute("checked", "checked");
+    toggle->DispatchEvent("change", {});
+    Refresh();
+    toggle = document->GetElementById("hair-group-override-damping");
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->HasAttribute("checked"));
+    value = Control("hair-group-override-damping-value");
+    ASSERT_NE(value, nullptr);
+    EXPECT_FALSE(value->HasAttribute("disabled"));
+
+    SetValue("hair-group-override-damping-value", "0.02");
+    Refresh();
+    EXPECT_EQ(Control("hair-group-override-damping-value")->GetValue(), "0.02");
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_EQ(groups.size(), 2u);
+    EXPECT_EQ(groups[0]["name"], "fringe");
+    ASSERT_TRUE(groups[0].contains("simulationOverrides"));
+    EXPECT_DOUBLE_EQ(groups[0]["simulationOverrides"]["damping"].get<double>(), 0.02);
+
+    // 关闭暂存成功后可能出现的 Save Content 弹窗，再删除当前组。
+    Click("#save-cancel");
+    Refresh();
+    Click("#hair-group-delete");
+    Refresh();
+    Refresh();
+
+    Rml::ElementList rows;
+    document->GetElementById("resource-hair-groups")
+        ->QuerySelectorAll(rows, "[data-action=hair-group-select]");
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0]->GetAttribute<std::string>("data-index", ""), "0");
+    EXPECT_NE(rows[0]->GetInnerRML().find("side"), std::string::npos);
+    // 删除当前选中组后回到 Default，选中索引不越界。
+    EXPECT_EQ(document->GetElementById("hair-group-name"), nullptr);
+    auto* defaultRow = document->GetElementById("hair-group-default");
+    ASSERT_NE(defaultRow, nullptr);
+    EXPECT_TRUE(defaultRow->IsClassSet("selected"));
+}
+
+TEST_F(TressfxGroups, TressfxGroupsCreateErrorIsVisibleWithoutSubmit)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    auto* submit = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(submit, nullptr);
+    EXPECT_FALSE(submit->HasAttribute("disabled"));
+
+    // 前后空白必须是行内错误，而不是静默 Trim 后创建成功。
+    SetValue("hair-group-create-name", " fringe ");
+    Refresh();
+    submit = document->GetElementById("hair-group-create-submit");
+    ASSERT_NE(submit, nullptr);
+    EXPECT_TRUE(submit->HasAttribute("disabled"));
+    auto* error = document->GetElementById("hair-group-create-error");
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(error->GetInnerRML().find("whitespace"), std::string::npos);
+
+    SetValue("hair-group-create-name", "Default");
+    Refresh();
+    error = document->GetElementById("hair-group-create-error");
+    ASSERT_NE(error, nullptr);
+    EXPECT_NE(error->GetInnerRML().find("reserved"), std::string::npos);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsDraftSurvivesTheOtherSectionSaving)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "fringe");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    ASSERT_NE(document->GetElementById("hair-group-row-0"), nullptr);
+
+    // Simulation 保存只改 simulationDefaults；Groups 的文档节没变，不能覆盖本地组草稿。
+    auto savedSimulation = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    savedSimulation->documentRevision = 12;
+    savedSimulation->document["simulationDefaults"]["damping"] = 0.02;
+    snapshot.tressfxDocuments = {*savedSimulation};
+    Refresh();
+    Refresh();
+    EXPECT_NE(document->GetElementById("hair-group-row-0"), nullptr)
+        << "saving Simulation must not discard an unsaved Groups draft";
+
+    // 反向：先编辑 Simulation 草稿，再由 Groups 的 revision 前进触发刷新。
+    SetValue("hair-sim-1-0", "0.011");
+    Refresh();
+    auto savedGroups = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    savedGroups->documentRevision = 13;
+    savedGroups->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}}});
+    snapshot.tressfxDocuments = {*savedGroups};
+    Refresh();
+    Refresh();
+    ASSERT_NE(Control("hair-sim-1-0"), nullptr);
+    EXPECT_EQ(Control("hair-sim-1-0")->GetValue(), "0.011")
+        << "saving Groups must not discard an unsaved Simulation draft";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLoadFailureDisablesSaveAndProtectsTheDocument)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    // 运行期/编辑器无法解析的名称；此时保存空控制器会删除整份 groups。
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "Default"}, {"guideRanges", {{0, 2}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+
+    auto* status = document->GetElementById("hair-group-status");
+    ASSERT_NE(status, nullptr);
+    EXPECT_NE(status->GetInnerRML().find("Groups unavailable"), std::string::npos);
+    auto* save = document->GetElementById("hair-group-save");
+    ASSERT_NE(save, nullptr);
+    EXPECT_TRUE(save->HasAttribute("disabled"));
+    sink.commands.clear();
+    Click("#hair-group-save");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsEmptyArraySavesAsKeyRemoval)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array();
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_TRUE(payload.changes[0].reset);
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPreviewControlsEmitOneRuntimeAction)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}},
+        {{"name", "side"}, {"guideRanges", {{4, 8}}}}});
+    snapshot.tressfxDocuments = {*authored};
+
+    // 发布新的预览 World 后 generation 才可用；UI 只发值语义，不直接写 World/GPU。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot previewSection;
+    previewSection.objectName = "preview_model";
+    previewSection.tressfxRootCloud = HairBrushRootCloud();
+    previewSection.tressfxGroupBinding = HairGroupBinding();
+    actor.sections.push_back(std::move(previewSection));
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    runtimeSink.actions.clear();
+
+    auto takePreviewAction = [&]() -> const UiAction* {
+        const UiAction* preview = nullptr;
+        for (const auto& action : runtimeSink.actions)
+            if (action.type == UiActionType::SetTressfxGroupPreview) preview = &action;
+        return preview;
+    };
+
+    // 选中 fringe：Default=-1 之外的组号是 index+1，默认 Group Colors 为开。
+    Click("#hair-group-row-0");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const UiAction* action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.worldGeneration, 100u);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 1u, 1u);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 0u);
+
+    runtimeSink.actions.clear();
+    Click("#hair-group-colors");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 1u, 0u);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 0u);
+
+    runtimeSink.actions.clear();
+    Click("#hair-group-solo");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    action = takePreviewAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->previewTressfxGroup.selectedGroup, 1);
+    EXPECT_EQ(action->previewTressfxGroup.flags & 2u, 2u);
+
+    // 预览开关是会话状态，不能产生任何资产文档命令。
+    EXPECT_TRUE(sink.commands.empty());
+    // 同一状态重复刷新不得每帧重发。
+    runtimeSink.actions.clear();
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPaintUsesPreviewGenerationAndStagesOnlyTheDraft)
+{
+    OpenTressfxAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->assets[0].tressfxGuideCount = 200;
+    snapshot.assetCatalog = catalog;
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 200}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    Refresh();
+    Refresh();
+    // Default 是隐式组 0，不能作为笔刷目标。
+    EXPECT_TRUE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    Click("#hair-group-row-0");
+    Refresh();
+    // 预览 World 尚未发布：Paint 必须禁用，任何点击都不能生成 ghost 命令。
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = "preview_model";
+    section.tressfxRootCloud = HairBrushRootCloud();
+    section.tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    section.tressfxGroupBinding = HairGroupBinding();
+    actor.sections.push_back(std::move(section));
+    actors->push_back(std::move(actor));
+    snapshot.sceneActors = actors;
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    SetValue("hair-brush-radius", "120");
+    Refresh();
+    auto* replace = document->GetElementById("hair-brush-replace");
+    ASSERT_NE(replace, nullptr);
+    replace->SetAttribute("checked", "checked");
+    replace->DispatchEvent("change", {});
+    Refresh();
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    Click("#hair-group-paint");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    ASSERT_TRUE(image->IsVisible(true));
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    const int centerX = static_cast<int>(offset.x + size.x * 0.5f);
+    const int centerY = static_cast<int>(offset.y + size.y * 0.5f);
+    context->ProcessMouseMove(centerX, centerY, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const auto brushAction = std::find_if(runtimeSink.actions.begin(), runtimeSink.actions.end(),
+        [](const UiAction& action)
+        {
+            return action.type == UiActionType::SetTressfxBrushPreview &&
+                !action.previewTressfxBrush.weights.empty();
+        });
+    ASSERT_NE(brushAction, runtimeSink.actions.end());
+    EXPECT_EQ(brushAction->previewTressfxBrush.worldGeneration, 100u);
+    EXPECT_EQ(brushAction->previewTressfxBrush.objectName, "preview_model");
+    EXPECT_EQ(brushAction->previewTressfxBrush.targetGroupId, 1u);
+    EXPECT_TRUE(sink.commands.empty());
+
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty())
+        << "a brush commit must only change the local Groups draft";
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "groups");
+    EXPECT_TRUE(sink.commands.back().expectedDocumentRevision >= authored->documentRevision);
+}
+
+TEST_F(TressfxGroups, TressfxGroupPreviewStateFreezesIntoEveryMeshDraw)
+{
+    World world = MakeVisibilityTestWorld();
+    world.SetTressfxGroupPreview({1, true, true});
+
+    const WorldSnapshot snapshot = BuildVisibilityTestSnapshot(world);
+    ASSERT_FALSE(snapshot.meshDraws.empty());
+    for (const MeshDrawSnapshot& draw : snapshot.meshDraws)
+    {
+        EXPECT_EQ(draw.tressfxSelectedGroup, 1);
+        EXPECT_EQ(draw.tressfxGroupFlags,
+            VL::TressfxGroupPreviewColors | VL::TressfxGroupPreviewSolo);
+    }
+
+    // 预览状态只是世界会话值；关闭后快照必须回到无选中、无 flags。
+    world.SetTressfxGroupPreview({-1, false, false});
+    const WorldSnapshot cleared = BuildVisibilityTestSnapshot(world);
+    for (const MeshDrawSnapshot& draw : cleared.meshDraws)
+    {
+        EXPECT_EQ(draw.tressfxSelectedGroup, -1);
+        EXPECT_EQ(draw.tressfxGroupFlags, 0u);
+    }
+}
+
+// 发布一个带发根点云的预览 World；Groups/笔刷只消费冻结快照。
+EditorSceneActorSnapshot HairPreviewActor(
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> binding,
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> groupConfigs = nullptr)
+{
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = "preview_model";
+    section.tressfxRootCloud = HairBrushRootCloud();
+    section.tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    section.tressfxGroupBinding = std::move(binding);
+    section.tressfxGroupConfigs = std::move(groupConfigs);
+    actor.sections.push_back(std::move(section));
+    return actor;
+}
+
+const UiAction* LastBrushPreviewAction(const std::vector<UiAction>& actions)
+{
+    const UiAction* result = nullptr;
+    for (const UiAction& action : actions)
+        if (action.type == UiActionType::SetTressfxBrushPreview) result = &action;
+    return result;
+}
+
+const UiAction* LastGroupBindingPreviewAction(const std::vector<UiAction>& actions)
+{
+    const UiAction* result = nullptr;
+    for (const UiAction& action : actions)
+        if (action.type == UiActionType::SetTressfxGroupBindingPreview) result = &action;
+    return result;
+}
+
+TEST_F(TressfxGroups, TressfxGroupsNewDraftGroupSyncsAndPaintsWithoutSaving)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 100}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    const auto saved = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 50}}}, {"side", {{50, 100}}}},
+        200, "saved-two", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(saved)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    runtimeSink.actions.clear();
+    sink.commands.clear();
+
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "crown");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+
+    const UiAction* binding = LastGroupBindingPreviewAction(runtimeSink.actions);
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.worldGeneration, 100u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.objectName, "preview_model");
+    EXPECT_EQ(binding->previewTressfxGroupBinding.groupNames,
+        (std::vector<std::string>{"fringe", "side", "crown"}));
+    ASSERT_EQ(binding->previewTressfxGroupBinding.guideGroupIds.size(), 200u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[0], 1u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[50], 2u);
+    // 新组是空组，笔刷填充前不覆盖任何 guide。
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[100], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[120], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[199], 0u);
+    // 结构同步只发一次；静帧 Refresh 不能重发 40k 数组。
+    runtimeSink.actions.clear();
+    Refresh();
+    EXPECT_EQ(LastGroupBindingPreviewAction(runtimeSink.actions), nullptr);
+
+    // 新建组尚未保存，但已经可以直接作为选中/笔刷目标。
+    EXPECT_EQ(document->GetElementById("hair-group-row-2")->GetAttribute<std::string>(
+        "data-action", ""), "hair-group-select");
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const UiAction* ghost = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ghost, nullptr);
+    EXPECT_EQ(ghost->previewTressfxBrush.targetGroupId, 3u)
+        << "ghost must use the draft group index, not the saved asset index";
+    EXPECT_FALSE(ghost->previewTressfxBrush.weights.empty());
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty())
+        << "preview binding and paint must not stage or save the asset";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsDeletedGroupRemapsDraftPaintTarget)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 100}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    const auto saved = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 50}}}, {"side", {{50, 100}}}},
+        200, "saved-two", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(saved)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+
+    Click("#hair-group-row-0");
+    Refresh();
+    runtimeSink.actions.clear();
+    Click("#hair-group-delete");
+    Refresh();
+    Refresh();
+
+    const UiAction* binding = LastGroupBindingPreviewAction(runtimeSink.actions);
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.groupNames,
+        (std::vector<std::string>{"side"}));
+    ASSERT_EQ(binding->previewTressfxGroupBinding.guideGroupIds.size(), 200u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[0], 0u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[50], 1u);
+    EXPECT_EQ(binding->previewTressfxGroupBinding.guideGroupIds[199], 0u);
+
+    Click("#hair-group-row-0");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    const UiAction* ghost = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ghost, nullptr);
+    EXPECT_EQ(ghost->previewTressfxBrush.targetGroupId, 1u);
+    EXPECT_FALSE(ghost->previewTressfxBrush.weights.empty());
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsPaintEmitsWorldRingAndClearsOnExit)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 50}}}},
+        {{"name", "side"}, {"guideRanges", {{50, 200}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(HairGroupBinding())});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(size.x, 0);
+    ASSERT_GT(size.y, 0);
+    runtimeSink.actions.clear();
+    context->ProcessMouseMove(static_cast<int>(offset.x + size.x * 0.5f),
+        static_cast<int>(offset.y + size.y * 0.5f), 0);
+    Refresh();
+
+    const UiAction* ring = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(ring, nullptr);
+    EXPECT_TRUE(ring->previewTressfxBrush.ringVisible);
+    EXPECT_TRUE(ring->previewTressfxBrush.ringCenter.allFinite());
+    EXPECT_NEAR(ring->previewTressfxBrush.ringNormal.norm(), 1.0f, 1.0e-3f);
+    EXPECT_GT(ring->previewTressfxBrush.ringRadiusWorld, 0.0f);
+    EXPECT_TRUE(ring->previewTressfxBrush.weights.empty())
+        << "hover must move the world ring without starting a ghost stroke";
+
+    // 退出 Paint 必须显式清除固定 key，不能等 duration 过期。
+    runtimeSink.actions.clear();
+    Click("#hair-group-paint");
+    Refresh();
+    const UiAction* clear = LastBrushPreviewAction(runtimeSink.actions);
+    ASSERT_NE(clear, nullptr);
+    EXPECT_FALSE(clear->previewTressfxBrush.ringVisible);
+    EXPECT_TRUE(clear->previewTressfxBrush.weights.empty());
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLassoStagesGuidesOnRelease)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 40}}}},
+        {{"name", "side"}, {"guideRanges", {{40, 120}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 40}}}, {"side", {{40, 120}}}}, 200, "lasso-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    Click("#hair-lasso");
+    Refresh();
+    ASSERT_TRUE(document->GetElementById("hair-lasso")->IsClassSet("active"));
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    // 从右下角开始，避开左上角的视口图例叠层（它会拦截 mousedown）。
+    const int left = static_cast<int>(offset.x + size.x * 0.2f);
+    const int right = static_cast<int>(offset.x + size.x * 0.8f);
+    const int top = static_cast<int>(offset.y + size.y * 0.2f);
+    const int bottom = static_cast<int>(offset.y + size.y * 0.8f);
+
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(right, top, 0);
+    context->ProcessMouseMove(left, top, 0);
+    context->ProcessMouseMove(left, bottom, 0);
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty())
+        << "lasso release only stages the local groups draft";
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    const auto& groups = std::get<nlohmann::json>(payload.changes[0].value);
+    ASSERT_GE(groups.size(), 2u);
+    uint32_t fringeCount = 0;
+    for (const auto& range : groups[0]["guideRanges"])
+        fringeCount += range[1].get<uint32_t>() - range[0].get<uint32_t>();
+    EXPECT_GT(fringeCount, 40u) << "lasso should add default-group roots to fringe";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsLassoEscapeLeavesDraftUntouched)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 200;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 40}}}},
+        {{"name", "side"}, {"guideRanges", {{40, 120}}}}});
+    snapshot.tressfxDocuments = {*authored};
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 40}}}, {"side", {{40, 120}}}}, 200, "lasso-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    view.motionCamera.position = {0.0f, 0.0f, 100.0f};
+    view.motionCamera.forward = {0.0f, 0.0f, -1.0f};
+    view.motionCamera.right = {1.0f, 0.0f, 0.0f};
+    view.motionCamera.up = {0.0f, 1.0f, 0.0f};
+    view.motionCamera.horizontalFovDegrees = 60.0f;
+    view.motionCamera.clipNear = 0.1f;
+    view.motionCamera.clipFar = 1000.0f;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+    Click("#hair-group-paint");
+    Refresh();
+    Click("#hair-lasso");
+    Refresh();
+
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Border);
+    const int left = static_cast<int>(offset.x + size.x * 0.2f);
+    const int right = static_cast<int>(offset.x + size.x * 0.8f);
+    const int top = static_cast<int>(offset.y + size.y * 0.2f);
+    const int bottom = static_cast<int>(offset.y + size.y * 0.8f);
+    context->ProcessMouseMove(right, bottom, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(right, top, 0);
+    context->ProcessMouseMove(left, top, 0);
+    context->ProcessMouseMove(left, bottom, 0);
+
+    // Esc 在松开前放弃手势并退出 Paint；draft 与资产都不能变化。
+    Rml::Dictionary keydown;
+    keydown["key_identifier"] = static_cast<int>(Rml::Input::KI_ESCAPE);
+    document->DispatchEvent("keydown", keydown);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("hair-group-paint")->IsClassSet("active"));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+
+    sink.commands.clear();
+    Click("#hair-group-save");
+    EXPECT_TRUE(sink.commands.empty()) << "Esc must not stage a lasso commit";
+}
+
+TEST_F(TressfxGroups, TressfxGroupsAssetDefaultUsesResolvedPlacementValue)
+{
+    OpenTressfxAsset();
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>(*snapshot.jsonDocument);
+    json->tressfxGuideCount = 10;
+    snapshot.jsonDocument = json;
+    auto authored = std::make_shared<EditorAssetDocumentResultPayload>(snapshot.tressfxDocuments[0]);
+    authored->document["simulationDefaults"]["damping"] = 0.035;
+    authored->document["groups"] = nlohmann::json::array({
+        {{"name", "fringe"}, {"guideRanges", {{0, 4}}}},
+        {{"name", "side"}, {"guideRanges", {{4, 8}}}}});
+    snapshot.tressfxDocuments = {*authored};
+
+    // placement 把 fringe 的 damping 覆盖为 0.02；组 0 仍是文档默认 0.035。
+    auto configs = std::make_shared<std::vector<TressfxSimulationConfig>>(3);
+    configs->at(0).damping = 0.035f;
+    configs->at(1).damping = 0.02f;
+    configs->at(2).damping = 0.035f;
+    auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"fringe", {{0, 4}}}, {"side", {{4, 8}}}}, 10, "default-binding", "test");
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{HairPreviewActor(binding, configs)});
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Refresh();
+    Click("#hair-group-row-0");
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-groups");
+    ASSERT_NE(section, nullptr);
+    std::string rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("asset default 0.02"), std::string::npos)
+        << "saved group must show the placement-resolved value";
+
+    // 新建但仍未保存的组没有解析结果：回退文档值并明确标注。
+    Click("#hair-group-create-open");
+    Refresh();
+    SetValue("hair-group-create-name", "draft");
+    Refresh();
+    Click("#hair-group-create-submit");
+    Refresh();
+    Refresh();
+    rml = section->GetInnerRML();
+    EXPECT_NE(rml.find("asset default 0.035"), std::string::npos);
+    EXPECT_NE(rml.find("draft group"), std::string::npos);
 }
 
 } // namespace

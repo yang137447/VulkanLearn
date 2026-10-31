@@ -27,6 +27,7 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
 RendererResourceCache::RendererResourceCache()
     : worldLocalResources(
           std::make_shared<WorldLocalResourcePackage>())
+    , tressfxGeometryCache(std::make_shared<TressfxGeometryCache>())
 {
 }
 
@@ -37,6 +38,7 @@ RendererResourceCache::RendererResourceCache(
     : globalTextures(std::move(inheritedGlobalTextures)),
       worldLocalResources(
           std::make_shared<WorldLocalResourcePackage>()),
+      tressfxGeometryCache(std::make_shared<TressfxGeometryCache>()),
       retireWorldLocalResourcesOnClear(false)
 {
     worldLocalResources->ownerGeneration = ownerGeneration;
@@ -45,15 +47,20 @@ RendererResourceCache::RendererResourceCache(
 void RendererResourceCache::Clear()
 {
     globalTextures.clear();
+    // Tressfx 几何缓存是进程级内容寻址缓存，候选包/缩略图会话共享同一实例。
+    // 这里不能清空：任意一次缩略图 Reset/Clear 都会让主预览的组编辑缓存失效。
+    // 条目在进程退出时随实例释放。
     ClearWorldLocalResources();
 }
 
 RendererResourceCache RendererResourceCache::BeginCandidate(
     uint64_t ownerGeneration) const
 {
-    return RendererResourceCache(
+    RendererResourceCache candidate = RendererResourceCache(
         globalTextures,
         ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
+    return candidate;
 }
 
 RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
@@ -62,6 +69,7 @@ RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
     RendererResourceCache candidate(
         globalTextures,
         ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
     candidate.worldLocalResources =
         std::make_shared<WorldLocalResourcePackage>(
             *worldLocalResources);
@@ -81,6 +89,7 @@ RendererResourceCache::CaptureActiveWorldLocalResources() const noexcept
 RendererResourceCache RendererResourceCache::BeginWorldExtensionCandidate(uint64_t ownerGeneration) const
 {
     RendererResourceCache candidate(globalTextures, ownerGeneration);
+    candidate.tressfxGeometryCache = tressfxGeometryCache;
     candidate.worldLocalResources = std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
     candidate.worldLocalResources->ownerGeneration = ownerGeneration;
     return candidate;
@@ -557,6 +566,12 @@ void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<
 
     resources.textures[std::move(textureKey)] =
         std::move(texture);
+}
+
+TressfxGeometryCache& RendererResourceCache::GetTressfxGeometryCache() const
+{
+    // 所有实例（含候选包）共享同一份进程级缓存。
+    return *tressfxGeometryCache;
 }
 
 const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_view textureKey) const

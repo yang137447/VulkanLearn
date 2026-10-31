@@ -1257,6 +1257,118 @@ void RenderSystem::RequestHairSimulationParameter(
     pendingHairLiveParameters.push_back(request);
 }
 
+void RenderSystem::RequestTressfxBrushPreview(
+    const VL::Hair::TressfxBrushPreviewRequest& request)
+{
+    std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
+    if (pendingTressfxBrushPreviews.size() >= 64)
+        pendingTressfxBrushPreviews.erase(pendingTressfxBrushPreviews.begin());
+    pendingTressfxBrushPreviews.push_back(request);
+}
+
+void RenderSystem::RequestTressfxGroupBindingPreview(
+    const VL::Hair::TressfxGroupBindingPreviewRequest& request)
+{
+    std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
+    // 同一对象的草稿结构更新只需要最新一份；拖拽编辑时避免队列被旧 binding 占满。
+    for (auto entry = pendingTressfxGroupBindingPreviews.begin();
+         entry != pendingTressfxGroupBindingPreviews.end(); ++entry)
+        if (entry->objectName == request.objectName &&
+            entry->worldGeneration == request.worldGeneration)
+        {
+            *entry = request;
+            return;
+        }
+    if (pendingTressfxGroupBindingPreviews.size() >= 16)
+        pendingTressfxGroupBindingPreviews.erase(
+            pendingTressfxGroupBindingPreviews.begin());
+    pendingTressfxGroupBindingPreviews.push_back(request);
+}
+
+void RenderSystem::ApplyTressfxGroupBindingPreviewRequests()
+{
+    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest> requests;
+    {
+        std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
+        requests.swap(pendingTressfxGroupBindingPreviews);
+    }
+    if (requests.empty()) return;
+
+    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    for (const VL::Hair::TressfxGroupBindingPreviewRequest& request : requests)
+    {
+        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
+        const VL::RenderDrawPacket* targetPacket = nullptr;
+        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
+            if (packet.debugName == request.objectName)
+            {
+                targetPacket = &packet;
+                break;
+            }
+        if (targetPacket == nullptr) continue;
+        const std::shared_ptr<RenderableObject>* object =
+            resourceCache.GetRenderableObject(targetPacket->mesh.key);
+        if (object == nullptr || *object == nullptr) continue;
+        const VL::Hair::TressfxGroupBinding binding =
+            VL::Hair::MakeTressfxGroupBinding(request);
+        std::string error;
+        if (!(*object)->UpdateTressfxGroupBinding(binding, error))
+        {
+            std::cout << "[TressFX][Warning] group binding preview rejected: "
+                      << error << " object=" << request.objectName << std::endl;
+        }
+    }
+}
+
+void RenderSystem::ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex)
+{
+    std::vector<VL::Hair::TressfxBrushPreviewRequest> requests;
+    {
+        std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
+        requests.swap(pendingTressfxBrushPreviews);
+    }
+    if (requests.empty()) return;
+
+    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    for (const VL::Hair::TressfxBrushPreviewRequest& request : requests)
+    {
+        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
+        const VL::RenderDrawPacket* targetPacket = nullptr;
+        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
+            if (packet.debugName == request.objectName)
+            {
+                targetPacket = &packet;
+                break;
+            }
+        if (targetPacket == nullptr) continue;
+        const std::shared_ptr<RenderableObject>* object =
+            resourceCache.GetRenderableObject(targetPacket->mesh.key);
+        if (object == nullptr || *object == nullptr) continue;
+        std::string error;
+        if (!(*object)->SetTressfxBrushPreview(request.targetGroupId,
+                request.mode, request.weights, swapchainImageIndex, error))
+        {
+            std::cout << "[TressFX][Warning] brush preview rejected: " << error
+                      << " object=" << request.objectName << std::endl;
+            continue;
+        }
+        // UBO 的 brush 状态属于对象资源包；在 draw 录制前同步，保证本帧读到新值。
+        for (auto& material : currentResolvedRenderScene.materialGroups)
+            for (auto& instance : material.materialInstances)
+                for (auto& draw : instance.draws)
+                {
+                    if (!draw.objectResourceEntry) continue;
+                    const VL::RenderDrawPacket& packet =
+                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                    if (packet.debugName != request.objectName) continue;
+                    VL::RendererObjectGpuResources& resources =
+                        draw.objectResourceEntry->GetResources();
+                    resources.tressfxBrushActive = (*object)->HasTressfxBrushPreview();
+                    resources.tressfxBrushRemoveMode = (*object)->TressfxBrushRemoveMode();
+                }
+    }
+}
+
 void RenderSystem::PrintGpuPassStats()
 {
     // 控制台按需启用采集；Snapshot 只读最近一次读回的窗口，不等待渲染线程。
@@ -3301,7 +3413,9 @@ void RenderSystem::EnsurePlacementRenderables(
         // 克隆本身不感知类型；绑定（毛发骨骼等）由通用 resolver 按 Kind 分派。
         std::shared_ptr<RenderableObject> clone =
             (*templateObject)->CloneForPlacement(draw.debugName,
-                draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr);
+                draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr,
+                draw.placementBinding.tressfxGroupConfigs.empty()
+                    ? nullptr : &draw.placementBinding.tressfxGroupConfigs);
         std::string bindingError;
         if (!VL::ApplyPlacementBinding(draw.placementBinding, **templateObject,
                 sourceObject, *clone, placementBindingCache, bindingError))
@@ -3465,6 +3579,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     frameShadowCasterCullStats = {};
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
+    // ghost 权重按 swapchain 槽写入；必须在拿到本帧 slot 之后更新，避免覆盖
+    // 另一 frame-in-flight 仍在读取的 buffer。
+    // 草稿 binding 先于 ghost/选中状态应用，保证本帧 shader 读到同一份组号表。
+    ApplyTressfxGroupBindingPreviewRequests();
+    ApplyTressfxBrushPreviewRequests(swapChainImageIndex);
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport

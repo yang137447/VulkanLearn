@@ -34,6 +34,9 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
     packet.windResponseProfileKey = drawSnapshot.windResponseProfileKey;
+    packet.tressfxPointsPerGuide = drawSnapshot.tressfxPointsPerGuide;
+    packet.tressfxSelectedGroup = drawSnapshot.tressfxSelectedGroup;
+    packet.tressfxGroupFlags = drawSnapshot.tressfxGroupFlags;
     packet.placementTemplateMeshKey = drawSnapshot.placementTemplateMeshKey;
     packet.placementBinding = drawSnapshot.placementBinding;
     return packet;

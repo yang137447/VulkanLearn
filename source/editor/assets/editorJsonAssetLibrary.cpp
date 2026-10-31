@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -156,6 +157,7 @@ public:
     bool typeSeen = false;
     bool typeIsString = false;
     std::string type;
+    std::string modelDataPath;
     // root.simulation.skinning 是否存在；与 type == "tressfx" 一起决定毛发视口守卫。
     bool simulationSkinning = false;
 
@@ -213,6 +215,9 @@ private:
             document.name = BoundedText(value);
         else if (location.label == "description" && kind == ValueKind::String)
             document.description = BoundedText(value);
+        // tressfx 的 .tfx 相对路径；worker 用它读取 guideCount，扫描目录时不打开模型。
+        else if (location.label == "modelDataPath" && kind == ValueKind::String)
+            modelDataPath = value;
         else if (location.label == "source" && includeFields && kind == ValueKind::String)
             document.textureSource = value;
         else if (location.label == "colorSpace" && includeFields && kind == ValueKind::String)
@@ -412,7 +417,7 @@ bool ValidateEditorJsonAssetPath(std::string_view assetPath, std::string& error)
 }
 
 bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
-    Document& document, bool includeFields)
+    Document& document, bool includeFields, std::string* tressfxModelDataPath)
 {
     document = {};
     if (!ValidateEditorJsonAssetPath(assetPath, document.diagnostic)) return false;
@@ -437,6 +442,7 @@ bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
     if (sax.typeSeen && sax.typeIsString) document.type = sax.type;
     document.tressfxSkinning =
         sax.typeIsString && sax.type == "tressfx" && sax.simulationSkinning;
+    if (tressfxModelDataPath != nullptr) *tressfxModelDataPath = sax.modelDataPath;
     if (!valid)
     {
         // 不展示损坏输入的半棵树，但保留已经识别的顶层类型供目录呈现错误候选。
@@ -495,6 +501,62 @@ struct EditorJsonAssetLibrary::Impl
         return !stopping && generation == documentGeneration;
     }
 
+    // Groups 编辑器在保存前用 guideCount 拦截 end > guideCount；这里只读 .tfx 头 12 字节。
+    // 路径非法、文件缺失或头太短都返回 0（未知），绝不能影响 JSON 本身打开。
+    uint32_t ReadTfxGuideCount(const std::string& modelDataPath) const
+    {
+        const std::string normalized = NormalizeSeparators(modelDataPath);
+        if (normalized.empty() || normalized.front() == '/' ||
+            normalized.find(':') != std::string::npos ||
+            normalized.find('\0') != std::string::npos)
+            return 0;
+        // u8path 对非法 UTF-8 可能抛异常；读取失败只允许降级为“未知”，不能逃出 worker。
+        try
+        {
+            const auto relative = std::filesystem::u8path(normalized);
+            if (relative.is_absolute() || relative.has_root_name() ||
+                LowerAscii(relative.extension().u8string()) != ".tfx")
+                return 0;
+            for (const auto& part : relative)
+                if (part == "..") return 0;
+            std::error_code ec;
+            const auto physical = std::filesystem::canonical(root / relative, ec);
+            if (ec || !PhysicalWithinRoot(root, physical) ||
+                !std::filesystem::is_regular_file(physical, ec))
+                return 0;
+            std::ifstream input(physical, std::ios::binary);
+            if (!input) return 0;
+            // .tfx 头：offset 0 = layout version(f32)，4 = guideCount(u32)，8 = pointsPerStrand(u32)。
+            // 只读 12 字节并按 tfxLoader 的规则做最小合理性检查；Git LFS 指针等非二进制内容
+            // 会让 version 不满足 >=4，从而返回 0 而不是把 ASCII 字节误当成 guide 数。
+            uint8_t header[12] = {};
+            input.read(reinterpret_cast<char*>(header), sizeof(header));
+            if (input.gcount() != static_cast<std::streamsize>(sizeof(header)))
+                return 0;
+            float version = 0.0f;
+            std::memcpy(&version, header, sizeof(version));
+            const uint32_t guideCount = static_cast<uint32_t>(header[4]) |
+                (static_cast<uint32_t>(header[5]) << 8) |
+                (static_cast<uint32_t>(header[6]) << 16) |
+                (static_cast<uint32_t>(header[7]) << 24);
+            const uint32_t pointsPerStrand = static_cast<uint32_t>(header[8]) |
+                (static_cast<uint32_t>(header[9]) << 8) |
+                (static_cast<uint32_t>(header[10]) << 16) |
+                (static_cast<uint32_t>(header[11]) << 24);
+            constexpr uint32_t MaxTfxVertexCount = 4194304u;
+            if (!std::isfinite(version) || version < 4.0f || guideCount == 0 ||
+                pointsPerStrand < 4 || pointsPerStrand > 64 ||
+                (pointsPerStrand & (pointsPerStrand - 1u)) != 0 ||
+                guideCount > MaxTfxVertexCount / pointsPerStrand)
+                return 0;
+            return guideCount;
+        }
+        catch (const std::exception&)
+        {
+            return 0;
+        }
+    }
+
     bool Load(const std::string& path, Document& output, bool fields, std::string* raw = nullptr)
     {
         std::filesystem::path physical;
@@ -502,8 +564,12 @@ struct EditorJsonAssetLibrary::Impl
         std::string text;
         if (ResolveJson(root, path, physical, error) && ReadJson(physical, text, error))
         {
-            const bool recognized = ParseEditorJsonAsset(path, text, output, fields);
+            std::string modelDataPath;
+            const bool recognized = ParseEditorJsonAsset(
+                path, text, output, fields, &modelDataPath);
             if (raw) *raw = std::move(text);
+            if (recognized && output.type == "tressfx" && !modelDataPath.empty())
+                output.tressfxGuideCount = ReadTfxGuideCount(modelDataPath);
             return recognized;
         }
         // 读取失败时仍保留有命名前缀的候选；不读取任何被 JSON 引用的文件。
@@ -556,7 +622,8 @@ struct EditorJsonAssetLibrary::Impl
                 {
                     result->assets.push_back({parsed.assetPath, parsed.kind, std::move(parsed.name),
                         std::move(parsed.description), std::move(parsed.diagnostic),
-                        std::move(parsed.type), parsed.tressfxSkinning});
+                        std::move(parsed.type), parsed.tressfxSkinning,
+                        parsed.tressfxGuideCount});
                     if (result->assets.size() == Limits::MaxCatalogEntries)
                     {
                         AddDiagnostic(result->diagnostic, "Catalog entry limit (20000) reached");

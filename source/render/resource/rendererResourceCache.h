@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <set>
 
+#include "render/resource/tressfxGeometryCache.h"
+
 class Material;
 class MaterialInstance;
 class RenderableObject;
@@ -143,6 +145,10 @@ public:
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
 
+    // 进程级 .tfx 几何导入缓存。候选包共享同一个实例：组编辑/World 重建都不
+    // 重新解析几何；条目只读且不持有 GPU 资源。
+    TressfxGeometryCache& GetTressfxGeometryCache() const;
+
 private:
     RendererResourceCache();
     RendererResourceCache(
@@ -154,6 +160,7 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<Texture>> globalTextures;
     WorldLocalResourcePackageHandle worldLocalResources;
+    std::shared_ptr<TressfxGeometryCache> tressfxGeometryCache;
     bool retireWorldLocalResourcesOnClear = true;
 };
 

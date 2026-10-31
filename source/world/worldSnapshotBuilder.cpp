@@ -96,7 +96,8 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     const WorldMeshObject& meshObject,
     const Eigen::Matrix4f& previousModel,
     bool selected,
-    const WorldSnapshotBuildDesc& desc)
+    const WorldSnapshotBuildDesc& desc,
+    const TressfxGroupPreviewState& groupPreview)
 {
     MeshDrawSnapshot snapshot;
     snapshot.skinPose = meshObject.skinPose;
@@ -119,6 +120,11 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.material = MakeResourceHandle(meshObject.materialKey);
     snapshot.materialInstance = MakeResourceHandle(meshObject.materialInstanceKey);
     snapshot.windResponseProfileKey = meshObject.windResponseProfileKey;
+    snapshot.tressfxPointsPerGuide = meshObject.tressfxPointsPerGuide;
+    snapshot.tressfxSelectedGroup = groupPreview.selectedGroup;
+    snapshot.tressfxGroupFlags =
+        (groupPreview.groupColors ? TressfxGroupPreviewColors : 0u) |
+        (groupPreview.solo ? TressfxGroupPreviewSolo : 0u);
     // 放置级网格：把模板键与通用 placementBinding 一起冻结，渲染线程在 resolve
     // 前据此克隆独立 RenderableObject；普通对象两者为空。
     snapshot.placementTemplateMeshKey = meshObject.placementTemplateMeshKey;
@@ -331,7 +337,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
                 desc.selectedObjectId == objectId &&
                 (desc.selectedAllMaterialSlots ||
                  desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex),
-            desc));
+            desc,
+            world.GetTressfxGroupPreview()));
         currentObjectModels[objectId] = meshObject.model;
     }
 

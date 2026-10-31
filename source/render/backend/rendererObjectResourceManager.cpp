@@ -201,6 +201,45 @@ void UpdateObjectDescriptorSets(
                         resources.writeDescriptorSets[i].push_back(write);
                         continue;
                     }
+                    // TressFX 分组预览（Phase 2）：binding 5/6 只在头发材质里反射出现，
+                    // 与骨骼对象共享 Object Set 2 但不参与 skinJointCount 合同。
+                    if (binding.binding == 5)
+                    {
+                        if (!resources.tressfxGuideGroupIds.buffer)
+                            throw std::runtime_error("TressFX guide group id SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxGuideGroupIds);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    if (binding.binding == 6)
+                    {
+                        if (!resources.tressfxGuideGroupColors.buffer)
+                            throw std::runtime_error("TressFX guide group color SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxGuideGroupColors);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    if (binding.binding == 7)
+                    {
+                        if (i >= resources.tressfxBrushWeights.size() ||
+                            !resources.tressfxBrushWeights[i].buffer)
+                            throw std::runtime_error("TressFX brush weight SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxBrushWeights[i]);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
                     if (!resources.skinJointCount || (binding.binding != 1 && binding.binding != 2))
                         throw std::runtime_error("Invalid skeletal Object SSBO contract");
                     vk::WriteDescriptorSet write;

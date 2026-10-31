@@ -17,10 +17,11 @@ layout(std140, set = 0, binding = 0) uniform SimulationParams
     vec4 wind1;        // TressFX Wind1
     vec4 wind2;        // TressFX Wind2
     vec4 wind3;        // TressFX Wind3
-    vec4 controls;     // x = dt, y = DampingCoeff, z = pointsPerGuide, w = rootFixedPoints
-    vec4 shape;        // x = globalShapeStiffness, y = effectiveRange,
-                       // z = vspCoefficient, w = vspAccelThresholdMax
-    vec4 motion;       // x = Stiffness(LocalShape), y = ResetPositions, z = rebaseOnly,
+    vec4 controls;     // x = dt, y = base DampingCoeff（分组模拟读 binding 17）,
+                       // z = pointsPerGuide, w = rootFixedPoints
+    vec4 shape;        // base globalShapeStiffness/effectiveRange/vspCoefficient/
+                       // vspAccelThresholdMax 的镜像；分组模拟读 binding 17
+    vec4 motion;       // x = base Stiffness(LocalShape), y = ResetPositions, z = rebaseOnly,
                        // w 的 bit0/bit1 = VSP / LocalShape 作者数组存在，
                        // bit2 = 逐 strand 多骨权重存在
                        // 时间调制在 Host 烘进 wind0..3

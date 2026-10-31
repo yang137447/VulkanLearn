@@ -30,6 +30,17 @@ struct RendererObjectGpuResources
     // TressFX current guide centers are updated at the frame boundary and
     // consumed by the strand vertex factory through Object Set 2 binding 3.
     vk::DescriptorBufferInfo tressfxPositions;
+    // TressFX 分组预览：binding 5 是按 guideIndex 索引的 group id，
+    // binding 6 是 vec4 组颜色表（index 0 = 默认灰）。两者都由 RenderableObject
+    // 拥有且静态，这里只冻结 descriptor info。
+    vk::DescriptorBufferInfo tressfxGuideGroupIds;
+    vk::DescriptorBufferInfo tressfxGuideGroupColors;
+    // binding 7：per-guide ghost weight；target 复用 UBO selectionData.z，
+    // active/remove 状态由 selectionData.w 的 bit2/bit3 表达。
+    // per-swapchain ghost 权重；上一帧可能仍读取旧槽。
+    std::vector<vk::DescriptorBufferInfo> tressfxBrushWeights;
+    bool tressfxBrushActive = false;
+    bool tressfxBrushRemoveMode = false;
     size_t skinJointCount = 0;
     Animation::SubmittedSkinPose submittedSkin;
 

@@ -69,6 +69,10 @@ struct MeshDrawSnapshot
     ResourceHandle material;
     ResourceHandle materialInstance;
     std::string windResponseProfileKey;
+    // TressFX 顶点工厂/片元着色消费；非头发对象保持 0/-1/0。
+    uint32_t tressfxPointsPerGuide = 0;
+    int32_t tressfxSelectedGroup = -1;
+    uint32_t tressfxGroupFlags = 0;
     // 放置级网格：mesh.key 已是本实例键，模板键指向仍在缓存里的模板
     // RenderableObject；渲染线程在 resolve 前据此克隆独立对象，并按 placementBinding
     // 的 Kind 解析绑定。普通共享对象两个字段为空。

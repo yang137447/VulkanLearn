@@ -1,6 +1,8 @@
 # TressFX 头发分组笔刷与可视化方案
 
-状态：设计草案，未实现。本文属于 `documents/plan/`，不是当前实现契约。
+状态：Phase 1–4 已于 2026-10-28 实现（Groups 数据/UI、GPU 分组着色、视口笔刷与 ghost、
+per-group CPU/GPU 求解）；Phase 5（TressFXGroup/Visibility/Tile 的 draw/culling/LOD）未实现，
+且按 §1 非目标不属于本方案。本文属于 `documents/plan/`，不是当前实现契约。
 
 基线：`codex/tressfx5-hair-port`，2026-10-28 的头发物理阻力提交 `3a849e1`。当前运行期边界以
 `documents/contracts/tressfx-asset-import.md` 为准。
@@ -109,19 +111,22 @@ Overrides
 `asset default` 是当前资产/placement 解析后的值，不是写死的 UI 常量；不要把 Female
 资产里的 `0.458/0.256/0.722` 当成所有资产的默认值。
 
+实现取舍（2026-10-29）：区间列表不作为作者 UI 暴露。组内 guide 的增删全部通过
+`Paint Groups` 圆形笔刷/套索/Remove 模式完成；列表只显示组名、guide 数和 override 数。
+`+ New Group` 只输入名称；空组是合法作者状态，之后用笔刷填充。区间列表不暴露。
+
 `Default` 不可重命名/删除，也不能作为笔刷目标组：选中 Default 时 `Paint Groups` 禁用，
 避免把 guide 写回隐式默认组。命名组才写 `simulationOverrides`。
 
 ### 4.2 新建组
 
-`groups[].guideRanges` 在契约里必须是非空数组，因此不能创建一个可保存的空组。
+`groups[].guideRanges` 允许为空；新建组可以先没有 guide。
 
-- `+ New Group` 打开创建行，要求名称 + 至少一个非空 `[start,end)`；
-- 可以从当前视口选择或手填首个 range；没有有效 range 时 `Create` 保持禁用；
+- `+ New Group` 打开创建行，只要求名称；`Create` 在名称合法时可用；
 - 名称进入 inline 编辑；
 - `Esc` 取消创建，`Enter` 确认名称；
-- 名称重复、空名称、`Default`/`unassigned` 保留名、非法 range 都在行内报错；
-- 如果用户删除组的最后一个 range，删除动作本身也删除该组（可撤销），不能留下空组；
+- 名称重复、空名称、`Default`/`unassigned` 保留名都在行内报错；
+- 删除组的最后一个 range 后保留空组；是否删除组由显式 Delete Group 决定；
 - 组列表顺序就是 `groups[]` 的声明顺序；删除组 k 会把 k+1..N 的运行时组号前移，
   提交前必须重映射颜色、override 控件和 GPU group id。
 
@@ -152,6 +157,7 @@ Painting → fringe
 | `Alt` + 左键 | 从目标组移除 |
 | 右键/中键 | 旋转/平移相机，不退出笔刷 |
 | `[` / `]` | 调整笔刷半径 |
+| `Alt` + 滚轮 | 调整笔刷半径；普通滚轮仍缩放相机 |
 | `Enter` / 松开 | 提交当前笔画 |
 | `Esc` | 放弃当前笔画并退出 |
 | `Ctrl+Z` | 撤销上一笔提交 |
@@ -168,8 +174,7 @@ Painting → fringe
   - 这些 guide 仍显示目标色 ghost，但保留原组颜色边缘/角标，提示不会被移动。
 - 打开 `Replace existing: On`：
   - 允许把 guide 从旧组移到目标组；
-  - 旧组变空时，提交会把该组一并删除（可撤销），因为空组不能写入资产；
-  - 不提供“保留空组”的保存路径；如果用户想保留旧组，必须给它留至少一个 range；
+  - 旧组变空时保留为空组，不自动删除；需要时显式 Delete Group；
   - 提交前可撤销。
 - 不在目标组的默认组 guide：正常加入目标组。
 
@@ -177,7 +182,7 @@ Painting → fringe
 
 | 状态 | 显示 |
 | --- | --- |
-| 已在目标组 | 目标组颜色，100% |
+| 已在目标组 | 组色直接顶掉 `MaterialInputs.baseColor`（等价 `u_tintColor`），PBR 光照/粗糙度/高光保留 |
 | 不在目标组，在笔刷范围 | 目标色 ghost，约 25–35%，按发根权重衰减 |
 | 属于其他组，在笔刷范围 | 目标色 ghost + 原组色边缘/角标 |
 | Remove 模式下的目标组 | 橙红 ghost，表示将被移除 |
@@ -185,6 +190,9 @@ Painting → fringe
 
 Ghost 只改 RGB tint，不改 alpha。因为 strand 路径当前强制 `inputs.opacity = 1.0` 并通过
 coverage discard 决定保留，ghost 头发必须保持完全不透明；不能靠 alpha 淡出。
+分组色写入 `MaterialInputs.baseColor` 而不是最终 `sceneColor`：这样颜色被替换，
+但 roughness/specular/AO/阴影仍由 PBR 计算。默认组保持原材质基色；调色板按 sRGB
+存储，shader 在写入基色前转线性。
 
 Tint 不能放在 `M_strandProbe.surface.glsl` / `M_strandPbr.surface.glsl`：它们只返回
 `MaterialInputs`，最终颜色在 `shader/glsl/engine/passTemplate/base.frag.glsl` 的
@@ -459,6 +467,12 @@ public:
 
 ### Phase 1：Groups UI + 数据
 
+- 已实现（2026-10-28）：`groups` 从几何 `modelCacheKey` 拆到
+  `tressfxGroupBindingKey`；`.tfx` guideCount 暴露到编辑器目录/文档快照；
+  Groups 列表、创建/删除/重命名、数值 range、6 字段 inherit/override、保存与校验。
+- 已实现（2026-10-29）：`TressfxGroupBinding` 与几何解耦；进程级 Tressfx 几何 LRU 缓存按
+  `.tfx BLAKE3 + 几何身份` 复用 ribbon/root cloud；候选缓存命中路径原地更新 group buffer，
+  组数变化才重建对象。整 World 重载仍会创建新的 renderable/GPU buffer，但不再重解析 `.tfx`。
 - 先把 groups 从 ribbon 几何 `modelCacheKey` 拆出，新增 group binding/behavior revision；
 - 把 `guideCount` 暴露到 Tressfx 文档/预览快照；
 - Groups 列表、创建/删除/重命名；
@@ -469,6 +483,8 @@ public:
 
 ### Phase 2：GPU 分组着色 + 选中高亮
 
+- 已实现（2026-10-28）：per-object group id/颜色 SSBO、forward-output RGB tint、
+  Group Colors / Selected / Solo 与预览视口左上角图例；未改 vertex layout。
 - 新增 per-object `groupIds` SSBO（按 guideIndex），不改 vertex layout；
 - 扩展 graphics descriptor set/pool，`TressFXStrands` 读 group id；
 - 在 `base.frag.glsl` forward output 增加 location 9 的 flat varying / RGB tint；
@@ -478,6 +494,12 @@ public:
 
 ### Phase 3：笔刷虚拟工作面 + ghost
 
+- 已实现（2026-10-28）：导入期发根点云（位置/生长方向/PCA 法线/组号/3D grid）、
+  SurfaceBrush + RootCloudSelector、Add/Remove/Replace、ghost RGB、提交/撤销/冲突提示。
+- 已实现（2026-10-29）：grid DDA 射线遍历、世界空间 debug-draw 圆环、套索选择、
+  resolved asset default；40,334 guide 基准 P95 ≈ 1.15 ms。屏幕圆环仅作平面退化回退。
+  新建/重命名/删除/改 range 的草稿 binding 会即时同步到预览 GPU buffer，无需保存重载即可
+  看到组色并立即笔刷；但组 override 仍需保存重载后才参与求解。
 - `SurfaceBrush` + `RootCloudSelector`；
 - 套索/笔刷、ghost preview；
 - 提交/撤销/冲突处理；
@@ -485,6 +507,10 @@ public:
 
 ### Phase 4：per-group simulation
 
+- 已实现（2026-10-28）：共享 `base -> group -> placement` 解析，CPU solver 与 GPU
+  compute 同源；GPU 每组 8 float（前 6 字段）+ 每 guide group id，绑定 17/18。
+  保存并重载后生效；实时 `hair set` 是会话级调试覆盖。
+  尚未做 40k guide 的 CPU/GPU 逐帧数值 readback 对照。
 - CPU/GPU 参数表；
 - 让 `simulationOverrides` 真正影响求解；
 - 增加实时预览/保存后生效的状态提示。
@@ -508,9 +534,9 @@ public:
 - 同一条笔画不重复加入；
 - guide 集合压缩成连续 range；
 - 超过 range 上限时拒绝并提示；
-- range 重叠/越界/空组拒绝；
+- range 重叠/越界拒绝；空组允许；
 - `end > guideCount` 在编辑器保存前被拦截，而不是等到下一次 import 才失败；
-- 新建组必须带首个非空 range；删除最后一个 range 会删除组；
+- 新建组可以没有 range；删除最后一个 range 保留空组；
 - `Default` / `unassigned` 保留名（大小写不敏感）被拒绝；
 - 删除组后后续组号、override 控件和 GPU id 重映射正确；
 - 组名 hash 颜色跨重启稳定；
@@ -523,7 +549,7 @@ public:
 UI 测试：
 
 - 新建组、重命名、删除；
-- 无首个 range 时 Create 禁用；删除最后 range 的行为；
+- 名称为空/非法时 Create 禁用；删除最后 range 保留空组；
 - `end > guideCount` 行内报错且无法保存；
 - 保留名/重名/空名行内报错；
 - inherit/override 切换；
@@ -563,7 +589,7 @@ UI 测试：
 5. 测试入口：
    - `cmake --build build-tressfx-groups --target main hair_asset_tests editor_ui_tests`
    - `build-tressfx-groups/bin/hair_asset_tests.exe`
-   - `build-tressfx-groups/bin/editor_ui_tests.exe --gtest_filter='EditorUiTest.*'`
+   - `build-tressfx-groups/bin/editor_ui_tests.exe --gtest_filter='EditorUiTest.*:TressfxGroups.*:TressfxGroupEditor.*:JsonAssetLibraryTest.*'`
    - `py -3 tool/validate-docs.py`
 6. 不要把 `TressFXGroup` 的 draw/culling/LOD 混进本方案；它是独立 Phase 5。
 
@@ -573,7 +599,7 @@ UI 测试：
 
 - `rootGrowthDir` / `rootNormal` 当前不存在，Phase 3 必须先补缓存；没有头皮法线时固定使用
   `-viewDir` 兜底，不把 `p1-p0` 当法线；
-- 空组不可表示：新组必须带第一个 range，删除最后 range/替换后变空都直接删除组；
+- 空组可表示：新组只输入名称，删除最后 range/替换后变空都保留命名组；
 - 移除 `unassigned` 概念，Default 就是隐式组 0；修正示例计数；
 - ghost tint 放到 `base.frag.glsl` 的 forward output，不改 material surface；ghost 只改 RGB，
   strand 仍完全不透明；

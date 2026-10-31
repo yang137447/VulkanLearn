@@ -582,7 +582,10 @@ Retarget 使用 `RT_` 文件名前缀。
 
 SAX 不构造完整 JSON DOM，只保留顶层分类/名称/说明及有界前序字段行。
 任意深度、ASCII 大小写不敏感的 `data` 字段及其整个子树不进入展示行或快照；
-普通引用路径仅作为元数据；像素例外是显式打开 Texture：worker 在 canonical 资源根内
+普通引用路径仅作为元数据；唯一例外是 `type: "tressfx"` 资产的 `modelDataPath`：
+worker 在 canonical 资源根内只读 `.tfx` 头的 12 字节以取得 `guideCount`，不解析几何、
+不加载 GPU 资源；读取失败只把 `tressfxGuideCount` 留 0，不影响 JSON 打开。
+像素例外是显式打开 Texture：worker 在 canonical 资源根内
 解码 source，输入最多 64 MiB、解码最多 32 MP，面积缩小到最长边 1024 后发布不可变快照。
 目录扫描不解码；Retarget 的值预览边界见下节。worker 不接触 World/GPU。
 按 colorSpace 在线性域缩小后编码 sRGB 显示，

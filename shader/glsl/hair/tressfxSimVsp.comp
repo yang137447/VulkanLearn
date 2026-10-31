@@ -6,6 +6,7 @@
 // 把 current 和 previous 位置一起向 Quat*pos + trans 混合，保持 Verlet 速度历史
 // 与位置同步，避免 VSP 引入虚假速度。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGroupCommon.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -37,6 +38,10 @@ void main()
         return;
 
     uint guide = point / pointsPerGuide;
+    TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
+    // Host 在任一组 vspCoefficient > 0 时录制本 pass；系数为 0 的组逐组早退。
+    if (group.vspCoefficient <= 0.0)
+        return;
     uint base = guide * 3u;
     vec4 vspQuat = strandLevelData.data[base + 0];
     vec4 vspTranslation = strandLevelData.data[base + 1];

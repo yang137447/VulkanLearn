@@ -14,8 +14,15 @@ add_executable(hair_asset_tests
     tressfxLiveParamsTests.cpp
     tressfxComponentBindingTests.cpp
     tressfxRootWeightsTests.cpp
+    tressfxGroupGpuDataTests.cpp
+    tressfxGroupSimulationTests.cpp
+    tressfxGroupBindingTests.cpp
+    tressfxGeometryCacheTests.cpp
+    tressfxSurfaceBrushTests.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/loader/hair/tressfxModelImporter.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
+    ${PROJECT_SOURCE_DIR}/source/hair/tressfxGroupSimulation.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/resource/tressfxGeometryCache.cpp
     ${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp)
 target_link_libraries(hair_asset_tests PRIVATE vl_hair_assets Vulkan::Vulkan Eigen3 Json)
 # MinGW 的 COFF 对象默认最多 32767 个 section；Debug 下 Eigen/JSON 重模板的单个

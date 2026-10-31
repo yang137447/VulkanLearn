@@ -963,6 +963,112 @@ body {
     border-top-width: 1px; border-top-color: #49494f;
     color: #d7ddd9; font-size: 12px; font-weight: bold;
 }
+/* TF Groups 区：结构由面板生成，rcss 只负责行/色块/表单的呈现。
+   半透明一律使用 #RRGGBBAA，禁止 rgba()（小数 alpha 会被静默截断为 0）。 */
+#resource-hair-groups { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
+#resource-hair-groups .hair-group-note { margin: 0 0 6px; color: #8f9893; font-size: 11px; }
+#resource-hair-groups .hair-group-row {
+    display: flex; align-items: center; width: 100%; height: 24px; min-height: 24px;
+    margin: 0; padding: 2px 4px; border-width: 0; border-radius: 3px;
+    background-color: transparent; color: #d7ddd9; font-size: 12px; text-align: left;
+}
+#resource-hair-groups .hair-group-row:hover { background-color: #35353a; }
+#resource-hair-groups .hair-group-row.selected { background-color: #3a4d47; }
+#resource-hair-groups .hair-group-swatch {
+    display: inline-block; width: 14px; height: 14px; border-radius: 4px;
+    border-width: 1px; border-color: #49494f; flex: none; margin-right: 6px;
+}
+#resource-hair-groups .hair-group-swatch-default { background-color: #788088; }
+#resource-hair-groups .hair-group-name {
+    width: 24%; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#resource-hair-groups .hair-group-count {
+    width: 22%; flex: none; color: #aeb7b2; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+#resource-hair-groups .hair-group-ranges {
+    flex: 1; min-width: 0; color: #9aa39e; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+#resource-hair-groups .hair-group-overrides {
+    width: 26%; flex: none; color: #8f9893; text-align: right; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+#resource-hair-groups .hair-group-actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+#resource-hair-groups .hair-group-preview-actions { margin: 0 0 6px; }
+#resource-hair-groups .hair-group-paint-controls {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin: 6px 0;
+    padding-top: 6px; border-top-width: 1px; border-top-color: #3b3b40;
+}
+#resource-hair-groups .hair-group-paint-controls button { height: 22px; padding: 0 8px; font-size: 11px; }
+#resource-hair-groups .hair-group-paint-controls button.active { background-color: #35594e; border-color: #62a58d; }
+#resource-hair-groups .hair-group-paint-label { color: #8f9893; font-size: 11px; }
+#resource-hair-groups .hair-group-paint-unit { color: #8f9893; font-size: 11px; }
+#resource-hair-groups #hair-brush-radius { width: 48px; height: 22px; }
+#resource-hair-groups #hair-brush-mode { width: 76px; height: 22px; }
+#resource-hair-groups .hair-group-paint-check { display: flex; align-items: center; color: #aeb7b2; font-size: 11px; }
+#resource-hair-groups .hair-group-paint-check span { margin-left: 3px; }
+#resource-hair-groups .hair-group-paint-state { margin: 4px 0; color: #d2b86a; font-size: 11px; }
+#resource-hair-groups .hair-group-toggle {
+    height: 22px; padding: 0 8px; border-width: 1px; border-color: #49494f;
+    border-radius: 3px; background-color: #2b2b30; color: #aeb7b2; font-size: 11px;
+}
+#resource-hair-groups .hair-group-toggle:hover { background-color: #35353a; }
+#resource-hair-groups .hair-group-toggle.active { background-color: #35594e; border-color: #62a58d; color: #d7ddd9; }
+#resource-hair-groups .hair-group-form { padding: 6px 0; border-top-width: 1px; border-top-color: #3b3b40; }
+#resource-hair-groups .hair-group-form-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+#resource-hair-groups .hair-group-form-label { width: 70px; flex: none; color: #aeb7b2; font-size: 11px; }
+#resource-hair-groups .hair-group-range-sep { color: #8f9893; font-size: 11px; }
+#resource-hair-groups input[type=text] { width: 70px; height: 22px; }
+#resource-hair-groups #hair-group-create-name { width: 160px; }
+#resource-hair-groups .property-row > label { width: 38%; flex: none; color: #aeb7b2; font-size: 11px; }
+#resource-hair-groups .property-row input[type=text] { width: 58%; }
+#resource-hair-groups .hair-group-inspector {
+    margin-top: 8px; padding-top: 8px; border-top-width: 1px; border-top-color: #49494f;
+}
+#resource-hair-groups .hair-group-inspector-head {
+    display: flex; align-items: center; margin-bottom: 6px; color: #d7ddd9; font-size: 12px;
+}
+#resource-hair-groups .hair-group-subhead {
+    margin-top: 8px; margin-bottom: 4px; color: #d7ddd9; font-size: 12px; font-weight: bold;
+}
+#resource-hair-groups .hair-group-range-row {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 24px; color: #aeb7b2; font-size: 12px;
+}
+#resource-hair-groups .hair-group-override-row { display: flex; align-items: center; gap: 4px; height: 24px; }
+#resource-hair-groups .hair-group-override-label { width: 34%; flex: none; color: #aeb7b2; font-size: 11px; }
+#resource-hair-groups input[type=checkbox] {
+    width: 14px; height: 14px; padding: 0; flex: none; box-sizing: border-box;
+}
+#resource-hair-groups .hair-group-default { color: #8f9893; font-size: 11px; }
+#resource-hair-groups .hair-group-legend {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+    margin-top: 6px; padding-top: 6px; border-top-width: 1px; border-top-color: #3b3b40;
+}
+#resource-hair-groups .hair-group-legend-title { color: #8f9893; font-size: 11px; }
+#resource-hair-groups .hair-group-legend-item { display: flex; align-items: center; color: #aeb7b2; font-size: 11px; }
+#resource-hair-groups .hair-group-legend-item .hair-group-swatch { margin-right: 4px; width: 10px; height: 10px; border-radius: 3px; }
+/* 视口图例：只有 Group Colors 开启时显示，位置在预览图左上角。 */
+#hair-group-legend-overlay {
+    display: none; position: absolute; right: 10px; top: 10px;
+    padding: 6px 8px; border-width: 1px; border-color: #49494f;
+    background-color: #1e1e22cc; border-radius: 3px;
+    /* 图例只是读数，不能拦截视口相机拖动或笔刷/套索手势。 */
+    pointer-events: none;
+}
+#hair-group-legend-overlay .hair-group-legend-title {
+    display: block; margin-bottom: 3px; color: #d7ddd9; font-size: 11px; font-weight: bold;
+}
+#hair-group-legend-overlay .hair-group-legend-item {
+    display: flex; align-items: center; color: #aeb7b2; font-size: 11px;
+}
+#hair-group-legend-overlay .hair-group-swatch {
+    display: inline-block; width: 10px; height: 10px; margin-right: 5px;
+    border-radius: 3px; border-width: 1px; border-color: #49494f;
+}
+#resource-hair-groups .hair-group-footer { margin-top: 8px; }
+#resource-hair-groups .hair-group-status { display: block; margin-top: 4px; color: #aeb7b2; font-size: 11px; }
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
 #resource-model-info.visible { display: block; }
 #resource-model-info h3 { margin: 0 0 7px; color: #e7e7e9; }
@@ -979,6 +1085,21 @@ body {
     border-right-width: 1px;
     border-right-color: #49494f;
     background-color: #101013;
+}
+/* 笔刷圆环只是 cursor 处的反馈近似；命中与半径由世界平面 SurfaceBrush 决定。 */
+#hair-brush-overlay {
+    display: none; position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    pointer-events: none; overflow: hidden; clip: always;
+}
+#hair-brush-ring {
+    display: none; position: absolute; left: 0; top: 0; width: 40px; height: 40px;
+    border-width: 2px; border-color: #f4d35e; border-radius: 20px;
+    background-color: #f4d35e22;
+}
+#hair-brush-hud {
+    position: absolute; left: 10px; top: 10px; padding: 4px 8px;
+    background-color: #101013CC; border-width: 1px; border-color: #49494f;
+    border-radius: 3px; color: #d7ddd9; font-size: 11px;
 }
 #resource-details-panel {
     display: flex;

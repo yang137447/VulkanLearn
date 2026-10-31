@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -611,6 +612,59 @@ TEST_F(JsonAssetLibraryTest, PublishesDocumentOnlyThroughGtPoll)
     EXPECT_FALSE(library.GetDocument()->fields.empty());
 }
 
+TEST_F(JsonAssetLibraryTest, TressfxGuideCountIsReadFromTheTfxHeader)
+{
+    // Groups 编辑器需要 guideCount 才能在保存前拦截 end > guideCount；
+    // 目录扫描与显式打开都必须带上同一份头信息。
+    // 12 字节是 editor worker 读取的最小头：version、guideCount、pointsPerStrand。
+    std::string tfx(12, '\0');
+    const float version = 4.0f;
+    std::memcpy(&tfx[0], &version, sizeof(version));
+    const uint32_t guideCount = 40334;
+    const uint32_t pointsPerStrand = 16;
+    std::memcpy(&tfx[8], &pointsPerStrand, sizeof(pointsPerStrand));
+    tfx[4] = static_cast<char>(guideCount & 0xff);
+    tfx[5] = static_cast<char>((guideCount >> 8) & 0xff);
+    tfx[6] = static_cast<char>((guideCount >> 16) & 0xff);
+    tfx[7] = static_cast<char>((guideCount >> 24) & 0xff);
+    Write("Maps/SC_x/Source/hair.tfx", tfx);
+    Write("Maps/SC_x/Meshes/TF_hair.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.05})");
+    Start();
+    ASSERT_TRUE(WaitCatalog());
+    ASSERT_EQ(library.GetCatalog()->assets.size(), 1u);
+    EXPECT_EQ(library.GetCatalog()->assets[0].tressfxGuideCount, guideCount);
+
+    library.RequestOpen("Maps/SC_x/Meshes/TF_hair.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->tressfxGuideCount, guideCount);
+    EXPECT_TRUE(library.GetDocument()->diagnostic.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, TressfxGuideCountStaysUnknownOnMissingOrShortSource)
+{
+    // 头不足 12 字节时不能越界读；任何失败都只把 guideCount 留 0。
+    Write("Maps/SC_y/Source/short.tfx", std::string(5, '\0'));
+    Write("Maps/SC_y/Meshes/TF_short.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/short.tfx","strandRadius":0.05})");
+    Write("Maps/SC_y/Meshes/TF_missing.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/missing.tfx","strandRadius":0.05})");
+    // 未拉取的 Git LFS 指针或任意文本都不是合法 TFX 头，不能把 ASCII 字节拼成伪 count。
+    Write("Maps/SC_y/Source/lfs.tfx", "version https://git-lfs.github.com/spec/v1\n");
+    Write("Maps/SC_y/Meshes/TF_lfs.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_y/Source/lfs.tfx","strandRadius":0.05})");
+    Start();
+    ASSERT_TRUE(WaitCatalog());
+    for (const auto& entry : library.GetCatalog()->assets)
+        EXPECT_EQ(entry.tressfxGuideCount, 0u) << entry.assetPath;
+
+    library.RequestOpen("Maps/SC_y/Meshes/TF_missing.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->tressfxGuideCount, 0u);
+    EXPECT_TRUE(library.GetDocument()->diagnostic.empty());
+    EXPECT_FALSE(library.GetDocument()->fields.empty());
+}
+
 TEST_F(JsonAssetLibraryTest, CatalogExcludesPayloadAndUnsupportedJsonButKeepsBrokenCandidate)
 {
     Write("Common/SM_mesh.json", R"({"type":"mesh","modelDataPath":"Data/missing.bin"})");
@@ -643,7 +697,8 @@ TEST_F(JsonAssetLibraryTest, CatalogExcludesPayloadAndUnsupportedJsonButKeepsBro
     EXPECT_EQ(broken, 1u);
 }
 
-TEST_F(JsonAssetLibraryTest, OpeningMetadataNeverFollowsAnyResourceReferences)
+// TressFX 的 .tfx 头读取是显式例外；其他资产的引用路径仍只作为元数据。
+TEST_F(JsonAssetLibraryTest, OpeningMetadataDoesNotFollowNonTressfxReferences)
 {
     Write("SM_mesh.json", R"({
         "type":"mesh","modelDataPath":"../outside.bin",

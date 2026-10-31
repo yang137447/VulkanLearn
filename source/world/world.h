@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -22,6 +23,7 @@
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
 #include "debug/drawDebug.h"
+#include "hair/tressfxGroupPreviewState.h"
 #include <map>
 
 class Camera;
@@ -33,6 +35,8 @@ class SpotLight;
 namespace VL
 {
 namespace Animation { class SkeletalPlayback; struct SkinPose; }
+namespace Hair { class TressfxRootCloud; }
+namespace Hair { struct TressfxGroupBinding; }
 class ScriptWorldContext;
 struct ScriptTemplateExtension;
 
@@ -91,6 +95,15 @@ struct WorldMeshObject
     std::string materialKey;
     std::string materialInstanceKey;
     std::string windResponseProfileKey;
+    // TressFX 顶点工厂反推 guideIndex 用的每根 guide 点数；非头发为 0。
+    uint32_t tressfxPointsPerGuide = 0;
+    // 发根选择缓存只读共享；编辑器快照按 object.model 变换到世界空间。
+    std::shared_ptr<const Hair::TressfxRootCloud> tressfxRootCloud;
+    // 已保存资产的 guide->group 映射与组名；组编辑只替换这份只读绑定。
+    std::shared_ptr<const Hair::TressfxGroupBinding> tressfxGroupBinding;
+    // placement 解析后的每组模拟配置（0 = Default，k = 第 k 个命名组）。
+    // 编辑器只读它显示 asset default；求解器仍从 placementBinding 消费。
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> tressfxGroupConfigs;
     // 放置级（per-placement）网格：placementTemplateMeshKey 非空表示本对象在 spawn
     // 时从该模板 RenderableObject 克隆独立实例（共享导入几何、独立 GPU 状态）；
     // placementBinding 描述如何解析自身绑定（Kind + 参数），由渲染线程按 Kind 分派。
@@ -128,6 +141,15 @@ public:
     // 场景全局风；与 environment 同属一次 World 构建，随 World 的发布/替换整体切换。
     void SetWind(WorldWind wind);
     const WorldWind& GetWind() const { return wind; }
+    // 头发分组预览是 World 的会话状态，不写资产；快照构建时冻结到每个 mesh draw。
+    void SetTressfxGroupPreview(TressfxGroupPreviewState state)
+    {
+        tressfxGroupPreview = state;
+    }
+    const TressfxGroupPreviewState& GetTressfxGroupPreview() const
+    {
+        return tressfxGroupPreview;
+    }
 
     void SetCsmSettings(CsmSettings settings);
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
@@ -259,6 +281,7 @@ private:
     bool editorViewEnabled = false;
     WorldEnvironment environment;
     WorldWind wind;
+    TressfxGroupPreviewState tressfxGroupPreview;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, WindResponseProfile> windResponseProfiles;

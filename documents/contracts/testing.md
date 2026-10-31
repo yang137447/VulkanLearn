@@ -24,13 +24,13 @@
 
 ## 测试目标实测规模
 
-2026-10-26 TressFX 行为迁移构建的最新注册数量（同名行覆盖下方较早基线）：
+2026-10-28 TressFX Groups Phase 1–4 构建的最新注册数量（同名行覆盖下方较早基线）：
 
 | 可执行文件 | 测试数 | 本轮增量覆盖 |
 | --- | --- | --- |
-| `hair_asset_tests` | 342 | defaults/placement 合成、错误与整数拒绝、几何/行为身份、绑定缓存、off 整束/零 delta 参数；live/Reset 按放置身份寻址、共享几何实例隔离、owner 冲突拒绝；`windGain` 资产响应、物理阻力方向/段长无关性/相对速度反馈、816-byte 参数打包 |
+| `hair_asset_tests` | 405 | defaults/placement 合成、错误与整数拒绝、几何/行为身份、`TressfxGroupBinding` 展开/越界回退、空命名组、草稿组增减/容量边界、保留名/大小写不敏感重名、空 groups 数组、Tressfx 几何 LRU 缓存命中/失效、4096 range 上限、off 整束/零 delta 参数；发根点云/PCA 法线、SurfaceBrush 射线/平面/世界半径、DDA 射线对拍、40k 发根可达性、RootCloudSelector gate/套索多边形、GroupPaint 共享会话/冲突/压缩/撤销；per-group 6 字段解析、placement 最后覆盖、CPU/GPU 选择规则一致性；live/Reset 按放置身份寻址、共享几何实例隔离、owner 冲突拒绝；`windGain` 资产响应、物理阻力方向/段长无关性/相对速度反馈、816-byte 参数打包 |
 | `script_tests` | 459（C# ON） | mode/override/rootBone 校验、auto 归一化、Spawn 有效配置保留及来源重写 |
-| `editor_ui_tests` | 813 | 独立 TF kind/七命令/生命周期、TF-only 前缀、真实服务只读投影与 live 门控、CPU/off 保存与 BP 稀疏覆盖；毛发参数多尺寸几何、焦点/半成品输入、跨刷新滑条拖动（含三项零端点）及旋转 World 身份/代际 |
+| `editor_ui_tests` | 861 | 独立 TF kind/七命令/生命周期、TF-only 前缀、真实服务只读投影与 live 门控、CPU/off 保存与 BP 稀疏覆盖；Groups 新建/重命名/区间/覆盖/删除、行内错误、`guideCount` 上界、空组删除与组号重映射、草稿 binding 同步预览、Simulation/Groups 草稿互不覆盖、加载失败保护；Group Colors/Solo、世界圆环 center/normal/radius、套索、resolved asset default、空白名/4096 行内错误；毛发参数多尺寸几何、焦点/半成品输入、跨刷新滑条拖动（含三项零端点）及旋转 World 身份/代际 |
 | `material_instance_editor_production_tests` | 12 | 独立 TressFX 草稿发布与保存反馈 |
 | `game_export_tests` | 20 | 放置代理/权重依赖闭包，不把 skinning.source 当文件 |
 | `material_schema_tests` | 29 | TressFX 工厂/材质路径边界 |

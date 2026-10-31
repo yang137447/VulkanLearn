@@ -2,6 +2,8 @@
 #include "mesh/validation/meshAssetValidator.h"
 #include "render/resource/renderableObjectKey.h"
 #include "hair/tressfxBehavior.h"
+#include "hair/tressfxGroupBinding.h"
+#include "hair/tressfxRootCloud.h"
 #include "tfxFixture.h"
 
 #include <gtest/gtest.h>
@@ -1199,6 +1201,14 @@ TEST_F(TressfxImport, RetainsOneGuideRootPositionPerStrand)
     EXPECT_TRUE(section.tressfxRootPositions[0].isApprox(Eigen::Vector3f(0, 0, -2)));
     EXPECT_TRUE(section.tressfxRootPositions[1].isApprox(Eigen::Vector3f(1, 0, -2)));
     EXPECT_TRUE(section.tressfxRootPositions[2].isApprox(Eigen::Vector3f(2, 0, -2)));
+    ASSERT_NE(section.tressfxRootCloud, nullptr);
+    ASSERT_EQ(section.tressfxRootCloud->RootCount(), 3u);
+    for (uint32_t guide = 0; guide < 3; ++guide)
+    {
+        const auto& root = section.tressfxRootCloud->Roots()[guide];
+        EXPECT_TRUE(root.position.isApprox(section.tressfxRootPositions[guide]));
+        EXPECT_GT(root.growthDirection.norm(), 0.9f);
+    }
 }
 
 TEST_F(TressfxImport, AppliesPerGuideThicknessAndPadsBounds)
@@ -1330,7 +1340,36 @@ TEST(TressfxGuideGroups, ValidGroupsResolveRangesAndOverrides)
     EXPECT_EQ(plan.tressfxGuideGroups[0].guideRanges[1], (std::pair<uint32_t, uint32_t>{4u, 6u}));
     EXPECT_DOUBLE_EQ(plan.tressfxGuideGroups[0].simulationOverrides.at("globalShapeStiffness")
         .get<double>(), 0.3);
-    EXPECT_NE(plan.modelCacheKey.find("|groups="), std::string::npos);
+    // 组只决定 groupIds 与渲染绑定，不改变 ribbon 几何身份。
+    EXPECT_EQ(plan.modelCacheKey.find("|groups="), std::string::npos);
+    EXPECT_NE(plan.tressfxGroupBindingKey.find("\"fringe\""), std::string::npos);
+    EXPECT_NE(plan.tressfxGroupBindingKey.find("[4,6]"), std::string::npos);
+}
+
+TEST(TressfxGuideGroups, RangeBudgetMatchesTheEditorLimit)
+{
+    // 编辑器 TressfxGroupEditor::MaxGuideRanges = 4096；资产层必须同样拒绝超限，
+    // 否则编辑器保存成功的资产会在下一次导入时失败。
+    nlohmann::json atLimit = nlohmann::json::array();
+    nlohmann::json overLimit = nlohmann::json::array();
+    for (uint32_t index = 0; index < 4097; ++index)
+    {
+        const nlohmann::json range = {index * 2, index * 2 + 1};
+        if (index < 4096) atLimit.push_back(range);
+        overLimit.push_back(range);
+    }
+    EXPECT_NO_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(
+        nlohmann::json::array({{{"name", "fringe"}, {"guideRanges", atLimit}}}))));
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(
+            nlohmann::json::array({{{"name", "fringe"}, {"guideRanges", overLimit}}})));
+        FAIL() << "4097 guide ranges were accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("4096"), std::string::npos);
+    }
 }
 
 TEST(TressfxGuideGroups, AbsentGroupsLeaveNoGroupPlanOrIdentity)
@@ -1338,6 +1377,21 @@ TEST(TressfxGuideGroups, AbsentGroupsLeaveNoGroupPlanOrIdentity)
     const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", Descriptor());
     EXPECT_TRUE(plan.tressfxGuideGroups.empty());
     EXPECT_EQ(plan.modelCacheKey.find("|groups="), std::string::npos);
+    EXPECT_TRUE(plan.tressfxGroupBindingKey.empty());
+}
+
+TEST(TressfxGuideGroups, GroupEditsChangeBindingKeyButNotGeometryIdentity)
+{
+    auto first = WithGroups(nlohmann::json::array(
+        {{{"name", "fringe"}, {"guideRanges", {{0, 2}}}},
+         {{"name", "back"}, {"guideRanges", {{2, 4}}}}}));
+    auto second = WithGroups(nlohmann::json::array(
+        {{{"name", "fringe"}, {"guideRanges", {{0, 1}}}},
+         {{"name", "crown"}, {"guideRanges", {{3, 4}}}}}));
+    const auto firstPlan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", first);
+    const auto secondPlan = MeshAssetValidator::BuildLoadPlan("TF_hair.json", second);
+    EXPECT_EQ(firstPlan.modelCacheKey, secondPlan.modelCacheKey);
+    EXPECT_NE(firstPlan.tressfxGroupBindingKey, secondPlan.tressfxGroupBindingKey);
 }
 
 TEST(TressfxGuideGroups, DuplicateNameIsRejected)
@@ -1439,6 +1493,45 @@ TEST(TressfxGuideGroups, GroupsAreOnlyAcceptedOnTressfxAssets)
     }
 }
 
+TEST(TressfxGuideGroups, EmptyArrayMeansNoNamedGroups)
+{
+    // 空数组与缺省 groups 语义相同；编辑器把“删除最后一个组”写成移除键，
+    // 但外部工具写空数组也不能被运行期拒绝，否则 UI 无法修复该资产。
+    const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json",
+        WithGroups(nlohmann::json::array()));
+    EXPECT_TRUE(plan.tressfxGuideGroups.empty());
+    EXPECT_TRUE(plan.tressfxGroupBindingKey.empty());
+}
+
+TEST(TressfxGuideGroups, EmptyGuideRangesFormAnEmptyNamedGroup)
+{
+    // 作者可以先建空组，再用笔刷填充；空组不占用 guide，但保留名称/顺序。
+    const auto plan = MeshAssetValidator::BuildLoadPlan("TF_hair.json",
+        WithGroups(nlohmann::json::array({
+            {{"name", "fringe"}, {"guideRanges", nlohmann::json::array()}}})));
+    ASSERT_EQ(plan.tressfxGuideGroups.size(), 1u);
+    EXPECT_EQ(plan.tressfxGuideGroups[0].name, "fringe");
+    EXPECT_TRUE(plan.tressfxGuideGroups[0].guideRanges.empty());
+}
+
+TEST(TressfxGuideGroups, ReservedDuplicateFoldedAndPaddedNamesAreRejected)
+{
+    // 编辑器用 Trim + 大小写不敏感比较并保留 Default/unassigned；
+    // 资产层必须用同一规则，否则“运行期合法、编辑器加载失败”的资产会出现。
+    for (const char* name : {"Default", "UNASSIGNED", " fringe ", " "})
+    {
+        auto groups = TwoGroups();
+        groups[0]["name"] = name;
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(groups)),
+            std::runtime_error) << name;
+    }
+    auto folded = TwoGroups();
+    folded[0]["name"] = "fringe";
+    folded[1]["name"] = "FRINGE";
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("TF_hair.json", WithGroups(folded)),
+        std::runtime_error);
+}
+
 TEST_F(TressfxImport, ResolvesGuideGroupIdsFromDeclaredRanges)
 {
     request.buildPlan = BuildPlacementFixturePlan("SM_guides.json", WithGroups(
@@ -1446,8 +1539,14 @@ TEST_F(TressfxImport, ResolvesGuideGroupIdsFromDeclaredRanges)
             {{"name", "a"}, {"guideRanges", {{0, 1}}}},
             {{"name", "b"}, {"guideRanges", {{2, 3}}}}})));
     const auto section = Import(TfxFixture::Guides(3)).sections[0];
+    // 几何导入只记录 guideCount，不保存 guide->group 映射。
+    EXPECT_EQ(section.tressfxGuideCount, 3u);
+    ASSERT_NE(section.tressfxRootCloud, nullptr);
+    ASSERT_EQ(section.tressfxRootCloud->RootCount(), 3u);
+    const auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {{"a", {{0, 1}}}, {"b", {{2, 3}}}}, section.tressfxGuideCount, "key", "test");
     // 0 号为默认组；未声明的 1 号 guide 保持 0。
-    EXPECT_EQ(section.tressfxGuideGroupIds, (std::vector<uint32_t>{1u, 0u, 2u}));
+    EXPECT_EQ(binding->guideGroupIds, (std::vector<uint32_t>{1u, 0u, 2u}));
 }
 
 TEST_F(TressfxImport, RangePastTfxGuideCountNamesGroupAndAsset)
@@ -1470,7 +1569,10 @@ TEST_F(TressfxImport, RangePastTfxGuideCountNamesGroupAndAsset)
 TEST_F(TressfxImport, AbsentGroupsLeaveGuideGroupIdsEmpty)
 {
     const auto section = Import(TfxFixture::Guides(3)).sections[0];
-    EXPECT_TRUE(section.tressfxGuideGroupIds.empty());
+    const auto binding = VL::Hair::BuildTressfxGroupBinding(
+        {}, section.tressfxGuideCount, {}, "test");
+    EXPECT_TRUE(binding->groupNames.empty());
+    EXPECT_EQ(binding->guideGroupIds, (std::vector<uint32_t>{0u, 0u, 0u}));
 }
 
 TEST(TressfxRenderableKey, GpuHairPlacementAppendsInstanceButStaticMeshesShare)
@@ -1506,5 +1608,15 @@ TEST(TressfxRenderableKey, SpawnRebasesInstanceIdentityButKeepsSharedKeys)
     EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey, "", "B"), templateKey);
     EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey,
                   "__blueprint/~template.0/hair", ""), templateKey);
+}
+
+TEST(TressfxRenderableKey, GroupIdentityDoesNotChangeTheRenderableKey)
+{
+    // 组名/区间/组数都不进入渲染对象键：颜色表和参数表按固定容量原地更新，
+    // 保存后组数变化也不能触发 ribbon/GPU 对象重建。
+    const std::string key = MakeRenderableObjectKey("cache", 0, "hair", "A", false);
+    EXPECT_EQ(key, "cache|0|hair");
+    EXPECT_EQ(key.find("|groups="), std::string::npos);
+    EXPECT_EQ(key.find("|groupCount="), std::string::npos);
 }
 }

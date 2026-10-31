@@ -26,6 +26,8 @@ struct EditorJsonAssetEntry
     std::string type;
     // tressfx 描述符声明了 simulation.skinning：毛发视口不预览它，由蓝图组件承载。
     bool tressfxSkinning = false;
+    // tressfx 的 .tfx guide 数；0 表示未知或不可用（文件缺失/头损坏/非 tressfx）。
+    uint32_t tressfxGuideCount = 0;
 };
 
 struct EditorJsonAssetCatalogSnapshot
@@ -117,6 +119,8 @@ struct EditorJsonDocumentSnapshot
     // UI 不再读文件判断“这是不是毛发、要不要挡预览”。
     std::string type;
     bool tressfxSkinning = false;
+    // 与目录条目同源的 guide 数，供 Groups 编辑器校验 end <= guideCount。
+    uint32_t tressfxGuideCount = 0;
 };
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)

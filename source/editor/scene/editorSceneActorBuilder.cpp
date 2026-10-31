@@ -85,6 +85,10 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.materialInstancePath = object.materialInstanceKey;
         section.materialSlotIndex = object.materialSlotIndex;
         section.materialSlotName = object.materialSlotName;
+        section.tressfxRootCloud = object.tressfxRootCloud;
+        section.tressfxGroupBinding = object.tressfxGroupBinding;
+        section.tressfxGroupConfigs = object.tressfxGroupConfigs;
+        section.tressfxRootLocalToWorld = object.model;
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，

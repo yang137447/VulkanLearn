@@ -22,6 +22,9 @@
 #include "editor/ui/editorPerformancePanel.h"
 #include "editor/ui/blueprintViewportInteraction.h"
 #include "editor/ui/tressfxHairPreview.h"
+#include "editor/ui/tressfxGroupEditor.h"
+#include "hair/tressfxGroupPaint.h"
+#include "hair/tressfxSurfaceBrush.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/widgets/widgetDocument.h"
@@ -327,8 +330,58 @@ private:
     void RefreshHairSimulationSection(bool isHair, bool hairBlocked);
     void SubmitHairSimulationLive(std::size_t controlIndex, const std::array<double, 3>& values);
     void SubmitHairSimulationSave();
+    // Groups 编辑器与 Simulation 一样只改冻结的 TF 草稿快照；保存仍走
+    // ModifyTressfxDocument + Save Content，不直接写资产或 World。
+    void RefreshHairGroupsSection(bool isHair, bool hairBlocked);
+    void SubmitHairGroupsSave();
+    void SelectHairGroup(int index);
+    // 预览状态只发值语义；generation 不可用时不投递，且同一组状态只发一次。
+    void SubmitTressfxGroupPreview();
+    // 草稿 binding 同步：只在草稿结构 revision 或预览 generation 变化时发送，
+    // 让新建/重命名/删除组无需保存重载即可被 GPU 着色、选中和笔刷使用。
+    void SubmitTressfxGroupBindingPreview();
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> EnsureHairDraftBinding();
+    bool HairDraftBindingReady() const;
+    // Phase 3 分组笔刷：屏幕只生成 ray；SurfaceBrush/RootCloudSelector 决定命中。
+    // ghost 只通过 SetTressfxBrushPreview 值语义命令进入渲染线程。
+    const EditorSceneMeshSectionSnapshot* HairBrushSection() const;
+    // 草稿组号 -> 已保存资产的 GPU 组号（0=Default，k=第 k 个已保存命名组）。
+    // 草稿新增/删除组后不能直接用草稿下标；找不到返回 -1。
+    int32_t SavedHairGroupIndex(const EditorSceneMeshSectionSnapshot* section,
+        int draftIndex) const;
+    bool HairBrushReady() const;
+    // 同一个预览 generation + binding 只建立一次共享会话；hover/笔画不再复制
+    // 40k guide 映射。binding 变化（保存后重载/切预览）时自动重建。
+    bool EnsureHairPaintSession(const EditorSceneMeshSectionSnapshot* section);
+    void ResetHairPaintSession();
+    void ToggleHairGroupPaint(bool active);
+    // 视口几何输入（viewport/camera/settings）只构造一次；圆形笔刷与套索共用同一套
+    // NDC/FOV 约定，避免它们的平面落点不一致。
+    bool PrepareHairBrushInputs(VL::Hair::BrushViewport& viewport,
+        VL::Hair::BrushCamera& camera, VL::Hair::BrushSettings& settings) const;
+    // 只更新 stamp/光标，不做圆形命中；套索与 hover 都需要一个稳定的 brush plane。
+    bool SampleHairBrushStamp(float screenX, float screenY);
+    void UpdateHairBrushSample(float screenX, float screenY, bool applyToStroke);
+    void BeginHairBrushStroke(float screenX, float screenY, bool shift, bool alt);
+    // 套索在手势期间自行累积命中，提交时不能再按当前光标补一个圆形 stamp。
+    void BeginHairLassoStroke(float screenX, float screenY, bool shift, bool alt);
+    void AppendHairLassoPoint(float screenX, float screenY);
+    // 拖动期间按当前多边形重建 ghost；每 3 个点更新一次，避免整屏套索下每次鼠标移动
+    // 都做全量 guide 选择。松开时仍以最终多边形重新计算一次。
+    void UpdateHairLassoPreview();
+    void CommitHairLassoStroke();
+    void CommitHairBrushStroke(bool sampleCurrent = true);
+    void CancelHairBrushStroke(bool exitPaint);
+    void SubmitTressfxBrushPreview();
+    void UpdateHairBrushOverlay();
+    void UndoLastHairBrushCommit();
+    std::string HairBrushConflictText(
+        const std::vector<VL::Hair::GroupPaintConflict>& conflicts) const;
     std::string hairSimulationPath;
     nlohmann::json hairSimulationValues = nlohmann::json::object();
+    // 上次从文档同步的 simulationDefaults；用于区分“另一个区域保存导致 revision 前进”
+    // 与真正的外部修改，避免 Groups 保存时丢掉未保存的 Simulation 草稿。
+    nlohmann::json hairSimulationObservedDefaults = nullptr;
     uint64_t hairSimulationBoundRevision = 0;
     uint64_t hairSimulationSaveRevision = 0;
     bool hairSimulationRequested = false;
@@ -342,6 +395,87 @@ private:
     std::string hairPreviewWindPath;
     uint64_t hairPreviewWindGeneration = 0;
     bool hairPreviewWindBound = false;
+    // Groups 的草稿状态完全属于面板：guideCount 只用于 range 上界校验，
+    // 选中索引 -1 表示隐式 Default 组 0（不可编辑、不可作为笔刷目标）。
+    VL::Editor::TressfxGroupEditor hairGroups;
+    std::string hairGroupsPath;
+    // 只有成功 Load 的控制器才允许保存；加载失败时保留原始 groups 不动，
+    // 绝不能把空控制器写回并删除用户的组。
+    bool hairGroupsLoaded = false;
+    // 上次成功同步的文档 groups；revision 前进但该节未变时保留本地草稿。
+    nlohmann::json hairGroupsObservedDocument = nullptr;
+    uint64_t hairGroupsBoundRevision = 0;
+    uint32_t hairGroupsBoundGuideCount = 0;
+    int hairGroupSelected = -1;
+    // Group Colors / Solo 是会话预览状态，不写资产。默认开着颜色，
+    // 让 TF 预览能直接看出分组；关卡头发仍由 World 默认 flags=0 保持原外观。
+    bool hairGroupColors = true;
+    bool hairGroupSolo = false;
+    bool hairGroupPreviewSent = false;
+    bool hairGroupPaintActive = false;
+    float hairBrushRadiusPx = 20.0f;
+    VL::Hair::GroupPaintMode hairBrushMode = VL::Hair::GroupPaintMode::Add;
+    bool hairBrushReplaceExisting = false;
+    bool hairBrushStrokeActive = false;
+    VL::Hair::GroupPaintMode hairBrushStrokeMode = VL::Hair::GroupPaintMode::Add;
+    VL::Hair::BrushStamp hairBrushStamp;
+    std::vector<VL::Hair::RootHit> hairBrushHits;
+    std::vector<VL::Hair::GroupPaintConflict> hairBrushConflicts;
+    VL::Hair::GroupPaintController hairPaint;
+    uint64_t hairPaintSessionGeneration = 0;
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> hairPaintSessionBinding;
+    // 笔刷冲突/Replace existing 必须针对当前 Groups 草稿，而不是已保存资产；
+    // 草稿结构变化时重建这份 binding（O(40k)，只在编辑时发生）。
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> hairPaintDraftBinding;
+    uint64_t hairPaintDraftRevision = 0;
+    uint64_t hairGroupsDraftRevision = 0;
+    std::string hairGroupsDraftSignature;
+    // 草稿 binding 已投递到的预览身份。Ready 只表示本 revision/generation
+    // 的队列命令已发出；实际 buffer 更新仍在 RT。容量不足由运行时拒绝并打印。
+    bool hairGroupBindingPreviewSent = false;
+    // 入队当帧仍视为“同步中”；下一次 Refresh 没有新 revision 才允许 Paint。
+    bool hairGroupBindingPreviewQueued = false;
+    uint64_t hairGroupBindingPreviewSentRevision = 0;
+    uint64_t hairGroupBindingPreviewSentGeneration = 0;
+    std::string hairGroupBindingPreviewSentObject;
+    std::string hairGroupBindingPreviewError;
+    // 只保存本笔刷会话的提交前整份 Groups 草稿；不是编辑器全局 undo。
+    std::vector<VL::Editor::TressfxGroupEditor> hairPaintUndo;
+    std::string hairBrushStatus;
+    float hairBrushCursorX = 0.0f;
+    float hairBrushCursorY = 0.0f;
+    // Lasso 是 Paint 区内的独立工具；手势点只保留屏幕坐标，平面投影在选择器里完成。
+    bool hairLassoActive = false;
+    bool hairLassoDragging = false;
+    std::vector<Eigen::Vector2f> hairLassoScreenPoints;
+    bool hairBrushPreviewActive = false;
+    // 离开预览时 section 已不可用，必须用最后一次对象名显式清 ghost。
+    std::string hairBrushLastObjectName;
+    uint64_t hairBrushLastGeneration = 0;
+    // 世界圆环的独立去重：ghost 权重不变时，鼠标移动仍必须更新圆环。
+    bool hairBrushRingSent = false;
+    bool hairBrushRingSentVisible = false;
+    Eigen::Vector3f hairBrushRingSentCenter = Eigen::Vector3f::Zero();
+    Eigen::Vector3f hairBrushRingSentNormal = Eigen::Vector3f::UnitY();
+    float hairBrushRingSentRadius = 0.0f;
+    uint64_t hairGroupPreviewSentGeneration = 0;
+    int32_t hairGroupPreviewSentSelected = -2;
+    uint32_t hairGroupPreviewSentFlags = 0;
+    bool hairGroupCreateActive = false;
+    std::string hairGroupCreateName;
+    std::string hairGroupCreateStart;
+    std::string hairGroupCreateEnd;
+    std::string hairGroupCreateError;
+    bool hairGroupAddRangeActive = false;
+    std::string hairGroupRangeStart;
+    std::string hairGroupRangeEnd;
+    std::string hairGroupRangeError;
+    std::string hairGroupStatus;
+    bool hairGroupsPendingSave = false;
+    uint64_t hairGroupsSaveRevision = 0;
+    int hairGroupsSaveWaitTicks = 0;
+    bool hairGroupsPendingReset = false;
+    nlohmann::json hairGroupsPendingValue = nlohmann::json();
 
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;

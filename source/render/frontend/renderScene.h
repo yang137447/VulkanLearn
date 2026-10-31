@@ -27,6 +27,10 @@ struct RenderDrawPacket
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
     std::string windResponseProfileKey;
+    // TressFX 分组预览值语义；渲染线程只写对象 UBO，不直接改 World。
+    uint32_t tressfxPointsPerGuide = 0;
+    int32_t tressfxSelectedGroup = -1;
+    uint32_t tressfxGroupFlags = 0;
     // 放置级网格（per-placement）：非空模板键表示本帧 resolve 之前渲染线程必须为
     // mesh.key 克隆一份独立 RenderableObject，并按 placementBinding 的 Kind 解析绑定。
     // 普通共享对象两个字段为空。

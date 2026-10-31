@@ -1,5 +1,6 @@
 #include "render/backend/rendererObjectResourceRegistry.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "materialInstance.h"
@@ -123,8 +124,22 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 {
                     const auto renderable = draw.renderableObject.lock();
                     if (renderable && renderable->IsTressfx())
+                    {
                         objectResourceEntry->GetResources().tressfxPositions =
                             renderable->GetTressfxPositionInfo();
+                        objectResourceEntry->GetResources().tressfxGuideGroupIds =
+                            renderable->GetTressfxGuideGroupIdInfo();
+                        objectResourceEntry->GetResources().tressfxGuideGroupColors =
+                            renderable->GetTressfxGuideGroupColorInfo();
+                        const uint32_t slots = std::max(
+                            1u, rendererBackend.GetSwapchainImageCount());
+                        auto& brushWeights =
+                            objectResourceEntry->GetResources().tressfxBrushWeights;
+                        brushWeights.resize(slots);
+                        for (uint32_t slot = 0; slot < slots; ++slot)
+                            brushWeights[slot] =
+                                renderable->GetTressfxBrushWeightInfo(slot);
+                    }
                 }
                 try
                 {

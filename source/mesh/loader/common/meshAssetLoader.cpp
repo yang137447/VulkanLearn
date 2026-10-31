@@ -25,6 +25,7 @@
 #include "animation/skeletalPlayback.h"
 #include "shader/build/contentHash.h"
 #include "hair/tressfxBehavior.h"
+#include "hair/tressfxGroupSimulation.h"
 #include "hair/collisionMeshObj.h"
 #include "hair/tfxBoneLoader.h"
 
@@ -181,6 +182,9 @@ void MeshAssetLoader::PrepareTressfxPlacement(
         request.buildPlan.meshAssetPath);
     request.tressfxEffective = VL::Hair::ResolveTressfxBehavior(
         request.buildPlan.tressfxSimulation, behavior, request.buildPlan.meshAssetPath);
+    request.tressfxGroupConfigs = VL::Hair::ResolveTressfxGroupSimulationConfigs(
+        request.buildPlan.tressfxSimulation, request.buildPlan.tressfxGuideGroups,
+        behavior, request.buildPlan.meshAssetPath);
     const auto& config = *request.tressfxEffective;
     auto resources = std::make_shared<TressfxPlacementResources>();
     if (config.collisionMesh)

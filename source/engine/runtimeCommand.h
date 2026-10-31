@@ -9,6 +9,7 @@
 #include "ui/uiAction.h"
 #include "debug/debugDrawControl.h"
 #include "hair/tressfxLiveParams.h"
+#include "hair/tressfxGroupPaint.h"
 
 namespace VL
 {
@@ -83,7 +84,15 @@ enum class RuntimeCommandType
     ResetHairSimulation,
     // `hair set <objectName> <field> <value...>`：只改目标渲染对象的模拟参数副本，
     // 下一帧组 params UBO 时生效；不重载 World、不改资产文件、不改共享导入结果。
-    SetHairSimulationParameter
+    SetHairSimulationParameter,
+    // 头发分组预览：只写 active World 的会话状态；渲染线程从冻结快照消费，
+    // 不直接改 RenderableObject 或 GPU buffer。
+    SetTressfxGroupPreview,
+    // 草稿 group binding：值语义进入 RT 队列，在 BeginFrame 后原地更新
+    // RenderableObject 的 group id/颜色/参数表，不写资产。
+    SetTressfxGroupBindingPreview,
+    // 分组笔刷 ghost：值语义命令，渲染线程按对象名更新 host-visible preview buffer。
+    SetTressfxBrushPreview
 };
 
 enum class RuntimeShaderReloadScope
@@ -145,6 +154,11 @@ struct RuntimeCommand
     MeshPlacementRequest meshPlacement;
     // `hair set` 的值语义：对象名 + 字段 + 1..3 个 float；GT 校验后转渲染线程。
     VL::Hair::HairLiveParameterRequest hairLiveParameter;
+    // `SetTressfxGroupPreview` 的值语义；sourceText=="ui" 时必须校验 World 代数。
+    int32_t tressfxSelectedGroup = -1;
+    uint32_t tressfxGroupFlags = 0;
+    VL::Hair::TressfxGroupBindingPreviewRequest tressfxGroupBindingPreview;
+    VL::Hair::TressfxBrushPreviewRequest tressfxBrushPreview;
     Debug::Control debugDrawControl;
     // LoadWorld 的附加场景对象（JSON 对象数组）。模型编辑器用它把"当前打开的模型"
     // 并入中性预览环境，从而不必生成临时场景文件 —— 临时文件会在磁盘上留下第二份真相，

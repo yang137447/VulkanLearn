@@ -4,6 +4,8 @@
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "animation/skeletalPlayback.h"
 #include "hair/tressfxSdfGrid.h"
+#include "hair/tressfxGroupGpuData.h"
+#include "hair/tressfxGroupSimulation.h"
 #include "hair/tressfxLiveParamsApply.h"
 #include "commonFunction.h"
 
@@ -11,7 +13,9 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 
 // params UBO 的槽数必须与帧同步环一致：BeginFrame 先等该槽 fence，主机再写槽内参数。
@@ -63,6 +67,30 @@ std::pair<vk::Buffer, vk::DeviceMemory> CreateUploadedDeviceLocalStorageBuffer(
         throw;
     }
 }
+
+VL::Hair::SimulationConfig MakeCpuSimulationConfig(
+    const TressfxSimulationConfig& config)
+{
+    VL::Hair::SimulationConfig cpu;
+    cpu.gravity = config.gravity;
+    // 风不在资产里：CPU config 的 wind 保持零，由
+    // AdvanceTressfxSimulation 每帧在 StepFrame 之前写入场景风向量。
+    cpu.windGain = config.windGain;
+    cpu.strandRadius = config.strandRadius;
+    cpu.damping = config.damping;
+    cpu.iterations = config.iterations;
+    cpu.rootFixedPoints = config.rootFixedPoints;
+    cpu.maxDt = config.maxDt;
+    cpu.bendStiffness = config.bendStiffness;
+    cpu.globalShapeStiffness = config.globalShapeStiffness;
+    cpu.globalShapeEffectiveRange = config.globalShapeEffectiveRange;
+    cpu.vspCoefficient = config.vspCoefficient;
+    cpu.vspAccelThresholdMax = config.vspAccelThresholdMax;
+    cpu.vspStiffness = config.vspStiffness;
+    cpu.localShapeStiffness = config.localShapeStiffness;
+    cpu.capsules = config.capsules;
+    return cpu;
+}
 } // namespace
 
 RenderableObject::RenderableObject(
@@ -89,7 +117,9 @@ RenderableObject::RenderableObject(
     VL::RendererBackendVulkan& backend,
     const std::string& objectName,
     const TressfxSimulationConfig* tressfxConfig,
-    std::shared_ptr<const TressfxPlacementResources> tressfxResources)
+    std::shared_ptr<const TressfxPlacementResources> tressfxResources,
+    const std::vector<TressfxSimulationConfig>* tressfxGroupConfigs,
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> tressfxGroupBinding)
     : imported(std::move(importedResource))
     , importedSectionIndex(sectionIndex)
     , tressfxPlacementResources(std::move(tressfxResources))
@@ -106,6 +136,34 @@ RenderableObject::RenderableObject(
         // 先复制作者参数到本对象副本，再做 GPU/CPU 资源分支：实时覆盖只写副本，
         // 共享的导入结果保持只读。
         tressfxSimulationConfig = tressfxConfig ? *tressfxConfig : imported->buildPlan.tressfxSimulation;
+        // 组解析结果同样按值拷入；缺省时退化成单份有效配置（组 0）。
+        if (tressfxGroupConfigs != nullptr && !tressfxGroupConfigs->empty())
+            tressfxGroupSimulationConfigs = *tressfxGroupConfigs;
+        else
+            tressfxGroupSimulationConfigs.assign(1, tressfxSimulationConfig);
+        // 分组绑定与几何分离：优先使用调用方按当前描述符构造的 binding；
+        // 兼容直接构造对象的调用方，退回到导入结果的 groups（仅新对象路径）。
+        if (tressfxGroupBinding)
+            tressfxGuideGroupBinding = std::move(tressfxGroupBinding);
+        else
+        {
+            std::vector<VL::Hair::TressfxGroupDeclaration> declarations;
+            for (const TressfxGuideGroupPlan& group : imported->buildPlan.tressfxGuideGroups)
+            {
+                VL::Hair::TressfxGroupDeclaration declaration;
+                declaration.name = group.name;
+                declaration.ranges = group.guideRanges;
+                declarations.push_back(std::move(declaration));
+            }
+            const uint32_t guideCount = section.tressfxGuideCount != 0
+                ? section.tressfxGuideCount
+                : static_cast<uint32_t>(section.tressfxRootPositions.size());
+            tressfxGuideGroupBinding = VL::Hair::BuildTressfxGroupBinding(
+                declarations, guideCount, imported->buildPlan.tressfxGroupBindingKey, name);
+        }
+        tressfxGroupBindingKey = tressfxGuideGroupBinding->key;
+        tressfxGroupSimulationKey =
+            VL::Hair::MakeTressfxGroupSimulationKey(tressfxGroupSimulationConfigs);
         for (const auto* curve : {&tressfxSimulationConfig.vspStiffness,
                 &tressfxSimulationConfig.localShapeStiffness})
             if (!curve->empty() && curve->size() != section.tressfxPointsPerStrand)
@@ -118,6 +176,12 @@ RenderableObject::RenderableObject(
         {
             tressfxGuideCount = static_cast<uint32_t>(pointCount / pointsPerGuide);
             tressfxPointsPerGuide = section.tressfxPointsPerStrand;
+            std::string groupError;
+            if (!VL::Hair::ValidateTressfxGroupPreviewBinding(
+                    *tressfxGuideGroupBinding, tressfxGuideCount, groupError))
+                throw std::runtime_error(
+                    "TressFX group binding does not match imported geometry: " +
+                    groupError + ": " + name);
             // GPU backend 不构造 CPU 参考 solver；位置只由 HairSimulationPass 的
             // compute dispatch 推进，避免同一份 SSBO 出现两个写入者。
             if (tressfxSimulationConfig.enabled &&
@@ -128,37 +192,20 @@ RenderableObject::RenderableObject(
                 for (size_t point = 0; point < pointCount; ++point)
                     restPositions.push_back(section.vertices[point * 2].position);
 
-                VL::Hair::SimulationConfig simulationConfig;
-                simulationConfig.gravity = tressfxSimulationConfig.gravity;
-                // 风不在资产里：CPU config 的 wind 保持零，由
-                // AdvanceTressfxSimulation 每帧在 StepFrame 之前写入场景风向量。
-                simulationConfig.windGain = tressfxSimulationConfig.windGain;
-                simulationConfig.strandRadius = tressfxSimulationConfig.strandRadius;
-                simulationConfig.damping = tressfxSimulationConfig.damping;
-                simulationConfig.iterations = tressfxSimulationConfig.iterations;
-                simulationConfig.rootFixedPoints = tressfxSimulationConfig.rootFixedPoints;
-                simulationConfig.maxDt = tressfxSimulationConfig.maxDt;
-                simulationConfig.bendStiffness = tressfxSimulationConfig.bendStiffness;
-                simulationConfig.globalShapeStiffness =
-                    tressfxSimulationConfig.globalShapeStiffness;
-                simulationConfig.globalShapeEffectiveRange =
-                    tressfxSimulationConfig.globalShapeEffectiveRange;
-                simulationConfig.vspCoefficient =
-                    tressfxSimulationConfig.vspCoefficient;
-                simulationConfig.vspAccelThresholdMax =
-                    tressfxSimulationConfig.vspAccelThresholdMax;
-                // 4a：CPU 参考 solver 与 GPU 参数块共用同一份作者刚度曲线；
-                // 空数组保持原有“未作者”回退语义。
-                simulationConfig.vspStiffness = tressfxSimulationConfig.vspStiffness;
-                simulationConfig.localShapeStiffness =
-                    tressfxSimulationConfig.localShapeStiffness;
-                simulationConfig.capsules = tressfxSimulationConfig.capsules;
+                // 4a：CPU 参考 solver 与 GPU group config 共用同一次分层解析结果；
+                // 空曲线仍保持“未作者”回退语义。
+                std::vector<VL::Hair::SimulationConfig> simulationConfigs;
+                simulationConfigs.reserve(tressfxGroupSimulationConfigs.size());
+                for (const TressfxSimulationConfig& groupConfig :
+                     tressfxGroupSimulationConfigs)
+                    simulationConfigs.push_back(MakeCpuSimulationConfig(groupConfig));
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
                     tressfxGuideCount,
                     pointsPerGuide,
                     section.tressfxInverseMass,
-                    simulationConfig);
+                    std::move(simulationConfigs),
+                    tressfxGuideGroupBinding->guideGroupIds);
             }
         }
     }
@@ -169,6 +216,8 @@ RenderableObject::RenderableObject(
     {
         CreateSkinInfluenceBuffer();
         CreateTressfxPositionBuffer();
+        CreateTressfxGuideGroupBuffers();
+        CreateTressfxBrushWeightBuffer();
         CreateTressfxGpuSimulationBuffers();
     }
     catch (...)
@@ -246,7 +295,23 @@ bool RenderableObject::ApplyTressfxLiveParameter(
         error = "TressFX live parameters require a GPU guide object";
         return false;
     }
-    return VL::Hair::ApplyHairLiveParameter(tressfxSimulationConfig, request, error);
+    // 先在所有副本上试写，成功后再一次性提交，避免某一组留下半改状态。
+    // 实时覆盖是调试语义，应压过作者默认值与组覆盖；否则分组后这些控件会
+    // 因为 shader 只读组参数表而完全失效。
+    TressfxSimulationConfig baseCandidate = tressfxSimulationConfig;
+    if (!VL::Hair::ApplyHairLiveParameter(baseCandidate, request, error))
+        return false;
+    std::vector<TressfxSimulationConfig> groupCandidates =
+        tressfxGroupSimulationConfigs;
+    for (TressfxSimulationConfig& candidate : groupCandidates)
+        if (!VL::Hair::ApplyHairLiveParameter(candidate, request, error))
+            return false;
+    tressfxSimulationConfig = std::move(baseCandidate);
+    tressfxGroupSimulationConfigs = std::move(groupCandidates);
+    // 实时覆盖也算当前对象状态：后续资产重载看到不同 identity 时会恢复作者值。
+    tressfxGroupSimulationKey =
+        VL::Hair::MakeTressfxGroupSimulationKey(tressfxGroupSimulationConfigs);
+    return true;
 }
 
 const vk::DescriptorBufferInfo& RenderableObject::GetTressfxParamsInfo(
@@ -262,6 +327,160 @@ void RenderableObject::WriteTressfxSimulationParams(
     // host-coherent 映射：写入当前 frame-in-flight 槽即可，beginFrame 已确认该槽
     // 上一帧的 fence 完成，因此不会与仍在执行的 dispatch 重叠。
     std::memcpy(tressfxParamsTargets[frameSlot].mapped, &params, sizeof(params));
+}
+
+void RenderableObject::WriteTressfxGroupSimulationConfigs(uint32_t frameSlot)
+{
+    if (frameSlot >= VL::Hair::GuideSimulationParamBufferCount ||
+        !tressfxGuideGroupConfigTargets[frameSlot].mapped)
+        return;
+    const vk::DeviceSize capacity =
+        tressfxGuideGroupConfigTargets[frameSlot].info.range /
+        sizeof(VL::Hair::TressfxGroupSimulationGpu);
+    const std::vector<VL::Hair::TressfxGroupSimulationGpu> data =
+        VL::Hair::BuildTressfxGroupSimulationGpuData(
+            tressfxGroupSimulationConfigs, static_cast<size_t>(capacity));
+    if (data.empty() || data.size() != capacity)
+        return;
+    std::memcpy(tressfxGuideGroupConfigTargets[frameSlot].mapped, data.data(),
+        data.size() * sizeof(VL::Hair::TressfxGroupSimulationGpu));
+}
+
+bool RenderableObject::UpdateTressfxGroupBinding(
+    const VL::Hair::TressfxGroupBinding& binding,
+    const std::vector<TressfxSimulationConfig>& groupConfigs,
+    std::string& error)
+{
+    error.clear();
+    if (!IsTressfx())
+    {
+        error = "TressFX group binding update requires a guide renderable";
+        return false;
+    }
+    if (!VL::Hair::ValidateTressfxGroupPreviewBinding(
+            binding, tressfxGuideCount, error))
+        return false;
+    // 颜色/参数表在对象创建时按上限预留；descriptor 只捕获一次 buffer，
+    // 组数增删都原地重写。这里先完成全部容量与配置校验，再触碰任何 GPU 数据。
+    const uint32_t colorCount = static_cast<uint32_t>(binding.groupNames.size()) + 1u;
+    const vk::DeviceSize colorCapacity =
+        tressfxGuideGroupColorInfo.range / sizeof(VL::Hair::TressfxGroupColorGpu);
+    if (!tressfxGuideGroupIdBuffer || !tressfxGuideGroupColorBuffer ||
+        !tressfxGuideGroupColorMemory || colorCount > colorCapacity)
+    {
+        error = "TressFX group count exceeds the preview color table capacity";
+        return false;
+    }
+    // 允许只给一份有效配置（调用方没有 per-group 解析结果时），否则必须与组数一致。
+    std::vector<TressfxSimulationConfig> resolvedConfigs = groupConfigs;
+    if (resolvedConfigs.size() != colorCount)
+    {
+        if (resolvedConfigs.size() != 1)
+        {
+            error = "TressFX resolved group config count does not match the group count";
+            return false;
+        }
+        resolvedConfigs.assign(colorCount, resolvedConfigs.front());
+    }
+    const bool hasGroupConfigTable =
+        static_cast<bool>(tressfxGuideGroupConfigTargets[0].buffer) &&
+        tressfxGuideGroupConfigTargets[0].info.range != 0;
+    const vk::DeviceSize groupConfigCapacity = hasGroupConfigTable
+        ? tressfxGuideGroupConfigTargets[0].info.range /
+            sizeof(VL::Hair::TressfxGroupSimulationGpu)
+        : 0;
+    if (hasGroupConfigTable && resolvedConfigs.size() > groupConfigCapacity)
+    {
+        error = "TressFX resolved group config count exceeds the GPU buffer capacity";
+        return false;
+    }
+
+    // 1) 每 guide 组号：与几何同长度，原地覆盖 host-coherent SSBO。
+    const vk::DeviceSize idBytes =
+        static_cast<vk::DeviceSize>(binding.guideGroupIds.size()) * sizeof(uint32_t);
+    void* idMapped = rendererBackend->MapMemory(tressfxGuideGroupIdMemory, idBytes);
+    std::memcpy(idMapped, binding.guideGroupIds.data(), static_cast<size_t>(idBytes));
+    rendererBackend->UnmapMemory(tressfxGuideGroupIdMemory);
+
+    // 2) 组颜色表：名称决定色块；尾部按固定容量补默认灰，支持组数增删。
+    const VL::Hair::TressfxGroupGpuData groupData = VL::Hair::BuildTressfxGroupGpuData(
+        tressfxGuideCount, binding.guideGroupIds, binding.groupNames,
+        VL::Hair::TressfxGroupPreviewColorCapacity);
+    const vk::DeviceSize colorBytes =
+        static_cast<vk::DeviceSize>(groupData.groupColors.size()) *
+        sizeof(VL::Hair::TressfxGroupColorGpu);
+    void* colorMapped = rendererBackend->MapMemory(
+        tressfxGuideGroupColorMemory, colorBytes);
+    std::memcpy(colorMapped, groupData.groupColors.data(),
+        static_cast<size_t>(colorBytes));
+    rendererBackend->UnmapMemory(tressfxGuideGroupColorMemory);
+
+    // 3) CPU/GPU 组参数：实时覆盖值被新的资产解析结果替换（组编辑是资产语义）。
+    tressfxSimulationConfig = resolvedConfigs.front();
+    tressfxGroupSimulationConfigs = resolvedConfigs;
+    if (hasGroupConfigTable)
+        for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+            WriteTressfxGroupSimulationConfigs(slot);
+    if (tressfxSimulation)
+    {
+        std::vector<VL::Hair::SimulationConfig> simulationConfigs;
+        simulationConfigs.reserve(resolvedConfigs.size());
+        for (const TressfxSimulationConfig& config : resolvedConfigs)
+            simulationConfigs.push_back(MakeCpuSimulationConfig(config));
+        // 只换配置与映射，保留求解历史与当前姿态。
+        tressfxSimulation->RebindGroups(
+            std::move(simulationConfigs), binding.guideGroupIds);
+    }
+
+    tressfxGuideGroupBinding =
+        std::make_shared<const VL::Hair::TressfxGroupBinding>(binding);
+    tressfxGuideGroupColorCount = colorCount;
+    tressfxGroupBindingKey = binding.key;
+    tressfxGroupSimulationKey =
+        VL::Hair::MakeTressfxGroupSimulationKey(tressfxGroupSimulationConfigs);
+    return true;
+}
+
+bool RenderableObject::UpdateTressfxGroupBinding(
+    const VL::Hair::TressfxGroupBinding& binding, std::string& error)
+{
+    error.clear();
+    if (!VL::Hair::ValidateTressfxGroupPreviewBinding(
+            binding, tressfxGuideCount, error))
+        return false;
+
+    // 草稿预览没有保存后的 per-group 解析结果：按名称保留已有组的配置，
+    // 新建/重命名组先使用 index 0（base + placement）。保存并重载后才应用
+    // 新的 simulationOverrides，这与 UI 的提示一致。
+    const TressfxSimulationConfig fallback = tressfxGroupSimulationConfigs.empty()
+        ? tressfxSimulationConfig : tressfxGroupSimulationConfigs.front();
+    std::vector<TressfxSimulationConfig> resolved;
+    resolved.reserve(binding.groupNames.size() + 1u);
+    resolved.push_back(fallback);
+    for (const std::string& name : binding.groupNames)
+    {
+        const TressfxSimulationConfig* config = nullptr;
+        if (tressfxGuideGroupBinding)
+        {
+            const auto& oldNames = tressfxGuideGroupBinding->groupNames;
+            for (size_t index = 0; index < oldNames.size(); ++index)
+                if (oldNames[index] == name && index + 1u < tressfxGroupSimulationConfigs.size())
+                {
+                    config = &tressfxGroupSimulationConfigs[index + 1u];
+                    break;
+                }
+        }
+        resolved.push_back(config != nullptr ? *config : fallback);
+    }
+    return UpdateTressfxGroupBinding(binding, resolved, error);
+}
+
+bool RenderableObject::HasTressfxGroupVsp() const
+{
+    for (const TressfxSimulationConfig& config : tressfxGroupSimulationConfigs)
+        if (config.vspCoefficient > 0.0f)
+            return true;
+    return false;
 }
 
 const vk::DescriptorBufferInfo& RenderableObject::GetTressfxResetParamsInfo(
@@ -322,7 +541,8 @@ void RenderableObject::ResetTressfxPenetrationStats(uint32_t frameSlot)
 }
 
 std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
-    const std::string& newName, const TressfxSimulationConfig* effectiveConfig) const
+    const std::string& newName, const TressfxSimulationConfig* effectiveConfig,
+    const std::vector<TressfxSimulationConfig>* groupConfigs) const
 {
     if (!imported || rendererBackend == nullptr)
         throw std::runtime_error(
@@ -330,10 +550,26 @@ std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
     // 构造函数按同一 imported/section 重新分配本对象的 GPU 资源与可变状态；导入几何
     // 仍共享。具体放置绑定（例如毛发的根点骨骼权重）由 resolver 按 Kind 应用，
     // 本方法保持类型无关。
+    // 调用方只给有效配置、未给组表时不能复用模板的组配置：两者的 base/placement
+    // 可能不同。此时退化为单份有效配置，至少保证 CPU/GPU 选到同一份标量。
+    std::vector<TressfxSimulationConfig> fallbackGroups;
+    const std::vector<TressfxSimulationConfig>* resolvedGroups = groupConfigs;
+    if (resolvedGroups == nullptr)
+    {
+        if (effectiveConfig != nullptr)
+        {
+            fallbackGroups.assign(1, *effectiveConfig);
+            resolvedGroups = &fallbackGroups;
+        }
+        else
+        {
+            resolvedGroups = &tressfxGroupSimulationConfigs;
+        }
+    }
     return std::make_shared<RenderableObject>(
         imported, importedSectionIndex, *rendererBackend, newName,
         effectiveConfig ? effectiveConfig : &tressfxSimulationConfig,
-        tressfxPlacementResources);
+        tressfxPlacementResources, resolvedGroups, tressfxGuideGroupBinding);
 }
 
 void RenderableObject::WriteTressfxColliders(
@@ -418,6 +654,166 @@ void RenderableObject::CreateTressfxPositionBuffer()
         .setRange(size);
 }
 
+void RenderableObject::CreateTressfxGuideGroupBuffers()
+{
+    if (!IsTressfx() || tressfxGuideCount == 0)
+        return;
+
+    // 组数据来自独立 binding，不读导入结果里的旧 descriptor；组编辑后
+    // UpdateTressfxGroupBinding 只重写这两份 buffer。
+    const std::vector<uint32_t> emptyIds;
+    const std::vector<std::string> emptyNames;
+    const std::vector<uint32_t>& guideGroupIds = tressfxGuideGroupBinding
+        ? tressfxGuideGroupBinding->guideGroupIds : emptyIds;
+    const std::vector<std::string>& groupNames = tressfxGuideGroupBinding
+        ? tressfxGuideGroupBinding->groupNames : emptyNames;
+    const VL::Hair::TressfxGroupGpuData data = VL::Hair::BuildTressfxGroupGpuData(
+        tressfxGuideCount, guideGroupIds, groupNames,
+        VL::Hair::TressfxGroupPreviewColorCapacity);
+
+    // group id 只是作者分组数据，不随模拟更新；host-visible coherent 让对象创建后
+    // 不再需要 staging/一次性上传。颜色表同样静态，但只读一次上传即可。
+    const vk::DeviceSize idBytes = static_cast<vk::DeviceSize>(data.guideGroupIds.size()) *
+        sizeof(uint32_t);
+    std::tie(tressfxGuideGroupIdBuffer, tressfxGuideGroupIdMemory) =
+        rendererBackend->CreateBuffer(
+            idBytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXGuideGroupIds: " + name);
+    try
+    {
+        void* mapped = rendererBackend->MapMemory(tressfxGuideGroupIdMemory, idBytes);
+        std::memcpy(mapped, data.guideGroupIds.data(), static_cast<size_t>(idBytes));
+        rendererBackend->UnmapMemory(tressfxGuideGroupIdMemory);
+    }
+    catch (...)
+    {
+        rendererBackend->DestroyBuffer(tressfxGuideGroupIdBuffer, tressfxGuideGroupIdMemory);
+        tressfxGuideGroupIdBuffer = nullptr;
+        tressfxGuideGroupIdMemory = nullptr;
+        throw;
+    }
+    tressfxGuideGroupIdInfo
+        .setBuffer(tressfxGuideGroupIdBuffer)
+        .setOffset(0)
+        .setRange(idBytes);
+
+    // descriptor 捕获固定容量；组数变化不再重建 color buffer。
+    const vk::DeviceSize colorBytes =
+        static_cast<vk::DeviceSize>(VL::Hair::TressfxGroupPreviewColorCapacity) *
+        sizeof(VL::Hair::TressfxGroupColorGpu);
+    std::tie(tressfxGuideGroupColorBuffer, tressfxGuideGroupColorMemory) =
+        rendererBackend->CreateBuffer(
+            colorBytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXGuideGroupColors: " + name);
+    try
+    {
+        void* mapped = rendererBackend->MapMemory(tressfxGuideGroupColorMemory, colorBytes);
+        std::memcpy(mapped, data.groupColors.data(), static_cast<size_t>(colorBytes));
+        rendererBackend->UnmapMemory(tressfxGuideGroupColorMemory);
+    }
+    catch (...)
+    {
+        rendererBackend->DestroyBuffer(tressfxGuideGroupColorBuffer, tressfxGuideGroupColorMemory);
+        tressfxGuideGroupColorBuffer = nullptr;
+        tressfxGuideGroupColorMemory = nullptr;
+        throw;
+    }
+    tressfxGuideGroupColorInfo
+        .setBuffer(tressfxGuideGroupColorBuffer)
+        .setOffset(0)
+        .setRange(colorBytes);
+    tressfxGuideGroupColorCount =
+        static_cast<uint32_t>(groupNames.size()) + 1u;
+}
+
+void RenderableObject::CreateTressfxBrushWeightBuffer()
+{
+    if (!IsTressfx() || tressfxGuideCount == 0) return;
+    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(tressfxGuideCount) *
+        sizeof(float);
+    const uint32_t slots = std::max(1u, rendererBackend->GetSwapchainImageCount());
+    tressfxBrushWeightBuffers.assign(slots, nullptr);
+    tressfxBrushWeightMemories.assign(slots, nullptr);
+    tressfxBrushWeightInfos.assign(slots, {});
+    for (uint32_t slot = 0; slot < slots; ++slot)
+    {
+        std::tie(tressfxBrushWeightBuffers[slot], tressfxBrushWeightMemories[slot]) =
+            rendererBackend->CreateBuffer(
+                bytes,
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent,
+                "TressFXBrushWeights[" + std::to_string(slot) + "]: " + name);
+        try
+        {
+            // 初值全零；UI 的第一次笔刷命令会整表覆盖，不做增量累加。
+            void* mapped = rendererBackend->MapMemory(tressfxBrushWeightMemories[slot], bytes);
+            std::memset(mapped, 0, static_cast<size_t>(bytes));
+            rendererBackend->UnmapMemory(tressfxBrushWeightMemories[slot]);
+        }
+        catch (...)
+        {
+            rendererBackend->DestroyBuffer(
+                tressfxBrushWeightBuffers[slot], tressfxBrushWeightMemories[slot]);
+            tressfxBrushWeightBuffers[slot] = nullptr;
+            tressfxBrushWeightMemories[slot] = nullptr;
+            throw;
+        }
+        tressfxBrushWeightInfos[slot]
+            .setBuffer(tressfxBrushWeightBuffers[slot])
+            .setOffset(0)
+            .setRange(bytes);
+    }
+}
+
+bool RenderableObject::SetTressfxBrushPreview(uint32_t targetGroupId,
+    VL::Hair::GroupPaintMode mode,
+    const std::vector<VL::Hair::TressfxBrushGuideWeight>& weights,
+    uint32_t frameSlot,
+    std::string& error)
+{
+    error.clear();
+    if (!IsTressfx() || tressfxBrushWeightBuffers.empty() || tressfxGuideCount == 0)
+    {
+        error = "TressFX brush preview requires a guide renderable";
+        return false;
+    }
+    if (targetGroupId >= tressfxGuideGroupColorCount)
+    {
+        error = "TressFX brush preview target group is outside the saved group color table";
+        return false;
+    }
+    const uint32_t slot = frameSlot < tressfxBrushWeightBuffers.size() ? frameSlot : 0;
+    if (!tressfxBrushWeightBuffers[slot]) return false;
+    const vk::DeviceSize bytes = static_cast<vk::DeviceSize>(tressfxGuideCount) *
+        sizeof(float);
+    std::vector<float> gpuWeights(tressfxGuideCount, 0.0f);
+    for (const VL::Hair::TressfxBrushGuideWeight& weight : weights)
+    {
+        if (weight.guideIndex >= tressfxGuideCount ||
+            !std::isfinite(weight.weight) || weight.weight < 0.0f ||
+            weight.weight > 1.0f)
+        {
+            error = "TressFX brush preview weight is invalid";
+            return false;
+        }
+        gpuWeights[weight.guideIndex] = std::max(
+            gpuWeights[weight.guideIndex], weight.weight);
+    }
+    void* mapped = rendererBackend->MapMemory(tressfxBrushWeightMemories[slot], bytes);
+    std::memcpy(mapped, gpuWeights.data(), static_cast<size_t>(bytes));
+    rendererBackend->UnmapMemory(tressfxBrushWeightMemories[slot]);
+    tressfxBrushActive = !weights.empty();
+    tressfxBrushMode = mode;
+    return true;
+}
+
 void RenderableObject::AdvanceTressfxSimulation(float dt,
     const Eigen::Vector3f& sceneWindVelocityCmPerSec)
 {
@@ -473,6 +869,36 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     }
     if (tressfxSimulationConfig.enabled)
     {
+    // 每组配置按 frame-in-flight 分槽：正常帧内容是静态的，实时参数覆盖
+    // 只在当前槽 fence 完成后重写，不与在飞 compute 共享同一份可写 buffer。
+    const std::vector<VL::Hair::TressfxGroupSimulationGpu> groupGpuData =
+        VL::Hair::BuildTressfxGroupSimulationGpuData(tressfxGroupSimulationConfigs,
+            VL::Hair::TressfxGroupPreviewColorCapacity);
+    const vk::DeviceSize groupConfigBytes =
+        static_cast<vk::DeviceSize>(VL::Hair::TressfxGroupPreviewColorCapacity) *
+        sizeof(VL::Hair::TressfxGroupSimulationGpu);
+    std::array<VL::Hair::TressfxGroupSimulationGpu, 1> emptyGroupConfig{};
+    const void* groupConfigSource = groupGpuData.empty()
+        ? static_cast<const void*>(emptyGroupConfig.data())
+        : static_cast<const void*>(groupGpuData.data());
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxGuideGroupConfigTargets[slot];
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+            groupConfigBytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXGroupSimulationConfigs: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, groupConfigBytes);
+        if (groupGpuData.empty())
+            std::memset(target.mapped, 0, static_cast<size_t>(groupConfigBytes));
+        else
+            std::memcpy(target.mapped, groupConfigSource,
+                static_cast<size_t>(groupConfigBytes));
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(groupConfigBytes);
+    }
+
     std::tie(tressfxPreviousPositionBuffer, tressfxPreviousPositionMemory) =
         CreateUploadedDeviceLocalStorageBuffer(
             *rendererBackend, initialPoints.data(), positionBytes,
@@ -1023,6 +1449,20 @@ void RenderableObject::DestroyTressfxBuffers()
     {
         if (tressfxPositionBuffer)
             rendererBackend->DestroyBuffer(tressfxPositionBuffer, tressfxPositionMemory);
+        if (tressfxGuideGroupIdBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxGuideGroupIdBuffer, tressfxGuideGroupIdMemory);
+        if (tressfxGuideGroupColorBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxGuideGroupColorBuffer, tressfxGuideGroupColorMemory);
+        for (size_t slot = 0; slot < tressfxBrushWeightBuffers.size(); ++slot)
+            if (tressfxBrushWeightBuffers[slot])
+                rendererBackend->DestroyBuffer(
+                    tressfxBrushWeightBuffers[slot], tressfxBrushWeightMemories[slot]);
+        tressfxBrushWeightBuffers.clear();
+        tressfxBrushWeightMemories.clear();
+        tressfxBrushWeightInfos.clear();
+        tressfxBrushActive = false;
         if (tressfxPreviousPositionBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxPreviousPositionBuffer, tressfxPreviousPositionMemory);
@@ -1040,6 +1480,14 @@ void RenderableObject::DestroyTressfxBuffers()
             rendererBackend->DestroyBuffer(
                 tressfxStrandLevelBuffer, tressfxStrandLevelMemory);
         for (auto& target : tressfxColliderTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
+        for (auto& target : tressfxGuideGroupConfigTargets)
         {
             if (target.mapped)
                 rendererBackend->UnmapMemory(target.memory);
@@ -1142,6 +1590,9 @@ void RenderableObject::DestroyTressfxBuffers()
     reportedSdfDomain = false;
     reportedSdfDomainFailure = false;
     tressfxGpuSimulation = false;
+    tressfxBrushWeightBuffers.clear();
+    tressfxBrushWeightMemories.clear();
+    tressfxBrushWeightInfos.clear();
 }
 
 void RenderableObject::CreateSkinInfluenceBuffer()

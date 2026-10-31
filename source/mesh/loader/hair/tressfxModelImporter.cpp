@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "hair/strandGeometry.h"
+#include "hair/tressfxGroupBinding.h"
+#include "hair/tressfxRootCloud.h"
 
 namespace
 {
@@ -31,36 +33,22 @@ namespace
             " points per strand");
     }
 
-    // 把 groups[] 的 [start,end) 区间展开成每 guide 的分组号（0 = 默认组，k = 声明序第 k 组）。
-    // 上界依赖 .tfx 的 guideCount，只能在解析后检查；组内/跨组重叠已由描述符层拒绝，
-    // 这里再确认一次，避免后一组静默覆盖前一组的归属。未声明 groups 时返回空数组。
-    std::vector<uint32_t> ResolveGuideGroupIds(const MeshAssetBuildPlan& plan, uint32_t guideCount)
+    // 组声明转成 hair 层的最小表示。几何导入只做上界校验；真正的 guide->group
+    // 展开由 RendererMeshLoader 用缓存的 guideCount 生成 TressfxGroupBinding，
+    // 因此组编辑不会改变这里的导入结果。
+    std::vector<VL::Hair::TressfxGroupDeclaration> GroupDeclarations(
+        const MeshAssetBuildPlan& plan)
     {
-        if (plan.tressfxGuideGroups.empty())
-            return {};
-        const std::string where = " (" + plan.meshAssetPath + ", " + plan.modelDataPath + ")";
-        std::vector<uint32_t> ids(guideCount, 0u);
-        for (size_t group = 0; group < plan.tressfxGuideGroups.size(); ++group)
+        std::vector<VL::Hair::TressfxGroupDeclaration> declarations;
+        declarations.reserve(plan.tressfxGuideGroups.size());
+        for (const TressfxGuideGroupPlan& group : plan.tressfxGuideGroups)
         {
-            const auto& declared = plan.tressfxGuideGroups[group];
-            for (const auto& range : declared.guideRanges)
-            {
-                if (range.second > guideCount)
-                    throw std::runtime_error(
-                        "TressFX group \"" + declared.name + "\" guideRanges [" +
-                        std::to_string(range.first) + ", " + std::to_string(range.second) +
-                        ") exceed the .tfx guide count " + std::to_string(guideCount) + where);
-                for (uint32_t guide = range.first; guide < range.second; ++guide)
-                {
-                    if (ids[guide] != 0u)
-                        throw std::runtime_error(
-                            "TressFX guide " + std::to_string(guide) +
-                            " belongs to more than one group: \"" + declared.name + "\"" + where);
-                    ids[guide] = static_cast<uint32_t>(group + 1);
-                }
-            }
+            VL::Hair::TressfxGroupDeclaration declaration;
+            declaration.name = group.name;
+            declaration.ranges = group.guideRanges;
+            declarations.push_back(std::move(declaration));
         }
-        return ids;
+        return declarations;
     }
 } // namespace
 
@@ -148,8 +136,32 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
         section.tressfxRootPositions.push_back(
             Eigen::Vector3f(root[0], root[1], root[2]));
     }
-    // 分组号与根点同属 CPU 资产副本；GPU 侧 stage 2 再决定如何消费。
-    section.tressfxGuideGroupIds = ResolveGuideGroupIds(request.buildPlan, asset.guideCount);
+    // 几何导入结果不保存 guide->group 映射。这里只校验声明上界，
+    // 避免缓存一份“无法展开分组”的几何；展开在绑定阶段完成。
+    section.tressfxGuideCount = asset.guideCount;
+    VL::Hair::ValidateTressfxGuideGroups(GroupDeclarations(request.buildPlan),
+        asset.guideCount,
+        " (" + request.buildPlan.meshAssetPath + ", " + request.buildPlan.modelDataPath + ")");
+    // 笔刷选择缓存与导入结果同寿命：position 用 rest p0，growthDirection 用
+    // normalize(p1-p0)；normal 在 root cloud 构建时由邻域 PCA 估计，缺失保持零。
+    // 点云不含分组号，组编辑不触碰这份几何缓存。
+    {
+        std::vector<Eigen::Vector3f> rootDirections;
+        rootDirections.reserve(asset.guideCount);
+        for (uint32_t strand = 0; strand < asset.guideCount; ++strand)
+        {
+            const auto& root = asset.positions[strand * asset.pointsPerStrand];
+            const auto& next = asset.positions[strand * asset.pointsPerStrand + 1];
+            const Eigen::Vector3f rootPosition(root[0], root[1], root[2]);
+            const Eigen::Vector3f nextPosition(next[0], next[1], next[2]);
+            const Eigen::Vector3f delta = nextPosition - rootPosition;
+            const float length = delta.norm();
+            rootDirections.push_back(length > 1.0e-8f
+                ? Eigen::Vector3f(delta / length) : Eigen::Vector3f::Zero());
+        }
+        section.tressfxRootCloud = VL::Hair::TressfxRootCloud::Build(
+            section.tressfxRootPositions, rootDirections);
+    }
     result.sections.push_back(std::move(section));
     return result;
 }

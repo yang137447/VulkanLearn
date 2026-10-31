@@ -355,10 +355,15 @@ TF 描述符可选 `groups` 数组，把 `.tfx` 的 guide 划分为具名组。�
 ]
 ```
 
-- `name`：非空字符串，同一资产内唯一。
-- `guideRanges`：非空数组，每项为 `[start, end]` 整数对（JSON `4.0` 与 `4` 等价，布尔与字符串拒绝），
+- `name`：非空字符串，不得有前后空白；同一资产内按 ASCII 大小写不敏感唯一。
+  `Default` 与 `unassigned`（大小写不敏感）是隐式组 0 的保留名，命名组不得使用。
+- `groups: []` 等价于未声明 `groups`：全部 guide 属于默认组 0。编辑器删除最后一个组时
+  移除该键；两种写法在加载期都合法。
+- `guideRanges`：数组，允许为空；每项为 `[start, end]` 整数对（JSON `4.0` 与 `4` 等价，布尔与字符串拒绝），
   半开区间 `[start, end)`，要求 `0 <= start < end`。组内区间互不重叠；跨组也不得共享 guide，
-  区间首尾相接（如 `[0,2)` 与 `[2,4)`）不算重叠。
+  区间首尾相接（如 `[0,2)` 与 `[2,4)`）不算重叠。所有组的总区间数上限为 4096；
+  笔刷提交前会合并相邻区间，超限拒绝保存。
+  空 `guideRanges` 表示一个尚无 guide 的命名组；编辑器允许先建空组，再用笔刷填充。
 - `simulationOverrides`：可选对象，键集为 6 个按组有意义的参数：`damping`、`bendStiffness`、
   `globalShapeStiffness`、`globalShapeEffectiveRange`、`vspCoefficient`、`vspAccelThresholdMax`。
   值域与 `simulationDefaults` 相同（复用同一校验代码）。`gravity`、`iterations` 是引擎公共参数，
@@ -371,15 +376,42 @@ TF 描述符可选 `groups` 数组，把 `.tfx` 的 guide 划分为具名组。�
 名称、组内与跨组重叠以及 overrides 键值。guide 上界 `end <= guideCount` 依赖 `.tfx` 解析结果，
 因此在导入期（`TressfxModelImporter::Import`）检查；错误消息包含组名与资产路径。
 
-导入成功后，`MeshSection::tressfxGuideGroupIds` 给出每根 guide 的分组号（0 = 默认组，
-k = 声明序第 k 组，从 1 起）。仅当声明了 `groups` 时填充且长度等于 guideCount；未声明时该数组为空，
-语义等同于全部 guide 属于组 0。该数组只存在于 CPU 导入结果中，不进入 GPU buffer。
+导入结果只保留几何与 guide 数（`MeshSection::tressfxGuideCount`），不再携带组号。
+每根 guide 的分组号由当前 `groups[]` 与 guideCount 在加载期展开为
+`TressfxGroupBinding`（0 = 默认组，k = 声明序第 k 组，从 1 起）；组编辑只重算这份 binding。
+binding 同时进入每对象的 GPU 只读 SSBO（Object Set 2 binding 5），组色调色板在 binding 6，
+笔刷 ghost 权重在 binding 7。它们都按 `RenderableObject` 冻结，不改变顶点布局。
 
-几何缓存身份（`modelCacheKey`）在声明 `groups` 时追加组名与区间；`simulationOverrides` 不影响导入结果，
-不进入几何身份。
+分组身份与几何身份分离：`modelCacheKey` 只描述 ribbon 顶点/索引及其它几何输入，不再包含组名或区间；
+声明 `groups` 时，组名与区间写入 `TressfxGroupBinding` 的绑定身份。组编辑不会改变几何身份；
+进程级 Tressfx 几何导入缓存按 `modelCacheKey + .tfx BLAKE3` 复用已展开的 ribbon/root cloud；
+描述符里的 `groups`/`simulationDefaults`/材质槽不参与几何键，命中后按当前 plan 重算 sectionPlans
+与 group binding。因此组编辑后的 World 重载不再重新解析或展开 `.tfx`。renderable 键只包含
+几何、行为和组数（`|groupCount=N`）；候选缓存命中路径可复用同一个 `RenderableObject`，原地更新
+group id/颜色/组参数 buffer，组数变化才重建对象。整 World 重载使用隔离候选包，仍会创建新的
+renderable/GPU buffer（但复用 CPU 几何导入结果）。`simulationOverrides` 不影响 ribbon 导入结果，
+但会进入 renderable 行为身份。
 
-当前状态：分组只完成数据校验与解析。运行期尚未为各组创建独立模拟对象，`simulationOverrides`
-不参与求解，放置的 `simulation.overrides` 与资产默认值的合成规则保持不变。
+6 个 `simulationOverrides` 字段已参与求解：CPU 参考 solver 与 GPU compute pass 使用同一份
+`base asset defaults -> group overrides -> placement overrides` 解析结果；同一 guide 的所有 point
+使用同一组配置，组号缺失/越界回退组 0。placement 仍然最后覆盖，组不能压过放置级
+`simulation.overrides`。GPU 侧每组 8 个 float（前 6 个为可覆盖字段）走 Compute Set 0 binding 17，
+每 guide 的 group id 走 binding 18。
+
+编辑器侧用于校验 `end <= guideCount` 的 guide 数是只读投影：目录条目与打开中的 Tressfx 文档快照
+暴露 `tressfxGuideCount`，由 editor asset worker 读取 `.tfx` 头得到；读取失败或文件缺失时为 0（未知），
+不影响 JSON 资产本身打开。保存前仍由 `MeshAssetValidator` 与导入期检查兜底。
+
+Groups 草稿的 binding 会通过 `SetTressfxGroupBindingPreview` 同步到当前预览的
+`RenderableObject`：新建/重命名/删除/改 range 后无需保存重载即可看到组色、Selected/Solo
+和 ghost，并可立即笔刷。该同步只改预览 GPU/CPU binding，不写 TF JSON、不推进文档 revision；
+组 override 仍需保存并重载后生效。GPU 颜色/组参数表按最大组数预留容量，组数变化原地更新。
+
+当前状态：Phase 1–4 已实现——Groups 草稿/保存、GPU 分组着色与 Selected/Solo、视口笔刷与
+ghost 预览、世界空间笔刷圆环、套索、per-group CPU/GPU 求解。Groups 检查器显示 placement
+合成后的 resolved asset default。Phase 5（`TressFXGroup`/`TressFXVisibility`/`TressFXTile`
+的 draw/culling/LOD）仍不在本方案范围。`simulationOverrides` 在保存并重载后生效，编辑器不伪造
+实时组参数预览；实时 `hair set` 调试覆盖仍是会话级、会同时写所有组配置。
 
 ### 碰撞：胶囊与逐帧 SDF 网格
 

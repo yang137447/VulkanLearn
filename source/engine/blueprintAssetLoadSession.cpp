@@ -179,6 +179,10 @@ WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
     mesh.materialKey = plan.materialKey;
     mesh.materialInstanceKey = plan.materialInstanceKey;
     mesh.windResponseProfileKey = plan.windResponseProfileKey;
+    mesh.tressfxPointsPerGuide = plan.tressfxPointsPerGuide;
+    mesh.tressfxRootCloud = plan.tressfxRootCloud;
+    mesh.tressfxGroupBinding = plan.tressfxGroupBinding;
+    mesh.tressfxGroupConfigs = plan.tressfxGroupConfigs;
     return mesh;
 }
 

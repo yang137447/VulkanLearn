@@ -549,6 +549,11 @@
                         </div>
                         <div id="resource-preview-surface">
                             <img id="resource-preview-image" src="vl://scene-viewport"/>
+                            <div id="hair-group-legend-overlay"></div>
+                            <div id="hair-brush-overlay">
+                                <div id="hair-brush-hud"></div>
+                                <div id="hair-brush-ring"></div>
+                            </div>
                             <img id="resource-texture-image"/>
                             <div class="asset-viewport-info">
                                 <h2 id="resource-preview-title"></h2>
@@ -576,6 +581,7 @@
                                 <div id="resource-motion-values"></div>
                             </div>
                             <div id="resource-hair-simulation"></div>
+                            <div id="resource-hair-groups"></div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

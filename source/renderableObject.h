@@ -10,6 +10,8 @@
 #include "hair/tressfxProxySkinning.h"
 #include "hair/tressfxSimulationParams.h"
 #include "hair/tressfxSkinning.h"
+#include "hair/tressfxGroupPaint.h"
+#include "hair/tressfxGroupBinding.h"
 #include "mesh/meshAssetTypes.h"
 
 struct MeshAssetImportResult;
@@ -33,7 +35,9 @@ public:
         VL::RendererBackendVulkan& rendererBackend,
         const std::string& name = "",
         const TressfxSimulationConfig* tressfxConfig = nullptr,
-        std::shared_ptr<const TressfxPlacementResources> tressfxResources = {});
+        std::shared_ptr<const TressfxPlacementResources> tressfxResources = {},
+        const std::vector<TressfxSimulationConfig>* tressfxGroupConfigs = nullptr,
+        std::shared_ptr<const VL::Hair::TressfxGroupBinding> tressfxGroupBinding = {});
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer);
@@ -50,6 +54,70 @@ public:
     const std::shared_ptr<const MeshAssetImportResult>& GetImported() const { return imported; }
     size_t GetImportedSectionIndex() const { return importedSectionIndex; }
     const vk::DescriptorBufferInfo& GetTressfxPositionInfo() const { return tressfxPositionInfo; }
+    // 每 guide 一个 group id（binding 5）与 vec4 组颜色表（binding 6）。
+    // descriptor 捕获固定容量 buffer；草稿组同步只原地重写内容，UI 不直接写 GPU。
+    const vk::DescriptorBufferInfo& GetTressfxGuideGroupIdInfo() const
+    {
+        return tressfxGuideGroupIdInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxGuideGroupColorInfo() const
+    {
+        return tressfxGuideGroupColorInfo;
+    }
+    // compute Set 0 binding 17：每组 8 个 float 的解析后配置；按 frame-in-flight
+    // 分槽，因为实时参数覆盖会改写它。索引 0 = base + placement。
+    const vk::DescriptorBufferInfo& GetTressfxGuideGroupConfigInfo(
+        uint32_t frameSlot) const
+    {
+        return tressfxGuideGroupConfigTargets[frameSlot].info;
+    }
+    void WriteTressfxGroupSimulationConfigs(uint32_t frameSlot);
+    // 只有至少一个组声明了 vspCoefficient > 0 时才需要录制 VSP pass。
+    bool HasTressfxGroupVsp() const;
+    const std::vector<TressfxSimulationConfig>& GetTressfxGroupSimulationConfigs() const
+    {
+        return tressfxGroupSimulationConfigs;
+    }
+    // 笔刷 ghost（binding 7）：每 guide 一个 float；空列表即清除。
+    const vk::DescriptorBufferInfo& GetTressfxBrushWeightInfo(uint32_t frameSlot) const
+    {
+        return tressfxBrushWeightInfos.at(
+            frameSlot < tressfxBrushWeightInfos.size() ? frameSlot : 0);
+    }
+    bool HasTressfxBrushPreview() const { return tressfxBrushActive; }
+    bool TressfxBrushRemoveMode() const
+    {
+        return tressfxBrushMode == VL::Hair::GroupPaintMode::Remove;
+    }
+    // 只由渲染线程调用；weights 是整笔的完整 guide->weight 映射，不是增量。
+    bool SetTressfxBrushPreview(uint32_t targetGroupId, VL::Hair::GroupPaintMode mode,
+        const std::vector<VL::Hair::TressfxBrushGuideWeight>& weights,
+        uint32_t frameSlot, std::string& error);
+    // 颜色表项数 = 1（默认组）+ 命名组数；shader 用 group id 直接索引。
+    uint32_t GetTressfxGuideGroupCount() const { return tressfxGuideGroupColorCount; }
+    const std::string& GetTressfxGroupBindingKey() const
+    {
+        return tressfxGroupBindingKey;
+    }
+    // 组 overrides 的身份：与 binding 分开比较，避免每次 World 重载都重写
+    // group 参数 buffer。
+    const std::string& GetTressfxGroupSimulationKey() const
+    {
+        return tressfxGroupSimulationKey;
+    }
+    // 组编辑后的原地更新：只重写 per-object group id/颜色/组参数 buffer 与
+    // CPU solver 的 guide->group 映射，不重建几何、不换 RenderableObject。
+    // 颜色表与参数表按 TressfxGroupPreviewColorCapacity 预留，支持组数增删；
+    // 超过容量返回错误且不修改任何已有数据。
+    bool UpdateTressfxGroupBinding(
+        const VL::Hair::TressfxGroupBinding& binding,
+        const std::vector<TressfxSimulationConfig>& groupConfigs,
+        std::string& error);
+    // 草稿预览入口：没有保存后的 per-group 解析结果时，保留旧名称对应的配置；
+    // 新建/重命名组回退到 index 0（base + placement），保存重载后再应用 override。
+    bool UpdateTressfxGroupBinding(
+        const VL::Hair::TressfxGroupBinding& binding,
+        std::string& error);
     // 游戏线程推进 CPU 参考 solver。sceneWindVelocityCmPerSec 是场景风向量
     // （direction * strength，厘米/秒），在 StepFrame 之前写入 solver config；
     // CPU 参考 backend 不消费场景阵风（GT 没有渲染线程的阵风时钟）。
@@ -78,7 +146,8 @@ public:
     // placementBindingResolver.h 按 PlacementBinding::Kind 分派，本方法不感知类型。
     // 仅在渲染线程、resolve 之前调用；失败抛 std::runtime_error。
     std::shared_ptr<RenderableObject> CloneForPlacement(const std::string& newName,
-        const TressfxSimulationConfig* effectiveConfig = nullptr) const;
+        const TressfxSimulationConfig* effectiveConfig = nullptr,
+        const std::vector<TressfxSimulationConfig>* groupConfigs = nullptr) const;
     // 多骨 GPU 资源：逐 strand 4×{joint,weight} 与每 frame-in-flight 的 palette。
     // 未声明 .tfxbone 时权重为 0，shader 用 motion.w bit2 判断是否读取。
     const vk::DescriptorBufferInfo& GetTressfxBoneWeightsInfo() const
@@ -215,6 +284,8 @@ private:
     void DestroyIndexBuffer();
     void CreateSkinInfluenceBuffer();
     void CreateTressfxPositionBuffer();
+    void CreateTressfxGuideGroupBuffers();
+    void CreateTressfxBrushWeightBuffer();
     void CreateTressfxGpuSimulationBuffers();
     void CreateTressfxSdfBuffers();
     void DestroyTressfxBuffers();
@@ -250,6 +321,23 @@ private:
     vk::Buffer tressfxPositionBuffer = nullptr;
     vk::DeviceMemory tressfxPositionMemory = nullptr;
     vk::DescriptorBufferInfo tressfxPositionInfo;
+    vk::Buffer tressfxGuideGroupIdBuffer = nullptr;
+    vk::DeviceMemory tressfxGuideGroupIdMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxGuideGroupIdInfo;
+    vk::Buffer tressfxGuideGroupColorBuffer = nullptr;
+    vk::DeviceMemory tressfxGuideGroupColorMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxGuideGroupColorInfo;
+    uint32_t tressfxGuideGroupColorCount = 0;
+    // 每组解析配置按 frame-in-flight 分槽；内容通常静态，但实时参数覆盖会在
+    // 当前槽 fence 完成后重写，避免与仍在执行的 compute 读同一 buffer。
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        tressfxGuideGroupConfigTargets;
+    // per-swapchain ghost 权重：上一帧仍可能读取同一槽，不能每帧覆写单 buffer。
+    std::vector<vk::Buffer> tressfxBrushWeightBuffers;
+    std::vector<vk::DeviceMemory> tressfxBrushWeightMemories;
+    std::vector<vk::DescriptorBufferInfo> tressfxBrushWeightInfos;
+    bool tressfxBrushActive = false;
+    VL::Hair::GroupPaintMode tressfxBrushMode = VL::Hair::GroupPaintMode::Add;
     vk::Buffer tressfxPreviousPositionBuffer = nullptr;
     vk::DeviceMemory tressfxPreviousPositionMemory = nullptr;
     vk::DescriptorBufferInfo tressfxPreviousPositionInfo;
@@ -323,6 +411,13 @@ private:
     // imported/section 是共享导入结果，写回会污染其他 placement。
     // CPU 参考 solver 在构造时另有一份副本，实时覆盖只服务 GPU backend。
     TressfxSimulationConfig tressfxSimulationConfig;
+    // index 0 = base + placement，k = base + 第 k 组 overrides + placement。
+    // CPU/GPU 都从这一份值语义数组取值；不写回共享导入结果。
+    std::vector<TressfxSimulationConfig> tressfxGroupSimulationConfigs;
+    // 已保存资产的 guide->group 映射与组名顺序；与导入几何分离。
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> tressfxGuideGroupBinding;
+    std::string tressfxGroupBindingKey;
+    std::string tressfxGroupSimulationKey;
     std::shared_ptr<const TressfxPlacementResources> tressfxPlacementResources;
     VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
     std::unique_ptr<VL::Hair::GuideSimulation> tressfxSimulation;

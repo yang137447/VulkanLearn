@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 #include "hair/tressfxBehavior.h"
@@ -36,6 +37,10 @@ struct PlacementBinding
     std::string weights;
     // 已在加载边界合成的有效配置；快照与 spawn 沿用值语义，不再读 TF 文件。
     std::optional<TressfxSimulationConfig> tressfx;
+    // 与 tressfx 同一次解析的 per-group 配置；组索引 0 是 base + placement，
+    // 命名组 k 已按 base -> group -> placement 合成。空表示未携带（回退到
+    // tressfx 的单份配置）。
+    std::vector<TressfxSimulationConfig> tressfxGroupConfigs;
 
     bool IsEmpty() const { return kind == Kind::None; }
 };

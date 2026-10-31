@@ -47,6 +47,10 @@ constexpr uint32_t SkinningPaletteBinding = 15;
 // 碰撞前穿透深度统计（x=胶囊、y=SDF，uint 位模式），只被两个 collide pass
 // 原子写、trace 读取；未开 trace 时也清零，不影响渲染。
 constexpr uint32_t PenetrationStatsBinding = 16;
+// 分组求解：每组 8 float 的解析配置 + per-guide 组号（与图形 Set 2 binding 5
+// 共用同一 buffer）。只有 Integration/StrandLevel/Vsp/LocalShape 声明。
+constexpr uint32_t GroupSimulationConfigBinding = 17;
+constexpr uint32_t GuideGroupIdBinding = 18;
 
 // 每个对象需要 GuideSimulationPassCount * GuideSimulationParamBufferCount
 // 个 set（9 * 2 = 18），外加 2 个 reset/换基首轮 Integration set；按 64 预留，
@@ -54,7 +58,7 @@ constexpr uint32_t PenetrationStatsBinding = 16;
 constexpr uint32_t DescriptorSetsPerPool = 64;
 // SdfSplat 是单个 set 的峰值：代理顶点/索引/距离网格/代理影响流/palette 共
 // 5 个 SSBO（Collision 只有 current + colliders，SdfCollide 只有 current + grid）。
-constexpr uint32_t StorageBuffersPerSet = 8;
+constexpr uint32_t StorageBuffersPerSet = 10;
 constexpr uint32_t UniformBuffersPerSet = 2;
 
 struct PassBinding
@@ -79,6 +83,8 @@ constexpr PassBinding IntegrationBindings[] = {
     {RestPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {BoneWeightsBinding, vk::DescriptorType::eStorageBuffer},
     {SkinningPaletteBinding, vk::DescriptorType::eStorageBuffer},
+    {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
+    {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding StrandLevelBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -88,18 +94,24 @@ constexpr PassBinding StrandLevelBindings[] = {
     {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
     {BoneWeightsBinding, vk::DescriptorType::eStorageBuffer},
     {SkinningPaletteBinding, vk::DescriptorType::eStorageBuffer},
+    {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
+    {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding VspBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
     {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
+    {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
+    {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding LocalShapeBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
     {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {RestPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
+    {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
+    {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding LengthWindBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -769,7 +781,7 @@ void HairSimulationPass::CreateObjectDescriptors(
     // vulkan-hpp 的 setBufferInfo 只保存指针（ArrayProxyNoTemporaries），因此
     // DescriptorBufferInfo 必须比 UpdateDescriptorSets 活得更久；这里按
     // [frame slot][binding] 放在函数级数组里，元素地址稳定。
-    std::array<std::array<vk::DescriptorBufferInfo, PenetrationStatsBinding + 1>,
+    std::array<std::array<vk::DescriptorBufferInfo, GuideGroupIdBinding + 1>,
         GuideSimulationParamBufferCount>
         bindingInfos{};
     // reset 首轮 Integration 的 binding 0 换成独立参数块，其余 binding 与正常
@@ -779,7 +791,7 @@ void HairSimulationPass::CreateObjectDescriptors(
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
         resetParamInfos[slot] = object.GetTressfxResetParamsInfo(slot);
-        std::array<vk::DescriptorBufferInfo, PenetrationStatsBinding + 1>& infos =
+        std::array<vk::DescriptorBufferInfo, GuideGroupIdBinding + 1>& infos =
             bindingInfos[slot];
         infos[ParamsBinding] = object.GetTressfxParamsInfo(slot);
         infos[CurrentPositionsBinding] = object.GetTressfxPositionInfo();
@@ -802,6 +814,9 @@ void HairSimulationPass::CreateObjectDescriptors(
             object.GetTressfxSkinningPaletteInfo(slot);
         infos[PenetrationStatsBinding] =
             object.GetTressfxPenetrationStatsInfo(slot);
+        infos[GroupSimulationConfigBinding] =
+            object.GetTressfxGuideGroupConfigInfo(slot);
+        infos[GuideGroupIdBinding] = object.GetTressfxGuideGroupIdInfo();
     }
 
     const bool hasSdfCollision = object.HasTressfxSdfCollision();
@@ -902,7 +917,10 @@ void HairSimulationPass::CreateObjectDescriptors(
         descriptors.penetrationStats[slot] =
             object.GetTressfxPenetrationStatsInfo(slot).buffer;
         descriptors.boneWeights = object.GetTressfxBoneWeightsInfo().buffer;
+        descriptors.groupConfigs[slot] =
+            object.GetTressfxGuideGroupConfigInfo(slot).buffer;
     }
+    descriptors.guideGroupIds = object.GetTressfxGuideGroupIdInfo().buffer;
 }
 
 HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescriptors(
@@ -955,8 +973,12 @@ bool HairSimulationPass::MatchesObjectDescriptors(
             descriptors.sdfPalette[slot] ==
                 object.GetTressfxSdfProxyPaletteInfo(slot).buffer &&
             descriptors.sdfParams[slot] ==
-                object.GetTressfxSdfParamsInfo(slot).buffer;
+                object.GetTressfxSdfParamsInfo(slot).buffer &&
+            descriptors.groupConfigs[slot] ==
+                object.GetTressfxGuideGroupConfigInfo(slot).buffer;
     }
+    matches = matches &&
+        descriptors.guideGroupIds == object.GetTressfxGuideGroupIdInfo().buffer;
     return matches;
 }
 
@@ -1535,6 +1557,9 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         // 没有 pose/palette 的帧回退单根骨矩阵，避免读到全零 palette。
         if (!skinning.strandBones.empty() && jointMatrices && !jointMatrices->empty())
             params.motion.w() += 4.0f;
+        // 每帧重写当前槽：正常帧内容不变，实时覆盖修改对象副本后也能在
+        // 当前 fence 已完成的槽里安全生效。
+        object.WriteTressfxGroupSimulationConfigs(frameSlot);
         object.WriteTressfxSimulationParams(params, frameSlot);
         // reset 首轮 / 换基首轮 Integration 使用独立参数块。正常 params 永远
         // motion.y = 0，避免同一 UBO 在命令执行时只剩最后一次写入。
@@ -1605,7 +1630,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             RecordPass(commandBuffer, GuideSimulationPass::StrandLevel,
                 state.sets[PassIndex(GuideSimulationPass::StrandLevel)][frameSlot],
                 strandGroupCount, anyDispatch, objectDispatchCount);
-            if (config.vspCoefficient > 0.0f)
+            if (object.HasTressfxGroupVsp())
                 RecordPass(commandBuffer, GuideSimulationPass::Vsp,
                     state.sets[PassIndex(GuideSimulationPass::Vsp)][frameSlot],
                     vertexGroupCount, anyDispatch, objectDispatchCount);

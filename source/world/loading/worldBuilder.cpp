@@ -316,10 +316,14 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
             object.collisionTriangles = meshObjectPlan.collisionTriangles;
             object.meshKey = meshObjectPlan.meshKey;
+            object.tressfxGroupBinding = meshObjectPlan.tressfxGroupBinding;
+            object.tressfxGroupConfigs = meshObjectPlan.tressfxGroupConfigs;
             object.placementBinding = meshObjectPlan.placementBinding;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
             object.windResponseProfileKey = meshObjectPlan.windResponseProfileKey;
+            object.tressfxPointsPerGuide = meshObjectPlan.tressfxPointsPerGuide;
+            object.tressfxRootCloud = meshObjectPlan.tressfxRootCloud;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

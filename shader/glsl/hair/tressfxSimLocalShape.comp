@@ -8,6 +8,7 @@
 // 与源实现的唯一差别：rootFixedPoints < 2 时从 local 1 开始，避免 TressFX 读取
 // `GlobalVertexIndex - 1`（首根 strand 会越界）；作者资产使用 >= 2。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGroupCommon.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -32,8 +33,9 @@ void main()
     if (guide >= params.counts.y)
         return;
 
+    TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
     // 标量为 0 但作者数组存在时仍要逐点求解；只有两者都缺席才整体关闭。
-    float scalarStiffness = params.motion.x;
+    float scalarStiffness = group.bendStiffness;
     if (scalarStiffness <= 0.0 && !TressfxHasLocalShapeStiffness())
         return;
 

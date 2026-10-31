@@ -151,6 +151,9 @@ private:
         vk::Buffer sdfProxyInfluences = nullptr;
         std::array<vk::Buffer, GuideSimulationParamBufferCount> sdfPalette{};
         std::array<vk::Buffer, GuideSimulationParamBufferCount> params{};
+        // 分组求解：每槽一份解析配置，组号 buffer 与图形顶点阶段共用。
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> groupConfigs{};
+        vk::Buffer guideGroupIds = nullptr;
         // reset/换基首轮 Integration 的独立参数块（同布局），与 params 分开持有。
         std::array<vk::Buffer, GuideSimulationParamBufferCount> resetParams{};
         // 多骨：逐 strand 4×(joint,weight) 与每槽全骨架 palette。

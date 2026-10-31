@@ -10,7 +10,11 @@ list(FILTER sources EXCLUDE REGEX "/source/hair/")
 # （否则 hair_asset_tests 会被迫链接 Vulkan 运行时），因此只补编进 main。
 list(APPEND sources
     "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.h")
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.h"
+    # 分组模拟解析依赖 TF 资产结构（含 Vulkan 顶点类型头），不能放进纯 CPU
+    # 的 vl_hair_assets；模块测试单独编译同一份实现。
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/tressfxGroupSimulation.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/tressfxGroupSimulation.h")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
 list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")

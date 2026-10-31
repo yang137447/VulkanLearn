@@ -5,6 +5,7 @@
 // 与源实现一致：先算 InitialPos（= 骨骼蒙皮后的 rest，米制下会乘 0.01，VL 厘米
 // 不缩放），不可移动点写回 InitialPos，可移动点做 Verlet 积分，再做 global shape。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGroupCommon.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -66,6 +67,7 @@ void main()
     uint pointsPerGuide = TressfxPointsPerGuide();
     uint local = point % pointsPerGuide;
     uint rootFixedPoints = TressfxRootFixedPoints();
+    TressfxGroupSimulationValues group = TressfxGroupSimulation(point / pointsPerGuide);
 
     vec3 restPos = restPositions.positions[point].xyz;
     // 不可移动点整步保持在 InitialPos；可移动点只用它做 global shape 目标。
@@ -112,7 +114,7 @@ void main()
     {
         // Integrate：Decay = exp(-DampingCoeff * dt * 60)，再叠加重力 * dt²。
         float dt = params.controls.x;
-        float decay = exp(-params.controls.y * dt * 60.0);
+        float decay = exp(-group.damping * dt * 60.0);
         vec3 force = params.gravity.xyz;
         tempPos = vec4(current.xyz + decay * (current.xyz - old.xyz)
             + force * dt * dt, 1.0);
@@ -124,10 +126,11 @@ void main()
     }
 
     // Global shape constraints：只作用于可移动点，且只在前 effectiveRange 比例内。
-    if (movable && params.shape.x > 0.0 && params.shape.y > 0.0
-        && float(local) < params.shape.y * float(pointsPerGuide))
+    if (movable && group.globalShapeStiffness > 0.0
+        && group.globalShapeEffectiveRange > 0.0
+        && float(local) < group.globalShapeEffectiveRange * float(pointsPerGuide))
     {
-        tempPos.xyz += params.shape.x * (initialPos - tempPos.xyz);
+        tempPos.xyz += group.globalShapeStiffness * (initialPos - tempPos.xyz);
     }
 
     currentPositions.positions[point] = tempPos;
