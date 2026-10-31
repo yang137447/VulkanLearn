@@ -31,6 +31,25 @@
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-11
 - 相关：`documents/contracts/ui-component-system.md` 的颜色格式约定段
 
+### [rmlui-shrink-to-fit-max-width] 收缩盒上的百分比 `max-width` 会被 RmlUi 按 0 解析
+
+- 适用场景：`position: absolute` + `width: auto`（以及 float / inline-block）的 RmlUi 元素同时写了 `max-width: N%`
+- 失败表现：元素内容宽度为 0，只剩左右 padding；配 `word-break: break-all` 时文本**逐字一行**，
+  看起来像"标题变成竖向"。写 `white-space: nowrap` 会掩盖症状：盒子仍然是 0 宽，只是文字横向溢出，
+  肉眼看起来像正常
+- 根因：RmlUi 6.2 `BlockContainer::GetShrinkToFitWidth()` 钳制宽度时把 containing block 宽度传死为 0
+  （`LayoutDetails::GetMinMaxWidth(min_width, max_width, computed, box, 0.f)`），百分比 `max-width`
+  因此解析成 0；`LayoutDetails::GetShrinkToFitWidth()` 再把结果交给 `BuildBoxWidth()`，后者虽然用真实的
+  containing block 重算一次上限，但已经救不回被钳成 0 的结果
+- 规避动作：百分比上限只写在**有确定宽度**的外层。需要"贴合内容 + 到窗口比例换行"时用两层：
+  外层 `position: absolute` + `width: 75%` + `overflow: hidden`，内层 `display: inline-block` 收缩包裹，
+  内层不写百分比 `max-width`（RmlUi 6.2 不支持 `width: fit-content`）
+- 证据：`ui/runtime-hud.rcss` 的 `#hud` 在 `max-width: 75%` 下内容宽 0、高 450（25 行逐字）；
+  改成 `max-width: 961px` 或删除后 173×18；`max-width: 100%` 复现 0 宽。
+  运行截图的面板 24px 宽（= 左右 padding）、466px 高，与脱离引擎的 RmlUi 探针逐像素一致
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-23
+- 相关：`ui/runtime-hud.rcss` 的 `#hud` / `#hud-panel`、`[rcss-alpha]`
+
 ### [screenshot-truncation] 截图 BMP 可能是半截文件
 
 - 适用场景：任何读截图做像素断言或人工核对的流程

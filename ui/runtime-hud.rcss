@@ -13,16 +13,31 @@ body {
     height: 100%;
 }
 
+/* 外层只做定位与上限：width 是确定值，百分比才能正常解析；
+   非交互 HUD 不占用鼠标（内层继承 pointer-events）。 */
 #hud {
     position: absolute;
     left: 18dp;
     top: 18dp;
-    padding: 8dp 12dp;
-    background-color: #0c1222c2;
-    max-width: 75%;
+    width: 75%;
     max-height: 65%;
     overflow: hidden;
+    pointer-events: none;
+}
+
+/* 卡片收缩包裹文本：短文本贴合自身宽度，长文本在 #hud 的 75% 处换行。
+   这里不能写百分比 max-width —— RmlUi 的 shrink-to-fit 会把它按 0 解析。 */
+#hud-panel {
+    display: inline-block;
+    padding: 8dp 12dp;
+    background-color: #0c1222c2;
     word-break: break-all;
+}
+
+/* RmlUi 没有内置基础样式表，div 的初始 display 是 inline；
+   显式声明成块，场景名与 gameplay 文本才会各自成行，margin-top 也才生效。 */
+#hud-panel > div {
+    display: block;
 }
 
 #gameplay-hud {
