@@ -6,8 +6,14 @@
     <body data-model="game_ui">
         <div id="ui-root">
             <div id="hud">
-                <div>{{world_text}}</div>
-                <div id="gameplay-hud" data-if="gameplay_text != ''">{{gameplay_text}}</div>
+                <!-- #hud 只负责定位、75% 宽度上限与裁剪；卡片底色在内层收缩盒上。
+                     百分比 max-width 不能写在内层：RmlUi 的 shrink-to-fit 用 0 作为
+                     containing block 宽度解析百分比 min/max-width，会把宽度钳成 0，
+                     再叠加 word-break: break-all 就变成每字一行。 -->
+                <div id="hud-panel">
+                    <div>{{world_text}}</div>
+                    <div id="gameplay-hud" data-if="gameplay_text != ''">{{gameplay_text}}</div>
+                </div>
             </div>
         </div>
     </body>

@@ -15,6 +15,8 @@ inline bool IsSupportedSceneObjectType(std::string_view type)
         type == "pointLight" ||
         type == "spotLight" ||
         type == "squareAreaLight" ||
+        type == "balloon" ||
+        type == "glassPane" ||
         type == "camera" ||
         type == "environment" ||
         type == "wind";

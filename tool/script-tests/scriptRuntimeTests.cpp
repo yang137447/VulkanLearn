@@ -326,6 +326,74 @@ TEST(ScriptScene, DistinctIdsCanShareDisplayName)
     EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
 }
 
+TEST(ScriptScene, BalloonSceneValidatesRuntimeSoftBodyFields)
+{
+    Json balloon{
+        {"name", "RubberBalloon"},
+        {"type", "balloon"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"materialInstance", "Common/Materials/MI_pbr_preview_ball.json"},
+        {"radius", 50},
+        {"thickness", 0.5},
+        {"subdivisions", 2},
+        {"siteCount", 16},
+        {"pressure", 3},
+        {"burstStrain", 0.25},
+        {"restContraction", 0.7},
+        {"seed", 1}};
+    Json scene{{"worldUnit", "cm"}, {"description", "Balloon soft body fixture"},
+        {"objects", Json::array({balloon,
+            {{"name", "Camera"}, {"type", "camera"}, {"position", {0, 0, 10}},
+                {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+                {"near_clip", 1}, {"far_clip", 100}, {"fov", 60}}})}};
+    scene["objects"][1]["exposure"] = DescribeCameraExposure(CameraExposure{});
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][0]["thickness"] = 50;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][0]["thickness"] = 0.5;
+    scene["objects"][0]["siteCount"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][0]["siteCount"] = 16;
+    scene["objects"][0]["materialInstance"] = "";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
+TEST(ScriptScene, GlassPaneSceneValidatesRuntimeFractureFields)
+{
+    Json pane{
+        {"name", "WindowGlass"},
+        {"type", "glassPane"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"materialInstance", "Common/Materials/MI_pbr_preview.json"},
+        {"width", 160},
+        {"height", 100},
+        {"thickness", 0.8},
+        {"siteCount", 40},
+        {"seed", 7},
+        {"subfracture", true}};
+    Json scene{{"worldUnit", "cm"}, {"description", "Glass pane fracture fixture"},
+        {"objects", Json::array({pane,
+            {{"name", "Camera"}, {"type", "camera"}, {"position", {0, 0, 10}},
+                {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+                {"near_clip", 1}, {"far_clip", 100}, {"fov", 60}}})}};
+    scene["objects"][1]["exposure"] = DescribeCameraExposure(CameraExposure{});
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][0]["thickness"] = 100;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][0]["thickness"] = 0.8;
+    scene["objects"][0]["siteCount"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][0]["siteCount"] = 40;
+    scene["objects"][0]["subfracture"] = "yes";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
 TEST(ScriptScene, MeshComponentRetainsRootTransformAndMaterialOverride)
 {
     auto blueprint = Blueprint("a");

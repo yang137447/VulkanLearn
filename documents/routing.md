@@ -13,11 +13,9 @@
 
 | 源码路径 | 必读文档 | 守护门禁（逐字 `-RuleName`） |
 | --- | --- | --- |
-| `source/core/performanceSnapshot.h`、`source/core/cpuFrameProfiler.h`、`source/core/performanceJsonlWriter.h` | `contracts/gpu-pass-timing.md`、`contracts/game-ui-stack.md` | — |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |
-| `source/editor/assets/editorRetargetPreview.*`、`source/editor/ui/retargetAssetEditorPanel.*`、`tool/editor-ui-tests/retargetPreviewTests.cpp` | `contracts/animation-asset-import.md`、`contracts/animation-runtime-skinning.md`、`contracts/ui-component-system.md`、`contracts/testing.md` | — |
 | `source/script/**`、`script/**`、`tool/script-tests/**`、`source/editor/scene/scriptBlueprintAuthoring.*` | `contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/service/**`、`source/editor/command/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
 | `tool/asset-edit/**` | `contracts/asset-modify-api.md`、`contracts/testing.md` | — |
@@ -27,20 +25,30 @@
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationScriptData.*`、`source/world/worldAnimation.cpp`、`source/script/scriptRuntime.cpp`、`tool/animation-tests/animationScriptDataTests.cpp`、`tool/animation-tests/notifyStateTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
 | `source/animation/skeletalPlayback.*`、`source/animation/footPlacement.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
-| `source/render/skinning/**`、`shader/glsl/engine/skinnedVertexMath.glsl`、`shader/glsl/engine/skinnedDeform.comp`、`tool/renderer-backend-tests/skin_deform_test.cpp`、`tool/material-schema-tests/skinDeformMaterialTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/gpu-pass-timing.md` | — |
 | `source/animation/motionWarping.*`、`source/script/scriptPhysics.cpp`、`script/VulkanLearn.Runtime/AnimationPlayback.cs`、`tool/animation-tests/motionWarpingTests.cpp` | `contracts/animation-motion-warping.md`、`contracts/animation-montage.md`、`contracts/testing.md` | — |
 | `source/animation/motionDatabase.*`、`source/animation/motionDebug.h`、`source/animation/motionFeatures.*`、`source/animation/motionHistory.*`、`source/animation/motionMatching.*`、`source/animation/motionRuntime.*`、`source/world/worldAnimation.cpp`、`tool/animation/motionDatabaseBuild.*`、`tool/animation/browse_motion_database.py`、`tool/animation/verify_gasp_motion_database.py`、`tool/animation/capture_gasp_p4.py`、`tool/animation/capture_gasp_p5.py`、`tool/animation-tests/motionDatabaseTests.cpp`、`tool/animation-tests/motionHistoryTests.cpp`、`tool/animation-tests/motionMatchingTests.cpp` | `contracts/animation-motion-features.md`、`contracts/testing.md` | — |
 | `source/animation/motionRuntimeDatabase.*` | `contracts/animation-asset-import.md`、`contracts/animation-motion-features.md`、`contracts/testing.md` | — |
 | `source/debug/**`、`source/ui/debugDrawOverlay.*`、`source/script/scriptDebugDraw.h`、`script/VulkanLearn.Runtime/DebugDraw.cs`、`tool/debug-draw-tests/**`、`tool/editor-ui-tests/debugDrawOverlayTests.cpp`、`tool/script-tests/scriptDebugDrawTests.cpp`、`tool/script-tests/managed/DebugDrawFixtures.cs`、`tool/debug/capture_draw_debug.py` | `contracts/debug-draw.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
-| `source/world/worldWind.h`、`source/world/worldWindSampling.h`、`source/world/sceneWindRuntime.h` | `contracts/scene-wind.md` | — |
-| `source/render/foliage/speedTreeWind*` | `contracts/scene-wind.md` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md`、`contracts/testing.md` | — |
 | `source/mesh/loader/hair/**`、`shader/glsl/engine/tressfxVertexFactory.glsl`、`shader/glsl/engine/tressfxCoverage.glsl`、`shader/glsl/hair/**`、`tool/material-schema-tests/tressfxMaterialTests.cpp` | `contracts/tressfx-asset-import.md`、`contracts/material-mesh-pass-composition.md`、`contracts/testing.md` | — |
+| `source/physics/**` | `contracts/fracture-core.md` | — |
+| `source/physics/fracture/fractureBudget.*` | `contracts/fracture-budget.md` | — |
+| `source/physics/fracture/destructibleProfile.*`、`plateFracturePolicy.*` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/glass-fracture-runtime.md` | — |
+| `tool/fracture-core-tests/**` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/testing.md` | — |
+| `source/engine/softBodyRuntime.*` | `contracts/softbody-runtime.md`、`contracts/fracture-budget.md` | — |
+| `source/engine/glassRuntime.*` | `contracts/glass-fracture-runtime.md`、`contracts/fracture-budget.md` | — |
+| `source/engine/projectileRuntime.*` | `contracts/projectile-shooting-runtime.md` | — |
+| `source/engine/destructibleRuntime.*` | `contracts/projectile-shooting-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/softbody-runtime.md` | — |
+| `source/physics/runtime/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
+| `source/audio/**` | `contracts/audio-runtime.md`、`contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
+| `tool/physics-runtime-tests/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/testing.md` | — |
+| `source/ui/sceneObjectTypeSupport.h` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/game-ui-stack.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html` | — |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
@@ -51,14 +59,13 @@
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
 | 论文 case 验证：`tool/validation/**` | `rationale/shading-model-case-records.md`（证据归档）、`plan/rendering/shading-model-alignment-plan.md` | — |
-| `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]` 条 | — |
+| `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]`、`[rmlui-shrink-to-fit-max-width]` 条 | — |
 | 改右键上下文菜单（`ui/editor-workspace.rml` 的 `#editor-context-menu`、面板的 `mouseup/button==1` 处理、菜单目标解析） | `contracts/ui-component-system.md` 的「右键上下文菜单」节 | — |
 | `source/render/editor/**`、`shader/glsl/pass/editorGrid.*`、`config/renderGraphConfig.json` 的 `editorGrid` pass | `contracts/material-mesh-pass-composition.md` 的「编辑器网格 pass」节 | — |
 | `source/editor/ui/editorViewportAxisIndicator.h`、`#viewport-axis-indicator` 叠层 | `contracts/ui-component-system.md` 的「角落坐标轴指示器」节 | — |
 | `source/pipeline/**` | `contracts/vulkanlearn-architecture.html` | Pipeline Vulkan creation diagnostics、Pipeline Vulkan creation diagnostic context |
 | `source/commonFunction.h` | `contracts/coding-guidelines.md` | CommonFunction depth helper cleanup、Source comment clarity |
-| `source/engine/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
-| `source/debugConsole.*` | `contracts/gpu-pass-timing.md`、`contracts/testing.md` | — |
+| `source/engine/**` | `contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
 | `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
@@ -84,7 +91,6 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | --- | --- |
 | `contracts/asset-organization.md` | 新增/移动资源目录，或改 `resourcePath` 布局时 |
 | `contracts/lookdev-scene.md` | 改文章资产审阅场景（`SC_lookdev_article`）、UE 资源导入、固定曝光/显示预设或截图时 |
-| `contracts/scene-wind.md` | 改场景 `wind` 对象、World 风状态、风时间 tick 或风校验时 |
 | `contracts/physical-lighting-and-exposure.md` | 改厘米世界长度、光源物理单位（lux/candela）、相机 EV100 或曝光模式时 |
 | `contracts/csm-shadow-map-m1.md` | 改 CSM 阴影贴图资源、分层 framebuffer、级联设置或相关 debug view 时 |
 | `contracts/debug-runtime-commands.md` | 新增/修改控制台调试命令（含相机控制与截图）时 |
@@ -146,7 +152,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 - `source/platform/**`（SDL 平台层与输入仲裁）
 - `source/engine/testing/**`（runtime validation services）
-- `source/core/runtimeResult.*`、`source/core/logStore.h`
+- `source/core/**`
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
 - 地形：**不存在运行时实现**。只有编辑器资产层的 `EditorAssetKind::Terrain` 与
   `objectType == "terrain"` 的 MI 导航解析；`SceneAssetValidator` 不接受 `terrain` 场景对象。
@@ -159,6 +165,13 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 ## 规划入口（非契约）
 
+- [实时破碎物理与声音研究计划](plan/physics/realtime-fracture-and-audio-plan.md)：
+  玻璃冲击/二次碎裂、气球破裂和事件驱动声音的混合路线、数据模型、里程碑与风险；
+  当前已落地运行时平面/球面破碎、橡皮膜软壳、Jolt 冲击、动态网格、落地音和气球爆裂读感；
+  玻璃、复杂物体和高级空间音频仍在计划中。
+- [气球爆裂手感研究](plan/physics/balloon-burst-feel-research.md)：
+  气球橡胶膜充气/撕裂/回缩、实时碎片条带、宽带爆裂声与视觉时序的证据和调参建议；
+  非契约研究记录，具体实现以 `contracts/softbody-runtime.md` 和源码为准。
 - [GASP 与 C# 动画控制开发计划](plan/architecture/gasp-csharp-animation-plan.md)：
   当前开发目标。C# 高层状态机与数据库筛选，原生 Motion Matching、轨迹/姿态历史、
   蒙皮、预览调试及障碍翻越的分阶段方案，每阶段提供可验收效果。

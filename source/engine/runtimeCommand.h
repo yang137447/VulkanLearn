@@ -32,6 +32,9 @@ enum class RuntimeCommandType
     ControlMotionDebug,
     ControlMotionReplay,
     ControlDebugDraw,
+    ImpactSoftBody,
+    ImpactGlassPane,
+    FireProjectile,
     SetEnvironmentIntensity,
     SetSunIntensity,
     // 逐 actor 可见性：stringValue 是大纲的稳定身份（"mesh|Sphere_01"、

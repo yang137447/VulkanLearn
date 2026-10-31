@@ -21,6 +21,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
     "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptRuntime.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptAssemblyMigration.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptBuildService.cpp"

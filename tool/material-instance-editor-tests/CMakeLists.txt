@@ -153,6 +153,7 @@ target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp")
 
 target_include_directories(material_instance_editor_production_tests

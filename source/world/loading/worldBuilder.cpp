@@ -215,6 +215,10 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         std::shared_ptr<World> world = std::make_shared<World>(
             generation,
             worldBuildPlan.scenePath);
+        world->SetNativeGameplay(
+            worldBuildPlan.sceneJson.value("runtimeMode", "authoring") ==
+            "gameplay");
+        world->SetProjectileSettings(worldBuildPlan.projectileSettings);
 
         WorldEnvironment environment;
         // 风缺省为无风；场景有 wind 对象时由校验器保证最多一个。
@@ -325,6 +329,50 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.tressfxPointsPerGuide = meshObjectPlan.tressfxPointsPerGuide;
             object.tressfxRootCloud = meshObjectPlan.tressfxRootCloud;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
+        }
+
+        for (const SoftBodyObjectBuildPlan& softBodyPlan : worldBuildPlan.softBodyObjectPlans)
+        {
+            WorldSoftBodyObject object;
+            object.name = softBodyPlan.objectName;
+            object.profileKey = softBodyPlan.profileKey;
+            object.model = softBodyPlan.model;
+            object.scenePosition = softBodyPlan.scenePosition;
+            object.sceneRotation = softBodyPlan.sceneRotation;
+            object.sceneScale = softBodyPlan.sceneScale;
+            object.subdivisions = softBodyPlan.subdivisions;
+            object.siteCount = softBodyPlan.siteCount;
+            object.radius = softBodyPlan.radius;
+            object.thickness = softBodyPlan.thickness;
+            object.pressure = softBodyPlan.pressure;
+            object.burstStrain = softBodyPlan.burstStrain;
+            object.restContraction = softBodyPlan.restContraction;
+            object.seed = softBodyPlan.seed;
+            object.materialKey = softBodyPlan.materialKey;
+            object.materialInstanceKey = softBodyPlan.materialInstanceKey;
+            world->AddSoftBodyObject(softBodyPlan.objectName, std::move(object));
+        }
+
+        for (const GlassObjectBuildPlan& glassPlan : worldBuildPlan.glassObjectPlans)
+        {
+            WorldGlassObject object;
+            object.name = glassPlan.objectName;
+            object.profileKey = glassPlan.profileKey;
+            object.model = glassPlan.model;
+            object.scenePosition = glassPlan.scenePosition;
+            object.sceneRotation = glassPlan.sceneRotation;
+            object.sceneScale = glassPlan.sceneScale;
+            object.width = glassPlan.width;
+            object.height = glassPlan.height;
+            object.thickness = glassPlan.thickness;
+            object.siteCount = glassPlan.siteCount;
+            object.seed = glassPlan.seed;
+            object.subfracture = glassPlan.subfracture;
+            object.materialKey = glassPlan.materialKey;
+            object.materialInstanceKey = glassPlan.materialInstanceKey;
+            object.crackMaterialKey = glassPlan.crackMaterialKey;
+            object.crackMaterialInstanceKey = glassPlan.crackMaterialInstanceKey;
+            world->AddGlassObject(glassPlan.objectName, std::move(object));
         }
 
         return RuntimeResult<std::shared_ptr<World>>::Success(std::move(world));

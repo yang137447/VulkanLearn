@@ -626,6 +626,67 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "softbody")
+    {
+        std::string action;
+        std::string name;
+        float speed = 800.0f;
+        commandStream >> action >> name;
+        if (action != "impact" || name.empty())
+        {
+            std::cout << "Usage: softbody impact <balloon-name> [speed-cm-per-second]" << std::endl;
+            return;
+        }
+        if (!(commandStream >> speed)) speed = 800.0f;
+        if (!std::isfinite(speed) || speed <= 0.0f || speed > 100000.0f)
+        {
+            std::cout << "softbody impact speed must be finite in (0, 100000]." << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::ImpactSoftBody;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.floatValue = speed;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "glass")
+    {
+        std::string action;
+        std::string name;
+        float speed = 800.0f;
+        commandStream >> action >> name;
+        if (action != "impact" || name.empty())
+        {
+            std::cout << "Usage: glass impact <pane-name> [speed-cm-per-second]" << std::endl;
+            return;
+        }
+        if (!(commandStream >> speed)) speed = 800.0f;
+        if (!std::isfinite(speed) || speed <= 0.0f || speed > 100000.0f)
+        {
+            std::cout << "glass impact speed must be finite in (0, 100000]." << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::ImpactGlassPane;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.floatValue = speed;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "shoot")
+    {
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::FireProjectile;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "screenshot")
     {
         std::string path;
@@ -869,6 +930,9 @@ void DebugConsole::PrintHelp() const
     std::cout << "  offline <on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export>\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  screenshot [file.bmp] - capture the presented swapchain image\n";
+    std::cout << "  softbody impact <balloon-name> [speed] - launch a Jolt sphere at a soft body\n";
+    std::cout << "  glass impact <pane-name> [speed] - launch a Jolt sphere at a glass pane\n";
+    std::cout << "  shoot - fire a visible arrow from the render camera\n";
     std::cout << "  camera get - print the active camera pose\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";

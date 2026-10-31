@@ -1,6 +1,8 @@
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 # 纯 CPU 离线核心由独立静态库拥有，不能随递归源文件再次编进 main。
 list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
+# 纯 CPU 破碎核心由独立静态库拥有，不依赖 Vulkan/Jolt，也不重复编进 main。
+list(FILTER sources EXCLUDE REGEX "/physics/")
 # 动画 CPU 资产和播放器由独立库拥有，避免递归源收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/animation/")
 list(FILTER sources EXCLUDE REGEX "/debug/")
@@ -57,12 +59,15 @@ PRIVATE
     vl_ui_widgets
     Threads::Threads
     vl_offline_core
+    vl_fracture_core
     vl_animation_assets
     vl_debug_draw
     vl_hair_assets
     vl_script_host
     ws2_32 dbghelp advapi32 user32 secur32
     )
+
+target_link_libraries(main PRIVATE vl_physics_runtime)
 
 if(TARGET vl_gameplay)
     add_dependencies(main vl_gameplay)

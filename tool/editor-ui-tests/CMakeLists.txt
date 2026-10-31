@@ -63,6 +63,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetJsonCommandHost.cpp"
     "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     # 逐 actor 可见性的 World/快照回归（editorUiTests.cpp）：渲染侧过滤发生在
     # WorldSnapshotBuilder，因此这里要编进真实的 World 与快照构建器，

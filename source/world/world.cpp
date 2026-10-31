@@ -464,6 +464,42 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     meshObjects[std::move(name)] = std::move(object);
 }
 
+void World::AddSoftBodyObject(std::string name, WorldSoftBodyObject object)
+{
+    softBodyObjects[std::move(name)] = std::move(object);
+}
+
+void World::AddGlassObject(std::string name, WorldGlassObject object)
+{
+    glassObjects[std::move(name)] = std::move(object);
+}
+
+bool World::RemoveMeshObject(const std::string& name)
+{
+    const auto found = meshObjects.find(name);
+    if (found == meshObjects.end()) return false;
+    meshObjects.erase(found);
+    return true;
+}
+
+bool World::SetMeshObjectLocalBounds(const std::string& name,
+    const Eigen::Vector3f& minimum, const Eigen::Vector3f& maximum)
+{
+    const auto found = meshObjects.find(name);
+    if (found == meshObjects.end()) return false;
+    found->second.localBoundsMin = minimum;
+    found->second.localBoundsMax = maximum;
+    return true;
+}
+
+bool World::SetMeshObjectModel(const std::string& name, const Eigen::Matrix4f& model)
+{
+    const auto found = meshObjects.find(name);
+    if (found == meshObjects.end()) return false;
+    found->second.model = model;
+    return true;
+}
+
 void World::AddWindResponseProfile(WindResponseProfile profile)
 {
     windResponseProfiles[profile.key] = std::move(profile);

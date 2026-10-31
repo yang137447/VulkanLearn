@@ -33,14 +33,14 @@ TEST(TressfxHairSimulationControls, LiveGateMatchesEnabledAndBackendDefaultSeman
         {{"simulationDefaults", {{"enabled", true}, {"backend", "cpu"}}}}));
 }
 
-// 面板控件表必须覆盖且只覆盖可实时覆盖的 8 个作者字段，默认值与
+// 面板控件表必须覆盖且只覆盖可实时覆盖的 9 个作者字段，默认值与
 // TressfxSimulationConfig 的成员初值一致；多一个字段会让面板显示资产并不拥有的值，
 // 少一个字段则作者只能改 JSON。
 TEST(TressfxHairSimulationControls, CoverEveryLiveParameterWithAuthoredDefaults)
 {
     std::size_t count = 0;
     const TressfxSimulationControl* controls = TressfxSimulationControls(count);
-    ASSERT_EQ(count, 8u);
+    ASSERT_EQ(count, 9u);
     const std::map<std::string, std::array<double, 3>> expected = {
         {"gravity", {0.0, -980.0, 0.0}},
         {"damping", {0.035, 0.0, 0.0}},
@@ -50,6 +50,7 @@ TEST(TressfxHairSimulationControls, CoverEveryLiveParameterWithAuthoredDefaults)
         {"globalShapeEffectiveRange", {0.0, 0.0, 0.0}},
         {"vspCoefficient", {0.0, 0.0, 0.0}},
         {"vspAccelThresholdMax", {140.0, 0.0, 0.0}},
+        {"windGain", {0.01, 0.0, 0.0}},
     };
     EXPECT_EQ(expected.size(), count);
     for (std::size_t index = 0; index < count; ++index)

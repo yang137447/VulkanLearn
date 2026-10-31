@@ -20,6 +20,8 @@ class DiagnosticsSubsystem;
 class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
+class DestructibleRuntimeRegistry;
+class ProjectileRuntime;
 class WorldTransitionCoordinator;
 class ScriptRuntimeSubsystem;
 namespace Editor { class SceneDocumentService; }
@@ -73,7 +75,9 @@ public:
         const DiagnosticsSubsystem& diagnostics,
         InputSubsystem* input = nullptr,
         ScriptRuntimeSubsystem* scripts = nullptr,
-        Editor::SceneDocumentService* sceneDocuments = nullptr) const;
+        Editor::SceneDocumentService* sceneDocuments = nullptr,
+        DestructibleRuntimeRegistry* destructibleRuntimes = nullptr,
+        ProjectileRuntime* projectileRuntime = nullptr) const;
 
 private:
     // `mesh sweep` 的每帧状态：显式命令启动，GT 每帧调用 ExecuteQueuedCommands 时
@@ -106,7 +110,9 @@ private:
         RuntimeCommandExecutionResult& executionResult,
         InputSubsystem* input,
         ScriptRuntimeSubsystem* scripts,
-        Editor::SceneDocumentService* sceneDocuments) const;
+        Editor::SceneDocumentService* sceneDocuments,
+        DestructibleRuntimeRegistry* destructibleRuntimes,
+        ProjectileRuntime* projectileRuntime) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,

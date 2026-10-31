@@ -48,6 +48,15 @@ Current implemented areas include:
 
 - Optional Windows x64/.NET 8 C# Blueprint hosting, scene placement and Play/Pause/Stop;
   implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
+- Runtime fracture verticals: `balloon` soft-body burst and `glassPane` impact fracture
+  with Jolt shards, secondary glass split, support islands, asset-backed WAV audio
+  with procedural fallback and a shared 320-shard global budget; current limits:
+  `documents/contracts/softbody-runtime.md`,
+  `documents/contracts/glass-fracture-runtime.md`,
+  `documents/contracts/fracture-budget.md`, `documents/contracts/audio-runtime.md`
+- Shared fracture impact world plus visible arrows and the `SC_fracture_playground`
+  playable level (Left click shoot, Esc mouse look, WASD move); limits:
+  `documents/contracts/projectile-shooting-runtime.md`
 - Vulkan device / swapchain initialization
 - Shader compilation and SPIR-V loading
 - Data-driven scene loading
@@ -257,7 +266,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 
 ### Scene JSON top-level fields
 
-`SC_*.json` (and any other asset with `"type": "scene"`) carries four top-level fields:
+`SC_*.json` (and any other asset with `"type": "scene"`) carries four required top-level fields:
 
 - `name`: display label (the UI scene selector uses it as the list label)
 - `type`: must be `"scene"`
@@ -267,6 +276,14 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
   without it, so a new scene cannot silently ship undocumented; runtime-test fixtures that build a scene
   in code must write one too. Written in Chinese, same as the planning documents.
 - `objects`: array of scene objects (see below)
+- `runtimeMode`: optional `"authoring"` (default) or `"gameplay"`. `gameplay` marks a
+  native试玩 scene that advances fracture/projectile physics without a C# Play state;
+  authoring scenes remain gated by Play/Pause/Editing.
+- `projectile`: optional projectile recipe (`materialInstance`, `speed`, `radius`,
+  `mass`, `cooldown`). Runtime uses this explicitly instead of scanning scene objects.
+
+`balloon` and `glassPane` additionally accept an optional `profile` string selecting a
+registered `DestructibleProfile` (`balloon.default`, `glass.default`, `glass.tempered`).
 
 ### Current scene object types
 
@@ -284,6 +301,8 @@ Scene JSON currently supports these `type` values:
 - `environment`
 - `wind` (scene-global wind, at most one per scene; `direction`/`strength`/optional `gust`;
   no position/rotation; see `documents/contracts/scene-wind.md`)
+- `balloon` (runtime rubber soft body; current scope and limits are in `documents/contracts/softbody-runtime.md`; Jolt impact, convex-hull shards, shard-shard contact, neck anchoring, approximate Jolt-pose coupling and asset-backed audio with procedural fallback are connected; advanced spatial audio/material are not)
+- `glassPane` (runtime glass plate; current scope and limits are in `documents/contracts/glass-fracture-runtime.md`; impact-point radial fracture, Jolt convex-hull shards, attached plates, support islands, CCD projectiles, landing secondary fracture and asset-backed glass audio with procedural fallback are connected; transparent material is not)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime

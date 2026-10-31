@@ -19,6 +19,7 @@
 #include "scene/placementBinding.h"
 #include "world/worldSnapshot.h"
 #include "world/worldWind.h"
+#include "world/projectileSettings.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
@@ -111,6 +112,52 @@ struct WorldMeshObject
     PlacementBinding placementBinding;
 };
 
+// 场景里声明的橡皮软体对象。它只保存作者参数和已解析的材质 key；
+// RubberShell 粒子、动态网格和爆裂状态由 GT 侧运行时持有，不进入 World。
+struct WorldSoftBodyObject
+{
+    std::string name;
+    std::string profileKey;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    int subdivisions = 2;
+    int siteCount = 16;
+    double radius = 20.0;
+    double thickness = 0.2;
+    double pressure = 10.0;
+    double burstStrain = 0.35;
+    double restContraction = 0.75;
+    uint64_t seed = 0;
+    std::string materialKey;
+    std::string materialInstanceKey;
+    bool visible = true;
+};
+
+// 场景里声明的运行时玻璃板。完整板网格、碎片和二次碎裂状态由 GT 侧
+// GlassRuntime 持有；World 只保存作者参数与已解析的材质 key。
+struct WorldGlassObject
+{
+    std::string name;
+    std::string profileKey;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    double width = 100.0;
+    double height = 100.0;
+    double thickness = 0.6;
+    int siteCount = 32;
+    uint64_t seed = 0;
+    bool subfracture = true;
+    std::string materialKey;
+    std::string materialInstanceKey;
+    std::string crackMaterialKey;
+    std::string crackMaterialInstanceKey;
+    bool visible = true;
+};
+
 // Runtime view of the active game world. Camera, light, environment, and mesh
 // object state is owned by World. Object GPU resources and descriptors live in
 // renderer-owned backend entries and are referenced from snapshots by key.
@@ -121,6 +168,16 @@ public:
 
     uint64_t GetGeneration() const { return generation; }
     const std::string& GetScenePath() const { return scenePath; }
+    bool IsNativeGameplay() const { return nativeGameplay; }
+    void SetNativeGameplay(bool value) { nativeGameplay = value; }
+    const ProjectileSettings& GetProjectileSettings() const
+    {
+        return projectileSettings;
+    }
+    void SetProjectileSettings(ProjectileSettings value)
+    {
+        projectileSettings = std::move(value);
+    }
 
     void SetViewTarget(std::shared_ptr<SceneNode> viewTarget);
     std::weak_ptr<SceneNode> GetViewTarget() const { return viewTarget; }
@@ -156,12 +213,20 @@ public:
 
     void AddMeshObject(std::string name, WorldMeshObject object);
     void AddWindResponseProfile(WindResponseProfile profile);
+    void AddSoftBodyObject(std::string name, WorldSoftBodyObject object);
+    void AddGlassObject(std::string name, WorldGlassObject object);
+    bool RemoveMeshObject(const std::string& name);
+    bool SetMeshObjectLocalBounds(const std::string& name,
+        const Eigen::Vector3f& minimum, const Eigen::Vector3f& maximum);
+    bool SetMeshObjectModel(const std::string& name, const Eigen::Matrix4f& model);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    const std::unordered_map<std::string, WorldSoftBodyObject>& GetSoftBodyObjects() const { return softBodyObjects; }
+    const std::unordered_map<std::string, WorldGlassObject>& GetGlassObjects() const { return glassObjects; }
     void TickAnimations(float deltaSeconds);
     // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
     bool ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value);
@@ -274,6 +339,9 @@ private:
 
     uint64_t generation = 0;
     std::string scenePath;
+    // 无 C# Play 状态的 native 试玩场景；编辑器场景保持 authoring。
+    bool nativeGameplay = false;
+    ProjectileSettings projectileSettings;
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     std::shared_ptr<Camera> editorCamera;
@@ -285,6 +353,8 @@ private:
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, WindResponseProfile> windResponseProfiles;
+    std::unordered_map<std::string, WorldSoftBodyObject> softBodyObjects;
+    std::unordered_map<std::string, WorldGlassObject> glassObjects;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
