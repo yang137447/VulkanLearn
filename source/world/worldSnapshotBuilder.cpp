@@ -376,9 +376,20 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         snapshotSystem.name = name;
         snapshotSystem.assetPath = particleSystem.assetPath;
         snapshotSystem.asset = particleSystem.asset;
-        snapshotSystem.model = particleSystem.model;
+        bool attachmentResolved = true;
+        snapshotSystem.model =
+            world.ResolveParticleSystemModel(
+                particleSystem, attachmentResolved);
         snapshotSystem.visible = particleSystem.visible;
         snapshotSystem.runtime = particleSystem.runtime;
+        snapshotSystem.budget =
+            world.GetEffectiveParticleBudget(name);
+        snapshotSystem.telemetry = particleSystem.telemetry;
+        snapshotSystem.telemetry.budgetedCapacity =
+            snapshotSystem.budget.effectiveCapacity;
+        snapshotSystem.userParameters = particleSystem.userParameters;
+        snapshotSystem.attachment = particleSystem.attachment;
+        snapshotSystem.attachment.resolved = attachmentResolved;
         snapshot.particleSystems.push_back(
             std::move(snapshotSystem));
     }

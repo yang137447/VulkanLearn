@@ -1,0 +1,57 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+
+// 全局 pair 表初始化：只对前 counter.alive 条 gathered 记录取深度，
+// 其余槽位放最远深度，排序后自然沉到尾部。
+struct GatheredBillboard
+{
+    vec4 centerSize;
+    vec4 rightRot;
+    vec4 upSoft;
+    vec4 color;
+    vec4 uvRect;
+    vec4 params;
+    vec4 frame;
+    vec4 flags;
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
+{
+    GatheredBillboard records[];
+} gatheredBuffer;
+
+layout(std430, set = 0, binding = 2) writeonly buffer SortPairs
+{
+    vec4 pairs[];
+} pairBuffer;
+
+layout(std430, set = 0, binding = 3) readonly buffer GlobalCounter
+{
+    uint alive;
+    uint events;
+    uint spawn;
+    uint death;
+    uint collision;
+    uint capacity;
+} globalCounter;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint capacity = uint(frame.sortParams.z);
+    if (index >= capacity)
+    {
+        return;
+    }
+    if (index >= globalCounter.alive)
+    {
+        pairBuffer.pairs[index] = vec4(-3.402823466e38);
+        return;
+    }
+    vec3 center = gatheredBuffer.records[index].centerSize.xyz;
+    float depth = -(frame.view * vec4(center, 1.0)).z;
+    pairBuffer.pairs[index] = vec4(depth, float(index), 0.0, 0.0);
+}

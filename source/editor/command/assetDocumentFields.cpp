@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -15,7 +16,17 @@ namespace
 {
 using Json = nlohmann::json;
 using K = EditorAssetDocumentKind;
-enum class ValueKind { Text, Boolean, Number, Vector3, Strings, Channels, Object, Array };
+enum class ValueKind {
+    Text,
+    Boolean,
+    Number,
+    Vector3,
+    Strings,
+    Channels,
+    Object,
+    Array,
+    UserParameters
+};
 struct Field
 {
     K kind;
@@ -25,6 +36,12 @@ struct Field
     bool reset = false;
     const char* unit = "";
     const char* options = "";
+    // 能力表默认公开每个字段；别名只参与写入校验，不重复暴露成第二行。
+    bool hidden = false;
+    // 数量型字段在协议边界就拒绝小数/负值，不能依赖运行时加载器兜底。
+    bool integer = false;
+    double minimum = std::numeric_limits<double>::quiet_NaN();
+    double maximum = std::numeric_limits<double>::quiet_NaN();
 };
 // scope 只列真正可编辑的目标；slot 的顺序身份不由字段名推导。
 const Field fields[] = {
@@ -75,22 +92,33 @@ const Field fields[] = {
     {K::ParticleSystem, "", "name", ValueKind::Text},
     {K::ParticleSystem, "", "version", ValueKind::Number},
     {K::ParticleSystem, "", "modules", ValueKind::Array},
+    {K::ParticleSystem, "", "userParameters", ValueKind::UserParameters, true},
     {K::ParticleSystem, "", "position", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "localSpace", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "renderMode", ValueKind::Text, false, "", "billboard|ribbon|mesh"},
     {K::ParticleSystem, "", "billboardAlignment", ValueKind::Text, true, "", "camera|velocity"},
+    {K::ParticleSystem, "", "billboardShadows", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "ribbonWidth", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},
     {K::ParticleSystem, "", "mesh.path", ValueKind::Text, true, "asset_path"},
     {K::ParticleSystem, "", "mesh.scale", ValueKind::Vector3, true},
     {K::ParticleSystem, "", "mesh.alignment", ValueKind::Text, true, "", "world|camera|velocity"},
+    {K::ParticleSystem, "", "mesh.materialInstancePath", ValueKind::Text, true, "asset_path"},
+    // 旧资产把材质实例路径放在 emitter 根；能力表只公开 mesh 路径，
+    // 根别名仍可写入并由 SetParticleField 规范化到 mesh。
+    {K::ParticleSystem, "", "materialInstancePath", ValueKind::Text, true, "asset_path", "", true},
     {K::ParticleSystem, "", "meshLighting", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "meshAmbient", ValueKind::Number, true},
     {K::ParticleSystem, "", "useFixedBounds", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "fixedBounds.center", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "fixedBounds.extent", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "maxParticles", ValueKind::Number},
+    {K::ParticleSystem, "", "randomSeed", ValueKind::Number, true, "", "", false, true, 0.0,
+        4294967295.0},
+    {K::ParticleSystem, "", "deterministicRandom", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "fixedTimeStep", ValueKind::Number, true, "s", "", false, false,
+        0.0, 0.25},
     {K::ParticleSystem, "", "burst", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "burstInterval", ValueKind::Number, true, "s"},
     {K::ParticleSystem, "", "spawnRate", ValueKind::Number},
@@ -131,7 +159,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "fadeDistance", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "minScreenSize", ValueKind::Number, true, "px"},
     {K::ParticleSystem, "", "maxScreenSize", ValueKind::Number, true, "px"},
-    {K::ParticleSystem, "", "collision.type", ValueKind::Text, true, "", "none|plane|box|capsule"},
+    {K::ParticleSystem, "", "collision.type", ValueKind::Text, true, "", "none|plane|box|capsule|sdf"},
     {K::ParticleSystem, "", "collision.bounce", ValueKind::Number, true},
     {K::ParticleSystem, "", "collision.friction", ValueKind::Number, true},
     {K::ParticleSystem, "", "collision.radius", ValueKind::Number, true, "cm"},
@@ -144,6 +172,10 @@ const Field fields[] = {
     {K::ParticleSystem, "", "collision.capsule.a", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "collision.capsule.b", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "collision.capsule.radius", ValueKind::Number, true, "cm"},
+    {K::ParticleSystem, "", "collision.sdf.path", ValueKind::Text, true, "asset_path"},
+    {K::ParticleSystem, "", "events.spawn", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "events.death", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "events.collision", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "colorStart", ValueKind::Array},
     {K::ParticleSystem, "", "colorEnd", ValueKind::Array},
     {K::ParticleSystem, "", "texture", ValueKind::Text, true, "asset_path"},
@@ -267,6 +299,7 @@ const char* TypeName(ValueKind type)
     case ValueKind::Number: return "number"; case ValueKind::Vector3: return "vec3";
     case ValueKind::Strings: return "string_array"; case ValueKind::Channels: return "channel_descriptions";
     case ValueKind::Object: return "object"; case ValueKind::Array: return "array";
+    case ValueKind::UserParameters: return "object";
     }
     return "";
 }
@@ -294,8 +327,19 @@ EditorAssetFieldValue DecodeValue(const Json& value, const Field& field)
         break;
     case ValueKind::Boolean: if (value.is_boolean()) return value.get<bool>(); break;
     case ValueKind::Number:
-        if (value.is_number() && std::isfinite(value.get<double>()) &&
-            std::isfinite(static_cast<float>(value.get<double>()))) return value.get<double>();
+        if (value.is_number())
+        {
+            const double number = value.get<double>();
+            if (!std::isfinite(number) ||
+                !std::isfinite(static_cast<float>(number)))
+                break;
+            if (field.integer && std::floor(number) != number) break;
+            if (std::isfinite(field.minimum) && number < field.minimum)
+                break;
+            if (std::isfinite(field.maximum) && number > field.maximum)
+                break;
+            return number;
+        }
         break;
     case ValueKind::Vector3:
         if (value.is_array() && value.size() == 3)
@@ -337,6 +381,30 @@ EditorAssetFieldValue DecodeValue(const Json& value, const Field& field)
                 channels[entry.key()] = entry.value().get<std::string>();
             }
             return channels;
+        }
+        break;
+    case ValueKind::UserParameters:
+        if (value.is_object() && value.size() <= 64)
+        {
+            bool valid = true;
+            for (auto parameter = value.begin();
+                 parameter != value.end(); ++parameter)
+            {
+                if (parameter.key().empty() ||
+                    !parameter.value().is_number())
+                {
+                    valid = false;
+                    break;
+                }
+                const double number = parameter.value().get<double>();
+                if (!std::isfinite(number) ||
+                    !std::isfinite(static_cast<float>(number)))
+                {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) return value;
         }
         break;
     }
@@ -419,6 +487,30 @@ void SetDottedField(
     }
 }
 
+// materialInstancePath 的规范位置是 mesh 子对象；旧资产允许 emitter 根别名。
+// 规范化写入后必须删除根/模块里的别名，否则 loader 的根字段会覆盖 mesh 值。
+void RemoveParticleMaterialInstancePathAlias(Json& emitter)
+{
+    if (!emitter.is_object()) return;
+    emitter.erase("materialInstancePath");
+    const auto mesh = emitter.find("mesh");
+    if (mesh != emitter.end() && mesh->is_object() && mesh->empty())
+        emitter.erase(mesh);
+    const auto modules = emitter.find("modules");
+    if (modules == emitter.end() || !modules->is_array()) return;
+    for (auto& module : *modules)
+    {
+        if (!module.is_object()) continue;
+        const auto fields = module.find("fields");
+        if (fields == module.end() || !fields->is_object()) continue;
+        fields->erase("materialInstancePath");
+        const auto moduleMesh = fields->find("mesh");
+        if (moduleMesh != fields->end() && moduleMesh->is_object() &&
+            moduleMesh->empty())
+            fields->erase(moduleMesh);
+    }
+}
+
 void SetParticleField(
     Json& target,
     const EditorAssetFieldChange& change,
@@ -426,6 +518,17 @@ void SetParticleField(
 {
     const ParticleFieldPath path = ParseParticleFieldPath(change.field);
     const bool v2 = target.value("version", 1) == 2;
+    if (change.field == "userParameters" && !v2)
+        throw std::invalid_argument(
+            "Particle userParameters requires version 2");
+    if (path.hasEmitter && path.field == "userParameters")
+        throw std::invalid_argument(
+            "Particle userParameters is a system-level field");
+    // 根别名与 mesh 路径共享同一个作者值；写入统一走规范路径。
+    const std::string outputField =
+        path.field == "materialInstancePath"
+        ? "mesh.materialInstancePath"
+        : path.field;
     if (!path.hasEmitter)
     {
         const bool explicitEmitters =
@@ -436,7 +539,7 @@ void SetParticleField(
             // 显式多发射器文档的根对象只拥有系统名和结构数组；
             // 其余字段写到根会被 ParseJson 忽略，必须明确拒绝。
             if (change.field != "name" && change.field != "emitters" &&
-                change.field != "version")
+                change.field != "version" && change.field != "userParameters")
                 throw std::invalid_argument(
                     "Particle field requires emitters.<index>.<field>: " +
                     change.field);
@@ -445,11 +548,11 @@ void SetParticleField(
         }
         // 隐式 v2 emitter：根字段按模块 owner 写回 modules[].fields。
         if (v2 && change.field != "name" && change.field != "version" &&
-            change.field != "modules")
+            change.field != "modules" && change.field != "userParameters")
         {
             if (!SetParticleEmitterField(
                     target,
-                    change.field,
+                    outputField,
                     ValueJson(change.value),
                     change.reset))
             {
@@ -457,6 +560,8 @@ void SetParticleField(
                     "Particle v2 field could not be written: " +
                     change.field);
             }
+            if (outputField == "mesh.materialInstancePath")
+                RemoveParticleMaterialInstancePathAlias(target);
             return;
         }
         // 旧资产没有 emitters 数组；根字段必须保持原有写入语义。
@@ -465,7 +570,9 @@ void SetParticleField(
             throw std::invalid_argument("Particle position requires an explicit emitters array");
         // 旧文档的根字段同样可能有多级路径（例如 collision.plane.normal），
         // 不能退回只支持两级的 SetField。
-        SetDottedField(target, change.field, change);
+        SetDottedField(target, outputField, change);
+        if (outputField == "mesh.materialInstancePath")
+            RemoveParticleMaterialInstancePathAlias(target);
         return;
     }
     if (!target.is_object() || !target.contains("emitters") ||
@@ -493,7 +600,7 @@ void SetParticleField(
     {
         if (!SetParticleEmitterField(
                 emitter,
-                path.field,
+                outputField,
                 ValueJson(change.value),
                 change.reset))
         {
@@ -501,15 +608,22 @@ void SetParticleField(
                 "Particle v2 field could not be written: " +
                 path.field);
         }
+        if (outputField == "mesh.materialInstancePath")
+            RemoveParticleMaterialInstancePathAlias(emitter);
         return;
     }
-    SetDottedField(emitter, path.field, change);
+    SetDottedField(emitter, outputField, change);
+    if (outputField == "mesh.materialInstancePath")
+        RemoveParticleMaterialInstancePathAlias(emitter);
 }
 
 Json FieldDescription(const Field& field)
 {
     Json result{{"field", field.name}, {"type", TypeName(field.type)}, {"resettable", field.reset},
         {"unit", field.unit}};
+    if (field.integer) result["integer"] = true;
+    if (std::isfinite(field.minimum)) result["minimum"] = field.minimum;
+    if (std::isfinite(field.maximum)) result["maximum"] = field.maximum;
     if (*field.options)
     {
         result["enum"] = Json::array();
@@ -529,7 +643,8 @@ Json FieldList(K kind, const std::string& scope)
 {
     Json result = Json::array();
     for (const auto& field : fields)
-        if (field.kind == kind && MatchesScope(scope, field.scope))
+        if (field.kind == kind && !field.hidden &&
+            MatchesScope(scope, field.scope))
         {
             auto description = FieldDescription(field);
             if (std::string(field.name) == "intensityUnit")
@@ -546,8 +661,22 @@ Json Projection(K kind, const std::string& scope, const Json& source)
         if (source.contains(key)) result[key] = source.at(key);
     for (const auto& field : fields)
     {
-        if (field.kind != kind || !MatchesScope(scope, field.scope)) continue;
+        if (field.kind != kind || field.hidden ||
+            !MatchesScope(scope, field.scope)) continue;
         const std::string name(field.name);
+        // 根 materialInstancePath 是旧别名；投影统一暴露在 mesh 下，
+        // 编辑时再由写入路径规范化并删除根别名。
+        const bool hasMeshMaterial =
+            source.is_object() && source.contains("mesh") &&
+            source.at("mesh").is_object() &&
+            source.at("mesh").contains("materialInstancePath");
+        if (name == "mesh.materialInstancePath" && !hasMeshMaterial &&
+            source.contains("materialInstancePath"))
+        {
+            result["mesh"]["materialInstancePath"] =
+                source.at("materialInstancePath");
+            continue;
+        }
         const auto dot = name.find('.');
         if (dot == std::string::npos)
         {
@@ -752,6 +881,7 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
     }
     if (kind == K::ParticleSystem)
     {
+        const bool v2 = document.value("version", 1) == 2;
         const bool explicitEmitters =
             document.contains("emitters") &&
             document.at("emitters").is_array();
@@ -763,7 +893,9 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
                 [](const Json& field)
                 {
                     return field.value("field", std::string()) ==
-                        "emitters";
+                        "emitters" ||
+                        field.value("field", std::string()) ==
+                        "userParameters";
                 }),
             emitterFields.end());
         if (!explicitEmitters)
@@ -774,10 +906,12 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
             result["fields"].erase(
                 std::remove_if(
                     result["fields"].begin(), result["fields"].end(),
-                    [](const Json& field)
+                    [v2](const Json& field)
                     {
-                        return field.value("field", std::string()) ==
-                            "position";
+                        const std::string name =
+                            field.value("field", std::string());
+                        return name == "position" ||
+                            (!v2 && name == "userParameters");
                     }),
                 result["fields"].end());
         }
@@ -790,7 +924,8 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
             {
                 const std::string name =
                     field.value("field", std::string());
-                if (name == "name" || name == "emitters")
+                if (name == "name" || name == "emitters" ||
+                    (v2 && name == "userParameters"))
                     result["fields"].push_back(field);
             }
         }

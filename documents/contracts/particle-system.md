@@ -6,8 +6,8 @@
 
 - 场景对象类型 `particleSystem`：作者在 `SC_*.json` 中用 `particlePath` 引用一个 `PS_*.json`。
 - `particleSystem` 现在是正式场景 actor，出现在大纲与 Details；支持 Location/Rotation/Scale
-  编辑和运行时可见性开关。当前场景侧仍只支持独立 `particleSystem` 对象，不提供模块化
-  stack 或运行时 emitter 级增删；Play 期的 C# 入口见
+  编辑和运行时可见性开关。场景 JSON 仍只支持独立 `particleSystem` 对象；v2 模块栈属于
+  `PS_*.json` 作者层，运行时通过稳定槽位 API 做 emitter 级增删。Play 期的 C# 入口见
   [C# Blueprint 运行时](csharp-blueprint-runtime.md#particle-systems)，详见「场景 actor 集成」。
 - `PS_*.json` 在 Content Browser 中作为独立 `ParticleSystem` 资产出现；双击进入自己的资源编辑器
   标签页。编辑器顶部是 emitter 选择器，左侧是
@@ -53,8 +53,8 @@
   未知类型直接拒绝，避免拼写错误静默变成空模块。
 - `fields` 与 v1 emitter 字段同名并递归合并；两个启用模块写同一字段且值不同会拒绝。
   v2 的模块顺序目前只属于作者层，runtime 消费展平后的 `ParticleEmitterAsset`，不重新解释顺序。
-- 根对象可声明 `userParameters`：对象、最多 64 项、值为有限数；当前只解析并保存在
-  `ParticleSystemAsset::userParameters`，尚未被模块引用。
+- 根对象可声明 `userParameters`：对象、最多 64 项、值为有限数。模块展平后，
+  以 `$Name` 形式出现的字符串会替换为同名数值；未知引用在加载期报错。
 - 没有 `version` 或 `version: 1` 的资产继续走原扁平字段路径；v2 根对象也允许直接携带一个
   隐式 emitter 的 `modules`。展平后的 runtime 校验与 v1 完全相同。
 - 粒子编辑器对 v1 资产提供 “Upgrade to v2 module stack”；升级会先提交 `version: 2`，再把
@@ -92,8 +92,9 @@ GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定
   仍保留在大纲与 World 中；渲染器冻结该实例的模拟与绘制（不推进时间、不清池、不排序、
   不 dispatch），重新显示后从冻结状态继续，不重建或重启粒子池。
 - 粒子的资产编辑仍走 `PS_*.json` 文档；场景 JSON 仍只支持独立 `particleSystem` 对象。
-  没有模块化 stack，也没有运行时 emitter 级增删。运行时实例增删由 World 级的
-  `particlespawn` / `particledestroy` / `particlerestart` 与 Play 期的
+  v2 模块栈是作者层结构；运行时通过 `particleemitter` / C# emitter API 对稳定槽位做
+  spawn/destroy/restart/enable，destroy 保留 tombstone，不重排作者或运行时索引。
+  实例增删仍由 `particlespawn` / `particledestroy` / `particlerestart` 与
   `Blueprint.Particles` 提供；逐实例运行时参数由 `particleparam` 或 C# setter 覆盖。
 
 ## 运行时实例管理
@@ -121,7 +122,9 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
 上下文生成 `~particle.<n>`；`Find(id)` 只查本 Blueprint 的 live 表，`DestroyAll()` 销毁
 该表全部实例。`ParticleSystem` 提供 `Destroy`、`SetVisible`、`SetSpawnRateScale`、
 `SetColorTint`、`SetEmitterEnabled` 与 `ResetOverrides`，没有 `Restart`；需要重启时
-`Destroy` 后重新 `Spawn`。完整签名与回调边界见
+`Destroy` 后重新 `Spawn`。发射器级提供 `SpawnEmitter` / `DestroyEmitter` /
+`RestartEmitter` / `SetEmitterEnabled(handle)`，以及附着、预算、用户参数、
+遥测和 `Subscribe(Action<ParticleEvent>)`。完整签名与回调边界见
 [C# Blueprint 运行时](csharp-blueprint-runtime.md#particle-systems)。
 
 托管调用只做 TRS 与参数范围校验并入队，不读取资产；native 在 GT 命令点对
@@ -158,18 +161,21 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   `ParticleFrameUniforms`（`std140`）。
   `Particle` 依次是 `positionAge`、`velocityLife`、`history0`、`history1`、`history2`；
   三个 history 的 `xyz` 是记录时的模拟空间位置、`w` 是记录时的 age，供 ribbon 使用。
-- compute 与 graphics 共用同一组 binding 语义：
+- compute 与 graphics 的公共 binding 语义：
   - `set 0, binding 0`：`ParticleFrameUniforms`
   - `set 0, binding 1`：粒子 storage buffer
-  - `set 0, binding 2`：可选 flipbook `sampler2D`；无纹理发射器绑定 1x1 白图
-  - `set 0, binding 3`：只读 `SortedPairs`；`xy = (viewDepth, originalParticleIndex)`
+  - graphics `set 0, binding 2`：可选 flipbook `sampler2D`；无纹理发射器绑定 1x1 白图
+  - graphics `set 0, binding 3`：只读 `SortedPairs`；`xy = (viewDepth, originalParticleIndex)`
+  - graphics `set 0, binding 4`：紧凑 `aliveIndices`，未排序路径使用
+  - graphics `set 0, binding 5`：GPU overdraw 片元计数
+  - compute `set 0, binding 2/3/4/5` 分别是 alive indices、事件计数、事件记录与 SDF
 - graphics 额外绑定 `set 3, binding 0`：`sceneDepth` 只读输入；该描述符集由 RenderGraph 的
   pass input 计划创建，`ParticleRenderer` 只在管线反射使用 set 3 时绑定。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
   `particle/particleMesh`；三者各有 additive 与 alpha 两条 blend pipeline，按 PS 的
   `renderMode` 与 `blend` 选择。mesh pipeline 使用 `Vertex` vertex input 合同并执行
-  `drawIndexed`。
+  `drawIndexedIndirect`。
 - 排序使用 `particle/particleSortInit` 与 `particle/particleSort` 两条 compute pipeline：
   init 把每个粒子写成 `vec4(viewDepth, index, 0, 0)`，然后执行标准 bitonic 网络。
   排序容量是 `maxParticles` 向上取 2 的幂、最低 256、最高 4096；关闭排序时仍分配 pair 表，
@@ -181,6 +187,7 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
 - `shape` 为 `x = shapeRadius`、`y = burst`、`z = localSpace enabled`、`w = 0`。
 - `ParticleFrame` 末尾的 `screenParams` 紧跟在 `sortPass` 之后：`x = viewportHeightPixels`，
   `y = maxScreenSize`，`z = 作者 spawnRate`（prewarm 池填充用），`w = 0`。
+  全局排序路径把 `w` 作为 8 槽纹理数组的索引；其它路径保持 0。
   C++ 与 GLSL 的 std140 字段顺序必须保持一致。
 - `screenParams` 之后依次是 `flipbookFrameDurations[64]`（每 `vec4` 打包 4 帧相对权重）、
   `flipbookFramePivots[128]`（每 `vec4` 打包 2 帧的 `(u0,v0,u1,v1)`，覆盖 256 帧）与 `flipbookParams3`
@@ -220,15 +227,20 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
   再交给线性过滤，避免帧间渗色；V 翻转保持不变。单帧纹理维持原有 mipmap 行为。
 - 每个 emitter 持有一份 host-visible indirect 参数缓冲：billboard/ribbon 使用
-  `drawIndirect`，mesh 使用 `drawIndexedIndirect`。当前参数在 emitter 创建时由 CPU 写入固定
-  顶点/索引数与实例数；尚未实现 GPU culling、indirect count 或 GPU 侧改写，但录制路径已不再
-  内联具体计数。
+  `drawIndirect`，mesh 使用 `drawIndexedIndirect`。CPU 只写固定顶点/索引步长与容量上界；
+  simulate 原子累加 alive，`particleFinalizeCount.comp` 每帧把 alive 写回
+  `instanceCount`。billboard/ribbon 使用“每实例固定顶点数 + 存活实例数”，vertex shader
+  通过 `gl_InstanceIndex` 取紧凑 `aliveIndices`；未使用
+  `VK_KHR_draw_indirect_count`，也不做 GPU 侧多命令重写。
 
 ## 资源生命周期与图身份
 
 - 每个 `EmitterResources` 由 `shared_ptr` 整体持有；发射器删除、池大小变化或排序开关变化时，
   活跃表把同一份所有权交给 `ResourceRetireQueue`，记录最近一次已提交 epoch。GPU 对应 fence
   完成后才析构 descriptor pool、粒子/pair/UBO buffer 与纹理，不能在帧仍在飞时逐字段释放。
+- 粒子池是跨帧连续状态，不能复制成 per-image 双份；`RenderSystem` 在存在 emitter 时等待
+  上一提交的 frame fence，再录制本帧模拟，因此粒子/全局 gather 缓冲不会与上一在飞帧交叠。
+  无粒子场景不增加该等待。
 - 粒子渲染器的图身份不只是 `ownerGeneration`：resize 会刻意写回旧 generation，因此
   `ParticleRenderIdentity` 同时比较 particle pass 的 `vk::RenderPass` 句柄、swapchain image
   数量、pass 宽高与管线契约。任一变化都会重建 particle pipeline 与每 image UBO 数组。
@@ -296,8 +308,8 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   世界中心计算深度。
 - 发射器模型仍是 `sceneObjectModel * translation(emitter.localPosition)`；`localSpace`
   只改变粒子状态所在的空间，不改变发射器摆放。
-- v1 限制：`localSpace=true` 且 `collision.type != "none"` 在加载校验阶段直接拒绝。
-  世界空间平面/盒体/胶囊碰撞不能与局部模拟组合，错误会说明该组合不受支持。
+- `localSpace=true` 可与平面/盒体/胶囊/SDF 碰撞组合；碰撞体按发射器局部空间解释，
+  与局部粒子坐标同一空间。mesh 仍拒绝 `localSpace=true`。
 
 ### fixedBounds
 
@@ -547,14 +559,15 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 深度相同时按稳定身份 key（`sceneName|assetPath|emitterName`）字典序升序排序，不使用
 `unordered_map` 的迭代顺序参与 tie-break。
 
-这个发射器级排序是当前不依赖 batching/indirect draw 的 v1：alpha 发射器之间按包围球远→近，
-每个 alpha 发射器内部仍可选逐粒子 bitonic 排序。additive 发射器同样参与绘制顺序，但加法混合
-本身与顺序无关。逐粒子级别的跨发射器全局排序不在本轮范围；发射器集合增删导致本帧排序表
-短暂失配时，未进入排序表的池按原 map 顺序补画。
+发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard、总容量 ≤ 8192 且唯一纹理 ≤ 8
+时，所有参与发射器 gather 到一个全局记录池，做一次全局逐粒子 bitonic 排序后
+`drawIndirect`；additive/ribbon/mesh 或超限场景保留逐发射器路径。全局路径与未参与发射器
+之间仍是发射器级先后近似；发射器集合增删导致排序表短暂失配时，未进入排序表的池按原
+map 顺序补画。
 
-可见性剔除在排序之前完成，但不会改写排序公式：`RecordSimulation` 仍为发射器集合计算
-远→近顺序，`RecordGraphics` 只跳过 `culled` 发射器。剔除与排序都发生在模拟之后、图形绘制
-之前；本轮没有 batching 或 indirect draw。
+可见性剔除在排序之前完成，但不会改写排序公式：`RecordSimulation` 仍为回退路径计算
+远→近顺序，`RecordGraphics` 只跳过 `culled` 发射器。逐发射器与全局路径都使用
+GPU 写回 instanceCount 的 indirect draw。
 
 ## RenderGraph 位置
 
@@ -896,7 +909,7 @@ alpha *= mix(1.0, 1.0 - tailT, ribbonFade)
 
 ```text
 particleIndex = sortParticles ? sortedPairs.pairs[gl_InstanceIndex].y
-                              : gl_InstanceIndex
+                              : aliveIndices.indices[gl_InstanceIndex]
 center        = positionAge.xyz          // 非 localSpace 已保存世界坐标
 local         = vertex.position * mesh.scale
 world         = center + rotation * basis * local
@@ -917,7 +930,7 @@ gl_Position   = viewProjection * vec4(world, 1)
 系统、不采样粒子纹理。
 
 每个实例固定索引数 `meshIndexCount`，draw call 为
-`drawIndexed(meshIndexCount, maxParticles)`。GPU 池里死亡粒子在该实例的所有顶点上输出
+`drawIndexedIndirect`，GPU finalize 把实例数写为 alive。GPU 池里死亡粒子在该实例的所有顶点上输出
 clip-space `z=2,w=1`，直接裁剪。统计的 `estimatedDrawnVertices` 对 mesh 使用
 `meshIndexCount * maxParticles`。
 
@@ -1044,20 +1057,34 @@ ribbon 为 `maxParticles * ribbonSegments * 6`；
 - `sortedEmitters`：可见且 `sortParticles=true` 的发射器数量。
 - `sortDispatchCount`：这些发射器实际录制的 bitonic pass 总数，
   `Σ levels*(levels+1)/2`，`levels=log2(sortCapacity)`；`sortCapacityTotal`
-  是它们排序容量的总和。被剔除的发射器不推进、不排序，因此不计入。
+  是它们排序容量的总和。全局 alpha 池只计一次全局网络容量/pass 数，不再按成员 emitter
+  重复累加。被剔除的发射器不推进、不排序，因此不计入。
 - `estimatedDrawCalls` / `estimatedDrawnVertices`：`RecordGraphics` 中真正执行
-  `draw`/`drawIndexed` 的 emitter 数量与顶点数；billboard 为 `maxParticles*6`，
+  `drawIndirect`/`drawIndexedIndirect` 的 emitter 数量与顶点数；billboard 为 `maxParticles*6`，
   ribbon 为 `maxParticles*ribbonSegments*6`，mesh 为
   `meshIndexCount*maxParticles`。culled、descriptor 不足、mesh 回退或 pipeline 为空的
-  早退按实际路径统计。
+  早退按实际路径统计。全局池的顶点数是容量上界（`capacity*6`），不是 GPU 实际 alive
+  数；逐 emitter 路径同样按容量上界估算。
 - `frameIndex`：`RecordSimulation` 调用次数，从 1 开始；空场景也递增。
   `elapsedSeconds` 跨帧累计非负模拟 `dt`（与模拟使用同一个 `[0, 0.1]` 夹取）。
 - `gpuTimingSupported` / `gpuMilliseconds` / `gpuAverageMilliseconds` /
   `gpuMaxMilliseconds` / `gpuSampleCount`：particle graphics pass 的 GPU
   timestamp 统计，见下节。
+- `emitterGpu`：逐 emitter 的 GPU 图形区间快照；全局排序池使用
+  `key="__global__"`。每项含 `supported/milliseconds/averageMilliseconds/
+  maxMilliseconds/sampleCount`，按 key 排序以保证 JSON 稳定。
 
-统计**不含** GPU overdraw、显存带宽或实际 alive 粒子数；alive 数量与逐粒子
-明细走 `particledump`。culling 期间的发射器保持冻结，不产生排序 dispatch 或绘制。
+`particlestats` 本身不等待设备空闲，因此仍不包含 alive 回读、GPU overdraw
+或显存带宽。alive 由 C# 订阅驱动的 `particletelemetry` 回填；`particledump`
+输出每个非全局 emitter 的 `overdrawFragments`（通过 discard 的片元原子计数）和
+`estimatedParticleBufferReadBytes`（aliveCount × 80 字节的读取规模估算，
+不是硬件显存带宽计数器）。全局排序池的对应值在 dump 根字段
+`globalAliveParticles` / `globalOverdrawFragments` /
+`globalEstimatedParticleBufferReadBytes`；其绘制耗时由 `__global__` GPU 计时覆盖。
+overdraw 计数要求逻辑设备启用 `fragmentStoresAndAtomics`；缺失时设备初始化直接报错，
+不会静默退化成无效 shader。
+culling 期间的发射器保持冻结，不产生排序
+dispatch 或绘制。
 
 ### GPU pass 计时
 
@@ -1076,7 +1103,9 @@ ribbon 为 `maxParticles * ribbonSegments * 6`；
   `GetTimestampPeriodNanoseconds()<=0`）时返回 `gpuTimingSupported=false`，
   数值保持 0，不写 query，不影响渲染。image index 越界、query pool / reset /
   writeTimestamp / 回读抛异常时也只禁用计时并输出一条 warning，不向帧循环抛异常。
-- 仍**没有** GPU overdraw、显存带宽或逐 emitter GPU 拆分；这些需要独立统计管线。
+- 逐 emitter query 与全局 pass query 独立；全局 alpha billboard 的粒子不再重复计入
+  逐 emitter 计时，而由 `__global__` 项表示。Vulkan 没有可直接读取的硬件显存带宽计数器；
+  dump 中的 `estimatedParticleBufferReadBytes` 明确是规模估算，不是实测值。
 
 ## 当前边界
 
@@ -1084,7 +1113,10 @@ ribbon 为 `maxParticles * ribbonSegments * 6`；
 undo/redo）、draft-live 预览、曲线/Flipbook 结构化编辑、逐帧时长/轴心/UV rect/旋转、平面/盒体
 碰撞、`localSpace`、`fixedBounds`、`burstInterval` 周期重触发、多级 LOD、发射器级跨发射器
 透明排序、逐粒子 billboard 旋转、ribbon 条带（3 段历史）、静态 mesh 实例化、纹理热切换、
-shader reload 提交后粒子管线重建。
+shader reload 提交后粒子管线重建、v2 模块栈与运行时用户参数、GPU 存活计数/indirect
+instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF 碰撞、发射器级运行时
+spawn/destroy/restart/enable、C# 事件与遥测、固定步长/确定性随机、mesh 材质数值子集与
+CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器 GPU 计时。
 
 仍未完成：
 
@@ -1092,26 +1124,46 @@ shader reload 提交后粒子管线重建。
 - flipbook 已有逐帧时长表、逐帧静态轴心、逐帧 UV rect 与逐帧旋转，但没有轴心/UV/旋转
   动画时间线；图集最大 16×16（256 帧），帧区间仍由 `startFrame`/`endFrame` 指定。
   UV rect 与旋转表受 64 帧 GPU 表限制，超过 64 帧的区间不能作者化这两张表。
-- 软粒子只读取单采样 `sceneDepth`；当前只有发射器级跨发射器排序与可选的单发射器内部逐粒子
-  排序，没有逐粒子级别的跨发射器全局排序，也没有事件模块或 Niagara 模块化 stack。
+- 软粒子只读取单采样 `sceneDepth`。alpha billboard 在
+  `renderMode=billboard && sortParticles && !additive` 且总容量 ≤ 8192、唯一纹理 ≤ 8 时走
+  全局 gather + 全局 bitonic + 单次 `drawIndirect`（`particleGlobalGather.comp` /
+  `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；ribbon/mesh 与超限场景回退到
+  逐发射器排序。全局路径使用固定索引分支选择 8 槽纹理，无纹理时保留程序化 FBM 形状；
+  开启 `billboardShadows` 的发射器留在逐发射器路径以保留 CSM。全局路径与其它未参与
+  发射器之间仍是发射器级先后近似。
+  事件 v1 已支持 spawn/death/collision 三类有界 GPU 记录（4096 条/发射器）与
+  `ParticleRenderer::DrainParticleEvents` / `RenderSystem::DrainParticleEvents` 回读；
+  C# 通过 `ParticleSystem.Subscribe` 的 owner 级兴趣触发最多 10 Hz 的回读，
+  EngineLoop 把事件写入 World 队列并在下一帧脚本 tick 交给 C#。该回读是无读游标的
+  最新帧快照，轮询之间可能截断/覆盖事件；没有 Niagara Data Channels、粒子级
+  spawn/destroy 或精确逐事件时间戳（桥使用批次模拟时间）。
   调试回读、CPU 帧级预算统计与 particle graphics pass 的 GPU timestamp 计时已支持
-  （`particlestats`/`particledump` 的 `gpuMs` 系列），但没有 GPU 粒子回写、
-  overdraw 或显存带宽统计。World 级实例 `spawn/destroy/restart` 已支持，但发射器级运行时增删与粒子级
-  spawn/destroy 仍没有。LOD 最多 4 档且只缩放连续发射预算，
+  （`particlestats`/`particledump` 的 `gpuMs` 与逐 emitter 项）；非全局 emitter
+  的 GPU overdraw 通过 `particledump.overdrawFragments` 提供，带宽仅有读取规模估算。
+  World 级和发射器级运行时增删都已支持，粒子级 spawn/destroy 仍没有。LOD 最多 4 档且只缩放连续发射预算，
   没有距离淡入淡出或渲染 LOD。
-- 碰撞 v1 支持无限平面、世界轴对齐盒体与胶囊；`collision.ccd` 提供最多 8 步子步，
-  没有三角网格、碰撞事件或碰撞回调；prewarm 不做子步。
-- 4096 容量需要 78 个 bitonic pass；每个 pass 都会写一次 `sortPass` UBO 并插入
-  compute→compute / transfer→compute barrier。当前按正确性优先，未做多 pass 合批或间接 dispatch。
+- 碰撞支持无限平面、轴对齐盒体、胶囊与有限体素 SDF（`collision.type=sdf` +
+  `collision.sdf.path`，`particleSdf` 资产，负值表示实体内部，三线性采样 + 中心差分梯度）。
+  `localSpace=true` 时碰撞体按发射器局部空间解释，允许与局部粒子坐标组合。
+  `collision.ccd` 提供最多 8 步子步；碰撞事件走同一 GPU 事件路径。没有三角网格碰撞、
+  碰撞回调或 `prewarm` 子步。
+- 排序仍是 bitonic；全局路径上限 8192，逐发射器路径上限 4096（4096 需要 78 个 pass）。
+  每个 pass 都会写一次 `sortPass` UBO 并插入 compute→compute / transfer→compute barrier；
+  未做多 pass 合批或 GPU 可变 dispatch。
 - 发射器结构编辑支持复制新增、删除、上下移动与整体 undo/redo，但没有空白新建或重命名
   对话框；复制会连同 `position` 一起复制，偏移仍需手动修改。
-- 发射器级透明排序按近似包围球工作，逐 emitter 的逐粒子排序仍各自独立；合批、indirect
-  dispatch 尚未实现。
+- 模拟 compute 每帧原子写 `alive`、紧凑 `aliveIndices` 与事件计数，`particleFinalizeCount.comp`
+  把存活数写回 `drawIndirect` 的 `instanceCount`；图形阶段不再使用 CPU 容量/存活猜测。
+  未使用 `VK_KHR_draw_indirect_count`；CPU 仍提交容量上界的单条间接命令。
 - ribbon 只保留最近 3 帧历史，没有子步/弧长重采样、逐顶点宽度曲线、纹理平铺、
   per-particle rotation/pivot 或逐粒子跨发射器全局排序。首帧与 prewarm 之后历史点
   全等于当前位置，条带要经过若干帧才拉开；条带长度与形状直接依赖模拟帧率。
-- mesh v1 只支持静态 SM、全部 section 合并、顶点色与粒子颜色曲线相乘；没有材质实例、
-  纹理采样、法线光照、每 section 材质、LOD、蒙皮、localSpace 或 size 曲线。网格朝向
+- mesh 支持静态 SM、全部 section 合并、粒子颜色曲线与顶点色相乘；可选
+  `materialInstancePath`（MI_*.json）只读取 `u_baseColor/u_emissive/u_emissiveStrength/
+  u_roughness/u_metallic` 数值子集，缺失或解析失败回退内置默认值并只告警一次。
+  片元使用单方向光的 GGX + Fresnel + Smith 近似并采样 particle pass 的 CSM
+  `shadowMap`（set 3 binding 1）。没有完整 Material 图/纹理/宏、每 section 材质、LOD、
+  蒙皮、localSpace 或 size 曲线。网格朝向
   旋转只绕局部 Y 轴，mesh scale 不参与 `maxScreenSize` 的 billboard 钳制。导入失败
   静默回退 billboard 而不是显示错误几何。
 - `burstInterval > 0` 的周期重触发没有相位偏移、次数上限或单次 burst 计数；周期从
@@ -1121,8 +1173,10 @@ shader reload 提交后粒子管线重建。
   shader 源码重建，粒子年龄/排序结果/纹理缓存会重置。若新粒子 shader 编译失败，失败发生在
   渲染线程重建阶段，不能回滚到旧管线。
 - Content Browser 粒子缩略图使用 `SC_particle_preview.json` 与当前 PS 资产构建独立
-  预览 World，在缩略图会话内只推进一次 `1/60` 秒 prewarm simulation 后绘制 particle pass；
-  成图进入 GPU image token，不写磁盘缓存。离线渲染路径仍不渲染粒子。
+  预览 World，在缩略图会话内按 30 个有界固定步（默认 `1/60` 秒）推进 simulation 后
+  绘制 particle pass；成图进入 GPU image token，不写磁盘缓存。离线渲染路径在导出结果中
+  发布 CPU 粒子 overlay，支持 billboard/ribbon 的确定性固定步合成；mesh/SDF 纹理细节与
+  实时 Vulkan 路径不完全等价（见 rationale/particle-offline-rendering.md）。
 
 编辑器字段修改走标准 `particle.modify` 草稿命令，保存走 `particle.save`；
 `particle.get_document/get_capabilities/validate/revert/reload/close/undo/redo` 与
@@ -1130,6 +1184,34 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
 脏文档以 `document_dirty` 拒绝；面板的“丢弃并关闭”先回退再关闭。值校验复用
 `ParticleAssetLoader::ParseJson`。粒子 undo/redo 使用与 Blueprint 相同的有界历史：
 32 步/16 MiB、保存保留、revert/reload 清空、新编辑清空 redo；历史只改内存草稿。
+
+## M3/M4/M5 核心字段
+
+- `materialInstancePath`（顶层或 `mesh.materialInstancePath`）：mesh 粒子的 MI_*.json
+  数值子集；路径必须是资源根相对的 `.json`。
+- `billboardShadows`：billboard/ribbon 的显式简化阴影开关；默认 unlit，开启后按
+  相机朝向法线采样 CSM 并调暗 50%。
+- `events.{spawn,death,collision}`：三类 GPU 事件记录开关。事件写入
+  `source/particles/particleEvents.h` 的 64-byte 记录；计数超过 4096 表示截断。
+- `randomSeed`（24 位参与 GPU hash）、`deterministicRandom`、`fixedTimeStep`
+  （0 关闭，范围 `[0,0.25]` 秒）：固定步长按帧累积，最多 8 步/帧；确定性随机用
+  `fixedStepIndex` 而不是 wall clock。
+- `collision.type="sdf"` + `collision.sdf.path`：有限体素 SDF（`type=particleSdf`，
+  分辨率每轴 `[2,64]`，`boundsMin/Max`，`distances` 为 x-fastest 的有符号距离数组）。
+- v2 `userParameters` 中以 `$Name` 形式出现的字符串会在模块展平后被替换为同名数值；
+  未知参数在加载期报错。
+- 运行时预算：`Synchronize` 用 compact emitter 的稳定 `name` 匹配
+  `ParticleSystemSnapshot::telemetry.emitters[]`，池容量取
+  `min(authored maxParticles, budgetedMaxParticles)`；0 容量不进入 `desired`，
+  已有池走正常 retire。预算容量变化会触发池重建，发射器 key 仍由
+  scene 名 + assetPath + emitter name 组成。
+- 单发射器重启：`telemetry.emitters[].restartEpoch` 变化只重置该池的
+  `elapsedSeconds/fixedStepAccumulator/fixedStepIndex/prewarm/needsClear/culled`，
+  不重建 GPU buffer/descriptor/texture。
+- 运行时用户参数：仅在 v2 且作者 `userParameters` 非空时冻结
+  `authoringJson`；渲染器按 system + 参数签名 + authoring 指针缓存重解析结果，
+  合并值写入根 `userParameters` 后重新 `ParseJson`。解析失败保留 last-good
+  并只告警一次，不向渲染线程抛异常，也不会每帧重解析未变化的参数。
 
 ## 验证入口
 
@@ -1171,3 +1253,13 @@ Particle 容器、逐 emitter 校验和 `emitters.<index>.<field>` 路径的回�
 胶囊碰撞与 CCD 子步的 CPU 镜像公式由 `particleCollisionTests.cpp` 覆盖；dump 的统计、明细截断与
 路径安全由 `particleDumpTests.cpp` 覆盖。真实 Vulkan
 资源的 retire timing 与 resize 需要运行时 validation 冒烟，不能由纯 CPU GTest 证明。
+
+- M3/M4/M5 新增回归：`particleMaterialSdfTests.cpp` 覆盖 MI 数值子集、
+  SDF 解析/三线性采样、全局排序顺序与容量/纹理槽位决策、固定步长累积；
+  `particleCollisionTests.cpp` 覆盖 SDF 推出与越界不修改；`particleAssetTests.cpp`
+  覆盖 v2 `$userParameter` 替换、events/确定性字段解析、localSpace+碰撞组合与
+  `materialInstancePath` 路径校验。
+- 全局排序运行时冒烟：`SC_particle_ue_demo` 应输出
+  `[Particles][Info] Global particle sort active: emitters=2 capacity=4096 textures=1`，
+  `particlestats` 的 `drawCalls` 从逐发射器绘制的 7 降为 6（5 个逐发射器 + 1 个全局），
+  且无 `VUID-` / `Validation Error`。

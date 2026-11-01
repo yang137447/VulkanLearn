@@ -1,0 +1,258 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+
+// 跨发射器透明排序 v1：每个 billboard alpha 发射器仍用自己的 UBO/粒子池，
+// 但把“渲染所需最终属性”聚集成一条全局记录。记录里的 center/basis/size/
+// rotation 都是世界空间，后续 global draw 不再需要逐发射器 UBO。
+struct GatheredBillboard
+{
+    vec4 centerSize;  // xyz world center, w half size (cm)
+    vec4 rightRot;    // xyz billboard right, w rotation radians
+    vec4 upSoft;      // xyz billboard up, w softness
+    vec4 color;       // rgba，已乘 opacity/colorTint
+    vec4 uvRect;      // u0,v0,u1,v1 sprite 子矩形
+    vec4 params;      // x=seed, y=time, z=columns, w=rows
+    vec4 frame;       // x=frameIndex, y=pivotX, z=pivotY, w=textureIndex
+    vec4 flags;       // x=hasUVs, y=hasTexture, z=softParticles, w=softDistance
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer ParticleBuffer
+{
+    Particle particles[];
+} particleReadBuffer;
+
+layout(std430, set = 0, binding = 2) writeonly buffer GatheredBuffer
+{
+    GatheredBillboard records[];
+} gatheredBuffer;
+
+// alive 字段是全局槽位计数器；其余字段留给 global event 扩展。
+layout(std430, set = 0, binding = 3) buffer GlobalCounter
+{
+    uint alive;
+    uint events;
+    uint spawn;
+    uint death;
+    uint collision;
+    uint capacity;
+} globalCounter;
+
+vec2 GatheredFlipbookPivot(int index)
+{
+    vec4 packed = frame.flipbookFramePivots[index / 2];
+    return (index & 1) == 0 ? packed.xy : packed.zw;
+}
+
+vec4 GatheredFlipbookUvRect(int index)
+{
+    return frame.flipbookFrameUVs[index];
+}
+
+float GatheredFlipbookRotation(int index)
+{
+    return frame.flipbookFrameRotations[index / 4][index % 4];
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint count = uint(particleReadBuffer.particles.length());
+    if (index >= count)
+    {
+        return;
+    }
+    Particle particle = particleReadBuffer.particles[index];
+    if (!IsParticleAlive(particle))
+    {
+        return;
+    }
+
+    float lifeT = clamp(
+        particle.positionAge.w / max(particle.velocityLife.w, 1.0e-4),
+        0.0,
+        1.0);
+    float size = EvaluateSizeCurve(lifeT);
+    vec3 particleCenter = particle.positionAge.xyz;
+    if (frame.shape.z > 0.5)
+    {
+        particleCenter =
+            (frame.localToWorld * vec4(particleCenter, 1.0)).xyz;
+    }
+
+    float centerDepth = -(frame.view * vec4(particleCenter, 1.0)).z;
+    float projScaleY =
+        1.0 / max(abs(frame.invProjection[1][1]), 1.0e-6);
+    float pixelHalfSize = abs(frame.invProjection[3][3]) < 1.0e-6
+        ? size * projScaleY * frame.screenParams.x * 0.5 /
+            max(centerDepth, 1.0e-3)
+        : size * projScaleY * frame.screenParams.x * 0.5;
+    if (frame.screenParams.y > 0.0 &&
+        pixelHalfSize > frame.screenParams.y)
+    {
+        size *= frame.screenParams.y / pixelHalfSize;
+    }
+
+    float seed = float(index) * 0.61803398875;
+    float columns = max(frame.curveParams.z, 1.0);
+    float rows = max(frame.curveParams.w, 1.0);
+    float startFrame = frame.flipbookParams.z;
+    float endFrame = frame.flipbookParams.w;
+    float frameCount = endFrame - startFrame + 1.0;
+    float localFrameIndex = 0.0;
+    if (frame.flipbookParams3.x > 0.5)
+    {
+        int durationCount = clamp(
+            int(frame.flipbookParams3.z + 0.5), 1, 256);
+        float totalWeight = 0.0;
+        for (int item = 0; item < durationCount; ++item)
+        {
+            totalWeight += FlipbookDuration(item);
+        }
+        float phaseWeight = 0.0;
+        if (frame.flipbookParams.x > 0.0)
+        {
+            float totalSeconds =
+                frameCount / frame.flipbookParams.x;
+            float cycle = frame.simulation.z / totalSeconds;
+            if (frame.flipbookParams2.y > 0.5)
+            {
+                cycle += fract(seed);
+            }
+            cycle = frame.flipbookParams2.x > 0.5
+                ? mod(cycle, 1.0)
+                : min(cycle, 1.0);
+            phaseWeight = cycle * totalWeight;
+        }
+        else
+        {
+            phaseWeight = lifeT * totalWeight;
+        }
+        int selected = durationCount - 1;
+        float accumulated = 0.0;
+        for (int item = 0; item < durationCount; ++item)
+        {
+            float duration = FlipbookDuration(item);
+            if (phaseWeight < accumulated + duration)
+            {
+                selected = item;
+                break;
+            }
+            accumulated += duration;
+        }
+        localFrameIndex = float(selected);
+    }
+    else if (frame.flipbookParams.x > 0.0)
+    {
+        float phase = frame.simulation.z * frame.flipbookParams.x;
+        if (frame.flipbookParams2.y > 0.5)
+        {
+            phase += fract(seed);
+        }
+        float stepped = floor(phase);
+        localFrameIndex = frame.flipbookParams2.x > 0.5
+            ? mod(stepped, frameCount)
+            : min(stepped, frameCount - 1.0);
+    }
+    else
+    {
+        localFrameIndex = min(
+            floor(lifeT * frameCount), frameCount - 1.0);
+    }
+    float frameIndex = clamp(
+        localFrameIndex + startFrame, startFrame, endFrame);
+
+    float frameRotation = 0.0;
+    if (frame.flipbookParams4.x > 0.5)
+    {
+        int rotationIndex = clamp(
+            int(floor(localFrameIndex)), 0, int(frameCount) - 1);
+        frameRotation = GatheredFlipbookRotation(rotationIndex);
+    }
+    float rotationDegrees =
+        frame.rotationParams.x +
+        frame.rotationParams.y * particle.positionAge.w +
+        frameRotation;
+    if (frame.rotationParams.z > 0.5)
+    {
+        rotationDegrees += fract(seed) * 360.0;
+    }
+
+    vec2 pivotOffset = vec2(0.0);
+    if (frame.flipbookParams3.y > 0.5)
+    {
+        int pivotIndex = clamp(
+            int(floor(localFrameIndex)), 0, int(frameCount) - 1);
+        pivotOffset =
+            (vec2(0.5) - GatheredFlipbookPivot(pivotIndex)) * 2.0;
+    }
+
+    vec3 billboardRight = frame.cameraRight.xyz;
+    vec3 billboardUp = frame.cameraUp.xyz;
+    if (frame.billboardParams.x > 0.5)
+    {
+        vec3 velocity = particle.velocityLife.xyz;
+        if (frame.shape.z > 0.5)
+        {
+            velocity = mat3(frame.localToWorld) * velocity;
+        }
+        float velocityLengthSquared = dot(velocity, velocity);
+        if (velocityLengthSquared > 1.0e-6)
+        {
+            vec3 forward = normalize(velocity);
+            vec3 candidateRight =
+                cross(vec3(0.0, 1.0, 0.0), forward);
+            if (dot(candidateRight, candidateRight) > 1.0e-6)
+            {
+                candidateRight = normalize(candidateRight);
+                vec3 candidateUp = cross(forward, candidateRight);
+                if (dot(candidateUp, candidateUp) > 1.0e-6)
+                {
+                    billboardRight = candidateRight;
+                    billboardUp = normalize(candidateUp);
+                }
+            }
+        }
+    }
+
+    vec4 spriteRect = vec4(0.0, 0.0, 1.0, 1.0);
+    if (frame.flipbookParams3.w > 0.5)
+    {
+        int uvIndex = clamp(
+            int(floor(localFrameIndex)), 0, int(frameCount) - 1);
+        spriteRect = GatheredFlipbookUvRect(uvIndex);
+    }
+
+    vec4 color = EvaluateColorCurve(lifeT);
+    color.a *= frame.render.w;
+    color *= frame.colorTint;
+
+    uint slot = atomicAdd(globalCounter.alive, 1u);
+    if (slot >= uint(gatheredBuffer.records.length()))
+    {
+        return;
+    }
+    GatheredBillboard record;
+    record.centerSize = vec4(particleCenter, size);
+    record.rightRot = vec4(
+        billboardRight,
+        radians(rotationDegrees));
+    record.upSoft = vec4(billboardUp, frame.render.z);
+    record.color = color;
+    record.uvRect = spriteRect;
+    record.params = vec4(
+        seed, frame.simulation.z, columns, rows);
+    record.frame = vec4(
+        frameIndex,
+        pivotOffset.x,
+        pivotOffset.y,
+        frame.screenParams.w); // 全局纹理槽位（per-emitter 路径保留为 0）
+    record.flags = vec4(
+        frame.flipbookParams3.w > 0.5 ? 1.0 : 0.0,
+        frame.flipbookParams.y > 0.5 ? 1.0 : 0.0,
+        frame.softParams.y > 0.5 ? 1.0 : 0.0,
+        frame.softParams.x);
+    gatheredBuffer.records[slot] = record;
+}

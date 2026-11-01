@@ -17,6 +17,8 @@ public static partial class NativeBridge
         public object Value { get; } = value;
         public bool Cleanup { get; } = cleanup;
     }
+    private sealed record ParticleSubscription(
+        ulong Id, Blueprint Owner, string SystemId, Action<ParticleEvent> Callback);
 
     private sealed partial class GameplayScheduler(Context context)
     {
@@ -29,6 +31,10 @@ public static partial class NativeBridge
         private readonly HashSet<ulong> sentRays = [];
         private readonly Dictionary<Blueprint, Dictionary<string, ParticleSystem>> particles = [];
         private readonly List<ParticleMessage> particleMessages = [];
+        private readonly Dictionary<ulong, ParticleSubscription> particleSubscriptions = [];
+        // native 兴趣按 Blueprint owner 计数；每个 owner 只在首个订阅/最后
+        // 一个订阅移除时发命令，避免 A 的清理误删 B 的兴趣。
+        private readonly HashSet<string> particleEventInterestOwners = new(StringComparer.Ordinal);
         private readonly List<Action> undo = [];
         private bool releasing;
         public bool HasPendingEvents => events.Count != 0;
@@ -156,6 +162,20 @@ public static partial class NativeBridge
                 throw new ArgumentOutOfRangeException(nameof(color),
                     "Particle color tint requires finite RGB in [0, 16] and alpha in [0, 1].");
         }
+        private static void ValidateEmitterBudgetScale(float scale)
+        {
+            if (!float.IsFinite(scale) || scale < 0 || scale > 16)
+                throw new ArgumentOutOfRangeException(nameof(scale),
+                    "Particle emitter budget scale must be finite and in [0, 16].");
+        }
+        private static void ValidateUserParameter(string key, float? value)
+        {
+            if (string.IsNullOrEmpty(key) || key.Length > 64)
+                throw new ArgumentException("Particle user parameter key requires 1..64 characters.", nameof(key));
+            if (value is { } number && (!float.IsFinite(number) || Math.Abs(number) > 1.0e6f))
+                throw new ArgumentOutOfRangeException(nameof(value),
+                    "Particle user parameter value must be finite and in [-1e6, 1e6].");
+        }
         private static void ValidateEmitterIndex(int index)
         {
             if (index < 0 || index >= 16)
@@ -171,6 +191,26 @@ public static partial class NativeBridge
             particleMessages.Add(message);
             if (!cleanup) undo.Add(() => particleMessages.Remove(message));
             if (context.InstanceIds.TryGetValue(owner.Handle.Id, out var instance)) instance.Dirty = true;
+        }
+        private void QueueParticleEventInterest(Blueprint owner, bool enabled)
+        {
+            if (releasing) return;
+            bool wasPresent = particleEventInterestOwners.Contains(owner.Handle.Id);
+            bool changed = enabled
+                ? particleEventInterestOwners.Add(owner.Handle.Id)
+                : particleEventInterestOwners.Remove(owner.Handle.Id);
+            if (!changed) return;
+            QueueParticle(owner, new
+            {
+                op = "events",
+                owner = owner.Handle.Id,
+                enabled
+            }, cleanup: !enabled);
+            undo.Add(() =>
+            {
+                if (wasPresent) particleEventInterestOwners.Add(owner.Handle.Id);
+                else particleEventInterestOwners.Remove(owner.Handle.Id);
+            });
         }
         private ParticleSystem QueueParticleSpawn(Blueprint owner, string assetPath, Vector3 position,
             Vector3? requestedRotation, Vector3? requestedScale)
@@ -200,6 +240,7 @@ public static partial class NativeBridge
                 QueueParticle(owner, new { op = "destroy", owner = owner.Handle.Id, id = handle.Id });
                 var live = particles[owner];
                 live.Remove(handle.Id);
+                RemoveParticleSubscriptions(owner, handle.Id);
                 undo.Add(() => live.Add(handle.Id, liveParticle));
             };
             particle.VisibleRequest = (handle, visible) =>
@@ -231,6 +272,124 @@ public static partial class NativeBridge
             {
                 RequireParticle(owner, handle);
                 QueueParticle(owner, new { op = "reset", owner = owner.Handle.Id, id = handle.Id });
+            };
+            particle.TelemetryQuery = handle =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                return liveParticle.Telemetry;
+            };
+            particle.SpawnEmitterRequest = (handle, sourceIndex, name) =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                if (sourceIndex < 0 || sourceIndex >= 16)
+                    throw new ArgumentOutOfRangeException(nameof(sourceIndex));
+                if (name != null && (name.Length == 0 || name.Length > 128))
+                    throw new ArgumentException("Particle emitter name requires 1..128 characters.", nameof(name));
+                if (liveParticle.Emitters.Count >= 16)
+                    throw new InvalidOperationException("Particle emitter budget exceeded.");
+                ulong sequence = ++context.NextParticleEmitter;
+                string emitterId = name ?? $"~emitter.{sequence}";
+                if (liveParticle.Emitters.ContainsKey(emitterId))
+                    throw new ArgumentException("Particle emitter name already exists.", nameof(name));
+                var emitter = new ParticleEmitterHandle(context.Id, handle.Id, emitterId, uint.MaxValue);
+                QueueParticle(owner, new { op = "spawnEmitter", owner = owner.Handle.Id,
+                    id = handle.Id, source = sourceIndex, emitter = emitterId });
+                liveParticle.Emitters[emitterId] = emitter;
+                undo.Add(() => liveParticle.Emitters.Remove(emitterId));
+                return emitter;
+            };
+            particle.DestroyEmitterRequest = (handle, emitterId) =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                if (!liveParticle.Emitters.ContainsKey(emitterId))
+                    throw new InvalidOperationException("Stale or foreign particle emitter handle.");
+                QueueParticle(owner, new { op = "destroyEmitter", owner = owner.Handle.Id,
+                    id = handle.Id, emitter = emitterId });
+                var removed = liveParticle.Emitters[emitterId];
+                liveParticle.Emitters.Remove(emitterId);
+                undo.Add(() => liveParticle.Emitters[emitterId] = removed);
+            };
+            particle.RestartEmitterRequest = (handle, emitterId) =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                if (!liveParticle.Emitters.ContainsKey(emitterId))
+                    throw new InvalidOperationException("Stale or foreign particle emitter handle.");
+                QueueParticle(owner, new { op = "restartEmitter", owner = owner.Handle.Id,
+                    id = handle.Id, emitter = emitterId });
+            };
+            particle.NamedEmitterRequest = (handle, emitterId, enabled) =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                if (!liveParticle.Emitters.ContainsKey(emitterId))
+                    throw new InvalidOperationException("Stale or foreign particle emitter handle.");
+                QueueParticle(owner, new { op = "emitter", owner = owner.Handle.Id,
+                    id = handle.Id, emitter = emitterId, enabled });
+            };
+            particle.BudgetRequest = (handle, maxTotal, scale) =>
+            {
+                RequireParticle(owner, handle);
+                if (maxTotal > 1_000_000)
+                    throw new ArgumentOutOfRangeException(nameof(maxTotal));
+                ValidateEmitterBudgetScale(scale);
+                QueueParticle(owner, new { op = "budget", owner = owner.Handle.Id,
+                    id = handle.Id, maxTotal, emitterScale = scale });
+            };
+            particle.UserParameterRequest = (handle, key, value) =>
+            {
+                RequireParticle(owner, handle);
+                ValidateUserParameter(key, value);
+                if (value.HasValue)
+                    QueueParticle(owner, new { op = "userParam", owner = owner.Handle.Id,
+                        id = handle.Id, key, value = value.Value });
+                else
+                    QueueParticle(owner, new { op = "clearUserParam", owner = owner.Handle.Id,
+                        id = handle.Id, key });
+            };
+            particle.AttachRequest = (handle, kind, targetName, component,
+                localPosition, localRotation, localScale) =>
+            {
+                RequireParticle(owner, handle);
+                if (kind != "mesh" && kind != "component")
+                    throw new ArgumentException("Particle attachment kind must be mesh or component.", nameof(kind));
+                if (string.IsNullOrEmpty(targetName) || targetName.Length > 128)
+                    throw new ArgumentException("Particle attachment target requires 1..128 characters.", nameof(targetName));
+                if (component != null && component.Length > 64)
+                    throw new ArgumentException("Particle attachment component exceeds 64 characters.", nameof(component));
+                Vector3 position = localPosition ?? Vector3.Zero;
+                Vector3 rotation = localRotation ?? Vector3.Zero;
+                Vector3 scale = localScale ?? Vector3.One;
+                ValidateTransform(new() { Position = position, Rotation = rotation, Scale = scale });
+                QueueParticle(owner, new { op = "attach", owner = owner.Handle.Id,
+                    id = handle.Id, targetKind = kind, targetName, component,
+                    position = Values(position), rotation = Values(rotation), scale = Values(scale) });
+            };
+            particle.DetachRequest = handle =>
+            {
+                RequireParticle(owner, handle);
+                QueueParticle(owner, new { op = "detach", owner = owner.Handle.Id, id = handle.Id });
+            };
+            particle.SubscribeRequest = (handle, callback) =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                ArgumentNullException.ThrowIfNull(callback);
+                if (particleSubscriptions.Count >= 256)
+                    throw new InvalidOperationException("Particle subscription budget exceeded.");
+                bool ownerHadSubscriptions = particleSubscriptions.Values
+                    .Any(s => s.Owner == owner);
+                ulong id = ++next;
+                var subscription = new ParticleSubscription(id, owner, liveParticle.Id, callback);
+                particleSubscriptions.Add(id, subscription);
+                if (!ownerHadSubscriptions) QueueParticleEventInterest(owner, true);
+                undo.Add(() => particleSubscriptions.Remove(id));
+                return new ParticleEventSubscription(() =>
+                {
+                    if (particleSubscriptions.Remove(id))
+                    {
+                        undo.Add(() => particleSubscriptions.Add(id, subscription));
+                        if (!particleSubscriptions.Values.Any(s => s.Owner == owner))
+                            QueueParticleEventInterest(owner, false);
+                    }
+                });
             };
         }
         private ParticleSystem RequireParticle(Blueprint owner, ParticleHandle handle)
@@ -274,9 +433,102 @@ public static partial class NativeBridge
             particleMessages.RemoveAll(m => m.Owner == owner);
             return values;
         }
+        public void ApplyParticleTelemetry(JsonElement telemetry)
+        {
+            if (telemetry.ValueKind != JsonValueKind.Array) return;
+            foreach (var item in telemetry.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    !item.TryGetProperty("name", out var name) ||
+                    name.ValueKind != JsonValueKind.String) continue;
+                string systemId = name.GetString()!;
+                var emitterValues = new List<ParticleEmitterTelemetry>();
+                if (item.TryGetProperty("emitters", out var emitters) &&
+                    emitters.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var emitter in emitters.EnumerateArray())
+                    {
+                        emitterValues.Add(new(
+                            emitter.TryGetProperty("index", out var index) ? index.GetUInt32() : 0,
+                            emitter.TryGetProperty("name", out var emitterName) ? emitterName.GetString()! : "",
+                            emitter.TryGetProperty("active", out var active) && active.GetBoolean(),
+                            emitter.TryGetProperty("enabled", out var enabled) && enabled.GetBoolean(),
+                            emitter.TryGetProperty("restartEpoch", out var restartEpoch) ? restartEpoch.GetUInt32() : 0,
+                            emitter.TryGetProperty("maxParticles", out var max) ? max.GetUInt32() : 0,
+                            emitter.TryGetProperty("budgetedMaxParticles", out var budgetedMax) ? budgetedMax.GetUInt32() : 0,
+                            emitter.TryGetProperty("aliveParticles", out var emitterAlive) ? emitterAlive.GetUInt32() : 0,
+                            emitter.TryGetProperty("aliveAvailable", out var emitterAliveAvailable) && emitterAliveAvailable.GetBoolean()));
+                    }
+                }
+                var snapshot = new ParticleTelemetry(
+                    item.TryGetProperty("emitterCount", out var count) ? count.GetUInt32() : 0,
+                    item.TryGetProperty("activeEmitterCount", out var activeCount) ? activeCount.GetUInt32() : 0,
+                    item.TryGetProperty("enabledEmitterCount", out var enabledCount) ? enabledCount.GetUInt32() : 0,
+                    item.TryGetProperty("visibleEmitterCount", out var visibleCount) ? visibleCount.GetUInt32() : 0,
+                    item.TryGetProperty("authoredCapacity", out var authored) ? authored.GetUInt32() : 0,
+                    item.TryGetProperty("budgetedCapacity", out var budgeted) ? budgeted.GetUInt32() : 0,
+                    item.TryGetProperty("aliveAvailable", out var systemAliveAvailable) && systemAliveAvailable.GetBoolean(),
+                    item.TryGetProperty("aliveParticles", out var systemAlive) ? systemAlive.GetUInt32() : 0,
+                    item.TryGetProperty("lastFrameBudget", out var frameBudget) ? frameBudget.GetUInt32() : 0,
+                    emitterValues.ToArray());
+                foreach (var table in particles.Values)
+                {
+                    if (!table.TryGetValue(systemId, out var particle)) continue;
+                    particle.ApplyTelemetry(snapshot);
+                    foreach (var emitter in emitterValues)
+                        if (particle.Emitters.TryGetValue(emitter.Name, out var handle) &&
+                            handle.StableIndex != emitter.StableIndex)
+                            particle.Emitters[emitter.Name] = handle with { StableIndex = emitter.StableIndex };
+                }
+            }
+        }
+        public void ApplyParticleEvents(JsonElement events)
+        {
+            if (events.ValueKind != JsonValueKind.Array) return;
+            foreach (var item in events.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                string systemId = item.TryGetProperty("system", out var system) ? system.GetString()! : "";
+                string emitterId = item.TryGetProperty("emitter", out var emitter) ? emitter.GetString()! : "";
+                string kindText = item.TryGetProperty("kind", out var kind) ? kind.GetString()! : "";
+                if (!Enum.TryParse<ParticleEventKind>(kindText, true, out var kindValue)) continue;
+                float time = item.TryGetProperty("time", out var timeValue) ? timeValue.GetSingle() : 0;
+                Vector3 position = ReadParticleEventVector(item, "position");
+                Vector3 normal = ReadParticleEventVector(item, "normal");
+                var particleEvent = new ParticleEvent(
+                    context.Id, systemId, emitterId, kindValue, time, position, normal);
+                foreach (var subscription in particleSubscriptions.Values
+                    .Where(s => s.SystemId == systemId).OrderBy(s => s.Id).ToArray())
+                {
+                    if (!particleSubscriptions.ContainsKey(subscription.Id) ||
+                        !CanRun(subscription.Owner)) continue;
+                    Invoke(subscription.Owner, "ParticleEvent",
+                        () => subscription.Callback(particleEvent));
+                }
+            }
+        }
+        private static Vector3 ReadParticleEventVector(JsonElement item, string field)
+        {
+            if (!item.TryGetProperty(field, out var value) ||
+                value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 3)
+                return Vector3.Zero;
+            return new(value[0].GetSingle(), value[1].GetSingle(), value[2].GetSingle());
+        }
+        private void RemoveParticleSubscriptions(Blueprint owner, string? systemId = null)
+        {
+            bool removed = false;
+            foreach (var id in particleSubscriptions.Values
+                .Where(s => s.Owner == owner &&
+                    (systemId == null || s.SystemId == systemId))
+                .Select(s => s.Id).ToArray())
+                removed = particleSubscriptions.Remove(id) || removed;
+            if (removed && !particleSubscriptions.Values.Any(s => s.Owner == owner))
+                QueueParticleEventInterest(owner, false);
+        }
         private void RemoveParticles(Blueprint owner)
         {
             if (!particles.Remove(owner, out var live)) return;
+            RemoveParticleSubscriptions(owner);
             // EndPlay 必须先补发 destroy，避免原生 World 遗漏仍在 live 表的实例；
             // 已经排队的用户命令保留，由本帧 Export 继续交付。
             if (releasing) return;
@@ -285,6 +537,33 @@ public static partial class NativeBridge
         }
         public string[] ParticleIds(Blueprint owner) =>
             particles.TryGetValue(owner, out var live) ? live.Keys.OrderBy(id => id, StringComparer.Ordinal).ToArray() : [];
+        public Dictionary<string, string[]> ParticleEmitterIds(Blueprint owner)
+        {
+            var result = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            if (!particles.TryGetValue(owner, out var live)) return result;
+            foreach (var particle in live.Values)
+                result[particle.Id] = particle.Emitters.Keys
+                    .OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            return result;
+        }
+        public void RestoreParticleEmitters(Blueprint owner,
+            IReadOnlyDictionary<string, string[]> emitters)
+        {
+            if (!particles.TryGetValue(owner, out var live)) return;
+            foreach (var entry in emitters)
+            {
+                if (!live.TryGetValue(entry.Key, out var particle))
+                    throw new InvalidOperationException("Migration particle emitter owner is missing.");
+                foreach (var emitterId in entry.Value)
+                {
+                    if (string.IsNullOrEmpty(emitterId) ||
+                        particle.Emitters.ContainsKey(emitterId))
+                        throw new InvalidOperationException("Migration particle emitter identity is invalid or duplicated.");
+                    particle.Emitters.Add(emitterId,
+                        new ParticleEmitterHandle(context.Id, particle.Id, emitterId, uint.MaxValue));
+                }
+            }
+        }
         public void RestoreParticles(Blueprint owner, IEnumerable<string> ids)
         {
             var live = ParticleTable(owner);
@@ -417,6 +696,7 @@ public static partial class NativeBridge
             debugMessages.Clear();
             debugPublishers.Clear();
             particles.Clear(); particleMessages.Clear();
+            particleEventInterestOwners.Clear();
             timers.Clear(); subscriptions.Clear(); events.Clear(); rays.Clear(); sentRays.Clear(); undo.Clear(); hud.Clear();
         }
     }

@@ -578,3 +578,121 @@ TEST(ParticleModuleEdit, SetFieldWritesLifetimeScaleKeysIntoModule)
         Module(emitter, "update.lifetime").at("fields")
             .contains("lifetimeScaleKeys"));
 }
+
+TEST(ParticleModuleEdit, NewParticleFieldsRouteToValidRuntimeModules)
+{
+    EXPECT_EQ(ParticleModuleTypeForField("events"), "events");
+    EXPECT_EQ(ParticleModuleTypeForField("events.spawn"), "events");
+    EXPECT_EQ(ParticleModuleTypeForField("events.death"), "events");
+    EXPECT_EQ(ParticleModuleTypeForField("events.collision"), "events");
+    ASSERT_NE(FindParticleModuleSpec("events"), nullptr);
+    EXPECT_EQ(FindParticleModuleSpec("events")->label, "Particle Events");
+
+    // 运行时只接受 emitter 模块；不能发明 loader 会拒绝的 determinism 模块。
+    EXPECT_EQ(ParticleModuleTypeForField("randomSeed"), "emitter");
+    EXPECT_EQ(ParticleModuleTypeForField("deterministicRandom"), "emitter");
+    EXPECT_EQ(ParticleModuleTypeForField("fixedTimeStep"), "emitter");
+    EXPECT_EQ(FindParticleModuleSpec("determinism"), nullptr);
+
+    EXPECT_EQ(ParticleModuleTypeForField("materialInstancePath"),
+        "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("mesh.materialInstancePath"),
+        "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("billboardShadows"), "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("collision.sdf.path"),
+        "collision.analytic");
+    // userParameters 是 PS 根字段，不属于任何 emitter 模块。
+    EXPECT_EQ(ParticleModuleTypeForField("userParameters"),
+        std::string());
+}
+
+TEST(ParticleModuleEdit, NewFieldsMigrateAndFlattenThroughValidModules)
+{
+    Json emitter = FlatEmitter();
+    emitter["events"] = Json{
+        {"spawn", true},
+        {"death", true},
+        {"collision", false}};
+    emitter["randomSeed"] = 11;
+    emitter["deterministicRandom"] = true;
+    emitter["fixedTimeStep"] = 0.02;
+    emitter["billboardShadows"] = true;
+    emitter["mesh"] = Json{
+        {"path", "Meshes/SM_test.json"},
+        {"materialInstancePath", "Materials/MI_test.json"}};
+
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+    EXPECT_FALSE(emitter.contains("events"));
+    EXPECT_FALSE(emitter.contains("randomSeed"));
+    EXPECT_FALSE(emitter.contains("deterministicRandom"));
+    EXPECT_FALSE(emitter.contains("fixedTimeStep"));
+    EXPECT_FALSE(emitter.contains("billboardShadows"));
+    EXPECT_FALSE(emitter.contains("mesh"));
+
+    EXPECT_EQ(Module(emitter, "events").at("fields").at("events").at(
+        "spawn"), true);
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at("randomSeed"),
+        11);
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at(
+        "deterministicRandom"), true);
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at("fixedTimeStep"),
+        0.02);
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at(
+        "billboardShadows"), true);
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at("mesh").at(
+        "materialInstancePath"), "Materials/MI_test.json");
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("events").at("spawn"), true);
+    EXPECT_EQ(flattened.at("events").at("collision"), false);
+    EXPECT_EQ(flattened.at("randomSeed"), 11);
+    EXPECT_EQ(flattened.at("deterministicRandom"), true);
+    EXPECT_EQ(flattened.at("fixedTimeStep"), 0.02);
+    EXPECT_EQ(flattened.at("billboardShadows"), true);
+    EXPECT_EQ(flattened.at("mesh").at("materialInstancePath"),
+        "Materials/MI_test.json");
+}
+
+TEST(ParticleModuleEdit, SetFieldCreatesEventsDeterminismAndRendererRows)
+{
+    Json emitter = Json{{"name", "e"}};
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "events.spawn", Json(true), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "events.collision", Json(true), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "randomSeed", Json(7), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "deterministicRandom", Json(true), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "fixedTimeStep", Json(0.02), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "billboardShadows", Json(true), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "mesh.materialInstancePath",
+        Json("Materials/MI_x.json"), false));
+
+    EXPECT_EQ(Module(emitter, "events").at("fields").at("events").at(
+        "spawn"), true);
+    EXPECT_EQ(Module(emitter, "events").at("fields").at("events").at(
+        "collision"), true);
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at("randomSeed"), 7);
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at(
+        "deterministicRandom"), true);
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at(
+        "billboardShadows"), true);
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at("mesh").at(
+        "materialInstancePath"), "Materials/MI_x.json");
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("events").at("spawn"), true);
+    EXPECT_EQ(flattened.at("randomSeed"), 7);
+    EXPECT_EQ(flattened.at("billboardShadows"), true);
+    EXPECT_EQ(flattened.at("mesh").at("materialInstancePath"),
+        "Materials/MI_x.json");
+
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "events.spawn", Json(), true));
+    EXPECT_FALSE(Module(emitter, "events").at("fields").at("events")
+        .contains("spawn"));
+}

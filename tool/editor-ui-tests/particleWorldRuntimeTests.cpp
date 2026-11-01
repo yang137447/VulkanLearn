@@ -4,8 +4,10 @@
 
 #include "commonFunction.h"
 #include "particles/particleLimits.h"
+#include "particles/particleEmitterKey.h"
 #include "sceneNode.h"
 #include "world/world.h"
+#include "world/particleRuntimeBridge.h"
 #include "world/worldSnapshotBuilder.h"
 
 namespace
@@ -18,6 +20,22 @@ VL::WorldParticleSystem MakeParticleSystemInstance(
     VL::WorldParticleSystem system;
     system.name = name;
     system.assetPath = assetPath;
+    return system;
+}
+
+VL::WorldParticleSystem MakeParticleSystemWithEmitters(
+    const std::string& name,
+    const std::string& assetPath)
+{
+    VL::WorldParticleSystem system =
+        MakeParticleSystemInstance(name, assetPath);
+    VL::ParticleEmitterAsset first;
+    first.name = "first";
+    first.maxParticles = 128;
+    VL::ParticleEmitterAsset second;
+    second.name = "second";
+    second.maxParticles = 64;
+    system.asset.emitters = {first, second};
     return system;
 }
 
@@ -374,4 +392,266 @@ TEST(ParticleWorldRuntime, SnapshotCarriesRuntimeOverrides)
     EXPECT_EQ(
         particle.runtime.enabledEmitterMask,
         ((1u << VL::kMaxParticleEmitters) - 1u) & ~(1u << 2));
+}
+
+TEST(ParticleWorldRuntime, EmitterLifecycleKeepsStableIndices)
+{
+    VL::World world = MakeParticleWorld();
+    world.AddParticleSystem(
+        "Spark_A",
+        MakeParticleSystemWithEmitters(
+            "Spark_A", "Maps/PS_sparks.json"));
+
+    const VL::WorldParticleSystem* system =
+        world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    ASSERT_EQ(system->emitterSlots.size(), 2u);
+    EXPECT_EQ(system->asset.emitters.size(), 2u);
+
+    ASSERT_TRUE(world.DestroyParticleEmitter("Spark_A", 0u));
+    system = world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    ASSERT_EQ(system->emitterSlots.size(), 2u);
+    EXPECT_FALSE(system->emitterSlots[0].active);
+    EXPECT_EQ(system->asset.emitters.size(), 1u);
+    EXPECT_EQ(system->asset.emitters[0].name, "second");
+    EXPECT_EQ(system->telemetry.emitters[0].active, false);
+    EXPECT_EQ(system->telemetry.emitters[1].active, true);
+
+    ASSERT_TRUE(world.SetParticleSystemEmitterEnabled("Spark_A", 1u, false));
+    system = world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    EXPECT_EQ(system->runtime.enabledEmitterMask, 0u);
+    EXPECT_FALSE(world.SetParticleSystemEmitterEnabled("Spark_A", 0u, true));
+
+    uint32_t stableIndex = 0;
+    ASSERT_TRUE(world.SpawnParticleEmitter(
+        "Spark_A", 1u, "runtime.extra", stableIndex));
+    EXPECT_EQ(stableIndex, 2u);
+    system = world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    ASSERT_EQ(system->emitterSlots.size(), 3u);
+    EXPECT_EQ(system->asset.emitters.size(), 2u);
+    EXPECT_EQ(system->asset.emitters[1].name, "runtime.extra");
+    EXPECT_TRUE(world.FindParticleEmitterIndex(
+        "Spark_A", "runtime.extra", stableIndex));
+    EXPECT_EQ(stableIndex, 2u);
+
+    ASSERT_TRUE(world.RestartParticleEmitter("Spark_A", 2u));
+    EXPECT_EQ(
+        world.FindParticleSystem("Spark_A")->emitterSlots[2].restartEpoch,
+        1u);
+    EXPECT_FALSE(world.RestartParticleEmitter("Spark_A", 0u));
+    EXPECT_FALSE(world.DestroyParticleEmitter("Spark_A", 9u));
+    EXPECT_FALSE(world.SpawnParticleEmitter(
+        "Spark_A", 2u, "runtime.extra", stableIndex));
+
+    ASSERT_TRUE(world.SetParticleSystemVisible("Spark_A", false));
+    EXPECT_EQ(
+        world.FindParticleSystem("Spark_A")->telemetry.visibleEmitterCount,
+        0u);
+    ASSERT_TRUE(world.SetParticleSystemVisible("Spark_A", true));
+    EXPECT_EQ(
+        world.FindParticleSystem("Spark_A")->telemetry.visibleEmitterCount,
+        1u);
+}
+
+TEST(ParticleWorldRuntime, AttachmentResolvesMeshAndComponent)
+{
+    VL::World world = MakeParticleWorld();
+    world.AddParticleSystem(
+        "Spark_A",
+        MakeParticleSystemInstance(
+            "Spark_A", "Maps/PS_sparks.json"));
+
+    VL::WorldMeshObject anchor;
+    anchor.sceneObjectIdentity = "mesh|Anchor";
+    anchor.model = Eigen::Matrix4f::Identity();
+    anchor.model(1, 3) = 100.0f;
+    world.AddMeshObject("Anchor", anchor);
+
+    ASSERT_TRUE(world.AttachParticleSystem(
+        "Spark_A", "mesh", "mesh|Anchor", "",
+        Eigen::Vector3f(0.0f, 25.0f, 0.0f),
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Ones()));
+    bool resolved = false;
+    const VL::WorldParticleSystem* system =
+        world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    const Eigen::Matrix4f attached =
+        world.ResolveParticleSystemModel(*system, resolved);
+    EXPECT_TRUE(resolved);
+    EXPECT_FLOAT_EQ(attached(1, 3), 125.0f);
+
+    // 组件矩阵由正式 Blueprint 可视化同步路径写入，测试不直接碰私有表。
+    const nlohmann::json componentBlueprint{
+        {"id", "bp"},
+        {"position", {0.0, 0.0, 0.0}},
+        {"rotation", {0.0, 0.0, 0.0}},
+        {"scale", {1.0, 1.0, 1.0}},
+        {"components", nlohmann::json::array({
+            {{"id", "arm"},
+             {"type", "mesh"},
+             {"modelPath", "Common/Meshes/SM_test.json"},
+             {"position", {30.0, 0.0, 0.0}}}})}};
+    world.ApplyScriptBlueprintVisuals(componentBlueprint, false);
+    ASSERT_TRUE(world.AttachParticleSystem(
+        "Spark_A", "component", "bp", "arm",
+        Eigen::Vector3f(5.0f, 0.0f, 0.0f),
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Ones()));
+    system = world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    const Eigen::Matrix4f component =
+        world.ResolveParticleSystemModel(*system, resolved);
+    EXPECT_TRUE(resolved);
+    EXPECT_FLOAT_EQ(component(0, 3), 35.0f);
+
+    ASSERT_TRUE(world.AttachParticleSystem(
+        "Spark_A", "mesh", "mesh|Missing", "",
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Ones()));
+    system = world.FindParticleSystem("Spark_A");
+    ASSERT_NE(system, nullptr);
+    const Eigen::Matrix4f missing =
+        world.ResolveParticleSystemModel(*system, resolved);
+    EXPECT_FALSE(resolved);
+    EXPECT_TRUE(missing.isApprox(system->model));
+
+    EXPECT_FALSE(world.AttachParticleSystem(
+        "Spark_A", "mesh", "mesh|Anchor", "",
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f::Zero(),
+        Eigen::Vector3f(1.0f, 0.0f, 1.0f)));
+    ASSERT_TRUE(world.DetachParticleSystem("Spark_A"));
+    EXPECT_FALSE(world.FindParticleSystem("Spark_A")->attachment.IsEnabled());
+}
+
+TEST(ParticleWorldRuntime, BudgetsAndUserParametersReachSnapshot)
+{
+    VL::World world = MakeParticleWorld();
+    world.AddParticleSystem(
+        "Spark_A",
+        MakeParticleSystemWithEmitters(
+            "Spark_A", "Maps/PS_sparks.json"));
+
+    ASSERT_TRUE(world.SetWorldParticleBudget(200u, 0.5f));
+    ASSERT_TRUE(world.SetParticleSystemBudget("Spark_A", 100u, 0.5f));
+    ASSERT_TRUE(world.SetParticleSystemUserParameter("Spark_A", "Wind", 2.5f));
+    EXPECT_FALSE(world.SetParticleSystemUserParameter(
+        "Spark_A", "", 1.0f));
+    EXPECT_FALSE(world.SetParticleSystemUserParameter(
+        "Spark_A", "Bad", std::numeric_limits<float>::infinity()));
+    EXPECT_FALSE(world.SetParticleSystemBudget("Spark_A", 0u, 16.1f));
+    EXPECT_FALSE(world.SetParticleSystemBudget("Spark_A", 1000001u, 1.0f));
+    EXPECT_FALSE(world.SetWorldParticleBudget(1000001u, 1.0f));
+    EXPECT_FALSE(world.SetWorldParticleBudget(0u, -0.1f));
+
+    VL::WorldSnapshotBuilder builder;
+    VL::WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world.GetGeneration();
+    auto result = builder.Build(world, desc);
+    ASSERT_FALSE(result.IsFailure());
+    const VL::ParticleSystemSnapshot& particle =
+        result.Value().particleSystems.front();
+    EXPECT_EQ(particle.budget.maxTotalParticles, 100u);
+    // 实例 0.5 与世界 0.5 相乘，最终缩放是 0.25。
+    EXPECT_FLOAT_EQ(particle.budget.emitterBudgetScale, 0.25f);
+    EXPECT_FLOAT_EQ(particle.userParameters.at("Wind"), 2.5f);
+    EXPECT_EQ(particle.telemetry.activeEmitterCount, 2u);
+    EXPECT_EQ(particle.telemetry.authoredCapacity, 192u);
+    EXPECT_GT(particle.telemetry.budgetedCapacity, 0u);
+
+    ASSERT_TRUE(world.ClearParticleSystemUserParameter("Spark_A", "Wind"));
+    EXPECT_TRUE(world.FindParticleSystem("Spark_A")->userParameters.empty());
+}
+
+TEST(ParticleWorldRuntime, RendererTelemetryIsExplicitlyUnavailableUntilFed)
+{
+    VL::World world = MakeParticleWorld();
+    world.AddParticleSystem(
+        "Spark_A",
+        MakeParticleSystemWithEmitters(
+            "Spark_A", "Maps/PS_sparks.json"));
+
+    VL::WorldSnapshotBuilder builder;
+    VL::WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world.GetGeneration();
+    auto result = builder.Build(world, desc);
+    ASSERT_FALSE(result.IsFailure());
+    EXPECT_FALSE(result.Value().particleSystems.front().telemetry.available);
+
+    EXPECT_FALSE(world.SetParticleSystemRendererTelemetry(
+        "Spark_A", 10, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            11, 12, 13, 14, 15, 16, 17}, 20));
+    ASSERT_TRUE(world.SetParticleSystemRendererTelemetry(
+        "Spark_A", 30, {10, 20}, 40));
+    result = builder.Build(world, desc);
+    ASSERT_FALSE(result.IsFailure());
+    const VL::ParticleSystemSnapshot& particle =
+        result.Value().particleSystems.front();
+    EXPECT_TRUE(particle.telemetry.available);
+    EXPECT_EQ(particle.telemetry.aliveParticles, 30u);
+    EXPECT_EQ(particle.telemetry.lastFrameBudget, 40u);
+    ASSERT_EQ(particle.telemetry.emitters.size(), 2u);
+    EXPECT_EQ(particle.telemetry.emitters[0].aliveParticles, 10u);
+    EXPECT_EQ(particle.telemetry.emitters[1].aliveParticles, 20u);
+    EXPECT_TRUE(world.GetParticleSystemTelemetry("Spark_A") != nullptr);
+}
+
+TEST(ParticleWorldRuntime, CaptureInterestIsOwnerCountedAndClearable)
+{
+    VL::World world(1, "Maps/SC_test/SC_test.json");
+    EXPECT_FALSE(world.IsParticleEventCaptureActive());
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_a", true));
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_a", true));
+    EXPECT_EQ(world.ParticleEventCaptureInterestCount(), 1u);
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_b", true));
+    EXPECT_EQ(world.ParticleEventCaptureInterestCount(), 2u);
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_a", false));
+    EXPECT_TRUE(world.IsParticleEventCaptureActive());
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_b", false));
+    EXPECT_FALSE(world.IsParticleEventCaptureActive());
+    EXPECT_FALSE(world.SetParticleEventCaptureInterest("", true));
+    EXPECT_FALSE(world.SetParticleEventCaptureInterest(
+        std::string(129, 'x'), true));
+    EXPECT_TRUE(world.SetParticleEventCaptureInterest("bp_c", true));
+    world.ClearParticleEventCaptureInterest();
+    EXPECT_FALSE(world.IsParticleEventCaptureActive());
+}
+
+TEST(ParticleWorldRuntime, EventKeyDecodeAndKindMappingAreStable)
+{
+    const std::string key = VL::BuildParticleEmitterKey(
+        "scene|with\\separators",
+        "Maps/SC_x/PS_event.json",
+        "emit|one\\two");
+    VL::ParticleEmitterKeyIdentity identity;
+    ASSERT_TRUE(VL::DecodeParticleEmitterKey(key, identity));
+    EXPECT_EQ(identity.sceneName, "scene|with\\separators");
+    EXPECT_EQ(identity.emitterName, "emit|one\\two");
+
+    EXPECT_FALSE(VL::DecodeParticleEmitterKey("only-two|segments", identity));
+    EXPECT_FALSE(VL::DecodeParticleEmitterKey("a|b|c|d", identity));
+    EXPECT_FALSE(VL::DecodeParticleEmitterKey("a|b|", identity));
+    EXPECT_FALSE(VL::DecodeParticleEmitterKey("a|b|c\\", identity));
+    EXPECT_EQ(std::string(VL::ParticleEventKindName(0)), "spawn");
+    EXPECT_EQ(std::string(VL::ParticleEventKindName(1)), "death");
+    EXPECT_EQ(std::string(VL::ParticleEventKindName(2)), "collision");
+    EXPECT_EQ(VL::ParticleEventKindName(3), nullptr);
+}
+
+TEST(ParticleWorldRuntime, EventPollClockIsPlayAndInterestGatedAtTenHz)
+{
+    VL::ParticleEventPollClock clock;
+    EXPECT_FALSE(clock.Consume(0.05f, true, true));
+    EXPECT_FALSE(clock.Consume(0.04f, true, true));
+    EXPECT_TRUE(clock.Consume(0.02f, true, true));
+    EXPECT_FALSE(clock.Consume(0.05f, true, true));
+    EXPECT_TRUE(clock.Consume(0.05f, true, true));
+    EXPECT_FALSE(clock.Consume(5.0f, false, true));
+    EXPECT_FALSE(clock.Consume(5.0f, true, false));
+    EXPECT_FALSE(clock.Consume(0.05f, true, true));
 }

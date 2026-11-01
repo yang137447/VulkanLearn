@@ -43,6 +43,11 @@ struct ParticleDumpEmitter
     std::string key;
     uint32_t maxParticles = 0;
     uint32_t aliveCount = 0;
+    // 本帧通过 discard 后的片元数（GPU overdraw 样本）。
+    uint64_t overdrawFragments = 0;
+    // aliveCount * GpuParticle 的字节数；这是着色器读取规模的透明估算，
+    // 不是硬件显存带宽计数器。
+    uint64_t estimatedParticleBufferReadBytes = 0;
     bool culled = false;
     bool sortParticles = false;
     bool localSpace = false;
@@ -53,6 +58,15 @@ struct ParticleDumpEmitter
     float boundsRadius = 0.0f;
     float elapsedSeconds = 0.0f;
     std::vector<ParticleDumpSample> particles;
+};
+
+// 全局 alpha billboard 池不是独立 emitter；其回读结果单独发布，避免把
+// 容量重复计入逐 emitter 总和。
+struct ParticleDumpGlobalStats
+{
+    uint32_t aliveParticles = 0;
+    uint64_t overdrawFragments = 0;
+    uint64_t estimatedParticleBufferReadBytes = 0;
 };
 
 inline nlohmann::ordered_json ParticleDumpVectorJson(
@@ -67,7 +81,8 @@ inline nlohmann::ordered_json ParticleDumpVectorJson(
 inline nlohmann::ordered_json BuildParticleDumpJson(
     std::vector<ParticleDumpEmitter> emitters,
     uint32_t maxPerEmitter,
-    const ParticleFrameStats& frameStats = ParticleFrameStats{})
+    const ParticleFrameStats& frameStats = ParticleFrameStats{},
+    const ParticleDumpGlobalStats& globalStats = ParticleDumpGlobalStats{})
 {
     // unordered_map iteration is not stable; dumps are regression artifacts,
     // so sort by the same stable emitter key used by the runtime identity.
@@ -82,6 +97,7 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
     uint64_t totalParticles = 0;
     uint64_t aliveParticles = 0;
     uint64_t estimatedDrawnVertices = 0;
+    uint64_t estimatedParticleBufferReadBytes = 0;
     uint32_t visibleEmitters = 0;
 
     nlohmann::ordered_json emitterArray =
@@ -90,6 +106,8 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
     {
         totalParticles += emitter.maxParticles;
         aliveParticles += emitter.aliveCount;
+        estimatedParticleBufferReadBytes +=
+            emitter.estimatedParticleBufferReadBytes;
         const uint64_t drawnVertices =
             static_cast<uint64_t>(emitter.maxParticles) *
             std::max(emitter.verticesPerParticle, 1u);
@@ -104,6 +122,9 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
         emitterJson["key"] = emitter.key;
         emitterJson["maxParticles"] = emitter.maxParticles;
         emitterJson["aliveCount"] = emitter.aliveCount;
+        emitterJson["overdrawFragments"] = emitter.overdrawFragments;
+        emitterJson["estimatedParticleBufferReadBytes"] =
+            emitter.estimatedParticleBufferReadBytes;
         emitterJson["totalParticles"] = emitter.maxParticles;
         emitterJson["culled"] = emitter.culled;
         emitterJson["sortParticles"] = emitter.sortParticles;
@@ -150,6 +171,12 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
     root["totalParticles"] = totalParticles;
     root["aliveParticles"] = aliveParticles;
     root["estimatedDrawnVertices"] = estimatedDrawnVertices;
+    root["estimatedParticleBufferReadBytes"] =
+        estimatedParticleBufferReadBytes;
+    root["globalAliveParticles"] = globalStats.aliveParticles;
+    root["globalOverdrawFragments"] = globalStats.overdrawFragments;
+    root["globalEstimatedParticleBufferReadBytes"] =
+        globalStats.estimatedParticleBufferReadBytes;
     // GPU pass 计时来自 RenderSystem 的 particle timestamp timer；
     // 不支持时为 false 且数值保持 0。
     root["gpuTimingSupported"] = frameStats.gpuTimingSupported;

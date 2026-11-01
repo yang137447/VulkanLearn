@@ -10,11 +10,18 @@ layout(location = 3) in float vSeed;
 layout(location = 4) in float vTime;
 layout(location = 5) in vec2 vAtlasUV;
 layout(location = 6) in float vViewDepth;
+layout(location = 7) in vec3 vWorldPosition;
 
 layout(location = 0) out vec4 outColor;
 
 // particle pass 只写 sceneColor；sceneDepth 是图输入，不能同时作为附件。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
+layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(std430, set = 0, binding = 5) buffer ParticleDebug
+{
+    uint fragments;
+    uint reserved;
+} particleDebug;
 
 float Hash21(vec2 p)
 {
@@ -95,5 +102,17 @@ void main()
             vColor.a * alpha * mix(1.0, erosion, 0.6));
     }
     outColor.a *= softFade;
+    if (frame.shadowParams.w > 0.5)
+    {
+        vec3 facingNormal =
+            normalize(frame.cameraPosition.xyz - vWorldPosition);
+        float shadow = SampleParticleCsmShadow(
+            shadowMap,
+            vWorldPosition,
+            facingNormal);
+        outColor.rgb *= mix(1.0, shadow, 0.5);
+    }
     outColor *= frame.colorTint;
+    if (outColor.a > 0.0)
+        atomicAdd(particleDebug.fragments, 1u);
 }

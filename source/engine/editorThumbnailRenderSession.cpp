@@ -11,6 +11,7 @@
 #include "material.h"
 #include "materialInstance.h"
 #include "mesh/loader/common/meshAssetLoader.h"
+#include "world/worldSnapshot.h"
 #include "particles/particleRenderer.h"
 #include "sceneNode.h"
 #include "pipeline/pipelineFactory.h"
@@ -256,8 +257,10 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         projection.SetProjection(projection.GetHFOV(), 1.0f, projection.GetClipNear(), projection.GetClipFar());
         WorldSnapshotBuilder snapshots;
         scene = Require(RendererFrontend().BuildRenderScene(Require(snapshots.Build(*world, {}))));
-        // 缩略图只推进一次固定步长；prewarm 在其中填满发射器池。
-        scene.simulationDeltaSeconds = 1.0f / 60.0f;
+        // 粒子缩略图按同一固定步长推进多步，让预热后的池真正演化；
+        // 模型/材质缩略图没有粒子发射器，该值不产生额外开销。
+        scene.simulationDeltaSeconds =
+            ParticleThumbnailSteps().fixedDeltaSeconds;
         resolved = Require(ResolvedRenderSceneBuilder().Build(scene, cache));
         frames.EnsureLightCapacity(scene.lights.size(), backend);
         RendererDescriptorContext descriptors;
@@ -298,18 +301,42 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         }
     }
 
+    void AdvanceParticleSimulation()
+    {
+        if (!particleAssetThumbnail) return;
+        const uint32_t steps = ParticleThumbnailStepCount();
+        for (uint32_t step = 0; step < steps; ++step)
+        {
+            vk::CommandBuffer command = backend.BeginSingleTimeCommands();
+            try
+            {
+                // 单个时间步一次提交；prewarm 只在第一步生效，后续步
+                // 使用该步的 elapsedSeconds 与 runtime dt。
+                particleRenderer.RecordSimulation(
+                    command,
+                    0,
+                    scene,
+                    vk::Extent2D{ThumbnailSide, ThumbnailSide});
+                backend.EndSingleTimeCommands(command);
+            }
+            catch (...)
+            {
+                if (command) backend.AbortSingleTimeCommands(command);
+                throw;
+            }
+        }
+    }
+
     void Render()
     {
+        // 每一步必须独立提交：粒子 UBO 是持久映射的，若把多个
+        // RecordSimulation 录进同一 command buffer，所有 dispatch 都会读到
+        // 最后一次写入的 dt/prewarm 值。
+        AdvanceParticleSimulation();
         vk::CommandBuffer command;
         try
         {
             command = backend.BeginSingleTimeCommands();
-            // compute 必须早于 particle pass；图形 pass 只消费本帧模拟结果。
-            particleRenderer.RecordSimulation(
-                command,
-                0,
-                scene,
-                vk::Extent2D{ThumbnailSide, ThumbnailSide});
             size_t index = 0;
             for (const auto& name : graph.GetRenderpassesOrdered())
             {

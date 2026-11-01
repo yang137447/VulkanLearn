@@ -13,7 +13,9 @@
 
 #include "commonFunction.h"
 #include "particles/particleFlipbook.h"
+#include "particles/particleMaterial.h"
 #include "particles/particleMesh.h"
+#include "particles/particleSdf.h"
 
 namespace VL
 {
@@ -196,6 +198,98 @@ Eigen::Vector3f NormalizeParticleCollisionPlaneNormal(
     return normal / length;
 }
 
+// v2 用户参数绑定：任何以 '$' 开头的字符串在展平后的 emitter JSON 中
+// 替换为同名数值参数。这样模块字段（spawnRate、gravity、radius 等）
+// 与普通数值走同一条解析/校验路径，不存在“只解析不生效”的旁路。
+void SubstituteParticleUserParameters(
+    nlohmann::json& value,
+    const std::unordered_map<std::string, float>& parameters,
+    const std::string& fieldPath)
+{
+    if (value.is_object())
+    {
+        for (auto child = value.begin(); child != value.end(); ++child)
+        {
+            SubstituteParticleUserParameters(
+                child.value(),
+                parameters,
+                fieldPath.empty()
+                    ? child.key()
+                    : fieldPath + "." + child.key());
+        }
+        return;
+    }
+    if (value.is_array())
+    {
+        for (size_t index = 0; index < value.size(); ++index)
+        {
+            SubstituteParticleUserParameters(
+                value.at(index),
+                parameters,
+                fieldPath + "[" + std::to_string(index) + "]");
+        }
+        return;
+    }
+    if (!value.is_string())
+    {
+        return;
+    }
+    const std::string reference = value.get<std::string>();
+    if (reference.empty() || reference.front() != '$')
+    {
+        return;
+    }
+    const std::string name = reference.substr(1);
+    const auto parameter = parameters.find(name);
+    if (parameter == parameters.end())
+    {
+        throw std::invalid_argument(
+            "Particle user parameter reference is unknown: " + name +
+            " at " + fieldPath);
+    }
+    value = parameter->second;
+}
+
+std::shared_ptr<const ParticleSdfAsset> LoadParticleSdfAsset(
+    const std::string& path)
+{
+    if (path.empty())
+    {
+        return nullptr;
+    }
+    RequireValidParticleMeshPath(path, "collision.sdf.path");
+    std::string resolvedPath;
+    try
+    {
+        resolvedPath = CommonFunction::Path(path);
+    }
+    catch (const std::exception& exception)
+    {
+        throw std::runtime_error(
+            "Failed to open particle SDF asset: " + path +
+            ": " + exception.what());
+    }
+    std::ifstream file(resolvedPath);
+    if (!file.is_open())
+    {
+        throw std::runtime_error(
+            "Failed to open particle SDF asset: " + path);
+    }
+    nlohmann::json json;
+    try
+    {
+        file >> json;
+    }
+    catch (const std::exception& exception)
+    {
+        throw std::runtime_error(
+            "Failed to parse particle SDF asset: " + path +
+            ": " + exception.what());
+    }
+    return std::make_shared<const ParticleSdfAsset>(
+        ParseParticleSdfJson(json));
+}
+
 ParticleEmitterAsset ParseEmitter(
     const nlohmann::json& json,
     size_t index,
@@ -234,6 +328,8 @@ ParticleEmitterAsset ParseEmitter(
         emitter.billboardAlignment =
             json.at("billboardAlignment").get<std::string>();
     }
+    emitter.billboardShadows = json.value(
+        "billboardShadows", emitter.billboardShadows);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh")
@@ -276,6 +372,26 @@ ParticleEmitterAsset ParseEmitter(
             emitter.meshAlignment =
                 mesh.at("alignment").get<std::string>();
         }
+        if (mesh.contains("materialInstancePath"))
+        {
+            if (!mesh.at("materialInstancePath").is_string())
+            {
+                throw std::invalid_argument(
+                    "Particle mesh.materialInstancePath must be a string");
+            }
+            emitter.materialInstancePath =
+                mesh.at("materialInstancePath").get<std::string>();
+        }
+    }
+    if (json.contains("materialInstancePath"))
+    {
+        if (!json.at("materialInstancePath").is_string())
+        {
+            throw std::invalid_argument(
+                "Particle materialInstancePath must be a string");
+        }
+        emitter.materialInstancePath =
+            json.at("materialInstancePath").get<std::string>();
     }
     // mesh 照明与几何参数同属 renderer 层；非 mesh 模式也可以作者化，
     // 但渲染端只在 renderMode=="mesh" 时消费。
@@ -499,11 +615,12 @@ ParticleEmitterAsset ParseEmitter(
         if (emitter.collisionType != "none" &&
             emitter.collisionType != "plane" &&
             emitter.collisionType != "box" &&
-            emitter.collisionType != "capsule")
+            emitter.collisionType != "capsule" &&
+            emitter.collisionType != "sdf")
         {
             throw std::invalid_argument(
                 "Particle collision type must be 'none', 'plane', 'box', "
-                "or 'capsule'");
+                "'capsule', or 'sdf'");
         }
         if (collision.contains("plane"))
         {
@@ -563,6 +680,25 @@ ParticleEmitterAsset ParseEmitter(
                 "radius",
                 emitter.collisionCapsuleRadius);
         }
+        if (collision.contains("sdf"))
+        {
+            const nlohmann::json& sdf = collision.at("sdf");
+            if (!sdf.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle collision sdf must be an object");
+            }
+            if (sdf.contains("path"))
+            {
+                if (!sdf.at("path").is_string())
+                {
+                    throw std::invalid_argument(
+                        "Particle collision.sdf.path must be a string");
+                }
+                emitter.collisionSdfPath =
+                    sdf.at("path").get<std::string>();
+            }
+        }
         emitter.collisionBounce = ReadFiniteFloat(
             collision,
             "bounce",
@@ -581,7 +717,40 @@ ParticleEmitterAsset ParseEmitter(
         emitter.collisionCcd = collision.value(
             "ccd",
             emitter.collisionCcd);
+        if (emitter.collisionType == "sdf")
+        {
+            if (emitter.collisionSdfPath.empty())
+            {
+                throw std::invalid_argument(
+                    "Particle collision type 'sdf' requires "
+                    "collision.sdf.path");
+            }
+            emitter.collisionSdf =
+                LoadParticleSdfAsset(emitter.collisionSdfPath);
+        }
     }
+
+    if (json.contains("events"))
+    {
+        const nlohmann::json& events = json.at("events");
+        if (!events.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle events must be an object");
+        }
+        emitter.emitSpawnEvent = events.value(
+            "spawn", emitter.emitSpawnEvent);
+        emitter.emitDeathEvent = events.value(
+            "death", emitter.emitDeathEvent);
+        emitter.emitCollisionEvent = events.value(
+            "collision", emitter.emitCollisionEvent);
+    }
+    emitter.randomSeed = ReadCountField(
+        json, "randomSeed", emitter.randomSeed);
+    emitter.deterministicRandom = json.value(
+        "deterministicRandom", emitter.deterministicRandom);
+    emitter.fixedTimeStep = ReadFiniteFloat(
+        json, "fixedTimeStep", emitter.fixedTimeStep);
 
     emitter.gravity = ReadVec3(
         json, "gravity", emitter.gravity);
@@ -1244,19 +1413,34 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     if (emitter.collisionType != "none" &&
         emitter.collisionType != "plane" &&
         emitter.collisionType != "box" &&
-        emitter.collisionType != "capsule")
+        emitter.collisionType != "capsule" &&
+        emitter.collisionType != "sdf")
     {
         throw std::invalid_argument(
             "Particle collision type must be 'none', 'plane', 'box', "
-            "or 'capsule'");
+            "'capsule', or 'sdf'");
     }
-    // 局部空间模拟的粒子坐标不是世界坐标，世界空间平面/盒体碰撞会在
-    // 错误空间里求解；v1 直接拒绝组合，避免静默产生错误轨迹。
-    if (emitter.localSpace && emitter.collisionType != "none")
+    // localSpace 与碰撞现在允许组合：localSpace=true 时碰撞体（平面/
+    // 盒体/胶囊/SDF）按发射器局部空间解释，与局部粒子坐标同一空间。
+    if (emitter.collisionType == "sdf" &&
+        (!emitter.collisionSdf || emitter.collisionSdf->Empty()))
     {
         throw std::invalid_argument(
-            "Particle localSpace cannot be combined with collision; "
-            "world-space collision requires localSpace=false");
+            "Particle collision type 'sdf' requires loaded SDF data");
+    }
+    if (!emitter.materialInstancePath.empty() &&
+        !IsValidParticleMeshRelativePath(emitter.materialInstancePath))
+    {
+        throw std::invalid_argument(
+            "Particle materialInstancePath must be a "
+            "resource-root-relative .json path: " +
+            emitter.materialInstancePath);
+    }
+    if (emitter.fixedTimeStep < 0.0f ||
+        emitter.fixedTimeStep > 0.25f)
+    {
+        throw std::invalid_argument(
+            "Particle fixedTimeStep must be in [0, 0.25] seconds");
     }
     for (int axis = 0; axis < 3; ++axis)
     {
@@ -1589,6 +1773,7 @@ const std::unordered_set<std::string>& ParticleModuleTypes()
         "forces.attractor",
         "forces.wind",
         "collision.analytic",
+        "events",
         "flipbook",
         "lod",
         "curves",
@@ -1831,20 +2016,29 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
         }
         asset.emitters.reserve(emitters.size());
         for (size_t index = 0; index < emitters.size(); ++index)
+        {
+            nlohmann::json flattened = asset.version == 2
+                ? FlattenParticleEmitterV2(emitters.at(index), index)
+                : emitters.at(index);
+            if (asset.version == 2)
+            {
+                SubstituteParticleUserParameters(
+                    flattened,
+                    asset.userParameters,
+                    "emitters[" + std::to_string(index) + "]");
+            }
             asset.emitters.push_back(
-                ParseEmitter(
-                    asset.version == 2
-                        ? FlattenParticleEmitterV2(
-                            emitters.at(index), index)
-                        : emitters.at(index),
-                    index,
-                    false));
+                ParseEmitter(flattened, index, false));
+        }
     }
     else if (asset.version == 2 && json.contains("modules"))
     {
         // v2 也允许根对象直接携带一个隐式 emitter 的 modules。
+        nlohmann::json flattened = FlattenParticleEmitterV2(json, 0);
+        SubstituteParticleUserParameters(
+            flattened, asset.userParameters, "modules");
         asset.emitters.push_back(
-            ParseEmitter(FlattenParticleEmitterV2(json, 0), 0, true));
+            ParseEmitter(flattened, 0, true));
     }
     else
     {
@@ -1859,6 +2053,13 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
         // 在场景候选提交前解析一次资源根，避免渲染线程首次创建发射器时
         // 才发现 flipbook 纹理缺失。GPU 纹理本身仍由 ParticleRenderer 创建。
         (void)CommonFunction::Path(emitter.texturePath);
+    }
+    // 只有 v2 + 用户参数才可能需要运行时覆盖重解析；冻结原始 JSON
+    // （而不是展平后的 emitter），保证模块结构/字段归属不丢失。
+    if (asset.version == 2 && !asset.userParameters.empty())
+    {
+        asset.authoringJson =
+            std::make_shared<const nlohmann::json>(json);
     }
     return asset;
 }

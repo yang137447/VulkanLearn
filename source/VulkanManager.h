@@ -69,6 +69,10 @@ private:
     {
         return drawIndirectCountEnabled;
     }
+    inline bool IsFragmentStoresAndAtomicsEnabled() const
+    {
+        return fragmentStoresAndAtomicsEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -129,6 +133,7 @@ private:
     // 记录逻辑设备实际启用的能力，而不是仅记录物理设备是否宣称支持。
     bool dualSourceBlendEnabled = false;
     bool drawIndirectCountEnabled = false;
+    bool fragmentStoresAndAtomicsEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

@@ -1,8 +1,9 @@
 #pragma once
 
-// File responsibility: Per-swapchain-image GPU timestamp timing for the particle
-// graphics pass. Mirrors EnvironmentGpuTimer's query layout, but boundary errors
-// and backend exceptions disable timing instead of escaping into the frame loop.
+// File responsibility: Per-swapchain-image GPU timestamp timing for one particle
+// graphics interval (the whole pass or one emitter/global-pool draw). Mirrors
+// EnvironmentGpuTimer's query layout, but boundary errors and backend exceptions
+// disable timing instead of escaping into the frame loop.
 
 #include <cstdint>
 #include <string>

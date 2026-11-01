@@ -134,6 +134,7 @@ vulkanlearn_add_gtest(
 add_executable(material_instance_editor_production_tests
     materialInstanceEditorProductionTests.cpp
     particleAssetTests.cpp
+    particleBudgetOverrideTests.cpp
     particleBurstTests.cpp
     particleCollisionTests.cpp
     particleCurveEditTests.cpp
@@ -149,6 +150,7 @@ add_executable(material_instance_editor_production_tests
     particleEmitterOrderTests.cpp
     particleFlipbookTests.cpp
     particleLodTests.cpp
+    particleMaterialSdfTests.cpp
     particleMeshTests.cpp
     particleMeshReferenceTests.cpp
     particleModuleEditTests.cpp

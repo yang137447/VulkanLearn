@@ -333,6 +333,89 @@ TEST_F(ScriptGameplayTest, CSharpParticlesSpawnControlResetAndDestroy)
     Tick();
     EXPECT_EQ(world->FindParticleSystem("~particle.1"), nullptr);
     EXPECT_TRUE(world->GetParticleSystems().empty());
+
+    ASSERT_TRUE(world->SetParticleEventCaptureInterest("manual", true));
+    std::string error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Editing, error)) << error;
+    EXPECT_FALSE(world->IsParticleEventCaptureActive());
+}
+
+TEST_F(ScriptGameplayTest, CSharpParticleEmitterBudgetAttachmentAndEvents)
+{
+    Prepare(Json::array({
+        GameplayBlueprint("api", "ScriptFixtures.ParticleApiBlueprint")}));
+    WorldMeshObject anchor;
+    anchor.sceneObjectIdentity = "mesh|Anchor";
+    anchor.model = Eigen::Matrix4f::Identity();
+    anchor.model(1, 3) = 100.0f;
+    world->AddMeshObject("Anchor", anchor);
+    Play();
+
+    Tick();
+    const WorldParticleSystem* particles =
+        world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    ASSERT_EQ(particles->emitterSlots.size(), 2u);
+    EXPECT_FALSE(particles->emitterSlots[0].asset.name.empty());
+    EXPECT_EQ(particles->emitterSlots[1].asset.name, "runtime.extra");
+    EXPECT_EQ(particles->emitterSlots[1].enabled, true);
+    EXPECT_EQ(particles->budget.maxTotalParticles, 512u);
+    EXPECT_FLOAT_EQ(particles->budget.emitterBudgetScale, 0.5f);
+    EXPECT_FLOAT_EQ(particles->userParameters.at("Wind"), 2.5f);
+    EXPECT_EQ(particles->attachment.targetKind, "mesh");
+    EXPECT_EQ(particles->attachment.targetName, "mesh|Anchor");
+    EXPECT_TRUE(world->IsParticleEventCaptureActive());
+
+    WorldSnapshotBuilder builder;
+    WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world->GetGeneration();
+    auto snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const ParticleSystemSnapshot& snapshot =
+        snapshotResult.Value().particleSystems.front();
+    EXPECT_TRUE(snapshot.attachment.resolved);
+    EXPECT_FLOAT_EQ(snapshot.model(1, 3), 125.0f);
+    EXPECT_EQ(snapshot.telemetry.activeEmitterCount, 2u);
+    EXPECT_EQ(snapshot.telemetry.enabledEmitterCount, 2u);
+    EXPECT_FALSE(snapshot.telemetry.available);
+    EXPECT_EQ(snapshot.budget.maxTotalParticles, 512u);
+    EXPECT_FLOAT_EQ(snapshot.budget.emitterBudgetScale, 0.5f);
+
+    EXPECT_TRUE(world->SetParticleSystemRendererTelemetry(
+        "~particle.1", 42, {10, 20}, 300));
+    snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const ParticleSystemSnapshot& fed =
+        snapshotResult.Value().particleSystems.front();
+    EXPECT_TRUE(fed.telemetry.available);
+    EXPECT_EQ(fed.telemetry.aliveParticles, 42u);
+    EXPECT_EQ(fed.telemetry.lastFrameBudget, 300u);
+    ASSERT_EQ(fed.telemetry.emitters.size(), 2u);
+    EXPECT_TRUE(fed.telemetry.emitters[0].aliveAvailable);
+    EXPECT_EQ(fed.telemetry.emitters[0].aliveParticles, 10u);
+    EXPECT_EQ(fed.telemetry.emitters[1].aliveParticles, 20u);
+
+    WorldParticleRuntimeEvent event;
+    event.systemName = "~particle.1";
+    event.emitterName = "runtime.extra";
+    event.kind = "collision";
+    event.time = 1.0f;
+    event.position = Eigen::Vector3f(1, 2, 3);
+    event.normal = Eigen::Vector3f(0, 1, 0);
+    ASSERT_TRUE(world->QueueParticleRuntimeEvent(event));
+
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    ASSERT_EQ(particles->emitterSlots.size(), 2u);
+    EXPECT_EQ(particles->emitterSlots[1].restartEpoch, 1u);
+    EXPECT_FALSE(particles->emitterSlots[1].enabled);
+    EXPECT_FALSE(State("api")["failed"].get<bool>());
+
+    Tick();
+    EXPECT_EQ(world->FindParticleSystem("~particle.1"), nullptr);
+    EXPECT_FALSE(world->IsParticleEventCaptureActive());
+    EXPECT_FALSE(State("api")["failed"].get<bool>());
 }
 
 TEST_F(ScriptGameplayTest, RuntimeComponentFailedCallbackDropsEntireStructureQueue)

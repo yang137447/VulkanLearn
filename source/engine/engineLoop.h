@@ -22,6 +22,7 @@
 #include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
+#include "world/particleRuntimeBridge.h"
 #include "shader/reload/shaderReloadRuntime.h"
 
 class Controller;
@@ -43,6 +44,7 @@ class ScriptBuildService;
 class BlueprintAssetLoadSession;
 class ScriptWorldContext;
 class RuntimeValidationServices;
+class World;
 class SubsystemCollection;
 class WorldTransitionCoordinator;
 enum class RenderGraphReleaseMode;
@@ -87,6 +89,8 @@ private:
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
+    // 仅在 Play 且 C# 粒子订阅存在时按 10 Hz 节流回读 GPU 事件/遥测。
+    void PollParticleRuntimeBridge(World& world);
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;
@@ -166,6 +170,9 @@ private:
     uint64_t pendingBuildWorldGeneration = 0;
     uint64_t autoPlayWorldGeneration = 0;
     std::string scriptBuildOutput;
+    ParticleEventPollClock particleEventPollClock;
+    double particleEventTimeSeconds = 0.0;
+    bool particleEventDrainFailureReported = false;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
     std::unique_ptr<WorldGraphTransactionCoordinator>

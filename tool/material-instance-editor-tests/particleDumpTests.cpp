@@ -34,6 +34,8 @@ std::vector<ParticleDumpEmitter> MakeEmitters()
     fire.key = "fire";
     fire.maxParticles = 64;
     fire.aliveCount = 2;
+    fire.overdrawFragments = 1234;
+    fire.estimatedParticleBufferReadBytes = 160;
     fire.sortParticles = true;
     fire.boundsCenter = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
     fire.boundsRadius = 12.5f;
@@ -47,6 +49,8 @@ std::vector<ParticleDumpEmitter> MakeEmitters()
     smoke.key = "smoke";
     smoke.maxParticles = 32;
     smoke.aliveCount = 1;
+    smoke.overdrawFragments = 12;
+    smoke.estimatedParticleBufferReadBytes = 80;
     smoke.culled = true;
     smoke.localSpace = true;
     smoke.boundsCenter = Eigen::Vector3f(-1.0f, 0.0f, 0.0f);
@@ -70,6 +74,9 @@ TEST(ParticleDump, SerializesEmitterStatisticsAndTotals)
     EXPECT_EQ(dump.at("visibleEmitters"), 1);
     EXPECT_EQ(dump.at("totalParticles"), 96);
     EXPECT_EQ(dump.at("aliveParticles"), 3);
+    EXPECT_EQ(dump.at("estimatedParticleBufferReadBytes"), 240);
+    EXPECT_EQ(dump.at("globalAliveParticles"), 0);
+    EXPECT_EQ(dump.at("globalOverdrawFragments"), 0);
     // 只有 fire 可见；culled 的 smoke 不计入预计 draw。
     EXPECT_EQ(dump.at("estimatedDrawnVertices"), 384);
 
@@ -77,6 +84,9 @@ TEST(ParticleDump, SerializesEmitterStatisticsAndTotals)
     ASSERT_EQ(emitters.size(), 2u);
     EXPECT_EQ(emitters.at(0).at("key"), "fire");
     EXPECT_EQ(emitters.at(0).at("aliveCount"), 2);
+    EXPECT_EQ(emitters.at(0).at("overdrawFragments"), 1234);
+    EXPECT_EQ(
+        emitters.at(0).at("estimatedParticleBufferReadBytes"), 160);
     EXPECT_EQ(emitters.at(0).at("totalParticles"), 64);
     EXPECT_EQ(emitters.at(0).at("culled"), false);
     EXPECT_EQ(emitters.at(0).at("sortParticles"), true);
@@ -85,6 +95,7 @@ TEST(ParticleDump, SerializesEmitterStatisticsAndTotals)
         emitters.at(0).at("bounds").at("radius").get<float>(),
         12.5f);
     EXPECT_EQ(emitters.at(1).at("key"), "smoke");
+    EXPECT_EQ(emitters.at(1).at("overdrawFragments"), 12);
     EXPECT_EQ(emitters.at(1).at("culled"), true);
     EXPECT_EQ(emitters.at(1).at("localSpace"), true);
 

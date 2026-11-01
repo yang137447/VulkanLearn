@@ -547,15 +547,22 @@ void RuntimeCommandExecutor::ExecuteCommand(
         }
         else if (command.secondaryStringValue == "emitter")
         {
-            if (command.intValue < 0 ||
-                !ValidateParticleEmitterIndex(
-                    static_cast<uint32_t>(command.intValue),
-                    validationError))
+            uint32_t emitterIndex = 0;
+            if (command.intValue >= 0)
+                emitterIndex = static_cast<uint32_t>(command.intValue);
+            else if (command.particleEmitterName.empty() ||
+                     !world->FindParticleEmitterIndex(
+                         command.stringValue,
+                         command.particleEmitterName,
+                         emitterIndex))
             {
                 diagnostics.ReportWarning(
-                    command.intValue < 0
-                        ? "Particle emitter index must be non-negative."
-                        : validationError);
+                    "Particle emitter requires a valid index or name.");
+                break;
+            }
+            if (!ValidateParticleEmitterIndex(emitterIndex, validationError))
+            {
+                diagnostics.ReportWarning(validationError);
                 break;
             }
             if (!ValidateParticleEmitterEnabledValue(
@@ -568,20 +575,20 @@ void RuntimeCommandExecutor::ExecuteCommand(
             const bool enabled = command.intValue2 != 0;
             if (!world->SetParticleSystemEmitterEnabled(
                     command.stringValue,
-                    static_cast<uint32_t>(command.intValue),
+                    emitterIndex,
                     enabled))
             {
                 diagnostics.ReportWarning(
                     "Particle emitter state was not applied: " +
                     command.stringValue + " emitter " +
-                    std::to_string(command.intValue));
+                    std::to_string(emitterIndex));
                 break;
             }
             diagnostics.ReportInfo(
                 std::string("Particle emitter ") +
                 (enabled ? "enabled: " : "disabled: ") +
                 command.stringValue + " emitter " +
-                std::to_string(command.intValue));
+                std::to_string(emitterIndex));
         }
         else
         {
@@ -596,6 +603,248 @@ void RuntimeCommandExecutor::ExecuteCommand(
             diagnostics.ReportInfo(
                 "Particle runtime overrides reset: " +
                 command.stringValue);
+        }
+        break;
+    }
+    case RuntimeCommandType::SpawnParticleEmitter:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter spawn ignored because no active World exists.");
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter spawn found no system named: " +
+                command.stringValue);
+            break;
+        }
+        if (command.intValue < 0)
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter source index must be non-negative.");
+            break;
+        }
+        uint32_t stableIndex = 0;
+        if (!world->SpawnParticleEmitter(
+                command.stringValue,
+                static_cast<uint32_t>(command.intValue),
+                command.particleEmitterName,
+                stableIndex))
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter spawn was rejected for system: " +
+                command.stringValue);
+            break;
+        }
+        std::string emitterName = command.particleEmitterName;
+        if (emitterName.empty())
+            emitterName = "runtime." + std::to_string(stableIndex);
+        diagnostics.ReportInfo(
+            "Particle emitter spawned: " + command.stringValue +
+            " stableIndex=" + std::to_string(stableIndex) +
+            " name=" + emitterName);
+        break;
+    }
+    case RuntimeCommandType::DestroyParticleEmitter:
+    case RuntimeCommandType::RestartParticleEmitter:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter command ignored because no active World exists.");
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter command found no system named: " +
+                command.stringValue);
+            break;
+        }
+        uint32_t stableIndex = 0;
+        if (command.intValue >= 0)
+        {
+            stableIndex = static_cast<uint32_t>(command.intValue);
+        }
+        else if (command.particleEmitterName.empty() ||
+                 !world->FindParticleEmitterIndex(
+                     command.stringValue,
+                     command.particleEmitterName,
+                     stableIndex))
+        {
+            diagnostics.ReportWarning(
+                "Particle emitter command requires an index or emitter name.");
+            break;
+        }
+        const bool destroy =
+            command.type == RuntimeCommandType::DestroyParticleEmitter;
+        const bool applied = destroy
+            ? world->DestroyParticleEmitter(
+                command.stringValue, stableIndex)
+            : world->RestartParticleEmitter(
+                command.stringValue, stableIndex);
+        if (!applied)
+        {
+            diagnostics.ReportWarning(
+                std::string("Particle emitter ") +
+                (destroy ? "destroy" : "restart") +
+                " was rejected for system: " + command.stringValue);
+            break;
+        }
+        diagnostics.ReportInfo(
+            std::string("Particle emitter ") +
+            (destroy ? "destroyed" : "restarted") + ": " +
+            command.stringValue + " stableIndex=" +
+            std::to_string(stableIndex));
+        break;
+    }
+    case RuntimeCommandType::SetParticleSystemBudget:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle budget ignored because no active World exists.");
+            break;
+        }
+        const uint32_t maxTotal = command.intValue < 0
+            ? 0u
+            : static_cast<uint32_t>(command.intValue);
+        const bool applied = command.stringValue == "world"
+            ? world->SetWorldParticleBudget(maxTotal, command.floatValue)
+            : world->SetParticleSystemBudget(
+                command.stringValue, maxTotal, command.floatValue);
+        if (!applied)
+        {
+            diagnostics.ReportWarning(
+                "Particle budget was rejected: " + command.stringValue);
+            break;
+        }
+        diagnostics.ReportInfo(
+            "Particle budget set: " + command.stringValue +
+            " maxTotal=" + std::to_string(maxTotal) +
+            " emitterScale=" + std::to_string(command.floatValue));
+        break;
+    }
+    case RuntimeCommandType::SetParticleSystemUserParameter:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle user parameter ignored because no active World exists.");
+            break;
+        }
+        const bool clear = command.intValue2 != 0;
+        const bool applied = clear
+            ? world->ClearParticleSystemUserParameter(
+                command.stringValue, command.particleUserParameterName)
+            : world->SetParticleSystemUserParameter(
+                command.stringValue,
+                command.particleUserParameterName,
+                command.floatValue);
+        if (!applied)
+        {
+            diagnostics.ReportWarning(
+                std::string("Particle user parameter ") +
+                (clear ? "clear" : "set") + " was rejected: " +
+                command.stringValue + " key=" +
+                command.particleUserParameterName);
+            break;
+        }
+        diagnostics.ReportInfo(
+            std::string("Particle user parameter ") +
+            (clear ? "cleared: " : "set: ") + command.stringValue +
+            " key=" + command.particleUserParameterName);
+        break;
+    }
+    case RuntimeCommandType::SetParticleSystemAttachment:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle attachment ignored because no active World exists.");
+            break;
+        }
+        if (command.secondaryStringValue == "detach")
+        {
+            if (!world->DetachParticleSystem(command.stringValue))
+            {
+                diagnostics.ReportWarning(
+                    "Particle detach found no system named: " +
+                    command.stringValue);
+                break;
+            }
+            diagnostics.ReportInfo(
+                "Particle attachment cleared: " + command.stringValue);
+            break;
+        }
+        if (!world->AttachParticleSystem(
+                command.stringValue,
+                command.secondaryStringValue,
+                command.particleAttachmentTarget,
+                command.particleAttachmentComponent,
+                command.particleAttachmentPosition,
+                command.particleAttachmentRotation,
+                command.particleAttachmentScale))
+        {
+            diagnostics.ReportWarning(
+                "Particle attachment was rejected: " +
+                command.stringValue);
+            break;
+        }
+        diagnostics.ReportInfo(
+            "Particle attachment set: " + command.stringValue +
+            " -> " + command.secondaryStringValue + ":" +
+            command.particleAttachmentTarget +
+            (command.particleAttachmentComponent.empty()
+                ? std::string()
+                : "/" + command.particleAttachmentComponent));
+        break;
+    }
+    case RuntimeCommandType::ReportParticleTelemetry:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle telemetry ignored because no active World exists.");
+            break;
+        }
+        if (!command.stringValue.empty())
+        {
+            const nlohmann::json telemetry =
+                world->DescribeParticleSystemTelemetry(
+                    command.stringValue);
+            if (telemetry.is_null())
+            {
+                diagnostics.ReportWarning(
+                    "Particle telemetry found no system named: " +
+                    command.stringValue);
+                break;
+            }
+            std::cout << telemetry.dump() << std::endl;
+            diagnostics.ReportInfo(telemetry.dump());
+            break;
+        }
+        for (const auto& entry : world->GetParticleSystems())
+        {
+            const nlohmann::json telemetry =
+                world->DescribeParticleSystemTelemetry(entry.first);
+            std::cout << telemetry.dump() << std::endl;
+            diagnostics.ReportInfo(telemetry.dump());
         }
         break;
     }

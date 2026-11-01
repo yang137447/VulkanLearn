@@ -45,6 +45,12 @@ bool EqualVector(const Eigen::Vector3f& left, const Eigen::Vector3f& right)
     return left.x() == right.x() && left.y() == right.y() && left.z() == right.z();
 }
 
+bool EqualVector(const Eigen::Vector4f& left, const Eigen::Vector4f& right)
+{
+    return left.x() == right.x() && left.y() == right.y() &&
+        left.z() == right.z() && left.w() == right.w();
+}
+
 bool EqualExposure(const CameraExposure& left, const CameraExposure& right)
 {
     return left.mode == right.mode &&
@@ -68,6 +74,15 @@ bool EqualMatrix(const Eigen::Matrix4f& left, const Eigen::Matrix4f& right)
     return true;
 }
 
+struct ParticleSystemNameLess
+{
+    bool operator()(const ParticleSystemSnapshot* first,
+        const ParticleSystemSnapshot* second) const
+    {
+        return first->name < second->name;
+    }
+};
+
 bool EqualInputSnapshot(const WorldSnapshot& left, const WorldSnapshot& right)
 {
     if (left.worldGeneration != right.worldGeneration ||
@@ -81,7 +96,8 @@ bool EqualInputSnapshot(const WorldSnapshot& left, const WorldSnapshot& right)
         left.camera.clipNear != right.camera.clipNear ||
         left.camera.clipFar != right.camera.clipFar ||
         left.meshDraws.size() != right.meshDraws.size() ||
-        left.lights.size() != right.lights.size())
+        left.lights.size() != right.lights.size() ||
+        left.particleSystems.size() != right.particleSystems.size())
         return false;
     for (size_t i = 0; i < left.meshDraws.size(); ++i)
     {
@@ -100,6 +116,32 @@ bool EqualInputSnapshot(const WorldSnapshot& left, const WorldSnapshot& right)
             !EqualVector(a.direction, b.direction) ||
             !EqualVector(a.color, b.color) || a.intensity != b.intensity ||
             a.squareSize != b.squareSize)
+            return false;
+    }
+    // 粒子系统按 unordered_map 顺序进入快照；这里按名称配对比较，
+    // 避免迭代顺序变化被误判成输入变化。资产内容变更通过 worldGeneration
+    // 覆盖，运行时覆盖与场景变换必须逐帧参与比较。
+    for (size_t index = 0; index < left.particleSystems.size(); ++index)
+    {
+        const ParticleSystemSnapshot* leftSystem = nullptr;
+        const ParticleSystemSnapshot* rightSystem = nullptr;
+        for (const ParticleSystemSnapshot& system : left.particleSystems)
+            if (system.name == right.particleSystems[index].name)
+                leftSystem = &system;
+        for (const ParticleSystemSnapshot& system : right.particleSystems)
+            if (system.name == left.particleSystems[index].name)
+                rightSystem = &system;
+        if (leftSystem == nullptr || rightSystem == nullptr ||
+            leftSystem->name != rightSystem->name ||
+            leftSystem->assetPath != rightSystem->assetPath ||
+            leftSystem->visible != rightSystem->visible ||
+            !EqualMatrix(leftSystem->model, rightSystem->model) ||
+            leftSystem->runtime.spawnRateScale !=
+                rightSystem->runtime.spawnRateScale ||
+            leftSystem->runtime.enabledEmitterMask !=
+                rightSystem->runtime.enabledEmitterMask ||
+            !EqualVector(leftSystem->runtime.colorTint,
+                rightSystem->runtime.colorTint))
             return false;
     }
     return true;
@@ -195,6 +237,54 @@ nlohmann::json OfflineRenderCoordinator::DescribeInput(
             {"type", static_cast<int>(light.type)}, {"position", Vector(light.position)},
             {"direction", Vector(light.direction)}, {"color", Vector(light.color)},
             {"intensity", light.intensity}, {"squareSize", light.squareSize}});
+    const OfflineParticlePreviewPolicy particlePolicy =
+        OfflineParticlePreviewDefaults();
+    result["particles"] = {
+        {"simulation", "Deterministic CPU mirror of particleSimulate.comp"},
+        {"fixedDeltaSeconds", particlePolicy.fixedDeltaSeconds},
+        {"previewSeconds", particlePolicy.previewSeconds},
+        {"maxSteps", particlePolicy.maxSteps},
+        {"steps", ComputeOfflineParticleStepCount(particlePolicy)},
+        {"seed", settings.seed},
+        {"compositor",
+            "billboard+ribbon; mesh falls back to billboard; "
+            "flipbook texture and soft-particle scene depth are not sampled"},
+        {"compositing", "premultiplied color + background * transmittance"}};
+    result["particles"]["systems"] = nlohmann::json::array();
+    std::vector<const ParticleSystemSnapshot*> orderedParticles;
+    orderedParticles.reserve(snapshot.particleSystems.size());
+    for (const ParticleSystemSnapshot& system : snapshot.particleSystems)
+        orderedParticles.push_back(&system);
+    std::stable_sort(orderedParticles.begin(), orderedParticles.end(),
+        ParticleSystemNameLess{});
+    for (const ParticleSystemSnapshot* system : orderedParticles)
+    {
+        nlohmann::json emitters = nlohmann::json::array();
+        for (const ParticleEmitterAsset& emitter : system->asset.emitters)
+        {
+            emitters.push_back({
+                {"name", emitter.name},
+                {"renderMode", emitter.renderMode},
+                {"maxParticles", emitter.maxParticles},
+                {"spawnRate", emitter.spawnRate},
+                {"burst", emitter.burst},
+                {"localSpace", emitter.localSpace},
+                {"additive", emitter.additive}});
+        }
+        result["particles"]["systems"].push_back({
+            {"name", system->name},
+            {"assetPath", system->assetPath},
+            {"visible", system->visible},
+            {"model", Matrix(system->model)},
+            {"runtime", {
+                {"spawnRateScale", system->runtime.spawnRateScale},
+                {"colorTint", {system->runtime.colorTint.x(),
+                    system->runtime.colorTint.y(),
+                    system->runtime.colorTint.z(),
+                    system->runtime.colorTint.w()}},
+                {"enabledEmitterMask", system->runtime.enabledEmitterMask}}},
+            {"emitters", std::move(emitters)}});
+    }
     return result;
 }
 
@@ -324,6 +414,22 @@ void OfflineRenderCoordinator::Run()
                 throw std::runtime_error(FormatRuntimeError(prepared.Error()));
             if (latestGeneration.load(std::memory_order_relaxed) != request->generation)
                 continue;
+            // 粒子层与路径追踪 film 共用同一冻结快照；模拟在 prepare worker
+            // 内完成，不触碰 Vulkan/活动 World，导出阶段只做逐像素合成。
+            // 交互预览不上传粒子层，跳过它以免 30 步模拟挤占 30ms 预览预算。
+            std::shared_ptr<const OfflineParticleOverlay> particleOverlay;
+            if (!request->settings.interactivePreview &&
+                !request->snapshot->particleSystems.empty())
+            {
+                particleOverlay =
+                    std::make_shared<const OfflineParticleOverlay>(
+                        BuildOfflineParticleOverlay(
+                            *request->snapshot,
+                            OfflineParticlePreviewDefaults(),
+                            request->settings.width,
+                            request->settings.height,
+                            request->settings.seed));
+            }
             nlohmann::json manifest;
             if (!request->settings.interactivePreview)
             {
@@ -354,6 +460,7 @@ void OfflineRenderCoordinator::Run()
                 prepared.Value().previewDeadline =
                     request->acceptedAt + OfflineCameraMotionPolicy::PreviewBudget;
             published->settings.samples = targetSamples;
+            published->particles = std::move(particleOverlay);
             for (size_t index = 0; index < request->snapshot->meshDraws.size(); ++index)
                 for (const auto& mesh : prepared.Value().instanceMeshes)
                     if (mesh.get() == prepared.Value().scene.instances[index].mesh)
@@ -438,6 +545,7 @@ std::shared_ptr<const OfflinePublishedResult> OfflineRenderCoordinator::Capture(
     auto result = std::make_shared<OfflinePublishedResult>();
     result->taskGeneration = active->generation;
     result->film = film;
+    result->particles = active->particles;
     result->manifest = active->manifest;
     result->manifest["taskGeneration"] = active->generation;
     result->manifest["samples"] = film->completedSamples;
@@ -467,12 +575,25 @@ void ExportOfflineResult(const OfflinePublishedResult& result,
     if (!std::filesystem::create_directories(temporary))
         throw std::runtime_error("Offline partial output already exists: " + temporary.string());
     const auto& film = *result.film;
-    std::vector<Offline::Vec3> combined(film.direct.size());
-    for (size_t i = 0; i < combined.size(); ++i)
-        combined[i] = film.direct[i] + film.indirect[i];
+    std::vector<Offline::Vec3> geometry(film.direct.size());
+    for (size_t i = 0; i < geometry.size(); ++i)
+        geometry[i] = film.direct[i] + film.indirect[i];
+    // 粒子是预乘颜色 + 背景可见比例的独立层；combined 输出按该公式合成，
+    // direct/indirect AOV 保持几何原值。
+    const bool hasParticles = result.particles != nullptr &&
+        !result.particles->Empty() &&
+        result.particles->width == film.width &&
+        result.particles->height == film.height;
+    const std::vector<Offline::Vec3> combined = hasParticles
+        ? CompositeOfflineParticleOverBackground(
+            geometry, *result.particles)
+        : geometry;
     WritePfm(temporary / "combined.pfm", combined, film.width, film.height);
     WritePfm(temporary / "direct.pfm", film.direct, film.width, film.height);
     WritePfm(temporary / "indirect.pfm", film.indirect, film.width, film.height);
+    if (hasParticles)
+        WritePfm(temporary / "particles.pfm",
+            result.particles->color, film.width, film.height);
     std::ofstream preview(temporary / "combined.ppm", std::ios::binary);
     preview << "P6\n" << film.width << ' ' << film.height << "\n255\n";
     for (const auto& color : combined)
@@ -486,8 +607,21 @@ void ExportOfflineResult(const OfflinePublishedResult& result,
     preview.close();
     nlohmann::json manifest = result.manifest;
     manifest["display"] = {{"exposure", displayExposure}, {"mapping", "Reinhard + sRGB"}};
+    if (hasParticles)
+    {
+        manifest["particleComposite"] = {
+            {"formula", "particleColor + geometry * transmittance"},
+            {"width", result.particles->width},
+            {"height", result.particles->height},
+            {"boundary",
+                "billboard+ribbon CPU compositor; mesh falls back to billboard; "
+                "flipbook texture and soft-particle scene depth are not sampled"}};
+    }
     for (const char* file : {"combined.pfm", "direct.pfm", "indirect.pfm", "combined.ppm"})
         manifest["outputs"][file] = ContentHasher::HashFile(temporary / file).ToHex();
+    if (hasParticles)
+        manifest["outputs"]["particles.pfm"] =
+            ContentHasher::HashFile(temporary / "particles.pfm").ToHex();
     std::ofstream file(temporary / "manifest.json");
     file << manifest.dump(2) << '\n';
     file.flush();

@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleStorageRO.glsl"
 #include "particleSorted.glsl"
+#include "particleAlive.glsl"
 #include "particleSprite.glsl"
 
 layout(location = 0) out vec4 vColor;
@@ -12,11 +13,14 @@ layout(location = 3) out float vSeed;
 layout(location = 4) out float vTime;
 layout(location = 5) out vec2 vAtlasUV;
 layout(location = 6) out float vViewDepth;
+layout(location = 7) out vec3 vWorldPosition;
 
 void main()
 {
     uint count = uint(particleBuffer.particles.length());
-    uint drawIndex = uint(gl_VertexIndex) / 6u;
+    // 间接绘制把实例数写到 alive；一个实例固定六个顶点，因此实例索引
+    // 才是紧凑存活槽位，顶点索引只决定 quad 角点。
+    uint drawIndex = uint(gl_InstanceIndex);
     if (drawIndex >= count)
     {
         gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
@@ -27,6 +31,7 @@ void main()
         vTime = 0.0;
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
+        vWorldPosition = vec3(0.0);
         return;
     }
 
@@ -36,6 +41,11 @@ void main()
     if (frame.sortParams.x > 0.5)
     {
         particleIndex = uint(sortedPairs.pairs[drawIndex].y);
+    }
+    else
+    {
+        // 未排序路径的 draw 数量来自 GPU 存活计数。
+        particleIndex = aliveIndices.indices[drawIndex];
     }
     if (particleIndex >= count)
     {
@@ -47,6 +57,7 @@ void main()
         vTime = 0.0;
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
+        vWorldPosition = vec3(0.0);
         return;
     }
 
@@ -62,6 +73,7 @@ void main()
         vTime = 0.0;
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
+        vWorldPosition = vec3(0.0);
         return;
     }
 
@@ -274,6 +286,7 @@ void main()
         frame.viewProjection * vec4(worldPosition, 1.0);
     // 视空间深度取正：相机前方为正，供片元与 sceneDepth 比较。
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
+    vWorldPosition = worldPosition;
 
     vColor = EvaluateColorCurve(lifeT);
     vColor.a *= frame.render.w;

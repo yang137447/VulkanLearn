@@ -76,6 +76,9 @@ bool ParticleFieldInModule(
     const std::string& module,
     const std::string& field)
 {
+    // RmlUi 固定页签没有独立的 Renderer/Events/Determinism 页：
+    // 这些字段归入 Emitter 页；v2 模块归属仍由
+    // ParticleModuleTypeForField 写进 loader 接受的 renderer/events/emitter。
     if (module == "emitter")
         return field == "name" || field == "position" ||
             field == "localSpace" ||
@@ -87,12 +90,18 @@ bool ParticleFieldInModule(
             field == "mesh.path" ||
             field == "mesh.scale" ||
             field == "mesh.alignment" ||
+            field == "mesh.materialInstancePath" ||
+            field == "materialInstancePath" ||
             field == "meshLighting" ||
             field == "meshAmbient" ||
+            field == "billboardShadows" ||
             field == "useFixedBounds" ||
             field == "fixedBounds.center" ||
             field == "fixedBounds.extent" ||
             field == "maxParticles" ||
+            field == "randomSeed" ||
+            field == "deterministicRandom" ||
+            field == "fixedTimeStep" ||
             field == "spawnRate" || field == "burst" ||
             field == "burstInterval" ||
             field == "lodDistance" ||
@@ -104,7 +113,10 @@ bool ParticleFieldInModule(
             field == "maxScreenSize" ||
             field == "rotation" ||
             field == "rotationSpeed" ||
-            field == "rotationRandom";
+            field == "rotationRandom" ||
+            field == "events.spawn" ||
+            field == "events.death" ||
+            field == "events.collision";
     if (module == "shape")
         return field == "shape.type" || field == "shape.radius" ||
             field == "shape.extent" || field == "shape.height" ||
@@ -136,7 +148,8 @@ bool ParticleFieldInModule(
             field == "collision.box.max" ||
             field == "collision.capsule.a" ||
             field == "collision.capsule.b" ||
-            field == "collision.capsule.radius";
+            field == "collision.capsule.radius" ||
+            field == "collision.sdf.path";
     if (module == "life")
         return field == "lifetime" || field == "lifetimeScaleKeys" ||
             field == "size" ||
@@ -209,6 +222,30 @@ nlohmann::json ParticleEmitterForEdit(const nlohmann::json& emitter)
     return FlattenParticleEmitter(emitter);
 }
 
+// 旧 emitter 根 materialInstancePath 是 mesh 路径的别名；结构编辑合并草稿
+// 时也按同一规则规范化，避免根别名在 v2 合并阶段覆盖 mesh 值。
+void RemoveParticleMaterialInstancePathAlias(nlohmann::json& emitter)
+{
+    if (!emitter.is_object()) return;
+    emitter.erase("materialInstancePath");
+    const auto mesh = emitter.find("mesh");
+    if (mesh != emitter.end() && mesh->is_object() && mesh->empty())
+        emitter.erase(mesh);
+    const auto modules = emitter.find("modules");
+    if (modules == emitter.end() || !modules->is_array()) return;
+    for (auto& module : *modules)
+    {
+        if (!module.is_object()) continue;
+        const auto fields = module.find("fields");
+        if (fields == module.end() || !fields->is_object()) continue;
+        fields->erase("materialInstancePath");
+        const auto moduleMesh = fields->find("mesh");
+        if (moduleMesh != fields->end() && moduleMesh->is_object() &&
+            moduleMesh->empty())
+            fields->erase(moduleMesh);
+    }
+}
+
 // 结构编辑提交整条 emitters 数组；提交前把尚未 flush 的字段草稿合并进
 // 工作副本，语义与 ApplyAssetChanges 的粒子路径一致：
 // 根字段、emitters.<index>.<field>、点路径与 reset 都按同一规则写入。
@@ -254,6 +291,8 @@ void ApplyParticleDraftChange(
         v2EmitterField = true;
     }
     if (field.empty() || !target->is_object()) return;
+    if (field == "materialInstancePath")
+        field = "mesh.materialInstancePath";
 
     if (v2EmitterField)
     {
@@ -262,6 +301,8 @@ void ApplyParticleDraftChange(
         if (SetParticleEmitterField(
             *target, field, value, change.reset))
         {
+            if (field == "mesh.materialInstancePath")
+                RemoveParticleMaterialInstancePathAlias(*target);
             return;
         }
         // 模块 helper 拒绝时保留旧的 raw 写入兜底，避免工作副本与
@@ -280,6 +321,8 @@ void ApplyParticleDraftChange(
         {
             if (change.reset) target->erase(segment);
             else (*target)[segment] = ParticleChangeValue(change.value);
+            if (field == "mesh.materialInstancePath")
+                RemoveParticleMaterialInstancePathAlias(*target);
             return;
         }
         if (!target->contains(segment))
@@ -3057,6 +3100,24 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
             systemMarkup += "<p class=\"particle-system-summary\">" +
                 std::to_string(document.at("emitters").size()) +
                 " emitters</p>";
+        if (document.value("version", 1) == 2)
+        {
+            // PS 根 userParameters 是 v2 用户参数表（最多 64 个有限数值）。
+            // 当前面板没有通用键值行控件，用单个 JSON 对象文本框显式编辑，
+            // 不把该字段静默隐藏；提交边界仍由 DecodeValue 校验。
+            const nlohmann::json parameters = document.value(
+                "userParameters", nlohmann::json::object());
+            systemMarkup +=
+                "<div class=\"particle-field-row\"><span>userParameters"
+                "</span><input type=\"text\" data-action=\"particle-field\""
+                " data-field=\"userParameters\" data-value-type=\"object\""
+                " value=\"" + Text(parameters.dump()) + "\"/>"
+                "<button class=\"particle-field-reset\""
+                " data-action=\"particle-field-reset\""
+                " data-field=\"userParameters\">Reset</button></div>"
+                "<p class=\"muted\">JSON object, numeric finite values, "
+                "max 64 entries.</p>";
+        }
         systemMarkup += ParticleModuleStackMarkup();
         return systemMarkup;
     }
@@ -3094,6 +3155,19 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
     {
         const std::string name = field.value("field", std::string());
         if (!ParticleFieldInModule(particleModule, name)) continue;
+        // SDF 路径只在碰撞类型为 sdf 时有意义；保留能力表字段以便切换
+        // 类型后立即出现，但默认不把无关路径显示成可编辑行。
+        if (name == "collision.sdf.path")
+        {
+            std::string collisionType = "none";
+            if (flattenedEmitter.contains("collision") &&
+                flattenedEmitter.at("collision").is_object())
+            {
+                collisionType = flattenedEmitter.at("collision").value(
+                    "type", std::string("none"));
+            }
+            if (collisionType != "sdf") continue;
+        }
         // 逐帧表由专用表格编辑；跳过 JSON 文本框，避免两套控件写同一字段。
         if (particleModule == "flipbook" &&
             (name == "flipbook.frameDurations" ||
@@ -3130,6 +3204,11 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
             flattenedEmitter.contains("fixedBounds"))
         {
             current = true;
+        }
+        if (name == "mesh.materialInstancePath" && current.is_null() &&
+            flattenedEmitter.contains("materialInstancePath"))
+        {
+            current = flattenedEmitter.at("materialInstancePath");
         }
         const std::string fieldPath = multiEmitter
             ? "emitters." + std::to_string(emitterIndex) + "." + name

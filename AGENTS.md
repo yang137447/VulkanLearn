@@ -56,8 +56,10 @@ Current implemented areas include:
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
-- GPU particle system: data-driven `PS_*.json` with optional `emitters[]` container, compute simulation and billboard pass;
-  current schema, ownership and limits: `documents/contracts/particle-system.md`
+- GPU particle system: data-driven `PS_*.json` v1/v2 module stacks, compute simulation,
+  billboard/ribbon/mesh rendering, GPU-count indirect draws, global alpha sorting, events,
+  runtime emitter/budget/user-parameter APIs and telemetry; current schema, ownership and
+  limits: `documents/contracts/particle-system.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers

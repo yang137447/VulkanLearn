@@ -1342,6 +1342,35 @@ void RenderSystem::RestartParticleSystems(
     particleRenderer.RestartParticleSystems(sceneObjectName);
 }
 
+bool RenderSystem::DrainParticleEvents(
+    uint32_t maxPerEmitter,
+    std::vector<VL::ParticleEventBatch>& outBatches,
+    std::string& outError)
+{
+    if (rendererBackend == nullptr)
+    {
+        outError = "Particle event drain failed: backend is unavailable.";
+        return false;
+    }
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    try
+    {
+        rendererBackend->WaitIdle();
+    }
+    catch (const std::exception& exception)
+    {
+        outError = std::string(
+            "Particle event drain failed while waiting for the device: ") +
+            exception.what();
+        return false;
+    }
+    return particleRenderer.DrainParticleEvents(
+        *rendererBackend, maxPerEmitter, outBatches, outError);
+}
+
 void RenderSystem::SetPendingSimulationDelta(float seconds)
 {
     // NaN/负值按 0 处理；上限与 EngineLoop 的 MaxSimulationDelta 一致。
@@ -3329,6 +3358,23 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
 
         // compute 必须在 particle pass 之前完成；这里录制的是本帧唯一一次
         // 模拟推进，图形 pass 只消费其结果。
+        VL::ParticleShadowCascadeData particleShadowData;
+        particleShadowData.valid = shadowCascadeFrameData.valid;
+        particleShadowData.lightViewProj =
+            shadowCascadeFrameData.lightViewProj;
+        particleShadowData.bias = shadowCascadeFrameData.bias;
+        particleShadowData.cascadeSplits =
+            shadowCascadeFrameData.cascadeSplits;
+        particleShadowData.csmParameters =
+            shadowCascadeFrameData.csmParameters;
+        particleRenderer.SetShadowCascadeData(particleShadowData);
+        // 粒子池是跨帧连续状态，不能像 per-image UBO 那样复制；有 emitter
+        // 时等待上一提交完成，避免两帧同时改写同一段粒子/排序/事件缓冲。
+        if (particleRenderer.HasEmitters())
+        {
+            rendererBackend->WaitForPreviousFrameFence(
+                frameIndex);
+        }
         particleRenderer.RecordSimulation(
             commandBuffer,
             swapChainImageIndex,

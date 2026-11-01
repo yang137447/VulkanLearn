@@ -25,12 +25,14 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
 {
     static const std::vector<ParticleModuleSpec> specs = {
         {"emitter", "Emitter",
-            {"maxParticles", "localSpace", "sortParticles"}},
+            {"maxParticles", "localSpace", "sortParticles",
+                "randomSeed", "deterministicRandom", "fixedTimeStep"}},
         {"renderer", "Renderer",
             {"renderMode", "billboardAlignment", "ribbonWidth",
                 "ribbonSegments", "ribbonFade", "mesh", "opacity",
                 "softness", "softParticles", "softParticleDistance",
-                "additive", "meshLighting", "meshAmbient"}},
+                "additive", "meshLighting", "meshAmbient",
+                "materialInstancePath", "billboardShadows"}},
         {"spawn.rate", "Spawn Rate",
             {"spawnRate", "burst", "burstInterval"}},
         {"spawn.shapeSphere", "Sphere Location", {"shape"}},
@@ -49,6 +51,7 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
         {"forces.attractor", "Point Attractor", {"attractor"}},
         {"forces.wind", "Wind", {"wind"}},
         {"collision.analytic", "Analytic Collision", {"collision"}},
+        {"events", "Particle Events", {"events"}},
         {"flipbook", "Flipbook", {"texture", "flipbook"}},
         {"lod", "LOD",
             {"lod", "lodDistance", "lodSpawnRateScale"}},
@@ -215,13 +218,16 @@ inline bool FindModuleIndex(
 inline std::string ParticleModuleTypeForField(std::string_view field)
 {
     using namespace ParticleModuleEditDetail;
-    if (IsOneOf(field, {"maxParticles", "localSpace", "sortParticles"}))
+    if (IsOneOf(field,
+        {"maxParticles", "localSpace", "sortParticles", "randomSeed",
+            "deterministicRandom", "fixedTimeStep"}))
         return "emitter";
     if (IsOneOf(field,
         {"renderMode", "billboardAlignment", "ribbonWidth",
             "ribbonSegments", "ribbonFade", "mesh", "opacity",
             "softness", "softParticles", "softParticleDistance",
-            "additive", "meshLighting", "meshAmbient"}) ||
+            "additive", "meshLighting", "meshAmbient",
+            "materialInstancePath", "billboardShadows"}) ||
         HasPrefix(field, "mesh."))
         return "renderer";
     if (IsOneOf(field, {"spawnRate", "burst", "burstInterval"}))
@@ -250,6 +256,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         return "forces.wind";
     if (field == "collision" || HasPrefix(field, "collision."))
         return "collision.analytic";
+    if (field == "events" || HasPrefix(field, "events."))
+        return "events";
     if (field == "texture" || field == "flipbook" ||
         HasPrefix(field, "flipbook."))
         return "flipbook";

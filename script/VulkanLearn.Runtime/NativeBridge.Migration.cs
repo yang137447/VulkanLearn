@@ -54,6 +54,7 @@ public static partial class NativeBridge
             nextBlueprint = context.NextBlueprint,
             nextComponent = context.NextComponent,
             nextParticle = context.NextParticle,
+            nextParticleEmitter = context.NextParticleEmitter,
             contacts = context.Contacts.OrderBy(p => p.Item1, StringComparer.Ordinal)
                 .ThenBy(p => p.Item2, StringComparer.Ordinal).Select(p => new[] { p.Item1, p.Item2 }).ToArray(),
             triggers = context.Triggers.OrderBy(p => p.Item1, StringComparer.Ordinal)
@@ -69,6 +70,7 @@ public static partial class NativeBridge
                 enabled = i.Blueprint.Enabled,
                 destroyed = i.Blueprint.PendingDestroy,
                 particles = context.Services.ParticleIds(i.Blueprint),
+                particleEmitters = context.Services.ParticleEmitterIds(i.Blueprint),
                 properties = CaptureProperties(i.Blueprint),
                 springArms = i.Blueprint.Components.OfType<SpringArmComponent>().Select(CaptureSpringArmHistory).ToArray(),
                 components = i.LogicComponents.Select(c => new
@@ -94,6 +96,9 @@ public static partial class NativeBridge
         context.NextComponent = Math.Max(context.NextComponent, snapshot.GetProperty("nextComponent").GetUInt64());
         if (snapshot.TryGetProperty("nextParticle", out var nextParticle))
             context.NextParticle = Math.Max(context.NextParticle, nextParticle.GetUInt64());
+        if (snapshot.TryGetProperty("nextParticleEmitter", out var nextParticleEmitter))
+            context.NextParticleEmitter = Math.Max(
+                context.NextParticleEmitter, nextParticleEmitter.GetUInt64());
         var runtimeStates = snapshot.GetProperty("states").EnumerateArray()
             .ToDictionary(n => n.GetProperty("id").GetString()!, StringComparer.Ordinal);
         foreach (var instance in context.Instances)
@@ -106,6 +111,12 @@ public static partial class NativeBridge
             if (source.TryGetProperty("particles", out var particles))
                 context.Services.RestoreParticles(blueprint,
                     particles.EnumerateArray().Select(p => p.GetString()!));
+            if (source.TryGetProperty("particleEmitters", out var particleEmitters))
+                context.Services.RestoreParticleEmitters(blueprint,
+                    particleEmitters.EnumerateObject().ToDictionary(
+                        p => p.Name,
+                        p => p.Value.EnumerateArray().Select(e => e.GetString()!).ToArray(),
+                        StringComparer.Ordinal));
             RestoreProperties(blueprint, source.GetProperty("properties"));
             foreach (var arm in source.GetProperty("springArms").EnumerateArray()) RestoreSpringArmHistory(blueprint, arm);
             instance.Started = source.GetProperty("Started").GetBoolean();

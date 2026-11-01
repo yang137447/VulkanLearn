@@ -433,3 +433,56 @@ TEST(ParticleCollisionCcd, SingleStepMatchesSemiImplicitGravityAndDrag)
     EXPECT_NEAR(state.velocity.y(), expectedVelocity, 1.0e-4f);
     EXPECT_NEAR(state.position.y(), expectedVelocity * 0.1f, 1.0e-4f);
 }
+
+TEST(ParticleCollisionSdf, PushesParticleOutAlongDistanceGradient)
+{
+    auto sdf = std::make_shared<ParticleSdfAsset>();
+    sdf->resolution = Eigen::Vector3i(2, 2, 2);
+    sdf->boundsMin = Eigen::Vector3f(-10.0f, -10.0f, -10.0f);
+    sdf->boundsMax = Eigen::Vector3f(10.0f, 10.0f, 10.0f);
+    // 平面状距离场：d = x，负值在 x<0 的实体内。
+    sdf->distances = {
+        -10.0f, 10.0f,
+        -10.0f, 10.0f,
+        -10.0f, 10.0f,
+        -10.0f, 10.0f};
+
+    ParticleEmitterAsset emitter;
+    emitter.collisionType = "sdf";
+    emitter.collisionSdf = sdf;
+    emitter.collisionRadius = 3.0f;
+    emitter.collisionBounce = 0.0f;
+    emitter.collisionFriction = 0.0f;
+    ParticleCollisionState state;
+    state.position = Eigen::Vector3f(2.0f, 0.0f, 0.0f);
+    state.velocity = Eigen::Vector3f(-10.0f, 0.0f, 0.0f);
+
+    Eigen::Vector3f normal = Eigen::Vector3f::Zero();
+    ASSERT_TRUE(ResolveParticleCollision(state, emitter, &normal));
+    EXPECT_NEAR(state.position.x(), 3.0f, 1.0e-4f);
+    EXPECT_NEAR(normal.x(), 1.0f, 1.0e-4f);
+    EXPECT_NEAR(state.velocity.x(), 0.0f, 1.0e-4f);
+}
+
+TEST(ParticleCollisionSdf, OutsideBoundsLeavesParticleUntouched)
+{
+    auto sdf = std::make_shared<ParticleSdfAsset>();
+    sdf->resolution = Eigen::Vector3i(2, 2, 2);
+    sdf->boundsMin = Eigen::Vector3f(-1.0f, -1.0f, -1.0f);
+    sdf->boundsMax = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
+    sdf->distances.assign(8, 0.0f);
+
+    ParticleEmitterAsset emitter;
+    emitter.collisionType = "sdf";
+    emitter.collisionSdf = sdf;
+    emitter.collisionRadius = 1.0f;
+    ParticleCollisionState state;
+    state.position = Eigen::Vector3f(100.0f, 0.0f, 0.0f);
+    state.velocity = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+
+    Eigen::Vector3f normal = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+    EXPECT_TRUE(ResolveParticleCollision(state, emitter, &normal));
+    EXPECT_FLOAT_EQ(state.position.x(), 100.0f);
+    EXPECT_FLOAT_EQ(state.velocity.x(), 1.0f);
+    EXPECT_FLOAT_EQ(normal.squaredNorm(), 0.0f);
+}

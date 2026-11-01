@@ -121,6 +121,12 @@ public:
     // 运行时 restart：只重置该场景对象名下发射器的模拟时间/预热/清池/剔除
     // 状态；不重新加载 PS 资产，也不重建纹理或 GPU 池。
     void RestartParticleSystems(const std::string& sceneObjectName);
+    // 事件回读：调用方需处于安全点；内部会等待设备空闲，然后把每个
+    // 发射器的 bounded 事件记录复制到 CPU。供脚本/调试层消费。
+    bool DrainParticleEvents(
+        uint32_t maxPerEmitter,
+        std::vector<VL::ParticleEventBatch>& outBatches,
+        std::string& outError);
     // 由 EngineLoop 在 scripts.Tick 之后写入；快照构建与粒子模拟只消费它。
     void SetPendingSimulationDelta(float seconds);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }

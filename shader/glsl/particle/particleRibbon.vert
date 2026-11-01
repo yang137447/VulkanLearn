@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleStorageRO.glsl"
 #include "particleSorted.glsl"
+#include "particleAlive.glsl"
 #include "particleSprite.glsl"
 
 layout(location = 0) out vec4 vColor;
@@ -12,6 +13,7 @@ layout(location = 3) out float vSeed;
 layout(location = 4) out float vTime;
 layout(location = 5) out vec2 vAtlasUV;
 layout(location = 6) out float vViewDepth;
+layout(location = 7) out vec3 vWorldPosition;
 
 void CullVertex()
 {
@@ -23,6 +25,7 @@ void CullVertex()
     vTime = 0.0;
     vAtlasUV = vec2(0.0);
     vViewDepth = 0.0;
+    vWorldPosition = vec3(0.0);
 }
 
 void main()
@@ -30,7 +33,9 @@ void main()
     uint count = uint(particleBuffer.particles.length());
     uint segments = clamp(uint(frame.ribbonParams.x + 0.5), 1u, 3u);
     uint verticesPerParticle = segments * 6u;
-    uint drawIndex = uint(gl_VertexIndex) / verticesPerParticle;
+    // 非索引 indirect 命令的 instanceCount 由 GPU finalize 写为存活数；
+    // 每个实例固定输出一条条带的 verticesPerParticle 个顶点。
+    uint drawIndex = uint(gl_InstanceIndex);
     uint localVertex = uint(gl_VertexIndex) % verticesPerParticle;
     if (drawIndex >= count)
     {
@@ -44,6 +49,10 @@ void main()
     if (frame.sortParams.x > 0.5)
     {
         particleIndex = uint(sortedPairs.pairs[drawIndex].y);
+    }
+    else
+    {
+        particleIndex = aliveIndices.indices[drawIndex];
     }
     if (particleIndex >= count)
     {
@@ -115,6 +124,7 @@ void main()
     gl_Position =
         frame.viewProjection * vec4(worldPosition, 1.0);
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
+    vWorldPosition = worldPosition;
 
     // 颜色仍按粒子寿命求值；尾端从当前端(0)向最旧历史端(1)线性衰减。
     float tailT = (float(segment) + along) / float(segments);

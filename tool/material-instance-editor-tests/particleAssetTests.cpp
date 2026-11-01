@@ -1645,16 +1645,18 @@ TEST(ParticleAsset, ExplicitFalseDisablesFixedBounds)
     EXPECT_FLOAT_EQ(asset.emitters[0].fixedBoundsExtent.y(), 5.0f);
 }
 
-TEST(ParticleAsset, LocalSpaceRejectsWorldCollision)
+TEST(ParticleAsset, LocalSpaceAcceptsCollisionInLocalSpace)
 {
     Json document = MultiEmitterDocument();
     document["emitters"][0]["localSpace"] = true;
     document["emitters"][0]["collision"] = Json{{"type", "plane"}};
 
-    EXPECT_THROW(
+    const ParticleSystemAsset asset =
         ParticleAssetLoader::ParseJson(
-            document, "Maps/SC_test/PS_local_collision.json"),
-        std::invalid_argument);
+            document, "Maps/SC_test/PS_local_collision.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_TRUE(asset.emitters[0].localSpace);
+    EXPECT_EQ(asset.emitters[0].collisionType, "plane");
 }
 
 TEST(ParticleAsset, FixedBoundsRejectsInvalidExtent)
@@ -2641,4 +2643,528 @@ TEST(ParticleAsset, LifetimeScaleEvaluatePiecewiseLinear)
         ParticleLifetimeScaleKey{1.0f, 0.0f}};
     EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(duplicate, 0.5f), 3.0f);
     EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(duplicate, 0.75f), 1.5f);
+}
+
+TEST(ParticleAsset, V2UserParametersSubstituteIntoModuleNumbers)
+{
+    const Json document = Json{
+        {"name", "PS_params"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", Json{
+            {"Rate", 42.5},
+            {"Radius", 8.0}}},
+        {"modules", Json::array({
+            Json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", Json{{"maxParticles", 64}}}},
+            Json{
+                {"type", "spawn.rate"},
+                {"enabled", true},
+                {"fields", Json{{"spawnRate", "$Rate"}}}},
+            Json{
+                {"type", "spawn.shapeSphere"},
+                {"enabled", true},
+                {"fields", Json{{"shape", Json{
+                    {"type", "sphere"},
+                    {"radius", "$Radius"}}}}}},
+            Json{
+                {"type", "update.lifetime"},
+                {"enabled", true},
+                {"fields", Json{{"lifetime", Json::array({0.5, 1.0})}}}}
+        })}
+    };
+
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_params.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].spawnRate, 42.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 8.0f);
+}
+
+TEST(ParticleAsset, V2UnknownUserParameterReferenceIsRejected)
+{
+    const Json document = Json{
+        {"name", "PS_params"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", Json{{"Rate", 1.0}}},
+        {"modules", Json::array({
+            Json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", Json{{"maxParticles", 64}}}},
+            Json{
+                {"type", "spawn.rate"},
+                {"enabled", true},
+                {"fields", Json{{"spawnRate", "$Missing"}}}}
+        })}
+    };
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_params.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, EventsDeterminismAndFixedStepParse)
+{
+    const Json document = Json{
+        {"name", "PS_events"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({Json{
+            {"name", "sparks"},
+            {"events", Json{
+                {"spawn", true},
+                {"death", true},
+                {"collision", true}}},
+            {"randomSeed", 7u},
+            {"deterministicRandom", true},
+            {"fixedTimeStep", 0.0166667f}
+        }})}
+    };
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_events.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_TRUE(asset.emitters[0].emitSpawnEvent);
+    EXPECT_TRUE(asset.emitters[0].emitDeathEvent);
+    EXPECT_TRUE(asset.emitters[0].emitCollisionEvent);
+    EXPECT_EQ(asset.emitters[0].randomSeed, 7u);
+    EXPECT_TRUE(asset.emitters[0].deterministicRandom);
+    EXPECT_FLOAT_EQ(asset.emitters[0].fixedTimeStep, 0.0166667f);
+}
+
+TEST(ParticleAsset, LocalSpaceCanCombineWithAnalyticCollision)
+{
+    const Json document = Json{
+        {"name", "PS_local_collision"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({Json{
+            {"name", "local"},
+            {"localSpace", true},
+            {"collision", Json{
+                {"type", "box"},
+                {"box", Json{
+                    {"min", {-1.0, -1.0, -1.0}},
+                    {"max", {1.0, 1.0, 1.0}}}}}}
+        }})}
+    };
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_local_collision.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_TRUE(asset.emitters[0].localSpace);
+    EXPECT_EQ(asset.emitters[0].collisionType, "box");
+}
+
+TEST(ParticleAsset, MaterialInstancePathMustBeRelativeJson)
+{
+    const Json document = Json{
+        {"name", "PS_material"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({Json{
+            {"name", "mesh"},
+            {"renderMode", "mesh"},
+            {"mesh", Json{{"path", "Maps/SC_test/Meshes/SM_x.json"}}},
+            {"materialInstancePath", "../escape.json"}
+        }})}
+    };
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_material.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, AuthoringJsonIsFrozenOnlyWhenUserParametersMatter)
+{
+    const Json withParameters = Json{
+        {"name", "PS_params"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", Json{{"Speed", 2.0}}},
+        {"modules", Json::array({
+            Json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", Json{{"maxParticles", 32}}}},
+            Json{
+                {"type", "spawn.rate"},
+                {"enabled", true},
+                {"fields", Json{{"spawnRate", "$Speed"}}}}
+        })}
+    };
+    const ParticleSystemAsset parsed =
+        ParticleAssetLoader::ParseJson(
+            withParameters, "Maps/SC_test/PS_params.json");
+    ASSERT_TRUE(parsed.authoringJson != nullptr);
+    EXPECT_EQ(parsed.authoringJson->at("name"), "PS_params");
+
+    const Json withoutParameters = Json{
+        {"name", "PS_plain"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"modules", Json::array({
+            Json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", Json{{"maxParticles", 32}}}},
+            Json{
+                {"type", "spawn.rate"},
+                {"enabled", true},
+                {"fields", Json{{"spawnRate", 20.0}}}}
+        })}
+    };
+    const ParticleSystemAsset plain =
+        ParticleAssetLoader::ParseJson(
+            withoutParameters, "Maps/SC_test/PS_plain.json");
+    EXPECT_TRUE(plain.authoringJson == nullptr);
+}
+
+namespace
+{
+
+EditorAssetFieldChange ParticleEditorChange(
+    std::string field,
+    EditorAssetFieldValue value)
+{
+    EditorAssetFieldChange change;
+    change.field = std::move(field);
+    change.value = std::move(value);
+    return change;
+}
+
+EditorAssetFieldChange ParticleEditorReset(std::string field)
+{
+    EditorAssetFieldChange change;
+    change.field = std::move(field);
+    change.reset = true;
+    return change;
+}
+
+const Json* FindParticleCapability(
+    const Json& fields,
+    const std::string& name)
+{
+    for (const Json& field : fields)
+        if (field.value("field", std::string()) == name)
+            return &field;
+    return nullptr;
+}
+
+} // namespace
+
+TEST(ParticleEditorFields, RendererEventsDeterminismAndSdfAreExposed)
+{
+    Json document = MultiEmitterDocument();
+    document["version"] = 2;
+    document["userParameters"] = Json{{"Speed", 2.0}, {"Radius", 8.0}};
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    ASSERT_TRUE(capabilities["fields"].is_array());
+    ASSERT_TRUE(capabilities["emitters"].is_array());
+    ASSERT_EQ(capabilities["emitters"].size(), 2u);
+
+    const Json& rootFields = capabilities["fields"];
+    const Json* rootParameters =
+        FindParticleCapability(rootFields, "userParameters");
+    ASSERT_NE(rootParameters, nullptr);
+    EXPECT_EQ(rootParameters->at("type"), "object");
+    EXPECT_TRUE(rootParameters->at("resettable").get<bool>());
+
+    const Json& emitterFields = capabilities["emitters"][0]["fields"];
+    EXPECT_EQ(FindParticleCapability(emitterFields, "userParameters"),
+        nullptr);
+
+    const Json* material = FindParticleCapability(
+        emitterFields, "mesh.materialInstancePath");
+    ASSERT_NE(material, nullptr);
+    EXPECT_EQ(material->at("type"), "string");
+    EXPECT_EQ(material->at("unit"), "asset_path");
+    EXPECT_TRUE(material->at("resettable").get<bool>());
+    // 根别名仍可写入，但能力表只公开规范位置，避免两行写同一值。
+    EXPECT_EQ(FindParticleCapability(emitterFields, "materialInstancePath"),
+        nullptr);
+
+    const Json* shadows =
+        FindParticleCapability(emitterFields, "billboardShadows");
+    ASSERT_NE(shadows, nullptr);
+    EXPECT_EQ(shadows->at("type"), "boolean");
+    EXPECT_TRUE(shadows->at("resettable").get<bool>());
+
+    for (const char* name : {"events.spawn", "events.death",
+             "events.collision"})
+    {
+        const Json* event = FindParticleCapability(emitterFields, name);
+        ASSERT_NE(event, nullptr) << name;
+        EXPECT_EQ(event->at("type"), "boolean");
+        EXPECT_TRUE(event->at("resettable").get<bool>());
+    }
+
+    const Json* seed = FindParticleCapability(emitterFields, "randomSeed");
+    ASSERT_NE(seed, nullptr);
+    EXPECT_EQ(seed->at("type"), "number");
+    EXPECT_TRUE(seed->at("integer").get<bool>());
+    EXPECT_DOUBLE_EQ(seed->at("minimum").get<double>(), 0.0);
+    EXPECT_DOUBLE_EQ(seed->at("maximum").get<double>(), 4294967295.0);
+    EXPECT_TRUE(seed->at("resettable").get<bool>());
+
+    const Json* deterministic = FindParticleCapability(
+        emitterFields, "deterministicRandom");
+    ASSERT_NE(deterministic, nullptr);
+    EXPECT_EQ(deterministic->at("type"), "boolean");
+    EXPECT_TRUE(deterministic->at("resettable").get<bool>());
+
+    const Json* step =
+        FindParticleCapability(emitterFields, "fixedTimeStep");
+    ASSERT_NE(step, nullptr);
+    EXPECT_EQ(step->at("type"), "number");
+    EXPECT_DOUBLE_EQ(step->at("minimum").get<double>(), 0.0);
+    EXPECT_DOUBLE_EQ(step->at("maximum").get<double>(), 0.25);
+    EXPECT_TRUE(step->at("resettable").get<bool>());
+
+    const Json* collisionType =
+        FindParticleCapability(emitterFields, "collision.type");
+    ASSERT_NE(collisionType, nullptr);
+    const Json& enumValues = collisionType->at("enum");
+    EXPECT_NE(
+        std::find(enumValues.begin(), enumValues.end(), "sdf"),
+        enumValues.end());
+
+    const Json* sdfPath =
+        FindParticleCapability(emitterFields, "collision.sdf.path");
+    ASSERT_NE(sdfPath, nullptr);
+    EXPECT_EQ(sdfPath->at("type"), "string");
+    EXPECT_EQ(sdfPath->at("unit"), "asset_path");
+    EXPECT_TRUE(sdfPath->at("resettable").get<bool>());
+}
+
+TEST(ParticleEditorFields, UserParametersAreV2OnlyAndBounded)
+{
+    Json v1 = MultiEmitterDocument();
+    const Json v1Capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, v1);
+    EXPECT_EQ(FindParticleCapability(v1Capabilities["fields"],
+        "userParameters"), nullptr);
+    EXPECT_EQ(FindParticleCapability(
+        v1Capabilities["emitters"][0]["fields"], "userParameters"),
+        nullptr);
+
+    Json v2 = MultiEmitterDocument();
+    v2["version"] = 2;
+    const Json v2Capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, v2);
+    ASSERT_NE(FindParticleCapability(v2Capabilities["fields"],
+        "userParameters"), nullptr);
+
+    const std::vector<EditorAssetFieldChange> valid{
+        ParticleEditorChange(
+            "userParameters", Json{{"Speed", 2.0}, {"Count", 3}})};
+    ApplyAssetChanges(v2, EditorAssetDocumentKind::ParticleSystem, valid);
+    EXPECT_DOUBLE_EQ(v2.at("userParameters").at("Speed").get<double>(),
+        2.0);
+    EXPECT_DOUBLE_EQ(v2.at("userParameters").at("Count").get<double>(),
+        3.0);
+
+    Json tooMany = Json::object();
+    for (int index = 0; index < 65; ++index)
+        tooMany["P" + std::to_string(index)] = 1.0;
+    EXPECT_THROW(
+        ApplyAssetChanges(v2, EditorAssetDocumentKind::ParticleSystem,
+            {ParticleEditorChange("userParameters", tooMany)}),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ApplyAssetChanges(v2, EditorAssetDocumentKind::ParticleSystem,
+            {ParticleEditorChange(
+                "userParameters", Json{{"Speed", "fast"}})}),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ApplyAssetChanges(v2, EditorAssetDocumentKind::ParticleSystem,
+            {ParticleEditorChange(
+                "userParameters", Json{{"", 1.0}})}),
+        std::invalid_argument);
+
+    Json exactlyLimit = Json::object();
+    for (int index = 0; index < 64; ++index)
+        exactlyLimit["P" + std::to_string(index)] = 0.5;
+    EXPECT_NO_THROW(ApplyAssetChanges(
+        v2, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorChange("userParameters", exactlyLimit)}));
+    EXPECT_EQ(v2.at("userParameters").size(), 64u);
+
+    EXPECT_THROW(
+        ApplyAssetChanges(v1, EditorAssetDocumentKind::ParticleSystem,
+            {ParticleEditorChange("userParameters", Json{{"Speed", 1.0}})}),
+        std::invalid_argument);
+
+    ApplyAssetChanges(v2, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorReset("userParameters")});
+    EXPECT_FALSE(v2.contains("userParameters"));
+}
+
+TEST(ParticleEditorFields, NewFieldsRoundTripAndResetToLoaderDefaults)
+{
+    Json document = MultiEmitterDocument();
+    const std::vector<EditorAssetFieldChange> changes{
+        ParticleEditorChange("emitters.0.billboardShadows", true),
+        ParticleEditorChange("emitters.0.mesh.materialInstancePath",
+            std::string("Maps/SC_test/Materials/MI_spark.json")),
+        ParticleEditorChange("emitters.0.events.spawn", true),
+        ParticleEditorChange("emitters.0.events.death", true),
+        ParticleEditorChange("emitters.0.events.collision", true),
+        ParticleEditorChange("emitters.0.randomSeed", 12345.0),
+        ParticleEditorChange("emitters.0.deterministicRandom", true),
+        ParticleEditorChange("emitters.0.fixedTimeStep", 0.01),
+        ParticleEditorChange("emitters.0.collision.sdf.path",
+            std::string("Maps/SC_test/Sdf/sdf_field.json"))};
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_new_fields.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    const ParticleEmitterAsset& emitter = asset.emitters[0];
+    EXPECT_TRUE(emitter.billboardShadows);
+    EXPECT_EQ(emitter.materialInstancePath,
+        "Maps/SC_test/Materials/MI_spark.json");
+    EXPECT_TRUE(emitter.emitSpawnEvent);
+    EXPECT_TRUE(emitter.emitDeathEvent);
+    EXPECT_TRUE(emitter.emitCollisionEvent);
+    EXPECT_EQ(emitter.randomSeed, 12345u);
+    EXPECT_TRUE(emitter.deterministicRandom);
+    EXPECT_FLOAT_EQ(emitter.fixedTimeStep, 0.01f);
+    EXPECT_EQ(emitter.collisionSdfPath,
+        "Maps/SC_test/Sdf/sdf_field.json");
+
+    std::vector<EditorAssetFieldChange> resets;
+    for (const EditorAssetFieldChange& change : changes)
+        resets.push_back(ParticleEditorReset(change.field));
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, resets);
+    const ParticleSystemAsset defaults = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_new_fields_reset.json");
+    const ParticleEmitterAsset& reset = defaults.emitters[0];
+    EXPECT_FALSE(reset.billboardShadows);
+    EXPECT_TRUE(reset.materialInstancePath.empty());
+    EXPECT_FALSE(reset.emitSpawnEvent);
+    EXPECT_FALSE(reset.emitDeathEvent);
+    EXPECT_FALSE(reset.emitCollisionEvent);
+    EXPECT_EQ(reset.randomSeed, 0u);
+    EXPECT_FALSE(reset.deterministicRandom);
+    EXPECT_FLOAT_EQ(reset.fixedTimeStep, 0.0f);
+    EXPECT_TRUE(reset.collisionSdfPath.empty());
+}
+
+TEST(ParticleEditorFields, MaterialInstancePathRootAliasNormalizesToMesh)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["materialInstancePath"] =
+        "Maps/SC_test/Materials/MI_old.json";
+
+    const Json projected = ProjectEditableAsset(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    ASSERT_TRUE(projected["emitters"][0].contains("mesh"));
+    EXPECT_EQ(projected["emitters"][0]["mesh"]["materialInstancePath"],
+        "Maps/SC_test/Materials/MI_old.json");
+    EXPECT_FALSE(projected["emitters"][0].contains("materialInstancePath"));
+
+    ApplyAssetChanges(document, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorChange("emitters.0.materialInstancePath",
+            std::string("Maps/SC_test/Materials/MI_new.json"))});
+    EXPECT_FALSE(document["emitters"][0].contains("materialInstancePath"));
+    EXPECT_EQ(document["emitters"][0]["mesh"]["materialInstancePath"],
+        "Maps/SC_test/Materials/MI_new.json");
+
+    ApplyAssetChanges(document, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorReset("emitters.0.mesh.materialInstancePath")});
+    EXPECT_FALSE(document["emitters"][0].contains("materialInstancePath"));
+    EXPECT_FALSE(document["emitters"][0].contains("mesh"));
+}
+
+TEST(ParticleEditorFields, NewFieldRangesAndEnumsAreEnforced)
+{
+    Json document = MultiEmitterDocument();
+    const auto apply = [&document](EditorAssetFieldChange change)
+    {
+        return ApplyAssetChanges(
+            document, EditorAssetDocumentKind::ParticleSystem,
+            {std::move(change)});
+    };
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.randomSeed", -1.0)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.randomSeed", 1.5)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.randomSeed", 4294967296.0)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.fixedTimeStep", -0.01)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.fixedTimeStep", 0.2501)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.collision.type", std::string("sdf "))),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.collision.type", std::string("mesh"))),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.billboardShadows", std::string("true"))),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.events.spawn", 1.0)), std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.mesh.materialInstancePath", std::string())),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.collision.sdf.path", std::string())),
+        std::invalid_argument);
+
+    // 合法边界值必须通过。
+    EXPECT_NO_THROW(apply(ParticleEditorChange(
+        "emitters.0.randomSeed", 4294967295.0)));
+    EXPECT_NO_THROW(apply(ParticleEditorChange(
+        "emitters.0.fixedTimeStep", 0.25)));
+    EXPECT_NO_THROW(apply(ParticleEditorChange(
+        "emitters.0.collision.type", std::string("sdf"))));
+}
+
+TEST(ParticleAsset, V2EventsDeterminismAndRendererModulesFlatten)
+{
+    const Json document = Json{
+        {"name", "PS_v2_new_fields"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"emitters", Json::array({Json{
+            {"name", "sparks"},
+            {"modules", Json::array({
+                Json{{"type", "events"}, {"fields", Json{
+                    {"events", Json{
+                        {"spawn", true},
+                        {"death", true},
+                        {"collision", false}}}}}},
+                Json{{"type", "emitter"}, {"fields", Json{
+                    {"randomSeed", 9},
+                    {"deterministicRandom", true},
+                    {"fixedTimeStep", 0.02}}}},
+                Json{{"type", "renderer"}, {"fields", Json{
+                    {"billboardShadows", true},
+                    {"mesh", Json{{"materialInstancePath",
+                        "Maps/SC_test/Materials/MI_z.json"}}}}}}
+            })}
+        }})}
+    };
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_v2_new_fields.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    const ParticleEmitterAsset& emitter = asset.emitters[0];
+    EXPECT_TRUE(emitter.emitSpawnEvent);
+    EXPECT_TRUE(emitter.emitDeathEvent);
+    EXPECT_FALSE(emitter.emitCollisionEvent);
+    EXPECT_EQ(emitter.randomSeed, 9u);
+    EXPECT_TRUE(emitter.deterministicRandom);
+    EXPECT_FLOAT_EQ(emitter.fixedTimeStep, 0.02f);
+    EXPECT_TRUE(emitter.billboardShadows);
+    EXPECT_EQ(emitter.materialInstancePath,
+        "Maps/SC_test/Materials/MI_z.json");
 }

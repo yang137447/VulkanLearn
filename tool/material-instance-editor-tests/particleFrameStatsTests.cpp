@@ -26,7 +26,7 @@ TEST(ParticleFrameStats, ZeroValuesFormatAndExposeEveryJsonField)
         "gpuMs=0.000 gpuAvgMs=0.000 gpuMaxMs=0.000 gpuSamples=0");
 
     const nlohmann::ordered_json json = stats.ToJson();
-    ASSERT_EQ(json.size(), 16u);
+    ASSERT_EQ(json.size(), 17u);
     EXPECT_EQ(json.at("totalEmitters").get<uint32_t>(), 0u);
     EXPECT_EQ(json.at("visibleEmitters").get<uint32_t>(), 0u);
     EXPECT_EQ(json.at("culledEmitters").get<uint32_t>(), 0u);
@@ -44,6 +44,8 @@ TEST(ParticleFrameStats, ZeroValuesFormatAndExposeEveryJsonField)
         json.at("gpuAverageMilliseconds").get<double>(), 0.0);
     EXPECT_DOUBLE_EQ(json.at("gpuMaxMilliseconds").get<double>(), 0.0);
     EXPECT_EQ(json.at("gpuSampleCount").get<uint64_t>(), 0u);
+    ASSERT_TRUE(json.at("emitterGpu").is_array());
+    EXPECT_TRUE(json.at("emitterGpu").empty());
 }
 
 TEST(ParticleFrameStats, FullValuesSurviveJsonRoundTrip)
@@ -92,6 +94,33 @@ TEST(ParticleFrameStats, FullValuesSurviveJsonRoundTrip)
     EXPECT_DOUBLE_EQ(
         roundTripped.at("gpuMaxMilliseconds").get<double>(), 0.91);
     EXPECT_EQ(roundTripped.at("gpuSampleCount").get<uint64_t>(), 64u);
+    EXPECT_TRUE(roundTripped.at("emitterGpu").is_array());
+}
+
+TEST(ParticleFrameStats, EmitterGpuRowsRoundTrip)
+{
+    ParticleFrameStats stats;
+    stats.emitterGpu.push_back(ParticleFrameStats::EmitterGpu{
+        "__global__", true, 0.25, 0.20, 0.40, 8});
+    stats.emitterGpu.push_back(ParticleFrameStats::EmitterGpu{
+        "scene|asset|sparks", false, 0.0, 0.0, 0.0, 0});
+
+    const nlohmann::json json =
+        nlohmann::json::parse(stats.ToJson().dump());
+    ASSERT_EQ(json.at("emitterGpu").size(), 2u);
+    EXPECT_EQ(
+        json.at("emitterGpu").at(0).at("key").get<std::string>(),
+        "__global__");
+    EXPECT_TRUE(
+        json.at("emitterGpu").at(0).at("supported").get<bool>());
+    EXPECT_DOUBLE_EQ(
+        json.at("emitterGpu").at(0).at("milliseconds").get<double>(),
+        0.25);
+    EXPECT_EQ(
+        json.at("emitterGpu").at(0).at("sampleCount").get<uint64_t>(),
+        8u);
+    EXPECT_FALSE(
+        json.at("emitterGpu").at(1).at("supported").get<bool>());
 }
 
 TEST(ParticleFrameStats, BitonicDispatchCountMatchesPowersOfTwo)

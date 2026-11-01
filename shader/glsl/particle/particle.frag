@@ -10,11 +10,21 @@ layout(location = 3) in float vSeed;
 layout(location = 4) in float vTime;
 layout(location = 5) in vec2 vAtlasUV;
 layout(location = 6) in float vViewDepth;
+layout(location = 7) in vec3 vWorldPosition;
 
 layout(location = 0) out vec4 outColor;
 
 // particle pass 只写 sceneColor；sceneDepth 是图输入，不能同时作为附件。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
+// 与 mesh 共用 particle pass 的 shadowMap 输入；billboard 默认 unlit，
+// 只有 billboardShadows 开关打开时才按相机朝向法线调暗。
+layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+// overdraw 调试计数；只在片元最终写出时累加一次。
+layout(std430, set = 0, binding = 5) buffer ParticleDebug
+{
+    uint fragments;
+    uint reserved;
+} particleDebug;
 
 float Hash21(vec2 p)
 {
@@ -100,5 +110,17 @@ void main()
         outColor = vec4(vColor.rgb, vColor.a * alpha);
     }
     outColor.a *= softFade;
+    if (frame.shadowParams.w > 0.5)
+    {
+        vec3 facingNormal =
+            normalize(frame.cameraPosition.xyz - vWorldPosition);
+        float shadow = SampleParticleCsmShadow(
+            shadowMap,
+            vWorldPosition,
+            facingNormal);
+        outColor.rgb *= mix(1.0, shadow, 0.5);
+    }
     outColor *= frame.colorTint;
+    if (outColor.a > 0.0)
+        atomicAdd(particleDebug.fragments, 1u);
 }

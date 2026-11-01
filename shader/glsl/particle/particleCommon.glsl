@@ -97,6 +97,26 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 meshLightDirection;
     // xyz = 方向光线性 RGB 颜色（不含 lux 强度）
     vec4 meshLightColor;
+    // mesh 材质 v1 子集：baseColor / emissive(强度在 w) / PBR 标量
+    vec4 materialBaseColor;
+    vec4 materialEmissiveStrength;
+    // x = roughness, y = metallic, z = hasMaterial, w reserved
+    vec4 materialPbr;
+    // CSM：4 级 lightViewProj、逐级 bias、split 距离
+    mat4 shadowLightViewProj[4];
+    vec4 shadowCascadeBias[4];
+    vec4 shadowCascadeSplits;
+    // x = active cascade count, y = shadow distance, z = enabled, w reserved
+    vec4 shadowParams;
+    // x = random seed, y = fixed step seconds, z = fixed step index,
+    // w = deterministic random enabled
+    vec4 determinismParams;
+    // x = spawn events, y = death events, z = collision events, w reserved
+    vec4 eventParams;
+    // SDF 碰撞体：bounds + 分辨率（w 分别是 x/y/z 轴分辨率）
+    vec4 collisionSdfBoundsMin;
+    vec4 collisionSdfBoundsMax;
+    vec4 collisionSdfResolution;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -248,6 +268,86 @@ float EvaluateLifetimeScale(float lifeT)
     }
     float weight = clamp((t - t0) / span, 0.0, 1.0);
     return clamp(mix(scale0, scale1, weight), 0.0, 4.0);
+}
+
+// 粒子 pass 自己声明 shadowMap（set 3 binding 1），因此这里不能复用
+// common/lighting.glsl 的 UBOGlobal 版本，只保留同样的 CSM 语义：
+// 选择级联 -> light clip 空间转为 [0,1] UV -> 比较采样 -> 3x3 PCF。
+int SelectParticleShadowCascade(vec3 worldPos)
+{
+    int activeCascadeCount = int(frame.shadowParams.x + 0.5);
+    if (activeCascadeCount <= 0)
+    {
+        return 0;
+    }
+    float viewDepth = -(frame.view * vec4(worldPos, 1.0)).z;
+    for (int cascadeIndex = 0; cascadeIndex < 4; ++cascadeIndex)
+    {
+        if (cascadeIndex >= activeCascadeCount - 1 ||
+            viewDepth <= frame.shadowCascadeSplits[cascadeIndex])
+        {
+            return cascadeIndex;
+        }
+    }
+    return max(activeCascadeCount - 1, 0);
+}
+
+float SampleParticleShadowCascade(
+    sampler2DArrayShadow shadowMap,
+    vec3 worldPos,
+    float viewDepth,
+    int cascadeIndex)
+{
+    vec4 clip =
+        frame.shadowLightViewProj[cascadeIndex] *
+        vec4(worldPos, 1.0);
+    vec3 ndc = clip.xyz / clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        ndc.z < 0.0 || ndc.z > 1.0)
+    {
+        return 1.0;
+    }
+    vec4 bias = frame.shadowCascadeBias[cascadeIndex];
+    float compareDepth = ndc.z - bias.x;
+    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0).xy);
+    float shadow = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            shadow += texture(
+                shadowMap,
+                vec4(
+                    uv + vec2(x, y) * texel,
+                    float(cascadeIndex),
+                    compareDepth));
+        }
+    }
+    return shadow / 9.0;
+}
+
+float SampleParticleCsmShadow(
+    sampler2DArrayShadow shadowMap,
+    vec3 worldPos,
+    vec3 worldNormal)
+{
+    if (frame.shadowParams.z < 0.5 || frame.shadowParams.x < 0.5)
+    {
+        return 1.0;
+    }
+    float viewDepth = -(frame.view * vec4(worldPos, 1.0)).z;
+    if (viewDepth > frame.shadowParams.y)
+    {
+        return 1.0;
+    }
+    int cascadeIndex =
+        SelectParticleShadowCascade(worldPos);
+    return SampleParticleShadowCascade(
+        shadowMap,
+        worldPos,
+        viewDepth,
+        cascadeIndex);
 }
 
 #endif

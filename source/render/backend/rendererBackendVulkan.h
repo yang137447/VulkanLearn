@@ -281,6 +281,9 @@ public:
     void DestroyFramebuffers(std::vector<RHIFramebufferHandle>& framebufferHandles);
     RendererFrameContext BeginFrame(uint32_t currentFrame);
     void SubmitFrame(const RendererFrameContext& frameContext, uint32_t currentFrame);
+    // 粒子池跨帧连续，但 per-emitter/global buffer 仍按场景共享；有粒子模拟时
+    // 等待上一提交的 frame fence，避免两个在飞帧同时改写同一段池。
+    void WaitForPreviousFrameFence(uint32_t currentFrameIndex);
 
 private:
     RHIBufferHandle RequireBufferHandle(vk::Buffer buffer) const;
@@ -322,6 +325,8 @@ private:
     std::unique_ptr<RendererThumbnailImages> thumbnailImages;
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
+    bool hasSubmittedFrame = false;
+    uint32_t lastSubmittedFrameIndex = 0;
     std::atomic<bool> swapchainRecreateRequired{false};
     std::unordered_map<VkBuffer, RHIBufferHandle> bufferHandlesByBuffer;
     std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;

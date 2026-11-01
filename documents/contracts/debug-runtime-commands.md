@@ -48,16 +48,27 @@ buffer，用一次性 command buffer 从粒子池做 `copyBuffer`。JSON 根字�
 `estimatedDrawnVertices`、`gpuTimingSupported`、`gpuMilliseconds`、
 `gpuAverageMilliseconds`、`gpuMaxMilliseconds`、`gpuSampleCount`，
 每个 emitter 含 `key`、`maxParticles`、`aliveCount`、
-`culled`、`sortParticles`、`localSpace`、`renderMode`、`bounds.center`、`bounds.radius`、
-`elapsedSeconds`、`drawnVertices` 与最多 N 个活粒子的
+`overdrawFragments`、`estimatedParticleBufferReadBytes`、`culled`、`sortParticles`、
+`localSpace`、`renderMode`、`bounds.center`、`bounds.radius`、`elapsedSeconds`、
+`drawnVertices` 与最多 N 个活粒子的
 `position/age/velocity/lifetime` 明细。
+
+`overdrawFragments` 来自 particle graphics shader 的片元原子计数，只统计通过
+`discard` 并最终写出的片元；culling、alpha 裁掉或软粒子完全透明的片元不计入。
+`estimatedParticleBufferReadBytes` 是 `aliveCount × 80` 的读取规模估算，不是
+Vulkan 硬件显存带宽计数器。全局 alpha billboard 池的对应值在根字段
+`globalAliveParticles` / `globalOverdrawFragments` /
+`globalEstimatedParticleBufferReadBytes`；它们是 gather 副本的描述，根 `aliveParticles`
+已经包含其源 emitter 池，消费者不要把这两组数再次相加。
+overdraw 依赖 `fragmentStoresAndAtomics`；设备缺失该能力时初始化报错。
 
 `drawnVertices` 按当前 draw 路径估算：billboard 为 `maxParticles * 6`，
 ribbon 为 `maxParticles * ribbonSegments * 6`；
 `estimatedDrawnVertices` 只累加未被 cull 的发射器。位置/速度是模拟空间原始值：
 `localSpace: true` 时是发射器局部坐标，否则是世界坐标。这是 CPU 回读统计，
-GPU 字段与 `particlestats` 同源（particle graphics pass 的 timestamp），
-不是 overdraw 计数或显存带宽统计。
+GPU 字段与 `particlestats` 同源（particle graphics pass 的 timestamp）；
+`overdrawFragments` 是片元原子计数，`estimatedParticleBufferReadBytes` 是读取规模
+估算，不是硬件显存带宽统计。
 
 ## Particle Stats
 
@@ -79,10 +90,17 @@ gpuTimingSupported=... gpuMs=... gpuAvgMs=... gpuMaxMs=... gpuSamples=...`，
 时 `gpuTimingSupported=false`，其余 GPU 数值为 0，渲染不受影响；计时启用时
 `gpuMs/gpuAvgMs/gpuMaxMs` 固定三位小数。
 
+JSON 还包含 `emitterGpu[]`：逐 emitter 的
+`key/supported/milliseconds/averageMilliseconds/maxMilliseconds/sampleCount`。
+全局 alpha billboard 池使用 key `__global__`；这些值在对应 image 下一次
+`BeginFrame` 回收，不等待当前帧完成。
+
 统计来自渲染器当前帧的 CPU 侧录制结果，不等待设备空闲、不做 GPU 回读；没有 active World
 时也照常输出。`totalParticles` 是作者池容量总和，`drawCalls`/`vertices` 只累计实际执行
 `draw` 的 emitter，`sortDispatchCount` 只累计未剔除且启用排序的 emitter 的 bitonic pass。
-它不包含 GPU overdraw、GPU timer、带宽或实际存活粒子数（存活数走 `particledump`）。
+它包含 particle graphics pass 的总 GPU timestamp 与逐 emitter `emitterGpu[]`；
+仍不包含 overdraw、带宽或实际存活粒子数，这些由 `particledump` /
+`particletelemetry` 提供。
 
 ## Particle Instances
 
@@ -130,13 +148,82 @@ particleparam <name> reset
 - `colorTint <r> <g> <b> <a>`：四个分量必须有限；RGB 范围 `[0, 16]`，允许 HDR 增亮；
   alpha 范围 `[0, 1]`。颜色乘到 billboard、ribbon 与 mesh 三种 renderMode 的最终颜色，
   alpha 同时缩放不透明度。
-- `emitter <index> <0|1>`：`index` 是 `PS_*.json` 的 `emitters[]` 顺序下标，从 0 开始，
-  `< 16`。`0` 冻结该发射器：不推进模拟时间、不清池、不排序、不 dispatch、不绘制；
+- `emitter <index> <0|1>`：`index` 是稳定发射器槽位下标；作者发射器按
+  `PS_*.json` 的 `emitters[]` 顺序占 `0..N-1`，运行时 spawn 只追加，`< 16`；
+  destroy 后槽位保留为 tombstone，
+  不会重排或复用。`0` 冻结该发射器：不推进模拟时间、不清池、不排序、不 dispatch、不绘制；
   重新置 `1` 后从冻结状态继续，不重建粒子池或重播预热。它是运行时启停，不删除发射器，
   也不改资产结构。
 
 参数覆盖通过 `CommandBus` 在 GT 命令点执行；分线程渲染时由粒子渲染器在帧边界消费，
 不要求 Console 线程等待渲染线程。
+
+## Particle Emitters
+
+```text
+particleemitter <system> spawn <sourceIndex> [name]
+particleemitter <system> destroy <index|name>
+particleemitter <system> restart <index|name>
+particleemitter <system> enable <index|name> <0|1>
+```
+
+四条命令只作用于当前 active World 中名为 `<system>` 的粒子实例，不写资产。发射器身份是
+稳定槽位下标：作者发射器先占 `0..N-1`，运行时 spawn 只追加；`destroy` 是 tombstone，
+保留槽位和名字用于后续查询，但会从运行时紧凑资产中移除，因此渲染器会退休对应池。
+`spawn` 从 `sourceIndex` 槽位复制发射器模板，`name` 省略时生成 `runtime.<stableIndex>`；
+名字必须唯一且不超过 128 字符，槽位总数仍受 16 上限约束。
+
+`restart` 只递增该槽位的 `restartEpoch`；该值随快照的逐 emitter telemetry 发布，
+`ParticleRenderer::Synchronize` 比较 epoch 后只重置对应池的模拟状态，不重建 GPU 资源
+（现有整实例 `particlerestart` 仍直接重置该实例名下所有 emitter）。
+
+## Particle Attachment, Budget, User Parameters
+
+```text
+particleattach <system> mesh <target> [x y z [rx ry rz [sx sy sz]]]
+particleattach <system> component <blueprint> <component> [x y z [rx ry rz [sx sy sz]]]
+particleattach <system> detach
+particlebudget <system|world> <maxTotal> <emitterScale>
+particleuser <system> <key> <value>
+particleuser <system> clear <key>
+```
+
+- `particleattach` 的 `<target>` 是场景网格身份（例如 `mesh|Anchor`，也接受 World 对象键）；
+  组件目标是 Blueprint id 加组件 id。局部 TRS 省略时为零位置、零旋转、单位缩放。
+  目标当前不存在仍允许设置，但快照 `attachment.resolved=false`，粒子保持作者 TRS，不会
+  瞬移到原点；每帧由 `WorldSnapshotBuilder` 通过 `World::ResolveParticleSystemModel`
+  重新解析。显式 `SetParticleSystemTransform` 会清除附着。
+- `particlebudget` 的 `world` 是保留字，设置 World 总量上限；其它名字设置实例覆盖。
+  `maxTotal` 是总量上限（`0..1000000`）；实例值为 0 表示没有实例覆盖并沿用 World 上限，
+  World 值为 0 表示 World 不设总量上限。未设实例上限的实例按名称排序稳定分配
+  World 剩余总量；实例显式上限优先，且允许超过 World 总量。`emitterScale` 范围
+  `[0, 16]`，实例值与 World 值相乘。预算只存在于快照/渲染器消费端，不写资产。
+- `particleuser` 的 key 为 `1..64` 字符且每实例最多 64 个；value 必须有限且
+  `|value| <= 1e6`。覆盖存入快照 `userParameters`，不合并作者 `PS_*.json`。
+
+## Particle Telemetry
+
+```text
+particletelemetry [system]
+```
+
+打印 World 侧遥测 JSON。省略 system 时逐实例各打印一行，不等待设备空闲。
+`emitterCount`/`activeEmitterCount`/`enabledEmitterCount`/`visibleEmitterCount`/`authoredCapacity`/
+`budgetedCapacity` 是 CPU 作者态与预算计算；`aliveAvailable=false` 时
+`aliveParticles`/`lastFrameBudget` 以及逐 emitter 的 alive 都表示“渲染器尚未回填”，
+不是 0。渲染器可通过 `World::SetParticleSystemRendererTelemetry` 在 GT 上回填
+alive、逐槽位 alive 和上一帧预算。
+
+GPU 事件回读由 C# `ParticleSystem.Subscribe` 的 owner 级兴趣驱动：首个订阅设置
+`World::SetParticleEventCaptureInterest(owner,true)`，最后一个订阅移除/owner
+destroy/EndPlay 清除；EngineLoop 仅在 Play 且兴趣存在时最多每 100 ms 调用一次
+`RenderSystem::DrainParticleEvents`，不会在普通帧调用 `WaitIdle`。事件 key 使用
+`scene|asset|emitter` 的转义规则解码；`eventData.z` 目前由渲染器留 0，桥使用
+Play 模拟时钟打批次时间戳。`localSpace` 事件位置/法线按 World 的 emitter
+model 转到世界空间；找不到当前发射器时保留原始模拟空间值。
+计数与记录是“最新一帧”快照，不维护跨 100 ms 的逐帧读游标；因此两次轮询之间超过
+4096 条/发射器的事件会截断，且较早帧的记录可能被后一帧覆盖。需要逐帧完整事件流时应
+增加 GPU 事件环形队列，而不是把该回读路径当成无损流。
 
 ## Animation
 

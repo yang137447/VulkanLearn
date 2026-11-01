@@ -70,6 +70,7 @@ public:
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
+    bool IsPlaying() const { return state == ScriptPlayState::Playing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
     // 粒子等 GPU 模拟消费的逻辑帧间隔：Pause=0，Playing 用已乘 timeScale 的
     // time.delta，Editing/未加载脚本时回退到调用方的编辑器时间。

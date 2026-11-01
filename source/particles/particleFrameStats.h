@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -15,6 +16,17 @@ namespace VL
 // 两者都只读，不改变渲染行为。
 struct ParticleFrameStats
 {
+    // 逐发射器 GPU 绘制区间；全局排序池使用 key "__global__"。
+    struct EmitterGpu
+    {
+        std::string key;
+        bool supported = false;
+        double lastMilliseconds = 0.0;
+        double averageMilliseconds = 0.0;
+        double maxMilliseconds = 0.0;
+        uint64_t sampleCount = 0;
+    };
+
     uint32_t totalEmitters = 0;
     uint32_t visibleEmitters = 0;
     uint32_t culledEmitters = 0;
@@ -33,6 +45,7 @@ struct ParticleFrameStats
     double gpuAverageMilliseconds = 0.0;
     double gpuMaxMilliseconds = 0.0;
     uint64_t gpuSampleCount = 0;
+    std::vector<EmitterGpu> emitterGpu;
 
     nlohmann::ordered_json ToJson() const
     {
@@ -53,6 +66,17 @@ struct ParticleFrameStats
         result["gpuAverageMilliseconds"] = gpuAverageMilliseconds;
         result["gpuMaxMilliseconds"] = gpuMaxMilliseconds;
         result["gpuSampleCount"] = gpuSampleCount;
+        result["emitterGpu"] = nlohmann::ordered_json::array();
+        for (const EmitterGpu& emitter : emitterGpu)
+        {
+            result["emitterGpu"].push_back({
+                {"key", emitter.key},
+                {"supported", emitter.supported},
+                {"milliseconds", emitter.lastMilliseconds},
+                {"averageMilliseconds", emitter.averageMilliseconds},
+                {"maxMilliseconds", emitter.maxMilliseconds},
+                {"sampleCount", emitter.sampleCount}});
+        }
         return result;
     }
 

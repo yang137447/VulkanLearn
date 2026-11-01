@@ -573,6 +573,10 @@
                 {
                     "resource": "sceneDepth",
                     "binding": 0
+                },
+                {
+                    "resource": "shadowMap",
+                    "binding": 1
                 }
             ],
             "output": [

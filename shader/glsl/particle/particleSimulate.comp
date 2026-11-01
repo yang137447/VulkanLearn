@@ -5,6 +5,44 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 #include "particleCommon.glsl"
 #include "particleStorageRW.glsl"
 
+// GPU 侧每帧重置的计数与输出队列。模拟结束后 aliveIndices 的前
+// counters.alive 项就是本帧存活粒子的紧凑索引，供间接绘制/排序使用。
+layout(std430, set = 0, binding = 2) buffer ParticleAliveIndices
+{
+    uint indices[];
+} aliveIndices;
+
+layout(std430, set = 0, binding = 3) buffer ParticleCounters
+{
+    uint alive;
+    uint events;
+    uint spawn;
+    uint death;
+    uint collision;
+    uint capacity;
+} counters;
+
+struct ParticleEvent
+{
+    vec4 positionAge;
+    vec4 velocityLife;
+    vec4 eventData; // x = type(0 spawn,1 death,2 collision), y = index
+    vec4 normal;
+};
+
+const uint kParticleEventCapacity = 4096u;
+
+layout(std430, set = 0, binding = 4) writeonly buffer ParticleEventBuffer
+{
+    ParticleEvent events[];
+} eventBuffer;
+
+// 可选 SDF 碰撞体；无 SDF 时绑定 1 个 float 的占位 buffer。
+layout(std430, set = 0, binding = 5) readonly buffer ParticleSdf
+{
+    float distances[];
+} particleSdf;
+
 // 轻量 PCG hash：同一 index 在时间推进后得到不连续随机流，
 // 避免 CPU 维护逐粒子随机种子 buffer。
 uint Hash(uint value)
@@ -156,18 +194,156 @@ vec3 AttractorForce(vec3 position)
     return offset / distance * (strength * falloff);
 }
 
-// 世界空间解析碰撞：粒子球与无限平面/轴对齐 AABB/线段胶囊。
+// 有界事件记录：slot 取对应计数器的原子自增结果，超过容量后丢弃但
+// 计数器继续累加，读取端据此判断是否发生截断。
+void EmitParticleEvent(
+    uint eventType,
+    uint index,
+    vec3 position,
+    float age,
+    vec3 velocity,
+    float lifetime,
+    vec3 normal)
+{
+    // 三种事件共享同一条 bounded buffer，用统一 events 计数器分配槽位；
+    // 逐类型计数器只用于诊断/截断判断。
+    uint slot = atomicAdd(counters.events, 1u);
+    if (eventType == 0u)
+    {
+        atomicAdd(counters.spawn, 1u);
+    }
+    else if (eventType == 1u)
+    {
+        atomicAdd(counters.death, 1u);
+    }
+    else
+    {
+        atomicAdd(counters.collision, 1u);
+    }
+    if (slot >= kParticleEventCapacity)
+    {
+        return;
+    }
+    ParticleEvent record;
+    record.positionAge = vec4(position, age);
+    record.velocityLife = vec4(velocity, lifetime);
+    record.eventData = vec4(float(eventType), float(index), 0.0, 0.0);
+    record.normal = vec4(normal, 0.0);
+    eventBuffer.events[slot] = record;
+}
+
+float SdfVoxel(ivec3 coordinate)
+{
+    ivec3 resolution = ivec3(frame.collisionSdfResolution.xyz + 0.5);
+    int index = coordinate.x +
+        resolution.x * (coordinate.y + resolution.y * coordinate.z);
+    return particleSdf.distances[index];
+}
+
+float SampleSdfDistance(vec3 position)
+{
+    vec3 resolution = frame.collisionSdfResolution.xyz;
+    vec3 normalized =
+        (position - frame.collisionSdfBoundsMin.xyz) /
+        max(frame.collisionSdfBoundsMax.xyz -
+            frame.collisionSdfBoundsMin.xyz, vec3(1.0e-6));
+    vec3 grid = normalized * max(resolution - vec3(1.0), vec3(0.0));
+    ivec3 base = clamp(
+        ivec3(floor(grid)),
+        ivec3(0),
+        ivec3(resolution) - ivec3(2));
+    vec3 fraction = clamp(grid - vec3(base), 0.0, 1.0);
+
+    float result = 0.0;
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            for (int x = 0; x < 2; ++x)
+            {
+                float weight =
+                    (x == 0 ? 1.0 - fraction.x : fraction.x) *
+                    (y == 0 ? 1.0 - fraction.y : fraction.y) *
+                    (z == 0 ? 1.0 - fraction.z : fraction.z);
+                result += weight * SdfVoxel(base + ivec3(x, y, z));
+            }
+        }
+    }
+    return result;
+}
+
+// 返回 false 表示位置在 SDF bounds 外（无碰撞）；normal 是距离场梯度，
+// 指向实体外部。与 CPU ParticleSdfAsset 的三线性/中心差分保持一致。
+bool SampleSdfCollision(
+    vec3 position,
+    out float distance,
+    out vec3 normal)
+{
+    distance = 0.0;
+    normal = vec3(0.0);
+    if (any(lessThan(position, frame.collisionSdfBoundsMin.xyz)) ||
+        any(greaterThan(position, frame.collisionSdfBoundsMax.xyz)))
+    {
+        return false;
+    }
+    vec3 resolution = max(frame.collisionSdfResolution.xyz, vec3(2.0));
+    vec3 cell = (frame.collisionSdfBoundsMax.xyz -
+        frame.collisionSdfBoundsMin.xyz) /
+        max(resolution - vec3(1.0), vec3(1.0));
+    distance = SampleSdfDistance(position);
+    // 与 CPU ParticleSdfAsset::SampleGradient 一致：中心差分采样点先夹到
+    // SDF bounds 内，边界处不会把 out-of-bounds 当成不同的梯度。
+    vec3 boundsMin = frame.collisionSdfBoundsMin.xyz;
+    vec3 boundsMax = frame.collisionSdfBoundsMax.xyz;
+    vec3 beforeXPosition = clamp(
+        position - vec3(cell.x, 0.0, 0.0), boundsMin, boundsMax);
+    vec3 afterXPosition = clamp(
+        position + vec3(cell.x, 0.0, 0.0), boundsMin, boundsMax);
+    vec3 beforeYPosition = clamp(
+        position - vec3(0.0, cell.y, 0.0), boundsMin, boundsMax);
+    vec3 afterYPosition = clamp(
+        position + vec3(0.0, cell.y, 0.0), boundsMin, boundsMax);
+    vec3 beforeZPosition = clamp(
+        position - vec3(0.0, 0.0, cell.z), boundsMin, boundsMax);
+    vec3 afterZPosition = clamp(
+        position + vec3(0.0, 0.0, cell.z), boundsMin, boundsMax);
+    float beforeX = SampleSdfDistance(beforeXPosition);
+    float afterX = SampleSdfDistance(afterXPosition);
+    float beforeY = SampleSdfDistance(beforeYPosition);
+    float afterY = SampleSdfDistance(afterYPosition);
+    float beforeZ = SampleSdfDistance(beforeZPosition);
+    float afterZ = SampleSdfDistance(afterZPosition);
+    // clamp 会缩短实际跨度；与 CPU 一样除以真实 span，而不是固定 2*cell。
+    float spanX = afterXPosition.x - beforeXPosition.x;
+    float spanY = afterYPosition.y - beforeYPosition.y;
+    float spanZ = afterZPosition.z - beforeZPosition.z;
+    normal = vec3(
+        spanX > 1.0e-6 ? (afterX - beforeX) / spanX : 0.0,
+        spanY > 1.0e-6 ? (afterY - beforeY) / spanY : 0.0,
+        spanZ > 1.0e-6 ? (afterZ - beforeZ) / spanZ : 0.0);
+    float lengthSquared = dot(normal, normal);
+    if (lengthSquared <= 1.0e-12)
+    {
+        return false;
+    }
+    normal /= sqrt(lengthSquared);
+    return true;
+}
+
+// 世界空间解析碰撞：粒子球与无限平面/轴对齐 AABB/线段胶囊/有限 SDF。
 // 与 source/particles/particleCollision.h 的 CPU 镜像保持同一套公式。
-void ResolveCollision(
+bool ResolveCollision(
     inout vec3 position,
     inout vec3 velocity,
     inout float age,
-    float lifetime)
+    float lifetime,
+    out vec3 hitNormal)
 {
+    hitNormal = vec3(0.0);
     int collisionType = int(frame.collisionParams.x + 0.5);
     if (collisionType == 0)
     {
-        return;
+        return false;
     }
 
     float bounce = clamp(frame.collisionParams.y, 0.0, 1.0);
@@ -192,6 +368,7 @@ void ResolveCollision(
                     normalVelocity * bounce;
             }
             hit = true;
+            hitNormal = normal;
         }
     }
     else if (collisionType == 2)
@@ -201,7 +378,7 @@ void ResolveCollision(
         if (any(lessThan(position, expandedMin)) ||
             any(greaterThan(position, expandedMax)))
         {
-            return;
+            return false;
         }
 
         int axis = 0;
@@ -246,6 +423,7 @@ void ResolveCollision(
         velocity = tangentVelocity * (1.0 - friction) +
             normal * reflectedNormalSpeed;
         hit = true;
+        hitNormal = normal;
     }
     else if (collisionType == 3)
     {
@@ -284,6 +462,27 @@ void ResolveCollision(
                     normalVelocity * bounce;
             }
             hit = true;
+            hitNormal = normal;
+        }
+    }
+    else if (collisionType == 4)
+    {
+        float distance = 0.0;
+        vec3 normal = vec3(0.0);
+        if (SampleSdfCollision(position, distance, normal) &&
+            distance < radius)
+        {
+            position += normal * (radius - distance);
+            float normalSpeed = dot(velocity, normal);
+            if (normalSpeed < 0.0)
+            {
+                vec3 normalVelocity = normal * normalSpeed;
+                vec3 tangentVelocity = velocity - normalVelocity;
+                velocity = tangentVelocity * (1.0 - friction) -
+                    normalVelocity * bounce;
+            }
+            hit = true;
+            hitNormal = normal;
         }
     }
 
@@ -291,6 +490,7 @@ void ResolveCollision(
     {
         age = lifetime;
     }
+    return hit;
 }
 
 // 在发射器局部空间按 shapeParams.x 的 shape code 生成 spawn 位置。
@@ -373,7 +573,7 @@ vec3 SampleSpawnPosition(inout uint randomState)
         radialDirection.y * ringRadius);
 }
 
-void SpawnParticle(
+bool SpawnParticle(
     uint index,
     inout Particle particle,
     inout uint randomState,
@@ -433,15 +633,17 @@ void SpawnParticle(
         }
     }
 
-    // 资产校验拒绝 localSpace + collision；这里仍显式跳过，保证局部
-    // 坐标不会被误当成世界坐标求交。
-    if (!localSpace)
+    // localSpace 与世界空间使用同一套碰撞公式：粒子坐标和碰撞体必须
+    // 处在同一空间。localSpace 资产的碰撞体按发射器局部空间作者化。
+    if (int(frame.collisionParams.x + 0.5) != 0)
     {
+        vec3 ignoredNormal;
         ResolveCollision(
             simulationPosition,
             simulationVelocity,
             age,
-            lifetime);
+            lifetime,
+            ignoredNormal);
     }
 
     particle.positionAge = vec4(
@@ -455,25 +657,32 @@ void SpawnParticle(
     particle.history0 = particle.positionAge;
     particle.history1 = particle.positionAge;
     particle.history2 = particle.positionAge;
-    particleBuffer.particles[index] = particle;
+    if (!prewarm && frame.eventParams.x > 0.5)
+    {
+        EmitParticleEvent(
+            0u,
+            index,
+            simulationPosition,
+            age,
+            simulationVelocity,
+            lifetime,
+            vec3(0.0));
+    }
+    return IsParticleAlive(particle);
 }
 
-void main()
+// 单粒子一帧（或固定步长的多个子步）推进。返回值是推进后的存活状态；
+// 事件在状态确定后统一写，避免死亡/碰撞分支各自遗漏。
+bool SimulateParticle(
+    uint index,
+    inout Particle particle,
+    inout uint randomState,
+    bool wasAlive)
 {
-    uint index = gl_GlobalInvocationID.x;
-    uint count =
-        uint(particleBuffer.particles.length());
-    if (index >= count)
-    {
-        return;
-    }
+    uint count = uint(particleBuffer.particles.length());
+    uint simSteps = uint(clamp(frame.determinismParams.y, 1.0, 8.0) + 0.5);
+    float stepSeconds = max(frame.simulation.y, 0.0);
 
-    uint randomState = Hash(
-        index * 0x9e3779b9u ^
-        uint(frame.simulation.z * 1000.0) ^
-        uint(frame.simulation.w > 0.5 ? 0x51ed270bu : 0u));
-
-    Particle particle = particleBuffer.particles[index];
     if (frame.simulation.w > 0.5)
     {
         // 首帧预热只填稳态存活量：spawnRate * 平均寿命；burst 仍整池喷发。
@@ -496,12 +705,10 @@ void main()
                 particle.history0 = vec4(0.0);
                 particle.history1 = vec4(0.0);
                 particle.history2 = vec4(0.0);
-                particleBuffer.particles[index] = particle;
-                return;
+                return false;
             }
         }
-        SpawnParticle(index, particle, randomState, true);
-        return;
+        return SpawnParticle(index, particle, randomState, true);
     }
 
     // burst 重触发：interval>0 时跨周期整池重生；非跨周期帧保持粒子状态，
@@ -511,17 +718,12 @@ void main()
     if (burstEmitter && burstInterval > 0.0)
     {
         float time = frame.simulation.z;
-        float previousTime =
-            max(time - frame.simulation.y, 0.0);
+        float frameSeconds = stepSeconds * float(simSteps);
+        float previousTime = max(time - frameSeconds, 0.0);
         if (floor(time / burstInterval) >
             floor(previousTime / burstInterval))
         {
-            SpawnParticle(
-                index,
-                particle,
-                randomState,
-                false);
-            return;
+            return SpawnParticle(index, particle, randomState, false);
         }
     }
 
@@ -531,91 +733,104 @@ void main()
         // interval>0 的 burst 已在上面处理跨周期重触发，同样不补发。
         if (burstEmitter)
         {
-            return;
+            return false;
         }
-        // 发射预算按整池大小归一化；只有死亡粒子参与抽样，
-        // 因此稳态存活数约为 spawnRate * averageLifetime。
+        // 发射预算按整池大小归一化；固定步长时每个子步都按 stepSeconds
+        // 抽样，使低帧率/高帧率的稳态存活数一致。
         float spawnChance = clamp(
-            frame.simulation.x * frame.simulation.y /
+            frame.simulation.x * stepSeconds /
                 max(float(count), 1.0),
             0.0,
             1.0);
-        if (Random(randomState) < spawnChance)
+        for (uint step = 0; step < simSteps; ++step)
         {
-            SpawnParticle(
-                index,
-                particle,
-                randomState,
-                false);
+            if (Random(randomState) < spawnChance)
+            {
+                return SpawnParticle(
+                    index, particle, randomState, false);
+            }
         }
-        return;
+        return false;
     }
 
     // 运行时衰老与积分都乘以 lifeT 曲线：lifeT 用推进前的 age/lifetime，
     // scale=0 时本帧完全冻结（不衰老、不移动、不碰撞，也不推进历史），
     // 但不会影响其它粒子或系统时间。prewarm 在 SpawnParticle 内直接按
     // 随机年龄解析积分，故意不应用这条曲线。
-    float lifeT = clamp(
-        particle.positionAge.w /
-            max(particle.velocityLife.w, 1.0e-6),
-        0.0,
-        1.0);
-    float deltaSeconds =
-        frame.simulation.y * EvaluateLifetimeScale(lifeT);
-    if (!(deltaSeconds > 0.0))
-    {
-        return;
-    }
-    particle.positionAge.w += deltaSeconds;
-    if (particle.positionAge.w >= particle.velocityLife.w)
-    {
-        particle.positionAge.w = particle.velocityLife.w;
-        particleBuffer.particles[index] = particle;
-        return;
-    }
-
     // 历史右移必须在积分之前：history0 记录本帧起点，当前位置经过积分后
     // 成为下一帧的 history0。死亡分支不更新历史，避免把尸体位置写进条带。
-    particle.history2 = particle.history1;
-    particle.history1 = particle.history0;
-    particle.history0 = particle.positionAge;
-
-    // 模拟空间积分：世界空间发射器使用世界坐标；localSpace 发射器使用
-    // 局部坐标，重力与 drag 也按局部空间解释。
-    // CCD 按一帧扫过的距离拆分子步，最多 8 步；每个子步使用 dt/steps
-    // 的重力与指数 drag，保持总时间一致（子步近似）。
-    int collisionType = int(frame.collisionParams.x + 0.5);
-    bool ccd = frame.collisionParams2.x > 0.5 && collisionType != 0;
-    int steps = 1;
-    if (ccd)
+    // 固定步长积累不足一帧时 dt=0，历史保持不动，避免重复采样同一位置。
+    if (stepSeconds > 0.0)
     {
-        float stepDistance = max(frame.collisionParams.w, 0.5);
-        float swept = length(particle.velocityLife.xyz) * deltaSeconds;
-        steps = int(clamp(ceil(swept / stepDistance), 1.0, 8.0));
+        particle.history2 = particle.history1;
+        particle.history1 = particle.history0;
+        particle.history0 = particle.positionAge;
     }
-    float stepSeconds = deltaSeconds / float(steps);
-    float damping = exp(-frame.gravityDrag.w * stepSeconds);
+
     vec3 position = particle.positionAge.xyz;
     vec3 velocity = particle.velocityLife.xyz;
     float age = particle.positionAge.w;
     float lifetime = particle.velocityLife.w;
-    for (int step = 0; step < steps; ++step)
+    int collisionType = int(frame.collisionParams.x + 0.5);
+    bool ccd = frame.collisionParams2.x > 0.5 && collisionType != 0;
+    bool hitAny = false;
+    vec3 hitNormal = vec3(0.0);
+
+    for (uint frameStep = 0u; frameStep < simSteps; ++frameStep)
     {
-        // 所有力都在模拟空间累加；localSpace 发射器不会把局部位置误当
-        // 世界位置。drag 作为最后的指数阻尼统一作用于重力、风、curl、
-        // 涡旋和吸引子产生的速度增量。
-        vec3 force = frame.gravityDrag.xyz + frame.wind.xyz;
-        force += CurlNoiseForce(position);
-        force += VortexForce(position);
-        force += AttractorForce(position);
-        velocity += force * stepSeconds;
-        velocity *= damping;
-        position += velocity * stepSeconds;
-        ResolveCollision(
-            position,
-            velocity,
-            age,
-            lifetime);
+        float lifeT = clamp(age / max(lifetime, 1.0e-6), 0.0, 1.0);
+        float deltaSeconds =
+            stepSeconds * EvaluateLifetimeScale(lifeT);
+        if (!(deltaSeconds > 0.0))
+        {
+            continue;
+        }
+        age += deltaSeconds;
+        if (age >= lifetime)
+        {
+            age = lifetime;
+            break;
+        }
+
+        // 模拟空间积分：世界空间发射器使用世界坐标；localSpace 发射器
+        // 使用局部坐标，重力/drag/碰撞体也按局部空间解释。
+        // CCD 按子步扫过距离再拆分，最多 8 步。
+        int ccdSteps = 1;
+        if (ccd)
+        {
+            float stepDistance = max(frame.collisionParams.w, 0.5);
+            float swept = length(velocity) * deltaSeconds;
+            ccdSteps = int(clamp(
+                ceil(swept / stepDistance), 1.0, 8.0));
+        }
+        float subSeconds = deltaSeconds / float(ccdSteps);
+        float damping = exp(-frame.gravityDrag.w * subSeconds);
+        for (int step = 0; step < ccdSteps; ++step)
+        {
+            // 所有力都在模拟空间累加；drag 统一阻尼本步全部速度增量。
+            vec3 force = frame.gravityDrag.xyz + frame.wind.xyz;
+            force += CurlNoiseForce(position);
+            force += VortexForce(position);
+            force += AttractorForce(position);
+            velocity += force * subSeconds;
+            velocity *= damping;
+            position += velocity * subSeconds;
+            vec3 collisionNormal;
+            if (ResolveCollision(
+                position,
+                velocity,
+                age,
+                lifetime,
+                collisionNormal))
+            {
+                hitAny = true;
+                hitNormal = collisionNormal;
+            }
+            if (age >= lifetime)
+            {
+                break;
+            }
+        }
         if (age >= lifetime)
         {
             break;
@@ -623,5 +838,67 @@ void main()
     }
     particle.positionAge = vec4(position, age);
     particle.velocityLife = vec4(velocity, lifetime);
+
+    bool alive = IsParticleAlive(particle);
+    if (hitAny && frame.eventParams.z > 0.5)
+    {
+        float normalLength = length(hitNormal);
+        EmitParticleEvent(
+            2u,
+            index,
+            position,
+            age,
+            velocity,
+            lifetime,
+            normalLength > 1.0e-6
+                ? hitNormal / normalLength
+                : vec3(0.0));
+    }
+    if (wasAlive && !alive && frame.eventParams.y > 0.5)
+    {
+        EmitParticleEvent(
+            1u,
+            index,
+            position,
+            age,
+            velocity,
+            lifetime,
+            vec3(0.0));
+    }
+    return alive;
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint count = uint(particleBuffer.particles.length());
+    if (index >= count)
+    {
+        return;
+    }
+
+    uint seed = uint(frame.determinismParams.x + 0.5);
+    uint stepIndex = uint(frame.determinismParams.z + 0.5);
+    uint timeSeed = frame.determinismParams.w > 0.5
+        ? (seed ^ (stepIndex * 0x85ebca6bu) ^ (seed * 0x27d4eb2du))
+        : uint(frame.simulation.z * 1000.0);
+    uint randomState = Hash(
+        index * 0x9e3779b9u ^
+        timeSeed ^
+        uint(frame.simulation.w > 0.5 ? 0x51ed270bu : 0u));
+
+    Particle particle = particleBuffer.particles[index];
+    bool wasAlive = IsParticleAlive(particle);
+    bool alive = SimulateParticle(
+        index, particle, randomState, wasAlive);
     particleBuffer.particles[index] = particle;
+
+    if (alive)
+    {
+        uint slot = atomicAdd(counters.alive, 1u);
+        if (slot < count)
+        {
+            aliveIndices.indices[slot] = index;
+        }
+    }
 }

@@ -6,6 +6,7 @@ add_executable(editor_ui_tests
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
     particleWorldRuntimeTests.cpp
+    particleThumbnailTimingTests.cpp
     debugDrawOverlayTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/debugDrawOverlay.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"

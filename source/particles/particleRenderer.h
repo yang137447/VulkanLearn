@@ -13,10 +13,15 @@
 #include <vulkan/vulkan.hpp>
 
 #include "particles/particleAsset.h"
+#include "particles/particleEvents.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleFrameStats.h"
+#include "particles/particleGlobalSort.h"
 #include "particles/particleIndirect.h"
+#include "particles/particleMaterial.h"
 #include "particles/particleRenderIdentity.h"
+#include "particles/particleSdf.h"
+#include "render/particles/particleGpuTimer.h"
 
 class PipelineBase;
 class PipelineFactory;
@@ -29,6 +34,28 @@ namespace VL
 {
 class RendererBackendVulkan;
 struct RenderScene;
+struct ParticleSystemSnapshot;
+
+// renderSystem 每帧把已构建的 CSM 数据推给粒子渲染器。粒子管线有独立的
+// set 0 UBO，不能直接读取 UBOGlobal，因此这里显式拷贝所需子集。
+struct ParticleShadowCascadeData
+{
+    std::array<Eigen::Matrix4f, 4> lightViewProj{};
+    std::array<Eigen::Vector4f, 4> bias{};
+    Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
+    // z = active cascade count, w = shadow distance
+    Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
+    bool valid = false;
+};
+
+// 单发射器事件读取结果；counters 是 GPU 原子计数（可能大于 records 数量，
+// 表示有界缓冲发生过截断）。
+struct ParticleEventBatch
+{
+    std::string emitterKey;
+    ParticleEventCounters counters;
+    std::vector<ParticleEventRecord> records;
+};
 
 // Niagara 式最小运行时：每个场景发射器拥有一段 GPU 粒子池，compute 负责
 // 生成/积分，billboard pass 直接消费同一段 storage buffer。
@@ -80,7 +107,19 @@ public:
     // 调用方必须保证渲染线程处于安全点。
     void RestartParticleSystems(const std::string& sceneObjectName);
 
+    // renderSystem 在 RecordSimulation 之前调用；shadowMap 本体仍通过
+    // particle pass 的 set 3 输入绑定，这里只提供级联矩阵与 bias。
+    void SetShadowCascadeData(const ParticleShadowCascadeData& data);
+
+    // 一次性 GPU 回读（调用方需保证设备空闲）。供脚本/调试层消费事件。
+    bool DrainParticleEvents(
+        RendererBackendVulkan& readbackBackend,
+        uint32_t maxPerEmitter,
+        std::vector<ParticleEventBatch>& outBatches,
+        std::string& outError);
+
     bool IsInitialized() const noexcept { return initialized; }
+    bool HasEmitters() const noexcept { return !emitters.empty(); }
     const ParticleFrameStats& GetFrameStats() const noexcept
     {
         return frameStats;
@@ -209,9 +248,27 @@ private:
         Eigen::Vector4f meshLightDirection;
         // xyz = directional light linear color（不乘 lux 强度）.
         Eigen::Vector4f meshLightColor;
+        // mesh 材质 v1 子集。
+        Eigen::Vector4f materialBaseColor;
+        Eigen::Vector4f materialEmissiveStrength;
+        // x = roughness, y = metallic, z = hasMaterial, w reserved.
+        Eigen::Vector4f materialPbr;
+        // CSM：4 级 lightViewProj、逐级 bias、split 与开关。
+        std::array<Eigen::Matrix4f, 4> shadowLightViewProj{};
+        std::array<Eigen::Vector4f, 4> shadowCascadeBias{};
+        Eigen::Vector4f shadowCascadeSplits;
+        Eigen::Vector4f shadowParams;
+        // x = seed, y = fixed step seconds, z = step index, w = deterministic.
+        Eigen::Vector4f determinismParams;
+        // x = spawn events, y = death events, z = collision events.
+        Eigen::Vector4f eventParams;
+        // SDF bounds/resolution；无 SDF 时分辨率保持 0。
+        Eigen::Vector4f collisionSdfBoundsMin;
+        Eigen::Vector4f collisionSdfBoundsMax;
+        Eigen::Vector4f collisionSdfResolution;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5760,
+        sizeof(FrameUniforms) == 6240,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -261,6 +318,42 @@ private:
     static_assert(
         offsetof(FrameUniforms, meshLightColor) == 5744,
         "ParticleFrame meshLightColor offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, materialBaseColor) == 5760,
+        "ParticleFrame materialBaseColor offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, materialEmissiveStrength) == 5776,
+        "ParticleFrame materialEmissiveStrength offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, materialPbr) == 5792,
+        "ParticleFrame materialPbr offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowLightViewProj) == 5808,
+        "ParticleFrame shadowLightViewProj offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowCascadeBias) == 6064,
+        "ParticleFrame shadowCascadeBias offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowCascadeSplits) == 6128,
+        "ParticleFrame shadowCascadeSplits offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowParams) == 6144,
+        "ParticleFrame shadowParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, determinismParams) == 6160,
+        "ParticleFrame determinismParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, eventParams) == 6176,
+        "ParticleFrame eventParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, collisionSdfBoundsMin) == 6192,
+        "ParticleFrame collisionSdfBoundsMin offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, collisionSdfBoundsMax) == 6208,
+        "ParticleFrame collisionSdfBoundsMax offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, collisionSdfResolution) == 6224,
+        "ParticleFrame collisionSdfResolution offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -271,6 +364,16 @@ private:
         float boundsRadius = 0.0f;
         ParticleFlipbookGpuTable flipbookTable;
         GpuBuffer particles;
+        // GPU 计数/紧凑存活索引/事件缓冲：每帧由 fillBuffer 清零计数，
+        // simulate 原子追加，finalize compute 把 alive 写回 indirectArgs。
+        GpuBuffer counters;
+        GpuBuffer aliveIndices;
+        GpuBuffer events;
+        /* 图形片元 overdraw 计数；每帧清零，particledump 回读。 */
+        GpuBuffer debugCounters;
+        // 可选 SDF 体素；无 SDF 时绑定 1 个 float 的占位 buffer。
+        GpuBuffer sdfData;
+        uint32_t sdfVoxelCount = 0;
         // bitonic sort 的双缓冲 pair 表；pair.xy = (viewDepth, particleIndex)。
         GpuBuffer sortPairsA;
         GpuBuffer sortPairsB;
@@ -288,6 +391,7 @@ private:
         std::vector<vk::DescriptorSet> sortInitSets;
         std::vector<vk::DescriptorSet> sortAtoBSets;
         std::vector<vk::DescriptorSet> sortBtoASets;
+        std::vector<vk::DescriptorSet> finalizeSets;
         std::shared_ptr<Texture> texture;
         // 路径 + 文件大小 + 修改时间 + mipmap 配置；变化时重建整个发射器。
         std::string textureSourceKey;
@@ -306,12 +410,19 @@ private:
         // 排序结束时 pair 表的奇偶性决定 graphics 绑定 A 还是 B。
         bool sortFinalUsesA = true;
         float elapsedSeconds = 0.0f;
+        // fixedTimeStep>0 时按固定步长推进；accumulator 吸收帧间余量，
+        // fixedStepIndex 作为确定性随机的离散时间。
+        float fixedStepAccumulator = 0.0f;
+        uint32_t fixedStepIndex = 0;
         bool needsClear = true;
         bool prewarm = true;
         bool culled = false;
         // 作者可见性不是剔除结果：隐藏时同样冻结模拟，但重新显示后
         // 不能重建池，因此与 culled 分开保存。
         bool visible = true;
+        // World stable slot 的 restart epoch；变化时只重置本发射器状态，
+        // 不重建 GPU 资源。
+        uint32_t restartEpoch = 0;
         // 发射器运行时开关与实例级覆盖；禁用沿冻结路径，重新启用不重建池。
         bool enabled = true;
         float spawnRateScale = 1.0f;
@@ -323,6 +434,47 @@ private:
             Eigen::Vector3f(0.0f, -1.0f, 0.0f);
         Eigen::Vector3f lightColor = Eigen::Vector3f::Ones();
         float ambient = 0.2f;
+        // 材质实例 v1 子集；加载失败保持 valid=false 的明确回退。
+        ParticleMaterialParams material;
+        // 单个 emitter 的 GPU 图形区间计时；模拟/排序仍由全局 pass timer
+        // 与 CPU 预算统计覆盖。
+        ParticleGpuTimer gpuTimer;
+        // SDF 碰撞体；与资产共享只读数据。
+        std::shared_ptr<const ParticleSdfAsset> sdf;
+    };
+
+    // 全局透明排序池：所有参与 billboard alpha 的发射器把自己的粒子
+    // gather 到这个共享记录数组，再做一次全局 bitonic 排序与单次 draw。
+    // 每个发射器仍保留自己的模拟池、UBO 与材质曲线，只是渲染阶段合并。
+    struct GlobalSortPool
+    {
+        bool active = false;
+        std::string signature;
+        uint32_t capacity = 0;
+        uint32_t emitterCount = 0;
+        bool finalUsesA = true;
+        std::vector<std::string> emitterKeys;
+        std::unordered_map<std::string, uint32_t> textureSlotByKey;
+        std::vector<std::shared_ptr<Texture>> textures;
+        // 所有全局池 buffer 按 swapchain image 分槽，避免两个在飞帧共享
+        // 同一 gather/sort/count/indirect 目标。
+        std::vector<GpuBuffer> records;
+        std::vector<GpuBuffer> pairsA;
+        std::vector<GpuBuffer> pairsB;
+        std::vector<GpuBuffer> counters;
+        std::vector<GpuBuffer> indirectArgs;
+        std::vector<GpuBuffer> debugCounters;
+        uint32_t lastImageIndex = 0;
+        uint32_t gatheredEmitters = 0;
+        std::vector<GpuBuffer> uniforms;
+        std::vector<vk::DescriptorSet> gatherSets;
+        std::vector<vk::DescriptorSet> sortInitSets;
+        std::vector<vk::DescriptorSet> sortAtoBSets;
+        std::vector<vk::DescriptorSet> sortBtoASets;
+        std::vector<vk::DescriptorSet> finalizeSets;
+        std::vector<vk::DescriptorSet> drawSets;
+        vk::DescriptorPool descriptorPool;
+        ParticleGpuTimer gpuTimer;
     };
 
     void Initialize(
@@ -354,12 +506,46 @@ private:
         const std::string& key,
         const std::string& meshPath,
         const std::string& error);
+    void WarnMaterialFallbackOnce(
+        const std::string& key,
+        const std::string& materialPath,
+        const std::string& error);
+    const ParticleSystemAsset& ResolveParticleSystemAsset(
+        const ParticleSystemSnapshot& snapshot);
+    void WarnUserParameterFailureOnce(
+        const std::string& key,
+        uint64_t signature,
+        const std::string& error);
+    void SynchronizeGlobalSort();
+    void DestroyGlobalSortPool();
+    bool CreateGlobalSortPool(
+        const std::vector<std::string>& emitterKeys,
+        const std::vector<uint32_t>& textureSlots,
+        const std::vector<std::shared_ptr<Texture>>& textures,
+        uint32_t capacity);
+    void RecordGlobalGather(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex);
+    void RecordGlobalSort(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const RenderScene& renderScene);
+    void RecordGlobalDraw(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Renderpass& renderPass);
+    bool IsGlobalSortEmitter(const std::string& key) const;
     void InsertBufferBarrier(
         vk::CommandBuffer commandBuffer,
         vk::PipelineStageFlags sourceStage,
         vk::AccessFlags sourceAccess,
         vk::PipelineStageFlags destinationStage,
         vk::AccessFlags destinationAccess);
+    // 冻结/剔除路径不运行 compute，但仍要清掉上一帧的 alive/事件/overdraw
+    // 计数，避免回读重放旧事件或发布陈旧诊断。
+    static void ClearParticleRuntimeCounters(
+        vk::CommandBuffer commandBuffer,
+        EmitterResources& emitter);
 
     RendererBackendVulkan* backend = nullptr;
     ParticleRenderIdentity renderIdentity;
@@ -368,6 +554,9 @@ private:
     std::shared_ptr<ComputePipeline> simulatePipeline;
     std::shared_ptr<ComputePipeline> sortPipeline;
     std::shared_ptr<ComputePipeline> sortInitPipeline;
+    std::shared_ptr<ComputePipeline> finalizeCountPipeline;
+    std::shared_ptr<ComputePipeline> globalGatherPipeline;
+    std::shared_ptr<ComputePipeline> globalSortInitPipeline;
     std::shared_ptr<PipelineBase> additivePipeline;
     std::shared_ptr<PipelineBase> alphaPipeline;
     // ribbon 与 billboard 共用 descriptor set layout 与 particle SSBO，
@@ -378,6 +567,7 @@ private:
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;
     std::shared_ptr<PipelineBase> meshAlphaPipeline;
+    std::shared_ptr<PipelineBase> globalDrawPipeline;
     std::shared_ptr<Texture> defaultTexture;
     // 发射器包整体由 shared_ptr 持有：活跃表与 retire queue 共享同一所有权，
     // 最后一个 epoch 完成后才析构 descriptor pool、buffer 与纹理。
@@ -389,9 +579,25 @@ private:
         textureCache;
     std::unordered_set<std::string> warnedTextureFallbacks;
     std::unordered_set<std::string> warnedMeshFallbacks;
+    std::unordered_set<std::string> warnedMaterialFallbacks;
+    // 运行时 userParameters 重解析缓存：key = system 身份，value 保存
+    // 最近一次成功解析的资产 + 失败标记，避免每帧重新 ParseJson。
+    struct ParticleUserParameterCacheEntry
+    {
+        uint64_t signature = 0;
+        const nlohmann::json* authoringJson = nullptr;
+        bool attempted = false;
+        bool parsed = false;
+        ParticleSystemAsset asset;
+    };
+    std::unordered_map<std::string, ParticleUserParameterCacheEntry>
+        userParameterCache;
+    std::unordered_set<std::string> warnedUserParameterFailures;
     // 每帧由 RecordSimulation 更新；RecordGraphics 只消费这份远->近顺序。
     std::vector<std::string> drawOrder;
     ParticleFrameStats frameStats;
+    ParticleShadowCascadeData shadowCascadeData;
+    GlobalSortPool globalSortPool;
 };
 
 } // namespace VL

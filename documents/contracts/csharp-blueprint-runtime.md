@@ -604,6 +604,33 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 - `ParticleSystem` 暴露 `Handle`/`Id`/`IsAlive`，以及 `Destroy()`、
   `SetVisible(bool)`、`SetSpawnRateScale(float)`、`SetColorTint(Vector4)`、
   `SetEmitterEnabled(int, bool)`、`ResetOverrides()`。
+- 发射器级 API：`SpawnEmitter(sourceIndex, name?)` 返回
+  `ParticleEmitterHandle(Context,SystemId,Id,StableIndex)`；`DestroyEmitter` /
+  `RestartEmitter` / `SetEmitterEnabled(handle,bool)` 使用该句柄或
+  `EmitterHandles` 中的稳定 id。native 槽位只追加不重排，destroy 是 tombstone；
+  `StableIndex` 在 native 遥测回来前是 `uint.MaxValue`，之后由
+  `particleTelemetry.emitters[].index` 回填。单实例最多 16 个发射器。
+- 预算与参数：`SetEmitterBudget(maxTotalParticles, emitterBudgetScale)`，
+  `SetUserParameter(key, value)` / `ClearUserParameter(key)`。预算 scale 为
+  `[0,16]`，`maxTotalParticles` 上限 `1_000_000`；用户参数 key 为 `1..64`
+  字符，最多 64 个，value 有限且 `|v| <= 1e6`。
+- 附着：`AttachTo(targetKind, targetName, component?, localPosition?,
+  localRotation?, localScale?)` 与 `Detach()`。`targetKind` 为 `mesh` 或
+  `component`；局部 TRS 省略时为零/单位值。目标不存在仍接受命令，但 telemetry
+  的 `attachment.resolved` 为 false，粒子保持作者 TRS。
+- 遥测：`Telemetry` 是最近一帧 native 快照，`TelemetryChanged` 在更新时触发。
+  计数字段由 World 维护；`AliveAvailable=false` 表示渲染器尚未回填 alive，
+  此时 `AliveParticles`/`LastFrameBudget` 不可当作 0；`VisibleEmitterCount` 在实例
+  隐藏时为 0；逐 emitter 的 `MaxParticles` 是作者池上限，`BudgetedMaxParticles`
+  是预算缩放/截断后的上限，`RestartEpoch` 用于检测 native 重启请求。
+- 事件：`Subscribe(Action<ParticleEvent>)` 返回可释放订阅；事件类型为
+  `Spawn`/`Death`/`Collision`，携带 system id、emitter id、时间、位置与法线。
+  native 在 GT 把事件写入下一帧 `particleEvents`，C# 只在 tick 回调线程分发；
+  队列最多 256 条，每上下文最多 256 个订阅。Destroy/EndPlay 会清理该 owner 的
+  订阅。首个订阅会向 native 发 `events=true`，最后一个订阅移除会发
+  `events=false`；只有兴趣存在时 EngineLoop 才以最多 10 Hz 进入 GPU 事件
+  回读安全点。热重载保留实例/发射器 id、`NextParticle`/`NextParticleEmitter` 和 pending
+  结构状态，但托管委托不可序列化，`OnReload` 必须重新 `Subscribe`。
 - `IsAlive` 只读取当前上下文的本地 live 表。`Destroy()`/`DestroyAll()` 被本地接受后
   句柄立即变为不存活，不向原生 World 查询；旧上下文、外部 owner 或已销毁实例的
   handle 在 `IsAlive` 中返回 false，在其它操作中被拒绝。
@@ -615,6 +642,13 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 `ParticleAssetLoader::Prepare` 校验资源。托管调用已返回的句柄不代表资产加载成功：
 路径、JSON 或资产校验失败会抛出 `Script.InvalidParticleSpawn`，本帧 Tick 捕获后以
 `StopContext` 诊断停止该 Play 上下文。
+
+新增命令 shape：`spawnEmitter`（`source`、可选 `emitter` 名）、
+`destroyEmitter`/`restartEmitter`（`emitter` id）、`emitter`（`index` 或
+`emitter` id 加 `enabled`）、`budget`（`maxTotal`、`emitterScale`）、
+`userParam`/`clearUserParam`（`key`，可选 `value`）、`attach`（`targetKind`、
+`targetName`、可选 `component` 与局部 TRS）、`detach`。字段缺失、类型错误、
+越界或 owner 不匹配仍按统一路径抛出 `Script.InvalidParticleCommand`。
 
 `SetSpawnRateScale` 只接受有限的 `[0,16]`；`SetColorTint` 要求 RGB 在 `[0,16]`、
 alpha 在 `[0,1]` 且全部有限；`SetEmitterEnabled` 的 index 为 `[0,15]`。

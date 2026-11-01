@@ -111,6 +111,32 @@ bool ParticleCommandBool(const nlohmann::json& command, const char* field,
     return command.at(field).get<bool>();
 }
 
+nlohmann::json BuildParticleTelemetryJson(const World& world)
+{
+    nlohmann::json result = nlohmann::json::array();
+    for (const auto& entry : world.GetParticleSystems())
+        result.push_back(
+            world.DescribeParticleSystemTelemetry(entry.first));
+    return result;
+}
+
+nlohmann::json BuildParticleEventsJson(
+    std::vector<WorldParticleRuntimeEvent> events)
+{
+    nlohmann::json result = nlohmann::json::array();
+    for (const auto& event : events)
+    {
+        result.push_back({
+            {"system", event.systemName},
+            {"emitter", event.emitterName},
+            {"kind", event.kind},
+            {"time", event.time},
+            {"position", {event.position.x(), event.position.y(), event.position.z()}},
+            {"normal", {event.normal.x(), event.normal.y(), event.normal.z()}}});
+    }
+    return result;
+}
+
 bool SameScriptVisuals(const nlohmann::json& before, const nlohmann::json& after)
 {
     for (const char* field : {"position", "rotation", "scale", "components", "enabled", "failed", "destroyed"})
@@ -245,6 +271,9 @@ void ScriptRuntimeSubsystem::SynchronizeWorld(const std::shared_ptr<World>& worl
 void ScriptRuntimeSubsystem::Stop(World& world)
 {
     world.GetDebugDraw().Clear();
+    // Play 上下文释放后不保留任何 GPU 事件回读兴趣，避免 Stop 后 EngineLoop
+    // 继续在设备安全点轮询旧订阅。
+    world.ClearParticleEventCaptureInterest();
     if (world.GetScriptContext()) world.GetScriptContext()->Release(0);
     if (world.GetScriptContext())
         for (const auto& item : world.GetScriptContext()->declarations.items())
@@ -451,6 +480,11 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
             if (declaration.contains("physics")) context.physicsIndices.push_back(index);
         }
         auto& current = states[index];
+        // disabled owner 的订阅仍保留；C# 只在 CanRun 时派发。不要在禁停时
+        // 清 native 兴趣，否则重新 Enable 后已存在的订阅无法自行恢复回读。
+        if (current.value("failed", false) ||
+            current.value("destroyed", false))
+            world.SetParticleEventCaptureInterest(id, false);
         if (changed) cameraChanged = cameraChanged || hadCamera || HasScriptCamera(current);
         if (changed && current.at("destroyed").get<bool>())
         {
@@ -512,6 +546,16 @@ void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::stri
             ThrowParticleCommand("owner mismatch: expected '" + owner + "', got '" + commandOwner + "'");
 
         const std::string operation = ParticleCommandString(command, "op", "particle command");
+        // 事件订阅兴趣是 owner 级命令，不需要粒子实例 id；它只改变
+        // EngineLoop 是否在安全点回读 GPU 事件，不产生任何渲染资源副作用。
+        if (operation == "events")
+        {
+            if (!world.SetParticleEventCaptureInterest(
+                    owner,
+                    ParticleCommandBool(command, "enabled", operation)))
+                ThrowParticleCommand("events interest was rejected");
+            continue;
+        }
         const std::string id = ParticleCommandString(command, "id", operation);
 
         if (operation == "spawn")
@@ -567,8 +611,134 @@ void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::stri
             continue;
         }
 
+        if (operation == "spawnEmitter")
+        {
+            if (!command.contains("source") ||
+                !command.at("source").is_number_integer())
+                ThrowParticleCommand(
+                    "spawnEmitter requires integer field 'source'");
+            const int64_t source = command.at("source").get<int64_t>();
+            if (source < 0 || source >
+                static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
+                ThrowParticleCommand("spawnEmitter field 'source' is out of range");
+            std::string name;
+            if (command.contains("emitter"))
+                name = ParticleCommandString(command, "emitter", operation);
+            uint32_t stableIndex = 0;
+            if (!world.SpawnParticleEmitter(
+                    id, static_cast<uint32_t>(source), name, stableIndex))
+                throw std::runtime_error(
+                    "Script.InvalidParticleEmitter: spawn was rejected for '" +
+                    id + "'");
+            continue;
+        }
+
+        if (operation == "destroyEmitter" || operation == "restartEmitter")
+        {
+            uint32_t emitterIndex = 0;
+            if (command.contains("index") &&
+                command.at("index").is_number_integer())
+            {
+                const int64_t index = command.at("index").get<int64_t>();
+                if (index < 0 ||
+                    index > static_cast<int64_t>(
+                        std::numeric_limits<uint32_t>::max()))
+                    ThrowParticleCommand(
+                        operation + " field 'index' is out of range");
+                emitterIndex = static_cast<uint32_t>(index);
+            }
+            else
+            {
+                const std::string emitter =
+                    ParticleCommandString(command, "emitter", operation);
+                if (!world.FindParticleEmitterIndex(
+                        id, emitter, emitterIndex))
+                    throw std::runtime_error(
+                        "Script.InvalidParticleEmitter: " + emitter);
+            }
+            const bool applied = operation == "destroyEmitter"
+                ? world.DestroyParticleEmitter(id, emitterIndex)
+                : world.RestartParticleEmitter(id, emitterIndex);
+            if (!applied)
+                throw std::runtime_error(
+                    "Script.InvalidParticleEmitter: " + operation +
+                    " was rejected for '" + id + "'");
+            continue;
+        }
+
+        if (operation == "attach" || operation == "detach")
+        {
+            bool applied = false;
+            if (operation == "detach")
+            {
+                applied = world.DetachParticleSystem(id);
+            }
+            else
+            {
+                const std::string kind =
+                    ParticleCommandString(command, "targetKind", operation);
+                const std::string target =
+                    ParticleCommandString(command, "targetName", operation);
+                std::string component;
+                if (command.contains("component") &&
+                    !command.at("component").is_null())
+                    component = ParticleCommandString(
+                        command, "component", operation);
+                applied = world.AttachParticleSystem(
+                    id,
+                    kind,
+                    target,
+                    component,
+                    ParticleCommandVector3(
+                        command, "position", operation),
+                    ParticleCommandVector3(
+                        command, "rotation", operation),
+                    ParticleCommandVector3(
+                        command, "scale", operation));
+            }
+            if (!applied)
+                ThrowParticleCommand(
+                    operation + " was rejected for particle system '" + id +
+                    "'");
+            continue;
+        }
+
+        if (operation == "budget")
+        {
+            if (!command.contains("maxTotal") ||
+                !command.at("maxTotal").is_number_integer())
+                ThrowParticleCommand("budget requires integer field 'maxTotal'");
+            const int64_t maxTotal = command.at("maxTotal").get<int64_t>();
+            if (maxTotal < 0 ||
+                maxTotal > 1000000)
+                ThrowParticleCommand("budget field 'maxTotal' is out of range");
+            if (!world.SetParticleSystemBudget(
+                    id,
+                    static_cast<uint32_t>(maxTotal),
+                    ParticleCommandNumber(command, "emitterScale", operation)))
+                ThrowParticleCommand(
+                    "budget was rejected for particle system '" + id + "'");
+            continue;
+        }
+
+        if (operation == "userParam" || operation == "clearUserParam")
+        {
+            const std::string key =
+                ParticleCommandString(command, "key", operation);
+            const bool applied = operation == "userParam"
+                ? world.SetParticleSystemUserParameter(
+                    id, key, ParticleCommandNumber(command, "value", operation))
+                : world.ClearParticleSystemUserParameter(id, key);
+            if (!applied)
+                ThrowParticleCommand(
+                    operation + " was rejected for particle system '" + id +
+                    "'");
+            continue;
+        }
+
         if (operation != "visible" && operation != "spawnRateScale" &&
-            operation != "colorTint" && operation != "emitter" && operation != "reset")
+            operation != "colorTint" && operation != "emitter" &&
+            operation != "reset")
             ThrowParticleCommand("unsupported particle command '" + operation + "'");
 
         if (world.FindParticleSystem(id) == nullptr)
@@ -605,21 +775,35 @@ void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::stri
         }
         else if (operation == "emitter")
         {
-            if (!command.contains("index") || !command.at("index").is_number_integer())
-                ThrowParticleCommand("emitter requires integer field 'index'");
-            int64_t index = 0;
-            try
+            uint32_t index = 0;
+            if (command.contains("index") &&
+                command.at("index").is_number_integer())
             {
-                index = command.at("index").get<int64_t>();
+                int64_t value = 0;
+                try
+                {
+                    value = command.at("index").get<int64_t>();
+                }
+                catch (const std::exception&)
+                {
+                    ThrowParticleCommand("emitter field 'index' is out of range");
+                }
+                if (value < 0 ||
+                    value > static_cast<int64_t>(
+                        std::numeric_limits<uint32_t>::max()))
+                    ThrowParticleCommand("emitter field 'index' is out of range");
+                index = static_cast<uint32_t>(value);
             }
-            catch (const std::exception&)
+            else
             {
-                ThrowParticleCommand("emitter field 'index' is out of range");
+                const std::string emitter =
+                    ParticleCommandString(command, "emitter", operation);
+                if (!world.FindParticleEmitterIndex(id, emitter, index))
+                    throw std::runtime_error(
+                        "Script.InvalidParticleEmitter: " + emitter);
             }
-            if (index < 0 || index > static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
-                ThrowParticleCommand("emitter field 'index' is out of range");
             applied = world.SetParticleSystemEmitterEnabled(
-                id, static_cast<uint32_t>(index), ParticleCommandBool(command, "enabled", operation));
+                id, index, ParticleCommandBool(command, "enabled", operation));
         }
         else if (operation == "reset")
         {
@@ -716,7 +900,11 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
                  int(input.moveUp) - int(input.moveDown)}}, {"deferLate", true},
                  {"inputMap", input.gameplay}, {"animationFeedback", world->ScriptAnimationFeedback()},
                  {"assetResults", assetResults}, {"assetUnloads", assetUnloads},
-                 {"states", context.TakePhysicsUpdates()}, {"delta", true}}));
+                 {"states", context.TakePhysicsUpdates()},
+                 {"particleTelemetry", BuildParticleTelemetryJson(*world)},
+                 {"particleEvents", BuildParticleEventsJson(
+                     world->TakeParticleRuntimeEvents())},
+                 {"delta", true}}));
             // 帧物理：Tick 写入的角色/刚体指令在同一次同步里领取，随后角色按帧 dt 移动、
             // 刚体按内部 1/60 子步推进；Tick 发起的查询在本帧物理位姿上执行。
             StepPhysics(*world, time.delta);

@@ -35,6 +35,7 @@ public static partial class NativeBridge
         public ulong NextBlueprint;
         public ulong NextComponent;
         public ulong NextParticle;
+        public ulong NextParticleEmitter;
         public bool Released;
         public bool DetailsDirty = true;
         public readonly List<ComponentCommand> ComponentCommands = [];
@@ -176,6 +177,10 @@ public static partial class NativeBridge
                         context.Input.Axes[axis.Name] = axis.Value.GetSingle();
                 }
                 if (request.TryGetProperty("states", out var prior)) Synchronize(context, prior);
+                if (request.TryGetProperty("particleTelemetry", out var particleTelemetry))
+                    context.Services.ApplyParticleTelemetry(particleTelemetry);
+                if (request.TryGetProperty("particleEvents", out var particleEvents))
+                    context.Services.ApplyParticleEvents(particleEvents);
                 if (request.TryGetProperty("assetUnloads", out var assetUnloads)) context.Services.ForgetAssets(assetUnloads);
                 if (request.TryGetProperty("assetResults", out var assetResults)) context.Services.CompleteAssets(assetResults);
                 if (context.Time.TimeScale > 0) context.Services.RunTimers();

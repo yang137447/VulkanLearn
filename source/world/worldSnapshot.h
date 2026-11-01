@@ -6,6 +6,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -103,6 +104,65 @@ struct EnvironmentSnapshot
     SkyParametersGPU skyParameters;
 };
 
+// 粒子运行时遥测分成两层：CPU 作者态计数由 World 维护，alive/预算执行结果
+// 只有在渲染器回填后才可用。aliveAvailable/available 为 false 时调用方不得
+// 把 0 当作“没有粒子”，必须显示为未知。
+struct ParticleEmitterTelemetry
+{
+    uint32_t stableIndex = 0;
+    std::string name;
+    bool active = false;
+    bool enabled = false;
+    // 渲染器可比较该 epoch 的变化执行单 emitter 重启；World 只负责递增。
+    uint32_t restartEpoch = 0;
+    uint32_t maxParticles = 0;
+    // 预算缩放/截断后本帧实际使用的池容量；0 且 active=true 表示不分配池。
+    uint32_t budgetedMaxParticles = 0;
+    uint32_t aliveParticles = 0;
+    bool aliveAvailable = false;
+};
+
+struct ParticleSystemTelemetry
+{
+    uint32_t emitterCount = 0;
+    uint32_t activeEmitterCount = 0;
+    uint32_t enabledEmitterCount = 0;
+    // enabled 再叠加实例可见性；隐藏实例的发射器不是 visible。
+    uint32_t visibleEmitterCount = 0;
+    // 作者池容量总和，以及按预算缩放/截断后的实际容量。
+    uint32_t authoredCapacity = 0;
+    uint32_t budgetedCapacity = 0;
+    bool available = false;
+    uint32_t aliveParticles = 0;
+    // 渲染器上一帧实际提交的预算；0 且 available=false 表示还没有回填。
+    uint32_t lastFrameBudget = 0;
+    std::vector<ParticleEmitterTelemetry> emitters;
+};
+
+struct ParticleSystemBudget
+{
+    // 实例值为 0 表示没有实例覆盖，沿用 World 上限；World 值为 0 表示
+    // World 不设总量上限。实例显式上限优先于 World 值。
+    uint32_t maxTotalParticles = 0;
+    float emitterBudgetScale = 1.0f;
+    uint32_t effectiveCapacity = 0;
+};
+
+// 附着目标只在快照构建时解析；resolved=false 表示目标当前不在 World 中，
+// 快照仍保留作者 TRS，避免目标暂时消失时粒子瞬移到原点。
+struct ParticleSystemAttachment
+{
+    std::string targetKind; // ""|mesh|component
+    std::string targetName;
+    std::string componentName;
+    Eigen::Vector3f localPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f localRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f localScale = Eigen::Vector3f::Ones();
+    bool resolved = false;
+
+    bool IsEnabled() const { return !targetKind.empty(); }
+};
+
 struct ParticleSystemSnapshot
 {
     RuntimeId particleSystemId = 0;
@@ -115,6 +175,10 @@ struct ParticleSystemSnapshot
     bool visible = true;
     // 运行时覆盖与可见性同样逐帧冻结进快照，渲染器不直接读取 World。
     ParticleSystemRuntimeOverrides runtime;
+    ParticleSystemBudget budget;
+    ParticleSystemTelemetry telemetry;
+    std::unordered_map<std::string, float> userParameters;
+    ParticleSystemAttachment attachment;
 };
 
 // Immutable render-facing copy of one World frame. The renderer may keep this

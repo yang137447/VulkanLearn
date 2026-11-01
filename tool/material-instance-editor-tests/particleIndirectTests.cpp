@@ -7,15 +7,15 @@ namespace
 
 using namespace VL;
 
-TEST(ParticleIndirect, BillboardUsesSixVerticesPerParticle)
+TEST(ParticleIndirect, BillboardUsesSixVerticesPerInstance)
 {
     const ParticleIndirectDrawShape shape =
         BuildParticleIndirectDrawShape(
             "billboard", 128, 3, false, 0);
 
     EXPECT_FALSE(shape.indexed);
-    EXPECT_EQ(shape.vertexCount, 768u);
-    EXPECT_EQ(shape.instanceCount, 1u);
+    EXPECT_EQ(shape.vertexCount, 6u);
+    EXPECT_EQ(shape.instanceCount, 128u);
 }
 
 TEST(ParticleIndirect, RibbonCountFollowsSegments)
@@ -25,7 +25,8 @@ TEST(ParticleIndirect, RibbonCountFollowsSegments)
             "ribbon", 64, 2, false, 0);
 
     EXPECT_FALSE(shape.indexed);
-    EXPECT_EQ(shape.vertexCount, 64u * 2u * 6u);
+    EXPECT_EQ(shape.vertexCount, 2u * 6u);
+    EXPECT_EQ(shape.instanceCount, 64u);
     EXPECT_NE(shape,
         BuildParticleIndirectDrawShape(
             "ribbon", 64, 3, false, 0));
@@ -50,8 +51,8 @@ TEST(ParticleIndirect, MeshFallbackReturnsBillboardShape)
             "mesh", 32, 1, false, 36);
 
     EXPECT_FALSE(shape.indexed);
-    EXPECT_EQ(shape.vertexCount, 32u * 6u);
-    EXPECT_EQ(shape.instanceCount, 1u);
+    EXPECT_EQ(shape.vertexCount, 6u);
+    EXPECT_EQ(shape.instanceCount, 32u);
 }
 
 } // namespace

@@ -8,6 +8,7 @@
 #include <Eigen/Dense>
 
 #include "particles/particleAsset.h"
+#include "particles/particleSdf.h"
 
 namespace VL
 {
@@ -20,12 +21,13 @@ struct ParticleCollisionState
 };
 
 // 与 particleSimulate.comp 的 ResolveCollision 保持同一套公式。
-// type 的 GPU 编码：0 none、1 plane、2 box、3 capsule。
+// type 的 GPU 编码：0 none、1 plane、2 box、3 capsule、4 sdf。
 inline int ParticleCollisionTypeValue(std::string_view type) noexcept
 {
     if (type == "plane") return 1;
     if (type == "box") return 2;
     if (type == "capsule") return 3;
+    if (type == "sdf") return 4;
     return 0;
 }
 
@@ -45,8 +47,13 @@ inline Eigen::Vector3f NormalizedParticleCollisionPlaneNormal(
 // 碰撞是粒子球（radius）与无限平面/世界 AABB/世界胶囊的解析修正。
 inline bool ResolveParticleCollision(
     ParticleCollisionState& state,
-    const ParticleEmitterAsset& emitter)
+    const ParticleEmitterAsset& emitter,
+    Eigen::Vector3f* outNormal = nullptr)
 {
+    if (outNormal != nullptr)
+    {
+        *outNormal = Eigen::Vector3f::Zero();
+    }
     if (!state.alive)
     {
         return false;
@@ -66,6 +73,7 @@ inline bool ResolveParticleCollision(
         std::clamp(emitter.collisionFriction, 0.0f, 1.0f);
     const float radius = std::max(emitter.collisionRadius, 0.0f);
     bool hit = false;
+    Eigen::Vector3f hitNormal = Eigen::Vector3f::Zero();
 
     if (type == 1)
     {
@@ -96,6 +104,7 @@ inline bool ResolveParticleCollision(
                 tangentVelocity * (1.0f - friction) -
                 normalVelocity * bounce;
         }
+        hitNormal = normal;
         hit = true;
     }
     else if (type == 2)
@@ -159,6 +168,7 @@ inline bool ResolveParticleCollision(
         state.velocity =
             tangentVelocity * (1.0f - friction) +
             normal * reflectedNormalSpeed;
+        hitNormal = normal;
         hit = true;
     }
     else if (type == 3)
@@ -206,9 +216,52 @@ inline bool ResolveParticleCollision(
                 tangentVelocity * (1.0f - friction) -
                 normalVelocity * bounce;
         }
+        hitNormal = normal;
+        hit = true;
+    }
+    else if (type == 4)
+    {
+        // SDF：d<radius 时沿梯度把粒子球推到等距面外。梯度为 0 时
+        // 放弃修正，保持位置不变，避免产生 NaN。
+        if (!emitter.collisionSdf || emitter.collisionSdf->Empty())
+        {
+            return true;
+        }
+        const float distance =
+            emitter.collisionSdf->SampleDistance(state.position);
+        if (!std::isfinite(distance) || distance >= radius)
+        {
+            return true;
+        }
+        const Eigen::Vector3f gradient =
+            emitter.collisionSdf->SampleGradient(state.position);
+        if (!gradient.allFinite() ||
+            gradient.squaredNorm() <= 1.0e-12f)
+        {
+            return true;
+        }
+        const Eigen::Vector3f normal = gradient.normalized();
+        state.position += normal * (radius - distance);
+
+        const float normalSpeed = normal.dot(state.velocity);
+        if (normalSpeed < 0.0f)
+        {
+            const Eigen::Vector3f normalVelocity =
+                normal * normalSpeed;
+            const Eigen::Vector3f tangentVelocity =
+                state.velocity - normalVelocity;
+            state.velocity =
+                tangentVelocity * (1.0f - friction) -
+                normalVelocity * bounce;
+        }
+        hitNormal = normal;
         hit = true;
     }
 
+    if (outNormal != nullptr)
+    {
+        *outNormal = hit ? hitNormal : Eigen::Vector3f::Zero();
+    }
     if (hit && emitter.killOnCollision)
     {
         state.alive = false;

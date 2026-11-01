@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleStorageRO.glsl"
 #include "particleSorted.glsl"
+#include "particleAlive.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -14,6 +15,8 @@ layout(location = 1) out float vSoftness;
 layout(location = 2) out float vViewDepth;
 // 世界空间法线；仅 particleMesh.frag 的方向光 Lambert 使用。
 layout(location = 4) out vec3 vNormal;
+// 世界空间位置；仅 mesh frag 的 CSM 级联选择使用。
+layout(location = 5) out vec3 vWorldPosition;
 
 // 与 vertex descriptor 的 billboard/ribbon 路径共用 binding 2，保证
 // descriptor set layout 完全一致；mesh v1 不采样纹理。
@@ -26,6 +29,7 @@ void CullVertex()
     vSoftness = 0.0;
     vViewDepth = 0.0;
     vNormal = vec3(0.0);
+    vWorldPosition = vec3(0.0);
 }
 
 mat3 RotateAroundAxis(vec3 axis, float angle)
@@ -61,6 +65,10 @@ void main()
     if (frame.sortParams.x > 0.5)
     {
         particleIndex = uint(sortedPairs.pairs[drawIndex].y);
+    }
+    else
+    {
+        particleIndex = aliveIndices.indices[drawIndex];
     }
     if (particleIndex >= count)
     {
@@ -156,4 +164,5 @@ void main()
     // 局部法线先乘逐粒子旋转，再乘当前朝向基（world/camera/velocity），
     // 与位置使用同一套变换，保证 Lambert 着色与粒子朝向一致。
     vNormal = normalize(rotation * basis * inNormal);
+    vWorldPosition = worldPosition;
 }

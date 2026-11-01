@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -97,6 +98,17 @@ struct WorldMeshObject
 // World 只冻结作者资产、摆放 TRS、可见性与实例运行时覆盖，避免把 GPU 生命周期混进逻辑世界。
 struct WorldParticleSystem
 {
+    // 发射器槽位只由 World 维护；stableIndex 等于槽位下标，销毁是 tombstone，
+    // 不会重排或复用。运行时 asset.emitters 只保留 active 槽位的紧凑副本，
+    // 因此渲染器资源仍能随 spawn/destroy 创建/退休，而 API 身份保持稳定。
+    struct EmitterSlot
+    {
+        ParticleEmitterAsset asset;
+        bool active = true;
+        bool enabled = true;
+        uint32_t restartEpoch = 0;
+    };
+
     std::string name;
     std::string assetPath;
     ParticleSystemAsset asset;
@@ -109,6 +121,25 @@ struct WorldParticleSystem
     bool visible = true;
     // 场景实例级运行时覆盖：只影响本 World 实例，不写回 PS_*.json / SC_*.json。
     ParticleSystemRuntimeOverrides runtime;
+    std::vector<EmitterSlot> emitterSlots;
+    // 稳定槽位身份只增不减；数量上限仍是 kMaxParticleEmitters。
+    uint32_t nextEmitterSlot = 0;
+    ParticleSystemBudget budget;
+    ParticleSystemAttachment attachment;
+    std::unordered_map<std::string, float> userParameters;
+    ParticleSystemTelemetry telemetry;
+};
+
+// 原生侧事件队列是“渲染器/物理稍后回填”的桥；C# 只在 GT 的下一帧 tick
+// 请求里领取它，不会把托管回调传进渲染线程。
+struct WorldParticleRuntimeEvent
+{
+    std::string systemName;
+    std::string emitterName;
+    std::string kind; // spawn|death|collision
+    float time = 0.0f;
+    Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    Eigen::Vector3f normal = Eigen::Vector3f::Zero();
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -213,6 +244,65 @@ public:
     bool SetParticleSystemEmitterEnabled(const std::string& name,
         uint32_t emitterIndex, bool enabled);
     bool ResetParticleSystemRuntimeOverrides(const std::string& name);
+    // 发射器级运行时 API。index 使用稳定槽位身份；name 是槽位显示名。
+    bool SpawnParticleEmitter(const std::string& systemName,
+        uint32_t sourceStableIndex, const std::string& requestedName,
+        uint32_t& outStableIndex);
+    bool DestroyParticleEmitter(const std::string& systemName,
+        uint32_t stableIndex);
+    bool RestartParticleEmitter(const std::string& systemName,
+        uint32_t stableIndex);
+    bool FindParticleEmitterIndex(const std::string& systemName,
+        const std::string& emitterName, uint32_t& outStableIndex) const;
+    // 预算覆盖：maxTotalParticles=0 表示不设上限；scale 范围 [0,16]。
+    bool SetParticleSystemBudget(const std::string& name,
+        uint32_t maxTotalParticles, float emitterBudgetScale);
+    bool SetWorldParticleBudget(uint32_t maxTotalParticles,
+        float emitterBudgetScale);
+    const ParticleSystemBudget& GetWorldParticleBudget() const
+    { return particleBudget; }
+    // 把 World 总量预算按名字稳定分配后，返回某个实例的实际预算。
+    // 实例显式 maxTotalParticles 优先，并允许超过 World 总量。
+    ParticleSystemBudget GetEffectiveParticleBudget(
+        const std::string& name) const;
+    // 命名用户参数：最多 64 个，key 1..64 字符，value 必须有限且 |v|<=1e6。
+    bool SetParticleSystemUserParameter(const std::string& name,
+        const std::string& key, float value);
+    bool ClearParticleSystemUserParameter(const std::string& name,
+        const std::string& key);
+    // 附着到网格场景对象或 Blueprint 组件；目标当前不存在时仍允许设置，
+    // 快照 telemetry/attachment.resolved 会显式为 false。
+    bool AttachParticleSystem(const std::string& name,
+        const std::string& targetKind, const std::string& targetName,
+        const std::string& componentName,
+        const Eigen::Vector3f& localPosition,
+        const Eigen::Vector3f& localRotation,
+        const Eigen::Vector3f& localScale);
+    bool DetachParticleSystem(const std::string& name);
+    // 渲染器回填入口：alive 数量按 stableIndex 对齐；越界/缺失保持未知。
+    bool SetParticleSystemRendererTelemetry(const std::string& name,
+        uint32_t aliveParticles,
+        const std::vector<uint32_t>& emitterAliveParticles,
+        uint32_t lastFrameBudget);
+    const ParticleSystemTelemetry* GetParticleSystemTelemetry(
+        const std::string& name) const;
+    nlohmann::json DescribeParticleSystemTelemetry(
+        const std::string& name) const;
+    // 原生事件可由渲染器/物理在 GT 上调用；队列上限 256，GT 下一帧领取。
+    bool QueueParticleRuntimeEvent(const WorldParticleRuntimeEvent& event);
+    std::vector<WorldParticleRuntimeEvent> TakeParticleRuntimeEvents();
+    // C# 粒子订阅是事件回读的唯一消费者。owner 级计数保证任一 owner 的
+    // destroy/EndPlay 只移除自己的兴趣，不会误停其它 owner 的事件采集。
+    bool SetParticleEventCaptureInterest(const std::string& owner, bool enabled);
+    bool IsParticleEventCaptureActive() const
+    { return !particleEventCaptureOwners.empty(); }
+    uint32_t ParticleEventCaptureInterestCount() const
+    { return static_cast<uint32_t>(particleEventCaptureOwners.size()); }
+    void ClearParticleEventCaptureInterest()
+    { particleEventCaptureOwners.clear(); }
+    // 每帧在快照构建时调用；没有附着时返回作者 model。
+    Eigen::Matrix4f ResolveParticleSystemModel(
+        const WorldParticleSystem& system, bool& resolved) const;
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
     // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
@@ -287,6 +377,9 @@ private:
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, WorldParticleSystem> particleSystems;
+    ParticleSystemBudget particleBudget;
+    std::vector<WorldParticleRuntimeEvent> particleRuntimeEvents;
+    std::unordered_set<std::string> particleEventCaptureOwners;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;

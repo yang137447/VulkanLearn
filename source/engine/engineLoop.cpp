@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "SDL3/SDL.h"
@@ -29,6 +31,7 @@
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
+#include "particles/particleEvents.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
 #include "engine/editorThumbnailRenderSession.h"
@@ -763,6 +766,28 @@ void EngineLoop::Tick()
 
     }
 
+    // 事件回读放在 Render 之后：GPU 事件缓冲来自刚提交的帧，且分线程模式
+    // 已在上面的 WaitForRenderThreadIdle 归还所有权。10 Hz 节流只在 Play
+    // 且有 C# 粒子订阅时生效，避免普通帧进入 WaitIdle。
+    if (const auto& particleWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorld())
+    {
+        const bool playing = GetSubsystems().GetScriptRuntime().IsPlaying();
+        if (playing)
+            particleEventTimeSeconds += simulationDelta;
+        else
+            particleEventTimeSeconds = 0.0;
+        const bool interested = particleWorld->IsParticleEventCaptureActive();
+        if (particleEventPollClock.Consume(
+                deltaTime, playing, interested))
+            PollParticleRuntimeBridge(*particleWorld);
+    }
+    else
+    {
+        particleEventPollClock.Reset();
+        particleEventTimeSeconds = 0.0;
+    }
+
     {
         PROFILE_SCOPE("FPS");
         GetSubsystems().GetFpsTool().Calculate(deltaTime);
@@ -774,6 +799,149 @@ void EngineLoop::Tick()
     // 即使关闭 UI 也推进帧边界；Motion/Console/脚本共用同一生命周期。
     if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
         world->GetDebugDraw().EndFrame();
+}
+
+void EngineLoop::PollParticleRuntimeBridge(World& world)
+{
+    // 事件/遥测回读需要设备安全点。只在 Play 且 C# 订阅存在时由
+    // ParticleEventPollClock 以 <=10 Hz 触发，普通帧不会调用 WaitIdle。
+    if (!GetSubsystems().GetScriptRuntime().IsPlaying() ||
+        !world.IsParticleEventCaptureActive() ||
+        world.GetParticleSystems().empty())
+        return;
+
+    std::vector<ParticleEventBatch> batches;
+    std::string error;
+    if (!RenderSystem::GetInstance().DrainParticleEvents(
+            kParticleEventDrainPerEmitter, batches, error))
+    {
+        if (error.find("No particle emitters") == std::string::npos &&
+            !particleEventDrainFailureReported)
+        {
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                "Particle event drain failed: " + error);
+            particleEventDrainFailureReported = true;
+        }
+        return;
+    }
+    particleEventDrainFailureReported = false;
+
+    struct SceneAggregate
+    {
+        uint32_t totalAlive = 0;
+        uint32_t totalCapacity = 0;
+        std::vector<uint32_t> perStableSlotAlive;
+    };
+    std::unordered_map<std::string, SceneAggregate> telemetry;
+
+    for (const ParticleEventBatch& batch : batches)
+    {
+        ParticleEmitterKeyIdentity identity;
+        if (!DecodeParticleEmitterKey(batch.emitterKey, identity))
+            continue;
+        const WorldParticleSystem* system =
+            world.FindParticleSystem(identity.sceneName);
+        if (system == nullptr) continue;
+
+        int stableIndex = -1;
+        const ParticleEmitterAsset* emitterAsset = nullptr;
+        for (size_t index = 0;
+             index < system->emitterSlots.size();
+             ++index)
+        {
+            if (!system->emitterSlots[index].active ||
+                system->emitterSlots[index].asset.name !=
+                    identity.emitterName)
+                continue;
+            stableIndex = static_cast<int>(index);
+            emitterAsset = &system->emitterSlots[index].asset;
+            break;
+        }
+
+        // 事件记录只有模拟空间位置；localSpace 由当前 World 资产判定。
+        // 渲染器把 emitter.model（场景模型 * 局部偏移）作为 localToWorld，
+        // 因此这里用同一矩阵把局部事件位置/法线转成世界空间。
+        Eigen::Matrix4f emitterModel = Eigen::Matrix4f::Identity();
+        const bool localSpace =
+            emitterAsset != nullptr && emitterAsset->localSpace;
+        if (localSpace)
+        {
+            bool resolved = false;
+            emitterModel = world.ResolveParticleSystemModel(*system, resolved);
+            Eigen::Matrix4f localOffset = Eigen::Matrix4f::Identity();
+            localOffset.block<3, 1>(0, 3) = emitterAsset->localPosition;
+            emitterModel = emitterModel * localOffset;
+        }
+
+        SceneAggregate& aggregate = telemetry[identity.sceneName];
+        if (aggregate.perStableSlotAlive.empty())
+            aggregate.perStableSlotAlive.resize(
+                system->emitterSlots.size(), 0);
+        aggregate.totalAlive += batch.counters.alive;
+        aggregate.totalCapacity += batch.counters.capacity;
+        if (stableIndex >= 0)
+            aggregate.perStableSlotAlive[
+                static_cast<size_t>(stableIndex)] +=
+                batch.counters.alive;
+
+        for (const ParticleEventRecord& record : batch.records)
+        {
+            const float rawType = record.eventData.x();
+            if (!std::isfinite(rawType)) continue;
+            const uint32_t eventType =
+                static_cast<uint32_t>(rawType + 0.5f);
+            const char* kind = ParticleEventKindName(eventType);
+            if (kind == nullptr) continue;
+
+            WorldParticleRuntimeEvent event;
+            event.systemName = identity.sceneName;
+            event.emitterName = identity.emitterName;
+            event.kind = kind;
+            // 渲染器当前把 eventData.z 留为 0；桥用 Play 模拟时钟打时间戳，
+            // 同一 100 ms 批次内的记录会共享这个时间。
+            event.time = static_cast<float>(particleEventTimeSeconds);
+            event.position = record.positionAge.head<3>();
+            event.normal = record.normal.head<3>();
+            if (localSpace)
+            {
+                const Eigen::Vector4f worldPosition =
+                    emitterModel *
+                    Eigen::Vector4f(
+                        event.position.x(),
+                        event.position.y(),
+                        event.position.z(),
+                        1.0f);
+                event.position = worldPosition.head<3>();
+                // 法线是协变向量，非均匀缩放时必须用逆转置，而不是直接乘
+                // 线性部分。
+                event.normal =
+                    emitterModel.block<3, 3>(0, 0)
+                        .inverse()
+                        .transpose() *
+                    event.normal;
+                const float normalLength = event.normal.norm();
+                if (normalLength > 1.0e-6f)
+                    event.normal /= normalLength;
+            }
+            // QueueParticleRuntimeEvent 自身有 256 条上限；满时丢弃，
+            // 不让诊断桥阻塞模拟/渲染。
+            (void)world.QueueParticleRuntimeEvent(event);
+        }
+    }
+
+    for (const auto& [sceneName, aggregate] : telemetry)
+    {
+        const ParticleSystemTelemetry* snapshotTelemetry =
+            world.GetParticleSystemTelemetry(sceneName);
+        const uint32_t budget = snapshotTelemetry != nullptr
+            ? snapshotTelemetry->budgetedCapacity
+            : aggregate.totalCapacity;
+        (void)world.SetParticleSystemRendererTelemetry(
+            sceneName,
+            aggregate.totalAlive,
+            aggregate.perStableSlotAlive,
+            budget);
+    }
 }
 
 void EngineLoop::TickScriptBuild(float deltaTime)

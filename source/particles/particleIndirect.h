@@ -54,8 +54,11 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
     return ParticleIndirectDrawShape{
         false,
         0,
-        maxParticles * verticesPerParticle,
-        1};
+        // 非索引路径改成“每实例固定顶点数 + 存活实例数”。GPU finalize
+        // 只改写 instanceCount，billboard/ribbon vertex shader 因此可以用
+        // gl_InstanceIndex 选择紧凑存活索引，而不是重放整池顶点。
+        verticesPerParticle,
+        maxParticles};
 }
 
 } // namespace VL

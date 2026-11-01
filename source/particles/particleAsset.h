@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -15,6 +16,7 @@ namespace VL
 {
 
 struct ParticleSystemAsset;
+struct ParticleSdfAsset;
 
 class ParticleAssetLoader
 {
@@ -72,6 +74,9 @@ struct ParticleEmitterAsset
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
     // 粒子速度。ribbon/mesh 各自使用自己的朝向逻辑。
     std::string billboardAlignment = "camera";
+    // billboard/ribbon 默认 unlit；开启后按相机朝向法线接收 CSM 阴影
+    // 调暗，属于显式的简化光照开关，不启用完整 PBR。
+    bool billboardShadows = false;
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;
@@ -80,6 +85,9 @@ struct ParticleEmitterAsset
     std::string meshPath;
     Eigen::Vector3f meshScale = Eigen::Vector3f::Ones();
     std::string meshAlignment = "world";
+    // 可选材质实例（MI_*.json）。只消费数值子集 baseColor/emissive/
+    // roughness/metallic；空字符串表示使用内置 unlit/默认 PBR 回退。
+    std::string materialInstancePath;
     // mesh 专用简化 Lambert：只用场景里第一个方向光的颜色与方向，
     // 不读 lux 强度、不接材质/阴影。billboard/ribbon 不受影响。
     bool meshLighting = true;
@@ -136,9 +144,10 @@ struct ParticleEmitterAsset
 
     // 世界空间碰撞。plane 的法线在解析时归一化，offset 是沿法线的
     // 世界距离；box 是世界轴对齐 AABB（cm）；capsule 是线段 AB 外扩
-    // capsuleRadius 的胶囊。碰撞字段对 type=none 不产生运行时开销，
-    // 但仍参与有限性与范围校验。
-    std::string collisionType = "none"; // none|plane|box|capsule
+    // capsuleRadius 的胶囊；sdf 是有限体素距离场。localSpace=true 时
+    // 碰撞体按发射器局部空间解释（与局部粒子坐标同一空间）。
+    // 碰撞字段对 type=none 不产生运行时开销，但仍参与有限性与范围校验。
+    std::string collisionType = "none"; // none|plane|box|capsule|sdf
     Eigen::Vector3f collisionPlaneNormal = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     float collisionPlaneOffset = 0.0f;
     Eigen::Vector3f collisionBoxMin =
@@ -156,6 +165,20 @@ struct ParticleEmitterAsset
     // CCD 只作用于运行时帧积分：按速度与碰撞半径把一帧拆成最多 8 个子步。
     // prewarm 的解析积分仍只在末尾做一次碰撞。
     bool collisionCcd = false;
+    // SDF 源路径相对资源根；解析成功后 collisionSdf 持有冻结数据。
+    std::string collisionSdfPath;
+    std::shared_ptr<const ParticleSdfAsset> collisionSdf;
+
+    // 事件 v1：只控制是否写 GPU 事件记录，不改变碰撞/死亡语义。
+    bool emitSpawnEvent = false;
+    bool emitDeathEvent = false;
+    bool emitCollisionEvent = false;
+
+    // 确定性随机：seed 参与每步随机状态派生；fixedTimeStep>0 时模拟按
+    // 固定步长推进（渲染帧累积），不依赖 wall clock。
+    uint32_t randomSeed = 0;
+    bool deterministicRandom = false;
+    float fixedTimeStep = 0.0f;
 
     // Billboard 半边长从 sizeStart 线性过渡到 sizeEnd。
     float sizeStart = 20.0f;
@@ -239,6 +262,10 @@ struct ParticleSystemAsset
     uint32_t version = 1;
     // v2 系统级用户参数；当前存储并校验，供后续模块引用。
     std::unordered_map<std::string, float> userParameters;
+    // v2 且存在 userParameters 时冻结一份作者 JSON：运行时参数覆盖需要
+    // 在原始模块结构上重新替换 $Name 并重新走 ParseJson。没有用户参数的
+    // 资产不保留副本，避免无意义的内存占用。
+    std::shared_ptr<const nlohmann::json> authoringJson;
     // 相对资源根的逻辑路径，用作运行时发射器身份的一部分。
     std::string sourcePath;
     std::vector<ParticleEmitterAsset> emitters;

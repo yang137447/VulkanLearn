@@ -20,6 +20,8 @@
 #include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
 #include "particles/particleCollision.h"
+#include "particles/particleBudget.h"
+#include "particles/particleDeterminism.h"
 #include "particles/particleDump.h"
 #include "particles/particleEmitterBounds.h"
 #include "particles/particleEmitterKey.h"
@@ -29,6 +31,7 @@
 #include "particles/particleMesh.h"
 #include "particles/particleRibbon.h"
 #include "particles/particleTextureReference.h"
+#include "particles/particleUserParameterOverride.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/frontend/renderScene.h"
 #include "render/rendergraph/renderGraphPassType.h"
@@ -112,6 +115,17 @@ uint32_t SortedCapacity(uint32_t maxParticles)
         std::max(maxParticles, kParticleSortMinimumCapacity);
     while (capacity < desired &&
            capacity < kParticleSortMaximumCapacity)
+    {
+        capacity <<= 1;
+    }
+    return capacity;
+}
+
+uint32_t GlobalSortCapacity(uint64_t desired)
+{
+    uint32_t capacity = kParticleSortMinimumCapacity;
+    while (capacity < desired &&
+           capacity < kParticleGlobalSortCapacity)
     {
         capacity <<= 1;
     }
@@ -205,6 +219,12 @@ std::string BuildEmitterMeshSourceKey(
             ? "missing"
             : std::to_string(static_cast<long long>(
                 writeTime.time_since_epoch().count()));
+        // mesh.scale 参与局部包围球计算；非均匀缩放不能用简单的半径乘
+        // 最大轴近似，因此把缩放纳入源身份，变化时重建 mesh 缓冲与 bounds。
+        key += '|';
+        key += std::to_string(asset.meshScale.x()) + "," +
+            std::to_string(asset.meshScale.y()) + "," +
+            std::to_string(asset.meshScale.z());
         return key;
     }
     catch (const std::exception&)
@@ -214,16 +234,48 @@ std::string BuildEmitterMeshSourceKey(
     }
 }
 
+ParticleMaterialParams LoadParticleMaterialInstance(
+    const std::string& path,
+    std::string& outError)
+{
+    ParticleMaterialParams params;
+    try
+    {
+        RequireValidParticleMeshPath(path, "materialInstancePath");
+        std::ifstream file(CommonFunction::Path(path));
+        if (!file.is_open())
+        {
+            outError = "file not found";
+            return params;
+        }
+        nlohmann::json json;
+        file >> json;
+        params = ParseParticleMaterialInstanceJson(json);
+    }
+    catch (const std::exception& exception)
+    {
+        outError = exception.what();
+    }
+    return params;
+}
+
 } // namespace
 
 ParticleRenderer::~ParticleRenderer()
 {
-    // backend 生命周期由 RenderSystem 保证；正常关闭走 Shutdown，
-    // 这里只兜底释放 Vulkan 包装对象，避免析构顺序变化时泄漏。
+    // 正常关闭走 Shutdown；若调用方绕过它，至少在同一 backend 仍有效时
+    // 走到设备空闲并释放全局池/管线/查询池，避免析构泄漏。
     if (backend != nullptr)
     {
-        emitters.clear();
-        textureCache.clear();
+        try
+        {
+            backend->WaitIdle();
+        }
+        catch (...)
+        {
+            // 析构不能把关闭路径异常抛回引擎。
+        }
+        Shutdown(*backend);
     }
 }
 
@@ -285,6 +337,12 @@ void ParticleRenderer::Initialize(
         factory.CreateComputePipeline("particle/particleSortInit");
     sortPipeline =
         factory.CreateComputePipeline("particle/particleSort");
+    finalizeCountPipeline =
+        factory.CreateComputePipeline("particle/particleFinalizeCount");
+    globalGatherPipeline =
+        factory.CreateComputePipeline("particle/particleGlobalGather");
+    globalSortInitPipeline =
+        factory.CreateComputePipeline("particle/particleGlobalSortInit");
 
     ShaderVariantKey variant;
     variant.shaderName = "particle/particle";
@@ -357,6 +415,19 @@ void ParticleRenderer::Initialize(
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::AlphaBlend);
 
+    // 跨发射器 alpha billboard 的统一绘制管线：无顶点输入，读取
+    // gathered 记录 + 全局排序 pair 表 + 8 槽纹理数组。
+    ShaderVariantKey globalVariant = variant;
+    globalVariant.shaderName = "particle/particleGlobal";
+    const GraphicsShaderVariantArtifact& globalArtifact =
+        factory.PrepareGraphicsShaderVariant(globalVariant);
+    globalDrawPipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        contract,
+        globalArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::AlphaBlend);
+
     // 无纹理发射器仍需一个合法 sampler；1x1 白图让 shader 走程序化形状分支。
     HostImage whiteImage;
     whiteImage.width = 1;
@@ -391,15 +462,20 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     // 活跃发射器可以立即析构，已退休的包仍由 ResourceRetireQueue 持有。
     emitters.clear();
     textureCache.clear();
+    DestroyGlobalSortPool();
     simulatePipeline.reset();
     sortInitPipeline.reset();
     sortPipeline.reset();
+    finalizeCountPipeline.reset();
+    globalGatherPipeline.reset();
+    globalSortInitPipeline.reset();
     additivePipeline.reset();
     alphaPipeline.reset();
     ribbonAdditivePipeline.reset();
     ribbonAlphaPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
+    globalDrawPipeline.reset();
     defaultTexture.reset();
     drawOrder.clear();
     renderIdentity = {};
@@ -423,6 +499,101 @@ void ParticleRenderer::InvalidatePipelines(
     Shutdown(renderer);
 }
 
+const ParticleSystemAsset&
+ParticleRenderer::ResolveParticleSystemAsset(
+    const ParticleSystemSnapshot& snapshot)
+{
+    const ParticleSystemAsset& base = snapshot.asset;
+    // 只有“带用户参数的 v2 作者 JSON + 运行时覆盖”才需要重解析。
+    if (!base.authoringJson || snapshot.userParameters.empty())
+    {
+        return base;
+    }
+
+    const std::string cacheKey =
+        snapshot.name + "|" + base.sourcePath;
+    const uint64_t signature =
+        BuildParticleUserParameterSignature(
+            snapshot.userParameters);
+    const nlohmann::json* authoring = base.authoringJson.get();
+
+    auto entryIt = userParameterCache.find(cacheKey);
+    if (entryIt != userParameterCache.end() &&
+        entryIt->second.attempted &&
+        entryIt->second.signature == signature &&
+        entryIt->second.authoringJson == authoring)
+    {
+        return entryIt->second.parsed
+            ? entryIt->second.asset
+            : (entryIt->second.asset.authoringJson !=
+                    base.authoringJson ||
+                entryIt->second.asset.emitters.empty()
+                ? base
+                : entryIt->second.asset);
+    }
+
+    // 缓存有界：每个系统一条，超出上限时淘汰最早插入项。缓存只服务
+    // 渲染线程，不跨系统共享资产。
+    if (entryIt == userParameterCache.end())
+    {
+        if (userParameterCache.size() >= 32)
+        {
+            userParameterCache.erase(userParameterCache.begin());
+        }
+        ParticleUserParameterCacheEntry entry;
+        entry.asset = base; // 解析失败时的 last-good 起点
+        entryIt = userParameterCache.emplace(
+            cacheKey, std::move(entry)).first;
+    }
+
+    ParticleUserParameterCacheEntry& entry = entryIt->second;
+    entry.signature = signature;
+    entry.authoringJson = authoring;
+    entry.attempted = true;
+    try
+    {
+        // 合并 -> ParseJson -> 运行时-only emitter 对齐；缓存资产始终
+        // 保留原始作者 JSON 指针，下一次覆盖仍在原始模块结构上合并。
+        ParticleSystemAsset parsed =
+            ParseParticleAssetWithRuntimeParameters(
+                base, snapshot.userParameters);
+        entry.asset = std::move(parsed);
+        entry.parsed = true;
+    }
+    catch (const std::exception& exception)
+    {
+        // 渲染线程不能抛异常：保留 last-good，并只告警一次。
+        WarnUserParameterFailureOnce(
+            cacheKey, signature, exception.what());
+        entry.parsed = false;
+    }
+    return entry.parsed
+        ? entry.asset
+        : (entry.asset.authoringJson != base.authoringJson ||
+            entry.asset.emitters.empty()
+            ? base
+            : entry.asset);
+}
+
+void ParticleRenderer::WarnUserParameterFailureOnce(
+    const std::string& key,
+    uint64_t signature,
+    const std::string& error)
+{
+    const std::string warningKey =
+        key + "|" + std::to_string(signature);
+    if (!warnedUserParameterFailures.insert(warningKey).second)
+    {
+        return;
+    }
+    const std::string message =
+        "Particle runtime user parameters ignored for '" + key +
+        "': " + error + "; keeping the last good asset";
+    ProcessLog().Append(
+        LogSeverity::Warning, "Particles", message);
+    std::cout << "[Particles][Warning] " << message << std::endl;
+}
+
 void ParticleRenderer::Synchronize(const RenderScene& renderScene)
 {
     if (!initialized)
@@ -439,12 +610,106 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
     for (const ParticleSystemSnapshot& snapshot :
          renderScene.particleSystems)
     {
+        // 运行时 userParameters 覆盖可能改变展平后的数值字段；只有签名/
+        // 作者指针变化时才重新 ParseJson，失败保留 last-good。
+        const ParticleSystemAsset* resolvedAsset = &snapshot.asset;
+        try
+        {
+            resolvedAsset = &ResolveParticleSystemAsset(snapshot);
+        }
+        catch (const std::exception& exception)
+        {
+            // 缓存插入/JSON 复制也可能分配失败；渲染线程必须保持无异常。
+            WarnUserParameterFailureOnce(
+                snapshot.name + "|" + snapshot.assetPath,
+                0u,
+                exception.what());
+        }
+        catch (...)
+        {
+            WarnUserParameterFailureOnce(
+                snapshot.name + "|" + snapshot.assetPath,
+                0u,
+                "unknown runtime user parameter failure");
+        }
+        const ParticleSystemAsset& systemAsset = *resolvedAsset;
+        std::unordered_map<std::string,
+            const ParticleEmitterTelemetry*> telemetryByName;
+        telemetryByName.reserve(snapshot.telemetry.emitters.size());
+        for (const ParticleEmitterTelemetry& telemetry :
+             snapshot.telemetry.emitters)
+        {
+            if (!telemetry.name.empty())
+            {
+                telemetryByName.emplace(
+                    telemetry.name, &telemetry);
+            }
+        }
+        // 快照通常带 World 生成的逐发射器预算；若 telemetry 缺失/名称
+        // 不匹配，则用本地镜像按 snapshot.budget 计算，避免总上限失效。
+        bool telemetryBudgetsUsable =
+            !snapshot.telemetry.emitters.empty();
+        if (telemetryBudgetsUsable)
+        {
+            for (const ParticleEmitterAsset& emitter :
+                 systemAsset.emitters)
+            {
+                if (telemetryByName.find(emitter.name) ==
+                    telemetryByName.end())
+                {
+                    telemetryBudgetsUsable = false;
+                    break;
+                }
+            }
+        }
+        std::vector<uint32_t> fallbackBudgets;
+        if (!telemetryBudgetsUsable)
+        {
+            std::vector<uint32_t> authored;
+            authored.reserve(systemAsset.emitters.size());
+            for (const ParticleEmitterAsset& emitter :
+                 systemAsset.emitters)
+            {
+                authored.push_back(emitter.maxParticles);
+            }
+            fallbackBudgets =
+                ComputeParticleEmitterBudgetCapacities(
+                    authored,
+                    snapshot.budget.maxTotalParticles,
+                    snapshot.budget.emitterBudgetScale);
+        }
+
         for (size_t emitterIndex = 0;
-             emitterIndex < snapshot.asset.emitters.size();
+             emitterIndex < systemAsset.emitters.size();
              ++emitterIndex)
         {
-            const ParticleEmitterAsset& emitter =
-                snapshot.asset.emitters[emitterIndex];
+            const ParticleEmitterAsset& authoredEmitter =
+                systemAsset.emitters[emitterIndex];
+            const auto telemetryIt = telemetryByName.find(
+                authoredEmitter.name);
+            const ParticleEmitterTelemetry* telemetry =
+                telemetryIt != telemetryByName.end()
+                ? telemetryIt->second
+                : nullptr;
+            // 预算 0 表示本帧不分配池；不加入 desired，已有池走正常
+            // retire 清理路径。预算变化会让下面的 maxParticles 比较
+            // 触发池重建。
+            const uint32_t budgetedMaxParticles =
+                telemetryBudgetsUsable && telemetry != nullptr
+                ? telemetry->budgetedMaxParticles
+                : fallbackBudgets.at(emitterIndex);
+            const uint32_t effectiveMaxParticles =
+                ResolveParticleEmitterCapacity(
+                    authoredEmitter.maxParticles,
+                    budgetedMaxParticles,
+                    telemetryBudgetsUsable);
+            if (!ShouldAllocateParticlePool(
+                    effectiveMaxParticles))
+            {
+                continue;
+            }
+            ParticleEmitterAsset emitter = authoredEmitter;
+            emitter.maxParticles = effectiveMaxParticles;
             const bool enabled =
                 emitterIndex < kMaxParticleEmitters &&
                 ((snapshot.runtime.enabledEmitterMask >> emitterIndex) & 1u) != 0;
@@ -474,6 +739,10 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                     emitter.maxParticles ||
                 emitterIt->second->asset.sortParticles !=
                     emitter.sortParticles ||
+                emitterIt->second->asset.materialInstancePath !=
+                    emitter.materialInstancePath ||
+                emitterIt->second->asset.collisionSdfPath !=
+                    emitter.collisionSdfPath ||
                 emitterIt->second->textureSourceKey !=
                     textureSourceKey ||
                 emitterIt->second->meshSourceKey !=
@@ -490,6 +759,12 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                     emitter, model, key, snapshot.visible, enabled,
                     snapshot.runtime.spawnRateScale,
                     snapshot.runtime.colorTint);
+                const auto created = emitters.find(key);
+                if (created != emitters.end() && telemetry != nullptr)
+                {
+                    created->second->restartEpoch =
+                        telemetry->restartEpoch;
+                }
                 continue;
             }
 
@@ -508,6 +783,21 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             // 否则编辑器改动或热重载后会继续用创建时的旧表。
             emitterIt->second->flipbookTable =
                 BuildParticleFlipbookGpuTable(emitter);
+            // World stable slot 的 restartEpoch 变化只重置该发射器的模拟
+            // 状态；池/纹理/描述符保持原样，不重建 GPU 资源。
+            if (telemetry != nullptr &&
+                emitterIt->second->restartEpoch !=
+                    telemetry->restartEpoch)
+            {
+                emitterIt->second->elapsedSeconds = 0.0f;
+                emitterIt->second->fixedStepAccumulator = 0.0f;
+                emitterIt->second->fixedStepIndex = 0;
+                emitterIt->second->prewarm = true;
+                emitterIt->second->needsClear = true;
+                emitterIt->second->culled = false;
+                emitterIt->second->restartEpoch =
+                    telemetry->restartEpoch;
+            }
             ComputeEmitterBounds(
                 emitter,
                 model,
@@ -531,6 +821,9 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             ++emitterIt;
         }
     }
+    // 发射器集合稳定后再决定全局透明排序池的成员/纹理槽位；签名不变时
+    // 直接复用，不在每帧创建 GPU 资源。
+    SynchronizeGlobalSort();
 }
 
 void ParticleRenderer::RestartParticleSystems(
@@ -548,10 +841,1079 @@ void ParticleRenderer::RestartParticleSystems(
         // elapsedSeconds 决定 burst 周期与 flipbook 系统时间；归零后从
         // 第一帧重新开始。prewarm/needsClear 让下一帧重建整池初始状态。
         emitter.elapsedSeconds = 0.0f;
+        emitter.fixedStepAccumulator = 0.0f;
+        emitter.fixedStepIndex = 0;
         emitter.prewarm = true;
         emitter.needsClear = true;
         emitter.culled = false;
     }
+}
+
+void ParticleRenderer::SetShadowCascadeData(
+    const ParticleShadowCascadeData& data)
+{
+    shadowCascadeData = data;
+}
+
+bool ParticleRenderer::DrainParticleEvents(
+    RendererBackendVulkan& readbackBackend,
+    uint32_t maxPerEmitter,
+    std::vector<ParticleEventBatch>& outBatches,
+    std::string& outError)
+{
+    outBatches.clear();
+    if (!initialized || backend != &readbackBackend)
+    {
+        outError =
+            "Particle renderer is not initialized for this backend.";
+        return false;
+    }
+    if (emitters.empty())
+    {
+        outError = "No particle emitters are available for event drain.";
+        return false;
+    }
+
+    maxPerEmitter = std::min(
+        maxPerEmitter, kParticleEventCapacity);
+    const vk::DeviceSize counterBytes = sizeof(ParticleEventCounters);
+    const vk::DeviceSize recordBytes =
+        maxPerEmitter > 0
+        ? sizeof(ParticleEventRecord) *
+            static_cast<vk::DeviceSize>(maxPerEmitter)
+        : sizeof(ParticleEventRecord);
+
+    for (const auto& [key, emitterPtr] : emitters)
+    {
+        const EmitterResources& emitter = *emitterPtr;
+        // 冻结 emitter 的计数在 RecordSimulation 中已清零；这里直接跳过，
+        // 避免 cull 边界上的旧记录被重复派发。
+        if (emitter.culled)
+        {
+            continue;
+        }
+        if (!emitter.counters.buffer || !emitter.events.buffer)
+        {
+            outError = "Particle emitter has no event buffers: " + key;
+            return false;
+        }
+
+        vk::Buffer counterReadback;
+        vk::DeviceMemory counterMemory;
+        vk::Buffer eventReadback;
+        vk::DeviceMemory eventMemory;
+        try
+        {
+            std::tie(counterReadback, counterMemory) =
+                readbackBackend.CreateBuffer(
+                    counterBytes,
+                    vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "ParticleEventCountersReadback:" + key);
+            std::tie(eventReadback, eventMemory) =
+                readbackBackend.CreateBuffer(
+                    recordBytes,
+                    vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "ParticleEventsReadback:" + key);
+
+            vk::CommandBuffer commandBuffer =
+                readbackBackend.BeginSingleTimeCommands();
+            vk::BufferMemoryBarrier toTransfer;
+            toTransfer
+                .setSrcAccessMask(
+                    vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            toTransfer.setBuffer(emitter.counters.buffer);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                nullptr,
+                toTransfer,
+                nullptr);
+            commandBuffer.copyBuffer(
+                emitter.counters.buffer,
+                counterReadback,
+                vk::BufferCopy(0, 0, counterBytes));
+
+            toTransfer.setBuffer(emitter.events.buffer);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                nullptr,
+                toTransfer,
+                nullptr);
+            commandBuffer.copyBuffer(
+                emitter.events.buffer,
+                eventReadback,
+                vk::BufferCopy(0, 0, recordBytes));
+            readbackBackend.EndSingleTimeCommands(commandBuffer);
+
+            const ParticleEventCounters* counters =
+                static_cast<const ParticleEventCounters*>(
+                    readbackBackend.MapMemory(counterMemory, counterBytes));
+            const ParticleEventRecord* records =
+                static_cast<const ParticleEventRecord*>(
+                    readbackBackend.MapMemory(eventMemory, recordBytes));
+            if (counters == nullptr || records == nullptr)
+            {
+                readbackBackend.UnmapMemory(counterMemory);
+                readbackBackend.UnmapMemory(eventMemory);
+                readbackBackend.DestroyBuffer(
+                    counterReadback, counterMemory);
+                readbackBackend.DestroyBuffer(
+                    eventReadback, eventMemory);
+                outError = "Particle event readback map failed: " + key;
+                return false;
+            }
+
+            ParticleEventBatch batch;
+            batch.emitterKey = key;
+            batch.counters = *counters;
+            const uint32_t recordCount = std::min(
+                std::min(maxPerEmitter, kParticleEventCapacity),
+                counters->events);
+            batch.records.assign(records, records + recordCount);
+            outBatches.push_back(std::move(batch));
+
+            readbackBackend.UnmapMemory(counterMemory);
+            readbackBackend.UnmapMemory(eventMemory);
+            readbackBackend.DestroyBuffer(
+                counterReadback, counterMemory);
+            readbackBackend.DestroyBuffer(
+                eventReadback, eventMemory);
+        }
+        catch (const std::exception& exception)
+        {
+            outError =
+                "Particle event drain failed for '" + key +
+                "': " + exception.what();
+            return false;
+        }
+    }
+    return true;
+}
+
+void ParticleRenderer::DestroyGlobalSortPool()
+{
+    // 全局池可能在上一帧仍被 GPU 引用；重建/销毁只发生在发射器集合或
+    // 纹理变化时，用一次 WaitIdle 换取安全，而不是每帧等待。
+    if (backend != nullptr && globalSortPool.active)
+    {
+        backend->WaitIdle();
+    }
+    if (backend != nullptr)
+    {
+        if (globalSortPool.descriptorPool)
+        {
+            backend->DestroyDescriptorPool(
+                globalSortPool.descriptorPool);
+        }
+        for (GpuBuffer& buffer : globalSortPool.records)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& buffer : globalSortPool.pairsA)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& buffer : globalSortPool.pairsB)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& buffer : globalSortPool.counters)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& buffer : globalSortPool.indirectArgs)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& buffer : globalSortPool.debugCounters)
+            DestroyBuffer(*backend, buffer);
+        for (GpuBuffer& uniform : globalSortPool.uniforms)
+        {
+            DestroyBuffer(*backend, uniform);
+        }
+        globalSortPool.gpuTimer.Shutdown(*backend);
+    }
+    globalSortPool = GlobalSortPool{};
+}
+
+bool ParticleRenderer::IsGlobalSortEmitter(
+    const std::string& key) const
+{
+    if (!globalSortPool.active)
+    {
+        return false;
+    }
+    return std::find(
+        globalSortPool.emitterKeys.begin(),
+        globalSortPool.emitterKeys.end(),
+        key) != globalSortPool.emitterKeys.end();
+}
+
+void ParticleRenderer::SynchronizeGlobalSort()
+{
+    if (!initialized || backend == nullptr)
+    {
+        return;
+    }
+
+    struct Candidate
+    {
+        std::string key;
+        std::string textureKey;
+        uint32_t maxParticles = 0;
+    };
+    std::vector<Candidate> candidates;
+    uint64_t totalCapacity = 0;
+    for (const auto& [key, emitterPtr] : emitters)
+    {
+        const EmitterResources& emitter = *emitterPtr;
+        if (!emitter.visible || !emitter.enabled)
+        {
+            continue;
+        }
+        // v1 全局排序只接纳 alpha billboard；ribbon/mesh 保留逐发射器
+        // 排序（它们的顶点生成与材质路径不同）。
+        if (emitter.asset.renderMode != "billboard" ||
+            !emitter.asset.sortParticles ||
+            emitter.asset.additive ||
+            // 全局 gather 记录不携带逐 emitter 阴影开关；需要 CSM 的
+            // billboard 留在逐 emitter 路径，避免静默丢失作者设置。
+            emitter.asset.billboardShadows)
+        {
+            continue;
+        }
+        totalCapacity += emitter.asset.maxParticles;
+        if (totalCapacity > kParticleGlobalSortCapacity)
+        {
+            DestroyGlobalSortPool();
+            return;
+        }
+        candidates.push_back(Candidate{
+            key, emitter.textureSourceKey, emitter.asset.maxParticles});
+    }
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const Candidate& left, const Candidate& right)
+        {
+            return left.key < right.key;
+        });
+
+    std::vector<std::string> emitterKeys;
+    std::vector<uint32_t> textureSlots;
+    std::vector<std::shared_ptr<Texture>> textures;
+    std::unordered_map<std::string, uint32_t> slotByTexture;
+    std::string signature;
+    for (const Candidate& candidate : candidates)
+    {
+        const auto slot = slotByTexture.find(candidate.textureKey);
+        uint32_t textureSlot = 0;
+        if (slot == slotByTexture.end())
+        {
+            if (textures.size() >= kParticleGlobalTextureSlots)
+            {
+                DestroyGlobalSortPool();
+                return;
+            }
+            textureSlot = static_cast<uint32_t>(textures.size());
+            slotByTexture.emplace(candidate.textureKey, textureSlot);
+            const auto emitter = emitters.find(candidate.key);
+            textures.push_back(
+                emitter != emitters.end() && emitter->second->texture
+                ? emitter->second->texture
+                : defaultTexture);
+        }
+        else
+        {
+            textureSlot = slot->second;
+        }
+        emitterKeys.push_back(candidate.key);
+        textureSlots.push_back(textureSlot);
+        signature += candidate.key + "#" + candidate.textureKey +
+            "#" + std::to_string(candidate.maxParticles) + ";";
+    }
+
+    if (emitterKeys.empty())
+    {
+        DestroyGlobalSortPool();
+        return;
+    }
+    // 失败签名也缓存，避免每帧重复创建/告警；发射器集合或纹理变化后
+    // 签名不同才会重试。
+    if (globalSortPool.signature == signature)
+    {
+        return;
+    }
+
+    const uint32_t sortCapacity =
+        GlobalSortCapacity(totalCapacity);
+    if (!CreateGlobalSortPool(
+            emitterKeys,
+            textureSlots,
+            textures,
+            sortCapacity))
+    {
+        globalSortPool.signature = signature;
+        const std::string message =
+            "Global particle sort disabled: pool creation failed";
+        ProcessLog().Append(
+            LogSeverity::Warning, "Particles", message);
+        std::cout << "[Particles][Warning] " << message << std::endl;
+        DestroyGlobalSortPool();
+        globalSortPool.signature = signature;
+        return;
+    }
+    globalSortPool.signature = signature;
+    const std::string message =
+        "Global particle sort active: emitters=" +
+        std::to_string(emitterKeys.size()) +
+        " capacity=" + std::to_string(sortCapacity) +
+        " textures=" + std::to_string(textures.size());
+    ProcessLog().Append(LogSeverity::Info, "Particles", message);
+    std::cout << "[Particles][Info] " << message << std::endl;
+}
+
+bool ParticleRenderer::CreateGlobalSortPool(
+    const std::vector<std::string>& emitterKeys,
+    const std::vector<uint32_t>& textureSlots,
+    const std::vector<std::shared_ptr<Texture>>& textures,
+    uint32_t capacity)
+{
+    DestroyGlobalSortPool();
+    if (backend == nullptr || emitterKeys.empty() ||
+        emitterKeys.size() != textureSlots.size() ||
+        !globalGatherPipeline || !globalSortInitPipeline ||
+        !globalDrawPipeline || !sortPipeline ||
+        !finalizeCountPipeline)
+    {
+        std::cout << "[Particles][Warning] Global particle sort "
+            "precondition failed: pipelines="
+                  << (globalGatherPipeline ? 1 : 0)
+                  << (globalSortInitPipeline ? 1 : 0)
+                  << (globalDrawPipeline ? 1 : 0)
+                  << (sortPipeline ? 1 : 0)
+                  << (finalizeCountPipeline ? 1 : 0)
+                  << std::endl;
+        return false;
+    }
+
+    const uint32_t imageCount = backend->GetSwapchainImageCount();
+    const uint32_t emitterCount =
+        static_cast<uint32_t>(emitterKeys.size());
+    const vk::DeviceSize recordBytes =
+        static_cast<vk::DeviceSize>(capacity) * 8u * sizeof(Eigen::Vector4f);
+    const vk::DeviceSize pairBytes =
+        static_cast<vk::DeviceSize>(capacity) * sizeof(Eigen::Vector4f);
+
+    globalSortPool.capacity = capacity;
+    globalSortPool.emitterCount = emitterCount;
+    globalSortPool.emitterKeys = emitterKeys;
+    globalSortPool.textures = textures;
+    for (size_t index = 0; index < emitterKeys.size(); ++index)
+    {
+        globalSortPool.textureSlotByKey.emplace(
+            emitterKeys[index], textureSlots[index]);
+    }
+
+    const auto createStorage = [this](
+        vk::DeviceSize bytes,
+        const std::string& name)
+    {
+        return backend->CreateBuffer(
+            bytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            name);
+    };
+    globalSortPool.records.resize(imageCount);
+    globalSortPool.pairsA.resize(imageCount);
+    globalSortPool.pairsB.resize(imageCount);
+    globalSortPool.counters.resize(imageCount);
+    globalSortPool.indirectArgs.resize(imageCount);
+    globalSortPool.debugCounters.resize(imageCount);
+    for (uint32_t imageIndex = 0; imageIndex < imageCount; ++imageIndex)
+    {
+        const std::string suffix = ":" + std::to_string(imageIndex);
+        std::tie(globalSortPool.records[imageIndex].buffer,
+            globalSortPool.records[imageIndex].memory) =
+            createStorage(recordBytes, "ParticleGlobalRecords" + suffix);
+        std::tie(globalSortPool.pairsA[imageIndex].buffer,
+            globalSortPool.pairsA[imageIndex].memory) =
+            createStorage(pairBytes, "ParticleGlobalPairsA" + suffix);
+        std::tie(globalSortPool.pairsB[imageIndex].buffer,
+            globalSortPool.pairsB[imageIndex].memory) =
+            createStorage(pairBytes, "ParticleGlobalPairsB" + suffix);
+
+        const auto counterAllocation = backend->CreateBuffer(
+            sizeof(ParticleEventCounters),
+            vk::BufferUsageFlagBits::eStorageBuffer |
+                vk::BufferUsageFlagBits::eTransferDst |
+                vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "ParticleGlobalCounters" + suffix);
+        globalSortPool.counters[imageIndex].buffer =
+            counterAllocation.first;
+        globalSortPool.counters[imageIndex].memory =
+            counterAllocation.second;
+        void* mappedCounters = backend->MapMemory(
+            globalSortPool.counters[imageIndex].memory,
+            sizeof(ParticleEventCounters));
+        if (mappedCounters == nullptr)
+        {
+            return false;
+        }
+        ParticleEventCounters initialCounters;
+        initialCounters.capacity = capacity;
+        std::memcpy(
+            mappedCounters, &initialCounters, sizeof(initialCounters));
+        backend->UnmapMemory(globalSortPool.counters[imageIndex].memory);
+
+        const auto indirectAllocation = backend->CreateBuffer(
+            sizeof(vk::DrawIndirectCommand),
+            vk::BufferUsageFlagBits::eIndirectBuffer |
+                vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "ParticleGlobalIndirect" + suffix);
+        globalSortPool.indirectArgs[imageIndex].buffer =
+            indirectAllocation.first;
+        globalSortPool.indirectArgs[imageIndex].memory =
+            indirectAllocation.second;
+        void* mappedIndirect = backend->MapMemory(
+            globalSortPool.indirectArgs[imageIndex].memory,
+            sizeof(vk::DrawIndirectCommand));
+        if (mappedIndirect == nullptr)
+        {
+            return false;
+        }
+        const vk::DrawIndirectCommand command(6u, capacity, 0u, 0u);
+        std::memcpy(mappedIndirect, &command, sizeof(command));
+        backend->UnmapMemory(
+            globalSortPool.indirectArgs[imageIndex].memory);
+
+        const auto debugCounterAllocation = backend->CreateBuffer(
+            sizeof(ParticleOverdrawCounters),
+            vk::BufferUsageFlagBits::eStorageBuffer |
+                vk::BufferUsageFlagBits::eTransferDst |
+                vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            "ParticleGlobalOverdraw" + suffix);
+        globalSortPool.debugCounters[imageIndex].buffer =
+            debugCounterAllocation.first;
+        globalSortPool.debugCounters[imageIndex].memory =
+            debugCounterAllocation.second;
+    }
+    globalSortPool.gpuTimer.Initialize(*backend);
+
+    globalSortPool.uniforms.resize(imageCount);
+    for (uint32_t imageIndex = 0; imageIndex < imageCount; ++imageIndex)
+    {
+        const auto uniformAllocation = backend->CreateBuffer(
+            sizeof(FrameUniforms),
+            vk::BufferUsageFlagBits::eUniformBuffer |
+                vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "ParticleGlobalUniforms:" + std::to_string(imageIndex));
+        globalSortPool.uniforms[imageIndex].buffer =
+            uniformAllocation.first;
+        globalSortPool.uniforms[imageIndex].memory =
+            uniformAllocation.second;
+        globalSortPool.uniforms[imageIndex].mapped =
+            backend->MapMemory(
+                uniformAllocation.second, sizeof(FrameUniforms));
+        if (globalSortPool.uniforms[imageIndex].mapped == nullptr)
+        {
+            return false;
+        }
+    }
+
+    const uint32_t sortPassCount =
+        ParticleSortDispatchCount(capacity);
+    globalSortPool.finalUsesA = (sortPassCount % 2u) == 0u;
+
+    const std::vector<vk::DescriptorSetLayout> gatherLayouts(
+        imageCount * emitterCount,
+        globalGatherPipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> sortInitLayouts(
+        imageCount,
+        globalSortInitPipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> sortLayouts(
+        imageCount,
+        sortPipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> finalizeLayouts(
+        imageCount,
+        finalizeCountPipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> drawLayouts(
+        imageCount,
+        globalDrawPipeline->GetDescriptorSetLayouts().at(0));
+
+    std::vector<vk::DescriptorPoolSize> poolSizes{
+        {vk::DescriptorType::eUniformBuffer,
+            imageCount * (emitterCount + 5)},
+        {vk::DescriptorType::eStorageBuffer,
+            imageCount * (emitterCount * 3u + 12u)},
+        {vk::DescriptorType::eCombinedImageSampler,
+            imageCount * kParticleGlobalTextureSlots}};
+    vk::DescriptorPoolCreateInfo poolInfo;
+    poolInfo
+        .setPoolSizes(poolSizes)
+        .setMaxSets(imageCount * (emitterCount + 5));
+    globalSortPool.descriptorPool = backend->CreateDescriptorPool(
+        poolInfo, "ParticleGlobalDescriptors");
+
+    try
+    {
+        vk::DescriptorSetAllocateInfo allocate;
+        allocate.setDescriptorPool(globalSortPool.descriptorPool);
+        allocate.setSetLayouts(gatherLayouts);
+        globalSortPool.gatherSets.resize(imageCount * emitterCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.gatherSets);
+
+        allocate.setSetLayouts(sortInitLayouts);
+        globalSortPool.sortInitSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.sortInitSets);
+        allocate.setSetLayouts(sortLayouts);
+        globalSortPool.sortAtoBSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.sortAtoBSets);
+        globalSortPool.sortBtoASets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.sortBtoASets);
+        allocate.setSetLayouts(finalizeLayouts);
+        globalSortPool.finalizeSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.finalizeSets);
+        allocate.setSetLayouts(drawLayouts);
+        globalSortPool.drawSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate, globalSortPool.drawSets);
+
+        for (uint32_t imageIndex = 0;
+             imageIndex < imageCount;
+             ++imageIndex)
+        {
+            const vk::DescriptorBufferInfo recordInfo(
+                globalSortPool.records[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo pairAInfo(
+                globalSortPool.pairsA[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo pairBInfo(
+                globalSortPool.pairsB[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo counterInfo(
+                globalSortPool.counters[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo indirectInfo(
+                globalSortPool.indirectArgs[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo debugCounterInfo(
+                globalSortPool.debugCounters[imageIndex].buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo uniformInfo(
+                globalSortPool.uniforms[imageIndex].buffer,
+                0,
+                sizeof(FrameUniforms));
+            for (uint32_t emitterIndex = 0;
+                 emitterIndex < emitterCount;
+                 ++emitterIndex)
+            {
+                const auto emitter = emitters.find(
+                    emitterKeys[emitterIndex]);
+                if (emitter == emitters.end() ||
+                    emitter->second->frameUniforms.size() <= imageIndex)
+                {
+                    throw std::runtime_error(
+                        "Global particle gather lost an emitter");
+                }
+                const vk::DescriptorBufferInfo emitterUniform(
+                    emitter->second->frameUniforms
+                        .at(imageIndex).buffer,
+                    0,
+                    sizeof(FrameUniforms));
+                const vk::DescriptorBufferInfo particleInfo(
+                    emitter->second->particles.buffer,
+                    0,
+                    VK_WHOLE_SIZE);
+                vk::WriteDescriptorSet uniformWrite;
+                uniformWrite
+                    .setDstSet(globalSortPool.gatherSets.at(
+                        imageIndex * emitterCount + emitterIndex))
+                    .setDstBinding(0)
+                    .setDescriptorCount(1)
+                    .setDescriptorType(
+                        vk::DescriptorType::eUniformBuffer)
+                    .setBufferInfo(emitterUniform);
+                vk::WriteDescriptorSet particleWrite = uniformWrite;
+                particleWrite
+                    .setDstBinding(1)
+                    .setDescriptorType(
+                        vk::DescriptorType::eStorageBuffer)
+                    .setBufferInfo(particleInfo);
+                vk::WriteDescriptorSet recordWrite = particleWrite;
+                recordWrite
+                    .setDstBinding(2)
+                    .setBufferInfo(recordInfo);
+                vk::WriteDescriptorSet counterWrite = particleWrite;
+                counterWrite
+                    .setDstBinding(3)
+                    .setBufferInfo(counterInfo);
+                backend->UpdateDescriptorSets(
+                    {uniformWrite,
+                     particleWrite,
+                     recordWrite,
+                     counterWrite});
+            }
+
+            vk::WriteDescriptorSet uniformWrite;
+            uniformWrite
+                .setDstSet(globalSortPool.sortInitSets.at(imageIndex))
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(uniformInfo);
+            vk::WriteDescriptorSet recordWrite = uniformWrite;
+            recordWrite
+                .setDstBinding(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(recordInfo);
+            vk::WriteDescriptorSet pairAWrite = recordWrite;
+            pairAWrite
+                .setDstBinding(2)
+                .setBufferInfo(pairAInfo);
+            vk::WriteDescriptorSet counterWrite = recordWrite;
+            counterWrite
+                .setDstBinding(3)
+                .setBufferInfo(counterInfo);
+            backend->UpdateDescriptorSets(
+                {uniformWrite, recordWrite, pairAWrite, counterWrite});
+
+            uniformWrite.setDstSet(
+                globalSortPool.sortAtoBSets.at(imageIndex));
+            vk::WriteDescriptorSet inA = pairAWrite;
+            inA.setDstSet(globalSortPool.sortAtoBSets.at(imageIndex))
+                .setDstBinding(1)
+                .setBufferInfo(pairAInfo);
+            vk::WriteDescriptorSet outB = pairAWrite;
+            outB.setDstSet(globalSortPool.sortAtoBSets.at(imageIndex))
+                .setDstBinding(2)
+                .setBufferInfo(pairBInfo);
+            backend->UpdateDescriptorSets({uniformWrite, inA, outB});
+
+            uniformWrite.setDstSet(
+                globalSortPool.sortBtoASets.at(imageIndex));
+            vk::WriteDescriptorSet inB = inA;
+            inB.setDstSet(globalSortPool.sortBtoASets.at(imageIndex))
+                .setBufferInfo(pairBInfo);
+            vk::WriteDescriptorSet outA = outB;
+            outA.setDstSet(globalSortPool.sortBtoASets.at(imageIndex))
+                .setBufferInfo(pairAInfo);
+            backend->UpdateDescriptorSets({uniformWrite, inB, outA});
+
+            uniformWrite.setDstSet(
+                globalSortPool.finalizeSets.at(imageIndex));
+            vk::WriteDescriptorSet finalizeCounter = counterWrite;
+            finalizeCounter.setDstSet(
+                    globalSortPool.finalizeSets.at(imageIndex))
+                .setDstBinding(0)
+                .setBufferInfo(counterInfo);
+            vk::WriteDescriptorSet finalizeArgs = counterWrite;
+            finalizeArgs.setDstSet(
+                    globalSortPool.finalizeSets.at(imageIndex))
+                .setDstBinding(1)
+                .setBufferInfo(indirectInfo);
+            backend->UpdateDescriptorSets(
+                {finalizeCounter, finalizeArgs});
+
+            // draw：UBO + records + 排序 pair + 8 槽纹理数组。
+            vk::WriteDescriptorSet drawUniform;
+            drawUniform
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(uniformInfo);
+            vk::WriteDescriptorSet drawRecords = recordWrite;
+            drawRecords.setDstSet(
+                    globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(1)
+                .setBufferInfo(recordInfo);
+            vk::WriteDescriptorSet drawPairs = pairAWrite;
+            drawPairs.setDstSet(
+                    globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(2)
+                .setBufferInfo(globalSortPool.finalUsesA
+                    ? pairAInfo
+                    : pairBInfo);
+            std::array<vk::DescriptorImageInfo, kParticleGlobalTextureSlots>
+                textureInfos;
+            for (uint32_t slotIndex = 0;
+                 slotIndex < kParticleGlobalTextureSlots;
+                 ++slotIndex)
+            {
+                const std::shared_ptr<Texture>& texture =
+                    slotIndex < textures.size()
+                    ? textures[slotIndex]
+                    : defaultTexture;
+                textureInfos[slotIndex] =
+                    texture->GetDescriptorInfo();
+            }
+            vk::WriteDescriptorSet drawTextures;
+            drawTextures
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(3)
+                .setDescriptorCount(kParticleGlobalTextureSlots)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(textureInfos);
+            vk::WriteDescriptorSet drawDebug;
+            drawDebug
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(5)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(debugCounterInfo);
+            backend->UpdateDescriptorSets(
+                {drawUniform,
+                 drawRecords,
+                 drawPairs,
+                 drawTextures,
+                 drawDebug});
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        std::cout << "[Particles][Warning] Global particle sort pool "
+            "creation threw: " << exception.what() << std::endl;
+        DestroyGlobalSortPool();
+        return false;
+    }
+    catch (...)
+    {
+        std::cout << "[Particles][Warning] Global particle sort pool "
+            "creation threw an unknown exception" << std::endl;
+        DestroyGlobalSortPool();
+        return false;
+    }
+    globalSortPool.active = true;
+    return true;
+}
+
+void ParticleRenderer::RecordGlobalGather(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex)
+{
+    if (!globalSortPool.active || backend == nullptr)
+    {
+        return;
+    }
+    const uint32_t imageCount = backend->GetSwapchainImageCount();
+    if (globalSortPool.gatherSets.size() <
+        imageCount * globalSortPool.emitterCount)
+    {
+        return;
+    }
+
+    vk::MemoryBarrier previousToClear;
+    previousToClear
+        .setSrcAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eTransfer,
+        {},
+        previousToClear,
+        nullptr,
+        nullptr);
+    commandBuffer.fillBuffer(
+        globalSortPool.counters[imageIndex].buffer,
+        0,
+        sizeof(uint32_t) * 5u,
+        0);
+    commandBuffer.fillBuffer(
+        globalSortPool.debugCounters[imageIndex].buffer,
+        0,
+        sizeof(ParticleOverdrawCounters),
+        0);
+    vk::BufferMemoryBarrier clearToCompute;
+    clearToCompute
+        .setBuffer(globalSortPool.counters[imageIndex].buffer)
+        .setOffset(0)
+        .setSize(VK_WHOLE_SIZE)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eComputeShader,
+        {},
+        nullptr,
+        clearToCompute,
+        nullptr);
+    vk::BufferMemoryBarrier debugClearToGraphics;
+    debugClearToGraphics
+        .setBuffer(globalSortPool.debugCounters[imageIndex].buffer)
+        .setOffset(0)
+        .setSize(VK_WHOLE_SIZE)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader,
+        {},
+        nullptr,
+        debugClearToGraphics,
+        nullptr);
+    globalSortPool.lastImageIndex = imageIndex;
+    // simulate 刚写过粒子池；gather 在 compute 阶段读取同一 buffer。
+    vk::MemoryBarrier simulateToGather;
+    simulateToGather
+        .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eComputeShader,
+        {},
+        simulateToGather,
+        nullptr,
+        nullptr);
+
+    globalGatherPipeline->Bind(commandBuffer);
+    globalSortPool.gatheredEmitters = 0;
+    for (uint32_t emitterIndex = 0;
+         emitterIndex < globalSortPool.emitterCount;
+         ++emitterIndex)
+    {
+        const auto emitter = emitters.find(
+            globalSortPool.emitterKeys[emitterIndex]);
+        if (emitter == emitters.end() ||
+            emitter->second->culled ||
+            emitter->second->frameUniforms.size() <= imageIndex)
+        {
+            continue;
+        }
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eCompute,
+            globalGatherPipeline->GetPipelineLayout(),
+            0,
+            globalSortPool.gatherSets.at(
+                imageIndex * globalSortPool.emitterCount + emitterIndex),
+            nullptr);
+        const uint32_t groupCount =
+            (emitter->second->asset.maxParticles + 255u) / 256u;
+        globalGatherPipeline->Dispatch(
+            commandBuffer, groupCount, 1, 1);
+        ++globalSortPool.gatheredEmitters;
+    }
+}
+
+void ParticleRenderer::RecordGlobalSort(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const RenderScene& renderScene)
+{
+    if (!globalSortPool.active ||
+        globalSortPool.uniforms.size() <= imageIndex)
+    {
+        return;
+    }
+    if (globalSortPool.gatheredEmitters > 0)
+    {
+        frameStats.sortedEmitters +=
+            globalSortPool.gatheredEmitters;
+        frameStats.sortCapacityTotal += globalSortPool.capacity;
+        frameStats.sortDispatchCount +=
+            ParticleSortDispatchCount(globalSortPool.capacity);
+    }
+
+    // 全局 UBO：排序与绘制只消费相机矩阵；per-emitter 数据已经烘焙进
+    // gathered 记录。
+    FrameUniforms uniforms{};
+    uniforms.viewProjection = renderScene.camera.viewProjection;
+    uniforms.view = renderScene.camera.view;
+    uniforms.invProjection = renderScene.camera.projection.inverse();
+    uniforms.cameraPosition = Eigen::Vector4f(
+        renderScene.camera.position.x(),
+        renderScene.camera.position.y(),
+        renderScene.camera.position.z(),
+        0.0f);
+    uniforms.sortParams = Eigen::Vector4f(
+        1.0f,
+        static_cast<float>(globalSortPool.capacity),
+        static_cast<float>(globalSortPool.capacity),
+        0.0f);
+    std::memcpy(
+        globalSortPool.uniforms.at(imageIndex).mapped,
+        &uniforms,
+        sizeof(uniforms));
+
+    vk::MemoryBarrier recordWriteToRead;
+    recordWriteToRead
+        .setSrcAccessMask(
+            vk::AccessFlagBits::eShaderWrite |
+            vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eComputeShader,
+        {},
+        recordWriteToRead,
+        nullptr,
+        nullptr);
+
+    const uint32_t groupCount =
+        (globalSortPool.capacity + 255u) / 256u;
+    globalSortInitPipeline->Bind(commandBuffer);
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute,
+        globalSortInitPipeline->GetPipelineLayout(),
+        0,
+        globalSortPool.sortInitSets.at(imageIndex),
+        nullptr);
+    globalSortInitPipeline->Dispatch(
+        commandBuffer, groupCount, 1, 1);
+
+    bool sourceIsA = true;
+    for (uint32_t k = 2;
+         k <= globalSortPool.capacity;
+         k <<= 1)
+    {
+        for (uint32_t j = k >> 1; j > 0; j >>= 1)
+        {
+            InsertBufferBarrier(
+                commandBuffer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::AccessFlagBits::eShaderRead,
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::AccessFlagBits::eTransferWrite);
+            const Eigen::Vector4f sortPass(
+                static_cast<float>(k),
+                static_cast<float>(j),
+                static_cast<float>(globalSortPool.capacity),
+                0.0f);
+            commandBuffer.updateBuffer(
+                globalSortPool.uniforms.at(imageIndex).buffer,
+                offsetof(FrameUniforms, sortPass),
+                sizeof(sortPass),
+                &sortPass);
+            InsertBufferBarrier(
+                commandBuffer,
+                vk::PipelineStageFlagBits::eComputeShader |
+                    vk::PipelineStageFlagBits::eTransfer,
+                vk::AccessFlagBits::eShaderWrite |
+                    vk::AccessFlagBits::eTransferWrite,
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite);
+            sortPipeline->Bind(commandBuffer);
+            commandBuffer.bindDescriptorSets(
+                vk::PipelineBindPoint::eCompute,
+                sortPipeline->GetPipelineLayout(),
+                0,
+                sourceIsA
+                    ? globalSortPool.sortAtoBSets.at(imageIndex)
+                    : globalSortPool.sortBtoASets.at(imageIndex),
+                nullptr);
+            sortPipeline->Dispatch(
+                commandBuffer, groupCount, 1, 1);
+            sourceIsA = !sourceIsA;
+        }
+    }
+
+    InsertBufferBarrier(
+        commandBuffer,
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::AccessFlagBits::eShaderWrite,
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite);
+    finalizeCountPipeline->Bind(commandBuffer);
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eCompute,
+        finalizeCountPipeline->GetPipelineLayout(),
+        0,
+        globalSortPool.finalizeSets.at(imageIndex),
+        nullptr);
+    finalizeCountPipeline->Dispatch(commandBuffer, 1, 1, 1);
+}
+
+void ParticleRenderer::RecordGlobalDraw(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Renderpass& renderPass)
+{
+    if (!globalSortPool.active || !globalDrawPipeline ||
+        globalSortPool.drawSets.size() <= imageIndex ||
+        globalSortPool.indirectArgs.size() <= imageIndex ||
+        !globalSortPool.indirectArgs[imageIndex].buffer)
+    {
+        return;
+    }
+    globalSortPool.gpuTimer.BeginPass(commandBuffer, imageIndex);
+    commandBuffer.bindPipeline(
+        globalDrawPipeline->GetBindPoint(),
+        globalDrawPipeline->GetPipeline());
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        globalDrawPipeline->GetPipelineLayout(),
+        0,
+        globalSortPool.drawSets.at(imageIndex),
+        nullptr);
+    bool usesPassSet = false;
+    for (const ShaderBinding& binding :
+         globalDrawPipeline->GetShaderBindings())
+    {
+        if (binding.set == PassSetIndex)
+        {
+            usesPassSet = true;
+            break;
+        }
+    }
+    const auto& descriptorSets = renderPass.GetDescriptorSets();
+    if (usesPassSet &&
+        imageIndex < descriptorSets.size() &&
+        PassSetIndex < descriptorSets[imageIndex].size())
+    {
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            globalDrawPipeline->GetPipelineLayout(),
+            PassSetIndex,
+            descriptorSets[imageIndex][PassSetIndex],
+            nullptr);
+    }
+    commandBuffer.drawIndirect(
+        globalSortPool.indirectArgs[imageIndex].buffer,
+        0,
+        1,
+        sizeof(vk::DrawIndirectCommand));
+    globalSortPool.gpuTimer.EndPass(commandBuffer, imageIndex);
+    ++frameStats.estimatedDrawCalls;
+    frameStats.estimatedDrawnVertices +=
+        static_cast<uint64_t>(globalSortPool.capacity) * 6u;
 }
 
 void ParticleRenderer::CreateEmitter(
@@ -584,6 +1946,22 @@ void ParticleRenderer::CreateEmitter(
     emitter->meshScale = asset.meshScale;
     emitter->meshAlignment = asset.meshAlignment;
     emitter->flipbookTable = BuildParticleFlipbookGpuTable(asset);
+    if (asset.renderMode == "mesh" &&
+        !asset.materialInstancePath.empty())
+    {
+        std::string materialError;
+        emitter->material = LoadParticleMaterialInstance(
+            asset.materialInstancePath, materialError);
+        if (!emitter->material.valid)
+        {
+            WarnMaterialFallbackOnce(
+                key,
+                asset.materialInstancePath,
+                materialError.empty()
+                    ? "material instance parse failed"
+                    : materialError);
+        }
+    }
     emitter->elapsedSeconds = 0.0f;
     emitter->needsClear = true;
     emitter->prewarm = true;
@@ -664,6 +2042,7 @@ void ParticleRenderer::CreateEmitter(
         emitter->meshLocalBoundsRadius);
     CreateBuffers(*emitter);
     CreateDescriptors(*emitter);
+    emitter->gpuTimer.Initialize(*backend);
     emitters.emplace(key, std::move(emitter));
 }
 
@@ -835,6 +2214,107 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     emitter.particles.buffer = particleAllocation.first;
     emitter.particles.memory = particleAllocation.second;
 
+    // GPU 计数（alive/spawn/death/collision）每帧 fillBuffer 清零。
+    const auto counterAllocation = backend->CreateBuffer(
+        sizeof(ParticleEventCounters),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst |
+            vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleCounters:" + emitter.key);
+    emitter.counters.buffer = counterAllocation.first;
+    emitter.counters.memory = counterAllocation.second;
+    void* mappedCounters = backend->MapMemory(
+        emitter.counters.memory, sizeof(ParticleEventCounters));
+    if (mappedCounters == nullptr)
+    {
+        throw std::runtime_error("particle counter map failed");
+    }
+    ParticleEventCounters initialCounters;
+    initialCounters.capacity = emitter.asset.maxParticles;
+    std::memcpy(
+        mappedCounters, &initialCounters, sizeof(initialCounters));
+    backend->UnmapMemory(emitter.counters.memory);
+
+    // 紧凑存活索引：simulate 原子追加，未排序绘制与 CPU 统计共用。
+    const vk::DeviceSize aliveBytes =
+        sizeof(uint32_t) *
+        static_cast<vk::DeviceSize>(
+            std::max(emitter.asset.maxParticles, 1u));
+    const auto aliveAllocation = backend->CreateBuffer(
+        aliveBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleAliveIndices:" + emitter.key);
+    emitter.aliveIndices.buffer = aliveAllocation.first;
+    emitter.aliveIndices.memory = aliveAllocation.second;
+
+    // 有界事件缓冲；每帧从 slot 0 覆盖写，计数器超容量表示截断。
+    const vk::DeviceSize eventBytes =
+        sizeof(ParticleEventRecord) * kParticleEventCapacity;
+    const auto eventAllocation = backend->CreateBuffer(
+        eventBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleEvents:" + emitter.key);
+    emitter.events.buffer = eventAllocation.first;
+    emitter.events.memory = eventAllocation.second;
+
+    // 图形 overdraw 计数：只写 uint，但需要 transfer 清除和回读。
+    const auto debugCounterAllocation = backend->CreateBuffer(
+        sizeof(ParticleOverdrawCounters),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst |
+            vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleOverdraw:" + emitter.key);
+    emitter.debugCounters.buffer = debugCounterAllocation.first;
+    emitter.debugCounters.memory = debugCounterAllocation.second;
+
+    // SDF 体素上传；无 SDF 时绑定 1 个 float 的占位 buffer，保持
+    // descriptor layout 与 shader binding 5 始终有效。
+    emitter.sdfVoxelCount = 0;
+    const vk::DeviceSize sdfBytes =
+        emitter.asset.collisionSdf &&
+            !emitter.asset.collisionSdf->Empty()
+        ? static_cast<vk::DeviceSize>(
+              emitter.asset.collisionSdf->distances.size()) *
+              sizeof(float)
+        : sizeof(float);
+    const auto sdfAllocation = backend->CreateBuffer(
+        sdfBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleSdf:" + emitter.key);
+    emitter.sdfData.buffer = sdfAllocation.first;
+    emitter.sdfData.memory = sdfAllocation.second;
+    void* mappedSdf = backend->MapMemory(
+        emitter.sdfData.memory, sdfBytes);
+    if (mappedSdf == nullptr)
+    {
+        throw std::runtime_error("particle SDF map failed");
+    }
+    if (emitter.asset.collisionSdf &&
+        !emitter.asset.collisionSdf->Empty())
+    {
+        emitter.sdf = emitter.asset.collisionSdf;
+        emitter.sdfVoxelCount = static_cast<uint32_t>(
+            emitter.sdf->distances.size());
+        std::memcpy(
+            mappedSdf,
+            emitter.sdf->distances.data(),
+            static_cast<size_t>(sdfBytes));
+    }
+    else
+    {
+        const float empty = 0.0f;
+        std::memcpy(mappedSdf, &empty, sizeof(float));
+    }
+    backend->UnmapMemory(emitter.sdfData.memory);
+
     // pair 表始终存在：graphics shader 无条件声明 binding 3，排序关闭时
     // 绑定 A 但不读取，排序开启时按 pass 奇偶决定最终绑定 A 还是 B。
     const vk::DeviceSize pairBytes =
@@ -872,7 +2352,8 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
         : sizeof(vk::DrawIndirectCommand);
     const auto indirectAllocation = backend->CreateBuffer(
         indirectBytes,
-        vk::BufferUsageFlagBits::eIndirectBuffer,
+        vk::BufferUsageFlagBits::eIndirectBuffer |
+            vk::BufferUsageFlagBits::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent,
         "ParticleIndirect:" + emitter.key);
@@ -948,17 +2429,20 @@ void ParticleRenderer::CreateDescriptors(
     const std::vector<vk::DescriptorSetLayout> sortLayouts(
         imageCount,
         sortInitPipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> finalizeLayouts(
+        imageCount,
+        finalizeCountPipeline->GetDescriptorSetLayouts().at(0));
 
-    // 每个 image：simulate、graphics、sortInit、AtoB、BtoA 共 5 个 set。
-    // storage 计数：simulate 1 + graphics 2 + sort 三组各 2 = 9。
+    // 每个 image：simulate、graphics、sortInit、AtoB、BtoA、finalize 共 6 个 set。
+    // storage 计数：simulate 5 + graphics 4 + sort 三组各 2 + finalize 2 = 17。
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer, imageCount * 5},
-        {vk::DescriptorType::eStorageBuffer, imageCount * 9},
+        {vk::DescriptorType::eStorageBuffer, imageCount * 17},
         {vk::DescriptorType::eCombinedImageSampler, imageCount}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
-        .setMaxSets(imageCount * 5);
+        .setMaxSets(imageCount * 6);
     emitter.descriptorPool = backend->CreateDescriptorPool(
         poolInfo,
         "ParticleDescriptors:" + emitter.key);
@@ -994,6 +2478,12 @@ void ParticleRenderer::CreateDescriptors(
             allocate,
             emitter.sortBtoASets);
 
+        allocate.setSetLayouts(finalizeLayouts);
+        emitter.finalizeSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate,
+            emitter.finalizeSets);
+
         for (uint32_t imageIndex = 0;
              imageIndex < imageCount; ++imageIndex)
         {
@@ -1011,6 +2501,26 @@ void ParticleRenderer::CreateDescriptors(
                 VK_WHOLE_SIZE);
             const vk::DescriptorBufferInfo pairBInfo(
                 emitter.sortPairsB.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo aliveInfo(
+                emitter.aliveIndices.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo counterInfo(
+                emitter.counters.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo eventInfo(
+                emitter.events.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo sdfInfo(
+                emitter.sdfData.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo debugCounterInfo(
+                emitter.debugCounters.buffer,
                 0,
                 VK_WHOLE_SIZE);
             // 排序关闭时 graphics 仍声明 binding 3，绑定 A 但不读取；
@@ -1035,8 +2545,41 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorCount(1)
                 .setDescriptorType(vk::DescriptorType::eStorageBuffer)
                 .setBufferInfo(particleInfo);
+            vk::WriteDescriptorSet aliveWrite;
+            aliveWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(2)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(aliveInfo);
+            vk::WriteDescriptorSet counterWrite;
+            counterWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(3)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(counterInfo);
+            vk::WriteDescriptorSet eventWrite;
+            eventWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(4)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(eventInfo);
+            vk::WriteDescriptorSet sdfWrite;
+            sdfWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(5)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(sdfInfo);
             backend->UpdateDescriptorSets(
-                {uniformWrite, particleWrite});
+                {uniformWrite,
+                 particleWrite,
+                 aliveWrite,
+                 counterWrite,
+                 eventWrite,
+                 sdfWrite});
 
             vk::WriteDescriptorSet sortedWrite;
             sortedWrite
@@ -1059,11 +2602,27 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorType(
                     vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(textureInfo);
+            vk::WriteDescriptorSet aliveGraphicsWrite;
+            aliveGraphicsWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(4)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(aliveInfo);
+            vk::WriteDescriptorSet debugGraphicsWrite;
+            debugGraphicsWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(5)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(debugCounterInfo);
             backend->UpdateDescriptorSets(
                 {uniformWrite,
                  particleWrite,
                  textureWrite,
-                 sortedWrite});
+                 sortedWrite,
+                 aliveGraphicsWrite,
+                 debugGraphicsWrite});
 
             uniformWrite.setDstSet(
                 emitter.sortInitSets.at(imageIndex));
@@ -1121,6 +2680,28 @@ void ParticleRenderer::CreateDescriptors(
                 {uniformWrite,
                  pairBInputWrite,
                  pairAOutputWrite});
+
+            // finalize：counters -> indirectArgs[1]（instanceCount）。
+            vk::WriteDescriptorSet finalizeCounterWrite;
+            finalizeCounterWrite
+                .setDstSet(emitter.finalizeSets.at(imageIndex))
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(counterInfo);
+            vk::DescriptorBufferInfo indirectInfo(
+                emitter.indirectArgs.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            vk::WriteDescriptorSet finalizeArgsWrite;
+            finalizeArgsWrite
+                .setDstSet(emitter.finalizeSets.at(imageIndex))
+                .setDstBinding(1)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(indirectInfo);
+            backend->UpdateDescriptorSets(
+                {finalizeCounterWrite, finalizeArgsWrite});
         }
     }
     catch (...)
@@ -1139,6 +2720,7 @@ void ParticleRenderer::DestroyEmitterResources(
     RendererBackendVulkan& rendererBackend,
     EmitterResources& emitter)
 {
+    emitter.gpuTimer.Shutdown(rendererBackend);
     if (emitter.descriptorPool)
     {
         rendererBackend.DestroyDescriptorPool(emitter.descriptorPool);
@@ -1149,10 +2731,16 @@ void ParticleRenderer::DestroyEmitterResources(
     emitter.sortInitSets.clear();
     emitter.sortAtoBSets.clear();
     emitter.sortBtoASets.clear();
+    emitter.finalizeSets.clear();
     emitter.texture.reset();
     DestroyBuffer(rendererBackend, emitter.meshVertices);
     DestroyBuffer(rendererBackend, emitter.meshIndices);
     DestroyBuffer(rendererBackend, emitter.particles);
+    DestroyBuffer(rendererBackend, emitter.counters);
+    DestroyBuffer(rendererBackend, emitter.aliveIndices);
+    DestroyBuffer(rendererBackend, emitter.events);
+    DestroyBuffer(rendererBackend, emitter.debugCounters);
+    DestroyBuffer(rendererBackend, emitter.sdfData);
     DestroyBuffer(rendererBackend, emitter.sortPairsA);
     DestroyBuffer(rendererBackend, emitter.sortPairsB);
     DestroyBuffer(rendererBackend, emitter.indirectArgs);
@@ -1243,6 +2831,26 @@ void ParticleRenderer::WarnMeshFallbackOnce(
     std::cout << "[Particles][Warning] " << message << std::endl;
 }
 
+void ParticleRenderer::WarnMaterialFallbackOnce(
+    const std::string& key,
+    const std::string& materialPath,
+    const std::string& error)
+{
+    if (!warnedMaterialFallbacks.insert(key + "|" + materialPath).second)
+    {
+        return;
+    }
+    const std::string message =
+        "Particle material fallback for emitter '" + key +
+        "' (" + materialPath + "): " + error +
+        "; using built-in default PBR factors";
+    ProcessLog().Append(
+        LogSeverity::Warning,
+        "Particles",
+        message);
+    std::cout << "[Particles][Warning] " << message << std::endl;
+}
+
 void ParticleRenderer::InsertBufferBarrier(
     vk::CommandBuffer commandBuffer,
     vk::PipelineStageFlags sourceStage,
@@ -1261,6 +2869,45 @@ void ParticleRenderer::InsertBufferBarrier(
         barrier,
         nullptr,
         nullptr);
+}
+
+void ParticleRenderer::ClearParticleRuntimeCounters(
+    vk::CommandBuffer commandBuffer,
+    EmitterResources& emitter)
+{
+    if (!emitter.counters.buffer && !emitter.debugCounters.buffer)
+    {
+        return;
+    }
+    // 上一轮 compute 写 alive/事件，fragment 写 overdraw；都必须在 transfer
+    // 清零之前完成（即使调用方已做提交级串行化，这里仍保留显式依赖）。
+    vk::MemoryBarrier toTransfer;
+    toTransfer
+        .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eTransfer,
+        {},
+        toTransfer,
+        nullptr,
+        nullptr);
+    if (emitter.counters.buffer)
+    {
+        commandBuffer.fillBuffer(
+            emitter.counters.buffer,
+            0,
+            sizeof(uint32_t) * 5u,
+            0);
+    }
+    if (emitter.debugCounters.buffer)
+    {
+        commandBuffer.fillBuffer(
+            emitter.debugCounters.buffer,
+            0,
+            sizeof(ParticleOverdrawCounters),
+            0);
+    }
 }
 
 void ParticleRenderer::RecordSimulation(
@@ -1326,14 +2973,20 @@ void ParticleRenderer::RecordSimulation(
         frameStats.totalParticles += emitter.asset.maxParticles;
         if (emitter.frameUniforms.size() <= imageIndex)
         {
+            emitter.culled = true;
+            ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
             continue;
         }
+        // 每 image 每帧回收上一轮 query，并重置本轮时间戳。即使随后被
+        // 剔除，也保持计时器状态与帧边界同步。
+        emitter.gpuTimer.BeginFrame(commandBuffer, imageIndex);
         // 作者隐藏、发射器禁用与视锥剔除共用"冻结"路径：不推进 elapsed/prewarm，
         // 不清池、不排序、不 dispatch，也不进入 RecordGraphics 的绘制列表。
         if (!emitter.visible || !emitter.enabled)
         {
             emitter.culled = true;
+            ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
             continue;
         }
@@ -1354,12 +3007,39 @@ void ParticleRenderer::RecordSimulation(
         if (emitter.culled)
         {
             // 冻结整个发射器状态：不推进时间、不写 UBO、不清池、不 dispatch。
+            ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
             continue;
         }
         ++frameStats.visibleEmitters;
         emitter.culled = false;
-        emitter.elapsedSeconds += dt;
+
+        // 固定步长：帧间余量进入 accumulator，只推进完整步；最多 8 步/帧
+        // 防止长时间停顿后一次补太多。余量保留到下一帧，避免时间漂移。
+        ParticleFixedStepState fixedStepState{
+            emitter.fixedStepAccumulator,
+            emitter.fixedStepIndex};
+        const ParticleFixedStepTick fixedStepTick =
+            AdvanceParticleFixedStep(
+                dt,
+                emitter.asset.fixedTimeStep,
+                8u,
+                fixedStepState);
+        emitter.fixedStepAccumulator = fixedStepState.accumulator;
+        emitter.fixedStepIndex = fixedStepState.stepIndex;
+        const float simulationStepSeconds =
+            fixedStepTick.stepSeconds;
+        const uint32_t simulationSteps = fixedStepTick.steps;
+        if (emitter.asset.fixedTimeStep > 0.0f)
+        {
+            emitter.elapsedSeconds +=
+                simulationStepSeconds *
+                static_cast<float>(simulationSteps);
+        }
+        else
+        {
+            emitter.elapsedSeconds += dt;
+        }
 
         // mesh 照明只取场景第一个方向光：方向光的 direction 是光线传播方向，
         // 表面指向光源需要取反。颜色使用线性 RGB，不乘 lux 强度，避免粒子
@@ -1435,7 +3115,7 @@ void ParticleRenderer::RecordSimulation(
         uniforms.simulation = Eigen::Vector4f(
             EffectiveParticleSpawnRate(
                 emitter.asset, lodDistance) * emitter.spawnRateScale,
-            dt,
+            simulationStepSeconds,
             emitter.elapsedSeconds,
             emitter.prewarm ? 1.0f : 0.0f);
         uniforms.render = Eigen::Vector4f(
@@ -1540,7 +3220,12 @@ void ParticleRenderer::RecordSimulation(
             // prewarm 的稳态池填充使用作者 spawnRate 乘实例倍率；LOD 只
             // 影响 simulation.x 的连续发射预算。
             emitter.asset.spawnRate * emitter.spawnRateScale,
-            0.0f);
+            globalSortPool.active
+                ? static_cast<float>(
+                    globalSortPool.textureSlotByKey.count(key) > 0
+                    ? globalSortPool.textureSlotByKey.at(key)
+                    : 0u)
+                : 0.0f);
         uniforms.flipbookFrameDurations = emitter.flipbookTable.durations;
         uniforms.flipbookFramePivots = emitter.flipbookTable.pivots;
         uniforms.flipbookParams3 = emitter.flipbookTable.flags;
@@ -1697,6 +3382,79 @@ void ParticleRenderer::RecordSimulation(
             lightColor.y(),
             lightColor.z(),
             0.0f);
+        uniforms.materialBaseColor = emitter.material.valid
+            ? emitter.material.baseColor
+            : Eigen::Vector4f::Ones();
+        uniforms.materialEmissiveStrength = Eigen::Vector4f(
+            emitter.material.emissive.x(),
+            emitter.material.emissive.y(),
+            emitter.material.emissive.z(),
+            emitter.material.emissiveStrength);
+        uniforms.materialPbr = Eigen::Vector4f(
+            emitter.material.roughness,
+            emitter.material.metallic,
+            emitter.material.valid ? 1.0f : 0.0f,
+            0.0f);
+        for (int cascade = 0; cascade < 4; ++cascade)
+        {
+            uniforms.shadowLightViewProj[cascade] =
+                shadowCascadeData.valid
+                ? shadowCascadeData.lightViewProj[cascade]
+                : Eigen::Matrix4f::Identity();
+            uniforms.shadowCascadeBias[cascade] =
+                shadowCascadeData.valid
+                ? shadowCascadeData.bias[cascade]
+                : Eigen::Vector4f::Zero();
+        }
+        uniforms.shadowCascadeSplits =
+            shadowCascadeData.valid
+            ? shadowCascadeData.cascadeSplits
+            : Eigen::Vector4f::Zero();
+        uniforms.shadowParams = Eigen::Vector4f(
+            shadowCascadeData.valid
+                ? shadowCascadeData.csmParameters.z()
+                : 0.0f,
+            shadowCascadeData.valid
+                ? shadowCascadeData.csmParameters.w()
+                : 0.0f,
+            shadowCascadeData.valid ? 1.0f : 0.0f,
+            emitter.asset.billboardShadows ? 1.0f : 0.0f);
+        // seed 只保留 24 位，保证 float 往返后仍精确；其余输入都由
+        // fixedStepIndex 驱动，不依赖 wall clock。
+        uniforms.determinismParams = Eigen::Vector4f(
+            static_cast<float>(emitter.asset.randomSeed & 0x00FFFFFFu),
+            static_cast<float>(simulationSteps > 0 ? simulationSteps : 1),
+            static_cast<float>(emitter.fixedStepIndex),
+            emitter.asset.deterministicRandom ? 1.0f : 0.0f);
+        uniforms.eventParams = Eigen::Vector4f(
+            emitter.asset.emitSpawnEvent ? 1.0f : 0.0f,
+            emitter.asset.emitDeathEvent ? 1.0f : 0.0f,
+            emitter.asset.emitCollisionEvent ? 1.0f : 0.0f,
+            0.0f);
+        if (emitter.sdf)
+        {
+            uniforms.collisionSdfBoundsMin = Eigen::Vector4f(
+                emitter.sdf->boundsMin.x(),
+                emitter.sdf->boundsMin.y(),
+                emitter.sdf->boundsMin.z(),
+                0.0f);
+            uniforms.collisionSdfBoundsMax = Eigen::Vector4f(
+                emitter.sdf->boundsMax.x(),
+                emitter.sdf->boundsMax.y(),
+                emitter.sdf->boundsMax.z(),
+                0.0f);
+            uniforms.collisionSdfResolution = Eigen::Vector4f(
+                static_cast<float>(emitter.sdf->resolution.x()),
+                static_cast<float>(emitter.sdf->resolution.y()),
+                static_cast<float>(emitter.sdf->resolution.z()),
+                0.0f);
+        }
+        else
+        {
+            uniforms.collisionSdfBoundsMin = Eigen::Vector4f::Zero();
+            uniforms.collisionSdfBoundsMax = Eigen::Vector4f::Zero();
+            uniforms.collisionSdfResolution = Eigen::Vector4f::Zero();
+        }
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,
             &uniforms,
@@ -1730,6 +3488,66 @@ void ParticleRenderer::RecordSimulation(
             emitter.needsClear = false;
         }
 
+        // 每帧清零 alive/spawn/death/collision 计数。上一帧 finalize 读过
+        // counters，因此先做 shaderWrite -> transferWrite 依赖。
+        {
+            vk::MemoryBarrier computeToTransfer;
+            computeToTransfer
+                .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eComputeShader,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                computeToTransfer,
+                nullptr,
+                nullptr);
+            commandBuffer.fillBuffer(
+                emitter.counters.buffer,
+                0,
+                sizeof(uint32_t) * 5u,
+                0);
+            commandBuffer.fillBuffer(
+                emitter.debugCounters.buffer,
+                0,
+                sizeof(ParticleOverdrawCounters),
+                0);
+            vk::BufferMemoryBarrier clearToCompute;
+            clearToCompute
+                .setBuffer(emitter.counters.buffer)
+                .setOffset(0)
+                .setSize(VK_WHOLE_SIZE)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                .setDstAccessMask(
+                    vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eComputeShader,
+                {},
+                nullptr,
+                clearToCompute,
+                nullptr);
+            vk::BufferMemoryBarrier debugClearToGraphics;
+            debugClearToGraphics
+                .setBuffer(emitter.debugCounters.buffer)
+                .setOffset(0)
+                .setSize(VK_WHOLE_SIZE)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                {},
+                nullptr,
+                debugClearToGraphics,
+                nullptr);
+        }
+
         simulatePipeline->Bind(commandBuffer);
         commandBuffer.bindDescriptorSets(
             vk::PipelineBindPoint::eCompute,
@@ -1745,7 +3563,10 @@ void ParticleRenderer::RecordSimulation(
             1,
             1);
 
-        if (emitter.asset.sortParticles)
+        // 参与全局排序的发射器跳过自己的 bitonic 排序，统一在帧末做一次
+        // 跨发射器排序。
+        const bool globalSorted = IsGlobalSortEmitter(key);
+        if (emitter.asset.sortParticles && !globalSorted)
         {
             ++frameStats.sortedEmitters;
             frameStats.sortCapacityTotal += emitter.sortCapacity;
@@ -1828,19 +3649,49 @@ void ParticleRenderer::RecordSimulation(
             }
         }
 
+        // GPU 收尾：把原子 alive 计数写回 indirect args.instanceCount。
+        // 后续 graphics 直接 drawIndirect，不再使用 CPU 侧容量/存活猜测。
+        InsertBufferBarrier(
+            commandBuffer,
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::AccessFlagBits::eShaderWrite,
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite);
+        finalizeCountPipeline->Bind(commandBuffer);
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eCompute,
+            finalizeCountPipeline->GetPipelineLayout(),
+            0,
+            emitter.finalizeSets.at(imageIndex),
+            nullptr);
+        finalizeCountPipeline->Dispatch(commandBuffer, 1, 1, 1);
+
         // prewarm 只允许第一帧；若录制后提交失败，下一帧会按正常发射补齐，
         // 不会重复把整池粒子重置成同一寿命分布。
         emitter.prewarm = false;
     }
 
+    // 跨发射器 gather + 一次全局 bitonic + finalize。只有存在参与发射器
+    // 时才执行；否则池保持 inactive。
+    if (globalSortPool.active)
+    {
+        globalSortPool.gpuTimer.BeginFrame(commandBuffer, imageIndex);
+    }
+    RecordGlobalGather(commandBuffer, imageIndex);
+    RecordGlobalSort(commandBuffer, imageIndex, renderScene);
+
     vk::MemoryBarrier writeToRead;
     writeToRead
         .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eIndirectCommandRead);
     commandBuffer.pipelineBarrier(
         vk::PipelineStageFlagBits::eComputeShader,
         vk::PipelineStageFlagBits::eVertexShader |
-            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::PipelineStageFlagBits::eFragmentShader |
+            vk::PipelineStageFlagBits::eDrawIndirect,
         {},
         writeToRead,
         nullptr,
@@ -1867,6 +3718,43 @@ void ParticleRenderer::RecordSimulation(
     {
         drawOrder.push_back(std::move(depthKeys[index].key));
     }
+
+    // 计时快照来自各 emitter 在上一轮同 image 的 query；按 key 排序发布，
+    // 避免 unordered_map 迭代顺序让 stats JSON 抖动。
+    frameStats.emitterGpu.clear();
+    frameStats.emitterGpu.reserve(emitters.size() + 1u);
+    for (const auto& [key, emitterPtr] : emitters)
+    {
+        const ParticleGpuTimingSnapshot& snapshot =
+            emitterPtr->gpuTimer.GetSnapshot();
+        frameStats.emitterGpu.push_back(ParticleFrameStats::EmitterGpu{
+            key,
+            snapshot.supported,
+            snapshot.lastMilliseconds,
+            snapshot.averageMilliseconds,
+            snapshot.maxMilliseconds,
+            snapshot.sampleCount});
+    }
+    if (globalSortPool.active)
+    {
+        const ParticleGpuTimingSnapshot& snapshot =
+            globalSortPool.gpuTimer.GetSnapshot();
+        frameStats.emitterGpu.push_back(ParticleFrameStats::EmitterGpu{
+            "__global__",
+            snapshot.supported,
+            snapshot.lastMilliseconds,
+            snapshot.averageMilliseconds,
+            snapshot.maxMilliseconds,
+            snapshot.sampleCount});
+    }
+    std::sort(
+        frameStats.emitterGpu.begin(),
+        frameStats.emitterGpu.end(),
+        [](const ParticleFrameStats::EmitterGpu& left,
+           const ParticleFrameStats::EmitterGpu& right)
+        {
+            return left.key < right.key;
+        });
 }
 
 void ParticleRenderer::RecordGraphics(
@@ -1884,6 +3772,7 @@ void ParticleRenderer::RecordGraphics(
     const auto recordEmitter = [&](EmitterResources& emitter)
     {
         if (emitter.culled ||
+            IsGlobalSortEmitter(emitter.key) ||
             emitter.graphicsSets.size() <= imageIndex)
         {
             return;
@@ -1909,6 +3798,7 @@ void ParticleRenderer::RecordGraphics(
         {
             return;
         }
+        emitter.gpuTimer.BeginPass(commandBuffer, imageIndex);
         commandBuffer.bindPipeline(
             pipeline->GetBindPoint(),
             pipeline->GetPipeline());
@@ -1980,12 +3870,10 @@ void ParticleRenderer::RecordGraphics(
         {
             const bool ribbon =
                 emitter.asset.renderMode == "ribbon";
-            const uint32_t vertexCount = ribbon
-                ? static_cast<uint32_t>(
-                    ParticleRibbonVertexCount(
-                        emitter.asset.maxParticles,
-                        emitter.asset.ribbonSegments))
-                : emitter.asset.maxParticles * 6u;
+            const uint32_t verticesPerParticle = ribbon
+                ? ParticleRibbonVerticesPerParticle(
+                    emitter.asset.ribbonSegments)
+                : 6u;
             if (emitter.indirectArgs.buffer)
             {
                 commandBuffer.drawIndirect(
@@ -1997,13 +3885,16 @@ void ParticleRenderer::RecordGraphics(
             else
             {
                 commandBuffer.draw(
-                    vertexCount,
-                    1,
+                    verticesPerParticle,
+                    emitter.asset.maxParticles,
                     0,
                     0);
             }
-            drawnVertices = vertexCount;
+            drawnVertices =
+                static_cast<uint64_t>(verticesPerParticle) *
+                emitter.asset.maxParticles;
         }
+        emitter.gpuTimer.EndPass(commandBuffer, imageIndex);
         ++frameStats.estimatedDrawCalls;
         frameStats.estimatedDrawnVertices += drawnVertices;
     };
@@ -2029,6 +3920,11 @@ void ParticleRenderer::RecordGraphics(
             recordEmitter(*emitterPtr);
         }
     }
+
+    // 全局池在所有逐发射器绘制之后统一画一次；其内部已按粒子的
+    // 世界空间视深度从远到近排序。与其它透明发射器的先后关系仍是
+    // 发射器级近似（v1 文档已记录）。
+    RecordGlobalDraw(commandBuffer, imageIndex, renderPass);
 }
 
 bool ParticleRenderer::DumpParticles(
@@ -2069,9 +3965,11 @@ bool ParticleRenderer::DumpParticles(
             return false;
         }
 
-        const vk::DeviceSize readbackBytes =
+        const vk::DeviceSize particleBytes =
             sizeof(GpuParticle) *
             static_cast<vk::DeviceSize>(emitter.asset.maxParticles);
+        const vk::DeviceSize readbackBytes =
+            particleBytes + sizeof(ParticleOverdrawCounters);
         vk::Buffer readbackBuffer;
         vk::DeviceMemory readbackMemory;
         void* mappedMemory = nullptr;
@@ -2110,7 +4008,23 @@ bool ParticleRenderer::DumpParticles(
                 emitter.particles.buffer,
                 readbackBuffer,
                 // vkCmdCopyBuffer 不接受 VK_WHOLE_SIZE；必须给出实际字节数。
-                vk::BufferCopy(0, 0, readbackBytes));
+                vk::BufferCopy(0, 0, particleBytes));
+
+            toTransfer.setBuffer(emitter.debugCounters.buffer);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                nullptr,
+                toTransfer,
+                nullptr);
+            commandBuffer.copyBuffer(
+                emitter.debugCounters.buffer,
+                readbackBuffer,
+                vk::BufferCopy(
+                    0,
+                    particleBytes,
+                    sizeof(ParticleOverdrawCounters)));
 
             vk::BufferMemoryBarrier toHost;
             toHost
@@ -2142,6 +4056,10 @@ bool ParticleRenderer::DumpParticles(
 
             const GpuParticle* particles =
                 static_cast<const GpuParticle*>(mappedMemory);
+            const ParticleOverdrawCounters* overdraw =
+                reinterpret_cast<const ParticleOverdrawCounters*>(
+                    static_cast<const std::uint8_t*>(mappedMemory) +
+                    particleBytes);
             ParticleDumpEmitter dumpEmitter;
             dumpEmitter.key = emitter.key;
             dumpEmitter.maxParticles = emitter.asset.maxParticles;
@@ -2167,6 +4085,11 @@ bool ParticleRenderer::DumpParticles(
             dumpEmitter.boundsCenter = emitter.worldCenter;
             dumpEmitter.boundsRadius = emitter.boundsRadius;
             dumpEmitter.elapsedSeconds = emitter.elapsedSeconds;
+            // 被剔除的 emitter 不录制图形 pass，计数器会保留上一帧值，
+            // dump 必须显式归零而不是发布陈旧 overdraw。
+            dumpEmitter.overdrawFragments = emitter.culled
+                ? 0u
+                : overdraw->fragments;
             dumpEmitter.particles.reserve(
                 std::min(
                     emitter.asset.maxParticles,
@@ -2197,6 +4120,10 @@ bool ParticleRenderer::DumpParticles(
                 }
             }
             dumpEmitters.push_back(std::move(dumpEmitter));
+            dumpEmitters.back().estimatedParticleBufferReadBytes =
+                static_cast<uint64_t>(
+                    dumpEmitters.back().aliveCount) *
+                sizeof(GpuParticle);
 
             readbackBackend.UnmapMemory(readbackMemory);
             mapped = false;
@@ -2225,6 +4152,112 @@ bool ParticleRenderer::DumpParticles(
         }
     }
 
+    ParticleDumpGlobalStats globalStats;
+    const uint32_t globalImageIndex =
+        std::min(
+            globalSortPool.lastImageIndex,
+            static_cast<uint32_t>(
+                std::max<size_t>(
+                    globalSortPool.counters.size(),
+                    1u) - 1u));
+    if (globalSortPool.active &&
+        globalSortPool.counters.size() > globalImageIndex &&
+        globalSortPool.debugCounters.size() > globalImageIndex)
+    {
+        const vk::DeviceSize counterBytes =
+            sizeof(ParticleEventCounters);
+        const vk::DeviceSize overdrawBytes =
+            sizeof(ParticleOverdrawCounters);
+        const vk::DeviceSize readbackBytes =
+            counterBytes + overdrawBytes;
+        vk::Buffer readbackBuffer;
+        vk::DeviceMemory readbackMemory;
+        try
+        {
+            std::tie(readbackBuffer, readbackMemory) =
+                readbackBackend.CreateBuffer(
+                    readbackBytes,
+                    vk::BufferUsageFlagBits::eTransferDst,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "ParticleGlobalDumpReadback");
+            vk::CommandBuffer commandBuffer =
+                readbackBackend.BeginSingleTimeCommands();
+            vk::BufferMemoryBarrier toTransfer;
+            toTransfer
+                .setSrcAccessMask(
+                    vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED);
+            toTransfer.setBuffer(
+                globalSortPool.counters[globalImageIndex].buffer);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                nullptr,
+                toTransfer,
+                nullptr);
+            commandBuffer.copyBuffer(
+                globalSortPool.counters[globalImageIndex].buffer,
+                readbackBuffer,
+                vk::BufferCopy(0, 0, counterBytes));
+            toTransfer.setBuffer(
+                globalSortPool.debugCounters[globalImageIndex].buffer);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eAllCommands,
+                vk::PipelineStageFlagBits::eTransfer,
+                {},
+                nullptr,
+                toTransfer,
+                nullptr);
+            commandBuffer.copyBuffer(
+                globalSortPool.debugCounters[globalImageIndex].buffer,
+                readbackBuffer,
+                vk::BufferCopy(0, counterBytes, overdrawBytes));
+            readbackBackend.EndSingleTimeCommands(commandBuffer);
+
+            const std::uint8_t* mapped =
+                static_cast<const std::uint8_t*>(
+                    readbackBackend.MapMemory(
+                        readbackMemory,
+                        readbackBytes));
+            if (mapped == nullptr)
+            {
+                throw std::runtime_error("map returned null");
+            }
+            const ParticleEventCounters* counters =
+                reinterpret_cast<const ParticleEventCounters*>(mapped);
+            const ParticleOverdrawCounters* overdraw =
+                reinterpret_cast<const ParticleOverdrawCounters*>(
+                    mapped + counterBytes);
+            globalStats.aliveParticles = counters->alive;
+            globalStats.overdrawFragments = overdraw->fragments;
+            globalStats.estimatedParticleBufferReadBytes =
+                static_cast<uint64_t>(counters->alive) *
+                sizeof(GpuParticle);
+            readbackBackend.UnmapMemory(readbackMemory);
+            readbackBackend.DestroyBuffer(
+                readbackBuffer,
+                readbackMemory);
+        }
+        catch (const std::exception& exception)
+        {
+            if (readbackBuffer || readbackMemory)
+            {
+                readbackBackend.DestroyBuffer(
+                    readbackBuffer,
+                    readbackMemory);
+            }
+            outError =
+                "Particle global dump readback failed: " +
+                std::string(exception.what());
+            return false;
+        }
+    }
+
     try
     {
         std::filesystem::create_directories(outputPath.parent_path());
@@ -2232,7 +4265,8 @@ bool ParticleRenderer::DumpParticles(
             BuildParticleDumpJson(
                 std::move(dumpEmitters),
                 maxPerEmitter,
-                frameStats).dump(2) + "\n";
+                frameStats,
+                globalStats).dump(2) + "\n";
         WriteTextFileAtomically(outputPath, text);
     }
     catch (const std::exception& exception)

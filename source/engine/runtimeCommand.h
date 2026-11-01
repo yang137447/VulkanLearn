@@ -34,6 +34,18 @@ enum class RuntimeCommandType
     // secondaryStringValue=spawnRateScale/colorTint/emitter/reset。
     // 覆盖只存在于当前 World，不写 PS_*.json / SC_*.json。
     SetParticleSystemParameter,
+    // 发射器级运行时生命周期；索引使用 stable emitter index，name 在
+    // 不存在稳定索引时作为回退身份。源索引只用于 spawn 的模板。
+    SpawnParticleEmitter,
+    DestroyParticleEmitter,
+    RestartParticleEmitter,
+    // 实例/World 粒子预算与命名用户参数；都是 runtime-only。
+    SetParticleSystemBudget,
+    SetParticleSystemUserParameter,
+    // 附着到网格场景对象或 Blueprint 组件；local TRS 由命令携带。
+    SetParticleSystemAttachment,
+    // 打印 World 侧 CPU 作者计数/预算；alive 只有渲染器回填后才可用。
+    ReportParticleTelemetry,
     SetDebugViewMode,
     CaptureScreenshot,
     SetCameraPosition,
@@ -120,6 +132,15 @@ struct RuntimeCommand
     Eigen::Vector3f particleSpawnPosition = Eigen::Vector3f::Zero();
     // particleparam colorTint 的 RGBA；RGB 是 HDR 乘数，A 是不透明度乘数。
     Eigen::Vector4f particleColorTint = Eigen::Vector4f::Ones();
+    // 发射器级命令的显示名；为空时由执行端生成 runtime.<stableIndex>。
+    std::string particleEmitterName;
+    // 命名用户参数 key 与附着目标。
+    std::string particleUserParameterName;
+    std::string particleAttachmentTarget;
+    std::string particleAttachmentComponent;
+    Eigen::Vector3f particleAttachmentPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f particleAttachmentRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f particleAttachmentScale = Eigen::Vector3f::Ones();
     std::string sourceText;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;
