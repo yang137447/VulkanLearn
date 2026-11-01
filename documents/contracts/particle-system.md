@@ -616,6 +616,10 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
   `path` 必须是资源根内、相对路径、无 `..` 的 `.json`；service 保存/validate 还会检查
   文件存在与 resource root 边界。`scale` 三个分量必须有限且向量非零；`alignment` 只能是
   `world`、`camera` 或 `velocity`。mesh v1 不允许与 `localSpace: true` 组合。
+- `meshLighting`：默认 `true`，仅 `renderMode: "mesh"` 使用。开启时按场景主方向光做单次
+  Lambert 近似；关闭时 mesh 仍走 unlit 输出。billboard 与 ribbon 忽略该字段。
+- `meshAmbient`：默认 `0.2`，仅 `renderMode: "mesh"` 且 `meshLighting: true` 时参与光照。
+  范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity 在加载和编辑器写入阶段都会被拒绝。
 - `rotation`：billboard 初始旋转角，单位度，任意有限数，默认 `0`。
 - `rotationSpeed`：随时间累加的旋转速度，单位度/秒，默认 `0`，范围 `[-3600, 3600]`。
 - `rotationRandom`：默认 `false`；为 `true` 时每个粒子用稳定相位叠加 `[0,360)` 度的初始角。
@@ -912,6 +916,24 @@ gl_Position   = viewProjection * vec4(world, 1)
 `drawIndexed(meshIndexCount, maxParticles)`。GPU 池里死亡粒子在该实例的所有顶点上输出
 clip-space `z=2,w=1`，直接裁剪。统计的 `estimatedDrawnVertices` 对 mesh 使用
 `meshIndexCount * maxParticles`。
+
+### Mesh 照明
+
+`meshLighting: true`（默认）时，mesh 片元用一个场景主方向光做单次 Lambert 近似：
+
+```text
+radiance = lightColor * (max(dot(N, L), 0) + meshAmbient)
+color    = EvaluateColorCurve(lifeT).rgb * 顶点色 * radiance
+```
+
+- `L` 是场景主方向光方向的取反（指向光源），`lightColor` 使用线性空间颜色；
+  `N` 是实例旋转后的世界空间法线。
+- `meshAmbient` 默认 `0.2`，直接加到 `NdotL` 上；它不是环境光探针，也不做半球积分。
+- 只读取场景中的第一个方向光；光色不乘 `lux` 强度。场景没有方向光时回退为
+  unlit（`radiance = 1`），不会阻断渲染。
+- 这是着色近似，不是完整材质系统：不接 Material Instance、不采样法线贴图/金属度/粗糙度，
+  不产生镜面高光、阴影、间接光或逐光源循环。
+- `meshLighting: false` 保持原有 unlit 路径；billboard 与 ribbon 完全忽略这两个字段。
 
 ### Curves 结构化编辑
 

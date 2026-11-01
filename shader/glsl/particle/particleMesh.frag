@@ -4,6 +4,7 @@
 
 layout(location = 0) in vec4 vColor;
 layout(location = 2) in float vViewDepth;
+layout(location = 4) in vec3 vNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -41,5 +42,14 @@ void main()
         float(textureSize(particleTexture, 0).x),
         0.0,
         1.0);
+    // mesh 简化 Lambert：只吃第一个方向光的线性颜色与 ambient。
+    // 法线贴图、高光与阴影都不在这个 v1 范围内。
+    if (frame.meshLightParams.x > 0.5) {
+        vec3 n = normalize(vNormal);
+        vec3 l = normalize(frame.meshLightDirection.xyz);
+        float ndl = max(dot(n, l), 0.0);
+        vec3 lighting = frame.meshLightColor.rgb * (ndl + clamp(frame.meshLightParams.y,0,1));
+        outColor.rgb *= lighting;
+    }
     outColor *= frame.colorTint;
 }

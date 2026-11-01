@@ -85,6 +85,8 @@ const Field fields[] = {
     {K::ParticleSystem, "", "mesh.path", ValueKind::Text, true, "asset_path"},
     {K::ParticleSystem, "", "mesh.scale", ValueKind::Vector3, true},
     {K::ParticleSystem, "", "mesh.alignment", ValueKind::Text, true, "", "world|camera|velocity"},
+    {K::ParticleSystem, "", "meshLighting", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "meshAmbient", ValueKind::Number, true},
     {K::ParticleSystem, "", "useFixedBounds", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "fixedBounds.center", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "fixedBounds.extent", ValueKind::Vector3, true, "cm"},

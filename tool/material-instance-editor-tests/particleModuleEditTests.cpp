@@ -125,6 +125,67 @@ TEST(ParticleModuleEdit, EnsureRejectsMalformedInputWithoutMutation)
     EXPECT_EQ(badModules, badModulesBefore);
 }
 
+TEST(ParticleModuleEdit, RendererModuleExposesMeshLightingFields)
+{
+    const ParticleModuleSpec* renderer =
+        FindParticleModuleSpec("renderer");
+    ASSERT_NE(renderer, nullptr);
+    const std::vector<std::string>& fields = renderer->fields;
+    EXPECT_NE(
+        std::find(fields.begin(), fields.end(), "meshLighting"),
+        fields.end());
+    EXPECT_NE(
+        std::find(fields.begin(), fields.end(), "meshAmbient"),
+        fields.end());
+
+    EXPECT_EQ(ParticleModuleTypeForField("meshLighting"), "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("meshAmbient"), "renderer");
+}
+
+TEST(ParticleModuleEdit, EnsureAndFlattenMigrateMeshLightingFields)
+{
+    Json emitter = FlatEmitter();
+    emitter["meshLighting"] = false;
+    emitter["meshAmbient"] = 0.7;
+
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+    EXPECT_FALSE(emitter.contains("meshLighting"));
+    EXPECT_FALSE(emitter.contains("meshAmbient"));
+    EXPECT_EQ(
+        Module(emitter, "renderer").at("fields").at("meshLighting"),
+        false);
+    EXPECT_EQ(
+        Module(emitter, "renderer").at("fields").at("meshAmbient"),
+        0.7);
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("meshLighting"), false);
+    EXPECT_EQ(flattened.at("meshAmbient"), 0.7);
+}
+
+TEST(ParticleModuleEdit, SetFieldWritesMeshLightingFieldsIntoModule)
+{
+    Json emitter = Json{{"name", "e"}};
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "meshLighting", Json(false), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "meshAmbient", Json(0.35), false));
+
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at("meshLighting"),
+        false);
+    EXPECT_EQ(Module(emitter, "renderer").at("fields").at("meshAmbient"),
+        0.35);
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("meshLighting"), false);
+    EXPECT_EQ(flattened.at("meshAmbient"), 0.35);
+
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "meshAmbient", Json(), true));
+    EXPECT_FALSE(
+        Module(emitter, "renderer").at("fields").contains("meshAmbient"));
+}
+
 TEST(ParticleModuleEdit, ForcesModulesExposeSpecsAndFieldOwnership)
 {
     const ParticleModuleSpec* curlNoise =

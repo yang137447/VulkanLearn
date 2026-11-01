@@ -2125,6 +2125,105 @@ TEST(ParticleAsset, CapabilitiesExposeMeshFields)
     EXPECT_TRUE(hasField("mesh.alignment"));
 }
 
+TEST(ParticleAsset, MeshLightingDefaultsToEnabledWithAmbient)
+{
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(), "Maps/SC_test/PS_mesh_lighting_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_TRUE(asset.emitters[0].meshLighting);
+    EXPECT_TRUE(asset.emitters[1].meshLighting);
+    EXPECT_FLOAT_EQ(asset.emitters[0].meshAmbient, 0.2f);
+    EXPECT_FLOAT_EQ(asset.emitters[1].meshAmbient, 0.2f);
+}
+
+TEST(ParticleAsset, MeshLightingFieldsRoundTripThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    const auto addChange = [&changes](
+        const char* field,
+        EditorAssetFieldValue value)
+    {
+        EditorAssetFieldChange change;
+        change.field = field;
+        change.value = std::move(value);
+        changes.push_back(std::move(change));
+    };
+    addChange("emitters.1.renderMode", std::string("mesh"));
+    addChange(
+        "emitters.1.mesh.path",
+        std::string("Common/Meshes/SM_cube.json"));
+    addChange("emitters.1.meshLighting", false);
+    addChange("emitters.1.meshAmbient", 0.6);
+
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_mesh_lighting_editor.json");
+
+    EXPECT_TRUE(asset.emitters[0].meshLighting);
+    EXPECT_FLOAT_EQ(asset.emitters[0].meshAmbient, 0.2f);
+    EXPECT_FALSE(asset.emitters[1].meshLighting);
+    EXPECT_FLOAT_EQ(asset.emitters[1].meshAmbient, 0.6f);
+}
+
+TEST(ParticleAsset, MeshAmbientRejectsOutOfRangeAndNonFinite)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["meshAmbient"] = -0.1;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_mesh_ambient_negative.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["meshAmbient"] = 1.5;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_mesh_ambient_too_large.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["meshAmbient"] =
+        std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_mesh_ambient_nan.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["meshAmbient"] =
+        std::numeric_limits<float>::infinity();
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_mesh_ambient_infinity.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, CapabilitiesExposeMeshLightingFields)
+{
+    const Json document = MultiEmitterDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const auto findField = [&capabilities](const char* name) -> const Json*
+    {
+        for (const Json& field : capabilities["emitters"][0]["fields"])
+            if (field.value("field", std::string()) == name)
+                return &field;
+        return nullptr;
+    };
+
+    const Json* lighting = findField("meshLighting");
+    const Json* ambient = findField("meshAmbient");
+    ASSERT_NE(lighting, nullptr);
+    ASSERT_NE(ambient, nullptr);
+    EXPECT_EQ(lighting->value("type", std::string()), "boolean");
+    EXPECT_TRUE(lighting->value("resettable", false));
+    EXPECT_EQ(ambient->value("type", std::string()), "number");
+    EXPECT_TRUE(ambient->value("resettable", false));
+}
+
 TEST(ParticleAsset, ForcesDefaultToDisabledNeutralValues)
 {
     const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(

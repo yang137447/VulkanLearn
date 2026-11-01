@@ -1297,6 +1297,36 @@ void ParticleRenderer::RecordSimulation(
         emitter.culled = false;
         emitter.elapsedSeconds += dt;
 
+        // mesh 照明只取场景第一个方向光：方向光的 direction 是光线传播方向，
+        // 表面指向光源需要取反。颜色使用线性 RGB，不乘 lux 强度，避免粒子
+        // 颜色与灯光量级错位；非 mesh 或作者关闭时保持旧 unlit 输出。
+        bool lightingEnabled = false;
+        Eigen::Vector3f lightDirection =
+            Eigen::Vector3f(0.0f, -1.0f, 0.0f);
+        Eigen::Vector3f lightColor = Eigen::Vector3f::Ones();
+        if (emitter.asset.renderMode == "mesh" &&
+            emitter.asset.meshLighting)
+        {
+            for (const LightSnapshot& light : renderScene.lights)
+            {
+                if (light.type != LightSnapshotType::Directional)
+                    continue;
+                // 零方向/零光色会让 Lambert 结果退化成黑块；文档承诺回退 unlit，
+                // 因此在启用前同时检查方向与颜色，而不是只检查存在性。
+                if (light.direction.squaredNorm() <= 1.0e-8f ||
+                    light.color.maxCoeff() <= 0.0f)
+                    continue;
+                lightDirection = -light.direction;
+                lightColor = light.color;
+                lightingEnabled = true;
+                break;
+            }
+        }
+        emitter.lightingEnabled = lightingEnabled;
+        emitter.lightDirection = lightDirection;
+        emitter.lightColor = lightColor;
+        emitter.ambient = emitter.asset.meshAmbient;
+
         FrameUniforms uniforms{};
         uniforms.viewProjection =
             renderScene.camera.viewProjection;
@@ -1587,6 +1617,21 @@ void ParticleRenderer::RecordSimulation(
             static_cast<float>(lifetimeScaleCount),
             0.0f,
             0.0f,
+            0.0f);
+        uniforms.meshLightParams = Eigen::Vector4f(
+            lightingEnabled ? 1.0f : 0.0f,
+            emitter.asset.meshAmbient,
+            0.0f,
+            0.0f);
+        uniforms.meshLightDirection = Eigen::Vector4f(
+            lightDirection.x(),
+            lightDirection.y(),
+            lightDirection.z(),
+            0.0f);
+        uniforms.meshLightColor = Eigen::Vector4f(
+            lightColor.x(),
+            lightColor.y(),
+            lightColor.z(),
             0.0f);
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,

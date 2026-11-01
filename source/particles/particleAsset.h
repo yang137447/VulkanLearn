@@ -80,6 +80,10 @@ struct ParticleEmitterAsset
     std::string meshPath;
     Eigen::Vector3f meshScale = Eigen::Vector3f::Ones();
     std::string meshAlignment = "world";
+    // mesh 专用简化 Lambert：只用场景里第一个方向光的颜色与方向，
+    // 不读 lux 强度、不接材质/阴影。billboard/ribbon 不受影响。
+    bool meshLighting = true;
+    float meshAmbient = 0.2f;
 
     // 固定包围球使用发射器局部空间的中心与半尺寸（cm）。启用后替代
     // 自动半径估算，剔除、距离淡出、minScreenSize 与跨发射器排序共用它。

@@ -91,6 +91,12 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 lifetimeScaleKeys[8];
     // x = key count, y/z/w reserved
     vec4 lifetimeScaleParams;
+    // x = mesh 照明开关, y = ambient, z/w reserved
+    vec4 meshLightParams;
+    // xyz = 表面指向光源的方向
+    vec4 meshLightDirection;
+    // xyz = 方向光线性 RGB 颜色（不含 lux 强度）
+    vec4 meshLightColor;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

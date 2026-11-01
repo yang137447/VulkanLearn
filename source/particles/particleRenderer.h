@@ -202,9 +202,15 @@ private:
             lifetimeScaleKeys;
         // x = key count, y/z/w reserved.
         Eigen::Vector4f lifetimeScaleParams;
+        // x = mesh lighting enabled, y = ambient, z/w reserved.
+        Eigen::Vector4f meshLightParams;
+        // xyz = surface-to-light direction（已取反方向光方向）.
+        Eigen::Vector4f meshLightDirection;
+        // xyz = directional light linear color（不乘 lux 强度）.
+        Eigen::Vector4f meshLightColor;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5712,
+        sizeof(FrameUniforms) == 5760,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -245,6 +251,15 @@ private:
     static_assert(
         offsetof(FrameUniforms, lifetimeScaleParams) == 5696,
         "ParticleFrame lifetimeScaleParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, meshLightParams) == 5712,
+        "ParticleFrame meshLightParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, meshLightDirection) == 5728,
+        "ParticleFrame meshLightDirection offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, meshLightColor) == 5744,
+        "ParticleFrame meshLightColor offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -293,6 +308,13 @@ private:
         bool enabled = true;
         float spawnRateScale = 1.0f;
         Eigen::Vector4f colorTint = Eigen::Vector4f::Ones();
+        // mesh 专用方向光缓存；每帧在 RecordSimulation 里按场景方向光重算，
+        // 不参与发射器资源重建。未启用时保持旧 unlit 输出。
+        bool lightingEnabled = false;
+        Eigen::Vector3f lightDirection =
+            Eigen::Vector3f(0.0f, -1.0f, 0.0f);
+        Eigen::Vector3f lightColor = Eigen::Vector3f::Ones();
+        float ambient = 0.2f;
     };
 
     void Initialize(

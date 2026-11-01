@@ -12,6 +12,8 @@ layout(location = 3) in vec2 inTexCoord;
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out float vSoftness;
 layout(location = 2) out float vViewDepth;
+// 世界空间法线；仅 particleMesh.frag 的方向光 Lambert 使用。
+layout(location = 4) out vec3 vNormal;
 
 // 与 vertex descriptor 的 billboard/ribbon 路径共用 binding 2，保证
 // descriptor set layout 完全一致；mesh v1 不采样纹理。
@@ -23,6 +25,7 @@ void CullVertex()
     vColor = vec4(0.0);
     vSoftness = 0.0;
     vViewDepth = 0.0;
+    vNormal = vec3(0.0);
 }
 
 mat3 RotateAroundAxis(vec3 axis, float angle)
@@ -150,4 +153,7 @@ void main()
         1.0);
     vColor.rgb *= textureGate;
     vSoftness = frame.render.z;
+    // 局部法线先乘逐粒子旋转，再乘当前朝向基（world/camera/velocity），
+    // 与位置使用同一套变换，保证 Lambert 着色与粒子朝向一致。
+    vNormal = normalize(rotation * basis * inNormal);
 }

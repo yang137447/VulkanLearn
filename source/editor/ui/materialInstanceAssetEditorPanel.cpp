@@ -87,6 +87,8 @@ bool ParticleFieldInModule(
             field == "mesh.path" ||
             field == "mesh.scale" ||
             field == "mesh.alignment" ||
+            field == "meshLighting" ||
+            field == "meshAmbient" ||
             field == "useFixedBounds" ||
             field == "fixedBounds.center" ||
             field == "fixedBounds.extent" ||

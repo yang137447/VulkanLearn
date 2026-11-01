@@ -277,6 +277,12 @@ ParticleEmitterAsset ParseEmitter(
                 mesh.at("alignment").get<std::string>();
         }
     }
+    // mesh 照明与几何参数同属 renderer 层；非 mesh 模式也可以作者化，
+    // 但渲染端只在 renderMode=="mesh" 时消费。
+    emitter.meshLighting = json.value(
+        "meshLighting", emitter.meshLighting);
+    emitter.meshAmbient = ReadFiniteFloat(
+        json, "meshAmbient", emitter.meshAmbient);
     // 显式 useFixedBounds 优先；省略时只要存在 fixedBounds 对象就启用，
     // 因此作者可以只写包围球数据，也可以写 false 明确关闭。
     emitter.useFixedBounds = json.contains("useFixedBounds")
@@ -1044,6 +1050,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle mesh.alignment must be 'world', 'camera' or 'velocity'");
+    }
+    RequireFinite(emitter.meshAmbient, "meshAmbient");
+    if (emitter.meshAmbient < 0.0f || emitter.meshAmbient > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle meshAmbient must be in [0, 1]");
     }
     if (emitter.renderMode == "mesh")
     {
