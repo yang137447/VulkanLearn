@@ -845,6 +845,60 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     emitter.sortPairsB.buffer = pairBAllocation.first;
     emitter.sortPairsB.memory = pairBAllocation.second;
 
+    // 间接参数与 emitter 池同生命周期；内容目前是固定顶点/索引与实例数，
+    // 但录制路径已经不再关心具体计数，后续 GPU culling 只需更新该缓冲。
+    const bool indirectMesh =
+        emitter.asset.renderMode == "mesh" &&
+        !emitter.meshFallbackBillboard &&
+        emitter.meshIndexCount > 0 &&
+        emitter.meshVertices.buffer && emitter.meshIndices.buffer;
+    const vk::DeviceSize indirectBytes = indirectMesh
+        ? sizeof(vk::DrawIndexedIndirectCommand)
+        : sizeof(vk::DrawIndirectCommand);
+    const auto indirectAllocation = backend->CreateBuffer(
+        indirectBytes,
+        vk::BufferUsageFlagBits::eIndirectBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleIndirect:" + emitter.key);
+    emitter.indirectArgs.buffer = indirectAllocation.first;
+    emitter.indirectArgs.memory = indirectAllocation.second;
+    void* mappedIndirect = backend->MapMemory(
+        emitter.indirectArgs.memory,
+        indirectBytes);
+    if (mappedIndirect == nullptr)
+    {
+        throw std::runtime_error("particle indirect parameter map failed");
+    }
+    if (indirectMesh)
+    {
+        const vk::DrawIndexedIndirectCommand command(
+            emitter.meshIndexCount,
+            emitter.asset.maxParticles,
+            0,
+            0,
+            0);
+        std::memcpy(mappedIndirect, &command, sizeof(command));
+    }
+    else
+    {
+        const uint32_t vertexCount =
+            emitter.asset.renderMode == "ribbon"
+                ? static_cast<uint32_t>(
+                    ParticleRibbonVertexCount(
+                        emitter.asset.maxParticles,
+                        emitter.asset.ribbonSegments))
+                : emitter.asset.maxParticles * 6u;
+        const vk::DrawIndirectCommand command(
+            vertexCount,
+            1,
+            0,
+            0);
+        std::memcpy(mappedIndirect, &command, sizeof(command));
+    }
+    backend->UnmapMemory(emitter.indirectArgs.memory);
+    emitter.indirectIndexed = indirectMesh;
+
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
     emitter.frameUniforms.reserve(imageCount);
@@ -1092,6 +1146,7 @@ void ParticleRenderer::DestroyEmitterResources(
     DestroyBuffer(rendererBackend, emitter.particles);
     DestroyBuffer(rendererBackend, emitter.sortPairsA);
     DestroyBuffer(rendererBackend, emitter.sortPairsB);
+    DestroyBuffer(rendererBackend, emitter.indirectArgs);
     for (GpuBuffer& buffer : emitter.frameUniforms)
     {
         DestroyBuffer(rendererBackend, buffer);
@@ -1891,12 +1946,23 @@ void ParticleRenderer::RecordGraphics(
                 emitter.meshIndices.buffer,
                 0,
                 vk::IndexType::eUint32);
-            commandBuffer.drawIndexed(
-                emitter.meshIndexCount,
-                emitter.asset.maxParticles,
-                0,
-                0,
-                0);
+            if (emitter.indirectArgs.buffer)
+            {
+                commandBuffer.drawIndexedIndirect(
+                    emitter.indirectArgs.buffer,
+                    0,
+                    1,
+                    sizeof(vk::DrawIndexedIndirectCommand));
+            }
+            else
+            {
+                commandBuffer.drawIndexed(
+                    emitter.meshIndexCount,
+                    emitter.asset.maxParticles,
+                    0,
+                    0,
+                    0);
+            }
             drawnVertices = ParticleMeshDrawnVertexCount(
                 emitter.meshIndexCount,
                 emitter.asset.maxParticles);
@@ -1911,11 +1977,22 @@ void ParticleRenderer::RecordGraphics(
                         emitter.asset.maxParticles,
                         emitter.asset.ribbonSegments))
                 : emitter.asset.maxParticles * 6u;
-            commandBuffer.draw(
-                vertexCount,
-                1,
-                0,
-                0);
+            if (emitter.indirectArgs.buffer)
+            {
+                commandBuffer.drawIndirect(
+                    emitter.indirectArgs.buffer,
+                    0,
+                    1,
+                    sizeof(vk::DrawIndirectCommand));
+            }
+            else
+            {
+                commandBuffer.draw(
+                    vertexCount,
+                    1,
+                    0,
+                    0);
+            }
             drawnVertices = vertexCount;
         }
         ++frameStats.estimatedDrawCalls;

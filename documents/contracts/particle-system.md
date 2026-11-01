@@ -219,6 +219,10 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
   再交给线性过滤，避免帧间渗色；V 翻转保持不变。单帧纹理维持原有 mipmap 行为。
+- 每个 emitter 持有一份 host-visible indirect 参数缓冲：billboard/ribbon 使用
+  `drawIndirect`，mesh 使用 `drawIndexedIndirect`。当前参数在 emitter 创建时由 CPU 写入固定
+  顶点/索引数与实例数；尚未实现 GPU culling、indirect count 或 GPU 侧改写，但录制路径已不再
+  内联具体计数。
 
 ## 资源生命周期与图身份
 

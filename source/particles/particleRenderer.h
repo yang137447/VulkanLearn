@@ -273,6 +273,10 @@ private:
         // bitonic sort 的双缓冲 pair 表；pair.xy = (viewDepth, particleIndex)。
         GpuBuffer sortPairsA;
         GpuBuffer sortPairsB;
+        // draw/drawIndexed 的间接参数；当前由 CPU 在创建时写入固定计数，
+        // 后续 GPU culling 可直接改写同一缓冲而不改录制路径。
+        GpuBuffer indirectArgs;
+        bool indirectIndexed = false;
         std::vector<GpuBuffer> frameUniforms;
         vk::DescriptorPool descriptorPool;
         std::vector<vk::DescriptorSet> computeSets;
