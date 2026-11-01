@@ -104,7 +104,9 @@ bool ParticleFieldInModule(
             field == "rotationSpeed" ||
             field == "rotationRandom";
     if (module == "shape")
-        return field == "shape.type" || field == "shape.radius";
+        return field == "shape.type" || field == "shape.radius" ||
+            field == "shape.extent" || field == "shape.height" ||
+            field == "shape.innerRadius";
     if (module == "velocity")
         return field == "velocity.min" || field == "velocity.max";
     if (module == "forces")

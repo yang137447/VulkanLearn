@@ -162,24 +162,93 @@ void ResolveCollision(
     }
 }
 
+// 在发射器局部空间按 shapeParams.x 的 shape code 生成 spawn 位置。
+// 所有圆盘/圆柱/圆锥的 XZ 径向采样都用 sqrt(u) 半径保证面积均匀；
+// sphere 用 cbrt(u) 保证体积均匀；box 三轴独立均匀采样。
+// 坐标约定：cone/cylinder 沿 +Y 展开，cylinder 居中于原点；disc/ring
+// 位于 XZ 平面 y=0；ring 的半径在 [innerRadius, radius] 内按面积插值。
+vec3 SampleSpawnPosition(inout uint randomState)
+{
+    const float twoPi = 6.28318530718;
+    int shapeType = int(frame.shapeParams.x + 0.5);
+    float radius = max(frame.shape.x, 0.0);
+    float height = max(frame.shapeParams.y, 0.0);
+    float innerRadius = clamp(frame.shapeParams.z, 0.0, radius);
+
+    if (shapeType == 0)
+    {
+        // 球体体积采样：方向均匀，半径按 cbrt 分布，避免粒子堆在球心。
+        float cosTheta = 1.0 - 2.0 * Random(randomState);
+        float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+        float phi = twoPi * Random(randomState);
+        vec3 direction = vec3(
+            sinTheta * cos(phi),
+            cosTheta,
+            sinTheta * sin(phi));
+        return direction *
+            (radius * pow(Random(randomState), 1.0 / 3.0));
+    }
+    if (shapeType == 1)
+    {
+        // box：三轴在 [-extent, +extent] 内独立均匀采样。
+        vec3 extent = max(frame.shapeExtent.xyz, vec3(0.0));
+        return vec3(
+            (Random(randomState) * 2.0 - 1.0) * extent.x,
+            (Random(randomState) * 2.0 - 1.0) * extent.y,
+            (Random(randomState) * 2.0 - 1.0) * extent.z);
+    }
+
+    // 其余形状先采样极角，再按各自的高度/半径规则展开 XZ 圆盘。
+    float phi = twoPi * Random(randomState);
+    vec2 radialDirection = vec2(cos(phi), sin(phi));
+    if (shapeType == 2)
+    {
+        // cone：沿 +Y 从 0 到 height，横截面半径线性收缩到 0；
+        // 每个高度层内部仍按 sqrt(u) 做面积均匀采样。
+        float t = Random(randomState);
+        float layerRadius = radius * (1.0 - t);
+        return vec3(
+            radialDirection.x * layerRadius * sqrt(Random(randomState)),
+            height * t,
+            radialDirection.y * layerRadius * sqrt(Random(randomState)));
+    }
+    if (shapeType == 3)
+    {
+        // cylinder：沿 +Y 居中于 [-height/2, +height/2]。
+        float layerRadius = radius * sqrt(Random(randomState));
+        return vec3(
+            radialDirection.x * layerRadius,
+            height * (Random(randomState) - 0.5),
+            radialDirection.y * layerRadius);
+    }
+    if (shapeType == 4)
+    {
+        // disc：XZ 平面 y=0，半径按 sqrt(u) 面积均匀。
+        float discRadius = radius * sqrt(Random(randomState));
+        return vec3(
+            radialDirection.x * discRadius,
+            0.0,
+            radialDirection.y * discRadius);
+    }
+    // ring：半径在 [innerRadius, radius] 内按面积均匀，等价于对 r² 线性
+    // 插值后开方；radius=0 时结果退化为原点，不产生 NaN。
+    float innerSquared = innerRadius * innerRadius;
+    float outerSquared = radius * radius;
+    float ringRadius =
+        sqrt(mix(innerSquared, outerSquared, Random(randomState)));
+    return vec3(
+        radialDirection.x * ringRadius,
+        0.0,
+        radialDirection.y * ringRadius);
+}
+
 void SpawnParticle(
     uint index,
     inout Particle particle,
     inout uint randomState,
     bool prewarm)
 {
-    // 球体体积采样：方向均匀，半径按 cbrt 分布，避免粒子堆在球心。
-    float cosTheta = 1.0 - 2.0 * Random(randomState);
-    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
-    float phi = 6.28318530718 * Random(randomState);
-    vec3 direction = vec3(
-        sinTheta * cos(phi),
-        cosTheta,
-        sinTheta * sin(phi));
-
-    float radius =
-        frame.shape.x * pow(Random(randomState), 1.0 / 3.0);
-    vec3 localPosition = direction * radius;
+    vec3 localPosition = SampleSpawnPosition(randomState);
     vec3 localVelocity = mix(
         frame.velocityMinLifetimeMin.xyz,
         frame.velocityMaxLifetimeMax.xyz,

@@ -45,7 +45,8 @@
 - `PS_*.json` 可声明 `version: 2`；每个 emitter 用 `modules` 数组描述模块。模块形状为
   `{ "type": "...", "enabled": true, "fields": { ... } }`。`enabled: false` 的模块不参与展平，
   runtime 使用该字段的默认值。
-- 当前模块类型：`emitter`、`renderer`、`spawn.rate`、`spawn.shapeSphere`、`spawn.velocity`、
+- 当前模块类型：`emitter`、`renderer`、`spawn.rate`、`spawn.shapeSphere`（名称保留，现承载全部
+  `shape.type`）、`spawn.velocity`、
   `update.lifetime`、`update.color`、`update.size`、`update.rotation`、`forces.gravity`、
   `forces.drag`、`collision.analytic`、`flipbook`、`lod`、`curves`、`bounds`、`culling`。
   未知类型直接拒绝，避免拼写错误静默变成空模块。
@@ -486,7 +487,18 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 - `lodDistance` / `lodSpawnRateScale`：单档兼容写法。`lod.tiers` 非空时被忽略；
   为空时发射器中心距离超过 `lodDistance` 后 `spawnRate *= lodSpawnRateScale`。
 - `lifetime: [min, max]`：秒，`0 < min <= max <= 60`。
-- `shape: { "type": "sphere", "radius": cm }`：当前只支持球体体积采样。
+- `shape`：发射形状，默认 `{ "type": "sphere", "radius": 10 }`。`type` 只能是
+  `sphere`、`box`、`cone`、`cylinder`、`disc`、`ring`；未知类型直接拒绝。
+  - `radius`：cm，默认 `10`，必须非负。`sphere` 用它定义球半径；`disc` 用它定义
+    圆盘半径；`ring` 用它定义外半径；`cone`/`cylinder` 用它定义底面半径。
+  - `extent`：`[x,y,z]` cm，默认 `[50,50,50]`，是 `box` 的三轴半尺寸。所有分量
+    必须非负；`type == "box"` 时三轴都必须 `> 0`。其它形状仍校验该字段，避免切换
+    形状时把非法值带进运行时。
+  - `height`：cm，默认 `100`，必须非负；`cone`/`cylinder` 必须 `> 0`。锥体从
+    底面 `y=0` 向 `+y` 收束，圆柱沿 `y` 轴居中于 `[-height/2, +height/2]`。
+  - `innerRadius`：cm，默认 `50`，必须非负；`ring` 必须满足
+    `0 <= innerRadius < radius` 且 `radius > 0`。
+  - `disc`/`ring` 位于发射器局部 `XZ` 平面 `y=0`；`box` 以发射器原点为中心。
 - `velocity: { "min": [x,y,z], "max": [x,y,z] }`：局部空间初速度，发射器矩阵的线性部分会旋转/缩放它。
 - `gravity: [x,y,z]`、`drag`：世界空间重力与指数阻力。
 - `size: [start, end]`：billboard 世界空间半边长（cm），按寿命线性插值。

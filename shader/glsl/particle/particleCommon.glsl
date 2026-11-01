@@ -70,6 +70,11 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 colorTint;
     // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved
     vec4 billboardParams;
+    // x = shape code (0 sphere, 1 box, 2 cone, 3 cylinder, 4 disc, 5 ring),
+    // y = height (cm), z = innerRadius (cm), w reserved
+    vec4 shapeParams;
+    // xyz = box half extents (cm), w reserved
+    vec4 shapeExtent;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

@@ -944,6 +944,279 @@ TEST(ParticleAsset, NonFiniteNumbersAreRejected)
         std::invalid_argument);
 }
 
+TEST(ParticleAsset, SpawnShapeDefaultsToSphereWithDocumentedDefaults)
+{
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            MultiEmitterDocument(),
+            "Maps/SC_test/PS_shape_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(asset.emitters[0].shapeType, "sphere");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 10.0f);
+    EXPECT_EQ(
+        asset.emitters[0].shapeExtent,
+        Eigen::Vector3f(50.0f, 50.0f, 50.0f));
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeHeight, 100.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeInnerRadius, 50.0f);
+}
+
+TEST(ParticleAsset, SpawnShapeTypesParseWithTheirParameters)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "box"}, {"extent", {40.0, 50.0, 60.0}}};
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_shape_box.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "box");
+    EXPECT_EQ(
+        asset.emitters[0].shapeExtent,
+        Eigen::Vector3f(40.0f, 50.0f, 60.0f));
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "cone"},
+        {"radius", 30.0},
+        {"height", 120.0},
+        {"extent", {1.0, 2.0, 3.0}}};
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_shape_cone.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "cone");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 30.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeHeight, 120.0f);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "cylinder"},
+        {"radius", 25.0},
+        {"height", 80.0}};
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_shape_cylinder.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "cylinder");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 25.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeHeight, 80.0f);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "disc"}, {"radius", 35.0}};
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_shape_disc.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "disc");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 35.0f);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "ring"},
+        {"radius", 60.0},
+        {"innerRadius", 20.0}};
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_shape_ring.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "ring");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 60.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeInnerRadius, 20.0f);
+}
+
+TEST(ParticleAsset, SpawnShapeFieldsRoundTripThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange type;
+    type.field = "emitters.0.shape.type";
+    type.value = std::string("box");
+    changes.push_back(type);
+    EditorAssetFieldChange extent;
+    extent.field = "emitters.0.shape.extent";
+    extent.value = std::array<double, 3>{40.0, 50.0, 60.0};
+    changes.push_back(extent);
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        Json::parse(document.dump()),
+        "Maps/SC_test/PS_shape_box_editor.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "box");
+    EXPECT_EQ(
+        asset.emitters[0].shapeExtent,
+        Eigen::Vector3f(40.0f, 50.0f, 60.0f));
+
+    document = MultiEmitterDocument();
+    changes.clear();
+    EditorAssetFieldChange coneType;
+    coneType.field = "emitters.0.shape.type";
+    coneType.value = std::string("cone");
+    changes.push_back(coneType);
+    EditorAssetFieldChange coneHeight;
+    coneHeight.field = "emitters.0.shape.height";
+    coneHeight.value = 120.0;
+    changes.push_back(coneHeight);
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    asset = ParticleAssetLoader::ParseJson(
+        Json::parse(document.dump()),
+        "Maps/SC_test/PS_shape_cone_editor.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "cone");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeHeight, 120.0f);
+
+    document = MultiEmitterDocument();
+    changes.clear();
+    EditorAssetFieldChange cylinderType;
+    cylinderType.field = "emitters.1.shape.type";
+    cylinderType.value = std::string("cylinder");
+    changes.push_back(cylinderType);
+    EditorAssetFieldChange cylinderHeight;
+    cylinderHeight.field = "emitters.1.shape.height";
+    cylinderHeight.value = 70.0;
+    changes.push_back(cylinderHeight);
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    asset = ParticleAssetLoader::ParseJson(
+        Json::parse(document.dump()),
+        "Maps/SC_test/PS_shape_cylinder_editor.json");
+    EXPECT_EQ(asset.emitters[1].shapeType, "cylinder");
+    EXPECT_FLOAT_EQ(asset.emitters[1].shapeHeight, 70.0f);
+
+    document = MultiEmitterDocument();
+    changes.clear();
+    EditorAssetFieldChange ringType;
+    ringType.field = "emitters.0.shape.type";
+    ringType.value = std::string("ring");
+    changes.push_back(ringType);
+    EditorAssetFieldChange ringRadius;
+    ringRadius.field = "emitters.0.shape.radius";
+    ringRadius.value = 60.0;
+    changes.push_back(ringRadius);
+    EditorAssetFieldChange ringInnerRadius;
+    ringInnerRadius.field = "emitters.0.shape.innerRadius";
+    ringInnerRadius.value = 20.0;
+    changes.push_back(ringInnerRadius);
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    asset = ParticleAssetLoader::ParseJson(
+        Json::parse(document.dump()),
+        "Maps/SC_test/PS_shape_ring_editor.json");
+    EXPECT_EQ(asset.emitters[0].shapeType, "ring");
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeRadius, 60.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].shapeInnerRadius, 20.0f);
+}
+
+TEST(ParticleAsset, SpawnShapeFieldsExposedByEditorCapabilities)
+{
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, MultiEmitterDocument());
+
+    ASSERT_TRUE(capabilities["emitters"].is_array());
+    ASSERT_FALSE(capabilities["emitters"].empty());
+    bool hasType = false;
+    bool hasExtent = false;
+    bool hasHeight = false;
+    bool hasInnerRadius = false;
+    for (const Json& field : capabilities["emitters"][0]["fields"])
+    {
+        const std::string name =
+            field.value("field", std::string());
+        if (name == "shape.type")
+        {
+            hasType = true;
+            const Json& values = field.at("enum");
+            EXPECT_EQ(values.size(), 6u);
+            for (const char* expected :
+                {"sphere", "box", "cone", "cylinder", "disc", "ring"})
+            {
+                bool found = false;
+                for (const Json& value : values)
+                    found = found || value == expected;
+                EXPECT_TRUE(found) << expected;
+            }
+        }
+        else if (name == "shape.extent")
+        {
+            hasExtent = true;
+            EXPECT_EQ(field.value("type", std::string()), "vec3");
+            EXPECT_EQ(field.value("unit", std::string()), "cm");
+            EXPECT_TRUE(field.value("resettable", false));
+        }
+        else if (name == "shape.height")
+        {
+            hasHeight = true;
+            EXPECT_EQ(field.value("type", std::string()), "number");
+            EXPECT_EQ(field.value("unit", std::string()), "cm");
+            EXPECT_TRUE(field.value("resettable", false));
+        }
+        else if (name == "shape.innerRadius")
+        {
+            hasInnerRadius = true;
+            EXPECT_EQ(field.value("type", std::string()), "number");
+            EXPECT_EQ(field.value("unit", std::string()), "cm");
+            EXPECT_TRUE(field.value("resettable", false));
+        }
+    }
+    EXPECT_TRUE(hasType);
+    EXPECT_TRUE(hasExtent);
+    EXPECT_TRUE(hasHeight);
+    EXPECT_TRUE(hasInnerRadius);
+}
+
+TEST(ParticleAsset, SpawnShapeRejectsInvalidTypeAndDimensions)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{{"type", "capsule"}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_invalid_type.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "box"}, {"extent", {40.0, 0.0, 60.0}}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_box_zero.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "box"}, {"extent", {40.0, -1.0, 60.0}}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_box_negative.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "cone"}, {"height", 0.0}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_cone_zero_height.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "cylinder"}, {"height", -5.0}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_cylinder_negative_height.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "ring"},
+        {"radius", 20.0},
+        {"innerRadius", 20.0}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_ring_equal_radius.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["shape"] = Json{
+        {"type", "ring"},
+        {"radius", 20.0},
+        {"innerRadius", 30.0}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_shape_ring_inner_outside.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, NonIntegerCountsAreRejected)
 {
     Json document = MultiEmitterDocument();

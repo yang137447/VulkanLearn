@@ -48,6 +48,33 @@ namespace
 constexpr uint32_t kParticleSortMinimumCapacity = 256;
 constexpr uint32_t kParticleSortMaximumCapacity = 4096;
 
+// shape.type 字符串到 UBO code 的映射。非法值已在资产校验阶段拒绝，
+// 这里回退 sphere 只用于防御未走校验的构造路径。
+int ParticleShapeCode(const std::string& shapeType)
+{
+    if (shapeType == "box")
+    {
+        return 1;
+    }
+    if (shapeType == "cone")
+    {
+        return 2;
+    }
+    if (shapeType == "cylinder")
+    {
+        return 3;
+    }
+    if (shapeType == "disc")
+    {
+        return 4;
+    }
+    if (shapeType == "ring")
+    {
+        return 5;
+    }
+    return 0;
+}
+
 Renderpass* FindParticlePass(RenderGraph& graph)
 {
     for (auto& [name, pass] : graph.GetRenderpasses())
@@ -1499,6 +1526,17 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.billboardAlignment == "velocity" ? 1.0f : 0.0f,
             0.0f,
             0.0f,
+            0.0f);
+        uniforms.shapeParams = Eigen::Vector4f(
+            static_cast<float>(
+                ParticleShapeCode(emitter.asset.shapeType)),
+            emitter.asset.shapeHeight,
+            emitter.asset.shapeInnerRadius,
+            0.0f);
+        uniforms.shapeExtent = Eigen::Vector4f(
+            emitter.asset.shapeExtent.x(),
+            emitter.asset.shapeExtent.y(),
+            emitter.asset.shapeExtent.z(),
             0.0f);
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,

@@ -98,6 +98,14 @@ struct ParticleEmitterAsset
         Eigen::Vector3f(0.0f, -100.0f, 0.0f);
     float drag = 0.0f;
     float shapeRadius = 10.0f;
+    // spawn 形状：所有形状都在发射器局部空间生成初始位置，再走现有的
+    // localSpace/localToWorld、prewarm 与碰撞流程。sphere 是 v1 默认值。
+    // box 的 extent 是三轴半尺寸（cm）；cone/cylinder 沿 +Y 展开；
+    // disc/ring 位于 XZ 平面 y=0；ring 的 innerRadius 必须小于 radius。
+    std::string shapeType = "sphere";
+    Eigen::Vector3f shapeExtent = Eigen::Vector3f(50.0f, 50.0f, 50.0f);
+    float shapeHeight = 100.0f;
+    float shapeInnerRadius = 50.0f;
 
     // 世界空间碰撞。plane 的法线在解析时归一化，offset 是沿法线的
     // 世界距离；box 是世界轴对齐 AABB（cm）；capsule 是线段 AB 外扩

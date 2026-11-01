@@ -179,9 +179,14 @@ private:
         Eigen::Vector4f colorTint;
         // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved.
         Eigen::Vector4f billboardParams;
+        // x = shape code (0 sphere, 1 box, 2 cone, 3 cylinder, 4 disc,
+        // 5 ring), y = height (cm), z = innerRadius (cm), w reserved.
+        Eigen::Vector4f shapeParams;
+        // xyz = box half extents (cm), w reserved.
+        Eigen::Vector4f shapeExtent;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5440,
+        sizeof(FrameUniforms) == 5472,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -192,6 +197,12 @@ private:
     static_assert(
         offsetof(FrameUniforms, billboardParams) == 5424,
         "ParticleFrame billboardParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shapeParams) == 5440,
+        "ParticleFrame shapeParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shapeExtent) == 5456,
+        "ParticleFrame shapeExtent offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

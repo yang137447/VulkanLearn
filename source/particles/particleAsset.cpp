@@ -418,15 +418,33 @@ ParticleEmitterAsset ParseEmitter(
             throw std::invalid_argument(
                 "Particle shape must be an object");
         }
-        const std::string shapeType =
-            shape.value("type", std::string("sphere"));
-        if (shapeType != "sphere")
+        if (shape.contains("type") && !shape.at("type").is_string())
         {
             throw std::invalid_argument(
-                "Particle shape currently supports only 'sphere'");
+                "Particle shape.type must be a string");
         }
+        emitter.shapeType = shape.value("type", emitter.shapeType);
+        if (emitter.shapeType != "sphere" &&
+            emitter.shapeType != "box" &&
+            emitter.shapeType != "cone" &&
+            emitter.shapeType != "cylinder" &&
+            emitter.shapeType != "disc" &&
+            emitter.shapeType != "ring")
+        {
+            throw std::invalid_argument(
+                "Particle shape.type must be 'sphere', 'box', 'cone', "
+                "'cylinder', 'disc', or 'ring'");
+        }
+        // 所有字段都读取，未使用字段仍参与有限性与非负校验，避免资产里
+        // 隐藏 NaN/Inf 或负数在切换形状后突然生效。
         emitter.shapeRadius = ReadFiniteFloat(
             shape, "radius", emitter.shapeRadius);
+        emitter.shapeExtent = ReadVec3(
+            shape, "extent", emitter.shapeExtent);
+        emitter.shapeHeight = ReadFiniteFloat(
+            shape, "height", emitter.shapeHeight);
+        emitter.shapeInnerRadius = ReadFiniteFloat(
+            shape, "innerRadius", emitter.shapeInnerRadius);
     }
 
     if (json.contains("collision"))
@@ -816,6 +834,11 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.gravity.z(), "gravity.z");
     RequireFinite(emitter.drag, "drag");
     RequireFinite(emitter.shapeRadius, "shape.radius");
+    RequireFinite(emitter.shapeExtent.x(), "shape.extent.x");
+    RequireFinite(emitter.shapeExtent.y(), "shape.extent.y");
+    RequireFinite(emitter.shapeExtent.z(), "shape.extent.z");
+    RequireFinite(emitter.shapeHeight, "shape.height");
+    RequireFinite(emitter.shapeInnerRadius, "shape.innerRadius");
     RequireFinite(emitter.collisionPlaneNormal.x(),
         "collision.plane.normal.x");
     RequireFinite(emitter.collisionPlaneNormal.y(),
@@ -1009,6 +1032,60 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle shape radius must be non-negative");
+    }
+    if (emitter.shapeType != "sphere" &&
+        emitter.shapeType != "box" &&
+        emitter.shapeType != "cone" &&
+        emitter.shapeType != "cylinder" &&
+        emitter.shapeType != "disc" &&
+        emitter.shapeType != "ring")
+    {
+        throw std::invalid_argument(
+            "Particle shape.type must be 'sphere', 'box', 'cone', "
+            "'cylinder', 'disc', or 'ring'");
+    }
+    // 未使用字段仍要求非负，保证切换 shape.type 时不会把资产里的负值
+    // 或退化尺寸带进运行时采样。
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        if (emitter.shapeExtent[axis] < 0.0f)
+        {
+            throw std::invalid_argument(
+                "Particle shape extent must be non-negative");
+        }
+    }
+    if (emitter.shapeHeight < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle shape height must be non-negative");
+    }
+    if (emitter.shapeInnerRadius < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle shape innerRadius must be non-negative");
+    }
+    if (emitter.shapeType == "box" &&
+        (emitter.shapeExtent.x() <= 0.0f ||
+         emitter.shapeExtent.y() <= 0.0f ||
+         emitter.shapeExtent.z() <= 0.0f))
+    {
+        throw std::invalid_argument(
+            "Particle box shape extent must be positive on all axes");
+    }
+    if ((emitter.shapeType == "cone" ||
+         emitter.shapeType == "cylinder") &&
+        emitter.shapeHeight <= 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle cone/cylinder shape height must be positive");
+    }
+    if (emitter.shapeType == "ring" &&
+        (emitter.shapeRadius <= 0.0f ||
+         emitter.shapeInnerRadius >= emitter.shapeRadius))
+    {
+        throw std::invalid_argument(
+            "Particle ring shape requires radius > 0 and "
+            "0 <= innerRadius < radius");
     }
     if (emitter.collisionType != "none" &&
         emitter.collisionType != "plane" &&
