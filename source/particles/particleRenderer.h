@@ -15,6 +15,7 @@
 #include "particles/particleAsset.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleFrameStats.h"
+#include "particles/particleIndirect.h"
 #include "particles/particleRenderIdentity.h"
 
 class PipelineBase;
@@ -277,6 +278,9 @@ private:
         // 后续 GPU culling 可直接改写同一缓冲而不改录制路径。
         GpuBuffer indirectArgs;
         bool indirectIndexed = false;
+        // renderMode/ribbonSegments/mesh fallback 任一变化都会改变命令形状；
+        // 把它保留在资源包里，Synchronize 才能在池未扩容时也触发重建。
+        ParticleIndirectDrawShape indirectShape;
         std::vector<GpuBuffer> frameUniforms;
         vk::DescriptorPool descriptorPool;
         std::vector<vk::DescriptorSet> computeSets;

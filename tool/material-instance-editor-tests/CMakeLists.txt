@@ -141,6 +141,7 @@ add_executable(material_instance_editor_production_tests
     particleDumpTests.cpp
     particleFlipbookEditTests.cpp
     particleFrameStatsTests.cpp
+    particleIndirectTests.cpp
     particleEmitterBoundsTests.cpp
     particleEmitterCullingTests.cpp
     particleEmitterEditTests.cpp

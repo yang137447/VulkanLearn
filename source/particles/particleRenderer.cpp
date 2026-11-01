@@ -457,9 +457,18 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 BuildEmitterTextureSourceKey(emitter);
             const std::string meshSourceKey =
                 BuildEmitterMeshSourceKey(emitter);
+            auto emitterIt = emitters.find(key);
+            const ParticleIndirectDrawShape indirectShape =
+                BuildParticleIndirectDrawShape(
+                    emitter.renderMode,
+                    emitter.maxParticles,
+                    emitter.ribbonSegments,
+                    emitter.renderMode == "mesh",
+                    emitterIt == emitters.end()
+                        ? 0u
+                        : emitterIt->second->meshIndexCount);
             // 可见性/启用状态与实例覆盖写入所有分支：新建池直接继承，
             // 已有池每帧跟随快照；开关切换不走资源重建。
-            auto emitterIt = emitters.find(key);
             if (emitterIt == emitters.end() ||
                 emitterIt->second->asset.maxParticles !=
                     emitter.maxParticles ||
@@ -468,7 +477,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 emitterIt->second->textureSourceKey !=
                     textureSourceKey ||
                 emitterIt->second->meshSourceKey !=
-                    meshSourceKey)
+                    meshSourceKey ||
+                emitterIt->second->indirectShape != indirectShape)
             {
                 if (emitterIt != emitters.end())
                 {
@@ -847,12 +857,17 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
 
     // 间接参数与 emitter 池同生命周期；内容目前是固定顶点/索引与实例数，
     // 但录制路径已经不再关心具体计数，后续 GPU culling 只需更新该缓冲。
-    const bool indirectMesh =
-        emitter.asset.renderMode == "mesh" &&
+    const bool meshUsable =
         !emitter.meshFallbackBillboard &&
-        emitter.meshIndexCount > 0 &&
         emitter.meshVertices.buffer && emitter.meshIndices.buffer;
-    const vk::DeviceSize indirectBytes = indirectMesh
+    const ParticleIndirectDrawShape indirectShape =
+        BuildParticleIndirectDrawShape(
+            emitter.asset.renderMode,
+            emitter.asset.maxParticles,
+            emitter.asset.ribbonSegments,
+            meshUsable,
+            emitter.meshIndexCount);
+    const vk::DeviceSize indirectBytes = indirectShape.indexed
         ? sizeof(vk::DrawIndexedIndirectCommand)
         : sizeof(vk::DrawIndirectCommand);
     const auto indirectAllocation = backend->CreateBuffer(
@@ -870,11 +885,11 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     {
         throw std::runtime_error("particle indirect parameter map failed");
     }
-    if (indirectMesh)
+    if (indirectShape.indexed)
     {
         const vk::DrawIndexedIndirectCommand command(
-            emitter.meshIndexCount,
-            emitter.asset.maxParticles,
+            indirectShape.indexCount,
+            indirectShape.instanceCount,
             0,
             0,
             0);
@@ -882,22 +897,16 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     }
     else
     {
-        const uint32_t vertexCount =
-            emitter.asset.renderMode == "ribbon"
-                ? static_cast<uint32_t>(
-                    ParticleRibbonVertexCount(
-                        emitter.asset.maxParticles,
-                        emitter.asset.ribbonSegments))
-                : emitter.asset.maxParticles * 6u;
         const vk::DrawIndirectCommand command(
-            vertexCount,
-            1,
+            indirectShape.vertexCount,
+            indirectShape.instanceCount,
             0,
             0);
         std::memcpy(mappedIndirect, &command, sizeof(command));
     }
     backend->UnmapMemory(emitter.indirectArgs.memory);
-    emitter.indirectIndexed = indirectMesh;
+    emitter.indirectShape = indirectShape;
+    emitter.indirectIndexed = indirectShape.indexed;
 
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
