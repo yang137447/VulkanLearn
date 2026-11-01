@@ -22,13 +22,47 @@ struct ParticleCollisionState
 
 // 与 particleSimulate.comp 的 ResolveCollision 保持同一套公式。
 // type 的 GPU 编码：0 none、1 plane、2 box、3 capsule、4 sdf。
+// 三角网格在加载期已烘成 SDF，因此 "mesh" 也映射到 4，共用同一段
+// 体素采样/梯度推出代码。
 inline int ParticleCollisionTypeValue(std::string_view type) noexcept
 {
     if (type == "plane") return 1;
     if (type == "box") return 2;
     if (type == "capsule") return 3;
     if (type == "sdf") return 4;
+    if (type == "mesh") return 4;
     return 0;
+}
+
+// SDF 资源身份：改变 collision.type 或重新加载出的 SDF 数据都必须重建
+// GPU buffer。只比较路径会漏掉“同时保留 sdf/mesh 两条路径后切换 type”，
+// 也会漏掉同路径文件内容更新后重新解析出的新 SDF。
+inline bool ParticleCollisionResourceIdentityChanged(
+    const ParticleEmitterAsset& current,
+    const ParticleEmitterAsset& next) noexcept
+{
+    if (current.collisionType != next.collisionType ||
+        current.collisionSdfPath != next.collisionSdfPath ||
+        current.collisionMeshPath != next.collisionMeshPath)
+    {
+        return true;
+    }
+    const std::string_view currentIdentity =
+        current.collisionSdf
+        ? std::string_view(current.collisionSdf->sourceIdentity)
+        : std::string_view();
+    const std::string_view nextIdentity =
+        next.collisionSdf
+        ? std::string_view(next.collisionSdf->sourceIdentity)
+        : std::string_view();
+    if (currentIdentity != nextIdentity)
+    {
+        return true;
+    }
+    // 内存构造/测试数据没有稳定源身份；此时退回指针比较。生产资产由
+    // loader 写入路径+大小+时间身份，运行时参数重解析会保留同一份 SDF。
+    return currentIdentity.empty() &&
+        current.collisionSdf != next.collisionSdf;
 }
 
 inline Eigen::Vector3f NormalizedParticleCollisionPlaneNormal(
@@ -221,8 +255,8 @@ inline bool ResolveParticleCollision(
     }
     else if (type == 4)
     {
-        // SDF：d<radius 时沿梯度把粒子球推到等距面外。梯度为 0 时
-        // 放弃修正，保持位置不变，避免产生 NaN。
+        // SDF（含加载期烘好的三角网格）：d<radius 时沿梯度把粒子球
+        // 推到等距面外。梯度为 0 时放弃修正，保持位置不变，避免 NaN。
         if (!emitter.collisionSdf || emitter.collisionSdf->Empty())
         {
             return true;

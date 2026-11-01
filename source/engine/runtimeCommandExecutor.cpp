@@ -6,6 +6,7 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -765,6 +766,58 @@ void RuntimeCommandExecutor::ExecuteCommand(
             std::string("Particle user parameter ") +
             (clear ? "cleared: " : "set: ") + command.stringValue +
             " key=" + command.particleUserParameterName);
+        break;
+    }
+    case RuntimeCommandType::SetParticleDataChannel:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle data channel ignored because no active World exists.");
+            break;
+        }
+        const bool clear = command.particleDataChannelClear;
+        std::string validationError;
+        if (!ExecuteParticleDataChannelCommand(
+                *world,
+                clear,
+                command.particleDataChannelName,
+                command.floatValue,
+                validationError))
+        {
+            diagnostics.ReportWarning(validationError);
+            break;
+        }
+        diagnostics.ReportInfo(
+            std::string("Particle data channel ") +
+            (clear ? "cleared: " : "set: ") +
+            command.particleDataChannelName +
+            (clear
+                ? std::string()
+                : "=" + std::to_string(command.floatValue)));
+        break;
+    }
+    case RuntimeCommandType::ReportParticleDataChannels:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle data channels ignored because no active World exists.");
+            break;
+        }
+        std::map<std::string, float> ordered(
+            world->GetParticleDataChannels().begin(),
+            world->GetParticleDataChannels().end());
+        nlohmann::json channels = nlohmann::json::object();
+        for (const auto& [name, value] : ordered)
+            channels[name] = value;
+        const std::string line = channels.dump();
+        std::cout << line << std::endl;
+        diagnostics.ReportInfo(line);
         break;
     }
     case RuntimeCommandType::SetParticleSystemAttachment:

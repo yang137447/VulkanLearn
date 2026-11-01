@@ -15,6 +15,7 @@
 #include "editor/command/editorCommandJsonCodec.h"
 #include "particles/particleDump.h"
 #include "particles/particleRuntimeCommand.h"
+#include "world/world.h"
 
 namespace
 {
@@ -1027,6 +1028,70 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "particledata")
+    {
+        const char* usage =
+            "Usage: particledata <name> <value> | "
+            "particledata <name> clear | particledata";
+        std::string name;
+        if (!(commandStream >> name))
+        {
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportParticleDataChannels;
+            runtimeCommand.sourceText = line;
+            std::cout << "Particle data channels queued for dump."
+                << std::endl;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        std::string second;
+        std::string extra;
+        if (!(commandStream >> second) || (commandStream >> extra))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        std::string validationError;
+        if (!VL::ValidateParticleDataChannelName(
+                name, validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleDataChannel;
+        runtimeCommand.particleDataChannelName = name;
+        runtimeCommand.sourceText = line;
+        if (second == "clear")
+        {
+            runtimeCommand.particleDataChannelClear = true;
+            std::cout << "Particle data channel clear queued: "
+                << name << std::endl;
+        }
+        else
+        {
+            float value = 0.0f;
+            if (!ParseConsoleFloat(second, value))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleDataChannelValue(
+                    value, validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.floatValue = value;
+            std::cout << "Particle data channel set queued: "
+                << name << "=" << value << std::endl;
+        }
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "particleattach")
     {
         const char* usage =
@@ -1350,6 +1415,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  particleemitter <system> <spawn <sourceIndex> [name]|destroy <index|name>|restart <index|name>|enable <index|name> <0|1>> - emitter lifecycle\n";
     std::cout << "  particlebudget <system|world> <maxTotal> <emitterScale> - runtime particle budget\n";
     std::cout << "  particleuser <system> [<key> <value>|clear <key>] - runtime named user parameter\n";
+    std::cout << "  particledata <name> <value> | particledata <name> clear | particledata - World-global particle data channel\n";
     std::cout << "  particleattach <system> <mesh <target>|component <blueprint> <component>|detach> [x y z [rx ry rz [sx sy sz]]] - attach to scene object/component\n";
     std::cout << "  particletelemetry [system] - print CPU-authored counts and renderer-fed alive/budget data\n";
     std::cout << "  camera get - print the active camera pose\n";

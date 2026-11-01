@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <cctype>
+#include <functional>
 #include "editor/command/strictJson.h"
 #include "particles/particleAsset.h"
 #include "particles/particleMeshReference.h"
@@ -141,6 +142,57 @@ void ValidateParticleDocumentMeshes(
     const Json& candidate,
     const std::filesystem::path& resourceRoot)
 {
+    // v1 emitter、v2 module fields 和根对象都可能持有 collision 对象；
+    // 递归检查两种碰撞资源路径，避免编辑器接受项目根回退文件而运行时拒绝。
+    std::function<void(const Json&)> validateCollisionReferences =
+        [&](const Json& value)
+    {
+        if (value.is_object())
+        {
+            const auto collision = value.find("collision");
+            if (collision != value.end() && collision->is_object())
+            {
+                const std::string type =
+                    collision->value("type", std::string("none"));
+                const char* pathField = type == "sdf"
+                    ? "sdf"
+                    : (type == "mesh" ? "mesh" : nullptr);
+                if (pathField != nullptr)
+                {
+                    const auto pathObject =
+                        collision->find(pathField);
+                    if (pathObject != collision->end() &&
+                        pathObject->is_object())
+                    {
+                        const auto path = pathObject->find("path");
+                        if (path != pathObject->end() &&
+                            path->is_string() &&
+                            !path->get<std::string>().empty())
+                        {
+                            (void)ValidateParticleMeshReference(
+                                resourceRoot,
+                                path->get<std::string>(),
+                                std::string("collision.") + pathField +
+                                    ".path");
+                        }
+                    }
+                }
+            }
+            for (auto child = value.begin(); child != value.end(); ++child)
+            {
+                validateCollisionReferences(child.value());
+            }
+        }
+        else if (value.is_array())
+        {
+            for (const Json& child : value)
+            {
+                validateCollisionReferences(child);
+            }
+        }
+    };
+    validateCollisionReferences(candidate);
+
     const bool hasEmitterArray =
         candidate.contains("emitters") &&
         candidate.at("emitters").is_array();
@@ -247,7 +299,8 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
             ValidateParticleDocumentMeshes(
                 document.baseline,
                 resourceRoot);
-            (void)ParticleAssetLoader::ParseJson(document.baseline, key);
+            (void)ParticleAssetLoader::ParseJson(
+                document.baseline, key, resourceRoot);
         }
         else ValidateTextureAssetJson(document.baseline);
         const auto after = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
@@ -332,7 +385,8 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
     {
         ValidateParticleDocumentTextures(candidate, resourceRoot);
         ValidateParticleDocumentMeshes(candidate, resourceRoot);
-        (void)ParticleAssetLoader::ParseJson(candidate, path);
+        (void)ParticleAssetLoader::ParseJson(
+            candidate, path, resourceRoot);
     }
     else if (kind == K::Mesh)
     {

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <set>
 #include <filesystem>
 #include "world/world.h"
@@ -134,6 +135,19 @@ nlohmann::json BuildParticleEventsJson(
             {"position", {event.position.x(), event.position.y(), event.position.z()}},
             {"normal", {event.normal.x(), event.normal.y(), event.normal.z()}}});
     }
+    return result;
+}
+
+nlohmann::json BuildParticleDataChannelsJson(const World& world)
+{
+    // 排序后写入 JSON，避免 unordered_map 迭代顺序让每次 tick 的 payload
+    // 字节发生变化，也便于 C#/诊断按稳定顺序比较。
+    std::map<std::string, float> ordered(
+        world.GetParticleDataChannels().begin(),
+        world.GetParticleDataChannels().end());
+    nlohmann::json result = nlohmann::json::object();
+    for (const auto& [name, value] : ordered)
+        result[name] = value;
     return result;
 }
 
@@ -326,7 +340,11 @@ bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, st
                 auto context = CreateContext(world.GetScriptBlueprints(), world.GetScriptTemplates(), 0,
                     world.ScriptAnimationCatalog(), world.ScriptAnimationAssets());
                 context->Call("set_time", {{"time", ContextTime()}});
-                const auto response = context->Call("start");
+                // BeginPlay 之前先把 World 通道交给托管侧，保证新 Play 上下文
+                // 在 BeginPlay 内读取到上一上下文/Console 留下的全局数据。
+                const auto response = context->Call("start",
+                    {{"particleDataChannels",
+                        BuildParticleDataChannelsJson(world)}});
                 world.SetScriptContext(std::move(context));
                 physics = std::make_shared<ScriptPhysicsWorld>();
                 physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
@@ -554,6 +572,23 @@ void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::stri
                     owner,
                     ParticleCommandBool(command, "enabled", operation)))
                 ThrowParticleCommand("events interest was rejected");
+            continue;
+        }
+        // 数据通道是 owner 校验后的 World 全局写入口，不需要粒子实例 id；
+        // 与逐实例 userParameters 分开存储，避免把全局值写进某个系统快照。
+        if (operation == "data" || operation == "clearData")
+        {
+            const std::string key =
+                ParticleCommandString(command, "key", operation);
+            const bool applied = operation == "data"
+                ? world.SetParticleDataChannel(
+                    key,
+                    ParticleCommandNumber(command, "value", operation))
+                : world.ClearParticleDataChannel(key);
+            if (!applied)
+                ThrowParticleCommand(
+                    operation + " was rejected for data channel '" +
+                    key + "'");
             continue;
         }
         const std::string id = ParticleCommandString(command, "id", operation);
@@ -904,6 +939,8 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
                  {"particleTelemetry", BuildParticleTelemetryJson(*world)},
                  {"particleEvents", BuildParticleEventsJson(
                      world->TakeParticleRuntimeEvents())},
+                 {"particleDataChannels",
+                     BuildParticleDataChannelsJson(*world)},
                  {"delta", true}}));
             // 帧物理：Tick 写入的角色/刚体指令在同一次同步里领取，随后角色按帧 dt 移动、
             // 刚体按内部 1/60 子步推进；Tick 发起的查询在本帧物理位姿上执行。

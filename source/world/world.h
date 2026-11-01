@@ -1,11 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
@@ -48,6 +50,53 @@ struct WorldEnvironment
     std::string hdrPath;
     SkyParametersGPU skyParameters;
 };
+
+// 全局粒子数据通道是与逐实例 userParameters 分离的命名空间：它只存在于
+// 当前 World，供 v2 模块的 `$Name` 在运行时解析使用。命令入口、C# 包装和
+// Console 共用同一组边界（key 上限是 UTF-8 字节数），避免三条路径对
+// "合法 key/value"给出不同答案。
+constexpr size_t kMaxParticleDataChannels = 64;
+constexpr size_t kMaxParticleDataChannelNameLength = 64;
+constexpr float kMaxParticleDataChannelAbsoluteValue = 1.0e6f;
+
+inline bool ValidateParticleDataChannelName(std::string_view name,
+    std::string& outError)
+{
+    if (name.empty() || name.size() > kMaxParticleDataChannelNameLength)
+    {
+        outError =
+            "Particle data channel name requires 1..64 UTF-8 bytes.";
+        return false;
+    }
+    if (name.find('\0') != std::string_view::npos)
+    {
+        outError =
+            "Particle data channel name must not contain NUL.";
+        return false;
+    }
+    outError.clear();
+    return true;
+}
+
+inline bool ValidateParticleDataChannelValue(float value,
+    std::string& outError)
+{
+    if (!std::isfinite(value) ||
+        std::abs(value) > kMaxParticleDataChannelAbsoluteValue)
+    {
+        outError =
+            "Particle data channel value must be finite and in [-1e6, 1e6].";
+        return false;
+    }
+    outError.clear();
+    return true;
+}
+
+class World;
+// 运行时命令桥的单一落点：先完整校验，再调用 World 写入，任何失败都保证
+// 无副作用。Console 使用上面的纯校验；执行端与测试共用这个函数。
+bool ExecuteParticleDataChannelCommand(World& world, bool clear,
+    const std::string& name, float value, std::string& outError);
 
 struct WorldSquareAreaLight
 {
@@ -270,6 +319,19 @@ public:
         const std::string& key, float value);
     bool ClearParticleSystemUserParameter(const std::string& name,
         const std::string& key);
+    // 全局命名标量通道：最多 64 项，key 1..64 UTF-8 字节，value 有限且 |v|<=1e6。
+    // 它们不属于任何 Blueprint owner，也不与逐实例 userParameters 合并存储；
+    // 快照按帧冻结副本，渲染器再决定 `$Name` 的解析优先级。
+    bool SetParticleDataChannel(const std::string& name, float value);
+    // 返回 false 表示 key 非法或当前不存在；不会为 clear 隐式创建条目。
+    bool ClearParticleDataChannel(const std::string& name);
+    bool GetParticleDataChannel(const std::string& name,
+        float& outValue) const;
+    const std::unordered_map<std::string, float>&
+        GetParticleDataChannels() const
+    { return particleDataChannels; }
+    size_t GetParticleDataChannelCount() const
+    { return particleDataChannels.size(); }
     // 附着到网格场景对象或 Blueprint 组件；目标当前不存在时仍允许设置，
     // 快照 telemetry/attachment.resolved 会显式为 false。
     bool AttachParticleSystem(const std::string& name,
@@ -378,6 +440,9 @@ private:
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, WorldParticleSystem> particleSystems;
     ParticleSystemBudget particleBudget;
+    // 全局通道不随 Blueprint 上下文生命周期增删；Play/Stop 与热重载只替换
+    // 脚本 owner，World 仍是同一实例，因此通道状态必须留在 World 上。
+    std::unordered_map<std::string, float> particleDataChannels;
     std::vector<WorldParticleRuntimeEvent> particleRuntimeEvents;
     std::unordered_set<std::string> particleEventCaptureOwners;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;

@@ -511,7 +511,8 @@ private:
         const std::string& materialPath,
         const std::string& error);
     const ParticleSystemAsset& ResolveParticleSystemAsset(
-        const ParticleSystemSnapshot& snapshot);
+        const ParticleSystemSnapshot& snapshot,
+        const std::unordered_map<std::string, float>& runtimeParameters);
     void WarnUserParameterFailureOnce(
         const std::string& key,
         uint64_t signature,

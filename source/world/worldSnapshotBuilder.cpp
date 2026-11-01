@@ -394,6 +394,10 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             std::move(snapshotSystem));
     }
 
+    // 数据通道是 World 级状态，快照必须拿走独立副本；渲染线程不得读取
+    // 可变 World，也不能在下一帧被 Console/C# 写入时看到半更新内容。
+    snapshot.particleDataChannels = world.GetParticleDataChannels();
+
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);
     previousViewProjection = snapshot.camera.viewProjection;
     previousObjectModels = std::move(currentObjectModels);

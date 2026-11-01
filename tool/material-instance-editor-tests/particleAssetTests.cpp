@@ -2932,6 +2932,9 @@ TEST(ParticleEditorFields, RendererEventsDeterminismAndSdfAreExposed)
     EXPECT_NE(
         std::find(enumValues.begin(), enumValues.end(), "sdf"),
         enumValues.end());
+    EXPECT_NE(
+        std::find(enumValues.begin(), enumValues.end(), "mesh"),
+        enumValues.end());
 
     const Json* sdfPath =
         FindParticleCapability(emitterFields, "collision.sdf.path");
@@ -2939,6 +2942,13 @@ TEST(ParticleEditorFields, RendererEventsDeterminismAndSdfAreExposed)
     EXPECT_EQ(sdfPath->at("type"), "string");
     EXPECT_EQ(sdfPath->at("unit"), "asset_path");
     EXPECT_TRUE(sdfPath->at("resettable").get<bool>());
+
+    const Json* meshPath =
+        FindParticleCapability(emitterFields, "collision.mesh.path");
+    ASSERT_NE(meshPath, nullptr);
+    EXPECT_EQ(meshPath->at("type"), "string");
+    EXPECT_EQ(meshPath->at("unit"), "asset_path");
+    EXPECT_TRUE(meshPath->at("resettable").get<bool>());
 }
 
 TEST(ParticleEditorFields, UserParametersAreV2OnlyAndBounded)
@@ -3106,7 +3116,7 @@ TEST(ParticleEditorFields, NewFieldRangesAndEnumsAreEnforced)
         "emitters.0.collision.type", std::string("sdf "))),
         std::invalid_argument);
     EXPECT_THROW(apply(ParticleEditorChange(
-        "emitters.0.collision.type", std::string("mesh"))),
+        "emitters.0.collision.type", std::string("mesh "))),
         std::invalid_argument);
     EXPECT_THROW(apply(ParticleEditorChange(
         "emitters.0.billboardShadows", std::string("true"))),
@@ -3127,6 +3137,8 @@ TEST(ParticleEditorFields, NewFieldRangesAndEnumsAreEnforced)
         "emitters.0.fixedTimeStep", 0.25)));
     EXPECT_NO_THROW(apply(ParticleEditorChange(
         "emitters.0.collision.type", std::string("sdf"))));
+    EXPECT_NO_THROW(apply(ParticleEditorChange(
+        "emitters.0.collision.type", std::string("mesh"))));
 }
 
 TEST(ParticleAsset, V2EventsDeterminismAndRendererModulesFlatten)

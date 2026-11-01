@@ -995,6 +995,65 @@ bool World::ClearParticleSystemUserParameter(const std::string& name,
     return true;
 }
 
+bool World::SetParticleDataChannel(const std::string& name, float value)
+{
+    std::string error;
+    if (!ValidateParticleDataChannelName(name, error) ||
+        !ValidateParticleDataChannelValue(value, error))
+        return false;
+    const auto existing = particleDataChannels.find(name);
+    if (existing == particleDataChannels.end() &&
+        particleDataChannels.size() >= kMaxParticleDataChannels)
+        return false;
+    particleDataChannels[name] = value;
+    return true;
+}
+
+bool World::ClearParticleDataChannel(const std::string& name)
+{
+    std::string error;
+    if (!ValidateParticleDataChannelName(name, error)) return false;
+    return particleDataChannels.erase(name) != 0;
+}
+
+bool World::GetParticleDataChannel(const std::string& name,
+    float& outValue) const
+{
+    std::string error;
+    if (!ValidateParticleDataChannelName(name, error)) return false;
+    const auto found = particleDataChannels.find(name);
+    if (found == particleDataChannels.end()) return false;
+    outValue = found->second;
+    return true;
+}
+
+bool ExecuteParticleDataChannelCommand(World& world, bool clear,
+    const std::string& name, float value, std::string& outError)
+{
+    if (!ValidateParticleDataChannelName(name, outError)) return false;
+    if (clear)
+    {
+        if (!world.ClearParticleDataChannel(name))
+        {
+            outError =
+                "Particle data channel clear found no entry named: " + name;
+            return false;
+        }
+        outError.clear();
+        return true;
+    }
+    if (!ValidateParticleDataChannelValue(value, outError)) return false;
+    if (!world.SetParticleDataChannel(name, value))
+    {
+        outError =
+            "Particle data channel set was rejected (64-channel limit): " +
+            name;
+        return false;
+    }
+    outError.clear();
+    return true;
+}
+
 bool World::AttachParticleSystem(const std::string& name,
     const std::string& targetKind, const std::string& targetName,
     const std::string& componentName,

@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -17,6 +19,21 @@ namespace VL
 
 struct ParticleSystemAsset;
 struct ParticleSdfAsset;
+// 运行时参数重解析只替换数值，不重新读盘/烘网格；按 collision type + path
+// 复用基础资产中已加载的 SDF。
+using ParticleCollisionResourceCache = std::unordered_map<
+    std::string,
+    std::shared_ptr<const ParticleSdfAsset>>;
+
+inline std::string ParticleCollisionResourceCacheKey(
+    std::string_view type,
+    std::string_view path)
+{
+    std::string key(type);
+    key += '|';
+    key += path;
+    return key;
+}
 
 class ParticleAssetLoader
 {
@@ -24,9 +41,13 @@ public:
     // 读取并完整校验；失败时抛出带路径的异常，调用发生在 World 候选提交之前。
     static ParticleSystemAsset Prepare(const std::string& path);
     // 解析已经读取的 JSON；编辑器字段写入后复用同一校验入口。
+    // resourceRoot 为空时用 CommonFunction::Path 解析碰撞/纹理资源；
+    // 测试或编辑器可传入显式资源根，仍坚持资源根相对路径契约。
     static ParticleSystemAsset ParseJson(
         const nlohmann::json& json,
-        std::string_view sourcePath);
+        std::string_view sourcePath,
+        const std::filesystem::path& resourceRoot = {},
+        const ParticleCollisionResourceCache* collisionCache = nullptr);
     static void Validate(const ParticleSystemAsset& asset);
 };
 
@@ -88,8 +109,8 @@ struct ParticleEmitterAsset
     // 可选材质实例（MI_*.json）。只消费数值子集 baseColor/emissive/
     // roughness/metallic；空字符串表示使用内置 unlit/默认 PBR 回退。
     std::string materialInstancePath;
-    // mesh 专用简化 Lambert：只用场景里第一个方向光的颜色与方向，
-    // 不读 lux 强度、不接材质/阴影。billboard/ribbon 不受影响。
+    // mesh 专用单方向光 GGX/Smith/Fresnel，并采样 CSM 阴影；光源只用
+    // 场景第一个方向光的颜色与方向，不读 lux 强度。billboard/ribbon 不受影响。
     bool meshLighting = true;
     float meshAmbient = 0.2f;
 
@@ -144,10 +165,11 @@ struct ParticleEmitterAsset
 
     // 世界空间碰撞。plane 的法线在解析时归一化，offset 是沿法线的
     // 世界距离；box 是世界轴对齐 AABB（cm）；capsule 是线段 AB 外扩
-    // capsuleRadius 的胶囊；sdf 是有限体素距离场。localSpace=true 时
-    // 碰撞体按发射器局部空间解释（与局部粒子坐标同一空间）。
+    // capsuleRadius 的胶囊；sdf 是有限体素距离场；mesh 是三角网格，
+    // 加载期烘成同一份 SDF。localSpace=true 时碰撞体按发射器局部空间
+    // 解释（与局部粒子坐标同一空间）。
     // 碰撞字段对 type=none 不产生运行时开销，但仍参与有限性与范围校验。
-    std::string collisionType = "none"; // none|plane|box|capsule|sdf
+    std::string collisionType = "none"; // none|plane|box|capsule|sdf|mesh
     Eigen::Vector3f collisionPlaneNormal = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     float collisionPlaneOffset = 0.0f;
     Eigen::Vector3f collisionBoxMin =
@@ -167,6 +189,9 @@ struct ParticleEmitterAsset
     bool collisionCcd = false;
     // SDF 源路径相对资源根；解析成功后 collisionSdf 持有冻结数据。
     std::string collisionSdfPath;
+    // 三角网格碰撞源路径相对资源根；加载期烘成 collisionSdf，
+    // 运行时仍走 SDF 的 GPU/CPU 路径。路径变化必须触发发射器重建。
+    std::string collisionMeshPath;
     std::shared_ptr<const ParticleSdfAsset> collisionSdf;
 
     // 事件 v1：只控制是否写 GPU 事件记录，不改变碰撞/死亡语义。
@@ -260,8 +285,9 @@ struct ParticleSystemAsset
     // v1 = 扁平 emitter 字段；v2 = emitters[].modules 模块栈。
     // 运行时消费的仍是展平后的 ParticleEmitterAsset，模块顺序只属于作者层。
     uint32_t version = 1;
-    // v2 系统级用户参数；当前存储并校验，供后续模块引用。
+    // v2 系统级用户参数与模块中实际出现的 `$Name` 依赖集。
     std::unordered_map<std::string, float> userParameters;
+    std::unordered_set<std::string> userParameterReferences;
     // v2 且存在 userParameters 时冻结一份作者 JSON：运行时参数覆盖需要
     // 在原始模块结构上重新替换 $Name 并重新走 ParseJson。没有用户参数的
     // 资产不保留副本，避免无意义的内存占用。

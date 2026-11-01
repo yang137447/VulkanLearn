@@ -114,6 +114,8 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     renderScene.frameIndex = snapshot.frameIndex;
     renderScene.simulationDeltaSeconds =
         snapshot.simulationDeltaSeconds;
+    renderScene.particleDataChannels =
+        snapshot.particleDataChannels;
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
     renderScene.particleSystems = snapshot.particleSystems;

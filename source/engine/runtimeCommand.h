@@ -44,6 +44,11 @@ enum class RuntimeCommandType
     SetParticleSystemUserParameter,
     // 附着到网格场景对象或 Blueprint 组件；local TRS 由命令携带。
     SetParticleSystemAttachment,
+    // 全局粒子数据通道：name 在 particleDataChannelName，set 用 floatValue，
+    // clear 由 particleDataChannelClear 区分。通道只写当前 active World。
+    SetParticleDataChannel,
+    // 打印 active World 的全局粒子数据通道快照。
+    ReportParticleDataChannels,
     // 打印 World 侧 CPU 作者计数/预算；alive 只有渲染器回填后才可用。
     ReportParticleTelemetry,
     SetDebugViewMode,
@@ -136,6 +141,10 @@ struct RuntimeCommand
     std::string particleEmitterName;
     // 命名用户参数 key 与附着目标。
     std::string particleUserParameterName;
+    // 全局粒子数据通道的 key；与逐实例用户名参数分开，避免一个字段承载
+    // 两种归属语义。
+    std::string particleDataChannelName;
+    bool particleDataChannelClear = false;
     std::string particleAttachmentTarget;
     std::string particleAttachmentComponent;
     Eigen::Vector3f particleAttachmentPosition = Eigen::Vector3f::Zero();

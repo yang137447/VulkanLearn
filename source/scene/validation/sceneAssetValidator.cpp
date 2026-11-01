@@ -1,7 +1,9 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
 #include "particles/particleAssetOverride.h"
+#include "commonFunction.h"
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -36,7 +38,9 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
             const std::string particlePath =
                 objectJson.at("particlePath").get<std::string>();
             objectPlan.particleAsset = VL::PrepareParticleAssetWithOverride(
-                particlePath, particleDocuments);
+                particlePath,
+                particleDocuments,
+                std::filesystem::path(CommonFunction::GetResourcePath()));
         }
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))

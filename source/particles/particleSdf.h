@@ -23,6 +23,13 @@ struct ParticleSdfAsset
     Eigen::Vector3f boundsMin = Eigen::Vector3f(-50.0f, -50.0f, -50.0f);
     Eigen::Vector3f boundsMax = Eigen::Vector3f(50.0f, 50.0f, 50.0f);
     std::vector<float> distances;
+    // 加载源身份（路径 + 文件大小/时间 + 内容 FNV），用于渲染器区分
+    // “同路径内容更新”和“运行时参数重解析但碰撞数据未变”。运行时重解析
+    // 会复用同一个 SDF 对象；无源身份的内存构造数据退回指针比较。
+    std::string sourceIdentity;
+    // 网格烘 SDF 时作者提供的 bounds padding；-1 表示该 SDF 不是 mesh
+    // 烘出的。缓存命中仍需用它校验 collision.radius。
+    float sourcePadding = -1.0f;
 
     bool Empty() const noexcept { return distances.empty(); }
 

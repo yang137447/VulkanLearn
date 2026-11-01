@@ -94,10 +94,11 @@ Flipbook 模块在普通字段下方提供 1..256 行的逐帧表格，可编辑
 `(u0,v0,u1,v1)` sprite UV rect 与逐帧旋转角；UV 列、旋转列及其 Seed/Reset 按钮只在
 64 帧以内的区间显示。表格提供 Seed/Uniform/Reset 批量操作；缺失数组显示默认值，
 首次逐行编辑才物化完整数组；
-Collision 模块编辑 `collision.type`、plane/box/capsule 参数、`ccd`、bounce/friction/radius 与
-`killOnCollision`，字段路径与其他 emitter 字段一致；
+Collision 模块编辑 `collision.type`、plane/box/capsule 参数、`collision.sdf.path`、
+`collision.mesh.path`、`ccd`、bounce/friction/radius 与 `killOnCollision`，字段路径与
+其他 emitter 字段一致；两条路径只在对应碰撞类型下显示；
 Emitter 模块还编辑 `localSpace`、`renderMode/ribbonWidth/ribbonSegments/ribbonFade`、
-`mesh.path/mesh.scale/mesh.alignment`、
+`mesh.path/mesh.scale/mesh.alignment/mesh.materialInstancePath/meshLighting/meshAmbient`、
 `useFixedBounds`、`fixedBounds.center/extent`、`lod.tiers` 与逐粒子
 `rotation/rotationSpeed/rotationRandom`；
 发射器选择器另有复制新增、删除与上下移动按钮（1..16 个），结构变更提交整条 `emitters` 数组；

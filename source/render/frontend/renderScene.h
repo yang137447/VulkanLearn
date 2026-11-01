@@ -48,6 +48,9 @@ struct RenderScene
     uint64_t frameIndex = 0;
     // 逻辑模拟时间；粒子 compute 用它推进，Pause 时保持 0。
     float simulationDeltaSeconds = 1.0f / 60.0f;
+    // World 级粒子数据通道的逐帧冻结副本；per-system userParameters
+    // 在运行时解析时覆盖同名通道。
+    std::unordered_map<std::string, float> particleDataChannels;
     CameraSnapshot camera;
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;

@@ -149,7 +149,8 @@ bool ParticleFieldInModule(
             field == "collision.capsule.a" ||
             field == "collision.capsule.b" ||
             field == "collision.capsule.radius" ||
-            field == "collision.sdf.path";
+            field == "collision.sdf.path" ||
+            field == "collision.mesh.path";
     if (module == "life")
         return field == "lifetime" || field == "lifetimeScaleKeys" ||
             field == "size" ||
@@ -3155,9 +3156,10 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
     {
         const std::string name = field.value("field", std::string());
         if (!ParticleFieldInModule(particleModule, name)) continue;
-        // SDF 路径只在碰撞类型为 sdf 时有意义；保留能力表字段以便切换
+        // 路径只在对应碰撞类型下有作者意义；保留能力表字段以便切换
         // 类型后立即出现，但默认不把无关路径显示成可编辑行。
-        if (name == "collision.sdf.path")
+        if (name == "collision.sdf.path" ||
+            name == "collision.mesh.path")
         {
             std::string collisionType = "none";
             if (flattenedEmitter.contains("collision") &&
@@ -3166,7 +3168,8 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
                 collisionType = flattenedEmitter.at("collision").value(
                     "type", std::string("none"));
             }
-            if (collisionType != "sdf") continue;
+            const bool meshPath = name == "collision.mesh.path";
+            if (collisionType != (meshPath ? "mesh" : "sdf")) continue;
         }
         // 逐帧表由专用表格编辑；跳过 JSON 文本框，避免两套控件写同一字段。
         if (particleModule == "flipbook" &&

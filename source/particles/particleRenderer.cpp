@@ -501,11 +501,14 @@ void ParticleRenderer::InvalidatePipelines(
 
 const ParticleSystemAsset&
 ParticleRenderer::ResolveParticleSystemAsset(
-    const ParticleSystemSnapshot& snapshot)
+    const ParticleSystemSnapshot& snapshot,
+    const std::unordered_map<std::string, float>& runtimeParameters)
 {
     const ParticleSystemAsset& base = snapshot.asset;
-    // 只有“带用户参数的 v2 作者 JSON + 运行时覆盖”才需要重解析。
-    if (!base.authoringJson || snapshot.userParameters.empty())
+    // 只有“带参数的 v2 作者 JSON + 该资产实际引用的运行时值”才需要重解析。
+    const std::unordered_map<std::string, float> effectiveParameters =
+        FilterParticleRuntimeParameters(base, runtimeParameters);
+    if (!base.authoringJson || effectiveParameters.empty())
     {
         return base;
     }
@@ -514,7 +517,7 @@ ParticleRenderer::ResolveParticleSystemAsset(
         snapshot.name + "|" + base.sourcePath;
     const uint64_t signature =
         BuildParticleUserParameterSignature(
-            snapshot.userParameters);
+            effectiveParameters);
     const nlohmann::json* authoring = base.authoringJson.get();
 
     auto entryIt = userParameterCache.find(cacheKey);
@@ -556,7 +559,10 @@ ParticleRenderer::ResolveParticleSystemAsset(
         // 保留原始作者 JSON 指针，下一次覆盖仍在原始模块结构上合并。
         ParticleSystemAsset parsed =
             ParseParticleAssetWithRuntimeParameters(
-                base, snapshot.userParameters);
+                base,
+                effectiveParameters,
+                std::filesystem::path(
+                    CommonFunction::GetResourcePath()));
         entry.asset = std::move(parsed);
         entry.parsed = true;
     }
@@ -613,9 +619,14 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         // 运行时 userParameters 覆盖可能改变展平后的数值字段；只有签名/
         // 作者指针变化时才重新 ParseJson，失败保留 last-good。
         const ParticleSystemAsset* resolvedAsset = &snapshot.asset;
+        const auto runtimeParameters =
+            CombineParticleRuntimeParameters(
+                renderScene.particleDataChannels,
+                snapshot.userParameters);
         try
         {
-            resolvedAsset = &ResolveParticleSystemAsset(snapshot);
+            resolvedAsset = &ResolveParticleSystemAsset(
+                snapshot, runtimeParameters);
         }
         catch (const std::exception& exception)
         {
@@ -741,8 +752,9 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                     emitter.sortParticles ||
                 emitterIt->second->asset.materialInstancePath !=
                     emitter.materialInstancePath ||
-                emitterIt->second->asset.collisionSdfPath !=
-                    emitter.collisionSdfPath ||
+                ParticleCollisionResourceIdentityChanged(
+                    emitterIt->second->asset,
+                    emitter) ||
                 emitterIt->second->textureSourceKey !=
                     textureSourceKey ||
                 emitterIt->second->meshSourceKey !=
@@ -3055,7 +3067,7 @@ void ParticleRenderer::RecordSimulation(
             {
                 if (light.type != LightSnapshotType::Directional)
                     continue;
-                // 零方向/零光色会让 Lambert 结果退化成黑块；文档承诺回退 unlit，
+                // 零方向/零光色会让 GGX 结果退化成黑块；文档承诺回退 unlit，
                 // 因此在启用前同时检查方向与颜色，而不是只检查存在性。
                 if (light.direction.squaredNorm() <= 1.0e-8f ||
                     light.color.maxCoeff() <= 0.0f)

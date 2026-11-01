@@ -418,6 +418,61 @@ TEST_F(ScriptGameplayTest, CSharpParticleEmitterBudgetAttachmentAndEvents)
     EXPECT_FALSE(State("api")["failed"].get<bool>());
 }
 
+TEST_F(ScriptGameplayTest, CSharpParticleDataChannelsRoundTripAndSurviveReload)
+{
+    ASSERT_TRUE(world->SetParticleDataChannel("Seed", 1.25f));
+    Prepare(Json::array({
+        GameplayBlueprint("data", "ScriptFixtures.ParticleDataBlueprint")}));
+    Play();
+
+    // BeginPlay 已经通过 start 请求收到 Seed，并把 Wind/Heat 写入 World。
+    float value = 0.0f;
+    ASSERT_TRUE(world->GetParticleDataChannel("Seed", value));
+    EXPECT_FLOAT_EQ(value, 1.25f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 2.5f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Heat", value));
+    EXPECT_FLOAT_EQ(value, -4.0f);
+
+    // 首个 tick 清除 Seed、覆盖 Wind；命令在 native 命令点同步应用。
+    Tick();
+    EXPECT_FALSE(world->GetParticleDataChannel("Seed", value));
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+
+    VL::WorldSnapshotBuilder builder;
+    VL::WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world->GetGeneration();
+    auto snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const VL::WorldSnapshot& snapshot = snapshotResult.Value();
+    ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Wind"), 3.5f);
+    ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Heat"), -4.0f);
+    EXPECT_FALSE(snapshot.particleDataChannels.count("Seed"));
+
+    // 热重载只交换脚本 owner；World 通道必须原样保留，托管镜像由
+    // migration snapshot 恢复，OnReload 能立即读到 3.5。
+    std::string error;
+    ASSERT_TRUE(runtime.ReloadAssembly(*world, error)) << error;
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+    EXPECT_FALSE(world->GetParticleDataChannel("Seed", value));
+    Tick();
+    Tick();
+    EXPECT_FALSE(State("data")["failed"].get<bool>());
+
+    // Stop 释放托管上下文，但不拥有 World 通道；下一 Play 的新上下文
+    // 通过 start 请求重新拿到同一份值，而不是从空表开始。
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Editing, error))
+        << error;
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Heat", value));
+    EXPECT_FLOAT_EQ(value, -4.0f);
+    Play();
+    EXPECT_FALSE(State("data")["failed"].get<bool>());
+}
+
 TEST_F(ScriptGameplayTest, RuntimeComponentFailedCallbackDropsEntireStructureQueue)
 {
     auto owner = GameplayBlueprint("owner", "ScriptFixtures.RuntimeComponentsBlueprint");

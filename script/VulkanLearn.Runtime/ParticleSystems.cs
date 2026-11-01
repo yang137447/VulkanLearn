@@ -59,6 +59,26 @@ public sealed class ParticleEventSubscription : IDisposable
     public void Dispose() => Interlocked.Exchange(ref cancel, null)?.Invoke();
 }
 
+// World 级命名标量通道。它不是某个粒子实例的 userParameters：同一 Play 内
+// 所有 Blueprint 读取同一份值；Set/Clear 通过 owner 校验后的 particleCommands
+// 写回 active World，Get 读取最近一次 native 快照并在本帧命令上即时可见。
+public sealed class ParticleDataChannels
+{
+    internal Action<string, float?> ChangeRequest = null!;
+    internal Func<string, float?> ValueQuery = null!;
+
+    public void Set(string name, float value) => ChangeRequest(name, value);
+    public void Clear(string name) => ChangeRequest(name, null);
+    public float? Get(string name) => ValueQuery(name);
+
+    public bool TryGet(string name, out float value)
+    {
+        var found = ValueQuery(name);
+        value = found ?? 0.0f;
+        return found.HasValue;
+    }
+}
+
 // 粒子实例的托管视图。所有成员都通过所属 Blueprint 的 GT 回调委托访问，
 // IsAlive 只反映本地 live 表，不在此处查询原生 World。
 public sealed class ParticleSystem
@@ -156,6 +176,8 @@ public sealed class ParticleSystems
     internal Func<string, Vector3, Vector3?, Vector3?, ParticleSystem> SpawnRequest = null!;
     internal Func<string, ParticleSystem?> FindRequest = null!;
     internal Action DestroyAllRequest = null!;
+
+    public ParticleDataChannels Data { get; internal set; } = new();
 
     public ParticleSystem Spawn(string assetPath, Vector3 position,
         Vector3? rotation = null, Vector3? scale = null) =>

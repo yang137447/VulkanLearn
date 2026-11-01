@@ -150,6 +150,10 @@ public static partial class NativeBridge
             case "start":
                 context.Playing = true;
                 SelectDefaultCamera(context);
+                // World 全局数据通道先于 BeginPlay 下发，新 Play 上下文
+                // 可在首个回调里读到 Console/上一上下文留下的值。
+                if (request.TryGetProperty("particleDataChannels", out var startParticleData))
+                    context.Services.ApplyParticleDataChannels(startParticleData);
                 foreach (var instance in context.Instances)
                 {
                     instance.Started = instance.Blueprint.Enabled && !instance.Blueprint.PendingDestroy;
@@ -181,6 +185,8 @@ public static partial class NativeBridge
                     context.Services.ApplyParticleTelemetry(particleTelemetry);
                 if (request.TryGetProperty("particleEvents", out var particleEvents))
                     context.Services.ApplyParticleEvents(particleEvents);
+                if (request.TryGetProperty("particleDataChannels", out var particleDataChannels))
+                    context.Services.ApplyParticleDataChannels(particleDataChannels);
                 if (request.TryGetProperty("assetUnloads", out var assetUnloads)) context.Services.ForgetAssets(assetUnloads);
                 if (request.TryGetProperty("assetResults", out var assetResults)) context.Services.CompleteAssets(assetResults);
                 if (context.Time.TimeScale > 0) context.Services.RunTimers();
@@ -234,6 +240,7 @@ public static partial class NativeBridge
                     Callback(context, instance, "EndPlay", 0, (EndPlayReason)request.GetProperty("reason").GetInt32());
                     RunScriptComponents(context, instance, "EndPlay", 0, (EndPlayReason)request.GetProperty("reason").GetInt32());
                 }
+                context.Services.ClearParticleDataChannels();
                 Contexts.Remove(id);
                 context.Released = true;
                 context.InstanceIds.Clear();

@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "particles/particleBudget.h"
+#include "particles/particleSdf.h"
 #include "particles/particleUserParameterOverride.h"
 
 namespace
@@ -64,6 +65,194 @@ TEST(ParticleUserParameterOverride, SignatureIsOrderIndependentAndChangesWithVal
     EXPECT_NE(
         BuildParticleUserParameterSignature(first),
         BuildParticleUserParameterSignature(changed));
+}
+
+TEST(ParticleUserParameterOverride, DataChannelsAreBaseAndInstanceOverridesWin)
+{
+    const std::unordered_map<std::string, float> channels = {
+        {"Wind", 2.0f}, {"OnlyChannel", 3.0f}};
+    const std::unordered_map<std::string, float> instance = {
+        {"Wind", 7.0f}, {"OnlyInstance", 4.0f},
+        {"Bad", std::numeric_limits<float>::quiet_NaN()}};
+
+    const auto combined =
+        CombineParticleRuntimeParameters(channels, instance);
+    EXPECT_FLOAT_EQ(combined.at("Wind"), 7.0f);
+    EXPECT_FLOAT_EQ(combined.at("OnlyChannel"), 3.0f);
+    EXPECT_FLOAT_EQ(combined.at("OnlyInstance"), 4.0f);
+    EXPECT_EQ(combined.find("Bad"), combined.end());
+}
+
+TEST(ParticleUserParameterOverride, DataChannelValuesReparseModuleFields)
+{
+    const nlohmann::json document = nlohmann::json{
+        {"name", "PS_data_channel"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", nlohmann::json{{"Wind", 1.0f}}},
+        {"modules", nlohmann::json::array({
+            nlohmann::json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"maxParticles", 32}}}},
+            nlohmann::json{
+                {"type", "forces.wind"},
+                {"enabled", true},
+                {"fields", nlohmann::json{
+                    {"wind", nlohmann::json::array(
+                        {"$Wind", 0.0f, 0.0f})}}}}
+        })}
+    };
+    const ParticleSystemAsset base = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_data_channel.json");
+    const auto combined = CombineParticleRuntimeParameters(
+        {{"Wind", 7.0f}}, {});
+    const ParticleSystemAsset parsed =
+        ParseParticleAssetWithRuntimeParameters(base, combined);
+    ASSERT_EQ(parsed.emitters.size(), 1u);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].wind.x(), 7.0f);
+}
+
+TEST(ParticleUserParameterOverride, FilterKeepsOnlyReferencedChannels)
+{
+    const nlohmann::json document = nlohmann::json{
+        {"name", "PS_reference_filter"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", nlohmann::json{{"Wind", 1.0f}}},
+        {"modules", nlohmann::json::array({
+            nlohmann::json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"maxParticles", 32}}}},
+            nlohmann::json{
+                {"type", "forces.wind"},
+                {"enabled", true},
+                {"fields", nlohmann::json{
+                    {"wind", nlohmann::json::array(
+                        {"$Wind", 0.0f, 0.0f})}}}}
+        })}
+    };
+    const ParticleSystemAsset base = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_reference_filter.json");
+    ASSERT_EQ(base.userParameterReferences.size(), 1u);
+    EXPECT_EQ(base.userParameterReferences.count("Wind"), 1u);
+
+    const std::unordered_map<std::string, float> all = {
+        {"Wind", 3.0f}, {"Unused", 9.0f}};
+    const auto filtered =
+        FilterParticleRuntimeParameters(base, all);
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_FLOAT_EQ(filtered.at("Wind"), 3.0f);
+
+    EXPECT_TRUE(
+        FilterParticleRuntimeParameters(
+            base, {{"Unused", 9.0f}}).empty());
+}
+
+TEST(ParticleUserParameterOverride, RuntimeReparseReusesCollisionSdf)
+{
+    const nlohmann::json document = nlohmann::json{
+        {"name", "PS_reuse_collision"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", nlohmann::json{{"Wind", 1.0f}}},
+        {"modules", nlohmann::json::array({
+            nlohmann::json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"maxParticles", 32}}}},
+            nlohmann::json{
+                {"type", "collision.analytic"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"collision", nlohmann::json{
+                    {"type", "mesh"},
+                    {"mesh", nlohmann::json{
+                        {"path", "Meshes/does_not_exist.json"}}},
+                    {"radius", 0.0}}}}}},
+            nlohmann::json{
+                {"type", "forces.wind"},
+                {"enabled", true},
+                {"fields", nlohmann::json{
+                    {"wind", nlohmann::json::array(
+                        {"$Wind", 0.0f, 0.0f})}}}}
+        })}
+    };
+    auto sdf = std::make_shared<ParticleSdfAsset>();
+    sdf->sourceIdentity = "mesh|Meshes/does_not_exist.json|10|20";
+    sdf->distances = {0.0f};
+    ParticleSystemAsset base;
+    base.name = "PS_reuse_collision";
+    base.version = 2;
+    base.sourcePath = "Maps/SC_test/PS_reuse_collision.json";
+    base.userParameters = {{"Wind", 1.0f}};
+    base.userParameterReferences = {"Wind"};
+    base.authoringJson =
+        std::make_shared<const nlohmann::json>(document);
+    ParticleEmitterAsset emitter;
+    emitter.name = "emitter0";
+    emitter.collisionType = "mesh";
+    emitter.collisionMeshPath = "Meshes/does_not_exist.json";
+    emitter.collisionSdf = sdf;
+    base.emitters.push_back(emitter);
+
+    const ParticleSystemAsset parsed =
+        ParseParticleAssetWithRuntimeParameters(
+            base, {{"Wind", 4.0f}});
+    ASSERT_EQ(parsed.emitters.size(), 1u);
+    EXPECT_EQ(parsed.emitters[0].collisionSdf, sdf);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].wind.x(), 4.0f);
+}
+
+TEST(ParticleUserParameterOverride, RuntimeReparseRejectsRadiusAboveMeshPadding)
+{
+    const nlohmann::json document = nlohmann::json{
+        {"name", "PS_reuse_padding"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", nlohmann::json{{"Radius", 1.0f}}},
+        {"modules", nlohmann::json::array({
+            nlohmann::json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"maxParticles", 32}}}},
+            nlohmann::json{
+                {"type", "collision.analytic"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"collision", nlohmann::json{
+                    {"type", "mesh"},
+                    {"mesh", nlohmann::json{
+                        {"path", "Meshes/padding_cube.json"}}},
+                    {"radius", "$Radius"}}}}}}
+        })}
+    };
+    auto sdf = std::make_shared<ParticleSdfAsset>();
+    sdf->sourceIdentity = "mesh|Meshes/padding_cube.json|10|20";
+    sdf->sourcePadding = 5.0f;
+    sdf->distances = {0.0f};
+    ParticleSystemAsset base;
+    base.name = "PS_reuse_padding";
+    base.version = 2;
+    base.sourcePath = "Maps/SC_test/PS_reuse_padding.json";
+    base.userParameters = {{"Radius", 1.0f}};
+    base.userParameterReferences = {"Radius"};
+    base.authoringJson =
+        std::make_shared<const nlohmann::json>(document);
+    ParticleEmitterAsset emitter;
+    emitter.name = "emitter0";
+    emitter.collisionType = "mesh";
+    emitter.collisionMeshPath = "Meshes/padding_cube.json";
+    emitter.collisionRadius = 1.0f;
+    emitter.collisionSdf = sdf;
+    base.emitters.push_back(emitter);
+
+    EXPECT_NO_THROW(
+        (void)ParseParticleAssetWithRuntimeParameters(
+            base, {{"Radius", 5.0f}}));
+    EXPECT_THROW(
+        (void)ParseParticleAssetWithRuntimeParameters(
+            base, {{"Radius", 6.0f}}),
+        std::invalid_argument);
 }
 
 TEST(ParticleUserParameterOverride, MergeOverwritesAndAddsRootParameters)

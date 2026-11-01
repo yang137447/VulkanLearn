@@ -281,12 +281,22 @@ bool SampleSdfCollision(
 {
     distance = 0.0;
     normal = vec3(0.0);
+    // 防御未上传或已退休的旧 SDF：零 bounds / 非法分辨率不能进入
+    // SdfVoxel 的索引计算，否则会越界读取 storage buffer。
+    vec3 rawResolution = frame.collisionSdfResolution.xyz;
+    if (any(lessThan(rawResolution, vec3(2.0))) ||
+        any(lessThanEqual(
+            frame.collisionSdfBoundsMax.xyz,
+            frame.collisionSdfBoundsMin.xyz)))
+    {
+        return false;
+    }
     if (any(lessThan(position, frame.collisionSdfBoundsMin.xyz)) ||
         any(greaterThan(position, frame.collisionSdfBoundsMax.xyz)))
     {
         return false;
     }
-    vec3 resolution = max(frame.collisionSdfResolution.xyz, vec3(2.0));
+    vec3 resolution = max(rawResolution, vec3(2.0));
     vec3 cell = (frame.collisionSdfBoundsMax.xyz -
         frame.collisionSdfBoundsMin.xyz) /
         max(resolution - vec3(1.0), vec3(1.0));

@@ -63,7 +63,8 @@ Vulkan 硬件显存带宽计数器。全局 alpha billboard 池的对应值在�
 overdraw 依赖 `fragmentStoresAndAtomics`；设备缺失该能力时初始化报错。
 
 `drawnVertices` 按当前 draw 路径估算：billboard 为 `maxParticles * 6`，
-ribbon 为 `maxParticles * ribbonSegments * 6`；
+ribbon 为 `maxParticles * ribbonSegments * 6`，mesh 为
+`meshIndexCount * maxParticles`；
 `estimatedDrawnVertices` 只累加未被 cull 的发射器。位置/速度是模拟空间原始值：
 `localSpace: true` 时是发射器局部坐标，否则是世界坐标。这是 CPU 回读统计，
 GPU 字段与 `particlestats` 同源（particle graphics pass 的 timestamp）；
@@ -198,8 +199,25 @@ particleuser <system> clear <key>
   World 值为 0 表示 World 不设总量上限。未设实例上限的实例按名称排序稳定分配
   World 剩余总量；实例显式上限优先，且允许超过 World 总量。`emitterScale` 范围
   `[0, 16]`，实例值与 World 值相乘。预算只存在于快照/渲染器消费端，不写资产。
-- `particleuser` 的 key 为 `1..64` 字符且每实例最多 64 个；value 必须有限且
+- `particleuser` 的 key 为 `1..64` UTF-8 字节且每实例最多 64 个；value 必须有限且
   `|value| <= 1e6`。覆盖存入快照 `userParameters`，不合并作者 `PS_*.json`。
+
+### Particle Data Channels
+
+```text
+particledata <name> <value>
+particledata <name> clear
+particledata
+```
+
+数据通道是当前 active World 的全局命名标量表，与逐实例 `userParameters` 是
+两个命名空间：它最多 64 项，key 为 `1..64` UTF-8 字节且不含 NUL，value 必须有限且
+`|value| <= 1e6`。`particledata` 不带参数时按 key 排序打印当前表的 JSON；
+`clear` 只删除已存在的项，对缺失 key 报“未找到”而不是隐式创建。命令在
+Console 投递前与执行端各校验一次，非法 key/value 或超过上限不会产生 World
+副作用。每个快照通过 `WorldSnapshot::particleDataChannels` 发布冻结副本；
+渲染器在 v2 模块 `$Name` 重解析时把该全局表作为基底，再由逐实例
+`userParameters` 覆盖同名项。
 
 ## Particle Telemetry
 

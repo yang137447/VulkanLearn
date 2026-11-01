@@ -170,3 +170,67 @@ TEST_F(ParticleMeshReferenceTest, ServiceOpenRejectsInvalidMeshReferences)
             std::string::npos) << result.message;
     }
 }
+
+TEST_F(ParticleMeshReferenceTest, ServiceOpenRejectsInvalidCollisionReferences)
+{
+    using namespace VL::Editor;
+    WriteFile(root / "Meshes" / "cube.obj");
+    struct Case
+    {
+        std::string type;
+        std::string path;
+        std::string expected;
+    };
+    const std::vector<Case> cases{
+        {"mesh", "../SM_cube.json", "traversal"},
+        {"mesh", "Meshes/missing.json", "missing file"},
+        {"sdf", "Meshes/cube.obj", "must use .json"}};
+
+    uint64_t commandId = 100;
+    for (const Case& testCase : cases)
+    {
+        const std::filesystem::path asset =
+            root / ("PS_collision_" +
+                std::to_string(commandId) + ".json");
+        {
+            std::ofstream file(asset, std::ios::binary);
+            file << nlohmann::json{
+                {"name", "PS_collision"},
+                {"type", "particleSystem"},
+                {"version", 2},
+                {"modules", nlohmann::json::array({
+                    nlohmann::json{
+                        {"type", "emitter"},
+                        {"enabled", true},
+                        {"fields", nlohmann::json{{"maxParticles", 8}}}},
+                    nlohmann::json{
+                        {"type", "collision.analytic"},
+                        {"enabled", true},
+                        {"fields", nlohmann::json{{"collision",
+                            nlohmann::json{
+                                {"type", testCase.type},
+                                {testCase.type, nlohmann::json{
+                                    {"path", testCase.path}}}}}}}}
+                })}
+            }.dump(4);
+        }
+        AssetDocumentService service(
+            root,
+            EditorAssetDocumentKind::ParticleSystem);
+        EditorCommandEnvelope get;
+        get.commandId = commandId++;
+        get.source = EditorCommandSource::RuntimeTest;
+        get.type = EditorCommandType::GetParticleDocument;
+        get.payload = MaterialInstanceAssetPathPayload{
+            asset.filename().generic_string()};
+        const EditorCommandResult result = service.Execute(get);
+        EXPECT_EQ(result.status, EditorCommandStatus::Failed)
+            << result.message;
+        EXPECT_EQ(result.errorCode, EditorErrorCode::ValidationFailed)
+            << result.message;
+        EXPECT_NE(result.message.find("collision."), std::string::npos)
+            << result.message;
+        EXPECT_NE(result.message.find(testCase.expected), std::string::npos)
+            << result.message;
+    }
+}

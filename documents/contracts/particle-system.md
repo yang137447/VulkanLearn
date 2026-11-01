@@ -49,7 +49,8 @@
   `shape.type`）、`spawn.velocity`、
   `update.lifetime`、`update.color`、`update.size`、`update.rotation`、`forces.gravity`、
   `forces.drag`、`forces.curlNoise`、`forces.vortex`、`forces.attractor`、
-  `forces.wind`、`collision.analytic`、`flipbook`、`lod`、`curves`、`bounds`、`culling`。
+  `forces.wind`、`collision.analytic`、`events`、`flipbook`、`lod`、`curves`、`bounds`、
+  `culling`。
   未知类型直接拒绝，避免拼写错误静默变成空模块。
 - `fields` 与 v1 emitter 字段同名并递归合并；两个启用模块写同一字段且值不同会拒绝。
   v2 的模块顺序目前只属于作者层，runtime 消费展平后的 `ParticleEmitterAsset`，不重新解释顺序。
@@ -74,9 +75,11 @@ SC_*.json particleSystem
     -> compute 模拟 -> particle pass billboard/ribbon/mesh 合成
 ```
 
-`ParticleSystemAsset` 是 CPU 冻结值；运行时不再重新解析作者 JSON。`sourcePath` 使用相对资源根的
-逻辑路径。场景对象仍只引用一个 PS 资产；`ParticleRenderer` 把每个子发射器展开成独立的
-GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定。GPU 模型矩阵是
+`ParticleSystemAsset` 是 CPU 冻结值；没有运行时覆盖时不再重新解析作者 JSON。v2 资产只在
+其模块实际引用过的 `$Name` 值发生变化时重解析，并按 collision type + path 复用已加载的
+SDF/网格碰撞数据。`sourcePath` 使用相对资源根的逻辑路径。场景对象仍只引用一个 PS 资产；
+`ParticleRenderer` 把每个子发射器展开成独立的 GPU emitter，身份由场景对象名、`assetPath`
+与 emitter 名共同决定。GPU 模型矩阵是
 `sceneObjectModel * translation(emitter.localPosition)`，局部偏移单位是 cm。
 
 ## 场景 actor 集成
@@ -154,6 +157,21 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   粒子池不清空、不 prewarm、不排序、不 dispatch、不绘制，重新启用后从原状态继续，
   不重建 GPU 池。它不删除资产中的发射器，也不改变发射器顺序。
 - `reset`：把三项覆盖恢复为默认值，不影响 `particlerestart` 的模拟时间/预热语义。
+
+### Particle Data Channels
+
+World 另维护一份与逐实例 `userParameters` 分开的全局命名标量表
+`particleDataChannels`，最多 64 项；key 为 `1..64` UTF-8 字节且不含 NUL，value 必须
+有限且 `|v| <= 1e6`。Console `particledata` 直接写入当前 active World；C#
+`Particles.Data` 先校验所属 Blueprint owner。通道不写资产，World 表不随 Play/Stop 清除；
+Stop 的 EndPlay 回调仍可读取托管镜像，整个 Play 上下文 release 后才释放；单个 owner
+Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 共享的全局镜像。快照通过
+`WorldSnapshot::particleDataChannels` 发布冻结副本。
+
+渲染器在 v2 模块 `$Name` 重解析时先读全局通道，再用该粒子实例的运行时
+`userParameters` 覆盖同名项。作者资产应声明同名默认 `userParameters`，否则加载期
+仍按未知参数拒绝；这样拼写错误不会静默变成 0。缓存签名只包含作者模块实际引用的
+`$Name` 依赖，通道更新只让引用它的系统重解析；重解析复用已加载的 SDF/网格碰撞数据。
 
 ## GPU 布局
 
@@ -447,10 +465,11 @@ spawnRate = asset.spawnRate * scale
 超过档位阈值时缩放立即生效；可见性距离淡出仍由独立的 `maxDrawDistance`/`fadeDistance`
 控制。
 
-## 平面、盒体与胶囊碰撞
+## 碰撞
 
 每个 emitter 的可选 `collision` 对象描述世界空间碰撞。`type` 为 `none`（默认）、`plane`、
-`box` 或 `capsule`；`none` 时 compute 在读取类型后直接返回，不执行距离计算、求交或分支主体。
+`box`、`capsule`、`sdf` 或 `mesh`；`none` 时 compute 在读取类型后直接返回，不执行距离计算、
+求交或分支主体。`sdf` 与 `mesh` 共用有限体素 SDF 路径。
 
 - `collision.plane.normal`：世界空间法线，解析时必须有限且长度 `> 1e-6`，解析后归一化。
 - `collision.plane.offset`：沿法线的世界距离（cm），平面方程为
@@ -463,10 +482,10 @@ spawnRate = asset.spawnRate * scale
 - `collision.radius`：粒子碰撞球半径（cm），默认 `0`，必须非负。
 - `collision.killOnCollision`：命中后把 `age` 设为 `lifetime`，粒子在写回后死亡；默认 `false`。
 - `collision.ccd`：是否对运行时帧积分做连续碰撞子步，默认 `false`；只对
-  `plane`/`box`/`capsule` 生效。
+  `none` 以外的碰撞类型生效。
 
-所有碰撞数值必须是有限数，NaN/Inf 在加载与编辑器写入阶段拒绝。`type` 只能是上述四个值。
-未使用分支的字段仍完整校验，便于作者在四种类型间切换时复用配置。
+所有碰撞数值必须是有限数，NaN/Inf 在加载与编辑器写入阶段拒绝。`type` 只能是上述六个值。
+未使用分支的字段仍完整校验，便于作者在类型间切换时复用配置。
 
 平面碰撞使用粒子球的外扩表面：
 
@@ -629,14 +648,19 @@ GPU 写回 instanceCount 的 indirect draw。
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
-  `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world" }`。
+  `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
+  "materialInstancePath": "..."? }`。
   `path` 必须是资源根内、相对路径、无 `..` 的 `.json`；service 保存/validate 还会检查
   文件存在与 resource root 边界。`scale` 三个分量必须有限且向量非零；`alignment` 只能是
-  `world`、`camera` 或 `velocity`。mesh v1 不允许与 `localSpace: true` 组合。
-- `meshLighting`：默认 `true`，仅 `renderMode: "mesh"` 使用。开启时按场景主方向光做单次
-  Lambert 近似；关闭时 mesh 仍走 unlit 输出。billboard 与 ribbon 忽略该字段。
+  `world`、`camera` 或 `velocity`。`materialInstancePath` 可选，只读取
+  `u_baseColor/u_emissive/u_emissiveStrength/u_roughness/u_metallic` 数值子集。
+  mesh v1 不允许与 `localSpace: true` 组合。
+- `meshLighting`：默认 `true`，仅 `renderMode: "mesh"` 使用。开启时按场景主方向光计算
+  单方向光 GGX/Smith/Fresnel 直接光并采样 CSM；关闭时 mesh 仍走 unlit 输出。
+  billboard 与 ribbon 忽略该字段。
 - `meshAmbient`：默认 `0.2`，仅 `renderMode: "mesh"` 且 `meshLighting: true` 时参与光照。
-  范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity 在加载和编辑器写入阶段都会被拒绝。
+  它乘 baseColor 作为常量环境项，范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity 在加载和
+  编辑器写入阶段都会被拒绝。
 - `rotation`：billboard 初始旋转角，单位度，任意有限数，默认 `0`。
 - `rotationSpeed`：随时间累加的旋转速度，单位度/秒，默认 `0`，范围 `[-3600, 3600]`。
 - `rotationRandom`：默认 `false`；为 `true` 时每个粒子用稳定相位叠加 `[0,360)` 度的初始角。
@@ -666,7 +690,7 @@ GPU 写回 instanceCount 的 indirect draw。
   交线附近的 alpha 淡出。
 - `softParticleDistance`：cm，默认 `25`，范围 `[0, 10000]`。片元用 `clamp((sceneDepth -
   particleDepth) / softParticleDistance, 0, 1)` 缩放 alpha。
-- `sortParticles`：默认 `false`。alpha billboard 必须为 `true`，否则资产校验以
+- `sortParticles`：默认 `false`。所有 alpha 发射器（billboard/ribbon/mesh）必须为 `true`，否则资产校验以
   “alpha blend requires sortParticles=true” 拒绝；每帧在 compute 中按相机 view-space
   深度执行 GPU bitonic sort。additive 发射器应保持关闭，排序不会改变加法结果。
 - `blend: "additive" | "alpha"`。
@@ -678,10 +702,10 @@ GPU 写回 instanceCount 的 indirect draw。
 - `minScreenSize`：px，默认 `0`（关闭）。发射器包围球的透视投影直径小于阈值时剔除。
 - `maxScreenSize`：px，默认 `0`（关闭）。逐 billboard 的屏幕半边长超过阈值时，只缩小
   该 billboard 的世界半边长；粒子中心位置、寿命和曲线数据不变。
-- `collision`：可选世界空间碰撞对象，字段为 `type`（`none`/`plane`/`box`/`capsule`）、
+- `collision`：可选世界空间碰撞对象，字段为 `type`（`none`/`plane`/`box`/`capsule`/`sdf`/`mesh`）、
   `plane.normal`、`plane.offset`、`box.min`、`box.max`、`capsule.a`、`capsule.b`、
-  `capsule.radius`、`bounce`、`friction`、`radius`、`killOnCollision` 与 `ccd`。
-  平面/盒体/胶囊公式、默认值和边界见「平面、盒体与胶囊碰撞」。
+  `capsule.radius`、`sdf.path`、`mesh.path`、`bounce`、`friction`、`radius`、
+  `killOnCollision` 与 `ccd`。各类型公式、默认值和边界见「碰撞」。
 
 `maxParticles` 上限 65536；`spawnRate` 上限 100000。球体采样使用 `cbrt` 半径分布，避免粒子堆在球心。
 排序开启时 `maxParticles` 上限为 4096。
@@ -926,8 +950,8 @@ gl_Position   = viewProjection * vec4(world, 1)
 `rotation`/`rotationSpeed`/`rotationRandom` 绕当前朝向基的局部 Y 轴（`basis[1]`）应用；
 `rotationRandom` 使用原始粒子索引的稳定小数相位。mesh v1 **不消费 size/sizeKeys 曲线**，
 视觉尺寸只由网格几何与 `mesh.scale` 决定。颜色为 `EvaluateColorCurve(lifeT) * 网格顶点色`，
-再乘 `opacity` 与距离淡出；片元沿用 billboard 的 `sceneDepth` 遮挡与软粒子淡出，不接材质
-系统、不采样粒子纹理。
+materialInstancePath 存在时再乘 MI 的 `u_baseColor`；片元沿用 billboard 的 `sceneDepth`
+遮挡与软粒子淡出，不接入完整 Material 图、纹理采样、法线贴图或宏变体。
 
 每个实例固定索引数 `meshIndexCount`，draw call 为
 `drawIndexedIndirect`，GPU finalize 把实例数写为 alive。GPU 池里死亡粒子在该实例的所有顶点上输出
@@ -936,20 +960,28 @@ clip-space `z=2,w=1`，直接裁剪。统计的 `estimatedDrawnVertices` 对 mes
 
 ### Mesh 照明
 
-`meshLighting: true`（默认）时，mesh 片元用一个场景主方向光做单次 Lambert 近似：
+`meshLighting: true`（默认）时，mesh 片元用一个场景主方向光计算 GGX/Smith/Fresnel：
 
 ```text
-radiance = lightColor * (max(dot(N, L), 0) + meshAmbient)
-color    = EvaluateColorCurve(lifeT).rgb * 顶点色 * radiance
+alpha    = roughness * roughness
+D        = alpha^2 / (pi * ((N·H)^2 * (alpha^2 - 1) + 1)^2)
+G        = SmithSchlick(N·V, N·L, k=(roughness+1)^2/8)
+F        = F0 + (1 - F0) * (1 - V·H)^5
+direct   = (baseColor * (1 - metallic) / pi + D*G*F/(4*N·L*N·V)) * lightColor * N·L * shadow
+color    = direct + baseColor * meshAmbient + emissive * emissiveStrength
 ```
 
 - `L` 是场景主方向光方向的取反（指向光源），`lightColor` 使用线性空间颜色；
-  `N` 是实例旋转后的世界空间法线。
-- `meshAmbient` 默认 `0.2`，直接加到 `NdotL` 上；它不是环境光探针，也不做半球积分。
-- 只读取场景中的第一个方向光；光色不乘 `lux` 强度。场景没有方向光时回退为
-  unlit（`radiance = 1`），不会阻断渲染。
-- 这是着色近似，不是完整材质系统：不接 Material Instance、不采样法线贴图/金属度/粗糙度，
-  不产生镜面高光、阴影、间接光或逐光源循环。
+  `N` 是实例旋转后的世界空间法线，`V` 是相机方向，`H` 是半程向量。
+- `materialInstancePath` 提供 `baseColor/roughness/metallic/emissive` 数值子集；
+  没有 MI 时 `baseColor` 来自粒子颜色曲线，`roughness` 默认 `0.5`、`metallic` 默认 `0`。
+- `shadow` 来自 CSM `SampleParticleCsmShadow`，使用世界位置与法线；`meshAmbient` 默认 `0.2`
+  乘 baseColor，不是环境光探针或半球积分。
+- 只读取场景中的第一个方向光；光色不乘 `lux` 强度。场景没有方向光时回退为 unlit，
+  不会阻断渲染。
+- 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图、IBL、间接光、
+  逐光源循环或 alpha-to-coverage。CSM 阴影对 mesh 自动化生效；billboard/ribbon 通过
+  `billboardShadows` 开关走各自的 CSM 采样路径。
 - `meshLighting: false` 保持原有 unlit 路径；billboard 与 ribbon 完全忽略这两个字段。
 
 ### Curves 结构化编辑
@@ -1032,7 +1064,8 @@ gpuMaxMilliseconds, gpuSampleCount, emitters[]
 `sortParticles`、`localSpace`、`renderMode`、`bounds.center`、`bounds.radius`、
 `elapsedSeconds`、`drawnVertices`，以及最多 N 个活粒子（池顺序）的 `index`、`position`、
 `age`、`velocity`、`lifetime`。billboard 的 `drawnVertices = maxParticles * 6`；
-ribbon 为 `maxParticles * ribbonSegments * 6`；
+ribbon 为 `maxParticles * ribbonSegments * 6`；mesh 为
+`meshIndexCount * maxParticles`；
 `estimatedDrawnVertices` 只累计未 cull 的 emitter。被 cull 的 emitter 仍会被回读，
 但其模拟状态处于冻结状态。
 
@@ -1114,9 +1147,10 @@ undo/redo）、draft-live 预览、曲线/Flipbook 结构化编辑、逐帧时�
 碰撞、`localSpace`、`fixedBounds`、`burstInterval` 周期重触发、多级 LOD、发射器级跨发射器
 透明排序、逐粒子 billboard 旋转、ribbon 条带（3 段历史）、静态 mesh 实例化、纹理热切换、
 shader reload 提交后粒子管线重建、v2 模块栈与运行时用户参数、GPU 存活计数/indirect
-instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF 碰撞、发射器级运行时
-spawn/destroy/restart/enable、C# 事件与遥测、固定步长/确定性随机、mesh 材质数值子集与
-CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器 GPU 计时。
+instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角网格碰撞、全局标量
+Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
+确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
+GPU 计时。
 
 仍未完成：
 
@@ -1135,18 +1169,26 @@ CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器 GPU 
   `ParticleRenderer::DrainParticleEvents` / `RenderSystem::DrainParticleEvents` 回读；
   C# 通过 `ParticleSystem.Subscribe` 的 owner 级兴趣触发最多 10 Hz 的回读，
   EngineLoop 把事件写入 World 队列并在下一帧脚本 tick 交给 C#。该回读是无读游标的
-  最新帧快照，轮询之间可能截断/覆盖事件；没有 Niagara Data Channels、粒子级
-  spawn/destroy 或精确逐事件时间戳（桥使用批次模拟时间）。
+  最新帧快照，轮询之间可能截断/覆盖事件；没有 Niagara Data Channels 的读写拓扑、
+  粒子级 spawn/destroy 或精确逐事件时间戳（桥使用批次模拟时间）。全局标量数据通道
+  已单独实现，见「Particle Data Channels」。
   调试回读、CPU 帧级预算统计与 particle graphics pass 的 GPU timestamp 计时已支持
   （`particlestats`/`particledump` 的 `gpuMs` 与逐 emitter 项）；非全局 emitter
   的 GPU overdraw 通过 `particledump.overdrawFragments` 提供，带宽仅有读取规模估算。
   World 级和发射器级运行时增删都已支持，粒子级 spawn/destroy 仍没有。LOD 最多 4 档且只缩放连续发射预算，
   没有距离淡入淡出或渲染 LOD。
-- 碰撞支持无限平面、轴对齐盒体、胶囊与有限体素 SDF（`collision.type=sdf` +
-  `collision.sdf.path`，`particleSdf` 资产，负值表示实体内部，三线性采样 + 中心差分梯度）。
+- 碰撞支持无限平面、轴对齐盒体、胶囊、有限体素 SDF 和三角网格：
+  `collision.type=sdf` 用 `collision.sdf.path` 直接读 `particleSdf`；
+  `collision.type=mesh` 用 `collision.mesh.path` 读 `particleCollisionMesh`
+  并在加载期烘成有符号 SDF（最近三角形距离 + 固定非轴对齐射线奇偶判定）。
+  两者运行时都走同一 SDF GPU/CPU 路径，负值表示实体内部，三线性采样 + 中心差分梯度。
+  mesh 上限为 16384 顶点、4096 三角形、分辨率每轴 `[2,48]`，体素×三角形最多 64M；
+  输入必须是闭合、绕序一致的流形网格，开放/非流形/零面积三角形会在加载期拒绝。
+  `padding` 同时定义 SDF bounds 的扩展量，必须不小于 `collision.radius`，否则粒子球
+  接触面但中心仍在 bounds 外时会漏碰撞。
   `localSpace=true` 时碰撞体按发射器局部空间解释，允许与局部粒子坐标组合。
-  `collision.ccd` 提供最多 8 步子步；碰撞事件走同一 GPU 事件路径。没有三角网格碰撞、
-  碰撞回调或 `prewarm` 子步。
+  `collision.ccd` 提供最多 8 步子步；碰撞事件走同一 GPU 事件路径。没有运行时逐三角形
+  直接求交、碰撞回调或 `prewarm` 子步。
 - 排序仍是 bitonic；全局路径上限 8192，逐发射器路径上限 4096（4096 需要 78 个 pass）。
   每个 pass 都会写一次 `sortPass` UBO 并插入 compute→compute / transfer→compute barrier；
   未做多 pass 合批或 GPU 可变 dispatch。
@@ -1176,7 +1218,8 @@ CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器 GPU 
   预览 World，在缩略图会话内按 30 个有界固定步（默认 `1/60` 秒）推进 simulation 后
   绘制 particle pass；成图进入 GPU image token，不写磁盘缓存。离线渲染路径在导出结果中
   发布 CPU 粒子 overlay，支持 billboard/ribbon 的确定性固定步合成；mesh/SDF 纹理细节与
-  实时 Vulkan 路径不完全等价（见 rationale/particle-offline-rendering.md）。
+  实时 Vulkan 路径不完全等价；离线仿真消费作者资产并忽略 World 级 Data Channels 与
+  运行时 `userParameters`（见 rationale/particle-offline-rendering.md）。
 
 编辑器字段修改走标准 `particle.modify` 草稿命令，保存走 `particle.save`；
 `particle.get_document/get_capabilities/validate/revert/reload/close/undo/redo` 与
@@ -1198,8 +1241,18 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
   `fixedStepIndex` 而不是 wall clock。
 - `collision.type="sdf"` + `collision.sdf.path`：有限体素 SDF（`type=particleSdf`，
   分辨率每轴 `[2,64]`，`boundsMin/Max`，`distances` 为 x-fastest 的有符号距离数组）。
+- `collision.type="mesh"` + `collision.mesh.path`：`type=particleCollisionMesh`，
+  `vertices` + `indices` 三角网格；`resolution` 缺省 `[24,24,24]`（每轴 `[2,48]`），
+  `padding` 缺省 `5`（cm，且不得小于 `collision.radius`）。顶点直接处于模拟空间
+  （世界空间，或 `localSpace=true` 时的发射器局部空间），没有独立碰撞网格 TRS。
+  加载期烘成与 SDF 相同的有符号体素数据；网格必须闭合、绕序一致，每条无向边恰好
+  由两个三角形共享。自交网格不做修复，其奇偶内外判定由作者负责。路径按
+  resource-root-relative 解析并拒绝 traversal/绝对路径/越界 symlink。
 - v2 `userParameters` 中以 `$Name` 形式出现的字符串会在模块展平后被替换为同名数值；
   未知参数在加载期报错。
+- World 级 `particleDataChannels` 是全局命名标量表；运行时解析先以通道值为基底，
+  再用逐实例 `userParameters` 覆盖同名项。Console `particledata` 与 C#
+  `Particles.Data` 写同一个 active World 表，快照冻结后交给渲染器重解析。
 - 运行时预算：`Synchronize` 用 compact emitter 的稳定 `name` 匹配
   `ParticleSystemSnapshot::telemetry.emitters[]`，池容量取
   `min(authored maxParticles, budgetedMaxParticles)`；0 容量不进入 `desired`，

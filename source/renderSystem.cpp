@@ -1417,6 +1417,15 @@ void RenderSystem::RebuildSwapchainDependentResources()
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
+        // ShutdownFrameResources 会释放粒子管线、默认纹理和发射器池；
+        // resize 的同一事务内必须把它们恢复到新 render pass/swapchain 上，
+        // 否则下一帧之前 backend 资源计数不稳定，旧 render pass 也可能被
+        // 已销毁的粒子 pipeline 引用。
+        particleRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            renderGraph);
+        particleRenderer.Synchronize(currentRenderScene);
     }
     offlineDisplay.Initialize(*rendererBackend);
     if (offlineCoordinator) offlineCoordinator->Restart();

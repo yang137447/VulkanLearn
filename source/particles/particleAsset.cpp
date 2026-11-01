@@ -7,6 +7,7 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
@@ -15,7 +16,10 @@
 #include "particles/particleFlipbook.h"
 #include "particles/particleMaterial.h"
 #include "particles/particleMesh.h"
+#include "particles/particleMeshCollision.h"
+#include "particles/particleMeshReference.h"
 #include "particles/particleSdf.h"
+#include "particles/particleTextureReference.h"
 
 namespace VL
 {
@@ -204,7 +208,8 @@ Eigen::Vector3f NormalizeParticleCollisionPlaneNormal(
 void SubstituteParticleUserParameters(
     nlohmann::json& value,
     const std::unordered_map<std::string, float>& parameters,
-    const std::string& fieldPath)
+    const std::string& fieldPath,
+    std::unordered_set<std::string>* references = nullptr)
 {
     if (value.is_object())
     {
@@ -215,7 +220,8 @@ void SubstituteParticleUserParameters(
                 parameters,
                 fieldPath.empty()
                     ? child.key()
-                    : fieldPath + "." + child.key());
+                    : fieldPath + "." + child.key(),
+                references);
         }
         return;
     }
@@ -226,7 +232,8 @@ void SubstituteParticleUserParameters(
             SubstituteParticleUserParameters(
                 value.at(index),
                 parameters,
-                fieldPath + "[" + std::to_string(index) + "]");
+                fieldPath + "[" + std::to_string(index) + "]",
+                references);
         }
         return;
     }
@@ -240,6 +247,10 @@ void SubstituteParticleUserParameters(
         return;
     }
     const std::string name = reference.substr(1);
+    if (references != nullptr)
+    {
+        references->insert(name);
+    }
     const auto parameter = parameters.find(name);
     if (parameter == parameters.end())
     {
@@ -250,18 +261,64 @@ void SubstituteParticleUserParameters(
     value = parameter->second;
 }
 
+std::string BuildParticleCollisionSourceIdentity(
+    const std::string& reference,
+    const std::filesystem::path& resolvedPath)
+{
+    std::error_code sizeError;
+    const std::uintmax_t size =
+        std::filesystem::file_size(resolvedPath, sizeError);
+    std::error_code timeError;
+    const std::filesystem::file_time_type writeTime =
+        std::filesystem::last_write_time(resolvedPath, timeError);
+    std::string key = reference;
+    key += '|';
+    key += sizeError ? std::string("missing") : std::to_string(size);
+    key += '|';
+    key += timeError
+        ? std::string("missing")
+        : std::to_string(static_cast<long long>(
+            writeTime.time_since_epoch().count()));
+    // 文件大小/时间粒度不足以保证失效；碰撞资产只在加载时计算一次内容
+    // 摘要，避免运行时重解析再次读盘。
+    std::ifstream file(resolvedPath, std::ios::binary);
+    std::uint64_t contentHash = 1469598103934665603ull;
+    if (file.is_open())
+    {
+        char buffer[8192];
+        while (file.good())
+        {
+            file.read(buffer, sizeof(buffer));
+            const std::streamsize count = file.gcount();
+            for (std::streamsize index = 0; index < count; ++index)
+            {
+                contentHash ^= static_cast<std::uint8_t>(
+                    buffer[static_cast<size_t>(index)]);
+                contentHash *= 1099511628211ull;
+            }
+        }
+    }
+    key += '|';
+    key += std::to_string(contentHash);
+    return key;
+}
+
 std::shared_ptr<const ParticleSdfAsset> LoadParticleSdfAsset(
-    const std::string& path)
+    const std::string& path,
+    const std::filesystem::path& resourceRoot)
 {
     if (path.empty())
     {
         return nullptr;
     }
     RequireValidParticleMeshPath(path, "collision.sdf.path");
-    std::string resolvedPath;
+    std::filesystem::path resolvedPath;
     try
     {
-        resolvedPath = CommonFunction::Path(path);
+        resolvedPath = resourceRoot.empty()
+            ? std::filesystem::path(CommonFunction::Path(path))
+            : ValidateParticleMeshReference(
+                resourceRoot, path, "collision.sdf.path");
     }
     catch (const std::exception& exception)
     {
@@ -286,14 +343,60 @@ std::shared_ptr<const ParticleSdfAsset> LoadParticleSdfAsset(
             "Failed to parse particle SDF asset: " + path +
             ": " + exception.what());
     }
-    return std::make_shared<const ParticleSdfAsset>(
-        ParseParticleSdfJson(json));
+    ParticleSdfAsset sdf = ParseParticleSdfJson(json);
+    sdf.sourceIdentity =
+        BuildParticleCollisionSourceIdentity(path, resolvedPath);
+    return std::make_shared<const ParticleSdfAsset>(std::move(sdf));
+}
+
+std::shared_ptr<const ParticleSdfAsset> LoadParticleCollisionMeshAsset(
+    const std::string& path,
+    const std::filesystem::path& resourceRoot,
+    float minimumPadding)
+{
+    if (path.empty())
+    {
+        return nullptr;
+    }
+    RequireValidParticleMeshPath(path, "collision.mesh.path");
+    std::filesystem::path resolvedPath;
+    try
+    {
+        resolvedPath = resourceRoot.empty()
+            ? std::filesystem::path(CommonFunction::Path(path))
+            : ValidateParticleMeshReference(
+                resourceRoot, path, "collision.mesh.path");
+    }
+    catch (const std::exception& exception)
+    {
+        throw std::runtime_error(
+            "Failed to open particle collision mesh asset: " + path +
+            ": " + exception.what());
+    }
+    const ParticleCollisionMeshAsset mesh =
+        ReadParticleCollisionMeshFile(resolvedPath);
+    // SDF 在 bounds 外返回“无碰撞”。如果 padding 小于粒子半径，
+    // 粒子球可能已经接触网格但中心仍在 bounds 外，形成漏碰撞。
+    if (std::isfinite(minimumPadding) &&
+        minimumPadding > 0.0f &&
+        mesh.padding + 1.0e-5f < minimumPadding)
+    {
+        throw std::invalid_argument(
+            "Particle collision mesh padding must be >= "
+            "collision.radius");
+    }
+    ParticleSdfAsset sdf = BuildParticleSdfFromCollisionMesh(mesh);
+    sdf.sourceIdentity =
+        BuildParticleCollisionSourceIdentity(path, resolvedPath);
+    return std::make_shared<const ParticleSdfAsset>(std::move(sdf));
 }
 
 ParticleEmitterAsset ParseEmitter(
     const nlohmann::json& json,
     size_t index,
-    bool implicit)
+    bool implicit,
+    const std::filesystem::path& resourceRoot,
+    const ParticleCollisionResourceCache* collisionCache)
 {
     if (!json.is_object())
     {
@@ -616,11 +719,12 @@ ParticleEmitterAsset ParseEmitter(
             emitter.collisionType != "plane" &&
             emitter.collisionType != "box" &&
             emitter.collisionType != "capsule" &&
-            emitter.collisionType != "sdf")
+            emitter.collisionType != "sdf" &&
+            emitter.collisionType != "mesh")
         {
             throw std::invalid_argument(
                 "Particle collision type must be 'none', 'plane', 'box', "
-                "'capsule', or 'sdf'");
+                "'capsule', 'sdf', or 'mesh'");
         }
         if (collision.contains("plane"))
         {
@@ -699,6 +803,25 @@ ParticleEmitterAsset ParseEmitter(
                     sdf.at("path").get<std::string>();
             }
         }
+        if (collision.contains("mesh"))
+        {
+            const nlohmann::json& mesh = collision.at("mesh");
+            if (!mesh.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle collision mesh must be an object");
+            }
+            if (mesh.contains("path"))
+            {
+                if (!mesh.at("path").is_string())
+                {
+                    throw std::invalid_argument(
+                        "Particle collision.mesh.path must be a string");
+                }
+                emitter.collisionMeshPath =
+                    mesh.at("path").get<std::string>();
+            }
+        }
         emitter.collisionBounce = ReadFiniteFloat(
             collision,
             "bounce",
@@ -725,8 +848,53 @@ ParticleEmitterAsset ParseEmitter(
                     "Particle collision type 'sdf' requires "
                     "collision.sdf.path");
             }
-            emitter.collisionSdf =
-                LoadParticleSdfAsset(emitter.collisionSdfPath);
+            if (collisionCache != nullptr)
+            {
+                const auto cached = collisionCache->find(
+                    ParticleCollisionResourceCacheKey(
+                        emitter.collisionType,
+                        emitter.collisionSdfPath));
+                if (cached != collisionCache->end())
+                {
+                    emitter.collisionSdf = cached->second;
+                }
+            }
+            if (!emitter.collisionSdf)
+            {
+                emitter.collisionSdf =
+                    LoadParticleSdfAsset(
+                        emitter.collisionSdfPath, resourceRoot);
+            }
+        }
+        else if (emitter.collisionType == "mesh")
+        {
+            if (emitter.collisionMeshPath.empty())
+            {
+                throw std::invalid_argument(
+                    "Particle collision type 'mesh' requires "
+                    "collision.mesh.path");
+            }
+            // 网格在提交前烘成 SDF；运行时 GPU 只看到 SDF 类型 4，
+            // 不会退回 plane/box 或静默关闭碰撞。
+            if (collisionCache != nullptr)
+            {
+                const auto cached = collisionCache->find(
+                    ParticleCollisionResourceCacheKey(
+                        emitter.collisionType,
+                        emitter.collisionMeshPath));
+                if (cached != collisionCache->end())
+                {
+                    emitter.collisionSdf = cached->second;
+                }
+            }
+            if (!emitter.collisionSdf)
+            {
+                emitter.collisionSdf =
+                    LoadParticleCollisionMeshAsset(
+                        emitter.collisionMeshPath,
+                        resourceRoot,
+                        emitter.collisionRadius);
+            }
         }
     }
 
@@ -1414,19 +1582,52 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         emitter.collisionType != "plane" &&
         emitter.collisionType != "box" &&
         emitter.collisionType != "capsule" &&
-        emitter.collisionType != "sdf")
+        emitter.collisionType != "sdf" &&
+        emitter.collisionType != "mesh")
     {
         throw std::invalid_argument(
             "Particle collision type must be 'none', 'plane', 'box', "
-            "'capsule', or 'sdf'");
+            "'capsule', 'sdf', or 'mesh'");
     }
     // localSpace 与碰撞现在允许组合：localSpace=true 时碰撞体（平面/
-    // 盒体/胶囊/SDF）按发射器局部空间解释，与局部粒子坐标同一空间。
+    // 盒体/胶囊/SDF/三角网格）按发射器局部空间解释，与局部粒子坐标
+    // 同一空间。
     if (emitter.collisionType == "sdf" &&
         (!emitter.collisionSdf || emitter.collisionSdf->Empty()))
     {
         throw std::invalid_argument(
             "Particle collision type 'sdf' requires loaded SDF data");
+    }
+    if (emitter.collisionType == "mesh")
+    {
+        if (emitter.collisionMeshPath.empty())
+        {
+            throw std::invalid_argument(
+                "Particle collision type 'mesh' requires "
+                "collision.mesh.path");
+        }
+        RequireValidParticleMeshPath(
+            emitter.collisionMeshPath, "collision.mesh.path");
+        if (!emitter.collisionSdf || emitter.collisionSdf->Empty())
+        {
+            throw std::invalid_argument(
+                "Particle collision type 'mesh' requires loaded SDF data");
+        }
+        if (emitter.collisionSdf->sourcePadding >= 0.0f &&
+            emitter.collisionRadius >
+                emitter.collisionSdf->sourcePadding + 1.0e-5f)
+        {
+            throw std::invalid_argument(
+                "Particle collision mesh padding must be >= "
+                "collision.radius");
+        }
+    }
+    else if (!emitter.collisionMeshPath.empty())
+    {
+        // 非激活类型的路径仍要满足资源根相对契约，避免切换类型时
+        // 才暴露拼写错误。
+        RequireValidParticleMeshPath(
+            emitter.collisionMeshPath, "collision.mesh.path");
     }
     if (!emitter.materialInstancePath.empty() &&
         !IsValidParticleMeshRelativePath(emitter.materialInstancePath))
@@ -1959,12 +2160,17 @@ ParticleSystemAsset ParticleAssetLoader::Prepare(const std::string& path)
             "Failed to parse particle system asset: " + path +
             ": " + exception.what());
     }
-    return ParseJson(json, path);
+    return ParseJson(
+        json,
+        path,
+        std::filesystem::path(CommonFunction::GetResourcePath()));
 }
 
 ParticleSystemAsset ParticleAssetLoader::ParseJson(
     const nlohmann::json& json,
-    std::string_view sourcePath)
+    std::string_view sourcePath,
+    const std::filesystem::path& resourceRoot,
+    const ParticleCollisionResourceCache* collisionCache)
 {
     const std::string path(sourcePath);
     if (!json.is_object())
@@ -2001,6 +2207,7 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
     }
     if (asset.version == 2)
         asset.userParameters = ParseParticleUserParameters(json);
+    std::unordered_set<std::string> userParameterReferences;
     if (json.contains("emitters"))
     {
         const nlohmann::json& emitters = json.at("emitters");
@@ -2025,10 +2232,16 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
                 SubstituteParticleUserParameters(
                     flattened,
                     asset.userParameters,
-                    "emitters[" + std::to_string(index) + "]");
+                    "emitters[" + std::to_string(index) + "]",
+                    &userParameterReferences);
             }
             asset.emitters.push_back(
-                ParseEmitter(flattened, index, false));
+                ParseEmitter(
+                    flattened,
+                    index,
+                    false,
+                    resourceRoot,
+                    collisionCache));
         }
     }
     else if (asset.version == 2 && json.contains("modules"))
@@ -2036,23 +2249,47 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
         // v2 也允许根对象直接携带一个隐式 emitter 的 modules。
         nlohmann::json flattened = FlattenParticleEmitterV2(json, 0);
         SubstituteParticleUserParameters(
-            flattened, asset.userParameters, "modules");
+            flattened,
+            asset.userParameters,
+            "modules",
+            &userParameterReferences);
         asset.emitters.push_back(
-            ParseEmitter(flattened, 0, true));
+            ParseEmitter(
+                flattened,
+                0,
+                true,
+                resourceRoot,
+                collisionCache));
     }
     else
     {
         // 旧 PS 资产没有 emitters：根对象就是一个隐式发射器。
-        asset.emitters.push_back(ParseEmitter(json, 0, true));
+        asset.emitters.push_back(
+            ParseEmitter(
+                json,
+                0,
+                true,
+                resourceRoot,
+                collisionCache));
     }
 
     Validate(asset);
+    asset.userParameterReferences =
+        std::move(userParameterReferences);
     for (const ParticleEmitterAsset& emitter : asset.emitters)
     {
         if (emitter.texturePath.empty()) continue;
         // 在场景候选提交前解析一次资源根，避免渲染线程首次创建发射器时
         // 才发现 flipbook 纹理缺失。GPU 纹理本身仍由 ParticleRenderer 创建。
-        (void)CommonFunction::Path(emitter.texturePath);
+        if (resourceRoot.empty())
+        {
+            (void)CommonFunction::Path(emitter.texturePath);
+        }
+        else
+        {
+            (void)ValidateParticleTextureReference(
+                resourceRoot, emitter.texturePath, "texture.path");
+        }
     }
     // 只有 v2 + 用户参数才可能需要运行时覆盖重解析；冻结原始 JSON
     // （而不是展平后的 emitter），保证模块结构/字段归属不丢失。

@@ -151,6 +151,7 @@ add_executable(material_instance_editor_production_tests
     particleFlipbookTests.cpp
     particleLodTests.cpp
     particleMaterialSdfTests.cpp
+    particleMeshCollisionTests.cpp
     particleMeshTests.cpp
     particleMeshReferenceTests.cpp
     particleModuleEditTests.cpp
@@ -210,4 +211,34 @@ target_link_libraries(material_instance_editor_production_tests
 
 vulkanlearn_add_gtest(
     material_instance_editor_production_tests
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(particle_mesh_collision_tests
+    particleMeshCollisionTests.cpp
+    particleCollisionTests.cpp
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAsset.cpp")
+
+target_include_directories(particle_mesh_collision_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${VULKANLEARN_SOURCE_DIR}/source"
+        "${VULKANLEARN_SOURCE_DIR}/extern/Eigen3"
+        "${VULKANLEARN_SOURCE_DIR}/extern/Json/include"
+        "${VULKANLEARN_SOURCE_DIR}/extern/VulkanSDK/include"
+        "${VULKANLEARN_SOURCE_DIR}/extern/Spirv-Reflect/include")
+
+target_compile_options(particle_mesh_collision_tests
+    PRIVATE
+        -fweak)
+
+target_link_libraries(particle_mesh_collision_tests
+    PRIVATE
+        Vulkan::Vulkan
+        Eigen3
+        Json
+        Spirv_Reflect
+        BLAKE3::blake3)
+
+vulkanlearn_add_gtest(
+    particle_mesh_collision_tests
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

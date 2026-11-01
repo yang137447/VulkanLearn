@@ -31,6 +31,9 @@ public static partial class NativeBridge
         private readonly HashSet<ulong> sentRays = [];
         private readonly Dictionary<Blueprint, Dictionary<string, ParticleSystem>> particles = [];
         private readonly List<ParticleMessage> particleMessages = [];
+        // 数据通道不按 owner 分表：native World 只有一个全局命名空间，这里
+        // 保存最近一帧副本供 Get 使用；Set/Clear 在同一帧内先更新本地值。
+        private readonly Dictionary<string, float> particleDataChannels = new(StringComparer.Ordinal);
         private readonly Dictionary<ulong, ParticleSubscription> particleSubscriptions = [];
         // native 兴趣按 Blueprint owner 计数；每个 owner 只在首个订阅/最后
         // 一个订阅移除时发命令，避免 A 的清理误删 B 的兴趣。
@@ -50,6 +53,12 @@ public static partial class NativeBridge
         {
             RequireCallback(context, owner);
             if (releasing || owner.PendingDestroy) throw new InvalidOperationException("Owner is ending play.");
+        }
+        private void RequireRead(Blueprint owner)
+        {
+            // EndPlay 是只读收尾阶段：releasing 时禁止命令/结构修改，但允许
+            // 读取已经冻结的 World 镜像；真正的 callback/线程/context 校验仍执行。
+            RequireCallback(context, owner);
         }
         private static void Name(string name)
         {
@@ -135,7 +144,12 @@ public static partial class NativeBridge
                 SpawnRequest = (path, position, rotation, scale) =>
                     QueueParticleSpawn(owner, path, position, rotation, scale),
                 FindRequest = id => FindParticle(owner, id),
-                DestroyAllRequest = () => DestroyAllParticles(owner)
+                DestroyAllRequest = () => DestroyAllParticles(owner),
+                Data = new()
+                {
+                    ChangeRequest = (name, value) => ChangeParticleData(owner, name, value),
+                    ValueQuery = name => ReadParticleData(owner, name)
+                }
             };
         }
         private Dictionary<string, ParticleSystem> ParticleTable(Blueprint owner)
@@ -170,11 +184,60 @@ public static partial class NativeBridge
         }
         private static void ValidateUserParameter(string key, float? value)
         {
-            if (string.IsNullOrEmpty(key) || key.Length > 64)
-                throw new ArgumentException("Particle user parameter key requires 1..64 characters.", nameof(key));
+            if (string.IsNullOrEmpty(key) || key.Contains('\0') ||
+                System.Text.Encoding.UTF8.GetByteCount(key) > 64)
+                throw new ArgumentException("Particle user parameter key requires 1..64 UTF-8 bytes without NUL.", nameof(key));
             if (value is { } number && (!float.IsFinite(number) || Math.Abs(number) > 1.0e6f))
                 throw new ArgumentOutOfRangeException(nameof(value),
                     "Particle user parameter value must be finite and in [-1e6, 1e6].");
+        }
+        private static void ValidateDataChannel(string key, float? value)
+        {
+            if (string.IsNullOrEmpty(key) || key.Contains('\0') ||
+                System.Text.Encoding.UTF8.GetByteCount(key) > 64)
+                throw new ArgumentException("Particle data channel key requires 1..64 UTF-8 bytes without NUL.", nameof(key));
+            if (value is { } number && (!float.IsFinite(number) || Math.Abs(number) > 1.0e6f))
+                throw new ArgumentOutOfRangeException(nameof(value),
+                    "Particle data channel value must be finite and in [-1e6, 1e6].");
+        }
+        private float? ReadParticleData(Blueprint owner, string name)
+        {
+            RequireRead(owner);
+            ValidateDataChannel(name, null);
+            return particleDataChannels.TryGetValue(name, out var value) ? value : null;
+        }
+        private void ChangeParticleData(Blueprint owner, string name, float? value)
+        {
+            Require(owner);
+            ValidateDataChannel(name, value);
+            if (value is null)
+            {
+                // clear 对不存在的 key 保持幂等；不把必然失败的 native 命令
+                // 投递出去，避免 EndPlay 清理顺序把整个帧批次判为非法。
+                if (!particleDataChannels.TryGetValue(name, out var previous)) return;
+                QueueParticle(owner, new
+                {
+                    op = "clearData",
+                    owner = owner.Handle.Id,
+                    key = name
+                });
+                particleDataChannels.Remove(name);
+                undo.Add(() => particleDataChannels[name] = previous);
+                return;
+            }
+            bool existed = particleDataChannels.TryGetValue(name, out var old);
+            if (!existed && particleDataChannels.Count >= 64)
+                throw new InvalidOperationException("Particle data channel budget exceeded.");
+            QueueParticle(owner, new
+            {
+                op = "data",
+                owner = owner.Handle.Id,
+                key = name,
+                value = value.Value
+            });
+            particleDataChannels[name] = value.Value;
+            if (existed) undo.Add(() => particleDataChannels[name] = old);
+            else undo.Add(() => particleDataChannels.Remove(name));
         }
         private static void ValidateEmitterIndex(int index)
         {
@@ -482,6 +545,37 @@ public static partial class NativeBridge
                 }
             }
         }
+        public void ApplyParticleDataChannels(JsonElement channels)
+        {
+            if (channels.ValueKind != JsonValueKind.Object) return;
+            particleDataChannels.Clear();
+            foreach (var entry in channels.EnumerateObject())
+            {
+                if (entry.Value.ValueKind != JsonValueKind.Number ||
+                    entry.Name.Length == 0 || entry.Name.Contains('\0') ||
+                    System.Text.Encoding.UTF8.GetByteCount(entry.Name) > 64) continue;
+                float value = entry.Value.GetSingle();
+                if (!float.IsFinite(value) || Math.Abs(value) > 1.0e6f) continue;
+                if (particleDataChannels.Count >= 64 &&
+                    !particleDataChannels.ContainsKey(entry.Name)) continue;
+                particleDataChannels[entry.Name] = value;
+            }
+        }
+        public Dictionary<string, float> ParticleDataChannelSnapshot() =>
+            new(particleDataChannels, StringComparer.Ordinal);
+        public void RestoreParticleDataChannels(IReadOnlyDictionary<string, float> values)
+        {
+            particleDataChannels.Clear();
+            foreach (var entry in values)
+            {
+                if (string.IsNullOrEmpty(entry.Key) ||
+                    System.Text.Encoding.UTF8.GetByteCount(entry.Key) > 64 ||
+                    entry.Key.Contains('\0') || !float.IsFinite(entry.Value) ||
+                    Math.Abs(entry.Value) > 1.0e6f) continue;
+                if (particleDataChannels.Count >= 64) break;
+                particleDataChannels[entry.Key] = entry.Value;
+            }
+        }
         public void ApplyParticleEvents(JsonElement events)
         {
             if (events.ValueKind != JsonValueKind.Array) return;
@@ -699,6 +793,10 @@ public static partial class NativeBridge
             particleEventInterestOwners.Clear();
             timers.Clear(); subscriptions.Clear(); events.Clear(); rays.Clear(); sentRays.Clear(); undo.Clear(); hud.Clear();
         }
+        // EndPlay 仍可读取通道；回调结束后才释放托管镜像。World 表本身
+        // 随 Play 上下文之外的原生 World 存活，下次 start/tick 会重新下发。
+        public void ClearParticleDataChannels() =>
+            particleDataChannels.Clear();
     }
     private static object GetServiceCounts(Context context) => context.Services.Counts();
     private static Instance RequireLive(Context context, BlueprintHandle handle)

@@ -613,7 +613,20 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 - 预算与参数：`SetEmitterBudget(maxTotalParticles, emitterBudgetScale)`，
   `SetUserParameter(key, value)` / `ClearUserParameter(key)`。预算 scale 为
   `[0,16]`，`maxTotalParticles` 上限 `1_000_000`；用户参数 key 为 `1..64`
-  字符，最多 64 个，value 有限且 `|v| <= 1e6`。
+  UTF-8 字节且不含 NUL，最多 64 个，value 有限且 `|v| <= 1e6`。
+- 全局数据通道：`Particles.Data` 暴露 `Set(name, value)`、`Clear(name)`、
+  `Get(name)`（缺失返回 null）和 `TryGet(name, out value)`。它写入当前 active
+  World 的全局表，不属于任何粒子实例，也不改变 `SetUserParameter` 的逐实例
+  语义；key 为 `1..64` UTF-8 字节且不含 NUL，value 有限且 `|v| <= 1e6`，全局最多
+  64 项。`Set`/`Clear` 经所属 owner 校验后进入 `particleCommands`，同一帧内
+  `Get` 立即看到本地写入；native 在 Play 开始的 `start` 请求中下发一次，并在每个
+  `tick` 请求中继续下发 `particleDataChannels` 冻结副本。`Clear` 对不存在的 key
+  幂等返回，Console 的缺失 key clear 仍报“未找到”。Stop/Destroy 的 EndPlay 回调仍可读取
+  托管镜像；Stop/release 在回调结束后清空整个托管镜像，单个 owner 清理不清空其他
+  Blueprint 共享的全局镜像，World 通道始终保留；热重载通过 migration snapshot 恢复镜像，
+  `OnReload` 可立即读取。
+  渲染器在 v2 `$Name` 重解析时以数据通道为基底、逐实例用户参数覆盖同名项；
+  作者资产仍需声明同名默认 `userParameters`，未知引用仍在加载期拒绝。
 - 附着：`AttachTo(targetKind, targetName, component?, localPosition?,
   localRotation?, localScale?)` 与 `Detach()`。`targetKind` 为 `mesh` 或
   `component`；局部 TRS 省略时为零/单位值。目标不存在仍接受命令，但 telemetry
@@ -647,8 +660,9 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 `destroyEmitter`/`restartEmitter`（`emitter` id）、`emitter`（`index` 或
 `emitter` id 加 `enabled`）、`budget`（`maxTotal`、`emitterScale`）、
 `userParam`/`clearUserParam`（`key`，可选 `value`）、`attach`（`targetKind`、
-`targetName`、可选 `component` 与局部 TRS）、`detach`。字段缺失、类型错误、
-越界或 owner 不匹配仍按统一路径抛出 `Script.InvalidParticleCommand`。
+`targetName`、可选 `component` 与局部 TRS）、`detach`、`data`/`clearData`
+（`key`，可选 `value`）。字段缺失、类型错误、越界或 owner 不匹配仍按统一
+路径抛出 `Script.InvalidParticleCommand`；`data` 命令不带粒子实例 id。
 
 `SetSpawnRateScale` 只接受有限的 `[0,16]`；`SetColorTint` 要求 RGB 在 `[0,16]`、
 alpha 在 `[0,1]` 且全部有限；`SetEmitterEnabled` 的 index 为 `[0,15]`。

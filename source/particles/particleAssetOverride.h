@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 
@@ -14,11 +15,13 @@ namespace VL
 // 未命中仍走正式 ParticleAssetLoader::Prepare。
 inline ParticleSystemAsset PrepareParticleAssetWithOverride(
     const std::string& path,
-    const std::unordered_map<std::string, nlohmann::json>& documents)
+    const std::unordered_map<std::string, nlohmann::json>& documents,
+    const std::filesystem::path& resourceRoot = {})
 {
     const auto document = documents.find(path);
     return document != documents.end()
-        ? ParticleAssetLoader::ParseJson(document->second, path)
+        ? ParticleAssetLoader::ParseJson(
+            document->second, path, resourceRoot)
         : ParticleAssetLoader::Prepare(path);
 }
 
