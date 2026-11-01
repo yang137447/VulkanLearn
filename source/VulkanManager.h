@@ -63,6 +63,12 @@ private:
     {
         return dualSourceBlendEnabled;
     }
+    // GPU 粒子剔除只有在逻辑设备真正启用 drawIndirectCount 后才能调用
+    // vkCmdDraw*IndirectCount；物理设备宣称支持不等于本设备已启用。
+    inline bool IsDrawIndirectCountEnabled() const
+    {
+        return drawIndirectCountEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -122,6 +128,7 @@ private:
     uint32_t graphicsQueueTimestampValidBits = 0;
     // 记录逻辑设备实际启用的能力，而不是仅记录物理设备是否宣称支持。
     bool dualSourceBlendEnabled = false;
+    bool drawIndirectCountEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

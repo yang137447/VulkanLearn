@@ -125,6 +125,9 @@ public:
     uint32_t GetGraphicsTimestampValidBits();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
+    // particle GPU culling 的 indirect-count 路径必须以此为准；false 时
+    // 使用 CPU 固定参数的 indirect 绘制并保留相同语义。
+    bool SupportsDrawIndirectCount() const;
     vk::QueryPool CreateTimestampQueryPool(
         uint32_t queryCount,
         const std::string& debugName);

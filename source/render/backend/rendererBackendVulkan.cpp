@@ -559,6 +559,11 @@ bool RendererBackendVulkan::SupportsDualSourceBlend() const
     return rhiDevice->IsDualSourceBlendEnabled();
 }
 
+bool RendererBackendVulkan::SupportsDrawIndirectCount() const
+{
+    return rhiDevice->IsDrawIndirectCountEnabled();
+}
+
 vk::QueryPool RendererBackendVulkan::CreateTimestampQueryPool(
     uint32_t queryCount,
     const std::string& debugName)

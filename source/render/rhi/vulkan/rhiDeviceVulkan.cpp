@@ -156,6 +156,11 @@ bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
     return VulkanManager::GetInstance().IsDualSourceBlendEnabled();
 }
 
+bool RHIDeviceVulkan::IsDrawIndirectCountEnabled() const
+{
+    return VulkanManager::GetInstance().IsDrawIndirectCountEnabled();
+}
+
 vk::QueryPool RHIDeviceVulkan::CreateTimestampQueryPool(
     uint32_t queryCount,
     const std::string& debugName)
