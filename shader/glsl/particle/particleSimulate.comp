@@ -25,6 +25,137 @@ float Random(inout uint state)
     return float(word & 0x00ffffffu) / 16777215.0;
 }
 
+// 3D value noise：整数格点哈希 + smoothstep 三线性插值。
+// 粒子力不需要可平铺噪声，固定格点哈希足以保证同一时间步的确定性。
+float HashNoiseLattice(ivec3 cell)
+{
+    uint hash = uint(cell.x) * 0x8da6b343u;
+    hash ^= uint(cell.y) * 0xd8163841u;
+    hash ^= uint(cell.z) * 0xcb1ab31fu;
+    return float(Hash(hash) & 0x00ffffffu) / 16777215.0;
+}
+
+float ValueNoise3D(vec3 position)
+{
+    vec3 cell = floor(position);
+    vec3 fraction = fract(position);
+    fraction = fraction * fraction * (3.0 - 2.0 * fraction);
+    ivec3 base = ivec3(cell);
+
+    float n000 = HashNoiseLattice(base + ivec3(0, 0, 0));
+    float n100 = HashNoiseLattice(base + ivec3(1, 0, 0));
+    float n010 = HashNoiseLattice(base + ivec3(0, 1, 0));
+    float n110 = HashNoiseLattice(base + ivec3(1, 1, 0));
+    float n001 = HashNoiseLattice(base + ivec3(0, 0, 1));
+    float n101 = HashNoiseLattice(base + ivec3(1, 0, 1));
+    float n011 = HashNoiseLattice(base + ivec3(0, 1, 1));
+    float n111 = HashNoiseLattice(base + ivec3(1, 1, 1));
+
+    return mix(
+        mix(mix(n000, n100, fraction.x),
+            mix(n010, n110, fraction.x),
+            fraction.y),
+        mix(mix(n001, n101, fraction.x),
+            mix(n011, n111, fraction.x),
+            fraction.y),
+        fraction.z);
+}
+
+// curl noise 由一个三分量势场求旋度得到。三个分量使用不同固定偏移，
+// 避免同一噪声值在三轴上产生相关运动；这里用有限差分近似偏导。
+vec3 CurlNoisePotential(vec3 position)
+{
+    vec3 offsetX = vec3(0.0, 0.0, 0.0);
+    vec3 offsetY = vec3(37.1, 11.7, 71.3);
+    vec3 offsetZ = vec3(83.9, 47.5, 19.1);
+    return vec3(
+        ValueNoise3D(position + offsetX),
+        ValueNoise3D(position + offsetY),
+        ValueNoise3D(position + offsetZ));
+}
+
+vec3 CurlNoiseForce(vec3 position)
+{
+    float strength = frame.curlParams.x;
+    float frequency = frame.curlParams.y;
+    // 关闭状态直接返回，避免每帧为未启用的模块支付噪声与差分开销。
+    if (strength <= 0.0 || frequency <= 0.0)
+    {
+        return vec3(0.0);
+    }
+
+    vec3 samplePosition = position * frequency +
+        vec3(0.0, 0.0, frame.simulation.z * frame.curlParams.z);
+    const float epsilon = 0.01;
+    vec3 x0 = CurlNoisePotential(samplePosition - vec3(epsilon, 0.0, 0.0));
+    vec3 x1 = CurlNoisePotential(samplePosition + vec3(epsilon, 0.0, 0.0));
+    vec3 y0 = CurlNoisePotential(samplePosition - vec3(0.0, epsilon, 0.0));
+    vec3 y1 = CurlNoisePotential(samplePosition + vec3(0.0, epsilon, 0.0));
+    vec3 z0 = CurlNoisePotential(samplePosition - vec3(0.0, 0.0, epsilon));
+    vec3 z1 = CurlNoisePotential(samplePosition + vec3(0.0, 0.0, epsilon));
+    vec3 curl = vec3(
+        (y1.z - y0.z) - (z1.y - z0.y),
+        (z1.x - z0.x) - (x1.z - x0.z),
+        (x1.y - x0.y) - (y1.x - y0.x));
+    return curl * (strength / (2.0 * epsilon));
+}
+
+// 涡旋：绕 axis 的切向力，径向中心是世界空间发射器原点或局部空间原点。
+// falloff 随到轴心距离线性衰减到半径外 0，axis 与径向平行时切向未定义，
+// 直接跳过，避免 normalize(0) 产生 NaN。
+vec3 VortexForce(vec3 position)
+{
+    float strength = frame.vortexParams.x;
+    float radius = frame.vortexParams.y;
+    if (strength <= 0.0 || radius <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    float axisLength = length(frame.vortexAxis.xyz);
+    if (axisLength <= 1.0e-6)
+    {
+        return vec3(0.0);
+    }
+    vec3 axis = frame.vortexAxis.xyz / axisLength;
+    vec3 center = frame.shape.z > 0.5
+        ? vec3(0.0)
+        : frame.localToWorld[3].xyz;
+    vec3 radial = position - center;
+    float distance = length(radial);
+    if (distance <= 1.0e-6)
+    {
+        return vec3(0.0);
+    }
+    float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
+    vec3 tangent = cross(axis, radial);
+    float tangentLength = length(tangent);
+    if (falloff <= 0.0 || tangentLength <= 1.0e-6)
+    {
+        return vec3(0.0);
+    }
+    return tangent / tangentLength * (strength * falloff);
+}
+
+// 点吸引子：向 attractorPosition 的径向力，使用 1 / (1 + (d/r)^2) 衰减。
+vec3 AttractorForce(vec3 position)
+{
+    float strength = frame.attractorParams.x;
+    float radius = frame.attractorParams.y;
+    if (strength <= 0.0 || radius <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    vec3 offset = frame.attractorPosition.xyz - position;
+    float distance = length(offset);
+    if (distance <= 1.0e-6)
+    {
+        return vec3(0.0);
+    }
+    float ratio = distance / radius;
+    float falloff = 1.0 / (1.0 + ratio * ratio);
+    return offset / distance * (strength * falloff);
+}
+
 // 世界空间解析碰撞：粒子球与无限平面/轴对齐 AABB/线段胶囊。
 // 与 source/particles/particleCollision.h 的 CPU 镜像保持同一套公式。
 void ResolveCollision(
@@ -456,7 +587,14 @@ void main()
     float lifetime = particle.velocityLife.w;
     for (int step = 0; step < steps; ++step)
     {
-        velocity += frame.gravityDrag.xyz * stepSeconds;
+        // 所有力都在模拟空间累加；localSpace 发射器不会把局部位置误当
+        // 世界位置。drag 作为最后的指数阻尼统一作用于重力、风、curl、
+        // 涡旋和吸引子产生的速度增量。
+        vec3 force = frame.gravityDrag.xyz + frame.wind.xyz;
+        force += CurlNoiseForce(position);
+        force += VortexForce(position);
+        force += AttractorForce(position);
+        velocity += force * stepSeconds;
         velocity *= damping;
         position += velocity * stepSeconds;
         ResolveCollision(

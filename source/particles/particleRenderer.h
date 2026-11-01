@@ -184,9 +184,21 @@ private:
         Eigen::Vector4f shapeParams;
         // xyz = box half extents (cm), w reserved.
         Eigen::Vector4f shapeExtent;
+        // x = curl noise strength, y = frequency, z = time speed, w reserved.
+        Eigen::Vector4f curlParams;
+        // x = vortex strength, y = radius, z/w reserved.
+        Eigen::Vector4f vortexParams;
+        // xyz = normalized vortex axis (computed in shader), w = 0.
+        Eigen::Vector4f vortexAxis;
+        // x = attractor strength, y = radius, z/w reserved.
+        Eigen::Vector4f attractorParams;
+        // xyz = attractor position in simulation space, w = 0.
+        Eigen::Vector4f attractorPosition;
+        // xyz = constant wind acceleration in simulation space, w = 0.
+        Eigen::Vector4f wind;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5472,
+        sizeof(FrameUniforms) == 5568,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -203,6 +215,24 @@ private:
     static_assert(
         offsetof(FrameUniforms, shapeExtent) == 5456,
         "ParticleFrame shapeExtent offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, curlParams) == 5472,
+        "ParticleFrame curlParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, vortexParams) == 5488,
+        "ParticleFrame vortexParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, vortexAxis) == 5504,
+        "ParticleFrame vortexAxis offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, attractorParams) == 5520,
+        "ParticleFrame attractorParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, attractorPosition) == 5536,
+        "ParticleFrame attractorPosition offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, wind) == 5552,
+        "ParticleFrame wind offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

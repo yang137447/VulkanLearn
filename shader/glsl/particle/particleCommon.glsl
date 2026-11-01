@@ -75,6 +75,18 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 shapeParams;
     // xyz = box half extents (cm), w reserved
     vec4 shapeExtent;
+    // x = curl noise strength, y = frequency, z = time speed, w reserved
+    vec4 curlParams;
+    // x = vortex strength, y = radius, z/w reserved
+    vec4 vortexParams;
+    // xyz = vortex axis, w = 0
+    vec4 vortexAxis;
+    // x = attractor strength, y = radius, z/w reserved
+    vec4 attractorParams;
+    // xyz = attractor position in simulation space, w = 0
+    vec4 attractorPosition;
+    // xyz = constant wind acceleration in simulation space, w = 0
+    vec4 wind;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

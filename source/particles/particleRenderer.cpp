@@ -1538,6 +1538,36 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.shapeExtent.y(),
             emitter.asset.shapeExtent.z(),
             0.0f);
+        uniforms.curlParams = Eigen::Vector4f(
+            emitter.asset.curlNoiseStrength,
+            emitter.asset.curlNoiseFrequency,
+            emitter.asset.curlNoiseSpeed,
+            0.0f);
+        uniforms.vortexParams = Eigen::Vector4f(
+            emitter.asset.vortexStrength,
+            emitter.asset.vortexRadius,
+            0.0f,
+            0.0f);
+        uniforms.vortexAxis = Eigen::Vector4f(
+            emitter.asset.vortexAxis.x(),
+            emitter.asset.vortexAxis.y(),
+            emitter.asset.vortexAxis.z(),
+            0.0f);
+        uniforms.attractorParams = Eigen::Vector4f(
+            emitter.asset.attractorStrength,
+            emitter.asset.attractorRadius,
+            0.0f,
+            0.0f);
+        uniforms.attractorPosition = Eigen::Vector4f(
+            emitter.asset.attractorPosition.x(),
+            emitter.asset.attractorPosition.y(),
+            emitter.asset.attractorPosition.z(),
+            0.0f);
+        uniforms.wind = Eigen::Vector4f(
+            emitter.asset.wind.x(),
+            emitter.asset.wind.y(),
+            emitter.asset.wind.z(),
+            0.0f);
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,
             &uniforms,

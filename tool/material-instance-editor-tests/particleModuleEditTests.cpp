@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,126 @@ TEST(ParticleModuleEdit, EnsureRejectsMalformedInputWithoutMutation)
     const Json badModulesBefore = badModules;
     EXPECT_FALSE(EnsureParticleModules(badModules));
     EXPECT_EQ(badModules, badModulesBefore);
+}
+
+TEST(ParticleModuleEdit, ForcesModulesExposeSpecsAndFieldOwnership)
+{
+    const ParticleModuleSpec* curlNoise =
+        FindParticleModuleSpec("forces.curlNoise");
+    const ParticleModuleSpec* vortex =
+        FindParticleModuleSpec("forces.vortex");
+    const ParticleModuleSpec* attractor =
+        FindParticleModuleSpec("forces.attractor");
+    const ParticleModuleSpec* wind =
+        FindParticleModuleSpec("forces.wind");
+    ASSERT_NE(curlNoise, nullptr);
+    ASSERT_NE(vortex, nullptr);
+    ASSERT_NE(attractor, nullptr);
+    ASSERT_NE(wind, nullptr);
+
+    EXPECT_NE(
+        std::find(curlNoise->fields.begin(), curlNoise->fields.end(),
+            "curlNoise"),
+        curlNoise->fields.end());
+    EXPECT_NE(
+        std::find(vortex->fields.begin(), vortex->fields.end(), "vortex"),
+        vortex->fields.end());
+    EXPECT_NE(
+        std::find(attractor->fields.begin(), attractor->fields.end(),
+            "attractor"),
+        attractor->fields.end());
+    EXPECT_NE(
+        std::find(wind->fields.begin(), wind->fields.end(), "wind"),
+        wind->fields.end());
+
+    EXPECT_EQ(ParticleModuleTypeForField("curlNoise.strength"),
+        "forces.curlNoise");
+    EXPECT_EQ(ParticleModuleTypeForField("curlNoise.frequency"),
+        "forces.curlNoise");
+    EXPECT_EQ(ParticleModuleTypeForField("vortex.axis"),
+        "forces.vortex");
+    EXPECT_EQ(ParticleModuleTypeForField("attractor.position"),
+        "forces.attractor");
+    EXPECT_EQ(ParticleModuleTypeForField("wind"),
+        "forces.wind");
+}
+
+TEST(ParticleModuleEdit, EnsureAndFlattenMigrateForcesFields)
+{
+    Json emitter = Json{
+        {"name", "e"},
+        {"curlNoise", {
+            {"strength", 3.0},
+            {"frequency", 0.25},
+            {"speed", 1.5}}},
+        {"vortex", {
+            {"strength", 4.0},
+            {"radius", 75.0},
+            {"axis", {0.0, 1.0, 0.0}}}},
+        {"attractor", {
+            {"position", {1.0, 2.0, 3.0}},
+            {"strength", -5.0},
+            {"radius", 120.0}}},
+        {"wind", {6.0, 0.0, -2.0}}};
+
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+    EXPECT_FALSE(emitter.contains("curlNoise"));
+    EXPECT_FALSE(emitter.contains("vortex"));
+    EXPECT_FALSE(emitter.contains("attractor"));
+    EXPECT_FALSE(emitter.contains("wind"));
+    EXPECT_EQ(
+        Module(emitter, "forces.curlNoise").at("fields")
+            .at("curlNoise").at("frequency"),
+        0.25);
+    EXPECT_EQ(
+        Module(emitter, "forces.vortex").at("fields")
+            .at("vortex").at("radius"),
+        75.0);
+    EXPECT_EQ(
+        Module(emitter, "forces.attractor").at("fields")
+            .at("attractor").at("strength"),
+        -5.0);
+    EXPECT_EQ(
+        Module(emitter, "forces.wind").at("fields").at("wind"),
+        Json({6.0, 0.0, -2.0}));
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_FALSE(flattened.contains("modules"));
+    EXPECT_EQ(flattened.at("curlNoise").at("speed"), 1.5);
+    EXPECT_EQ(flattened.at("vortex").at("axis"),
+        Json({0.0, 1.0, 0.0}));
+    EXPECT_EQ(flattened.at("attractor").at("position"),
+        Json({1.0, 2.0, 3.0}));
+    EXPECT_EQ(flattened.at("wind"), Json({6.0, 0.0, -2.0}));
+}
+
+TEST(ParticleModuleEdit, SetFieldWritesForcesModuleFields)
+{
+    Json emitter = Json{{"name", "e"}};
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "curlNoise.frequency", Json(0.4), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "vortex.axis", Json({0.0, 0.0, 1.0}), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "attractor.position", Json({4.0, 5.0, 6.0}), false));
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "wind", Json({1.0, 0.0, 0.0}), false));
+
+    EXPECT_EQ(
+        Module(emitter, "forces.curlNoise").at("fields")
+            .at("curlNoise").at("frequency"),
+        0.4);
+    EXPECT_EQ(
+        Module(emitter, "forces.vortex").at("fields")
+            .at("vortex").at("axis"),
+        Json({0.0, 0.0, 1.0}));
+    EXPECT_EQ(
+        Module(emitter, "forces.attractor").at("fields")
+            .at("attractor").at("position"),
+        Json({4.0, 5.0, 6.0}));
+    EXPECT_EQ(
+        Module(emitter, "forces.wind").at("fields").at("wind"),
+        Json({1.0, 0.0, 0.0}));
 }
 
 TEST(ParticleModuleEdit, FlattenMergesEnabledModulesInOrder)

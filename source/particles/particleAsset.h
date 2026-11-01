@@ -97,6 +97,18 @@ struct ParticleEmitterAsset
     Eigen::Vector3f gravity =
         Eigen::Vector3f(0.0f, -100.0f, 0.0f);
     float drag = 0.0f;
+    // 力模块统一在模拟空间解释：localSpace 发射器用局部坐标/局部力，
+    // 世界空间发射器用世界坐标/世界力。strength 为加速度量纲（cm/s^2）。
+    float curlNoiseStrength = 0.0f;
+    float curlNoiseFrequency = 0.1f;
+    float curlNoiseSpeed = 0.0f;
+    float vortexStrength = 0.0f;
+    float vortexRadius = 50.0f;
+    Eigen::Vector3f vortexAxis = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+    Eigen::Vector3f attractorPosition = Eigen::Vector3f::Zero();
+    float attractorStrength = 0.0f;
+    float attractorRadius = 100.0f;
+    Eigen::Vector3f wind = Eigen::Vector3f::Zero();
     float shapeRadius = 10.0f;
     // spawn 形状：所有形状都在发射器局部空间生成初始位置，再走现有的
     // localSpace/localToWorld、prewarm 与碰撞流程。sphere 是 v1 默认值。

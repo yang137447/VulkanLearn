@@ -43,6 +43,10 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
             {"rotation", "rotationSpeed", "rotationRandom"}},
         {"forces.gravity", "Gravity Force", {"gravity"}},
         {"forces.drag", "Drag", {"drag"}},
+        {"forces.curlNoise", "Curl Noise", {"curlNoise"}},
+        {"forces.vortex", "Vortex", {"vortex"}},
+        {"forces.attractor", "Point Attractor", {"attractor"}},
+        {"forces.wind", "Wind", {"wind"}},
         {"collision.analytic", "Analytic Collision", {"collision"}},
         {"flipbook", "Flipbook", {"texture", "flipbook"}},
         {"lod", "LOD",
@@ -234,6 +238,14 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         return "update.rotation";
     if (field == "gravity") return "forces.gravity";
     if (field == "drag") return "forces.drag";
+    if (field == "curlNoise" || HasPrefix(field, "curlNoise."))
+        return "forces.curlNoise";
+    if (field == "vortex" || HasPrefix(field, "vortex."))
+        return "forces.vortex";
+    if (field == "attractor" || HasPrefix(field, "attractor."))
+        return "forces.attractor";
+    if (field == "wind" || HasPrefix(field, "wind."))
+        return "forces.wind";
     if (field == "collision" || HasPrefix(field, "collision."))
         return "collision.analytic";
     if (field == "texture" || field == "flipbook" ||

@@ -48,7 +48,8 @@
 - 当前模块类型：`emitter`、`renderer`、`spawn.rate`、`spawn.shapeSphere`（名称保留，现承载全部
   `shape.type`）、`spawn.velocity`、
   `update.lifetime`、`update.color`、`update.size`、`update.rotation`、`forces.gravity`、
-  `forces.drag`、`collision.analytic`、`flipbook`、`lod`、`curves`、`bounds`、`culling`。
+  `forces.drag`、`forces.curlNoise`、`forces.vortex`、`forces.attractor`、
+  `forces.wind`、`collision.analytic`、`flipbook`、`lod`、`curves`、`bounds`、`culling`。
   未知类型直接拒绝，避免拼写错误静默变成空模块。
 - `fields` 与 v1 emitter 字段同名并递归合并；两个启用模块写同一字段且值不同会拒绝。
   v2 的模块顺序目前只属于作者层，runtime 消费展平后的 `ParticleEmitterAsset`，不重新解释顺序。
@@ -206,7 +207,15 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   与 `meshScale`（`xyz = 网格局部缩放`）。billboard/ribbon 发射器也写入，但只有 mesh
   shader 读取。随后是 `colorTint`（RGBA 运行时颜色乘数）与 `billboardParams`
   （`x = billboardAlignment`，0 camera、1 velocity；`y/z/w` 保留）；`billboardParams`
-  只有 billboard shader 读取。C++ 与 GLSL 顺序必须一致。
+  只有 billboard shader 读取。
+- `billboardParams` 之后是 `shapeParams`（`x = shape code`，0 sphere、1 box、2 cone、
+  3 cylinder、4 disc、5 ring；`y = height`、`z = innerRadius`、`w` 保留）与
+  `shapeExtent`（`xyz = box 半尺寸`，cm）。
+- UBO 末尾追加 `curlParams`（`x = strength`、`y = frequency`、`z = time speed`、
+  `w` 保留）、`vortexParams`（`x = strength`、`y = radius`）、`vortexAxis`
+  （`xyz = 未归一化轴`）、`attractorParams`（`x = strength`、`y = radius`）、
+  `attractorPosition`（`xyz = 模拟空间位置`）与 `wind`（`xyz = 模拟空间常量加速度`）。
+  这些字段由 compute shader 消费；C++ 与 GLSL 的追加顺序必须一致。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
   再交给线性过滤，避免帧间渗色；V 翻转保持不变。单帧纹理维持原有 mipmap 行为。
@@ -284,6 +293,76 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
 - 视锥剔除、`maxDrawDistance`/`fadeDistance`、`minScreenSize` 与跨发射器透明排序
   都消费同一份 center/radius；固定包围球只需要覆盖实际可见粒子范围，不会改变粒子
   模拟、距离淡出公式或逐粒子排序。
+
+## 外力
+
+每个 emitter 可选 `curlNoise`、`vortex`、`attractor` 对象与 `wind` 向量。它们与
+`gravity` 一样产生加速度，在同一个子步内先合成力，再对速度做指数 drag 阻尼：
+
+```text
+force = gravity + wind + curlNoise + vortex + attractor
+velocity += force * dt
+velocity *= exp(-drag * dt)
+```
+
+所有力都在**模拟空间**解释：普通发射器使用世界坐标/世界向量，`localSpace: true`
+使用发射器局部坐标/局部向量。除特别说明外，强度单位是 `cm/s^2`，所有数值必须有限；
+`localSpace` 不改变这些字段的作者化含义，只改变粒子状态所在的空间。
+
+### Curl Noise
+
+```json
+"curlNoise": { "strength": 0, "frequency": 0.1, "speed": 0 }
+```
+
+- `strength`：默认 `0`，必须非负；`0` 时完全跳过噪声采样与差分开销。
+- `frequency`：默认 `0.1`，单位 `1/cm`，必须非负；`0` 时同样关闭。
+- `speed`：默认 `0`，单位 `1/s`，只把时间相位加到噪声第三轴，必须有限。
+
+采样位置为 `position * frequency + vec3(0, 0, time * speed)`。噪声是一个三分量
+value-noise 势场，三个分量使用互不相同的固定偏移；shader 以 `0.01` 的步长做中心
+差分，近似势场旋度 `curl`，再乘 `strength / (2 * 0.01)` 得到加速度。因此该力无散度，
+不会把粒子持续推向单一方向。`localSpace` 发射器直接对局部位置采样。
+
+### Vortex
+
+```json
+"vortex": { "strength": 0, "radius": 50, "axis": [0, 1, 0] }
+```
+
+- `strength`：默认 `0`，必须非负。
+- `radius`：默认 `50`，单位 cm，必须非负；`strength > 0` 时必须大于 `0`。
+- `axis`：默认 `[0,1,0]`，必须有限；`strength > 0` 时长度不能为零，shader 内归一化。
+
+涡心是模拟空间原点；世界空间发射器的模拟空间原点对应发射器世界位置
+（`localToWorld` 平移），`localSpace` 发射器对应局部原点。径向向量
+`radial = position - center`，切向为 `normalize(cross(axis, radial))`。作用半径内使用
+线性衰减 `falloff = clamp(1 - length(radial) / radius, 0, 1)`，半径外为零；径向与轴
+平行或重合时切向未定义，直接跳过。
+
+### Point Attractor
+
+```json
+"attractor": { "position": [0, 0, 0], "strength": 0, "radius": 100 }
+```
+
+- `position`：默认 `[0,0,0]`，单位 cm，按模拟空间解释。
+- `strength`：默认 `0`，必须非负。
+- `radius`：默认 `100`，单位 cm，必须非负；`strength > 0` 时必须大于 `0`。
+
+力方向为 `normalize(position - particlePosition)`，衰减为
+`1 / (1 + (distance / radius)^2)`。距离为零时跳过，避免除零。`localSpace` 发射器的
+`position` 是局部坐标，世界空间发射器则直接使用世界坐标。
+
+### Wind
+
+```json
+"wind": [0, 0, 0]
+```
+
+`wind` 是模拟空间常量加速度向量，默认零，单位 `cm/s^2`；三个分量都必须有限。
+它不随位置、速度或时间变化，也不是场景级 `wind` 对象；场景风由独立系统消费，
+不会自动叠加到粒子发射器的 `wind` 字段。
 
 ## Burst 重触发
 

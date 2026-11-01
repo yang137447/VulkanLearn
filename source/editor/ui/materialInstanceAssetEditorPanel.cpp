@@ -110,7 +110,17 @@ bool ParticleFieldInModule(
     if (module == "velocity")
         return field == "velocity.min" || field == "velocity.max";
     if (module == "forces")
-        return field == "gravity" || field == "drag";
+        return field == "gravity" || field == "drag" ||
+            field == "curlNoise.strength" ||
+            field == "curlNoise.frequency" ||
+            field == "curlNoise.speed" ||
+            field == "vortex.strength" ||
+            field == "vortex.radius" ||
+            field == "vortex.axis" ||
+            field == "attractor.position" ||
+            field == "attractor.strength" ||
+            field == "attractor.radius" ||
+            field == "wind";
     if (module == "collision")
         return field == "collision.type" ||
             field == "collision.bounce" ||

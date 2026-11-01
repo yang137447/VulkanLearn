@@ -546,6 +546,52 @@ ParticleEmitterAsset ParseEmitter(
 
     emitter.gravity = ReadVec3(
         json, "gravity", emitter.gravity);
+    if (json.contains("curlNoise"))
+    {
+        const nlohmann::json& curl = json.at("curlNoise");
+        if (!curl.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle curlNoise must be an object");
+        }
+        emitter.curlNoiseStrength = ReadFiniteFloat(
+            curl, "strength", emitter.curlNoiseStrength);
+        emitter.curlNoiseFrequency = ReadFiniteFloat(
+            curl, "frequency", emitter.curlNoiseFrequency);
+        emitter.curlNoiseSpeed = ReadFiniteFloat(
+            curl, "speed", emitter.curlNoiseSpeed);
+    }
+    if (json.contains("vortex"))
+    {
+        const nlohmann::json& vortex = json.at("vortex");
+        if (!vortex.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle vortex must be an object");
+        }
+        emitter.vortexStrength = ReadFiniteFloat(
+            vortex, "strength", emitter.vortexStrength);
+        emitter.vortexRadius = ReadFiniteFloat(
+            vortex, "radius", emitter.vortexRadius);
+        emitter.vortexAxis = ReadVec3(
+            vortex, "axis", emitter.vortexAxis);
+    }
+    if (json.contains("attractor"))
+    {
+        const nlohmann::json& attractor = json.at("attractor");
+        if (!attractor.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle attractor must be an object");
+        }
+        emitter.attractorPosition = ReadVec3(
+            attractor, "position", emitter.attractorPosition);
+        emitter.attractorStrength = ReadFiniteFloat(
+            attractor, "strength", emitter.attractorStrength);
+        emitter.attractorRadius = ReadFiniteFloat(
+            attractor, "radius", emitter.attractorRadius);
+    }
+    emitter.wind = ReadVec3(json, "wind", emitter.wind);
     emitter.colorStart = ReadVec4(
         json, "colorStart", emitter.colorStart);
     emitter.colorEnd = ReadVec4(
@@ -833,6 +879,25 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.gravity.y(), "gravity.y");
     RequireFinite(emitter.gravity.z(), "gravity.z");
     RequireFinite(emitter.drag, "drag");
+    RequireFinite(emitter.curlNoiseStrength, "curlNoise.strength");
+    RequireFinite(emitter.curlNoiseFrequency, "curlNoise.frequency");
+    RequireFinite(emitter.curlNoiseSpeed, "curlNoise.speed");
+    RequireFinite(emitter.vortexStrength, "vortex.strength");
+    RequireFinite(emitter.vortexRadius, "vortex.radius");
+    RequireFinite(emitter.vortexAxis.x(), "vortex.axis.x");
+    RequireFinite(emitter.vortexAxis.y(), "vortex.axis.y");
+    RequireFinite(emitter.vortexAxis.z(), "vortex.axis.z");
+    RequireFinite(emitter.attractorPosition.x(),
+        "attractor.position.x");
+    RequireFinite(emitter.attractorPosition.y(),
+        "attractor.position.y");
+    RequireFinite(emitter.attractorPosition.z(),
+        "attractor.position.z");
+    RequireFinite(emitter.attractorStrength, "attractor.strength");
+    RequireFinite(emitter.attractorRadius, "attractor.radius");
+    RequireFinite(emitter.wind.x(), "wind.x");
+    RequireFinite(emitter.wind.y(), "wind.y");
+    RequireFinite(emitter.wind.z(), "wind.z");
     RequireFinite(emitter.shapeRadius, "shape.radius");
     RequireFinite(emitter.shapeExtent.x(), "shape.extent.x");
     RequireFinite(emitter.shapeExtent.y(), "shape.extent.y");
@@ -1027,6 +1092,50 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle drag must be in [0, 20]");
+    }
+    if (emitter.curlNoiseStrength < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle curlNoise.strength must be non-negative");
+    }
+    if (emitter.curlNoiseFrequency < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle curlNoise.frequency must be non-negative");
+    }
+    if (emitter.vortexStrength < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle vortex.strength must be non-negative");
+    }
+    if (emitter.vortexRadius < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle vortex.radius must be non-negative");
+    }
+    if (emitter.vortexStrength > 0.0f &&
+        emitter.vortexAxis.squaredNorm() <= 1.0e-12f)
+    {
+        throw std::invalid_argument(
+            "Particle vortex.axis must be non-zero when "
+            "vortex.strength is positive");
+    }
+    if (emitter.attractorStrength < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle attractor.strength must be non-negative");
+    }
+    if (emitter.attractorRadius < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle attractor.radius must be non-negative");
+    }
+    if (emitter.attractorStrength > 0.0f &&
+        emitter.attractorRadius <= 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle attractor.radius must be positive when "
+            "attractor.strength is positive");
     }
     if (emitter.shapeRadius < 0.0f)
     {
@@ -1409,6 +1518,10 @@ const std::unordered_set<std::string>& ParticleModuleTypes()
         "update.rotation",
         "forces.gravity",
         "forces.drag",
+        "forces.curlNoise",
+        "forces.vortex",
+        "forces.attractor",
+        "forces.wind",
         "collision.analytic",
         "flipbook",
         "lod",
