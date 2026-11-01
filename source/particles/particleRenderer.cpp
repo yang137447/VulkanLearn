@@ -1568,6 +1568,26 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.wind.y(),
             emitter.asset.wind.z(),
             0.0f);
+        // 每帧整表重写：空表也必须清掉上一份 UBO 内容，count=0 才是
+        // “恒为 1”的唯一信号。
+        uniforms.lifetimeScaleKeys.fill(Eigen::Vector4f::Zero());
+        const size_t lifetimeScaleCount = std::min<size_t>(
+            emitter.asset.lifetimeScaleKeys.size(),
+            kMaxParticleCurveKeys);
+        for (size_t keyIndex = 0;
+             keyIndex < lifetimeScaleCount;
+             ++keyIndex)
+        {
+            const ParticleLifetimeScaleKey& key =
+                emitter.asset.lifetimeScaleKeys[keyIndex];
+            uniforms.lifetimeScaleKeys[keyIndex] =
+                Eigen::Vector4f(key.time, key.scale, 0.0f, 0.0f);
+        }
+        uniforms.lifetimeScaleParams = Eigen::Vector4f(
+            static_cast<float>(lifetimeScaleCount),
+            0.0f,
+            0.0f,
+            0.0f);
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,
             &uniforms,

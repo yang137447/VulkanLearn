@@ -40,6 +40,14 @@ struct ParticleSizeKey
     float size = 1.0f;
 };
 
+// 粒子归一化年龄 lifeT 对应的时间倍率。scale=0 冻结本帧，1 正常，
+// >1 加速衰老；time/scale 都参与作者校验并打包进 GPU 曲线表。
+struct ParticleLifetimeScaleKey
+{
+    float time = 0.0f;
+    float scale = 1.0f;
+};
+
 // 单级 LOD：相机距离越过 distance 后，连续发射预算乘 spawnRateScale。
 struct ParticleLodTier
 {
@@ -88,6 +96,9 @@ struct ParticleEmitterAsset
     float spawnRate = 200.0f;
     float lifetimeMin = 1.0f;
     float lifetimeMax = 1.5f;
+    // 按 lifeT = age / lifetime 采样时间倍率，乘到本帧模拟 delta 与年龄
+    // 推进上。空表示恒为 1；prewarm 不应用该曲线。
+    std::vector<ParticleLifetimeScaleKey> lifetimeScaleKeys;
 
     // 世界单位是 cm；速度与重力也按 cm/s、cm/s^2 作者化。
     Eigen::Vector3f velocityMin =

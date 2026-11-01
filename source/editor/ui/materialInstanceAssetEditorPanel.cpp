@@ -136,7 +136,8 @@ bool ParticleFieldInModule(
             field == "collision.capsule.b" ||
             field == "collision.capsule.radius";
     if (module == "life")
-        return field == "lifetime" || field == "size" ||
+        return field == "lifetime" || field == "lifetimeScaleKeys" ||
+            field == "size" ||
             field == "softness" || field == "softParticles" ||
             field == "softParticleDistance" || field == "sortParticles" ||
             field == "opacity";

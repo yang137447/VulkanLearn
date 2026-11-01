@@ -457,3 +457,63 @@ TEST(ParticleModuleEdit, ModuleOperationsRejectLimitAndMalformedInput)
     EXPECT_FALSE(SetParticleModuleEnabled(badEntry, 0, false));
     EXPECT_EQ(badEntry, badEntryBefore);
 }
+
+TEST(ParticleModuleEdit, LifetimeModuleExposesScaleKeysField)
+{
+    const ParticleModuleSpec* spec =
+        FindParticleModuleSpec("update.lifetime");
+    ASSERT_NE(spec, nullptr);
+    EXPECT_NE(
+        std::find(
+            spec->fields.begin(),
+            spec->fields.end(),
+            "lifetimeScaleKeys"),
+        spec->fields.end());
+    EXPECT_EQ(
+        ParticleModuleTypeForField("lifetimeScaleKeys"),
+        "update.lifetime");
+}
+
+TEST(ParticleModuleEdit, EnsureAndFlattenMigrateLifetimeScaleKeys)
+{
+    const Json keys = Json::array({
+        Json{{"time", 0.0}, {"scale", 0.0}},
+        Json{{"time", 1.0}, {"scale", 2.0}}});
+    Json emitter = Json{
+        {"name", "fire"},
+        {"lifetime", Json::array({0.5, 1.0})},
+        {"lifetimeScaleKeys", keys}};
+
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+    EXPECT_FALSE(emitter.contains("lifetimeScaleKeys"));
+    const Json& module = Module(emitter, "update.lifetime");
+    EXPECT_EQ(module.at("fields").at("lifetime").at(0), 0.5);
+    EXPECT_EQ(module.at("fields").at("lifetimeScaleKeys"), keys);
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("lifetimeScaleKeys"), keys);
+    EXPECT_FALSE(flattened.contains("modules"));
+}
+
+TEST(ParticleModuleEdit, SetFieldWritesLifetimeScaleKeysIntoModule)
+{
+    Json emitter = Json{{"name", "e"}};
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+
+    const Json keys = Json::array({
+        Json{{"time", 0.25}, {"scale", 1.5}},
+        Json{{"time", 0.75}, {"scale", 0.0}}});
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "lifetimeScaleKeys", keys, false));
+    EXPECT_FALSE(emitter.contains("lifetimeScaleKeys"));
+    EXPECT_EQ(
+        Module(emitter, "update.lifetime").at("fields")
+            .at("lifetimeScaleKeys"),
+        keys);
+
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "lifetimeScaleKeys", Json(), true));
+    EXPECT_FALSE(
+        Module(emitter, "update.lifetime").at("fields")
+            .contains("lifetimeScaleKeys"));
+}

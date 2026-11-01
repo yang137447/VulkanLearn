@@ -87,6 +87,10 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 attractorPosition;
     // xyz = constant wind acceleration in simulation space, w = 0
     vec4 wind;
+    // x = lifeT, y = time scale, z/w reserved；count=0 表示恒为 1
+    vec4 lifetimeScaleKeys[8];
+    // x = key count, y/z/w reserved
+    vec4 lifetimeScaleParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -194,6 +198,50 @@ float EvaluateSizeCurve(float t)
         }
     }
     return frame.sizeKeys[count - 1].y;
+}
+
+// 按 lifeT = age / lifetime 取时间倍率：空表恒为 1，首尾外 clamp，
+// 段内线性插值，输出限制在 [0,4]。重复 time 取最后一个 <= lifeT 的
+// key，和 CPU 的 EvaluateParticleLifetimeScale 保持一致。
+float EvaluateLifetimeScale(float lifeT)
+{
+    int count = int(frame.lifetimeScaleParams.x);
+    if (count <= 0)
+    {
+        return 1.0;
+    }
+    float t = clamp(lifeT, 0.0, 1.0);
+    int index = 0;
+    for (int current = 0; current < count; ++current)
+    {
+        if (frame.lifetimeScaleKeys[current].x <= t)
+        {
+            index = current;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (index + 1 >= count)
+    {
+        return clamp(frame.lifetimeScaleKeys[index].y, 0.0, 4.0);
+    }
+    float t0 = frame.lifetimeScaleKeys[index].x;
+    float scale0 = frame.lifetimeScaleKeys[index].y;
+    if (t <= t0)
+    {
+        return clamp(scale0, 0.0, 4.0);
+    }
+    float span =
+        frame.lifetimeScaleKeys[index + 1].x - t0;
+    float scale1 = frame.lifetimeScaleKeys[index + 1].y;
+    if (span <= 0.0)
+    {
+        return clamp(scale1, 0.0, 4.0);
+    }
+    float weight = clamp((t - t0) / span, 0.0, 1.0);
+    return clamp(mix(scale0, scale1, weight), 0.0, 4.0);
 }
 
 #endif

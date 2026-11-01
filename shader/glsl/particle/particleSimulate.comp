@@ -551,7 +551,21 @@ void main()
         return;
     }
 
-    float deltaSeconds = frame.simulation.y;
+    // 运行时衰老与积分都乘以 lifeT 曲线：lifeT 用推进前的 age/lifetime，
+    // scale=0 时本帧完全冻结（不衰老、不移动、不碰撞，也不推进历史），
+    // 但不会影响其它粒子或系统时间。prewarm 在 SpawnParticle 内直接按
+    // 随机年龄解析积分，故意不应用这条曲线。
+    float lifeT = clamp(
+        particle.positionAge.w /
+            max(particle.velocityLife.w, 1.0e-6),
+        0.0,
+        1.0);
+    float deltaSeconds =
+        frame.simulation.y * EvaluateLifetimeScale(lifeT);
+    if (!(deltaSeconds > 0.0))
+    {
+        return;
+    }
     particle.positionAge.w += deltaSeconds;
     if (particle.positionAge.w >= particle.velocityLife.w)
     {

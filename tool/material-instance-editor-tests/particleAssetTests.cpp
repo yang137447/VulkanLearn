@@ -12,6 +12,7 @@
 
 #include "editor/command/assetDocumentFields.h"
 #include "particles/particleAsset.h"
+#include "particles/particleLifetime.h"
 
 namespace
 {
@@ -2355,4 +2356,190 @@ TEST(ParticleAsset, ForcesRejectInvalidRangesAndNonFiniteValues)
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_wind_nan.json"),
         std::invalid_argument);
+}
+
+TEST(ParticleAsset, LifetimeScaleKeysDefaultToEmpty)
+{
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(),
+        "Maps/SC_test/PS_lifetime_scale_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_TRUE(asset.emitters[0].lifetimeScaleKeys.empty());
+    EXPECT_TRUE(asset.emitters[1].lifetimeScaleKeys.empty());
+}
+
+TEST(ParticleAsset, LifetimeScaleKeysParseSortsByTimeAndKeepsDuplicates)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", 1.0}, {"scale", 0.0}},
+        Json{{"time", 0.5}, {"scale", 2.0}},
+        Json{{"time", 0.0}, {"scale", 0.25}},
+        Json{{"time", 0.5}, {"scale", 3.0}}});
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_lifetime_scale_parse.json");
+
+    const std::vector<ParticleLifetimeScaleKey>& keys =
+        asset.emitters[0].lifetimeScaleKeys;
+    ASSERT_EQ(keys.size(), 4u);
+    EXPECT_FLOAT_EQ(keys[0].time, 0.0f);
+    EXPECT_FLOAT_EQ(keys[0].scale, 0.25f);
+    EXPECT_FLOAT_EQ(keys[1].time, 0.5f);
+    EXPECT_FLOAT_EQ(keys[1].scale, 2.0f);
+    EXPECT_FLOAT_EQ(keys[2].time, 0.5f);
+    EXPECT_FLOAT_EQ(keys[2].scale, 3.0f);
+    EXPECT_FLOAT_EQ(keys[3].time, 1.0f);
+    EXPECT_FLOAT_EQ(keys[3].scale, 0.0f);
+}
+
+TEST(ParticleAsset, LifetimeScaleKeysRoundTripThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange change;
+    change.field = "emitters.0.lifetimeScaleKeys";
+    change.value = Json::array({
+        Json{{"time", 0.0}, {"scale", 0.5}},
+        Json{{"time", 0.75}, {"scale", 2.0}}});
+    changes.push_back(change);
+
+    ApplyAssetChanges(
+        document,
+        EditorAssetDocumentKind::ParticleSystem,
+        changes);
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_lifetime_scale_editor.json");
+    ASSERT_EQ(asset.emitters[0].lifetimeScaleKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lifetimeScaleKeys[0].scale, 0.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lifetimeScaleKeys[1].time, 0.75f);
+
+    EditorAssetFieldChange resetChange;
+    resetChange.field = "emitters.0.lifetimeScaleKeys";
+    resetChange.reset = true;
+    changes.clear();
+    changes.push_back(resetChange);
+    ApplyAssetChanges(
+        document,
+        EditorAssetDocumentKind::ParticleSystem,
+        changes);
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_lifetime_scale_reset.json");
+    EXPECT_TRUE(asset.emitters[0].lifetimeScaleKeys.empty());
+}
+
+TEST(ParticleAsset, LifetimeScaleKeysExposedByEditorCapabilities)
+{
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem,
+        MultiEmitterDocument());
+    Json found;
+    for (const Json& field : capabilities["emitters"][0]["fields"])
+    {
+        if (field.value("field", std::string()) == "lifetimeScaleKeys")
+        {
+            found = field;
+            break;
+        }
+    }
+    ASSERT_TRUE(found.is_object());
+    EXPECT_EQ(found.value("type", std::string()), "array");
+    EXPECT_TRUE(found.value("resettable", false));
+}
+
+TEST(ParticleAsset, LifetimeScaleKeysRejectInvalidCountRangeAndNonFinite)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity =
+        std::numeric_limits<float>::infinity();
+
+    Json document = MultiEmitterDocument();
+    Json keys = Json::array();
+    for (int index = 0; index < 9; ++index)
+    {
+        keys.push_back(Json{{"time", index / 10.0}, {"scale", 1.0}});
+    }
+    document["emitters"][0]["lifetimeScaleKeys"] = keys;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_count.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", 1.5}, {"scale", 1.0}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_time.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", 0.5}, {"scale", -0.1}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_low.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", 0.5}, {"scale", 4.1}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_high.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", nan}, {"scale", 1.0}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_time_nan.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["lifetimeScaleKeys"] = Json::array({
+        Json{{"time", 0.5}, {"scale", infinity}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lifetime_scale_scale_inf.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, LifetimeScaleEvaluateEmptyAndClamp)
+{
+    const std::vector<ParticleLifetimeScaleKey> empty;
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(empty, 0.5f), 1.0f);
+
+    const std::vector<ParticleLifetimeScaleKey> keys = {
+        ParticleLifetimeScaleKey{0.25f, 0.5f},
+        ParticleLifetimeScaleKey{0.75f, 2.0f}};
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, -1.0f), 0.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 0.0f), 0.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, nan), 0.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 1.0f), 2.0f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 2.0f), 2.0f);
+}
+
+TEST(ParticleAsset, LifetimeScaleEvaluatePiecewiseLinear)
+{
+    const std::vector<ParticleLifetimeScaleKey> keys = {
+        ParticleLifetimeScaleKey{0.0f, 0.0f},
+        ParticleLifetimeScaleKey{0.5f, 1.0f},
+        ParticleLifetimeScaleKey{1.0f, 4.0f}};
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 0.25f), 0.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 0.5f), 1.0f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 0.75f), 2.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(keys, 1.0f), 4.0f);
+
+    const std::vector<ParticleLifetimeScaleKey> duplicate = {
+        ParticleLifetimeScaleKey{0.0f, 0.5f},
+        ParticleLifetimeScaleKey{0.5f, 1.0f},
+        ParticleLifetimeScaleKey{0.5f, 3.0f},
+        ParticleLifetimeScaleKey{1.0f, 0.0f}};
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(duplicate, 0.5f), 3.0f);
+    EXPECT_FLOAT_EQ(EvaluateParticleLifetimeScale(duplicate, 0.75f), 1.5f);
 }

@@ -378,6 +378,39 @@ ParticleEmitterAsset ParseEmitter(
             lifetime.at(1), "lifetime.max");
     }
 
+    if (json.contains("lifetimeScaleKeys"))
+    {
+        const nlohmann::json& keys = json.at("lifetimeScaleKeys");
+        if (!keys.is_array() ||
+            keys.size() > kMaxParticleCurveKeys)
+        {
+            throw std::invalid_argument(
+                "Particle lifetimeScaleKeys requires 0..8 entries");
+        }
+        for (const nlohmann::json& keyJson : keys)
+        {
+            if (!keyJson.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle lifetime scale key must be an object");
+            }
+            ParticleLifetimeScaleKey key;
+            key.time = ReadFiniteFloat(keyJson, "time", key.time);
+            key.scale = ReadFiniteFloat(
+                keyJson, "scale", key.scale);
+            emitter.lifetimeScaleKeys.push_back(key);
+        }
+        // 重复 time 合法，稳定排序保留作者书写顺序供编辑器后续处理。
+        std::stable_sort(
+            emitter.lifetimeScaleKeys.begin(),
+            emitter.lifetimeScaleKeys.end(),
+            [](const ParticleLifetimeScaleKey& lhs,
+               const ParticleLifetimeScaleKey& rhs)
+            {
+                return lhs.time < rhs.time;
+            });
+    }
+
     if (json.contains("size"))
     {
         const nlohmann::json& size = json.at("size");
@@ -1330,7 +1363,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         }
     }
     if (emitter.colorKeys.size() > kMaxParticleCurveKeys ||
-        emitter.sizeKeys.size() > kMaxParticleCurveKeys)
+        emitter.sizeKeys.size() > kMaxParticleCurveKeys ||
+        emitter.lifetimeScaleKeys.size() > kMaxParticleCurveKeys)
     {
         throw std::invalid_argument(
             "Particle curve key count exceeds GPU capacity");
@@ -1368,6 +1402,26 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
                 "Particle size key value must be non-negative");
         }
         previousSizeTime = key.time;
+    }
+    float previousLifetimeScaleTime = -1.0f;
+    for (const ParticleLifetimeScaleKey& key :
+         emitter.lifetimeScaleKeys)
+    {
+        RequireFinite(key.time, "lifetimeScaleKeys.time");
+        RequireFinite(key.scale, "lifetimeScaleKeys.scale");
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time < previousLifetimeScaleTime)
+        {
+            throw std::invalid_argument(
+                "Particle lifetime scale key times must be in [0,1] "
+                "and non-decreasing");
+        }
+        if (key.scale < 0.0f || key.scale > 4.0f)
+        {
+            throw std::invalid_argument(
+                "Particle lifetime scale key value must be in [0,4]");
+        }
+        previousLifetimeScaleTime = key.time;
     }
     if (emitter.flipbookColumns == 0 || emitter.flipbookColumns > 16 ||
         emitter.flipbookRows == 0 || emitter.flipbookRows > 16)

@@ -96,6 +96,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "lodSpawnRateScale", ValueKind::Number, true},
     {K::ParticleSystem, "", "lod.tiers", ValueKind::Array, true},
     {K::ParticleSystem, "", "lifetime", ValueKind::Array},
+    {K::ParticleSystem, "", "lifetimeScaleKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "shape.type", ValueKind::Text, false, "", "sphere|box|cone|cylinder|disc|ring"},
     {K::ParticleSystem, "", "shape.radius", ValueKind::Number, false, "cm"},
     {K::ParticleSystem, "", "shape.extent", ValueKind::Vector3, true, "cm"},

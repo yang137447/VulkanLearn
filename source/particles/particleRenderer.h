@@ -196,9 +196,15 @@ private:
         Eigen::Vector4f attractorPosition;
         // xyz = constant wind acceleration in simulation space, w = 0.
         Eigen::Vector4f wind;
+        // x = lifeT, y = time scale, z/w reserved. 空表由 count=0 表示，
+        // 运行时倍率恒为 1；prewarm 不消费这张表。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            lifetimeScaleKeys;
+        // x = key count, y/z/w reserved.
+        Eigen::Vector4f lifetimeScaleParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5568,
+        sizeof(FrameUniforms) == 5712,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -233,6 +239,12 @@ private:
     static_assert(
         offsetof(FrameUniforms, wind) == 5552,
         "ParticleFrame wind offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, lifetimeScaleKeys) == 5568,
+        "ParticleFrame lifetimeScaleKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, lifetimeScaleParams) == 5696,
+        "ParticleFrame lifetimeScaleParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

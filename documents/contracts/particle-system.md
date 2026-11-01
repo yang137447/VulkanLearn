@@ -262,6 +262,24 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   的 `time.delta`，`Editing`/无脚本时回退到编辑器 `simulationDelta`。因此暂停会冻结
   粒子，时间缩放同时作用于粒子；不再使用眼适应的 wall-clock delta。
 
+### Lifetime Scale Curve
+
+`lifetimeScaleKeys: [{ "time": 0, "scale": 1 }]` 是可选的生命周期倍率曲线，属于
+`update.lifetime` 模块；缺省或空数组表示倍率恒为 `1`。
+
+- `time` 是归一化年龄 `lifeT = age / lifetime`，取值 `[0, 1]`；`scale` 取值
+  `[0, 4]`。两者都必须是有限数；缺省时 `time = 0`、`scale = 1`。最多 8 个 key，
+  加载时按 `time` 稳定升序排序，允许相同 `time`；相同 `time` 段取后一个 key 的值。
+- 每帧对每个存活粒子用当前 `lifeT` 做分段线性插值。`lifeT` 在首 key 之前或尾 key
+  之后时取端点 key 的 `scale`（即钳制到 `[0,1]` 后查表），不做线性外推。
+- 求得的倍率只乘到该粒子本帧的模拟 delta 上，用于位置、速度与 `age` 的推进；
+  不改变作者的 `lifetime` 范围、发射预算、prewarm 目标数或渲染尺寸。
+- `scale = 0` 表示该粒子在当前年龄被冻结：本帧 delta 为 0，位置、速度与 `age`
+  都不推进，也不做碰撞与历史点更新，但粒子仍保持存活并继续渲染；它不会立即死亡。
+  离开该段后继续按曲线推进。
+- prewarm 例外：首帧预热仍按原来的解析解用完整随机年龄积分，不应用
+  `lifetimeScaleKeys`；倍率只在预热完成后的正常运行帧生效。
+
 ## 局部空间与固定包围球
 
 ### localSpace
@@ -566,6 +584,9 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 - `lodDistance` / `lodSpawnRateScale`：单档兼容写法。`lod.tiers` 非空时被忽略；
   为空时发射器中心距离超过 `lodDistance` 后 `spawnRate *= lodSpawnRateScale`。
 - `lifetime: [min, max]`：秒，`0 < min <= max <= 60`。
+- `lifetimeScaleKeys`：可选的归一化年龄倍率曲线，最多 8 个
+  `{ "time": 0..1, "scale": 0..4 }` key；空或缺省表示恒为 `1`。详见
+  「Lifetime Scale Curve」。
 - `shape`：发射形状，默认 `{ "type": "sphere", "radius": 10 }`。`type` 只能是
   `sphere`、`box`、`cone`、`cylinder`、`disc`、`ring`；未知类型直接拒绝。
   - `radius`：cm，默认 `10`，必须非负。`sphere` 用它定义球半径；`disc` 用它定义
