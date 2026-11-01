@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -198,6 +199,11 @@ struct ParticleEmitterAsset
 struct ParticleSystemAsset
 {
     std::string name;
+    // v1 = 扁平 emitter 字段；v2 = emitters[].modules 模块栈。
+    // 运行时消费的仍是展平后的 ParticleEmitterAsset，模块顺序只属于作者层。
+    uint32_t version = 1;
+    // v2 系统级用户参数；当前存储并校验，供后续模块引用。
+    std::unordered_map<std::string, float> userParameters;
     // 相对资源根的逻辑路径，用作运行时发射器身份的一部分。
     std::string sourcePath;
     std::vector<ParticleEmitterAsset> emitters;

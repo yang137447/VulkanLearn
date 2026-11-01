@@ -40,6 +40,22 @@
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
 
+## v2 模块栈（资产层）
+
+- `PS_*.json` 可声明 `version: 2`；每个 emitter 用 `modules` 数组描述模块。模块形状为
+  `{ "type": "...", "enabled": true, "fields": { ... } }`。`enabled: false` 的模块不参与展平，
+  runtime 使用该字段的默认值。
+- 当前模块类型：`emitter`、`renderer`、`spawn.rate`、`spawn.shapeSphere`、`spawn.velocity`、
+  `update.lifetime`、`update.color`、`update.size`、`update.rotation`、`forces.gravity`、
+  `forces.drag`、`collision.analytic`、`flipbook`、`lod`、`curves`、`bounds`、`culling`。
+  未知类型直接拒绝，避免拼写错误静默变成空模块。
+- `fields` 与 v1 emitter 字段同名并递归合并；两个启用模块写同一字段且值不同会拒绝。
+  v2 的模块顺序目前只属于作者层，runtime 消费展平后的 `ParticleEmitterAsset`，不重新解释顺序。
+- 根对象可声明 `userParameters`：对象、最多 64 项、值为有限数；当前只解析并保存在
+  `ParticleSystemAsset::userParameters`，尚未被模块引用。
+- 没有 `version` 或 `version: 1` 的资产继续走原扁平字段路径；v2 根对象也允许直接携带一个
+  隐式 emitter 的 `modules`。展平后的 runtime 校验与 v1 完全相同。
+
 ## 数据路径
 
 ```text

@@ -77,6 +77,97 @@ TEST(ParticleAsset, LegacyRootBecomesOneImplicitEmitter)
     EXPECT_EQ(asset.emitters.at(0).maxParticles, 32u);
 }
 
+namespace
+{
+
+Json V2ModuleDocument()
+{
+    return Json{
+        {"name", "PS_v2"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", {{"Wind", 2.5}}},
+        {"emitters", Json::array({
+            Json{
+                {"name", "fire"},
+                {"position", {1.0, 2.0, 3.0}},
+                {"modules", Json::array({
+                    Json{{"type", "emitter"}, {"fields", {
+                        {"maxParticles", 128},
+                        {"renderMode", "billboard"}}}},
+                    Json{{"type", "spawn.rate"}, {"fields", {
+                        {"spawnRate", 50.0},
+                        {"burst", false}}}},
+                    Json{{"type", "forces.gravity"}, {"fields", {
+                        {"gravity", {0.0, -50.0, 0.0}}}}},
+                    Json{{"type", "update.lifetime"}, {"fields", {
+                        {"lifetime", {1.0, 2.0}}}}}
+                })}
+            }
+        })}
+    };
+}
+
+} // namespace
+
+TEST(ParticleAsset, V2ModulesFlattenIntoRuntimeEmitter)
+{
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            V2ModuleDocument(), "Maps/SC_test/PS_v2.json");
+
+    ASSERT_EQ(asset.version, 2u);
+    ASSERT_EQ(asset.userParameters.size(), 1u);
+    EXPECT_FLOAT_EQ(asset.userParameters.at("Wind"), 2.5f);
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    const ParticleEmitterAsset& emitter = asset.emitters.front();
+    EXPECT_EQ(emitter.name, "fire");
+    EXPECT_EQ(emitter.maxParticles, 128u);
+    EXPECT_FLOAT_EQ(emitter.spawnRate, 50.0f);
+    EXPECT_EQ(emitter.gravity, Eigen::Vector3f(0.0f, -50.0f, 0.0f));
+    EXPECT_FLOAT_EQ(emitter.lifetimeMin, 1.0f);
+    EXPECT_FLOAT_EQ(emitter.lifetimeMax, 2.0f);
+}
+
+TEST(ParticleAsset, V2DisabledModulesLeaveRuntimeDefaults)
+{
+    Json document = V2ModuleDocument();
+    document["emitters"][0]["modules"][1]["enabled"] = false;
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_v2_disabled.json");
+    EXPECT_FLOAT_EQ(asset.emitters.front().spawnRate, 200.0f);
+}
+
+TEST(ParticleAsset, V2ModuleFieldConflictsAndUnknownTypesAreRejected)
+{
+    Json conflict = V2ModuleDocument();
+    conflict["emitters"][0]["modules"].push_back(Json{
+        {"type", "spawn.rate"},
+        {"fields", {{"spawnRate", 10.0}}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            conflict, "Maps/SC_test/PS_v2_conflict.json"),
+        std::invalid_argument);
+
+    Json unknown = V2ModuleDocument();
+    unknown["emitters"][0]["modules"][0]["type"] = "spawn.typo";
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            unknown, "Maps/SC_test/PS_v2_unknown.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, V2UserParametersRejectNonNumbers)
+{
+    Json document = V2ModuleDocument();
+    document["userParameters"]["Wind"] = "fast";
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_v2_params.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, DuplicateEmitterNamesAreRejected)
 {
     Json document = MultiEmitterDocument();
