@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <limits>
 
 #include "editor/scene/editorActorProperty.h"
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/ui/editorActorVisualization.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "sceneNode.h"
 #include "world/world.h"
 
@@ -114,6 +116,106 @@ TEST(EditorActorProperty, MeshEditMovesAllSectionsAndPreservesTheirRelativeMatri
     EXPECT_EQ(a.scenePosition, b.scenePosition);
     EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("mesh|Model", P::Scale, 0, 0), error));
     EXPECT_EQ(world.GetMeshObjects().at("Model::A").sceneScale, Eigen::Vector3f(-2, 3, 4));
+}
+
+TEST(EditorActorProperty, ParticleActorSnapshotExposesAuthorTransformAndVisibility)
+{
+    World world(7, "Maps/SC_particle/SC_particle.json");
+    ParticleSystemAsset asset;
+    asset.name = "PS_Smoke";
+    asset.emitters.resize(2);
+    WorldParticleSystem system;
+    system.name = "Smoke_01";
+    system.assetPath = "Maps/SC_particle/Particles/PS_Smoke.json";
+    system.asset = asset;
+    system.scenePosition = Eigen::Vector3f(10, 20, 30);
+    system.sceneRotation = Eigen::Vector3f(0, 45, 0);
+    system.sceneScale = Eigen::Vector3f(2, 3, 4);
+    system.visible = false;
+    world.AddParticleSystem(system.name, system);
+
+    const auto actors = BuildEditorSceneActors(world);
+    const EditorSceneActorSnapshot* particle = nullptr;
+    for (const auto& actor : actors)
+        if (actor.identity == "particleSystem|Smoke_01") particle = &actor;
+    ASSERT_NE(particle, nullptr);
+    EXPECT_EQ(particle->type, EditorSceneActorType::ParticleSystem);
+    EXPECT_EQ(particle->displayName, "Smoke_01");
+    EXPECT_EQ(particle->particleAssetPath, system.assetPath);
+    EXPECT_EQ(particle->particleEmitterCount, 2u);
+    EXPECT_EQ(particle->position, Eigen::Vector3f(10, 20, 30));
+    EXPECT_EQ(particle->rotation, Eigen::Vector3f(0, 45, 0));
+    EXPECT_EQ(particle->scale, Eigen::Vector3f(2, 3, 4));
+    // 隐藏实例仍必须出现在大纲里，眼睛状态由 World 的可见性字段决定。
+    EXPECT_FALSE(particle->visible);
+}
+
+TEST(EditorActorProperty, ParticleActorEditsOnlyTransformThroughWorld)
+{
+    World world(7, "scene.json");
+    WorldParticleSystem system;
+    system.name = "Spark";
+    system.scenePosition = Eigen::Vector3f(1, 2, 3);
+    world.AddParticleSystem(system.name, system);
+
+    std::string error;
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Position, 0, 100), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Rotation, 1, 45), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Scale, 2, 2.5f), error));
+    const WorldParticleSystem* updated = world.FindParticleSystem("Spark");
+    ASSERT_NE(updated, nullptr);
+    EXPECT_EQ(updated->scenePosition, Eigen::Vector3f(100, 2, 3));
+    EXPECT_EQ(updated->sceneRotation, Eigen::Vector3f(0, 45, 0));
+    EXPECT_EQ(updated->sceneScale, Eigen::Vector3f(1, 1, 2.5f));
+}
+
+TEST(EditorActorProperty, ParticleActorRejectsZeroOrSubEpsilonScale)
+{
+    World world(7, "scene.json");
+    WorldParticleSystem system;
+    system.name = "Spark";
+    world.AddParticleSystem(system.name, system);
+
+    std::string error;
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Scale, 0, 0), error));
+    EXPECT_NE(error.find("scale"), std::string::npos);
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Scale, 1, 1.0e-7f), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(
+        world, Edit("particleSystem|Spark", P::Intensity, 0, 10), error));
+    const WorldParticleSystem* unchanged = world.FindParticleSystem("Spark");
+    ASSERT_NE(unchanged, nullptr);
+    EXPECT_EQ(unchanged->sceneScale, Eigen::Vector3f::Ones());
+}
+
+TEST(EditorActorProperty, ParticleActorDetailsExposeAssetAndTransformOnly)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::ParticleSystem;
+    actor.displayName = "Smoke";
+    actor.particleAssetPath = "Maps/PS_smoke.json";
+    actor.particleEmitterCount = 3;
+
+    const auto fields = SceneActorFields(actor);
+    bool hasAsset = false;
+    bool hasEmitters = false;
+    for (const auto& field : fields)
+    {
+        hasAsset = hasAsset || field.id == "actor-field-particle-asset";
+        hasEmitters = hasEmitters || field.id == "actor-field-particle-emitters";
+    }
+    EXPECT_TRUE(hasAsset);
+    EXPECT_TRUE(hasEmitters);
+
+    const auto editable = SceneActorEditableFields(actor);
+    ASSERT_EQ(editable.size(), 3u);
+    EXPECT_EQ(editable[0].property, P::Position);
+    EXPECT_EQ(editable[1].property, P::Rotation);
+    EXPECT_EQ(editable[2].property, P::Scale);
 }
 
 TEST(EditorActorProperty, SpotHalfAnglesAreValidatedTogetherAndConvertedToRadians)
@@ -354,6 +456,34 @@ TEST(EditorActorVisualization, ScriptCapsuleOutlineHasOnlyVerticalStraightSeams)
         // 半球/圆环的小段不会越过整个直段；跨直段的线必须竖直。
         if (std::abs(line.end.y() - line.begin.y()) > 20)
             EXPECT_NEAR(line.begin.x(), line.end.x(), 1e-4f);
+    }
+}
+
+TEST(EditorActorVisualization, ParticleActorDrawsThreeAxisMarkerAtAuthorPosition)
+{
+    EditorSceneCameraActor view;
+    view.position = {0, 0, 1000};
+    view.clipFar = 5000;
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::ParticleSystem;
+    actor.position = {10, 20, 30};
+
+    const auto lines = BuildActorVisualLines(actor, view, 800, 400);
+    // 粒子 actor 只画摆放原点的三轴十字；容量必须与这里的 3 条线一致。
+    ASSERT_EQ(lines.size(), 3u);
+    Eigen::Vector2f center;
+    ASSERT_TRUE(ProjectActorVisualPoint(view, actor.position, 800, 400, center));
+    for (const auto& line : lines)
+    {
+        EXPECT_TRUE(line.begin.allFinite());
+        EXPECT_TRUE(line.end.allFinite());
+        // 每条轴线段都应经过 actor.position 的投影点，而不是画在世界原点。
+        const Eigen::Vector2f direction = line.end - line.begin;
+        const Eigen::Vector2f offset = center - line.begin;
+        const float distance = std::abs(
+            direction.x() * offset.y() - direction.y() * offset.x()) /
+            std::max(direction.norm(), 1.0e-6f);
+        EXPECT_LT(distance, 0.5f);
     }
 }
 } // namespace

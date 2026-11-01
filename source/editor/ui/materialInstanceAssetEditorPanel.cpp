@@ -79,6 +79,7 @@ bool ParticleFieldInModule(
         return field == "name" || field == "position" ||
             field == "localSpace" ||
             field == "renderMode" ||
+            field == "billboardAlignment" ||
             field == "ribbonWidth" ||
             field == "ribbonSegments" ||
             field == "ribbonFade" ||
@@ -1844,6 +1845,7 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
                 case EditorSceneActorType::DirectionalLight: capacity = 3; break;
                 case EditorSceneActorType::Camera: capacity = 8; break;
                 case EditorSceneActorType::SquareAreaLight: capacity = 5; break;
+                case EditorSceneActorType::ParticleSystem: capacity = 3; break;
                 case EditorSceneActorType::Script:
                     capacity = actor.scriptPhysics.is_null() ? 0 :
                         actor.scriptPhysics.value("shape", "box") == "box" ? 12 : 100;
@@ -1890,8 +1892,13 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
         widgetDocument.SetClass(id, "selected", selected);
         const auto& actor = actors[index];
         Eigen::Vector2f pixel;
-        const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
-            ? actor.camera.position : actor.type == EditorSceneActorType::Script ? actor.position : actor.light.position;
+        // 粒子 actor 没有灯光字段；图标必须投影到作者摆放原点，不能落到世界零点。
+        Eigen::Vector3f position = actor.light.position;
+        if (actor.type == EditorSceneActorType::Camera)
+            position = actor.camera.position;
+        else if (actor.type == EditorSceneActorType::Script ||
+            actor.type == EditorSceneActorType::ParticleSystem)
+            position = actor.position;
         const bool visible = actor.visible && view &&
             ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
         widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");

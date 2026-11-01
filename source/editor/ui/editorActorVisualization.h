@@ -61,6 +61,17 @@ inline std::vector<EditorActorVisualLine> BuildActorVisualLines(
 {
     std::vector<EditorActorVisualLine> lines;
     if (width <= 0.0f || height <= 0.0f) return lines;
+    if (actor.type == EditorSceneActorType::ParticleSystem)
+    {
+        // 粒子 actor 没有可投影的固定几何；用世界轴十字标出摆放原点，
+        // 长度固定为 30cm，不冒充发射器包围球或发射方向。
+        constexpr float AxisLength = 30.0f;
+        for (const Eigen::Vector3f& axis : std::array<Eigen::Vector3f, 3>{
+            Eigen::Vector3f::UnitX(), Eigen::Vector3f::UnitY(), Eigen::Vector3f::UnitZ()})
+            AddActorVisualLine(lines, view, actor.position - axis * AxisLength,
+                actor.position + axis * AxisLength, width, height);
+        return lines;
+    }
     if (actor.type == EditorSceneActorType::Script && !actor.scriptPhysics.is_null())
     {
         const auto& physics = actor.scriptPhysics;

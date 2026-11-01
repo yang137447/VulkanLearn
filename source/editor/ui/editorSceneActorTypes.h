@@ -12,8 +12,9 @@
 namespace VL::EditorUi
 {
 
-// 大纲 actor 的类型。前七种与场景 JSON 的对象 type 一一对应，WindProfile 是
-// 网格导入产生的风剖面（不是场景对象），最后一类只表达 World 里确实存在的状态。
+// 大纲 actor 的类型。除 WindProfile 外均与场景 JSON 的对象 type 一一对应；
+// WindProfile 是网格导入产生的风剖面（不是场景对象），Script 只表达 World 里
+// 确实存在的 C# Blueprint 状态。
 enum class EditorSceneActorType : uint8_t
 {
     Mesh,
@@ -23,6 +24,7 @@ enum class EditorSceneActorType : uint8_t
     SquareAreaLight,
     Camera,
     Environment,
+    ParticleSystem,
     WindProfile,
     Script
 };
@@ -113,15 +115,15 @@ struct EditorSceneActorSnapshot
     // 展开状态的键，不是 DOM 索引，也不能当作 GPU 资源身份。
     std::string identity;
     std::string displayName;
-    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格与四类灯
-    // 真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
+    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。网格、四类灯与
+    // 粒子系统真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
     bool visible = true;
     // 只有 Mesh 使用；其余类型为空。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;
-    // 作者根 TRS：网格取 scene JSON 根，节点取 SceneNode；旋转沿用 VL 的度制 XYZ。
+    // 作者根 TRS：网格与粒子系统取 scene JSON 根，节点取 SceneNode；旋转沿用 VL 的度制 XYZ。
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
     Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
     Eigen::Vector3f scale = Eigen::Vector3f::Ones();
@@ -150,6 +152,10 @@ struct EditorSceneActorSnapshot
     bool scriptSpawned = false;
     EditorSceneEnvironmentActor environment;
     EditorSceneWindActor wind;
+    // 粒子系统只冻结展示所需的作者资产路径与发射器数量；模拟与 GPU 缓冲
+    // 仍归渲染器所有，UI 不持有 ParticleSystemAsset 或任何 GPU 句柄。
+    std::string particleAssetPath;
+    uint32_t particleEmitterCount = 0;
 };
 
 } // namespace VL::EditorUi

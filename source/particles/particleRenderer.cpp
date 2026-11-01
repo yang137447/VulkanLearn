@@ -412,9 +412,15 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
     for (const ParticleSystemSnapshot& snapshot :
          renderScene.particleSystems)
     {
-        for (const ParticleEmitterAsset& emitter :
-             snapshot.asset.emitters)
+        for (size_t emitterIndex = 0;
+             emitterIndex < snapshot.asset.emitters.size();
+             ++emitterIndex)
         {
+            const ParticleEmitterAsset& emitter =
+                snapshot.asset.emitters[emitterIndex];
+            const bool enabled =
+                emitterIndex < kMaxParticleEmitters &&
+                ((snapshot.runtime.enabledEmitterMask >> emitterIndex) & 1u) != 0;
             const std::string key =
                 BuildEmitterKey(snapshot, emitter);
             desired.insert(key);
@@ -424,6 +430,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 BuildEmitterTextureSourceKey(emitter);
             const std::string meshSourceKey =
                 BuildEmitterMeshSourceKey(emitter);
+            // 可见性/启用状态与实例覆盖写入所有分支：新建池直接继承，
+            // 已有池每帧跟随快照；开关切换不走资源重建。
             auto emitterIt = emitters.find(key);
             if (emitterIt == emitters.end() ||
                 emitterIt->second->asset.maxParticles !=
@@ -441,13 +449,21 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                         std::move(emitterIt->second));
                     emitters.erase(emitterIt);
                 }
-                CreateEmitter(emitter, model, key);
+                CreateEmitter(
+                    emitter, model, key, snapshot.visible, enabled,
+                    snapshot.runtime.spawnRateScale,
+                    snapshot.runtime.colorTint);
                 continue;
             }
 
             // 资产参数和摆放矩阵每帧都可变化；GPU 缓冲只随 maxParticles 重建。
             emitterIt->second->asset = emitter;
             emitterIt->second->model = model;
+            emitterIt->second->visible = snapshot.visible;
+            emitterIt->second->enabled = enabled;
+            emitterIt->second->spawnRateScale =
+                snapshot.runtime.spawnRateScale;
+            emitterIt->second->colorTint = snapshot.runtime.colorTint;
             emitterIt->second->meshScale = emitter.meshScale;
             emitterIt->second->meshAlignment =
                 emitter.meshAlignment;
@@ -504,7 +520,11 @@ void ParticleRenderer::RestartParticleSystems(
 void ParticleRenderer::CreateEmitter(
     const ParticleEmitterAsset& asset,
     const Eigen::Matrix4f& model,
-    const std::string& key)
+    const std::string& key,
+    bool visible,
+    bool enabled,
+    float spawnRateScale,
+    const Eigen::Vector4f& colorTint)
 {
     std::shared_ptr<EmitterResources> emitter(
         new EmitterResources(),
@@ -516,6 +536,10 @@ void ParticleRenderer::CreateEmitter(
     emitter->key = key;
     emitter->asset = asset;
     emitter->model = model;
+    emitter->visible = visible;
+    emitter->enabled = enabled;
+    emitter->spawnRateScale = spawnRateScale;
+    emitter->colorTint = colorTint;
     emitter->textureSourceKey =
         BuildEmitterTextureSourceKey(asset);
     emitter->meshSourceKey =
@@ -1214,6 +1238,14 @@ void ParticleRenderer::RecordSimulation(
             ++frameStats.culledEmitters;
             continue;
         }
+        // 作者隐藏、发射器禁用与视锥剔除共用"冻结"路径：不推进 elapsed/prewarm，
+        // 不清池、不排序、不 dispatch，也不进入 RecordGraphics 的绘制列表。
+        if (!emitter.visible || !emitter.enabled)
+        {
+            emitter.culled = true;
+            ++frameStats.culledEmitters;
+            continue;
+        }
         const ParticleEmitterCullingResult culling =
             CullParticleEmitter(
                 ParticleEmitterCullingInput{
@@ -1281,7 +1313,7 @@ void ParticleRenderer::RecordSimulation(
             (emitter.worldCenter - renderScene.camera.position).norm();
         uniforms.simulation = Eigen::Vector4f(
             EffectiveParticleSpawnRate(
-                emitter.asset, lodDistance),
+                emitter.asset, lodDistance) * emitter.spawnRateScale,
             dt,
             emitter.elapsedSeconds,
             emitter.prewarm ? 1.0f : 0.0f);
@@ -1384,9 +1416,9 @@ void ParticleRenderer::RecordSimulation(
         uniforms.screenParams = Eigen::Vector4f(
             viewportHeightPixels,
             emitter.asset.maxScreenSize,
-            // prewarm 的稳态池填充使用未缩放的作者 spawnRate；LOD 只
-            // 影响 simulation.x 的连续发射预算。shape.z 留给 localSpace。
-            emitter.asset.spawnRate,
+            // prewarm 的稳态池填充使用作者 spawnRate 乘实例倍率；LOD 只
+            // 影响 simulation.x 的连续发射预算。
+            emitter.asset.spawnRate * emitter.spawnRateScale,
             0.0f);
         uniforms.flipbookFrameDurations = emitter.flipbookTable.durations;
         uniforms.flipbookFramePivots = emitter.flipbookTable.pivots;
@@ -1461,6 +1493,12 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.meshScale.x(),
             emitter.asset.meshScale.y(),
             emitter.asset.meshScale.z(),
+            0.0f);
+        uniforms.colorTint = emitter.colorTint;
+        uniforms.billboardParams = Eigen::Vector4f(
+            emitter.asset.billboardAlignment == "velocity" ? 1.0f : 0.0f,
+            0.0f,
+            0.0f,
             0.0f);
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,

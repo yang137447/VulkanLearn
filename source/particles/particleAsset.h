@@ -60,6 +60,9 @@ struct ParticleEmitterAsset
     // 条带；mesh 用静态网格按粒子实例化。ribbonWidth 是世界空间半宽（cm），
     // ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
     std::string renderMode = "billboard"; // billboard|ribbon|mesh
+    // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
+    // 粒子速度。ribbon/mesh 各自使用自己的朝向逻辑。
+    std::string billboardAlignment = "camera";
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;

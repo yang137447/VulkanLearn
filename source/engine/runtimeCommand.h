@@ -30,6 +30,10 @@ enum class RuntimeCommandType
     SpawnParticleSystem,
     DestroyParticleSystem,
     RestartParticleSystem,
+    // 逐实例运行时参数覆盖：stringValue=场景对象名，
+    // secondaryStringValue=spawnRateScale/colorTint/emitter/reset。
+    // 覆盖只存在于当前 World，不写 PS_*.json / SC_*.json。
+    SetParticleSystemParameter,
     SetDebugViewMode,
     CaptureScreenshot,
     SetCameraPosition,
@@ -99,6 +103,9 @@ struct RuntimeCommand
     RuntimeShaderReloadScope shaderReloadScope =
         RuntimeShaderReloadScope::Changed;
     int intValue = 0;
+    // SetParticleSystemParameter 的第二个整数参数（emitter 的 0/1 开关），
+    // 与 intValue 分开以免把 index 和布尔值编码进同一个数。
+    int intValue2 = 0;
     float floatValue = 0.0f;
     // 环境压力测试通过值语义投递完整天空参数，执行端只在 active World 所有权侧写回。
     SkyParametersGPU skyParametersValue;
@@ -111,6 +118,8 @@ struct RuntimeCommand
     std::string secondaryStringValue;
     // particlespawn 的世界空间摆放位置。
     Eigen::Vector3f particleSpawnPosition = Eigen::Vector3f::Zero();
+    // particleparam colorTint 的 RGBA；RGB 是 HDR 乘数，A 是不透明度乘数。
+    Eigen::Vector4f particleColorTint = Eigen::Vector4f::Ones();
     std::string sourceText;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;

@@ -1,6 +1,6 @@
 # C# Blueprint Runtime
 
-状态：当前契约，2026-10-18。对应 `source/script/`、`script/`、
+状态：当前契约，2026-11-01。对应 `source/script/`、`script/`、
 `source/editor/scene/scriptBlueprintAuthoring.cpp` 与 GoogleTest `script_tests`。
 覆盖蓝图作者、游戏逻辑、物理、编译重载、动态资源和导出；完整目标及历史见
 [开发计划](../plan/architecture/csharp-actor-runtime-plan.md)。
@@ -590,6 +590,39 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 角色有原生 capsule 查询代理，参与射线与 Trigger；重力只在角色的每帧物理推进中积分。
 出生或传送在完整 body 集合同步后刷新支撑查询；移走/删除根体会唤醒旧位置附近的休眠体。
 
+## Particle Systems
+
+`Blueprint.Particles` 是 Play 上下文内的粒子实例服务，只在所属 Blueprint 的 live GT
+回调中可用；OnCreate、工作线程、其它 Blueprint 及旧上下文调用都会拒绝。
+
+- `Particles.Spawn(assetPath, position, rotation?, scale?)` 返回本上下文的
+  `ParticleSystem`。省略 rotation/scale 时分别使用零旋转与单位缩放；TRS 必须有限，
+  且缩放各轴绝对值不小于 `1e-6`。C# 侧只做值校验并把 `spawn` 命令加入
+  `particleCommands`，此时尚未读取资产。
+- `Particles.Find(id)` 返回本 Blueprint live 表中的实例或 null；
+  `Particles.DestroyAll()` 销毁本 Blueprint 当前仍存活的实例。
+- `ParticleSystem` 暴露 `Handle`/`Id`/`IsAlive`，以及 `Destroy()`、
+  `SetVisible(bool)`、`SetSpawnRateScale(float)`、`SetColorTint(Vector4)`、
+  `SetEmitterEnabled(int, bool)`、`ResetOverrides()`。
+- `IsAlive` 只读取当前上下文的本地 live 表。`Destroy()`/`DestroyAll()` 被本地接受后
+  句柄立即变为不存活，不向原生 World 查询；旧上下文、外部 owner 或已销毁实例的
+  handle 在 `IsAlive` 中返回 false，在其它操作中被拒绝。
+- 没有 `Restart`。需要重启时执行 `Destroy()` 后再 `Spawn()`。
+
+`particleCommands` 是逐帧一次性批处理：服务在回调中累积命令，native GT 在命令点消费并
+清空，同值新命令不会被状态去重。每批最多 256 条普通命令；`RemoveOwner` 生成的清理命令
+不受该预算限制。原生 `ScriptRuntimeSubsystem::ApplyParticleCommands` 对 `Spawn` 同步调用
+`ParticleAssetLoader::Prepare` 校验资源。托管调用已返回的句柄不代表资产加载成功：
+路径、JSON 或资产校验失败会抛出 `Script.InvalidParticleSpawn`，本帧 Tick 捕获后以
+`StopContext` 诊断停止该 Play 上下文。
+
+`SetSpawnRateScale` 只接受有限的 `[0,16]`；`SetColorTint` 要求 RGB 在 `[0,16]`、
+alpha 在 `[0,1]` 且全部有限；`SetEmitterEnabled` 的 index 为 `[0,15]`。
+这些方法与 console `particleparam` 使用同一组 World setter 和校验边界。
+C# spawn 的实例 ID 由当前上下文生成 `~particle.<n>`，不写入作者 Scene。
+Blueprint Destroy、故障隔离或 EndPlay 触发的 owner 清理会为仍在 live 表中的实例
+补发 `destroy`；整体上下文 Release 是独立边界，不经过该补发路径。
+
 ## 输入、计时器与 Blueprint 通信
 
 `config/config.json` 可选 `gameplayInput` 配置由启动时 SDL 一次解析键名：
@@ -846,7 +879,7 @@ Vector2 与 MoveForward/MoveRight/MoveUp 轴、下述 Time 值、
 回调内 Log.Debug/Info/Warning/Error、Destroy，Components/GetComponent、SceneComponent.Parent/WorldMatrix、
 BlueprintWorld 的 Spawn/Destroy/IsAlive 与可选 Body。Destroy 停止后续回调、
 结束播放并隐藏组件网格；实例槽位保留到上下文释放，Stop 恢复作者实例。
-计时器、跨 Blueprint 查找/消息、组件与动态资产见上节。
+粒子 Play 期实例见 `Particles` 小节；计时器、跨 Blueprint 查找/消息、组件与动态资产见上节。
 
 ### 时间与性能快照
 

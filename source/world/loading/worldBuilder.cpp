@@ -159,16 +159,10 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node)
 }
 
 Eigen::Matrix4f BuildParticleSystemModel(
-    const nlohmann::json& node)
+    const Eigen::Vector3f& position,
+    const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
 {
-    const Eigen::Vector3f position =
-        JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
-    const Eigen::Vector3f rotation =
-        JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
-    const Eigen::Vector3f scale = node.contains("scale")
-        ? JsonParser::ParseValue<Eigen::Vector3f>(node["scale"])
-        : Eigen::Vector3f::Ones();
-
     Eigen::Matrix4f scaleMatrix = Eigen::Matrix4f::Identity();
     scaleMatrix(0, 0) = scale.x();
     scaleMatrix(1, 1) = scale.y();
@@ -305,8 +299,21 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 particleSystem.assetPath =
                     objectJson.at("particlePath").get<std::string>();
                 particleSystem.asset = *objectPlan.particleAsset;
+                particleSystem.scenePosition =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["position"]);
+                particleSystem.sceneRotation =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["rotation"]);
+                particleSystem.sceneScale = objectJson.contains("scale")
+                    ? JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["scale"])
+                    : Eigen::Vector3f::Ones();
                 particleSystem.model =
-                    BuildParticleSystemModel(objectJson);
+                    BuildParticleSystemModel(
+                        particleSystem.scenePosition,
+                        particleSystem.sceneRotation,
+                        particleSystem.sceneScale);
                 world->AddParticleSystem(
                     objectPlan.objectName,
                     std::move(particleSystem));

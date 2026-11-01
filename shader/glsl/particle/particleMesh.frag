@@ -41,4 +41,5 @@ void main()
         float(textureSize(particleTexture, 0).x),
         0.0,
         1.0);
+    outColor *= frame.colorTint;
 }

@@ -5,6 +5,8 @@
 
 #include <Eigen/Dense>
 
+#include "particles/particleRuntimeState.h"
+
 namespace VL
 {
 
@@ -44,6 +46,39 @@ inline Eigen::Matrix4f BuildParticleSpawnModel(
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     model.block<3, 1>(0, 3) = position;
     return model;
+}
+
+// 四个运行时参数名由 Console 与执行端共用；未知名字必须被拒绝，
+// 不能静默落到某个默认分支。
+inline bool ValidateParticleParameterName(
+    std::string_view name,
+    std::string& outError)
+{
+    if (name == "spawnRateScale" || name == "colorTint" ||
+        name == "emitter" || name == "reset")
+    {
+        outError.clear();
+        return true;
+    }
+    outError =
+        "Unknown particle parameter: " + std::string(name) +
+        " (expected spawnRateScale, colorTint, emitter or reset).";
+    return false;
+}
+
+// emitter 命令的第二个参数只接受 0/1；范围校验与 World 写入分离，
+// 保证 Console 与执行端在投递前后使用同一判据。
+inline bool ValidateParticleEmitterEnabledValue(
+    int value,
+    std::string& outError)
+{
+    if (value != 0 && value != 1)
+    {
+        outError = "Particle emitter enabled value must be 0 or 1.";
+        return false;
+    }
+    outError.clear();
+    return true;
 }
 
 } // namespace VL

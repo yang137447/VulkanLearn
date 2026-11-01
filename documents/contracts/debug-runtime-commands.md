@@ -109,6 +109,35 @@ restart 在 GT 命令点执行；分线程渲染时先等待渲染线程空闲�
 GPU 池尚不存在（例如同一批命令里先 spawn 再 restart）时 restart 是空操作，新池本来就会
 从预热状态开始。
 
+## Particle Parameters
+
+```text
+particleparam <name> spawnRateScale <scale>
+particleparam <name> colorTint <r> <g> <b> <a>
+particleparam <name> emitter <index> <0|1>
+particleparam <name> reset
+```
+
+四条命令都作用于当前 active World 中名为 `<name>` 的粒子系统实例。覆盖属于运行时状态，
+不写 `PS_*.json` 或 `SC_*.json`；`reset` 把该实例的覆盖恢复为默认值（`spawnRateScale = 1`、
+`colorTint = (1,1,1,1)`、所有发射器启用）。Console 在投递前用同一组校验函数检查参数，
+数量或类型错误打印 Usage，语义越界直接打印校验错误而不投递；执行端在 GT 命令点再次校验，
+实例不存在、参数名未知或数值越界时只输出 warning，不改变任何实例，也不向帧循环抛异常。
+因此脚本入口和手输命令的拒绝条件一致。
+
+- `spawnRateScale <scale>`：有限值，范围 `[0, 16]`。它只缩放连续发射预算和 prewarm 的
+  池填充目标，不改变 `burst` 发射器的整池喷发次数，也不改寿命、速度、碰撞、尺寸或渲染。
+- `colorTint <r> <g> <b> <a>`：四个分量必须有限；RGB 范围 `[0, 16]`，允许 HDR 增亮；
+  alpha 范围 `[0, 1]`。颜色乘到 billboard、ribbon 与 mesh 三种 renderMode 的最终颜色，
+  alpha 同时缩放不透明度。
+- `emitter <index> <0|1>`：`index` 是 `PS_*.json` 的 `emitters[]` 顺序下标，从 0 开始，
+  `< 16`。`0` 冻结该发射器：不推进模拟时间、不清池、不排序、不 dispatch、不绘制；
+  重新置 `1` 后从冻结状态继续，不重建粒子池或重播预热。它是运行时启停，不删除发射器，
+  也不改资产结构。
+
+参数覆盖通过 `CommandBus` 在 GT 命令点执行；分线程渲染时由粒子渲染器在帧边界消费，
+不要求 Console 线程等待渲染线程。
+
 ## Animation
 
 ```text

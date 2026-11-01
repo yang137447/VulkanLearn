@@ -103,6 +103,8 @@ private:
         const nlohmann::json& animationCatalog = nlohmann::json::object(),
         const nlohmann::json& animationAssets = nlohmann::json::object());
     void Apply(World& world, const nlohmann::json& response);
+    void ApplyParticleCommands(World& world, const std::string& owner,
+        const nlohmann::json& commands);
     void CollectDiagnostics(const nlohmann::json& response, const World* world = nullptr);
     void StepPhysics(World& world, float dt, bool collectQueries = true);
     void RefreshPerformance(World& world, bool details = true);

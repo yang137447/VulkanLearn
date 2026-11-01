@@ -175,13 +175,23 @@ private:
         Eigen::Vector4f meshParams;
         // mesh 局部缩放；mesh particle v1 不消费 size 曲线。
         Eigen::Vector4f meshScale;
+        // 场景实例级颜色 tint；rgb 与 alpha 都乘到最终片元输出。
+        Eigen::Vector4f colorTint;
+        // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved.
+        Eigen::Vector4f billboardParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 5408,
+        sizeof(FrameUniforms) == 5440,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
         "ParticleFrame meshScale offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, colorTint) == 5408,
+        "ParticleFrame colorTint offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, billboardParams) == 5424,
+        "ParticleFrame billboardParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -223,6 +233,13 @@ private:
         bool needsClear = true;
         bool prewarm = true;
         bool culled = false;
+        // 作者可见性不是剔除结果：隐藏时同样冻结模拟，但重新显示后
+        // 不能重建池，因此与 culled 分开保存。
+        bool visible = true;
+        // 发射器运行时开关与实例级覆盖；禁用沿冻结路径，重新启用不重建池。
+        bool enabled = true;
+        float spawnRateScale = 1.0f;
+        Eigen::Vector4f colorTint = Eigen::Vector4f::Ones();
     };
 
     void Initialize(
@@ -230,7 +247,9 @@ private:
         RendererBackendVulkan& backend,
         RenderGraph& graph);
     void CreateEmitter(const ParticleEmitterAsset& asset,
-        const Eigen::Matrix4f& model, const std::string& key);
+        const Eigen::Matrix4f& model, const std::string& key,
+        bool visible, bool enabled, float spawnRateScale,
+        const Eigen::Vector4f& colorTint);
     static void DestroyEmitterResources(
         RendererBackendVulkan& backend,
         EmitterResources& emitter);

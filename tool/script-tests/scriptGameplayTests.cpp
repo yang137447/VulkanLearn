@@ -296,6 +296,45 @@ TEST_F(ScriptGameplayTest, RuntimeComponentsCommitAfterCallbackReuseMeshesAndRes
     EXPECT_FALSE(world->GetMeshObjects().count("__blueprint/owner/visual"));
 }
 
+TEST_F(ScriptGameplayTest, CSharpParticlesSpawnControlResetAndDestroy)
+{
+    Prepare(Json::array({
+        GameplayBlueprint("particles", "ScriptFixtures.ParticleProbeBlueprint")}));
+    Play();
+
+    ASSERT_EQ(world->GetParticleSystems().size(), 1u);
+    const WorldParticleSystem* particles =
+        world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_EQ(particles->assetPath,
+        "Maps/SC_particle_demo/PS_sparks.json");
+    EXPECT_TRUE(particles->visible);
+
+    // phase 0: visible/参数/emitter 覆盖在同一个 GT 命令批次内应用。
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_FALSE(particles->visible);
+    EXPECT_FLOAT_EQ(particles->runtime.spawnRateScale, 2.0f);
+    EXPECT_EQ(particles->runtime.colorTint,
+        Eigen::Vector4f(1.0f, 0.5f, 0.25f, 1.0f));
+    EXPECT_EQ(particles->runtime.enabledEmitterMask & 1u, 0u);
+
+    // phase 2: Reset 恢复参数默认值，但不改 visible。
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_FALSE(particles->visible);
+    EXPECT_FLOAT_EQ(particles->runtime.spawnRateScale, 1.0f);
+    EXPECT_EQ(particles->runtime.colorTint, Eigen::Vector4f::Ones());
+    EXPECT_NE(particles->runtime.enabledEmitterMask & 1u, 0u);
+
+    // phase 3: Destroy 从 native World 移除实例。
+    Tick();
+    EXPECT_EQ(world->FindParticleSystem("~particle.1"), nullptr);
+    EXPECT_TRUE(world->GetParticleSystems().empty());
+}
+
 TEST_F(ScriptGameplayTest, RuntimeComponentFailedCallbackDropsEntireStructureQueue)
 {
     auto owner = GameplayBlueprint("owner", "ScriptFixtures.RuntimeComponentsBlueprint");

@@ -14,6 +14,7 @@
 #include "baseStructs.h"
 #include "environmentType.h"
 #include "particles/particleAsset.h"
+#include "particles/particleRuntimeState.h"
 #include "render/camera/cameraExposure.h"
 
 namespace VL
@@ -109,6 +110,11 @@ struct ParticleSystemSnapshot
     std::string assetPath;
     ParticleSystemAsset asset;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    // 隐藏实例仍保留在快照中：渲染器靠它让发射器池按名字继续存活并冻结，
+    // 不能像网格/灯光那样在快照构建处直接过滤掉。
+    bool visible = true;
+    // 运行时覆盖与可见性同样逐帧冻结进快照，渲染器不直接读取 World。
+    ParticleSystemRuntimeOverrides runtime;
 };
 
 // Immutable render-facing copy of one World frame. The renderer may keep this

@@ -224,6 +224,16 @@ ParticleEmitterAsset ParseEmitter(
     emitter.localSpace = json.value("localSpace", emitter.localSpace);
     emitter.renderMode = json.value(
         "renderMode", emitter.renderMode);
+    if (json.contains("billboardAlignment"))
+    {
+        if (!json.at("billboardAlignment").is_string())
+        {
+            throw std::invalid_argument(
+                "Particle billboardAlignment must be a string");
+        }
+        emitter.billboardAlignment =
+            json.at("billboardAlignment").get<std::string>();
+    }
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh")
@@ -875,6 +885,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon' or 'mesh'");
+    }
+    if (emitter.billboardAlignment != "camera" &&
+        emitter.billboardAlignment != "velocity")
+    {
+        throw std::invalid_argument(
+            "Particle billboardAlignment must be 'camera' or 'velocity'");
     }
     if (emitter.ribbonWidth <= 0.0f)
     {

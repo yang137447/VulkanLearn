@@ -377,6 +377,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         snapshotSystem.assetPath = particleSystem.assetPath;
         snapshotSystem.asset = particleSystem.asset;
         snapshotSystem.model = particleSystem.model;
+        snapshotSystem.visible = particleSystem.visible;
+        snapshotSystem.runtime = particleSystem.runtime;
         snapshot.particleSystems.push_back(
             std::move(snapshotSystem));
     }

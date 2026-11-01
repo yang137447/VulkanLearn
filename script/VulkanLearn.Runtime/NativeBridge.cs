@@ -34,6 +34,7 @@ public static partial class NativeBridge
         public GameplayAssembly Assembly = null!;
         public ulong NextBlueprint;
         public ulong NextComponent;
+        public ulong NextParticle;
         public bool Released;
         public bool DetailsDirty = true;
         public readonly List<ComponentCommand> ComponentCommands = [];
@@ -338,6 +339,7 @@ public static partial class NativeBridge
         context.Services.Bind(blueprint);
         context.Services.BindHud(blueprint);
         context.Services.BindDebug(blueprint);
+        context.Services.BindParticles(blueprint);
         BindScriptComponents(context, instance, node);
         BindExposedProperties(blueprint, node.GetProperty("properties"));
         // OnCreate 不能结构性修改 World；创建失败只丢弃候选或该次 Spawn。

@@ -100,4 +100,5 @@ void main()
         outColor = vec4(vColor.rgb, vColor.a * alpha);
     }
     outColor.a *= softFade;
+    outColor *= frame.colorTint;
 }

@@ -10,6 +10,13 @@ public static partial class NativeBridge
     private sealed record EventRequest(Blueprint Owner, Component? Component, BlueprintHandle? Target, string Name, string Payload);
     private sealed record RayRequest(ulong Id, Blueprint Owner, Component? Component, Vector3 From, Vector3 To,
         bool IncludeTriggers, uint Mask, float Radius, bool Local, Action<RaycastHit?> Callback);
+    // 使用引用类型，保证回滚时按消息实例移除，不会误删内容相同的另一条命令。
+    private sealed class ParticleMessage(Blueprint owner, object value, bool cleanup = false)
+    {
+        public Blueprint Owner { get; } = owner;
+        public object Value { get; } = value;
+        public bool Cleanup { get; } = cleanup;
+    }
 
     private sealed partial class GameplayScheduler(Context context)
     {
@@ -20,9 +27,12 @@ public static partial class NativeBridge
         private readonly List<EventRequest> events = [];
         private readonly Dictionary<ulong, RayRequest> rays = [];
         private readonly HashSet<ulong> sentRays = [];
+        private readonly Dictionary<Blueprint, Dictionary<string, ParticleSystem>> particles = [];
+        private readonly List<ParticleMessage> particleMessages = [];
         private readonly List<Action> undo = [];
         private bool releasing;
         public bool HasPendingEvents => events.Count != 0;
+        public bool HasPendingParticles => particleMessages.Count != 0;
 
         public void Commit() => undo.Clear();
         public void Rollback()
@@ -111,6 +121,181 @@ public static partial class NativeBridge
                     undo.Add(() => rays.Remove(id));
                 }
             };
+        }
+        public void BindParticles(Blueprint owner)
+        {
+            owner.Particles = new()
+            {
+                SpawnRequest = (path, position, rotation, scale) =>
+                    QueueParticleSpawn(owner, path, position, rotation, scale),
+                FindRequest = id => FindParticle(owner, id),
+                DestroyAllRequest = () => DestroyAllParticles(owner)
+            };
+        }
+        private Dictionary<string, ParticleSystem> ParticleTable(Blueprint owner)
+        {
+            if (!particles.TryGetValue(owner, out var live))
+            {
+                live = new(StringComparer.Ordinal);
+                particles.Add(owner, live);
+            }
+            return live;
+        }
+        private static void ValidateSpawnRateScale(float scale)
+        {
+            if (!float.IsFinite(scale) || scale < 0 || scale > 16)
+                throw new ArgumentOutOfRangeException(nameof(scale),
+                    "Particle spawn rate scale must be finite and in [0, 16].");
+        }
+        private static void ValidateColorTint(Vector4 color)
+        {
+            if (!float.IsFinite(color.X) || !float.IsFinite(color.Y) ||
+                !float.IsFinite(color.Z) || !float.IsFinite(color.W) ||
+                color.X < 0 || color.X > 16 || color.Y < 0 || color.Y > 16 ||
+                color.Z < 0 || color.Z > 16 || color.W < 0 || color.W > 1)
+                throw new ArgumentOutOfRangeException(nameof(color),
+                    "Particle color tint requires finite RGB in [0, 16] and alpha in [0, 1].");
+        }
+        private static void ValidateEmitterIndex(int index)
+        {
+            if (index < 0 || index >= 16)
+                throw new ArgumentOutOfRangeException(nameof(index), "Particle emitter index is out of range.");
+        }
+        private void QueueParticle(Blueprint owner, object value, bool cleanup = false)
+        {
+            // 普通命令共享 256 条预算；EndPlay 清理命令与 DrawDebug 一样不受预算限制，
+            // 以免销毁时泄漏原生实例。清理消息不参与回调回滚。
+            if (!cleanup && particleMessages.Count >= 256)
+                throw new InvalidOperationException("Particle command budget exceeded.");
+            var message = new ParticleMessage(owner, value, cleanup);
+            particleMessages.Add(message);
+            if (!cleanup) undo.Add(() => particleMessages.Remove(message));
+            if (context.InstanceIds.TryGetValue(owner.Handle.Id, out var instance)) instance.Dirty = true;
+        }
+        private ParticleSystem QueueParticleSpawn(Blueprint owner, string assetPath, Vector3 position,
+            Vector3? requestedRotation, Vector3? requestedScale)
+        {
+            Require(owner);
+            if (string.IsNullOrEmpty(assetPath))
+                throw new ArgumentException("Particle asset path must be non-empty.", nameof(assetPath));
+            Vector3 rotation = requestedRotation ?? Vector3.Zero;
+            Vector3 scale = requestedScale ?? Vector3.One;
+            ValidateTransform(new() { Position = position, Rotation = rotation, Scale = scale });
+            string id = $"~particle.{++context.NextParticle}";
+            QueueParticle(owner, new { op = "spawn", owner = owner.Handle.Id, id, path = assetPath,
+                position = Values(position), rotation = Values(rotation), scale = Values(scale) });
+            var particle = new ParticleSystem { Handle = new(context.Id, id) };
+            BindParticleRequests(owner, particle);
+            var live = ParticleTable(owner);
+            live.Add(id, particle);
+            undo.Add(() => live.Remove(id));
+            return particle;
+        }
+        private void BindParticleRequests(Blueprint owner, ParticleSystem particle)
+        {
+            particle.AliveQuery = handle => ParticleAlive(owner, handle);
+            particle.DestroyRequest = handle =>
+            {
+                var liveParticle = RequireParticle(owner, handle);
+                QueueParticle(owner, new { op = "destroy", owner = owner.Handle.Id, id = handle.Id });
+                var live = particles[owner];
+                live.Remove(handle.Id);
+                undo.Add(() => live.Add(handle.Id, liveParticle));
+            };
+            particle.VisibleRequest = (handle, visible) =>
+            {
+                RequireParticle(owner, handle);
+                QueueParticle(owner, new { op = "visible", owner = owner.Handle.Id, id = handle.Id, value = visible });
+            };
+            particle.SpawnRateScaleRequest = (handle, scale) =>
+            {
+                RequireParticle(owner, handle);
+                ValidateSpawnRateScale(scale);
+                QueueParticle(owner, new { op = "spawnRateScale", owner = owner.Handle.Id, id = handle.Id, value = scale });
+            };
+            particle.ColorTintRequest = (handle, color) =>
+            {
+                RequireParticle(owner, handle);
+                ValidateColorTint(color);
+                QueueParticle(owner, new { op = "colorTint", owner = owner.Handle.Id, id = handle.Id,
+                    value = new[] { color.X, color.Y, color.Z, color.W } });
+            };
+            particle.EmitterRequest = (handle, index, enabled) =>
+            {
+                RequireParticle(owner, handle);
+                ValidateEmitterIndex(index);
+                QueueParticle(owner, new { op = "emitter", owner = owner.Handle.Id, id = handle.Id,
+                    index, enabled });
+            };
+            particle.ResetRequest = handle =>
+            {
+                RequireParticle(owner, handle);
+                QueueParticle(owner, new { op = "reset", owner = owner.Handle.Id, id = handle.Id });
+            };
+        }
+        private ParticleSystem RequireParticle(Blueprint owner, ParticleHandle handle)
+        {
+            Require(owner);
+            if (handle.Context != context.Id || !particles.TryGetValue(owner, out var live) ||
+                !live.TryGetValue(handle.Id, out var particle) || particle.Handle != handle)
+                throw new InvalidOperationException("Stale or foreign particle handle.");
+            return particle;
+        }
+        private bool ParticleAlive(Blueprint owner, ParticleHandle handle)
+        {
+            Require(owner);
+            return handle.Context == context.Id && particles.TryGetValue(owner, out var live) &&
+                live.TryGetValue(handle.Id, out var particle) && particle.Handle == handle;
+        }
+        private ParticleSystem? FindParticle(Blueprint owner, string id)
+        {
+            Require(owner);
+            return !string.IsNullOrEmpty(id) && particles.TryGetValue(owner, out var live) &&
+                live.TryGetValue(id, out var particle) ? particle : null;
+        }
+        private void DestroyAllParticles(Blueprint owner)
+        {
+            Require(owner);
+            if (!particles.TryGetValue(owner, out var live) || live.Count == 0) return;
+            var values = live.Values.ToArray();
+            if (particleMessages.Count + values.Length > 256)
+                throw new InvalidOperationException("Particle command budget exceeded.");
+            foreach (var particle in values)
+            {
+                QueueParticle(owner, new { op = "destroy", owner = owner.Handle.Id, id = particle.Id });
+                live.Remove(particle.Id);
+                undo.Add(() => live.Add(particle.Id, particle));
+            }
+        }
+        public object[] TakeParticles(Blueprint owner)
+        {
+            if (particleMessages.Count == 0) return Array.Empty<object>();
+            var values = particleMessages.Where(m => m.Owner == owner).Select(m => m.Value).ToArray();
+            particleMessages.RemoveAll(m => m.Owner == owner);
+            return values;
+        }
+        private void RemoveParticles(Blueprint owner)
+        {
+            if (!particles.Remove(owner, out var live)) return;
+            // EndPlay 必须先补发 destroy，避免原生 World 遗漏仍在 live 表的实例；
+            // 已经排队的用户命令保留，由本帧 Export 继续交付。
+            if (releasing) return;
+            foreach (var particle in live.Values)
+                QueueParticle(owner, new { op = "destroy", owner = owner.Handle.Id, id = particle.Id }, cleanup: true);
+        }
+        public string[] ParticleIds(Blueprint owner) =>
+            particles.TryGetValue(owner, out var live) ? live.Keys.OrderBy(id => id, StringComparer.Ordinal).ToArray() : [];
+        public void RestoreParticles(Blueprint owner, IEnumerable<string> ids)
+        {
+            var live = ParticleTable(owner);
+            foreach (var id in ids)
+            {
+                if (string.IsNullOrEmpty(id) || live.ContainsKey(id))
+                    throw new InvalidOperationException("Migration particle identity is invalid or duplicated.");
+                var particle = new ParticleSystem { Handle = new(context.Id, id) };
+                BindParticleRequests(owner, particle);
+                live.Add(id, particle);
+            }
         }
         public void RunTimers()
         {
@@ -211,13 +396,14 @@ public static partial class NativeBridge
             events.RemoveAll(e => e.Component == component);
         }
         public object Counts() => new { timers = timers.Count, subscriptions = subscriptions.Count, events = events.Count,
-            rays = rays.Count, assets = assets.Count, commands = context.Commands.Count,
+            rays = rays.Count, assets = assets.Count, particles = particleMessages.Count, commands = context.Commands.Count,
             componentCommands = context.ComponentCommands.Count + context.LogicComponentCommands.Count };
         public void RemoveOwner(Blueprint owner)
         {
             RemoveHud(owner);
             RemoveDebug(owner);
             RemoveAssetOwner(owner);
+            RemoveParticles(owner);
             foreach (var id in timers.Values.Where(t => t.Owner == owner).Select(t => t.Id).ToArray()) timers.Remove(id);
             foreach (var id in subscriptions.Values.Where(s => s.Owner == owner).Select(s => s.Id).ToArray()) subscriptions.Remove(id);
             foreach (var id in rays.Values.Where(r => r.Owner == owner).Select(r => r.Id).ToArray())
@@ -230,6 +416,7 @@ public static partial class NativeBridge
             releasing = true;
             debugMessages.Clear();
             debugPublishers.Clear();
+            particles.Clear(); particleMessages.Clear();
             timers.Clear(); subscriptions.Clear(); events.Clear(); rays.Clear(); sentRays.Clear(); undo.Clear(); hud.Clear();
         }
     }

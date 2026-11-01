@@ -230,10 +230,46 @@ void main()
         pivotOffset = (vec2(0.5) - FlipbookPivot(pivotIndex)) * 2.0;
     }
 
-    // 面向相机的 billboard；size 是世界空间半边长（cm）。
+    // Billboard 朝向基：默认跟随相机平面；velocity 模式让 quad 的法线
+    // 对齐粒子速度，适合拖尾/火花。速度过短、与世界上方平行或
+    // normalize 退化时回退到相机基，避免零面积 quad 与 NaN。
+    vec3 billboardRight = frame.cameraRight.xyz;
+    vec3 billboardUp = frame.cameraUp.xyz;
+    if (frame.billboardParams.x > 0.5)
+    {
+        // localSpace 粒子池保存局部速度；构造世界空间 billboard 基前
+        // 必须乘发射器线性部分，否则旋转后的发射器会让朝向偏转。
+        vec3 velocity = particle.velocityLife.xyz;
+        if (frame.shape.z > 0.5)
+        {
+            velocity = mat3(frame.localToWorld) * velocity;
+        }
+        float velocityLengthSquared = dot(velocity, velocity);
+        if (velocityLengthSquared > 1.0e-6)
+        {
+            vec3 forward = normalize(velocity);
+            vec3 candidateRight =
+                cross(vec3(0.0, 1.0, 0.0), forward);
+            float rightLengthSquared =
+                dot(candidateRight, candidateRight);
+            if (rightLengthSquared > 1.0e-6)
+            {
+                candidateRight = normalize(candidateRight);
+                vec3 candidateUp = cross(forward, candidateRight);
+                float upLengthSquared = dot(candidateUp, candidateUp);
+                if (upLengthSquared > 1.0e-6)
+                {
+                    billboardRight = candidateRight;
+                    billboardUp = normalize(candidateUp);
+                }
+            }
+        }
+    }
+
+    // size 是世界空间半边长（cm）。
     vec3 worldPosition = particleCenter +
-        (frame.cameraRight.xyz * (rotatedCorner.x + pivotOffset.x) +
-         frame.cameraUp.xyz * (rotatedCorner.y + pivotOffset.y)) * size;
+        (billboardRight * (rotatedCorner.x + pivotOffset.x) +
+         billboardUp * (rotatedCorner.y + pivotOffset.y)) * size;
     gl_Position =
         frame.viewProjection * vec4(worldPosition, 1.0);
     // 视空间深度取正：相机前方为正，供片元与 sceneDepth 比较。

@@ -62,6 +62,14 @@ std::string FormatVector3(const Eigen::Vector3f& value)
         std::to_string(value.z()) + ")";
 }
 
+std::string FormatColorTint(const Eigen::Vector4f& value)
+{
+    return "(" + std::to_string(value.x()) + ", " +
+        std::to_string(value.y()) + ", " +
+        std::to_string(value.z()) + ", " +
+        std::to_string(value.w()) + ")";
+}
+
 // 可见性写入端：把"大纲身份 → World 对象"这一步收在一个地方，
 // 让命令分支只说类型语义，不重复 World 的表结构。返回 false 表示对象不在当前 World。
 bool ApplyActorVisibility(
@@ -82,6 +90,8 @@ bool ApplyActorVisibility(
         return world.SetLightVisible(identity.name, visible);
     case EditorSceneActorType::SquareAreaLight:
         return world.SetSquareAreaLightVisible(identity.name, visible);
+    case EditorSceneActorType::ParticleSystem:
+        return world.SetParticleSystemVisible(identity.name, visible);
     // 相机 / 环境 / 风剖面没有渲染侧可见性；调用方已用
     // SceneActorHasVisibilityToggle() 挡住，这里不提供任何默认成功路径。
     case EditorSceneActorType::Camera:
@@ -394,6 +404,12 @@ void RuntimeCommandExecutor::ExecuteCommand(
             system.asset = std::move(asset);
             system.model = BuildParticleSpawnModel(
                 command.particleSpawnPosition);
+            // console spawn 的 actor 也要能在大纲/Details 中回显同一组 TRS；
+            // 位置来自命令，默认无旋转、单位缩放且立即可见。
+            system.scenePosition = command.particleSpawnPosition;
+            system.sceneRotation = Eigen::Vector3f::Zero();
+            system.sceneScale = Eigen::Vector3f::Ones();
+            system.visible = true;
             world->AddParticleSystem(
                 command.stringValue,
                 std::move(system));
@@ -454,6 +470,133 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.RestartParticleSystems(command.stringValue);
         diagnostics.ReportInfo(
             "Particle system restarted: " + command.stringValue);
+        break;
+    }
+    case RuntimeCommandType::SetParticleSystemParameter:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle parameter ignored because no active World exists.");
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle parameter found no system named: " +
+                command.stringValue);
+            break;
+        }
+
+        std::string validationError;
+        if (!ValidateParticleParameterName(
+                command.secondaryStringValue,
+                validationError))
+        {
+            diagnostics.ReportWarning(validationError);
+            break;
+        }
+
+        if (command.secondaryStringValue == "spawnRateScale")
+        {
+            if (!ValidateParticleSpawnRateScale(
+                    command.floatValue,
+                    validationError))
+            {
+                diagnostics.ReportWarning(validationError);
+                break;
+            }
+            if (!world->SetParticleSystemSpawnRateScale(
+                    command.stringValue,
+                    command.floatValue))
+            {
+                diagnostics.ReportWarning(
+                    "Particle spawnRateScale was not applied: " +
+                    command.stringValue);
+                break;
+            }
+            diagnostics.ReportInfo(
+                "Particle spawnRateScale set: " +
+                command.stringValue + " = " +
+                std::to_string(command.floatValue));
+        }
+        else if (command.secondaryStringValue == "colorTint")
+        {
+            if (!ValidateParticleColorTint(
+                    command.particleColorTint,
+                    validationError))
+            {
+                diagnostics.ReportWarning(validationError);
+                break;
+            }
+            if (!world->SetParticleSystemColorTint(
+                    command.stringValue,
+                    command.particleColorTint))
+            {
+                diagnostics.ReportWarning(
+                    "Particle colorTint was not applied: " +
+                    command.stringValue);
+                break;
+            }
+            diagnostics.ReportInfo(
+                "Particle colorTint set: " +
+                command.stringValue + " = " +
+                FormatColorTint(command.particleColorTint));
+        }
+        else if (command.secondaryStringValue == "emitter")
+        {
+            if (command.intValue < 0 ||
+                !ValidateParticleEmitterIndex(
+                    static_cast<uint32_t>(command.intValue),
+                    validationError))
+            {
+                diagnostics.ReportWarning(
+                    command.intValue < 0
+                        ? "Particle emitter index must be non-negative."
+                        : validationError);
+                break;
+            }
+            if (!ValidateParticleEmitterEnabledValue(
+                    command.intValue2,
+                    validationError))
+            {
+                diagnostics.ReportWarning(validationError);
+                break;
+            }
+            const bool enabled = command.intValue2 != 0;
+            if (!world->SetParticleSystemEmitterEnabled(
+                    command.stringValue,
+                    static_cast<uint32_t>(command.intValue),
+                    enabled))
+            {
+                diagnostics.ReportWarning(
+                    "Particle emitter state was not applied: " +
+                    command.stringValue + " emitter " +
+                    std::to_string(command.intValue));
+                break;
+            }
+            diagnostics.ReportInfo(
+                std::string("Particle emitter ") +
+                (enabled ? "enabled: " : "disabled: ") +
+                command.stringValue + " emitter " +
+                std::to_string(command.intValue));
+        }
+        else
+        {
+            if (!world->ResetParticleSystemRuntimeOverrides(
+                    command.stringValue))
+            {
+                diagnostics.ReportWarning(
+                    "Particle runtime overrides were not reset: " +
+                    command.stringValue);
+                break;
+            }
+            diagnostics.ReportInfo(
+                "Particle runtime overrides reset: " +
+                command.stringValue);
+        }
         break;
     }
     case RuntimeCommandType::RunShaderReloadTest:

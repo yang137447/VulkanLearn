@@ -1527,6 +1527,81 @@ TEST(ParticleAsset, CapabilitiesExposeRibbonFields)
     EXPECT_TRUE(hasField("ribbonFade"));
 }
 
+TEST(ParticleAsset, BillboardAlignmentDefaultsToCamera)
+{
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            MultiEmitterDocument(),
+            "Maps/SC_test/PS_billboard_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(asset.emitters[0].billboardAlignment, "camera");
+    EXPECT_EQ(asset.emitters[1].billboardAlignment, "camera");
+}
+
+TEST(ParticleAsset, BillboardAlignmentVelocityRoundTripsThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange change;
+    change.field = "emitters.0.billboardAlignment";
+    change.value = std::string("velocity");
+    changes.push_back(change);
+
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            Json::parse(document.dump()),
+            "Maps/SC_test/PS_billboard_velocity.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(asset.emitters[0].billboardAlignment, "velocity");
+    EXPECT_EQ(asset.emitters[1].billboardAlignment, "camera");
+}
+
+TEST(ParticleAsset, BillboardAlignmentRejectsInvalidValue)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardAlignment"] = "normal";
+
+    try
+    {
+        (void)ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_invalid.json");
+        FAIL() << "billboardAlignment outside camera|velocity must be rejected";
+    }
+    catch (const std::invalid_argument& exception)
+    {
+        EXPECT_NE(
+            std::string(exception.what()).find("billboardAlignment"),
+            std::string::npos);
+    }
+}
+
+TEST(ParticleAsset, CapabilitiesAndProjectionExposeBillboardAlignment)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardAlignment"] = "velocity";
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const Json projection = ProjectEditableAsset(
+        EditorAssetDocumentKind::ParticleSystem, document);
+
+    const Json* alignmentField = nullptr;
+    for (const Json& field : capabilities["emitters"][0]["fields"])
+        if (field.value("field", std::string()) == "billboardAlignment")
+            alignmentField = &field;
+
+    ASSERT_NE(alignmentField, nullptr);
+    EXPECT_EQ(alignmentField->value("type", std::string()), "string");
+    EXPECT_TRUE(alignmentField->value("resettable", false));
+    ASSERT_TRUE(alignmentField->contains("enum"));
+    EXPECT_EQ(alignmentField->at("enum"), Json::array({"camera", "velocity"}));
+    EXPECT_EQ(
+        projection["emitters"][0]["billboardAlignment"], "velocity");
+}
+
 TEST(ParticleAsset, MeshFieldsParseAndRoundTrip)
 {
     Json document = MultiEmitterDocument();

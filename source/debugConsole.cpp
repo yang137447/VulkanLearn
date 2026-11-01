@@ -16,6 +16,49 @@
 #include "particles/particleDump.h"
 #include "particles/particleRuntimeCommand.h"
 
+namespace
+{
+
+bool ParseConsoleFloat(const std::string& token, float& outValue)
+{
+    try
+    {
+        size_t consumed = 0;
+        const float value = std::stof(token, &consumed);
+        if (consumed != token.size())
+        {
+            return false;
+        }
+        outValue = value;
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
+bool ParseConsoleInt(const std::string& token, int& outValue)
+{
+    try
+    {
+        size_t consumed = 0;
+        const int value = std::stoi(token, &consumed);
+        if (consumed != token.size())
+        {
+            return false;
+        }
+        outValue = value;
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
+} // namespace
+
 DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
     : commandBus(commandBus), editorRuntime(runtime)
 {
@@ -649,6 +692,127 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "particleparam")
+    {
+        const char* usage =
+            "Usage: particleparam <name> spawnRateScale <scale> | "
+            "colorTint <r> <g> <b> <a> | emitter <index> <0|1> | reset";
+
+        std::string name;
+        std::string parameter;
+        if (!(commandStream >> name >> parameter))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        std::vector<std::string> arguments;
+        std::string token;
+        while (commandStream >> token)
+        {
+            arguments.push_back(token);
+        }
+
+        std::string validationError;
+        if (!VL::ValidateParticleParameterName(parameter, validationError))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleSystemParameter;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.secondaryStringValue = parameter;
+
+        if (parameter == "spawnRateScale")
+        {
+            float scale = 0.0f;
+            if (arguments.size() != 1 ||
+                !ParseConsoleFloat(arguments[0], scale))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleSpawnRateScale(scale, validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.floatValue = scale;
+        }
+        else if (parameter == "colorTint")
+        {
+            if (arguments.size() != 4)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            Eigen::Vector4f colorTint = Eigen::Vector4f::Ones();
+            if (!ParseConsoleFloat(arguments[0], colorTint.x()) ||
+                !ParseConsoleFloat(arguments[1], colorTint.y()) ||
+                !ParseConsoleFloat(arguments[2], colorTint.z()) ||
+                !ParseConsoleFloat(arguments[3], colorTint.w()))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleColorTint(colorTint, validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.particleColorTint = colorTint;
+        }
+        else if (parameter == "emitter")
+        {
+            int index = 0;
+            int enabled = 0;
+            if (arguments.size() != 2 ||
+                !ParseConsoleInt(arguments[0], index) ||
+                !ParseConsoleInt(arguments[1], enabled))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (index < 0)
+            {
+                std::cout
+                    << "Particle emitter index must be non-negative."
+                    << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleEmitterIndex(
+                    static_cast<uint32_t>(index),
+                    validationError) ||
+                !VL::ValidateParticleEmitterEnabledValue(
+                    enabled,
+                    validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.intValue = index;
+            runtimeCommand.intValue2 = enabled;
+        }
+        else
+        {
+            if (!arguments.empty())
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+        }
+
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle parameter queued: " << name << " " << parameter
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "camera")
     {
         std::string mode;
@@ -861,6 +1025,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  particlespawn <name> <PS_asset_path> [x y z] - add a particle system instance to the active World\n";
     std::cout << "  particledestroy <name> - remove a particle system instance from the active World\n";
     std::cout << "  particlerestart <name> - reset one particle system instance (simulation time, prewarm, cull)\n";
+    std::cout << "  particleparam <name> <spawnRateScale <scale>|colorTint <r> <g> <b> <a>|emitter <index> <0|1>|reset> - runtime-only particle overrides\n";
     std::cout << "  camera get - print the active camera pose\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";

@@ -10,8 +10,12 @@
 #include "script/scriptPropertySchema.h"
 #include "script/scriptCompleteDeclaration.h"
 #include "core/logStore.h"
+#include "commonFunction.h"
+#include "particles/particleAsset.h"
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <set>
 #include <filesystem>
 #include "world/world.h"
@@ -48,6 +52,63 @@ bool HasScriptSpringArm(const nlohmann::json& states)
             for (const auto& component : state.at("components"))
                 if (component.at("type") == "springArm") return true;
     return false;
+}
+
+[[noreturn]] void ThrowParticleCommand(const std::string& detail)
+{
+    throw std::runtime_error("Script.InvalidParticleCommand: " + detail);
+}
+
+std::string ParticleCommandString(const nlohmann::json& command, const char* field,
+    const std::string& operation)
+{
+    if (!command.contains(field) || !command.at(field).is_string())
+        ThrowParticleCommand(operation + " requires string field '" + field + "'");
+    const std::string value = command.at(field).get<std::string>();
+    if (value.empty() || value.find('\0') != std::string::npos)
+        ThrowParticleCommand(operation + " requires a non-empty string field '" + field + "'");
+    return value;
+}
+
+float ParticleCommandNumber(const nlohmann::json& command, const char* field,
+    const std::string& operation)
+{
+    if (!command.contains(field) || !command.at(field).is_number())
+        ThrowParticleCommand(operation + " requires numeric field '" + field + "'");
+    const double number = command.at(field).get<double>();
+    if (!std::isfinite(number) ||
+        std::abs(number) > static_cast<double>(std::numeric_limits<float>::max()))
+        ThrowParticleCommand(operation + " field '" + field + "' must be finite");
+    return static_cast<float>(number);
+}
+
+Eigen::Vector3f ParticleCommandVector3(const nlohmann::json& command, const char* field,
+    const std::string& operation)
+{
+    if (!command.contains(field) || !command.at(field).is_array() ||
+        command.at(field).size() != 3)
+        ThrowParticleCommand(operation + " requires vec3 field '" + field + "'");
+    Eigen::Vector3f result;
+    for (size_t axis = 0; axis < 3; ++axis)
+    {
+        const auto& value = command.at(field).at(axis);
+        if (!value.is_number())
+            ThrowParticleCommand(operation + " field '" + field + "' requires finite numbers");
+        const double number = value.get<double>();
+        if (!std::isfinite(number) ||
+            std::abs(number) > static_cast<double>(std::numeric_limits<float>::max()))
+            ThrowParticleCommand(operation + " field '" + field + "' requires finite numbers");
+        result[static_cast<Eigen::Index>(axis)] = static_cast<float>(number);
+    }
+    return result;
+}
+
+bool ParticleCommandBool(const nlohmann::json& command, const char* field,
+    const std::string& operation)
+{
+    if (!command.contains(field) || !command.at(field).is_boolean())
+        ThrowParticleCommand(operation + " requires boolean field '" + field + "'");
+    return command.at(field).get<bool>();
 }
 
 bool SameScriptVisuals(const nlohmann::json& before, const nlohmann::json& after)
@@ -419,13 +480,154 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
             // 公共绘图预算失败只拒绝该 owner 的整批图形，不让调试工具停止其它 gameplay。
             pendingDiagnostics.push_back({LogSeverity::Warning, "DrawDebug batch rejected for " + id + ": " + error.what(), {}});
         }
+        // 托管粒子指令在 GT 命令点同步消费；任何非法指令都会抛出并停止本上下文，
+        // 避免后续帧继续对错误对象写入运行时覆盖。
+        if (update.contains("particleCommands"))
+            ApplyParticleCommands(world, id, update.at("particleCommands"));
         // 请求队列已有独立 owner，快照不保留已领取的一次性资源/查询命令。
-        for (const char* field : {"raycasts", "assetRequests", "assetCancels", "animationCommands", "debugCommands"})
+        for (const char* field : {"raycasts", "assetRequests", "assetCancels", "animationCommands",
+            "debugCommands", "particleCommands"})
             if (current.contains(field) && !current.at(field).empty()) current[field] = nlohmann::json::array();
     }
     if (cameraChanged) world.UpdateScriptCamera(states);
     appliedUpdates += updates.size();
     applyMilliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
+
+void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::string& owner,
+    const nlohmann::json& commands)
+{
+    if (!commands.is_array())
+        ThrowParticleCommand("particleCommands must be an array");
+    if (commands.size() > 256)
+        ThrowParticleCommand("particleCommands exceeds the 256-command budget");
+
+    for (const auto& command : commands)
+    {
+        if (!command.is_object())
+            ThrowParticleCommand("particle command must be an object");
+
+        const std::string commandOwner = ParticleCommandString(command, "owner", "particle command");
+        if (commandOwner != owner)
+            ThrowParticleCommand("owner mismatch: expected '" + owner + "', got '" + commandOwner + "'");
+
+        const std::string operation = ParticleCommandString(command, "op", "particle command");
+        const std::string id = ParticleCommandString(command, "id", operation);
+
+        if (operation == "spawn")
+        {
+            const std::string path = ParticleCommandString(command, "path", operation);
+            if (world.FindParticleSystem(id) != nullptr)
+                throw std::runtime_error("Script.InvalidParticleSpawn: duplicate id: " + id);
+
+            const Eigen::Vector3f position = ParticleCommandVector3(command, "position", operation);
+            const Eigen::Vector3f rotation = ParticleCommandVector3(command, "rotation", operation);
+            const Eigen::Vector3f scale = ParticleCommandVector3(command, "scale", operation);
+            if (std::abs(scale.x()) < 1e-6f || std::abs(scale.y()) < 1e-6f ||
+                std::abs(scale.z()) < 1e-6f)
+            {
+                ThrowParticleCommand("spawn scale axes must have absolute value >= 1e-6");
+            }
+
+            ParticleSystemAsset asset;
+            try
+            {
+                asset = ParticleAssetLoader::Prepare(path);
+            }
+            catch (const std::exception& error)
+            {
+                throw std::runtime_error("Script.InvalidParticleSpawn: failed to load particle asset '" +
+                    path + "': " + error.what());
+            }
+
+            Eigen::Matrix4f scaleMatrix = Eigen::Matrix4f::Identity();
+            scaleMatrix(0, 0) = scale.x();
+            scaleMatrix(1, 1) = scale.y();
+            scaleMatrix(2, 2) = scale.z();
+            Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+            translation.block<3, 1>(0, 3) = position;
+
+            WorldParticleSystem system;
+            system.name = id;
+            system.assetPath = path;
+            system.asset = std::move(asset);
+            system.scenePosition = position;
+            system.sceneRotation = rotation;
+            system.sceneScale = scale;
+            system.visible = true;
+            system.model = translation * CommonFunction::RotationToMatrix(rotation) * scaleMatrix;
+            world.AddParticleSystem(id, std::move(system));
+            continue;
+        }
+
+        if (operation == "destroy")
+        {
+            // EndPlay 清理与显式销毁可能落在同一批指令里；不存在时保持幂等。
+            if (world.FindParticleSystem(id) != nullptr) world.RemoveParticleSystem(id);
+            continue;
+        }
+
+        if (operation != "visible" && operation != "spawnRateScale" &&
+            operation != "colorTint" && operation != "emitter" && operation != "reset")
+            ThrowParticleCommand("unsupported particle command '" + operation + "'");
+
+        if (world.FindParticleSystem(id) == nullptr)
+            throw std::runtime_error("Script.InvalidParticleHandle: " + id);
+
+        bool applied = false;
+        if (operation == "visible")
+        {
+            applied = world.SetParticleSystemVisible(id, ParticleCommandBool(command, "value", operation));
+        }
+        else if (operation == "spawnRateScale")
+        {
+            applied = world.SetParticleSystemSpawnRateScale(
+                id, ParticleCommandNumber(command, "value", operation));
+        }
+        else if (operation == "colorTint")
+        {
+            const auto& value = command.value("value", nlohmann::json());
+            Eigen::Vector4f colorTint;
+            if (!value.is_array() || value.size() != 4)
+                ThrowParticleCommand("colorTint requires vec4 field 'value'");
+            for (size_t channel = 0; channel < 4; ++channel)
+            {
+                const auto& number = value.at(channel);
+                if (!number.is_number())
+                    ThrowParticleCommand("colorTint field 'value' requires finite numbers");
+                const double channelValue = number.get<double>();
+                if (!std::isfinite(channelValue) ||
+                    std::abs(channelValue) > static_cast<double>(std::numeric_limits<float>::max()))
+                    ThrowParticleCommand("colorTint field 'value' requires finite numbers");
+                colorTint[static_cast<Eigen::Index>(channel)] = static_cast<float>(channelValue);
+            }
+            applied = world.SetParticleSystemColorTint(id, colorTint);
+        }
+        else if (operation == "emitter")
+        {
+            if (!command.contains("index") || !command.at("index").is_number_integer())
+                ThrowParticleCommand("emitter requires integer field 'index'");
+            int64_t index = 0;
+            try
+            {
+                index = command.at("index").get<int64_t>();
+            }
+            catch (const std::exception&)
+            {
+                ThrowParticleCommand("emitter field 'index' is out of range");
+            }
+            if (index < 0 || index > static_cast<int64_t>(std::numeric_limits<uint32_t>::max()))
+                ThrowParticleCommand("emitter field 'index' is out of range");
+            applied = world.SetParticleSystemEmitterEnabled(
+                id, static_cast<uint32_t>(index), ParticleCommandBool(command, "enabled", operation));
+        }
+        else if (operation == "reset")
+        {
+            applied = world.ResetParticleSystemRuntimeOverrides(id);
+        }
+        if (!applied)
+            ThrowParticleCommand(operation + " was rejected for particle system '" + id + "'");
+    }
 }
 
 void ScriptRuntimeSubsystem::StepPhysics(World& world, float dt, bool collectQueries)

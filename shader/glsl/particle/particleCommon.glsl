@@ -28,7 +28,7 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 gravityDrag;
     vec4 velocityMinLifetimeMin;
     vec4 velocityMaxLifetimeMax;
-    vec4 simulation; // spawnRate, dt, time, prewarm
+    vec4 simulation; // effective spawnRate (LOD * instance scale), dt, time, prewarm
     vec4 render;     // sizeStart, sizeEnd, softness, opacity
     vec4 shape;      // sphere radius, burst, localSpace enabled, reserved
     vec4 softParams; // softParticleDistance, softParticles enabled, reserved
@@ -42,7 +42,7 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 flipbookParams2; // loop, randomStartFrame, reserved
     vec4 sortParams; // sort enabled, particle pool count, sorted capacity, reserved
     vec4 sortPass;   // bitonic k, bitonic j, sorted capacity, reserved
-    // viewport height, max billboard half-size px, prewarm spawnRate, reserved
+    // viewport height, max billboard half-size px, prewarm spawnRate with instance scale, reserved
     vec4 screenParams;
     vec4 flipbookFrameDurations[64]; // 每 vec4 打包 4 帧的秒数
     vec4 flipbookFramePivots[128];   // 每 vec4 打包 2 帧的 (u0,v0,u1,v1)，支持 256 帧
@@ -66,6 +66,10 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 meshParams;
     // mesh local scale; v1 ignores the size curve
     vec4 meshScale;
+    // 场景实例级颜色 tint；rgb/alpha 都乘到最终片元输出
+    vec4 colorTint;
+    // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved
+    vec4 billboardParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

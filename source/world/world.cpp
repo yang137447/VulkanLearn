@@ -1,9 +1,11 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <utility>
 
+#include "commonFunction.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
 #include "script/scriptScene.h"
@@ -25,6 +27,13 @@ void CloneAnimation(WorldMeshObject& mesh,
     mesh.skinPose = player->Pose(mesh.skinSection);
     mesh.localBoundsMin = mesh.skinPose->boundsMin;
     mesh.localBoundsMax = mesh.skinPose->boundsMax;
+}
+
+// 负缩放是合法的镜像变换；只拒绝会让粒子 model 退化的零轴。
+bool ValidParticleScaleAxis(float value)
+{
+    constexpr float kMinAbsoluteScale = 1.0e-6f;
+    return std::isfinite(value) && std::abs(value) >= kMinAbsoluteScale;
 }
 }
 
@@ -528,6 +537,105 @@ bool World::SetSquareAreaLightVisible(const std::string& name, bool visible)
     const auto lightIt = squareAreaLights.find(name);
     if (lightIt == squareAreaLights.end()) return false;
     lightIt->second.visible = visible;
+    return true;
+}
+
+bool World::SetParticleSystemVisible(const std::string& name, bool visible)
+{
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+    systemIt->second.visible = visible;
+    return true;
+}
+
+bool World::SetParticleSystemTransform(const std::string& name,
+    const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+
+    if (!position.allFinite() || !rotation.allFinite() ||
+        !ValidParticleScaleAxis(scale.x()) ||
+        !ValidParticleScaleAxis(scale.y()) ||
+        !ValidParticleScaleAxis(scale.z()))
+    {
+        return false;
+    }
+
+    Eigen::Matrix4f scaleMatrix = Eigen::Matrix4f::Identity();
+    scaleMatrix(0, 0) = scale.x();
+    scaleMatrix(1, 1) = scale.y();
+    scaleMatrix(2, 2) = scale.z();
+    Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+    translation.block<3, 1>(0, 3) = position;
+    // 与 WorldBuilder::BuildParticleSystemModel 保持同一 bake 顺序。
+    systemIt->second.model = translation *
+        CommonFunction::RotationToMatrix(rotation) *
+        scaleMatrix;
+    systemIt->second.scenePosition = position;
+    systemIt->second.sceneRotation = rotation;
+    systemIt->second.sceneScale = scale;
+    return true;
+}
+
+bool World::SetParticleSystemSpawnRateScale(const std::string& name, float scale)
+{
+    std::string error;
+    if (!ValidateParticleSpawnRateScale(scale, error))
+    {
+        return false;
+    }
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+    systemIt->second.runtime.spawnRateScale = scale;
+    return true;
+}
+
+bool World::SetParticleSystemColorTint(const std::string& name,
+    const Eigen::Vector4f& colorTint)
+{
+    std::string error;
+    if (!ValidateParticleColorTint(colorTint, error))
+    {
+        return false;
+    }
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+    systemIt->second.runtime.colorTint = colorTint;
+    return true;
+}
+
+bool World::SetParticleSystemEmitterEnabled(const std::string& name,
+    uint32_t emitterIndex, bool enabled)
+{
+    std::string error;
+    if (!ValidateParticleEmitterIndex(emitterIndex, error))
+    {
+        return false;
+    }
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+
+    // 只改对应低位；高位保留隐式/未来发射器的默认启用状态。
+    const uint32_t emitterBit = 1u << emitterIndex;
+    if (enabled)
+    {
+        systemIt->second.runtime.enabledEmitterMask |= emitterBit;
+    }
+    else
+    {
+        systemIt->second.runtime.enabledEmitterMask &= ~emitterBit;
+    }
+    return true;
+}
+
+bool World::ResetParticleSystemRuntimeOverrides(const std::string& name)
+{
+    const auto systemIt = particleSystems.find(name);
+    if (systemIt == particleSystems.end()) return false;
+    // 默认构造即恢复全发射器启用、倍率 1、白色 tint；visible 不属于运行时覆盖。
+    systemIt->second.runtime = ParticleSystemRuntimeOverrides{};
     return true;
 }
 

@@ -50,8 +50,9 @@ struct EditorSceneActorIdentity
 
 bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
 
-// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境与风剖面
-// 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
+// 可见性开关只覆盖渲染路径真正持有的对象：网格、四类灯与粒子系统。
+// 相机、环境、风剖面与 Blueprint 没有逐 actor 的渲染侧可见性状态，
+// 因此不为它们显示一个点了没有效果的眼睛。
 bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
 // actor 与槽行共用一个窗口化行下标空间；actor 行带 sceneActors 里的下标，

@@ -75,6 +75,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "position", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "localSpace", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "renderMode", ValueKind::Text, false, "", "billboard|ribbon|mesh"},
+    {K::ParticleSystem, "", "billboardAlignment", ValueKind::Text, true, "", "camera|velocity"},
     {K::ParticleSystem, "", "ribbonWidth", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},

@@ -17,6 +17,7 @@
 #include "render/shadow/csmSettings.h"
 #include "world/worldSnapshot.h"
 #include "particles/particleAsset.h"
+#include "particles/particleRuntimeState.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
@@ -93,13 +94,21 @@ struct WorldMeshObject
 };
 
 // 粒子发射器是 World 级渲染对象；粒子缓冲本身归渲染器所有，
-// World 只冻结作者资产与摆放矩阵，避免把 GPU 生命周期混进逻辑世界。
+// World 只冻结作者资产、摆放 TRS、可见性与实例运行时覆盖，避免把 GPU 生命周期混进逻辑世界。
 struct WorldParticleSystem
 {
     std::string name;
     std::string assetPath;
     ParticleSystemAsset asset;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    // 与网格/灯光同源的作者变换缓存：Details 回显 TRS，编辑器改轴时
+    // 用同一组值重算 model，不从已烘焙矩阵反分解。
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    bool visible = true;
+    // 场景实例级运行时覆盖：只影响本 World 实例，不写回 PS_*.json / SC_*.json。
+    ParticleSystemRuntimeOverrides runtime;
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -175,8 +184,8 @@ public:
 
     // 逐对象可见性写入端：只有 RuntimeCommandExecutor 在命令执行边界调用，
     // UI 回调不持有 World。名字不存在时返回 false，由调用方给出诊断而不是静默忽略。
-    // 这里的四个入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
-    // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染快照的过滤。
+    // 这里的入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
+    // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染侧消费规则。
     //
     // 网格按场景对象身份（MeshSceneObjectIdentity）写入，不是按 section 键：
     // 多 section 模型在 meshObjects 里是多个条目，identity 本身不是任何一个条目的键，
@@ -185,10 +194,25 @@ public:
     bool SetLightVisible(const std::string& name, bool visible);
     // 方形面光在 World 里按值保存（不是 shared_ptr），因此单独一个入口。
     bool SetSquareAreaLightVisible(const std::string& name, bool visible);
+    // 粒子系统隐藏时不从快照剔除：发射器池必须按名字继续存在并冻结，
+    // 重新显示后接着原模拟状态，而不是重建/重播粒子。
+    bool SetParticleSystemVisible(const std::string& name, bool visible);
     // 调用方已校验有限 TRS 与非零 scale；按 scene identity 更新所有 section。
     bool SetMeshSceneObjectTransform(const std::string& identity,
         const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
         const Eigen::Vector3f& scale);
+    // 返回 false 表示名字不存在或 scale 非法（任一轴 |scale| < 1e-6 或非有限值）。
+    // 粒子没有导入节点，因此直接用新 TRS 重算 model。
+    bool SetParticleSystemTransform(const std::string& name,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
+    // 运行时覆盖写入端：先完整校验，失败不修改；成功只改匹配实例。
+    bool SetParticleSystemSpawnRateScale(const std::string& name, float scale);
+    bool SetParticleSystemColorTint(const std::string& name,
+        const Eigen::Vector4f& colorTint);
+    bool SetParticleSystemEmitterEnabled(const std::string& name,
+        uint32_t emitterIndex, bool enabled);
+    bool ResetParticleSystemRuntimeOverrides(const std::string& name);
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
     // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——

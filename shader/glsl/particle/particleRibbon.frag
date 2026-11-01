@@ -95,4 +95,5 @@ void main()
             vColor.a * alpha * mix(1.0, erosion, 0.6));
     }
     outColor.a *= softFade;
+    outColor *= frame.colorTint;
 }

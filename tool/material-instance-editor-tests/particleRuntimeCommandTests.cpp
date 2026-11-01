@@ -124,3 +124,110 @@ TEST(ParticleRuntimeCommand, SceneMatchHandlesBackslashNames)
     EXPECT_TRUE(ParticleEmitterKeyMatchesScene(key, "Floor\\A"));
     EXPECT_FALSE(ParticleEmitterKeyMatchesScene(key, "Floor"));
 }
+
+TEST(ParticleRuntimeCommand, ParameterNameAcceptsSupportedNames)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleParameterName("spawnRateScale", error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleParameterName("colorTint", error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleParameterName("emitter", error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleParameterName("reset", error));
+    EXPECT_TRUE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, ParameterNameRejectsUnknownAndEmpty)
+{
+    std::string error;
+    EXPECT_FALSE(ValidateParticleParameterName("color", error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleParameterName("", error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleParameterName("SpawnRateScale", error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, SpawnRateScaleAcceptsRangeAndRejectsInvalid)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleSpawnRateScale(0.0f, error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleSpawnRateScale(16.0f, error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleSpawnRateScale(2.5f, error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleSpawnRateScale(-0.01f, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnRateScale(16.01f, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnRateScale(
+        std::numeric_limits<float>::quiet_NaN(), error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnRateScale(
+        std::numeric_limits<float>::infinity(), error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, ColorTintAcceptsRangesAndRejectsInvalid)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleColorTint(
+        Eigen::Vector4f(1.0f, 0.5f, 0.0f, 1.0f), error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleColorTint(
+        Eigen::Vector4f(16.0f, 16.0f, 16.0f, 0.0f), error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleColorTint(
+        Eigen::Vector4f(-0.01f, 1.0f, 1.0f, 1.0f), error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleColorTint(
+        Eigen::Vector4f(16.01f, 1.0f, 1.0f, 1.0f), error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleColorTint(
+        Eigen::Vector4f(1.0f, 1.0f, 1.0f, 1.01f), error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleColorTint(
+        Eigen::Vector4f(1.0f, 1.0f, 1.0f, -0.01f), error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleColorTint(
+        Eigen::Vector4f(
+            std::numeric_limits<float>::quiet_NaN(),
+            1.0f,
+            1.0f,
+            1.0f),
+        error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, EmitterIndexAcceptsRangeAndRejectsOutOfRange)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleEmitterIndex(0u, error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleEmitterIndex(
+        kMaxParticleEmitters - 1u, error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleEmitterIndex(kMaxParticleEmitters, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleEmitterIndex(kMaxParticleEmitters + 1u, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, EmitterEnabledValueAcceptsOnlyZeroOrOne)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleEmitterEnabledValue(0, error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleEmitterEnabledValue(1, error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleEmitterEnabledValue(2, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleEmitterEnabledValue(-1, error));
+    EXPECT_FALSE(error.empty());
+}

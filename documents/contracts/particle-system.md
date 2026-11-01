@@ -5,6 +5,10 @@
 ## 当前能力
 
 - 场景对象类型 `particleSystem`：作者在 `SC_*.json` 中用 `particlePath` 引用一个 `PS_*.json`。
+- `particleSystem` 现在是正式场景 actor，出现在大纲与 Details；支持 Location/Rotation/Scale
+  编辑和运行时可见性开关。当前场景侧仍只支持独立 `particleSystem` 对象，不提供模块化
+  stack 或运行时 emitter 级增删；Play 期的 C# 入口见
+  [C# Blueprint 运行时](csharp-blueprint-runtime.md#particle-systems)，详见「场景 actor 集成」。
 - `PS_*.json` 在 Content Browser 中作为独立 `ParticleSystem` 资产出现；双击进入自己的资源编辑器
   标签页。编辑器顶部是 emitter 选择器，左侧是
   System/Emitter/Shape/Velocity/Forces/Collision/Life/Color/Flipbook/Curves 模块，中间是可编辑字段表单，
@@ -30,8 +34,8 @@
 - 发射器选择器支持复制新增、删除与上下移动（1..16 个）；结构变更以整条 `emitters`
   数组作为一次字段变更提交，不新增命令类型，并作为单个步骤进入粒子 undo 历史。
 - GPU compute 每帧推进粒子池；graphics pass 按发射器 `renderMode` 读取同一段 storage
-  buffer，用相机朝向 billboard、最近 3 个历史位置组成的 ribbon 条带，或静态 SM 网格
-  实例化合成。
+  buffer，用按 `billboardAlignment` 朝向的 billboard、最近 3 个历史位置组成的 ribbon
+  条带，或静态 SM 网格实例化合成。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -41,7 +45,7 @@
 ```text
 SC_*.json particleSystem
     -> SceneAssetValidator / ParticleAssetLoader（冻结并校验 PS_*.json）
-    -> WorldBuilder（WorldParticleSystem：asset + model）
+    -> WorldBuilder（WorldParticleSystem：asset + model + scenePosition/sceneRotation/sceneScale + visible）
     -> WorldSnapshotBuilder -> ParticleSystemSnapshot
     -> RendererFrontend -> RenderScene::particleSystems
     -> ParticleRenderer::Synchronize（按 sceneName|assetPath|emitterName 建 GPU 池）
@@ -53,10 +57,27 @@ SC_*.json particleSystem
 GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定。GPU 模型矩阵是
 `sceneObjectModel * translation(emitter.localPosition)`，局部偏移单位是 cm。
 
+## 场景 actor 集成
+
+- 每个由 `WorldBuilder` 构建的 `WorldParticleSystem` 都发布为
+  `EditorSceneActorType::ParticleSystem`，大纲身份是 `particleSystem|<场景对象 name>`。
+  `scenePosition`、`sceneRotation`、`sceneScale` 与 `visible` 由 World 实例持有，不从已烘焙的
+  `model` 反分解。
+- 大纲选中粒子行后，Details 提供 Location/Rotation/Scale。编辑通过
+  `World::SetParticleSystemTransform` 按同一组作者 TRS 重算 `model`，只改活动 World 的实例，
+  不修改 `PS_*.json`、不改场景对象名或 `particlePath`。
+- 可见性开关写 `WorldParticleSystem.visible`，只影响运行时，不写入 `SC_*.json`。隐藏的实例
+  仍保留在大纲与 World 中；渲染器冻结该实例的模拟与绘制（不推进时间、不清池、不排序、
+  不 dispatch），重新显示后从冻结状态继续，不重建或重启粒子池。
+- 粒子的资产编辑仍走 `PS_*.json` 文档；场景 JSON 仍只支持独立 `particleSystem` 对象。
+  没有模块化 stack，也没有运行时 emitter 级增删。运行时实例增删由 World 级的
+  `particlespawn` / `particledestroy` / `particlerestart` 与 Play 期的
+  `Blueprint.Particles` 提供；逐实例运行时参数由 `particleparam` 或 C# setter 覆盖。
+
 ## 运行时实例管理
 
-控制台的 `particlespawn` / `particledestroy` / `particlerestart` 管理当前 active World 的
-粒子系统实例（命令格式见 [调试命令](debug-runtime-commands.md)）：
+控制台的 `particlespawn` / `particledestroy` / `particlerestart` / `particleparam` 管理当前
+active World 的粒子系统实例（命令格式见 [调试命令](debug-runtime-commands.md)）：
 
 - `particlespawn` 在 GT 命令点读取并校验 `PS_*.json`，构造
   `WorldParticleSystem{name, assetPath, asset, translation(position)}` 并写入 World。
@@ -66,8 +87,48 @@ GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定
 - `particlerestart` 按场景对象名匹配 emitter key（转义后的第一段），把匹配池的
   `elapsedSeconds/prewarm/needsClear/culled` 重置；不重新加载资产、不重建纹理与 GPU 池，
   也不改 World 中的资产数据。分线程渲染时先等待渲染线程空闲再改状态。
+- `particleparam` 写实例级运行时覆盖：连续发射预算缩放、RGBA 颜色乘数与逐发射器启停。
+  覆盖不写资产、不写场景；`reset` 恢复默认值。语义与范围见下面的「运行时参数覆盖」。
 
 这些操作只影响当前 World 实例，不是资产编辑，也不会写回 `SC_*.json` 或 `PS_*.json`。
+
+### C# Blueprint 入口
+
+`Blueprint.Particles` 只在所属 Blueprint 的 live GT 回调中可用。Play 期的
+`Spawn(assetPath, position, rotation?, scale?)` 返回 `ParticleSystem`，实例 ID 由当前
+上下文生成 `~particle.<n>`；`Find(id)` 只查本 Blueprint 的 live 表，`DestroyAll()` 销毁
+该表全部实例。`ParticleSystem` 提供 `Destroy`、`SetVisible`、`SetSpawnRateScale`、
+`SetColorTint`、`SetEmitterEnabled` 与 `ResetOverrides`，没有 `Restart`；需要重启时
+`Destroy` 后重新 `Spawn`。完整签名与回调边界见
+[C# Blueprint 运行时](csharp-blueprint-runtime.md#particle-systems)。
+
+托管调用只做 TRS 与参数范围校验并入队，不读取资产；native 在 GT 命令点对
+`particleCommands` 中的 `spawn` 同步执行 `ParticleAssetLoader::Prepare`。因此返回句柄
+不代表资产已成功加载；路径或资产校验失败会停止该 Play 上下文并发布 `StopContext`
+诊断。C# setter 与 console `particleparam` 共用同一组 `World` setter 和校验边界：
+`spawnRateScale ∈ [0,16]`、`colorTint` RGB `∈ [0,16]` 且 alpha `∈ [0,1]`、
+`emitter` index `∈ [0,15]`，全部要求有限值。Blueprint Destroy、故障隔离或 EndPlay
+触发的 owner 清理会为仍在 live 表中的实例补发 `destroy`；整体上下文 Release 不经过
+该补发路径。
+
+### 运行时参数覆盖
+
+每个 `WorldParticleSystem` 持有 `ParticleSystemRuntimeOverrides`，由 `particleparam`
+或 C# `ParticleSystem` setter 在 GT 命令点写入，渲染器按实例消费。覆盖不进入
+`PS_*.json` / `SC_*.json`，也不改变 `ParticleSystemAsset` 的冻结值。
+
+- `spawnRateScale`：默认 `1`，范围 `[0, 16]`。它乘在连续发射预算上，并参与 prewarm 的
+  稳态目标数 `min(maxParticles, spawnRate * spawnRateScale * 0.5 * (lifetimeMin +
+  lifetimeMax))`。`burst: true` 的整池喷发不受它影响，`burstInterval` 周期重触发仍按整池
+  执行。
+- `colorTint`：默认 `(1,1,1,1)`。RGB 每分量在 `[0, 16]` 且全部有限，允许 HDR 增亮；
+  alpha 在 `[0, 1]`。渲染时乘到 billboard、ribbon 与 mesh 三种 renderMode 的最终颜色，
+  alpha 乘到最终不透明度。
+- `enabledEmitterMask`：默认低 16 位全 `1`。`particleparam <name> emitter <index> <0|1>`
+  只切换一个下标；关闭的发射器走与实例隐藏相同的冻结路径：`elapsedSeconds` 不推进、
+  粒子池不清空、不 prewarm、不排序、不 dispatch、不绘制，重新启用后从原状态继续，
+  不重建 GPU 池。它不删除资产中的发射器，也不改变发射器顺序。
+- `reset`：把三项覆盖恢复为默认值，不影响 `particlerestart` 的模拟时间/预热语义。
 
 ## GPU 布局
 
@@ -122,7 +183,9 @@ GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定
   billboard shader 不读取。
 - `ribbonParams` 之后再追加 `meshParams`（`x = alignment`，0 world、1 camera、2 velocity）
   与 `meshScale`（`xyz = 网格局部缩放`）。billboard/ribbon 发射器也写入，但只有 mesh
-  shader 读取；C++ 与 GLSL 顺序必须一致。
+  shader 读取。随后是 `colorTint`（RGBA 运行时颜色乘数）与 `billboardParams`
+  （`x = billboardAlignment`，0 camera、1 velocity；`y/z/w` 保留）；`billboardParams`
+  只有 billboard shader 读取。C++ 与 GLSL 顺序必须一致。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
   再交给线性过滤，避免帧间渗色；V 翻转保持不变。单帧纹理维持原有 mipmap 行为。
@@ -175,9 +238,10 @@ GPU emitter，身份由场景对象名、`assetPath` 与 emitter 名共同决定
 
 - `localSpace: true` 时粒子池保存发射器局部坐标：spawn 位置与速度不再乘
   `localToWorld`，重力与 drag 也按局部空间解释并在局部空间积分，prewarm 同样如此。
-- 渲染顶点把粒子中心按 `localToWorld * vec4(position, 1)` 变换到世界后，再做相机朝向
-  billboard、深度与 `maxScreenSize` 尺寸钳制；`screenSize` 与 `vViewDepth` 都使用变换后
-  的世界中心。逐粒子透明排序的 `particleSortInit` 也用同一世界中心计算深度。
+- 渲染顶点把粒子中心按 `localToWorld * vec4(position, 1)` 变换到世界后，再做 billboard
+  朝向（`camera` 或 `velocity`）、深度与 `maxScreenSize` 尺寸钳制；`screenSize` 与
+  `vViewDepth` 都使用变换后的世界中心。逐粒子透明排序的 `particleSortInit` 也用同一
+  世界中心计算深度。
 - 发射器模型仍是 `sceneObjectModel * translation(emitter.localPosition)`；`localSpace`
   只改变粒子状态所在的空间，不改变发射器摆放。
 - v1 限制：`localSpace=true` 且 `collision.type != "none"` 在加载校验阶段直接拒绝。
@@ -408,6 +472,10 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 - `size: [start, end]`：billboard 世界空间半边长（cm），按寿命线性插值。
 - `renderMode`：`"billboard"`（默认）、`"ribbon"` 或 `"mesh"`。ribbon 用当前点与最近
   3 个历史点生成面向相机的条带；mesh 用静态 SM 网格按粒子实例化，详见对应章节。
+- `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
+  `"camera"` 或 `"velocity"`。`velocity` 用粒子速度方向构造 billboard 基，让 quad 的
+  法线对齐速度；速度退化时回退 camera 基，详见「Billboard 朝向」。ribbon 与 mesh
+  忽略该字段。
 - `ribbonWidth`：ribbon 世界空间半宽（cm），默认 `5`，必须 `> 0` 且有限。
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
@@ -578,9 +646,35 @@ worldPosition = particleCenter
 `rotatedCorner` 在下一节定义；旋转为 0 时它等于 `corner`。`maxScreenSize` 的屏幕封顶仍
 作用在 `size` 上；pivot 只移动 quad 中心，不修改粒子中心、寿命或曲线。
 
+### Billboard 朝向
+
+`renderMode: "billboard"` 的 quad 默认使用相机基：
+
+```text
+billboardRight = cameraRight
+billboardUp    = cameraUp
+```
+
+资产可把 `billboardAlignment` 设为 `"velocity"`，改用粒子池中的模拟空间速度 `v`
+构造基：
+
+```text
+forward        = normalize(v)
+billboardRight = normalize(cross(vec3(0, 1, 0), forward))
+billboardUp    = normalize(cross(forward, billboardRight))
+```
+
+此时 quad 的法线对齐速度方向，适合拖尾/火花。`|v|^2 <= 1e-6`、`v` 与世界上方
+平行，或叉积/归一化后的基向量退化时，整个 quad 回退相机基，避免零面积 quad 与 NaN。
+`localSpace` 发射器先把模拟空间速度乘 `localToWorld` 的线性部分，再构造世界空间基。
+
+`billboardAlignment` 只影响 billboard；ribbon 与 mesh 各有独立的朝向逻辑。逐粒子旋转
+仍在该朝向基内绕 quad 中心应用，pivot 与 `maxScreenSize` 语义不变。
+
 ### 逐粒子 billboard 旋转
 
-每个 billboard 在相机平面内绕自身中心旋转。`age` 是粒子的模拟年龄，`seed` 是稳定的
+每个 billboard 在当前朝向基内绕自身中心旋转；默认 camera 基等价于相机平面。
+`age` 是粒子的模拟年龄，`seed` 是稳定的
 `fract(particleIndex * 0.61803398875)`：
 
 ```text
@@ -590,8 +684,8 @@ angle = radians(rotation + rotationSpeed * age
 rotatedCorner = vec2(corner.x * c - corner.y * s,
                      corner.x * s + corner.y * c)
 worldPosition = particleCenter
-    + (cameraRight * (rotatedCorner.x + pivotOffset.x)
-     + cameraUp    * (rotatedCorner.y + pivotOffset.y)) * size
+    + (billboardRight * (rotatedCorner.x + pivotOffset.x)
+     + billboardUp    * (rotatedCorner.y + pivotOffset.y)) * size
 ```
 
 其中 `c = cos(angle)`、`s = sin(angle)`。pivot 偏移作用于旋转后的 quad；`maxScreenSize`
@@ -882,6 +976,10 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
 ## 验证入口
 
 - 构建：`cmake --build build -j`
+- 场景 actor/保存：`ctest --test-dir build -R "^(SceneDocumentTest|EditorActorProperty|ParticleWorldRuntime)\." --output-on-failure`。
+  `editor_ui_tests` 覆盖 `particleSystem` actor 快照（类型、身份、TRS、可见性）、World 变换与
+  可见性行为，以及 `SceneDocumentTest` 的场景 TRS 保存保留 `particlePath` 与未管理字段；
+  测试仍由现有 `editor_ui_tests` / ctest 入口注册，不新增目标。
 - 运行时加载：`main.exe --initial-scene Maps/SC_particle_demo/SC_particle_ue_demo.json --no-dev-ui`
 - 截图：启动命令加 `--console-command "screenshot build/particle.bmp" --console-command-delay 20`；
   文件落在 `<resourcePath>/Generated/Screenshots/<path>`。
@@ -899,6 +997,10 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
   Content Browser 完成粒子缩略图时输出 `Particle thumbnail rendered: <PS 路径>`，
   失败则输出 `Particle thumbnail failed` 诊断。运行时验证只确认请求完成与无 Vulkan validation，
   不做像素级比对。
+- C# 粒子入口：托管 API 在 `script/VulkanLearn.Runtime/ParticleSystems.cs` 与
+  `GameplayScheduler.cs`，`particleCommands` 的原生消费在
+  `source/script/scriptRuntime.cpp`；验收需开启 C# 宿主并执行 Play 冒烟。该入口没有新增
+  runtime test flag。
 
 Particle 容器、逐 emitter 校验和 `emitters.<index>.<field>` 路径的回归位于
 `tool/material-instance-editor-tests/particleAssetTests.cpp`，由
