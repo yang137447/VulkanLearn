@@ -17,6 +17,7 @@
 #include "core/logStore.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "pipeline/computePipeline.h"
+#include "pipeline/graphicsPipelineLayoutDesc.h"
 #include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
 #include "particles/particleCollision.h"
@@ -89,6 +90,35 @@ Renderpass* FindParticlePass(RenderGraph& graph)
         }
     }
     return nullptr;
+}
+
+GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
+{
+    // particleGlobal.frag 明确不使用 CSM，编译器会把 shadowMap 从反射
+    // 结果中裁掉；但 particle pass 的 set 3 始终由图输入分配为
+    // sceneDepth + shadowMap 两个 binding。显式覆盖 set 3，保证 pipeline
+    // layout 与 render pass descriptor set 的布局兼容，同时不改变 shader
+    // 的 unlit 输出。
+    GraphicsPipelineLayoutDesc layout;
+    layout.overrideSets[PassSetIndex] = true;
+    ShaderBinding sceneDepth;
+    sceneDepth.set = PassSetIndex;
+    sceneDepth.binding = 0;
+    sceneDepth.type = vk::DescriptorType::eCombinedImageSampler;
+    sceneDepth.descriptorCount = 1;
+    sceneDepth.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    sceneDepth.name = "sceneDepth";
+    ShaderBinding shadowMap;
+    shadowMap.set = PassSetIndex;
+    shadowMap.binding = 1;
+    shadowMap.type = vk::DescriptorType::eCombinedImageSampler;
+    shadowMap.descriptorCount = 1;
+    shadowMap.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    shadowMap.name = "shadowMap";
+    layout.setBindings[PassSetIndex] = {
+        std::move(sceneDepth),
+        std::move(shadowMap)};
+    return layout;
 }
 
 ParticleRenderIdentity BuildParticleRenderIdentity(
@@ -426,7 +456,8 @@ void ParticleRenderer::Initialize(
         contract,
         globalArtifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::AlphaBlend);
+        GraphicsPipelineBlendMode::AlphaBlend,
+        BuildParticleGlobalLayout());
 
     // 无纹理发射器仍需一个合法 sampler；1x1 白图让 shader 走程序化形状分支。
     HostImage whiteImage;

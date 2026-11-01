@@ -54,6 +54,9 @@
   未知类型直接拒绝，避免拼写错误静默变成空模块。
 - `fields` 与 v1 emitter 字段同名并递归合并；两个启用模块写同一字段且值不同会拒绝。
   v2 的模块顺序目前只属于作者层，runtime 消费展平后的 `ParticleEmitterAsset`，不重新解释顺序。
+- `renderer.fields.additive` 是 v2 的混合开关：存在时布尔值直接决定 additive/alpha，
+  并优先于底层 `blend` 字符串；两者同时出现时以 `additive` 为准。v1 的作者字段仍是
+  `blend`，v2 renderer 模块公开 `additive`。
 - 根对象可声明 `userParameters`：对象、最多 64 项、值为有限数。模块展平后，
   以 `$Name` 形式出现的字符串会替换为同名数值；未知引用在加载期报错。
 - 没有 `version` 或 `version: 1` 的资产继续走原扁平字段路径；v2 根对象也允许直接携带一个
@@ -188,7 +191,9 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   - graphics `set 0, binding 5`：GPU overdraw 片元计数
   - compute `set 0, binding 2/3/4/5` 分别是 alive indices、事件计数、事件记录与 SDF
 - graphics 额外绑定 `set 3, binding 0`：`sceneDepth` 只读输入；该描述符集由 RenderGraph 的
-  pass input 计划创建，`ParticleRenderer` 只在管线反射使用 set 3 时绑定。
+  pass input 计划创建，`ParticleRenderer` 只在管线反射使用 set 3 时绑定。`set 3, binding 1`
+  是 particle pass 的 CSM `shadowMap`；全局 alpha billboard 的 fragment shader 不采样
+  CSM，但仍显式声明这两个 binding 的管线布局，以匹配 pass 描述符集的固定布局。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
   `particle/particleMesh`；三者各有 additive 与 alpha 两条 blend pipeline，按 PS 的
@@ -1316,3 +1321,20 @@ Particle 容器、逐 emitter 校验和 `emitters.<index>.<field>` 路径的回�
   `[Particles][Info] Global particle sort active: emitters=2 capacity=4096 textures=1`，
   `particlestats` 的 `drawCalls` 从逐发射器绘制的 7 降为 6（5 个逐发射器 + 1 个全局），
   且无 `VUID-` / `Validation Error`。
+
+## 高级展示案例
+
+`Maps/SC_particle_advanced/SC_particle_advanced_impact.json` 是可直接启动的
+Niagara 式综合案例：`PS_advanced_impact.json` 用 5 个发射器组合火焰、火星、烟柱、
+冲击尘和岩石碎片，覆盖 v2 模块、全局 alpha 排序、mesh 实例化与 CSM、三角网格碰撞、
+Data Channels 和 C# 事件订阅。场景自带 ground/rock mesh、程序化焦痕地面和火/烟
+翻转书图集；详细观察点见该目录的 `README.md`。
+
+```powershell
+main.exe --initial-scene Maps/SC_particle_advanced/SC_particle_advanced_impact.json --no-dev-ui --focus-window
+```
+
+验收时应看到 `Global particle sort active: emitters=2`（烟柱 + 冲击尘），且无
+`VUID-` / `Validation Error`。编辑态直接使用 `PS_*.json` 默认 `userParameters`；
+Play 态由 `Gameplay.ParticleDirector` 通过 `Particles.Data` 覆盖发射率、湍流、风场
+和重力，并输出碰撞事件日志。

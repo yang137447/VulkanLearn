@@ -140,6 +140,28 @@ TEST(ParticleAsset, V2DisabledModulesLeaveRuntimeDefaults)
     EXPECT_FLOAT_EQ(asset.emitters.front().spawnRate, 200.0f);
 }
 
+TEST(ParticleAsset, V2RendererAdditiveControlsBlend)
+{
+    Json document = V2ModuleDocument();
+    document["emitters"][0]["modules"][0]["fields"]["sortParticles"] = true;
+    // 根级 blend 仍可作者化；renderer.additive 必须优先于它。
+    document["emitters"][0]["blend"] = "additive";
+    document["emitters"][0]["modules"].push_back(Json{
+        {"type", "renderer"},
+        {"fields", {{"additive", false}}}});
+    const ParticleSystemAsset alpha =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_v2_alpha.json");
+    EXPECT_FALSE(alpha.emitters.front().additive);
+
+    document["emitters"][0]["blend"] = "alpha";
+    document["emitters"][0]["modules"].back()["fields"]["additive"] = true;
+    const ParticleSystemAsset additive =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_v2_additive.json");
+    EXPECT_TRUE(additive.emitters.front().additive);
+}
+
 TEST(ParticleAsset, V2ModuleFieldConflictsAndUnknownTypesAreRejected)
 {
     Json conflict = V2ModuleDocument();

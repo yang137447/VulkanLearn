@@ -1207,8 +1207,21 @@ ParticleEmitterAsset ParseEmitter(
             frameCount > 0 ? frameCount - 1 : 0;
     }
 
-    const std::string blend =
+    std::string blend =
         json.value("blend", std::string("additive"));
+    // v2 renderer 模块暴露的是布尔 additive；v1 继续使用 blend 字符串。
+    // 两者同时出现时 additive 是 v2 模块作者意图，优先于底层 blend。
+    if (json.contains("additive"))
+    {
+        if (!json.at("additive").is_boolean())
+        {
+            throw std::invalid_argument(
+                "Particle additive must be a boolean");
+        }
+        blend = json.at("additive").get<bool>()
+            ? "additive"
+            : "alpha";
+    }
     if (blend != "additive" && blend != "alpha")
     {
         throw std::invalid_argument(
