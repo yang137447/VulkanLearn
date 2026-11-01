@@ -55,6 +55,10 @@
   `ParticleSystemAsset::userParameters`，尚未被模块引用。
 - 没有 `version` 或 `version: 1` 的资产继续走原扁平字段路径；v2 根对象也允许直接携带一个
   隐式 emitter 的 `modules`。展平后的 runtime 校验与 v1 完全相同。
+- 粒子编辑器对 v1 资产提供 “Upgrade to v2 module stack”；升级会先提交 `version: 2`，再把
+  每个 emitter 的字段迁入模块并提交整条 `emitters`（隐式根提交 `modules`）。v2 编辑器显示
+  模块行，可添加、删除、上下移动、启停；字段编辑按 `ParticleModuleTypeForField` 写回
+  对应模块的 `fields`，不再写 emitter 根键。模块顺序仍是作者层信息，runtime 只消费展平值。
 
 ## 数据路径
 

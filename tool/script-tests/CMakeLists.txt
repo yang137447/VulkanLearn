@@ -63,4 +63,6 @@ if(TARGET vl_gameplay)
     add_dependencies(vl_script_fixtures vl_gameplay)
     add_dependencies(script_tests vl_script_fixtures)
 endif()
-vulkanlearn_add_gtest(script_tests)
+# 粒子/C# 资源路径从项目根解析；ctest 默认工作目录在 build 子目录，
+# 会把 "../VukanLearnResources" 解析到错误位置。
+vulkanlearn_add_gtest(script_tests WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

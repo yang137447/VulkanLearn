@@ -33,6 +33,7 @@
 #include "particles/particleCurveEdit.h"
 #include "particles/particleEmitterEdit.h"
 #include "particles/particleFlipbookEdit.h"
+#include "particles/particleModuleEdit.h"
 #include "script/scriptTypeIdentity.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
@@ -186,6 +187,13 @@ nlohmann::json ParticleChangeValue(const EditorAssetFieldValue& value)
         [](const auto& item) { return nlohmann::json(item); }, value);
 }
 
+// v2 的字段真实存放在 emitters[].modules[].fields 里，编辑投影统一先展平；
+// v1 没有 modules 时展平等价于原对象，调用方可以直接复用同一份读取逻辑。
+nlohmann::json ParticleEmitterForEdit(const nlohmann::json& emitter)
+{
+    return FlattenParticleEmitter(emitter);
+}
+
 // 结构编辑提交整条 emitters 数组；提交前把尚未 flush 的字段草稿合并进
 // 工作副本，语义与 ApplyAssetChanges 的粒子路径一致：
 // 根字段、emitters.<index>.<field>、点路径与 reset 都按同一规则写入。
@@ -195,6 +203,7 @@ void ApplyParticleDraftChange(
 {
     nlohmann::json* target = &document;
     std::string field = change.field;
+    bool v2EmitterField = false;
     if (field.rfind("emitters.", 0) == 0)
     {
         const size_t indexStart = std::string("emitters.").size();
@@ -216,8 +225,33 @@ void ApplyParticleDraftChange(
         }
         target = &document.at("emitters").at(index);
         field = field.substr(separator + 1);
+        v2EmitterField = document.is_object() &&
+            document.value("version", 1) == 2;
+    }
+    else if (document.is_object() &&
+        document.value("version", 1) == 2 &&
+        field != "name" && field != "version" &&
+        field != "emitters" && field != "modules" &&
+        field != "userParameters")
+    {
+        // v2 允许根对象直接承载隐式 emitter 的 modules；这类文档的字段
+        // 同样必须写进模块，不能落到会被解析器忽略的根键上。
+        v2EmitterField = true;
     }
     if (field.empty() || !target->is_object()) return;
+
+    if (v2EmitterField)
+    {
+        nlohmann::json value;
+        if (!change.reset) value = ParticleChangeValue(change.value);
+        if (SetParticleEmitterField(
+            *target, field, value, change.reset))
+        {
+            return;
+        }
+        // 模块 helper 拒绝时保留旧的 raw 写入兜底，避免工作副本与
+        // 已提交命令在结构异常文档上完全失联。
+    }
 
     size_t start = 0;
     while (true)
@@ -2884,6 +2918,93 @@ bool MaterialInstanceAssetEditorPanel::HasParticlePreview() const
             "SC_particle_preview.json";
 }
 
+std::string
+MaterialInstanceAssetEditorPanel::ParticleModuleStackMarkup() const
+{
+    using UiWidgets::Text;
+    const auto* active = resourceEditor.ActiveTab();
+    const auto* authored = active
+        ? ParticleDocument(active->path) : nullptr;
+    if (authored == nullptr || !authored->document.is_object())
+        return std::string();
+    const nlohmann::json& document = authored->document;
+    const bool v2 = document.value("version", 1) == 2;
+    if (!v2)
+    {
+        return "<div class=\"particle-module-stack\">"
+            "<div class=\"particle-field-row\"><span>Module stack</span>"
+            "<button data-action=\"particle-upgrade-v2\">"
+            "Upgrade to v2 module stack</button></div></div>";
+    }
+
+    const bool multiEmitter =
+        document.contains("emitters") &&
+        document.at("emitters").is_array() &&
+        !document.at("emitters").empty();
+    const size_t emitterIndex = multiEmitter
+        ? std::min(particleEmitterIndex,
+            document.at("emitters").size() - 1)
+        : 0;
+    const nlohmann::json& emitter = multiEmitter
+        ? document.at("emitters").at(emitterIndex)
+        : document;
+    const nlohmann::json modules = emitter.contains("modules") &&
+        emitter.at("modules").is_array()
+        ? emitter.at("modules") : nlohmann::json::array();
+
+    std::string markup = "<div class=\"particle-module-stack\">";
+    markup += "<div class=\"particle-field-row\"><span>Module stack</span>"
+        "<span class=\"particle-module-count\">" +
+        std::to_string(modules.size()) + " modules</span></div>";
+    if (modules.empty())
+    {
+        markup += "<p class=\"muted\">No modules. Add one below.</p>";
+    }
+    const size_t selected = modules.empty() ? 0 :
+        std::min(particleModuleStackIndex, modules.size() - 1);
+    for (size_t index = 0; index < modules.size(); ++index)
+    {
+        const nlohmann::json& module = modules.at(index);
+        const std::string type = module.value(
+            "type", std::string());
+        const ParticleModuleSpec* spec =
+            FindParticleModuleSpec(type);
+        const std::string label = spec != nullptr
+            ? spec->label : type;
+        const bool enabled = module.value("enabled", true);
+        markup += "<div class=\"particle-field-row particle-module-row" +
+            std::string(index == selected ? " selected" : "") + "\">";
+        markup += "<button data-action=\"particle-module-stack-select\""
+            " data-index=\"" + std::to_string(index) + "\">" +
+            Text(std::to_string(index) + ". " + label) + "</button>";
+        markup += "<span>" +
+            std::string(enabled ? "enabled" : "disabled") + "</span>";
+        markup += "<button data-action=\"particle-module-stack-toggle\""
+            " data-index=\"" + std::to_string(index) + "\">" +
+            std::string(enabled ? "Disable" : "Enable") + "</button>";
+        markup += "<button data-action=\"particle-module-stack-up\""
+            " data-index=\"" + std::to_string(index) + "\">Up</button>";
+        markup += "<button data-action=\"particle-module-stack-down\""
+            " data-index=\"" + std::to_string(index) + "\">Down</button>";
+        markup += "<button data-action=\"particle-module-stack-remove\""
+            " data-index=\"" + std::to_string(index) + "\">Remove</button>";
+        markup += "</div>";
+    }
+
+    std::string options;
+    for (const ParticleModuleSpec& spec :
+        ParticleModuleSpecs())
+    {
+        options += "<option value=\"" + Text(spec.type) + "\">" +
+            Text(spec.label) + "</option>";
+    }
+    markup += "<div class=\"particle-field-row\"><span>Add module</span>"
+        "<select id=\"particle-module-type\">" + options + "</select>"
+        "<button data-action=\"particle-module-stack-add\">Add</button>"
+        "</div></div>";
+    return markup;
+}
+
 std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
 {
     using UiWidgets::Text;
@@ -2907,6 +3028,8 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
     const nlohmann::json& emitter = multiEmitter
         ? document.at("emitters").at(emitterIndex)
         : document;
+    const nlohmann::json flattenedEmitter =
+        ParticleEmitterForEdit(emitter);
     if (particleModule == "system")
     {
         std::string systemMarkup =
@@ -2919,6 +3042,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
             systemMarkup += "<p class=\"particle-system-summary\">" +
                 std::to_string(document.at("emitters").size()) +
                 " emitters</p>";
+        systemMarkup += ParticleModuleStackMarkup();
         return systemMarkup;
     }
     if (particleModule == "curves")
@@ -2928,16 +3052,19 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
         const std::string prefix = multiEmitter
             ? "emitters." + std::to_string(emitterIndex) + "."
             : std::string();
-        std::string curveMarkup = ParticleCurveMarkup(
-            ParticleCurveKeys(emitter, "colorKeys",
+        std::string curveMarkup = ParticleModuleStackMarkup();
+        curveMarkup += ParticleCurveMarkup(
+            ParticleCurveKeys(flattenedEmitter, "colorKeys",
                 prefix + "colorKeys"),
             "colorKeys");
         curveMarkup += ParticleCurveMarkup(
-            ParticleCurveKeys(emitter, "sizeKeys",
+            ParticleCurveKeys(flattenedEmitter, "sizeKeys",
                 prefix + "sizeKeys"),
             "sizeKeys");
         return curveMarkup;
     }
+    // 模块栈放在字段表单最上方：v1 显示升级入口，v2 显示结构操作。
+    markup += ParticleModuleStackMarkup();
     nlohmann::json fields = authored->capabilities.value(
         "fields", nlohmann::json::array());
     if (multiEmitter)
@@ -2964,7 +3091,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
         // 隐式发射器没有 localPosition；不要把无法写回的 position 暴露给旧资产。
         if (name == "position" && !multiEmitter) continue;
         const std::string type = field.value("type", std::string());
-        nlohmann::json current = emitter;
+        nlohmann::json current = flattenedEmitter;
         size_t start = 0;
         while (!name.empty())
         {
@@ -2984,8 +3111,8 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
         // fixedBounds 存在但 useFixedBounds 省略时，加载器会自动启用。
         // 表单必须显示生效值，否则作者会误以为固定包围球处于关闭状态。
         if (name == "useFixedBounds" &&
-            !emitter.contains("useFixedBounds") &&
-            emitter.contains("fixedBounds"))
+            !flattenedEmitter.contains("useFixedBounds") &&
+            flattenedEmitter.contains("fixedBounds"))
         {
             current = true;
         }
@@ -3064,9 +3191,11 @@ MaterialInstanceAssetEditorPanel::ParticleFlipbookTableMarkup() const
         ? std::min(particleEmitterIndex,
             working.at("emitters").size() - 1)
         : 0;
-    const nlohmann::json& emitter = multiEmitter
+    const nlohmann::json& rawEmitter = multiEmitter
         ? working.at("emitters").at(emitterIndex)
         : working;
+    // v2 的 flipbook 字段位于模块内，表格必须读取展平后的投影。
+    const nlohmann::json emitter = ParticleEmitterForEdit(rawEmitter);
 
     const size_t frameCount = FlipbookFrameCount(emitter);
     std::string markup =
@@ -3263,9 +3392,11 @@ void MaterialInstanceAssetEditorPanel::HandleParticleFlipbookTableEdit(
         ? std::min(particleEmitterIndex,
             working.at("emitters").size() - 1)
         : 0;
-    const nlohmann::json& emitter = multiEmitter
+    const nlohmann::json& rawEmitter = multiEmitter
         ? working.at("emitters").at(emitterIndex)
         : working;
+    const nlohmann::json emitter =
+        ParticleEmitterForEdit(rawEmitter);
     const size_t frameCount = FlipbookFrameCount(emitter);
     if (frameCount == 0 || frameCount > kMaxFrames)
     {
@@ -3392,9 +3523,11 @@ void MaterialInstanceAssetEditorPanel::HandleParticleFlipbookTableAction(
         ? std::min(particleEmitterIndex,
             working.at("emitters").size() - 1)
         : 0;
-    const nlohmann::json& emitter = multiEmitter
+    const nlohmann::json& rawEmitter = multiEmitter
         ? working.at("emitters").at(emitterIndex)
         : working;
+    const nlohmann::json emitter =
+        ParticleEmitterForEdit(rawEmitter);
     const size_t frameCount = FlipbookFrameCount(emitter);
     if (frameCount == 0 || frameCount > kMaxFrames)
     {
@@ -3605,6 +3738,9 @@ nlohmann::json MaterialInstanceAssetEditorPanel::ParticleCurveKeys(
     const std::string& fieldPath) const
 {
     const bool colorCurve = curve == "colorKeys";
+    // v2 的曲线字段在模块内；先展平，pending 分支与端点回退都读同一投影。
+    const nlohmann::json editEmitter =
+        ParticleEmitterForEdit(emitter);
     const auto* active = resourceEditor.ActiveTab();
     if (active != nullptr && pendingParticlePath == active->path)
     {
@@ -3615,7 +3751,7 @@ nlohmann::json MaterialInstanceAssetEditorPanel::ParticleCurveKeys(
             {
                 // 删除到空数组时字段写 reset；预览必须回到端点值，
                 // 不能继续显示当前文档里即将被移除的那条曲线。
-                nlohmann::json fallback = emitter;
+                nlohmann::json fallback = editEmitter;
                 if (fallback.is_object())
                     fallback.erase(colorCurve
                         ? "colorKeys" : "sizeKeys");
@@ -3630,8 +3766,8 @@ nlohmann::json MaterialInstanceAssetEditorPanel::ParticleCurveKeys(
         }
     }
     return colorCurve
-        ? ParticleCurveEdit::ReadColorKeys(emitter)
-        : ParticleCurveEdit::ReadSizeKeys(emitter);
+        ? ParticleCurveEdit::ReadColorKeys(editEmitter)
+        : ParticleCurveEdit::ReadSizeKeys(editEmitter);
 }
 
 const nlohmann::json*
@@ -3904,6 +4040,221 @@ void MaterialInstanceAssetEditorPanel::HandleParticleEmitterStructure(
     EditorAssetFieldChange change;
     change.field = "emitters";
     change.value = working.at("emitters");
+    QueueParticleAssetDraft(std::move(change));
+    localStatus = feedback;
+    RefreshResourceEditor();
+}
+
+void MaterialInstanceAssetEditorPanel::HandleParticleModuleStack(
+    const std::string& action,
+    Rml::Element& element)
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr ||
+        active->kind != EditorAssetKind::ParticleSystem)
+    {
+        return;
+    }
+    const auto* authored = ParticleDocument(active->path);
+    if (authored == nullptr || !authored->document.is_object())
+        return;
+
+    nlohmann::json working = authored->document;
+    // 与发射器结构命令一致：先把未 flush 的字段草稿合并进工作副本，
+    // 再用最新数组执行模块操作，避免旧快照覆盖用户刚输入的值。
+    const bool hasPendingDraft = pendingParticlePath == active->path;
+    if (hasPendingDraft)
+    {
+        for (const auto& pending : pendingParticleChanges)
+        {
+            if (pending.field != "emitters" || pending.reset) continue;
+            const auto* value =
+                std::get_if<nlohmann::json>(&pending.value);
+            if (value != nullptr && value->is_array())
+                working["emitters"] = *value;
+        }
+        for (const auto& pending : pendingParticleChanges)
+        {
+            if (pending.field != "emitters")
+                ApplyParticleDraftChange(working, pending);
+        }
+    }
+
+    const bool v2 = working.value("version", 1) == 2;
+    const bool hasEmittersArray =
+        working.contains("emitters") &&
+        working.at("emitters").is_array() &&
+        !working.at("emitters").empty();
+    const size_t emitterIndex = hasEmittersArray
+        ? std::min(particleEmitterIndex,
+            working.at("emitters").size() - 1)
+        : 0;
+    nlohmann::json& emitter = hasEmittersArray
+        ? working["emitters"].at(emitterIndex)
+        : working;
+    const size_t moduleCount = emitter.contains("modules") &&
+        emitter.at("modules").is_array()
+        ? emitter.at("modules").size() : 0;
+
+    if (action == "particle-module-stack-select")
+    {
+        const int requested = element.GetAttribute<int>(
+            "data-index", -1);
+        particleModuleStackIndex = requested < 0 || moduleCount == 0
+            ? 0
+            : std::min(static_cast<size_t>(requested),
+                moduleCount - 1);
+        RefreshResourceEditor();
+        return;
+    }
+
+    if (action == "particle-upgrade-v2")
+    {
+        if (v2)
+        {
+            localStatus = "Document already uses the v2 module stack.";
+            RefreshResourceEditor();
+            return;
+        }
+        working["version"] = 2;
+        bool upgraded = true;
+        if (hasEmittersArray)
+        {
+            for (auto& entry : working["emitters"])
+            {
+                if (!EnsureParticleModules(entry))
+                {
+                    upgraded = false;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            upgraded = EnsureParticleModules(working);
+        }
+        if (!upgraded)
+        {
+            // 失败不提交任何命令；pending 字段草稿原样保留。
+            localStatus = "Could not upgrade the particle document to v2.";
+            RefreshResourceEditor();
+            return;
+        }
+
+        particleModuleStackIndex = 0;
+        particleEmitterMarkupCache.clear();
+        particleFieldsMarkupCache.clear();
+        if (hasPendingDraft)
+        {
+            pendingParticleChanges.clear();
+            pendingParticlePath.clear();
+        }
+        // version 必须先落盘：后续 emitters/modules 结构的解析语义由它决定。
+        EditorAssetFieldChange versionChange;
+        versionChange.field = "version";
+        versionChange.value = 2.0;
+        QueueParticleAssetDraft(std::move(versionChange));
+        EditorAssetFieldChange structureChange;
+        structureChange.field = hasEmittersArray ? "emitters" : "modules";
+        structureChange.value = hasEmittersArray
+            ? working.at("emitters") : working.at("modules");
+        QueueParticleAssetDraft(std::move(structureChange));
+        localStatus = "Particle document upgraded to v2 modules.";
+        RefreshResourceEditor();
+        return;
+    }
+
+    if (!v2)
+    {
+        localStatus = "Upgrade the document to v2 before editing modules.";
+        RefreshResourceEditor();
+        return;
+    }
+
+    const size_t selected = moduleCount == 0 ? 0 :
+        std::min(particleModuleStackIndex, moduleCount - 1);
+    // 行按钮自带 data-index：即使该行尚未被选中，也必须操作被点击的模块。
+    const int rowValue = element.GetAttribute<int>(
+        "data-index", static_cast<int>(selected));
+    const size_t rowIndex = moduleCount == 0 ? 0 :
+        std::min(static_cast<size_t>(std::max(rowValue, 0)),
+            moduleCount - 1);
+    size_t nextSelection = selected;
+    bool success = false;
+    std::string feedback;
+    if (action == "particle-module-stack-add")
+    {
+        std::string type;
+        if (document != nullptr)
+        {
+            if (auto* control = document->GetElementById(
+                "particle-module-type"))
+                type = ControlValue(*control);
+        }
+        success = AddParticleModule(
+            emitter, type, nextSelection);
+        feedback = "Module added.";
+    }
+    else if (action == "particle-module-stack-remove")
+    {
+        success = RemoveParticleModule(
+            emitter, rowIndex);
+        feedback = "Module removed.";
+        nextSelection = rowIndex;
+    }
+    else if (action == "particle-module-stack-up" ||
+        action == "particle-module-stack-down")
+    {
+        const int delta =
+            action == "particle-module-stack-up" ? -1 : 1;
+        success = MoveParticleModule(
+            emitter, rowIndex, delta);
+        feedback = "Module moved.";
+        nextSelection = success
+            ? static_cast<size_t>(
+                static_cast<std::ptrdiff_t>(rowIndex) + delta)
+            : rowIndex;
+    }
+    else if (action == "particle-module-stack-toggle")
+    {
+        const bool enabled = rowIndex < moduleCount &&
+            emitter.at("modules").at(rowIndex).value(
+                "enabled", true);
+        success = SetParticleModuleEnabled(
+            emitter, rowIndex, !enabled);
+        feedback = enabled ? "Module disabled." : "Module enabled.";
+        nextSelection = rowIndex;
+    }
+    else
+    {
+        return;
+    }
+
+    if (!success)
+    {
+        localStatus = action == "particle-module-stack-add"
+            ? std::string("The selected module cannot be added.")
+            : std::string("Module operation is not valid for the current stack.");
+        RefreshResourceEditor();
+        return;
+    }
+
+    const size_t updatedCount = emitter.contains("modules") &&
+        emitter.at("modules").is_array()
+        ? emitter.at("modules").size() : 0;
+    particleModuleStackIndex = updatedCount == 0 ? 0 :
+        std::min(nextSelection, updatedCount - 1);
+    particleEmitterMarkupCache.clear();
+    particleFieldsMarkupCache.clear();
+    if (hasPendingDraft)
+    {
+        pendingParticleChanges.clear();
+        pendingParticlePath.clear();
+    }
+    EditorAssetFieldChange change;
+    change.field = hasEmittersArray ? "emitters" : "modules";
+    change.value = hasEmittersArray
+        ? working.at("emitters") : working.at("modules");
     QueueParticleAssetDraft(std::move(change));
     localStatus = feedback;
     RefreshResourceEditor();
@@ -4357,6 +4708,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
                 ? module->second : std::string("emitter");
             particleEmitterMarkupCache.clear();
             particleFieldsMarkupCache.clear();
+            particleModuleStackIndex = 0;
             pendingParticleEmitterSelection.reset();
             pendingParticleEmitterSelectionPath.clear();
             particleHistoryCommandAwaitingSnapshot = false;
@@ -4422,6 +4774,37 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
             particleEmitterMarkupCache.clear();
             SetMarkup("particle-emitter-select", std::string());
         }
+        // v2 模块栈选择只服务编辑面板；每帧按当前发射器模块数夹紧，
+        // 结构命令改变数组后旧索引不会越界。
+        size_t moduleCount = 0;
+        if (authored != nullptr &&
+            authored->document.is_object() &&
+            authored->document.value("version", 1) == 2)
+        {
+            const auto& document = authored->document;
+            const bool multiEmitter =
+                document.contains("emitters") &&
+                document.at("emitters").is_array() &&
+                !document.at("emitters").empty();
+            if (multiEmitter)
+            {
+                const size_t index = std::min(
+                    particleEmitterIndex,
+                    document.at("emitters").size() - 1);
+                const auto& emitter =
+                    document.at("emitters").at(index);
+                if (emitter.contains("modules") &&
+                    emitter.at("modules").is_array())
+                    moduleCount = emitter.at("modules").size();
+            }
+            else if (document.contains("modules") &&
+                document.at("modules").is_array())
+            {
+                moduleCount = document.at("modules").size();
+            }
+        }
+        particleModuleStackIndex = moduleCount == 0 ? 0 :
+            std::min(particleModuleStackIndex, moduleCount - 1);
         SetDisabled("particle-emitter-add",
             authored == nullptr ||
                 emitterCount >= kMaxParticleEmitters);
@@ -4477,6 +4860,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         particleEmitterDocumentPath.clear();
         particleEmitterMarkupCache.clear();
         particleFieldsMarkupCache.clear();
+        particleModuleStackIndex = 0;
         pendingParticleEmitterSelection.reset();
         pendingParticleEmitterSelectionPath.clear();
         for (const char* id : {"particle-emitter-add",
@@ -5319,6 +5703,16 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         particleModule = element.GetAttribute<std::string>(
             "data-module", "emitter");
         RefreshResourceEditor();
+    }
+    else if (action == "particle-upgrade-v2" ||
+        action == "particle-module-stack-select" ||
+        action == "particle-module-stack-add" ||
+        action == "particle-module-stack-remove" ||
+        action == "particle-module-stack-up" ||
+        action == "particle-module-stack-down" ||
+        action == "particle-module-stack-toggle")
+    {
+        HandleParticleModuleStack(action, element);
     }
     else if (action == "particle-emitter-add" ||
         action == "particle-emitter-remove" ||

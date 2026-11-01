@@ -1,4 +1,5 @@
 #include "editor/command/assetDocumentFields.h"
+#include "particles/particleModuleEdit.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,6 +73,8 @@ const Field fields[] = {
     {K::Texture, "", "wrapMode", ValueKind::Text, true, "", "repeat|clamp"},
     {K::Texture, "", "channelsDescription", ValueKind::Channels, true},
     {K::ParticleSystem, "", "name", ValueKind::Text},
+    {K::ParticleSystem, "", "version", ValueKind::Number},
+    {K::ParticleSystem, "", "modules", ValueKind::Array},
     {K::ParticleSystem, "", "position", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "localSpace", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "renderMode", ValueKind::Text, false, "", "billboard|ribbon|mesh"},
@@ -406,6 +409,7 @@ void SetParticleField(
     const std::map<size_t, std::string>* originalNames)
 {
     const ParticleFieldPath path = ParseParticleFieldPath(change.field);
+    const bool v2 = target.value("version", 1) == 2;
     if (!path.hasEmitter)
     {
         const bool explicitEmitters =
@@ -415,11 +419,28 @@ void SetParticleField(
         {
             // 显式多发射器文档的根对象只拥有系统名和结构数组；
             // 其余字段写到根会被 ParseJson 忽略，必须明确拒绝。
-            if (change.field != "name" && change.field != "emitters")
+            if (change.field != "name" && change.field != "emitters" &&
+                change.field != "version")
                 throw std::invalid_argument(
                     "Particle field requires emitters.<index>.<field>: " +
                     change.field);
             SetField(target, change);
+            return;
+        }
+        // 隐式 v2 emitter：根字段按模块 owner 写回 modules[].fields。
+        if (v2 && change.field != "name" && change.field != "version" &&
+            change.field != "modules")
+        {
+            if (!SetParticleEmitterField(
+                    target,
+                    change.field,
+                    ValueJson(change.value),
+                    change.reset))
+            {
+                throw std::invalid_argument(
+                    "Particle v2 field could not be written: " +
+                    change.field);
+            }
             return;
         }
         // 旧资产没有 emitters 数组；根字段必须保持原有写入语义。
@@ -451,6 +472,20 @@ void SetParticleField(
         }
         if (identity != *change.expectedEmitterName)
             throw std::invalid_argument("Particle emitter identity changed");
+    }
+    if (v2)
+    {
+        if (!SetParticleEmitterField(
+                emitter,
+                path.field,
+                ValueJson(change.value),
+                change.reset))
+        {
+            throw std::invalid_argument(
+                "Particle v2 field could not be written: " +
+                path.field);
+        }
+        return;
     }
     SetDottedField(emitter, path.field, change);
 }

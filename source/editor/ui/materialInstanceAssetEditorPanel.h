@@ -211,6 +211,7 @@ private:
     void FlushParticleAssetEdits();
     void SubmitParticleAssetCommand(EditorCommandType type, const std::string& path);
     std::string ParticleFieldsMarkup() const;
+    std::string ParticleModuleStackMarkup() const;
     std::string ParticleCurveMarkup(const nlohmann::json& keys, const std::string& curve) const;
     nlohmann::json ParticleCurveKeys(const nlohmann::json& emitter,
         const std::string& curve, const std::string& fieldPath) const;
@@ -223,6 +224,7 @@ private:
     void HandleParticleFlipbookTableEdit(Rml::Element& element);
     void HandleParticleFlipbookTableAction(const std::string& action);
     void HandleParticleEmitterStructure(const std::string& action);
+    void HandleParticleModuleStack(const std::string& action, Rml::Element& element);
     bool ProcessParticleKeyboard(Rml::Event& event);
     void HandleParticleFieldReset(Rml::Element& element);
     void MergeParticleInFlightChanges();
@@ -252,6 +254,8 @@ private:
     std::string particleModule = "emitter";
     // 多发射器 PS 的当前选择；按文档路径持久化，关闭标签后清理。
     size_t particleEmitterIndex = 0;
+    // v2 模块栈的当前选中行；索引只服务编辑面板，不参与运行时资产契约。
+    size_t particleModuleStackIndex = 0;
     std::string particleEmitterDocumentPath;
     std::unordered_map<std::string, size_t> particleEmitterSelectionByPath;
     std::unordered_map<std::string, std::string> particleModuleByPath;

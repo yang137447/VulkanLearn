@@ -7865,6 +7865,110 @@ TEST_F(EditorUiTest, ParticleCurvePanelAddsKeyAndSubmitsWholeArray)
     EXPECT_EQ(value->size(), 3u);
 }
 
+TEST_F(EditorUiTest, ParticleUpgradeV2SubmitsVersionThenEmitterModules)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_upgrade.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_upgrade"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"spawnRate", 12.0},
+                {"gravity", {0.0, -980.0, 0.0}}}
+        })}});
+
+    // v1 文档在字段表单最上方提供升级入口；结构迁移必须把原有字段
+    // 收进模块，而不是丢失。
+    Click("[data-action=particle-upgrade-v2]");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    EXPECT_EQ(payload.assetPath, path);
+    ASSERT_EQ(payload.changes.size(), 2u);
+    EXPECT_EQ(payload.changes[0].field, "version");
+    const auto* version = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(version, nullptr);
+    EXPECT_DOUBLE_EQ(*version, 2.0);
+    EXPECT_EQ(payload.changes[1].field, "emitters");
+    const auto* emitters = std::get_if<nlohmann::json>(
+        &payload.changes[1].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 1u);
+    const auto& emitter = emitters->at(0);
+    ASSERT_TRUE(emitter.contains("modules"));
+    const auto& modules = emitter.at("modules");
+    ASSERT_TRUE(modules.is_array());
+    bool hasSpawn = false;
+    bool hasGravity = false;
+    for (const auto& module : modules)
+    {
+        if (module.value("type", std::string()) == "spawn.rate")
+        {
+            hasSpawn = true;
+            EXPECT_DOUBLE_EQ(module.at("fields").at("spawnRate")
+                .get<double>(), 12.0);
+        }
+        if (module.value("type", std::string()) == "forces.gravity")
+            hasGravity = true;
+    }
+    EXPECT_TRUE(hasSpawn);
+    EXPECT_TRUE(hasGravity);
+}
+
+TEST_F(EditorUiTest, ParticleModuleStackToggleTargetsClickedRow)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_stack.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_stack"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"modules", Json::array({
+                    Json{{"type", "emitter"},
+                        {"enabled", true},
+                        {"fields", Json::object()}},
+                    Json{{"type", "spawn.rate"},
+                        {"enabled", true},
+                        {"fields", {{"spawnRate", 10.0}}}}
+                })}}
+        })}});
+
+    // 第二行未被选中也必须切换第二行，而不是当前选中行。
+    Click("[data-action=particle-module-stack-toggle][data-index='1']");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters");
+    const auto* emitters = std::get_if<nlohmann::json>(
+        &payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 1u);
+    const auto& modules =
+        emitters->at(0).at("modules");
+    ASSERT_EQ(modules.size(), 2u);
+    EXPECT_TRUE(modules.at(0).value("enabled", true));
+    EXPECT_FALSE(modules.at(1).value("enabled", true));
+}
+
 TEST_F(EditorUiTest, ParticleCurveRemoveOfSingleKeyResetsField)
 {
     using Json = nlohmann::json;

@@ -150,6 +150,7 @@ add_executable(material_instance_editor_production_tests
     particleLodTests.cpp
     particleMeshTests.cpp
     particleMeshReferenceTests.cpp
+    particleModuleEditTests.cpp
     particlePreviewUpdateTests.cpp
     particleRenderIdentityTests.cpp
     particleRibbonTests.cpp
