@@ -32,6 +32,17 @@ public:
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }
     const vk::DescriptorBufferInfo& GetSkinInfluenceInfo() const { return skinInfluenceInfo; }
+    const vk::DescriptorBufferInfo& GetVertexBufferInfo() const { return vertexBufferInfo; }
+    const vk::DescriptorBufferInfo& GetIndexBufferInfo() const { return indexBufferInfo; }
+    const std::vector<struct Vertex>& GetSourceVertices() const;
+    const std::vector<uint32_t>& GetSourceIndices() const;
+    uint32_t GetVertexStrideFloats() const;
+
+    // 描边法线平滑是一次性 GPU 工作：资产声明后由 loader 入队，
+    // RenderSystem 在帧内安全点录制 compute 并标记 ready。
+    bool RequestOutlineNormalSmoothing() noexcept;
+    bool IsOutlineNormalsReady() const noexcept { return outlineNormalsReady; }
+    void MarkOutlineNormalsReady() noexcept { outlineNormalsReady = true; }
 
 private:
     void UpdateLocalBounds();
@@ -64,4 +75,6 @@ private:
     vk::Buffer skinInfluenceBuffer = nullptr;
     vk::DeviceMemory skinInfluenceMemory = nullptr;
     vk::DescriptorBufferInfo skinInfluenceInfo;
+    bool outlineNormalsRequested = false;
+    bool outlineNormalsReady = false;
 };

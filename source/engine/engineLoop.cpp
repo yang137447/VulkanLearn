@@ -17,6 +17,7 @@
 #include "script/scriptSourceLocation.h"
 #include "engine/blueprintPreviewTransform.h"
 #include "engine/blueprintAssetLoadSession.h"
+#include "engine/editorInteractionPolicy.h"
 #include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
@@ -696,6 +697,9 @@ void EngineLoop::Tick()
                 if (!scripts.Control(*world, ScriptPlayState::Playing, error))
                     GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
             }
+            // 自动 Play 与手动 Play 共用同一套交互隔离：参考网格、选择描边与
+            // 编辑器观察相机在同一帧退出。
+            SynchronizeEditorInteractionState();
         }
         // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
         if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
@@ -705,9 +709,34 @@ void EngineLoop::Tick()
         }
         if (scripts.IsEditing())
             controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
+        // 读回走"渲染线程权威值 -> GT 快照 -> C#"：GT 只取走变化的快照。
+        if (world && world->GetScriptContext() && !scripts.IsEditing())
+        {
+            nlohmann::json updatedState;
+            const bool updated =
+                RenderSystem::GetInstance().TakeScriptMaterialState(updatedState);
+            if (updated) lastScriptMaterialState = updatedState.dump();
+            // 新 World 的托管上下文是全新的；即使数值相同也必须重新推一次快照。
+            const bool newWorld =
+                world->GetGeneration() != lastScriptMaterialStateWorldGeneration;
+            if (newWorld) lastScriptMaterialStateWorldGeneration = world->GetGeneration();
+            if (!lastScriptMaterialState.empty() && (updated || newWorld))
+                scripts.PushMaterialState(*world, nlohmann::json::parse(lastScriptMaterialState));
+        }
         scripts.Tick(world, simulationDelta,
             GetSubsystems().GetInputSubsystem().GetActionState(),
             GetSubsystems().GetDiagnosticsSubsystem());
+        if (world)
+        {
+            // GT 只把命令交给渲染线程；MaterialInstance 由 RT 独占，避免参数写入与 UBO 上传并发。
+            RenderSystem::GetInstance().ApplyScriptMaterialCommands(
+                world->TakeScriptMaterialCommands());
+            std::vector<std::string> materialErrors;
+            RenderSystem::GetInstance().TakeScriptMaterialErrors(materialErrors);
+            for (const std::string& error : materialErrors)
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                    error, "Blueprint Material");
+        }
         if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode())
             world->TickAnimations(simulationDelta);
@@ -1030,6 +1059,9 @@ void EngineLoop::ApplyQueuedUiActions()
                 if (scripts.IsEditing()) TickBlueprintAssets();
                 scripts.Control(*world, static_cast<ScriptPlayState>(action.intValue), error);
                 if (scripts.IsEditing()) TickBlueprintAssets();
+                // 编辑器 UI 的 Play/Pause/Stop 都是交互边界：状态切换后立即同步
+                // 参考网格、观察相机和选择描边，不能等下一帧。
+                SynchronizeEditorInteractionState();
             }
             else if (action.type == UiActionType::ReloadScripts)
             {
@@ -1120,6 +1152,12 @@ void EngineLoop::ApplyQueuedUiActions()
         }
         if (action.type == UiActionType::FrameEditorActor)
         {
+            if (!IsEditorSceneInteractionEnabled())
+            {
+                GetSubsystems().GetScriptRuntime().SetFeedback(
+                    "Stop gameplay before framing scene actors");
+                continue;
+            }
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
             if (world) FrameEditorActor(*world, action.actorProperty.worldGeneration,
                 action.actorProperty.identity);
@@ -1207,6 +1245,10 @@ void EngineLoop::ApplyQueuedUiActions()
             break;
         case UiActionType::SetDebugViewMode:
             command.type = RuntimeCommandType::SetDebugViewMode;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetEditorGridVisible:
+            command.type = RuntimeCommandType::SetEditorGridVisible;
             command.intValue = action.intValue;
             break;
         case UiActionType::SetToneMappingMode:
@@ -1371,19 +1413,55 @@ void EngineLoop::ApplyQueuedUiActions()
     }
 }
 
-void EngineLoop::UpdateUiInputPolicy()
+bool EngineLoop::IsEditorSceneInteractionEnabled() const
 {
+    if (uiSubsystem == nullptr || !uiSubsystem->IsDeveloperUiVisible() ||
+        RenderSystem::GetInstance().IsOfflineMode())
+    {
+        return false;
+    }
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!world || !GetSubsystems().GetScriptRuntime().IsEditing())
+    {
+        return false;
+    }
+    // 资产预览有自己的 orbit 相机，不参与关卡编辑交互。
+    return std::filesystem::path(world->GetScenePath()).filename() !=
+        "SC_model_preview.json";
+}
+
+void EngineLoop::SynchronizeEditorInteractionState()
+{
+    const bool enabled = IsEditorSceneInteractionEnabled();
     const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
     if (world && world->GetCamera())
     {
-        // 资产预览已经有自己的 orbit 相机；只有关卡编辑使用独立观察相机。
-        const bool editingLevel = uiSubsystem && uiSubsystem->IsDeveloperUiVisible() &&
-            GetSubsystems().GetScriptRuntime().IsEditing() &&
-            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json";
-        world->SetEditorViewEnabled(editingLevel);
-        controller->SetViewTarget(editingLevel ? world->GetRenderCamera() :
-            world->GetViewTarget().lock(), world->GetGeneration());
+        // Play/Pause 期间镜头只属于蓝图运行时；编辑器观察相机必须完全退出。
+        world->SetEditorViewEnabled(enabled);
+        if (controller != nullptr)
+        {
+            controller->SetViewTarget(
+                enabled ? world->GetRenderCamera() : world->GetViewTarget().lock(),
+                world->GetGeneration());
+        }
     }
+    RenderSystem::GetInstance().SetEditorOverlaysVisible(enabled);
+    if (editorSceneInteractionWasEnabled && !enabled)
+    {
+        // 进入 Play/Pause 时必须清掉编辑器选中态；否则蓝图相机画面里会继续
+        // 显示上一帧的选择描边，且回到 Editing 后没有任何对象与描边对应。
+        RenderSystem::GetInstance().ClearSelectedMaterialInstance();
+        if (uiSubsystem != nullptr)
+        {
+            uiSubsystem->ClearMaterialInstanceSceneSelection();
+        }
+    }
+    editorSceneInteractionWasEnabled = enabled;
+}
+
+void EngineLoop::UpdateUiInputPolicy()
+{
+    SynchronizeEditorInteractionState();
     auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
     if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
     {
@@ -1445,6 +1523,7 @@ void EngineLoop::UpdateUiViewModel(
     snapshot.cameraMoveSpeed = controller->GetMoveVelocity();
     const RenderSystem& renderSystem = RenderSystem::GetInstance();
     snapshot.debugViewMode = renderSystem.GetDebugViewMode();
+    snapshot.editorGridVisible = renderSystem.IsEditorGridVisible();
     snapshot.toneMappingMode = renderSystem.GetToneMappingMode();
     snapshot.offlineMode = renderSystem.IsOfflineMode();
     snapshot.offlineState = static_cast<int>(renderSystem.GetOfflineState());
@@ -1678,6 +1757,7 @@ void EngineLoop::PumpPlatformEvents()
 
         if (event.type == PlatformEventType::MouseButtonDown &&
             event.mouseButton == PlatformMouseButton::Left && uiSubsystem != nullptr &&
+            IsEditorSceneInteractionEnabled() &&
             !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeRequested() &&
             !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled() &&
             uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))

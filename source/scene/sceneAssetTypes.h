@@ -62,4 +62,6 @@ struct MeshObjectBuildPlan
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+      // 本体 section 需要为 forward 描边写 GBuffer outline mask。
+      bool writesOutlineMask = false;
 };

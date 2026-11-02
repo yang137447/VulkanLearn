@@ -26,6 +26,29 @@ void CloneAnimation(WorldMeshObject& mesh,
     mesh.localBoundsMin = mesh.skinPose->boundsMin;
     mesh.localBoundsMax = mesh.skinPose->boundsMax;
 }
+
+// 蓝图网格的 per-actor 材质实例键跟随场景身份：<MI>#bp/<identity>/<slot>。
+// 克隆时保留模板键作为 parent，渲染端在缺失新键时用它克隆实例。
+void RetargetScriptMaterialInstance(
+    WorldMeshObject& mesh,
+    const std::string& templateIdentity,
+    const std::string& newIdentity)
+{
+    const std::string marker = "#bp/";
+    const auto markerPos = mesh.materialInstanceKey.find(marker);
+    if (markerPos == std::string::npos) return;
+    const size_t identityPos = markerPos + marker.size();
+    if (mesh.materialInstanceKey.compare(
+            identityPos, templateIdentity.size(), templateIdentity) != 0)
+        return;
+    const std::string suffix =
+        mesh.materialInstanceKey.substr(identityPos + templateIdentity.size());
+    const std::string newKey =
+        mesh.materialInstanceKey.substr(0, identityPos) + newIdentity + suffix;
+    if (newKey == mesh.materialInstanceKey) return;
+    mesh.materialInstanceParentKey = mesh.materialInstanceKey;
+    mesh.materialInstanceKey = newKey;
+}
 }
 
 World::World(uint64_t generation, std::string scenePath)
@@ -153,6 +176,26 @@ void World::ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visibl
             ScriptVector(actor, "rotation"), ScriptVector(actor, "scale", 1));
         SetMeshSceneObjectVisible(ScriptBlueprintMeshIdentity(id), visible);
     }
+    else
+    {
+        // 有 mesh 组件时，加载期可能还留有旧单根兼容对象（身份 __blueprint/<id>）。
+        // 它不会被下面的组件循环按 __blueprint/<id>/<component> 匹配到，会以 actor
+        // 变换原样再画一遍（表现为同一网格出现两份、夹角等于 actor 与组件旋转之差）。
+        // 组件是唯一权威，这里删除 actor 级残留对象。
+        bool hasMeshComponent = false;
+        for (const auto& node : components)
+            if (node.value("type", std::string()) == "mesh") hasMeshComponent = true;
+        if (hasMeshComponent)
+        {
+            for (auto it = meshObjects.begin(); it != meshObjects.end();)
+            {
+                if (MeshSceneObjectIdentity(it->second, it->first) == prefix)
+                    it = meshObjects.erase(it);
+                else
+                    ++it;
+            }
+        }
+    }
     for (size_t index = 0; index < components.size(); ++index)
     {
         const auto type = components[index].at("type").get<std::string>();
@@ -273,6 +316,9 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         for (const auto& sourceSection : source->second)
         {
             auto section = sourceSection;
+            RetargetScriptMaterialInstance(
+                section, sourceSection.sceneObjectIdentity,
+                ScriptMeshIdentity(id, node));
             section.sceneObjectIdentity = ScriptMeshIdentity(id, node);
             CloneAnimation(section, players);
             section.debugName = section.sceneObjectIdentity + (sectionIndex == 0 ? "" : "~section." + std::to_string(sectionIndex));
@@ -305,6 +351,7 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
         if (identity != prefix && identity.rfind(prefix + "/", 0) != 0) continue;
         auto clone = entry.second;
         clone.sceneObjectIdentity = destination + identity.substr(prefix.size());
+        RetargetScriptMaterialInstance(clone, identity, clone.sceneObjectIdentity);
         CloneAnimation(clone, players);
         clone.debugName = destination + entry.first.substr(prefix.size());
         clones.emplace_back(clone.debugName, std::move(clone));
@@ -330,6 +377,18 @@ void World::RemoveScriptBlueprintMeshes(const std::string& id)
     for (auto it = scriptLights.begin(); it != scriptLights.end();)
         if (it->first == prefix || it->first.rfind(prefix + "/", 0) == 0) it = scriptLights.erase(it);
         else ++it;
+}
+
+void World::QueueScriptMaterialCommand(ScriptMaterialCommand command)
+{
+    scriptMaterialCommands.push_back(std::move(command));
+}
+
+std::vector<ScriptMaterialCommand> World::TakeScriptMaterialCommands()
+{
+    std::vector<ScriptMaterialCommand> result = std::move(scriptMaterialCommands);
+    scriptMaterialCommands.clear();
+    return result;
 }
 
 void World::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
@@ -395,6 +454,36 @@ void World::SetCsmSettings(CsmSettings settings)
 
 void World::AddMeshObject(std::string name, WorldMeshObject object)
 {
+    // 蓝图实例的 mesh 组件是唯一权威：加载期可能同时建出旧单根对象
+    // (__blueprint/<id>) 与组件对象 (__blueprint/<id>/<component>)。
+    // 编辑器预览与脚本世界走不同的构建入口，这里在容器入口做一次收敛，
+    // 保证两条路径都只保留组件级网格。
+    const std::string identity = MeshSceneObjectIdentity(object, name);
+    constexpr std::string_view kBlueprintPrefix = "__blueprint/";
+    if (identity.rfind(kBlueprintPrefix, 0) == 0)
+    {
+        const std::string tail = identity.substr(kBlueprintPrefix.size());
+        const bool componentLevel = tail.find('/') != std::string::npos;
+        if (componentLevel)
+        {
+            const std::string actorIdentity =
+                std::string(kBlueprintPrefix) + tail.substr(0, tail.find('/'));
+            for (auto it = meshObjects.begin(); it != meshObjects.end();)
+            {
+                if (MeshSceneObjectIdentity(it->second, it->first) == actorIdentity)
+                    it = meshObjects.erase(it);
+                else
+                    ++it;
+            }
+        }
+        else
+        {
+            const std::string componentPrefix = identity + "/";
+            for (const auto& entry : meshObjects)
+                if (MeshSceneObjectIdentity(entry.second, entry.first).rfind(componentPrefix, 0) == 0)
+                    return;
+        }
+    }
     meshObjects[std::move(name)] = std::move(object);
 }
 

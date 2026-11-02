@@ -1192,12 +1192,14 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.imageHandle =
             rendererBackend.GetImageHandle(
                 resource.image);
-        vk::ImageAspectFlagBits aspect =
+        vk::ImageAspectFlags aspect =
             vk::ImageAspectFlagBits::eColor;
         if (bIsDepthFormat)
         {
-            aspect =
-                vk::ImageAspectFlagBits::eDepth;
+            // 组合深度/模板格式的附件视图必须同时包含 stencil aspect。
+            aspect = CommonFunction::HasStencilComponent(resource.format)
+                ? (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)
+                : vk::ImageAspectFlagBits::eDepth;
         }
         const vk::ImageViewType imageViewType =
             resource.type == "texture2DArray"
@@ -2009,6 +2011,11 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     else if (formatStr == "D32_SFLOAT")
     {
         return vk::Format::eD32Sfloat;
+    }
+    else if (formatStr == "D32_SFLOAT_S8_UINT")
+    {
+        // 带 stencil 的深度格式：供选中描边用 stencil 掩码替代 viewBias。
+        return vk::Format::eD32SfloatS8Uint;
     }
     else if (formatStr == "R8G8B8A8_UNORM")
     {

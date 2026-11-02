@@ -23,6 +23,7 @@ namespace VL
 
 struct MaterialDefinitionReloadBatch;
 struct OfflineWorldAssets;
+class OutlineNormalSmoother;
 
 struct PendingGeneratedResourceFile
 {
@@ -54,6 +55,8 @@ struct RendererResourceLoadContext
     OfflineWorldAssets* offlineWorldAssets = nullptr;
     bool offlineOnly = false;
     bool useFrozenMaterials = false;
+    // 只有实时 World 事务提供；缩略图/预览候选保持 null，避免修改候选缓存对象。
+    OutlineNormalSmoother* outlineNormalSmoother = nullptr;
     // 增量异步资产保留既有 MI 身份，但新 MI 的 JSON 只消费 worker 已冻结版本。
     const std::map<std::filesystem::path, nlohmann::json>* preparedMaterialSources = nullptr;
 

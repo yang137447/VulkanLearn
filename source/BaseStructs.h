@@ -90,6 +90,8 @@ struct alignas(16) UBOGlobal
     int environmentType = 0;
     alignas(16) std::array<Eigen::Vector4f, 9> environmentSH{};
     SkyParametersGPU skyParameters;
+    // editorGrid pass 的世界 Y 偏移；场景地面不在 y=0 时用它对齐参考网格。
+    float editorGridHeight = 0.0f;
 };
 
 static_assert(offsetof(SkyParametersGPU, sunDirectionIntensity) == 0, "SkyParametersGPU sunDirectionIntensity must match GLSL std140 layout");
@@ -116,6 +118,7 @@ static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, ho
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, groundColor) == 1040, "UBOGlobal groundColor must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, scatteringControls) == 1056, "UBOGlobal scatteringControls must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, cloudControls) == 1072, "UBOGlobal cloudControls must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, editorGridHeight) == 1088, "UBOGlobal editorGridHeight must match GLSL std140 layout");
 struct alignas(16) UBOModel
 {
     Eigen::Matrix4f model;

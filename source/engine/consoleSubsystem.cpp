@@ -1,5 +1,6 @@
 #include "engine/consoleSubsystem.h"
 
+#include <cctype>
 #include <utility>
 
 #include "debugConsole.h"
@@ -30,13 +31,18 @@ void ConsoleSubsystem::Update()
     // 提交顺序与命令行给出的顺序一致，保证同一组参数产生同一份截图。
     if (!pendingLaunchCommands.empty())
     {
-        if (elapsedFrames >= launchCommandDelayFrames)
+        for (auto iterator = pendingLaunchCommands.begin();
+             iterator != pendingLaunchCommands.end();)
         {
-            for (const std::string& line : pendingLaunchCommands)
+            if (elapsedFrames >= iterator->frame)
             {
-                debugConsole->SubmitCommandLine(line);
+                debugConsole->SubmitCommandLine(iterator->line);
+                iterator = pendingLaunchCommands.erase(iterator);
             }
-            pendingLaunchCommands.clear();
+            else
+            {
+                ++iterator;
+            }
         }
         ++elapsedFrames;
     }
@@ -51,7 +57,36 @@ void ConsoleSubsystem::QueueLaunchCommands(std::vector<std::string> lines, int d
         return;
     }
 
-    pendingLaunchCommands = std::move(lines);
+    pendingLaunchCommands.clear();
+    pendingLaunchCommands.reserve(lines.size());
+    for (const std::string& line : lines)
+    {
+        ScheduledLaunchCommand command;
+        command.frame = delayFrames < 0 ? 0 : delayFrames;
+        command.line = line;
+        // "@120 screenshot a.bmp"：该条命令在第 120 帧提交，其余命令沿用统一延迟。
+        if (!line.empty() && line.front() == '@')
+        {
+            size_t offset = 1;
+            int frame = 0;
+            while (offset < line.size() &&
+                   std::isdigit(static_cast<unsigned char>(line[offset])) != 0)
+            {
+                frame = frame * 10 + (line[offset] - '0');
+                ++offset;
+            }
+            if (offset > 1)
+            {
+                command.frame = frame;
+                while (offset < line.size() && line[offset] == ' ')
+                {
+                    ++offset;
+                }
+                command.line = line.substr(offset);
+            }
+        }
+        pendingLaunchCommands.push_back(std::move(command));
+    }
     launchCommandDelayFrames = delayFrames < 0 ? 0 : delayFrames;
     elapsedFrames = 0;
 }

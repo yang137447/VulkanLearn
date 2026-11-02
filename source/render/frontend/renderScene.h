@@ -19,12 +19,14 @@ struct RenderDrawPacket
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;
+    std::string materialInstanceParentKey;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f previousModel = Eigen::Matrix4f::Identity();
     Eigen::Matrix3f speedTreeWorldToLocalDirection = Eigen::Matrix3f::Identity();
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
     std::string speedTreeWindProfileKey;
+    bool writesOutlineMask = false;
 };
 
 struct MaterialInstanceDrawGroup

@@ -11,6 +11,7 @@ add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests
     scriptSpringArmTests.cpp
     scriptLogicComponentTests.cpp
     scriptCustomDataTests.cpp
+    scriptDuplicateMeshTests.cpp
     scriptPropertySchemaTests.cpp
     "${PROJECT_SOURCE_DIR}/source/editor/scene/scriptBlueprintAuthoring.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"

@@ -1,6 +1,7 @@
 #include "world/loading/worldLoader.h"
 
 #include <exception>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -107,6 +108,17 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
         buildPlan.authoredSceneJson = buildPlan.sceneJson;
         // 资产只在隔离准备中解析一次；网格计划与托管实例消费完全相同的有效声明。
         buildPlan.sceneJson = ResolveScriptBlueprintScene(CommonFunction::GetResourcePath(), buildPlan.sceneJson, scenePath);
+        if (buildPlan.sceneJson.contains("editorGridHeight"))
+        {
+            const auto& height = buildPlan.sceneJson.at("editorGridHeight");
+            if (!height.is_number())
+                throw std::runtime_error(
+                    "Scene editorGridHeight must be a finite number");
+            buildPlan.editorGridHeight = height.get<float>();
+            if (!std::isfinite(buildPlan.editorGridHeight))
+                throw std::runtime_error(
+                    "Scene editorGridHeight must be a finite number");
+        }
         buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(scenePath, buildPlan.sceneJson);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
         return RuntimeResult<WorldBuildPlan>::Success(std::move(buildPlan));

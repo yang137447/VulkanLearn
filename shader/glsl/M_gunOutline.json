@@ -1,0 +1,109 @@
+{
+    "name": "M_gunOutline",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "features": {
+        "modifiesMeshPosition": true
+    },
+    "renderStates": {
+        "renderMode": "TransparentAlphaBlend",
+        "cullMode": "None"
+    },
+    "macros": {},
+    "parameters": {
+        "u_outlineColor": {
+            "type": "color",
+            "default": [
+                0.5,
+                0.5,
+                0.5,
+                1.0
+            ],
+            "description": "gameplay-driven outline colour; rgb drives emissive and a scales the shell alpha",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "outline red",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "outline green",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "outline blue",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "w": {
+                    "name": "alpha",
+                    "description": "outline alpha",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
+        },
+        "u_outlineColorScale": {
+            "type": "float",
+            "default": 10.0,
+            "range": {
+                "min": 0,
+                "max": 5000
+            },
+            "description": "capture h[8].x=3.2119 belongs to the capture's own tonemap chain; VL multiplies the scene by exposure again, so this ships a calibrated value: 3.2119 * 3.1134 = 10.0 (rim L~137 vs capture 123..145). Recalibrate if EV100 or tone mapping changes."
+        },
+        "u_outlineScreenFraction": {
+            "type": "float",
+            "default": 0.006944,
+            "range": {
+                "min": 0,
+                "max": 0.2
+            },
+            "description": "outline half-width as a fraction of viewport height (5px/720p = 0.006944); width_cm = fraction * 2 * tanHalfFovY * distance, so it stays constant on screen at any FOV/distance"
+        },
+        "u_widthScale": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0,
+                "max": 10
+            },
+            "description": "gameplay multiplier applied on top of the capture width curve"
+        },
+        "u_outlineOpacity": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0,
+                "max": 1
+            },
+            "description": "gameplay-driven outline intensity multiplier"
+        },
+        "u_fadeDistance": {
+            "type": "float",
+            "default": 1200.0,
+            "range": {
+                "min": 1,
+                "max": 10000
+            },
+            "description": "distance fade in centimeters; matches the reference 12 m highlight range"
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "M_gunOutline.vertex.glsl",
+        "surface": "M_gunOutline.surface.glsl"
+    }
+}

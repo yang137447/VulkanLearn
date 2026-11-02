@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "render/backend/rendererObjectGpuResources.h"
@@ -31,16 +32,24 @@ public:
     RendererObjectGpuResources& GetResources() { return resources; }
     const RendererObjectGpuResources& GetResources() const { return resources; }
     const std::string& GetObjectName() const { return objectName; }
+    const std::string& GetMaterialInstanceKey() const { return materialInstanceKey; }
 
     void Initialize(
         RendererBackendVulkan& rendererBackend,
         const RendererDescriptorContext& descriptorContext,
         MaterialInstance& materialInstance,
         MaterialShadowCasterKind shadowCasterKind);
+    // 贴图参数变化后重建当前 image 的材质描述符；调用点必须在 image acquire 之后。
+    void RefreshMaterialDescriptors(
+        RendererBackendVulkan& rendererBackend,
+        const RendererDescriptorContext& descriptorContext,
+        MaterialInstance& materialInstance,
+        uint32_t imageIndex);
     void Shutdown();
 
 private:
     std::string objectName;
+    std::string materialInstanceKey;
     RendererBackendVulkan* rendererBackend = nullptr;
     RendererObjectGpuResources resources;
 };

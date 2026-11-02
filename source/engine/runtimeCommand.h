@@ -19,6 +19,8 @@ enum class RuntimeCommandType
     RunShaderComputeReloadTest,
     RunWorldGraphTransactionTest,
     SetDebugViewMode,
+    // 编辑器视口参考网格开关；intValue 0/1。
+    SetEditorGridVisible,
     CaptureScreenshot,
     SetCameraPosition,
     SetCameraLookAt,
@@ -43,6 +45,9 @@ enum class RuntimeCommandType
     ForceSpeedTreeGust,
     SetToneMappingMode,
     SetCameraExposure,
+    // 控制台实时调参：复用 World::ScriptMaterialCommand 队列（与蓝图 SetScalar/SetVector
+    // 同一条渲染线程安全路径），只写数值参数。
+    SetMaterialParameter,
     SetOfflineMode,
     SetOfflineSetting,
     SetOfflineAov,
@@ -63,6 +68,8 @@ enum class RuntimeCommandType
     ReloadShaders,
     ReloadAssembly,
     InjectInput,
+    // 合成 gameplay axis（如 MoveForward），供无焦点自动化驱动蓝图相机。
+    InjectAxis,
     ReportShaderCacheStatistics
 };
 
@@ -96,6 +103,12 @@ struct RuntimeCommand
     Eigen::Vector3f cameraUpValue = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     std::string stringValue;
     std::string sourceText;
+    // SetMaterialParameter：per-actor 实例键（<MI>#bp/<identity>/<slot>）或共享实例键。
+    std::string materialInstanceKey;
+    std::string materialParameterName;
+    // 1=scalar，2=vec2，3=vec3，4=vec4；与 ScriptMaterialCommand::valueCount 一致。
+    uint32_t materialValueCount = 0;
+    float materialValues[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;
     // LoadWorld 的附加场景对象（JSON 对象数组）。模型编辑器用它把"当前打开的模型"

@@ -40,6 +40,7 @@ bool IsSupportedFormat(const std::string& format)
         "R32_SFLOAT",
         "D16_UNORM",
         "D32_SFLOAT",
+        "D32_SFLOAT_S8_UINT",
         "D24_UNORM_S8_UINT"
     };
     return kSupportedFormats.find(format) != kSupportedFormats.end();
@@ -54,6 +55,7 @@ bool IsDepthFormatString(const std::string& format)
 {
     return format == "D16_UNORM" ||
         format == "D32_SFLOAT" ||
+        format == "D32_SFLOAT_S8_UINT" ||
         format == "D24_UNORM_S8_UINT";
 }
 

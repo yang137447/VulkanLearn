@@ -66,6 +66,8 @@ public:
     bool Control(World& world, ScriptPlayState requested, std::string& error);
     void Tick(const std::shared_ptr<World>& world, float dt, const InputActionState& input,
         const DiagnosticsSubsystem& diagnostics);
+    // 原生权威材质数值回传；只在快照变化时由引擎调用，C# 侧随 Get* 读取。
+    void PushMaterialState(World& world, const nlohmann::json& values);
     void Shutdown() noexcept;
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;

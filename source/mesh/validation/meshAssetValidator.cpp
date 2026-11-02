@@ -122,6 +122,53 @@ namespace
         return materialSlots;
     }
 
+    std::vector<std::string> ReadMaterialSlotNameList(
+        const nlohmann::json& json,
+        std::string_view fieldName,
+        std::string_view meshAssetPath,
+        std::string_view modelDataPath,
+        const std::vector<MeshMaterialSlot>& materialSlots)
+    {
+        std::vector<std::string> sections;
+        const std::string field(fieldName);
+        if (!json.contains(field))
+            return sections;
+        if (!json[field].is_array() || json[field].empty())
+        {
+            throw std::runtime_error(
+                "Mesh asset " + field + " must be a non-empty array of material slot names: " +
+                std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+        }
+
+        for (const auto& item : json[field])
+        {
+            if (!item.is_string() || item.get<std::string>().empty())
+            {
+                throw std::runtime_error(
+                    "Mesh asset " + field + " must contain non-empty strings: " +
+                    std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+            }
+            const std::string slotName = item.get<std::string>();
+            bool declared = false;
+            for (const MeshMaterialSlot& slot : materialSlots)
+                declared = declared || slot.name == slotName;
+            if (!declared)
+            {
+                throw std::runtime_error(
+                    "Mesh asset " + field + " references an unknown material slot: " +
+                    std::string(meshAssetPath) + " slot=" + slotName);
+            }
+            if (std::find(sections.begin(), sections.end(), slotName) != sections.end())
+            {
+                throw std::runtime_error(
+                    "Mesh asset " + field + " contains a duplicate slot: " +
+                    std::string(meshAssetPath) + " slot=" + slotName);
+            }
+            sections.push_back(slotName);
+        }
+        return sections;
+    }
+
     MeshImportOptions ReadImportOptions(
         const nlohmann::json& json,
         std::string_view meshAssetPath,
@@ -295,6 +342,18 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         meshAssetPath,
         loadPlan.modelDataPath);
     loadPlan.materialSlots = ReadMaterialSlots(effectiveMeshAssetJson, meshAssetPath, loadPlan.modelDataPath);
+    loadPlan.smoothNormalsSections = ReadMaterialSlotNameList(
+        effectiveMeshAssetJson,
+        "smoothNormalsSections",
+        meshAssetPath,
+        loadPlan.modelDataPath,
+        loadPlan.materialSlots);
+    loadPlan.outlineMaskSections = ReadMaterialSlotNameList(
+        effectiveMeshAssetJson,
+        "outlineMaskSections",
+        meshAssetPath,
+        loadPlan.modelDataPath,
+        loadPlan.materialSlots);
     loadPlan.modelCacheKey = loadPlan.modelDataPath;
     if (effectiveMeshAssetJson.contains("skinning"))
     {
@@ -307,6 +366,14 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         if (loadPlan.importOptions.generateSmoothNormals ||
             !loadPlan.importOptions.includedSectionNames.empty())
             throw std::runtime_error("Skeletal import does not support static importOptions");
+        if (!loadPlan.smoothNormalsSections.empty())
+            throw std::runtime_error(
+                "Mesh skinning does not support smoothNormalsSections: " +
+                std::string(meshAssetPath));
+        if (!loadPlan.outlineMaskSections.empty())
+            throw std::runtime_error(
+                "Mesh skinning does not support outlineMaskSections: " +
+                std::string(meshAssetPath));
 
         // skinning.root 已删除。显式拒绝而不是静默忽略，避免旧资源带着错误的
         // 根骨假设继续导入；根骨唯一来源是 skinning.skeleton 指向的 SK。
@@ -439,6 +506,10 @@ std::vector<MeshSectionLoadPlan> MeshAssetValidator::BuildSectionLoadPlans(
         sectionPlan.materialSlotIndex = static_cast<uint32_t>(sourceSlotIndex);
         sectionPlan.materialSlotName = materialSlot.name;
         sectionPlan.materialInstancePath = materialSlot.materialInstancePath;
+        sectionPlan.writesOutlineMask =
+            std::find(buildPlan.outlineMaskSections.begin(),
+                buildPlan.outlineMaskSections.end(),
+                materialSlot.name) != buildPlan.outlineMaskSections.end();
         sectionPlans.push_back(sectionPlan);
     }
     return sectionPlans;

@@ -83,6 +83,10 @@ private:
     void UpdateUiViewModel(
         float deltaTime,
         const RuntimeCommandExecutionResult& commandResult);
+    // Play/Pause 期间关闭编辑器场景交互；下降沿同时清掉选择描边，避免游戏画面
+    // 里残留编辑器选中态。
+    void SynchronizeEditorInteractionState();
+    bool IsEditorSceneInteractionEnabled() const;
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
@@ -137,6 +141,7 @@ private:
     bool shutdownCompleted = false;
     bool exitAfterRuntimeTests = false;
     bool useRenderThread = false;
+    bool editorSceneInteractionWasEnabled = false;
     int exitCode = 0;
     // 渲染主循环节拍上限（Hz）；0 = 不限速。只影响 Run() 的补帧，不改变固定 60 Hz 物理子步。
     int frameLimitHz = 0;
@@ -161,6 +166,9 @@ private:
     std::optional<std::filesystem::path> pendingBuiltAssembly;
     uint64_t pendingBuildWorldGeneration = 0;
     uint64_t autoPlayWorldGeneration = 0;
+    // 上一次推给 C# 的权威材质快照；相同则跳过托管调用。
+    std::string lastScriptMaterialState;
+    uint64_t lastScriptMaterialStateWorldGeneration = 0;
     std::string scriptBuildOutput;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;

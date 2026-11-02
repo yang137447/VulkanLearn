@@ -131,6 +131,7 @@
                     </div>
                     <div id="viewport-toolbar">
                         <button class="browser-icon" id="viewport-actor-visuals" data-action="viewport-actor-visuals" title="Show light and camera helpers"><img src="icons/eye.png"/></button>
+                        <label class="motion-debug-toggle"><input id="viewport-grid-toggle" type="checkbox" data-action="viewport-grid-toggle" checked="checked"/><span>Grid</span></label>
                         <label class="motion-debug-toggle"><input id="viewport-motion-debug" type="checkbox" data-action="motion-debug"/><span id="viewport-motion-label">Motion</span></label>
                         <div class="menu-root" id="menu-debug-draw">
                             <button class="browser-icon menu-title" id="viewport-debug-draw" data-action="menu-open" data-menu="debug-draw" title="Draw Debug"><img src="icons/mesh.png"/></button>

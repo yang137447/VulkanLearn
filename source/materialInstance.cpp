@@ -262,6 +262,21 @@ MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
         std::move(textureBindings));
 }
 
+std::shared_ptr<MaterialInstance> MaterialInstance::Clone(std::string name) const
+{
+    auto clone = std::make_shared<MaterialInstance>();
+    clone->materialInstanceName = std::move(name);
+    clone->baseMaterial = baseMaterial;
+    clone->parameters = parameters;
+    clone->floatParameters = floatParameters;
+    clone->vec2Parameters = vec2Parameters;
+    clone->vec3Parameters = vec3Parameters;
+    clone->vec4Parameters = vec4Parameters;
+    clone->textures = textures;
+    clone->textureBindingIdentities = textureBindingIdentities;
+    return clone;
+}
+
 const vk::DescriptorImageInfo& MaterialInstance::GetTextureDescriptorInfo(const std::string& textureName) const
 {
     auto it = textures.find(textureName);

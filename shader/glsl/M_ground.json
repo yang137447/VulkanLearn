@@ -1,0 +1,190 @@
+{
+    "name": "M_ground",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "shaderEvaluation": {
+        "vertex": "M_ground.vertex.glsl",
+        "surface": "M_ground.surface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "VL_SKINNED_MESH": 0,
+        "USE_ALBEDO_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_PBR_MAP": 0,
+        "USE_EMISSION_MAP": 0,
+        "USE_ALPHA_MAP": 0,
+        "USE_VERTEX_COLOR": 0
+    },
+    "parameters": {
+        "u_specular": {
+            "type": "float",
+            "default": 0.5,
+            "range": {
+                "min": 0,
+                "max": 1
+            },
+            "description": "dielectric F0 = 0.08 * specular; zero disables the dielectric specular lobe for diffuse calibration"
+        },
+        "u_alphaClipThreshold": {
+            "type": "float",
+            "default": 0.5,
+            "range": {
+                "min": 0,
+                "max": 1
+            },
+            "description": "alpha test threshold for masked material coverage"
+        },
+        "u_tintColor": {
+            "type": "color",
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "red channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            },
+            "description": "linear base-color and opacity multiplier"
+        },
+        "u_pbrFactors": {
+            "type": "vec4",
+            "default": [
+                0.5,
+                0,
+                1,
+                0
+            ],
+            "channels": {
+                "x": {
+                    "name": "roughness",
+                    "description": "roughness channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "metallic",
+                    "description": "metallic channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "ambientOcclusion",
+                    "description": "ambient occlusion channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved channel",
+                    "range": {
+                        "min": 0,
+                        "max": 0
+                    }
+                }
+            },
+            "description": "fallback surface factors used when the corresponding texture map is unavailable"
+        },
+        "u_emissiveStrength": {
+            "type": "float",
+            "default": 1,
+            "range": {
+                "min": 0,
+                "max": 100000
+            },
+            "description": "scene-linear emissive radiance multiplier before camera exposure"
+        },
+        "u_tiling": {
+            "type": "vec2",
+            "default": [
+                10,
+                10
+            ],
+            "channels": {
+                "x": {
+                    "name": "u",
+                    "description": "u tiling",
+                    "range": {
+                        "min": 0,
+                        "max": 1000
+                    }
+                },
+                "y": {
+                    "name": "v",
+                    "description": "v tiling",
+                    "range": {
+                        "min": 0,
+                        "max": 1000
+                    }
+                }
+            },
+            "description": "UV tiling; 4000cm plane with 400cm per tile = 10"
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "pbrParamMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "alphaMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

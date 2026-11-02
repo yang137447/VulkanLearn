@@ -57,12 +57,23 @@ void main()
     // Geometry 已占满设备允许的 8 个颜色附件，选中标记复用 Velocity 的保留 z 通道；
     // Eye 的 z/w 有既定语义，因此只对普通 GBuffer 表面写入标记。
     if (surface.shadingModel != SHADING_MODEL_EYE)
+    {
         outGBufferVelocity.z = uboM.selectionData.x;
+        // w 是普通表面的保留通道，供 forward 描边读取本体 mask；
+        // 不复用 z，避免触发 toneMapping 的编辑器选中外扩轮廓。
+        outGBufferVelocity.w = uboM.selectionData.y;
+    }
     outGBufferF = gbuffer.gbufferF;
     outSceneColorBase = gbuffer.sceneColorBase;
 #else
     outSceneColor = BuildMaterialForwardOutput(surface);
     outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
+#if defined(VL_FORWARD_TRANSPARENT_PASS_INPUTS)
+    // 引用 gbufferVelocity 以固定 set 3 binding 1 的反射；权重恒为 0。
+    // 这样所有 transparent 材质的 set 3 layout 都与 forwardTransparent input 一致。
+    float outlineMaskProbeWeight = float(uboVP.debugViewMode == 9999);
+    outSceneColor.rgb += vec3(texture(gbufferVelocity, vec2(0.0)).b * outlineMaskProbeWeight);
+#endif
 #endif
 }
 

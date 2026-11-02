@@ -119,7 +119,8 @@ void UpdateObjectDescriptorSets(
     RendererBackendVulkan& rendererBackend,
     const RendererDescriptorContext& descriptorContext,
     MaterialInstance& materialInstance,
-    RendererObjectGpuResources& resources)
+    RendererObjectGpuResources& resources,
+    int32_t onlyImage)
 {
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     resources.writeDescriptorSets.resize(swapChainImageCount);
@@ -128,6 +129,8 @@ void UpdateObjectDescriptorSets(
 
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
+        // 运行时替换材质贴图时只重写当前已 acquire 的 image，避免改写仍在飞行中的描述符集。
+        if (onlyImage >= 0 && static_cast<int32_t>(i) != onlyImage) continue;
         resources.writeDescriptorSets[i].clear();
         RendererDescriptorWriteInputs writeInputs;
         writeInputs.descriptorContext = &descriptorContext;
@@ -410,6 +413,21 @@ void DestroyShadowDescriptorSets(
 
 } // namespace
 
+void UpdateObjectDescriptorSetsForImage(
+    RendererBackendVulkan& rendererBackend,
+    const RendererDescriptorContext& descriptorContext,
+    MaterialInstance& materialInstance,
+    RendererObjectGpuResources& resources,
+    uint32_t imageIndex)
+{
+    UpdateObjectDescriptorSets(
+        rendererBackend,
+        descriptorContext,
+        materialInstance,
+        resources,
+        static_cast<int32_t>(imageIndex));
+}
+
 void RendererObjectResourceManager::InitializeObjectResources(
     RendererBackendVulkan& rendererBackend,
     const RendererDescriptorContext& descriptorContext,
@@ -435,7 +453,7 @@ void RendererObjectResourceManager::InitializeObjectResources(
         rendererBackend.SetupDescriptorBufferInfos(resources.skinPalette);
     }
     CreateObjectDescriptorSets(rendererBackend, objectName, materialInstance, resources);
-    UpdateObjectDescriptorSets(rendererBackend, descriptorContext, materialInstance, resources);
+    UpdateObjectDescriptorSets(rendererBackend, descriptorContext, materialInstance, resources, -1);
     // 公共 Opaque 管线有自己的精简 descriptor layout，因此需要 shadowDescriptorSets。
     // 专用 ShadowCaster 直接复用 Surface Set 0~2；None 不参与 Shadow pass，二者都
     // 不应额外分配公共 Shadow descriptor。

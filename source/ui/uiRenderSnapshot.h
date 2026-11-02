@@ -124,6 +124,8 @@ struct UiViewModelSnapshot
     bool speedTreeGustingEnabled = true;
     uint32_t speedTreeWindProfileCount = 0;
     bool developerUiVisible = false;
+    // 编辑器参考网格是显示偏好；Play/Pause 只关闭绘制，不禁用或忘记这个值。
+    bool editorGridVisible = true;
     // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
     float cameraMoveSpeed = 1000.0f;
     std::string activeWorldPath;

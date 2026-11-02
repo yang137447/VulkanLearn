@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
+#include "engine/editorInteractionPolicy.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/service/sceneDocumentService.h"
@@ -275,6 +276,19 @@ void RuntimeCommandExecutor::ExecuteCommand(
     ScriptRuntimeSubsystem* scripts,
     Editor::SceneDocumentService* sceneDocuments) const
 {
+    // 执行端是最后一道权威边界：Play/Pause 期间场景归蓝图运行时所有，任何遗留的
+    // UI 请求或旧控制台脚本都不能继续改场景作者数据。控制台相机/调参命令仍保留，
+    // 它们不是编辑器场景交互。
+    if (scripts != nullptr && !EditorInteraction::SceneEditingEnabled(
+            scripts->IsEditing(), true, renderSystem.IsOfflineMode()) &&
+        (command.type == RuntimeCommandType::SetActorVisible ||
+            command.type == RuntimeCommandType::SetActorProperty ||
+            command.type == RuntimeCommandType::SaveCsmSettingsToScene))
+    {
+        diagnostics.ReportWarning(
+            "Scene editing command rejected while Play/Pause is active.");
+        return;
+    }
     switch (command.type)
     {
     case RuntimeCommandType::LoadWorld:
@@ -364,6 +378,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
         }
         world->SetMotionDebugEnabled(command.intValue == 1);
         diagnostics.ReportInfo("Motion debug " + std::string(command.intValue == 1 ? "enabled" : "disabled"));
+        break;
+    }
+    case RuntimeCommandType::SetEditorGridVisible:
+    {
+        renderSystem.SetEditorGridVisible(command.intValue != 0);
+        diagnostics.ReportInfo(std::string("Editor grid ") +
+            (command.intValue != 0 ? "enabled" : "disabled"));
         break;
     }
     case RuntimeCommandType::SetOfflineMode:
@@ -565,6 +586,39 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.SetEnvironmentIntensity(command.floatValue);
         diagnostics.ReportInfo("Environment intensity set to " + std::to_string(command.floatValue));
         break;
+    case RuntimeCommandType::SetMaterialParameter:
+    {
+        const std::shared_ptr<World>& activeWorld =
+            worldManager.GetActiveWorld();
+        if (!activeWorld)
+        {
+            diagnostics.ReportWarning(
+                "matparam ignored because no active World exists.");
+            break;
+        }
+        if (command.materialValueCount < 1 || command.materialValueCount > 4)
+        {
+            diagnostics.ReportWarning(
+                "matparam ignored because the value count must be 1..4.");
+            break;
+        }
+
+        // 与蓝图 SetScalar/SetVector 完全同一条队列：GT 入队，渲染线程统一校验并写入
+        // MaterialInstance，保证 per-actor 克隆、描述符刷新与错误诊断的行为一致。
+        ScriptMaterialCommand materialCommand;
+        materialCommand.materialInstanceKey = command.materialInstanceKey;
+        materialCommand.parameterName = command.materialParameterName;
+        materialCommand.valueCount = command.materialValueCount;
+        for (uint32_t index = 0; index < command.materialValueCount; ++index)
+        {
+            materialCommand.values[index] = command.materialValues[index];
+        }
+        activeWorld->QueueScriptMaterialCommand(std::move(materialCommand));
+        diagnostics.ReportInfo(
+            "Material parameter queued: " + command.materialParameterName +
+            " (" + command.materialInstanceKey + ")");
+        break;
+    }
     case RuntimeCommandType::SetSunIntensity:
     {
         const std::shared_ptr<World>& activeWorld =
@@ -846,6 +900,25 @@ void RuntimeCommandExecutor::ExecuteCommand(
         catch (const std::exception& error)
         {
             diagnostics.ReportWarning(std::string("Input injection rejected: ") + error.what());
+        }
+        break;
+    }
+    case RuntimeCommandType::InjectAxis:
+    {
+        if (!input)
+        {
+            diagnostics.ReportWarning("Input axis injection unavailable");
+            break;
+        }
+        try
+        {
+            input->InjectAxis(command.stringValue, command.floatValue);
+            diagnostics.ReportInfo("Input axis injected: " + command.stringValue +
+                " = " + std::to_string(command.floatValue));
+        }
+        catch (const std::exception& error)
+        {
+            diagnostics.ReportWarning(error.what());
         }
         break;
     }

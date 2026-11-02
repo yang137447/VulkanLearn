@@ -59,6 +59,10 @@
             "type": "string",
             "const": "cm",
             "description": "场景位置、尺寸、裁剪面和导入后的世界长度均使用厘米。"
+        },
+        "editorGridHeight": {
+            "type": "number",
+            "description": "编辑器参考网格的世界 Y 高度（cm），默认 0。场景地面不在 y=0 时用它把网格对齐到地面，使网格能被地面和物体正确深度遮挡。"
         }
     },
     "required": [

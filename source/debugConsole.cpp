@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "engine/runtimeCommand.h"
+#include "engine/consoleCommandParsing.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/command/editorCommandJsonCodec.h"
 
@@ -438,6 +439,116 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "inputaxis")
+    {
+        std::string axis;
+        float value = 0.0f;
+        if (!(commandStream >> axis >> value) || !std::isfinite(value))
+        {
+            std::cout << "Usage: inputaxis <name> <value> (e.g. inputaxis MoveForward 1)"
+                      << std::endl;
+            return;
+        }
+        std::string trailing;
+        if (commandStream >> trailing)
+        {
+            std::cout << "Usage: inputaxis <name> <value>" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::InjectAxis;
+        runtimeCommand.stringValue = axis;
+        runtimeCommand.floatValue = value;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "sun")
+    {
+        std::string rest;
+        std::getline(commandStream, rest);
+        const VL::ConsoleCommandParsing::SunArgument parsed =
+            VL::ConsoleCommandParsing::ParseSunIntensity(rest);
+        if (!parsed.ok)
+        {
+            std::cout << "Usage: sun <lux> (finite value > 0)" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetSunIntensity;
+        runtimeCommand.floatValue = parsed.lux;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "exposure")
+    {
+        std::string field;
+        float value = 0.0f;
+        if (!(commandStream >> field >> value))
+        {
+            std::cout << "Usage: exposure <field> <value>; fields: mode ev100 aperture "
+                         "shutterSeconds iso compensation autoMinEv100 autoMaxEv100 "
+                         "autoSpeedUp autoSpeedDown autoTargetGray" << std::endl;
+            return;
+        }
+        std::string trailing;
+        if ((commandStream >> trailing) || !std::isfinite(value))
+        {
+            std::cout << "Usage: exposure <field> <value> (finite)" << std::endl;
+            return;
+        }
+        if (!VL::IsCameraExposureField(field))
+        {
+            std::cout << "Unknown exposure field: " << field << std::endl;
+            std::cout << "Usage: exposure <field> <value>; fields: mode ev100 aperture "
+                         "shutterSeconds iso compensation autoMinEv100 autoMaxEv100 "
+                         "autoSpeedUp autoSpeedDown autoTargetGray" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetCameraExposure;
+        runtimeCommand.stringValue = field;
+        runtimeCommand.floatValue = value;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "matparam")
+    {
+        std::string rest;
+        std::getline(commandStream, rest);
+        const VL::ConsoleCommandParsing::MaterialParameterArgument parsed =
+            VL::ConsoleCommandParsing::ParseMaterialParameter(rest);
+        if (!parsed.ok)
+        {
+            std::cout << "Usage: matparam <materialInstanceKey> <paramName> [v0 [v1 [v2 [v3]]]]"
+                      << std::endl;
+            std::cout << "  Key for a blueprint-owned mesh is "
+                         "<MI path>#bp/<sceneObjectIdentity>/<slot>, e.g. "
+                         "Maps/SC_gun_outline_demo/Materials/MI_gun_body.json"
+                         "#bp/__blueprint/dropped-gun/gun/0" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetMaterialParameter;
+        runtimeCommand.materialInstanceKey = parsed.materialInstanceKey;
+        runtimeCommand.materialParameterName = parsed.parameterName;
+        runtimeCommand.materialValueCount = parsed.valueCount;
+        for (uint32_t index = 0; index < parsed.valueCount; ++index)
+        {
+            runtimeCommand.materialValues[index] = parsed.values[index];
+        }
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "screenshot")
     {
         std::string path;
@@ -680,9 +791,17 @@ void DebugConsole::PrintHelp() const
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";
     std::cout << "  camera pose <px> <py> <pz> <tx> <ty> <tz> - set position and look-at\n";
+    std::cout << "  sun <lux> - set the primary directional light intensity (finite, > 0)\n";
+    std::cout << "  exposure <field> <value> - edit the active camera exposure; fields:\n";
+    std::cout << "    mode(0=ev100,1=physical,2=auto) ev100 aperture shutterSeconds iso compensation\n";
+    std::cout << "    autoMinEv100 autoMaxEv100 autoSpeedUp autoSpeedDown autoTargetGray\n";
+    std::cout << "  matparam <instanceKey> <paramName> [v0 [v1 [v2 [v3]]]] - write a numeric\n";
+    std::cout << "    material parameter through the gameplay material queue (1=scalar, 3=vec3, 4=vec4)\n";
+    std::cout << "    per-actor key: <MI path>#bp/<sceneObjectIdentity>/<slot>\n";
     std::cout << "  shaderreload <changed|all> - transactionally publish live Graphics, Compute, and UI shaders\n";
     std::cout << "  reloadassembly - reload the configured Gameplay assembly in the live World\n";
     std::cout << "  injectinput <action> <down|up> - inject a gameplay action for automation (no OS focus required)\n";
+    std::cout << "  inputaxis <name> <value> - inject a gameplay axis value for automation (no OS focus required)\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
 }

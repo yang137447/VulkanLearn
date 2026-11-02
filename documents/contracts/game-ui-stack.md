@@ -83,6 +83,15 @@ the document revision unchanged; history never writes files automatically.
 Level editing navigates an independent World-owned editor camera. The authored
 scene Camera remains editable without following viewport movement; immersion
 returns to the scene camera. Model/material previews keep their existing camera.
+Play/Pause removes editor-only viewport interaction: picking, transform tool groups,
+the corner axis indicator, actor helpers and the reference grid are not drawn, and
+the editor camera/controller stops updating. Mouse, keyboard and camera then belong
+to the Blueprint runtime. The Grid checkbox keeps its user preference but is disabled
+until Editing; `RuntimeCommandExecutor` rejects scene-authoring commands independently
+of the UI so stale events cannot cross the Play boundary.
+On the Editing -> Play/Pause transition the UI blurs the focused editor control and
+hands keyboard ownership to the game viewport; clicking a real text-entry control can
+still claim the keyboard back for the developer UI.
 Scene display uses a graph-owned offscreen image. GT owns only a logical
 texture token and a framebuffer-pixel layout rectangle, never image handles.
 

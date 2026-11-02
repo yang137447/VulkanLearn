@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -49,6 +50,7 @@ class PipelineFactory;
 namespace VL
 {
 class World;
+struct ScriptMaterialCommand;
 struct OfflineWorldAssets;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
@@ -142,6 +144,13 @@ public:
     void SetSelectedMaterialInstance(
         const VL::Editor::Selection::MaterialInstanceSelection& selection);
     void ClearSelectedMaterialInstance() noexcept;
+    // GT 只入队；MaterialInstance 由渲染线程拥有，命令在 Render() 内应用。
+    void ApplyScriptMaterialCommands(
+        const std::vector<VL::ScriptMaterialCommand>& commands);
+    // 取回渲染线程发布的权威材质快照；无新快照返回 false。
+    bool TakeScriptMaterialState(nlohmann::json& state);
+    // 取回渲染线程产生的命令错误，由 GT 写入诊断。
+    void TakeScriptMaterialErrors(std::vector<std::string>& errors);
     VL::Editor::Preview::IMaterialInstancePreviewAdapter&
     GetMaterialInstancePreviewAdapter() noexcept
     {
@@ -207,6 +216,24 @@ public:
 
     void SetDebugViewMode(int mode) { debugViewMode = mode; }
     int GetDebugViewMode() const { return debugViewMode; }
+    void SetEditorGridVisible(bool visible) noexcept
+    {
+        showEditorGrid.store(visible, std::memory_order_relaxed);
+    }
+    bool IsEditorGridVisible() const noexcept
+    {
+        return showEditorGrid.load(std::memory_order_relaxed);
+    }
+    // 编辑器辅助几何（参考网格等）是否允许录制。它只由脚本状态/开发者 UI
+    // 驱动的帧级策略控制，与用户自己的 Grid 开关分开保存。
+    void SetEditorOverlaysVisible(bool visible) noexcept
+    {
+        editorOverlaysVisible.store(visible, std::memory_order_relaxed);
+    }
+    bool AreEditorOverlaysVisible() const noexcept
+    {
+        return editorOverlaysVisible.load(std::memory_order_relaxed);
+    }
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
@@ -246,6 +273,25 @@ public:
 private:
     class MaterialInstancePreviewSession;
     class OfflineMaterialInstancePreviewSession;
+
+    // 贴图参数替换后，每个 swapchain image 的描述符集要在它被 acquire 的那一帧重写。
+    struct PendingMaterialTextureRefresh
+    {
+        std::string materialInstanceKey;
+        // 每个 swapchain image 一位；该 image 被 acquire 时重建并清位，全部清空后移除。
+        uint32_t remainingImagesMask = 0;
+    };
+    std::vector<PendingMaterialTextureRefresh> pendingMaterialTextureRefresh;
+    void RefreshPendingMaterialTextureDescriptors();
+    std::mutex scriptMaterialMutex;
+    std::vector<VL::ScriptMaterialCommand> pendingScriptMaterialCommands;
+    std::vector<std::string> pendingScriptMaterialErrors;
+    nlohmann::json scriptMaterialState;
+    bool scriptMaterialStateDirty = false;
+    void ApplyPendingScriptMaterialCommands();
+    void PublishScriptMaterialState();
+    // 运行时克隆的蓝图对象在缺失 per-actor 实例时，从模板实例派生并绑进活动缓存。
+    void EnsureBlueprintMaterialInstances(VL::RenderScene& renderScene);
 
     RenderSystem()
         : materialInstancePreviewAdapter(*this)
@@ -397,6 +443,8 @@ private:
     uint32_t selectedMaterialSlotIndex = 0;
     uint64_t selectedWorldGeneration = 0;
     int debugViewMode = 0;
+    std::atomic_bool showEditorGrid{true};
+    std::atomic_bool editorOverlaysVisible{true};
     float environmentIntensity = 1.0f;
     int toneMappingMode = 3;
     float bloomStrength = 0.08f;

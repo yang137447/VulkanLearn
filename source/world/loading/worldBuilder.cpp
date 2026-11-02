@@ -285,6 +285,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         world->SetEnvironment(environment);
         world->SetCsmSettings(std::move(csmSettings));
+        world->SetEditorGridHeight(worldBuildPlan.editorGridHeight);
 
         for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)
         {
@@ -312,6 +313,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
             object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
+            object.writesOutlineMask = meshObjectPlan.writesOutlineMask;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

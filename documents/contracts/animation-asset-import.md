@@ -146,6 +146,11 @@ Motion Matching 数据库的 `CaptureMotionDatabaseInputs` 也把 `skinning.skel
 | `montageBlake3=<id>:<hex>` | 每个 Montage 一项 | loader |
 | `generateSmoothNormals`、`section=<name>` | 静态导入选项（骨骼导入拒绝这些选项） | 规划层 |
 
+`smoothNormalsSections` 不进入 `modelCacheKey`：它不改变 CPU 几何导入结果，只让
+`RendererMeshLoader` 为命中的 section 使用独立的 `|outlineSmooth` renderable key，
+由运行时 compute 写回该 section 自己的顶点法线。当前行为见
+[描边壳运行时法线平滑](outline-normal-smoothing.md)。
+
 旧 `|skinning=<root>` 段随 `skinning.root` 一起删除；骨骼 SM 的最小键是
 `<modelDataPath>|skeleton=<SK path>|clip=<id>:<path>`。
 

@@ -22,5 +22,7 @@ float environmentIntensity;
 int environmentType;
 vec4 environmentSH[9];
 #include "skyParametersFields.glsl"
+// 场景地面不在 y=0 时，editorGrid pass 用它把参考网格对齐到地面。
+float editorGridHeight;
 
 #endif

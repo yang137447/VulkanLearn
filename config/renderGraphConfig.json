@@ -539,6 +539,10 @@
                 {
                     "resource": "shadowMap",
                     "binding": 0
+                },
+                {
+                    "resource": "gbufferVelocity",
+                    "binding": 1
                 }
             ],
             "output": [

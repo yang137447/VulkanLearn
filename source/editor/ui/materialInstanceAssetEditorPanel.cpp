@@ -452,7 +452,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-preview-image",
         "resource-animation-tools", "resource-animation-play", "resource-animation-pause",
         "resource-animation-clip", "resource-animation-time", "resource-animation-status",
-        "viewport-motion-debug", "viewport-motion-status",
+        "viewport-grid-toggle", "viewport-motion-debug", "viewport-motion-status",
         "viewport-motion-matching", "motion-matching-title", "motion-matching-database",
         "motion-matching-query", "motion-matching-decision", "motion-matching-rows",
         "motion-timeline-play", "motion-timeline-pause", "motion-timeline-seek", "motion-timeline-status",
@@ -1222,6 +1222,9 @@ void MaterialInstanceAssetEditorPanel::OpenContextMenu(Rml::Event& event)
             if (action == "outliner-actor" || action == "outliner-expand" ||
                 action == "outliner-visible" || action == "outliner-slot")
             {
+                // Play/Pause 下场景对象归蓝图运行时所有，大纲不再提供编辑菜单。
+                if (runtimeView.scripts.state != ScriptPlayState::Editing ||
+                    runtimeView.offlineMode) break;
                 const size_t index = addressed->GetAttribute<size_t>("data-index", 0);
                 if (index >= OutlinerActors().size()) break;
                 const EditorSceneActorSnapshot& actor = OutlinerActors()[index];
@@ -1387,7 +1390,9 @@ bool MaterialInstanceAssetEditorPanel::FindCatalogAssetKind(const std::string& p
 
 void MaterialInstanceAssetEditorPanel::ToggleContextActorVisibility()
 {
-    if (runtimeActionSink == nullptr) return;
+    if (runtimeActionSink == nullptr ||
+        runtimeView.scripts.state != ScriptPlayState::Editing ||
+        runtimeView.offlineMode) return;
     const EditorSceneActorSnapshot* actor = ContextMenuActor();
     if (actor == nullptr)
     {
@@ -1405,6 +1410,8 @@ void MaterialInstanceAssetEditorPanel::ToggleContextActorVisibility()
 
 void MaterialInstanceAssetEditorPanel::OpenContextActorMaterial(size_t slotIndex)
 {
+    if (runtimeView.scripts.state != ScriptPlayState::Editing ||
+        runtimeView.offlineMode) return;
     const EditorSceneActorSnapshot* actor = ContextMenuActor();
     if (actor == nullptr)
     {
@@ -1494,7 +1501,8 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
     std::string linesMarkup;
     std::string iconsMarkup;
     std::vector<EditorActorVisualLine> lines;
-    if (showActorVisualization && view && size.x > 0 && size.y > 0)
+    if (showActorVisualization && runtimeView.scripts.state == ScriptPlayState::Editing &&
+        view && size.x > 0 && size.y > 0)
     {
         // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
         for (size_t index = 0; index < actors.size(); ++index)
@@ -2844,6 +2852,26 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     const bool refreshOffline = !runtimeControlsCurrent || !SameOfflineControls(runtimeView, view);
     runtimeView = view;
     WidgetRefreshScope refresh(refreshingControls);
+    // Grid 是编辑器显示偏好；Play/Pause 下控件禁用但保留用户选择，
+    // 回到 Editing 后恢复同一开关状态。
+    const bool sceneEditing = view.scripts.state == ScriptPlayState::Editing &&
+        !view.offlineMode;
+    auto* gridToggle = document ? document->GetElementById("viewport-grid-toggle") : nullptr;
+    if (gridToggle && gridToggle->HasAttribute("checked") != view.editorGridVisible)
+    {
+        if (view.editorGridVisible) gridToggle->SetAttribute("checked", "");
+        else gridToggle->RemoveAttribute("checked");
+    }
+    SetDisabled("viewport-grid-toggle", !sceneEditing);
+    SetDisabled("viewport-actor-visuals", !sceneEditing);
+    // 变换工具和角落坐标轴只属于编辑器视口；Play/Pause 下镜头与操作都归蓝图，
+    // 这些控件既不可用也不应继续显示。
+    widgetDocument.SetProperty("viewport-axis-indicator", "display",
+        sceneEditing ? "block" : "none");
+    widgetDocument.SetProperty("viewport-transform-tools", "display",
+        sceneEditing ? "flex" : "none");
+    widgetDocument.SetProperty("viewport-transform-space", "display",
+        sceneEditing ? "flex" : "none");
     const bool motionEnabled = view.motionDebug && view.motionDebug->enabled;
     auto* motionToggle = document ? document->GetElementById("viewport-motion-debug") : nullptr;
     if (motionToggle && motionToggle->HasAttribute("checked") != motionEnabled)
@@ -3602,16 +3630,21 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         if (outlinerExpansion.expandedActors.erase(identity) == 0)
             outlinerExpansion.expandedActors.insert(identity);
     }
-    else if ((action == "outliner-actor" || action == "viewport-actor") && index < OutlinerActors().size())
+    else if ((action == "outliner-actor" || action == "viewport-actor") &&
+        runtimeView.scripts.state == ScriptPlayState::Editing &&
+        index < OutlinerActors().size())
     {
         SelectOutlinerActor(OutlinerActors()[index]);
     }
-    else if (action == "viewport-actor-visuals")
+    else if (action == "viewport-actor-visuals" &&
+        runtimeView.scripts.state == ScriptPlayState::Editing)
     {
         showActorVisualization = !showActorVisualization;
         RefreshActorVisualization();
     }
-    else if (action == "outliner-visible" && index < OutlinerActors().size())
+    else if (action == "outliner-visible" &&
+        runtimeView.scripts.state == ScriptPlayState::Editing &&
+        index < OutlinerActors().size())
     {
         // 眼睛不改选择、不改展开、不改滚动：它只发一条运行时命令，且身份用冻结快照里的
         // 稳定字符串，不用 DOM 上的数据或 sceneActors 下标。
@@ -3623,7 +3656,9 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         request.intValue = actor.visible ? 0 : 1;
         runtimeActionSink->RequestRuntimeAction(std::move(request));
     }
-    else if (action == "outliner-slot" && index < OutlinerActors().size())
+    else if (action == "outliner-slot" &&
+        runtimeView.scripts.state == ScriptPlayState::Editing &&
+        index < OutlinerActors().size())
     {
         const EditorSceneActorSnapshot& actor = OutlinerActors()[index];
         SelectModelMaterial(MeshSceneActorModel(actor),
@@ -3718,6 +3753,20 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             request.intValue = element.HasAttribute("checked") ? 1 : 0;
             runtimeActionSink->RequestRuntimeAction(std::move(request));
         }
+        return;
+    }
+    if (action == "viewport-grid-toggle")
+    {
+        // Play/Pause 下控件已禁用；这里仍然再校验一次，防止程序化 change
+        // 或旧事件把编辑器显示偏好带进运行时。
+        if (runtimeActionSink == nullptr ||
+            runtimeView.scripts.state != ScriptPlayState::Editing ||
+            runtimeView.offlineMode)
+            return;
+        UiAction request;
+        request.type = UiActionType::SetEditorGridVisible;
+        request.intValue = element.HasAttribute("checked") ? 1 : 0;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
         return;
     }
     if (action == "motion-replay-seek")
@@ -4324,7 +4373,8 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
         action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
         action == "log-autoscroll" || action == "animation-clip" || action == "animation-time" ||
-        action == "motion-debug" || action == "debug-draw-enabled" || action == "debug-draw-category" ||
+        action == "motion-debug" || action == "viewport-grid-toggle" ||
+        action == "debug-draw-enabled" || action == "debug-draw-category" ||
         action == "debug-draw-owner")) return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
     if (action != "menu-open" && action.rfind("debug-draw-", 0) != 0 && IsInsideMenuBar(element)) CloseMenus();
@@ -4353,7 +4403,10 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         else if (event.GetType() == "click") HandleClick(*element, action);
         else if (event.GetType() == "change") HandleChange(*element, action);
         else if (event.GetType() == "dblclick" &&
-            (action == "outliner-actor" || action == "viewport-actor") && runtimeActionSink != nullptr)
+            (action == "outliner-actor" || action == "viewport-actor") &&
+            runtimeView.scripts.state == ScriptPlayState::Editing &&
+            !runtimeView.offlineMode &&
+            runtimeActionSink != nullptr)
         {
             const size_t index = element->GetAttribute<size_t>("data-index", 0);
             if (index < OutlinerActors().size())

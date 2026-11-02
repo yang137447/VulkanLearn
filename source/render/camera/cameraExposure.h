@@ -127,4 +127,15 @@ inline CameraExposure EditCameraExposure(CameraExposure value, const std::string
     ValidateCameraExposure(value);
     return value;
 }
+
+// 控制台/编辑器共用的字段白名单：必须与上面 EditCameraExposure 的 if 链保持同一集合，
+// consoleCommandTests 会逐字段断言两者一致，避免两边漂移。
+inline bool IsCameraExposureField(const std::string& field)
+{
+    return field == "mode" || field == "ev100" || field == "aperture" ||
+        field == "shutterSeconds" || field == "iso" || field == "compensation" ||
+        field == "autoMinEv100" || field == "autoMaxEv100" ||
+        field == "autoSpeedUp" || field == "autoSpeedDown" ||
+        field == "autoTargetGray";
+}
 }

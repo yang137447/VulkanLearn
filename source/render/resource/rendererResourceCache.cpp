@@ -494,6 +494,22 @@ const std::shared_ptr<RendererObjectResourceEntry>* RendererResourceCache::GetOb
     return nullptr;
 }
 
+std::vector<RendererObjectResourceEntry*> RendererResourceCache::FindObjectResourcesByMaterial(
+    std::string_view materialInstanceKey) const
+{
+    std::vector<RendererObjectResourceEntry*> result;
+    for (const auto& [name, entry] :
+         worldLocalResources->objectResources)
+    {
+        if (entry != nullptr &&
+            entry->GetMaterialInstanceKey() == materialInstanceKey)
+        {
+            result.push_back(entry.get());
+        }
+    }
+    return result;
+}
+
 void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<Texture> texture)
 {
     WorldLocalResourcePackage& resources =

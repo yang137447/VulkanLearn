@@ -137,6 +137,14 @@ Material/pipeline 使用独立的 render-pass compatibility key；当前单一 `
 复制 MaterialInstance 隐式解决。完整的不兼容 multi-pass variant 由后续 Material Multi-Pass
 设计处理。
 
+蓝图网格组件是唯一例外：身份为 `__blueprint/<actor>[/<component>]` 的网格按
+`<normalized MI path>#bp/<sceneObjectIdentity>/<materialSlotIndex>` 克隆一份
+CPU 参数独立的 `MaterialInstance`，使 C# 侧按 actor + 槽位写入的参数不会影响共享同一
+MI asset 的其他对象。克隆只复制参数与贴图绑定，不复制 Vulkan UBO/描述符；GPU 资源仍由
+对象资源注册时 `RenderInitialize` 建立。共享 MI asset 本身不被改写。
+运行时 `Spawn` 或新增组件会派生新键（身份换成新 actor/组件）并记录模板键；
+渲染端解析到缓存缺失的新键时，从模板实例克隆 CPU 参数后再走正常的对象资源初始化。
+
 ## Set 约定
 
 当前建议保持现有 descriptor set 职责不变：

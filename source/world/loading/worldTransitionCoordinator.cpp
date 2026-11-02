@@ -7,6 +7,7 @@
 
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/offline/offlineWorldAssets.h"
+#include "render/outline/outlineNormalSmoother.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
@@ -153,6 +154,8 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             &prepared.passMaterialBindings;
         loadContext.offlineWorldAssets =
             prepared.offlineWorldAssets.get();
+        loadContext.outlineNormalSmoother =
+            &OutlineNormalSmoother::GetInstance();
         loadContext.offlineOnly = RenderSystem::GetInstance().IsOfflineMode();
         prepared.offlineWorldAssets->realtimePrepared = !loadContext.offlineOnly;
 

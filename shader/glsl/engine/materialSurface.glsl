@@ -5,6 +5,14 @@
 #include "materialContext.glsl"
 #include "materialInputs.glsl"
 
+// 所有 transparent 材质共享 forwardTransparent 的第二个 pass 输入：
+// geometry pass 的 gbufferVelocity。C 的本体在 z 通道写 outline mask。
+// 即使某个透明材质不消费它，base.frag 也会引用一次，保证 set 3 binding 1
+// 进入该材质的 descriptor layout，避免与 pass input set 不兼容。
+#if defined(VL_FORWARD_TRANSPARENT_PASS_INPUTS)
+layout(set = 3, binding = 1) uniform sampler2D gbufferVelocity;
+#endif
+
 #ifndef MATERIAL_SHADING_MODEL
 #define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
 #endif

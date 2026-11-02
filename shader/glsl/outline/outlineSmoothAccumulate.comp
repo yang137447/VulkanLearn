@@ -1,0 +1,49 @@
+#version 450
+// Pass 2：按三角形累加面法线×面积到焊接槽位。
+// 用 int 定点累加，避免依赖 atomicAdd(float) 扩展。
+#include "outlineSmoothContract.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) buffer VertFloats { float vf[]; };
+layout(set = 0, binding = 1, std430) buffer Indices { uint idx[]; };
+layout(set = 0, binding = 2, std430) buffer RepIndex { uint rep[]; };
+layout(set = 0, binding = 3, std430) buffer Accum { int accum[]; };
+layout(set = 0, binding = 4, std140) uniform Params { SmoothParams params; };
+
+const float kFixedScale = 4096.0;
+
+void main()
+{
+    uint tri = gl_GlobalInvocationID.x;
+    if (tri * 3u + 2u >= params.indexCount) return;
+
+    uint i0 = idx[tri * 3u + 0u];
+    uint i1 = idx[tri * 3u + 1u];
+    uint i2 = idx[tri * 3u + 2u];
+    if (i0 >= params.vertexCount || i1 >= params.vertexCount || i2 >= params.vertexCount) return;
+
+    vec3 p0 = vec3(vf[i0 * params.strideFloats], vf[i0 * params.strideFloats + 1u], vf[i0 * params.strideFloats + 2u]);
+    vec3 p1 = vec3(vf[i1 * params.strideFloats], vf[i1 * params.strideFloats + 1u], vf[i1 * params.strideFloats + 2u]);
+    vec3 p2 = vec3(vf[i2 * params.strideFloats], vf[i2 * params.strideFloats + 1u], vf[i2 * params.strideFloats + 2u]);
+
+    vec3 n = cross(p1 - p0, p2 - p0);
+    float doubleArea = length(n);
+    if (doubleArea <= 1e-12) return;
+
+    // 源网格存在少量反绕序面（弹夹等薄壁件）。源顶点法线是资产给出的朝向，
+    // 用三个源法线之和给几何面法线定符号，避免反绕序面把壳推向内部。
+    vec3 sn0 = vec3(vf[i0 * params.strideFloats + 3u], vf[i0 * params.strideFloats + 4u], vf[i0 * params.strideFloats + 5u]);
+    vec3 sn1 = vec3(vf[i1 * params.strideFloats + 3u], vf[i1 * params.strideFloats + 4u], vf[i1 * params.strideFloats + 5u]);
+    vec3 sn2 = vec3(vf[i2 * params.strideFloats + 3u], vf[i2 * params.strideFloats + 4u], vf[i2 * params.strideFloats + 5u]);
+    vec3 sourceReference = sn0 + sn1 + sn2;
+    if (dot(sourceReference, sourceReference) > 1e-12 && dot(n, sourceReference) < 0.0)
+        n = -n;
+
+    vec3 weighted = (n / doubleArea) * (0.5 * doubleArea);   // 归一化后再乘面积
+
+    ivec3 fixedv = ivec3(round(weighted * kFixedScale));
+    uint s0 = rep[i0] * 3u, s1 = rep[i1] * 3u, s2 = rep[i2] * 3u;
+    atomicAdd(accum[s0 + 0u], fixedv.x); atomicAdd(accum[s0 + 1u], fixedv.y); atomicAdd(accum[s0 + 2u], fixedv.z);
+    atomicAdd(accum[s1 + 0u], fixedv.x); atomicAdd(accum[s1 + 1u], fixedv.y); atomicAdd(accum[s1 + 2u], fixedv.z);
+    atomicAdd(accum[s2 + 0u], fixedv.x); atomicAdd(accum[s2 + 1u], fixedv.y); atomicAdd(accum[s2 + 2u], fixedv.z);
+}

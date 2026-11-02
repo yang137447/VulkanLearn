@@ -85,6 +85,11 @@ void InputSubsystem::UpdateActionState()
         if (!down && entry.second) node["released"] = true;
         entry.second = down;
     }
+    for (const auto& entry : injectedAxes)
+    {
+        auto& axes = actionState.gameplay["axes"];
+        axes[entry.first] = axes.value(entry.first, 0.0f) + entry.second;
+    }
     if (!gameKeyboardEnabled || !focused)
     {
         return;
@@ -105,6 +110,15 @@ void InputSubsystem::InjectAction(const std::string& action, bool pressed)
     injectedPrevious.try_emplace(action, false);
     if (pressed) injectedActions.insert(action);
     else injectedActions.erase(action);
+}
+
+void InputSubsystem::InjectAxis(const std::string& axis, float value)
+{
+    if (axis.empty() || axis.size() > 128)
+        throw std::invalid_argument("Injected input axis name is invalid");
+    if (!std::isfinite(value))
+        throw std::invalid_argument("Injected input axis value must be finite");
+    injectedAxes[axis] = value;
 }
 
 void InputSubsystem::SetRelativeMouseModeRequested(bool requested)

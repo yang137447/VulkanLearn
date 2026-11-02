@@ -1,5 +1,6 @@
 #include "render/resource/rendererMeshLoader.h"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -13,6 +14,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "render/outline/outlineNormalSmoother.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
@@ -129,8 +131,19 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
         // 覆盖属于场景实例，不能修改按 SM 路径共享的导入缓存或源资产槽位。
         const std::string materialPath = node.value("materialOverride", sectionPlan.materialInstancePath);
+        // 资产按 mesh materialSlots[].name 声明，和 source slot 名一致；
+        // sectionName 是源文件里的组名（如 gun_outline），不适合做资产契约。
+        const bool smoothSectionNormals =
+            std::find(buildPlan.smoothNormalsSections.begin(),
+                buildPlan.smoothNormalsSections.end(),
+                sectionPlan.materialSlotName) !=
+            buildPlan.smoothNormalsSections.end();
         std::string renderableObjectKey =
             buildPlan.modelCacheKey + "|" + std::to_string(sectionIndex) + "|" + section.sectionName;
+        // A/B/C 三个 mesh 资产共享同一 OBJ 与 modelCacheKey；只有声明平滑的
+        // section 需要独立顶点缓冲，否则 compute 会改到其他实例的描边壳。
+        if (smoothSectionNormals)
+            renderableObjectKey += "|outlineSmooth";
         if (loadContext.offlineWorldAssets != nullptr)
         {
             loadContext.offlineWorldAssets->sections.emplace(
@@ -156,6 +169,11 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
                 renderableObjectKey);
             resourceCache.BindRenderableObject(renderableObjectKey, renderableObject);
         }
+        if (smoothSectionNormals && loadContext.outlineNormalSmoother != nullptr &&
+            renderableObject->RequestOutlineNormalSmoothing())
+        {
+            loadContext.outlineNormalSmoother->Enqueue(renderableObject);
+        }
         }
 
         std::shared_ptr<MaterialInstance> materialInstance =
@@ -168,6 +186,31 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
                 "VL_SKINNED_MESH", "1");
             if (skinMaterial != static_cast<bool>(animation))
                 throw std::runtime_error("Mesh and material vertex factory mismatch: " + materialPath);
+        }
+
+        // 蓝图网格组件按 actor + 槽位克隆材质实例：C# 写入参数只影响该对象，
+        // 不会改到共享同一 MI 资产的其他网格。克隆只复制 CPU 参数与贴图绑定，
+        // GPU UBO/描述符仍由对象资源注册时建立。
+        if (materialInstance && !loadContext.offlineOnly &&
+            meshObjectBaseName.rfind("__blueprint/", 0) == 0)
+        {
+            const std::string blueprintMaterialKey =
+                MaterialAssetUtils::BlueprintMaterialInstanceKey(
+                    materialPath,
+                    meshObjectBaseName,
+                    sectionPlan.materialSlotIndex);
+            const std::shared_ptr<MaterialInstance>* cachedBlueprintMaterial =
+                resourceCache.GetMaterialInstance(blueprintMaterialKey);
+            if (cachedBlueprintMaterial != nullptr && *cachedBlueprintMaterial != nullptr)
+            {
+                materialInstance = *cachedBlueprintMaterial;
+            }
+            else
+            {
+                materialInstance = materialInstance->Clone(blueprintMaterialKey);
+                resourceCache.BindMaterialInstance(
+                    blueprintMaterialKey, materialInstance);
+            }
         }
 
         std::string meshObjectName = meshObjectBaseName;
@@ -187,6 +230,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.materialSlotIndex = sectionPlan.materialSlotIndex;
         meshObjectPlan.materialSlotName = sectionPlan.materialSlotName;
         meshObjectPlan.debugName = meshObjectName;
+        meshObjectPlan.writesOutlineMask = sectionPlan.writesOutlineMask;
         meshObjectPlan.model = BuildModelMatrix(position, rotation, scale);
         meshObjectPlan.scenePosition = position;
         meshObjectPlan.sceneRotation = rotation;

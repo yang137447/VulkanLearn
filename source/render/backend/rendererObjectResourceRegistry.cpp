@@ -34,6 +34,7 @@ void RendererObjectResourceEntry::Initialize(
     MaterialShadowCasterKind shadowCasterKind)
 {
     this->rendererBackend = &rendererBackend;
+    materialInstanceKey = materialInstance.GetName();
 
     RendererObjectResourceManager resourceManager;
     resourceManager.InitializeObjectResources(
@@ -43,6 +44,21 @@ void RendererObjectResourceEntry::Initialize(
         materialInstance,
         shadowCasterKind,
         resources);
+}
+
+void RendererObjectResourceEntry::RefreshMaterialDescriptors(
+    RendererBackendVulkan& rendererBackend,
+    const RendererDescriptorContext& descriptorContext,
+    MaterialInstance& materialInstance,
+    uint32_t imageIndex)
+{
+    if (!resources.initialized) return;
+    UpdateObjectDescriptorSetsForImage(
+        rendererBackend,
+        descriptorContext,
+        materialInstance,
+        resources,
+        imageIndex);
 }
 
 void RendererObjectResourceEntry::Shutdown()

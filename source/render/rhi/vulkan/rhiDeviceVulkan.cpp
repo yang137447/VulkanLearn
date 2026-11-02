@@ -513,7 +513,7 @@ RHIImageViewHandle RHIDeviceVulkan::Create2DImageView(
     RHIImageHandle imageHandle,
     uint32_t mipLevels,
     vk::Format format,
-    vk::ImageAspectFlagBits aspectMask,
+    vk::ImageAspectFlags aspectMask,
     const std::string& debugName)
 {
     const VulkanImageResource& resource = RequireImageResource(imageHandle);
@@ -533,7 +533,7 @@ RHIImageViewHandle RHIDeviceVulkan::CreateImageView(
     RHIImageHandle imageHandle,
     vk::ImageViewType viewType,
     vk::Format format,
-    vk::ImageAspectFlagBits aspectMask,
+    vk::ImageAspectFlags aspectMask,
     uint32_t baseMipLevel,
     uint32_t mipLevelCount,
     uint32_t baseArrayLayer,

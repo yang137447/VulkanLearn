@@ -12,6 +12,7 @@
 #include "core/logStore.h"
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <set>
 #include <filesystem>
 #include "world/world.h"
@@ -55,6 +56,117 @@ bool SameScriptVisuals(const nlohmann::json& before, const nlohmann::json& after
     for (const char* field : {"position", "rotation", "scale", "components", "enabled", "failed", "destroyed"})
         if (!before.contains(field) || before.at(field) != after.at(field)) return false;
     return true;
+}
+
+// C# 命令只携带实例键与参数名；实例必须来自 World 网格对象，拒绝脚本凭空构造的 key。
+// 类型/存在性由 RenderSystem 在应用时用真实 MaterialInstance 校验。
+std::vector<std::string> ApplyScriptMaterialCommands(World& world, const nlohmann::json& commands)
+{
+    std::vector<std::string> errors;
+    if (!commands.is_array() || commands.empty()) return errors;
+    if (commands.size() > 64)
+        throw std::runtime_error("Script.InvalidResponse: Material command budget exceeded");
+    std::set<std::string> knownInstances;
+    for (const auto& entry : world.GetMeshObjects())
+        knownInstances.insert(entry.second.materialInstanceKey);
+    for (const auto& command : commands)
+    {
+        const std::string instance = command.value("instance", std::string());
+        const std::string name = command.value("name", std::string());
+        const std::string op = command.value("op", std::string());
+        if (instance.empty() || name.empty() || !knownInstances.count(instance))
+        {
+            errors.push_back("Material command rejected: unknown instance or parameter name");
+            continue;
+        }
+        ScriptMaterialCommand resolved;
+        resolved.materialInstanceKey = instance;
+        resolved.parameterName = name;
+        if (op == "setScalar")
+        {
+            const auto& value = command.at("value");
+            if (!value.is_number())
+            {
+                errors.push_back("Material scalar '" + name + "' requires a number");
+                continue;
+            }
+            resolved.valueCount = 1;
+            resolved.values[0] = value.get<float>();
+        }
+        else if (op == "setVector")
+        {
+            const auto& value = command.at("value");
+            if (!value.is_array() || (value.size() != 3 && value.size() != 4))
+            {
+                errors.push_back("Material vector '" + name + "' requires vec3 or vec4");
+                continue;
+            }
+            resolved.valueCount = static_cast<uint32_t>(value.size());
+            bool numeric = true;
+            for (size_t index = 0; index < value.size(); ++index)
+            {
+                if (!value[index].is_number()) { numeric = false; break; }
+                resolved.values[index] = value[index].get<float>();
+            }
+            if (!numeric)
+            {
+                errors.push_back("Material vector '" + name + "' requires numeric components");
+                continue;
+            }
+        }
+        else if (op == "setTexture")
+        {
+            const std::string asset = command.value("asset", std::string());
+            if (asset.empty() || asset.find('\0') != std::string::npos)
+            {
+                errors.push_back("Material texture '" + name + "' requires an asset path");
+                continue;
+            }
+            resolved.textureAssetPath = asset;
+            resolved.valueCount = 0;
+        }
+        else
+        {
+            errors.push_back("Material command rejected: unknown op '" + op + "'");
+            continue;
+        }
+        bool finite = true;
+        for (uint32_t index = 0; index < resolved.valueCount; ++index)
+            finite = finite && std::isfinite(resolved.values[index]);
+        if (!finite)
+        {
+            errors.push_back("Material parameter '" + name + "' requires finite values");
+            continue;
+        }
+        world.QueueScriptMaterialCommand(std::move(resolved));
+    }
+    return errors;
+}
+
+// 蓝图网格组件的槽位/实例身份来自导入后的 World 网格，而不是作者 JSON；
+// C# 侧据此枚举槽位，并把写入绑定到 per-actor 克隆实例上。
+void AttachScriptMaterialSlots(World& world, nlohmann::json& blueprints)
+{
+    for (auto& blueprint : blueprints)
+    {
+        if (!blueprint.contains("components")) continue;
+        const std::string actorId = blueprint.at("id").get<std::string>();
+        for (auto& component : blueprint.at("components"))
+        {
+            if (component.value("type", std::string()) != "mesh") continue;
+            const std::string identity = ScriptMeshIdentity(actorId, component);
+            std::map<uint32_t, nlohmann::json> slots;
+            for (const auto& entry : world.GetMeshObjects())
+                if (entry.second.sceneObjectIdentity == identity)
+                    slots.emplace(entry.second.materialSlotIndex, nlohmann::json{
+                        {"index", entry.second.materialSlotIndex},
+                        {"name", entry.second.materialSlotName},
+                        {"instance", entry.second.materialInstanceKey}});
+            nlohmann::json list = nlohmann::json::array();
+            for (auto& [index, slot] : slots) list.push_back(std::move(slot));
+            component["materialSlots"] = std::move(list);
+        }
+    }
 }
 }
 
@@ -135,6 +247,7 @@ void ScriptRuntimeSubsystem::PrepareWorld(World& world, const nlohmann::json& sc
         }
     if (std::filesystem::path(world.GetScenePath()).filename() != "SC_model_preview.json")
         ValidateScriptPhysicsReferences(blueprints, templates);
+    AttachScriptMaterialSlots(world, blueprints);
     world.SetScriptBlueprints(blueprints);
     world.SetScriptResolvedBlueprints(std::move(resolved));
     world.PrepareScriptComponentMeshTemplates();
@@ -287,6 +400,22 @@ void ScriptRuntimeSubsystem::CollectDiagnostics(const nlohmann::json& response, 
             pendingDiagnostics.push_back({LogSeverity::Info, message.get<std::string>(), {}});
 }
 
+void ScriptRuntimeSubsystem::PushMaterialState(World& world, const nlohmann::json& values)
+{
+    const auto context = world.GetScriptContext();
+    if (!context || IsEditing() || values.empty()) return;
+    try
+    {
+        context->Call("material_state", {{"values", values}});
+    }
+    catch (const std::exception& error)
+    {
+        // 读回是可选服务；托管侧异常不应中断 Tick 主循环。
+        pendingDiagnostics.push_back({LogSeverity::Warning,
+            std::string("Material state push failed: ") + error.what(), {}});
+    }
+}
+
 void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
 {
     const auto started = std::chrono::steady_clock::now();
@@ -408,6 +537,9 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
         }
         if (update.contains("animationCommands"))
             world.ApplyScriptAnimationRequests(current, update.at("animationCommands"));
+        if (update.contains("materialCommands"))
+            for (const auto& error : ApplyScriptMaterialCommands(world, update.at("materialCommands")))
+                pendingDiagnostics.push_back({LogSeverity::Warning, error, {}});
         try
         {
             if (update.contains("debugCommands") || (changed && (current.value("failed", false) ||

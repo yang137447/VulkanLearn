@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <set>
+#include <vector>
 
 class Material;
 class MaterialInstance;
@@ -126,6 +127,9 @@ public:
 
     void BindObjectResource(std::string objectName, std::shared_ptr<RendererObjectResourceEntry> objectResource);
     const std::shared_ptr<RendererObjectResourceEntry>* GetObjectResource(std::string_view objectName) const;
+    // 按材质实例身份列出对象资源；蓝图材质贴图替换后只重建这些对象的描述符。
+    std::vector<RendererObjectResourceEntry*> FindObjectResourcesByMaterial(
+        std::string_view materialInstanceKey) const;
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;

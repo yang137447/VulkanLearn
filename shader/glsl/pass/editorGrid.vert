@@ -12,5 +12,7 @@ layout(location = 0) out vec4 outGridColor;
 void main()
 {
     outGridColor = inColor;
-    gl_Position = uboVP.viewProjection * vec4(inPosition, 1.0);
+    // 场景地面可能不在 y=0；参考网格跟随场景高度，才能在枪体/地面之后被深度测试。
+    vec3 worldPosition = inPosition + vec3(0.0, uboVP.editorGridHeight, 0.0);
+    gl_Position = uboVP.viewProjection * vec4(worldPosition, 1.0);
 }

@@ -6657,6 +6657,43 @@ TEST_F(EditorUiTest, HiddenActorRowShowsEyeOffAndStillRoutesDetailsAndSelection)
     EXPECT_FALSE(OutlinerRowElement("Sphere_01")->IsClassSet("hidden-row"));
 }
 
+TEST_F(EditorUiTest, PlayingDisablesScenePickingAuthoringAndGridControls)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(SunActor(1.0f, true));
+    SettleOutliner();
+
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 42;
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+
+    // Play/Pause 期间大纲行、眼睛与 Grid 开关都不能再把编辑操作送进运行时。
+    selectionSink.selectedModel.reset();
+    OutlinerRow("outliner-actor", "Sphere_01")->DispatchEvent("click", {});
+    EXPECT_FALSE(selectionSink.selectedModel.has_value());
+    auto* eye = OutlinerVisibilityToggle("Sphere_01");
+    ASSERT_NE(eye, nullptr);
+    eye->DispatchEvent("click", {});
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    auto* grid = document->GetElementById("viewport-grid-toggle");
+    ASSERT_NE(grid, nullptr);
+    EXPECT_TRUE(grid->HasAttribute("disabled"));
+    grid->DispatchEvent("change", {});
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    // 回到 Editing 后同一控件恢复路由，证明禁用只由 Play 状态驱动。
+    view.scripts.state = ScriptPlayState::Editing;
+    panel->UpdateRuntimeView(view);
+    EXPECT_FALSE(grid->HasAttribute("disabled"));
+    grid->DispatchEvent("change", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::SetEditorGridVisible);
+    EXPECT_EQ(runtimeSink.actions.front().intValue, 1);
+}
+
 // ---------------------------------------------------------------------------
 // 多 section 网格的整 actor 可见性：大纲的一行代表整个场景网格对象，
 // 写入端必须按 sceneObjectIdentity 一次写全它的所有 section。

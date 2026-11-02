@@ -174,13 +174,13 @@ public:
         vk::Image image,
         uint32_t mipLevels,
         vk::Format format,
-        vk::ImageAspectFlagBits aspectMask,
+        vk::ImageAspectFlags aspectMask,
         const std::string& debugName);
     vk::ImageView CreateImageView(
         vk::Image image,
         vk::ImageViewType viewType,
         vk::Format format,
-        vk::ImageAspectFlagBits aspectMask,
+        vk::ImageAspectFlags aspectMask,
         uint32_t baseMipLevel,
         uint32_t mipLevelCount,
         uint32_t baseArrayLayer,

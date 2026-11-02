@@ -166,6 +166,9 @@ public:
     void SetName(const std::string& name) { materialInstanceName = name; }
     const std::string& GetName() const { return materialInstanceName; }
     MaterialInstanceStateSnapshot CaptureStateSnapshot() const;
+    // 只复制 CPU 参数与贴图绑定，不复制 Vulkan UBO/描述符；
+    // 新实例在对象资源注册时由 RenderInitialize 建立自己的 GPU 资源。
+    std::shared_ptr<MaterialInstance> Clone(std::string name) const;
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }

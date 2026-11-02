@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "material/materialDescriptorSchema.h"
+#include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "material/validation/materialAssetValidator.h"
 
@@ -326,4 +327,25 @@ TEST(MaterialSchema, ModelProfileIsSparseAssetReference)
     instance["modelProfile"] = material["modelProfile"];
     EXPECT_THROW(MaterialAssetValidator::ValidateInstanceOverrides(
         material, instance, "MI_test.json"), std::runtime_error);
+}
+
+TEST(MaterialSchema, BlueprintMaterialInstanceKeyIsPerActorAndSlot)
+{
+    const std::string firstActor = MaterialAssetUtils::BlueprintMaterialInstanceKey(
+        "Maps/SC_x/Materials/../Materials/MI_gun.json",
+        "__blueprint/gun-01/body",
+        2);
+    EXPECT_EQ(firstActor,
+        "Maps/SC_x/Materials/MI_gun.json#bp/__blueprint/gun-01/body/2");
+
+    EXPECT_NE(firstActor,
+        MaterialAssetUtils::BlueprintMaterialInstanceKey(
+            "Maps/SC_x/Materials/MI_gun.json",
+            "__blueprint/gun-02/body",
+            2));
+    EXPECT_NE(firstActor,
+        MaterialAssetUtils::BlueprintMaterialInstanceKey(
+            "Maps/SC_x/Materials/MI_gun.json",
+            "__blueprint/gun-01/body",
+            3));
 }

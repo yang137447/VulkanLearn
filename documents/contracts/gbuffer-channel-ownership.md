@@ -163,8 +163,10 @@ high 4 bits = SelectiveOutputMask     (DecodeGBufferFlags,        gbufferCodec.g
 - `SelectionMask` 与 `gbufferVelocity.z`：geometry pass 对**非 Eye** 像素写
   `velocity.z = selectionData.x`（`base.frag.glsl:57-60`）；forward 路径则写独立的
   `selectionMask` 附件（`base.frag.glsl:33`、`65`）。两条路径的选中语义不同，不要混用。
-- `gbufferVelocity.zw` 对普通表面为 0；Eye 把 `pupilRadius/irisRadius` 与
-  `limbusWidth/irisRadius` 存在这里。
+- `gbufferVelocity.z` 对普通表面保存编辑器选中标记；`gbufferVelocity.w` 是
+  forward 描边的本体 mask（来自 `UBOModel.selectionData.y`，普通未标记表面为 0）。
+  两者都不参与运动矢量。Eye 仍把 `pupilRadius/irisRadius` 与
+  `limbusWidth/irisRadius` 存在 z/w，因此描边 mask 只对非 Eye 表面有效。
 
 ## 5. 打包与版本纪律
 

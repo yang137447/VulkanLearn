@@ -35,6 +35,9 @@ public:
     // 测试/自动化用：对应 UE UPlayerInput::InjectInputForAction 的合成 action，
     // 不依赖 OS 键盘焦点；只进入 gameplay action，不伪造 SDL 状态。
     void InjectAction(const std::string& action, bool pressed);
+    // 合成 axis（例如 MoveForward）：与 SDL 采样值相加，且不要求窗口焦点，
+    // 供无 UI 的自动化截图驱动蓝图相机/移动。
+    void InjectAxis(const std::string& axis, float value);
 
     void SetRelativeMouseModeRequested(bool requested);
     void SetRelativeMouseModeAllowed(bool allowed);
@@ -53,6 +56,7 @@ private:
     std::map<std::string, int> gameplayScancodes;
     std::set<std::string> injectedActions;
     std::map<std::string, bool> injectedPrevious;
+    std::map<std::string, float> injectedAxes;
     // UI visibility may suspend capture without overwriting the player's Esc preference.
     // 默认不请求捕获：启动后光标保持自由，鼠标移动不会带动渲染视窗。
     // 需要相机环绕/飞行时按 Esc 显式开启捕获。

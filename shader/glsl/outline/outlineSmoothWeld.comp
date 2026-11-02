@@ -1,0 +1,36 @@
+#version 450
+// Pass 1：按位置焊接。每个顶点量化位置后在哈希表里抢占一个槽位，
+// 同位置的复制顶点会拿到同一个 rep（槽位下标）。
+#include "outlineSmoothContract.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) buffer VertFloats { float vf[]; };
+layout(set = 0, binding = 1, std430) buffer HashTable { uint table[]; };
+layout(set = 0, binding = 2, std430) buffer RepIndex { uint rep[]; };
+layout(set = 0, binding = 3, std140) uniform Params { SmoothParams params; };
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= params.vertexCount) return;
+
+    uint base = i * params.strideFloats;
+    ivec3 q = ivec3(round(vec3(vf[base], vf[base + 1], vf[base + 2]) * params.quantScale));
+    uint key = OutlineKey(q);
+    uint h = OutlineHash(q, params.hashSize);
+
+    // 线性探测：槽里存 key。同位置顶点命中同一 key 后复用同一槽位；
+    // 不同 key 撞到同一桶时才继续向后探测。
+    for (uint probe = 0; probe < params.hashSize; ++probe)
+    {
+        uint slot = (h + probe) & (params.hashSize - 1u);
+        uint prev = atomicCompSwap(table[slot], 0u, key);
+        if (prev == 0u || prev == key)
+        {
+            rep[i] = slot;
+            return;
+        }
+    }
+    // 表满时退化为自成一槽，避免死循环。
+    rep[i] = params.hashSize - 1u;
+}

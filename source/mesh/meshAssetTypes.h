@@ -166,6 +166,13 @@ struct MeshAssetBuildPlan
     std::string modelDataPath;
     MeshImportOptions importOptions;
     std::vector<MeshMaterialSlot> materialSlots;
+    // 描边壳专用：这些 materialSlots[].name 对应的 section 会在运行时用
+    // compute 焊接面积加权法线。按 slot 名而不是源文件 group 名匹配，
+    // 因为 OBJ 的 group 名（如 gun_outline）不是资产契约。
+    std::vector<std::string> smoothNormalsSections;
+    // 这些 materialSlots[].name 对应的本体 section 会在 GBuffer velocity.z
+    // 写 outline mask；forward 描边由该 mask 裁掉本体覆盖。
+    std::vector<std::string> outlineMaskSections;
     std::string modelCacheKey;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
@@ -211,6 +218,7 @@ struct MeshSectionLoadPlan
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     std::string materialInstancePath;
+    bool writesOutlineMask = false;
 };
 
 // Full model import result preserving all geometry sections from the source model.

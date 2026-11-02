@@ -17,6 +17,8 @@
 #include "core/runtimeResult.h"
 #include "sceneNode.h"
 #include "materialInstance.h"
+#include "texture.h"
+#include "textureAssetLoader.h"
 #include "material.h"
 #include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
@@ -28,6 +30,7 @@
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "render/outline/outlineNormalSmoother.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
@@ -1073,6 +1076,7 @@ bool RenderSystem::SetOfflineMode(bool enabled, std::string& message)
             VL::RendererResourceLoadContext context{cache, graph->GetGraph()};
             context.graphicsCandidateState = &graphics;
             context.offlineWorldAssets = assets.get();
+            context.outlineNormalSmoother = &VL::OutlineNormalSmoother::GetInstance();
             VL::RendererMaterialLoader materialLoader(*pipelineFactory, *rendererBackend, context);
             // pass MI 按图合同复用；冻结的仅是场景 MI。相同 shadow MI 被四个 pass
             // 共用，逐 pass 重建会使前几个 Renderpass 的 weak_ptr 立即过期。
@@ -2213,6 +2217,246 @@ void RenderSystem::ApplyMaterialInstancePreviewMaterialOverride(
         materialInstancePreviewOverrideMaterialKey);
 }
 
+void RenderSystem::ApplyScriptMaterialCommands(
+    const std::vector<VL::ScriptMaterialCommand>& commands)
+{
+    if (commands.empty()) return;
+    std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+    pendingScriptMaterialCommands.insert(
+        pendingScriptMaterialCommands.end(),
+        commands.begin(), commands.end());
+}
+
+void RenderSystem::ApplyPendingScriptMaterialCommands()
+{
+    std::vector<VL::ScriptMaterialCommand> commands;
+    {
+        std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+        commands.swap(pendingScriptMaterialCommands);
+    }
+    if (commands.empty()) return;
+    std::vector<std::string> errors;
+    VL::RendererResourceCache& activeCache =
+        VL::RendererResourceCache::GetInstance();
+    for (const VL::ScriptMaterialCommand& command : commands)
+    {
+        const std::shared_ptr<MaterialInstance>* found =
+            activeCache.GetMaterialInstance(command.materialInstanceKey);
+        if (found == nullptr || *found == nullptr)
+        {
+            errors.push_back(
+                "Material instance is not bound in the active world: " +
+                command.materialInstanceKey);
+            continue;
+        }
+        MaterialInstance& instance = **found;
+        if (!command.textureAssetPath.empty())
+        {
+            if (!instance.HasTexture(command.parameterName))
+            {
+                errors.push_back(
+                    "Material texture parameter not found: " + command.parameterName +
+                    " (" + command.materialInstanceKey + ")");
+                continue;
+            }
+            const TextureBindingLoadDesc textureLoadDesc =
+                LoadTextureAssetDesc(command.textureAssetPath);
+            const std::string textureCacheKey =
+                BuildTextureCacheKey(textureLoadDesc);
+            std::shared_ptr<Texture> texture;
+            const std::shared_ptr<Texture>* cachedTexture =
+                activeCache.GetTexture(textureCacheKey);
+            if (cachedTexture != nullptr && *cachedTexture != nullptr)
+                texture = *cachedTexture;
+            else
+            {
+                texture = std::make_shared<Texture>(
+                    *rendererBackend,
+                    textureLoadDesc.source,
+                    ToTextureCreateDesc(textureLoadDesc));
+                activeCache.BindTexture(textureCacheKey, texture);
+            }
+            instance.SetTexture(
+                command.parameterName,
+                texture,
+                command.textureAssetPath,
+                textureCacheKey);
+            // 贴图换了，对象描述符集必须重建；延后到下一次 frame begin 的 acquired image，
+            // 避免改写仍在飞行中的描述符集。
+            const uint32_t imageCount = rendererBackend->GetSwapchainImageCount();
+            const uint32_t imageMask = imageCount >= 32
+                ? 0xFFFFFFFFu : ((1u << imageCount) - 1u);
+            bool pending = false;
+            for (PendingMaterialTextureRefresh& refresh : pendingMaterialTextureRefresh)
+                if (refresh.materialInstanceKey == command.materialInstanceKey)
+                {
+                    refresh.remainingImagesMask = imageMask;
+                    pending = true;
+                    break;
+                }
+            if (!pending)
+                pendingMaterialTextureRefresh.push_back({
+                    command.materialInstanceKey,
+                    imageMask});
+            continue;
+        }
+        const auto parameterIt = instance.GetParameters().find(command.parameterName);
+        if (parameterIt == instance.GetParameters().end())
+        {
+            errors.push_back(
+                "Material parameter not found: " + command.parameterName +
+                " (" + command.materialInstanceKey + ")");
+            continue;
+        }
+        const bool typeMatches =
+            (command.valueCount == 1 && parameterIt->second.type == ParamType::Float) ||
+            (command.valueCount == 3 && parameterIt->second.type == ParamType::Vec3) ||
+            (command.valueCount == 4 && parameterIt->second.type == ParamType::Vec4);
+        if (!typeMatches)
+        {
+            errors.push_back(
+                "Material parameter type mismatch: " + command.parameterName +
+                " (" + command.materialInstanceKey + ")");
+            continue;
+        }
+        if (command.valueCount == 1)
+            instance.SetParameter(command.parameterName, command.values[0]);
+        else if (command.valueCount == 3)
+            instance.SetParameter(command.parameterName, Eigen::Vector3f(
+                command.values[0], command.values[1], command.values[2]));
+        else
+            instance.SetParameter(command.parameterName, Eigen::Vector4f(
+                command.values[0], command.values[1],
+                command.values[2], command.values[3]));
+    }
+    if (!errors.empty())
+    {
+        std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+        pendingScriptMaterialErrors.insert(
+            pendingScriptMaterialErrors.end(),
+            std::make_move_iterator(errors.begin()),
+            std::make_move_iterator(errors.end()));
+    }
+}
+
+void RenderSystem::RefreshPendingMaterialTextureDescriptors()
+{
+    if (pendingMaterialTextureRefresh.empty()) return;
+    VL::RendererResourceCache& activeCache =
+        VL::RendererResourceCache::GetInstance();
+    const VL::RendererDescriptorContext descriptorContext =
+        BuildRendererDescriptorContext();
+    for (auto it = pendingMaterialTextureRefresh.begin();
+         it != pendingMaterialTextureRefresh.end();)
+    {
+        const std::shared_ptr<MaterialInstance>* material =
+            activeCache.GetMaterialInstance(it->materialInstanceKey);
+        if (material == nullptr || *material == nullptr)
+        {
+            it = pendingMaterialTextureRefresh.erase(it);
+            continue;
+        }
+        const uint32_t imageBit = 1u << swapChainImageIndex;
+        if ((it->remainingImagesMask & imageBit) != 0)
+        {
+            for (VL::RendererObjectResourceEntry* entry :
+                 activeCache.FindObjectResourcesByMaterial(it->materialInstanceKey))
+            {
+                if (entry == nullptr) continue;
+                entry->RefreshMaterialDescriptors(
+                    *rendererBackend,
+                    descriptorContext,
+                    **material,
+                    swapChainImageIndex);
+            }
+            it->remainingImagesMask &= ~imageBit;
+        }
+        if (it->remainingImagesMask == 0)
+            it = pendingMaterialTextureRefresh.erase(it);
+        else
+            ++it;
+    }
+}
+
+void RenderSystem::PublishScriptMaterialState()
+{
+    std::vector<std::string> materialInstanceKeys;
+    for (const VL::RenderDrawPacket& draw : currentRenderScene.drawPackets)
+    {
+        const std::string& key = draw.materialInstance.key;
+        if (key.find("#bp/") == std::string::npos) continue;
+        if (std::find(materialInstanceKeys.begin(), materialInstanceKeys.end(), key) ==
+            materialInstanceKeys.end())
+            materialInstanceKeys.push_back(key);
+    }
+    nlohmann::json result = nlohmann::json::object();
+    VL::RendererResourceCache& activeCache =
+        VL::RendererResourceCache::GetInstance();
+    for (const std::string& key : materialInstanceKeys)
+    {
+        const std::shared_ptr<MaterialInstance>* found =
+            activeCache.GetMaterialInstance(key);
+        if (found == nullptr || *found == nullptr) continue;
+        MaterialInstance& instance = **found;
+        nlohmann::json values = nlohmann::json::object();
+        for (const auto& [name, parameter] : instance.GetParameters())
+        {
+            switch (parameter.type)
+            {
+            case ParamType::Float:
+                values[name] = nlohmann::json::array({instance.GetParameter<float>(name)});
+                break;
+            case ParamType::Vec2:
+            {
+                const Eigen::Vector2f value = instance.GetParameter<Eigen::Vector2f>(name);
+                values[name] = nlohmann::json::array({value.x(), value.y()});
+                break;
+            }
+            case ParamType::Vec3:
+            {
+                const Eigen::Vector3f value = instance.GetParameter<Eigen::Vector3f>(name);
+                values[name] = nlohmann::json::array({value.x(), value.y(), value.z()});
+                break;
+            }
+            case ParamType::Vec4:
+            {
+                const Eigen::Vector4f value = instance.GetParameter<Eigen::Vector4f>(name);
+                values[name] = nlohmann::json::array(
+                    {value.x(), value.y(), value.z(), value.w()});
+                break;
+            }
+            }
+        }
+        if (!values.empty()) result[key] = std::move(values);
+    }
+    std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+    if (result != scriptMaterialState)
+    {
+        scriptMaterialState = std::move(result);
+        scriptMaterialStateDirty = true;
+    }
+}
+
+bool RenderSystem::TakeScriptMaterialState(nlohmann::json& state)
+{
+    std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+    if (!scriptMaterialStateDirty) return false;
+    scriptMaterialStateDirty = false;
+    state = scriptMaterialState;
+    return true;
+}
+
+void RenderSystem::TakeScriptMaterialErrors(std::vector<std::string>& errors)
+{
+    std::lock_guard<std::mutex> lock(scriptMaterialMutex);
+    if (pendingScriptMaterialErrors.empty()) return;
+    errors.insert(
+        errors.end(),
+        std::make_move_iterator(pendingScriptMaterialErrors.begin()),
+        std::make_move_iterator(pendingScriptMaterialErrors.end()));
+    pendingScriptMaterialErrors.clear();
+}
+
 void RenderSystem::RebuildRenderSceneMaterialGroups(
     VL::RenderScene& renderScene) const
 {
@@ -2370,6 +2614,7 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    ubo.editorGridHeight = activeWorld ? activeWorld->GetEditorGridHeight() : 0.0f;
     const float cameraExposureScale = VL::ExposureScale(camera.exposure);
     const bool autoExposureEnabled =
         camera.exposure.mode == VL::ExposureMode::Auto;
@@ -2454,6 +2699,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    ubo.editorGridHeight = activeWorld ? activeWorld->GetEditorGridHeight() : 0.0f;
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
         Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
@@ -3027,6 +3273,10 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
     {
         throw std::runtime_error("RenderSystem renderer backend is not set");
     }
+    // 材质命令与读回都在渲染线程执行：MaterialInstance 的 CPU 参数由 RT 消费，
+    // GT 只通过互斥队列交接，避免 UBO 上传与参数写入并发。
+    // 单线程与 workerThreadCount==2 都收敛到本函数，两条路径行为必须一致。
+    ApplyPendingScriptMaterialCommands();
 
     const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
     if (consumedSnapshot)
@@ -3052,11 +3302,13 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
     }
 
     RecordAndSubmitCurrentRenderScene();
+    PublishScriptMaterialState();
 }
 
 void RenderSystem::BuildResolvedRenderScene()
 {
     const auto& resourceCache = VL::RendererResourceCache::GetInstance();
+    EnsureBlueprintMaterialInstances(currentRenderScene);
     for (auto& draw : currentRenderScene.drawPackets)
     {
         const auto* instance = resourceCache.GetMaterialInstance(draw.materialInstance.key);
@@ -3071,6 +3323,26 @@ void RenderSystem::BuildResolvedRenderScene()
     }
 
     currentResolvedRenderScene = std::move(resolvedSceneResult.Value());
+}
+
+void RenderSystem::EnsureBlueprintMaterialInstances(VL::RenderScene& renderScene)
+{
+    VL::RendererResourceCache& activeCache =
+        VL::RendererResourceCache::GetInstance();
+    for (VL::RenderDrawPacket& draw : renderScene.drawPackets)
+    {
+        if (draw.materialInstanceParentKey.empty()) continue;
+        const std::string& key = draw.materialInstance.key;
+        if (key.empty()) continue;
+        const std::shared_ptr<MaterialInstance>* existing =
+            activeCache.GetMaterialInstance(key);
+        if (existing != nullptr && *existing != nullptr) continue;
+        const std::shared_ptr<MaterialInstance>* parent =
+            activeCache.GetMaterialInstance(draw.materialInstanceParentKey);
+        if (parent == nullptr || *parent == nullptr) continue;
+        // 只复制 CPU 参数；GPU UBO/描述符由对象资源注册时 RenderInitialize 建立。
+        activeCache.BindMaterialInstance(key, (*parent)->Clone(key));
+    }
 }
 
 void RenderSystem::InitializeCurrentRenderSceneResources()
@@ -3129,6 +3401,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     uiOverlayRenderer.CollectRetiredTextures();
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
+    // 当前 image 已经 acquire；此时才能安全重写它的对象描述符集。
+    RefreshPendingMaterialTextureDescriptors();
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport
@@ -3172,6 +3446,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
 
+        // 描边法线平滑是一次性 compute：必须在本帧任意图形 pass 读取顶点缓冲之前
+        // 完成；这里已过 BeginFrame 的 image fence，且透明 pass 尚未开始。
+        VL::OutlineNormalSmoother::GetInstance().RecordPending(
+            commandBuffer, swapChainImageIndex);
+
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
         {
@@ -3188,9 +3467,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             }
 
             // 参考网格是编辑器视口的显示辅助：视口不可见（运行页面、无 UI、资源编辑器
-            // 全屏）时整个 pass 不录制，运行时画面与截图保持与接入前一致。
+            // 全屏）、Play/Pause 关闭编辑器交互，或 UI 的 Grid 开关关闭时整个 pass 不录制。
             if (renderPass.type == VL::RenderGraphPassType::EditorGrid &&
-                !renderToViewport)
+                (!renderToViewport ||
+                    !editorOverlaysVisible.load(std::memory_order_relaxed) ||
+                    !showEditorGrid.load(std::memory_order_relaxed)))
             {
                 continue;
             }
@@ -3408,6 +3689,8 @@ void RenderSystem::InitializeFrameResources()
         shaderReloadCoordinator->RegisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
+    VL::OutlineNormalSmoother::GetInstance().Initialize(
+        *pipelineFactory, *rendererBackend);
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -3418,6 +3701,7 @@ void RenderSystem::ShutdownFrameResources()
     }
 
     environmentGpuTimer.Shutdown(*rendererBackend);
+    VL::OutlineNormalSmoother::GetInstance().Shutdown();
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->UnregisterComputeParticipant(

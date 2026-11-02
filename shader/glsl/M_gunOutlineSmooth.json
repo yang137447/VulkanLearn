@@ -1,0 +1,127 @@
+{
+    "name": "M_gunOutlineSmooth",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "features": {
+        "modifiesMeshPosition": true
+    },
+    "renderStates": {
+        "renderMode": "TransparentAlphaBlend",
+        "cullMode": "None"
+    },
+    "macros": {},
+    "parameters": {
+        "u_outlineColor": {
+            "type": "color",
+            "default": [
+                0.5,
+                0.5,
+                0.5,
+                1.0
+            ],
+            "description": "neutral tint; rgb is scaled by u_outlineColorScale",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "outline red",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "outline green",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "outline blue",
+                    "range": {
+                        "min": 0,
+                        "max": 100
+                    }
+                },
+                "w": {
+                    "name": "alpha",
+                    "description": "outline alpha",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
+        },
+        "u_outlineColorScale": {
+            "type": "float",
+            "default": 10.0,
+            "range": {
+                "min": 0,
+                "max": 5000
+            },
+            "description": "calibrated so rim L matches the capture (3.2119 * 3.1134)"
+        },
+        "u_outlineOpacity": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0,
+                "max": 1
+            },
+            "description": "gameplay pulse"
+        },
+        "u_fadeDistance": {
+            "type": "float",
+            "default": 1200.0,
+            "range": {
+                "min": 1,
+                "max": 10000
+            },
+            "description": "distance fade in centimeters"
+        },
+        "u_widthNear": {
+            "type": "float",
+            "default": 0.2,
+            "range": {
+                "min": 0,
+                "max": 10
+            },
+            "description": "capture WIDTH_NEAR"
+        },
+        "u_widthFar": {
+            "type": "float",
+            "default": 4.0,
+            "range": {
+                "min": 0,
+                "max": 20
+            },
+            "description": "capture WIDTH_FAR"
+        },
+        "u_widthScale": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0,
+                "max": 10
+            },
+            "description": "gameplay multiplier"
+        },
+        "u_viewBias": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0,
+                "max": 50
+            },
+            "description": "view-space depth push; 0 = classic shell, 3 pushes the smoothed shell away from the camera"
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "M_gunOutlineSmooth.vertex.glsl",
+        "surface": "M_gunOutlineSmooth.surface.glsl"
+    }
+}

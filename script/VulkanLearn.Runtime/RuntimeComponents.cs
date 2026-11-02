@@ -55,11 +55,139 @@ public sealed class ComponentDescription
     public ComponentCollision? Collision { get; init; }
 }
 
+public sealed class MaterialSlot
+{
+    public int Index { get; init; }
+    public string Name { get; init; } = "";
+    // 该槽位在当前 actor 上实际绑定的实例身份（蓝图网格是 per-actor 克隆键）。
+    public string Instance { get; init; } = "";
+    // 原生权威值快照（material_state 推送）；键为参数名。
+    internal readonly Dictionary<string, float[]> Values = new(StringComparer.Ordinal);
+}
+
+internal readonly record struct MaterialCommand(string Op, string Instance, string Name, float[] Value,
+    string Asset = "");
+
+// 与 UE 的 UMaterialInstanceDynamic 对齐：蓝图只在 per-actor 实例上写参数，
+// 不会改到共享同一 MI 资产的其他对象。参数存在性与类型由原生侧最终校验。
+public sealed class MaterialInstance
+{
+    private readonly MeshComponent owner;
+    // 蓝图侧影子：记录本句柄最后写入的数值。读取材质默认值需要原生反馈通道，当前未实现。
+    private readonly Dictionary<string, float> scalarValues = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Vector4> vectorValues = new(StringComparer.Ordinal);
+
+    internal MaterialInstance(MeshComponent ownerValue, MaterialSlot slot)
+    {
+        owner = ownerValue;
+        SlotIndex = slot.Index;
+        SlotName = slot.Name;
+        AssetPath = slot.Instance;
+    }
+
+    public int SlotIndex { get; }
+    public string SlotName { get; }
+    public string AssetPath { get; }
+
+    public void SetScalar(string name, float value)
+    {
+        scalarValues[name] = value;
+        owner.QueueMaterial("setScalar", AssetPath, name, new[] { value });
+    }
+
+    public void SetVector(string name, Vector3 value)
+    {
+        vectorValues[name] = new Vector4(value, 0);
+        owner.QueueMaterial("setVector", AssetPath, name, new[] { value.X, value.Y, value.Z });
+    }
+
+    public void SetVector(string name, Vector4 value)
+    {
+        vectorValues[name] = value;
+        owner.QueueMaterial("setVector", AssetPath, name, new[] { value.X, value.Y, value.Z, value.W });
+    }
+
+    public void SetColor(string name, Vector4 value) => SetVector(name, value);
+
+    // 贴图参数按资产路径提交；原生在下一帧加载/缓存贴图并重建对象描述符集。
+    public void SetTexture(string name, AssetId texture)
+    {
+        if (string.IsNullOrEmpty(texture.Path))
+            throw new ArgumentException("Material texture requires an asset path.", nameof(texture));
+        owner.QueueMaterialTexture(AssetPath, name, texture.Path);
+    }
+
+    public bool TryGetScalar(string name, out float value)
+    {
+        if (owner.TryGetMaterialValue(AssetPath, name, out var native) && native.Length == 1)
+        {
+            value = native[0];
+            return true;
+        }
+        return scalarValues.TryGetValue(name, out value);
+    }
+
+    public bool TryGetVector(string name, out Vector4 value)
+    {
+        if (owner.TryGetMaterialValue(AssetPath, name, out var native) && native.Length >= 3)
+        {
+            value = native.Length >= 4
+                ? new Vector4(native[0], native[1], native[2], native[3])
+                : new Vector4(native[0], native[1], native[2], 0);
+            return true;
+        }
+        return vectorValues.TryGetValue(name, out value);
+    }
+
+    public float GetScalar(string name) =>
+        scalarValues.TryGetValue(name, out var value)
+            ? value
+            : throw new InvalidOperationException(
+                $"Scalar parameter '{name}' has not been written by this blueprint.");
+
+    public Vector4 GetVector(string name) =>
+        vectorValues.TryGetValue(name, out var value)
+            ? value
+            : throw new InvalidOperationException(
+                $"Vector parameter '{name}' has not been written by this blueprint.");
+}
+
 public sealed class MeshComponent : SceneComponent
 {
     public AnimationPlayback Animation { get; } = new();
     public AssetId Mesh { get; internal set; }
     public AssetId Material { get; internal set; }
+    public IReadOnlyList<MaterialSlot> Materials { get; internal set; } = Array.Empty<MaterialSlot>();
+
+    private readonly List<MaterialCommand> materialCommands = [];
+    internal int PendingMaterialCount => materialCommands.Count;
+    internal IReadOnlyList<MaterialCommand> PendingMaterials => materialCommands;
+    internal void QueueMaterial(string op, string instance, string name, float[] value) =>
+        materialCommands.Add(new MaterialCommand(op, instance, name, value));
+    internal void QueueMaterialTexture(string instance, string name, string asset) =>
+        materialCommands.Add(new MaterialCommand("setTexture", instance, name, Array.Empty<float>(), asset));
+    internal bool TryGetMaterialValue(string instance, string parameter, out float[] values)
+    {
+        foreach (var slot in Materials)
+            if (slot.Instance == instance && slot.Values.TryGetValue(parameter, out values!))
+                return true;
+        values = Array.Empty<float>();
+        return false;
+    }
+    internal void TruncateMaterials(int count) =>
+        materialCommands.RemoveRange(count, materialCommands.Count - count);
+
+    // UE 语义的 GetMaterial：按槽位返回实例句柄；槽位不存在返回 null。
+    public MaterialInstance? GetMaterial(int slotIndex)
+    {
+        foreach (var slot in Materials)
+            if (slot.Index == slotIndex) return new MaterialInstance(this, slot);
+        return null;
+    }
+
+    // 蓝图网格在加载期已拥有 per-actor 实例，因此这里与 GetMaterial 等价；
+    // 保留 UE 名称，后续支持运行期替换源材质时再扩展。
+    public MaterialInstance? CreateDynamicMaterialInstance(int slotIndex) => GetMaterial(slotIndex);
 }
 
 public abstract partial class Blueprint

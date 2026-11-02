@@ -49,6 +49,7 @@ public static partial class NativeBridge
             }
             ExportCommand(ref update, blueprint.Handle.Id, "raycasts", context.Services.TakeRays(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "animationCommands", TakeAnimationCommands(blueprint), complete);
+            ExportCommand(ref update, blueprint.Handle.Id, "materialCommands", TakeMaterialCommands(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "debugCommands", context.Services.TakeDebug(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetRequests", context.Services.TakeAssets(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetCancels", context.Services.TakeAssetCancellations(blueprint), complete);
@@ -69,6 +70,44 @@ public static partial class NativeBridge
         Array values, bool complete)
     {
         if (complete || values.Length != 0) AddUpdate(ref update, id, field, values);
+    }
+
+    // 材质命令一次消费即清空；失败回调由 Callback 的计数快照回滚。
+    private static object[] TakeMaterialCommands(Blueprint owner)
+    {
+        var commands = new List<object>();
+        foreach (var mesh in owner.Components.OfType<MeshComponent>())
+        {
+            foreach (var command in mesh.PendingMaterials)
+            {
+                // 原生协议：setScalar 的 value 是数字，setVector 才是数组；
+                // 蓝图侧命令统一用 float[] 存储，这里按 op 还原线上格式。
+                object value = command.Op == "setScalar" ? command.Value[0] : command.Value;
+                commands.Add(new { op = command.Op, instance = command.Instance,
+                    name = command.Name, value, asset = command.Asset });
+            }
+            mesh.TruncateMaterials(0);
+        }
+        return commands.ToArray();
+    }
+
+    // 原生权威参数快照按实例身份写回槽位；MaterialInstance.Get* 优先读这里。
+    private static void ApplyMaterialState(Context context, JsonElement values)
+    {
+        foreach (var instance in context.Instances)
+        {
+            foreach (var mesh in instance.Blueprint.Components.OfType<MeshComponent>())
+            {
+                foreach (var slot in mesh.Materials)
+                {
+                    slot.Values.Clear();
+                    if (!values.TryGetProperty(slot.Instance, out var parameters)) continue;
+                    foreach (var parameter in parameters.EnumerateObject())
+                        slot.Values[parameter.Name] = parameter.Value.EnumerateArray()
+                            .Select(value => value.GetSingle()).ToArray();
+                }
+            }
+        }
     }
 
     private static void ExportValue(Dictionary<string, object> baseline, ref Dictionary<string, object>? update,

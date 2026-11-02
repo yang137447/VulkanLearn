@@ -63,6 +63,29 @@ const std::vector<uint32_t>& RenderableObject::GetIndices() const
                     : indices;
 }
 
+const std::vector<Vertex>& RenderableObject::GetSourceVertices() const
+{
+    return GetVertices();
+}
+
+const std::vector<uint32_t>& RenderableObject::GetSourceIndices() const
+{
+    return GetIndices();
+}
+
+uint32_t RenderableObject::GetVertexStrideFloats() const
+{
+    return static_cast<uint32_t>(sizeof(Vertex) / sizeof(float));
+}
+
+bool RenderableObject::RequestOutlineNormalSmoothing() noexcept
+{
+    if (outlineNormalsRequested || outlineNormalsReady)
+        return false;
+    outlineNormalsRequested = true;
+    return true;
+}
+
 RenderableObject::~RenderableObject()
 {
     if (rendererBackend && skinInfluenceBuffer)
@@ -127,7 +150,10 @@ void RenderableObject::CreateVertexBuffer()
     std::memcpy(data, sourceVertices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
-    vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    // Storage 用途供描边法线平滑的 compute 读位置/写回法线；
+        // 让 compute 直接改这份顶点缓冲，壳材质无需额外绑定。
+        vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer |
+            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags vertexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
         bufferSize,
@@ -172,7 +198,9 @@ void RenderableObject::CreateIndexBuffer()
     std::memcpy(data, sourceIndices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
-    vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    // Storage 用途供描边法线平滑的 accumulate pass 读取三角形索引。
+    vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer |
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags indexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(indexBuffer, indexBufferMemory) = rendererBackend->CreateBuffer(
         bufferSize,

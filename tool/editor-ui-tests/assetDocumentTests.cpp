@@ -121,6 +121,58 @@ TEST_F(AssetDocumentTest, SkeletalMeshRejectsStaticSectionFiltering)
     EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
 }
 
+TEST_F(AssetDocumentTest, StaticMeshAcceptsSmoothNormalsSectionsByMaterialSlot)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["smoothNormalsSections"] = {"Default"};
+    const MeshAssetBuildPlan plan =
+        MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh);
+    ASSERT_EQ(plan.smoothNormalsSections.size(), 1u);
+    EXPECT_EQ(plan.smoothNormalsSections.front(), "Default");
+    // 平滑配置只影响运行时 renderable key，不改变几何导入缓存身份。
+    EXPECT_EQ(plan.modelCacheKey, "triangle.obj");
+}
+
+TEST_F(AssetDocumentTest, SmoothNormalsSectionsRejectUnknownMaterialSlot)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["smoothNormalsSections"] = {"Missing"};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
+}
+
+TEST_F(AssetDocumentTest, SkeletalMeshRejectsSmoothNormalsSections)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"}, {"clips", Json::array()}};
+    mesh["smoothNormalsSections"] = {"Default"};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
+}
+
+TEST_F(AssetDocumentTest, StaticMeshAcceptsOutlineMaskSectionsByMaterialSlot)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["outlineMaskSections"] = {"Default"};
+    const MeshAssetBuildPlan plan =
+        MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh);
+    ASSERT_EQ(plan.outlineMaskSections.size(), 1u);
+    EXPECT_EQ(plan.outlineMaskSections.front(), "Default");
+}
+
+TEST_F(AssetDocumentTest, OutlineMaskSectionsRejectUnknownMaterialSlot)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["outlineMaskSections"] = {"Missing"};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
+}
+
+TEST_F(AssetDocumentTest, SkeletalMeshRejectsOutlineMaskSections)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"}, {"clips", Json::array()}};
+    mesh["outlineMaskSections"] = {"Default"};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
+}
+
 Json BlueprintAsset()
 {
     return {{"type", "blueprint"}, {"name", "Actor"}, {"class", "Gameplay.RotatorBlueprint"},

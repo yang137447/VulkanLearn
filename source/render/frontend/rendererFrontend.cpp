@@ -23,6 +23,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.mesh = drawSnapshot.mesh;
     packet.material = drawSnapshot.material;
     packet.materialInstance = drawSnapshot.materialInstance;
+    packet.materialInstanceParentKey = drawSnapshot.materialInstanceParentKey;
     packet.model = drawSnapshot.model;
     packet.previousModel = drawSnapshot.previousModel;
     if (!drawSnapshot.speedTreeWindProfileKey.empty())
@@ -33,6 +34,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
     packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
+    packet.writesOutlineMask = drawSnapshot.writesOutlineMask;
     return packet;
 }
 

@@ -229,6 +229,11 @@ TRS 沿用 SetActorProperty/场景补丁入口。Preview World 和离线模式�
 Undo/Redo 也走正式 World 重载；即使候选资源准备失败，仍能撤销未提交草稿。
 保存后仍可撤销为脏草稿，磁盘仅经显式 Save Content 改变。
 离线、资产预览页、Play/Pause 禁用 Scene 作者编辑及 Scene 历史操作；没有跨资产通用 Undo。
+Play/Pause 同时关闭编辑器视口拾取、变换工具、角落坐标轴、参考网格和独立观察相机：
+视口鼠标/键盘输入只交给 `InputSubsystem` 与蓝图，镜头只取 `World` 的脚本相机。
+进入游戏态时 GT 清掉渲染端选择描边与 UI 场景选择；回到 Editing 后恢复 Grid 用户偏好。
+`RuntimeCommandExecutor` 独立拒绝 `SetActorVisible`、`SetActorProperty` 与
+`SaveCsmSettingsToScene`，因此遗留 UI 事件或旧控制台脚本不能穿透这一边界。
 
 ## 内联自定义数据
 
@@ -639,6 +644,31 @@ Stop/World 换代释放委托，旧上下文句柄被拒绝。
 请求先在值节点上验证父链、投影、灯光及碰撞，再在回调批次结束后应用；
 回调失败丢弃该回调的结构请求。移除活动相机回到作者镜头，Stop 恢复作者组件树。
 Mesh/Material 组合需由当前 World 或已加载 BP 模板正式准备，回调本身不导入或上传。
+
+### 材质参数
+
+蓝图网格组件在加载期按 actor + 槽位拥有独立 `MaterialInstance`（key 规则见
+`material-param-authoring-and-reflection.md`）。准备 World 时，原生把每个 mesh 组件的
+`materialSlots`（`index` / `name` / `instance`）并入声明；C# 侧对应：
+
+- `MeshComponent.Materials`：只读槽位表
+- `MeshComponent.GetMaterial(slotIndex)`：返回该槽位的 `MaterialInstance?`
+- `MeshComponent.CreateDynamicMaterialInstance(slotIndex)`：与 `GetMaterial` 等价
+  （实例已在加载期创建，不会在回调里重建 GPU 资源）
+- `MaterialInstance.SetScalar(name, float)` / `SetVector(name, Vector3|Vector4)` / `SetColor(name, Vector4)`
+- `MaterialInstance.SetTexture(name, AssetId)`：按纹理资产路径替换该槽位的贴图参数
+- `MaterialInstance.GetScalar/GetVector`：读取原生权威值快照。渲染线程在数值变化时发布
+  快照，GT 取走 `material_state`（实例身份 -> 参数名 -> float 数组）后推给托管侧；
+  未收到快照前回退到本蓝图最后写入值
+
+写入只排队成该 Blueprint 的 `materialCommands`。GT 把命令交给 `RenderSystem` 的互斥队列，
+由渲染线程在 `Render()` 内应用（`MaterialInstance` 由 RT 独占，避免参数写入与 UBO 上传并发）：
+实例必须属于当前 World、参数必须存在且类型匹配，否则记录 warning 诊断并丢弃该条命令；
+不会中断 Tick。`setVector` 支持 vec3/vec4，分别校验 `Vec3`/`Vec4` 参数。
+贴图命令走纹理资产加载/缓存后写入实例，对象描述符集只在 `BeginFrame` 取得 image 之后
+重建当前 image，并在随后若干帧补齐其余 swapchain image；不会改写仍在飞行中的描述符集。
+运行时 `Spawn` / `AddComponent` 的网格会派生自己的 per-actor 实例（从模板实例克隆参数），
+不再共享模板 actor 的材质实例。
 
 ### 自定义 C# 逻辑组件
 

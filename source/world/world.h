@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -88,7 +89,24 @@ struct WorldMeshObject
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
+    // 运行时克隆（Spawn / 新增组件）用：模板实例键，渲染端在缺失新键时据此克隆。
+    std::string materialInstanceParentKey;
     std::string speedTreeWindProfileKey;
+    // 本体 section 在 GBuffer selection 通道写 outline mask。
+    bool writesOutlineMask = false;
+};
+
+// C# 蓝图写入的材质参数。World 只排队（GT 数据），真正的 MaterialInstance
+// 归渲染资源缓存所有；由引擎在 GT 上转交 RenderSystem 应用，World 不持有 GPU 资源。
+struct ScriptMaterialCommand
+{
+    std::string materialInstanceKey;
+    std::string parameterName;
+    // 非空表示贴图参数写入；此时 valueCount 为 0。
+    std::string textureAssetPath;
+    // 1=scalar，3=vec3，4=vec4；与脚本命令的 value 数组长度一致。
+    uint32_t valueCount = 1;
+    float values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -120,6 +138,8 @@ public:
 
     void SetCsmSettings(CsmSettings settings);
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
+    void SetEditorGridHeight(float height) noexcept { editorGridHeight = height; }
+    float GetEditorGridHeight() const noexcept { return editorGridHeight; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
     void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
@@ -191,6 +211,9 @@ public:
     nlohmann::json ScriptAnimationAssets() const;
     nlohmann::json ScriptAnimationFeedback() const;
     void ApplyScriptAnimationRequests(const nlohmann::json& actor, const nlohmann::json& requests);
+    // 材质命令只排队；应用与参数校验由 RenderSystem 在 GT 帧内完成。
+    void QueueScriptMaterialCommand(ScriptMaterialCommand command);
+    std::vector<ScriptMaterialCommand> TakeScriptMaterialCommands();
     void TickScriptAnimations(float deltaSeconds, const Animation::GroundProbe* ground = nullptr);
     void ResetScriptAnimations();
     void SetMotionResourceRoot(std::string root) { motionResourceRoot = std::move(root); }
@@ -240,6 +263,7 @@ private:
     bool editorViewEnabled = false;
     WorldEnvironment environment;
     CsmSettings csmSettings;
+    float editorGridHeight = 0.0f;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
@@ -251,6 +275,7 @@ private:
     nlohmann::json scriptBlueprintSources = nlohmann::json::array();
     // 运行时 TRS 与作者声明分离；逻辑 Actor 没有网格时仍能在 Details 回显。
     nlohmann::json scriptBlueprintStates = nlohmann::json::array();
+    std::vector<ScriptMaterialCommand> scriptMaterialCommands;
     std::shared_ptr<ScriptWorldContext> scriptContext;
     nlohmann::json scriptTemplates = nlohmann::json::object();
     nlohmann::json scriptAssetDigests = nlohmann::json::object();

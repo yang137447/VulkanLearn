@@ -73,12 +73,40 @@ Editing 下成功替换；Playing/Paused 若存在受控骨骼控制器，按迁
 
 ```text
 injectinput <action> <down|up>
+inputaxis <name> <value>
 ```
 
 向当前 gameplay action 层注入合成动作，对应 UE `UPlayerInput::InjectInputForAction`。
 它不要求 SDL 键盘焦点，不伪造 SDL held 状态，也不写资产；用于自动化验证
 `Interact`/`Jump` 等 action 到 Blueprint/Controller 的路径。真实 OS 键盘路径
 仍需窗口焦点，二者不能混为一谈。
+`inputaxis` 向 gameplay axis 层注入合成值（例如 `inputaxis MoveForward 1`），
+与 SDL 采样值相加且同样不要求焦点；用于无窗口自动化的蓝图相机/移动验收。
+
+## Realtime tuning
+
+```text
+sun <lux>
+exposure <field> <value>
+matparam <instanceKey> <paramName> [v0 [v1 [v2 [v3]]]]
+```
+
+三条命令都只排队类型化 `RuntimeCommand`，不在 Console 线程直接写 World/材质：
+
+- `sun` 写当前 World 的第一个 directionalLight；只接受有限正数。
+- `exposure` 走与编辑器相同的 `EditCameraExposure` 字段集合：
+  `mode ev100 aperture shutterSeconds iso compensation autoMinEv100 autoMaxEv100
+  autoSpeedUp autoSpeedDown autoTargetGray`；未知字段或非有限值只打印 Usage。
+- `matparam` 复用蓝图 `SetScalar/SetVector` 的 `World::ScriptMaterialCommand`
+  队列（渲染线程统一校验、per-actor 克隆与描述符刷新），只写数值参数；
+  1 个分量按 scalar、3/4 个分量按 vec3/vec4。贴图参数不在本命令范围内。
+  蓝图网格的 per-actor 键形如
+  `<MI 路径>#bp/__blueprint/<sceneObjectIdentity>/<slot 索引>`，例如
+  `Maps/SC_gun_outline_demo/Materials/MI_gun_body.json#bp/__blueprint/dropped-gun/gun/0`。
+  不存在的键由渲染线程报告 `Material instance is not bound in the active world` 并跳过。
+
+参数解析的边界由 `tool/console-command-tests` 覆盖（GoogleTest），
+不依赖启动 Vulkan 或 World。
 
 ## DrawDebug
 
@@ -112,6 +140,16 @@ Console 解析只排队类型化控制值，执行、预算与生命周期见 [�
 --console-command "<line>"          可重复，按命令行顺序提交
 --console-command-delay <frames>    默认 60，提交前等待的帧数
 ```
+
+单条命令可以加 `@<frame> ` 前缀覆盖提交帧，其它命令仍使用 `--console-command-delay`：
+
+```powershell
+--console-command "@180 inputaxis MoveForward -1" `
+--console-command "@238 inputaxis MoveForward 0"  `
+--console-command "@250 screenshot mid.bmp"
+```
+
+这让同一进程内完成"改参数/移动 → 等稳定 → 截图"的扫描，不必为每个数值重启进程。
 
 ```powershell
 .\build\bin\main.exe --initial-scene "Maps/SC_x/SC_x.json" `

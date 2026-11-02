@@ -31,6 +31,8 @@ enum class UiActionType
     TransformBlueprintPreview,
     SetCameraMoveSpeed,
     SetDebugViewMode,
+    // 编辑器视口参考网格开关；intValue 0/1。
+    SetEditorGridVisible,
     SetToneMappingMode,
     SetCameraExposure,
     SetOfflineMode,

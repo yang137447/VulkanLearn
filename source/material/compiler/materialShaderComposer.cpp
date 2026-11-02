@@ -74,6 +74,13 @@ std::string BuildStageSource(
         stream << "#extension GL_EXT_blend_func_extended : require\n\n";
     }
     stream << BuildFeatureDefines(request.features);
+    if (!vertexStage && request.pass == MaterialPass::Base &&
+        IsTransparentRenderMode(request.shaderVariantKey.renderMode))
+    {
+        // forwardTransparent 的 pass input 集同时包含 shadowMap 与 gbufferVelocity。
+        // 所有透明材质都必须声明/引用后者，descriptor set layout 才能与 pass input 兼容。
+        stream << "#define VL_FORWARD_TRANSPARENT_PASS_INPUTS 1\n\n";
+    }
 
     if (vertexStage)
     {

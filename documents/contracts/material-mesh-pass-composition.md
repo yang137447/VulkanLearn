@@ -79,6 +79,10 @@ SkinnedMesh 在材质求值前通过独立 Set 2 SSBO 执行完整 CSR LBS，
 
 - **尺寸按 cm 定义**：小格 10 cm、每 10 格一条主线（1 m），XZ 各覆盖 -240 到 +240 cm。
   线半宽为 0.12/0.2 cm（次线/主线），Y 轴高 40 cm，地面抬升 0.02 cm。
+  网格平面的世界 Y 是 `scene.editorGridHeight + 0.02`，字段默认 0；
+  `SC_gun_outline_demo` 的地面在 `y=-14`，因此场景显式写 `editorGridHeight: -14`
+  让网格贴地。网格若留在 `y=0` 会悬在枪体上方 14 cm，深度测试无法把一个
+  物理上更靠近相机的平面遮到枪后面。
   这是固定十进制参考网格，不是 UE 随视距自适应的完整实现，也不是 HDRI 自带的棋盘纹理。
 
 - **它是场景几何，不是 UI 叠层。** 画在 `sceneColor` / `sceneDepth` 上、`loadOp: load`，
@@ -94,8 +98,12 @@ SkinnedMesh 在材质求值前通过独立 Set 2 SSBO 执行完整 CSR LBS，
   顶点数因此是逻辑四边形数 × 2（绕序）× 6：`EditorGridExpectedVertexCount()` 与其测试共用这一口径。
 - **顶点流复用共享 `Vertex`**（`source/VertexDataStruct.h`：position=0、normal=1、color=2）。
   网格 shader 只消费 0 与 2，**跳过 normal** —— normal 的取值只为满足共享布局，不表达光照信息。
-- 几何在 XZ 地面上抬升 `kGroundLift`，避免与场景自身的 y=0 地面在共面像素上随机归属；
+- 几何在场景地面高度上抬升 `kGroundLift`，避免与地面在共面像素上随机归属；
   颜色是 tone mapping 前的线性值且全部低于 bloom 阈值，因此后处理不会把网格线当成高光。
+- **Grid 是编辑器显示偏好，不是场景数据。** UI checkbox 通过
+  `SetEditorGridVisible` 只改渲染端原子状态；Play/Pause 或开发者 UI 隐藏时 pass 整体不录制，
+  但用户开关值保留，回到 Editing 后按原值恢复。Play/Pause 同时不绘制角落坐标轴与
+  变换工具组，视口点击也不再进入编辑器拾取。
 
 几何所有权在 `source/render/editor/editorViewportGrid.*`（只管"网格长什么样"），
 pass 状态与深度策略在配置与 `shader/glsl/pass/editorGrid.*`（管"怎么被画出来"）。

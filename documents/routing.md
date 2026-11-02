@@ -35,6 +35,7 @@
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
+| `source/render/outline/**`、`source/renderableObject.*`、`shader/glsl/outline/**` | `contracts/outline-normal-smoothing.md` | — |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
@@ -81,6 +82,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | `contracts/debug-runtime-commands.md` | 新增/修改控制台调试命令（含相机控制与截图）时 |
 | `contracts/environment-update-scheduler.md` | 改环境贴图更新调度、SH 广播、dirty generation 或 IBL barrier 时 |
 | `contracts/material-mesh-pass-composition.md` | 改材质求值、Base/ShadowDepth 模板、Composer 身份或 Shadow 路由时 |
+| `contracts/outline-normal-smoothing.md` | 改描边壳、顶点法线焊接、`smoothNormalsSections` 或一次性 compute 入队/录制时 |
 | `contracts/animation-runtime-skinning.md` | 改骨骼 SM 加载、动画时钟/快照、蒙皮 SSBO、姿态/速度历史或动画预览控件时 |
 | `contracts/shader-structure-and-material-function.md` | 改 Shader Structure、Material Inputs/Function 组合或 Shading Model 边界时 |
 | `contracts/testing.md` | 改测试入口、测试目标或新增测试时 |

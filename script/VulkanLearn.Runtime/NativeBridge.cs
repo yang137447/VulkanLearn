@@ -139,6 +139,7 @@ public static partial class NativeBridge
         {
             case "animation_catalog": UpdateAnimationCatalog(context, request.GetProperty("catalog"),
                 request.TryGetProperty("assets", out var assets) ? assets : default); return null;
+            case "material_state": ApplyMaterialState(context, request.GetProperty("values")); return null;
             case "migration_capture": return CaptureMigration(context);
             case "migration_restore": return RestoreMigration(context, request.GetProperty("snapshot"));
             case "migration_export": return MigrationExport(context);
@@ -286,6 +287,14 @@ public static partial class NativeBridge
             };
             component.Id = n.TryGetProperty("id", out var componentId) ? componentId.GetString()! : "root";
             component.Kind = n.GetProperty("type").GetString()!; component.Owner = blueprint;
+            if (component is MeshComponent meshComponent &&
+                n.TryGetProperty("materialSlots", out var materialSlots))
+                meshComponent.Materials = materialSlots.EnumerateArray().Select(slot => new MaterialSlot
+                {
+                    Index = slot.GetProperty("index").GetInt32(),
+                    Name = slot.GetProperty("name").GetString()!,
+                    Instance = slot.GetProperty("instance").GetString()!
+                }).ToArray();
             if (component is CameraComponent camera)
             {
                 if (n.TryGetProperty("fov", out var fov)) camera.HorizontalFov = fov.GetSingle();
@@ -547,6 +556,8 @@ public static partial class NativeBridge
         var jump = blueprint.Character?.JumpRequested ?? false;
         var animationCommands = blueprint.Components.OfType<MeshComponent>()
             .Select(c => (c.Animation, c.Animation.Pending)).ToArray();
+        var materialCommandState = blueprint.Components.OfType<MeshComponent>()
+            .Select(c => (c, c.PendingMaterialCount)).ToArray();
         callbackBlueprint = blueprint;
         callbackComponent = scriptComponent;
         callbackPhase = phase;
@@ -608,6 +619,7 @@ public static partial class NativeBridge
             if (blueprint.Body is { } body) { body.Velocity = velocity; body.Impulse = impulse; body.VelocityChanged = velocityChanged; }
             if (blueprint.Character is { } character) { character.WalkVelocity = walkVelocity; character.RootMotionVelocity = rootMotionVelocity; character.RootMotionActive = rootMotionActive; character.JumpRequested = jump; }
             foreach (var (animation, pending) in animationCommands) animation.Pending = pending;
+            foreach (var (mesh, count) in materialCommandState) mesh.TruncateMaterials(count);
             context.Services.Rollback();
             if (scriptComponent == null) context.Services.RemoveOwner(blueprint);
             else context.Services.RemoveComponent(scriptComponent);

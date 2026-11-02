@@ -61,6 +61,18 @@ namespace MaterialAssetUtils
         return std::filesystem::path(path).lexically_normal().generic_string();
     }
 
+    // 蓝图网格组件按 actor + 槽位拥有独立材质实例：参数写入只影响该对象，
+    // 不会污染共享同一 MI 资产的其他对象。渲染资源仍由对象注册时初始化。
+    inline std::string BlueprintMaterialInstanceKey(
+        std::string_view materialInstancePath,
+        std::string_view sceneObjectIdentity,
+        uint32_t materialSlotIndex)
+    {
+        return NormalizeAssetPath(materialInstancePath) + "#bp/" +
+            std::string(sceneObjectIdentity) + "/" +
+            std::to_string(materialSlotIndex);
+    }
+
     inline std::string NormalizeShaderGlslRelativePath(std::string_view path)
     {
         const std::filesystem::path normalizedPath =

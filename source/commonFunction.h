@@ -641,7 +641,7 @@ namespace CommonFunction
         return imageView;
     }
 
-    inline vk::ImageView Create2DImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor, const std::string& name = "")
+    inline vk::ImageView Create2DImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlags aspectMask = vk::ImageAspectFlagBits::eColor, const std::string& name = "")
     {
         return CreateImageViewBase(
             device,

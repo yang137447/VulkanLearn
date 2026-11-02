@@ -63,7 +63,10 @@ struct MeshDrawSnapshot
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;
+    // 运行时克隆模板实例键；新键缺失时渲染端据此创建 per-actor 实例。
+    std::string materialInstanceParentKey;
     std::string speedTreeWindProfileKey;
+    bool writesOutlineMask = false;
 };
 
 enum class LightSnapshotType

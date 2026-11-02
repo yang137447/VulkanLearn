@@ -20,10 +20,13 @@
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <nlohmann/json.hpp>
 
 
 #include "engine/diagnosticsSubsystem.h"
+#include "engine/editorInteractionPolicy.h"
 #include "engine/runtimeCommand.h"
 #include "core/renderSession.h"
 #include "editor/selection/materialInstanceSelection.h"
@@ -433,6 +436,22 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
     ReconcileOfflineModeFeedback(lastViewModel, previous);
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
+    // 进入 Play/Pause 时把输入焦点交给游戏视口：Play 按钮等编辑器控件不能再
+    // 以“仍有 UI 焦点”为由吞掉 WASD。若之后用户点搜索框等文本控件，
+    // ProcessDeveloperUiEvent 会重新建立 UI 焦点。
+    const bool wasEditing = !previous.scripts.available ||
+        previous.scripts.state == ScriptPlayState::Editing;
+    const bool gameplayActive = lastViewModel.scripts.available &&
+        lastViewModel.scripts.state != ScriptPlayState::Editing;
+    if (wasEditing && gameplayActive)
+    {
+        sceneViewportInputActive = true;
+        if (Rml::Element* focus = rmlContext->GetFocusElement();
+            focus != nullptr && focus->GetOwnerDocument() == editorDocument)
+        {
+            focus->Blur();
+        }
+    }
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
@@ -464,7 +483,12 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
 
 bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 {
-    if (!developerUiVisible || editorDocument == nullptr ||
+    // Play/Pause 下视口点击属于蓝图运行时，不能再被编辑器拾取截走。
+    const bool scriptsEditing = !lastViewModel.scripts.available ||
+        lastViewModel.scripts.state == ScriptPlayState::Editing;
+    if (!EditorInteraction::SceneEditingEnabled(
+            scriptsEditing, developerUiVisible, lastViewModel.offlineMode) ||
+        editorDocument == nullptr ||
         !std::isfinite(mouseX) || !std::isfinite(mouseY) ||
         mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
         materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
@@ -1785,8 +1809,33 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
         materialInstanceEditorPanel->IsAssetEditorVisible();
     if (resourceEditor) sceneViewportInputActive = false;
+    const bool scriptsEditing = !lastViewModel.scripts.available ||
+        lastViewModel.scripts.state == ScriptPlayState::Editing;
+    const bool sceneInteractionEnabled = EditorInteraction::SceneEditingEnabled(
+        scriptsEditing, developerUiVisible, lastViewModel.offlineMode);
     const Rml::Element* focus = rmlContext->GetFocusElement();
     bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
+    // Play/Pause 下编辑器焦点不能再吞键；只有真正的文本输入仍需要键盘。
+    // RmlUi 的 button/checkbox 也是 ElementFormControl，因此必须看 input type。
+    bool textInputFocus = false;
+    if (editorFocus)
+    {
+        const auto* input =
+            dynamic_cast<const Rml::ElementFormControlInput*>(focus);
+        if (input != nullptr)
+        {
+            const Rml::String type = input->GetAttribute<Rml::String>("type", "text");
+            textInputFocus = type == "text" || type == "search" ||
+                type == "password" || type == "number";
+        }
+        else
+        {
+            textInputFocus =
+                dynamic_cast<const Rml::ElementFormControlSelect*>(focus) != nullptr;
+        }
+    }
+    const bool editorOwnsKeys = modal ||
+        (editorFocus && (sceneInteractionEnabled || textInputFocus));
     switch (event.type)
     {
     case PlatformEventType::MouseMove:
@@ -1806,10 +1855,9 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
             (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
         if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
         {
-            // 右键在运行时输入里没有任何绑定：相机看的是相对鼠标增量，拾取只认左键。
-            // 视口命中的右键因此交给编辑器文档，右键上下文菜单才有 RmlUi 事件与坐标；
-            // 返回 true 表示这次右键已被编辑器消费，同一事件不再走场景输入。
-            if (event.mouseButton == PlatformMouseButton::Right)
+            // 右键上下文菜单只在 Editing 属于编辑器；Play/Pause 下右键必须留给蓝图。
+            if (event.mouseButton == PlatformMouseButton::Right &&
+                sceneInteractionEnabled)
             {
                 ProcessRuntimeUiEvent(event);
                 return true;
@@ -1840,7 +1888,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
     case PlatformEventType::KeyUp:
         if (rmlPressedKeyboardKeys.count(event.key) != 0)
-            return ProcessRuntimeUiEvent(event) || editorFocus || modal;
+            return ProcessRuntimeUiEvent(event) || editorOwnsKeys;
         return false;
     case PlatformEventType::KeyDown:
     case PlatformEventType::TextInput:
@@ -1848,7 +1896,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     case PlatformEventType::GamepadButtonDown:
     case PlatformEventType::GamepadButtonUp:
     case PlatformEventType::GamepadAxisMotion:
-        if (editorFocus || modal)
+        if (editorOwnsKeys)
         {
             ProcessRuntimeUiEvent(event);
             return true;

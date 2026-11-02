@@ -559,6 +559,7 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
                 speedTreeWindState->windVector.head<3>());
     }
     ubo.selectionData.x() = drawPacket.selected ? 1.0f : 0.0f;
+    ubo.selectionData.y() = drawPacket.writesOutlineMask ? 1.0f : 0.0f;
     std::memcpy(
         objectResources.objectUniformBuffer.buffersMapped[swapChainImageIndex],
         &ubo,
