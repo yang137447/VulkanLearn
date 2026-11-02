@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "particles/particleModuleEdit.h"
+#include "editor/particles/particleModuleEdit.h"
 
 namespace
 {
@@ -137,9 +137,17 @@ TEST(ParticleModuleEdit, RendererModuleExposesMeshLightingFields)
     EXPECT_NE(
         std::find(fields.begin(), fields.end(), "meshAmbient"),
         fields.end());
+    EXPECT_NE(
+        std::find(fields.begin(), fields.end(), "billboardLighting"),
+        fields.end());
+    EXPECT_NE(
+        std::find(fields.begin(), fields.end(), "billboardAmbient"),
+        fields.end());
 
     EXPECT_EQ(ParticleModuleTypeForField("meshLighting"), "renderer");
     EXPECT_EQ(ParticleModuleTypeForField("meshAmbient"), "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("billboardLighting"), "renderer");
+    EXPECT_EQ(ParticleModuleTypeForField("billboardAmbient"), "renderer");
 }
 
 TEST(ParticleModuleEdit, EnsureAndFlattenMigrateMeshLightingFields)
@@ -184,6 +192,38 @@ TEST(ParticleModuleEdit, SetFieldWritesMeshLightingFieldsIntoModule)
         emitter, "meshAmbient", Json(), true));
     EXPECT_FALSE(
         Module(emitter, "renderer").at("fields").contains("meshAmbient"));
+}
+
+TEST(ParticleModuleEdit, BillboardLightingFieldsMigrateAndReset)
+{
+    Json emitter = FlatEmitter();
+    emitter["billboardLighting"] = true;
+    emitter["billboardAmbient"] = 0.45;
+    emitter["billboardShadows"] = true;
+
+    ASSERT_TRUE(EnsureParticleModules(emitter));
+    EXPECT_FALSE(emitter.contains("billboardLighting"));
+    EXPECT_FALSE(emitter.contains("billboardAmbient"));
+    EXPECT_FALSE(emitter.contains("billboardShadows"));
+    EXPECT_EQ(
+        Module(emitter, "renderer").at("fields").at("billboardLighting"),
+        true);
+    EXPECT_EQ(
+        Module(emitter, "renderer").at("fields").at("billboardAmbient"),
+        0.45);
+
+    const Json flattened = FlattenParticleEmitter(emitter);
+    EXPECT_EQ(flattened.at("billboardLighting"), true);
+    EXPECT_EQ(flattened.at("billboardAmbient"), 0.45);
+
+    ASSERT_TRUE(SetParticleEmitterField(
+        emitter, "billboardAmbient", Json(), true));
+    EXPECT_FALSE(
+        Module(emitter, "renderer").at("fields")
+            .contains("billboardAmbient"));
+    EXPECT_EQ(
+        FlattenParticleEmitter(emitter).value("billboardAmbient", -1.0),
+        -1.0);
 }
 
 TEST(ParticleModuleEdit, ForcesModulesExposeSpecsAndFieldOwnership)

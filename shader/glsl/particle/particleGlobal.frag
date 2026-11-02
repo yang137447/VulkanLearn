@@ -13,6 +13,11 @@ layout(location = 7) in flat int vTextureIndex;
 layout(location = 8) in vec2 vSpriteUV;
 layout(location = 9) in vec2 vSoftParams;
 layout(location = 10) in flat float vHasTexture;
+layout(location = 11) in vec3 vWorldPosition;
+layout(location = 12) in flat vec4 vLightParams;
+layout(location = 13) in flat vec3 vLightDirection;
+layout(location = 14) in flat vec3 vLightColor;
+layout(location = 15) in flat vec3 vLightingNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -124,6 +129,15 @@ void main()
             vColor.a * radial * mix(1.0, erosion, 0.72));
     }
     outColor.a *= softFade;
+    outColor.rgb = EvaluateParticleBillboardLighting(
+        outColor.rgb,
+        vWorldPosition,
+        vLightingNormal,
+        vLightParams,
+        vLightDirection,
+        vLightColor,
+        0.0,
+        shadowMap);
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);
 }

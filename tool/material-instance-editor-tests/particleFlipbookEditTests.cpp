@@ -4,7 +4,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "particles/particleFlipbookEdit.h"
+#include "editor/particles/particleFlipbookEdit.h"
 
 namespace
 {

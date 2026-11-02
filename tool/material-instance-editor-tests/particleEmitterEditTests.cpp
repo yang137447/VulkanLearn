@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "particles/particleAsset.h"
-#include "particles/particleEmitterEdit.h"
+#include "editor/particles/particleEmitterEdit.h"
 
 namespace
 {

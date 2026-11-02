@@ -117,6 +117,9 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 collisionSdfBoundsMin;
     vec4 collisionSdfBoundsMax;
     vec4 collisionSdfResolution;
+    // x = billboard lighting enabled, y = ambient, z/w reserved.
+    // 与 mesh 共用 lightDirection/lightColor，但 billboard 使用面向相机的法线。
+    vec4 billboardLightParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -348,6 +351,39 @@ float SampleParticleCsmShadow(
         worldPos,
         viewDepth,
         cascadeIndex);
+}
+
+// billboard 光照的运行时近似：sprite 没有几何法线，因此使用面向相机的
+// 法线。direct 只取场景第一个方向光的 Lambert 项；ambient 是作者常量。
+// 该函数同时服务逐发射器 UBO 与全局 gather 记录，参数由调用方解包。
+vec3 EvaluateParticleBillboardLighting(
+    vec3 baseColor,
+    vec3 worldPosition,
+    vec3 lightingNormal,
+    vec4 lightParams,
+    vec3 lightDirection,
+    vec3 lightColor,
+    float shadowEnabled,
+    sampler2DArrayShadow shadowMap)
+{
+    if (lightParams.x < 0.5)
+    {
+        return baseColor;
+    }
+    vec3 normal = normalize(lightingNormal);
+    vec3 direction = normalize(lightDirection);
+    float ndl = max(dot(normal, direction), 0.0);
+    float shadow = 1.0;
+    if (shadowEnabled > 0.5)
+    {
+        shadow = SampleParticleCsmShadow(
+            shadowMap,
+            worldPosition,
+            normal);
+    }
+    float ambient = clamp(lightParams.y, 0.0, 1.0);
+    return baseColor *
+        (ambient + lightColor * ndl * shadow);
 }
 
 #endif

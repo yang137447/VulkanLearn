@@ -30,10 +30,10 @@
 #include "editor/ui/scriptComponentControls.h"
 #include "editor/ui/scriptPhysicsControls.h"
 #include "editor/ui/scriptPropertyControls.h"
-#include "particles/particleCurveEdit.h"
-#include "particles/particleEmitterEdit.h"
-#include "particles/particleFlipbookEdit.h"
-#include "particles/particleModuleEdit.h"
+#include "editor/particles/particleCurveEdit.h"
+#include "editor/particles/particleEmitterEdit.h"
+#include "editor/particles/particleFlipbookEdit.h"
+#include "editor/particles/particleModuleEdit.h"
 #include "script/scriptTypeIdentity.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
@@ -95,6 +95,8 @@ bool ParticleFieldInModule(
             field == "meshLighting" ||
             field == "meshAmbient" ||
             field == "billboardShadows" ||
+            field == "billboardLighting" ||
+            field == "billboardAmbient" ||
             field == "useFixedBounds" ||
             field == "fixedBounds.center" ||
             field == "fixedBounds.extent" ||

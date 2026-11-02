@@ -98,6 +98,10 @@ struct ParticleEmitterAsset
     // billboard/ribbon 默认 unlit；开启后按相机朝向法线接收 CSM 阴影
     // 调暗，属于显式的简化光照开关，不启用完整 PBR。
     bool billboardShadows = false;
+    // billboard 专用运行时照明：以相机朝向法线作为表面法线，消费场景
+    // 第一个方向光的线色；这是 sprite 的着色近似，不引入编辑器材质状态。
+    bool billboardLighting = false;
+    float billboardAmbient = 0.2f;
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;

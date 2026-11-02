@@ -246,6 +246,13 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   （`xyz = 未归一化轴`）、`attractorParams`（`x = strength`、`y = radius`）、
   `attractorPosition`（`xyz = 模拟空间位置`）与 `wind`（`xyz = 模拟空间常量加速度`）。
   这些字段由 compute shader 消费；C++ 与 GLSL 的追加顺序必须一致。
+- `wind` 之后依次是 `lifetimeScaleKeys[8]` / `lifetimeScaleParams`、
+  `meshLightParams` / `meshLightDirection` / `meshLightColor`、mesh 材质字段、
+  CSM 矩阵/级联参数、确定性/事件参数与 SDF bounds/resolution。最后追加
+  `billboardLightParams`：`x = billboard lighting enabled`、`y = billboardAmbient`、
+  `z/w` 保留；方向与颜色复用 `meshLightDirection` / `meshLightColor`。因此
+  `ParticleFrame` 的 std140 大小是 6256 字节，`billboardLightParams` 偏移是 6240。
+  C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
   再交给线性过滤，避免帧间渗色；V 翻转保持不变。单帧纹理维持原有 mipmap 行为。
@@ -666,6 +673,14 @@ GPU 写回 instanceCount 的 indirect draw。
 - `meshAmbient`：默认 `0.2`，仅 `renderMode: "mesh"` 且 `meshLighting: true` 时参与光照。
   它乘 baseColor 作为常量环境项，范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity 在加载和
   编辑器写入阶段都会被拒绝。
+- `billboardLighting`：默认 `false`，仅 `renderMode: "billboard"` 使用。开启后以实际
+  billboard 平面的世界空间面法线（camera alignment 时朝向相机，velocity alignment 时
+  朝向速度）计算场景第一个方向光的 Lambert 直接光；没有有效方向光时保持 unlit。
+- `billboardAmbient`：默认 `0.2`，仅 `renderMode: "billboard"` 且
+  `billboardLighting: true` 时参与光照，范围 `[0, 1]`；它乘粒子颜色作为常量环境项。
+  `billboardLighting` 与 `billboardShadows` 同时开启时，直接光乘 CSM shadow，而不是
+  再叠加旧的 50% 调暗。additive billboard 也消费同一光照；需要自发光时应显式关闭
+  `billboardLighting`。
 - `rotation`：billboard 初始旋转角，单位度，任意有限数，默认 `0`。
 - `rotationSpeed`：随时间累加的旋转速度，单位度/秒，默认 `0`，范围 `[-3600, 3600]`。
 - `rotationRandom`：默认 `false`；为 `true` 时每个粒子用稳定相位叠加 `[0,360)` 度的初始角。
@@ -987,7 +1002,32 @@ color    = direct + baseColor * meshAmbient + emissive * emissiveStrength
 - 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图、IBL、间接光、
   逐光源循环或 alpha-to-coverage。CSM 阴影对 mesh 自动化生效；billboard/ribbon 通过
   `billboardShadows` 开关走各自的 CSM 采样路径。
-- `meshLighting: false` 保持原有 unlit 路径；billboard 与 ribbon 完全忽略这两个字段。
+- `meshLighting: false` 保持原有 unlit 路径；ribbon 完全忽略这两个字段，billboard 使用
+  独立的 `billboardLighting` / `billboardAmbient`。
+
+### Billboard 照明
+
+`billboardLighting: true` 时，逐发射器与全局 alpha billboard 路径使用同一个片元近似：
+
+```text
+N       = normalize(cross(billboardRight, billboardUp))
+L       = normalize(-sceneDirectionalLight.direction)
+direct  = baseColor * lightColor * max(N·L, 0) * shadow
+ambient = baseColor * billboardAmbient
+color   = direct + ambient
+```
+
+- `billboardRight` / `billboardUp` 是实际 quad 基。camera alignment 时面法线朝向相机，
+  velocity alignment 时面法线朝向速度；不再一律使用相机中心方向。
+- `lightColor` 是场景第一个方向光的线性 RGB，不乘 lux 强度；没有有效方向光时
+  `billboardLightParams.x = 0`，输出回退到原 unlit 颜色，不阻断渲染。
+- `billboardShadows: true` 时 `shadow` 来自 CSM；两者都关闭时使用旧 unlit + 50% 阴影
+  调暗路径。全局 alpha 排序仍排除 `billboardShadows=true` 的发射器，因此 CSM 路径始终
+  走逐发射器绘制。
+- 全局 gather 记录新增 `lightParams`、`lightDirection`、`lightColor` 三个 `vec4`；
+  `GatheredBillboard` 的 std430 stride 从 8 个 `vec4` 变为 11 个。gather、sort-init、
+  global vertex/fragment 四处结构体必须同步。
+- 该照明只给 sprite 一个方向光近似，不提供法线贴图、IBL、逐光源循环或完整 Material Graph。
 
 ### Curves 结构化编辑
 
@@ -1155,7 +1195,7 @@ shader reload 提交后粒子管线重建、v2 模块栈与运行时用户参数
 instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角网格碰撞、全局标量
 Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
 确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
-GPU 计时。
+GPU 计时、billboard 方向光近似与逐发射器/全局路径的光照记录。
 
 仍未完成：
 
@@ -1168,8 +1208,9 @@ GPU 计时。
   全局 gather + 全局 bitonic + 单次 `drawIndirect`（`particleGlobalGather.comp` /
   `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；ribbon/mesh 与超限场景回退到
   逐发射器排序。全局路径使用固定索引分支选择 8 槽纹理，无纹理时保留程序化 FBM 形状；
-  开启 `billboardShadows` 的发射器留在逐发射器路径以保留 CSM。全局路径与其它未参与
-  发射器之间仍是发射器级先后近似。
+  gather 记录携带逐发射器 `billboardLighting` / `billboardAmbient` / 方向光参数，因此
+  lit 与 unlit alpha billboard 可以同池排序。开启 `billboardShadows` 的发射器仍留在
+  逐发射器路径以保留 CSM。全局路径与其它未参与发射器之间仍是发射器级先后近似。
   事件 v1 已支持 spawn/death/collision 三类有界 GPU 记录（4096 条/发射器）与
   `ParticleRenderer::DrainParticleEvents` / `RenderSystem::DrainParticleEvents` 回读；
   C# 通过 `ParticleSystem.Subscribe` 的 owner 级兴趣触发最多 10 Hz 的回读，
@@ -1238,7 +1279,10 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
 - `materialInstancePath`（顶层或 `mesh.materialInstancePath`）：mesh 粒子的 MI_*.json
   数值子集；路径必须是资源根相对的 `.json`。
 - `billboardShadows`：billboard/ribbon 的显式简化阴影开关；默认 unlit，开启后按
-  相机朝向法线采样 CSM 并调暗 50%。
+  实际 billboard 面法线采样 CSM 并调暗 50%；与 `billboardLighting` 同时开启时改为把
+  CSM shadow 乘进方向光直接项。
+- `billboardLighting` / `billboardAmbient`：billboard 的运行时方向光近似，默认关闭 /
+  `0.2`；不改变 mesh 或 ribbon 的着色。
 - `events.{spawn,death,collision}`：三类 GPU 事件记录开关。事件写入
   `source/particles/particleEvents.h` 的 64-byte 记录；计数超过 4096 表示截断。
 - `randomSeed`（24 位参与 GPU hash）、`deterministicRandom`、`fixedTimeStep`

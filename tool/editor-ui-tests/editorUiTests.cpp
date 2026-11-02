@@ -8610,6 +8610,67 @@ TEST_F(EditorUiTest, ParticleEmitterModuleShowsRotationFields)
     EXPECT_EQ(randomControl->GetValue(), "true");
 }
 
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsBillboardLightingFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_billboard_lighting.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_billboard_lighting"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"billboardLighting", true},
+                {"billboardAmbient", 0.35},
+                {"billboardShadows", false}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "billboardLighting"}, {"type", "boolean"},
+                {"resettable", true}},
+            Json{{"field", "billboardAmbient"}, {"type", "number"},
+                {"resettable", true}, {"minimum", 0.0},
+                {"maximum", 1.0}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* lightingInput = query("emitters.0.billboardLighting");
+    auto* ambientInput = query("emitters.0.billboardAmbient");
+    ASSERT_NE(lightingInput, nullptr);
+    ASSERT_NE(ambientInput, nullptr);
+    auto* lightingControl = dynamic_cast<Rml::ElementFormControlSelect*>(
+        lightingInput);
+    auto* ambientControl = dynamic_cast<Rml::ElementFormControlInput*>(
+        ambientInput);
+    ASSERT_NE(lightingControl, nullptr);
+    ASSERT_NE(ambientControl, nullptr);
+    EXPECT_EQ(lightingControl->GetValue(), "true");
+    EXPECT_EQ(ambientControl->GetValue(), "0.35");
+
+    ambientControl->SetValue("0.7");
+    ambientInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.billboardAmbient");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "smoke");
+    const auto* value = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_DOUBLE_EQ(*value, 0.7);
+}
+
 TEST_F(EditorUiTest, ParticleEmitterModuleShowsRibbonFields)
 {
     using Json = nlohmann::json;

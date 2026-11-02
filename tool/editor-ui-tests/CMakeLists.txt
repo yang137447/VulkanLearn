@@ -74,7 +74,8 @@ if(MINGW)
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_compile_definitions(editor_ui_tests PRIVATE
-    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
+    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui"
+    VL_WITH_EDITOR=1)
 target_link_libraries(editor_ui_tests PRIVATE
     vl_ui_widgets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

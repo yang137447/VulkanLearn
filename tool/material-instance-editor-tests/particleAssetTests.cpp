@@ -2161,6 +2161,52 @@ TEST(ParticleAsset, MeshLightingDefaultsToEnabledWithAmbient)
     EXPECT_FLOAT_EQ(asset.emitters[1].meshAmbient, 0.2f);
 }
 
+TEST(ParticleAsset, BillboardLightingDefaultsToUnlitWithAmbient)
+{
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(),
+        "Maps/SC_test/PS_billboard_lighting_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_FALSE(asset.emitters[0].billboardLighting);
+    EXPECT_FALSE(asset.emitters[1].billboardLighting);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardAmbient, 0.2f);
+    EXPECT_FLOAT_EQ(asset.emitters[1].billboardAmbient, 0.2f);
+}
+
+TEST(ParticleAsset, BillboardLightingParsesAndRejectsInvalidAmbient)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardLighting"] = true;
+    document["emitters"][0]["billboardAmbient"] = 0.65;
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_billboard_lighting.json");
+    EXPECT_TRUE(asset.emitters[0].billboardLighting);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardAmbient, 0.65f);
+
+    document["emitters"][0]["billboardAmbient"] = -0.1;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_billboard_lighting_negative.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["billboardAmbient"] = 1.5;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_billboard_lighting_too_large.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["billboardAmbient"] =
+        std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_billboard_lighting_nan.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, MeshLightingFieldsRoundTripThroughEditorPath)
 {
     Json document = MultiEmitterDocument();
@@ -2916,6 +2962,17 @@ TEST(ParticleEditorFields, RendererEventsDeterminismAndSdfAreExposed)
     EXPECT_EQ(shadows->at("type"), "boolean");
     EXPECT_TRUE(shadows->at("resettable").get<bool>());
 
+    const Json* billboardLighting =
+        FindParticleCapability(emitterFields, "billboardLighting");
+    const Json* billboardAmbient =
+        FindParticleCapability(emitterFields, "billboardAmbient");
+    ASSERT_NE(billboardLighting, nullptr);
+    ASSERT_NE(billboardAmbient, nullptr);
+    EXPECT_EQ(billboardLighting->at("type"), "boolean");
+    EXPECT_TRUE(billboardLighting->at("resettable").get<bool>());
+    EXPECT_EQ(billboardAmbient->at("type"), "number");
+    EXPECT_TRUE(billboardAmbient->at("resettable").get<bool>());
+
     for (const char* name : {"events.spawn", "events.death",
              "events.collision"})
     {
@@ -3041,6 +3098,8 @@ TEST(ParticleEditorFields, NewFieldsRoundTripAndResetToLoaderDefaults)
     Json document = MultiEmitterDocument();
     const std::vector<EditorAssetFieldChange> changes{
         ParticleEditorChange("emitters.0.billboardShadows", true),
+        ParticleEditorChange("emitters.0.billboardLighting", true),
+        ParticleEditorChange("emitters.0.billboardAmbient", 0.55),
         ParticleEditorChange("emitters.0.mesh.materialInstancePath",
             std::string("Maps/SC_test/Materials/MI_spark.json")),
         ParticleEditorChange("emitters.0.events.spawn", true),
@@ -3059,6 +3118,8 @@ TEST(ParticleEditorFields, NewFieldsRoundTripAndResetToLoaderDefaults)
     ASSERT_EQ(asset.emitters.size(), 2u);
     const ParticleEmitterAsset& emitter = asset.emitters[0];
     EXPECT_TRUE(emitter.billboardShadows);
+    EXPECT_TRUE(emitter.billboardLighting);
+    EXPECT_FLOAT_EQ(emitter.billboardAmbient, 0.55f);
     EXPECT_EQ(emitter.materialInstancePath,
         "Maps/SC_test/Materials/MI_spark.json");
     EXPECT_TRUE(emitter.emitSpawnEvent);
@@ -3079,6 +3140,8 @@ TEST(ParticleEditorFields, NewFieldsRoundTripAndResetToLoaderDefaults)
         document, "Maps/SC_test/PS_new_fields_reset.json");
     const ParticleEmitterAsset& reset = defaults.emitters[0];
     EXPECT_FALSE(reset.billboardShadows);
+    EXPECT_FALSE(reset.billboardLighting);
+    EXPECT_FLOAT_EQ(reset.billboardAmbient, 0.2f);
     EXPECT_TRUE(reset.materialInstancePath.empty());
     EXPECT_FALSE(reset.emitSpawnEvent);
     EXPECT_FALSE(reset.emitDeathEvent);
@@ -3142,6 +3205,15 @@ TEST(ParticleEditorFields, NewFieldRangesAndEnumsAreEnforced)
         std::invalid_argument);
     EXPECT_THROW(apply(ParticleEditorChange(
         "emitters.0.billboardShadows", std::string("true"))),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.billboardLighting", std::string("true"))),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.billboardAmbient", -0.01)),
+        std::invalid_argument);
+    EXPECT_THROW(apply(ParticleEditorChange(
+        "emitters.0.billboardAmbient", 1.01)),
         std::invalid_argument);
     EXPECT_THROW(apply(ParticleEditorChange(
         "emitters.0.events.spawn", 1.0)), std::invalid_argument);

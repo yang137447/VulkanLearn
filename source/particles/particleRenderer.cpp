@@ -1245,7 +1245,8 @@ bool ParticleRenderer::CreateGlobalSortPool(
     const uint32_t emitterCount =
         static_cast<uint32_t>(emitterKeys.size());
     const vk::DeviceSize recordBytes =
-        static_cast<vk::DeviceSize>(capacity) * 8u * sizeof(Eigen::Vector4f);
+        static_cast<vk::DeviceSize>(capacity) *
+        kParticleGlobalRecordVec4Count * sizeof(Eigen::Vector4f);
     const vk::DeviceSize pairBytes =
         static_cast<vk::DeviceSize>(capacity) * sizeof(Eigen::Vector4f);
 
@@ -3084,15 +3085,21 @@ void ParticleRenderer::RecordSimulation(
             emitter.elapsedSeconds += dt;
         }
 
-        // mesh 照明只取场景第一个方向光：方向光的 direction 是光线传播方向，
-        // 表面指向光源需要取反。颜色使用线性 RGB，不乘 lux 强度，避免粒子
-        // 颜色与灯光量级错位；非 mesh 或作者关闭时保持旧 unlit 输出。
-        bool lightingEnabled = false;
+        // mesh/billboard 照明只取场景第一个方向光：方向光的 direction 是
+        // 光线传播方向，表面指向光源需要取反。颜色使用线性 RGB，不乘 lux
+        // 强度，避免粒子颜色与灯光量级错位；作者关闭时保持旧 unlit 输出。
+        const bool wantsMeshLighting =
+            emitter.asset.renderMode == "mesh" &&
+            emitter.asset.meshLighting;
+        const bool wantsBillboardLighting =
+            emitter.asset.renderMode == "billboard" &&
+            emitter.asset.billboardLighting;
+        bool meshLightingEnabled = false;
+        bool billboardLightingEnabled = false;
         Eigen::Vector3f lightDirection =
             Eigen::Vector3f(0.0f, -1.0f, 0.0f);
         Eigen::Vector3f lightColor = Eigen::Vector3f::Ones();
-        if (emitter.asset.renderMode == "mesh" &&
-            emitter.asset.meshLighting)
+        if (wantsMeshLighting || wantsBillboardLighting)
         {
             for (const LightSnapshot& light : renderScene.lights)
             {
@@ -3105,11 +3112,12 @@ void ParticleRenderer::RecordSimulation(
                     continue;
                 lightDirection = -light.direction;
                 lightColor = light.color;
-                lightingEnabled = true;
+                meshLightingEnabled = wantsMeshLighting;
+                billboardLightingEnabled = wantsBillboardLighting;
                 break;
             }
         }
-        emitter.lightingEnabled = lightingEnabled;
+        emitter.lightingEnabled = meshLightingEnabled;
         emitter.lightDirection = lightDirection;
         emitter.lightColor = lightColor;
         emitter.ambient = emitter.asset.meshAmbient;
@@ -3411,7 +3419,7 @@ void ParticleRenderer::RecordSimulation(
             0.0f,
             0.0f);
         uniforms.meshLightParams = Eigen::Vector4f(
-            lightingEnabled ? 1.0f : 0.0f,
+            meshLightingEnabled ? 1.0f : 0.0f,
             emitter.asset.meshAmbient,
             0.0f,
             0.0f);
@@ -3437,6 +3445,11 @@ void ParticleRenderer::RecordSimulation(
             emitter.material.roughness,
             emitter.material.metallic,
             emitter.material.valid ? 1.0f : 0.0f,
+            0.0f);
+        uniforms.billboardLightParams = Eigen::Vector4f(
+            billboardLightingEnabled ? 1.0f : 0.0f,
+            emitter.asset.billboardAmbient,
+            0.0f,
             0.0f);
         for (int cascade = 0; cascade < 4; ++cascade)
         {

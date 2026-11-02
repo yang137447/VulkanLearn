@@ -1,5 +1,5 @@
 #include "editor/command/assetDocumentFields.h"
-#include "particles/particleModuleEdit.h"
+#include "editor/particles/particleModuleEdit.h"
 
 #include <algorithm>
 #include <cmath>
@@ -98,6 +98,9 @@ const Field fields[] = {
     {K::ParticleSystem, "", "renderMode", ValueKind::Text, false, "", "billboard|ribbon|mesh"},
     {K::ParticleSystem, "", "billboardAlignment", ValueKind::Text, true, "", "camera|velocity"},
     {K::ParticleSystem, "", "billboardShadows", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "billboardLighting", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "billboardAmbient", ValueKind::Number, true,
+        "", "", false, false, 0.0, 1.0},
     {K::ParticleSystem, "", "ribbonWidth", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},

@@ -12,6 +12,9 @@ struct GatheredBillboard
     vec4 params;
     vec4 frame;
     vec4 flags;
+    vec4 lightParams;
+    vec4 lightDirection;
+    vec4 lightColor;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -52,6 +55,11 @@ layout(location = 7) out flat int vTextureIndex;
 layout(location = 8) out vec2 vSpriteUV;
 layout(location = 9) out vec2 vSoftParams;
 layout(location = 10) out flat float vHasTexture;
+layout(location = 11) out vec3 vWorldPosition;
+layout(location = 12) out flat vec4 vLightParams;
+layout(location = 13) out flat vec3 vLightDirection;
+layout(location = 14) out flat vec3 vLightColor;
+layout(location = 15) out flat vec3 vLightingNormal;
 
 void main()
 {
@@ -70,6 +78,11 @@ void main()
         vSpriteUV = vec2(0.0);
         vSoftParams = vec2(0.0);
         vHasTexture = 0.0;
+        vWorldPosition = vec3(0.0);
+        vLightParams = vec4(0.0);
+        vLightDirection = vec3(0.0);
+        vLightColor = vec3(0.0);
+        vLightingNormal = vec3(0.0);
         return;
     }
     uint recordIndex = uint(sortedPairs.pairs[drawIndex].y);
@@ -87,6 +100,11 @@ void main()
         vSpriteUV = vec2(0.0);
         vSoftParams = vec2(0.0);
         vHasTexture = 0.0;
+        vWorldPosition = vec3(0.0);
+        vLightParams = vec4(0.0);
+        vLightDirection = vec3(0.0);
+        vLightColor = vec3(0.0);
+        vLightingNormal = vec3(0.0);
         return;
     }
 
@@ -137,4 +155,13 @@ void main()
     vTextureIndex = int(record.frame.w);
     vSoftParams = record.flags.zw;
     vHasTexture = record.flags.y;
+    vWorldPosition = worldPosition;
+    vLightParams = record.lightParams;
+    vLightDirection = record.lightDirection.xyz;
+    vLightColor = record.lightColor.rgb;
+    vec3 lightingNormal = cross(record.rightRot.xyz, record.upSoft.xyz);
+    float lightingNormalLength = length(lightingNormal);
+    vLightingNormal = lightingNormalLength > 1.0e-5
+        ? lightingNormal / lightingNormalLength
+        : normalize(frame.cameraPosition.xyz - worldPosition);
 }

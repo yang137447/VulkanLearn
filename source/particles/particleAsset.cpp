@@ -433,6 +433,10 @@ ParticleEmitterAsset ParseEmitter(
     }
     emitter.billboardShadows = json.value(
         "billboardShadows", emitter.billboardShadows);
+    emitter.billboardLighting = json.value(
+        "billboardLighting", emitter.billboardLighting);
+    emitter.billboardAmbient = ReadFiniteFloat(
+        json, "billboardAmbient", emitter.billboardAmbient);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh")
@@ -1407,6 +1411,13 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle meshAmbient must be in [0, 1]");
     }
+    RequireFinite(emitter.billboardAmbient, "billboardAmbient");
+    if (emitter.billboardAmbient < 0.0f ||
+        emitter.billboardAmbient > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardAmbient must be in [0, 1]");
+    }
     if (emitter.renderMode == "mesh")
     {
         if (emitter.meshPath.empty())
@@ -2304,7 +2315,7 @@ ParticleSystemAsset ParticleAssetLoader::ParseJson(
                 resourceRoot, emitter.texturePath, "texture.path");
         }
     }
-    // 只有 v2 + 用户参数才可能需要运行时覆盖重解析；冻结原始 JSON
+    // 只有 v2 + 用户参数才需要运行时覆盖重解析；冻结原始 JSON
     // （而不是展平后的 emitter），保证模块结构/字段归属不丢失。
     if (asset.version == 2 && !asset.userParameters.empty())
     {

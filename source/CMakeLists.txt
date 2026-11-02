@@ -23,6 +23,7 @@ if(TARGET copy_shaderc_dll)
 endif()
 
 target_include_directories(main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(main PRIVATE VL_WITH_EDITOR=1)
 
 option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." OFF)
 option(VULKANLEARN_ENABLE_NVTX "Enable NVIDIA NVTX profiler markers." OFF)

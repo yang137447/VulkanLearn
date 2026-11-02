@@ -17,6 +17,9 @@ struct GatheredBillboard
     vec4 params;      // x=seed, y=time, z=columns, w=rows
     vec4 frame;       // x=frameIndex, y=pivotX, z=pivotY, w=textureIndex
     vec4 flags;       // x=hasUVs, y=hasTexture, z=softParticles, w=softDistance
+    vec4 lightParams; // x=lighting enabled, y=ambient, z/w reserved
+    vec4 lightDirection;
+    vec4 lightColor;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer ParticleBuffer
@@ -254,5 +257,8 @@ void main()
         frame.flipbookParams.y > 0.5 ? 1.0 : 0.0,
         frame.softParams.y > 0.5 ? 1.0 : 0.0,
         frame.softParams.x);
+    record.lightParams = frame.billboardLightParams;
+    record.lightDirection = frame.meshLightDirection;
+    record.lightColor = frame.meshLightColor;
     gatheredBuffer.records[slot] = record;
 }

@@ -9,7 +9,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/editorBuild.h"
 #include "particles/particleLimits.h"
+
+static_assert(VL_WITH_EDITOR != 0,
+    "editor/particles/particleEmitterEdit.h requires VL_WITH_EDITOR=1");
 
 namespace VL
 {

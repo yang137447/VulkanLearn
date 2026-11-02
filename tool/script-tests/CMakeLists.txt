@@ -34,6 +34,7 @@ add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests
     "${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/diagnosticsSubsystem.cpp")
 target_include_directories(script_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
+target_compile_definitions(script_tests PRIVATE VL_WITH_EDITOR=1)
 # 动态足部质量夹具让该翻译单元超过 MinGW COFF section/文件上限；只放宽该目标文件格式。
 if(MINGW)
     set_source_files_properties(scriptAnimationTests.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")

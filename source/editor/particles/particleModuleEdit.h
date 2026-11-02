@@ -9,6 +9,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/editorBuild.h"
+
+static_assert(VL_WITH_EDITOR != 0,
+    "editor/particles/particleModuleEdit.h requires VL_WITH_EDITOR=1");
+
 namespace VL
 {
 
@@ -32,7 +37,8 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "ribbonSegments", "ribbonFade", "mesh", "opacity",
                 "softness", "softParticles", "softParticleDistance",
                 "additive", "meshLighting", "meshAmbient",
-                "materialInstancePath", "billboardShadows"}},
+                "materialInstancePath", "billboardShadows",
+                "billboardLighting", "billboardAmbient"}},
         {"spawn.rate", "Spawn Rate",
             {"spawnRate", "burst", "burstInterval"}},
         {"spawn.shapeSphere", "Sphere Location", {"shape"}},
@@ -227,7 +233,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "ribbonSegments", "ribbonFade", "mesh", "opacity",
             "softness", "softParticles", "softParticleDistance",
             "additive", "meshLighting", "meshAmbient",
-            "materialInstancePath", "billboardShadows"}) ||
+            "materialInstancePath", "billboardShadows",
+            "billboardLighting", "billboardAmbient"}) ||
         HasPrefix(field, "mesh."))
         return "renderer";
     if (IsOneOf(field, {"spawnRate", "burst", "burstInterval"}))

@@ -14,6 +14,7 @@ layout(location = 4) out float vTime;
 layout(location = 5) out vec2 vAtlasUV;
 layout(location = 6) out float vViewDepth;
 layout(location = 7) out vec3 vWorldPosition;
+layout(location = 8) out vec3 vLightingNormal;
 
 void main()
 {
@@ -32,6 +33,7 @@ void main()
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
         vWorldPosition = vec3(0.0);
+        vLightingNormal = vec3(0.0);
         return;
     }
 
@@ -58,6 +60,7 @@ void main()
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
         vWorldPosition = vec3(0.0);
+        vLightingNormal = vec3(0.0);
         return;
     }
 
@@ -74,6 +77,7 @@ void main()
         vAtlasUV = vec2(0.0);
         vViewDepth = 0.0;
         vWorldPosition = vec3(0.0);
+        vLightingNormal = vec3(0.0);
         return;
     }
 
@@ -287,6 +291,13 @@ void main()
     // 视空间深度取正：相机前方为正，供片元与 sceneDepth 比较。
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
     vWorldPosition = worldPosition;
+    // billboard 的可见面法线由实际 quad 基决定；velocity alignment 与
+    // camera alignment 在这里得到同一套光照语义，避免相机朝向法线错用。
+    vec3 lightingNormal = cross(billboardRight, billboardUp);
+    float lightingNormalLength = length(lightingNormal);
+    vLightingNormal = lightingNormalLength > 1.0e-5
+        ? lightingNormal / lightingNormalLength
+        : normalize(frame.cameraPosition.xyz - worldPosition);
 
     vColor = EvaluateColorCurve(lifeT);
     vColor.a *= frame.render.w;

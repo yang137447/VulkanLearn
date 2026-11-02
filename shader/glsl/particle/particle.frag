@@ -11,6 +11,7 @@ layout(location = 4) in float vTime;
 layout(location = 5) in vec2 vAtlasUV;
 layout(location = 6) in float vViewDepth;
 layout(location = 7) in vec3 vWorldPosition;
+layout(location = 8) in vec3 vLightingNormal;
 
 layout(location = 0) out vec4 outColor;
 
@@ -110,14 +111,24 @@ void main()
         outColor = vec4(vColor.rgb, vColor.a * alpha);
     }
     outColor.a *= softFade;
-    if (frame.shadowParams.w > 0.5)
+    if (frame.billboardLightParams.x > 0.5)
     {
-        vec3 facingNormal =
-            normalize(frame.cameraPosition.xyz - vWorldPosition);
+        outColor.rgb = EvaluateParticleBillboardLighting(
+            outColor.rgb,
+            vWorldPosition,
+            vLightingNormal,
+            frame.billboardLightParams,
+            frame.meshLightDirection.xyz,
+            frame.meshLightColor.rgb,
+            frame.shadowParams.w,
+            shadowMap);
+    }
+    else if (frame.shadowParams.w > 0.5)
+    {
         float shadow = SampleParticleCsmShadow(
             shadowMap,
             vWorldPosition,
-            facingNormal);
+            vLightingNormal);
         outColor.rgb *= mix(1.0, shadow, 0.5);
     }
     outColor *= frame.colorTint;

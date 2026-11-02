@@ -6,7 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "particles/particleAsset.h"
-#include "particles/particleCurveEdit.h"
+#include "editor/particles/particleCurveEdit.h"
 
 namespace
 {

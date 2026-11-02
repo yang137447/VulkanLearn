@@ -266,9 +266,12 @@ private:
         Eigen::Vector4f collisionSdfBoundsMin;
         Eigen::Vector4f collisionSdfBoundsMax;
         Eigen::Vector4f collisionSdfResolution;
+        // x = billboard lighting enabled, y = ambient, z/w reserved.
+        // 与 mesh 共用方向光的线性色/方向，但开关和环境项独立。
+        Eigen::Vector4f billboardLightParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6240,
+        sizeof(FrameUniforms) == 6256,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -354,6 +357,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, collisionSdfResolution) == 6224,
         "ParticleFrame collisionSdfResolution offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, billboardLightParams) == 6240,
+        "ParticleFrame billboardLightParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
