@@ -1338,3 +1338,18 @@ main.exe --initial-scene Maps/SC_particle_advanced/SC_particle_advanced_impact.j
 `VUID-` / `Validation Error`。编辑态直接使用 `PS_*.json` 默认 `userParameters`；
 Play 态由 `Gameplay.ParticleDirector` 通过 `Particles.Data` 覆盖发射率、湍流、风场
 和重力，并输出碰撞事件日志。
+
+### UE 5.8 Niagara 示例复刻
+
+`Maps/SC_particle_ue_explosion/SC_particle_ue_explosion.json` 对齐 UE 5.8
+`NiagaraExamples` 的 `NS_Explosion` / `NS_Dirt_Explosion` / `NS_Smoke_Plume`：
+UE 侧爆炸系统固定边界为 `1500 x 1500 x 850 cm`、效果类型
+`NET_Gameplay_Burst`，并使用 sprite、mesh、light、decal 多个渲染器。
+VulkanLearn 版本用 7 个发射器（`flash`、`core_burst`、`roil_smoke`、
+`dirt_burst`、`spark_burst`、`debris`、`smoke_plume`）重建火球、翻滚烟、
+地面尘、火花、岩石碎片和残余烟柱；`burstInterval = 3.0s` 循环，火花/碎片走
+SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序。
+
+该案例是结构/视觉对齐，不是 UE 资产的直接移植：没有 Decal/Light Renderer，
+用场景点光源和地面焦痕近似；没有 UE Material Graph/SubUV 的完整语义；
+粒子图集为程序化等价物。启动与验收细节见该目录的 `README.md`。
