@@ -203,6 +203,12 @@ struct DecalSnapshot
     // 与 WorldDecal 同名的作者数据；渲染器消费前不改变其语义。
     uint32_t responseMask = DefaultDecalResponse();
     float normalStrength = 0.35f;
+    // 可选的 T_*.json 贴图资产引用；空字符串表示程序化/默认行为。
+    // decal 材质由代码维护，没有也不计划引入 UE Material Graph。
+    std::string albedoMap;
+    std::string normalMap;
+    // ORM：R=roughness，G=metallic，B=ambientOcclusion。
+    std::string ormMap;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

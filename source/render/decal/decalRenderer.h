@@ -1,16 +1,22 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Dense>
 #include <vulkan/vulkan.hpp>
 
+#include "resource/image/hostImage.h"
+
 class PipelineBase;
 class PipelineFactory;
 class RenderGraph;
+class Texture;
 struct Renderpass;
 
 namespace VL
@@ -19,8 +25,9 @@ class RendererBackendVulkan;
 struct RenderScene;
 
 // BeforeLighting DBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
-// instanced unit cube 批量绘制到 DBuffer A/B/C/D 与 DBufferMask；实例数据
-// 只在当前 image 的 SSBO 中更新，不创建逐 decal 的 descriptor 或 GPU 资源。
+// 逐 decal 的 unit cube 绘制到 DBuffer A/B/C/D 与 DBufferMask；实例数据
+// 在每帧固定的 SSBO 槽位中更新，material 贴图走逐 decal 的 set 1
+// descriptor（per swapchain image × per instance slot）。
 class DecalRenderer
 {
 public:
@@ -35,6 +42,10 @@ public:
         uint32_t imageIndex,
         const Renderpass& renderPass,
         const RenderScene& renderScene);
+    // 渲染线程在进入 decal render pass 之前调用：按 DecalSnapshot::decalId
+    // 加载/复用 albedo/normal/ORM 贴图，并为已消失的 decal 退休纹理集。
+    // 必须幂等；失败回退默认纹理，不能向渲染线程抛出异常。
+    void Synchronize(const RenderScene& renderScene);
 
     bool IsInitialized() const noexcept { return initialized; }
 
@@ -64,11 +75,42 @@ private:
         // x = edgeSoftness, y = noiseStrength, z = seed,
         // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
         Eigen::Vector4f params;
-        // 预留给 decal normal 材质；当前程序化法线直接写入 DBufferB。
+        // xyz 保留；w = 1 表示当前 decal 成功加载了 normalMap，
+        // shader 据此在贴图法线与程序化 FBM 法线之间选择。
         Eigen::Vector4f normal;
     };
     static_assert(sizeof(DecalInstance) == 192,
         "DecalInstance layout must match decalCommon.glsl");
+
+    // 一个 decal 的代码维护贴图槽位；没有 UE Material Graph。
+    struct DecalTextureSet
+    {
+        std::string albedoPath;
+        std::string normalPath;
+        std::string ormPath;
+        std::shared_ptr<Texture> albedo;
+        std::shared_ptr<Texture> normal;
+        std::shared_ptr<Texture> orm;
+        // 只有 normalMap 真正加载成功才为 true；失败/空路径回退默认 flat normal。
+        bool hasNormalMap = false;
+        // 创建该纹理集时的 World 世代，用于退休队列排障；不参与时序判断。
+        uint64_t ownerGeneration = 0;
+    };
+
+    // 已经写入 descriptor 的纹理身份；用于跳过未变化的逐槽 descriptor 更新。
+    struct DescriptorTextureState
+    {
+        const Texture* albedo = nullptr;
+        const Texture* normal = nullptr;
+        const Texture* orm = nullptr;
+
+        bool operator==(const DescriptorTextureState& other) const
+        {
+            return albedo == other.albedo &&
+                normal == other.normal &&
+                orm == other.orm;
+        }
+    };
 
     void Initialize(
         PipelineFactory& factory,
@@ -76,6 +118,21 @@ private:
         RenderGraph& graph);
     void CreateStaticGeometry(RendererBackendVulkan& backend);
     void CreateFrameResources(RendererBackendVulkan& backend);
+    void CreateMaterialTextures(RendererBackendVulkan& backend);
+    std::shared_ptr<Texture> ResolveTexture(
+        const std::string& assetPath,
+        HostImage::TextureSemantic semantic,
+        const std::shared_ptr<Texture>& fallback,
+        const std::string& decalName);
+    void RetireTextureSet(std::shared_ptr<DecalTextureSet> textureSet);
+    void WarnTextureFallbackOnce(
+        const std::string& assetPath,
+        const std::string& decalName,
+        const std::string& error);
+    void WriteMaterialDescriptors(
+        uint32_t imageIndex,
+        uint32_t slot,
+        const DecalTextureSet& textures);
     void DestroyResources(RendererBackendVulkan& backend);
     static void DestroyBuffer(
         RendererBackendVulkan& backend,
@@ -90,6 +147,22 @@ private:
     std::vector<GpuBuffer> instanceBuffers;
     std::vector<vk::DescriptorSet> descriptorSets;
     vk::DescriptorPool descriptorPool;
+    // set 1 material 贴图：image × instance slot 的独立 descriptor set，
+    // 每次 draw 只绑定当前 slot，避免每帧写整批 descriptor。
+    vk::DescriptorPool materialDescriptorPool;
+    std::vector<std::vector<vk::DescriptorSet>> materialDescriptorSets;
+    std::vector<std::vector<DescriptorTextureState>>
+        descriptorTextureStates;
+    // 仅保留弱引用：活跃/已退休纹理集仍持有强引用，Shutdown 清空索引
+    // 不会提前销毁 GPU 资源。
+    std::unordered_map<std::string, std::weak_ptr<Texture>>
+        textureCache;
+    std::unordered_map<uint64_t, std::shared_ptr<DecalTextureSet>>
+        textureSets;
+    std::unordered_set<std::string> warnedTextureFailures;
+    std::shared_ptr<Texture> defaultAlbedoTexture;
+    std::shared_ptr<Texture> defaultNormalTexture;
+    std::shared_ptr<Texture> defaultOrmTexture;
 };
 
 } // namespace VL

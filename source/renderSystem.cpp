@@ -1430,6 +1430,7 @@ void RenderSystem::RebuildSwapchainDependentResources()
             *pipelineFactory,
             *rendererBackend,
             renderGraph);
+        decalRenderer.Synchronize(currentRenderScene);
     }
     offlineDisplay.Initialize(*rendererBackend);
     if (offlineCoordinator) offlineCoordinator->Restart();
@@ -3259,6 +3260,9 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             *pipelineFactory,
             *rendererBackend,
             RenderGraph::GetInstance());
+        // 贴图集按冻结 RenderScene 幂等同步：新增/移除 decal 或贴图路径
+        // 变化时才创建/退休纹理，不能等到 pass 录制阶段再加载。
+        decalRenderer.Synchronize(currentRenderScene);
     }
     RecordAndSubmitCurrentRenderScene();
 }

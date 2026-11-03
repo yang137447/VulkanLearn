@@ -364,6 +364,17 @@ TEST(ScriptScene, DecalComponentValidatesProjectionAndRanges)
     EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
     scene["objects"][1]["normalStrength"] = 0.5;
     EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    for (const char* field : {"albedoMap", "normalMap", "ormMap"})
+    {
+        scene["objects"][1][field] = "T_scorch_texture.json";
+        EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+        scene["objects"][1][field] = 7;
+        EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+        scene["objects"][1][field] = "";
+        EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+        scene["objects"][1].erase(field);
+    }
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
 }
 
 TEST(ScriptScene, DecalResponseMapsToDBufferMask)
@@ -530,6 +541,9 @@ TEST_F(ScriptRuntimeTest, DecalResponseAndNormalStrengthSurviveSnapshot)
     decal.responseMask =
         DecalResponseColor | DecalResponseNormal;
     decal.normalStrength = 0.72f;
+    decal.albedoMap = "T_scorch_albedo.json";
+    decal.normalMap = "T_scorch_normal.json";
+    decal.ormMap = "T_scorch_orm.json";
     world->AddDecal("Scorch", decal);
 
     WorldSnapshotBuilder builder;
@@ -539,6 +553,9 @@ TEST_F(ScriptRuntimeTest, DecalResponseAndNormalStrengthSurviveSnapshot)
     EXPECT_EQ(snapshot.Value().decals[0].responseMask,
         DecalResponseColor | DecalResponseNormal);
     EXPECT_FLOAT_EQ(snapshot.Value().decals[0].normalStrength, 0.72f);
+    EXPECT_EQ(snapshot.Value().decals[0].albedoMap, "T_scorch_albedo.json");
+    EXPECT_EQ(snapshot.Value().decals[0].normalMap, "T_scorch_normal.json");
+    EXPECT_EQ(snapshot.Value().decals[0].ormMap, "T_scorch_orm.json");
 }
 
 TEST_F(ScriptRuntimeTest, PauseFreezesAndStopRestoresAuthoredTransform)

@@ -14,7 +14,8 @@ struct DecalInstance
     // x = edge softness, y = noise strength, z = seed,
     // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
     vec4 params;
-    // xyz/w 预留给 normal-capable decal 材质；当前程序化法线不使用它。
+    // xyz 保留；w = 1 表示 normalMap 已成功加载，shader 走贴图法线，
+    // 否则走程序化 FBM 法线。
     vec4 normal;
 };
 

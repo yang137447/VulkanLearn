@@ -10,6 +10,12 @@ layout(location = 2) out vec4 outDBufferC;
 layout(location = 3) out vec4 outDBufferD;
 layout(location = 4) out vec4 outDBufferMask;
 
+// 代码维护的 decal 贴图槽位（没有 Material Graph）。Synchronize 保证三个
+// binding 始终有合法纹理；缺失时绑定 1x1 默认值。
+layout(set = 1, binding = 0) uniform sampler2D albedoMap;
+layout(set = 1, binding = 1) uniform sampler2D normalMap;
+layout(set = 1, binding = 2) uniform sampler2D ormMap;
+
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 
 void main()
@@ -40,8 +46,10 @@ void main()
     float noise = DecalFbm(
         decalUv * 7.0 + vec2(instance.params.z, 0.0));
     float mottling = mix(1.0, noise, clamp(instance.params.y, 0.0, 1.0));
+    vec4 albedoSample = texture(albedoMap, decalUv);
     float alpha = instance.surface.w * projectionFade *
-        radial * clamp(0.35 + 0.65 * mottling, 0.0, 1.0);
+        radial * clamp(0.35 + 0.65 * mottling, 0.0, 1.0) *
+        albedoSample.a;
     if (alpha <= 0.001)
         discard;
 
@@ -49,26 +57,52 @@ void main()
     // 是否允许影响接收表面。
     vec4 response = DecalDecodeResponseMask(instance.params.w);
 
-    // 程序化法线：局部 X 是投影深度，局部 (z,y) 是贴花平面 UV。
-    // 用有限差分从 FBM 高度场求切平面法线，再经 decalToWorld 的
-    // 逆转置变换到世界空间（法线不做平移）。
-    float seed = instance.params.z;
-    float eps = 1.0 / 256.0;
-    float height = DecalFbm(decalUv * 7.0 + vec2(seed));
-    float heightU = DecalFbm(
-        (decalUv + vec2(eps, 0.0)) * 7.0 + vec2(seed));
-    float heightV = DecalFbm(
-        (decalUv + vec2(0.0, eps)) * 7.0 + vec2(seed));
-    float dHdU = (heightU - height) / eps;
-    float dHdV = (heightV - height) / eps;
-    // normalStrength 直接缩放坡度；0 时退化为投影体平坦法线。
-    float bumpScale = instance.color.w * 0.12;
-    vec3 localNormal = normalize(vec3(
-        -1.0,
-        -dHdV * bumpScale,
-        -dHdU * bumpScale));
+    // 局部 X 是投影深度，局部 (z,y) 是贴花平面 UV；两种法线来源最终都
+    // 换算到同一局部基，再经 decalToWorld 的逆转置进入世界空间。
+    vec3 localNormal;
+    if (instance.normal.w > 0.5)
+    {
+        // 切线空间法线：xy 受 normalStrength 缩放，z 保持贴图强度。
+        // 贴花平面 UV = (z,y)，因此 tangent.x -> local.z，
+        // tangent.y -> local.y，tangent.z -> local.-x。
+        vec3 tangentNormal =
+            texture(normalMap, decalUv).xyz * 2.0 - 1.0;
+        tangentNormal.xy *=
+            clamp(instance.color.w, 0.0, 1.0);
+        tangentNormal = normalize(tangentNormal);
+        localNormal = vec3(
+            -tangentNormal.z,
+            tangentNormal.y,
+            tangentNormal.x);
+    }
+    else
+    {
+        // 程序化法线：用有限差分从 FBM 高度场求切平面法线。
+        float seed = instance.params.z;
+        float eps = 1.0 / 256.0;
+        float height = DecalFbm(decalUv * 7.0 + vec2(seed));
+        float heightU = DecalFbm(
+            (decalUv + vec2(eps, 0.0)) * 7.0 + vec2(seed));
+        float heightV = DecalFbm(
+            (decalUv + vec2(0.0, eps)) * 7.0 + vec2(seed));
+        float dHdU = (heightU - height) / eps;
+        float dHdV = (heightV - height) / eps;
+        // normalStrength 直接缩放坡度；0 时退化为投影体平坦法线。
+        float bumpScale = instance.color.w * 0.12;
+        localNormal = normalize(vec3(
+            -1.0,
+            -dHdV * bumpScale,
+            -dHdU * bumpScale));
+    }
     mat3 normalMatrix = transpose(inverse(mat3(instance.decalToWorld)));
     vec3 worldNormal = normalize(normalMatrix * localNormal);
+
+    // ORM 约定：R=roughness，G=metallic，B=ambientOcclusion；作者值
+    // 与贴图逐通道相乘，默认白图保持作者值。
+    vec3 ormSample = texture(ormMap, decalUv).rgb;
+    float roughness = instance.surface.r * ormSample.r;
+    float metallic = instance.surface.g * ormSample.g;
+    float ambientOcclusion = instance.surface.b * ormSample.b;
 
     // 每个 decal 只写自己 response 允许的缓冲区；否则重叠时另一个
     // decal 的 mask 位会把本 decal 的默认通道值泄漏给接收表面。
@@ -76,15 +110,15 @@ void main()
     // coverage；C: roughness/AO + roughness coverage；D: metallic +
     // metallic coverage。
     outDBufferA = vec4(
-        instance.color.rgb * mottling,
+        instance.color.rgb * albedoSample.rgb * mottling,
         alpha * response.r);
     outDBufferC = vec4(
-        instance.surface.r,
-        instance.surface.b,
+        roughness,
+        ambientOcclusion,
         0.0,
         alpha * response.b);
     outDBufferD = vec4(
-        instance.surface.g,
+        metallic,
         0.0,
         0.0,
         alpha * response.a);

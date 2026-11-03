@@ -137,6 +137,12 @@ struct WorldDecal
     uint32_t responseMask = DefaultDecalResponse();
     // decal 法线对接收表面法线的混合权重，0 表示忽略法线响应。
     float normalStrength = 0.35f;
+    // 可选的 T_*.json 贴图资产引用；空字符串表示保留程序化径向 + noise
+    // 的默认外观。decal 材质完全由代码维护，没有 UE Material Graph。
+    std::string albedoMap;
+    std::string normalMap;
+    // ORM 打包约定与 glTF/UE 一致：R=roughness，G=metallic，B=ambientOcclusion。
+    std::string ormMap;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

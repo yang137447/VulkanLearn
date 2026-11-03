@@ -152,6 +152,16 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                     throw std::invalid_argument(
                         "Decal has unknown decalResponse: " + response);
             }
+            for (const char* field : {"albedoMap", "normalMap", "ormMap"})
+            {
+                if (!object.contains(field))
+                    continue;
+                if (!object.at(field).is_string() ||
+                    object.at(field).get<std::string>().empty())
+                    throw std::invalid_argument(
+                        std::string("Decal ") + field +
+                        " must be a non-empty T_*.json texture asset path");
+            }
             if (object.contains("sortOrder"))
             {
                 if (!object.at("sortOrder").is_number_integer() ||

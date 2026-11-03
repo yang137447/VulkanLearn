@@ -62,8 +62,9 @@ Current implemented areas include:
   limits: `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   sceneDepth reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
-  DecalResponse channel masks and procedural FBM normals; current scope and limits:
-  `documents/contracts/decal-runtime.md`
+  DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM
+  fallback and GPU-side per-decal material descriptors (`albedoMap`/`normalMap`/`ormMap`,
+  no Material Graph); current scope and limits: `documents/contracts/decal-runtime.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -299,8 +300,9 @@ Scene JSON currently supports these `type` values:
 - `decal` (BeforeLighting DBuffer decal; current scope and limits are in
   `documents/contracts/decal-runtime.md`; unit-cube projection, sceneDepth
   reconstruction, DBuffer A/B/C/D + Mask composition, DecalResponse channel
-  masks and procedural normals are connected; decal textures/material graph,
-  stencil and non-deferred receivers are not)
+  masks, sampled albedo/normal/ORM textures (procedural FBM fallback) and
+  per-decal GPU material descriptors (`albedoMap`/`normalMap`/`ormMap`, no
+  Material Graph) are connected; stencil and non-deferred receivers are not)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime

@@ -349,6 +349,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 }
                 decal.normalStrength = objectJson.value(
                     "normalStrength", decal.normalStrength);
+                decal.albedoMap = objectJson.value(
+                    "albedoMap", decal.albedoMap);
+                decal.normalMap = objectJson.value(
+                    "normalMap", decal.normalMap);
+                decal.ormMap = objectJson.value(
+                    "ormMap", decal.ormMap);
                 decal.sortOrder = static_cast<uint32_t>(
                     objectJson.value("sortOrder", 0));
                 world->AddDecal(
