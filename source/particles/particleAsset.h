@@ -129,9 +129,11 @@ struct ParticleEmitterAsset
 
     // billboard 是默认路径；ribbon 用当前点与最近 3 个历史点组成相机朝向
     // 条带；mesh 用静态网格按粒子实例化；beam 在作者化起止点之间绘制
-    // 多条带噪声的并行电弧，不消费粒子池。ribbonWidth 是世界空间半宽（cm），
-    // ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
-    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam
+    // 多条带噪声的并行电弧，不消费粒子池；distortion 仍消费粒子池，
+    // 但不写 sceneColor，而是在独立 pass 里把屏幕空间 UV 偏移写入
+    // RGBA16F distortion 缓冲，由 toneMapping 合成。ribbonWidth 是世界空间
+    // 半宽（cm），ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
+    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam|distortion
     ParticleBeamAsset beam;
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
     // 粒子速度，fixed 用作者指定的发射器局部法线/上方向。ribbon/mesh/beam
@@ -272,6 +274,9 @@ struct ParticleEmitterAsset
     // additive 发射器应保持 false，排序不会改变加法混合结果，只会增加 dispatch。
     bool sortParticles = false;
     float opacity = 1.0f;
+    // 仅 renderMode=="distortion" 使用：UV 偏移幅度（屏幕空间比例）。
+    // 最终偏移在 shader 里再乘纹理/程序化梯度与覆盖率；0 表示不扰动。
+    float distortionStrength = 0.02f;
     // 0 = 关闭。maxDrawDistance 按包围球最近点做距离剔除，
     // fadeDistance 在该阈值之前形成线性 alpha 淡出。
     float maxDrawDistance = 0.0f;

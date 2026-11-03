@@ -41,7 +41,7 @@
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decal、particle；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -218,6 +218,17 @@
         {
             "name": "dbufferMask",
             "format": "R8G8B8A8_UNORM",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "distortion",
+            "format": "R16G16B16A16_SFLOAT",
             "clearColor": [0.0, 0.0, 0.0, 0.0],
             "widthScale": 1,
             "heightScale": 1,
@@ -708,6 +719,30 @@
             ]
         },
         {
+            "name": "particleDistortion",
+            "type": "distortion",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "distortion",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "editorGrid",
             "type": "editorGrid",
             "needCreateMaterial": true,
@@ -959,6 +994,10 @@
                 {
                     "resource": "autoExposure",
                     "binding": 4
+                },
+                {
+                    "resource": "distortion",
+                    "binding": 5
                 }
             ],
             "output": [

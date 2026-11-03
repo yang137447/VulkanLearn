@@ -17,6 +17,8 @@ layout(set = 3, binding = 1) uniform sampler2D bloomColor;
 layout(set = 3, binding = 2) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 3) uniform sampler2D selectionMask;
 layout(set = 3, binding = 4) uniform sampler2D autoExposure;
+// 屏幕空间扰动：rg 是带符号的 UV 偏移（已乘覆盖率累加）。
+layout(set = 3, binding = 5) uniform sampler2D distortion;
 
 // Tone Mapping Functions
 
@@ -177,7 +179,6 @@ float ResolveSelectionOutline(vec2 uv)
 
 void main()
 {
-    vec3 scene = texture(sceneColor, inUV).rgb;
     vec3 bloom = texture(bloomColor, inUV).rgb;
 
     float exposure = u_toneMappingParams.x;
@@ -195,10 +196,18 @@ void main()
     {
         // sceneColor 中的 raw debug 值已完成编码，只保留最终 framebuffer
         // 的 sRGB 显示编码；HDR 光照类 debug 仍走下面的 Beauty 变换。
-        color = clamp(scene, 0.0, 1.0);
+        color = clamp(texture(sceneColor, inUV).rgb, 0.0, 1.0);
     }
     else
     {
+        // 扰动在粒子与 Bloom 采样之后、tone mapping 之前应用：Bloom 仍从
+        // 未扭曲的 sceneColor 生成，只把它固定叠加到偏移后的场景颜色上。
+        vec2 distortionOffset = texture(distortion, inUV).rg;
+        vec2 sceneUV = clamp(
+            inUV + distortionOffset,
+            vec2(0.0),
+            vec2(1.0));
+        vec3 scene = texture(sceneColor, sceneUV).rgb;
         // Bloom 预过滤阶段已经完成曝光；这里仅曝光原始 sceneColor，
         // 再与曝光后的 Bloom 合成，避免 Bloom 被重复曝光。
         if (u_exposureSettings.x > 0.5)

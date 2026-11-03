@@ -13,6 +13,7 @@
 #include "editor/command/assetDocumentFields.h"
 #include "particles/particleAsset.h"
 #include "particles/particleLifetime.h"
+#include "render/rendergraph/renderGraphPassType.h"
 
 namespace
 {
@@ -1823,6 +1824,78 @@ TEST(ParticleAsset, RibbonFieldsDefaultToBillboard)
     EXPECT_FLOAT_EQ(asset.emitters[0].ribbonWidth, 5.0f);
     EXPECT_EQ(asset.emitters[0].ribbonSegments, 3u);
     EXPECT_FLOAT_EQ(asset.emitters[0].ribbonFade, 1.0f);
+}
+
+TEST(ParticleAsset, DistortionModeParsesStrengthAndDefaults)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["renderMode"] = "distortion";
+
+    ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_distortion_defaults.json");
+    EXPECT_EQ(asset.emitters[0].renderMode, "distortion");
+    EXPECT_FLOAT_EQ(asset.emitters[0].distortionStrength, 0.02f);
+
+    document["emitters"][0]["distortionStrength"] = 0.08;
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_distortion_custom.json");
+    EXPECT_FLOAT_EQ(asset.emitters[0].distortionStrength, 0.08f);
+    // distortion 走独立加法缓冲，不要求 alpha billboard 的排序开关。
+    EXPECT_FALSE(asset.emitters[0].sortParticles);
+}
+
+TEST(RenderGraphPassType, DistortionNameIsRegistered)
+{
+    const auto parsed = ParseRenderGraphPassType("distortion");
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(*parsed, RenderGraphPassType::Distortion);
+    EXPECT_EQ(RenderGraphPassTypeToString(*parsed), "distortion");
+    // 表里必须保留 particle，distortion 是追加而不是替换。
+    const auto particle = ParseRenderGraphPassType("particle");
+    ASSERT_TRUE(particle.has_value());
+    EXPECT_EQ(*particle, RenderGraphPassType::Particle);
+}
+
+TEST(ParticleAsset, DistortionStrengthRejectsOutOfRange)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["renderMode"] = "distortion";
+    document["emitters"][0]["distortionStrength"] = -0.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_distortion_negative.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["distortionStrength"] = 0.251;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_distortion_large.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, DistortionFieldsRoundTripThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange mode;
+    mode.field = "emitters.1.renderMode";
+    mode.value = std::string("distortion");
+    changes.push_back(std::move(mode));
+    EditorAssetFieldChange strength;
+    strength.field = "emitters.1.distortionStrength";
+    strength.value = 0.05;
+    changes.push_back(std::move(strength));
+
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_distortion_editor.json");
+
+    EXPECT_EQ(asset.emitters[1].renderMode, "distortion");
+    EXPECT_FLOAT_EQ(asset.emitters[1].distortionStrength, 0.05f);
+    EXPECT_EQ(asset.emitters[0].renderMode, "billboard");
 }
 
 TEST(ParticleAsset, RibbonFieldsRoundTripThroughEditorPath)

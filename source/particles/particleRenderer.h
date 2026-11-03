@@ -92,6 +92,13 @@ public:
         uint32_t imageIndex,
         const Renderpass& renderPass);
 
+    // 屏幕空间扰动：只绘制 renderMode=="distortion" 的 emitter，把带符号
+    // UV 偏移累加进独立 distortion 附件；sceneDepth 走 set 3。
+    void RecordDistortion(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Renderpass& renderPass);
+
     // 一次性 GPU 回读：调用前必须保证渲染线程与设备空闲。输出是调试快照，
     // 不参与正常帧路径；失败时返回 false 并保留一条可直接展示的原因。
     // frameStats 只用于写 dump 根部的 GPU pass 计时字段。
@@ -285,9 +292,13 @@ private:
         // x = 分支末端横向偏移（cm，已乘模型最大列缩放），y/z/w 保留。
         // 追加在 fixed billboard 之后，避免重排既有偏移。
         Eigen::Vector4f beamBranch;
+        // x = distortionStrength（屏幕空间 UV 比例），
+        // y = 纹理可用（0 时回退程序化方向场），z/w 保留。
+        // 追加在 beamBranch 之后，保持既有字段偏移不变。
+        Eigen::Vector4f distortionParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6368,
+        sizeof(FrameUniforms) == 6384,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -397,6 +408,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, beamBranch) == 6352,
         "ParticleFrame beamBranch offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, distortionParams) == 6368,
+        "ParticleFrame distortionParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -436,6 +450,9 @@ private:
         std::vector<vk::DescriptorSet> sortBtoASets;
         std::vector<vk::DescriptorSet> finalizeSets;
         std::shared_ptr<Texture> texture;
+        // 作者给了 texturePath 但解码/创建失败时置 true。distortion 需要
+        // 用它回退到程序化方向场，而不是把 1x1 白图当成 (1,1) 偏移。
+        bool textureFallback = false;
         // 路径 + 文件大小 + 修改时间 + mipmap 配置；变化时重建整个发射器。
         std::string textureSourceKey;
         // mesh 路径 + 文件大小 + 修改时间；变化时重建网格缓冲。
@@ -611,6 +628,9 @@ private:
     // 实例数由 count * (1 + branchCount) 决定，不读取存活粒子索引。
     std::shared_ptr<PipelineBase> beamAdditivePipeline;
     std::shared_ptr<PipelineBase> beamAlphaPipeline;
+    // distortion 与 particle pass 的 set 0 合同相同，但使用独立 renderPass
+    // 与 distortion 附件；该管线只在图里存在 distortion pass 时创建。
+    std::shared_ptr<PipelineBase> distortionPipeline;
     // mesh 使用静态 SM 的 Vertex 输入布局与 drawIndexed；排序仍共用
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;

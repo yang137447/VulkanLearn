@@ -355,6 +355,10 @@ private:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) override;
+    void RecordDistortionPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
     void RecordDecalPass(
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,

@@ -2467,6 +2467,19 @@ void RenderSystem::RecordParticlePass(
     particleGpuTimer.EndPass(commandBuffer, swapChainImageIndex);
 }
 
+void RenderSystem::RecordDistortionPass(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex)
+{
+    // 扰动发射器复用粒子池与 set 0；这里只切换 pass 的颜色目标，
+    // 由 ParticleRenderer 决定哪些 emitter 进入 distortion 管线。
+    particleRenderer.RecordDistortion(
+        commandBuffer,
+        swapChainImageIndex,
+        renderPass);
+}
+
 void RenderSystem::RecordDecalPass(
     vk::CommandBuffer& commandBuffer,
     const Renderpass& renderPass,

@@ -133,6 +133,8 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 billboardFixedUp;
     // x = 分支末端横向偏移（cm，已乘模型最大列缩放），y/z/w 保留。
     vec4 beamBranch;
+    // x = distortionStrength（屏幕空间 UV 比例），y = 纹理可用，z/w 保留。
+    vec4 distortionParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

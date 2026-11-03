@@ -35,7 +35,8 @@
   数组作为一次字段变更提交，不新增命令类型，并作为单个步骤进入粒子 undo 历史。
 - GPU compute 每帧推进粒子池；graphics pass 按发射器 `renderMode` 读取同一段 storage
   buffer，用按 `billboardAlignment` 朝向的 billboard、最近 3 个历史位置组成的 ribbon
-  条带、静态 SM 网格实例化，或在作者化起止点之间生成多条带噪声的 beam 合成。
+  条带、静态 SM 网格实例化，在作者化起止点之间生成多条带噪声的 beam 合成，或在独立
+  distortion pass 中把屏幕空间 UV 偏移写入 RGBA16F 缓冲。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -76,6 +77,7 @@ SC_*.json particleSystem
     -> RendererFrontend -> RenderScene::particleSystems
     -> ParticleRenderer::Synchronize（按 sceneName|assetPath|emitterName 建 GPU 池）
     -> compute 模拟 -> particle pass billboard/ribbon/mesh/beam 合成
+    -> particleDistortion pass 写 UV 偏移 -> toneMapping 偏移 sceneColor
 ```
 
 `ParticleSystemAsset` 是 CPU 冻结值；没有运行时覆盖时不再重新解析作者 JSON。v2 资产只在
@@ -196,10 +198,12 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   CSM，但仍显式声明这两个 binding 的管线布局，以匹配 pass 描述符集的固定布局。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
-  `particle/particleMesh`，beam variant 名为 `particle/particleBeam`；四者各有 additive
-  与 alpha 两条 blend pipeline，按 PS 的 `renderMode` 与 `blend` 选择。mesh pipeline 使用
-  `Vertex` vertex input 合同并执行 `drawIndexedIndirect`。beam pipeline 不消费顶点输入，
-  始终直接 `draw(segments * 6, count, 0, 0)`。
+  `particle/particleMesh`，beam variant 名为 `particle/particleBeam`，distortion variant
+  名为 `particle/particleDistortion`。billboard/ribbon/mesh/beam 各有 additive 与 alpha
+  两条 blend pipeline，按 PS 的 `renderMode` 与 `blend` 选择；distortion 只有一条
+  additive 管线，写入独立附件。mesh pipeline 使用 `Vertex` vertex input 合同并执行
+  `drawIndexedIndirect`。beam pipeline 不消费顶点输入，始终直接
+  `draw(segments * 6, count, 0, 0)`。
 - 排序使用 `particle/particleSortInit` 与 `particle/particleSort` 两条 compute pipeline：
   init 把每个粒子写成 `vec4(viewDepth, index, 0, 0)`，然后执行标准 bitonic 网络。
   排序容量是 `maxParticles` 向上取 2 的幂、最低 256、最高 4096；关闭排序时仍分配 pair 表，
@@ -262,8 +266,11 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   （`xyz` 为 emitter-local 向量乘模型线性部分并归一化后的世界空间基，`w` 保留），
   最后追加 `beamBranch`
   （`x = branchSpread`，已乘模型最大列缩放；`y/z/w` 保留）。因此 `ParticleFrame` 的
-  std140 大小是 6368 字节，beam 字段偏移是 6256、6272、6288、6304，fixed 字段偏移
-  是 6320、6336，`beamBranch` 偏移是 6352。
+  末尾再追加 `distortionParams`：`x = distortionStrength`（屏幕空间 UV 比例），
+  `y = 纹理可用`（加载失败时为 0，shader 回退程序化方向场），`z/w` 保留。
+  `ParticleFrame` 的 std140 大小是 6384 字节，beam 字段偏移是
+  6256、6272、6288、6304，fixed 字段偏移是 6320、6336，`beamBranch` 偏移是 6352，
+  `distortionParams` 偏移是 6368。
   C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
@@ -275,7 +282,8 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   通过 `gl_InstanceIndex` 取紧凑 `aliveIndices`；未使用
   `VK_KHR_draw_indirect_count`，也不做 GPU 侧多命令重写。beam 不读取 indirect 参数，
   实例数直接来自 `beam.count * (1 + beam.branchCount)`；该发射器也跳过
-  simulate/sort/finalize。
+  simulate/sort/finalize。distortion 仍正常模拟并使用同一套 indirect 参数，但绘制
+  发生在 `particleDistortion` pass，不进入 particle pass 的 sceneColor 合成。
 
 ## 资源生命周期与图身份
 
@@ -619,8 +627,8 @@ beam 的自动中心是变换后的线段中点，局部半径见「Beam 电弧�
 
 发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard、总容量 ≤ 8192 且唯一纹理 ≤ 8
 时，所有参与发射器 gather 到一个全局记录池，做一次全局逐粒子 bitonic 排序后
-`drawIndirect`；additive/ribbon/mesh/beam 或超限场景保留逐发射器路径。beam 永远不进入
-gather 记录池。全局路径与未参与发射器
+`drawIndirect`；additive/ribbon/mesh/beam/distortion 或超限场景保留逐发射器路径。
+beam 与 distortion 永远不进入 gather 记录池。全局路径与未参与发射器
 之间仍是发射器级先后近似；发射器集合增删导致排序表短暂失配时，未进入排序表的池按原
 map 顺序补画。
 
@@ -634,6 +642,16 @@ GPU 写回 instanceCount 的 indirect draw。
 与后处理之前，只输出 `sceneColor`（`loadOp=load`、`storeOp=store`），并把 `sceneDepth` 作为
 `binding 0` 的图输入。`depthTestEnable=false`、`depthWriteEnable=false`；pass 不挂深度附件，
 因此不会形成采样与附件写入的反馈环。
+
+紧随其后的 `particleDistortion` pass（`type: "distortion"`）输出全分辨率 RGBA16F
+`distortion` 资源（`clearColor = [0,0,0,0]`、`loadOp=clear`、`storeOp=store`），同样以
+`sceneDepth` 为 `binding 0` 输入，不创建 pass material，`needMsaa=false`。它只绘制
+`renderMode == "distortion"` 的 emitter；`RecordGraphics` 则跳过 distortion emitter，
+其它 emitter 仍走正常粒子绘制。
+`toneMapping` 通过 `binding 5` 采样该资源，在 Beauty 分支把
+`clamp(inUV + distortion.rg, 0, 1)` 作为 sceneColor 的采样 UV；偏移在 UV 空间，
+因此非正方形视口下不是像素等距（后续可改为按宽高比换算）。Bloom 仍从原始
+sceneColor 生成并在未偏移的 `inUV` 上叠加。raw debug 视图与速度可视化不消费扰动。
 
 当前它不是并进 `forwardTransparent` 的：后者同时写 `selectionMask`，粒子 fragment 只写
 `sceneColor` 时会让粒子覆盖区的选择遮罩变成未定义值。selection/outline 独立成 pass 之前，
@@ -678,9 +696,10 @@ GPU 写回 instanceCount 的 indirect draw。
 - `velocity: { "min": [x,y,z], "max": [x,y,z] }`：局部空间初速度，发射器矩阵的线性部分会旋转/缩放它。
 - `gravity: [x,y,z]`、`drag`：世界空间重力与指数阻力。
 - `size: [start, end]`：billboard 世界空间半边长（cm），按寿命线性插值。
-- `renderMode`：`"billboard"`（默认）、`"ribbon"`、`"mesh"` 或 `"beam"`。ribbon 用当前点与
-  最近 3 个历史点生成面向相机的条带；mesh 用静态 SM 网格按粒子实例化；beam 在作者化
-  起止点之间生成多条带噪声的并行弧，详见对应章节。
+- `renderMode`：`"billboard"`（默认）、`"ribbon"`、`"mesh"`、`"beam"` 或
+  `"distortion"`。ribbon 用当前点与最近 3 个历史点生成面向相机的条带；mesh 用静态 SM
+  网格按粒子实例化；beam 在作者化起止点之间生成多条带噪声的并行弧；distortion 仍消费
+  粒子池，但绘制到独立 UV 偏移缓冲，详见对应章节。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
   `"camera"`、`"velocity"` 或 `"fixed"`。`velocity` 用粒子速度方向构造 billboard 基，
   让 quad 的法线对齐速度；`fixed` 用作者化的发射器局部基固定 quad 朝向，适合枪口闪光等
@@ -696,6 +715,9 @@ GPU 写回 instanceCount 的 indirect draw。
 - `ribbonWidth`：ribbon 世界空间半宽（cm），默认 `5`，必须 `> 0` 且有限。
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
+- `distortionStrength`：默认 `0.02`，范围 `[0, 0.25]`，仅
+  `renderMode: "distortion"` 使用。它是 UV 偏移的最大比例；最终偏移还会乘
+  纹理/程序化方向与覆盖率。`0` 表示不扰动，非法或非有限值在加载期拒绝。
 - `beam`：`renderMode: "beam"` 时使用；省略时每个字段取默认值。结构为
   `{ "start": [-200,0,0], "end": [200,0,0], "segments": 16, "width": 3.0,
   "count": 4, "noiseAmplitude": 18.0, "noiseFrequency": 3.0,
@@ -764,7 +786,8 @@ GPU 写回 instanceCount 的 indirect draw。
   “alpha blend requires sortParticles=true” 拒绝；每帧在 compute 中按相机 view-space
   深度执行 GPU bitonic sort。additive 发射器应保持关闭，排序不会改变加法结果。
   beam 不参与逐粒子排序，因此 alpha beam 不要求该开关；即使作者写 `true` 也没有排序
-  dispatch。
+  dispatch。distortion 也豁免该检查，因为它的累积统一走加法缓冲；开启排序时
+  distortion 仍可使用局部排序结果，但不会进入全局 gather。
 - `blend: "additive" | "alpha"`。
 - `maxDrawDistance`：cm，默认 `0`（不限）。按发射器包围球最近点判断，最近点超过阈值时
   整个发射器剔除。
@@ -1076,6 +1099,34 @@ pointBranch(t) = BeamPoint(root, branchEnd, ..., seed(t), t)
 2 * branchLength * sqrt(3) * endpointJitter : 0) +
 sqrt(2) * noiseAmplitude + width + sqrt(3) * endpointJitter) * maxColumnScale`；
 `useFixedBounds` 仍覆盖该自动估算。
+
+### Distortion 屏幕空间热扰动
+
+`renderMode: "distortion"` 复用 billboard 的模拟、池、尺寸/颜色曲线、flipbook 与
+`billboardAlignment`，但绘制目标是独立的 RGBA16F `distortion` 附件，而不是 sceneColor。
+发射器仍按正常预算分配粒子池、执行 simulate 与可选局部排序；`RecordGraphics` 跳过它们，
+`RecordDistortion` 只用同一份 set 0 描述符集与 `drawIndirect` 绘制。
+
+顶点 shader `particle/particleDistortion.vert` 复制 billboard 的实例索引、寿命曲线、
+尺寸封顶、旋转、pivot、flipbook 与 fixed/velocity/camera 基逻辑；fragment shader
+`particle/particleDistortion.frag`：
+
+```text
+覆盖位置 = discard if particleDepth >= sceneDepth
+coverage = radial(softness) * opacity * colorAlpha * textureAlpha * softFade
+direction = normalize(texture.rg * 2 - 1)          // 有纹理
+          | FBM 有限差分梯度                        // 无纹理
+output    = vec4(direction * distortionStrength, 0, coverage)
+```
+
+该 pass 使用 additive blend（`src.rgb * src.a + dst.rgb`、`src.a + dst.a`），因此
+fragment 不再把 coverage 预乘进 RGB；重叠粒子的偏移按覆盖率加权累加。`distortion` 不清
+sceneColor，也不写深度；`toneMapping` 在 Beauty 分支执行
+`sceneColorUV = clamp(inUV + distortion.rg, 0, 1)`。
+
+限制：偏移只在最终 tone mapping 采样时应用，不参与 Bloom、SSR 或后续屏幕空间效果；
+当前没有 per-emitter distortion 强度上限之外的形状控制，也不支持折射法线/深度差驱动的
+真实折射。它只影响最终合成，不改变 G-Buffer 或 decal。
 
 ### Mesh 实例化
 
@@ -1565,11 +1616,12 @@ main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json -
 和 `NE_BulletShells`，实例包含 `Flash_Center`、`MuzzleFlash_Front`、
 `MuzzleFlash_Side`、`Muzzle_Smoke`、`Muzzle_Sparks`、`Bullet_Shell` /
 `Bullet_Shell_Eject`。VulkanLearn 用 `flash_front`、`flash_side`、
-`flash_center`、`muzzle_smoke`、`muzzle_sparks`、`bullet_shell` 六个发射器
-重建，`burstInterval = 1.0s` 循环；程序化步枪与弹壳为静态 SM，闪光/烟
-贴图为程序化 TGA；火花使用引擎程序化圆盘，不接纹理。
+`flash_center`、`muzzle_smoke`、`muzzle_sparks`、`muzzle_heat_haze`、
+`bullet_shell` 七个发射器重建，`burstInterval = 1.0s` 循环；程序化步枪与弹壳为
+静态 SM，闪光/烟/扰动贴图为程序化 TGA；火花使用引擎程序化圆盘，不接纹理。
 
 该案例是结构/视觉近似：UE 的 particle-driven light 用周期 `pulse` 点光近似；
-front 卡片使用 camera billboard，side 卡片使用 fixed billboard；仍没有
-distortion 材质或 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
+front 卡片使用 camera billboard，side 卡片使用 fixed billboard；
+`muzzle_heat_haze` 走 `renderMode: "distortion"` 的独立 UV 偏移缓冲，由 toneMapping
+合成；没有 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
 维护。启动与截图见该目录的 `README.md`。

@@ -242,6 +242,14 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             swapChainImageIndex,
             renderPass);
     }
+    void RecordDistortionPass(
+        vk::CommandBuffer&,
+        const Renderpass&,
+        uint32_t) override
+    {
+        // 缩略图只验证单个粒子资产的形状，不合成屏幕空间扰动；
+        // pass 已由 RenderGraph 清空 distortion 附件，保持空录制。
+    }
     void RecordDecalPass(
         vk::CommandBuffer&,
         const Renderpass&,

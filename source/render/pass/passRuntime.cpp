@@ -71,6 +71,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Particle:
         RecordParticlePass(context);
         return;
+    case RenderGraphPassType::Distortion:
+        RecordDistortionPass(context);
+        return;
     case RenderGraphPassType::Decal:
         RecordDecalPass(context);
         return;
@@ -290,6 +293,19 @@ void PassRuntime::RecordParticlePass(
     // set 3 作为只读输入；pass 本身不挂深度附件，避免采样/写入反馈环。
     BeginConfiguredRenderPass(context);
     context.services.RecordParticlePass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDistortionPass(
+    PassRuntimeContext& context) const
+{
+    // 扰动 pass 只写 distortion 附件；sceneDepth 通过 set 3 只读采样。
+    // 不绑定 sceneColor，避免同一帧内同时把它作为附件与采样源。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDistortionPass(
         context.commandBuffer,
         context.renderPass,
         context.swapChainImageIndex);

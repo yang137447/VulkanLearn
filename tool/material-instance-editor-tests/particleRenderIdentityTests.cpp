@@ -38,6 +38,10 @@ TEST(ParticleRenderIdentity, EveryGraphicsDependencyChangesIdentity)
     renderPassChanged.particleRenderPass += 0x20;
     EXPECT_NE(baseline, renderPassChanged);
 
+    ParticleRenderIdentity distortionPassChanged = baseline;
+    distortionPassChanged.distortionRenderPass += 0x20;
+    EXPECT_NE(baseline, distortionPassChanged);
+
     ParticleRenderIdentity imageCountChanged = baseline;
     imageCountChanged.swapchainImageCount += 1;
     EXPECT_NE(baseline, imageCountChanged);

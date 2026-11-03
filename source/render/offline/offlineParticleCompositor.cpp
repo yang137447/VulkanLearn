@@ -721,6 +721,11 @@ void RasterizeEmitter(
     {
         return;
     }
+    // 离线合成没有 distortion 附件；扰动粒子不应退化成可见 billboard。
+    if (emitter.asset.renderMode == "distortion")
+    {
+        return;
+    }
     const bool ribbon = emitter.asset.renderMode == "ribbon";
     std::vector<ParticleDepthKey> order;
     if (emitter.asset.sortParticles)

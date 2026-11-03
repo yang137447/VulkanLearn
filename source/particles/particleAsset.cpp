@@ -447,11 +447,12 @@ ParticleEmitterAsset ParseEmitter(
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
-        emitter.renderMode != "beam")
+        emitter.renderMode != "beam" &&
+        emitter.renderMode != "distortion")
     {
         throw std::invalid_argument(
-            "Particle renderMode must be 'billboard', 'ribbon', 'mesh' "
-            "or 'beam'");
+            "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
+            "'beam' or 'distortion'");
     }
     emitter.ribbonWidth = ReadFiniteFloat(
         json, "ribbonWidth", emitter.ribbonWidth);
@@ -587,6 +588,9 @@ ParticleEmitterAsset ParseEmitter(
         json.value("sortParticles", emitter.sortParticles);
     emitter.opacity = ReadFiniteFloat(
         json, "opacity", emitter.opacity);
+    emitter.distortionStrength = ReadFiniteFloat(
+        json, "distortionStrength",
+        emitter.distortionStrength);
     emitter.maxDrawDistance = ReadFiniteFloat(
         json, "maxDrawDistance", emitter.maxDrawDistance);
     emitter.fadeDistance = ReadFiniteFloat(
@@ -1396,6 +1400,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.softness, "softness");
     RequireFinite(emitter.softParticleDistance, "softParticleDistance");
     RequireFinite(emitter.opacity, "opacity");
+    RequireFinite(emitter.distortionStrength, "distortionStrength");
     RequireFinite(emitter.maxDrawDistance, "maxDrawDistance");
     RequireFinite(emitter.fadeDistance, "fadeDistance");
     RequireFinite(emitter.minScreenSize, "minScreenSize");
@@ -1418,11 +1423,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
-        emitter.renderMode != "beam")
+        emitter.renderMode != "beam" &&
+        emitter.renderMode != "distortion")
     {
         throw std::invalid_argument(
-            "Particle renderMode must be 'billboard', 'ribbon', 'mesh' "
-            "or 'beam'");
+            "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
+            "'beam' or 'distortion'");
     }
     if (emitter.billboardAlignment != "camera" &&
         emitter.billboardAlignment != "velocity" &&
@@ -1898,10 +1904,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     // alpha billboard 的绘制顺序直接影响结果；作者忘了开启排序时直接拒绝，
     // 而不是静默按池索引顺序画出穿插。additive 与顺序无关，保持自由。
     // beam 的实例顺序就是作者弧编号，不存在逐粒子深度排序；alpha beam
-    // 不应被要求打开一个渲染端永远不会使用的排序开关。
+    // 不应被要求打开一个渲染端永远不会使用的排序开关。distortion 的累积
+    // 统一走 One/SrcAlpha 加法，与 emitter.additive 无关，也不需要排序。
     if (!emitter.additive &&
         !emitter.sortParticles &&
-        emitter.renderMode != "beam")
+        emitter.renderMode != "beam" &&
+        emitter.renderMode != "distortion")
     {
         throw std::invalid_argument(
             "Particle alpha blend requires sortParticles=true");
@@ -1910,6 +1918,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle opacity must be in [0, 1]");
+    }
+    if (emitter.distortionStrength < 0.0f ||
+        emitter.distortionStrength > 0.25f)
+    {
+        throw std::invalid_argument(
+            "Particle distortionStrength must be in [0, 0.25]");
     }
     if (emitter.maxDrawDistance < 0.0f ||
         emitter.fadeDistance < 0.0f ||

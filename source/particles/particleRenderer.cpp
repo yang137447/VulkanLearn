@@ -93,6 +93,19 @@ Renderpass* FindParticlePass(RenderGraph& graph)
     return nullptr;
 }
 
+Renderpass* FindDistortionPass(RenderGraph& graph)
+{
+    for (auto& [name, pass] : graph.GetRenderpasses())
+    {
+        (void)name;
+        if (pass.type == RenderGraphPassType::Distortion)
+        {
+            return &pass;
+        }
+    }
+    return nullptr;
+}
+
 GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
 {
     // particleGlobal.frag 明确不使用 CSM，编译器会把 shadowMap 从反射
@@ -146,12 +159,17 @@ GraphicsPipelineLayoutDesc BuildParticleBeamLayout(
 ParticleRenderIdentity BuildParticleRenderIdentity(
     RenderGraph& graph,
     const Renderpass& pass,
+    const Renderpass* distortionPass,
     const RendererBackendVulkan& backend)
 {
     ParticleRenderIdentity identity;
     identity.ownerGeneration = graph.GetOwnerGeneration();
     identity.particleRenderPass = reinterpret_cast<uintptr_t>(
         static_cast<VkRenderPass>(pass.renderPass));
+    identity.distortionRenderPass = distortionPass != nullptr
+        ? reinterpret_cast<uintptr_t>(
+            static_cast<VkRenderPass>(distortionPass->renderPass))
+        : 0;
     identity.swapchainImageCount = backend.GetSwapchainImageCount();
     identity.passWidth = pass.width;
     identity.passHeight = pass.height;
@@ -234,7 +252,8 @@ std::string BuildEmitterTextureSourceKey(
         return BuildParticleTextureSourceKey(
             asset.texturePath,
             CommonFunction::Path(asset.texturePath),
-            generateMipmaps);
+            generateMipmaps) +
+            (asset.renderMode == "distortion" ? "|data" : "|color");
     }
     catch (const std::exception&)
     {
@@ -343,6 +362,7 @@ void ParticleRenderer::EnsureInitialized(
         nextIdentity = BuildParticleRenderIdentity(
             graph,
             *particlePass,
+            FindDistortionPass(graph),
             renderer);
     }
     if (initialized && backend == &renderer &&
@@ -378,10 +398,12 @@ void ParticleRenderer::Initialize(
         initialized = false;
         return;
     }
+    Renderpass* distortionPass = FindDistortionPass(graph);
 
     renderIdentity = BuildParticleRenderIdentity(
         graph,
         *particlePass,
+        distortionPass,
         renderer);
     simulatePipeline =
         factory.CreateComputePipeline("particle/particleSimulate");
@@ -464,6 +486,29 @@ void ParticleRenderer::Initialize(
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::AlphaBlend,
         beamLayout);
+
+    // distortion 自己写独立附件，因此必须使用 distortion pass 的 VkRenderPass；
+    // set 0 复制 billboard 合同，set 3 只声明 sceneDepth（图里没有 shadowMap）。
+    if (distortionPass != nullptr)
+    {
+        ShaderVariantKey distortionVariant = variant;
+        distortionVariant.shaderName = "particle/particleDistortion";
+        const GraphicsShaderVariantArtifact& distortionArtifact =
+            factory.PrepareGraphicsShaderVariant(distortionVariant);
+        PassPipelineContractKey distortionContract =
+            distortionPass->pipelineContractKey;
+        distortionContract.useVertexInput = false;
+        distortionContract.depthTestEnable = false;
+        distortionContract.depthWriteEnable = false;
+        distortionContract.depthCompareOp = vk::CompareOp::eLess;
+        distortionPipeline = factory.CreateGraphicsPipeline(
+            &distortionPass->renderPass,
+            distortionContract,
+            distortionArtifact,
+            vk::CullModeFlagBits::eNone,
+            GraphicsPipelineBlendMode::Additive,
+            beamLayout);
+    }
 
     // mesh 粒子读取静态 SM 的 Vertex stream，因此同一条 particle pass
     // 需要使用带 vertex input 的合同；descriptor set 仍与 billboard 相同。
@@ -551,6 +596,7 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     ribbonAlphaPipeline.reset();
     beamAdditivePipeline.reset();
     beamAlphaPipeline.reset();
+    distortionPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
     globalDrawPipeline.reset();
@@ -2089,7 +2135,16 @@ void ParticleRenderer::CreateEmitter(
                 TextureIO::LoadOptions options;
                 options.semantic = HostImage::TextureSemantic::Color;
                 options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOff;
-                options.transfer = TextureIO::LoadOptions::Transfer::SRGB;
+                // distortion 是方向/覆盖率数据纹理，不能走 sRGB 解码，
+                // 否则作者化的 0.5 中点会变成约 0.214。
+                const bool dataTexture =
+                    asset.renderMode == "distortion";
+                options.semantic = dataTexture
+                    ? HostImage::TextureSemantic::Data
+                    : HostImage::TextureSemantic::Color;
+                options.transfer = dataTexture
+                    ? TextureIO::LoadOptions::Transfer::Linear
+                    : TextureIO::LoadOptions::Transfer::SRGB;
                 options.forceChannels = 4;
                 const std::optional<HostImage> cpuImage =
                     TextureIO::Load(
@@ -2101,8 +2156,8 @@ void ParticleRenderer::CreateEmitter(
                         "texel decoder returned no image");
                 }
                 Texture::CreateDesc desc;
-                desc.semantic = HostImage::TextureSemantic::Color;
-                desc.transfer = TextureIO::LoadOptions::Transfer::SRGB;
+                desc.semantic = options.semantic;
+                desc.transfer = options.transfer;
                 // 多帧图集不能生成 mipmap：低 mip 会把相邻 cell 混在一起，
                 // 线过滤再叠加半 texel 内缩即可避免帧间渗色。单帧纹理保留原行为。
                 desc.generateMipmaps = generateMipmaps;
@@ -2124,6 +2179,7 @@ void ParticleRenderer::CreateEmitter(
                     asset.texturePath,
                     exception.what());
                 emitter->texture = defaultTexture;
+                emitter->textureFallback = true;
             }
             catch (...)
             {
@@ -2132,6 +2188,7 @@ void ParticleRenderer::CreateEmitter(
                     asset.texturePath,
                     "unknown texture load failure");
                 emitter->texture = defaultTexture;
+                emitter->textureFallback = true;
             }
         }
     }
@@ -3609,6 +3666,16 @@ void ParticleRenderer::RecordSimulation(
             fixedUp.y(),
             fixedUp.z(),
             0.0f);
+        // 只有 distortion emitter 消费该字段；其它模式保持 0，shader 即使
+        // 误读也得到零偏移。
+        uniforms.distortionParams = Eigen::Vector4f(
+            emitter.asset.renderMode == "distortion"
+                ? emitter.asset.distortionStrength
+                : 0.0f,
+            // y = 真实纹理可用；加载失败时强制走程序化方向场。
+            emitter.textureFallback ? 0.0f : 1.0f,
+            0.0f,
+            0.0f);
         for (int cascade = 0; cascade < 4; ++cascade)
         {
             uniforms.shadowLightViewProj[cascade] =
@@ -3995,6 +4062,7 @@ void ParticleRenderer::RecordGraphics(
     const auto recordEmitter = [&](EmitterResources& emitter)
     {
         if (emitter.culled ||
+            emitter.asset.renderMode == "distortion" ||
             IsGlobalSortEmitter(emitter.key) ||
             emitter.graphicsSets.size() <= imageIndex)
         {
@@ -4184,6 +4252,88 @@ void ParticleRenderer::RecordGraphics(
     // 世界空间视深度从远到近排序。与其它透明发射器的先后关系仍是
     // 发射器级近似（v1 文档已记录）。
     RecordGlobalDraw(commandBuffer, imageIndex, renderPass);
+}
+
+void ParticleRenderer::RecordDistortion(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Renderpass& renderPass)
+{
+    if (!initialized || !distortionPipeline)
+    {
+        return;
+    }
+
+    const auto& descriptorSets = renderPass.GetDescriptorSets();
+    bool usesPassSet = false;
+    for (const ShaderBinding& binding :
+         distortionPipeline->GetShaderBindings())
+    {
+        if (binding.set == PassSetIndex)
+        {
+            usesPassSet = true;
+            break;
+        }
+    }
+
+    for (auto& [key, emitterPtr] : emitters)
+    {
+        (void)key;
+        EmitterResources& emitter = *emitterPtr;
+        if (emitter.culled ||
+            emitter.asset.renderMode != "distortion" ||
+            emitter.graphicsSets.size() <= imageIndex)
+        {
+            continue;
+        }
+
+        emitter.gpuTimer.BeginPass(commandBuffer, imageIndex);
+        commandBuffer.bindPipeline(
+            distortionPipeline->GetBindPoint(),
+            distortionPipeline->GetPipeline());
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            distortionPipeline->GetPipelineLayout(),
+            0,
+            emitter.graphicsSets.at(imageIndex),
+            nullptr);
+        if (usesPassSet &&
+            imageIndex < descriptorSets.size() &&
+            PassSetIndex < descriptorSets[imageIndex].size())
+        {
+            commandBuffer.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                distortionPipeline->GetPipelineLayout(),
+                PassSetIndex,
+                descriptorSets[imageIndex][PassSetIndex],
+                nullptr);
+        }
+
+        // 与 billboard 相同：indirect 的 instanceCount 由 GPU finalize
+        // 写入存活数；没有 indirect 缓冲时按池上限绘制，由 shader 丢弃死亡槽。
+        if (emitter.indirectArgs.buffer)
+        {
+            commandBuffer.drawIndirect(
+                emitter.indirectArgs.buffer,
+                0,
+                1,
+                sizeof(vk::DrawIndirectCommand));
+        }
+        else
+        {
+            commandBuffer.draw(
+                6u,
+                emitter.asset.maxParticles,
+                0,
+                0);
+        }
+        // 与 particle pass 的统计口径一致：indirect 的实例数由 GPU 改写，
+        // 这里按池上限记录本帧上界；dump 也按同一公式估算顶点数。
+        ++frameStats.estimatedDrawCalls;
+        frameStats.estimatedDrawnVertices +=
+            static_cast<uint64_t>(6u) * emitter.asset.maxParticles;
+        emitter.gpuTimer.EndPass(commandBuffer, imageIndex);
+    }
 }
 
 bool ParticleRenderer::DumpParticles(

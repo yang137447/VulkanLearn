@@ -37,6 +37,7 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "billboardUp", "ribbonWidth",
                 "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
                 "softness", "softParticles", "softParticleDistance",
+                "distortionStrength",
                 "additive", "meshLighting", "meshAmbient",
                 "materialInstancePath", "billboardShadows",
                 "billboardLighting", "billboardAmbient"}},
@@ -234,6 +235,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "billboardUp", "ribbonWidth",
             "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
             "softness", "softParticles", "softParticleDistance",
+            "distortionStrength",
             "additive", "meshLighting", "meshAmbient",
             "materialInstancePath", "billboardShadows",
             "billboardLighting", "billboardAmbient"}) ||

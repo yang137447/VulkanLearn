@@ -57,9 +57,9 @@ Current implemented areas include:
 - Post-process pipeline
 - Bloom and tone mapping
 - GPU particle system: data-driven `PS_*.json` v1/v2 module stacks, compute simulation,
-  billboard/ribbon/mesh/beam rendering, GPU-count indirect draws, global alpha sorting, events,
-  runtime emitter/budget/user-parameter APIs and telemetry; current schema, ownership and
-  limits: `documents/contracts/particle-system.md`
+  billboard/ribbon/mesh/beam/distortion rendering, GPU-count indirect draws, global alpha
+  sorting, events, runtime emitter/budget/user-parameter APIs and telemetry; current schema,
+  ownership and limits: `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   sceneDepth reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
   DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM

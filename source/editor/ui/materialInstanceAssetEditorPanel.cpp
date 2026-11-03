@@ -99,6 +99,7 @@ bool ParticleFieldInModule(
             field == "billboardShadows" ||
             field == "billboardLighting" ||
             field == "billboardAmbient" ||
+            field == "distortionStrength" ||
             field == "useFixedBounds" ||
             field == "fixedBounds.center" ||
             field == "fixedBounds.extent" ||
