@@ -55,6 +55,7 @@ struct RenderScene
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;
     std::vector<LightSnapshot> lights;
+    std::vector<DecalSnapshot> decals;
     std::vector<ParticleSystemSnapshot> particleSystems;
     EnvironmentSnapshot environment;
     int debugViewMode = 0;

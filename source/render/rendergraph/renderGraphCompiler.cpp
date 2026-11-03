@@ -811,6 +811,16 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     output.resource,
                     CompiledRenderGraphBarrierType::ShaderReadToAttachment);
             }
+            else if (pass.type != RenderGraphPassType::AutoExposure &&
+                output.resource != "swapChain" &&
+                output.loadOp == "load" &&
+                previousResourceUses[output.resource] == ResourcePreviousUse::Attachment)
+            {
+                AddBarrier(
+                    pass,
+                    output.resource,
+                    CompiledRenderGraphBarrierType::AttachmentToAttachment);
+            }
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(output.resource)),
                 pass.name,

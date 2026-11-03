@@ -90,6 +90,11 @@ std::string BuildLightRuntimeKey(const World& world, const std::string& lightNam
     return world.GetScenePath() + "|light|" + lightName;
 }
 
+std::string BuildDecalRuntimeKey(const World& world, const std::string& decalName)
+{
+    return world.GetScenePath() + "|decal|" + decalName;
+}
+
 std::string BuildParticleRuntimeKey(
     const World& world,
     const std::string& particleSystemName)
@@ -363,6 +368,25 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         auto frozen = light;
         frozen.lightId = StableRuntimeId(BuildLightRuntimeKey(world, identity));
         snapshot.lights.push_back(std::move(frozen));
+    }
+
+    snapshot.decals.reserve(world.GetDecals().size());
+    for (const auto& [name, decal] : world.GetDecals())
+    {
+        if (!decal.visible) continue;
+        DecalSnapshot decalSnapshot;
+        decalSnapshot.decalId =
+            StableRuntimeId(BuildDecalRuntimeKey(world, name));
+        decalSnapshot.name = name;
+        decalSnapshot.decalToWorld = decal.decalToWorld;
+        decalSnapshot.color = decal.color;
+        decalSnapshot.opacity = decal.opacity;
+        decalSnapshot.edgeSoftness = decal.edgeSoftness;
+        decalSnapshot.noiseStrength = decal.noiseStrength;
+        decalSnapshot.randomSeed = decal.randomSeed;
+        decalSnapshot.sortOrder = decal.sortOrder;
+        decalSnapshot.visible = decal.visible;
+        snapshot.decals.push_back(std::move(decalSnapshot));
     }
 
     snapshot.particleSystems.reserve(

@@ -242,6 +242,14 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             swapChainImageIndex,
             renderPass);
     }
+    void RecordDecalPass(
+        vk::CommandBuffer&,
+        const Renderpass&,
+        uint32_t,
+        const RenderScene&) override
+    {
+        // 缩略图会话没有 DecalRenderer；decal pass 保持空录制。
+    }
 
     void ConfigureScene()
     {

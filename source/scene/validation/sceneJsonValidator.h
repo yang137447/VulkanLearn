@@ -92,7 +92,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
             type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
             type != "environment" && type != "blueprintInstance" &&
-            type != "particleSystem")
+            type != "particleSystem" && type != "decal")
             throw std::invalid_argument("Unknown scene object type: " + type);
         if (type == "particleSystem")
         {
@@ -102,6 +102,49 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             {
                 throw std::invalid_argument(
                     "Particle system requires path: particlePath");
+            }
+        }
+        if (type == "decal")
+        {
+            if (!object.contains("size") || !object.at("size").is_array() ||
+                object.at("size").size() != 3)
+            {
+                throw std::invalid_argument(
+                    "Decal requires vec3: size");
+            }
+            for (const auto& component : object.at("size"))
+            {
+                if (!component.is_number() ||
+                    !std::isfinite(component.get<double>()))
+                    throw std::invalid_argument(
+                        "Decal size must contain finite numbers");
+                const float value = static_cast<float>(
+                    component.get<double>());
+                if (!std::isfinite(value) || value <= 0.0f ||
+                    value > 100000.0f)
+                    throw std::invalid_argument(
+                        "Decal size components must be in (0, 100000]");
+            }
+            for (const char* field : {"opacity", "edgeSoftness",
+                     "noiseStrength"})
+            {
+                if (object.contains(field))
+                {
+                    const float value = static_cast<float>(
+                        ReadPhysicalNumber(object, field, 0.0, 1.0));
+                    if (value < 0.0f || value > 1.0f)
+                        throw std::invalid_argument(
+                            std::string("Decal ") + field +
+                            " must be in [0, 1]");
+                }
+            }
+            if (object.contains("sortOrder"))
+            {
+                if (!object.at("sortOrder").is_number_integer() ||
+                    object.at("sortOrder").get<int>() < 0 ||
+                    object.at("sortOrder").get<int>() > 255)
+                    throw std::invalid_argument(
+                        "Decal sortOrder must be an integer in [0, 255]");
             }
         }
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})

@@ -1394,6 +1394,7 @@ VulkanLearn 版本用 7 个发射器（`flash`、`core_burst`、`roil_smoke`、
 地面尘、火花、岩石碎片和残余烟柱；`burstInterval = 3.0s` 循环，火花/碎片走
 SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序。
 
-该案例是结构/视觉对齐，不是 UE 资产的直接移植：没有 Decal/Light Renderer，
-用场景点光源和地面焦痕近似；没有 UE Material Graph/SubUV 的完整语义；
-粒子图集为程序化等价物。启动与验收细节见该目录的 `README.md`。
+该案例是结构/视觉对齐，不是 UE 资产的直接移植：`ExplosionScorch` 使用
+BeforeLighting GBuffer decal（见 `decal-runtime.md`），但没有 Light Renderer；
+没有 UE Material Graph/SubUV 的完整语义；粒子图集与 decal 图案为程序化等价物。
+启动与验收细节见该目录的 `README.md`。

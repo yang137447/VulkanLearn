@@ -53,6 +53,13 @@ public:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) = 0;
+    // DecalRenderer 拥有 unit cube、实例 SSBO 与 decal pipeline；pass 仅提供
+    // 已开始的 GBufferC 窗口和 sceneDepth 输入描述符集。
+    virtual void RecordDecalPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const RenderScene& renderScene) = 0;
 };
 
 struct PassRuntimeContext
@@ -85,6 +92,7 @@ private:
     void RecordPostProcessPass(PassRuntimeContext& context) const;
     void RecordEditorGridPass(PassRuntimeContext& context) const;
     void RecordParticlePass(PassRuntimeContext& context) const;
+    void RecordDecalPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;
     void BeginConfiguredRenderPass(PassRuntimeContext& context) const;

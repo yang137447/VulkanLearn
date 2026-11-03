@@ -71,6 +71,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Particle:
         RecordParticlePass(context);
         return;
+    case RenderGraphPassType::Decal:
+        RecordDecalPass(context);
+        return;
     case RenderGraphPassType::Unknown:
     case RenderGraphPassType::AutoExposure:
         break;
@@ -290,6 +293,18 @@ void PassRuntime::RecordParticlePass(
         context.commandBuffer,
         context.renderPass,
         context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDecalPass(
+    PassRuntimeContext& context) const
+{
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDecalPass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex,
+        context.renderScene);
     context.commandBuffer.endRenderPass();
 }
 

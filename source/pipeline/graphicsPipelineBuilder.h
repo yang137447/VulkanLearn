@@ -10,6 +10,8 @@ enum class GraphicsPipelineBlendMode
     AlphaBlend,
     PremultipliedAlpha,
     Additive,
+    // BeforeLighting decal 只写 GBufferC.rgb，alpha（AO）由写掩码保留。
+    DecalColor,
     // 颜色公式为 Add + Multiplier * Destination，第二颜色源提供逐通道 Multiplier。
     ThinTranslucentDualSource
 };

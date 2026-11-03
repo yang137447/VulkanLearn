@@ -22,6 +22,9 @@ enum class CompiledRenderGraphBarrierType
 {
     AttachmentToShaderRead,
     ShaderReadToAttachment,
+    // 同一 color attachment 被两个 pass 连续 LOAD/WRITE；需要 WAW + RAW
+    // 可见性，layout 本身保持 ColorAttachmentOptimal。
+    AttachmentToAttachment,
     ShaderReadToStorage,
     StorageToShaderRead
 };

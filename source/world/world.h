@@ -111,6 +111,27 @@ struct WorldSquareAreaLight
     bool visible = true;
 };
 
+// 场景中的静态 decal 组件。size 是作者空间的完整尺寸（cm），按 UE
+// DecalSize 的语义，X 是投影深度、Y/Z 是投影平面宽高；decalToWorld
+// 已把半尺寸烘进局部矩阵，渲染器直接用 [-1,1] 单位 cube。
+struct WorldDecal
+{
+    std::string name;
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    Eigen::Vector3f size = Eigen::Vector3f(100.0f, 400.0f, 400.0f);
+    Eigen::Matrix4f decalToWorld = Eigen::Matrix4f::Identity();
+    Eigen::Vector4f color =
+        Eigen::Vector4f(0.02f, 0.018f, 0.015f, 1.0f);
+    float opacity = 0.85f;
+    float edgeSoftness = 0.35f;
+    float noiseStrength = 0.55f;
+    float randomSeed = 0.0f;
+    uint32_t sortOrder = 0;
+    bool visible = true;
+};
+
 // 灯光的可见性直接落在灯光对象上（SceneNode::visible）。World 只按名字找到
 // shared_ptr，不改持有关系：合并/分节后的网格没有 SceneNode，因此可见性字段
 // 只在网格与灯光两处存在，不引入第二套"World 拥有的可见性集合"。
@@ -222,6 +243,7 @@ public:
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
+    void AddDecal(std::string name, WorldDecal decal);
     void AddParticleSystem(std::string name, WorldParticleSystem system);
     // 运行时 spawn/destroy 只改逻辑 World；同名 spawn 覆盖既有对象，
     // 被替换/移除的 GPU 池由下一次 Render 的 ParticleRenderer::Synchronize 退休。
@@ -238,6 +260,7 @@ public:
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    const std::unordered_map<std::string, WorldDecal>& GetDecals() const { return decals; }
     const std::unordered_map<std::string, WorldParticleSystem>& GetParticleSystems() const { return particleSystems; }
     void TickAnimations(float deltaSeconds);
     // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
@@ -438,6 +461,7 @@ private:
     WorldEnvironment environment;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
+    std::unordered_map<std::string, WorldDecal> decals;
     std::unordered_map<std::string, WorldParticleSystem> particleSystems;
     ParticleSystemBudget particleBudget;
     // 全局通道不随 Blueprint 上下文生命周期增删；Play/Stop 与热重载只替换

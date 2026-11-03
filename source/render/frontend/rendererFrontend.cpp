@@ -118,6 +118,7 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
         snapshot.particleDataChannels;
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
+    renderScene.decals = snapshot.decals;
     renderScene.particleSystems = snapshot.particleSystems;
     renderScene.environment = snapshot.environment;
     renderScene.debugViewMode = snapshot.debugViewMode;

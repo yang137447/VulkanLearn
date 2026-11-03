@@ -21,6 +21,9 @@ enum class RenderGraphPassType
     // 区别是它保留深度测试以复用场景 sceneDepth 做遮挡，因此需要独立行为类型。
     EditorGrid,
     AutoExposure,
+    // BeforeLighting GBuffer decal：独立 DecalRenderer 用 unit cube 投影，
+    // 只写 GBufferC.rgb，必须排在 geometry 之后、deferredLighting 之前。
+    Decal,
     // 粒子 billboard 不经过 Material schema，由 ParticleRenderer 直接绑定
     // 自己的 UBO/SSBO；该类型只负责在图中声明 sceneColor/sceneDepth 的合成顺序。
     Particle
@@ -32,9 +35,9 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 八个：编辑器网格、自动曝光与粒子各自追加，合并后必须都在表里，
+// 九个：编辑器网格、自动曝光、Decal 与粒子各自追加，合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 8>
+inline constexpr std::array<RenderGraphPassTypeName, 9>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -43,6 +46,7 @@ inline constexpr std::array<RenderGraphPassTypeName, 8>
         {RenderGraphPassType::PostProcess, "postProcess"},
         {RenderGraphPassType::EditorGrid, "editorGrid"},
         {RenderGraphPassType::AutoExposure, "autoExposure"},
+        {RenderGraphPassType::Decal, "decal"},
         {RenderGraphPassType::Particle, "particle"}
     }};
 

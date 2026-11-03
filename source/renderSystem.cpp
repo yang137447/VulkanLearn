@@ -1426,6 +1426,10 @@ void RenderSystem::RebuildSwapchainDependentResources()
             *rendererBackend,
             renderGraph);
         particleRenderer.Synchronize(currentRenderScene);
+        decalRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            renderGraph);
     }
     offlineDisplay.Initialize(*rendererBackend);
     if (offlineCoordinator) offlineCoordinator->Restart();
@@ -1466,6 +1470,7 @@ void RenderSystem::RefreshResolvedSceneAfterShaderReload()
         // 粒子管线没有注册成 shader reload participant；reload 提交后丢弃
         // 旧 artifact，下一次 Render 的 EnsureInitialized/Synchronize 重建。
         particleRenderer.InvalidatePipelines(*rendererBackend);
+        decalRenderer.InvalidatePipelines(*rendererBackend);
     }
 }
 
@@ -1635,6 +1640,8 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.renderScene.materialGroups);
     currentRenderScene.lights.swap(
         prepared.renderScene.lights);
+    currentRenderScene.decals.swap(
+        prepared.renderScene.decals);
     currentRenderScene.particleSystems.swap(
         prepared.renderScene.particleSystems);
     swap(
@@ -2458,6 +2465,19 @@ void RenderSystem::RecordParticlePass(
     particleGpuTimer.EndPass(commandBuffer, swapChainImageIndex);
 }
 
+void RenderSystem::RecordDecalPass(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex,
+    const VL::RenderScene& renderScene)
+{
+    decalRenderer.RecordGraphics(
+        commandBuffer,
+        swapChainImageIndex,
+        renderPass,
+        renderScene);
+}
+
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     UpdateUBOGlobalWithProjectionTransform(
@@ -3235,6 +3255,10 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             *rendererBackend,
             RenderGraph::GetInstance());
         particleRenderer.Synchronize(currentRenderScene);
+        decalRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            RenderGraph::GetInstance());
     }
     RecordAndSubmitCurrentRenderScene();
 }
@@ -3638,6 +3662,7 @@ void RenderSystem::ShutdownFrameResources()
 
     environmentGpuTimer.Shutdown(*rendererBackend);
     particleGpuTimer.Shutdown(*rendererBackend);
+    decalRenderer.Shutdown(*rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->UnregisterComputeParticipant(

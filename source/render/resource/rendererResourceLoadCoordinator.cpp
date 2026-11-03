@@ -109,6 +109,12 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             // ParticleRenderer 按 RenderScene 管理，这里不创建材质/网格资源。
             continue;
         }
+        else if (type == "decal")
+        {
+            // Decal 的参数与 unit cube 几何由 DecalRenderer 直接消费；
+            // 这条资源准备路径不创建材质/网格。
+            continue;
+        }
         else if (type == "directionalLight" ||
                  type == "pointLight" ||
                  type == "spotLight" ||

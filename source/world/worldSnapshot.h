@@ -181,6 +181,25 @@ struct ParticleSystemSnapshot
     ParticleSystemAttachment attachment;
 };
 
+// BeforeLighting GBuffer decal 的冻结渲染输入。decalToWorld 已包含
+// 单位 cube 的半尺寸缩放；世界位置落在该矩阵的 [-1,1] 局部立方体内时
+// 才参与投影。颜色是线性 RGB，opacity 只控制 GBufferC.rgb 的混合；
+// GBufferC.a（AO）由 decal pipeline 的写掩码保留，当前不改写。
+struct DecalSnapshot
+{
+    RuntimeId decalId = 0;
+    std::string name;
+    Eigen::Matrix4f decalToWorld = Eigen::Matrix4f::Identity();
+    Eigen::Vector4f color =
+        Eigen::Vector4f(0.02f, 0.018f, 0.015f, 1.0f);
+    float opacity = 0.85f;
+    float edgeSoftness = 0.35f;
+    float noiseStrength = 0.55f;
+    float randomSeed = 0.0f;
+    uint32_t sortOrder = 0;
+    bool visible = true;
+};
+
 // Immutable render-facing copy of one World frame. The renderer may keep this
 // after the game thread has already advanced to a newer mutable World state.
 struct WorldSnapshot
@@ -196,6 +215,7 @@ struct WorldSnapshot
     CameraSnapshot camera;
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;
+    std::vector<DecalSnapshot> decals;
     std::vector<ParticleSystemSnapshot> particleSystems;
     EnvironmentSnapshot environment;
     int debugViewMode = 0;

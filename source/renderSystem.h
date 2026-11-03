@@ -40,6 +40,7 @@
 #include "render/shadow/csmSettings.h"
 #include "particles/particleFrameStats.h"
 #include "particles/particleRenderer.h"
+#include "render/decal/decalRenderer.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -354,6 +355,11 @@ private:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) override;
+    void RecordDecalPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const VL::RenderScene& renderScene) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
@@ -461,6 +467,7 @@ private:
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
     VL::ParticleRenderer particleRenderer;
+    VL::DecalRenderer decalRenderer;
     VL::RenderScene currentRenderScene;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;

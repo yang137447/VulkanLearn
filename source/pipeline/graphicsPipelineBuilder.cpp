@@ -91,6 +91,22 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
                 .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
         }
     }
+    else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::DecalColor)
+    {
+        for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+        {
+            attachmentState
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eZero)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setColorWriteMask(
+                    vk::ColorComponentFlagBits::eR |
+                    vk::ColorComponentFlagBits::eG |
+                    vk::ColorComponentFlagBits::eB);
+        }
+    }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
     {
         // 双源混合只占用 location 0；selectionMask 等普通输出可以追加在

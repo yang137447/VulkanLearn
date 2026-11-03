@@ -540,6 +540,11 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     meshObjects[std::move(name)] = std::move(object);
 }
 
+void World::AddDecal(std::string name, WorldDecal decal)
+{
+    decals[std::move(name)] = std::move(decal);
+}
+
 void World::AddParticleSystem(
     std::string name,
     WorldParticleSystem system)

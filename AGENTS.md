@@ -60,6 +60,9 @@ Current implemented areas include:
   billboard/ribbon/mesh rendering, GPU-count indirect draws, global alpha sorting, events,
   runtime emitter/budget/user-parameter APIs and telemetry; current schema, ownership and
   limits: `documents/contracts/particle-system.md`
+- BeforeLighting GBuffer decals: data-driven scene `decal` objects, unit-cube projection,
+  sceneDepth reconstruction, stable sort instances and base-color modification; current
+  scope and limits: `documents/contracts/decal-runtime.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -290,6 +293,10 @@ Scene JSON currently supports these `type` values:
 - `particleSystem` (`particlePath` references a `PS_*.json`; a PS file may contain up to 16
   `emitters[]`, each expanded into its own GPU emitter; current schema and limits are in
   `documents/contracts/particle-system.md`)
+- `decal` (BeforeLighting GBuffer decal; current scope and limits are in
+  `documents/contracts/decal-runtime.md`; unit-cube projection, sceneDepth
+  reconstruction and GBufferC base-color modification are connected; DBuffer,
+  decal materials and normal/roughness/AO output are not)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime

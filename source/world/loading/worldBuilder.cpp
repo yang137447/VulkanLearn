@@ -286,6 +286,55 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             {
                 environment = BuildEnvironment(objectJson);
             }
+            else if (type == "decal")
+            {
+                WorldDecal decal;
+                decal.name = objectPlan.objectName;
+                decal.scenePosition =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["position"]);
+                decal.sceneRotation =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["rotation"]);
+                decal.sceneScale = objectJson.contains("scale")
+                    ? JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["scale"])
+                    : Eigen::Vector3f::Ones();
+                decal.size =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["size"]);
+                const Eigen::Vector3f halfExtent =
+                    decal.size.cwiseProduct(decal.sceneScale) * 0.5f;
+                Eigen::Matrix4f scale = Eigen::Matrix4f::Identity();
+                scale(0, 0) = halfExtent.x();
+                scale(1, 1) = halfExtent.y();
+                scale(2, 2) = halfExtent.z();
+                decal.decalToWorld =
+                    Eigen::Affine3f(Eigen::Translation3f(
+                        decal.scenePosition)).matrix() *
+                    CommonFunction::RotationToMatrix(
+                        decal.sceneRotation) *
+                    scale;
+                if (objectJson.contains("color"))
+                {
+                    const Eigen::Vector3f color =
+                        JsonParser::ParseValue<Eigen::Vector3f>(
+                            objectJson["color"]);
+                    decal.color =
+                        Eigen::Vector4f(color.x(), color.y(), color.z(), 1.0f);
+                }
+                decal.opacity = objectJson.value(
+                    "opacity", decal.opacity);
+                decal.edgeSoftness = objectJson.value(
+                    "edgeSoftness", decal.edgeSoftness);
+                decal.noiseStrength = objectJson.value(
+                    "noiseStrength", decal.noiseStrength);
+                decal.sortOrder = static_cast<uint32_t>(
+                    objectJson.value("sortOrder", 0));
+                world->AddDecal(
+                    objectPlan.objectName,
+                    std::move(decal));
+            }
             else if (type == "particleSystem")
             {
                 if (!objectPlan.particleAsset)

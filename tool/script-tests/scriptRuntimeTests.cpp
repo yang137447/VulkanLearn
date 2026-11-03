@@ -313,6 +313,47 @@ TEST(ScriptScene, RejectsUnsupportedComponents)
     EXPECT_THROW(ValidateScriptBlueprint(blueprint), std::invalid_argument);
 }
 
+TEST(ScriptScene, DecalComponentValidatesProjectionAndRanges)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json decal{
+        {"name", "GroundScorch"},
+        {"type", "decal"},
+        {"position", {0, 1, 0}},
+        {"rotation", {0, 0, -90}},
+        {"size", {20, 200, 200}},
+        {"color", {0.02, 0.01, 0.005}},
+        {"opacity", 0.8},
+        {"edgeSoftness", 0.3},
+        {"noiseStrength", 0.6},
+        {"sortOrder", 2}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Decal fixture"},
+        {"objects", Json::array({camera, decal})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1].erase("size");
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["size"] = {0, 200, 200};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["size"] = {20, 200, 200};
+    scene["objects"][1]["opacity"] = 1.1;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["opacity"] = 0.8;
+    scene["objects"][1]["sortOrder"] = 256;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
 TEST(ScriptScene, DistinctIdsCanShareDisplayName)
 {
     auto a = Blueprint("a"), b = Blueprint("b");
