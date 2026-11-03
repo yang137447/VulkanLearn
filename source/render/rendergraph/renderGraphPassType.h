@@ -22,7 +22,7 @@ enum class RenderGraphPassType
     EditorGrid,
     AutoExposure,
     // BeforeLighting DBuffer decal：独立 DecalRenderer 用 unit cube 投影，
-    // 写 DBuffer A/B/C，必须排在 geometry 之后、deferredLighting 之前。
+    // 写 DBuffer A/B/C/D + Mask，必须排在 geometry 之后、deferredLighting 之前。
     Decal,
     // 粒子 billboard 不经过 Material schema，由 ParticleRenderer 直接绑定
     // 自己的 UBO/SSBO；该类型只负责在图中声明 sceneColor/sceneDepth 的合成顺序。

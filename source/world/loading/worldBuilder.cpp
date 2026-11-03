@@ -335,6 +335,20 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                     "metallic", decal.metallic);
                 decal.ambientOcclusion = objectJson.value(
                     "ambientOcclusion", decal.ambientOcclusion);
+                if (objectJson.contains("decalResponse"))
+                {
+                    const std::string response =
+                        objectJson.at("decalResponse").get<std::string>();
+                    if (!TryParseDecalResponse(
+                            response, decal.responseMask))
+                    {
+                        throw std::runtime_error(
+                            "Decal " + objectPlan.objectName +
+                            " has unknown decalResponse: " + response);
+                    }
+                }
+                decal.normalStrength = objectJson.value(
+                    "normalStrength", decal.normalStrength);
                 decal.sortOrder = static_cast<uint32_t>(
                     objectJson.value("sortOrder", 0));
                 world->AddDecal(

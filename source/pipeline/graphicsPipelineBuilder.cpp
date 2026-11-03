@@ -107,6 +107,37 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
                     vk::ColorComponentFlagBits::eB);
         }
     }
+    else if (desc.pipelineStateDesc.blendMode ==
+        GraphicsPipelineBlendMode::DecalDBuffer)
+    {
+        if (desc.colorAttachmentCount < 5)
+        {
+            throw std::runtime_error(
+                "Decal DBuffer blending requires 5 color attachments");
+        }
+
+        // DBuffer A/B/C/D 存 RGB + 覆盖率：src.rgb 由 src.a 预乘，
+        // alpha 以 over 形式累积，供合成端恢复覆盖率。
+        for (size_t attachmentIndex = 0; attachmentIndex < 4;
+             ++attachmentIndex)
+        {
+            pipelineColorBlendAttachmentStates[attachmentIndex]
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+        }
+
+        // DBufferMask 每个通道是 0/1 响应位；One/One 让重叠 decal
+        // 的同类响应按“或”累积，合成端再做 saturate。
+        pipelineColorBlendAttachmentStates[4]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eOne)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+    }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
     {
         // 双源混合只占用 location 0；selectionMask 等普通输出可以追加在
@@ -138,6 +169,8 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     }
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
+    // 逐附件不同的 blend state 由设备特性 independentBlend 控制，
+    // VulkanManager 在逻辑设备创建时启用；结构体本身没有开关字段。
     pipelineColorBlendStateCreateInfo
         .setAttachments(pipelineColorBlendAttachmentStates)
         .setLogicOpEnable(false)

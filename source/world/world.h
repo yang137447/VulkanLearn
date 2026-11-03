@@ -15,6 +15,7 @@
 #include <Eigen/Dense>
 
 #include "baseStructs.h"
+#include "decalResponse.h"
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
@@ -131,6 +132,11 @@ struct WorldDecal
     float roughness = 1.0f;
     float metallic = 0.0f;
     float ambientOcclusion = 1.0f;
+    // 作者侧的 DBuffer 响应位；DecalRenderer 把它随实例数据上传，
+    // deferredLighting 按 DBufferMask 逐通道决定是否覆盖表面。
+    uint32_t responseMask = DefaultDecalResponse();
+    // decal 法线对接收表面法线的混合权重，0 表示忽略法线响应。
+    float normalStrength = 0.35f;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

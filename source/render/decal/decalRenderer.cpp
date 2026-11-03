@@ -116,9 +116,9 @@ void DecalRenderer::Initialize(
         // 闭合 cube 只保留正面；否则同一 sceneDepth 表面会被前后两面
         // 各混合一次。索引绕序与 pipeline 的 clockwise front face 对齐。
         vk::CullModeFlagBits::eBack,
-        // DBuffer A/B/C 的 alpha 是逐通道覆盖率，必须写入 alpha，
-        // 不能用只写 RGB 的 DecalColor 模式。
-        GraphicsPipelineBlendMode::AlphaBlend);
+        // DBuffer A/B/C/D 的 alpha 是逐通道覆盖率，mask 附件则用
+        // One/One 累积响应位；两种状态由 DecalDBuffer 模式分开设置。
+        GraphicsPipelineBlendMode::DecalDBuffer);
     if (!pipeline)
         throw std::runtime_error("DecalRenderer failed to create its graphics pipeline");
 
@@ -364,17 +364,20 @@ void DecalRenderer::RecordGraphics(
         target.decalToWorld = source.decalToWorld;
         target.worldToDecal = source.decalToWorld.inverse();
         target.color = source.color;
-        target.color.w() = source.opacity;
+        // color.w 已改为 normalStrength；opacity 只走 surface.w。
+        target.color.w() = source.normalStrength;
         target.surface = Eigen::Vector4f(
             source.roughness,
             source.metallic,
             source.ambientOcclusion,
             source.opacity);
+        // params.w 传入 DBufferMask 的响应位掩码，shader 解码为
+        // color/normal/roughness/metallic 四个 0/1 通道。
         target.params = Eigen::Vector4f(
             source.edgeSoftness,
             source.noiseStrength,
             source.randomSeed,
-            0.0f);
+            static_cast<float>(source.responseMask));
         target.normal = Eigen::Vector4f(0.0f, 0.0f, 1.0f, 0.0f);
     }
 

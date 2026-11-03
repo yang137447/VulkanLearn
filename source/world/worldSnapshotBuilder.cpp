@@ -387,6 +387,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         decalSnapshot.roughness = decal.roughness;
         decalSnapshot.metallic = decal.metallic;
         decalSnapshot.ambientOcclusion = decal.ambientOcclusion;
+        decalSnapshot.responseMask = decal.responseMask;
+        decalSnapshot.normalStrength = decal.normalStrength;
         decalSnapshot.sortOrder = decal.sortOrder;
         decalSnapshot.visible = decal.visible;
         snapshot.decals.push_back(std::move(decalSnapshot));

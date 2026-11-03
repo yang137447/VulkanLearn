@@ -7,14 +7,29 @@ struct DecalInstance
 {
     mat4 decalToWorld;
     mat4 worldToDecal;
+    // xyz = baseColor，w = normalStrength（0 表示程序化法线不生效）。
     vec4 color;
     // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
     vec4 surface;
-    // x = edge softness, y = noise strength, z = seed, w reserved.
+    // x = edge softness, y = noise strength, z = seed,
+    // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
     vec4 params;
-    // xyz = world normal, w = normal opacity.
+    // xyz/w 预留给 normal-capable decal 材质；当前程序化法线不使用它。
     vec4 normal;
 };
+
+// 把 C++ DecalResponse 的 uint32 位掩码（以 float 传入 SSBO）解码为
+// (color, normal, roughness, metallic) 四个 0/1 通道。
+vec4 DecalDecodeResponseMask(float packedMask)
+{
+    // [0,15] 在 float 中可精确表示；clamp 防止作者/上传数据越界。
+    int mask = int(clamp(packedMask, 0.0, 15.0) + 0.5);
+    return vec4(
+        float(mask & 1),
+        float((mask >> 1) & 1),
+        float((mask >> 2) & 1),
+        float((mask >> 3) & 1));
+}
 
 layout(std140, set = 0, binding = 0) uniform DecalFrame
 {

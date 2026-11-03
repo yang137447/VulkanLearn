@@ -205,6 +205,28 @@
             ]
         },
         {
+            "name": "dbufferD",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferMask",
+            "format": "R8G8B8A8_UNORM",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
             "name": "sceneColorBase",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1,
@@ -480,6 +502,16 @@
                     "resource": "dbufferC",
                     "loadOp": "clear",
                     "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferD",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferMask",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         },
@@ -536,6 +568,14 @@
                 {
                     "resource": "dbufferC",
                     "binding": 12
+                },
+                {
+                    "resource": "dbufferMask",
+                    "binding": 13
+                },
+                {
+                    "resource": "dbufferD",
+                    "binding": 14
                 }
             ],
             "output": [

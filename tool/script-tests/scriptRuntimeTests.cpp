@@ -352,6 +352,47 @@ TEST(ScriptScene, DecalComponentValidatesProjectionAndRanges)
     scene["objects"][1]["opacity"] = 0.8;
     scene["objects"][1]["sortOrder"] = 256;
     EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["sortOrder"] = 2;
+    scene["objects"][1]["decalResponse"] = "roughnessNormal";
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    scene["objects"][1]["decalResponse"] = "baseColor";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["decalResponse"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["decalResponse"] = "colorNormalRoughness";
+    scene["objects"][1]["normalStrength"] = 1.1;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["normalStrength"] = 0.5;
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+}
+
+TEST(ScriptScene, DecalResponseMapsToDBufferMask)
+{
+    uint32_t mask = 0;
+    EXPECT_EQ(DefaultDecalResponse(), 7u);
+    EXPECT_TRUE(TryParseDecalResponse("colorNormalRoughness", mask));
+    EXPECT_EQ(mask, DecalResponseColor | DecalResponseNormal |
+        DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("colorNormal", mask));
+    EXPECT_EQ(mask, DecalResponseColor | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("color", mask));
+    EXPECT_EQ(mask, DecalResponseColor);
+    EXPECT_TRUE(TryParseDecalResponse("normal", mask));
+    EXPECT_EQ(mask, DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("roughness", mask));
+    EXPECT_EQ(mask, DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("roughnessNormal", mask));
+    EXPECT_EQ(mask, DecalResponseRoughness | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("metallic", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic);
+    EXPECT_TRUE(TryParseDecalResponse("metallicNormal", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("metallicRoughness", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("metallicRoughnessNormal", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseRoughness |
+        DecalResponseNormal);
+    EXPECT_FALSE(TryParseDecalResponse("ColorNormalRoughness", mask));
 }
 
 TEST(ScriptScene, DistinctIdsCanShareDisplayName)
@@ -479,6 +520,25 @@ TEST_F(ScriptRuntimeTest, TransformPublishesIntoNewSnapshotWithoutChangingFrozen
     expected.SetTransform(Eigen::Vector3f::Zero(), Eigen::Vector3f(0, 90, 0), Eigen::Vector3f::Ones());
     EXPECT_TRUE(after.Value().meshDraws[0].model.isApprox(expected.GetModelMatrix(), 1e-5f));
     EXPECT_TRUE(before.Value().meshDraws[0].model.isApprox(Eigen::Matrix4f::Identity()));
+}
+
+TEST_F(ScriptRuntimeTest, DecalResponseAndNormalStrengthSurviveSnapshot)
+{
+    world->SetCamera(std::make_shared<Camera>());
+    WorldDecal decal;
+    decal.decalToWorld = Eigen::Matrix4f::Identity();
+    decal.responseMask =
+        DecalResponseColor | DecalResponseNormal;
+    decal.normalStrength = 0.72f;
+    world->AddDecal("Scorch", decal);
+
+    WorldSnapshotBuilder builder;
+    const auto snapshot = builder.Build(*world, {});
+    ASSERT_TRUE(snapshot.IsSuccess());
+    ASSERT_EQ(snapshot.Value().decals.size(), 1u);
+    EXPECT_EQ(snapshot.Value().decals[0].responseMask,
+        DecalResponseColor | DecalResponseNormal);
+    EXPECT_FLOAT_EQ(snapshot.Value().decals[0].normalStrength, 0.72f);
 }
 
 TEST_F(ScriptRuntimeTest, PauseFreezesAndStopRestoresAuthoredTransform)

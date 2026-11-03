@@ -54,7 +54,7 @@ public:
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) = 0;
     // DecalRenderer 拥有 unit cube、实例 SSBO 与 decal pipeline；pass 仅提供
-    // 已开始的 DBuffer A/B/C 窗口和 sceneDepth 输入描述符集。
+    // 已开始的 DBuffer A/B/C/D + Mask 窗口和 sceneDepth 输入描述符集。
     virtual void RecordDecalPass(
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,

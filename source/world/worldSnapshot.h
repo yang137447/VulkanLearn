@@ -13,6 +13,7 @@
 #include <Eigen/Dense>
 
 #include "baseStructs.h"
+#include "decalResponse.h"
 #include "environmentType.h"
 #include "particles/particleAsset.h"
 #include "particles/particleRuntimeState.h"
@@ -183,8 +184,8 @@ struct ParticleSystemSnapshot
 
 // BeforeLighting DBuffer decal 的冻结渲染输入。decalToWorld 已包含
 // 单位 cube 的半尺寸缩放；世界位置落在该矩阵的 [-1,1] 局部立方体内时
-// 才参与投影。颜色/roughness/AO 通过 DBuffer A/C 在 deferredLighting
-// 之前合成，不直接读写 GBuffer。
+// 才参与投影。颜色/normal/roughness/AO/metallic 通过 DBuffer A/B/C/D
+// 在 deferredLighting 之前合成，不直接读写 GBuffer。
 struct DecalSnapshot
 {
     RuntimeId decalId = 0;
@@ -199,6 +200,9 @@ struct DecalSnapshot
     float roughness = 1.0f;
     float metallic = 0.0f;
     float ambientOcclusion = 1.0f;
+    // 与 WorldDecal 同名的作者数据；渲染器消费前不改变其语义。
+    uint32_t responseMask = DefaultDecalResponse();
+    float normalStrength = 0.35f;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

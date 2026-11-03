@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "render/camera/cameraExposure.h"
 #include "render/lighting/physicalLighting.h"
+#include "world/decalResponse.h"
 #include "world/environmentType.h"
 #include "script/scriptScene.h"
 
@@ -127,7 +128,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             }
             for (const char* field : {"opacity", "edgeSoftness",
                      "noiseStrength", "roughness", "metallic",
-                     "ambientOcclusion"})
+                     "ambientOcclusion", "normalStrength"})
             {
                 if (object.contains(field))
                 {
@@ -138,6 +139,18 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                             std::string("Decal ") + field +
                             " must be in [0, 1]");
                 }
+            }
+            if (object.contains("decalResponse"))
+            {
+                if (!object.at("decalResponse").is_string())
+                    throw std::invalid_argument(
+                        "Decal decalResponse must be string");
+                const std::string response =
+                    object.at("decalResponse").get<std::string>();
+                uint32_t mask = 0;
+                if (!TryParseDecalResponse(response, mask))
+                    throw std::invalid_argument(
+                        "Decal has unknown decalResponse: " + response);
             }
             if (object.contains("sortOrder"))
             {

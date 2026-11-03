@@ -73,6 +73,12 @@ private:
     {
         return fragmentStoresAndAtomicsEnabled;
     }
+    // DBuffer decal 的 mask 附件和颜色附件使用不同 blend state，
+    // 只有设备真正启用 independentBlend 才能创建这种 pipeline。
+    inline bool IsIndependentBlendEnabled() const
+    {
+        return independentBlendEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -134,6 +140,7 @@ private:
     bool dualSourceBlendEnabled = false;
     bool drawIndirectCountEnabled = false;
     bool fragmentStoresAndAtomicsEnabled = false;
+    bool independentBlendEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

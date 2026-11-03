@@ -203,12 +203,23 @@ void VulkanManager::CreateVkDevice()
         supportedFeatures.dualSrcBlend == VK_TRUE;
     fragmentStoresAndAtomicsEnabled =
         supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
+    independentBlendEnabled =
+        supportedFeatures.independentBlend == VK_TRUE;
     // 粒子 overdraw 诊断在 fragment 中对 storage buffer 做原子累加；
     // 当前没有第二套无原子 shader，因此在设备初始化时显式拒绝缺失能力。
     if (!fragmentStoresAndAtomicsEnabled)
     {
         throw std::runtime_error(
             "Vulkan device must support fragmentStoresAndAtomics for particle overdraw diagnostics.");
+    }
+    // DBuffer decal 的 attachment 0..2（straight-alpha）与 attachment 3
+    // （One/One mask）必须拥有不同 blend state，因此把 independentBlend
+    // 视为核心能力；缺失时必须在设备初始化处显式拒绝，而不是等
+    // pipeline 创建时产生 Vulkan 验证错误。
+    if (!independentBlendEnabled)
+    {
+        throw std::runtime_error(
+            "Vulkan device must support independentBlend for DBuffer decals.");
     }
     vk::PhysicalDeviceVulkan12Features supportedVulkan12Features;
     vk::PhysicalDeviceFeatures2 supportedFeatures2;
@@ -225,6 +236,8 @@ void VulkanManager::CreateVkDevice()
         .setSamplerAnisotropy(VK_TRUE)
         .setFragmentStoresAndAtomics(
             fragmentStoresAndAtomicsEnabled ? VK_TRUE : VK_FALSE)
+        .setIndependentBlend(
+            independentBlendEnabled ? VK_TRUE : VK_FALSE)
         .setDualSrcBlend(
             dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
     vk::PhysicalDeviceVulkan12Features deviceVulkan12Features;

@@ -27,6 +27,8 @@ layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 10) uniform sampler2D dbufferA;
 layout(set = 3, binding = 11) uniform sampler2D dbufferB;
 layout(set = 3, binding = 12) uniform sampler2D dbufferC;
+layout(set = 3, binding = 13) uniform sampler2D dbufferMask;
+layout(set = 3, binding = 14) uniform sampler2D dbufferD;
 GBufferData SampleGBuffer(vec2 uv)
 {
     GBufferData data;
@@ -49,7 +51,9 @@ void main()
         surface,
         texture(dbufferA, inUV),
         texture(dbufferB, inUV),
-        texture(dbufferC, inUV));
+        texture(dbufferC, inUV),
+        texture(dbufferD, inUV),
+        texture(dbufferMask, inUV));
 
     float deviceDepth = texture(sceneDepth, inUV).r;
     surface.worldPosition = ReconstructWorldPositionFromSceneDepth(inUV, deviceDepth);

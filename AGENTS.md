@@ -61,8 +61,9 @@ Current implemented areas include:
   runtime emitter/budget/user-parameter APIs and telemetry; current schema, ownership and
   limits: `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
-  sceneDepth reconstruction, stable sort instances and DBuffer A/B/C composition; current
-  scope and limits: `documents/contracts/decal-runtime.md`
+  sceneDepth reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
+  DecalResponse channel masks and procedural FBM normals; current scope and limits:
+  `documents/contracts/decal-runtime.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -80,7 +81,9 @@ falls back to DefaultLit. Deferred models additionally need GBuffer encode/decod
 Infrastructure that existed only
 to serve those models went with them: the four LUT-generator compute shaders (`clothLookupTables`,
 `eyeCausticLut`, `hairAzimuthalLut`, `subsurfaceLookupTables`), their C++ generators/loaders, the SSS blur and
-composition passes, and set 3 bindings 10..13. `deferredLighting` therefore writes `sceneColor` directly
+composition passes, and the LUT sampler slots that used to live at set 3 bindings 10..13. Those bindings are
+now occupied by the decal DBuffer inputs (10..14), so a rebuilt LUT model must allocate free slots instead.
+`deferredLighting` therefore writes `sceneColor` directly
 again (single output, `loadOp=clear`) and `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` is now a compile-time
 `#error`. Re-adding a deferred model that needs a LUT means adding the graph `input`, the pass material
 texture slot and the shader sampler declaration together, keeping binding order equal to the graph input order.
@@ -295,9 +298,9 @@ Scene JSON currently supports these `type` values:
   `documents/contracts/particle-system.md`)
 - `decal` (BeforeLighting DBuffer decal; current scope and limits are in
   `documents/contracts/decal-runtime.md`; unit-cube projection, sceneDepth
-  reconstruction, DBuffer A/C base-color + roughness/metallic/AO composition
-  are connected; DBufferB normal coverage, decal materials/textures and
-  DBufferMask/DecalResponse are not)
+  reconstruction, DBuffer A/B/C/D + Mask composition, DecalResponse channel
+  masks and procedural normals are connected; decal textures/material graph,
+  stencil and non-deferred receivers are not)
 
 `terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
 accept it, the world loader/builder has no terrain path, and no terrain runtime

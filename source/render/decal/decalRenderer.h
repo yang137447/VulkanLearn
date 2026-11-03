@@ -19,8 +19,8 @@ class RendererBackendVulkan;
 struct RenderScene;
 
 // BeforeLighting DBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
-// instanced unit cube 批量绘制到 DBuffer A/B/C；实例数据只在当前 image
-// 的 SSBO 中更新，不创建逐 decal 的 descriptor 或 GPU 资源。
+// instanced unit cube 批量绘制到 DBuffer A/B/C/D 与 DBufferMask；实例数据
+// 只在当前 image 的 SSBO 中更新，不创建逐 decal 的 descriptor 或 GPU 资源。
 class DecalRenderer
 {
 public:
@@ -57,13 +57,14 @@ private:
     {
         Eigen::Matrix4f decalToWorld;
         Eigen::Matrix4f worldToDecal;
+        // xyz = baseColor，w = normalStrength（0 表示程序化法线不生效）。
         Eigen::Vector4f color;
         // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
         Eigen::Vector4f surface;
-        // x = edgeSoftness, y = noiseStrength, z = seed, w = reserved.
+        // x = edgeSoftness, y = noiseStrength, z = seed,
+        // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
         Eigen::Vector4f params;
-        // xyz = world normal, w = normal opacity. Current source leaves
-        // normal opacity at 0 until a normal-capable decal material exists.
+        // 预留给 decal normal 材质；当前程序化法线直接写入 DBufferB。
         Eigen::Vector4f normal;
     };
     static_assert(sizeof(DecalInstance) == 192,
