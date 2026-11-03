@@ -456,6 +456,33 @@ void RasterizeBillboard(
             }
         }
     }
+    else if (asset.billboardAlignment == "fixed")
+    {
+        // fixed 基在发射器局部空间作者化；与 GPU 路径一样先乘 emitter.model
+        // 线性部分，再构造 right 并用 normal × right 正交化 up。
+        if (asset.billboardNormal.squaredNorm() > 1.0e-6f &&
+            asset.billboardUp.squaredNorm() > 1.0e-6f)
+        {
+            const Eigen::Matrix3f linear =
+                emitter.model.block<3, 3>(0, 0);
+            const Eigen::Vector3f normal =
+                (linear * asset.billboardNormal).normalized();
+            const Eigen::Vector3f upHint =
+                (linear * asset.billboardUp).normalized();
+            const Eigen::Vector3f candidateRight =
+                upHint.cross(normal);
+            if (candidateRight.squaredNorm() > 1.0e-6f)
+            {
+                billboardRight = candidateRight.normalized();
+                const Eigen::Vector3f candidateUp =
+                    normal.cross(billboardRight);
+                if (candidateUp.squaredNorm() > 1.0e-6f)
+                {
+                    billboardUp = candidateUp.normalized();
+                }
+            }
+        }
+    }
 
     float rotationDegrees =
         asset.rotation + asset.rotationSpeed * particle.positionAge.w();

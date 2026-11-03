@@ -194,7 +194,8 @@ void main()
 
     vec3 billboardRight = frame.cameraRight.xyz;
     vec3 billboardUp = frame.cameraUp.xyz;
-    if (frame.billboardParams.x > 0.5)
+    int billboardAlignment = int(frame.billboardParams.x + 0.5);
+    if (billboardAlignment == 1)
     {
         vec3 velocity = particle.velocityLife.xyz;
         if (frame.shape.z > 0.5)
@@ -216,6 +217,30 @@ void main()
                     billboardRight = candidateRight;
                     billboardUp = normalize(candidateUp);
                 }
+            }
+        }
+    }
+    else if (billboardAlignment == 2)
+    {
+        // fixed 基与 particle.vert 保持一致：normal 是 quad 面法线，
+        // up 只作提示，正交化后 cross(right, up) == normal。
+        vec3 normal = frame.billboardFixedNormal.xyz;
+        vec3 upHint = frame.billboardFixedUp.xyz;
+        float normalLengthSquared = dot(normal, normal);
+        float upLengthSquared = dot(upHint, upHint);
+        if (normalLengthSquared > 1.0e-6 &&
+            upLengthSquared > 1.0e-6)
+        {
+            vec3 normalDir = normal * inversesqrt(normalLengthSquared);
+            vec3 upDir = upHint * inversesqrt(upLengthSquared);
+            vec3 candidateRight = cross(upDir, normalDir);
+            float rightLengthSquared =
+                dot(candidateRight, candidateRight);
+            if (rightLengthSquared > 1.0e-6)
+            {
+                billboardRight =
+                    candidateRight * inversesqrt(rightLengthSquared);
+                billboardUp = normalize(cross(normalDir, billboardRight));
             }
         }
     }

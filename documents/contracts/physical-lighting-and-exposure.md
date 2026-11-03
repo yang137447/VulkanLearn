@@ -53,6 +53,52 @@ snapshots; parent scale affects position, not intensity or cone angles.
 Component directional lights do not replace the authored primary CSM sun.
 See [C# Blueprint runtime](csharp-blueprint-runtime.md) for fields and lifetime rules.
 
+## Point Light Pulse
+
+`pointLight` may declare an optional periodic pulse:
+
+```json
+{
+    "type": "pointLight",
+    "intensity": 25.0,
+    "pulse": {
+        "period": 1.0,
+        "duration": 0.08,
+        "phase": 0.0,
+        "peakIntensity": 250.0
+    }
+}
+```
+
+`period`, `duration`, `phase`, and `peakIntensity` are required when `pulse`
+exists. `period` and `duration` are seconds with `period > 0` and
+`0 < duration <= period`; `phase` is a finite second offset and may be
+negative; `peakIntensity` is additive candela and must be in
+`[0, 1e12]`. Only `pointLight` accepts `pulse`; other light types reject the
+field instead of silently ignoring it.
+
+The CPU evaluates the pulse from renderer animation time:
+
+```text
+local = wrap(time + phase, period)
+factor = local < duration ? (1 - local / duration)^2 : 0
+effectiveIntensity = baseIntensity + peakIntensity * factor
+```
+
+`baseIntensity` is always present, so the light remains at its authored level
+between pulses. The curve starts at the full peak and decays smoothly to zero
+at the pulse boundary. The factor is evaluated at the GPU-upload boundary and
+only the upload copy is modified; the frozen `LightSnapshot` keeps the authored
+base intensity. The point/spot candela-to-centimeter conversion runs after the
+effective intensity is computed.
+
+Time comes from `RenderSystem::animationTimeSeconds`, advanced by the same
+clamped frame delta used for exposure. It is wall-clock render time, not
+simulation particle time: the pulse continues while Play is paused and has no
+particle birth/death readback. This is a deliberate approximation for effects
+such as muzzle flashes, explosions, and Tesla arcs; it is not a particle-driven
+light. Editor thumbnails upload lights with time 0.
+
 ## Camera Exposure
 
 Every camera must provide:

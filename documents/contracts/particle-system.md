@@ -237,7 +237,7 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
 - `ribbonParams` 之后再追加 `meshParams`（`x = alignment`，0 world、1 camera、2 velocity）
   与 `meshScale`（`xyz = 网格局部缩放`）。billboard/ribbon 发射器也写入，但只有 mesh
   shader 读取。随后是 `colorTint`（RGBA 运行时颜色乘数）与 `billboardParams`
-  （`x = billboardAlignment`，0 camera、1 velocity；`y/z/w` 保留）；`billboardParams`
+  （`x = billboardAlignment`，0 camera、1 velocity、2 fixed；`y/z/w` 保留）；`billboardParams`
   只有 billboard shader 读取。
 - `billboardParams` 之后是 `shapeParams`（`x = shape code`，0 sphere、1 box、2 cone、
   3 cylinder、4 disc、5 ring；`y = height`、`z = innerRadius`、`w` 保留）与
@@ -256,8 +256,10 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   `w = segments`）、`beamEnd`（`xyz = 世界空间终点`，`w = width`）、`beamNoise`
   （`x = amplitude`、`y = frequency`、`z = speed`、`w = endpointJitter`）与
   `beamParams`（`x = count`，`y/z/w` 保留）。四个字段都在 UBO 末尾，不重排既有字段。
-  因此 `ParticleFrame` 的 std140 大小是 6320 字节，四个 beam 字段偏移分别是
-  6256、6272、6288、6304。
+  随后追加 fixed billboard 基：`billboardFixedNormal` 与 `billboardFixedUp`
+  （`xyz` 为 CPU 归一化后的世界空间向量，`w` 保留）。因此 `ParticleFrame` 的
+  std140 大小是 6352 字节，beam 字段偏移是 6256、6272、6288、6304，fixed 字段偏移
+  是 6320、6336。
   C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
@@ -671,9 +673,17 @@ GPU 写回 instanceCount 的 indirect draw。
   最近 3 个历史点生成面向相机的条带；mesh 用静态 SM 网格按粒子实例化；beam 在作者化
   起止点之间生成多条带噪声的并行弧，详见对应章节。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
-  `"camera"` 或 `"velocity"`。`velocity` 用粒子速度方向构造 billboard 基，让 quad 的
-  法线对齐速度；速度退化时回退 camera 基，详见「Billboard 朝向」。ribbon、mesh 与 beam
-  忽略该字段。
+  `"camera"`、`"velocity"` 或 `"fixed"`。`velocity` 用粒子速度方向构造 billboard 基，
+  让 quad 的法线对齐速度；`fixed` 用作者化的发射器局部基固定 quad 朝向，适合枪口闪光等
+  不随相机转动的卡片。任何模式退化时都回退 camera 基，详见「Billboard 朝向」。
+  ribbon、mesh 与 beam 忽略该字段。
+- `billboardNormal`：`vec3`，仅 `billboardAlignment: "fixed"` 有意义，默认
+  `[0, 0, 1]`。它是 quad 在发射器局部空间的面法线，上传前乘 `emitter.model` 线性部分；
+  必须有限且非零。作者无需预先归一化，运行时归一化。
+- `billboardUp`：`vec3`，仅 `billboardAlignment: "fixed"` 有意义，默认
+  `[0, 1, 0]`。它是发射器局部空间上方向提示，必须有限、非零，且与归一化后的
+  `billboardNormal` 不平行（`|dot| < 0.999`）。渲染时先构造
+  `right = normalize(cross(up, normal))`，再用 `cross(normal, right)` 正交化上方向。
 - `ribbonWidth`：ribbon 世界空间半宽（cm），默认 `5`，必须 `> 0` 且有限。
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
@@ -891,11 +901,24 @@ billboardRight = normalize(cross(vec3(0, 1, 0), forward))
 billboardUp    = normalize(cross(forward, billboardRight))
 ```
 
-`billboardAlignment` 只影响 billboard；ribbon、mesh 与 beam 都忽略该字段。
-
 此时 quad 的法线对齐速度方向，适合拖尾/火花。`|v|^2 <= 1e-6`、`v` 与世界上方
 平行，或叉积/归一化后的基向量退化时，整个 quad 回退相机基，避免零面积 quad 与 NaN。
 `localSpace` 发射器先把模拟空间速度乘 `localToWorld` 的线性部分，再构造世界空间基。
+
+资产也可把 `billboardAlignment` 设为 `"fixed"`，用作者化的发射器局部向量固定 quad 朝向：
+
+```text
+normal         = normalize(emitterLinear * billboardNormal)
+upHint         = normalize(emitterLinear * billboardUp)
+billboardRight = normalize(cross(upHint, normal))
+billboardUp    = normalize(cross(normal, billboardRight))
+```
+
+因此 quad 的几何法线 `cross(billboardRight, billboardUp)` 精确等于 `normal`；上方向只作为
+提示，最终基与 `normal` 正交。`billboardNormal` / `billboardUp` 是发射器局部数据，上传前
+统一乘 `emitter.model` 的线性部分，因此旋转/缩放粒子系统会带着卡片一起转。任一向量为零、二者平行，或构造出的
+基退化时，整个 quad 回退相机基。固定朝向与逐粒子旋转、pivot、UV、照明和 `maxScreenSize`
+正交组合；同一发射器的所有粒子共享该固定基。
 
 `billboardAlignment` 只影响 billboard；ribbon、mesh 与 beam 各有独立的朝向逻辑。逐粒子旋转
 仍在该朝向基内绕 quad 中心应用，pivot 与 `maxScreenSize` 语义不变。
@@ -1485,7 +1508,8 @@ BeforeLighting DBuffer decal（见 `decal-runtime.md`），但没有 Light Rende
 `decalResponse = colorNormalRoughness` 写入 DBuffer。
 
 该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的粒子驱动灯光目前
-用静态点光近似；没有 UE Material Graph；碎块复用 `SM_rock`，贴图与 decal
+用周期 `pulse` 点光近似（CPU 动画时间，不是粒子驱动）；没有 UE Material Graph；
+碎块复用 `SM_rock`，贴图与 decal
 图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
 
 ```powershell
@@ -1506,7 +1530,7 @@ main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json -
 重建，`burstInterval = 1.0s` 循环；程序化步枪与弹壳为静态 SM，闪光/烟
 贴图为程序化 TGA；火花使用引擎程序化圆盘，不接纹理。
 
-该案例是结构/视觉近似：UE 的 particle-driven light 用静态暖色点光近似；
-front/side 卡片在 VulkanLearn 中统一为 camera billboard，没有 distortion
-材质或 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
+该案例是结构/视觉近似：UE 的 particle-driven light 用周期 `pulse` 点光近似；
+front 卡片使用 camera billboard，side 卡片使用 fixed billboard；仍没有
+distortion 材质或 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
 维护。启动与截图见该目录的 `README.md`。

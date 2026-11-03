@@ -103,6 +103,17 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
     light->SetRadius(radius);
     light->SetPosition(position);
     light->SetRotation(rotation);
+    if (node.contains("pulse"))
+    {
+        const nlohmann::json& pulse = node.at("pulse");
+        // 校验器要求 pulse 的四个子字段同时存在；这里直接取，避免绕过校验
+        // 的调用路径把缺失字段静默降级成“无脉冲”。
+        light->SetPulsePeriod(pulse.at("period").get<float>());
+        light->SetPulseDuration(pulse.at("duration").get<float>());
+        light->SetPulsePhase(pulse.at("phase").get<float>());
+        light->SetPulsePeakIntensity(
+            pulse.at("peakIntensity").get<float>());
+    }
     return light;
 }
 

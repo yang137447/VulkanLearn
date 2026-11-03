@@ -217,7 +217,8 @@ private:
         Eigen::Vector4f meshScale;
         // 场景实例级颜色 tint；rgb 与 alpha 都乘到最终片元输出。
         Eigen::Vector4f colorTint;
-        // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved.
+        // x = billboard alignment (0 camera, 1 velocity, 2 fixed),
+        // y/z/w reserved.
         Eigen::Vector4f billboardParams;
         // x = shape code (0 sphere, 1 box, 2 cone, 3 cylinder, 4 disc,
         // 5 ring), y = height (cm), z = innerRadius (cm), w reserved.
@@ -276,9 +277,13 @@ private:
         Eigen::Vector4f beamNoise;
         // x = 并行弧数量, y/z/w reserved。
         Eigen::Vector4f beamParams;
+        // fixed billboard 的世界空间法线与上方向；xyz 已在 CPU 归一化。
+        // 追加在 beam 之后，保持既有字段偏移不变。
+        Eigen::Vector4f billboardFixedNormal;
+        Eigen::Vector4f billboardFixedUp;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6320,
+        sizeof(FrameUniforms) == 6352,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -379,6 +384,12 @@ private:
     static_assert(
         offsetof(FrameUniforms, beamParams) == 6304,
         "ParticleFrame beamParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, billboardFixedNormal) == 6320,
+        "ParticleFrame billboardFixedNormal offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, billboardFixedUp) == 6336,
+        "ParticleFrame billboardFixedUp offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

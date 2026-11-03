@@ -33,7 +33,8 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
             {"maxParticles", "localSpace", "sortParticles",
                 "randomSeed", "deterministicRandom", "fixedTimeStep"}},
         {"renderer", "Renderer",
-            {"renderMode", "billboardAlignment", "ribbonWidth",
+            {"renderMode", "billboardAlignment", "billboardNormal",
+                "billboardUp", "ribbonWidth",
                 "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
                 "softness", "softParticles", "softParticleDistance",
                 "additive", "meshLighting", "meshAmbient",
@@ -229,7 +230,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "deterministicRandom", "fixedTimeStep"}))
         return "emitter";
     if (IsOneOf(field,
-        {"renderMode", "billboardAlignment", "ribbonWidth",
+        {"renderMode", "billboardAlignment", "billboardNormal",
+            "billboardUp", "ribbonWidth",
             "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
             "softness", "softParticles", "softParticleDistance",
             "additive", "meshLighting", "meshAmbient",

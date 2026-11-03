@@ -10,6 +10,7 @@
 #include "editor/scene/scriptBlueprintPlacement.h"
 #include <fstream>
 #include <chrono>
+#include <limits>
 
 namespace
 {
@@ -404,6 +405,100 @@ TEST(ScriptScene, DecalResponseMapsToDBufferMask)
     EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseRoughness |
         DecalResponseNormal);
     EXPECT_FALSE(TryParseDecalResponse("ColorNormalRoughness", mask));
+}
+
+TEST(ScriptScene, PointLightPulseValidatesRanges)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json light{
+        {"name", "MuzzleFlashLight"},
+        {"type", "pointLight"},
+        {"position", {0, 1, 0}},
+        {"rotation", {0, 0, 0}},
+        {"color", {1.0, 0.8, 0.6}},
+        {"intensity", 25.0},
+        {"intensityUnit", "cd"},
+        {"pulse", {
+            {"period", 1.0},
+            {"duration", 0.08},
+            {"phase", 0.0},
+            {"peakIntensity", 250.0}}}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Point light pulse fixture"},
+        {"objects", Json::array({camera, light})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1]["pulse"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"] = {
+        {"period", 1.0},
+        {"duration", 0.08},
+        {"phase", 0.0},
+        {"peakIntensity", 250.0}};
+
+    scene["objects"][1]["pulse"]["period"] = 0.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["period"] = 1.0;
+    scene["objects"][1]["pulse"]["duration"] = 0.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["duration"] = 1.01;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["duration"] = 0.08;
+    scene["objects"][1]["pulse"]["phase"] =
+        std::numeric_limits<double>::infinity();
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["phase"] = 0.0;
+    scene["objects"][1]["pulse"]["peakIntensity"] = -1.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["peakIntensity"] = 250.0;
+    scene["objects"][1]["pulse"].erase("period");
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["period"] = 1.0;
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    // pulse 只属于点光；方向光/聚光携带该字段会被拒绝，避免静默忽略。
+    scene["objects"][1]["type"] = "directionalLight";
+    scene["objects"][1]["intensityUnit"] = "lux";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["type"] = "spotLight";
+    scene["objects"][1]["intensityUnit"] = "cd";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
+TEST(ScriptScene, PointLightPulseSurvivesSnapshot)
+{
+    World world(1, "Maps/Pulse/SC_Pulse.json");
+    PointLight light;
+    light.SetName("MuzzleFlashLight");
+    light.SetPulsePeriod(0.75f);
+    light.SetPulseDuration(0.05f);
+    light.SetPulsePhase(0.25f);
+    light.SetPulsePeakIntensity(120.0f);
+
+    const LightSnapshot snapshot =
+        BuildWorldPointLightSnapshot(world, "MuzzleFlashLight", light);
+    EXPECT_FLOAT_EQ(snapshot.pulsePeriod, 0.75f);
+    EXPECT_FLOAT_EQ(snapshot.pulseDuration, 0.05f);
+    EXPECT_FLOAT_EQ(snapshot.pulsePhase, 0.25f);
+    EXPECT_FLOAT_EQ(snapshot.pulsePeakIntensity, 120.0f);
+
+    DirectionalLight sun;
+    const LightSnapshot sunSnapshot =
+        BuildWorldDirectionalLightSnapshot(world, "Sun", sun);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePeriod, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulseDuration, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePhase, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePeakIntensity, 0.0f);
 }
 
 TEST(ScriptScene, DistinctIdsCanShareDisplayName)

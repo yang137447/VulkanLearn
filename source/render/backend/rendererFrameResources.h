@@ -62,7 +62,8 @@ public:
         const UBOGlobal& uboGlobal);
     void UpdateLightBuffer(
         uint32_t swapChainImageIndex,
-        const std::vector<LightSnapshot>& lights);
+        const std::vector<LightSnapshot>& lights,
+        float timeSeconds = 0.0f);
     void UpdateMaterialInstanceUniformBuffer(
         uint32_t swapChainImageIndex,
         MaterialInstance& materialInstance);

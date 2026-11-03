@@ -37,6 +37,30 @@ inline void ValidateSceneEnvironmentJson(const nlohmann::json& object)
             throw std::invalid_argument(std::string("Sky requires finite number: ") + field);
 }
 
+// 点光脉冲是 CPU 端时间近似，不参与粒子求值；period/duration 决定窗口，
+// phase 平移窗口，peakIntensity 在窗口内叠加到基础 cd 上。
+inline void ValidatePointLightPulseJson(const nlohmann::json& object)
+{
+    if (!object.contains("pulse"))
+        return;
+    if (object.at("type").get<std::string>() != "pointLight")
+        throw std::invalid_argument("Only pointLight supports pulse");
+    const auto& pulse = object.at("pulse");
+    if (!pulse.is_object())
+        throw std::invalid_argument("pointLight pulse must be object");
+
+    constexpr double maximum = std::numeric_limits<float>::max();
+    const double period = ReadPhysicalNumber(pulse, "period", 0.0, maximum);
+    const double duration = ReadPhysicalNumber(pulse, "duration", 0.0, maximum);
+    (void)ReadPhysicalNumber(pulse, "phase", -maximum, maximum);
+    (void)ReadPhysicalNumber(pulse, "peakIntensity", 0.0, 1.0e12);
+    if (period <= 0.0)
+        throw std::invalid_argument("pointLight pulse period must be > 0");
+    if (duration <= 0.0 || duration > period)
+        throw std::invalid_argument(
+            "pointLight pulse duration must be > 0 and <= period");
+}
+
 // loader 与资产草稿共用的作者数据校验；不读模型、不创建 World 或 GPU 资源。
 inline void ValidateSceneAssetJson(const nlohmann::json& scene)
 {
@@ -95,6 +119,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             type != "environment" && type != "blueprintInstance" &&
             type != "particleSystem" && type != "decal")
             throw std::invalid_argument("Unknown scene object type: " + type);
+        ValidatePointLightPulseJson(object);
         if (type == "particleSystem")
         {
             if (!object.contains("particlePath") ||

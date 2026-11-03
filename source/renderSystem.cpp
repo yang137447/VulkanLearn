@@ -2424,7 +2424,8 @@ void RenderSystem::UploadLightsForPass(
     uint32_t swapChainImageIndex,
     const std::vector<VL::LightSnapshot>& lights)
 {
-    frameResources.UpdateLightBuffer(swapChainImageIndex, lights);
+    frameResources.UpdateLightBuffer(
+        swapChainImageIndex, lights, animationTimeSeconds);
 }
 
 bool RenderSystem::IsCsmEnabled() const
@@ -2613,6 +2614,7 @@ void RenderSystem::UpdateExposureFrameTiming()
     // 眼适应不应因断点、窗口拖拽或首帧长暂停瞬间跳到目标值。
     exposureDeltaSeconds = static_cast<float>(
         std::clamp(elapsed, 1.0 / 240.0, 0.1));
+    animationTimeSeconds += exposureDeltaSeconds;
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(

@@ -443,6 +443,8 @@ private:
     float bloomKnee = 0.5f;
     float bloomClamp = 12.0f;
     float exposureDeltaSeconds = 1.0f / 60.0f;
+    // 渲染线程单调时钟；点光脉冲与曝光共用同一帧间隔，Pause 时仍推进。
+    float animationTimeSeconds = 0.0f;
     bool exposureClockInitialized = false;
     // 最近一次逻辑模拟帧间隔，默认 1/60 保持首帧行为不变。
     float pendingSimulationDeltaSeconds = 1.0f / 60.0f;

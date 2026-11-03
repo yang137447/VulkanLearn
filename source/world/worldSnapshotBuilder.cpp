@@ -163,6 +163,10 @@ LightSnapshot BuildPointLightSnapshot(
     snapshot.intensity = light.GetIntensity();
     snapshot.position = light.GetPosition();
     snapshot.radius = light.GetRadius();
+    snapshot.pulsePeriod = light.GetPulsePeriod();
+    snapshot.pulseDuration = light.GetPulseDuration();
+    snapshot.pulsePhase = light.GetPulsePhase();
+    snapshot.pulsePeakIntensity = light.GetPulsePeakIntensity();
     return snapshot;
 }
 

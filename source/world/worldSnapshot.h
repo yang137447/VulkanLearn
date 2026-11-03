@@ -93,6 +93,12 @@ struct LightSnapshot
     float coneAngleOuter = 0.0f;
     float coneAngleInner = 0.0f;
     float squareSize = 0.0f;
+    // 仅 Point 消费。period<=0 表示无脉冲；其余字段在脉冲窗口内按
+    // (1 - t/duration)^2 叠加到 intensity（cd）上。
+    float pulsePeriod = 0.0f;
+    float pulseDuration = 0.0f;
+    float pulsePhase = 0.0f;
+    float pulsePeakIntensity = 0.0f;
 };
 
 struct EnvironmentSnapshot

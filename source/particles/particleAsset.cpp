@@ -432,6 +432,12 @@ ParticleEmitterAsset ParseEmitter(
         emitter.billboardAlignment =
             json.at("billboardAlignment").get<std::string>();
     }
+    // fixed 模式的发射器局部基；其它 alignment 也接受作者化数值，
+    // 但渲染端只在 billboardAlignment == "fixed" 时消费。
+    emitter.billboardNormal = ReadVec3(
+        json, "billboardNormal", emitter.billboardNormal);
+    emitter.billboardUp = ReadVec3(
+        json, "billboardUp", emitter.billboardUp);
     emitter.billboardShadows = json.value(
         "billboardShadows", emitter.billboardShadows);
     emitter.billboardLighting = json.value(
@@ -1411,10 +1417,41 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
             "or 'beam'");
     }
     if (emitter.billboardAlignment != "camera" &&
-        emitter.billboardAlignment != "velocity")
+        emitter.billboardAlignment != "velocity" &&
+        emitter.billboardAlignment != "fixed")
     {
         throw std::invalid_argument(
-            "Particle billboardAlignment must be 'camera' or 'velocity'");
+            "Particle billboardAlignment must be 'camera', 'velocity' "
+            "or 'fixed'");
+    }
+    if (emitter.billboardAlignment == "fixed")
+    {
+        RequireFinite(emitter.billboardNormal.x(), "billboardNormal.x");
+        RequireFinite(emitter.billboardNormal.y(), "billboardNormal.y");
+        RequireFinite(emitter.billboardNormal.z(), "billboardNormal.z");
+        RequireFinite(emitter.billboardUp.x(), "billboardUp.x");
+        RequireFinite(emitter.billboardUp.y(), "billboardUp.y");
+        RequireFinite(emitter.billboardUp.z(), "billboardUp.z");
+        const float normalLengthSquared =
+            emitter.billboardNormal.squaredNorm();
+        const float upLengthSquared =
+            emitter.billboardUp.squaredNorm();
+        if (!(normalLengthSquared > 1.0e-6f) ||
+            !(upLengthSquared > 1.0e-6f))
+        {
+            throw std::invalid_argument(
+                "Particle fixed billboardNormal/billboardUp must be "
+                "non-zero");
+        }
+        const float parallel = std::abs(
+            emitter.billboardNormal.normalized().dot(
+                emitter.billboardUp.normalized()));
+        if (!(parallel < 0.999f))
+        {
+            throw std::invalid_argument(
+                "Particle fixed billboardNormal and billboardUp must not "
+                "be parallel");
+        }
     }
     if (emitter.ribbonWidth <= 0.0f)
     {

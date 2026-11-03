@@ -19,6 +19,7 @@
 #include "render/foliage/speedTreeWindTransform.h"
 #include "render/frontend/renderScene.h"
 #include "render/lighting/physicalLighting.h"
+#include "render/lighting/lightPulse.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "shaderReflect.h"
 
@@ -388,7 +389,8 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
 
 void RendererFrameResources::UpdateLightBuffer(
     uint32_t swapChainImageIndex,
-    const std::vector<LightSnapshot>& lights)
+    const std::vector<LightSnapshot>& lights,
+    float timeSeconds)
 {
     if (lights.size() > maxLightCount)
     {
@@ -416,7 +418,16 @@ void RendererFrameResources::UpdateLightBuffer(
         }
         else if (light.type == LightSnapshotType::Point)
         {
-            pointLightGPUs.push_back(BuildLightGPU(light));
+            // 脉冲是点光的 CPU 近似：只修改上传副本，冻结的 LightSnapshot
+            // 仍保留作者基础值，避免逐帧上传污染场景状态。
+            LightSnapshot pulsed = light;
+            pulsed.intensity = light.intensity +
+                light.pulsePeakIntensity * EvaluateLightPulse(
+                    timeSeconds,
+                    light.pulsePeriod,
+                    light.pulseDuration,
+                    light.pulsePhase);
+            pointLightGPUs.push_back(BuildLightGPU(pulsed));
         }
         else if (light.type == LightSnapshotType::Spot)
         {

@@ -84,6 +84,8 @@ bool ParticleFieldInModule(
             field == "localSpace" ||
             field == "renderMode" ||
             field == "billboardAlignment" ||
+            field == "billboardNormal" ||
+            field == "billboardUp" ||
             field == "ribbonWidth" ||
             field == "ribbonSegments" ||
             field == "ribbonFade" ||

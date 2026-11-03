@@ -3411,8 +3411,11 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.meshScale.z(),
             0.0f);
         uniforms.colorTint = emitter.colorTint;
+        const int billboardAlignmentCode =
+            ParticleBillboardAlignmentCode(
+                emitter.asset.billboardAlignment);
         uniforms.billboardParams = Eigen::Vector4f(
-            emitter.asset.billboardAlignment == "velocity" ? 1.0f : 0.0f,
+            static_cast<float>(billboardAlignmentCode),
             0.0f,
             0.0f,
             0.0f);
@@ -3554,6 +3557,50 @@ void ParticleRenderer::RecordSimulation(
             static_cast<float>(emitter.asset.beam.count),
             0.0f,
             0.0f,
+            0.0f);
+        // fixed billboard 基在发射器局部空间作者化；上传前乘 emitter.model
+        // 的线性部分，使其跟随粒子系统/武器的旋转与缩放。其它 alignment
+        // 上传默认基；shader 即使误读也拿到有效向量。
+        Eigen::Vector3f fixedNormal(0.0f, 0.0f, 1.0f);
+        Eigen::Vector3f fixedUp(0.0f, 1.0f, 0.0f);
+        if (billboardAlignmentCode == 2)
+        {
+            const Eigen::Matrix3f linear =
+                emitter.model.block<3, 3>(0, 0);
+            fixedNormal = linear * emitter.asset.billboardNormal;
+            fixedUp = linear * emitter.asset.billboardUp;
+            if (!(fixedNormal.squaredNorm() > 1.0e-6f))
+            {
+                fixedNormal = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+            }
+            else
+            {
+                fixedNormal.normalize();
+            }
+            if (!(fixedUp.squaredNorm() > 1.0e-6f))
+            {
+                fixedUp = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+            }
+            else
+            {
+                fixedUp.normalize();
+            }
+            if (fixedNormal.cross(fixedUp).squaredNorm() <= 1.0e-6f)
+            {
+                fixedUp = std::abs(fixedNormal.y()) < 0.99f
+                    ? Eigen::Vector3f(0.0f, 1.0f, 0.0f)
+                    : Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+            }
+        }
+        uniforms.billboardFixedNormal = Eigen::Vector4f(
+            fixedNormal.x(),
+            fixedNormal.y(),
+            fixedNormal.z(),
+            0.0f);
+        uniforms.billboardFixedUp = Eigen::Vector4f(
+            fixedUp.x(),
+            fixedUp.y(),
+            fixedUp.z(),
             0.0f);
         for (int cascade = 0; cascade < 4; ++cascade)
         {

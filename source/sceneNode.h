@@ -63,13 +63,27 @@ public:
   void SetColor(const Eigen::Vector3f& color) { this->color = color; }
   void SetIntensity(float intensity) { this->intensity = intensity; }
   void SetRadius(float radius) { this->radius = radius; }
+  // 周期性脉冲只放大点光；period<=0 表示未启用。渲染端按 CPU 时间叠加
+  // peakIntensity，基础 intensity 始终保留。
+  void SetPulsePeriod(float value) { pulsePeriod = value; }
+  void SetPulseDuration(float value) { pulseDuration = value; }
+  void SetPulsePhase(float value) { pulsePhase = value; }
+  void SetPulsePeakIntensity(float value) { pulsePeakIntensity = value; }
   inline const Eigen::Vector3f& GetColor() const { return color; }
   inline float GetIntensity() const { return intensity; }
   inline float GetRadius() const { return radius; }
+  inline float GetPulsePeriod() const { return pulsePeriod; }
+  inline float GetPulseDuration() const { return pulseDuration; }
+  inline float GetPulsePhase() const { return pulsePhase; }
+  inline float GetPulsePeakIntensity() const { return pulsePeakIntensity; }
 private:
   Eigen::Vector3f color = Eigen::Vector3f::Ones();
   float intensity = 1.0f;
   float radius = 1.0f;
+  float pulsePeriod = 0.0f;
+  float pulseDuration = 0.0f;
+  float pulsePhase = 0.0f;
+  float pulsePeakIntensity = 0.0f;
 };
 
 class SpotLight: public SceneNode {

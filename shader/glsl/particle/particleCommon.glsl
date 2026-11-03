@@ -68,7 +68,7 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 meshScale;
     // 场景实例级颜色 tint；rgb/alpha 都乘到最终片元输出
     vec4 colorTint;
-    // x = billboard alignment (0 camera, 1 velocity), y/z/w reserved
+    // x = billboard alignment (0 camera, 1 velocity, 2 fixed), y/z/w reserved
     vec4 billboardParams;
     // x = shape code (0 sphere, 1 box, 2 cone, 3 cylinder, 4 disc, 5 ring),
     // y = height (cm), z = innerRadius (cm), w reserved
@@ -127,6 +127,9 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 beamNoise;
     // x = 并行弧数量, y/z/w reserved。
     vec4 beamParams;
+    // fixed billboard 的世界空间法线与上方向（CPU 已归一化）。
+    vec4 billboardFixedNormal;
+    vec4 billboardFixedUp;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

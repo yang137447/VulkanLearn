@@ -247,11 +247,13 @@ void main()
     }
 
     // Billboard 朝向基：默认跟随相机平面；velocity 模式让 quad 的法线
-    // 对齐粒子速度，适合拖尾/火花。速度过短、与世界上方平行或
-    // normalize 退化时回退到相机基，避免零面积 quad 与 NaN。
+    // 对齐粒子速度，适合拖尾/火花；fixed 模式使用作者化的世界空间
+    // 法线与上方向，适合枪口闪光等不随相机转动的卡片。任何模式退化时
+    // 都回退到相机基，避免零面积 quad 与 NaN。
     vec3 billboardRight = frame.cameraRight.xyz;
     vec3 billboardUp = frame.cameraUp.xyz;
-    if (frame.billboardParams.x > 0.5)
+    int billboardAlignment = int(frame.billboardParams.x + 0.5);
+    if (billboardAlignment == 1)
     {
         // localSpace 粒子池保存局部速度；构造世界空间 billboard 基前
         // 必须乘发射器线性部分，否则旋转后的发射器会让朝向偏转。
@@ -278,6 +280,30 @@ void main()
                     billboardRight = candidateRight;
                     billboardUp = normalize(candidateUp);
                 }
+            }
+        }
+    }
+    else if (billboardAlignment == 2)
+    {
+        // fixed 基：normal 是 quad 面法线，up 只作为上方向提示；
+        // 先构造 right 再正交化 up，使 cross(right, up) 精确等于 normal。
+        vec3 normal = frame.billboardFixedNormal.xyz;
+        vec3 upHint = frame.billboardFixedUp.xyz;
+        float normalLengthSquared = dot(normal, normal);
+        float upLengthSquared = dot(upHint, upHint);
+        if (normalLengthSquared > 1.0e-6 &&
+            upLengthSquared > 1.0e-6)
+        {
+            vec3 normalDir = normal * inversesqrt(normalLengthSquared);
+            vec3 upDir = upHint * inversesqrt(upLengthSquared);
+            vec3 candidateRight = cross(upDir, normalDir);
+            float rightLengthSquared =
+                dot(candidateRight, candidateRight);
+            if (rightLengthSquared > 1.0e-6)
+            {
+                billboardRight =
+                    candidateRight * inversesqrt(rightLengthSquared);
+                billboardUp = normalize(cross(normalDir, billboardRight));
             }
         }
     }

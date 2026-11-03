@@ -35,6 +35,21 @@ inline std::string ParticleCollisionResourceCacheKey(
     return key;
 }
 
+// billboardParams.x 的编码必须与 particle.vert / particleGlobalGather.comp
+// 保持一致：0 camera、1 velocity、2 fixed。
+inline int ParticleBillboardAlignmentCode(std::string_view alignment)
+{
+    if (alignment == "velocity")
+    {
+        return 1;
+    }
+    if (alignment == "fixed")
+    {
+        return 2;
+    }
+    return 0;
+}
+
 class ParticleAssetLoader
 {
 public:
@@ -112,8 +127,14 @@ struct ParticleEmitterAsset
     std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam
     ParticleBeamAsset beam;
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
-    // 粒子速度。ribbon/mesh/beam 各自使用自己的朝向逻辑。
+    // 粒子速度，fixed 用作者指定的发射器局部法线/上方向。ribbon/mesh/beam
+    // 各自使用自己的朝向逻辑。
     std::string billboardAlignment = "camera";
+    // fixed alignment 使用的发射器局部空间法线（quad 朝向）与上方向提示。
+    // 上传前乘 emitter.model 线性部分，因此会跟随粒子系统/武器的旋转与缩放；
+    // 运行时只做归一化与正交化。
+    Eigen::Vector3f billboardNormal = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+    Eigen::Vector3f billboardUp = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     // billboard/ribbon 默认 unlit；开启后按相机朝向法线接收 CSM 阴影
     // 调暗，属于显式的简化光照开关，不启用完整 PBR。
     bool billboardShadows = false;

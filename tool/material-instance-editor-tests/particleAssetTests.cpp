@@ -2111,9 +2111,98 @@ TEST(ParticleAsset, CapabilitiesAndProjectionExposeBillboardAlignment)
     EXPECT_EQ(alignmentField->value("type", std::string()), "string");
     EXPECT_TRUE(alignmentField->value("resettable", false));
     ASSERT_TRUE(alignmentField->contains("enum"));
-    EXPECT_EQ(alignmentField->at("enum"), Json::array({"camera", "velocity"}));
+    EXPECT_EQ(
+        alignmentField->at("enum"),
+        Json::array({"camera", "velocity", "fixed"}));
     EXPECT_EQ(
         projection["emitters"][0]["billboardAlignment"], "velocity");
+}
+
+TEST(ParticleAsset, BillboardAlignmentFixedParsesWorldBasis)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardAlignment"] = "fixed";
+    document["emitters"][0]["billboardNormal"] = {0.0, 0.0, 1.0};
+    document["emitters"][0]["billboardUp"] = {0.0, 1.0, 0.0};
+
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_fixed.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(asset.emitters[0].billboardAlignment, "fixed");
+    EXPECT_TRUE(asset.emitters[0].billboardNormal.isApprox(
+        Eigen::Vector3f(0.0f, 0.0f, 1.0f)));
+    EXPECT_TRUE(asset.emitters[0].billboardUp.isApprox(
+        Eigen::Vector3f(0.0f, 1.0f, 0.0f)));
+    // 非 fixed 发射器保留默认基，渲染端不会消费它们。
+    EXPECT_EQ(asset.emitters[1].billboardAlignment, "camera");
+    EXPECT_TRUE(asset.emitters[1].billboardNormal.isApprox(
+        Eigen::Vector3f(0.0f, 0.0f, 1.0f)));
+    EXPECT_TRUE(asset.emitters[1].billboardUp.isApprox(
+        Eigen::Vector3f(0.0f, 1.0f, 0.0f)));
+}
+
+TEST(ParticleAsset, BillboardAlignmentFixedRoundTripsThroughEditorPath)
+{
+    Json document = MultiEmitterDocument();
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange change;
+    change.field = "emitters.0.billboardAlignment";
+    change.value = std::string("fixed");
+    changes.push_back(change);
+    change.field = "emitters.0.billboardNormal";
+    change.value = std::array<double, 3>{1.0, 0.0, 0.0};
+    changes.push_back(change);
+    change.field = "emitters.0.billboardUp";
+    change.value = std::array<double, 3>{0.0, 1.0, 0.0};
+    changes.push_back(change);
+
+    ApplyAssetChanges(
+        document, EditorAssetDocumentKind::ParticleSystem, changes);
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            Json::parse(document.dump()),
+            "Maps/SC_test/PS_billboard_fixed.json");
+
+    EXPECT_EQ(asset.emitters[0].billboardAlignment, "fixed");
+    EXPECT_TRUE(asset.emitters[0].billboardNormal.isApprox(
+        Eigen::Vector3f(1.0f, 0.0f, 0.0f)));
+    EXPECT_TRUE(asset.emitters[0].billboardUp.isApprox(
+        Eigen::Vector3f(0.0f, 1.0f, 0.0f)));
+}
+
+TEST(ParticleAsset, BillboardAlignmentFixedRejectsDegenerateBasis)
+{
+    const auto parseWith = [](const Json& document) {
+        return ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_fixed_invalid.json");
+    };
+
+    Json zeroNormal = MultiEmitterDocument();
+    zeroNormal["emitters"][0]["billboardAlignment"] = "fixed";
+    zeroNormal["emitters"][0]["billboardNormal"] = {0.0, 0.0, 0.0};
+    zeroNormal["emitters"][0]["billboardUp"] = {0.0, 1.0, 0.0};
+    EXPECT_THROW(parseWith(zeroNormal), std::invalid_argument);
+
+    Json zeroUp = MultiEmitterDocument();
+    zeroUp["emitters"][0]["billboardAlignment"] = "fixed";
+    zeroUp["emitters"][0]["billboardNormal"] = {0.0, 0.0, 1.0};
+    zeroUp["emitters"][0]["billboardUp"] = {0.0, 0.0, 0.0};
+    EXPECT_THROW(parseWith(zeroUp), std::invalid_argument);
+
+    Json parallel = MultiEmitterDocument();
+    parallel["emitters"][0]["billboardAlignment"] = "fixed";
+    parallel["emitters"][0]["billboardNormal"] = {0.0, 2.0, 0.0};
+    parallel["emitters"][0]["billboardUp"] = {0.0, -3.0, 0.0};
+    EXPECT_THROW(parseWith(parallel), std::invalid_argument);
+
+    Json nonFinite = MultiEmitterDocument();
+    nonFinite["emitters"][0]["billboardAlignment"] = "fixed";
+    nonFinite["emitters"][0]["billboardNormal"] =
+        Json::array({0.0, 0.0, std::numeric_limits<double>::infinity()});
+    nonFinite["emitters"][0]["billboardUp"] = {0.0, 1.0, 0.0};
+    EXPECT_THROW(parseWith(nonFinite), std::invalid_argument);
 }
 
 TEST(ParticleAsset, MeshFieldsParseAndRoundTrip)
