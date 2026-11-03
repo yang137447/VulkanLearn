@@ -1895,6 +1895,131 @@ TEST(ParticleAsset, RibbonFieldsRejectInvalidValues)
         std::invalid_argument);
 }
 
+TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
+{
+    Json document = MultiEmitterDocument();
+    const ParticleSystemAsset defaults =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_beam_defaults.json");
+    ASSERT_EQ(defaults.emitters.size(), 2u);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.start.x(), -200.0f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.end.x(), 200.0f);
+    EXPECT_EQ(defaults.emitters[0].beam.segments, 16u);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.width, 3.0f);
+    EXPECT_EQ(defaults.emitters[0].beam.count, 4u);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.noiseAmplitude, 18.0f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.noiseFrequency, 3.0f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.noiseSpeed, 5.0f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.endpointJitter, 0.0f);
+
+    document["emitters"][0]["renderMode"] = "beam";
+    document["emitters"][0]["beam"] = Json{
+        {"start", {-1.0, 2.0, 3.0}},
+        {"end", {4.0, 5.0, 6.0}},
+        {"segments", 24},
+        {"width", 2.5},
+        {"count", 5},
+        {"noiseAmplitude", 25.0},
+        {"noiseFrequency", 4.0},
+        {"noiseSpeed", 6.0},
+        {"endpointJitter", 7.0}};
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_beam_custom.json");
+
+    EXPECT_EQ(asset.emitters[0].renderMode, "beam");
+    EXPECT_EQ(asset.emitters[0].beam.start,
+        Eigen::Vector3f(-1.0f, 2.0f, 3.0f));
+    EXPECT_EQ(asset.emitters[0].beam.end,
+        Eigen::Vector3f(4.0f, 5.0f, 6.0f));
+    EXPECT_EQ(asset.emitters[0].beam.segments, 24u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.width, 2.5f);
+    EXPECT_EQ(asset.emitters[0].beam.count, 5u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseAmplitude, 25.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseFrequency, 4.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseSpeed, 6.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.endpointJitter, 7.0f);
+
+    // beam 不参与逐粒子排序，alpha 路径不强制 sortParticles=true。
+    document["emitters"][0]["blend"] = "alpha";
+    document["emitters"][0]["sortParticles"] = false;
+    EXPECT_NO_THROW(
+        (void)ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_beam_alpha.json"));
+}
+
+TEST(ParticleAsset, BeamFieldsRejectInvalidValues)
+{
+    const auto expectReject = [](
+        Json document,
+        const char* path)
+    {
+        EXPECT_THROW(
+            ParticleAssetLoader::ParseJson(document, path),
+            std::invalid_argument);
+    };
+    const auto beamDocument = []()
+    {
+        Json document = MultiEmitterDocument();
+        document["emitters"][0]["renderMode"] = "beam";
+        document["emitters"][0]["beam"] = Json{
+            {"start", {-200.0, 0.0, 0.0}},
+            {"end", {200.0, 0.0, 0.0}},
+            {"segments", 16},
+            {"width", 3.0},
+            {"count", 4},
+            {"noiseAmplitude", 18.0},
+            {"noiseFrequency", 3.0},
+            {"noiseSpeed", 5.0},
+            {"endpointJitter", 0.0}};
+        return document;
+    };
+
+    Json document = beamDocument();
+    document["emitters"][0]["beam"]["end"] = {-200.0, 0.0, 0.0};
+    expectReject(document, "Maps/SC_test/PS_beam_degenerate.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["segments"] = 1;
+    expectReject(document, "Maps/SC_test/PS_beam_segments_low.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["segments"] = 65;
+    expectReject(document, "Maps/SC_test/PS_beam_segments_high.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["count"] = 0;
+    expectReject(document, "Maps/SC_test/PS_beam_count_low.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["count"] = 17;
+    expectReject(document, "Maps/SC_test/PS_beam_count_high.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["width"] = 0.0;
+    expectReject(document, "Maps/SC_test/PS_beam_width.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["noiseAmplitude"] = -1.0;
+    expectReject(document, "Maps/SC_test/PS_beam_amplitude.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["noiseFrequency"] = 0.0;
+    expectReject(document, "Maps/SC_test/PS_beam_frequency.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["endpointJitter"] = -1.0;
+    expectReject(document, "Maps/SC_test/PS_beam_jitter.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"] = "not-an-object";
+    expectReject(document, "Maps/SC_test/PS_beam_object.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["start"] = {0.0, 0.0};
+    expectReject(document, "Maps/SC_test/PS_beam_start.json");
+}
+
 TEST(ParticleAsset, CapabilitiesExposeRibbonFields)
 {
     const Json document = MultiEmitterDocument();

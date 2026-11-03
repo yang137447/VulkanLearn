@@ -55,4 +55,19 @@ TEST(ParticleIndirect, MeshFallbackReturnsBillboardShape)
     EXPECT_EQ(shape.instanceCount, 32u);
 }
 
+TEST(ParticleIndirect, BeamUsesSegmentsAndAuthoredArcCount)
+{
+    const ParticleIndirectDrawShape shape =
+        BuildParticleIndirectDrawShape(
+            "beam", 5, 3, false, 0, 24, 5);
+
+    EXPECT_FALSE(shape.indexed);
+    EXPECT_EQ(shape.vertexCount, 24u * 6u);
+    EXPECT_EQ(shape.instanceCount, 5u);
+    // beam 的实例数来自 count，而不是 maxParticles。
+    EXPECT_NE(shape,
+        BuildParticleIndirectDrawShape(
+            "beam", 5, 3, false, 0, 24, 4));
+}
+
 } // namespace

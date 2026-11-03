@@ -22,6 +22,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "particles/particleCollision.h"
 #include "particles/particleBudget.h"
+#include "particles/particleBeam.h"
 #include "particles/particleDeterminism.h"
 #include "particles/particleDump.h"
 #include "particles/particleEmitterBounds.h"
@@ -118,6 +119,27 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
     layout.setBindings[PassSetIndex] = {
         std::move(sceneDepth),
         std::move(shadowMap)};
+    return layout;
+}
+
+GraphicsPipelineLayoutDesc BuildParticleBeamLayout(
+    const PipelineBase& particleLayoutSource)
+{
+    // beam 不读取 sortedPairs/aliveIndices，glslang 会把这两个声明从反射
+    // 结果里裁掉；但 emitter 的 set 0 descriptor set 是按 billboard 管线
+    // 布局分配的，直接绑定会在 vkCmdDraw 报 00358/08600。显式复制 billboard
+    // set 0 的完整 binding 合同，保证布局完全相同，同时不要求 beam shader
+    // 读取无意义的粒子索引。
+    GraphicsPipelineLayoutDesc layout;
+    layout.overrideSets[0] = true;
+    for (const ShaderBinding& binding :
+         particleLayoutSource.GetDescriptorLayoutBindings())
+    {
+        if (binding.set == 0)
+        {
+            layout.setBindings[0].push_back(binding);
+        }
+    }
     return layout;
 }
 
@@ -420,6 +442,29 @@ void ParticleRenderer::Initialize(
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::AlphaBlend);
 
+    // beam 同样不使用顶点输入；起止点、段数与噪声参数都来自 FrameUniforms。
+    // 与 ribbon 使用同一 pass 合同和 descriptor set 0，避免额外描述符池。
+    ShaderVariantKey beamVariant = variant;
+    beamVariant.shaderName = "particle/particleBeam";
+    const GraphicsShaderVariantArtifact& beamArtifact =
+        factory.PrepareGraphicsShaderVariant(beamVariant);
+    const GraphicsPipelineLayoutDesc beamLayout =
+        BuildParticleBeamLayout(*additivePipeline);
+    beamAdditivePipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        contract,
+        beamArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::Additive,
+        beamLayout);
+    beamAlphaPipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        contract,
+        beamArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::AlphaBlend,
+        beamLayout);
+
     // mesh 粒子读取静态 SM 的 Vertex stream，因此同一条 particle pass
     // 需要使用带 vertex input 的合同；descriptor set 仍与 billboard 相同。
     ShaderVariantKey meshVariant = variant;
@@ -504,6 +549,8 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     alphaPipeline.reset();
     ribbonAdditivePipeline.reset();
     ribbonAlphaPipeline.reset();
+    beamAdditivePipeline.reset();
+    beamAlphaPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
     globalDrawPipeline.reset();
@@ -712,7 +759,11 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             for (const ParticleEmitterAsset& emitter :
                  systemAsset.emitters)
             {
-                authored.push_back(emitter.maxParticles);
+                // beam 不分配模拟粒子池，也不参与总预算消耗。
+                authored.push_back(
+                    emitter.renderMode == "beam"
+                        ? 0u
+                        : emitter.maxParticles);
             }
             fallbackBudgets =
                 ComputeParticleEmitterBudgetCapacities(
@@ -740,11 +791,15 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 telemetryBudgetsUsable && telemetry != nullptr
                 ? telemetry->budgetedMaxParticles
                 : fallbackBudgets.at(emitterIndex);
+            // beam 是纯渲染模式：即使 emitterBudgetScale=0 或前面的
+            // emitter 耗尽总预算，也不能把电弧整个裁掉。
             const uint32_t effectiveMaxParticles =
-                ResolveParticleEmitterCapacity(
-                    authoredEmitter.maxParticles,
-                    budgetedMaxParticles,
-                    telemetryBudgetsUsable);
+                authoredEmitter.renderMode == "beam"
+                    ? authoredEmitter.maxParticles
+                    : ResolveParticleEmitterCapacity(
+                        authoredEmitter.maxParticles,
+                        budgetedMaxParticles,
+                        telemetryBudgetsUsable);
             if (!ShouldAllocateParticlePool(
                     effectiveMaxParticles))
             {
@@ -773,7 +828,9 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                     emitter.renderMode == "mesh",
                     emitterIt == emitters.end()
                         ? 0u
-                        : emitterIt->second->meshIndexCount);
+                        : emitterIt->second->meshIndexCount,
+                    emitter.beam.segments,
+                    emitter.beam.count);
             // 可见性/启用状态与实例覆盖写入所有分支：新建池直接继承，
             // 已有池每帧跟随快照；开关切换不走资源重建。
             if (emitterIt == emitters.end() ||
@@ -2390,7 +2447,9 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
             emitter.asset.maxParticles,
             emitter.asset.ribbonSegments,
             meshUsable,
-            emitter.meshIndexCount);
+            emitter.meshIndexCount,
+            emitter.asset.beam.segments,
+            emitter.asset.beam.count);
     const vk::DeviceSize indirectBytes = indirectShape.indexed
         ? sizeof(vk::DrawIndexedIndirectCommand)
         : sizeof(vk::DrawIndirectCommand);
@@ -3451,6 +3510,51 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.billboardAmbient,
             0.0f,
             0.0f);
+        // beam 端点是发射器局部空间作者数据，渲染前统一乘 emitter.model；
+        // localSpace 对 beam 没有额外含义。
+        const Eigen::Vector3f beamStartWorld =
+            (emitter.model * Eigen::Vector4f(
+                emitter.asset.beam.start.x(),
+                emitter.asset.beam.start.y(),
+                emitter.asset.beam.start.z(),
+                1.0f)).head<3>();
+        const Eigen::Vector3f beamEndWorld =
+            (emitter.model * Eigen::Vector4f(
+                emitter.asset.beam.end.x(),
+                emitter.asset.beam.end.y(),
+                emitter.asset.beam.end.z(),
+                1.0f)).head<3>();
+        // 端点已经被 model 的尺度放大；宽度/噪声/抖动是局部空间长度，
+        // 必须使用同一最大列缩放，否则非 1 缩放下包围球与画面不一致。
+        float beamScale = 0.0f;
+        const Eigen::Matrix3f beamLinear =
+            emitter.model.block<3, 3>(0, 0);
+        for (int column = 0; column < 3; ++column)
+        {
+            beamScale = std::max(
+                beamScale,
+                beamLinear.col(column).norm());
+        }
+        uniforms.beamStart = Eigen::Vector4f(
+            beamStartWorld.x(),
+            beamStartWorld.y(),
+            beamStartWorld.z(),
+            static_cast<float>(emitter.asset.beam.segments));
+        uniforms.beamEnd = Eigen::Vector4f(
+            beamEndWorld.x(),
+            beamEndWorld.y(),
+            beamEndWorld.z(),
+            emitter.asset.beam.width * beamScale);
+        uniforms.beamNoise = Eigen::Vector4f(
+            emitter.asset.beam.noiseAmplitude * beamScale,
+            emitter.asset.beam.noiseFrequency,
+            emitter.asset.beam.noiseSpeed,
+            emitter.asset.beam.endpointJitter * beamScale);
+        uniforms.beamParams = Eigen::Vector4f(
+            static_cast<float>(emitter.asset.beam.count),
+            0.0f,
+            0.0f,
+            0.0f);
         for (int cascade = 0; cascade < 4; ++cascade)
         {
             uniforms.shadowLightViewProj[cascade] =
@@ -3602,6 +3706,15 @@ void ParticleRenderer::RecordSimulation(
                 nullptr,
                 debugClearToGraphics,
                 nullptr);
+        }
+
+        // beam 是纯渲染模式：弧的形状完全来自 UBO，不消费粒子池、
+        // 不参与局部/全局排序。跳过 simulate/sort/finalize，避免为零
+        // 渲染的粒子池做无意义计算；计数与 overdraw 缓冲仍已清零。
+        if (emitter.asset.renderMode == "beam")
+        {
+            emitter.prewarm = false;
+            continue;
         }
 
         simulatePipeline->Bind(commandBuffer);
@@ -3839,17 +3952,23 @@ void ParticleRenderer::RecordGraphics(
             emitter.meshIndexCount > 0 &&
             emitter.meshVertices.buffer &&
             emitter.meshIndices.buffer;
+        const bool beam =
+            emitter.asset.renderMode == "beam";
         const std::shared_ptr<PipelineBase>& pipeline = mesh
             ? (emitter.asset.additive
                 ? meshAdditivePipeline
                 : meshAlphaPipeline)
-            : (emitter.asset.renderMode == "ribbon"
+            : (beam
+                ? (emitter.asset.additive
+                    ? beamAdditivePipeline
+                    : beamAlphaPipeline)
+                : (emitter.asset.renderMode == "ribbon"
                 ? (emitter.asset.additive
                     ? ribbonAdditivePipeline
                     : ribbonAlphaPipeline)
                 : (emitter.asset.additive
                     ? additivePipeline
-                    : alphaPipeline));
+                    : alphaPipeline)));
         if (!pipeline)
         {
             return;
@@ -3930,13 +4049,35 @@ void ParticleRenderer::RecordGraphics(
                 ? ParticleRibbonVerticesPerParticle(
                     emitter.asset.ribbonSegments)
                 : 6u;
-            if (emitter.indirectArgs.buffer)
+            if (beam)
+            {
+                // beam 的实例数来自作者 count，而不是存活粒子数；必须绕过
+                // indirect/finalize，否则零粒子发射器会被画成 0 条弧。
+                const uint32_t segments =
+                    ClampParticleBeamSegments(
+                        emitter.asset.beam.segments);
+                const uint32_t count = emitter.asset.beam.count;
+                commandBuffer.draw(
+                    segments * kParticleBeamVerticesPerSegment,
+                    count,
+                    0,
+                    0);
+                drawnVertices = ParticleBeamVertexCount(
+                    segments,
+                    count);
+            }
+            else if (emitter.indirectArgs.buffer)
             {
                 commandBuffer.drawIndirect(
                     emitter.indirectArgs.buffer,
                     0,
                     1,
                     sizeof(vk::DrawIndirectCommand));
+                // indirect 的 instanceCount 由 GPU 改写；统计仍沿用本帧
+                // 上界，与 direct fallback 保持一致，不能漏记成 0。
+                drawnVertices =
+                    static_cast<uint64_t>(verticesPerParticle) *
+                    emitter.asset.maxParticles;
             }
             else
             {
@@ -3945,10 +4086,10 @@ void ParticleRenderer::RecordGraphics(
                     emitter.asset.maxParticles,
                     0,
                     0);
+                drawnVertices =
+                    static_cast<uint64_t>(verticesPerParticle) *
+                    emitter.asset.maxParticles;
             }
-            drawnVertices =
-                static_cast<uint64_t>(verticesPerParticle) *
-                emitter.asset.maxParticles;
         }
         emitter.gpuTimer.EndPass(commandBuffer, imageIndex);
         ++frameStats.estimatedDrawCalls;
@@ -4118,7 +4259,15 @@ bool ParticleRenderer::DumpParticles(
                     particleBytes);
             ParticleDumpEmitter dumpEmitter;
             dumpEmitter.key = emitter.key;
-            dumpEmitter.maxParticles = emitter.asset.maxParticles;
+            // beam 不占用模拟粒子池；dump 用 drawInstances 表达弧数量。
+            dumpEmitter.maxParticles =
+                emitter.asset.renderMode == "beam"
+                    ? 0u
+                    : emitter.asset.maxParticles;
+            dumpEmitter.drawInstances =
+                emitter.asset.renderMode == "beam"
+                    ? emitter.asset.beam.count
+                    : 0u;
             dumpEmitter.culled = emitter.culled;
             dumpEmitter.sortParticles = emitter.asset.sortParticles;
             dumpEmitter.localSpace = emitter.asset.localSpace;
@@ -4132,11 +4281,20 @@ bool ParticleRenderer::DumpParticles(
             }
             else
             {
-                dumpEmitter.verticesPerParticle =
-                    emitter.asset.renderMode == "ribbon"
-                        ? ParticleRibbonVerticesPerParticle(
-                            emitter.asset.ribbonSegments)
-                        : 6u;
+                if (emitter.asset.renderMode == "beam")
+                {
+                    dumpEmitter.verticesPerParticle =
+                        ParticleBeamVerticesPerParticle(
+                            emitter.asset.beam.segments);
+                }
+                else
+                {
+                    dumpEmitter.verticesPerParticle =
+                        emitter.asset.renderMode == "ribbon"
+                            ? ParticleRibbonVerticesPerParticle(
+                                emitter.asset.ribbonSegments)
+                            : 6u;
+                }
             }
             dumpEmitter.boundsCenter = emitter.worldCenter;
             dumpEmitter.boundsRadius = emitter.boundsRadius;

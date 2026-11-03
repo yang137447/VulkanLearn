@@ -120,6 +120,13 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     // x = billboard lighting enabled, y = ambient, z/w reserved.
     // 与 mesh 共用 lightDirection/lightColor，但 billboard 使用面向相机的法线。
     vec4 billboardLightParams;
+    // beam 渲染：xyz 世界端点，w 分别为段数与半宽。
+    vec4 beamStart;
+    vec4 beamEnd;
+    // x = 噪声幅度, y = 频率, z = 速度, w = 端点抖动（cm）。
+    vec4 beamNoise;
+    // x = 并行弧数量, y/z/w reserved。
+    vec4 beamParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

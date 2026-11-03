@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "particles/particleBeam.h"
 #include "particles/particleRibbon.h"
 
 namespace VL
@@ -37,7 +38,9 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
     uint32_t maxParticles,
     uint32_t ribbonSegments,
     bool meshUsable,
-    uint32_t meshIndexCount)
+    uint32_t meshIndexCount,
+    uint32_t beamSegments = 16,
+    uint32_t beamCount = 1)
 {
     if (renderMode == "mesh" && meshUsable && meshIndexCount > 0)
     {
@@ -46,6 +49,17 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
             meshIndexCount,
             0,
             maxParticles};
+    }
+
+    if (renderMode == "beam")
+    {
+        // beam 的实际绘制由 RecordGraphics 直接发起；这里保持与其它模式
+        // 相同的描述形状，避免间接参数与管线选择出现两套事实来源。
+        return ParticleIndirectDrawShape{
+            false,
+            0,
+            ParticleBeamVerticesPerParticle(beamSegments),
+            beamCount};
     }
 
     const uint32_t verticesPerParticle = renderMode == "ribbon"

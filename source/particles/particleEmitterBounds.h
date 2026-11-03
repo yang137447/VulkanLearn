@@ -17,6 +17,21 @@ inline float ComputeParticleEmitterLocalRadius(
     const ParticleEmitterAsset& asset,
     float meshLocalBoundsRadius = 0.0f)
 {
+    // beam 不消费粒子池；包围球只需覆盖端点、横向半宽、噪声包络和
+    // 端点抖动。继续叠加寿命/速度/重力会得到与画面无关的巨大球体。
+    if (asset.renderMode == "beam")
+    {
+        return 0.5f *
+                (asset.beam.end - asset.beam.start).norm() +
+            // 两个正交噪声波最坏可叠加成 sqrt(2) 倍幅度；
+            // 端点抖动是三个独立轴，最坏 sqrt(3) 倍。
+            std::sqrt(2.0f) *
+                std::max(asset.beam.noiseAmplitude, 0.0f) +
+            std::max(asset.beam.width, 0.0f) +
+            std::sqrt(3.0f) *
+                std::max(asset.beam.endpointJitter, 0.0f);
+    }
+
     // 速度区间逐轴取绝对值最大者再求范数：非对称区间
     // (例如 [-400, 20]) 也必须按最远可达速度外扩。
     const Eigen::Vector3f maxSpeed(
@@ -91,9 +106,17 @@ inline void ComputeParticleEmitterBounds(
             std::max(maximumScale, linear.col(column).norm());
     }
 
-    const Eigen::Vector3f localCenter = asset.useFixedBounds
-        ? asset.fixedBoundsCenter
-        : Eigen::Vector3f::Zero();
+    Eigen::Vector3f localCenter = Eigen::Vector3f::Zero();
+    if (asset.useFixedBounds)
+    {
+        localCenter = asset.fixedBoundsCenter;
+    }
+    else if (asset.renderMode == "beam")
+    {
+        // beam 的自动包围球必须围绕线段中点，而不是发射器原点；
+        // 否则跨屏幕的 Tesla 弧会被按原点剔除。
+        localCenter = (asset.beam.start + asset.beam.end) * 0.5f;
+    }
     worldCenter =
         (model * Eigen::Vector4f(localCenter.x(),
              localCenter.y(), localCenter.z(), 1.0f)).head<3>();

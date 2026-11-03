@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include "commonFunction.h"
+#include "particles/particleBeam.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleMaterial.h"
 #include "particles/particleMesh.h"
@@ -439,10 +440,12 @@ ParticleEmitterAsset ParseEmitter(
         json, "billboardAmbient", emitter.billboardAmbient);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
-        emitter.renderMode != "mesh")
+        emitter.renderMode != "mesh" &&
+        emitter.renderMode != "beam")
     {
         throw std::invalid_argument(
-            "Particle renderMode must be 'billboard', 'ribbon' or 'mesh'");
+            "Particle renderMode must be 'billboard', 'ribbon', 'mesh' "
+            "or 'beam'");
     }
     emitter.ribbonWidth = ReadFiniteFloat(
         json, "ribbonWidth", emitter.ribbonWidth);
@@ -450,6 +453,33 @@ ParticleEmitterAsset ParseEmitter(
         json, "ribbonSegments", emitter.ribbonSegments);
     emitter.ribbonFade = ReadFiniteFloat(
         json, "ribbonFade", emitter.ribbonFade);
+    if (json.contains("beam"))
+    {
+        const nlohmann::json& beam = json.at("beam");
+        if (!beam.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle beam must be an object");
+        }
+        emitter.beam.start = ReadVec3(
+            beam, "start", emitter.beam.start);
+        emitter.beam.end = ReadVec3(
+            beam, "end", emitter.beam.end);
+        emitter.beam.segments = ReadCountField(
+            beam, "segments", emitter.beam.segments);
+        emitter.beam.width = ReadFiniteFloat(
+            beam, "width", emitter.beam.width);
+        emitter.beam.count = ReadCountField(
+            beam, "count", emitter.beam.count);
+        emitter.beam.noiseAmplitude = ReadFiniteFloat(
+            beam, "noiseAmplitude", emitter.beam.noiseAmplitude);
+        emitter.beam.noiseFrequency = ReadFiniteFloat(
+            beam, "noiseFrequency", emitter.beam.noiseFrequency);
+        emitter.beam.noiseSpeed = ReadFiniteFloat(
+            beam, "noiseSpeed", emitter.beam.noiseSpeed);
+        emitter.beam.endpointJitter = ReadFiniteFloat(
+            beam, "endpointJitter", emitter.beam.endpointJitter);
+    }
     if (json.contains("mesh"))
     {
         const nlohmann::json& mesh = json.at("mesh");
@@ -1260,6 +1290,17 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.spawnRate, "spawnRate");
     RequireFinite(emitter.ribbonWidth, "ribbonWidth");
     RequireFinite(emitter.ribbonFade, "ribbonFade");
+    RequireFinite(emitter.beam.start.x(), "beam.start.x");
+    RequireFinite(emitter.beam.start.y(), "beam.start.y");
+    RequireFinite(emitter.beam.start.z(), "beam.start.z");
+    RequireFinite(emitter.beam.end.x(), "beam.end.x");
+    RequireFinite(emitter.beam.end.y(), "beam.end.y");
+    RequireFinite(emitter.beam.end.z(), "beam.end.z");
+    RequireFinite(emitter.beam.width, "beam.width");
+    RequireFinite(emitter.beam.noiseAmplitude, "beam.noiseAmplitude");
+    RequireFinite(emitter.beam.noiseFrequency, "beam.noiseFrequency");
+    RequireFinite(emitter.beam.noiseSpeed, "beam.noiseSpeed");
+    RequireFinite(emitter.beam.endpointJitter, "beam.endpointJitter");
     RequireFinite(emitter.lifetimeMin, "lifetime.min");
     RequireFinite(emitter.lifetimeMax, "lifetime.max");
     RequireFinite(emitter.velocityMin.x(), "velocity.min.x");
@@ -1362,10 +1403,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     }
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
-        emitter.renderMode != "mesh")
+        emitter.renderMode != "mesh" &&
+        emitter.renderMode != "beam")
     {
         throw std::invalid_argument(
-            "Particle renderMode must be 'billboard', 'ribbon' or 'mesh'");
+            "Particle renderMode must be 'billboard', 'ribbon', 'mesh' "
+            "or 'beam'");
     }
     if (emitter.billboardAlignment != "camera" &&
         emitter.billboardAlignment != "velocity")
@@ -1387,6 +1430,49 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle ribbonFade must be in [0, 1]");
+    }
+    if (emitter.beam.segments < kMinParticleBeamSegments ||
+        emitter.beam.segments > kMaxParticleBeamSegments)
+    {
+        throw std::invalid_argument(
+            "Particle beam.segments must be in [2, 64]");
+    }
+    if (emitter.beam.count < kMinParticleBeamCount ||
+        emitter.beam.count > kMaxParticleBeamCount)
+    {
+        throw std::invalid_argument(
+            "Particle beam.count must be in [1, 16]");
+    }
+    if (emitter.beam.width <= 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.width must be positive");
+    }
+    if (emitter.beam.noiseAmplitude < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.noiseAmplitude must be non-negative");
+    }
+    if (emitter.beam.noiseFrequency <= 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.noiseFrequency must be positive");
+    }
+    if (emitter.beam.noiseSpeed < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.noiseSpeed must be non-negative");
+    }
+    if (emitter.beam.endpointJitter < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.endpointJitter must be non-negative");
+    }
+    if ((emitter.beam.end - emitter.beam.start).squaredNorm() <=
+        1.0e-12f)
+    {
+        throw std::invalid_argument(
+            "Particle beam start and end must differ");
     }
     if (!emitter.meshPath.empty())
     {
@@ -1744,7 +1830,11 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     }
     // alpha billboard 的绘制顺序直接影响结果；作者忘了开启排序时直接拒绝，
     // 而不是静默按池索引顺序画出穿插。additive 与顺序无关，保持自由。
-    if (!emitter.additive && !emitter.sortParticles)
+    // beam 的实例顺序就是作者弧编号，不存在逐粒子深度排序；alpha beam
+    // 不应被要求打开一个渲染端永远不会使用的排序开关。
+    if (!emitter.additive &&
+        !emitter.sortParticles &&
+        emitter.renderMode != "beam")
     {
         throw std::invalid_argument(
             "Particle alpha blend requires sortParticles=true");

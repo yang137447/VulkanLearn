@@ -35,7 +35,7 @@
   数组作为一次字段变更提交，不新增命令类型，并作为单个步骤进入粒子 undo 历史。
 - GPU compute 每帧推进粒子池；graphics pass 按发射器 `renderMode` 读取同一段 storage
   buffer，用按 `billboardAlignment` 朝向的 billboard、最近 3 个历史位置组成的 ribbon
-  条带，或静态 SM 网格实例化合成。
+  条带、静态 SM 网格实例化，或在作者化起止点之间生成多条带噪声的 beam 合成。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -75,7 +75,7 @@ SC_*.json particleSystem
     -> WorldSnapshotBuilder -> ParticleSystemSnapshot
     -> RendererFrontend -> RenderScene::particleSystems
     -> ParticleRenderer::Synchronize（按 sceneName|assetPath|emitterName 建 GPU 池）
-    -> compute 模拟 -> particle pass billboard/ribbon/mesh 合成
+    -> compute 模拟 -> particle pass billboard/ribbon/mesh/beam 合成
 ```
 
 `ParticleSystemAsset` 是 CPU 冻结值；没有运行时覆盖时不再重新解析作者 JSON。v2 资产只在
@@ -153,7 +153,7 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
   lifetimeMax))`。`burst: true` 的整池喷发不受它影响，`burstInterval` 周期重触发仍按整池
   执行。
 - `colorTint`：默认 `(1,1,1,1)`。RGB 每分量在 `[0, 16]` 且全部有限，允许 HDR 增亮；
-  alpha 在 `[0, 1]`。渲染时乘到 billboard、ribbon 与 mesh 三种 renderMode 的最终颜色，
+  alpha 在 `[0, 1]`。渲染时乘到 billboard、ribbon、mesh 与 beam 四种 renderMode 的最终颜色，
   alpha 乘到最终不透明度。
 - `enabledEmitterMask`：默认低 16 位全 `1`。`particleparam <name> emitter <index> <0|1>`
   只切换一个下标；关闭的发射器走与实例隐藏相同的冻结路径：`elapsedSeconds` 不推进、
@@ -196,9 +196,10 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   CSM，但仍显式声明这两个 binding 的管线布局，以匹配 pass 描述符集的固定布局。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
-  `particle/particleMesh`；三者各有 additive 与 alpha 两条 blend pipeline，按 PS 的
-  `renderMode` 与 `blend` 选择。mesh pipeline 使用 `Vertex` vertex input 合同并执行
-  `drawIndexedIndirect`。
+  `particle/particleMesh`，beam variant 名为 `particle/particleBeam`；四者各有 additive
+  与 alpha 两条 blend pipeline，按 PS 的 `renderMode` 与 `blend` 选择。mesh pipeline 使用
+  `Vertex` vertex input 合同并执行 `drawIndexedIndirect`。beam pipeline 不消费顶点输入，
+  始终直接 `draw(segments * 6, count, 0, 0)`。
 - 排序使用 `particle/particleSortInit` 与 `particle/particleSort` 两条 compute pipeline：
   init 把每个粒子写成 `vec4(viewDepth, index, 0, 0)`，然后执行标准 bitonic 网络。
   排序容量是 `maxParticles` 向上取 2 的幂、最低 256、最高 4096；关闭排序时仍分配 pair 表，
@@ -250,8 +251,13 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   `meshLightParams` / `meshLightDirection` / `meshLightColor`、mesh 材质字段、
   CSM 矩阵/级联参数、确定性/事件参数与 SDF bounds/resolution。最后追加
   `billboardLightParams`：`x = billboard lighting enabled`、`y = billboardAmbient`、
-  `z/w` 保留；方向与颜色复用 `meshLightDirection` / `meshLightColor`。因此
-  `ParticleFrame` 的 std140 大小是 6256 字节，`billboardLightParams` 偏移是 6240。
+  `z/w` 保留；方向与颜色复用 `meshLightDirection` / `meshLightColor`。
+- `billboardLightParams` 之后追加 beam 字段：`beamStart`（`xyz = 世界空间起点`，
+  `w = segments`）、`beamEnd`（`xyz = 世界空间终点`，`w = width`）、`beamNoise`
+  （`x = amplitude`、`y = frequency`、`z = speed`、`w = endpointJitter`）与
+  `beamParams`（`x = count`，`y/z/w` 保留）。四个字段都在 UBO 末尾，不重排既有字段。
+  因此 `ParticleFrame` 的 std140 大小是 6320 字节，四个 beam 字段偏移分别是
+  6256、6272、6288、6304。
   C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
@@ -261,7 +267,8 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   simulate 原子累加 alive，`particleFinalizeCount.comp` 每帧把 alive 写回
   `instanceCount`。billboard/ribbon 使用“每实例固定顶点数 + 存活实例数”，vertex shader
   通过 `gl_InstanceIndex` 取紧凑 `aliveIndices`；未使用
-  `VK_KHR_draw_indirect_count`，也不做 GPU 侧多命令重写。
+  `VK_KHR_draw_indirect_count`，也不做 GPU 侧多命令重写。beam 不读取 indirect 参数，
+  实例数直接来自 `beam.count`；该发射器也跳过 simulate/sort/finalize。
 
 ## 资源生命周期与图身份
 
@@ -353,7 +360,10 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
 - 关闭时保持原有自动逻辑：`worldCenter = model * origin`，
   `worldRadius = 自动局部半径 * maxLinearScale`，自动局部半径仍包含速度、重力、
   发射半径与最大 visual extent；billboard/ribbon 使用尺寸或条带宽度，mesh 使用导入
-  顶点乘 `mesh.scale` 后的最大局部半径。
+  顶点乘 `mesh.scale` 后的最大局部半径。beam 是例外：`worldCenter` 取变换后的线段
+  中点（除非启用 `fixedBounds`），局部半径只计
+  `0.5 * |end-start| + sqrt(2) * noiseAmplitude + width +
+  sqrt(3) * endpointJitter`，不叠加粒子寿命/速度。
 - 视锥剔除、`maxDrawDistance`/`fadeDistance`、`minScreenSize` 与跨发射器透明排序
   都消费同一份 center/radius；固定包围球只需要覆盖实际可见粒子范围，不会改变粒子
   模拟、距离淡出公式或逐粒子排序。
@@ -584,15 +594,22 @@ localRadius = shapeRadius
 worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 ```
 
+beam 是例外：`localCenter` 取变换后的线段中点，包络半径为
+`0.5 * |end-start| + sqrt(2) * noiseAmplitude + width +
+sqrt(3) * endpointJitter`，再乘同一个 `maxColumnScale`。
+
 逐轴取绝对值最大者保证非对称速度区间（如 `[-400, 20]`）也按最远可达速度外扩；
 `maxBillboardHalfSize` 保证大尺寸低速烟雾不会被视锥/距离/屏幕尺寸提前剔除，也不会在
 跨发射器排序中错位。
+beam 的自动中心是变换后的线段中点，局部半径见「Beam 电弧」；它不会按发射器原点
+参与剔除。
 深度相同时按稳定身份 key（`sceneName|assetPath|emitterName`）字典序升序排序，不使用
 `unordered_map` 的迭代顺序参与 tie-break。
 
 发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard、总容量 ≤ 8192 且唯一纹理 ≤ 8
 时，所有参与发射器 gather 到一个全局记录池，做一次全局逐粒子 bitonic 排序后
-`drawIndirect`；additive/ribbon/mesh 或超限场景保留逐发射器路径。全局路径与未参与发射器
+`drawIndirect`；additive/ribbon/mesh/beam 或超限场景保留逐发射器路径。beam 永远不进入
+gather 记录池。全局路径与未参与发射器
 之间仍是发射器级先后近似；发射器集合增删导致排序表短暂失配时，未进入排序表的池按原
 map 顺序补画。
 
@@ -650,15 +667,26 @@ GPU 写回 instanceCount 的 indirect draw。
 - `velocity: { "min": [x,y,z], "max": [x,y,z] }`：局部空间初速度，发射器矩阵的线性部分会旋转/缩放它。
 - `gravity: [x,y,z]`、`drag`：世界空间重力与指数阻力。
 - `size: [start, end]`：billboard 世界空间半边长（cm），按寿命线性插值。
-- `renderMode`：`"billboard"`（默认）、`"ribbon"` 或 `"mesh"`。ribbon 用当前点与最近
-  3 个历史点生成面向相机的条带；mesh 用静态 SM 网格按粒子实例化，详见对应章节。
+- `renderMode`：`"billboard"`（默认）、`"ribbon"`、`"mesh"` 或 `"beam"`。ribbon 用当前点与
+  最近 3 个历史点生成面向相机的条带；mesh 用静态 SM 网格按粒子实例化；beam 在作者化
+  起止点之间生成多条带噪声的并行弧，详见对应章节。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
   `"camera"` 或 `"velocity"`。`velocity` 用粒子速度方向构造 billboard 基，让 quad 的
-  法线对齐速度；速度退化时回退 camera 基，详见「Billboard 朝向」。ribbon 与 mesh
+  法线对齐速度；速度退化时回退 camera 基，详见「Billboard 朝向」。ribbon、mesh 与 beam
   忽略该字段。
 - `ribbonWidth`：ribbon 世界空间半宽（cm），默认 `5`，必须 `> 0` 且有限。
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
+- `beam`：`renderMode: "beam"` 时使用；省略时每个字段取默认值。结构为
+  `{ "start": [-200,0,0], "end": [200,0,0], "segments": 16, "width": 3.0,
+  "count": 4, "noiseAmplitude": 18.0, "noiseFrequency": 3.0,
+  "noiseSpeed": 5.0, "endpointJitter": 0.0 }`。
+  `start`/`end` 是发射器局部空间端点（cm），都必须有限且不能重合；`segments` 是每条弧的
+  段数，范围 `[2, 64]`；`width` 是横向半宽（cm），必须 `> 0`；`count` 是并行弧数量，
+  范围 `[1, 16]`；`noiseAmplitude`（cm）、`noiseSpeed` 与 `endpointJitter`（cm）必须
+  非负；`noiseFrequency` 必须 `> 0`。`beam` 必须是对象；非对象、缺失/非法 `vec3`、
+  越界计数与非有限值都在加载期拒绝。作者应让 `maxParticles >= count`，但加载器不会
+  静默改写 `maxParticles`。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
   `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
   "materialInstancePath": "..."? }`。
@@ -713,6 +741,8 @@ GPU 写回 instanceCount 的 indirect draw。
 - `sortParticles`：默认 `false`。所有 alpha 发射器（billboard/ribbon/mesh）必须为 `true`，否则资产校验以
   “alpha blend requires sortParticles=true” 拒绝；每帧在 compute 中按相机 view-space
   深度执行 GPU bitonic sort。additive 发射器应保持关闭，排序不会改变加法结果。
+  beam 不参与逐粒子排序，因此 alpha beam 不要求该开关；即使作者写 `true` 也没有排序
+  dispatch。
 - `blend: "additive" | "alpha"`。
 - `maxDrawDistance`：cm，默认 `0`（不限）。按发射器包围球最近点判断，最近点超过阈值时
   整个发射器剔除。
@@ -861,11 +891,13 @@ billboardRight = normalize(cross(vec3(0, 1, 0), forward))
 billboardUp    = normalize(cross(forward, billboardRight))
 ```
 
+`billboardAlignment` 只影响 billboard；ribbon、mesh 与 beam 都忽略该字段。
+
 此时 quad 的法线对齐速度方向，适合拖尾/火花。`|v|^2 <= 1e-6`、`v` 与世界上方
 平行，或叉积/归一化后的基向量退化时，整个 quad 回退相机基，避免零面积 quad 与 NaN。
 `localSpace` 发射器先把模拟空间速度乘 `localToWorld` 的线性部分，再构造世界空间基。
 
-`billboardAlignment` 只影响 billboard；ribbon 与 mesh 各有独立的朝向逻辑。逐粒子旋转
+`billboardAlignment` 只影响 billboard；ribbon、mesh 与 beam 各有独立的朝向逻辑。逐粒子旋转
 仍在该朝向基内绕 quad 中心应用，pivot 与 `maxScreenSize` 语义不变。
 
 ### 逐粒子 billboard 旋转
@@ -941,6 +973,49 @@ alpha *= mix(1.0, 1.0 - tailT, ribbonFade)
 暂停时 `simulationDeltaSeconds = 0`，历史不会重复写入同一点。`ribbonWidth` 会额外计入
 发射器包围球半径，因此剔除、距离淡出与跨发射器排序都覆盖条带横向范围。
 
+### Beam 电弧
+
+`renderMode: "beam"` 不消费粒子池：它按作者化的 `beam.start`/`beam.end` 生成
+`count` 条并行弧，每条弧有 `segments` 段。CPU 每帧把两个端点乘 `emitter.model`
+变换到世界空间并写入 UBO；因此 `localSpace` 对 beam 没有额外含义，光束也随场景对象
+平移/旋转/缩放。端点的位置由矩阵直接变换；`width`、`noiseAmplitude` 和
+`endpointJitter` 是局部空间长度，CPU 按模型线性部分的最大列缩放后写入 UBO。
+该发射器跳过 simulate、局部排序、finalize 与全局 gather，池可以保持零存活粒子。
+World 的粒子预算不计入 beam，`emitterBudgetScale=0` 或其它 emitter 耗尽预算时
+电弧仍会绘制；`ParticleSystemBudget.effectiveCapacity` 与
+`telemetry.budgetedCapacity` 也只累计非 beam 发射器。
+
+绘制形状固定为 `segments * 6` 个顶点、`count` 个实例：
+
+```text
+draw(segments * 6, count, 0, 0)
+drawnVertices = segments * 6 * count
+```
+
+顶点着色器按 `arcIndex = gl_InstanceIndex` 与 `segment = localVertex / 6` 生成四边形；
+起止点使用稳定哈希做逐弧 `endpointJitter`，弧内噪声使用
+
+```text
+envelope = sin(pi * t)                    // 两端为零
+offset   = (sideA * waveA + sideB * waveB) * amplitude * envelope
+point(t) = mix(start, end, t) + offset
+```
+
+`waveA/waveB` 是频率、速度与弧相位错开的三层正弦。横向宽度用
+`cross(tangent, viewDirection)` 面向相机，退化时回退 `cameraRight`；宽度在两端按
+`smoothstep` 收窄。颜色按 `mix(colorStart, colorEnd, t)` 取色，逐弧乘以
+`[0.75, 1]` 的闪烁，alpha 只取 `render.w`（即 `opacity` 与运行时淡出）。有纹理时
+采样整张 `particleTexture`，不消费 flipbook cell。片元沿用 ribbon 的 `sceneDepth`
+剔除、软粒子淡出与 overdraw 计数，但横截面是“亮核 + 快速衰减”，不做 FBM 侵蚀。
+
+限制：beam 没有分支结构、CPU 曲线编辑或逐段作者化控制点；端点只能是一条直线段的两端，
+噪声由固定层数的正弦和程序化哈希决定。它只支持 additive/alpha 两种既有混合，不进入
+全局排序或 8 槽 gather 纹理数组，也不支持逐弧独立材质/纹理。自动包围球以变换后的
+线段中点为球心，半径是
+`(halfDistance + sqrt(2) * noiseAmplitude + width + sqrt(3) * endpointJitter) *
+maxColumnScale`；
+`useFixedBounds` 仍覆盖该自动估算。
+
 ### Mesh 实例化
 
 `renderMode: "mesh"` 时，运行时用 `MeshAssetLoader::Prepare(mesh.path)` 读取 SM 描述并
@@ -1000,9 +1075,9 @@ color    = direct + baseColor * meshAmbient + emissive * emissiveStrength
 - 只读取场景中的第一个方向光；光色不乘 `lux` 强度。场景没有方向光时回退为 unlit，
   不会阻断渲染。
 - 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图、IBL、间接光、
-  逐光源循环或 alpha-to-coverage。CSM 阴影对 mesh 自动化生效；billboard/ribbon 通过
+  逐光源循环或 alpha-to-coverage。CSM 阴影对 mesh 自动化生效；billboard/ribbon/beam 通过
   `billboardShadows` 开关走各自的 CSM 采样路径。
-- `meshLighting: false` 保持原有 unlit 路径；ribbon 完全忽略这两个字段，billboard 使用
+- `meshLighting: false` 保持原有 unlit 路径；ribbon 与 beam 完全忽略这两个字段，billboard 使用
   独立的 `billboardLighting` / `billboardAmbient`。
 
 ### Billboard 照明
@@ -1107,10 +1182,11 @@ gpuMaxMilliseconds, gpuSampleCount, emitters[]
 
 每个 emitter 输出 `key`、`maxParticles`、`aliveCount`、`totalParticles`、`culled`、
 `sortParticles`、`localSpace`、`renderMode`、`bounds.center`、`bounds.radius`、
-`elapsedSeconds`、`drawnVertices`，以及最多 N 个活粒子（池顺序）的 `index`、`position`、
+`elapsedSeconds`、`drawInstances`、`drawnVertices`，以及最多 N 个活粒子（池顺序）的 `index`、`position`、
 `age`、`velocity`、`lifetime`。billboard 的 `drawnVertices = maxParticles * 6`；
 ribbon 为 `maxParticles * ribbonSegments * 6`；mesh 为
-`meshIndexCount * maxParticles`；
+`meshIndexCount * maxParticles`；beam 的 `maxParticles`/`totalParticles` 为 0，
+`drawInstances = beam.count`，`drawnVertices = segments * 6 * count`；
 `estimatedDrawnVertices` 只累计未 cull 的 emitter。被 cull 的 emitter 仍会被回读，
 但其模拟状态处于冻结状态。
 
@@ -1278,11 +1354,11 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
 
 - `materialInstancePath`（顶层或 `mesh.materialInstancePath`）：mesh 粒子的 MI_*.json
   数值子集；路径必须是资源根相对的 `.json`。
-- `billboardShadows`：billboard/ribbon 的显式简化阴影开关；默认 unlit，开启后按
+- `billboardShadows`：billboard/ribbon/beam 的显式简化阴影开关；默认 unlit，开启后按
   实际 billboard 面法线采样 CSM 并调暗 50%；与 `billboardLighting` 同时开启时改为把
   CSM shadow 乘进方向光直接项。
 - `billboardLighting` / `billboardAmbient`：billboard 的运行时方向光近似，默认关闭 /
-  `0.2`；不改变 mesh 或 ribbon 的着色。
+  `0.2`；不改变 mesh、ribbon 或 beam 的着色。
 - `events.{spawn,death,collision}`：三类 GPU 事件记录开关。事件写入
   `source/particles/particleEvents.h` 的 64-byte 记录；计数超过 4096 表示截断。
 - `randomSeed`（24 位参与 GPU hash）、`deterministicRandom`、`fixedTimeStep`

@@ -269,9 +269,16 @@ private:
         // x = billboard lighting enabled, y = ambient, z/w reserved.
         // 与 mesh 共用方向光的线性色/方向，但开关和环境项独立。
         Eigen::Vector4f billboardLightParams;
+        // beam 渲染：xyz 世界端点，w 分别为段数与半宽。
+        Eigen::Vector4f beamStart;
+        Eigen::Vector4f beamEnd;
+        // x = 噪声幅度, y = 频率, z = 速度, w = 端点抖动（cm）。
+        Eigen::Vector4f beamNoise;
+        // x = 并行弧数量, y/z/w reserved。
+        Eigen::Vector4f beamParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6256,
+        sizeof(FrameUniforms) == 6320,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -360,6 +367,18 @@ private:
     static_assert(
         offsetof(FrameUniforms, billboardLightParams) == 6240,
         "ParticleFrame billboardLightParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamStart) == 6256,
+        "ParticleFrame beamStart offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamEnd) == 6272,
+        "ParticleFrame beamEnd offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamNoise) == 6288,
+        "ParticleFrame beamNoise offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamParams) == 6304,
+        "ParticleFrame beamParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -570,6 +589,10 @@ private:
     // 只替换 shader 与顶点数。
     std::shared_ptr<PipelineBase> ribbonAdditivePipeline;
     std::shared_ptr<PipelineBase> ribbonAlphaPipeline;
+    // beam 与 ribbon 共用 particle pass 的 set 0/set 3；顶点数由段数决定，
+    // 实例数由作者 beam.count 决定，不读取存活粒子索引。
+    std::shared_ptr<PipelineBase> beamAdditivePipeline;
+    std::shared_ptr<PipelineBase> beamAlphaPipeline;
     // mesh 使用静态 SM 的 Vertex 输入布局与 drawIndexed；排序仍共用
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;

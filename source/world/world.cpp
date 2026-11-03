@@ -138,6 +138,14 @@ void RefreshParticleRuntime(
         if (!slot.active) continue;
         ++system.telemetry.activeEmitterCount;
         if (slot.enabled) ++system.telemetry.enabledEmitterCount;
+        // beam 不消费粒子池：保留作者容量供渲染器直接绘制，但不计入
+        // authored/budgetedCapacity，也不消耗其它 emitter 的总预算。
+        if (slot.asset.renderMode == "beam")
+        {
+            system.telemetry.emitters.back().budgetedMaxParticles =
+                slot.asset.maxParticles;
+            continue;
+        }
         system.telemetry.authoredCapacity += slot.asset.maxParticles;
         const uint32_t scaled =
             ScaledParticleCapacity(slot.asset.maxParticles, scale);
@@ -960,6 +968,8 @@ ParticleSystemBudget World::GetEffectiveParticleBudget(
     for (const auto& slot : target->second.emitterSlots)
     {
         if (!slot.active) continue;
+        // beam 直接绘制，不分配模拟池，因此不参与有效容量/预算消耗。
+        if (slot.asset.renderMode == "beam") continue;
         const uint32_t scaled =
             ScaledParticleCapacity(slot.asset.maxParticles,
                 result.emitterBudgetScale);

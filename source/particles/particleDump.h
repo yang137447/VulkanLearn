@@ -52,8 +52,11 @@ struct ParticleDumpEmitter
     bool sortParticles = false;
     bool localSpace = false;
     std::string renderMode = "billboard";
-    // billboard 为 6；ribbon 为 ribbonSegments * 6；mesh 为合并后的索引数。
+    // billboard 为 6；ribbon 为 ribbonSegments * 6；beam 为 segments * 6；
+    // mesh 为合并后的索引数。
     uint32_t verticesPerParticle = 6;
+    // beam 用作者 count 作为实例数；0 表示沿用 maxParticles。
+    uint32_t drawInstances = 0;
     Eigen::Vector3f boundsCenter = Eigen::Vector3f::Zero();
     float boundsRadius = 0.0f;
     float elapsedSeconds = 0.0f;
@@ -108,8 +111,12 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
         aliveParticles += emitter.aliveCount;
         estimatedParticleBufferReadBytes +=
             emitter.estimatedParticleBufferReadBytes;
+        const uint64_t instanceCount =
+            emitter.drawInstances > 0
+                ? emitter.drawInstances
+                : emitter.maxParticles;
         const uint64_t drawnVertices =
-            static_cast<uint64_t>(emitter.maxParticles) *
+            instanceCount *
             std::max(emitter.verticesPerParticle, 1u);
         if (!emitter.culled)
         {
@@ -128,6 +135,10 @@ inline nlohmann::ordered_json BuildParticleDumpJson(
         emitterJson["totalParticles"] = emitter.maxParticles;
         emitterJson["culled"] = emitter.culled;
         emitterJson["sortParticles"] = emitter.sortParticles;
+        emitterJson["drawInstances"] =
+            emitter.drawInstances > 0
+                ? emitter.drawInstances
+                : emitter.maxParticles;
         emitterJson["localSpace"] = emitter.localSpace;
         emitterJson["renderMode"] = emitter.renderMode;
         emitterJson["bounds"] = nlohmann::ordered_json{

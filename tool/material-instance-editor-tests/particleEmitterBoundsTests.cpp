@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "particles/particleAsset.h"
 #include "particles/particleEmitterBounds.h"
 
@@ -193,4 +195,65 @@ TEST(ParticleEmitterBounds, MeshFallbackKeepsBillboardRadius)
         0.0f);
 
     EXPECT_FLOAT_EQ(radius, 40.0f);
+}
+
+TEST(ParticleEmitterBounds, BeamCoversMidpointNoiseAndWidth)
+{
+    ParticleEmitterAsset emitter = BoundsTestEmitter();
+    emitter.renderMode = "beam";
+    emitter.beam.start = Eigen::Vector3f(-200.0f, 0.0f, 0.0f);
+    emitter.beam.end = Eigen::Vector3f(200.0f, 0.0f, 0.0f);
+    emitter.beam.width = 3.0f;
+    emitter.beam.noiseAmplitude = 18.0f;
+    emitter.beam.endpointJitter = 4.0f;
+
+    // 200（半长）+ 18*sqrt(2)（两轴噪声）+ 3（半宽）+
+    // 4*sqrt(3)（三轴端点抖动）
+    EXPECT_FLOAT_EQ(
+        ComputeParticleEmitterLocalRadius(emitter),
+        200.0f + 18.0f * std::sqrt(2.0f) +
+            3.0f + 4.0f * std::sqrt(3.0f));
+
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    model(0, 0) = 2.0f;
+    model(1, 1) = 0.5f;
+    model(2, 2) = 1.5f;
+    model.block<3, 1>(0, 3) =
+        Eigen::Vector3f(100.0f, 20.0f, -5.0f);
+
+    Eigen::Vector3f center;
+    float radius = 0.0f;
+    ComputeParticleEmitterBounds(emitter, model, center, radius);
+
+    // 自动中心取变换后的线段中点，而不是发射器原点。
+    EXPECT_FLOAT_EQ(center.x(), 100.0f);
+    EXPECT_FLOAT_EQ(center.y(), 20.0f);
+    EXPECT_FLOAT_EQ(center.z(), -5.0f);
+    EXPECT_FLOAT_EQ(
+        radius,
+        2.0f * (200.0f + 18.0f * std::sqrt(2.0f) +
+            3.0f + 4.0f * std::sqrt(3.0f)));
+}
+
+TEST(ParticleEmitterBounds, BeamCenterFollowsOffsetEndpoints)
+{
+    ParticleEmitterAsset emitter = BoundsTestEmitter();
+    emitter.renderMode = "beam";
+    emitter.beam.start = Eigen::Vector3f(100.0f, 0.0f, 0.0f);
+    emitter.beam.end = Eigen::Vector3f(300.0f, 0.0f, 0.0f);
+    emitter.beam.width = 2.0f;
+    emitter.beam.noiseAmplitude = 10.0f;
+    emitter.beam.endpointJitter = 0.0f;
+
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    model.block<3, 1>(0, 3) = Eigen::Vector3f(10.0f, 0.0f, 0.0f);
+
+    Eigen::Vector3f center;
+    float radius = 0.0f;
+    ComputeParticleEmitterBounds(emitter, model, center, radius);
+
+    EXPECT_FLOAT_EQ(center.x(), 210.0f);
+    EXPECT_FLOAT_EQ(
+        radius,
+        100.0f + 10.0f * std::sqrt(2.0f) + 2.0f);
 }

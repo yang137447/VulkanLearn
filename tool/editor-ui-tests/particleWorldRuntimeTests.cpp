@@ -568,6 +568,37 @@ TEST(ParticleWorldRuntime, BudgetsAndUserParametersReachSnapshot)
     EXPECT_TRUE(world.FindParticleSystem("Spark_A")->userParameters.empty());
 }
 
+TEST(ParticleWorldRuntime, BeamDoesNotConsumeParticleBudget)
+{
+    VL::World world = MakeParticleWorld();
+    VL::WorldParticleSystem system =
+        MakeParticleSystemInstance(
+            "Arc", "Maps/PS_tesla.json");
+    VL::ParticleEmitterAsset beam;
+    beam.name = "arc";
+    beam.renderMode = "beam";
+    beam.maxParticles = 5;
+    VL::ParticleEmitterAsset smoke;
+    smoke.name = "smoke";
+    smoke.maxParticles = 128;
+    system.asset.emitters = {beam, smoke};
+    world.AddParticleSystem("Arc", system);
+
+    ASSERT_TRUE(world.SetWorldParticleBudget(200u, 1.0f));
+    VL::WorldSnapshotBuilder builder;
+    const auto result = builder.Build(world, {});
+    ASSERT_FALSE(result.IsFailure());
+    const auto& telemetry =
+        result.Value().particleSystems.front().telemetry.emitters;
+    ASSERT_EQ(telemetry.size(), 2u);
+    EXPECT_EQ(telemetry[0].budgetedMaxParticles, 5u);
+    EXPECT_EQ(telemetry[1].budgetedMaxParticles, 128u);
+    // beam 不消耗总预算，有效容量只统计 smoke。
+    EXPECT_EQ(
+        result.Value().particleSystems.front().budget.effectiveCapacity,
+        128u);
+}
+
 TEST(ParticleWorldRuntime, RendererTelemetryIsExplicitlyUnavailableUntilFed)
 {
     VL::World world = MakeParticleWorld();

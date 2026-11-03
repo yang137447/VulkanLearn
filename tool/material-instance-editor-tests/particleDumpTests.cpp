@@ -105,6 +105,23 @@ TEST(ParticleDump, SerializesEmitterStatisticsAndTotals)
     EXPECT_EQ(dump.at("gpuSampleCount").get<uint64_t>(), 0u);
 }
 
+TEST(ParticleDump, BeamUsesDrawInstancesAndSegmentVertices)
+{
+    ParticleDumpEmitter beam;
+    beam.key = "arc";
+    beam.renderMode = "beam";
+    beam.maxParticles = 0;
+    beam.drawInstances = 5;
+    beam.verticesPerParticle = 24 * 6;
+
+    const nlohmann::ordered_json dump =
+        BuildParticleDumpJson({beam}, 4);
+    EXPECT_EQ(dump.at("totalParticles"), 0);
+    EXPECT_EQ(dump.at("estimatedDrawnVertices"), 5u * 24u * 6u);
+    ASSERT_EQ(dump.at("emitters").size(), 1u);
+    EXPECT_EQ(dump.at("emitters").at(0).at("drawInstances"), 5);
+}
+
 TEST(ParticleDump, RootCarriesGpuPassTimingFromFrameStats)
 {
     ParticleFrameStats stats;

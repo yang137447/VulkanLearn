@@ -80,6 +80,23 @@ struct ParticleLodTier
 
 // 单个发射器的作者数据。多发射器 PS 里每个 entries 共享同一套字段；
 // localPosition 是相对 particleSystem 场景对象的局部偏移（cm）。
+// beam 渲染模式的端点与噪声参数；端点在发射器局部空间作者化，
+// 渲染前由 emitter.model 变换到世界空间。
+struct ParticleBeamAsset
+{
+    Eigen::Vector3f start = Eigen::Vector3f(-200.0f, 0.0f, 0.0f);
+    Eigen::Vector3f end = Eigen::Vector3f(200.0f, 0.0f, 0.0f);
+    uint32_t segments = 16;
+    // 半宽（cm）；最终四边形横向半宽。
+    float width = 3.0f;
+    // 并行弧数量；渲染器按实例数绘制，不依赖存活粒子。
+    uint32_t count = 4;
+    float noiseAmplitude = 18.0f;
+    float noiseFrequency = 3.0f;
+    float noiseSpeed = 5.0f;
+    float endpointJitter = 0.0f;
+};
+
 struct ParticleEmitterAsset
 {
     std::string name;
@@ -89,11 +106,13 @@ struct ParticleEmitterAsset
     bool localSpace = false;
 
     // billboard 是默认路径；ribbon 用当前点与最近 3 个历史点组成相机朝向
-    // 条带；mesh 用静态网格按粒子实例化。ribbonWidth 是世界空间半宽（cm），
+    // 条带；mesh 用静态网格按粒子实例化；beam 在作者化起止点之间绘制
+    // 多条带噪声的并行电弧，不消费粒子池。ribbonWidth 是世界空间半宽（cm），
     // ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
-    std::string renderMode = "billboard"; // billboard|ribbon|mesh
+    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam
+    ParticleBeamAsset beam;
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
-    // 粒子速度。ribbon/mesh 各自使用自己的朝向逻辑。
+    // 粒子速度。ribbon/mesh/beam 各自使用自己的朝向逻辑。
     std::string billboardAlignment = "camera";
     // billboard/ribbon 默认 unlit；开启后按相机朝向法线接收 CSM 阴影
     // 调暗，属于显式的简化光照开关，不启用完整 PBR。

@@ -34,7 +34,7 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "randomSeed", "deterministicRandom", "fixedTimeStep"}},
         {"renderer", "Renderer",
             {"renderMode", "billboardAlignment", "ribbonWidth",
-                "ribbonSegments", "ribbonFade", "mesh", "opacity",
+                "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
                 "softness", "softParticles", "softParticleDistance",
                 "additive", "meshLighting", "meshAmbient",
                 "materialInstancePath", "billboardShadows",
@@ -230,12 +230,13 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         return "emitter";
     if (IsOneOf(field,
         {"renderMode", "billboardAlignment", "ribbonWidth",
-            "ribbonSegments", "ribbonFade", "mesh", "opacity",
+            "ribbonSegments", "ribbonFade", "mesh", "beam", "opacity",
             "softness", "softParticles", "softParticleDistance",
             "additive", "meshLighting", "meshAmbient",
             "materialInstancePath", "billboardShadows",
             "billboardLighting", "billboardAmbient"}) ||
-        HasPrefix(field, "mesh."))
+        HasPrefix(field, "mesh.") ||
+        HasPrefix(field, "beam."))
         return "renderer";
     if (IsOneOf(field, {"spawnRate", "burst", "burstInterval"}))
         return "spawn.rate";
