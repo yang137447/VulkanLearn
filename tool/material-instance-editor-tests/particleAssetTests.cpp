@@ -1911,6 +1911,10 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.noiseFrequency, 3.0f);
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.noiseSpeed, 5.0f);
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.endpointJitter, 0.0f);
+    EXPECT_EQ(defaults.emitters[0].beam.branchCount, 0u);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchStart, 0.5f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchLength, 0.3f);
+    EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchSpread, 20.0f);
 
     document["emitters"][0]["renderMode"] = "beam";
     document["emitters"][0]["beam"] = Json{
@@ -1922,7 +1926,11 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
         {"noiseAmplitude", 25.0},
         {"noiseFrequency", 4.0},
         {"noiseSpeed", 6.0},
-        {"endpointJitter", 7.0}};
+        {"endpointJitter", 7.0},
+        {"branchCount", 2},
+        {"branchStart", 0.45},
+        {"branchLength", 0.35},
+        {"branchSpread", 33.0}};
     const ParticleSystemAsset asset =
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_beam_custom.json");
@@ -1939,6 +1947,10 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseFrequency, 4.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseSpeed, 6.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.endpointJitter, 7.0f);
+    EXPECT_EQ(asset.emitters[0].beam.branchCount, 2u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchStart, 0.45f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchLength, 0.35f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchSpread, 33.0f);
 
     // beam 不参与逐粒子排序，alpha 路径不强制 sortParticles=true。
     document["emitters"][0]["blend"] = "alpha";
@@ -2012,6 +2024,30 @@ TEST(ParticleAsset, BeamFieldsRejectInvalidValues)
     expectReject(document, "Maps/SC_test/PS_beam_jitter.json");
 
     document = beamDocument();
+    document["emitters"][0]["beam"]["branchCount"] = 5;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_count_high.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["branchStart"] = -0.1;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_start_low.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["branchStart"] = 1.1;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_start_high.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["branchLength"] = 0.0;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_length_low.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["branchLength"] = 1.1;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_length_high.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["branchSpread"] = -1.0;
+    expectReject(document, "Maps/SC_test/PS_beam_branch_spread.json");
+
+    document = beamDocument();
     document["emitters"][0]["beam"] = "not-an-object";
     expectReject(document, "Maps/SC_test/PS_beam_object.json");
 
@@ -2039,6 +2075,10 @@ TEST(ParticleAsset, CapabilitiesExposeRibbonFields)
     EXPECT_TRUE(hasField("ribbonWidth"));
     EXPECT_TRUE(hasField("ribbonSegments"));
     EXPECT_TRUE(hasField("ribbonFade"));
+    EXPECT_TRUE(hasField("beam.branchCount"));
+    EXPECT_TRUE(hasField("beam.branchStart"));
+    EXPECT_TRUE(hasField("beam.branchLength"));
+    EXPECT_TRUE(hasField("beam.branchSpread"));
 }
 
 TEST(ParticleAsset, BillboardAlignmentDefaultsToCamera)

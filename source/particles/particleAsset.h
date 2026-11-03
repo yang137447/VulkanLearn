@@ -110,6 +110,13 @@ struct ParticleBeamAsset
     float noiseFrequency = 3.0f;
     float noiseSpeed = 5.0f;
     float endpointJitter = 0.0f;
+    // 分支：每条并行弧从主弧的 branchStart 附近长出 branchCount 条分叉。
+    // branchLength 是主线长度的比例，branchSpread 是末端横向偏移（cm），
+    // 四个字段都只改变渲染形状，不引入额外粒子实例。
+    uint32_t branchCount = 0;
+    float branchStart = 0.5f;
+    float branchLength = 0.3f;
+    float branchSpread = 20.0f;
 };
 
 struct ParticleEmitterAsset

@@ -257,3 +257,25 @@ TEST(ParticleEmitterBounds, BeamCenterFollowsOffsetEndpoints)
         radius,
         100.0f + 10.0f * std::sqrt(2.0f) + 2.0f);
 }
+
+TEST(ParticleEmitterBounds, BeamBranchesExtendRadius)
+{
+    ParticleEmitterAsset emitter = BoundsTestEmitter();
+    emitter.renderMode = "beam";
+    emitter.beam.start = Eigen::Vector3f(-200.0f, 0.0f, 0.0f);
+    emitter.beam.end = Eigen::Vector3f(200.0f, 0.0f, 0.0f);
+    emitter.beam.width = 3.0f;
+    emitter.beam.noiseAmplitude = 0.0f;
+    emitter.beam.endpointJitter = 2.0f;
+    emitter.beam.branchCount = 2;
+    emitter.beam.branchStart = 0.45f;
+    emitter.beam.branchLength = 0.35f;
+    emitter.beam.branchSpread = 35.0f;
+
+    // 200（半长）+ 0.35 * 400（分支长度）+ 35（横向 spread）+ 3（半宽）
+    // + (1 + 2*0.35)*sqrt(3)*2（主弧与分支两端抖动）。
+    EXPECT_FLOAT_EQ(
+        ComputeParticleEmitterLocalRadius(emitter),
+        200.0f + 0.35f * 400.0f + 35.0f + 3.0f +
+            (1.0f + 2.0f * 0.35f) * std::sqrt(3.0f) * 2.0f);
+}

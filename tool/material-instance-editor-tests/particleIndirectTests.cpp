@@ -70,4 +70,29 @@ TEST(ParticleIndirect, BeamUsesSegmentsAndAuthoredArcCount)
             "beam", 5, 3, false, 0, 24, 4));
 }
 
+TEST(ParticleIndirect, BeamBranchesMultiplyInstanceCount)
+{
+    const ParticleIndirectDrawShape shape =
+        BuildParticleIndirectDrawShape(
+            "beam", 8, 3, false, 0, 24, 5, 2);
+
+    EXPECT_FALSE(shape.indexed);
+    EXPECT_EQ(shape.vertexCount, 24u * 6u);
+    // count * (1 + branchCount) = 5 * 3。
+    EXPECT_EQ(shape.instanceCount, 15u);
+    EXPECT_NE(shape,
+        BuildParticleIndirectDrawShape(
+            "beam", 8, 3, false, 0, 24, 5, 1));
+}
+
+TEST(ParticleBeam, VertexCountIncludesBranchInstances)
+{
+    EXPECT_EQ(
+        ParticleBeamVertexCount(24, 5, 2),
+        static_cast<uint64_t>(24 * 6 * 15));
+    EXPECT_EQ(
+        ParticleBeamVertexCount(24, 5),
+        static_cast<uint64_t>(24 * 6 * 5));
+}
+
 } // namespace

@@ -485,6 +485,14 @@ ParticleEmitterAsset ParseEmitter(
             beam, "noiseSpeed", emitter.beam.noiseSpeed);
         emitter.beam.endpointJitter = ReadFiniteFloat(
             beam, "endpointJitter", emitter.beam.endpointJitter);
+        emitter.beam.branchCount = ReadCountField(
+            beam, "branchCount", emitter.beam.branchCount);
+        emitter.beam.branchStart = ReadFiniteFloat(
+            beam, "branchStart", emitter.beam.branchStart);
+        emitter.beam.branchLength = ReadFiniteFloat(
+            beam, "branchLength", emitter.beam.branchLength);
+        emitter.beam.branchSpread = ReadFiniteFloat(
+            beam, "branchSpread", emitter.beam.branchSpread);
     }
     if (json.contains("mesh"))
     {
@@ -1504,6 +1512,28 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle beam.endpointJitter must be non-negative");
+    }
+    if (emitter.beam.branchCount > kMaxParticleBeamBranches)
+    {
+        throw std::invalid_argument(
+            "Particle beam.branchCount must be in [0, 4]");
+    }
+    if (emitter.beam.branchStart < 0.0f ||
+        emitter.beam.branchStart > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.branchStart must be in [0, 1]");
+    }
+    if (emitter.beam.branchLength <= 0.0f ||
+        emitter.beam.branchLength > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.branchLength must be in (0, 1]");
+    }
+    if (emitter.beam.branchSpread < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle beam.branchSpread must be non-negative");
     }
     if ((emitter.beam.end - emitter.beam.start).squaredNorm() <=
         1.0e-12f)

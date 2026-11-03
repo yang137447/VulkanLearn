@@ -830,7 +830,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                         ? 0u
                         : emitterIt->second->meshIndexCount,
                     emitter.beam.segments,
-                    emitter.beam.count);
+                    emitter.beam.count,
+                    emitter.beam.branchCount);
             // 可见性/启用状态与实例覆盖写入所有分支：新建池直接继承，
             // 已有池每帧跟随快照；开关切换不走资源重建。
             if (emitterIt == emitters.end() ||
@@ -2449,7 +2450,8 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
             meshUsable,
             emitter.meshIndexCount,
             emitter.asset.beam.segments,
-            emitter.asset.beam.count);
+            emitter.asset.beam.count,
+            emitter.asset.beam.branchCount);
     const vk::DeviceSize indirectBytes = indirectShape.indexed
         ? sizeof(vk::DrawIndexedIndirectCommand)
         : sizeof(vk::DrawIndirectCommand);
@@ -3555,6 +3557,11 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.beam.endpointJitter * beamScale);
         uniforms.beamParams = Eigen::Vector4f(
             static_cast<float>(emitter.asset.beam.count),
+            static_cast<float>(emitter.asset.beam.branchCount),
+            emitter.asset.beam.branchStart,
+            emitter.asset.beam.branchLength);
+        uniforms.beamBranch = Eigen::Vector4f(
+            emitter.asset.beam.branchSpread * beamScale,
             0.0f,
             0.0f,
             0.0f);
@@ -4098,20 +4105,28 @@ void ParticleRenderer::RecordGraphics(
                 : 6u;
             if (beam)
             {
-                // beam 的实例数来自作者 count，而不是存活粒子数；必须绕过
+                // beam 的实例数来自 count * (1 + branchCount)，而不是存活粒子数；必须绕过
                 // indirect/finalize，否则零粒子发射器会被画成 0 条弧。
                 const uint32_t segments =
                     ClampParticleBeamSegments(
                         emitter.asset.beam.segments);
                 const uint32_t count = emitter.asset.beam.count;
+                const uint32_t branchCount =
+                    emitter.asset.beam.branchCount;
+                const uint32_t totalInstances =
+                    static_cast<uint32_t>(
+                        ParticleBeamInstanceCount(
+                            count,
+                            branchCount));
                 commandBuffer.draw(
                     segments * kParticleBeamVerticesPerSegment,
-                    count,
+                    totalInstances,
                     0,
                     0);
                 drawnVertices = ParticleBeamVertexCount(
                     segments,
-                    count);
+                    count,
+                    branchCount);
             }
             else if (emitter.indirectArgs.buffer)
             {
@@ -4313,7 +4328,10 @@ bool ParticleRenderer::DumpParticles(
                     : emitter.asset.maxParticles;
             dumpEmitter.drawInstances =
                 emitter.asset.renderMode == "beam"
-                    ? emitter.asset.beam.count
+                    ? static_cast<uint32_t>(
+                        ParticleBeamInstanceCount(
+                            emitter.asset.beam.count,
+                            emitter.asset.beam.branchCount))
                     : 0u;
             dumpEmitter.culled = emitter.culled;
             dumpEmitter.sortParticles = emitter.asset.sortParticles;

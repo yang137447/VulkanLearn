@@ -255,11 +255,15 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
 - `billboardLightParams` 之后追加 beam 字段：`beamStart`（`xyz = 世界空间起点`，
   `w = segments`）、`beamEnd`（`xyz = 世界空间终点`，`w = width`）、`beamNoise`
   （`x = amplitude`、`y = frequency`、`z = speed`、`w = endpointJitter`）与
-  `beamParams`（`x = count`，`y/z/w` 保留）。四个字段都在 UBO 末尾，不重排既有字段。
+  `beamParams`（`x = count`、`y = branchCount`、`z = branchStart`、
+  `w = branchLength`）。四个字段追加在 `billboardLightParams` 之后，
+  不重排既有字段。
   随后追加 fixed billboard 基：`billboardFixedNormal` 与 `billboardFixedUp`
-  （`xyz` 为 CPU 归一化后的世界空间向量，`w` 保留）。因此 `ParticleFrame` 的
-  std140 大小是 6352 字节，beam 字段偏移是 6256、6272、6288、6304，fixed 字段偏移
-  是 6320、6336。
+  （`xyz` 为 emitter-local 向量乘模型线性部分并归一化后的世界空间基，`w` 保留），
+  最后追加 `beamBranch`
+  （`x = branchSpread`，已乘模型最大列缩放；`y/z/w` 保留）。因此 `ParticleFrame` 的
+  std140 大小是 6368 字节，beam 字段偏移是 6256、6272、6288、6304，fixed 字段偏移
+  是 6320、6336，`beamBranch` 偏移是 6352。
   C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
@@ -270,7 +274,8 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   `instanceCount`。billboard/ribbon 使用“每实例固定顶点数 + 存活实例数”，vertex shader
   通过 `gl_InstanceIndex` 取紧凑 `aliveIndices`；未使用
   `VK_KHR_draw_indirect_count`，也不做 GPU 侧多命令重写。beam 不读取 indirect 参数，
-  实例数直接来自 `beam.count`；该发射器也跳过 simulate/sort/finalize。
+  实例数直接来自 `beam.count * (1 + beam.branchCount)`；该发射器也跳过
+  simulate/sort/finalize。
 
 ## 资源生命周期与图身份
 
@@ -364,8 +369,10 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   发射半径与最大 visual extent；billboard/ribbon 使用尺寸或条带宽度，mesh 使用导入
   顶点乘 `mesh.scale` 后的最大局部半径。beam 是例外：`worldCenter` 取变换后的线段
   中点（除非启用 `fixedBounds`），局部半径只计
-  `0.5 * |end-start| + sqrt(2) * noiseAmplitude + width +
-  sqrt(3) * endpointJitter`，不叠加粒子寿命/速度。
+  `0.5 * |end-start| + branchLength * |end-start| + branchSpread +
+  sqrt(2) * noiseAmplitude + width +
+  (1 + 2 * branchLength) * sqrt(3) * endpointJitter`（无分支时分支项为 0），
+  不叠加粒子寿命/速度。
 - 视锥剔除、`maxDrawDistance`/`fadeDistance`、`minScreenSize` 与跨发射器透明排序
   都消费同一份 center/radius；固定包围球只需要覆盖实际可见粒子范围，不会改变粒子
   模拟、距离淡出公式或逐粒子排序。
@@ -597,8 +604,10 @@ worldRadius = localRadius * max(模型线性部分三列 scale 的范数)
 ```
 
 beam 是例外：`localCenter` 取变换后的线段中点，包络半径为
-`0.5 * |end-start| + sqrt(2) * noiseAmplitude + width +
-sqrt(3) * endpointJitter`，再乘同一个 `maxColumnScale`。
+`0.5 * |end-start| + branchLength * |end-start| + branchSpread +
+sqrt(2) * noiseAmplitude + width +
+(1 + 2 * branchLength) * sqrt(3) * endpointJitter`（无分支时分支项为 0），
+再乘同一个 `maxColumnScale`。
 
 逐轴取绝对值最大者保证非对称速度区间（如 `[-400, 20]`）也按最远可达速度外扩；
 `maxBillboardHalfSize` 保证大尺寸低速烟雾不会被视锥/距离/屏幕尺寸提前剔除，也不会在
@@ -690,13 +699,16 @@ GPU 写回 instanceCount 的 indirect draw。
 - `beam`：`renderMode: "beam"` 时使用；省略时每个字段取默认值。结构为
   `{ "start": [-200,0,0], "end": [200,0,0], "segments": 16, "width": 3.0,
   "count": 4, "noiseAmplitude": 18.0, "noiseFrequency": 3.0,
-  "noiseSpeed": 5.0, "endpointJitter": 0.0 }`。
+  "noiseSpeed": 5.0, "endpointJitter": 0.0, "branchCount": 0,
+  "branchStart": 0.5, "branchLength": 0.3, "branchSpread": 20.0 }`。
   `start`/`end` 是发射器局部空间端点（cm），都必须有限且不能重合；`segments` 是每条弧的
   段数，范围 `[2, 64]`；`width` 是横向半宽（cm），必须 `> 0`；`count` 是并行弧数量，
   范围 `[1, 16]`；`noiseAmplitude`（cm）、`noiseSpeed` 与 `endpointJitter`（cm）必须
-  非负；`noiseFrequency` 必须 `> 0`。`beam` 必须是对象；非对象、缺失/非法 `vec3`、
-  越界计数与非有限值都在加载期拒绝。作者应让 `maxParticles >= count`，但加载器不会
-  静默改写 `maxParticles`。
+  非负；`noiseFrequency` 必须 `> 0`。`branchCount` 是每条并行弧的分支数，范围 `[0, 4]`；
+  `branchStart` 是分支根在主弧上的参数位置，范围 `[0, 1]`；`branchLength` 是分支长度
+  相对主线长度的比例，范围 `(0, 1]`；`branchSpread`（cm）是分支末端横向偏移，必须非负。
+  `beam` 必须是对象；非对象、缺失/非法 `vec3`、越界计数与非有限值都在加载期拒绝。
+  作者应让 `maxParticles >= count`，但加载器不会静默改写 `maxParticles`。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
   `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
   "materialInstancePath": "..."? }`。
@@ -1008,21 +1020,45 @@ World 的粒子预算不计入 beam，`emitterBudgetScale=0` 或其它 emitter �
 电弧仍会绘制；`ParticleSystemBudget.effectiveCapacity` 与
 `telemetry.budgetedCapacity` 也只累计非 beam 发射器。
 
-绘制形状固定为 `segments * 6` 个顶点、`count` 个实例：
+绘制形状固定为 `segments * 6` 个顶点、`count * (1 + branchCount)` 个实例：
 
 ```text
-draw(segments * 6, count, 0, 0)
-drawnVertices = segments * 6 * count
+arcsPerInstance  = 1 + branchCount
+totalInstances   = count * arcsPerInstance
+draw(segments * 6, totalInstances, 0, 0)
+drawnVertices = segments * 6 * totalInstances
 ```
 
-顶点着色器按 `arcIndex = gl_InstanceIndex` 与 `segment = localVertex / 6` 生成四边形；
-起止点使用稳定哈希做逐弧 `endpointJitter`，弧内噪声使用
+实例布局是 `[arc0 main, arc0 branch1..N, arc1 main, ...]`：
+`arcIndex = gl_InstanceIndex / arcsPerInstance`、
+`branchIndex = gl_InstanceIndex % arcsPerInstance`，`branchIndex == 0` 是主弧。
+着色器按 `segment = localVertex / 6` 生成四边形；起止点使用稳定哈希做逐弧
+`endpointJitter`，弧内噪声使用
 
 ```text
 envelope = sin(pi * t)                    // 两端为零
 offset   = (sideA * waveA + sideB * waveB) * amplitude * envelope
 point(t) = mix(start, end, t) + offset
 ```
+
+分支（`branchIndex > 0`）先用稳定哈希在主弧上取
+`rootT = clamp(branchStart + 0.2 * hash, 0, 1)`，取主弧在 `rootT` 的噪声点作为 root，
+再按主切线旋转到 `sideA/sideB` 平面内：
+
+```text
+lateral      = normalize(sideA * cos(angle) + sideB * sin(angle))
+branchDir    = normalize(mainTangent * cos(bend) + lateral * sin(bend))
+branchEnd    = root + branchDir * (branchLength * |end - start|) +
+               lateral * branchSpread
+pointBranch(t) = BeamPoint(root, branchEnd, ..., seed(t), t)
+```
+
+`bend` 与 `angle` 都来自 `BeamHash`，分支方向由主切线旋转得到；`seed` 由主弧编号
+和分支编号决定。包络 `sin(pi * t)` 保证 `t = 0` 时分支点与主弧 root 完全重合。
+分支的噪声频率与幅度额外乘以 `clamp(branchLength, 0.1, 1.0)`，使短分支在世界空间
+保持接近主弧的空间频率，而不是在更短的 t 区间内被压成高频锯齿。
+分支使用更暗的颜色（`0.55x`）、更细的宽度（`0.55x`），alpha 沿长度淡出；根部不做
+收窄，末端仍按 `smoothstep` 收窄。
 
 `waveA/waveB` 是频率、速度与弧相位错开的三层正弦。横向宽度用
 `cross(tangent, viewDirection)` 面向相机，退化时回退 `cameraRight`；宽度在两端按
@@ -1031,12 +1067,14 @@ point(t) = mix(start, end, t) + offset
 采样整张 `particleTexture`，不消费 flipbook cell。片元沿用 ribbon 的 `sceneDepth`
 剔除、软粒子淡出与 overdraw 计数，但横截面是“亮核 + 快速衰减”，不做 FBM 侵蚀。
 
-限制：beam 没有分支结构、CPU 曲线编辑或逐段作者化控制点；端点只能是一条直线段的两端，
-噪声由固定层数的正弦和程序化哈希决定。它只支持 additive/alpha 两种既有混合，不进入
-全局排序或 8 槽 gather 纹理数组，也不支持逐弧独立材质/纹理。自动包围球以变换后的
-线段中点为球心，半径是
-`(halfDistance + sqrt(2) * noiseAmplitude + width + sqrt(3) * endpointJitter) *
-maxColumnScale`；
+限制：beam 有固定的直线主段和程序化分叉，但没有 CPU 曲线编辑、逐段作者化控制点或
+控制曲线；分支形状由 `branchStart/branchLength/branchSpread` 与哈希共同决定，不能逐条
+手工摆放。它只支持 additive/alpha 两种既有混合，不进入全局排序或 8 槽 gather
+纹理数组，也不支持逐弧独立材质/纹理。自动包围球以变换后的线段中点为球心，半径是
+`(halfDistance +
+(branchCount > 0 ? branchLength * |end - start| + branchSpread +
+2 * branchLength * sqrt(3) * endpointJitter : 0) +
+sqrt(2) * noiseAmplitude + width + sqrt(3) * endpointJitter) * maxColumnScale`；
 `useFixedBounds` 仍覆盖该自动估算。
 
 ### Mesh 实例化
@@ -1209,7 +1247,8 @@ gpuMaxMilliseconds, gpuSampleCount, emitters[]
 `age`、`velocity`、`lifetime`。billboard 的 `drawnVertices = maxParticles * 6`；
 ribbon 为 `maxParticles * ribbonSegments * 6`；mesh 为
 `meshIndexCount * maxParticles`；beam 的 `maxParticles`/`totalParticles` 为 0，
-`drawInstances = beam.count`，`drawnVertices = segments * 6 * count`；
+`drawInstances = beam.count * (1 + beam.branchCount)`，
+`drawnVertices = segments * 6 * drawInstances`；
 `estimatedDrawnVertices` 只累计未 cull 的 emitter。被 cull 的 emitter 仍会被回读，
 但其模拟状态处于冻结状态。
 

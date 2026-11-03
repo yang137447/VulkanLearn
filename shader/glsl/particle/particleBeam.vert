@@ -81,10 +81,11 @@ vec3 BeamPoint(
     vec3 sideB,
     uint arcIndex,
     float t,
-    float time)
+    float time,
+    float noiseScale)
 {
     // 每条弧使用略不同的频率，避免多条同频正弦形成规则编织网格。
-    float arcFrequency = frame.beamNoise.y *
+    float arcFrequency = frame.beamNoise.y * noiseScale *
         (0.85 + 0.30 * BeamHash(
             vec3(float(arcIndex), 1.0, 2.0)));
     float envelope = sin(kBeamPi * t);
@@ -104,7 +105,7 @@ vec3 BeamPoint(
         1.0);
     return mix(start, end, t) +
         (sideA * noiseA + sideB * noiseB) *
-            (frame.beamNoise.x * envelope);
+            (frame.beamNoise.x * noiseScale * envelope);
 }
 
 // 边界处的连续侧向量：相邻 segment 共享同一个 p(t) 与 side(t)，
@@ -117,17 +118,18 @@ vec3 BeamSide(
     uint arcIndex,
     float t,
     float time,
-    float delta)
+    float delta,
+    float noiseScale)
 {
     float previousT = max(t - delta, 0.0);
     float nextT = min(t + delta, 1.0);
     vec3 previous = BeamPoint(
-        start, end, sideA, sideB, arcIndex, previousT, time);
+        start, end, sideA, sideB, arcIndex, previousT, time, noiseScale);
     vec3 next = BeamPoint(
-        start, end, sideA, sideB, arcIndex, nextT, time);
+        start, end, sideA, sideB, arcIndex, nextT, time, noiseScale);
     vec3 tangent = next - previous;
     vec3 midpoint = BeamPoint(
-        start, end, sideA, sideB, arcIndex, t, time);
+        start, end, sideA, sideB, arcIndex, t, time, noiseScale);
     vec3 viewOffset = frame.cameraPosition.xyz - midpoint;
     float viewLength = length(viewOffset);
     vec3 viewDirection = viewLength > 1.0e-5
@@ -140,6 +142,15 @@ vec3 BeamSide(
         : frame.cameraRight.xyz;
 }
 
+// 主弧两端都收窄；分支只在末端收窄，根部保持全宽以贴住主弧。
+float BeamTaper(float t, bool branchRoot)
+{
+    float endTaper = smoothstep(0.0, 0.06, 1.0 - t);
+    return branchRoot
+        ? endTaper
+        : smoothstep(0.0, 0.06, t) * endTaper;
+}
+
 void main()
 {
     uint segments =
@@ -147,8 +158,15 @@ void main()
     // 这里不 clamp count：作者非法值应被资产校验拒绝，而不是在 GPU 上
     // 静默改变实例数。
     uint count = uint(max(int(frame.beamParams.x + 0.5), 0));
+    uint branchCount =
+        uint(clamp(int(frame.beamParams.y + 0.5), 0, 4));
+    // 实例布局：[arc0 main, arc0 branch1..N, arc1 main, ...]。
+    // 分支复用所属弧的端点/相位，但使用独立的噪声种子。
+    uint arcsPerInstance = 1u + branchCount;
+    uint arcIndex = uint(gl_InstanceIndex) / arcsPerInstance;
+    uint branchIndex = uint(gl_InstanceIndex) % arcsPerInstance;
+    bool isBranch = branchIndex > 0u;
     uint verticesPerArc = segments * 6u;
-    uint arcIndex = uint(gl_InstanceIndex);
     uint localVertex = uint(gl_VertexIndex) % verticesPerArc;
     uint segment = localVertex / 6u;
     vec2 corner = kParticleCorners[localVertex % 6u];
@@ -184,27 +202,98 @@ void main()
         : frame.cameraRight.xyz;
     vec3 sideB = normalize(cross(axis, sideA));
 
+    // 分支：从主弧内部取稳定 root t，沿主切线朝侧向偏转，
+    // 末端再叠加 branchSpread。strip 的 t=0 与主弧 root 完全重合。
+    vec3 stripStart = start;
+    vec3 stripEnd = end;
+    uint stripSeed = arcIndex;
+    float branchWeight = 1.0;
+    float stripNoiseScale = 1.0;
+    if (isBranch)
+    {
+        float rootHash = BeamHash(vec3(
+            float(arcIndex) * 7.13 + float(branchIndex) * 3.71,
+            2.0,
+            9.0));
+        float rootT = clamp(
+            frame.beamParams.z + 0.2 * rootHash, 0.0, 1.0);
+        vec3 root = BeamPoint(
+            start, end, sideA, sideB, arcIndex, rootT, time, 1.0);
+        float delta = 1.0 / float(segments);
+        vec3 previous = BeamPoint(
+            start,
+            end,
+            sideA,
+            sideB,
+            arcIndex,
+            max(rootT - delta, 0.0),
+            time,
+            1.0);
+        vec3 next = BeamPoint(
+            start,
+            end,
+            sideA,
+            sideB,
+            arcIndex,
+            min(rootT + delta, 1.0),
+            time,
+            1.0);
+        vec3 tangent = next - previous;
+        float tangentLength = length(tangent);
+        tangent = tangentLength > 1.0e-5
+            ? tangent / tangentLength
+            : axis;
+        float lateralHash = BeamHash(vec3(
+            float(arcIndex) * 5.31 + float(branchIndex) * 13.7,
+            4.0,
+            2.0));
+        float lateralAngle = lateralHash * kBeamPi * 2.0;
+        vec3 lateral = normalize(
+            sideA * cos(lateralAngle) +
+            sideB * sin(lateralAngle));
+        float bendHash = BeamHash(vec3(
+            float(arcIndex) * 9.17 + float(branchIndex) * 7.3,
+            6.0,
+            8.0));
+        float bendAngle = mix(0.55, 1.15, bendHash);
+        vec3 branchDirection = normalize(
+            tangent * cos(bendAngle) +
+            lateral * sin(bendAngle));
+        float branchLength = clamp(frame.beamParams.w, 0.0001, 1.0);
+        stripStart = root;
+        stripEnd = root +
+            branchDirection * (branchLength * axisLength) +
+            lateral * max(frame.beamBranch.x, 0.0);
+        stripSeed = 4000u + arcIndex * 8u + branchIndex;
+        stripNoiseScale = clamp(branchLength, 0.1, 1.0);
+        branchWeight = 0.55;
+    }
+
     float t0 = float(segment) / float(segments);
     float t1 = float(segment + 1u) / float(segments);
     vec3 point0 = BeamPoint(
-        start, end, sideA, sideB, arcIndex, t0, time);
+        stripStart, stripEnd, sideA, sideB, stripSeed, t0, time,
+        stripNoiseScale);
     vec3 point1 = BeamPoint(
-        start, end, sideA, sideB, arcIndex, t1, time);
+        stripStart, stripEnd, sideA, sideB, stripSeed, t1, time,
+        stripNoiseScale);
     float delta = 1.0 / float(segments);
     vec3 side0 = BeamSide(
-        start, end, sideA, sideB, arcIndex, t0, time, delta);
+        stripStart, stripEnd, sideA, sideB, stripSeed, t0, time, delta,
+        stripNoiseScale);
     vec3 side1 = BeamSide(
-        start, end, sideA, sideB, arcIndex, t1, time, delta);
+        stripStart, stripEnd, sideA, sideB, stripSeed, t1, time, delta,
+        stripNoiseScale);
 
     float along = corner.x * 0.5 + 0.5;
     float t = mix(t0, t1, along);
     // 端点处收窄，避免多条弧在固定端点叠成亮斑。
-    float taper0 = smoothstep(0.0, 0.06, t0) *
-        smoothstep(0.0, 0.06, 1.0 - t0);
-    float taper1 = smoothstep(0.0, 0.06, t1) *
-        smoothstep(0.0, 0.06, 1.0 - t1);
-    float halfWidth0 = frame.beamEnd.w * mix(0.25, 1.0, taper0);
-    float halfWidth1 = frame.beamEnd.w * mix(0.25, 1.0, taper1);
+    float taper0 = BeamTaper(t0, isBranch);
+    float taper1 = BeamTaper(t1, isBranch);
+    float halfWidth0 = frame.beamEnd.w * branchWeight *
+        mix(0.25, 1.0, taper0);
+    float halfWidth1 = frame.beamEnd.w * branchWeight *
+        mix(0.25, 1.0, taper1);
     float halfWidth = mix(halfWidth0, halfWidth1, along);
     vec3 worldPosition =
         mix(point0, point1, along) +
@@ -220,9 +309,16 @@ void main()
     float flicker = 0.75 + 0.25 *
         (0.5 + 0.5 * sin(
             time * (3.0 + float(arcIndex) * 0.37) +
-            float(arcIndex) * 2.1));
-    vColor = vec4(color.rgb * flicker, frame.render.w);
-    vSeed = float(arcIndex) * 0.61803398875;
+            float(arcIndex) * 2.1 +
+            float(branchIndex) * 0.83));
+    // 分支比主弧暗、细，并沿长度淡出，形成 UE 电弧的短分叉。
+    float branchColor = isBranch ? 0.55 : 1.0;
+    float branchFade = isBranch ? mix(1.0, 0.35, t) : 1.0;
+    vColor = vec4(
+        color.rgb * flicker * branchColor,
+        frame.render.w * branchFade);
+    vSeed = float(arcIndex) * 0.61803398875 +
+        float(branchIndex) * 0.137;
     vTime = time;
     vUV = vec2(t, corner.y * 0.5 + 0.5);
     vec2 halfTexel = vec2(0.5) / max(atlasSize, vec2(1.0));

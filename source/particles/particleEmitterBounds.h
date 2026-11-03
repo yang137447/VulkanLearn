@@ -21,8 +21,25 @@ inline float ComputeParticleEmitterLocalRadius(
     // 端点抖动。继续叠加寿命/速度/重力会得到与画面无关的巨大球体。
     if (asset.renderMode == "beam")
     {
+        const float mainLength =
+            (asset.beam.end - asset.beam.start).norm();
+        // 分支从主弧内部出发，最长可再走 branchLength * 主线长度，
+        // 末端还有横向 spread；root 本身仍落在线段内，不会超出半长。
+        const float branchReach =
+            asset.beam.branchCount > 0
+                ? std::max(asset.beam.branchLength, 0.0f) *
+                        mainLength +
+                    std::max(asset.beam.branchSpread, 0.0f) +
+                    // 分支端点也带同一 jitter；两个端点各自外扩，
+                    // 因此再计一份两端的抖动余量。
+                    2.0f *
+                        std::max(asset.beam.branchLength, 0.0f) *
+                        std::sqrt(3.0f) *
+                        std::max(asset.beam.endpointJitter, 0.0f)
+                : 0.0f;
         return 0.5f *
-                (asset.beam.end - asset.beam.start).norm() +
+                mainLength +
+            branchReach +
             // 两个正交噪声波最坏可叠加成 sqrt(2) 倍幅度；
             // 端点抖动是三个独立轴，最坏 sqrt(3) 倍。
             std::sqrt(2.0f) *

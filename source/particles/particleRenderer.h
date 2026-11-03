@@ -275,15 +275,19 @@ private:
         Eigen::Vector4f beamEnd;
         // x = 噪声幅度, y = 频率, z = 速度, w = 端点抖动（cm）。
         Eigen::Vector4f beamNoise;
-        // x = 并行弧数量, y/z/w reserved。
+        // x = 并行弧数量, y = branchCount, z = branchStart,
+        // w = branchLength。
         Eigen::Vector4f beamParams;
         // fixed billboard 的世界空间法线与上方向；xyz 已在 CPU 归一化。
         // 追加在 beam 之后，保持既有字段偏移不变。
         Eigen::Vector4f billboardFixedNormal;
         Eigen::Vector4f billboardFixedUp;
+        // x = 分支末端横向偏移（cm，已乘模型最大列缩放），y/z/w 保留。
+        // 追加在 fixed billboard 之后，避免重排既有偏移。
+        Eigen::Vector4f beamBranch;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6352,
+        sizeof(FrameUniforms) == 6368,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -390,6 +394,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, billboardFixedUp) == 6336,
         "ParticleFrame billboardFixedUp offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamBranch) == 6352,
+        "ParticleFrame beamBranch offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -601,7 +608,7 @@ private:
     std::shared_ptr<PipelineBase> ribbonAdditivePipeline;
     std::shared_ptr<PipelineBase> ribbonAlphaPipeline;
     // beam 与 ribbon 共用 particle pass 的 set 0/set 3；顶点数由段数决定，
-    // 实例数由作者 beam.count 决定，不读取存活粒子索引。
+    // 实例数由 count * (1 + branchCount) 决定，不读取存活粒子索引。
     std::shared_ptr<PipelineBase> beamAdditivePipeline;
     std::shared_ptr<PipelineBase> beamAlphaPipeline;
     // mesh 使用静态 SM 的 Vertex 输入布局与 drawIndexed；排序仍共用

@@ -40,7 +40,8 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
     bool meshUsable,
     uint32_t meshIndexCount,
     uint32_t beamSegments = 16,
-    uint32_t beamCount = 1)
+    uint32_t beamCount = 1,
+    uint32_t beamBranchCount = 0)
 {
     if (renderMode == "mesh" && meshUsable && meshIndexCount > 0)
     {
@@ -59,7 +60,12 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
             false,
             0,
             ParticleBeamVerticesPerParticle(beamSegments),
-            beamCount};
+            // 分支与主弧共用同一条间接形状；instanceCount 必须按
+            // count * (1 + branchCount) 描述，否则 dump/统计会少算分支。
+            static_cast<uint32_t>(
+                ParticleBeamInstanceCount(
+                    beamCount,
+                    beamBranchCount))};
     }
 
     const uint32_t verticesPerParticle = renderMode == "ribbon"

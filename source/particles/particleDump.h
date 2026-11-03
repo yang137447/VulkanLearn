@@ -55,7 +55,7 @@ struct ParticleDumpEmitter
     // billboard 为 6；ribbon 为 ribbonSegments * 6；beam 为 segments * 6；
     // mesh 为合并后的索引数。
     uint32_t verticesPerParticle = 6;
-    // beam 用作者 count 作为实例数；0 表示沿用 maxParticles。
+    // beam 用 count * (1 + branchCount) 作为实例数；0 表示沿用 maxParticles。
     uint32_t drawInstances = 0;
     Eigen::Vector3f boundsCenter = Eigen::Vector3f::Zero();
     float boundsRadius = 0.0f;

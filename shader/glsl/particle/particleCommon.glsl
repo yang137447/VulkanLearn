@@ -125,11 +125,14 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 beamEnd;
     // x = 噪声幅度, y = 频率, z = 速度, w = 端点抖动（cm）。
     vec4 beamNoise;
-    // x = 并行弧数量, y/z/w reserved。
+    // x = 并行弧数量, y = branchCount, z = branchStart,
+    // w = branchLength。
     vec4 beamParams;
     // fixed billboard 的世界空间法线与上方向（CPU 已归一化）。
     vec4 billboardFixedNormal;
     vec4 billboardFixedUp;
+    // x = 分支末端横向偏移（cm，已乘模型最大列缩放），y/z/w 保留。
+    vec4 beamBranch;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
