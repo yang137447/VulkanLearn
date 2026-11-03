@@ -181,10 +181,10 @@ struct ParticleSystemSnapshot
     ParticleSystemAttachment attachment;
 };
 
-// BeforeLighting GBuffer decal 的冻结渲染输入。decalToWorld 已包含
+// BeforeLighting DBuffer decal 的冻结渲染输入。decalToWorld 已包含
 // 单位 cube 的半尺寸缩放；世界位置落在该矩阵的 [-1,1] 局部立方体内时
-// 才参与投影。颜色是线性 RGB，opacity 只控制 GBufferC.rgb 的混合；
-// GBufferC.a（AO）由 decal pipeline 的写掩码保留，当前不改写。
+// 才参与投影。颜色/roughness/AO 通过 DBuffer A/C 在 deferredLighting
+// 之前合成，不直接读写 GBuffer。
 struct DecalSnapshot
 {
     RuntimeId decalId = 0;
@@ -196,6 +196,9 @@ struct DecalSnapshot
     float edgeSoftness = 0.35f;
     float noiseStrength = 0.55f;
     float randomSeed = 0.0f;
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    float ambientOcclusion = 1.0f;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

@@ -45,7 +45,8 @@
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
-            "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。"
+            "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。",
+            "clearColor": "可选四分量颜色清除值；未提供时沿用颜色附件默认灰底 0.2,0.2,0.2,1。"
         },
         "output": {
             "resource": "当前 pass 输出的逻辑资源名。",
@@ -163,6 +164,39 @@
         {
             "name": "gbufferF",
             "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferA",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferB",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferC",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
             "widthScale": 1,
             "heightScale": 1,
             "usage": [
@@ -433,8 +467,18 @@
             ],
             "output": [
                 {
-                    "resource": "gbufferC",
-                    "loadOp": "load",
+                    "resource": "dbufferA",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferB",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferC",
+                    "loadOp": "clear",
                     "storeOp": "store"
                 }
             ]
@@ -480,6 +524,18 @@
                 },
                 {
                     "resource": "shadowMap"
+                },
+                {
+                    "resource": "dbufferA",
+                    "binding": 10
+                },
+                {
+                    "resource": "dbufferB",
+                    "binding": 11
+                },
+                {
+                    "resource": "dbufferC",
+                    "binding": 12
                 }
             ],
             "output": [

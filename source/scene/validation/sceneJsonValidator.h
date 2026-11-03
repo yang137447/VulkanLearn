@@ -126,7 +126,8 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                         "Decal size components must be in (0, 100000]");
             }
             for (const char* field : {"opacity", "edgeSoftness",
-                     "noiseStrength"})
+                     "noiseStrength", "roughness", "metallic",
+                     "ambientOcclusion"})
             {
                 if (object.contains(field))
                 {

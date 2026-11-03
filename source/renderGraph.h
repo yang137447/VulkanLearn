@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,6 +42,7 @@ struct RenderResource
     uint32_t width;
     uint32_t height;
     uint32_t arrayLayers = 1;
+    std::array<float, 4> clearColor = {0.2f, 0.2f, 0.2f, 1.0f};
 };
 
 class MaterialInstance;

@@ -10,7 +10,8 @@ enum class GraphicsPipelineBlendMode
     AlphaBlend,
     PremultipliedAlpha,
     Additive,
-    // BeforeLighting decal 只写 GBufferC.rgb，alpha（AO）由写掩码保留。
+    // 旧版直接写 GBufferC.rgb 的 decal 模式；DBuffer decal 已改用
+    // AlphaBlend 写入覆盖率，本模式不再由 DecalRenderer 使用。
     DecalColor,
     // 颜色公式为 Add + Multiplier * Destination，第二颜色源提供逐通道 Multiplier。
     ThinTranslucentDualSource

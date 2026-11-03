@@ -21,8 +21,8 @@ enum class RenderGraphPassType
     // 区别是它保留深度测试以复用场景 sceneDepth 做遮挡，因此需要独立行为类型。
     EditorGrid,
     AutoExposure,
-    // BeforeLighting GBuffer decal：独立 DecalRenderer 用 unit cube 投影，
-    // 只写 GBufferC.rgb，必须排在 geometry 之后、deferredLighting 之前。
+    // BeforeLighting DBuffer decal：独立 DecalRenderer 用 unit cube 投影，
+    // 写 DBuffer A/B/C，必须排在 geometry 之后、deferredLighting 之前。
     Decal,
     // 粒子 billboard 不经过 Material schema，由 ParticleRenderer 直接绑定
     // 自己的 UBO/SSBO；该类型只负责在图中声明 sceneColor/sceneDepth 的合成顺序。

@@ -1119,6 +1119,7 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.type = resourceDesc.type;
         resource.arrayLayers =
             resourceDesc.arrayLayers;
+        resource.clearColor = resourceDesc.clearColor;
         resource.format = formatOverride == vk::Format::eUndefined
             ? GetFormat(resourceDesc.format) : formatOverride;
 
@@ -2105,8 +2106,8 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     bool bUseMsaa)
 {
     std::vector<vk::ClearValue> clearValues;
-    vk::ClearValue clearColor;
-    clearColor.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
+    const std::array<float, 4> defaultClearColor{
+        0.2f, 0.2f, 0.2f, 1.0f};
     vk::ClearValue clearDepth;
     clearDepth.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
     // 总览：清除值顺序需与 RenderPass attachments 顺序一致
@@ -2118,6 +2119,26 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     {
         if (IsDepthResource(resourceName)) continue;
 
+        // 每个颜色附件独立取 clearColor，不能复用上一个附件的值：
+        // DBuffer 等资源用零清除，普通场景颜色仍用默认灰色。
+        std::array<float, 4> color = defaultClearColor;
+        const auto msaaIt = resourcesMsaa.find(resourceName);
+        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
+        {
+            color = msaaIt->second[0].clearColor;
+        }
+        else
+        {
+            // 单采样输出只存在于 resolve 表；缺失时回退默认清除色。
+            const auto resolveIt = resourcesResolve.find(resourceName);
+            if (resolveIt != resourcesResolve.end() &&
+                !resolveIt->second.empty())
+            {
+                color = resolveIt->second[0].clearColor;
+            }
+        }
+        vk::ClearValue clearColor;
+        clearColor.setColor(vk::ClearColorValue(color));
         // MSAA / Main Attachment
         clearValues.push_back(clearColor);
     }
@@ -2128,7 +2149,16 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
         for (const auto& resourceName : outputResources)
         {
             if (IsDepthResource(resourceName)) continue;
-            
+
+            std::array<float, 4> color = defaultClearColor;
+            const auto resolveIt = resourcesResolve.find(resourceName);
+            if (resolveIt != resourcesResolve.end() &&
+                !resolveIt->second.empty())
+            {
+                color = resolveIt->second[0].clearColor;
+            }
+            vk::ClearValue clearColor;
+            clearColor.setColor(vk::ClearColorValue(color));
             clearValues.push_back(clearColor);
         }
     }

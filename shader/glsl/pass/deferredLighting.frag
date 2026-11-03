@@ -3,6 +3,7 @@
 #include "generate/M_deferredLightingParamter.glsl"
 #include "../engine/gbufferCodec.glsl"
 #include "../engine/deferredLighting.glsl"
+#include "../engine/decalComposite.glsl"
 #include "../engine/materialDebugView.glsl"
 
 layout(location = 0) in vec2 inUV;
@@ -23,6 +24,9 @@ layout(set = 3, binding = 5) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 6) uniform sampler2D gbufferF;
 layout(set = 3, binding = 7) uniform sampler2D sceneColorBase;
 layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
+layout(set = 3, binding = 10) uniform sampler2D dbufferA;
+layout(set = 3, binding = 11) uniform sampler2D dbufferB;
+layout(set = 3, binding = 12) uniform sampler2D dbufferC;
 GBufferData SampleGBuffer(vec2 uv)
 {
     GBufferData data;
@@ -41,6 +45,11 @@ void main()
 {
     GBufferData gbuffer = SampleGBuffer(inUV);
     MaterialSurface surface = DecodeGBufferSurface(gbuffer);
+    ApplyDecalDBuffer(
+        surface,
+        texture(dbufferA, inUV),
+        texture(dbufferB, inUV),
+        texture(dbufferC, inUV));
 
     float deviceDepth = texture(sceneDepth, inUV).r;
     surface.worldPosition = ReconstructWorldPositionFromSceneDepth(inUV, deviceDepth);

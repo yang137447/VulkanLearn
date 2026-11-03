@@ -128,6 +128,9 @@ struct WorldDecal
     float edgeSoftness = 0.35f;
     float noiseStrength = 0.55f;
     float randomSeed = 0.0f;
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    float ambientOcclusion = 1.0f;
     uint32_t sortOrder = 0;
     bool visible = true;
 };

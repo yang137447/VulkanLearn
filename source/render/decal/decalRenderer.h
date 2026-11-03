@@ -18,9 +18,9 @@ namespace VL
 class RendererBackendVulkan;
 struct RenderScene;
 
-// BeforeLighting GBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
-// instanced unit cube 批量绘制；实例数据只在当前 image 的 SSBO 中更新，
-// 不创建逐 decal 的 descriptor 或 GPU 资源。
+// BeforeLighting DBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
+// instanced unit cube 批量绘制到 DBuffer A/B/C；实例数据只在当前 image
+// 的 SSBO 中更新，不创建逐 decal 的 descriptor 或 GPU 资源。
 class DecalRenderer
 {
 public:
@@ -58,10 +58,15 @@ private:
         Eigen::Matrix4f decalToWorld;
         Eigen::Matrix4f worldToDecal;
         Eigen::Vector4f color;
-        // x = opacity, y = edgeSoftness, z = noiseStrength, w = seed.
+        // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
+        Eigen::Vector4f surface;
+        // x = edgeSoftness, y = noiseStrength, z = seed, w = reserved.
         Eigen::Vector4f params;
+        // xyz = world normal, w = normal opacity. Current source leaves
+        // normal opacity at 0 until a normal-capable decal material exists.
+        Eigen::Vector4f normal;
     };
-    static_assert(sizeof(DecalInstance) == 160,
+    static_assert(sizeof(DecalInstance) == 192,
         "DecalInstance layout must match decalCommon.glsl");
 
     void Initialize(

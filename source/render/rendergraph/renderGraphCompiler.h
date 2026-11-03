@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -56,6 +57,8 @@ struct CompiledRenderGraphResource
     bool hasFixedHeight = false;
     float heightValue = 1.0f;
     uint32_t arrayLayers = 1;
+    // 颜色资源的清除值；默认保持旧的灰底 (0.2,0.2,0.2,1)。
+    std::array<float, 4> clearColor = {0.2f, 0.2f, 0.2f, 1.0f};
     bool initializeShaderRead = false;
     bool isSwapchain = false;
 };

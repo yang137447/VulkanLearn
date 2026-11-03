@@ -329,6 +329,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                     "edgeSoftness", decal.edgeSoftness);
                 decal.noiseStrength = objectJson.value(
                     "noiseStrength", decal.noiseStrength);
+                decal.roughness = objectJson.value(
+                    "roughness", decal.roughness);
+                decal.metallic = objectJson.value(
+                    "metallic", decal.metallic);
+                decal.ambientOcclusion = objectJson.value(
+                    "ambientOcclusion", decal.ambientOcclusion);
                 decal.sortOrder = static_cast<uint32_t>(
                     objectJson.value("sortOrder", 0));
                 world->AddDecal(

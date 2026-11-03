@@ -1,6 +1,7 @@
 #include "render/rendergraph/renderGraphCompiler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -591,6 +592,30 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     resource.name));
             }
             resource.arrayLayers = resourceNode["arrayLayers"].get<uint32_t>();
+        }
+        if (resourceNode.contains("clearColor"))
+        {
+            const nlohmann::json& clearColor = resourceNode["clearColor"];
+            if (!clearColor.is_array() || clearColor.size() != 4)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidResourceClearColor",
+                    "Render graph resource clearColor must be a four-component array.",
+                    resource.name));
+            }
+            for (size_t component = 0; component < 4; ++component)
+            {
+                if (!clearColor[component].is_number() ||
+                    !std::isfinite(clearColor[component].get<double>()))
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidResourceClearColor",
+                        "Render graph resource clearColor components must be finite numbers.",
+                        resource.name));
+                }
+                resource.clearColor[component] =
+                    clearColor[component].get<float>();
+            }
         }
         if (resource.arrayLayers < 1)
         {

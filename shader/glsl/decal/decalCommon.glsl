@@ -8,8 +8,12 @@ struct DecalInstance
     mat4 decalToWorld;
     mat4 worldToDecal;
     vec4 color;
-    // x = opacity, y = edge softness, z = noise strength, w = seed.
+    // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
+    vec4 surface;
+    // x = edge softness, y = noise strength, z = seed, w reserved.
     vec4 params;
+    // xyz = world normal, w = normal opacity.
+    vec4 normal;
 };
 
 layout(std140, set = 0, binding = 0) uniform DecalFrame

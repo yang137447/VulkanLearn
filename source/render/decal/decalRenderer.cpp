@@ -116,7 +116,9 @@ void DecalRenderer::Initialize(
         // 闭合 cube 只保留正面；否则同一 sceneDepth 表面会被前后两面
         // 各混合一次。索引绕序与 pipeline 的 clockwise front face 对齐。
         vk::CullModeFlagBits::eBack,
-        GraphicsPipelineBlendMode::DecalColor);
+        // DBuffer A/B/C 的 alpha 是逐通道覆盖率，必须写入 alpha，
+        // 不能用只写 RGB 的 DecalColor 模式。
+        GraphicsPipelineBlendMode::AlphaBlend);
     if (!pipeline)
         throw std::runtime_error("DecalRenderer failed to create its graphics pipeline");
 
@@ -362,11 +364,18 @@ void DecalRenderer::RecordGraphics(
         target.decalToWorld = source.decalToWorld;
         target.worldToDecal = source.decalToWorld.inverse();
         target.color = source.color;
+        target.color.w() = source.opacity;
+        target.surface = Eigen::Vector4f(
+            source.roughness,
+            source.metallic,
+            source.ambientOcclusion,
+            source.opacity);
         target.params = Eigen::Vector4f(
-            source.opacity,
             source.edgeSoftness,
             source.noiseStrength,
-            source.randomSeed);
+            source.randomSeed,
+            0.0f);
+        target.normal = Eigen::Vector4f(0.0f, 0.0f, 1.0f, 0.0f);
     }
 
     commandBuffer.bindPipeline(

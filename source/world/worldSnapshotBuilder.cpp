@@ -384,6 +384,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         decalSnapshot.edgeSoftness = decal.edgeSoftness;
         decalSnapshot.noiseStrength = decal.noiseStrength;
         decalSnapshot.randomSeed = decal.randomSeed;
+        decalSnapshot.roughness = decal.roughness;
+        decalSnapshot.metallic = decal.metallic;
+        decalSnapshot.ambientOcclusion = decal.ambientOcclusion;
         decalSnapshot.sortOrder = decal.sortOrder;
         decalSnapshot.visible = decal.visible;
         snapshot.decals.push_back(std::move(decalSnapshot));

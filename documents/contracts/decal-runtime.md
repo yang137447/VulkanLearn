@@ -7,7 +7,7 @@
 
 ```text
 geometry
-  -> decals（写 GBufferC）
+  -> decals（写 DBuffer A/B/C）
   -> deferredLighting
   -> forwardOpaque / sky / forwardTransparent / particle
 ```
@@ -29,6 +29,9 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
   "opacity": 0.92,
   "edgeSoftness": 0.48,
   "noiseStrength": 0.72,
+  "roughness": 0.9,
+  "metallic": 0.0,
+  "ambientOcclusion": 0.45,
   "sortOrder": 0
 }
 ```
@@ -38,6 +41,8 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
 - `position`/`rotation` 是场景作者 TRS；`scale` 可选，非零，参与半尺寸。
 - `opacity`、`edgeSoftness`、`noiseStrength` 都在 `[0, 1]`；`sortOrder`
   是 `[0, 255]` 整数。所有数值必须有限。
+- `roughness`、`metallic`、`ambientOcclusion` 可选，默认 `1/0/1`，范围
+  都在 `[0, 1]`，通过 DBufferC 合成到接收表面。
 - `type=decal` 的对象不创建网格或材质资源；SceneAssetValidator 负责
   字段边界，WorldBuilder 负责转换成 `DecalSnapshot`。
 
@@ -49,14 +54,21 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
   世界位置，再乘 `worldToDecal`。
 - 局部 cube 落在 `[-1,1]` 外则丢弃。局部 X 是投影深度，UV 使用局部
   `zy`，与 UE `DeferredDecal.usf` 的 `SwizzlePos.zyx` 语义一致。
-- 当前只写 `GBufferC.rgb`（baseColor）。`DecalColor` 混合写掩码保留
-  `GBufferC.a`（AO），不读取或写 GBufferC 本身。
-- 这是 `BeforeLighting` 子集：decal 会在 `deferredLighting` 之前改变
-  opaque GBuffer 表面颜色，因此仍接受场景光照。
+- `DBufferA` 写 baseColor + color coverage；`DBufferC` 写
+  roughness/metallic/AO + surface coverage；`DBufferB` 写编码到 `[0,1]` 的
+  world normal + normal coverage（当前源还没有 normal-capable decal 材质，
+  coverage 为 0）。三个缓冲区都由固定功能 AlphaBlend 预乘 coverage，
+  `deferredLighting` 按 over 形式合成；normal 目前只处理单层 decal。
+- 这是 `BeforeLighting` 子集：decal 在 `deferredLighting` 前修改
+  `MaterialSurface`，因此仍接受场景光照；deferredLighting 通过
+  `ApplyDecalDBuffer` 合成，不读写同一张 GBuffer。
 
 ## 当前限制
 
-- 没有 DBufferA/B/C、DBufferMask、法线、roughness、metallic、AO 修改。
+- DBufferA/B/C 已接入；仍没有 DBufferMask、DBuffer 多目标响应掩码和
+  材质 `DecalResponse`。
+- `DBufferB` 已保留 normal 通道，但当前源没有 normal-capable decal 材质，
+  法线覆盖率仍为 0。
 - 没有 decal 纹理/材质图；当前使用程序化径向 + value-noise 形状。
 - 没有硬件 depth/stencil 附件；像素以 `sceneDepth` 重建投影体判断，
   大屏或相机进入 decal 体积的鲁棒性仍需后续 stencil 路径。
