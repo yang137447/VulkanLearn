@@ -1398,3 +1398,24 @@ SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序。
 BeforeLighting DBuffer decal（见 `decal-runtime.md`），但没有 Light Renderer；
 没有 UE Material Graph/SubUV 的完整语义；粒子图集与 decal 图案为程序化等价物。
 启动与验收细节见该目录的 `README.md`。
+
+`Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json` 对齐 UE 5.8
+`NiagaraExamples/FX_Weapons/Impacts/NS_Impact_Concrete`。UE 系统由
+`NE_Impact_LightDecal`、`NE_Impact_MeshAndSprite`、`NE_Impact_SecondarySprite`
+和 `NE_Impact_Sprite` 组成；VulkanLearn 用 `impact_flash`、`impact_sparks`、
+`impact_dust`、`impact_chips`、`impact_smoke` 五个发射器重建闪光、火花、
+尘、混凝土碎块和残留烟，并以 `burstInterval = 2.5s` 循环。墙面
+`ImpactCrater` 使用 `T_Impact_Concrete_*` 的 albedo/normal/ORM 贴图，经
+`decalResponse = colorNormalRoughness` 写入 DBuffer。
+
+该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的粒子驱动灯光目前
+用静态点光近似；没有 UE Material Graph；碎块复用 `SM_rock`，贴图与 decal
+图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
+
+```powershell
+main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json --no-dev-ui --focus-window
+```
+
+验收时应看到墙面撞击坑 decal、短暂闪光、向外喷出的火花与碎块，以及尘/烟
+层；日志不应出现 `VUID-`、`Validation Error` 或纹理 fallback。启动与近似
+细节见该目录的 `README.md`。
