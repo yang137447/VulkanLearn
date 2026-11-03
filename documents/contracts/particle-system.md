@@ -1495,3 +1495,18 @@ main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json -
 验收时应看到墙面撞击坑 decal、短暂闪光、向外喷出的火花与碎块，以及尘/烟
 层；日志不应出现 `VUID-`、`Validation Error` 或纹理 fallback。启动与近似
 细节见该目录的 `README.md`。
+
+`Maps/SC_particle_ue_muzzle/SC_ue_muzzle_flash.json` 对齐 UE 5.8
+`NiagaraExamples/FX_Weapons/MuzzleFlashes/NS_MuzzleFlash`。UE 系统导入
+`NE_MuzzleFlash_Base`、`NE_MuzzleFlash_Smoke`、`NE_MuzzleFlash_Sparks_Base`
+和 `NE_BulletShells`，实例包含 `Flash_Center`、`MuzzleFlash_Front`、
+`MuzzleFlash_Side`、`Muzzle_Smoke`、`Muzzle_Sparks`、`Bullet_Shell` /
+`Bullet_Shell_Eject`。VulkanLearn 用 `flash_front`、`flash_side`、
+`flash_center`、`muzzle_smoke`、`muzzle_sparks`、`bullet_shell` 六个发射器
+重建，`burstInterval = 1.0s` 循环；程序化步枪与弹壳为静态 SM，闪光/烟
+贴图为程序化 TGA；火花使用引擎程序化圆盘，不接纹理。
+
+该案例是结构/视觉近似：UE 的 particle-driven light 用静态暖色点光近似；
+front/side 卡片在 VulkanLearn 中统一为 camera billboard，没有 distortion
+材质或 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
+维护。启动与截图见该目录的 `README.md`。
