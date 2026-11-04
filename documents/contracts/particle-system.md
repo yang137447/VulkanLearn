@@ -36,9 +36,10 @@
 - GPU compute 每帧推进粒子池；graphics pass 按发射器 `renderMode` 读取同一段 storage
   buffer，用按 `billboardAlignment` 朝向的 billboard、最近 3 个历史位置组成的 ribbon
   条带、静态 SM 网格实例化，在作者化起止点之间生成多条带噪声的 beam 合成，或在独立
-  distortion pass 中把屏幕高度归一化偏移写入 RGBA16F 缓冲。`renderMode: "light"` 与
-  `renderMode: "decal"` 是 CPU 侧例外：它们不分配 GPU 池，而是共享同一份固定步长/burst
-  模拟，把存活粒子分别映射成最多 64 盏场景 PointLight 或最多 64 个可见 DBuffer decal。
+  distortion pass 中把屏幕高度归一化偏移写入 RGBA16F 缓冲。`renderMode: "light"`
+  复用 GPU 模拟池并由独立 compute 生成最多 64 盏 per-particle light；
+  `renderMode: "decal"` 是 CPU 侧例外：它不分配 GPU 池，而是共享同一份固定步长/burst
+  模拟，把存活粒子映射成最多 64 个可见 DBuffer decal。
   粒子 decal 与静态 decal 共用 `decalStencil` D24S8 union mask（bit0）、64 槽实例
   排序和 `DecalRenderer`；粒子侧不额外创建 stencil 资源或独立 decal pass。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
@@ -83,8 +84,8 @@ SC_*.json particleSystem
     -> compute 模拟 -> particle pass billboard/ribbon/mesh/beam 合成
     -> particleDistortion pass 写屏幕高度归一化偏移
     -> bloomPrefilter 与 toneMapping 按同一公式映射 sceneUV
-    -> ParticleLightRuntime::Synchronize/Update（renderMode=="light"）
-    -> 追加 RenderScene::lights -> light SSBO -> deferred lighting
+    -> particleLightEmit compute（renderMode=="light"）
+    -> ParticleLightSSBO（set 0 binding 4）-> deferred/forward lighting
     -> ParticleDecalRuntime::Synchronize/Update（renderMode=="decal"）
     -> 追加 RenderScene::decals -> DecalRenderer::Synchronize
     -> decalStencil pass（D24S8 bit0 union mask）-> decals pass（stencil gate + DBuffer）
@@ -731,8 +732,9 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
 - `renderMode`：`"billboard"`（默认）、`"ribbon"`、`"mesh"`、`"beam"`、
   `"distortion"`、`"light"` 或 `"decal"`。ribbon 用当前点与最近 3 个历史点生成面向相机的条带；
   mesh 用静态 SM 网格按粒子实例化；beam 在作者化起止点之间生成多条带噪声的并行弧；
-  distortion 仍消费粒子池，但绘制到独立 UV 偏移缓冲；light 不渲染几何，由 CPU
-  运行时把存活粒子映射为场景 PointLight，详见「Light 粒子灯（CPU）」；decal 同样不渲染
+  distortion 仍消费粒子池，但绘制到独立 UV 偏移缓冲；light 不渲染几何，复用 GPU
+  模拟池并写入独立 per-particle light SSBO，详见「Light 粒子灯（GPU per-particle light）」；
+  decal 同样不渲染
   几何，由 CPU 运行时把存活粒子映射为 BeforeLighting DBuffer decal，详见
   「Decal 粒子贴花（CPU）」。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
@@ -1455,42 +1457,42 @@ dispatch 或绘制。
   逐 emitter 计时，而由 `__global__` 项表示。Vulkan 没有可直接读取的硬件显存带宽计数器；
   dump 中的 `estimatedParticleBufferReadBytes` 明确是规模估算，不是实测值。
 
-## Light 粒子灯（CPU）
+## Light 粒子灯（GPU per-particle light）
 
-`renderMode: "light"` 是 CPU 侧的最小 particle-driven light 路径，不创建 GPU 粒子池，
-也不进入 compute simulate、indirect draw、全局 gather 或排序。`ParticleRenderer::Synchronize`
-在遇到 light 发射器时直接跳过；World 的 authored/budgeted capacity 也把它排除在粒子总预算
-之外。
+`renderMode: "light"` 拥有正常 GPU 粒子池（每个发射器最多 64 个粒子），复用
+`particleSimulate.comp` 的固定步长、burst 绝对周期、shape/gravity/drag、局部/世界空间、
+`colorTint`、`spawnRateScale`、事件/碰撞与确定性随机。它不进入 billboard/ribbon/mesh/
+beam/indirect draw、全局 gather 或排序。World 的 authored/budgeted capacity 仍把 light
+发射器排除在普通粒子总预算之外；模拟池按 `min(maxParticles, 64)` 独立分配。
 
-- 运行时由 `ParticleLightRuntime` 拥有逐发射器状态，身份与 GPU 池一致：
-  场景对象名 + `assetPath` + 发射器名。World 换代或发射器集合变化时清理状态；
-  同一代际内按 `randomSeed` 与身份派生固定随机状态。
-- 与 decal 共用 `ParticleCpuEmitterRuntime`。粒子年龄/位置积分的非固定步长单帧上限是
-  `0.1 s`；burst 周期另有独立绝对时钟，非固定步长使用未裁剪 raw delta，因此一次大帧跳
-  跨过多个 interval 时仍只重触发一次。按 `burst` / `spawnRate` 生成、按 `lifetime`
-  老化，并用 `gravity`、指数 `drag` 积分位置；连续发射乘实例 `spawnRateScale`。
-  `fixedTimeStep > 0` 时复用 GPU 的固定步长调度：accumulator 只推进完整步，
-  每帧最多 8 步，余量跨帧保留；不足一步的帧不老化、不生成，但继续输出当前存活灯。
-  `fixedTimeStep` 参与发射器状态签名，修改后会清空该发射器的灯池。
-  `lifetimeScaleKeys` 与 LOD 预算不参与 light 模拟。
-- 发射器模型是 `particleSystem.model * translation(localPosition)`。`localSpace=false`
-  时位置/速度在生成时变换到世界空间；`localSpace=true` 时在局部空间积分，输出灯光前
-  再乘模型。shape 的六种类型（sphere/box/cone/cylinder/disc/ring）使用与 GPU 相同的
-  采样公式。
-- 每个存活粒子输出一个 `LightSnapshotType::Point`：
+- 模拟后由独立 `particle/particleLightEmit.comp` 读取存活粒子，写入每个 swapchain image
+  一份固定 64 槽的 `ParticleLightSSBO`。`RenderSystem` 不再调用 CPU
+  `ParticleLightRuntime`，`RenderScene::lights` 中也没有对应动态灯，因此不存在
+  CPU/GPU 双重发光。
+- `ParticleLightSSBO` 布局：`uvec4 header`（x = count high-water mark、y = capacity 64）
+  后接 32 字节条目 `{positionRadius, colorIntensity}`。条目位置是粒子世界坐标（cm），
+  `colorIntensity.w` 是 `cd * 100^2`，与场景 `LightGPU` 的点光约定一致。
+- 槽位按 light 发射器 key 的稳定顺序 first-fit 分配；总请求超过 64 时后面的槽位容量为 0，
+  截断结果不依赖 `unordered_map` 迭代顺序。每个粒子写 `base + particleIndex`，用
+  `atomicMax(header.count, slot + 1)` 发布 high-water；空槽保持零强度，由着色器跳过。
+- 每个存活粒子的颜色/强度：
   `color = mix(colorStart.rgb, colorEnd.rgb, lifeT) * colorTint.rgb`，
   `alpha = clamp(mix(colorStart.a, colorEnd.a, lifeT) * colorTint.a, 0, 1)`，
   `intensity = light.intensity * (1 - lifeT) * alpha`，`radius = light.radius`。
-  当前没有粒子级光源纹理、逐粒子阴影或逐粒子 IES。
-- 每个 light 发射器最多 `maxParticles` 盏存活灯；整个 RenderScene 的 light 发射器合计
-  最多 64 盏。超出时按快照中的 particleSystems 顺序与 emitter 顺序截断，保证确定性。
-- 动态灯追加到 `RenderScene::lights` 后才进入现有 `UploadLightsForPass` 路径；
-  `RenderSystem` 在追加后调用 `EnsureLightCapacity`，必要时扩容并刷新 runtime descriptors。
-  因此它是真实的场景 PointLight，不是 emissive billboard 的替代。
-- 世界/实例隐藏与 `enabledEmitterMask` 会移除对应 light 状态；Pause 时
-  `simulationDeltaSeconds == 0`，灯光停留在当前年龄。离线渲染与编辑器缩略图不运行
-  该 CPU 运行时；`OfflineParticleSimulation` 直接跳过 light 发射器，不分配
-  粒子数组、不推进 `elapsedSeconds`，只保留发射器槽位供索引/掩码稳定。
+  发射时乘 `100^2`，不经过 CPU 量化或回读。
+- 每帧 `BeginFrame` 等待该 image fence 后，host 清零 `header + 64 entries`，发布
+  host-write → compute/fragment barrier；粒子 simulate 后插入 compute write → compute
+  read/write barrier，再执行 light emit；`RecordSimulation` 末尾的 compute →
+  vertex/fragment barrier 让 deferred 和 forward 读取同一份结果。
+- deferred 与 forward 共用 set 0 binding 4 的 `ParticleLightSSBO`，并把它合并进现有
+  点光循环。该 SSBO 不扩容，也不做逐帧 descriptor 热刷新；容量固定 64。
+- 隐藏/禁用/剔除沿用普通 emitter 冻结路径：不推进模拟，本帧输出为零。Pause 时
+  `simulationDeltaSeconds == 0`，粒子保持当前年龄；runtime restart 会重置池并在下一帧
+  prewarm。World 换代通过 `ParticleRenderer::Synchronize` 重建/回收池与描述符包。
+- 编辑器粒子缩略图在创建 `RendererFrameResources` 后绑定同一 light buffer；离线
+  `OfflineParticleSimulation` 仍跳过 light 发射器，不分配粒子数组、不推进时间。
+- 仍没有逐粒子光纹理、逐粒子阴影、逐粒子 IES 或光源曲线；light 发射器本身不产生
+  可见 draw call。
 
 编辑器能力表公开 `renderMode` 的 `light` 选项以及 `light.intensity`、`light.radius`；
 字段仍写入 v2 renderer 模块的 `fields`。没有独立的 Light 模块页，也没有 Material Graph。
@@ -1543,7 +1545,7 @@ instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角�
 Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
 确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
 GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记录，以及
-`renderMode: "light"` 的 CPU 粒子点光（每场景最多 64 盏）、
+`renderMode: "light"` 的 GPU per-particle 点光（独立 compute，每场景最多 64 盏）、
 `renderMode: "decal"` 的 CPU 粒子贴花（与静态 decal 共享每场景最多 64 个可见实例）。
 
 仍未完成：
@@ -1592,9 +1594,9 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
 - 模拟 compute 每帧原子写 `alive`、紧凑 `aliveIndices` 与事件计数，`particleFinalizeCount.comp`
   把存活数写回 `drawIndirect` 的 `instanceCount`；图形阶段不再使用 CPU 容量/存活猜测。
   未使用 `VK_KHR_draw_indirect_count`；CPU 仍提交容量上界的单条间接命令。
-- light 发射器没有 GPU 模拟/回读，也没有独立 GPU light pass：它只把 CPU 粒子映射为
-  `LightSnapshot`，因此不参与 GPU 事件、碰撞、排序、indirect 或粒子 dump。光源本身
-  没有阴影贴图、纹理投影、逐粒子 IES、光源曲线或运行时死灯回收以外的生命周期功能。
+- light 发射器已有 GPU 模拟池与独立 `particleLightEmit` compute，但输出仍是固定 64 槽的
+  点光 SSBO：没有光纹理、阴影贴图、逐粒子 IES 或光源曲线；越过 64 槽的请求按稳定 emitter
+  key 顺序截断。light 发射器不产生可见 draw call，也不参与排序/indirect。
 - decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU
   粒子映射为 `DecalSnapshot`，再走现有静态 decal 的 64 槽 DBuffer 路径。因此它不产生
   HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集、硬件 stencil 裁剪或
@@ -1752,11 +1754,11 @@ VulkanLearn 版本用 8 个发射器（`flash`、`core_burst`、`roil_smoke`、
 `dirt_burst`、`spark_burst`、`debris`、`smoke_plume`、`explosion_light`）重建火球、翻滚烟、
 地面尘、火花、岩石碎片和残余烟柱；`burstInterval = 3.0s` 循环，火花/碎片走
 SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序；`explosion_light` 用
-3 盏 CPU 粒子点光复刻 UE Light Renderer。
+3 盏 GPU per-particle 点光复刻 UE Light Renderer。
 
 该案例是结构/视觉对齐，不是 UE 资产的直接移植：`ExplosionScorch` 使用
-BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 是 CPU
-粒子到 PointLight 的映射，不是 GPU light pass；
+BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 由 GPU 粒子池和
+独立 light emit compute 生成；
 没有 UE Material Graph/SubUV 的完整语义；粒子图集与 decal 图案为程序化等价物。
 启动与验收细节见该目录的 `README.md`。
 
@@ -1771,7 +1773,7 @@ BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 是 CP
 `decalResponse = colorNormalRoughness` 写入 DBuffer。
 
 该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的光强由
-`impact_light` 的 CPU 粒子点光复刻，墙面 decal 由 `impact_decal` 的
+`impact_light` 的 GPU per-particle 点光复刻，墙面 decal 由 `impact_decal` 的
 CPU particle-driven decal 生成，不再保留静态 `ImpactCrater` 场景对象。没有 UE Material Graph；
 碎块复用 `SM_rock`，贴图与 decal
 图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
@@ -1795,7 +1797,7 @@ main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json -
 静态 SM，闪光/烟/扰动贴图为程序化 TGA；火花使用引擎程序化圆盘，不接纹理。
 
 该案例是结构/视觉近似：UE 的 particle-driven light 用 `muzzle_light` 的
-CPU 粒子点光复刻；
+GPU per-particle 点光复刻；
 front 卡片使用 camera billboard，side 卡片使用 fixed billboard；
 `muzzle_heat_haze` 走 `renderMode: "distortion"` 的独立屏幕高度归一化偏移缓冲，由
 bloomPrefilter 与 toneMapping 共同消费；没有 UE flipbook 动画；没有 Material Graph，
@@ -1808,7 +1810,7 @@ bloomPrefilter 与 toneMapping 共同消费；没有 UE flipbook 动画；没有
 和左右 `tesla_light_*`、`tesla_smoke`、左右 `tesla_node_decal_*` 共 15 个发射器重建
 双极放电；beam 使用 `branchCount` /
 `branchStart` / `branchLength` / `branchSpread` 生成分支，两个
-`renderMode: "light"` 发射器每 0.7 s 生成 150 cd / 900 cm 的 CPU 粒子灯。
+`renderMode: "light"` 发射器每 0.7 s 生成 150 cd / 900 cm 的 GPU per-particle 灯。
 左右落地弧启用 `beam.hitScan`（y=10 的地面平面），`tesla_smoke` 以连续 billboard
 补充线圈上方的薄烟，左右 `tesla_node_decal_*` 通过 CPU 粒子 decal 重建
 `Tesla_Node_Decals` 的节点辉光。它仍不是 UE 资产直接移植：HitScan 是受控平面命中，

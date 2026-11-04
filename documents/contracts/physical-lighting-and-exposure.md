@@ -97,13 +97,17 @@ clamped frame delta used for exposure. It is wall-clock render time, not
 simulation particle time: the pulse continues while Play is paused and has no
 particle birth/death readback. Use `pulse` for a static scene light that must
 flash without a particle system; for effects with a Niagara Light Renderer use
-the CPU particle light path below. Editor thumbnails upload lights with time 0.
+the GPU particle light path below. Editor thumbnails upload static lights with
+time 0.
 
-## CPU Particle Lights
+## GPU Particle Lights
 
-A particle emitter with `renderMode: "light"` is simulated on the CPU and
-contributes real point-light snapshots every frame. It does not allocate a GPU
-particle pool and does not use a separate GPU light pass:
+A particle emitter with `renderMode: "light"` owns a normal GPU particle pool
+(at most 64 particles), advanced by the shared `particleSimulate` compute with
+the same fixed-step, burst, shape, gravity/drag, color tint and deterministic
+random rules as other emitters. A dedicated `particleLightEmit` compute then
+reads the live particles and writes point lights into a separate per-swapchain
+`ParticleLightSSBO`; `RenderSystem` no longer calls `ParticleLightRuntime`:
 
 ```json
 {
@@ -119,21 +123,27 @@ particle pool and does not use a separate GPU light pass:
 ```
 
 `light.intensity` is candela and `light.radius` is centimeters; both must be
-finite and positive. `maxParticles` is capped at 64 per light emitter, and the
-whole scene is capped at 64 live particle lights. The CPU runtime advances with
-`RenderScene::simulationDeltaSeconds`, so Play/Pause and time scale affect the
-light exactly like the other particle modules. The snapshot color is
+finite and positive. `maxParticles` is capped at 64 per light emitter. All light
+emitters share one fixed 64-slot output buffer per swapchain image; slots are
+assigned in stable emitter-key order (first-fit), so overflow truncation does
+not depend on map iteration order. The shader color is
 `mix(colorStart.rgb, colorEnd.rgb, lifeT)`, multiplied by the instance color
 tint; alpha fades intensity, and the final scalar is
-`light.intensity * (1 - lifeT) * alpha`.
+`light.intensity * (1 - lifeT) * alpha`. The GPU emits
+`intensity * 100^2` to match the existing `LightGPU` centimeter-distance
+convention.
 
-Particle lights are appended to `RenderScene::lights` before the existing light
-SSBO upload. Light SSBO capacity grows and runtime descriptors refresh if the
-combined static + particle light count exceeds the current buffer. Limits: no
-GPU particle readback, no per-light shadows, no light textures, no particle
-event/collision integration for light emitters, and no offline/thumbnail
-simulation. See [particle system](particle-system.md) §Light for the full
-authoring and shape contract.
+The output buffer has a `uvec4 header` (`count` high-water mark, capacity 64)
+followed by 32-byte `ParticleLightGPU` entries. The buffer is cleared on the
+host every frame after the image fence and before simulation; `particleLightEmit`
+writes `atomicMax(header.count, slot + 1)` and unique per-particle slots.
+Deferred and forward lighting read the same buffer through set 0 binding 4 and
+merge it into the existing point-light loop; there is no second copy in
+`RenderScene::lights`. Limits: no per-light shadows, no light textures; the
+offline particle compositor still skips light
+emitters. Editor particle thumbnails use the same GPU path when their session
+sets the light buffer. See [particle system](particle-system.md) §Light for the
+full authoring and shape contract.
 
 ## Camera Exposure
 

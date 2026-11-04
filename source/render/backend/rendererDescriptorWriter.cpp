@@ -100,6 +100,15 @@ bool BuildRendererDescriptorWrite(
             "RendererDescriptorWriter",
             "light storage buffer info"));
     }
+    else if (update.source ==
+        RendererDescriptorUpdateSource::ParticleLightStorage)
+    {
+        outWrite.setBufferInfo(RequireRendererDescriptorBufferInfo(
+            inputs.descriptorContext->particleLightBufferInfos,
+            swapChainImageIndex,
+            "RendererDescriptorWriter",
+            "particle light storage buffer info"));
+    }
     else if (update.source == RendererDescriptorUpdateSource::GlobalTexture)
     {
         const RendererResourceCache& resourceCache =

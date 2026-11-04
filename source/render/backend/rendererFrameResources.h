@@ -64,6 +64,11 @@ public:
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights,
         float timeSeconds = 0.0f);
+    // GPU per-particle light 输出：在每帧 BeginFrame 之后、粒子 simulate
+    // 之前清零；host-visible 内存已由 image fence 保护。
+    void ClearParticleLightBuffer(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapChainImageIndex);
     void UpdateMaterialInstanceUniformBuffer(
         uint32_t swapChainImageIndex,
         MaterialInstance& materialInstance);
@@ -75,6 +80,13 @@ public:
 
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetParticleLightBufferInfos() const;
+    const std::vector<vk::Buffer>&
+        GetParticleLightBufferHandles() const noexcept
+    {
+        return particleLightBuffer.buffers;
+    }
     size_t GetLightCapacity() const { return maxLightCount; }
     const std::vector<RHIBufferHandle>&
         GetLightBufferHandlesForTest() const noexcept
@@ -92,6 +104,7 @@ private:
 
     Buffer globalUniformBuffer;
     Buffer lightBuffer;
+    Buffer particleLightBuffer;
     size_t maxLightCount = 0;
     bool initialized = false;
 };

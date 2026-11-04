@@ -19,6 +19,7 @@ struct RendererDescriptorContext
 {
     const std::vector<vk::DescriptorBufferInfo>* globalUniformBufferInfos = nullptr;
     const std::vector<vk::DescriptorBufferInfo>* lightBufferInfos = nullptr;
+    const std::vector<vk::DescriptorBufferInfo>* particleLightBufferInfos = nullptr;
     const RendererResourceCache* resourceCache = nullptr;
     std::shared_ptr<Material> commonOpaqueShadowMaterial;
 };

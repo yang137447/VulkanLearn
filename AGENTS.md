@@ -59,9 +59,10 @@ Current implemented areas include:
 - GPU particle system: data-driven `PS_*.json` v1/v2 module stacks, compute simulation,
   billboard/ribbon/mesh/beam/distortion rendering, GPU-count indirect draws, global alpha
   sorting, events, runtime emitter/budget/user-parameter APIs and telemetry, plus
-  `renderMode: "light"` CPU particle lights and `renderMode: "decal"` CPU particle decals
-  (shared fixed-step/burst simulation, no GPU pool; up to 64 live lights and 64 total visible
-  DBuffer decals); current schema, ownership and limits:
+  `renderMode: "light"` GPU per-particle point lights (reuse the simulate pool, dedicated
+  `particleLightEmit` compute, fixed 64-slot per-image SSBO, set 0 binding 4) and
+  `renderMode: "decal"` CPU particle decals (shared fixed-step/burst simulation, up to 64
+  total visible DBuffer decals); current schema, ownership and limits:
   `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   a dedicated `decalStencil` D24S8 pass (unit-cube bit0 union mask, stencil gate on the
@@ -216,8 +217,8 @@ If a change affects boot behavior, verify it against this order.
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
 - `source/particles/`: `particleSystem` asset loading/validation, the GPU compute + billboard
-  runtime, the shared CPU light/decal emitter simulation, and the
-  `renderMode: "light"`/`renderMode: "decal"` output runtimes
+  runtime, the GPU per-particle light output path, the shared CPU decal emitter simulation,
+  and the retained CPU light reference runtime used only by module tests
 - `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files

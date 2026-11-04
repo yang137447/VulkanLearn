@@ -13,9 +13,9 @@ namespace VL
 
 struct RenderScene;
 
-// renderMode=="light" 的 CPU 运行时。它不拥有 GPU 粒子池，也不写
-// sceneColor；每次 Update 把共享 CPU 模拟中的存活粒子映射成场景
-// PointLight，由现有的 Light SSBO / deferred lighting 路径消费。
+// CPU 参考实现，仅保留给模块测试/行为对照。实时 RenderSystem 不再调用它：
+// renderMode=="light" 由 GPU 模拟池 + particleLightEmit compute 生成
+// ParticleLightSSBO，因此不会与场景 PointLight 重复发光。
 class ParticleLightRuntime
 {
 public:

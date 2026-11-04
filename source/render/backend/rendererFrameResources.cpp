@@ -21,6 +21,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "render/lighting/lightPulse.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "particles/particleLightGpu.h"
 #include "shaderReflect.h"
 
 namespace VL
@@ -256,6 +257,23 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
     {
         std::memset(mappedBuffer, 0, sizeof(UBOGlobal));
     }
+
+    // GPU particle light 输出按 swapchain image 分槽，避免在飞帧竞争。
+    // 容量固定 64，不随发射器数量扩容，也不触发 descriptor 热刷新。
+    rendererBackend.CreatePerSwapchainBufferSet(
+        particleLightBuffer,
+        ParticleLightSSBOSize(),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        memoryPropertyFlags,
+        "SSBO_ParticleLight");
+    for (void* mappedBuffer : particleLightBuffer.buffersMapped)
+    {
+        if (mappedBuffer != nullptr)
+        {
+            std::memset(mappedBuffer, 0, ParticleLightSSBOSize());
+        }
+    }
     initialized = true;
 }
 
@@ -267,6 +285,10 @@ void RendererFrameResources::Shutdown(RendererBackendVulkan& rendererBackend)
     }
 
     DestroyLightBuffer(rendererBackend);
+    if (particleLightBuffer.HasResources())
+    {
+        rendererBackend.DestroyBufferSet(particleLightBuffer);
+    }
     rendererBackend.DestroyBufferSet(globalUniformBuffer);
     initialized = false;
 }
@@ -584,6 +606,52 @@ const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetGlobalUn
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetLightBufferInfos() const
 {
     return lightBuffer.bufferInfos;
+}
+
+const std::vector<vk::DescriptorBufferInfo>&
+RendererFrameResources::GetParticleLightBufferInfos() const
+{
+    return particleLightBuffer.bufferInfos;
+}
+
+void RendererFrameResources::ClearParticleLightBuffer(
+    vk::CommandBuffer commandBuffer,
+    uint32_t swapChainImageIndex)
+{
+    if (!initialized ||
+        swapChainImageIndex >= particleLightBuffer.buffersMapped.size())
+    {
+        throw std::runtime_error(
+            "RendererFrameResources particle light SSBO is not initialized "
+            "for this swapchain image.");
+    }
+    void* mapped =
+        particleLightBuffer.buffersMapped[swapChainImageIndex];
+    if (mapped == nullptr)
+    {
+        throw std::runtime_error(
+            "RendererFrameResources particle light SSBO is not mapped.");
+    }
+    std::memset(mapped, 0, ParticleLightSSBOSize());
+    ParticleLightSSBOHeader header;
+    std::memcpy(mapped, &header, sizeof(header));
+
+    // 同一 image 的 fence 已在 BeginFrame 等待，host 写入不再与上一帧
+    // compute/fragment 竞争；这里只发布 host write -> shader read/write。
+    vk::MemoryBarrier hostToShader;
+    hostToShader
+        .setSrcAccessMask(vk::AccessFlagBits::eHostWrite)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eHost,
+        vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+        {},
+        hostToShader,
+        nullptr,
+        nullptr);
 }
 
 void RendererFrameResources::CreateLightBuffer(

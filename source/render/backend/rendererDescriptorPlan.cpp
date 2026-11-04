@@ -68,7 +68,18 @@ void BuildMaterialDescriptorUpdates(
         }
         else if (binding.type == vk::DescriptorType::eStorageBuffer)
         {
-            update.source = RendererDescriptorUpdateSource::LightStorage;
+            // set 0 的全局 SSBO 槽位：1 = 场景灯，4 = GPU 粒子灯。
+            if (binding.set == GlobalSetIndex &&
+                binding.binding == 4)
+            {
+                update.source =
+                    RendererDescriptorUpdateSource::ParticleLightStorage;
+            }
+            else
+            {
+                update.source =
+                    RendererDescriptorUpdateSource::LightStorage;
+            }
         }
         else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
         {

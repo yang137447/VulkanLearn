@@ -19,6 +19,7 @@
 #include "particles/particleFrameStats.h"
 #include "particles/particleGlobalSort.h"
 #include "particles/particleIndirect.h"
+#include "particles/particleLightGpu.h"
 #include "particles/particleMaterial.h"
 #include "particles/particleRenderIdentity.h"
 #include "particles/particleSdf.h"
@@ -80,6 +81,10 @@ public:
     // 冻结 RenderScene 中的发射器集合：新增/删除/参数变化只影响自己的 GPU 包。
     void Synchronize(const RenderScene& renderScene);
 
+    // 由 RenderSystem 在 Synchronize 之前提供本 swapchain 的 GPU light 输出
+    // buffer。buffer 容量固定为 kMaxParticleLights，不做逐帧扩容。
+    void SetParticleLightBuffers(std::vector<vk::Buffer> buffers);
+
     // 在图形 pass 之前录制 compute；结束时把 SSBO 可见性移交给顶点着色器。
     void RecordSimulation(
         vk::CommandBuffer commandBuffer,
@@ -129,7 +134,8 @@ public:
     bool IsInitialized() const noexcept { return initialized; }
     bool HasEmitters() const noexcept { return !emitters.empty(); }
     // 最近一次 Synchronize 解析出的运行时资产（含 userParameters / Data
-    // Channels 覆盖）。CPU 粒子灯光必须复用这份结果。
+    // Channels 覆盖）。CPU decal runtime 与 GPU light 发射器都必须复用这份结果，
+    // 避免同一发射器在两条输出路径上解析出不同的参数。
     const std::unordered_map<std::string, ParticleSystemAsset>&
         GetResolvedSystemAssets() const noexcept
     {
@@ -318,9 +324,12 @@ private:
         // x = widthScale, y = intensity, z = noisePhase, w 保留。
         std::array<Eigen::Vector4f, kMaxParticleBeamCount>
             beamArcParams;
+        // x = 全局 light 槽位 base, y = 本发射器槽位容量,
+        // z = cd intensity, w = cm radius。仅 light emit compute 消费。
+        Eigen::Vector4f particleLightParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 7456,
+        sizeof(FrameUniforms) == 7472,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -454,6 +463,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, beamArcParams) == 7200,
         "ParticleFrame beamArcParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightParams) == 7456,
+        "ParticleFrame particleLightParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -492,6 +504,9 @@ private:
         std::vector<vk::DescriptorSet> sortAtoBSets;
         std::vector<vk::DescriptorSet> sortBtoASets;
         std::vector<vk::DescriptorSet> finalizeSets;
+        // light 发射器专用：UBO + 只读粒子池 + 全局 light 输出 SSBO。
+        // 普通发射器不分配这组 set。
+        std::vector<vk::DescriptorSet> lightEmitSets;
         std::shared_ptr<Texture> texture;
         // 作者给了 texturePath 但解码/创建失败时置 true。distortion 需要
         // 用它回退到程序化方向场，而不是把 1x1 白图当成 (1,1) 偏移。
@@ -530,6 +545,10 @@ private:
         bool enabled = true;
         float spawnRateScale = 1.0f;
         Eigen::Vector4f colorTint = Eigen::Vector4f::Ones();
+        // 本发射器在全局 64 槽 GPU light 输出中的确定性子区间。
+        uint32_t lightSlotBase = 0;
+        uint32_t lightSlotCapacity = 0;
+        uint32_t lightBufferGeneration = 0;
         // mesh 专用方向光缓存；每帧在 RecordSimulation 里按场景方向光重算，
         // 不参与发射器资源重建。未启用时保持旧 unlit 输出。
         bool lightingEnabled = false;
@@ -596,6 +615,7 @@ private:
         EmitterResources& emitter,
         const std::string& emitterKey);
     void CreateDescriptors(EmitterResources& emitter);
+    void CreateLightEmitterDescriptors(EmitterResources& emitter);
     static void DestroyBuffer(
         RendererBackendVulkan& backend,
         GpuBuffer& buffer);
@@ -621,6 +641,7 @@ private:
         uint64_t signature,
         const std::string& error);
     void SynchronizeGlobalSort();
+    void AssignParticleLightSlots();
     void DestroyGlobalSortPool();
     bool CreateGlobalSortPool(
         const std::vector<std::string>& emitterKeys,
@@ -661,6 +682,7 @@ private:
     std::shared_ptr<ComputePipeline> finalizeCountPipeline;
     std::shared_ptr<ComputePipeline> globalGatherPipeline;
     std::shared_ptr<ComputePipeline> globalSortInitPipeline;
+    std::shared_ptr<ComputePipeline> particleLightEmitPipeline;
     std::shared_ptr<PipelineBase> additivePipeline;
     std::shared_ptr<PipelineBase> alphaPipeline;
     // ribbon 与 billboard 共用 descriptor set layout 与 particle SSBO，
@@ -686,6 +708,9 @@ private:
         emitters;
     std::unordered_map<std::string, ParticleSystemAsset>
         resolvedSystemAssets;
+    // per-swapchain-image，由 RendererFrameResources 持有；这里只保存引用。
+    std::vector<vk::Buffer> particleLightBuffers;
+    uint32_t particleLightBufferGeneration = 0;
     // 仅缓存弱引用：仍被活跃/退休发射器持有的纹理由发射器生命周期管理，
     // Shutdown 清空索引不会提前销毁 GPU 资源。
     std::unordered_map<std::string, std::weak_ptr<Texture>>
@@ -693,6 +718,7 @@ private:
     std::unordered_set<std::string> warnedTextureFallbacks;
     std::unordered_set<std::string> warnedMeshFallbacks;
     std::unordered_set<std::string> warnedMaterialFallbacks;
+    bool warnedMissingParticleLightBuffer = false;
     // 运行时 userParameters 重解析缓存：key = system 身份，value 保存
     // 最近一次成功解析的资产 + 失败标记，避免每帧重新 ParseJson。
     struct ParticleUserParameterCacheEntry

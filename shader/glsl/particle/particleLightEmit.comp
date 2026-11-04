@@ -1,0 +1,71 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+#include "particleStorageRO.glsl"
+
+// 与 source/particles/particleLightGpu.h、common/lighting.glsl 保持一致。
+struct ParticleLightGPU
+{
+    vec4 positionRadius;
+    vec4 colorIntensity;
+};
+
+layout(std430, set = 0, binding = 2) buffer ParticleLightOutput
+{
+    uvec4 header;
+    ParticleLightGPU lights[];
+} particleLightOutput;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint capacity = uint(frame.particleLightParams.y + 0.5);
+    if (index >= capacity)
+    {
+        return;
+    }
+
+    Particle particle = particleBuffer.particles[index];
+    if (!IsParticleAlive(particle))
+    {
+        return;
+    }
+
+    float lifetime = max(particle.velocityLife.w, 1.0e-6);
+    float lifeT = clamp(particle.positionAge.w / lifetime, 0.0, 1.0);
+    float alpha = clamp(
+        mix(frame.colorStart.w, frame.colorEnd.w, lifeT) *
+            frame.colorTint.w,
+        0.0,
+        1.0);
+    float intensity =
+        frame.particleLightParams.z * (1.0 - lifeT) * alpha;
+    if (!(intensity > 0.0))
+    {
+        return;
+    }
+
+    vec3 color =
+        mix(frame.colorStart.xyz, frame.colorEnd.xyz, lifeT) *
+        frame.colorTint.xyz;
+    vec3 worldPosition = frame.shape.z > 0.5
+        ? (frame.localToWorld *
+            vec4(particle.positionAge.xyz, 1.0)).xyz
+        : particle.positionAge.xyz;
+
+    uint base = uint(frame.particleLightParams.x + 0.5);
+    uint slot = base + index;
+    if (slot >= 64u)
+    {
+        return;
+    }
+
+    particleLightOutput.lights[slot].positionRadius =
+        vec4(worldPosition, frame.particleLightParams.w);
+    // LightGPU 的点光/聚光约定：cd 在 GPU 上传边界乘 100^2，配合 cm 距离。
+    particleLightOutput.lights[slot].colorIntensity =
+        vec4(color, intensity * 10000.0);
+    atomicMax(particleLightOutput.header.x, slot + 1u);
+}

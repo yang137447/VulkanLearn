@@ -146,6 +146,9 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 beamArcColorEnd[16];
     // x = widthScale, y = intensity, z = noisePhase, w 保留。
     vec4 beamArcParams[16];
+    // x = 全局 light 槽位 base, y = 本发射器槽位容量,
+    // z = cd intensity, w = cm radius。仅 light emit compute 消费。
+    vec4 particleLightParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

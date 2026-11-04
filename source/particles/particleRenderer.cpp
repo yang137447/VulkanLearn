@@ -418,6 +418,8 @@ void ParticleRenderer::Initialize(
         factory.CreateComputePipeline("particle/particleGlobalGather");
     globalSortInitPipeline =
         factory.CreateComputePipeline("particle/particleGlobalSortInit");
+    particleLightEmitPipeline =
+        factory.CreateComputePipeline("particle/particleLightEmit");
 
     ShaderVariantKey variant;
     variant.shaderName = "particle/particle";
@@ -583,6 +585,9 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     // 调用方必须已等待设备空闲（renderer.WaitIdle 或引擎关闭路径）；
     // 活跃发射器可以立即析构，已退休的包仍由 ResourceRetireQueue 持有。
     emitters.clear();
+    particleLightBuffers.clear();
+    particleLightBufferGeneration = 0;
+    warnedMissingParticleLightBuffer = false;
     textureCache.clear();
     DestroyGlobalSortPool();
     simulatePipeline.reset();
@@ -591,6 +596,7 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     finalizeCountPipeline.reset();
     globalGatherPipeline.reset();
     globalSortInitPipeline.reset();
+    particleLightEmitPipeline.reset();
     additivePipeline.reset();
     alphaPipeline.reset();
     ribbonAdditivePipeline.reset();
@@ -725,6 +731,16 @@ void ParticleRenderer::WarnUserParameterFailureOnce(
     std::cout << "[Particles][Warning] " << message << std::endl;
 }
 
+void ParticleRenderer::SetParticleLightBuffers(
+    std::vector<vk::Buffer> buffers)
+{
+    if (particleLightBuffers != buffers)
+    {
+        ++particleLightBufferGeneration;
+    }
+    particleLightBuffers = std::move(buffers);
+}
+
 void ParticleRenderer::Synchronize(const RenderScene& renderScene)
 {
     if (!initialized)
@@ -739,6 +755,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
          renderScene.particleSystems)
         emitterCount += snapshot.asset.emitters.size();
     desired.reserve(emitterCount);
+    const uint32_t swapchainImageCount =
+        backend->GetSwapchainImageCount();
     for (const ParticleSystemSnapshot& snapshot :
          renderScene.particleSystems)
     {
@@ -830,10 +848,10 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         {
             const ParticleEmitterAsset& authoredEmitter =
                 systemAsset.emitters[emitterIndex];
-            // light/decal 发射器由 CPU runtime 分别生成 PointLight 或
-            // DecalSnapshot；粒子渲染器不创建池、indirect 参数或排序资源。
-            if (authoredEmitter.renderMode == "light" ||
-                authoredEmitter.renderMode == "decal")
+            // decal 发射器由 CPU runtime 生成 DecalSnapshot；粒子渲染器
+            // 不创建池、indirect 参数或排序资源。light 发射器则必须进入
+            // GPU 模拟，由独立 light emit compute 输出到场景光照缓冲。
+            if (authoredEmitter.renderMode == "decal")
             {
                 continue;
             }
@@ -855,10 +873,14 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             const uint32_t effectiveMaxParticles =
                 authoredEmitter.renderMode == "beam"
                     ? authoredEmitter.maxParticles
-                    : ResolveParticleEmitterCapacity(
-                        authoredEmitter.maxParticles,
-                        budgetedMaxParticles,
-                        telemetryBudgetsUsable);
+                    : (authoredEmitter.renderMode == "light"
+                        ? std::min(
+                            authoredEmitter.maxParticles,
+                            kMaxParticleLights)
+                        : ResolveParticleEmitterCapacity(
+                            authoredEmitter.maxParticles,
+                            budgetedMaxParticles,
+                            telemetryBudgetsUsable));
             if (!ShouldAllocateParticlePool(
                     effectiveMaxParticles))
             {
@@ -903,6 +925,14 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 ParticleCollisionResourceIdentityChanged(
                     emitterIt->second->asset,
                     emitter) ||
+                // GPU light 输出 buffer 在本帧才可用时，需要重建描述符包；
+                // 不能留下一个只有 simulate set、没有 emit set 的发射器。
+                (emitter.renderMode == "light" &&
+                 particleLightBuffers.size() >= swapchainImageCount &&
+                 (emitterIt->second->lightEmitSets.size() <
+                      swapchainImageCount ||
+                  emitterIt->second->lightBufferGeneration !=
+                      particleLightBufferGeneration)) ||
                 emitterIt->second->textureSourceKey !=
                     textureSourceKey ||
                 emitterIt->second->meshSourceKey !=
@@ -981,6 +1011,7 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             ++emitterIt;
         }
     }
+    AssignParticleLightSlots();
     // 发射器集合稳定后再决定全局透明排序池的成员/纹理槽位；签名不变时
     // 直接复用，不在每帧创建 GPU 资源。
     SynchronizeGlobalSort();
@@ -1208,6 +1239,35 @@ bool ParticleRenderer::IsGlobalSortEmitter(
         globalSortPool.emitterKeys.begin(),
         globalSortPool.emitterKeys.end(),
         key) != globalSortPool.emitterKeys.end();
+}
+
+void ParticleRenderer::AssignParticleLightSlots()
+{
+    std::vector<std::pair<std::string, uint32_t>> requests;
+    requests.reserve(emitters.size());
+    for (const auto& [key, emitterPtr] : emitters)
+    {
+        if (emitterPtr->asset.renderMode == "light")
+        {
+            requests.emplace_back(
+                key,
+                std::min(
+                    emitterPtr->asset.maxParticles,
+                    kMaxParticleLights));
+        }
+    }
+    const std::vector<ParticleLightSlot> slots =
+        AllocateParticleLightSlots(std::move(requests));
+    for (const ParticleLightSlot& slot : slots)
+    {
+        const auto emitter = emitters.find(slot.key);
+        if (emitter == emitters.end())
+        {
+            continue;
+        }
+        emitter->second->lightSlotBase = slot.base;
+        emitter->second->lightSlotCapacity = slot.capacity;
+    }
 }
 
 void ParticleRenderer::SynchronizeGlobalSort()
@@ -2593,6 +2653,12 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
 void ParticleRenderer::CreateDescriptors(
     EmitterResources& emitter)
 {
+    if (emitter.asset.renderMode == "light")
+    {
+        CreateLightEmitterDescriptors(emitter);
+        return;
+    }
+
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
     const std::vector<vk::DescriptorSetLayout> computeLayouts(
@@ -2891,6 +2957,195 @@ void ParticleRenderer::CreateDescriptors(
     }
 }
 
+void ParticleRenderer::CreateLightEmitterDescriptors(
+    EmitterResources& emitter)
+{
+    const uint32_t imageCount =
+        backend->GetSwapchainImageCount();
+    const bool hasLightOutput =
+        particleLightBuffers.size() >= imageCount;
+    if (!hasLightOutput && !warnedMissingParticleLightBuffer)
+    {
+        warnedMissingParticleLightBuffer = true;
+        const std::string message =
+            "Particle light output buffer is unavailable; "
+            "renderMode=\"light\" emitters will simulate but emit no lights";
+        ProcessLog().Append(
+            LogSeverity::Warning,
+            "Particles",
+            message);
+        std::cout << "[Particles][Warning] " << message << std::endl;
+    }
+
+    const std::vector<vk::DescriptorSetLayout> computeLayouts(
+        imageCount,
+        simulatePipeline->GetDescriptorSetLayouts().at(0));
+    const std::vector<vk::DescriptorSetLayout> lightEmitLayouts(
+        imageCount,
+        particleLightEmitPipeline->GetDescriptorSetLayouts().at(0));
+
+    // simulate 固定 1 UBO + 5 storage；light emit 固定 1 UBO + 2 storage。
+    const uint32_t setCountPerImage = hasLightOutput ? 2u : 1u;
+    std::vector<vk::DescriptorPoolSize> poolSizes{
+        {vk::DescriptorType::eUniformBuffer,
+         imageCount * setCountPerImage},
+        {vk::DescriptorType::eStorageBuffer,
+         imageCount * (5u + (hasLightOutput ? 2u : 0u))}};
+    vk::DescriptorPoolCreateInfo poolInfo;
+    poolInfo
+        .setPoolSizes(poolSizes)
+        .setMaxSets(imageCount * setCountPerImage);
+    emitter.descriptorPool = backend->CreateDescriptorPool(
+        poolInfo,
+        "ParticleLightDescriptors:" + emitter.key);
+
+    try
+    {
+        vk::DescriptorSetAllocateInfo allocate;
+        allocate
+            .setDescriptorPool(emitter.descriptorPool)
+            .setSetLayouts(computeLayouts);
+        emitter.computeSets.resize(imageCount);
+        backend->AllocateDescriptorSets(
+            allocate,
+            emitter.computeSets);
+
+        if (hasLightOutput)
+        {
+            allocate.setSetLayouts(lightEmitLayouts);
+            emitter.lightEmitSets.resize(imageCount);
+            backend->AllocateDescriptorSets(
+                allocate,
+                emitter.lightEmitSets);
+        }
+
+        for (uint32_t imageIndex = 0;
+             imageIndex < imageCount; ++imageIndex)
+        {
+            const vk::DescriptorBufferInfo uniformInfo(
+                emitter.frameUniforms.at(imageIndex).buffer,
+                0,
+                sizeof(FrameUniforms));
+            const vk::DescriptorBufferInfo particleInfo(
+                emitter.particles.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo aliveInfo(
+                emitter.aliveIndices.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo counterInfo(
+                emitter.counters.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo eventInfo(
+                emitter.events.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo sdfInfo(
+                emitter.sdfData.buffer,
+                0,
+                VK_WHOLE_SIZE);
+
+            vk::WriteDescriptorSet uniformWrite;
+            uniformWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(uniformInfo);
+            vk::WriteDescriptorSet particleWrite;
+            particleWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(1)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(particleInfo);
+            vk::WriteDescriptorSet aliveWrite;
+            aliveWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(2)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(aliveInfo);
+            vk::WriteDescriptorSet counterWrite;
+            counterWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(3)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(counterInfo);
+            vk::WriteDescriptorSet eventWrite;
+            eventWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(4)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(eventInfo);
+            vk::WriteDescriptorSet sdfWrite;
+            sdfWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(5)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(sdfInfo);
+            backend->UpdateDescriptorSets(
+                {uniformWrite,
+                 particleWrite,
+                 aliveWrite,
+                 counterWrite,
+                 eventWrite,
+                 sdfWrite});
+
+            if (!hasLightOutput)
+            {
+                continue;
+            }
+            vk::DescriptorBufferInfo lightOutputInfo(
+                particleLightBuffers.at(imageIndex),
+                0,
+                VK_WHOLE_SIZE);
+            vk::WriteDescriptorSet lightUniformWrite;
+            lightUniformWrite
+                .setDstSet(emitter.lightEmitSets.at(imageIndex))
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(uniformInfo);
+            vk::WriteDescriptorSet lightParticleWrite;
+            lightParticleWrite
+                .setDstSet(emitter.lightEmitSets.at(imageIndex))
+                .setDstBinding(1)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(particleInfo);
+            vk::WriteDescriptorSet lightOutputWrite;
+            lightOutputWrite
+                .setDstSet(emitter.lightEmitSets.at(imageIndex))
+                .setDstBinding(2)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(lightOutputInfo);
+            backend->UpdateDescriptorSets(
+                {lightUniformWrite,
+                 lightParticleWrite,
+                 lightOutputWrite});
+        }
+    }
+    catch (...)
+    {
+        if (emitter.descriptorPool)
+        {
+            backend->DestroyDescriptorPool(
+                emitter.descriptorPool);
+            emitter.descriptorPool = nullptr;
+        }
+        throw;
+    }
+    emitter.lightBufferGeneration =
+        particleLightBufferGeneration;
+}
+
 void ParticleRenderer::DestroyEmitterResources(
     RendererBackendVulkan& rendererBackend,
     EmitterResources& emitter)
@@ -2907,6 +3162,7 @@ void ParticleRenderer::DestroyEmitterResources(
     emitter.sortAtoBSets.clear();
     emitter.sortBtoASets.clear();
     emitter.finalizeSets.clear();
+    emitter.lightEmitSets.clear();
     emitter.texture.reset();
     DestroyBuffer(rendererBackend, emitter.meshVertices);
     DestroyBuffer(rendererBackend, emitter.meshIndices);
@@ -3764,6 +4020,11 @@ void ParticleRenderer::RecordSimulation(
             emitter.textureFallback ? 0.0f : 1.0f,
             0.0f,
             0.0f);
+        uniforms.particleLightParams = Eigen::Vector4f(
+            static_cast<float>(emitter.lightSlotBase),
+            static_cast<float>(emitter.lightSlotCapacity),
+            emitter.asset.light.intensity,
+            emitter.asset.light.radius);
         for (int cascade = 0; cascade < 4; ++cascade)
         {
             uniforms.shadowLightViewProj[cascade] =
@@ -3940,6 +4201,38 @@ void ParticleRenderer::RecordSimulation(
             groupCount,
             1,
             1);
+
+        // light 发射器只产光，不进入排序/绘制。emit 读取 simulate 刚写入
+        // 的粒子池，并写全局 light 输出 SSBO；两个 compute 之间必须显式
+        // 建立 shaderWrite -> shaderRead 依赖。
+        if (emitter.asset.renderMode == "light")
+        {
+            if (particleLightEmitPipeline &&
+                emitter.lightEmitSets.size() > imageIndex)
+            {
+                InsertBufferBarrier(
+                    commandBuffer,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderWrite,
+                    vk::PipelineStageFlagBits::eComputeShader,
+                    vk::AccessFlagBits::eShaderRead |
+                        vk::AccessFlagBits::eShaderWrite);
+                particleLightEmitPipeline->Bind(commandBuffer);
+                commandBuffer.bindDescriptorSets(
+                    vk::PipelineBindPoint::eCompute,
+                    particleLightEmitPipeline->GetPipelineLayout(),
+                    0,
+                    emitter.lightEmitSets.at(imageIndex),
+                    nullptr);
+                particleLightEmitPipeline->Dispatch(
+                    commandBuffer,
+                    groupCount,
+                    1,
+                    1);
+            }
+            emitter.prewarm = false;
+            continue;
+        }
 
         // 参与全局排序的发射器跳过自己的 bitonic 排序，统一在帧末做一次
         // 跨发射器排序。
@@ -4151,6 +4444,7 @@ void ParticleRenderer::RecordGraphics(
     {
         if (emitter.culled ||
             emitter.asset.renderMode == "distortion" ||
+            emitter.asset.renderMode == "light" ||
             IsGlobalSortEmitter(emitter.key) ||
             emitter.graphicsSets.size() <= imageIndex)
         {
@@ -4575,7 +4869,13 @@ bool ParticleRenderer::DumpParticles(
             dumpEmitter.sortParticles = emitter.asset.sortParticles;
             dumpEmitter.localSpace = emitter.asset.localSpace;
             dumpEmitter.renderMode = emitter.asset.renderMode;
-            if (emitter.asset.renderMode == "mesh" &&
+            if (emitter.asset.renderMode == "light")
+            {
+                // light 只写 GPU light SSBO，不产生可见 draw；dump 不能把
+                // 存活粒子误报成 billboard 顶点。
+                dumpEmitter.verticesPerParticle = 0u;
+            }
+            else if (emitter.asset.renderMode == "mesh" &&
                 !emitter.meshFallbackBillboard &&
                 emitter.meshIndexCount > 0)
             {

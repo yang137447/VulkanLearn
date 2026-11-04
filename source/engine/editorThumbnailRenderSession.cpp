@@ -282,6 +282,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         RendererDescriptorContext descriptors;
         descriptors.globalUniformBufferInfos = &frames.GetGlobalUniformBufferInfos();
         descriptors.lightBufferInfos = &frames.GetLightBufferInfos();
+        descriptors.particleLightBufferInfos =
+            &frames.GetParticleLightBufferInfos();
         descriptors.resourceCache = &cache;
         descriptors.commonOpaqueShadowMaterial = graph.FindCanonicalShadowPass()->materialInstance.lock()->GetBaseMaterial().lock();
         if (descriptorsReady) graph.RefreshRuntimeDescriptors(backend, descriptors);
@@ -292,6 +294,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             particleRenderer.EnsureInitialized(factory, backend, graph);
             if (!particleRenderer.IsInitialized())
                 throw std::runtime_error("Particle thumbnail requires a particle pass");
+            particleRenderer.SetParticleLightBuffers(
+                frames.GetParticleLightBufferHandles());
             particleRenderer.Synchronize(scene);
         }
         // 统一固定曝光，与中央预览的相机契约一致；不读取活动图上用户正编辑的参数。
@@ -328,6 +332,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             {
                 // 单个时间步一次提交；prewarm 只在第一步生效，后续步
                 // 使用该步的 elapsedSeconds 与 runtime dt。
+                frames.ClearParticleLightBuffer(command, 0);
                 particleRenderer.RecordSimulation(
                     command,
                     0,

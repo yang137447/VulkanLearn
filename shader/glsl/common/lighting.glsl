@@ -24,6 +24,21 @@ layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
     Light lights[];
 } uboLight;
 
+// GPU per-particle light 输出。与普通场景灯 SSBO 分离：compute 每帧先清零，
+// 再由 particle/particleLightEmit.comp 写入；deferred/forward 共用这份读取。
+struct ParticleLightGPU
+{
+    vec4 positionRadius;  // xyz world cm, w radius cm
+    vec4 colorIntensity;  // xyz linear RGB, w cd * 100^2
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO
+{
+    // x = high-water count, y = capacity, z/w reserved.
+    uvec4 header;
+    ParticleLightGPU lights[];
+} particleLightSSBO;
+
 layout(set = 0, binding = 2) uniform samplerCube prefilteredEnvironmentCube;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 
@@ -867,6 +882,46 @@ LightingLobes CalculatePointLightLobes(
         radiance);
 }
 
+// GPU 粒子灯复用点光公式，不进入 CPU 的 RenderScene::lights 列表。
+// count 是 high-water mark，空槽由零强度跳过，因此允许粒子死亡/截断留下空洞。
+LightingLobes CalculateParticleLightLobes(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float specular)
+{
+    LightingLobes lighting = CreateLightingLobes();
+    uint count = min(particleLightSSBO.header.x, 64u);
+    for (uint index = 0u; index < count; ++index)
+    {
+        ParticleLightGPU source = particleLightSSBO.lights[index];
+        if (source.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        Light pointLight;
+        pointLight.colorIntensity = source.colorIntensity;
+        pointLight.positionRadius = source.positionRadius;
+        pointLight.directionPad = vec4(0.0);
+        pointLight.coneAngleOuterInnerPadPad = vec4(0.0);
+        LightingLobes lobes = CalculatePointLightLobes(
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            specular,
+            pointLight);
+        lighting.diffuse += lobes.diffuse;
+        lighting.specular += lobes.specular;
+    }
+    return lighting;
+}
+
 vec3 CalculateClearCoatPointLight(
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
@@ -1042,6 +1097,16 @@ LightingLobes CalculateDirectLightingLobes(
         lighting.diffuse += lightLobes.diffuse;
         lighting.specular += lightLobes.specular;
     }
+    LightingLobes particleLobes = CalculateParticleLightLobes(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        specular);
+    lighting.diffuse += particleLobes.diffuse;
+    lighting.specular += particleLobes.specular;
     return lighting;
 }
 

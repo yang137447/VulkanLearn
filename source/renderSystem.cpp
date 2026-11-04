@@ -3285,14 +3285,11 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             *pipelineFactory,
             *rendererBackend,
             RenderGraph::GetInstance());
+        // light 发射器复用 GPU 模拟池；emit compute 的输出使用固定 64 槽
+        // per-image SSBO。buffer 必须在 Synchronize 创建发射器描述符前提供。
+        particleRenderer.SetParticleLightBuffers(
+            frameResources.GetParticleLightBufferHandles());
         particleRenderer.Synchronize(currentRenderScene);
-        // light 发射器由 CPU 运行时映射成动态 PointLight；必须在
-        // RecordAndSubmit 上传 light SSBO 之前完成。灯光数量增长时同步
-        // 扩容并刷新 descriptor，避免 SSBO 换代后仍绑定旧缓冲区。
-        particleLightRuntime.Synchronize(
-            currentRenderScene,
-            particleRenderer.GetResolvedSystemAssets());
-        particleLightRuntime.Update(currentRenderScene);
         // particle decal 同样消费 resolved assets（userParameters/Data
         // Channels）。必须先重建动态 decal 列表，再让 DecalRenderer
         // 按冻结列表同步纹理集；实例 SSBO 固定 64 槽，不做逐帧扩容。
@@ -3304,9 +3301,8 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
                 currentRenderScene.lights.size(),
                 *rendererBackend))
         {
-            // 正常路径已在世界初始化时预分配 static + kMaxLiveLights；
-            // 这里仅在异常容量增长时兜底。旧 descriptor set 可能仍被
-            // 在飞帧引用，必须先到 device idle 边界再刷新。
+            // 仅场景静态灯使用这份 SSBO；GPU 粒子灯走独立固定容量缓冲，
+            // 不会触发这里的扩容。异常容量增长时仍需先到 device idle。
             rendererBackend->WaitIdle();
             RenderGraph::GetInstance().RefreshRuntimeDescriptors(
                 *rendererBackend,
@@ -3345,12 +3341,6 @@ void RenderSystem::BuildResolvedRenderScene()
 void RenderSystem::InitializeCurrentRenderSceneResources()
 {
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
-    // CPU 粒子灯最多追加 kMaxLiveLights 盏；在世界资源初始化时预留这部分
-    // 容量，避免运行中因 SSBO 扩容触发 descriptor 热刷新。
-    frameResources.EnsureLightCapacity(
-        currentRenderScene.lights.size() +
-            VL::ParticleLightRuntime::kMaxLiveLights,
-        *rendererBackend);
     environmentUpdateState.Reset();
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();
@@ -3474,6 +3464,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             rendererBackend->WaitForPreviousFrameFence(
                 frameIndex);
         }
+        // GPU 粒子灯输出每帧从零开始；compute 只写本帧存活槽位，光照
+        // shader 用 high-water count + 零强度空槽读取。
+        frameResources.ClearParticleLightBuffer(
+            commandBuffer,
+            swapChainImageIndex);
         particleRenderer.RecordSimulation(
             commandBuffer,
             swapChainImageIndex,
@@ -3647,6 +3642,8 @@ RenderSystem::BuildRendererDescriptorContext(
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
     descriptorContext.lightBufferInfos =
         &lightBufferInfos;
+    descriptorContext.particleLightBufferInfos =
+        &frameResources.GetParticleLightBufferInfos();
     descriptorContext.resourceCache =
         &resourceCache;
     Renderpass* canonicalShadowPass =

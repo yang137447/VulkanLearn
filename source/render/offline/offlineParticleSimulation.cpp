@@ -535,8 +535,9 @@ void StepOfflineParticleSystem(
         {
             continue;
         }
-        // CPU 粒子灯/decal 只服务实时场景输出，离线合成器没有消费路径；
-        // 跳过整个模拟，避免为不会显示也不会发光的粒子付出开销。
+        // light（GPU emit compute）与 decal（CPU runtime）只服务实时场景输出，
+        // 离线合成器没有消费路径；跳过整个模拟，避免为不会显示也不会发光的
+        // 粒子付出开销。
         if (emitter.asset.renderMode == "light" ||
             emitter.asset.renderMode == "decal")
         {
