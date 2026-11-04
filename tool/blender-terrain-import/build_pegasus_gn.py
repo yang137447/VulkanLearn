@@ -60,8 +60,21 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--erosion-smooth", type=float, default=0.04)
     parser.add_argument("--erosion-k", type=float, default=0.2,
                         help="implicit stream-power coefficient")
-    parser.add_argument("--erosion-pre-smooth", type=int, default=6,
-                        help="binomial passes before erosion; keeps the network dendritic")
+    parser.add_argument("--erosion-flow-method", choices=("mfd", "d8"),
+                        default="mfd",
+                        help="implicit flow routing model")
+    parser.add_argument("--erosion-uplift", type=float, default=0.0,
+                        help="uniform uplift in metres per erosion step")
+    parser.add_argument("--erosion-deposition", type=float, default=1.0,
+                        help="deposition strength multiplier (0 disables)")
+    parser.add_argument("--erosion-deposition-slope-deg", type=float,
+                        default=15.0,
+                        help="slope where deposition falls to 1/e")
+    parser.add_argument("--erosion-deposition-length-m", type=float,
+                        default=1000.0,
+                        help="flat-ground distance where ~63%% of sediment deposits")
+    parser.add_argument("--erosion-pre-smooth", type=int, default=0,
+                        help="optional low-frequency pre-smoothing; MFD usually needs none")
     parser.add_argument("--erosion-detail-restore", type=float, default=0.4,
                         help="fraction of the high-frequency detail added back")
     parser.add_argument("--camera-position", type=float, nargs=3,
@@ -336,17 +349,25 @@ def main() -> int:
     height = height_m / args.height_scale_m
     erosion_stats = None
     if args.erode:
-        from terrain_erosion import ErosionParams, erode
+        from terrain_erosion import ErosionDiagnostics, ErosionParams, erode
 
         cell_size = args.size_m / max(args.resolution - 1, 1)
+        diagnostics = ErosionDiagnostics()
         eroded, flow_area, fill_depth = erode(
             height_m, cell_size,
-            ErosionParams(iterations=args.erosion_iterations,
-                          thermal_iterations=args.thermal_iterations,
-                          smooth_weight=args.erosion_smooth,
-                          k=args.erosion_k,
-                          pre_smooth_iterations=args.erosion_pre_smooth,
-                          detail_restore=args.erosion_detail_restore))
+            ErosionParams(
+                iterations=args.erosion_iterations,
+                thermal_iterations=args.thermal_iterations,
+                smooth_weight=args.erosion_smooth,
+                k=args.erosion_k,
+                flow_method=args.erosion_flow_method,
+                uplift_m=args.erosion_uplift,
+                deposition_rate=args.erosion_deposition,
+                deposition_slope_deg=args.erosion_deposition_slope_deg,
+                deposition_length_m=args.erosion_deposition_length_m,
+                pre_smooth_iterations=args.erosion_pre_smooth,
+                detail_restore=args.erosion_detail_restore),
+            diagnostics)
         height_m = np.clip(eroded, 0.0, args.height_scale_m)
         height = height_m / args.height_scale_m
         flow_path = args.output_dir / "flow_accumulation.png"
@@ -356,9 +377,20 @@ def main() -> int:
         erosion_stats = {
             "iterations": args.erosion_iterations,
             "thermalIterations": args.thermal_iterations,
+            "flowMethod": args.erosion_flow_method,
+            "preSmoothIterations": args.erosion_pre_smooth,
+            "detailRestore": args.erosion_detail_restore,
+            "upliftM": args.erosion_uplift,
+            "depositionRate": args.erosion_deposition,
+            "depositionSlopeDeg": args.erosion_deposition_slope_deg,
+            "depositionLengthM": args.erosion_deposition_length_m,
             "maxFillDepthM": float(fill_depth.max()),
             "meanFlowAreaM2": float(flow_area.mean()),
             "maxFlowAreaM2": float(flow_area.max()),
+            "erodedVolumeM3": diagnostics.eroded_volume_m3,
+            "depositedVolumeM3": diagnostics.deposited_volume_m3,
+            "exportedSedimentM3": diagnostics.exported_sediment_m3,
+            "upliftVolumeM3": diagnostics.uplift_volume_m3,
             "flowTexture": str(flow_path.resolve()),
         }
 

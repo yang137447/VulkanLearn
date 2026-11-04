@@ -13,6 +13,13 @@ the incision follows the stream-power law ``E = K * A^m * S^n``.  That couples
 every channel to the drainage area above it, so trunk valleys deepen faster
 than hillslopes and a branching network can emerge.
 
+The implicit solver uses Quinn (1991) MFD by default; ``flow_method="d8"`` is
+kept for A/B comparison.  ``uplift_m`` is added to every non-outlet cell before
+the solve, and the optional deposition pass routes the produced sediment down
+the same network and deposits a slope-limited fraction in flat cells.  A
+sediment ledger (produced / deposited / exported / uplifted) is available
+through ``ErosionDiagnostics``.
+
 CLI:
 
     python terrain_erosion.py \
@@ -67,6 +74,12 @@ AREA_REFERENCE_SCALE = 1.0
 # normalized with edge replication, so it conserves the mean height.
 _SMOOTH_WEIGHT = 0.12
 
+# Deposition is only applied where the filled surface is not already steep:
+# steep channels keep transporting sediment, flat valley floors and basins
+# drop it.  This is a pragmatic transport-limitation proxy, not a full
+# entrainment/deposition solver.
+_DEPOSITION_SLOPE_DEG = 15.0
+
 _DIRS8: tuple[tuple[int, int, float], ...] = (
     (-1, -1, math.sqrt(2.0)),
     (-1, 0, 1.0),
@@ -90,7 +103,6 @@ class ErosionParams:
     thermal_iterations: int = 6
     talus_deg: float = 36.0
     thermal_rate: float = 0.5
-    upland_weight: float = 0.0  # reserved for future uplift/sediment coupling
     # Extra knobs used by ``erode``.  The public signature of the individual
     # functions stays as specified in the task.
     area_normalization: str = AREA_NORMALIZATION_MODE
@@ -99,11 +111,33 @@ class ErosionParams:
     # "implicit" = Braun & Willett 2013 (default); "explicit" = legacy
     # capped explicit incision, kept for A/B comparison.
     method: str = "implicit"
+    # Implicit flow routing: "mfd" = Quinn (1991) multiple flow direction,
+    # "d8" = single steepest receiver (old default, kept for A/B).
+    flow_method: str = "mfd"
     uplift_m: float = 0.0  # per time step, only used by the implicit solver
-    # 侵蚀在低频面上进行，再把高频细节按比例贴回：D8 在几百米尺度的
-    # 细节噪声上会碎成短沟，先平滑能让水系连成长树枝。
+    # Fraction of the local sediment flux that can be deposited per cell on a
+    # flat surface.  The actual fraction is scaled down exponentially by the
+    # local slope (see _deposit_sediment).  ``deposition_rate`` is a 0..1
+    # strength multiplier; the per-cell fraction also depends on
+    # ``deposition_length_m`` so the model stays resolution-independent.
+    deposition_rate: float = 0.0
+    deposition_slope_deg: float = _DEPOSITION_SLOPE_DEG
+    deposition_length_m: float = 1000.0
+    # 可选的“低频面侵蚀 + 高频细节贴回”。MFD 默认不需要它；保留给
+    # 需要强抑制高频碎沟的资产做对照。
     pre_smooth_iterations: int = 0
     detail_restore: float = 0.0
+
+
+@dataclass
+class ErosionDiagnostics:
+    """Cumulative sediment/mass ledger for one implicit erosion run."""
+
+    iterations: int = 0
+    eroded_volume_m3: float = 0.0
+    deposited_volume_m3: float = 0.0
+    exported_sediment_m3: float = 0.0
+    uplift_volume_m3: float = 0.0
 
 
 def _as_heightfield(z: np.ndarray) -> np.ndarray:
@@ -269,70 +303,94 @@ def _d8_weights(filled: np.ndarray, cell_size: float) -> list[np.ndarray]:
     return weights
 
 
-def _accumulate_from_weights(
-    filled: np.ndarray, cell_size: float, weights: list[np.ndarray]
-) -> np.ndarray:
-    """Accumulate drainage area from precomputed receiver weights.
+@dataclass
+class _FlowEdges:
+    """CSR layout of the downhill routing graph."""
 
-    The routed graph is a DAG because every edge goes to a strictly lower
-    filled cell.  Instead of a Python loop over every cell, cells are peeled in
-    topological layers: a cell enters the frontier once all of its donors have
-    been processed.  Each layer is one vectorized scatter, which keeps the
-    per-cell Python overhead out of the hot path.
+    targets: np.ndarray
+    weights: np.ndarray
+    steps: np.ndarray
+    offsets: np.ndarray
+
+
+def _csr_flow_edges(
+    weights: list[np.ndarray], filled: np.ndarray
+) -> _FlowEdges | None:
+    """Pack every positive-weight receiver into a source-indexed CSR.
+
+    ``targets``/``weights``/``steps`` are sorted by source, so the outgoing
+    edges of node ``i`` are ``offsets[i] .. offsets[i + 1]``.
     """
 
     height, width = filled.shape
     count = height * width
     index_grid = np.arange(count, dtype=np.int64).reshape(height, width)
-    receivers: list[np.ndarray] = []
-    for direction, (dy, dx, _) in enumerate(_DIRS8):
-        receiver = index_grid + dy * width + dx
-        receivers.append(receiver.ravel())
-
-    weight_flat = [weight.ravel() for weight in weights]
-
-    # Number of incoming edges per cell.  A donor with a positive weight
-    # contributes exactly one edge, so bincount over receiver indices is the
-    # complete in-degree ledger.
-    in_degree = np.zeros(count, dtype=np.int32)
-    for direction in range(8):
-        weight = weight_flat[direction]
-        has_edge = weight > 0.0
-        if not np.any(has_edge):
+    source_chunks: list[np.ndarray] = []
+    target_chunks: list[np.ndarray] = []
+    weight_chunks: list[np.ndarray] = []
+    step_chunks: list[np.ndarray] = []
+    for direction, (dy, dx, step) in enumerate(_DIRS8):
+        flat_weight = weights[direction].ravel()
+        sources = np.flatnonzero(flat_weight > 0.0)
+        if sources.size == 0:
             continue
-        in_degree += np.bincount(
-            receivers[direction][has_edge], minlength=count
-        ).astype(np.int32)
+        source_chunks.append(sources)
+        target_chunks.append(
+            (index_grid + dy * width + dx).ravel()[sources]
+        )
+        weight_chunks.append(flat_weight[sources])
+        step_chunks.append(np.full(sources.size, step, dtype=np.float64))
 
-    accumulation = np.full(count, cell_size * cell_size, dtype=np.float64)
-    frontier = np.flatnonzero(in_degree == 0)
+    if not source_chunks:
+        return None
+    sources = np.concatenate(source_chunks)
+    targets = np.concatenate(target_chunks)
+    edge_weights = np.concatenate(weight_chunks)
+    edge_steps = np.concatenate(step_chunks)
+    edge_order = np.argsort(sources, kind="stable")
+    counts = np.bincount(sources, minlength=count)
+    offsets = np.concatenate(([0], np.cumsum(counts)))
+    return _FlowEdges(
+        targets=targets[edge_order],
+        weights=edge_weights[edge_order],
+        steps=edge_steps[edge_order],
+        offsets=offsets,
+    )
 
-    while frontier.size:
-        destinations: list[np.ndarray] = []
-        contributions: list[np.ndarray] = []
-        for direction in range(8):
-            weight = weight_flat[direction][frontier]
-            has_edge = weight > 0.0
-            if not np.any(has_edge):
-                continue
-            source = frontier[has_edge]
-            destinations.append(receivers[direction][source])
-            contributions.append(accumulation[source] * weight[has_edge])
 
-        if not destinations:
-            break
+def _accumulate_from_weights(
+    filled: np.ndarray,
+    cell_size: float,
+    weights: list[np.ndarray],
+    edges: _FlowEdges | None = None,
+) -> np.ndarray:
+    """Accumulate drainage area from precomputed receiver weights.
 
-        target = np.concatenate(destinations)
-        np.add.at(accumulation, target, np.concatenate(contributions))
-        np.add.at(in_degree, target, -1)
-        # Only cells whose in-degree just reached zero can join the next layer.
-        # Filtering before unique is cheaper than sorting every destination.
-        frontier = np.unique(target[in_degree[target] == 0])
+    Every edge goes to a strictly lower filled cell, so a high-to-low sweep
+    visits donors before receivers.  Python lists keep the per-cell sweep
+    cheap; the alternative (one vectorized Kahn layer per flow level) spends
+    most of its time in per-layer NumPy overhead on tall dendritic networks.
+    """
 
-    if np.any(in_degree):
-        raise RuntimeError("flow routing graph contains a cycle")
+    height, width = filled.shape
+    count = height * width
+    cell_area = cell_size * cell_size
+    if edges is None:
+        edges = _csr_flow_edges(weights, filled)
+    accumulation = [cell_area] * count
+    if edges is None:
+        return np.asarray(accumulation, dtype=np.float64).reshape(
+            height, width
+        )
 
-    return accumulation.reshape(height, width)
+    targets = edges.targets.tolist()
+    edge_weights = edges.weights.tolist()
+    offsets = edges.offsets.tolist()
+    for index in np.argsort(-filled.ravel(), kind="stable").tolist():
+        contribution = accumulation[index]
+        for edge in range(offsets[index], offsets[index + 1]):
+            accumulation[targets[edge]] += contribution * edge_weights[edge]
+    return np.asarray(accumulation, dtype=np.float64).reshape(height, width)
 
 
 def _flow_from_filled(
@@ -485,67 +543,95 @@ def stream_power_erode(
     )
 
 
-def _d8_receivers(
-    filled: np.ndarray, cell_size: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Steepest-descent receiver index and flow distance for every cell."""
+def _flow_weights(
+    filled: np.ndarray, cell_size: float, method: str
+) -> tuple[list[np.ndarray], np.ndarray, np.ndarray]:
+    """Receiver weights plus steepest drop/slope for either routing model."""
 
-    height, width = filled.shape
-    count = height * width
+    if method == "mfd":
+        return _mfd_weights_and_slope(filled, cell_size)
+    if method != "d8":
+        raise ValueError(f"unknown flow method {method!r}; expected 'mfd' or 'd8'")
+
     weights = _d8_weights(filled, cell_size)
-    index_grid = np.arange(count, dtype=np.int64).reshape(height, width)
-
-    receiver = np.full(count, -1, dtype=np.int64)
-    distance = np.full(count, cell_size, dtype=np.float64)
-    for direction, (dy, dx, step) in enumerate(_DIRS8):
+    height, width = filled.shape
+    padded = np.pad(filled, 1, mode="constant", constant_values=np.inf)
+    best_drop = np.zeros((height, width), dtype=np.float64)
+    best_slope = np.zeros((height, width), dtype=np.float64)
+    for direction, (dy, dx, distance) in enumerate(_DIRS8):
         mask = weights[direction] > 0.0
         if not np.any(mask):
             continue
-        flat_mask = mask.ravel()
-        receiver[flat_mask] = (index_grid + dy * width + dx)[mask]
-        distance[flat_mask] = cell_size * step
-    return receiver, distance
+        neighbour = padded[
+            1 + dy : 1 + dy + height, 1 + dx : 1 + dx + width
+        ]
+        drop = filled - neighbour
+        best_drop[mask] = drop[mask]
+        best_slope[mask] = drop[mask] / (cell_size * distance)
+    np.maximum(best_drop, 0.0, out=best_drop)
+    np.maximum(best_slope, 0.0, out=best_slope)
+    return weights, best_drop, best_slope
 
 
-def _topological_levels(receiver: np.ndarray, filled: np.ndarray) -> np.ndarray:
-    """Level = number of flow steps to the outlet.
+def _topological_levels_multi(
+    filled: np.ndarray, edges: _FlowEdges | None
+) -> np.ndarray:
+    """Level = longest number of flow steps to an outlet.
 
-    A D8 receiver is always strictly lower in the filled surface, so visiting
-    cells from high to low guarantees the receiver is already resolved.
+    A receiver is always strictly lower in the filled surface, so a low-to-high
+    sweep guarantees every receiver level is already known.  The CSR edge list
+    keeps the pass O(cells + edges).
     """
 
-    order = np.argsort(-filled.ravel(), kind="stable")
-    level = np.zeros(filled.size, dtype=np.int32)
-    for index in order:
-        target = receiver[index]
-        if target >= 0:
-            level[index] = level[target] + 1
-    return level
+    count = filled.size
+    level = [0] * count
+    if edges is None:
+        return np.asarray(level, dtype=np.int32).reshape(filled.shape)
+
+    targets = edges.targets.tolist()
+    offsets = edges.offsets.tolist()
+    for index in np.argsort(filled.ravel(), kind="stable").tolist():
+        best = 0
+        for edge in range(offsets[index], offsets[index + 1]):
+            candidate = level[targets[edge]] + 1
+            if candidate > best:
+                best = candidate
+        level[index] = best
+    return np.asarray(level, dtype=np.int32).reshape(filled.shape)
 
 
-def _solve_implicit_network(
+def _solve_implicit_network_multi(
     surface: np.ndarray,
     area: np.ndarray,
-    receiver: np.ndarray,
-    distance: np.ndarray,
+    edges: _FlowEdges | None,
     level: np.ndarray,
+    cell_size: float,
     k: float,
     m: float,
     n: float,
     dt: float,
     uplift: float,
 ) -> np.ndarray:
-    """One implicit solve on a fixed drainage network."""
+    """One implicit solve on a fixed multi-receiver drainage network.
+
+    For every node the incision is distributed over its downhill receivers
+    with the same weights used for area accumulation::
+
+        h_i = h_i_lifted - K dt A_i^m sum_j w_ij ((h_i - h_j) / d_ij)^n
+
+    All receivers are strictly lower in the filled surface, so processing
+    levels from the outlet upstream means every ``h_j`` is already solved.
+    """
 
     previous = surface.ravel().copy()
     solved = previous.copy()
+    if edges is None:
+        return solved.reshape(surface.shape)
     area_flat = area.ravel()
-    receiver_flat = receiver.ravel()
-    distance_flat = np.maximum(distance.ravel(), 1.0e-6)
     lifted = previous + uplift * dt
-
-    order = np.argsort(level, kind="stable")
-    counts = np.bincount(level)
+    flat_level = level.ravel()
+    order = np.argsort(flat_level, kind="stable")
+    counts = np.bincount(flat_level)
     offsets = np.concatenate(([0], np.cumsum(counts)))
 
     for current in range(1, counts.size):
@@ -554,38 +640,172 @@ def _solve_implicit_network(
         if begin == end:
             continue
         index = order[begin:end]
-        target = receiver_flat[index]
-        valid = target >= 0
-        if not np.all(valid):
-            index = index[valid]
-            target = target[valid]
-            if index.size == 0:
-                continue
+        left = edges.offsets[index]
+        right = edges.offsets[index + 1]
+        edge_counts = right - left
+        total = int(edge_counts.sum())
+        if total == 0:
+            continue
+        starts = np.repeat(left, edge_counts)
+        local = np.arange(total, dtype=np.int64) - np.repeat(
+            np.cumsum(edge_counts) - edge_counts, edge_counts
+        )
+        edge_index = starts + local
+        source_local = np.repeat(np.arange(index.size), edge_counts)
+        target = edges.targets[edge_index]
+        weight = edges.weights[edge_index]
+        distance = np.maximum(
+            edges.steps[edge_index] * cell_size, 1.0e-6
+        )
+        inverse_distance = weight / distance
         downstream = solved[target]
+        inv_sum = np.bincount(
+            source_local, weights=inverse_distance, minlength=index.size
+        )
+        downstream_sum = np.bincount(
+            source_local,
+            weights=inverse_distance * downstream,
+            minlength=index.size,
+        )
+        max_downstream = np.full(index.size, -np.inf, dtype=np.float64)
+        np.maximum.at(max_downstream, source_local, downstream)
+
+        value = previous[index].copy()
+        has_edge = edge_counts > 0
+        if not np.any(has_edge):
+            continue
         coefficient = (
-            k
-            * dt
-            * np.power(np.maximum(area_flat[index], 1.0), m)
-            / distance_flat[index]
+            k * dt * np.power(np.maximum(area_flat[index], 1.0), m)
         )
         if abs(n - 1.0) < 1.0e-9:
-            solved[index] = (lifted[index] + coefficient * downstream) / (
-                1.0 + coefficient
+            value[has_edge] = (
+                lifted[index][has_edge] +
+                coefficient[has_edge] * downstream_sum[has_edge]
+            ) / (1.0 + coefficient[has_edge] * inv_sum[has_edge])
+            value[has_edge] = np.maximum(
+                value[has_edge], max_downstream[has_edge]
             )
-            continue
-
-        value = solved[index].copy()
-        source = lifted[index]
-        for _ in range(6):
-            drop = np.maximum(value - downstream, 1.0e-6)
-            slope = drop / distance_flat[index]
-            residual = source - value + coefficient * drop * np.power(slope, n - 1.0)
-            derivative = 1.0 + n * coefficient * np.power(slope, n - 1.0)
-            value = value + residual / derivative
-            value = np.maximum(value, downstream)
+        else:
+            source = lifted[index]
+            for _ in range(6):
+                drop = np.maximum(
+                    value[source_local] - downstream, 1.0e-6
+                )
+                slope = drop / distance
+                sum_power = np.bincount(
+                    source_local,
+                    weights=weight * np.power(slope, n),
+                    minlength=index.size,
+                )
+                sum_derivative = np.bincount(
+                    source_local,
+                    weights=(
+                        weight * n * np.power(slope, n - 1.0) / distance
+                    ),
+                    minlength=index.size,
+                )
+                residual = source - value + coefficient * sum_power
+                derivative = 1.0 + coefficient * sum_derivative
+                value = value + residual / derivative
+                value[has_edge] = np.maximum(
+                    value[has_edge], max_downstream[has_edge]
+                )
+                value[~has_edge] = previous[index][~has_edge]
         solved[index] = value
 
     return solved.reshape(surface.shape)
+
+
+def _deposit_sediment(
+    surface: np.ndarray,
+    incision_m: np.ndarray,
+    edges: _FlowEdges | None,
+    level: np.ndarray,
+    best_slope: np.ndarray,
+    cell_size: float,
+    deposition_rate: float,
+    deposition_slope_deg: float,
+    deposition_length_m: float,
+) -> tuple[np.ndarray, float]:
+    """Route local incision downstream and deposit a slope-limited fraction.
+
+    The returned height is added back to the surface.  Sediment that reaches
+    a cell without a downhill receiver leaves the grid.  Mass is conserved
+    exactly (up to floating point) between produced, deposited and exported
+    volume, which is what the self-test checks.
+    """
+
+    if not 0.0 <= deposition_rate <= 1.0:
+        raise ValueError("deposition_rate must be in [0, 1]")
+    if deposition_slope_deg <= 0.0:
+        raise ValueError("deposition_slope_deg must be positive")
+    if deposition_length_m <= 0.0:
+        raise ValueError("deposition_length_m must be positive")
+
+    height, width = surface.shape
+    count = height * width
+    cell_area = cell_size * cell_size
+    slope_scale = max(math.tan(math.radians(deposition_slope_deg)), 1.0e-6)
+    # Fraction deposited by a flat cell after travelling one cell length.
+    # This is independent of the raster resolution: 63% deposits after
+    # ``deposition_length_m`` on flat ground when deposition_rate == 1.
+    per_cell_fraction = 1.0 - math.exp(-cell_size / deposition_length_m)
+    sediment = np.zeros(count, dtype=np.float64)
+    deposited_height = np.zeros(count, dtype=np.float64)
+    produced = np.asarray(incision_m, dtype=np.float64).ravel() * cell_area
+    slope = np.asarray(best_slope, dtype=np.float64).ravel()
+    if edges is None:
+        has_receiver = np.zeros(count, dtype=bool)
+    else:
+        has_receiver = np.diff(edges.offsets) > 0
+
+    flat_level = level.ravel()
+    order = np.argsort(flat_level, kind="stable")
+    counts = np.bincount(flat_level)
+    offsets = np.concatenate(([0], np.cumsum(counts)))
+    exported = 0.0
+
+    for current in range(counts.size - 1, -1, -1):
+        begin = offsets[current]
+        end = offsets[current + 1]
+        if begin == end:
+            continue
+        index = order[begin:end]
+        available = sediment[index] + produced[index]
+        fraction = np.clip(
+            deposition_rate
+            * per_cell_fraction
+            * np.exp(-slope[index] / slope_scale),
+            0.0,
+            1.0,
+        )
+        deposit_volume = available * fraction
+        deposited_height[index] = deposit_volume / cell_area
+        remaining = available - deposit_volume
+        sediment[index] = 0.0
+        exported += float(remaining[~has_receiver[index]].sum())
+        if edges is not None:
+            left = edges.offsets[index]
+            right = edges.offsets[index + 1]
+            edge_counts = right - left
+            total = int(edge_counts.sum())
+            if total > 0:
+                starts = np.repeat(left, edge_counts)
+                local = np.arange(total, dtype=np.int64) - np.repeat(
+                    np.cumsum(edge_counts) - edge_counts, edge_counts
+                )
+                edge_index = starts + local
+                source_local = np.repeat(
+                    np.arange(index.size), edge_counts
+                )
+                np.add.at(
+                    sediment,
+                    edges.targets[edge_index],
+                    remaining[source_local] * edges.weights[edge_index],
+                )
+
+    deposited = deposited_height.reshape(surface.shape)
+    return deposited, exported
 
 
 def implicit_stream_power_erode(
@@ -598,30 +818,98 @@ def implicit_stream_power_erode(
     dt: float = 1.0,
     uplift: float = 0.0,
     fill_epsilon: float = _FILL_EPSILON_M,
+    flow_method: str = "mfd",
+    deposition_rate: float = 0.0,
+    deposition_slope_deg: float = _DEPOSITION_SLOPE_DEG,
+    deposition_length_m: float = 1000.0,
+    diagnostics: ErosionDiagnostics | None = None,
 ) -> np.ndarray:
     """Braun & Willett (2013) implicit stream-power incision.
 
-    ``dh/dt = U - K A^m S^n`` is solved implicitly along the D8 network: each
-    node depends only on its already-solved downstream node, so one topological
-    pass replaces explicit time stepping and removes the ``0.5 * drop`` cap
-    that kept the explicit solver from cutting real valleys.  ``n == 1`` is
-    linear; other exponents use Newton steps vectorized per flow level.
+    ``dh/dt = U - K A^m S^n`` is solved implicitly along the selected flow
+    network.  With ``flow_method="mfd"`` the drainage area and the incision
+    are distributed over Quinn (1991) multiple-flow receivers; ``"d8"`` keeps
+    the previous single steepest-receiver model for A/B.  Every receiver is
+    strictly lower in the filled surface, so one topological pass from the
+    outlet upstream replaces explicit time stepping and removes the
+    ``0.5 * drop`` cap that kept the explicit solver from cutting real
+    valleys.  ``n == 1`` is linear; other exponents use Newton steps
+    vectorized per flow level.
+
+    ``deposition_rate > 0`` adds a transport-limitation proxy: the sediment
+    produced by this step is routed down the same network and a slope-scaled
+    fraction is deposited in flat cells.  Sediment reaching an outlet leaves
+    the grid.  ``diagnostics``, when supplied, receives the cumulative
+    produced/deposited/exported/uplifted volumes.
     """
 
     if iterations < 0:
         raise ValueError("iterations must be non-negative")
     if cell_size <= 0.0:
         raise ValueError("cell_size must be positive")
+    if flow_method not in ("mfd", "d8"):
+        raise ValueError(
+            f"unknown flow method {flow_method!r}; expected 'mfd' or 'd8'"
+        )
+    if not 0.0 <= deposition_rate <= 1.0:
+        raise ValueError("deposition_rate must be in [0, 1]")
+    if deposition_slope_deg <= 0.0:
+        raise ValueError("deposition_slope_deg must be positive")
+    if deposition_length_m <= 0.0:
+        raise ValueError("deposition_length_m must be positive")
 
     surface = _as_heightfield(z)
+    cell_area = cell_size * cell_size
     for _ in range(int(iterations)):
         filled, _ = fill_depressions(surface, cell_size, fill_epsilon)
-        receiver, distance = _d8_receivers(filled, cell_size)
-        area = _flow_from_filled(filled, cell_size, "d8")
-        level = _topological_levels(receiver, filled)
-        surface = _solve_implicit_network(
-            surface, area, receiver, distance, level, k, m, n, dt, uplift
+        weights, _, best_slope = _flow_weights(
+            filled, cell_size, flow_method
         )
+        edges = _csr_flow_edges(weights, filled)
+        area = _accumulate_from_weights(filled, cell_size, weights, edges)
+        level = _topological_levels_multi(filled, edges)
+        previous = surface
+        surface = _solve_implicit_network_multi(
+            surface,
+            area,
+            edges,
+            level,
+            cell_size,
+            k,
+            m,
+            n,
+            dt,
+            uplift,
+        )
+        incision = np.maximum(previous - surface, 0.0)
+        if diagnostics is not None:
+            diagnostics.eroded_volume_m3 += (
+                float(incision.sum()) * cell_area
+            )
+            diagnostics.uplift_volume_m3 += (
+                float(uplift) * float(dt) * cell_area *
+                float(np.count_nonzero(level > 0))
+            )
+        if deposition_rate > 0.0:
+            deposited, exported = _deposit_sediment(
+                surface,
+                incision,
+                edges,
+                level,
+                best_slope,
+                cell_size,
+                deposition_rate,
+                deposition_slope_deg,
+                deposition_length_m,
+            )
+            surface = surface + deposited
+            if diagnostics is not None:
+                diagnostics.deposited_volume_m3 += (
+                    float(deposited.sum()) * cell_area
+                )
+                diagnostics.exported_sediment_m3 += exported
+    if diagnostics is not None:
+        diagnostics.iterations += int(iterations)
     return surface
 
 
@@ -696,6 +984,7 @@ def erode(
     z: np.ndarray,
     cell_size: float,
     params: ErosionParams | None = None,
+    diagnostics: ErosionDiagnostics | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Stream-power incision followed by thermal relaxation.
 
@@ -709,7 +998,8 @@ def erode(
         raise ValueError("cell_size must be positive")
 
     if settings.method == "implicit":
-        # 侵蚀在低频面上进行，避免 D8 被高频细节主导成碎沟。
+        # 侵蚀在低频面上进行，避免高频细节主导细碎沟；MFD 下这层补偿可以
+        # 用更少甚至 0 次 pre-smooth。
         base = array
         residual = None
         if settings.pre_smooth_iterations > 0:
@@ -726,6 +1016,11 @@ def erode(
             settings.dt,
             settings.uplift_m,
             settings.fill_epsilon,
+            settings.flow_method,
+            settings.deposition_rate,
+            settings.deposition_slope_deg,
+            settings.deposition_length_m,
+            diagnostics,
         )
         if residual is not None and settings.detail_restore > 0.0:
             eroded = eroded + residual * settings.detail_restore
@@ -829,6 +1124,57 @@ def _self_test(verbose: bool = True) -> dict[str, float]:
         f"no gullies at the foot ring (incision std={foot_variation:.4e})"
     )
 
+    mfd_area = flow_accumulation(cone, cell_size, "mfd")
+    d8_area = flow_accumulation(cone, cell_size, "d8")
+    mfd_concentration = float(
+        np.percentile(mfd_area, 99) / max(float(np.median(mfd_area)), 1e-9)
+    )
+    d8_concentration = float(
+        np.percentile(d8_area, 99) / max(float(np.median(d8_area)), 1e-9)
+    )
+    assert np.all(np.isfinite(mfd_area)) and np.all(mfd_area > 0.0)
+    assert np.all(np.isfinite(d8_area)) and np.all(d8_area > 0.0)
+
+    deposition_diagnostics = ErosionDiagnostics()
+    deposited, _, _ = erode(
+        cone,
+        cell_size,
+        ErosionParams(
+            iterations=8,
+            thermal_iterations=0,
+            deposition_rate=0.5,
+            deposition_slope_deg=15.0,
+        ),
+        deposition_diagnostics,
+    )
+    produced_volume = deposition_diagnostics.eroded_volume_m3
+    deposited_volume = deposition_diagnostics.deposited_volume_m3
+    exported_volume = deposition_diagnostics.exported_sediment_m3
+    balance_error = abs(
+        produced_volume - deposited_volume - exported_volume
+    ) / max(produced_volume, 1.0)
+    assert produced_volume > 0.0, "deposition test produced no sediment"
+    assert deposited_volume > 0.0, "deposition test did not deposit sediment"
+    assert exported_volume > 0.0, "deposition test exported no sediment"
+    assert balance_error < 1.0e-9, (
+        f"sediment budget does not balance: {balance_error:.3e}"
+    )
+    assert deposited.mean() >= eroded.mean() - 1.0e-6, (
+        "deposition should not lower the mean surface"
+    )
+
+    uplifted = implicit_stream_power_erode(
+        cone,
+        cell_size,
+        iterations=2,
+        k=0.0,
+        uplift=0.25,
+        flow_method="mfd",
+    )
+    assert float(uplifted.mean()) > float(cone.mean()), (
+        "uplift was not applied to the implicit solve"
+    )
+
     result = {
         "pit_violations": float(pit_violations),
         "max_fill_depth_m": float(fill_depth.max()),
@@ -837,6 +1183,12 @@ def _self_test(verbose: bool = True) -> dict[str, float]:
         "max_incision_m": max_incision,
         "flow_p99_over_median": concentration,
         "foot_incision_std_m": foot_variation,
+        "mfd_p99_over_median": mfd_concentration,
+        "d8_p99_over_median": d8_concentration,
+        "deposited_volume_m3": deposited_volume,
+        "exported_volume_m3": exported_volume,
+        "sediment_balance_error": balance_error,
+        "uplift_mean_delta_m": float(uplifted.mean() - cone.mean()),
     }
     if verbose:
         print("self-test: PASS")
@@ -864,8 +1216,32 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--talus-deg", type=float, default=36.0)
     parser.add_argument("--thermal-rate", type=float, default=0.5)
     parser.add_argument("--method", choices=("implicit", "explicit"), default="implicit")
+    parser.add_argument(
+        "--flow-method",
+        choices=("mfd", "d8"),
+        default="mfd",
+        help="implicit flow routing: multiple-flow (default) or steepest D8",
+    )
     parser.add_argument("--uplift", type=float, default=0.0,
                         help="uplift in metres per step (implicit solver only)")
+    parser.add_argument(
+        "--deposition",
+        type=float,
+        default=0.0,
+        help="deposition strength multiplier (0..1; 0 disables)",
+    )
+    parser.add_argument(
+        "--deposition-slope-deg",
+        type=float,
+        default=_DEPOSITION_SLOPE_DEG,
+        help="slope at which the deposition fraction falls to 1/e",
+    )
+    parser.add_argument(
+        "--deposition-length-m",
+        type=float,
+        default=1000.0,
+        help="flat-ground distance over which ~63%% of sediment deposits",
+    )
     parser.add_argument("--pre-smooth", type=int, default=0,
                         help="binomial smoothing passes before erosion")
     parser.add_argument("--detail-restore", type=float, default=0.0,
@@ -910,11 +1286,16 @@ def main(argv: list[str] | None = None) -> int:
         thermal_rate=args.thermal_rate,
         area_normalization=args.area_normalization,
         method=args.method,
+        flow_method=args.flow_method,
         uplift_m=args.uplift,
+        deposition_rate=args.deposition,
+        deposition_slope_deg=args.deposition_slope_deg,
+        deposition_length_m=args.deposition_length_m,
         pre_smooth_iterations=args.pre_smooth,
         detail_restore=args.detail_restore,
     )
 
+    diagnostics = ErosionDiagnostics()
     stream_started = time.perf_counter()
     if params.method == "implicit":
         base = heights
@@ -933,6 +1314,11 @@ def main(argv: list[str] | None = None) -> int:
             params.dt,
             params.uplift_m,
             params.fill_epsilon,
+            params.flow_method,
+            params.deposition_rate,
+            params.deposition_slope_deg,
+            params.deposition_length_m,
+            diagnostics,
         )
         if residual is not None and params.detail_restore > 0.0:
             stream_power = stream_power + residual * params.detail_restore
@@ -1022,6 +1408,17 @@ def main(argv: list[str] | None = None) -> int:
         "mean_slope_delta_deg": slope_after - slope_before,
         "height_min_after_m": float(eroded.min()),
         "height_max_after_m": float(eroded.max()),
+        "sediment_budget": {
+            "eroded_volume_m3": diagnostics.eroded_volume_m3,
+            "deposited_volume_m3": diagnostics.deposited_volume_m3,
+            "exported_volume_m3": diagnostics.exported_sediment_m3,
+            "uplift_volume_m3": diagnostics.uplift_volume_m3,
+            "mass_balance_error_m3": (
+                diagnostics.eroded_volume_m3
+                - diagnostics.deposited_volume_m3
+                - diagnostics.exported_sediment_m3
+            ),
+        },
         "flow_visualization": "log1p(area/cell_area) normalized to 0..65535",
     }
 
