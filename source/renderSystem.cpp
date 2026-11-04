@@ -30,6 +30,7 @@
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/shadow/localShadowMath.h"
+#include "render/volumetricFog/volumetricFogRenderer.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
@@ -1417,6 +1418,8 @@ void RenderSystem::RebuildSwapchainDependentResources()
     if (!offlineMode)
     {
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+        renderGraph.InitializeVolumetricFog(
+            *pipelineFactory, *rendererBackend, descriptorContext);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
         // ShutdownFrameResources 会释放粒子管线、默认纹理和发射器池；
@@ -1463,6 +1466,8 @@ void RenderSystem::RebuildRenderGraphDependentResources()
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    renderGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
 }
@@ -1599,6 +1604,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
                 candidateGraph,
                 candidateLightBufferInfos);
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1706,6 +1713,8 @@ void RenderSystem::PrepareRenderGraphReload(
                 candidateGraph,
                 GetLightBufferInfo());
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -2829,6 +2838,21 @@ void RenderSystem::RecordDistortionPass(
         renderPass);
 }
 
+void RenderSystem::RecordFogCompositePass(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex)
+{
+    // fogComposite 的 pipeline/descriptor 由 RenderGraph 拥有的
+    // VolumetricFogRenderer 提供；没有雾节点的图不会走到这里。
+    const auto& fog = RenderGraph::GetInstance().GetVolumetricFog();
+    if (fog)
+    {
+        fog->RecordComposite(
+            commandBuffer, swapChainImageIndex, renderPass);
+    }
+}
+
 void RenderSystem::RecordDecalStencilPass(
     vk::CommandBuffer& commandBuffer,
     const Renderpass& renderPass,
@@ -2942,6 +2966,20 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    // 体积雾参数跟随冻结场景快照；enabled=0 时 compute 仍会写零值，
+    // 保证 fog texture 不含上一帧残留。
+    const VL::FogSettings& fog = currentRenderScene.environment.fog;
+    const bool fogEnabled = VL::IsFogEnabled(fog);
+    ubo.fogParams0 = Eigen::Vector4f(
+        fog.density, fog.heightFalloff, fog.baseHeight, fog.anisotropy);
+    ubo.fogParams1 = Eigen::Vector4f(
+        fog.albedo.x(), fog.albedo.y(), fog.albedo.z(), fog.intensity);
+    ubo.fogParams2 = Eigen::Vector4f(
+        camera.clipNear,
+        camera.clipFar,
+        static_cast<float>(VL::kMaxVolumetricFogLayers),
+        fogEnabled ? 1.0f : 0.0f);
+    ubo.fogParams3 = Eigen::Vector4f::Zero();
     const float cameraExposureScale = VL::ExposureScale(camera.exposure);
     const bool autoExposureEnabled =
         camera.exposure.mode == VL::ExposureMode::Auto;
@@ -3026,6 +3064,11 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    // 阴影 pass 不消费体积雾；显式清零，避免把未初始化字段上传。
+    ubo.fogParams0 = Eigen::Vector4f::Zero();
+    ubo.fogParams1 = Eigen::Vector4f::Zero();
+    ubo.fogParams2 = Eigen::Vector4f::Zero();
+    ubo.fogParams3 = Eigen::Vector4f::Zero();
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
         Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
@@ -3891,6 +3934,20 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
                 renderGraph.GetAutoExposure()->Record(commandBuffer, swapChainImageIndex,
                     currentRenderScene.camera.exposure, exposureDeltaSeconds);
+                continue;
+            }
+            // 体积雾注入是独立 compute：没有 framebuffer，也不需要 pass material。
+            // 图屏障先把 fog texture2DArray 的全部层转到 GENERAL。
+            if (renderPass.type == VL::RenderGraphPassType::VolumetricFog)
+            {
+                PassBarrier::PrepareForPass(
+                    commandBuffer, renderGraph, passIndex, swapChainImageIndex);
+                const auto& volumetricFog = renderGraph.GetVolumetricFog();
+                if (volumetricFog)
+                {
+                    volumetricFog->Record(
+                        commandBuffer, swapChainImageIndex, renderPass);
+                }
                 continue;
             }
             VL::PassRuntimeContext passContext{

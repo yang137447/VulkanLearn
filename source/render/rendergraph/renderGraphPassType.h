@@ -37,7 +37,13 @@ enum class RenderGraphPassType
     Distortion,
     // 局部光阴影：每个 pass 负责 localShadowMap 的一个数组层。点光在一个
     // pass 内按八象限多次 begin/end 投影，聚光一次透视绘制。
-    LocalShadow
+    LocalShadow,
+    // 体积雾注入：独立 compute 把 32 个深度层的 in-scatter/transmittance
+    // 写进 texture2DArray（storage image），不经过 framebuffer。
+    VolumetricFog,
+    // 体积雾合成：全屏 pass 读取相邻两层并按像素深度插值，用
+    // One / OneMinusSrcAlpha 预乘混合写回 sceneColor。
+    FogComposite
 };
 
 struct RenderGraphPassTypeName
@@ -46,11 +52,11 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十二个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动与
-// 局部光阴影各自追加，
+// 十四个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动、
+// 局部光阴影、体积雾注入与体积雾合成各自追加，
 // 合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 12>
+inline constexpr std::array<RenderGraphPassTypeName, 14>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -63,7 +69,9 @@ inline constexpr std::array<RenderGraphPassTypeName, 12>
         {RenderGraphPassType::DecalStencil, "decalStencil"},
         {RenderGraphPassType::Particle, "particle"},
         {RenderGraphPassType::Distortion, "distortion"},
-        {RenderGraphPassType::LocalShadow, "localShadow"}
+        {RenderGraphPassType::LocalShadow, "localShadow"},
+        {RenderGraphPassType::VolumetricFog, "volumetricFog"},
+        {RenderGraphPassType::FogComposite, "fogComposite"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

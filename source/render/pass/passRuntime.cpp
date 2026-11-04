@@ -77,6 +77,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Distortion:
         RecordDistortionPass(context);
         return;
+    case RenderGraphPassType::FogComposite:
+        RecordFogCompositePass(context);
+        return;
     case RenderGraphPassType::DecalStencil:
         RecordDecalStencilPass(context);
         return;
@@ -95,6 +98,18 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
         std::string(
             RenderGraphPassTypeToString(
                 context.renderPass.type)));
+}
+
+void PassRuntime::RecordFogCompositePass(PassRuntimeContext& context) const
+{
+    // 合成是纯全屏 pass：pipeline/descriptor 由 VolumetricFogRenderer 绑定，
+    // 这里只负责 render pass 的 begin/end 与 viewport/scissor 设置。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordFogCompositePass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
 }
 
 void PassRuntime::PreparePassResources(PassRuntimeContext& context) const

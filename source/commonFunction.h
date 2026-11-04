@@ -840,7 +840,10 @@ namespace CommonFunction
         return CreateSamplerBase(device, samplerInfo, name);
     }
 
-    inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+    // layerCount 默认 1，保持所有单层图像的旧调用不变；texture2DArray
+    // （体积雾 32 层 storage image）必须显式传全部层，否则只有 layer 0
+    // 离开 UNDEFINED，后续 storage 读写会触发 imageLayout-09600。
+    inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t layerCount = 1)
     {
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
@@ -856,7 +859,7 @@ namespace CommonFunction
                 .setBaseMipLevel(0)
                 .setLevelCount(mipLevels)
                 .setBaseArrayLayer(0)
-                .setLayerCount(1));
+                .setLayerCount(std::max(layerCount, 1u)));
 
         vk::PipelineStageFlags sourceStage;
         vk::PipelineStageFlags destinationStage;

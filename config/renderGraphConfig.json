@@ -63,10 +63,10 @@
             "stencil": "可选硬件 stencil 状态。front/back 共用同一组值；未声明时 testEnable=false，旧 pass 状态不变。字段为 testEnable、writeMask、compareMask、reference、compareOp、failOp、depthFailOp、passOp。启用 stencil 的 pass 必须输出 D24_UNORM_S8_UINT 或 D32_SFLOAT_S8_UINT 附件。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、localShadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decalStencil、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、localShadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decalStencil、decal、particle、distortion、volumetricFog、fogComposite；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
-            "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
+            "type": "可选资源类型。默认 texture2D；CSM shadowMap 与 volumetricFog 使用 texture2DArray。",
             "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。",
             "clearColor": "可选四分量颜色清除值；未提供时沿用颜色附件默认灰底 0.2,0.2,0.2,1。"
         },
@@ -103,6 +103,19 @@
             "arrayLayers": 8,
             "usage": [
                 "depthStencilAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "volumetricFog",
+            "type": "texture2DArray",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.25,
+            "heightScale": 0.25,
+            "arrayLayers": 32,
+            "initialLayout": "shaderRead",
+            "usage": [
+                "storage",
                 "sampled"
             ]
         },
@@ -1063,6 +1076,59 @@
                 {
                     "resource": "distortion",
                     "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "volumetricFog",
+            "type": "volumetricFog",
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                },
+                {
+                    "resource": "shadowMap",
+                    "binding": 1
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 2
+                }
+            ],
+            "output": [
+                {
+                    "resource": "volumetricFog",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "fogComposite",
+            "type": "fogComposite",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "volumetricFog",
+                    "binding": 0
+                },
+                {
+                    "resource": "sceneDepth",
+                    "binding": 1
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
                     "storeOp": "store"
                 }
             ]

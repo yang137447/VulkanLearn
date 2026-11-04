@@ -5,10 +5,10 @@
 
 // billboard/ribbon 是透明卡片，没有几何厚度。阴影端用固定阈值的
 // alpha test 近似 UE 的 masked shadow。烟/尘卡片是半透明的，阈值太低
-// 会把整张卡写成实心剪影；取 0.55 只保留较密的芯部，避免大块黑板。
+// 会把整张卡写成实心剪影；取 0.25 只保留较密的芯部，避免大块黑板。
 // 真正的半透明软阴影需要逐灯 transmittance 累积，当前二进制 shadow map
 // 只能做到 masked 近似。阈值只作用于形状覆盖率，不改变可见粒子合成。
-const float kParticleShadowAlphaThreshold = 0.35;
+const float kParticleShadowAlphaThreshold = 0.25;
 
 // 与 particle.frag / particleRibbon.frag 相同的程序化边缘侵蚀。
 // 阴影 pass 不声明可见 pass 的 sceneDepth/光照输入，因此这里保留一份

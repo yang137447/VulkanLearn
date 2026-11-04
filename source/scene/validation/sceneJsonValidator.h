@@ -10,6 +10,7 @@
 #include "world/decalResponse.h"
 #include "world/environmentType.h"
 #include "world/localLightShadowSettings.h"
+#include "render/volumetricFog/volumetricFogSettings.h"
 #include "script/scriptScene.h"
 
 namespace VL
@@ -21,6 +22,12 @@ inline void ValidateSceneEnvironmentJson(const nlohmann::json& object)
     if (object.contains("cubeSize") &&
         (!object.at("cubeSize").is_number_integer() || object.at("cubeSize").get<double>() <= 0))
         throw std::invalid_argument("Environment cubeSize must be a positive integer");
+    if (object.contains("fog"))
+    {
+        // 与 WorldBuilder 共用同一份解析/范围校验，避免校验器通过而运行时
+        // 才因参数越界失败。
+        (void)ParseFogSettingsJson(object.at("fog"));
+    }
     if (!object.contains("skyParameters")) return;
     const auto& sky = object.at("skyParameters");
     if (!sky.is_object()) throw std::invalid_argument("skyParameters must be object");

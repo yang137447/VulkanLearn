@@ -220,6 +220,8 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
     snapshot.intensity = environment.type == EnvironmentType::None
         ? 0.0f : environment.intensity * desc.environmentIntensity;
     snapshot.skyParameters = environment.skyParameters;
+    // 体积雾是渲染期效果，不随全局环境强度缩放；由 fog.intensity 单独控制。
+    snapshot.fog = environment.fog;
 
     if (environment.type == EnvironmentType::Hdri && !environment.hdrPath.empty())
     {

@@ -19,6 +19,7 @@
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
+#include "render/volumetricFog/volumetricFogSettings.h"
 #include "world/worldSnapshot.h"
 #include "particles/particleAsset.h"
 #include "particles/particleRuntimeState.h"
@@ -50,6 +51,9 @@ struct WorldEnvironment
     float intensity = 1.0f;
     std::string hdrPath;
     SkyParametersGPU skyParameters;
+    // environment.fog；没有该块时 FogSettings::enabled 为 false，
+    // 渲染路径保持旧行为（不产生体积雾）。
+    FogSettings fog;
 };
 
 // 全局粒子数据通道是与逐实例 userParameters 分离的命名空间：它只存在于

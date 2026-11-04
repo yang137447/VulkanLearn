@@ -293,6 +293,110 @@ TEST(ParticleSceneLighting, RendererWritesDescriptorBindingsSixToNine)
     EXPECT_TRUE(Contains(source, "imageCount * 3"));
 }
 
+TEST(ParticleSceneLighting, BillboardMaterialLobesUseGgxAndHenyeyGreenstein)
+{
+    const std::string source =
+        ReadSource("shader/glsl/particle/particleSceneLighting.glsl");
+    // 镜面必须是真正的 D*G*F 直接光 lobe，而不是又一份 Lambert。
+    EXPECT_TRUE(Contains(source, "float ParticleBillboardSpecularLobe("));
+    EXPECT_TRUE(Contains(source, "DistributionGGX(n, h, roughness)"));
+    EXPECT_TRUE(Contains(source, "ParticleGeometrySmith(n, v, l, roughness)"));
+    // 前向散射用归一化 HG，g=0.6，峰值归一到 1。
+    EXPECT_TRUE(Contains(source, "float ParticleBillboardForwardScattering("));
+    EXPECT_TRUE(Contains(source, "const float g = 0.6;"));
+    EXPECT_TRUE(Contains(source, "1.0 + g * g - 2.0 * g * cosTheta"));
+    // 两项共享同一份已含阴影/半径窗的 radiance。
+    EXPECT_TRUE(Contains(
+        source,
+        "vec3 AccumulateParticleBillboardMaterialLobes("));
+    EXPECT_TRUE(Contains(source, "specularStrength * specular"));
+    EXPECT_TRUE(Contains(
+        source,
+        "forwardScattering * transmission * baseColor / PI"));
+
+    const std::string particle =
+        ReadSource("shader/glsl/particle/particle.frag");
+    const std::string ribbon =
+        ReadSource("shader/glsl/particle/particleRibbon.frag");
+    const std::string global =
+        ReadSource("shader/glsl/particle/particleGlobal.frag");
+    EXPECT_TRUE(Contains(particle, "frame.billboardLightParams2.x"));
+    EXPECT_TRUE(Contains(ribbon, "frame.billboardLightParams2.x"));
+    EXPECT_TRUE(Contains(global, "vLightParams2.x"));
+}
+
+TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
+{
+    const std::string common =
+        ReadSource("shader/glsl/particle/particleCommon.glsl");
+    EXPECT_TRUE(Contains(common, "vec4 billboardLightParams2;"));
+
+    const std::string header =
+        ReadSource("source/particles/particleRenderer.h");
+    EXPECT_TRUE(Contains(
+        header,
+        "offsetof(FrameUniforms, billboardLightParams2) == 7568"));
+    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 7584"));
+
+    const std::string renderer =
+        ReadSource("source/particles/particleRenderer.cpp");
+    EXPECT_TRUE(Contains(renderer, "uniforms.billboardLightParams2"));
+    EXPECT_TRUE(Contains(renderer, "emitter.asset.billboardSpecular"));
+    EXPECT_TRUE(Contains(renderer, "emitter.asset.billboardRoughness"));
+    EXPECT_TRUE(Contains(
+        renderer,
+        "emitter.asset.billboardForwardScattering"));
+    // ribbon 与 billboard 共用同一套场景光照合同，CPU 侧必须同时接纳两种
+    // renderMode；只写 billboard 会让 particleRibbon.frag 的光照分支死掉。
+    EXPECT_TRUE(Contains(
+        renderer,
+        "emitter.asset.renderMode == \"ribbon\""));
+
+    const std::string gather =
+        ReadSource("shader/glsl/particle/particleGlobalGather.comp");
+    EXPECT_TRUE(Contains(gather, "vec4 lightParams2;"));
+    EXPECT_TRUE(Contains(
+        gather,
+        "record.lightParams2 = frame.billboardLightParams2;"));
+
+    const std::string vertex =
+        ReadSource("shader/glsl/particle/particleGlobal.vert");
+    EXPECT_TRUE(Contains(vertex, "vLightParams2 = record.lightParams2;"));
+    EXPECT_TRUE(Contains(
+        vertex,
+        "layout(location = 16) out flat vec4 vLightParams2;"));
+}
+
+// 与 shader/glsl/particle/particleSceneLighting.glsl 的
+// ParticleBillboardForwardScattering 逐式对应的 CPU 参考实现。
+// g=0.6，并按峰值归一化，使作者参数可以直接当作“额外多少份漫反射”。
+double ReferenceForwardScattering(double cosTheta)
+{
+    const double g = 0.6;
+    const double denominator = std::max(
+        1.0 + g * g - 2.0 * g * cosTheta,
+        1.0e-4);
+    const double phase =
+        (1.0 - g * g) / (denominator * std::sqrt(denominator));
+    return phase * (1.0 - g) * (1.0 - g) / (1.0 + g);
+}
+
+TEST(ParticleSceneLighting, ForwardScatteringPeaksAtBacklightAndFadesForward)
+{
+    // 完美逆光（光传播方向与视线同向）归一化为 1。
+    EXPECT_NEAR(ReferenceForwardScattering(1.0), 1.0, 1.0e-6);
+    // 侧光明显低于逆光，但仍然非零。
+    const double side = ReferenceForwardScattering(0.0);
+    EXPECT_GT(side, 0.0);
+    EXPECT_LT(side, 0.1);
+    // 单调：逆光 > 侧光 > 顺光。
+    EXPECT_GT(ReferenceForwardScattering(1.0),
+        ReferenceForwardScattering(0.5));
+    EXPECT_GT(ReferenceForwardScattering(0.5), side);
+    EXPECT_GT(side, ReferenceForwardScattering(-1.0));
+    EXPECT_GE(ReferenceForwardScattering(-1.0), 0.0);
+}
+
 TEST(ParticleSceneLighting, RenderSystemSuppliesIblAndLightBuffers)
 {
     const std::string source = ReadSource("source/renderSystem.cpp");

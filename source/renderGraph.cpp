@@ -12,6 +12,8 @@
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/camera/autoExposureCompute.h"
+#include "render/backend/rendererDescriptorContext.h"
+#include "render/volumetricFog/volumetricFogRenderer.h"
 #include "texture.h"
 #include <algorithm>
 #include <memory>
@@ -707,6 +709,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
 {
     resourcesMsaa.swap(other.resourcesMsaa);
     autoExposure.swap(other.autoExposure);
+    volumetricFog.swap(other.volumetricFog);
     resourcesResolve.swap(other.resourcesResolve);
     sceneViewportOutputs.swap(other.sceneViewportOutputs);
     renderpassesOrdered.swap(other.renderpassesOrdered);
@@ -757,6 +760,22 @@ void RenderGraph::Shutdown(
             retireQueue.GetLastSubmittedEpoch(), std::move(autoExposure));
     }
     autoExposure.reset();
+    if (volumetricFog)
+    {
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+        {
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            retireQueue.RetireShared(
+                "VolumetricFog:Graph", ownerGeneration,
+                retireQueue.GetLastSubmittedEpoch(),
+                std::move(volumetricFog));
+        }
+        else
+        {
+            volumetricFog->Shutdown(rendererBackend);
+            volumetricFog.reset();
+        }
+    }
     for(auto& [name, renderpass] : renderpasses)
     {
         DestroyRenderpass(renderpass, rendererBackend, releaseMode);
@@ -1068,6 +1087,34 @@ void RenderGraph::InitializeAutoExposure(PipelineFactory& factory,
     }
 }
 
+void RenderGraph::InitializeVolumetricFog(
+    PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend,
+    const VL::RendererDescriptorContext& descriptorContext)
+{
+    if (volumetricFog)
+    {
+        return;
+    }
+    // 没有 fog 节点的自定义图不创建 owner；调用方按空指针处理。
+    bool hasInjectionPass = false;
+    for (const auto& pass : compiledFrameGraph.passes)
+    {
+        if (pass.type == VL::RenderGraphPassType::VolumetricFog)
+        {
+            hasInjectionPass = true;
+            break;
+        }
+    }
+    if (!hasInjectionPass)
+    {
+        return;
+    }
+    auto candidate = std::make_shared<VL::VolumetricFogRenderer>();
+    candidate->Initialize(factory, backend, *this, descriptorContext);
+    volumetricFog = std::move(candidate);
+}
+
 void RenderGraph::RenderInitialize(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
@@ -1075,7 +1122,13 @@ void RenderGraph::RenderInitialize(
     for (const std::string& passName : renderpassesOrdered)
     {
         Renderpass& renderpass = renderpasses.at(passName);
-        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
+        // 专用 compute / 自带 pipeline 的 pass 不经过 Material pass 描述符。
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
+            renderpass.type == VL::RenderGraphPassType::FogComposite)
+        {
+            continue;
+        }
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
@@ -1113,9 +1166,21 @@ void RenderGraph::RefreshRuntimeDescriptors(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
 {
+    // 体积雾不走 pass material 描述符刷新，但同样依赖每 image 的
+    // global/light/particle-light buffer；World 换代后必须一起更新。
+    if (volumetricFog)
+    {
+        volumetricFog->RefreshDescriptors(
+            rendererBackend, descriptorContext);
+    }
     for (auto& [passName, renderpass] : renderpasses)
     {
-        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
+            renderpass.type == VL::RenderGraphPassType::FogComposite)
+        {
+            continue;
+        }
         // World-local 纹理替换会同时改变缓存的 image view/sampler 与写入计划。
         // 必须先重建 pass-input 快照，避免刷新时把待退休的 world-local 纹理写回活动 descriptor。
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
@@ -1296,7 +1361,8 @@ RenderResource RenderGraph::CreateRenderResource(
                 1,
                 resource.format,
                 vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eShaderReadOnlyOptimal);
+                vk::ImageLayout::eShaderReadOnlyOptimal,
+                resource.arrayLayers);
         }
         resource.imageHandle =
             rendererBackend.GetImageHandle(
@@ -1524,6 +1590,16 @@ Renderpass RenderGraph::CreateRenderpass(
         {
             renderpass.width = 1;
             renderpass.height = 1;
+            return renderpass;
+        }
+        // 体积雾注入是 compute 节点：输出只有 storage usage，不能生成
+        // framebuffer；尺寸直接取雾 texture2DArray 的分辨率。
+        if (renderpass.type == VL::RenderGraphPassType::VolumetricFog)
+        {
+            const auto& fogResources =
+                resourcesResolve.at(renderpass.outputResources.at(0));
+            renderpass.width = fogResources.at(0).width;
+            renderpass.height = fogResources.at(0).height;
             return renderpass;
         }
         MaybeFailRenderPassCreation();

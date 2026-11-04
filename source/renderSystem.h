@@ -393,6 +393,10 @@ private:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) override;
+    void RecordFogCompositePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
     void RecordDecalStencilPass(
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,

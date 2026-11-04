@@ -4307,8 +4307,12 @@ void ParticleRenderer::RecordSimulation(
         const bool wantsMeshLighting =
             emitter.asset.renderMode == "mesh" &&
             emitter.asset.meshLighting;
+        // ribbon 与 billboard 共用同一份场景光照合同（ribbon 用面向相机的
+        // 视线法线），因此这里必须同时接纳两种 renderMode；否则
+        // particleRibbon.frag 的 billboardLightParams.x 永远为 0。
         const bool wantsBillboardLighting =
-            emitter.asset.renderMode == "billboard" &&
+            (emitter.asset.renderMode == "billboard" ||
+             emitter.asset.renderMode == "ribbon") &&
             emitter.asset.billboardLighting;
         bool meshLightingEnabled = false;
         bool billboardLightingEnabled = false;
@@ -4674,6 +4678,14 @@ void ParticleRenderer::RecordSimulation(
                 emitter.asset.billboardLightingStrength,
                 0.0f,
                 1.0f),
+            0.0f);
+        uniforms.billboardLightParams2 = Eigen::Vector4f(
+            std::clamp(emitter.asset.billboardSpecular, 0.0f, 1.0f),
+            std::clamp(emitter.asset.billboardRoughness, 0.02f, 1.0f),
+            std::clamp(
+                emitter.asset.billboardForwardScattering,
+                0.0f,
+                2.0f),
             0.0f);
         // beam 端点是发射器局部空间作者数据，渲染前统一乘 emitter.model；
         // localSpace 对 beam 没有额外含义。

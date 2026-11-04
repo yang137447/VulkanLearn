@@ -15,6 +15,7 @@ struct GatheredBillboard
     vec4 lightParams;
     vec4 lightDirection;
     vec4 lightColor;
+    vec4 lightParams2;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -60,6 +61,7 @@ layout(location = 12) out flat vec4 vLightParams;
 layout(location = 13) out flat vec3 vLightDirection;
 layout(location = 14) out flat vec3 vLightColor;
 layout(location = 15) out flat vec3 vLightingNormal;
+layout(location = 16) out flat vec4 vLightParams2;
 
 void main()
 {
@@ -157,6 +159,7 @@ void main()
     vHasTexture = record.flags.y;
     vWorldPosition = worldPosition;
     vLightParams = record.lightParams;
+    vLightParams2 = record.lightParams2;
     vLightDirection = record.lightDirection.xyz;
     vLightColor = record.lightColor.rgb;
     vec3 lightingNormal = cross(record.rightRot.xyz, record.upSoft.xyz);

@@ -13,6 +13,7 @@ add_executable(vl_renderer_backend_tests
     particle_sprite_shadow_test.cpp
     particle_mesh_material_test.cpp
     local_shadow_math_test.cpp
+    volumetric_fog_test.cpp
     pass_pipeline_contract_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp

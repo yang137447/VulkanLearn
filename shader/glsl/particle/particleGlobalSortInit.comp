@@ -19,6 +19,7 @@ struct GatheredBillboard
     vec4 lightParams;
     vec4 lightDirection;
     vec4 lightColor;
+    vec4 lightParams2;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer

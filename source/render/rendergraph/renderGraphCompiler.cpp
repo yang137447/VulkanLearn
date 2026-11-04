@@ -1010,6 +1010,77 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidAutoExposure", "AutoExposure scene color must be produced earlier in this graph.", pass.name));
         }
+        if (pass.type == RenderGraphPassType::VolumetricFog)
+        {
+            // 体积雾注入是专用 compute 节点：输出必须是初始化到 shaderRead
+            // 的 storage+sampled texture2DArray（每个数组层保存一个深度层），
+            // 且不参与 MSAA / pass material。
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 || inputs.empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog requires exactly one output, at least one input, and no MSAA/material.",
+                    pass.name));
+            }
+            const CompiledRenderGraphResource* target = nullptr;
+            for (const auto& resource : compiledGraph.resources)
+            {
+                if (resource.name == outputs[0].resource) target = &resource;
+            }
+            if (!target || target->type != "texture2DArray" ||
+                !target->initializeShaderRead || target->arrayLayers < 2 ||
+                std::find(target->usage.begin(), target->usage.end(), "storage") == target->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "sampled") == target->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog output must be an initialized storage+sampled texture2DArray with at least two layers.",
+                    pass.name));
+            }
+            bool hasSceneDepthInput = false;
+            for (const CompiledRenderGraphPassInputDescriptor& input : inputs)
+            {
+                if (input.source != "renderGraph")
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidVolumetricFog",
+                        "VolumetricFog inputs must be graph resources with explicit bindings.",
+                        pass.name));
+                }
+                hasSceneDepthInput = hasSceneDepthInput ||
+                    input.resource == "sceneDepth";
+            }
+            if (!hasSceneDepthInput)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog requires sceneDepth as an input.",
+                    pass.name));
+            }
+        }
+        if (pass.type == RenderGraphPassType::FogComposite)
+        {
+            // 合成 pass 只允许写 sceneColor；fog volume 必须作为采样输入，
+            // 否则上一阶段的 storage 布局不会被转换回 shaderRead。
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 ||
+                outputs[0].resource != "sceneColor" ||
+                outputs[0].loadOp != "load" ||
+                inputs.size() != 2 ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidFogComposite",
+                    "FogComposite requires fog volume + sceneDepth inputs and a single sceneColor LOAD output.",
+                    pass.name));
+            }
+        }
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
@@ -1112,9 +1183,14 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            if (pass.type == RenderGraphPassType::AutoExposure)
+            // 存储写 pass（AutoExposure / VolumetricFog）输出的是 storage image，
+            // 不参与 framebuffer attachment 布局；统一从 shaderRead 转到 GENERAL。
+            const bool isStorageWritePass =
+                pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::VolumetricFog;
+            if (isStorageWritePass)
                 AddBarrier(pass, output.resource, CompiledRenderGraphBarrierType::ShaderReadToStorage);
-            if (pass.type != RenderGraphPassType::AutoExposure && output.resource != "swapChain" &&
+            if (!isStorageWritePass && output.resource != "swapChain" &&
                 output.loadOp == "load" &&
                 previousResourceUses[output.resource] == ResourcePreviousUse::Sampled)
             {
@@ -1123,7 +1199,7 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     output.resource,
                     CompiledRenderGraphBarrierType::ShaderReadToAttachment);
             }
-            else if (pass.type != RenderGraphPassType::AutoExposure &&
+            else if (!isStorageWritePass &&
                 output.resource != "swapChain" &&
                 output.loadOp == "load" &&
                 previousResourceUses[output.resource] == ResourcePreviousUse::Attachment)
@@ -1133,7 +1209,7 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     output.resource,
                     CompiledRenderGraphBarrierType::AttachmentToAttachment);
             }
-            else if (pass.type != RenderGraphPassType::AutoExposure &&
+            else if (!isStorageWritePass &&
                 output.resource != "swapChain" &&
                 output.loadOp == "load" &&
                 previousResourceUses[output.resource] ==
@@ -1169,7 +1245,10 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            previousResourceUses[output.resource] = pass.type == RenderGraphPassType::AutoExposure
+            const bool isStorageWritePass =
+                pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::VolumetricFog;
+            previousResourceUses[output.resource] = isStorageWritePass
                 ? ResourcePreviousUse::Storage : ResourcePreviousUse::Attachment;
         }
 
@@ -1200,6 +1279,67 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             if (use.accessType == CompiledRenderGraphAccessType::Write && use.passName != exposurePass->name)
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidAutoExposure", "Exposure output cannot have another writer.", output));
+    }
+
+    // 体积雾注入/合成各只允许一个：注入端按层写同一张图，合成端只做一次
+    // 相邻层插值；出现第二个节点会让 storage 写入互相覆盖。
+    const CompiledRenderGraphPass* fogInjectionPass = nullptr;
+    size_t fogInjectionIndex = 0;
+    const CompiledRenderGraphPass* fogCompositePass = nullptr;
+    size_t fogCompositeIndex = 0;
+    for (size_t passIndex = 0; passIndex < compiledGraph.passes.size(); ++passIndex)
+    {
+        const auto& pass = compiledGraph.passes[passIndex];
+        if (pass.type == RenderGraphPassType::VolumetricFog)
+        {
+            if (fogInjectionPass)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.DuplicateVolumetricFog",
+                    "Only one VolumetricFog pass per graph is supported.",
+                    pass.name));
+            fogInjectionPass = &pass;
+            fogInjectionIndex = passIndex;
+        }
+        if (pass.type == RenderGraphPassType::FogComposite)
+        {
+            if (fogCompositePass)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.DuplicateFogComposite",
+                    "Only one FogComposite pass per graph is supported.",
+                    pass.name));
+            fogCompositePass = &pass;
+            fogCompositeIndex = passIndex;
+        }
+    }
+    if ((fogInjectionPass == nullptr) != (fogCompositePass == nullptr))
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.IncompleteVolumetricFog",
+            "VolumetricFog and FogComposite must be declared together.",
+            fogInjectionPass ? fogInjectionPass->name : fogCompositePass->name));
+    }
+    if (fogInjectionPass && fogInjectionIndex > fogCompositeIndex)
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidVolumetricFogOrder",
+            "VolumetricFog must run before FogComposite.",
+            fogInjectionPass->name));
+    }
+    if (fogInjectionPass)
+    {
+        const std::string& fogResource =
+            fogInjectionPass->outputResources[0].resource;
+        if (std::find(
+                fogCompositePass->inputResources.begin(),
+                fogCompositePass->inputResources.end(),
+                fogResource) ==
+            fogCompositePass->inputResources.end())
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidVolumetricFogOrder",
+                "FogComposite must sample the VolumetricFog output.",
+                fogCompositePass->name));
+        }
     }
 
     auto geometryPassResult = ValidateRequiredSingletonPassType(

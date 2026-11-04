@@ -175,6 +175,11 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node)
     environment.intensity = config.value("intensity", 1.0f);
     environment.hdrPath = config.value("hdrPath", std::string());
     environment.skyParameters = BuildSkyParameters(config);
+    // fog 缺失时保持 FogSettings 默认值（enabled=false），旧场景行为不变。
+    if (config.contains("fog"))
+    {
+        environment.fog = ParseFogSettingsJson(config.at("fog"));
+    }
 
     return environment;
 }

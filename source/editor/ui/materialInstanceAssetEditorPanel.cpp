@@ -101,6 +101,10 @@ bool ParticleFieldInModule(
             field == "billboardShadows" ||
             field == "billboardLighting" ||
             field == "billboardAmbient" ||
+            field == "billboardLightingStrength" ||
+            field == "billboardSpecular" ||
+            field == "billboardRoughness" ||
+            field == "billboardForwardScattering" ||
             field == "light.intensity" ||
             field == "light.radius" ||
             field == "decal.size" ||

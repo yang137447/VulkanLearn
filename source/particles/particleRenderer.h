@@ -381,9 +381,12 @@ private:
         Eigen::Vector4f shadowCasterParams;
         // xyz = 点光位置；仅八面体模式使用。
         Eigen::Vector4f shadowLightPosition;
+        // billboard/ribbon 材质近似：x = specular 强度, y = roughness,
+        // z = 前向散射权重, w 保留。追加在末尾以保持既有字段偏移不变。
+        Eigen::Vector4f billboardLightParams2;
     };
     static_assert(
-        sizeof(FrameUniforms) == 7568,
+        sizeof(FrameUniforms) == 7584,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -529,6 +532,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, shadowLightPosition) == 7552,
         "ParticleFrame shadowLightPosition offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, billboardLightParams2) == 7568,
+        "ParticleFrame billboardLightParams2 offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

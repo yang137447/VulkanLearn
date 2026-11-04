@@ -1,0 +1,347 @@
+#version 450
+
+#include "../common/commonUbo.glsl"
+#include "../common/shadowFiltering.glsl"
+#include "../common/localShadowSampling.glsl"
+
+// 体积雾注入：每像素沿视线把 32 个指数分布深度层做一次累积。
+// 每层只积分“上一层到本层”这一段，因此每个像素的总工作量是 O(层数)，
+// 不是 O(层数²)。结果按层写成 (in-scatter, 1 - transmittance)，
+// 合成端只需要在相邻两层之间插值。
+
+// 与 common/lighting.glsl 的 Light / UBOLight 逐字段一致。
+// 不直接 include lighting.glsl 是为了避免把 IBL 的 cubemap / BRDF LUT
+// 采样器带进 compute 描述符布局；字段顺序变化时必须同步这两处。
+struct Light
+{
+    vec4 colorIntensity;
+    vec4 positionRadius;
+    vec4 directionPad;
+    vec4 coneAngleOuterInnerPadPad;
+    vec4 shadowParams;
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer UBOLight
+{
+    int directionalLightOffset;
+    int directionalLightCount;
+    int pointLightOffset;
+    int pointLightCount;
+    int spotLightOffset;
+    int spotLightCount;
+
+    Light lights[];
+} uboLight;
+
+// 与 common/lighting.glsl 的 ParticleLightGPU / ParticleLightSSBO 一致。
+struct ParticleLightGPU
+{
+    vec4 positionRadius;
+    vec4 colorIntensity;
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO
+{
+    uvec4 header;
+    ParticleLightGPU lights[];
+} particleLightSSBO;
+
+// CSM 采样与材质路径共用同一份实现（级联选择/过渡/淡出）。
+// 必须放在 UBOLight 声明之后：csmShadowSampling.glsl 直接引用 uboLight。
+#include "../common/csmShadowSampling.glsl"
+
+layout(set = 1, binding = 0) uniform sampler2D sceneDepth;
+layout(set = 1, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(set = 1, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+// rgb = 累积 in-scatter（已乘路径透射率），a = 1 - 累积透射率。
+layout(set = 1, binding = 3, rgba16f) uniform image2DArray fogImage;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+const int VL_FOG_MAX_LAYERS = 32;
+const uint VL_FOG_PARTICLE_LIGHT_CAPACITY = 64u;
+// 与表面光照的 Lambert 归一化保持一致：radiance * albedo / PI。
+// 不做这一步时，1 lux 的方向光会让雾比同一盏光照亮的表面亮约 3.14 倍。
+const float VL_FOG_SCATTER_NORMALIZATION = 0.31830988618;
+
+// 与 source/render/volumetricFog/volumetricFogSettings.h 的
+// FogSliceViewDepthCm 保持一致：指数分布，近处层密、远处层疏。
+float FogSliceViewDepth(
+    float nearCm,
+    float farCm,
+    float layer,
+    float layerCount)
+{
+    float t = clamp(layer / max(layerCount - 1.0, 1.0), 0.0, 1.0);
+    return nearCm * pow(max(farCm, nearCm + 1.0) / nearCm, t);
+}
+
+// UE5 GetLocalLightAttenuation 的半径窗，与 common/lighting.glsl 的
+// EvaluateLocalLightRadiusWindow 同公式；compute 不 include 整个 lighting
+// 头文件，因此在这里保留一份等价实现。
+float FogLocalLightRadiusWindow(float distanceCm, float radiusCm)
+{
+    if (radiusCm <= 0.0)
+    {
+        return 1.0;
+    }
+    float normalizedDistanceSq =
+        (distanceCm * distanceCm) / (radiusCm * radiusCm);
+    float window = clamp(
+        1.0 - normalizedDistanceSq * normalizedDistanceSq, 0.0, 1.0);
+    return window * window;
+}
+
+// 与 volumetricFogSettings.h 的 HenyeyGreensteinPhase 一致；
+// g=0 时返回 1（各向同性），便于作者只调密度/强度。
+float FogPhase(float cosTheta, float anisotropy)
+{
+    float g = clamp(anisotropy, -0.95, 0.95);
+    float denominator = 1.0 + g * g - 2.0 * g * clamp(cosTheta, -1.0, 1.0);
+    return (1.0 - g * g) /
+        max(denominator * sqrt(max(denominator, 1.0e-6)), 1.0e-6);
+}
+
+float FogDensityPerCm(vec3 worldPos)
+{
+    float densityPerCm = uboVP.fogParams0.x / 100.0;
+    float falloffPerCm = uboVP.fogParams0.y / 100.0;
+    float heightScale = 1.0;
+    if (falloffPerCm > 0.0)
+    {
+        // 上限 8 避免相机低于 baseHeight 时密度爆炸；下限 0 保证非负。
+        heightScale = clamp(
+            exp(-falloffPerCm * (worldPos.y - uboVP.fogParams0.z)),
+            0.0,
+            8.0);
+    }
+    return densityPerCm * heightScale;
+}
+
+vec3 FogWorldPosition(vec3 viewRay, float viewDepthCm)
+{
+    // viewRay 已归一化，-viewRay.z 是单位视线长度对应的视图深度增量。
+    vec3 viewPos =
+        viewRay * (viewDepthCm / max(-viewRay.z, 1.0e-4));
+    return (uboVP.invView * vec4(viewPos, 1.0)).xyz;
+}
+
+// 单点 in-scatter 光照。方向光乘 CSM；点光/聚光乘 localShadowMap；
+// GPU 粒子灯不投影（与表面光照合同一致）。
+vec3 EvaluateFogScattering(vec3 worldPos, vec3 viewDir)
+{
+    vec3 result = vec3(0.0);
+    float g = uboVP.fogParams0.w;
+
+    for (int index = 0; index < uboLight.directionalLightCount; ++index)
+    {
+        Light light = uboLight.lights[uboLight.directionalLightOffset + index];
+        vec3 propagation = normalize(light.directionPad.xyz);
+        int cascadeIndex = 0;
+        // 体积介质没有几何法线；把“指向光源”当作法线，使 slope bias 退化为 0，
+        // 避免把表面阴影的斜率补偿错误地套到雾上。
+        float visibility = CalculateCsmShadow(
+            shadowMap, worldPos, -propagation, cascadeIndex);
+        float phase = FogPhase(dot(propagation, viewDir), g);
+        result +=
+            light.colorIntensity.rgb *
+            light.colorIntensity.w *
+            visibility *
+            phase;
+    }
+
+    for (int index = 0; index < uboLight.pointLightCount; ++index)
+    {
+        Light light = uboLight.lights[uboLight.pointLightOffset + index];
+        vec3 toLight = light.positionRadius.xyz - worldPos;
+        float distanceSq = dot(toLight, toLight);
+        float radius = light.positionRadius.w;
+        if (radius > 0.0 && distanceSq > radius * radius)
+        {
+            continue;
+        }
+        float distanceCm = sqrt(max(distanceSq, 0.0));
+        float attenuation =
+            FogLocalLightRadiusWindow(distanceCm, radius) /
+            (distanceSq + 1.0);
+        if (attenuation <= 0.0)
+        {
+            continue;
+        }
+        float visibility = SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.directionPad.xyz,
+            light.coneAngleOuterInnerPadPad.x,
+            worldPos);
+        vec3 propagation = toLight / max(distanceCm, 1.0e-4);
+        float phase = FogPhase(dot(propagation, viewDir), g);
+        result +=
+            light.colorIntensity.rgb *
+            light.colorIntensity.w *
+            attenuation *
+            visibility *
+            phase;
+    }
+
+    for (int index = 0; index < uboLight.spotLightCount; ++index)
+    {
+        Light light = uboLight.lights[uboLight.spotLightOffset + index];
+        vec3 toLight = light.positionRadius.xyz - worldPos;
+        float distanceSq = dot(toLight, toLight);
+        float radius = light.positionRadius.w;
+        if (radius > 0.0 && distanceSq > radius * radius)
+        {
+            continue;
+        }
+        float distanceCm = sqrt(max(distanceSq, 0.0));
+        float attenuation =
+            FogLocalLightRadiusWindow(distanceCm, radius) /
+            (distanceSq + 1.0);
+        if (attenuation <= 0.0)
+        {
+            continue;
+        }
+        vec3 propagation = toLight / max(distanceCm, 1.0e-4);
+        float cosAngle = clamp(
+            dot(propagation, -normalize(light.directionPad.xyz)),
+            -1.0,
+            1.0);
+        float spotAngle = acos(cosAngle);
+        float angleIntensity = 1.0 - smoothstep(
+            light.coneAngleOuterInnerPadPad.y,
+            light.coneAngleOuterInnerPadPad.x,
+            spotAngle);
+        if (angleIntensity <= 0.0)
+        {
+            continue;
+        }
+        float visibility = SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.directionPad.xyz,
+            light.coneAngleOuterInnerPadPad.x,
+            worldPos);
+        float phase = FogPhase(dot(propagation, viewDir), g);
+        result +=
+            light.colorIntensity.rgb *
+            light.colorIntensity.w *
+            attenuation *
+            angleIntensity *
+            visibility *
+            phase;
+    }
+
+    uint particleLightCount =
+        min(particleLightSSBO.header.x, VL_FOG_PARTICLE_LIGHT_CAPACITY);
+    for (uint index = 0u; index < particleLightCount; ++index)
+    {
+        ParticleLightGPU light = particleLightSSBO.lights[index];
+        if (light.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        vec3 toLight = light.positionRadius.xyz - worldPos;
+        float distanceSq = dot(toLight, toLight);
+        float radius = light.positionRadius.w;
+        if (radius > 0.0 && distanceSq > radius * radius)
+        {
+            continue;
+        }
+        float distanceCm = sqrt(max(distanceSq, 0.0));
+        float attenuation =
+            FogLocalLightRadiusWindow(distanceCm, radius) /
+            (distanceSq + 1.0);
+        if (attenuation <= 0.0)
+        {
+            continue;
+        }
+        vec3 propagation = toLight / max(distanceCm, 1.0e-4);
+        float phase = FogPhase(dot(propagation, viewDir), g);
+        result +=
+            light.colorIntensity.rgb *
+            light.colorIntensity.w *
+            attenuation *
+            phase;
+    }
+
+    return result;
+}
+
+void main()
+{
+    ivec3 fogExtent = imageSize(fogImage);
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= fogExtent.x || pixel.y >= fogExtent.y)
+    {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(fogExtent.xy);
+    vec2 ndc = uv * 2.0 - 1.0;
+
+    // 场景深度换算成视图空间深度；天空像素得到 far，雾会一直累积到远层。
+    float deviceDepth = texture(sceneDepth, uv).r;
+    vec4 sceneView = uboVP.invProjection * vec4(ndc, deviceDepth, 1.0);
+    float sceneViewDepth = -sceneView.z / max(sceneView.w, 1.0e-6);
+
+    vec4 nearH = uboVP.invProjection * vec4(ndc, 0.0, 1.0);
+    vec4 farH = uboVP.invProjection * vec4(ndc, 1.0, 1.0);
+    vec3 viewRay = normalize(
+        farH.xyz / farH.w - nearH.xyz / nearH.w);
+
+    float nearCm = max(uboVP.fogParams2.x, 1.0);
+    float farCm = max(uboVP.fogParams2.y, nearCm + 1.0);
+    float layerCount = clamp(
+        uboVP.fogParams2.z, 2.0, float(VL_FOG_MAX_LAYERS));
+    bool enabled = uboVP.fogParams2.w > 0.5;
+
+    vec3 accumInScatter = vec3(0.0);
+    float accumTransmittance = 1.0;
+    float previousDepth = 0.0;
+    vec3 previousWorld = uboVP.cameraPosition;
+
+    for (int layer = 0; layer < VL_FOG_MAX_LAYERS; ++layer)
+    {
+        float sliceDepth = FogSliceViewDepth(
+            nearCm, farCm, float(layer), layerCount);
+        float clampedDepth = min(sliceDepth, sceneViewDepth);
+        if (enabled && float(layer) < layerCount &&
+            clampedDepth > previousDepth + 1.0e-4)
+        {
+            float middleDepth =
+                0.5 * (previousDepth + clampedDepth);
+            vec3 middleWorld =
+                FogWorldPosition(viewRay, middleDepth);
+            vec3 currentWorld =
+                FogWorldPosition(viewRay, clampedDepth);
+            // 密度积分必须用真实世界段长；视图深度只是层分布参数。
+            float spanCm = length(currentWorld - previousWorld);
+            float density = FogDensityPerCm(middleWorld);
+            if (density > 0.0 && spanCm > 0.0)
+            {
+                float opticalDepth = density * spanCm;
+                float stepTransmittance = exp(-opticalDepth);
+                vec3 scattering = EvaluateFogScattering(
+                    middleWorld, viewRay) *
+                    uboVP.fogParams1.rgb *
+                    VL_FOG_SCATTER_NORMALIZATION;
+                // 单次散射能量：T * (1 - exp(-sigma*dt)) * 反照率 * 光照。
+                accumInScatter +=
+                    accumTransmittance *
+                    (1.0 - stepTransmittance) *
+                    scattering *
+                    uboVP.fogParams1.w;
+                accumTransmittance *= stepTransmittance;
+            }
+            previousDepth = clampedDepth;
+            previousWorld = currentWorld;
+        }
+        imageStore(
+            fogImage,
+            ivec3(pixel, layer),
+            vec4(accumInScatter, 1.0 - accumTransmittance));
+    }
+}

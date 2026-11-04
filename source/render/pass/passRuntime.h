@@ -111,6 +111,18 @@ public:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) = 0;
+    // 体积雾合成的 pipeline/descriptor 归 VolumetricFogRenderer 所有；
+    // pass 层只提供已开始的 sceneColor 窗口与 viewport。没有体积雾的会话
+    // （缩略图/离线）保持空录制。
+    virtual void RecordFogCompositePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+    }
     // DecalRenderer 拥有 unit cube、实例 SSBO 与 decal pipeline；pass 仅提供
     // 已开始的 DBuffer A/B/C/D + Mask 窗口和 sceneDepth 输入描述符集。
     // 主渲染路径必须覆写；没有 DecalRenderer 的缩略图会话保持空录制，
@@ -165,6 +177,7 @@ private:
     void RecordEditorGridPass(PassRuntimeContext& context) const;
     void RecordParticlePass(PassRuntimeContext& context) const;
     void RecordDistortionPass(PassRuntimeContext& context) const;
+    void RecordFogCompositePass(PassRuntimeContext& context) const;
     void RecordDecalStencilPass(PassRuntimeContext& context) const;
     void RecordDecalPass(PassRuntimeContext& context) const;
 

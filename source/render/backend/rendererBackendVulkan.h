@@ -172,7 +172,8 @@ public:
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout);
+        vk::ImageLayout newLayout,
+        uint32_t layerCount = 1);
     vk::ImageView Create2DImageView(
         vk::Image image,
         uint32_t mipLevels,

@@ -238,14 +238,24 @@ struct ParticleEmitterAsset
     // billboard/ribbon 默认 unlit；开启后按相机朝向法线接收 CSM 阴影
     // 调暗，属于显式的简化光照开关，不启用完整 PBR。
     bool billboardShadows = false;
-    // billboard 专用运行时照明：以相机朝向法线作为表面法线，消费场景
-    // 第一个方向光的线色；这是 sprite 的着色近似，不引入编辑器材质状态。
+    // billboard/ribbon 运行时照明：以相机朝向法线作为表面法线，消费全部
+    // 场景灯与 GPU 粒子灯（含局部阴影），并叠加 IBL 环境项；这是 sprite
+    // 的着色近似，不引入编辑器材质状态。开启条件仍是场景存在有效方向光
+    // （见 ParticleRenderer::Synchronize），避免把原本 unlit 的资产意外压黑。
     bool billboardLighting = false;
     float billboardAmbient = 0.2f;
-    // billboard/ribbon 直接光强度（0..1）。sprite 是体积感卡片，逐像素
-    // 直接光按固体表面全量求值会过曝；该系数只缩放直接光，环境项仍由
-    // billboardAmbient 控制。默认 1 表示不额外衰减。
+    // billboard/ribbon 光照替换比例（0..1）：0 = 完全保留 authored 颜色，
+    // 1 = 完全使用场景光照。sprite 是体积感卡片，逐像素直接光按固体表面
+    // 全量求值会过曝，所以用插值而不是纯乘法；默认 1 表示完全使用场景光照。
     float billboardLightingStrength = 1.0f;
+    // sprite 镜面近似：billboard 没有几何法线，只做法线=视线方向的
+    // 单 lobe GGX，让烟雾在侧光/逆光下有一点边缘高光。0 完全关闭。
+    float billboardSpecular = 0.1f;
+    // 上述 GGX lobe 的感知粗糙度；0 会产生针状高光，因此校验下限取 0.02。
+    float billboardRoughness = 0.6f;
+    // Henyey-Greenstein 前向散射权重（0..2）：逆光时让光从烟团背面
+    // 透过来，0 表示只保留 wrapped Lambert。只作用于直接光。
+    float billboardForwardScattering = 0.35f;
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;

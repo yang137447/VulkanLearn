@@ -485,6 +485,18 @@ ParticleEmitterAsset ParseEmitter(
         json,
         "billboardLightingStrength",
         emitter.billboardLightingStrength);
+    emitter.billboardSpecular = ReadFiniteFloat(
+        json,
+        "billboardSpecular",
+        emitter.billboardSpecular);
+    emitter.billboardRoughness = ReadFiniteFloat(
+        json,
+        "billboardRoughness",
+        emitter.billboardRoughness);
+    emitter.billboardForwardScattering = ReadFiniteFloat(
+        json,
+        "billboardForwardScattering",
+        emitter.billboardForwardScattering);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
@@ -2088,6 +2100,31 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle billboardLightingStrength must be in [0, 1]");
+    }
+    RequireFinite(emitter.billboardSpecular, "billboardSpecular");
+    if (emitter.billboardSpecular < 0.0f ||
+        emitter.billboardSpecular > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardSpecular must be in [0, 1]");
+    }
+    // 下限 0.02：roughness=0 时 GGX 退化成 delta 分布，屏幕上会出现
+    // 单像素针状高光；保留一个足够窄但有限的高光核。
+    RequireFinite(emitter.billboardRoughness, "billboardRoughness");
+    if (emitter.billboardRoughness < 0.02f ||
+        emitter.billboardRoughness > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardRoughness must be in [0.02, 1]");
+    }
+    RequireFinite(
+        emitter.billboardForwardScattering,
+        "billboardForwardScattering");
+    if (emitter.billboardForwardScattering < 0.0f ||
+        emitter.billboardForwardScattering > 2.0f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardForwardScattering must be in [0, 2]");
     }
     if (emitter.renderMode == "mesh")
     {

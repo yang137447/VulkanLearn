@@ -156,6 +156,9 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 shadowCasterParams;
     // xyz = 点光位置；仅八面体模式使用。w 保留。
     vec4 shadowLightPosition;
+    // billboard/ribbon 材质近似：x = specular 强度, y = roughness,
+    // z = 前向散射权重, w 保留。追加在末尾，既有偏移不变。
+    vec4 billboardLightParams2;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

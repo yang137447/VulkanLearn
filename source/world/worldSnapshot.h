@@ -15,6 +15,7 @@
 #include "baseStructs.h"
 #include "decalResponse.h"
 #include "environmentType.h"
+#include "render/volumetricFog/volumetricFogSettings.h"
 #include "particles/particleAsset.h"
 #include "particles/particleRuntimeState.h"
 #include "render/camera/cameraExposure.h"
@@ -115,6 +116,8 @@ struct EnvironmentSnapshot
     ResourceHandle brdfLut;
     float intensity = 1.0f;
     SkyParametersGPU skyParameters;
+    // 体积雾作者参数；enabled=false 表示该场景不启用体积雾。
+    FogSettings fog;
 };
 
 // 粒子运行时遥测分成两层：CPU 作者态计数由 World 维护，alive/预算执行结果

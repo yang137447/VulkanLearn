@@ -193,6 +193,38 @@ on its existing `shadowMap` array; a point/spot light without an assigned slice
 reports full visibility. GPU particle lights never allocate a local shadow
 slice.
 
+## Volumetric Fog
+
+`environment.fog` enables a height-fog / in-scattering pass:
+
+```json
+"fog": {
+    "enabled": true,
+    "density": 0.0003,
+    "heightFalloff": 0.35,
+    "baseHeight": 0.0,
+    "albedo": [0.75, 0.82, 1.0],
+    "anisotropy": 0.4,
+    "intensity": 1.0
+}
+```
+
+`density` and `heightFalloff` are per meter; `baseHeight` is centimeters.
+The pass order is `particle → particleDistortion → volumetricFog →
+fogComposite → editorGrid → autoExposure → bloomPrefilter`. The fog volume is
+a quarter-resolution `RGBA16F` `texture2DArray` with 32 exponentially spaced
+depth layers. Each layer integrates only the previous segment, so the cost is
+O(layers) per froxel; directional light is shadowed by CSM, point/spot by the
+local shadow atlas, and GPU particle lights contribute without shadows.
+`fogComposite` samples the two neighboring layers by pixel view depth and
+composites with premultiplied over into `sceneColor` before Bloom, so Bloom
+and auto exposure see the fogged color.
+
+Limits: no temporal denoising (there is no TAA), no froxel light list (all
+in-range lights are iterated per froxel), and the offline render path does not
+record the fog pass. Fog brightness follows the physical light intensity, so
+bright flash lights need very low `density` values (about `0.0001`/m).
+
 ## Camera Exposure
 
 Every camera must provide:

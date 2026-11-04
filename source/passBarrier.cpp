@@ -350,7 +350,10 @@ void PassBarrier::TransitionStorage(vk::CommandBuffer& commandBuffer,
     const auto& resource = graph.GetResourcesResolve().at(resourceName).at(imageIndex);
     vk::ImageMemoryBarrier barrier;
     barrier.setImage(resource.image)
-        .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1))
+        // 体积雾把 texture2DArray 的每个数组层都当独立深度层写入/采样；
+        // 只转换 layer 0 会让其余层停留在 GENERAL，触发 imageLayout-00344。
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            vk::ImageAspectFlagBits::eColor, 0, 1, 0, resource.arrayLayers))
         .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
         .setOldLayout(toStorage ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral)
         .setNewLayout(toStorage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal)

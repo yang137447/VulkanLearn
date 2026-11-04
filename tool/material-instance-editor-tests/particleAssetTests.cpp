@@ -2862,6 +2862,84 @@ TEST(ParticleAsset, BillboardLightingParsesAndRejectsInvalidAmbient)
         std::invalid_argument);
 }
 
+TEST(ParticleAsset, BillboardMaterialLobeDefaults)
+{
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(),
+        "Maps/SC_test/PS_billboard_lobes_default.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardSpecular, 0.1f);
+    EXPECT_FLOAT_EQ(asset.emitters[1].billboardSpecular, 0.1f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardRoughness, 0.6f);
+    EXPECT_FLOAT_EQ(asset.emitters[1].billboardRoughness, 0.6f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].billboardForwardScattering,
+        0.35f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[1].billboardForwardScattering,
+        0.35f);
+}
+
+TEST(ParticleAsset, BillboardMaterialLobesParseAndValidateRanges)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardSpecular"] = 0.45;
+    document["emitters"][0]["billboardRoughness"] = 0.25;
+    document["emitters"][0]["billboardForwardScattering"] = 1.5;
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document,
+        "Maps/SC_test/PS_billboard_lobes.json");
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardSpecular, 0.45f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardRoughness, 0.25f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].billboardForwardScattering,
+        1.5f);
+
+    // 镜面强度
+    document["emitters"][0]["billboardSpecular"] = -0.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_specular_low.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardSpecular"] = 1.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_specular_high.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardSpecular"] = 0.4;
+
+    // 粗糙度下限是 0.02：0 会让 GGX 退化成 delta 高光。
+    document["emitters"][0]["billboardRoughness"] = 0.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_roughness_low.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardRoughness"] = 1.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_roughness_high.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardRoughness"] = 0.6;
+
+    document["emitters"][0]["billboardForwardScattering"] = -0.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_scatter_low.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardForwardScattering"] = 2.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_scatter_high.json"),
+        std::invalid_argument);
+    document["emitters"][0]["billboardForwardScattering"] =
+        std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_billboard_scatter_nan.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, MeshLightingFieldsRoundTripThroughEditorPath)
 {
     Json document = MultiEmitterDocument();

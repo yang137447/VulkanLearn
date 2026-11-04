@@ -127,6 +127,9 @@ void main()
             frame.cameraPosition.xyz,
             clamp(frame.billboardLightParams.y, 0.0, 1.0),
             clamp(frame.billboardLightParams.z, 0.0, 1.0),
+            clamp(frame.billboardLightParams2.x, 0.0, 1.0),
+            clamp(frame.billboardLightParams2.y, 0.02, 1.0),
+            clamp(frame.billboardLightParams2.z, 0.0, 2.0),
             directionalShadow);
     }
     else if (frame.shadowParams.w > 0.5)

@@ -498,7 +498,8 @@ void RHIDeviceVulkan::TransitionImageLayout(
     uint32_t mipLevels,
     vk::Format format,
     vk::ImageLayout oldLayout,
-    vk::ImageLayout newLayout)
+    vk::ImageLayout newLayout,
+    uint32_t layerCount)
 {
     const VulkanImageResource& resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
@@ -511,7 +512,8 @@ void RHIDeviceVulkan::TransitionImageLayout(
         GetCommandPool(),
         GetGraphicsQueue(),
         oldLayout,
-        newLayout);
+        newLayout,
+        layerCount);
 }
 
 RHIImageViewHandle RHIDeviceVulkan::Create2DImageView(

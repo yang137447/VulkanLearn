@@ -1142,9 +1142,16 @@ void RendererBackendVulkan::TransitionImageLayout(
     uint32_t mipLevels,
     vk::Format format,
     vk::ImageLayout oldLayout,
-    vk::ImageLayout newLayout)
+    vk::ImageLayout newLayout,
+    uint32_t layerCount)
 {
-    rhiDevice->TransitionImageLayout(RequireImageHandle(image), mipLevels, format, oldLayout, newLayout);
+    rhiDevice->TransitionImageLayout(
+        RequireImageHandle(image),
+        mipLevels,
+        format,
+        oldLayout,
+        newLayout,
+        layerCount);
 }
 
 vk::ImageView RendererBackendVulkan::Create2DImageView(

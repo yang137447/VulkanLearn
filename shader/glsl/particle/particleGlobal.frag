@@ -19,6 +19,7 @@ layout(location = 12) in flat vec4 vLightParams;
 layout(location = 13) in flat vec3 vLightDirection;
 layout(location = 14) in flat vec3 vLightColor;
 layout(location = 15) in flat vec3 vLightingNormal;
+layout(location = 16) in flat vec4 vLightParams2;
 
 layout(location = 0) out vec4 outColor;
 
@@ -145,6 +146,9 @@ void main()
             frame.cameraPosition.xyz,
             clamp(vLightParams.y, 0.0, 1.0),
             clamp(vLightParams.z, 0.0, 1.0),
+            clamp(vLightParams2.x, 0.0, 1.0),
+            clamp(vLightParams2.y, 0.02, 1.0),
+            clamp(vLightParams2.z, 0.0, 2.0),
             1.0);
     }
     if (outColor.a > 0.0)

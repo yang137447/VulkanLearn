@@ -172,6 +172,97 @@ float ParticleWrappedDiffuse(float normalLight, float wrap)
         1.0);
 }
 
+// 零长度方向（相机位于粒子中心、粒子灯恰好落在片元上）会让 normalize
+// 产生 NaN；这里退回 +Y，保证 specular/前向散射只退化为 0 而不是污染整帧。
+vec3 ParticleBillboardSafeDirection(vec3 direction)
+{
+    float lengthSquared = dot(direction, direction);
+    return lengthSquared > 1.0e-8
+        ? direction * inversesqrt(lengthSquared)
+        : vec3(0.0, 1.0, 0.0);
+}
+
+// billboard 的廉价 GGX 镜面 lobe。
+//
+// sprite 没有真实几何法线，调用方传的是面向相机的法线；因此这里只保留
+// 解析光形式的 D*G*F/(4*NoV)（公式里已经乘过 NoL），不引入 IBL 或
+// 多次散射近似。roughness 由作者参数给出，避免烟团出现针状高光。
+float ParticleBillboardSpecularLobe(
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 lightDirection,
+    float roughness)
+{
+    vec3 n = ParticleBillboardSafeDirection(normal);
+    vec3 v = ParticleBillboardSafeDirection(viewDirection);
+    vec3 l = ParticleBillboardSafeDirection(lightDirection);
+    float normalLight = dot(n, l);
+    float normalView = max(dot(n, v), 0.0);
+    // 光在卡片背面时镜面 lobe 视为 0；逆光的透光感交给前向散射项。
+    if (normalLight <= 0.0 || normalView <= 0.0)
+    {
+        return 0.0;
+    }
+    vec3 h = normalize(l + v);
+    float distribution = DistributionGGX(n, h, roughness);
+    float geometry = ParticleGeometrySmith(n, v, l, roughness);
+    float fresnel = 0.04 + 0.96 * pow(
+        clamp(1.0 - max(dot(h, v), 0.0), 0.0, 1.0),
+        5.0);
+    return distribution * geometry * fresnel /
+        max(4.0 * normalView, 1.0e-4);
+}
+
+// 归一化 Henyey-Greenstein 相位（g = 0.6）。
+//
+// cosTheta = dot(-L, V)：L 是表面指向光源的方向，-L 是光传播方向；它与
+// 视线同向时就是逆光（光从粒子背面穿向相机）。
+// 原始 HG 的峰值是 (1+g)/(1-g)^2，这里除掉该峰值，使完美逆光处等于 1，
+// 作者参数 billboardForwardScattering 就可以直接理解成“额外多少份漫反射”。
+float ParticleBillboardForwardScattering(
+    vec3 lightDirection,
+    vec3 viewDirection)
+{
+    const float g = 0.6;
+    float cosTheta = clamp(
+        dot(
+            -ParticleBillboardSafeDirection(lightDirection),
+            ParticleBillboardSafeDirection(viewDirection)),
+        -1.0,
+        1.0);
+    float denominator = max(
+        1.0 + g * g - 2.0 * g * cosTheta,
+        1.0e-4);
+    float phase = (1.0 - g * g) /
+        (denominator * sqrt(denominator));
+    return phase * (1.0 - g) * (1.0 - g) / (1.0 + g);
+}
+
+// billboard/ribbon 单盏灯的附加项：镜面 + 前向散射。两项都与漫反射共享
+// 同一份 radiance（已含半径窗/聚光角/阴影），因此灯被遮挡时一起消失。
+vec3 AccumulateParticleBillboardMaterialLobes(
+    vec3 baseColor,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 lightDirection,
+    vec3 radiance,
+    float specularStrength,
+    float roughness,
+    float forwardScattering)
+{
+    float specular = ParticleBillboardSpecularLobe(
+        normal,
+        viewDirection,
+        lightDirection,
+        roughness);
+    float transmission = ParticleBillboardForwardScattering(
+        lightDirection,
+        viewDirection);
+    return radiance * (
+        specularStrength * specular +
+        forwardScattering * transmission * baseColor / PI);
+}
+
 // 环境漫反射近似：粒子 UBO 不含 GPU 写的 SH 系数，无法在 CPU 侧复制；
 // 预过滤 cubemap 的最高 mip 已接近全粗糙方向平均，直接作为 irradiance
 // 近似可保持与场景 IBL 同量级，且不需要额外 UBO 通道。
@@ -432,13 +523,16 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
     return lighting;
 }
 
-// billboard/ribbon 的完整场景光照：漫反射 wrapped Lambert，无镜面 lobe。
+// billboard/ribbon 的完整场景光照：wrapped Lambert 漫反射 + 廉价 GGX 镜面
+// + Henyey-Greenstein 前向散射（半透明体积近似）。
 // directionalShadow 只作用于方向光；点光/聚光走各自的 localShadowMap slice，
 // GPU 粒子灯仍是无阴影的裸点光（见 CalculateParticleLightLobes 的合同）。
 // lightingStrength 是“场景光照替换 authored 颜色的比例”：0 = 完全保留
 // unlit 作者颜色，1 = 完全使用场景光照。粒子资产通常把颜色作者化成最终
 // 观感（偏 emissive），直接相乘会在暗场景掉亮度、在强光附近过曝；因此
 // 用插值而不是纯乘法，让美术可以按效果调节被灯染色的程度。
+// specularStrength / roughness / forwardScattering 只影响直接光附加项，
+// 三项都包含在最终的 mix 里，所以 lightingStrength=0 时仍然完全 unlit。
 vec3 CalculateParticleBillboardSceneLighting(
     sampler2DArrayShadow localShadowMap,
     vec3 baseColor,
@@ -447,9 +541,14 @@ vec3 CalculateParticleBillboardSceneLighting(
     vec3 cameraPosition,
     float ambientScale,
     float lightingStrength,
+    float specularStrength,
+    float roughness,
+    float forwardScattering,
     float directionalShadow)
 {
     vec3 normal = normalize(lightingNormal);
+    vec3 viewDirection = ParticleBillboardSafeDirection(
+        cameraPosition - pixelPosition);
     vec3 lighting = vec3(0.0);
     const float wrap = 0.5;
 
@@ -458,7 +557,8 @@ vec3 CalculateParticleBillboardSceneLighting(
     for (int index = offset; index < end; ++index)
     {
         ParticleSceneLightGPU light = particleSceneLights.lights[index];
-        vec3 lightDirection = normalize(-light.directionPad.xyz);
+        vec3 lightDirection = ParticleBillboardSafeDirection(
+            -light.directionPad.xyz);
         float wrapped = ParticleWrappedDiffuse(
             dot(normal, lightDirection),
             wrap);
@@ -467,6 +567,15 @@ vec3 CalculateParticleBillboardSceneLighting(
             light.colorIntensity.w *
             directionalShadow;
         lighting += baseColor / PI * radiance * wrapped;
+        lighting += AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            lightDirection,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
     }
 
     offset = particleSceneLights.pointLightOffset;
@@ -498,6 +607,15 @@ vec3 CalculateParticleBillboardSceneLighting(
                 light.coneAngleOuterInnerPadPad.x,
                 pixelPosition);
         lighting += baseColor / PI * radiance * wrapped;
+        lighting += AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            offsetToLight,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
     }
 
     offset = particleSceneLights.spotLightOffset;
@@ -506,7 +624,7 @@ vec3 CalculateParticleBillboardSceneLighting(
     {
         ParticleSceneLightGPU light = particleSceneLights.lights[index];
         vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
-        vec3 surfaceToLight = normalize(offsetToLight);
+        vec3 surfaceToLight = ParticleBillboardSafeDirection(offsetToLight);
         float spotAngle = acos(clamp(dot(
             surfaceToLight,
             -light.directionPad.xyz), -1.0, 1.0));
@@ -539,6 +657,15 @@ vec3 CalculateParticleBillboardSceneLighting(
                 light.coneAngleOuterInnerPadPad.x,
                 pixelPosition);
         lighting += baseColor / PI * radiance * wrapped;
+        lighting += AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            surfaceToLight,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
     }
 
     uint particleLightCount = min(particleLightSSBO.header.x, 64u);
@@ -566,6 +693,15 @@ vec3 CalculateParticleBillboardSceneLighting(
             light.colorIntensity.xyz *
             light.colorIntensity.w;
         lighting += baseColor / PI * radiance * wrapped;
+        lighting += AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            offsetToLight,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
     }
 
     // ambientScale 沿用作者的 billboardLightParams.y。常量 ambient 保留为

@@ -43,7 +43,8 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "additive", "meshLighting", "meshAmbient", "castShadows",
                 "materialInstancePath", "billboardShadows",
                 "billboardLighting", "billboardAmbient",
-                "billboardLightingStrength",
+                "billboardLightingStrength", "billboardSpecular",
+                "billboardRoughness", "billboardForwardScattering",
                 "beam.colorKeys", "beam.widthKeys", "beam.arcs",
                 "beam.hitScan"}},
         {"spawn.rate", "Spawn Rate",
@@ -248,7 +249,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "castShadows",
             "materialInstancePath", "billboardShadows",
             "billboardLighting", "billboardAmbient",
-            "billboardLightingStrength",
+            "billboardLightingStrength", "billboardSpecular",
+            "billboardRoughness", "billboardForwardScattering",
             "beam.colorKeys", "beam.widthKeys", "beam.arcs"}) ||
         HasPrefix(field, "mesh.") ||
         HasPrefix(field, "beam.") ||

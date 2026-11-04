@@ -20,6 +20,8 @@ struct GatheredBillboard
     vec4 lightParams; // x=lighting enabled, y=ambient, z/w reserved
     vec4 lightDirection;
     vec4 lightColor;
+    // x=specular 强度, y=roughness, z=前向散射权重, w 保留
+    vec4 lightParams2;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer ParticleBuffer
@@ -285,5 +287,6 @@ void main()
     record.lightParams = frame.billboardLightParams;
     record.lightDirection = frame.meshLightDirection;
     record.lightColor = frame.meshLightColor;
+    record.lightParams2 = frame.billboardLightParams2;
     gatheredBuffer.records[slot] = record;
 }

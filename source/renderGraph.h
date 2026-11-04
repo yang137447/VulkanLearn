@@ -51,6 +51,8 @@ namespace VL
 {
 class RendererBackendVulkan;
 class AutoExposureCompute;
+class VolumetricFogRenderer;
+struct RendererDescriptorContext;
 
 enum class RenderGraphReleaseMode
 {
@@ -198,6 +200,16 @@ public:
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     void InitializeAutoExposure(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
     const std::shared_ptr<VL::AutoExposureCompute>& GetAutoExposure() const noexcept { return autoExposure; }
+    // 体积雾注入/合成 owner。没有 volumetricFog/fogComposite pass 的自定义图
+    // 不会创建它；调用方必须按空指针处理。
+    void InitializeVolumetricFog(
+        PipelineFactory& factory,
+        VL::RendererBackendVulkan& backend,
+        const VL::RendererDescriptorContext& descriptorContext);
+    const std::shared_ptr<VL::VolumetricFogRenderer>& GetVolumetricFog() const noexcept
+    {
+        return volumetricFog;
+    }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // 每个 acquired image 独占一张完整 backing extent 的单采样输出，生命周期
@@ -268,6 +280,7 @@ private:
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::shared_ptr<VL::AutoExposureCompute> autoExposure;
+    std::shared_ptr<VL::VolumetricFogRenderer> volumetricFog;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
     std::vector<RenderResource> sceneViewportOutputs;
 

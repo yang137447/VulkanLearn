@@ -854,6 +854,12 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   `billboardLighting` 与 `billboardShadows` 同时开启时，直接光乘 CSM shadow，而不是
   再叠加旧的 50% 调暗。additive billboard 也消费同一光照；需要自发光时应显式关闭
   `billboardLighting`。
+- `billboardSpecular` / `billboardRoughness` / `billboardForwardScattering`：
+  默认 `0.1` / `0.6` / `0.35`，范围 `[0,1]` / `[0.02,1]` / `[0,2]`。
+  前两者给 sprite 一个廉价 GGX 镜面 lobe；后者是归一化 Henyey-Greenstein
+  前向散射项，让逆光烟产生透光感。三项都只在 `billboardLighting: true` 时
+  生效，并共享 `billboardLightingStrength` 的 authored→lit 插值。ribbon
+  也使用同一组参数（法线取面向相机的视线方向）。
 - `rotation`：billboard 初始旋转角，单位度，任意有限数，默认 `0`。
 - `rotationSpeed`：随时间累加的旋转速度，单位度/秒，默认 `0`，范围 `[-3600, 3600]`。
 - `rotationRandom`：默认 `false`；为 `true` 时每个粒子用稳定相位叠加 `[0,360)` 度的初始角。
