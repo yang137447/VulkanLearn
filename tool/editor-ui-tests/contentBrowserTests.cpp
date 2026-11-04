@@ -329,6 +329,7 @@ TEST_F(ContentBrowserTest, ThumbnailRequestsAreWindowBoundedAndIncludeRenderable
         catalog->assets.push_back({"Common/T_" + std::to_string(i) + ".json", EditorAssetKind::Texture, "Texture"});
     catalog->assets.push_back({"Common/MI_material.json", EditorAssetKind::MaterialInstance, "Material"});
     catalog->assets.push_back({"Common/SM_mesh.json", EditorAssetKind::Mesh, "Mesh"});
+    catalog->assets.push_back({"Common/TF_guides.json", EditorAssetKind::Tressfx, "Hair"});
     catalog->assets.push_back({"Common/SC_scene.json", EditorAssetKind::Scene, "Scene"});
     catalog->assets.push_back({"Common/TR_terrain.json", EditorAssetKind::Terrain, "Terrain"});
     snapshot.assetCatalog = catalog;
@@ -340,11 +341,33 @@ TEST_F(ContentBrowserTest, ThumbnailRequestsAreWindowBoundedAndIncludeRenderable
     EXPECT_LT(requests.size(), catalog->assets.size());
     EXPECT_NE(std::find(requests.begin(), requests.end(), "Common/MI_material.json"), requests.end());
     EXPECT_NE(std::find(requests.begin(), requests.end(), "Common/SM_mesh.json"), requests.end());
+    EXPECT_NE(std::find(requests.begin(), requests.end(), "Common/TF_guides.json"), requests.end());
     EXPECT_EQ(std::find(requests.begin(), requests.end(), "Common/SC_scene.json"), requests.end());
     EXPECT_EQ(std::find(requests.begin(), requests.end(), "Common/TR_terrain.json"), requests.end());
     EXPECT_TRUE(docking.SetPanelVisible("content", false));
     Refresh();
     EXPECT_TRUE(browser.VisibleThumbnailPaths().empty());
+}
+
+TEST_F(ContentBrowserTest, TressfxFilterIsIndependentFromMeshAndDispatchesItsOwnKind)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {
+        {"Models/SM_body.json", EditorAssetKind::Mesh, "Body"},
+        {"Models/TF_hair.json", EditorAssetKind::Tressfx, "Hair"}
+    };
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    SetValue("browser-type", "mesh");
+    EXPECT_EQ(Paths(), std::vector<std::string>{"Models/SM_body.json"});
+    SetValue("browser-type", "tressfx");
+    EXPECT_EQ(Paths(), std::vector<std::string>{"Models/TF_hair.json"});
+    ASSERT_EQ(Items().size(), 1u);
+    EXPECT_TRUE(Items().front()->IsClassSet("asset-kind-tressfx"));
+    EXPECT_EQ(Items().front()->QuerySelector(".asset-kind")->GetInnerRML(), "TressFX");
+    Send(Items().front(), "dblclick");
+    ASSERT_FALSE(openedPaths.empty());
+    EXPECT_EQ(openedPaths.back(), "Models/TF_hair.json");
 }
 
 TEST_F(ContentBrowserTest, GpuThumbnailDisplaysAndRefreshReturnsToPlaceholderWithoutReplacingTile)

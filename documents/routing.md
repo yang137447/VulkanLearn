@@ -35,12 +35,27 @@
 | `source/script/scriptPhysics.*`、`source/script/scriptRuntime.cpp`、`source/world/loading/terrainCollisionInstances.*`、`source/world/world.h` | `contracts/terrain.md`、`contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/terrain.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
+| `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md`、`contracts/testing.md` | — |
+| `source/mesh/loader/hair/**`、`shader/glsl/engine/tressfxVertexFactory.glsl`、`shader/glsl/engine/tressfxCoverage.glsl`、`shader/glsl/hair/**`、`tool/material-schema-tests/tressfxMaterialTests.cpp` | `contracts/tressfx-asset-import.md`、`contracts/material-mesh-pass-composition.md`、`contracts/testing.md` | — |
+| `source/physics/**` | `contracts/fracture-core.md` | — |
+| `source/physics/fracture/fractureBudget.*` | `contracts/fracture-budget.md` | — |
+| `source/physics/fracture/destructibleProfile.*`、`plateFracturePolicy.*` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/glass-fracture-runtime.md` | — |
+| `tool/fracture-core-tests/**` | `contracts/fracture-core.md`、`contracts/fracture-budget.md`、`contracts/testing.md` | — |
+| `source/engine/softBodyRuntime.*` | `contracts/softbody-runtime.md`、`contracts/fracture-budget.md` | — |
+| `source/engine/glassRuntime.*` | `contracts/glass-fracture-runtime.md`、`contracts/fracture-budget.md` | — |
+| `source/engine/projectileRuntime.*` | `contracts/projectile-shooting-runtime.md` | — |
+| `source/engine/destructibleRuntime.*` | `contracts/projectile-shooting-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/softbody-runtime.md` | — |
+| `source/physics/runtime/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
+| `source/audio/**` | `contracts/audio-runtime.md`、`contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
+| `tool/physics-runtime-tests/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/testing.md` | — |
+| `source/ui/sceneObjectTypeSupport.h` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/game-ui-stack.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
-| `source/render/backend/**` | `contracts/vulkanlearn-architecture.html` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/render/backend/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html` | — |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
-| `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
+| `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
 | `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
@@ -205,6 +220,13 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 ## 规划入口（非契约）
 
+- [实时破碎物理与声音研究计划](plan/physics/realtime-fracture-and-audio-plan.md)：
+  玻璃冲击/二次碎裂、气球破裂和事件驱动声音的混合路线、数据模型、里程碑与风险；
+  当前已落地运行时平面/球面破碎、橡皮膜软壳、Jolt 冲击、动态网格、落地音和气球爆裂读感；
+  玻璃、复杂物体和高级空间音频仍在计划中。
+- [气球爆裂手感研究](plan/physics/balloon-burst-feel-research.md)：
+  气球橡胶膜充气/撕裂/回缩、实时碎片条带、宽带爆裂声与视觉时序的证据和调参建议；
+  非契约研究记录，具体实现以 `contracts/softbody-runtime.md` 和源码为准。
 - [地形系统：Open World Demo Collection 复刻计划](plan/rendering/terrain-openworld-demo-plan.md)：
   当前地形目标。CPU 高度图网格 + 最多 32 层 + tile 候选层 + ID/权重图 top-4；
   GPU-driven/VT 与几何 streaming 仍搁置；CPU 几何 LOD 已接运行时选择

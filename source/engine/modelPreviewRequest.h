@@ -32,4 +32,19 @@ inline nlohmann::json BuildMaterialPreviewObjects(const std::string& materialPat
     return objects;
 }
 
+// 保留目标/源各自的厘米骨长；并排偏移仅用于观察，不回写 SM 或参与 retarget 数学。
+inline nlohmann::json BuildRetargetPreviewObjects(const std::string& target, const std::string& source,
+    const std::string& profile)
+{
+    auto objects = BuildModelPreviewObjects(target);
+    objects[0]["position"] = {65.0, 0.0, 0.0};
+    objects[0]["scale"] = {1.0, 1.0, 1.0};
+    auto sourceObject = objects[0];
+    sourceObject["name"] = "preview_retarget_source|" + profile;
+    sourceObject["modelPath"] = source;
+    sourceObject["position"] = {-65.0, 0.0, 0.0};
+    objects.push_back(std::move(sourceObject));
+    return objects;
+}
+
 } // namespace VL

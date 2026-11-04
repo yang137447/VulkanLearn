@@ -18,6 +18,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.selected = drawSnapshot.selected;
     packet.debugName = drawSnapshot.debugName;
     packet.sceneObjectIdentity = drawSnapshot.sceneObjectIdentity;
+    packet.simulationDeltaSeconds = drawSnapshot.simulationDeltaSeconds;
     packet.materialSlotIndex = drawSnapshot.materialSlotIndex;
     packet.materialSlotName = drawSnapshot.materialSlotName;
     packet.mesh = drawSnapshot.mesh;
@@ -25,7 +26,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.materialInstance = drawSnapshot.materialInstance;
     packet.model = drawSnapshot.model;
     packet.previousModel = drawSnapshot.previousModel;
-    if (!drawSnapshot.speedTreeWindProfileKey.empty())
+    if (!drawSnapshot.windResponseProfileKey.empty())
     {
         packet.speedTreeWorldToLocalDirection =
             BuildSpeedTreeWorldToLocalDirectionMatrix(drawSnapshot.model);
@@ -36,6 +37,12 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.terrainFeedbackEligible =
         drawSnapshot.terrainFeedbackEligible;
     packet.isTerrain = drawSnapshot.isTerrain;
+    packet.windResponseProfileKey = drawSnapshot.windResponseProfileKey;
+    packet.tressfxPointsPerGuide = drawSnapshot.tressfxPointsPerGuide;
+    packet.tressfxSelectedGroup = drawSnapshot.tressfxSelectedGroup;
+    packet.tressfxGroupFlags = drawSnapshot.tressfxGroupFlags;
+    packet.placementTemplateMeshKey = drawSnapshot.placementTemplateMeshKey;
+    packet.placementBinding = drawSnapshot.placementBinding;
     return packet;
 }
 
@@ -115,9 +122,16 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     RenderScene renderScene;
     renderScene.worldGeneration = snapshot.worldGeneration;
     renderScene.frameIndex = snapshot.frameIndex;
+    renderScene.hairSimulationDeltaSeconds = snapshot.hairSimulationDeltaSeconds;
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
     renderScene.environment = snapshot.environment;
+    renderScene.wind = snapshot.wind;
+    // 非实时消费者（编辑器缩略图/离线预检）不会经过 RenderSystem 的
+    // SceneWindRuntime；这里先给未缓动的作者值作兜底。实时路径每帧会被
+    // AdvanceSceneWind 的解析结果覆盖。
+    renderScene.resolvedWind.direction = snapshot.wind.direction;
+    renderScene.resolvedWind.strength = snapshot.wind.strength;
     renderScene.debugViewMode = snapshot.debugViewMode;
 
     renderScene.drawPackets.reserve(snapshot.meshDraws.size());

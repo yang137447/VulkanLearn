@@ -1,5 +1,6 @@
 #include "script/scriptPhysics.h"
 #include "script/scriptComponents.h"
+#include "physics/runtime/joltRuntime.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -142,7 +143,6 @@ struct ScriptPhysicsWorld::Impl
         }
     };
     RegistrationGuard registration;
-    // 与地形碰撞共享同一份进程级 Jolt 注册，避免二次 RegisterTypes()。
     JPH::BroadPhaseLayerInterfaceTable layers{2, 2};
     JPH::ObjectLayerPairFilterTable pairs{2};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broadphaseFilter;

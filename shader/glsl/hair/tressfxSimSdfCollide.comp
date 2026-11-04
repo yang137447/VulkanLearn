@@ -1,0 +1,70 @@
+#version 450
+
+// SDF 碰撞：TressFXSimulationCollideStrandsVerticesWithSDF.usf 的 VL 移植。
+// 一个 invocation 处理一根 strand，按 root→tip 串行；dispatch = ceil(guideCount/64)。
+//
+// - 跳过 local < rootFixedPoints 以及不可移动点（w == 0），与 Integration pass
+//   的 pinned 规则一致；参考 shader 只按 NumVerticesFromRootBeforeSDFCollision 跳过。
+// - 先在点位置三线性采样**有符号**距离，distance > margin 直接早退；否则用同一
+//   场的中心差分梯度，归一化后把点推到 margin。有符号距离下内部点是负值，因此
+//   总会被处理；梯度指向距离增大的方向（外侧），内部点会穿过表面被推到另一侧。
+//   梯度退化（点恰在表面等）跳过，避免 NaN。
+// - 只写 current positions，不重写 previous/历史。参考 shader 里
+//   GuidesDeformedPrevPositionBuffer 的写入同样是注释掉的，因此不产生碰撞速度
+//   冲量（无摩擦、接触略黏）。
+// - 符号来自最近三角形绕序法线（SignedDistancePointToTriangle 约定）。代理保留
+//   身体网格绕序，因此外侧为正、内侧为负；开放边/非流形边附近符号仍可能翻转
+//   （见合同显式近似）。
+#include "tressfxSimCommon.glsl"
+#include "tressfxSdfCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+// x=胶囊、y=SDF 的碰撞前最大穿透深度（厘米）；uint 位模式供 atomicMax。
+layout(set = 0, binding = 16, std430) buffer PenetrationStats
+{
+    uint stats[];
+} penetrationStats;
+
+const float TressfxSdfGradientEpsilonSquared = 1.0e-12;
+
+void main()
+{
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
+        return;
+
+    const uint pointsPerGuide = TressfxPointsPerGuide();
+    const uint root = guide * pointsPerGuide;
+    const uint rootFixedPoints = TressfxRootFixedPoints();
+    const float margin = sdf.range.x;
+
+    for (uint local = rootFixedPoints; local < pointsPerGuide; ++local)
+    {
+        const uint point = root + local;
+        vec4 position = currentPositions.positions[point];
+        if (!TressfxIsMovable(position.w))
+            continue;
+
+        const float distance = SdfTrilinear(position.xyz);
+        if (distance > margin)
+            continue;
+        // 有符号距离为负表示点在代理内部；记录进入身体的深度。
+        if (distance < 0.0)
+            atomicMax(penetrationStats.stats[1], floatBitsToUint(-distance));
+
+        const vec3 gradient = SdfGradient(position.xyz);
+        if (!(dot(gradient, gradient) > TressfxSdfGradientEpsilonSquared))
+            continue;
+
+        // 与参考 shader 相同的投影量：normalize(gradient) * (margin - distance)。
+        const vec3 normal = normalize(gradient);
+        position.xyz += normal * (margin - distance);
+        currentPositions.positions[point] = position;
+    }
+}

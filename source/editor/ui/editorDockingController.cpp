@@ -17,6 +17,7 @@
 #include <RmlUi/Core/Event.h>
 
 #include "ui/widgets/text/textWidgets.h"
+#include "ui/widgets/navigation/tabWidgets.h"
 
 namespace VL::EditorUi
 {
@@ -34,6 +35,7 @@ std::string BodyId(const std::string& panel)
     if (panel == "content") return "content-browser-page";
     if (panel == "log") return "log-page";
     if (panel == "terrain") return "terrain-page";
+    if (panel == "performance") return "performance-page";
     if (panel.rfind("resource:material:", 0) == 0) return "material-editor";
     if (panel == "resource" || DockWorkspace::IsResourceDocumentPanel(panel))
         return "resource-editor";
@@ -48,6 +50,7 @@ std::string TabId(const std::string& panel)
     if (panel == "content") return "workspace-content-tab";
     if (panel == "log") return "workspace-log-tab";
     if (panel == "terrain") return "workspace-terrain-tab";
+    if (panel == "performance") return "workspace-performance-tab";
     if (panel == "resource") return "workspace-resource-tab";
     if (DockWorkspace::IsResourceDocumentPanel(panel))
         return "workspace-resource-tab-" + panel.substr(9);
@@ -68,6 +71,7 @@ std::string BaseTabMarkup(const std::string& panel)
     if (panel == "renderer") return "<span>Renderer</span>";
     if (panel == "log") return "<span>Log</span>";
     if (panel == "terrain") return "<span>Landscape</span>";
+    if (panel == "performance") return "<span>Performance</span>";
     return "<img id=\"workspace-resource-icon\" src=\"icons/file-box.png\"/>"
         "<span id=\"workspace-resource-label\">Asset Editor</span>";
 }
@@ -79,12 +83,9 @@ std::string ResourceTabMarkup(const EditorDockResourceTab& tab)
     const std::string label = tab.label.empty()
         ? std::filesystem::path(tab.path).filename().string()
         : tab.label;
-    std::string markup = "<img class=\"resource-tab-icon\" src=\"" + Text(tab.icon) +
-        "\"/><span class=\"resource-tab-label\">" + Text(label) + "</span>";
-    if (tab.documentIndex >= 0)
-        markup += "<span class=\"tab-close\" data-action=\"close\" data-index=\"" +
-            std::to_string(tab.documentIndex) + "\" title=\"Close Material Instance\">x</span>";
-    return markup;
+    const size_t index = tab.documentIndex >= 0 ? static_cast<size_t>(tab.documentIndex) : 0;
+    return DocumentTabContent(label, {"workspace-tab", index, 0, tab.panel},
+        {"close", index, 0, tab.panel}, false, tab.icon);
 }
 
 // 每个标签的内容都在这里生成，且**永不产出空标签**：resource 文档面板若在 resourceTabs
@@ -352,6 +353,7 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
         if (version < 3)
         {
             bool hasTerrain = false;
+            bool hasPerformance = false;
             uint32_t contentStack = 0;
             uint32_t firstStack = 0;
             for (const auto& item : candidate.nodes)
@@ -362,12 +364,18 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
                 {
                     if (panel == "content") contentStack = item.first;
                     if (panel == "terrain") hasTerrain = true;
+                    if (panel == "performance") hasPerformance = true;
                 }
             }
             if (!hasTerrain)
             {
                 const uint32_t target = contentStack != 0 ? contentStack : firstStack;
                 if (target != 0) candidate.nodes.at(target).tabs.push_back("terrain");
+            }
+            if (!hasPerformance)
+            {
+                const uint32_t target = contentStack != 0 ? contentStack : firstStack;
+                if (target != 0) candidate.nodes.at(target).tabs.push_back("performance");
             }
         }
         if (HidesEveryPanel(candidate, candidateHidden))
@@ -677,12 +685,11 @@ void EditorDockingController::RebuildShell()
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
     {
-        resourceMarkup += "<button id=\"" + TabId(tab.panel) +
+        resourceMarkup += "<div id=\"" + TabId(tab.panel) +
             "\" data-workspace-panel=\"" + Text(tab.panel) +
-            "\" title=\"" + Text(tab.path) + "\" class=\"workspace-asset-tab " +
-            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">";
-        resourceMarkup += "<img src=\"" + Text(tab.icon) +
-            "\"/><span>" + Text(tab.label) + "</span></button>";
+            "\" title=\"" + Text(tab.path) + "\" class=\"document-tab workspace-asset-tab " +
+            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">" +
+            ResourceTabMarkup(tab) + "</div>";
     }
     document->GetElementById("dock-dynamic-tabs")->SetInnerRML(resourceMarkup);
     std::string markup;
@@ -730,15 +737,33 @@ void EditorDockingController::RebuildShell()
     structureDirty = false;
 }
 
+uint32_t EditorDockingController::ExpandedAssetStack() const
+{
+    for (const auto& tab : resourceTabs)
+        if (tab.panel == activeWorkspacePanel && IsPanelVisible(tab.panel))
+        {
+            const uint32_t stack = workspace.FindStack(tab.panel);
+            if (stack && workspace.State().nodes.at(stack).active == tab.panel) return stack;
+        }
+    return 0;
+}
+
 void EditorDockingController::ApplyGeometry()
 {
     const std::vector<uint32_t> collapsed = CollapsedStacks();
-    geometry = workspace.Layout(Bounds(), collapsed);
+    const uint32_t expanded = ExpandedAssetStack();
+    geometry = workspace.Layout(Bounds(), collapsed, expanded);
     // 整组隐藏的标签组不进入几何，也不渲染成空灰框；重新显示时由下一次 Sync 放回原位。
     for (const auto& item : workspace.State().nodes)
     {
-        if (item.second.IsSplit()) continue;
-        const bool folded = std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
+        if (item.second.IsSplit())
+        {
+            widgets.SetProperty("dock-split-" + std::to_string(item.first),
+                "display", expanded ? "none" : "block");
+            continue;
+        }
+        const bool folded = expanded ? item.first != expanded :
+            std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
         widgets.SetProperty("dock-stack-" + std::to_string(item.first), "display", folded ? "none" : "flex");
     }
     int floatingZ = 5;
@@ -768,13 +793,15 @@ void EditorDockingController::ApplyGeometry()
 void EditorDockingController::ApplyTabs()
 {
     std::unordered_map<std::string, bool> bodyActive;
+    const uint32_t expanded = ExpandedAssetStack();
     for (const auto& item : workspace.State().nodes)
     {
         if (item.second.IsSplit()) continue;
         for (const auto& panel : item.second.tabs)
         {
             const bool visible = IsPanelVisible(panel);
-            const bool active = visible && item.second.active == panel;
+            const bool active = visible && item.second.active == panel &&
+                (expanded == 0 || expanded == item.first);
             const std::string bodyId = BodyId(panel);
             bodyActive[bodyId] = bodyActive[bodyId] || active;
             widgets.SetClass(TabId(panel), "selected", active);
@@ -935,8 +962,13 @@ void EditorDockingController::Activate(const std::string& panel)
     if (!IsPanelVisible(panel)) return;
     if (workspace.Activate(panel))
     {
+        activeWorkspacePanel = panel;
         savePending = true;
-        if (document != nullptr) ApplyTabs();
+        if (document != nullptr)
+        {
+            ApplyGeometry();
+            ApplyTabs();
+        }
         if (panel == "terrain") EnsureTerrainPanelRoom();
     }
 }
@@ -948,9 +980,19 @@ std::string EditorDockingController::ResourcePathForPanel(const std::string& pan
     return {};
 }
 
+std::string EditorDockingController::PanelAfterClose(const std::string& panel) const
+{
+    if (!IsPanelActive(panel)) return {};
+    std::vector<std::string> eligible;
+    for (const auto& tab : resourceTabs)
+        if (IsPanelVisible(tab.panel)) eligible.push_back(tab.panel);
+    return workspace.TabAfterClose(panel, eligible, "viewport");
+}
+
 void EditorDockingController::Reset()
 {
     CancelDrag();
+    activeWorkspacePanel = "viewport";
     workspace.Reset();
     std::vector<std::string> panels;
     for (const auto& tab : resourceTabs) panels.push_back(tab.panel);
@@ -1125,6 +1167,14 @@ UiViewportRect EditorDockingController::GetSceneViewportRect() const
     auto* image = document->GetElementById("material-preview-image");
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("resource-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+        image = document->GetElementById("retarget-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+    {
+        auto* retargetSurface = document->GetElementById("retarget-preview-surface");
+        if (retargetSurface != nullptr && retargetSurface->IsVisible(true))
+            image = retargetSurface;
+    }
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("blueprint-asset-preview-surface");
     if (image == nullptr || !image->IsVisible(true))

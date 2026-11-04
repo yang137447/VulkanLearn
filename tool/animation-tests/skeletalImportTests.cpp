@@ -362,6 +362,11 @@ TEST_F(SkeletalImport, SkinPaletteUsesAllNineInfluencesAndDeformedBounds)
     }
     const auto& section = mesh.sections.front();
     const auto pose = VL::Animation::BuildSkinPose(section, models, 7);
+    const auto reference = VL::Animation::BuildSkinPoseReference(section, models, 7);
+    // 快速路径与参考路径的 palette 内容/顺序必须完全一致，只有 bounds 允许更松。
+    ASSERT_EQ(pose->matrices.size(), reference->matrices.size());
+    for (size_t joint = 0; joint < pose->matrices.size(); ++joint)
+        EXPECT_TRUE(pose->matrices[joint].isApprox(reference->matrices[joint], 0));
     Eigen::Vector3f expectedMin = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
     Eigen::Vector3f expectedMax = -expectedMin;
     for (size_t i = 0; i < section.vertices.size(); ++i)
@@ -369,13 +374,17 @@ TEST_F(SkeletalImport, SkinPaletteUsesAllNineInfluencesAndDeformedBounds)
         const auto matrix = VL::Animation::BlendSkinMatrix(section, i, pose->matrices);
         const Eigen::Vector3f p = (matrix * section.vertices[i].position.homogeneous()).head<3>();
         EXPECT_NEAR(p.z(), section.vertices[i].position.z() + 50, 0.001);
-        EXPECT_TRUE((p.array() >= pose->boundsMin.array()).all());
-        EXPECT_TRUE((p.array() <= pose->boundsMax.array()).all());
+        // 保守边界只在浮点舍入误差内等于精确结果，因此按容差判断包含关系。
+        EXPECT_TRUE((p.array() >= pose->boundsMin.array() - 1e-4f).all());
+        EXPECT_TRUE((p.array() <= pose->boundsMax.array() + 1e-4f).all());
         expectedMin = expectedMin.cwiseMin(p);
         expectedMax = expectedMax.cwiseMax(p);
     }
-    EXPECT_TRUE(pose->boundsMin.isApprox(expectedMin, 1e-6f));
-    EXPECT_TRUE(pose->boundsMax.isApprox(expectedMax, 1e-6f));
+    // 逐顶点精确边界是快速保守边界的子集（允许相等，也允许更松）。
+    EXPECT_TRUE((reference->boundsMin.array() <= pose->boundsMin.array() + 1e-4f).all());
+    EXPECT_TRUE((reference->boundsMax.array() >= pose->boundsMax.array() - 1e-4f).all());
+    EXPECT_TRUE((pose->boundsMin.array() <= expectedMin.array() + 1e-4f).all());
+    EXPECT_TRUE((pose->boundsMax.array() >= expectedMax.array() - 1e-4f).all());
     EXPECT_EQ(pose->discontinuity, 7u);
     const auto words = VL::Animation::PackSkinInfluences(section);
     EXPECT_EQ(words[1] - words[0], 18u);
@@ -391,6 +400,37 @@ TEST_F(SkeletalImport, SkinPaletteUsesAllNineInfluencesAndDeformedBounds)
         }
         EXPECT_TRUE(gpuLayout.isApprox(VL::Animation::BlendSkinMatrix(section, v, pose->matrices), 1e-6f));
     }
+}
+
+TEST_F(SkeletalImport, PrecomputedJointBindBoundsMatchFreshComputation)
+{
+    const auto mesh = AssimpSkeletalImporter::BuildMesh(*scene, "root");
+    const auto& imported = mesh.sections.front();
+    // 导入器在 ReadSection 末尾写入预计算数据；这里把它清空后重算，逐项比对。
+    VL::Animation::SkinSection recomputed = imported;
+    recomputed.jointBindBounds.clear();
+    recomputed.jointBindWeightSumError = 0;
+    VL::Animation::ComputeJointBindBounds(recomputed);
+    ASSERT_EQ(recomputed.jointBindBounds.size(), imported.jointBindBounds.size());
+    ASSERT_EQ(recomputed.jointBindBounds.size(), imported.inverseBinds.size());
+    EXPECT_FLOAT_EQ(recomputed.jointBindWeightSumError, imported.jointBindWeightSumError);
+    // 0.2 + 8×0.1 的 float 求和并不精确等于 1；只要求远小于导入容差。
+    EXPECT_LT(recomputed.jointBindWeightSumError, 1.0e-6f);
+    size_t usedJoints = 0;
+    for (size_t joint = 0; joint < imported.jointBindBounds.size(); ++joint)
+    {
+        const auto& actual = imported.jointBindBounds[joint];
+        const auto& expected = recomputed.jointBindBounds[joint];
+        EXPECT_EQ(actual.vertexCount, expected.vertexCount) << "joint " << joint;
+        EXPECT_TRUE(actual.min.isApprox(expected.min, 0)) << "joint " << joint;
+        EXPECT_TRUE(actual.max.isApprox(expected.max, 0)) << "joint " << joint;
+        if (actual.vertexCount > 0) ++usedJoints;
+    }
+    // 夹具的每个顶点有 9 个影响；10 个关节里 root 不承载权重，其余 9 个各收到 6 个顶点。
+    EXPECT_EQ(usedJoints, 9u);
+    EXPECT_EQ(imported.jointBindBounds[0].vertexCount, 0u);
+    for (size_t joint = 1; joint < imported.jointBindBounds.size(); ++joint)
+        EXPECT_EQ(imported.jointBindBounds[joint].vertexCount, 6u) << "joint " << joint;
 }
 
 TEST_F(SkeletalImport, PlaybackPauseSeekLoopAndFrozenPose)

@@ -51,12 +51,23 @@ Json ReadJson(const std::filesystem::path& path)
     return ParseStrictJson(text, 4 * 1024 * 1024);
 }
 
+std::vector<std::string> TressfxPlacementReferences(const Json& placement)
+{
+    std::vector<std::string> paths;
+    if (placement.contains("hairCollision") && placement.at("hairCollision").contains("mesh"))
+        paths.push_back(placement.at("hairCollision").at("mesh").at("path").get<std::string>());
+    if (placement.contains("skinning") && placement.at("skinning").contains("boneWeights"))
+        paths.push_back(placement.at("skinning").at("boneWeights").get<std::string>());
+    return paths;
+}
+
 void ValidateKind(K kind, const Json& json, const std::string& path)
 {
     if (!json.is_object()) throw std::invalid_argument("Asset must be a JSON object");
     const std::string type = json.value("type", "");
     if ((kind == K::Scene && type != "scene") ||
         (kind == K::Mesh && type != "mesh" && type != "speedtree") ||
+        (kind == K::Tressfx && type != "tressfx") ||
         (kind == K::Texture && type != "texture") ||
         (kind == K::Blueprint && type != "blueprint") ||
         (kind == K::Terrain && type != "terrain"))
@@ -67,11 +78,13 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     if (kind == K::Scene && foldedFilename == "sc_model_preview.json")
         throw std::invalid_argument("Preview scenes are not editable asset documents");
+    if (kind == K::Tressfx && filename.rfind("TF_", 0) != 0)
+        throw std::invalid_argument("TressFX descriptors require TF_*.json names; 请将旧 SM_ 毛发资产改为 TF_ 前缀");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
         (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
         (kind == K::Blueprint && filename.rfind("BP_", 0) != 0) ||
         (kind == K::Terrain && foldedFilename.rfind("tr_", 0) != 0))
-        throw std::invalid_argument("Mesh/Texture/Blueprint/Terrain descriptors require SM_/T_/BP_/TR_ JSON names");
+        throw std::invalid_argument("Mesh/TressFX/Texture/Blueprint/Terrain descriptors require SM_/TF_/T_/BP_/TR_ JSON names");
 }
 
 void ValidateLegacyScene(const Json& scene)
@@ -155,7 +168,7 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         ValidateKind(kind, document.baseline, key);
         ValidateKind(kind, document.baseline, document.absolutePath.filename().generic_string());
         if (kind == K::Scene) ValidateLegacyScene(document.baseline);
-        else if (kind == K::Mesh) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
+        else if (kind == K::Mesh || kind == K::Tressfx) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
         else if (kind == K::Blueprint) ValidateScriptBlueprintAsset(document.baseline);
         else if (kind == K::Terrain)
         {
@@ -184,6 +197,9 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         const auto effective = ResolveScriptBlueprintScene(resourceRoot, candidate, path);
         for (const auto& object : effective.at("objects"))
         {
+            if (object.contains("tressfx"))
+                for (const auto& reference : TressfxPlacementReferences(object.at("tressfx")))
+                    ResolveReference(reference);
             if (object.at("type") == "environment" && object.at("environment").at("type") == "hdri")
                 ResolveReference(object.at("environment").at("hdrPath").get<std::string>());
             if (object.at("type") == "terrain")
@@ -202,21 +218,26 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                     const auto reference = ResolveReference(object.at(field).get<std::string>());
                     const auto asset = ReadJson(reference);
                     const std::string type = asset.value("type", "");
-                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument(std::string("Invalid reference type for ") + field);
                 }
             if (object.at("type") == "blueprintInstance" && object.contains("components"))
                 for (const auto& component : object.at("components"))
+                {
+                    if (component.value("type", "") == "tressfx")
+                        for (const auto& reference : TressfxPlacementReferences(component))
+                            ResolveReference(reference);
                     for (const char* field : {"modelPath", "materialOverride"})
                         if (component.contains(field))
                         {
                             const auto asset = ReadJson(ResolveReference(component.at(field).get<std::string>()));
                             const auto type = asset.value("type", "");
-                            if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                            if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                                 (std::string(field) == "materialOverride" && type != "materialInstance"))
                                 throw std::invalid_argument("Invalid Actor component reference type");
                         }
+                }
         }
     }
     else if (kind == K::Blueprint)
@@ -226,6 +247,16 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         if (!blueprintComponentClasses.is_null()) ValidateScriptLogicPropertySchema(candidate, blueprintComponentClasses);
         const auto owner = Resolve(path).lexically_relative(resourceRoot);
         for (const auto& component : candidate.value("components", Json::array()))
+        {
+            // 代理已经下沉到组件；作者保存边界继续复核引用及内容归属，避免漏掉 OBJ。
+            if (component.value("type", "") == "tressfx")
+                for (const auto& path : TressfxPlacementReferences(component))
+                {
+                    const auto reference = ResolveReference(path).lexically_relative(resourceRoot);
+                    if ((ScriptContentDomain(owner) != "generated" && ScriptContentDomain(reference) == "generated") ||
+                        (ScriptContentDomain(owner) == "common" && ScriptContentDomain(reference) == "maps"))
+                        throw std::invalid_argument("Actor dependency violates content ownership");
+                }
             for (const char* field : {"modelPath", "materialOverride"})
                 if (component.contains(field))
                 {
@@ -235,21 +266,41 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         (ScriptContentDomain(owner) == "common" && ScriptContentDomain(reference) == "maps"))
                         throw std::invalid_argument("Actor dependency violates content ownership");
                     const auto type = ReadJson(physical).value("type", "");
-                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument("Invalid Actor component reference type");
                 }
+        }
     }
-    else if (kind == K::Mesh)
+    else if (kind == K::Mesh || kind == K::Tressfx)
     {
         const auto plan = MeshAssetValidator::BuildLoadPlan(path, candidate);
         ResolveReference(plan.modelDataPath);
         if (!plan.skeletonPath.empty()) ResolveReference(plan.skeletonPath);
+        if (!plan.animationSourceModelPath.empty())
+        {
+            const auto sourceModelReference = ResolveReference(plan.animationSourceModelPath);
+            const auto sourceModel = ReadJson(sourceModelReference);
+            if (sourceModel.value("type", "") != "mesh")
+                throw std::invalid_argument(
+                    "Mesh skinning.sourceModel must reference a skeletal mesh descriptor");
+            // 让 sourceModel 自身的 descriptor 规则在编辑器边界先收口；
+            // 正式导入仍会再次读取并验证骨架/FBX 内容。
+            const auto sourcePlan = MeshAssetValidator::BuildLoadPlan(
+                plan.animationSourceModelPath, sourceModel);
+            if (!sourcePlan.IsSkeletal() || !sourcePlan.animationSourceModelPath.empty())
+                throw std::invalid_argument(
+                    "Mesh skinning.sourceModel must be a non-retargeted skeletal mesh descriptor");
+        }
+        if (!plan.retargetProfilePath.empty())
+            ResolveReference(plan.retargetProfilePath);
         for (const auto& clip : plan.animationClips)
         {
             ResolveReference(clip.path);
             if (!clip.sequencePath.empty()) ResolveReference(clip.sequencePath);
         }
+        for (const auto& montage : plan.animationMontages)
+            ResolveReference(montage.path);
         for (const auto& slot : plan.materialSlots)
         {
             const auto reference = ResolveReference(slot.materialInstancePath);
@@ -575,7 +626,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetDocumentService::Modi
     for (const auto& entry : documents)
         if (entry.second.draft != entry.second.baseline)
             result.push_back({entry.first, kind == K::Scene ? EditorUi::EditorAssetKind::Scene :
-                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh : kind == K::Blueprint ?
+                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh :
+                kind == K::Tressfx ? EditorUi::EditorAssetKind::Tressfx : kind == K::Blueprint ?
                 EditorUi::EditorAssetKind::Blueprint : kind == K::Terrain ?
                 EditorUi::EditorAssetKind::Terrain : EditorUi::EditorAssetKind::Texture,
                 entry.second.revision, entry.second.status, entry.second.message});

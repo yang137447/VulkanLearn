@@ -3,6 +3,7 @@ add_executable(terrain_tests
     terrainHeightmapIOTests.cpp
     terrainHeightmapEditorTests.cpp
     terrainPaintFileTests.cpp
+    terrainTressfxStubs.cpp
     terrainPageManagerP31Tests.cpp
     terrainLayerFeedbackTests.cpp
     terrainLayerPageManagerTests.cpp
@@ -36,6 +37,8 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp
     ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/resource/tressfxGeometryCache.cpp
+    ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/resourceRetireQueue.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp
@@ -56,6 +59,9 @@ target_link_libraries(terrain_tests
         stb_image
         OpenEXR::OpenEXR
         Jolt
+        vl_hair_assets
+        vl_fracture_core
+        vl_animation_assets
 )
 
 vulkanlearn_add_gtest(terrain_tests)

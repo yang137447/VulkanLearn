@@ -124,28 +124,32 @@ public:
             Scan(ReadJson(staging / "resources" / relative));
     }
 
-    void Scan(const Json& value, const std::string& field = {})
+    void Scan(const Json& value, const std::string& field = {},
+        const std::string& parentField = {})
     {
         if (value.is_object())
         {
             if (value.contains("type") && value.at("type").is_string() &&
                 (value.at("type") == "blueprint" || value.at("type") == "blueprintInstance"))
                 requiresScripts = true;
-            for (const auto& item : value.items()) Scan(item.value(), item.key());
+            for (const auto& item : value.items()) Scan(item.value(), item.key(), field);
             return;
         }
         if (value.is_array())
         {
-            for (const auto& item : value) Scan(item, field);
+            for (const auto& item : value) Scan(item, field, parentField);
             return;
         }
         if (!value.is_string()) return;
+        // 蒙皮 source 是场景身份，不是资源路径；代理与权重才属于导出依赖闭包。
+        if (field == "source" && parentField == "skinning") return;
         auto name = value.get<std::string>();
         std::replace(name.begin(), name.end(), '\\', '/');
         if (name.empty()) return;
         const bool assetField = field == "modelPath" || field == "modelDataPath" || field == "materialOverride" ||
             field == "materialInstancePath" || field == "blueprintPath" || field == "spawnAssets" ||
-            field == "hdrPath" || field == "source";
+            field == "hdrPath" || field == "source" || field == "boneWeights" ||
+            (field == "path" && parentField == "mesh");
         if (name.rfind("shader/", 0) == 0)
         {
             ResolveContent(projectRoot, name);

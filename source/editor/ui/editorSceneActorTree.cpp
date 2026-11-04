@@ -25,8 +25,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
         "icons/light-area.png"},
     {EditorSceneActorType::Camera, "camera", "Cameras", "icons/camera.png"},
     {EditorSceneActorType::Environment, "environment", "Environments", "icons/environment.png"},
-    {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
-        "icons/wind.png"},
+    {EditorSceneActorType::SceneWind, "wind", "Wind", "icons/wind.png"},
     {EditorSceneActorType::Terrain, "terrain", "Terrains", "icons/terrain.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
     {EditorSceneActorType::Script, "blueprintInstance", "Blueprint Instances", "icons/file-box.png"},
@@ -98,46 +97,6 @@ bool MeshActorHasOpenableSlot(const EditorSceneActorSnapshot& actor)
     for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
         if (!section.materialInstancePath.empty()) return true;
     return false;
-}
-
-// Mesh 与 Terrain 共享 section 只读字段：地形的 chunk 仍是 World mesh，
-// 材质/槽语义完全一致，仅 actor 身份与 TR 资产路径不同。
-// Details 每帧都会重新布局；地形 chunk 的完整资源 key 很长，数百个 section
-// 会触发 RmlUI 的折行热点并冻结主线程。只展开前 8 个 section，保留总数，
-// 其余 section 的完整 key 仍可从资源/日志侧查看。
-constexpr size_t MaxDetailedActorSections = 8;
-
-void AddMeshSectionFields(std::vector<EditorSceneActorField>& fields,
-    const EditorSceneActorSnapshot& actor)
-{
-    const size_t detailedCount =
-        std::min(actor.sections.size(), MaxDetailedActorSections);
-    for (size_t index = 0; index < detailedCount; ++index)
-    {
-        const EditorSceneMeshSectionSnapshot& section = actor.sections[index];
-        const std::string prefix = "actor-field-section-" + std::to_string(index) + "-";
-        const std::string suffix = actor.sections.size() == 1
-            ? std::string() : " " + section.objectName;
-        AddField(fields, prefix + "mesh", "Mesh" + suffix, EmptyFallback(section.meshKey));
-        AddField(fields, prefix + "material", "Material" + suffix,
-            EmptyFallback(section.materialKey));
-        AddField(fields, prefix + "material-instance", "Material Instance" + suffix,
-            EmptyFallback(section.materialInstancePath));
-        AddField(fields, prefix + "slot", "Slot" + suffix,
-            (section.materialSlotName.empty()
-                ? std::to_string(section.materialSlotIndex)
-                : section.materialSlotName + " (#" +
-                    std::to_string(section.materialSlotIndex) + ")"));
-        AddField(fields, prefix + "wind", "Wind Profile" + suffix,
-            EmptyFallback(section.windProfileKey));
-    }
-    if (actor.sections.size() > detailedCount)
-    {
-        AddField(fields, "actor-field-section-details", "Section Details",
-            "Showing first " + std::to_string(detailedCount) + " of " +
-                std::to_string(actor.sections.size()) +
-                " sections to keep Details responsive.");
-    }
 }
 
 // 槽行标签与迁移前一致：优先用槽名，没有槽名时退回 MI 文件名。
@@ -243,9 +202,12 @@ bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
     case EditorSceneActorType::SpotLight:
     case EditorSceneActorType::SquareAreaLight:
         return true;
+    // 相机 / 环境 / 风剖面 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
+    //（destroyed），也没有逐 actor 的渲染开关命令。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
-    case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
+    case EditorSceneActorType::Script:
         return false;
     }
     return false;
@@ -426,20 +388,31 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
         AddField(fields, "actor-field-script-id", "Blueprint ID", actor.identity.substr(std::string_view("blueprintInstance|").size()));
         break;
     case EditorSceneActorType::Mesh:
-        AddField(fields, "actor-field-scene-object", "Scene Object",
-            actor.sceneObjectIdentity);
-        AddField(fields, "actor-field-sections", "Sections",
-            std::to_string(actor.sections.size()));
-        AddMeshSectionFields(fields, actor);
-        break;
     case EditorSceneActorType::Terrain:
-        AddField(fields, "actor-field-terrain-asset", "Terrain Asset",
-            EmptyFallback(actor.terrainAssetPath));
+        if (actor.type == EditorSceneActorType::Terrain)
+            AddField(fields, "actor-field-terrain-asset", "Terrain Asset",
+                EmptyFallback(actor.terrainAssetPath));
         AddField(fields, "actor-field-scene-object", "Scene Object",
             actor.sceneObjectIdentity);
         AddField(fields, "actor-field-sections", "Sections",
             std::to_string(actor.sections.size()));
-        AddMeshSectionFields(fields, actor);
+        for (size_t index = 0; index < actor.sections.size(); ++index)
+        {
+            const EditorSceneMeshSectionSnapshot& section = actor.sections[index];
+            const std::string prefix = "actor-field-section-" + std::to_string(index) + "-";
+            const std::string suffix = actor.sections.size() == 1
+                ? std::string() : " " + section.objectName;
+            AddField(fields, prefix + "mesh", "Mesh" + suffix, EmptyFallback(section.meshKey));
+            AddField(fields, prefix + "material", "Material" + suffix,
+                EmptyFallback(section.materialKey));
+            AddField(fields, prefix + "material-instance", "Material Instance" + suffix,
+                EmptyFallback(section.materialInstancePath));
+            AddField(fields, prefix + "slot", "Slot" + suffix,
+                (section.materialSlotName.empty()
+                    ? std::to_string(section.materialSlotIndex)
+                    : section.materialSlotName + " (#" +
+                        std::to_string(section.materialSlotIndex) + ")"));
+        }
         break;
     case EditorSceneActorType::DirectionalLight:
     case EditorSceneActorType::PointLight:
@@ -477,41 +450,10 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
         AddField(fields, "actor-field-hdr-path", "HDR Path", EmptyFallback(environment.hdrPath));
         break;
     }
-    case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
     {
-        const EditorSceneWindActor& wind = actor.wind;
-        AddField(fields, "actor-field-wind-key", "Profile Key", wind.key);
-        AddVectorField(fields, "actor-field-bounds-min", "Source Bounds Min", wind.sourceBoundsMin);
-        AddVectorField(fields, "actor-field-bounds-max", "Source Bounds Max", wind.sourceBoundsMax);
-        AddField(fields, "actor-field-strength-response", "Strength Response",
-            SceneActorNumber(wind.strengthResponse));
-        AddField(fields, "actor-field-direction-response", "Direction Response",
-            SceneActorNumber(wind.directionResponse));
-        AddField(fields, "actor-field-gust-frequency", "Gust Frequency",
-            SceneActorNumber(wind.gustFrequency));
-        AddField(fields, "actor-field-gust-strength-min", "Gust Strength Min",
-            SceneActorNumber(wind.gustStrengthMin));
-        AddField(fields, "actor-field-gust-strength-max", "Gust Strength Max",
-            SceneActorNumber(wind.gustStrengthMax));
-        AddField(fields, "actor-field-gust-duration-min", "Gust Duration Min",
-            SceneActorNumber(wind.gustDurationMin));
-        AddField(fields, "actor-field-gust-duration-max", "Gust Duration Max",
-            SceneActorNumber(wind.gustDurationMax));
-        AddField(fields, "actor-field-gust-rise", "Gust Rise Scalar",
-            SceneActorNumber(wind.gustRiseScalar));
-        AddField(fields, "actor-field-gust-fall", "Gust Fall Scalar",
-            SceneActorNumber(wind.gustFallScalar));
-        AddField(fields, "actor-field-shared-start-height", "Shared Start Height",
-            SceneActorNumber(wind.sharedStartHeight));
-        AddField(fields, "actor-field-branch1-limit", "Branch 1 Stretch Limit",
-            SceneActorNumber(wind.branch1StretchLimit));
-        AddField(fields, "actor-field-branch2-limit", "Branch 2 Stretch Limit",
-            SceneActorNumber(wind.branch2StretchLimit));
-        AddField(fields, "actor-field-do-shared", "Shared Wind", wind.doShared ? "on" : "off");
-        AddField(fields, "actor-field-do-branch1", "Branch 1 Wind", wind.doBranch1 ? "on" : "off");
-        AddField(fields, "actor-field-do-branch2", "Branch 2 Wind", wind.doBranch2 ? "on" : "off");
-        AddField(fields, "actor-field-do-ripple", "Ripple", wind.doRipple ? "on" : "off");
-        AddField(fields, "actor-field-do-shimmer", "Shimmer", wind.doShimmer ? "on" : "off");
+        // 场景风的值由可编辑控件展示（SceneActorEditableFields），这里不再重复
+        // 生成一组只读行；作者 name 已在大纲/分组标题中显示。
         break;
     }
     }
@@ -523,7 +465,20 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
 {
     using P = EditorActorProperty;
     std::vector<EditorSceneActorEditableField> fields;
-    if (actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+    if (actor.type == EditorSceneActorType::SceneWind)
+    {
+        // 与旧 SpeedTree 调节一致：方向 + 风力滑条 + 阵风滑条，不暴露噪声内部参数。
+        // 阵风滑条为 0 即关闭；非零时使用场景风层固定的频率/湍流默认值。
+        fields.push_back({P::WindDirection, "Direction", actor.worldWind.direction, 3});
+        fields.push_back({P::WindStrength, "Strength (cm/s)",
+            Eigen::Vector3f(actor.worldWind.strengthCmPerSec, 0, 0), 1,
+            true, 0.0f, 3270.0f});
+        fields.push_back({P::WindGustAmplitude, "Gust",
+            Eigen::Vector3f(actor.worldWind.gustAmplitude, 0, 0), 1,
+            true, 0.0f, 1.0f});
+        return fields;
+    }
+    if (actor.type == EditorSceneActorType::Environment)
         return fields;
     fields.push_back({P::Position, "Location (cm)", actor.position, 3});
     if (actor.type != EditorSceneActorType::SquareAreaLight)
@@ -592,8 +547,6 @@ std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t c
 
 MaterialInstanceModelSnapshot MeshSceneActorModel(const EditorSceneActorSnapshot& actor)
 {
-    // Terrain 的 chunk 与普通 mesh 共用 section/材质槽语义；编辑器 Terrain 类型
-    // 只改变大纲身份，不引入第二条 World 地形或材质导航路径。
     MaterialInstanceModelSnapshot model;
     model.worldGeneration = actor.worldGeneration;
     model.scenePath = actor.scenePath;

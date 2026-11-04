@@ -27,6 +27,16 @@ struct LaunchOptions
     bool forceShaderRebuild = false;
     bool offlineRender = false;
     bool exitAfterTests = false;
+    // 逐 pass GPU 计时：默认关闭以保证普通日志与逐帧路径无额外开销；
+    // 打开后每 120 帧向日志打印一张 [GPU] 表，控制台 gpustats 可随时按需查看。
+    bool gpuStats = false;
+    // 逐帧 GPU 预蒙皮：默认开启，蒙皮材质使用读 pre-skin buffer 的变体，并在
+    // 每帧 pass 循环前录制一次骨混合 compute；--no-prerender-skin 关闭后没有
+    // buffer/pass/变体，回落到逐 pass 蒙皮，供 A/B 与问题定位使用。
+    bool prerenderSkin = true;
+    // 机器可读性能时间序列：每行一个 perf JSON，每秒追加一行。
+    // 路径为空表示不写；打开该通道同时按需启用 GPU 采集。
+    std::optional<std::string> perfJsonlPath;
     // 自动化输入验收：启动后主动抢占 OS 键盘焦点，仅显式 flag 生效。
     bool focusWindow = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;

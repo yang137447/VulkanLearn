@@ -18,7 +18,10 @@ enum class EditorActorProperty : uint8_t
     CameraAutoTargetGray,
     // 完整 TRS 一次提交：position/rotation/scale 三个数组必须同时有效。
     // 追加在末尾，避免已有数值枚举在 UI/命令序列化中重编号。
-    Transform
+    Transform,
+    // 场景全局 wind 对象：方向、强度、阵风参数。阵风开启由“写入任一非零阵风参数”
+    // 表达，不额外引入布尔控件；全零时运行期等效关闭。
+    WindDirection, WindStrength, WindGustAmplitude, WindGustFrequency, WindGustTurbulence
 };
 
 // UI 提交编辑意图；单分量路径由 GT 从当前对象读取其它分量，避免同帧连续

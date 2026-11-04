@@ -1,0 +1,77 @@
+#version 450
+
+// 每帧一次 GPU 预蒙皮：一个 invocation 处理一个顶点，dispatch = ceil(vertexCount / 64)。
+// 输出布局与 engine/skinnedVertexFactory.glsl 的 VL_SKINNED_PRERENDERED 读取端
+// 完全一致：每个顶点 4 个 vec4（64 B），按顶点索引直接寻址。
+#define VL_SKIN_SET_INDEX 0
+#include "skinnedVertexMath.glsl"
+
+layout(local_size_x = 64) in;
+
+// x = vertexCount。dispatch 向上取整，尾部 invocation 必须早退，避免越界读取
+// 源顶点流或 influence CSR。
+layout(std140, set = 0, binding = 0) uniform SkinDeformParams
+{
+    uvec4 counts;
+} skinDeformParams;
+
+// 顶点缓冲当作紧排 float 流读取。布局镜像 source/VertexDataStruct.h 的 Vertex：
+// 112 B/顶点，position 0、normal 12、tangent 64（Eigen::Vector4f 16 B 对齐）。
+// C++ 侧 skinDeformLayout.h 有 static_assert、skin_deform_test 固定这组偏移，
+// 改顶点 ABI 时两处必须同时更新。
+layout(std430, set = 0, binding = 3) readonly buffer SkinSourceVertices
+{
+    float words[];
+} skinSourceVertices;
+
+struct SkinDeformedVertex { vec4 position; vec4 previousPosition; vec4 normal; vec4 tangent; };
+layout(std430, set = 0, binding = 4) writeonly buffer SkinDeformedVertices
+{
+    SkinDeformedVertex vertices[];
+} skinDeformedVertices;
+
+const uint VertexStrideFloats = 28u;
+const uint PositionOffsetFloats = 0u;
+const uint NormalOffsetFloats = 3u;
+const uint TangentOffsetFloats = 16u;
+
+vec3 ReadVec3(uint base)
+{
+    return vec3(skinSourceVertices.words[base],
+        skinSourceVertices.words[base + 1u],
+        skinSourceVertices.words[base + 2u]);
+}
+
+vec4 ReadVec4(uint base)
+{
+    return vec4(skinSourceVertices.words[base],
+        skinSourceVertices.words[base + 1u],
+        skinSourceVertices.words[base + 2u],
+        skinSourceVertices.words[base + 3u]);
+}
+
+void main()
+{
+    uint vertexIndex = gl_GlobalInvocationID.x;
+    if (vertexIndex >= skinDeformParams.counts.x)
+        return;
+
+    uint base = vertexIndex * VertexStrideFloats;
+    vec3 localPosition = ReadVec3(base + PositionOffsetFloats);
+    vec3 localNormal = ReadVec3(base + NormalOffsetFloats);
+    vec4 localTangent = ReadVec4(base + TangentOffsetFloats);
+
+    vec3 position;
+    vec3 normal;
+    vec4 tangent;
+    vec3 previousPosition;
+    SkinVertex(vertexIndex, localPosition, localNormal, localTangent,
+        position, normal, tangent, previousPosition);
+
+    SkinDeformedVertex deformed;
+    deformed.position = vec4(position, 1.0);
+    deformed.previousPosition = vec4(previousPosition, 1.0);
+    deformed.normal = vec4(normal, 0.0);
+    deformed.tangent = tangent;
+    skinDeformedVertices.vertices[vertexIndex] = deformed;
+}

@@ -145,7 +145,8 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
     // curves 只有“clip 有 sidecar 且至少一条曲线”时才出现；没有曲线的 clip 不发布空数组，
     // 避免 22 个 clip 的 catalog 中塞入无消费价值的结构。
     auto curves = nlohmann::json::object();
-    for (const Clip& clip : asset.clips)
+    const auto& animation = asset.AnimationAsset();
+    for (const Clip& clip : animation.clips)
     {
         if (clip.sequence.curves.empty()) continue;
         auto list = nlohmann::json::array();
@@ -156,7 +157,7 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
     result["curves"] = std::move(curves);
 
     auto montages = nlohmann::json::array();
-    for (const Montage& montage : asset.montages)
+    for (const Montage& montage : animation.montages)
     {
         auto sections = nlohmann::json::array();
         for (const MontageSection& section : montage.sections)
@@ -282,7 +283,7 @@ void PlayMontage(SkeletalPlayback& player, const Montage& montage,
     if (montage.derivedClipId.empty())
         throw std::invalid_argument("Animation montage '" + montage.id +
             "' has no derived clip id; the Montage must be bound to a loaded sequence sidecar");
-    const auto& clips = player.Asset().clips;
+    const auto& clips = player.Asset().AnimationAsset().clips;
     const auto clip = std::find_if(clips.begin(), clips.end(),
         [&](const Clip& value) { return value.id == montage.derivedClipId; });
     if (clip == clips.end())

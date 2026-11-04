@@ -21,6 +21,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "shaderReflect.h"
+#include "hair/tressfxGroupPreviewState.h"
 
 namespace VL
 {
@@ -520,11 +521,42 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
     }
 }
 
+void RendererFrameResources::WriteObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    if (!drawPacket.skinPose)
+        return;
+
+    const auto& current = *drawPacket.skinPose;
+    const auto& previous = objectResources.submittedSkin.Previous(current);
+    if (current.matrices.size() != objectResources.skinJointCount ||
+        previous.matrices.size() != current.matrices.size())
+        throw std::runtime_error("Skin palette size changed without resource preparation");
+    auto* bytes = static_cast<unsigned char*>(
+        objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
+    for (size_t i = 0; i < current.matrices.size(); ++i)
+    {
+        std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
+        std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
+    }
+}
+
+void RendererFrameResources::UpdateObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
+}
+
 void RendererFrameResources::UpdateObjectUniformBuffer(
     uint32_t swapChainImageIndex,
     RendererObjectGpuResources& objectResources,
     const RenderDrawPacket& drawPacket,
-    const SpeedTreeWindStateGPU* speedTreeWindState)
+    const SpeedTreeWindStateGPU* speedTreeWindState,
+    bool uploadSkinPalette)
 {
     if (swapChainImageIndex >= objectResources.objectUniformBuffer.buffersMapped.size())
     {
@@ -537,18 +569,11 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
     if (drawPacket.skinPose)
     {
         const auto& current = *drawPacket.skinPose;
-        const auto& previous = objectResources.submittedSkin.Previous(current);
-        if (current.matrices.size() != objectResources.skinJointCount ||
-            previous.matrices.size() != current.matrices.size())
-            throw std::runtime_error("Skin palette size changed without resource preparation");
         ubo.previousModel = objectResources.submittedSkin.PreviousModel(current, drawPacket.model);
-        auto* bytes = static_cast<unsigned char*>(
-            objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
-        for (size_t i = 0; i < current.matrices.size(); ++i)
-        {
-            std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
-            std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
-        }
+        // GPU 预蒙皮路径在帧前已经写完整份 palette，draw 内再写一遍没有收益；
+        // 关闭预蒙皮时保持原路径，仍然逐 draw 上传。
+        if (uploadSkinPalette)
+            WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
     }
     if (speedTreeWindState != nullptr)
     {
@@ -559,6 +584,20 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
                 speedTreeWindState->windVector.head<3>());
     }
     ubo.selectionData.x() = drawPacket.selected ? 1.0f : 0.0f;
+    // 头发分组预览：y=pointsPerGuide（顶点工厂反推 guideIndex），
+    // z=selectedGroup（-1 无选中），w=preview flags（bit0 colors / bit1 solo）。
+    ubo.selectionData.y() = static_cast<float>(drawPacket.tressfxPointsPerGuide);
+    ubo.selectionData.z() = static_cast<float>(drawPacket.tressfxSelectedGroup);
+    // brush 目标组始终等于当前选中组（UI 只允许给选中组上笔刷），因此沿用
+    // selectionData.z；不要在 float 的 w 里打包组号，组号较大时会丢精度。
+    uint32_t packedFlags = drawPacket.tressfxGroupFlags;
+    if (objectResources.tressfxBrushActive)
+    {
+        packedFlags |= VL::TressfxGroupPreviewBrushActive;
+        if (objectResources.tressfxBrushRemoveMode)
+            packedFlags |= VL::TressfxGroupPreviewBrushRemove;
+    }
+    ubo.selectionData.w() = static_cast<float>(packedFlags);
     std::memcpy(
         objectResources.objectUniformBuffer.buffersMapped[swapChainImageIndex],
         &ubo,

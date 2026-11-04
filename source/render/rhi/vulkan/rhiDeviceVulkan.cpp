@@ -150,6 +150,13 @@ uint32_t RHIDeviceVulkan::GetGraphicsTimestampValidBits()
     return VulkanManager::GetInstance().GetGraphicsQueueTimestampValidBits();
 }
 
+bool RHIDeviceVulkan::SupportsTimestampQueries()
+{
+    // timestampComputeAndGraphics 决定 graphics/compute 队列能否写 timestamp；
+    // 具体队列的 timestampValidBits 仍由 GetGraphicsTimestampValidBits 单独校验。
+    return GetPhysicalDevice().getProperties().limits.timestampComputeAndGraphics != 0;
+}
+
 bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
 {
     // 由 VulkanManager 返回创建逻辑设备时实际启用的状态，避免误用仅物理支持的结果。
@@ -212,6 +219,32 @@ void RHIDeviceVulkan::ReadTimestampQueryPair(
     {
         throw std::runtime_error("Failed to read Vulkan timestamp query results.");
     }
+}
+
+bool RHIDeviceVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    // 刻意不传 VK_QUERY_RESULT_WAIT_BIT：统计路径绝不允许阻塞渲染线程。
+    const VkResult result = vkGetQueryPoolResults(
+        static_cast<VkDevice>(GetDevice()),
+        static_cast<VkQueryPool>(queryPool),
+        firstQuery,
+        static_cast<uint32_t>(timestamps.size()),
+        sizeof(timestamps),
+        timestamps.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY)
+    {
+        return false;
+    }
+    if (result != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to read Vulkan timestamp query results.");
+    }
+    return true;
 }
 
 vk::PhysicalDevice& RHIDeviceVulkan::GetPhysicalDevice()

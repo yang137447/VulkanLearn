@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <set>
 
+#include "render/resource/tressfxGeometryCache.h"
+
 class Material;
 class MaterialInstance;
 class RenderableObject;
@@ -18,6 +20,7 @@ namespace VL
 
 class RendererObjectResourceEntry;
 struct TerrainStreamingState;
+struct WorldWind;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -121,6 +124,18 @@ public:
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
     const std::shared_ptr<RenderableObject>* GetRenderableObject(std::string_view objectKey) const;
+    // 运行时 spawn 的 per-placement 毛发在 actor 销毁后需要单独回收：从活动
+    // World 包里摘除并返回对象，调用方按 GPU epoch 交给 ResourceRetireQueue。
+    // 键不存在返回 nullptr。
+    std::shared_ptr<RenderableObject> TakeRenderableObject(std::string_view objectKey);
+    // 当前活动 World 包里的 placement-scoped renderable 数量（诊断/无泄漏核对用）。
+    size_t CountPlacementScopedRenderableObjects() const;
+    // Advances CPU TressFX guide solvers once per game frame. The active
+    // package owns the objects, so world replacement cannot invalidate this
+    // traversal while the caller is between frame publication boundaries.
+    // 场景风只取 direction * strength（厘米/秒）：GT 不拥有渲染线程的阵风时钟，
+    // 阵风相位由 GPU 路径施加，CPU 参考 backend 不复制它。
+    void AdvanceTressfxSimulations(float deltaSeconds, const WorldWind& sceneWind);
 
     void BindMaterial(std::string materialKey, std::shared_ptr<Material> material);
     const std::shared_ptr<Material>* GetMaterial(std::string_view materialKey) const;
@@ -138,6 +153,9 @@ public:
     // 只对 candidate package 写入；提交后随 package 一起发布。
     void BindTerrainStreaming(std::shared_ptr<TerrainStreamingState> streamingState);
     std::shared_ptr<TerrainStreamingState> GetTerrainStreaming() const;
+    // 进程级 .tfx 几何导入缓存。候选包共享同一个实例：组编辑/World 重建都不
+    // 重新解析几何；条目只读且不持有 GPU 资源。
+    TressfxGeometryCache& GetTressfxGeometryCache() const;
 
 private:
     RendererResourceCache();
@@ -150,6 +168,7 @@ private:
 
     std::unordered_map<std::string, std::shared_ptr<Texture>> globalTextures;
     WorldLocalResourcePackageHandle worldLocalResources;
+    std::shared_ptr<TressfxGeometryCache> tressfxGeometryCache;
     bool retireWorldLocalResourcesOnClear = true;
 };
 

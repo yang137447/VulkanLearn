@@ -1,0 +1,31 @@
+{
+    "name": "M_strandProbe",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {"renderMode": "TransparentAlphaBlendWriteDepth", "cullMode": "None"},
+    "macros": {"VL_TRESSFX_STRANDS": 1},
+    "parameters": {
+        "u_edgeFeather": {
+            "type": "float",
+            "default": 0.15,
+            "description": "ribbon 两侧各自的 UV1 渐隐宽度，0 为硬边；仅为随机覆盖预览，不代表像素面积积分",
+            "range": {"min": 0, "max": 0.5}
+        },
+        "u_tintColor": {
+            "type": "color",
+            "default": [0.8, 0.12, 0.32, 1.0],
+            "description": "静态发丝可见性探针的线性颜色，不代表 Hair 光照",
+            "channels": {
+                "x": {"name": "red", "description": "线性红色", "range": {"min": 0, "max": 100}},
+                "y": {"name": "green", "description": "线性绿色", "range": {"min": 0, "max": 100}},
+                "z": {"name": "blue", "description": "线性蓝色", "range": {"min": 0, "max": 100}},
+                "w": {"name": "opacity", "description": "随机覆盖保留概率，0 完全裁除，1 保留内部像素", "range": {"min": 0, "max": 1}}
+            }
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "hair/M_strandProbe.vertex.glsl",
+        "surface": "hair/M_strandProbe.surface.glsl"
+    }
+}

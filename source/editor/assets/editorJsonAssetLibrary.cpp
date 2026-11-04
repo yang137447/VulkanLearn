@@ -1,8 +1,10 @@
 #include "editorJsonAssetLibrary.h"
+#include "editorRetargetPreview.h"
 
 #include <algorithm>
 #include <condition_variable>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -70,10 +72,12 @@ std::optional<Kind> FilenameKind(std::string_view assetPath)
     const std::string name = LowerAscii(path.stem().u8string());
     if (name.compare(0, 3, "mi_") == 0) return Kind::MaterialInstance;
     if (name.compare(0, 3, "sm_") == 0) return Kind::Mesh;
+    if (name.compare(0, 3, "tf_") == 0) return Kind::Tressfx;
     if (name.compare(0, 3, "sc_") == 0) return Kind::Scene;
     if (name.compare(0, 2, "t_") == 0) return Kind::Texture;
     if (name.compare(0, 3, "tr_") == 0) return Kind::Terrain;
     if (name.compare(0, 3, "bp_") == 0) return Kind::Blueprint;
+    if (name.compare(0, 3, "rt_") == 0) return Kind::Retarget;
     // 兼容旧场景文件名；只看 basename，不能把 SC_ 目录下的其他 JSON 当场景。
     if (name.compare(0, 5, "scene") == 0) return Kind::Scene;
     return std::nullopt;
@@ -85,6 +89,7 @@ std::optional<Kind> TypeKind(const std::string& text)
     if (lower == "materialinstance") return Kind::MaterialInstance;
     // 真实 SM_speedtree 资产以 speedtree 为顶层 type；浏览时归入模型，不读取其 SDK data。
     if (lower == "mesh" || lower == "speedtree") return Kind::Mesh;
+    if (lower == "tressfx") return Kind::Tressfx;
     if (lower == "scene") return Kind::Scene;
     if (lower == "texture") return Kind::Texture;
     if (lower == "terrain") return Kind::Terrain;
@@ -132,7 +137,14 @@ public:
     bool end_array() override { stack.pop_back(); return true; }
     bool key(string_t& value) override
     {
+        if (stack.empty()) return true;
         stack.back().key = value;
+        // `/simulation/skinning` 是 tressfx 绑定声明；只在 root 下的 simulation
+        // 对象里认这一层，不累计完整键路径。type 由 Metadata 单独记录。
+        if (!simulationSkinning && stack.size() == 2u &&
+            stack.back().kind == ValueKind::Object &&
+            stack.back().label == "simulation" && value == "skinning")
+            simulationSkinning = true;
         return true;
     }
     bool parse_error(size_t position, const std::string&, const nlohmann::detail::exception&) override
@@ -145,6 +157,9 @@ public:
     bool typeSeen = false;
     bool typeIsString = false;
     std::string type;
+    std::string modelDataPath;
+    // root.simulation.skinning 是否存在；与 type == "tressfx" 一起决定毛发视口守卫。
+    bool simulationSkinning = false;
 
 private:
     struct Frame
@@ -154,6 +169,9 @@ private:
         bool omitted;
         std::string path;
         std::string key;
+        // 引入该对象的键（数组元素为空）；只用于识别 /simulation/skinning，
+        // 不累计完整路径。
+        std::string label;
         size_t nextIndex = 0;
     };
     struct Location
@@ -197,6 +215,9 @@ private:
             document.name = BoundedText(value);
         else if (location.label == "description" && kind == ValueKind::String)
             document.description = BoundedText(value);
+        // tressfx 的 .tfx 相对路径；worker 用它读取 guideCount，扫描目录时不打开模型。
+        else if (location.label == "modelDataPath" && kind == ValueKind::String)
+            modelDataPath = value;
         else if (location.label == "source" && includeFields && kind == ValueKind::String)
             document.textureSource = value;
         else if (location.label == "colorSpace" && includeFields && kind == ValueKind::String)
@@ -232,7 +253,8 @@ private:
             AddDiagnostic(document.diagnostic, "Asset JSON root must be an object");
         Metadata(location, kind, "");
         const int row = AddField(location, kind, kind == ValueKind::Object ? "{...}" : "[...]");
-        stack.push_back({kind, row, location.omitted, std::move(location.path), {}, 0});
+        stack.push_back({kind, row, location.omitted, std::move(location.path), {},
+            kind == ValueKind::Object ? location.label : std::string(), 0});
         return true;
     }
 
@@ -395,7 +417,7 @@ bool ValidateEditorJsonAssetPath(std::string_view assetPath, std::string& error)
 }
 
 bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
-    Document& document, bool includeFields)
+    Document& document, bool includeFields, std::string* tressfxModelDataPath)
 {
     document = {};
     if (!ValidateEditorJsonAssetPath(assetPath, document.diagnostic)) return false;
@@ -415,6 +437,12 @@ bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
     }
     AssetSax sax(document, includeFields);
     const bool valid = Json::sax_parse(jsonText.begin(), jsonText.end(), &sax);
+    // type / simulation.skinning 是毛发视口与目录共用的作者摘要；损坏 JSON 也保留
+    // 已解析到的 type，让错误候选仍能按资产类型呈现。
+    if (sax.typeSeen && sax.typeIsString) document.type = sax.type;
+    document.tressfxSkinning =
+        sax.typeIsString && sax.type == "tressfx" && sax.simulationSkinning;
+    if (tressfxModelDataPath != nullptr) *tressfxModelDataPath = sax.modelDataPath;
     if (!valid)
     {
         // 不展示损坏输入的半棵树，但保留已经识别的顶层类型供目录呈现错误候选。
@@ -473,13 +501,77 @@ struct EditorJsonAssetLibrary::Impl
         return !stopping && generation == documentGeneration;
     }
 
-    bool Load(const std::string& path, Document& output, bool fields)
+    // Groups 编辑器在保存前用 guideCount 拦截 end > guideCount；这里只读 .tfx 头 12 字节。
+    // 路径非法、文件缺失或头太短都返回 0（未知），绝不能影响 JSON 本身打开。
+    uint32_t ReadTfxGuideCount(const std::string& modelDataPath) const
+    {
+        const std::string normalized = NormalizeSeparators(modelDataPath);
+        if (normalized.empty() || normalized.front() == '/' ||
+            normalized.find(':') != std::string::npos ||
+            normalized.find('\0') != std::string::npos)
+            return 0;
+        // u8path 对非法 UTF-8 可能抛异常；读取失败只允许降级为“未知”，不能逃出 worker。
+        try
+        {
+            const auto relative = std::filesystem::u8path(normalized);
+            if (relative.is_absolute() || relative.has_root_name() ||
+                LowerAscii(relative.extension().u8string()) != ".tfx")
+                return 0;
+            for (const auto& part : relative)
+                if (part == "..") return 0;
+            std::error_code ec;
+            const auto physical = std::filesystem::canonical(root / relative, ec);
+            if (ec || !PhysicalWithinRoot(root, physical) ||
+                !std::filesystem::is_regular_file(physical, ec))
+                return 0;
+            std::ifstream input(physical, std::ios::binary);
+            if (!input) return 0;
+            // .tfx 头：offset 0 = layout version(f32)，4 = guideCount(u32)，8 = pointsPerStrand(u32)。
+            // 只读 12 字节并按 tfxLoader 的规则做最小合理性检查；Git LFS 指针等非二进制内容
+            // 会让 version 不满足 >=4，从而返回 0 而不是把 ASCII 字节误当成 guide 数。
+            uint8_t header[12] = {};
+            input.read(reinterpret_cast<char*>(header), sizeof(header));
+            if (input.gcount() != static_cast<std::streamsize>(sizeof(header)))
+                return 0;
+            float version = 0.0f;
+            std::memcpy(&version, header, sizeof(version));
+            const uint32_t guideCount = static_cast<uint32_t>(header[4]) |
+                (static_cast<uint32_t>(header[5]) << 8) |
+                (static_cast<uint32_t>(header[6]) << 16) |
+                (static_cast<uint32_t>(header[7]) << 24);
+            const uint32_t pointsPerStrand = static_cast<uint32_t>(header[8]) |
+                (static_cast<uint32_t>(header[9]) << 8) |
+                (static_cast<uint32_t>(header[10]) << 16) |
+                (static_cast<uint32_t>(header[11]) << 24);
+            constexpr uint32_t MaxTfxVertexCount = 4194304u;
+            if (!std::isfinite(version) || version < 4.0f || guideCount == 0 ||
+                pointsPerStrand < 4 || pointsPerStrand > 64 ||
+                (pointsPerStrand & (pointsPerStrand - 1u)) != 0 ||
+                guideCount > MaxTfxVertexCount / pointsPerStrand)
+                return 0;
+            return guideCount;
+        }
+        catch (const std::exception&)
+        {
+            return 0;
+        }
+    }
+
+    bool Load(const std::string& path, Document& output, bool fields, std::string* raw = nullptr)
     {
         std::filesystem::path physical;
         std::string error;
         std::string text;
         if (ResolveJson(root, path, physical, error) && ReadJson(physical, text, error))
-            return ParseEditorJsonAsset(path, text, output, fields);
+        {
+            std::string modelDataPath;
+            const bool recognized = ParseEditorJsonAsset(
+                path, text, output, fields, &modelDataPath);
+            if (raw) *raw = std::move(text);
+            if (recognized && output.type == "tressfx" && !modelDataPath.empty())
+                output.tressfxGuideCount = ReadTfxGuideCount(modelDataPath);
+            return recognized;
+        }
         // 读取失败时仍保留有命名前缀的候选；不读取任何被 JSON 引用的文件。
         const bool candidate = ParseEditorJsonAsset(path, {}, output, false);
         output.diagnostic = error;
@@ -529,7 +621,9 @@ struct EditorJsonAssetLibrary::Impl
                 if (Load(relative, parsed, false))
                 {
                     result->assets.push_back({parsed.assetPath, parsed.kind, std::move(parsed.name),
-                        std::move(parsed.description), std::move(parsed.diagnostic)});
+                        std::move(parsed.description), std::move(parsed.diagnostic),
+                        std::move(parsed.type), parsed.tressfxSkinning,
+                        parsed.tressfxGuideCount});
                     if (result->assets.size() == Limits::MaxCatalogEntries)
                     {
                         AddDiagnostic(result->diagnostic, "Catalog entry limit (20000) reached");
@@ -656,9 +750,10 @@ struct EditorJsonAssetLibrary::Impl
     void Open(uint64_t generation, const std::string& path)
     {
         auto result = std::make_shared<Document>();
+        std::string raw;
         try
         {
-            Load(path, *result, true);
+            Load(path, *result, true, &raw);
         }
         catch (const std::exception&)
         {
@@ -672,6 +767,15 @@ struct EditorJsonAssetLibrary::Impl
             try { LoadTexturePreview(*result); }
             catch (const std::exception&) { result->previewDiagnostic = "Texture preview decoding failed"; }
         }
+        if (result->kind == Kind::Retarget && result->diagnostic.empty() && CurrentDocument(generation))
+        {
+            try { LoadRetargetPreview(raw, *result); }
+            catch (const std::exception& error)
+            {
+                result->retargetPreview.reset();
+                result->previewDiagnostic = BoundedText(error.what());
+            }
+        }
         result->revision = generation;
         std::shared_ptr<const Document> discarded;
         {
@@ -682,6 +786,50 @@ struct EditorJsonAssetLibrary::Impl
                 readyDocument = std::move(result);
             }
         }
+    }
+
+    void LoadRetargetPreview(const std::string& raw, Document& result)
+    {
+        // worker 只验证引用路径/参考骨架；实际网格及 sourceModel 仍走 GT 的正式加载事务。
+        // 复用目录 worker 的路径/字节边界；扫描目录时不跟随这些引用。
+        std::string text, error;
+        std::filesystem::path physical;
+        const Json profile = Json::parse(raw);
+        if (!profile.contains("preview") || !profile.at("preview").is_object())
+            throw std::runtime_error("Reference preview requires preview.sourceSkeletonPath and targetSkeletonPath");
+        const auto& preview = profile.at("preview");
+        for (const auto& item : preview.items())
+            if (item.key() != "sourceSkeletonPath" && item.key() != "targetSkeletonPath" &&
+                item.key() != "targetModelPath")
+                throw std::runtime_error("Unknown retarget preview field: " + item.key());
+        Json skeletons[2];
+        size_t index = 0;
+        for (const char* key : {"sourceSkeletonPath", "targetSkeletonPath"})
+        {
+            if (!preview.contains(key) || !preview.at(key).is_string())
+                throw std::runtime_error(std::string("Missing preview.") + key);
+            if (!ResolveJson(root, preview.at(key).get<std::string>(), physical, error) ||
+                !ReadJson(physical, text, error))
+                throw std::runtime_error(std::string(key) + ": " + error);
+            Document checked;
+            // SK 不属于目录分类，但同样执行 SAX 深度/行数预算后才构造 JSON DOM。
+            if (SourceLineLimitExceeded(text))
+                throw std::runtime_error("JSON source line limit (100000) exceeded");
+            AssetSax sax(checked, false);
+            const bool valid = Json::sax_parse(text.begin(), text.end(), &sax);
+            if (!valid || !checked.diagnostic.empty())
+                throw std::runtime_error(checked.diagnostic.empty() ? "Invalid preview skeleton JSON" : checked.diagnostic);
+            skeletons[index++] = Json::parse(text);
+        }
+        auto values = BuildEditorRetargetPreview(profile, skeletons[0], skeletons[1]);
+        if (preview.contains("targetModelPath"))
+        {
+            if (!preview.at("targetModelPath").is_string() ||
+                !ResolveJson(root, preview.at("targetModelPath").get<std::string>(), physical, error))
+                throw std::runtime_error("Invalid preview.targetModelPath: " + error);
+            values.targetModelPath = preview.at("targetModelPath").get<std::string>();
+        }
+        result.retargetPreview = std::make_shared<const EditorUi::EditorRetargetPreview>(std::move(values));
     }
 
     void ServicePendingOpen()

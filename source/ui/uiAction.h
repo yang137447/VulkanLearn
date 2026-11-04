@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include "editor/scene/editorActorProperty.h"
 #include "debug/debugDrawControl.h"
+#include "hair/tressfxGroupPaint.h"
 
 namespace VL
 {
@@ -18,9 +19,26 @@ enum class UiActionType
     LoadWorld,
     // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
     PreviewModel,
+    PreviewRetarget,
     PreviewMaterial,
     PreviewBlueprint,
     NavigateModelPreview,
+    // 毛发资产视口：左键拖动旋转预览对象。只作用于预览 World，不写 SC/SM；
+    // GT 把它转成绝对的 SetMeshPlacement，累计角度由 UI 维护。
+    RotatePreviewModel,
+    // 毛发资产视口的复位：排队一次 ResetPositions（stringValue 空 = 所有 tressfx 对象）。
+    ResetHairSimulation,
+    // 毛发资产视口的模拟参数实时覆盖：只在当前预览 World 生效，不写资产。
+    // 字段名与值域由运行期命令边界再次校验。
+    SetHairSimulationParameter,
+    // 毛发分组预览（Group Colors / Selected / Solo）：只改当前预览 World 的会话状态，
+    // 不写资产，也不直接接触 GPU buffer。
+    SetTressfxGroupPreview,
+    // Groups 草稿绑定的预览同步：只在草稿结构/预览 generation 变化时发送；
+    // 由运行时队列交给 RT 原地更新 group id/颜色/参数 buffer。
+    SetTressfxGroupBindingPreview,
+    // 分组笔刷 ghost：只更新 per-object preview buffer，不写资产或 GPU group id。
+    SetTressfxBrushPreview,
     ControlAnimationPreview,
     // 被聚焦脚本控制器的时间轴：stringValue=组件身份，intValue 0=seek/1=play，floatValue=秒。
     ControlScriptAnimation,
@@ -59,10 +77,6 @@ enum class UiActionType
     // intValue 是 0/1。身份在执行边界解析并校验，UI 回调不接触 World。
     SetActorVisible,
     SetActorProperty,
-    // Landscape Sculpt：值语义 brush 输入，执行边界校验 World/session 后写 CPU session。
-    TerrainEdit,
-    // Landscape Paint：layer weight 覆盖层，执行边界失效 TerrainPageManager 页。
-    TerrainPaint,
     FrameEditorActor,
     ControlScripts,
     ReloadScripts,
@@ -85,9 +99,8 @@ enum class UiActionType
     RedoSceneEdit,
     CreateScriptBlueprintAsset,
     OpenScriptSource,
-    SetSpeedTreeStrength,
-    SetSpeedTreeGustingEnabled,
-    ForceSpeedTreeGust,
+    TerrainEdit,
+    TerrainPaint,
     Quit
 };
 
@@ -130,8 +143,59 @@ struct BlueprintPreviewTransformInput
     bool reset = false;
 };
 
-// Landscape Sculpt 只表达值语义；UI 不持有 TerrainEditSession/World。
-// u/v 是高度图归一化坐标，radiusUv 也是归一化半径；mode 0 Raise/1 Lower/2 Smooth。
+// 毛发视口的模型旋转：yaw 是预览世界内的累计角度（度），只绕资产原点 Y 轴转动。
+// pitch 字段保留兼容，毛发 UI 恒传 0；不改原点位置，不写资产或场景数据。
+struct ModelPreviewRotationInput
+{
+    uint64_t worldGeneration = 0;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+
+// 毛发视口的实时参数：field 与作者字段同名（gravity/damping/...），
+// valueCount 决定读 1 或 3 个分量。UI 只发值语义，校验与投递都在 GT/RT。
+struct ModelPreviewHairParameterInput
+{
+    uint64_t worldGeneration = 0;
+    std::string field;
+    std::array<float, 3> values{0.0f, 0.0f, 0.0f};
+    uint32_t valueCount = 0;
+};
+
+struct ModelPreviewTressfxGroupInput
+{
+    uint64_t worldGeneration = 0;
+    // -1 = 无选中；0 = 隐式 Default；k = 声明序第 k 个命名组。
+    int32_t selectedGroup = -1;
+    // 与 shader 的 uboM.selectionData.w 一致：bit0 Group Colors，bit1 Solo。
+    uint32_t flags = 0;
+};
+
+struct ModelPreviewTressfxGroupBindingInput
+{
+    uint64_t worldGeneration = 0;
+    uint64_t draftRevision = 0;
+    std::string objectName;
+    std::vector<uint32_t> guideGroupIds;
+    std::vector<std::string> groupNames;
+    std::string bindingKey;
+};
+
+struct ModelPreviewTressfxBrushInput
+{
+    uint64_t worldGeneration = 0;
+    std::string objectName;
+    // 0 = Default（不允许作为绘画目标）；k = 声明序第 k 个命名组。
+    uint32_t targetGroupId = 0;
+    VL::Hair::GroupPaintMode mode = VL::Hair::GroupPaintMode::Add;
+    std::vector<VL::Hair::TressfxBrushGuideWeight> weights;
+    // 世界空间笔刷圆环；正常路径由 World DebugDraw 绘制，UI 的屏幕圆环只做降级提示。
+    bool ringVisible = false;
+    Eigen::Vector3f ringCenter = Eigen::Vector3f::Zero();
+    Eigen::Vector3f ringNormal = Eigen::Vector3f::UnitY();
+    float ringRadiusWorld = 0.0f;
+};
+
 enum class TerrainBrushOperation
 {
     BeginStroke,
@@ -148,14 +212,14 @@ struct TerrainBrushInput
 {
     TerrainBrushOperation operation = TerrainBrushOperation::ApplyBrush;
     uint64_t worldGeneration = 0;
-    std::string placementId; // terrain|<scene object name>
+    std::string placementId;
     float u = 0.0f;
     float v = 0.0f;
     float radiusUv = 0.0f;
     float strength = 1.0f;
     float falloff = 1.0f;
-    int mode = 0; // 0 Raise, 1 Lower, 2 Smooth
-    int shape = 0; // 0 Circle, 1 Square
+    int mode = 0;
+    int shape = 0;
 };
 
 struct TerrainPaintInput
@@ -174,7 +238,7 @@ struct TerrainPaintInput
     float noise = 0.0f;
     uint32_t noiseSeed = 0;
     bool erase = false;
-    int shape = 0; // 0 Circle, 1 Square
+    int shape = 0;
 };
 
 struct UiAction
@@ -183,12 +247,19 @@ struct UiAction
     int intValue = 0;
     float floatValue = 0.0f;
     std::string stringValue;
+    // PreviewRetarget: stringValue 为 RT 身份，此字段为作者指定的目标 SM；GT 核对二者绑定。
+    std::string retargetPreviewModel;
     uint64_t blueprintPreviewRevision = 0;
     ModelPreviewCameraInput previewCamera;
-    BlueprintPreviewTransformInput blueprintTransform;
-    EditorActorPropertyEdit actorProperty;
+    ModelPreviewRotationInput previewRotation;
+    ModelPreviewHairParameterInput previewHairParameter;
+    ModelPreviewTressfxGroupInput previewTressfxGroup;
+    ModelPreviewTressfxGroupBindingInput previewTressfxGroupBinding;
+    ModelPreviewTressfxBrushInput previewTressfxBrush;
     TerrainBrushInput terrainBrush;
     TerrainPaintInput terrainPaint;
+    BlueprintPreviewTransformInput blueprintTransform;
+    EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;
     // 脚本作者请求只带值；class/name/modelPath 或 property/value 在 GT 校验。
     nlohmann::json script = nlohmann::json::object();

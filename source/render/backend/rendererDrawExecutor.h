@@ -8,6 +8,7 @@
 #include "render/backend/rendererObjectGpuResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/frontend/renderScene.h"
+#include "render/shadow/shadowCasterCull.h"
 
 class MaterialInstance;
 class PipelineBase;
@@ -41,6 +42,12 @@ struct RendererDrawContext
     const RenderScene& renderScene;
     const ResolvedRenderScene& resolvedRenderScene;
     RendererDrawUploadServices& services;
+    // 仅阴影 pass 设置：该级联自己的 caster 剔除体。nullptr 表示不做空间剔除。
+    const ShadowCasterCullFrustum* shadowCasterCullFrustum = nullptr;
+    // 接收面光源空间 XY 范围；对方向光是比拟合视锥更紧、仍然精确的预筛。
+    const ShadowCasterReceiverBounds* shadowCasterReceiverBounds = nullptr;
+    // 仅阴影 pass 设置：记录 before/after draw 数，供 --gpu-stats 诊断。
+    ShadowCasterCullStats* shadowCasterCullStats = nullptr;
 };
 
 // Backend 侧 DrawPacket 执行器，直接消费已解析的 Renderable 句柄和 backend GPU 资源。

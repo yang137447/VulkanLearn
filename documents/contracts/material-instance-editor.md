@@ -4,7 +4,7 @@
 
 ## Status
 
-The facade also hosts Scene/Mesh/Texture/Blueprint document commands through the shared
+The facade also hosts Scene/Mesh/TressFX/Texture/Blueprint document commands through the shared
 [asset modification API](asset-modify-api.md). Their drafts and Save Content
 entries have separate owners; MI parameters, bindings and preview remain owned here.
 

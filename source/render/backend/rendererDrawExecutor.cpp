@@ -234,6 +234,36 @@ void RendererDrawExecutor::DrawShadowScene(
                     RequireResolvedDrawResources("Shadow", draw, context.renderScene);
                 RendererObjectGpuResources& objectResources = *drawResources.objectResources;
                 const RenderDrawPacket& drawPacket = *drawResources.drawPacket;
+                if (context.shadowCasterCullStats != nullptr)
+                {
+                    ++context.shadowCasterCullStats->casterDraws;
+                }
+
+                // 逐级联空间剔除。bounds 来自当前帧 draw packet：蒙皮对象已是
+                // skinPose 边界，TressFX/SpeedTree 是各自资产边界；这里绝不读取
+                // bind pose。两个判据都只在“完全在外”时返回 false。
+                const bool outsideCullFrustum =
+                    context.shadowCasterCullFrustum != nullptr &&
+                    !context.shadowCasterCullFrustum->IntersectsWorldBounds(
+                        drawPacket.worldBoundsMin,
+                        drawPacket.worldBoundsMax,
+                        kShadowCasterCullPadding);
+                const bool outsideReceiverLightSpaceXy =
+                    context.shadowCasterReceiverBounds != nullptr &&
+                    !ShadowCasterBoundsTouchReceiverLightSpaceXy(
+                        drawPacket.worldBoundsMin,
+                        drawPacket.worldBoundsMax,
+                        *context.shadowCasterReceiverBounds,
+                        kShadowCasterCullPadding);
+                if (outsideCullFrustum || outsideReceiverLightSpaceXy)
+                {
+                    continue;
+                }
+                if (context.shadowCasterCullStats != nullptr)
+                {
+                    ++context.shadowCasterCullStats->submittedDraws;
+                }
+
                 VulkanDebug::ScopedRegion region(
                     commandBuffer,
                     drawPacket.debugName,

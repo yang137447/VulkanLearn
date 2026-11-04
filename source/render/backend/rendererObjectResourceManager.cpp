@@ -1,5 +1,6 @@
 #include "render/backend/rendererObjectResourceManager.h"
 
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/shadow/materialShadowCasterPolicy.h"
+#include "render/skinning/skinDeformLayout.h"
 #include "shaderReflect.h"
 
 namespace VL
@@ -173,6 +175,71 @@ void UpdateObjectDescriptorSets(
             {
                 if (binding.set == ObjectSetIndex)
                 {
+                    if (binding.binding == 3)
+                    {
+                        if (!resources.tressfxPositions.buffer)
+                            throw std::runtime_error("TressFX Object SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxPositions);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    if (binding.binding == 4)
+                    {
+                        // pre-skin 输出由对象资源包持有；单 buffer 跨帧复用，读端
+                        // 由 compute→vertex / 上一帧读取→compute 的显式屏障保护。
+                        if (!resources.skinDeform.HasResources())
+                            throw std::runtime_error("Skinned pre-deform Object SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.skinDeform.bufferInfos.at(0));
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    // TressFX 分组预览（Phase 2）：binding 5/6 只在头发材质里反射出现，
+                    // 与骨骼对象共享 Object Set 2 但不参与 skinJointCount 合同。
+                    if (binding.binding == 5)
+                    {
+                        if (!resources.tressfxGuideGroupIds.buffer)
+                            throw std::runtime_error("TressFX guide group id SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxGuideGroupIds);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    if (binding.binding == 6)
+                    {
+                        if (!resources.tressfxGuideGroupColors.buffer)
+                            throw std::runtime_error("TressFX guide group color SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxGuideGroupColors);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
+                    if (binding.binding == 7)
+                    {
+                        if (i >= resources.tressfxBrushWeights.size() ||
+                            !resources.tressfxBrushWeights[i].buffer)
+                            throw std::runtime_error("TressFX brush weight SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxBrushWeights[i]);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
                     if (!resources.skinJointCount || (binding.binding != 1 && binding.binding != 2))
                         throw std::runtime_error("Invalid skeletal Object SSBO contract");
                     vk::WriteDescriptorSet write;
@@ -434,6 +501,29 @@ void RendererObjectResourceManager::InitializeObjectResources(
             "SkinPalette: " + objectName);
         rendererBackend.SetupDescriptorBufferInfos(resources.skinPalette);
     }
+    if (resources.skinJointCount && resources.prerenderSkin &&
+        resources.skinDeformVertexCount > 0)
+    {
+        // 单份 device-local 输出：帧内 compute 写、vertex 读；跨帧复用在每次
+        // dispatch 前用 VERTEX_SHADER→COMPUTE_SHADER 屏障覆盖上一帧的读取。
+        // 这比逐 swapchain image 分槽省 3 倍显存，且屏障本来就属于该 pass。
+        rendererBackend.CreateBufferSet(resources.skinDeform,
+            VL::Skinning::SkinDeformBufferSizeBytes(resources.skinDeformVertexCount),
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            "SkinDeform: " + objectName,
+            false);
+        // 16 B std140 uvec4，只有 x 是有效 vertexCount；dispatch 尾部早退依赖它。
+        rendererBackend.CreateBufferSet(resources.skinDeformParams,
+            sizeof(uint32_t) * 4,
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "SkinDeformParams: " + objectName);
+        for (void* mapped : resources.skinDeformParams.buffersMapped)
+        {
+            std::memcpy(mapped, &resources.skinDeformVertexCount, sizeof(uint32_t));
+        }
+    }
     CreateObjectDescriptorSets(rendererBackend, objectName, materialInstance, resources);
     UpdateObjectDescriptorSets(rendererBackend, descriptorContext, materialInstance, resources);
     // 公共 Opaque 管线有自己的精简 descriptor layout，因此需要 shadowDescriptorSets。
@@ -459,6 +549,10 @@ void RendererObjectResourceManager::ShutdownObjectResources(
 
     DestroyShadowDescriptorSets(*rendererBackend, resources);
     DestroyObjectDescriptorSets(*rendererBackend, resources);
+    if (resources.skinDeformParams.HasResources())
+        rendererBackend->DestroyBufferSet(resources.skinDeformParams);
+    if (resources.skinDeform.HasResources())
+        rendererBackend->DestroyBufferSet(resources.skinDeform);
     if (resources.skinPalette.HasResources())
         rendererBackend->DestroyBufferSet(resources.skinPalette);
     if (resources.objectUniformBuffer.HasResources())

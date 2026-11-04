@@ -116,7 +116,9 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     RuntimeId objectId,
     const WorldMeshObject& meshObject,
     const Eigen::Matrix4f& previousModel,
-    bool selected)
+    bool selected,
+    const WorldSnapshotBuildDesc& desc,
+    const TressfxGroupPreviewState& groupPreview)
 {
     MeshDrawSnapshot snapshot;
     snapshot.skinPose = meshObject.skinPose;
@@ -126,6 +128,11 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.sceneObjectIdentity = meshObject.sceneObjectIdentity.empty()
         ? objectName
         : meshObject.sceneObjectIdentity;
+    // 与 World::TickAnimations 的普通/蓝图归属规则一致；在 GT 冻结，
+    // RT 仅消费值，不查询脚本宿主或从发丝对象身份反推来源时钟。
+    snapshot.simulationDeltaSeconds =
+        snapshot.sceneObjectIdentity.rfind("__blueprint/", 0) == 0
+            ? desc.gameSimulationDeltaSeconds : desc.simulationDeltaSeconds;
     snapshot.materialSlotIndex = meshObject.materialSlotIndex;
     snapshot.materialSlotName = meshObject.materialSlotName;
     snapshot.model = meshObject.model;
@@ -139,6 +146,16 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.isTerrain = meshObject.isTerrain;
     snapshot.lodGroupId = meshObject.lodGroupId;
     snapshot.lodLevel = meshObject.lodLevel;
+    snapshot.windResponseProfileKey = meshObject.windResponseProfileKey;
+    snapshot.tressfxPointsPerGuide = meshObject.tressfxPointsPerGuide;
+    snapshot.tressfxSelectedGroup = groupPreview.selectedGroup;
+    snapshot.tressfxGroupFlags =
+        (groupPreview.groupColors ? TressfxGroupPreviewColors : 0u) |
+        (groupPreview.solo ? TressfxGroupPreviewSolo : 0u);
+    // 放置级网格：把模板键与通用 placementBinding 一起冻结，渲染线程在 resolve
+    // 前据此克隆独立 RenderableObject；普通对象两者为空。
+    snapshot.placementTemplateMeshKey = meshObject.placementTemplateMeshKey;
+    snapshot.placementBinding = meshObject.placementBinding;
 
     const std::array<Eigen::Vector3f, 8> worldCorners = BuildWorldCorners(
         meshObject.localBoundsMin,
@@ -314,6 +331,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     WorldSnapshot snapshot;
     snapshot.worldGeneration = world.GetGeneration();
     snapshot.frameIndex = desc.frameIndex;
+    snapshot.hairSimulationDeltaSeconds = desc.hairSimulationDeltaSeconds;
     snapshot.debugViewMode = desc.debugViewMode;
 
     Camera& camera = *world.GetRenderCamera();
@@ -390,7 +408,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
                 objectId,
                 meshObject,
                 previousModel,
-                selected));
+                selected,
+                desc,
+                world.GetTressfxGroupPreview()));
             currentObjectModels[objectId] = meshObject.model;
             continue;
         }
@@ -476,7 +496,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             objectId,
             meshObject,
             previousModel,
-            selected));
+            selected,
+            desc,
+            world.GetTressfxGroupPreview()));
         currentObjectModels[objectId] = meshObject.model;
     }
 
@@ -524,7 +546,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             objectId,
             *representative,
             previousModel,
-            selected));
+            selected,
+            desc,
+            world.GetTressfxGroupPreview()));
         // 代表兜底也算一次出图；它的级以实际网格为准。
         ++drawnChunks;
         if (representative->lodLevel < TerrainMaxLodLevels)
@@ -567,6 +591,9 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     }
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);
+    // 风是场景全局状态：冻结进快照后，头发/离线消费者看到的是同一代 World 的风，
+    // 不会在渲染线程重新读取可能已被换代的 World。
+    snapshot.wind = world.GetWind();
     previousViewProjection = snapshot.camera.viewProjection;
     previousObjectModels = std::move(currentObjectModels);
 

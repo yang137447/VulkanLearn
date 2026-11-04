@@ -54,6 +54,9 @@ struct RendererResourceLoadContext
     OfflineWorldAssets* offlineWorldAssets = nullptr;
     bool offlineOnly = false;
     bool useFrozenMaterials = false;
+    // GPU 预蒙皮：World 候选从 RenderSystem 的启动 flag 复制，材质变体与对象
+    // pre-skin buffer 都按它选择；预览/缩略图显式传 false。
+    bool prerenderSkin = false;
     // 增量异步资产保留既有 MI 身份，但新 MI 的 JSON 只消费 worker 已冻结版本。
     const std::map<std::filesystem::path, nlohmann::json>* preparedMaterialSources = nullptr;
 

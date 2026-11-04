@@ -56,7 +56,8 @@ public:
         const RendererDescriptorContext& descriptorContext,
         const RenderScene& renderScene,
         ResolvedRenderScene& resolvedRenderScene,
-        RendererResourceCache& resourceCache) const;
+        RendererResourceCache& resourceCache,
+        bool prerenderSkin = false) const;
 };
 
 } // namespace VL
