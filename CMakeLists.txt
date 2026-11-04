@@ -14,6 +14,9 @@ option(VULKANLEARN_BUILD_ANIMATION_TOOLS
 
 option(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS "Build and host C# gameplay Blueprints (requires .NET 8 SDK)." OFF)
 
+set(VULKANLEARN_TERRAIN_EROSION_PYTHON "" CACHE FILEPATH
+    "Optional Python interpreter with numpy for terrain_erosion_tests.py.")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -41,6 +44,15 @@ endif()
 
 if(VULKANLEARN_BUILD_TESTS)
     enable_testing()
+
+    if(VULKANLEARN_TERRAIN_EROSION_PYTHON AND
+        EXISTS "${VULKANLEARN_TERRAIN_EROSION_PYTHON}")
+        add_test(
+            NAME terrain_erosion_tests
+            COMMAND "${VULKANLEARN_TERRAIN_EROSION_PYTHON}"
+                "${CMAKE_SOURCE_DIR}/tool/blender-terrain-import/terrain_erosion_tests.py"
+                -v)
+    endif()
 
     include(FetchContent)
     FetchContent_Declare(

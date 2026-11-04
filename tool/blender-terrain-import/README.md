@@ -104,6 +104,18 @@ py -3 tool\terrain-ue-import\build_vulkanlearn_assets.py `
 
 ## 验收
 
+数值回归（MFD vs D8、沉积质量账、抬升、沉积长度尺度）：
+
+```powershell
+& 'D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe' `
+  tool\blender-terrain-import\terrain_erosion_tests.py -v
+```
+
+如果把该解释器路径传给 CMake 的 `VULKANLEARN_TERRAIN_EROSION_PYTHON`，
+同一脚本也会注册成 CTest 项 `terrain_erosion_tests`。
+
+可视化验收：
+
 ```powershell
 & $blender --background --python tool\blender-terrain-import\terrain_preview.py -- `
   --heightmap "$res\Generated\BlenderPegasusGN\Source\heightmap_gn.png" `
@@ -117,6 +129,21 @@ py -3 tool\terrain-ue-import\build_vulkanlearn_assets.py `
 * `anisotropy` — 山脊主方向性，越大越像山脉；基线 1.02，当前约 1.27
 * `ridge_density` / `valley_density` — 两者接近说明是各向同性噪声，不是脊谷网络
 * `drainage_length_km` — 连续谷线总长，衡量树枝状水系
+
+### 2026-11-05 六地貌 1024² 默认参数
+
+| 预设 | anisotropy | drainage_km | slope_p50° | deposited / exported (M m³) |
+|---|---:|---:|---:|---:|
+| alpine | 1.88 | 1.96 | 35.2 | 174 / 195 |
+| coastal | 1.15 | 1.43 | 22.2 | 112 / 200 |
+| canyon | 1.14 | 3.84 | 16.6 | 91 / 263 |
+| dune | 14.43 | 3.67 | 53.9 | 381 / 464 |
+| karst | 1.08 | 1.17 | 27.6 | 116 / 211 |
+| volcanic | 1.13 | 1.10 | 26.8 | 112 / 214 |
+
+六个预设的侵蚀/沉积/输出质量账误差都 < 1e-15。对照图：
+`artifacts/gn_biomes/contact_sheet.png`。coastal 东侧边缘仍有条带，后续应优先
+检查海岸权重与边界 taper，而不是直接调侵蚀系数。
 
 ## 已知边界
 
