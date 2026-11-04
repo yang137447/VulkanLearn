@@ -7,14 +7,43 @@
 
 ```text
 geometry
-  -> decals（写 DBuffer A/B/C/D 与 DBufferMask）
+  -> decalStencil（D24S8，unit cube 写 stencil bit0）
+  -> decals（stencil test + 写 DBuffer A/B/C/D 与 DBufferMask）
   -> deferredLighting
   -> forwardOpaque / sky / forwardTransparent / particle
 ```
 
+`decalStencil` 是独立的 `RenderGraphPassType::DecalStencil`，只挂
+`decalStencil`（`D24_UNORM_S8_UINT`）深度/stencil 附件，不写颜色。
+它和 `decals` 分开的原因是不能在同一个 pass 里既采样 `sceneDepth`
+又把同一张 depth 当 attachment：`decals` 需要 `sceneDepth` 采样重建
+世界位置，而 `decalStencil` 是它的 stencil attachment。`RenderGraphCompiler`
+会拒绝任何 input/output 指向同一资源的 pass（`PassFeedbackLoop`）。
+
+硬件 mask 算法：
+
+1. `decalStencil` pass 先 clear stencil 为 `0`；`DecalRenderer` 用与
+   decals 完全相同的 unit cube、实例 SSBO 和排序结果绘制所有可见 decal。
+   pipeline 为 `cullMode=None`、depth test/write 关闭，stencil test 为
+   `always`、`passOp=replace`、`writeMask=0x01`、`reference=1`。
+2. 每个 cube 面覆盖的像素把 stencil bit0 置 `1`。cull 关闭保证相机进入
+   decal 体积时，剩余可见面仍能写 mask，而不是因所有面都变成背面而漏写。
+3. `decals` pass 以同一 `decalStencil` 为深度/stencil attachment，
+   `stencilLoadOp=load`，pipeline 为 stencil test 开启、`compareOp=notEqual`、
+   `reference=0`、`compareMask=0x01`、`writeMask=0`，失败片元在进入
+   fragment shader 前被固定功能丢弃。
+
+这里采用 union mask（所有可见 decal 共用 bit0），不是逐 decal 独立
+stencil 值。像素落在 union 内但不在某个 decal 的投影体时，仍由 decals
+fragment shader 用 `sceneDepth` 重建和局部 `[-1,1]` cube 判断丢弃；
+因此 mask 是硬件屏幕空间 early gate，不是最终几何包含性判断。
+静态 decal 与 `renderMode: "decal"` 粒子 decal 共享这同一遍 mask，
+共享 64 槽排序与实例数据。
+
 `decals` 是独立的 `RenderGraphPassType::Decal`，由 `DecalRenderer` 拥有
-unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，也不
-经过 Material 图或普通 mesh draw。
+unit cube、实例 SSBO、pipeline 与 descriptor，并额外拥有
+`DecalStencil` 的 mask pipeline。它不是 particle pass，也不经过 Material
+图或普通 mesh draw。
 
 `deferredLighting` 与 `forwardOpaque` 按像素屏幕 UV 读取同一组 DBuffer。
 forward opaque 通过 set 3 binding 1..5 绑定 `dbufferA/B/C/D/Mask`，在材质
@@ -254,8 +283,12 @@ forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 D
   要做到完整 UE 等价需要额外的逐层 payload 或有序 resolve，不在当前
   DBuffer 布局内；若将来引入，必须同时改 DBuffer 格式、
   `config/renderGraphConfig.json` 的附件/清屏值和本契约。
-- 没有硬件 depth/stencil 附件；像素以 `sceneDepth` 重建投影体判断，
-  大屏或相机进入 decal 体积的鲁棒性仍需后续 stencil 路径。
+- 硬件 stencil 只提供屏幕空间 union mask，不是逐 decal 的 stencil ID，
+  也不提供 per-pixel decal depth。像素的最终包含性仍由 `sceneDepth`
+  重建 + 局部 cube 判断；因此 stencil 是 early gate/性能与反馈环隔离
+  结构，不是完整的 UE 逐层 decal depth/stencil。
+- stencil 资源是 `D24_UNORM_S8_UINT`，只使用 stencil bit0；当前没有
+  stencil 值分组、stencil 深度剔除或 forward/transparent 接收路径。
 - `ForwardOpaque` 已按屏幕 UV 接收 DBuffer；`ForwardTransparent` 明确不
   接收，因为当前 DBuffer 没有 per-pixel decal depth/stencil 来判断透明面
   与后方 opaque 的遮挡关系。粒子仍走自己的粒子 shader，不会自动接收 decal。
@@ -264,7 +297,8 @@ forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 D
   期间保留纹理集最多 120 帧，超过后正常退休；World 换代立即清空持久集合，
   避免 emitter 删除/重命名后长期占用默认或真实纹理。
 - 粒子 decal 只是静态 decal 的 CPU 动态来源。它不按命中表面自动定向、
-  没有逐粒子图集/材质图、硬件 stencil 或逐层 RNM；动态与静态共享 64 槽时，
+  没有逐粒子图集/材质图或逐层 RNM；它复用静态 decal 的硬件 stencil
+  union mask 与 64 槽实例数据。动态与静态共享 64 槽时，
   粒子路径没有抢占静态 decal 的优先级。Beam 的 `beam.hitScan` 是独立的
   受控平面命中，不会把命中法线传给粒子 decal。
 
@@ -280,6 +314,13 @@ forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 D
   对 `source/render/decal/decalNormalBlend.h`（shader 的 CPU 镜像）做
   数值回归：coverage 0/1、同半球半覆盖、对跖点 50/50 不抵消、跨半球
   满覆盖、多层完全相消回退、`normalStrength == 0` 不写 coverage。
+- Graph/pipeline 合同：`tool/renderer-backend-tests/decal_stencil_graph_test.cpp`
+  锁定 `decalStencil` 的 `D24_UNORM_S8_UINT` 附件、mask->decals 顺序、
+  bit0 write/reference、`notEqual` gate、默认 stencil 关闭、反馈环拒绝、
+  无 stencil 附件拒绝与非法 op/mask 拒绝；
+  `tool/renderer-backend-tests/pass_pipeline_contract_test.cpp` 锁定
+  `PassPipelineContractKey` 的 normalized key 与 `GraphicsPipelineStateDesc`
+  映射。
 - 粒子驱动路径：
   `tool/material-instance-editor-tests/particleDecalRuntimeTests.cpp`
   覆盖 schema/capability/round-trip、burst 确定性、decalToWorld 约定、
@@ -287,7 +328,8 @@ forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 D
   静态/动态 64 槽分配、同名不同 assetPath、disable/re-enable；
   `tool/editor-ui-tests` 覆盖 Emitter 页 decal 控件与 World 预算排除；
   `tool/offline-integration-tests` 锁定离线模拟跳过 decal。
-- 运行时：`SC_particle_ue_explosion` 的 `ExplosionScorch` 应在
+- 运行时：`SC_particle_ue_impact` 的墙面/地面贴花与
+  `SC_particle_ue_explosion` 的 `ExplosionScorch` 应在
   `deferredLighting` 前把地面基色压暗；日志不应出现 `VUID-` 或
   `Validation Error`，也不应出现 `[Decals][Warning]`（出现即说明
   albedo/normal/ORM 之一加载失败并回退默认纹理）。

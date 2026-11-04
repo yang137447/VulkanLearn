@@ -39,6 +39,8 @@
   distortion pass 中把屏幕高度归一化偏移写入 RGBA16F 缓冲。`renderMode: "light"` 与
   `renderMode: "decal"` 是 CPU 侧例外：它们不分配 GPU 池，而是共享同一份固定步长/burst
   模拟，把存活粒子分别映射成最多 64 盏场景 PointLight 或最多 64 个可见 DBuffer decal。
+  粒子 decal 与静态 decal 共用 `decalStencil` D24S8 union mask（bit0）、64 槽实例
+  排序和 `DecalRenderer`；粒子侧不额外创建 stencil 资源或独立 decal pass。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -84,7 +86,8 @@ SC_*.json particleSystem
     -> ParticleLightRuntime::Synchronize/Update（renderMode=="light"）
     -> 追加 RenderScene::lights -> light SSBO -> deferred lighting
     -> ParticleDecalRuntime::Synchronize/Update（renderMode=="decal"）
-    -> 追加 RenderScene::decals -> DecalRenderer::Synchronize -> BeforeLighting DBuffer
+    -> 追加 RenderScene::decals -> DecalRenderer::Synchronize
+    -> decalStencil pass（D24S8 bit0 union mask）-> decals pass（stencil gate + DBuffer）
 ```
 
 `ParticleSystemAsset` 是 CPU 冻结值；没有运行时覆盖时不再重新解析作者 JSON。v2 资产只在

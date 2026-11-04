@@ -95,6 +95,56 @@ vk::CompareOp GetDepthCompareOp(VL::CompiledDepthCompareOp compareOp)
     throw std::runtime_error("Compiled render graph contains an unknown depthCompareOp");
 }
 
+vk::CompareOp GetStencilCompareOp(VL::CompiledStencilCompareOp compareOp)
+{
+    switch (compareOp)
+    {
+    case VL::CompiledStencilCompareOp::Never:
+        return vk::CompareOp::eNever;
+    case VL::CompiledStencilCompareOp::Less:
+        return vk::CompareOp::eLess;
+    case VL::CompiledStencilCompareOp::Equal:
+        return vk::CompareOp::eEqual;
+    case VL::CompiledStencilCompareOp::LessOrEqual:
+        return vk::CompareOp::eLessOrEqual;
+    case VL::CompiledStencilCompareOp::Greater:
+        return vk::CompareOp::eGreater;
+    case VL::CompiledStencilCompareOp::NotEqual:
+        return vk::CompareOp::eNotEqual;
+    case VL::CompiledStencilCompareOp::GreaterOrEqual:
+        return vk::CompareOp::eGreaterOrEqual;
+    case VL::CompiledStencilCompareOp::Always:
+        return vk::CompareOp::eAlways;
+    }
+    throw std::runtime_error(
+        "Compiled render graph contains an unknown stencilCompareOp");
+}
+
+vk::StencilOp GetStencilOp(VL::CompiledStencilOp stencilOp)
+{
+    switch (stencilOp)
+    {
+    case VL::CompiledStencilOp::Keep:
+        return vk::StencilOp::eKeep;
+    case VL::CompiledStencilOp::Zero:
+        return vk::StencilOp::eZero;
+    case VL::CompiledStencilOp::Replace:
+        return vk::StencilOp::eReplace;
+    case VL::CompiledStencilOp::IncrementAndClamp:
+        return vk::StencilOp::eIncrementAndClamp;
+    case VL::CompiledStencilOp::DecrementAndClamp:
+        return vk::StencilOp::eDecrementAndClamp;
+    case VL::CompiledStencilOp::Invert:
+        return vk::StencilOp::eInvert;
+    case VL::CompiledStencilOp::IncrementAndWrap:
+        return vk::StencilOp::eIncrementAndWrap;
+    case VL::CompiledStencilOp::DecrementAndWrap:
+        return vk::StencilOp::eDecrementAndWrap;
+    }
+    throw std::runtime_error(
+        "Compiled render graph contains an unknown stencil operation");
+}
+
 bool HasRenderResourceHandles(const RenderResource& resource)
 {
     return resource.imageHandle.IsValid() ||
@@ -1193,13 +1243,23 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.imageHandle =
             rendererBackend.GetImageHandle(
                 resource.image);
-        vk::ImageAspectFlagBits aspect =
-            vk::ImageAspectFlagBits::eColor;
-        if (bIsDepthFormat)
-        {
-            aspect =
-                vk::ImageAspectFlagBits::eDepth;
-        }
+        // shader 采样视图只取 depth aspect；带 stencil 的 framebuffer
+        // attachment 视图必须同时包含 stencil，否则 stencil test 写入
+        // 不会真正作用到该资源。
+        const vk::ImageAspectFlagBits shaderAspect = bIsDepthFormat
+            ? vk::ImageAspectFlagBits::eDepth
+            : vk::ImageAspectFlagBits::eColor;
+        // 现有 backend 接口用单个 ImageAspectFlagBits 接收 aspect；combined
+        // depth-stencil 需要位掩码，Vulkan-Hpp 的 Flags 构造会保留该位组合。
+        const vk::ImageAspectFlagBits attachmentAspect =
+            bIsDepthFormat &&
+                CommonFunction::HasStencilComponent(resource.format)
+            ? static_cast<vk::ImageAspectFlagBits>(
+                  static_cast<uint32_t>(
+                      vk::ImageAspectFlagBits::eDepth) |
+                  static_cast<uint32_t>(
+                      vk::ImageAspectFlagBits::eStencil))
+            : shaderAspect;
         const vk::ImageViewType imageViewType =
             resource.type == "texture2DArray"
                 ? vk::ImageViewType::e2DArray
@@ -1209,7 +1269,7 @@ RenderResource RenderGraph::CreateRenderResource(
                 resource.image,
                 imageViewType,
                 resource.format,
-                aspect,
+                shaderAspect,
                 0,
                 1,
                 0,
@@ -1231,7 +1291,7 @@ RenderResource RenderGraph::CreateRenderResource(
             resource.image,
             vk::ImageViewType::e2D,
             resource.format,
-            aspect,
+            attachmentAspect,
             0,
             1,
             layer,
@@ -1343,6 +1403,24 @@ Renderpass RenderGraph::CreateRenderpass(
             passDesc.pipelineState.depthWriteEnable;
         renderpass.pipelineContractKey.depthCompareOp =
             GetDepthCompareOp(passDesc.pipelineState.depthCompareOp);
+        renderpass.pipelineContractKey.stencilTestEnable =
+            passDesc.pipelineState.stencilTestEnable;
+        renderpass.pipelineContractKey.stencilWriteMask =
+            passDesc.pipelineState.stencilWriteMask;
+        renderpass.pipelineContractKey.stencilCompareMask =
+            passDesc.pipelineState.stencilCompareMask;
+        renderpass.pipelineContractKey.stencilReference =
+            passDesc.pipelineState.stencilReference;
+        renderpass.pipelineContractKey.stencilCompareOp =
+            GetStencilCompareOp(
+                passDesc.pipelineState.stencilCompareOp);
+        renderpass.pipelineContractKey.stencilFailOp =
+            GetStencilOp(passDesc.pipelineState.stencilFailOp);
+        renderpass.pipelineContractKey.stencilPassOp =
+            GetStencilOp(passDesc.pipelineState.stencilPassOp);
+        renderpass.pipelineContractKey.stencilDepthFailOp =
+            GetStencilOp(
+                passDesc.pipelineState.stencilDepthFailOp);
         renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
 
         renderpass.inputResources = passDesc.inputResources;
@@ -1357,6 +1435,10 @@ Renderpass RenderGraph::CreateRenderpass(
                 GetAttachmentLoadOp(output.loadOp);
             renderpass.outputStoreOps[resourceName] =
                 GetAttachmentStoreOp(output.storeOp);
+            renderpass.outputStencilLoadOps[resourceName] =
+                GetAttachmentLoadOp(output.stencilLoadOp);
+            renderpass.outputStencilStoreOps[resourceName] =
+                GetAttachmentStoreOp(output.stencilStoreOp);
             if (bIsShadowPass)
             {
                 renderpass.shadowCascadeIndex = output.layer;
@@ -1702,16 +1784,30 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
             .setSamples(sampleCount)
             .setLoadOp(renderpass.outputLoadOps.at(depthName))
             .setStoreOp(renderpass.outputStoreOps.at(depthName))
-            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
-            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(renderpass.outputLoadOps.at(depthName) == vk::AttachmentLoadOp::eLoad ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined)
+            .setStencilLoadOp(
+                renderpass.outputStencilLoadOps.at(depthName))
+            .setStencilStoreOp(
+                renderpass.outputStencilStoreOps.at(depthName))
+            .setInitialLayout(
+                (renderpass.outputLoadOps.at(depthName) ==
+                     vk::AttachmentLoadOp::eLoad ||
+                 renderpass.outputStencilLoadOps.at(depthName) ==
+                     vk::AttachmentLoadOp::eLoad)
+                    ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+                    : vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
         
         attachmentDescriptions.push_back(depthStencilAttachmentDescription);
 
         depthAttachmentReference.setAttachment(attachmentDescriptions.size() - 1);
         depthAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
-        depthAttachmentReference.setAspectMask(vk::ImageAspectFlagBits::eDepth);
+        vk::ImageAspectFlags depthAspect =
+            vk::ImageAspectFlagBits::eDepth;
+        if (CommonFunction::HasStencilComponent(depthFormat))
+        {
+            depthAspect |= vk::ImageAspectFlagBits::eStencil;
+        }
+        depthAttachmentReference.setAspectMask(depthAspect);
 
         if (bUseMsaa)
         {
@@ -2010,6 +2106,14 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     else if (formatStr == "D32_SFLOAT")
     {
         return vk::Format::eD32Sfloat;
+    }
+    else if (formatStr == "D16_UNORM")
+    {
+        return vk::Format::eD16Unorm;
+    }
+    else if (formatStr == "D24_UNORM_S8_UINT")
+    {
+        return vk::Format::eD24UnormS8Uint;
     }
     else if (formatStr == "R8G8B8A8_UNORM")
     {

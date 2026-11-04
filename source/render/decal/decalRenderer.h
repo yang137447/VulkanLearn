@@ -24,6 +24,7 @@ namespace VL
 {
 class RendererBackendVulkan;
 struct RenderScene;
+struct DecalSnapshot;
 
 // BeforeLighting DBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
 // 逐 decal 的 unit cube 绘制到 DBuffer A/B/C/D 与 DBufferMask；实例数据
@@ -39,6 +40,13 @@ public:
     void Shutdown(RendererBackendVulkan& backend);
     void InvalidatePipelines(RendererBackendVulkan& backend);
     void RecordGraphics(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Renderpass& renderPass,
+        const RenderScene& renderScene);
+    // 在 decals pass 之前写硬件 stencil bit0：unit cube 的屏幕覆盖
+    // 就是 decal 投影体，camera 在体积内时仍由双面写入保持有效。
+    void RecordStencil(
         vk::CommandBuffer commandBuffer,
         uint32_t imageIndex,
         const Renderpass& renderPass,
@@ -134,6 +142,12 @@ private:
         uint32_t imageIndex,
         uint32_t slot,
         const DecalTextureSet& textures);
+    std::vector<const DecalSnapshot*> CollectVisibleDecals(
+        const RenderScene& renderScene) const;
+    void UploadFrameInstances(
+        uint32_t imageIndex,
+        const RenderScene& renderScene,
+        const std::vector<const DecalSnapshot*>& visibleDecals);
     void DestroyResources(RendererBackendVulkan& backend);
     static void DestroyBuffer(
         RendererBackendVulkan& backend,
@@ -142,6 +156,9 @@ private:
     RendererBackendVulkan* backend = nullptr;
     bool initialized = false;
     std::shared_ptr<PipelineBase> pipeline;
+    // mask pass 与 decals pass 共享 cube/实例 SSBO，但 render pass、
+    // stencil 状态和 cull 状态不同，必须各自拥有 pipeline。
+    std::shared_ptr<PipelineBase> stencilPipeline;
     GpuBuffer cubeVertices;
     GpuBuffer cubeIndices;
     std::vector<GpuBuffer> frameUniforms;

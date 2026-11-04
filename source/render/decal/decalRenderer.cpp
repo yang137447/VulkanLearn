@@ -39,6 +39,17 @@ const Renderpass* FindDecalPass(const RenderGraph& graph)
     return nullptr;
 }
 
+const Renderpass* FindDecalStencilPass(const RenderGraph& graph)
+{
+    for (const auto& [name, pass] : graph.GetRenderpasses())
+    {
+        (void)name;
+        if (pass.type == RenderGraphPassType::DecalStencil)
+            return &pass;
+    }
+    return nullptr;
+}
+
 std::array<Vertex, kDecalCubeVertexCount> UnitCubeVertices()
 {
     std::array<Vertex, kDecalCubeVertexCount> vertices{};
@@ -125,6 +136,43 @@ void DecalRenderer::Initialize(
         initialized = false;
         return;
     }
+    const Renderpass* stencilPass = FindDecalStencilPass(graph);
+    if (stencilPass == nullptr)
+    {
+        throw std::runtime_error(
+            "DecalRenderer requires a decalStencil pass before the decal pass");
+    }
+
+    const PassPipelineContractKey& decalContract =
+        decalPass->pipelineContractKey;
+    // stencil gate 必须由真实 graph 合同开启，不能在 C++ 侧悄悄伪造。
+    // bit0 约定：mask pass 写 1，decals pass 用 notEqual 0 通过。
+    if (!decalContract.useVertexInput ||
+        !decalContract.stencilTestEnable ||
+        decalContract.stencilCompareOp != vk::CompareOp::eNotEqual ||
+        (decalContract.stencilCompareMask & 0x01u) == 0u ||
+        (decalContract.stencilWriteMask & 0x01u) != 0u ||
+        (decalContract.stencilReference &
+         decalContract.stencilCompareMask & 0x01u) != 0u)
+    {
+        throw std::runtime_error(
+            "Decal pass must consume stencil bit0 with notEqual reference 0 "
+            "and writeMask 0");
+    }
+
+    const PassPipelineContractKey& stencilContract =
+        stencilPass->pipelineContractKey;
+    if (!stencilContract.useVertexInput ||
+        !stencilContract.stencilTestEnable ||
+        stencilContract.stencilCompareOp != vk::CompareOp::eAlways ||
+        stencilContract.stencilPassOp != vk::StencilOp::eReplace ||
+        (stencilContract.stencilWriteMask & 0x01u) == 0u ||
+        (stencilContract.stencilReference & 0x01u) == 0u)
+    {
+        throw std::runtime_error(
+            "Decal stencil pass must write bit0 with replace op and "
+            "reference bit0 set");
+    }
 
     ShaderVariantKey variant;
     variant.shaderName = "decal/decal";
@@ -133,16 +181,10 @@ void DecalRenderer::Initialize(
     const GraphicsShaderVariantArtifact& artifact =
         factory.PrepareGraphicsShaderVariant(variant);
 
-    PassPipelineContractKey contract =
-        decalPass->pipelineContractKey;
-    contract.useVertexInput = true;
-    contract.depthTestEnable = false;
-    contract.depthWriteEnable = false;
-    contract.depthCompareOp = vk::CompareOp::eAlways;
     Renderpass* mutableDecalPass = const_cast<Renderpass*>(decalPass);
     pipeline = factory.CreateGraphicsPipeline(
         &mutableDecalPass->renderPass,
-        contract,
+        decalContract,
         artifact,
         // 闭合 cube 只保留正面；否则同一 sceneDepth 表面会被前后两面
         // 各混合一次。索引绕序与 pipeline 的 clockwise front face 对齐。
@@ -152,6 +194,38 @@ void DecalRenderer::Initialize(
         GraphicsPipelineBlendMode::DecalDBuffer);
     if (!pipeline)
         throw std::runtime_error("DecalRenderer failed to create its graphics pipeline");
+
+    ShaderVariantKey stencilVariant;
+    stencilVariant.shaderName = "decal/decalStencil";
+    stencilVariant.renderMode = RenderMode::Opaque;
+    stencilVariant.shadingModelMacro = "SHADING_MODEL_UNLIT";
+    const GraphicsShaderVariantArtifact& stencilArtifact =
+        factory.PrepareGraphicsShaderVariant(stencilVariant);
+    Renderpass* mutableStencilPass = const_cast<Renderpass*>(stencilPass);
+    // stencil fragment shader 不声明 set0，reflection 会把 binding 0 的
+    // stageFlags 缩成 vertex-only；这会让共享的 decal descriptor set
+    // 与 mask pipeline layout 不兼容。显式继承 decal pipeline 的 set0
+    // 布局（含 vertex|fragment stageFlags），保证同一 descriptor set 可绑定。
+    GraphicsPipelineLayoutDesc stencilLayoutDesc;
+    stencilLayoutDesc.overrideSets[0] = true;
+    for (const ShaderBinding& binding :
+         pipeline->GetDescriptorLayoutBindings())
+    {
+        if (binding.set == 0)
+            stencilLayoutDesc.setBindings[0].push_back(binding);
+    }
+    stencilPipeline = factory.CreateGraphicsPipeline(
+        &mutableStencilPass->renderPass,
+        stencilContract,
+        stencilArtifact,
+        // camera 在体积内时所有面都是背面；mask pass 必须双面写入，
+        // 否则 stencil 会错误地保持 0。
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::Opaque,
+        stencilLayoutDesc);
+    if (!stencilPipeline)
+        throw std::runtime_error(
+            "DecalRenderer failed to create its stencil pipeline");
 
     CreateStaticGeometry(renderer);
     CreateMaterialTextures(renderer);
@@ -419,6 +493,7 @@ void DecalRenderer::DestroyResources(RendererBackendVulkan& renderer)
     defaultAlbedoTexture.reset();
     defaultNormalTexture.reset();
     defaultOrmTexture.reset();
+    stencilPipeline.reset();
     pipeline.reset();
 }
 
@@ -707,20 +782,9 @@ void DecalRenderer::WriteMaterialDescriptors(
     descriptorTextureStates[imageIndex][slot] = desired;
 }
 
-void DecalRenderer::RecordGraphics(
-    vk::CommandBuffer commandBuffer,
-    uint32_t imageIndex,
-    const Renderpass& renderPass,
-    const RenderScene& renderScene)
+std::vector<const DecalSnapshot*> DecalRenderer::CollectVisibleDecals(
+    const RenderScene& renderScene) const
 {
-    if (!initialized || !pipeline ||
-        imageIndex >= descriptorSets.size() ||
-        imageIndex >= frameUniforms.size() ||
-        imageIndex >= instanceBuffers.size() ||
-        imageIndex >= materialDescriptorSets.size() ||
-        materialDescriptorSets[imageIndex].size() < kMaxDecalInstances)
-        return;
-
     std::vector<const DecalSnapshot*> visibleDecals;
     visibleDecals.reserve(renderScene.decals.size());
     for (const DecalSnapshot& decal : renderScene.decals)
@@ -728,8 +792,6 @@ void DecalRenderer::RecordGraphics(
         if (decal.visible)
             visibleDecals.push_back(&decal);
     }
-    if (visibleDecals.empty())
-        return;
     std::sort(
         visibleDecals.begin(),
         visibleDecals.end(),
@@ -741,7 +803,14 @@ void DecalRenderer::RecordGraphics(
         });
     if (visibleDecals.size() > kMaxDecalInstances)
         visibleDecals.resize(kMaxDecalInstances);
+    return visibleDecals;
+}
 
+void DecalRenderer::UploadFrameInstances(
+    uint32_t imageIndex,
+    const RenderScene& renderScene,
+    const std::vector<const DecalSnapshot*>& visibleDecals)
+{
     FrameUniforms frame{};
     frame.viewProjection = renderScene.camera.viewProjection;
     frame.invViewProjection =
@@ -790,6 +859,74 @@ void DecalRenderer::RecordGraphics(
                 ? 1.0f
                 : 0.0f);
     }
+}
+
+void DecalRenderer::RecordStencil(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Renderpass& renderPass,
+    const RenderScene& renderScene)
+{
+    (void)renderPass;
+    if (!initialized || !stencilPipeline ||
+        imageIndex >= descriptorSets.size() ||
+        imageIndex >= frameUniforms.size() ||
+        imageIndex >= instanceBuffers.size())
+        return;
+
+    const std::vector<const DecalSnapshot*> visibleDecals =
+        CollectVisibleDecals(renderScene);
+    // 即使没有可见 decal 也要进入 render pass：mask pass 的 clear
+    // 负责把上一帧的 stencil 位清零，否则 residue 会污染后续帧。
+    UploadFrameInstances(imageIndex, renderScene, visibleDecals);
+    if (visibleDecals.empty())
+        return;
+
+    commandBuffer.bindPipeline(
+        stencilPipeline->GetBindPoint(),
+        stencilPipeline->GetPipeline());
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        stencilPipeline->GetPipelineLayout(),
+        0,
+        descriptorSets[imageIndex],
+        nullptr);
+    commandBuffer.bindVertexBuffers(
+        0,
+        cubeVertices.buffer,
+        vk::DeviceSize{0});
+    commandBuffer.bindIndexBuffer(
+        cubeIndices.buffer,
+        0,
+        vk::IndexType::eUint32);
+    // mask shader 只需要实例矩阵；一次 draw 覆盖所有可见 decal。
+    commandBuffer.drawIndexed(
+        kDecalCubeIndexCount,
+        static_cast<uint32_t>(visibleDecals.size()),
+        0,
+        0,
+        0);
+}
+
+void DecalRenderer::RecordGraphics(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Renderpass& renderPass,
+    const RenderScene& renderScene)
+{
+    if (!initialized || !pipeline ||
+        imageIndex >= descriptorSets.size() ||
+        imageIndex >= frameUniforms.size() ||
+        imageIndex >= instanceBuffers.size() ||
+        imageIndex >= materialDescriptorSets.size() ||
+        materialDescriptorSets[imageIndex].size() < kMaxDecalInstances)
+        return;
+
+    const std::vector<const DecalSnapshot*> visibleDecals =
+        CollectVisibleDecals(renderScene);
+    if (visibleDecals.empty())
+        return;
+    UploadFrameInstances(imageIndex, renderScene, visibleDecals);
 
     commandBuffer.bindPipeline(
         pipeline->GetBindPoint(),

@@ -361,6 +361,11 @@ private:
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
         uint32_t swapChainImageIndex) override;
+    void RecordDecalStencilPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const VL::RenderScene& renderScene) override;
     void RecordDecalPass(
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,

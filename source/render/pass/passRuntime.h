@@ -61,6 +61,19 @@ public:
         uint32_t swapChainImageIndex) = 0;
     // DecalRenderer 拥有 unit cube、实例 SSBO 与 decal pipeline；pass 仅提供
     // 已开始的 DBuffer A/B/C/D + Mask 窗口和 sceneDepth 输入描述符集。
+    // 主渲染路径必须覆写；没有 DecalRenderer 的缩略图会话保持空录制，
+    // 其 decal pass 本身也是空录制，因此不需要 stencil mask。
+    virtual void RecordDecalStencilPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const RenderScene& renderScene)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+        (void)renderScene;
+    }
     virtual void RecordDecalPass(
         vk::CommandBuffer& commandBuffer,
         const Renderpass& renderPass,
@@ -99,6 +112,7 @@ private:
     void RecordEditorGridPass(PassRuntimeContext& context) const;
     void RecordParticlePass(PassRuntimeContext& context) const;
     void RecordDistortionPass(PassRuntimeContext& context) const;
+    void RecordDecalStencilPass(PassRuntimeContext& context) const;
     void RecordDecalPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;

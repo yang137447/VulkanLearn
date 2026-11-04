@@ -200,6 +200,16 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
         .setScissorCount(1)
         .setPScissors(&scissor);
 
+    vk::StencilOpState stencilOpState;
+    stencilOpState
+        .setFailOp(desc.pipelineStateDesc.stencilFailOp)
+        .setPassOp(desc.pipelineStateDesc.stencilPassOp)
+        .setDepthFailOp(desc.pipelineStateDesc.stencilDepthFailOp)
+        .setCompareOp(desc.pipelineStateDesc.stencilCompareOp)
+        .setCompareMask(desc.pipelineStateDesc.stencilCompareMask)
+        .setWriteMask(desc.pipelineStateDesc.stencilWriteMask)
+        .setReference(desc.pipelineStateDesc.stencilReference);
+
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo;
     pipelineDepthStencilStateCreateInfo
         .setDepthTestEnable(desc.pipelineStateDesc.bDepthTestEnable)
@@ -208,9 +218,9 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
         .setDepthBoundsTestEnable(false)
         .setMinDepthBounds(0.0f)
         .setMaxDepthBounds(1.0f)
-        .setStencilTestEnable(false)
-        .setBack(vk::StencilOpState())
-        .setFront(vk::StencilOpState());
+        .setStencilTestEnable(desc.pipelineStateDesc.bStencilTestEnable)
+        .setBack(stencilOpState)
+        .setFront(stencilOpState);
 
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo

@@ -77,6 +77,10 @@ struct CompiledRenderGraphPassOutput
     uint32_t layer = 0;
     std::string loadOp = "clear";
     std::string storeOp = "store";
+    // 只有带 stencil 分量的深度格式会使用这两个操作；颜色附件与
+    // D32/D16 深度附件保持 dontCare。
+    std::string stencilLoadOp = "dontCare";
+    std::string stencilStoreOp = "dontCare";
 };
 
 struct CompiledRenderGraphPassInputDescriptor
@@ -97,12 +101,46 @@ enum class CompiledDepthCompareOp
     Always
 };
 
+enum class CompiledStencilCompareOp
+{
+    Never,
+    Less,
+    Equal,
+    LessOrEqual,
+    Greater,
+    NotEqual,
+    GreaterOrEqual,
+    Always
+};
+
+enum class CompiledStencilOp
+{
+    Keep,
+    Zero,
+    Replace,
+    IncrementAndClamp,
+    DecrementAndClamp,
+    Invert,
+    IncrementAndWrap,
+    DecrementAndWrap
+};
+
 struct CompiledGraphicsPipelineState
 {
     bool useVertexInput = true;
     bool depthTestEnable = true;
     bool depthWriteEnable = true;
     CompiledDepthCompareOp depthCompareOp = CompiledDepthCompareOp::Less;
+    // 旧 pass 默认关闭 stencil；只有显式声明 stencil 的 pass 才改变状态。
+    bool stencilTestEnable = false;
+    uint8_t stencilWriteMask = 0xFF;
+    uint8_t stencilCompareMask = 0xFF;
+    uint8_t stencilReference = 0;
+    CompiledStencilCompareOp stencilCompareOp =
+        CompiledStencilCompareOp::Always;
+    CompiledStencilOp stencilFailOp = CompiledStencilOp::Keep;
+    CompiledStencilOp stencilPassOp = CompiledStencilOp::Keep;
+    CompiledStencilOp stencilDepthFailOp = CompiledStencilOp::Keep;
 };
 
 struct CompiledRenderGraphPass

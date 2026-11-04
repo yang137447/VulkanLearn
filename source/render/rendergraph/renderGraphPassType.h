@@ -24,6 +24,10 @@ enum class RenderGraphPassType
     // BeforeLighting DBuffer decal：独立 DecalRenderer 用 unit cube 投影，
     // 写 DBuffer A/B/C/D + Mask，必须排在 geometry 之后、deferredLighting 之前。
     Decal,
+    // Decal 硬件 stencil 预标记：只写 D24S8 的 stencil bit0，不写颜色。
+    // 与 Decal pass 分开，确保 decal pass 采样 sceneDepth 时不再把同一
+    // depth 资源同时作为 attachment，避免采样/写入反馈环。
+    DecalStencil,
     // 粒子 billboard 不经过 Material schema，由 ParticleRenderer 直接绑定
     // 自己的 UBO/SSBO；该类型只负责在图中声明 sceneColor/sceneDepth 的合成顺序。
     Particle,
@@ -39,10 +43,10 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十个：编辑器网格、自动曝光、Decal、粒子与屏幕空间扰动各自追加，
+// 十一个：编辑器网格、自动曝光、Decal、DecalStencil、粒子与屏幕空间扰动各自追加，
 // 合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 10>
+inline constexpr std::array<RenderGraphPassTypeName, 11>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -52,6 +56,7 @@ inline constexpr std::array<RenderGraphPassTypeName, 10>
         {RenderGraphPassType::EditorGrid, "editorGrid"},
         {RenderGraphPassType::AutoExposure, "autoExposure"},
         {RenderGraphPassType::Decal, "decal"},
+        {RenderGraphPassType::DecalStencil, "decalStencil"},
         {RenderGraphPassType::Particle, "particle"},
         {RenderGraphPassType::Distortion, "distortion"}
     }};

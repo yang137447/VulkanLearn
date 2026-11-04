@@ -105,6 +105,9 @@ struct Renderpass
     std::unordered_map<std::string, uint32_t> outputLayers;
     std::unordered_map<std::string, vk::AttachmentLoadOp> outputLoadOps;
     std::unordered_map<std::string, vk::AttachmentStoreOp> outputStoreOps;
+    // 仅带 stencil 分量的深度资源使用；颜色附件保持 dontCare。
+    std::unordered_map<std::string, vk::AttachmentLoadOp> outputStencilLoadOps;
+    std::unordered_map<std::string, vk::AttachmentStoreOp> outputStencilStoreOps;
     // pass 输入描述符集, 统一使用Set3。inputDescriptorImageInfos 按 binding 下标保存，
     // binding 关系来自 CompiledRenderGraph，而不是运行时的输入数组顺序推断。
     vk::DescriptorPool descriptorPool;

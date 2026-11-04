@@ -5,6 +5,8 @@ add_executable(vl_renderer_backend_tests
     physical_lighting_test.cpp
     auto_exposure_test.cpp
     decal_normal_blend_test.cpp
+    decal_stencil_graph_test.cpp
+    pass_pipeline_contract_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
 )

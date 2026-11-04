@@ -64,7 +64,9 @@ Current implemented areas include:
   DBuffer decals); current schema, ownership and limits:
   `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
-  sceneDepth reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
+  a dedicated `decalStencil` D24S8 pass (unit-cube bit0 union mask, stencil gate on the
+  decals pass; sceneDepth stays a sampled input so there is no feedback loop), sceneDepth
+  reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
   DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM
   fallback and GPU-side per-decal material descriptors (`albedoMap`/`normalMap`/`ormMap`,
   no Material Graph); current scope and limits: `documents/contracts/decal-runtime.md`

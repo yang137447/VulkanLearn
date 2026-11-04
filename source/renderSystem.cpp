@@ -2480,6 +2480,21 @@ void RenderSystem::RecordDistortionPass(
         renderPass);
 }
 
+void RenderSystem::RecordDecalStencilPass(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex,
+    const VL::RenderScene& renderScene)
+{
+    // mask pass 只写 decalStencil，不触碰 DBuffer；DecalRenderer 在这一步
+    // 用与 decals pass 相同的实例顺序写 bit0。
+    decalRenderer.RecordStencil(
+        commandBuffer,
+        swapChainImageIndex,
+        renderPass,
+        renderScene);
+}
+
 void RenderSystem::RecordDecalPass(
     vk::CommandBuffer& commandBuffer,
     const Renderpass& renderPass,

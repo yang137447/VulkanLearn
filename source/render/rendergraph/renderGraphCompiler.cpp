@@ -130,6 +130,125 @@ RuntimeResult<CompiledDepthCompareOp> CompileDepthCompareOp(
         passName));
 }
 
+RuntimeResult<CompiledStencilCompareOp> CompileStencilCompareOp(
+    const nlohmann::json& stencilNode,
+    const std::string& passName)
+{
+    if (!stencilNode.contains("compareOp"))
+    {
+        return RuntimeResult<CompiledStencilCompareOp>::Success(
+            CompiledStencilCompareOp::Always);
+    }
+    if (!stencilNode["compareOp"].is_string())
+    {
+        return RuntimeResult<CompiledStencilCompareOp>::Failure(
+            MakeCompileError(
+                "RenderGraphCompiler.InvalidPipelineState",
+                "Render graph pass stencil.compareOp must be a string.",
+                passName));
+    }
+
+    const std::string compareOp =
+        stencilNode["compareOp"].get<std::string>();
+    static const std::unordered_map<std::string, CompiledStencilCompareOp>
+        kCompareOps = {
+            {"never", CompiledStencilCompareOp::Never},
+            {"less", CompiledStencilCompareOp::Less},
+            {"equal", CompiledStencilCompareOp::Equal},
+            {"lessOrEqual", CompiledStencilCompareOp::LessOrEqual},
+            {"greater", CompiledStencilCompareOp::Greater},
+            {"notEqual", CompiledStencilCompareOp::NotEqual},
+            {"greaterOrEqual", CompiledStencilCompareOp::GreaterOrEqual},
+            {"always", CompiledStencilCompareOp::Always}};
+    const auto compareIt = kCompareOps.find(compareOp);
+    if (compareIt == kCompareOps.end())
+    {
+        return RuntimeResult<CompiledStencilCompareOp>::Failure(
+            MakeCompileError(
+                "RenderGraphCompiler.InvalidPipelineState",
+                "Render graph pass stencil.compareOp is unsupported.",
+                passName));
+    }
+    return RuntimeResult<CompiledStencilCompareOp>::Success(
+        compareIt->second);
+}
+
+RuntimeResult<CompiledStencilOp> CompileStencilOp(
+    const nlohmann::json& stencilNode,
+    const char* fieldName,
+    const std::string& passName)
+{
+    if (!stencilNode.contains(fieldName))
+    {
+        return RuntimeResult<CompiledStencilOp>::Success(
+            CompiledStencilOp::Keep);
+    }
+    if (!stencilNode[fieldName].is_string())
+    {
+        return RuntimeResult<CompiledStencilOp>::Failure(
+            MakeCompileError(
+                "RenderGraphCompiler.InvalidPipelineState",
+                "Render graph pass stencil operation must be a string: " +
+                    std::string(fieldName),
+                passName));
+    }
+
+    const std::string op = stencilNode[fieldName].get<std::string>();
+    static const std::unordered_map<std::string, CompiledStencilOp>
+        kStencilOps = {
+            {"keep", CompiledStencilOp::Keep},
+            {"zero", CompiledStencilOp::Zero},
+            {"replace", CompiledStencilOp::Replace},
+            {"incrementAndClamp", CompiledStencilOp::IncrementAndClamp},
+            {"decrementAndClamp", CompiledStencilOp::DecrementAndClamp},
+            {"invert", CompiledStencilOp::Invert},
+            {"incrementAndWrap", CompiledStencilOp::IncrementAndWrap},
+            {"decrementAndWrap", CompiledStencilOp::DecrementAndWrap}};
+    const auto opIt = kStencilOps.find(op);
+    if (opIt == kStencilOps.end())
+    {
+        return RuntimeResult<CompiledStencilOp>::Failure(
+            MakeCompileError(
+                "RenderGraphCompiler.InvalidPipelineState",
+                "Render graph pass stencil operation is unsupported: " +
+                    std::string(fieldName),
+                passName));
+    }
+    return RuntimeResult<CompiledStencilOp>::Success(opIt->second);
+}
+
+RuntimeResult<uint8_t> CompileStencilMaskField(
+    const nlohmann::json& stencilNode,
+    const char* fieldName,
+    uint8_t defaultValue,
+    const std::string& passName)
+{
+    if (!stencilNode.contains(fieldName))
+    {
+        return RuntimeResult<uint8_t>::Success(defaultValue);
+    }
+    if (!stencilNode[fieldName].is_number_unsigned())
+    {
+        return RuntimeResult<uint8_t>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPipelineState",
+            "Render graph pass stencil mask/reference must be an unsigned "
+            "integer in [0, 255]: " + std::string(fieldName),
+            passName));
+    }
+    const uint64_t value =
+        stencilNode[fieldName].get<uint64_t>();
+    if (value > 0xFFu)
+    {
+        return RuntimeResult<uint8_t>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPipelineState",
+            "Render graph pass stencil mask/reference exceeds 255: " +
+                std::string(fieldName),
+            passName));
+    }
+    return RuntimeResult<uint8_t>::Success(
+        static_cast<uint8_t>(value));
+}
+
 RuntimeResult<CompiledGraphicsPipelineState> CompilePipelineState(
     const nlohmann::json& passNode,
     const std::string& passName)
@@ -179,6 +298,107 @@ RuntimeResult<CompiledGraphicsPipelineState> CompilePipelineState(
     pipelineState.depthWriteEnable =
         stateNode.value("depthWriteEnable", pipelineState.depthWriteEnable);
     pipelineState.depthCompareOp = depthCompareResult.Value();
+
+    if (stateNode.contains("stencil"))
+    {
+        const nlohmann::json& stencilNode = stateNode["stencil"];
+        if (!stencilNode.is_object())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                MakeCompileError(
+                    "RenderGraphCompiler.InvalidPipelineState",
+                    "Render graph pass stencil state must be an object.",
+                    passName));
+        }
+        if (stencilNode.contains("testEnable") &&
+            !stencilNode["testEnable"].is_boolean())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                MakeCompileError(
+                    "RenderGraphCompiler.InvalidPipelineState",
+                    "Render graph pass stencil.testEnable must be boolean.",
+                    passName));
+        }
+
+        const char* maskFields[] = {
+            "writeMask", "compareMask", "reference"};
+        for (const char* fieldName : maskFields)
+        {
+            if (stencilNode.contains(fieldName) &&
+                !stencilNode[fieldName].is_number_unsigned())
+            {
+                return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                    MakeCompileError(
+                        "RenderGraphCompiler.InvalidPipelineState",
+                        "Render graph pass stencil mask/reference must be an "
+                        "unsigned integer: " + std::string(fieldName),
+                        passName));
+            }
+        }
+
+        pipelineState.stencilTestEnable =
+            stencilNode.value("testEnable", false);
+        auto writeMaskResult = CompileStencilMaskField(
+            stencilNode, "writeMask", pipelineState.stencilWriteMask,
+            passName);
+        auto compareMaskResult = CompileStencilMaskField(
+            stencilNode, "compareMask", pipelineState.stencilCompareMask,
+            passName);
+        auto referenceResult = CompileStencilMaskField(
+            stencilNode, "reference", pipelineState.stencilReference,
+            passName);
+        if (writeMaskResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                writeMaskResult.Error());
+        }
+        if (compareMaskResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                compareMaskResult.Error());
+        }
+        if (referenceResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                referenceResult.Error());
+        }
+        pipelineState.stencilWriteMask = writeMaskResult.Value();
+        pipelineState.stencilCompareMask = compareMaskResult.Value();
+        pipelineState.stencilReference = referenceResult.Value();
+
+        auto compareOpResult =
+            CompileStencilCompareOp(stencilNode, passName);
+        auto failOpResult =
+            CompileStencilOp(stencilNode, "failOp", passName);
+        auto passOpResult =
+            CompileStencilOp(stencilNode, "passOp", passName);
+        auto depthFailOpResult =
+            CompileStencilOp(stencilNode, "depthFailOp", passName);
+        if (compareOpResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                compareOpResult.Error());
+        }
+        if (failOpResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                failOpResult.Error());
+        }
+        if (passOpResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                passOpResult.Error());
+        }
+        if (depthFailOpResult.IsFailure())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+                depthFailOpResult.Error());
+        }
+        pipelineState.stencilCompareOp = compareOpResult.Value();
+        pipelineState.stencilFailOp = failOpResult.Value();
+        pipelineState.stencilPassOp = passOpResult.Value();
+        pipelineState.stencilDepthFailOp = depthFailOpResult.Value();
+    }
     return RuntimeResult<CompiledGraphicsPipelineState>::Success(std::move(pipelineState));
 }
 
@@ -433,6 +653,10 @@ RuntimeResult<std::vector<CompiledRenderGraphPassOutput>> CompilePassOutputs(
         }
         output.loadOp = outputNode.value("loadOp", std::string("clear"));
         output.storeOp = outputNode.value("storeOp", std::string("store"));
+        output.stencilLoadOp =
+            outputNode.value("stencilLoadOp", std::string("dontCare"));
+        output.stencilStoreOp =
+            outputNode.value("stencilStoreOp", std::string("dontCare"));
         if (!IsSupportedLoadOp(output.loadOp))
         {
             return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
@@ -446,6 +670,20 @@ RuntimeResult<std::vector<CompiledRenderGraphPassOutput>> CompilePassOutputs(
                 "RenderGraphCompiler.UnsupportedStoreOp",
                 "Render graph pass output storeOp is not supported.",
                 passName + ":" + output.resource + ":" + output.storeOp));
+        }
+        if (!IsSupportedLoadOp(output.stencilLoadOp))
+        {
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedStencilLoadOp",
+                "Render graph pass output stencilLoadOp is not supported.",
+                passName + ":" + output.resource + ":" + output.stencilLoadOp));
+        }
+        if (!IsSupportedStoreOp(output.stencilStoreOp))
+        {
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedStencilStoreOp",
+                "Render graph pass output stencilStoreOp is not supported.",
+                passName + ":" + output.resource + ":" + output.stencilStoreOp));
         }
         outputs.push_back(std::move(output));
     }
@@ -806,6 +1044,55 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             }
         }
         pass.outputResources = std::move(outputResult.Value());
+
+        // 同一 pass 不能既把资源作为 sampled input，又把它作为 attachment。
+        // 典型错误是 decal 直接采样 sceneDepth 同时把它写回；这种反馈环在
+        // Vulkan 上是未定义行为，必须在编译期拒绝。
+        for (const std::string& inputResource : pass.inputResources)
+        {
+            for (const CompiledRenderGraphPassOutput& output :
+                 pass.outputResources)
+            {
+                if (inputResource == output.resource)
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(
+                        MakeCompileError(
+                            "RenderGraphCompiler.PassFeedbackLoop",
+                            "Render graph pass cannot sample and attach the "
+                            "same resource.",
+                            pass.name + ":" + inputResource));
+                }
+            }
+        }
+
+        // stencil test 只有在 pass 真正挂载带 stencil 分量的深度附件时
+        // 才有意义；否则 Vulkan 管线创建会失败或行为未定义。
+        if (pass.pipelineState.stencilTestEnable)
+        {
+            bool hasStencilAttachment = false;
+            for (const CompiledRenderGraphPassOutput& output :
+                 pass.outputResources)
+            {
+                const auto formatIt =
+                    resourceFormats.find(output.resource);
+                if (formatIt != resourceFormats.end() &&
+                    formatIt->second == "D24_UNORM_S8_UINT")
+                {
+                    hasStencilAttachment = true;
+                    break;
+                }
+            }
+            if (!hasStencilAttachment)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(
+                    MakeCompileError(
+                        "RenderGraphCompiler.MissingStencilAttachment",
+                        "Render graph pass enables stencil test without a "
+                        "depth-stencil attachment.",
+                        pass.name));
+            }
+        }
+
         for (const std::string& inputResource : pass.inputResources)
         {
             if (previousResourceUses[inputResource] == ResourcePreviousUse::Attachment)

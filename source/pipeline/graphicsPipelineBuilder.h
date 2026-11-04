@@ -27,6 +27,16 @@ struct GraphicsPipelineStateDesc
     bool bDepthTestEnable = true;
     bool bDepthWriteEnable = true;
     vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
+    // stencil 默认关闭；front/back 使用同一组状态，当前 decal mask
+    // 不依赖双面不同 compare/op。
+    bool bStencilTestEnable = false;
+    uint32_t stencilWriteMask = 0xFF;
+    uint32_t stencilCompareMask = 0xFF;
+    uint32_t stencilReference = 0;
+    vk::StencilOp stencilFailOp = vk::StencilOp::eKeep;
+    vk::StencilOp stencilPassOp = vk::StencilOp::eKeep;
+    vk::StencilOp stencilDepthFailOp = vk::StencilOp::eKeep;
+    vk::CompareOp stencilCompareOp = vk::CompareOp::eAlways;
     vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
     GraphicsPipelineBlendMode blendMode = GraphicsPipelineBlendMode::Opaque;
 };

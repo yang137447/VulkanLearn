@@ -15,7 +15,8 @@
             "sampled",
             "present",
             "transferSrc",
-            "transferDst"
+            "transferDst",
+            "storage"
         ],
         "loadOpSupport": [
             "clear",
@@ -34,14 +35,35 @@
             "greaterOrEqual",
             "always"
         ],
+        "stencilCompareOpSupport": [
+            "never",
+            "less",
+            "equal",
+            "lessOrEqual",
+            "greater",
+            "notEqual",
+            "greaterOrEqual",
+            "always"
+        ],
+        "stencilOpSupport": [
+            "keep",
+            "zero",
+            "replace",
+            "incrementAndClamp",
+            "decrementAndClamp",
+            "invert",
+            "incrementAndWrap",
+            "decrementAndWrap"
+        ],
         "pipelineState": {
             "useVertexInput": "是否使用模型顶点输入。fullscreen/postprocess/sky 这类 pass 通常为 false。",
             "depthTestEnable": "是否开启深度测试。",
             "depthWriteEnable": "是否写入深度。",
-            "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
+            "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。",
+            "stencil": "可选硬件 stencil 状态。front/back 共用同一组值；未声明时 testEnable=false，旧 pass 状态不变。字段为 testEnable、writeMask、compareMask、reference、compareOp、failOp、depthFailOp、passOp。启用 stencil 的 pass 必须输出 D24_UNORM_S8_UINT 或 D32_SFLOAT_S8_UINT 附件。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decalStencil、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -52,7 +74,9 @@
             "resource": "当前 pass 输出的逻辑资源名。",
             "layer": "可选输出数组层。默认 0；CSM shadowCascadeN 使用它选择 shadowMap 的目标层。",
             "loadOp": "attachment 开始时的加载策略。",
-            "storeOp": "attachment 结束时的保存策略。"
+            "storeOp": "attachment 结束时的保存策略。",
+            "stencilLoadOp": "带 stencil 分量附件的 stencil 加载策略；默认 dontCare。",
+            "stencilStoreOp": "带 stencil 分量附件的 stencil 保存策略；默认 dontCare。"
         }
     },
     "resources": [
@@ -336,6 +360,15 @@
                 "depthStencilAttachment",
                 "sampled"
             ]
+        },
+        {
+            "name": "decalStencil",
+            "format": "D24_UNORM_S8_UINT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "depthStencilAttachment"
+            ]
         }
     ],
     "passes": [
@@ -483,6 +516,37 @@
             ]
         },
         {
+            "name": "decalStencil",
+            "type": "decalStencil",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "always",
+                "stencil": {
+                    "testEnable": true,
+                    "writeMask": 1,
+                    "compareMask": 1,
+                    "reference": 1,
+                    "compareOp": "always",
+                    "failOp": "keep",
+                    "depthFailOp": "keep",
+                    "passOp": "replace"
+                }
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "decalStencil",
+                    "loadOp": "clear",
+                    "storeOp": "store",
+                    "stencilLoadOp": "clear",
+                    "stencilStoreOp": "store"
+                }
+            ]
+        },
+        {
             "name": "decals",
             "type": "decal",
             "needMsaa": false,
@@ -490,7 +554,17 @@
                 "useVertexInput": true,
                 "depthTestEnable": false,
                 "depthWriteEnable": false,
-                "depthCompareOp": "always"
+                "depthCompareOp": "always",
+                "stencil": {
+                    "testEnable": true,
+                    "writeMask": 0,
+                    "compareMask": 1,
+                    "reference": 0,
+                    "compareOp": "notEqual",
+                    "failOp": "keep",
+                    "depthFailOp": "keep",
+                    "passOp": "keep"
+                }
             },
             "input": [
                 {
@@ -523,6 +597,13 @@
                     "resource": "dbufferMask",
                     "loadOp": "clear",
                     "storeOp": "store"
+                },
+                {
+                    "resource": "decalStencil",
+                    "loadOp": "load",
+                    "storeOp": "store",
+                    "stencilLoadOp": "load",
+                    "stencilStoreOp": "dontCare"
                 }
             ]
         },

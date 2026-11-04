@@ -74,6 +74,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Distortion:
         RecordDistortionPass(context);
         return;
+    case RenderGraphPassType::DecalStencil:
+        RecordDecalStencilPass(context);
+        return;
     case RenderGraphPassType::Decal:
         RecordDecalPass(context);
         return;
@@ -317,6 +320,21 @@ void PassRuntime::RecordDecalPass(
 {
     BeginConfiguredRenderPass(context);
     context.services.RecordDecalPass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex,
+        context.renderScene);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDecalStencilPass(
+    PassRuntimeContext& context) const
+{
+    // mask pass 只有一个 D24S8 深度/stencil 附件，不采样 sceneDepth。
+    // 它与后续 decals pass 分离，避免 decal shader 采样 sceneDepth 时
+    // 同一 pass 又把 depth 当 attachment。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDecalStencilPass(
         context.commandBuffer,
         context.renderPass,
         context.swapChainImageIndex,

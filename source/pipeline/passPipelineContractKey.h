@@ -24,6 +24,14 @@ struct PassPipelineContractKey
     bool depthTestEnable = true;
     bool depthWriteEnable = true;
     vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
+    bool stencilTestEnable = false;
+    uint32_t stencilWriteMask = 0xFF;
+    uint32_t stencilCompareMask = 0xFF;
+    uint32_t stencilReference = 0;
+    vk::CompareOp stencilCompareOp = vk::CompareOp::eAlways;
+    vk::StencilOp stencilFailOp = vk::StencilOp::eKeep;
+    vk::StencilOp stencilPassOp = vk::StencilOp::eKeep;
+    vk::StencilOp stencilDepthFailOp = vk::StencilOp::eKeep;
     bool isShadowPass = false;
 
     bool operator==(const PassPipelineContractKey& other) const
@@ -33,6 +41,14 @@ struct PassPipelineContractKey
             depthTestEnable == other.depthTestEnable &&
             depthWriteEnable == other.depthWriteEnable &&
             depthCompareOp == other.depthCompareOp &&
+            stencilTestEnable == other.stencilTestEnable &&
+            stencilWriteMask == other.stencilWriteMask &&
+            stencilCompareMask == other.stencilCompareMask &&
+            stencilReference == other.stencilReference &&
+            stencilCompareOp == other.stencilCompareOp &&
+            stencilFailOp == other.stencilFailOp &&
+            stencilPassOp == other.stencilPassOp &&
+            stencilDepthFailOp == other.stencilDepthFailOp &&
             isShadowPass == other.isShadowPass;
     }
 
@@ -49,6 +65,14 @@ struct PassPipelineContractKey
                << "|depthTest=" << depthTestEnable
                << "|depthWrite=" << depthWriteEnable
                << "|depthCompare=" << static_cast<uint32_t>(depthCompareOp)
+               << "|stencilTest=" << stencilTestEnable
+               << "|stencilWriteMask=" << stencilWriteMask
+               << "|stencilCompareMask=" << stencilCompareMask
+               << "|stencilReference=" << stencilReference
+               << "|stencilCompare=" << static_cast<uint32_t>(stencilCompareOp)
+               << "|stencilFail=" << static_cast<uint32_t>(stencilFailOp)
+               << "|stencilPass=" << static_cast<uint32_t>(stencilPassOp)
+               << "|stencilDepthFail=" << static_cast<uint32_t>(stencilDepthFailOp)
                << "|shadowPass=" << isShadowPass;
         return stream.str();
     }
@@ -62,6 +86,14 @@ struct PassPipelineContractKey
         pipelineStateDesc.bDepthTestEnable = depthTestEnable;
         pipelineStateDesc.bDepthWriteEnable = depthWriteEnable;
         pipelineStateDesc.depthCompareOp = depthCompareOp;
+        pipelineStateDesc.bStencilTestEnable = stencilTestEnable;
+        pipelineStateDesc.stencilWriteMask = stencilWriteMask;
+        pipelineStateDesc.stencilCompareMask = stencilCompareMask;
+        pipelineStateDesc.stencilReference = stencilReference;
+        pipelineStateDesc.stencilCompareOp = stencilCompareOp;
+        pipelineStateDesc.stencilFailOp = stencilFailOp;
+        pipelineStateDesc.stencilPassOp = stencilPassOp;
+        pipelineStateDesc.stencilDepthFailOp = stencilDepthFailOp;
         pipelineStateDesc.cullMode = cullMode;
         pipelineStateDesc.blendMode = blendMode;
         return pipelineStateDesc;
