@@ -449,11 +449,12 @@ ParticleEmitterAsset ParseEmitter(
         emitter.renderMode != "mesh" &&
         emitter.renderMode != "beam" &&
         emitter.renderMode != "distortion" &&
-        emitter.renderMode != "light")
+        emitter.renderMode != "light" &&
+        emitter.renderMode != "decal")
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
-            "'beam', 'distortion' or 'light'");
+            "'beam', 'distortion', 'light' or 'decal'");
     }
     emitter.ribbonWidth = ReadFiniteFloat(
         json, "ribbonWidth", emitter.ribbonWidth);
@@ -495,6 +496,116 @@ ParticleEmitterAsset ParseEmitter(
             beam, "branchLength", emitter.beam.branchLength);
         emitter.beam.branchSpread = ReadFiniteFloat(
             beam, "branchSpread", emitter.beam.branchSpread);
+        if (beam.contains("colorKeys"))
+        {
+            const nlohmann::json& keys = beam.at("colorKeys");
+            if (!keys.is_array() || keys.empty() ||
+                keys.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle beam.colorKeys requires 1..8 entries");
+            }
+            for (const nlohmann::json& keyJson : keys)
+            {
+                if (!keyJson.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle beam color key must be an object");
+                }
+                ParticleBeamColorKey key;
+                key.time = ReadFiniteFloat(
+                    keyJson, "time", key.time);
+                key.color = ReadVec4(
+                    keyJson, "color", key.color);
+                emitter.beam.colorKeys.push_back(key);
+            }
+        }
+        if (beam.contains("widthKeys"))
+        {
+            const nlohmann::json& keys = beam.at("widthKeys");
+            if (!keys.is_array() || keys.empty() ||
+                keys.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle beam.widthKeys requires 1..8 entries");
+            }
+            for (const nlohmann::json& keyJson : keys)
+            {
+                if (!keyJson.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle beam width key must be an object");
+                }
+                ParticleBeamWidthKey key;
+                key.time = ReadFiniteFloat(
+                    keyJson, "time", key.time);
+                key.width = ReadFiniteFloat(
+                    keyJson, "width", key.width);
+                emitter.beam.widthKeys.push_back(key);
+            }
+        }
+        if (beam.contains("arcs"))
+        {
+            const nlohmann::json& arcs = beam.at("arcs");
+            if (!arcs.is_array() || arcs.empty() ||
+                arcs.size() > kMaxParticleBeamCount)
+            {
+                throw std::invalid_argument(
+                    "Particle beam.arcs requires 1..16 entries");
+            }
+            for (const nlohmann::json& arcJson : arcs)
+            {
+                if (!arcJson.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle beam arc must be an object");
+                }
+                ParticleBeamArc arc;
+                arc.colorStart = ReadVec3(
+                    arcJson, "colorStart", arc.colorStart);
+                arc.colorEnd = ReadVec3(
+                    arcJson, "colorEnd", arc.colorEnd);
+                arc.widthScale = ReadFiniteFloat(
+                    arcJson, "widthScale", arc.widthScale);
+                arc.intensity = ReadFiniteFloat(
+                    arcJson, "intensity", arc.intensity);
+                arc.noisePhase = ReadFiniteFloat(
+                    arcJson, "noisePhase", arc.noisePhase);
+                emitter.beam.arcs.push_back(arc);
+            }
+        }
+        if (beam.contains("hitScan"))
+        {
+            const nlohmann::json& hitScan = beam.at("hitScan");
+            if (!hitScan.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle beam.hitScan must be an object");
+            }
+            if (hitScan.contains("enabled"))
+            {
+                if (!hitScan.at("enabled").is_boolean())
+                {
+                    throw std::invalid_argument(
+                        "Particle beam.hitScan.enabled must be boolean");
+                }
+                emitter.beam.hitScan.enabled =
+                    hitScan.at("enabled").get<bool>();
+            }
+            else
+            {
+                emitter.beam.hitScan.enabled = true;
+            }
+            emitter.beam.hitScan.planeNormal = ReadVec3(
+                hitScan, "planeNormal",
+                emitter.beam.hitScan.planeNormal);
+            emitter.beam.hitScan.planeOffset = ReadFiniteFloat(
+                hitScan, "planeOffset",
+                emitter.beam.hitScan.planeOffset);
+            emitter.beam.hitScan.maxDistance = ReadFiniteFloat(
+                hitScan, "maxDistance",
+                emitter.beam.hitScan.maxDistance);
+        }
     }
     if (json.contains("light"))
     {
@@ -509,6 +620,77 @@ ParticleEmitterAsset ParseEmitter(
             light, "intensity", emitter.light.intensity);
         emitter.light.radius = ReadFiniteFloat(
             light, "radius", emitter.light.radius);
+    }
+    if (json.contains("decal"))
+    {
+        const nlohmann::json& decal = json.at("decal");
+        if (!decal.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle decal must be an object");
+        }
+        emitter.hasDecal = true;
+        emitter.decal.size = ReadVec3(
+            decal, "size", emitter.decal.size);
+        emitter.decal.rotation = ReadVec3(
+            decal, "rotation", emitter.decal.rotation);
+        emitter.decal.color = ReadVec3(
+            decal, "color", emitter.decal.color);
+        emitter.decal.opacity = ReadFiniteFloat(
+            decal, "opacity", emitter.decal.opacity);
+        emitter.decal.edgeSoftness = ReadFiniteFloat(
+            decal, "edgeSoftness", emitter.decal.edgeSoftness);
+        emitter.decal.noiseStrength = ReadFiniteFloat(
+            decal, "noiseStrength", emitter.decal.noiseStrength);
+        emitter.decal.roughness = ReadFiniteFloat(
+            decal, "roughness", emitter.decal.roughness);
+        emitter.decal.metallic = ReadFiniteFloat(
+            decal, "metallic", emitter.decal.metallic);
+        emitter.decal.ambientOcclusion = ReadFiniteFloat(
+            decal, "ambientOcclusion", emitter.decal.ambientOcclusion);
+        emitter.decal.normalStrength = ReadFiniteFloat(
+            decal, "normalStrength", emitter.decal.normalStrength);
+        if (decal.contains("decalResponse"))
+        {
+            if (!decal.at("decalResponse").is_string())
+            {
+                throw std::invalid_argument(
+                    "Particle decal.decalResponse must be a string");
+            }
+            const std::string response =
+                decal.at("decalResponse").get<std::string>();
+            if (!TryParseDecalResponse(
+                    response, emitter.decal.responseMask))
+            {
+                throw std::invalid_argument(
+                    "Particle decal has unknown decalResponse: " +
+                    response);
+            }
+        }
+        for (const char* field :
+            {"albedoMap", "normalMap", "ormMap"})
+        {
+            if (!decal.contains(field))
+            {
+                continue;
+            }
+            if (!decal.at(field).is_string())
+            {
+                throw std::invalid_argument(
+                    std::string("Particle decal.") + field +
+                    " must be a string");
+            }
+            const std::string value =
+                decal.at(field).get<std::string>();
+            if (field == std::string("albedoMap"))
+                emitter.decal.albedoMap = value;
+            else if (field == std::string("normalMap"))
+                emitter.decal.normalMap = value;
+            else
+                emitter.decal.ormMap = value;
+        }
+        emitter.decal.sortOrder = ReadCountField(
+            decal, "sortOrder", emitter.decal.sortOrder);
     }
     if (json.contains("mesh"))
     {
@@ -1334,6 +1516,31 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.beam.noiseFrequency, "beam.noiseFrequency");
     RequireFinite(emitter.beam.noiseSpeed, "beam.noiseSpeed");
     RequireFinite(emitter.beam.endpointJitter, "beam.endpointJitter");
+    for (const ParticleBeamColorKey& key : emitter.beam.colorKeys)
+    {
+        RequireFinite(key.time, "beam.colorKeys.time");
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            RequireFinite(key.color[channel], "beam.colorKeys.color");
+        }
+    }
+    for (const ParticleBeamWidthKey& key : emitter.beam.widthKeys)
+    {
+        RequireFinite(key.time, "beam.widthKeys.time");
+        RequireFinite(key.width, "beam.widthKeys.width");
+    }
+    for (const ParticleBeamArc& arc : emitter.beam.arcs)
+    {
+        RequireFinite(arc.colorStart.x(), "beam.arcs.colorStart.x");
+        RequireFinite(arc.colorStart.y(), "beam.arcs.colorStart.y");
+        RequireFinite(arc.colorStart.z(), "beam.arcs.colorStart.z");
+        RequireFinite(arc.colorEnd.x(), "beam.arcs.colorEnd.x");
+        RequireFinite(arc.colorEnd.y(), "beam.arcs.colorEnd.y");
+        RequireFinite(arc.colorEnd.z(), "beam.arcs.colorEnd.z");
+        RequireFinite(arc.widthScale, "beam.arcs.widthScale");
+        RequireFinite(arc.intensity, "beam.arcs.intensity");
+        RequireFinite(arc.noisePhase, "beam.arcs.noisePhase");
+    }
     RequireFinite(emitter.lifetimeMin, "lifetime.min");
     RequireFinite(emitter.lifetimeMax, "lifetime.max");
     RequireFinite(emitter.velocityMin.x(), "velocity.min.x");
@@ -1440,11 +1647,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         emitter.renderMode != "mesh" &&
         emitter.renderMode != "beam" &&
         emitter.renderMode != "distortion" &&
-        emitter.renderMode != "light")
+        emitter.renderMode != "light" &&
+        emitter.renderMode != "decal")
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
-            "'beam', 'distortion' or 'light'");
+            "'beam', 'distortion', 'light' or 'decal'");
     }
     if (emitter.hasLight)
     {
@@ -1473,6 +1681,68 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
             throw std::invalid_argument(
                 "Particle light maxParticles must be <= 64");
         }
+    }
+    if (emitter.hasDecal)
+    {
+        RequireFinite(emitter.decal.size.x(), "decal.size.x");
+        RequireFinite(emitter.decal.size.y(), "decal.size.y");
+        RequireFinite(emitter.decal.size.z(), "decal.size.z");
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            if (emitter.decal.size[axis] <= 0.0f ||
+                emitter.decal.size[axis] > 100000.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle decal.size components must be in "
+                    "(0, 100000]");
+            }
+        }
+        RequireFinite(emitter.decal.rotation.x(), "decal.rotation.x");
+        RequireFinite(emitter.decal.rotation.y(), "decal.rotation.y");
+        RequireFinite(emitter.decal.rotation.z(), "decal.rotation.z");
+        for (int channel = 0; channel < 3; ++channel)
+        {
+            RequireFinite(
+                emitter.decal.color[channel], "decal.color");
+            if (emitter.decal.color[channel] < 0.0f ||
+                emitter.decal.color[channel] > 64.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle decal.color components must be in [0, 64]");
+            }
+        }
+        const struct
+        {
+            float value;
+            const char* name;
+        } unitRangeFields[] = {
+            {emitter.decal.opacity, "decal.opacity"},
+            {emitter.decal.edgeSoftness, "decal.edgeSoftness"},
+            {emitter.decal.noiseStrength, "decal.noiseStrength"},
+            {emitter.decal.roughness, "decal.roughness"},
+            {emitter.decal.metallic, "decal.metallic"},
+            {emitter.decal.ambientOcclusion, "decal.ambientOcclusion"},
+            {emitter.decal.normalStrength, "decal.normalStrength"}};
+        for (const auto& field : unitRangeFields)
+        {
+            RequireFinite(field.value, field.name);
+            if (field.value < 0.0f || field.value > 1.0f)
+            {
+                throw std::invalid_argument(
+                    std::string("Particle ") + field.name +
+                    " must be in [0, 1]");
+            }
+        }
+        if (emitter.decal.sortOrder > 255)
+        {
+            throw std::invalid_argument(
+                "Particle decal.sortOrder must be in [0, 255]");
+        }
+    }
+    if (emitter.renderMode == "decal" && !emitter.hasDecal)
+    {
+        throw std::invalid_argument(
+            "Particle decal renderMode requires a decal object");
     }
     if (emitter.billboardAlignment != "camera" &&
         emitter.billboardAlignment != "velocity" &&
@@ -1584,6 +1854,116 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle beam.branchSpread must be non-negative");
+    }
+    if (emitter.beam.colorKeys.size() > kMaxParticleCurveKeys ||
+        emitter.beam.widthKeys.size() > kMaxParticleCurveKeys)
+    {
+        throw std::invalid_argument(
+            "Particle beam curve key count exceeds GPU capacity");
+    }
+    float previousBeamColorTime = -1.0f;
+    for (const ParticleBeamColorKey& key : emitter.beam.colorKeys)
+    {
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time <= previousBeamColorTime)
+        {
+            throw std::invalid_argument(
+                "Particle beam color key times must be strictly "
+                "increasing in [0,1]");
+        }
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            if (key.color[channel] < 0.0f ||
+                key.color[channel] > 64.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle beam color key channels must be in [0,64]");
+            }
+        }
+        previousBeamColorTime = key.time;
+    }
+    float previousBeamWidthTime = -1.0f;
+    for (const ParticleBeamWidthKey& key : emitter.beam.widthKeys)
+    {
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time <= previousBeamWidthTime)
+        {
+            throw std::invalid_argument(
+                "Particle beam width key times must be strictly "
+                "increasing in [0,1]");
+        }
+        if (key.width < 0.0f || key.width > 1.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam width key value must be in [0,1]");
+        }
+        previousBeamWidthTime = key.time;
+    }
+    if (emitter.beam.arcs.size() > kMaxParticleBeamCount)
+    {
+        throw std::invalid_argument(
+            "Particle beam.arcs exceeds the 16-arc capacity");
+    }
+    if (!emitter.beam.arcs.empty() &&
+        emitter.beam.arcs.size() != emitter.beam.count)
+    {
+        throw std::invalid_argument(
+            "Particle beam.arcs size must equal beam.count");
+    }
+    for (const ParticleBeamArc& arc : emitter.beam.arcs)
+    {
+        if (arc.colorStart.minCoeff() < 0.0f ||
+            arc.colorStart.maxCoeff() > 64.0f ||
+            arc.colorEnd.minCoeff() < 0.0f ||
+            arc.colorEnd.maxCoeff() > 64.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam arc color channels must be in [0,64]");
+        }
+        if (arc.widthScale < 0.0f || arc.widthScale > 1.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam arc widthScale must be in [0,1]");
+        }
+        if (arc.intensity < 0.0f || arc.intensity > 64.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam arc intensity must be in [0,64]");
+        }
+        if (arc.noisePhase < -1000.0f || arc.noisePhase > 1000.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam arc noisePhase must be in [-1000,1000]");
+        }
+    }
+    if (emitter.beam.hitScan.enabled)
+    {
+        RequireFinite(
+            emitter.beam.hitScan.planeNormal.x(),
+            "beam.hitScan.planeNormal.x");
+        RequireFinite(
+            emitter.beam.hitScan.planeNormal.y(),
+            "beam.hitScan.planeNormal.y");
+        RequireFinite(
+            emitter.beam.hitScan.planeNormal.z(),
+            "beam.hitScan.planeNormal.z");
+        if (emitter.beam.hitScan.planeNormal.squaredNorm() <= 1.0e-12f)
+        {
+            throw std::invalid_argument(
+                "Particle beam.hitScan.planeNormal must be non-zero");
+        }
+        RequireFinite(
+            emitter.beam.hitScan.planeOffset,
+            "beam.hitScan.planeOffset");
+        RequireFinite(
+            emitter.beam.hitScan.maxDistance,
+            "beam.hitScan.maxDistance");
+        if (emitter.beam.hitScan.maxDistance <= 0.0f ||
+            emitter.beam.hitScan.maxDistance > 1000000.0f)
+        {
+            throw std::invalid_argument(
+                "Particle beam.hitScan.maxDistance must be in (0, 1e6]");
+        }
     }
     if ((emitter.beam.end - emitter.beam.start).squaredNorm() <=
         1.0e-12f)
@@ -1940,7 +2320,9 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     }
     // 当前 bitonic sort 每个 pass 一次 dispatch；4096 已需要 78 个 pass。
     // 排序池必须覆盖整个 particle pool，因此不能在排序开启时静默截断。
-    if (emitter.sortParticles && emitter.maxParticles > 4096)
+    if (emitter.sortParticles &&
+        emitter.renderMode != "decal" &&
+        emitter.maxParticles > 4096)
     {
         throw std::invalid_argument(
             "Particle sortParticles requires maxParticles <= 4096");
@@ -1954,7 +2336,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         !emitter.sortParticles &&
         emitter.renderMode != "beam" &&
         emitter.renderMode != "distortion" &&
-        emitter.renderMode != "light")
+        emitter.renderMode != "light" &&
+        emitter.renderMode != "decal")
     {
         throw std::invalid_argument(
             "Particle alpha blend requires sortParticles=true");

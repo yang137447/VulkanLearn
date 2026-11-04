@@ -500,6 +500,38 @@ TEST(OfflineParticleSimulation, LightEmittersDoNotAllocateOrAdvance)
     EXPECT_FALSE(state.emitters[1].particles.empty());
 }
 
+TEST(OfflineParticleSimulation, DecalEmittersDoNotAllocateOrAdvance)
+{
+    VL::ParticleSystemAsset asset;
+    asset.name = "PS_offline_decal";
+    asset.sourcePath = "test/PS_offline_decal.json";
+    VL::ParticleEmitterAsset decal;
+    decal.name = "impact_decal";
+    decal.renderMode = "decal";
+    decal.hasDecal = true;
+    decal.maxParticles = 8;
+    decal.burst = true;
+    decal.lifetimeMin = 0.2f;
+    decal.lifetimeMax = 0.2f;
+    VL::ParticleEmitterAsset billboard;
+    billboard.name = "smoke";
+    billboard.maxParticles = 8;
+    billboard.spawnRate = 10.0f;
+    billboard.lifetimeMin = 1.0f;
+    billboard.lifetimeMax = 1.0f;
+    asset.emitters = {decal, billboard};
+
+    const VL::OfflineParticleSystemState state =
+        VL::SimulateOfflineParticles(
+            InputFromAsset(asset, 13u),
+            VL::OfflineParticlePreviewDefaults(),
+            Eigen::Vector3f(0.0f, 0.0f, 300.0f));
+    ASSERT_EQ(state.emitters.size(), 2u);
+    EXPECT_TRUE(state.emitters[0].particles.empty());
+    EXPECT_FLOAT_EQ(state.emitters[0].elapsedSeconds, 0.0f);
+    EXPECT_FALSE(state.emitters[1].particles.empty());
+}
+
 TEST(OfflineParticleCompositor, BoundsAndAlphaCoverage)
 {
     const VL::OfflineParticleCamera camera =

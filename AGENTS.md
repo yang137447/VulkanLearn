@@ -59,8 +59,10 @@ Current implemented areas include:
 - GPU particle system: data-driven `PS_*.json` v1/v2 module stacks, compute simulation,
   billboard/ribbon/mesh/beam/distortion rendering, GPU-count indirect draws, global alpha
   sorting, events, runtime emitter/budget/user-parameter APIs and telemetry, plus
-  `renderMode: "light"` CPU particle lights (up to 64 live point lights, no GPU pool); current
-  schema, ownership and limits: `documents/contracts/particle-system.md`
+  `renderMode: "light"` CPU particle lights and `renderMode: "decal"` CPU particle decals
+  (shared fixed-step/burst simulation, no GPU pool; up to 64 live lights and 64 total visible
+  DBuffer decals); current schema, ownership and limits:
+  `documents/contracts/particle-system.md`
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   sceneDepth reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
   DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM
@@ -212,7 +214,8 @@ If a change affects boot behavior, verify it against this order.
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
 - `source/particles/`: `particleSystem` asset loading/validation, the GPU compute + billboard
-  runtime, and the CPU `renderMode: "light"` point-light runtime
+  runtime, the shared CPU light/decal emitter simulation, and the
+  `renderMode: "light"`/`renderMode: "decal"` output runtimes
 - `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files

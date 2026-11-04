@@ -3278,10 +3278,21 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             currentRenderScene,
             particleRenderer.GetResolvedSystemAssets());
         particleLightRuntime.Update(currentRenderScene);
+        // particle decal 同样消费 resolved assets（userParameters/Data
+        // Channels）。必须先重建动态 decal 列表，再让 DecalRenderer
+        // 按冻结列表同步纹理集；实例 SSBO 固定 64 槽，不做逐帧扩容。
+        particleDecalRuntime.Synchronize(
+            currentRenderScene,
+            particleRenderer.GetResolvedSystemAssets());
+        particleDecalRuntime.Update(currentRenderScene);
         if (frameResources.EnsureLightCapacity(
                 currentRenderScene.lights.size(),
                 *rendererBackend))
         {
+            // 正常路径已在世界初始化时预分配 static + kMaxLiveLights；
+            // 这里仅在异常容量增长时兜底。旧 descriptor set 可能仍被
+            // 在飞帧引用，必须先到 device idle 边界再刷新。
+            rendererBackend->WaitIdle();
             RenderGraph::GetInstance().RefreshRuntimeDescriptors(
                 *rendererBackend,
                 BuildRendererDescriptorContext());
@@ -3319,6 +3330,12 @@ void RenderSystem::BuildResolvedRenderScene()
 void RenderSystem::InitializeCurrentRenderSceneResources()
 {
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    // CPU 粒子灯最多追加 kMaxLiveLights 盏；在世界资源初始化时预留这部分
+    // 容量，避免运行中因 SSBO 扩容触发 descriptor 热刷新。
+    frameResources.EnsureLightCapacity(
+        currentRenderScene.lights.size() +
+            VL::ParticleLightRuntime::kMaxLiveLights,
+        *rendererBackend);
     environmentUpdateState.Reset();
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();

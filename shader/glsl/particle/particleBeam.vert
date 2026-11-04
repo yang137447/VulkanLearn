@@ -38,14 +38,22 @@ float BeamHash(vec3 value)
     return fract((p.x + p.y) * p.z);
 }
 
-vec3 BeamJitter(uint arcIndex, float salt, float time, float amount)
+vec3 BeamJitter(
+    uint arcIndex,
+    float salt,
+    float time,
+    float amount,
+    float noisePhase)
 {
     if (amount <= 0.0)
     {
         return vec3(0.0);
     }
     float arc = float(arcIndex);
-    vec3 seed = vec3(arc * 1.731 + salt, time * 0.37, arc * 0.619);
+    vec3 seed = vec3(
+        arc * 1.731 + salt + noisePhase * 0.137,
+        time * 0.37,
+        arc * 0.619);
     vec3 random = vec3(
         BeamHash(seed),
         BeamHash(seed + vec3(17.13, 4.71, 9.37)),
@@ -60,9 +68,11 @@ float BeamNoiseWave(
     float frequency,
     float speed,
     float time,
-    float channel)
+    float channel,
+    float noisePhase)
 {
-    float phase = float(arcIndex) * 1.7 + channel * 2.3;
+    float phase =
+        float(arcIndex) * 1.7 + channel * 2.3 + noisePhase;
     return sin(t * frequency * kBeamPi * 2.0 +
             time * speed * 1.7 + phase) *
             0.6 +
@@ -82,7 +92,8 @@ vec3 BeamPoint(
     uint arcIndex,
     float t,
     float time,
-    float noiseScale)
+    float noiseScale,
+    float noisePhase)
 {
     // 每条弧使用略不同的频率，避免多条同频正弦形成规则编织网格。
     float arcFrequency = frame.beamNoise.y * noiseScale *
@@ -95,14 +106,16 @@ vec3 BeamPoint(
         arcFrequency,
         frame.beamNoise.z,
         time,
-        0.0);
+        0.0,
+        noisePhase);
     float noiseB = BeamNoiseWave(
         t,
         arcIndex,
         arcFrequency,
         frame.beamNoise.z,
         time,
-        1.0);
+        1.0,
+        noisePhase);
     return mix(start, end, t) +
         (sideA * noiseA + sideB * noiseB) *
             (frame.beamNoise.x * noiseScale * envelope);
@@ -119,17 +132,21 @@ vec3 BeamSide(
     float t,
     float time,
     float delta,
-    float noiseScale)
+    float noiseScale,
+    float noisePhase)
 {
     float previousT = max(t - delta, 0.0);
     float nextT = min(t + delta, 1.0);
     vec3 previous = BeamPoint(
-        start, end, sideA, sideB, arcIndex, previousT, time, noiseScale);
+        start, end, sideA, sideB, arcIndex, previousT, time, noiseScale,
+        noisePhase);
     vec3 next = BeamPoint(
-        start, end, sideA, sideB, arcIndex, nextT, time, noiseScale);
+        start, end, sideA, sideB, arcIndex, nextT, time, noiseScale,
+        noisePhase);
     vec3 tangent = next - previous;
     vec3 midpoint = BeamPoint(
-        start, end, sideA, sideB, arcIndex, t, time, noiseScale);
+        start, end, sideA, sideB, arcIndex, t, time, noiseScale,
+        noisePhase);
     vec3 viewOffset = frame.cameraPosition.xyz - midpoint;
     float viewLength = length(viewOffset);
     vec3 viewDirection = viewLength > 1.0e-5
@@ -149,6 +166,92 @@ float BeamTaper(float t, bool branchRoot)
     return branchRoot
         ? endTaper
         : smoothstep(0.0, 0.06, t) * endTaper;
+}
+
+float BeamColorKeyTime(int index)
+{
+    return index < 4
+        ? frame.beamColorKeyTimes[0][index]
+        : frame.beamColorKeyTimes[1][index - 4];
+}
+
+// 颜色曲线按弧归一化 t 采样，起点/终点外 clamp 到首尾 key。
+vec4 EvaluateBeamColorCurve(float t)
+{
+    int count = int(frame.beamCurveParams.x);
+    if (count <= 1)
+    {
+        return frame.beamColorKeys[0];
+    }
+    if (t <= BeamColorKeyTime(0))
+    {
+        return frame.beamColorKeys[0];
+    }
+    if (t >= BeamColorKeyTime(count - 1))
+    {
+        return frame.beamColorKeys[count - 1];
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = BeamColorKeyTime(index);
+        float t1 = BeamColorKeyTime(index + 1);
+        if (t >= t0 && t <= t1)
+        {
+            float weight = (t - t0) / max(t1 - t0, 1.0e-5);
+            return mix(
+                frame.beamColorKeys[index],
+                frame.beamColorKeys[index + 1],
+                weight);
+        }
+    }
+    return frame.beamColorKeys[count - 1];
+}
+
+// 宽度 key 是 [0,1] 乘数；无表时恒为 1，保持旧资产画面。
+float BeamWidthScaleAt(float t)
+{
+    int count = int(frame.beamCurveParams.y);
+    if (count <= 0)
+    {
+        return 1.0;
+    }
+    if (count == 1 || t <= frame.beamWidthKeys[0].x)
+    {
+        return frame.beamWidthKeys[0].y;
+    }
+    if (t >= frame.beamWidthKeys[count - 1].x)
+    {
+        return frame.beamWidthKeys[count - 1].y;
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = frame.beamWidthKeys[index].x;
+        float t1 = frame.beamWidthKeys[index + 1].x;
+        if (t >= t0 && t <= t1)
+        {
+            float weight = (t - t0) / max(t1 - t0, 1.0e-5);
+            return mix(
+                frame.beamWidthKeys[index].y,
+                frame.beamWidthKeys[index + 1].y,
+                weight);
+        }
+    }
+    return frame.beamWidthKeys[count - 1].y;
+}
+
+// 逐弧颜色是基础色曲线的乘性 tint；省略 arcs 时两边都是 1。
+vec4 BeamArcColor(float t, uint arcIndex)
+{
+    vec4 base = int(frame.beamCurveParams.x) > 0
+        ? EvaluateBeamColorCurve(t)
+        : mix(frame.colorStart, frame.colorEnd, t);
+    vec3 tint = mix(
+        frame.beamArcColorStart[arcIndex].rgb,
+        frame.beamArcColorEnd[arcIndex].rgb,
+        t);
+    // beam 的 alpha 继续由 opacity/branch fade 控制；颜色 key 的 alpha
+    // 保留给未来扩展，避免旧资产的 colorStart.w 突然改变亮度。
+    return vec4(base.rgb * tint, 1.0);
 }
 
 void main()
@@ -181,12 +284,24 @@ void main()
         return;
     }
 
+    vec4 arcParams = frame.beamArcParams[arcIndex];
+    float arcNoisePhase = arcParams.z;
     float time = frame.simulation.z;
     float jitter = frame.beamNoise.w;
     vec3 start = frame.beamStart.xyz +
-        BeamJitter(arcIndex, 1.0, time * frame.beamNoise.z, jitter);
+        BeamJitter(
+            arcIndex,
+            1.0,
+            time * frame.beamNoise.z,
+            jitter,
+            arcNoisePhase);
     vec3 end = frame.beamEnd.xyz +
-        BeamJitter(arcIndex, 7.0, time * frame.beamNoise.z, jitter);
+        BeamJitter(
+            arcIndex,
+            7.0,
+            time * frame.beamNoise.z,
+            jitter,
+            arcNoisePhase);
 
     vec3 axis = end - start;
     float axisLength = length(axis);
@@ -218,7 +333,15 @@ void main()
         float rootT = clamp(
             frame.beamParams.z + 0.2 * rootHash, 0.0, 1.0);
         vec3 root = BeamPoint(
-            start, end, sideA, sideB, arcIndex, rootT, time, 1.0);
+            start,
+            end,
+            sideA,
+            sideB,
+            arcIndex,
+            rootT,
+            time,
+            1.0,
+            arcNoisePhase);
         float delta = 1.0 / float(segments);
         vec3 previous = BeamPoint(
             start,
@@ -228,7 +351,8 @@ void main()
             arcIndex,
             max(rootT - delta, 0.0),
             time,
-            1.0);
+            1.0,
+            arcNoisePhase);
         vec3 next = BeamPoint(
             start,
             end,
@@ -237,7 +361,8 @@ void main()
             arcIndex,
             min(rootT + delta, 1.0),
             time,
-            1.0);
+            1.0,
+            arcNoisePhase);
         vec3 tangent = next - previous;
         float tangentLength = length(tangent);
         tangent = tangentLength > 1.0e-5
@@ -273,27 +398,28 @@ void main()
     float t1 = float(segment + 1u) / float(segments);
     vec3 point0 = BeamPoint(
         stripStart, stripEnd, sideA, sideB, stripSeed, t0, time,
-        stripNoiseScale);
+        stripNoiseScale, arcNoisePhase);
     vec3 point1 = BeamPoint(
         stripStart, stripEnd, sideA, sideB, stripSeed, t1, time,
-        stripNoiseScale);
+        stripNoiseScale, arcNoisePhase);
     float delta = 1.0 / float(segments);
     vec3 side0 = BeamSide(
         stripStart, stripEnd, sideA, sideB, stripSeed, t0, time, delta,
-        stripNoiseScale);
+        stripNoiseScale, arcNoisePhase);
     vec3 side1 = BeamSide(
         stripStart, stripEnd, sideA, sideB, stripSeed, t1, time, delta,
-        stripNoiseScale);
+        stripNoiseScale, arcNoisePhase);
 
     float along = corner.x * 0.5 + 0.5;
     float t = mix(t0, t1, along);
     // 端点处收窄，避免多条弧在固定端点叠成亮斑。
     float taper0 = BeamTaper(t0, isBranch);
     float taper1 = BeamTaper(t1, isBranch);
+    float arcWidthScale = clamp(arcParams.x, 0.0, 1.0);
     float halfWidth0 = frame.beamEnd.w * branchWeight *
-        mix(0.25, 1.0, taper0);
+        arcWidthScale * BeamWidthScaleAt(t0) * mix(0.25, 1.0, taper0);
     float halfWidth1 = frame.beamEnd.w * branchWeight *
-        mix(0.25, 1.0, taper1);
+        arcWidthScale * BeamWidthScaleAt(t1) * mix(0.25, 1.0, taper1);
     float halfWidth = mix(halfWidth0, halfWidth1, along);
     vec3 worldPosition =
         mix(point0, point1, along) +
@@ -304,7 +430,7 @@ void main()
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
     vWorldPosition = worldPosition;
 
-    vec4 color = mix(frame.colorStart, frame.colorEnd, t);
+    vec4 color = BeamArcColor(t, arcIndex);
     // 每条弧以不同频率闪烁，模拟 Tesla 放电的断续感。
     float flicker = 0.75 + 0.25 *
         (0.5 + 0.5 * sin(
@@ -314,8 +440,9 @@ void main()
     // 分支比主弧暗、细，并沿长度淡出，形成 UE 电弧的短分叉。
     float branchColor = isBranch ? 0.55 : 1.0;
     float branchFade = isBranch ? mix(1.0, 0.35, t) : 1.0;
+    float arcIntensity = max(arcParams.y, 0.0);
     vColor = vec4(
-        color.rgb * flicker * branchColor,
+        color.rgb * flicker * branchColor * arcIntensity,
         frame.render.w * branchFade);
     vSeed = float(arcIndex) * 0.61803398875 +
         float(branchIndex) * 0.137;

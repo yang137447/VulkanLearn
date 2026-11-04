@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include "render/camera/autoExposureContract.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 
@@ -22,6 +26,13 @@ nlohmann::json& ExposureResource(nlohmann::json& graph)
     for (auto& resource : graph.at("resources"))
         if (resource.at("name") == name) return resource;
     throw std::runtime_error("Missing AutoExposure fixture output");
+}
+std::string LoadShaderSource(const std::string& relativePath)
+{
+    std::ifstream input(std::string(VL_TEST_SOURCE_ROOT) + "/" + relativePath);
+    return std::string(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
 }
 }
 
@@ -133,8 +144,113 @@ TEST(AutoExposureGraph, SingleComputePassAndSharedOutputAreCompiled)
         EXPECT_TRUE(samplesExposure) << pass.name;
         if (pass.name == "bloomPrefilter")
         {
-            ASSERT_EQ(pass.barriersBeforePass.size(), 1u);
+            ASSERT_EQ(pass.barriersBeforePass.size(), 2u);
             EXPECT_EQ(pass.barriersBeforePass[0].type, VL::CompiledRenderGraphBarrierType::StorageToShaderRead);
+            EXPECT_EQ(pass.barriersBeforePass[1].type, VL::CompiledRenderGraphBarrierType::AttachmentToShaderRead);
+        }
+    }
+}
+
+TEST(ParticleDistortionGraph, BloomPrefilterAndToneMappingShareDistortionInput)
+{
+    const auto result = VL::RenderGraphCompiler{}.Compile(LoadGraph());
+    ASSERT_TRUE(result.IsSuccess());
+
+    const VL::CompiledRenderGraphPass* distortion = nullptr;
+    const VL::CompiledRenderGraphPass* bloom = nullptr;
+    const VL::CompiledRenderGraphPass* toneMapping = nullptr;
+    const VL::CompiledRenderGraphPass* autoExposure = nullptr;
+    for (const auto& pass : result.Value().passes)
+    {
+        if (pass.name == "particleDistortion") distortion = &pass;
+        if (pass.name == "bloomPrefilter") bloom = &pass;
+        if (pass.name == "toneMapping") toneMapping = &pass;
+        if (pass.name == "autoExposure") autoExposure = &pass;
+    }
+    ASSERT_NE(distortion, nullptr);
+    ASSERT_NE(bloom, nullptr);
+    ASSERT_NE(toneMapping, nullptr);
+    ASSERT_NE(autoExposure, nullptr);
+    EXPECT_EQ(distortion->type, VL::RenderGraphPassType::Distortion);
+
+    const auto bloomBinding = std::find_if(
+        bloom->inputDescriptors.begin(),
+        bloom->inputDescriptors.end(),
+        [](const VL::CompiledRenderGraphPassInputDescriptor& descriptor)
+        {
+            return descriptor.resource == "distortion";
+        });
+    ASSERT_NE(bloomBinding, bloom->inputDescriptors.end());
+    EXPECT_EQ(bloomBinding->binding, 2u);
+
+    // toneMapping 的既有绑定保持不变；Bloom 与最终合成共用同一扭曲资源。
+    const auto toneMappingBinding = std::find_if(
+        toneMapping->inputDescriptors.begin(),
+        toneMapping->inputDescriptors.end(),
+        [](const VL::CompiledRenderGraphPassInputDescriptor& descriptor)
+        {
+            return descriptor.resource == "distortion";
+        });
+    ASSERT_NE(toneMappingBinding, toneMapping->inputDescriptors.end());
+    EXPECT_EQ(toneMappingBinding->binding, 5u);
+
+    // autoExposure 只能读取未扭曲 sceneColor，扭曲资源不得进入测光输入。
+    ASSERT_EQ(autoExposure->inputDescriptors.size(), 1u);
+    EXPECT_EQ(autoExposure->inputDescriptors[0].resource, "sceneColor");
+    EXPECT_EQ(autoExposure->inputDescriptors[0].binding, 0u);
+}
+
+TEST(ParticleDistortionShader, BloomAndToneMappingUseSameAspectCorrectedUv)
+{
+    const std::string bloom = LoadShaderSource("shader/glsl/pass/bloomPrefilter.frag");
+    const std::string toneMapping = LoadShaderSource("shader/glsl/pass/toneMapping.frag");
+    const std::string aspect = "float aspect = sceneSize.x / max(sceneSize.y, 1.0);";
+    const std::string mapping =
+        "vec2(distortionOffset.x / aspect, distortionOffset.y)";
+    ASSERT_FALSE(bloom.empty());
+    ASSERT_FALSE(toneMapping.empty());
+    EXPECT_NE(bloom.find(aspect), std::string::npos);
+    EXPECT_NE(toneMapping.find(aspect), std::string::npos);
+    EXPECT_NE(bloom.find(mapping), std::string::npos);
+    EXPECT_NE(toneMapping.find(mapping), std::string::npos);
+    EXPECT_NE(bloom.find("texture(inputColor, sceneUV + texel"), std::string::npos);
+    EXPECT_NE(toneMapping.find("texture(sceneColor, sceneUV)"), std::string::npos);
+}
+
+TEST(ForwardDecalReceiverGraph, OnlyForwardOpaqueBindsDBufferInputs)
+{
+    const auto result = VL::RenderGraphCompiler{}.Compile(LoadGraph());
+    ASSERT_TRUE(result.IsSuccess());
+    for (const auto& pass : result.Value().passes)
+    {
+        if (pass.name != "forwardOpaque")
+        {
+            continue;
+        }
+        const std::array<std::string, 5> expected{
+            "dbufferA", "dbufferB", "dbufferC",
+            "dbufferD", "dbufferMask"};
+        for (size_t index = 0; index < expected.size(); ++index)
+        {
+            const auto found = std::find_if(
+                pass.inputDescriptors.begin(),
+                pass.inputDescriptors.end(),
+                [&expected, index](
+                    const VL::CompiledRenderGraphPassInputDescriptor&
+                        descriptor)
+                {
+                    return descriptor.resource == expected[index];
+                });
+            ASSERT_NE(found, pass.inputDescriptors.end()) << pass.name;
+            EXPECT_EQ(found->binding, index + 1u) << pass.name;
+        }
+    }
+    for (const auto& pass : result.Value().passes)
+    {
+        if (pass.name != "forwardTransparent") continue;
+        for (const auto& descriptor : pass.inputDescriptors)
+        {
+            EXPECT_NE(descriptor.resource.rfind("dbuffer", 0), 0u);
         }
     }
 }

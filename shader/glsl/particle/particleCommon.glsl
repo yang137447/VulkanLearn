@@ -133,8 +133,19 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 billboardFixedUp;
     // x = 分支末端横向偏移（cm，已乘模型最大列缩放），y/z/w 保留。
     vec4 beamBranch;
-    // x = distortionStrength（屏幕空间 UV 比例），y = 纹理可用，z/w 保留。
+    // x = distortionStrength（屏幕高度归一化偏移），y = 纹理可用，z/w 保留。
     vec4 distortionParams;
+    // beam 逐段控制：颜色 key 覆盖基础色，width key 乘基础半宽。
+    vec4 beamColorKeys[8];
+    vec4 beamColorKeyTimes[2];
+    vec4 beamWidthKeys[8];
+    // x = color key count, y = width key count, z/w 保留。
+    vec4 beamCurveParams;
+    // 逐主弧覆盖：颜色 tint 是基础色曲线的乘数，分支沿用所属主弧。
+    vec4 beamArcColorStart[16];
+    vec4 beamArcColorEnd[16];
+    // x = widthScale, y = intensity, z = noisePhase, w 保留。
+    vec4 beamArcParams[16];
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

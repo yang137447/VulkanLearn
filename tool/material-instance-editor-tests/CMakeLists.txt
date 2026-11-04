@@ -146,12 +146,14 @@ add_executable(material_instance_editor_production_tests
     particleFrameStatsTests.cpp
     particleIndirectTests.cpp
     particleLightRuntimeTests.cpp
+    particleDecalRuntimeTests.cpp
     particleEmitterBoundsTests.cpp
     particleEmitterCullingTests.cpp
     particleEmitterEditTests.cpp
     particleEmitterKeyTests.cpp
     particleEmitterOrderTests.cpp
     particleFlipbookTests.cpp
+    particleHitScanTests.cpp
     particleLodTests.cpp
     particleMaterialSdfTests.cpp
     particleMeshCollisionTests.cpp
@@ -183,6 +185,8 @@ target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAsset.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleCpuEmitterRuntime.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleDecalRuntime.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleLightRuntime.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"

@@ -105,4 +105,12 @@ float DecalProjectionFade(vec3 localPosition, float softness)
     return 1.0 - smoothstep(soft, 1.0, edge);
 }
 
+// normalStrength 为 0（或极小）时不允许覆盖接收表面法线；DBufferB 的
+// coverage 保持 0，deferred 合成端会直接跳过法线响应。
+// 与 source/render/decal/decalNormalBlend.h 的 DecalNormalWriteCoverage 同构。
+float DecalNormalWriteCoverage(float coverage, float normalStrength)
+{
+    return coverage * step(1.0e-4, normalStrength);
+}
+
 #endif

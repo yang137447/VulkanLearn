@@ -8565,6 +8565,107 @@ TEST_F(EditorUiTest, ParticleEmitterModuleShowsBurstIntervalAndLodFields)
     EXPECT_DOUBLE_EQ(*value, 4.0);
 }
 
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsBeamCurveAndArcFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_beam_fields.json";
+    Json assetDocument = Json::parse(R"json({
+        "name": "PS_beam_fields",
+        "type": "particleSystem",
+        "version": 2,
+        "emitters": [{
+            "name": "arc",
+            "modules": [{
+                "type": "renderer",
+                "enabled": true,
+                "fields": {
+                    "renderMode": "beam",
+                    "beam": {
+                        "count": 2,
+                        "colorKeys": [
+                            {"time": 0.0, "color": [2.0, 4.0, 8.0, 1.0]}
+                        ],
+                        "widthKeys": [
+                            {"time": 0.0, "width": 0.4}
+                        ],
+                        "arcs": [
+                            {"colorStart": [1.0, 0.7, 0.2],
+                             "widthScale": 0.8},
+                            {"colorStart": [0.2, 0.7, 1.0],
+                             "widthScale": 0.4}
+                        ]
+                    }
+                }
+            }]
+        }]
+    })json");
+    Json capabilities = Json::parse(R"json({
+        "fields": [
+            {"field": "beam.colorKeys", "type": "array",
+             "resettable": true},
+            {"field": "beam.widthKeys", "type": "array",
+             "resettable": true},
+            {"field": "beam.arcs", "type": "array",
+             "resettable": true}
+        ]
+    })json");
+    OpenParticleAsset(
+        path, std::move(assetDocument), std::move(capabilities));
+    Click("#particle-module-emitter");
+    Refresh();
+
+    auto* colorInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.colorKeys']");
+    auto* widthInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.widthKeys']");
+    auto* arcsInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.arcs']");
+    ASSERT_NE(colorInput, nullptr);
+    ASSERT_NE(widthInput, nullptr);
+    ASSERT_NE(arcsInput, nullptr);
+    auto* colorControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(colorInput);
+    auto* widthControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(widthInput);
+    auto* arcsControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(arcsInput);
+    ASSERT_NE(colorControl, nullptr);
+    ASSERT_NE(widthControl, nullptr);
+    ASSERT_NE(arcsControl, nullptr);
+    const Json colorKeys = Json::parse(colorControl->GetValue());
+    ASSERT_EQ(colorKeys.size(), 1u);
+    EXPECT_FLOAT_EQ(
+        colorKeys.at(0).at("color").at(2).get<float>(), 8.0f);
+    const Json arcs = Json::parse(arcsControl->GetValue());
+    ASSERT_EQ(arcs.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        arcs.at(1).at("widthScale").get<float>(), 0.4f);
+
+    widthControl->SetValue(R"([{"time":0.0,"width":0.25}])");
+    widthInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.beam.widthKeys");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "arc");
+    const auto* value = std::get_if<nlohmann::json>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_array());
+    EXPECT_FLOAT_EQ(value->at(0).at("width").get<float>(), 0.25f);
+}
+
 TEST_F(EditorUiTest, ParticleEmitterModuleShowsRotationFields)
 {
     using Json = nlohmann::json;
@@ -8764,6 +8865,100 @@ TEST_F(EditorUiTest, ParticleEmitterModuleShowsMeshFields)
     EXPECT_EQ(value(pathInput), "Common/Meshes/SM_cube.json");
     EXPECT_EQ(value(scaleInput), "[2.0,3.0,4.0]");
     EXPECT_EQ(value(alignmentInput), "velocity");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsDecalFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_decal_fields.json";
+    const Json decal = Json{
+        {"size", {80.0, 320.0, 240.0}},
+        {"rotation", {0.0, 0.0, 90.0}},
+        {"color", {0.4, 0.2, 0.1}},
+        {"opacity", 0.7},
+        {"edgeSoftness", 0.35},
+        {"noiseStrength", 0.5},
+        {"roughness", 0.8},
+        {"metallic", 0.1},
+        {"ambientOcclusion", 0.6},
+        {"normalStrength", 0.4},
+        {"decalResponse", "metallicRoughnessNormal"},
+        {"sortOrder", 3}};
+    const Json emitter = Json{
+        {"name", "scorch"},
+        {"renderMode", "decal"},
+        {"decal", decal}};
+    Json emitters = Json::array();
+    emitters.push_back(emitter);
+    const Json assetDocument = Json{
+        {"name", "PS_decal_fields"},
+        {"type", "particleSystem"},
+        {"emitters", emitters}};
+    Json fieldList = Json::array();
+    fieldList.push_back(
+        Json{{"field", "renderMode"}, {"type", "string"}});
+    fieldList.push_back(
+        Json{{"field", "decal.size"}, {"type", "vec3"},
+            {"unit", "cm"}});
+    fieldList.push_back(
+        Json{{"field", "decal.opacity"}, {"type", "number"}});
+    fieldList.push_back(
+        Json{{"field", "decal.decalResponse"}, {"type", "string"}});
+    fieldList.push_back(
+        Json{{"field", "decal.sortOrder"}, {"type", "number"}});
+    const Json capabilities = Json{{"fields", fieldList}};
+    OpenParticleAsset(path, assetDocument, capabilities);
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* sizeInput = query("emitters.0.decal.size");
+    auto* opacityInput = query("emitters.0.decal.opacity");
+    auto* responseInput = query("emitters.0.decal.decalResponse");
+    auto* sortInput = query("emitters.0.decal.sortOrder");
+    ASSERT_NE(sizeInput, nullptr);
+    ASSERT_NE(opacityInput, nullptr);
+    ASSERT_NE(responseInput, nullptr);
+    ASSERT_NE(sortInput, nullptr);
+
+    const auto value = [](Rml::Element* element)
+    {
+        auto* control =
+            dynamic_cast<Rml::ElementFormControlInput*>(element);
+        return control ? control->GetValue() : std::string();
+    };
+    EXPECT_EQ(value(sizeInput), "[80.0,320.0,240.0]");
+    EXPECT_EQ(value(opacityInput), "0.7");
+    EXPECT_EQ(value(responseInput), "metallicRoughnessNormal");
+    EXPECT_EQ(value(sortInput), "3");
+
+    auto* opacityControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(opacityInput);
+    ASSERT_NE(opacityControl, nullptr);
+    opacityControl->SetValue("0.45");
+    opacityInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.decal.opacity");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "scorch");
+    const auto* number = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(number, nullptr);
+    EXPECT_DOUBLE_EQ(*number, 0.45);
 }
 
 nlohmann::json ParticleStructureDocument()

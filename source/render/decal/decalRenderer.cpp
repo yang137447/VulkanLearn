@@ -28,8 +28,6 @@ namespace
 
 constexpr uint32_t kDecalCubeVertexCount = 8;
 constexpr uint32_t kDecalCubeIndexCount = 36;
-constexpr uint32_t kMaxDecalInstances = 64;
-
 const Renderpass* FindDecalPass(const RenderGraph& graph)
 {
     for (const auto& [name, pass] : graph.GetRenderpasses())
@@ -413,6 +411,9 @@ void DecalRenderer::DestroyResources(RendererBackendVulkan& renderer)
     // 调用方必须已到达设备空闲边界（WaitIdle 或引擎关闭路径）；
     // 已退休纹理集仍由 ResourceRetireQueue 持有。
     textureSets.clear();
+    persistentTextureSetIds.clear();
+    persistentTextureMissingFrames.clear();
+    hasTextureSetWorldGeneration = false;
     textureCache.clear();
     warnedTextureFailures.clear();
     defaultAlbedoTexture.reset();
@@ -443,6 +444,20 @@ void DecalRenderer::Synchronize(const RenderScene& renderScene)
     if (!initialized || backend == nullptr)
         return;
 
+    // 粒子 decal 的稳定纹理身份只在同一 World 内保留；World 换代时
+    // 清掉持久集合，让旧的动态纹理集按正常 retire 路径释放。
+    if (!hasTextureSetWorldGeneration)
+    {
+        textureSetWorldGeneration = renderScene.worldGeneration;
+        hasTextureSetWorldGeneration = true;
+    }
+    else if (textureSetWorldGeneration != renderScene.worldGeneration)
+    {
+        persistentTextureSetIds.clear();
+        persistentTextureMissingFrames.clear();
+        textureSetWorldGeneration = renderScene.worldGeneration;
+    }
+
     bool textureSetChanged = false;
     std::unordered_set<uint64_t> desiredDecalIds;
     desiredDecalIds.reserve(renderScene.decals.size());
@@ -451,6 +466,10 @@ void DecalRenderer::Synchronize(const RenderScene& renderScene)
         if (!decal.visible)
             continue;
         desiredDecalIds.insert(decal.decalId);
+        if (decal.persistentTextureSet)
+        {
+            persistentTextureSetIds.insert(decal.decalId);
+        }
 
         std::shared_ptr<DecalTextureSet>& textureSet =
             textureSets[decal.decalId];
@@ -504,14 +523,32 @@ void DecalRenderer::Synchronize(const RenderScene& renderScene)
 
     for (auto it = textureSets.begin(); it != textureSets.end();)
     {
-        if (desiredDecalIds.find(it->first) == desiredDecalIds.end())
+        if (desiredDecalIds.find(it->first) != desiredDecalIds.end())
         {
-            RetireTextureSet(std::move(it->second));
-            it = textureSets.erase(it);
-            textureSetChanged = true;
+            persistentTextureMissingFrames.erase(it->first);
+            ++it;
             continue;
         }
-        ++it;
+        if (persistentTextureSetIds.find(it->first) !=
+            persistentTextureSetIds.end())
+        {
+            // 粒子 decal 寿命之间有短暂空档；保留几帧纹理集，但 emitter
+            // 删除/重命名超过 120 帧后必须真正退休。
+            constexpr uint32_t kPersistentTextureGraceFrames = 120;
+            uint32_t& missingFrames =
+                persistentTextureMissingFrames[it->first];
+            ++missingFrames;
+            if (missingFrames <= kPersistentTextureGraceFrames)
+            {
+                ++it;
+                continue;
+            }
+            persistentTextureSetIds.erase(it->first);
+            persistentTextureMissingFrames.erase(it->first);
+        }
+        RetireTextureSet(std::move(it->second));
+        it = textureSets.erase(it);
+        textureSetChanged = true;
     }
 
     // 只保留仍然存活的弱索引；强引用由活跃或已退休纹理集持有。

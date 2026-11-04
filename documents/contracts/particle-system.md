@@ -36,8 +36,9 @@
 - GPU compute 每帧推进粒子池；graphics pass 按发射器 `renderMode` 读取同一段 storage
   buffer，用按 `billboardAlignment` 朝向的 billboard、最近 3 个历史位置组成的 ribbon
   条带、静态 SM 网格实例化，在作者化起止点之间生成多条带噪声的 beam 合成，或在独立
-  distortion pass 中把屏幕空间 UV 偏移写入 RGBA16F 缓冲。`renderMode: "light"` 是
-  CPU 侧例外：它不分配 GPU 池，而是把存活粒子映射成最多 64 盏场景 PointLight。
+  distortion pass 中把屏幕高度归一化偏移写入 RGBA16F 缓冲。`renderMode: "light"` 与
+  `renderMode: "decal"` 是 CPU 侧例外：它们不分配 GPU 池，而是共享同一份固定步长/burst
+  模拟，把存活粒子分别映射成最多 64 盏场景 PointLight 或最多 64 个可见 DBuffer decal。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -78,9 +79,12 @@ SC_*.json particleSystem
     -> RendererFrontend -> RenderScene::particleSystems
     -> ParticleRenderer::Synchronize（按 sceneName|assetPath|emitterName 建 GPU 池）
     -> compute 模拟 -> particle pass billboard/ribbon/mesh/beam 合成
-    -> particleDistortion pass 写 UV 偏移 -> toneMapping 偏移 sceneColor
+    -> particleDistortion pass 写屏幕高度归一化偏移
+    -> bloomPrefilter 与 toneMapping 按同一公式映射 sceneUV
     -> ParticleLightRuntime::Synchronize/Update（renderMode=="light"）
     -> 追加 RenderScene::lights -> light SSBO -> deferred lighting
+    -> ParticleDecalRuntime::Synchronize/Update（renderMode=="decal"）
+    -> 追加 RenderScene::decals -> DecalRenderer::Synchronize -> BeforeLighting DBuffer
 ```
 
 `ParticleSystemAsset` 是 CPU 冻结值；没有运行时覆盖时不再重新解析作者 JSON。v2 资产只在
@@ -269,11 +273,15 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   （`xyz` 为 emitter-local 向量乘模型线性部分并归一化后的世界空间基，`w` 保留），
   最后追加 `beamBranch`
   （`x = branchSpread`，已乘模型最大列缩放；`y/z/w` 保留）。因此 `ParticleFrame` 的
-  末尾再追加 `distortionParams`：`x = distortionStrength`（屏幕空间 UV 比例），
+  末尾再追加 `distortionParams`：`x = distortionStrength`（屏幕高度归一化比例），
   `y = 纹理可用`（加载失败时为 0，shader 回退程序化方向场），`z/w` 保留。
-  `ParticleFrame` 的 std140 大小是 6384 字节，beam 字段偏移是
+  `distortionParams` 之后追加 beam 控制数组：`beamColorKeys[8]`、
+  `beamColorKeyTimes[2]`、`beamWidthKeys[8]`、`beamCurveParams`、
+  `beamArcColorStart[16]`、`beamArcColorEnd[16]`、`beamArcParams[16]`。
+  `ParticleFrame` 的 std140 大小是 7456 字节，beam 字段偏移是
   6256、6272、6288、6304，fixed 字段偏移是 6320、6336，`beamBranch` 偏移是 6352，
-  `distortionParams` 偏移是 6368。
+  `distortionParams` 偏移是 6368；新数组偏移是 6384、6512、6544、6672、6688、
+  6944、7200。旧字段偏移保持不变。
   C++ 的 `static_assert` 与 `particleCommon.glsl` 必须同时更新。
 - 图集 `columns*rows > 1` 时禁用 mipmap：低 mip 会把相邻 cell 混在一起。顶点着色器在算出
   `vAtlasUV` 后用 `textureSize(particleTexture, 0)` 内缩半个 texel 到当前 cell 边界内，
@@ -651,10 +659,28 @@ GPU 写回 instanceCount 的 indirect draw。
 `sceneDepth` 为 `binding 0` 输入，不创建 pass material，`needMsaa=false`。它只绘制
 `renderMode == "distortion"` 的 emitter；`RecordGraphics` 则跳过 distortion emitter，
 其它 emitter 仍走正常粒子绘制。
-`toneMapping` 通过 `binding 5` 采样该资源，在 Beauty 分支把
-`clamp(inUV + distortion.rg, 0, 1)` 作为 sceneColor 的采样 UV；偏移在 UV 空间，
-因此非正方形视口下不是像素等距（后续可改为按宽高比换算）。Bloom 仍从原始
-sceneColor 生成并在未偏移的 `inUV` 上叠加。raw debug 视图与速度可视化不消费扰动。
+`bloomPrefilter` 在 `binding 0/1` 的 sceneColor/autoExposure 之后追加 `binding 2` 的
+`distortion` 输入，预过滤的四个 sceneColor tap 都先经过同一扰动映射；`toneMapping`
+仍通过 `binding 5` 采样该资源。两端公式必须逐字一致：
+
+```text
+vec2 d  = distortion.rg
+aspect  = width / height
+sceneUV = clamp(inUV + vec2(d.x / aspect, d.y), 0, 1)
+```
+
+`distortion.rg` 的单位是**屏幕高度归一化偏移**：`1.0` 表示一个屏幕高度，横纵相同数值
+对应相同像素距离；消费端把 x 除以宽高比后才是 UV 位移。因此该偏移与视口比例无关，
+不会在非正方形视口下被横向拉伸。
+
+Bloom 因而从扭曲后的 sceneColor 生成；`toneMapping` 仍在未偏移的 `inUV` 取 Bloom，
+只把它叠加到偏移后的 sceneColor 上，避免 Bloom 被二次扭曲。`autoExposure` 继续以
+未扭曲的 sceneColor 作为唯一输入，这是有意保留的曝光边界。raw debug 视图与速度可视化
+不消费扰动。
+
+当前 render graph 没有 SSR pass，因此没有可接入的 SSR 采样点。将来新增 SSR 时，应在
+SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而不是改变反射射线方向；
+同时保持 autoExposure 读取未扭曲 sceneColor 的既有边界。
 
 当前它不是并进 `forwardTransparent` 的：后者同时写 `selectionMask`，粒子 fragment 只写
 `sceneColor` 时会让粒子覆盖区的选择遮罩变成未定义值。selection/outline 独立成 pass 之前，
@@ -700,10 +726,12 @@ sceneColor 生成并在未偏移的 `inUV` 上叠加。raw debug 视图与速度
 - `gravity: [x,y,z]`、`drag`：世界空间重力与指数阻力。
 - `size: [start, end]`：billboard 世界空间半边长（cm），按寿命线性插值。
 - `renderMode`：`"billboard"`（默认）、`"ribbon"`、`"mesh"`、`"beam"`、
-  `"distortion"` 或 `"light"`。ribbon 用当前点与最近 3 个历史点生成面向相机的条带；
+  `"distortion"`、`"light"` 或 `"decal"`。ribbon 用当前点与最近 3 个历史点生成面向相机的条带；
   mesh 用静态 SM 网格按粒子实例化；beam 在作者化起止点之间生成多条带噪声的并行弧；
   distortion 仍消费粒子池，但绘制到独立 UV 偏移缓冲；light 不渲染几何，由 CPU
-  运行时把存活粒子映射为场景 PointLight，详见「Light 粒子灯（CPU）」。
+  运行时把存活粒子映射为场景 PointLight，详见「Light 粒子灯（CPU）」；decal 同样不渲染
+  几何，由 CPU 运行时把存活粒子映射为 BeforeLighting DBuffer decal，详见
+  「Decal 粒子贴花（CPU）」。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
   `"camera"`、`"velocity"` 或 `"fixed"`。`velocity` 用粒子速度方向构造 billboard 基，
   让 quad 的法线对齐速度；`fixed` 用作者化的发射器局部基固定 quad 朝向，适合枪口闪光等
@@ -720,8 +748,10 @@ sceneColor 生成并在未偏移的 `inUV` 上叠加。raw debug 视图与速度
 - `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
 - `distortionStrength`：默认 `0.02`，范围 `[0, 0.25]`，仅
-  `renderMode: "distortion"` 使用。它是 UV 偏移的最大比例；最终偏移还会乘
-  纹理/程序化方向与覆盖率。`0` 表示不扰动，非法或非有限值在加载期拒绝。
+  `renderMode: "distortion"` 使用。它是屏幕高度归一化偏移的最大比例
+  （`1.0` = 一个屏幕高度），与视口宽高比无关；消费端把 x 除以 `width / height`
+  后才得到 UV 位移。最终偏移还会乘纹理/程序化方向与覆盖率。`0` 表示不扰动，
+  非法或非有限值在加载期拒绝。
 - `beam`：`renderMode: "beam"` 时使用；省略时每个字段取默认值。结构为
   `{ "start": [-200,0,0], "end": [200,0,0], "segments": 16, "width": 3.0,
   "count": 4, "noiseAmplitude": 18.0, "noiseFrequency": 3.0,
@@ -735,11 +765,38 @@ sceneColor 生成并在未偏移的 `inUV` 上叠加。raw debug 视图与速度
   相对主线长度的比例，范围 `(0, 1]`；`branchSpread`（cm）是分支末端横向偏移，必须非负。
   `beam` 必须是对象；非对象、缺失/非法 `vec3`、越界计数与非有限值都在加载期拒绝。
   作者应让 `maxParticles >= count`，但加载器不会静默改写 `maxParticles`。
+- `beam.colorKeys` / `beam.widthKeys`：可选的 beam 归一化弧长控制曲线，最多 8 个
+  `{ "time": 0..1, "color": [r,g,b,a] }` / `{ "time": 0..1, "width": 0..1 }` key。
+  time 必须严格递增；颜色通道范围 `[0,64]`，宽度是 `beam.width` 的乘数。空表保持
+  `colorStart/colorEnd` 与恒定宽度。曲线同时作用于主弧和分支，按分支自身归一化
+  `t` 采样。
+- `beam.arcs`：可选的逐主弧覆盖，最多 16 项且非空时必须与 `count` 相等。每项可写
+  `colorStart`/`colorEnd`（乘性 RGB tint）、`widthScale [0,1]`、`intensity [0,64]`、
+  `noisePhase [-1000,1000]`；分支继承所属主弧。它不是逐弧 materialInstancePath；
+  当前 beam 仍是单 draw / 单 set 0 descriptor，逐弧真实材质需要拆分 draw 与 UBO range。
+- `beam.hitScan`：可选的 CPU 射线/平面命中，结构为
+  `{ "planeNormal": [0,1,0], "planeOffset": 0, "maxDistance": 2000 }`。
+  `planeNormal` 必须非零，`planeOffset` 是归一化平面法线上的世界距离，
+  `maxDistance` 是沿 `start -> end` 方向的有限最大距离。命中时把 UBO 的 beam 终点
+  替换为命中点；否则保留作者化 `end`。这是受控平面命中，不是任意物理 mesh raycast。
 - `light`：`renderMode: "light"` 时必填，结构为
   `{ "intensity": 300.0, "radius": 700.0 }`。`intensity` 单位是 cd，`radius` 单位是 cm，
   两者都必须有限且 `> 0`。颜色来自 `colorStart`/`colorEnd` 的 RGB/alpha；alpha 参与
   强度衰减。`light` 必须是对象；缺失、非对象或非有限/非正值在加载期拒绝。
   light 发射器的 `maxParticles` 必须在 `[1, 64]`，且不要求 alpha 排序开关。
+- `decal`：`renderMode: "decal"` 时必填，结构为
+  `{ "size": [100,400,400], "rotation": [0,0,0], "color": [0.02,0.018,0.015],
+  "opacity": 0.85, "edgeSoftness": 0.35, "noiseStrength": 0.55, "roughness": 1.0,
+  "metallic": 0.0, "ambientOcclusion": 1.0, "normalStrength": 0.35,
+  "decalResponse": "colorNormalRoughness", "albedoMap": "", "normalMap": "",
+  "ormMap": "", "sortOrder": 0 }`。`size` 是完整局部尺寸（cm），X 是投影深度、
+  Y/Z 是投影平面宽高，每轴必须在 `(0, 100000]`；`rotation` 单位是度且必须有限；
+  `color` 三分量在 `[0, 64]`；`opacity`/`edgeSoftness`/`noiseStrength`/
+  `roughness`/`metallic`/`ambientOcclusion`/`normalStrength` 都在 `[0, 1]`。
+  `decalResponse` 复用场景 decal 的 UE 枚举映射；三个贴图字段必须是字符串，空字符串
+  表示程序化外观，非空路径由 `DecalRenderer::Synchronize` 加载并在失败时回退默认纹理。
+  `sortOrder` 是 `[0, 255]` 整数。`decal` 必须是对象；缺失、非对象、未知 response
+  或任何越界/非有限值都在加载期拒绝。decal 发射器不要求也不需要 `sortParticles`。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
   `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
   "materialInstancePath": "..."? }`。
@@ -1100,10 +1157,18 @@ pointBranch(t) = BeamPoint(root, branchEnd, ..., seed(t), t)
 采样整张 `particleTexture`，不消费 flipbook cell。片元沿用 ribbon 的 `sceneDepth`
 剔除、软粒子淡出与 overdraw 计数，但横截面是“亮核 + 快速衰减”，不做 FBM 侵蚀。
 
-限制：beam 有固定的直线主段和程序化分叉，但没有 CPU 曲线编辑、逐段作者化控制点或
-控制曲线；分支形状由 `branchStart/branchLength/branchSpread` 与哈希共同决定，不能逐条
-手工摆放。它只支持 additive/alpha 两种既有混合，不进入全局排序或 8 槽 gather
-纹理数组，也不支持逐弧独立材质/纹理。自动包围球以变换后的线段中点为球心，半径是
+可选 `beam.colorKeys` / `beam.widthKeys` 按归一化弧长 `t` 采样；颜色表覆盖基础
+`colorStart/colorEnd`，宽度表乘到 `beam.width`，主弧与分支共用同一采样函数。逐主弧
+`beam.arcs` 提供颜色 tint、宽度乘数、强度乘数与独立噪声相位，分支继承所属主弧。
+这些数据在 UBO 末尾的固定数组中上传，旧字段偏移不变。`beam.hitScan` 在每个模拟帧
+把世界空间 start/end 当作有限射线，对作者化平面做一次确定性求交；命中时替换 UBO
+end，未命中保留原 end。它不读取物理场景，因此不是任意 mesh 的 HitScan。
+
+限制：beam 有固定的直线主段和程序化分叉，控制曲线仍是分段线性，不提供逐段控制点
+或 Bezier/Hermite 切线；分支形状由 `branchStart/branchLength/branchSpread` 与哈希共同
+决定，不能逐条手工摆放。它只支持 additive/alpha 两种既有混合，不进入全局排序或 8 槽
+gather 纹理数组，也不支持逐弧独立材质/纹理：当前所有弧共用单 pipeline、单 set 0
+descriptor，逐弧 materialInstancePath 需要拆分 draw 与 UBO/descriptor range。自动包围球以变换后的线段中点为球心，半径是
 `(halfDistance +
 (branchCount > 0 ? branchLength * |end - start| + branchSpread +
 2 * branchLength * sqrt(3) * endpointJitter : 0) +
@@ -1131,12 +1196,15 @@ output    = vec4(direction * distortionStrength, 0, coverage)
 
 该 pass 使用 additive blend（`src.rgb * src.a + dst.rgb`、`src.a + dst.a`），因此
 fragment 不再把 coverage 预乘进 RGB；重叠粒子的偏移按覆盖率加权累加。`distortion` 不清
-sceneColor，也不写深度；`toneMapping` 在 Beauty 分支执行
-`sceneColorUV = clamp(inUV + distortion.rg, 0, 1)`。
+sceneColor，也不写深度。输出的 `rgb` 是屏幕高度归一化偏移；`bloomPrefilter` 与
+`toneMapping` 都执行
+`d = distortion.rg`、`sceneUV = clamp(inUV + vec2(d.x / aspect, d.y), 0, 1)`，其中
+`aspect = width / height`。
 
-限制：偏移只在最终 tone mapping 采样时应用，不参与 Bloom、SSR 或后续屏幕空间效果；
-当前没有 per-emitter distortion 强度上限之外的形状控制，也不支持折射法线/深度差驱动的
-真实折射。它只影响最终合成，不改变 G-Buffer 或 decal。
+限制：偏移参与 Bloom 预过滤和最终 tone mapping；仓库当前没有 SSR pass，无法验证 SSR
+接入，将来应在 SSR 的屏幕空间采样入口复用同一映射。当前没有 per-emitter distortion
+强度上限之外的形状控制，也不支持折射法线/深度差驱动的真实折射。它只影响后处理采样，
+不改变 G-Buffer 或 decal。
 
 ### Mesh 实例化
 
@@ -1394,12 +1462,13 @@ dispatch 或绘制。
 - 运行时由 `ParticleLightRuntime` 拥有逐发射器状态，身份与 GPU 池一致：
   场景对象名 + `assetPath` + 发射器名。World 换代或发射器集合变化时清理状态；
   同一代际内按 `randomSeed` 与身份派生固定随机状态。
-- 每帧消费 `RenderScene::simulationDeltaSeconds`（单帧上限 `0.1 s`，与点光脉冲
-  的稳定性限制一致），按 `burst` / `spawnRate` 生成、按 `lifetime` 老化，并用
-  `gravity`、指数 `drag` 积分位置；连续发射乘实例 `spawnRateScale`。
+- 与 decal 共用 `ParticleCpuEmitterRuntime`。粒子年龄/位置积分的非固定步长单帧上限是
+  `0.1 s`；burst 周期另有独立绝对时钟，非固定步长使用未裁剪 raw delta，因此一次大帧跳
+  跨过多个 interval 时仍只重触发一次。按 `burst` / `spawnRate` 生成、按 `lifetime`
+  老化，并用 `gravity`、指数 `drag` 积分位置；连续发射乘实例 `spawnRateScale`。
   `fixedTimeStep > 0` 时复用 GPU 的固定步长调度：accumulator 只推进完整步，
-  每帧最多 8 步，余量跨帧保留；不足一步的帧不老化、不生成，但继续输出当前
-  存活灯。`fixedTimeStep` 参与发射器状态签名，修改后会清空该发射器的灯池。
+  每帧最多 8 步，余量跨帧保留；不足一步的帧不老化、不生成，但继续输出当前存活灯。
+  `fixedTimeStep` 参与发射器状态签名，修改后会清空该发射器的灯池。
   `lifetimeScaleKeys` 与 LOD 预算不参与 light 模拟。
 - 发射器模型是 `particleSystem.model * translation(localPosition)`。`localSpace=false`
   时位置/速度在生成时变换到世界空间；`localSpace=true` 时在局部空间积分，输出灯光前
@@ -1423,6 +1492,43 @@ dispatch 或绘制。
 编辑器能力表公开 `renderMode` 的 `light` 选项以及 `light.intensity`、`light.radius`；
 字段仍写入 v2 renderer 模块的 `fields`。没有独立的 Light 模块页，也没有 Material Graph。
 
+## Decal 粒子贴花（CPU）
+
+`renderMode: "decal"` 与 light 共用 `ParticleCpuEmitterRuntime` 的固定步长、burst 绝对周期、
+shape/gravity/drag 积分、局部/世界空间与 SplitMix64 确定性随机。它不创建 GPU 粒子池，也不进入
+compute simulate、indirect draw、全局 gather 或排序；`ParticleRenderer::Synchronize`、
+World 的 authored/budgeted capacity 与离线粒子模拟都会跳过 decal 发射器。
+
+- 运行时由 `ParticleDecalRuntime` 拥有逐发射器状态，身份仍是场景对象名 + `assetPath` +
+  发射器名。每帧先移除上一帧追加到 `RenderScene::decals` 的动态条目，再按当前存活粒子重建，
+  不累加旧快照。
+- 每个存活粒子输出一个 `DecalSnapshot`。`decalId` 由发射器 key 与稳定粒子槽位派生，
+  不包含 burst 代际；槽位取发射器内最小空闲索引。因此同一槽位反复 burst/重生成时
+  `DecalRenderer` 可以继续复用同一纹理集。
+- 变换约定与场景 decal / `WorldBuilder` 一致。decalToWorld 为
+  `T(粒子世界位置) * R(发射器模型归一化方向) * R(decal.rotation) *
+  scale(decal.size * 0.5)`；单位 cube 的 X 是投影深度、Y/Z 是投影平面，uv 使用局部 ZY。
+  `localSpace=true` 的粒子先在输出前乘发射器模型；父级缩放不进入 decal 体积，
+  decal 的尺寸完全由 `decal.size` 控制。
+- `color = decal.color * mix(colorStart.rgb, colorEnd.rgb, lifeT) * colorTint.rgb`；
+  `opacity = clamp(decal.opacity * mix(colorStart.a, colorEnd.a, lifeT) *
+  colorTint.a, 0, 1)`。roughness/metallic/AO/normalStrength、response、贴图与 sortOrder
+  直接来自 `decal`。程序化噪声相位由稳定 decalId 派生。
+- `DecalRenderer` 固定 64 个实例槽。`ParticleDecalRuntime` 先删除上一帧动态条目，再统计
+  当前剩余可见静态 `RenderScene::decals` 数量；动态容量是 `64 - 静态可见数量`。超出时按
+  particleSystems 顺序与 emitter 顺序确定性截断，再从后往前移除尾部粒子。静态 decal
+  原样保留，不会被运行时改写或排序。
+- `RenderSystem` 在 `DecalRenderer::Synchronize` 之前完成
+  `ParticleDecalRuntime::Synchronize/Update`。实例 SSBO、逐 swapchain image 实例缓冲和
+  每槽 material descriptor 都是固定容量，没有逐帧 SSBO/descriptor 扩容路径。
+- World/实例隐藏、`enabledEmitterMask` 与 Pause 语义与 light 相同。离线渲染和编辑器缩略图
+  不运行该 CPU 运行时；`OfflineParticleSimulation` 跳过 decal 发射器，不分配粒子数组、
+  不推进 `elapsedSeconds`，只保留发射器槽位供索引/掩码稳定。
+
+编辑器能力表公开 `renderMode` 的 `decal` 选项，以及 `decal.size`、`decal.rotation`、
+`decal.color`、材质/响应/贴图/sortOrder 字段；它们归入 v2 renderer 模块并显示在 Emitter 页。
+decal 仍走代码维护的 DBuffer shader，没有 Material Graph。
+
 ## 当前边界
 
 已落地：多发射器容器与结构编辑（复制新增/删除/移动，作为一次 `modify` 支持整体
@@ -1434,7 +1540,8 @@ instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角�
 Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
 确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
 GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记录，以及
-`renderMode: "light"` 的 CPU 粒子点光（每场景最多 64 盏）。
+`renderMode: "light"` 的 CPU 粒子点光（每场景最多 64 盏）、
+`renderMode: "decal"` 的 CPU 粒子贴花（与静态 decal 共享每场景最多 64 个可见实例）。
 
 仍未完成：
 
@@ -1485,6 +1592,13 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
 - light 发射器没有 GPU 模拟/回读，也没有独立 GPU light pass：它只把 CPU 粒子映射为
   `LightSnapshot`，因此不参与 GPU 事件、碰撞、排序、indirect 或粒子 dump。光源本身
   没有阴影贴图、纹理投影、逐粒子 IES、光源曲线或运行时死灯回收以外的生命周期功能。
+- decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU
+  粒子映射为 `DecalSnapshot`，再走现有静态 decal 的 64 槽 DBuffer 路径。因此它不产生
+  HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集、硬件 stencil 裁剪或
+  UE Niagara Decal Renderer 的逐粒子材质图。DBuffer 现在由 deferred 与 forward opaque
+  共同采样；forward transparent 不接收，normal 合成使用 whiteout/大圆混合，而不是逐层 RNM。
+  动态与静态 decal 共享 64 个可见实例；静态 decal 先占槽，超出时粒子路径按 emitter
+  顺序截断。
 - ribbon 只保留最近 3 帧历史，没有子步/弧长重采样、逐顶点宽度曲线、纹理平铺、
   per-particle rotation/pivot 或逐粒子跨发射器全局排序。首帧与 prewarm 之后历史点
   全等于当前位置，条带要经过若干帧才拉开；条带长度与形状直接依赖模拟帧率。
@@ -1647,13 +1761,15 @@ BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 是 CP
 `NiagaraExamples/FX_Weapons/Impacts/NS_Impact_Concrete`。UE 系统由
 `NE_Impact_LightDecal`、`NE_Impact_MeshAndSprite`、`NE_Impact_SecondarySprite`
 和 `NE_Impact_Sprite` 组成；VulkanLearn 用 `impact_flash`、`impact_sparks`、
-`impact_dust`、`impact_chips`、`impact_smoke`、`impact_light` 六个发射器重建闪光、火花、
-尘、混凝土碎块和残留烟，并以 `burstInterval = 2.5s` 循环。墙面
-`ImpactCrater` 使用 `T_Impact_Concrete_*` 的 albedo/normal/ORM 贴图，经
+`impact_dust`、`impact_chips`、`impact_smoke`、`impact_light`、`impact_decal`
+七个发射器重建闪光、火花、尘、混凝土碎块、残留烟和墙面贴花，并以
+`burstInterval = 2.5s` 循环。墙面 decal 由 `impact_decal` 的 CPU 粒子运行时生成，
+使用 `T_Impact_Concrete_*` 的 albedo/normal/ORM 贴图，经
 `decalResponse = colorNormalRoughness` 写入 DBuffer。
 
 该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的光强由
-`impact_light` 的 CPU 粒子点光复刻，decal 参数仍是静态场景对象；没有 UE Material Graph；
+`impact_light` 的 CPU 粒子点光复刻，墙面 decal 由 `impact_decal` 的
+CPU particle-driven decal 生成，不再保留静态 `ImpactCrater` 场景对象。没有 UE Material Graph；
 碎块复用 `SM_rock`，贴图与 decal
 图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
 
@@ -1678,14 +1794,19 @@ main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json -
 该案例是结构/视觉近似：UE 的 particle-driven light 用 `muzzle_light` 的
 CPU 粒子点光复刻；
 front 卡片使用 camera billboard，side 卡片使用 fixed billboard；
-`muzzle_heat_haze` 走 `renderMode: "distortion"` 的独立 UV 偏移缓冲，由 toneMapping
-合成；没有 UE flipbook 动画；没有 Material Graph，贴图与材质全部由代码/JSON
+`muzzle_heat_haze` 走 `renderMode: "distortion"` 的独立屏幕高度归一化偏移缓冲，由
+bloomPrefilter 与 toneMapping 共同消费；没有 UE flipbook 动画；没有 Material Graph，
+贴图与材质全部由代码/JSON
 维护。启动与截图见该目录的 `README.md`。
 
 `Maps/SC_particle_ue_tesla/SC_ue_tesla_coil.json` 对齐 UE 5.8
 `NiagaraExamples/FX_Ribbons/NS_TeslaCoil`。`PS_ue_tesla_coil.json` 用
 `arc_main`、左右环境弧、左右落地弧、`arc_cross`、左右环形辉光、左右节点火花
-和左右 `tesla_light_*` 共 12 个发射器重建双极放电；beam 使用 `branchCount` /
+和左右 `tesla_light_*`、`tesla_smoke`、左右 `tesla_node_decal_*` 共 15 个发射器重建
+双极放电；beam 使用 `branchCount` /
 `branchStart` / `branchLength` / `branchSpread` 生成分支，两个
 `renderMode: "light"` 发射器每 0.7 s 生成 150 cd / 900 cm 的 CPU 粒子灯。
-`HitScan`、`Smoke`、`Tesla_Node_Decals` 和 Material Graph 仍未复刻。
+左右落地弧启用 `beam.hitScan`（y=10 的地面平面），`tesla_smoke` 以连续 billboard
+补充线圈上方的薄烟，左右 `tesla_node_decal_*` 通过 CPU 粒子 decal 重建
+`Tesla_Node_Decals` 的节点辉光。它仍不是 UE 资产直接移植：HitScan 是受控平面命中，
+不是任意物理 mesh raycast；节点 decal 没有材质图；Material Graph 仍未复刻。

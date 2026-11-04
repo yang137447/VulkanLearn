@@ -40,6 +40,7 @@
 #include "render/shadow/csmSettings.h"
 #include "particles/particleFrameStats.h"
 #include "particles/particleLightRuntime.h"
+#include "particles/particleDecalRuntime.h"
 #include "particles/particleRenderer.h"
 #include "render/decal/decalRenderer.h"
 #include "ui/uiOverlayRendererVulkan.h"
@@ -475,6 +476,7 @@ private:
     VL::EditorViewportGrid editorViewportGrid;
     VL::ParticleRenderer particleRenderer;
     VL::ParticleLightRuntime particleLightRuntime;
+    VL::ParticleDecalRuntime particleDecalRuntime;
     VL::DecalRenderer decalRenderer;
     VL::RenderScene currentRenderScene;
     uint64_t submittedCameraGeneration = 0;

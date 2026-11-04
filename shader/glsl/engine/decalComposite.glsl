@@ -3,13 +3,81 @@
 
 #include "materialSurface.glsl"
 
-vec3 DecodeDecalWorldNormal(vec3 encodedNormal)
+// DBufferB.rgb 是覆盖率先乘后的 world normal 之和 P = Σ N_i·w_i，
+// DBufferB.a 是 over 覆盖率 c。这里不恢复"平均编码法线"，而是直接
+// 用 P 的模长做相干强度（单层时 |P| = c），再与接收表面法线合成。
+//
+// 同半球：whiteout（坡度叠加）。把 decal 法线表达在接收表面的切平面
+// 基里，base 自身的坡度为 0，whiteout 的坡度形式为
+//   normalize(base + T · slopeX + B · slopeY)
+// coverage 缩放 detail 的坡度；单层时 0 精确回到 base、1 精确回到 decal。
+// 这正是 UE 5.8 legacy DBuffer 的线性
+//   normalize(base * opacity + premulNormal)
+// 在相反法线、coverage=0.5 时会相消到 0 的替代方案。
+//
+// 跨半球：gnomonic 坡度在 dz <= 0 处无定义，改用单位球上的测地线
+// （great-circle）插值；对跖点的 50/50 会得到与 base 垂直的单位向量，
+// 绝不返回 0/NaN。该分支的选择理由与残余近似见
+// documents/contracts/decal-runtime.md。
+vec3 DecalBlendWorldNormal(
+    vec3 baseNormal,
+    vec3 premultipliedDecalNormal,
+    float coverage)
 {
-    return normalize(encodedNormal * 2.0 - 1.0);
+    const float epsilon = 1.0e-6;
+    // base 来自 GBuffer decode，正常情况下已是单位向量；零向量时
+    // normalize 会产生 NaN，与 CPU 镜像一致地回退到 +Z。
+    float baseLengthSq = dot(baseNormal, baseNormal);
+    baseNormal = baseLengthSq > epsilon * epsilon
+        ? baseNormal * inversesqrt(baseLengthSq)
+        : vec3(0.0, 0.0, 1.0);
+
+    float weight = clamp(coverage, 0.0, 1.0);
+    float decalLengthSq =
+        dot(premultipliedDecalNormal, premultipliedDecalNormal);
+    if (weight <= 0.0 || decalLengthSq <= epsilon * epsilon)
+        return baseNormal;
+
+    float decalLength = sqrt(decalLengthSq);
+    vec3 decalNormal = premultipliedDecalNormal / decalLength;
+    // 数学上 |P| <= c；取最小值只是防御 fp16 累积误差。
+    float fade = min(weight, decalLength);
+
+    // 以接收表面法线为 +Z 建正交基；helper 与 base 至少约 25.8°，
+    // 叉积不会退化。
+    vec3 helper = abs(baseNormal.x) < 0.9
+        ? vec3(1.0, 0.0, 0.0)
+        : vec3(0.0, 0.0, 1.0);
+    vec3 tangent = normalize(cross(helper, baseNormal));
+    vec3 bitangent = cross(baseNormal, tangent);
+
+    float dz = dot(decalNormal, baseNormal);
+    float dx = dot(decalNormal, tangent);
+    float dy = dot(decalNormal, bitangent);
+
+    if (dz > 0.0)
+    {
+        float slopeX = (dx / dz) * fade;
+        float slopeY = (dy / dz) * fade;
+        return normalize(
+            baseNormal +
+            tangent * slopeX +
+            bitangent * slopeY);
+    }
+
+    float sinAngle = sqrt(dx * dx + dy * dy);
+    vec3 axis = tangent;
+    float angle = 3.141592653589793 * fade;
+    if (sinAngle > epsilon)
+    {
+        axis = (tangent * dx + bitangent * dy) / sinAngle;
+        angle = acos(clamp(dz, -1.0, 1.0)) * fade;
+    }
+    return baseNormal * cos(angle) + axis * sin(angle);
 }
 
 // DBuffer A: baseColor.rgb + color coverage
-// DBuffer B: encoded world normal + normal coverage
+// DBuffer B: premultiplied world normal + normal coverage
 // DBuffer C: roughness/ambientOcclusion + roughness coverage
 // DBuffer D: metallic + metallic coverage
 // DBufferMask: r = color, g = normal, b = roughness, a = metallic
@@ -36,24 +104,16 @@ void ApplyDecalDBuffer(
             material.baseColor * (1.0 - colorCoverage);
     }
 
-    float normalAlpha = clamp(normalBuffer.a, 0.0, 1.0);
-    float normalCoverage = normalAlpha * response.g;
+    float normalCoverage =
+        clamp(normalBuffer.a, 0.0, 1.0) * response.g;
     if (normalCoverage > 0.0)
     {
-        // 先除掉 AlphaBlend 预乘的覆盖率，再做 normal 合成；单层 decal
-        // 可精确恢复。多层 normal decal 仍需 RNM/whiteout 才能真正对齐 UE。
-        vec3 encodedNormal =
-            normalBuffer.rgb / max(normalAlpha, 1.0e-5);
-        vec3 blendedNormal = mix(
+        // 不再除以 normalCoverage：P 本身就是预乘和，除法会在低覆盖率
+        // 时放大 fp16 噪声，也无法表达多层法线的相消程度。
+        material.worldNormal = DecalBlendWorldNormal(
             material.worldNormal,
-            DecodeDecalWorldNormal(encodedNormal),
+            normalBuffer.rgb,
             normalCoverage);
-        // 相反法线在 coverage≈0.5 时可能互相抵消；退化时保留 decal
-        // 法线，避免 normalize(0) 产生 NaN 污染后续光照。
-        float blendedLengthSq = dot(blendedNormal, blendedNormal);
-        material.worldNormal = blendedLengthSq > 1.0e-8
-            ? blendedNormal * inversesqrt(blendedLengthSq)
-            : DecodeDecalWorldNormal(encodedNormal);
     }
 
     float surfaceCoverage = clamp(surfaceBuffer.a, 0.0, 1.0);

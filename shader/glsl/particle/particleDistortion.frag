@@ -11,8 +11,9 @@ layout(location = 4) in float vTime;
 layout(location = 5) in vec2 vAtlasUV;
 layout(location = 6) in float vViewDepth;
 
-// rgb = 带符号的屏幕空间 UV 偏移（已乘覆盖率），a = 覆盖率。
-// 该 pass 不写 sceneColor，toneMapping 采样本附件后偏移场景 UV。
+// rgb = 屏幕高度归一化的带符号偏移（已乘覆盖率，1.0 = 一个屏幕高度），
+// a = 覆盖率。消费端按 x / aspect、y 原样转成 UV，保证横纵像素等距。
+// 该 pass 不写 sceneColor，bloomPrefilter 与 toneMapping 共用该偏移。
 layout(location = 0) out vec4 outDistortion;
 
 // distortion pass 只把 sceneDepth 作为图输入；没有 shadowMap 绑定。
@@ -110,8 +111,8 @@ void main()
             smoothstep(0.12, 0.72, heightCenter);
     }
 
-    // 偏移长度限幅，避免重叠粒子把 UV 拖出屏幕太远；strength 由作者控制，
-    // 最终 rgb 还会被固定管线按 alpha 再乘一次覆盖率。
+    // 偏移长度限幅，避免重叠粒子把屏幕高度归一化偏移拖得过大；
+    // strength 由作者控制，最终 rgb 还会被固定管线按 alpha 再乘一次覆盖率。
     float directionLength = length(offsetDirection);
     if (directionLength > 1.0e-5)
     {

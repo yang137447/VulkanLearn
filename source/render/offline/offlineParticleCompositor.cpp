@@ -721,10 +721,11 @@ void RasterizeEmitter(
     {
         return;
     }
-    // 离线合成没有 distortion 附件，也没有 CPU 粒子灯消费路径；
-    // 这两类发射器都不应退化成可见 billboard。
+    // 离线合成没有 distortion 附件，也没有 CPU 粒子灯/贴花消费路径；
+    // 这些发射器都不应退化成可见 billboard。
     if (emitter.asset.renderMode == "distortion" ||
-        emitter.asset.renderMode == "light")
+        emitter.asset.renderMode == "light" ||
+        emitter.asset.renderMode == "decal")
     {
         return;
     }

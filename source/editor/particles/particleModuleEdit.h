@@ -36,12 +36,15 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
             {"renderMode", "billboardAlignment", "billboardNormal",
                 "billboardUp", "ribbonWidth",
                 "ribbonSegments", "ribbonFade", "mesh", "beam", "light",
+                "decal",
                 "opacity",
                 "softness", "softParticles", "softParticleDistance",
                 "distortionStrength",
                 "additive", "meshLighting", "meshAmbient",
                 "materialInstancePath", "billboardShadows",
-                "billboardLighting", "billboardAmbient"}},
+                "billboardLighting", "billboardAmbient",
+                "beam.colorKeys", "beam.widthKeys", "beam.arcs",
+                "beam.hitScan"}},
         {"spawn.rate", "Spawn Rate",
             {"spawnRate", "burst", "burstInterval"}},
         {"spawn.shapeSphere", "Sphere Location", {"shape"}},
@@ -235,15 +238,18 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         {"renderMode", "billboardAlignment", "billboardNormal",
             "billboardUp", "ribbonWidth",
             "ribbonSegments", "ribbonFade", "mesh", "beam", "light",
+            "decal",
             "opacity",
             "softness", "softParticles", "softParticleDistance",
             "distortionStrength",
             "additive", "meshLighting", "meshAmbient",
             "materialInstancePath", "billboardShadows",
-            "billboardLighting", "billboardAmbient"}) ||
+            "billboardLighting", "billboardAmbient",
+            "beam.colorKeys", "beam.widthKeys", "beam.arcs"}) ||
         HasPrefix(field, "mesh.") ||
         HasPrefix(field, "beam.") ||
-        HasPrefix(field, "light."))
+        HasPrefix(field, "light.") ||
+        HasPrefix(field, "decal."))
         return "renderer";
     if (IsOneOf(field, {"spawnRate", "burst", "burstInterval"}))
         return "spawn.rate";

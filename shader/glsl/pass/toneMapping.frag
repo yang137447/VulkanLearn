@@ -17,7 +17,7 @@ layout(set = 3, binding = 1) uniform sampler2D bloomColor;
 layout(set = 3, binding = 2) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 3) uniform sampler2D selectionMask;
 layout(set = 3, binding = 4) uniform sampler2D autoExposure;
-// 屏幕空间扰动：rg 是带符号的 UV 偏移（已乘覆盖率累加）。
+// 屏幕空间扰动：rg 是屏幕高度归一化的带符号偏移（已乘覆盖率累加）。
 layout(set = 3, binding = 5) uniform sampler2D distortion;
 
 // Tone Mapping Functions
@@ -78,6 +78,17 @@ vec3 ApplyToneMap(vec3 color, int mode) {
 vec3 ApplySaturation(vec3 color, float saturation) {
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
     return mix(vec3(luma), color, saturation);
+}
+
+vec2 DistortionSceneUv(vec2 uv, vec2 distortionOffset, vec2 sceneSize)
+{
+    // 与 bloomPrefilter.frag 保持同一公式：y 直接作为高度比例，
+    // x 除以宽高比后才是等距的屏幕空间偏移。
+    float aspect = sceneSize.x / max(sceneSize.y, 1.0);
+    return clamp(
+        uv + vec2(distortionOffset.x / aspect, distortionOffset.y),
+        vec2(0.0),
+        vec2(1.0));
 }
 
 bool IsRawDebugView(int debugMode)
@@ -200,13 +211,13 @@ void main()
     }
     else
     {
-        // 扰动在粒子与 Bloom 采样之后、tone mapping 之前应用：Bloom 仍从
-        // 未扭曲的 sceneColor 生成，只把它固定叠加到偏移后的场景颜色上。
-        vec2 distortionOffset = texture(distortion, inUV).rg;
-        vec2 sceneUV = clamp(
-            inUV + distortionOffset,
-            vec2(0.0),
-            vec2(1.0));
+        // Bloom 已在 bloomPrefilter 中从同一扭曲场生成，这里只把未偏移的
+        // Bloom 叠加到偏移后的 sceneColor 上，避免 Bloom 被二次扭曲。
+        // autoExposure 仍消费未扭曲的 sceneColor，这是有意的曝光边界。
+        vec2 sceneUV = DistortionSceneUv(
+            inUV,
+            texture(distortion, inUV).rg,
+            vec2(textureSize(sceneColor, 0)));
         vec3 scene = texture(sceneColor, sceneUV).rgb;
         // Bloom 预过滤阶段已经完成曝光；这里仅曝光原始 sceneColor，
         // 再与曝光后的 Bloom 合成，避免 Bloom 被重复曝光。

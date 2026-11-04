@@ -12,6 +12,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "resource/image/hostImage.h"
+#include "render/decal/decalLimits.h"
 
 class PipelineBase;
 class PipelineFactory;
@@ -159,6 +160,15 @@ private:
         textureCache;
     std::unordered_map<uint64_t, std::shared_ptr<DecalTextureSet>>
         textureSets;
+    // 粒子 decal 的稳定槽位即使短暂没有存活粒子，也保留纹理集；
+    // 这样不会在粒子寿命间隙反复退休/重建默认纹理 descriptor。
+    std::unordered_set<uint64_t> persistentTextureSetIds;
+    // 粒子 decal 短暂进入寿命间隙时不立刻退休纹理；超过 grace 帧仍无
+    // 存活 decal 才释放，避免 emitter 被删除/重命名后永久占用内存。
+    std::unordered_map<uint64_t, uint32_t>
+        persistentTextureMissingFrames;
+    uint64_t textureSetWorldGeneration = 0;
+    bool hasTextureSetWorldGeneration = false;
     std::unordered_set<std::string> warnedTextureFailures;
     std::shared_ptr<Texture> defaultAlbedoTexture;
     std::shared_ptr<Texture> defaultNormalTexture;

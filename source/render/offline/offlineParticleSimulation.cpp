@@ -506,10 +506,11 @@ OfflineParticleSystemState CreateOfflineParticleSystemState(
             emitter.model,
             emitter.worldCenter,
             emitter.worldRadius);
-        // light 发射器没有 GPU 粒子池，也没有离线可见几何；不要为它
-        // 分配/模拟粒子。保留 slot 以维持 enabledEmitterMask 与编辑器
+        // light/decal 发射器没有 GPU 粒子池，也没有离线可见几何；不要为
+        // 它们分配/模拟粒子。保留 slot 以维持 enabledEmitterMask 与编辑器
         // 发射器索引的稳定性。
-        if (emitter.asset.renderMode != "light")
+        if (emitter.asset.renderMode != "light" &&
+            emitter.asset.renderMode != "decal")
         {
             emitter.particles.resize(emitter.asset.maxParticles);
         }
@@ -534,9 +535,10 @@ void StepOfflineParticleSystem(
         {
             continue;
         }
-        // CPU 粒子灯只服务实时 PointLight，离线合成器没有消费路径；
+        // CPU 粒子灯/decal 只服务实时场景输出，离线合成器没有消费路径；
         // 跳过整个模拟，避免为不会显示也不会发光的粒子付出开销。
-        if (emitter.asset.renderMode == "light")
+        if (emitter.asset.renderMode == "light" ||
+            emitter.asset.renderMode == "decal")
         {
             continue;
         }

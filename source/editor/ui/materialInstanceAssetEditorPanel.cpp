@@ -80,7 +80,9 @@ bool ParticleFieldInModule(
     // 这些字段归入 Emitter 页；v2 模块归属仍由
     // ParticleModuleTypeForField 写进 loader 接受的 renderer/events/emitter。
     if (module == "emitter")
-        return field == "name" || field == "position" ||
+        return field == "beam" ||
+            field.rfind("beam.", 0) == 0 ||
+            field == "name" || field == "position" ||
             field == "localSpace" ||
             field == "renderMode" ||
             field == "billboardAlignment" ||
@@ -101,6 +103,21 @@ bool ParticleFieldInModule(
             field == "billboardAmbient" ||
             field == "light.intensity" ||
             field == "light.radius" ||
+            field == "decal.size" ||
+            field == "decal.rotation" ||
+            field == "decal.color" ||
+            field == "decal.opacity" ||
+            field == "decal.edgeSoftness" ||
+            field == "decal.noiseStrength" ||
+            field == "decal.roughness" ||
+            field == "decal.metallic" ||
+            field == "decal.ambientOcclusion" ||
+            field == "decal.normalStrength" ||
+            field == "decal.decalResponse" ||
+            field == "decal.albedoMap" ||
+            field == "decal.normalMap" ||
+            field == "decal.ormMap" ||
+            field == "decal.sortOrder" ||
             field == "distortionStrength" ||
             field == "useFixedBounds" ||
             field == "fixedBounds.center" ||

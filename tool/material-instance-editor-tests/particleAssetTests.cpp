@@ -1988,6 +1988,9 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchStart, 0.5f);
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchLength, 0.3f);
     EXPECT_FLOAT_EQ(defaults.emitters[0].beam.branchSpread, 20.0f);
+    EXPECT_TRUE(defaults.emitters[0].beam.colorKeys.empty());
+    EXPECT_TRUE(defaults.emitters[0].beam.widthKeys.empty());
+    EXPECT_TRUE(defaults.emitters[0].beam.arcs.empty());
 
     document["emitters"][0]["renderMode"] = "beam";
     document["emitters"][0]["beam"] = Json{
@@ -1995,7 +1998,7 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
         {"end", {4.0, 5.0, 6.0}},
         {"segments", 24},
         {"width", 2.5},
-        {"count", 5},
+        {"count", 2},
         {"noiseAmplitude", 25.0},
         {"noiseFrequency", 4.0},
         {"noiseSpeed", 6.0},
@@ -2004,6 +2007,25 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
         {"branchStart", 0.45},
         {"branchLength", 0.35},
         {"branchSpread", 33.0}};
+    document["emitters"][0]["beam"]["colorKeys"] = Json::array({
+        Json{{"time", 0.0}, {"color", {1.0, 2.0, 3.0, 1.0}}},
+        Json{{"time", 0.5}, {"color", {0.5, 1.0, 2.0, 0.8}}},
+        Json{{"time", 1.0}, {"color", {0.1, 0.2, 0.3, 0.0}}}});
+    document["emitters"][0]["beam"]["widthKeys"] = Json::array({
+        Json{{"time", 0.0}, {"width", 0.25}},
+        Json{{"time", 0.7}, {"width", 1.0}},
+        Json{{"time", 1.0}, {"width", 0.1}}});
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        Json{{"colorStart", {1.0, 0.7, 0.2}},
+            {"colorEnd", {0.4, 0.1, 0.0}},
+            {"widthScale", 0.8},
+            {"intensity", 1.5},
+            {"noisePhase", 1.2}},
+        Json{{"colorStart", {0.2, 0.7, 1.0}},
+            {"colorEnd", {0.0, 0.1, 0.4}},
+            {"widthScale", 0.5},
+            {"intensity", 0.75},
+            {"noisePhase", -2.4}}});
     const ParticleSystemAsset asset =
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_beam_custom.json");
@@ -2015,7 +2037,7 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
         Eigen::Vector3f(4.0f, 5.0f, 6.0f));
     EXPECT_EQ(asset.emitters[0].beam.segments, 24u);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.width, 2.5f);
-    EXPECT_EQ(asset.emitters[0].beam.count, 5u);
+    EXPECT_EQ(asset.emitters[0].beam.count, 2u);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseAmplitude, 25.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseFrequency, 4.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.noiseSpeed, 6.0f);
@@ -2024,6 +2046,18 @@ TEST(ParticleAsset, BeamFieldsDefaultAndParseCustomValues)
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchStart, 0.45f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchLength, 0.35f);
     EXPECT_FLOAT_EQ(asset.emitters[0].beam.branchSpread, 33.0f);
+    ASSERT_EQ(asset.emitters[0].beam.colorKeys.size(), 3u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.colorKeys[1].time, 0.5f);
+    EXPECT_EQ(asset.emitters[0].beam.colorKeys[1].color,
+        Eigen::Vector4f(0.5f, 1.0f, 2.0f, 0.8f));
+    ASSERT_EQ(asset.emitters[0].beam.widthKeys.size(), 3u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.widthKeys[1].width, 1.0f);
+    ASSERT_EQ(asset.emitters[0].beam.arcs.size(), 2u);
+    EXPECT_EQ(asset.emitters[0].beam.arcs[0].colorStart,
+        Eigen::Vector3f(1.0f, 0.7f, 0.2f));
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.arcs[0].widthScale, 0.8f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.arcs[0].intensity, 1.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].beam.arcs[1].noisePhase, -2.4f);
 
     // beam 不参与逐粒子排序，alpha 路径不强制 sortParticles=true。
     document["emitters"][0]["blend"] = "alpha";
@@ -2127,6 +2161,97 @@ TEST(ParticleAsset, BeamFieldsRejectInvalidValues)
     document = beamDocument();
     document["emitters"][0]["beam"]["start"] = {0.0, 0.0};
     expectReject(document, "Maps/SC_test/PS_beam_start.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["colorKeys"] = Json::array();
+    expectReject(document, "Maps/SC_test/PS_beam_color_keys_empty.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["colorKeys"] = Json::array({
+        Json{{"time", 0.5}, {"color", {1.0, 1.0, 1.0, 1.0}}},
+        Json{{"time", 0.5}, {"color", {1.0, 0.0, 0.0, 1.0}}}});
+    expectReject(document, "Maps/SC_test/PS_beam_color_keys_duplicate.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["colorKeys"] = Json::array({
+        Json{{"time", -0.1}, {"color", {1.0, 1.0, 1.0, 1.0}}}});
+    expectReject(document, "Maps/SC_test/PS_beam_color_keys_time.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["colorKeys"] = Json::array({
+        Json{{"time", 0.0}, {"color", {65.0, 1.0, 1.0, 1.0}}}});
+    expectReject(document, "Maps/SC_test/PS_beam_color_keys_range.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["widthKeys"] = Json::array({
+        Json{{"time", 0.0}, {"width", 1.1}}});
+    expectReject(document, "Maps/SC_test/PS_beam_width_keys_range.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["widthKeys"] = Json::array({
+        Json{{"time", 0.8}, {"width", 1.0}},
+        Json{{"time", 0.2}, {"width", 0.5}}});
+    expectReject(document, "Maps/SC_test/PS_beam_width_keys_order.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        Json{{"widthScale", 0.5}}});
+    expectReject(document, "Maps/SC_test/PS_beam_arcs_count.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        Json{{"widthScale", 1.1}},
+        Json{{"widthScale", 0.5}},
+        Json{{"widthScale", 0.5}},
+        Json{{"widthScale", 0.5}}});
+    expectReject(document, "Maps/SC_test/PS_beam_arcs_width.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        Json{{"intensity", -1.0}},
+        Json{{"intensity", 1.0}},
+        Json{{"intensity", 1.0}},
+        Json{{"intensity", 1.0}}});
+    expectReject(document, "Maps/SC_test/PS_beam_arcs_intensity.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        Json{{"noisePhase", 1001.0}},
+        Json{{"noisePhase", 0.0}},
+        Json{{"noisePhase", 0.0}},
+        Json{{"noisePhase", 0.0}}});
+    expectReject(document, "Maps/SC_test/PS_beam_arcs_phase.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["arcs"] = Json::array({
+        "not-an-object"});
+    expectReject(document, "Maps/SC_test/PS_beam_arcs_object.json");
+
+    document = beamDocument();
+    document["emitters"][0]["beam"]["hitScan"] = Json{
+        {"planeNormal", {0.0, 1.0, 0.0}},
+        {"planeOffset", 0.0},
+        {"maxDistance", 2000.0}};
+    const ParticleSystemAsset hitScanAsset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_beam_hitscan.json");
+    ASSERT_EQ(hitScanAsset.emitters.size(), 2u);
+    EXPECT_TRUE(hitScanAsset.emitters[0].beam.hitScan.enabled);
+    EXPECT_TRUE(hitScanAsset.emitters[0].beam.hitScan.planeNormal
+        .isApprox(Eigen::Vector3f::UnitY()));
+    EXPECT_FLOAT_EQ(
+        hitScanAsset.emitters[0].beam.hitScan.maxDistance, 2000.0f);
+
+    document["emitters"][0]["beam"]["hitScan"]["planeNormal"] =
+        {0.0, 0.0, 0.0};
+    expectReject(document, "Maps/SC_test/PS_beam_hitscan_normal.json");
+    document = beamDocument();
+    document["emitters"][0]["beam"]["hitScan"] = Json{
+        {"maxDistance", 0.0}};
+    expectReject(document, "Maps/SC_test/PS_beam_hitscan_distance.json");
+    document = beamDocument();
+    document["emitters"][0]["beam"]["hitScan"] = 1;
+    expectReject(document, "Maps/SC_test/PS_beam_hitscan_object.json");
 }
 
 TEST(ParticleAsset, CapabilitiesExposeRibbonFields)
@@ -2152,6 +2277,90 @@ TEST(ParticleAsset, CapabilitiesExposeRibbonFields)
     EXPECT_TRUE(hasField("beam.branchStart"));
     EXPECT_TRUE(hasField("beam.branchLength"));
     EXPECT_TRUE(hasField("beam.branchSpread"));
+    EXPECT_TRUE(hasField("beam.colorKeys"));
+    EXPECT_TRUE(hasField("beam.widthKeys"));
+    EXPECT_TRUE(hasField("beam.arcs"));
+    EXPECT_TRUE(hasField("beam.hitScan.enabled"));
+    EXPECT_TRUE(hasField("beam.hitScan.planeNormal"));
+    EXPECT_TRUE(hasField("beam.hitScan.planeOffset"));
+    EXPECT_TRUE(hasField("beam.hitScan.maxDistance"));
+}
+
+TEST(ParticleAsset, BeamCurvesRoundTripThroughV2RendererModule)
+{
+    Json document = V2ModuleDocument();
+    auto& modules = document["emitters"][0]["modules"];
+    // renderer 字段只能由一个模块拥有；旧 fixture 把 renderMode 放在
+    // emitter 模块里，这里先移除再建立规范 owner。
+    modules[0]["fields"].erase("renderMode");
+    modules.push_back(Json{
+        {"type", "renderer"},
+        {"enabled", true},
+        {"fields", Json{
+            {"renderMode", "beam"},
+            {"beam", Json{
+                {"start", {-200.0, 0.0, 0.0}},
+                {"end", {200.0, 0.0, 0.0}},
+                {"segments", 24},
+                {"width", 3.0},
+                {"count", 2},
+                {"noiseAmplitude", 18.0},
+                {"noiseFrequency", 3.0},
+                {"noiseSpeed", 5.0}}}}}});
+
+    std::vector<EditorAssetFieldChange> changes;
+    EditorAssetFieldChange colorChange;
+    colorChange.field = "emitters.0.beam.colorKeys";
+    colorChange.value = Json::array({
+        Json{{"time", 0.0}, {"color", {2.0, 4.0, 8.0, 1.0}}},
+        Json{{"time", 1.0}, {"color", {0.5, 1.0, 2.0, 0.0}}}});
+    changes.push_back(colorChange);
+    EditorAssetFieldChange widthChange;
+    widthChange.field = "emitters.0.beam.widthKeys";
+    widthChange.value = Json::array({
+        Json{{"time", 0.0}, {"width", 0.2}},
+        Json{{"time", 0.5}, {"width", 1.0}},
+        Json{{"time", 1.0}, {"width", 0.4}}});
+    changes.push_back(widthChange);
+    EditorAssetFieldChange arcChange;
+    arcChange.field = "emitters.0.beam.arcs";
+    arcChange.value = Json::array({
+        Json{{"colorStart", {1.0, 0.6, 0.2}},
+            {"widthScale", 0.9},
+            {"intensity", 1.25},
+            {"noisePhase", 0.7}},
+        Json{{"colorStart", {0.2, 0.6, 1.0}},
+            {"widthScale", 0.45},
+            {"intensity", 0.8},
+            {"noisePhase", -1.3}}});
+    changes.push_back(arcChange);
+    ApplyAssetChanges(
+        document,
+        EditorAssetDocumentKind::ParticleSystem,
+        changes);
+
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            Json::parse(document.dump()),
+            "Maps/SC_test/PS_beam_v2_curves.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    const ParticleBeamAsset& beam = asset.emitters[0].beam;
+    ASSERT_EQ(beam.colorKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(beam.colorKeys[0].color.y(), 4.0f);
+    ASSERT_EQ(beam.widthKeys.size(), 3u);
+    EXPECT_FLOAT_EQ(beam.widthKeys[1].width, 1.0f);
+    ASSERT_EQ(beam.arcs.size(), 2u);
+    EXPECT_FLOAT_EQ(beam.arcs[1].widthScale, 0.45f);
+    EXPECT_FLOAT_EQ(beam.arcs[1].noisePhase, -1.3f);
+
+    // 字段必须落在 renderer 模块里，而不是根对象旁路。
+    const Json& rendererModule =
+        document["emitters"][0]["modules"].back();
+    EXPECT_EQ(rendererModule["type"], "renderer");
+    EXPECT_TRUE(rendererModule["fields"].contains("beam"));
+    EXPECT_TRUE(rendererModule["fields"]["beam"].contains("colorKeys"));
+    EXPECT_TRUE(rendererModule["fields"]["beam"].contains("widthKeys"));
+    EXPECT_TRUE(rendererModule["fields"]["beam"].contains("arcs"));
 }
 
 TEST(ParticleAsset, BillboardAlignmentDefaultsToCamera)

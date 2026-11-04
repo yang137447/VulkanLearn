@@ -10,6 +10,18 @@
 #else
     #define VL_FORWARD_DECLARE_SHADOWMAP_INPUT
     #include "../materialForwardOutput.glsl"
+    // Forward opaque 在 deferredLighting 之后运行；DBuffer 仍由 decals pass
+    // 保留，前向不透明表面可以按屏幕 UV 读取同一份贴花数据。透明表面不读
+    // DBuffer：透明片元在 deferred depth 之前时没有可靠的逐像素 decal 深度，
+    // 直接采样会把后方 opaque 的贴花串到前方透明面上。
+    #if defined(RENDER_MODE_FORWARD_OPAQUE)
+    #include "../decalComposite.glsl"
+    layout(set = 3, binding = 1) uniform sampler2D dbufferA;
+    layout(set = 3, binding = 2) uniform sampler2D dbufferB;
+    layout(set = 3, binding = 3) uniform sampler2D dbufferC;
+    layout(set = 3, binding = 4) uniform sampler2D dbufferD;
+    layout(set = 3, binding = 5) uniform sampler2D dbufferMask;
+    #endif
 #endif
 
 layout(location = 0) in MaterialVaryings v2f;
@@ -61,6 +73,19 @@ void main()
     outGBufferF = gbuffer.gbufferF;
     outSceneColorBase = gbuffer.sceneColorBase;
 #else
+    #if defined(RENDER_MODE_FORWARD_OPAQUE)
+    // BeforeLighting decal 的 DBuffer 是按屏幕像素对齐的；前向表面读取
+    // 自身像素的 DBuffer，避免把 decal 只留给 deferred opaque。
+    vec2 decalScreenUv =
+        gl_FragCoord.xy / vec2(textureSize(dbufferA, 0));
+    ApplyDecalDBuffer(
+        surface,
+        texture(dbufferA, decalScreenUv),
+        texture(dbufferB, decalScreenUv),
+        texture(dbufferC, decalScreenUv),
+        texture(dbufferD, decalScreenUv),
+        texture(dbufferMask, decalScreenUv));
+    #endif
     outSceneColor = BuildMaterialForwardOutput(surface);
     outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
 #endif

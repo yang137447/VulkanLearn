@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include "particles/particleLimits.h"
+#include "world/decalResponse.h"
 
 namespace VL
 {
@@ -86,6 +87,43 @@ struct ParticleLifetimeScaleKey
     float scale = 1.0f;
 };
 
+// beam 曲线按归一化弧长 t（0=起点，1=终点）采样。颜色 key 覆盖
+// colorStart/colorEnd 的 RGB 渐变；宽度 key 是基础半宽的乘数。
+struct ParticleBeamColorKey
+{
+    float time = 0.0f;
+    Eigen::Vector4f color = Eigen::Vector4f::Ones();
+};
+
+struct ParticleBeamWidthKey
+{
+    float time = 0.0f;
+    // [0,1] 归一化乘数；基础 beam.width 仍是最大半宽，包围球无需放大。
+    float width = 1.0f;
+};
+
+// 逐主弧调色与形态覆盖。分支继承所属主弧；颜色是基础颜色曲线的乘性
+// tint，widthScale 与 intensity 默认 1，noisePhase 默认 0，因此省略
+// arcs 的旧资产保持原有画面。
+struct ParticleBeamArc
+{
+    Eigen::Vector3f colorStart = Eigen::Vector3f::Ones();
+    Eigen::Vector3f colorEnd = Eigen::Vector3f::Ones();
+    float widthScale = 1.0f;
+    float intensity = 1.0f;
+    float noisePhase = 0.0f;
+};
+
+// Beam HitScan 的平面命中参数。它是 CPU 侧确定性射线/平面测试，不伪装成
+// 任意 mesh 的物理 raycast；没有命中时保留作者化 beam.end。
+struct ParticleBeamHitScanAsset
+{
+    bool enabled = false;
+    Eigen::Vector3f planeNormal = Eigen::Vector3f::UnitY();
+    float planeOffset = 0.0f;
+    float maxDistance = 2000.0f;
+};
+
 // 单级 LOD：相机距离越过 distance 后，连续发射预算乘 spawnRateScale。
 struct ParticleLodTier
 {
@@ -117,6 +155,13 @@ struct ParticleBeamAsset
     float branchStart = 0.5f;
     float branchLength = 0.3f;
     float branchSpread = 20.0f;
+    // 可选的逐段控制。空表保持原有 colorStart/colorEnd 与恒定宽度；
+    // 非空时必须按 time 严格递增，加载器不会排序或截断作者数据。
+    std::vector<ParticleBeamColorKey> colorKeys;
+    std::vector<ParticleBeamWidthKey> widthKeys;
+    // 可选的逐主弧覆盖，数量必须为空或等于 count。分支沿用主弧配置。
+    std::vector<ParticleBeamArc> arcs;
+    ParticleBeamHitScanAsset hitScan;
 };
 
 // renderMode=="light" 的 CPU 灯光参数。发射器本身不写 sceneColor，也不分配
@@ -126,6 +171,30 @@ struct ParticleLightAsset
 {
     float intensity = 300.0f;
     float radius = 700.0f;
+};
+
+// renderMode=="decal" 的 CPU 粒子贴花参数。size 与场景 decal 同义：
+// 完整局部尺寸（cm），X 是投影深度，Y/Z 是投影平面宽高；运行时把
+// size*0.5 烘进 decalToWorld。颜色与 colorStart/colorEnd 相乘，alpha
+// 控制生命周期淡出。贴图为空字符串时继续使用程序化径向 + noise。
+struct ParticleDecalAsset
+{
+    Eigen::Vector3f size = Eigen::Vector3f(100.0f, 400.0f, 400.0f);
+    Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f color =
+        Eigen::Vector3f(0.02f, 0.018f, 0.015f);
+    float opacity = 0.85f;
+    float edgeSoftness = 0.35f;
+    float noiseStrength = 0.55f;
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    float ambientOcclusion = 1.0f;
+    float normalStrength = 0.35f;
+    uint32_t responseMask = DefaultDecalResponse();
+    std::string albedoMap;
+    std::string normalMap;
+    std::string ormMap;
+    uint32_t sortOrder = 0;
 };
 
 struct ParticleEmitterAsset
@@ -142,11 +211,16 @@ struct ParticleEmitterAsset
     // 但不写 sceneColor，而是在独立 pass 里把屏幕空间 UV 偏移写入
     // RGBA16F distortion 缓冲，由 toneMapping 合成。ribbonWidth 是世界空间
     // 半宽（cm），ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
-    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam|distortion|light
+    std::string renderMode =
+        "billboard"; // billboard|ribbon|mesh|beam|distortion|light|decal
     // 只有 renderMode=="light" 需要作者提供 light 对象；hasLight 区分
     // “省略对象”和“对象存在但数值等于默认值”。
     ParticleLightAsset light;
     bool hasLight = false;
+    // 只有 renderMode=="decal" 需要作者提供 decal 对象；hasDecal 区分
+    // “省略对象”和“对象存在但数值等于默认值”。
+    ParticleDecalAsset decal;
+    bool hasDecal = false;
     ParticleBeamAsset beam;
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
     // 粒子速度，fixed 用作者指定的发射器局部法线/上方向。ribbon/mesh/beam

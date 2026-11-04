@@ -611,6 +611,26 @@
                 {
                     "resource": "shadowMap",
                     "binding": 0
+                },
+                {
+                    "resource": "dbufferA",
+                    "binding": 1
+                },
+                {
+                    "resource": "dbufferB",
+                    "binding": 2
+                },
+                {
+                    "resource": "dbufferC",
+                    "binding": 3
+                },
+                {
+                    "resource": "dbufferD",
+                    "binding": 4
+                },
+                {
+                    "resource": "dbufferMask",
+                    "binding": 5
                 }
             ],
             "output": [
@@ -803,6 +823,10 @@
                 {
                     "resource": "autoExposure",
                     "binding": 1
+                },
+                {
+                    "resource": "distortion",
+                    "binding": 2
                 }
             ],
             "output": [

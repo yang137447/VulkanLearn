@@ -632,6 +632,39 @@ TEST(ParticleWorldRuntime, LightDoesNotConsumeParticleBudget)
     EXPECT_EQ(particle.budget.effectiveCapacity, 128u);
 }
 
+TEST(ParticleWorldRuntime, DecalDoesNotConsumeParticleBudget)
+{
+    VL::World world = MakeParticleWorld();
+    VL::WorldParticleSystem system =
+        MakeParticleSystemInstance(
+            "Impact", "Maps/PS_impact.json");
+    VL::ParticleEmitterAsset decal;
+    decal.name = "impact_decal";
+    decal.renderMode = "decal";
+    decal.hasDecal = true;
+    decal.maxParticles = 3;
+    VL::ParticleEmitterAsset smoke;
+    smoke.name = "smoke";
+    smoke.maxParticles = 128;
+    system.asset.emitters = {decal, smoke};
+    world.AddParticleSystem("Impact", system);
+
+    ASSERT_TRUE(world.SetWorldParticleBudget(200u, 1.0f));
+    VL::WorldSnapshotBuilder builder;
+    const auto result = builder.Build(world, {});
+    ASSERT_FALSE(result.IsFailure());
+    const VL::ParticleSystemSnapshot& particle =
+        result.Value().particleSystems.front();
+    ASSERT_EQ(particle.telemetry.emitters.size(), 2u);
+    EXPECT_EQ(
+        particle.telemetry.emitters[0].budgetedMaxParticles, 0u);
+    EXPECT_EQ(
+        particle.telemetry.emitters[1].budgetedMaxParticles, 128u);
+    // decal 只由 CPU runtime 写 DecalSnapshot，不分配粒子池。
+    EXPECT_EQ(particle.telemetry.authoredCapacity, 128u);
+    EXPECT_EQ(particle.budget.effectiveCapacity, 128u);
+}
+
 TEST(ParticleWorldRuntime, RendererTelemetryIsExplicitlyUnavailableUntilFed)
 {
     VL::World world = MakeParticleWorld();

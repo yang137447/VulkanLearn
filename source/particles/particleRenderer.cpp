@@ -29,6 +29,7 @@
 #include "particles/particleEmitterKey.h"
 #include "particles/particleEmitterCulling.h"
 #include "particles/particleEmitterOrder.h"
+#include "particles/particleHitScan.h"
 #include "particles/particleLod.h"
 #include "particles/particleMesh.h"
 #include "particles/particleRibbon.h"
@@ -637,8 +638,8 @@ ParticleRenderer::ResolveParticleSystemAsset(
         return base;
     }
 
-    const std::string cacheKey =
-        snapshot.name + "|" + base.sourcePath;
+    const std::string cacheKey = BuildParticleSystemAssetKey(
+        snapshot.name, base.sourcePath);
     const uint64_t signature =
         BuildParticleUserParameterSignature(
             effectiveParameters);
@@ -769,7 +770,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 "unknown runtime user parameter failure");
         }
         const ParticleSystemAsset& systemAsset = *resolvedAsset;
-        resolvedSystemAssets[snapshot.name] = systemAsset;
+        resolvedSystemAssets[BuildParticleSystemAssetKey(
+            snapshot.name, snapshot.assetPath)] = systemAsset;
         std::unordered_map<std::string,
             const ParticleEmitterTelemetry*> telemetryByName;
         telemetryByName.reserve(snapshot.telemetry.emitters.size());
@@ -807,10 +809,11 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             for (const ParticleEmitterAsset& emitter :
                  systemAsset.emitters)
             {
-                // beam/light 不分配模拟粒子池，也不参与总预算消耗。
+                // beam/light/decal 不分配模拟粒子池，也不参与总预算消耗。
                 authored.push_back(
                     (emitter.renderMode == "beam" ||
-                     emitter.renderMode == "light")
+                     emitter.renderMode == "light" ||
+                     emitter.renderMode == "decal")
                         ? 0u
                         : emitter.maxParticles);
             }
@@ -827,9 +830,10 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         {
             const ParticleEmitterAsset& authoredEmitter =
                 systemAsset.emitters[emitterIndex];
-            // light 发射器由 ParticleLightRuntime 在 CPU 上模拟并生成
-            // PointLight；粒子渲染器不创建池、indirect 参数或排序资源。
-            if (authoredEmitter.renderMode == "light")
+            // light/decal 发射器由 CPU runtime 分别生成 PointLight 或
+            // DecalSnapshot；粒子渲染器不创建池、indirect 参数或排序资源。
+            if (authoredEmitter.renderMode == "light" ||
+                authoredEmitter.renderMode == "decal")
             {
                 continue;
             }
@@ -3589,12 +3593,29 @@ void ParticleRenderer::RecordSimulation(
                 emitter.asset.beam.start.y(),
                 emitter.asset.beam.start.z(),
                 1.0f)).head<3>();
-        const Eigen::Vector3f beamEndWorld =
+        Eigen::Vector3f beamEndWorld =
             (emitter.model * Eigen::Vector4f(
                 emitter.asset.beam.end.x(),
                 emitter.asset.beam.end.y(),
                 emitter.asset.beam.end.z(),
                 1.0f)).head<3>();
+        if (emitter.asset.beam.hitScan.enabled)
+        {
+            const float authoredRayLength =
+                (beamEndWorld - beamStartWorld).norm();
+            const auto hit = IntersectParticlePlane(
+                beamStartWorld,
+                beamEndWorld,
+                emitter.asset.beam.hitScan.planeNormal,
+                emitter.asset.beam.hitScan.planeOffset,
+                std::min(
+                    emitter.asset.beam.hitScan.maxDistance,
+                    authoredRayLength));
+            if (hit)
+            {
+                beamEndWorld = hit->position;
+            }
+        }
         // 端点已经被 model 的尺度放大；宽度/噪声/抖动是局部空间长度，
         // 必须使用同一最大列缩放，否则非 1 缩放下包围球与画面不一致。
         float beamScale = 0.0f;
@@ -3631,6 +3652,64 @@ void ParticleRenderer::RecordSimulation(
             0.0f,
             0.0f,
             0.0f);
+        // 曲线与逐弧覆盖只对 beam 有意义；其它模式保持 count=0、
+        // 恒等 tint/宽度，避免误读未初始化数组。
+        uniforms.beamColorKeys.fill(Eigen::Vector4f::Zero());
+        uniforms.beamColorKeyTimes.fill(Eigen::Vector4f::Zero());
+        uniforms.beamWidthKeys.fill(Eigen::Vector4f::Zero());
+        uniforms.beamCurveParams = Eigen::Vector4f::Zero();
+        uniforms.beamArcColorStart.fill(
+            Eigen::Vector4f(1.0f, 1.0f, 1.0f, 0.0f));
+        uniforms.beamArcColorEnd.fill(
+            Eigen::Vector4f(1.0f, 1.0f, 1.0f, 0.0f));
+        uniforms.beamArcParams.fill(Eigen::Vector4f(1.0f, 1.0f, 0.0f, 0.0f));
+        if (emitter.asset.renderMode == "beam")
+        {
+            const ParticleBeamAsset& beam = emitter.asset.beam;
+            for (size_t index = 0;
+                 index < beam.colorKeys.size();
+                 ++index)
+            {
+                uniforms.beamColorKeys[index] =
+                    beam.colorKeys[index].color;
+                uniforms.beamColorKeyTimes[index / 4][index % 4] =
+                    beam.colorKeys[index].time;
+            }
+            for (size_t index = 0;
+                 index < beam.widthKeys.size();
+                 ++index)
+            {
+                uniforms.beamWidthKeys[index] = Eigen::Vector4f(
+                    beam.widthKeys[index].time,
+                    beam.widthKeys[index].width,
+                    0.0f,
+                    0.0f);
+            }
+            for (size_t index = 0; index < beam.arcs.size(); ++index)
+            {
+                const ParticleBeamArc& arc = beam.arcs[index];
+                uniforms.beamArcColorStart[index] = Eigen::Vector4f(
+                    arc.colorStart.x(),
+                    arc.colorStart.y(),
+                    arc.colorStart.z(),
+                    0.0f);
+                uniforms.beamArcColorEnd[index] = Eigen::Vector4f(
+                    arc.colorEnd.x(),
+                    arc.colorEnd.y(),
+                    arc.colorEnd.z(),
+                    0.0f);
+                uniforms.beamArcParams[index] = Eigen::Vector4f(
+                    arc.widthScale,
+                    arc.intensity,
+                    arc.noisePhase,
+                    0.0f);
+            }
+            uniforms.beamCurveParams = Eigen::Vector4f(
+                static_cast<float>(beam.colorKeys.size()),
+                static_cast<float>(beam.widthKeys.size()),
+                0.0f,
+                0.0f);
+        }
         // fixed billboard 基在发射器局部空间作者化；上传前乘 emitter.model
         // 的线性部分，使其跟随粒子系统/武器的旋转与缩放。其它 alignment
         // 上传默认基；shader 即使误读也拿到有效向量。

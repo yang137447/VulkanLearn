@@ -13,6 +13,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "particles/particleAsset.h"
+#include "particles/particleBeam.h"
 #include "particles/particleEvents.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleFrameStats.h"
@@ -303,9 +304,23 @@ private:
         // y = 纹理可用（0 时回退程序化方向场），z/w 保留。
         // 追加在 beamBranch 之后，保持既有字段偏移不变。
         Eigen::Vector4f distortionParams;
+        // beam 逐段曲线与逐主弧覆盖。全部追加在 distortionParams 之后，
+        // 旧字段偏移保持不变。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys> beamColorKeys;
+        std::array<Eigen::Vector4f, 2> beamColorKeyTimes;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys> beamWidthKeys;
+        // x = color key count, y = width key count, z/w 保留。
+        Eigen::Vector4f beamCurveParams;
+        std::array<Eigen::Vector4f, kMaxParticleBeamCount>
+            beamArcColorStart;
+        std::array<Eigen::Vector4f, kMaxParticleBeamCount>
+            beamArcColorEnd;
+        // x = widthScale, y = intensity, z = noisePhase, w 保留。
+        std::array<Eigen::Vector4f, kMaxParticleBeamCount>
+            beamArcParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 6384,
+        sizeof(FrameUniforms) == 7456,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -418,6 +433,27 @@ private:
     static_assert(
         offsetof(FrameUniforms, distortionParams) == 6368,
         "ParticleFrame distortionParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamColorKeys) == 6384,
+        "ParticleFrame beamColorKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamColorKeyTimes) == 6512,
+        "ParticleFrame beamColorKeyTimes offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamWidthKeys) == 6544,
+        "ParticleFrame beamWidthKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamCurveParams) == 6672,
+        "ParticleFrame beamCurveParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamArcColorStart) == 6688,
+        "ParticleFrame beamArcColorStart offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamArcColorEnd) == 6944,
+        "ParticleFrame beamArcColorEnd offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamArcParams) == 7200,
+        "ParticleFrame beamArcParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

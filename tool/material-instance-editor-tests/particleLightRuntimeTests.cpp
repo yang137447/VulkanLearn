@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -7,6 +8,7 @@
 
 #include "editor/command/assetDocumentFields.h"
 #include "particles/particleAsset.h"
+#include "particles/particleEmitterKey.h"
 #include "particles/particleLightRuntime.h"
 #include "render/frontend/renderScene.h"
 
@@ -401,6 +403,37 @@ TEST(ParticleLightRuntime, FixedTimeStepHoldsStateBetweenWholeSteps)
     EXPECT_FLOAT_EQ(scene.lights.front().intensity, 243.0f);
 }
 
+TEST(ParticleLightRuntime, BurstUsesAbsoluteCycleAcrossFixedSteps)
+{
+    ParticleEmitterAsset emitter =
+        MakeLightEmitter("cycle_light", 25, 1, 10.0f);
+    emitter.fixedTimeStep = 0.1f;
+    emitter.burstInterval = 0.25f;
+    RenderScene scene;
+    scene.particleSystems.push_back(
+        MakeSnapshot("Lamp", emitter));
+    ParticleLightRuntime runtime;
+
+    UpdateFrames(runtime, scene, 1, 0.1f);
+    ASSERT_EQ(scene.lights.size(), 1u);
+    const uint64_t firstId = scene.lights.front().lightId;
+
+    // 0.1 -> 0.2 没有跨过 0.25；0.2 -> 0.3 才跨周期。
+    UpdateFrames(runtime, scene, 1, 0.1f);
+    ASSERT_EQ(scene.lights.size(), 1u);
+    EXPECT_EQ(scene.lights.front().lightId, firstId);
+    UpdateFrames(runtime, scene, 1, 0.1f);
+    ASSERT_EQ(scene.lights.size(), 1u);
+    EXPECT_NE(scene.lights.front().lightId, firstId);
+
+    // 一帧跨过多个周期（0.3 -> 1.1）也只重触发一次，不能生成多批灯。
+    const uint64_t beforeMultiCycle = scene.lights.front().lightId;
+    UpdateFrames(runtime, scene, 1, 0.8f);
+    ASSERT_EQ(scene.lights.size(), 1u);
+    EXPECT_NE(scene.lights.front().lightId, beforeMultiCycle);
+    EXPECT_EQ(runtime.GetLiveLightCount(), 1u);
+}
+
 TEST(ParticleLightRuntime, ContinuousSpawnRateAndRuntimeScale)
 {
     ParticleEmitterAsset emitter =
@@ -588,10 +621,60 @@ TEST(ParticleLightRuntime, ResolvedAssetOverridesSnapshotEmitter)
     resolvedEmitter.light.intensity = 432.0f;
     resolved.emitters.push_back(resolvedEmitter);
     const std::unordered_map<std::string, ParticleSystemAsset>
-        resolvedAssets{{"Lamp", resolved}};
+        resolvedAssets{{
+            BuildParticleSystemAssetKey(
+                "Lamp", scene.particleSystems.front().assetPath),
+            resolved}};
     ParticleLightRuntime runtime;
     runtime.Synchronize(scene, resolvedAssets);
     runtime.Update(scene);
     ASSERT_EQ(scene.lights.size(), 1u);
     EXPECT_FLOAT_EQ(scene.lights.front().intensity, 432.0f);
+}
+
+TEST(ParticleLightRuntime, ResolvedAssetKeySeparatesSameNamedSystems)
+{
+    ParticleEmitterAsset first =
+        MakeLightEmitter("flash_light", 91, 1, 10.0f);
+    ParticleEmitterAsset second = first;
+    second.light.intensity = 222.0f;
+    RenderScene scene;
+    ParticleSystemSnapshot firstSnapshot =
+        MakeSnapshot("Lamp", first);
+    firstSnapshot.assetPath = "Maps/SC_test/PS_first.json";
+    ParticleSystemSnapshot secondSnapshot =
+        MakeSnapshot("Lamp", second);
+    secondSnapshot.assetPath = "Maps/SC_test/PS_second.json";
+    scene.particleSystems = {firstSnapshot, secondSnapshot};
+
+    ParticleSystemAsset firstResolved;
+    ParticleEmitterAsset firstEmitter = first;
+    firstEmitter.light.intensity = 111.0f;
+    firstResolved.emitters.push_back(firstEmitter);
+    ParticleSystemAsset secondResolved;
+    ParticleEmitterAsset secondEmitter = second;
+    secondEmitter.light.intensity = 222.0f;
+    secondResolved.emitters.push_back(secondEmitter);
+    const std::unordered_map<std::string, ParticleSystemAsset>
+        resolvedAssets{
+            {BuildParticleSystemAssetKey(
+                 "Lamp", firstSnapshot.assetPath),
+             firstResolved},
+            {BuildParticleSystemAssetKey(
+                 "Lamp", secondSnapshot.assetPath),
+             secondResolved}};
+
+    ParticleLightRuntime runtime;
+    runtime.Synchronize(scene, resolvedAssets);
+    runtime.Update(scene);
+    ASSERT_EQ(scene.lights.size(), 2u);
+    float minimum = scene.lights[0].intensity;
+    float maximum = scene.lights[0].intensity;
+    for (const LightSnapshot& light : scene.lights)
+    {
+        minimum = std::min(minimum, light.intensity);
+        maximum = std::max(maximum, light.intensity);
+    }
+    EXPECT_FLOAT_EQ(minimum, 111.0f);
+    EXPECT_FLOAT_EQ(maximum, 222.0f);
 }

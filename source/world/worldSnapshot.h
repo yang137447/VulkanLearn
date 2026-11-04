@@ -217,6 +217,10 @@ struct DecalSnapshot
     std::string ormMap;
     uint32_t sortOrder = 0;
     bool visible = true;
+    // 粒子 decal 的槽位会随寿命消失/重生，但 decalId 稳定且贴图路径不变。
+    // true 时 DecalRenderer 保留其纹理集，避免粒子花屏瞬间反复创建/退休
+    // 默认纹理 descriptor；静态 decal 保持 false。
+    bool persistentTextureSet = false;
 };
 
 // Immutable render-facing copy of one World frame. The renderer may keep this

@@ -16,6 +16,12 @@ geometry
 unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，也不
 经过 Material 图或普通 mesh draw。
 
+`deferredLighting` 与 `forwardOpaque` 按像素屏幕 UV 读取同一组 DBuffer。
+forward opaque 通过 set 3 binding 1..5 绑定 `dbufferA/B/C/D/Mask`，在材质
+forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 DBuffer：
+它在 deferred depth 之前时没有可靠的逐像素 decal 深度，直接把后方 opaque
+的贴花串到前方透明面上会产生错误遮挡。
+
 ## 场景对象
 
 ```json
@@ -68,22 +74,98 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
 - `type=decal` 的对象不创建网格或材质资源；SceneAssetValidator 负责
   字段边界，WorldBuilder 负责转换成 `DecalSnapshot`。
 
+## 粒子驱动动态 decal
+
+`PS_*.json` 的发射器支持 `renderMode: "decal"`。它不是新的 decal pass，
+也不改变 DBuffer 布局；CPU 运行时把每个存活粒子转换成一个
+`DecalSnapshot`，追加到 `RenderScene::decals` 后复用本文件描述的
+`DecalRenderer`、DBuffer 合成、贴图槽与材质 descriptor。
+
+```json
+{
+  "renderMode": "decal",
+  "decal": {
+    "size": [60.0, 300.0, 240.0],
+    "rotation": [0.0, 0.0, 90.0],
+    "color": [0.5, 0.25, 0.125],
+    "opacity": 0.75,
+    "edgeSoftness": 0.4,
+    "noiseStrength": 0.6,
+    "roughness": 0.8,
+    "metallic": 0.1,
+    "ambientOcclusion": 0.7,
+    "normalStrength": 0.3,
+    "decalResponse": "metallicRoughnessNormal",
+    "albedoMap": "Maps/SC_example/Textures/T_burn_albedo.json",
+    "normalMap": "Maps/SC_example/Textures/T_burn_normal.json",
+    "ormMap": "Maps/SC_example/Textures/T_burn_orm.json",
+    "sortOrder": 7
+  }
+}
+```
+
+- 字段边界与场景 decal 相同：`size` 每轴 `(0, 100000]`，rotation 有限，
+  color 在 `[0, 64]`，其余材质/覆盖参数在 `[0, 1]`，`sortOrder`
+  是 `[0, 255]` 整数。`decalResponse` 复用
+  `world/decalResponse.h` 的 UE 枚举映射。三个贴图字段可为空字符串；
+  空值使用程序化外观。
+- 每个存活粒子先删除上一帧动态条目再重建，不堆叠。`decalId` 由
+  发射器身份（scene object + assetPath + emitter name）与其稳定粒子槽位
+  派生，不包含 burst 代际，因此 `DecalRenderer` 的纹理集可以在同一槽位
+  反复生成/死亡时复用。
+- `decalToWorld` 与场景 decal / `WorldBuilder` 使用同一约定：
+
+  ```text
+  position = particleWorldPosition
+  basis    = normalizeColumns(emitter.model.linear)
+  matrix   = T(position) * basis * R(decal.rotation) * scale(decal.size * 0.5)
+  ```
+
+  单位 cube 的 X 是投影深度，Y/Z 是投影平面，像素 UV 仍使用局部 ZY。
+  父级缩放不进入 decal 体积；`decal.size` 是唯一尺寸来源。
+  `localSpace=true` 的粒子位置先乘发射器模型。
+- 颜色为 `decal.color * mix(colorStart.rgb, colorEnd.rgb) *
+  colorTint.rgb`；opacity 为 `decal.opacity * clamp(mix(alpha) *
+  colorTint.a, 0, 1)`。roughness/metallic/AO/normalStrength、response、
+  贴图与 `sortOrder` 直接取自 `decal`。
+- `DecalRenderer` 的 64 个实例槽由静态可见 decal 与粒子 decal 共享。
+  运行时先移除自己的上一帧条目，再按剩余静态可见数量计算动态容量；
+  超出时按 particleSystems / emitter 顺序确定性截断。静态 decal 保留
+  原槽，不参与粒子预算。
+- `RenderSystem` 在 `DecalRenderer::Synchronize` 前更新粒子 decal，
+  因此纹理集看到的是本帧最终列表。实例 SSBO 与每 swapchain image
+  的实例缓冲仍是固定 64 槽，没有逐帧扩容。
+
 ## 投影与输出
 
 - `DecalRenderer` 用一个单位 cube 实例化绘制所有可见 decal，最多 64 个；
-  实例按 `sortOrder` 稳定排序。
+  实例按 `sortOrder` 稳定排序。静态场景 decal 与
+  `renderMode: "decal"` 的 CPU 粒子 decal 共享该上限。
 - 顶点只做 `decalToWorld -> viewProjection`；像素用 `sceneDepth` 重建
   世界位置，再乘 `worldToDecal`。
 - 局部 cube 落在 `[-1,1]` 外则丢弃。局部 X 是投影深度，UV 使用局部
   `zy`，与 UE `DeferredDecal.usf` 的 `SwizzlePos.zyx` 语义一致。
-- `DBufferA` 写 baseColor + color coverage；`DBufferB` 写编码到 `[0,1]`
-  的 world normal + normal coverage；`DBufferC` 写 roughness/AO +
+- `DBufferA` 写 baseColor + color coverage；`DBufferB` 写**带符号的
+  world normal** + normal coverage；`DBufferC` 写 roughness/AO +
   roughness coverage；`DBufferD` 写 metallic + metallic coverage。
   每个 decal 只写自己 response 允许的通道，避免重叠时把未响应通道的
   默认值泄漏给接收表面。UE 把 roughness/metallic/AO 打包在 DBufferC；
   VL 拆成 C/D，是为了让 roughness-only 与 metallic-only decal 重叠时
   仍能各自独立合成。四个数据缓冲区都由固定功能 AlphaBlend 预乘
   coverage，`deferredLighting` 按 over 形式合成。
+- `DBufferB` 是 `R16G16B16A16_SFLOAT`（A/C/D 也是 16F），因此
+  不需要 UE UNORM DBuffer 的 `128/255` 偏置编码。写端直接输出单位
+  world normal，混合状态 `SrcAlpha / OneMinusSrcAlpha` 把它变成覆盖率
+  预乘的向量和：
+
+  ```text
+  P = DBufferB.rgb = Σ N_i · w_i      （w_i 是 over 合成的逐层权重）
+  c = DBufferB.a   = 1 - Π(1 - a_i)
+  ```
+
+  单层 decal 满足 `|P| = c`；多层方向相反而部分抵消时 `|P| < c`。
+  合成端不再除 `c` 恢复平均法线，而是直接用 `P` 的模长作为相干强度，
+  避免低覆盖率放大 fp16 噪声。
 - `DBufferMask` 是 `R8G8B8A8_UNORM`，RGBA 依次对应
   color/normal/roughness/metallic 响应位。decal pass 用 One/One 加法
   累积（重叠 decal 的同类位按“或”处理），合成端先 saturate 成 0/1，
@@ -97,6 +179,35 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
   `(-1, -dH/dV*s, -dH/dU*s)`，`s = normalStrength * 0.12`。两条路径都用
   `decalToWorld` 的逆转置变换到世界空间。`normalStrength == 0` 时不写
   normal coverage，DBufferB 不生效。
+- 法线合成由 `engine/decalComposite.glsl` 的 `DecalBlendWorldNormal`
+  完成，输入是接收表面法线 `base`、预乘和 `P` 与总覆盖率 `c`：
+  - 以 `base` 为 +Z 建正交基，把 `N = normalize(P)` 分解为切向
+    `(dx, dy)` 与法向 `dz`。
+  - `dz > 0`（同半球）走 **whiteout**（坡度叠加，Barré-Brisebois &
+    Hill 2012）：base 在该局部基里的坡度为 0，
+    `slope = (dx/dz, dy/dz) * fade`，whiteout 的坡度形式给出
+
+    ```text
+    normalize(base + T * slope.x + B * slope.y)
+    fade = min(c, |P|)
+    ```
+
+    单层 decal 有 `fade = c`，所以 `fade = 0` 精确回到 `base`、
+    `fade = 1` 精确回到 `N`；中间按坡度淡入，等价于标准
+    detail-normal whiteout。多层时 `|P|` 的衰减会额外压低 detail
+    强度，这正是相消程度的体现。
+  - `dz <= 0`（跨地平线）gnomonic 坡度无定义，改用单位球上的
+    **great-circle** 插值：旋转角 `acos(dz) * fade`，轴取
+    `(T*dx + B*dy) / |(dx, dy)|`；对跖点 `|(dx, dy)| ≈ 0` 时取由
+    `base` 唯一确定的切线。因此 `coverage = 0.5`、decal 法线与接收
+    法线相反时，结果是与 `base` 垂直的单位向量，而不是零向量或 NaN。
+  - `|P| ≈ 0`（多层法线完全相消）稳定回退到 `base`。
+- 这与 UE 5.8 legacy DBuffer 的
+  `WorldNormal = normalize(WorldNormal * NormalOpacity + PreMulWorldNormal)`
+  有意不同：UE 的线性组合在对跖点 50/50 仍会得到零向量。VL 选择
+  whiteout + great-circle 是为了让该退化不进入光照；同半球仍保持
+  detail-normal 的坡度语义。这不是完整的 UE RNM 等价，残余近似见
+  「当前限制」。
 - 这是 `BeforeLighting` 子集：decal 在 `deferredLighting` 前修改
   `MaterialSurface`，因此仍接受场景光照；deferredLighting 通过
   `ApplyDecalDBuffer` 合成，不读写同一张 GBuffer。
@@ -132,14 +243,30 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
   重新加载磁盘内容。
 - decal 贴图不做 bindless 数组；固定上限 64 个 decal，每个 swapchain
   image 为每个实例槽位维护独立 descriptor set。
-- 法线路径只适用于单层 decal；重叠 normal decal 没有 RNM/whiteout
-  重建，叠加结果不保证与 UE 一致。
+- normal decal 的 DBufferB 只保存 `P = Σ N_i·w_i` 与总覆盖率 `c`，
+  无法恢复每一层的独立权重和顺序；多层叠加先在世界空间法线上做线性
+  累积，再对合成方向做一次 whiteout。方向接近相反时 `|P|` 会衰减
+  （这是有意保留的相干性度量），完全相消时回退到接收表面法线。这与
+  UE 按层顺序逐次执行 normal blend 的结果不等价。fp16 每通道约 11 bit
+  有效精度；因为没有"除以覆盖率"的步骤，低覆盖率不会放大噪声。
+- 没有真正的 RNM：RNM 需要每个 decal 在接收表面切空间里的偏导数并按
+  层重建，而当前 DBuffer 只存合成后的法线向量，也不保存逐层顺序。
+  要做到完整 UE 等价需要额外的逐层 payload 或有序 resolve，不在当前
+  DBuffer 布局内；若将来引入，必须同时改 DBuffer 格式、
+  `config/renderGraphConfig.json` 的附件/清屏值和本契约。
 - 没有硬件 depth/stencil 附件；像素以 `sceneDepth` 重建投影体判断，
   大屏或相机进入 decal 体积的鲁棒性仍需后续 stencil 路径。
-- 只影响 deferred opaque GBuffer；`ForwardOpaque`、透明表面和粒子不会
-  自动接收 decal。
+- `ForwardOpaque` 已按屏幕 UV 接收 DBuffer；`ForwardTransparent` 明确不
+  接收，因为当前 DBuffer 没有 per-pixel decal depth/stencil 来判断透明面
+  与后方 opaque 的遮挡关系。粒子仍走自己的粒子 shader，不会自动接收 decal。
 - decal 纹理集按 `decalId` 创建并交给 `ResourceRetireQueue` 退休；
-  实例数据仍走每 swapchain image 的 SSBO。
+  实例数据仍走每 swapchain image 的 SSBO。粒子 decal 的稳定槽位在寿命间隙
+  期间保留纹理集最多 120 帧，超过后正常退休；World 换代立即清空持久集合，
+  避免 emitter 删除/重命名后长期占用默认或真实纹理。
+- 粒子 decal 只是静态 decal 的 CPU 动态来源。它不按命中表面自动定向、
+  没有逐粒子图集/材质图、硬件 stencil 或逐层 RNM；动态与静态共享 64 槽时，
+  粒子路径没有抢占静态 decal 的优先级。Beam 的 `beam.hitScan` 是独立的
+  受控平面命中，不会把命中法线传给粒子 decal。
 
 ## 验证
 
@@ -149,6 +276,17 @@ unit cube、实例 SSBO、pipeline 与 descriptor。它不是 particle pass，�
   `ScriptRuntimeTest.DecalResponseAndNormalStrengthSurviveSnapshot`
   覆盖 World -> Snapshot 的 DecalResponse、normalStrength 与三个贴图
   路径数据传递。
+- 法线合成数学：`tool/renderer-backend-tests/decal_normal_blend_test.cpp`
+  对 `source/render/decal/decalNormalBlend.h`（shader 的 CPU 镜像）做
+  数值回归：coverage 0/1、同半球半覆盖、对跖点 50/50 不抵消、跨半球
+  满覆盖、多层完全相消回退、`normalStrength == 0` 不写 coverage。
+- 粒子驱动路径：
+  `tool/material-instance-editor-tests/particleDecalRuntimeTests.cpp`
+  覆盖 schema/capability/round-trip、burst 确定性、decalToWorld 约定、
+  fixedTimeStep、lifetime、shape/gravity、动态条目移除、稳定槽位 ID、
+  静态/动态 64 槽分配、同名不同 assetPath、disable/re-enable；
+  `tool/editor-ui-tests` 覆盖 Emitter 页 decal 控件与 World 预算排除；
+  `tool/offline-integration-tests` 锁定离线模拟跳过 decal。
 - 运行时：`SC_particle_ue_explosion` 的 `ExplosionScorch` 应在
   `deferredLighting` 前把地面基色压暗；日志不应出现 `VUID-` 或
   `Validation Error`，也不应出现 `[Decals][Warning]`（出现即说明

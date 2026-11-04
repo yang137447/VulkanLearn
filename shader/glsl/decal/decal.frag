@@ -106,9 +106,8 @@ void main()
 
     // 每个 decal 只写自己 response 允许的缓冲区；否则重叠时另一个
     // decal 的 mask 位会把本 decal 的默认通道值泄漏给接收表面。
-    // A: baseColor + color coverage；B: 编码 world normal + normal
-    // coverage；C: roughness/AO + roughness coverage；D: metallic +
-    // metallic coverage。
+    // A: baseColor + color coverage；B: world normal + normal coverage；
+    // C: roughness/AO + roughness coverage；D: metallic + metallic coverage。
     outDBufferA = vec4(
         instance.color.rgb * albedoSample.rgb * mottling,
         alpha * response.r);
@@ -122,12 +121,13 @@ void main()
         0.0,
         0.0,
         alpha * response.a);
-    // normalStrength 为 0 时不写 normal coverage，避免平坦法线仍覆盖
-    // 接收表面；大于 0 时 normal coverage 与颜色/表面覆盖率一致。
-    float normalEnabled = step(1.0e-4, instance.color.w);
+    // DBufferB 是 R16G16B16A16_SFLOAT，直接写带符号的 world normal，
+    // 由固定功能 SrcAlpha/OneMinusSrcAlpha 把它预乘成 Σ N_i·w_i；
+    // 合成端因此不需要 0.5 偏移编码，也不需要除以覆盖率恢复方向。
+    // normalStrength 为 0 时 coverage 为 0，RGB 不参与混合。
     outDBufferB = vec4(
-        worldNormal * 0.5 + 0.5,
-        alpha * response.g * normalEnabled);
+        worldNormal,
+        DecalNormalWriteCoverage(alpha * response.g, instance.color.w));
     // 掩码只存 0/1 位，不乘 alpha；不透明但也想改 roughness 的
     // decal 不应因覆盖率衰减而丢失响应位。
     outDBufferMask = response;

@@ -35,6 +35,16 @@ inline std::string BuildParticleEmitterKey(
         EscapeParticleEmitterKeySegment(emitterName);
 }
 
+// resolved asset map 使用 sceneName + assetPath：同名但不同资产路径的
+// particle system 不能共享 userParameters/Data Channel 解析结果。
+inline std::string BuildParticleSystemAssetKey(
+    std::string_view sceneName,
+    std::string_view assetPath)
+{
+    return EscapeParticleEmitterKeySegment(sceneName) + "|" +
+        EscapeParticleEmitterKeySegment(assetPath);
+}
+
 // 场景对象名是 key 的第一段；先按同一套规则转义再比较前缀，避免
 // `A|B` 与 `A` 这类名字在运行时 restart 时互相误配。
 inline bool ParticleEmitterKeyMatchesScene(
