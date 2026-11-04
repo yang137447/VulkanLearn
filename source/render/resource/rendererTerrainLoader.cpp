@@ -2270,6 +2270,11 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             // 也不该把自己的页坐标写进其他分层地形的 feedback。
             objectPlan.terrainFeedbackEligible =
                 TerrainParticipatesInFeedback(plan, usesLayerTable);
+            // 仅标记编辑器的地形身份；World 侧仍按 chunk mesh 构建和绘制。
+            objectPlan.isTerrain = true;
+            objectPlan.terrainAssetPath = plan.desc.assetPath;
+            objectPlan.terrainPlacementId =
+                TerrainPlacementIdentity(plan);
             if (multiLod)
             {
                 objectPlan.lodGroupId =

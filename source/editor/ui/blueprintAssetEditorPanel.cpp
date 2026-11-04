@@ -101,6 +101,13 @@ const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::Bluepr
     return nullptr;
 }
 
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::TerrainDocument(const std::string& path) const
+{
+    for (const auto& entry : snapshot.terrainDocuments)
+        if (entry.assetPath == path) return &entry;
+    return nullptr;
+}
+
 void MaterialInstanceAssetEditorPanel::QueueBlueprintAssetDraft(Json candidate)
 {
     const auto* tab = resourceEditor.ActiveTab();

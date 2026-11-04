@@ -36,7 +36,8 @@ const char* SceneActorGroupIcon(EditorSceneActorType type);
 using EditorSceneActorList = std::vector<EditorSceneActorSnapshot>;
 const EditorSceneActorList& SceneActorList(const std::shared_ptr<const EditorSceneActorList>& actors);
 
-// 稳定 actor 身份：mesh 用场景对象名，其余类型用各自的 World 名字（灯光名、风剖面 key）。
+// 稳定 actor 身份：mesh/terrain 用场景对象名，其余类型用各自的 World 名字
+// （灯光名、风剖面 key）。
 std::string SceneActorIdentity(EditorSceneActorType type, const std::string& name);
 
 // 稳定身份的逆解析：分隔符之前是分组键（= 场景对象 type），之后是对象名。
@@ -50,8 +51,8 @@ struct EditorSceneActorIdentity
 
 bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
 
-// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境与风剖面
-// 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
+// 可见性开关只覆盖渲染路径真正持有的对象：网格、地形与四类灯。相机、环境与
+// 风剖面没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
 bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
 // actor 与槽行共用一个窗口化行下标空间；actor 行带 sceneActors 里的下标，
@@ -107,7 +108,7 @@ bool SameSceneActorExpansion(
 
 // 按全局名称顺序输出 actor 行，不产生类型分组。query/typeFilter 只影响可见性，
 // 不改变 actor 下标，因此事件地址在本次快照内稳定。
-// 展开的 mesh actor 追加槽行，因此"哪些行存在"完全由本函数的入参决定。
+// 展开的 mesh/terrain actor 追加槽行，因此"哪些行存在"完全由本函数的入参决定。
 std::vector<EditorSceneActorRow> BuildSceneActorRows(
     const std::vector<EditorSceneActorSnapshot>& actors,
     const std::string& query,
@@ -172,8 +173,9 @@ struct EditorSceneActorEditableField
 std::vector<EditorSceneActorEditableField> SceneActorEditableFields(const EditorSceneActorSnapshot& actor);
 std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t component);
 
-// 把 mesh actor 还原成既有的 MI 导航值语义：材质槽只包含带有效材质实例的 section，
-// 下标与大纲里的槽行一一对应，选择仍走原来的 RequestMaterialSelection 路由。
+// 把 mesh/terrain actor 还原成既有的 MI 导航值语义：材质槽只包含带有效材质实例的
+// section，下标与大纲里的槽行一一对应，选择仍走原来的 RequestMaterialSelection
+// 路由。Terrain 在 World 中仍是 chunk mesh，因此无需第二套模型快照。
 MaterialInstanceModelSnapshot MeshSceneActorModel(const EditorSceneActorSnapshot& actor);
 
 // 与面板共用的数值格式：9 位有效数字，保证同一值在只读行与输入控件里写法一致。

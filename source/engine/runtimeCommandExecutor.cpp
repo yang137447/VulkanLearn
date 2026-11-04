@@ -70,9 +70,10 @@ bool ApplyActorVisibility(
     switch (identity.type)
     {
     case EditorSceneActorType::Mesh:
-        // 网格 actor 的身份就是 sceneObjectIdentity（大纲按它聚合 section），
-        // 因此这里一次写全该 actor 的所有 section，而不是找同名的单个渲染对象。
         return world.SetMeshSceneObjectVisible(identity.name, visible);
+    case EditorSceneActorType::Terrain:
+        // 地形在 World 里仍是 chunk mesh；同名 Mesh/Terrain 必须按类型分开写入。
+        return world.SetTerrainSceneObjectVisible(identity.name, visible);
     case EditorSceneActorType::DirectionalLight:
     case EditorSceneActorType::PointLight:
     case EditorSceneActorType::SpotLight:
@@ -632,6 +633,14 @@ void RuntimeCommandExecutor::ExecuteCommand(
         std::string error;
         if (!activeWorld)
             error = "No active World.";
+        else if (command.actorProperty.preview)
+        {
+            // 拖动预览只改 live World，不要求文档可编辑、不写草稿/历史；
+            // 释放时同一 Transform 以 preview=false 再进来一次，才产生单笔 Undo。
+            if (!ApplyEditorActorProperty(*activeWorld, command.actorProperty, error))
+                diagnostics.ReportWarning("Actor preview rejected: " + error);
+            break;
+        }
         else if (sceneDocuments && !sceneDocuments->PrepareActorEdit(
             activeWorld->GetScenePath(), command.actorProperty.identity, error))
         {

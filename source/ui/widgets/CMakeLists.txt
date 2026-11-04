@@ -1,5 +1,6 @@
 add_library(vl_ui_widgets STATIC
     widgetDocument.cpp
+    editor/brushLibraryPanel.cpp
     input/inputWidgets.cpp
     layout/layoutWidgets.cpp
     navigation/tabWidgets.cpp

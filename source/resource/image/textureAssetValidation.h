@@ -18,6 +18,7 @@ inline void ValidateTextureAssetJson(const nlohmann::json& asset)
     for (const auto& entry : asset.items())
         if (entry.key() != "name" && entry.key() != "type" && entry.key() != "source" &&
             entry.key() != "sources" &&
+            entry.key() != "displacementSources" &&
             entry.key() != "colorSpace" && entry.key() != "mipmaps" && entry.key() != "filter" &&
             entry.key() != "wrapMode" && entry.key() != "channelsDescription")
             throw std::invalid_argument("Unknown texture field: " + entry.key());
@@ -33,11 +34,27 @@ inline void ValidateTextureAssetJson(const nlohmann::json& asset)
         for (const auto& source : asset.at("sources"))
             if (!source.is_string() || source.get<std::string>().empty())
                 throw std::invalid_argument("Texture array sources must be non-empty strings");
+        // displacementSources 是层 source-set 的编辑器侧 16-bit 位移源，运行时不上传。
+        // 若存在必须与 sources 同序同长，避免预览按 slice 取到错层。
+        if (asset.contains("displacementSources"))
+        {
+            if (!asset.at("displacementSources").is_array() ||
+                asset.at("displacementSources").size() != asset.at("sources").size())
+                throw std::invalid_argument(
+                    "Texture array displacementSources must match sources");
+            for (const auto& source : asset.at("displacementSources"))
+                if (!source.is_string() || source.get<std::string>().empty())
+                    throw std::invalid_argument(
+                        "Texture array displacementSources must be non-empty strings");
+        }
     }
     else
     {
         if (asset.contains("sources"))
             throw std::invalid_argument("Single texture must use source, not sources");
+        if (asset.contains("displacementSources"))
+            throw std::invalid_argument(
+                "Single texture must not use displacementSources");
         if (!asset.at("source").is_string() || asset.at("source").get<std::string>().empty())
             throw std::invalid_argument("Texture requires non-empty string: source");
     }

@@ -8,6 +8,7 @@
 #include "scene/validation/sceneJsonValidator.h"
 #include "script/scriptBlueprintAsset.h"
 #include "script/scriptPropertySchema.h"
+#include "terrain/validation/terrainAssetValidator.h"
 
 namespace VL::Editor
 {
@@ -57,7 +58,8 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     if ((kind == K::Scene && type != "scene") ||
         (kind == K::Mesh && type != "mesh" && type != "speedtree") ||
         (kind == K::Texture && type != "texture") ||
-        (kind == K::Blueprint && type != "blueprint"))
+        (kind == K::Blueprint && type != "blueprint") ||
+        (kind == K::Terrain && type != "terrain"))
         throw std::invalid_argument("Wrong asset type: " + path);
     const auto filename = std::filesystem::path(path).filename().string();
     std::string foldedFilename = filename;
@@ -67,8 +69,9 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
         throw std::invalid_argument("Preview scenes are not editable asset documents");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
         (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
-        (kind == K::Blueprint && filename.rfind("BP_", 0) != 0))
-        throw std::invalid_argument("Mesh/Texture/Blueprint descriptors require SM_/T_/BP_ JSON names");
+        (kind == K::Blueprint && filename.rfind("BP_", 0) != 0) ||
+        (kind == K::Terrain && foldedFilename.rfind("tr_", 0) != 0))
+        throw std::invalid_argument("Mesh/Texture/Blueprint/Terrain descriptors require SM_/T_/BP_/TR_ JSON names");
 }
 
 void ValidateLegacyScene(const Json& scene)
@@ -154,6 +157,12 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         if (kind == K::Scene) ValidateLegacyScene(document.baseline);
         else if (kind == K::Mesh) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
         else if (kind == K::Blueprint) ValidateScriptBlueprintAsset(document.baseline);
+        else if (kind == K::Terrain)
+        {
+            // 与 capabilities 的 document_and_references 声明一致：打开时就
+            // 解析 heightmap/MI 引用，避免缺失引用被显示成 clean 文档。
+            Validate(document.baseline, key);
+        }
         else ValidateTextureAssetJson(document.baseline);
         const auto after = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
         if (!after.Succeeded() || before.digest != after.digest || Resolve(key) != document.absolutePath)
@@ -177,6 +186,16 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         {
             if (object.at("type") == "environment" && object.at("environment").at("type") == "hdri")
                 ResolveReference(object.at("environment").at("hdrPath").get<std::string>());
+            if (object.at("type") == "terrain")
+            {
+                // 场景只引用 TR；这里先确认引用存在且类型正确，避免保存一个
+                // LoadWorld 必然失败的 terrainPath。高度图/MI 的内容预检仍由
+                // 正式 TerrainAssetLoader 在 World 加载阶段完成。
+                const auto reference = ResolveReference(
+                    object.at("terrainPath").get<std::string>());
+                if (ReadJson(reference).value("type", std::string()) != "terrain")
+                    throw std::invalid_argument("terrainPath must reference a terrain asset");
+            }
             for (const char* field : {"modelPath", "materialOverride"})
                 if (object.contains(field))
                 {
@@ -238,6 +257,34 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                 ReadJson(reference).value("type", "") != "materialInstance")
                 throw std::invalid_argument("Mesh slots require MI_*.json materialInstance references");
         }
+    }
+    else if (kind == K::Terrain)
+    {
+        TerrainAssetValidator::Validate(candidate, path);
+        ResolveReference(candidate.at("heightmapPath").get<std::string>());
+        // paintPath 是可选的持久化目标：文件可以尚不存在，但父目录必须
+        // 落在资源根内且可解析。仍然拒绝绝对路径、根外遍历和链接逃逸。
+        if (candidate.contains("paintPath"))
+        {
+            const std::string paintPath =
+                candidate.at("paintPath").get<std::string>();
+            ValidateRelativePath(paintPath);
+            const auto absolute = std::filesystem::weakly_canonical(
+                resourceRoot / PortablePath(paintPath));
+            const auto relative = absolute.lexically_relative(resourceRoot);
+            if (relative.empty() || relative.is_absolute() ||
+                *relative.begin() == ".." ||
+                !std::filesystem::is_directory(absolute.parent_path()) ||
+                (std::filesystem::exists(absolute) &&
+                 !std::filesystem::is_regular_file(absolute)))
+                throw std::invalid_argument(
+                    "Terrain paintPath must resolve inside resource root and reference a file target: " +
+                    paintPath);
+        }
+        const auto material = ResolveReference(
+            candidate.at("materialInstancePath").get<std::string>());
+        if (ReadJson(material).value("type", std::string()) != "materialInstance")
+            throw std::invalid_argument("Terrain materialInstancePath must reference a materialInstance asset");
     }
     else
     {
@@ -323,6 +370,26 @@ EditorAssetDocumentResultPayload AssetDocumentService::Describe(const std::strin
     result.canRedo = kind == K::Blueprint && !document.blueprintHistory.redo.empty();
     result.document = ProjectEditableAsset(kind, document.draft);
     result.capabilities = DescribeAssetCapabilities(kind, document.draft);
+    if (kind == K::Terrain && document.draft.contains("heightmapPath") &&
+        document.draft.at("heightmapPath").is_string())
+    {
+        try
+        {
+            const auto physical = ResolveReference(
+                document.draft.at("heightmapPath").get<std::string>());
+            std::string extension = physical.extension().string();
+            for (char& character : extension)
+                character = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(character)));
+            if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
+                extension == ".bmp" || extension == ".tga")
+                result.heightmapPreviewPath = physical.string();
+        }
+        catch (const std::exception&)
+        {
+            // 预览路径只是 UI 提示；缺失引用由 validate/modify 的正式错误报告。
+        }
+    }
     return result;
 }
 
@@ -338,6 +405,8 @@ void AssetDocumentService::DescribeFailure(const std::string& path, const Docume
             if (change.objectIdentity) target["objectIdentity"] = *change.objectIdentity;
             if (change.slotIndex) target["slotIndex"] = *change.slotIndex;
             if (change.expectedSlotName) target["expectedSlotName"] = *change.expectedSlotName;
+            if (change.layerIndex) target["layerIndex"] = *change.layerIndex;
+            if (change.expectedLayerName) target["expectedLayerName"] = *change.expectedLayerName;
             targets.push_back(std::move(target));
         }
     // 完整候选可因字段组合失败；targets 表示本次请求范围，不伪装成已定位的单字段错误。
@@ -507,7 +576,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetDocumentService::Modi
         if (entry.second.draft != entry.second.baseline)
             result.push_back({entry.first, kind == K::Scene ? EditorUi::EditorAssetKind::Scene :
                 kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh : kind == K::Blueprint ?
-                EditorUi::EditorAssetKind::Blueprint : EditorUi::EditorAssetKind::Texture,
+                EditorUi::EditorAssetKind::Blueprint : kind == K::Terrain ?
+                EditorUi::EditorAssetKind::Terrain : EditorUi::EditorAssetKind::Texture,
                 entry.second.revision, entry.second.status, entry.second.message});
     return result;
 }

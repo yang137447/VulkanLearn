@@ -163,6 +163,62 @@ void TerrainPageManager::RegisterTerrain(
     }
 }
 
+void TerrainPageManager::UpdateLayerPaint(
+    const std::string& placementId,
+    std::shared_ptr<const TerrainLayerPaintData> paint)
+{
+    const size_t index = FindRegistrationIndex(placementId);
+    if (index == InvalidIndex)
+        throw std::runtime_error(
+            "Terrain layer paint targets an unregistered placement: " + placementId);
+    if (paint && (paint->Empty() ||
+        paint->layerCount != plans[index].desc.layers.size()))
+        throw std::runtime_error(
+            "Terrain layer paint dimensions do not match the registered layer table: " +
+            placementId);
+    plans[index].layerPaint = std::move(paint);
+}
+
+void TerrainPageManager::UpdateHeightmap(
+    const std::string& placementId,
+    std::shared_ptr<const HostImage> heightmap)
+{
+    const size_t index = FindRegistrationIndex(placementId);
+    if (index == InvalidIndex)
+        throw std::runtime_error(
+            "Terrain heightmap update targets an unregistered placement: " +
+            placementId);
+    if (!heightmap)
+        throw std::runtime_error(
+            "Terrain heightmap update requires a decoded heightmap: " +
+            placementId);
+    const std::shared_ptr<const HostImage>& previous = plans[index].heightmap;
+    if (previous &&
+        (previous->width != heightmap->width ||
+         previous->height != heightmap->height))
+    {
+        // 覆盖页的 tile 划分与 UV 采样依赖固定的高度图尺寸；换尺寸会让
+        // 已注册的虚拟页不再对应同一块地形区域。
+        throw std::runtime_error(
+            "Terrain heightmap update dimensions do not match the registered "
+            "heightmap: " + placementId);
+    }
+    plans[index].heightmap = std::move(heightmap);
+}
+
+void TerrainPageManager::InvalidatePlacementPages(const std::string& placementId)
+{
+    if (placementId.empty()) return;
+    for (PageState& page : pages)
+    {
+        if (page.key.placementId != placementId || !page.resident)
+            continue;
+        // 有引用/上传 pin 的页不能在这里强拆；下一轮 feedback 仍会看到旧内容，
+        // 但调用方会在下一帧再次尝试失效。
+        static_cast<void>(EvictPageAt(page));
+    }
+}
+
 uint32_t TerrainPageManager::RequestInitialTerrainPages(
     const Registration& registration,
     uint32_t tilesPerSide,

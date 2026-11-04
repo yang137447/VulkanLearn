@@ -136,6 +136,7 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.speedTreeWindProfileKey = meshObject.speedTreeWindProfileKey;
     snapshot.terrainFeedbackEligible =
         meshObject.terrainFeedbackEligible;
+    snapshot.isTerrain = meshObject.isTerrain;
     snapshot.lodGroupId = meshObject.lodGroupId;
     snapshot.lodLevel = meshObject.lodLevel;
 

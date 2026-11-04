@@ -35,6 +35,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
     packet.terrainFeedbackEligible =
         drawSnapshot.terrainFeedbackEligible;
+    packet.isTerrain = drawSnapshot.isTerrain;
     return packet;
 }
 

@@ -9,7 +9,7 @@
 | 修订 | 2026-10-19 第 1 版 |
 | 关联 | [地形复刻计划](terrain-openworld-demo-plan.md)、[GASP 计划](../architecture/gasp-csharp-animation-plan.md)、[Shading Model 计划](shading-model-alignment-plan.md) |
 | 范围 | 地形碰撞、GASP 角色、植被/石头撒点、PP2 风数据、3D 风力点、LOD、自定义 shading model |
-| 非目标 | GPU-driven、VT/clipmap、streaming、地形编辑、完整编辑器工具链 |
+| 非目标 | GPU-driven、VT/clipmap、完整编辑器工具链 |
 
 > 本文件是计划，不是契约。每个子系统落地后再拆出 `documents/contracts/*`；
 > 在那之前，源码与测试才是事实。
@@ -48,8 +48,8 @@
 
 | 子系统 | 现状 | 缺口 |
 | --- | --- | --- |
-| 地形渲染 | 无运行时；只有编辑器资产层；有复刻计划 | 高度图网格、材质、texture array、场景接入 |
-| 地形碰撞 | Jolt 只在 C# Blueprints 开启时编译；现有 `ScriptPhysicsWorld` 用 capsule/box/mesh | 没有 heightfield；没有地形静态体；物理单位与 cm 场景的换算要固定 |
+| 地形渲染 | CPU 高度图 chunk mesh、层表/ID 权重、texture array、VT atlas/streaming、CPU LOD/skirt、加载期 chunk 驻留、Landscape Sculpt/Paint、脏 chunk/覆盖页重建与高度图写回均已接入 | 运行时异步几何分页/卸载、GPU-driven、草地、高度图/层纹理图像预览 |
+| 地形碰撞 | Play 模式通过 Jolt heightfield 创建静态地形 body；cm→m 与 placement TRS 已固定；Sculpt 更新高度图快照，下次 Play 重建 | 分块碰撞、Play 中实时重建、按距离的碰撞分辨率、同一 TR 多摆放的去重 |
 | 角色 | Jolt `CharacterVirtual` 胶囊已存在；GASP 计划未实现 | 地形上的走/跑/贴地/脚部 IK；GASP Motion Matching |
 | GPU instancing | 没有 `DrawIndexedInstanced`；每个 `RenderableObject` 一次 draw | 实例缓冲、逐实例剔除、实例化阴影、批处理 |
 | 植被/石头 | 没有撒点系统；只有普通 mesh 场景对象 | 地形查询、密度/排除、Poisson/聚类、对齐、嵌入、确定性种子 |
@@ -57,7 +57,7 @@
 | 风 | 只有 SpeedTree 专用风（`speedTreeWindSystem.*`） | 通用植被风、3D 风力点、角色交互 |
 | LOD | 没有运行时 LOD；SpeedTree 只取最高细节 | 网格 LOD 导入/生成、地形 LOD、植被 LOD/impostor、HLOD |
 | 自定义 shading | `ShadingModelID` 与 `MaterialInputs` 接口在，模型实现已删 | 每个模型的求值器、dispatch、材质校验、GBuffer/forward、测试 |
-| 编辑器工具 | 无地形/植被/风编辑 | 撒点预览、风点 gizmo、LOD debug；可后置 |
+| 编辑器工具 | TR 资产页 + 地形 Sculpt（Raise/Lower/Smooth）；无植被/风编辑 | layer paint、植被撒点预览、风点 gizmo、LOD debug；可后置 |
 
 ## 2. 子系统拆解
 

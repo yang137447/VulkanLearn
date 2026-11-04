@@ -19,6 +19,19 @@ EditorActorPropertyEdit Edit(const std::string& identity, P property, uint32_t c
     return {7, identity, property, component, value};
 }
 
+EditorActorPropertyEdit Transform(const std::string& identity,
+    const Eigen::Vector3f& position, const Eigen::Vector3f& rotation, const Eigen::Vector3f& scale)
+{
+    EditorActorPropertyEdit edit;
+    edit.worldGeneration = 7;
+    edit.identity = identity;
+    edit.property = P::Transform;
+    edit.transformPosition = {position.x(), position.y(), position.z()};
+    edit.transformRotation = {rotation.x(), rotation.y(), rotation.z()};
+    edit.transformScale = {scale.x(), scale.y(), scale.z()};
+    return edit;
+}
+
 TEST(EditorActorVisualization, BlueprintPreviewPublishesVisibleSectionBoundsAsFrozenValues)
 {
     World world(7, "Maps/SC_model_preview/SC_model_preview.json");
@@ -114,6 +127,53 @@ TEST(EditorActorProperty, MeshEditMovesAllSectionsAndPreservesTheirRelativeMatri
     EXPECT_EQ(a.scenePosition, b.scenePosition);
     EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("mesh|Model", P::Scale, 0, 0), error));
     EXPECT_EQ(world.GetMeshObjects().at("Model::A").sceneScale, Eigen::Vector3f(-2, 3, 4));
+}
+
+TEST(EditorActorProperty, CompleteTransformAppliesAllMeshComponentsTogether)
+{
+    World world(7, "scene.json");
+    WorldMeshObject section;
+    section.sceneObjectIdentity = "Model";
+    section.scenePosition = Eigen::Vector3f(1, 2, 3);
+    section.sceneScale = Eigen::Vector3f(1, 1, 1);
+    world.AddMeshObject("Model::A", section);
+    std::string error;
+    ASSERT_TRUE(ApplyEditorActorProperty(world,
+        Transform("mesh|Model", {40, 50, 60}, {10, 20, 30}, {-2, 3, 4}), error)) << error;
+    const auto& object = world.GetMeshObjects().at("Model::A");
+    EXPECT_EQ(object.scenePosition, Eigen::Vector3f(40, 50, 60));
+    EXPECT_EQ(object.sceneRotation, Eigen::Vector3f(10, 20, 30));
+    EXPECT_EQ(object.sceneScale, Eigen::Vector3f(-2, 3, 4));
+}
+
+TEST(EditorActorProperty, CompleteTransformValidationIsAtomic)
+{
+    World world(7, "scene.json");
+    WorldMeshObject section;
+    section.sceneObjectIdentity = "Model";
+    section.scenePosition = Eigen::Vector3f(1, 2, 3);
+    section.sceneScale = Eigen::Vector3f(1, 1, 1);
+    world.AddMeshObject("Model::A", section);
+    std::string error;
+    EXPECT_FALSE(ApplyEditorActorProperty(world,
+        Transform("mesh|Model", {40, 50, 60}, {10, 20, 30}, {0, 1, 1}), error));
+    EXPECT_EQ(world.GetMeshObjects().at("Model::A").scenePosition, Eigen::Vector3f(1, 2, 3));
+    auto stale = Transform("mesh|Model", {40, 50, 60}, {10, 20, 30}, {1, 1, 1});
+    stale.worldGeneration = 8;
+    EXPECT_FALSE(ApplyEditorActorProperty(world, stale, error));
+    EXPECT_EQ(world.GetMeshObjects().at("Model::A").scenePosition, Eigen::Vector3f(1, 2, 3));
+}
+
+TEST(EditorActorProperty, CompleteTransformEditsLightPositionAndAuthoredRotation)
+{
+    World world(7, "scene.json");
+    auto light = std::make_shared<PointLight>();
+    world.AddPointLight("Key", light);
+    std::string error;
+    ASSERT_TRUE(ApplyEditorActorProperty(world,
+        Transform("pointLight|Key", {10, 20, 30}, {40, 50, 60}, {1, 1, 1}), error)) << error;
+    EXPECT_EQ(light->GetPosition(), Eigen::Vector3f(10, 20, 30));
+    EXPECT_TRUE(light->GetRotation().isApprox(Eigen::Vector3f(40, 50, 60), 1.0e-4f));
 }
 
 TEST(EditorActorProperty, SpotHalfAnglesAreValidatedTogetherAndConvertedToRadians)

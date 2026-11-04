@@ -862,6 +862,36 @@ TEST(TerrainWeightMap, PacksTopFourIdsAndNormalizedWeights)
     }
 }
 
+TEST(TerrainWeightMap, PaintOverrideAddsAWeightOutsideItsHeightBand)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    auto paint = std::make_shared<VL::TerrainLayerPaintData>();
+    paint->width = 8;
+    paint->height = 8;
+    paint->layerCount = 2;
+    paint->weights.assign(8u * 8u * 2u, 0.0f);
+    paint->opacity.assign(8u * 8u * 2u, 0u);
+    for (size_t index = 0; index < 8u * 8u; ++index)
+    {
+        paint->weights[8u * 8u + index] = 1.0f;
+        paint->opacity[8u * 8u + index] = 255;
+    }
+    plan.layerPaint = paint;
+
+    const VL::TerrainWeightMap map = VL::TerrainWeightMapBuilder::Build(plan, 8, 2);
+    for (size_t texel = 0; texel < 8u * 8u; ++texel)
+    {
+        bool foundHigh = false;
+        for (size_t slot = 0; slot < 4; ++slot)
+            foundHigh = foundHigh || map.ids[texel * 4 + slot] == 1;
+        EXPECT_TRUE(foundHigh) << texel;
+    }
+}
+
 TEST(TerrainWeightMap, TileCandidatesFollowHeightBands)
 {
     VL::TerrainBuildPlan plan = MakePlan(
@@ -1065,6 +1095,43 @@ TEST(TerrainPageManager, DistinguishesVirtualPageFromPhysicalAtlasSlot)
     // atlas 数据只出现在物理槽位 (1,0)，虚拟坐标 (6,4) 处仍为空。
     EXPECT_NE(manager.WeightAtlas()[AtlasPageByteOffset(1, 0)], 0u);
     EXPECT_EQ(manager.WeightAtlas()[AtlasPageByteOffset(6, 4)], 0u);
+}
+
+TEST(TerrainPageManager, UpdateHeightmapRebakesInvalidatedPagesFromNewHeights)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    plan.heightmap = std::make_shared<const HostImage>(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.0f; }));
+    const std::string path = plan.desc.assetPath;
+    const VL::TerrainPageManager::PageKey key = MakePageKey(path, 0, 0);
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    std::vector<uint8_t> ids;
+    std::vector<uint8_t> weights;
+    ASSERT_TRUE(manager.ReadPageLayers(key, false, ids, weights));
+    EXPECT_EQ(ids[0], 0u);
+    EXPECT_EQ(weights[0], 255u);
+
+    manager.UpdateHeightmap(
+        path,
+        std::make_shared<const HostImage>(
+            MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 1.0f; })));
+    manager.InvalidatePlacementPages(path);
+    const VL::TerrainPageManager::PageState* invalidated =
+        manager.FindPage(key);
+    ASSERT_NE(invalidated, nullptr);
+    EXPECT_FALSE(invalidated->resident);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    ASSERT_TRUE(manager.ReadPageLayers(key, false, ids, weights));
+    // 只有确实按新高度重新烘焙，top-1 层才会从 low 变成 high。
+    EXPECT_EQ(ids[0], 1u);
+    EXPECT_EQ(weights[0], 255u);
 }
 
 TEST(TerrainPageManager, EvictedPhysicalSlotIsReusedByAnotherVirtualPage)

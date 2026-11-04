@@ -399,14 +399,7 @@ bool MaterialInstanceAssetEditorPanel::RequestBlueprintHistory(bool redo)
 
 void MaterialInstanceAssetEditorPanel::RefreshBlueprintHistoryControls()
 {
-    if (!document) return;
-    const auto* tab = resourceEditor.ActiveTab();
-    if (!tab || tab->kind != EditorAssetKind::Blueprint || !IsResourceEditorVisible()) return;
-    const auto* authored = BlueprintDocument(tab->path);
-    const bool enabled = authored && runtimeView.scripts.available && !runtimeView.offlineMode &&
-        runtimeView.scripts.state == ScriptPlayState::Editing && pendingBlueprintPath.empty() &&
-        !blueprintCommandAwaitingSnapshot && !blueprintGizmoDragging;
-    SetDisabled("menu-edit-undo", !enabled || !authored->canUndo);
-    SetDisabled("menu-edit-redo", !enabled || !authored->canRedo);
+    // 菜单 Edit 与全局工具条按钮共享同一套上下文可用性。
+    RefreshHistoryControls();
 }
 } // namespace VL::EditorUi

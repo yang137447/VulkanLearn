@@ -25,12 +25,15 @@
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/scene/scriptBlueprintAuthoring.h"
 #include "editor/service/sceneDocumentService.h"
+#include "editor/terrain/terrainEditSession.h"
+#include "editor/terrain/terrainPaintSession.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
 #include "engine/editorThumbnailRenderSession.h"
+#include "engine/terrainEditApply.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
@@ -39,11 +42,14 @@
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererTerrainLoader.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
 #include "sceneNode.h"
 #include "shaderCompiler.h"
+#include "terrain/terrainPaintFile.h"
+#include "terrain/terrainPageManager.h"
 #include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
 #include "ui/uiRenderSnapshot.h"
@@ -69,6 +75,15 @@ RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     graphFault.failPassMaterialContract =
         injection.failPassMaterialContract;
     return graphFault;
+}
+
+TerrainBrushShape ToTerrainBrushShape(int shape)
+{
+    if (shape == 0)
+        return TerrainBrushShape::Circle;
+    if (shape == 1)
+        return TerrainBrushShape::Square;
+    throw std::invalid_argument("Unknown terrain brush shape.");
 }
 
 } // namespace
@@ -596,6 +611,12 @@ void EngineLoop::Tick()
          activeWorldBeforeCommand.scenePath !=
              commandResult.activeWorldAfterCommand.scenePath))
     {
+        terrainEditSession.reset();
+        terrainEditSessionGeneration = 0;
+        terrainEditSessionPlacementId.clear();
+        terrainPaintSession.reset();
+        terrainPaintSessionGeneration = 0;
+        terrainPaintSessionPlacementId.clear();
         uiSubsystem->NotifyWorldChanged(
             commandResult.activeWorldAfterCommand.scenePath,
             commandResult.activeWorldAfterCommand.generation);
@@ -961,8 +982,348 @@ void EngineLoop::TickBlueprintAssets()
 void EngineLoop::ApplyQueuedUiActions()
 {
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
+    // 同一 drain 内所有 ApplyBrush 先只改 CPU session；End/Cancel/Undo/Redo
+    // 只置脏标记，循环结束后最多重建一次 GPU 网格。
+    bool terrainEditNeedsRebuild = false;
     for (const UiAction& action : actions)
     {
+        if (action.type == UiActionType::TerrainEdit)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world)
+                error = "Terrain sculpt requires an active World.";
+            else if (action.terrainBrush.worldGeneration != world->GetGeneration())
+                error = "The World changed since this terrain brush event.";
+            else if (!scripts.IsEditing())
+                error = "Stop gameplay before sculpting terrain.";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() ==
+                    "SC_model_preview.json")
+                error = "Terrain sculpt requires a realtime authoring level.";
+
+            const TerrainCollisionInstance* instance = nullptr;
+            if (error.empty())
+            {
+                for (const TerrainCollisionInstance& candidate :
+                     world->GetTerrainCollisionInstances())
+                    if (candidate.placementId == action.terrainBrush.placementId)
+                    {
+                        instance = &candidate;
+                        break;
+                    }
+                if (instance == nullptr)
+                    error = "Terrain placement was not found in the active World: " +
+                        action.terrainBrush.placementId;
+            }
+
+            if (error.empty() &&
+                (!terrainEditSession ||
+                 terrainEditSessionGeneration != world->GetGeneration() ||
+                 terrainEditSessionPlacementId != action.terrainBrush.placementId))
+            {
+                // 同一 drain 内从 A 切到 B 或结束 A 后立刻 Begin B 时，先把
+                // A 的 dirty 预览/取消结果提交到 GPU，不能只保留 B 的新 session。
+                if (terrainEditSession && rendererBackend != nullptr &&
+                    terrainEditSessionGeneration == world->GetGeneration())
+                {
+                    if (!ApplyTerrainEditUpdate(*world))
+                        error = "Previous terrain sculpt update failed; retry after the renderer recovers.";
+                }
+                if (error.empty())
+                {
+                    terrainEditSession.reset();
+                    auto candidate = std::make_unique<Editor::TerrainEditSession>();
+                    if (!Editor::TerrainEditSession::Create(*instance, *candidate, error))
+                    {
+                        candidate.reset();
+                    }
+                    else
+                    {
+                        terrainEditSession = std::move(candidate);
+                        terrainEditSessionGeneration = world->GetGeneration();
+                        terrainEditSessionPlacementId = action.terrainBrush.placementId;
+                    }
+                }
+            }
+
+            if (error.empty() && terrainEditSession)
+            {
+                const auto operation = action.terrainBrush.operation;
+                try
+                {
+                    if (operation == TerrainBrushOperation::BeginStroke)
+                    {
+                        if (!terrainEditSession->BeginStroke())
+                            error = "A terrain sculpt stroke is already active.";
+                    }
+                    else if (operation == TerrainBrushOperation::ApplyBrush)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received ApplyBrush without BeginStroke.";
+                        else
+                        {
+                            TerrainSculptBrush brush;
+                            if (action.terrainBrush.mode == 0)
+                                brush.mode = TerrainSculptMode::Raise;
+                            else if (action.terrainBrush.mode == 1)
+                                brush.mode = TerrainSculptMode::Lower;
+                            else if (action.terrainBrush.mode == 2)
+                                brush.mode = TerrainSculptMode::Smooth;
+                            else
+                                throw std::invalid_argument("Unknown terrain sculpt mode.");
+                            brush.shape =
+                                ToTerrainBrushShape(action.terrainBrush.shape);
+                            brush.centerUv = Eigen::Vector2f(
+                                action.terrainBrush.u, action.terrainBrush.v);
+                            brush.radiusUv = action.terrainBrush.radiusUv;
+                            brush.strength = action.terrainBrush.strength;
+                            brush.falloff = action.terrainBrush.falloff;
+                            // 半径外/clamp 后无数值变化不是错误；一次 drain 内只做
+                            // 一次 GPU 重建，拖动期间仍能看到实时地形预览。
+                            if (terrainEditSession->ApplyBrush(brush))
+                                terrainEditNeedsRebuild = true;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::EndStroke)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received EndStroke without BeginStroke.";
+                        else if (terrainEditSession->EndStroke())
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::CancelStroke)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received CancelStroke without BeginStroke.";
+                        else
+                        {
+                            const uint64_t revision = terrainEditSession->Revision();
+                            terrainEditSession->CancelStroke();
+                            // 未改过高度的空笔画 Cancel 不应支付一次全地形上传。
+                            terrainEditNeedsRebuild =
+                                terrainEditSession->Revision() != revision;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::Undo)
+                    {
+                        if (!terrainEditSession->Undo())
+                            error = "No terrain stroke is available to undo.";
+                        else
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::Redo)
+                    {
+                        if (!terrainEditSession->Redo())
+                            error = "No terrain stroke is available to redo.";
+                        else
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::SaveHeightmap)
+                    {
+                        const std::filesystem::path path =
+                            std::filesystem::path(CommonFunction::GetResourcePath()) /
+                            terrainEditSession->Desc().heightmapPath;
+                        if (terrainEditSession->SaveHeightmap(path, error))
+                            scripts.SetFeedback("Heightmap saved: " + path.string());
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    error = exception.what();
+                }
+            }
+            if (!error.empty())
+            {
+                scripts.SetFeedback(error);
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
+            }
+            continue;
+        }
+        if (action.type == UiActionType::TerrainPaint)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world)
+                error = "Terrain paint requires an active World.";
+            else if (action.terrainPaint.worldGeneration != world->GetGeneration())
+                error = "The World changed since this terrain paint event.";
+            else if (!scripts.IsEditing())
+                error = "Stop gameplay before painting terrain layers.";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() ==
+                    "SC_model_preview.json")
+                error = "Terrain paint requires a realtime authoring level.";
+
+            const TerrainCollisionInstance* instance = nullptr;
+            if (error.empty())
+            {
+                for (const TerrainCollisionInstance& candidate :
+                     world->GetTerrainCollisionInstances())
+                    if (candidate.placementId == action.terrainPaint.placementId)
+                    {
+                        instance = &candidate;
+                        break;
+                    }
+                if (instance == nullptr)
+                    error = "Terrain placement was not found in the active World: " +
+                        action.terrainPaint.placementId;
+            }
+            if (error.empty() &&
+                (!terrainPaintSession ||
+                 terrainPaintSessionGeneration != world->GetGeneration() ||
+                 terrainPaintSessionPlacementId != action.terrainPaint.placementId))
+            {
+                terrainPaintSession.reset();
+                auto candidate = std::make_unique<Editor::TerrainPaintSession>();
+                if (!Editor::TerrainPaintSession::Create(*instance, *candidate, error))
+                    candidate.reset();
+                else
+                {
+                    terrainPaintSession = std::move(candidate);
+                    terrainPaintSessionGeneration = world->GetGeneration();
+                    terrainPaintSessionPlacementId = action.terrainPaint.placementId;
+                }
+            }
+
+            bool invalidate = false;
+            if (error.empty() && terrainPaintSession)
+            {
+                const auto operation = action.terrainPaint.operation;
+                try
+                {
+                    if (operation == TerrainBrushOperation::BeginStroke)
+                    {
+                        if (!terrainPaintSession->BeginStroke())
+                            error = "A terrain paint stroke is already active.";
+                    }
+                    else if (operation == TerrainBrushOperation::ApplyBrush)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received ApplyBrush without BeginStroke.";
+                        else
+                        {
+                            Editor::TerrainPaintBrush brush;
+                            brush.layerIndex = action.terrainPaint.layerIndex;
+                            brush.shape =
+                                ToTerrainBrushShape(action.terrainPaint.shape);
+                            brush.centerUv = Eigen::Vector2f(
+                                action.terrainPaint.u, action.terrainPaint.v);
+                            brush.radiusUv = action.terrainPaint.radiusUv;
+                            brush.strength = action.terrainPaint.strength;
+                            brush.falloff = action.terrainPaint.falloff;
+                            brush.opacity = action.terrainPaint.opacity;
+                            brush.flow = action.terrainPaint.flow;
+                            brush.noise = action.terrainPaint.noise;
+                            brush.noiseSeed = action.terrainPaint.noiseSeed;
+                            brush.erase = action.terrainPaint.erase;
+                            if (terrainPaintSession->ApplyBrush(brush))
+                                invalidate = true;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::EndStroke)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received EndStroke without BeginStroke.";
+                        else invalidate = terrainPaintSession->EndStroke();
+                    }
+                    else if (operation == TerrainBrushOperation::CancelStroke)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received CancelStroke without BeginStroke.";
+                        else
+                        {
+                            const uint64_t revision = terrainPaintSession->Revision();
+                            terrainPaintSession->CancelStroke();
+                            invalidate = terrainPaintSession->Revision() != revision;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::Undo)
+                    {
+                        if (!terrainPaintSession->Undo())
+                            error = "No terrain paint stroke is available to undo.";
+                        else invalidate = true;
+                    }
+                    else if (operation == TerrainBrushOperation::Redo)
+                    {
+                        if (!terrainPaintSession->Redo())
+                            error = "No terrain paint stroke is available to redo.";
+                        else invalidate = true;
+                    }
+                    else if (operation == TerrainBrushOperation::SavePaint)
+                    {
+                        if (terrainPaintSession->IsStrokeActive())
+                            error = "Finish or cancel the paint stroke before saving.";
+                        else
+                        {
+                            const auto paint = terrainPaintSession->PaintData();
+                            if (!paint || paint->Empty())
+                                error = "Terrain paint has no edited data to save.";
+                            else if (terrainPaintSession->PaintPath().empty())
+                                error =
+                                    "TR has no paintPath; add one to persist terrain paint.";
+                            else
+                            {
+                                std::filesystem::path path;
+                                std::string pathError;
+                                if (!ResolveTerrainPaintPath(
+                                        CommonFunction::GetResourcePath(),
+                                        terrainPaintSession->PaintPath(),
+                                        path,
+                                        pathError))
+                                    error = pathError;
+                                else if (SaveTerrainLayerPaintFile(path, *paint, error))
+                                    scripts.SetFeedback(
+                                        "Terrain paint saved: " + path.string());
+                            }
+                        }
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    error = exception.what();
+                }
+            }
+            if (error.empty() && invalidate)
+            {
+                // 先更新 World 的 placement 快照：Play/Stop 或切换 Actor 会销毁
+                // 会话，重建时必须从最新覆盖层继续，而不是回到加载期旧快照。
+                if (!world->UpdateTerrainPlacementLayerPaint(
+                        terrainPaintSessionPlacementId,
+                        terrainPaintSession->PaintData()))
+                    error = "Terrain paint placement disappeared from the active World.";
+                else
+                {
+                    try
+                    {
+                        const auto streaming =
+                            RendererResourceCache::GetInstance().GetTerrainStreaming();
+                        if (!streaming)
+                            throw std::runtime_error(
+                                "Terrain paint requires layered terrain pages.");
+                        WaitForRenderThreadIdle();
+                        streaming->pageManager.UpdateLayerPaint(
+                            terrainPaintSessionPlacementId,
+                            terrainPaintSession->PaintData());
+                        streaming->pageManager.InvalidatePlacementPages(
+                            terrainPaintSessionPlacementId);
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        error = std::string("Terrain paint page update failed: ") +
+                            exception.what();
+                    }
+                }
+            }
+            if (!error.empty())
+            {
+                scripts.SetFeedback(error);
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
+            }
+            continue;
+        }
         if (action.type == UiActionType::OpenScriptSource ||
             (action.type == UiActionType::CreateScriptBlueprintAsset && action.script.contains("class")))
         {
@@ -1053,6 +1414,13 @@ void EngineLoop::ApplyQueuedUiActions()
                 // 同批Stop/Play也必须先移除上一上下文的动态模板，不能把它们当成新场景常驻资产。
                 if (scripts.IsEditing()) TickBlueprintAssets();
                 scripts.Control(*world, static_cast<ScriptPlayState>(action.intValue), error);
+                // Play/Stop 都会切换编辑上下文；CPU 高度副本不能跨状态继续用。
+                terrainEditSession.reset();
+                terrainEditSessionGeneration = 0;
+                terrainEditSessionPlacementId.clear();
+                terrainPaintSession.reset();
+                terrainPaintSessionGeneration = 0;
+                terrainPaintSessionPlacementId.clear();
                 if (scripts.IsEditing()) TickBlueprintAssets();
             }
             else if (action.type == UiActionType::ReloadScripts)
@@ -1364,6 +1732,24 @@ void EngineLoop::ApplyQueuedUiActions()
         GetSubsystems().GetCommandBus().Queue(std::move(command));
     }
 
+    if (terrainEditNeedsRebuild && terrainEditSession)
+    {
+        const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+        if (!world || world->GetGeneration() != terrainEditSessionGeneration)
+        {
+            terrainEditSession.reset();
+            terrainEditSessionGeneration = 0;
+            terrainEditSessionPlacementId.clear();
+        }
+        else if (rendererBackend == nullptr)
+        {
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                "Terrain sculpt CPU edit kept dirty, but no renderer backend is available.",
+                "Terrain");
+        }
+        else ApplyTerrainEditUpdate(*world);
+    }
+
     // RmlUi 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
     // 确保选择描边与常规视口拾取走同一个稳定帧边界。
     if (uiSubsystem != nullptr)
@@ -1393,6 +1779,93 @@ void EngineLoop::ApplyQueuedUiActions()
             RenderSystem::GetInstance().ClearSelectedMaterialInstance();
         }
     }
+}
+
+bool EngineLoop::ApplyTerrainEditUpdate(World& world)
+{
+    if (!terrainEditSession || rendererBackend == nullptr) return false;
+    WaitForRenderThreadIdle();
+    Editor::TerrainMeshUpdate update = terrainEditSession->BuildUpdate();
+    // 加载期驻留窗口会跳过部分 (chunk, LOD)；CPU 编辑仍要对整张高度图
+    // 生成 dirty，但 GPU 只能替换 World 里真实存在的对象。
+    const auto& meshObjects = world.GetMeshObjects();
+    update.chunks.erase(std::remove_if(update.chunks.begin(), update.chunks.end(),
+        [&meshObjects, &update](const Editor::TerrainChunkMeshUpdate& chunk)
+        {
+            const auto found = meshObjects.find(chunk.objectName);
+            return found == meshObjects.end() || !found->second.isTerrain ||
+                found->second.terrainPlacementId != update.placementId;
+        }), update.chunks.end());
+    if (update.chunks.empty() && !update.heightmap) return false;
+
+    // 分层地形的覆盖页权重由高度/坡度烘焙，几何与权重必须在同一次提交里
+    // 一起推进。必须在替换 GPU 网格前确认页管理器可用，否则宁可拒绝本次
+    // 提交，也不能留下“新几何 + 旧权重”的持久分叉。
+    const bool layered = !update.desc.layers.empty();
+    std::shared_ptr<TerrainStreamingState> streaming;
+    if (layered)
+    {
+        streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        const bool registered = streaming &&
+            std::any_of(
+                streaming->pageManager.Registrations().begin(),
+                streaming->pageManager.Registrations().end(),
+                [&update](const TerrainPageManager::Registration& registration)
+                {
+                    return registration.placementId == update.placementId;
+                });
+        if (!registered)
+        {
+            const std::string message = streaming
+                ? "Terrain sculpt requires a placement registered with the "
+                    "layered terrain page manager: " + update.placementId
+                : "Terrain sculpt requires layered terrain streaming state.";
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                message, "Terrain");
+            GetSubsystems().GetScriptRuntime().SetFeedback(message);
+            return false;
+        }
+    }
+
+    TerrainEditApplyStats stats;
+    std::string error;
+    if (!ApplyTerrainMeshUpdate(world, *rendererBackend, update, stats, error))
+    {
+        const std::string message = "Terrain sculpt GPU update failed: " + error;
+        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(message, "Terrain");
+        GetSubsystems().GetScriptRuntime().SetFeedback(message);
+        return false;
+    }
+    if (layered)
+    {
+        try
+        {
+            // 与网格替换同处一个 render-thread-idle 边界：先换 plan 的高度图
+            // 快照，再失效驻留覆盖页，feedback 下一轮就会按新高度重新烘焙。
+            streaming->pageManager.UpdateHeightmap(
+                update.placementId, update.heightmap);
+            streaming->pageManager.InvalidatePlacementPages(update.placementId);
+        }
+        catch (const std::exception& exception)
+        {
+            // 几何已经提交但权重尚未跟上；保留 dirty 让下一笔重试，
+            // 不能在这里 ResetDirty 把分叉固化成已同步状态。
+            const std::string message =
+                std::string("Terrain sculpt page update failed: ") +
+                exception.what();
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                message, "Terrain");
+            GetSubsystems().GetScriptRuntime().SetFeedback(message);
+            return false;
+        }
+    }
+    terrainEditSession->ResetDirty();
+    if (stats.renderableObjects != 0 || stats.worldChunks != 0)
+        GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+            "Terrain sculpt updated " + std::to_string(stats.renderableObjects) +
+            " renderable objects and " + std::to_string(stats.worldChunks) +
+            " World chunks.", "Terrain");
+    return true;
 }
 
 void EngineLoop::UpdateUiInputPolicy()

@@ -6,6 +6,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include <RmlUi/Core/SystemInterface.h>
 
 #include "core/renderSession.h"
+#include "editor/brush/brushProfile.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorTextMatch.h"
 #include "editor/ui/editorViewportAxisIndicator.h"
@@ -36,6 +38,7 @@
 #include "ui/widgets/property/propertyWidgets.h"
 #include "ui/widgets/text/textWidgets.h"
 #include "ui/widgets/views/viewWidgets.h"
+#include "ui/uiColorTransform.h"
 
 namespace VL::EditorUi
 {
@@ -80,6 +83,179 @@ std::string Number(float value)
     return stream.str();
 }
 
+std::string TerrainNumber(float value)
+{
+    std::ostringstream stream;
+    stream << std::setprecision(6) << value;
+    return stream.str();
+}
+
+std::string TerrainLayerRange(float minimum, float maximum)
+{
+    return TerrainNumber(minimum) + "-" + TerrainNumber(maximum);
+}
+
+std::string TerrainLayerColor(const TerrainLayerDesc& layer)
+{
+    const Eigen::Vector3f color = layer.avgColor;
+    const float sum = std::abs(color.x()) + std::abs(color.y()) + std::abs(color.z());
+    unsigned int red = 0;
+    unsigned int green = 0;
+    unsigned int blue = 0;
+    if (std::isfinite(sum) && sum > 0.01f)
+    {
+        red = UiSrgbHexByte(UiLinearToSrgb(color.x()));
+        green = UiSrgbHexByte(UiLinearToSrgb(color.y()));
+        blue = UiSrgbHexByte(UiLinearToSrgb(color.z()));
+    }
+    else
+    {
+        // 没有可用平均色时，用层身份哈希生成稳定的低饱和色；不能每帧随机。
+        const std::string& identity = layer.key.empty() ? layer.name : layer.key;
+        uint32_t hash = 2166136261u;
+        for (const unsigned char character : identity)
+        {
+            hash ^= character;
+            hash *= 16777619u;
+        }
+        red = 72u + (hash & 63u);
+        green = 78u + ((hash >> 8u) & 63u);
+        blue = 68u + ((hash >> 16u) & 63u);
+    }
+    std::ostringstream stream;
+    stream << '#' << std::uppercase << std::hex << std::setfill('0')
+        << std::setw(2) << red << std::setw(2) << green
+        << std::setw(2) << blue << "FF";
+    return stream.str();
+}
+
+std::string TerrainLayerSourceLabel(uint32_t sourceSet)
+{
+    return "set " + std::to_string(sourceSet);
+}
+
+bool TerrainLayerMatchesSearch(const TerrainLayerDesc& layer, const std::string& search)
+{
+    const std::string folded = FoldAsciiCase(search);
+    if (folded.empty()) return true;
+    const std::string haystack = FoldAsciiCase(layer.name + "\n" + layer.key + "\n" +
+        TerrainLayerSourceLabel(layer.sourceSet) + "\nsourceSet " +
+        std::to_string(layer.sourceSet));
+    return haystack.find(folded) != std::string::npos;
+}
+
+std::string TerrainLayerCardMarkup(const TerrainLayerDesc& layer, const std::string& color,
+    const std::string& spherePath, size_t index, bool selected, bool listView)
+{
+    const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
+    const std::string meta = TerrainLayerSourceLabel(layer.sourceSet) +
+        " &#183; uvScale " + TerrainNumber(layer.uvScale);
+    std::string classes = "terrain-layer-card ";
+    classes += listView ? "terrain-layer-list-card" : "terrain-layer-grid-card";
+    if (selected) classes += " selected";
+    std::string markup = "<button id=\"terrain-layer-card-" + std::to_string(index) +
+        "\" class=\"" + classes + "\" data-action=\"terrain-layer-select\" data-index=\"" +
+        std::to_string(index) + "\" title=\"" + Text(name) + "\">" +
+        "<div class=\"terrain-layer-swatch";
+    if (spherePath.empty())
+    {
+        markup += "\" style=\"background-color: " + color +
+            ";\"><div class=\"terrain-layer-swatch-highlight\"></div>";
+    }
+    else
+    {
+        // 有真实球体图时不能保留色块背景，否则 PNG 透明角落会露出方块。
+        markup += " has-image\"><img class=\"terrain-layer-swatch-image\" src=\"" +
+            Text(spherePath) + "\"/>";
+    }
+    markup += std::string("</div>") +
+        "<div class=\"terrain-layer-card-copy\">" +
+        "<span class=\"terrain-layer-card-name\">" + Text(name) + "</span>" +
+        "<span class=\"terrain-layer-card-meta\">" + meta + "</span>" +
+        "</div></button>";
+    return markup;
+}
+
+// 窗口计算必须与 RCSS 的固定卡片盒一致：144px 卡宽 + 6px 右间距 = 150px 单元格，
+// 116px 卡高 + 6px 下间距 = 122px 行高；列表行高为 34px 卡 + 4px 间距 = 38px。
+constexpr float TerrainLayerGridCellWidth = 150.0f;
+constexpr float TerrainLayerGridRowHeight = 122.0f;
+constexpr float TerrainLayerListRowHeight = 38.0f;
+constexpr float TerrainLayerFallbackViewportWidth = 320.0f;
+constexpr float TerrainLayerFallbackViewportHeight = 180.0f;
+constexpr size_t TerrainLayerVirtualizeThreshold = 12;
+
+int TerrainLayerGridColumns(float viewportWidth)
+{
+    if (!std::isfinite(viewportWidth) || viewportWidth <= 0.0f) return 1;
+    return std::max(1, static_cast<int>(std::floor(
+        viewportWidth / TerrainLayerGridCellWidth)));
+}
+
+int TerrainBrushShapeIndex(Editor::BrushShape shape)
+{
+    return shape == Editor::BrushShape::Square ? 1 : 0;
+}
+
+int TerrainBrushFalloffIndex(Editor::BrushFalloff falloff)
+{
+    return static_cast<int>(falloff);
+}
+
+float TerrainBrushFalloffValue(Editor::BrushFalloff falloff)
+{
+    // 当前地形核心只消费 0..1 的插值权重；Lut 尚未接入几何采样，
+    // 复用它最接近的平滑权重，避免预设选中后参数实际不生效。
+    switch (falloff)
+    {
+    case Editor::BrushFalloff::Linear: return 0.6f;
+    case Editor::BrushFalloff::Constant: return 0.0f;
+    case Editor::BrushFalloff::Smooth:
+    case Editor::BrushFalloff::Lut:
+    default: return 1.0f;
+    }
+}
+
+bool TerrainBrushValueMatches(float value, float expected)
+{
+    return std::abs(value - expected) <=
+        1.0e-5f * std::max(1.0f, std::abs(expected));
+}
+
+bool TerrainBrushValuesMatch(
+    const Editor::BrushProfile& profile,
+    float radiusCm,
+    float strength,
+    float falloff,
+    int shape)
+{
+    return TerrainBrushValueMatches(radiusCm, profile.radiusCm) &&
+        TerrainBrushValueMatches(strength, profile.strength) &&
+        TerrainBrushValueMatches(falloff, TerrainBrushFalloffValue(profile.falloff)) &&
+        shape == TerrainBrushShapeIndex(profile.shape);
+}
+
+bool TerrainSculptBrushMatches(
+    const Editor::BrushProfile& profile,
+    const TerrainSculptBrushState& state)
+{
+    return TerrainBrushValuesMatch(profile, state.radiusCm,
+        state.strength, state.falloff, state.shape);
+}
+
+bool TerrainPaintBrushMatches(
+    const Editor::PaintBrushPreset& preset,
+    const TerrainPaintBrushState& state)
+{
+    return TerrainBrushValueMatches(state.radiusCm, preset.profile.radiusCm) &&
+        TerrainBrushValueMatches(state.hardness, preset.hardness) &&
+        TerrainBrushValueMatches(state.opacity, preset.opacity) &&
+        TerrainBrushValueMatches(state.flow, preset.flow) &&
+        TerrainBrushValueMatches(state.noise, preset.profile.noise) &&
+        state.noiseSeed == preset.profile.noiseSeed &&
+        state.shape == TerrainBrushShapeIndex(preset.profile.shape);
+}
+
 std::string MotionNumber(double value)
 {
     std::ostringstream stream;
@@ -116,6 +292,39 @@ bool ParseNumber(const std::string& text, T& value)
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
     return !text.empty() && result.ec == std::errc() &&
         result.ptr == text.data() + text.size() && std::isfinite(static_cast<double>(value));
+}
+
+BlueprintGizmoMode SceneGizmoMode(const std::string& tool)
+{
+    return tool == "rotate" ? BlueprintGizmoMode::Rotate :
+        tool == "scale" ? BlueprintGizmoMode::Scale : BlueprintGizmoMode::Translate;
+}
+
+bool SceneGizmoSupportsActor(EditorSceneActorType type)
+{
+    // Environment/Wind 没有可写的 Actor Transform；其余场景对象都参与 UE 式
+    // Move/Rotate/Scale 中的至少一种。SquareAreaLight 只有位置和朝向法线，
+    // 不支持 authored scale/rotation，因此只显示平移 Gizmo。
+    return type != EditorSceneActorType::Environment &&
+        type != EditorSceneActorType::WindProfile;
+}
+
+bool SceneGizmoSupportsMode(EditorSceneActorType type, BlueprintGizmoMode mode)
+{
+    if (mode == BlueprintGizmoMode::Translate) return SceneGizmoSupportsActor(type);
+    if (mode == BlueprintGizmoMode::Rotate)
+        return SceneGizmoSupportsActor(type) && type != EditorSceneActorType::SquareAreaLight;
+    return type == EditorSceneActorType::Mesh || type == EditorSceneActorType::Terrain ||
+        type == EditorSceneActorType::Script;
+}
+
+Eigen::Quaternionf SceneGizmoRotation(const Eigen::Vector3f& degrees)
+{
+    // 与 World 的 YXZ 作者旋转约定一致；只用于 Local 轴方向，不改变 TRS 语义。
+    const Eigen::Vector3f radians = degrees * 0.017453292519943295f;
+    const Eigen::Quaternionf y(Eigen::AngleAxisf(radians.y(), Eigen::Vector3f::UnitY()));
+    const Eigen::Quaternionf x(Eigen::AngleAxisf(radians.x(), Eigen::Vector3f::UnitX()));
+    return y * x * Eigen::AngleAxisf(radians.z(), Eigen::Vector3f::UnitZ());
 }
 
 // 文本输入与范围控件都是 ElementFormControl，但取值路径不同：
@@ -295,6 +504,7 @@ const char* PanelLabel(const std::string& panel)
     if (panel == "content") return "Content Browser";
     if (panel == "renderer") return "Renderer";
     if (panel == "log") return "Log";
+    if (panel == "terrain") return "Landscape";
     return "Asset Editor";
 }
 
@@ -396,6 +606,7 @@ Editor::Selection::MaterialInstanceModelContext SelectionModel(
     result.objectId = model.objectId;
     result.displayName = model.displayName;
     result.objectIdentity = model.objectIdentity;
+    result.actorIdentity = model.actorIdentity;
     for (const auto& material : model.materials)
     {
         Editor::Selection::MaterialInstanceModelMaterial item;
@@ -439,6 +650,19 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
         "content-browser-page", "renderer-page", "editor-viewport-surface", "editor-viewport-image",
         "workspace-log-tab", "log-page", "log-scroll", "log-rows", "log-count",
+        "workspace-terrain-tab", "terrain-page", "terrain-page-body", "terrain-empty", "terrain-summary",
+        "terrain-mode-sculpt", "terrain-mode-paint", "terrain-mode-layers",
+        "terrain-layer-search", "terrain-layer-view-grid", "terrain-layer-view-list",
+        "terrain-panel-filter-row",
+        "terrain-workspace", "terrain-brush-column", "terrain-brush-library-title",
+        "terrain-brush-library", "terrain-layer-library",
+        "terrain-layer-visible-count", "terrain-layer-scroll", "terrain-layer-cards",
+        "terrain-layer-top-spacer", "terrain-layer-bottom-spacer",
+        "terrain-layer-empty", "terrain-layer-status", "terrain-layer-hover-preview",
+        "terrain-layer-hover-image",
+        "terrain-surface-panel", "terrain-surface-size", "terrain-surface-height-scale",
+        "terrain-surface-layer-count", "terrain-surface-chunk-count",
+        "terrain-surface-section-count",
         "log-output", "log-scripts", "log-output-tab", "log-scripts-tab",
         "log-severity", "log-source", "log-search", "log-autoscroll", "log-clear",
         "log-scripts-search", "log-scripts-summary", "log-scripts-rows",
@@ -447,6 +671,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
         "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
         "blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert",
+        "terrain-asset-editor", "terrain-asset-save", "terrain-asset-revert",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
@@ -471,7 +696,8 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-json-kind", "resource-json-path", "resource-json-description",
         "resource-json-status", "resource-json-fields", "resource-json-search",
         "resource-json-page", "resource-json-prev", "resource-json-next",
-        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield", "workspace-reset",
+        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield",
+        "workspace-undo", "workspace-redo", "workspace-reset",
         "asset-sources", "asset-breadcrumbs", "asset-count", "asset-empty", "browser-selection",
         "browser-back", "browser-forward", "browser-up", "browser-sources-toggle",
         "browser-grid", "browser-list", "browser-recursive", "browser-sort", "browser-size",
@@ -488,6 +714,18 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
+        "viewport-snap-enabled", "viewport-snap-move", "viewport-snap-rotate", "viewport-snap-scale",
+        "viewport-gizmo-overlay", "viewport-gizmo-capture",
+        "viewport-brush-ring", "viewport-brush-ring-center",
+        "viewport-tool-landscape", "viewport-landscape-controls",
+        "viewport-landscape-sculpt", "viewport-landscape-paint",
+        "viewport-landscape-write",
+        "viewport-brush-settings", "viewport-brush-mode-0", "viewport-brush-mode-1",
+        "viewport-brush-mode-2", "viewport-brush-radius", "viewport-brush-strength",
+        "viewport-brush-falloff", "terrain-sculpt-settings", "viewport-paint-settings",
+        "viewport-paint-mode", "terrain-paint-radius", "terrain-paint-hardness",
+        "terrain-paint-opacity", "terrain-paint-flow",
+        "viewport-paint-erase",
         "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe",
         "viewport-axis-indicator", "viewport-axis-bar-x", "viewport-axis-bar-y",
         "viewport-axis-bar-z", "viewport-axis-label-x", "viewport-axis-label-y",
@@ -528,6 +766,11 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     docking.SetPanelVisible("viewport", true);
     docking.Activate("viewport");
     widgetDocument.Attach(candidate);
+    if (!brushLibrary.Attach(candidate, "terrain-brush-library", error))
+    {
+        Detach();
+        return false;
+    }
     if (!contentBrowser.Attach(candidate, error))
     {
         Detach();
@@ -543,6 +786,12 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         Detach();
         return false;
     }
+    terrainAssetEditor.SetCommandSink(commandSink);
+    if (!terrainAssetEditor.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
     if (!logPanel.Attach(candidate, error))
     {
         Detach();
@@ -550,6 +799,7 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     }
     detailsIdentity.clear();
     actorDetailsIdentity.clear();
+    terrainSummarySignature.clear();
     blueprintAssetIdentity.clear();
     RefreshWorkspace();
     RefreshLists();
@@ -561,6 +811,10 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
 void MaterialInstanceAssetEditorPanel::Detach()
 {
     CancelBlueprintViewportDrag();
+    CancelSceneGizmoDrag();
+    CancelTerrainBrushStroke();
+    ClearTerrainBrushHit();
+    landscapeToolActive = false;
     actorDragPath.clear();
     textureViewSource.clear();
     ResetTextureView();
@@ -574,6 +828,8 @@ void MaterialInstanceAssetEditorPanel::Detach()
     motionMatchingRefreshKey.clear();
     textureOptionsDirty = true;
     textureOptionSelections.clear();
+    brushLibrary.Detach();
+    brushLibraryCatalogDomain = -1;
     if (document != nullptr)
     {
         document->RemoveEventListener("click", this);
@@ -594,10 +850,19 @@ void MaterialInstanceAssetEditorPanel::Detach()
         docking.Detach();
         document = nullptr;
     }
+    terrainAssetEditor.Detach();
     widgetDocument.Detach();
     axisIndicatorSignature.clear();
+    terrainSummarySignature.clear();
+    terrainLayerLibrarySignature.clear();
+    terrainLayerSourceKey.clear();
+    terrainLayerWindow = TerrainLayerWindowState{};
+    terrainLayerWindowDirty = true;
+    terrainLayerScrollResetPending = true;
+    terrainLayerLastScrollTop = -1.0f;
     // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
     outlinerMounted = false;
+    sceneGizmoMarkupMounted = false;
     // 右键菜单的目标属于旧文档的 DOM，重新接上后必须先回到"没有菜单"。
     contextMenuKind = ContextMenuKind::None;
     contextMenuTarget.clear();
@@ -687,6 +952,18 @@ void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)
 
 void MaterialInstanceAssetEditorPanel::RequestSave()
 {
+    if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Terrain &&
+        IsResourceEditorVisible())
+    {
+        const auto* terrain = TerrainDocument(tab->path);
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SaveTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = MaterialInstanceAssetPathPayload{tab->path};
+        Submit(std::move(command));
+        return;
+    }
     if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Blueprint &&
         IsResourceEditorVisible())
     {
@@ -811,7 +1088,8 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
             ? EditorCommandType::SaveSceneDocument : row.kind == EditorAssetKind::Mesh
             ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Texture
             ? EditorCommandType::SaveTextureDocument : row.kind == EditorAssetKind::Blueprint
-            ? EditorCommandType::SaveBlueprintDocument : EditorCommandType::SaveMaterialInstanceDocument;
+            ? EditorCommandType::SaveBlueprintDocument : row.kind == EditorAssetKind::Terrain
+            ? EditorCommandType::SaveTerrainDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
         command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
         saveWaiting.insert(row.assetPath);
@@ -829,6 +1107,8 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     textureOptionsDirty = textureOptionsDirty || !SameTextureOptions(snapshot.textureAssets, value.textureAssets);
     const std::string previousDocument = snapshot.selectedDocumentPath;
     snapshot = value;
+    SynchronizeSceneGizmoSelection();
+    SynchronizeTerrainBrushSelection();
     if (blueprintCommandAwaitingSnapshot)
     {
         const auto* authored = BlueprintDocument(blueprintCommandPath);
@@ -976,6 +1256,411 @@ void MaterialInstanceAssetEditorPanel::RefreshWorkspace()
     docking.Sync();
     RefreshMenus();
     RefreshViewportToolbar();
+    RefreshTerrainSummary();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainSummary()
+{
+    if (document == nullptr) return;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const bool terrainSelected =
+        actor != nullptr && actor->type == EditorSceneActorType::Terrain;
+
+    // 空状态与编辑工作区只随选中地形身份切换；层内容由层库自己的签名缓存。
+    const std::string signature = terrainSelected
+        ? actor->identity + "|" + std::to_string(actor->worldGeneration)
+        : "empty";
+    if (signature != terrainSummarySignature)
+    {
+        terrainSummarySignature = signature;
+        widgetDocument.SetProperty("terrain-empty", "display", terrainSelected ? "none" : "flex");
+        // 编辑器工作区始终保留：没有地形时笔刷库仍可选择默认笔刷，
+        // 层库只显示显式空状态，不伪造任何地形层。
+        widgetDocument.SetProperty("terrain-summary", "display", "flex");
+    }
+    RefreshTerrainLayerLibrary();
+    RefreshTerrainSurfacePanel(SelectedTerrainActor());
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainSurfacePanel(
+    const EditorSceneActorSnapshot* actor)
+{
+    if (document == nullptr) return;
+    if (actor == nullptr || actor->terrainPlan == nullptr)
+    {
+        SetMarkup("terrain-surface-size", "");
+        SetMarkup("terrain-surface-height-scale", "");
+        SetMarkup("terrain-surface-layer-count", "0");
+        SetMarkup("terrain-surface-chunk-count", "0");
+        SetMarkup("terrain-surface-section-count", "0");
+        return;
+    }
+
+    const TerrainAssetDesc& desc = actor->terrainPlan->desc;
+    SetMarkup("terrain-surface-size",
+        Text(TerrainNumber(desc.size.x()) + " x " + TerrainNumber(desc.size.y()) + " cm"));
+    SetMarkup("terrain-surface-height-scale", Text(TerrainNumber(desc.heightScale) + " cm"));
+    SetMarkup("terrain-surface-layer-count", Text(std::to_string(desc.layers.size())));
+
+    uint32_t chunksPerSide = 0;
+    if (desc.chunkQuads != 0)
+        chunksPerSide = desc.gridResolution / desc.chunkQuads;
+    SetMarkup("terrain-surface-chunk-count",
+        Text(std::to_string(chunksPerSide) + " x " + std::to_string(chunksPerSide) +
+            " (" + std::to_string(static_cast<uint64_t>(chunksPerSide) * chunksPerSide) + ")"));
+    SetMarkup("terrain-surface-section-count", Text(std::to_string(actor->sections.size())));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
+{
+    if (document == nullptr) return;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    const TerrainBuildPlan* plan = actor == nullptr ? nullptr : actor->terrainPlan.get();
+    const size_t layerCount = plan == nullptr ? 0 : plan->desc.layers.size();
+    if (layerCount == 0)
+    {
+        terrainPaintLayer = 0;
+        if (terrainPanelMode == TerrainPanelMode::Paint)
+            terrainPanelMode = TerrainPanelMode::Layers;
+    }
+    else if (terrainPaintLayer >= layerCount)
+    {
+        terrainPaintLayer = static_cast<uint32_t>(layerCount - 1);
+    }
+    const bool selectedValid = layerCount != 0 && terrainPaintLayer < layerCount;
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    std::ostringstream sourceKey;
+    sourceKey << (actor == nullptr ? 0 : reinterpret_cast<uintptr_t>(plan)) << '|'
+        << (actor == nullptr ? std::string() : actor->identity) << '|'
+        << (actor == nullptr ? 0 : actor->worldGeneration) << '|' << layerCount;
+    if (sourceKey.str() != terrainLayerSourceKey)
+    {
+        terrainLayerSourceKey = sourceKey.str();
+        terrainLayerHoverActive = false;
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+    }
+    if (terrainLayerScrollResetPending)
+    {
+        if (scroll != nullptr) scroll->SetScrollTop(0.0f);
+        terrainLayerScrollResetPending = false;
+        terrainLayerWindowDirty = true;
+    }
+
+    const float scrollTop = scroll == nullptr ? 0.0f : scroll->GetScrollTop();
+    float viewportWidth = 0.0f;
+    float viewportHeight = 0.0f;
+    if (scroll != nullptr)
+    {
+        const Rml::Vector2f content = scroll->GetBox().GetSize(Rml::BoxArea::Content);
+        viewportWidth = content.x;
+        viewportHeight = content.y;
+    }
+    const bool viewportMeasured = std::isfinite(viewportWidth) &&
+        std::isfinite(viewportHeight) && viewportWidth > 0.0f && viewportHeight > 0.0f;
+    if (!viewportMeasured)
+    {
+        // 面板隐藏时布局尺寸可能为 0；沿用上一次有效尺寸，避免窗口在隐藏/显示之间抖动。
+        if (terrainLayerWindow.valid)
+        {
+            viewportWidth = terrainLayerWindow.viewportWidth;
+            viewportHeight = terrainLayerWindow.viewportHeight;
+        }
+        else
+        {
+            viewportWidth = TerrainLayerFallbackViewportWidth;
+            viewportHeight = TerrainLayerFallbackViewportHeight;
+        }
+    }
+    if (terrainLayerWindow.valid)
+    {
+        if (std::abs(viewportWidth - terrainLayerWindow.viewportWidth) > 0.5f ||
+            std::abs(viewportHeight - terrainLayerWindow.viewportHeight) > 0.5f ||
+            std::abs(scrollTop - terrainLayerLastScrollTop) > 0.5f)
+            terrainLayerWindowDirty = true;
+    }
+
+    size_t visibleCount = 0;
+    if (plan != nullptr)
+    {
+        for (size_t index = 0; index < layerCount; ++index)
+        {
+            if (TerrainLayerMatchesSearch(plan->desc.layers[index], terrainLayerSearch))
+                ++visibleCount;
+        }
+    }
+    if (!terrainLayerWindow.valid || terrainLayerWindowDirty ||
+        terrainLayerWindow.filteredCount != visibleCount ||
+        terrainLayerWindow.listView != terrainLayerListView)
+    {
+        TerrainLayerWindowState window;
+        window.valid = true;
+        window.listView = terrainLayerListView;
+        window.filteredCount = visibleCount;
+        window.viewportWidth = viewportWidth;
+        window.viewportHeight = viewportHeight;
+        window.columns = terrainLayerListView ? 1 : TerrainLayerGridColumns(viewportWidth);
+        const float rowHeight = terrainLayerListView ?
+            TerrainLayerListRowHeight : TerrainLayerGridRowHeight;
+        window.totalRows = terrainLayerListView ? static_cast<int>(visibleCount) :
+            static_cast<int>((visibleCount + static_cast<size_t>(window.columns) - 1) /
+                static_cast<size_t>(window.columns));
+        if (visibleCount <= TerrainLayerVirtualizeThreshold)
+        {
+            // 小集合全部挂载，避免为十几张卡片引入 spacer 和额外的布局分支。
+            window.firstRow = 0;
+            window.endRow = window.totalRows;
+            window.firstIndex = 0;
+            window.endIndex = visibleCount;
+            window.topSpacerHeight = 0.0f;
+            window.bottomSpacerHeight = 0.0f;
+        }
+        else
+        {
+            constexpr int OverscanRows = 1;
+            const int firstVisibleRow = std::max(0,
+                static_cast<int>(std::floor(scrollTop / rowHeight)));
+            const int lastVisibleRow = std::max(firstVisibleRow,
+                static_cast<int>(std::ceil((scrollTop + viewportHeight) / rowHeight)) - 1);
+            window.firstRow = std::max(0, firstVisibleRow - OverscanRows);
+            window.endRow = std::min(window.totalRows, lastVisibleRow + 1 + OverscanRows);
+            window.firstRow = std::min(window.firstRow,
+                std::max(0, window.totalRows - 1));
+            if (window.endRow <= window.firstRow)
+                window.endRow = std::min(window.totalRows, window.firstRow + 1);
+            window.firstIndex = std::min(visibleCount,
+                static_cast<size_t>(window.firstRow) *
+                    static_cast<size_t>(window.columns));
+            window.endIndex = std::min(visibleCount,
+                static_cast<size_t>(window.endRow) *
+                    static_cast<size_t>(window.columns));
+            window.topSpacerHeight = static_cast<float>(window.firstRow) * rowHeight;
+            window.bottomSpacerHeight =
+                static_cast<float>(window.totalRows - window.endRow) * rowHeight;
+        }
+        terrainLayerWindow = window;
+    }
+    terrainLayerWindowDirty = false;
+    terrainLayerLastScrollTop = scrollTop;
+
+    // 窗口范围进入签名：滚动到同一行内不重建，跨行才替换卡片 DOM。
+    std::ostringstream signature;
+    signature << sourceKey.str() << '|' << terrainPaintLayer << '|'
+        << static_cast<int>(terrainPanelMode) << '|' << terrainLayerListView << '|'
+        << terrainLayerSearch << '|' << terrainLayerWindow.columns << ','
+        << terrainLayerWindow.firstRow << ',' << terrainLayerWindow.endRow << ','
+        << static_cast<int>(std::lround(terrainLayerWindow.topSpacerHeight)) << ','
+        << static_cast<int>(std::lround(terrainLayerWindow.bottomSpacerHeight));
+    if (signature.str() == terrainLayerLibrarySignature) return;
+    terrainLayerLibrarySignature = signature.str();
+
+    widgetDocument.SetClass("terrain-layer-cards", "terrain-layer-grid", !terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-cards", "terrain-layer-list", terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-view-grid", "active", !terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-view-list", "active", terrainLayerListView);
+    HideTerrainLayerHoverPreview();
+
+    std::string cards;
+    size_t filteredIndex = 0;
+    if (plan != nullptr)
+    {
+        for (size_t index = 0; index < layerCount; ++index)
+        {
+            const TerrainLayerDesc& layer = plan->desc.layers[index];
+            if (!TerrainLayerMatchesSearch(layer, terrainLayerSearch)) continue;
+            if (filteredIndex >= terrainLayerWindow.firstIndex &&
+                filteredIndex < terrainLayerWindow.endIndex)
+            {
+                const VL::Editor::TerrainLayerPreviewPaths previews =
+                    TerrainPreviewPaths(plan->desc, index);
+                cards += TerrainLayerCardMarkup(layer, TerrainLayerColor(layer),
+                    previews.spherePath, index, selectedValid && terrainPaintLayer == index,
+                    terrainLayerListView);
+            }
+            ++filteredIndex;
+        }
+    }
+    widgetDocument.SetProperty("terrain-layer-top-spacer", "height",
+        Pixels(terrainLayerWindow.topSpacerHeight));
+    widgetDocument.SetProperty("terrain-layer-top-spacer", "display",
+        terrainLayerWindow.topSpacerHeight > 0.0f ? "block" : "none");
+    widgetDocument.SetProperty("terrain-layer-bottom-spacer", "height",
+        Pixels(terrainLayerWindow.bottomSpacerHeight));
+    widgetDocument.SetProperty("terrain-layer-bottom-spacer", "display",
+        terrainLayerWindow.bottomSpacerHeight > 0.0f ? "block" : "none");
+    SetMarkup("terrain-layer-cards", std::move(cards));
+    SetMarkup("terrain-layer-visible-count",
+        Text(std::to_string(visibleCount) + " / " + std::to_string(layerCount) +
+            (layerCount == 1 ? " layer" : " layers")));
+
+    std::string emptyText;
+    if (layerCount == 0)
+        emptyText = actor == nullptr
+            ? "Select a Landscape actor to browse layers."
+            : "This terrain has no authored layers.";
+    else if (visibleCount == 0)
+        emptyText = "No layers match \"" + terrainLayerSearch + "\".";
+    SetMarkup("terrain-layer-empty", emptyText.empty() ? std::string() : Text(emptyText));
+    widgetDocument.SetProperty("terrain-layer-empty", "display",
+        emptyText.empty() ? "none" : "block");
+
+    std::string status;
+    if (!selectedValid)
+    {
+        status = "No layer selected | 0 layers";
+    }
+    else
+    {
+        const TerrainLayerDesc& layer = plan->desc.layers[terrainPaintLayer];
+        const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
+        status = "Selected: " + name +
+            " | source set " + std::to_string(layer.sourceSet) +
+            " | uvScale " + TerrainNumber(layer.uvScale) +
+            " | height " + TerrainLayerRange(layer.heightMin, layer.heightMax) +
+            " | slope " + TerrainLayerRange(layer.slopeMin, layer.slopeMax) +
+            " | " + std::to_string(layerCount) + " layers";
+    }
+    SetMarkup("terrain-layer-status", Text(status));
+    // 选中只改卡片 class；重建后恢复原 scrollTop，不能把用户滚到的位置弹回顶部。
+    if (scroll != nullptr)
+        scroll->SetScrollTop(scrollTop);
+    // 卡片重建会清掉旧 DOM 目标；若鼠标仍停在层库上，用稳定层号在同一帧恢复悬停平面。
+    if (terrainPanelMode == TerrainPanelMode::Sculpt)
+        terrainLayerHoverActive = false;
+    if (terrainLayerHoverActive)
+    {
+        Rml::Element* hoveredCard = document->GetElementById(
+            "terrain-layer-card-" + std::to_string(terrainLayerHoverLayer));
+        if (hoveredCard != nullptr)
+        {
+            const Rml::Vector2f cardOffset =
+                hoveredCard->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const Rml::Vector2f cardSize =
+                hoveredCard->GetBox().GetSize(Rml::BoxArea::Border);
+            const bool pointerStillOnCard =
+                terrainLayerHoverScreenX >= cardOffset.x &&
+                terrainLayerHoverScreenY >= cardOffset.y &&
+                terrainLayerHoverScreenX < cardOffset.x + cardSize.x &&
+                terrainLayerHoverScreenY < cardOffset.y + cardSize.y;
+            if (pointerStillOnCard)
+            {
+                RefreshTerrainLayerHoverPreview(
+                    {terrainLayerHoverScreenX, terrainLayerHoverScreenY}, hoveredCard);
+            }
+            else
+            {
+                terrainLayerHoverActive = false;
+                HideTerrainLayerHoverPreview();
+            }
+        }
+        else
+        {
+            terrainLayerHoverActive = false;
+            HideTerrainLayerHoverPreview();
+        }
+    }
+}
+
+VL::Editor::TerrainLayerPreviewPaths MaterialInstanceAssetEditorPanel::TerrainPreviewPaths(
+    const TerrainAssetDesc& desc, size_t layerIndex)
+{
+    if (terrainLayerPreviewProvider != nullptr)
+        return terrainLayerPreviewProvider->Get(desc, layerIndex);
+    return terrainLayerPreviewCache.Get(desc, layerIndex);
+}
+
+void MaterialInstanceAssetEditorPanel::HideTerrainLayerHoverPreview()
+{
+    if (document == nullptr) return;
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "display", "none");
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerHoverPreview(
+    const Rml::Vector2f& screenPoint, const Rml::Element* target)
+{
+    if (document == nullptr)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const Rml::Element* card = target;
+    while (card != nullptr && card != document &&
+        card->GetAttribute<std::string>("data-action", "") != "terrain-layer-select")
+        card = card->GetParentNode();
+    if (card == nullptr || card == document)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const size_t index = card->GetAttribute<size_t>("data-index", 0);
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr || actor->terrainPlan == nullptr ||
+        index >= actor->terrainPlan->desc.layers.size())
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    Rml::Element* page = document->GetElementById("terrain-page");
+    Rml::Element* preview = document->GetElementById("terrain-layer-hover-preview");
+    if (page == nullptr || preview == nullptr)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const Rml::Vector2f offset = page->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const Rml::Vector2f size = page->GetBox().GetSize(Rml::BoxArea::Content);
+    if (size.x <= 0.0f || size.y <= 0.0f)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    terrainLayerHoverActive = true;
+    terrainLayerHoverLayer = index;
+    terrainLayerHoverScreenX = screenPoint.x;
+    terrainLayerHoverScreenY = screenPoint.y;
+    constexpr float PreviewWidth = 160.0f;
+    constexpr float PreviewHeight = 112.0f;
+    // 容器仍有 -8° 旋转；留出旋转后的外接盒边距，避免贴边时被面板裁掉。
+    constexpr float PreviewMargin = 14.0f;
+    const float maximumX = std::max(PreviewMargin,
+        size.x - PreviewWidth - PreviewMargin);
+    const float maximumY = std::max(PreviewMargin,
+        size.y - PreviewHeight - PreviewMargin);
+    const float x = std::clamp(
+        screenPoint.x - offset.x + 16.0f, PreviewMargin, maximumX);
+    const float y = std::clamp(
+        screenPoint.y - offset.y - 18.0f, PreviewMargin, maximumY);
+    const VL::Editor::TerrainLayerPreviewPaths previews =
+        TerrainPreviewPaths(actor->terrainPlan->desc, index);
+    Rml::Element* image = document->GetElementById("terrain-layer-hover-image");
+    const bool hasPlaneImage = image != nullptr && !previews.planePath.empty();
+    if (image != nullptr)
+    {
+        if (hasPlaneImage)
+        {
+            if (terrainLayerHoverImageSource != previews.planePath)
+            {
+                image->SetAttribute("src", previews.planePath);
+                terrainLayerHoverImageSource = previews.planePath;
+            }
+            widgetDocument.SetProperty("terrain-layer-hover-image", "display", "block");
+        }
+        else
+        {
+            widgetDocument.SetProperty("terrain-layer-hover-image", "display", "none");
+        }
+    }
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "background-color",
+        TerrainLayerColor(actor->terrainPlan->desc.layers[index]));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "left", Pixels(x));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "top", Pixels(y));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "display", "block");
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshMenus()
@@ -1044,6 +1729,14 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
     SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
     SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+    if (auto* check = document->GetElementById("viewport-snap-enabled"))
+    {
+        if (sceneSnapEnabled && !check->HasAttribute("checked")) check->SetAttribute("checked", "checked");
+        if (!sceneSnapEnabled && check->HasAttribute("checked")) check->RemoveAttribute("checked");
+    }
+    SetControlValue("viewport-snap-move", Number(sceneMoveSnap));
+    SetControlValue("viewport-snap-rotate", Number(sceneRotateSnap));
+    SetControlValue("viewport-snap-scale", Number(sceneScaleSnap));
     // 菜单只映射已有 debug view，不复制渲染状态；勾选与标题以运行时快照为准。
     const char* modes[] = {"Lit", "Base Color", "Emissive", "World Normal",
         "Roughness", "Metallic", "Ambient Occlusion", "Shadow", "Direct Lighting",
@@ -1057,6 +1750,9 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     SetMarkup("viewport-view-title", std::string(mode >= 0 && mode < 13 ? modes[mode] : "Debug View") + " v");
     RefreshViewportAxisIndicator();
     RefreshActorVisualization();
+    RefreshSceneGizmo();
+    RefreshTerrainBrushUi();
+    RefreshHistoryControls();
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
@@ -1144,6 +1840,856 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
             std::string("rotate(") +
                 std::to_string(EditorUi::AxisIndicatorRotationDegrees(projection)) + "deg)");
     }
+}
+
+bool MaterialInstanceAssetEditorPanel::BuildSelectedSceneGizmo()
+{
+    sceneViewportGizmo = {};
+    if (document == nullptr || landscapeToolActive || IsAssetEditorVisible() || HasModal() ||
+        viewportTransformTool == "select")
+        return false;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr || !SceneGizmoSupportsActor(actor->type))
+        return false;
+    const BlueprintGizmoMode mode = SceneGizmoMode(viewportTransformTool);
+    if (!SceneGizmoSupportsMode(actor->type, mode))
+        return false;
+    const EditorSceneCameraActor* view = nullptr;
+    for (const EditorSceneActorSnapshot& candidate : OutlinerActors())
+        if (candidate.type == EditorSceneActorType::Camera)
+        {
+            view = candidate.hasViewportCamera ? &candidate.viewportCamera : &candidate.camera;
+            break;
+        }
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (view == nullptr || image == nullptr || !image->IsVisible(true))
+        return false;
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+    if (size.x <= 0 || size.y <= 0)
+        return false;
+
+    const Eigen::Vector3f position = sceneGizmoDragging ? sceneGizmoPosition : actor->position;
+    const Eigen::Vector3f rotation = sceneGizmoDragging ? sceneGizmoRotation : actor->rotation;
+    const Eigen::Vector3f scale = sceneGizmoDragging ? sceneGizmoScale : actor->scale;
+    // Gizmo 的原点始终是 actor 世界位置；Local 只改变三轴朝向。
+    // 父矩阵只携带原点与局部旋转，position 传 0，避免把作者位置投射两次。
+    Eigen::Quaternionf parentRotation = Eigen::Quaternionf::Identity();
+    Eigen::Matrix4f parentWorld = Eigen::Matrix4f::Identity();
+    parentWorld.block<3, 1>(0, 3) = position;
+    if (viewportTransformSpace == "local")
+    {
+        parentRotation = SceneGizmoRotation(rotation);
+        parentWorld.block<3, 3>(0, 0) = parentRotation.toRotationMatrix();
+    }
+    BlueprintViewportGizmo gizmo = BuildBlueprintViewportGizmo(*view, size.x, size.y,
+        parentWorld, parentRotation, Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero(),
+        scale, mode);
+    if (!gizmo.valid) return false;
+    gizmo.initialValue = mode == BlueprintGizmoMode::Translate ? position :
+        mode == BlueprintGizmoMode::Rotate ? rotation : scale;
+    sceneViewportGizmo = gizmo;
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshSceneGizmo()
+{
+    if (document == nullptr) return;
+    if (!sceneGizmoMarkupMounted)
+    {
+        // 固定线段/命中槽位只挂载一次；相机移动和拖动只更新 transform/visibility，
+        // 避免每帧重建整段 DOM 触发布局。
+        std::string markup;
+        for (size_t axis = 0; axis < 3; ++axis)
+            for (size_t index = 0; index < 48; ++index)
+            {
+                const std::string suffix = std::to_string(axis) + "-" + std::to_string(index);
+                markup += "<div id=\"scene-gizmo-line-" + suffix +
+                    "\" class=\"actor-visual-line\"></div>";
+                markup += "<div id=\"scene-gizmo-hit-" + suffix +
+                    "\" data-action=\"scene-gizmo-axis\" data-axis=\"" +
+                    std::to_string(axis) + "\"></div>";
+            }
+        SetMarkup("viewport-gizmo-overlay", std::move(markup));
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "position", "absolute");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "left", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "top", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "width", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "height", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "pointer-events", "none");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "position", "absolute");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "left", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "top", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "width", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "height", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "z-index", "2");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "pointer-events", "auto");
+        sceneGizmoMarkupMounted = true;
+    }
+    const bool visible = BuildSelectedSceneGizmo();
+    static const char* colors[] = {"#e42a1f", "#2fd93f", "#3a5cfa"};
+    for (size_t axis = 0; axis < 3; ++axis)
+        for (size_t index = 0; index < 48; ++index)
+        {
+            const std::string suffix = std::to_string(axis) + "-" + std::to_string(index);
+            const std::string lineId = "scene-gizmo-line-" + suffix;
+            const std::string hitId = "scene-gizmo-hit-" + suffix;
+            const auto& lines = sceneViewportGizmo.axes[axis].lines;
+            const bool lineVisible = visible && index < lines.size();
+            widgetDocument.SetProperty(lineId, "visibility", lineVisible ? "visible" : "hidden");
+            widgetDocument.SetProperty(hitId, "visibility", lineVisible ? "visible" : "hidden");
+            // 命中由视图内的像素距离完成，和蓝图页一致；DOM 只负责画线。
+            // 若让 hit div 拦截指针，场景视口左键会绕过 Gizmo 命中测试。
+            widgetDocument.SetProperty(hitId, "pointer-events", "none");
+            if (!lineVisible) continue;
+            const auto& line = lines[index];
+            const Eigen::Vector2f delta = line.end - line.begin;
+            const std::string transform = "translate(" + Number(line.begin.x()) + "px, " +
+                Number(line.begin.y()) + "px) rotate(" +
+                Number(std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f) +
+                "deg) scaleX(" + Number(delta.norm()) + ")";
+            widgetDocument.SetProperty(lineId, "transform", transform);
+            widgetDocument.SetProperty(lineId, "background-color", colors[axis]);
+            widgetDocument.SetProperty(hitId, "position", "absolute");
+            widgetDocument.SetProperty(hitId, "left", "0px");
+            widgetDocument.SetProperty(hitId, "top", "-6px");
+            widgetDocument.SetProperty(hitId, "width", "1px");
+            widgetDocument.SetProperty(hitId, "height", "12px");
+            widgetDocument.SetProperty(hitId, "transform-origin", "0px 0px");
+            widgetDocument.SetProperty(hitId, "transform", transform);
+            widgetDocument.SetProperty(hitId, "background-color", "#00000000");
+            widgetDocument.SetProperty(hitId, "z-index", "1");
+        }
+    widgetDocument.SetProperty("viewport-gizmo-capture", "display",
+        sceneGizmoDragging ? "block" : "none");
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeSceneGizmoSelection()
+{
+    if (!sceneGizmoDragging) return;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const bool current = actor != nullptr &&
+        actor->worldGeneration == sceneGizmoGeneration &&
+        actor->identity == sceneGizmoIdentity && !IsAssetEditorVisible();
+    if (current) return;
+    // 同一 World 内切换/删除 actor 时恢复旧对象的 live 预览；World 换代时
+    // 旧代数命令本来就应被拒绝，直接丢弃本地手势，不把旧值写到新关卡。
+    CancelSceneGizmoDrag(actor != nullptr &&
+        actor->worldGeneration == sceneGizmoGeneration);
+}
+
+UiAction MaterialInstanceAssetEditorPanel::SceneGizmoAction(bool preview) const
+{
+    UiAction action;
+    action.type = UiActionType::SetActorProperty;
+    auto& edit = action.actorProperty;
+    edit.worldGeneration = sceneGizmoGeneration;
+    edit.identity = sceneGizmoIdentity;
+    edit.property = EditorActorProperty::Transform;
+    edit.preview = preview;
+    edit.transformPosition = {sceneGizmoPosition.x(), sceneGizmoPosition.y(), sceneGizmoPosition.z()};
+    edit.transformRotation = {sceneGizmoRotation.x(), sceneGizmoRotation.y(), sceneGizmoRotation.z()};
+    edit.transformScale = {sceneGizmoScale.x(), sceneGizmoScale.y(), sceneGizmoScale.z()};
+    return action;
+}
+
+bool MaterialInstanceAssetEditorPanel::BeginSceneGizmoDrag(size_t axis,
+    const Eigen::Vector2f& pixel, const Eigen::Vector2f& offset)
+{
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr || !sceneViewportGizmo.valid ||
+        axis >= sceneViewportGizmo.axes.size() ||
+        !sceneViewportGizmo.axes[axis].visible)
+        return false;
+    sceneGizmoDragging = true;
+    sceneGizmoAxis = axis;
+    sceneGizmoStart = pixel;
+    sceneGizmoOffset = offset;
+    sceneGizmoGeneration = actor->worldGeneration;
+    sceneGizmoIdentity = actor->identity;
+    sceneDragGizmo = sceneViewportGizmo;
+    sceneGizmoOriginalPosition = sceneGizmoPosition = actor->position;
+    sceneGizmoOriginalRotation = sceneGizmoRotation = actor->rotation;
+    sceneGizmoOriginalScale = sceneGizmoScale = actor->scale;
+    RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::UpdateSceneGizmoDrag(const Eigen::Vector2f& pixel)
+{
+    if (!sceneGizmoDragging || !sceneDragGizmo.valid) return false;
+    Eigen::Vector3f value;
+    const BlueprintGizmoMode mode = SceneGizmoMode(viewportTransformTool);
+    const float previousRotation = sceneGizmoRotation[sceneGizmoAxis];
+    if (!DragBlueprintViewportGizmo(sceneDragGizmo, sceneGizmoAxis, sceneGizmoStart,
+        pixel, value, previousRotation))
+        return false;
+    if (sceneSnapEnabled)
+    {
+        const float step = mode == BlueprintGizmoMode::Translate ? sceneMoveSnap :
+            mode == BlueprintGizmoMode::Rotate ? sceneRotateSnap : sceneScaleSnap;
+        Eigen::Vector3f snapped;
+        if (SnapBlueprintViewportValue(mode, sceneGizmoAxis,
+            sceneDragGizmo.initialValue, value, step, snapped))
+            value = snapped;
+        else value = sceneDragGizmo.initialValue;
+    }
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    // 刚体根只接受统一缩放；与蓝图编辑器保持同一规则。
+    if (mode == BlueprintGizmoMode::Scale && actor != nullptr &&
+        actor->type == EditorSceneActorType::Script && !actor->scriptPhysics.is_null())
+        value = Eigen::Vector3f::Constant(value[sceneGizmoAxis]);
+
+    sceneGizmoPosition = sceneGizmoOriginalPosition;
+    sceneGizmoRotation = sceneGizmoOriginalRotation;
+    sceneGizmoScale = sceneGizmoOriginalScale;
+    if (mode == BlueprintGizmoMode::Translate) sceneGizmoPosition = value;
+    else if (mode == BlueprintGizmoMode::Rotate) sceneGizmoRotation = value;
+    else sceneGizmoScale = value;
+    if (runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(SceneGizmoAction(true));
+    RefreshSceneGizmo();
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::CommitSceneGizmoDrag()
+{
+    if (!sceneGizmoDragging) return;
+    const bool changed =
+        !sceneGizmoPosition.isApprox(sceneGizmoOriginalPosition, 1.0e-6f) ||
+        !sceneGizmoRotation.isApprox(sceneGizmoOriginalRotation, 1.0e-6f) ||
+        !sceneGizmoScale.isApprox(sceneGizmoOriginalScale, 1.0e-6f);
+    const UiAction commit = SceneGizmoAction(false);
+    sceneGizmoDragging = false;
+    sceneGizmoIdentity.clear();
+    if (changed && runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(commit);
+    RefreshSceneGizmo();
+}
+
+void MaterialInstanceAssetEditorPanel::CancelSceneGizmoDrag(bool restore)
+{
+    if (!sceneGizmoDragging)
+    {
+        sceneGizmoAxis = 0;
+        sceneGizmoIdentity.clear();
+        return;
+    }
+    sceneGizmoPosition = sceneGizmoOriginalPosition;
+    sceneGizmoRotation = sceneGizmoOriginalRotation;
+    sceneGizmoScale = sceneGizmoOriginalScale;
+    if (restore && runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(SceneGizmoAction(true));
+    sceneGizmoDragging = false;
+    sceneGizmoIdentity.clear();
+    RefreshSceneGizmo();
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessSceneGizmoInput(Rml::Event& event)
+{
+    const auto& type = event.GetType();
+    if (type == "keydown" && event.GetParameter<int>("key_identifier", 0) == Rml::Input::KI_ESCAPE)
+    {
+        if (!sceneGizmoDragging) return false;
+        CancelSceneGizmoDrag();
+        return true;
+    }
+    if (document == nullptr) return false;
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (image == nullptr) return false;
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const bool left = event.GetParameter<int>("button", -1) == 0;
+    const Eigen::Vector2f pixel(event.GetParameter<float>("mouse_x", 0) - offset.x,
+        event.GetParameter<float>("mouse_y", 0) - offset.y);
+    if (sceneGizmoDragging)
+    {
+        // 拖动期间透明 capture 覆盖视口，所有鼠标事件都归本手势；
+        // 释放/取消前绝不进入场景拾取或相机导航。
+        if (type == "mousemove") UpdateSceneGizmoDrag(pixel);
+        else if (type == "mouseup" && left)
+        {
+            UpdateSceneGizmoDrag(pixel);
+            CommitSceneGizmoDrag();
+        }
+        if (type == "mousedown" || type == "mouseup" || type == "mousemove")
+            return true;
+    }
+    if (type != "mousedown" || !left) return false;
+    // 关卡视口的左键通常直接交给游戏/场景拾取；Gizmo 必须先在图像像素上
+    // 做一次命中测试，命中时才消费这次按下。这里与蓝图页共用同一数学。
+    if (event.GetTargetElement() == image && viewportTransformTool != "select")
+    {
+        if (const auto axis = HitBlueprintViewportGizmo(sceneViewportGizmo, pixel))
+            return BeginSceneGizmoDrag(*axis, pixel,
+                Eigen::Vector2f(offset.x, offset.y));
+        return false;
+    }
+    Rml::Element* target = event.GetTargetElement();
+    while (target != nullptr && target != document &&
+        !target->HasAttribute("data-action"))
+        target = target->GetParentNode();
+    if (target == nullptr || target == document ||
+        target->GetAttribute<std::string>("data-action", "") != "scene-gizmo-axis")
+        return false;
+    const size_t axis = target->GetAttribute<size_t>("data-axis", sceneViewportGizmo.axes.size());
+    return BeginSceneGizmoDrag(axis, pixel, Eigen::Vector2f(offset.x, offset.y));
+}
+
+bool MaterialInstanceAssetEditorPanel::IsTerrainSculptActive() const
+{
+    return landscapeToolActive && document != nullptr &&
+        !IsAssetEditorVisible() && !HasModal() &&
+        runtimeView.scripts.state == ScriptPlayState::Editing &&
+        !runtimeView.offlineMode;
+}
+
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedTerrainActor() const
+{
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    return actor != nullptr && actor->type == EditorSceneActorType::Terrain &&
+        actor->terrainPlan != nullptr ? actor : nullptr;
+}
+
+bool MaterialInstanceAssetEditorPanel::IsTerrainHistoryContext() const
+{
+    // 地形历史优先：只有 Landscape 工具激活、选中地形且没有进行中的 stroke 时才接管 Undo/Redo。
+    return landscapeToolActive && SelectedTerrainActor() != nullptr &&
+        IsTerrainSculptActive() && !terrainBrushStrokeActive;
+}
+
+float MaterialInstanceAssetEditorPanel::ActiveTerrainBrushRadiusCm() const
+{
+    return landscapePaintMode ? terrainPaintBrush.radiusCm : terrainSculptBrush.radiusCm;
+}
+
+float MaterialInstanceAssetEditorPanel::TerrainBrushRadiusUv() const
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr) return 0.0f;
+    const float worldSpan = actor->terrainPlan->desc.size.x() *
+        std::abs(actor->scale.x());
+    if (!std::isfinite(worldSpan) || worldSpan < 1.0e-3f) return 0.0f;
+    return std::clamp(ActiveTerrainBrushRadiusCm() / worldSpan, 1.0e-5f, 1.0f);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushRing()
+{
+    if (document == nullptr) return;
+    const int shape = landscapePaintMode ? terrainPaintBrush.shape : terrainSculptBrush.shape;
+    widgetDocument.SetClass("viewport-brush-ring", "square",
+        shape == TerrainBrushShapeIndex(Editor::BrushShape::Square));
+    const bool visible = TerrainBrushRingVisible() && IsTerrainSculptActive();
+    widgetDocument.SetProperty("viewport-brush-ring", "display", visible ? "block" : "none");
+    // RmlUi 的 Element::visible 只在 Display/Visibility 属性变化时刷新；
+    // 同时写 visibility 让隐藏状态下一帧一定生效，避免透明环继续吃掉视口事件。
+    widgetDocument.SetProperty("viewport-brush-ring", "visibility", visible ? "visible" : "hidden");
+    if (!visible) return;
+    const float radius = std::max(8.0f, terrainBrushRingRadiusPixels);
+    widgetDocument.SetProperty("viewport-brush-ring", "left",
+        Pixels(terrainBrushPixel.x() - radius));
+    widgetDocument.SetProperty("viewport-brush-ring", "top",
+        Pixels(terrainBrushPixel.y() - radius));
+    widgetDocument.SetProperty("viewport-brush-ring", "width", Pixels(radius * 2.0f));
+    widgetDocument.SetProperty("viewport-brush-ring", "height", Pixels(radius * 2.0f));
+}
+
+bool MaterialInstanceAssetEditorPanel::ActivateTerrainPaintMode()
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr || actor->terrainPlan == nullptr ||
+        actor->terrainPlan->desc.layers.empty())
+    {
+        localStatus = "Paint requires a terrain with at least one layer.";
+        return false;
+    }
+    CancelTerrainBrushStroke();
+    ClearTerrainBrushHit();
+    landscapePaintMode = true;
+    landscapeToolActive = true;
+    viewportTransformTool = "select";
+    terrainPanelMode = TerrainPanelMode::Paint;
+    RefreshViewportToolbar();
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushLibrary()
+{
+    // 切换领域会重建分类下拉；RmlUi 在迁移 option 时会同步派发 change，
+    // 必须把这次程序化更新挡在宿主事件之外，否则 Build 会重入并销毁正在遍历的 option。
+    WidgetRefreshScope refresh(refreshingControls);
+    // Layers 只切换视图；笔刷列隐藏时仍按最近一次 Sculpt/Paint 工具决定目录，
+    // 这样从 Layers 返回时选中项和标题不会跳回另一套领域。
+    const bool paintDomain = terrainPanelMode == TerrainPanelMode::Paint ||
+        (terrainPanelMode == TerrainPanelMode::Layers && landscapePaintMode);
+    const int catalogDomain = paintDomain ? 1 : 0;
+    if (catalogDomain != brushLibraryCatalogDomain)
+    {
+        std::vector<UiWidgets::BrushLibraryEntry> entries;
+        if (paintDomain)
+        {
+            for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+            {
+                const Editor::BrushProfile& profile = preset.profile;
+                UiWidgets::BrushLibraryEntry entry;
+                entry.id = Editor::BrushProfileId(profile);
+                entry.name = profile.name;
+                entry.category = profile.category;
+                entry.shape = TerrainBrushShapeIndex(profile.shape);
+                entry.falloff = TerrainBrushFalloffIndex(profile.falloff);
+                entry.radiusCm = profile.radiusCm;
+                entry.strength = preset.opacity;
+                entries.push_back(std::move(entry));
+            }
+        }
+        else
+        {
+            for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+            {
+                UiWidgets::BrushLibraryEntry entry;
+                entry.id = Editor::BrushProfileId(profile);
+                entry.name = profile.name;
+                entry.category = profile.category;
+                entry.shape = TerrainBrushShapeIndex(profile.shape);
+                entry.falloff = TerrainBrushFalloffIndex(profile.falloff);
+                entry.radiusCm = profile.radiusCm;
+                entry.strength = profile.strength;
+                entries.push_back(std::move(entry));
+            }
+        }
+        brushLibrary.SetEntries(std::move(entries));
+        brushLibraryCatalogDomain = catalogDomain;
+    }
+    SetMarkup("terrain-brush-library-title",
+        paintDomain ? "Paint Brushes" : "Sculpt Brushes");
+    brushLibrary.SetSelectedId(paintDomain
+        ? terrainPaintBrush.presetId : terrainSculptBrush.presetId);
+    brushLibrary.Build();
+}
+
+void MaterialInstanceAssetEditorPanel::ApplyTerrainBrushPreset(const std::string& presetId)
+{
+    if (presetId.empty()) return;
+    const bool paintDomain = terrainPanelMode == TerrainPanelMode::Paint ||
+        (terrainPanelMode == TerrainPanelMode::Layers && landscapePaintMode);
+    if (paintDomain)
+    {
+        for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+        {
+            if (Editor::BrushProfileId(preset.profile) != presetId) continue;
+            terrainPaintBrush.radiusCm = preset.profile.radiusCm;
+            terrainPaintBrush.hardness = preset.hardness;
+            terrainPaintBrush.opacity = preset.opacity;
+            terrainPaintBrush.flow = preset.flow;
+            terrainPaintBrush.noise = preset.profile.noise;
+            terrainPaintBrush.noiseSeed = preset.profile.noiseSeed;
+            terrainPaintBrush.shape = TerrainBrushShapeIndex(preset.profile.shape);
+            terrainPaintBrush.presetId = presetId;
+            RefreshTerrainBrushUi();
+            return;
+        }
+        return;
+    }
+
+    for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+    {
+        if (Editor::BrushProfileId(profile) != presetId) continue;
+        terrainSculptBrush.radiusCm = profile.radiusCm;
+        terrainSculptBrush.strength = profile.strength;
+        terrainSculptBrush.falloff = TerrainBrushFalloffValue(profile.falloff);
+        terrainSculptBrush.shape = TerrainBrushShapeIndex(profile.shape);
+        terrainSculptBrush.presetId = presetId;
+        RefreshTerrainBrushUi();
+        return;
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeSculptBrushPresetId()
+{
+    for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+    {
+        if (!TerrainSculptBrushMatches(profile, terrainSculptBrush)) continue;
+        terrainSculptBrush.presetId = Editor::BrushProfileId(profile);
+        return;
+    }
+    // 手动编辑后没有精确匹配的预设：保留用户数值，只取消预设高亮。
+    terrainSculptBrush.presetId.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizePaintBrushPresetId()
+{
+    for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+    {
+        if (!TerrainPaintBrushMatches(preset, terrainPaintBrush)) continue;
+        terrainPaintBrush.presetId = Editor::BrushProfileId(preset.profile);
+        return;
+    }
+    terrainPaintBrush.presetId.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushUi()
+{
+    if (document == nullptr) return;
+    SetViewportToolbarClass("viewport-tool-landscape", landscapeToolActive);
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    const size_t layerCount = actor != nullptr && actor->terrainPlan
+        ? actor->terrainPlan->desc.layers.size() : 0;
+    const bool hasLayers = layerCount != 0;
+    SetViewportToolbarClass("viewport-landscape-sculpt",
+        landscapeToolActive && !landscapePaintMode);
+    SetViewportToolbarClass("viewport-landscape-paint",
+        landscapeToolActive && landscapePaintMode);
+    SetDisabled("viewport-landscape-paint", !hasLayers);
+    SetDisabled("terrain-mode-sculpt", actor == nullptr);
+    SetDisabled("terrain-mode-paint", actor == nullptr || !hasLayers);
+    if (!hasLayers)
+    {
+        landscapePaintMode = false;
+        if (terrainPanelMode == TerrainPanelMode::Paint)
+            terrainPanelMode = TerrainPanelMode::Layers;
+    }
+    if (actor == nullptr && terrainPanelMode != TerrainPanelMode::Layers)
+        terrainPanelMode = TerrainPanelMode::Layers;
+    if (terrainPaintLayer >= layerCount)
+        terrainPaintLayer = layerCount == 0 ? 0 : static_cast<uint32_t>(layerCount - 1);
+
+    const bool sculptMode = terrainPanelMode == TerrainPanelMode::Sculpt;
+    const bool paintMode = terrainPanelMode == TerrainPanelMode::Paint;
+    const bool layersMode = terrainPanelMode == TerrainPanelMode::Layers;
+    // 两套领域共用同一个笔刷列：Sculpt/Paint 各自显示自己的目录与参数，
+    // Layers 只浏览层，不保留会被误认为可落笔的笔刷控件。
+    const bool brushVisible = actor != nullptr && !layersMode;
+    widgetDocument.SetProperty("terrain-brush-column", "display",
+        brushVisible ? "flex" : "none");
+    widgetDocument.SetProperty("viewport-brush-settings", "display",
+        brushVisible ? "flex" : "none");
+    widgetDocument.SetProperty("terrain-sculpt-settings", "display",
+        sculptMode && brushVisible ? "block" : "none");
+    for (int mode = 0; mode < 3; ++mode)
+        widgetDocument.SetClass("viewport-brush-mode-" + std::to_string(mode),
+            "active", sculptMode && brushVisible && terrainSculptMode == mode);
+    widgetDocument.SetProperty("viewport-landscape-controls", "display",
+        landscapeToolActive ? "flex" : "none");
+    widgetDocument.SetProperty("viewport-paint-settings", "display",
+        paintMode && landscapePaintMode && hasLayers && brushVisible ? "flex" : "none");
+    // Sculpt 右侧只看地形几何摘要；层卡属于 Paint/Layers，不能在 Sculpt 中抢空间。
+    widgetDocument.SetProperty("terrain-layer-library", "display",
+        sculptMode ? "none" : "flex");
+    widgetDocument.SetProperty("terrain-surface-panel", "display",
+        sculptMode && actor != nullptr ? "flex" : "none");
+    widgetDocument.SetProperty("terrain-panel-filter-row", "display",
+        sculptMode ? "none" : "flex");
+    if (sculptMode) HideTerrainLayerHoverPreview();
+    widgetDocument.SetClass("terrain-mode-sculpt", "active",
+        sculptMode);
+    widgetDocument.SetClass("terrain-mode-paint", "active",
+        paintMode);
+    widgetDocument.SetClass("terrain-mode-layers", "active",
+        layersMode);
+    SetViewportToolbarClass("viewport-paint-mode", !landscapePaintErase);
+    SetViewportToolbarClass("viewport-paint-erase", landscapePaintErase);
+    SetControlValue("viewport-brush-radius", Number(terrainSculptBrush.radiusCm));
+    SetControlValue("viewport-brush-strength", Number(terrainSculptBrush.strength));
+    SetControlValue("viewport-brush-falloff", Number(terrainSculptBrush.falloff));
+    SetControlValue("terrain-paint-radius", Number(terrainPaintBrush.radiusCm));
+    SetControlValue("terrain-paint-hardness", Number(terrainPaintBrush.hardness));
+    SetControlValue("terrain-paint-opacity", Number(terrainPaintBrush.opacity));
+    SetControlValue("terrain-paint-flow", Number(terrainPaintBrush.flow));
+    SetMarkup("viewport-landscape-write",
+        landscapePaintMode ? "Write Paint" : "Write Heightmap");
+    RefreshTerrainBrushLibrary();
+    RefreshTerrainBrushRing();
+    RefreshTerrainLayerLibrary();
+}
+
+void MaterialInstanceAssetEditorPanel::ClearTerrainBrushHit()
+{
+    if (!terrainBrushHit && terrainBrushPlacementId.empty()) return;
+    terrainBrushHit = false;
+    terrainBrushUv = Eigen::Vector2f::Zero();
+    terrainBrushPixel = Eigen::Vector2f::Zero();
+    terrainBrushWorldPoint = Eigen::Vector3f::Zero();
+    terrainBrushRingRadiusPixels = 0.0f;
+    terrainBrushPlacementId.clear();
+    RefreshTerrainBrushRing();
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateTerrainBrushHit(float mouseX, float mouseY)
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (!IsTerrainSculptActive() || actor == nullptr)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    const EditorSceneCameraActor* camera = nullptr;
+    for (const EditorSceneActorSnapshot& candidate : OutlinerActors())
+        if (candidate.type == EditorSceneActorType::Camera)
+        {
+            camera = candidate.hasViewportCamera ? &candidate.viewportCamera : &candidate.camera;
+            break;
+        }
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (camera == nullptr || image == nullptr || !image->IsVisible(true))
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+    const Eigen::Vector2f pixel(mouseX - offset.x, mouseY - offset.y);
+    if (size.x <= 0 || size.y <= 0 || pixel.x() < 0 || pixel.y() < 0 ||
+        pixel.x() >= size.x || pixel.y() >= size.y)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    TerrainBrushSurfaceHit hit;
+    try
+    {
+        hit = PickTerrainBrushSurface(*camera,
+            size.x, size.y, pixel, *actor->terrainPlan, actor->position,
+            actor->rotation, actor->scale);
+    }
+    catch (const std::exception&)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!hit.valid)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    terrainBrushHit = true;
+    terrainBrushUv = hit.uv;
+    terrainBrushPixel = pixel;
+    terrainBrushWorldPoint = hit.worldPosition;
+    terrainBrushGeneration = actor->worldGeneration;
+    terrainBrushPlacementId = actor->identity;
+    terrainBrushRingRadiusPixels = TerrainBrushRadiusPixels(*camera,
+        size.x, size.y, hit.worldPosition, ActiveTerrainBrushRadiusCm(), actor->scale);
+    RefreshTerrainBrushRing();
+}
+
+void MaterialInstanceAssetEditorPanel::SendTerrainBrushAction(
+    TerrainBrushOperation operation, bool includeBrush)
+{
+    if (runtimeActionSink == nullptr) return;
+    const bool strokeOperation = operation == TerrainBrushOperation::EndStroke ||
+        operation == TerrainBrushOperation::CancelStroke;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    // stroke 的结束/取消只依赖 Begin 时保存的 generation/placement：
+    // 中途切到普通 Mesh 或清空选择也必须能把 engine 的 active stroke 收尾。
+    if (strokeOperation)
+    {
+        if (terrainBrushGeneration == 0 || terrainBrushPlacementId.empty()) return;
+    }
+    else if (actor == nullptr)
+    {
+        return;
+    }
+    if ((operation == TerrainBrushOperation::BeginStroke ||
+         operation == TerrainBrushOperation::ApplyBrush) && !terrainBrushHit)
+        return;
+    UiAction action;
+    action.type = UiActionType::TerrainEdit;
+    auto& brush = action.terrainBrush;
+    brush.operation = operation;
+    brush.worldGeneration = strokeOperation ? terrainBrushGeneration : actor->worldGeneration;
+    brush.placementId = strokeOperation ? terrainBrushPlacementId : actor->identity;
+    if (includeBrush)
+    {
+        brush.u = terrainBrushUv.x();
+        brush.v = terrainBrushUv.y();
+        brush.strength = terrainSculptBrush.strength;
+        brush.falloff = terrainSculptBrush.falloff;
+        brush.mode = terrainSculptMode;
+        brush.shape = terrainSculptBrush.shape;
+    }
+    brush.radiusUv = strokeOperation ? 0.0f : TerrainBrushRadiusUv();
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::EndTerrainBrushStroke()
+{
+    if (!terrainBrushStrokeActive) return;
+    if (landscapePaintMode) SendTerrainPaintAction(TerrainBrushOperation::EndStroke, true);
+    else SendTerrainBrushAction(TerrainBrushOperation::EndStroke, true);
+    terrainBrushStrokeActive = false;
+    RefreshTerrainBrushUi();
+}
+
+void MaterialInstanceAssetEditorPanel::SendTerrainPaintAction(
+    TerrainBrushOperation operation, bool includeBrush)
+{
+    if (runtimeActionSink == nullptr) return;
+    const bool strokeOperation = operation == TerrainBrushOperation::EndStroke ||
+        operation == TerrainBrushOperation::CancelStroke;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (strokeOperation)
+    {
+        if (terrainBrushGeneration == 0 || terrainBrushPlacementId.empty()) return;
+    }
+    else if (actor == nullptr || actor->terrainPlan == nullptr ||
+        actor->terrainPlan->desc.layers.empty())
+    {
+        return;
+    }
+    if ((operation == TerrainBrushOperation::BeginStroke ||
+         operation == TerrainBrushOperation::ApplyBrush) && !terrainBrushHit)
+        return;
+
+    UiAction action;
+    action.type = UiActionType::TerrainPaint;
+    auto& paint = action.terrainPaint;
+    paint.operation = operation;
+    paint.worldGeneration = strokeOperation ? terrainBrushGeneration : actor->worldGeneration;
+    paint.placementId = strokeOperation ? terrainBrushPlacementId : actor->identity;
+    paint.layerIndex = terrainPaintLayer;
+    paint.erase = landscapePaintErase;
+    if (includeBrush)
+    {
+        paint.u = terrainBrushUv.x();
+        paint.v = terrainBrushUv.y();
+        paint.radiusUv = TerrainBrushRadiusUv();
+        // Paint 的 opacity/flow/noise 各自表达独立语义；strength 固定为 1，
+        // 避免旧的 opacity*flow 中间映射再次压暗落笔。hardness 仍映射为 falloff。
+        paint.strength = 1.0f;
+        paint.falloff = std::clamp(1.0f - terrainPaintBrush.hardness, 0.0f, 1.0f);
+        paint.opacity = std::clamp(terrainPaintBrush.opacity, 0.0f, 1.0f);
+        paint.flow = std::clamp(terrainPaintBrush.flow, 0.0f, 1.0f);
+        paint.noise = std::clamp(terrainPaintBrush.noise, 0.0f, 1.0f);
+        paint.noiseSeed = terrainPaintBrush.noiseSeed;
+        paint.shape = terrainPaintBrush.shape;
+    }
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::CancelTerrainBrushStroke()
+{
+    if (!terrainBrushStrokeActive) return;
+    if (landscapePaintMode) SendTerrainPaintAction(TerrainBrushOperation::CancelStroke, true);
+    else SendTerrainBrushAction(TerrainBrushOperation::CancelStroke, true);
+    terrainBrushStrokeActive = false;
+    RefreshTerrainBrushUi();
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeTerrainBrushSelection()
+{
+    if (!landscapeToolActive)
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!IsTerrainSculptActive())
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (terrainBrushStrokeActive && actor != nullptr &&
+        actor->worldGeneration != terrainBrushGeneration)
+    {
+        // World 换代后旧代数命令会被执行端拒绝；这里只丢弃本地手势，
+        // 不再发一笔注定失败、只会刷诊断的 CancelStroke。
+        terrainBrushStrokeActive = false;
+        ClearTerrainBrushHit();
+        return;
+    }
+    const bool differentActor = actor == nullptr ||
+        (terrainBrushGeneration != 0 && actor->worldGeneration != terrainBrushGeneration) ||
+        (!terrainBrushPlacementId.empty() && actor->identity != terrainBrushPlacementId);
+    if (terrainBrushStrokeActive && differentActor)
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!terrainBrushStrokeActive && terrainBrushHit && differentActor)
+        ClearTerrainBrushHit();
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event)
+{
+    if (event.GetType() != "keydown" || document == nullptr ||
+        IsAssetEditorVisible() || HasModal()) return false;
+    auto* focus = document->GetContext()->GetFocusElement();
+    if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
+    const int key = event.GetParameter<int>("key_identifier", 0);
+    const char* tool = nullptr;
+    if (key == Rml::Input::KI_Q) tool = "select";
+    else if (key == Rml::Input::KI_W) tool = "move";
+    else if (key == Rml::Input::KI_E) tool = "rotate";
+    else if (key == Rml::Input::KI_R) tool = "scale";
+    if (tool == nullptr) return false;
+    if (sceneGizmoDragging) CancelSceneGizmoDrag();
+    if (landscapeToolActive)
+    {
+        landscapeToolActive = false;
+        landscapePaintMode = false;
+        terrainPanelMode = TerrainPanelMode::Layers;
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+    }
+    viewportTransformTool = tool;
+    RefreshViewportToolbar();
+    RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessTerrainSculptPointer(
+    const std::string& type, int button, float mouseX, float mouseY)
+{
+    if (!IsTerrainSculptActive()) return false;
+    if (landscapePaintMode)
+    {
+        const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+        if (actor == nullptr || actor->terrainPlan == nullptr ||
+            actor->terrainPlan->desc.layers.empty())
+            return false;
+    }
+    if (type == "mouseleave")
+    {
+        ClearTerrainBrushHit();
+        return false;
+    }
+    const bool left = button == 0;
+    if (type == "mousemove")
+    {
+        UpdateTerrainBrushHit(mouseX, mouseY);
+        if (terrainBrushStrokeActive)
+        {
+            if (terrainBrushHit)
+            {
+                if (landscapePaintMode)
+                    SendTerrainPaintAction(TerrainBrushOperation::ApplyBrush, true);
+                else SendTerrainBrushAction(TerrainBrushOperation::ApplyBrush, true);
+            }
+            return true;
+        }
+        return false;
+    }
+    if (type == "mousedown" && left)
+    {
+        UpdateTerrainBrushHit(mouseX, mouseY);
+        if (!terrainBrushStrokeActive && terrainBrushHit)
+        {
+            terrainBrushStrokeActive = true;
+            if (landscapePaintMode)
+                SendTerrainPaintAction(TerrainBrushOperation::BeginStroke, true);
+            else SendTerrainBrushAction(TerrainBrushOperation::BeginStroke, true);
+            RefreshTerrainBrushUi();
+        }
+        // Landscape 左键永远不落到场景拾取/相机导航；无命中时只是空点击。
+        return true;
+    }
+    if (type == "mouseup" && left)
+    {
+        if (terrainBrushStrokeActive) EndTerrainBrushStroke();
+        return true;
+    }
+    return false;
 }
 
 // 工具条激活态只在真正变化时写一次 class；静止帧不重复触碰 RmlUi 样式，也不重建 markup。
@@ -1562,8 +3108,12 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
         widgetDocument.SetClass(id, "selected", selected);
         const auto& actor = actors[index];
         Eigen::Vector2f pixel;
+        // Terrain 是编辑器身份，不是灯；World 里它只有 chunk mesh 根位置，
+        // 不能用默认零值的 light.position 冒充地形坐标。
         const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
-            ? actor.camera.position : actor.type == EditorSceneActorType::Script ? actor.position : actor.light.position;
+            ? actor.camera.position
+            : (actor.type == EditorSceneActorType::Script ||
+                actor.type == EditorSceneActorType::Terrain) ? actor.position : actor.light.position;
         const bool visible = actor.visible && view &&
             ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
         widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
@@ -1770,9 +3320,11 @@ void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActo
     if (sceneSelectionSink == nullptr) return;
     FlushPendingEdits();
     ShowSceneDetails();
-    if (actor.type == EditorSceneActorType::Mesh)
+    if (actor.type == EditorSceneActorType::Mesh ||
+        actor.type == EditorSceneActorType::Terrain)
     {
-        // mesh actor 仍走迁移前的 MI 导航路由：整模型选择 + 视口描边完全一致。
+        // Terrain 的 chunk 复用 mesh 的 section/材质槽语义，因此选择路由与 Mesh 相同：
+        // 整模型选择 + 视口描边，不新增地形专属的资产编辑面板。
         sceneSelectionSink->RequestModelSelection(SelectionModel(MeshSceneActorModel(actor)));
         return;
     }
@@ -2248,6 +3800,13 @@ void MaterialInstanceAssetEditorPanel::CloseActiveResource()
 void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
 {
     const auto* active = resourceEditor.ActiveTab();
+    if (active != nullptr && active->kind == EditorAssetKind::Terrain)
+    {
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::GetTerrainDocument;
+        command.payload = MaterialInstanceAssetPathPayload{active->path};
+        Submit(std::move(command));
+    }
     // 读取器只保留最新请求；切回未完成的标签须补读，已缓存的标签不重复 IO。
     if (active != nullptr && (active->snapshot == nullptr || active->loading) &&
         jsonAssetRequestSink != nullptr)
@@ -2261,6 +3820,18 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
     {
         if (!pendingBlueprintPath.empty()) { localStatus = "Save or revert pending edits before reloading."; return; }
         SubmitBlueprintAssetCommand(EditorCommandType::ReloadBlueprintDocument, tab->path);
+        return;
+    }
+    if (tab && tab->kind == EditorAssetKind::Terrain)
+    {
+        const auto* terrain = TerrainDocument(tab->path);
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::ReloadTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = ReloadMaterialInstanceDocumentPayload{
+            tab->path, EditorDirtyDocumentPolicy::RequireClean};
+        Submit(std::move(command));
         return;
     }
     resourceEditor.RequestReload();
@@ -2560,8 +4131,10 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
     for (const auto& tab : resourceEditor.Tabs())
     {
         const auto* actor = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(tab.path) : nullptr;
+        const auto* terrain = tab.kind == EditorAssetKind::Terrain ? TerrainDocument(tab.path) : nullptr;
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
-            std::filesystem::path(tab.path).filename().string() + (actor && actor->dirty ? " *" : ""),
+            std::filesystem::path(tab.path).filename().string() +
+                ((actor && actor->dirty) || (terrain && terrain->dirty) ? " *" : ""),
             EditorAssetKindIcon(tab.kind)});
     }
     for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
@@ -2581,18 +4154,41 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     RefreshDocumentTabs();
     const auto* active = resourceEditor.ActiveTab();
     const bool blueprintAsset = active && active->kind == EditorAssetKind::Blueprint;
+    const bool terrainAsset = active && active->kind == EditorAssetKind::Terrain;
     for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
         widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
-    widgetDocument.SetProperty("resource-preview-panel", "display", blueprintAsset ? "none" : "flex");
-    widgetDocument.SetProperty("resource-details-panel", "display", blueprintAsset ? "none" : "flex");
+    widgetDocument.SetProperty("terrain-asset-editor", "display", terrainAsset ? "block" : "none");
+    for (const char* id : {"terrain-asset-save", "terrain-asset-revert"})
+        widgetDocument.SetProperty(id, "display", terrainAsset ? "block" : "none");
+    widgetDocument.SetProperty("resource-preview-panel", "display",
+        blueprintAsset || terrainAsset ? "none" : "flex");
+    widgetDocument.SetProperty("resource-details-panel", "display",
+        blueprintAsset || terrainAsset ? "none" : "flex");
     if (blueprintAsset)
     {
+        terrainAssetEditor.Build(nullptr, false);
         for (const char* id : {"resource-model-tools", "resource-texture-tools"})
             widgetDocument.SetClass(id, "visible", false);
         SetDisabled("resource-reload", !BlueprintDocument(active->path));
         RefreshBlueprintAssetEditor();
         return;
     }
+    if (terrainAsset)
+    {
+        for (const char* id : {"resource-model-tools", "resource-texture-tools"})
+            widgetDocument.SetClass(id, "visible", false);
+        const auto* terrain = TerrainDocument(active->path);
+        SetDisabled("resource-reload", active->loading || terrain == nullptr);
+        SetMarkup("resource-preview-title", Text(terrain != nullptr &&
+            terrain->document.is_object() && terrain->document.contains("name")
+            ? terrain->document.value("name", std::string())
+            : std::filesystem::path(active->path).filename().string()));
+        SetMarkup("resource-preview-kind", "Terrain");
+        SetMarkup("resource-preview-path", Text(active->path));
+        terrainAssetEditor.Build(terrain, active->loading);
+        return;
+    }
+    terrainAssetEditor.Build(nullptr, false);
     const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
     const bool previewReady = HasCurrentModelPreview();
     const bool animated = isMesh && previewReady && runtimeView.animationWorldGeneration ==
@@ -2792,6 +4388,62 @@ void MaterialInstanceAssetEditorPanel::RefreshControls()
     textureOptionsDirty = false;
 }
 
+void MaterialInstanceAssetEditorPanel::RequestUndoRedo(bool redo)
+{
+    // 全局 Undo/Redo 按上下文路由，不新增第二套历史栈。
+    if (IsTerrainHistoryContext())
+    {
+        const TerrainBrushOperation operation = redo ?
+            TerrainBrushOperation::Redo : TerrainBrushOperation::Undo;
+        if (landscapePaintMode) SendTerrainPaintAction(operation, false);
+        else SendTerrainBrushAction(operation, false);
+        return;
+    }
+    if (RequestBlueprintHistory(redo)) return;
+    if (!runtimeActionSink || HasModal() || runtimeView.scripts.state != ScriptPlayState::Editing ||
+        runtimeView.offlineMode || IsAssetEditorVisible() ||
+        !(redo ? runtimeView.scripts.canRedo : runtimeView.scripts.canUndo))
+        return;
+    UiAction request;
+    request.type = redo ? UiActionType::RedoSceneEdit : UiActionType::UndoSceneEdit;
+    request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshHistoryControls()
+{
+    if (document == nullptr) return;
+    bool canUndo = false;
+    bool canRedo = false;
+    if (IsTerrainHistoryContext())
+    {
+        // 地形历史尚无 canUndo/canRedo 快照；保持乐观，空历史由引擎反馈报告。
+        canUndo = canRedo = true;
+    }
+    else if (const auto* tab = resourceEditor.ActiveTab();
+        tab && tab->kind == EditorAssetKind::Blueprint && IsResourceEditorVisible())
+    {
+        const auto* authored = BlueprintDocument(tab->path);
+        const bool enabled = authored && runtimeView.scripts.available && !runtimeView.offlineMode &&
+            runtimeView.scripts.state == ScriptPlayState::Editing && pendingBlueprintPath.empty() &&
+            !blueprintCommandAwaitingSnapshot && !blueprintGizmoDragging && !HasModal();
+        canUndo = enabled && authored->canUndo;
+        canRedo = enabled && authored->canRedo;
+    }
+    else
+    {
+        const auto& scripts = runtimeView.scripts;
+        const bool enabled = !runtimeView.offlineMode && !IsAssetEditorVisible() &&
+            !HasModal() && scripts.state == ScriptPlayState::Editing;
+        canUndo = enabled && scripts.canUndo;
+        canRedo = enabled && scripts.canRedo;
+    }
+    SetDisabled("menu-edit-undo", !canUndo);
+    SetDisabled("menu-edit-redo", !canRedo);
+    SetDisabled("workspace-undo", !canUndo);
+    SetDisabled("workspace-redo", !canRedo);
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
 {
     if (document == nullptr) return;
@@ -2823,9 +4475,7 @@ void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
         if (button->GetAttribute<std::string>("title", "") != title) button->SetAttribute("title", title);
     }
     SetDisabled("script-placement-toggle", !canAuthor);
-    SetDisabled("menu-edit-undo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canUndo);
-    SetDisabled("menu-edit-redo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canRedo);
-    RefreshBlueprintHistoryControls();
+    RefreshHistoryControls();
     widgetDocument.SetProperty("script-placement", "display",
         scripts.available && scriptPlacementVisible ? "block" : "none");
     std::string options;
@@ -3154,6 +4804,22 @@ void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
 
 void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
 {
+    if (terrainAssetEditor.HandleClick(element, action)) return;
+    if (action == "terrain-asset-save" || action == "terrain-asset-revert")
+    {
+        const auto* tab = resourceEditor.ActiveTab();
+        const auto* terrain = tab && tab->kind == EditorAssetKind::Terrain
+            ? TerrainDocument(tab->path) : nullptr;
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = action == "terrain-asset-save"
+            ? EditorCommandType::SaveTerrainDocument
+            : EditorCommandType::RevertTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = MaterialInstanceAssetPathPayload{tab->path};
+        Submit(std::move(command));
+        return;
+    }
     if (action == "motion-timeline-play" || action == "motion-timeline-pause")
     {
         if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
@@ -3219,17 +4885,9 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         else RequestScriptEdit(UiActionType::SetScriptPhysics,
             {{"field", "constraint-remove"}, {"value", index}});
     }
-    else if (action == "scene-undo" || action == "scene-redo")
-    {
-        if (RequestBlueprintHistory(action == "scene-redo")) return;
-        if (!runtimeActionSink || runtimeView.scripts.state != ScriptPlayState::Editing || runtimeView.offlineMode ||
-            IsAssetEditorVisible() || !(action == "scene-redo" ? runtimeView.scripts.canRedo : runtimeView.scripts.canUndo))
-            return;
-        UiAction request;
-        request.type = action == "scene-redo" ? UiActionType::RedoSceneEdit : UiActionType::UndoSceneEdit;
-        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
-        runtimeActionSink->RequestRuntimeAction(std::move(request));
-    }
+    else if (action == "workspace-undo" || action == "workspace-redo" ||
+        action == "scene-undo" || action == "scene-redo")
+        RequestUndoRedo(action == "workspace-redo" || action == "scene-redo");
     else if (action == "script-blueprint-duplicate") RequestScriptEdit(UiActionType::DuplicateScriptBlueprint);
     else if (action == "script-blueprint-delete") RequestScriptEdit(UiActionType::DeleteScriptBlueprint);
     else if (action == "script-component-add")
@@ -3414,16 +5072,110 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "about-open") aboutVisible = true;
     else if (action == "about-close") aboutVisible = false;
+    else if (action == "terrain-mode-layers")
+    {
+        terrainPanelMode = TerrainPanelMode::Layers;
+        RefreshTerrainBrushUi();
+        RefreshTerrainLayerLibrary();
+    }
+    else if (action == "terrain-layer-view-grid" || action == "terrain-layer-view-list")
+    {
+        terrainLayerListView = action == "terrain-layer-view-list";
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+        RefreshTerrainLayerLibrary();
+    }
+    else if (action == "brush-library-select")
+    {
+        ApplyTerrainBrushPreset(element.GetAttribute<std::string>("data-brush-id", ""));
+    }
+    else if (action == "terrain-layer-select")
+    {
+        const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+        const size_t count = actor == nullptr ? 0 : actor->terrainPlan->desc.layers.size();
+        const size_t index = element.GetAttribute<size_t>("data-index", count);
+        if (index < count)
+        {
+            terrainPaintLayer = static_cast<uint32_t>(index);
+            RefreshTerrainLayerLibrary();
+        }
+    }
+    else if (action == "viewport-tool-landscape")
+    {
+        landscapeToolActive = !landscapeToolActive;
+        if (landscapeToolActive)
+        {
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Sculpt;
+            if (sceneGizmoDragging) CancelSceneGizmoDrag();
+            viewportTransformTool = "select";
+        }
+        else
+        {
+            CancelTerrainBrushStroke();
+            ClearTerrainBrushHit();
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Layers;
+        }
+        RefreshViewportToolbar();
+    }
+    else if (action == "viewport-landscape-sculpt" || action == "terrain-mode-sculpt")
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        landscapePaintMode = false;
+        landscapeToolActive = true;
+        viewportTransformTool = "select";
+        terrainPanelMode = TerrainPanelMode::Sculpt;
+        RefreshViewportToolbar();
+    }
+    else if (action == "viewport-landscape-paint" || action == "terrain-mode-paint")
+    {
+        ActivateTerrainPaintMode();
+    }
+    else if (action == "viewport-paint-erase")
+    {
+        landscapePaintErase = true;
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-paint-mode")
+    {
+        landscapePaintErase = false;
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-brush-mode")
+    {
+        terrainSculptMode = std::clamp(element.GetAttribute<int>("data-mode", 0), 0, 2);
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-landscape-write")
+    {
+        if (terrainBrushStrokeActive || runtimeActionSink == nullptr) return;
+        if (landscapePaintMode)
+            SendTerrainPaintAction(TerrainBrushOperation::SavePaint, false);
+        else
+            SendTerrainBrushAction(TerrainBrushOperation::SaveHeightmap, false);
+    }
     else if (action == "viewport-tool")
     {
-        // 工具条只切换本地高亮；数值 Transform 编辑走 Details，尚无视口 gizmo。
-        // 这里刻意不产生任何 UiAction/资产命令，避免用假开关冒充已实现的编辑能力。
+        // 工具条、Details 与 Gizmo 共用这一份模式状态；切工具前先把手势恢复到
+        // 原始 TRS，不能让一次半途拖动跨模式提交。
+        if (sceneGizmoDragging) CancelSceneGizmoDrag();
+        if (landscapeToolActive)
+        {
+            landscapeToolActive = false;
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Layers;
+            CancelTerrainBrushStroke();
+            ClearTerrainBrushHit();
+        }
         viewportTransformTool = element.GetAttribute<std::string>("data-tool", "select");
         RefreshViewportToolbar();
     }
     else if (action == "viewport-space")
     {
-        // 同上：World/Local 只是呈现状态，渲染器和相机不读取它。
+        // World/Local 只影响 Gizmo 轴方向，不改变渲染相机或场景坐标。
+        if (sceneGizmoDragging) CancelSceneGizmoDrag();
         viewportTransformSpace = element.GetAttribute<std::string>("data-space", "world");
         RefreshViewportToolbar();
     }
@@ -3454,6 +5206,18 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "revert")
     {
+        if (const auto* tab = resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::Terrain && IsResourceEditorVisible())
+        {
+            const auto* terrain = TerrainDocument(tab->path);
+            if (terrain == nullptr) return;
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::RevertTerrainDocument;
+            command.expectedDocumentRevision = terrain->documentRevision;
+            command.payload = MaterialInstanceAssetPathPayload{tab->path};
+            Submit(std::move(command));
+            return;
+        }
         pendingEdits.clear();
         pendingValues.clear();
         SubmitPathCommand(EditorCommandType::RevertMaterialInstanceDocument);
@@ -3484,8 +5248,22 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         }
         else SubmitPathCommand(EditorCommandType::RestoreMaterialInstancePreviewBaseline);
     }
-    else if (action == "reload" && snapshot.activeDocument)
+    else if (action == "reload")
     {
+        if (const auto* tab = resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::Terrain && IsResourceEditorVisible())
+        {
+            const auto* terrain = TerrainDocument(tab->path);
+            if (terrain == nullptr) return;
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::ReloadTerrainDocument;
+            command.expectedDocumentRevision = terrain->documentRevision;
+            command.payload = ReloadMaterialInstanceDocumentPayload{
+                tab->path, EditorDirtyDocumentPolicy::RequireClean};
+            Submit(std::move(command));
+            return;
+        }
+        if (!snapshot.activeDocument) return;
         if (!pendingEdits.empty())
         {
             localStatus = "Save or revert pending edits before reloading.";
@@ -3679,6 +5457,27 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
 
 void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
 {
+    if (terrainAssetEditor.HandleChange(element, action)) return;
+    if (action == "terrain-layer-search")
+    {
+        terrainLayerSearch = ControlValue(element);
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+        RefreshTerrainLayerLibrary();
+        return;
+    }
+    if (action == "brush-library-search")
+    {
+        brushLibrary.SetQuery(ControlValue(element));
+        brushLibrary.Build();
+        return;
+    }
+    if (action == "brush-library-category")
+    {
+        brushLibrary.SetCategory(ControlValue(element));
+        brushLibrary.Build();
+        return;
+    }
     if (action.rfind("debug-draw-", 0) == 0)
     {
         if (!runtimeActionSink || !runtimeView.debugDraw || !runtimeView.motionWorldGeneration || runtimeView.offlineMode) return;
@@ -3769,6 +5568,112 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
+    if (action == "viewport-snap-enabled")
+    {
+        sceneSnapEnabled = element.HasAttribute("checked");
+        RefreshViewportToolbar();
+        return;
+    }
+    if (action == "viewport-snap-move" || action == "viewport-snap-rotate" ||
+        action == "viewport-snap-scale")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number) || number <= 0.0f)
+        {
+            localStatus = "Snap values must be finite and greater than zero.";
+            RefreshViewportToolbar();
+            return;
+        }
+        if (action == "viewport-snap-move") sceneMoveSnap = number;
+        else if (action == "viewport-snap-rotate") sceneRotateSnap = number;
+        else sceneScaleSnap = number;
+        RefreshViewportToolbar();
+        return;
+    }
+    if (action == "viewport-brush-radius" || action == "viewport-brush-strength" ||
+        action == "viewport-brush-falloff")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number))
+        {
+            localStatus = "Brush values must be finite numbers.";
+            RefreshTerrainBrushUi();
+            return;
+        }
+        if (action == "viewport-brush-radius")
+        {
+            if (number <= 0.0f)
+            {
+                localStatus = "Sculpt brush radius must be greater than zero.";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.radiusCm = number;
+        }
+        else if (action == "viewport-brush-strength")
+        {
+            if (number <= 0.0f || number > 1.0f)
+            {
+                localStatus = "Sculpt brush strength must be in (0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.strength = number;
+        }
+        else
+        {
+            if (number < 0.0f || number > 1.0f)
+            {
+                localStatus = "Sculpt brush falloff must be in [0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.falloff = number;
+        }
+        SynchronizeSculptBrushPresetId();
+        RefreshTerrainBrushUi();
+        return;
+    }
+    if (action == "terrain-paint-radius" || action == "terrain-paint-hardness" ||
+        action == "terrain-paint-opacity" || action == "terrain-paint-flow")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number))
+        {
+            localStatus = "Paint brush values must be finite numbers.";
+            RefreshTerrainBrushUi();
+            return;
+        }
+        if (action == "terrain-paint-radius")
+        {
+            if (number <= 0.0f)
+            {
+                localStatus = "Paint brush radius must be greater than zero.";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainPaintBrush.radiusCm = number;
+        }
+        else
+        {
+            if (number < 0.0f || number > 1.0f)
+            {
+                localStatus = action == "terrain-paint-hardness"
+                    ? "Paint hardness must be in [0, 1]."
+                    : action == "terrain-paint-opacity"
+                    ? "Paint opacity must be in [0, 1]."
+                    : "Paint flow must be in [0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            if (action == "terrain-paint-hardness") terrainPaintBrush.hardness = number;
+            else if (action == "terrain-paint-opacity") terrainPaintBrush.opacity = number;
+            else terrainPaintBrush.flow = number;
+        }
+        SynchronizePaintBrushPresetId();
+        RefreshTerrainBrushUi();
+        return;
+    }
     if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, false);
     else if (HandleSceneLogicEvent(element, action, false)) {}
     else if (HandleSceneCompositePropertyEvent(element, action, false)) {}
@@ -4253,6 +6158,50 @@ bool MaterialInstanceAssetEditorPanel::ProcessBlueprintAssetDrag(Rml::Event& eve
 void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
 {
     if (refreshingControls || document == nullptr) return;
+    const auto& eventType = event.GetType();
+    if (eventType == "mousescroll")
+    {
+        // 滚轮默认滚动发生在捕获之后；这里只标脏，下一次 Build 再按新的 scrollTop 重算窗口。
+        auto* layerScroll = document->GetElementById("terrain-layer-scroll");
+        for (auto* element = event.GetTargetElement(); element != nullptr;
+            element = element->GetParentNode())
+        {
+            if (element == layerScroll)
+            {
+                terrainLayerWindowDirty = true;
+                break;
+            }
+        }
+    }
+    if (ProcessViewportShortcut(event))
+    {
+        event.StopPropagation();
+        return;
+    }
+    if (eventType == "mousemove")
+        RefreshTerrainLayerHoverPreview(event.GetUnprojectedMouseScreenPos(), event.GetTargetElement());
+    auto* sceneImage = document->GetElementById("editor-viewport-image");
+    auto* sceneSurface = document->GetElementById("editor-viewport-surface");
+    if (IsTerrainSculptActive() && sceneImage != nullptr &&
+        (event.GetTargetElement() == sceneImage ||
+         event.GetTargetElement() == sceneSurface) &&
+        (eventType == "mousedown" || eventType == "mousemove" || eventType == "mouseup"))
+    {
+        const int button = eventType == "mousemove" ? -1 :
+            event.GetParameter<int>("button", -1);
+        if (ProcessTerrainSculptPointer(eventType, button,
+            event.GetParameter<float>("mouse_x", 0.0f),
+            event.GetParameter<float>("mouse_y", 0.0f)))
+        {
+            event.StopPropagation();
+            return;
+        }
+    }
+    if (ProcessSceneGizmoInput(event))
+    {
+        event.StopPropagation();
+        return;
+    }
     if (ProcessBlueprintAssetDrag(event)) return;
     if (ProcessBlueprintViewportInput(event) || ProcessTexturePreviewInput(event) || ProcessModelPreviewInput(event))
     {
@@ -4323,6 +6272,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (event.GetType() == "click" && (action == "save-file" || action == "script-physics-trigger" ||
         action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
         action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
+        action == "viewport-snap-enabled" ||
         action == "log-autoscroll" || action == "animation-clip" || action == "animation-time" ||
         action == "motion-debug" || action == "debug-draw-enabled" || action == "debug-draw-category" ||
         action == "debug-draw-owner")) return;

@@ -1,9 +1,10 @@
 # Terrain Runtime
 
 > 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；地形
-> chunk 卸载、专用低分辨率兜底页/时序淡入、分块/编辑后碰撞重建与地形编辑等未来
-> 能力不在这里承诺。运行时几何 LOD、层页 force-mip/avgColor 混合与相机前向预取
-> 已接入。
+> chunk 卸载、专用低分辨率兜底页/时序淡入、运行时异步分页与 Play 中的实时碰撞重建
+> 不在当前能力内。运行时几何 LOD、层页 force-mip/avgColor 混合与相机前向预取已接入；
+> 编辑器侧已有 TR 资产页、Landscape Sculpt/Paint 会话、高度图写回与 Paint 快照保存，
+> 边界见“编辑器地形编辑”。
 
 ## 数据流
 
@@ -66,6 +67,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
   覆盖只改该次摆放的虚拟页区域，不修改 TR 资产本身。
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
+- `paintPath`（可选）是资源根相对的 `.vlpaint` paint 快照路径，且要求至少一层
+  `layers`。文件不存在是合法状态：此时它只是 Save Paint 的写入目标；文件存在时
+  `TerrainAssetLoader` 会按当前层数恢复覆盖层，存在但格式/层数/权重非法则加载失败。
 - `layers` 可选：1..256 层。每层必有 `name`、`heightRange`、`slopeRange`；可选
   `noise`、`uvScale`、`uvRotation` 与 L1 新增的 `sourceResolution`（512/1024/2048，
   默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认中性 0.18）、`sourceSet`（0..255，
@@ -78,18 +82,219 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   四行全零；布局与 CPU accessor 见“层 catalog v2”。
 - 未知字段、缺失字段、非有限数值、非法范围都会在场景预检阶段失败。
 
+## 编辑器地形编辑
+
+### TR 资产页
+
+`TR_*.json` 现在同时是标准资产文档，命令前缀为 `terrain.*`：
+`terrain.get_document` / `get_capabilities` / `modify` / `validate` /
+`save` / `revert` / `reload`。它复用 `AssetDocumentService` 的 baseline/draft/
+revision、源摘要冲突检查和原子保存，不是第二套文件编辑器。
+
+- 顶层可编辑字段：`name`、`description`、`heightmapPath`、`paintPath`、
+  `materialInstancePath`、`size`、`heightScale`、`heightOffset`、
+  `gridResolution`、`chunkQuads`、`lodLevels`、`lodDistances`、
+  `chunkResidencyDistances`、`pageOrigin`、`pageTilesPerSide`。
+- `layers` 既可按整表提交（增删/重排），也可用 `layerIndex` +
+  `expectedLayerName` 定位单层后编辑 `name`/`key`/`heightRange`/`slopeRange`/
+  `noise`/`uvScale`/`uvRotation`/`sourceResolution`/`avgColor`/`sourceSet`/`flags`。
+  层身份在写入前复核；草稿重排后旧索引不会静默写到另一层。
+- `validate`/`save` 复用正式 `TerrainAssetValidator`，并解析
+  `heightmapPath` 与 `materialInstancePath`；后者必须是 `type:"materialInstance"`。
+  这里不导入高度图像素、不准备 Vulkan 资源；World 加载仍走正式事务。
+- 资源编辑器里的 Terrain 标签页显示这些字段、层表和 heightmap 预览（PNG/JPG/
+  BMP/TGA 直接由 RmlUi 解码；EXR 只显示“preview unavailable”），保存走
+  `terrain.save`，重读走 `terrain.reload`。TR 资产页仍不显示层纹理预览；Landscape
+  层库的 source-set 预览见下一节。关闭标签不会
+  提交草稿，重新打开同一路径仍会看到服务里的未保存草稿。
+
+### Landscape 层库 source-set 预览
+
+Landscape 的 Layers/Paint 层卡使用 CPU 预览，不读取 GPU 纹理，也不把运行时
+texture array 当作编辑器资源。解析链固定为：
+
+```text
+TerrainAssetDesc.materialInstancePath
+  -> MI textures.layerAlbedo / layerNormal / layerPbr
+  -> 三张 T_*.json (type: "textureArray")
+  -> sources[slice]
+  -> layerAlbedo 组可选的 displacementSources[slice]（16-bit grayscale）
+```
+
+- `slice` 是**同 sourceSet 中早于当前层的层数**，不是 sourceSet 编号。缺失的
+  `sources` 项保留空位，避免后续层滑到下一张图。三张数组必须使用同一个
+  `slice`；`M_pbr` 材质、缺少 albedo/normal/pbr 任一阵列、不是 `textureArray`
+  或任一源文件缺失/损坏都视为“无预览”，退回 `avgColor`。
+- 每个层 source-set 中由 `layerAlbedo` 指向的 `textureArray` 可携带
+  `displacementSources`：它与 `sources` 同序、同长度，预览按同一个 `slice`
+  取 16-bit 灰度高度图。该字段只服务编辑器层预览，运行时不会上传或替换
+  `layerPbr`；`textureAssetValidation` 接受它，但验证时要求与 `sources` 同长。
+- Grid/List 卡优先显示 `96×96` RGBA 球体缩略图：圆形 alpha mask，CPU PBR
+  （Lambert diffuse + GGX specular + directional key light + ambient，ACES
+  近似 tone map）。albedo 提供 base color；normal map 在球面 tangent basis
+  上扰动法线；pbr 通道固定为 R=roughness、G=metallic、B=AO。
+  球体以 albedo/normal/pbr 三源共同着色，不再生成纯 albedo 高光贴图。
+- displacement 主路径是 `displacementSources` 的 16-bit grayscale：用
+  `stbi_load_16` 单通道解码并除以 `65535`，保留 `0x8000` 与 `0xFFFF` 的差别，
+  用于法线梯度与轻微轮廓半径扰动。只有旧组**没有** `displacementSources`
+  时才回退到 `pbr.a`（有效 alpha）或 albedo 亮度近似；声明了该字段但当前
+  slice 缺失/无法解码时直接拒绝预览，不静默降到 8-bit 或 `pbr.a`。
+  位移仅影响预览，不改写地形高度、TR 字段或运行时纹理数组；运行时
+  `layerPbr` 的 A=height 合同保持不变。
+- 悬停层显示 `160×112` 无边框平面，3×3 repeat tile 加一层细网格；RmlUi 的三竖线/
+  两横线仍叠加在上层。平面同样使用 normal + pbr + 16-bit displacement 着色；
+  没有平面路径时保留 `avgColor` 背景并隐藏图片。
+- albedo 由 `TextureIO::Load` 以 RGBA、`ForceOff`、sRGB 读取；normal/pbr 以
+  linear RGBA 读取，全部不导入 Vulkan；displacement 由独立的
+  `LoadTerrainLayerDisplacement` 走 16-bit 解码，也不导入 Vulkan。预览缓存 key
+  包含 albedo/normal/pbr/displacement 四个源绝对路径、各自文件大小与
+  `last_write_time`、球体/平面尺寸、着色版本与位移参数以及 sphere/plane 种类，输出到
+  `resourcePath/Generated/TerrainPreview/PreviewCache/<key>.png`。目标 PNG 只按
+  完整 key 复用，重复请求不重写文件（mtime 保持不变）；首次生成仍先写同目录临时
+  文件再原子替换。内存缓存按源文件身份复用三张 RGBA8 解码结果与 16-bit 高度场。
+- 只对当前可见的层卡请求球体/平面缓存，不遍历 256 层。单个源失败只输出一次
+  诊断；预览不修改 `M_terrain`、MI、纹理数组或任何 TR 字段。
+
+### Landscape Sculpt
+
+Landscape 工具只在 authoring（`ScriptPlayState::Editing`）、非 offline、
+非 `SC_model_preview.json` 的实时关卡中可用。Play 会销毁编辑会话；编辑期间不允许
+Play 修改同一地形。
+
+Sculpt 同时支持带 `layers` 的地形。带层地形的覆盖页权重由
+`TerrainPageManager` 按高度/坡度烘焙，因此每次雕塑提交都会在同一
+render-thread-idle 边界替换该 placement 的高度图快照，并失效已驻留的覆盖页；
+正常情况下下一轮 feedback 会用新高度重新请求、重新烘焙。若页管理更新失败，
+dirty 会保留供下一次笔刷提交重试，但失败到重试之间几何已经更新、权重仍使用旧
+快照；Diagnostics/Editor 会保留这条失败信息。
+
+- 会话以 `TerrainCollisionInstance.plan` 创建 `TerrainHeightmapEditor`，复制
+  高度样本到 CPU；支持 Raise/Lower/Smooth、Circle/Square 笔刷形状、UE 风格
+  smooth falloff、归一化 UV 半径、strength 与 falloff。Circle 使用归一化 UV
+  的欧氏距离，Square 使用同一归一化 UV 的 Chebyshev 距离
+  `max(|du|, |dv|)`；两者共用同一 falloff/strength 计算。笔刷半径在 UI 中以
+  cm 输入，按地形 X 世界跨度换算成 UV，因此非正方形地形上的世界足迹仍是椭圆。
+  Sculpt 没有 noise；Paint 的 Spray 已按 texel 接入噪声，但旋转与 Stamp 仍未进入
+  Sculpt/Paint，属于后续 brush library。
+- 拖动左键一次发一个 `BeginStroke`，移动发 `ApplyBrush`，释放发 `EndStroke`；
+  Esc/焦点丢失/选择或 World 换代发 `CancelStroke`。一次 stroke 只形成一个
+  会话 undo；历史最多 8 条，撤销/重做后全量标记 dirty。
+- 每个 dirty chunk 会按全部 LOD 重建 CPU 网格；运行时只替换 World 中实际存在的
+  (chunk, LOD) `RenderableObject`（资源 key 与加载期一致），同时更新
+  `World::meshObjects` 的 chunk 包围盒和多层 LOD0 组包围盒。被加载期驻留窗口
+  裁掉的细 LOD 不会凭空创建。
+- 每次提交同时更新该 placement 的 World 高度图快照与页管理器内部的高度图
+  副本；带层地形会失效已驻留覆盖页，下一轮 feedback 用新高度重新烘焙权重。
+  下一次 Play 的 `ScriptPhysicsWorld::SetTerrainCollisions` 才消费新高度图
+  重建碰撞，Play 中不做实时 Jolt body 重建。
+- GPU 重建失败时不会清 dirty；下一次笔刷/结束/撤销会重试，并在 Editor/Diagnostics
+  中保留失败信息。
+- Sculpt 没有 GPU 侧整张高度图上传，也没有与 Scene 文档合并的 Undo；Sculpt 的
+  undo/redo 是会话局部的，不进入 Edit 菜单的 Scene 历史。
+
+### Landscape Paint
+
+Paint 面向带 `layers` 的地形，使用独立 `TerrainPaintSession`：
+
+- Landscape 面板的 Paint 组提供 Radius、Hardness、Opacity、Flow 与 Paint/Erase；
+  笔刷形状与 Sculpt 共用 Circle/Square 语义（Square 使用归一化 UV 的 Chebyshev
+  距离）。`TerrainPaintInput` 携带 `strength`/`falloff`/`opacity`/`flow`/
+  `noise`/`noiseSeed`/`shape`：UI 将 `falloff` 映射为
+  `clamp(1 - hardness, 0..1)`，并把兼容用的 `strength` 固定为 1；Opacity、
+  Flow 与 Spray 各自独立生效，不再合成为单一 strength。
+- Flow 是每个 stamp 的推进速度，Opacity 是整个 stroke 的覆盖上限。对足迹内
+  每个 texel，`step = falloff * clamp(strength) * flow`，存在 spray 时再乘
+  `1 - noise + noise * StableNoise01(x, y, noiseSeed)`。Paint 的
+  `targetOpacity = max(currentOpacity, opacity)`，再以
+  `current + (target - current) * step` 同时推进 opacity 与 layer weight；
+  因此重复 stamp 不会突破当前画笔的 opacity 上限，也不会把已有更高覆盖擦低。
+  Erase 保持 weight 不变，只按 `currentOpacity * (1 - step)` 降低覆盖率。
+- Spray 噪声按 texel 与 `noiseSeed` 确定性生成，同一 seed 的重绘结果一致；
+  其 32-bit 混合公式与 `editor/brush/brushSampler.cpp` 的 `StableNoise01`
+  保持一致。选择 Paint 预设会复制 `profile.noise`/`profile.noiseSeed`；手动修改
+  Hardness/Opacity/Flow 会保留当前噪声参数，只有重选预设才覆盖它们。
+  Sculpt 没有 Opacity/Flow/Spray 语义，只保留自己的 Strength/Falloff；
+  两套状态互不影响。旋转与 Stamp 仍未接入运行时 Paint。
+  一次左键拖动发一收
+  `BeginStroke/ApplyBrush/EndStroke`，Esc/选择变化/Play 发 `CancelStroke`。
+- 覆盖层是 `TerrainLayerPaintData`（layer-major 的 weight/opacity；无持久化快照时
+  按层数新分配 256²/128²/64² 的空白层）。`TerrainWeightMapBuilder` 在烘焙覆盖率页时
+  按 bilinear 混合覆盖值，tile 候选层也会补入被 Paint 命中的层。
+- TR 的 `paintPath` 指向资源根相对的 `.vlpaint` 文件。文件存在时，加载期快照成为
+  Paint 会话的起始状态（必须与 TR 层数一致、正方形、2..4096 边长），首次笔画不会
+  把已保存权重清空；文件不存在时 `plan.layerPaint` 为空，会话按上述分辨率分配空白层。
+- 每次提交都会把覆盖层快照写回 World 的 placement（`UpdateTerrainPlacementLayerPaint`），
+  因此 Play/Stop 或切换 Actor 销毁会话后，下一次笔画从最新覆盖层继续。只有重新
+  加载 World 才会回到 `paintPath` 的文件内容，未 Save Paint 的改动在重载后丢失。
+- 提交时在 render thread idle 边界更新 `TerrainPageManager` 的 plan 副本并失效该
+  placement 的已驻留覆盖页；feedback 会用新权重重新请求/上传页。当前不在 Play 中
+  修改页表。
+
+### Save Heightmap
+
+Landscape 工具栏的 `Save Heightmap` 把当前 Sculpt 快照写回 TR 的 `heightmapPath`：
+
+- `.png` 默认写 grayscale，位深按目标文件现有 PNG 决定：目标已是 16-bit PNG 时
+  保留 16-bit，新文件或 8-bit 目标写 8-bit。`TerrainHeightmapWriter::WriteOptions::PngBitDepth::Sixteen`
+  可显式写出真正的 16-bit grayscale PNG（IHDR bit depth 16、color type 0、
+  大端样本）；`Eight` 保持旧的 8-bit 行为。8-bit 写入路径的字节语义不变。
+  `.bmp` 写 24-bit grayscale；`.exr` 先把 R32_FLOAT 高度扩成 RGBA16_FLOAT
+  （R/G/B 同值、A=1）再走 `TextureIO` 的半精度 EXR 输出，且不做 [0,1] clamp，
+  保留编辑器已有的越界/HDR 高度；其他扩展名明确失败。
+- 使用同目录临时文件 + 原子替换；不会改写 TR JSON，也不会自动重新加载 World。
+  Paint 覆盖与高度图不是同一份数据，Save Heightmap 不会保存 Paint；Paint 走
+  下面的 Save Paint。
+
+### Save Paint
+
+Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话快照写到 TR 的
+`paintPath`：
+
+- 有活动 stroke、会话没有可保存数据或 TR 没有 `paintPath` 时拒绝；缺失路径的反馈是
+  `TR has no paintPath; add one to persist terrain paint.`。
+- 路径按 `resourcePath / paintPath` 解析，写 `.vlpaint` v1；成功后反馈
+  `Terrain paint saved: <path>`。保存不改写 TR JSON、不失效页、不重新加载 World。
+- 加载与保存共用 `ResolveTerrainPaintPath`：解析结果按 weak canonical 归一化后
+  必须仍位于资源根内，绝对路径、`..` 逃逸以及 junction/symlink 指向根外都会失败。
+- 文件格式固定为小端：
+
+| 偏移 | 类型 | 内容 |
+| --- | --- | --- |
+| 0 | `char[4]` | `VLP1` |
+| 4 | `uint32` | `width` |
+| 8 | `uint32` | `height` |
+| 12 | `uint32` | `layerCount` |
+| 16 | `uint32` | `flags`，v1 为 0 |
+| 20 | `uint32` | `reserved`，v1 为 0 |
+| 24 | `float32[width*height*layerCount]` | layer-major 权重 |
+| `24 + 4*N` | `uint8[width*height*layerCount]` | layer-major opacity |
+
+- 读取器拒绝错误 magic、非正方形、边长不在 `[2,4096]`、层数不在 `[1,256]`、
+  与 TR 层数不一致、文件长度与头部声明不符、非有限或超出 `[0,1]` 的权重、
+  非零 `flags`/`reserved`、尺寸乘法溢出，以及编码后超过 512 MiB 的负载；
+  错误信息包含文件路径。`paintPath` 存在但不是常规文件（例如目录）时按损坏
+  资产处理，不会静默当作“未绘制”。
+- 写入使用同目录临时文件 + 原子替换，失败时清理临时文件。
+
 ## 高度图
 
-`TerrainAssetLoader::Prepare` 使用 `TextureIO::Load` 的 linear、无翻转路径解码高度图：
-
-- EXR/HDR 走 float 路径；PNG/BMP/TGA 等 8-bit 图像按 0..1 归一化。
-  当前 EXR 沿用 `TextureIO` 的 `RgbaInputFile`，因此需要 RGBA EXR；单通道 EXR 尚未支持。
+- `TerrainAssetLoader::Prepare` 通过专用的 `TerrainHeightmapIO::Load` 读取高度图，
+  不改写 `TextureIO` 的通用贴图语义。16-bit grayscale PNG 用 `stbi_load_16`
+  单通道解码，每个样本除以 `65535` 后写入 `R32_FLOAT`，完整保留 16 bit；
+  PNG 16-bit 的大端样本序由解码器处理。
+- 16-bit PNG 必须是单通道/grayscale；RGB/RGBA 16-bit PNG 会带路径诊断被拒绝。
+  损坏、截断或尺寸非正的 16-bit PNG 同样拒绝，不静默降为 8-bit。当前不支持
+  无头部的 raw 16-bit little-endian：TR 没有可信任的宽高来源，不能凭空推断。
+- 其他格式完全走 `TextureIO::Load` 原有路径：8-bit PNG/BMP/TGA 按 0..1
+  归一化；EXR/HDR 走 float 路径。当前 EXR 沿用 `TextureIO` 的 `RgbaInputFile`，
+  因此需要 RGBA EXR；单通道 EXR 尚未支持。
 - 高度图至少 2×2；采样使用双线性插值。
 - 地形 UV `u` 对应 +X，`v` 对应 +Z；顶点 `x = (u-0.5)*size.x`、
   `z = (v-0.5)*size.y`、`y = sample*heightScale + heightOffset`。
 - 高度图不套用材质纹理的固定 V 翻转；翻转会同时改变高度场方向。
-- 当前支持 `TextureIO` 实际产出的 `RGBA32_FLOAT`、`R32_FLOAT`、`RGBA8_UNORM/SRGB`、
-  `R8_*`、`RG8_*` 标量读取；其他格式在加载阶段报错。
+- 当前支持 16-bit PNG 解码出的 `R32_FLOAT`，以及 `TextureIO` 实际产出的
+  `RGBA32_FLOAT`、`R32_FLOAT`、`RGBA8_UNORM/SRGB`、`R8_*`、`RG8_*` 标量读取；
+  其他格式在加载阶段报错。
 
 ## 网格
 
@@ -239,7 +444,8 @@ World 中摆放多次，只要对象名不同。
 `TerrainBuildPlan::desc`；未提供时保持 TR 原值。`placementId` 为空（旧测试/旧资产）时
 注册和资源 key 回退到 `desc.assetPath`。
 `position/rotation/scale` 通过模型矩阵应用到所有 chunk；chunk 的 `sceneObjectIdentity`
-仍是地形对象名，编辑器 actor 树因此把多个 chunk 聚合成一个 mesh actor。
+仍是地形对象名，编辑器 actor 树因此把多个 chunk 聚合成一个独立 `Terrain` actor；
+该类型只属于编辑器身份/展示，World 中仍是 chunk mesh。
 
 ## 材质
 
@@ -375,7 +581,9 @@ World 中摆放多次，只要对象名不同。
 - 当前地形只支持 realtime 渲染；offline-only 渲染遇到 terrain 直接失败。
 - 地形碰撞已接入 World/Play：`WorldBuilder` 为每个 terrain placement 保留 plan+TRS，
   脚本 Play 在既有 `ScriptPhysicsWorld` 里创建静态 heightfield；编辑器/普通预览
-  不创建物理世界。当前仍是整张地形一个 body，没有分块/编辑重建；没有地形编辑和绘制工具。
+  不创建物理世界。当前仍是整张地形一个 body；Sculpt 提交会更新高度图与分层
+  覆盖页，碰撞仍只在下一次 Play 重建，Play 中不做实时 body 重建。编辑器已有
+  TR 资产页、layered Sculpt/Paint 与高度图写回；分块碰撞仍未实现。
 - page manager/GPU page 资源由 world-local `TerrainStreamingState` 管理；chunk 资源 key
   （`TerrainChunkResourceKey`）包含 `placementId`、TR 路径、高度图路径、size、
   heightScale/offset、grid/chunk 参数、`lod`/`lodStep` 与 chunk 坐标。同一 TR 的两处
@@ -873,8 +1081,9 @@ P3/P3.1/L1/L2/L3/L4a/L4b/L4c/L4e **没有**实现：低分辨率 fallback 页（
 `avgColor` 混合与细一级 mip 预取，没有降采样兜底页）、视锥/地形 tile 级预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
-地形 chunk 卸载、地形编辑。地形碰撞的 heightfield 模块已接入 World/Play
-（见下节），但仍是整张地形一个 body，没有分块/编辑重建。
+地形 chunk 卸载、Play 中实时碰撞重建。地形碰撞的 heightfield 模块已接入
+World/Play（见下节），但仍是整张地形一个 body；Sculpt 的碰撞更新只在下次 Play
+生效。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
 每帧 8 页是数量预算，不是时间预算，重载/快速移动时单帧仍可能出现烘焙耗时峰值。
 

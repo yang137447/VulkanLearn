@@ -44,6 +44,8 @@ class ScriptWorldContext;
 class RuntimeValidationServices;
 class SubsystemCollection;
 class WorldTransitionCoordinator;
+namespace Editor { class TerrainEditSession; }
+namespace Editor { class TerrainPaintSession; }
 enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
@@ -79,6 +81,7 @@ private:
     void Tick();
     void PumpPlatformEvents();
     void ApplyQueuedUiActions();
+    bool ApplyTerrainEditUpdate(World& world);
     void UpdateUiInputPolicy();
     void UpdateUiViewModel(
         float deltaTime,
@@ -161,6 +164,14 @@ private:
     std::optional<std::filesystem::path> pendingBuiltAssembly;
     uint64_t pendingBuildWorldGeneration = 0;
     uint64_t autoPlayWorldGeneration = 0;
+    // Landscape Sculpt CPU session：只由 GT 在 UiAction 边界创建/推进；GPU 更新
+    // 每帧最多一次，rendererBackend 为空时保留 dirty 并给出诊断。
+    std::unique_ptr<Editor::TerrainEditSession> terrainEditSession;
+    uint64_t terrainEditSessionGeneration = 0;
+    std::string terrainEditSessionPlacementId;
+    std::unique_ptr<Editor::TerrainPaintSession> terrainPaintSession;
+    uint64_t terrainPaintSessionGeneration = 0;
+    std::string terrainPaintSessionPlacementId;
     std::string scriptBuildOutput;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;

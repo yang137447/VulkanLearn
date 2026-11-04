@@ -52,7 +52,8 @@ Destructive validation workflows remain console/launch operations, not buttons.
 - Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
-  (offline controls) / Log (Output and Scripts) tabs; switching only changes presentation.
+  (offline controls) / Log (Output and Scripts) / Landscape (read-only selected terrain
+  summary with an explicit empty state) tabs; switching only changes presentation.
 - Left/center: a scene Viewport image and game input.
 - Bottom edge: status bar.
 - Dirty-close modal: explicit Save/Discard/Cancel.
@@ -77,7 +78,9 @@ asset, or the class attribute for inline Blueprints. Both GT requests and formal
 loading enforce this permission. Blueprint tabs produce revision-gated `blueprint.*`
 document commands; they do not mutate scene instances or run managed callbacks.
 Scene history is unavailable in asset pages, offline mode or Play/Pause.
-Blueprint pages instead route Edit Undo/Redo to their own revision-gated document history.
+The top toolbar exposes global Undo/Redo/Save commands; Edit Undo/Redo and the toolbar
+share one context route (terrain brush stroke, then the active Blueprint document, then Scene).
+Blueprint pages therefore route Undo/Redo to their own revision-gated document history.
 Frozen per-path command completion feedback releases UI waiting state even when rejection leaves
 the document revision unchanged; history never writes files automatically.
 Level editing navigates an independent World-owned editor camera. The authored
@@ -132,8 +135,10 @@ history and existing console output intact. Rows are virtualized and hidden pane
 defer filtering/DOM work. Scripts reads frozen timing, per-object callback, physics,
 assembly and GC metrics at most four times per second, with 64 objects per page.
 Neither Log view invokes managed code, reads World, or modifies diagnostic producers.
-The six permanent dock panels include Log; version-1 saved layouts migrate by adding
-it to the Content stack while retaining active tabs, ratios and hidden panels.
+The seven permanent dock panels include Log and Landscape; version-3 layouts require all
+seven. Version-1 layouts add the missing Log, and version-1/2 layouts add the missing
+Landscape to the Content stack while retaining active tabs, ratios, floating positions
+and hidden panels.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
@@ -145,8 +150,9 @@ debounce for 350 ms; scalar defaults/permissions do not reload geometry. The pre
 does not create a managed context or simulate physics. Matching Blueprint identity and a
 new World generation gate image publication and camera input. Returning reloads the
 remembered level. BP drafts reach formal scene instances only after explicit save.
-The scene selector includes `blueprintInstance` levels and excludes editor-only `terrain`;
-type filtering does not replace formal scene or C# host validation.
+The scene selector includes `blueprintInstance` levels and levels containing `terrain`;
+excluding terrain would leave those levels visible in File/Content Browser but unloadable
+through `LoadWorld`. Type filtering does not replace formal scene or C# host validation.
 The Blueprint viewport supports mesh-component bounding-box picking and three-axis authoring gizmos.
 Translation follows parent axes, rotation edits local YXZ Euler components, and scale follows local axes.
 Dragging sends generation/revision-gated values to GT and continuously updates the real mesh/light
@@ -154,8 +160,35 @@ transforms without reloading the World; release submits one document edit and ca
 the preview baseline. Self supports root rotation/scale, and the toolbar supplies translation,
 angle and scale snapping. Camera, light and Scene components have pickable helper graphics;
 mesh hits take priority over Self collision wires. Right drag orbits and middle drag pans.
-Stale preview geometry or a changed viewport cancels editing. No node graph, world-space gizmo
-or level gizmo is provided.
+Stale preview geometry or a changed viewport cancels editing. No node graph is provided.
+The level viewport reuses the same three-axis gizmo math for Mesh, Terrain and Script actors:
+Move/Rotate/Scale edit the complete authored TRS, World/Local changes the axis basis, and the
+toolbar exposes 10 cm / 5 degree / 0.1 snapping defaults. Lights and Camera expose Move/Rotate,
+SquareAreaLight exposes Move only, and Environment/Wind actors expose no gizmo. Dragging writes
+live World preview values and commits exactly one scene-document history entry on release; Esc,
+focus loss, selection change and World replacement cancel the gesture and restore the original
+TRS. Q/W/E/R select the UE-style Select/Move/Rotate/Scale tools while focus is outside a
+text/dropdown control. There is no multi-select gizmo or rollback package for a commit-time
+document validation failure.
+
+The Landscape toolbar opens a Sculpt session on the selected Terrain actor. Raise/Lower/Smooth
+brushes use a UV radius converted from a cm input, strength and smooth falloff; the viewport shows
+a pointer-transparent brush ring derived from the frozen `TerrainPlan` heightmap and the editor
+camera ray. A left drag emits one BeginStroke, multiple ApplyBrush values and one EndStroke; Esc,
+focus loss, selection change or World replacement emits CancelStroke. EngineLoop owns the CPU
+`TerrainEditSession`, replaces dirty (chunk, LOD) renderable objects under stable resource keys,
+updates World chunk bounds and updates the collision heightmap snapshot for the next Play. Paint is
+available on layered Terrains through a separate `TerrainPaintSession`: layer selection and
+Erase edit a CPU weight/opacity override, then invalidate the placement's resident coverage pages
+at a render-idle boundary so the existing page manager re-bakes and uploads them. Sculpt can be
+written back to `.png` (16-bit), `.bmp` (24-bit) or `.exr` with `Write Heightmap`; Paint overrides
+remain session-only and are discarded by a World reload.
+
+Terrain `TR_*.json` tabs are editable AssetDocuments rather than read-only JSON: top-level
+geometry/LOD/page fields and the layer table use typed `terrain.modify` changes with revision
+gating, and Save/Revert/Reload go through `terrain.save`/`terrain.revert`/`terrain.reload`.
+The TR page previews PNG/JPG/BMP/TGA heightmaps through RmlUi; EXR is marked unavailable.
+Layer texture image previews are still not implemented.
 MI tabs request `PreviewMaterial`, using the formal preview ball with an instance-only
 material binding in `SC_model_preview`. The material image supplies the viewport rectangle
 and uses UI-owned, generation-guarded orbit/pan/zoom input, just like the model image.

@@ -40,7 +40,8 @@ float ReadPixel(const HostImage& image, uint32_t x, uint32_t y)
         return reinterpret_cast<const float*>(row)[static_cast<size_t>(x) * 4];
     default:
         throw std::runtime_error(
-            "Terrain heightmap pixel format is not supported; use RGBA EXR/HDR float or 8-bit grayscale/RGBA");
+            "Terrain heightmap pixel format is not supported; use 16-bit "
+            "grayscale PNG, RGBA EXR/HDR float, or 8-bit grayscale/RGBA");
     }
 }
 

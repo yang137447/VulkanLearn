@@ -234,6 +234,39 @@ TerrainTileCandidateList BuildTileCandidates(
         if (heightOverlaps && slopeOverlaps)
             tile.layerIds.push_back(static_cast<uint8_t>(layer));
     }
+    // Paint 覆盖可以让高度/坡度窗口外的层重新参与；候选表必须包含这些层，
+    // 否则 BakeTile 根本不会计算它们的覆盖权重。
+    if (plan.layerPaint && !plan.layerPaint->Empty())
+    {
+        constexpr uint32_t PaintSamples = 16;
+        for (size_t layer = 0; layer < plan.desc.layers.size(); ++layer)
+        {
+            if (std::find(tile.layerIds.begin(), tile.layerIds.end(),
+                static_cast<uint8_t>(layer)) != tile.layerIds.end())
+                continue;
+            bool painted = false;
+            for (uint32_t sampleZ = 0; sampleZ < PaintSamples && !painted; ++sampleZ)
+            {
+                for (uint32_t sampleX = 0; sampleX < PaintSamples && !painted; ++sampleX)
+                {
+                    const float u =
+                        (static_cast<float>(tileX * tileResolution) +
+                         (static_cast<float>(sampleX) + 0.5f) *
+                             static_cast<float>(tileResolution) / PaintSamples) /
+                        static_cast<float>(resolution);
+                    const float v =
+                        (static_cast<float>(tileZ * tileResolution) +
+                         (static_cast<float>(sampleZ) + 0.5f) *
+                             static_cast<float>(tileResolution) / PaintSamples) /
+                        static_cast<float>(resolution);
+                    painted = plan.layerPaint->HasPaint(
+                        static_cast<uint32_t>(layer), u, v);
+                }
+            }
+            if (painted)
+                tile.layerIds.push_back(static_cast<uint8_t>(layer));
+        }
+    }
     if (tile.layerIds.empty())
         tile.layerIds.push_back(0);
     return tile;
@@ -271,7 +304,12 @@ void BakeTile(
 
             weights.clear();
             for (uint8_t layerId : tile.layerIds)
-                weights.push_back(LayerWeight(plan.desc.layers[layerId], layerId, state));
+            {
+                float weight = LayerWeight(plan.desc.layers[layerId], layerId, state);
+                if (plan.layerPaint)
+                    weight = plan.layerPaint->Blend(layerId, u, v, weight);
+                weights.push_back(std::max(0.0f, weight));
+            }
             uint8_t ids[TopLayerCount];
             uint8_t texelWeights[TopLayerCount];
             SelectTop4(weights, tile.layerIds, ids, texelWeights);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "world/worldSnapshotBuilder.h"
 #include "script/scriptScene.h"
 #include "script/scriptComponents.h"
+#include "terrain/terrainAssetTypes.h"
 
 namespace VL
 {
@@ -22,8 +24,9 @@ namespace
 using EditorUi::EditorSceneActorSnapshot;
 using EditorUi::EditorSceneActorType;
 
-// 一个场景对象（sceneObjectIdentity）聚合出的 mesh actor：section 按 World meshObjects
-// 的键（对象名）排序，保证多 section 模型的行顺序不依赖 unordered_map 的遍历顺序。
+// 一个场景对象（sceneObjectIdentity）聚合出的 mesh/terrain actor：section 按 World
+// meshObjects 的键（对象名）排序，保证多 section 模型的行顺序不依赖 unordered_map
+// 的遍历顺序。
 struct MeshActorGroup
 {
     std::string sceneObjectIdentity;
@@ -35,13 +38,17 @@ std::string SceneObjectIdentity(const WorldMeshObject& object, const std::string
     return MeshSceneObjectIdentity(object, objectName);
 }
 
-std::vector<MeshActorGroup> CollectMeshGroups(const World& world)
+std::vector<MeshActorGroup> CollectMeshGroups(const World& world, bool terrain)
 {
     std::map<std::string, MeshActorGroup> sorted;
     for (const auto& entry : world.GetMeshObjects())
     {
-        MeshActorGroup& group = sorted[SceneObjectIdentity(entry.second, entry.first)];
-        group.sceneObjectIdentity = SceneObjectIdentity(entry.second, entry.first);
+        // 地形在 World 中仍是 chunk mesh；isTerrain 只决定编辑器 actor 归组，
+        // 避免同一场景对象同时产生 Mesh 与 Terrain 两行。
+        if (entry.second.isTerrain != terrain) continue;
+        const std::string identity = SceneObjectIdentity(entry.second, entry.first);
+        MeshActorGroup& group = sorted[identity];
+        group.sceneObjectIdentity = identity;
         group.sections.push_back({entry.first, &entry.second});
     }
 
@@ -56,13 +63,14 @@ std::vector<MeshActorGroup> CollectMeshGroups(const World& world)
     return groups;
 }
 
-EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup& group)
+EditorSceneActorSnapshot BuildMeshLikeActor(
+    const World& world, const MeshActorGroup& group, EditorSceneActorType type)
 {
     EditorSceneActorSnapshot actor;
-    actor.type = EditorSceneActorType::Mesh;
+    actor.type = type;
     actor.worldGeneration = world.GetGeneration();
     actor.scenePath = world.GetScenePath();
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::Mesh, group.sceneObjectIdentity);
+    actor.identity = EditorUi::SceneActorIdentity(type, group.sceneObjectIdentity);
     actor.displayName = group.sceneObjectIdentity;
     actor.sceneObjectIdentity = group.sceneObjectIdentity;
     if (!group.sections.empty())
@@ -70,6 +78,8 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         actor.position = group.sections.front().second->scenePosition;
         actor.rotation = group.sections.front().second->sceneRotation;
         actor.scale = group.sections.front().second->sceneScale;
+        if (type == EditorSceneActorType::Terrain)
+            actor.terrainAssetPath = group.sections.front().second->terrainAssetPath;
     }
     actor.sections.reserve(group.sections.size());
     for (const auto& entry : group.sections)
@@ -89,13 +99,35 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
-    // 与渲染快照仍画出这些 section 的事实一致。写入端
-    // （World::SetMeshSceneObjectVisible）按同一身份一次写全所有 section，
-    // 因此这个"任一可见"的读数在点击之后与整行状态必然一致。
+    // 与渲染快照仍画出这些 section 的事实一致。写入端按 isTerrain 选择
+    // SetMeshSceneObjectVisible 或 SetTerrainSceneObjectVisible，并一次写全
+    // 同类型的所有 section，因此这个"任一可见"读数在点击后与整行状态一致。
     actor.visible = std::any_of(group.sections.begin(), group.sections.end(),
         [](const auto& entry) { return entry.second->visible; });
     // 模型级 id 取排序后的第一个 section：选择时整模型高亮走的是同一个 RuntimeId。
     actor.meshObjectId = actor.sections.empty() ? 0 : actor.sections.front().objectId;
+    return actor;
+}
+
+EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup& group)
+{
+    return BuildMeshLikeActor(world, group, EditorSceneActorType::Mesh);
+}
+
+EditorSceneActorSnapshot BuildTerrainActor(const World& world, const MeshActorGroup& group)
+{
+    EditorSceneActorSnapshot actor =
+        BuildMeshLikeActor(world, group, EditorSceneActorType::Terrain);
+    // placementId 与大纲稳定身份同源：terrain|<scene object name>。同一 TR 多次
+    // 摆放时不能按 assetPath 选错计划，因此这里只按 placementId 匹配。
+    for (const TerrainCollisionInstance& instance : world.GetTerrainCollisionInstances())
+        if (instance.placementId == actor.identity)
+        {
+            actor.terrainPlan = std::make_shared<const TerrainBuildPlan>(instance.plan);
+            if (actor.terrainAssetPath.empty())
+                actor.terrainAssetPath = instance.plan.desc.assetPath;
+            break;
+        }
     return actor;
 }
 
@@ -205,9 +237,12 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
 {
     std::vector<EditorSceneActorSnapshot> actors;
 
-    for (const MeshActorGroup& group : CollectMeshGroups(world))
+    for (const MeshActorGroup& group : CollectMeshGroups(world, false))
         if (group.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
             actors.push_back(BuildMeshActor(world, group));
+    for (const MeshActorGroup& group : CollectMeshGroups(world, true))
+        if (group.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
+            actors.push_back(BuildTerrainActor(world, group));
 
     auto declarations = world.GetScriptBlueprints();
     for (const auto& state : world.GetScriptBlueprintStates())

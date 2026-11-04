@@ -115,6 +115,10 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Enter: return Rml::Input::KI_RETURN;
     case PlatformKey::Escape: return Rml::Input::KI_ESCAPE;
     case PlatformKey::A: return Rml::Input::KI_A;
+    case PlatformKey::Q: return Rml::Input::KI_Q;
+    case PlatformKey::W: return Rml::Input::KI_W;
+    case PlatformKey::E: return Rml::Input::KI_E;
+    case PlatformKey::R: return Rml::Input::KI_R;
     case PlatformKey::S: return Rml::Input::KI_S;
     case PlatformKey::C: return Rml::Input::KI_C;
     case PlatformKey::V: return Rml::Input::KI_V;
@@ -469,6 +473,7 @@ bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
         mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
         materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
         materialInstanceEditorPanel->IsWorkspaceDragging() ||
+        materialInstanceEditorPanel->IsTerrainSculptActive() ||
         !ContainsViewportPoint(sceneViewportRect, mouseX, mouseY))
     {
         return false;
@@ -592,6 +597,7 @@ bool UiSubsystem::SelectSceneObjectFromPick(
     modelSnapshot.objectId = selection.modelContext.objectId;
     modelSnapshot.displayName = selection.modelContext.displayName;
     modelSnapshot.objectIdentity = selection.modelContext.objectIdentity;
+    modelSnapshot.actorIdentity = selection.modelContext.actorIdentity;
     modelSnapshot.materials.reserve(selection.modelContext.materials.size());
     for (const Editor::Selection::MaterialInstanceModelMaterial& material :
          selection.modelContext.materials)
@@ -607,8 +613,10 @@ bool UiSubsystem::SelectSceneObjectFromPick(
     selectedModelMaterials = std::move(modelSnapshot);
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     // 视口拾取与大纲行共用同一份选中态：拾取到的网格在大纲里也要高亮。
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    selectedActorIdentity = selection.modelContext.actorIdentity.empty()
+        ? EditorUi::SceneActorIdentity(
+            EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity)
+        : selection.modelContext.actorIdentity;
     if (selection.objectIdentity.rfind("__blueprint/", 0) == 0)
     {
         const auto id = selection.objectIdentity.substr(std::string_view("__blueprint/").size());
@@ -631,6 +639,7 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
         modelSnapshot.objectId = model.objectId;
         modelSnapshot.displayName = model.displayName;
         modelSnapshot.objectIdentity = model.objectIdentity;
+        modelSnapshot.actorIdentity = model.actorIdentity;
         modelSnapshot.materials.reserve(model.materials.size());
         for (const Editor::Selection::MaterialInstanceModelMaterial& material :
              model.materials)
@@ -665,7 +674,18 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
         selectedMaterialSlotIndex.reset();
         return;
     }
+    // 渲染侧模型来自 AggregateSceneModel；保留 Outliner 已写入的 actorIdentity，
+    // 避免地形材质槽刷新把 terrain|... 覆盖回 mesh|...。
+    const std::string previousActorIdentity =
+        selectedModelMaterials->actorIdentity;
+    const RuntimeId previousObjectId = selectedModelMaterials->objectId;
+    const uint64_t previousGeneration =
+        selectedModelMaterials->worldGeneration;
     selectedModelMaterials = *selected;
+    if (selectedModelMaterials->actorIdentity.empty() &&
+        selectedModelMaterials->objectId == previousObjectId &&
+        selectedModelMaterials->worldGeneration == previousGeneration)
+        selectedModelMaterials->actorIdentity = previousActorIdentity;
 }
 
 // 大纲快照逐帧替换：只保存不可变数组的共享指针，选择态按稳定身份保留，
@@ -741,6 +761,7 @@ bool UiSubsystem::RequestModelSelection(
     modelSnapshot.objectId = model.objectId;
     modelSnapshot.displayName = model.displayName;
     modelSnapshot.objectIdentity = model.objectIdentity;
+    modelSnapshot.actorIdentity = model.actorIdentity;
     modelSnapshot.materials.reserve(model.materials.size());
     for (const Editor::Selection::MaterialInstanceModelMaterial& material : model.materials)
     {
@@ -755,8 +776,10 @@ bool UiSubsystem::RequestModelSelection(
     selectedMaterialSlotIndex.reset();
     pendingMaterialInstanceSelection.reset();
     pendingMaterialInstanceModelSelection = model;
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
+    selectedActorIdentity = model.actorIdentity.empty()
+        ? EditorUi::SceneActorIdentity(
+            EditorUi::EditorSceneActorType::Mesh, model.objectIdentity)
+        : model.actorIdentity;
     pendingSceneSelectionClear = false;
     return true;
 }
@@ -774,8 +797,10 @@ bool UiSubsystem::RequestMaterialSelection(
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection = selection;
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    selectedActorIdentity = selection.modelContext.actorIdentity.empty()
+        ? EditorUi::SceneActorIdentity(
+            EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity)
+        : selection.modelContext.actorIdentity;
     pendingSceneSelectionClear = false;
     return true;
 }
@@ -1787,6 +1812,17 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     if (resourceEditor) sceneViewportInputActive = false;
     const Rml::Element* focus = rmlContext->GetFocusElement();
     bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
+    // 关卡 Gizmo 一旦开始拖动，鼠标事件即使离开视口图像也归这次手势。
+    // 必须在 sceneHit/游戏输入分流之前消费，否则拖动会变成相机移动。
+    if (materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsSceneGizmoDragging() &&
+        (event.type == PlatformEventType::MouseMove ||
+         event.type == PlatformEventType::MouseButtonDown ||
+         event.type == PlatformEventType::MouseButtonUp))
+    {
+        ProcessRuntimeUiEvent(event);
+        return true;
+    }
     switch (event.type)
     {
     case PlatformEventType::MouseMove:
@@ -1800,6 +1836,28 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         const bool sceneHit = materialInstanceEditorPanel != nullptr &&
             materialInstanceEditorPanel->IsSceneViewportElement(hit);
         const bool editorHit = hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit;
+        const char* sculptType = event.type == PlatformEventType::MouseMove ? "mousemove" :
+            event.type == PlatformEventType::MouseButtonDown ? "mousedown" :
+            event.type == PlatformEventType::MouseButtonUp ? "mouseup" : "";
+        const int sculptButton = event.mouseButton == PlatformMouseButton::Left ? 0 :
+            event.mouseButton == PlatformMouseButton::Right ? 1 :
+            event.mouseButton == PlatformMouseButton::Middle ? 2 : -1;
+        const bool sculptRoute = sceneHit ||
+            (materialInstanceEditorPanel != nullptr &&
+             materialInstanceEditorPanel->IsTerrainBrushStrokeActive());
+        if (sculptRoute && sculptType[0] != '\0' && materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->ProcessTerrainSculptPointer(
+                sculptType, sculptButton, event.mouseX, event.mouseY))
+        {
+            sceneViewportInputActive = false;
+            editorPointerCaptured = false;
+            return true;
+        }
+        if (event.type == PlatformEventType::MouseMove && !sceneHit &&
+            materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsTerrainSculptActive())
+            materialInstanceEditorPanel->ProcessTerrainSculptPointer(
+                "mouseleave", -1, event.mouseX, event.mouseY);
         if (ShouldReleaseScenePointerForEditor(event.type, editorHit))
             sceneViewportInputActive = false;
         const bool captured = editorPointerCaptured ||
@@ -1813,6 +1871,16 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
             {
                 ProcessRuntimeUiEvent(event);
                 return true;
+            }
+            // 左键先让编辑器文档处理一次：若命中 Gizmo，panel 会进入拖动；
+            // 未命中则继续走原有游戏输入/场景拾取路径。
+            if (event.type == PlatformEventType::MouseButtonDown &&
+                event.mouseButton == PlatformMouseButton::Left)
+            {
+                ProcessRuntimeUiEvent(event);
+                if (materialInstanceEditorPanel != nullptr &&
+                    materialInstanceEditorPanel->IsSceneGizmoDragging())
+                    return true;
             }
             // 图像属于 editor DOM，但内部场景输入归游戏；不让点击把焦点交给文档根节点。
             if (event.type == PlatformEventType::MouseButtonDown)

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +25,7 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/scriptPropertyControls.h"
+#include "editor/brush/brushProfile.h"
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/modelPreviewRequest.h"
@@ -32,12 +35,30 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "resource/image/hostImage.h"
+#include "terrain/terrainAssetTypes.h"
 #include "animation/motionDebug.h"
 
 namespace
 {
 using namespace VL;
 using namespace VL::EditorUi;
+
+class FakeTerrainLayerPreviewProvider final
+    : public VL::Editor::ITerrainLayerPreviewProvider
+{
+public:
+    VL::Editor::TerrainLayerPreviewPaths Get(
+        const TerrainAssetDesc&, size_t layerIndex) override
+    {
+        ++requestCount;
+        return layerIndex < layers.size() ? layers[layerIndex]
+                                          : VL::Editor::TerrainLayerPreviewPaths{};
+    }
+
+    std::vector<VL::Editor::TerrainLayerPreviewPaths> layers;
+    size_t requestCount = 0;
+};
 
 // 单 section、带有效材质实例的 mesh actor；字段组合与 World→快照的映射保持一致。
 EditorSceneActorSnapshot MeshActor(const std::string& name, uint64_t generation,
@@ -60,6 +81,109 @@ EditorSceneActorSnapshot MeshActor(const std::string& name, uint64_t generation,
     section.materialSlotIndex = 0;
     section.materialSlotName = "Surface";
     actor.sections.push_back(std::move(section));
+    return actor;
+}
+
+EditorSceneActorSnapshot TerrainActor(const std::string& name, uint64_t generation,
+    RuntimeId objectId = 21)
+{
+    EditorSceneActorSnapshot actor = MeshActor(name, generation, objectId);
+    actor.type = EditorSceneActorType::Terrain;
+    actor.identity = SceneActorIdentity(EditorSceneActorType::Terrain, name);
+    actor.terrainAssetPath = "Maps/SC_test/Terrains/TR_landscape.json";
+    return actor;
+}
+
+std::shared_ptr<const TerrainBuildPlan> FlatTerrainPlan(const std::string& name)
+{
+    auto image = std::make_shared<HostImage>();
+    image->width = 2;
+    image->height = 2;
+    image->channels = 1;
+    image->format = HostImage::PixelFormat::R8_UNORM;
+    image->data = {0, 0, 0, 0};
+    auto plan = std::make_shared<TerrainBuildPlan>();
+    plan->desc.assetPath = "Maps/SC_test/Terrains/TR_landscape.json";
+    plan->desc.name = name;
+    plan->desc.size = Eigen::Vector2f(1000.0f, 1000.0f);
+    plan->desc.heightScale = 100.0f;
+    plan->desc.heightOffset = 0.0f;
+    plan->desc.gridResolution = 2;
+    plan->desc.chunkQuads = 1;
+    plan->heightmap = image;
+    plan->placementId = "terrain|" + name;
+    return plan;
+}
+
+EditorSceneActorSnapshot SculptTerrainActor(const std::string& name, uint64_t generation)
+{
+    EditorSceneActorSnapshot actor = TerrainActor(name, generation);
+    actor.terrainPlan = FlatTerrainPlan(name);
+    actor.terrainAssetPath = actor.terrainPlan->desc.assetPath;
+    return actor;
+}
+
+EditorSceneActorSnapshot LayeredTerrainActor(const std::string& name, uint64_t generation)
+{
+    EditorSceneActorSnapshot actor = SculptTerrainActor(name, generation);
+    auto plan = std::make_shared<TerrainBuildPlan>(*actor.terrainPlan);
+    TerrainLayerDesc grass;
+    grass.name = "Grass";
+    grass.key = "terrain.grass";
+    grass.heightMin = 0.0f;
+    grass.heightMax = 0.35f;
+    grass.slopeMin = 0.0f;
+    grass.slopeMax = 25.0f;
+    grass.uvScale = 2.0f;
+    grass.sourceSet = 1;
+    grass.avgColor = Eigen::Vector3f(0.12f, 0.34f, 0.08f);
+    TerrainLayerDesc rock;
+    rock.name = "Rock";
+    rock.key = "terrain.rock";
+    rock.heightMin = 0.35f;
+    rock.heightMax = 1.0f;
+    rock.slopeMin = 25.0f;
+    rock.slopeMax = 90.0f;
+    rock.uvScale = 1.5f;
+    rock.sourceSet = 2;
+    rock.avgColor = Eigen::Vector3f(0.18f, 0.18f, 0.18f);
+    plan->desc.layers = {grass, rock};
+    actor.terrainPlan = std::move(plan);
+    return actor;
+}
+
+EditorSceneActorSnapshot ManyLayerTerrainActor(const std::string& name, uint64_t generation,
+    size_t layerCount)
+{
+    EditorSceneActorSnapshot actor = SculptTerrainActor(name, generation);
+    auto plan = std::make_shared<TerrainBuildPlan>(*actor.terrainPlan);
+    plan->desc.layers.resize(layerCount);
+    for (size_t index = 0; index < layerCount; ++index)
+    {
+        plan->desc.layers[index].name = "Layer " + std::to_string(index);
+        plan->desc.layers[index].key = "terrain.layer." + std::to_string(index);
+        plan->desc.layers[index].sourceSet = static_cast<uint32_t>(index % 8);
+    }
+    actor.terrainPlan = std::move(plan);
+    return actor;
+}
+
+int TerrainLayerGridColumnsForTest(Rml::Element* scroll)
+{
+    const float width = scroll->GetBox().GetSize(Rml::BoxArea::Content).x;
+    return std::max(1, static_cast<int>(std::floor(width / 150.0f)));
+}
+
+EditorSceneActorSnapshot EnvironmentActor(const std::string& name, uint64_t generation)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Environment;
+    actor.worldGeneration = generation;
+    actor.scenePath = "Maps/SC_test/SC_test.json";
+    actor.identity = SceneActorIdentity(EditorSceneActorType::Environment, name);
+    actor.displayName = name;
+    actor.environment.type = EnvironmentType::ProceduralSky;
+    actor.environment.intensity = 1.0f;
     return actor;
 }
 
@@ -335,6 +459,95 @@ protected:
         auto* surface = document->GetElementById("blueprint-asset-preview-surface");
         const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
         return surface->GetAbsoluteOffset(Rml::BoxArea::Content) + Rml::Vector2f(size.x * x, size.y * y);
+    }
+    Rml::Vector2f SceneViewportAbsolute(const Eigen::Vector2f& pixel) const
+    {
+        auto* image = document->GetElementById("editor-viewport-image");
+        const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+        return Rml::Vector2f(offset.x + pixel.x(), offset.y + pixel.y());
+    }
+    void SelectSceneActorForGizmo(EditorSceneActorSnapshot actor)
+    {
+        snapshot.activeDocument.reset();
+        snapshot.documentTabs.clear();
+        snapshot.selectedDocumentPath.clear();
+        actors.clear();
+        EditorSceneActorSnapshot camera = CameraBlueprint("Camera");
+        camera.camera.position = {0, 0, 500};
+        camera.camera.forward = {0, 0, -1};
+        camera.camera.right = {1, 0, 0};
+        camera.camera.up = {0, 1, 0};
+        camera.camera.clipNear = 1;
+        camera.camera.clipFar = 10000;
+        AddActor(std::move(camera));
+        const std::string identity = actor.identity;
+        AddActor(std::move(actor));
+        snapshot.selectedActorIdentity = identity;
+        panel->Build(snapshot);
+        context->Update();
+        runtimeSink.actions.clear();
+        sink.commands.clear();
+    }
+    void SelectSceneActorForSculpt(EditorSceneActorSnapshot actor)
+    {
+        snapshot.activeDocument.reset();
+        snapshot.documentTabs.clear();
+        snapshot.selectedDocumentPath.clear();
+        actors.clear();
+        EditorSceneActorSnapshot camera = CameraBlueprint("Camera");
+        camera.camera.position = {0, 300, 500};
+        camera.camera.forward = Eigen::Vector3f(0, -300, -500).normalized();
+        camera.camera.right = Eigen::Vector3f::UnitX();
+        camera.camera.up = camera.camera.right.cross(camera.camera.forward).normalized();
+        camera.camera.clipNear = 1;
+        camera.camera.clipFar = 10000;
+        AddActor(std::move(camera));
+        const std::string identity = actor.identity;
+        AddActor(std::move(actor));
+        snapshot.selectedActorIdentity = identity;
+        panel->Build(snapshot);
+        context->Update();
+        runtimeSink.actions.clear();
+        sink.commands.clear();
+    }
+    Rml::Vector2f SceneViewportCenter() const
+    {
+        auto* image = document->GetElementById("editor-viewport-image");
+        const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+        return Rml::Vector2f(offset.x + size.x * 0.5f, offset.y + size.y * 0.5f);
+    }
+    UiAction BeginTerrainStrokeAtCenter()
+    {
+        runtimeSink.actions.clear();
+        const Rml::Vector2f center = SceneViewportCenter();
+        MovePointer(center);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseButtonUp(0, 0);
+        Refresh();
+        for (const UiAction& action : runtimeSink.actions)
+        {
+            if (action.type == UiActionType::TerrainEdit &&
+                action.terrainBrush.operation == TerrainBrushOperation::BeginStroke)
+                return action;
+        }
+        return {};
+    }
+    UiAction BeginPaintStrokeAtCenter()
+    {
+        runtimeSink.actions.clear();
+        const Rml::Vector2f center = SceneViewportCenter();
+        MovePointer(center);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseButtonUp(0, 0);
+        Refresh();
+        for (const UiAction& action : runtimeSink.actions)
+        {
+            if (action.type == UiActionType::TerrainPaint &&
+                action.terrainPaint.operation == TerrainBrushOperation::BeginStroke)
+                return action;
+        }
+        return {};
     }
     void PublishBlueprintLogicComponents()
     {
@@ -669,6 +882,11 @@ protected:
     Rml::ElementFormControl* Control(const std::string& id)
     {
         return dynamic_cast<Rml::ElementFormControl*>(document->GetElementById(id));
+    }
+    float FieldNumber(const std::string& id)
+    {
+        auto* control = Control(id);
+        return control == nullptr ? 0.0f : std::stof(control->GetValue());
     }
     void ExpectSliderRange(const std::string& componentId, float minValue, float maxValue)
     {
@@ -1756,6 +1974,15 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSele
     EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
     EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
     EXPECT_TRUE(sink.commands.empty());
+    // Publishing the viewport schedules a debounced PreviewBlueprint request;
+    // it is not part of the viewport pick and must not hide a pick-generated action.
+    runtimeSink.actions.erase(
+        std::remove_if(runtimeSink.actions.begin(), runtimeSink.actions.end(),
+            [](const UiAction& action)
+            {
+                return action.type == UiActionType::PreviewBlueprint;
+            }),
+        runtimeSink.actions.end());
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
@@ -1927,6 +2154,34 @@ TEST_F(EditorUiTest, SceneUndoRedoFollowHistoryAvailabilityAndAreDisabledDuringP
     EXPECT_EQ(runtimeSink.actions.size(), 2u);
 }
 
+TEST_F(EditorUiTest, GlobalUndoRedoRouteToSceneHistoryWhenNoAssetContextIsActive)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.scripts.worldGeneration = 42;
+    view.scripts.canUndo = true;
+    view.scripts.canRedo = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+
+    auto* undo = document->GetElementById("workspace-undo");
+    auto* redo = document->GetElementById("workspace-redo");
+    ASSERT_NE(undo, nullptr);
+    ASSERT_NE(redo, nullptr);
+    EXPECT_FALSE(undo->HasAttribute("disabled"));
+    EXPECT_FALSE(redo->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#workspace-undo");
+    Click("#workspace-redo");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::UndoSceneEdit);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::RedoSceneEdit);
+}
+
 TEST_F(EditorUiTest, BlueprintAssetUndoRedoTargetTheActiveDocumentRevisionWithoutSceneActions)
 {
     OpenBlueprintAsset();
@@ -1935,7 +2190,9 @@ TEST_F(EditorUiTest, BlueprintAssetUndoRedoTargetTheActiveDocumentRevisionWithou
     Refresh();
     EXPECT_FALSE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
     EXPECT_FALSE(document->GetElementById("menu-edit-redo")->HasAttribute("disabled"));
-    Click("#menu-edit-undo");
+    EXPECT_FALSE(document->GetElementById("workspace-undo")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("workspace-redo")->HasAttribute("disabled"));
+    Click("#workspace-undo");
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::UndoBlueprintDocument);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
@@ -1944,7 +2201,7 @@ TEST_F(EditorUiTest, BlueprintAssetUndoRedoTargetTheActiveDocumentRevisionWithou
     // 权威快照确认版本后，redo 必须使用新版本，而非撤销请求之前的版本。
     snapshot.blueprintDocuments[0].documentRevision = 12;
     Refresh();
-    Click("#menu-edit-redo");
+    Click("#workspace-redo");
     ASSERT_EQ(sink.commands.size(), 2u);
     EXPECT_EQ(sink.commands[1].type, EditorCommandType::RedoBlueprintDocument);
     EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 12u);
@@ -1961,6 +2218,8 @@ TEST_F(EditorUiTest, BlueprintAssetHistoryAvailabilityIsIndependentFromSceneHist
     Refresh();
     EXPECT_TRUE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
     EXPECT_TRUE(document->GetElementById("menu-edit-redo")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("workspace-undo")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("workspace-redo")->HasAttribute("disabled"));
     Click("#menu-edit-undo");
     Click("#menu-edit-redo");
     EXPECT_TRUE(sink.commands.empty());
@@ -5623,13 +5882,21 @@ TEST_F(EditorUiTest, EditUndoRedoArePresentButDisabled)
     context->Update();
     auto* undo = document->GetElementById("menu-edit-undo");
     auto* redo = document->GetElementById("menu-edit-redo");
+    auto* workspaceUndo = document->GetElementById("workspace-undo");
+    auto* workspaceRedo = document->GetElementById("workspace-redo");
     ASSERT_NE(undo, nullptr);
     ASSERT_NE(redo, nullptr);
+    ASSERT_NE(workspaceUndo, nullptr);
+    ASSERT_NE(workspaceRedo, nullptr);
     EXPECT_TRUE(undo->HasAttribute("disabled"));
     EXPECT_TRUE(redo->HasAttribute("disabled"));
+    EXPECT_TRUE(workspaceUndo->HasAttribute("disabled"));
+    EXPECT_TRUE(workspaceRedo->HasAttribute("disabled"));
     // 没有 Scene 历史时两个入口禁用，不能产生空撤销请求。
     undo->DispatchEvent("click", {});
     redo->DispatchEvent("click", {});
+    workspaceUndo->DispatchEvent("click", {});
+    workspaceRedo->DispatchEvent("click", {});
     EXPECT_TRUE(sink.commands.empty());
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
@@ -5686,10 +5953,15 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
             if (ancestor == menubar) { insideMenu = true; break; }
         if (!insideMenu) ++outside;
     }
-    EXPECT_EQ(outside, 8) << "expected Save / Reset Layout / Immersive Mode and Play / Pause / Stop / Reload C# / Compile C#; "
-                             "if this changed, re-check the assertions above are not vacuous";
+    EXPECT_EQ(outside, 10) << "expected Undo / Redo / Save / Reset Layout / Immersive Mode and "
+                              "Play / Pause / Stop / Reload C# / Compile C#; "
+                              "if this changed, re-check the assertions above are not vacuous";
     EXPECT_EQ(toolbar->QuerySelector("[data-action=save-all]")->GetId(), "menu-file-save");
     EXPECT_EQ(document->GetElementById("workspace-save")->GetAttribute<std::string>("data-action", ""), "save-all");
+    EXPECT_EQ(document->GetElementById("workspace-undo")->GetAttribute<std::string>("data-action", ""), "workspace-undo");
+    EXPECT_EQ(document->GetElementById("workspace-redo")->GetAttribute<std::string>("data-action", ""), "workspace-redo");
+    EXPECT_EQ(document->GetElementById("workspace-undo")->GetAttribute<std::string>("title", ""), "Undo (Ctrl+Z)");
+    EXPECT_EQ(document->GetElementById("workspace-redo")->GetAttribute<std::string>("title", ""), "Redo (Ctrl+Shift+Z)");
     EXPECT_NE(toolbar->QuerySelector("[data-action=workspace-reset]"), nullptr);
 }
 
@@ -6317,7 +6589,7 @@ TEST_F(EditorUiTest, TransformToolsChangeNoCommandAndStayCachedOnStaticFrames)
 {
     Click("#viewport-tool-rotate");
     context->Update();
-    // 没有 gizmo 也没有 transform 编辑后端：工具与坐标系只驱动高亮，不提交任何命令。
+    // 切工具只改 Gizmo 模式；没有拖动时不得提交 Actor 命令。
     EXPECT_EQ(panel->ViewportTransformTool(), "rotate");
     EXPECT_TRUE(sink.commands.empty());
     EXPECT_TRUE(runtimeSink.actions.empty());
@@ -6331,6 +6603,459 @@ TEST_F(EditorUiTest, TransformToolsChangeNoCommandAndStayCachedOnStaticFrames)
     EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
     EXPECT_TRUE(document->GetElementById("viewport-tool-rotate")->IsClassSet("active"));
     EXPECT_TRUE(document->GetElementById("viewport-view-lit")->IsClassSet("active"));
+}
+
+TEST_F(EditorUiTest, SceneGizmoToolbarDrivesModeAndTerrainLocalAxes)
+{
+    EditorSceneActorSnapshot terrain = TerrainActor("Landscape", 1);
+    terrain.rotation = Eigen::Vector3f(0, 45, 0);
+    SelectSceneActorForGizmo(std::move(terrain));
+
+    Click("#viewport-tool-move");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+    EXPECT_EQ(panel->SceneViewportGizmo().mode, BlueprintGizmoMode::Translate);
+    EXPECT_TRUE(panel->SceneViewportGizmo().axes[0].worldAxis.isApprox(
+        Eigen::Vector3f::UnitX(), 1.0e-4f));
+
+    Click("#viewport-tool-rotate");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+    EXPECT_EQ(panel->SceneViewportGizmo().mode, BlueprintGizmoMode::Rotate);
+
+    Click("#viewport-space-local");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+    EXPECT_FALSE(panel->SceneViewportGizmo().axes[0].worldAxis.isApprox(
+        Eigen::Vector3f::UnitX(), 1.0e-3f));
+    Click("#viewport-space-world");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+    EXPECT_TRUE(panel->SceneViewportGizmo().axes[0].worldAxis.isApprox(
+        Eigen::Vector3f::UnitX(), 1.0e-4f));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, SceneGizmoIsHiddenForEnvironmentActors)
+{
+    SelectSceneActorForGizmo(EnvironmentActor("Sky", 1));
+    Click("#viewport-tool-move");
+    Refresh();
+    EXPECT_FALSE(panel->SceneViewportGizmo().valid);
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, SceneGizmoDragPreviewsThenCommitsOneTransform)
+{
+    SelectSceneActorForGizmo(MeshActor("Model", 1));
+    Click("#viewport-tool-move");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+    const auto& axis = panel->SceneViewportGizmo().axes[0];
+    ASSERT_TRUE(axis.visible);
+    ASSERT_FALSE(axis.lines.empty());
+    const auto& line = axis.lines.front();
+    const Rml::Vector2f start = SceneViewportAbsolute((line.begin + line.end) * 0.5f);
+    MovePointer(start);
+    context->ProcessMouseButtonDown(0, 0);
+    ASSERT_TRUE(panel->IsSceneGizmoDragging());
+    MovePointer(start + Rml::Vector2f(60, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+
+    size_t previews = 0;
+    size_t commits = 0;
+    UiAction commit;
+    for (const auto& action : runtimeSink.actions)
+    {
+        if (action.type != UiActionType::SetActorProperty ||
+            action.actorProperty.property != EditorActorProperty::Transform) continue;
+        if (action.actorProperty.preview) ++previews;
+        else { ++commits; commit = action; }
+    }
+    EXPECT_GE(previews, 1u);
+    ASSERT_EQ(commits, 1u);
+    EXPECT_EQ(commit.actorProperty.identity, "mesh|Model");
+    EXPECT_NE(commit.actorProperty.transformPosition[0], 0.0f);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, SceneGizmoCancelRestoresOriginalTransformWithoutADocumentEdit)
+{
+    SelectSceneActorForGizmo(MeshActor("Model", 1));
+    Click("#viewport-tool-move");
+    Refresh();
+    const auto& axis = panel->SceneViewportGizmo().axes[0];
+    ASSERT_TRUE(axis.visible);
+    ASSERT_FALSE(axis.lines.empty());
+    const auto& line = axis.lines.front();
+    const Rml::Vector2f start = SceneViewportAbsolute((line.begin + line.end) * 0.5f);
+    MovePointer(start);
+    context->ProcessMouseButtonDown(0, 0);
+    ASSERT_TRUE(panel->IsSceneGizmoDragging());
+    MovePointer(start + Rml::Vector2f(60, 0));
+    panel->CancelModelPreviewDrag();
+    Refresh();
+
+    EXPECT_FALSE(panel->IsSceneGizmoDragging());
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    const auto& restore = runtimeSink.actions.back();
+    EXPECT_EQ(restore.type, UiActionType::SetActorProperty);
+    EXPECT_TRUE(restore.actorProperty.preview);
+    EXPECT_EQ(restore.actorProperty.property, EditorActorProperty::Transform);
+    EXPECT_EQ(restore.actorProperty.transformPosition, (std::array<float, 3>{0, 0, 0}));
+    EXPECT_EQ(restore.actorProperty.transformRotation, (std::array<float, 3>{0, 0, 0}));
+    EXPECT_EQ(restore.actorProperty.transformScale, (std::array<float, 3>{1, 1, 1}));
+    for (const auto& action : runtimeSink.actions)
+        if (action.type == UiActionType::SetActorProperty &&
+            action.actorProperty.property == EditorActorProperty::Transform)
+            EXPECT_TRUE(action.actorProperty.preview);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeToolbarShowsSculptControlsAndDisablesPaintWithoutGizmo)
+{
+    SelectSceneActorForGizmo(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-move");
+    Refresh();
+    ASSERT_TRUE(panel->SceneViewportGizmo().valid);
+
+    Click("#viewport-tool-landscape");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("viewport-tool-landscape")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("viewport-landscape-controls")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("viewport-brush-settings")->IsVisible(false));
+    EXPECT_TRUE(document->GetElementById("terrain-mode-sculpt")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("viewport-landscape-paint")->HasAttribute("disabled"));
+    EXPECT_EQ(document->GetElementById("viewport-landscape-undo"), nullptr);
+    EXPECT_EQ(document->GetElementById("viewport-landscape-redo"), nullptr);
+    EXPECT_EQ(document->GetElementById("viewport-landscape-save"), nullptr);
+    ASSERT_NE(document->GetElementById("viewport-landscape-write"), nullptr);
+    EXPECT_FALSE(panel->SceneViewportGizmo().valid);
+    runtimeSink.actions.clear();
+    EXPECT_FALSE(document->GetElementById("workspace-undo")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("workspace-redo")->HasAttribute("disabled"));
+    Click("#workspace-undo");
+    Click("#workspace-redo");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainEdit);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.operation, TerrainBrushOperation::Undo);
+    EXPECT_EQ(runtimeSink.actions[1].terrainBrush.operation, TerrainBrushOperation::Redo);
+    EXPECT_TRUE(sink.commands.empty());
+
+    Click("#viewport-tool-landscape");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("viewport-landscape-controls")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("viewport-brush-settings")->IsVisible(false));
+    EXPECT_TRUE(document->GetElementById("terrain-mode-layers")->IsClassSet("active"));
+    EXPECT_FALSE(panel->SceneViewportGizmo().valid);
+    Click("#viewport-tool-move");
+    Refresh();
+    EXPECT_TRUE(panel->SceneViewportGizmo().valid);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeSculptPointerEmitsOneBeginApplyEndWithoutSceneCommands)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    const auto center = SceneViewportCenter();
+    MovePointer(center);
+    context->ProcessMouseButtonDown(0, 0);
+    MovePointer(center + Rml::Vector2f(20, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+
+    size_t begin = 0, apply = 0, end = 0, cancel = 0;
+    UiAction first;
+    for (const auto& action : runtimeSink.actions)
+    {
+        if (action.type == UiActionType::UndoSceneEdit || action.type == UiActionType::RedoSceneEdit)
+            ADD_FAILURE() << "Landscape Sculpt must not emit scene history actions";
+        if (action.type != UiActionType::TerrainEdit) continue;
+        if (first.type != UiActionType::TerrainEdit) first = action;
+        switch (action.terrainBrush.operation)
+        {
+        case TerrainBrushOperation::BeginStroke: ++begin; break;
+        case TerrainBrushOperation::ApplyBrush: ++apply; break;
+        case TerrainBrushOperation::EndStroke: ++end; break;
+        case TerrainBrushOperation::CancelStroke: ++cancel; break;
+        default: break;
+        }
+    }
+    EXPECT_EQ(begin, 1u);
+    EXPECT_GE(apply, 1u);
+    EXPECT_EQ(end, 1u);
+    EXPECT_EQ(cancel, 0u);
+    ASSERT_EQ(first.type, UiActionType::TerrainEdit);
+    EXPECT_EQ(first.terrainBrush.worldGeneration, 1u);
+    EXPECT_EQ(first.terrainBrush.placementId, "terrain|Landscape");
+    EXPECT_NEAR(first.terrainBrush.u, 0.5f, 0.1f);
+    EXPECT_NEAR(first.terrainBrush.v, 0.5f, 0.1f);
+    EXPECT_GT(first.terrainBrush.radiusUv, 0.0f);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapePaintEmitsLayerPaintActionsAndRoutesUndo)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    ASSERT_FALSE(document->GetElementById("viewport-landscape-paint")->HasAttribute("disabled"));
+    Click("#viewport-landscape-paint");
+    Refresh();
+    EXPECT_TRUE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("viewport-paint-settings")->IsVisible(false));
+    Click("#terrain-layer-card-1");
+    Refresh();
+
+    const auto center = SceneViewportCenter();
+    MovePointer(center);
+    context->ProcessMouseButtonDown(0, 0);
+    MovePointer(center + Rml::Vector2f(20, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+
+    size_t begin = 0, apply = 0, end = 0;
+    for (const auto& action : runtimeSink.actions)
+    {
+        if (action.type != UiActionType::TerrainPaint) continue;
+        EXPECT_EQ(action.terrainPaint.placementId, "terrain|Landscape");
+        EXPECT_EQ(action.terrainPaint.layerIndex, 1u);
+        EXPECT_FALSE(action.terrainPaint.erase);
+        if (action.terrainPaint.operation == TerrainBrushOperation::BeginStroke) ++begin;
+        if (action.terrainPaint.operation == TerrainBrushOperation::ApplyBrush) ++apply;
+        if (action.terrainPaint.operation == TerrainBrushOperation::EndStroke) ++end;
+    }
+    EXPECT_EQ(begin, 1u);
+    EXPECT_GE(apply, 1u);
+    EXPECT_EQ(end, 1u);
+
+    runtimeSink.actions.clear();
+    Click("#viewport-paint-erase");
+    Click("#workspace-undo");
+    Click("#workspace-redo");
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainPaint);
+    EXPECT_EQ(runtimeSink.actions[0].terrainPaint.operation, TerrainBrushOperation::Undo);
+    EXPECT_EQ(runtimeSink.actions[1].terrainPaint.operation, TerrainBrushOperation::Redo);
+}
+
+TEST_F(EditorUiTest, LandscapeWriteButtonSavesPaintAndFlipsItsLabel)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    auto* write = document->GetElementById("viewport-landscape-write");
+    ASSERT_NE(write, nullptr);
+    EXPECT_NE(write->GetInnerRML().find("Write Heightmap"), std::string::npos);
+    EXPECT_EQ(write->GetInnerRML().find("Save"), std::string::npos);
+
+    Click("#viewport-landscape-paint");
+    Refresh();
+    EXPECT_NE(write->GetInnerRML().find("Write Paint"), std::string::npos);
+
+    runtimeSink.actions.clear();
+    Click("#viewport-landscape-write");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainPaint);
+    EXPECT_EQ(runtimeSink.actions[0].terrainPaint.operation,
+        TerrainBrushOperation::SavePaint);
+    EXPECT_EQ(runtimeSink.actions[0].terrainPaint.placementId,
+        "terrain|Landscape");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeWriteButtonStillSavesHeightmapInSculptMode)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    auto* write = document->GetElementById("viewport-landscape-write");
+    ASSERT_NE(write, nullptr);
+    EXPECT_NE(write->GetInnerRML().find("Write Heightmap"), std::string::npos);
+
+    runtimeSink.actions.clear();
+    Click("#viewport-landscape-write");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainEdit);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.operation,
+        TerrainBrushOperation::SaveHeightmap);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.placementId,
+        "terrain|Landscape");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeEscCancelsStrokeAndLeavesTheToolActive)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    const auto center = SceneViewportCenter();
+    MovePointer(center);
+    context->ProcessMouseButtonDown(0, 0);
+    runtimeSink.actions.clear();
+    // EngineLoop 的 Esc 优先走 CancelBlueprintAssetDrag；这里验证同一入口会发
+    // CancelStroke，而不是 EndStroke 或 Scene Undo。
+    EXPECT_TRUE(panel->CancelBlueprintAssetDrag());
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainEdit);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.operation,
+        TerrainBrushOperation::CancelStroke);
+    EXPECT_TRUE(panel->IsTerrainSculptActive());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeStrokeCancelStillReachesEngineAfterSelectionClears)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    const auto center = SceneViewportCenter();
+    MovePointer(center);
+    context->ProcessMouseButtonDown(0, 0);
+    runtimeSink.actions.clear();
+
+    snapshot.selectedActorIdentity.clear();
+    snapshot.selectedModel.reset();
+    snapshot.selectedMaterialSlotIndex.reset();
+    Refresh();
+
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::TerrainEdit);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.operation,
+        TerrainBrushOperation::CancelStroke);
+    EXPECT_EQ(runtimeSink.actions[0].terrainBrush.placementId, "terrain|Landscape");
+    EXPECT_FALSE(panel->IsTerrainBrushStrokeActive());
+}
+
+TEST_F(EditorUiTest, LandscapeBrushRingTracksHitAndHidesOutsideOrWhenToolCloses)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    const auto center = SceneViewportCenter();
+    MovePointer(center);
+    Refresh();
+    EXPECT_TRUE(panel->TerrainBrushRingVisible());
+    EXPECT_TRUE(document->GetElementById("viewport-brush-ring")->IsVisible(true));
+    EXPECT_NEAR(panel->TerrainBrushUv().x(), 0.5f, 0.1f);
+    EXPECT_NEAR(panel->TerrainBrushUv().y(), 0.5f, 0.1f);
+
+    auto* image = document->GetElementById("editor-viewport-image");
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+    panel->ProcessTerrainSculptPointer("mousemove", -1, offset.x - 4.0f, offset.y - 4.0f);
+    Refresh();
+    EXPECT_FALSE(panel->TerrainBrushRingVisible());
+    EXPECT_FALSE(document->GetElementById("viewport-brush-ring")->IsVisible(true));
+
+    panel->ProcessTerrainSculptPointer("mousemove", -1, center.x, center.y);
+    Refresh();
+    ASSERT_TRUE(panel->TerrainBrushRingVisible());
+    Click("#viewport-tool-landscape");
+    Refresh();
+    EXPECT_FALSE(panel->TerrainBrushRingVisible());
+    EXPECT_FALSE(document->GetElementById("viewport-brush-ring")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, LandscapeBrushRingUsesSquareClassForSquarePresets)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Click("#viewport-tool-landscape");
+    Refresh();
+
+    auto* ring = document->GetElementById("viewport-brush-ring");
+    ASSERT_NE(ring, nullptr);
+    MovePointer(SceneViewportCenter());
+    Refresh();
+    ASSERT_TRUE(panel->TerrainBrushRingVisible());
+    EXPECT_FALSE(ring->IsClassSet("square"));
+
+    Click("[data-action=brush-library-select][data-brush-id=square]");
+    Refresh();
+    EXPECT_TRUE(ring->IsClassSet("square"));
+    Click("[data-action=brush-library-select][data-brush-id=soft-round]");
+    Refresh();
+    EXPECT_FALSE(ring->IsClassSet("square"));
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_FALSE(ring->IsClassSet("square"));
+    Click("[data-action=brush-library-select][data-brush-id=square-mask]");
+    Refresh();
+    EXPECT_TRUE(ring->IsClassSet("square"));
+    Click("[data-action=brush-library-select][data-brush-id=soft-mask]");
+    Refresh();
+    EXPECT_FALSE(ring->IsClassSet("square"));
+}
+
+TEST_F(EditorUiTest, LandscapeSculptConsumesLeftGestureButLeavesRightAndWheelAlone)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    const auto center = SceneViewportCenter();
+    EXPECT_TRUE(panel->ProcessTerrainSculptPointer(
+        "mousedown", 0, center.x, center.y));
+    EXPECT_TRUE(panel->ProcessTerrainSculptPointer(
+        "mousemove", -1, center.x + 8.0f, center.y));
+    EXPECT_TRUE(panel->ProcessTerrainSculptPointer(
+        "mouseup", 0, center.x + 8.0f, center.y));
+    EXPECT_FALSE(panel->ProcessTerrainSculptPointer(
+        "mousedown", 1, center.x, center.y));
+    EXPECT_FALSE(panel->ProcessTerrainSculptPointer(
+        "mousescroll", -1, center.x, center.y));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeSculptIsDisabledOutsideAuthoringAndOfflineModes)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    ASSERT_TRUE(panel->IsTerrainSculptActive());
+    const auto center = SceneViewportCenter();
+
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_FALSE(panel->IsTerrainSculptActive());
+    EXPECT_FALSE(panel->ProcessTerrainSculptPointer(
+        "mousedown", 0, center.x, center.y));
+
+    view.scripts.state = ScriptPlayState::Editing;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_FALSE(panel->IsTerrainSculptActive());
+}
+
+TEST_F(EditorUiTest, SceneGizmoKeyboardShortcutsMatchUeAndIgnoreTextFocus)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    context->ProcessKeyDown(Rml::Input::KI_W, 0);
+    EXPECT_EQ(panel->ViewportTransformTool(), "move");
+    context->ProcessKeyDown(Rml::Input::KI_E, 0);
+    EXPECT_EQ(panel->ViewportTransformTool(), "rotate");
+    context->ProcessKeyDown(Rml::Input::KI_R, 0);
+    EXPECT_EQ(panel->ViewportTransformTool(), "scale");
+    context->ProcessKeyDown(Rml::Input::KI_Q, 0);
+    EXPECT_EQ(panel->ViewportTransformTool(), "select");
+
+    auto* snap = document->GetElementById("viewport-snap-move");
+    ASSERT_NE(snap, nullptr);
+    snap->Focus();
+    context->Update();
+    context->ProcessKeyDown(Rml::Input::KI_W, 0);
+    EXPECT_EQ(panel->ViewportTransformTool(), "select");
 }
 
 TEST_F(EditorUiTest, ViewportToolbarOverlayIsNotASceneHit)
@@ -6709,6 +7434,1008 @@ std::vector<const EditorSceneActorSnapshot*> FindActorSnapshot(
         if (actor.type == EditorSceneActorType::Mesh && actor.sceneObjectIdentity == sceneObjectIdentity)
             matches.push_back(&actor);
     return matches;
+}
+
+WorldMeshObject TerrainEditorChunk(
+    const std::string& objectName,
+    const std::string& sceneObjectIdentity,
+    const std::string& terrainAssetPath,
+    const Eigen::Vector3f& scenePosition)
+{
+    WorldMeshObject object = VisibilityTestMesh(objectName);
+    object.sceneObjectIdentity = sceneObjectIdentity;
+    object.isTerrain = true;
+    object.terrainAssetPath = terrainAssetPath;
+    object.scenePosition = scenePosition;
+    object.sceneRotation = Eigen::Vector3f::Zero();
+    object.sceneScale = Eigen::Vector3f::Ones();
+    SceneNode root;
+    root.SetTransform(object.scenePosition, object.sceneRotation, object.sceneScale);
+    object.model = root.GetModelMatrix();
+    object.materialSlotName = "Terrain";
+    return object;
+}
+
+World MakeTerrainEditorActorTestWorld()
+{
+    World world(9, "Maps/SC_terrain_editor/SC_terrain_editor.json");
+    auto camera = std::make_shared<Camera>();
+    camera->SetProjection(60.0f, 16.0f / 9.0f, 0.1f, 10000.0f);
+    world.SetCamera(std::move(camera));
+
+    const std::string terrainPath = "Maps/SC_terrain_editor/Terrains/TR_ground.json";
+    const Eigen::Vector3f terrainPosition(100.0f, 200.0f, 300.0f);
+    world.AddMeshObject("Landscape::chunk_0_0",
+        TerrainEditorChunk("Landscape::chunk_0_0", "Landscape", terrainPath, terrainPosition));
+    world.AddMeshObject("Landscape::chunk_1_0",
+        TerrainEditorChunk("Landscape::chunk_1_0", "Landscape", terrainPath, terrainPosition));
+    world.AddMeshObject("Rock", VisibilityTestMesh("Rock"));
+    return world;
+}
+
+const EditorSceneActorSnapshot* FindActorByIdentity(
+    const std::vector<EditorSceneActorSnapshot>& actors, const std::string& identity)
+{
+    for (const EditorSceneActorSnapshot& actor : actors)
+        if (actor.identity == identity) return &actor;
+    return nullptr;
+}
+
+TEST_F(EditorUiTest, TerrainChunksAggregateIntoOneTerrainActorWithoutSwallowingMeshes)
+{
+    World world = MakeTerrainEditorActorTestWorld();
+    const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+
+    size_t terrainActors = 0;
+    size_t landscapeMeshActors = 0;
+    size_t rockMeshActors = 0;
+    for (const EditorSceneActorSnapshot& actor : actors)
+    {
+        if (actor.type == EditorSceneActorType::Terrain)
+            ++terrainActors;
+        if (actor.type == EditorSceneActorType::Mesh &&
+            actor.sceneObjectIdentity == "Landscape")
+            ++landscapeMeshActors;
+        if (actor.type == EditorSceneActorType::Mesh &&
+            actor.sceneObjectIdentity == "Rock")
+            ++rockMeshActors;
+    }
+
+    ASSERT_EQ(terrainActors, 1u);
+    EXPECT_EQ(landscapeMeshActors, 0u);
+    EXPECT_EQ(rockMeshActors, 1u);
+
+    const EditorSceneActorSnapshot* terrain = FindActorByIdentity(actors, "terrain|Landscape");
+    ASSERT_NE(terrain, nullptr);
+    EXPECT_EQ(terrain->type, EditorSceneActorType::Terrain);
+    EXPECT_EQ(terrain->displayName, "Landscape");
+    EXPECT_EQ(terrain->sceneObjectIdentity, "Landscape");
+    EXPECT_EQ(terrain->sections.size(), 2u);
+    EXPECT_EQ(terrain->terrainAssetPath, "Maps/SC_terrain_editor/Terrains/TR_ground.json");
+    EXPECT_EQ(terrain->position, Eigen::Vector3f(100.0f, 200.0f, 300.0f));
+
+    const EditorSceneActorSnapshot* rock = FindActorByIdentity(actors, "mesh|Rock");
+    ASSERT_NE(rock, nullptr);
+    EXPECT_EQ(rock->type, EditorSceneActorType::Mesh);
+    EXPECT_EQ(rock->sections.size(), 1u);
+}
+
+TEST_F(EditorUiTest, TerrainActorIdentityFieldsAndVisibilityUseTheMeshEditorPath)
+{
+    const std::string identity = SceneActorIdentity(EditorSceneActorType::Terrain, "Landscape");
+    EXPECT_EQ(identity, "terrain|Landscape");
+
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity(identity, parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::Terrain);
+    EXPECT_EQ(parsed.name, "Landscape");
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::Terrain));
+
+    World world = MakeTerrainEditorActorTestWorld();
+    const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    const EditorSceneActorSnapshot* terrain = FindActorByIdentity(actors, identity);
+    ASSERT_NE(terrain, nullptr);
+
+    const std::vector<EditorSceneActorEditableField> editable = SceneActorEditableFields(*terrain);
+    ASSERT_EQ(editable.size(), 3u);
+    EXPECT_EQ(editable[0].property, EditorActorProperty::Position);
+    EXPECT_EQ(editable[1].property, EditorActorProperty::Rotation);
+    EXPECT_EQ(editable[2].property, EditorActorProperty::Scale);
+
+    const std::vector<EditorSceneActorField> fields = SceneActorFields(*terrain);
+    bool sawTerrainAsset = false;
+    for (const EditorSceneActorField& field : fields)
+        if (field.id == "actor-field-terrain-asset")
+        {
+            sawTerrainAsset = true;
+            EXPECT_EQ(field.value, "Maps/SC_terrain_editor/Terrains/TR_ground.json");
+        }
+    EXPECT_TRUE(sawTerrainAsset);
+}
+
+TEST_F(EditorUiTest, TerrainOutlinerSelectionCarriesItsActorIdentityIntoTheModelRoute)
+{
+    EditorSceneActorSnapshot terrain = MeshActor("Landscape", 9, 31);
+    terrain.type = EditorSceneActorType::Terrain;
+    terrain.identity = SceneActorIdentity(EditorSceneActorType::Terrain, "Landscape");
+    terrain.terrainAssetPath = "Maps/SC_terrain_editor/Terrains/TR_ground.json";
+
+    SelectActorInOutliner(std::move(terrain));
+    Click("[data-action=outliner-actor]");
+
+    ASSERT_TRUE(selectionSink.selectedModel.has_value());
+    // 选中 Terrain 仍复用 mesh 的整模型选择/材质槽路径，但必须保留 terrain|
+    // 身份；否则 UiSubsystem 会把它回落成 mesh|Landscape，Details 随即丢失。
+    EXPECT_EQ(selectionSink.selectedModel->actorIdentity, "terrain|Landscape");
+    EXPECT_EQ(selectionSink.selectedModel->objectIdentity, "Landscape");
+    EXPECT_TRUE(selectionSink.selectedActorIdentity.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapePanelShowsEmptyStateAndLayerCardsFromSelectedTerrain)
+{
+    Click("#workspace-terrain-tab");
+    Refresh();
+    auto* page = document->GetElementById("terrain-page");
+    auto* empty = document->GetElementById("terrain-empty");
+    auto* summary = document->GetElementById("terrain-summary");
+    ASSERT_NE(page, nullptr);
+    ASSERT_NE(empty, nullptr);
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(page->IsVisible());
+    // 首次切到 Landscape 时底栏应扩到能同时容纳笔刷库与层库的高度。
+    EXPECT_GE(page->GetClientHeight(), 250.0f);
+    EXPECT_TRUE(empty->IsVisible());
+    EXPECT_TRUE(summary->IsVisible());
+    EXPECT_EQ(document->GetElementById("terrain-empty")->QuerySelector(".terrain-empty-title")->GetInnerRML(),
+        "Select a Landscape actor to edit terrain.");
+    EXPECT_FALSE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-brush-library")->IsVisible(true));
+    Rml::ElementList libraryCards;
+    document->GetElementById("terrain-brush-library")
+        ->QuerySelectorAll(libraryCards, ".brush-library-card");
+    EXPECT_EQ(libraryCards.size(), 4u);
+
+    // 非 Terrain actor 与无选择走同一个显式空状态，不能沿用上一次的地形数据。
+    SelectActorInOutliner(PointLightActor("Key_Point_Light", 250.0f, 12.5f));
+    EXPECT_TRUE(empty->IsVisible());
+    EXPECT_TRUE(summary->IsVisible());
+
+    EditorSceneActorSnapshot terrain = LayeredTerrainActor("Landscape", 7);
+    terrain.sections.resize(3);
+    SelectActorInOutliner(std::move(terrain));
+    EXPECT_FALSE(empty->IsVisible());
+    EXPECT_TRUE(summary->IsVisible());
+
+    auto* cards = document->GetElementById("terrain-layer-cards");
+    ASSERT_NE(cards, nullptr);
+    Rml::ElementList cardElements;
+    cards->QuerySelectorAll(cardElements, ".terrain-layer-card");
+    ASSERT_EQ(cardElements.size(), 2u);
+    EXPECT_FALSE(document->GetElementById("terrain-layer-top-spacer")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-bottom-spacer")->IsVisible(true));
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(), "2 / 2 layers");
+    EXPECT_NE(cards->GetInnerRML().find("Grass"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("Rock"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("set 1"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("uvScale 2"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("set 2"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("uvScale 1.5"), std::string::npos);
+
+    const std::string status = document->GetElementById("terrain-layer-status")->GetInnerRML();
+    EXPECT_NE(status.find("Selected: Grass"), std::string::npos);
+    EXPECT_NE(status.find("source set 1"), std::string::npos);
+    EXPECT_NE(status.find("uvScale 2"), std::string::npos);
+    EXPECT_NE(status.find("height 0-0.35"), std::string::npos);
+    EXPECT_NE(status.find("slope 0-25"), std::string::npos);
+    EXPECT_NE(status.find("2 layers"), std::string::npos);
+
+    auto* swatch = document->GetElementById("terrain-layer-card-0")->QuerySelector(".terrain-layer-swatch");
+    ASSERT_NE(swatch, nullptr);
+    const std::string style = swatch->GetAttribute<std::string>("style", "");
+    EXPECT_NE(style.find("background-color: #"), std::string::npos);
+    EXPECT_NE(style.find("FF"), std::string::npos);
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-library")->IsVisible(true));
+    EXPECT_EQ(document->GetElementById("terrain-surface-size")->GetInnerRML(),
+        "1000 x 1000 cm");
+    EXPECT_EQ(document->GetElementById("terrain-surface-height-scale")->GetInnerRML(),
+        "100 cm");
+    EXPECT_EQ(document->GetElementById("terrain-surface-layer-count")->GetInnerRML(), "2");
+    EXPECT_EQ(document->GetElementById("terrain-surface-chunk-count")->GetInnerRML(),
+        "2 x 2 (4)");
+    EXPECT_EQ(document->GetElementById("terrain-surface-section-count")->GetInnerRML(), "3");
+}
+
+TEST_F(EditorUiTest, LandscapeBrushLibraryAppliesPresetParameters)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* library = document->GetElementById("terrain-brush-library");
+    ASSERT_NE(library, nullptr);
+    Rml::ElementList cards;
+    library->QuerySelectorAll(cards, ".brush-library-card");
+    ASSERT_EQ(cards.size(), 4u);
+    auto* soft = document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-round]");
+    ASSERT_NE(soft, nullptr);
+    EXPECT_TRUE(soft->IsClassSet("selected"));
+
+    SetValue("viewport-brush-radius", "1234");
+    SetValue("viewport-brush-strength", "0.65");
+    SetValue("viewport-brush-falloff", "0.35");
+    Refresh();
+    EXPECT_EQ(document->QuerySelector(".brush-library-card.selected"), nullptr);
+
+    const UiAction customStroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(customStroke.type, UiActionType::TerrainEdit);
+    EXPECT_FLOAT_EQ(customStroke.terrainBrush.strength, 0.65f);
+    EXPECT_FLOAT_EQ(customStroke.terrainBrush.falloff, 0.35f);
+    EXPECT_EQ(customStroke.terrainBrush.shape, 0);
+
+    Click("[data-action=brush-library-select][data-brush-id=hard-round]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 300.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-strength"), 0.2f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+    EXPECT_FALSE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-round]")->IsClassSet("selected"));
+
+    const UiAction hardStroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(hardStroke.type, UiActionType::TerrainEdit);
+    EXPECT_FLOAT_EQ(hardStroke.terrainBrush.strength, 0.2f);
+    EXPECT_FLOAT_EQ(hardStroke.terrainBrush.falloff, 0.0f);
+    EXPECT_EQ(hardStroke.terrainBrush.shape, 0);
+    EXPECT_LT(hardStroke.terrainBrush.radiusUv, customStroke.terrainBrush.radiusUv);
+
+    Click("[data-action=brush-library-select][data-brush-id=square]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 400.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-strength"), 0.15f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.6f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=square]")->IsClassSet("selected"));
+
+    const UiAction squareStroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(squareStroke.type, UiActionType::TerrainEdit);
+    EXPECT_FLOAT_EQ(squareStroke.terrainBrush.falloff, 0.6f);
+    EXPECT_EQ(squareStroke.terrainBrush.shape, 1);
+
+    Click("[data-action=brush-library-select][data-brush-id=soft-round]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 500.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 1.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-round]")->IsClassSet("selected"));
+
+    const UiAction softStroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(softStroke.type, UiActionType::TerrainEdit);
+    EXPECT_FLOAT_EQ(softStroke.terrainBrush.falloff, 1.0f);
+    EXPECT_EQ(softStroke.terrainBrush.shape, 0);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeBrushLibrarySearchAndCategoryUseHostActions)
+{
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    SetValue("brush-library-search", "hard");
+    Refresh();
+    Rml::ElementList cards;
+    cards.clear();
+    document->GetElementById("terrain-brush-library")
+        ->QuerySelectorAll(cards, ".brush-library-card");
+    ASSERT_EQ(cards.size(), 1u);
+    EXPECT_EQ(cards.front()->GetAttribute<std::string>("data-brush-id", ""), "hard-round");
+
+    auto* category = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->GetElementById("brush-library-category"));
+    ASSERT_NE(category, nullptr);
+    EXPECT_EQ(category->GetNumOptions(), 2);
+    SelectOption("brush-library-category", "Sculpt");
+    Refresh();
+    EXPECT_EQ(category->GetValue(), "Sculpt");
+    cards.clear();
+    document->GetElementById("terrain-brush-library")
+        ->QuerySelectorAll(cards, ".brush-library-card");
+    EXPECT_EQ(cards.size(), 1u);
+
+    SetValue("brush-library-search", "");
+    Refresh();
+    cards.clear();
+    document->GetElementById("terrain-brush-library")
+        ->QuerySelectorAll(cards, ".brush-library-card");
+    EXPECT_EQ(cards.size(), 4u);
+
+    SelectOption("brush-library-category", "All");
+    Refresh();
+    EXPECT_EQ(category->GetValue(), "All");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeBrushLibraryRequiresTerrainAndSculptMode)
+{
+    Click("#workspace-terrain-tab");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-empty")->IsVisible());
+    EXPECT_TRUE(document->GetElementById("terrain-summary")->IsVisible());
+    EXPECT_FALSE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-brush-library")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("viewport-brush-settings")->IsVisible(false));
+
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-brush-library")->IsVisible(true));
+    Click("[data-action=brush-library-select][data-brush-id=hard-round]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 300.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-strength"), 0.2f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+
+    Click("#terrain-mode-layers");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+
+    SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 2));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeSculptAndPaintBrushStateStayIndependent)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Click("#terrain-mode-sculpt");
+    Refresh();
+
+    SetValue("viewport-brush-radius", "1234");
+    SetValue("viewport-brush-strength", "0.65");
+    SetValue("viewport-brush-falloff", "0.35");
+    Refresh();
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-radius"), 500.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-hardness"), 0.5f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-opacity"), 0.8f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-flow"), 0.8f);
+
+    SetValue("terrain-paint-radius", "777");
+    SetValue("terrain-paint-hardness", "0.25");
+    SetValue("terrain-paint-opacity", "0.6");
+    SetValue("terrain-paint-flow", "0.5");
+    Refresh();
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 1234.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-strength"), 0.65f);
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-falloff"), 0.35f);
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-radius"), 777.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-hardness"), 0.25f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-opacity"), 0.6f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-flow"), 0.5f);
+
+    SetValue("terrain-paint-hardness", "1.5");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-hardness"), 0.25f);
+    EXPECT_NE(document->GetElementById("editor-notice")->GetInnerRML().find(
+        "Paint hardness must be in [0, 1]."), std::string::npos);
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    SetValue("viewport-brush-radius", "-1");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 1234.0f);
+    EXPECT_NE(document->GetElementById("editor-notice")->GetInnerRML().find(
+        "Sculpt brush radius must be greater than zero."), std::string::npos);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeBrushCatalogsAndSelectionSwitchByDomain)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Click("#terrain-mode-sculpt");
+    Refresh();
+
+    EXPECT_EQ(document->GetElementById("terrain-brush-library-title")->GetInnerRML(),
+        "Sculpt Brushes");
+    EXPECT_NE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-round]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-mask]"), nullptr);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-round]")->IsClassSet("selected"));
+
+    Click("[data-action=brush-library-select][data-brush-id=hard-round]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 300.0f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_EQ(document->GetElementById("terrain-brush-library-title")->GetInnerRML(),
+        "Paint Brushes");
+    EXPECT_NE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=spray]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]"), nullptr);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=soft-mask]")->IsClassSet("selected"));
+
+    Click("[data-action=brush-library-select][data-brush-id=spray]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-radius"), 600.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-hardness"), 0.4f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-opacity"), 0.6f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-flow"), 0.7f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=spray]")->IsClassSet("selected"));
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_EQ(document->GetElementById("terrain-brush-library-title")->GetInnerRML(),
+        "Sculpt Brushes");
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-radius"), 300.0f);
+
+    SetValue("viewport-brush-strength", "0.55");
+    Refresh();
+    EXPECT_EQ(document->QuerySelector(".brush-library-card.selected"), nullptr);
+    Click("[data-action=brush-library-select][data-brush-id=hard-round]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("viewport-brush-strength"), 0.2f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=hard-round]")->IsClassSet("selected"));
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=spray]")->IsClassSet("selected"));
+    SetValue("terrain-paint-hardness", "0.33");
+    Refresh();
+    EXPECT_EQ(document->QuerySelector(".brush-library-card.selected"), nullptr);
+    Click("[data-action=brush-library-select][data-brush-id=spray]");
+    Refresh();
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-paint-hardness"), 0.4f);
+    EXPECT_TRUE(document->QuerySelector(
+        "[data-action=brush-library-select][data-brush-id=spray]")->IsClassSet("selected"));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeActionsUseTheirOwnBrushState)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Click("#terrain-mode-paint");
+    Refresh();
+
+    Click("[data-action=brush-library-select][data-brush-id=square-mask]");
+    Refresh();
+    const UiAction paintBegin = BeginPaintStrokeAtCenter();
+    ASSERT_EQ(paintBegin.type, UiActionType::TerrainPaint);
+    EXPECT_FLOAT_EQ(paintBegin.terrainPaint.strength, 1.0f);
+    EXPECT_FLOAT_EQ(paintBegin.terrainPaint.opacity, 1.0f);
+    EXPECT_FLOAT_EQ(paintBegin.terrainPaint.flow, 0.9f);
+    EXPECT_FLOAT_EQ(paintBegin.terrainPaint.noise, 0.0f);
+    EXPECT_EQ(paintBegin.terrainPaint.noiseSeed, 0u);
+    EXPECT_FLOAT_EQ(paintBegin.terrainPaint.falloff, 0.2f);
+    EXPECT_EQ(paintBegin.terrainPaint.shape, 1);
+    EXPECT_GT(paintBegin.terrainPaint.radiusUv, 0.0f);
+
+    Click("[data-action=brush-library-select][data-brush-id=spray]");
+    Refresh();
+    const UiAction sprayBegin = BeginPaintStrokeAtCenter();
+    ASSERT_EQ(sprayBegin.type, UiActionType::TerrainPaint);
+    EXPECT_FLOAT_EQ(sprayBegin.terrainPaint.strength, 1.0f);
+    EXPECT_FLOAT_EQ(sprayBegin.terrainPaint.opacity, 0.6f);
+    EXPECT_FLOAT_EQ(sprayBegin.terrainPaint.flow, 0.7f);
+    EXPECT_FLOAT_EQ(sprayBegin.terrainPaint.noise, 0.35f);
+    EXPECT_EQ(sprayBegin.terrainPaint.noiseSeed, 0u);
+
+    // 手动改硬度只清预设高亮，不把 Spray 的噪声参数丢掉；下一次落笔仍带 spray。
+    SetValue("terrain-paint-hardness", "0.33");
+    Refresh();
+    const UiAction editedSprayBegin = BeginPaintStrokeAtCenter();
+    ASSERT_EQ(editedSprayBegin.type, UiActionType::TerrainPaint);
+    EXPECT_FLOAT_EQ(editedSprayBegin.terrainPaint.noise, 0.35f);
+    EXPECT_EQ(editedSprayBegin.terrainPaint.noiseSeed, 0u);
+    EXPECT_NEAR(editedSprayBegin.terrainPaint.falloff, 0.67f, 1.0e-5f);
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    SetValue("viewport-brush-radius", "1234");
+    SetValue("viewport-brush-strength", "0.65");
+    SetValue("viewport-brush-falloff", "0.35");
+    Refresh();
+    const UiAction sculptBegin = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(sculptBegin.type, UiActionType::TerrainEdit);
+    EXPECT_FLOAT_EQ(sculptBegin.terrainBrush.strength, 0.65f);
+    EXPECT_FLOAT_EQ(sculptBegin.terrainBrush.falloff, 0.35f);
+    EXPECT_EQ(sculptBegin.terrainBrush.shape, 0);
+    EXPECT_GT(sculptBegin.terrainBrush.radiusUv, 0.0f);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, LandscapeSculptHidesLayerCardsAndLayerSelectionDoesNotChangeTool)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    ASSERT_TRUE(panel->IsTerrainSculptActive());
+    EXPECT_FALSE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-library")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-card-1")->IsVisible(true));
+
+    Click("#terrain-mode-layers");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-library")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("terrain-layer-card-1")->IsVisible(true));
+
+    Click("#terrain-layer-card-1");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-card-1")->IsClassSet("selected"));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-card-0")->IsClassSet("selected"));
+    EXPECT_NE(document->GetElementById("terrain-layer-status")->GetInnerRML().find("Selected: Rock"),
+        std::string::npos);
+    EXPECT_FALSE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(panel->IsTerrainSculptActive());
+    EXPECT_TRUE(document->GetElementById("terrain-mode-layers")->IsClassSet("active"));
+}
+
+TEST_F(EditorUiTest, LandscapeLayerLibraryVirtualizes256Cards)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    Rml::ElementList cards;
+    document->GetElementById("terrain-layer-cards")->QuerySelectorAll(cards, ".terrain-layer-card");
+    EXPECT_GT(cards.size(), 0u);
+    EXPECT_LT(cards.size(), 256u);
+    EXPECT_LE(cards.size(), 60u);
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(),
+        "256 / 256 layers");
+    EXPECT_NE(document->GetElementById("terrain-layer-card-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("terrain-layer-card-255"), nullptr);
+
+    auto* topSpacer = document->GetElementById("terrain-layer-top-spacer");
+    auto* bottomSpacer = document->GetElementById("terrain-layer-bottom-spacer");
+    ASSERT_NE(topSpacer, nullptr);
+    ASSERT_NE(bottomSpacer, nullptr);
+    EXPECT_FALSE(topSpacer->IsVisible(true));
+    EXPECT_TRUE(bottomSpacer->IsVisible(true));
+    EXPECT_FLOAT_EQ(topSpacer->GetBox().GetSize(Rml::BoxArea::Border).y, 0.0f);
+    EXPECT_GT(bottomSpacer->GetBox().GetSize(Rml::BoxArea::Border).y, 0.0f);
+}
+
+TEST_F(EditorUiTest, LandscapeLayerLibraryShowsAllSmallCountsWithoutSpacers)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 12));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    Rml::ElementList cards;
+    document->GetElementById("terrain-layer-cards")->QuerySelectorAll(cards, ".terrain-layer-card");
+    EXPECT_EQ(cards.size(), 12u);
+    EXPECT_FALSE(document->GetElementById("terrain-layer-top-spacer")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-bottom-spacer")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, LandscapeLayerLibraryScrollWindowExposesLaterCards)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    ASSERT_NE(scroll, nullptr);
+    const int columns = TerrainLayerGridColumnsForTest(scroll);
+    constexpr size_t TargetIndex = 200;
+    const int targetRow = static_cast<int>(TargetIndex / static_cast<size_t>(columns));
+    scroll->SetScrollTop(static_cast<float>(targetRow) * 122.0f);
+    Refresh();
+
+    EXPECT_GT(scroll->GetScrollTop(), 0.0f);
+    EXPECT_EQ(document->GetElementById("terrain-layer-card-0"), nullptr);
+    ASSERT_NE(document->GetElementById("terrain-layer-card-200"), nullptr);
+    EXPECT_NE(document->GetElementById("terrain-layer-card-200")->GetInnerRML().find("Layer 200"),
+        std::string::npos);
+
+    auto* topSpacer = document->GetElementById("terrain-layer-top-spacer");
+    auto* bottomSpacer = document->GetElementById("terrain-layer-bottom-spacer");
+    ASSERT_NE(topSpacer, nullptr);
+    ASSERT_NE(bottomSpacer, nullptr);
+    const float topHeight = topSpacer->GetBox().GetSize(Rml::BoxArea::Border).y;
+    const float bottomHeight = bottomSpacer->GetBox().GetSize(Rml::BoxArea::Border).y;
+    const int totalRows = static_cast<int>((256 + columns - 1) / columns);
+    EXPECT_EQ(std::lround(topHeight / 122.0f), std::max(0, targetRow - 1));
+    EXPECT_GT(topHeight, 0.0f);
+    EXPECT_GE(bottomHeight, 0.0f);
+    EXPECT_LT(topHeight + bottomHeight, static_cast<float>(totalRows) * 122.0f);
+}
+
+TEST_F(EditorUiTest, LandscapeLayerLibraryOnlyRequestsMountedCards)
+{
+    FakeTerrainLayerPreviewProvider provider;
+    panel->SetTerrainLayerPreviewProvider(&provider);
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    ASSERT_NE(scroll, nullptr);
+    provider.requestCount = 0;
+    scroll->SetScrollTop(100.0f * 122.0f);
+    Refresh();
+
+    EXPECT_GT(provider.requestCount, 0u);
+    EXPECT_LT(provider.requestCount, 256u);
+}
+
+TEST_F(EditorUiTest, LandscapeLayerLibraryListWindowExposesLaterRows)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+    Click("#terrain-layer-view-list");
+    Refresh();
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    ASSERT_NE(scroll, nullptr);
+    scroll->SetScrollTop(200.0f * 38.0f);
+    Refresh();
+
+    EXPECT_TRUE(document->GetElementById("terrain-layer-cards")->IsClassSet("terrain-layer-list"));
+    EXPECT_EQ(document->GetElementById("terrain-layer-card-0"), nullptr);
+    ASSERT_NE(document->GetElementById("terrain-layer-card-200"), nullptr);
+    auto* topSpacer = document->GetElementById("terrain-layer-top-spacer");
+    ASSERT_NE(topSpacer, nullptr);
+    EXPECT_EQ(std::lround(topSpacer->GetBox().GetSize(Rml::BoxArea::Border).y / 38.0f), 199);
+}
+
+TEST_F(EditorUiTest, LandscapeLayerSelectionKeepsScrolledWindowInPlace)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    ASSERT_NE(scroll, nullptr);
+    const int columns = TerrainLayerGridColumnsForTest(scroll);
+    constexpr size_t TargetIndex = 200;
+    const int targetRow = static_cast<int>(TargetIndex / static_cast<size_t>(columns));
+    scroll->SetScrollTop(static_cast<float>(targetRow) * 122.0f);
+    Refresh();
+    ASSERT_NE(document->GetElementById("terrain-layer-card-200"), nullptr);
+    const float before = scroll->GetScrollTop();
+
+    Click("#terrain-layer-card-200");
+    Refresh();
+    ASSERT_NE(document->GetElementById("terrain-layer-card-200"), nullptr);
+    EXPECT_TRUE(document->GetElementById("terrain-layer-card-200")->IsClassSet("selected"));
+    EXPECT_EQ(document->GetElementById("terrain-layer-card-0"), nullptr);
+    EXPECT_NEAR(scroll->GetScrollTop(), before, 1.0f);
+}
+
+TEST_F(EditorUiTest, LandscapeLayerSearchResetsVirtualWindowAndScroll)
+{
+    SelectSceneActorForSculpt(ManyLayerTerrainActor("Landscape", 1, 256));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    ASSERT_NE(scroll, nullptr);
+    scroll->SetScrollTop(scroll->GetScrollHeight() * 0.7f);
+    Refresh();
+    ASSERT_GT(scroll->GetScrollTop(), 0.0f);
+
+    SetValue("terrain-layer-search", "Layer 200");
+    Refresh();
+    EXPECT_FLOAT_EQ(scroll->GetScrollTop(), 0.0f);
+    ASSERT_NE(document->GetElementById("terrain-layer-card-200"), nullptr);
+    EXPECT_EQ(document->GetElementById("terrain-layer-card-0"), nullptr);
+    EXPECT_FALSE(document->GetElementById("terrain-layer-top-spacer")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-bottom-spacer")->IsVisible(true));
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(),
+        "1 / 256 layers");
+
+    SetValue("terrain-layer-search", "");
+    Refresh();
+    EXPECT_FLOAT_EQ(scroll->GetScrollTop(), 0.0f);
+    EXPECT_NE(document->GetElementById("terrain-layer-card-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(),
+        "256 / 256 layers");
+}
+
+TEST_F(EditorUiTest, LandscapeLayerSearchFiltersCardsAndShowsNoMatchState)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    SetValue("terrain-layer-search", "rock");
+    Refresh();
+    auto* cards = document->GetElementById("terrain-layer-cards");
+    Rml::ElementList cardElements;
+    cardElements.clear();
+    cards->QuerySelectorAll(cardElements, ".terrain-layer-card");
+    ASSERT_EQ(cardElements.size(), 1u);
+    EXPECT_NE(cards->GetInnerRML().find("Rock"), std::string::npos);
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(), "1 / 2 layers");
+
+    SetValue("terrain-layer-search", "missing");
+    Refresh();
+    cardElements.clear();
+    cards->QuerySelectorAll(cardElements, ".terrain-layer-card");
+    EXPECT_EQ(cardElements.size(), 0u);
+    auto* empty = document->GetElementById("terrain-layer-empty");
+    EXPECT_TRUE(empty->IsVisible());
+    EXPECT_NE(empty->GetInnerRML().find("No layers match"), std::string::npos);
+    EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(), "0 / 2 layers");
+
+    SetValue("terrain-layer-search", "");
+    Refresh();
+    cardElements.clear();
+    cards->QuerySelectorAll(cardElements, ".terrain-layer-card");
+    EXPECT_EQ(cardElements.size(), 2u);
+    EXPECT_FALSE(empty->IsVisible());
+}
+
+TEST_F(EditorUiTest, LandscapeLayerGridListToggleUpdatesContainerClass)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+    auto* cards = document->GetElementById("terrain-layer-cards");
+    EXPECT_TRUE(cards->IsClassSet("terrain-layer-grid"));
+    EXPECT_FALSE(cards->IsClassSet("terrain-layer-list"));
+
+    Click("#terrain-layer-view-list");
+    Refresh();
+    EXPECT_FALSE(cards->IsClassSet("terrain-layer-grid"));
+    EXPECT_TRUE(cards->IsClassSet("terrain-layer-list"));
+    EXPECT_TRUE(document->GetElementById("terrain-layer-view-list")->IsClassSet("active"));
+
+    Click("#terrain-layer-view-grid");
+    Refresh();
+    EXPECT_TRUE(cards->IsClassSet("terrain-layer-grid"));
+    EXPECT_FALSE(cards->IsClassSet("terrain-layer-list"));
+    EXPECT_TRUE(document->GetElementById("terrain-layer-view-grid")->IsClassSet("active"));
+}
+
+TEST_F(EditorUiTest, LandscapePanelModesMirrorViewportToolAndLayersView)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    EXPECT_TRUE(panel->IsTerrainSculptActive());
+    EXPECT_FALSE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("terrain-mode-sculpt")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("viewport-landscape-sculpt")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("viewport-brush-settings")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-layer-library")->IsVisible(true));
+
+    Click("#terrain-mode-paint");
+    Refresh();
+    EXPECT_TRUE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("terrain-mode-paint")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("viewport-landscape-paint")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("viewport-paint-settings")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("terrain-layer-library")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("viewport-brush-mode-0")->IsVisible(true));
+
+    Click("#terrain-mode-layers");
+    Refresh();
+    EXPECT_TRUE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("terrain-mode-layers")->IsClassSet("active"));
+    // Layers 只浏览层：笔刷列整体隐藏，层库占满宽度。
+    EXPECT_FALSE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-brush-library")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("viewport-brush-settings")->IsVisible(false));
+    EXPECT_TRUE(document->GetElementById("terrain-layer-cards")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+
+    Click("#viewport-landscape-sculpt");
+    Refresh();
+    EXPECT_FALSE(panel->IsTerrainPaintMode());
+    EXPECT_TRUE(document->GetElementById("terrain-mode-sculpt")->IsClassSet("active"));
+    EXPECT_TRUE(document->GetElementById("terrain-brush-column")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("terrain-surface-panel")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, LandscapeLayerHoverPreviewAppearsNearCardAndHidesOutside)
+{
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+    auto* preview = document->GetElementById("terrain-layer-hover-preview");
+    auto* card = document->GetElementById("terrain-layer-card-0");
+    ASSERT_NE(preview, nullptr);
+    ASSERT_NE(card, nullptr);
+    Rml::ElementList gridLines;
+    preview->QuerySelectorAll(gridLines, ".terrain-hover-grid-line");
+    ASSERT_EQ(gridLines.size(), 5u);
+
+    MovePointer(card->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(18.0f, 18.0f));
+    context->Update();
+    EXPECT_TRUE(preview->IsVisible(true));
+
+    auto* status = document->GetElementById("terrain-layer-status");
+    MovePointer(status->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(8.0f, 8.0f));
+    context->Update();
+    EXPECT_FALSE(preview->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, LandscapeLayerCardsUseSourceAlbedoAndHoverPlaneWhenAvailable)
+{
+    FakeTerrainLayerPreviewProvider provider;
+    provider.layers.resize(2);
+    provider.layers[0].spherePath = "D:/preview/grass_sphere.png";
+    provider.layers[0].planePath = "D:/preview/grass_plane.png";
+    panel->SetTerrainLayerPreviewProvider(&provider);
+
+    SelectSceneActorForSculpt(LayeredTerrainActor("Landscape", 1));
+    Click("#workspace-terrain-tab");
+    Refresh();
+
+    auto* card0 = document->GetElementById("terrain-layer-card-0");
+    auto* card1 = document->GetElementById("terrain-layer-card-1");
+    ASSERT_NE(card0, nullptr);
+    ASSERT_NE(card1, nullptr);
+    auto* image = card0->QuerySelector(".terrain-layer-swatch-image");
+    ASSERT_NE(image, nullptr);
+    EXPECT_EQ(image->GetAttribute<std::string>("src", ""),
+        "D:/preview/grass_sphere.png");
+    auto* swatch = card0->QuerySelector(".terrain-layer-swatch");
+    ASSERT_NE(swatch, nullptr);
+    EXPECT_TRUE(swatch->IsClassSet("has-image"));
+    EXPECT_NEAR(card0->GetBox().GetSize(Rml::BoxArea::Border).x, 144.0f, 1.0f);
+    EXPECT_NEAR(card0->GetBox().GetSize(Rml::BoxArea::Border).y, 116.0f, 1.0f);
+    EXPECT_NEAR(image->GetBox().GetSize(Rml::BoxArea::Border).x, 84.0f, 1.0f);
+    EXPECT_NEAR(image->GetBox().GetSize(Rml::BoxArea::Border).y, 84.0f, 1.0f);
+    EXPECT_EQ(card0->QuerySelector(".terrain-layer-swatch-highlight"), nullptr);
+    EXPECT_EQ(card1->QuerySelector(".terrain-layer-swatch-image"), nullptr);
+    auto* fallbackHighlight =
+        card1->QuerySelector(".terrain-layer-swatch-highlight");
+    ASSERT_NE(fallbackHighlight, nullptr);
+    auto* fallbackSwatch = card1->QuerySelector(".terrain-layer-swatch");
+    ASSERT_NE(fallbackSwatch, nullptr);
+    EXPECT_NEAR(fallbackSwatch->GetBox().GetSize(Rml::BoxArea::Border).x, 84.0f, 1.0f);
+    EXPECT_NEAR(fallbackSwatch->GetBox().GetSize(Rml::BoxArea::Border).y, 84.0f, 1.0f);
+
+    auto* hoverImage = document->GetElementById("terrain-layer-hover-image");
+    ASSERT_NE(hoverImage, nullptr);
+    MovePointer(card0->GetAbsoluteOffset(Rml::BoxArea::Border) +
+        Rml::Vector2f(18.0f, 18.0f));
+    context->Update();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-hover-preview")->IsVisible(true));
+    EXPECT_TRUE(hoverImage->IsVisible(true));
+    EXPECT_EQ(hoverImage->GetAttribute<std::string>("src", ""),
+        "D:/preview/grass_plane.png");
+    EXPECT_NEAR(hoverImage->GetBox().GetSize(Rml::BoxArea::Border).x, 160.0f, 1.0f);
+    EXPECT_NEAR(hoverImage->GetBox().GetSize(Rml::BoxArea::Border).y, 112.0f, 1.0f);
+
+    // 第二层没有 source-set 纹理：悬停框保留程序化底色，但隐藏平面图片。
+    MovePointer(card1->GetAbsoluteOffset(Rml::BoxArea::Border) +
+        Rml::Vector2f(18.0f, 18.0f));
+    context->Update();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-hover-preview")->IsVisible(true));
+    EXPECT_FALSE(hoverImage->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, TerrainActorTransformAndVisibilityReachEveryWorldChunk)
+{
+    World world = MakeTerrainEditorActorTestWorld();
+    TerrainCollisionInstance collision;
+    collision.placementId = "terrain|Landscape";
+    collision.placement.position = Eigen::Vector3f(100.0f, 200.0f, 300.0f);
+    world.AddTerrainCollisionInstance(std::move(collision));
+    std::string error;
+    const EditorActorPropertyEdit edit{
+        world.GetGeneration(), "terrain|Landscape", EditorActorProperty::Position, 0, 450.0f};
+
+    ASSERT_TRUE(ApplyEditorActorProperty(world, edit, error)) << error;
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape::chunk_0_0").scenePosition.x(), 450.0f);
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape::chunk_1_0").scenePosition.x(), 450.0f);
+    ASSERT_EQ(world.GetTerrainCollisionInstances().size(), 1u);
+    EXPECT_FLOAT_EQ(world.GetTerrainCollisionInstances()[0].placement.position.x(), 450.0f);
+    EXPECT_FALSE(world.IsMeshSceneObjectVisible("Landscape"));
+    EXPECT_FALSE(world.SetMeshSceneObjectVisible("Landscape", false));
+
+    ASSERT_TRUE(world.SetTerrainSceneObjectVisible("Landscape", false));
+    EXPECT_FALSE(world.GetMeshObjects().at("Landscape::chunk_0_0").visible);
+    EXPECT_FALSE(world.GetMeshObjects().at("Landscape::chunk_1_0").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Rock").visible);
+}
+
+TEST_F(EditorUiTest, SameNamedMeshAndTerrainSceneObjectsDoNotCrossWrite)
+{
+    World world(10, "Maps/SC_terrain_editor/SC_terrain_editor.json");
+    WorldMeshObject mesh = VisibilityTestMesh("Landscape_Mesh");
+    mesh.sceneObjectIdentity = "Landscape";
+    mesh.scenePosition = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
+    SceneNode meshRoot;
+    meshRoot.SetTransform(mesh.scenePosition, mesh.sceneRotation, mesh.sceneScale);
+    mesh.model = meshRoot.GetModelMatrix();
+    world.AddMeshObject("Landscape_Mesh", mesh);
+    world.AddMeshObject("Landscape::chunk_0_0",
+        TerrainEditorChunk("Landscape::chunk_0_0", "Landscape",
+            "Maps/SC_terrain_editor/Terrains/TR_ground.json",
+            Eigen::Vector3f(10.0f, 20.0f, 30.0f)));
+
+    const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    ASSERT_NE(FindActorByIdentity(actors, "mesh|Landscape"), nullptr);
+    ASSERT_NE(FindActorByIdentity(actors, "terrain|Landscape"), nullptr);
+
+    std::string error;
+    ASSERT_TRUE(ApplyEditorActorProperty(world,
+        {world.GetGeneration(), "terrain|Landscape",
+            EditorActorProperty::Position, 0, 450.0f}, error)) << error;
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape::chunk_0_0").scenePosition.x(), 450.0f);
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape_Mesh").scenePosition.x(), 1.0f);
+
+    ASSERT_TRUE(ApplyEditorActorProperty(world,
+        {world.GetGeneration(), "mesh|Landscape",
+            EditorActorProperty::Position, 0, 50.0f}, error)) << error;
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape_Mesh").scenePosition.x(), 50.0f);
+    EXPECT_FLOAT_EQ(world.GetMeshObjects().at("Landscape::chunk_0_0").scenePosition.x(), 450.0f);
+
+    ASSERT_TRUE(world.SetTerrainSceneObjectVisible("Landscape", false));
+    EXPECT_FALSE(world.GetMeshObjects().at("Landscape::chunk_0_0").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape_Mesh").visible);
+
+    ASSERT_TRUE(world.SetTerrainSceneObjectVisible("Landscape", true));
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape::chunk_0_0").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape_Mesh").visible);
+
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible("Landscape", false));
+    EXPECT_FALSE(world.GetMeshObjects().at("Landscape_Mesh").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape::chunk_0_0").visible);
+
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible("Landscape", true));
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape::chunk_0_0").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Landscape_Mesh").visible);
 }
 
 TEST_F(EditorUiTest, MultiSectionMeshVisibilityAppliesToEverySectionAtOnce)

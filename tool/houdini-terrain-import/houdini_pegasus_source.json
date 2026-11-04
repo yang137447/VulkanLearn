@@ -1,0 +1,95 @@
+{
+  "assetName": "houdini_pegasus_bg43",
+  "outputRelative": "Generated/HoudiniPegasus",
+  "description": "Houdini heightfield 离线烘焙导入：4065x4065 16-bit 高度图与 g_layer0..3 地表权重来自 G66 bigworld bg43 导出；世界尺寸与高度范围取自同目录 bg43.bgeo.sc 的 gstat 元数据。材质层使用 KiteDemo GroundTiles 的真实 albedo/normal/PBR/height 纹理作为 PBR 占位，不声称是 Pegasus 官方资产。",
+  "sceneDescription": "Houdini/Pegasus 离线烘焙管线验收场景：真实 16-bit 高度场、四层 Houdini mask 烘焙为 VLP1 权重、KiteDemo 地表纹理数组；用于导入与渲染验证，不参与论文数值验证。",
+  "source": {
+    "project": "G66 bigworld Houdini terrain export",
+    "exportRoot": "D:/YYBWorkSpace/G66/res/scene_bw/bigworld/export",
+    "heightmap": "Heightmap.png",
+    "bgeo": "D:/YYBWorkSpace/G66/res/scene_bw/bigworld/terrain_swap/ue_to_houdini/bg43.bgeo.sc",
+    "bgeoResolution": [4065, 4065],
+    "bgeoSizeMeters": [2048.5, 512.707, 2048.5],
+    "bgeoBoundsMeters": [-2464.25, -462.525, 6815.75, -415.748, 50.182, 8864.25],
+    "bgeoCenterMeters": [-1440.0, -206.172, 7840.0],
+    "units": "m",
+    "licenseNote": "Internal G66 project fixture for local pipeline validation; do not redistribute. Project Pegasus tutorial assets require a SideFX license and their own terms."
+  },
+  "sizeMeters": [2048.5, 2048.5],
+  "heightRangeMeters": [-462.525, 50.182],
+  "textureResolution": 1024,
+  "paintResolution": 2048,
+  "materialUvScale": 8.0,
+  "invertNormalGreen": true,
+  "flipVertical": false,
+  "gridResolution": 2048,
+  "chunkQuads": 256,
+  "lodLevels": 3,
+  "lodDistances": [600000.0, 1200000.0],
+  "chunkResidencyDistances": [660000.0, 1320000.0],
+  "terrainPosition": [0.0, 46252.5, 0.0],
+  "cameraPosition": [0.0, 35000.0, 90000.0],
+  "cameraRotation": [-20.0, 0.0, 0.0],
+  "layers": [
+    {
+      "name": "Gravel Ground",
+      "mask": "Layer_g_layer0.png",
+      "textures": {
+        "albedo": "Generated/KiteDemo/Textures/Source/layer_00_albedo.png",
+        "normal": "Generated/KiteDemo/Textures/Source/layer_00_normal.png",
+        "pbr": "Generated/KiteDemo/Textures/Source/layer_00_pbr.png",
+        "height": "Generated/KiteDemo/Textures/Source/layer_00_height16.png"
+      },
+      "heightRange": [0.0, 0.45],
+      "slopeRange": [0.0, 30.0],
+      "uvScale": 16.0,
+      "uvRotation": 0.0,
+      "noise": 0.03
+    },
+    {
+      "name": "River Pebbles",
+      "mask": "Layer_g_layer1.png",
+      "textures": {
+        "albedo": "Generated/KiteDemo/Textures/Source/layer_06_albedo.png",
+        "normal": "Generated/KiteDemo/Textures/Source/layer_06_normal.png",
+        "pbr": "Generated/KiteDemo/Textures/Source/layer_06_pbr.png",
+        "height": "Generated/KiteDemo/Textures/Source/layer_06_height16.png"
+      },
+      "heightRange": [0.0, 0.35],
+      "slopeRange": [0.0, 20.0],
+      "uvScale": 18.0,
+      "uvRotation": 0.0,
+      "noise": 0.03
+    },
+    {
+      "name": "Rock Face",
+      "mask": "Layer_g_layer2.png",
+      "textures": {
+        "albedo": "Generated/KiteDemo/Textures/Source/layer_07_albedo.png",
+        "normal": "Generated/KiteDemo/Textures/Source/layer_07_normal.png",
+        "pbr": "Generated/KiteDemo/Textures/Source/layer_07_pbr.png",
+        "height": "Generated/KiteDemo/Textures/Source/layer_07_height16.png"
+      },
+      "heightRange": [0.15, 1.0],
+      "slopeRange": [20.0, 90.0],
+      "uvScale": 14.0,
+      "uvRotation": 0.0,
+      "noise": 0.03
+    },
+    {
+      "name": "Volcanic Ground",
+      "mask": "Layer_g_layer3.png",
+      "textures": {
+        "albedo": "Generated/KiteDemo/Textures/Source/layer_02_albedo.png",
+        "normal": "Generated/KiteDemo/Textures/Source/layer_02_normal.png",
+        "pbr": "Generated/KiteDemo/Textures/Source/layer_02_pbr.png",
+        "height": "Generated/KiteDemo/Textures/Source/layer_02_height16.png"
+      },
+      "heightRange": [0.35, 1.0],
+      "slopeRange": [0.0, 90.0],
+      "uvScale": 12.0,
+      "uvRotation": 0.0,
+      "noise": 0.03
+    }
+  ]
+}

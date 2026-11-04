@@ -8,7 +8,8 @@
 #include <nlohmann/json.hpp>
 
 #include "commonFunction.h"
-#include "resource/image/textureIO.h"
+#include "terrain/terrainPaintFile.h"
+#include "terrain/terrainHeightmapIO.h"
 #include "terrain/validation/terrainAssetValidator.h"
 
 namespace VL
@@ -32,6 +33,7 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         desc.assetPath = pathString;
         desc.name = asset.at("name").get<std::string>();
         desc.heightmapPath = asset.at("heightmapPath").get<std::string>();
+        desc.paintPath = asset.value("paintPath", std::string());
         desc.size = Eigen::Vector2f(
             asset.at("size")[0].get<float>(),
             asset.at("size")[1].get<float>());
@@ -98,22 +100,67 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         // 材质路径在场景预检阶段就要可解析；完整 MI/shader 校验仍留给正式 material loader。
         static_cast<void>(CommonFunction::Path(desc.materialInstancePath));
 
-        TextureIO::LoadOptions options;
-        options.semantic = HostImage::TextureSemantic::Data;
-        options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOff;
-        options.transfer = TextureIO::LoadOptions::Transfer::Linear;
-        options.forceChannels = 4;
         const std::filesystem::path heightmapPath =
             CommonFunction::Path(desc.heightmapPath);
-        auto heightmap = TextureIO::Load(heightmapPath, options);
+        std::string heightmapError;
+        auto heightmap = TerrainHeightmapIO::Load(heightmapPath, heightmapError);
         if (!heightmap)
-            throw std::runtime_error("Failed to decode heightmap: " + desc.heightmapPath);
+        {
+            throw std::runtime_error(
+                heightmapError.empty() ?
+                    "Failed to decode heightmap: " + desc.heightmapPath :
+                    heightmapError);
+        }
         if (heightmap->width < 2 || heightmap->height < 2)
             throw std::runtime_error("Heightmap requires at least 2x2 pixels: " + desc.heightmapPath);
 
         TerrainBuildPlan plan;
         plan.desc = std::move(desc);
         plan.heightmap = std::make_shared<const HostImage>(std::move(*heightmap));
+        // paintPath 可以指向尚不存在的文件：它是 Save Paint 的写入目标。
+        // 只有文件已经存在时才恢复快照；存在但内容非法必须失败，不能静默
+        // 当作“未绘制”，否则一次损坏的保存会被下一次编辑覆盖。
+        if (!plan.desc.paintPath.empty())
+        {
+            if (plan.desc.layers.empty())
+                throw std::runtime_error(
+                    "Terrain paintPath requires at least one layer: " +
+                    plan.desc.paintPath);
+            // paintPath 与 Save Paint 共用同一套资源根解析/越界检查，不能再走
+            // CommonFunction::Path 的 shader/项目根回退，否则读取与写回可能
+            // 命中不同文件，保存后重载却看不到新快照。
+            std::filesystem::path paintPhysical;
+            std::string paintPathError;
+            if (!ResolveTerrainPaintPath(
+                    CommonFunction::GetResourcePath(),
+                    plan.desc.paintPath,
+                    paintPhysical,
+                    paintPathError))
+                throw std::runtime_error(paintPathError);
+            std::error_code paintQueryError;
+            const bool paintExists =
+                std::filesystem::exists(paintPhysical, paintQueryError);
+            if (paintQueryError)
+                throw std::runtime_error(
+                    "Terrain paintPath cannot be queried: " + paintPathError);
+            if (paintExists &&
+                !std::filesystem::is_regular_file(paintPhysical, paintQueryError))
+                throw std::runtime_error(
+                    "Terrain paintPath must be a regular file: " +
+                    plan.desc.paintPath);
+            if (paintExists)
+            {
+                auto paint = std::make_shared<TerrainLayerPaintData>();
+                std::string paintError;
+                if (!LoadTerrainLayerPaintFile(
+                        paintPhysical,
+                        static_cast<uint32_t>(plan.desc.layers.size()),
+                        *paint,
+                        paintError))
+                    throw std::runtime_error(paintError);
+                plan.layerPaint = std::move(paint);
+            }
+        }
         return plan;
     }
     catch (const std::exception& error)

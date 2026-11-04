@@ -59,6 +59,10 @@ enum class UiActionType
     // intValue 是 0/1。身份在执行边界解析并校验，UI 回调不接触 World。
     SetActorVisible,
     SetActorProperty,
+    // Landscape Sculpt：值语义 brush 输入，执行边界校验 World/session 后写 CPU session。
+    TerrainEdit,
+    // Landscape Paint：layer weight 覆盖层，执行边界失效 TerrainPageManager 页。
+    TerrainPaint,
     FrameEditorActor,
     ControlScripts,
     ReloadScripts,
@@ -126,6 +130,53 @@ struct BlueprintPreviewTransformInput
     bool reset = false;
 };
 
+// Landscape Sculpt 只表达值语义；UI 不持有 TerrainEditSession/World。
+// u/v 是高度图归一化坐标，radiusUv 也是归一化半径；mode 0 Raise/1 Lower/2 Smooth。
+enum class TerrainBrushOperation
+{
+    BeginStroke,
+    ApplyBrush,
+    EndStroke,
+    CancelStroke,
+    Undo,
+    Redo,
+    SaveHeightmap,
+    SavePaint
+};
+
+struct TerrainBrushInput
+{
+    TerrainBrushOperation operation = TerrainBrushOperation::ApplyBrush;
+    uint64_t worldGeneration = 0;
+    std::string placementId; // terrain|<scene object name>
+    float u = 0.0f;
+    float v = 0.0f;
+    float radiusUv = 0.0f;
+    float strength = 1.0f;
+    float falloff = 1.0f;
+    int mode = 0; // 0 Raise, 1 Lower, 2 Smooth
+    int shape = 0; // 0 Circle, 1 Square
+};
+
+struct TerrainPaintInput
+{
+    TerrainBrushOperation operation = TerrainBrushOperation::ApplyBrush;
+    uint64_t worldGeneration = 0;
+    std::string placementId;
+    uint32_t layerIndex = 0;
+    float u = 0.0f;
+    float v = 0.0f;
+    float radiusUv = 0.0f;
+    float strength = 0.0f;
+    float falloff = 1.0f;
+    float opacity = 1.0f;
+    float flow = 1.0f;
+    float noise = 0.0f;
+    uint32_t noiseSeed = 0;
+    bool erase = false;
+    int shape = 0; // 0 Circle, 1 Square
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
@@ -136,6 +187,8 @@ struct UiAction
     ModelPreviewCameraInput previewCamera;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
+    TerrainBrushInput terrainBrush;
+    TerrainPaintInput terrainPaint;
     Debug::Control debugDrawControl;
     // 脚本作者请求只带值；class/name/modelPath 或 property/value 在 GT 校验。
     nlohmann::json script = nlohmann::json::object();

@@ -99,6 +99,12 @@ struct WorldMeshObject
     std::vector<float> lodDistancesCm;
     Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
+    // 地形 chunk 仍是普通 WorldMeshObject；独立 Terrain 身份只属于编辑器
+    // 展示/身份层，不引入第二套 World 地形类型。
+    bool isTerrain = false;
+    std::string terrainAssetPath;
+    // 同一 TR 的多处摆放必须能区分各自 chunk；为空表示非地形。
+    std::string terrainPlacementId;
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -140,6 +146,19 @@ public:
     // 地形碰撞摆放是 World 的只读加载期数据：WorldBuilder 从场景计划一次性写入，
     // Play 时 ScriptPhysicsWorld 读取它创建静态 heightfield；渲染路径不消费。
     void AddTerrainCollisionInstance(TerrainCollisionInstance instance);
+    // 地形编辑提交：只命中指定 placement 的 chunk（单层名字无 ::lodN，
+    // lodLevel 必须为 0）。多层 LOD0 同时更新共享的组包围盒。
+    bool UpdateTerrainChunkBounds(const std::string& placementId,
+        uint32_t chunkX, uint32_t chunkZ, uint32_t lodLevel,
+        const Eigen::Vector3f& localBoundsMin,
+        const Eigen::Vector3f& localBoundsMax);
+    // 更新下一次 Play 重建 Jolt heightfield 用的不可变高度图快照。
+    bool UpdateTerrainPlacementHeightmap(const std::string& placementId,
+        std::shared_ptr<const HostImage> heightmap);
+    // 编辑器 paint 提交：保留当前覆盖层快照，供 Play/Stop 或切换 Actor 后
+    // 重建 TerrainPaintSession 时恢复；不影响下一次 Play 的碰撞高度图。
+    bool UpdateTerrainPlacementLayerPaint(const std::string& placementId,
+        std::shared_ptr<const TerrainLayerPaintData> paint);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
     const std::vector<TerrainCollisionInstance>& GetTerrainCollisionInstances() const
@@ -169,13 +188,16 @@ public:
 
     // 逐对象可见性写入端：只有 RuntimeCommandExecutor 在命令执行边界调用，
     // UI 回调不持有 World。名字不存在时返回 false，由调用方给出诊断而不是静默忽略。
-    // 这里的四个入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
+    // 这些入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
     // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染快照的过滤。
     //
     // 网格按场景对象身份（MeshSceneObjectIdentity）写入，不是按 section 键：
     // 多 section 模型在 meshObjects 里是多个条目，identity 本身不是任何一个条目的键，
     // 因此"一个 actor 一个可见性"要求这里一次写全该 identity 的所有 section。
+    // scene JSON 的 type|name 才是唯一身份；World 内部仍按 isTerrain 分开写，
+    // 防止同名的普通 mesh 与地形 actor 互相串写。
     bool SetMeshSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible);
+    bool SetTerrainSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible);
     bool SetLightVisible(const std::string& name, bool visible);
     // 方形面光在 World 里按值保存（不是 shared_ptr），因此单独一个入口。
     bool SetSquareAreaLightVisible(const std::string& name, bool visible);
@@ -183,11 +205,13 @@ public:
     bool SetMeshSceneObjectTransform(const std::string& identity,
         const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
         const Eigen::Vector3f& scale);
+    bool SetTerrainSceneObjectTransform(const std::string& identity,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
-    // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
-    // 只要还有可见 section 就算可见。两个入口共用同一份 identity 推导，
-    // 因此"行显示什么"与"点击会写什么"不会漂移。
+    // 读取端：与普通 mesh actor 行同一条规则——只要还有可见 section 就算可见。
+    // 地形行使用自己的 chunk 快照，不通过该入口读取。
     bool IsMeshSceneObjectVisible(const std::string& sceneObjectIdentity) const;
     // 作者声明与执行上下文都属于 World，渲染快照不携带托管实例或其指针。
     void SetScriptBlueprints(nlohmann::json actors) { scriptBlueprints = std::move(actors); }
@@ -240,11 +264,15 @@ private:
     friend struct ScriptTemplateExtension;
     void AppendScriptComponentMeshTemplate(const nlohmann::json& blueprint);
     void RecordScriptMotion(float deltaSeconds);
-    // 对属于同一个场景对象身份的每个 mesh section 施加同一操作，返回是否至少命中一个。
-    // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用，避免"大纲认得的名字
-    // World 不认得"这类静默失配。
+    // 对属于同一个场景对象身份、且地形标志匹配的每个 mesh section 施加同一操作。
+    // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用；terrain 过滤则
+    // 区分同名的普通 mesh 与地形 actor。
     template <typename ApplyFn>
-    bool ForEachMeshObjectInSceneObject(const std::string& sceneObjectIdentity, ApplyFn&& apply);
+    bool ForEachMeshObjectInSceneObject(
+        const std::string& sceneObjectIdentity, bool terrain, ApplyFn&& apply);
+    bool SetSceneObjectTransform(const std::string& identity, bool terrain,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
 
     uint64_t generation = 0;
     std::string scenePath;

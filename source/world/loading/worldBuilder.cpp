@@ -333,6 +333,9 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.lodDistancesCm = meshObjectPlan.lodDistancesCm;
             object.lodGroupBoundsMin = meshObjectPlan.lodGroupBoundsMin;
             object.lodGroupBoundsMax = meshObjectPlan.lodGroupBoundsMax;
+            object.isTerrain = meshObjectPlan.isTerrain;
+            object.terrainAssetPath = meshObjectPlan.terrainAssetPath;
+            object.terrainPlacementId = meshObjectPlan.terrainPlacementId;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

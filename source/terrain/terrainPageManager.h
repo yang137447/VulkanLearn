@@ -151,6 +151,20 @@ public:
         bool preload = true);
     void RegisterTerrain(const TerrainBuildPlan& plan, bool preload = true);
 
+    // 编辑器 layer paint 覆盖层：更新该 placement 的 plan 副本并让所有已驻留
+    // 覆盖页失效，下一轮 feedback 会用新覆盖重新烘焙。调用方必须在 render
+    // thread idle 的稳定边界执行。
+    void UpdateLayerPaint(
+        const std::string& placementId,
+        std::shared_ptr<const TerrainLayerPaintData> paint);
+    // 编辑器 sculpt 提交：替换该 placement 的只读高度图快照。覆盖页权重由
+    // 高度/坡度烘焙，调用方必须在替换后失效已驻留页，下一轮 feedback 才会
+    // 用新高度重建。本方法只改 CPU plan 副本，不做 Vulkan 调用也不淘汰页。
+    void UpdateHeightmap(
+        const std::string& placementId,
+        std::shared_ptr<const HostImage> heightmap);
+    void InvalidatePlacementPages(const std::string& placementId);
+
     // P3 流式加载的初始可见集合：只请求 placement 中心 tilesPerSide² 页，
     // 其余页交给 feedback。返回成功驻留的页数；这是“首帧不全灰”的最小集合，
     // 不是全量 preload。

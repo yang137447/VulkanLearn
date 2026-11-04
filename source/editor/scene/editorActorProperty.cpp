@@ -21,6 +21,16 @@ bool Reject(std::string& error, const char* message)
     return false;
 }
 
+bool Finite(const std::array<float, 3>& value)
+{
+    return std::isfinite(value[0]) && std::isfinite(value[1]) && std::isfinite(value[2]);
+}
+
+Eigen::Vector3f Vector(const std::array<float, 3>& value)
+{
+    return {value[0], value[1], value[2]};
+}
+
 template<class T>
 T* FindNode(const std::unordered_map<std::string, std::shared_ptr<T>>& nodes,
     const std::string& name)
@@ -31,6 +41,14 @@ T* FindNode(const std::unordered_map<std::string, std::shared_ptr<T>>& nodes,
 
 bool SetNodeTransform(SceneNode& node, const EditorActorPropertyEdit& edit)
 {
+    if (edit.property == EditorActorProperty::Transform)
+    {
+        // Camera 的快照不发布 authored scale；整组 Transform 仍只写位置/朝向，
+        // 避免一次平移把未展示的缩放覆盖成默认 1。
+        node.SetPosition(Vector(edit.transformPosition));
+        node.SetRotation(Vector(edit.transformRotation));
+        return true;
+    }
     Eigen::Vector3f value = edit.property == EditorActorProperty::Position
         ? node.GetPosition() : node.GetRotation();
     value[edit.component] = edit.value;
@@ -72,18 +90,71 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     error.clear();
     if (edit.worldGeneration != world.GetGeneration())
         return Reject(error, "The World changed since this edit was produced.");
-    if (!std::isfinite(edit.value))
-        return Reject(error, "A complete finite number is required.");
-    const bool vector = edit.property == P::Position || edit.property == P::Rotation ||
-        edit.property == P::Scale || edit.property == P::Color || edit.property == P::Normal;
-    if (edit.component >= (vector ? 3u : 1u))
-        return Reject(error, "Unknown property component.");
+    const bool transform = edit.property == P::Transform;
+    if (transform)
+    {
+        // 完整 Transform 必须整体有效：任一分量非法或 scale 过零时，
+        // 不允许只写入一半再失败。这里只是入口校验，真正写入在类型分支中。
+        if (!Finite(edit.transformPosition) || !Finite(edit.transformRotation) ||
+            !Finite(edit.transformScale))
+            return Reject(error, "A complete finite Transform is required.");
+        if ((Vector(edit.transformScale).array().abs() < 1.0e-6f).any())
+            return Reject(error, "Scale must be non-zero (negative scale is supported).");
+    }
+    else
+    {
+        if (!std::isfinite(edit.value))
+            return Reject(error, "A complete finite number is required.");
+        const bool vector = edit.property == P::Position || edit.property == P::Rotation ||
+            edit.property == P::Scale || edit.property == P::Color || edit.property == P::Normal;
+        if (edit.component >= (vector ? 3u : 1u))
+            return Reject(error, "Unknown property component.");
+    }
     EditorUi::EditorSceneActorIdentity identity;
     if (!EditorUi::ParseSceneActorIdentity(edit.identity, identity))
         return Reject(error, "Unknown actor identity.");
 
     if (identity.type == EditorSceneActorType::Script)
     {
+        if (transform)
+        {
+            const Eigen::Vector3f scale = Vector(edit.transformScale);
+            if ((scale.array().abs() < 1.0e-6f).any())
+                return Reject(error, "Actor editing requires Transform with non-zero scale.");
+            const nlohmann::json* found = nullptr;
+            for (const auto& actor : world.GetScriptBlueprints())
+                if (actor.at("id") == identity.name) { found = &actor; break; }
+            if (found == nullptr)
+                return Reject(error, "Actor is not in the active World or is read-only.");
+            if (found->contains("physics") &&
+                !(edit.transformScale[0] == edit.transformScale[1] &&
+                  edit.transformScale[1] == edit.transformScale[2]))
+                return Reject(error, "Rigid body scale must stay uniform; edit its authored vec3 together.");
+            // 只写真正变化的组；一次平移不应触发 3 次无关的 rotation/scale 重建。
+            bool positionChanged = false, rotationChanged = false, scaleChanged = false;
+            for (uint32_t component = 0; component < 3; ++component)
+            {
+                positionChanged = positionChanged ||
+                    found->at("position")[component].get<float>() != edit.transformPosition[component];
+                rotationChanged = rotationChanged ||
+                    found->at("rotation")[component].get<float>() != edit.transformRotation[component];
+                scaleChanged = scaleChanged ||
+                    found->at("scale")[component].get<float>() != edit.transformScale[component];
+            }
+            if (positionChanged)
+                for (uint32_t component = 0; component < 3; ++component)
+                    if (!world.SetScriptBlueprintTransform(identity.name, "position",
+                        component, edit.transformPosition[component])) return false;
+            if (rotationChanged)
+                for (uint32_t component = 0; component < 3; ++component)
+                    if (!world.SetScriptBlueprintTransform(identity.name, "rotation",
+                        component, edit.transformRotation[component])) return false;
+            if (scaleChanged)
+                for (uint32_t component = 0; component < 3; ++component)
+                    if (!world.SetScriptBlueprintTransform(identity.name, "scale",
+                        component, edit.transformScale[component])) return false;
+            return true;
+        }
         const char* field = edit.property == P::Position ? "position" :
             edit.property == P::Rotation ? "rotation" : edit.property == P::Scale ? "scale" : nullptr;
         if (!field || (edit.property == P::Scale && std::abs(edit.value) < 1e-6f))
@@ -95,13 +166,31 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
                     return Reject(error, "Rigid body scale must stay uniform; edit its authored vec3 together.");
         return world.SetScriptBlueprintTransform(identity.name, field, edit.component, edit.value);
     }
-    if (identity.type == EditorSceneActorType::Mesh)
+    // 地形在 World 中仍是共享 sceneObjectIdentity 的 chunk mesh；编辑器 Terrain
+    // 身份只改变大纲行类型。World 内部按 isTerrain 选择写入入口，避免同名
+    // Mesh/Terrain 场景对象互相串写。
+    if (identity.type == EditorSceneActorType::Mesh ||
+        identity.type == EditorSceneActorType::Terrain)
     {
+        const bool terrain = identity.type == EditorSceneActorType::Terrain;
+        if (transform)
+        {
+            const bool applied = terrain
+                ? world.SetTerrainSceneObjectTransform(identity.name,
+                    Vector(edit.transformPosition), Vector(edit.transformRotation),
+                    Vector(edit.transformScale))
+                : world.SetMeshSceneObjectTransform(identity.name,
+                    Vector(edit.transformPosition), Vector(edit.transformRotation),
+                    Vector(edit.transformScale));
+            return applied ? true :
+                Reject(error, "Actor is not in the active World or is read-only.");
+        }
         if (edit.property != P::Position && edit.property != P::Rotation && edit.property != P::Scale)
-            return Reject(error, "Mesh editing only supports Transform.");
+            return Reject(error, "Mesh/Terrain editing only supports Transform.");
         for (const auto& entry : world.GetMeshObjects())
         {
             const WorldMeshObject& object = entry.second;
+            if (object.isTerrain != terrain) continue;
             if (MeshSceneObjectIdentity(object, entry.first) != identity.name) continue;
             Eigen::Vector3f position = object.scenePosition;
             Eigen::Vector3f rotation = object.sceneRotation;
@@ -111,13 +200,29 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
             else scale[edit.component] = edit.value;
             if ((scale.array().abs() < 1.0e-6f).any())
                 return Reject(error, "Scale must be non-zero (negative scale is supported).");
-            return world.SetMeshSceneObjectTransform(identity.name, position, rotation, scale);
+            return terrain
+                ? world.SetTerrainSceneObjectTransform(
+                    identity.name, position, rotation, scale)
+                : world.SetMeshSceneObjectTransform(
+                    identity.name, position, rotation, scale);
         }
     }
     else if (identity.type == EditorSceneActorType::DirectionalLight)
     {
         if (auto* light = FindNode(world.GetDirectionalLights(), identity.name))
         {
+            if (transform)
+            {
+                light->SetPosition(Vector(edit.transformPosition));
+                light->SetRotation(Vector(edit.transformRotation));
+                if (light == world.GetPrimaryDirectionalLight().get())
+                {
+                    WorldEnvironment environment = world.GetEnvironment();
+                    environment.skyParameters.sunDirectionIntensity.head<3>() = -light->GetForwardVector();
+                    world.SetEnvironment(std::move(environment));
+                }
+                return true;
+            }
             if (edit.property == P::CastShadows)
             {
                 if (light != world.GetPrimaryDirectionalLight().get() ||
@@ -142,12 +247,26 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     else if (identity.type == EditorSceneActorType::PointLight)
     {
         if (auto* light = FindNode(world.GetPointLights(), identity.name))
+        {
+            if (transform)
+            {
+                light->SetPosition(Vector(edit.transformPosition));
+                light->SetRotation(Vector(edit.transformRotation));
+                return true;
+            }
             return SetLight(*light, edit, error);
+        }
     }
     else if (identity.type == EditorSceneActorType::SpotLight)
     {
         if (auto* light = FindNode(world.GetSpotLights(), identity.name))
         {
+            if (transform)
+            {
+                light->SetPosition(Vector(edit.transformPosition));
+                light->SetRotation(Vector(edit.transformRotation));
+                return true;
+            }
             if (edit.property != P::InnerCone && edit.property != P::OuterCone)
                 return SetLight(*light, edit, error);
             const float angle = edit.value * DegreesToRadians;
@@ -166,7 +285,8 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
         if (it != world.GetSquareAreaLights().end())
         {
             WorldSquareAreaLight light = it->second;
-            if (edit.property == P::Position) light.position[edit.component] = edit.value;
+            if (transform) light.position = Vector(edit.transformPosition);
+            else if (edit.property == P::Position) light.position[edit.component] = edit.value;
             else if (edit.property == P::Normal)
             {
                 light.normal[edit.component] = edit.value;
@@ -189,6 +309,7 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
         const auto& camera = world.GetCamera();
         if (camera && (camera->GetName().empty() ? "Camera" : camera->GetName()) == identity.name)
         {
+            if (transform) return SetNodeTransform(*camera, edit);
             if (edit.property == P::Position || edit.property == P::Rotation)
                 return SetNodeTransform(*camera, edit);
             if (const char* field = CameraExposureField(edit.property))
@@ -236,11 +357,13 @@ bool FrameEditorActor(World& world, uint64_t generation, const std::string& iden
             actor.type == EditorUi::EditorSceneActorType::WindProfile) return false;
         Eigen::Vector3f target = actor.position;
         float radius = 150.0f;
-        if (actor.type == EditorUi::EditorSceneActorType::Mesh)
+        if (actor.type == EditorUi::EditorSceneActorType::Mesh ||
+            actor.type == EditorUi::EditorSceneActorType::Terrain)
         {
             Eigen::Vector3f lower = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
             Eigen::Vector3f upper = Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
-            // 用所有 section 的变换后角点，而不是作者根位置：源模型可偏心，section 可相距很远。
+            // 用所有 section 的变换后角点，而不是作者根位置：源模型可偏心，section 可相距很远；
+            // 地形的 section 就是同一 placement 下的各个 chunk，取景必须包住整块地形。
             for (const auto& section : actor.sections)
             {
                 const auto& object = world.GetMeshObjects().at(section.objectName);

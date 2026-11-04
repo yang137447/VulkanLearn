@@ -180,6 +180,30 @@ struct TerrainLayerDesc
     std::string key;
 };
 
+// 编辑器 layer paint 的绝对覆盖层。weights/opacity 按 layer-major 排列：
+// index = (layer * height + y) * width + x。opacity=0 表示该 texel 仍使用
+// 高度/坡度烘焙结果；opacity>0 时按 bilinear 采样把权重混合到覆盖值。
+// 该结构本身是会话快照；需要跨 World 重载保留时由 TR 的 paintPath 指向
+// 对应的 .vlpaint 文件，未 Save Paint 的编辑仍只存在于当前会话。
+struct TerrainLayerPaintData
+{
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t layerCount = 0;
+    std::vector<float> weights;
+    std::vector<uint8_t> opacity;
+
+    bool Empty() const noexcept
+    {
+        return width == 0 || height == 0 || layerCount == 0 ||
+            weights.size() != static_cast<size_t>(width) * height * layerCount ||
+            opacity.size() != weights.size();
+    }
+
+    float Blend(uint32_t layer, float u, float v, float base) const;
+    bool HasPaint(uint32_t layer, float u, float v) const;
+};
+
 // TR_*.json 解析后的几何/材质描述。size、heightScale、heightOffset 的单位都是 cm，
 // 与世界单位一致；heightmap 是资源根相对路径，不套材质纹理的 V 翻转。
 struct TerrainAssetDesc
@@ -187,6 +211,9 @@ struct TerrainAssetDesc
     std::string assetPath;
     std::string name;
     std::string heightmapPath;
+    // 可选的 layer paint 快照（资源根相对 .vlpaint）。文件可以尚不存在，
+    // 此时它只是编辑器 Save Paint 的目标路径；存在时加载期会恢复覆盖层。
+    std::string paintPath;
     Eigen::Vector2f size = Eigen::Vector2f(100000.0f, 100000.0f);
     float heightScale = 0.0f;
     float heightOffset = 0.0f;
@@ -270,6 +297,8 @@ struct TerrainBuildPlan
 {
     TerrainAssetDesc desc;
     std::shared_ptr<const HostImage> heightmap;
+    // 可选的编辑器 layer paint 覆盖；为空时完全走高度/坡度烘焙。
+    std::shared_ptr<const TerrainLayerPaintData> layerPaint;
     // 一次场景摆放的稳定身份，由 SceneAssetValidator 写成 `terrain|<objectName>`。
     // 同一 TR 可以在一个 World 里摆放多次，assetPath 因此不再是唯一注册键；
     // 为空时由 TerrainPlacementIdentity 回退到 assetPath，兼容旧测试/旧资产。

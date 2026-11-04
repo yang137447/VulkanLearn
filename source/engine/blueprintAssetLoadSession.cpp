@@ -166,6 +166,10 @@ WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
     mesh.materialKey = plan.materialKey;
     mesh.materialInstanceKey = plan.materialInstanceKey;
     mesh.speedTreeWindProfileKey = plan.speedTreeWindProfileKey;
+    // 蓝图资产始终是普通网格；地形身份不通过该加载会话传播。
+    mesh.isTerrain = false;
+    mesh.terrainAssetPath.clear();
+    mesh.terrainPlacementId.clear();
     return mesh;
 }
 

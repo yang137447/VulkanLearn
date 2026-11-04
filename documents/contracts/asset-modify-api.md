@@ -4,21 +4,23 @@
 
 ## 入口与归属
 
-Scene、Mesh、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
+Scene、Mesh、Texture、Blueprint、Terrain 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
 通过 `MaterialInstanceEditorRuntime::SubmitJson` 投递到现有 `EditorCommandBus`；
 无窗口工具 `vl_asset_edit` 使用同一 codec、bus、`AssetCommandExecutor` 与文档服务。
 Console 只借用 facade，不操作 World 或文件。运行中入口需要启用编辑器。
 
 | 命令前缀 | 文档归属与可编辑内容 |
 | --- | --- |
-| `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
+| `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；terrain 摆放的 terrainPath/pageOrigin/pageTilesPerSide；灯光作者参数；相机变换、投影、曝光 |
 | `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、导入选项、已有材质槽的 MI 绑定 |
 | `texture.*` | `T_*.json`；`source`（单图）或 `sources`（数组层序）、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
+| `terrain.*` | `TR_*.json`；名称/说明、高度图/MI/paint 快照引用、size/heightScale/heightOffset、grid/chunk/LOD/page 字段、完整 layers 表及逐层 typed 字段 |
 
 场景中的模型变换属于 Scene，共享模型的槽绑定属于 Mesh；MI 参数和贴图槽由原 MI 服务拥有。
-接口不编辑几何或图片像素，不支持 Scene 对象增删/改名/类型转换、槽增删/重排、任意 JSON Pointer、
-环境/风参数、terrain、通用跨资产历史。临时 `SC_model_preview.json` 不能成为可编辑资产文档。
+接口不编辑几何或图片像素（包括高度图像素），不支持 Scene 对象增删/改名/类型转换、
+任意 JSON Pointer、环境/风参数、通用跨资产历史。Scene 的 `terrainPath` 只改场景引用的
+TR 资产；TR 内部参数改走 `terrain.modify`。临时 `SC_model_preview.json` 不能成为可编辑资产文档。
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
 BP 文档支持完整替换组件数组，包括增删和父链调整。可选
@@ -30,7 +32,7 @@ BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 
 ## 生命周期
 
-四种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
+五种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
 `save`、`revert`、`reload`。已有 `scene.save` 复用同一 Scene owner。
 Blueprint 另支持 `undo`、`redo`，都要求当前 revision；文档投影的 `canUndo` / `canRedo` 标明可用性。
 两个历史栈合计最多 32 步、16 MiB 序列化 JSON，保存保留、revert/reload 清空，新编辑清空 redo。
@@ -44,7 +46,10 @@ Blueprint 另支持 `undo`、`redo`，都要求当前 revision；文档投影的
 每次 modify 接受 1..128 项：在隔离副本上应用全部修改，然后验证最终候选。
 near/far、spot 内外锥等组合只看最终状态。失败不改变任何字段或 revision；
 无变化不推进 revision。重复目标、未知字段/属性、错误类型、非有限或 float 不可表示数值拒绝。
-向量必须给完整三个分量。可选字段删除采用 `{"field":"mipmaps","reset":true}`，
+向量必须给完整分量：普通 vec3 给三个分量，terrain 的 `pageOrigin` 给两个整数分量，
+`lodDistances` / `chunkResidencyDistances` 使用有限数字数组（`lodLevels=1` 时允许空数组）。
+`pageTilesPerSide` 与 `pageOrigin` 保持 JSON integer，不能提交浮点。可选字段删除采用
+`{"field":"mipmaps","reset":true}`，
 reset 不能同时带 value；必填字段不能 reset。
 
 BP 的 `properties`、`physics`、`componentInstanceEditable` 使用完整对象，
@@ -76,6 +81,8 @@ scope 为 candidate，targets 表示整个请求范围，不声称定位到其�
 Scene 根字段不带选择器；对象字段以唯一的 `objectIdentity:"type|name"` 定位，
 不按数组下标猜对象。完整场景校验拒绝重复身份。Mesh 槽必须同时带
 `slotIndex` 与 `expectedSlotName`，仅修改 `materialInstancePath`，顺序身份变化即拒绝。
+Terrain 单层字段必须同时带 `layerIndex` 与 `expectedLayerName`；整表增删/重排直接修改
+`layers` 数组，不按旧层下标静默写入。
 
 位置、长度和裁剪面使用厘米，rotation 与锥角使用度。
 灯光 intensity 使用最终 intensityUnit 的作者值（directional 为 lux，局部光为 cd/lm）。
@@ -85,7 +92,12 @@ UI 的保持亮度换算仍属于 UI actor adapter。Camera rotation 明确清�
 
 场景 JSON 与 Texture JSON 分别由 `sceneJsonValidator.h`、`textureAssetValidation.h`
 共享给正式 loader 和标准资产候选；Mesh 使用现有 `MeshAssetValidator`。
-校验检查文档及引用文件存在/类型/资源根边界，结果标记
+校验检查文档及引用文件存在/类型/资源根边界；terrain 的 `terrainPath` 必须引用
+`type: "terrain"` 的 TR 资产；TR 的 `heightmapPath` 必须是资源根内存在的文件，
+`materialInstancePath` 必须引用 `type:"materialInstance"`。可选 `paintPath` 必须是
+资源根内、以 `.vlpaint` 结尾且父目录可解析的文件目标；文件本身允许尚不存在
+（首次 Save Paint 的目标），但绝对路径、根外遍历与链接逃逸仍拒绝。TR 文档本身走
+`TerrainAssetValidator`。结果标记
 `validationLevel:"document_and_references"`、`contentPreflight:false`。
 这不导入模型、不验证源材质槽与几何对应关系、不解码图片，也不准备 Vulkan 资源。
 正式 World 加载仍执行完整导入与资源事务；加载失败不回滚已经明确保存的作者文件。
@@ -104,9 +116,10 @@ Scene 草稿与已有 UI actor 编辑使用同一 baseline/draft/revision，进�
 可读取最新草稿继续编辑，不必等待前一个分量触发的重载。标准 API 改写使历史不匹配时，
 仍受上述 staged Scene 门禁约束；该例外不授权对旧 World 做 live 参数补丁。
 
-Mesh/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save。
+Mesh/Texture/Terrain 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save/terrain.save。
 本接口没有 GPU 热替换，保存后需经正式资源重建/World 加载消费新描述；
-texture.reload/mesh.reload 只重读作者文档。API 没有新增模型/贴图 Details 编辑控件。
+texture.reload/mesh.reload/terrain.reload 只重读作者文档。API 没有新增模型/贴图
+Details 编辑控件；Terrain 资源页只编辑作者 JSON，不写高度图像素。
 MI 的现有预览协议保持独立。
 
 BP 标签页有独立草稿与 revision，也进入 Save Content，提交 `blueprint.save`。

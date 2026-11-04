@@ -163,6 +163,8 @@ struct MaterialInstanceModelSnapshot
     VL::RuntimeId objectId = 0;
     std::string displayName;
     std::string objectIdentity;
+    // 大纲 Terrain/Mesh 的稳定身份；视口拾取路径为空。
+    std::string actorIdentity;
     std::vector<MaterialInstanceModelMaterialSnapshot> materials;
 };
 
@@ -190,6 +192,7 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
     std::vector<EditorAssetDocumentResultPayload> blueprintDocuments;
+    std::vector<EditorAssetDocumentResultPayload> terrainDocuments;
     std::vector<EditorBlueprintCommandFeedback> blueprintCommandFeedback;
     std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;

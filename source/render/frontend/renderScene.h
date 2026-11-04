@@ -27,6 +27,8 @@ struct RenderDrawPacket
     std::string speedTreeWindProfileKey;
     // 显式地形标记：feedback pass 用 draw packet 层过滤，而不是遍历材质/名字。
     bool terrainFeedbackEligible = false;
+    // 编辑器拾取身份：地形 chunk 仍是 mesh，但选中必须回写 terrain|name。
+    bool isTerrain = false;
 };
 
 struct MaterialInstanceDrawGroup

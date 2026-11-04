@@ -1,7 +1,7 @@
 # VulkanLearn
 
 ## 简介
-这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。地形已包含 CPU 几何 LOD/skirt 生成与独立的 Jolt heightfield 碰撞模块；运行时 LOD 选择和 World 级碰撞接入尚未完成。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
+这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。地形已包含 CPU 几何 LOD/skirt、运行时 LOD 选择、加载期 chunk 驻留和 Play 模式 Jolt heightfield 碰撞；运行时异步几何分页、地形笔刷编辑和编辑后碰撞重建仍未完成。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
 
 ## 文档分工
 
@@ -208,7 +208,12 @@ Content Browser 使用目录树、路径导航、搜索、类型筛选和资产�
 双击 Scene 会复用现有 World/RenderGraph 事务切换关卡，并同步打开只读 JSON inspector；
 双击 Mesh 进入模型预览标签并自动取景：左/右键拖动旋转、滚轮缩放、中键平移，
 双击画面或点击相机按钮重新取景。切换/重载模型会重置相机，不修改模型资产。
-Texture 标签提供 PNG/JPEG/TGA/BMP 的等比例 RGB 预览；Terrain 仍为类型预览占位。
+Texture 标签提供 PNG/JPEG/TGA/BMP 的等比例 RGB 预览；Terrain 标签是可编辑的
+`TR_*.json` 资产页（顶层字段 + layers 表），保存/回退走标准资产命令。
+关卡视口的 Landscape 工具提供 Terrain Sculpt（Raise/Lower/Smooth、半径/强度/
+falloff、单笔 Undo）与 layered Terrain Paint（layer 选择/Erase）；脏 chunk 与失效
+覆盖页在运行时重建。Sculpt 可显式写回 `.png/.bmp/.exr` 高度图，Paint 覆盖仍是会话内状态。
+关卡变换支持 UE 风格 Q/W/E/R（Select/Move/Rotate/Scale）与 World/Local、吸附。
 贴图预览支持滚轮缩放、鼠标拖动平移，双击或 Fit Image 按钮复位；放大的是有界预览图。
 贴图预览按 colorSpace 显示，最长边限制为 1024，标题显示原图尺寸；资源标签包含只读 JSON Details；
 支持标签切换、关闭、返回 World、重复打开去重和重新读取 JSON。Scene 仍进入主工作区

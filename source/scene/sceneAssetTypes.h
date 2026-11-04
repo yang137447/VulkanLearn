@@ -79,4 +79,11 @@ struct MeshObjectBuildPlan
     std::vector<float> lodDistancesCm;
     Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
+    // 地形在 World 中仍是 chunk mesh；独立 Terrain 身份只属于编辑器
+    // 展示/身份层，不引入第二套 World 地形类型。
+    bool isTerrain = false;
+    std::string terrainAssetPath;
+    // 一次场景摆放的身份（terrain|<objectName>）。同一 TR 可摆放多次，
+    // assetPath 不能作为 chunk 更新/碰撞回写的唯一键。
+    std::string terrainPlacementId;
 };

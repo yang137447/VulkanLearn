@@ -383,6 +383,9 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     const EditorActorPropertyEdit& edit)
 {
     if (IsPreviewScene(actor.scenePath)) return;
+    // Gizmo 拖动中的预览只属于 live World；命令端不得把每帧预览写进草稿或历史。
+    // 释放时的 commit 才走这里，完整 Transform 只 push 一次快照。
+    if (edit.preview) return;
     auto& document = documents.at(Normalize(actor.scenePath));
     auto& object = *FindActor(document.draft, actor.identity);
     auto previous = document.draft;
@@ -403,6 +406,15 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     }
     else switch (edit.property)
     {
+    case P::Transform:
+        object["position"] = Vector(actor.position);
+        if (actor.type != EditorUi::EditorSceneActorType::SquareAreaLight)
+            object["rotation"] = Vector(actor.rotation);
+        if (actor.type == EditorUi::EditorSceneActorType::Mesh ||
+            actor.type == EditorUi::EditorSceneActorType::Terrain ||
+            actor.type == EditorUi::EditorSceneActorType::Script)
+            object["scale"] = Vector(actor.scale);
+        break;
     case P::Position: object["position"] = Vector(actor.position); break;
     case P::Rotation: object["rotation"] = Vector(actor.rotation); break;
     case P::Scale: object["scale"] = Vector(actor.scale); break;
@@ -428,7 +440,8 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     default: break; // 曝光字段已由上方具名映射处理。
     }
     if (actor.type == EditorUi::EditorSceneActorType::Camera &&
-        (edit.property == P::Position || edit.property == P::Rotation))
+        (edit.property == P::Position || edit.property == P::Rotation ||
+         edit.property == P::Transform))
     {
         // look_at 在加载时优先于 rotation；变换后以实际朝向写 TRS，不能留下旧 target 覆盖新旋转。
         object["rotation"] = Vector(actor.rotation);

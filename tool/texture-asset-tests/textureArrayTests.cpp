@@ -393,6 +393,42 @@ TEST_F(TextureArrayTest, RejectsEmptyArraySources)
     EXPECT_THROW(LoadTextureAssetDesc(assetPath.string()), std::exception);
 }
 
+TEST_F(TextureArrayTest, AcceptsEditorOnlyDisplacementSourcesSidecar)
+{
+    nlohmann::json asset = {
+        {"name", "T_displacement_sidecar"},
+        {"type", "textureArray"},
+        {"sources", {"grass_albedo.png", "rock_albedo.png"}},
+        {"displacementSources", {"grass_height16.png", "rock_height16.png"}},
+        {"colorSpace", "srgb"}};
+    const auto assetPath = directory / "T_displacement_sidecar.json";
+    std::ofstream stream(assetPath);
+    stream << asset.dump(2);
+    stream.close();
+
+    const TextureBindingLoadDesc description =
+        LoadTextureAssetDesc(assetPath.string());
+    ASSERT_EQ(description.sources.size(), 2u);
+    EXPECT_EQ(description.sources[0], "grass_albedo.png");
+    EXPECT_EQ(description.sources[1], "rock_albedo.png");
+}
+
+TEST_F(TextureArrayTest, RejectsDisplacementSourcesLengthMismatch)
+{
+    nlohmann::json asset = {
+        {"name", "T_displacement_mismatch"},
+        {"type", "textureArray"},
+        {"sources", {"grass_albedo.png", "rock_albedo.png"}},
+        {"displacementSources", {"grass_height16.png"}},
+        {"colorSpace", "srgb"}};
+    const auto assetPath = directory / "T_displacement_mismatch.json";
+    std::ofstream stream(assetPath);
+    stream << asset.dump(2);
+    stream.close();
+
+    EXPECT_THROW(LoadTextureAssetDesc(assetPath.string()), std::exception);
+}
+
 TEST_F(TextureArrayTest, RejectsSingleTextureWithSourcesField)
 {
     const auto source = WriteBmp("single.bmp");

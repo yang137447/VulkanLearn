@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -9,11 +10,14 @@
 
 #include "world/worldSnapshot.h"
 
+namespace VL { struct TerrainBuildPlan; }
+
 namespace VL::EditorUi
 {
 
-// 大纲 actor 的类型。前七种与场景 JSON 的对象 type 一一对应，WindProfile 是
-// 网格导入产生的风剖面（不是场景对象），最后一类只表达 World 里确实存在的状态。
+// 大纲 actor 的类型。Mesh/Terrain 与其余场景对象 type 一一对应；WindProfile
+// 是网格导入产生的风剖面（不是场景对象），Script/Environment 只表达 World
+// 里确实存在的状态。Terrain 仅用于编辑器身份与展示，World 中仍是 chunk mesh。
 enum class EditorSceneActorType : uint8_t
 {
     Mesh,
@@ -24,7 +28,8 @@ enum class EditorSceneActorType : uint8_t
     Camera,
     Environment,
     WindProfile,
-    Script
+    Script,
+    Terrain
 };
 
 // 一个 mesh actor 的渲染子对象。World 的 meshObjects 按 section 展开，
@@ -113,11 +118,17 @@ struct EditorSceneActorSnapshot
     // 展开状态的键，不是 DOM 索引，也不能当作 GPU 资源身份。
     std::string identity;
     std::string displayName;
-    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格与四类灯
-    // 真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
+    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格、地形与
+    // 四类灯真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
     bool visible = true;
-    // 只有 Mesh 使用；其余类型为空。
+    // 只有 Mesh/Terrain 使用；其余类型为空。Terrain 的每个 section 对应
+    // World 中的一块地形 chunk，仍完全复用 mesh 的材质槽结构。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
+    // 仅 Terrain 使用：TR 资产路径，用于 Details 展示；不引入第二套 World 地形对象。
+    std::string terrainAssetPath;
+    // 仅 Terrain 使用：World 加载期准备好的只读计划。高度图通过 shared_ptr
+    // 共享，UI 只用于 ray→heightfield 命中和圆环投影，不能写回。
+    std::shared_ptr<const TerrainBuildPlan> terrainPlan;
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;

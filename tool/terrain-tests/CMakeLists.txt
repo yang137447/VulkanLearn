@@ -1,5 +1,8 @@
 add_executable(terrain_tests
     terrainTests.cpp
+    terrainHeightmapIOTests.cpp
+    terrainHeightmapEditorTests.cpp
+    terrainPaintFileTests.cpp
     terrainPageManagerP31Tests.cpp
     terrainLayerFeedbackTests.cpp
     terrainLayerPageManagerTests.cpp
@@ -15,6 +18,10 @@ terrainLayerRegistryTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapIO.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapEditor.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapWriter.cpp
+    ${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainPaintSession.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerTable.cpp
 ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerRegistry.cpp
 ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
@@ -24,6 +31,9 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainChunkResidency.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPageManager.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp
+    ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp
     ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/resourceRetireQueue.cpp

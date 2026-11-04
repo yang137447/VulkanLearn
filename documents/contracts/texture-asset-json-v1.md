@@ -200,6 +200,10 @@ their own orientation contract. Environment HDRI loading explicitly selects
 `ForceOff`, and generated Vulkan images do not pass through the file-backed material
 texture path.
 
+Single-image export supports 8-bit R/RG/RGBA PNG and `RGBA16_FLOAT` EXR. PNG writes
+use stored zlib blocks for editor caches and previews; arrays or multi-mip images are
+still rejected instead of saving layer 0 silently.
+
 Mesh UVs are imported unchanged. Blender/glTF, OBJ, terrain, and other asset pipelines
 must author source images and UVs for the engine material-texture convention instead
 of adding Shader compensation or a per-asset runtime switch.
@@ -293,6 +297,7 @@ The texture asset JSON should map to runtime options as follows:
 | `type` | `texture` loads one image; `textureArray` loads ordered layers |
 | `source` | single-image file passed to `TextureIO::Load` |
 | `sources` | ordered layer files passed to `TextureIO::LoadArray` |
+| `displacementSources` | editor-only per-layer 16-bit height sidecar for terrain layer preview; not uploaded at runtime |
 | `colorSpace` | `TextureIO::LoadOptions::Transfer` |
 | `mipmaps` | device mip generation |
 | `filter` | Vulkan sampler filter |
@@ -334,6 +339,28 @@ order. Every decoded source must have the same dimensions, pixel format,
 semantic, swizzle and row stride; otherwise the whole asset is rejected. CPU mip
 chains are not supported, and single-image export rejects arrays instead of
 silently writing layer 0.
+
+Terrain layer source-sets may also carry an optional `displacementSources`
+array. It is ordered like `sources`, must have the same length, and each entry
+points at a 16-bit grayscale height image:
+
+```json
+{
+    "type": "textureArray",
+    "sources": [
+        "Maps/SC_terrain/Source/Textures/T_grass_albedo.png",
+        "Maps/SC_terrain/Source/Textures/T_rock_albedo.png"
+    ],
+    "displacementSources": [
+        "Maps/SC_terrain/Source/Textures/T_grass_height16.png",
+        "Maps/SC_terrain/Source/Textures/T_rock_height16.png"
+    ]
+}
+```
+
+`displacementSources` is an editor-side field consumed by
+`TerrainLayerPreviewCache`; it does not participate in GPU texture creation,
+sampler state or the texture cache key. Single-image `texture` assets reject it.
 
 Material JSON declares the matching slot type, and the generated parameter
 include uses it verbatim:

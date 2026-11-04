@@ -1,5 +1,10 @@
 add_executable(editor_ui_tests
     editorUiTests.cpp
+    brushTests.cpp
+    sceneObjectTypeSupportTests.cpp
+    terrainEditSessionTests.cpp
+    terrainAssetEditorTests.cpp
+    terrainLayerPreviewTests.cpp
     terrainLodSnapshotTests.cpp
     actorPropertyTests.cpp
     sceneDocumentTests.cpp
@@ -39,6 +44,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintAssetEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/terrainAssetEditorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintLogicComponentsPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/sceneLogicComponentsPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/scriptPropertyControls.cpp"
@@ -64,6 +70,17 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorSceneActorBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorActorProperty.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/brush/brushProfile.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/brush/brushSampler.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainEditSession.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainPaintSession.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainLayerPreview.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapEditor.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapWriter.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
 if(MINGW)

@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -74,7 +77,8 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
     for (const auto& entry : asset.items())
     {
         if (entry.key() != "name" && entry.key() != "type" && entry.key() != "description" &&
-            entry.key() != "heightmapPath" && entry.key() != "size" &&
+            entry.key() != "heightmapPath" && entry.key() != "paintPath" &&
+            entry.key() != "size" &&
             entry.key() != "heightScale" && entry.key() != "heightOffset" &&
             entry.key() != "gridResolution" && entry.key() != "chunkQuads" &&
             entry.key() != "lodLevels" && entry.key() != "lodDistances" &&
@@ -213,6 +217,40 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
     if (pageOrigin.x() + static_cast<int>(pageTilesPerSide) > 32 ||
         pageOrigin.y() + static_cast<int>(pageTilesPerSide) > 32)
         throw std::invalid_argument("Terrain pageOrigin + pageTilesPerSide exceeds global page table: " + assetPath);
+
+    // 可选 paintPath：资源根相对的 .vlpaint 快照。文件可以尚不存在（首次
+    // Save Paint 的写入目标），但路径本身必须是安全的相对路径，并绑定一层
+    // 以上的 layer 表；否则保存出的快照无法与任何地形层身份对应。
+    if (asset.contains("paintPath"))
+    {
+        if (!asset.at("paintPath").is_string())
+            throw std::invalid_argument(
+                "Terrain paintPath must be a string: " + assetPath);
+        const std::string paintPath = asset.at("paintPath").get<std::string>();
+        if (paintPath.empty() || paintPath.size() > 1024)
+            throw std::invalid_argument(
+                "Terrain paintPath requires 1..1024 characters: " + assetPath);
+        const std::filesystem::path parsed(paintPath);
+        if (parsed.is_absolute() || parsed.has_root_name() ||
+            parsed.has_root_directory())
+            throw std::invalid_argument(
+                "Terrain paintPath must be resource-root-relative: " + assetPath);
+        for (const auto& part : parsed)
+            if (part == "..")
+                throw std::invalid_argument(
+                    "Terrain paintPath must not contain traversal: " + assetPath);
+        std::string extension = parsed.extension().string();
+        for (char& character : extension)
+            character = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(character)));
+        if (extension != ".vlpaint")
+            throw std::invalid_argument(
+                "Terrain paintPath must use the .vlpaint extension: " + assetPath);
+        if (!asset.contains("layers") || !asset.at("layers").is_array() ||
+            asset.at("layers").empty())
+            throw std::invalid_argument(
+                "Terrain paintPath requires at least one layer: " + assetPath);
+    }
 
     if (!asset.contains("layers")) return;
     const auto& layers = asset.at("layers");
