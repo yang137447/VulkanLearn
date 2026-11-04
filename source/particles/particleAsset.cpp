@@ -789,6 +789,16 @@ ParticleEmitterAsset ParseEmitter(
         "meshLighting", emitter.meshLighting);
     emitter.meshAmbient = ReadFiniteFloat(
         json, "meshAmbient", emitter.meshAmbient);
+    if (json.contains("castShadows"))
+    {
+        if (!json.at("castShadows").is_boolean())
+        {
+            throw std::invalid_argument(
+                "Particle castShadows must be a boolean");
+        }
+        emitter.castShadows =
+            json.at("castShadows").get<bool>();
+    }
     // 显式 useFixedBounds 优先；省略时只要存在 fixedBounds 对象就启用，
     // 因此作者可以只写包围球数据，也可以写 false 明确关闭。
     emitter.useFixedBounds = json.contains("useFixedBounds")

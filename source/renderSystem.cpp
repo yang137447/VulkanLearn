@@ -2633,6 +2633,92 @@ void RenderSystem::UpdateLocalShadowUBOForPass(
         ubo);
 }
 
+void RenderSystem::PrepareParticleShadowCasters(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex,
+    uint32_t octant)
+{
+    if (renderPass.type == VL::RenderGraphPassType::Shadow)
+    {
+        const uint32_t cascadeIndex =
+            renderPass.shadowCascadeIndex;
+        if (!shadowCascadeFrameData.valid ||
+            cascadeIndex >= shadowCascadeFrameData.lightViewProj.size())
+        {
+            return;
+        }
+        // CSM 不需要光位置/远平面；w=bias 仅保存，接收面 bias 仍在
+        // 采样端应用，caster 不再重复偏移深度。
+        particleRenderer.PrepareShadow(
+            commandBuffer,
+            swapChainImageIndex,
+            shadowCascadeFrameData.lightViewProj[cascadeIndex],
+            0,
+            0,
+            Eigen::Vector3f::Zero(),
+            0.0f,
+            0.0f);
+        return;
+    }
+    if (renderPass.type != VL::RenderGraphPassType::LocalShadow)
+    {
+        return;
+    }
+
+    const uint32_t lightIndex = renderPass.localShadowIndex;
+    if (lightIndex >= activeLocalShadowLights.size())
+    {
+        return;
+    }
+    const VL::LightSnapshot& light =
+        activeLocalShadowLights[lightIndex];
+    const float farCm = VL::ComputeLocalShadowFar(light.radius);
+    const uint32_t mode =
+        light.type == VL::LightSnapshotType::Point ? 1u : 0u;
+    Eigen::Matrix4f viewProjection;
+    if (mode == 1)
+    {
+        // 与 shadowLocal / localShadowSampling 共用同一八面体编码；
+        // view 是单位阵，投影矩阵直接把世界方向折到 [-1,1]^2。
+        viewProjection =
+            VL::BuildOctahedralProjectionMatrix(
+                light.position,
+                octant);
+    }
+    else
+    {
+        const VL::LocalShadowSpotMatrices matrices =
+            VL::BuildSpotShadowMatrices(
+                light.position,
+                light.direction,
+                light.coneAngleOuter,
+                1.0f,
+                farCm);
+        viewProjection = matrices.projection * matrices.view;
+    }
+    particleRenderer.PrepareShadow(
+        commandBuffer,
+        swapChainImageIndex,
+        viewProjection,
+        static_cast<int>(mode),
+        static_cast<int>(octant),
+        light.position,
+        farCm,
+        std::max(0.0f, light.shadowBias));
+}
+
+void RenderSystem::RecordParticleShadowCasters(
+    vk::CommandBuffer& commandBuffer,
+    const Renderpass& renderPass,
+    uint32_t swapChainImageIndex)
+{
+    particleRenderer.RecordShadow(
+        commandBuffer,
+        swapChainImageIndex,
+        renderPass);
+}
+
 void RenderSystem::DrawEditorGridGeometry(
     vk::CommandBuffer& commandBuffer)
 {

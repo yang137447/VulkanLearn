@@ -149,6 +149,13 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     // x = 全局 light 槽位 base, y = 本发射器槽位容量,
     // z = cd intensity, w = cm radius。仅 light emit compute 消费。
     vec4 particleLightParams;
+    // 阴影 caster pass 专用：每次录制一个 shadow 视图/象限时按顺序
+    // updateBuffer 覆盖，不参与可见粒子 pass。
+    mat4 shadowViewProj;
+    // x = mode 0 透视 / 1 八面体, y = 象限 0..7, z = far cm, w = bias cm。
+    vec4 shadowCasterParams;
+    // xyz = 点光位置；仅八面体模式使用。w 保留。
+    vec4 shadowLightPosition;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

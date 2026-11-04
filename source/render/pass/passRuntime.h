@@ -72,6 +72,29 @@ public:
         (void)octant;
         (void)mode;
     }
+    // mesh 粒子 caster 的 UBO 更新必须在 render pass 外进行：同一
+    // per-image UBO 要在一个 pass 内按 CSM 级联/八面体象限多次覆盖，
+    // 只能依赖有序的 vkCmdUpdateBuffer。Record 阶段只做管线/描述符/绘制。
+    virtual void PrepareParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        uint32_t octant)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+        (void)octant;
+    }
+    virtual void RecordParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+    }
     // 编辑器参考网格的几何与缓冲归 RenderSystem 所有；pass 流程只请求提交一次
     // 网格绘制，因此网格顶点生命周期不会泄漏到 pass 层。
     virtual void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) = 0;

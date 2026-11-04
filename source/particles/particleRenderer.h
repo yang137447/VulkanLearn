@@ -115,6 +115,27 @@ public:
         uint32_t imageIndex,
         const Renderpass& renderPass);
 
+    // mesh 粒子作为阴影 caster 的两个阶段：
+    // 1) PrepareShadow 必须在 render pass 外调用。它用有序的
+    //    vkCmdUpdateBuffer 覆盖每个 caster 的 shadowViewProj / 参数，并插入
+    //    uniform-read -> transfer -> uniform-read 依赖；同一 per-image UBO
+    //    在一帧内会被 CSM/局部阴影多次覆盖，只能用命令缓冲保证顺序。
+    // 2) RecordShadow 在 shadow render pass 已开始后调用，只绑定按
+    //    vk::RenderPass 缓存的 caster 管线、描述符与网格并提交 indirect draw。
+    void PrepareShadow(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Eigen::Matrix4f& viewProjection,
+        int mode,
+        int octant,
+        const Eigen::Vector3f& lightPosition,
+        float farCm,
+        float biasCm);
+    void RecordShadow(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Renderpass& renderPass);
+
     // 一次性 GPU 回读：调用前必须保证渲染线程与设备空闲。输出是调试快照，
     // 不参与正常帧路径；失败时返回 false 并保留一条可直接展示的原因。
     // frameStats 只用于写 dump 根部的 GPU pass 计时字段。
@@ -337,9 +358,15 @@ private:
         // x = 全局 light 槽位 base, y = 本发射器槽位容量,
         // z = cd intensity, w = cm radius。仅 light emit compute 消费。
         Eigen::Vector4f particleLightParams;
+        // 阴影 caster pass 专用：每个 shadow 视图/象限录制前覆盖。
+        Eigen::Matrix4f shadowViewProj;
+        // x = mode 0 透视 / 1 八面体, y = 象限, z = far cm, w = bias cm。
+        Eigen::Vector4f shadowCasterParams;
+        // xyz = 点光位置；仅八面体模式使用。
+        Eigen::Vector4f shadowLightPosition;
     };
     static_assert(
-        sizeof(FrameUniforms) == 7472,
+        sizeof(FrameUniforms) == 7568,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -476,6 +503,15 @@ private:
     static_assert(
         offsetof(FrameUniforms, particleLightParams) == 7456,
         "ParticleFrame particleLightParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowViewProj) == 7472,
+        "ParticleFrame shadowViewProj offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowCasterParams) == 7536,
+        "ParticleFrame shadowCasterParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowLightPosition) == 7552,
+        "ParticleFrame shadowLightPosition offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -623,6 +659,15 @@ private:
     static void DestroyEmitterResources(
         RendererBackendVulkan& backend,
         EmitterResources& emitter);
+    // PrepareShadow 与 RecordShadow 必须使用完全相同的 caster 判定：
+    // 作者开关、mesh 几何有效、可见/启用、本 image UBO 存在，以及包围球
+    // 与当前 shadow 视图的保守相交。任何条件只改一处都会导致 UBO 更新与
+    // draw 数量不一致。
+    static bool IsMeshShadowCaster(
+        const EmitterResources& emitter,
+        uint32_t imageIndex,
+        const Eigen::Vector3f& lightPosition,
+        float farCm);
     void CreateBuffers(EmitterResources& emitter);
     void LoadEmitterMesh(
         EmitterResources& emitter,
@@ -631,6 +676,8 @@ private:
     void CreateLightEmitterDescriptors(EmitterResources& emitter);
     void CreateFallbackLightingResources();
     void DestroyFallbackLightingResources();
+    std::shared_ptr<PipelineBase> GetOrCreateShadowPipeline(
+        const Renderpass& renderPass);
     const vk::DescriptorBufferInfo& SceneLightInfoForImage(
         uint32_t imageIndex) const;
     const vk::DescriptorBufferInfo& ParticleLightInfoForImage(
@@ -721,6 +768,15 @@ private:
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;
     std::shared_ptr<PipelineBase> meshAlphaPipeline;
+    // mesh caster 管线按 shadow/localShadow 的 VkRenderPass 句柄缓存；
+    // 同一图里 CSM 与局部阴影使用不同 render pass，不能共用。
+    std::unordered_map<uintptr_t, std::shared_ptr<PipelineBase>>
+        shadowPipelines;
+    PipelineFactory* pipelineFactory = nullptr;
+    // PrepareShadow 与 RecordShadow 之间的单帧剔除输入；两者按 pass
+    // 严格交替调用，只在渲染线程使用。
+    Eigen::Vector3f shadowCullLightPosition = Eigen::Vector3f::Zero();
+    float shadowCullFarCm = 0.0f;
     std::shared_ptr<PipelineBase> globalDrawPipeline;
     std::shared_ptr<Texture> defaultTexture;
     // 发射器包整体由 shared_ptr 持有：活跃表与 retire queue 共享同一所有权，

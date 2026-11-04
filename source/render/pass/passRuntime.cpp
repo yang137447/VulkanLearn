@@ -183,6 +183,11 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         renderPass.width,
         renderPass.height,
         renderPass.shadowCascadeIndex);
+    context.services.PrepareParticleShadowCasters(
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        0);
     BeginConfiguredRenderPass(context);
 
     RendererDrawContext drawContext{
@@ -194,6 +199,10 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         context.services
     };
     drawExecutor.DrawShadowScene(commonOpaquePipeline, drawContext);
+    context.services.RecordParticleShadowCasters(
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex);
 
     commandBuffer.endRenderPass();
 }
@@ -259,6 +268,11 @@ void PassRuntime::RecordLocalShadowPass(
             lightIndex,
             octant,
             mode);
+        context.services.PrepareParticleShadowCasters(
+            commandBuffer,
+            renderPass,
+            context.swapChainImageIndex,
+            octant);
         BeginConfiguredRenderPass(context);
         if (octant == 0)
         {
@@ -286,6 +300,10 @@ void PassRuntime::RecordLocalShadowPass(
             localShadowLight,
             // 只在第一个象限/聚光唯一一次上报，避免 8 象限重复计数。
             octant == 0);
+        context.services.RecordParticleShadowCasters(
+            commandBuffer,
+            renderPass,
+            context.swapChainImageIndex);
         commandBuffer.endRenderPass();
     }
 }

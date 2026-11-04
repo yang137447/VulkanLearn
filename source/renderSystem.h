@@ -350,6 +350,15 @@ private:
         uint32_t lightIndex,
         uint32_t octant,
         uint32_t mode) override;
+    void PrepareParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        uint32_t octant) override;
+    void RecordParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
     void UpdateMaterialInstanceUBOForPass(
         const std::shared_ptr<MaterialInstance>& materialInstance) override;
     void UpdateObjectUBOForPass(

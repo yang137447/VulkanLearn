@@ -826,6 +826,10 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   完整 DefaultLit 光照：全部方向光/点光/聚光 + 全部 GPU 粒子灯，GGX/Smith/Fresnel
   直接光 + 预过滤 cubemap/BRDF LUT 的 IBL，方向光额外采样 CSM；关闭时 mesh 仍走
   unlit 输出。billboard 与 ribbon 忽略该字段。
+- `castShadows`：默认 `false`，仅 `renderMode: "mesh"` 使用。开启后 mesh 粒子实例
+  会以同一份 `particleMeshTransform` 变换写入 CSM 与局部阴影图集；billboard/ribbon、
+  beam、light 与 decal 不投影。CSM 的 4 级会提交同一批 caster（暂未逐级做视锥剔除），
+  局部阴影按灯范围对发射器包围球做保守剔除。
 - `meshAmbient`：默认 `0.2`，仅 `renderMode: "mesh"` 且 `meshLighting: true` 时参与光照。
   它同时缩放常量 ambient 与 IBL 环境项，范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity
   在加载和编辑器写入阶段都会被拒绝。

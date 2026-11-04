@@ -158,11 +158,18 @@ Scene `pointLight` and `spotLight` objects may declare
 `castShadows` defaults to false). `radius` is the attenuation range in
 centimeters: it defaults to 1000 cm (10 m), must be finite and `> 0`, and the
 shader window `clamp(1 - (d^2/r^2)^2, 0, 1)^2` makes the light contribute only
-inside that range. Up to four
+inside that range. Up to eight
 shadow-casting local lights are selected per frame by a stable importance key
 (camera distance, radius, intensity, then `lightId`). Each selected light owns
 one slice of `localShadowMap`, a `D32_SFLOAT` `texture2DArray` with 1024²
-slices, so point and spot lights share one atlas type:
+slices, so point and spot lights share one atlas type. Local shadow draws are
+culled per light: point lights skip casters whose world AABB does not reach the
+light radius, and spot lights additionally test the cone; WPO/SpeedTree casters
+skip this culling because their authored bounds do not include deformation.
+Mesh particle emitters with `castShadows: true` are additional casters in both
+the local atlas and CSM; sprite/ribbon particles do not cast.
+`LocalShadow` material pipelines are part of the same transactional shader
+reload commit as Surface/Shadow:
 
 - Spot: a standard perspective view-projection from the light position,
   direction, outer cone angle (`fov = 2 * coneOuter`), near 1 cm and far = the

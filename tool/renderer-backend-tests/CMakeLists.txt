@@ -8,6 +8,7 @@ add_executable(vl_renderer_backend_tests
     decal_stencil_graph_test.cpp
     particle_light_gpu_test.cpp
     particle_scene_lighting_test.cpp
+    particle_mesh_shadow_test.cpp
     local_shadow_math_test.cpp
     pass_pipeline_contract_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp

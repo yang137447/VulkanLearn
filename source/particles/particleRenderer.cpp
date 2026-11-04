@@ -33,6 +33,7 @@
 #include "particles/particleLod.h"
 #include "particles/particleMesh.h"
 #include "particles/particleRibbon.h"
+#include "particles/particleShadowCaster.h"
 #include "particles/particleTextureReference.h"
 #include "particles/particleUserParameterOverride.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -552,6 +553,7 @@ void ParticleRenderer::Initialize(
     RenderGraph& graph)
 {
     backend = &renderer;
+    pipelineFactory = &factory;
 
     Renderpass* particlePass = FindParticlePass(graph);
     if (particlePass == nullptr)
@@ -792,6 +794,8 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     distortionPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
+    shadowPipelines.clear();
+    pipelineFactory = nullptr;
     globalDrawPipeline.reset();
     defaultTexture.reset();
     drawOrder.clear();
@@ -5209,6 +5213,269 @@ void ParticleRenderer::RecordGraphics(
         if (orderedKeys.find(key) == orderedKeys.end())
         {
             recordEmitter(*emitterPtr);
+        }
+    }
+}
+
+std::shared_ptr<PipelineBase>
+ParticleRenderer::GetOrCreateShadowPipeline(
+    const Renderpass& renderPass)
+{
+    if (!initialized || pipelineFactory == nullptr)
+    {
+        return nullptr;
+    }
+
+    // 同一图里的 CSM、localShadow 层各自拥有 VkRenderPass 句柄；管线状态
+    // 完全相同也必须按句柄分开缓存，否则会把 CSM 管线拿去绑 localShadow。
+    const uintptr_t renderPassKey =
+        reinterpret_cast<uintptr_t>(
+            static_cast<VkRenderPass>(renderPass.renderPass));
+    const auto existing = shadowPipelines.find(renderPassKey);
+    if (existing != shadowPipelines.end())
+    {
+        return existing->second;
+    }
+
+    ShaderVariantKey variant;
+    variant.shaderName = "particle/particleShadow";
+    variant.renderMode = RenderMode::TransparentAdditive;
+    variant.shadingModelMacro = "SHADING_MODEL_UNLIT";
+    const GraphicsShaderVariantArtifact& artifact =
+        pipelineFactory->PrepareGraphicsShaderVariant(variant);
+
+    PassPipelineContractKey contract =
+        renderPass.pipelineContractKey;
+    contract.useVertexInput = true;
+
+    // caster shader 只声明 set 0；显式保留与可见粒子完全相同的 set 0
+    // 合同（graphicsSets 就是用这份 layout 分配的），但不把 pass set 3
+    // 带进阴影管线布局。
+    GraphicsPipelineLayoutDesc layout = BuildParticleSharedLayout();
+    layout.overrideSets[PassSetIndex] = false;
+    layout.setBindings[PassSetIndex].clear();
+
+    // PipelineFactory 的旧接口接受非 const 句柄指针；这里传一份副本，
+    // 不把 render pass 的只读缓存暴露给可写接口。
+    vk::RenderPass renderPassHandle = renderPass.renderPass;
+    std::shared_ptr<PipelineBase> pipeline =
+        pipelineFactory->CreateGraphicsPipeline(
+            &renderPassHandle,
+            contract,
+            artifact,
+            vk::CullModeFlagBits::eNone,
+            GraphicsPipelineBlendMode::Opaque,
+            layout);
+    if (pipeline)
+    {
+        shadowPipelines.emplace(renderPassKey, pipeline);
+    }
+    return pipeline;
+}
+
+bool ParticleRenderer::IsMeshShadowCaster(
+    const EmitterResources& emitter,
+    uint32_t imageIndex,
+    const Eigen::Vector3f& lightPosition,
+    float farCm)
+{
+    return ParticleEmitterCastsMeshShadow(
+               emitter.asset,
+               emitter.meshFallbackBillboard) &&
+        !emitter.culled &&
+        emitter.visible &&
+        emitter.enabled &&
+        emitter.meshIndexCount > 0 &&
+        emitter.meshVertices.buffer &&
+        emitter.meshIndices.buffer &&
+        emitter.frameUniforms.size() > imageIndex &&
+        ParticleMeshCasterIntersectsShadowVolume(
+            emitter.worldCenter,
+            emitter.boundsRadius,
+            lightPosition,
+            farCm);
+}
+
+void ParticleRenderer::PrepareShadow(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Eigen::Matrix4f& viewProjection,
+    int mode,
+    int octant,
+    const Eigen::Vector3f& lightPosition,
+    float farCm,
+    float biasCm)
+{
+    // RecordShadow 与 PrepareShadow 严格按 pass 交替调用；这里缓存本次
+    // shadow 视图的剔除参数，避免绘制阶段再依赖已经更新的全局 UBO。
+    shadowCullLightPosition = lightPosition;
+    shadowCullFarCm = farCm;
+    if (!initialized || emitters.empty())
+    {
+        return;
+    }
+
+    struct ShadowCasterUniforms
+    {
+        Eigen::Matrix4f viewProjection;
+        Eigen::Vector4f parameters;
+        Eigen::Vector4f lightPosition;
+    };
+    static_assert(
+        sizeof(ShadowCasterUniforms) == 96,
+        "Shadow caster UBO block must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, shadowCasterParams) -
+                offsetof(FrameUniforms, shadowViewProj) ==
+            64,
+        "shadowCasterParams must directly follow shadowViewProj");
+    static_assert(
+        offsetof(FrameUniforms, shadowLightPosition) -
+                offsetof(FrameUniforms, shadowViewProj) ==
+            80,
+        "shadowLightPosition must directly follow shadowCasterParams");
+
+    bool hasCaster = false;
+    for (const auto& [key, emitter] : emitters)
+    {
+        (void)key;
+        if (IsMeshShadowCaster(
+                *emitter, imageIndex, lightPosition, farCm))
+        {
+            hasCaster = true;
+            break;
+        }
+    }
+    if (!hasCaster)
+    {
+        return;
+    }
+
+    // 上一段 shadow draw 的顶点着色器可能仍在读同一 per-image UBO；
+    // 有序 updateBuffer 之前必须先把 uniform read 与 transfer write 隔开。
+    vk::MemoryBarrier readToTransfer;
+    readToTransfer
+        .setSrcAccessMask(vk::AccessFlagBits::eUniformRead)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eVertexShader,
+        vk::PipelineStageFlagBits::eTransfer,
+        {},
+        readToTransfer,
+        nullptr,
+        nullptr);
+
+    ShadowCasterUniforms uniforms{};
+    uniforms.viewProjection = viewProjection;
+    uniforms.parameters = Eigen::Vector4f(
+        static_cast<float>(mode),
+        static_cast<float>(octant),
+        farCm,
+        biasCm);
+    uniforms.lightPosition = Eigen::Vector4f(
+        lightPosition.x(),
+        lightPosition.y(),
+        lightPosition.z(),
+        0.0f);
+    for (auto& [key, emitter] : emitters)
+    {
+        (void)key;
+        if (!IsMeshShadowCaster(
+                *emitter, imageIndex, lightPosition, farCm))
+        {
+            continue;
+        }
+        commandBuffer.updateBuffer(
+            emitter->frameUniforms.at(imageIndex).buffer,
+            offsetof(FrameUniforms, shadowViewProj),
+            sizeof(uniforms),
+            &uniforms);
+    }
+
+    vk::MemoryBarrier transferToVertex;
+    transferToVertex
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eUniformRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eVertexShader,
+        {},
+        transferToVertex,
+        nullptr,
+        nullptr);
+}
+
+void ParticleRenderer::RecordShadow(
+    vk::CommandBuffer commandBuffer,
+    uint32_t imageIndex,
+    const Renderpass& renderPass)
+{
+    if (!initialized || emitters.empty())
+    {
+        return;
+    }
+    std::shared_ptr<PipelineBase> pipeline =
+        GetOrCreateShadowPipeline(renderPass);
+    if (!pipeline)
+    {
+        return;
+    }
+
+    bool pipelineBound = false;
+    for (auto& [key, emitterPtr] : emitters)
+    {
+        (void)key;
+        EmitterResources& emitter = *emitterPtr;
+        if (!IsMeshShadowCaster(
+                emitter,
+                imageIndex,
+                shadowCullLightPosition,
+                shadowCullFarCm) ||
+            emitter.graphicsSets.size() <= imageIndex)
+        {
+            continue;
+        }
+
+        if (!pipelineBound)
+        {
+            commandBuffer.bindPipeline(
+                pipeline->GetBindPoint(),
+                pipeline->GetPipeline());
+            pipelineBound = true;
+        }
+        commandBuffer.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            pipeline->GetPipelineLayout(),
+            0,
+            emitter.graphicsSets.at(imageIndex),
+            nullptr);
+
+        const vk::DeviceSize vertexOffset = 0;
+        commandBuffer.bindVertexBuffers(
+            0,
+            1,
+            &emitter.meshVertices.buffer,
+            &vertexOffset);
+        commandBuffer.bindIndexBuffer(
+            emitter.meshIndices.buffer,
+            0,
+            vk::IndexType::eUint32);
+        if (emitter.indirectArgs.buffer)
+        {
+            commandBuffer.drawIndexedIndirect(
+                emitter.indirectArgs.buffer,
+                0,
+                1,
+                sizeof(vk::DrawIndexedIndirectCommand));
+        }
+        else
+        {
+            commandBuffer.drawIndexed(
+                emitter.meshIndexCount,
+                emitter.asset.maxParticles,
+                0,
+                0,
+                0);
         }
     }
 }

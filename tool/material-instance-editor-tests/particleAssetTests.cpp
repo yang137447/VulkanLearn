@@ -13,6 +13,7 @@
 #include "editor/command/assetDocumentFields.h"
 #include "particles/particleAsset.h"
 #include "particles/particleLifetime.h"
+#include "particles/particleShadowCaster.h"
 #include "render/rendergraph/renderGraphPassType.h"
 
 namespace
@@ -58,6 +59,34 @@ TEST(ParticleAsset, MultiEmitterParsesNamesAndLocalPositions)
     EXPECT_FLOAT_EQ(asset.emitters.at(1).localPosition.y(), 55.0f);
     EXPECT_EQ(asset.emitters.at(0).maxParticles, 128u);
     EXPECT_EQ(asset.emitters.at(1).maxParticles, 64u);
+}
+
+TEST(ParticleAsset, MeshCastShadowsParsesBooleanAndDefaultsFalse)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["renderMode"] = "mesh";
+    document["emitters"][0]["mesh"] = Json{
+        {"path", "Maps/SC_test/Meshes/SM_debris.json"}};
+    document["emitters"][1]["renderMode"] = "mesh";
+    document["emitters"][1]["mesh"] = Json{
+        {"path", "Maps/SC_test/Meshes/SM_chip.json"}};
+    document["emitters"][1]["castShadows"] = true;
+
+    const ParticleSystemAsset asset =
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_caster.json");
+
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_FALSE(asset.emitters.at(0).castShadows);
+    EXPECT_TRUE(asset.emitters.at(1).castShadows);
+    EXPECT_TRUE(VL::ParticleEmitterCastsMeshShadow(asset.emitters.at(1)));
+
+    Json invalid = document;
+    invalid["emitters"][0]["castShadows"] = 1.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_caster_invalid.json"),
+        std::invalid_argument);
 }
 
 TEST(ParticleAsset, EmitterSortOrderParsesAndValidatesRange)

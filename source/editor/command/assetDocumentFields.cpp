@@ -206,6 +206,9 @@ const Field fields[] = {
     {K::ParticleSystem, "", "materialInstancePath", ValueKind::Text, true, "asset_path", "", true},
     {K::ParticleSystem, "", "meshLighting", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "meshAmbient", ValueKind::Number, true},
+    // 仅 mesh 粒子消费；其它 renderMode 忽略。阴影本身由 CSM/局部阴影
+    // pass 录制，不在能力表里暴露线程或图结构。
+    {K::ParticleSystem, "", "castShadows", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "useFixedBounds", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "fixedBounds.center", ValueKind::Vector3, true, "cm"},
     {K::ParticleSystem, "", "fixedBounds.extent", ValueKind::Vector3, true, "cm"},
