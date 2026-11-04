@@ -521,11 +521,7 @@ TerrainMeshUpdate TerrainEditSession::BuildUpdate() const
     for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
     {
         const std::vector<TerrainMeshChunk> meshes =
-            editor_->BuildDirtyChunkMeshes(
-                lodLevel,
-                multiLod
-                    ? std::optional<bool>(true)
-                    : std::nullopt);
+            editor_->BuildDirtyChunkMeshes(lodLevel);
         for (const TerrainMeshChunk& mesh : meshes)
         {
             TerrainChunkMeshUpdate chunk;

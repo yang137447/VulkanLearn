@@ -321,7 +321,7 @@ TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
     ASSERT_EQ(chunks.size(), 4u);
     for (const VL::TerrainMeshChunk& chunk : chunks)
     {
-        // LOD0 没有 skirt：3×3 顶点、4 个格子各 2 个三角形。
+        // LOD0 没有额外边界几何：3×3 顶点、4 个格子各 2 个三角形。
         EXPECT_EQ(chunk.lodLevel, 0u);
         EXPECT_EQ(chunk.vertices.size(), 9u);
         EXPECT_EQ(chunk.indices.size(), 24u);
@@ -350,11 +350,11 @@ TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
         << "actual=" << first.vertices[4].normal.transpose();
     EXPECT_TRUE(first.vertices[3].texCoord.isApprox(
         Eigen::Vector2f(0.0f, 0.25f)));
-    // 没有任何顶点被 skirt 拉到地表以下。
+    // 没有任何顶点被额外边界几何拉到地表以下。
     EXPECT_FLOAT_EQ(first.boundsMin.y(), 0.0f);
 }
 
-TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendSkirtRing)
+TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendStitchBand)
 {
     VL::TerrainBuildPlan plan = MakePlan(
         MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
@@ -368,23 +368,25 @@ TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendSkirtRing)
     ASSERT_EQ(lod0.size(), 1u);
     EXPECT_EQ(lod0.front().vertices.size(), 81u);
 
-    // lod1: 4×4 格子 + 4*4 个 skirt；lod2: 2×2；lod3: 1×1。
+    // 更粗的 LOD 在四条边上都补一圈 LOD0 间距的边界环。
+    const uint32_t chunkQuads = 8;
+    const uint32_t ringVertices = chunkQuads * 4;
     const uint32_t expectedQuads[] = {0u, 4u, 2u, 1u};
     for (uint32_t lod = 1; lod <= 3; ++lod)
     {
         const uint32_t quads = expectedQuads[lod];
         const uint32_t baseVertices = (quads + 1) * (quads + 1);
-        const uint32_t skirtVertices = quads * 4;
+        const uint32_t step = 1u << lod;
+        const uint32_t interiorCells = quads > 1 ? quads - 2 : 0;
+        const uint32_t interiorIndices = interiorCells * interiorCells * 6;
+        const uint32_t bandIndices = 4u * quads * (step + 1u) * 3u;
         const std::vector<VL::TerrainMeshChunk> chunks =
             VL::TerrainMeshBuilder::BuildChunks(plan, lod);
         ASSERT_EQ(chunks.size(), 1u);
         const VL::TerrainMeshChunk& chunk = chunks.front();
         EXPECT_EQ(chunk.lodLevel, lod);
-        EXPECT_EQ(chunk.vertices.size(), baseVertices + skirtVertices);
-        EXPECT_EQ(
-            chunk.indices.size(),
-            static_cast<size_t>(quads) * quads * 6 +
-                static_cast<size_t>(skirtVertices) * 6);
+        EXPECT_EQ(chunk.vertices.size(), baseVertices + ringVertices);
+        EXPECT_EQ(chunk.indices.size(), interiorIndices + bandIndices);
         for (uint32_t index : chunk.indices)
             EXPECT_LT(index, chunk.vertices.size());
 
@@ -410,111 +412,126 @@ TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendSkirtRing)
     }
 }
 
-TEST(TerrainMeshBuilder, SkirtExtendsBelowAndBoundsCoverIt)
+TEST(TerrainMeshBuilder, StitchBandVerticesStayOnBoundaryAndInsideBounds)
 {
     VL::TerrainBuildPlan plan = MakePlan(
-        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
             return static_cast<float>(x + y) * 0.1f;
         }));
-    plan.desc.gridResolution = 4;
+    plan.desc.gridResolution = 8;
     plan.desc.chunkQuads = 4;
 
     const std::vector<VL::TerrainMeshChunk> chunks =
         VL::TerrainMeshBuilder::BuildChunks(plan, 1);
-    ASSERT_EQ(chunks.size(), 1u);
+    ASSERT_EQ(chunks.size(), 4u);
     const VL::TerrainMeshChunk& chunk = chunks.front();
     const uint32_t quads = 2;
     const uint32_t baseVertices = (quads + 1) * (quads + 1);
-    ASSERT_EQ(chunk.vertices.size(), baseVertices + quads * 4);
+    const uint32_t ringVertices = 4u * plan.desc.chunkQuads;
+    ASSERT_EQ(chunk.vertices.size(), baseVertices + ringVertices);
 
-    const float skirtDepthCm = VL::TerrainChunkSkirtDepthCm(plan.desc);
-    EXPECT_FLOAT_EQ(skirtDepthCm, 10.0f);
-
-    Eigen::Vector3f baseMin = chunk.vertices[0].position;
-    Eigen::Vector3f baseMax = baseMin;
-    for (uint32_t index = 1; index < baseVertices; ++index)
-    {
-        baseMin = baseMin.cwiseMin(chunk.vertices[index].position);
-        baseMax = baseMax.cwiseMax(chunk.vertices[index].position);
-    }
-
+    // 边界环必须精确落在 chunk 的四条边界线上，且不超出 AABB。
     for (uint32_t index = baseVertices; index < chunk.vertices.size(); ++index)
     {
-        const Vertex& skirt = chunk.vertices[index];
-        // skirt 只在竖直方向下移；X/Z 与边界顶点对齐，UV 沿用边界顶点。
-        EXPECT_TRUE(
-            skirt.position.x() >= baseMin.x() - 1.0e-4f &&
-            skirt.position.x() <= baseMax.x() + 1.0e-4f);
-        EXPECT_TRUE(
-            skirt.position.z() >= baseMin.z() - 1.0e-4f &&
-            skirt.position.z() <= baseMax.z() + 1.0e-4f);
-        bool matched = false;
-        for (uint32_t baseIndex = 0; baseIndex < baseVertices; ++baseIndex)
-        {
-            const Vertex& base = chunk.vertices[baseIndex];
-            if (std::abs(base.position.x() - skirt.position.x()) < 1.0e-4f &&
-                std::abs(base.position.z() - skirt.position.z()) < 1.0e-4f)
-            {
-                EXPECT_FLOAT_EQ(skirt.position.y(), base.position.y() - skirtDepthCm);
-                EXPECT_TRUE(skirt.normal.isApprox(base.normal));
-                matched = true;
-                break;
-            }
-        }
-        EXPECT_TRUE(matched);
+        const Eigen::Vector3f& position = chunk.vertices[index].position;
+        const bool onBoundary =
+            std::abs(position.x() - chunk.boundsMin.x()) < 1.0e-4f ||
+            std::abs(position.x() - chunk.boundsMax.x()) < 1.0e-4f ||
+            std::abs(position.z() - chunk.boundsMin.z()) < 1.0e-4f ||
+            std::abs(position.z() - chunk.boundsMax.z()) < 1.0e-4f;
+        EXPECT_TRUE(onBoundary);
+        EXPECT_TRUE(position.x() >= chunk.boundsMin.x() - 1.0e-4f &&
+                    position.x() <= chunk.boundsMax.x() + 1.0e-4f);
+        EXPECT_TRUE(position.z() >= chunk.boundsMin.z() - 1.0e-4f &&
+                    position.z() <= chunk.boundsMax.z() + 1.0e-4f);
+        EXPECT_TRUE(position.y() >= chunk.boundsMin.y() - 1.0e-4f &&
+                    position.y() <= chunk.boundsMax.y() + 1.0e-4f);
     }
-
-    // AABB 必须覆盖 skirt，否则视锥/阴影裁剪会切掉裙边。
-    float skirtMinY = baseMin.y();
-    for (uint32_t index = baseVertices; index < chunk.vertices.size(); ++index)
-        skirtMinY = std::min(skirtMinY, chunk.vertices[index].position.y());
-    EXPECT_FLOAT_EQ(chunk.boundsMin.y(), baseMin.y() - skirtDepthCm);
-    EXPECT_FLOAT_EQ(chunk.boundsMin.y(), skirtMinY);
-    EXPECT_FLOAT_EQ(chunk.boundsMin.x(), baseMin.x());
-    EXPECT_FLOAT_EQ(chunk.boundsMax.x(), baseMax.x());
-    EXPECT_FLOAT_EQ(chunk.boundsMin.z(), baseMin.z());
-    EXPECT_FLOAT_EQ(chunk.boundsMax.z(), baseMax.z());
-    EXPECT_FLOAT_EQ(chunk.boundsMax.y(), baseMax.y());
 }
 
-TEST(TerrainMeshBuilder, SkirtTrianglesFaceOutwardForBackCulling)
+TEST(TerrainMeshBuilder, StitchBandKeepsClockwiseFrontFace)
 {
     VL::TerrainBuildPlan plan = MakePlan(
-        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
-    plan.desc.gridResolution = 4;
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 8;
     plan.desc.chunkQuads = 4;
 
     const std::vector<VL::TerrainMeshChunk> chunks =
         VL::TerrainMeshBuilder::BuildChunks(plan, 1);
-    ASSERT_EQ(chunks.size(), 1u);
-    const VL::TerrainMeshChunk& chunk = chunks.front();
-    const uint32_t quads = 2;
-    const uint32_t baseVertices = (quads + 1) * (quads + 1);
-    const size_t baseTriangleIndices =
-        static_cast<size_t>(quads) * quads * 6;
-    ASSERT_EQ(chunk.indices.size(), baseTriangleIndices + quads * 4 * 6);
-
-    const Eigen::Vector3f center(
-        0.5f * (chunk.boundsMin.x() + chunk.boundsMax.x()),
-        0.0f,
-        0.5f * (chunk.boundsMin.z() + chunk.boundsMax.z()));
-    for (size_t index = baseTriangleIndices; index < chunk.indices.size(); index += 3)
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
     {
-        const Eigen::Vector3f& a = chunk.vertices[chunk.indices[index]].position;
-        const Eigen::Vector3f& b = chunk.vertices[chunk.indices[index + 1]].position;
-        const Eigen::Vector3f& c = chunk.vertices[chunk.indices[index + 2]].position;
-        const Eigen::Vector3f normal = (b - a).cross(c - a);
-        ASSERT_GT(normal.norm(), 1.0e-6f);
-        const Eigen::Vector3f centroid = (a + b + c) / 3.0f;
-        // 引擎 front face 为顺时针；地形自身的几何法线朝下仍从上方可见，
-        // 说明“可见侧”对应几何法线背离观察者。因此裙边朝向地形内部的
-        // 法线才是外侧正面，Back culling 不会把裙边剔掉。
-        const Eigen::Vector3f inward(center.x() - centroid.x(), 0.0f,
-            center.z() - centroid.z());
-        EXPECT_GT(normal.x() * inward.x() + normal.z() * inward.z(), 0.0f);
-        EXPECT_NEAR(normal.y(), 0.0f, 1.0e-4f);
+        for (size_t index = 0; index < chunk.indices.size(); index += 3)
+        {
+            const Eigen::Vector3f& a = chunk.vertices[chunk.indices[index]].position;
+            const Eigen::Vector3f& b = chunk.vertices[chunk.indices[index + 1]].position;
+            const Eigen::Vector3f& c = chunk.vertices[chunk.indices[index + 2]].position;
+            const Eigen::Vector3f normal = (b - a).cross(c - a);
+            ASSERT_GT(normal.norm(), 1.0e-6f);
+            // 引擎 front face 为顺时针；地形自身的几何法线朝下，仍从上方可见。
+            // 过渡带必须与内部网格同向，否则会被 Back culling 剔掉。
+            EXPECT_LT(normal.y(), -1.0e-6f);
+        }
     }
-    EXPECT_EQ(chunk.vertices.size(), baseVertices + quads * 4);
+}
+
+TEST(TerrainMeshBuilder, StitchBandIsWatertightAcrossLodLevels)
+{
+    // 相邻 chunk 差一级 LOD 时，共享边界必须由同一组 LOD0 采样点构成。
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x * x + y * y) * 0.05f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(lod0.size(), 4u);
+    ASSERT_EQ(lod1.size(), 4u);
+
+    // 索引顺序是 chunkZ 外层、chunkX 内层：(0,0)=0、(1,0)=1。
+    const VL::TerrainMeshChunk& coarse = lod1[0];
+    const VL::TerrainMeshChunk& fine = lod0[1];
+    const float sharedX = fine.vertices.front().position.x();
+
+    auto boundarySamples = [sharedX](const VL::TerrainMeshChunk& chunk) {
+        // 只统计被索引引用的顶点：粗 LOD 的基础网格仍保留一条未被绘制的
+        // 边界列，它不参与实际网格，不能算进缝合结果。
+        std::vector<bool> used(chunk.vertices.size(), false);
+        for (uint32_t index : chunk.indices)
+            used[index] = true;
+        std::vector<std::pair<float, float>> samples;
+        for (size_t index = 0; index < chunk.vertices.size(); ++index)
+        {
+            if (!used[index])
+                continue;
+            const Vertex& vertex = chunk.vertices[index];
+            if (std::abs(vertex.position.x() - sharedX) < 1.0e-3f)
+                samples.emplace_back(vertex.position.z(), vertex.position.y());
+        }
+        std::sort(samples.begin(), samples.end());
+        // 角落会同时被两条边引用，按位置去重。
+        samples.erase(
+            std::unique(samples.begin(), samples.end(),
+                [](const auto& lhs, const auto& rhs) {
+                    return std::abs(lhs.first - rhs.first) < 1.0e-3f &&
+                           std::abs(lhs.second - rhs.second) < 1.0e-3f;
+                }),
+            samples.end());
+        return samples;
+    };
+
+    const auto coarseSamples = boundarySamples(coarse);
+    const auto fineSamples = boundarySamples(fine);
+    ASSERT_EQ(coarseSamples.size(), fineSamples.size());
+    for (size_t index = 0; index < coarseSamples.size(); ++index)
+    {
+        EXPECT_NEAR(coarseSamples[index].first, fineSamples[index].first, 1.0e-3f);
+        EXPECT_NEAR(coarseSamples[index].second, fineSamples[index].second, 1.0e-3f);
+    }
 }
 
 TEST(TerrainMeshBuilder, CoarseLodNormalsMatchAcrossChunkBoundary)
@@ -649,25 +666,21 @@ TEST(TerrainLod, AabbDistanceUsesTheNearestPoint)
         std::sqrt(200.0f * 200.0f + 400.0f * 400.0f));
 }
 
-TEST(TerrainMeshBuilder, SkirtOverrideAddsSkirtToLod0)
+TEST(TerrainMeshBuilder, Lod0HasNoStitchBand)
 {
     VL::TerrainBuildPlan plan = MakePlan(
         MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
     plan.desc.gridResolution = 4;
     plan.desc.chunkQuads = 2;
 
-    const std::vector<VL::TerrainMeshChunk> legacy =
+    const std::vector<VL::TerrainMeshChunk> chunks =
         VL::TerrainMeshBuilder::BuildChunks(plan, 0);
-    const std::vector<VL::TerrainMeshChunk> skirted =
-        VL::TerrainMeshBuilder::BuildChunks(plan, 0, true);
-    ASSERT_EQ(legacy.size(), skirted.size());
-    for (size_t index = 0; index < legacy.size(); ++index)
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
     {
-        // 2x2 quad 的 LOD0 基础网格是 3x3 顶点；边界环共 8 个顶点。
-        EXPECT_EQ(legacy[index].vertices.size(), 9u);
-        EXPECT_EQ(skirted[index].vertices.size(), 9u + 8u);
-        EXPECT_EQ(legacy[index].indices.size(), 24u);
-        EXPECT_EQ(skirted[index].indices.size(), 24u + 8u * 6u);
+        // LOD0 的边界本来就是 LOD0 间距，不需要额外边界环或过渡带。
+        EXPECT_EQ(chunk.vertices.size(), 9u);
+        EXPECT_EQ(chunk.indices.size(), 24u);
     }
 }
 
@@ -692,10 +705,10 @@ TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
         VL::TerrainChunkResourceKey(plan, 0, 0),
         VL::TerrainChunkResourceKey(plan, 0, 0, 0));
 
-    // LOD0 是否带 skirt 由 lodLevels 决定；单级与多级资产的 LOD0 不能共享 key。
+    // LOD0 的几何与 lodLevels 无关；单级与多级资产可以共享同一个 LOD0 缓冲。
     VL::TerrainBuildPlan multiLodPlan = plan;
     multiLodPlan.desc.lodLevels = 3;
-    EXPECT_NE(
+    EXPECT_EQ(
         VL::TerrainChunkResourceKey(plan, 0, 0, 0),
         VL::TerrainChunkResourceKey(multiLodPlan, 0, 0, 0));
 

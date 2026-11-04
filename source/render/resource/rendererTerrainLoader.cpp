@@ -2111,7 +2111,7 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
     // 每帧由 WorldSnapshotBuilder 按相机距离只挑一级输出。第一版几何驻留
     // 在加载期生效：窗口外的细 LOD（0..N-2）不生成，最粗一级永远生成，
     // 因此运行时相机移动只会改变“选择/兜底”，不会再补传细网格。
-    // lodLevels=1 保持历史路径（无 skirt、无 LOD 组、名字/mesh key 不变）。
+    // lodLevels=1 保持历史路径（无边界缝合带、无 LOD 组、名字/mesh key 不变）。
     // TR 预检保证 1..4；这里不做静默钳制，越界让 BuildChunks 明确失败。
     const uint32_t lodLevelCount =
         plan.desc.lodLevels == 0 ? 1u : plan.desc.lodLevels;
@@ -2128,17 +2128,12 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         multiLod && chunkResidency.cameraKnown &&
         chunksPerSide != 0;
 
-    // 组的距离口径必须与运行时选择完全一致：LOD0 顶点范围（多级资产还要
-    // 叠加 LOD0 的 skirt 下移）。先算一遍不含法线的 AABB，再用它决定哪些
+    // 组的距离口径必须与运行时选择完全一致：用 LOD0 顶点范围（边界缝合带
+    // 与地表同高，不会改变 AABB）。先算一遍不含法线的 AABB，再用它决定哪些
     // 细 LOD 进入驻留窗口；窗口外的 chunk 连顶点/法线都不生成。
     std::vector<TerrainChunkBounds> chunkBounds;
     if (multiLod)
-    {
         chunkBounds = TerrainMeshBuilder::ComputeChunkBounds(plan);
-        const float skirtDepthCm = TerrainChunkSkirtDepthCm(plan.desc);
-        for (TerrainChunkBounds& bounds : chunkBounds)
-            bounds.boundsMin.y() -= skirtDepthCm;
-    }
 
     TerrainChunkPlacementStats placementStats;
     placementStats.placementId = TerrainPlacementIdentity(plan);
@@ -2157,8 +2152,8 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
     {
         TerrainChunkLevelStats& levelStats = placementStats.levels[lodLevel];
         levelStats.lodLevel = lodLevel;
-        // 多级地形的 LOD0 也带 skirt（与更粗一级互相遮挡），单级旧资产不带。
-        levelStats.skirt = multiLod || lodLevel > 0;
+        // LOD0 走历史网格；更粗的级别带一圈边界缝合带。
+        levelStats.stitched = lodLevel > 0;
         TerrainChunkBuildFilter& filter = levelFilters[lodLevel];
         if (!residencyActive)
             continue;
@@ -2204,7 +2199,6 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             TerrainMeshBuilder::BuildChunks(
                 plan,
                 lodLevel,
-                multiLod ? std::optional<bool>(true) : std::nullopt,
                 filter);
         TerrainChunkLevelStats& levelStats = placementStats.levels[lodLevel];
         levelStats.chunkCount = static_cast<uint32_t>(chunks.size());
@@ -2212,10 +2206,10 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             totalChunks - static_cast<uint32_t>(chunks.size());
         levelStats.skippedVertexCount =
             static_cast<uint64_t>(levelStats.skippedChunkCount) *
-            TerrainChunkVertexCount(plan.desc, lodLevel, levelStats.skirt);
+            TerrainChunkVertexCount(plan.desc, lodLevel, levelStats.stitched);
         levelStats.skippedIndexCount =
             static_cast<uint64_t>(levelStats.skippedChunkCount) *
-            TerrainChunkIndexCount(plan.desc, lodLevel, levelStats.skirt);
+            TerrainChunkIndexCount(plan.desc, lodLevel, levelStats.stitched);
         levelStats.skippedVertexBytes =
             levelStats.skippedVertexCount * sizeof(Vertex);
         levelStats.skippedIndexBytes =

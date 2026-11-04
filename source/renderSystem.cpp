@@ -2083,7 +2083,7 @@ void RenderSystem::ReportTerrainChunkStatistics() const
         {
             std::cout
                 << "[TerrainChunk]   level=" << level.lodLevel
-                << " skirt=" << (level.skirt ? 1 : 0)
+                << " stitched=" << (level.stitched ? 1 : 0)
                 << " chunks=" << level.chunkCount
                 << "/" << level.chunkCount + level.skippedChunkCount
                 << " vertices=" << level.vertexCount

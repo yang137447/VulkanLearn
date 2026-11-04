@@ -27,7 +27,7 @@ struct TerrainChunkResidencyDesc
 struct TerrainChunkLevelStats
 {
     uint32_t lodLevel = 0;
-    bool skirt = false;
+    bool stitched = false;
     uint32_t chunkCount = 0;
     uint32_t skippedChunkCount = 0;
     uint64_t vertexCount = 0;
@@ -66,17 +66,17 @@ struct TerrainChunkResidencyStats
     uint32_t TotalSkippedChunks() const;
 };
 
-// 单 chunk 按 LOD 的确定性顶点/索引数量（含 skirt），用于给被跳过的 chunk
+// 单 chunk 按 LOD 的确定性顶点/索引数量（含边界缝合带），用于给被跳过的 chunk
 // 估算“如果不做驻留会占多少”。它必须与 TerrainMeshBuilder::BuildChunks
 // 的实际输出一致，测试里逐级对照。
 uint64_t TerrainChunkVertexCount(
     const TerrainAssetDesc& desc,
     uint32_t lodLevel,
-    bool buildSkirt);
+    bool stitched = true);
 uint64_t TerrainChunkIndexCount(
     const TerrainAssetDesc& desc,
     uint32_t lodLevel,
-    bool buildSkirt);
+    bool stitched = true);
 
 // 把局部 AABB 变换到世界空间 AABB；与 WorldSnapshotBuilder 的 LOD 距离口径一致，
 // 避免加载期驻留和运行时选择使用两个不同的距离。

@@ -304,13 +304,13 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。
 - 每个 chunk 计算局部 AABB，交给 World/渲染快照做视锥与阴影裁剪。
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
-- `lodLevels=1` 的旧资产仍只生成/绑定 LOD0，且 LOD0 无 skirt、顶点/索引与历史
+- `lodLevels=1` 的旧资产仍只生成/绑定 LOD0，且 LOD0 无额外边界几何、顶点/索引与历史
   实现逐字节一致。`lodLevels>1` 时 renderer 为每个 chunk 生成 0..lodLevels-1 级，
-  每一级（包括 LOD0）都追加 skirt；运行时每帧按相机到 chunk 世界 AABB 的距离
-  只输出一级。skirt 深度是经验值，未做裂缝上界证明。没有地形 chunk 卸载。
+  `lod > 0` 的级别带一圈**边界缝合带**；运行时每帧按相机到 chunk 世界 AABB
+  的距离只输出一级。没有地形 chunk 卸载。
   地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
 
-### CPU 几何 LOD 与 skirt
+### CPU 几何 LOD 与边界缝合
 
 - 第 `lod` 级的合并步长是 `2^lod`：一个 chunk 变成
   `quadsPerChunk = chunkQuads / 2^lod` 个格子，基础顶点
@@ -319,16 +319,20 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   每 `2^lod` 个 LOD0 网格点上；中心差分间距同步乘 `2^lod`，相邻 chunk 的共享边界
   仍使用同一全局采样。
 - `lodLevels=1` 时 LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
-- `lodLevels>1` 时 LOD0 也带 skirt（否则与相邻 LOD1 的边界约一半情况无法遮挡）；
-  `BuildChunks(plan, lodLevel, buildSkirtOverride=true)` 显式打开。
-- `lod >= 1`（或无 override 的 LOD0）在边界环追加一圈 skirt：位置沿 -Y 下移
-  `max(1cm, 10% × |heightScale|)`，法线/UV/`texCoord1` 沿用边界顶点；skirt 顶点排在
-  基础顶点之后，基础顶点与索引不动。深度只取决于 TR 的 `heightScale`，因此各级一致；
-  它只是经验值，未做裂缝上界证明。
-- chunk 的 AABB 覆盖 skirt 的最低点；skirt 绕序按引擎顺时针 front face 写成
-  “几何法线朝内”，不会被 Back culling 剔除。
-- chunk 资源 key 含 `lod`、合并步长与 LOD0 的 skirt 开关；`lodDistances`
-  只影响运行时选择，不进 key。
+- 没有 skirt。`lod > 0` 的 chunk 在四条边上追加一圈**按 LOD0 间距采样**的边界环
+  （`4 × chunkQuads` 个顶点），再用一圈过渡三角形把它连到第一条粗网格线。
+  因为任何级别的 chunk 边界都落在同一组 LOD0 采样点上，相邻 chunk 无论差几级
+  LOD 都逐点重合，天然水密；构建期不需要知道邻居级别，着色器也不需要 morph。
+- 过渡带每侧 `quadsPerChunk × (2^lod + 1)` 个三角形：每个粗区间把 `2^lod` 段细边
+  扇形连到粗顶点，再用一个三角形收口。粗 LOD 最外一圈常规四边形因此不再生成，
+  改由过渡带覆盖；内部保留 `(quadsPerChunk-2)²` 个格子。
+- 基础 `(quadsPerChunk+1)²` 顶点保持原顺序与位置（测试与 LOD 对齐语义不变），
+  边界环排在它们之后；粗网格最外一圈顶点因此不被任何索引引用，只占少量内存。
+- 过渡带顶点与地表同高，AABB 不变；绕序与内部网格一致（几何法线朝下），
+  不会被 Back culling 剔除。
+- chunk 资源 key 含 `lod` 与合并步长；`lodDistances` 只影响运行时选择，不进 key。
+- `TerrainChunkVertexCount` / `TerrainChunkIndexCount` 的 `stitched` 参数
+  （默认 true）按上述公式给出精确值；驻留预算与测试共用同一函数。
 - `TerrainLodDistancesCm(desc)`：显式距离表，或按地形最长边按级数均分
   （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
   在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
@@ -1167,9 +1171,10 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   覆盖 WorldBuilder 生成的实例、`SetTerrainCollisions` 替换/清空、
   Raycast/ProbeGround 命中 heightfield 并与 `SampleHeightCm` 比较、普通 World
   不创建物理世界。当前 worktree 未开 C#，没有完整 Play 冒烟。
-- CPU LOD/skirt：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无 skirt）、
-  LOD1..3 的格子数与 skirt 环顶点数、基础顶点在 LOD0 同名网格点的位置/法线/UV、
-  skirt 的竖直下移与 AABB 覆盖、skirt 三角形朝内绕序、粗 LOD 跨 chunk 边界法线连续、
+- CPU LOD/边界缝合：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无额外几何）、
+  LOD1..3 的格子数、边界环顶点数与过渡带三角形数、基础顶点在 LOD0 同名网格点的
+  位置/法线/UV、边界环落在 chunk 边界线上且不超出 AABB、过渡带三角形与内部网格
+  同向（法线朝下）、相邻 chunk 差一级 LOD 时共享边界逐点重合、粗 LOD 跨 chunk 边界法线连续、
   `chunkQuads` 无法被步长整除与 `lodLevel` 越界时抛错、`lodLevels`/`lodDistances`
   的校验与加载器往返、默认距离按地形最长边推导、距离→级别边界（含负距离）、
   距离 AABB 最近点、10% 双向滞回带、LOD0 显式 skirt override、

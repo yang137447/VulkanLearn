@@ -147,12 +147,10 @@ public:
     HostImage ExportNormalizedHeightmap() const;
 
     // 用当前高度快照调用现有 TerrainMeshBuilder::BuildChunks，只生成 dirty
-    // chunk 子集。网格公式、法线、UV、裙边全部复用运行时实现，不在此处复制。
-    // 没有 dirty chunk 时返回空；lodLevel 与 buildSkirtOverride 语义同
-    // TerrainMeshBuilder::BuildChunks。
+    // chunk 子集。网格公式、法线、UV、边界缝合全部复用运行时实现，不在此处复制。
+    // 没有 dirty chunk 时返回空；lodLevel 语义同 TerrainMeshBuilder::BuildChunks。
     std::vector<TerrainMeshChunk> BuildDirtyChunkMeshes(
-        uint32_t lodLevel = 0,
-        std::optional<bool> buildSkirtOverride = std::nullopt) const;
+        uint32_t lodLevel = 0) const;
 
     // UE 风格的平滑衰减：normalizedDistance 是 d/radius。falloff 控制
     // 过渡带宽度，结果在 [0,1] 内单调不增。UI 预览也应使用这个函数，

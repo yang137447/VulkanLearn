@@ -189,7 +189,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   Jolt 注册。World 通过 `world/loading/terrainCollisionInstances.*` 保留每个
   terrain placement 的计划与 TRS，Play 时 `ScriptPhysicsWorld::SetTerrainCollisions`
   创建/替换 body，Stop/World 换代销毁；编辑器与普通加载不创建物理世界。
-  `TerrainCollisionWorld` 只是测试/离线夹具。CPU 侧已有 LOD/skirt 生成；
+  `TerrainCollisionWorld` 只是测试/离线夹具。CPU 侧已有 LOD/边界缝合生成；
   `lodLevels>1` 时 `RendererTerrainLoader` 按**加载期几何驻留窗口**生成
   (chunk, LOD)（`source/terrain/terrainChunkResidency.*` +
   `TerrainMeshBuilder::ComputeChunkBounds`/`TerrainChunkBuildFilter`），窗口外只建

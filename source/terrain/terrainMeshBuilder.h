@@ -39,7 +39,7 @@ std::string TerrainChunkResourceKey(
 
 // 高度图在加载期一次性生成 CPU chunk 网格；法线使用全局高度采样中心差分，
 // 因此相邻 chunk 的共享边界不会出现法线接缝。
-// 单个 chunk 的 LOD0 AABB（不含 skirt），由 ComputeChunkBounds 直接从高度图
+// 单个 chunk 的 LOD0 AABB（不含边界缝合带；缝合带与地表同高），由 ComputeChunkBounds 直接从高度图
 // 采样得到，用于加载期决定哪些细 LOD 需要真正生成。
 struct TerrainChunkBounds
 {
@@ -67,15 +67,12 @@ struct TerrainChunkBuildFilter
 class TerrainMeshBuilder
 {
 public:
-    // 生成指定 LOD 的全部 chunk。LOD0 与历史实现逐字节一致（无 skirt）；
-    // LOD>=1 把每方向 chunkQuads/2^lod 个格子合并一格，并在 chunk 边界
-    // 追加一圈向下延伸的 skirt，用于遮挡与更粗 LOD 相邻时的裂缝。
-    // buildSkirtOverride 为空时沿用历史规则（仅 LOD>=1 带裙边）；多级地形
-    // 需要给 LOD0 也带裙边，否则与相邻 LOD1 chunk 的边界无法完全遮挡。
+    // 生成指定 LOD 的全部 chunk。LOD0 与历史实现逐字节一致；
+    // LOD>=1 把每方向 chunkQuads/2^lod 个格子合并一格，并把四条边界改为
+    // 按 LOD0 间距采样的边界环 + 一圈过渡三角形，保证与任意 LOD 的邻居水密。
     static std::vector<TerrainMeshChunk> BuildChunks(
         const TerrainBuildPlan& plan,
         uint32_t lodLevel = 0,
-        std::optional<bool> buildSkirtOverride = std::nullopt,
         const TerrainChunkBuildFilter* filter = nullptr);
 
     // 只计算 LOD0 的 chunk AABB（顶点位置的范围），不生成法线/索引。
@@ -87,6 +84,4 @@ public:
 
 // skirt 向下延伸的深度（cm）。当前按地形总高度尺度取 10%，下限 1cm；
 // 所有 LOD 级共用同一深度，保证相邻级互相覆盖。
-float TerrainChunkSkirtDepthCm(const TerrainAssetDesc& desc);
-
 } // namespace VL

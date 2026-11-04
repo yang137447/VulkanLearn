@@ -478,8 +478,7 @@ HostImage TerrainHeightmapEditor::ExportNormalizedHeightmap() const
 }
 
 std::vector<TerrainMeshChunk> TerrainHeightmapEditor::BuildDirtyChunkMeshes(
-    uint32_t lodLevel,
-    std::optional<bool> buildSkirtOverride) const
+    uint32_t lodLevel) const
 {
     const std::vector<TerrainDirtyChunk> dirtyChunks = DirtyChunks();
     if (dirtyChunks.empty())
@@ -505,7 +504,6 @@ std::vector<TerrainMeshChunk> TerrainHeightmapEditor::BuildDirtyChunkMeshes(
     return TerrainMeshBuilder::BuildChunks(
         editedPlan,
         lodLevel,
-        buildSkirtOverride,
         &filter);
 }
 

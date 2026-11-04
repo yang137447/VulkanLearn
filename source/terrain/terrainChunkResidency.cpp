@@ -23,27 +23,34 @@ uint32_t QuadsPerChunk(const TerrainAssetDesc& desc, uint32_t lodLevel)
 uint64_t TerrainChunkVertexCount(
     const TerrainAssetDesc& desc,
     uint32_t lodLevel,
-    bool buildSkirt)
+    bool stitched)
 {
     const uint32_t quads = QuadsPerChunk(desc, lodLevel);
     const uint64_t base =
         static_cast<uint64_t>(quads + 1) * static_cast<uint64_t>(quads + 1);
-    const uint64_t skirt =
-        buildSkirt ? static_cast<uint64_t>(quads) * 4ull : 0ull;
-    return base + skirt;
+    if (!stitched || TerrainLodStepQuads(lodLevel) == 1)
+        return base;
+    // 四条边都按 LOD0 间距补一圈边界环。
+    return base + static_cast<uint64_t>(desc.chunkQuads) * 4ull;
 }
 
 uint64_t TerrainChunkIndexCount(
     const TerrainAssetDesc& desc,
     uint32_t lodLevel,
-    bool buildSkirt)
+    bool stitched)
 {
     const uint32_t quads = QuadsPerChunk(desc, lodLevel);
-    const uint64_t base =
+    const uint32_t step = TerrainLodStepQuads(lodLevel);
+    const uint64_t full =
         static_cast<uint64_t>(quads) * static_cast<uint64_t>(quads) * 6ull;
-    const uint64_t skirt =
-        buildSkirt ? static_cast<uint64_t>(quads) * 4ull * 6ull : 0ull;
-    return base + skirt;
+    if (!stitched || step == 1)
+        return full;
+    // 最外一圈格子改由边界带填充：内部 (quads-2)² 个格子，每条边
+    // quads×(step+1) 个三角形。
+    const uint32_t interior = quads > 1 ? quads - 2 : 0;
+    const uint64_t band =
+        static_cast<uint64_t>(quads) * (step + 1ull) * 3ull * 4ull;
+    return static_cast<uint64_t>(interior) * interior * 6ull + band;
 }
 
 uint64_t TerrainChunkResidencyStats::TotalVertexBytes() const

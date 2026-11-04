@@ -172,22 +172,22 @@ TEST(TerrainChunkResidency, EstimatesMatchBuiltChunkCounts)
     const TerrainBuildPlan plan = MakePlan();
     for (uint32_t lodLevel = 0; lodLevel < 3; ++lodLevel)
     {
-        const bool skirt = true;
+        const bool stitched = true;
         const std::vector<TerrainMeshChunk> chunks =
-            TerrainMeshBuilder::BuildChunks(plan, lodLevel, true);
+            TerrainMeshBuilder::BuildChunks(plan, lodLevel);
         ASSERT_FALSE(chunks.empty());
         for (const TerrainMeshChunk& chunk : chunks)
         {
             EXPECT_EQ(
                 chunk.vertices.size(),
-                TerrainChunkVertexCount(plan.desc, lodLevel, skirt));
+                TerrainChunkVertexCount(plan.desc, lodLevel, stitched));
             EXPECT_EQ(
                 chunk.indices.size(),
-                TerrainChunkIndexCount(plan.desc, lodLevel, skirt));
+                TerrainChunkIndexCount(plan.desc, lodLevel, stitched));
         }
     }
 
-    // 不带 skirt 的旧路径同样一致。
+    // 不带缝合带的路径（LOD0）同样一致。
     const std::vector<TerrainMeshChunk> legacy =
         TerrainMeshBuilder::BuildChunks(plan, 0);
     ASSERT_FALSE(legacy.empty());
@@ -229,7 +229,7 @@ TEST(TerrainMeshBuilder, FilterSkipsChunksWithoutChangingTheRest)
     TerrainChunkBuildFilter filter;
     filter.chunkMask = {0, 1, 0, 0};
     const std::vector<TerrainMeshChunk> filtered =
-        TerrainMeshBuilder::BuildChunks(plan, 0, std::nullopt, &filter);
+        TerrainMeshBuilder::BuildChunks(plan, 0, &filter);
     ASSERT_EQ(filtered.size(), 1u);
     EXPECT_EQ(filtered[0].chunkX, 1u);
     EXPECT_EQ(filtered[0].chunkZ, 0u);
@@ -261,7 +261,7 @@ TEST(TerrainMeshBuilder, FilterSkipsChunksWithoutChangingTheRest)
     const TerrainChunkBuildFilter noFilter;
     EXPECT_TRUE(noFilter.Accepts(0, 0, 2));
     EXPECT_EQ(
-        TerrainMeshBuilder::BuildChunks(plan, 0, std::nullopt, &noFilter).size(),
+        TerrainMeshBuilder::BuildChunks(plan, 0, &noFilter).size(),
         4u);
 }
 
