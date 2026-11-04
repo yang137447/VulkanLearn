@@ -191,6 +191,9 @@ struct ParticleDecalAsset
     float metallic = 0.0f;
     float ambientOcclusion = 1.0f;
     float normalStrength = 0.35f;
+    // 线性自发光颜色与强度；强度 0 时不写 DBufferEmissive。
+    Eigen::Vector3f emissive = Eigen::Vector3f::Zero();
+    float emissiveStrength = 0.0f;
     uint32_t responseMask = DefaultDecalResponse();
     std::string albedoMap;
     std::string normalMap;

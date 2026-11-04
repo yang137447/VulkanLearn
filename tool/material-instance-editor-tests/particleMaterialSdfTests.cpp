@@ -69,6 +69,102 @@ TEST(ParticleMaterial, ClampsPbrAndRejectsWrongTypes)
         std::invalid_argument);
 }
 
+TEST(ParticleMaterial, ParsesTextureSlotsAndUvTransform)
+{
+    const Json document = Json{
+        {"type", "materialInstance"},
+        {"uvScale", Json::array({2.0, 3.0})},
+        {"uvOffset", Json::array({0.25, 0.5})},
+        {"textures", Json{
+            {"albedoMap",
+             "Maps/SC_particle_ue_impact/Textures/T_Impact_Concrete_BaseColor.json"},
+            {"normalMap",
+             "Maps/SC_particle_ue_impact/Textures/T_Impact_Concrete_Normal.json"},
+            {"pbrParamMap",
+             "Maps/SC_particle_ue_impact/Textures/T_Impact_Concrete_ORM.json"},
+            {"emissionMap",
+             "Maps/SC_particle_ue_explosion/Textures/T_Explosion_Scorch_BaseColor.json"}}}
+    };
+    const ParticleMaterialParams params =
+        ParseParticleMaterialInstanceJson(document);
+    EXPECT_TRUE(params.valid);
+    EXPECT_FLOAT_EQ(params.uvScale.x(), 2.0f);
+    EXPECT_FLOAT_EQ(params.uvScale.y(), 3.0f);
+    EXPECT_FLOAT_EQ(params.uvOffset.x(), 0.25f);
+    EXPECT_FLOAT_EQ(params.uvOffset.y(), 0.5f);
+    EXPECT_NE(params.albedoMap.find("T_Impact_Concrete_BaseColor"),
+        std::string::npos);
+    EXPECT_NE(params.normalMap.find("T_Impact_Concrete_Normal"),
+        std::string::npos);
+    // M_pbr 的 pbrParamMap 与 decal 的 ormMap 是同一语义槽位。
+    EXPECT_NE(params.ormMap.find("T_Impact_Concrete_ORM"),
+        std::string::npos);
+    // emissionMap 与 emissiveMap 同义。
+    EXPECT_NE(params.emissiveMap.find("T_Explosion_Scorch_BaseColor"),
+        std::string::npos);
+    // emissiveMap 存在但未显式给 u_emissive 时用白色 tint，避免自发光为黑色。
+    EXPECT_FLOAT_EQ(params.emissive.x(), 1.0f);
+    EXPECT_FLOAT_EQ(params.emissive.z(), 1.0f);
+    // 与 M_pbr 的 u_emissiveStrength 默认值对齐，贴图不会被 0 强度吞掉。
+    EXPECT_FLOAT_EQ(params.emissiveStrength, 1.0f);
+}
+
+TEST(ParticleMaterial, MapsPbrTintAndUvParameterAliases)
+{
+    const Json document = Json{
+        {"type", "materialInstance"},
+        {"parameters", Json{
+            {"u_tintColor", Json::array({0.6, 0.4, 0.2, 0.9})},
+            {"u_pbrFactors", Json::array({0.3, 0.8, 0.7, 0.0})},
+            {"u_alphaClipThreshold", 0.35},
+            {"u_normalStrength", 0.5},
+            {"u_uvScale", Json::array({4.0, 5.0})},
+            {"u_uvOffset", Json::array({-0.1, 0.2})}}}
+    };
+    const ParticleMaterialParams params =
+        ParseParticleMaterialInstanceJson(document);
+    EXPECT_FLOAT_EQ(params.baseColor.x(), 0.6f);
+    EXPECT_FLOAT_EQ(params.baseColor.w(), 0.9f);
+    EXPECT_FLOAT_EQ(params.roughness, 0.3f);
+    EXPECT_FLOAT_EQ(params.metallic, 0.8f);
+    EXPECT_FLOAT_EQ(params.ambientOcclusion, 0.7f);
+    EXPECT_FLOAT_EQ(params.alphaClipThreshold, 0.35f);
+    EXPECT_FLOAT_EQ(params.normalStrength, 0.5f);
+    EXPECT_FLOAT_EQ(params.uvScale.x(), 4.0f);
+    EXPECT_FLOAT_EQ(params.uvOffset.y(), 0.2f);
+}
+
+TEST(ParticleMaterial, RejectsInvalidTexturePathsAndUvTypes)
+{
+    const Json absolute = Json{
+        {"type", "materialInstance"},
+        {"textures", Json{{"albedoMap", "C:/textures/T_albedo.json"}}}};
+    EXPECT_THROW(
+        ParseParticleMaterialInstanceJson(absolute),
+        std::invalid_argument);
+
+    const Json traversal = Json{
+        {"type", "materialInstance"},
+        {"textures", Json{{"normalMap", "../T_normal.json"}}}};
+    EXPECT_THROW(
+        ParseParticleMaterialInstanceJson(traversal),
+        std::invalid_argument);
+
+    const Json nonJson = Json{
+        {"type", "materialInstance"},
+        {"textures", Json{{"ormMap", "Maps/foo/T_orm.png"}}}};
+    EXPECT_THROW(
+        ParseParticleMaterialInstanceJson(nonJson),
+        std::invalid_argument);
+
+    const Json badUv = Json{
+        {"type", "materialInstance"},
+        {"parameters", Json{{"u_uvScale", Json::array({1.0})}}}};
+    EXPECT_THROW(
+        ParseParticleMaterialInstanceJson(badUv),
+        std::invalid_argument);
+}
+
 TEST(ParticleSdf, ParsesAndSamplesTrilinearDistance)
 {
     Json document = Json{

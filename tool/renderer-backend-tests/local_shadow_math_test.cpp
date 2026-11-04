@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include "render/rendergraph/renderGraphCompiler.h"
@@ -20,6 +22,27 @@ Eigen::Vector4f TransformPoint(
     const Eigen::Vector3f& point)
 {
     return matrix * Eigen::Vector4f(point.x(), point.y(), point.z(), 1.0f);
+}
+
+std::string ReadShadowSource(const std::string& relativePath)
+{
+    const std::string path =
+        std::string(VL_TEST_SOURCE_ROOT) + "/" + relativePath;
+    std::ifstream file(path);
+    if (!file.is_open())
+    {
+        return std::string();
+    }
+    return std::string(
+        std::istreambuf_iterator<char>(file),
+        std::istreambuf_iterator<char>());
+}
+
+bool ContainsShadowText(
+    const std::string& source,
+    const std::string& needle)
+{
+    return source.find(needle) != std::string::npos;
 }
 
 } // namespace
@@ -325,6 +348,149 @@ TEST(LocalShadowMath, SpotCullUsesConeAngleAndRange)
     const auto edge = boxAround(edgeCenter, 8.0f);
     EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
         edge.first, edge.second, volume));
+}
+
+TEST(LocalShadowMath, CascadeFrustumPlanesRejectOutsideAabb)
+{
+    const Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    const Eigen::Vector3f direction(0.0f, 0.0f, -1.0f);
+    const float outerConeRadians =
+        30.0f * 3.14159265358979323846f / 180.0f;
+    const VL::LocalShadowSpotMatrices matrices =
+        VL::BuildSpotShadowMatrices(
+            position,
+            direction,
+            outerConeRadians,
+            1.0f,
+            100.0f);
+    const VL::ShadowFrustumPlanes planes =
+        VL::ExtractShadowFrustumPlanes(
+            matrices.projection * matrices.view);
+
+    // 平面必须归一化，否则 AABB 距离比较会随矩阵缩放漂移。
+    for (const Eigen::Vector4f& plane : planes)
+    {
+        EXPECT_NEAR(plane.head<3>().norm(), 1.0f, 1.0e-5f);
+    }
+
+    // 视锥内的点必须落在全部平面的内侧（dot(n, p) + w >= 0）。
+    const Eigen::Vector3f insidePoint(0.0f, 0.0f, -50.0f);
+    for (const Eigen::Vector4f& plane : planes)
+    {
+        EXPECT_GE(
+            plane.head<3>().dot(insidePoint) + plane.w(),
+            -1.0e-4f);
+    }
+
+    EXPECT_TRUE(VL::IntersectsShadowFrustum(
+        Eigen::Vector3f(-2.0f, -2.0f, -52.0f),
+        Eigen::Vector3f(2.0f, 2.0f, -48.0f),
+        planes));
+
+    // 明显离开锥体。
+    EXPECT_FALSE(VL::IntersectsShadowFrustum(
+        Eigen::Vector3f(98.0f, -2.0f, -52.0f),
+        Eigen::Vector3f(102.0f, 2.0f, -48.0f),
+        planes));
+
+    // 灯后方。
+    EXPECT_FALSE(VL::IntersectsShadowFrustum(
+        Eigen::Vector3f(-2.0f, -2.0f, 20.0f),
+        Eigen::Vector3f(2.0f, 2.0f, 24.0f),
+        planes));
+
+    // 超过 far=100cm。
+    EXPECT_FALSE(VL::IntersectsShadowFrustum(
+        Eigen::Vector3f(-2.0f, -2.0f, -220.0f),
+        Eigen::Vector3f(2.0f, 2.0f, -210.0f),
+        planes));
+}
+
+TEST(LocalShadowMath, CascadeFrustumKeepsDegenerateBounds)
+{
+    const VL::ShadowFrustumPlanes planes =
+        VL::ExtractShadowFrustumPlanes(Eigen::Matrix4f::Identity());
+    // 退化 AABB 与非有限矩阵不能静默剔除 draw。
+    EXPECT_TRUE(VL::IntersectsShadowFrustum(
+        Eigen::Vector3f(10.0f, 10.0f, 10.0f),
+        Eigen::Vector3f(-10.0f, -10.0f, -10.0f),
+        planes));
+}
+
+TEST(LocalShadowSampling, ReceiverBiasUsesSlopeAndNormalOffset)
+{
+    // 与 localShadowSampling.glsl 的 BuildLocalShadowReceiverBias 同公式。
+    const auto slopeFor = [](float nDotL)
+    {
+        const float clamped = std::clamp(nDotL, 0.0f, 1.0f);
+        const float sine =
+            std::sqrt(std::max(1.0f - clamped * clamped, 0.0f));
+        return sine / std::max(clamped, 0.2f);
+    };
+    EXPECT_NEAR(slopeFor(1.0f), 0.0f, 1.0e-6f);
+    EXPECT_NEAR(slopeFor(0.5f), std::sqrt(0.75f) / 0.5f, 1.0e-5f);
+    // N·L = 0 时使用 0.2 下限，避免掠射 bias 发散。
+    EXPECT_NEAR(slopeFor(0.0f), 5.0f, 1.0e-5f);
+
+    const float authorBiasCm = 2.0f;
+    const auto depthBiasFor = [authorBiasCm, &slopeFor](float nDotL)
+    {
+        return authorBiasCm * std::clamp(
+            1.0f + 1.5f * slopeFor(nDotL),
+            1.0f,
+            4.0f);
+    };
+    // 正常入射仍是作者值；掠射 (N·L=0.5) 按斜率放大。
+    EXPECT_NEAR(depthBiasFor(1.0f), authorBiasCm, 1.0e-5f);
+    EXPECT_NEAR(depthBiasFor(0.5f), 7.196f, 1.0e-2f);
+    // 极端掠射封顶 4×作者 bias，避免接触阴影整体脱离。
+    EXPECT_NEAR(depthBiasFor(0.0f), 8.0f, 1.0e-5f);
+
+    const std::string source =
+        ReadShadowSource("shader/glsl/common/localShadowSampling.glsl");
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "#define VL_LOCAL_SHADOW_PCF_RADIUS 2"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "#define VL_LOCAL_SHADOW_SLOPE_BIAS 1.5"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "#define VL_LOCAL_SHADOW_NORMAL_OFFSET_SCALE 0.5"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "#define VL_LOCAL_SHADOW_MAX_DEPTH_BIAS_SCALE 4.0"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "BuildLocalShadowReceiverBias"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "dot(normal, surfaceToLight)"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "1.0 - nDotL * nDotL"));
+    // 点光：作者 cm 深度偏置除以 far；聚光：按透视深度导数换算。
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "receiverBias.depthBiasCm / farCm"));
+    EXPECT_TRUE(ContainsShadowText(
+        source,
+        "LocalShadowSpotDepthBiasPerCm"));
+    // 旧 6 参数入口保留给没有几何法线的粒子路径。
+    EXPECT_TRUE(ContainsShadowText(source, "vec3(0.0));"));
+}
+
+TEST(LocalShadowSampling, SceneLightingPassesSurfaceNormalIntoBias)
+{
+    const std::string lighting = ReadShadowSource(
+        "shader/glsl/common/lighting.glsl");
+    // PBR/粒子灯点光与聚光都要把法线交给接收面 bias。
+    EXPECT_TRUE(ContainsShadowText(lighting, "normal_WS);"));
+    EXPECT_TRUE(ContainsShadowText(lighting, "topNormal_WS);"));
+    // 半径外提前返回，避免为 attenuation=0 的像素做阴影采样。
+    EXPECT_TRUE(ContainsShadowText(
+        lighting,
+        "if (attenuation <= 0.0)"));
 }
 
 TEST(LocalShadowMath, CullBuildsFromSnapshotAndKeepsInvalidData)

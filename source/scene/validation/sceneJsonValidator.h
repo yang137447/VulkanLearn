@@ -166,6 +166,35 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                             " must be in [0, 1]");
                 }
             }
+            if (object.contains("emissive"))
+            {
+                const auto& emissive = object.at("emissive");
+                if (!emissive.is_array() || emissive.size() != 3)
+                    throw std::invalid_argument(
+                        "Decal emissive must be a vec3");
+                for (const auto& component : emissive)
+                {
+                    if (!component.is_number() ||
+                        !std::isfinite(component.get<double>()))
+                        throw std::invalid_argument(
+                            "Decal emissive must contain finite numbers");
+                    const float value = static_cast<float>(
+                        component.get<double>());
+                    if (!std::isfinite(value) || value < 0.0f ||
+                        value > 64.0f)
+                        throw std::invalid_argument(
+                            "Decal emissive components must be in [0, 64]");
+                }
+            }
+            if (object.contains("emissiveStrength"))
+            {
+                const float strength = static_cast<float>(
+                    ReadPhysicalNumber(
+                        object, "emissiveStrength", 0.0, 1000.0));
+                if (strength < 0.0f || strength > 1000.0f)
+                    throw std::invalid_argument(
+                        "Decal emissiveStrength must be in [0, 1000]");
+            }
             if (object.contains("decalResponse"))
             {
                 if (!object.at("decalResponse").is_string())

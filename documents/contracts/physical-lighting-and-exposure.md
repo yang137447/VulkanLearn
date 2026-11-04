@@ -175,6 +175,11 @@ reload commit as Surface/Shadow:
   direction, outer cone angle (`fov = 2 * coneOuter`), near 1 cm and far = the
   light radius. The shader reconstructs the same matrices from the GPU light
   record and samples with 3×3 PCF.
+  The receiver applies a normal offset plus a slope-scaled depth bias
+  (`bias * clamp(1 + 1.5*tanθ, 1, 4)`, capped at 4× the authored bias) and
+  uses 5×5 PCF; true PCSS is not implemented because the atlas is bound as a
+  comparison sampler only. CSM shadow passes cull drawers per cascade with the
+  cascade frustum planes (WPO/SpeedTree keep full submission).
 - Point: one octahedral slice. Rendering uses eight quadrant passes with
   per-octant world-space projection matrices; the fragment shader rejects
   fragments outside the current octant and writes

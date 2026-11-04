@@ -26,8 +26,31 @@ class RendererBackendVulkan;
 struct RenderScene;
 struct DecalSnapshot;
 
+// 与 shader/glsl/decal/decalCommon.glsl 的 std430 DecalInstance 一一对应。
+// 公开这个布局是为了让布局/stride 回归测试直接校验 offsetof，而不是在
+// 测试里复制一份容易漂移的结构体。
+struct DecalGpuInstance
+{
+    Eigen::Matrix4f decalToWorld;
+    Eigen::Matrix4f worldToDecal;
+    // xyz = baseColor，w = normalStrength（0 表示程序化法线不生效）。
+    Eigen::Vector4f color;
+    // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
+    Eigen::Vector4f surface;
+    // x = edgeSoftness, y = noiseStrength, z = seed,
+    // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
+    Eigen::Vector4f params;
+    // xyz 保留；w = 1 表示当前 decal 成功加载了 normalMap，
+    // shader 据此在贴图法线与程序化 FBM 法线之间选择。
+    Eigen::Vector4f normal;
+    // rgb = 线性 emissive，w = emissiveStrength；写端与 coverage 预乘。
+    Eigen::Vector4f emissive;
+};
+static_assert(sizeof(DecalGpuInstance) == 208,
+    "DecalGpuInstance layout must match decalCommon.glsl");
+
 // BeforeLighting DBuffer decal 的 GPU 侧拥有者。一个 decal pass 内用
-// 逐 decal 的 unit cube 绘制到 DBuffer A/B/C/D 与 DBufferMask；实例数据
+// 逐 decal 的 unit cube 绘制到 DBuffer A/B/C/D、Mask 与 Emissive；实例数据
 // 在每帧固定的 SSBO 槽位中更新，material 贴图走逐 decal 的 set 1
 // descriptor（per swapchain image × per instance slot）。
 class DecalRenderer
@@ -72,24 +95,7 @@ private:
         Eigen::Matrix4f invViewProjection;
     };
 
-    // 与 shader/glsl/decal/decalCommon.glsl 的 std430 DecalInstance 一一对应。
-    struct DecalInstance
-    {
-        Eigen::Matrix4f decalToWorld;
-        Eigen::Matrix4f worldToDecal;
-        // xyz = baseColor，w = normalStrength（0 表示程序化法线不生效）。
-        Eigen::Vector4f color;
-        // x = roughness, y = metallic, z = ambientOcclusion, w = opacity.
-        Eigen::Vector4f surface;
-        // x = edgeSoftness, y = noiseStrength, z = seed,
-        // w = DecalResponse 位掩码（color/normal/roughness/metallic）。
-        Eigen::Vector4f params;
-        // xyz 保留；w = 1 表示当前 decal 成功加载了 normalMap，
-        // shader 据此在贴图法线与程序化 FBM 法线之间选择。
-        Eigen::Vector4f normal;
-    };
-    static_assert(sizeof(DecalInstance) == 192,
-        "DecalInstance layout must match decalCommon.glsl");
+    using DecalInstance = DecalGpuInstance;
 
     // 一个 decal 的代码维护贴图槽位；没有 UE Material Graph。
     struct DecalTextureSet

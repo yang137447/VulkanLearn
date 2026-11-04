@@ -858,6 +858,13 @@ void DecalRenderer::UploadFrameInstances(
             textureSet != nullptr && textureSet->hasNormalMap
                 ? 1.0f
                 : 0.0f);
+        // rgb = 线性 emissive，w = 强度；coverage 由 shader 用投影 alpha
+        // 统一乘一次，避免 CPU/GPU 两端重复衰减。
+        target.emissive = Eigen::Vector4f(
+            source.emissive.x(),
+            source.emissive.y(),
+            source.emissive.z(),
+            source.emissiveStrength);
     }
 }
 

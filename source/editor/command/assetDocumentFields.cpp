@@ -81,6 +81,10 @@ const Field fields[] = {
     {K::Scene, "squareAreaLight", "position", ValueKind::Vector3, false, "cm"},
     {K::Scene, "squareAreaLight", "normal", ValueKind::Vector3},
     {K::Scene, "squareAreaLight", "size", ValueKind::Number, false, "cm"},
+    // Decal 的自发光与表面响应解耦：强度 0 时不产生附加颜色。
+    {K::Scene, "decal", "emissive", ValueKind::Vector3, true, "linear_rgb"},
+    {K::Scene, "decal", "emissiveStrength", ValueKind::Number, true,
+        "", "", false, false, 0.0, 1000.0},
     {K::Scene, "camera", "position", ValueKind::Vector3, false, "cm"},
     {K::Scene, "camera", "rotation", ValueKind::Vector3, false, "degrees"},
     {K::Scene, "camera", "look_at", ValueKind::Vector3, true, "cm"},
@@ -174,6 +178,10 @@ const Field fields[] = {
         "", "", false, false, 0.0, 1.0},
     {K::ParticleSystem, "", "decal.normalStrength", ValueKind::Number, true,
         "", "", false, false, 0.0, 1.0},
+    {K::ParticleSystem, "", "decal.emissive", ValueKind::Vector3, true,
+        "linear_rgb"},
+    {K::ParticleSystem, "", "decal.emissiveStrength", ValueKind::Number, true,
+        "", "", false, false, 0.0, 1000.0},
     {K::ParticleSystem, "", "decal.decalResponse", ValueKind::Text, true, "",
         "colorNormalRoughness|colorNormal|color|normal|roughness|"
         "roughnessNormal|metallic|metallicNormal|metallicRoughness|"

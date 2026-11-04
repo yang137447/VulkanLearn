@@ -45,6 +45,7 @@
 #include "shader/build/atomicFile.h"
 #include "shaderReflect.h"
 #include "texture.h"
+#include "textureAssetLoader.h"
 
 namespace VL
 {
@@ -319,6 +320,71 @@ GraphicsPipelineLayoutDesc BuildParticleSharedLayout()
         MakeParticlePassSetBinding(1, "shadowMap"),
         MakeParticlePassSetBinding(2, "localShadowMap")};
     return layout;
+}
+
+// mesh 可见管线独占 set 1：材质 UBO + albedo/normal/ORM/emissive。
+// 其它粒子渲染模式继续使用不含 set 1 的共享 layout，避免无材质管线
+// 被要求绑定空材质描述符。
+GraphicsPipelineLayoutDesc BuildParticleMeshLayout()
+{
+    GraphicsPipelineLayoutDesc layout = BuildParticleSharedLayout();
+    layout.overrideSets[kParticleMaterialSetIndex] = true;
+    std::vector<ShaderBinding>& bindings =
+        layout.setBindings[kParticleMaterialSetIndex];
+    ShaderBinding materialUniform;
+    materialUniform.set = kParticleMaterialSetIndex;
+    materialUniform.binding = kParticleMaterialUniformBinding;
+    materialUniform.type = vk::DescriptorType::eUniformBuffer;
+    materialUniform.descriptorCount = 1;
+    materialUniform.stageFlags =
+        vk::ShaderStageFlagBits::eVertex |
+        vk::ShaderStageFlagBits::eFragment;
+    materialUniform.name = "ParticleMaterialUniform";
+    bindings.push_back(std::move(materialUniform));
+    const char* textureNames[] = {
+        "albedoMap",
+        "normalMap",
+        "ormMap",
+        "emissiveMap"};
+    for (uint32_t index = 0;
+         index < kParticleMaterialTextureCount;
+         ++index)
+    {
+        ShaderBinding texture;
+        texture.set = kParticleMaterialSetIndex;
+        texture.binding = kParticleMaterialAlbedoBinding + index;
+        texture.type = vk::DescriptorType::eCombinedImageSampler;
+        texture.descriptorCount = 1;
+        texture.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        texture.name = textureNames[index];
+        bindings.push_back(std::move(texture));
+    }
+    return layout;
+}
+
+std::shared_ptr<Texture> CreateParticleSolidTexture(
+    RendererBackendVulkan& backend,
+    const std::array<uint8_t, 4>& rgba,
+    HostImage::PixelFormat pixelFormat,
+    HostImage::TextureSemantic semantic,
+    const char* debugName)
+{
+    HostImage image;
+    image.width = 1;
+    image.height = 1;
+    image.channels = 4;
+    image.format = pixelFormat;
+    image.semantic = semantic;
+    image.rowStrideBytes = 4;
+    image.data = {rgba[0], rgba[1], rgba[2], rgba[3]};
+    Texture::CreateDesc desc;
+    desc.semantic = semantic;
+    desc.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    desc.generateMipmaps = false;
+    desc.filter = vk::Filter::eLinear;
+    desc.wrapMode = vk::SamplerAddressMode::eClampToEdge;
+    desc.debugName = debugName;
+    return std::make_shared<Texture>(backend, image, desc);
 }
 
 ParticleRenderIdentity BuildParticleRenderIdentity(
@@ -701,20 +767,23 @@ void ParticleRenderer::Initialize(
     meshContract.depthTestEnable = false;
     meshContract.depthWriteEnable = false;
     meshContract.depthCompareOp = vk::CompareOp::eLess;
+    // mesh 独占材质 set 1；billboard/ribbon/beam 的共享 layout 不变。
+    const GraphicsPipelineLayoutDesc meshLayout =
+        BuildParticleMeshLayout();
     meshAdditivePipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         meshContract,
         meshArtifact,
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::Additive,
-        sharedLayout);
+        meshLayout);
     meshAlphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         meshContract,
         meshArtifact,
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::AlphaBlend,
-        sharedLayout);
+        meshLayout);
 
     // 跨发射器 alpha billboard 的统一绘制管线：无顶点输入，读取
     // gathered 记录 + 全局排序 pair 表 + 8 槽纹理数组。
@@ -750,6 +819,26 @@ void ParticleRenderer::Initialize(
         renderer,
         whiteImage,
         whiteDesc);
+    // mesh 材质缺失槽位的常量默认值。flat normal 必须是 (0,0,1)，
+    // 否则缺失 normalMap 时会把几何法线整体旋转。
+    defaultNormalTexture = CreateParticleSolidTexture(
+        renderer,
+        {128, 128, 255, 255},
+        HostImage::PixelFormat::RGBA8_UNORM,
+        HostImage::TextureSemantic::Normal,
+        "ParticleDefaultNormal");
+    defaultOrmTexture = CreateParticleSolidTexture(
+        renderer,
+        {255, 255, 255, 255},
+        HostImage::PixelFormat::RGBA8_UNORM,
+        HostImage::TextureSemantic::Data,
+        "ParticleDefaultOrm");
+    defaultEmissiveTexture = CreateParticleSolidTexture(
+        renderer,
+        {0, 0, 0, 255},
+        HostImage::PixelFormat::RGBA8_UNORM,
+        HostImage::TextureSemantic::Color,
+        "ParticleDefaultEmissive");
     // 场景光照 descriptor 的兜底资源必须在第一个发射器创建前就绪。
     CreateFallbackLightingResources();
     initialized = true;
@@ -798,6 +887,9 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     pipelineFactory = nullptr;
     globalDrawPipeline.reset();
     defaultTexture.reset();
+    defaultNormalTexture.reset();
+    defaultOrmTexture.reset();
+    defaultEmissiveTexture.reset();
     drawOrder.clear();
     renderIdentity = {};
     initialized = false;
@@ -2675,6 +2767,10 @@ void ParticleRenderer::CreateEmitter(
                     : materialError);
         }
     }
+    if (asset.renderMode == "mesh")
+    {
+        LoadEmitterMaterialTextures(*emitter, key);
+    }
     emitter->elapsedSeconds = 0.0f;
     emitter->needsClear = true;
     emitter->prewarm = true;
@@ -2918,6 +3014,98 @@ void ParticleRenderer::LoadEmitterMesh(
     }
 }
 
+std::shared_ptr<Texture> ParticleRenderer::ResolveMaterialTexture(
+    const std::string& emitterKey,
+    const std::string& assetPath,
+    HostImage::TextureSemantic semantic,
+    const std::shared_ptr<Texture>& fallback)
+{
+    if (assetPath.empty())
+    {
+        return fallback;
+    }
+    try
+    {
+        TextureBindingLoadDesc loadDesc =
+            LoadTextureAssetDesc(assetPath);
+        // 法线/ORM/emissive 的数据语义由纹理资产 colorSpace 决定；
+        // 这里只覆盖 runtime 用途，供调试工具与设备层区分。
+        loadDesc.semantic = semantic;
+        const std::string cacheKey =
+            BuildTextureCacheKey(loadDesc);
+        auto cached = textureCache.find(cacheKey);
+        if (cached != textureCache.end())
+        {
+            std::shared_ptr<Texture> texture =
+                cached->second.lock();
+            if (texture)
+            {
+                return texture;
+            }
+            textureCache.erase(cached);
+        }
+        std::shared_ptr<Texture> texture =
+            std::make_shared<Texture>(
+                *backend,
+                loadDesc.source,
+                ToTextureCreateDesc(loadDesc));
+        textureCache[cacheKey] = texture;
+        return texture;
+    }
+    catch (const std::exception& exception)
+    {
+        WarnTextureFallbackOnce(
+            emitterKey + "|" + assetPath,
+            assetPath,
+            exception.what());
+    }
+    catch (...)
+    {
+        WarnTextureFallbackOnce(
+            emitterKey + "|" + assetPath,
+            assetPath,
+            "unknown material texture load failure");
+    }
+    return fallback;
+}
+
+void ParticleRenderer::LoadEmitterMaterialTextures(
+    EmitterResources& emitter,
+    const std::string& emitterKey)
+{
+    // 无论 MI 是否存在都绑定完整 set 1：缺失槽位使用常量默认纹理，
+    // shader 通过 textureFlags 关闭对应采样分支，视觉回到原数值材质。
+    const ParticleMaterialParams& material = emitter.material;
+    emitter.materialAlbedo = material.valid
+        ? ResolveMaterialTexture(
+            emitterKey,
+            material.albedoMap,
+            HostImage::TextureSemantic::Color,
+            defaultTexture)
+        : defaultTexture;
+    emitter.materialNormal = material.valid
+        ? ResolveMaterialTexture(
+            emitterKey,
+            material.normalMap,
+            HostImage::TextureSemantic::Normal,
+            defaultNormalTexture)
+        : defaultNormalTexture;
+    emitter.materialOrm = material.valid
+        ? ResolveMaterialTexture(
+            emitterKey,
+            material.ormMap,
+            HostImage::TextureSemantic::Data,
+            defaultOrmTexture)
+        : defaultOrmTexture;
+    emitter.materialEmissive = material.valid
+        ? ResolveMaterialTexture(
+            emitterKey,
+            material.emissiveMap,
+            HostImage::TextureSemantic::Color,
+            defaultEmissiveTexture)
+        : defaultEmissiveTexture;
+}
+
 void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
 {
     emitter.sortCapacity = SortedCapacity(emitter.asset.maxParticles);
@@ -3116,6 +3304,49 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     emitter.indirectShape = indirectShape;
     emitter.indirectIndexed = indirectShape.indexed;
 
+    if (emitter.asset.renderMode == "mesh")
+    {
+        const auto materialAllocation = backend->CreateBuffer(
+            sizeof(ParticleMaterialUniforms),
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "ParticleMaterialUniform:" + emitter.key);
+        emitter.materialUniform.buffer = materialAllocation.first;
+        emitter.materialUniform.memory = materialAllocation.second;
+        void* mappedMaterial = backend->MapMemory(
+            emitter.materialUniform.memory,
+            sizeof(ParticleMaterialUniforms));
+        if (mappedMaterial == nullptr)
+        {
+            throw std::runtime_error(
+                "particle material uniform map failed");
+        }
+        const ParticleMaterialParams& params = emitter.material;
+        ParticleMaterialUniforms uniforms{};
+        uniforms.uvScaleOffset = Eigen::Vector4f(
+            params.uvScale.x(),
+            params.uvScale.y(),
+            params.uvOffset.x(),
+            params.uvOffset.y());
+        uniforms.textureFlags = Eigen::Vector4f(
+            params.albedoMap.empty() ? 0.0f : 1.0f,
+            params.normalMap.empty() ? 0.0f : 1.0f,
+            params.ormMap.empty() ? 0.0f : 1.0f,
+            params.emissiveMap.empty() ? 0.0f : 1.0f);
+        uniforms.materialParams = Eigen::Vector4f(
+            params.alphaClipThreshold,
+            params.ambientOcclusion,
+            params.normalStrength,
+            0.0f);
+        std::memcpy(
+            mappedMaterial,
+            &uniforms,
+            sizeof(ParticleMaterialUniforms));
+        backend->UnmapMemory(emitter.materialUniform.memory);
+        emitter.materialUniform.mapped = nullptr;
+    }
+
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
     emitter.frameUniforms.reserve(imageCount);
@@ -3153,6 +3384,10 @@ void ParticleRenderer::CreateDescriptors(
 
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
+    const bool meshMaterial =
+        emitter.asset.renderMode == "mesh";
+    const uint32_t materialSetCount =
+        meshMaterial ? imageCount : 0;
     const std::vector<vk::DescriptorSetLayout> computeLayouts(
         imageCount,
         simulatePipeline->GetDescriptorSetLayouts().at(0));
@@ -3167,17 +3402,20 @@ void ParticleRenderer::CreateDescriptors(
         finalizeCountPipeline->GetDescriptorSetLayouts().at(0));
 
     // 每个 image：simulate、graphics、sortInit、AtoB、BtoA、finalize 共 6 个 set。
+    // mesh 额外每 image 一个材质 set 1（1 UBO + 4 贴图）。
     // storage 计数：simulate 5 + graphics 6 + sort 三组各 2 + finalize 2 = 19。
     // graphics 新增的 2 个 storage 是场景灯/GPU 粒子灯 SSBO（binding 6/7）；
     // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
     std::vector<vk::DescriptorPoolSize> poolSizes{
-        {vk::DescriptorType::eUniformBuffer, imageCount * 5},
+        {vk::DescriptorType::eUniformBuffer,
+         imageCount * 5 + materialSetCount},
         {vk::DescriptorType::eStorageBuffer, imageCount * 19},
-        {vk::DescriptorType::eCombinedImageSampler, imageCount * 3}};
+        {vk::DescriptorType::eCombinedImageSampler,
+         imageCount * 3 + materialSetCount * 4}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
-        .setMaxSets(imageCount * 6);
+        .setMaxSets(imageCount * 6 + materialSetCount);
     emitter.descriptorPool = backend->CreateDescriptorPool(
         poolInfo,
         "ParticleDescriptors:" + emitter.key);
@@ -3198,6 +3436,19 @@ void ParticleRenderer::CreateDescriptors(
         backend->AllocateDescriptorSets(
             allocate,
             emitter.graphicsSets);
+
+        if (meshMaterial)
+        {
+            std::vector<vk::DescriptorSetLayout> materialLayouts(
+                imageCount,
+                meshAdditivePipeline->GetDescriptorSetLayouts().at(
+                    kParticleMaterialSetIndex));
+            allocate.setSetLayouts(materialLayouts);
+            emitter.materialSets.resize(imageCount);
+            backend->AllocateDescriptorSets(
+                allocate,
+                emitter.materialSets);
+        }
 
         allocate.setSetLayouts(sortLayouts);
         emitter.sortInitSets.resize(imageCount);
@@ -3394,6 +3645,46 @@ void ParticleRenderer::CreateDescriptors(
                  particleLightWrite,
                  environmentWrite,
                  brdfLutWrite});
+
+            if (meshMaterial &&
+                imageIndex < emitter.materialSets.size())
+            {
+                const vk::DescriptorBufferInfo materialInfo(
+                    emitter.materialUniform.buffer,
+                    0,
+                    sizeof(ParticleMaterialUniforms));
+                vk::WriteDescriptorSet materialUniformWrite;
+                materialUniformWrite
+                    .setDstSet(emitter.materialSets.at(imageIndex))
+                    .setDstBinding(kParticleMaterialUniformBinding)
+                    .setDescriptorCount(1)
+                    .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                    .setBufferInfo(materialInfo);
+                const std::shared_ptr<Texture> materialTextures[] = {
+                    emitter.materialAlbedo,
+                    emitter.materialNormal,
+                    emitter.materialOrm,
+                    emitter.materialEmissive};
+                std::vector<vk::WriteDescriptorSet> materialWrites;
+                materialWrites.push_back(materialUniformWrite);
+                for (uint32_t slot = 0;
+                     slot < kParticleMaterialTextureCount;
+                     ++slot)
+                {
+                    vk::WriteDescriptorSet textureWrite;
+                    textureWrite
+                        .setDstSet(emitter.materialSets.at(imageIndex))
+                        .setDstBinding(
+                            kParticleMaterialAlbedoBinding + slot)
+                        .setDescriptorCount(1)
+                        .setDescriptorType(
+                            vk::DescriptorType::eCombinedImageSampler)
+                        .setImageInfo(
+                            materialTextures[slot]->GetDescriptorInfo());
+                    materialWrites.push_back(textureWrite);
+                }
+                backend->UpdateDescriptorSets(materialWrites);
+            }
 
             uniformWrite.setDstSet(
                 emitter.sortInitSets.at(imageIndex));
@@ -3695,7 +3986,13 @@ void ParticleRenderer::DestroyEmitterResources(
     emitter.sortBtoASets.clear();
     emitter.finalizeSets.clear();
     emitter.lightEmitSets.clear();
+    emitter.materialSets.clear();
     emitter.texture.reset();
+    emitter.materialAlbedo.reset();
+    emitter.materialNormal.reset();
+    emitter.materialOrm.reset();
+    emitter.materialEmissive.reset();
+    DestroyBuffer(rendererBackend, emitter.materialUniform);
     DestroyBuffer(rendererBackend, emitter.meshVertices);
     DestroyBuffer(rendererBackend, emitter.meshIndices);
     DestroyBuffer(rendererBackend, emitter.particles);
@@ -5093,6 +5390,15 @@ void ParticleRenderer::RecordGraphics(
         uint64_t drawnVertices = 0;
         if (mesh)
         {
+            if (imageIndex < emitter.materialSets.size())
+            {
+                commandBuffer.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics,
+                    pipeline->GetPipelineLayout(),
+                    kParticleMaterialSetIndex,
+                    emitter.materialSets.at(imageIndex),
+                    nullptr);
+            }
             const vk::DeviceSize vertexOffset = 0;
             commandBuffer.bindVertexBuffers(
                 0,

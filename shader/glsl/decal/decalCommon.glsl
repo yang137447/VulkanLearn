@@ -17,6 +17,9 @@ struct DecalInstance
     // xyz 保留；w = 1 表示 normalMap 已成功加载，shader 走贴图法线，
     // 否则走程序化 FBM 法线。
     vec4 normal;
+    // rgb = 线性 emissive；w = emissiveStrength。写端把两者与 coverage
+    // 一起预乘后写入 DBufferEmissive，合成端只做加法，不再乘场景光照。
+    vec4 emissive;
 };
 
 // 把 C++ DecalResponse 的 uint32 位掩码（以 float 传入 SSBO）解码为

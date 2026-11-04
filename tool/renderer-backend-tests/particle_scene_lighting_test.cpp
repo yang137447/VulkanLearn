@@ -393,7 +393,7 @@ TEST(LocalShadowSampling, ShaderImplementsOctahedralPcfAndFallback)
     EXPECT_TRUE(Contains(source, "EncodeOctahedralDirection"));
     EXPECT_TRUE(Contains(source, "DecodeOctahedralDirection"));
     EXPECT_TRUE(Contains(source, "FoldOctahedralTap"));
-    EXPECT_TRUE(Contains(source, "#define VL_LOCAL_SHADOW_PCF_RADIUS 1"));
+    EXPECT_TRUE(Contains(source, "#define VL_LOCAL_SHADOW_PCF_RADIUS 2"));
     EXPECT_TRUE(Contains(source, "SampleOctahedralShadowPcf"));
     EXPECT_TRUE(Contains(source, "SampleSpotShadowPcf"));
     EXPECT_TRUE(Contains(source, "SampleLocalLightShadow"));

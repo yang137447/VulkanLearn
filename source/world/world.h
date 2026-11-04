@@ -132,6 +132,9 @@ struct WorldDecal
     float roughness = 1.0f;
     float metallic = 0.0f;
     float ambientOcclusion = 1.0f;
+    // 线性自发光颜色与强度；强度为 0 时不写 DBufferEmissive。
+    Eigen::Vector3f emissive = Eigen::Vector3f::Zero();
+    float emissiveStrength = 0.0f;
     // 作者侧的 DBuffer 响应位；DecalRenderer 把它随实例数据上传，
     // deferredLighting 按 DBufferMask 逐通道决定是否覆盖表面。
     uint32_t responseMask = DefaultDecalResponse();

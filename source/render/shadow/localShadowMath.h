@@ -84,4 +84,20 @@ bool IntersectsLocalShadowVolume(
     const Eigen::Vector3f& aabbMax,
     const LocalShadowCullVolume& volume);
 
+// CSM 逐级剔除用的视锥平面。
+// 矩阵约定与 shadow pass 一致：world → Vulkan NDC，x/y ∈ [-1,1]，z ∈ [0,1]。
+// 平面顺序固定为 left/right/bottom/top/near/far，xyz 已归一化、w 为平面常数，
+// 视锥内部满足 dot(n, p) + w >= 0。
+using ShadowFrustumPlanes = std::array<Eigen::Vector4f, 6>;
+
+ShadowFrustumPlanes ExtractShadowFrustumPlanes(
+    const Eigen::Matrix4f& lightViewProjection);
+
+// 世界 AABB 与视锥的保守相交测试：取每个平面法线方向上的“正顶点”，
+// 只有在完全位于某个平面外侧时才剔除。退化/非有限输入返回 true（保留 draw）。
+bool IntersectsShadowFrustum(
+    const Eigen::Vector3f& aabbMin,
+    const Eigen::Vector3f& aabbMax,
+    const ShadowFrustumPlanes& planes);
+
 } // namespace VL

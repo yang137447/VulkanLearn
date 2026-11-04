@@ -9,6 +9,7 @@ layout(location = 1) out vec4 outDBufferB;
 layout(location = 2) out vec4 outDBufferC;
 layout(location = 3) out vec4 outDBufferD;
 layout(location = 4) out vec4 outDBufferMask;
+layout(location = 5) out vec4 outDBufferEmissive;
 
 // 代码维护的 decal 贴图槽位（没有 Material Graph）。Synchronize 保证三个
 // binding 始终有合法纹理；缺失时绑定 1x1 默认值。
@@ -131,4 +132,10 @@ void main()
     // 掩码只存 0/1 位，不乘 alpha；不透明但也想改 roughness 的
     // decal 不应因覆盖率衰减而丢失响应位。
     outDBufferMask = response;
+    // Emissive 是独立的附加通道，不受 color/normal/roughness/metallic
+    // 响应位影响。RGB 先乘 coverage 是为了配合 DecalDBuffer 的
+    // One/OneMinusSrcAlpha 预乘 over 混合；合成端直接累加 RGB。
+    outDBufferEmissive = vec4(
+        instance.emissive.rgb * instance.emissive.w * alpha,
+        alpha);
 }

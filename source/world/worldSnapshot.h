@@ -212,6 +212,9 @@ struct DecalSnapshot
     float roughness = 1.0f;
     float metallic = 0.0f;
     float ambientOcclusion = 1.0f;
+    // 线性自发光颜色与强度；只写 DBufferEmissive，不参与表面光照。
+    Eigen::Vector3f emissive = Eigen::Vector3f::Zero();
+    float emissiveStrength = 0.0f;
     // 与 WorldDecal 同名的作者数据；渲染器消费前不改变其语义。
     uint32_t responseMask = DefaultDecalResponse();
     float normalStrength = 0.35f;

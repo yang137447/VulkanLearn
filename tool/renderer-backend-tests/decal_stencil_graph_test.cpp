@@ -89,8 +89,17 @@ TEST(DecalStencilGraph, UsesD24S8AttachmentAndOrdersMaskBeforeDecals)
     const VL::CompiledRenderGraphPass& decalPass =
         RequireCompiledPass(graph, "decals");
     EXPECT_EQ(decalPass.type, VL::RenderGraphPassType::Decal);
-    EXPECT_EQ(decalPass.colorOutputCount, 5u);
+    EXPECT_EQ(decalPass.colorOutputCount, 6u);
     EXPECT_TRUE(decalPass.outputsDepth);
+    const std::string* lastColor = nullptr;
+    for (const auto& output : decalPass.outputResources)
+    {
+        if (output.resource == "decalStencil")
+            continue;
+        lastColor = &output.resource;
+    }
+    ASSERT_NE(lastColor, nullptr);
+    EXPECT_EQ(*lastColor, "dbufferEmissive");
     ASSERT_FALSE(decalPass.inputResources.empty());
     EXPECT_EQ(decalPass.inputResources[0], "sceneDepth");
     bool attachesStencil = false;

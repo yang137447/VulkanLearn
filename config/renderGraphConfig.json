@@ -263,6 +263,17 @@
             ]
         },
         {
+            "name": "dbufferEmissive",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
             "name": "distortion",
             "format": "R16G16B16A16_SFLOAT",
             "clearColor": [0.0, 0.0, 0.0, 0.0],
@@ -779,6 +790,11 @@
                     "storeOp": "store"
                 },
                 {
+                    "resource": "dbufferEmissive",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
                     "resource": "decalStencil",
                     "loadOp": "load",
                     "storeOp": "store",
@@ -852,6 +868,10 @@
                 {
                     "resource": "localShadowMap",
                     "binding": 15
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 16
                 }
             ],
             "output": [
@@ -900,6 +920,10 @@
                 {
                     "resource": "localShadowMap",
                     "binding": 6
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 7
                 }
             ],
             "output": [
@@ -963,6 +987,10 @@
                 {
                     "resource": "localShadowMap",
                     "binding": 6
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 7
                 }
             ],
             "output": [

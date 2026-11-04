@@ -217,7 +217,7 @@ TEST(ParticleDistortionShader, BloomAndToneMappingUseSameAspectCorrectedUv)
     EXPECT_NE(toneMapping.find("texture(sceneColor, sceneUV)"), std::string::npos);
 }
 
-TEST(ForwardDecalReceiverGraph, OnlyForwardOpaqueBindsDBufferInputs)
+TEST(ForwardDecalReceiverGraph, OnlyForwardOpaqueBindsSurfaceDBufferInputs)
 {
     const auto result = VL::RenderGraphCompiler{}.Compile(LoadGraph());
     ASSERT_TRUE(result.IsSuccess());
@@ -250,7 +250,9 @@ TEST(ForwardDecalReceiverGraph, OnlyForwardOpaqueBindsDBufferInputs)
         if (pass.name != "forwardTransparent") continue;
         for (const auto& descriptor : pass.inputDescriptors)
         {
-            EXPECT_NE(descriptor.resource.rfind("dbuffer", 0), 0u);
+            // 透明 pass 不读 A..D/Mask；只允许纯附加的 Emissive。
+            if (descriptor.resource.rfind("dbuffer", 0) == 0)
+                EXPECT_EQ(descriptor.resource, "dbufferEmissive");
         }
     }
 }

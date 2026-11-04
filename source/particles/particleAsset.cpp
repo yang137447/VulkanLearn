@@ -691,6 +691,10 @@ ParticleEmitterAsset ParseEmitter(
             decal, "ambientOcclusion", emitter.decal.ambientOcclusion);
         emitter.decal.normalStrength = ReadFiniteFloat(
             decal, "normalStrength", emitter.decal.normalStrength);
+        emitter.decal.emissive = ReadVec3(
+            decal, "emissive", emitter.decal.emissive);
+        emitter.decal.emissiveStrength = ReadFiniteFloat(
+            decal, "emissiveStrength", emitter.decal.emissiveStrength);
         if (decal.contains("decalResponse"))
         {
             if (!decal.at("decalResponse").is_string())
@@ -1788,6 +1792,25 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
                     std::string("Particle ") + field.name +
                     " must be in [0, 1]");
             }
+        }
+        for (int channel = 0; channel < 3; ++channel)
+        {
+            RequireFinite(
+                emitter.decal.emissive[channel], "decal.emissive");
+            if (emitter.decal.emissive[channel] < 0.0f ||
+                emitter.decal.emissive[channel] > 64.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle decal.emissive components must be in [0, 64]");
+            }
+        }
+        RequireFinite(
+            emitter.decal.emissiveStrength, "decal.emissiveStrength");
+        if (emitter.decal.emissiveStrength < 0.0f ||
+            emitter.decal.emissiveStrength > 1000.0f)
+        {
+            throw std::invalid_argument(
+                "Particle decal.emissiveStrength must be in [0, 1000]");
         }
         if (emitter.decal.sortOrder > 255)
         {

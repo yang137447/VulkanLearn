@@ -10,18 +10,20 @@
 #else
     #define VL_FORWARD_DECLARE_SHADOWMAP_INPUT
     #include "../materialForwardOutput.glsl"
+    #include "../decalComposite.glsl"
     // Forward opaque 在 deferredLighting 之后运行；DBuffer 仍由 decals pass
     // 保留，前向不透明表面可以按屏幕 UV 读取同一份贴花数据。透明表面不读
-    // DBuffer：透明片元在 deferred depth 之前时没有可靠的逐像素 decal 深度，
-    // 直接采样会把后方 opaque 的贴花串到前方透明面上。
+    // A..D：透明片元在 deferred depth 之前时没有可靠的逐像素 decal 深度，
+    // 直接采样会把后方 opaque 的贴花串到前方透明面上。Emissive 是纯附加项，
+    // 但仍沿用同一屏幕 UV，因此同样受"透明面在前、decal 在后"的深度限制。
     #if defined(RENDER_MODE_FORWARD_OPAQUE)
-    #include "../decalComposite.glsl"
     layout(set = 3, binding = 1) uniform sampler2D dbufferA;
     layout(set = 3, binding = 2) uniform sampler2D dbufferB;
     layout(set = 3, binding = 3) uniform sampler2D dbufferC;
     layout(set = 3, binding = 4) uniform sampler2D dbufferD;
     layout(set = 3, binding = 5) uniform sampler2D dbufferMask;
     #endif
+    layout(set = 3, binding = 7) uniform sampler2D dbufferEmissive;
 #endif
 
 layout(location = 0) in MaterialVaryings v2f;
@@ -86,7 +88,14 @@ void main()
         texture(dbufferD, decalScreenUv),
         texture(dbufferMask, decalScreenUv));
     #endif
-    outSceneColor = BuildMaterialForwardOutput(surface);
+    vec4 forwardColor = BuildMaterialForwardOutput(surface);
+    // 自发光 decal 不参与前向光照，直接叠加在最终颜色上；deferred 路径
+    // 使用同一套 coverage 预乘语义。
+    vec2 emissiveScreenUv =
+        gl_FragCoord.xy / vec2(textureSize(dbufferEmissive, 0));
+    forwardColor.rgb += ResolveDecalEmissive(
+        texture(dbufferEmissive, emissiveScreenUv));
+    outSceneColor = forwardColor;
     outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
 #endif
 }

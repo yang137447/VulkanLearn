@@ -2452,6 +2452,10 @@ void RenderSystem::PrepareLocalShadowLights()
     activeLocalShadowLights.clear();
     localShadowDrawnCasters.fill(0);
     localShadowTotalCasters.fill(0);
+    // CSM 各级 caster 统计也按帧清零。该函数每帧在 shadow/localShadow
+    // pass 录制前调用一次，是统一的重置点，不能放在逐级 UBO 更新里。
+    shadowCascadeDrawnCasters.fill(0);
+    shadowCascadeTotalCasters.fill(0);
     for (VL::LightSnapshot& light : currentRenderScene.lights)
     {
         light.shadowSlice = VL::kInvalidLocalShadowSlice;
@@ -2517,14 +2521,80 @@ void RenderSystem::ReportLocalShadowCasterStats(
     localShadowTotalCasters[localShadowIndex] = totalCasters;
 }
 
+bool RenderSystem::GetShadowCascadeFrustumPlanes(
+    uint32_t cascadeIndex,
+    VL::ShadowFrustumPlanes& outPlanes) const
+{
+    if (!IsCsmEnabled() ||
+        !IsShadowCascadeActive(cascadeIndex) ||
+        !shadowCascadeFrameData.valid ||
+        cascadeIndex >= shadowCascadeFrameData.lightViewProj.size())
+    {
+        return false;
+    }
+
+    const Eigen::Matrix4f& lightViewProjection =
+        shadowCascadeFrameData.lightViewProj[cascadeIndex];
+    if (!lightViewProjection.allFinite())
+    {
+        // 矩阵异常时保留全量绘制，宁可多画也不能漏影。
+        return false;
+    }
+    // 场景没有方向光时 CalculateShadowMatrixForCameraRange 会回退单位阵；
+    // 此时 CSM 实际没有有效视锥，不能按单位立方体剔除 caster。
+    if (lightViewProjection.isApprox(
+            Eigen::Matrix4f::Identity(),
+            1.0e-6f))
+    {
+        return false;
+    }
+    outPlanes = VL::ExtractShadowFrustumPlanes(lightViewProjection);
+    return true;
+}
+
+void RenderSystem::ReportShadowCascadeCasterStats(
+    uint32_t cascadeIndex,
+    uint32_t drawnCasters,
+    uint32_t totalCasters)
+{
+    if (cascadeIndex >= shadowCascadeDrawnCasters.size())
+    {
+        return;
+    }
+    shadowCascadeDrawnCasters[cascadeIndex] = drawnCasters;
+    shadowCascadeTotalCasters[cascadeIndex] = totalCasters;
+}
+
 void RenderSystem::LogLocalShadowCasterStatistics()
 {
     // 低频输出，避免每帧刷控制台；120 帧约 2 秒（60 FPS）。
     constexpr uint32_t kLogIntervalFrames = 120;
-    if (activeLocalShadowLights.empty() ||
-        currentFrame % kLogIntervalFrames != 0)
+    if (currentFrame % kLogIntervalFrames != 0)
     {
         return;
+    }
+
+    // CSM 级联剔除统计：每级 casters=drawn/total，用于确认视锥剔除生效
+    // 且没有因为级联矩阵异常把整级清空。
+    if (IsCsmEnabled())
+    {
+        for (uint32_t cascadeIndex = 0;
+             cascadeIndex < csmSettings.cascadeCount &&
+             cascadeIndex < shadowCascadeDrawnCasters.size();
+             ++cascadeIndex)
+        {
+            // 0/0 表示该级没有可用视锥（例如场景没有方向光）或没有 caster，
+            // 不输出容易误解的空统计。
+            if (shadowCascadeTotalCasters[cascadeIndex] == 0)
+            {
+                continue;
+            }
+            std::cout << "[CsmShadow] cascade=" << cascadeIndex
+                      << " casters="
+                      << shadowCascadeDrawnCasters[cascadeIndex]
+                      << "/" << shadowCascadeTotalCasters[cascadeIndex]
+                      << std::endl;
+        }
     }
 
     for (size_t index = 0;
@@ -2939,7 +3009,6 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     BuildShadowCascadeFrameData(passSizeWidth, passSizeHeight);
     const uint32_t activeCascadeIndex =
         std::min(cascadeIndex, csmSettings.cascadeCount - 1);
-
     UBOGlobal ubo;
     ubo.view = shadowCascadeFrameData.view[activeCascadeIndex];
     ubo.projection = shadowCascadeFrameData.projection[activeCascadeIndex];

@@ -110,10 +110,10 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     else if (desc.pipelineStateDesc.blendMode ==
         GraphicsPipelineBlendMode::DecalDBuffer)
     {
-        if (desc.colorAttachmentCount < 5)
+        if (desc.colorAttachmentCount < 6)
         {
             throw std::runtime_error(
-                "Decal DBuffer blending requires 5 color attachments");
+                "Decal DBuffer blending requires 6 color attachments");
         }
 
         // DBuffer A/B/C/D 存 RGB + 覆盖率：src.rgb 由 src.a 预乘，
@@ -137,6 +137,15 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
             .setDstColorBlendFactor(vk::BlendFactor::eOne)
             .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
             .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+
+        // DBufferEmissive 的 RGB 在 shader 里已乘过 coverage，因此颜色用
+        // One/OneMinusSrcAlpha 预乘 over；alpha 继续按覆盖率 over 累积。
+        pipelineColorBlendAttachmentStates[5]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
     }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
     {

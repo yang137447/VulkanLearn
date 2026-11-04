@@ -81,6 +81,7 @@ vec3 DecalBlendWorldNormal(
 // DBuffer C: roughness/ambientOcclusion + roughness coverage
 // DBuffer D: metallic + metallic coverage
 // DBufferMask: r = color, g = normal, b = roughness, a = metallic
+// DBufferEmissive: rgb = emissive * strength * coverage（预乘），a = coverage
 // DBuffer 的 RGB 已由 AlphaBlend（SrcAlpha / OneMinusSrcAlpha）预乘覆盖率，
 // 所以这里必须用 over 形式累加，不能再乘一次 alpha。
 void ApplyDecalDBuffer(
@@ -138,6 +139,15 @@ void ApplyDecalDBuffer(
             metallicBuffer.r +
             material.metallic * (1.0 - metallicCoverage);
     }
+}
+
+// Emissive 在直接/间接光之后作为独立附加项合成，不参与任何光照计算，
+// 也不读取 DBufferMask：它没有 color/normal/roughness/metallic 响应位。
+// RGB 已在写端乘过 coverage 并由 One/OneMinusSrcAlpha 完成 over 合成，
+// 因此这里只做加法；覆盖率为 0 时 RGB 本来就是 0。
+vec3 ResolveDecalEmissive(vec4 emissiveBuffer)
+{
+    return max(emissiveBuffer.rgb, vec3(0.0));
 }
 
 #endif

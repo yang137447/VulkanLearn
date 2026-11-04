@@ -150,4 +150,16 @@ vec3 ParticleMeshWorldNormal(
     return normalize(rotation * basis * localNormal);
 }
 
+// 切线使用与位置/法线完全相同的朝向基与逐粒子旋转；非均匀 meshScale 与
+// 现有法线路径一样不做逆转置，保持既有近似语义。
+vec3 ParticleMeshWorldTangent(
+    Particle particle,
+    uint particleIndex,
+    vec3 localTangent)
+{
+    mat3 basis = ParticleMeshOrientation(particle);
+    mat3 rotation = ParticleMeshRotation(particle, particleIndex);
+    return rotation * basis * localTangent;
+}
+
 #endif

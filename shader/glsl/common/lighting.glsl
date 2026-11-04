@@ -897,6 +897,11 @@ LightingLobes CalculatePointLightLobes(
     float attenuation =
         EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
         (distanceCm * distanceCm + 1.0);
+    // 半径外的像素 attenuation 恒为 0；提前返回可以跳过 25-tap 阴影采样。
+    if (attenuation <= 0.0)
+    {
+        return CreateLightingLobes();
+    }
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -908,7 +913,8 @@ LightingLobes CalculatePointLightLobes(
         pointLight.positionRadius.xyz,
         pointLight.directionPad.xyz,
         pointLight.coneAngleOuterInnerPadPad.x,
-        pixelPos_WS);
+        pixelPos_WS,
+        normal_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
@@ -983,6 +989,10 @@ vec3 CalculateClearCoatPointLight(
     float attenuation =
         EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
         (distanceCm * distanceCm + 1.0);
+    if (attenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -993,7 +1003,8 @@ vec3 CalculateClearCoatPointLight(
         pointLight.positionRadius.xyz,
         pointLight.directionPad.xyz,
         pointLight.coneAngleOuterInnerPadPad.x,
-        pixelPos_WS);
+        pixelPos_WS,
+        topNormal_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -1034,8 +1045,13 @@ vec3 CalculateClearCoatSpotLight(
     float attenuation =
         EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
         (distanceCm * distanceCm + 1.0);
+    float shadowedAttenuation = attenuation * angleIntensity;
+    if (shadowedAttenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
     vec3 radiance =
-        attenuation * angleIntensity *
+        shadowedAttenuation *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
     radiance *= SampleLocalLightShadow(
@@ -1044,7 +1060,8 @@ vec3 CalculateClearCoatSpotLight(
         spotLight.positionRadius.xyz,
         spotLight.directionPad.xyz,
         spotLight.coneAngleOuterInnerPadPad.x,
-        pixelPos_WS);
+        pixelPos_WS,
+        topNormal_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -1083,8 +1100,13 @@ LightingLobes CalculateSpotLightLobes(
     float attenuation =
         EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
         (distanceCm * distanceCm + 1.0);
+    float shadowedAttenuation = attenuation * angleIntensity;
+    if (shadowedAttenuation <= 0.0)
+    {
+        return CreateLightingLobes();
+    }
     vec3 radiance =
-        attenuation * angleIntensity *
+        shadowedAttenuation *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
     radiance *= SampleLocalLightShadow(
@@ -1093,7 +1115,8 @@ LightingLobes CalculateSpotLightLobes(
         spotLight.positionRadius.xyz,
         spotLight.directionPad.xyz,
         spotLight.coneAngleOuterInnerPadPad.x,
-        pixelPos_WS);
+        pixelPos_WS,
+        normal_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,

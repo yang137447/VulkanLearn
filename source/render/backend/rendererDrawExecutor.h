@@ -8,6 +8,7 @@
 #include "render/backend/rendererObjectGpuResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/frontend/renderScene.h"
+#include "render/shadow/localShadowMath.h"
 
 class MaterialInstance;
 class PipelineBase;
@@ -45,6 +46,25 @@ public:
         uint32_t totalCasters)
     {
         (void)localShadowIndex;
+        (void)drawnCasters;
+        (void)totalCasters;
+    }
+    // CSM 逐级剔除：由 RenderSystem 从本帧冻结的 lightViewProj 提取视锥平面。
+    // 返回 false 表示该级没有可用矩阵（CSM 关闭 / 缩略图会话），调用方保持全量绘制。
+    virtual bool GetShadowCascadeFrustumPlanes(
+        uint32_t cascadeIndex,
+        ShadowFrustumPlanes& outPlanes) const
+    {
+        (void)cascadeIndex;
+        (void)outPlanes;
+        return false;
+    }
+    virtual void ReportShadowCascadeCasterStats(
+        uint32_t cascadeIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters)
+    {
+        (void)cascadeIndex;
         (void)drawnCasters;
         (void)totalCasters;
     }

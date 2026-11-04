@@ -19,10 +19,24 @@
 //         fov = 2 * coneOuter, aspect = 1, near = 1 cm, far = shadowParams.z
 //     重建，up 选择必须与录制端相同（见 BuildLocalSpotShadowWorldToNdc）。
 
-// 3×3 PCF：每个 tap 先折回有效区域，再做一次硬件 comparison sampling。
-#define VL_LOCAL_SHADOW_PCF_RADIUS 1
+// 5×5 PCF：每个 tap 先折回有效区域，再做一次硬件 comparison sampling。
+//
+// 为什么不是 PCSS：blocker search 需要读取阴影图的原始深度，而局部阴影图
+// 目前只以 comparison sampler（sampler2DArrayShadow）绑定；同一 descriptor
+// 槽位无法再以普通 sampler 读取。要上真正的 PCSS 需要给三条 pass 各加一个
+// 非比较采样器绑定，属于 descriptor 合同变更，不在本次质量修复范围内。
+// 这里先把固定核从 3×3 提到 5×5，并用接收面斜率 bias 抑制条纹/摩尔纹。
+#define VL_LOCAL_SHADOW_PCF_RADIUS 2
 // 聚光阴影 near 固定 1 cm；点光不使用透视投影。
 #define VL_LOCAL_SHADOW_SPOT_NEAR_CM 1.0
+// 接收面 bias：作者值（cm）只消费一次，拆成 normal offset 与 slope depth bias 两部分。
+// normal offset 在掠射时沿法线推开采样点；depth bias 补偿纹素足迹与深度量化。
+#define VL_LOCAL_SHADOW_NORMAL_OFFSET_SCALE 0.5
+#define VL_LOCAL_SHADOW_SLOPE_BIAS 1.5
+// 深度 bias 上限（相对作者值）：防止极端掠射把接触阴影推离投射物。
+#define VL_LOCAL_SHADOW_MAX_DEPTH_BIAS_SCALE 4.0
+// N·L 下限避免掠射时 tan(theta) 爆炸；0.2 对应约 78.5°，已经覆盖可见掠射面。
+#define VL_LOCAL_SHADOW_MIN_NDOTL 0.2
 
 // 八面体上下半球的折叠。0 必须按 +1 处理：sign(0) = 0 会把 -Z 极点
 // 折到 (0,0)，与解码端的 corner = -Z 约定不一致，导致极点处出现暗斑。
@@ -88,9 +102,16 @@ float SampleOctahedralShadowPcf(
             offsetX <= VL_LOCAL_SHADOW_PCF_RADIUS;
             ++offsetX)
         {
-            vec2 tapUv = FoldOctahedralTap(
+            vec2 tapUv =
                 shadowUv +
-                vec2(float(offsetX), float(offsetY)) * texelSize);
+                vec2(float(offsetX), float(offsetY)) * texelSize;
+            // 方形内部的 tap 已经是合法八面体坐标；只有越界 tap 需要折叠，
+            // 避免为每个 5×5 采样都做一次 decode/encode。
+            if (tapUv.x < 0.0 || tapUv.x > 1.0 ||
+                tapUv.y < 0.0 || tapUv.y > 1.0)
+            {
+                tapUv = FoldOctahedralTap(tapUv);
+            }
             visibility += texture(
                 localShadowMap,
                 vec4(tapUv, slice, referenceDepth));
@@ -194,6 +215,83 @@ float SampleSpotShadowPcf(
     return visibility / tapCount;
 }
 
+// 接收面 bias 的中间结果。
+//   position    ：沿法线偏移后的世界坐标，后续方向/深度都从这里重算；
+//   depthBiasCm ：已按 N·L 做 slope 放大的世界深度偏置（cm）。
+struct LocalShadowReceiverBias
+{
+    vec3 position;
+    float depthBiasCm;
+};
+
+// 把作者的 bias（cm）换算成接收面偏置：
+//   normalOffset = bias * 0.5 * (1 - N·L)
+//   depthBiasCm  = bias * clamp(1 + 1.5 * tan(theta), 1, 4)
+// 正常入射时 normal offset 为 0、depth bias 保持作者值；掠射时两者的
+// normal offset 主要是横向位移。深度项封顶 4×bias，避免极端掠射时把
+// 接触阴影整体推离投射物（peter-panning）。
+//
+// pixelNormal 长度为 0 表示调用方没有几何法线（旧 6 参数入口）：退回
+// N·L = 1，也就是只保留作者深度 bias，行为与升级前一致。
+LocalShadowReceiverBias BuildLocalShadowReceiverBias(
+    vec3 pixelPosition,
+    vec3 pixelNormal,
+    vec3 lightPosition,
+    float biasCm)
+{
+    LocalShadowReceiverBias result;
+    result.position = pixelPosition;
+    result.depthBiasCm = max(biasCm, 0.0);
+
+    vec3 toLight = lightPosition - pixelPosition;
+    float normalLengthSquared = dot(pixelNormal, pixelNormal);
+    float lightDistanceSquared = dot(toLight, toLight);
+    if (normalLengthSquared <= 1.0e-12 ||
+        lightDistanceSquared <= 1.0e-12 ||
+        biasCm <= 0.0)
+    {
+        return result;
+    }
+
+    vec3 normal = pixelNormal * inversesqrt(normalLengthSquared);
+    vec3 surfaceToLight = toLight * inversesqrt(lightDistanceSquared);
+    float nDotL = clamp(dot(normal, surfaceToLight), 0.0, 1.0);
+    // tan(theta) = sqrt(1 - N·L²) / N·L，分母设置下限避免掠射发散。
+    float sine = sqrt(max(1.0 - nDotL * nDotL, 0.0));
+    float slope = sine / max(nDotL, VL_LOCAL_SHADOW_MIN_NDOTL);
+
+    result.position =
+        pixelPosition +
+        normal *
+            (biasCm *
+             VL_LOCAL_SHADOW_NORMAL_OFFSET_SCALE *
+             (1.0 - nDotL));
+    result.depthBiasCm =
+        biasCm *
+        clamp(
+            1.0 + VL_LOCAL_SHADOW_SLOPE_BIAS * slope,
+            1.0,
+            VL_LOCAL_SHADOW_MAX_DEPTH_BIAS_SCALE);
+    return result;
+}
+
+// 透视投影的深度对世界视距的导数：
+//   ndc.z = far * (d - near) / ((far - near) * d)
+//   d(ndc.z)/dd = near * far / ((far - near) * d²)
+// 作者 bias 以 cm 存储，必须按当前接收点距离换算成 ndc 单位，
+// 否则近处会过偏、远处会欠偏。
+float LocalShadowSpotDepthBiasPerCm(
+    float viewDistanceCm,
+    float nearCm,
+    float farCm)
+{
+    float safeDistance = max(viewDistanceCm, nearCm + 1.0e-3);
+    return
+        (nearCm * farCm) /
+        (max(farCm - nearCm, 1.0e-3) *
+         safeDistance * safeDistance);
+}
+
 // 统一入口：shadowParams = (slice, type, farCm, biasCm)；
 // type: 1 = 聚光，2 = 八面体点光。slice < 0 或 type == 0 表示不投影。
 // 返回 1.0 = 完全可见；0.0 = 完全遮蔽。
@@ -203,15 +301,20 @@ float SampleLocalLightShadow(
     in vec3 lightPosition,
     in vec3 lightDirection,
     in float coneOuterRadians,
-    in vec3 pixelPosition)
+    in vec3 pixelPosition,
+    in vec3 pixelNormal)
 {
     if (shadowParams.x < 0.0 || shadowParams.y < 0.5)
     {
         return 1.0;
     }
     float farCm = max(shadowParams.z, 1.0e-3);
-    // bias 以 cm 存储，深度是归一化后的 [0,1]，因此统一除以 far。
-    float normalizedBias = shadowParams.w / farCm;
+    LocalShadowReceiverBias receiverBias =
+        BuildLocalShadowReceiverBias(
+            pixelPosition,
+            pixelNormal,
+            lightPosition,
+            shadowParams.w);
 
     if (shadowParams.y < 1.5)
     {
@@ -221,7 +324,8 @@ float SampleLocalLightShadow(
             coneOuterRadians,
             VL_LOCAL_SHADOW_SPOT_NEAR_CM,
             farCm);
-        vec4 clipPosition = worldToNdc * vec4(pixelPosition, 1.0);
+        vec4 clipPosition =
+            worldToNdc * vec4(receiverBias.position, 1.0);
         if (clipPosition.w <= 1.0e-6)
         {
             return 1.0;
@@ -233,6 +337,17 @@ float SampleLocalLightShadow(
         {
             return 1.0;
         }
+        // 用 ndc.z 反解视距，再把 cm 偏置换算成 ndc 深度单位。
+        float nearCm = VL_LOCAL_SHADOW_SPOT_NEAR_CM;
+        float viewDistanceCm =
+            (nearCm * farCm) /
+            max(farCm - ndc.z * (farCm - nearCm), 1.0e-3);
+        float normalizedBias =
+            receiverBias.depthBiasCm *
+            LocalShadowSpotDepthBiasPerCm(
+                viewDistanceCm,
+                nearCm,
+                farCm);
         return SampleSpotShadowPcf(
             localShadowMap,
             ndc.xy * 0.5 + 0.5,
@@ -240,18 +355,41 @@ float SampleLocalLightShadow(
             ndc.z - normalizedBias);
     }
 
-    vec3 toPixel = pixelPosition - lightPosition;
+    vec3 toPixel = receiverBias.position - lightPosition;
     float distanceCm = length(toPixel);
     if (distanceCm <= 1.0e-6)
     {
         // 灯内部的位置没有可靠方向，按受光处理，避免灯体积里出现黑点。
         return 1.0;
     }
+    // 点光存的是线性距离 / far，因此 cm 偏置直接除以 far。
+    float normalizedBias = receiverBias.depthBiasCm / farCm;
     return SampleOctahedralShadowPcf(
         localShadowMap,
         toPixel / distanceCm,
         shadowParams.x,
         distanceCm / farCm - normalizedBias);
+}
+
+// 兼容入口：调用方没有几何法线时只保留作者深度 bias。
+// 粒子 billboard/ribbon 的法线语义与材质不同，迁移到带法线入口前继续使用
+// 这个重载，避免在缺少法线时凭空假设 N·L。
+float SampleLocalLightShadow(
+    in sampler2DArrayShadow localShadowMap,
+    in vec4 shadowParams,
+    in vec3 lightPosition,
+    in vec3 lightDirection,
+    in float coneOuterRadians,
+    in vec3 pixelPosition)
+{
+    return SampleLocalLightShadow(
+        localShadowMap,
+        shadowParams,
+        lightPosition,
+        lightDirection,
+        coneOuterRadians,
+        pixelPosition,
+        vec3(0.0));
 }
 
 #endif

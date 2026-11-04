@@ -40,17 +40,26 @@ std::string BuildResolvedDrawErrorPrefix(
     const char* passName,
     const ResolvedDrawPacket& draw);
 
-// 局部阴影 caster 剔除：世界 AABB 已经包含当前 skin pose，直接与灯影响
-// 范围测试即可。两类对象跳过剔除：
+// 阴影 caster 剔除的公共例外：世界 AABB 不包含顶点阶段位移时不能剔除，
+// 否则会在 CSM/局部阴影里漏掉实际超出包围盒的影子。
 // - WPO 材质：顶点位移后的实际范围超出静态 AABB；
 // - SpeedTree：世界 bounds 不含风位移，剔除会裁掉摆动的枝叶影子。
+bool ShadowCasterSkipsCulling(
+    const Material& material,
+    const RenderDrawPacket& drawPacket)
+{
+    return material.GetMaterialFeatureKey().modifiesMeshPosition ||
+        !drawPacket.speedTreeWindProfileKey.empty();
+}
+
+// 局部阴影 caster 剔除：世界 AABB 已经包含当前 skin pose，直接与灯影响
+// 范围测试即可。
 bool LocalShadowCasterPassesCull(
     const Material& material,
     const RenderDrawPacket& drawPacket,
     const LocalShadowCullVolume& volume)
 {
-    if (material.GetMaterialFeatureKey().modifiesMeshPosition ||
-        !drawPacket.speedTreeWindProfileKey.empty())
+    if (ShadowCasterSkipsCulling(material, drawPacket))
     {
         return true;
     }
@@ -203,6 +212,17 @@ void RendererDrawExecutor::DrawShadowScene(
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
     vk::Pipeline boundPipeline;
 
+    // CSM 逐级剔除：每级级联的 lightViewProj 在 UpdateShadowGlobalUBOForPass
+    // 中已经冻结，这里只提取世界空间视锥平面。矩阵不可用时保持全量绘制，
+    // 与局部阴影的逐灯剔除路径完全独立。
+    ShadowFrustumPlanes cascadePlanes{};
+    const bool cullCascade =
+        context.services.GetShadowCascadeFrustumPlanes(
+            renderPass.shadowCascadeIndex,
+            cascadePlanes);
+    uint32_t totalCasterCount = 0;
+    uint32_t drawnCasterCount = 0;
+
     for (const ResolvedMaterialGroup& materialGroup : context.resolvedRenderScene.materialGroups)
     {
         // ResolvedScene 已经完成最终路由：None 跳过，CommonOpaque 使用 pass 公共管线，
@@ -255,6 +275,21 @@ void RendererDrawExecutor::DrawShadowScene(
                     RequireResolvedDrawResources("Shadow", draw, context.renderScene);
                 RendererObjectGpuResources& objectResources = *drawResources.objectResources;
                 const RenderDrawPacket& drawPacket = *drawResources.drawPacket;
+                if (cullCascade)
+                {
+                    ++totalCasterCount;
+                    if (!ShadowCasterSkipsCulling(
+                            *materialGroup.material,
+                            drawPacket) &&
+                        !IntersectsShadowFrustum(
+                            drawPacket.worldBoundsMin,
+                            drawPacket.worldBoundsMax,
+                            cascadePlanes))
+                    {
+                        continue;
+                    }
+                    ++drawnCasterCount;
+                }
                 VulkanDebug::ScopedRegion region(
                     commandBuffer,
                     drawPacket.debugName,
@@ -295,6 +330,14 @@ void RendererDrawExecutor::DrawShadowScene(
                 drawResources.renderableObject->Draw(commandBuffer);
             }
         }
+    }
+
+    if (cullCascade)
+    {
+        context.services.ReportShadowCascadeCasterStats(
+            renderPass.shadowCascadeIndex,
+            drawnCasterCount,
+            totalCasterCount);
     }
 }
 

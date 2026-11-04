@@ -177,6 +177,10 @@ forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 D
 - `DBufferA` 写 baseColor + color coverage；`DBufferB` 写**带符号的
   world normal** + normal coverage；`DBufferC` 写 roughness/AO +
   roughness coverage；`DBufferD` 写 metallic + metallic coverage。
+  `DBufferEmissive`（RGBA16F）写预乘 emissive + coverage；它不读
+  response mask、不参与场景光照，deferred 在直接/间接光之后相加，
+  forward 在最终颜色上相加，因此可进入 Bloom。所有 DBuffer 都按固定
+  功能预乘 coverage 混合。
   每个 decal 只写自己 response 允许的通道，避免重叠时把未响应通道的
   默认值泄漏给接收表面。UE 把 roughness/metallic/AO 打包在 DBufferC；
   VL 拆成 C/D，是为了让 roughness-only 与 metallic-only decal 重叠时

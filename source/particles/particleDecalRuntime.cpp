@@ -170,6 +170,11 @@ void ParticleDecalRuntime::EmitDecalSnapshot(
     snapshot.roughness = settings.roughness;
     snapshot.metallic = settings.metallic;
     snapshot.ambientOcclusion = settings.ambientOcclusion;
+    // 运行时 colorTint 同时控制 albedo 与 emissive 的 RGB；alpha 已通过
+    // snapshot.opacity → coverage 统一淡出，不在 RGB 上再乘一次。
+    snapshot.emissive =
+        settings.emissive.cwiseProduct(state.colorTint.head<3>());
+    snapshot.emissiveStrength = settings.emissiveStrength;
     snapshot.responseMask = settings.responseMask;
     snapshot.normalStrength = settings.normalStrength;
     snapshot.albedoMap = settings.albedoMap;

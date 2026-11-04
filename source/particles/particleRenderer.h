@@ -24,6 +24,7 @@
 #include "particles/particleRenderIdentity.h"
 #include "particles/particleSdf.h"
 #include "render/particles/particleGpuTimer.h"
+#include "resource/image/hostImage.h"
 
 class PipelineBase;
 class PipelineFactory;
@@ -194,6 +195,21 @@ private:
         Eigen::Vector4f history1;
         Eigen::Vector4f history2;
     };
+
+    // mesh 材质 set 1 的 std140 UBO；与 particleMesh.vert/frag 的
+    // ParticleMaterialUniform 一一对应。
+    struct ParticleMaterialUniforms
+    {
+        // xy = uvScale, zw = uvOffset
+        Eigen::Vector4f uvScaleOffset;
+        // x = hasAlbedo, y = hasNormal, z = hasOrm, w = hasEmissive
+        Eigen::Vector4f textureFlags;
+        // x = alphaClipThreshold, y = ambientOcclusion, z = normalStrength
+        Eigen::Vector4f materialParams;
+    };
+    static_assert(
+        sizeof(ParticleMaterialUniforms) == 48,
+        "ParticleMaterialUniforms std140 layout must match particleMesh shaders");
 
     // std140 布局必须与 shader/particle/particleCommon.glsl 保持一致。
     struct FrameUniforms
@@ -554,6 +570,14 @@ private:
         // 普通发射器不分配这组 set。
         std::vector<vk::DescriptorSet> lightEmitSets;
         std::shared_ptr<Texture> texture;
+        // mesh 专用材质贴图；失败/缺失回退 ParticleRenderer 的默认纹理。
+        std::shared_ptr<Texture> materialAlbedo;
+        std::shared_ptr<Texture> materialNormal;
+        std::shared_ptr<Texture> materialOrm;
+        std::shared_ptr<Texture> materialEmissive;
+        // mesh 材质 set 1：每 image 一个 set，共享同一个只读 UBO。
+        GpuBuffer materialUniform;
+        std::vector<vk::DescriptorSet> materialSets;
         // 作者给了 texturePath 但解码/创建失败时置 true。distortion 需要
         // 用它回退到程序化方向场，而不是把 1x1 白图当成 (1,1) 偏移。
         bool textureFallback = false;
@@ -672,6 +696,14 @@ private:
     void LoadEmitterMesh(
         EmitterResources& emitter,
         const std::string& emitterKey);
+    void LoadEmitterMaterialTextures(
+        EmitterResources& emitter,
+        const std::string& emitterKey);
+    std::shared_ptr<Texture> ResolveMaterialTexture(
+        const std::string& emitterKey,
+        const std::string& assetPath,
+        HostImage::TextureSemantic semantic,
+        const std::shared_ptr<Texture>& fallback);
     void CreateDescriptors(EmitterResources& emitter);
     void CreateLightEmitterDescriptors(EmitterResources& emitter);
     void CreateFallbackLightingResources();
@@ -779,6 +811,11 @@ private:
     float shadowCullFarCm = 0.0f;
     std::shared_ptr<PipelineBase> globalDrawPipeline;
     std::shared_ptr<Texture> defaultTexture;
+    // mesh 材质缺失槽位的常量默认值：白 albedo 复用 defaultTexture；
+    // 法线用 (0,0,1)，ORM 白图，emissive 黑图。
+    std::shared_ptr<Texture> defaultNormalTexture;
+    std::shared_ptr<Texture> defaultOrmTexture;
+    std::shared_ptr<Texture> defaultEmissiveTexture;
     // 发射器包整体由 shared_ptr 持有：活跃表与 retire queue 共享同一所有权，
     // 最后一个 epoch 完成后才析构 descriptor pool、buffer 与纹理。
     std::unordered_map<std::string, std::shared_ptr<EmitterResources>>

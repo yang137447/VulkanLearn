@@ -113,6 +113,8 @@ bool ParticleFieldInModule(
             field == "decal.metallic" ||
             field == "decal.ambientOcclusion" ||
             field == "decal.normalStrength" ||
+            field == "decal.emissive" ||
+            field == "decal.emissiveStrength" ||
             field == "decal.decalResponse" ||
             field == "decal.albedoMap" ||
             field == "decal.normalMap" ||

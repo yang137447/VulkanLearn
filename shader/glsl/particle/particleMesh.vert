@@ -10,6 +10,9 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
+// Source meshes may omit tangents; the fragment shader then reconstructs the
+// basis from screen-space derivatives of world position and UV.
+layout(location = 4) in vec4 inTangent;
 
 layout(location = 0) out vec4 vColor;
 layout(location = 1) out float vSoftness;
@@ -18,10 +21,25 @@ layout(location = 2) out float vViewDepth;
 layout(location = 4) out vec3 vNormal;
 // 世界空间位置；仅 mesh frag 的 CSM 级联选择使用。
 layout(location = 5) out vec3 vWorldPosition;
+// 世界空间切线（xyz）与 MikkTSpace handedness（sign）；无法解析时长度为 0。
+layout(location = 6) out vec3 vTangent;
+layout(location = 7) out float vTangentSign;
+layout(location = 8) out vec2 vUv;
 
 // 与 vertex descriptor 的 billboard/ribbon 路径共用 binding 2，保证
 // descriptor set layout 完全一致；mesh v1 不采样纹理。
 layout(set = 0, binding = 2) uniform sampler2D particleTexture;
+// mesh 专用材质 set：数值 UV 变换与四张贴图。只有 mesh 管线创建该 set，
+// billboard/ribbon/beam 继续使用不含 set 1 的共享 layout。
+layout(std140, set = 1, binding = 0) uniform ParticleMaterialUniform
+{
+    // xy = uvScale, zw = uvOffset
+    vec4 uvScaleOffset;
+    // x = hasAlbedo, y = hasNormal, z = hasOrm, w = hasEmissive
+    vec4 textureFlags;
+    // x = alphaClipThreshold, y = ambientOcclusion, z = normalStrength
+    vec4 materialParams;
+} material;
 
 void CullVertex()
 {
@@ -31,6 +49,9 @@ void CullVertex()
     vViewDepth = 0.0;
     vNormal = vec3(0.0);
     vWorldPosition = vec3(0.0);
+    vTangent = vec3(0.0);
+    vTangentSign = 1.0;
+    vUv = vec2(0.0);
 }
 
 void main()
@@ -68,4 +89,15 @@ void main()
         particleIndex,
         inNormal);
     vWorldPosition = worldPosition;
+    // UV 变换与贴图采样只在 mesh 材质 set 中存在；无 MI 时是恒等变换。
+    vUv = inTexCoord * material.uvScaleOffset.xy +
+        material.uvScaleOffset.zw;
+    float tangentLength = length(inTangent.xyz);
+    vTangent = tangentLength > 1.0e-5
+        ? ParticleMeshWorldTangent(
+            particle,
+            particleIndex,
+            inTangent.xyz / tangentLength)
+        : vec3(0.0);
+    vTangentSign = inTangent.w < 0.0 ? -1.0 : 1.0;
 }

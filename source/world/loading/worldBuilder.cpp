@@ -356,6 +356,14 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                     "metallic", decal.metallic);
                 decal.ambientOcclusion = objectJson.value(
                     "ambientOcclusion", decal.ambientOcclusion);
+                if (objectJson.contains("emissive"))
+                {
+                    decal.emissive =
+                        JsonParser::ParseValue<Eigen::Vector3f>(
+                            objectJson["emissive"]);
+                }
+                decal.emissiveStrength = objectJson.value(
+                    "emissiveStrength", decal.emissiveStrength);
                 if (objectJson.contains("decalResponse"))
                 {
                     const std::string response =

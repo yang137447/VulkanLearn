@@ -395,6 +395,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         decalSnapshot.roughness = decal.roughness;
         decalSnapshot.metallic = decal.metallic;
         decalSnapshot.ambientOcclusion = decal.ambientOcclusion;
+        decalSnapshot.emissive = decal.emissive;
+        decalSnapshot.emissiveStrength = decal.emissiveStrength;
         decalSnapshot.responseMask = decal.responseMask;
         decalSnapshot.normalStrength = decal.normalStrength;
         decalSnapshot.albedoMap = decal.albedoMap;

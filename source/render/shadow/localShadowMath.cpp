@@ -269,6 +269,75 @@ bool IntersectsLocalShadowVolume(
     return angleToCenter <= outerCone + angularRadius;
 }
 
+ShadowFrustumPlanes ExtractShadowFrustumPlanes(
+    const Eigen::Matrix4f& lightViewProjection)
+{
+    const Eigen::Vector4f row0 = lightViewProjection.row(0);
+    const Eigen::Vector4f row1 = lightViewProjection.row(1);
+    const Eigen::Vector4f row2 = lightViewProjection.row(2);
+    const Eigen::Vector4f row3 = lightViewProjection.row(3);
+
+    ShadowFrustumPlanes planes;
+    // 裁剪条件（Vulkan 约定）：
+    //   -w <= x <= w、-w <= y <= w、0 <= z <= w
+    // 对应平面方程 row3 ± row0、row3 ± row1、row2、row3 - row2 >= 0。
+    planes[0] = row3 + row0;
+    planes[1] = row3 - row0;
+    planes[2] = row3 + row1;
+    planes[3] = row3 - row1;
+    planes[4] = row2;
+    planes[5] = row3 - row2;
+
+    for (Eigen::Vector4f& plane : planes)
+    {
+        const float normalLength = plane.head<3>().norm();
+        if (std::isfinite(normalLength) && normalLength > 1.0e-8f)
+        {
+            plane /= normalLength;
+        }
+    }
+    return planes;
+}
+
+bool IntersectsShadowFrustum(
+    const Eigen::Vector3f& aabbMin,
+    const Eigen::Vector3f& aabbMax,
+    const ShadowFrustumPlanes& planes)
+{
+    if (!aabbMin.allFinite() ||
+        !aabbMax.allFinite() ||
+        aabbMin.x() > aabbMax.x() ||
+        aabbMin.y() > aabbMax.y() ||
+        aabbMin.z() > aabbMax.z())
+    {
+        // WPO/异常包围盒不能因为数据退化被静默剔除。
+        return true;
+    }
+
+    for (const Eigen::Vector4f& plane : planes)
+    {
+        const Eigen::Vector3f normal = plane.head<3>();
+        if (!normal.allFinite() ||
+            !std::isfinite(plane.w()) ||
+            normal.squaredNorm() <= 1.0e-16f)
+        {
+            // 无效平面不能参与剔除，否则会把整个 draw 列表清空。
+            continue;
+        }
+        // 正顶点：沿平面法线最远的 AABB 角点。只有它也在平面外侧时，
+        // 整个 AABB 才确定不相交，因此该测试是保守的。
+        const Eigen::Vector3f positiveVertex(
+            normal.x() >= 0.0f ? aabbMax.x() : aabbMin.x(),
+            normal.y() >= 0.0f ? aabbMax.y() : aabbMin.y(),
+            normal.z() >= 0.0f ? aabbMax.z() : aabbMin.z());
+        if (normal.dot(positiveVertex) + plane.w() < 0.0f)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::vector<size_t> RankLocalShadowLights(
     const std::vector<LightSnapshot>& lights,
     const Eigen::Vector3f& cameraPosition,

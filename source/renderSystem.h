@@ -377,6 +377,13 @@ private:
         uint32_t localShadowIndex,
         uint32_t drawnCasters,
         uint32_t totalCasters) override;
+    bool GetShadowCascadeFrustumPlanes(
+        uint32_t cascadeIndex,
+        VL::ShadowFrustumPlanes& outPlanes) const override;
+    void ReportShadowCascadeCasterStats(
+        uint32_t cascadeIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters) override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
     void RecordParticlePass(
         vk::CommandBuffer& commandBuffer,
@@ -509,6 +516,11 @@ private:
         localShadowDrawnCasters{};
     std::array<uint32_t, VL::kMaxLocalShadowLights>
         localShadowTotalCasters{};
+    // CSM 逐级 caster 统计；与局部阴影分开，便于确认级联剔除是否生效。
+    std::array<uint32_t, VL::CsmSettings::MaxCascadeCount>
+        shadowCascadeDrawnCasters{};
+    std::array<uint32_t, VL::CsmSettings::MaxCascadeCount>
+        shadowCascadeTotalCasters{};
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;

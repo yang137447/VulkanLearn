@@ -137,6 +137,8 @@ Json DecalEmitterDocument()
                         "metallic": 0.1,
                         "ambientOcclusion": 0.7,
                         "normalStrength": 0.3,
+                        "emissive": [4.0, 2.0, 1.0],
+                        "emissiveStrength": 6.0,
                         "decalResponse": "metallicRoughnessNormal",
                         "albedoMap": "Maps/SC_test/Textures/T_burn_albedo.json",
                         "normalMap": "Maps/SC_test/Textures/T_burn_normal.json",
@@ -188,6 +190,8 @@ TEST(ParticleAsset, DecalModeParsesDefaultsAndRejectsInvalidFields)
     EXPECT_FLOAT_EQ(emitter.decal.opacity, 0.85f);
     EXPECT_FLOAT_EQ(emitter.decal.edgeSoftness, 0.35f);
     EXPECT_FLOAT_EQ(emitter.decal.noiseStrength, 0.55f);
+    EXPECT_EQ(emitter.decal.emissive, Eigen::Vector3f::Zero());
+    EXPECT_FLOAT_EQ(emitter.decal.emissiveStrength, 0.0f);
     EXPECT_EQ(emitter.decal.responseMask, DefaultDecalResponse());
     EXPECT_EQ(emitter.decal.sortOrder, 0u);
 
@@ -245,6 +249,23 @@ TEST(ParticleAsset, DecalModeParsesDefaultsAndRejectsInvalidFields)
         ParticleAssetLoader::ParseJson(
             badTexture, "Maps/SC_test/PS_decal_texture.json"),
         std::invalid_argument);
+
+    Json badEmissive = document;
+    badEmissive["emitters"][0]["modules"][0]["fields"]["decal"]
+        ["emissive"] = Json::array({65.0, 0.0, 0.0});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            badEmissive, "Maps/SC_test/PS_decal_emissive.json"),
+        std::invalid_argument);
+
+    Json badEmissiveStrength = document;
+    badEmissiveStrength["emitters"][0]["modules"][0]["fields"]["decal"]
+        ["emissiveStrength"] = 1001.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            badEmissiveStrength,
+            "Maps/SC_test/PS_decal_emissive_strength.json"),
+        std::invalid_argument);
 }
 
 TEST(ParticleAsset, DecalCapabilitiesExposeFieldsAndRoundTrip)
@@ -281,6 +302,8 @@ TEST(ParticleAsset, DecalCapabilitiesExposeFieldsAndRoundTrip)
     EXPECT_NE(field("decal.metallic"), nullptr);
     EXPECT_NE(field("decal.ambientOcclusion"), nullptr);
     EXPECT_NE(field("decal.normalStrength"), nullptr);
+    EXPECT_NE(field("decal.emissive"), nullptr);
+    EXPECT_NE(field("decal.emissiveStrength"), nullptr);
     EXPECT_NE(field("decal.decalResponse"), nullptr);
     EXPECT_NE(field("decal.albedoMap"), nullptr);
     EXPECT_NE(field("decal.normalMap"), nullptr);
@@ -324,6 +347,9 @@ TEST(ParticleAsset, DecalCapabilitiesExposeFieldsAndRoundTrip)
         DecalResponseMetallic | DecalResponseRoughness |
             DecalResponseNormal);
     EXPECT_EQ(asset.emitters[0].decal.sortOrder, 11u);
+    EXPECT_EQ(asset.emitters[0].decal.emissive,
+        Eigen::Vector3f(4.0f, 2.0f, 1.0f));
+    EXPECT_FLOAT_EQ(asset.emitters[0].decal.emissiveStrength, 6.0f);
 
     Json emitter = Json{{"name", "scorch"}};
     ASSERT_TRUE(SetParticleEmitterField(
@@ -518,6 +544,30 @@ TEST(ParticleDecalRuntime, ColorAndOpacityFollowLifetime)
     ASSERT_EQ(scene.decals.size(), 1u);
     EXPECT_NEAR(scene.decals.front().opacity, 0.25f, 1.0e-4f);
     EXPECT_NEAR(scene.decals.front().color.x(), 0.5f, 1.0e-4f);
+}
+
+TEST(ParticleDecalRuntime, EmissiveFieldsReachDecalSnapshot)
+{
+    ParticleEmitterAsset emitter =
+        MakeDecalEmitter("emissive", 23, 1, 10.0f);
+    emitter.decal.emissive = Eigen::Vector3f(4.0f, 2.0f, 1.0f);
+    emitter.decal.emissiveStrength = 6.0f;
+    RenderScene scene;
+    scene.particleSystems.push_back(
+        MakeSnapshot("Emissive", emitter));
+    ParticleDecalRuntime runtime;
+    UpdateFrames(runtime, scene, 1, 0.1f);
+    ASSERT_EQ(scene.decals.size(), 1u);
+    EXPECT_EQ(scene.decals.front().emissive,
+        Eigen::Vector3f(4.0f, 2.0f, 1.0f));
+    EXPECT_FLOAT_EQ(scene.decals.front().emissiveStrength, 6.0f);
+
+    scene.particleSystems.front().runtime.colorTint =
+        Eigen::Vector4f(2.0f, 1.0f, 0.5f, 1.0f);
+    UpdateFrames(runtime, scene, 1, 0.1f);
+    ASSERT_EQ(scene.decals.size(), 1u);
+    EXPECT_EQ(scene.decals.front().emissive,
+        Eigen::Vector3f(8.0f, 2.0f, 0.5f));
 }
 
 TEST(ParticleDecalRuntime, DynamicDecalsAreRemovedAndDoNotStack)
