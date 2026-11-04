@@ -125,6 +125,7 @@ class ManifestSpec:
     material_uv_scale: float
     description: str
     scene_description: str
+    environment: dict[str, Any] | None
     terrain_position_cm: tuple[float, float, float]
     camera_position_cm: tuple[float, float, float] | None
     camera_rotation_deg: tuple[float, float, float]
@@ -1011,6 +1012,9 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
     scene_description = _first(top, "scenedescription", "scene_description", default="")
     if not isinstance(description, str) or not isinstance(scene_description, str):
         _fail("description and sceneDescription must be strings")
+    environment = _first(top, "environment")
+    if environment is not None and not isinstance(environment, dict):
+        _fail("environment must be an object")
     asset_name = _asset_name(_first(top, "assetname", "asset_name", default="kitedemo"))
     output_relative = _output_relative(
         _first(top, "outputrelative", "output_relative", default=OUTPUT_RELATIVE.as_posix()))
@@ -1056,6 +1060,7 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         material_uv_scale=_clean_float(material_uv_scale),
         description=description.strip(),
         scene_description=scene_description.strip(),
+        environment=environment,
         terrain_position_cm=terrain_position or (0.0, 0.0, 0.0),
         camera_position_cm=camera_position,
         camera_rotation_deg=camera_rotation or (-18.0, 0.0, 0.0),
@@ -1643,7 +1648,7 @@ def _convert(
             {
                 "name": "Environment_01",
                 "type": "environment",
-                "environment": {
+                "environment": spec.environment or {
                     "type": "hdri",
                     "hdrPath": "Common/Environments/sunset.exr",
                     "cubeSize": 512,
