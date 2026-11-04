@@ -66,6 +66,13 @@ layout(std430, set = 0, binding = 7) readonly buffer ParticleLightSSBO
 layout(set = 0, binding = 8) uniform samplerCube prefilteredEnvironmentCube;
 layout(set = 0, binding = 9) uniform sampler2D brdfLut;
 
+// 屏幕空间 tile 光照列表。粒子 set 0 的 6..9 已被场景灯/粒子灯/IBL 占用，
+// 因此聚类缓冲从 10 开始；遍历逻辑与材质路径共用 lightGridSampling.glsl。
+#define VL_LIGHT_GRID_BINDING 10
+#define VL_LIGHT_INDEX_BINDING 11
+#define VL_LIGHT_GRID_PARAMS_BINDING 12
+#include "../common/lightGridSampling.glsl"
+
 struct ParticleLightingLobes
 {
     vec3 diffuse;
@@ -430,6 +437,64 @@ ParticleLightingLobes AccumulateParticleSpotLight(
 
 // 全部场景灯 + GPU 粒子灯聚合。只有 mesh 粒子需要 specular lobe；
 // billboard 走下面的 wrapped Lambert。
+ParticleLightingLobes AccumulateParticleMeshLightByIndex(
+    int lightIndex,
+    sampler2DArrayShadow localShadowMap,
+    vec3 normal,
+    vec3 pixelPosition,
+    vec3 cameraPosition,
+    vec3 baseColor,
+    float roughness,
+    float metallic,
+    float directionalShadow)
+{
+    int lightCount =
+        particleSceneLights.spotLightOffset +
+        particleSceneLights.spotLightCount;
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return CreateParticleLightingLobes();
+    }
+    if (lightIndex < particleSceneLights.pointLightOffset)
+    {
+        return AccumulateParticleDirectionalLight(
+            particleSceneLights.lights[lightIndex],
+            normal,
+            pixelPosition,
+            cameraPosition,
+            baseColor,
+            roughness,
+            metallic,
+            directionalShadow);
+    }
+    ParticleSceneLightGPU light =
+        particleSceneLights.lights[lightIndex];
+    if (lightIndex < particleSceneLights.spotLightOffset)
+    {
+        return AccumulateParticlePointLight(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.positionRadius.w,
+            light.colorIntensity.xyz * light.colorIntensity.w,
+            normal,
+            pixelPosition,
+            cameraPosition,
+            baseColor,
+            roughness,
+            metallic);
+    }
+    return AccumulateParticleSpotLight(
+        localShadowMap,
+        light,
+        normal,
+        pixelPosition,
+        cameraPosition,
+        baseColor,
+        roughness,
+        metallic);
+}
+
 ParticleLightingLobes CalculateParticleMeshSceneLighting(
     sampler2DArrayShadow localShadowMap,
     vec3 normal,
@@ -442,59 +507,88 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
 {
     ParticleLightingLobes lighting = CreateParticleLightingLobes();
 
-    int offset = particleSceneLights.directionalLightOffset;
-    int end = offset + particleSceneLights.directionalLightCount;
-    for (int index = offset; index < end; ++index)
+    if (LightGridEnabled())
     {
-        ParticleLightingLobes lobes = AccumulateParticleDirectionalLight(
-            particleSceneLights.lights[index],
-            normal,
-            pixelPosition,
-            cameraPosition,
-            baseColor,
-            roughness,
-            metallic,
-            directionalShadow);
-        lighting.diffuse += lobes.diffuse;
-        lighting.specular += lobes.specular;
+        uint tileIndex =
+            LightGridTileIndexFromFragCoord(gl_FragCoord.xy);
+        uint visibleLightCount =
+            LightGridVisibleLightCount(tileIndex);
+        for (uint slot = 0u; slot < visibleLightCount; ++slot)
+        {
+            int lightIndex = int(
+                LightGridLightIndex(tileIndex, slot));
+            ParticleLightingLobes lobes =
+                AccumulateParticleMeshLightByIndex(
+                    lightIndex,
+                    localShadowMap,
+                    normal,
+                    pixelPosition,
+                    cameraPosition,
+                    baseColor,
+                    roughness,
+                    metallic,
+                    directionalShadow);
+            lighting.diffuse += lobes.diffuse;
+            lighting.specular += lobes.specular;
+        }
     }
-
-    offset = particleSceneLights.pointLightOffset;
-    end = offset + particleSceneLights.pointLightCount;
-    for (int index = offset; index < end; ++index)
+    else
     {
-        ParticleSceneLightGPU light = particleSceneLights.lights[index];
-        ParticleLightingLobes lobes = AccumulateParticlePointLight(
-            localShadowMap,
-            light.shadowParams,
-            light.positionRadius.xyz,
-            light.positionRadius.w,
-            light.colorIntensity.xyz * light.colorIntensity.w,
-            normal,
-            pixelPosition,
-            cameraPosition,
-            baseColor,
-            roughness,
-            metallic);
-        lighting.diffuse += lobes.diffuse;
-        lighting.specular += lobes.specular;
-    }
+        // 回退：没有聚类 pass 时保持原来的三段连续循环。
+        int offset = particleSceneLights.directionalLightOffset;
+        int end = offset + particleSceneLights.directionalLightCount;
+        for (int index = offset; index < end; ++index)
+        {
+            ParticleLightingLobes lobes = AccumulateParticleDirectionalLight(
+                particleSceneLights.lights[index],
+                normal,
+                pixelPosition,
+                cameraPosition,
+                baseColor,
+                roughness,
+                metallic,
+                directionalShadow);
+            lighting.diffuse += lobes.diffuse;
+            lighting.specular += lobes.specular;
+        }
 
-    offset = particleSceneLights.spotLightOffset;
-    end = offset + particleSceneLights.spotLightCount;
-    for (int index = offset; index < end; ++index)
-    {
-        ParticleLightingLobes lobes = AccumulateParticleSpotLight(
-            localShadowMap,
-            particleSceneLights.lights[index],
-            normal,
-            pixelPosition,
-            cameraPosition,
-            baseColor,
-            roughness,
-            metallic);
-        lighting.diffuse += lobes.diffuse;
-        lighting.specular += lobes.specular;
+        offset = particleSceneLights.pointLightOffset;
+        end = offset + particleSceneLights.pointLightCount;
+        for (int index = offset; index < end; ++index)
+        {
+            ParticleSceneLightGPU light = particleSceneLights.lights[index];
+            ParticleLightingLobes lobes = AccumulateParticlePointLight(
+                localShadowMap,
+                light.shadowParams,
+                light.positionRadius.xyz,
+                light.positionRadius.w,
+                light.colorIntensity.xyz * light.colorIntensity.w,
+                normal,
+                pixelPosition,
+                cameraPosition,
+                baseColor,
+                roughness,
+                metallic);
+            lighting.diffuse += lobes.diffuse;
+            lighting.specular += lobes.specular;
+        }
+
+        offset = particleSceneLights.spotLightOffset;
+        end = offset + particleSceneLights.spotLightCount;
+        for (int index = offset; index < end; ++index)
+        {
+            ParticleLightingLobes lobes = AccumulateParticleSpotLight(
+                localShadowMap,
+                particleSceneLights.lights[index],
+                normal,
+                pixelPosition,
+                cameraPosition,
+                baseColor,
+                roughness,
+                metallic);
+            lighting.diffuse += lobes.diffuse;
+            lighting.specular += lobes.specular;
+        }
     }
 
     uint particleLightCount = min(particleLightSSBO.header.x, 64u);
@@ -533,6 +627,200 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
 // 用插值而不是纯乘法，让美术可以按效果调节被灯染色的程度。
 // specularStrength / roughness / forwardScattering 只影响直接光附加项，
 // 三项都包含在最终的 mix 里，所以 lightingStrength=0 时仍然完全 unlit。
+vec3 ParticleBillboardDirectionalContribution(
+    ParticleSceneLightGPU light,
+    vec3 baseColor,
+    vec3 normal,
+    vec3 viewDirection,
+    float specularStrength,
+    float roughness,
+    float forwardScattering,
+    float directionalShadow)
+{
+    vec3 lightDirection = ParticleBillboardSafeDirection(
+        -light.directionPad.xyz);
+    float wrapped = ParticleWrappedDiffuse(
+        dot(normal, lightDirection),
+        0.5);
+    vec3 radiance =
+        light.colorIntensity.xyz *
+        light.colorIntensity.w *
+        directionalShadow;
+    return
+        baseColor / PI * radiance * wrapped +
+        AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            lightDirection,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
+}
+
+vec3 ParticleBillboardPointContribution(
+    ParticleSceneLightGPU light,
+    sampler2DArrayShadow localShadowMap,
+    vec3 baseColor,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 pixelPosition,
+    float specularStrength,
+    float roughness,
+    float forwardScattering)
+{
+    vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
+    float distanceSquared = dot(offsetToLight, offsetToLight);
+    float attenuation = ParticleAttenuation(
+        distanceSquared,
+        light.positionRadius.w);
+    if (attenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    float wrapped = ParticleWrappedDiffuse(
+        dot(normal, normalize(offsetToLight)),
+        0.5);
+    vec3 radiance =
+        attenuation *
+        light.colorIntensity.xyz *
+        light.colorIntensity.w *
+        SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.directionPad.xyz,
+            light.coneAngleOuterInnerPadPad.x,
+            pixelPosition);
+    return
+        baseColor / PI * radiance * wrapped +
+        AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            offsetToLight,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
+}
+
+vec3 ParticleBillboardSpotContribution(
+    ParticleSceneLightGPU light,
+    sampler2DArrayShadow localShadowMap,
+    vec3 baseColor,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 pixelPosition,
+    float specularStrength,
+    float roughness,
+    float forwardScattering)
+{
+    vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
+    vec3 surfaceToLight = ParticleBillboardSafeDirection(offsetToLight);
+    float spotAngle = acos(clamp(dot(
+        surfaceToLight,
+        -light.directionPad.xyz), -1.0, 1.0));
+    float angleIntensity = 1.0 - smoothstep(
+        light.coneAngleOuterInnerPadPad.y,
+        light.coneAngleOuterInnerPadPad.x,
+        spotAngle);
+    if (angleIntensity <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    float distanceSquared = dot(offsetToLight, offsetToLight);
+    float attenuation =
+        ParticleAttenuation(
+            distanceSquared,
+            light.positionRadius.w) *
+        angleIntensity;
+    float wrapped = ParticleWrappedDiffuse(
+        dot(normal, surfaceToLight),
+        0.5);
+    vec3 radiance =
+        attenuation *
+        light.colorIntensity.xyz *
+        light.colorIntensity.w *
+        SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.directionPad.xyz,
+            light.coneAngleOuterInnerPadPad.x,
+            pixelPosition);
+    return
+        baseColor / PI * radiance * wrapped +
+        AccumulateParticleBillboardMaterialLobes(
+            baseColor,
+            normal,
+            viewDirection,
+            surfaceToLight,
+            radiance,
+            specularStrength,
+            roughness,
+            forwardScattering);
+}
+
+vec3 AccumulateParticleBillboardLightByIndex(
+    int lightIndex,
+    sampler2DArrayShadow localShadowMap,
+    vec3 baseColor,
+    vec3 normal,
+    vec3 viewDirection,
+    vec3 pixelPosition,
+    float specularStrength,
+    float roughness,
+    float forwardScattering,
+    float directionalShadow)
+{
+    int lightCount =
+        particleSceneLights.spotLightOffset +
+        particleSceneLights.spotLightCount;
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return vec3(0.0);
+    }
+    ParticleSceneLightGPU light =
+        particleSceneLights.lights[lightIndex];
+    if (lightIndex < particleSceneLights.pointLightOffset)
+    {
+        return ParticleBillboardDirectionalContribution(
+            light,
+            baseColor,
+            normal,
+            viewDirection,
+            specularStrength,
+            roughness,
+            forwardScattering,
+            directionalShadow);
+    }
+    if (lightIndex < particleSceneLights.spotLightOffset)
+    {
+        return ParticleBillboardPointContribution(
+            light,
+            localShadowMap,
+            baseColor,
+            normal,
+            viewDirection,
+            pixelPosition,
+            specularStrength,
+            roughness,
+            forwardScattering);
+    }
+    return ParticleBillboardSpotContribution(
+        light,
+        localShadowMap,
+        baseColor,
+        normal,
+        viewDirection,
+        pixelPosition,
+        specularStrength,
+        roughness,
+        forwardScattering);
+}
+
 vec3 CalculateParticleBillboardSceneLighting(
     sampler2DArrayShadow localShadowMap,
     vec3 baseColor,
@@ -552,120 +840,75 @@ vec3 CalculateParticleBillboardSceneLighting(
     vec3 lighting = vec3(0.0);
     const float wrap = 0.5;
 
-    int offset = particleSceneLights.directionalLightOffset;
-    int end = offset + particleSceneLights.directionalLightCount;
-    for (int index = offset; index < end; ++index)
+    if (LightGridEnabled())
     {
-        ParticleSceneLightGPU light = particleSceneLights.lights[index];
-        vec3 lightDirection = ParticleBillboardSafeDirection(
-            -light.directionPad.xyz);
-        float wrapped = ParticleWrappedDiffuse(
-            dot(normal, lightDirection),
-            wrap);
-        vec3 radiance =
-            light.colorIntensity.xyz *
-            light.colorIntensity.w *
-            directionalShadow;
-        lighting += baseColor / PI * radiance * wrapped;
-        lighting += AccumulateParticleBillboardMaterialLobes(
-            baseColor,
-            normal,
-            viewDirection,
-            lightDirection,
-            radiance,
-            specularStrength,
-            roughness,
-            forwardScattering);
-    }
-
-    offset = particleSceneLights.pointLightOffset;
-    end = offset + particleSceneLights.pointLightCount;
-    for (int index = offset; index < end; ++index)
-    {
-        ParticleSceneLightGPU light = particleSceneLights.lights[index];
-        vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
-        float distanceSquared = dot(offsetToLight, offsetToLight);
-        float attenuation = ParticleAttenuation(
-            distanceSquared,
-            light.positionRadius.w);
-        if (attenuation <= 0.0)
+        uint tileIndex =
+            LightGridTileIndexFromFragCoord(gl_FragCoord.xy);
+        uint visibleLightCount =
+            LightGridVisibleLightCount(tileIndex);
+        for (uint slot = 0u; slot < visibleLightCount; ++slot)
         {
-            continue;
-        }
-        float wrapped = ParticleWrappedDiffuse(
-            dot(normal, normalize(offsetToLight)),
-            wrap);
-        vec3 radiance =
-            attenuation *
-            light.colorIntensity.xyz *
-            light.colorIntensity.w *
-            SampleLocalLightShadow(
+            lighting += AccumulateParticleBillboardLightByIndex(
+                int(LightGridLightIndex(tileIndex, slot)),
                 localShadowMap,
-                light.shadowParams,
-                light.positionRadius.xyz,
-                light.directionPad.xyz,
-                light.coneAngleOuterInnerPadPad.x,
-                pixelPosition);
-        lighting += baseColor / PI * radiance * wrapped;
-        lighting += AccumulateParticleBillboardMaterialLobes(
-            baseColor,
-            normal,
-            viewDirection,
-            offsetToLight,
-            radiance,
-            specularStrength,
-            roughness,
-            forwardScattering);
+                baseColor,
+                normal,
+                viewDirection,
+                pixelPosition,
+                specularStrength,
+                roughness,
+                forwardScattering,
+                directionalShadow);
+        }
     }
-
-    offset = particleSceneLights.spotLightOffset;
-    end = offset + particleSceneLights.spotLightCount;
-    for (int index = offset; index < end; ++index)
+    else
     {
-        ParticleSceneLightGPU light = particleSceneLights.lights[index];
-        vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
-        vec3 surfaceToLight = ParticleBillboardSafeDirection(offsetToLight);
-        float spotAngle = acos(clamp(dot(
-            surfaceToLight,
-            -light.directionPad.xyz), -1.0, 1.0));
-        float angleIntensity = 1.0 - smoothstep(
-            light.coneAngleOuterInnerPadPad.y,
-            light.coneAngleOuterInnerPadPad.x,
-            spotAngle);
-        if (angleIntensity <= 0.0)
+        int offset = particleSceneLights.directionalLightOffset;
+        int end = offset + particleSceneLights.directionalLightCount;
+        for (int index = offset; index < end; ++index)
         {
-            continue;
+            lighting += ParticleBillboardDirectionalContribution(
+                particleSceneLights.lights[index],
+                baseColor,
+                normal,
+                viewDirection,
+                specularStrength,
+                roughness,
+                forwardScattering,
+                directionalShadow);
         }
-        float distanceSquared = dot(offsetToLight, offsetToLight);
-        float attenuation =
-            ParticleAttenuation(
-                distanceSquared,
-                light.positionRadius.w) *
-            angleIntensity;
-        float wrapped = ParticleWrappedDiffuse(
-            dot(normal, surfaceToLight),
-            wrap);
-        vec3 radiance =
-            attenuation *
-            light.colorIntensity.xyz *
-            light.colorIntensity.w *
-            SampleLocalLightShadow(
+
+        offset = particleSceneLights.pointLightOffset;
+        end = offset + particleSceneLights.pointLightCount;
+        for (int index = offset; index < end; ++index)
+        {
+            lighting += ParticleBillboardPointContribution(
+                particleSceneLights.lights[index],
                 localShadowMap,
-                light.shadowParams,
-                light.positionRadius.xyz,
-                light.directionPad.xyz,
-                light.coneAngleOuterInnerPadPad.x,
-                pixelPosition);
-        lighting += baseColor / PI * radiance * wrapped;
-        lighting += AccumulateParticleBillboardMaterialLobes(
-            baseColor,
-            normal,
-            viewDirection,
-            surfaceToLight,
-            radiance,
-            specularStrength,
-            roughness,
-            forwardScattering);
+                baseColor,
+                normal,
+                viewDirection,
+                pixelPosition,
+                specularStrength,
+                roughness,
+                forwardScattering);
+        }
+
+        offset = particleSceneLights.spotLightOffset;
+        end = offset + particleSceneLights.spotLightCount;
+        for (int index = offset; index < end; ++index)
+        {
+            lighting += ParticleBillboardSpotContribution(
+                particleSceneLights.lights[index],
+                localShadowMap,
+                baseColor,
+                normal,
+                viewDirection,
+                pixelPosition,
+                specularStrength,
+                roughness,
+                forwardScattering);
+        }
     }
 
     uint particleLightCount = min(particleLightSSBO.header.x, 64u);

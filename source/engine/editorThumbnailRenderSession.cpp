@@ -285,6 +285,12 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         descriptors.lightBufferInfos = &frames.GetLightBufferInfos();
         descriptors.particleLightBufferInfos =
             &frames.GetParticleLightBufferInfos();
+        descriptors.lightGridBufferInfos =
+            &frames.GetLightGridBufferInfos();
+        descriptors.lightIndexBufferInfos =
+            &frames.GetLightIndexBufferInfos();
+        descriptors.lightGridParamBufferInfos =
+            &frames.GetLightGridParamBufferInfos();
         descriptors.resourceCache = &cache;
         descriptors.commonOpaqueShadowMaterial = graph.FindCanonicalShadowPass()->materialInstance.lock()->GetBaseMaterial().lock();
         if (descriptorsReady) graph.RefreshRuntimeDescriptors(backend, descriptors);

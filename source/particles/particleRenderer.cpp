@@ -38,6 +38,7 @@
 #include "particles/particleUserParameterOverride.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/frontend/renderScene.h"
+#include "render/lightCulling/lightCulling.h"
 #include "render/rendergraph/renderGraphPassType.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
@@ -209,6 +210,24 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
         1,
         vk::ShaderStageFlagBits::eFragment,
         "brdfLut"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        10,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        11,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightIndexBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        12,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridParamsBlock"));
     layout.overrideSets[PassSetIndex] = true;
     ShaderBinding sceneDepth;
     sceneDepth.set = PassSetIndex;
@@ -311,6 +330,24 @@ GraphicsPipelineLayoutDesc BuildParticleSharedLayout()
         1,
         vk::ShaderStageFlagBits::eFragment,
         "brdfLut"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        10,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridBuffer"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        11,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightIndexBuffer"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        12,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridParamsBlock"));
     // Set 3 必须与 RenderGraph 的输入全集完全一致。反射会裁掉未静态使用的
     // binding（beam 不采样 CSM/local shadow），若各管线各走反射，layout 会
     // 少于 pass descriptor set 的 0/1/2 三个 binding，导致绑定时不兼容。
@@ -1078,6 +1115,44 @@ void ParticleRenderer::SetSceneLightingResources(
     brdfLutDescriptor = brdfLut;
 }
 
+void ParticleRenderer::SetLightCullingResources(
+    std::vector<vk::DescriptorBufferInfo> gridInfos,
+    std::vector<vk::DescriptorBufferInfo> indexInfos,
+    std::vector<vk::DescriptorBufferInfo> paramInfos)
+{
+    bool changed =
+        lightGridInfos.size() != gridInfos.size() ||
+        lightIndexInfos.size() != indexInfos.size() ||
+        lightGridParamInfos.size() != paramInfos.size();
+    for (size_t index = 0;
+         !changed && index < gridInfos.size();
+         ++index)
+    {
+        changed = !SameBufferInfo(lightGridInfos[index], gridInfos[index]);
+    }
+    for (size_t index = 0;
+         !changed && index < indexInfos.size();
+         ++index)
+    {
+        changed = !SameBufferInfo(lightIndexInfos[index], indexInfos[index]);
+    }
+    for (size_t index = 0;
+         !changed && index < paramInfos.size();
+         ++index)
+    {
+        changed = !SameBufferInfo(
+            lightGridParamInfos[index],
+            paramInfos[index]);
+    }
+    if (changed)
+    {
+        ++sceneLightingGeneration;
+    }
+    lightGridInfos = std::move(gridInfos);
+    lightIndexInfos = std::move(indexInfos);
+    lightGridParamInfos = std::move(paramInfos);
+}
+
 const vk::DescriptorBufferInfo&
 ParticleRenderer::SceneLightInfoForImage(uint32_t imageIndex) const
 {
@@ -1092,6 +1167,30 @@ ParticleRenderer::ParticleLightInfoForImage(uint32_t imageIndex) const
     return imageIndex < sceneParticleLightInfos.size()
         ? sceneParticleLightInfos[imageIndex]
         : fallbackParticleLightInfo;
+}
+
+const vk::DescriptorBufferInfo&
+ParticleRenderer::LightGridInfoForImage(uint32_t imageIndex) const
+{
+    return imageIndex < lightGridInfos.size()
+        ? lightGridInfos[imageIndex]
+        : fallbackLightGridInfo;
+}
+
+const vk::DescriptorBufferInfo&
+ParticleRenderer::LightIndexInfoForImage(uint32_t imageIndex) const
+{
+    return imageIndex < lightIndexInfos.size()
+        ? lightIndexInfos[imageIndex]
+        : fallbackLightIndexInfo;
+}
+
+const vk::DescriptorBufferInfo&
+ParticleRenderer::LightGridParamInfoForImage(uint32_t imageIndex) const
+{
+    return imageIndex < lightGridParamInfos.size()
+        ? lightGridParamInfos[imageIndex]
+        : fallbackLightGridParamInfo;
 }
 
 const vk::DescriptorImageInfo&
@@ -1164,6 +1263,89 @@ void ParticleRenderer::CreateFallbackLightingResources()
     }
     fallbackParticleLightInfo = vk::DescriptorBufferInfo(
         fallbackParticleLightBuffer.buffer,
+        0,
+        VK_WHOLE_SIZE);
+
+    // tile 光照兜底：1 个 tile、可容纳 64 个索引，params.enabled=0。
+    // 这样没有聚类 pass 的会话仍能绑定完整 set 0，shader 走连续灯循环。
+    const auto lightGridAllocation = backend->CreateBuffer(
+        LightGridBytes(1),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleFallbackLightGrid");
+    fallbackLightGridBuffer.buffer = lightGridAllocation.first;
+    fallbackLightGridBuffer.memory = lightGridAllocation.second;
+    fallbackLightGridBuffer.mapped = backend->MapMemory(
+        fallbackLightGridBuffer.memory,
+        LightGridBytes(1));
+    if (fallbackLightGridBuffer.mapped != nullptr)
+    {
+        std::memset(
+            fallbackLightGridBuffer.mapped,
+            0,
+            LightGridBytes(1));
+    }
+    fallbackLightGridInfo = vk::DescriptorBufferInfo(
+        fallbackLightGridBuffer.buffer,
+        0,
+        VK_WHOLE_SIZE);
+
+    const auto lightIndexAllocation = backend->CreateBuffer(
+        LightIndexListBytes(1),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleFallbackLightIndex");
+    fallbackLightIndexBuffer.buffer = lightIndexAllocation.first;
+    fallbackLightIndexBuffer.memory = lightIndexAllocation.second;
+    fallbackLightIndexBuffer.mapped = backend->MapMemory(
+        fallbackLightIndexBuffer.memory,
+        LightIndexListBytes(1));
+    if (fallbackLightIndexBuffer.mapped != nullptr)
+    {
+        std::memset(
+            fallbackLightIndexBuffer.mapped,
+            0,
+            LightIndexListBytes(1));
+    }
+    fallbackLightIndexInfo = vk::DescriptorBufferInfo(
+        fallbackLightIndexBuffer.buffer,
+        0,
+        VK_WHOLE_SIZE);
+
+    const auto lightGridParamAllocation = backend->CreateBuffer(
+        sizeof(LightGridParams),
+        vk::BufferUsageFlagBits::eUniformBuffer |
+            vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleFallbackLightGridParams");
+    fallbackLightGridParamBuffer.buffer =
+        lightGridParamAllocation.first;
+    fallbackLightGridParamBuffer.memory =
+        lightGridParamAllocation.second;
+    fallbackLightGridParamBuffer.mapped = backend->MapMemory(
+        fallbackLightGridParamBuffer.memory,
+        sizeof(LightGridParams));
+    if (fallbackLightGridParamBuffer.mapped != nullptr)
+    {
+        LightGridParams params{};
+        params.tilesX = 1;
+        params.tilesY = 1;
+        params.renderWidth = 1;
+        params.renderHeight = 1;
+        params.enabled = 0;
+        std::memcpy(
+            fallbackLightGridParamBuffer.mapped,
+            &params,
+            sizeof(params));
+    }
+    fallbackLightGridParamInfo = vk::DescriptorBufferInfo(
+        fallbackLightGridParamBuffer.buffer,
         0,
         VK_WHOLE_SIZE);
 
@@ -1271,11 +1453,17 @@ void ParticleRenderer::DestroyFallbackLightingResources()
     {
         DestroyBuffer(*backend, fallbackSceneLightBuffer);
         DestroyBuffer(*backend, fallbackParticleLightBuffer);
+        DestroyBuffer(*backend, fallbackLightGridBuffer);
+        DestroyBuffer(*backend, fallbackLightIndexBuffer);
+        DestroyBuffer(*backend, fallbackLightGridParamBuffer);
     }
     else
     {
         fallbackSceneLightBuffer = {};
         fallbackParticleLightBuffer = {};
+        fallbackLightGridBuffer = {};
+        fallbackLightIndexBuffer = {};
+        fallbackLightGridParamBuffer = {};
     }
     fallbackEnvironmentCube.reset();
     defaultBlackTexture.reset();
@@ -2121,15 +2309,15 @@ bool ParticleRenderer::CreateGlobalSortPool(
 
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer,
-            imageCount * (emitterCount + 5)},
+         imageCount * (emitterCount + 6)},
         {vk::DescriptorType::eStorageBuffer,
-            imageCount * (emitterCount * 3u + 14u)},
+            imageCount * (emitterCount * 3u + 16u)},
         {vk::DescriptorType::eCombinedImageSampler,
             imageCount * (kParticleGlobalTextureSlots + 2u)}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
-        .setMaxSets(imageCount * (emitterCount + 5));
+        .setMaxSets(imageCount * (emitterCount + 6));
     globalSortPool.descriptorPool = backend->CreateDescriptorPool(
         poolInfo, "ParticleGlobalDescriptors");
 
@@ -2388,6 +2576,27 @@ bool ParticleRenderer::CreateGlobalSortPool(
                 .setDescriptorType(
                     vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(BrdfLutDescriptor());
+            vk::WriteDescriptorSet drawLightGrid;
+            drawLightGrid
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(10)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(LightGridInfoForImage(imageIndex));
+            vk::WriteDescriptorSet drawLightIndex;
+            drawLightIndex
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(11)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(LightIndexInfoForImage(imageIndex));
+            vk::WriteDescriptorSet drawLightGridParam;
+            drawLightGridParam
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(12)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(LightGridParamInfoForImage(imageIndex));
             backend->UpdateDescriptorSets(
                 {drawUniform,
                  drawRecords,
@@ -2397,7 +2606,10 @@ bool ParticleRenderer::CreateGlobalSortPool(
                  drawSceneLight,
                  drawParticleLight,
                  drawEnvironment,
-                 drawBrdfLut});
+                 drawBrdfLut,
+                 drawLightGrid,
+                 drawLightIndex,
+                 drawLightGridParam});
         }
     }
     catch (const std::exception& exception)
@@ -3403,13 +3615,14 @@ void ParticleRenderer::CreateDescriptors(
 
     // 每个 image：simulate、graphics、sortInit、AtoB、BtoA、finalize 共 6 个 set。
     // mesh 额外每 image 一个材质 set 1（1 UBO + 4 贴图）。
-    // storage 计数：simulate 5 + graphics 6 + sort 三组各 2 + finalize 2 = 19。
+    // storage 计数：simulate 5 + graphics 8 + sort 三组各 2 + finalize 2 = 21。
     // graphics 新增的 2 个 storage 是场景灯/GPU 粒子灯 SSBO（binding 6/7）；
+    // 再新增 2 个 storage 是 tile 灯网格/索引（binding 10/11）。
     // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer,
-         imageCount * 5 + materialSetCount},
-        {vk::DescriptorType::eStorageBuffer, imageCount * 19},
+         imageCount * 6 + materialSetCount},
+        {vk::DescriptorType::eStorageBuffer, imageCount * 21},
         {vk::DescriptorType::eCombinedImageSampler,
          imageCount * 3 + materialSetCount * 4}};
     vk::DescriptorPoolCreateInfo poolInfo;
@@ -3634,6 +3847,27 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorType(
                     vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(BrdfLutDescriptor());
+            vk::WriteDescriptorSet lightGridWrite;
+            lightGridWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(10)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(LightGridInfoForImage(imageIndex));
+            vk::WriteDescriptorSet lightIndexWrite;
+            lightIndexWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(11)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(LightIndexInfoForImage(imageIndex));
+            vk::WriteDescriptorSet lightGridParamWrite;
+            lightGridParamWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(12)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(LightGridParamInfoForImage(imageIndex));
             backend->UpdateDescriptorSets(
                 {uniformWrite,
                  particleWrite,
@@ -3644,7 +3878,10 @@ void ParticleRenderer::CreateDescriptors(
                  sceneLightWrite,
                  particleLightWrite,
                  environmentWrite,
-                 brdfLutWrite});
+                 brdfLutWrite,
+                 lightGridWrite,
+                 lightIndexWrite,
+                 lightGridParamWrite});
 
             if (meshMaterial &&
                 imageIndex < emitter.materialSets.size())

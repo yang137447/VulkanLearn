@@ -948,7 +948,11 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(outputResult.Error());
         }
-        if (outputResult.Value().empty())
+        // tile 光照聚类不写任何图资源（输出是帧拥有的 SSBO），是唯一允许
+        // 空 output 的 pass 类型；其余 pass 仍必须至少写一个资源。
+        const bool allowsEmptyOutput =
+            passNode.value("type", std::string()) == "lightCulling";
+        if (outputResult.Value().empty() && !allowsEmptyOutput)
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                 "RenderGraphCompiler.EmptyPassOutput",
@@ -975,6 +979,21 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 pass.name + ":" + passTypeName));
         }
         pass.type = *passType;
+        if (pass.type == RenderGraphPassType::LightCulling)
+        {
+            // 聚类只消费帧级 buffer（灯光/网格），不采样图资源，也不建
+            // VkRenderPass。任何 input/output/MSAA/material 都是作者错误。
+            if (!inputResult.Value().empty() ||
+                !outputResult.Value().empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidLightCulling",
+                    "LightCulling must not declare graph inputs/outputs, MSAA, or a pass material.",
+                    pass.name));
+            }
+        }
         if (pass.type == RenderGraphPassType::AutoExposure)
         {
             // 专用曝光节点不是通用 Compute authoring：一张 sceneColor 输入，

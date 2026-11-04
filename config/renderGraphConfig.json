@@ -661,6 +661,12 @@
             ]
         },
         {
+            "name": "lightCulling",
+            "type": "lightCulling",
+            "input": [],
+            "output": []
+        },
+        {
             "name": "geometry",
             "type": "geometry",
             "needMsaa": false,

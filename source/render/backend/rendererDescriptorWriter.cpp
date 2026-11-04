@@ -109,6 +109,30 @@ bool BuildRendererDescriptorWrite(
             "RendererDescriptorWriter",
             "particle light storage buffer info"));
     }
+    else if (update.source == RendererDescriptorUpdateSource::LightGridStorage)
+    {
+        outWrite.setBufferInfo(RequireRendererDescriptorBufferInfo(
+            inputs.descriptorContext->lightGridBufferInfos,
+            swapChainImageIndex,
+            "RendererDescriptorWriter",
+            "light grid storage buffer info"));
+    }
+    else if (update.source == RendererDescriptorUpdateSource::LightIndexStorage)
+    {
+        outWrite.setBufferInfo(RequireRendererDescriptorBufferInfo(
+            inputs.descriptorContext->lightIndexBufferInfos,
+            swapChainImageIndex,
+            "RendererDescriptorWriter",
+            "light index storage buffer info"));
+    }
+    else if (update.source == RendererDescriptorUpdateSource::LightGridUniform)
+    {
+        outWrite.setBufferInfo(RequireRendererDescriptorBufferInfo(
+            inputs.descriptorContext->lightGridParamBufferInfos,
+            swapChainImageIndex,
+            "RendererDescriptorWriter",
+            "light grid parameter uniform buffer info"));
+    }
     else if (update.source == RendererDescriptorUpdateSource::GlobalTexture)
     {
         const RendererResourceCache& resourceCache =

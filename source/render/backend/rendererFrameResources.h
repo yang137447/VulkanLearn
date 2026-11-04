@@ -78,16 +78,48 @@ public:
         const RenderDrawPacket& drawPacket,
         const SpeedTreeWindStateGPU* speedTreeWindState);
 
+    // 屏幕空间 tile 光照聚类的输出缓冲。尺寸跟随渲染目标（sceneColor），
+    // resize 或自定义图改变分辨率时重建；返回 true 表示 descriptor 必须刷新。
+    bool EnsureLightCullingGrid(
+        uint32_t renderWidth,
+        uint32_t renderHeight,
+        RendererBackendVulkan& rendererBackend);
+
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>&
         GetParticleLightBufferInfos() const;
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightGridBufferInfos() const
+    {
+        return lightGridBuffer.bufferInfos;
+    }
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightIndexBufferInfos() const
+    {
+        return lightIndexBuffer.bufferInfos;
+    }
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightGridParamBufferInfos() const
+    {
+        return lightGridParamBuffer.bufferInfos;
+    }
     const std::vector<vk::Buffer>&
         GetParticleLightBufferHandles() const noexcept
     {
         return particleLightBuffer.buffers;
     }
     size_t GetLightCapacity() const { return maxLightCount; }
+    bool HasLightCullingGrid() const
+    {
+        return lightGridBuffer.HasResources() &&
+            lightIndexBuffer.HasResources() &&
+            lightGridParamBuffer.HasResources();
+    }
+    uint32_t GetLightCullingTilesX() const { return lightCullingTilesX; }
+    uint32_t GetLightCullingTilesY() const { return lightCullingTilesY; }
+    uint32_t GetLightCullingRenderWidth() const { return lightCullingRenderWidth; }
+    uint32_t GetLightCullingRenderHeight() const { return lightCullingRenderHeight; }
     const std::vector<RHIBufferHandle>&
         GetLightBufferHandlesForTest() const noexcept
     {
@@ -105,6 +137,14 @@ private:
     Buffer globalUniformBuffer;
     Buffer lightBuffer;
     Buffer particleLightBuffer;
+    // grid: header + tiles；indices: tiles × maxLightsPerTile；params: std140 块。
+    Buffer lightGridBuffer;
+    Buffer lightIndexBuffer;
+    Buffer lightGridParamBuffer;
+    uint32_t lightCullingRenderWidth = 0;
+    uint32_t lightCullingRenderHeight = 0;
+    uint32_t lightCullingTilesX = 0;
+    uint32_t lightCullingTilesY = 0;
     size_t maxLightCount = 0;
     bool initialized = false;
 };

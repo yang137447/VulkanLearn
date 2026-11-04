@@ -20,6 +20,9 @@ enum class RendererDescriptorUpdateSource
     ObjectUniform,
     LightStorage,
     ParticleLightStorage,
+    LightGridStorage,
+    LightIndexStorage,
+    LightGridUniform,
     GlobalTexture,
     MaterialTexture,
     PassInputTexture

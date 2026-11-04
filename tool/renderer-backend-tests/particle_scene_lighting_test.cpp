@@ -286,10 +286,17 @@ TEST(ParticleSceneLighting, RendererWritesDescriptorBindingsSixToNine)
     EXPECT_TRUE(Contains(source, ".setDstBinding(7)"));
     EXPECT_TRUE(Contains(source, ".setDstBinding(8)"));
     EXPECT_TRUE(Contains(source, ".setDstBinding(9)"));
+    // tile 光照列表：grid/indices 是 storage，params 是 UBO。
+    EXPECT_TRUE(Contains(source, ".setDstBinding(10)"));
+    EXPECT_TRUE(Contains(source, ".setDstBinding(11)"));
+    EXPECT_TRUE(Contains(source, ".setDstBinding(12)"));
     EXPECT_TRUE(Contains(source, "SceneLightInfoForImage(imageIndex)"));
     EXPECT_TRUE(Contains(source, "ParticleLightInfoForImage(imageIndex)"));
-    // 图形池每 image 至少要有 2 个额外 storage 与 2 个额外 sampler。
-    EXPECT_TRUE(Contains(source, "imageCount * 19"));
+    EXPECT_TRUE(Contains(source, "LightGridInfoForImage(imageIndex)"));
+    EXPECT_TRUE(Contains(source, "LightIndexInfoForImage(imageIndex)"));
+    EXPECT_TRUE(Contains(source, "LightGridParamInfoForImage(imageIndex)"));
+    // 图形池每 image 至少要有 4 个额外 storage、2 个额外 sampler 与 1 个 UBO。
+    EXPECT_TRUE(Contains(source, "imageCount * 21"));
     EXPECT_TRUE(Contains(source, "imageCount * 3"));
 }
 

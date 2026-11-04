@@ -52,6 +52,7 @@ namespace VL
 class RendererBackendVulkan;
 class AutoExposureCompute;
 class VolumetricFogRenderer;
+class LightCullingRenderer;
 struct RendererDescriptorContext;
 
 enum class RenderGraphReleaseMode
@@ -210,6 +211,19 @@ public:
     {
         return volumetricFog;
     }
+    // 屏幕空间 tile 光照聚类 owner。自定义图可能没有 lightCulling pass，
+    // 此时返回空指针，光照 shader 走 UBOLight 的连续回退分支。
+    void InitializeLightCulling(
+        PipelineFactory& factory,
+        VL::RendererBackendVulkan& backend,
+        const VL::RendererDescriptorContext& descriptorContext);
+    const std::shared_ptr<VL::LightCullingRenderer>& GetLightCulling() const noexcept
+    {
+        return lightCulling;
+    }
+    // 主颜色目标（sceneColor）的解析尺寸。tile 聚类与帧资源缓冲都以它为准，
+    // 避免把编辑器视口矩形或 swapchain 尺寸混用。
+    vk::Extent2D GetSceneColorExtent() const noexcept;
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // 每个 acquired image 独占一张完整 backing extent 的单采样输出，生命周期
@@ -281,6 +295,7 @@ private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::shared_ptr<VL::AutoExposureCompute> autoExposure;
     std::shared_ptr<VL::VolumetricFogRenderer> volumetricFog;
+    std::shared_ptr<VL::LightCullingRenderer> lightCulling;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
     std::vector<RenderResource> sceneViewportOutputs;
 

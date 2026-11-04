@@ -225,6 +225,27 @@ in-range lights are iterated per froxel), and the offline render path does not
 record the fog pass. Fog brightness follows the physical light intensity, so
 bright flash lights need very low `density` values (about `0.0001`/m).
 
+## Light Culling
+
+A `lightCulling` compute pass runs after the local shadow passes and before
+geometry. It builds a 16×16 screen-tile list for scene directional/point/spot
+lights (particle lights stay on their independent SSBO):
+
+- `lightGrid`: `uvec4 header` (overflow tile/light counters) plus one
+  `uvec4(count, overflow, 0, 0)` per tile.
+- `lightIndices`: fixed `tiles × 64` `uint` slots; overflow truncates in a
+  deterministic order and only increments counters.
+- `lightGridParams`: tile size, tile counts, render extent, light intervals and
+  an `enabled` flag.
+
+Directional lights enter every tile; point lights use a screen-projected sphere
+plus view-depth interval; spot lights use the cone's minimal bounding sphere.
+The lighting shaders read the tile list when `enabled != 0`, otherwise they
+fall back to the existing contiguous header loops. Material/post set 0 uses
+bindings 5/6/7; particle set 0 uses 10/11/12. The culling pass itself is not
+registered as a shader-reload participant yet, and a tile is capped at 64
+entries (no dynamic growth).
+
 ## Camera Exposure
 
 Every camera must provide:

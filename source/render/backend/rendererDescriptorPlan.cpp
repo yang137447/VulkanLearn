@@ -53,7 +53,12 @@ void BuildMaterialDescriptorUpdates(
         {
             if (binding.set == GlobalSetIndex)
             {
-                update.source = RendererDescriptorUpdateSource::GlobalUniform;
+                // set 0 的 7 = tile 光照参数（lightGridParams）；其余 UBO 仍是
+                // UBOGlobal。两者都是 per-image 更新，但所有者不同。
+                update.source =
+                    binding.binding == 7
+                        ? RendererDescriptorUpdateSource::LightGridUniform
+                        : RendererDescriptorUpdateSource::GlobalUniform;
             }
             else if (binding.set == MaterialSetIndex)
             {
@@ -68,12 +73,25 @@ void BuildMaterialDescriptorUpdates(
         }
         else if (binding.type == vk::DescriptorType::eStorageBuffer)
         {
-            // set 0 的全局 SSBO 槽位：1 = 场景灯，4 = GPU 粒子灯。
+            // set 0 的全局 SSBO 槽位：1 = 场景灯，4 = GPU 粒子灯，
+            // 5 = tile 灯网格，6 = tile 灯索引。
             if (binding.set == GlobalSetIndex &&
                 binding.binding == 4)
             {
                 update.source =
                     RendererDescriptorUpdateSource::ParticleLightStorage;
+            }
+            else if (binding.set == GlobalSetIndex &&
+                binding.binding == 5)
+            {
+                update.source =
+                    RendererDescriptorUpdateSource::LightGridStorage;
+            }
+            else if (binding.set == GlobalSetIndex &&
+                binding.binding == 6)
+            {
+                update.source =
+                    RendererDescriptorUpdateSource::LightIndexStorage;
             }
             else
             {

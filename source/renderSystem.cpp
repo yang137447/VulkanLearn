@@ -31,6 +31,7 @@
 #include "render/resource/resourceRetireQueue.h"
 #include "render/shadow/localShadowMath.h"
 #include "render/volumetricFog/volumetricFogRenderer.h"
+#include "render/lightCulling/lightCullingRenderer.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
@@ -1420,6 +1421,8 @@ void RenderSystem::RebuildSwapchainDependentResources()
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
         renderGraph.InitializeVolumetricFog(
             *pipelineFactory, *rendererBackend, descriptorContext);
+        renderGraph.InitializeLightCulling(
+            *pipelineFactory, *rendererBackend, descriptorContext);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
         // ShutdownFrameResources 会释放粒子管线、默认纹理和发射器池；
@@ -1467,6 +1470,8 @@ void RenderSystem::RebuildRenderGraphDependentResources()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     renderGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
+    renderGraph.InitializeLightCulling(
         *pipelineFactory, *rendererBackend, descriptorContext);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
@@ -1606,6 +1611,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.InitializeVolumetricFog(
         *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeLightCulling(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1714,6 +1721,8 @@ void RenderSystem::PrepareRenderGraphReload(
                 GetLightBufferInfo());
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeLightCulling(
         *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.RenderInitialize(
         *rendererBackend,
@@ -3759,6 +3768,10 @@ void RenderSystem::ConfigureParticleSceneLighting()
         frameResources.GetParticleLightBufferInfos(),
         environmentCubeDescriptor,
         brdfLutDescriptor);
+    particleRenderer.SetLightCullingResources(
+        frameResources.GetLightGridBufferInfos(),
+        frameResources.GetLightIndexBufferInfos(),
+        frameResources.GetLightGridParamBufferInfos());
 }
 
 void RenderSystem::InitializeCurrentRenderSceneResources()
@@ -3860,6 +3873,24 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // shadowSlice/shadowFar 必须在 geometry/forward 的 UploadLightsForPass
         // 之前写回冻结快照；LocalShadow pass 也消费同一份选灯结果。
         PrepareLocalShadowLights();
+        // 图分辨率可能在自定义图/重载后变化：tile 网格必须与 sceneColor
+        // 一致，否则 fragment 会索引到错误 tile。换代时同步刷新依赖它的
+        // descriptor（材质 set 0 与粒子 set 0 均缓存 buffer info）。
+        const vk::Extent2D sceneColorExtent =
+            renderGraph.GetSceneColorExtent();
+        if (sceneColorExtent.width != 0 &&
+            sceneColorExtent.height != 0 &&
+            frameResources.EnsureLightCullingGrid(
+                sceneColorExtent.width,
+                sceneColorExtent.height,
+                *rendererBackend))
+        {
+            rendererBackend->WaitIdle();
+            RenderGraph::GetInstance().RefreshRuntimeDescriptors(
+                *rendererBackend,
+                BuildRendererDescriptorContext());
+            ConfigureParticleSceneLighting();
+        }
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
         UpdateUBOGlobal(commandBuffer);
@@ -3946,6 +3977,24 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 if (volumetricFog)
                 {
                     volumetricFog->Record(
+                        commandBuffer, swapChainImageIndex, renderPass);
+                }
+                continue;
+            }
+            // tile 光照聚类：compute 只写帧拥有的 SSBO，没有 framebuffer。
+            // 本帧灯光必须先落入 SSBO——geometry/forward 里的
+            // UploadLightsForPass 发生在本 pass 之后，不能依赖它。
+            if (renderPass.type == VL::RenderGraphPassType::LightCulling)
+            {
+                UploadLightsForPass(
+                    swapChainImageIndex,
+                    currentRenderScene.lights);
+                PassBarrier::PrepareForPass(
+                    commandBuffer, renderGraph, passIndex, swapChainImageIndex);
+                const auto& lightCulling = renderGraph.GetLightCulling();
+                if (lightCulling)
+                {
+                    lightCulling->Record(
                         commandBuffer, swapChainImageIndex, renderPass);
                 }
                 continue;
@@ -4085,6 +4134,12 @@ RenderSystem::BuildRendererDescriptorContext(
         &lightBufferInfos;
     descriptorContext.particleLightBufferInfos =
         &frameResources.GetParticleLightBufferInfos();
+    descriptorContext.lightGridBufferInfos =
+        &frameResources.GetLightGridBufferInfos();
+    descriptorContext.lightIndexBufferInfos =
+        &frameResources.GetLightIndexBufferInfos();
+    descriptorContext.lightGridParamBufferInfos =
+        &frameResources.GetLightGridParamBufferInfos();
     descriptorContext.resourceCache =
         &resourceCache;
     Renderpass* canonicalShadowPass =
@@ -4134,6 +4189,17 @@ void RenderSystem::InitializeFrameResources()
 
     frameResources.Initialize(*rendererBackend);
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    // tile 聚类缓冲随主颜色目标尺寸重建；这里先按当前图取一次，
+    // 运行时若图分辨率变化会在帧首再次校验。
+    const vk::Extent2D sceneColorExtent =
+        RenderGraph::GetInstance().GetSceneColorExtent();
+    if (sceneColorExtent.width != 0 && sceneColorExtent.height != 0)
+    {
+        frameResources.EnsureLightCullingGrid(
+            sceneColorExtent.width,
+            sceneColorExtent.height,
+            *rendererBackend);
+    }
     editorViewportGrid.EnsureCreated(*rendererBackend);
     proceduralSkyCubeGenerator.Initialize(
         *pipelineFactory,

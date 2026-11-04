@@ -43,7 +43,12 @@ enum class RenderGraphPassType
     VolumetricFog,
     // 体积雾合成：全屏 pass 读取相邻两层并按像素深度插值，用
     // One / OneMinusSrcAlpha 预乘混合写回 sceneColor。
-    FogComposite
+    FogComposite,
+    // 屏幕空间 tile 光照聚类：纯 compute 节点，不写任何图资源；输出缓冲
+    // （lightGrid/lightIndices/lightGridParams）由 RendererFrameResources
+    // 按 swapchain image 持有，graph 只负责把它排在光照数据上传之后、
+    // geometry 之前。
+    LightCulling
 };
 
 struct RenderGraphPassTypeName
@@ -52,11 +57,11 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十四个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动、
+// 十五个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动、
 // 局部光阴影、体积雾注入与体积雾合成各自追加，
 // 合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 14>
+inline constexpr std::array<RenderGraphPassTypeName, 15>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -71,7 +76,8 @@ inline constexpr std::array<RenderGraphPassTypeName, 14>
         {RenderGraphPassType::Distortion, "distortion"},
         {RenderGraphPassType::LocalShadow, "localShadow"},
         {RenderGraphPassType::VolumetricFog, "volumetricFog"},
-        {RenderGraphPassType::FogComposite, "fogComposite"}
+        {RenderGraphPassType::FogComposite, "fogComposite"},
+        {RenderGraphPassType::LightCulling, "lightCulling"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

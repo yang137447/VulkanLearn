@@ -97,6 +97,14 @@ public:
         vk::DescriptorImageInfo environmentCube,
         vk::DescriptorImageInfo brdfLut);
 
+    // 屏幕空间 tile 光照列表（set 0 binding 10/11/12）。资源换代同样
+    // 改变 generation，触发发射器 descriptor 包重建；缺失时使用内部
+    // “单 tile + enabled=0”兜底，shader 自动回退到连续灯循环。
+    void SetLightCullingResources(
+        std::vector<vk::DescriptorBufferInfo> gridInfos,
+        std::vector<vk::DescriptorBufferInfo> indexInfos,
+        std::vector<vk::DescriptorBufferInfo> paramInfos);
+
     // 在图形 pass 之前录制 compute；结束时把 SSBO 可见性移交给顶点着色器。
     void RecordSimulation(
         vk::CommandBuffer commandBuffer,
@@ -722,6 +730,12 @@ private:
         uint32_t imageIndex) const;
     const vk::DescriptorBufferInfo& ParticleLightInfoForImage(
         uint32_t imageIndex) const;
+    const vk::DescriptorBufferInfo& LightGridInfoForImage(
+        uint32_t imageIndex) const;
+    const vk::DescriptorBufferInfo& LightIndexInfoForImage(
+        uint32_t imageIndex) const;
+    const vk::DescriptorBufferInfo& LightGridParamInfoForImage(
+        uint32_t imageIndex) const;
     const vk::DescriptorImageInfo& EnvironmentCubeDescriptor() const;
     const vk::DescriptorImageInfo& BrdfLutDescriptor() const;
     static void DestroyBuffer(
@@ -838,6 +852,9 @@ private:
     // GPU 资源仍由 RendererFrameResources 持有，这里只保存绑定视图。
     std::vector<vk::DescriptorBufferInfo> sceneLightInfos;
     std::vector<vk::DescriptorBufferInfo> sceneParticleLightInfos;
+    std::vector<vk::DescriptorBufferInfo> lightGridInfos;
+    std::vector<vk::DescriptorBufferInfo> lightIndexInfos;
+    std::vector<vk::DescriptorBufferInfo> lightGridParamInfos;
     vk::DescriptorImageInfo environmentCubeDescriptor{};
     vk::DescriptorImageInfo brdfLutDescriptor{};
     uint32_t sceneLightingGeneration = 0;
@@ -845,8 +862,14 @@ private:
     // 1x1x6 黑色 cubemap 与 1x1 黑色 BRDF LUT。避免取样未定义 descriptor。
     GpuBuffer fallbackSceneLightBuffer{};
     GpuBuffer fallbackParticleLightBuffer{};
+    GpuBuffer fallbackLightGridBuffer{};
+    GpuBuffer fallbackLightIndexBuffer{};
+    GpuBuffer fallbackLightGridParamBuffer{};
     vk::DescriptorBufferInfo fallbackSceneLightInfo{};
     vk::DescriptorBufferInfo fallbackParticleLightInfo{};
+    vk::DescriptorBufferInfo fallbackLightGridInfo{};
+    vk::DescriptorBufferInfo fallbackLightIndexInfo{};
+    vk::DescriptorBufferInfo fallbackLightGridParamInfo{};
     std::shared_ptr<Texture> fallbackEnvironmentCube;
     std::shared_ptr<Texture> defaultBlackTexture;
     // 仅缓存弱引用：仍被活跃/退休发射器持有的纹理由发射器生命周期管理，

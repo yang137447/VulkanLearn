@@ -70,6 +70,14 @@ Current implemented areas include:
   while mesh particles use the complete DefaultLit path. Transparent ordering uses the
   authoring `sortOrder` layer, and the global alpha pool is one draw item inside the same
   depth order instead of being drawn last.
+- Decals now write a six-channel DBuffer including a premultiplied `dbufferEmissive`
+  (additive after lighting, feeds Bloom). Mesh particle materials read albedo/normal/ORM/
+  emissive textures through a dedicated set 1. Mesh, billboard and ribbon particles can
+  cast CSM and local-light shadows (`castShadows`, masked alpha for sprites). Local
+  point/spot shadows use one octahedral slice per light in a `D32` texture array with up
+  to eight selected lights, per-light caster culling and transactional shader reload.
+  `environment.fog` drives the quarter-resolution 32-layer volumetric fog/light-shaft
+  pass before Bloom.
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   a dedicated `decalStencil` D24S8 pass (unit-cube bit0 union mask, stencil gate on the
   decals pass; sceneDepth stays a sampled input so there is no feedback loop), sceneDepth

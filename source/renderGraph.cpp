@@ -14,6 +14,7 @@
 #include "render/camera/autoExposureCompute.h"
 #include "render/backend/rendererDescriptorContext.h"
 #include "render/volumetricFog/volumetricFogRenderer.h"
+#include "render/lightCulling/lightCullingRenderer.h"
 #include "texture.h"
 #include <algorithm>
 #include <memory>
@@ -710,6 +711,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
     resourcesMsaa.swap(other.resourcesMsaa);
     autoExposure.swap(other.autoExposure);
     volumetricFog.swap(other.volumetricFog);
+    lightCulling.swap(other.lightCulling);
     resourcesResolve.swap(other.resourcesResolve);
     sceneViewportOutputs.swap(other.sceneViewportOutputs);
     renderpassesOrdered.swap(other.renderpassesOrdered);
@@ -774,6 +776,22 @@ void RenderGraph::Shutdown(
         {
             volumetricFog->Shutdown(rendererBackend);
             volumetricFog.reset();
+        }
+    }
+    if (lightCulling)
+    {
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+        {
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            retireQueue.RetireShared(
+                "LightCulling:Graph", ownerGeneration,
+                retireQueue.GetLastSubmittedEpoch(),
+                std::move(lightCulling));
+        }
+        else
+        {
+            lightCulling->Shutdown(rendererBackend);
+            lightCulling.reset();
         }
     }
     for(auto& [name, renderpass] : renderpasses)
@@ -1115,6 +1133,46 @@ void RenderGraph::InitializeVolumetricFog(
     volumetricFog = std::move(candidate);
 }
 
+void RenderGraph::InitializeLightCulling(
+    PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend,
+    const VL::RendererDescriptorContext& descriptorContext)
+{
+    if (lightCulling)
+    {
+        return;
+    }
+    // 没有聚类节点的自定义图不创建 owner；shader 的 enabled=0 回退分支
+    // 保证行为与引入聚类前一致。
+    bool hasCullingPass = false;
+    for (const auto& pass : compiledFrameGraph.passes)
+    {
+        if (pass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            hasCullingPass = true;
+            break;
+        }
+    }
+    if (!hasCullingPass)
+    {
+        return;
+    }
+    auto candidate = std::make_shared<VL::LightCullingRenderer>();
+    candidate->Initialize(factory, backend, *this, descriptorContext);
+    lightCulling = std::move(candidate);
+}
+
+vk::Extent2D RenderGraph::GetSceneColorExtent() const noexcept
+{
+    const auto found = resourcesResolve.find("sceneColor");
+    if (found == resourcesResolve.end() || found->second.empty())
+    {
+        return vk::Extent2D(0, 0);
+    }
+    const RenderResource& resource = found->second.front();
+    return vk::Extent2D(resource.width, resource.height);
+}
+
 void RenderGraph::RenderInitialize(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
@@ -1125,7 +1183,8 @@ void RenderGraph::RenderInitialize(
         // 专用 compute / 自带 pipeline 的 pass 不经过 Material pass 描述符。
         if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
             renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
-            renderpass.type == VL::RenderGraphPassType::FogComposite)
+            renderpass.type == VL::RenderGraphPassType::FogComposite ||
+            renderpass.type == VL::RenderGraphPassType::LightCulling)
         {
             continue;
         }
@@ -1173,11 +1232,17 @@ void RenderGraph::RefreshRuntimeDescriptors(
         volumetricFog->RefreshDescriptors(
             rendererBackend, descriptorContext);
     }
+    if (lightCulling)
+    {
+        lightCulling->RefreshDescriptors(
+            rendererBackend, descriptorContext);
+    }
     for (auto& [passName, renderpass] : renderpasses)
     {
         if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
             renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
-            renderpass.type == VL::RenderGraphPassType::FogComposite)
+            renderpass.type == VL::RenderGraphPassType::FogComposite ||
+            renderpass.type == VL::RenderGraphPassType::LightCulling)
         {
             continue;
         }
@@ -1600,6 +1665,22 @@ Renderpass RenderGraph::CreateRenderpass(
                 resourcesResolve.at(renderpass.outputResources.at(0));
             renderpass.width = fogResources.at(0).width;
             renderpass.height = fogResources.at(0).height;
+            return renderpass;
+        }
+        // tile 光照聚类是纯 compute 节点：不创建 VkRenderPass/framebuffer，
+        // 尺寸取主颜色目标，保证与光照 shader 的 gl_FragCoord 一致。
+        if (renderpass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            const auto colorIt = resourcesResolve.find("sceneColor");
+            if (colorIt == resourcesResolve.end() ||
+                colorIt->second.empty())
+            {
+                throw std::runtime_error(
+                    "LightCulling pass requires a sceneColor render target: " +
+                    renderpass.name);
+            }
+            renderpass.width = colorIt->second[0].width;
+            renderpass.height = colorIt->second[0].height;
             return renderpass;
         }
         MaybeFailRenderPassCreation();
