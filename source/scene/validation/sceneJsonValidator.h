@@ -237,6 +237,24 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             // 局部阴影只对点光/聚光生效；解析与 WorldBuilder 共用同一份
             // 字段规则，避免校验通过后加载期再静默降级。
             (void)ReadLocalLightShadowSettings(object, type + "|" + name);
+            // 点光/聚光的衰减范围：省略时由 WorldBuilder 取 1000 cm；
+            // 作者一旦写出就必须是有限正数，0/负值会让灯变成无限范围。
+            if (object.contains("radius"))
+            {
+                if (!object.at("radius").is_number())
+                {
+                    throw std::invalid_argument(
+                        type + " radius must be a number");
+                }
+                const double radius =
+                    object.at("radius").get<double>();
+                if (!std::isfinite(radius) || radius <= 0.0 ||
+                    radius > 1000000.0)
+                {
+                    throw std::invalid_argument(
+                        type + " radius must be in (0, 1000000] cm");
+                }
+            }
         }
         if (type == "camera")
         {

@@ -28,9 +28,16 @@ inline LocalLightShadowSettings ReadLocalLightShadowSettings(
     }
 
     const nlohmann::json& shadow = lightNode.at("shadow");
+    // 允许 `"shadow": true/false` 简写；对象形式再读 castShadows/bias。
+    if (shadow.is_boolean())
+    {
+        settings.castShadows = shadow.get<bool>();
+        return settings;
+    }
     if (!shadow.is_object())
     {
-        throw std::invalid_argument(owner + " shadow must be an object");
+        throw std::invalid_argument(
+            owner + " shadow must be a boolean or object");
     }
     if (shadow.contains("castShadows"))
     {

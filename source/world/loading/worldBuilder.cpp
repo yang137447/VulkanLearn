@@ -95,7 +95,8 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = ReadCanonicalLightIntensity(node);
-    const float radius = node.value("radius", 0.0f);
+    // 与 UE 的 Attenuation Radius 对齐：省略时给 10 m，而不是无限范围。
+    const float radius = node.value("radius", 1000.0f);
     const LocalLightShadowSettings shadow =
         ReadLocalLightShadowSettings(node, "pointLight|" + name);
 
@@ -129,7 +130,7 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = ReadCanonicalLightIntensity(node);
-    const float radius = node.value("radius", 0.0f);
+    const float radius = node.value("radius", 1000.0f);
     // 场景 JSON 使用角度制；GPU 的 acos 与锥角比较使用弧度制。
     const float coneAngleOuter =
         JsonParser::ParseValue<float>(node["cone_angle_outer"]) * M_PI / 180.0f;

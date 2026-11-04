@@ -153,8 +153,12 @@ full authoring and shape contract.
 ## Local Light Shadows
 
 Scene `pointLight` and `spotLight` objects may declare
-`"shadow": { "castShadows": true, "bias": 2.0 }` (`bias` is centimeters and
-optional; the default is 2 cm, and `castShadows` defaults to false). Up to four
+`"shadow": { "castShadows": true, "bias": 2.0 }` or the shorthand
+`"shadow": true` (`bias` is centimeters and optional; the default is 2 cm, and
+`castShadows` defaults to false). `radius` is the attenuation range in
+centimeters: it defaults to 1000 cm (10 m), must be finite and `> 0`, and the
+shader window `clamp(1 - (d^2/r^2)^2, 0, 1)^2` makes the light contribute only
+inside that range. Up to four
 shadow-casting local lights are selected per frame by a stable importance key
 (camera distance, radius, intensity, then `lightId`). Each selected light owns
 one slice of `localShadowMap`, a `D32_SFLOAT` `texture2DArray` with 1024²
