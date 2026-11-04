@@ -1599,8 +1599,9 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
   key 顺序截断。light 发射器不产生可见 draw call，也不参与排序/indirect。
 - decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU
   粒子映射为 `DecalSnapshot`，再走现有静态 decal 的 64 槽 DBuffer 路径。因此它不产生
-  HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集、硬件 stencil 裁剪或
-  UE Niagara Decal Renderer 的逐粒子材质图。DBuffer 现在由 deferred 与 forward opaque
+  HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集或
+  UE Niagara Decal Renderer 的逐粒子材质图；硬件 stencil 只提供 bit0 union mask，
+  不区分单个 decal ID。DBuffer 现在由 deferred 与 forward opaque
   共同采样；forward transparent 不接收，normal 合成使用 whiteout/大圆混合，而不是逐层 RNM。
   动态与静态 decal 共享 64 个可见实例；静态 decal 先占槽，超出时粒子路径按 emitter
   顺序截断。

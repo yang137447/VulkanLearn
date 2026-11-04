@@ -164,9 +164,10 @@ struct ParticleBeamAsset
     ParticleBeamHitScanAsset hitScan;
 };
 
-// renderMode=="light" 的 CPU 灯光参数。发射器本身不写 sceneColor，也不分配
-// GPU 粒子池；运行时按粒子年龄生成瞬时 PointLight。intensity 单位是 cd，
-// radius 单位是 cm，颜色来自 colorStart/colorEnd 的 RGB 与 alpha。
+// renderMode=="light" 的灯光参数。发射器拥有独立 GPU 模拟池，由
+// particleLightEmit compute 按粒子年龄输出瞬时点光，不写 sceneColor。
+// intensity 单位是 cd，radius 单位是 cm，颜色来自 colorStart/colorEnd 的
+// RGB 与 alpha。
 struct ParticleLightAsset
 {
     float intensity = 300.0f;

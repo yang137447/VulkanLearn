@@ -17,9 +17,10 @@ namespace VL
 
 struct RenderScene;
 
-// light/decal 两类 CPU 发射器共享的粒子模拟。它们不拥有 GPU 池，也不进入
-// compute simulate、indirect draw 或排序；这里只维护确定性的存活粒子列表，
-// 由上层分别映射成 PointLight 或 DecalSnapshot。
+// CPU 侧发射器（当前只剩 renderMode=="decal"）使用的粒子模拟。它不拥有
+// GPU 池，也不进入 compute simulate、indirect draw 或排序；这里只维护
+// 确定性的存活粒子列表，由上层映射成 DecalSnapshot。renderMode=="light"
+// 已改走 GPU 模拟池与 particleLightEmit compute，不再使用本类。
 //
 // 身份与 ParticleRenderer 保持一致：场景对象名 + 资产路径 + 发射器名。
 // fixedTimeStep、burst 绝对周期、shape/gravity/drag 与 SplitMix64 随机都只
