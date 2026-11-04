@@ -38,7 +38,9 @@ std::string TerrainChunkResourceKey(
     uint32_t lodLevel = 0);
 
 // 高度图在加载期一次性生成 CPU chunk 网格；法线使用全局高度采样中心差分，
-// 因此相邻 chunk 的共享边界不会出现法线接缝。
+// 因此相邻 chunk 的共享边界不会出现法线接缝。粗 LOD 的边界环固定使用
+// step=1 法线，内侧粗顶点按到边界的距离混向细法线，避免过渡带把法线变化
+// 压在一个格子里形成明暗线。
 // 单个 chunk 的 LOD0 AABB（不含边界缝合带；缝合带与地表同高），由 ComputeChunkBounds 直接从高度图
 // 采样得到，用于加载期决定哪些细 LOD 需要真正生成。
 struct TerrainChunkBounds
@@ -70,6 +72,7 @@ public:
     // 生成指定 LOD 的全部 chunk。LOD0 与历史实现逐字节一致；
     // LOD>=1 把每方向 chunkQuads/2^lod 个格子合并一格，并把四条边界改为
     // 按 LOD0 间距采样的边界环 + 一圈过渡三角形，保证与任意 LOD 的邻居水密。
+    // 边界环法线固定为 step=1，粗网格顶点在边界附近按距离把法线混向细法线。
     static std::vector<TerrainMeshChunk> BuildChunks(
         const TerrainBuildPlan& plan,
         uint32_t lodLevel = 0,
@@ -82,6 +85,4 @@ public:
         const TerrainBuildPlan& plan);
 };
 
-// skirt 向下延伸的深度（cm）。当前按地形总高度尺度取 10%，下限 1cm；
-// 所有 LOD 级共用同一深度，保证相邻级互相覆盖。
 } // namespace VL

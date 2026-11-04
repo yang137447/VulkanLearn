@@ -558,6 +558,146 @@ TEST(TerrainMeshBuilder, CoarseLodNormalsMatchAcrossChunkBoundary)
     }
 }
 
+TEST(TerrainMeshBuilder, StitchBandBlendsCoarseNormalsTowardFineEdge)
+{
+    const auto height = [](uint32_t x, uint32_t y) {
+        return 0.5f +
+            0.22f * std::sin(static_cast<float>(x) * 0.9f) *
+                std::cos(static_cast<float>(y) * 0.7f) +
+            0.12f * std::sin(static_cast<float>(x + y) * 1.9f);
+    };
+    VL::TerrainBuildPlan plan = MakePlan(MakeHeightmap(33, 33, height));
+    plan.desc.gridResolution = 32;
+    plan.desc.chunkQuads = 16;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(lod0.size(), 4u);
+    ASSERT_EQ(lod1.size(), 4u);
+
+    const VL::TerrainMeshChunk& coarse = lod1.front();
+    const VL::TerrainMeshChunk& fine = lod0.front();
+    const uint32_t quads = plan.desc.chunkQuads / 2;
+    const uint32_t verticesPerRow = quads + 1;
+    const uint32_t ringBase = verticesPerRow * verticesPerRow;
+    ASSERT_EQ(coarse.vertices.size(), ringBase + 4u * plan.desc.chunkQuads);
+
+    // 边界环与 LOD0 在同一位置必须使用完全相同的 step=1 法线。
+    for (uint32_t j = 0; j < plan.desc.chunkQuads; ++j)
+    {
+        const Vertex& boundary = coarse.vertices[ringBase + j];
+        const Vertex& lod0Vertex = fine.vertices[j];
+        ASSERT_TRUE(boundary.position.isApprox(lod0Vertex.position, 1.0e-4f));
+        EXPECT_TRUE(boundary.normal.isApprox(lod0Vertex.normal, 1.0e-5f));
+    }
+
+    // 第一条粗网格线（距底边一个粗格）应被混向细法线；纯粗法线应与它不同。
+    const uint32_t localX = quads / 2;
+    const uint32_t coarseIndex = verticesPerRow + localX;
+    const uint32_t globalX = localX * 2;
+    const uint32_t globalZ = 2;
+    const uint32_t lod0Index = globalZ * 33 + globalX;
+    const Eigen::Vector3f& blended = coarse.vertices[coarseIndex].normal;
+    const Eigen::Vector3f& fineNormal = fine.vertices[lod0Index].normal;
+
+    const float u = static_cast<float>(globalX) / 32.0f;
+    const float v = static_cast<float>(globalZ) / 32.0f;
+    const float stepUv = 2.0f / 32.0f;
+    const float stepDx = 2.0f * stepUv * plan.desc.size.x();
+    const float stepDz = 2.0f * stepUv * plan.desc.size.y();
+    const float left = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u - stepUv, v);
+    const float right = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u + stepUv, v);
+    const float down = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u, v - stepUv);
+    const float up = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u, v + stepUv);
+    const Eigen::Vector3f pureCoarse(
+        -(right - left) / stepDx,
+        1.0f,
+        -(up - down) / stepDz);
+    const Eigen::Vector3f expectedPureCoarse = pureCoarse.normalized();
+
+    EXPECT_GT((blended - expectedPureCoarse).norm(), 1.0e-4f)
+        << "edge-adjacent coarse normal was not blended";
+    EXPECT_LT((blended - fineNormal).norm(), (expectedPureCoarse - fineNormal).norm())
+        << "blended normal should be closer to the LOD0 normal than the raw coarse normal";
+
+    // 距离四条边都超过混合宽度的内部顶点保持纯粗法线。
+    const uint32_t interiorIndex = 4 * verticesPerRow + 4;
+    const Eigen::Vector3f& interior = coarse.vertices[interiorIndex].normal;
+    const float interiorU = static_cast<float>(4 * 2) / 32.0f;
+    const float interiorV = static_cast<float>(4 * 2) / 32.0f;
+    const float interiorLeft = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU - stepUv, interiorV);
+    const float interiorRight = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU + stepUv, interiorV);
+    const float interiorDown = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU, interiorV - stepUv);
+    const float interiorUp = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU, interiorV + stepUv);
+    const Eigen::Vector3f interiorCoarse = Eigen::Vector3f(
+        -(interiorRight - interiorLeft) / stepDx,
+        1.0f,
+        -(interiorUp - interiorDown) / stepDz).normalized();
+    EXPECT_TRUE(interior.isApprox(interiorCoarse, 1.0e-5f));
+}
+
+TEST(TerrainMeshBuilder, StitchBandNormalsMatchAcrossDifferentLods)
+{
+    VL::TerrainBuildPlan plan = MakePlan(MakeHeightmap(33, 33,
+        [](uint32_t x, uint32_t y) {
+            return 0.5f +
+                0.22f * std::sin(static_cast<float>(x) * 0.9f) *
+                    std::cos(static_cast<float>(y) * 0.7f) +
+                0.12f * std::sin(static_cast<float>(x + y) * 1.9f);
+        }));
+    plan.desc.gridResolution = 32;
+    plan.desc.chunkQuads = 16;
+
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    const std::vector<VL::TerrainMeshChunk> lod2 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 2);
+    ASSERT_EQ(lod1.size(), 4u);
+    ASSERT_EQ(lod2.size(), 4u);
+
+    const uint32_t edge = plan.desc.chunkQuads;
+    const uint32_t lod1RingBase =
+        (plan.desc.chunkQuads / 2 + 1) * (plan.desc.chunkQuads / 2 + 1);
+    const uint32_t lod2RingBase =
+        (plan.desc.chunkQuads / 4 + 1) * (plan.desc.chunkQuads / 4 + 1);
+
+    // (0,0) 的右边界与 (1,0) 的左边界共享 x=16 的 LOD0 采样点。
+    for (uint32_t j = 0; j < edge; ++j)
+    {
+        const Vertex& lod1Edge =
+            lod1[0].vertices[lod1RingBase + edge + j];
+        const Vertex& lod2Edge =
+            lod2[0].vertices[lod2RingBase + edge + j];
+        // z=0 是邻居的底边起点；z=1..edge-1 由邻居左边界的 1..edge-1
+        // 采样点覆盖。
+        const uint32_t neighbourIndex = j == 0
+            ? lod1RingBase
+            : lod1RingBase + 3 * edge + (edge - j);
+        const uint32_t neighbourIndex2 = j == 0
+            ? lod2RingBase
+            : lod2RingBase + 3 * edge + (edge - j);
+        const Vertex& lod1Neighbour = lod1[1].vertices[neighbourIndex];
+        const Vertex& lod2Neighbour = lod2[1].vertices[neighbourIndex2];
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod2Edge.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.normal.isApprox(lod2Edge.normal, 1.0e-5f));
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod1Neighbour.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod2Neighbour.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.normal.isApprox(lod1Neighbour.normal, 1.0e-5f));
+        EXPECT_TRUE(lod2Edge.normal.isApprox(lod2Neighbour.normal, 1.0e-5f));
+        EXPECT_TRUE(lod1Neighbour.normal.isApprox(lod2Neighbour.normal, 1.0e-5f));
+    }
+}
+
 TEST(TerrainMeshBuilder, RejectsLodStepLargerThanChunkQuads)
 {
     VL::TerrainBuildPlan plan = MakePlan(

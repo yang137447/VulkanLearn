@@ -301,7 +301,9 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 - 每块有 `(chunkQuads+1)²` 个顶点、`chunkQuads²×2` 个三角形、uint32 索引。
 - 顶点 UV 是整块地形的 `[0,1]` 全局坐标，留给材质乘 `uvScale`；切线为 `(1,0,0,1)`。
 - 法线用全局高度图中心差分：`n = normalize(-dh/dx, 1, -dh/dz)`。相邻 chunk 共享的
-  边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。
+  边界采样同一个全局 UV，因此不会出现 chunk 内法线接缝。粗 LOD 的边界环固定使用
+  `step=1` 法线；距边界 3 个粗格以内的粗顶点把 `step=2^lod` 法线按 smoothstep
+  混向 `step=1` 法线，避免缝合带把法线变化压在一个格子里形成明暗线。
 - 每个 chunk 计算局部 AABB，交给 World/渲染快照做视锥与阴影裁剪。
 - 索引绕序与引擎的 Clockwise front face 对齐；材质可以使用 Back culling。
 - `lodLevels=1` 的旧资产仍只生成/绑定 LOD0，且 LOD0 无额外边界几何、顶点/索引与历史
@@ -315,9 +317,12 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 - 第 `lod` 级的合并步长是 `2^lod`：一个 chunk 变成
   `quadsPerChunk = chunkQuads / 2^lod` 个格子，基础顶点
   `(quadsPerChunk+1)²`、三角形 `quadsPerChunk²×2`。
-- 基础顶点的世界位置、UV、`texCoord1` 与法线公式和 LOD0 相同，只是采样点落在
-  每 `2^lod` 个 LOD0 网格点上；中心差分间距同步乘 `2^lod`，相邻 chunk 的共享边界
-  仍使用同一全局采样。
+- 基础顶点的世界位置、UV、`texCoord1` 与 LOD0 同名网格点一致；采样点落在每
+  `2^lod` 个 LOD0 网格点上。
+- 内部粗顶点的法线用 `step=2^lod` 中心差分；距 chunk 四条边不超过 3 个粗格
+  （更粗的 LOD 若整块只有 1~2 个粗格则整块）的顶点，把粗法线按距离 smoothstep
+  混向同一位置的 `step=1` 法线。边界环顶点始终是 `step=1` 法线，因此相邻 chunk
+  无论 LOD 相同还是不同，共享边界法线都逐位一致。
 - `lodLevels=1` 时 LOD0 的顶点/索引与历史实现逐字节一致（无 skirt、索引顺序不变）。
 - 没有 skirt。`lod > 0` 的 chunk 在四条边上追加一圈**按 LOD0 间距采样**的边界环
   （`4 × chunkQuads` 个顶点），再用一圈过渡三角形把它连到第一条粗网格线。
@@ -359,7 +364,8 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `lodDistances[l] × (1 + 10%)`，与运行时“变粗”阈值同源，避免加载期漏掉刚处在
   滞回带内的目标级。作者显式给出更小的窗口时，初始视角就可能走兜底。
 - 距离口径与运行时选择完全一致：chunk 的 LOD0 局部 AABB 变换到世界空间，
-  多级资产再叠加 LOD0 skirt 的下移量，然后取到相机位置的最近点距离
+  多级资产直接使用 LOD0 AABB（缝合带与地表同高，没有 skirt 下移），
+  然后取到相机位置的最近点距离
   （`TerrainChunkWorldBounds` / `TerrainChunkLevelIsResident`）。
 - 判定只需要高度范围，不生成法线：`TerrainMeshBuilder::ComputeChunkBounds`
   直接从高度图采样 LOD0 顶点位置范围；`TerrainChunkBuildFilter::chunkMask`
@@ -1173,11 +1179,12 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   不创建物理世界。当前 worktree 未开 C#，没有完整 Play 冒烟。
 - CPU LOD/边界缝合：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无额外几何）、
   LOD1..3 的格子数、边界环顶点数与过渡带三角形数、基础顶点在 LOD0 同名网格点的
-  位置/法线/UV、边界环落在 chunk 边界线上且不超出 AABB、过渡带三角形与内部网格
+  位置/UV（线性坡面下法线也一致）、边界环落在 chunk 边界线上且不超出 AABB、过渡带三角形与内部网格
   同向（法线朝下）、相邻 chunk 差一级 LOD 时共享边界逐点重合、粗 LOD 跨 chunk 边界法线连续、
+  边界附近粗法线混向细法线而内部保持粗法线、不同 LOD 的边界环法线逐位一致、
   `chunkQuads` 无法被步长整除与 `lodLevel` 越界时抛错、`lodLevels`/`lodDistances`
   的校验与加载器往返、默认距离按地形最长边推导、距离→级别边界（含负距离）、
-  距离 AABB 最近点、10% 双向滞回带、LOD0 显式 skirt override、
+  距离 AABB 最近点、10% 双向滞回带、
   chunk key 区分 LOD 且不受 `lodDistances` 影响。
 - 运行时选择：`editor_ui_tests --gtest_filter=TerrainLodSnapshot.*` 用真实
   `World` + `WorldSnapshotBuilder` 钉住“每组只输出一个 draw”、近/远级切换、

@@ -12,6 +12,19 @@ namespace VL
 namespace
 {
 
+// 粗 LOD 的边界环必须使用 step=1 法线，才能和任意 LOD 的邻居逐点一致。
+// 但第一条粗网格线如果仍用 step=2^lod 法线，过渡带会把整段法线变化压在
+// 一个格子里，出现一条淡明暗线。这里让边界附近的粗顶点按距离把法线混向
+// 细法线，过渡分摊到最多 3 个粗格；更粗的 LOD 如果整块只有 1~2 个粗格，
+// 则整块都使用混合法线，边界处仍然严格一致。
+constexpr float kNormalBlendCells = 3.0f;
+
+float SmoothStep01(float value)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value * value * (3.0f - 2.0f * value);
+}
+
 } // namespace
 
 bool TerrainChunkBuildFilter::Accepts(
@@ -80,6 +93,8 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     // lodStep 合并，得到 quadsPerChunk 个格子。
     const uint32_t quadsPerChunk = desc.chunkQuads / lodStep;
     const uint32_t verticesPerRow = quadsPerChunk + 1;
+    const float normalBlendCells = std::min(
+        kNormalBlendCells, static_cast<float>(quadsPerChunk));
     const float grid = static_cast<float>(desc.gridResolution);
     // 全局页 UV 是 [0,1] 的归一化坐标；最后一列/行的顶点恰好落在页边界上，
     // 直接采样会落进邻居页。按半个页 texel 内缩，内部顶点保持精确值。
@@ -117,30 +132,41 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                 static_cast<size_t>(lodStep > 1 ? desc.chunkQuads * 4 * 2 : 0));
 
             auto appendVertex = [&](uint32_t globalX, uint32_t globalZ,
-                                    uint32_t gradientStep) {
+                                    uint32_t gradientStep,
+                                    float fineNormalWeight) {
                 const float u = static_cast<float>(globalX) / grid;
                 const float v = static_cast<float>(globalZ) / grid;
-                const float stepUv =
-                    static_cast<float>(gradientStep) / grid;
-                const float stepDx = 2.0f * stepUv * desc.size.x();
-                const float stepDz = 2.0f * stepUv * desc.size.y();
                 const float height = TerrainHeightmap::SampleHeightCm(
                     desc, *plan.heightmap, u, v);
-                const float left = TerrainHeightmap::SampleHeightCm(
-                    desc, *plan.heightmap, u - stepUv, v);
-                const float right = TerrainHeightmap::SampleHeightCm(
-                    desc, *plan.heightmap, u + stepUv, v);
-                const float down = TerrainHeightmap::SampleHeightCm(
-                    desc, *plan.heightmap, u, v - stepUv);
-                const float up = TerrainHeightmap::SampleHeightCm(
-                    desc, *plan.heightmap, u, v + stepUv);
+                auto gradientNormal = [&](uint32_t step) {
+                    const float stepUv = static_cast<float>(step) / grid;
+                    const float stepDx = 2.0f * stepUv * desc.size.x();
+                    const float stepDz = 2.0f * stepUv * desc.size.y();
+                    const float left = TerrainHeightmap::SampleHeightCm(
+                        desc, *plan.heightmap, u - stepUv, v);
+                    const float right = TerrainHeightmap::SampleHeightCm(
+                        desc, *plan.heightmap, u + stepUv, v);
+                    const float down = TerrainHeightmap::SampleHeightCm(
+                        desc, *plan.heightmap, u, v - stepUv);
+                    const float up = TerrainHeightmap::SampleHeightCm(
+                        desc, *plan.heightmap, u, v + stepUv);
 
-                // u 对应 +X、v 对应 +Z；梯度法线取 (-dh/dx, 1, -dh/dz)。
-                Eigen::Vector3f normal(
-                    -(right - left) / stepDx,
-                    1.0f,
-                    -(up - down) / stepDz);
-                normal.normalize();
+                    // u 对应 +X、v 对应 +Z；梯度法线取 (-dh/dx, 1, -dh/dz)。
+                    Eigen::Vector3f normal(
+                        -(right - left) / stepDx,
+                        1.0f,
+                        -(up - down) / stepDz);
+                    normal.normalize();
+                    return normal;
+                };
+
+                Eigen::Vector3f normal = gradientNormal(gradientStep);
+                if (gradientStep > 1 && fineNormalWeight > 0.0f)
+                {
+                    normal = normal * (1.0f - fineNormalWeight) +
+                        gradientNormal(1) * fineNormalWeight;
+                    normal.normalize();
+                }
 
                 Vertex vertex;
                 vertex.position = Eigen::Vector3f(
@@ -183,7 +209,16 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                         chunkX * desc.chunkQuads + localX * lodStep;
                     const uint32_t globalZ =
                         chunkZ * desc.chunkQuads + localZ * lodStep;
-                    appendVertex(globalX, globalZ, lodStep);
+                    const uint32_t boundaryDistance = std::min(
+                        std::min(localX, localZ),
+                        std::min(
+                            quadsPerChunk - localX,
+                            quadsPerChunk - localZ));
+                    const float fineNormalWeight = 1.0f - SmoothStep01(
+                        static_cast<float>(boundaryDistance) /
+                        normalBlendCells);
+                    appendVertex(
+                        globalX, globalZ, lodStep, fineNormalWeight);
                 }
             }
 
@@ -223,13 +258,13 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                 const uint32_t ringBase =
                     static_cast<uint32_t>(chunk.vertices.size());
                 for (uint32_t j = 0; j < edge; ++j)
-                    appendVertex(baseX + j, baseZ, 1);
+                    appendVertex(baseX + j, baseZ, 1, 1.0f);
                 for (uint32_t j = 0; j < edge; ++j)
-                    appendVertex(baseX + edge, baseZ + j, 1);
+                    appendVertex(baseX + edge, baseZ + j, 1, 1.0f);
                 for (uint32_t j = 0; j < edge; ++j)
-                    appendVertex(baseX + edge - j, baseZ + edge, 1);
+                    appendVertex(baseX + edge - j, baseZ + edge, 1, 1.0f);
                 for (uint32_t j = 0; j < edge; ++j)
-                    appendVertex(baseX, baseZ + edge - j, 1);
+                    appendVertex(baseX, baseZ + edge - j, 1, 1.0f);
 
                 // 角点归下一条边所有，j == edge 时跳到下一条边的起点。
                 auto fineIndex = [&](uint32_t side, uint32_t j) -> uint32_t {
