@@ -826,10 +826,12 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   完整 DefaultLit 光照：全部方向光/点光/聚光 + 全部 GPU 粒子灯，GGX/Smith/Fresnel
   直接光 + 预过滤 cubemap/BRDF LUT 的 IBL，方向光额外采样 CSM；关闭时 mesh 仍走
   unlit 输出。billboard 与 ribbon 忽略该字段。
-- `castShadows`：默认 `false`，仅 `renderMode: "mesh"` 使用。开启后 mesh 粒子实例
-  会以同一份 `particleMeshTransform` 变换写入 CSM 与局部阴影图集；billboard/ribbon、
-  beam、light 与 decal 不投影。CSM 的 4 级会提交同一批 caster（暂未逐级做视锥剔除），
-  局部阴影按灯范围对发射器包围球做保守剔除。
+- `castShadows`：默认 `false`，`renderMode` 为 `mesh` / `billboard` / `ribbon` 时可用；
+  beam、light 与 decal 不投影。mesh 用同一份 `particleMeshTransform`；billboard/ribbon
+  生成程序化卡片/条带并以固定 `0.35` alpha test 做 masked shadow。二进制 shadow map
+  只适合有较密芯部的效果；半透明烟/尘需要逐灯 transmittance 累积（当前未实现），
+  所以案例里默认只给 mesh 碎块开启。CSM 的 4 级会提交同一批 caster（已按级联
+  视锥剔除），局部阴影按灯范围对发射器包围球做保守剔除。
 - mesh 粒子的 `materialInstancePath` 现在除数值参数外还读取 `textures`
   （albedo/normal/pbrParam/emission）与 UV scale/offset；纹理走独立 set 1，
   缺失时回退白图/flat normal/白 ORM/黑 emissive。仍是合并 section 的单材质，

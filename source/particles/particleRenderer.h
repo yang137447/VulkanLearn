@@ -23,6 +23,7 @@
 #include "particles/particleMaterial.h"
 #include "particles/particleRenderIdentity.h"
 #include "particles/particleSdf.h"
+#include "particles/particleShadowCaster.h"
 #include "render/particles/particleGpuTimer.h"
 #include "resource/image/hostImage.h"
 
@@ -684,10 +685,10 @@ private:
         RendererBackendVulkan& backend,
         EmitterResources& emitter);
     // PrepareShadow 与 RecordShadow 必须使用完全相同的 caster 判定：
-    // 作者开关、mesh 几何有效、可见/启用、本 image UBO 存在，以及包围球
+    // 作者开关、对应几何有效、可见/启用、本 image UBO 存在，以及包围球
     // 与当前 shadow 视图的保守相交。任何条件只改一处都会导致 UBO 更新与
-    // draw 数量不一致。
-    static bool IsMeshShadowCaster(
+    // draw 数量不一致。返回 None 表示不投影。
+    static ParticleShadowCasterMode ResolveShadowCasterMode(
         const EmitterResources& emitter,
         uint32_t imageIndex,
         const Eigen::Vector3f& lightPosition,
@@ -709,7 +710,8 @@ private:
     void CreateFallbackLightingResources();
     void DestroyFallbackLightingResources();
     std::shared_ptr<PipelineBase> GetOrCreateShadowPipeline(
-        const Renderpass& renderPass);
+        const Renderpass& renderPass,
+        ParticleShadowCasterMode mode);
     const vk::DescriptorBufferInfo& SceneLightInfoForImage(
         uint32_t imageIndex) const;
     const vk::DescriptorBufferInfo& ParticleLightInfoForImage(
@@ -800,9 +802,10 @@ private:
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;
     std::shared_ptr<PipelineBase> meshAlphaPipeline;
-    // mesh caster 管线按 shadow/localShadow 的 VkRenderPass 句柄缓存；
-    // 同一图里 CSM 与局部阴影使用不同 render pass，不能共用。
-    std::unordered_map<uintptr_t, std::shared_ptr<PipelineBase>>
+    // mesh/billboard/ribbon caster 管线按 shadow/localShadow 的
+    // VkRenderPass 句柄 + caster 几何类型缓存；同一图里 CSM 与局部阴影
+    // 使用不同 render pass，不能共用。
+    std::unordered_map<uint64_t, std::shared_ptr<PipelineBase>>
         shadowPipelines;
     PipelineFactory* pipelineFactory = nullptr;
     // PrepareShadow 与 RecordShadow 之间的单帧剔除输入；两者按 pass

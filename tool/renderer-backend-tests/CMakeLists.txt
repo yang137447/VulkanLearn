@@ -10,6 +10,7 @@ add_executable(vl_renderer_backend_tests
     particle_light_gpu_test.cpp
     particle_scene_lighting_test.cpp
     particle_mesh_shadow_test.cpp
+    particle_sprite_shadow_test.cpp
     particle_mesh_material_test.cpp
     local_shadow_math_test.cpp
     pass_pipeline_contract_test.cpp

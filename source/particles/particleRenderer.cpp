@@ -5525,26 +5525,52 @@ void ParticleRenderer::RecordGraphics(
 
 std::shared_ptr<PipelineBase>
 ParticleRenderer::GetOrCreateShadowPipeline(
-    const Renderpass& renderPass)
+    const Renderpass& renderPass,
+    ParticleShadowCasterMode mode)
 {
-    if (!initialized || pipelineFactory == nullptr)
+    if (!initialized ||
+        pipelineFactory == nullptr ||
+        mode == ParticleShadowCasterMode::None)
     {
         return nullptr;
     }
 
     // 同一图里的 CSM、localShadow 层各自拥有 VkRenderPass 句柄；管线状态
     // 完全相同也必须按句柄分开缓存，否则会把 CSM 管线拿去绑 localShadow。
-    const uintptr_t renderPassKey =
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkRenderPass>(renderPass.renderPass));
-    const auto existing = shadowPipelines.find(renderPassKey);
+    // mesh/billboard/ribbon 的顶点输入与 shader 不同，因此句柄之外还要
+    // 把 caster 几何类型编进 key。
+    const uint64_t renderPassKey =
+        static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+            static_cast<VkRenderPass>(renderPass.renderPass)));
+    const uint64_t cacheKey =
+        (renderPassKey << 2) |
+        static_cast<uint64_t>(mode);
+    const auto existing = shadowPipelines.find(cacheKey);
     if (existing != shadowPipelines.end())
     {
         return existing->second;
     }
 
+    const char* shaderName = nullptr;
+    bool useVertexInput = false;
+    switch (mode)
+    {
+    case ParticleShadowCasterMode::Mesh:
+        shaderName = "particle/particleShadow";
+        useVertexInput = true;
+        break;
+    case ParticleShadowCasterMode::Billboard:
+        shaderName = "particle/particleBillboardShadow";
+        break;
+    case ParticleShadowCasterMode::Ribbon:
+        shaderName = "particle/particleRibbonShadow";
+        break;
+    default:
+        return nullptr;
+    }
+
     ShaderVariantKey variant;
-    variant.shaderName = "particle/particleShadow";
+    variant.shaderName = shaderName;
     variant.renderMode = RenderMode::TransparentAdditive;
     variant.shadingModelMacro = "SHADING_MODEL_UNLIT";
     const GraphicsShaderVariantArtifact& artifact =
@@ -5552,7 +5578,9 @@ ParticleRenderer::GetOrCreateShadowPipeline(
 
     PassPipelineContractKey contract =
         renderPass.pipelineContractKey;
-    contract.useVertexInput = true;
+    // billboard/ribbon caster 由 gl_VertexIndex 生成四边形，没有顶点缓冲；
+    // mesh caster 读取静态 SM 的顶点/索引流。
+    contract.useVertexInput = useVertexInput;
 
     // caster shader 只声明 set 0；显式保留与可见粒子完全相同的 set 0
     // 合同（graphicsSets 就是用这份 layout 分配的），但不把 pass set 3
@@ -5574,32 +5602,49 @@ ParticleRenderer::GetOrCreateShadowPipeline(
             layout);
     if (pipeline)
     {
-        shadowPipelines.emplace(renderPassKey, pipeline);
+        shadowPipelines.emplace(cacheKey, pipeline);
     }
     return pipeline;
 }
 
-bool ParticleRenderer::IsMeshShadowCaster(
+ParticleShadowCasterMode ParticleRenderer::ResolveShadowCasterMode(
     const EmitterResources& emitter,
     uint32_t imageIndex,
     const Eigen::Vector3f& lightPosition,
     float farCm)
 {
-    return ParticleEmitterCastsMeshShadow(
-               emitter.asset,
-               emitter.meshFallbackBillboard) &&
-        !emitter.culled &&
-        emitter.visible &&
-        emitter.enabled &&
-        emitter.meshIndexCount > 0 &&
-        emitter.meshVertices.buffer &&
-        emitter.meshIndices.buffer &&
-        emitter.frameUniforms.size() > imageIndex &&
-        ParticleMeshCasterIntersectsShadowVolume(
+    const ParticleShadowCasterMode mode =
+        ParticleShadowCasterModeFor(
+            emitter.asset,
+            emitter.meshFallbackBillboard);
+    if (mode == ParticleShadowCasterMode::None)
+    {
+        return ParticleShadowCasterMode::None;
+    }
+    if (emitter.culled ||
+        !emitter.visible ||
+        !emitter.enabled ||
+        emitter.frameUniforms.size() <= imageIndex ||
+        emitter.graphicsSets.size() <= imageIndex)
+    {
+        return ParticleShadowCasterMode::None;
+    }
+    if (mode == ParticleShadowCasterMode::Mesh &&
+        (emitter.meshIndexCount == 0 ||
+         !emitter.meshVertices.buffer ||
+         !emitter.meshIndices.buffer))
+    {
+        return ParticleShadowCasterMode::None;
+    }
+    if (!ParticleMeshCasterIntersectsShadowVolume(
             emitter.worldCenter,
             emitter.boundsRadius,
             lightPosition,
-            farCm);
+            farCm))
+    {
+        return ParticleShadowCasterMode::None;
+    }
+    return mode;
 }
 
 void ParticleRenderer::PrepareShadow(
@@ -5645,8 +5690,11 @@ void ParticleRenderer::PrepareShadow(
     for (const auto& [key, emitter] : emitters)
     {
         (void)key;
-        if (IsMeshShadowCaster(
-                *emitter, imageIndex, lightPosition, farCm))
+        if (ResolveShadowCasterMode(
+                *emitter,
+                imageIndex,
+                lightPosition,
+                farCm) != ParticleShadowCasterMode::None)
         {
             hasCaster = true;
             break;
@@ -5686,8 +5734,11 @@ void ParticleRenderer::PrepareShadow(
     for (auto& [key, emitter] : emitters)
     {
         (void)key;
-        if (!IsMeshShadowCaster(
-                *emitter, imageIndex, lightPosition, farCm))
+        if (ResolveShadowCasterMode(
+                *emitter,
+                imageIndex,
+                lightPosition,
+                farCm) == ParticleShadowCasterMode::None)
         {
             continue;
         }
@@ -5720,34 +5771,38 @@ void ParticleRenderer::RecordShadow(
     {
         return;
     }
-    std::shared_ptr<PipelineBase> pipeline =
-        GetOrCreateShadowPipeline(renderPass);
-    if (!pipeline)
-    {
-        return;
-    }
-
-    bool pipelineBound = false;
+    // 同一 pass 内可能混有 mesh/billboard/ribbon caster。管线只在几何
+    // 类型切换时重绑，descriptor set 仍按发射器绑定（每个发射器有自己
+    // 的粒子池与纹理）。
+    ParticleShadowCasterMode boundMode =
+        ParticleShadowCasterMode::None;
+    std::shared_ptr<PipelineBase> pipeline;
     for (auto& [key, emitterPtr] : emitters)
     {
         (void)key;
         EmitterResources& emitter = *emitterPtr;
-        if (!IsMeshShadowCaster(
+        const ParticleShadowCasterMode mode =
+            ResolveShadowCasterMode(
                 emitter,
                 imageIndex,
                 shadowCullLightPosition,
-                shadowCullFarCm) ||
-            emitter.graphicsSets.size() <= imageIndex)
+                shadowCullFarCm);
+        if (mode == ParticleShadowCasterMode::None)
         {
             continue;
         }
 
-        if (!pipelineBound)
+        if (mode != boundMode)
         {
+            pipeline = GetOrCreateShadowPipeline(renderPass, mode);
+            if (!pipeline)
+            {
+                continue;
+            }
             commandBuffer.bindPipeline(
                 pipeline->GetBindPoint(),
                 pipeline->GetPipeline());
-            pipelineBound = true;
+            boundMode = mode;
         }
         commandBuffer.bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
@@ -5756,30 +5811,53 @@ void ParticleRenderer::RecordShadow(
             emitter.graphicsSets.at(imageIndex),
             nullptr);
 
-        const vk::DeviceSize vertexOffset = 0;
-        commandBuffer.bindVertexBuffers(
-            0,
-            1,
-            &emitter.meshVertices.buffer,
-            &vertexOffset);
-        commandBuffer.bindIndexBuffer(
-            emitter.meshIndices.buffer,
-            0,
-            vk::IndexType::eUint32);
-        if (emitter.indirectArgs.buffer)
+        if (mode == ParticleShadowCasterMode::Mesh)
         {
-            commandBuffer.drawIndexedIndirect(
+            const vk::DeviceSize vertexOffset = 0;
+            commandBuffer.bindVertexBuffers(
+                0,
+                1,
+                &emitter.meshVertices.buffer,
+                &vertexOffset);
+            commandBuffer.bindIndexBuffer(
+                emitter.meshIndices.buffer,
+                0,
+                vk::IndexType::eUint32);
+            if (emitter.indirectArgs.buffer)
+            {
+                commandBuffer.drawIndexedIndirect(
+                    emitter.indirectArgs.buffer,
+                    0,
+                    1,
+                    sizeof(vk::DrawIndexedIndirectCommand));
+            }
+            else
+            {
+                commandBuffer.drawIndexed(
+                    emitter.meshIndexCount,
+                    emitter.asset.maxParticles,
+                    0,
+                    0,
+                    0);
+            }
+        }
+        else if (emitter.indirectArgs.buffer)
+        {
+            // billboard 固定 6 顶点/实例，ribbon 为 segments*6；两者都由
+            // 创建期写入的 indirect shape 决定顶点数，GPU finalize 只改
+            // instanceCount。caster 用 aliveIndices，因此这个实例数正好
+            // 对应存活粒子数。
+            commandBuffer.drawIndirect(
                 emitter.indirectArgs.buffer,
                 0,
                 1,
-                sizeof(vk::DrawIndexedIndirectCommand));
+                sizeof(vk::DrawIndirectCommand));
         }
         else
         {
-            commandBuffer.drawIndexed(
-                emitter.meshIndexCount,
+            commandBuffer.draw(
+                emitter.indirectShape.vertexCount,
                 emitter.asset.maxParticles,
-                0,
                 0,
                 0);
         }

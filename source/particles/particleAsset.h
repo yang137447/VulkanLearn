@@ -261,8 +261,9 @@ struct ParticleEmitterAsset
     // 场景第一个方向光的颜色与方向，不读 lux 强度。billboard/ribbon 不受影响。
     bool meshLighting = true;
     float meshAmbient = 0.2f;
-    // mesh 粒子是否作为阴影 caster 写入 CSM 与局部阴影图。只有
-    // renderMode=="mesh" 消费；其它渲染模式忽略该开关。
+    // 粒子是否作为阴影 caster 写入 CSM 与局部阴影图。mesh 写真实三角形，
+    // billboard/ribbon 用固定阈值的 alpha-test 近似可见卡片；beam/light/
+    // decal 忽略该开关。mesh 导入失败回退 billboard 时不投影。
     bool castShadows = false;
 
     // 固定包围球使用发射器局部空间的中心与半尺寸（cm）。启用后替代
