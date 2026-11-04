@@ -1133,6 +1133,20 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     output.resource,
                     CompiledRenderGraphBarrierType::AttachmentToAttachment);
             }
+            else if (pass.type != RenderGraphPassType::AutoExposure &&
+                output.resource != "swapChain" &&
+                output.loadOp == "load" &&
+                previousResourceUses[output.resource] ==
+                    ResourcePreviousUse::None)
+            {
+                // 第一次写入就 LOAD：图像可能从未初始化。显式做
+                // UNDEFINED -> attachment，避免 loadOp=LOAD 与 initialLayout
+                // 不一致，也让后续没有生产者的切片处于合法布局。
+                AddBarrier(
+                    pass,
+                    output.resource,
+                    CompiledRenderGraphBarrierType::UndefinedToAttachment);
+            }
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(output.resource)),
                 pass.name,

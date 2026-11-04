@@ -18,6 +18,8 @@ layout(location = 0) out vec4 outColor;
 // particle pass 只写 sceneColor；sceneDepth 是图输入，不能同时作为附件。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+// 局部光阴影图集：与 billboard/mesh 共用 particle pass 的 binding 2。
+layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
 {
     uint fragments;
@@ -118,6 +120,7 @@ void main()
                 facingNormal);
         }
         outColor.rgb = CalculateParticleBillboardSceneLighting(
+            localShadowMap,
             outColor.rgb,
             vWorldPosition,
             facingNormal,

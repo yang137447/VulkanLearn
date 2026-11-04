@@ -167,6 +167,8 @@ LightSnapshot BuildPointLightSnapshot(
     snapshot.pulseDuration = light.GetPulseDuration();
     snapshot.pulsePhase = light.GetPulsePhase();
     snapshot.pulsePeakIntensity = light.GetPulsePeakIntensity();
+    snapshot.castShadows = light.GetCastShadows();
+    snapshot.shadowBias = light.GetShadowBias();
     return snapshot;
 }
 
@@ -186,6 +188,8 @@ LightSnapshot BuildSpotLightSnapshot(
     snapshot.worldToLight = CommonFunction::RotationToMatrix(light.GetRotation()).block<3, 3>(0, 0).transpose();
     snapshot.coneAngleOuter = light.GetConeAngleOuter();
     snapshot.coneAngleInner = light.GetConeAngleInner();
+    snapshot.castShadows = light.GetCastShadows();
+    snapshot.shadowBias = light.GetShadowBias();
     return snapshot;
 }
 

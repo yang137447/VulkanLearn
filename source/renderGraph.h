@@ -84,6 +84,9 @@ struct Renderpass
     std::string name;
     VL::RenderGraphPassType type = VL::RenderGraphPassType::Unknown;
     uint32_t shadowCascadeIndex = 0;
+    // LocalShadow pass 只写 localShadowMap 的一个数组层；该值同时是
+    // RenderSystem 本帧选灯列表中的 lightIndex。
+    uint32_t localShadowIndex = 0;
     VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
     std::vector<vk::ClearValue> clearValues;
@@ -188,6 +191,9 @@ public:
     // 返回构图阶段已经校验过的第一条 Shadow pass；当前图没有 Shadow pass
     // 时返回 nullptr。调用方不得跨 RenderGraph shutdown/reload 保存该指针。
     Renderpass* FindCanonicalShadowPass();
+    // 返回第一条 LocalShadow pass，作为材质 LocalShadow pipeline 的创建模板；
+    // 当前图没有局部阴影时不返回错误，调用方按“无局部阴影”处理。
+    Renderpass* FindCanonicalLocalShadowPass();
     const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     void InitializeAutoExposure(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
@@ -228,6 +234,7 @@ private:
         const VL::CompiledRenderGraphPass& passDesc,
         VL::RendererBackendVulkan& rendererBackend);
     void ValidateAndResolveCanonicalShadowPass();
+    void ValidateAndResolveCanonicalLocalShadowPass();
     void DestroyRenderpass(
         Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
@@ -267,6 +274,7 @@ private:
     std::vector<std::string> renderpassesOrdered;
     std::unordered_map<std::string, Renderpass> renderpasses;
     std::string canonicalShadowPassName;
+    std::string canonicalLocalShadowPassName;
     VL::CompiledRenderGraph compiledFrameGraph;
     nlohmann::json sourceJson;
     VL::RendererDescriptorPlanCache descriptorPlanCache;

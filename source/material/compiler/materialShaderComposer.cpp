@@ -11,13 +11,16 @@ namespace VL
 namespace
 {
 
-std::string BuildFeatureDefines(const MaterialFeatureKey& features)
+std::string BuildFeatureDefines(
+    const MaterialFeatureKey& features,
+    MaterialPass pass)
 {
     std::ostringstream stream;
     stream << "#define MATERIAL_WRITES_EVERY_PIXEL " << features.writesEveryPixel << "\n"
            << "#define MATERIAL_USES_OPACITY_MASK " << features.usesOpacityMask << "\n"
            << "#define MATERIAL_MODIFIES_MESH_POSITION " << features.modifiesMeshPosition << "\n"
-           << "#define MATERIAL_TWO_SIDED " << features.twoSided << "\n\n";
+           << "#define MATERIAL_TWO_SIDED " << features.twoSided << "\n"
+           << "#define VL_LOCAL_SHADOW " << (pass == MaterialPass::LocalShadow ? 1 : 0) << "\n\n";
     return stream.str();
 }
 
@@ -73,7 +76,7 @@ std::string BuildStageSource(
     {
         stream << "#extension GL_EXT_blend_func_extended : require\n\n";
     }
-    stream << BuildFeatureDefines(request.features);
+    stream << BuildFeatureDefines(request.features, request.pass);
 
     if (vertexStage)
     {
@@ -89,7 +92,9 @@ std::string BuildStageSource(
             ? "engine/passTemplate/base.vert.glsl"
             : "engine/passTemplate/shadowDepth.vert.glsl");
     }
-    else if (request.pass == MaterialPass::Base || request.features.usesOpacityMask)
+    else if (request.pass == MaterialPass::Base ||
+             request.pass == MaterialPass::LocalShadow ||
+             request.features.usesOpacityMask)
     {
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialContext.glsl");
         // 生成参数 include 必须先于 materialSurface；它定义 MATERIAL_SHADING_MODEL，

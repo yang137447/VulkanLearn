@@ -47,6 +47,11 @@ private:
         const RenderGraph& renderGraph,
         const std::string& resourceName,
         uint32_t swapChainImageIndex);
+    static void TransitionUndefinedToAttachment(
+        vk::CommandBuffer& commandBuffer,
+        const RenderGraph& renderGraph,
+        const std::string& resourceName,
+        uint32_t swapChainImageIndex);
     static void TransitionStorage(
         vk::CommandBuffer& commandBuffer, const RenderGraph& renderGraph,
         const std::string& resourceName, uint32_t imageIndex, bool toStorage);

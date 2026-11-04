@@ -342,6 +342,13 @@ private:
         uint32_t passWidth,
         uint32_t passHeight,
         uint32_t cascadeIndex) override;
+    void UpdateLocalShadowUBOForPass(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passWidth,
+        uint32_t passHeight,
+        uint32_t lightIndex,
+        uint32_t octant,
+        uint32_t mode) override;
     void UpdateMaterialInstanceUBOForPass(
         const std::shared_ptr<MaterialInstance>& materialInstance) override;
     void UpdateObjectUBOForPass(
@@ -352,6 +359,8 @@ private:
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
+    bool IsLocalShadowActive(uint32_t localShadowIndex) const override;
+    uint32_t GetLocalShadowMode(uint32_t localShadowIndex) const override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
     void RecordParticlePass(
         vk::CommandBuffer& commandBuffer,
@@ -422,6 +431,9 @@ private:
     };
 
     void BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight);
+    // 每帧在 UploadLightsForPass 之前运行：写回 shadowSlice/shadowFar，
+    // 并把前 kMaxLocalShadowLights 盏灯冻结给 LocalShadow pass 使用。
+    void PrepareLocalShadowLights();
     ShadowProjectionParams CalculateShadowMatrixForCameraRange(
         float splitNear,
         float splitFar,
@@ -471,6 +483,8 @@ private:
     
     VL::CsmSettings csmSettings;
     ShadowCascadeFrameData shadowCascadeFrameData;
+    // 索引即 localShadow pass 的数组层；未激活的层不参与 UBO 上传。
+    std::vector<VL::LightSnapshot> activeLocalShadowLights;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;

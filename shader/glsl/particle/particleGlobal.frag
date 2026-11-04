@@ -26,6 +26,9 @@ layout(location = 0) out vec4 outColor;
 // 全局路径 v1 明确不消费 shadowMap，但仍声明以保持 descriptor layout 兼容。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+// 全局 alpha 池不消费 CSM，但它与逐发射器 billboard 共用 material/descriptor
+// 布局；局部光阴影仍按 set 3 binding 2 声明并参与点光/聚光采样。
+layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
 
 layout(set = 0, binding = 3) uniform sampler2D particleTextures[8];
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
@@ -135,6 +138,7 @@ void main()
         // 全局池当前没有逐发射器 CSM 绑定（v1 明确不消费 shadowMap），
         // 因此这里只做无阴影的完整场景光照；开关关闭时保持 unlit 原输出。
         outColor.rgb = CalculateParticleBillboardSceneLighting(
+            localShadowMap,
             outColor.rgb,
             vWorldPosition,
             vLightingNormal,

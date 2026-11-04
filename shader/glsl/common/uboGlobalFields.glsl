@@ -23,4 +23,10 @@ int environmentType;
 vec4 environmentSH[9];
 #include "skyParametersFields.glsl"
 
+// 局部光阴影：xyz = 灯位置 cm，w = far cm。
+vec4 localShadowLightPos;
+// x = mode（0 = 透视/hardware depth，1 = 八面体），y = 八面体象限 0..7，
+// z = 接收面 bias cm，w 保留。
+vec4 localShadowParams;
+
 #endif

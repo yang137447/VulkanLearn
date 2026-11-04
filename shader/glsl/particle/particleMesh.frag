@@ -14,6 +14,8 @@ layout(location = 0) out vec4 outColor;
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 // CSM shadowMap 是 particle pass 的第二个图输入（binding 1）。
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+// 局部光阴影图集是 particle pass 的第三个图输入（binding 2）。
+layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
 // 与 billboard/ribbon 共用 set 0 binding 2；v1 不采样，只用尺寸门控
 // 让反射出的 stageFlags 保持 Vertex|Fragment，descriptor set 可复用。
 layout(set = 0, binding = 2) uniform sampler2D particleTexture;
@@ -75,6 +77,7 @@ void main()
         // 与主 DefaultLit 路径同公式：全部方向光/点光/聚光 + GPU 粒子灯，
         // CSM 只作用于方向光（当前只烘焙主方向光的级联）。
         ParticleLightingLobes lobes = CalculateParticleMeshSceneLighting(
+            localShadowMap,
             n,
             vWorldPosition,
             frame.cameraPosition.xyz,

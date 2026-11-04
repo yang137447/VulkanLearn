@@ -3,6 +3,9 @@
 
 #include "../common/commonUbo.glsl"
 layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
+// 局部光阴影图集（点光八面体 / 聚光透视）。由 renderGraph 的 deferredLighting
+// input 显式绑定到 binding 15；采样公式见 common/localShadowSampling.glsl。
+layout(set = 3, binding = 15) uniform sampler2DArrayShadow localShadowMap;
 // set 3 的 binding 10..14 现由 decal DBuffer A/B/C/Mask/D 占用。Hair / Eye / Cloth
 // 的旧 LUT 声明已于 2026-09-12 随模型实现清理；重建某个模型时不能再复用这些
 // binding，必须重新分配空闲槽位，并同步 renderGraphConfig 的 pass input 与 pass
@@ -83,13 +86,15 @@ void ResolveDeferredLightingComposition(
 
 DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
     in MaterialSurface surface,
-    in sampler2DArrayShadow inputShadowMap)
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2DArrayShadow inputLocalShadowMap)
 {
     DeferredLightingResult result =
         CreateDefaultDeferredLightingResult();
     vec3 viewDir = normalize(
         uboVP.cameraPosition - surface.worldPosition);
     LightingLobes directLobes = CalculateDirectLightingLobes(
+        inputLocalShadowMap,
         surface.worldNormal,
         surface.worldPosition,
         uboVP.cameraPosition,
@@ -139,7 +144,8 @@ DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
 
 DeferredLightingResult ShadeDeferredSurfaceDetailed(
     in MaterialSurface surface,
-    in sampler2DArrayShadow inputShadowMap)
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2DArrayShadow inputLocalShadowMap)
 {
     switch (surface.shadingModel)
     {
@@ -151,17 +157,20 @@ DeferredLightingResult ShadeDeferredSurfaceDetailed(
         default:
             return ShadeDefaultLitDeferredSurfaceDetailed(
                 surface,
-                inputShadowMap);
+                inputShadowMap,
+                inputLocalShadowMap);
     }
 }
 
 vec3 ShadeDeferredSurface(
     in MaterialSurface surface,
-    in sampler2DArrayShadow inputShadowMap)
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2DArrayShadow inputLocalShadowMap)
 {
     return ShadeDeferredSurfaceDetailed(
         surface,
-        inputShadowMap).finalColor;
+        inputShadowMap,
+        inputLocalShadowMap).finalColor;
 }
 
 #endif

@@ -9,6 +9,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "world/decalResponse.h"
 #include "world/environmentType.h"
+#include "world/localLightShadowSettings.h"
 #include "script/scriptScene.h"
 
 namespace VL
@@ -231,6 +232,12 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "directionalLight" || type == "pointLight" ||
             type == "spotLight" || type == "squareAreaLight") ReadCanonicalLightIntensity(object);
+        if (type == "pointLight" || type == "spotLight")
+        {
+            // 局部阴影只对点光/聚光生效；解析与 WorldBuilder 共用同一份
+            // 字段规则，避免校验通过后加载期再静默降级。
+            (void)ReadLocalLightShadowSettings(object, type + "|" + name);
+        }
         if (type == "camera")
         {
             hasCamera = true;

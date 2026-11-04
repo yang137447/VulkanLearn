@@ -143,11 +143,39 @@ host every frame after the image fence and before simulation; `particleLightEmit
 writes `atomicMax(header.count, slot + 1)` and unique per-particle slots.
 Deferred and forward lighting read the same buffer through set 0 binding 4 and
 merge it into the existing point-light loop; there is no second copy in
-`RenderScene::lights`. Limits: no per-light shadows, no light textures; the
+`RenderScene::lights`. GPU particle lights do not cast shadows; scene point/spot
+lights can (see Local Light Shadows). Limits: no light textures; the
 offline particle compositor still skips light
 emitters. Editor particle thumbnails use the same GPU path when their session
 sets the light buffer. See [particle system](particle-system.md) §Light for the
 full authoring and shape contract.
+
+## Local Light Shadows
+
+Scene `pointLight` and `spotLight` objects may declare
+`"shadow": { "castShadows": true, "bias": 2.0 }` (`bias` is centimeters and
+optional; the default is 2 cm, and `castShadows` defaults to false). Up to four
+shadow-casting local lights are selected per frame by a stable importance key
+(camera distance, radius, intensity, then `lightId`). Each selected light owns
+one slice of `localShadowMap`, a `D32_SFLOAT` `texture2DArray` with 1024²
+slices, so point and spot lights share one atlas type:
+
+- Spot: a standard perspective view-projection from the light position,
+  direction, outer cone angle (`fov = 2 * coneOuter`), near 1 cm and far = the
+  light radius. The shader reconstructs the same matrices from the GPU light
+  record and samples with 3×3 PCF.
+- Point: one octahedral slice. Rendering uses eight quadrant passes with
+  per-octant world-space projection matrices; the fragment shader rejects
+  fragments outside the current octant and writes
+  `gl_FragDepth = distance / far`. Sampling encodes the pixel-to-light
+  direction with the standard octahedral map and folds PCF taps back across the
+  diamond/square seams.
+
+The shader uses set 3 bindings owned by the consuming pass: deferred lighting
+binding 15, forward opaque/transparent binding 6, particle binding 2. CSM stays
+on its existing `shadowMap` array; a point/spot light without an assigned slice
+reports full visibility. GPU particle lights never allocate a local shadow
+slice.
 
 ## Camera Exposure
 

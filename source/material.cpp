@@ -147,6 +147,14 @@ void Material::SetShadowPipeline(
     pipelineReloadRecipe.shadow = reloadRecipe;
 }
 
+void Material::SetLocalShadowPipeline(
+    std::shared_ptr<PipelineBase> pipeline,
+    const GraphicsShaderVariantArtifact& shaderArtifact)
+{
+    localShadowPipeline = std::move(pipeline);
+    localShadowShaderArtifact = shaderArtifact;
+}
+
 std::vector<ShaderBinding> Material::BuildActiveShaderBindings(
     const std::vector<ShaderBinding>& surfaceBindings,
     const std::vector<ShaderBinding>* shadowBindings)

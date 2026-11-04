@@ -1287,8 +1287,9 @@ color    = direct + ambient + emissive * emissiveStrength
   `N` 是实例旋转后的世界空间法线，`V` 是相机方向，`H` 是半程向量。
 - `materialInstancePath` 提供 `baseColor/roughness/metallic/emissive` 数值子集；
   没有 MI 时 `baseColor` 来自粒子颜色曲线，`roughness` 默认 `0.5`、`metallic` 默认 `0`。
-- `shadow` 只作用于方向光，来自 CSM `SampleParticleCsmShadow`；点光/聚光/粒子灯当前
-  没有局部阴影。`diffuseIbl` 用预过滤 cubemap 的最高 mip 近似 irradiance，
+- 方向光的 `shadow` 来自 CSM `SampleParticleCsmShadow`；场景点光/聚光可各自开启
+  `shadow.castShadows` 并采样局部阴影图集，GPU 粒子灯不投影。`diffuseIbl` 用预过滤
+  cubemap 的最高 mip 近似 irradiance，
   `specularIbl` 用预过滤 cubemap + BRDF LUT；`meshAmbient` 默认 `0.2` 同时缩放常量
   ambient 与 IBL。
 - 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图或
@@ -1313,7 +1314,8 @@ color   = mix(baseColor, direct + ambient, billboardLightingStrength)
 - `billboardRight` / `billboardUp` 是实际 quad 基。camera alignment 时面法线朝向相机，
   velocity alignment 时面法线朝向速度；不再一律使用相机中心方向。
 - `radiance` 对方向光/点光/聚光/粒子灯分别使用各自的光色、强度与半径窗；`lightShadow`
-  只在 `billboardShadows: true` 时来自方向光 CSM，局部灯没有阴影。
+  只在 `billboardShadows: true` 时来自方向光 CSM；场景点光/聚光可开启
+  `shadow.castShadows` 并通过局部阴影图集参与（粒子灯不投影）。
 - `billboardLightingStrength` 是 unlit 作者颜色与场景光照之间的插值比例；0 完全保留
   authored 颜色，1 完全使用光照，避免纯乘法在暗场景掉亮度、在强光附近过曝。
 - 全局 alpha 排序仍排除 `billboardShadows=true` 的发射器，因此 CSM 路径始终
@@ -1322,7 +1324,7 @@ color   = mix(baseColor, direct + ambient, billboardLightingStrength)
   `GatheredBillboard` 的 std430 stride 从 8 个 `vec4` 变为 11 个。gather、sort-init、
   global vertex/fragment 四处结构体必须同步。
 - 该照明已覆盖全部场景灯与 GPU 粒子灯并接入 IBL，但 sprite 只做 wrapped Lambert
-  （没有镜面 lobe），仍不提供法线贴图或完整 Material Graph；局部灯没有阴影。
+  （没有镜面 lobe），仍不提供法线贴图或完整 Material Graph；GPU 粒子灯不投影。
 
 ### Curves 结构化编辑
 
@@ -1627,7 +1629,8 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   可见 draw call，也不参与排序/indirect。
 - 粒子场景光照：billboard/ribbon 在 `billboardLighting` 开关下接收全部方向光/点光/聚光
   + GPU 粒子灯 + IBL，mesh 在 `meshLighting` 下走完整 DefaultLit。仍有的边界：sprite 只做
-  wrapped Lambert、无镜面 lobe；点光/聚光/粒子灯没有局部阴影（CSM 只作用于方向光）；
+  wrapped Lambert、无镜面 lobe；场景点光/聚光可开启局部阴影（八面体点光 +
+  透视聚光图集），GPU 粒子灯不投影；CSM 只作用于方向光；
   IBL 漫反射用预过滤 cubemap 的最高 mip 近似 irradiance，因为粒子 UBO 不携带 GPU 写的
   SH 系数；没有 UE 的 Translucency Volume 模式。
 - decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU

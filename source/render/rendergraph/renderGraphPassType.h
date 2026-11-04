@@ -34,7 +34,10 @@ enum class RenderGraphPassType
     // 屏幕空间折射/热扰动：粒子 emitter 只写 UV 偏移缓冲，不碰 sceneColor；
     // toneMapping 在最终合成时采样该缓冲并偏移场景颜色。独立 pass 让粒子
     // 与场景颜色之间没有读写反馈环。
-    Distortion
+    Distortion,
+    // 局部光阴影：每个 pass 负责 localShadowMap 的一个数组层。点光在一个
+    // pass 内按八象限多次 begin/end 投影，聚光一次透视绘制。
+    LocalShadow
 };
 
 struct RenderGraphPassTypeName
@@ -43,10 +46,11 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十一个：编辑器网格、自动曝光、Decal、DecalStencil、粒子与屏幕空间扰动各自追加，
+// 十二个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动与
+// 局部光阴影各自追加，
 // 合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 11>
+inline constexpr std::array<RenderGraphPassTypeName, 12>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -58,7 +62,8 @@ inline constexpr std::array<RenderGraphPassTypeName, 11>
         {RenderGraphPassType::Decal, "decal"},
         {RenderGraphPassType::DecalStencil, "decalStencil"},
         {RenderGraphPassType::Particle, "particle"},
-        {RenderGraphPassType::Distortion, "distortion"}
+        {RenderGraphPassType::Distortion, "distortion"},
+        {RenderGraphPassType::LocalShadow, "localShadow"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

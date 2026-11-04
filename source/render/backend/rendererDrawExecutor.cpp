@@ -285,6 +285,115 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
     DrawSurfaceScene("Geometry", SurfaceDrawDomain::Geometry, context);
 }
 
+void RendererDrawExecutor::DrawLocalShadowScene(
+    const PipelineBase& commonLocalShadowPipeline,
+    RendererDrawContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    vk::Pipeline boundPipeline;
+
+    for (const ResolvedMaterialGroup& materialGroup :
+         context.resolvedRenderScene.materialGroups)
+    {
+        if (materialGroup.shadowCaster.kind ==
+            MaterialShadowCasterKind::None)
+        {
+            continue;
+        }
+
+        // LocalShadow 与 CSM 共用 ShadowCaster 路由，但材质侧只接受显式
+        // LocalShadow pipeline；没有专用管线的 WPO/alpha override 回退公共
+        // 管线，至少保留几何投影而不是直接丢 draw。
+        const bool usesMaterialLocalShadowPass =
+            materialGroup.shadowCaster.kind ==
+                MaterialShadowCasterKind::MaterialPass &&
+            materialGroup.material->GetLocalShadowPipeline() != nullptr;
+        const PipelineBase* localShadowPipeline =
+            usesMaterialLocalShadowPass
+            ? materialGroup.material->GetLocalShadowPipeline().get()
+            : &commonLocalShadowPipeline;
+
+        const std::string pipelineRegionName =
+            "LocalShadow Pipeline: " +
+            materialGroup.material->GetMaterialKey();
+        VulkanDebug::ScopedRegion pipelineRegion(
+            commandBuffer,
+            pipelineRegionName,
+            VulkanDebug::DebugCategory::ePipeline);
+        if (boundPipeline != localShadowPipeline->GetPipeline())
+        {
+            commandBuffer.bindPipeline(
+                localShadowPipeline->GetBindPoint(),
+                localShadowPipeline->GetPipeline());
+            boundPipeline = localShadowPipeline->GetPipeline();
+        }
+
+        for (const ResolvedMaterialInstanceGroup& materialInstanceGroup :
+             materialGroup.materialInstances)
+        {
+            if (usesMaterialLocalShadowPass)
+            {
+                context.services.UpdateMaterialInstanceUBOForPass(
+                    materialInstanceGroup.materialInstance);
+            }
+
+            for (const ResolvedDrawPacket& draw :
+                 materialInstanceGroup.draws)
+            {
+                ResolvedDrawResources drawResources =
+                    RequireResolvedDrawResources(
+                        "LocalShadow",
+                        draw,
+                        context.renderScene);
+                RendererObjectGpuResources& objectResources =
+                    *drawResources.objectResources;
+                const RenderDrawPacket& drawPacket =
+                    *drawResources.drawPacket;
+                VulkanDebug::ScopedRegion region(
+                    commandBuffer,
+                    drawPacket.debugName,
+                    VulkanDebug::DebugCategory::eObject);
+
+                if (usesMaterialLocalShadowPass)
+                {
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        objectResources.descriptorSets[
+                            context.swapChainImageIndex],
+                        nullptr);
+                }
+                else
+                {
+                    const auto& descriptorSets =
+                        objectResources.shadowDescriptorSets[
+                            context.swapChainImageIndex];
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        renderPass.GetDescriptorSets()[
+                            context.swapChainImageIndex][GlobalSetIndex],
+                        nullptr);
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        ObjectSetIndex,
+                        descriptorSets[ObjectSetIndex],
+                        nullptr);
+                }
+
+                context.services.UpdateObjectUBOForPass(
+                    objectResources,
+                    drawPacket);
+                drawResources.renderableObject->Draw(commandBuffer);
+            }
+        }
+    }
+}
+
 void RendererDrawExecutor::DrawForwardOpaqueScene(
     RendererDrawContext& context) const
 {

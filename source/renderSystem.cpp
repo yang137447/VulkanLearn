@@ -29,6 +29,7 @@
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "render/shadow/localShadowMath.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
@@ -2446,6 +2447,139 @@ bool RenderSystem::IsShadowCascadeActive(
         cascadeIndex < csmSettings.cascadeCount;
 }
 
+void RenderSystem::PrepareLocalShadowLights()
+{
+    activeLocalShadowLights.clear();
+    for (VL::LightSnapshot& light : currentRenderScene.lights)
+    {
+        light.shadowSlice = VL::kInvalidLocalShadowSlice;
+    }
+
+    const std::vector<size_t> ranked =
+        VL::RankLocalShadowLights(
+            currentRenderScene.lights,
+            currentRenderScene.camera.position,
+            VL::kMaxLocalShadowLights);
+    activeLocalShadowLights.reserve(ranked.size());
+    for (size_t slice = 0; slice < ranked.size(); ++slice)
+    {
+        VL::LightSnapshot& light =
+            currentRenderScene.lights[ranked[slice]];
+        light.shadowSlice = static_cast<uint32_t>(slice);
+        light.shadowFar =
+            VL::ComputeLocalShadowFar(light.radius);
+        light.shadowBias =
+            std::max(0.0f, light.shadowBias);
+        activeLocalShadowLights.push_back(light);
+    }
+}
+
+bool RenderSystem::IsLocalShadowActive(
+    uint32_t localShadowIndex) const
+{
+    return localShadowIndex < activeLocalShadowLights.size() &&
+        activeLocalShadowLights[localShadowIndex].castShadows;
+}
+
+uint32_t RenderSystem::GetLocalShadowMode(
+    uint32_t localShadowIndex) const
+{
+    if (localShadowIndex >= activeLocalShadowLights.size())
+    {
+        return 0;
+    }
+    return activeLocalShadowLights[localShadowIndex].type ==
+        VL::LightSnapshotType::Point ? 1u : 0u;
+}
+
+void RenderSystem::UpdateLocalShadowUBOForPass(
+    vk::CommandBuffer& commandBuffer,
+    uint32_t passWidth,
+    uint32_t passHeight,
+    uint32_t lightIndex,
+    uint32_t octant,
+    uint32_t mode)
+{
+    PROFILE_FUNCTION();
+    (void)passWidth;
+    (void)passHeight;
+    if (lightIndex >= activeLocalShadowLights.size())
+    {
+        throw std::runtime_error(
+            "LocalShadow pass requested an inactive light index");
+    }
+
+    const VL::LightSnapshot& light =
+        activeLocalShadowLights[lightIndex];
+    const float farCm =
+        VL::ComputeLocalShadowFar(light.radius);
+
+    UBOGlobal ubo;
+    if (mode == 1)
+    {
+        // 八面体象限：view 固定为单位阵，投影矩阵直接输出世界点相对灯位置
+        // 的折叠坐标；depth 由片元 shader 的方向长度写入，因此逆矩阵不参与
+        // 任何计算，显式置单位阵避免奇异投影产生 NaN。
+        ubo.view = Eigen::Matrix4f::Identity();
+        ubo.projection =
+            VL::BuildOctahedralProjectionMatrix(
+                light.position,
+                octant);
+        ubo.invView = Eigen::Matrix4f::Identity();
+        ubo.invProjection = Eigen::Matrix4f::Identity();
+        ubo.invViewProjection = Eigen::Matrix4f::Identity();
+        ubo.cameraPosition = light.position;
+    }
+    else
+    {
+        const VL::LocalShadowSpotMatrices matrices =
+            VL::BuildSpotShadowMatrices(
+                light.position,
+                light.direction,
+                light.coneAngleOuter,
+                1.0f,
+                farCm);
+        ubo.view = matrices.view;
+        ubo.projection = matrices.projection;
+        ubo.invView = ubo.view.inverse();
+        ubo.invProjection = ubo.projection.inverse();
+        ubo.viewProjection = ubo.projection * ubo.view;
+        ubo.invViewProjection = ubo.viewProjection.inverse();
+        Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
+        Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
+        ubo.cameraPosition = -(rotT.transpose() * trans);
+    }
+
+    if (mode == 1)
+    {
+        ubo.viewProjection = ubo.projection * ubo.view;
+        ubo.invViewProjection = Eigen::Matrix4f::Identity();
+    }
+    ubo.previousViewProjection = ubo.viewProjection;
+    ubo.debugViewMode = currentRenderScene.debugViewMode;
+    ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    ubo.environmentType =
+        currentRenderScene.environment.type ==
+            VL::EnvironmentType::ProceduralSky ? 1 : 0;
+    ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    // xyz = 灯位置，w = far；shader 用 length(worldPos - xyz) / w。
+    ubo.localShadowLightPos = Eigen::Vector4f(
+        light.position.x(),
+        light.position.y(),
+        light.position.z(),
+        farCm);
+    // x = 0 透视 / 1 八面体，y = 象限，z = 接收面 bias cm。
+    ubo.localShadowParams = Eigen::Vector4f(
+        static_cast<float>(mode),
+        static_cast<float>(octant),
+        std::max(0.0f, light.shadowBias),
+        0.0f);
+    frameResources.UpdateGlobalUniformBuffer(
+        commandBuffer,
+        swapChainImageIndex,
+        ubo);
+}
+
 void RenderSystem::DrawEditorGridGeometry(
     vk::CommandBuffer& commandBuffer)
 {
@@ -3472,6 +3606,9 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         else
         {
         AdvanceSpeedTreeWindProfiles();
+        // shadowSlice/shadowFar 必须在 geometry/forward 的 UploadLightsForPass
+        // 之前写回冻结快照；LocalShadow pass 也消费同一份选灯结果。
+        PrepareLocalShadowLights();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
         UpdateUBOGlobal(commandBuffer);

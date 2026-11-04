@@ -20,6 +20,7 @@
 #include "render/frontend/renderScene.h"
 #include "render/lighting/physicalLighting.h"
 #include "render/lighting/lightPulse.h"
+#include "render/shadow/localShadowMath.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "particles/particleLightGpu.h"
 #include "shaderReflect.h"
@@ -169,6 +170,18 @@ LightGPU BuildLightGPU(const LightSnapshot& light)
         light.coneAngleInner,
         0.0f,
         0.0f);
+    const bool shadowSelected =
+        light.castShadows &&
+        light.shadowSlice < kMaxLocalShadowLights;
+    gpuLight.shadowParams = Eigen::Vector4f(
+        shadowSelected
+            ? static_cast<float>(light.shadowSlice)
+            : -1.0f,
+        light.type == LightSnapshotType::Spot
+            ? 1.0f
+            : (light.type == LightSnapshotType::Point ? 2.0f : 0.0f),
+        light.shadowFar,
+        light.shadowBias);
     return gpuLight;
 }
 

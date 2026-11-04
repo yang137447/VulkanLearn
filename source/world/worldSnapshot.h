@@ -99,6 +99,12 @@ struct LightSnapshot
     float pulseDuration = 0.0f;
     float pulsePhase = 0.0f;
     float pulsePeakIntensity = 0.0f;
+    // 局部光阴影：castShadows 由场景作者开启；shadowSlice/shadowFar 是
+    // RenderSystem 每帧按重要性分配的运行时值，不写回 World。
+    bool castShadows = false;
+    uint32_t shadowSlice = 0;
+    float shadowFar = 0.0f;
+    float shadowBias = 2.0f;
 };
 
 struct EnvironmentSnapshot

@@ -4,6 +4,9 @@
 #include "defines.glsl"
 #include "microfacetDistribution.glsl"
 #include "shadowFiltering.glsl"
+// 局部光阴影（八面体点光 / 透视聚光）。这里只引入纯函数；sampler 由各 pass
+// shader 按自己的 set 3 布局声明后作为参数传入。
+#include "localShadowSampling.glsl"
 
 struct Light{
     // CPU 上传时已将点光/聚光强度乘 100^2；方向光仍为 lux。
@@ -11,6 +14,9 @@ struct Light{
     vec4 positionRadius;
     vec4 directionPad;
     vec4 coneAngleOuterInnerPadPad;
+    // x = 局部阴影 slice（<0 无），y = 1 聚光 / 2 八面体点光，
+    // z = far cm，w = bias cm。
+    vec4 shadowParams;
 };
 // 这里用统一参数 + 分段储存的方式
 layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
@@ -875,6 +881,7 @@ float EvaluateLocalLightRadiusWindow(
 }
 
 LightingLobes CalculatePointLightLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -894,6 +901,14 @@ LightingLobes CalculatePointLightLobes(
         attenuation *
         pointLight.colorIntensity.w *
         pointLight.colorIntensity.xyz;
+    // 局部阴影只影响这一盏灯的 radiance；方向光仍由 CSM 单独处理。
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        pointLight.shadowParams,
+        pointLight.positionRadius.xyz,
+        pointLight.directionPad.xyz,
+        pointLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
@@ -909,6 +924,7 @@ LightingLobes CalculatePointLightLobes(
 // GPU 粒子灯复用点光公式，不进入 CPU 的 RenderScene::lights 列表。
 // count 是 high-water mark，空槽由零强度跳过，因此允许粒子死亡/截断留下空洞。
 LightingLobes CalculateParticleLightLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -931,7 +947,10 @@ LightingLobes CalculateParticleLightLobes(
         pointLight.positionRadius = source.positionRadius;
         pointLight.directionPad = vec4(0.0);
         pointLight.coneAngleOuterInnerPadPad = vec4(0.0);
+        // GPU 粒子灯不参与局部阴影（预算与收益都不划算）。
+        pointLight.shadowParams = vec4(-1.0);
         LightingLobes lobes = CalculatePointLightLobes(
+            localShadowMap,
             normal_WS,
             pixelPos_WS,
             cameraPos_WS,
@@ -947,6 +966,7 @@ LightingLobes CalculateParticleLightLobes(
 }
 
 vec3 CalculateClearCoatPointLight(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -967,6 +987,13 @@ vec3 CalculateClearCoatPointLight(
         attenuation *
         pointLight.colorIntensity.w *
         pointLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        pointLight.shadowParams,
+        pointLight.positionRadius.xyz,
+        pointLight.directionPad.xyz,
+        pointLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -982,6 +1009,7 @@ vec3 CalculateClearCoatPointLight(
 }
 
 vec3 CalculateClearCoatSpotLight(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -1010,6 +1038,13 @@ vec3 CalculateClearCoatSpotLight(
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        spotLight.shadowParams,
+        spotLight.positionRadius.xyz,
+        spotLight.directionPad.xyz,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -1025,6 +1060,7 @@ vec3 CalculateClearCoatSpotLight(
 }
 
 LightingLobes CalculateSpotLightLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -1051,6 +1087,13 @@ LightingLobes CalculateSpotLightLobes(
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        spotLight.shadowParams,
+        spotLight.positionRadius.xyz,
+        spotLight.directionPad.xyz,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
@@ -1064,6 +1107,7 @@ LightingLobes CalculateSpotLightLobes(
 }
 
 LightingLobes CalculateDirectLightingLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -1098,6 +1142,7 @@ LightingLobes CalculateDirectLightingLobes(
     {
         LightingLobes lightLobes =
             CalculatePointLightLobes(
+                localShadowMap,
                 normal_WS,
                 pixelPos_WS,
                 cameraPos_WS,
@@ -1116,6 +1161,7 @@ LightingLobes CalculateDirectLightingLobes(
     {
         LightingLobes lightLobes =
             CalculateSpotLightLobes(
+                localShadowMap,
                 normal_WS,
                 pixelPos_WS,
                 cameraPos_WS,
@@ -1128,6 +1174,7 @@ LightingLobes CalculateDirectLightingLobes(
         lighting.specular += lightLobes.specular;
     }
     LightingLobes particleLobes = CalculateParticleLightLobes(
+        localShadowMap,
         normal_WS,
         pixelPos_WS,
         cameraPos_WS,
@@ -1141,6 +1188,7 @@ LightingLobes CalculateDirectLightingLobes(
 }
 
 vec3 CalculateDirectLighting(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -1152,6 +1200,7 @@ vec3 CalculateDirectLighting(
 {
     // 直接光总入口：只聚合显式光源，不承担任何 IBL 或其他间接光职责。
     LightingLobes lobes = CalculateDirectLightingLobes(
+        localShadowMap,
         normal_WS,
         pixelPos_WS,
         cameraPos_WS,
@@ -1163,6 +1212,7 @@ vec3 CalculateDirectLighting(
 }
 
 vec3 CalculateClearCoatDirectLighting(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -1196,6 +1246,7 @@ vec3 CalculateClearCoatDirectLighting(
     for (int i = offset; i < end; ++i)
     {
         lighting += CalculateClearCoatPointLight(
+            localShadowMap,
             topNormal_WS,
             bottomNormal_WS,
             pixelPos_WS,
@@ -1213,6 +1264,7 @@ vec3 CalculateClearCoatDirectLighting(
     for (int i = offset; i < end; ++i)
     {
         lighting += CalculateClearCoatSpotLight(
+            localShadowMap,
             topNormal_WS,
             bottomNormal_WS,
             pixelPos_WS,

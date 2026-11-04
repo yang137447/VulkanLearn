@@ -6,6 +6,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
+#include "world/localLightShadowSettings.h"
 #include "render/lighting/physicalLighting.h"
 
 namespace VL
@@ -95,12 +96,16 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = ReadCanonicalLightIntensity(node);
     const float radius = node.value("radius", 0.0f);
+    const LocalLightShadowSettings shadow =
+        ReadLocalLightShadowSettings(node, "pointLight|" + name);
 
     std::shared_ptr<PointLight> light = std::make_shared<PointLight>();
     light->SetName(name);
     light->SetColor(color);
     light->SetIntensity(intensity);
     light->SetRadius(radius);
+    light->SetCastShadows(shadow.castShadows);
+    light->SetShadowBias(shadow.bias);
     light->SetPosition(position);
     light->SetRotation(rotation);
     if (node.contains("pulse"))
@@ -130,6 +135,8 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
         JsonParser::ParseValue<float>(node["cone_angle_outer"]) * M_PI / 180.0f;
     const float coneAngleInner =
         JsonParser::ParseValue<float>(node["cone_angle_inner"]) * M_PI / 180.0f;
+    const LocalLightShadowSettings shadow =
+        ReadLocalLightShadowSettings(node, "spotLight|" + name);
 
     std::shared_ptr<SpotLight> light = std::make_shared<SpotLight>();
     light->SetName(name);
@@ -140,6 +147,8 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     light->SetRotation(rotation);
     light->SetConeAngleOuter(coneAngleOuter);
     light->SetConeAngleInner(coneAngleInner);
+    light->SetCastShadows(shadow.castShadows);
+    light->SetShadowBias(shadow.bias);
     return light;
 }
 

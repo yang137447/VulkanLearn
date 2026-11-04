@@ -26,6 +26,9 @@ enum class CompiledRenderGraphBarrierType
     // 同一 color attachment 被两个 pass 连续 LOAD/WRITE；需要 WAW + RAW
     // 可见性，layout 本身保持 ColorAttachmentOptimal。
     AttachmentToAttachment,
+    // 资源第一次写入但 loadOp=LOAD；必须先从不存在的布局显式转入
+    // depth/color attachment，否则 render pass 的 initialLayout 与真实布局不符。
+    UndefinedToAttachment,
     ShaderReadToStorage,
     StorageToShaderRead
 };

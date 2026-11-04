@@ -99,6 +99,95 @@ void ValidateInheritedEngineBindings(
     }
 }
 
+// LocalShadow 的 Set 0/2 只校验 Vulkan 管线兼容性（set/binding/type/count/
+// stage），不比较 UBO 反射成员表。原因：片段新增 localShadowLightPos/Params
+// 的使用后，SPIR-V 反射会保留这两个成员；Surface shader 未使用它们时反射
+// 成员表更短，但两者绑定的是同一份引擎 UBO，管线布局完全兼容。
+void ValidateLocalShadowEngineBindings(
+    const std::string& materialName,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings)
+{
+    for (const ShaderBinding& localShadowBinding : localShadowBindings)
+    {
+        if (localShadowBinding.set >= PassSetIndex)
+        {
+            throw std::runtime_error(
+                "Material LocalShadow cannot use Set 3 or higher: " +
+                materialName);
+        }
+        if (localShadowBinding.set == MaterialSetIndex)
+        {
+            continue;
+        }
+
+        const ShaderBinding* surfaceBinding = FindBinding(
+            surfaceBindings,
+            localShadowBinding.set,
+            localShadowBinding.binding);
+        const bool pipelineLayoutMatches = surfaceBinding != nullptr &&
+            surfaceBinding->type == localShadowBinding.type &&
+            surfaceBinding->descriptorCount ==
+                localShadowBinding.descriptorCount &&
+            surfaceBinding->name == localShadowBinding.name;
+        if (!pipelineLayoutMatches)
+        {
+            throw std::runtime_error(
+                "Material LocalShadow binding is incompatible with the "
+                "Surface descriptor contract: " + materialName +
+                " Set " + std::to_string(localShadowBinding.set) +
+                " Binding " + std::to_string(localShadowBinding.binding));
+        }
+    }
+}
+
+// LocalShadow fragment 需要读 UBOGlobal 的 localShadow 字段，而 Surface
+// fragment 可能完全没用到 Set 0；这里把 LocalShadow 反射到的 Set 0/2 绑定
+// 并入 layout，并合并 stageFlags。描述符集本身仍由 Surface layout 分配，
+// 两者 binding/type/count/name 相同，因此可以直接复用同一批 MI descriptor。
+void MergeLocalShadowEngineBindings(
+    GraphicsPipelineLayoutDesc& layout,
+    const std::vector<ShaderBinding>& localShadowBindings,
+    const std::string& materialName)
+{
+    for (const ShaderBinding& localShadowBinding : localShadowBindings)
+    {
+        if (localShadowBinding.set == MaterialSetIndex)
+        {
+            continue;
+        }
+        std::vector<ShaderBinding>& engineBindings =
+            layout.setBindings[localShadowBinding.set];
+        bool merged = false;
+        for (ShaderBinding& binding : engineBindings)
+        {
+            if (binding.binding != localShadowBinding.binding)
+            {
+                continue;
+            }
+            if (binding.type != localShadowBinding.type ||
+                binding.descriptorCount !=
+                    localShadowBinding.descriptorCount ||
+                binding.name != localShadowBinding.name)
+            {
+                throw std::runtime_error(
+                    "Material LocalShadow binding layout conflict: " +
+                    materialName + " Set " +
+                    std::to_string(localShadowBinding.set) +
+                    " Binding " +
+                    std::to_string(localShadowBinding.binding));
+            }
+            binding.stageFlags |= localShadowBinding.stageFlags;
+            merged = true;
+            break;
+        }
+        if (!merged)
+        {
+            engineBindings.push_back(localShadowBinding);
+        }
+    }
+}
+
 // Shadow pipeline 的 Set 0/2 繼承 Base engine contract，Set 1 始終使用
 // 完整材質 schema，從而可直接綁定 MI 已建立的 descriptor set。
 GraphicsPipelineLayoutDesc BuildInheritedMaterialLayout(
@@ -114,7 +203,12 @@ GraphicsPipelineLayoutDesc BuildInheritedMaterialLayout(
     {
         if (binding.set == GlobalSetIndex || binding.set == ObjectSetIndex)
         {
-            layoutDesc.setBindings[binding.set].push_back(binding);
+            ShaderBinding engineBinding = binding;
+            engineBinding.stageFlags |=
+                vk::ShaderStageFlagBits::eVertex |
+                vk::ShaderStageFlagBits::eFragment;
+            layoutDesc.setBindings[binding.set].push_back(
+                std::move(engineBinding));
         }
     }
     layoutDesc.setBindings[MaterialSetIndex] =
@@ -262,6 +356,121 @@ MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     return result;
 }
 
+MaterialShadowPipelineBuildResult BuildMaterialLocalShadowPipeline(
+    PipelineFactory& pipelineFactory,
+    Renderpass* canonicalLocalShadowPass,
+    const MaterialInstanceBuildPlan& loadPlan,
+    const Material& material,
+    PipelineFactory::GraphicsCandidateState* candidateState)
+{
+    if (canonicalLocalShadowPass == nullptr)
+    {
+        return {};
+    }
+
+    // 只有两类材质需要专属 LocalShadow 管线：
+    // 1) 普通世界材质已经有 ShadowCaster 管线（alpha/WPO/two-sided）；
+    // 2) LocalShadow pass 自己的公共材质（M_shadow → shaderName "shadow"）。
+    const bool isShadowPassMaterial =
+        loadPlan.shaderVariantKey.shaderName == "shadow";
+    if (!isShadowPassMaterial && material.GetShadowPipeline() == nullptr)
+    {
+        return {};
+    }
+
+    const GraphicsShaderVariantArtifact* localShadowShaderArtifact = nullptr;
+    std::optional<MaterialShaderCompileRequest> composedRequest;
+    if (loadPlan.baseShaderCompileRequest)
+    {
+        composedRequest = *loadPlan.baseShaderCompileRequest;
+        composedRequest->pass = MaterialPass::LocalShadow;
+        localShadowShaderArtifact = candidateState != nullptr
+            ? &pipelineFactory.PrepareMaterialShaderVariantCandidate(
+                *candidateState,
+                *composedRequest)
+            : &pipelineFactory.PrepareMaterialShaderVariant(
+                *composedRequest);
+    }
+    else if (isShadowPassMaterial)
+    {
+        // 公共 pass 材质没有 shaderEvaluation，直接编译完整 shadowLocal 变体。
+        // 它只声明 Set 0/2，不依赖材质参数。
+        ShaderVariantKey localShadowVariant = loadPlan.shaderVariantKey;
+        localShadowVariant.shaderName = "shadowLocal";
+        localShadowShaderArtifact = candidateState != nullptr
+            ? &pipelineFactory.PrepareGraphicsShaderVariantCandidate(
+                *candidateState,
+                localShadowVariant)
+            : &pipelineFactory.PrepareGraphicsShaderVariant(
+                localShadowVariant);
+    }
+    else
+    {
+        // 显式 `.shadow` override 是作者自定义投影 shader，不能假设它也写
+        // LocalShadow 深度；退回公共管线并由 draw executor 保持几何投影。
+        return {};
+    }
+
+    const std::vector<ShaderBinding>& surfaceBindings =
+        material.GetRenderPipeline()->GetShaderBindings();
+    material.GetMaterialDescriptorSchema().ValidateShaderBindings(
+        localShadowShaderArtifact->shaderBindings,
+        loadPlan.materialKey);
+    ValidateLocalShadowEngineBindings(
+        loadPlan.materialKey,
+        surfaceBindings,
+        localShadowShaderArtifact->shaderBindings);
+
+    GraphicsPipelineLayoutDesc localShadowLayout =
+        BuildInheritedMaterialLayout(material, surfaceBindings);
+    MergeLocalShadowEngineBindings(
+        localShadowLayout,
+        localShadowShaderArtifact->shaderBindings,
+        loadPlan.materialKey);
+    MaterialShadowPipelineBuildResult result;
+    result.pipeline = candidateState != nullptr
+        ? pipelineFactory.CreateGraphicsPipelineCandidate(
+            *candidateState,
+            &canonicalLocalShadowPass->renderPass,
+            canonicalLocalShadowPass->pipelineContractKey,
+            *localShadowShaderArtifact,
+            loadPlan.cullMode,
+            GraphicsPipelineBlendMode::Opaque,
+            localShadowLayout)
+        : pipelineFactory.CreateGraphicsPipeline(
+            &canonicalLocalShadowPass->renderPass,
+            canonicalLocalShadowPass->pipelineContractKey,
+            *localShadowShaderArtifact,
+            loadPlan.cullMode,
+            GraphicsPipelineBlendMode::Opaque,
+            localShadowLayout);
+    result.shaderArtifact = *localShadowShaderArtifact;
+    result.reloadRecipe.passName = canonicalLocalShadowPass->name;
+    result.reloadRecipe.passPipelineContractKey =
+        canonicalLocalShadowPass->pipelineContractKey;
+    result.reloadRecipe.shader.shaderVariantKey =
+        loadPlan.shaderVariantKey;
+    result.reloadRecipe.shader.kind =
+        composedRequest.has_value()
+        ? GraphicsShaderReloadRecipeKind::MaterialComposed
+        : GraphicsShaderReloadRecipeKind::StandaloneVariant;
+    if (composedRequest.has_value())
+    {
+        result.reloadRecipe.shader.materialCompileRequest =
+            std::move(composedRequest);
+    }
+    else
+    {
+        result.reloadRecipe.shader.shaderVariantKey.shaderName =
+            "shadowLocal";
+    }
+    result.reloadRecipe.cullMode = loadPlan.cullMode;
+    result.reloadRecipe.blendMode = GraphicsPipelineBlendMode::Opaque;
+    result.reloadRecipe.layoutKind =
+        MaterialPipelineLayoutRecipeKind::ShadowInheritedSurface;
+    return result;
+}
+
 void ValidateMaterialShadowShaderBindings(
     const std::string& materialName,
     const MaterialDescriptorSchema& materialDescriptorSchema,
@@ -290,7 +499,12 @@ GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
     {
         if (binding.set == GlobalSetIndex || binding.set == ObjectSetIndex)
         {
-            layoutDesc.setBindings[binding.set].push_back(binding);
+            ShaderBinding engineBinding = binding;
+            engineBinding.stageFlags |=
+                vk::ShaderStageFlagBits::eVertex |
+                vk::ShaderStageFlagBits::eFragment;
+            layoutDesc.setBindings[binding.set].push_back(
+                std::move(engineBinding));
         }
     }
     layoutDesc.setBindings[MaterialSetIndex] =

@@ -314,6 +314,65 @@ TEST(ScriptScene, RejectsUnsupportedComponents)
     EXPECT_THROW(ValidateScriptBlueprint(blueprint), std::invalid_argument);
 }
 
+TEST(ScriptScene, LocalLightShadowFieldsValidate)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60},
+        {"intensityUnit", "cd"},
+        {"intensity", 1},
+        {"color", {1, 1, 1}}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json point{
+        {"name", "Point"},
+        {"type", "pointLight"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"intensityUnit", "cd"},
+        {"intensity", 10},
+        {"color", {1, 1, 1}},
+        {"radius", 500},
+        {"shadow", {{"castShadows", true}, {"bias", 2.5}}}};
+    Json spot{
+        {"name", "Spot"},
+        {"type", "spotLight"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"intensityUnit", "lm"},
+        {"intensity", 100},
+        {"color", {1, 1, 1}},
+        {"radius", 800},
+        {"cone_angle_outer", 35},
+        {"cone_angle_inner", 15}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Local light shadow fixture"},
+        {"objects", Json::array({camera, point, spot})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    // 缺省 shadow 表示不投影；空对象保持默认 bias。
+    scene["objects"][1].erase("shadow");
+    scene["objects"][2]["shadow"] = Json::object();
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1]["shadow"] = 7;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"castShadows", 1}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"bias", -0.1}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"bias", 1001}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"castShadows", true}, {"bias", 0}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+}
+
 TEST(ScriptScene, DecalComponentValidatesProjectionAndRanges)
 {
     Json camera{

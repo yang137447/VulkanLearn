@@ -60,7 +60,8 @@ void main()
 
     DeferredLightingResult lighting = ShadeDeferredSurfaceDetailed(
         surface,
-        shadowMap);
+        shadowMap,
+        localShadowMap);
     vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,

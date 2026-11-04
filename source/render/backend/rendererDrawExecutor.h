@@ -49,6 +49,7 @@ class RendererDrawExecutor
 public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
+    void DrawLocalShadowScene(const PipelineBase& commonLocalShadowPipeline, RendererDrawContext& context) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
     void DrawForwardOpaqueScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;

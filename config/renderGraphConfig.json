@@ -63,7 +63,7 @@
             "stencil": "可选硬件 stencil 状态。front/back 共用同一组值；未声明时 testEnable=false，旧 pass 状态不变。字段为 testEnable、writeMask、compareMask、reference、compareOp、failOp、depthFailOp、passOp。启用 stencil 的 pass 必须输出 D24_UNORM_S8_UINT 或 D32_SFLOAT_S8_UINT 附件。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decalStencil、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、localShadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、decalStencil、decal、particle、distortion；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -92,6 +92,18 @@
                 "sampled",
                 "transferSrc",
                 "transferDst"
+            ]
+        },
+        {
+            "name": "localShadowMap",
+            "type": "texture2DArray",
+            "format": "D32_SFLOAT",
+            "widthSize": 1024,
+            "heightSize": 1024,
+            "arrayLayers": 8,
+            "usage": [
+                "depthStencilAttachment",
+                "sampled"
             ]
         },
         {
@@ -457,6 +469,90 @@
             ]
         },
         {
+            "name": "localShadow0",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 0,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow1",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 1,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow2",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 2,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow3",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 3,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "geometry",
             "type": "geometry",
             "needMsaa": false,
@@ -668,6 +764,10 @@
                 {
                     "resource": "dbufferD",
                     "binding": 14
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 15
                 }
             ],
             "output": [
@@ -712,6 +812,10 @@
                 {
                     "resource": "dbufferMask",
                     "binding": 5
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 6
                 }
             ],
             "output": [
@@ -771,6 +875,10 @@
                 {
                     "resource": "shadowMap",
                     "binding": 0
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 6
                 }
             ],
             "output": [
@@ -809,6 +917,10 @@
                 {
                     "resource": "shadowMap",
                     "binding": 1
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 2
                 }
             ],
             "output": [

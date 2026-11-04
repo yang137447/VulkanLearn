@@ -53,6 +53,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Shadow:
         RecordShadowPass(context);
         return;
+    case RenderGraphPassType::LocalShadow:
+        RecordLocalShadowPass(context);
+        return;
     case RenderGraphPassType::Geometry:
         RecordGeometryPass(context);
         return;
@@ -193,6 +196,91 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     drawExecutor.DrawShadowScene(commonOpaquePipeline, drawContext);
 
     commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordLocalShadowPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    const uint32_t lightIndex = renderPass.localShadowIndex;
+
+    // 未激活的层仍要 begin/end：render graph 依赖这个 pass 把
+    // localShadowMap 从上一状态转换到 depth attachment，后续采样才合法。
+    if (!context.services.IsLocalShadowActive(lightIndex))
+    {
+        BeginConfiguredRenderPass(context);
+        commandBuffer.endRenderPass();
+        return;
+    }
+
+    std::shared_ptr<MaterialInstance> passMaterialInstance =
+        renderPass.materialInstance.lock();
+    if (!passMaterialInstance)
+    {
+        throw std::runtime_error(
+            "LocalShadow pass '" + renderPass.name +
+            "' has no common opaque pass material instance");
+    }
+    std::shared_ptr<Material> baseMaterial =
+        passMaterialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial || !baseMaterial->GetLocalShadowPipeline())
+    {
+        throw std::runtime_error(
+            "LocalShadow pass '" + renderPass.name +
+            "' common opaque material has no LocalShadow pipeline");
+    }
+
+    const PipelineBase& commonLocalShadowPipeline =
+        *baseMaterial->GetLocalShadowPipeline();
+    const uint32_t mode =
+        context.services.GetLocalShadowMode(lightIndex);
+    const uint32_t drawCount = mode == 1 ? 8u : 1u;
+
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+
+    for (uint32_t octant = 0; octant < drawCount; ++octant)
+    {
+        context.services.UpdateLocalShadowUBOForPass(
+            commandBuffer,
+            renderPass.width,
+            renderPass.height,
+            lightIndex,
+            octant,
+            mode);
+        BeginConfiguredRenderPass(context);
+        if (octant == 0)
+        {
+            // loadOp=load 是 pass 合同要求的 layout/load 语义；每个灯开始时
+            // 用 clearAttachments 清空当前 slice，后续象限必须保留已写深度。
+            vk::ClearAttachment attachment;
+            attachment
+                .setAspectMask(vk::ImageAspectFlagBits::eDepth)
+                .setColorAttachment(0)
+                .setClearValue(vk::ClearValue().setDepthStencil(
+                    vk::ClearDepthStencilValue{ 1.0f, 0 }));
+            vk::ClearRect clearRect;
+            clearRect
+                .setRect(vk::Rect2D(
+                    vk::Offset2D(0, 0),
+                    vk::Extent2D(renderPass.width, renderPass.height)))
+                .setBaseArrayLayer(0)
+                .setLayerCount(1);
+            commandBuffer.clearAttachments(attachment, clearRect);
+        }
+
+        drawExecutor.DrawLocalShadowScene(
+            commonLocalShadowPipeline,
+            drawContext);
+        commandBuffer.endRenderPass();
+    }
 }
 
 void PassRuntime::RecordGeometryPass(PassRuntimeContext& context) const

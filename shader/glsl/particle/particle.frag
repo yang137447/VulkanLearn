@@ -21,6 +21,9 @@ layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 // 与 mesh 共用 particle pass 的 shadowMap 输入；billboard 默认 unlit，
 // 只有 billboardShadows 开关打开时才按相机朝向法线调暗。
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+// 局部光阴影图集：particle pass 的第三个 set 3 输入。点光/聚光按
+// Light.shadowParams 选择 slice 与投影方式，见 common/localShadowSampling.glsl。
+layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
 // overdraw 调试计数；只在片元最终写出时累加一次。
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
 {
@@ -125,6 +128,7 @@ void main()
                 normalize(vLightingNormal));
         }
         outColor.rgb = CalculateParticleBillboardSceneLighting(
+            localShadowMap,
             outColor.rgb,
             vWorldPosition,
             vLightingNormal,

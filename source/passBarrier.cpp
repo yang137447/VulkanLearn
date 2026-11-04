@@ -93,6 +93,15 @@ void PassBarrier::ApplyCompiledBarrierPlan(
                 barrier.resource,
                 swapChainImageIndex);
         }
+        else if (barrier.type ==
+            VL::CompiledRenderGraphBarrierType::UndefinedToAttachment)
+        {
+            TransitionUndefinedToAttachment(
+                commandBuffer,
+                renderGraph,
+                barrier.resource,
+                swapChainImageIndex);
+        }
         else if (barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage ||
             barrier.type == VL::CompiledRenderGraphBarrierType::StorageToShaderRead)
         {
@@ -100,6 +109,64 @@ void PassBarrier::ApplyCompiledBarrierPlan(
                 barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage);
         }
     }
+}
+
+void PassBarrier::TransitionUndefinedToAttachment(
+    vk::CommandBuffer& commandBuffer,
+    const RenderGraph& renderGraph,
+    const std::string& resourceName,
+    uint32_t swapChainImageIndex)
+{
+    const auto& resolveMap = renderGraph.GetResourcesResolve();
+    auto resourceIt = resolveMap.find(resourceName);
+    if (resourceIt == resolveMap.end())
+    {
+        return;
+    }
+
+    const auto& resource = resourceIt->second[swapChainImageIndex];
+    const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
+    vk::ImageAspectFlags aspectMask =
+        bIsDepth ? vk::ImageAspectFlagBits::eDepth
+                 : vk::ImageAspectFlagBits::eColor;
+    if (bIsDepth && CommonFunction::HasStencilComponent(resource.format))
+    {
+        aspectMask |= vk::ImageAspectFlagBits::eStencil;
+    }
+
+    vk::ImageMemoryBarrier imageBarrier;
+    imageBarrier
+        .setImage(resource.image)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::eUndefined)
+        .setNewLayout(
+            bIsDepth
+            ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+            : vk::ImageLayout::eColorAttachmentOptimal)
+        .setSrcAccessMask({})
+        .setDstAccessMask(
+            bIsDepth
+            ? (vk::AccessFlagBits::eDepthStencilAttachmentRead |
+               vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+            : (vk::AccessFlagBits::eColorAttachmentRead |
+               vk::AccessFlagBits::eColorAttachmentWrite))
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            aspectMask,
+            0,
+            1,
+            0,
+            resource.arrayLayers));
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        bIsDepth
+            ? (vk::PipelineStageFlagBits::eEarlyFragmentTests |
+               vk::PipelineStageFlagBits::eLateFragmentTests)
+            : vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::DependencyFlags(),
+        nullptr,
+        nullptr,
+        imageBarrier);
 }
 
 void PassBarrier::TransitionAttachmentToAttachment(

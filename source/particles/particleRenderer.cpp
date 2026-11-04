@@ -124,13 +124,26 @@ ShaderBinding MakeParticleLayoutBinding(
     return result;
 }
 
+// MakeParticleLayoutBinding 固定写 set 0（共享合同）；pass set 3 必须显式
+// 指定 set，否则 BuildPipelineLayoutBindings 会把这些 binding 归到 set 0。
+ShaderBinding MakeParticlePassSetBinding(uint32_t binding, const char* name)
+{
+    ShaderBinding result = MakeParticleLayoutBinding(
+        binding,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        name);
+    result.set = PassSetIndex;
+    return result;
+}
+
 GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
 {
     // particleGlobal.frag 明确不使用 CSM，编译器会把 shadowMap 从反射
-    // 结果中裁掉；但 particle pass 的 set 3 始终由图输入分配为
-    // sceneDepth + shadowMap 两个 binding。显式覆盖 set 3，保证 pipeline
-    // layout 与 render pass descriptor set 的布局兼容，同时不改变 shader
-    // 的 unlit 输出。
+    // 结果中裁掉；但 particle pass 的 set 3 由图输入分配为
+    // sceneDepth + shadowMap + localShadowMap 三个 binding。显式覆盖 set 3，
+    // 保证 pipeline layout 与 render pass descriptor set 的布局兼容。
     GraphicsPipelineLayoutDesc layout;
     // 全局 alpha 池有自己的一套 set 0：0 UBO、1 gathered records、
     // 2 sorted pairs、3 纹理数组、5 debug、6/7 两盏灯缓冲、8/9 IBL。
@@ -209,9 +222,18 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
     shadowMap.descriptorCount = 1;
     shadowMap.stageFlags = vk::ShaderStageFlagBits::eFragment;
     shadowMap.name = "shadowMap";
+    // 全局池现在会采样局部光阴影（点光/聚光），必须与 pass 的第三个输入对齐。
+    ShaderBinding localShadowMap;
+    localShadowMap.set = PassSetIndex;
+    localShadowMap.binding = 2;
+    localShadowMap.type = vk::DescriptorType::eCombinedImageSampler;
+    localShadowMap.descriptorCount = 1;
+    localShadowMap.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    localShadowMap.name = "localShadowMap";
     layout.setBindings[PassSetIndex] = {
         std::move(sceneDepth),
-        std::move(shadowMap)};
+        std::move(shadowMap),
+        std::move(localShadowMap)};
     return layout;
 }
 
@@ -287,6 +309,14 @@ GraphicsPipelineLayoutDesc BuildParticleSharedLayout()
         1,
         vk::ShaderStageFlagBits::eFragment,
         "brdfLut"));
+    // Set 3 必须与 RenderGraph 的输入全集完全一致。反射会裁掉未静态使用的
+    // binding（beam 不采样 CSM/local shadow），若各管线各走反射，layout 会
+    // 少于 pass descriptor set 的 0/1/2 三个 binding，导致绑定时不兼容。
+    layout.overrideSets[PassSetIndex] = true;
+    layout.setBindings[PassSetIndex] = {
+        MakeParticlePassSetBinding(0, "sceneDepth"),
+        MakeParticlePassSetBinding(1, "shadowMap"),
+        MakeParticlePassSetBinding(2, "localShadowMap")};
     return layout;
 }
 
@@ -630,9 +660,14 @@ void ParticleRenderer::Initialize(
         sharedLayout);
 
     // distortion 自己写独立附件，因此必须使用 distortion pass 的 VkRenderPass；
-    // set 0 复用共享合同，set 3 只声明 sceneDepth（图里没有 shadowMap）。
+    // set 0 复用共享合同；distortion pass 的图输入只有 sceneDepth，所以 set 3
+    // 必须去掉共享合同里的 shadowMap/localShadowMap，否则 layout 与图不一致。
     if (distortionPass != nullptr)
     {
+        GraphicsPipelineLayoutDesc distortionLayout = sharedLayout;
+        distortionLayout.setBindings[PassSetIndex] = {
+            MakeParticlePassSetBinding(0, "sceneDepth")};
+
         ShaderVariantKey distortionVariant = variant;
         distortionVariant.shaderName = "particle/particleDistortion";
         const GraphicsShaderVariantArtifact& distortionArtifact =
@@ -649,7 +684,7 @@ void ParticleRenderer::Initialize(
             distortionArtifact,
             vk::CullModeFlagBits::eNone,
             GraphicsPipelineBlendMode::Additive,
-            sharedLayout);
+            distortionLayout);
     }
 
     // mesh 粒子读取静态 SM 的 Vertex stream，因此同一条 particle pass

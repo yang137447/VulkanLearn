@@ -45,6 +45,7 @@ public:
     const std::vector<ShaderBinding>& GetActiveShaderBindings() const { return activeShaderBindings; }
     const std::shared_ptr<PipelineBase>& GetRenderPipeline() const { return renderPipeline; }
     const std::shared_ptr<PipelineBase>& GetShadowPipeline() const { return shadowPipeline; }
+    const std::shared_ptr<PipelineBase>& GetLocalShadowPipeline() const { return localShadowPipeline; }
     const VL::MaterialPipelineReloadRecipe& GetPipelineReloadRecipe() const
     {
         return pipelineReloadRecipe;
@@ -64,6 +65,12 @@ public:
         std::shared_ptr<PipelineBase> pipeline,
         const GraphicsShaderVariantArtifact& shaderArtifact,
         const VL::MaterialGraphicsPassReloadRecipe& reloadRecipe);
+    // LocalShadow 不参与现有 hot-reload commit：它使用 ShadowDepth 模板的
+    // 独立 pass 变体，重载时保留旧管线仍可安全绘制；后续接入 reload 再补
+    // recipe/commit 字段，不能和 Surface/CSM Shadow 事务混在一起。
+    void SetLocalShadowPipeline(
+        std::shared_ptr<PipelineBase> pipeline,
+        const GraphicsShaderVariantArtifact& shaderArtifact);
     void ValidatePipelineReloadCommit(
         const VL::MaterialPipelineReloadCommit& commit) const;
     VL::RetiredMaterialPipelines CommitPipelineReload(
@@ -78,7 +85,9 @@ private:
     std::vector<ShaderBinding> activeShaderBindings;
     std::shared_ptr<PipelineBase> renderPipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
+    std::shared_ptr<PipelineBase> localShadowPipeline;
     VL::MaterialPipelineReloadRecipe pipelineReloadRecipe;
     GraphicsShaderVariantArtifact surfaceShaderArtifact;
     std::optional<GraphicsShaderVariantArtifact> shadowShaderArtifact;
+    std::optional<GraphicsShaderVariantArtifact> localShadowShaderArtifact;
 };

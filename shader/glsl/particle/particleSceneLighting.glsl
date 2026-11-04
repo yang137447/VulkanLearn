@@ -17,6 +17,9 @@
 
 #include "../common/defines.glsl"
 #include "../common/microfacetDistribution.glsl"
+// 局部光阴影采样与 common/lighting.glsl 共用同一份纯函数；sampler 由四个
+// particle fragment shader 各自声明 set 3 binding 2 后传入。
+#include "../common/localShadowSampling.glsl"
 
 // 与 common/lighting.glsl 的 LightGPU 逐字段一致（4 × vec4 = 64 字节）。
 // colorIntensity.xyz 是线性 RGB tint，w 是方向光 lux 或点光/聚光 cd * 100^2；
@@ -27,6 +30,7 @@ struct ParticleSceneLightGPU
     vec4 positionRadius;
     vec4 directionPad;
     vec4 coneAngleOuterInnerPadPad;
+    vec4 shadowParams;
 };
 
 // 与 common/lighting.glsl 的 ParticleLightGPU 逐字段一致（2 × vec4）。
@@ -240,6 +244,8 @@ ParticleLightingLobes AccumulateParticleDirectionalLight(
 }
 
 ParticleLightingLobes AccumulateParticlePointLight(
+    in sampler2DArrayShadow localShadowMap,
+    in vec4 shadowParams,
     vec3 lightPosition,
     float lightRadius,
     vec3 lightColorIntensity,
@@ -259,7 +265,16 @@ ParticleLightingLobes AccumulateParticlePointLight(
     {
         return CreateParticleLightingLobes();
     }
-    vec3 radiance = attenuation * lightColorIntensity;
+    vec3 radiance =
+        attenuation *
+        lightColorIntensity *
+        SampleLocalLightShadow(
+            localShadowMap,
+            shadowParams,
+            lightPosition,
+            vec3(0.0),
+            0.0,
+            pixelPosition);
     return EvaluateParticleDefaultPbrLight(
         normal,
         pixelPosition,
@@ -272,6 +287,7 @@ ParticleLightingLobes AccumulateParticlePointLight(
 }
 
 ParticleLightingLobes AccumulateParticleSpotLight(
+    in sampler2DArrayShadow localShadowMap,
     ParticleSceneLightGPU light,
     vec3 normal,
     vec3 pixelPosition,
@@ -302,7 +318,14 @@ ParticleLightingLobes AccumulateParticleSpotLight(
     vec3 radiance =
         attenuation *
         light.colorIntensity.xyz *
-        light.colorIntensity.w;
+        light.colorIntensity.w *
+        SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            light.directionPad.xyz,
+            light.coneAngleOuterInnerPadPad.x,
+            pixelPosition);
     return EvaluateParticleDefaultPbrLight(
         normal,
         pixelPosition,
@@ -317,6 +340,7 @@ ParticleLightingLobes AccumulateParticleSpotLight(
 // 全部场景灯 + GPU 粒子灯聚合。只有 mesh 粒子需要 specular lobe；
 // billboard 走下面的 wrapped Lambert。
 ParticleLightingLobes CalculateParticleMeshSceneLighting(
+    sampler2DArrayShadow localShadowMap,
     vec3 normal,
     vec3 pixelPosition,
     vec3 cameraPosition,
@@ -350,6 +374,8 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
     {
         ParticleSceneLightGPU light = particleSceneLights.lights[index];
         ParticleLightingLobes lobes = AccumulateParticlePointLight(
+            localShadowMap,
+            light.shadowParams,
             light.positionRadius.xyz,
             light.positionRadius.w,
             light.colorIntensity.xyz * light.colorIntensity.w,
@@ -368,6 +394,7 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
     for (int index = offset; index < end; ++index)
     {
         ParticleLightingLobes lobes = AccumulateParticleSpotLight(
+            localShadowMap,
             particleSceneLights.lights[index],
             normal,
             pixelPosition,
@@ -388,6 +415,8 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
             continue;
         }
         ParticleLightingLobes lobes = AccumulateParticlePointLight(
+            localShadowMap,
+            vec4(-1.0),
             light.positionRadius.xyz,
             light.positionRadius.w,
             light.colorIntensity.xyz * light.colorIntensity.w,
@@ -404,12 +433,14 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
 }
 
 // billboard/ribbon 的完整场景光照：漫反射 wrapped Lambert，无镜面 lobe。
-// directionalShadow 只作用于方向光；点光/聚光/粒子灯当前没有局部阴影。
+// directionalShadow 只作用于方向光；点光/聚光走各自的 localShadowMap slice，
+// GPU 粒子灯仍是无阴影的裸点光（见 CalculateParticleLightLobes 的合同）。
 // lightingStrength 是“场景光照替换 authored 颜色的比例”：0 = 完全保留
 // unlit 作者颜色，1 = 完全使用场景光照。粒子资产通常把颜色作者化成最终
 // 观感（偏 emissive），直接相乘会在暗场景掉亮度、在强光附近过曝；因此
 // 用插值而不是纯乘法，让美术可以按效果调节被灯染色的程度。
 vec3 CalculateParticleBillboardSceneLighting(
+    sampler2DArrayShadow localShadowMap,
     vec3 baseColor,
     vec3 pixelPosition,
     vec3 lightingNormal,
@@ -458,7 +489,14 @@ vec3 CalculateParticleBillboardSceneLighting(
         vec3 radiance =
             attenuation *
             light.colorIntensity.xyz *
-            light.colorIntensity.w;
+            light.colorIntensity.w *
+            SampleLocalLightShadow(
+                localShadowMap,
+                light.shadowParams,
+                light.positionRadius.xyz,
+                light.directionPad.xyz,
+                light.coneAngleOuterInnerPadPad.x,
+                pixelPosition);
         lighting += baseColor / PI * radiance * wrapped;
     }
 
@@ -492,7 +530,14 @@ vec3 CalculateParticleBillboardSceneLighting(
         vec3 radiance =
             attenuation *
             light.colorIntensity.xyz *
-            light.colorIntensity.w;
+            light.colorIntensity.w *
+            SampleLocalLightShadow(
+                localShadowMap,
+                light.shadowParams,
+                light.positionRadius.xyz,
+                light.directionPad.xyz,
+                light.coneAngleOuterInnerPadPad.x,
+                pixelPosition);
         lighting += baseColor / PI * radiance * wrapped;
     }
 

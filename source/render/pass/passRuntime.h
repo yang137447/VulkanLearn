@@ -43,6 +43,35 @@ public:
         const std::vector<LightSnapshot>& lights) = 0;
     virtual bool IsCsmEnabled() const = 0;
     virtual bool IsShadowCascadeActive(uint32_t cascadeIndex) const = 0;
+    // LocalShadow pass 由 RenderSystem 每帧选灯后激活。缩略图/离线等没有
+    // 局部阴影生产者的会话保持默认 false，仍需 begin/end 完成 layout 转换。
+    virtual bool IsLocalShadowActive(uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return false;
+    }
+    // 0 = 透视聚光，1 = 八面体点光。PassRuntime 用它决定一个 pass 内
+    // 录制一次还是八个象限各录制一次。
+    virtual uint32_t GetLocalShadowMode(uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return 0;
+    }
+    virtual void UpdateLocalShadowUBOForPass(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passWidth,
+        uint32_t passHeight,
+        uint32_t lightIndex,
+        uint32_t octant,
+        uint32_t mode)
+    {
+        (void)commandBuffer;
+        (void)passWidth;
+        (void)passHeight;
+        (void)lightIndex;
+        (void)octant;
+        (void)mode;
+    }
     // 编辑器参考网格的几何与缓冲归 RenderSystem 所有；pass 流程只请求提交一次
     // 网格绘制，因此网格顶点生命周期不会泄漏到 pass 层。
     virtual void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) = 0;
@@ -105,6 +134,7 @@ public:
 
 private:
     void RecordShadowPass(PassRuntimeContext& context) const;
+    void RecordLocalShadowPass(PassRuntimeContext& context) const;
     void RecordGeometryPass(PassRuntimeContext& context) const;
     void RecordForwardOpaquePass(PassRuntimeContext& context) const;
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;

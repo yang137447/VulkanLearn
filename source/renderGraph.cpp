@@ -712,6 +712,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
     renderpassesOrdered.swap(other.renderpassesOrdered);
     renderpasses.swap(other.renderpasses);
     canonicalShadowPassName.swap(other.canonicalShadowPassName);
+    canonicalLocalShadowPassName.swap(other.canonicalLocalShadowPassName);
     using std::swap;
     swap(ownerGeneration, other.ownerGeneration);
     compiledFrameGraph.resources.swap(
@@ -788,6 +789,7 @@ void RenderGraph::Shutdown(
     renderpasses.clear();
     renderpassesOrdered.clear();
     canonicalShadowPassName.clear();
+    canonicalLocalShadowPassName.clear();
     descriptorPlanCache.Clear();
     ownerGeneration = 0;
 }
@@ -823,6 +825,7 @@ void RenderGraph::LoadRenderGraph(
 
             // 先建立msaa资源
             if (name != "shadowMap" &&
+                name != "localShadowMap" &&
                 std::find(resourceDesc.usage.begin(), resourceDesc.usage.end(), "storage") == resourceDesc.usage.end())
             {
                 std::vector<RenderResource>& msaaResources =
@@ -867,6 +870,7 @@ void RenderGraph::LoadRenderGraph(
             renderpass = CreateRenderpass(passDesc, rendererBackend);
         }
         ValidateAndResolveCanonicalShadowPass();
+        ValidateAndResolveCanonicalLocalShadowPass();
     }
     catch (...)
     {
@@ -909,6 +913,15 @@ Renderpass* RenderGraph::FindCanonicalShadowPass()
         return nullptr;
     }
     return &renderpasses.at(canonicalShadowPassName);
+}
+
+Renderpass* RenderGraph::FindCanonicalLocalShadowPass()
+{
+    if (canonicalLocalShadowPassName.empty())
+    {
+        return nullptr;
+    }
+    return &renderpasses.at(canonicalLocalShadowPassName);
 }
 
 Renderpass& RenderGraph::RequireUniquePass(
@@ -992,6 +1005,51 @@ void RenderGraph::ValidateAndResolveCanonicalShadowPass()
                 "Shadow pass '" + renderpass.name +
                 "' must use the canonical shadow material instance path '" +
                 canonicalShadowMaterialPath + "'");
+        }
+    }
+}
+
+void RenderGraph::ValidateAndResolveCanonicalLocalShadowPass()
+{
+    canonicalLocalShadowPassName.clear();
+    const Renderpass* canonicalLocalShadowPass = nullptr;
+    std::string canonicalLocalShadowMaterialPath;
+
+    // 所有局部阴影层必须共享同一管线合同和公共材质，才能复用同一套
+    // LocalShadow pipeline/描述符布局；layer 的连续性由编译期 output.layer 保证。
+    for (const std::string& passName : renderpassesOrdered)
+    {
+        const Renderpass& renderpass = renderpasses.at(passName);
+        if (renderpass.type !=
+            VL::RenderGraphPassType::LocalShadow)
+        {
+            continue;
+        }
+
+        const std::string materialPath =
+            MaterialAssetUtils::NormalizeAssetPath(renderpass.materialInstancePath);
+        if (canonicalLocalShadowPass == nullptr)
+        {
+            canonicalLocalShadowPass = &renderpass;
+            canonicalLocalShadowPassName = passName;
+            canonicalLocalShadowMaterialPath = materialPath;
+            continue;
+        }
+
+        if (renderpass.pipelineContractKey !=
+            canonicalLocalShadowPass->pipelineContractKey)
+        {
+            throw std::runtime_error(
+                "LocalShadow pass '" + renderpass.name +
+                "' is not pipeline-compatible with canonical local shadow pass '" +
+                canonicalLocalShadowPass->name + "'");
+        }
+        if (materialPath != canonicalLocalShadowMaterialPath)
+        {
+            throw std::runtime_error(
+                "LocalShadow pass '" + renderpass.name +
+                "' must use the canonical local shadow material instance path '" +
+                canonicalLocalShadowMaterialPath + "'");
         }
     }
 }
@@ -1305,7 +1363,8 @@ RenderResource RenderGraph::CreateRenderResource(
         }
 
         resource.sampler = bIsDepthFormat
-            ? (resource.name == "shadowMap"
+            ? ((resource.name == "shadowMap" ||
+                resource.name == "localShadowMap")
                 ? rendererBackend
                       .CreateDepthCompareSampler(
                           "Sampler: " +
@@ -1394,6 +1453,9 @@ Renderpass RenderGraph::CreateRenderpass(
         const bool bIsShadowPass =
             renderpass.type ==
             VL::RenderGraphPassType::Shadow;
+        const bool bIsLocalShadowPass =
+            renderpass.type ==
+            VL::RenderGraphPassType::LocalShadow;
         const bool bUseMsaa = passDesc.needMsaa;
         renderpass.pipelineContractKey.useVertexInput =
             passDesc.pipelineState.useVertexInput;
@@ -1421,7 +1483,8 @@ Renderpass RenderGraph::CreateRenderpass(
         renderpass.pipelineContractKey.stencilDepthFailOp =
             GetStencilOp(
                 passDesc.pipelineState.stencilDepthFailOp);
-        renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
+        renderpass.pipelineContractKey.isShadowPass =
+            bIsShadowPass || bIsLocalShadowPass;
 
         renderpass.inputResources = passDesc.inputResources;
         renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
@@ -1442,6 +1505,10 @@ Renderpass RenderGraph::CreateRenderpass(
             if (bIsShadowPass)
             {
                 renderpass.shadowCascadeIndex = output.layer;
+            }
+            if (bIsLocalShadowPass)
+            {
+                renderpass.localShadowIndex = output.layer;
             }
         }
         // 当前游戏图没有 swapChain 的 MSAA 源附件，不能把单采样 Viewport
@@ -1482,6 +1549,13 @@ Renderpass RenderGraph::CreateRenderpass(
                 resourcesResolve.at("shadowMap")[0].width;
             renderpass.height =
                 resourcesResolve.at("shadowMap")[0].height;
+        }
+        else if (bIsLocalShadowPass)
+        {
+            renderpass.width =
+                resourcesResolve.at("localShadowMap")[0].width;
+            renderpass.height =
+                resourcesResolve.at("localShadowMap")[0].height;
         }
         else
         {

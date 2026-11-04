@@ -39,6 +39,16 @@ MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     const Material& material,
     PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
 
+// 构建局部阴影专用管线：点光/聚光共享 ShadowDepth 模板，但片段阶段写
+// gl_FragDepth（八面体方向长度或透视 z）。普通不透明材质返回空，由公共
+// shadowLocal 管线绘制；WPO/alpha 材质使用 composed LocalShadow 变体。
+MaterialShadowPipelineBuildResult BuildMaterialLocalShadowPipeline(
+    PipelineFactory& pipelineFactory,
+    Renderpass* canonicalLocalShadowPass,
+    const MaterialInstanceBuildPlan& loadPlan,
+    const Material& material,
+    PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
+
 void ValidateMaterialShadowShaderBindings(
     const std::string& materialName,
     const MaterialDescriptorSchema& materialDescriptorSchema,
