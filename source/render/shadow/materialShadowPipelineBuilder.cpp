@@ -512,4 +512,38 @@ GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
     return layoutDesc;
 }
 
+void ValidateMaterialLocalShadowShaderBindings(
+    const std::string& materialName,
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings)
+{
+    materialDescriptorSchema.ValidateShaderBindings(
+        localShadowBindings,
+        materialName);
+    ValidateLocalShadowEngineBindings(
+        materialName,
+        surfaceBindings,
+        localShadowBindings);
+}
+
+GraphicsPipelineLayoutDesc BuildMaterialLocalShadowPipelineLayout(
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings,
+    const std::string& materialName)
+{
+    // 与初次创建 LocalShadow 管线时完全一致：先继承 Surface 的 Set 0/2
+    // 和完整材质 Set 1，再合并 LocalShadow shader 的 stage 扩展。
+    GraphicsPipelineLayoutDesc layoutDesc =
+        BuildMaterialShadowPipelineLayout(
+            materialDescriptorSchema,
+            surfaceBindings);
+    MergeLocalShadowEngineBindings(
+        layoutDesc,
+        localShadowBindings,
+        materialName);
+    return layoutDesc;
+}
+
 } // namespace VL

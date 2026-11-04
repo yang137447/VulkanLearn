@@ -211,7 +211,7 @@ void RuntimeTestHooks::UpdateShaderReloadTest(
             shaderReloadTestFixtureDirectory.clear();
             diagnostics.ReportInfo(
                 "Shader reload runtime test completed: "
-                "compatible Surface/Shadow commits, compile rollback, "
+                "compatible Surface/Shadow/LocalShadow commits, compile rollback, "
                 "ABI rejection, pipeline creation rollback, recovery, "
                 "formal artifact restoration, and epoch retirement passed.");
             return;
@@ -309,31 +309,35 @@ void RuntimeTestHooks::UpdateShaderReloadTest(
                     operation.failureMessage);
             }
             if (!operation.committed ||
-                operation.affectedBuildCount != 2 ||
-                operation.pipelinesCreated != 2 ||
-                operation.pipelinesRetired != 2)
+                operation.affectedBuildCount != 3 ||
+                operation.pipelinesCreated != 3 ||
+                operation.pipelinesRetired != 3)
             {
                 throw std::runtime_error(
                     std::string(phaseName) +
-                    " did not commit the complete Surface/Shadow batch");
+                    " did not commit the complete Surface/Shadow/LocalShadow batch");
             }
             if (before.surfacePipeline ==
                     after.surfacePipeline ||
                 before.shadowPipeline ==
                     after.shadowPipeline ||
+                before.localShadowPipeline ==
+                    after.localShadowPipeline ||
                 before.surfaceGeneration ==
                     after.surfaceGeneration ||
                 before.shadowGeneration ==
-                    after.shadowGeneration)
+                    after.shadowGeneration ||
+                before.localShadowGeneration ==
+                    after.localShadowGeneration)
             {
                 throw std::runtime_error(
                     std::string(phaseName) +
-                    " did not replace both live Pipeline generations");
+                    " did not replace all live Pipeline generations");
             }
             diagnostics.ReportInfo(
                 std::string("Shader reload runtime test passed ") +
                 phaseName +
-                ": builds=2, pipelinesCreated=2, retired=2.");
+                ": builds=3, pipelinesCreated=3, retired=3.");
         }
         else
         {

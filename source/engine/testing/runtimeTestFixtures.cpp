@@ -275,8 +275,12 @@ ShaderReloadRuntimeSnapshot CaptureShaderReloadRuntimeSnapshot(
             captured.material.lock().get());
     snapshot.surfacePipeline = captured.surfacePipeline;
     snapshot.shadowPipeline = captured.shadowPipeline;
+    snapshot.localShadowPipeline =
+        captured.localShadowPipeline;
     snapshot.surfaceGeneration = captured.surfaceGeneration;
     snapshot.shadowGeneration = captured.shadowGeneration;
+    snapshot.localShadowGeneration =
+        captured.localShadowGeneration;
     snapshot.surfaceVertexDigest =
         captured.surfaceVertexDigest;
     snapshot.surfaceFragmentDigest =
@@ -285,6 +289,10 @@ ShaderReloadRuntimeSnapshot CaptureShaderReloadRuntimeSnapshot(
         captured.shadowVertexDigest;
     snapshot.shadowFragmentDigest =
         captured.shadowFragmentDigest;
+    snapshot.localShadowVertexDigest =
+        captured.localShadowVertexDigest;
+    snapshot.localShadowFragmentDigest =
+        captured.localShadowFragmentDigest;
     snapshot.manifestDigest = captured.manifestDigest;
     return snapshot;
 }
@@ -296,13 +304,19 @@ bool SameShaderReloadRuntimeSnapshot(
     return lhs.material == rhs.material &&
         lhs.surfacePipeline == rhs.surfacePipeline &&
         lhs.shadowPipeline == rhs.shadowPipeline &&
+        lhs.localShadowPipeline == rhs.localShadowPipeline &&
         lhs.surfaceGeneration == rhs.surfaceGeneration &&
         lhs.shadowGeneration == rhs.shadowGeneration &&
+        lhs.localShadowGeneration == rhs.localShadowGeneration &&
         lhs.manifestDigest == rhs.manifestDigest &&
         lhs.surfaceVertexDigest == rhs.surfaceVertexDigest &&
         lhs.surfaceFragmentDigest == rhs.surfaceFragmentDigest &&
         lhs.shadowVertexDigest == rhs.shadowVertexDigest &&
-        lhs.shadowFragmentDigest == rhs.shadowFragmentDigest;
+        lhs.shadowFragmentDigest == rhs.shadowFragmentDigest &&
+        lhs.localShadowVertexDigest ==
+            rhs.localShadowVertexDigest &&
+        lhs.localShadowFragmentDigest ==
+            rhs.localShadowFragmentDigest;
 }
 
 std::filesystem::path

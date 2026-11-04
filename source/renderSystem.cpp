@@ -2450,6 +2450,8 @@ bool RenderSystem::IsShadowCascadeActive(
 void RenderSystem::PrepareLocalShadowLights()
 {
     activeLocalShadowLights.clear();
+    localShadowDrawnCasters.fill(0);
+    localShadowTotalCasters.fill(0);
     for (VL::LightSnapshot& light : currentRenderScene.lights)
     {
         light.shadowSlice = VL::kInvalidLocalShadowSlice;
@@ -2490,6 +2492,57 @@ uint32_t RenderSystem::GetLocalShadowMode(
     }
     return activeLocalShadowLights[localShadowIndex].type ==
         VL::LightSnapshotType::Point ? 1u : 0u;
+}
+
+const VL::LightSnapshot* RenderSystem::GetLocalShadowLight(
+    uint32_t localShadowIndex) const
+{
+    if (localShadowIndex >= activeLocalShadowLights.size())
+    {
+        return nullptr;
+    }
+    return &activeLocalShadowLights[localShadowIndex];
+}
+
+void RenderSystem::ReportLocalShadowCasterStats(
+    uint32_t localShadowIndex,
+    uint32_t drawnCasters,
+    uint32_t totalCasters)
+{
+    if (localShadowIndex >= VL::kMaxLocalShadowLights)
+    {
+        return;
+    }
+    localShadowDrawnCasters[localShadowIndex] = drawnCasters;
+    localShadowTotalCasters[localShadowIndex] = totalCasters;
+}
+
+void RenderSystem::LogLocalShadowCasterStatistics()
+{
+    // 低频输出，避免每帧刷控制台；120 帧约 2 秒（60 FPS）。
+    constexpr uint32_t kLogIntervalFrames = 120;
+    if (activeLocalShadowLights.empty() ||
+        currentFrame % kLogIntervalFrames != 0)
+    {
+        return;
+    }
+
+    for (size_t index = 0;
+         index < activeLocalShadowLights.size();
+         ++index)
+    {
+        const VL::LightSnapshot& light =
+            activeLocalShadowLights[index];
+        std::cout << "[LocalShadow] slice=" << index
+                  << " type="
+                  << (light.type == VL::LightSnapshotType::Point
+                          ? "point"
+                          : "spot")
+                  << " casters="
+                  << localShadowDrawnCasters[index]
+                  << "/" << localShadowTotalCasters[index]
+                  << std::endl;
+    }
 }
 
 void RenderSystem::UpdateLocalShadowUBOForPass(
@@ -3698,6 +3751,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             };
             passRuntime.RecordPass(renderPassName, passContext);
         }
+        LogLocalShadowCasterStatistics();
         }
 
         if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)

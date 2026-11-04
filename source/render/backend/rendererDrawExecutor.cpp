@@ -5,6 +5,7 @@
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/shadow/localShadowMath.h"
 #include "renderableObject.h"
 #include "shaderReflect.h"
 #include "vulkanDebug.h"
@@ -38,6 +39,26 @@ struct SortedTransparentDraw
 std::string BuildResolvedDrawErrorPrefix(
     const char* passName,
     const ResolvedDrawPacket& draw);
+
+// 局部阴影 caster 剔除：世界 AABB 已经包含当前 skin pose，直接与灯影响
+// 范围测试即可。两类对象跳过剔除：
+// - WPO 材质：顶点位移后的实际范围超出静态 AABB；
+// - SpeedTree：世界 bounds 不含风位移，剔除会裁掉摆动的枝叶影子。
+bool LocalShadowCasterPassesCull(
+    const Material& material,
+    const RenderDrawPacket& drawPacket,
+    const LocalShadowCullVolume& volume)
+{
+    if (material.GetMaterialFeatureKey().modifiesMeshPosition ||
+        !drawPacket.speedTreeWindProfileKey.empty())
+    {
+        return true;
+    }
+    return IntersectsLocalShadowVolume(
+        drawPacket.worldBoundsMin,
+        drawPacket.worldBoundsMax,
+        volume);
+}
 
 struct TransparentDrawBackToFront
 {
@@ -287,11 +308,23 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
 
 void RendererDrawExecutor::DrawLocalShadowScene(
     const PipelineBase& commonLocalShadowPipeline,
-    RendererDrawContext& context) const
+    RendererDrawContext& context,
+    const LightSnapshot* light,
+    bool recordCasterStats) const
 {
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
     vk::Pipeline boundPipeline;
+    // 八面体点光的 8 个象限共用同一盏灯的剔除结果，因此体积在
+    // 本函数开头构建一次，所有 draw 复用。
+    const LocalShadowCullVolume cullVolume =
+        light != nullptr
+        ? BuildLocalShadowCullVolume(*light)
+        : LocalShadowCullVolume{};
+    const bool cullEnabled =
+        light != nullptr && cullVolume.radius > 0.0f;
+    uint32_t totalCasterCount = 0;
+    uint32_t drawnCasterCount = 0;
 
     for (const ResolvedMaterialGroup& materialGroup :
          context.resolvedRenderScene.materialGroups)
@@ -350,6 +383,16 @@ void RendererDrawExecutor::DrawLocalShadowScene(
                     *drawResources.objectResources;
                 const RenderDrawPacket& drawPacket =
                     *drawResources.drawPacket;
+                ++totalCasterCount;
+                if (cullEnabled &&
+                    !LocalShadowCasterPassesCull(
+                        *materialGroup.material,
+                        drawPacket,
+                        cullVolume))
+                {
+                    continue;
+                }
+                ++drawnCasterCount;
                 VulkanDebug::ScopedRegion region(
                     commandBuffer,
                     drawPacket.debugName,
@@ -391,6 +434,14 @@ void RendererDrawExecutor::DrawLocalShadowScene(
                 drawResources.renderableObject->Draw(commandBuffer);
             }
         }
+    }
+
+    if (recordCasterStats && light != nullptr)
+    {
+        context.services.ReportLocalShadowCasterStats(
+            renderPass.localShadowIndex,
+            drawnCasterCount,
+            totalCasterCount);
     }
 }
 

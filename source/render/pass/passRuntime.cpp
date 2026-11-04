@@ -236,6 +236,10 @@ void PassRuntime::RecordLocalShadowPass(
     const uint32_t mode =
         context.services.GetLocalShadowMode(lightIndex);
     const uint32_t drawCount = mode == 1 ? 8u : 1u;
+    // caster 剔除只依赖灯的冻结参数；点光 8 象限共用同一体积。
+    // 没有服务的缩略图/离线会话返回 nullptr，此时退回全量绘制。
+    const LightSnapshot* localShadowLight =
+        context.services.GetLocalShadowLight(lightIndex);
 
     RendererDrawContext drawContext{
         commandBuffer,
@@ -278,7 +282,10 @@ void PassRuntime::RecordLocalShadowPass(
 
         drawExecutor.DrawLocalShadowScene(
             commonLocalShadowPipeline,
-            drawContext);
+            drawContext,
+            localShadowLight,
+            // 只在第一个象限/聚光唯一一次上报，避免 8 象限重复计数。
+            octant == 0);
         commandBuffer.endRenderPass();
     }
 }

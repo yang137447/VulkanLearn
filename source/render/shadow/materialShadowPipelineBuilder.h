@@ -6,6 +6,7 @@
 // common opaque shadow pipelines and ShadowCaster routing remain outside this file.
 
 #include <memory>
+#include <vector>
 
 #include "material/materialPipelineReload.h"
 #include "pipeline/graphicsPipelineLayoutDesc.h"
@@ -58,5 +59,19 @@ void ValidateMaterialShadowShaderBindings(
 GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
     const MaterialDescriptorSchema& materialDescriptorSchema,
     const std::vector<ShaderBinding>& surfaceBindings);
+
+// LocalShadow 在 Surface/Shadow 的 Set 0/2 基础上还要合并 LocalShadow
+// shader 实际反射到的 stage；热重载重建必须与初次创建使用同一 layout。
+void ValidateMaterialLocalShadowShaderBindings(
+    const std::string& materialName,
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings);
+
+GraphicsPipelineLayoutDesc BuildMaterialLocalShadowPipelineLayout(
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings,
+    const std::string& materialName);
 
 } // namespace VL

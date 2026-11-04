@@ -206,6 +206,158 @@ TEST(LocalShadowMath, FallbackFarIsFiniteAndDeterministic)
     EXPECT_FLOAT_EQ(VL::ComputeLocalShadowFar(0.5f), 2.0f);
 }
 
+TEST(LocalShadowMath, RankHonorsEightLightBudget)
+{
+    std::vector<LightSnapshot> lights;
+    for (uint32_t index = 0; index < 10; ++index)
+    {
+        LightSnapshot light;
+        light.type = LightSnapshotType::Point;
+        light.castShadows = true;
+        light.lightId = index + 1;
+        light.intensity = 100.0f + static_cast<float>(index);
+        light.radius = 1000.0f;
+        light.position = Eigen::Vector3f(100.0f, 0.0f, 0.0f);
+        lights.push_back(light);
+    }
+
+    const std::vector<size_t> ranked =
+        VL::RankLocalShadowLights(
+            lights,
+            Eigen::Vector3f::Zero(),
+            VL::kMaxLocalShadowLights);
+    ASSERT_EQ(ranked.size(), 8u);
+    // 强度 109..102 的 8 盏按降序进入预算。
+    for (size_t index = 0; index < ranked.size(); ++index)
+    {
+        EXPECT_EQ(ranked[index], 9u - index);
+    }
+    EXPECT_EQ(VL::kMaxLocalShadowLights, 8u);
+}
+
+TEST(LocalShadowMath, PointCullRejectsAabbOutsideRadius)
+{
+    const Eigen::Vector3f aabbMin(0.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f aabbMax(10.0f, 10.0f, 10.0f);
+
+    VL::LocalShadowCullVolume volume;
+    volume.isPoint = true;
+    volume.position = Eigen::Vector3f(-5.0f, 5.0f, 5.0f);
+    volume.radius = 6.0f;
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        aabbMin, aabbMax, volume));
+
+    volume.radius = 4.0f;
+    EXPECT_FALSE(VL::IntersectsLocalShadowVolume(
+        aabbMin, aabbMax, volume));
+
+    // 灯在 AABB 内部：即使半径很小也必然相交。
+    volume.position = Eigen::Vector3f(5.0f, 5.0f, 5.0f);
+    volume.radius = 0.5f;
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        aabbMin, aabbMax, volume));
+}
+
+TEST(LocalShadowMath, PointCullTreatsZeroRadiusAsUnbounded)
+{
+    const Eigen::Vector3f aabbMin(
+        100000.0f, 100000.0f, 100000.0f);
+    const Eigen::Vector3f aabbMax(
+        100010.0f, 100010.0f, 100010.0f);
+    VL::LocalShadowCullVolume volume;
+    volume.isPoint = true;
+    volume.position = Eigen::Vector3f::Zero();
+    volume.radius = 0.0f;
+    // 旧资产可能没有 radius；不能因为 0 半径把所有 caster 剔掉。
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        aabbMin, aabbMax, volume));
+}
+
+TEST(LocalShadowMath, SpotCullUsesConeAngleAndRange)
+{
+    const Eigen::Vector3f direction(0.0f, 0.0f, -1.0f);
+    VL::LocalShadowCullVolume volume;
+    volume.isPoint = false;
+    volume.position = Eigen::Vector3f::Zero();
+    volume.direction = direction;
+    volume.coneAngleOuter =
+        20.0f * 3.14159265358979323846f / 180.0f;
+    volume.radius = 500.0f;
+
+    const auto boxAround = [](const Eigen::Vector3f& center,
+                              float halfExtent)
+    {
+        return std::pair<Eigen::Vector3f, Eigen::Vector3f>(
+            center - Eigen::Vector3f::Constant(halfExtent),
+            center + Eigen::Vector3f::Constant(halfExtent));
+    };
+
+    const auto inCone = boxAround(
+        Eigen::Vector3f(0.0f, 0.0f, -100.0f), 2.0f);
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        inCone.first, inCone.second, volume));
+
+    // 明显偏离锥体轴 45°，远大于 20° + 包围球角度容差。
+    const auto outsideCone = boxAround(
+        Eigen::Vector3f(100.0f, 0.0f, -100.0f), 2.0f);
+    EXPECT_FALSE(VL::IntersectsLocalShadowVolume(
+        outsideCone.first, outsideCone.second, volume));
+
+    // 灯后方。
+    const auto behind = boxAround(
+        Eigen::Vector3f(0.0f, 0.0f, 100.0f), 2.0f);
+    EXPECT_FALSE(VL::IntersectsLocalShadowVolume(
+        behind.first, behind.second, volume));
+
+    // 超出 radius 远界。
+    const auto beyondRange = boxAround(
+        Eigen::Vector3f(0.0f, 0.0f, -600.0f), 2.0f);
+    EXPECT_FALSE(VL::IntersectsLocalShadowVolume(
+        beyondRange.first, beyondRange.second, volume));
+
+    // 包围球刚好跨过锥体边缘：保守测试必须保留这个 caster。
+    const float edgeAngle =
+        25.0f * 3.14159265358979323846f / 180.0f;
+    const Eigen::Vector3f edgeCenter(
+        100.0f * std::tan(edgeAngle),
+        0.0f,
+        -100.0f);
+    const auto edge = boxAround(edgeCenter, 8.0f);
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        edge.first, edge.second, volume));
+}
+
+TEST(LocalShadowMath, CullBuildsFromSnapshotAndKeepsInvalidData)
+{
+    LightSnapshot point;
+    point.type = LightSnapshotType::Point;
+    point.position = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
+    point.radius = 250.0f;
+    const VL::LocalShadowCullVolume pointVolume =
+        VL::BuildLocalShadowCullVolume(point);
+    EXPECT_TRUE(pointVolume.isPoint);
+    EXPECT_FLOAT_EQ(pointVolume.radius, 250.0f);
+
+    LightSnapshot spot;
+    spot.type = LightSnapshotType::Spot;
+    spot.position = Eigen::Vector3f::Zero();
+    spot.direction = Eigen::Vector3f(0.0f, 0.0f, -4.0f);
+    spot.radius = 100.0f;
+    spot.coneAngleOuter = 0.5f;
+    const VL::LocalShadowCullVolume spotVolume =
+        VL::BuildLocalShadowCullVolume(spot);
+    EXPECT_FALSE(spotVolume.isPoint);
+    EXPECT_NEAR(spotVolume.direction.z(), -1.0f, 1.0e-6f);
+
+    // 退化 AABB / 非有限输入必须保留 draw，不能静默漏影。
+    VL::LocalShadowCullVolume smallVolume = pointVolume;
+    smallVolume.radius = 1.0f;
+    EXPECT_TRUE(VL::IntersectsLocalShadowVolume(
+        Eigen::Vector3f(10.0f, 10.0f, 10.0f),
+        Eigen::Vector3f(-10.0f, -10.0f, -10.0f),
+        smallVolume));
+}
+
 TEST(LocalLightShadowSettings, ParsesDefaultsAndOverrides)
 {
     const nlohmann::json none = nlohmann::json::object();
@@ -304,7 +456,7 @@ TEST(LocalShadowGraph, CompilesLocalShadowProducersAndSamplingBarrier)
             deferred = &pass;
         }
     }
-    EXPECT_EQ(localShadowWriters, 4u);
+    EXPECT_EQ(localShadowWriters, 8u);
     ASSERT_NE(firstLocalShadow, nullptr);
     ASSERT_NE(deferred, nullptr);
 

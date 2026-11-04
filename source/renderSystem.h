@@ -38,6 +38,7 @@
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/localShadowMath.h"
 #include "particles/particleFrameStats.h"
 #include "particles/particleDecalRuntime.h"
 #include "particles/particleRenderer.h"
@@ -361,6 +362,12 @@ private:
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
     bool IsLocalShadowActive(uint32_t localShadowIndex) const override;
     uint32_t GetLocalShadowMode(uint32_t localShadowIndex) const override;
+    const VL::LightSnapshot* GetLocalShadowLight(
+        uint32_t localShadowIndex) const override;
+    void ReportLocalShadowCasterStats(
+        uint32_t localShadowIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters) override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
     void RecordParticlePass(
         vk::CommandBuffer& commandBuffer,
@@ -434,6 +441,8 @@ private:
     // 每帧在 UploadLightsForPass 之前运行：写回 shadowSlice/shadowFar，
     // 并把前 kMaxLocalShadowLights 盏灯冻结给 LocalShadow pass 使用。
     void PrepareLocalShadowLights();
+    // 只做低频日志，避免每帧刷新控制台；由 pass 录制完成后的帧尾调用。
+    void LogLocalShadowCasterStatistics();
     ShadowProjectionParams CalculateShadowMatrixForCameraRange(
         float splitNear,
         float splitFar,
@@ -485,6 +494,12 @@ private:
     ShadowCascadeFrameData shadowCascadeFrameData;
     // 索引即 localShadow pass 的数组层；未激活的层不参与 UBO 上传。
     std::vector<VL::LightSnapshot> activeLocalShadowLights;
+    // 本帧每层实际录制/候选的 caster 数；PrepareLocalShadowLights 清零，
+    // pass 录制时填充，帧尾按低频输出。
+    std::array<uint32_t, VL::kMaxLocalShadowLights>
+        localShadowDrawnCasters{};
+    std::array<uint32_t, VL::kMaxLocalShadowLights>
+        localShadowTotalCasters{};
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;

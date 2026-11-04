@@ -553,6 +553,90 @@
             ]
         },
         {
+            "name": "localShadow4",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 4,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow5",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 5,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow6",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 6,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow7",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 7,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "geometry",
             "type": "geometry",
             "needMsaa": false,

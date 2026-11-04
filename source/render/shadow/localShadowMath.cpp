@@ -155,6 +155,120 @@ float ComputeLocalShadowFar(float lightRadius)
     return std::max(2.0f, lightRadius * 1.05f);
 }
 
+LocalShadowCullVolume BuildLocalShadowCullVolume(
+    const LightSnapshot& light)
+{
+    LocalShadowCullVolume volume;
+    volume.isPoint =
+        light.type == LightSnapshotType::Point;
+    volume.position = light.position;
+    volume.coneAngleOuter = light.coneAngleOuter;
+    // radius <= 0 在作者数据里表示“未限制”，此时不做距离剔除；
+    // 不能拿 shadow far 的 fallback 去剔除，否则会改变无半径灯的行为。
+    volume.radius =
+        std::isfinite(light.radius) && light.radius > 0.0f
+        ? light.radius
+        : 0.0f;
+
+    if (!volume.isPoint)
+    {
+        const float directionLength = light.direction.norm();
+        if (std::isfinite(directionLength) &&
+            directionLength > 1.0e-6f)
+        {
+            volume.direction =
+                light.direction / directionLength;
+        }
+        else
+        {
+            // 无效聚光方向无法可靠构造锥体，退化为不剔除。
+            volume.radius = 0.0f;
+        }
+    }
+    return volume;
+}
+
+bool IntersectsLocalShadowVolume(
+    const Eigen::Vector3f& aabbMin,
+    const Eigen::Vector3f& aabbMax,
+    const LocalShadowCullVolume& volume)
+{
+    const bool finiteBounds =
+        aabbMin.allFinite() &&
+        aabbMax.allFinite() &&
+        volume.position.allFinite();
+    if (!finiteBounds ||
+        aabbMin.x() > aabbMax.x() ||
+        aabbMin.y() > aabbMax.y() ||
+        aabbMin.z() > aabbMax.z())
+    {
+        // 世界包围盒来自快照；异常数据宁可多画一次。
+        return true;
+    }
+
+    const float radius = volume.radius;
+    if (!std::isfinite(radius) || radius <= 0.0f)
+    {
+        // 未限制半径（旧行为）或非法半径：不做剔除。
+        return true;
+    }
+    const float radiusSquared = radius * radius;
+
+    if (volume.isPoint)
+    {
+        const Eigen::Vector3f closest =
+            volume.position.cwiseMax(aabbMin).cwiseMin(aabbMax);
+        return (volume.position - closest).squaredNorm() <=
+            radiusSquared;
+    }
+
+    // 聚光：用 AABB 的外接球做保守测试。包围球中心到灯的距离与
+    // 锥体半角共同决定是否可能相交；球半径作为角度容差。
+    const Eigen::Vector3f center =
+        (aabbMin + aabbMax) * 0.5f;
+    const Eigen::Vector3f halfExtent =
+        (aabbMax - aabbMin) * 0.5f;
+    const float boundingRadius = halfExtent.norm();
+    const Eigen::Vector3f toCenter =
+        center - volume.position;
+    const float distance = toCenter.norm();
+
+    // 远界：包围球整体超出灯半径时不可能有影子。
+    if (distance > radius + boundingRadius)
+    {
+        return false;
+    }
+    // 灯在包围球内：必然相交。
+    if (distance <= boundingRadius)
+    {
+        return true;
+    }
+
+    const float forwardDistance =
+        toCenter.dot(volume.direction);
+    // 锥体只向传播方向延伸；整球落在过灯且垂直于轴的平面后方时
+    // 不可能与锥体相交。允许 boundingRadius 作为保守余量。
+    if (forwardDistance < -boundingRadius)
+    {
+        return false;
+    }
+
+    const float cosine =
+        std::clamp(forwardDistance / distance, -1.0f, 1.0f);
+    const float angleToCenter = std::acos(cosine);
+    // 渲染端把聚光半角夹在 (0, 89°]，剔除必须使用同一上限，
+    // 否则作者写了 >90° 时会把实际可见的 caster 剔掉。
+    const float outerCone = std::clamp(
+        std::isfinite(volume.coneAngleOuter)
+            ? volume.coneAngleOuter
+            : 0.0f,
+        0.0f,
+        1.5533431f);
+    const float angularRadius = std::asin(
+        std::clamp(boundingRadius / distance, 0.0f, 1.0f));
+    return angleToCenter <= outerCone + angularRadius;
+}
+
 std::vector<size_t> RankLocalShadowLights(
     const std::vector<LightSnapshot>& lights,
     const Eigen::Vector3f& cameraPosition,

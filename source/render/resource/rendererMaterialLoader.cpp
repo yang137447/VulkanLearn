@@ -417,7 +417,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
             {
                 cachedBaseMaterial->SetLocalShadowPipeline(
                     std::move(localShadowBuildResult.pipeline),
-                    localShadowBuildResult.shaderArtifact);
+                    localShadowBuildResult.shaderArtifact,
+                    localShadowBuildResult.reloadRecipe);
             }
         }
         return *cachedMaterialInstance;
@@ -537,7 +538,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         {
             material->SetLocalShadowPipeline(
                 std::move(localShadowBuildResult.pipeline),
-                localShadowBuildResult.shaderArtifact);
+                localShadowBuildResult.shaderArtifact,
+                localShadowBuildResult.reloadRecipe);
         }
     }
     const auto& shaderParameters = effectiveMaterialInstanceJson["parameters"];

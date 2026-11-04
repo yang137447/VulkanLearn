@@ -31,6 +31,23 @@ public:
     virtual void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
+    // 局部阴影 caster 剔除与低频统计。默认实现关闭剔除，供缩略图/
+    // 离线等没有局部阴影生产者的会话复用。
+    virtual const LightSnapshot* GetLocalShadowLight(
+        uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return nullptr;
+    }
+    virtual void ReportLocalShadowCasterStats(
+        uint32_t localShadowIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters)
+    {
+        (void)localShadowIndex;
+        (void)drawnCasters;
+        (void)totalCasters;
+    }
 };
 
 struct RendererDrawContext
@@ -49,7 +66,13 @@ class RendererDrawExecutor
 public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
-    void DrawLocalShadowScene(const PipelineBase& commonLocalShadowPipeline, RendererDrawContext& context) const;
+    // light 为空表示调用方没有可用的冻结灯数据；此时不做剔除，保持旧的全量绘制。
+    // recordCasterStats 只在点光首个象限/聚光唯一一次为 true，避免重复统计。
+    void DrawLocalShadowScene(
+        const PipelineBase& commonLocalShadowPipeline,
+        RendererDrawContext& context,
+        const LightSnapshot* light,
+        bool recordCasterStats) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
     void DrawForwardOpaqueScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;
