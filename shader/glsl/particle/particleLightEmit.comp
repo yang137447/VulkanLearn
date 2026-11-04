@@ -35,11 +35,10 @@ void main()
 
     float lifetime = max(particle.velocityLife.w, 1.0e-6);
     float lifeT = clamp(particle.positionAge.w / lifetime, 0.0, 1.0);
-    float alpha = clamp(
-        mix(frame.colorStart.w, frame.colorEnd.w, lifeT) *
-            frame.colorTint.w,
-        0.0,
-        1.0);
+    // CPU 在无作者 colorKeys 时会填两个端点 key，因此曲线求值对现有资产
+    // 等价于 mix(colorStart, colorEnd, lifeT)，同时让逐粒子灯响应颜色曲线。
+    vec4 colorCurve = EvaluateColorCurve(lifeT);
+    float alpha = clamp(colorCurve.a * frame.colorTint.a, 0.0, 1.0);
     float intensity =
         frame.particleLightParams.z * (1.0 - lifeT) * alpha;
     if (!(intensity > 0.0))
@@ -47,9 +46,7 @@ void main()
         return;
     }
 
-    vec3 color =
-        mix(frame.colorStart.xyz, frame.colorEnd.xyz, lifeT) *
-        frame.colorTint.xyz;
+    vec3 color = colorCurve.rgb * frame.colorTint.rgb;
     vec3 worldPosition = frame.shape.z > 0.5
         ? (frame.localToWorld *
             vec4(particle.positionAge.xyz, 1.0)).xyz

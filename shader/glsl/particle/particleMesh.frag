@@ -1,6 +1,7 @@
 #version 450
 
 #include "particleCommon.glsl"
+#include "particleSceneLighting.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 2) in float vViewDepth;
@@ -43,8 +44,8 @@ void main()
             1.0);
     }
 
-    // 材质 v1 子集：baseColor 乘粒子颜色曲线；roughness/metallic 只驱动
-    // 一个方向光的 GGX 高光，不接入完整 Material 图/纹理/宏。
+    // 材质 v1 子集：baseColor 乘粒子颜色曲线；roughness/metallic 驱动
+    // 完整场景光照下的 GGX 高光，但仍不接入 Material 图/纹理/宏。
     vec3 baseColor = vColor.rgb;
     if (frame.materialPbr.z > 0.5)
     {
@@ -64,39 +65,37 @@ void main()
     if (frame.meshLightParams.x > 0.5)
     {
         vec3 n = normalize(vNormal);
-        vec3 l = normalize(frame.meshLightDirection.xyz);
         vec3 v = normalize(frame.cameraPosition.xyz - vWorldPosition);
-        float ndl = max(dot(n, l), 0.0);
-        float ndv = max(dot(n, v), 1.0e-4);
         float roughness = clamp(frame.materialPbr.x, 0.04, 1.0);
         float metallic = clamp(frame.materialPbr.y, 0.0, 1.0);
-        float alpha = roughness * roughness;
-        vec3 halfVector = normalize(l + v);
-        float ndh = max(dot(n, halfVector), 0.0);
-        float vdh = max(dot(v, halfVector), 0.0);
-        float alphaSquared = alpha * alpha;
-        float denominator =
-            ndh * ndh * (alphaSquared - 1.0) + 1.0;
-        float distribution = alphaSquared /
-            max(3.14159265 * denominator * denominator, 1.0e-6);
-        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
-        float geometry =
-            (ndl / (ndl * (1.0 - k) + k)) *
-            (ndv / (ndv * (1.0 - k) + k));
-        vec3 f0 = mix(vec3(0.04), baseColor, metallic);
-        vec3 fresnel =
-            f0 + (1.0 - f0) * pow(1.0 - vdh, 5.0);
-        vec3 diffuse = baseColor * (1.0 - metallic);
-        vec3 specular = distribution * geometry * fresnel /
-            max(4.0 * ndl * ndv, 1.0e-5);
         float shadow = SampleParticleCsmShadow(
             shadowMap,
             vWorldPosition,
             n);
-        vec3 direct = (diffuse / 3.14159265 + specular) *
-            frame.meshLightColor.rgb * ndl * shadow;
-        vec3 ambient = baseColor * clamp(frame.meshLightParams.y, 0.0, 1.0);
-        outColor.rgb = direct + ambient;
+        // 与主 DefaultLit 路径同公式：全部方向光/点光/聚光 + GPU 粒子灯，
+        // CSM 只作用于方向光（当前只烘焙主方向光的级联）。
+        ParticleLightingLobes lobes = CalculateParticleMeshSceneLighting(
+            n,
+            vWorldPosition,
+            frame.cameraPosition.xyz,
+            baseColor,
+            roughness,
+            metallic,
+            shadow);
+        vec3 f0 = mix(vec3(0.04), baseColor, metallic);
+        float ambientScale = clamp(frame.meshLightParams.y, 0.0, 1.0);
+        vec3 diffuseIbl = ParticleSampleDiffuseIbl(n, baseColor);
+        vec3 specularIbl = ParticleEvaluateSpecularIbl(
+            n,
+            v,
+            f0,
+            roughness);
+        // 常量 ambient 保留为环境缺失（黑 cubemap）时的下限，IBL 作为额外
+        // 环境项；两者共用 meshLightParams.y，与原 ambient 语义连续。
+        outColor.rgb =
+            lobes.diffuse +
+            lobes.specular +
+            (baseColor + diffuseIbl + specularIbl) * ambientScale;
     }
     if (frame.materialPbr.z > 0.5)
     {

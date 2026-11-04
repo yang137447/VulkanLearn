@@ -34,6 +34,7 @@ Json FlatEmitter()
         {"name", "fire"},
         {"position", {1.0, 2.0, 3.0}},
         {"maxParticles", 42},
+        {"sortOrder", -3},
         {"spawnRate", 12.0},
         {"velocity", {{"min", {0.0, 1.0, 0.0}},
             {"max", {0.0, 2.0, 0.0}}}},
@@ -59,6 +60,8 @@ TEST(ParticleModuleEdit, SpecsExposeStableOrderAndFieldOwnership)
     EXPECT_EQ(FindParticleModuleSpec("spawn.typo"), nullptr);
 
     EXPECT_EQ(ParticleModuleTypeForField("maxParticles"), "emitter");
+    EXPECT_EQ(ParticleModuleTypeForField("sortParticles"), "emitter");
+    EXPECT_EQ(ParticleModuleTypeForField("sortOrder"), "emitter");
     EXPECT_EQ(ParticleModuleTypeForField("mesh.path"), "renderer");
     EXPECT_EQ(ParticleModuleTypeForField("shape.radius"),
         "spawn.shapeSphere");
@@ -83,6 +86,7 @@ TEST(ParticleModuleEdit, EnsureMigratesFlatFieldsAndPreservesBaseFields)
     EXPECT_EQ(emitter.at("position"), Json({1.0, 2.0, 3.0}));
     EXPECT_EQ(emitter.at("customFlag"), 7);
     EXPECT_FALSE(emitter.contains("maxParticles"));
+    EXPECT_EQ(Module(emitter, "emitter").at("fields").at("sortOrder"), -3);
     EXPECT_FALSE(emitter.contains("spawnRate"));
     EXPECT_FALSE(emitter.contains("collision"));
     EXPECT_FALSE(emitter.contains("mesh"));

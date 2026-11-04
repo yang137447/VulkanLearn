@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
+#include "particleSceneLighting.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -102,7 +103,30 @@ void main()
             vColor.a * alpha * mix(1.0, erosion, 0.6));
     }
     outColor.a *= softFade;
-    if (frame.shadowParams.w > 0.5)
+    if (frame.billboardLightParams.x > 0.5)
+    {
+        // ribbon 没有稳定的几何法线：条带始终面向相机，因此把视线方向
+        // 当作法线（与 billboard 的相机朝向法线同义），只做尽力光照。
+        vec3 facingNormal =
+            normalize(frame.cameraPosition.xyz - vWorldPosition);
+        float directionalShadow = 1.0;
+        if (frame.shadowParams.w > 0.5)
+        {
+            directionalShadow = SampleParticleCsmShadow(
+                shadowMap,
+                vWorldPosition,
+                facingNormal);
+        }
+        outColor.rgb = CalculateParticleBillboardSceneLighting(
+            outColor.rgb,
+            vWorldPosition,
+            facingNormal,
+            frame.cameraPosition.xyz,
+            clamp(frame.billboardLightParams.y, 0.0, 1.0),
+            clamp(frame.billboardLightParams.z, 0.0, 1.0),
+            directionalShadow);
+    }
+    else if (frame.shadowParams.w > 0.5)
     {
         vec3 facingNormal =
             normalize(frame.cameraPosition.xyz - vWorldPosition);

@@ -43,8 +43,11 @@ Spot angles are half-angles in degrees in JSON and radians
 in the GPU snapshot. The inner cone is fully lit, the outer cone is zero, and
 the transition is smooth.
 
-The current `radius` field remains a legacy scene field because it is not yet
-consumed by the real-time evaluator. It is not a physical attenuation control.
+Point and spot `radius` is now consumed by the real-time evaluator as a UE-style
+local-light window: the existing `1 / (d^2 + 1)` core is multiplied by
+`clamp(1 - (d^2 / r^2)^2, 0, 1)^2`. `radius <= 0` means an unbounded light and
+keeps the pre-window behavior. It is an artist attenuation window, not a
+photometric quantity.
 
 Optional C# Blueprint light components accept only canonical units: directional
 `lux`, point/spot `cd`. They share the existing snapshot and GPU conversion
@@ -126,9 +129,10 @@ reads the live particles and writes point lights into a separate per-swapchain
 finite and positive. `maxParticles` is capped at 64 per light emitter. All light
 emitters share one fixed 64-slot output buffer per swapchain image; slots are
 assigned in stable emitter-key order (first-fit), so overflow truncation does
-not depend on map iteration order. The shader color is
-`mix(colorStart.rgb, colorEnd.rgb, lifeT)`, multiplied by the instance color
-tint; alpha fades intensity, and the final scalar is
+not depend on map iteration order. The shader color/alpha comes from
+`EvaluateColorCurve(lifeT)` (author `colorKeys` when present, otherwise the
+`colorStart`/`colorEnd` endpoints), multiplied by the instance color tint;
+alpha fades intensity, and the final scalar is
 `light.intensity * (1 - lifeT) * alpha`. The GPU emits
 `intensity * 100^2` to match the existing `LightGPU` centimeter-distance
 convention.
@@ -277,8 +281,9 @@ On October 9, 2026, the resource scenes under
 - Omitted legacy CSM distances are materialized as 30000 cm (formerly the
   300-world-unit default). Bias controls are normalized depth/slope factors,
   not world lengths; they are not multiplied by 100.
-- The unused legacy `radius` field was removed from migrated point and spot
-  lights. It must not be interpreted as a physical attenuation radius.
+- The migrated point and spot lights omit `radius`, which now means an unbounded
+  artist window (`radius <= 0`). It must not be interpreted as a physical
+  attenuation radius.
 
 `SC_scene01` was migrated from the historical `sunLight` form to a loadable
 `directionalLight` with `lux` intensity, centimeter-space transforms, and the
@@ -326,6 +331,9 @@ value; `toneMapping` exposes only the raw scene color and then combines it
 with that Bloom value, so Bloom is not exposed twice. The prefilter
 parameter's `w` channel is runtime-owned exposure, not an artist control;
 neutral default 1 preserves neutral-exposure paper plots.
+`bloomDownsample` uses a 2x2 Karis average (`1 / (1 + luma)`) instead of a fixed
+3x3 kernel: fireflies from sparks/arcs no longer dominate the lowest mip, while
+the normalized weights keep the overall exposure level stable.
 
 These are explicit project-authored migration baselines, not recovered
 photometric measurements or paper-scene lighting. Absolute HDRI luminance

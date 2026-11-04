@@ -42,6 +42,11 @@
   模拟，把存活粒子映射成最多 64 个可见 DBuffer decal。
   粒子 decal 与静态 decal 共用 `decalStencil` D24S8 union mask（bit0）、64 槽实例
   排序和 `DecalRenderer`；粒子侧不额外创建 stencil 资源或独立 decal pass。
+- 粒子图形 pass 可选接收完整场景光照：billboard/ribbon 用 wrapped Lambert 消费全部
+  方向光/点光/聚光 + GPU 粒子灯 + IBL，mesh 走完整 DefaultLit；开关与强度由
+  `billboardLighting` / `billboardLightingStrength` / `meshLighting` 控制。
+- 透明顺序以 `sortOrder`（作者层）为主键、包围球视深度为次序；全局 alpha 池作为
+  一个 draw item 参与同一份排序，不再固定最后绘制。
 - Billboard 支持可选 flipbook 图集；没有纹理时回退到程序化软圆盘叠加 4 阶 FBM 噪声侵蚀。
 - color/size 支持最多 8 个生命周期 key；没有 key 时回退到 `colorStart/colorEnd`、`size` 两个端点。
 - 世界单位是 cm；速度与重力按 cm/s、cm/s^2 作者化。
@@ -607,7 +612,8 @@ prewarm 的解析积分完成后只在末尾调用一次碰撞，不逐子步求
 ## 跨发射器排序
 
 `ParticleRenderer` 每帧在模拟录制之后计算发射器级绘制顺序，graphics pass 按该顺序从远到近
-绘制所有 billboard 发射器。深度键是：
+绘制所有 billboard 发射器。排序主键是作者字段 `sortOrder`（升序，值小的先画），
+同层内再按视深度降序；深度键是：
 
 ```text
 depth = dot(emitterWorldCenter - cameraPosition, normalize(cameraForward))
@@ -637,15 +643,19 @@ sqrt(2) * noiseAmplitude + width +
 跨发射器排序中错位。
 beam 的自动中心是变换后的线段中点，局部半径见「Beam 电弧」；它不会按发射器原点
 参与剔除。
-深度相同时按稳定身份 key（`sceneName|assetPath|emitterName`）字典序升序排序，不使用
-`unordered_map` 的迭代顺序参与 tie-break。
+`sortOrder` 相同时再比较视深度；深度也相同时按稳定身份 key
+（`sceneName|assetPath|emitterName`）字典序升序排序，不使用 `unordered_map` 的迭代
+顺序参与 tie-break。`sortOrder` 是主序，否则深度排序会把作者的层级意图重新打散。
 
 发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard、总容量 ≤ 8192 且唯一纹理 ≤ 8
 时，所有参与发射器 gather 到一个全局记录池，做一次全局逐粒子 bitonic 排序后
 `drawIndirect`；additive/ribbon/mesh/beam/distortion 或超限场景保留逐发射器路径。
 beam 与 distortion 永远不进入 gather 记录池。全局路径与未参与发射器
 之间仍是发射器级先后近似；发射器集合增删导致排序表短暂失配时，未进入排序表的池按原
-map 顺序补画。
+map 顺序补画。全局 alpha 池本身作为一个特殊 draw item 参与同一份排序：`sortOrder`
+取池内成员最小值，位置取池内**背景边缘**（最大视深）的成员，轮到该项时一次性录制
+`RecordGlobalDraw`。因此它不再固定拖到所有逐发射器之后，中近景碎片/弹壳可以正确
+盖在烟前；整池只有一个插入位置，池跨越很大深度范围时仍是近似。
 
 可见性剔除在排序之前完成，但不会改写排序公式：`RecordSimulation` 仍为回退路径计算
 远→近顺序，`RecordGraphics` 只跳过 `culled` 发射器。逐发射器与全局路径都使用
@@ -786,8 +796,10 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   替换为命中点；否则保留作者化 `end`。这是受控平面命中，不是任意物理 mesh raycast。
 - `light`：`renderMode: "light"` 时必填，结构为
   `{ "intensity": 300.0, "radius": 700.0 }`。`intensity` 单位是 cd，`radius` 单位是 cm，
-  两者都必须有限且 `> 0`。颜色来自 `colorStart`/`colorEnd` 的 RGB/alpha；alpha 参与
-  强度衰减。`light` 必须是对象；缺失、非对象或非有限/非正值在加载期拒绝。
+  两者都必须有限且 `> 0`。颜色与 alpha 来自 `EvaluateColorCurve(lifeT)`：有
+  `colorKeys` 时使用曲线，否则 CPU 会填 `colorStart`/`colorEnd` 两个端点 key。
+  alpha 参与强度衰减；`radius` 已由实时点光求值消费（见下文半径窗）。`light` 必须是
+  对象；缺失、非对象或非有限/非正值在加载期拒绝。
   light 发射器的 `maxParticles` 必须在 `[1, 64]`，且不要求 alpha 排序开关。
 - `decal`：`renderMode: "decal"` 时必填，结构为
   `{ "size": [100,400,400], "rotation": [0,0,0], "color": [0.02,0.018,0.015],
@@ -811,16 +823,24 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   `u_baseColor/u_emissive/u_emissiveStrength/u_roughness/u_metallic` 数值子集。
   mesh v1 不允许与 `localSpace: true` 组合。
 - `meshLighting`：默认 `true`，仅 `renderMode: "mesh"` 使用。开启时按场景主方向光计算
-  单方向光 GGX/Smith/Fresnel 直接光并采样 CSM；关闭时 mesh 仍走 unlit 输出。
-  billboard 与 ribbon 忽略该字段。
+  完整 DefaultLit 光照：全部方向光/点光/聚光 + 全部 GPU 粒子灯，GGX/Smith/Fresnel
+  直接光 + 预过滤 cubemap/BRDF LUT 的 IBL，方向光额外采样 CSM；关闭时 mesh 仍走
+  unlit 输出。billboard 与 ribbon 忽略该字段。
 - `meshAmbient`：默认 `0.2`，仅 `renderMode: "mesh"` 且 `meshLighting: true` 时参与光照。
-  它乘 baseColor 作为常量环境项，范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity 在加载和
-  编辑器写入阶段都会被拒绝。
+  它同时缩放常量 ambient 与 IBL 环境项，范围 `[0, 1]`；负值、超过 1、NaN 与 Infinity
+  在加载和编辑器写入阶段都会被拒绝。
 - `billboardLighting`：默认 `false`，仅 `renderMode: "billboard"` 使用。开启后以实际
   billboard 平面的世界空间面法线（camera alignment 时朝向相机，velocity alignment 时
-  朝向速度）计算场景第一个方向光的 Lambert 直接光；没有有效方向光时保持 unlit。
+  朝向速度）计算**全部**方向光/点光/聚光 + GPU 粒子灯的 wrapped Lambert 直接光
+  （wrap = 0.5），并叠加常量 ambient 与 IBL 漫反射；方向光可按 `billboardShadows`
+  采样 CSM。unlit 路径保持不变。
 - `billboardAmbient`：默认 `0.2`，仅 `renderMode: "billboard"` 且
   `billboardLighting: true` 时参与光照，范围 `[0, 1]`；它乘粒子颜色作为常量环境项。
+- `billboardLightingStrength`：默认 `1.0`，范围 `[0, 1]`，只有
+  `billboardLighting: true` 时生效。
+  这是“场景光照替换 authored 颜色”的比例：0 保留原 unlit 颜色，1 完全使用场景光照；
+  用插值而非纯乘法，避免 authored 颜色在暗场景掉亮度或在强光附近过曝。
+  ribbon 使用同一对开关（法线取面向相机的视线方向）。
   `billboardLighting` 与 `billboardShadows` 同时开启时，直接光乘 CSM shadow，而不是
   再叠加旧的 50% 调暗。additive billboard 也消费同一光照；需要自发光时应显式关闭
   `billboardLighting`。
@@ -1258,22 +1278,25 @@ D        = alpha^2 / (pi * ((N·H)^2 * (alpha^2 - 1) + 1)^2)
 G        = SmithSchlick(N·V, N·L, k=(roughness+1)^2/8)
 F        = F0 + (1 - F0) * (1 - V·H)^5
 direct   = (baseColor * (1 - metallic) / pi + D*G*F/(4*N·L*N·V)) * lightColor * N·L * shadow
-color    = direct + baseColor * meshAmbient + emissive * emissiveStrength
+ambient  = (baseColor + diffuseIbl + specularIbl) * meshAmbient
+color    = direct + ambient + emissive * emissiveStrength
 ```
 
-- `L` 是场景主方向光方向的取反（指向光源），`lightColor` 使用线性空间颜色；
+- `direct` 对全部方向光/点光/聚光 + GPU 粒子灯逐盏求和；`L` 指向该灯，
+  `lightColor` 使用线性空间颜色（点光/聚光已含 `cd * 100^2` 与半径窗）。
   `N` 是实例旋转后的世界空间法线，`V` 是相机方向，`H` 是半程向量。
 - `materialInstancePath` 提供 `baseColor/roughness/metallic/emissive` 数值子集；
   没有 MI 时 `baseColor` 来自粒子颜色曲线，`roughness` 默认 `0.5`、`metallic` 默认 `0`。
-- `shadow` 来自 CSM `SampleParticleCsmShadow`，使用世界位置与法线；`meshAmbient` 默认 `0.2`
-  乘 baseColor，不是环境光探针或半球积分。
-- 只读取场景中的第一个方向光；光色不乘 `lux` 强度。场景没有方向光时回退为 unlit，
-  不会阻断渲染。
-- 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图、IBL、间接光、
-  逐光源循环或 alpha-to-coverage。CSM 阴影对 mesh 自动化生效；billboard/ribbon/beam 通过
-  `billboardShadows` 开关走各自的 CSM 采样路径。
-- `meshLighting: false` 保持原有 unlit 路径；ribbon 与 beam 完全忽略这两个字段，billboard 使用
-  独立的 `billboardLighting` / `billboardAmbient`。
+- `shadow` 只作用于方向光，来自 CSM `SampleParticleCsmShadow`；点光/聚光/粒子灯当前
+  没有局部阴影。`diffuseIbl` 用预过滤 cubemap 的最高 mip 近似 irradiance，
+  `specularIbl` 用预过滤 cubemap + BRDF LUT；`meshAmbient` 默认 `0.2` 同时缩放常量
+  ambient 与 IBL。
+- 这是着色近似，不是完整材质系统：不接完整 Material 图、纹理/法线贴图或
+  alpha-to-coverage。billboard/ribbon/beam 通过 `billboardShadows` 开关走各自的 CSM
+  采样路径。
+- `meshLighting: false` 保持原有 unlit 路径；beam 完全忽略这两个字段，ribbon 复用
+  `billboardLighting` / `billboardAmbient` / `billboardLightingStrength`（法线取面向
+  相机的视线方向，属于尽力近似），billboard 使用同一组开关。
 
 ### Billboard 照明
 
@@ -1281,23 +1304,25 @@ color    = direct + baseColor * meshAmbient + emissive * emissiveStrength
 
 ```text
 N       = normalize(cross(billboardRight, billboardUp))
-L       = normalize(-sceneDirectionalLight.direction)
-direct  = baseColor * lightColor * max(N·L, 0) * shadow
-ambient = baseColor * billboardAmbient
-color   = direct + ambient
+wrapped = clamp((N·L + 0.5) / 1.5, 0, 1)       // 每盏方向光/点光/聚光/粒子灯
+direct  = Σ baseColor / pi * radiance * wrapped * lightShadow
+ambient = (baseColor + diffuseIbl) * billboardAmbient
+color   = mix(baseColor, direct + ambient, billboardLightingStrength)
 ```
 
 - `billboardRight` / `billboardUp` 是实际 quad 基。camera alignment 时面法线朝向相机，
   velocity alignment 时面法线朝向速度；不再一律使用相机中心方向。
-- `lightColor` 是场景第一个方向光的线性 RGB，不乘 lux 强度；没有有效方向光时
-  `billboardLightParams.x = 0`，输出回退到原 unlit 颜色，不阻断渲染。
-- `billboardShadows: true` 时 `shadow` 来自 CSM；两者都关闭时使用旧 unlit + 50% 阴影
-  调暗路径。全局 alpha 排序仍排除 `billboardShadows=true` 的发射器，因此 CSM 路径始终
-  走逐发射器绘制。
+- `radiance` 对方向光/点光/聚光/粒子灯分别使用各自的光色、强度与半径窗；`lightShadow`
+  只在 `billboardShadows: true` 时来自方向光 CSM，局部灯没有阴影。
+- `billboardLightingStrength` 是 unlit 作者颜色与场景光照之间的插值比例；0 完全保留
+  authored 颜色，1 完全使用光照，避免纯乘法在暗场景掉亮度、在强光附近过曝。
+- 全局 alpha 排序仍排除 `billboardShadows=true` 的发射器，因此 CSM 路径始终
+  走逐发射器绘制；全局路径的 gather 记录携带同一组 lighting 参数。
 - 全局 gather 记录新增 `lightParams`、`lightDirection`、`lightColor` 三个 `vec4`；
   `GatheredBillboard` 的 std430 stride 从 8 个 `vec4` 变为 11 个。gather、sort-init、
   global vertex/fragment 四处结构体必须同步。
-- 该照明只给 sprite 一个方向光近似，不提供法线贴图、IBL、逐光源循环或完整 Material Graph。
+- 该照明已覆盖全部场景灯与 GPU 粒子灯并接入 IBL，但 sprite 只做 wrapped Lambert
+  （没有镜面 lobe），仍不提供法线贴图或完整 Material Graph；局部灯没有阴影。
 
 ### Curves 结构化编辑
 
@@ -1544,7 +1569,7 @@ shader reload 提交后粒子管线重建、v2 模块栈与运行时用户参数
 instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角网格碰撞、全局标量
 Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
 确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
-GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记录，以及
+GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射器/全局路径的光照记录，以及
 `renderMode: "light"` 的 GPU per-particle 点光（独立 compute，每场景最多 64 盏）、
 `renderMode: "decal"` 的 CPU 粒子贴花（与静态 decal 共享每场景最多 64 个可见实例）。
 
@@ -1559,9 +1584,11 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
   全局 gather + 全局 bitonic + 单次 `drawIndirect`（`particleGlobalGather.comp` /
   `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；ribbon/mesh 与超限场景回退到
   逐发射器排序。全局路径使用固定索引分支选择 8 槽纹理，无纹理时保留程序化 FBM 形状；
-  gather 记录携带逐发射器 `billboardLighting` / `billboardAmbient` / 方向光参数，因此
-  lit 与 unlit alpha billboard 可以同池排序。开启 `billboardShadows` 的发射器仍留在
-  逐发射器路径以保留 CSM。全局路径与其它未参与发射器之间仍是发射器级先后近似。
+  gather 记录携带逐发射器 `billboardLighting` / `billboardAmbient` /
+  `billboardLightingStrength` / 方向光参数，因此 lit 与 unlit alpha billboard 可以同池
+  排序。开启 `billboardShadows` 的发射器仍留在逐发射器路径以保留 CSM。全局池作为
+  一个 draw item 参与同一份排序表（最小 `sortOrder` + 池的背景边缘深度），与其它
+  未参与发射器之间仍是发射器级先后近似。
   事件 v1 已支持 spawn/death/collision 三类有界 GPU 记录（4096 条/发射器）与
   `ParticleRenderer::DrainParticleEvents` / `RenderSystem::DrainParticleEvents` 回读；
   C# 通过 `ParticleSystem.Subscribe` 的 owner 级兴趣触发最多 10 Hz 的回读，
@@ -1594,9 +1621,15 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
 - 模拟 compute 每帧原子写 `alive`、紧凑 `aliveIndices` 与事件计数，`particleFinalizeCount.comp`
   把存活数写回 `drawIndirect` 的 `instanceCount`；图形阶段不再使用 CPU 容量/存活猜测。
   未使用 `VK_KHR_draw_indirect_count`；CPU 仍提交容量上界的单条间接命令。
-- light 发射器已有 GPU 模拟池与独立 `particleLightEmit` compute，但输出仍是固定 64 槽的
-  点光 SSBO：没有光纹理、阴影贴图、逐粒子 IES 或光源曲线；越过 64 槽的请求按稳定 emitter
-  key 顺序截断。light 发射器不产生可见 draw call，也不参与排序/indirect。
+- light 发射器已有 GPU 模拟池与独立 `particleLightEmit` compute，颜色/alpha 消费
+  `colorKeys` 曲线，输出仍是固定 64 槽的点光 SSBO：没有光纹理、阴影贴图、逐粒子 IES
+  或独立的强度曲线；越过 64 槽的请求按稳定 emitter key 顺序截断。light 发射器不产生
+  可见 draw call，也不参与排序/indirect。
+- 粒子场景光照：billboard/ribbon 在 `billboardLighting` 开关下接收全部方向光/点光/聚光
+  + GPU 粒子灯 + IBL，mesh 在 `meshLighting` 下走完整 DefaultLit。仍有的边界：sprite 只做
+  wrapped Lambert、无镜面 lobe；点光/聚光/粒子灯没有局部阴影（CSM 只作用于方向光）；
+  IBL 漫反射用预过滤 cubemap 的最高 mip 近似 irradiance，因为粒子 UBO 不携带 GPU 写的
+  SH 系数；没有 UE 的 Translucency Volume 模式。
 - decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU
   粒子映射为 `DecalSnapshot`，再走现有静态 decal 的 64 槽 DBuffer 路径。因此它不产生
   HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集或
@@ -1611,9 +1644,9 @@ GPU 计时、billboard 方向光近似、逐发射器/全局路径的光照记�
 - mesh 支持静态 SM、全部 section 合并、粒子颜色曲线与顶点色相乘；可选
   `materialInstancePath`（MI_*.json）只读取 `u_baseColor/u_emissive/u_emissiveStrength/
   u_roughness/u_metallic` 数值子集，缺失或解析失败回退内置默认值并只告警一次。
-  片元使用单方向光的 GGX + Fresnel + Smith 近似并采样 particle pass 的 CSM
-  `shadowMap`（set 3 binding 1）。没有完整 Material 图/纹理/宏、每 section 材质、LOD、
-  蒙皮、localSpace 或 size 曲线。网格朝向
+  片元使用完整 DefaultLit（全部方向光/点光/聚光 + GPU 粒子灯，GGX + Fresnel + Smith
+  + IBL），方向光采样 particle pass 的 CSM `shadowMap`（set 3 binding 1）。没有完整
+  Material 图/纹理/宏、每 section 材质、LOD、蒙皮、localSpace 或 size 曲线。网格朝向
   旋转只绕局部 Y 轴，mesh scale 不参与 `maxScreenSize` 的 billboard 钳制。导入失败
   静默回退 billboard 而不是显示错误几何。
 - `burstInterval > 0` 的周期重触发没有相位偏移、次数上限或单次 burst 计数；周期从
@@ -1643,8 +1676,9 @@ Scene/Mesh/Texture/Blueprint 共用同一命令总线。`particle.close` 只关�
 - `billboardShadows`：billboard/ribbon/beam 的显式简化阴影开关；默认 unlit，开启后按
   实际 billboard 面法线采样 CSM 并调暗 50%；与 `billboardLighting` 同时开启时改为把
   CSM shadow 乘进方向光直接项。
-- `billboardLighting` / `billboardAmbient`：billboard 的运行时方向光近似，默认关闭 /
-  `0.2`；不改变 mesh、ribbon 或 beam 的着色。
+- `billboardLighting` / `billboardAmbient` / `billboardLightingStrength`：billboard 与
+  ribbon 的运行时场景光照开关 / 环境缩放 / 光照替换比例，默认关闭 / `0.2` / `1.0`；
+  不改变 mesh 或 beam 的着色。
 - `events.{spawn,death,collision}`：三类 GPU 事件记录开关。事件写入
   `source/particles/particleEvents.h` 的 64-byte 记录；计数超过 4096 表示截断。
 - `randomSeed`（24 位参与 GPU hash）、`deterministicRandom`、`fixedTimeStep`
@@ -1755,7 +1789,9 @@ VulkanLearn 版本用 8 个发射器（`flash`、`core_burst`、`roil_smoke`、
 `dirt_burst`、`spark_burst`、`debris`、`smoke_plume`、`explosion_light`）重建火球、翻滚烟、
 地面尘、火花、岩石碎片和残余烟柱；`burstInterval = 3.0s` 循环，火花/碎片走
 SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序；`explosion_light` 用
-3 盏 GPU per-particle 点光复刻 UE Light Renderer。
+3 盏 GPU per-particle 点光复刻 UE Light Renderer；地面尘与残余烟柱开启
+`billboardLighting`，由火球灯光与场景补光染色（`roil_smoke` 保留 unlit，
+避免蓝色彩光盖过火球本体）。mesh 碎片走完整 DefaultLit。
 
 该案例是结构/视觉对齐，不是 UE 资产的直接移植：`ExplosionScorch` 使用
 BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 由 GPU 粒子池和
@@ -1772,6 +1808,8 @@ BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 由 GP
 `burstInterval = 2.5s` 循环。墙面 decal 由 `impact_decal` 的 CPU 粒子运行时生成，
 使用 `T_Impact_Concrete_*` 的 albedo/normal/ORM 贴图，经
 `decalResponse = colorNormalRoughness` 写入 DBuffer。
+尘与残留烟开启 `billboardLighting`，由撞击闪光与场景补光染色；碎块 mesh 走
+完整 DefaultLit。
 
 该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的光强由
 `impact_light` 的 GPU per-particle 点光复刻，墙面 decal 由 `impact_decal` 的

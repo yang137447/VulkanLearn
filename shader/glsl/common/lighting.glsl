@@ -852,6 +852,28 @@ vec3 CalculateClearCoatDirectionalLight(
         radiance);
 }
 
+// UE5 GetLocalLightAttenuation 的局部光半径窗：
+//   Window = saturate(1 - (d^2 / r^2)^2)^2
+// 目的不是替代 1/(d^2+1) 核函数，而是在作者半径处平滑收敛到 0，避免硬截断
+// 产生可见的光斑边界。radius <= 0 视为无限半径，保持旧行为。
+float EvaluateLocalLightRadiusWindow(
+    in float distanceCm,
+    in float radiusCm)
+{
+    if (radiusCm <= 0.0)
+    {
+        return 1.0;
+    }
+    float normalizedDistanceSq =
+        (distanceCm * distanceCm) / (radiusCm * radiusCm);
+    // GLSL 没有 HLSL 的 saturate，这里用 clamp 表达同一个 [0, 1] 截断。
+    float window = clamp(
+        1.0 - normalizedDistanceSq * normalizedDistanceSq,
+        0.0,
+        1.0);
+    return window * window;
+}
+
 LightingLobes CalculatePointLightLobes(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
@@ -865,7 +887,9 @@ LightingLobes CalculatePointLightLobes(
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
     // 距离平方直接使用 cm^2；1 cm^2 等价于原先的 1e-4 m^2 近场软化项。
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -936,7 +960,9 @@ vec3 CalculateClearCoatPointLight(
 {
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -977,7 +1003,9 @@ vec3 CalculateClearCoatSpotLight(
         spotLight.coneAngleOuterInnerPadPad.x,
         spotLightAngle);
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *
@@ -1016,7 +1044,9 @@ LightingLobes CalculateSpotLightLobes(
         spotLight.coneAngleOuterInnerPadPad.x,
         spotLightAngle);
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *

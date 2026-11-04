@@ -64,6 +64,12 @@ Current implemented areas include:
   `renderMode: "decal"` CPU particle decals (shared fixed-step/burst simulation, up to 64
   total visible DBuffer decals); current schema, ownership and limits:
   `documents/contracts/particle-system.md`
+- Particle graphics now opt into full scene lighting: billboard/ribbon receive all
+  directional/point/spot lights plus GPU particle lights and IBL through a particle-owned
+  set 0 binding 6..9 contract (wrapped Lambert, `billboardLightingStrength` blend),
+  while mesh particles use the complete DefaultLit path. Transparent ordering uses the
+  authoring `sortOrder` layer, and the global alpha pool is one draw item inside the same
+  depth order instead of being drawn last.
 - BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
   a dedicated `decalStencil` D24S8 pass (unit-cube bit0 union mask, stencil gate on the
   decals pass; sceneDepth stays a sampled input so there is no feedback loop), sceneDepth

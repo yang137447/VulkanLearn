@@ -319,6 +319,7 @@ private:
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
     void InitializeCurrentRenderSceneResources();
+    void ConfigureParticleSceneLighting();
     void RecordAndSubmitCurrentRenderScene();
     void AdvanceSpeedTreeWindProfiles();
     void UpdateExposureFrameTiming();

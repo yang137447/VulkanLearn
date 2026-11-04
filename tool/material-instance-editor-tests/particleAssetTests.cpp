@@ -60,6 +60,51 @@ TEST(ParticleAsset, MultiEmitterParsesNamesAndLocalPositions)
     EXPECT_EQ(asset.emitters.at(1).maxParticles, 64u);
 }
 
+TEST(ParticleAsset, EmitterSortOrderParsesAndValidatesRange)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["sortOrder"] = -7;
+    document["emitters"][1]["sortOrder"] = 1000;
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_sort_order.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(asset.emitters.at(0).sortOrder, -7);
+    EXPECT_EQ(asset.emitters.at(1).sortOrder, 1000);
+
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    Json sortOrderField;
+    for (const Json& field : capabilities["emitters"][0]["fields"])
+    {
+        if (field.value("field", std::string()) == "sortOrder")
+        {
+            sortOrderField = field;
+        }
+    }
+    ASSERT_TRUE(sortOrderField.is_object());
+    EXPECT_EQ(sortOrderField.value("type", std::string()), "number");
+    EXPECT_TRUE(sortOrderField.value("integer", false));
+    EXPECT_DOUBLE_EQ(sortOrderField.value("minimum", 0.0), -1000.0);
+    EXPECT_DOUBLE_EQ(sortOrderField.value("maximum", 0.0), 1000.0);
+
+    // 小数不能静默截断，越界也不能留到运行时才发现。
+    document["emitters"][0]["sortOrder"] = 1.5;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_sort_order_fraction.json"),
+        std::invalid_argument);
+    document["emitters"][0]["sortOrder"] = -1001;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_sort_order_low.json"),
+        std::invalid_argument);
+    document["emitters"][0]["sortOrder"] = 1001;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_sort_order_high.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, LegacyRootBecomesOneImplicitEmitter)
 {
     const Json document{
@@ -161,6 +206,18 @@ TEST(ParticleAsset, V2RendererAdditiveControlsBlend)
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_v2_additive.json");
     EXPECT_TRUE(additive.emitters.front().additive);
+}
+
+TEST(ParticleAsset, V2EmitterModuleCarriesSortOrder)
+{
+    // sortParticles 与 sortOrder 同属 emitter 模块；展平后运行时只看到
+    // 根级字段，因此 v2 作者层不能被遗漏。
+    Json document = V2ModuleDocument();
+    document["emitters"][0]["modules"][0]["fields"]["sortOrder"] = 12;
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_v2_sort_order.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_EQ(asset.emitters.front().sortOrder, 12);
 }
 
 TEST(ParticleAsset, V2ModuleFieldConflictsAndUnknownTypesAreRejected)
@@ -2708,6 +2765,39 @@ TEST(ParticleAsset, BillboardLightingDefaultsToUnlitWithAmbient)
     EXPECT_FALSE(asset.emitters[1].billboardLighting);
     EXPECT_FLOAT_EQ(asset.emitters[0].billboardAmbient, 0.2f);
     EXPECT_FLOAT_EQ(asset.emitters[1].billboardAmbient, 0.2f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].billboardLightingStrength,
+        1.0f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[1].billboardLightingStrength,
+        1.0f);
+}
+
+TEST(ParticleAsset, BillboardLightingStrengthParsesAndValidates)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["billboardLighting"] = true;
+    document["emitters"][0]["billboardLightingStrength"] = 0.35;
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document,
+        "Maps/SC_test/PS_billboard_lighting_strength.json");
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].billboardLightingStrength,
+        0.35f);
+
+    document["emitters"][0]["billboardLightingStrength"] = -0.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_billboard_lighting_strength_low.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["billboardLightingStrength"] = 1.01;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document,
+            "Maps/SC_test/PS_billboard_lighting_strength_high.json"),
+        std::invalid_argument);
 }
 
 TEST(ParticleAsset, BillboardLightingParsesAndRejectsInvalidAmbient)

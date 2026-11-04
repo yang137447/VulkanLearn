@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
+#include "particleSceneLighting.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -113,15 +114,24 @@ void main()
     outColor.a *= softFade;
     if (frame.billboardLightParams.x > 0.5)
     {
-        outColor.rgb = EvaluateParticleBillboardLighting(
+        // 方向光共用同一套 CSM（以主方向光的级联为准）；点光/聚光/粒子灯
+        // 当前没有局部阴影，shadow 只乘到方向光辐射度上。
+        float directionalShadow = 1.0;
+        if (frame.shadowParams.w > 0.5)
+        {
+            directionalShadow = SampleParticleCsmShadow(
+                shadowMap,
+                vWorldPosition,
+                normalize(vLightingNormal));
+        }
+        outColor.rgb = CalculateParticleBillboardSceneLighting(
             outColor.rgb,
             vWorldPosition,
             vLightingNormal,
-            frame.billboardLightParams,
-            frame.meshLightDirection.xyz,
-            frame.meshLightColor.rgb,
-            frame.shadowParams.w,
-            shadowMap);
+            frame.cameraPosition.xyz,
+            clamp(frame.billboardLightParams.y, 0.0, 1.0),
+            clamp(frame.billboardLightParams.z, 0.0, 1.0),
+            directionalShadow);
     }
     else if (frame.shadowParams.w > 0.5)
     {

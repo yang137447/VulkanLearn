@@ -181,6 +181,8 @@ const Field fields[] = {
     {K::ParticleSystem, "", "billboardLighting", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "billboardAmbient", ValueKind::Number, true,
         "", "", false, false, 0.0, 1.0},
+    {K::ParticleSystem, "", "billboardLightingStrength", ValueKind::Number, true,
+        "", "", false, false, 0.0, 1.0},
     {K::ParticleSystem, "", "ribbonWidth", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},
@@ -237,6 +239,10 @@ const Field fields[] = {
     {K::ParticleSystem, "", "softParticles", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "softParticleDistance", ValueKind::Number, false, "cm"},
     {K::ParticleSystem, "", "sortParticles", ValueKind::Boolean, true},
+    // 透明排序层：值越小越早绘制。整数与范围在协议边界拒绝，避免
+    // 编辑器写入 1.5 / 1001 后运行时才失败。
+    {K::ParticleSystem, "", "sortOrder", ValueKind::Number, true, "", "",
+        false, true, -1000.0, 1000.0},
     {K::ParticleSystem, "", "opacity", ValueKind::Number},
     {K::ParticleSystem, "", "maxDrawDistance", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "fadeDistance", ValueKind::Number, true, "cm"},

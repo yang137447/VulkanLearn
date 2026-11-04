@@ -30,7 +30,7 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
 {
     static const std::vector<ParticleModuleSpec> specs = {
         {"emitter", "Emitter",
-            {"maxParticles", "localSpace", "sortParticles",
+            {"maxParticles", "localSpace", "sortParticles", "sortOrder",
                 "randomSeed", "deterministicRandom", "fixedTimeStep"}},
         {"renderer", "Renderer",
             {"renderMode", "billboardAlignment", "billboardNormal",
@@ -43,6 +43,7 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "additive", "meshLighting", "meshAmbient",
                 "materialInstancePath", "billboardShadows",
                 "billboardLighting", "billboardAmbient",
+                "billboardLightingStrength",
                 "beam.colorKeys", "beam.widthKeys", "beam.arcs",
                 "beam.hitScan"}},
         {"spawn.rate", "Spawn Rate",
@@ -231,7 +232,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
 {
     using namespace ParticleModuleEditDetail;
     if (IsOneOf(field,
-        {"maxParticles", "localSpace", "sortParticles", "randomSeed",
+        {"maxParticles", "localSpace", "sortParticles", "sortOrder",
+            "randomSeed",
             "deterministicRandom", "fixedTimeStep"}))
         return "emitter";
     if (IsOneOf(field,
@@ -245,6 +247,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "additive", "meshLighting", "meshAmbient",
             "materialInstancePath", "billboardShadows",
             "billboardLighting", "billboardAmbient",
+            "billboardLightingStrength",
             "beam.colorKeys", "beam.widthKeys", "beam.arcs"}) ||
         HasPrefix(field, "mesh.") ||
         HasPrefix(field, "beam.") ||

@@ -85,6 +85,16 @@ public:
     // buffer。buffer 容量固定为 kMaxParticleLights，不做逐帧扩容。
     void SetParticleLightBuffers(std::vector<vk::Buffer> buffers);
 
+    // 粒子图形 pass 的场景光照输入：per-image 场景 Light SSBO、per-image
+    // GPU 粒子灯 SSBO，以及全局 IBL 采样器。descriptor 在发射器创建时写入，
+    // 资源换代（World 重载、环境重建）会改变 generation 并触发已有发射器
+    // 重建 descriptor 包；IBL 缺失时使用内部黑色 cubemap / 黑图兜底。
+    void SetSceneLightingResources(
+        std::vector<vk::DescriptorBufferInfo> lightInfos,
+        std::vector<vk::DescriptorBufferInfo> particleLightInfos,
+        vk::DescriptorImageInfo environmentCube,
+        vk::DescriptorImageInfo brdfLut);
+
     // 在图形 pass 之前录制 compute；结束时把 SSBO 可见性移交给顶点着色器。
     void RecordSimulation(
         vk::CommandBuffer commandBuffer,
@@ -563,6 +573,9 @@ private:
         ParticleGpuTimer gpuTimer;
         // SDF 碰撞体；与资产共享只读数据。
         std::shared_ptr<const ParticleSdfAsset> sdf;
+        // 创建 descriptor 时的场景光照代际；换代后必须重建 set 0 的
+        // binding 6..9，否则会继续采样已退休的 buffer/cubemap。
+        uint32_t sceneLightingGeneration = 0;
     };
 
     // 全局透明排序池：所有参与 billboard alpha 的发射器把自己的粒子
@@ -616,6 +629,14 @@ private:
         const std::string& emitterKey);
     void CreateDescriptors(EmitterResources& emitter);
     void CreateLightEmitterDescriptors(EmitterResources& emitter);
+    void CreateFallbackLightingResources();
+    void DestroyFallbackLightingResources();
+    const vk::DescriptorBufferInfo& SceneLightInfoForImage(
+        uint32_t imageIndex) const;
+    const vk::DescriptorBufferInfo& ParticleLightInfoForImage(
+        uint32_t imageIndex) const;
+    const vk::DescriptorImageInfo& EnvironmentCubeDescriptor() const;
+    const vk::DescriptorImageInfo& BrdfLutDescriptor() const;
     static void DestroyBuffer(
         RendererBackendVulkan& backend,
         GpuBuffer& buffer);
@@ -711,6 +732,21 @@ private:
     // per-swapchain-image，由 RendererFrameResources 持有；这里只保存引用。
     std::vector<vk::Buffer> particleLightBuffers;
     uint32_t particleLightBufferGeneration = 0;
+    // 场景灯/粒子灯 descriptor 输入同样按 image 索引保存副本；真正的
+    // GPU 资源仍由 RendererFrameResources 持有，这里只保存绑定视图。
+    std::vector<vk::DescriptorBufferInfo> sceneLightInfos;
+    std::vector<vk::DescriptorBufferInfo> sceneParticleLightInfos;
+    vk::DescriptorImageInfo environmentCubeDescriptor{};
+    vk::DescriptorImageInfo brdfLutDescriptor{};
+    uint32_t sceneLightingGeneration = 0;
+    // 资源缺失时的兜底：32 字节空场景灯 header、全零粒子灯 SSBO、
+    // 1x1x6 黑色 cubemap 与 1x1 黑色 BRDF LUT。避免取样未定义 descriptor。
+    GpuBuffer fallbackSceneLightBuffer{};
+    GpuBuffer fallbackParticleLightBuffer{};
+    vk::DescriptorBufferInfo fallbackSceneLightInfo{};
+    vk::DescriptorBufferInfo fallbackParticleLightInfo{};
+    std::shared_ptr<Texture> fallbackEnvironmentCube;
+    std::shared_ptr<Texture> defaultBlackTexture;
     // 仅缓存弱引用：仍被活跃/退休发射器持有的纹理由发射器生命周期管理，
     // Shutdown 清空索引不会提前销毁 GPU 资源。
     std::unordered_map<std::string, std::weak_ptr<Texture>>

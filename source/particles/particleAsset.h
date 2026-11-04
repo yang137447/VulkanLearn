@@ -239,6 +239,10 @@ struct ParticleEmitterAsset
     // 第一个方向光的线色；这是 sprite 的着色近似，不引入编辑器材质状态。
     bool billboardLighting = false;
     float billboardAmbient = 0.2f;
+    // billboard/ribbon 直接光强度（0..1）。sprite 是体积感卡片，逐像素
+    // 直接光按固体表面全量求值会过曝；该系数只缩放直接光，环境项仍由
+    // billboardAmbient 控制。默认 1 表示不额外衰减。
+    float billboardLightingStrength = 1.0f;
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;
@@ -361,6 +365,11 @@ struct ParticleEmitterAsset
     // alpha billboard 必须开启：按相机视图深度做 back-to-front GPU 排序。
     // additive 发射器应保持 false，排序不会改变加法混合结果，只会增加 dispatch。
     bool sortParticles = false;
+    // 作者排序层（-1000..1000）：数值小的先画（更远/背景），数值大的后画。
+    // 它优先于视深度，用于稳定表达“烟永远在碎块后面”这类跨深度美术意图；
+    // 默认 0 时保持旧的纯深度排序行为。仅影响逐 emitter 与全局池的插入
+    // 位置，不改变池内逐粒子排序。
+    int sortOrder = 0;
     float opacity = 1.0f;
     // 仅 renderMode=="distortion" 使用：UV 偏移幅度（屏幕空间比例）。
     // 最终偏移在 shader 里再乘纹理/程序化梯度与覆盖率；0 表示不扰动。

@@ -832,7 +832,8 @@ OfflineParticleOverlay CompositeOfflineParticles(
                 system.name + "|" + emitter.asset.name + "|" +
                     std::to_string(index),
                 emitter.worldCenter,
-                emitter.worldRadius});
+                emitter.worldRadius,
+                emitter.asset.sortOrder});
         }
     }
     const std::vector<size_t> drawOrder =

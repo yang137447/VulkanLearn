@@ -18,6 +18,7 @@
 #include "sceneNode.h"
 #include "materialInstance.h"
 #include "material.h"
+#include "texture.h"
 #include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
 #include "commonFunction.h"
@@ -1425,6 +1426,11 @@ void RenderSystem::RebuildSwapchainDependentResources()
             *pipelineFactory,
             *rendererBackend,
             renderGraph);
+        // resize 后 frameResources 已换新 buffer；light 发射器描述符必须在
+        // 同一个事务里重新指向新输出，不能等下一帧。
+        particleRenderer.SetParticleLightBuffers(
+            frameResources.GetParticleLightBufferHandles());
+        ConfigureParticleSceneLighting();
         particleRenderer.Synchronize(currentRenderScene);
         decalRenderer.EnsureInitialized(
             *pipelineFactory,
@@ -3289,6 +3295,7 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         // per-image SSBO。buffer 必须在 Synchronize 创建发射器描述符前提供。
         particleRenderer.SetParticleLightBuffers(
             frameResources.GetParticleLightBufferHandles());
+        ConfigureParticleSceneLighting();
         particleRenderer.Synchronize(currentRenderScene);
         // particle decal 同样消费 resolved assets（userParameters/Data
         // Channels）。必须先重建动态 decal 列表，再让 DecalRenderer
@@ -3336,6 +3343,37 @@ void RenderSystem::BuildResolvedRenderScene()
     }
 
     currentResolvedRenderScene = std::move(resolvedSceneResult.Value());
+}
+
+void RenderSystem::ConfigureParticleSceneLighting()
+{
+    // 粒子图形 pass 的场景灯光/IBL descriptor：场景灯与 GPU 粒子灯按
+    // swapchain image 绑定，IBL 取活动 World 的预过滤 cubemap 与全局
+    // BRDF LUT。资源缺失时传空 descriptor，由 ParticleRenderer 内部的
+    // 黑色兜底资源接管，保证 shader 永远读到合法描述符。
+    const VL::RendererResourceCache& lightingCache =
+        VL::RendererResourceCache::GetInstance();
+    vk::DescriptorImageInfo environmentCubeDescriptor{};
+    const std::shared_ptr<Texture>* prefilteredEnvironment =
+        lightingCache.GetGlobalTexture("prefilteredEnvironmentCube");
+    if (prefilteredEnvironment != nullptr &&
+        *prefilteredEnvironment != nullptr)
+    {
+        environmentCubeDescriptor =
+            (*prefilteredEnvironment)->GetDescriptorInfo();
+    }
+    vk::DescriptorImageInfo brdfLutDescriptor{};
+    const std::shared_ptr<Texture>* brdfLut =
+        lightingCache.GetGlobalTexture("brdfLut");
+    if (brdfLut != nullptr && *brdfLut != nullptr)
+    {
+        brdfLutDescriptor = (*brdfLut)->GetDescriptorInfo();
+    }
+    particleRenderer.SetSceneLightingResources(
+        GetLightBufferInfo(),
+        frameResources.GetParticleLightBufferInfos(),
+        environmentCubeDescriptor,
+        brdfLutDescriptor);
 }
 
 void RenderSystem::InitializeCurrentRenderSceneResources()

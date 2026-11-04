@@ -156,6 +156,43 @@ uint32_t ReadCountField(
     return static_cast<uint32_t>(number);
 }
 
+// 排序层是整数：editor 协议可能把 JSON Number 以 double 送达，必须显式
+// 拒绝小数，不能靠 get<int> 静默截断；上下界在解析期就固定，避免运行时
+// 出现无法解释的超大排序键。
+int ReadIntField(
+    const nlohmann::json& object,
+    const char* field,
+    int fallback,
+    int minimum,
+    int maximum)
+{
+    if (!object.contains(field))
+    {
+        return fallback;
+    }
+    const nlohmann::json& value = object.at(field);
+    if (!value.is_number())
+    {
+        throw std::invalid_argument(
+            std::string("Particle field must be a number: ") + field);
+    }
+    const double number = value.get<double>();
+    if (!std::isfinite(number) || std::floor(number) != number)
+    {
+        throw std::invalid_argument(
+            std::string("Particle field must be an integer: ") + field);
+    }
+    if (number < static_cast<double>(minimum) ||
+        number > static_cast<double>(maximum))
+    {
+        throw std::invalid_argument(
+            std::string("Particle field must be in [") +
+            std::to_string(minimum) + ", " +
+            std::to_string(maximum) + "]: " + field);
+    }
+    return static_cast<int>(number);
+}
+
 // flipbook 帧号必须是整数；JSON Number 在编辑器里可能以 double 到达，
 // 因此先检查有限性、整数性和非负范围，避免直接 get<uint32_t> 静默截断。
 uint32_t ReadFrameIndex(
@@ -444,6 +481,10 @@ ParticleEmitterAsset ParseEmitter(
         "billboardLighting", emitter.billboardLighting);
     emitter.billboardAmbient = ReadFiniteFloat(
         json, "billboardAmbient", emitter.billboardAmbient);
+    emitter.billboardLightingStrength = ReadFiniteFloat(
+        json,
+        "billboardLightingStrength",
+        emitter.billboardLightingStrength);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
@@ -783,6 +824,11 @@ ParticleEmitterAsset ParseEmitter(
         json, "softParticleDistance", emitter.softParticleDistance);
     emitter.sortParticles =
         json.value("sortParticles", emitter.sortParticles);
+    // sortOrder 与 sortParticles 一样按展平后的 emitter 根字段解析；它不
+    // 改变池内逐粒子排序，只决定整个 emitter（或全局 alpha 池）在透明
+    // 绘制序列中的位置。
+    emitter.sortOrder = ReadIntField(
+        json, "sortOrder", emitter.sortOrder, -1000, 1000);
     emitter.opacity = ReadFiniteFloat(
         json, "opacity", emitter.opacity);
     emitter.distortionStrength = ReadFiniteFloat(
@@ -2001,6 +2047,15 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle billboardAmbient must be in [0, 1]");
     }
+    RequireFinite(
+        emitter.billboardLightingStrength,
+        "billboardLightingStrength");
+    if (emitter.billboardLightingStrength < 0.0f ||
+        emitter.billboardLightingStrength > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardLightingStrength must be in [0, 1]");
+    }
     if (emitter.renderMode == "mesh")
     {
         if (emitter.meshPath.empty())
@@ -2326,6 +2381,11 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle sortParticles requires maxParticles <= 4096");
+    }
+    if (emitter.sortOrder < -1000 || emitter.sortOrder > 1000)
+    {
+        throw std::invalid_argument(
+            "Particle sortOrder must be in [-1000, 1000]");
     }
     // alpha billboard 的绘制顺序直接影响结果；作者忘了开启排序时直接拒绝，
     // 而不是静默按池索引顺序画出穿插。additive 与顺序无关，保持自由。

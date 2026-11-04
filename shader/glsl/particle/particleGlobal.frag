@@ -1,6 +1,7 @@
 #version 450
 
 #include "particleCommon.glsl"
+#include "particleSceneLighting.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -129,15 +130,19 @@ void main()
             vColor.a * radial * mix(1.0, erosion, 0.72));
     }
     outColor.a *= softFade;
-    outColor.rgb = EvaluateParticleBillboardLighting(
-        outColor.rgb,
-        vWorldPosition,
-        vLightingNormal,
-        vLightParams,
-        vLightDirection,
-        vLightColor,
-        0.0,
-        shadowMap);
+    if (vLightParams.x > 0.5)
+    {
+        // 全局池当前没有逐发射器 CSM 绑定（v1 明确不消费 shadowMap），
+        // 因此这里只做无阴影的完整场景光照；开关关闭时保持 unlit 原输出。
+        outColor.rgb = CalculateParticleBillboardSceneLighting(
+            outColor.rgb,
+            vWorldPosition,
+            vLightingNormal,
+            frame.cameraPosition.xyz,
+            clamp(vLightParams.y, 0.0, 1.0),
+            clamp(vLightParams.z, 0.0, 1.0),
+            1.0);
+    }
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);
 }

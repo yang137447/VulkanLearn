@@ -107,6 +107,23 @@ Renderpass* FindDistortionPass(RenderGraph& graph)
     return nullptr;
 }
 
+ShaderBinding MakeParticleLayoutBinding(
+    uint32_t binding,
+    vk::DescriptorType type,
+    uint32_t descriptorCount,
+    vk::ShaderStageFlags stageFlags,
+    const char* name)
+{
+    ShaderBinding result;
+    result.set = 0;
+    result.binding = binding;
+    result.type = type;
+    result.descriptorCount = descriptorCount;
+    result.stageFlags = stageFlags;
+    result.name = name;
+    return result;
+}
+
 GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
 {
     // particleGlobal.frag 明确不使用 CSM，编译器会把 shadowMap 从反射
@@ -115,6 +132,68 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
     // layout 与 render pass descriptor set 的布局兼容，同时不改变 shader
     // 的 unlit 输出。
     GraphicsPipelineLayoutDesc layout;
+    // 全局 alpha 池有自己的一套 set 0：0 UBO、1 gathered records、
+    // 2 sorted pairs、3 纹理数组、5 debug、6/7 两盏灯缓冲、8/9 IBL。
+    // 同样必须显式覆盖 6..9，否则未采样的 brdfLut 会被 glslang 裁掉，
+    // 导致 draw set 的写入越界。
+    layout.overrideSets[0] = true;
+    std::vector<ShaderBinding>& globalBindings = layout.setBindings[0];
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        0,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "ParticleFrame"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        1,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "GatheredBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        2,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "SortedPairs"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        3,
+        vk::DescriptorType::eCombinedImageSampler,
+        kParticleGlobalTextureSlots,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "particleTextures"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        5,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleDebug"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        6,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleSceneLightSSBO"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        7,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleLightSSBO"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        8,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "prefilteredEnvironmentCube"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        9,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "brdfLut"));
     layout.overrideSets[PassSetIndex] = true;
     ShaderBinding sceneDepth;
     sceneDepth.set = PassSetIndex;
@@ -136,24 +215,78 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
     return layout;
 }
 
-GraphicsPipelineLayoutDesc BuildParticleBeamLayout(
-    const PipelineBase& particleLayoutSource)
+GraphicsPipelineLayoutDesc BuildParticleSharedLayout()
 {
-    // beam 不读取 sortedPairs/aliveIndices，glslang 会把这两个声明从反射
-    // 结果里裁掉；但 emitter 的 set 0 descriptor set 是按 billboard 管线
-    // 布局分配的，直接绑定会在 vkCmdDraw 报 00358/08600。显式复制 billboard
-    // set 0 的完整 binding 合同，保证布局完全相同，同时不要求 beam shader
-    // 读取无意义的粒子索引。
+    // 所有逐发射器图形管线（billboard/ribbon/beam/mesh/distortion）共用同一批
+    // descriptor set，因此 set 0 必须逐字段完全一致。这里显式列出 0..9：
+    // glslang 会裁掉某个 shader 未静态使用的 binding（billboard 不采样
+    // brdfLut，mesh 才采样），若各管线各自走反射，layout 会不兼容并在
+    // vkCmdBindDescriptorSets 报 00358/08600，或写入时越界。
     GraphicsPipelineLayoutDesc layout;
     layout.overrideSets[0] = true;
-    for (const ShaderBinding& binding :
-         particleLayoutSource.GetDescriptorLayoutBindings())
-    {
-        if (binding.set == 0)
-        {
-            layout.setBindings[0].push_back(binding);
-        }
-    }
+    std::vector<ShaderBinding>& bindings = layout.setBindings[0];
+    bindings.push_back(MakeParticleLayoutBinding(
+        0,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "ParticleFrame"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        1,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "ParticleBuffer"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        2,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "particleTexture"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        3,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "SortedPairs"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        4,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "ParticleAliveIndices"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        5,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleDebug"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        6,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleSceneLightSSBO"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        7,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleLightSSBO"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        8,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "prefilteredEnvironmentCube"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        9,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "brdfLut"));
     return layout;
 }
 
@@ -435,18 +568,24 @@ void ParticleRenderer::Initialize(
     contract.depthTestEnable = false;
     contract.depthWriteEnable = false;
     contract.depthCompareOp = vk::CompareOp::eLess;
+    // 所有逐发射器图形管线共用这一份 set 0 显式合同；不能依赖各自的
+    // shader 反射，否则未被静态使用的 binding 会被裁掉导致 layout 不一致。
+    const GraphicsPipelineLayoutDesc sharedLayout =
+        BuildParticleSharedLayout();
     additivePipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         contract,
         artifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::Additive);
+        GraphicsPipelineBlendMode::Additive,
+        sharedLayout);
     alphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         contract,
         artifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::AlphaBlend);
+        GraphicsPipelineBlendMode::AlphaBlend,
+        sharedLayout);
 
     // ribbon 复用同一 pass、descriptor layout 与 particle SSBO，只替换
     // 顶点/片元 shader；顶点数按段数在 RecordGraphics 中决定。
@@ -459,13 +598,15 @@ void ParticleRenderer::Initialize(
         contract,
         ribbonArtifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::Additive);
+        GraphicsPipelineBlendMode::Additive,
+        sharedLayout);
     ribbonAlphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         contract,
         ribbonArtifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::AlphaBlend);
+        GraphicsPipelineBlendMode::AlphaBlend,
+        sharedLayout);
 
     // beam 同样不使用顶点输入；起止点、段数与噪声参数都来自 FrameUniforms。
     // 与 ribbon 使用同一 pass 合同和 descriptor set 0，避免额外描述符池。
@@ -473,25 +614,23 @@ void ParticleRenderer::Initialize(
     beamVariant.shaderName = "particle/particleBeam";
     const GraphicsShaderVariantArtifact& beamArtifact =
         factory.PrepareGraphicsShaderVariant(beamVariant);
-    const GraphicsPipelineLayoutDesc beamLayout =
-        BuildParticleBeamLayout(*additivePipeline);
     beamAdditivePipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         contract,
         beamArtifact,
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::Additive,
-        beamLayout);
+        sharedLayout);
     beamAlphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         contract,
         beamArtifact,
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::AlphaBlend,
-        beamLayout);
+        sharedLayout);
 
     // distortion 自己写独立附件，因此必须使用 distortion pass 的 VkRenderPass；
-    // set 0 复制 billboard 合同，set 3 只声明 sceneDepth（图里没有 shadowMap）。
+    // set 0 复用共享合同，set 3 只声明 sceneDepth（图里没有 shadowMap）。
     if (distortionPass != nullptr)
     {
         ShaderVariantKey distortionVariant = variant;
@@ -510,7 +649,7 @@ void ParticleRenderer::Initialize(
             distortionArtifact,
             vk::CullModeFlagBits::eNone,
             GraphicsPipelineBlendMode::Additive,
-            beamLayout);
+            sharedLayout);
     }
 
     // mesh 粒子读取静态 SM 的 Vertex stream，因此同一条 particle pass
@@ -530,13 +669,15 @@ void ParticleRenderer::Initialize(
         meshContract,
         meshArtifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::Additive);
+        GraphicsPipelineBlendMode::Additive,
+        sharedLayout);
     meshAlphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         meshContract,
         meshArtifact,
         vk::CullModeFlagBits::eNone,
-        GraphicsPipelineBlendMode::AlphaBlend);
+        GraphicsPipelineBlendMode::AlphaBlend,
+        sharedLayout);
 
     // 跨发射器 alpha billboard 的统一绘制管线：无顶点输入，读取
     // gathered 记录 + 全局排序 pair 表 + 8 槽纹理数组。
@@ -572,6 +713,8 @@ void ParticleRenderer::Initialize(
         renderer,
         whiteImage,
         whiteDesc);
+    // 场景光照 descriptor 的兜底资源必须在第一个发射器创建前就绪。
+    CreateFallbackLightingResources();
     initialized = true;
 }
 
@@ -587,6 +730,14 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     emitters.clear();
     particleLightBuffers.clear();
     particleLightBufferGeneration = 0;
+    sceneLightInfos.clear();
+    sceneParticleLightInfos.clear();
+    environmentCubeDescriptor = vk::DescriptorImageInfo{};
+    brdfLutDescriptor = vk::DescriptorImageInfo{};
+    sceneLightingGeneration = 0;
+    fallbackSceneLightInfo = vk::DescriptorBufferInfo{};
+    fallbackParticleLightInfo = vk::DescriptorBufferInfo{};
+    DestroyFallbackLightingResources();
     warnedMissingParticleLightBuffer = false;
     textureCache.clear();
     DestroyGlobalSortPool();
@@ -739,6 +890,264 @@ void ParticleRenderer::SetParticleLightBuffers(
         ++particleLightBufferGeneration;
     }
     particleLightBuffers = std::move(buffers);
+}
+
+namespace
+{
+
+bool SameBufferInfo(
+    const vk::DescriptorBufferInfo& left,
+    const vk::DescriptorBufferInfo& right)
+{
+    return left.buffer == right.buffer &&
+        left.offset == right.offset &&
+        left.range == right.range;
+}
+
+bool SameImageInfo(
+    const vk::DescriptorImageInfo& left,
+    const vk::DescriptorImageInfo& right)
+{
+    return left.sampler == right.sampler &&
+        left.imageView == right.imageView &&
+        left.imageLayout == right.imageLayout;
+}
+
+} // namespace
+
+void ParticleRenderer::SetSceneLightingResources(
+    std::vector<vk::DescriptorBufferInfo> lightInfos,
+    std::vector<vk::DescriptorBufferInfo> particleLightInfos,
+    vk::DescriptorImageInfo environmentCube,
+    vk::DescriptorImageInfo brdfLut)
+{
+    bool changed = sceneLightInfos.size() != lightInfos.size() ||
+        sceneParticleLightInfos.size() != particleLightInfos.size() ||
+        !SameImageInfo(environmentCubeDescriptor, environmentCube) ||
+        !SameImageInfo(brdfLutDescriptor, brdfLut);
+    for (size_t index = 0; !changed && index < lightInfos.size(); ++index)
+    {
+        changed = !SameBufferInfo(sceneLightInfos[index], lightInfos[index]);
+    }
+    for (size_t index = 0;
+         !changed && index < particleLightInfos.size();
+         ++index)
+    {
+        changed = !SameBufferInfo(
+            sceneParticleLightInfos[index],
+            particleLightInfos[index]);
+    }
+    if (changed)
+    {
+        ++sceneLightingGeneration;
+    }
+    sceneLightInfos = std::move(lightInfos);
+    sceneParticleLightInfos = std::move(particleLightInfos);
+    environmentCubeDescriptor = environmentCube;
+    brdfLutDescriptor = brdfLut;
+}
+
+const vk::DescriptorBufferInfo&
+ParticleRenderer::SceneLightInfoForImage(uint32_t imageIndex) const
+{
+    return imageIndex < sceneLightInfos.size()
+        ? sceneLightInfos[imageIndex]
+        : fallbackSceneLightInfo;
+}
+
+const vk::DescriptorBufferInfo&
+ParticleRenderer::ParticleLightInfoForImage(uint32_t imageIndex) const
+{
+    return imageIndex < sceneParticleLightInfos.size()
+        ? sceneParticleLightInfos[imageIndex]
+        : fallbackParticleLightInfo;
+}
+
+const vk::DescriptorImageInfo&
+ParticleRenderer::EnvironmentCubeDescriptor() const
+{
+    return environmentCubeDescriptor.imageView != vk::ImageView{}
+        ? environmentCubeDescriptor
+        : fallbackEnvironmentCube->GetDescriptorInfo();
+}
+
+const vk::DescriptorImageInfo&
+ParticleRenderer::BrdfLutDescriptor() const
+{
+    return brdfLutDescriptor.imageView != vk::ImageView{}
+        ? brdfLutDescriptor
+        : defaultBlackTexture->GetDescriptorInfo();
+}
+
+void ParticleRenderer::CreateFallbackLightingResources()
+{
+    if (backend == nullptr)
+    {
+        return;
+    }
+
+    // 32 字节 = LightSSBOHeader（6 个有效 int + 2 个 padding）。全零表示
+    // 没有任何场景灯，材质仍可安全读取 binding 6。
+    constexpr vk::DeviceSize kSceneLightHeaderBytes = 32;
+    const auto sceneLightAllocation = backend->CreateBuffer(
+        kSceneLightHeaderBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleFallbackSceneLights");
+    fallbackSceneLightBuffer.buffer = sceneLightAllocation.first;
+    fallbackSceneLightBuffer.memory = sceneLightAllocation.second;
+    fallbackSceneLightBuffer.mapped = backend->MapMemory(
+        fallbackSceneLightBuffer.memory,
+        kSceneLightHeaderBytes);
+    if (fallbackSceneLightBuffer.mapped != nullptr)
+    {
+        std::memset(
+            fallbackSceneLightBuffer.mapped,
+            0,
+            static_cast<size_t>(kSceneLightHeaderBytes));
+    }
+    fallbackSceneLightInfo = vk::DescriptorBufferInfo(
+        fallbackSceneLightBuffer.buffer,
+        0,
+        VK_WHOLE_SIZE);
+
+    // GPU 粒子灯兜底：header 的 count/capacity 都是 0，任何读取循环立即结束。
+    const auto particleLightAllocation = backend->CreateBuffer(
+        ParticleLightSSBOSize(),
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleFallbackLights");
+    fallbackParticleLightBuffer.buffer = particleLightAllocation.first;
+    fallbackParticleLightBuffer.memory = particleLightAllocation.second;
+    fallbackParticleLightBuffer.mapped = backend->MapMemory(
+        fallbackParticleLightBuffer.memory,
+        ParticleLightSSBOSize());
+    if (fallbackParticleLightBuffer.mapped != nullptr)
+    {
+        std::memset(
+            fallbackParticleLightBuffer.mapped,
+            0,
+            ParticleLightSSBOSize());
+    }
+    fallbackParticleLightInfo = vk::DescriptorBufferInfo(
+        fallbackParticleLightBuffer.buffer,
+        0,
+        VK_WHOLE_SIZE);
+
+    // BRDF LUT 兜底用全黑图：环境高光乘 0，不会伪造能量。漫反射 IBL 仍
+    // 可独立工作，因为它的近似只采样 prefiltered cubemap。
+    HostImage blackImage;
+    blackImage.width = 1;
+    blackImage.height = 1;
+    blackImage.channels = 4;
+    blackImage.format = HostImage::PixelFormat::RGBA8_UNORM;
+    blackImage.semantic = HostImage::TextureSemantic::Data;
+    blackImage.rowStrideBytes = 4;
+    blackImage.data = {0, 0, 0, 0};
+    Texture::CreateDesc blackDesc;
+    blackDesc.semantic = HostImage::TextureSemantic::Data;
+    blackDesc.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    blackDesc.generateMipmaps = false;
+    blackDesc.filter = vk::Filter::eLinear;
+    blackDesc.wrapMode = vk::SamplerAddressMode::eClampToEdge;
+    blackDesc.debugName = "ParticleDefaultBlack";
+    defaultBlackTexture = std::make_shared<Texture>(
+        *backend,
+        blackImage,
+        blackDesc);
+
+    // 1x1x6 黑色 cubemap：cube 采样要求视图类型匹配，不能拿 2D 白图顶替。
+    // 图像创建后必须把全部 6 个 layer 从 UNDEFINED 转到 ShaderReadOnly；
+    // 通用 TransitionImageLayout 只处理 1 个 layer，这里显式写 barrier。
+    const vk::Format cubeFormat = vk::Format::eR8G8B8A8Unorm;
+    vk::ImageCreateInfo cubeInfo;
+    cubeInfo
+        .setFlags(vk::ImageCreateFlagBits::eCubeCompatible)
+        .setImageType(vk::ImageType::e2D)
+        .setExtent(vk::Extent3D{1, 1, 1})
+        .setMipLevels(1)
+        .setArrayLayers(6)
+        .setFormat(cubeFormat)
+        .setTiling(vk::ImageTiling::eOptimal)
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setUsage(vk::ImageUsageFlagBits::eSampled)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setSamples(vk::SampleCountFlagBits::e1);
+    vk::Image cubeImage;
+    vk::DeviceMemory cubeMemory;
+    std::tie(cubeImage, cubeMemory) = backend->CreateImage(
+        cubeInfo,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleFallbackEnvironmentCube");
+    vk::CommandBuffer command = backend->BeginSingleTimeCommands();
+    try
+    {
+        vk::ImageMemoryBarrier barrier;
+        barrier
+            .setOldLayout(vk::ImageLayout::eUndefined)
+            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(cubeImage)
+            .setSrcAccessMask(vk::AccessFlagBits::eNone)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(6));
+        command.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTopOfPipe,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            {},
+            nullptr,
+            nullptr,
+            barrier);
+        backend->EndSingleTimeCommands(command);
+    }
+    catch (...)
+    {
+        if (command)
+        {
+            backend->AbortSingleTimeCommands(command);
+        }
+        throw;
+    }
+    vk::ImageView cubeView = backend->CreateCubeImageView(
+        cubeImage,
+        1,
+        cubeFormat,
+        "ParticleFallbackEnvironmentCubeView");
+    vk::Sampler cubeSampler = backend->CreateCubeSampler(
+        0.0f,
+        "ParticleFallbackEnvironmentCubeSampler");
+    fallbackEnvironmentCube = std::make_shared<Texture>(
+        *backend,
+        cubeImage,
+        cubeMemory,
+        cubeView,
+        cubeSampler,
+        1,
+        cubeFormat);
+}
+
+void ParticleRenderer::DestroyFallbackLightingResources()
+{
+    if (backend != nullptr)
+    {
+        DestroyBuffer(*backend, fallbackSceneLightBuffer);
+        DestroyBuffer(*backend, fallbackParticleLightBuffer);
+    }
+    else
+    {
+        fallbackSceneLightBuffer = {};
+        fallbackParticleLightBuffer = {};
+    }
+    fallbackEnvironmentCube.reset();
+    defaultBlackTexture.reset();
 }
 
 void ParticleRenderer::Synchronize(const RenderScene& renderScene)
@@ -933,6 +1342,10 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                       swapchainImageCount ||
                   emitterIt->second->lightBufferGeneration !=
                       particleLightBufferGeneration)) ||
+                // 场景灯/IBL descriptor 换代后所有图形发射器都要重建 set 0，
+                // 否则会继续引用已退休的 buffer/cubemap。
+                emitterIt->second->sceneLightingGeneration !=
+                    sceneLightingGeneration ||
                 emitterIt->second->textureSourceKey !=
                     textureSourceKey ||
                 emitterIt->second->meshSourceKey !=
@@ -1353,6 +1766,10 @@ void ParticleRenderer::SynchronizeGlobalSort()
         signature += candidate.key + "#" + candidate.textureKey +
             "#" + std::to_string(candidate.maxParticles) + ";";
     }
+    // 场景灯/IBL descriptor 换代也必须重建全局 draw set；否则全局池会
+    // 继续引用旧 light SSBO 或旧 prefiltered cubemap。
+    signature += "lighting#" +
+        std::to_string(sceneLightingGeneration) + ";";
 
     if (emitterKeys.empty())
     {
@@ -1575,9 +1992,9 @@ bool ParticleRenderer::CreateGlobalSortPool(
         {vk::DescriptorType::eUniformBuffer,
             imageCount * (emitterCount + 5)},
         {vk::DescriptorType::eStorageBuffer,
-            imageCount * (emitterCount * 3u + 12u)},
+            imageCount * (emitterCount * 3u + 14u)},
         {vk::DescriptorType::eCombinedImageSampler,
-            imageCount * kParticleGlobalTextureSlots}};
+            imageCount * (kParticleGlobalTextureSlots + 2u)}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
@@ -1808,12 +2225,48 @@ bool ParticleRenderer::CreateGlobalSortPool(
                 .setDescriptorCount(1)
                 .setDescriptorType(vk::DescriptorType::eStorageBuffer)
                 .setBufferInfo(debugCounterInfo);
+            // 全局 alpha 池与逐发射器 billboard 使用同一组场景光照绑定；
+            // 全局记录只携带 billboardLightParams，IBL/灯光本身来自这里。
+            vk::WriteDescriptorSet drawSceneLight;
+            drawSceneLight
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(6)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(SceneLightInfoForImage(imageIndex));
+            vk::WriteDescriptorSet drawParticleLight;
+            drawParticleLight
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(7)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(ParticleLightInfoForImage(imageIndex));
+            vk::WriteDescriptorSet drawEnvironment;
+            drawEnvironment
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(8)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(EnvironmentCubeDescriptor());
+            vk::WriteDescriptorSet drawBrdfLut;
+            drawBrdfLut
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(9)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(BrdfLutDescriptor());
             backend->UpdateDescriptorSets(
                 {drawUniform,
                  drawRecords,
                  drawPairs,
                  drawTextures,
-                 drawDebug});
+                 drawDebug,
+                 drawSceneLight,
+                 drawParticleLight,
+                 drawEnvironment,
+                 drawBrdfLut});
         }
     }
     catch (const std::exception& exception)
@@ -2675,11 +3128,13 @@ void ParticleRenderer::CreateDescriptors(
         finalizeCountPipeline->GetDescriptorSetLayouts().at(0));
 
     // 每个 image：simulate、graphics、sortInit、AtoB、BtoA、finalize 共 6 个 set。
-    // storage 计数：simulate 5 + graphics 4 + sort 三组各 2 + finalize 2 = 17。
+    // storage 计数：simulate 5 + graphics 6 + sort 三组各 2 + finalize 2 = 19。
+    // graphics 新增的 2 个 storage 是场景灯/GPU 粒子灯 SSBO（binding 6/7）；
+    // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer, imageCount * 5},
-        {vk::DescriptorType::eStorageBuffer, imageCount * 17},
-        {vk::DescriptorType::eCombinedImageSampler, imageCount}};
+        {vk::DescriptorType::eStorageBuffer, imageCount * 19},
+        {vk::DescriptorType::eCombinedImageSampler, imageCount * 3}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
@@ -2857,13 +3312,49 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorCount(1)
                 .setDescriptorType(vk::DescriptorType::eStorageBuffer)
                 .setBufferInfo(debugCounterInfo);
+            // 场景灯与 GPU 粒子灯按 image 绑定各自的 SSBO；IBL 是全局资源，
+            // 所有 image 共用同一 cubemap/LUT。
+            vk::WriteDescriptorSet sceneLightWrite;
+            sceneLightWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(6)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(SceneLightInfoForImage(imageIndex));
+            vk::WriteDescriptorSet particleLightWrite;
+            particleLightWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(7)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(ParticleLightInfoForImage(imageIndex));
+            vk::WriteDescriptorSet environmentWrite;
+            environmentWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(8)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(EnvironmentCubeDescriptor());
+            vk::WriteDescriptorSet brdfLutWrite;
+            brdfLutWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(9)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(BrdfLutDescriptor());
             backend->UpdateDescriptorSets(
                 {uniformWrite,
                  particleWrite,
                  textureWrite,
                  sortedWrite,
                  aliveGraphicsWrite,
-                 debugGraphicsWrite});
+                 debugGraphicsWrite,
+                 sceneLightWrite,
+                 particleLightWrite,
+                 environmentWrite,
+                 brdfLutWrite});
 
             uniformWrite.setDstSet(
                 emitter.sortInitSets.at(imageIndex));
@@ -2944,6 +3435,7 @@ void ParticleRenderer::CreateDescriptors(
             backend->UpdateDescriptorSets(
                 {finalizeCounterWrite, finalizeArgsWrite});
         }
+        emitter.sceneLightingGeneration = sceneLightingGeneration;
     }
     catch (...)
     {
@@ -3144,6 +3636,7 @@ void ParticleRenderer::CreateLightEmitterDescriptors(
     }
     emitter.lightBufferGeneration =
         particleLightBufferGeneration;
+    emitter.sceneLightingGeneration = sceneLightingGeneration;
 }
 
 void ParticleRenderer::DestroyEmitterResources(
@@ -3839,7 +4332,12 @@ void ParticleRenderer::RecordSimulation(
         uniforms.billboardLightParams = Eigen::Vector4f(
             billboardLightingEnabled ? 1.0f : 0.0f,
             emitter.asset.billboardAmbient,
-            0.0f,
+            // z 只缩放直接光：sprite 是体积感卡片，全量逐像素直接光会过曝；
+            // 全局 alpha 池通过 gather record 原样携带该字段。
+            std::clamp(
+                emitter.asset.billboardLightingStrength,
+                0.0f,
+                1.0f),
             0.0f);
         // beam 端点是发射器局部空间作者数据，渲染前统一乘 emitter.model；
         // localSpace 对 beam 没有额外含义。
@@ -4369,14 +4867,56 @@ void ParticleRenderer::RecordSimulation(
         nullptr);
 
     std::vector<ParticleEmitterDepthKey> depthKeys;
-    depthKeys.reserve(emitters.size());
+    depthKeys.reserve(emitters.size() + 1u);
     for (const auto& [key, emitterPtr] : emitters)
     {
         const EmitterResources& emitter = *emitterPtr;
-        depthKeys.push_back(ParticleEmitterDepthKey{
-            key,
-            emitter.worldCenter,
-            emitter.boundsRadius});
+        ParticleEmitterDepthKey depthKey;
+        depthKey.key = key;
+        depthKey.worldCenter = emitter.worldCenter;
+        depthKey.worldRadius = emitter.boundsRadius;
+        depthKey.sortOrder = emitter.asset.sortOrder;
+        depthKeys.push_back(std::move(depthKey));
+    }
+    // 全局 alpha 池不是一个真实 emitter，但必须作为一个 draw item 参与
+    // 同一份排序；否则它只能在所有逐发射器之后录制，重新出现“烟永远
+    // 盖住碎块/弹壳”的问题。
+    // 只统计本帧可真实 gather 的成员（缺失/被剔除/本 image UBO 未就绪
+    // 的成员不会产生顶点，不能影响整池位置）。池整体取最小 sortOrder
+    // 与池的背景边缘深度，近似边界见 TryMakeParticleGlobalSortDrawKey。
+    if (globalSortPool.active)
+    {
+        std::vector<ParticleEmitterDepthKey> globalMembers;
+        globalMembers.reserve(globalSortPool.emitterKeys.size());
+        for (const std::string& memberKey : globalSortPool.emitterKeys)
+        {
+            const auto memberIt = emitters.find(memberKey);
+            if (memberIt == emitters.end())
+            {
+                continue;
+            }
+            const EmitterResources& member = *memberIt->second;
+            if (member.culled ||
+                member.frameUniforms.size() <= imageIndex)
+            {
+                continue;
+            }
+            ParticleEmitterDepthKey memberKeyData;
+            memberKeyData.key = memberKey;
+            memberKeyData.worldCenter = member.worldCenter;
+            memberKeyData.worldRadius = member.boundsRadius;
+            memberKeyData.sortOrder = member.asset.sortOrder;
+            globalMembers.push_back(std::move(memberKeyData));
+        }
+        ParticleEmitterDepthKey globalKey;
+        if (TryMakeParticleGlobalSortDrawKey(
+                globalMembers,
+                renderScene.camera.position,
+                renderScene.camera.forward,
+                globalKey))
+        {
+            depthKeys.push_back(std::move(globalKey));
+        }
     }
     const std::vector<size_t> sortedIndices =
         ComputeParticleEmitterDrawOrder(
@@ -4612,6 +5152,13 @@ void ParticleRenderer::RecordGraphics(
     orderedKeys.reserve(drawOrder.size());
     for (const std::string& key : drawOrder)
     {
+        // 全局池在排序表里占一个特殊 item；轮到它时一次性画完池内
+        // 所有已 gather 的粒子，而不是固定拖到所有 emitter 之后。
+        if (key == kParticleGlobalDrawKey)
+        {
+            RecordGlobalDraw(commandBuffer, imageIndex, renderPass);
+            continue;
+        }
         orderedKeys.insert(key);
         const auto emitterIt = emitters.find(key);
         if (emitterIt != emitters.end())
@@ -4629,11 +5176,6 @@ void ParticleRenderer::RecordGraphics(
             recordEmitter(*emitterPtr);
         }
     }
-
-    // 全局池在所有逐发射器绘制之后统一画一次；其内部已按粒子的
-    // 世界空间视深度从远到近排序。与其它透明发射器的先后关系仍是
-    // 发射器级近似（v1 文档已记录）。
-    RecordGlobalDraw(commandBuffer, imageIndex, renderPass);
 }
 
 void ParticleRenderer::RecordDistortion(

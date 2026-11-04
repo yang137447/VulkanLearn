@@ -15,14 +15,24 @@ void main()
     ivec2 sizePx = textureSize(inputBloom, 0);
     vec2 texel = 1.0 / vec2(sizePx);
 
-    // 当前实现使用一个归一化的 3x3、近似高斯的采样核，让 bloom 在降采样时更稳定，
-    // 避免直接单点采样带来的 aliasing、亮部丢失、跳变和闪烁。
-    // 后续如果要进一步提升 HDR bloom 的质量，可在前 1~2 级 downsample 中引入
-    // Karis average：它的重点不是单纯“更模糊”，而是抑制 fireflies，避免极亮孤立
-    // 像素在低分辨率 mip 中占主导，从而让整条 bloom 金字塔更稳定。
-    vec3 sum = vec3(0.0);
-    sum += SampleOffset(vec2(0.0)) * 0.25;
-    sum += (SampleOffset(vec2( texel.x, 0.0)) + SampleOffset(vec2(-texel.x, 0.0)) + SampleOffset(vec2(0.0,  texel.y)) + SampleOffset(vec2(0.0, -texel.y))) * 0.125;
+    // Karis average：对 2x2 源 texel 做亮度加权平均，每个 tap 权重 1/(1+luma)。
+    // 重点不是更模糊，而是抑制 fireflies：极亮孤立像素（火花/电弧）不会在低 mip
+    // 中独占能量，从而消除 bloom 的跳变与爬行；权重归一化后整体亮度水平不变。
+    const vec2 sampleOffsets[4] = vec2[](
+        vec2(-0.5, -0.5),
+        vec2( 0.5, -0.5),
+        vec2(-0.5,  0.5),
+        vec2( 0.5,  0.5));
+    vec3 colorSum = vec3(0.0);
+    float weightSum = 0.0;
+    for (int index = 0; index < 4; ++index)
+    {
+        vec3 color = SampleOffset(sampleOffsets[index] * texel);
+        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float weight = 1.0 / (1.0 + luma);
+        colorSum += color * weight;
+        weightSum += weight;
+    }
 
-    outColor = vec4(sum, 1.0);
+    outColor = vec4(colorSum / max(weightSum, 1.0e-5), 1.0);
 }

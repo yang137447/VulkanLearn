@@ -28,6 +28,7 @@
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "texture.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 #include "world/loading/worldBuilder.h"
@@ -296,6 +297,29 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 throw std::runtime_error("Particle thumbnail requires a particle pass");
             particleRenderer.SetParticleLightBuffers(
                 frames.GetParticleLightBufferHandles());
+            // 缩略图与主渲染共用同一套粒子光照合同：场景灯/粒子灯按 image
+            // 取各自的 SSBO，IBL 用本会话已烘焙的预过滤 cubemap。
+            vk::DescriptorImageInfo environmentCubeDescriptor{};
+            const std::shared_ptr<Texture>* prefilteredEnvironment =
+                cache.GetGlobalTexture("prefilteredEnvironmentCube");
+            if (prefilteredEnvironment != nullptr &&
+                *prefilteredEnvironment != nullptr)
+            {
+                environmentCubeDescriptor =
+                    (*prefilteredEnvironment)->GetDescriptorInfo();
+            }
+            vk::DescriptorImageInfo brdfLutDescriptor{};
+            const std::shared_ptr<Texture>* brdfLut =
+                cache.GetGlobalTexture("brdfLut");
+            if (brdfLut != nullptr && *brdfLut != nullptr)
+            {
+                brdfLutDescriptor = (*brdfLut)->GetDescriptorInfo();
+            }
+            particleRenderer.SetSceneLightingResources(
+                frames.GetLightBufferInfos(),
+                frames.GetParticleLightBufferInfos(),
+                environmentCubeDescriptor,
+                brdfLutDescriptor);
             particleRenderer.Synchronize(scene);
         }
         // 统一固定曝光，与中央预览的相机契约一致；不读取活动图上用户正编辑的参数。
