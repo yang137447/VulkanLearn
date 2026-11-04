@@ -468,6 +468,38 @@ TEST(OfflineParticleSimulation, PreviewPolicyDevelopsBurstParticles)
         10.0 * MeanPositionLength(one));
 }
 
+TEST(OfflineParticleSimulation, LightEmittersDoNotAllocateOrAdvance)
+{
+    VL::ParticleSystemAsset asset;
+    asset.name = "PS_offline_light";
+    asset.sourcePath = "test/PS_offline_light.json";
+    VL::ParticleEmitterAsset light;
+    light.name = "flash_light";
+    light.renderMode = "light";
+    light.hasLight = true;
+    light.maxParticles = 8;
+    light.burst = true;
+    light.lifetimeMin = 0.2f;
+    light.lifetimeMax = 0.2f;
+    VL::ParticleEmitterAsset billboard;
+    billboard.name = "smoke";
+    billboard.maxParticles = 8;
+    billboard.spawnRate = 10.0f;
+    billboard.lifetimeMin = 1.0f;
+    billboard.lifetimeMax = 1.0f;
+    asset.emitters = {light, billboard};
+
+    const VL::OfflineParticleSystemState state =
+        VL::SimulateOfflineParticles(
+            InputFromAsset(asset, 11u),
+            VL::OfflineParticlePreviewDefaults(),
+            Eigen::Vector3f(0.0f, 0.0f, 300.0f));
+    ASSERT_EQ(state.emitters.size(), 2u);
+    EXPECT_TRUE(state.emitters[0].particles.empty());
+    EXPECT_FLOAT_EQ(state.emitters[0].elapsedSeconds, 0.0f);
+    EXPECT_FALSE(state.emitters[1].particles.empty());
+}
+
 TEST(OfflineParticleCompositor, BoundsAndAlphaCoverage)
 {
     const VL::OfflineParticleCamera camera =

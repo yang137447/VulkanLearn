@@ -3271,6 +3271,21 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             *rendererBackend,
             RenderGraph::GetInstance());
         particleRenderer.Synchronize(currentRenderScene);
+        // light 发射器由 CPU 运行时映射成动态 PointLight；必须在
+        // RecordAndSubmit 上传 light SSBO 之前完成。灯光数量增长时同步
+        // 扩容并刷新 descriptor，避免 SSBO 换代后仍绑定旧缓冲区。
+        particleLightRuntime.Synchronize(
+            currentRenderScene,
+            particleRenderer.GetResolvedSystemAssets());
+        particleLightRuntime.Update(currentRenderScene);
+        if (frameResources.EnsureLightCapacity(
+                currentRenderScene.lights.size(),
+                *rendererBackend))
+        {
+            RenderGraph::GetInstance().RefreshRuntimeDescriptors(
+                *rendererBackend,
+                BuildRendererDescriptorContext());
+        }
         decalRenderer.EnsureInitialized(
             *pipelineFactory,
             *rendererBackend,

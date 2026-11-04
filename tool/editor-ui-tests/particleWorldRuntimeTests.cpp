@@ -599,6 +599,39 @@ TEST(ParticleWorldRuntime, BeamDoesNotConsumeParticleBudget)
         128u);
 }
 
+TEST(ParticleWorldRuntime, LightDoesNotConsumeParticleBudget)
+{
+    VL::World world = MakeParticleWorld();
+    VL::WorldParticleSystem system =
+        MakeParticleSystemInstance(
+            "Flash", "Maps/PS_flash.json");
+    VL::ParticleEmitterAsset light;
+    light.name = "flash_light";
+    light.renderMode = "light";
+    light.hasLight = true;
+    light.maxParticles = 2;
+    VL::ParticleEmitterAsset smoke;
+    smoke.name = "smoke";
+    smoke.maxParticles = 128;
+    system.asset.emitters = {light, smoke};
+    world.AddParticleSystem("Flash", system);
+
+    ASSERT_TRUE(world.SetWorldParticleBudget(200u, 1.0f));
+    VL::WorldSnapshotBuilder builder;
+    const auto result = builder.Build(world, {});
+    ASSERT_FALSE(result.IsFailure());
+    const VL::ParticleSystemSnapshot& particle =
+        result.Value().particleSystems.front();
+    ASSERT_EQ(particle.telemetry.emitters.size(), 2u);
+    EXPECT_EQ(
+        particle.telemetry.emitters[0].budgetedMaxParticles, 0u);
+    EXPECT_EQ(
+        particle.telemetry.emitters[1].budgetedMaxParticles, 128u);
+    // light 不分配 GPU 池，也不消耗总预算。
+    EXPECT_EQ(particle.telemetry.authoredCapacity, 128u);
+    EXPECT_EQ(particle.budget.effectiveCapacity, 128u);
+}
+
 TEST(ParticleWorldRuntime, RendererTelemetryIsExplicitlyUnavailableUntilFed)
 {
     VL::World world = MakeParticleWorld();

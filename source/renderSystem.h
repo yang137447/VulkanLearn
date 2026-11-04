@@ -39,6 +39,7 @@
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
 #include "particles/particleFrameStats.h"
+#include "particles/particleLightRuntime.h"
 #include "particles/particleRenderer.h"
 #include "render/decal/decalRenderer.h"
 #include "ui/uiOverlayRendererVulkan.h"
@@ -473,6 +474,7 @@ private:
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
     VL::ParticleRenderer particleRenderer;
+    VL::ParticleLightRuntime particleLightRuntime;
     VL::DecalRenderer decalRenderer;
     VL::RenderScene currentRenderScene;
     uint64_t submittedCameraGeneration = 0;

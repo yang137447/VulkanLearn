@@ -53,7 +53,7 @@ snapshots; parent scale affects position, not intensity or cone angles.
 Component directional lights do not replace the authored primary CSM sun.
 See [C# Blueprint runtime](csharp-blueprint-runtime.md) for fields and lifetime rules.
 
-## Point Light Pulse
+## Static Point Light Pulse
 
 `pointLight` may declare an optional periodic pulse:
 
@@ -95,9 +95,45 @@ effective intensity is computed.
 Time comes from `RenderSystem::animationTimeSeconds`, advanced by the same
 clamped frame delta used for exposure. It is wall-clock render time, not
 simulation particle time: the pulse continues while Play is paused and has no
-particle birth/death readback. This is a deliberate approximation for effects
-such as muzzle flashes, explosions, and Tesla arcs; it is not a particle-driven
-light. Editor thumbnails upload lights with time 0.
+particle birth/death readback. Use `pulse` for a static scene light that must
+flash without a particle system; for effects with a Niagara Light Renderer use
+the CPU particle light path below. Editor thumbnails upload lights with time 0.
+
+## CPU Particle Lights
+
+A particle emitter with `renderMode: "light"` is simulated on the CPU and
+contributes real point-light snapshots every frame. It does not allocate a GPU
+particle pool and does not use a separate GPU light pass:
+
+```json
+{
+    "name": "muzzle_light",
+    "modules": [
+        { "type": "emitter", "fields": {
+            "maxParticles": 2,
+            "renderMode": "light",
+            "light": { "intensity": 300.0, "radius": 700.0 }
+        } }
+    ]
+}
+```
+
+`light.intensity` is candela and `light.radius` is centimeters; both must be
+finite and positive. `maxParticles` is capped at 64 per light emitter, and the
+whole scene is capped at 64 live particle lights. The CPU runtime advances with
+`RenderScene::simulationDeltaSeconds`, so Play/Pause and time scale affect the
+light exactly like the other particle modules. The snapshot color is
+`mix(colorStart.rgb, colorEnd.rgb, lifeT)`, multiplied by the instance color
+tint; alpha fades intensity, and the final scalar is
+`light.intensity * (1 - lifeT) * alpha`.
+
+Particle lights are appended to `RenderScene::lights` before the existing light
+SSBO upload. Light SSBO capacity grows and runtime descriptors refresh if the
+combined static + particle light count exceeds the current buffer. Limits: no
+GPU particle readback, no per-light shadows, no light textures, no particle
+event/collision integration for light emitters, and no offline/thumbnail
+simulation. See [particle system](particle-system.md) §Light for the full
+authoring and shape contract.
 
 ## Camera Exposure
 

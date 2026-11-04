@@ -119,6 +119,15 @@ struct ParticleBeamAsset
     float branchSpread = 20.0f;
 };
 
+// renderMode=="light" 的 CPU 灯光参数。发射器本身不写 sceneColor，也不分配
+// GPU 粒子池；运行时按粒子年龄生成瞬时 PointLight。intensity 单位是 cd，
+// radius 单位是 cm，颜色来自 colorStart/colorEnd 的 RGB 与 alpha。
+struct ParticleLightAsset
+{
+    float intensity = 300.0f;
+    float radius = 700.0f;
+};
+
 struct ParticleEmitterAsset
 {
     std::string name;
@@ -133,7 +142,11 @@ struct ParticleEmitterAsset
     // 但不写 sceneColor，而是在独立 pass 里把屏幕空间 UV 偏移写入
     // RGBA16F distortion 缓冲，由 toneMapping 合成。ribbonWidth 是世界空间
     // 半宽（cm），ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
-    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam|distortion
+    std::string renderMode = "billboard"; // billboard|ribbon|mesh|beam|distortion|light
+    // 只有 renderMode=="light" 需要作者提供 light 对象；hasLight 区分
+    // “省略对象”和“对象存在但数值等于默认值”。
+    ParticleLightAsset light;
+    bool hasLight = false;
     ParticleBeamAsset beam;
     // 仅 billboard 使用：camera 跟随相机平面，velocity 让 quad 的法线对齐
     // 粒子速度，fixed 用作者指定的发射器局部法线/上方向。ribbon/mesh/beam

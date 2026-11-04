@@ -731,6 +731,7 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         return;
     }
 
+    resolvedSystemAssets.clear();
     std::unordered_set<std::string> desired;
     size_t emitterCount = 0;
     for (const ParticleSystemSnapshot& snapshot :
@@ -768,6 +769,7 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
                 "unknown runtime user parameter failure");
         }
         const ParticleSystemAsset& systemAsset = *resolvedAsset;
+        resolvedSystemAssets[snapshot.name] = systemAsset;
         std::unordered_map<std::string,
             const ParticleEmitterTelemetry*> telemetryByName;
         telemetryByName.reserve(snapshot.telemetry.emitters.size());
@@ -805,9 +807,10 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             for (const ParticleEmitterAsset& emitter :
                  systemAsset.emitters)
             {
-                // beam 不分配模拟粒子池，也不参与总预算消耗。
+                // beam/light 不分配模拟粒子池，也不参与总预算消耗。
                 authored.push_back(
-                    emitter.renderMode == "beam"
+                    (emitter.renderMode == "beam" ||
+                     emitter.renderMode == "light")
                         ? 0u
                         : emitter.maxParticles);
             }
@@ -824,6 +827,12 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         {
             const ParticleEmitterAsset& authoredEmitter =
                 systemAsset.emitters[emitterIndex];
+            // light 发射器由 ParticleLightRuntime 在 CPU 上模拟并生成
+            // PointLight；粒子渲染器不创建池、indirect 参数或排序资源。
+            if (authoredEmitter.renderMode == "light")
+            {
+                continue;
+            }
             const auto telemetryIt = telemetryByName.find(
                 authoredEmitter.name);
             const ParticleEmitterTelemetry* telemetry =

@@ -506,7 +506,13 @@ OfflineParticleSystemState CreateOfflineParticleSystemState(
             emitter.model,
             emitter.worldCenter,
             emitter.worldRadius);
-        emitter.particles.resize(emitter.asset.maxParticles);
+        // light 发射器没有 GPU 粒子池，也没有离线可见几何；不要为它
+        // 分配/模拟粒子。保留 slot 以维持 enabledEmitterMask 与编辑器
+        // 发射器索引的稳定性。
+        if (emitter.asset.renderMode != "light")
+        {
+            emitter.particles.resize(emitter.asset.maxParticles);
+        }
         system.emitters.push_back(std::move(emitter));
     }
     return system;
@@ -525,6 +531,12 @@ void StepOfflineParticleSystem(
     {
         // 隐藏/禁用与 GPU 的冻结路径一致：不推进 elapsed、不消费 prewarm。
         if (!emitter.visible || !emitter.enabled)
+        {
+            continue;
+        }
+        // CPU 粒子灯只服务实时 PointLight，离线合成器没有消费路径；
+        // 跳过整个模拟，避免为不会显示也不会发光的粒子付出开销。
+        if (emitter.asset.renderMode == "light")
         {
             continue;
         }

@@ -127,6 +127,13 @@ public:
 
     bool IsInitialized() const noexcept { return initialized; }
     bool HasEmitters() const noexcept { return !emitters.empty(); }
+    // 最近一次 Synchronize 解析出的运行时资产（含 userParameters / Data
+    // Channels 覆盖）。CPU 粒子灯光必须复用这份结果。
+    const std::unordered_map<std::string, ParticleSystemAsset>&
+        GetResolvedSystemAssets() const noexcept
+    {
+        return resolvedSystemAssets;
+    }
     const ParticleFrameStats& GetFrameStats() const noexcept
     {
         return frameStats;
@@ -641,6 +648,8 @@ private:
     // 最后一个 epoch 完成后才析构 descriptor pool、buffer 与纹理。
     std::unordered_map<std::string, std::shared_ptr<EmitterResources>>
         emitters;
+    std::unordered_map<std::string, ParticleSystemAsset>
+        resolvedSystemAssets;
     // 仅缓存弱引用：仍被活跃/退休发射器持有的纹理由发射器生命周期管理，
     // Shutdown 清空索引不会提前销毁 GPU 资源。
     std::unordered_map<std::string, std::weak_ptr<Texture>>

@@ -448,11 +448,12 @@ ParticleEmitterAsset ParseEmitter(
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
         emitter.renderMode != "beam" &&
-        emitter.renderMode != "distortion")
+        emitter.renderMode != "distortion" &&
+        emitter.renderMode != "light")
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
-            "'beam' or 'distortion'");
+            "'beam', 'distortion' or 'light'");
     }
     emitter.ribbonWidth = ReadFiniteFloat(
         json, "ribbonWidth", emitter.ribbonWidth);
@@ -494,6 +495,20 @@ ParticleEmitterAsset ParseEmitter(
             beam, "branchLength", emitter.beam.branchLength);
         emitter.beam.branchSpread = ReadFiniteFloat(
             beam, "branchSpread", emitter.beam.branchSpread);
+    }
+    if (json.contains("light"))
+    {
+        const nlohmann::json& light = json.at("light");
+        if (!light.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle light must be an object");
+        }
+        emitter.hasLight = true;
+        emitter.light.intensity = ReadFiniteFloat(
+            light, "intensity", emitter.light.intensity);
+        emitter.light.radius = ReadFiniteFloat(
+            light, "radius", emitter.light.radius);
     }
     if (json.contains("mesh"))
     {
@@ -1424,11 +1439,40 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
         emitter.renderMode != "beam" &&
-        emitter.renderMode != "distortion")
+        emitter.renderMode != "distortion" &&
+        emitter.renderMode != "light")
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
-            "'beam' or 'distortion'");
+            "'beam', 'distortion' or 'light'");
+    }
+    if (emitter.hasLight)
+    {
+        RequireFinite(emitter.light.intensity, "light.intensity");
+        RequireFinite(emitter.light.radius, "light.radius");
+        if (emitter.light.intensity <= 0.0f)
+        {
+            throw std::invalid_argument(
+                "Particle light.intensity must be positive");
+        }
+        if (emitter.light.radius <= 0.0f)
+        {
+            throw std::invalid_argument(
+                "Particle light.radius must be positive");
+        }
+    }
+    if (emitter.renderMode == "light")
+    {
+        if (!emitter.hasLight)
+        {
+            throw std::invalid_argument(
+                "Particle light renderMode requires a light object");
+        }
+        if (emitter.maxParticles > 64)
+        {
+            throw std::invalid_argument(
+                "Particle light maxParticles must be <= 64");
+        }
     }
     if (emitter.billboardAlignment != "camera" &&
         emitter.billboardAlignment != "velocity" &&
@@ -1909,7 +1953,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     if (!emitter.additive &&
         !emitter.sortParticles &&
         emitter.renderMode != "beam" &&
-        emitter.renderMode != "distortion")
+        emitter.renderMode != "distortion" &&
+        emitter.renderMode != "light")
     {
         throw std::invalid_argument(
             "Particle alpha blend requires sortParticles=true");
