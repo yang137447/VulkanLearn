@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -36,6 +37,15 @@ std::string TerrainChunkResourceKey(
     uint32_t chunkX,
     uint32_t chunkZ,
     uint32_t lodLevel = 0);
+
+// 加载期与运行时 streaming 共用的 World 对象名。多级资产必须带 `::lodN`，
+// 单级地形保持历史名字（无 LOD 后缀）。
+std::string TerrainChunkObjectName(
+    std::string_view sceneObjectName,
+    uint32_t chunkX,
+    uint32_t chunkZ,
+    uint32_t lodLevel,
+    bool multiLod);
 
 // 高度图在加载期一次性生成 CPU chunk 网格；法线使用全局高度采样中心差分，
 // 因此相邻 chunk 的共享边界不会出现法线接缝。粗 LOD 的边界环固定使用

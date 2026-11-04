@@ -39,6 +39,7 @@ class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
 class RenderThread;
+class TerrainChunkStreamer;
 class RuntimeConfig;
 class RuntimeCommandExecutor;
 class ScriptBuildService;
@@ -197,6 +198,7 @@ private:
     std::unique_ptr<ShaderReloadRuntime> shaderReloadRuntime;
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
+    std::unique_ptr<TerrainChunkStreamer> terrainChunkStreamer;
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<ScriptBuildService> scriptBuild;

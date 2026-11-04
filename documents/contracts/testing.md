@@ -21,6 +21,7 @@
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |
 | `ctest --test-dir build -R <regex> --output-on-failure` | 已构建对应目标 | 模块测试 | 见下"改动 → 验证" |
 | `.\build\bin\main.exe --dev-ui` | 已构建、`config/config.json` 可解析 | 端到端渲染/交互 | UI 或渲染路径改动后（见"手工与像素验证"） |
+| `<blender-python> tool/blender-terrain-import/terrain_erosion_tests.py -v` | Blender 5.2 Python（含 numpy） | MFD/D8 汇流差异、沉积质量账、抬升耦合、沉积长度尺度 | 改 `tool/blender-terrain-import/terrain_erosion.py` 后；也可通过 `VULKANLEARN_TERRAIN_EROSION_PYTHON` 注册为 CTest 项 |
 
 ## 测试目标实测规模
 
@@ -1761,3 +1762,20 @@ BP 实窗检查被用户 Escape 中止，因此本轮未完成最终 BP 视口�
   VLP1、页表/atlas 与几何 LOD 均走正式 CPU 路径。
 - `main`、`editor_ui_tests`、`terrain_tests` 构建通过；文档门禁
   `py -3 tool/validate-docs.py` 通过。
+
+## 2026-11-05 地形 streaming 与侵蚀回归
+
+`codex/terrain-openworld` 的缝合带法线、MFD 侵蚀和运行时 chunk streaming 改动：
+
+- `terrain_tests` 注册 258 项，全部通过；新增
+  `TerrainChunkResidency.StreamingSet*` 与 `ParsesChunkGroupIdWithPipesInPlacement`
+  覆盖运行时期望集合、1.15 滞回、距离排序和含 `|` 的 placementId。
+- `terrain_erosion_tests`（Blender 5.2 Python）4 项通过，覆盖 MFD/D8 汇流差异、
+  沉积质量账、抬升耦合和沉积长度尺度。可用
+  `-DVULKANLEARN_TERRAIN_EROSION_PYTHON=<python.exe>` 注册为 CTest。
+- `SC_terrain_blender_gn_pegasus.json` 手工 streaming 冒烟：`--no-dev-ui` 下
+  `camera pose 0 165000 2000000 0 0 0` 后 `terrainchunk stats` 报告
+  `objectsByLevel=2:16`；移回 `0 165000 330000 0 0 0` 后恢复
+  `objectsByLevel=0:16,1:16,2:16`，画面无空洞。
+- 六地貌 1024² 默认 producer 全部跑通，侵蚀/沉积/输出体积质量账误差均 < 1e-15；
+  证据 `artifacts/gn_biomes/contact_sheet.png` 与各目录 `blender_pegasus_gn_metadata.json`。

@@ -145,6 +145,10 @@ public:
     const std::shared_ptr<MaterialInstance>* GetMaterialInstance(std::string_view materialInstanceKey) const;
 
     void BindObjectResource(std::string objectName, std::shared_ptr<RendererObjectResourceEntry> objectResource);
+    // 摘除并返回逐对象 GPU 资源；调用方按 GPU epoch 交给 ResourceRetireQueue，
+    // 避免运行时 chunk 卸载后模型 UBO/descriptor 永久留在 World 包里。
+    std::shared_ptr<RendererObjectResourceEntry> TakeObjectResource(
+        std::string_view objectName);
     const std::shared_ptr<RendererObjectResourceEntry>* GetObjectResource(std::string_view objectName) const;
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);

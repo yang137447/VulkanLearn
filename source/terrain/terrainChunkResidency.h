@@ -98,4 +98,52 @@ bool TerrainChunkLevelIsResident(
     uint32_t lodLevel,
     uint32_t lodLevelCount);
 
+// 运行时 streaming 的稳定 chunk/LOD 身份。它只描述“哪一份网格”，不包含
+// placement；调用方按 placement 分开维护集合。
+struct TerrainChunkId
+{
+    uint32_t chunkX = 0;
+    uint32_t chunkZ = 0;
+    uint32_t lodLevel = 0;
+
+    bool operator==(const TerrainChunkId& other) const noexcept
+    {
+        return chunkX == other.chunkX &&
+            chunkZ == other.chunkZ &&
+            lodLevel == other.lodLevel;
+    }
+    bool operator<(const TerrainChunkId& other) const noexcept
+    {
+        if (chunkX != other.chunkX) return chunkX < other.chunkX;
+        if (chunkZ != other.chunkZ) return chunkZ < other.chunkZ;
+        return lodLevel < other.lodLevel;
+    }
+};
+
+struct TerrainChunkStreamingCandidate
+{
+    TerrainChunkId id;
+    float distanceCm = 0.0f;
+};
+
+// 每帧应驻留的 (chunk, LOD) 集合，按距离由近到远排序，供流式构建预算
+// 优先处理近处。最粗一级永远进入集合；更细一级用 residency 窗口乘以
+// hysteresisScale（默认 1.15）判定，给“离开窗口后延迟两帧再卸载”留余量。
+// cameraKnown=false / 单级地形返回空集合。
+std::vector<TerrainChunkStreamingCandidate> ComputeTerrainChunkStreamingSet(
+    const TerrainChunkResidencyDesc& residency,
+    const std::vector<float>& residencyDistancesCm,
+    const Eigen::Matrix4f& model,
+    const std::vector<TerrainChunkBounds>& chunkBounds,
+    uint32_t lodLevelCount,
+    float hysteresisScale = 1.15f);
+
+// 从 LOD 组身份 `placementId|chunkX|chunkZ` 还原 chunk 坐标。placementId
+// 本身允许包含 '|'（例如 `terrain|name`），因此只从右侧解析最后两段。
+bool ParseTerrainChunkLodGroupId(
+    const std::string& groupId,
+    std::string& placementId,
+    uint32_t& chunkX,
+    uint32_t& chunkZ);
+
 } // namespace VL

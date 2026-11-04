@@ -1,8 +1,9 @@
 # Terrain Runtime
 
 > 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；地形
-> chunk 卸载、专用低分辨率兜底页/时序淡入、运行时异步分页与 Play 中的实时碰撞重建
-> 不在当前能力内。运行时几何 LOD、层页 force-mip/avgColor 混合与相机前向预取已接入；
+> 专用低分辨率兜底页/时序淡入、运行时异步 GPU 上传与 Play 中的实时碰撞重建
+> 不在当前能力内。运行时几何 LOD、异步 CPU chunk 构建 + GT 上传/卸载、
+> 层页 force-mip/avgColor 混合与相机前向预取已接入；
 > 编辑器侧已有 TR 资产页、Landscape Sculpt/Paint 会话、高度图写回与 Paint 快照保存，
 > 边界见“编辑器地形编辑”。
 
@@ -309,8 +310,10 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 - `lodLevels=1` 的旧资产仍只生成/绑定 LOD0，且 LOD0 无额外边界几何、顶点/索引与历史
   实现逐字节一致。`lodLevels>1` 时 renderer 为每个 chunk 生成 0..lodLevels-1 级，
   `lod > 0` 的级别带一圈**边界缝合带**；运行时每帧按相机到 chunk 世界 AABB
-  的距离只输出一级。没有地形 chunk 卸载。
-  地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现，但几何本身不流式。
+  的距离只输出一级。运行时 `TerrainChunkStreamer` 会按相机窗口补齐/卸载
+  (chunk, LOD) 并退休其 RenderableObject/逐对象 GPU 资源。
+  地表 ID/权重 atlas 的页内容已按需流式驻留，top-4 混合已实现；几何 chunk
+  也由加载期窗口 + 运行时 worker 构建共同驻留。
 
 ### CPU 几何 LOD 与边界缝合
 
@@ -342,17 +345,28 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
   在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
 
-### 几何 chunk 驻留（第一版）
+### 几何 chunk 驻留与运行时 streaming
 
-第一版的目标是“用距离窗口省掉窗口外的细 LOD 几何”，不是运行时异步分页。
-边界必须按下面的措辞理解：
+加载期仍按窗口预生成一批 (chunk, LOD) 作为首帧基线；之后的相机移动由
+`TerrainChunkStreamer` 继续补齐/卸载：
 
-- **只做加载期驻留**：`RendererTerrainLoader::LoadTerrainObject` 在 World 加载时
-  决定创建哪些 (chunk, LOD) 网格；窗口外的细 LOD 连 CPU 顶点/法线都不生成，
+- **加载期驻留**：`RendererTerrainLoader::LoadTerrainObject` 在 World 加载时
+  决定初始创建哪些 (chunk, LOD) 网格；窗口外的细 LOD 连 CPU 顶点/法线都不生成，
   也不会 `BindRenderableObject` 到 `RendererResourceCache`。
-- **运行时不重传**：相机之后移动到窗口外区域，只会改变 `WorldSnapshotBuilder`
-  的选择并回退到已驻留的更粗一级；已经创建的细 LOD 也不会在运行时卸载。
-  真正的异步构建/上传、运行时退休和卸载是后续工作。
+- **运行时流式补齐**：`EngineLoop` 在每个 World snapshot 发布前读取
+  `World::GetRenderCamera()`，用 `ComputeTerrainChunkStreamingSet` 计算期望集合。
+  最粗一级恒在集合内；更细一级用 residency 窗口 × 1.15 的滞回。CPU
+  `TerrainMeshBuilder::BuildChunks` 在独立 worker 线程构建；GT 在渲染线程空闲边界
+  创建 `RenderableObject`/挂 `WorldMeshObject`。每帧最多 4 个新请求、2 个 GPU
+  上传、16 个在途构建；离开期望集合的 chunk 连续缺席 2 帧后卸载，每帧最多 4 个。
+- **卸载与退休**：卸载先 `World::RemoveMeshObject`，再用
+  `RendererResourceCache::TakeRenderableObject` / `TakeObjectResource` 取出 GPU
+  资源，交给 `ResourceRetireQueue` 按已提交 epoch 释放。
+- **选择不变**：`WorldSnapshotBuilder` 仍是唯一 LOD 选择点；它只读 World 里实际
+  存在的 `lodLevel` 生成 resident 位图，目标级未驻留时回退到更粗一级，最坏停在
+  coarsest。streaming 不另写一套选择规则。
+- **范围**：只处理 `lodLevels>1`、存在 terrain collision instance、且至少有一个
+  模板 chunk 的 placement；单级地形、无相机/离线路径不进入 streaming。
 - **最粗一级永远驻留**：`lodLevels-1` 不受窗口约束，因此任何组都至少有一份
   可绘制网格，不会出现空洞。
 
@@ -371,9 +385,9 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   直接从高度图采样 LOD0 顶点位置范围；`TerrainChunkBuildFilter::chunkMask`
   再让 `BuildChunks` 只生成窗口内的 chunk。mask 只影响“生成哪些 chunk”，
   不影响任何 chunk 的顶点/索引内容，因此不进入资源 key。
-- 加载期相机来自场景 JSON 的 camera 对象（`ReadInitialTerrainChunkResidency`）。
-  加载后才执行的 `camera pose` 不改变窗口。没有 camera / 离线 / 单级地形时
-  驻留判定关闭，行为回到“全部创建”。
+- 加载期相机来自场景 JSON 的 camera 对象（`ReadInitialTerrainChunkResidency`），
+  只决定首帧基线；之后执行的 `camera pose` 由 streamer 在每个 snapshot 前消费。
+  没有 camera / 离线 / 单级地形时，加载期驻留判定关闭，行为回到“全部创建”。
 - `WorldSnapshotBuilder` 仍是唯一选择点：先按距离 + 滞回选目标级；目标级不在
   World 里（加载期没驻留）就沿更粗方向找最近的 resident 级，最坏停在 coarsest。
   组内 resident 级位图直接由“World 里存在哪些 `lodLevel`”得到，不另存一份状态。
@@ -1091,7 +1105,7 @@ P3/P3.1/L1/L2/L3/L4a/L4b/L4c/L4e **没有**实现：低分辨率 fallback 页（
 `avgColor` 混合与细一级 mip 预取，没有降采样兜底页）、视锥/地形 tile 级预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
-地形 chunk 卸载、Play 中实时碰撞重建。地形碰撞的 heightfield 模块已接入
+Play 中实时碰撞重建。地形碰撞的 heightfield 模块已接入
 World/Play（见下节），但仍是整张地形一个 body；Sculpt 的碰撞更新只在下次 Play
 生效。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
@@ -1200,6 +1214,15 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   一致、过滤不改顶点/索引内容、跳过量估算与真实网格逐级一致”；
   `TerrainValidator.AcceptsChunkResidencyDistances` /
   `RejectsInvalidChunkResidencyDistances` 钉住资产校验。
+- 运行时 chunk streaming：`ComputeTerrainChunkStreamingSet` 由
+  `TerrainChunkResidency.StreamingSetKeepsCoarsestAndNearFineLevels` /
+  `StreamingSetAppliesHysteresis` / `ParsesChunkGroupIdWithPipesInPlacement`
+  钉住“最粗一级恒选、近处细级按距离排序、1.15 滞回、placementId 可含 `|`”。
+  手工冒烟：`--no-dev-ui` 加载 `SC_terrain_blender_gn_pegasus.json`，用
+  `camera pose 0 165000 2000000 0 0 0` 移到窗口外后 `terrainchunk stats`
+  报告 `objectsByLevel=2:16`；再移回 `0 165000 330000 0 0 0` 后恢复
+  `objectsByLevel=0:16,1:16,2:16`，画面无空洞。加载期 `chunks=48` 字节基线
+  保持只读，运行时以 `objectsByLevel`/`drawnByLevel` 为准。
 - LOD 冒烟：`Generated/Validation/TerrainLod/` 的
   `TR_terrain_lod_smoke.json`（3 级、4×4 chunk、距离 3000/8000cm）配
   `SC_terrain_lod_near|mid|far.json`；`terrainchunk stats` 分别报告

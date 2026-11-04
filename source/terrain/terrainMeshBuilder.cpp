@@ -69,6 +69,20 @@ std::string TerrainChunkResourceKey(
         "|chunk=" + std::to_string(chunkX) + "," + std::to_string(chunkZ);
 }
 
+std::string TerrainChunkObjectName(
+    std::string_view sceneObjectName,
+    uint32_t chunkX,
+    uint32_t chunkZ,
+    uint32_t lodLevel,
+    bool multiLod)
+{
+    std::string name = std::string(sceneObjectName) + "::chunk_" +
+        std::to_string(chunkX) + "_" + std::to_string(chunkZ);
+    if (multiLod)
+        name += "::lod" + std::to_string(lodLevel);
+    return name;
+}
+
 std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     const TerrainBuildPlan& plan,
     uint32_t lodLevel,

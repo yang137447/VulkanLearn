@@ -42,6 +42,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "engine/editorThumbnailRenderSession.h"
 #include "engine/terrainEditApply.h"
+#include "engine/terrainChunkStreamer.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
@@ -454,6 +455,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend = std::make_unique<RendererBackendVulkan>();
     rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
     rendererBackendInitialized = true;
+    terrainChunkStreamer = std::make_unique<TerrainChunkStreamer>();
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
@@ -1037,6 +1039,24 @@ void EngineLoop::Tick()
     }
     SynchronizeSceneViewport();
     TickEditorThumbnails();
+
+    if (terrainChunkStreamer != nullptr && rendererBackend != nullptr)
+    {
+        const auto& streamingWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorld();
+        if (streamingWorld)
+        {
+            if (const auto camera = streamingWorld->GetRenderCamera())
+            {
+                PROFILE_SCOPE("TerrainChunkStreaming");
+                terrainChunkStreamer->Update(
+                    *streamingWorld,
+                    *rendererBackend,
+                    RendererResourceCache::GetInstance(),
+                    camera->GetPosition());
+            }
+        }
+    }
 
     {
         PROFILE_SCOPE("RenderLoop");

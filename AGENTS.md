@@ -381,15 +381,19 @@ temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` m
 in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
 Current limits: no dedicated low-resolution fallback page or temporal fade (the L4e path only
 blends a coarser mip toward `avgColor`), no frustum/tile-level prefetch (only forward-motion
-prefetch), no terrain chunk unloading, terrain editing, or per-chunk/edit-time collision rebuild.
-CPU geometry LOD/skirt generation, load-time chunk residency and runtime selection are
-wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel, buildSkirtOverride,
+prefetch), and no terrain editing or per-chunk/edit-time collision rebuild. Runtime chunk
+streaming does unload out-of-window geometry.
+CPU geometry LOD/stitching generation, load-time chunk residency, runtime streaming and LOD
+selection are wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel,
 filter)`, TR `lodLevels`/`lodDistances`/`chunkResidencyDistances`) the loader computes chunk
 AABBs from the heightmap (`ComputeChunkBounds`), keeps only the (chunk, LOD) pairs inside the
 residency window (`TerrainChunkResidencyDistancesCm`, default `lodDistances × 1.1`, coarsest
-always resident) and generates those meshes (LOD0 also gets a skirt). The window comes from the
-scene JSON camera at load time; a later `camera pose` does not refill fine levels. Runtime has no
-async build/upload/unload yet. `WorldSnapshotBuilder` picks one level per
+always resident) and generates those meshes. LOD>0 uses boundary stitching, with the boundary
+ring at `step=1` normals and coarse vertices blended toward them near the edge; there is no
+skirt. The load-time window comes from the scene JSON camera; `TerrainChunkStreamer` then
+consumes the render camera every frame, builds missing chunks on a worker thread, creates their
+GPU objects on the game thread, and retires chunks absent for two frames. `WorldSnapshotBuilder`
+picks one level per
 `lodGroupId = placementId|chunkX|chunkZ` from the camera's distance to the chunk world AABB with a
 10% hysteresis band; if the target level was never resident it falls back to the nearest coarser
 resident level (worst case coarsest) instead of leaving a hole. The snapshot is the single
@@ -607,8 +611,8 @@ If asked to add or change a terrain:
 - inspect `source/scene/validation/sceneJsonValidator.h` and `sceneAssetValidator.cpp`
 
 Heightmap/TR/geometry changes are runtime changes; World-level collision integration, terrain
-chunk unloading and terrain editing are still feature requests, not fixes. CPU LOD/skirt
-generation, runtime LOD selection (`WorldSnapshotBuilder` + `terrainlod stats`) and the standalone
+editing and per-chunk collision rebuild are still feature requests, not fixes. CPU LOD/stitching
+generation, runtime chunk streaming, runtime LOD selection (`WorldSnapshotBuilder` + `terrainlod stats`) and the standalone
 Jolt heightfield collision module already exist; treat bugs in those paths as fixes.
 
 If asked to add or change a render pass:

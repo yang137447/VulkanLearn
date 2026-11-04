@@ -2240,13 +2240,12 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             }
 
             MeshObjectBuildPlan objectPlan;
-            const std::string chunkBaseName =
-                objectName + "::chunk_" +
-                std::to_string(chunk.chunkX) + "_" +
-                std::to_string(chunk.chunkZ);
-            objectPlan.objectName = multiLod
-                ? chunkBaseName + "::lod" + std::to_string(lodLevel)
-                : chunkBaseName;
+            objectPlan.objectName = TerrainChunkObjectName(
+                objectName,
+                chunk.chunkX,
+                chunk.chunkZ,
+                lodLevel,
+                multiLod);
             objectPlan.sceneObjectIdentity = objectName;
             objectPlan.materialSlotIndex = 0;
             objectPlan.materialSlotName = "Terrain";

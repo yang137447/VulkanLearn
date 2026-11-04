@@ -561,6 +561,19 @@ const std::shared_ptr<RendererObjectResourceEntry>* RendererResourceCache::GetOb
     return nullptr;
 }
 
+std::shared_ptr<RendererObjectResourceEntry>
+RendererResourceCache::TakeObjectResource(std::string_view objectName)
+{
+    WorldLocalResourcePackage& resources = GetMutableWorldLocalResources();
+    auto objectIt = resources.objectResources.find(std::string(objectName));
+    if (objectIt == resources.objectResources.end())
+        return nullptr;
+    std::shared_ptr<RendererObjectResourceEntry> object =
+        std::move(objectIt->second);
+    resources.objectResources.erase(objectIt);
+    return object;
+}
+
 void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<Texture> texture)
 {
     WorldLocalResourcePackage& resources =

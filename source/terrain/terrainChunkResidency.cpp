@@ -166,4 +166,93 @@ bool TerrainChunkLevelIsResident(
         residencyDistancesCm);
 }
 
+std::vector<TerrainChunkStreamingCandidate> ComputeTerrainChunkStreamingSet(
+    const TerrainChunkResidencyDesc& residency,
+    const std::vector<float>& residencyDistancesCm,
+    const Eigen::Matrix4f& model,
+    const std::vector<TerrainChunkBounds>& chunkBounds,
+    uint32_t lodLevelCount,
+    float hysteresisScale)
+{
+    std::vector<TerrainChunkStreamingCandidate> candidates;
+    if (!residency.cameraKnown || lodLevelCount == 0 || chunkBounds.empty())
+        return candidates;
+
+    const float scale = std::max(hysteresisScale, 1.0f);
+    const uint32_t coarsestLevel = lodLevelCount - 1;
+    candidates.reserve(
+        chunkBounds.size() * static_cast<size_t>(lodLevelCount));
+    for (const TerrainChunkBounds& bounds : chunkBounds)
+    {
+        Eigen::Vector3f worldMin;
+        Eigen::Vector3f worldMax;
+        TerrainChunkWorldBounds(
+            model, bounds.boundsMin, bounds.boundsMax, worldMin, worldMax);
+        const float distanceCm = TerrainLodDistanceToAabbCm(
+            residency.cameraPositionCm, worldMin, worldMax);
+        for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
+        {
+            bool keep = lodLevel == coarsestLevel;
+            if (!keep && lodLevel < residencyDistancesCm.size())
+            {
+                keep = distanceCm <=
+                    residencyDistancesCm[lodLevel] * scale;
+            }
+            if (!keep)
+                continue;
+            candidates.push_back(TerrainChunkStreamingCandidate{
+                TerrainChunkId{bounds.chunkX, bounds.chunkZ, lodLevel},
+                distanceCm});
+        }
+    }
+
+    std::stable_sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const TerrainChunkStreamingCandidate& lhs,
+           const TerrainChunkStreamingCandidate& rhs) {
+            if (lhs.distanceCm != rhs.distanceCm)
+                return lhs.distanceCm < rhs.distanceCm;
+            return lhs.id < rhs.id;
+        });
+    return candidates;
+}
+
+bool ParseTerrainChunkLodGroupId(
+    const std::string& groupId,
+    std::string& placementId,
+    uint32_t& chunkX,
+    uint32_t& chunkZ)
+{
+    const size_t last = groupId.rfind('|');
+    if (last == std::string::npos || last == 0)
+        return false;
+    const size_t previous = groupId.rfind('|', last - 1);
+    if (previous == std::string::npos || previous == 0)
+        return false;
+    try
+    {
+        const std::string chunkXText =
+            groupId.substr(previous + 1, last - previous - 1);
+        const std::string chunkZText = groupId.substr(last + 1);
+        size_t consumedX = 0;
+        size_t consumedZ = 0;
+        const unsigned long parsedX = std::stoul(chunkXText, &consumedX);
+        const unsigned long parsedZ = std::stoul(chunkZText, &consumedZ);
+        if (consumedX != chunkXText.size() || consumedZ != chunkZText.size())
+            return false;
+        if (parsedX > std::numeric_limits<uint32_t>::max() ||
+            parsedZ > std::numeric_limits<uint32_t>::max())
+            return false;
+        placementId = groupId.substr(0, previous);
+        chunkX = static_cast<uint32_t>(parsedX);
+        chunkZ = static_cast<uint32_t>(parsedZ);
+        return !placementId.empty();
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 } // namespace VL

@@ -167,6 +167,82 @@ TEST(TerrainChunkResidency, UsesWorldAabbDistance)
         2));
 }
 
+TEST(TerrainChunkResidency, StreamingSetKeepsCoarsestAndNearFineLevels)
+{
+    TerrainChunkResidencyDesc residency;
+    residency.cameraKnown = true;
+    residency.cameraPositionCm = Eigen::Vector3f::Zero();
+    const Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    const std::vector<TerrainChunkBounds> bounds = {
+        TerrainChunkBounds{
+            0, 0,
+            Eigen::Vector3f(-100.0f, 0.0f, -100.0f),
+            Eigen::Vector3f(100.0f, 10.0f, 100.0f)},
+        TerrainChunkBounds{
+            1, 0,
+            Eigen::Vector3f(900.0f, 0.0f, -100.0f),
+            Eigen::Vector3f(1100.0f, 10.0f, 100.0f)}};
+    const std::vector<float> windows = {200.0f, 500.0f};
+    const std::vector<TerrainChunkStreamingCandidate> candidates =
+        ComputeTerrainChunkStreamingSet(
+            residency, windows, model, bounds, 3, 1.0f);
+
+    // 近处 chunk 的三级都在窗口内；远处 chunk 只保留最粗一级。
+    ASSERT_EQ(candidates.size(), 4u);
+    EXPECT_EQ(candidates[0].id, (TerrainChunkId{0, 0, 0}));
+    EXPECT_EQ(candidates[1].id, (TerrainChunkId{0, 0, 1}));
+    EXPECT_EQ(candidates[2].id, (TerrainChunkId{0, 0, 2}));
+    EXPECT_EQ(candidates[3].id, (TerrainChunkId{1, 0, 2}));
+    EXPECT_LE(candidates[0].distanceCm, candidates[1].distanceCm);
+    EXPECT_LE(candidates[2].distanceCm, candidates[3].distanceCm);
+}
+
+TEST(TerrainChunkResidency, StreamingSetAppliesHysteresis)
+{
+    TerrainChunkResidencyDesc residency;
+    residency.cameraKnown = true;
+    residency.cameraPositionCm = Eigen::Vector3f::Zero();
+    const Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    const std::vector<TerrainChunkBounds> bounds = {
+        TerrainChunkBounds{
+            0, 0,
+            Eigen::Vector3f(500.0f, 0.0f, -100.0f),
+            Eigen::Vector3f(700.0f, 10.0f, 100.0f)}};
+    const std::vector<float> windows = {400.0f};
+
+    const std::vector<TerrainChunkStreamingCandidate> exact =
+        ComputeTerrainChunkStreamingSet(
+            residency, windows, model, bounds, 2, 1.0f);
+    ASSERT_EQ(exact.size(), 1u);
+    EXPECT_EQ(exact[0].id.lodLevel, 1u);
+
+    const std::vector<TerrainChunkStreamingCandidate> hysteretic =
+        ComputeTerrainChunkStreamingSet(
+            residency, windows, model, bounds, 2, 1.5f);
+    ASSERT_EQ(hysteretic.size(), 2u);
+    EXPECT_EQ(hysteretic[0].id.lodLevel, 0u);
+    EXPECT_EQ(hysteretic[1].id.lodLevel, 1u);
+}
+
+TEST(TerrainChunkResidency, ParsesChunkGroupIdWithPipesInPlacement)
+{
+    std::string placementId;
+    uint32_t chunkX = 0;
+    uint32_t chunkZ = 0;
+    EXPECT_TRUE(ParseTerrainChunkLodGroupId(
+        "terrain|mountain_a|12|7", placementId, chunkX, chunkZ));
+    EXPECT_EQ(placementId, "terrain|mountain_a");
+    EXPECT_EQ(chunkX, 12u);
+    EXPECT_EQ(chunkZ, 7u);
+
+    EXPECT_FALSE(ParseTerrainChunkLodGroupId(
+        "terrain|mountain_a|12", placementId, chunkX, chunkZ));
+    EXPECT_FALSE(ParseTerrainChunkLodGroupId(
+        "terrain|mountain_a|12|x", placementId, chunkX, chunkZ));
+    EXPECT_FALSE(ParseTerrainChunkLodGroupId(
+        "|12|7", placementId, chunkX, chunkZ));
+}
+
 TEST(TerrainChunkResidency, EstimatesMatchBuiltChunkCounts)
 {
     const TerrainBuildPlan plan = MakePlan();
