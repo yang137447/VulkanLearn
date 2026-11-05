@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,8 @@
 #include <utility>
 
 #include "commonFunction.h"
+#include "animation/animationAssets.h"
+#include "animation/skeletalPlayback.h"
 #include "core/logStore.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "pipeline/computePipeline.h"
@@ -56,6 +59,39 @@ namespace
 // maxParticles 是作者池大小；排序网络要求 2 的幂，最小 256 以摊薄 dispatch。
 constexpr uint32_t kParticleSortMinimumCapacity = 256;
 constexpr uint32_t kParticleSortMaximumCapacity = 4096;
+
+uint64_t BuildParticleDataChannelSignature(
+    const ParticleDataChannelMap& channels)
+{
+    std::vector<std::pair<std::string, std::string>> ordered;
+    ordered.reserve(channels.size());
+    for (const auto& [key, value] : channels)
+    {
+        ordered.emplace_back(key, value.ToTypedJson().dump());
+    }
+    std::sort(
+        ordered.begin(),
+        ordered.end(),
+        [](const auto& left, const auto& right)
+        {
+            return left.first < right.first;
+        });
+    uint64_t hash = 1469598103934665603ull;
+    for (const auto& [key, value] : ordered)
+    {
+        for (char character : key)
+        {
+            hash ^= static_cast<uint8_t>(character);
+            hash *= 1099511628211ull;
+        }
+        for (char character : value)
+        {
+            hash ^= static_cast<uint8_t>(character);
+            hash *= 1099511628211ull;
+        }
+    }
+    return hash;
+}
 
 // shape.type 字符串到 UBO code 的映射。非法值已在资产校验阶段拒绝，
 // 这里回退 sphere 只用于防御未走校验的构造路径。
@@ -228,6 +264,18 @@ GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
         1,
         vk::ShaderStageFlagBits::eFragment,
         "LightGridParamsBlock"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        13,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "translucencyVolume"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        14,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "iesLut"));
     layout.overrideSets[PassSetIndex] = true;
     ShaderBinding sceneDepth;
     sceneDepth.set = PassSetIndex;
@@ -348,6 +396,18 @@ GraphicsPipelineLayoutDesc BuildParticleSharedLayout()
         1,
         vk::ShaderStageFlagBits::eFragment,
         "LightGridParamsBlock"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        13,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "translucencyVolume"));
+    bindings.push_back(MakeParticleLayoutBinding(
+        14,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "iesLut"));
     // Set 3 必须与 RenderGraph 的输入全集完全一致。反射会裁掉未静态使用的
     // binding（beam 不采样 CSM/local shadow），若各管线各走反射，layout 会
     // 少于 pass descriptor set 的 0/1/2 三个 binding，导致绑定时不兼容。
@@ -822,6 +882,51 @@ void ParticleRenderer::Initialize(
         GraphicsPipelineBlendMode::AlphaBlend,
         meshLayout);
 
+    // SkeletalMeshTris/Bones 不读取顶点缓冲，逐粒子用 3/6 个顶点展开。
+    PassPipelineContractKey skeletalContract =
+        particlePass->pipelineContractKey;
+    skeletalContract.useVertexInput = false;
+    skeletalContract.depthTestEnable = false;
+    skeletalContract.depthWriteEnable = false;
+    skeletalContract.depthCompareOp = vk::CompareOp::eLess;
+    ShaderVariantKey skeletalTriangleVariant = variant;
+    skeletalTriangleVariant.shaderName =
+        "particle/particleSkeletalTriangle";
+    const GraphicsShaderVariantArtifact& skeletalTriangleArtifact =
+        factory.PrepareGraphicsShaderVariant(skeletalTriangleVariant);
+    skeletalTriangleAdditivePipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        skeletalContract,
+        skeletalTriangleArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::Additive,
+        meshLayout);
+    skeletalTriangleAlphaPipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        skeletalContract,
+        skeletalTriangleArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::AlphaBlend,
+        meshLayout);
+    ShaderVariantKey skeletalBoneVariant = variant;
+    skeletalBoneVariant.shaderName = "particle/particleSkeletalBone";
+    const GraphicsShaderVariantArtifact& skeletalBoneArtifact =
+        factory.PrepareGraphicsShaderVariant(skeletalBoneVariant);
+    skeletalBoneAdditivePipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        skeletalContract,
+        skeletalBoneArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::Additive,
+        meshLayout);
+    skeletalBoneAlphaPipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        skeletalContract,
+        skeletalBoneArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::AlphaBlend,
+        meshLayout);
+
     // 跨发射器 alpha billboard 的统一绘制管线：无顶点输入，读取
     // gathered 记录 + 全局排序 pair 表 + 8 槽纹理数组。
     ShaderVariantKey globalVariant = variant;
@@ -876,8 +981,26 @@ void ParticleRenderer::Initialize(
         HostImage::PixelFormat::RGBA8_UNORM,
         HostImage::TextureSemantic::Color,
         "ParticleDefaultEmissive");
+    HostImage iesImage;
+    iesImage.width = 64;
+    iesImage.height = 16;
+    iesImage.channels = 4;
+    iesImage.format = HostImage::PixelFormat::RGBA8_UNORM;
+    iesImage.semantic = HostImage::TextureSemantic::Data;
+    iesImage.rowStrideBytes = 64 * 4;
+    iesImage.data.assign(64 * 16 * 4, 255);
+    Texture::CreateDesc iesDesc;
+    iesDesc.semantic = HostImage::TextureSemantic::Data;
+    iesDesc.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    iesDesc.generateMipmaps = false;
+    iesDesc.filter = vk::Filter::eLinear;
+    iesDesc.wrapMode = vk::SamplerAddressMode::eClampToEdge;
+    iesDesc.debugName = "ParticleIesLutDefault";
+    iesLutTexture = std::make_shared<Texture>(
+        renderer, iesImage, iesDesc);
     // 场景光照 descriptor 的兜底资源必须在第一个发射器创建前就绪。
     CreateFallbackLightingResources();
+    EnsureTranslucencyVolume();
     initialized = true;
 }
 
@@ -901,6 +1024,7 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     fallbackSceneLightInfo = vk::DescriptorBufferInfo{};
     fallbackParticleLightInfo = vk::DescriptorBufferInfo{};
     DestroyFallbackLightingResources();
+    DestroyTranslucencyVolume();
     warnedMissingParticleLightBuffer = false;
     textureCache.clear();
     DestroyGlobalSortPool();
@@ -920,6 +1044,10 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     distortionPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
+    skeletalTriangleAdditivePipeline.reset();
+    skeletalTriangleAlphaPipeline.reset();
+    skeletalBoneAdditivePipeline.reset();
+    skeletalBoneAlphaPipeline.reset();
     shadowPipelines.clear();
     pipelineFactory = nullptr;
     globalDrawPipeline.reset();
@@ -927,6 +1055,7 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     defaultNormalTexture.reset();
     defaultOrmTexture.reset();
     defaultEmissiveTexture.reset();
+    iesLutTexture.reset();
     drawOrder.clear();
     renderIdentity = {};
     initialized = false;
@@ -952,13 +1081,17 @@ void ParticleRenderer::InvalidatePipelines(
 const ParticleSystemAsset&
 ParticleRenderer::ResolveParticleSystemAsset(
     const ParticleSystemSnapshot& snapshot,
-    const std::unordered_map<std::string, float>& runtimeParameters)
+    const ParticleDataChannelMap& dataChannels,
+    const std::unordered_map<std::string, float>& userParameters)
 {
     const ParticleSystemAsset& base = snapshot.asset;
     // 只有“带参数的 v2 作者 JSON + 该资产实际引用的运行时值”才需要重解析。
+    const ParticleDataChannelMap effectiveChannels =
+        FilterParticleRuntimeParametersTyped(base, dataChannels);
     const std::unordered_map<std::string, float> effectiveParameters =
-        FilterParticleRuntimeParameters(base, runtimeParameters);
-    if (!base.authoringJson || effectiveParameters.empty())
+        FilterParticleRuntimeParameters(base, userParameters);
+    if (!base.authoringJson ||
+        (effectiveChannels.empty() && effectiveParameters.empty()))
     {
         return base;
     }
@@ -968,12 +1101,15 @@ ParticleRenderer::ResolveParticleSystemAsset(
     const uint64_t signature =
         BuildParticleUserParameterSignature(
             effectiveParameters);
+    const uint64_t channelSignature =
+        BuildParticleDataChannelSignature(effectiveChannels);
     const nlohmann::json* authoring = base.authoringJson.get();
 
     auto entryIt = userParameterCache.find(cacheKey);
     if (entryIt != userParameterCache.end() &&
         entryIt->second.attempted &&
         entryIt->second.signature == signature &&
+        entryIt->second.channelSignature == channelSignature &&
         entryIt->second.authoringJson == authoring)
     {
         return entryIt->second.parsed
@@ -1001,6 +1137,7 @@ ParticleRenderer::ResolveParticleSystemAsset(
 
     ParticleUserParameterCacheEntry& entry = entryIt->second;
     entry.signature = signature;
+    entry.channelSignature = channelSignature;
     entry.authoringJson = authoring;
     entry.attempted = true;
     try
@@ -1008,8 +1145,9 @@ ParticleRenderer::ResolveParticleSystemAsset(
         // 合并 -> ParseJson -> 运行时-only emitter 对齐；缓存资产始终
         // 保留原始作者 JSON 指针，下一次覆盖仍在原始模块结构上合并。
         ParticleSystemAsset parsed =
-            ParseParticleAssetWithRuntimeParameters(
+            ParseParticleAssetWithRuntimeParametersTyped(
                 base,
+                effectiveChannels,
                 effectiveParameters,
                 std::filesystem::path(
                     CommonFunction::GetResourcePath()));
@@ -1207,6 +1345,250 @@ ParticleRenderer::BrdfLutDescriptor() const
     return brdfLutDescriptor.imageView != vk::ImageView{}
         ? brdfLutDescriptor
         : defaultBlackTexture->GetDescriptorInfo();
+}
+
+void ParticleRenderer::DestroyTranslucencyVolume()
+{
+    if (backend == nullptr)
+    {
+        return;
+    }
+    DestroyBuffer(*backend, translucencyVolumeStaging);
+    if (translucencyVolumeSampler)
+    {
+        backend->DestroySampler(translucencyVolumeSampler);
+        translucencyVolumeSampler = nullptr;
+    }
+    if (translucencyVolumeView)
+    {
+        backend->DestroyImageView(translucencyVolumeView);
+        translucencyVolumeView = nullptr;
+    }
+    if (translucencyVolumeImage)
+    {
+        backend->DestroyImageResource(
+            translucencyVolumeImage,
+            translucencyVolumeMemory,
+            translucencyVolumeView,
+            translucencyVolumeSampler);
+        translucencyVolumeImage = nullptr;
+        translucencyVolumeMemory = nullptr;
+        translucencyVolumeView = nullptr;
+        translucencyVolumeSampler = nullptr;
+    }
+    translucencyVolumeDescriptor = vk::DescriptorImageInfo{};
+    translucencyVolumeReady = false;
+    translucencyVolumeUploaded = false;
+    translucencyVolumeSignature = 0;
+}
+
+void ParticleRenderer::EnsureTranslucencyVolume()
+{
+    if (translucencyVolumeReady || backend == nullptr)
+    {
+        return;
+    }
+    constexpr uint32_t kVolumeSize = 16;
+    vk::ImageCreateInfo info;
+    info
+        .setImageType(vk::ImageType::e3D)
+        .setFormat(vk::Format::eR32G32B32A32Sfloat)
+        .setExtent(vk::Extent3D(kVolumeSize, kVolumeSize, kVolumeSize))
+        .setMipLevels(1)
+        .setArrayLayers(1)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setTiling(vk::ImageTiling::eOptimal)
+        .setUsage(vk::ImageUsageFlagBits::eSampled |
+            vk::ImageUsageFlagBits::eTransferDst)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setInitialLayout(vk::ImageLayout::eUndefined);
+    const auto imageAllocation = backend->CreateImage(
+        info,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleTranslucencyVolume");
+    translucencyVolumeImage = imageAllocation.first;
+    translucencyVolumeMemory = imageAllocation.second;
+    translucencyVolumeView = backend->CreateImageView(
+        translucencyVolumeImage,
+        vk::ImageViewType::e3D,
+        vk::Format::eR32G32B32A32Sfloat,
+        vk::ImageAspectFlagBits::eColor,
+        0,
+        1,
+        0,
+        1,
+        "ParticleTranslucencyVolumeView");
+    vk::SamplerCreateInfo samplerInfo;
+    samplerInfo
+        .setMagFilter(vk::Filter::eLinear)
+        .setMinFilter(vk::Filter::eLinear)
+        .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+        .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+        .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+        .setMipmapMode(vk::SamplerMipmapMode::eNearest);
+    translucencyVolumeSampler = backend->CreateSampler(
+        samplerInfo, "ParticleTranslucencyVolumeSampler");
+    const vk::DeviceSize bytes =
+        kVolumeSize * kVolumeSize * kVolumeSize *
+        sizeof(float) * 4u;
+    const auto staging = backend->CreateBuffer(
+        bytes,
+        vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "ParticleTranslucencyVolumeStaging");
+    translucencyVolumeStaging.buffer = staging.first;
+    translucencyVolumeStaging.memory = staging.second;
+    translucencyVolumeDescriptor = vk::DescriptorImageInfo(
+        translucencyVolumeSampler,
+        translucencyVolumeView,
+        vk::ImageLayout::eShaderReadOnlyOptimal);
+    translucencyVolumeReady = true;
+}
+
+void ParticleRenderer::UpdateTranslucencyVolume(
+    const RenderScene& renderScene)
+{
+    EnsureTranslucencyVolume();
+    if (!translucencyVolumeReady)
+    {
+        return;
+    }
+    uint64_t signature = 14695981039346656037ull;
+    const auto mix = [&](uint64_t value)
+    {
+        signature ^= value;
+        signature *= 1099511628211ull;
+    };
+    for (const LightSnapshot& light : renderScene.lights)
+    {
+        mix(static_cast<uint64_t>(light.type));
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            mix(static_cast<uint64_t>(
+                std::llround(light.position[axis] * 4.0f)));
+            mix(static_cast<uint64_t>(
+                std::llround(light.color[axis] * 1024.0f)));
+        }
+        mix(static_cast<uint64_t>(
+            std::llround(light.intensity * 64.0f)));
+        mix(static_cast<uint64_t>(
+            std::llround(light.radius * 4.0f)));
+    }
+    if (signature == translucencyVolumeSignature)
+    {
+        return;
+    }
+    translucencyVolumeSignature = signature;
+    constexpr uint32_t kVolumeSize = 16;
+    const Eigen::Vector3f volumeMin(-4000.0f, -1500.0f, -4000.0f);
+    const Eigen::Vector3f volumeExtent(8000.0f, 8000.0f, 8000.0f);
+    std::vector<float> voxels(
+        kVolumeSize * kVolumeSize * kVolumeSize * 4u,
+        0.0f);
+    for (uint32_t z = 0; z < kVolumeSize; ++z)
+    {
+        for (uint32_t y = 0; y < kVolumeSize; ++y)
+        {
+            for (uint32_t x = 0; x < kVolumeSize; ++x)
+            {
+                const Eigen::Vector3f position =
+                    volumeMin +
+                    Eigen::Vector3f(
+                        (x + 0.5f) / kVolumeSize,
+                        (y + 0.5f) / kVolumeSize,
+                        (z + 0.5f) / kVolumeSize)
+                        .cwiseProduct(volumeExtent);
+                Eigen::Vector3f irradiance = Eigen::Vector3f::Zero();
+                for (const LightSnapshot& light : renderScene.lights)
+                {
+                    if (light.type == LightSnapshotType::Directional)
+                    {
+                        irradiance += light.color *
+                            (light.intensity * 0.3f);
+                        continue;
+                    }
+                    const Eigen::Vector3f offset =
+                        light.position - position;
+                    const float distanceSquared = offset.squaredNorm();
+                    if (light.radius > 0.0f &&
+                        distanceSquared > light.radius * light.radius)
+                    {
+                        continue;
+                    }
+                    const float normalizedSquared =
+                        light.radius > 0.0f
+                            ? distanceSquared /
+                                (light.radius * light.radius)
+                            : 0.0f;
+                    const float window = light.radius > 0.0f
+                        ? std::pow(std::max(
+                            1.0f - normalizedSquared *
+                                normalizedSquared,
+                            0.0f), 2.0f)
+                        : 1.0f;
+                    irradiance += light.color *
+                        (light.intensity * window /
+                            (distanceSquared + 1.0f));
+                }
+                const size_t index =
+                    ((z * kVolumeSize + y) * kVolumeSize + x) * 4u;
+                voxels[index + 0] = irradiance.x();
+                voxels[index + 1] = irradiance.y();
+                voxels[index + 2] = irradiance.z();
+                voxels[index + 3] = 1.0f;
+            }
+        }
+    }
+    void* mapped = backend->MapMemory(
+        translucencyVolumeStaging.memory,
+        voxels.size() * sizeof(float));
+    if (mapped == nullptr)
+    {
+        return;
+    }
+    std::memcpy(
+        mapped,
+        voxels.data(),
+        voxels.size() * sizeof(float));
+    backend->UnmapMemory(translucencyVolumeStaging.memory);
+    vk::CommandBuffer command = backend->BeginSingleTimeCommands();
+    const vk::ImageLayout oldLayout = translucencyVolumeUploaded
+        ? vk::ImageLayout::eShaderReadOnlyOptimal
+        : vk::ImageLayout::eUndefined;
+    backend->TransitionImageLayout(
+        translucencyVolumeImage,
+        1,
+        vk::Format::eR32G32B32A32Sfloat,
+        oldLayout,
+        vk::ImageLayout::eTransferDstOptimal,
+        1);
+    vk::BufferImageCopy copy;
+    copy
+        .setBufferOffset(0)
+        .setBufferRowLength(0)
+        .setBufferImageHeight(0)
+        .setImageSubresource(
+            vk::ImageSubresourceLayers(
+                vk::ImageAspectFlagBits::eColor, 0, 0, 1))
+        .setImageOffset(vk::Offset3D(0, 0, 0))
+        .setImageExtent(vk::Extent3D(
+            kVolumeSize, kVolumeSize, kVolumeSize));
+    command.copyBufferToImage(
+        translucencyVolumeStaging.buffer,
+        translucencyVolumeImage,
+        vk::ImageLayout::eTransferDstOptimal,
+        1,
+        &copy);
+    backend->TransitionImageLayout(
+        translucencyVolumeImage,
+        1,
+        vk::Format::eR32G32B32A32Sfloat,
+        vk::ImageLayout::eTransferDstOptimal,
+        vk::ImageLayout::eShaderReadOnlyOptimal,
+        1);
+    backend->EndSingleTimeCommands(command);
+    translucencyVolumeUploaded = true;
 }
 
 void ParticleRenderer::CreateFallbackLightingResources()
@@ -1491,14 +1873,12 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
         // 运行时 userParameters 覆盖可能改变展平后的数值字段；只有签名/
         // 作者指针变化时才重新 ParseJson，失败保留 last-good。
         const ParticleSystemAsset* resolvedAsset = &snapshot.asset;
-        const auto runtimeParameters =
-            CombineParticleRuntimeParameters(
-                renderScene.particleDataChannels,
-                snapshot.userParameters);
         try
         {
             resolvedAsset = &ResolveParticleSystemAsset(
-                snapshot, runtimeParameters);
+                snapshot,
+                renderScene.particleDataChannels,
+                snapshot.userParameters);
         }
         catch (const std::exception& exception)
         {
@@ -1743,6 +2123,8 @@ void ParticleRenderer::Synchronize(const RenderScene& renderScene)
             ++emitterIt;
         }
     }
+    RebuildIesLut();
+    BindParentSpawnSources();
     AssignParticleLightSlots();
     // 发射器集合稳定后再决定全局透明排序池的成员/纹理槽位；签名不变时
     // 直接复用，不在每帧创建 GPU 资源。
@@ -1769,6 +2151,58 @@ void ParticleRenderer::RestartParticleSystems(
         emitter.prewarm = true;
         emitter.needsClear = true;
         emitter.culled = false;
+    }
+}
+
+std::vector<ParticleLightShadowCandidate>
+ParticleRenderer::GetParticleLightShadowCandidates() const
+{
+    std::vector<ParticleLightShadowCandidate> candidates;
+    for (const auto& [key, emitter] : emitters)
+    {
+        if (emitter->asset.renderMode != "light" ||
+            !emitter->asset.light.castShadows ||
+            emitter->culled || !emitter->visible || !emitter->enabled)
+        {
+            continue;
+        }
+        candidates.push_back({
+            key,
+            emitter->worldCenter,
+            std::max(emitter->asset.light.radius, emitter->boundsRadius),
+            true});
+    }
+    return candidates;
+}
+
+void ParticleRenderer::SetParticleLightShadowBinding(
+    const std::string& emitterKey,
+    uint32_t slice,
+    float farCm,
+    float biasCm,
+    bool castShadows)
+{
+    const auto found = emitters.find(emitterKey);
+    if (found == emitters.end())
+    {
+        return;
+    }
+    EmitterResources& emitter = *found->second;
+    emitter.particleLightShadowSlice = slice;
+    emitter.particleLightShadowFar = farCm;
+    emitter.particleLightShadowBias = biasCm;
+    emitter.particleLightCastShadows = castShadows;
+}
+
+void ParticleRenderer::ClearParticleLightShadowBindings()
+{
+    for (auto& [key, emitter] : emitters)
+    {
+        emitter->particleLightShadowSlice = 0xFFFFFFFFu;
+        emitter->particleLightShadowFar = 0.0f;
+        emitter->particleLightShadowBias =
+            emitter->asset.light.shadowBias;
+        emitter->particleLightCastShadows = false;
     }
 }
 
@@ -1971,6 +2405,202 @@ bool ParticleRenderer::IsGlobalSortEmitter(
         globalSortPool.emitterKeys.begin(),
         globalSortPool.emitterKeys.end(),
         key) != globalSortPool.emitterKeys.end();
+}
+
+void ParticleRenderer::BindParentSpawnSources()
+{
+    for (auto& [key, emitter] : emitters)
+    {
+        emitter->emitSpawnEvents = false;
+    }
+    const uint32_t imageCount =
+        backend->GetSwapchainImageCount();
+    for (auto& [childKey, child] : emitters)
+    {
+        if (child->asset.spawnSource.mode != "parentEmitter")
+        {
+            continue;
+        }
+        const size_t separator = childKey.find_last_of('|');
+        if (separator == std::string::npos)
+        {
+            continue;
+        }
+        const std::string parentKey =
+            childKey.substr(0, separator + 1) +
+            EscapeParticleEmitterKeySegment(
+                child->asset.spawnSource.parentEmitter);
+        const auto parentIt = emitters.find(parentKey);
+        if (parentIt == emitters.end())
+        {
+            continue;
+        }
+        parentIt->second->emitSpawnEvents = true;
+        const vk::DescriptorBufferInfo parentInfo(
+            parentIt->second->spawnEvents.buffer,
+            0,
+            VK_WHOLE_SIZE);
+        for (uint32_t imageIndex = 0;
+             imageIndex < imageCount &&
+             imageIndex < child->computeSets.size();
+             ++imageIndex)
+        {
+            vk::WriteDescriptorSet write;
+            write
+                .setDstSet(child->computeSets.at(imageIndex))
+                .setDstBinding(7)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(parentInfo);
+            backend->UpdateDescriptorSets({write});
+        }
+    }
+}
+
+void ParticleRenderer::RebuildIesLut()
+{
+    if (backend == nullptr)
+    {
+        return;
+    }
+    std::vector<std::string> keys;
+    keys.reserve(emitters.size());
+    for (const auto& [key, emitter] : emitters)
+    {
+        keys.push_back(key);
+    }
+    std::sort(keys.begin(), keys.end());
+    std::vector<std::vector<float>> profiles;
+    for (const std::string& key : keys)
+    {
+        auto& emitter = *emitters.at(key);
+        emitter.iesProfileIndex = 0;
+        const auto& profile = emitter.asset.light.iesProfile;
+        if (profile.empty())
+        {
+            continue;
+        }
+        auto found = std::find_if(
+            profiles.begin(),
+            profiles.end(),
+            [&](const std::vector<float>& candidate)
+            {
+                return candidate == profile;
+            });
+        if (found == profiles.end())
+        {
+            if (profiles.size() >= 15)
+            {
+                continue;
+            }
+            profiles.push_back(profile);
+            found = profiles.end() - 1;
+        }
+        emitter.iesProfileIndex = static_cast<uint32_t>(
+            std::distance(profiles.begin(), found) + 1);
+    }
+    uint64_t signature = 14695981039346656037ull;
+    const auto mix = [&](uint32_t value)
+    {
+        signature ^= value;
+        signature *= 1099511628211ull;
+    };
+    for (const auto& profile : profiles)
+    {
+        for (float sample : profile)
+        {
+            mix(static_cast<uint32_t>(
+                std::llround(sample * 1024.0f)));
+        }
+        mix(0xFFFFFFFFu);
+    }
+    if (signature == iesLutSignature)
+    {
+        return;
+    }
+    iesLutSignature = signature;
+    HostImage image;
+    image.width = 64;
+    image.height = 16;
+    image.channels = 4;
+    image.format = HostImage::PixelFormat::RGBA8_UNORM;
+    image.semantic = HostImage::TextureSemantic::Data;
+    image.rowStrideBytes = 64 * 4;
+    image.data.assign(64 * 16 * 4, 255);
+    for (size_t profileIndex = 0;
+         profileIndex < profiles.size();
+         ++profileIndex)
+    {
+        const auto& profile = profiles[profileIndex];
+        for (uint32_t x = 0; x < 64; ++x)
+        {
+            const float u = (x + 0.5f) / 64.0f;
+            const float source =
+                u * static_cast<float>(profile.size() - 1);
+            const size_t low = static_cast<size_t>(source);
+            const size_t high = std::min(
+                low + 1, profile.size() - 1);
+            const float weight = source - static_cast<float>(low);
+            const float value =
+                profile[low] * (1.0f - weight) +
+                profile[high] * weight;
+            const uint8_t byte = static_cast<uint8_t>(std::clamp(
+                value / 64.0f, 0.0f, 1.0f) * 255.0f + 0.5f);
+            const size_t index =
+                ((profileIndex + 1) * 64 + x) * 4;
+            image.data[index + 0] = byte;
+            image.data[index + 1] = byte;
+            image.data[index + 2] = byte;
+            image.data[index + 3] = 255;
+        }
+    }
+    Texture::CreateDesc desc;
+    desc.semantic = HostImage::TextureSemantic::Data;
+    desc.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    desc.generateMipmaps = false;
+    desc.filter = vk::Filter::eLinear;
+    desc.wrapMode = vk::SamplerAddressMode::eClampToEdge;
+    desc.debugName = "ParticleIesLut";
+    iesLutTexture = std::make_shared<Texture>(
+        *backend, image, desc);
+
+    // 纹理对象换了，已有 descriptor 必须重写。
+    const uint32_t imageCount = backend->GetSwapchainImageCount();
+    const vk::DescriptorImageInfo iesInfo =
+        iesLutTexture->GetDescriptorInfo();
+    for (auto& [key, emitter] : emitters)
+    {
+        for (uint32_t imageIndex = 0;
+             imageIndex < emitter->graphicsSets.size() &&
+             imageIndex < imageCount;
+             ++imageIndex)
+        {
+            vk::WriteDescriptorSet write;
+            write
+                .setDstSet(emitter->graphicsSets.at(imageIndex))
+                .setDstBinding(14)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(iesInfo);
+            backend->UpdateDescriptorSets({write});
+        }
+    }
+    for (uint32_t imageIndex = 0;
+         imageIndex < globalSortPool.drawSets.size() &&
+         imageIndex < imageCount;
+         ++imageIndex)
+    {
+        vk::WriteDescriptorSet write;
+        write
+            .setDstSet(globalSortPool.drawSets.at(imageIndex))
+            .setDstBinding(14)
+            .setDescriptorCount(1)
+            .setDescriptorType(
+                vk::DescriptorType::eCombinedImageSampler)
+            .setImageInfo(iesInfo);
+        backend->UpdateDescriptorSets({write});
+    }
 }
 
 void ParticleRenderer::AssignParticleLightSlots()
@@ -2313,7 +2943,7 @@ bool ParticleRenderer::CreateGlobalSortPool(
         {vk::DescriptorType::eStorageBuffer,
             imageCount * (emitterCount * 3u + 16u)},
         {vk::DescriptorType::eCombinedImageSampler,
-            imageCount * (kParticleGlobalTextureSlots + 2u)}};
+            imageCount * (kParticleGlobalTextureSlots + 4u)}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
@@ -2576,6 +3206,22 @@ bool ParticleRenderer::CreateGlobalSortPool(
                 .setDescriptorType(
                     vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(BrdfLutDescriptor());
+            vk::WriteDescriptorSet drawVolume;
+            drawVolume
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(13)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(translucencyVolumeDescriptor);
+            vk::WriteDescriptorSet drawIes;
+            drawIes
+                .setDstSet(globalSortPool.drawSets.at(imageIndex))
+                .setDstBinding(14)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(iesLutTexture->GetDescriptorInfo());
             vk::WriteDescriptorSet drawLightGrid;
             drawLightGrid
                 .setDstSet(globalSortPool.drawSets.at(imageIndex))
@@ -2607,6 +3253,8 @@ bool ParticleRenderer::CreateGlobalSortPool(
                  drawParticleLight,
                  drawEnvironment,
                  drawBrdfLut,
+                 drawVolume,
+                 drawIes,
                  drawLightGrid,
                  drawLightIndex,
                  drawLightGridParam});
@@ -2780,6 +3428,13 @@ void ParticleRenderer::RecordGlobalSort(
         static_cast<float>(globalSortPool.capacity),
         static_cast<float>(globalSortPool.capacity),
         0.0f);
+    uniforms.translucencyVolumeMin = Eigen::Vector4f(
+        -4000.0f, -1500.0f, -4000.0f, 1.0f);
+    uniforms.translucencyVolumeInvExtent = Eigen::Vector4f(
+        1.0f / 8000.0f,
+        1.0f / 8000.0f,
+        1.0f / 8000.0f,
+        0.12f);
     std::memcpy(
         globalSortPool.uniforms.at(imageIndex).mapped,
         &uniforms,
@@ -3082,7 +3737,9 @@ void ParticleRenderer::LoadEmitterMesh(
     EmitterResources& emitter,
     const std::string& emitterKey)
 {
-    if (emitter.asset.renderMode != "mesh")
+    if (emitter.asset.renderMode != "mesh" &&
+        emitter.asset.renderMode != "skeletalMeshTris" &&
+        emitter.asset.renderMode != "skeletalMeshBones")
     {
         return;
     }
@@ -3094,8 +3751,11 @@ void ParticleRenderer::LoadEmitterMesh(
             MeshAssetLoader::Prepare(emitter.asset.meshPath);
         if (request.buildPlan.IsSkeletal())
         {
-            throw std::runtime_error(
-                "skeletal meshes are not supported");
+            const MeshAssetImportResult imported =
+                MeshAssetLoader::ImportSections(request);
+            LoadSkeletalEmitterMesh(
+                emitter, emitterKey, imported);
+            return;
         }
         const MeshAssetImportResult imported =
             MeshAssetLoader::ImportSections(request);
@@ -3226,6 +3886,408 @@ void ParticleRenderer::LoadEmitterMesh(
     }
 }
 
+void ParticleRenderer::LoadSkeletalEmitterMesh(
+    EmitterResources& emitter,
+    const std::string& emitterKey,
+    const MeshAssetImportResult& imported)
+{
+    using namespace VL::Animation;
+    if (!imported.modelResource.skeletalAsset)
+    {
+        throw std::runtime_error(
+            "skeletal mesh import did not return a SkeletalAsset");
+    }
+    emitter.skeletalAsset = imported.modelResource.skeletalAsset;
+    const SkeletalAsset& asset = *emitter.skeletalAsset;
+    emitter.skeletalClipIndex = 0;
+    if (!emitter.asset.skeletalPose.clip.empty())
+    {
+        const auto clip = std::find_if(
+            asset.clips.begin(),
+            asset.clips.end(),
+            [&](const Clip& candidate)
+            {
+                return candidate.id == emitter.asset.skeletalPose.clip;
+            });
+        if (clip == asset.clips.end())
+        {
+            throw std::runtime_error(
+                "skeletalPose.clip is unknown: " +
+                emitter.asset.skeletalPose.clip);
+        }
+        emitter.skeletalClipIndex = static_cast<size_t>(
+            std::distance(asset.clips.begin(), clip));
+    }
+    emitter.skeletalPoseTime = emitter.asset.skeletalPose.time;
+    emitter.skeletalPoseRate = emitter.asset.skeletalPose.rate;
+    emitter.skeletalPoseLoop = emitter.asset.skeletalPose.loop;
+
+    const auto computeModels = [&](float clock)
+    {
+        std::vector<Eigen::Matrix4f> models;
+        models.reserve(asset.mesh.joints.size());
+        if (emitter.asset.skeletalPose.clip.empty())
+        {
+            for (const Joint& joint : asset.mesh.joints)
+            {
+                models.push_back(joint.restModel);
+            }
+            return models;
+        }
+        const Clip& clip = asset.clips.at(emitter.skeletalClipIndex);
+        float time = emitter.skeletalPoseTime + clock;
+        if (emitter.skeletalPoseLoop)
+        {
+            const float duration = std::max(
+                clip.runtime ? clip.runtime->duration() : 0.0f,
+                1.0e-4f);
+            time = std::fmod(time, duration);
+            if (time < 0.0f)
+            {
+                time += duration;
+            }
+        }
+        const LocalPose locals = SampleLocals(asset.mesh, clip, time);
+        return LocalToModels(asset.mesh, locals);
+    };
+    const auto skinVertices = [&](EmitterResources::SkeletalSection& section,
+                                  const std::vector<Eigen::Matrix4f>& models)
+    {
+        section.skinnedVertices = section.sourceVertices;
+        for (size_t vertexIndex = 0;
+             vertexIndex < section.sourceVertices.size();
+             ++vertexIndex)
+        {
+            Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
+            const uint32_t begin = section.influenceOffsets.at(vertexIndex);
+            const uint32_t end = section.influenceOffsets.at(vertexIndex + 1);
+            for (uint32_t index = begin; index < end; ++index)
+            {
+                const auto& influence = section.influences.at(index);
+                if (influence.joint >= models.size() ||
+                    influence.joint >= section.inverseBinds.size())
+                {
+                    continue;
+                }
+                skin += influence.weight *
+                    models[influence.joint] *
+                    section.inverseBinds[influence.joint];
+            }
+            Vertex& target = section.skinnedVertices[vertexIndex];
+            const Vertex& source = section.sourceVertices[vertexIndex];
+            target.position =
+                (skin * Eigen::Vector4f(
+                    source.position.x(),
+                    source.position.y(),
+                    source.position.z(),
+                    1.0f)).head<3>();
+            const Eigen::Matrix3f linear = skin.block<3, 3>(0, 0);
+            const Eigen::Matrix3f normalMatrix =
+                linear.inverse().transpose();
+            target.normal = (normalMatrix * source.normal).normalized();
+            Eigen::Vector3f tangent =
+                linear * source.tangent.head<3>();
+            tangent -= target.normal * target.normal.dot(tangent);
+            if (tangent.squaredNorm() > 1.0e-10f)
+            {
+                target.tangent.head<3>() = tangent.normalized();
+            }
+        }
+    };
+    const auto createHostBuffer = [&](vk::DeviceSize bytes,
+                                      vk::BufferUsageFlags usage,
+                                      const std::string& name)
+    {
+        GpuBuffer result;
+        const auto allocation = backend->CreateBuffer(
+            bytes,
+            usage,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            name);
+        result.buffer = allocation.first;
+        result.memory = allocation.second;
+        return result;
+    };
+
+    const std::vector<Eigen::Matrix4f> models = computeModels(0.0f);
+    std::vector<std::array<float, 16>> sourceRecords;
+    std::vector<float> sourceWeights;
+    for (size_t sectionIndex = 0;
+         sectionIndex < asset.mesh.sections.size();
+         ++sectionIndex)
+    {
+        const SkinSection& source = asset.mesh.sections[sectionIndex];
+        if (source.vertices.empty() || source.indices.empty())
+        {
+            continue;
+        }
+        EmitterResources::SkeletalSection section;
+        section.sourceVertices = source.vertices;
+        section.sourceIndices = source.indices;
+        section.influenceOffsets = source.influenceOffsets;
+        section.influences.reserve(source.influences.size());
+        for (const Influence& influence : source.influences)
+        {
+            section.influences.push_back(
+                {influence.joint, influence.weight});
+        }
+        section.inverseBinds = source.inverseBinds;
+        section.meshToModel = source.meshToModel;
+        skinVertices(section, models);
+        section.indexCount =
+            static_cast<uint32_t>(section.sourceIndices.size());
+        section.vertices = createHostBuffer(
+            static_cast<vk::DeviceSize>(
+                section.skinnedVertices.size() * sizeof(Vertex)),
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            "ParticleSkeletalVertices:" + emitterKey +
+                "/" + std::to_string(sectionIndex));
+        section.indices = createHostBuffer(
+            static_cast<vk::DeviceSize>(
+                section.sourceIndices.size() * sizeof(uint32_t)),
+            vk::BufferUsageFlagBits::eIndexBuffer,
+            "ParticleSkeletalIndices:" + emitterKey +
+                "/" + std::to_string(sectionIndex));
+        void* mapped = backend->MapMemory(
+            section.vertices.memory,
+            static_cast<vk::DeviceSize>(
+                section.skinnedVertices.size() * sizeof(Vertex)));
+        if (mapped == nullptr)
+        {
+            throw std::runtime_error("skeletal vertex map failed");
+        }
+        std::memcpy(
+            mapped,
+            section.skinnedVertices.data(),
+            section.skinnedVertices.size() * sizeof(Vertex));
+        backend->UnmapMemory(section.vertices.memory);
+        mapped = backend->MapMemory(
+            section.indices.memory,
+            static_cast<vk::DeviceSize>(
+                section.sourceIndices.size() * sizeof(uint32_t)));
+        if (mapped == nullptr)
+        {
+            throw std::runtime_error("skeletal index map failed");
+        }
+        std::memcpy(
+            mapped,
+            section.sourceIndices.data(),
+            section.sourceIndices.size() * sizeof(uint32_t));
+        backend->UnmapMemory(section.indices.memory);
+        for (const Vertex& vertex : section.skinnedVertices)
+        {
+            const Eigen::Vector3f scaled(
+                vertex.position.x() * emitter.asset.meshScale.x(),
+                vertex.position.y() * emitter.asset.meshScale.y(),
+                vertex.position.z() * emitter.asset.meshScale.z());
+            emitter.meshLocalBoundsRadius = std::max(
+                emitter.meshLocalBoundsRadius, scaled.norm());
+        }
+
+        std::string materialPath =
+            sectionIndex < imported.sectionPlans.size()
+                ? imported.sectionPlans[sectionIndex].materialInstancePath
+                : std::string();
+        if (materialPath.empty())
+        {
+            materialPath = emitter.asset.materialInstancePath;
+        }
+        if (!materialPath.empty())
+        {
+            std::string materialError;
+            section.material = LoadParticleMaterialInstance(
+                materialPath, materialError);
+            if (!section.material.valid && !materialError.empty())
+            {
+                WarnMaterialFallbackOnce(
+                    emitterKey + "#" + std::to_string(sectionIndex),
+                    materialPath,
+                    materialError);
+            }
+        }
+        section.albedo = ResolveMaterialTexture(
+            emitterKey + "#" + std::to_string(sectionIndex),
+            section.material.albedoMap,
+            HostImage::TextureSemantic::Color,
+            defaultTexture);
+        section.normal = ResolveMaterialTexture(
+            emitterKey + "#" + std::to_string(sectionIndex),
+            section.material.normalMap,
+            HostImage::TextureSemantic::Normal,
+            defaultNormalTexture);
+        section.orm = ResolveMaterialTexture(
+            emitterKey + "#" + std::to_string(sectionIndex),
+            section.material.ormMap,
+            HostImage::TextureSemantic::Data,
+            defaultOrmTexture);
+        section.emissive = ResolveMaterialTexture(
+            emitterKey + "#" + std::to_string(sectionIndex),
+            section.material.emissiveMap,
+            HostImage::TextureSemantic::Color,
+            defaultEmissiveTexture);
+        section.materialUniform = createHostBuffer(
+            sizeof(ParticleMaterialUniforms),
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            "ParticleSkeletalMaterial:" + emitterKey +
+                "/" + std::to_string(sectionIndex));
+        void* materialMapped = backend->MapMemory(
+            section.materialUniform.memory,
+            sizeof(ParticleMaterialUniforms));
+        if (materialMapped == nullptr)
+        {
+            throw std::runtime_error(
+                "skeletal material uniform map failed");
+        }
+        const ParticleMaterialParams& params = section.material;
+        ParticleMaterialUniforms uniforms{};
+        uniforms.uvScaleOffset = Eigen::Vector4f(
+            params.uvScale.x(),
+            params.uvScale.y(),
+            params.uvOffset.x(),
+            params.uvOffset.y());
+        uniforms.textureFlags = Eigen::Vector4f(
+            params.albedoMap.empty() ? 0.0f : 1.0f,
+            params.normalMap.empty() ? 0.0f : 1.0f,
+            params.ormMap.empty() ? 0.0f : 1.0f,
+            params.emissiveMap.empty() ? 0.0f : 1.0f);
+        uniforms.materialParams = Eigen::Vector4f(
+            params.alphaClipThreshold,
+            params.ambientOcclusion,
+            params.normalStrength,
+            0.0f);
+        std::memcpy(
+            materialMapped,
+            &uniforms,
+            sizeof(ParticleMaterialUniforms));
+        backend->UnmapMemory(section.materialUniform.memory);
+
+        if (emitter.asset.renderMode == "skeletalMeshTris")
+        {
+            for (size_t index = 0;
+                 index + 2 < section.sourceIndices.size();
+                 index += 3)
+            {
+                const Vertex& v0 =
+                    section.skinnedVertices[section.sourceIndices[index]];
+                const Vertex& v1 =
+                    section.skinnedVertices[section.sourceIndices[index + 1]];
+                const Vertex& v2 =
+                    section.skinnedVertices[section.sourceIndices[index + 2]];
+                const Eigen::Vector3f crossValue =
+                    (v1.position - v0.position).cross(
+                        v2.position - v0.position);
+                const float area = crossValue.norm() * 0.5f;
+                if (area <= 1.0e-8f)
+                {
+                    continue;
+                }
+                std::array<float, 16> record{};
+                record[0] = v0.position.x();
+                record[1] = v0.position.y();
+                record[2] = v0.position.z();
+                record[4] = v1.position.x();
+                record[5] = v1.position.y();
+                record[6] = v1.position.z();
+                record[8] = v2.position.x();
+                record[9] = v2.position.y();
+                record[10] = v2.position.z();
+                const Eigen::Vector3f normal = crossValue.normalized();
+                record[12] = normal.x();
+                record[13] = normal.y();
+                record[14] = normal.z();
+                sourceRecords.push_back(record);
+                sourceWeights.push_back(area);
+            }
+        }
+        else if (emitter.asset.renderMode == "skeletalMeshBones")
+        {
+            for (size_t jointIndex = 0;
+                 jointIndex < asset.mesh.joints.size();
+                 ++jointIndex)
+            {
+                const int parent = asset.mesh.joints[jointIndex].parent;
+                if (parent < 0 ||
+                    static_cast<size_t>(parent) >= models.size())
+                {
+                    continue;
+                }
+                const Eigen::Vector3f a =
+                    models[static_cast<size_t>(parent)].block<3, 1>(0, 3);
+                const Eigen::Vector3f b =
+                    models[jointIndex].block<3, 1>(0, 3);
+                const float length = (b - a).norm();
+                if (length <= 1.0e-4f)
+                {
+                    continue;
+                }
+                std::array<float, 16> record{};
+                record[0] = a.x();
+                record[1] = a.y();
+                record[2] = a.z();
+                record[4] = b.x();
+                record[5] = b.y();
+                record[6] = b.z();
+                const Eigen::Vector3f axis = (b - a) / length;
+                record[8] = axis.x();
+                record[9] = axis.y();
+                record[10] = axis.z();
+                sourceRecords.push_back(record);
+                sourceWeights.push_back(length);
+            }
+        }
+        emitter.skeletalSections.push_back(std::move(section));
+    }
+    if (emitter.skeletalSections.empty())
+    {
+        throw std::runtime_error("skeletal mesh has no non-empty sections");
+    }
+    emitter.meshIndexCount = 0;
+    for (const EmitterResources::SkeletalSection& section :
+         emitter.skeletalSections)
+    {
+        emitter.meshIndexCount += section.indexCount;
+    }
+    emitter.meshFallbackBillboard = false;
+
+    const size_t recordCount = std::min<size_t>(
+        sourceRecords.size(), 65536);
+    if (recordCount > 0)
+    {
+        const vk::DeviceSize bytes =
+            sizeof(uint32_t) * 4 +
+            static_cast<vk::DeviceSize>(recordCount) *
+                sizeof(float) * 16;
+        emitter.spawnSource = createHostBuffer(
+            bytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            "ParticleSpawnSource:" + emitterKey);
+        void* mapped = backend->MapMemory(
+            emitter.spawnSource.memory, bytes);
+        if (mapped == nullptr)
+        {
+            throw std::runtime_error("spawn source map failed");
+        }
+        auto* words = static_cast<uint32_t*>(mapped);
+        words[0] = emitter.asset.renderMode == "skeletalMeshTris" ? 1u : 2u;
+        words[1] = static_cast<uint32_t>(recordCount);
+        words[2] = 0;
+        words[3] = 0;
+        float* data = reinterpret_cast<float*>(words + 4);
+        float cdf = 0.0f;
+        for (size_t index = 0; index < recordCount; ++index)
+        {
+            cdf += sourceWeights[index];
+            std::array<float, 16> record = sourceRecords[index];
+            record[3] = cdf;
+            std::memcpy(data + index * 16, record.data(), sizeof(float) * 16);
+        }
+        emitter.spawnSourceRecordCount =
+            static_cast<uint32_t>(recordCount);
+        backend->UnmapMemory(emitter.spawnSource.memory);
+    }
+}
+
 std::shared_ptr<Texture> ParticleRenderer::ResolveMaterialTexture(
     const std::string& emitterKey,
     const std::string& assetPath,
@@ -3337,6 +4399,40 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
         "ParticlePool:" + emitter.key);
     emitter.particles.buffer = particleAllocation.first;
     emitter.particles.memory = particleAllocation.second;
+
+    // 每个 emitter 一份当前帧 spawn/death/collision 输出，供子 emitter 读取。
+    // 父 emitter 写 header + 最多 1024 条记录；子 emitter 只消费当前帧。
+    constexpr uint32_t kMaxSpawnEvents = 1024;
+    const vk::DeviceSize spawnEventBytes =
+        sizeof(uint32_t) * 4 +
+        static_cast<vk::DeviceSize>(kMaxSpawnEvents) *
+            sizeof(float) * 16;
+    const auto spawnEventAllocation = backend->CreateBuffer(
+        spawnEventBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "ParticleSpawnEvents:" + emitter.key);
+    emitter.spawnEvents.buffer = spawnEventAllocation.first;
+    emitter.spawnEvents.memory = spawnEventAllocation.second;
+    if (!emitter.spawnSource.buffer)
+    {
+        const auto sourceAllocation = backend->CreateBuffer(
+            16,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "ParticleSpawnSourceEmpty:" + emitter.key);
+        emitter.spawnSource.buffer = sourceAllocation.first;
+        emitter.spawnSource.memory = sourceAllocation.second;
+        void* mapped = backend->MapMemory(
+            emitter.spawnSource.memory, 16);
+        if (mapped != nullptr)
+        {
+            std::memset(mapped, 0, 16);
+            backend->UnmapMemory(emitter.spawnSource.memory);
+        }
+    }
 
     // GPU 计数（alive/spawn/death/collision）每帧 fillBuffer 清零。
     const auto counterAllocation = backend->CreateBuffer(
@@ -3597,9 +4693,18 @@ void ParticleRenderer::CreateDescriptors(
     const uint32_t imageCount =
         backend->GetSwapchainImageCount();
     const bool meshMaterial =
-        emitter.asset.renderMode == "mesh";
+        emitter.asset.renderMode == "mesh" ||
+        emitter.asset.renderMode == "skeletalMeshTris" ||
+        emitter.asset.renderMode == "skeletalMeshBones";
+    const uint32_t materialLayers = meshMaterial
+        ? static_cast<uint32_t>(std::max<size_t>(
+            emitter.skeletalSections.empty()
+                ? 1u
+                : emitter.skeletalSections.size(),
+            1u))
+        : 0u;
     const uint32_t materialSetCount =
-        meshMaterial ? imageCount : 0;
+        meshMaterial ? imageCount * materialLayers : 0;
     const std::vector<vk::DescriptorSetLayout> computeLayouts(
         imageCount,
         simulatePipeline->GetDescriptorSetLayouts().at(0));
@@ -3615,16 +4720,16 @@ void ParticleRenderer::CreateDescriptors(
 
     // 每个 image：simulate、graphics、sortInit、AtoB、BtoA、finalize 共 6 个 set。
     // mesh 额外每 image 一个材质 set 1（1 UBO + 4 贴图）。
-    // storage 计数：simulate 5 + graphics 8 + sort 三组各 2 + finalize 2 = 21。
+    // storage 计数：simulate 8 + graphics 8 + sort 三组各 2 + finalize 2 = 24。
     // graphics 新增的 2 个 storage 是场景灯/GPU 粒子灯 SSBO（binding 6/7）；
     // 再新增 2 个 storage 是 tile 灯网格/索引（binding 10/11）。
     // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer,
          imageCount * 6 + materialSetCount},
-        {vk::DescriptorType::eStorageBuffer, imageCount * 21},
+        {vk::DescriptorType::eStorageBuffer, imageCount * 24},
         {vk::DescriptorType::eCombinedImageSampler,
-         imageCount * 3 + materialSetCount * 4}};
+         imageCount * 5 + materialSetCount * 4}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
@@ -3650,7 +4755,7 @@ void ParticleRenderer::CreateDescriptors(
             allocate,
             emitter.graphicsSets);
 
-        if (meshMaterial)
+        if (meshMaterial && emitter.skeletalSections.empty())
         {
             std::vector<vk::DescriptorSetLayout> materialLayouts(
                 imageCount,
@@ -3661,6 +4766,21 @@ void ParticleRenderer::CreateDescriptors(
             backend->AllocateDescriptorSets(
                 allocate,
                 emitter.materialSets);
+        }
+        else if (meshMaterial)
+        {
+            std::vector<vk::DescriptorSetLayout> materialLayouts(
+                imageCount,
+                meshAdditivePipeline->GetDescriptorSetLayouts().at(
+                    kParticleMaterialSetIndex));
+            for (auto& section : emitter.skeletalSections)
+            {
+                allocate.setSetLayouts(materialLayouts);
+                section.materialSets.resize(imageCount);
+                backend->AllocateDescriptorSets(
+                    allocate,
+                    section.materialSets);
+            }
         }
 
         allocate.setSetLayouts(sortLayouts);
@@ -3718,6 +4838,18 @@ void ParticleRenderer::CreateDescriptors(
                 emitter.sdfData.buffer,
                 0,
                 VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo spawnSourceInfo(
+                emitter.spawnSource.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo parentSpawnEventInfo(
+                emitter.spawnEvents.buffer,
+                0,
+                VK_WHOLE_SIZE);
+            const vk::DescriptorBufferInfo spawnEventOutInfo(
+                emitter.spawnEvents.buffer,
+                0,
+                VK_WHOLE_SIZE);
             const vk::DescriptorBufferInfo debugCounterInfo(
                 emitter.debugCounters.buffer,
                 0,
@@ -3772,13 +4904,37 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorCount(1)
                 .setDescriptorType(vk::DescriptorType::eStorageBuffer)
                 .setBufferInfo(sdfInfo);
+            vk::WriteDescriptorSet spawnSourceWrite;
+            spawnSourceWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(6)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(spawnSourceInfo);
+            vk::WriteDescriptorSet parentSpawnWrite;
+            parentSpawnWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(7)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(parentSpawnEventInfo);
+            vk::WriteDescriptorSet spawnEventOutWrite;
+            spawnEventOutWrite
+                .setDstSet(emitter.computeSets.at(imageIndex))
+                .setDstBinding(8)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                .setBufferInfo(spawnEventOutInfo);
             backend->UpdateDescriptorSets(
                 {uniformWrite,
                  particleWrite,
                  aliveWrite,
                  counterWrite,
                  eventWrite,
-                 sdfWrite});
+                 sdfWrite,
+                 spawnSourceWrite,
+                 parentSpawnWrite,
+                 spawnEventOutWrite});
 
             vk::WriteDescriptorSet sortedWrite;
             sortedWrite
@@ -3847,6 +5003,22 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorType(
                     vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(BrdfLutDescriptor());
+            vk::WriteDescriptorSet volumeWrite;
+            volumeWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(13)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(translucencyVolumeDescriptor);
+            vk::WriteDescriptorSet iesWrite;
+            iesWrite
+                .setDstSet(emitter.graphicsSets.at(imageIndex))
+                .setDstBinding(14)
+                .setDescriptorCount(1)
+                .setDescriptorType(
+                    vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(iesLutTexture->GetDescriptorInfo());
             vk::WriteDescriptorSet lightGridWrite;
             lightGridWrite
                 .setDstSet(emitter.graphicsSets.at(imageIndex))
@@ -3879,6 +5051,8 @@ void ParticleRenderer::CreateDescriptors(
                  particleLightWrite,
                  environmentWrite,
                  brdfLutWrite,
+                 volumeWrite,
+                 iesWrite,
                  lightGridWrite,
                  lightIndexWrite,
                  lightGridParamWrite});
@@ -3921,6 +5095,51 @@ void ParticleRenderer::CreateDescriptors(
                     materialWrites.push_back(textureWrite);
                 }
                 backend->UpdateDescriptorSets(materialWrites);
+            }
+            else if (meshMaterial)
+            {
+                for (auto& section : emitter.skeletalSections)
+                {
+                    if (imageIndex >= section.materialSets.size())
+                    {
+                        continue;
+                    }
+                    const vk::DescriptorBufferInfo materialInfo(
+                        section.materialUniform.buffer,
+                        0,
+                        sizeof(ParticleMaterialUniforms));
+                    vk::WriteDescriptorSet materialUniformWrite;
+                    materialUniformWrite
+                        .setDstSet(section.materialSets.at(imageIndex))
+                        .setDstBinding(kParticleMaterialUniformBinding)
+                        .setDescriptorCount(1)
+                        .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                        .setBufferInfo(materialInfo);
+                    const std::shared_ptr<Texture> materialTextures[] = {
+                        section.albedo,
+                        section.normal,
+                        section.orm,
+                        section.emissive};
+                    std::vector<vk::WriteDescriptorSet> materialWrites;
+                    materialWrites.push_back(materialUniformWrite);
+                    for (uint32_t slot = 0;
+                         slot < kParticleMaterialTextureCount;
+                         ++slot)
+                    {
+                        vk::WriteDescriptorSet textureWrite;
+                        textureWrite
+                            .setDstSet(section.materialSets.at(imageIndex))
+                            .setDstBinding(
+                                kParticleMaterialAlbedoBinding + slot)
+                            .setDescriptorCount(1)
+                            .setDescriptorType(
+                                vk::DescriptorType::eCombinedImageSampler)
+                            .setImageInfo(
+                                materialTextures[slot]->GetDescriptorInfo());
+                        materialWrites.push_back(textureWrite);
+                    }
+                    backend->UpdateDescriptorSets(materialWrites);
+                }
             }
 
             uniformWrite.setDstSet(
@@ -4232,6 +5451,23 @@ void ParticleRenderer::DestroyEmitterResources(
     DestroyBuffer(rendererBackend, emitter.materialUniform);
     DestroyBuffer(rendererBackend, emitter.meshVertices);
     DestroyBuffer(rendererBackend, emitter.meshIndices);
+    DestroyBuffer(rendererBackend, emitter.spawnEvents);
+    DestroyBuffer(rendererBackend, emitter.spawnSource);
+    for (auto& section : emitter.skeletalSections)
+    {
+        DestroyBuffer(rendererBackend, section.vertices);
+        DestroyBuffer(rendererBackend, section.indices);
+        DestroyBuffer(rendererBackend, section.skinInfluences);
+        for (GpuBuffer& palette : section.skinPalettes)
+        {
+            DestroyBuffer(rendererBackend, palette);
+        }
+        section.skinPalettes.clear();
+        section.paletteSets.clear();
+        section.materialSets.clear();
+        DestroyBuffer(rendererBackend, section.materialUniform);
+    }
+    emitter.skeletalSections.clear();
     DestroyBuffer(rendererBackend, emitter.particles);
     DestroyBuffer(rendererBackend, emitter.counters);
     DestroyBuffer(rendererBackend, emitter.aliveIndices);
@@ -4462,10 +5698,81 @@ void ParticleRenderer::RecordSimulation(
         std::abs(renderScene.camera.projection(1, 1));
     const float viewportHeightPixels =
         static_cast<float>(renderExtent.height);
-    for (auto& [key, emitterPtr] : emitters)
+    UpdateTranslucencyVolume(renderScene);
+    // parentEmitter 子节点读取父节点本帧的 spawn/death/collision 记录，
+    // 因此模拟顺序必须显式按依赖深度排序；unordered_map 迭代顺序不能
+    // 代表发射器树。深度相同的节点仍按 key 排序，保证确定性。
+    const auto parentKeyOf = [&](const std::string& childKey)
+        -> std::string {
+        const auto childIt = emitters.find(childKey);
+        if (childIt == emitters.end() ||
+            childIt->second->asset.spawnSource.mode != "parentEmitter")
+        {
+            return {};
+        }
+        const size_t separator = childKey.find_last_of('|');
+        if (separator == std::string::npos)
+        {
+            return {};
+        }
+        const std::string parentKey =
+            childKey.substr(0, separator + 1) +
+            EscapeParticleEmitterKeySegment(
+                childIt->second->asset.spawnSource.parentEmitter);
+        return emitters.find(parentKey) != emitters.end()
+            ? parentKey
+            : std::string();
+    };
+    std::unordered_map<std::string, size_t> emitterDepths;
+    std::unordered_set<std::string> depthVisiting;
+    std::function<size_t(const std::string&)> computeDepth =
+        [&](const std::string& emitterKey) -> size_t {
+        const auto cached = emitterDepths.find(emitterKey);
+        if (cached != emitterDepths.end())
+        {
+            return cached->second;
+        }
+        // 循环引用时不递归，按根节点处理；资产校验会拒绝缺失父节点，
+        // 但运行时代码仍不能因为作者错误而栈溢出。
+        if (!depthVisiting.insert(emitterKey).second)
+        {
+            return 0;
+        }
+        const std::string parentKey = parentKeyOf(emitterKey);
+        const size_t depth = parentKey.empty()
+            ? 0
+            : computeDepth(parentKey) + 1;
+        depthVisiting.erase(emitterKey);
+        emitterDepths.emplace(emitterKey, depth);
+        return depth;
+    };
+    std::vector<std::string> simulationOrder;
+    simulationOrder.reserve(emitters.size());
+    for (const auto& [key, emitterPtr] : emitters)
     {
-        (void)key;
-        EmitterResources& emitter = *emitterPtr;
+        (void)emitterPtr;
+        simulationOrder.push_back(key);
+        (void)computeDepth(key);
+    }
+    std::sort(
+        simulationOrder.begin(),
+        simulationOrder.end(),
+        [&](const std::string& lhs, const std::string& rhs)
+        {
+            const size_t lhsDepth = emitterDepths.at(lhs);
+            const size_t rhsDepth = emitterDepths.at(rhs);
+            return lhsDepth != rhsDepth
+                ? lhsDepth < rhsDepth
+                : lhs < rhs;
+        });
+    for (const std::string& key : simulationOrder)
+    {
+        const auto emitterIt = emitters.find(key);
+        if (emitterIt == emitters.end())
+        {
+            continue;
+        }
+        EmitterResources& emitter = *emitterIt->second;
         ++frameStats.totalEmitters;
         frameStats.totalParticles += emitter.asset.maxParticles;
         if (emitter.frameUniforms.size() <= imageIndex)
@@ -4510,6 +5817,101 @@ void ParticleRenderer::RecordSimulation(
         }
         ++frameStats.visibleEmitters;
         emitter.culled = false;
+
+        // 骨骼完整 mesh 的 CPU skinning：只有作者设置了非零 poseRate 才
+        // 每帧改写 host-visible 顶点流。rate=0 时保持加载期姿态。
+        if (!emitter.skeletalSections.empty() &&
+            emitter.skeletalAsset &&
+            std::abs(emitter.skeletalPoseRate) > 1.0e-6f)
+        {
+            const auto& asset = *emitter.skeletalAsset;
+            std::vector<Eigen::Matrix4f> models;
+            models.reserve(asset.mesh.joints.size());
+            if (emitter.asset.skeletalPose.clip.empty())
+            {
+                for (const Animation::Joint& joint : asset.mesh.joints)
+                {
+                    models.push_back(joint.restModel);
+                }
+            }
+            else
+            {
+                const Animation::Clip& clip =
+                    asset.clips.at(emitter.skeletalClipIndex);
+                float time = emitter.skeletalPoseTime +
+                    emitter.elapsedSeconds * emitter.skeletalPoseRate;
+                if (emitter.skeletalPoseLoop)
+                {
+                    const float duration = std::max(
+                        clip.runtime ? clip.runtime->duration() : 0.0f,
+                        1.0e-4f);
+                    time = std::fmod(time, duration);
+                    if (time < 0.0f)
+                    {
+                        time += duration;
+                    }
+                }
+                const Animation::LocalPose locals =
+                    Animation::SampleLocals(asset.mesh, clip, time);
+                models = Animation::LocalToModels(asset.mesh, locals);
+            }
+            for (auto& section : emitter.skeletalSections)
+            {
+                for (size_t vertexIndex = 0;
+                     vertexIndex < section.sourceVertices.size();
+                     ++vertexIndex)
+                {
+                    Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
+                    const uint32_t begin =
+                        section.influenceOffsets.at(vertexIndex);
+                    const uint32_t end =
+                        section.influenceOffsets.at(vertexIndex + 1);
+                    for (uint32_t influenceIndex = begin;
+                         influenceIndex < end;
+                         ++influenceIndex)
+                    {
+                        const auto& influence =
+                            section.influences.at(influenceIndex);
+                        if (influence.joint >= models.size() ||
+                            influence.joint >= section.inverseBinds.size())
+                        {
+                            continue;
+                        }
+                        skin += influence.weight *
+                            models[influence.joint] *
+                            section.inverseBinds[influence.joint];
+                    }
+                    Vertex& target =
+                        section.skinnedVertices[vertexIndex];
+                    const Vertex& source =
+                        section.sourceVertices[vertexIndex];
+                    target.position =
+                        (skin * Eigen::Vector4f(
+                            source.position.x(),
+                            source.position.y(),
+                            source.position.z(),
+                            1.0f)).head<3>();
+                    const Eigen::Matrix3f linear =
+                        skin.block<3, 3>(0, 0);
+                    const Eigen::Matrix3f normalMatrix =
+                        linear.inverse().transpose();
+                    target.normal =
+                        (normalMatrix * source.normal).normalized();
+                }
+                void* mapped = backend->MapMemory(
+                    section.vertices.memory,
+                    static_cast<vk::DeviceSize>(
+                        section.skinnedVertices.size() * sizeof(Vertex)));
+                if (mapped != nullptr)
+                {
+                    std::memcpy(
+                        mapped,
+                        section.skinnedVertices.data(),
+                        section.skinnedVertices.size() * sizeof(Vertex));
+                    backend->UnmapMemory(section.vertices.memory);
+                }
+            }
+        }
 
         // 固定步长：帧间余量进入 accumulator，只推进完整步；最多 8 步/帧
         // 防止长时间停顿后一次补太多。余量保留到下一帧，避免时间漂移。
@@ -4717,11 +6119,115 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.flipbookBlend ? 1.0f : 0.0f,
             emitter.asset.flipbookPlayRate,
             0.0f);
+        uniforms.flipbookPlayRateKeys.fill(
+            Eigen::Vector4f(0.0f, 1.0f, 0.0f, 0.0f));
+        uniforms.flipbookUvOffsetKeys.fill(Eigen::Vector4f::Zero());
+        uniforms.flipbookUvScaleKeys.fill(
+            Eigen::Vector4f(0.0f, 0.0f, 1.0f, 1.0f));
+        uniforms.flipbookRateKeyTimes.fill(Eigen::Vector4f::Zero());
+        uniforms.flipbookUvKeyTimes.fill(Eigen::Vector4f::Zero());
+        const size_t rateKeyCount = std::min<size_t>(
+            emitter.asset.flipbookPlayRateKeys.size(),
+            kMaxParticleCurveKeys);
+        for (size_t index = 0; index < rateKeyCount; ++index)
+        {
+            const ParticleFlipbookRateKey& key =
+                emitter.asset.flipbookPlayRateKeys[index];
+            uniforms.flipbookPlayRateKeys[index] = Eigen::Vector4f(
+                key.time, key.rate, 0.0f, 0.0f);
+            uniforms.flipbookRateKeyTimes[index / 4][index % 4] =
+                key.time;
+        }
+        const size_t offsetKeyCount = std::min<size_t>(
+            emitter.asset.flipbookUvOffsetKeys.size(),
+            kMaxParticleCurveKeys);
+        for (size_t index = 0; index < offsetKeyCount; ++index)
+        {
+            const ParticleFlipbookUvKey& key =
+                emitter.asset.flipbookUvOffsetKeys[index];
+            uniforms.flipbookUvOffsetKeys[index] = Eigen::Vector4f(
+                key.time, 0.0f, key.value.x(), key.value.y());
+            uniforms.flipbookUvKeyTimes[index / 4][index % 4] =
+                key.time;
+        }
+        const size_t scaleKeyCount = std::min<size_t>(
+            emitter.asset.flipbookUvScaleKeys.size(),
+            kMaxParticleCurveKeys);
+        for (size_t index = 0; index < scaleKeyCount; ++index)
+        {
+            const ParticleFlipbookUvKey& key =
+                emitter.asset.flipbookUvScaleKeys[index];
+            uniforms.flipbookUvScaleKeys[index] = Eigen::Vector4f(
+                key.time, 0.0f, key.value.x(), key.value.y());
+            // offset/scale 共享 UV 时间轴；两张表同时存在时作者应使用
+            // 相同 time（loader 分别校验，渲染取 scale 的 time）。
+            uniforms.flipbookUvKeyTimes[index / 4][index % 4] =
+                key.time;
+        }
+        uniforms.flipbookParams6 = Eigen::Vector4f(
+            static_cast<float>(rateKeyCount),
+            static_cast<float>(offsetKeyCount),
+            static_cast<float>(scaleKeyCount),
+            emitter.asset.flipbookStartFrameJitter);
         uniforms.textureModeParams = Eigen::Vector4f(
             emitter.asset.eooPacked ? 1.0f : 0.0f,
             emitter.asset.eooEmissiveStrength,
             0.0f,
             0.0f);
+        const auto spawnModeCode = [](const std::string& mode) {
+            if (mode == "skeletalTris") return 1.0f;
+            if (mode == "skeletalBones") return 2.0f;
+            if (mode == "parentEmitter") return 3.0f;
+            return 0.0f;
+        };
+        const auto parentEventCode = [](const std::string& event) {
+            if (event == "spawn") return 0.0f;
+            if (event == "collision") return 2.0f;
+            return 1.0f;
+        };
+        uniforms.spawnSourceParams = Eigen::Vector4f(
+            spawnModeCode(emitter.asset.spawnSource.mode),
+            parentEventCode(emitter.asset.spawnSource.parentEvent),
+            static_cast<float>(emitter.asset.spawnSource.perEvent),
+            emitter.asset.spawnSource.normalVelocityScale);
+        uniforms.spawnSourceOffset = Eigen::Vector4f(
+            emitter.asset.spawnSource.offset.x(),
+            emitter.asset.spawnSource.offset.y(),
+            emitter.asset.spawnSource.offset.z(),
+            0.0f);
+        uniforms.burstTiming = Eigen::Vector4f(
+            emitter.asset.burstDelay,
+            emitter.asset.burstPhase,
+            0.0f,
+            0.0f);
+        uniforms.spawnEventOutput = Eigen::Vector4f(
+            emitter.emitSpawnEvents ? 1.0f : 0.0f,
+            0.0f,
+            0.0f,
+            0.0f);
+        uniforms.dissolveParams = Eigen::Vector4f(
+            emitter.asset.dissolve.start,
+            emitter.asset.dissolve.end,
+            emitter.asset.dissolve.edgeWidth,
+            emitter.asset.dissolve.noiseScale);
+        uniforms.dissolveParams2 = Eigen::Vector4f(
+            emitter.asset.dissolve.edgeStrength,
+            emitter.asset.dissolve.noiseSpeed,
+            emitter.asset.dissolve.enabled ? 1.0f : 0.0f,
+            0.0f);
+        uniforms.dissolveEdgeColor = Eigen::Vector4f(
+            emitter.asset.dissolve.edgeColor.x(),
+            emitter.asset.dissolve.edgeColor.y(),
+            emitter.asset.dissolve.edgeColor.z(),
+            0.0f);
+        uniforms.translucencyVolumeMin = Eigen::Vector4f(
+            -4000.0f, -1500.0f, -4000.0f,
+            1.0f);
+        uniforms.translucencyVolumeInvExtent = Eigen::Vector4f(
+            1.0f / 8000.0f,
+            1.0f / 8000.0f,
+            1.0f / 8000.0f,
+            0.12f);
         uniforms.sortParams = Eigen::Vector4f(
             emitter.asset.sortParticles ? 1.0f : 0.0f,
             static_cast<float>(emitter.asset.maxParticles),
@@ -4813,7 +6319,9 @@ void ParticleRenderer::RecordSimulation(
             static_cast<float>(std::min<size_t>(
                 emitter.asset.ribbonWidthKeys.size(),
                 kMaxParticleCurveKeys)),
-            0.0f,
+            static_cast<float>(std::min<size_t>(
+                emitter.asset.ribbonColorKeys.size(),
+                kMaxParticleCurveKeys)),
             0.0f);
         uniforms.ribbonWidthKeys.fill(Eigen::Vector4f::Zero());
         uniforms.ribbonWidthKeyTimes.fill(Eigen::Vector4f::Zero());
@@ -4829,10 +6337,23 @@ void ParticleRenderer::RecordSimulation(
             uniforms.ribbonWidthKeyTimes[keyIndex / 4][keyIndex % 4] =
                 key.time;
         }
+        uniforms.ribbonColorKeys.fill(Eigen::Vector4f::Zero());
+        uniforms.ribbonColorKeyTimes.fill(Eigen::Vector4f::Zero());
+        for (size_t keyIndex = 0;
+             keyIndex < emitter.asset.ribbonColorKeys.size() &&
+             keyIndex < kMaxParticleCurveKeys;
+             ++keyIndex)
+        {
+            const ParticleRibbonColorKey& key =
+                emitter.asset.ribbonColorKeys[keyIndex];
+            uniforms.ribbonColorKeys[keyIndex] = key.color;
+            uniforms.ribbonColorKeyTimes[keyIndex / 4][keyIndex % 4] =
+                key.time;
+        }
         uniforms.meshParams = Eigen::Vector4f(
             static_cast<float>(ParticleMeshAlignmentCode(
                 emitter.asset.meshAlignment)),
-            0.0f,
+            emitter.asset.skeletalBoneRadius,
             0.0f,
             0.0f);
         uniforms.meshScale = Eigen::Vector4f(
@@ -5140,6 +6661,18 @@ void ParticleRenderer::RecordSimulation(
             static_cast<float>(emitter.lightSlotCapacity),
             emitter.asset.light.intensity,
             emitter.asset.light.radius);
+        uniforms.particleLightShadowParams = Eigen::Vector4f(
+            emitter.particleLightCastShadows
+                ? static_cast<float>(emitter.particleLightShadowSlice)
+                : -1.0f,
+            1.0f,
+            emitter.particleLightShadowFar,
+            emitter.particleLightShadowBias);
+        uniforms.particleLightIesParams = Eigen::Vector4f(
+            static_cast<float>(emitter.iesProfileIndex),
+            emitter.iesProfileIndex > 0 ? 1.0f : 0.0f,
+            0.0f,
+            0.0f);
         for (int cascade = 0; cascade < 4; ++cascade)
         {
             uniforms.shadowLightViewProj[cascade] =
@@ -5200,6 +6733,88 @@ void ParticleRenderer::RecordSimulation(
             uniforms.collisionSdfBoundsMax = Eigen::Vector4f::Zero();
             uniforms.collisionSdfResolution = Eigen::Vector4f::Zero();
         }
+        // World 级 typed Data Channel -> 材质/精灵参数。绑定只在通道存在
+        // 时覆盖作者默认值；缺失或类型不兼容保持原值，避免 Console 清空
+        // 通道后材质突然变黑/全透明。颜色参数接受标量（灰阶）或 1~4 分量，
+        // 标量只写 RGB，不改变原有 alpha。
+        if (!emitter.asset.materialBindings.empty())
+        {
+            const auto readColor = [](const ParticleDataChannelValue& value,
+                                      Eigen::Vector4f& out) {
+                const size_t count = value.ComponentCount();
+                if (value.IsScalar())
+                {
+                    out.head<3>().setConstant(value.values[0]);
+                    return;
+                }
+                out.x() = value.values[0];
+                out.y() = value.values[1];
+                out.z() = count >= 3 ? value.values[2] : 0.0f;
+                if (count >= 4)
+                {
+                    out.w() = value.values[3];
+                }
+            };
+            for (const auto& [parameter, channelName] :
+                 emitter.asset.materialBindings)
+            {
+                const auto found =
+                    renderScene.particleDataChannels.find(channelName);
+                if (found == renderScene.particleDataChannels.end())
+                {
+                    continue;
+                }
+                const ParticleDataChannelValue& value = found->second;
+                if (parameter == "baseColor")
+                {
+                    readColor(value, uniforms.materialBaseColor);
+                }
+                else if (parameter == "color")
+                {
+                    readColor(value, uniforms.colorTint);
+                }
+                else if (parameter == "emissive")
+                {
+                    const Eigen::Vector4f original =
+                        uniforms.materialEmissiveStrength;
+                    Eigen::Vector4f color = original;
+                    readColor(value, color);
+                    uniforms.materialEmissiveStrength =
+                        Eigen::Vector4f(
+                            color.x(), color.y(), color.z(), original.w());
+                }
+                else
+                {
+                    float scalar = 0.0f;
+                    if (!value.TryGetFloat(scalar))
+                    {
+                        continue;
+                    }
+                    if (parameter == "emissiveStrength")
+                    {
+                        uniforms.materialEmissiveStrength.w() =
+                            std::clamp(scalar, 0.0f, 1.0e4f);
+                    }
+                    else if (parameter == "roughness")
+                    {
+                        uniforms.materialPbr.x() =
+                            std::clamp(scalar, 0.02f, 1.0f);
+                    }
+                    else if (parameter == "metallic")
+                    {
+                        uniforms.materialPbr.y() =
+                            std::clamp(scalar, 0.0f, 1.0f);
+                    }
+                    else if (parameter == "opacity")
+                    {
+                        const float opacity =
+                            std::clamp(scalar, 0.0f, 1.0f);
+                        uniforms.materialBaseColor.w() = opacity;
+                        uniforms.colorTint.w() = opacity;
+                    }
+                }
+            }
+        }
         std::memcpy(
             emitter.frameUniforms.at(imageIndex).mapped,
             &uniforms,
@@ -5257,6 +6872,22 @@ void ParticleRenderer::RecordSimulation(
                 0,
                 sizeof(ParticleOverdrawCounters),
                 0);
+            // parentEmitter 子节点只消费当前帧事件，header 每帧清零。
+            commandBuffer.fillBuffer(
+                emitter.spawnEvents.buffer,
+                0,
+                sizeof(uint32_t) * 4u,
+                0);
+            // 骨骼完整 mesh 用 direct drawIndexed（实例数=maxParticles），
+            // 未使用槽位必须指向无效索引，vertex shader 才会裁掉。
+            if (!emitter.skeletalSections.empty())
+            {
+                commandBuffer.fillBuffer(
+                    emitter.aliveIndices.buffer,
+                    0,
+                    VK_WHOLE_SIZE,
+                    0xFFFFFFFFu);
+            }
             vk::BufferMemoryBarrier clearToCompute;
             clearToCompute
                 .setBuffer(emitter.counters.buffer)
@@ -5273,7 +6904,24 @@ void ParticleRenderer::RecordSimulation(
                 vk::PipelineStageFlagBits::eComputeShader,
                 {},
                 nullptr,
-                clearToCompute,
+                {clearToCompute,
+                 vk::BufferMemoryBarrier(
+                     vk::AccessFlagBits::eTransferWrite,
+                     vk::AccessFlagBits::eShaderRead |
+                         vk::AccessFlagBits::eShaderWrite,
+                     VK_QUEUE_FAMILY_IGNORED,
+                     VK_QUEUE_FAMILY_IGNORED,
+                     emitter.spawnEvents.buffer,
+                     0,
+                     VK_WHOLE_SIZE),
+                 vk::BufferMemoryBarrier(
+                     vk::AccessFlagBits::eTransferWrite,
+                     vk::AccessFlagBits::eShaderRead,
+                     VK_QUEUE_FAMILY_IGNORED,
+                     VK_QUEUE_FAMILY_IGNORED,
+                     emitter.aliveIndices.buffer,
+                     0,
+                     VK_WHOLE_SIZE)},
                 nullptr);
             vk::BufferMemoryBarrier debugClearToGraphics;
             debugClearToGraphics
@@ -5302,6 +6950,15 @@ void ParticleRenderer::RecordSimulation(
             continue;
         }
 
+        // 上一个 emitter 的 spawnEvents/粒子池写入必须先对当前 dispatch
+        // 可见；parentEmitter 子节点读取父节点同一帧的事件记录。
+        InsertBufferBarrier(
+            commandBuffer,
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::AccessFlagBits::eShaderWrite,
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::AccessFlagBits::eShaderRead |
+                vk::AccessFlagBits::eShaderWrite);
         simulatePipeline->Bind(commandBuffer);
         commandBuffer.bindDescriptorSets(
             vk::PipelineBindPoint::eCompute,
@@ -5613,23 +7270,54 @@ void ParticleRenderer::RecordGraphics(
             emitter.meshIndexCount > 0 &&
             emitter.meshVertices.buffer &&
             emitter.meshIndices.buffer;
+        const bool skeletalMesh =
+            emitter.asset.renderMode == "mesh" &&
+            !emitter.skeletalSections.empty();
+        const bool skeletalTriangle =
+            emitter.asset.renderMode == "skeletalMeshTris" &&
+            !emitter.skeletalSections.empty();
+        const bool skeletalBone =
+            emitter.asset.renderMode == "skeletalMeshBones" &&
+            !emitter.skeletalSections.empty();
         const bool beam =
             emitter.asset.renderMode == "beam";
-        const std::shared_ptr<PipelineBase>& pipeline = mesh
-            ? (emitter.asset.additive
+        std::shared_ptr<PipelineBase> pipeline;
+        if (skeletalTriangle)
+        {
+            pipeline = emitter.asset.additive
+                ? skeletalTriangleAdditivePipeline
+                : skeletalTriangleAlphaPipeline;
+        }
+        else if (skeletalBone)
+        {
+            pipeline = emitter.asset.additive
+                ? skeletalBoneAdditivePipeline
+                : skeletalBoneAlphaPipeline;
+        }
+        else if (mesh || skeletalMesh)
+        {
+            pipeline = emitter.asset.additive
                 ? meshAdditivePipeline
-                : meshAlphaPipeline)
-            : (beam
-                ? (emitter.asset.additive
-                    ? beamAdditivePipeline
-                    : beamAlphaPipeline)
-                : (emitter.asset.renderMode == "ribbon"
-                ? (emitter.asset.additive
-                    ? ribbonAdditivePipeline
-                    : ribbonAlphaPipeline)
-                : (emitter.asset.additive
-                    ? additivePipeline
-                    : alphaPipeline)));
+                : meshAlphaPipeline;
+        }
+        else if (beam)
+        {
+            pipeline = emitter.asset.additive
+                ? beamAdditivePipeline
+                : beamAlphaPipeline;
+        }
+        else if (emitter.asset.renderMode == "ribbon")
+        {
+            pipeline = emitter.asset.additive
+                ? ribbonAdditivePipeline
+                : ribbonAlphaPipeline;
+        }
+        else
+        {
+            pipeline = emitter.asset.additive
+                ? additivePipeline
+                : alphaPipeline;
+        }
         if (!pipeline)
         {
             return;
@@ -5669,7 +7357,41 @@ void ParticleRenderer::RecordGraphics(
                 nullptr);
         }
         uint64_t drawnVertices = 0;
-        if (mesh)
+        if (skeletalMesh)
+        {
+            for (auto& section : emitter.skeletalSections)
+            {
+                if (imageIndex < section.materialSets.size())
+                {
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        pipeline->GetPipelineLayout(),
+                        kParticleMaterialSetIndex,
+                        section.materialSets.at(imageIndex),
+                        nullptr);
+                }
+                const vk::DeviceSize vertexOffset = 0;
+                commandBuffer.bindVertexBuffers(
+                    0,
+                    1,
+                    &section.vertices.buffer,
+                    &vertexOffset);
+                commandBuffer.bindIndexBuffer(
+                    section.indices.buffer,
+                    0,
+                    vk::IndexType::eUint32);
+                commandBuffer.drawIndexed(
+                    section.indexCount,
+                    emitter.asset.maxParticles,
+                    0,
+                    0,
+                    0);
+                drawnVertices += ParticleMeshDrawnVertexCount(
+                    section.indexCount,
+                    emitter.asset.maxParticles);
+            }
+        }
+        else if (mesh)
         {
             if (imageIndex < emitter.materialSets.size())
             {
@@ -5710,6 +7432,41 @@ void ParticleRenderer::RecordGraphics(
             drawnVertices = ParticleMeshDrawnVertexCount(
                 emitter.meshIndexCount,
                 emitter.asset.maxParticles);
+        }
+        else if (skeletalTriangle || skeletalBone)
+        {
+            const uint32_t verticesPerParticle =
+                skeletalTriangle ? 3u : 6u;
+            if (imageIndex < emitter.skeletalSections.front()
+                    .materialSets.size())
+            {
+                commandBuffer.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics,
+                    pipeline->GetPipelineLayout(),
+                    kParticleMaterialSetIndex,
+                    emitter.skeletalSections.front()
+                        .materialSets.at(imageIndex),
+                    nullptr);
+            }
+            if (emitter.indirectArgs.buffer)
+            {
+                commandBuffer.drawIndirect(
+                    emitter.indirectArgs.buffer,
+                    0,
+                    1,
+                    sizeof(vk::DrawIndirectCommand));
+            }
+            else
+            {
+                commandBuffer.draw(
+                    verticesPerParticle,
+                    emitter.asset.maxParticles,
+                    0,
+                    0);
+            }
+            drawnVertices =
+                static_cast<uint64_t>(verticesPerParticle) *
+                emitter.asset.maxParticles;
         }
         else
         {
@@ -6235,8 +7992,8 @@ bool ParticleRenderer::DumpParticles(
     std::string& outError)
 {
     static_assert(
-        sizeof(GpuParticle) == sizeof(Eigen::Vector4f) * 18,
-        "Particle dump assumes the std430 Particle layout is 18 vec4s.");
+        sizeof(GpuParticle) == sizeof(Eigen::Vector4f) * 21,
+        "Particle dump assumes the std430 Particle layout is 21 vec4s.");
 
     if (!initialized || backend != &readbackBackend)
     {

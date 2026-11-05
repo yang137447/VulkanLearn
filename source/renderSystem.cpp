@@ -2478,22 +2478,75 @@ void RenderSystem::PrepareLocalShadowLights()
     {
         light.shadowSlice = VL::kInvalidLocalShadowSlice;
     }
+    particleRenderer.ClearParticleLightShadowBindings();
+
+    std::vector<VL::LightSnapshot> candidates =
+        currentRenderScene.lights;
+    std::unordered_map<uint64_t, size_t> sceneIndexByLightId;
+    for (size_t index = 0; index < currentRenderScene.lights.size(); ++index)
+    {
+        sceneIndexByLightId.emplace(
+            currentRenderScene.lights[index].lightId, index);
+    }
+    std::unordered_map<uint64_t, std::string> particleKeyByLightId;
+    for (const VL::ParticleLightShadowCandidate& particle :
+         particleRenderer.GetParticleLightShadowCandidates())
+    {
+        uint64_t hash = 14695981039346656037ull;
+        for (unsigned char character : particle.emitterKey)
+        {
+            hash ^= character;
+            hash *= 1099511628211ull;
+        }
+        VL::LightSnapshot light;
+        light.lightId = hash;
+        light.type = VL::LightSnapshotType::Point;
+        light.color = Eigen::Vector3f::Ones();
+        light.intensity = 1.0f;
+        light.position = particle.position;
+        light.radius = particle.radius;
+        light.castShadows = particle.castShadows;
+        particleKeyByLightId.emplace(hash, particle.emitterKey);
+        candidates.push_back(light);
+    }
 
     const std::vector<size_t> ranked =
         VL::RankLocalShadowLights(
-            currentRenderScene.lights,
+            candidates,
             currentRenderScene.camera.position,
             VL::kMaxLocalShadowLights);
     activeLocalShadowLights.reserve(ranked.size());
     for (size_t slice = 0; slice < ranked.size(); ++slice)
     {
         VL::LightSnapshot& light =
-            currentRenderScene.lights[ranked[slice]];
+            candidates[ranked[slice]];
         light.shadowSlice = static_cast<uint32_t>(slice);
         light.shadowFar =
             VL::ComputeLocalShadowFar(light.radius);
         light.shadowBias =
             std::max(0.0f, light.shadowBias);
+        const auto particle = particleKeyByLightId.find(light.lightId);
+        if (particle != particleKeyByLightId.end())
+        {
+            particleRenderer.SetParticleLightShadowBinding(
+                particle->second,
+                light.shadowSlice,
+                light.shadowFar,
+                light.shadowBias,
+                true);
+        }
+        else
+        {
+            const auto scene = sceneIndexByLightId.find(light.lightId);
+            if (scene != sceneIndexByLightId.end())
+            {
+                VL::LightSnapshot& original =
+                    currentRenderScene.lights[scene->second];
+                original.shadowSlice = light.shadowSlice;
+                original.shadowFar = light.shadowFar;
+                original.shadowBias = light.shadowBias;
+            }
+        }
         activeLocalShadowLights.push_back(light);
     }
 }

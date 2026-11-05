@@ -26,7 +26,7 @@ std::string ReadSource(const std::string& relativePath)
 TEST(ParticleLightGpu, LayoutMatchesStd430)
 {
     EXPECT_EQ(sizeof(VL::ParticleLightSSBOHeader), 16u);
-    EXPECT_EQ(sizeof(VL::ParticleLightGPU), 32u);
+    EXPECT_EQ(sizeof(VL::ParticleLightGPU), 64u);
     EXPECT_EQ(offsetof(VL::ParticleLightGPU, colorIntensity), 16u);
     EXPECT_EQ(
         VL::ParticleLightSSBOSize(),

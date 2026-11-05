@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "particles/particleBudget.h"
+#include "particles/particleDataChannel.h"
 #include "particles/particleSdf.h"
 #include "particles/particleUserParameterOverride.h"
 
@@ -81,6 +82,194 @@ TEST(ParticleUserParameterOverride, DataChannelsAreBaseAndInstanceOverridesWin)
     EXPECT_FLOAT_EQ(combined.at("OnlyChannel"), 3.0f);
     EXPECT_FLOAT_EQ(combined.at("OnlyInstance"), 4.0f);
     EXPECT_EQ(combined.find("Bad"), combined.end());
+}
+
+TEST(ParticleDataChannel, JsonInfersAndRoundTripsTypedValues)
+{
+    std::string error;
+    ParticleDataChannelValue value;
+
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(0.5f, value, error))
+        << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Float);
+    EXPECT_FLOAT_EQ(value.values[0], 0.5f);
+
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(true, value, error))
+        << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Bool);
+    EXPECT_FLOAT_EQ(value.values[0], 1.0f);
+
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json::array({1.0f, 2.0f}), value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec2);
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json::array({1.0f, 2.0f, 3.0f}), value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json::array({1.0f, 2.0f, 3.0f, 4.0f}), value, error))
+        << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec4);
+
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"int", 42}}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Int);
+    EXPECT_FLOAT_EQ(value.values[0], 42.0f);
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"bool", false}}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Bool);
+    EXPECT_FLOAT_EQ(value.values[0], 0.0f);
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"quat", nlohmann::json::array(
+            {0.0f, 0.0f, 0.0f, 1.0f})}}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Quat);
+    EXPECT_FLOAT_EQ(value.values[3], 1.0f);
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"type", "vec3"},
+            {"values", nlohmann::json::array({4.0f, 5.0f, 6.0f})}},
+        value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+
+    const nlohmann::json encoded = value.ToTypedJson();
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(encoded, value, error))
+        << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(value.values[1], 5.0f);
+
+    ASSERT_TRUE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"type", 6},
+            {"values", nlohmann::json::array(
+                {0.0f, 0.0f, 0.0f, 1.0f})}}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Quat);
+}
+
+TEST(ParticleDataChannel, JsonRejectsInvalidShapesTypesAndRanges)
+{
+    std::string error;
+    ParticleDataChannelValue value;
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        std::numeric_limits<float>::quiet_NaN(), value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(1.0e7f, value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(1.0e300, value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json::array({1.0f}), value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json::array({1.0f, 2.0f, 3.0f, 4.0f, 5.0f}),
+        value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"int", 1.5f}}, value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"bool", 2}}, value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"type", "not-a-type"},
+            {"values", nlohmann::json::array({1.0f})}}, value, error));
+    EXPECT_FALSE(ParticleDataChannelValue::ParseJson(
+        nlohmann::json{{"type", "vec3"},
+            {"values", nlohmann::json::array({1.0f, 2.0f})}},
+        value, error));
+}
+
+TEST(ParticleDataChannel, ConsoleTextGrammarSupportsAllTypedForms)
+{
+    std::string error;
+    ParticleDataChannelValue value;
+    EXPECT_TRUE(ParseParticleDataChannelText({"0.5"}, value, error))
+        << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Float);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"vec2", "1", "2"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec2);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"vec3", "1", "2", "3"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"vec4", "1", "2", "3", "4"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec4);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"quat", "0", "0", "0", "1"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Quat);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"bool", "true"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Bool);
+    EXPECT_FLOAT_EQ(value.values[0], 1.0f);
+    EXPECT_TRUE(ParseParticleDataChannelText(
+        {"int", "42"}, value, error)) << error;
+    EXPECT_EQ(value.type, ParticleDataChannelType::Int);
+    EXPECT_FLOAT_EQ(value.values[0], 42.0f);
+
+    EXPECT_FALSE(ParseParticleDataChannelText(
+        {"vec3", "1", "2"}, value, error));
+    EXPECT_FALSE(ParseParticleDataChannelText(
+        {"bool", "maybe"}, value, error));
+    EXPECT_FALSE(ParseParticleDataChannelText(
+        {"int", "1.5"}, value, error));
+    EXPECT_FALSE(ParseParticleDataChannelText(
+        {"vec3", "1", "2", "1e7"}, value, error));
+}
+
+TEST(ParticleUserParameterOverride, TypedChannelsReplaceVectorBoolAndFloatFields)
+{
+    const nlohmann::json document = nlohmann::json{
+        {"name", "PS_typed_data_channel"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"userParameters", nlohmann::json::object()},
+        {"modules", nlohmann::json::array({
+            nlohmann::json{
+                {"type", "emitter"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"maxParticles", 32}}}},
+            nlohmann::json{
+                {"type", "forces.wind"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"wind", "$WindVec"}}}},
+            nlohmann::json{
+                {"type", "forces.drag"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"drag", "$DragFloat"}}}},
+            nlohmann::json{
+                {"type", "renderer"},
+                {"enabled", true},
+                {"fields", nlohmann::json{{"additive", "$Additive"}}}}
+        })}
+    };
+    ParticleSystemAsset base;
+    base.name = "PS_typed_data_channel";
+    base.version = 2;
+    base.sourcePath = "Maps/SC_test/PS_typed_data_channel.json";
+    base.authoringJson =
+        std::make_shared<const nlohmann::json>(document);
+    ParticleEmitterAsset snapshotEmitter;
+    snapshotEmitter.name = "emitter0";
+    base.emitters.push_back(snapshotEmitter);
+
+    ParticleDataChannelMap channels;
+    channels.emplace("WindVec", ParticleDataChannelValue::MakeVec3(1, 2, 3));
+    channels.emplace("DragFloat", ParticleDataChannelValue::MakeFloat(9.0f));
+    channels.emplace("Additive", ParticleDataChannelValue::MakeBool(true));
+
+    const ParticleSystemAsset parsed =
+        ParseParticleAssetWithRuntimeParametersTyped(
+            base, channels, {{"DragFloat", 1.5f}});
+    ASSERT_EQ(parsed.emitters.size(), 1u);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].wind.x(), 1.0f);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].wind.y(), 2.0f);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].wind.z(), 3.0f);
+    EXPECT_FLOAT_EQ(parsed.emitters[0].drag, 1.5f);
+    EXPECT_TRUE(parsed.emitters[0].additive);
+    EXPECT_EQ(parsed.userParameterReferences.count("WindVec"), 1u);
+    EXPECT_EQ(parsed.userParameterReferences.count("Additive"), 1u);
+    EXPECT_EQ(parsed.userParameterReferences.count("DragFloat"), 1u);
+}
+
+TEST(ParticleUserParameterOverride, TypedScalarProjectionKeepsInstanceOverride)
+{
+    ParticleDataChannelMap channels;
+    channels.emplace("Wind", ParticleDataChannelValue::MakeFloat(2.0f));
+    channels.emplace("Direction", ParticleDataChannelValue::MakeVec3(1, 2, 3));
+    const auto combined = CombineParticleRuntimeParametersTyped(
+        channels, {{"Wind", 7.0f}});
+    EXPECT_FLOAT_EQ(combined.at("Wind"), 7.0f);
+    EXPECT_EQ(combined.find("Direction"), combined.end());
 }
 
 TEST(ParticleUserParameterOverride, DataChannelValuesReparseModuleFields)

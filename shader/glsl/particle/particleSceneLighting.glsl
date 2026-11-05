@@ -38,6 +38,8 @@ struct ParticlePointLightGPU
 {
     vec4 positionRadius;
     vec4 colorIntensity;
+    vec4 shadowParams;
+    vec4 meta;
 };
 
 // CPU 侧 LightSSBOHeader 是 6 个有效 int + 2 个 padding（共 32 字节）；
@@ -65,6 +67,10 @@ layout(std430, set = 0, binding = 7) readonly buffer ParticleLightSSBO
 
 layout(set = 0, binding = 8) uniform samplerCube prefilteredEnvironmentCube;
 layout(set = 0, binding = 9) uniform sampler2D brdfLut;
+// 低分辨率世界空间辐照度体积；w<0.5 时不采样。
+layout(set = 0, binding = 13) uniform sampler3D translucencyVolume;
+// IES LUT：64 个极角样本 × 16 个 profile；R 存储 0..1 归一化强度。
+layout(set = 0, binding = 14) uniform sampler2D iesLut;
 
 // 屏幕空间 tile 光照列表。粒子 set 0 的 6..9 已被场景灯/粒子灯/IBL 占用，
 // 因此聚类缓冲从 10 开始；遍历逻辑与材质路径共用 lightGridSampling.glsl。
@@ -301,6 +307,37 @@ vec3 ParticleSampleDiffuseIbl(vec3 normal, vec3 baseColor)
         normalize(normal),
         maxLod).rgb;
     return irradianceApprox * baseColor;
+}
+
+vec3 ParticleSampleTranslucencyVolume(vec3 worldPosition)
+{
+    if (frame.translucencyVolumeMin.w < 0.5)
+    {
+        return vec3(0.0);
+    }
+    vec3 uvw = (worldPosition - frame.translucencyVolumeMin.xyz) *
+        frame.translucencyVolumeInvExtent.xyz;
+    if (any(lessThan(uvw, vec3(0.0))) ||
+        any(greaterThan(uvw, vec3(1.0))))
+    {
+        return vec3(0.0);
+    }
+    return texture(translucencyVolume, uvw).rgb *
+        frame.translucencyVolumeInvExtent.w;
+}
+
+float ParticleIesScale(vec4 meta, vec3 surfaceToLight, vec3 viewDirection)
+{
+    if (meta.y < 0.5)
+    {
+        return 1.0;
+    }
+    float cosine = clamp(dot(
+        ParticleBillboardSafeDirection(surfaceToLight),
+        ParticleBillboardSafeDirection(viewDirection)), -1.0, 1.0);
+    float u = acos(cosine) / 3.14159265359;
+    float v = (meta.x + 0.5) / 16.0;
+    return texture(iesLut, vec2(u, v)).r * 64.0;
 }
 
 vec3 ParticleSamplePrefilteredEnvironment(
@@ -619,12 +656,18 @@ ParticleLightingLobes CalculateParticleMeshSceneLighting(
         {
             continue;
         }
+        vec3 viewDirection = ParticleBillboardSafeDirection(
+            cameraPosition - pixelPosition);
+        vec3 offsetToLight =
+            light.positionRadius.xyz - pixelPosition;
+        float ies = ParticleIesScale(
+            light.meta, offsetToLight, viewDirection);
         ParticleLightingLobes lobes = AccumulateParticlePointLight(
             localShadowMap,
-            vec4(-1.0),
+            light.shadowParams,
             light.positionRadius.xyz,
             light.positionRadius.w,
-            light.colorIntensity.xyz * light.colorIntensity.w,
+            light.colorIntensity.xyz * light.colorIntensity.w * ies,
             normal,
             pixelPosition,
             cameraPosition,
@@ -1000,6 +1043,14 @@ vec3 CalculateParticleBillboardSceneLighting(
             attenuation *
             light.colorIntensity.xyz *
             light.colorIntensity.w *
+            ParticleIesScale(light.meta, offsetToLight, viewDirection) *
+            SampleLocalLightShadow(
+                localShadowMap,
+                light.shadowParams,
+                light.positionRadius.xyz,
+                vec3(0.0),
+                0.0,
+                pixelPosition) *
             ParticleBillboardTransmittance(
                 offsetToLight,
                 viewDirection,
@@ -1022,7 +1073,8 @@ vec3 CalculateParticleBillboardSceneLighting(
     // 缩放，因此亮度语义与原实现连续。
     lighting +=
         (baseColor + ParticleSampleDiffuseIbl(normal, baseColor)) *
-        ambientScale;
+        ambientScale +
+        ParticleSampleTranslucencyVolume(pixelPosition) * ambientScale;
     return mix(
         baseColor,
         lighting,

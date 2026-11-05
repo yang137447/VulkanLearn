@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <fstream>
+#include <limits>
 #include "script/scriptBlueprintAsset.h"
 #include "script/scriptPhysics.h"
 #include "script/scriptRuntime.h"
@@ -85,6 +86,46 @@ TEST(ScriptScene, PhysicsRejectsInvalidShapesCoefficientsAndRootScale)
     EXPECT_THROW(ValidateScriptBlueprint(blueprint), std::invalid_argument);
     blueprint["physics"] = {{"shape", "sphere"}, {"radius", 10}};
     EXPECT_NO_THROW(ValidateScriptBlueprint(blueprint));
+}
+
+TEST(ScriptWorld, TypedParticleDataChannelsValidateCapacityAndRanges)
+{
+    World world(1, "typed-data");
+    for (size_t index = 0; index < kMaxParticleDataChannels; ++index)
+    {
+        ASSERT_TRUE(world.SetParticleDataChannel(
+            "channel" + std::to_string(index), static_cast<float>(index)));
+    }
+    EXPECT_EQ(world.GetParticleDataChannelCount(), kMaxParticleDataChannels);
+    EXPECT_FALSE(world.SetParticleDataChannel("overflow", 1.0f));
+    EXPECT_TRUE(world.SetParticleDataChannel("channel0", 7.0f));
+
+    EXPECT_TRUE(world.SetParticleDataChannel(
+        "channel0", ParticleDataChannelValue::MakeVec3(1, 2, 3)));
+    ParticleDataChannelValue value;
+    ASSERT_TRUE(world.GetParticleDataChannelValue("channel0", value));
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(value.values[2], 3.0f);
+    float scalar = 0.0f;
+    EXPECT_FALSE(world.GetParticleDataChannel("channel0", scalar));
+
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "badVec", ParticleDataChannelValue::MakeVec3(
+            std::numeric_limits<float>::quiet_NaN(), 0, 0)));
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "hugeVec", ParticleDataChannelValue::MakeVec3(1.0e7f, 0, 0)));
+    ParticleDataChannelValue invalidBool =
+        ParticleDataChannelValue::MakeBool(true);
+    invalidBool.values[0] = 2.0f;
+    EXPECT_FALSE(world.SetParticleDataChannel("badBool", invalidBool));
+    ParticleDataChannelValue fractional =
+        ParticleDataChannelValue::MakeInt(1);
+    fractional.values[0] = 1.5f;
+    EXPECT_FALSE(world.SetParticleDataChannel("badInt", fractional));
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "badQuat", ParticleDataChannelValue::MakeQuat(
+            0, 0, 0, std::numeric_limits<float>::infinity())));
+    EXPECT_EQ(world.GetParticleDataChannelCount(), kMaxParticleDataChannels);
 }
 
 TEST(ScriptScene, CompoundAndMeshPhysicsValidateReferencesDimensionsAndScale)
@@ -421,6 +462,14 @@ TEST_F(ScriptGameplayTest, CSharpParticleEmitterBudgetAttachmentAndEvents)
 TEST_F(ScriptGameplayTest, CSharpParticleDataChannelsRoundTripAndSurviveReload)
 {
     ASSERT_TRUE(world->SetParticleDataChannel("Seed", 1.25f));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedDir", ParticleDataChannelValue::MakeVec3(1, 2, 3)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedCount", ParticleDataChannelValue::MakeInt(7)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedFlag", ParticleDataChannelValue::MakeBool(true)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedRot", ParticleDataChannelValue::MakeQuat(0, 0, 0, 1)));
     Prepare(Json::array({
         GameplayBlueprint("data", "ScriptFixtures.ParticleDataBlueprint")}));
     Play();
@@ -433,6 +482,24 @@ TEST_F(ScriptGameplayTest, CSharpParticleDataChannelsRoundTripAndSurviveReload)
     EXPECT_FLOAT_EQ(value, 2.5f);
     ASSERT_TRUE(world->GetParticleDataChannel("Heat", value));
     EXPECT_FLOAT_EQ(value, -4.0f);
+
+    ParticleDataChannelValue typed;
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Direction", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(typed.values[0], 1.0f);
+    EXPECT_FLOAT_EQ(typed.values[2], 3.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Tiling", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Vec2);
+    EXPECT_FLOAT_EQ(typed.values[1], 5.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Count", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Int);
+    EXPECT_FLOAT_EQ(typed.values[0], 42.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Enabled", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Bool);
+    EXPECT_FLOAT_EQ(typed.values[0], 1.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Rotation", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Quat);
+    EXPECT_FLOAT_EQ(typed.values[3], 1.0f);
 
     // 首个 tick 清除 Seed、覆盖 Wind；命令在 native 命令点同步应用。
     Tick();
@@ -449,6 +516,12 @@ TEST_F(ScriptGameplayTest, CSharpParticleDataChannelsRoundTripAndSurviveReload)
     ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Wind"), 3.5f);
     ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Heat"), -4.0f);
     EXPECT_FALSE(snapshot.particleDataChannels.count("Seed"));
+    ASSERT_EQ(snapshot.particleDataChannels.at("Direction").type,
+        ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(
+        snapshot.particleDataChannels.at("Direction").values[1], 2.0f);
+    ASSERT_EQ(snapshot.particleDataChannels.at("Count").type,
+        ParticleDataChannelType::Int);
 
     // 热重载只交换脚本 owner；World 通道必须原样保留，托管镜像由
     // migration snapshot 恢复，OnReload 能立即读到 3.5。

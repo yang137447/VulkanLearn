@@ -125,10 +125,29 @@ public sealed class ParticleDataBlueprint : Blueprint
         // Seed 由 native World 在 Play 前预置；start 请求必须先把通道交给托管侧。
         if (data.Get("Seed") is { } seed && seed != 1.25f)
             throw new InvalidOperationException("Particle data channel Seed was not delivered.");
+        if (data.GetVector3("SeedDir") is not { } seedDir ||
+            seedDir != new Vector3(1, 2, 3))
+            throw new InvalidOperationException("Typed vec3 data channel was not delivered.");
+        if (data.GetInt("SeedCount") != 7 ||
+            data.GetBool("SeedFlag") != true ||
+            data.GetQuaternion("SeedRot") is not { } seedRot ||
+            seedRot != new Quaternion(0, 0, 0, 1))
+            throw new InvalidOperationException("Typed scalar/quat data channels were not delivered.");
         data.Set("Wind", 2.5f);
         data.Set("Heat", -4.0f);
+        data.Vector3("Direction", new Vector3(1, 2, 3));
+        data.Vector2("Tiling", new Vector2(4, 5));
+        data.Int("Count", 42);
+        data.Bool("Enabled", true);
+        data.Quaternion("Rotation", new Quaternion(0, 0, 0, 1));
         if (data.Get("Wind") != 2.5f || data.Get("Heat") != -4.0f)
             throw new InvalidOperationException("Particle data channel local write was not visible.");
+        if (data.GetVector3("Direction") != new Vector3(1, 2, 3) ||
+            data.GetVector2("Tiling") != new Vector2(4, 5) ||
+            data.GetInt("Count") != 42 ||
+            data.GetBool("Enabled") != true ||
+            data.GetQuaternion("Rotation") != new Quaternion(0, 0, 0, 1))
+            throw new InvalidOperationException("Typed data channel local write was not visible.");
         if (data.Get("Missing") != null)
             throw new InvalidOperationException("Missing particle data channel returned a value.");
 
@@ -137,6 +156,15 @@ public sealed class ParticleDataBlueprint : Blueprint
         Expect<ArgumentException>(() => data.Set("bad\0key", 1.0f), "NUL data channel key");
         Expect<ArgumentOutOfRangeException>(() => data.Set("Nan", float.NaN), "NaN data channel value");
         Expect<ArgumentOutOfRangeException>(() => data.Set("Huge", 1.000001e6f), "Oversized data channel value");
+        Expect<ArgumentOutOfRangeException>(
+            () => data.Vector3("BadVec", new Vector3(1.0e7f, 0, 0)),
+            "Oversized vec3 data channel value");
+        Expect<ArgumentOutOfRangeException>(
+            () => data.Vector3("NanVec", new Vector3(float.NaN, 0, 0)),
+            "NaN vec3 data channel value");
+        Expect<ArgumentOutOfRangeException>(
+            () => data.Int("BadInt", 1000001),
+            "Oversized int data channel value");
         var cjkName = new string('中', 21);
         data.Set(cjkName, 1.0f);
         if (data.Get(cjkName) != 1.0f)
@@ -152,6 +180,10 @@ public sealed class ParticleDataBlueprint : Blueprint
     {
         if (Particles.Data.Get("Wind") is not { } wind || wind != 3.5f)
             throw new InvalidOperationException("Particle data channels were lost across live reload.");
+        if (Particles.Data.GetVector3("Direction") != new Vector3(1, 2, 3) ||
+            Particles.Data.GetInt("Count") != 42 ||
+            Particles.Data.GetBool("Enabled") != true)
+            throw new InvalidOperationException("Typed data channels were lost across live reload.");
     }
 
     protected override void EndPlay(EndPlayReason reason)
@@ -184,6 +216,12 @@ public sealed class ParticleDataBlueprint : Blueprint
                 Particles.Data.Get("Heat") != -4.0f ||
                 Particles.Data.Get("Seed") != null)
                 throw new InvalidOperationException("Particle data channels drifted after a native frame.");
+            if (Particles.Data.GetVector3("Direction") != new Vector3(1, 2, 3) ||
+                Particles.Data.GetVector2("Tiling") != new Vector2(4, 5) ||
+                Particles.Data.GetInt("Count") != 42 ||
+                Particles.Data.GetBool("Enabled") != true ||
+                Particles.Data.GetQuaternion("Rotation") != new Quaternion(0, 0, 0, 1))
+                throw new InvalidOperationException("Typed data channels drifted after a native frame.");
         }
     }
 }

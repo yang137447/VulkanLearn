@@ -43,6 +43,28 @@ layout(std430, set = 0, binding = 5) readonly buffer ParticleSdf
     float distances[];
 } particleSdf;
 
+// 骨骼三角面/骨段采样源；header = (kind 1 tri/2 bone, count, 0, 0)。
+layout(std430, set = 0, binding = 6) readonly buffer ParticleSpawnSource
+{
+    uvec4 header;
+    vec4 data[];
+} spawnSource;
+
+// 父 emitter 当前帧事件；header.x = count。记录 = 4 vec4:
+// [position.xyz, age] [velocity.xyz, lifetime] [normal.xyz, type] [offset.xyz, 0]。
+layout(std430, set = 0, binding = 7) readonly buffer ParticleParentSpawnEvents
+{
+    uvec4 header;
+    vec4 data[];
+} parentSpawnEvents;
+
+// 本 emitter 输出给子 emitter 的事件。
+layout(std430, set = 0, binding = 8) buffer ParticleSpawnEventsOut
+{
+    uvec4 header;
+    vec4 data[];
+} spawnEventsOut;
+
 // 轻量 PCG hash：同一 index 在时间推进后得到不连续随机流，
 // 避免 CPU 维护逐粒子随机种子 buffer。
 uint Hash(uint value)
@@ -583,24 +605,212 @@ vec3 SampleSpawnPosition(inout uint randomState)
         radialDirection.y * ringRadius);
 }
 
+bool IsSkeletalSpawnSource()
+{
+    int mode = int(frame.spawnSourceParams.x + 0.5);
+    return mode == 1 || mode == 2;
+}
+
+bool IsParentSpawnSource()
+{
+    return int(frame.spawnSourceParams.x + 0.5) == 3;
+}
+
+uint SpawnSourceCount()
+{
+    return min(spawnSource.header.y, 65536u);
+}
+
+// 骨骼源按粒子 index 一一映射到三角面/骨段，与 UE 的“每三角形一个
+// 粒子”语义一致：maxParticles 足够大时整个网格会被覆盖，不会因为
+// 随机采样出现缺洞；index 溢出源数量时由调用方拒绝生成。
+bool SampleSkeletalSpawnSource(
+    uint sourceIndex,
+    inout uint randomState,
+    out uint sourceKind,
+    out vec3 p0,
+    out vec3 p1,
+    out vec3 p2,
+    out vec3 normal)
+{
+    sourceKind = spawnSource.header.x;
+    p0 = vec3(0.0);
+    p1 = vec3(0.0);
+    p2 = vec3(0.0);
+    normal = vec3(0.0, 1.0, 0.0);
+    uint count = SpawnSourceCount();
+    if (count == 0u)
+    {
+        return false;
+    }
+    uint record = sourceIndex % count;
+    vec4 a = spawnSource.data[record * 4u + 0u];
+    vec4 b = spawnSource.data[record * 4u + 1u];
+    vec4 c = spawnSource.data[record * 4u + 2u];
+    if (sourceKind == 1u)
+    {
+        p0 = a.xyz;
+        p1 = b.xyz;
+        p2 = c.xyz;
+        normal = normalize(cross(p1 - p0, p2 - p0));
+        return length(normal) > 0.0;
+    }
+    p0 = a.xyz;
+    p1 = b.xyz;
+    p2 = p0;
+    normal = normalize(c.xyz);
+    return length(p1 - p0) > 1.0e-5;
+}
+
+void EmitSpawnEvent(
+    vec3 position,
+    vec3 velocity,
+    float age,
+    float lifetime,
+    vec3 normal,
+    uint eventType)
+{
+    if (frame.spawnEventOutput.x < 0.5)
+    {
+        return;
+    }
+    uint slot = atomicAdd(spawnEventsOut.header.x, 1u);
+    if (slot >= 1024u)
+    {
+        return;
+    }
+    spawnEventsOut.data[slot * 4u + 0u] =
+        vec4(position, age);
+    spawnEventsOut.data[slot * 4u + 1u] =
+        vec4(velocity, lifetime);
+    spawnEventsOut.data[slot * 4u + 2u] =
+        vec4(normal, float(eventType));
+    spawnEventsOut.data[slot * 4u + 3u] = vec4(0.0);
+}
+
+bool ParentSpawnEvent(
+    uint index,
+    out vec3 position,
+    out vec3 velocity,
+    out vec3 normal,
+    out float lifetime)
+{
+    position = vec3(0.0);
+    velocity = vec3(0.0);
+    normal = vec3(0.0, 1.0, 0.0);
+    lifetime = 1.0;
+    uint count = min(parentSpawnEvents.header.x, 1024u);
+    uint perEvent = max(
+        uint(frame.spawnSourceParams.z + 0.5), 1u);
+    if (count == 0u || index >= count * perEvent)
+    {
+        return false;
+    }
+    uint eventIndex = min(index / perEvent, count - 1u);
+    vec4 eventPosition = parentSpawnEvents.data[eventIndex * 4u + 0u];
+    vec4 eventVelocity = parentSpawnEvents.data[eventIndex * 4u + 1u];
+    vec4 eventNormal = parentSpawnEvents.data[eventIndex * 4u + 2u];
+    uint eventType = uint(eventNormal.w + 0.5);
+    if (eventType != uint(frame.spawnSourceParams.y + 0.5))
+    {
+        return false;
+    }
+    position = eventPosition.xyz + frame.spawnSourceOffset.xyz;
+    velocity = eventVelocity.xyz;
+    normal = eventNormal.xyz;
+    lifetime = eventVelocity.w;
+    return true;
+}
+
 bool SpawnParticle(
     uint index,
     inout Particle particle,
     inout uint randomState,
     bool prewarm)
 {
-    vec3 localPosition = SampleSpawnPosition(randomState);
+    particle.source0 = vec4(0.0);
+    particle.source1 = vec4(0.0);
+    particle.source2 = vec4(0.0);
+    vec3 localPosition = vec3(0.0);
     vec3 localVelocity = mix(
         frame.velocityMinLifetimeMin.xyz,
         frame.velocityMaxLifetimeMax.xyz,
         vec3(Random(randomState),
              Random(randomState),
              Random(randomState)));
-
     float lifetime = mix(
         frame.velocityMinLifetimeMin.w,
         frame.velocityMaxLifetimeMax.w,
         Random(randomState));
+    bool parentSource = IsParentSpawnSource();
+    if (parentSource)
+    {
+        vec3 parentPosition;
+        vec3 parentVelocity;
+        vec3 parentNormal;
+        float parentLifetime;
+        if (!ParentSpawnEvent(
+                index,
+                parentPosition,
+                parentVelocity,
+                parentNormal,
+                parentLifetime))
+        {
+            return false;
+        }
+        localPosition = parentPosition;
+        localVelocity =
+            parentVelocity * 0.25 + localVelocity * 0.75;
+        // 生命周期由子发射器作者化决定；父寿命只作为事件记录保留，
+        // 不强制继承，否则短命火花会被长命 leader 拖长。
+        (void)parentLifetime;
+    }
+    else if (IsSkeletalSpawnSource())
+    {
+        uint sourceKind = 0u;
+        vec3 p0;
+        vec3 p1;
+        vec3 p2;
+        vec3 sourceNormal;
+        uint sourceCount = SpawnSourceCount();
+        if (index >= sourceCount ||
+            !SampleSkeletalSpawnSource(
+                index,
+                randomState,
+                sourceKind,
+                p0,
+                p1,
+                p2,
+                sourceNormal))
+        {
+            return false;
+        }
+        if (sourceKind == 1u)
+        {
+            vec3 center = (p0 + p1 + p2) / 3.0;
+            localPosition = center;
+            particle.source0 = vec4(p0 - center, 1.0);
+            particle.source1 = vec4(p1 - center, 0.0);
+            particle.source2 = vec4(p2 - center, 0.0);
+        }
+        else
+        {
+            vec3 center = (p0 + p1) * 0.5;
+            localPosition = center;
+            particle.source0 = vec4(p0 - center, 2.0);
+            particle.source1 = vec4(p1 - center, 0.0);
+            particle.source2 = vec4(sourceNormal, 0.0);
+        }
+        if (frame.spawnSourceParams.w > 0.0)
+        {
+            localVelocity = sourceNormal * frame.spawnSourceParams.w;
+        }
+    }
+    else
+    {
+        localPosition = SampleSpawnPosition(randomState);
+    }
+
     bool burst = frame.shape.y > 0.5;
     float age = (prewarm && !burst)
         ? Random(randomState) * lifetime * 0.95
@@ -610,12 +820,35 @@ bool SpawnParticle(
     // gravity/drag 也按局部空间作者化并在局部空间积分。其余发射器保持
     // 原来的世界空间模拟，只有顶点阶段才做 billboard 处理。
     bool localSpace = frame.shape.z > 0.5;
-    vec3 simulationPosition = localSpace
-        ? localPosition
-        : (frame.localToWorld * vec4(localPosition, 1.0)).xyz;
-    vec3 simulationVelocity = localSpace
-        ? localVelocity
-        : mat3(frame.localToWorld) * localVelocity;
+    bool skeletalSource = IsSkeletalSpawnSource();
+    vec3 simulationPosition;
+    vec3 simulationVelocity;
+    if (parentSource)
+    {
+        // 父事件已经处在父发射器的模拟空间（当前案例为世界空间）。
+        simulationPosition = localPosition;
+        simulationVelocity = localVelocity;
+    }
+    else if (skeletalSource)
+    {
+        // 骨段/三角面在骨骼网格 model space；粒子中心走 emitter 变换，
+        // source 向量保留 model space 供 mesh vertex 阶段使用。
+        simulationPosition = localSpace
+            ? localPosition
+            : (frame.localToWorld * vec4(localPosition, 1.0)).xyz;
+        simulationVelocity = localSpace
+            ? localVelocity
+            : mat3(frame.localToWorld) * localVelocity;
+    }
+    else
+    {
+        simulationPosition = localSpace
+            ? localPosition
+            : (frame.localToWorld * vec4(localPosition, 1.0)).xyz;
+        simulationVelocity = localSpace
+            ? localVelocity
+            : mat3(frame.localToWorld) * localVelocity;
+    }
 
     // prewarm: 根据随机年龄把粒子积分到“已经存在 age 秒”的状态，
     // 避免首帧整池粒子挤在发射球附近。运行时每帧仍走下面的半隐式积分。
@@ -693,6 +926,19 @@ bool SpawnParticle(
             lifetime,
             vec3(0.0));
     }
+    if (!prewarm)
+    {
+        vec3 eventNormal = length(simulationVelocity) > 1.0e-5
+            ? normalize(simulationVelocity)
+            : vec3(0.0, 1.0, 0.0);
+        EmitSpawnEvent(
+            simulationPosition,
+            simulationVelocity,
+            age,
+            lifetime,
+            eventNormal,
+            0u);
+    }
     return IsParticleAlive(particle);
 }
 
@@ -710,6 +956,11 @@ bool SimulateParticle(
 
     if (frame.simulation.w > 0.5)
     {
+        // parentEmitter 在 prewarm 阶段没有父事件，不能凭空生成。
+        if (IsParentSpawnSource())
+        {
+            return false;
+        }
         // 首帧预热只填稳态存活量：spawnRate * 平均寿命；burst 仍整池喷发。
         // spawnRate=0 的连续发射器预热后保持全池死亡，不能凭空填满。
         bool burst = frame.shape.y > 0.5;
@@ -731,6 +982,9 @@ bool SimulateParticle(
                 {
                     particle.history[historyIndex] = vec4(0.0);
                 }
+                particle.source0 = vec4(0.0);
+                particle.source1 = vec4(0.0);
+                particle.source2 = vec4(0.0);
                 return false;
             }
         }
@@ -745,9 +999,17 @@ bool SimulateParticle(
     {
         float time = frame.simulation.z;
         float frameSeconds = stepSeconds * float(simSteps);
-        float previousTime = max(time - frameSeconds, 0.0);
-        if (floor(time / burstInterval) >
-            floor(previousTime / burstInterval))
+        float offset = frame.burstTiming.x + frame.burstTiming.y;
+        float localTime = time - offset;
+        float previousTime = localTime - frameSeconds;
+        bool crossedStart =
+            previousTime < 0.0 && localTime >= 0.0;
+        bool crossedCycle =
+            localTime >= 0.0 &&
+            previousTime >= 0.0 &&
+            floor(localTime / burstInterval) >
+                floor(previousTime / burstInterval);
+        if (crossedStart || crossedCycle)
         {
             return SpawnParticle(index, particle, randomState, false);
         }
@@ -755,6 +1017,11 @@ bool SimulateParticle(
 
     if (!IsParticleAlive(particle))
     {
+        if (IsParentSpawnSource())
+        {
+            return SpawnParticle(
+                index, particle, randomState, false);
+        }
         // 一次性 burst 只在 prewarm 帧整池喷发；粒子死亡后保持死亡。
         // interval>0 的 burst 已在上面处理跨周期重触发，同样不补发。
         if (burstEmitter)
@@ -884,6 +1151,19 @@ bool SimulateParticle(
                 ? hitNormal / normalLength
                 : vec3(0.0));
     }
+    if (hitAny)
+    {
+        float normalLength = length(hitNormal);
+        EmitSpawnEvent(
+            position,
+            velocity,
+            age,
+            lifetime,
+            normalLength > 1.0e-6
+                ? hitNormal / normalLength
+                : vec3(0.0, 1.0, 0.0),
+            2u);
+    }
     if (wasAlive && !alive && frame.eventParams.y > 0.5)
     {
         EmitParticleEvent(
@@ -894,6 +1174,16 @@ bool SimulateParticle(
             velocity,
             lifetime,
             vec3(0.0));
+    }
+    if (wasAlive && !alive)
+    {
+        EmitSpawnEvent(
+            position,
+            velocity,
+            age,
+            lifetime,
+            vec3(0.0, 1.0, 0.0),
+            1u);
     }
     return alive;
 }

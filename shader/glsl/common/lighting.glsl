@@ -36,6 +36,8 @@ struct ParticleLightGPU
 {
     vec4 positionRadius;  // xyz world cm, w radius cm
     vec4 colorIntensity;  // xyz linear RGB, w cd * 100^2
+    vec4 shadowParams;    // x=slice, y=mode, z=far, w=bias
+    vec4 meta;            // x=IES profile, y=hasIes
 };
 
 layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO

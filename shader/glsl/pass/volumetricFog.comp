@@ -38,6 +38,8 @@ struct ParticleLightGPU
 {
     vec4 positionRadius;
     vec4 colorIntensity;
+    vec4 shadowParams;
+    vec4 meta;
 };
 
 layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO
@@ -45,6 +47,12 @@ layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO
     uvec4 header;
     ParticleLightGPU lights[];
 } particleLightSSBO;
+
+// 体积雾消费与材质/粒子相同的屏幕 tile 灯列表；关闭时回退到连续循环。
+#define VL_LIGHT_GRID_BINDING 2
+#define VL_LIGHT_INDEX_BINDING 3
+#define VL_LIGHT_GRID_PARAMS_BINDING 5
+#include "../common/lightGridSampling.glsl"
 
 // CSM 采样与材质路径共用同一份实现（级联选择/过渡/淡出）。
 // 必须放在 UBOLight 声明之后：csmShadowSampling.glsl 直接引用 uboLight。
@@ -128,13 +136,39 @@ vec3 FogWorldPosition(vec3 viewRay, float viewDepthCm)
 
 // 单点 in-scatter 光照。方向光乘 CSM；点光/聚光乘 localShadowMap；
 // GPU 粒子灯不投影（与表面光照合同一致）。
-vec3 EvaluateFogScattering(vec3 worldPos, vec3 viewDir)
+bool FogLightInGrid(uint lightIndex, uint tileIndex)
+{
+    if (!LightGridEnabled())
+    {
+        return true;
+    }
+    uint count = LightGridVisibleLightCount(tileIndex);
+    for (uint slot = 0u; slot < count; ++slot)
+    {
+        if (LightGridLightIndex(tileIndex, slot) == lightIndex)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+vec3 EvaluateFogScattering(
+    vec3 worldPos,
+    vec3 viewDir,
+    uint tileIndex)
 {
     vec3 result = vec3(0.0);
     float g = uboVP.fogParams0.w;
 
     for (int index = 0; index < uboLight.directionalLightCount; ++index)
     {
+        if (!FogLightInGrid(
+                uboLight.directionalLightOffset + index,
+                tileIndex))
+        {
+            continue;
+        }
         Light light = uboLight.lights[uboLight.directionalLightOffset + index];
         vec3 propagation = normalize(light.directionPad.xyz);
         int cascadeIndex = 0;
@@ -152,6 +186,12 @@ vec3 EvaluateFogScattering(vec3 worldPos, vec3 viewDir)
 
     for (int index = 0; index < uboLight.pointLightCount; ++index)
     {
+        if (!FogLightInGrid(
+                uboLight.pointLightOffset + index,
+                tileIndex))
+        {
+            continue;
+        }
         Light light = uboLight.lights[uboLight.pointLightOffset + index];
         vec3 toLight = light.positionRadius.xyz - worldPos;
         float distanceSq = dot(toLight, toLight);
@@ -187,6 +227,12 @@ vec3 EvaluateFogScattering(vec3 worldPos, vec3 viewDir)
 
     for (int index = 0; index < uboLight.spotLightCount; ++index)
     {
+        if (!FogLightInGrid(
+                uboLight.spotLightOffset + index,
+                tileIndex))
+        {
+            continue;
+        }
         Light light = uboLight.lights[uboLight.spotLightOffset + index];
         vec3 toLight = light.positionRadius.xyz - worldPos;
         float distanceSq = dot(toLight, toLight);
@@ -260,10 +306,18 @@ vec3 EvaluateFogScattering(vec3 worldPos, vec3 viewDir)
         }
         vec3 propagation = toLight / max(distanceCm, 1.0e-4);
         float phase = FogPhase(dot(propagation, viewDir), g);
+        float visibility = SampleLocalLightShadow(
+            localShadowMap,
+            light.shadowParams,
+            light.positionRadius.xyz,
+            vec3(0.0),
+            0.0,
+            worldPos);
         result +=
             light.colorIntensity.rgb *
             light.colorIntensity.w *
             attenuation *
+            visibility *
             phase;
     }
 
@@ -325,7 +379,9 @@ void main()
                 float opticalDepth = density * spanCm;
                 float stepTransmittance = exp(-opticalDepth);
                 vec3 scattering = EvaluateFogScattering(
-                    middleWorld, viewRay) *
+                    middleWorld,
+                    viewRay,
+                    LightGridTileIndexFromFragCoord(vec2(pixel))) *
                     uboVP.fogParams1.rgb *
                     VL_FOG_SCATTER_NORMALIZATION;
                 // 单次散射能量：T * (1 - exp(-sigma*dt)) * 反照率 * 光照。

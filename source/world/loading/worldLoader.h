@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/runtimeResult.h"
+#include "particles/particleDataChannel.h"
 #include "scene/sceneAssetTypes.h"
 
 namespace VL
@@ -20,6 +21,9 @@ struct WorldBuildPlan
     SceneAssetBuildPlan sceneAssetPlan;
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
     std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
+    // 场景级 typed Data Channels；加载后写入 World，供 `$Name` 替换、
+    // 材质绑定与 C# 读取共用同一份值。
+    ParticleDataChannelMap particleDataChannels;
 };
 
 // IO and validation stage for loading a World. It produces a pure build plan;

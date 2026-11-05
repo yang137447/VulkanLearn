@@ -8,6 +8,7 @@
 #include "baseStructs.h"
 #include "ui/uiAction.h"
 #include "debug/debugDrawControl.h"
+#include "particles/particleDataChannel.h"
 
 namespace VL
 {
@@ -44,8 +45,9 @@ enum class RuntimeCommandType
     SetParticleSystemUserParameter,
     // 附着到网格场景对象或 Blueprint 组件；local TRS 由命令携带。
     SetParticleSystemAttachment,
-    // 全局粒子数据通道：name 在 particleDataChannelName，set 用 floatValue，
-    // clear 由 particleDataChannelClear 区分。通道只写当前 active World。
+    // 全局粒子数据通道：name 在 particleDataChannelName；clear 由
+    // particleDataChannelClear 区分。类型化值走 particleDataChannelValue，
+    // 旧 floatValue 仍作为 Float 兼容路径。通道只写当前 active World。
     SetParticleDataChannel,
     // 打印 active World 的全局粒子数据通道快照。
     ReportParticleDataChannels,
@@ -145,6 +147,8 @@ struct RuntimeCommand
     // 两种归属语义。
     std::string particleDataChannelName;
     bool particleDataChannelClear = false;
+    ParticleDataChannelValue particleDataChannelValue;
+    bool particleDataChannelTyped = false;
     std::string particleAttachmentTarget;
     std::string particleAttachmentComponent;
     Eigen::Vector3f particleAttachmentPosition = Eigen::Vector3f::Zero();

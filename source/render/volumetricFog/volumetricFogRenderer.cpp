@@ -300,6 +300,24 @@ void VolumetricFogRenderer::CreateComputeDescriptors(
                         descriptorContext.particleLightBufferInfos->at(
                             imageIndex));
                 }
+                else if (binding.set == 0 && binding.binding == 2)
+                {
+                    write.setBufferInfo(
+                        descriptorContext.lightGridBufferInfos->at(
+                            imageIndex));
+                }
+                else if (binding.set == 0 && binding.binding == 3)
+                {
+                    write.setBufferInfo(
+                        descriptorContext.lightIndexBufferInfos->at(
+                            imageIndex));
+                }
+                else if (binding.set == 0 && binding.binding == 5)
+                {
+                    write.setBufferInfo(
+                        descriptorContext.lightGridParamBufferInfos->at(
+                            imageIndex));
+                }
                 else if (binding.set == 1 && binding.binding == 0)
                 {
                     write.setImageInfo(resources.sceneDepth);

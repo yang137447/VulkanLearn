@@ -180,6 +180,69 @@ struct ParticleLightAsset
 {
     float intensity = 300.0f;
     float radius = 700.0f;
+    // 可选 IES 角度剖面：64 个线性强度样本，覆盖 0..pi 极角。
+    // 空表表示各向同性；非空时由 GPU 粒子灯按光源方向采样。
+    std::vector<float> iesProfile;
+    // 粒子灯是否复用 localShadowMap 的逐灯点光切片。
+    bool castShadows = false;
+    float shadowBias = 2.0f;
+};
+
+// Skeletal mesh particle 的固定/循环姿态选择。clip 为空时使用 bind/rest pose。
+struct ParticleSkeletalPoseAsset
+{
+    std::string clip;
+    float time = 0.0f;
+    float rate = 0.0f;
+    bool loop = true;
+};
+
+// 粒子生成源。skeletalTris/Bones 从 mesh.path 指向的骨骼网格采样；
+// parent 模式从同一 PS 内另一个 emitter 的当前帧 spawn/death/collision 事件生成。
+struct ParticleSpawnSourceAsset
+{
+    // none | skeletalTris | skeletalBones | parentEmitter
+    std::string mode = "none";
+    // skeletalTris/skeletalBones 使用 mesh.path；parentEmitter 使用 parentEmitter。
+    std::string parentEmitter;
+    // spawn | death | collision
+    std::string parentEvent = "death";
+    uint32_t perEvent = 1;
+    Eigen::Vector3f offset = Eigen::Vector3f::Zero();
+    // 三角面/骨段法线方向初速度倍率；0 表示保留作者 velocity。
+    float normalVelocityScale = 0.0f;
+};
+
+// mesh 粒子溶解：噪声阈值从 start 推进到 end，阈值附近保留 edgeWidth 的
+// 自发光边缘。值全部是归一化年龄参数。
+struct ParticleDissolveAsset
+{
+    bool enabled = false;
+    float start = 0.2f;
+    float end = 0.9f;
+    float edgeWidth = 0.08f;
+    Eigen::Vector3f edgeColor = Eigen::Vector3f(1.0f, 0.35f, 0.05f);
+    float edgeStrength = 4.0f;
+    float noiseScale = 4.0f;
+    float noiseSpeed = 0.6f;
+};
+
+struct ParticleFlipbookRateKey
+{
+    float time = 0.0f;
+    float rate = 1.0f;
+};
+
+struct ParticleFlipbookUvKey
+{
+    float time = 0.0f;
+    Eigen::Vector2f value = Eigen::Vector2f::Zero();
+};
+
+struct ParticleRibbonColorKey
+{
+    float time = 0.0f;
+    Eigen::Vector4f color = Eigen::Vector4f::Ones();
 };
 
 // renderMode=="decal" 的 CPU 粒子贴花参数。size 与场景 decal 同义：
@@ -223,8 +286,8 @@ struct ParticleEmitterAsset
     // 但不写 sceneColor，而是在独立 pass 里把屏幕空间 UV 偏移写入
     // RGBA16F distortion 缓冲，由 toneMapping 合成。ribbonWidth 是世界空间
     // 半宽（cm），ribbonSegments 是段数 1..3，ribbonFade 是尾端 alpha 衰减强度。
-    std::string renderMode =
-        "billboard"; // billboard|ribbon|mesh|beam|distortion|light|decal
+    // billboard|ribbon|mesh|skeletalMeshTris|skeletalMeshBones|beam|distortion|light|decal
+    std::string renderMode = "billboard";
     // 只有 renderMode=="light" 需要作者提供 light 对象；hasLight 区分
     // “省略对象”和“对象存在但数值等于默认值”。
     ParticleLightAsset light;
@@ -274,6 +337,8 @@ struct ParticleEmitterAsset
     float ribbonUVTiling = 1.0f;
     // 可选的逐弧长宽度曲线；空表保持恒定 ribbonWidth。
     std::vector<ParticleRibbonWidthKey> ribbonWidthKeys;
+    // 可选的逐弧长颜色曲线；空表保持粒子寿命颜色。
+    std::vector<ParticleRibbonColorKey> ribbonColorKeys;
     // mesh 渲染：路径相对资源根，scale 是网格局部缩放，alignment 是
     // world|camera|velocity。v1 不使用 size 曲线，也不支持 localSpace。
     std::string meshPath;
@@ -286,6 +351,18 @@ struct ParticleEmitterAsset
     // 场景第一个方向光的颜色与方向，不读 lux 强度。billboard/ribbon 不受影响。
     bool meshLighting = true;
     float meshAmbient = 0.2f;
+    // 骨骼网格粒子的姿态选择；静态 mesh 忽略。
+    ParticleSkeletalPoseAsset skeletalPose;
+    // skeletalMeshBones 的骨段半径（局部 cm）。三角面路径忽略。
+    float skeletalBoneRadius = 0.35f;
+    // 粒子来源与父 emitter 触发。renderMode=skeletalMeshTris/Bones 或
+    // 需要粒子级 spawn 时使用。
+    ParticleSpawnSourceAsset spawnSource;
+    // mesh 粒子溶解；静态 mesh 与骨骼网格共用。
+    ParticleDissolveAsset dissolve;
+    // 运行时 Data Channel -> 材质/精灵参数绑定。key 是受控参数名，
+    // value 是 World 级 typed channel 名。
+    std::unordered_map<std::string, std::string> materialBindings;
     // 粒子是否作为阴影 caster 写入 CSM 与局部阴影图。mesh 写真实三角形，
     // billboard/ribbon 用固定阈值的 alpha-test 近似可见卡片；beam/light/
     // decal 忽略该开关。mesh 导入失败回退 billboard 时不投影。
@@ -303,6 +380,9 @@ struct ParticleEmitterAsset
     // burstInterval > 0 时按该周期整池重触发；0 表示只触发一次。
     bool burst = false;
     float burstInterval = 0.0f;
+    // 首次 burst 的延迟与周期相位（秒）；spawnSource=parentEmitter 时忽略。
+    float burstDelay = 0.0f;
+    float burstPhase = 0.0f;
     float spawnRate = 200.0f;
     float lifetimeMin = 1.0f;
     float lifetimeMax = 1.5f;
@@ -456,6 +536,12 @@ struct ParticleEmitterAsset
     bool flipbookBlend = false;
     // 播放速度倍率；同时作用于 fps 与寿命驱动模式。
     float flipbookPlayRate = 1.0f;
+    // 逐粒子初始帧抖动（帧数）；用稳定粒子相位偏移 [0, jitter)。
+    float flipbookStartFrameJitter = 0.0f;
+    // 逐寿命播放速率/UV 曲线；空表保持常量。
+    std::vector<ParticleFlipbookRateKey> flipbookPlayRateKeys;
+    std::vector<ParticleFlipbookUvKey> flipbookUvOffsetKeys;
+    std::vector<ParticleFlipbookUvKey> flipbookUvScaleKeys;
     // 非空时必须与帧区间长度 endFrame-startFrame+1 完全一致。
     // 每项是 >0 的相对时长权重：fps>0 时一轮固定为 frameCount/fps 秒，
     // 每帧实际秒数 = weight / totalWeight * frameCount / fps；

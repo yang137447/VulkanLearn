@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "world/worldSnapshot.h"
+#include "particles/particleDataChannel.h"
 
 namespace VL
 {
@@ -50,7 +51,7 @@ struct RenderScene
     float simulationDeltaSeconds = 1.0f / 60.0f;
     // World 级粒子数据通道的逐帧冻结副本；per-system userParameters
     // 在运行时解析时覆盖同名通道。
-    std::unordered_map<std::string, float> particleDataChannels;
+    ParticleDataChannelMap particleDataChannels;
     CameraSnapshot camera;
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;

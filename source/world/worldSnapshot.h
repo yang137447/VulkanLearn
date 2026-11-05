@@ -17,6 +17,7 @@
 #include "environmentType.h"
 #include "render/volumetricFog/volumetricFogSettings.h"
 #include "particles/particleAsset.h"
+#include "particles/particleDataChannel.h"
 #include "particles/particleRuntimeState.h"
 #include "render/camera/cameraExposure.h"
 
@@ -246,7 +247,7 @@ struct WorldSnapshot
     float simulationDeltaSeconds = 1.0f / 60.0f;
     // 全局粒子数据通道的逐帧副本。它与 ParticleSystemSnapshot::userParameters
     // 是不同命名空间：这里没有实例归属，渲染器负责按约定合并 `$Name`。
-    std::unordered_map<std::string, float> particleDataChannels;
+    ParticleDataChannelMap particleDataChannels;
     CameraSnapshot camera;
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;

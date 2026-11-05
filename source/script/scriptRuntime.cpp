@@ -142,12 +142,12 @@ nlohmann::json BuildParticleDataChannelsJson(const World& world)
 {
     // 排序后写入 JSON，避免 unordered_map 迭代顺序让每次 tick 的 payload
     // 字节发生变化，也便于 C#/诊断按稳定顺序比较。
-    std::map<std::string, float> ordered(
+    std::map<std::string, ParticleDataChannelValue> ordered(
         world.GetParticleDataChannels().begin(),
         world.GetParticleDataChannels().end());
     nlohmann::json result = nlohmann::json::object();
     for (const auto& [name, value] : ordered)
-        result[name] = value;
+        result[name] = value.ToJson();
     return result;
 }
 
@@ -578,13 +578,49 @@ void ScriptRuntimeSubsystem::ApplyParticleCommands(World& world, const std::stri
         // 与逐实例 userParameters 分开存储，避免把全局值写进某个系统快照。
         if (operation == "data" || operation == "clearData")
         {
-            const std::string key =
-                ParticleCommandString(command, "key", operation);
-            const bool applied = operation == "data"
-                ? world.SetParticleDataChannel(
-                    key,
-                    ParticleCommandNumber(command, "value", operation))
-                : world.ClearParticleDataChannel(key);
+            const std::string key = command.contains("key")
+                ? ParticleCommandString(command, "key", operation)
+                : ParticleCommandString(command, "name", operation);
+            bool applied = false;
+            if (operation == "clearData")
+            {
+                applied = world.ClearParticleDataChannel(key);
+            }
+            else
+            {
+                ParticleDataChannelValue value;
+                std::string parseError;
+                bool parsed = false;
+                if (command.contains("type") || command.contains("values"))
+                {
+                    nlohmann::json payload = nlohmann::json::object();
+                    if (command.contains("type"))
+                        payload["type"] = command.at("type");
+                    if (command.contains("values"))
+                        payload["values"] = command.at("values");
+                    else if (command.contains("value"))
+                        payload["value"] = command.at("value");
+                    parsed = ParticleDataChannelValue::ParseJson(
+                        payload, value, parseError);
+                }
+                else if (command.contains("value"))
+                {
+                    parsed = ParticleDataChannelValue::ParseJson(
+                        command.at("value"), value, parseError);
+                }
+                else
+                {
+                    parseError =
+                        "Particle data command requires value or values.";
+                }
+                if (!parsed)
+                {
+                    ThrowParticleCommand(
+                        "data channel '" + key +
+                        "' was rejected: " + parseError);
+                }
+                applied = world.SetParticleDataChannel(key, value);
+            }
             if (!applied)
                 ThrowParticleCommand(
                     operation + " was rejected for data channel '" +

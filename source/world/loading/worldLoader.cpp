@@ -9,6 +9,7 @@
 #include "scene/validation/sceneAssetValidator.h"
 #include "commonFunction.h"
 #include "script/scriptBlueprintAsset.h"
+#include "world/world.h"
 
 namespace VL
 {
@@ -112,6 +113,43 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
         buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(
             scenePath, buildPlan.sceneJson, particleDocuments);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
+        // 场景级 typed Data Channel：value 语法与 Console/C# 共用
+        // ParticleDataChannelValue::ParseJson，类型不再退化为 float map。
+        if (buildPlan.sceneJson.contains("particleDataChannels"))
+        {
+            const nlohmann::json& channels =
+                buildPlan.sceneJson.at("particleDataChannels");
+            if (!channels.is_object())
+            {
+                throw std::runtime_error(
+                    "Scene particleDataChannels must be an object");
+            }
+            if (channels.size() > kMaxParticleDataChannels)
+            {
+                throw std::runtime_error(
+                    "Scene particleDataChannels exceeds 64 entries");
+            }
+            for (auto channel = channels.begin();
+                 channel != channels.end(); ++channel)
+            {
+                std::string error;
+                if (!ValidateParticleDataChannelName(channel.key(), error))
+                {
+                    throw std::runtime_error(
+                        "Scene particleDataChannels: " + error);
+                }
+                ParticleDataChannelValue value;
+                if (!ParticleDataChannelValue::ParseJson(
+                        channel.value(), value, error))
+                {
+                    throw std::runtime_error(
+                        "Scene particleDataChannels['" + channel.key() +
+                        "']: " + error);
+                }
+                buildPlan.particleDataChannels.emplace(
+                    channel.key(), value);
+            }
+        }
         return RuntimeResult<WorldBuildPlan>::Success(std::move(buildPlan));
     }
     catch (const std::exception& exception)

@@ -34,14 +34,18 @@ struct alignas(16) ParticleLightGPU
 {
     Eigen::Vector4f positionRadius = Eigen::Vector4f::Zero();
     Eigen::Vector4f colorIntensity = Eigen::Vector4f::Zero();
+    // x=local shadow slice, y=mode, z=far cm, w=bias cm。
+    Eigen::Vector4f shadowParams = Eigen::Vector4f(-1.0f, 0.0f, 0.0f, 0.0f);
+    // x=IES profile index, y=has Ies, z/w reserved。
+    Eigen::Vector4f meta = Eigen::Vector4f::Zero();
 };
 
 static_assert(
     sizeof(ParticleLightSSBOHeader) == 16,
     "ParticleLight SSBO header must match std430 uvec4");
 static_assert(
-    sizeof(ParticleLightGPU) == 32,
-    "ParticleLightGPU must match std430 two vec4 layout");
+    sizeof(ParticleLightGPU) == 64,
+    "ParticleLightGPU must match std430 four vec4 layout");
 static_assert(
     offsetof(ParticleLightGPU, colorIntensity) == 16,
     "ParticleLightGPU colorIntensity offset must match std430");

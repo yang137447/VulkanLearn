@@ -7,12 +7,14 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "particles/particleAsset.h"
+#include "particles/particleDataChannel.h"
 
 namespace VL
 {
@@ -43,6 +45,34 @@ CombineParticleRuntimeParameters(
     return combined;
 }
 
+// 类型化通道的标量投影：Float/Int/Bool 进入旧的 float 参数表，
+// 向量与四元数只能通过下文的 `$Name` JSON 替换路径消费。
+inline std::unordered_map<std::string, float>
+CombineParticleRuntimeParametersTyped(
+    const ParticleDataChannelMap& dataChannels,
+    const std::unordered_map<std::string, float>& userParameters)
+{
+    std::unordered_map<std::string, float> combined;
+    combined.reserve(dataChannels.size() + userParameters.size());
+    for (const auto& [key, value] : dataChannels)
+    {
+        float scalar = 0.0f;
+        if (!key.empty() && value.TryGetFloat(scalar) &&
+            std::isfinite(scalar))
+        {
+            combined[key] = scalar;
+        }
+    }
+    for (const auto& [key, value] : userParameters)
+    {
+        if (!key.empty() && std::isfinite(value))
+        {
+            combined[key] = value;
+        }
+    }
+    return combined;
+}
+
 // 只把作者模块真正引用过的 `$Name` 放进缓存签名。否则任意全局通道变化
 // 都会让所有参数化系统重解析，即使它们的模块根本没有引用该通道。
 inline std::unordered_map<std::string, float>
@@ -55,6 +85,27 @@ FilterParticleRuntimeParameters(
         return {};
     }
     std::unordered_map<std::string, float> filtered;
+    filtered.reserve(asset.userParameterReferences.size());
+    for (const std::string& name : asset.userParameterReferences)
+    {
+        const auto parameter = parameters.find(name);
+        if (parameter != parameters.end())
+        {
+            filtered.emplace(parameter->first, parameter->second);
+        }
+    }
+    return filtered;
+}
+
+inline ParticleDataChannelMap FilterParticleRuntimeParametersTyped(
+    const ParticleSystemAsset& asset,
+    const ParticleDataChannelMap& parameters)
+{
+    ParticleDataChannelMap filtered;
+    if (asset.userParameterReferences.empty())
+    {
+        return filtered;
+    }
     filtered.reserve(asset.userParameterReferences.size());
     for (const std::string& name : asset.userParameterReferences)
     {
@@ -162,6 +213,72 @@ inline nlohmann::json MergeParticleUserParameters(
     return merged;
 }
 
+// 类型化模块字段替换：作者把整个字段写成 "$Name" 时，按通道类型替换为
+// number/bool/数组。逐实例 float userParameters 同名时优先，保持旧的
+// “实例覆盖通道”语义；Float 通道也会在这里直接替换，因此未知引用仍由
+// ParseJson 的原有路径报错。
+inline void SubstituteTypedParticleDataChannels(
+    nlohmann::json& value,
+    const ParticleDataChannelMap& dataChannels,
+    const std::unordered_map<std::string, float>& userParameters,
+    std::unordered_set<std::string>& replacedReferences,
+    const std::string& fieldPath = {})
+{
+    if (value.is_object())
+    {
+        for (auto child = value.begin(); child != value.end(); ++child)
+        {
+            if (child.key() == "userParameters")
+            {
+                continue;
+            }
+            SubstituteTypedParticleDataChannels(
+                child.value(),
+                dataChannels,
+                userParameters,
+                replacedReferences,
+                fieldPath.empty()
+                    ? child.key()
+                    : fieldPath + "." + child.key());
+        }
+        return;
+    }
+    if (value.is_array())
+    {
+        for (size_t index = 0; index < value.size(); ++index)
+        {
+            SubstituteTypedParticleDataChannels(
+                value.at(index),
+                dataChannels,
+                userParameters,
+                replacedReferences,
+                fieldPath + "[" + std::to_string(index) + "]");
+        }
+        return;
+    }
+    if (!value.is_string())
+    {
+        return;
+    }
+    const std::string reference = value.get<std::string>();
+    if (reference.empty() || reference.front() != '$')
+    {
+        return;
+    }
+    const std::string name = reference.substr(1);
+    if (userParameters.find(name) != userParameters.end())
+    {
+        return;
+    }
+    const auto channel = dataChannels.find(name);
+    if (channel == dataChannels.end())
+    {
+        return;
+    }
+    value = channel->second.ToJson();
+    replacedReferences.insert(name);
+}
+
 // 运行时重解析只包含作者 JSON 里的 emitter；World 运行时新增的 slot
 // 不在作者 JSON 中。按 name 把解析结果套回快照顺序，未匹配项保留
 // 快照资产，避免运行时发射器被覆盖丢失。
@@ -213,6 +330,51 @@ inline ParticleSystemAsset ParseParticleAssetWithRuntimeParameters(
     parsed.emitters = ReconcileParticleEmitterOverrides(
         parsed.emitters, base.emitters);
     parsed.authoringJson = base.authoringJson;
+    return parsed;
+}
+
+inline ParticleSystemAsset ParseParticleAssetWithRuntimeParametersTyped(
+    const ParticleSystemAsset& base,
+    const ParticleDataChannelMap& dataChannels,
+    const std::unordered_map<std::string, float>& userParameters,
+    const std::filesystem::path& resourceRoot = {})
+{
+    for (const auto& [name, value] : dataChannels)
+    {
+        std::string error;
+        if (name.empty() || !value.Validate(error))
+        {
+            throw std::invalid_argument(
+                "Particle data channel '" + name +
+                "' is invalid: " +
+                (error.empty() ? "name must be non-empty" : error));
+        }
+    }
+    const std::unordered_map<std::string, float> combined =
+        CombineParticleRuntimeParametersTyped(dataChannels, userParameters);
+    if (!base.authoringJson ||
+        (combined.empty() && dataChannels.empty()))
+    {
+        return base;
+    }
+
+    nlohmann::json merged = MergeParticleUserParameters(
+        *base.authoringJson, combined);
+    std::unordered_set<std::string> typedReferences;
+    SubstituteTypedParticleDataChannels(
+        merged, dataChannels, userParameters, typedReferences);
+    const ParticleCollisionResourceCache collisionCache =
+        BuildParticleCollisionResourceCache(base);
+    ParticleSystemAsset parsed = ParticleAssetLoader::ParseJson(
+        merged,
+        base.sourcePath,
+        resourceRoot,
+        &collisionCache);
+    parsed.emitters = ReconcileParticleEmitterOverrides(
+        parsed.emitters, base.emitters);
+    parsed.authoringJson = base.authoringJson;
+    parsed.userParameterReferences.insert(
+        typedReferences.begin(), typedReferences.end());
     return parsed;
 }
 

@@ -55,7 +55,8 @@ public static partial class NativeBridge
             nextComponent = context.NextComponent,
             nextParticle = context.NextParticle,
             nextParticleEmitter = context.NextParticleEmitter,
-            particleDataChannels = context.Services.ParticleDataChannelSnapshot(),
+            particleDataChannels = context.Services.ParticleDataChannelSnapshot()
+                .ToDictionary(p => p.Key, p => p.Value.ToPayload(), StringComparer.Ordinal),
             contacts = context.Contacts.OrderBy(p => p.Item1, StringComparer.Ordinal)
                 .ThenBy(p => p.Item2, StringComparer.Ordinal).Select(p => new[] { p.Item1, p.Item2 }).ToArray(),
             triggers = context.Triggers.OrderBy(p => p.Item1, StringComparer.Ordinal)
@@ -102,8 +103,16 @@ public static partial class NativeBridge
                 context.NextParticleEmitter, nextParticleEmitter.GetUInt64());
         if (snapshot.TryGetProperty("particleDataChannels", out var particleDataChannels))
             context.Services.RestoreParticleDataChannels(
-                particleDataChannels.EnumerateObject().ToDictionary(
-                    p => p.Name, p => p.Value.GetSingle(), StringComparer.Ordinal));
+                particleDataChannels.EnumerateObject()
+                    .Where(p => ParticleDataChannelValue.TryParse(p.Value, out _))
+                    .ToDictionary(
+                        p => p.Name,
+                        p =>
+                        {
+                            ParticleDataChannelValue.TryParse(p.Value, out var value);
+                            return value;
+                        },
+                        StringComparer.Ordinal));
         var runtimeStates = snapshot.GetProperty("states").EnumerateArray()
             .ToDictionary(n => n.GetProperty("id").GetString()!, StringComparer.Ordinal);
         foreach (var instance in context.Instances)

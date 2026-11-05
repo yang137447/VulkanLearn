@@ -35,6 +35,9 @@ bool ResolveParticleRibbonParticle(
     {
         particle.history[historyIndex] = vec4(0.0);
     }
+    particle.source0 = vec4(0.0);
+    particle.source1 = vec4(0.0);
+    particle.source2 = vec4(0.0);
 
     uint count = uint(particleBuffer.particles.length());
     if (drawIndex >= count)
@@ -113,7 +116,7 @@ bool BuildParticleRibbonVertex(
     bool useSortedPairs,
     out ParticleRibbonVertex outVertex)
 {
-    uint segments = clamp(uint(frame.ribbonParams.x + 0.5), 1u, 32u);
+    uint segments = clamp(uint(frame.ribbonParams.x + 0.5), 1u, 64u);
     uint verticesPerParticle = segments * 6u;
     uint localVertex = vertexIndex % verticesPerParticle;
 
@@ -199,7 +202,7 @@ bool BuildParticleRibbonVertex(
     vec3 worldPosition = pathPosition + side * (corner.y * width);
 
     // 颜色仍按粒子寿命求值；尾端从当前端(0)向最旧历史端(1)线性衰减。
-    vec4 color = EvaluateColorCurve(lifeT);
+    vec4 color = EvaluateRibbonColor(t, EvaluateColorCurve(lifeT));
     color.a *= frame.render.w;
     color.a *= mix(
         1.0,

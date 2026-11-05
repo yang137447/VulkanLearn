@@ -11,6 +11,10 @@ struct Particle
     // 最近 16 帧的位置快照，供 ribbon 条带使用；xyz 是记录时的模拟空间
     // 位置，w 是记录时的 age。history[0] 是上一帧，history[15] 最旧。
     vec4 history[16];
+    // skeletalTris/Bones 逐粒子源；source0.w = 0 none / 1 triangle / 2 bone。
+    vec4 source0;
+    vec4 source1;
+    vec4 source2;
 };
 
 // std140 布局与 particleRenderer.h::FrameUniforms 一一对应。
@@ -165,6 +169,35 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 flipbookParams5;
     // x = EOO 打包纹理, y = EOO emissive 强度, z/w 保留。
     vec4 textureModeParams;
+    // x = source mode, y = parent event, z = perEvent,
+    // w = normalVelocityScale.
+    vec4 spawnSourceParams;
+    // xyz = source/parent offset (cm).
+    vec4 spawnSourceOffset;
+    // x = burstDelay, y = burstPhase.
+    vec4 burstTiming;
+    // x = emit spawn events for children.
+    vec4 spawnEventOutput;
+    // x=start,y=end,z=edgeWidth,w=noiseScale
+    vec4 dissolveParams;
+    // x=edgeStrength,y=noiseSpeed,z=enabled
+    vec4 dissolveParams2;
+    // xyz=edgeColor
+    vec4 dissolveEdgeColor;
+    // x=time,y=rate; x=time,zw=uv offset; x=time,zw=uv scale.
+    vec4 flipbookPlayRateKeys[8];
+    vec4 flipbookUvOffsetKeys[8];
+    vec4 flipbookUvScaleKeys[8];
+    vec4 flipbookRateKeyTimes[2];
+    vec4 flipbookUvKeyTimes[2];
+    // x=rateCount,y=offsetCount,z=scaleCount,w=startFrameJitter
+    vec4 flipbookParams6;
+    vec4 ribbonColorKeys[8];
+    vec4 ribbonColorKeyTimes[2];
+    vec4 translucencyVolumeMin;      // xyz min, w enabled
+    vec4 translucencyVolumeInvExtent; // xyz 1/extent, w intensity
+    vec4 particleLightShadowParams;  // slice,type,far,bias
+    vec4 particleLightIesParams;     // profileIndex,hasIes,0,0
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -314,6 +347,44 @@ float EvaluateRibbonWidth(float t)
     return frame.ribbonWidthKeys[count - 1].y;
 }
 
+float RibbonColorKeyTime(int index)
+{
+    return index < 4
+        ? frame.ribbonColorKeyTimes[0][index]
+        : frame.ribbonColorKeyTimes[1][index - 4];
+}
+
+vec4 EvaluateRibbonColor(float t, vec4 fallback)
+{
+    int count = int(frame.ribbonUVParams.z + 0.5);
+    if (count <= 0)
+    {
+        return fallback;
+    }
+    float clamped = clamp(t, 0.0, 1.0);
+    if (clamped <= RibbonColorKeyTime(0))
+    {
+        return frame.ribbonColorKeys[0];
+    }
+    if (clamped >= RibbonColorKeyTime(count - 1))
+    {
+        return frame.ribbonColorKeys[count - 1];
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = RibbonColorKeyTime(index);
+        float t1 = RibbonColorKeyTime(index + 1);
+        if (clamped >= t0 && clamped <= t1)
+        {
+            return mix(
+                frame.ribbonColorKeys[index],
+                frame.ribbonColorKeys[index + 1],
+                (clamped - t0) / max(t1 - t0, 1.0e-5));
+        }
+    }
+    return frame.ribbonColorKeys[count - 1];
+}
+
 struct ParticleFlipbookFrame
 {
     // 当前帧（几何/pivot/rotation 使用）与用于线性混合的下一帧。
@@ -321,6 +392,92 @@ struct ParticleFlipbookFrame
     float nextLocalFrameIndex;
     float blend;
 };
+
+float FlipbookRateKeyTime(int index)
+{
+    return index < 4
+        ? frame.flipbookRateKeyTimes[0][index]
+        : frame.flipbookRateKeyTimes[1][index - 4];
+}
+
+float FlipbookUvKeyTime(int index)
+{
+    return index < 4
+        ? frame.flipbookUvKeyTimes[0][index]
+        : frame.flipbookUvKeyTimes[1][index - 4];
+}
+
+float EvaluateFlipbookPlayRate(float lifeT)
+{
+    int count = int(frame.flipbookParams6.x);
+    if (count <= 0)
+    {
+        return 1.0;
+    }
+    float t = clamp(lifeT, 0.0, 1.0);
+    if (t <= FlipbookRateKeyTime(0))
+    {
+        return frame.flipbookPlayRateKeys[0].y;
+    }
+    if (t >= FlipbookRateKeyTime(count - 1))
+    {
+        return frame.flipbookPlayRateKeys[count - 1].y;
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = FlipbookRateKeyTime(index);
+        float t1 = FlipbookRateKeyTime(index + 1);
+        if (t >= t0 && t <= t1)
+        {
+            return mix(
+                frame.flipbookPlayRateKeys[index].y,
+                frame.flipbookPlayRateKeys[index + 1].y,
+                (t - t0) / max(t1 - t0, 1.0e-5));
+        }
+    }
+    return frame.flipbookPlayRateKeys[count - 1].y;
+}
+
+vec2 EvaluateFlipbookUvCurve(
+    int count,
+    bool scaleCurve,
+    float lifeT)
+{
+    if (count <= 0)
+    {
+        return scaleCurve ? vec2(1.0) : vec2(0.0);
+    }
+    const int maxKeys = 8;
+    vec2 values[8];
+    for (int index = 0; index < maxKeys; ++index)
+    {
+        values[index] = scaleCurve
+            ? frame.flipbookUvScaleKeys[index].zw
+            : frame.flipbookUvOffsetKeys[index].zw;
+    }
+    float t = clamp(lifeT, 0.0, 1.0);
+    if (t <= FlipbookUvKeyTime(0))
+    {
+        return values[0];
+    }
+    if (t >= FlipbookUvKeyTime(count - 1))
+    {
+        return values[count - 1];
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = FlipbookUvKeyTime(index);
+        float t1 = FlipbookUvKeyTime(index + 1);
+        if (t >= t0 && t <= t1)
+        {
+            return mix(
+                values[index],
+                values[index + 1],
+                (t - t0) / max(t1 - t0, 1.0e-5));
+        }
+    }
+    return values[count - 1];
+}
 
 // 统一 emitter 时间与逐粒子年龄两种 SubUV 播放。blend 关闭时 next 与
 // blend 不参与采样；durations 表仍只按相对权重分配帧时间。
@@ -332,7 +489,11 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
     float startFrame = frame.flipbookParams.z;
     float endFrame = frame.flipbookParams.w;
     float frameCount = max(endFrame - startFrame + 1.0, 1.0);
-    float playRate = clamp(frame.flipbookParams5.z, 0.0, 16.0);
+    float playRate = clamp(
+        frame.flipbookParams5.z *
+            EvaluateFlipbookPlayRate(lifeT),
+        0.0,
+        16.0);
     float fps = frame.flipbookParams.x * playRate;
     bool perParticle = frame.flipbookParams5.x > 0.5;
     bool blendEnabled = frame.flipbookParams5.y > 0.5;
@@ -445,6 +606,17 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
     result.nextLocalFrameIndex =
         clamp(nextFrame, 0.0, frameCount - 1.0);
     result.blend = blendEnabled ? clamp(blend, 0.0, 1.0) : 0.0;
+    if (perParticle)
+    {
+        result.localFrameIndex = mod(
+            result.localFrameIndex +
+                fract(seed) * frame.flipbookParams6.w,
+            frameCount);
+        result.nextLocalFrameIndex = mod(
+            result.nextLocalFrameIndex +
+                fract(seed) * frame.flipbookParams6.w,
+            frameCount);
+    }
     return result;
 }
 

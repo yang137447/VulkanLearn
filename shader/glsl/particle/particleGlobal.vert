@@ -18,6 +18,7 @@ struct GatheredBillboard
     vec4 lightParams2;
     vec4 flags2;
     vec4 flags3;
+    vec4 uvTransform;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -162,6 +163,8 @@ void main()
         vSpriteUV = mix(
             record.uvRect.xy, record.uvRect.zw, vUV);
     }
+    vSpriteUV = vSpriteUV * record.uvTransform.xy +
+        record.uvTransform.zw;
     vec2 atlasCell = vec2(
         mod(record.frame.x, record.params.z),
         floor(record.frame.x / record.params.z));

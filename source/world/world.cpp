@@ -1020,6 +1020,13 @@ bool World::ClearParticleSystemUserParameter(const std::string& name,
 
 bool World::SetParticleDataChannel(const std::string& name, float value)
 {
+    return SetParticleDataChannel(
+        name, ParticleDataChannelValue::MakeFloat(value));
+}
+
+bool World::SetParticleDataChannel(const std::string& name,
+    const ParticleDataChannelValue& value)
+{
     std::string error;
     if (!ValidateParticleDataChannelName(name, error) ||
         !ValidateParticleDataChannelValue(value, error))
@@ -1046,12 +1053,31 @@ bool World::GetParticleDataChannel(const std::string& name,
     if (!ValidateParticleDataChannelName(name, error)) return false;
     const auto found = particleDataChannels.find(name);
     if (found == particleDataChannels.end()) return false;
+    return found->second.TryGetFloat(outValue);
+}
+
+bool World::GetParticleDataChannelValue(const std::string& name,
+    ParticleDataChannelValue& outValue) const
+{
+    std::string error;
+    if (!ValidateParticleDataChannelName(name, error)) return false;
+    const auto found = particleDataChannels.find(name);
+    if (found == particleDataChannels.end()) return false;
     outValue = found->second;
     return true;
 }
 
 bool ExecuteParticleDataChannelCommand(World& world, bool clear,
     const std::string& name, float value, std::string& outError)
+{
+    return ExecuteParticleDataChannelCommand(
+        world, clear, name,
+        ParticleDataChannelValue::MakeFloat(value), outError);
+}
+
+bool ExecuteParticleDataChannelCommand(World& world, bool clear,
+    const std::string& name, const ParticleDataChannelValue& value,
+    std::string& outError)
 {
     if (!ValidateParticleDataChannelName(name, outError)) return false;
     if (clear)

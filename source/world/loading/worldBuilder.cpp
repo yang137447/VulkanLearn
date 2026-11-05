@@ -448,6 +448,19 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             world->AddSpeedTreeWindProfile(profile);
         }
 
+        for (const auto& [name, value] :
+             worldBuildPlan.particleDataChannels)
+        {
+            if (!world->SetParticleDataChannel(name, value))
+            {
+                return RuntimeResult<std::shared_ptr<World>>::Failure(
+                    MakeRuntimeError(
+                        "WorldBuilder.ParticleDataChannelRejected",
+                        "Scene particle data channel was rejected: " + name,
+                        worldBuildPlan.scenePath));
+            }
+        }
+
         for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
         {
             WorldMeshObject object;

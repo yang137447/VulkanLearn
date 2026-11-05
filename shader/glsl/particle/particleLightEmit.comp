@@ -10,6 +10,8 @@ struct ParticleLightGPU
 {
     vec4 positionRadius;
     vec4 colorIntensity;
+    vec4 shadowParams;
+    vec4 meta;
 };
 
 layout(std430, set = 0, binding = 2) buffer ParticleLightOutput
@@ -64,5 +66,9 @@ void main()
     // LightGPU 的点光/聚光约定：cd 在 GPU 上传边界乘 100^2，配合 cm 距离。
     particleLightOutput.lights[slot].colorIntensity =
         vec4(color, intensity * 10000.0);
+    particleLightOutput.lights[slot].shadowParams =
+        frame.particleLightShadowParams;
+    particleLightOutput.lights[slot].meta =
+        frame.particleLightIesParams;
     atomicMax(particleLightOutput.header.x, slot + 1u);
 }

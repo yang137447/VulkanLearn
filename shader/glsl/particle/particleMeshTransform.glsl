@@ -40,6 +40,9 @@ bool ResolveParticleMeshParticle(
     {
         particle.history[historyIndex] = vec4(0.0);
     }
+    particle.source0 = vec4(0.0);
+    particle.source1 = vec4(0.0);
+    particle.source2 = vec4(0.0);
 
     uint count = uint(particleBuffer.particles.length());
     if (drawIndex >= count)

@@ -22,6 +22,7 @@
 #include "render/volumetricFog/volumetricFogSettings.h"
 #include "world/worldSnapshot.h"
 #include "particles/particleAsset.h"
+#include "particles/particleDataChannel.h"
 #include "particles/particleRuntimeState.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
@@ -97,11 +98,20 @@ inline bool ValidateParticleDataChannelValue(float value,
     return true;
 }
 
+inline bool ValidateParticleDataChannelValue(
+    const ParticleDataChannelValue& value, std::string& outError)
+{
+    return value.Validate(outError);
+}
+
 class World;
 // 运行时命令桥的单一落点：先完整校验，再调用 World 写入，任何失败都保证
 // 无副作用。Console 使用上面的纯校验；执行端与测试共用这个函数。
 bool ExecuteParticleDataChannelCommand(World& world, bool clear,
     const std::string& name, float value, std::string& outError);
+bool ExecuteParticleDataChannelCommand(World& world, bool clear,
+    const std::string& name, const ParticleDataChannelValue& value,
+    std::string& outError);
 
 struct WorldSquareAreaLight
 {
@@ -364,15 +374,21 @@ public:
         const std::string& key, float value);
     bool ClearParticleSystemUserParameter(const std::string& name,
         const std::string& key);
-    // 全局命名标量通道：最多 64 项，key 1..64 UTF-8 字节，value 有限且 |v|<=1e6。
+    // 全局命名类型化通道：最多 64 项，key 1..64 UTF-8 字节，所有组件有限且
+    // |v|<=1e6。float 重载保留为 Float 类型的便捷入口。
     // 它们不属于任何 Blueprint owner，也不与逐实例 userParameters 合并存储；
     // 快照按帧冻结副本，渲染器再决定 `$Name` 的解析优先级。
     bool SetParticleDataChannel(const std::string& name, float value);
+    bool SetParticleDataChannel(const std::string& name,
+        const ParticleDataChannelValue& value);
     // 返回 false 表示 key 非法或当前不存在；不会为 clear 隐式创建条目。
     bool ClearParticleDataChannel(const std::string& name);
+    // 仅标量类型（Float/Int/Bool）可读为 float；向量/四元数返回 false。
     bool GetParticleDataChannel(const std::string& name,
         float& outValue) const;
-    const std::unordered_map<std::string, float>&
+    bool GetParticleDataChannelValue(const std::string& name,
+        ParticleDataChannelValue& outValue) const;
+    const ParticleDataChannelMap&
         GetParticleDataChannels() const
     { return particleDataChannels; }
     size_t GetParticleDataChannelCount() const
@@ -488,7 +504,7 @@ private:
     ParticleSystemBudget particleBudget;
     // 全局通道不随 Blueprint 上下文生命周期增删；Play/Stop 与热重载只替换
     // 脚本 owner，World 仍是同一实例，因此通道状态必须留在 World 上。
-    std::unordered_map<std::string, float> particleDataChannels;
+    ParticleDataChannelMap particleDataChannels;
     std::vector<WorldParticleRuntimeEvent> particleRuntimeEvents;
     std::unordered_set<std::string> particleEventCaptureOwners;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;

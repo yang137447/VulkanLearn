@@ -505,6 +505,8 @@ ParticleEmitterAsset ParseEmitter(
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
+        emitter.renderMode != "skeletalMeshTris" &&
+        emitter.renderMode != "skeletalMeshBones" &&
         emitter.renderMode != "beam" &&
         emitter.renderMode != "distortion" &&
         emitter.renderMode != "light" &&
@@ -512,6 +514,7 @@ ParticleEmitterAsset ParseEmitter(
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
+            "'skeletalMeshTris', 'skeletalMeshBones', "
             "'beam', 'distortion', 'light' or 'decal'");
     }
     emitter.ribbonWidth = ReadFiniteFloat(
@@ -562,6 +565,38 @@ ParticleEmitterAsset ParseEmitter(
             }
             previousTime = key.time;
             emitter.ribbonWidthKeys.push_back(key);
+        }
+    }
+    if (json.contains("ribbonColorKeys"))
+    {
+        const nlohmann::json& colorKeys = json.at("ribbonColorKeys");
+        if (!colorKeys.is_array() ||
+            colorKeys.size() > kMaxParticleCurveKeys)
+        {
+            throw std::invalid_argument(
+                "Particle ribbonColorKeys allows at most 8 keys");
+        }
+        emitter.ribbonColorKeys.clear();
+        float previousTime = -1.0f;
+        for (const nlohmann::json& entry : colorKeys)
+        {
+            if (!entry.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonColorKeys entry must be an object");
+            }
+            ParticleRibbonColorKey key;
+            key.time = ReadFiniteFloat(entry, "time", 0.0f);
+            key.color = ReadVec4(entry, "color", key.color);
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousTime)
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonColorKeys times must be in [0,1] "
+                    "and strictly increasing");
+            }
+            previousTime = key.time;
+            emitter.ribbonColorKeys.push_back(key);
         }
     }
     if (json.contains("beam"))
@@ -722,6 +757,36 @@ ParticleEmitterAsset ParseEmitter(
             light, "intensity", emitter.light.intensity);
         emitter.light.radius = ReadFiniteFloat(
             light, "radius", emitter.light.radius);
+        emitter.light.castShadows = light.value(
+            "castShadows", emitter.light.castShadows);
+        emitter.light.shadowBias = ReadFiniteFloat(
+            light, "shadowBias", emitter.light.shadowBias);
+        if (light.contains("iesProfile"))
+        {
+            const nlohmann::json& ies = light.at("iesProfile");
+            if (!ies.is_array() || ies.size() > 64)
+            {
+                throw std::invalid_argument(
+                    "Particle light.iesProfile allows at most 64 samples");
+            }
+            emitter.light.iesProfile.clear();
+            for (const nlohmann::json& sample : ies)
+            {
+                if (!sample.is_number())
+                {
+                    throw std::invalid_argument(
+                        "Particle light.iesProfile samples must be numbers");
+                }
+                const float value = sample.get<float>();
+                if (!std::isfinite(value) || value < 0.0f || value > 64.0f)
+                {
+                    throw std::invalid_argument(
+                        "Particle light.iesProfile samples must be finite "
+                        "and in [0,64]");
+                }
+                emitter.light.iesProfile.push_back(value);
+            }
+        }
     }
     if (json.contains("decal"))
     {
@@ -848,6 +913,105 @@ ParticleEmitterAsset ParseEmitter(
         emitter.materialInstancePath =
             json.at("materialInstancePath").get<std::string>();
     }
+    if (json.contains("skeletalPose"))
+    {
+        const nlohmann::json& pose = json.at("skeletalPose");
+        if (!pose.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle skeletalPose must be an object");
+        }
+        emitter.skeletalPose.clip = pose.value(
+            "clip", emitter.skeletalPose.clip);
+        emitter.skeletalPose.time = ReadFiniteFloat(
+            pose, "time", emitter.skeletalPose.time);
+        emitter.skeletalPose.rate = ReadFiniteFloat(
+            pose, "rate", emitter.skeletalPose.rate);
+        emitter.skeletalPose.loop = pose.value(
+            "loop", emitter.skeletalPose.loop);
+    }
+    emitter.skeletalBoneRadius = ReadFiniteFloat(
+        json, "skeletalBoneRadius", emitter.skeletalBoneRadius);
+    if (json.contains("spawnSource"))
+    {
+        const nlohmann::json& source = json.at("spawnSource");
+        if (!source.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle spawnSource must be an object");
+        }
+        emitter.spawnSource.mode = source.value(
+            "mode", emitter.spawnSource.mode);
+        emitter.spawnSource.parentEmitter = source.value(
+            "parentEmitter", emitter.spawnSource.parentEmitter);
+        emitter.spawnSource.parentEvent = source.value(
+            "parentEvent", emitter.spawnSource.parentEvent);
+        emitter.spawnSource.perEvent = ReadCountField(
+            source, "perEvent", emitter.spawnSource.perEvent);
+        emitter.spawnSource.offset = ReadVec3(
+            source, "offset", emitter.spawnSource.offset);
+        emitter.spawnSource.normalVelocityScale = ReadFiniteFloat(
+            source,
+            "normalVelocityScale",
+            emitter.spawnSource.normalVelocityScale);
+    }
+    if (emitter.spawnSource.mode == "none")
+    {
+        if (emitter.renderMode == "skeletalMeshTris")
+        {
+            emitter.spawnSource.mode = "skeletalTris";
+        }
+        else if (emitter.renderMode == "skeletalMeshBones")
+        {
+            emitter.spawnSource.mode = "skeletalBones";
+        }
+    }
+    if (json.contains("dissolve"))
+    {
+        const nlohmann::json& dissolve = json.at("dissolve");
+        if (!dissolve.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle dissolve must be an object");
+        }
+        emitter.dissolve.enabled = dissolve.value(
+            "enabled", true);
+        emitter.dissolve.start = ReadFiniteFloat(
+            dissolve, "start", emitter.dissolve.start);
+        emitter.dissolve.end = ReadFiniteFloat(
+            dissolve, "end", emitter.dissolve.end);
+        emitter.dissolve.edgeWidth = ReadFiniteFloat(
+            dissolve, "edgeWidth", emitter.dissolve.edgeWidth);
+        emitter.dissolve.edgeColor = ReadVec3(
+            dissolve, "edgeColor", emitter.dissolve.edgeColor);
+        emitter.dissolve.edgeStrength = ReadFiniteFloat(
+            dissolve, "edgeStrength", emitter.dissolve.edgeStrength);
+        emitter.dissolve.noiseScale = ReadFiniteFloat(
+            dissolve, "noiseScale", emitter.dissolve.noiseScale);
+        emitter.dissolve.noiseSpeed = ReadFiniteFloat(
+            dissolve, "noiseSpeed", emitter.dissolve.noiseSpeed);
+    }
+    if (json.contains("materialBindings"))
+    {
+        const nlohmann::json& bindings = json.at("materialBindings");
+        if (!bindings.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle materialBindings must be an object");
+        }
+        for (auto binding = bindings.begin();
+             binding != bindings.end(); ++binding)
+        {
+            if (!binding.value().is_string() ||
+                binding.value().get<std::string>().empty())
+            {
+                throw std::invalid_argument(
+                    "Particle materialBindings values must be non-empty strings");
+            }
+            emitter.materialBindings[binding.key()] =
+                binding.value().get<std::string>();
+        }
+    }
     // mesh 照明与几何参数同属 renderer 层；非 mesh 模式也可以作者化，
     // 但渲染端只在 renderMode=="mesh" 时消费。
     emitter.meshLighting = json.value(
@@ -888,6 +1052,10 @@ ParticleEmitterAsset ParseEmitter(
     emitter.burst = json.value("burst", emitter.burst);
     emitter.burstInterval = ReadFiniteFloat(
         json, "burstInterval", emitter.burstInterval);
+    emitter.burstDelay = ReadFiniteFloat(
+        json, "burstDelay", emitter.burstDelay);
+    emitter.burstPhase = ReadFiniteFloat(
+        json, "burstPhase", emitter.burstPhase);
     emitter.spawnRate = ReadFiniteFloat(
         json, "spawnRate", emitter.spawnRate);
     emitter.drag = ReadFiniteFloat(json, "drag", emitter.drag);
@@ -1452,6 +1620,97 @@ ParticleEmitterAsset ParseEmitter(
             flipbook,
             "playRate",
             emitter.flipbookPlayRate);
+        emitter.flipbookStartFrameJitter = ReadFiniteFloat(
+            flipbook,
+            "startFrameJitter",
+            emitter.flipbookStartFrameJitter);
+        auto readUvCurve = [&](const char* field,
+                               std::vector<ParticleFlipbookUvKey>& keys)
+        {
+            if (!flipbook.contains(field))
+            {
+                return;
+            }
+            const nlohmann::json& curve = flipbook.at(field);
+            if (!curve.is_array() ||
+                curve.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    std::string("Particle flipbook.") + field +
+                    " allows at most 8 keys");
+            }
+            keys.clear();
+            float previousTime = -1.0f;
+            for (const nlohmann::json& entry : curve)
+            {
+                if (!entry.is_object())
+                {
+                    throw std::invalid_argument(
+                        std::string("Particle flipbook.") + field +
+                        " entry must be an object");
+                }
+                ParticleFlipbookUvKey key;
+                key.time = ReadFiniteFloat(entry, "time", 0.0f);
+                const nlohmann::json& value = entry.at("value");
+                if (!value.is_array() || value.size() != 2)
+                {
+                    throw std::invalid_argument(
+                        std::string("Particle flipbook.") + field +
+                        " value requires [x,y]");
+                }
+                key.value = Eigen::Vector2f(
+                    ReadFiniteNumber(value.at(0), "value.x"),
+                    ReadFiniteNumber(value.at(1), "value.y"));
+                if (key.time < 0.0f || key.time > 1.0f ||
+                    key.time <= previousTime)
+                {
+                    throw std::invalid_argument(
+                        std::string("Particle flipbook.") + field +
+                        " times must be in [0,1] and strictly increasing");
+                }
+                previousTime = key.time;
+                keys.push_back(key);
+            }
+        };
+        readUvCurve("uvOffsetKeys", emitter.flipbookUvOffsetKeys);
+        readUvCurve("uvScaleKeys", emitter.flipbookUvScaleKeys);
+        if (flipbook.contains("playRateKeys"))
+        {
+            const nlohmann::json& curve = flipbook.at("playRateKeys");
+            if (!curve.is_array() ||
+                curve.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.playRateKeys allows at most 8 keys");
+            }
+            emitter.flipbookPlayRateKeys.clear();
+            float previousTime = -1.0f;
+            for (const nlohmann::json& entry : curve)
+            {
+                if (!entry.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.playRateKeys entry must be an object");
+                }
+                ParticleFlipbookRateKey key;
+                key.time = ReadFiniteFloat(entry, "time", 0.0f);
+                key.rate = ReadFiniteFloat(entry, "rate", 1.0f);
+                if (key.time < 0.0f || key.time > 1.0f ||
+                    key.time <= previousTime)
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.playRateKeys times must be in "
+                        "[0,1] and strictly increasing");
+                }
+                if (key.rate < 0.0f || key.rate > 16.0f)
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.playRateKeys rate must be in [0,16]");
+                }
+                previousTime = key.time;
+                emitter.flipbookPlayRateKeys.push_back(key);
+            }
+        }
 
         if (flipbook.contains("frameDurations"))
         {
@@ -1793,6 +2052,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle renderMode must be 'billboard', 'ribbon', 'mesh', "
+            "'skeletalMeshTris', 'skeletalMeshBones', "
             "'beam', 'distortion', 'light' or 'decal'");
     }
     if (emitter.hasLight)
@@ -1808,6 +2068,13 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         {
             throw std::invalid_argument(
                 "Particle light.radius must be positive");
+        }
+        RequireFinite(emitter.light.shadowBias, "light.shadowBias");
+        if (emitter.light.shadowBias < 0.0f ||
+            emitter.light.shadowBias > 100.0f)
+        {
+            throw std::invalid_argument(
+                "Particle light.shadowBias must be in [0,100]");
         }
     }
     if (emitter.renderMode == "light")
@@ -1962,6 +2229,27 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle ribbonUVTiling must be in (0, 64]");
+    }
+    float previousRibbonColorTime = -1.0f;
+    for (const ParticleRibbonColorKey& key : emitter.ribbonColorKeys)
+    {
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time <= previousRibbonColorTime)
+        {
+            throw std::invalid_argument(
+                "Particle ribbonColorKeys times must be in [0,1] "
+                "and strictly increasing");
+        }
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            RequireFinite(key.color[channel], "ribbonColorKeys.color");
+            if (key.color[channel] < 0.0f || key.color[channel] > 64.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonColorKeys color must be in [0,64]");
+            }
+        }
+        previousRibbonColorTime = key.time;
     }
     if (emitter.beam.segments < kMinParticleBeamSegments ||
         emitter.beam.segments > kMaxParticleBeamSegments)
@@ -2142,6 +2430,119 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         RequireValidParticleMeshPath(emitter.meshPath);
     }
+    if (emitter.spawnSource.mode != "none" &&
+        emitter.spawnSource.mode != "skeletalTris" &&
+        emitter.spawnSource.mode != "skeletalBones" &&
+        emitter.spawnSource.mode != "parentEmitter")
+    {
+        throw std::invalid_argument(
+            "Particle spawnSource.mode must be none/skeletalTris/"
+            "skeletalBones/parentEmitter");
+    }
+    if (emitter.spawnSource.parentEvent != "spawn" &&
+        emitter.spawnSource.parentEvent != "death" &&
+        emitter.spawnSource.parentEvent != "collision")
+    {
+        throw std::invalid_argument(
+            "Particle spawnSource.parentEvent must be spawn/death/collision");
+    }
+    if (emitter.spawnSource.perEvent < 1 ||
+        emitter.spawnSource.perEvent > 64)
+    {
+        throw std::invalid_argument(
+            "Particle spawnSource.perEvent must be in [1,64]");
+    }
+    if ((emitter.spawnSource.mode == "skeletalTris" ||
+         emitter.spawnSource.mode == "skeletalBones") &&
+        emitter.meshPath.empty())
+    {
+        throw std::invalid_argument(
+            "Particle skeletal spawnSource requires mesh.path");
+    }
+    if (emitter.spawnSource.mode == "parentEmitter" &&
+        emitter.spawnSource.parentEmitter.empty())
+    {
+        throw std::invalid_argument(
+            "Particle spawnSource.parentEmitter must be non-empty");
+    }
+    RequireFinite(
+        emitter.spawnSource.normalVelocityScale,
+        "spawnSource.normalVelocityScale");
+    if (emitter.spawnSource.normalVelocityScale < 0.0f)
+    {
+        throw std::invalid_argument(
+            "Particle spawnSource.normalVelocityScale must be non-negative");
+    }
+    if ((emitter.renderMode == "skeletalMeshTris" ||
+         emitter.renderMode == "skeletalMeshBones") &&
+        emitter.meshPath.empty())
+    {
+        throw std::invalid_argument(
+            "Particle skeletal renderMode requires mesh.path");
+    }
+    RequireFinite(emitter.skeletalPose.time, "skeletalPose.time");
+    RequireFinite(emitter.skeletalPose.rate, "skeletalPose.rate");
+    if (emitter.skeletalPose.time < 0.0f ||
+        emitter.skeletalPose.rate < -16.0f ||
+        emitter.skeletalPose.rate > 16.0f)
+    {
+        throw std::invalid_argument(
+            "Particle skeletalPose.time must be non-negative and "
+            "rate in [-16,16]");
+    }
+    RequireFinite(emitter.skeletalBoneRadius, "skeletalBoneRadius");
+    if (emitter.skeletalBoneRadius < 0.01f ||
+        emitter.skeletalBoneRadius > 100.0f)
+    {
+        throw std::invalid_argument(
+            "Particle skeletalBoneRadius must be in [0.01, 100]");
+    }
+    RequireFinite(emitter.dissolve.start, "dissolve.start");
+    RequireFinite(emitter.dissolve.end, "dissolve.end");
+    RequireFinite(emitter.dissolve.edgeWidth, "dissolve.edgeWidth");
+    RequireFinite(emitter.dissolve.edgeStrength, "dissolve.edgeStrength");
+    RequireFinite(emitter.dissolve.noiseScale, "dissolve.noiseScale");
+    RequireFinite(emitter.dissolve.noiseSpeed, "dissolve.noiseSpeed");
+    if (emitter.dissolve.start < 0.0f || emitter.dissolve.start > 1.0f ||
+        emitter.dissolve.end < 0.0f || emitter.dissolve.end > 1.0f ||
+        emitter.dissolve.end < emitter.dissolve.start ||
+        emitter.dissolve.edgeWidth < 0.0f ||
+        emitter.dissolve.edgeWidth > 0.5f ||
+        emitter.dissolve.edgeStrength < 0.0f ||
+        emitter.dissolve.edgeStrength > 32.0f ||
+        emitter.dissolve.noiseScale <= 0.0f ||
+        emitter.dissolve.noiseScale > 64.0f ||
+        emitter.dissolve.noiseSpeed < 0.0f ||
+        emitter.dissolve.noiseSpeed > 16.0f)
+    {
+        throw std::invalid_argument(
+            "Particle dissolve ranges are invalid");
+    }
+    for (int channel = 0; channel < 3; ++channel)
+    {
+        RequireFinite(emitter.dissolve.edgeColor[channel],
+            "dissolve.edgeColor");
+    }
+    for (const auto& [parameter, channel] : emitter.materialBindings)
+    {
+        if (parameter != "baseColor" &&
+            parameter != "emissive" &&
+            parameter != "emissiveStrength" &&
+            parameter != "roughness" &&
+            parameter != "metallic" &&
+            parameter != "opacity" &&
+            parameter != "color")
+        {
+            throw std::invalid_argument(
+                "Particle materialBindings has unsupported parameter: " +
+                parameter);
+        }
+        if (channel.empty())
+        {
+            throw std::invalid_argument(
+                "Particle materialBindings channel must be non-empty");
+        }
+    }
     RequireFinite(emitter.meshScale.x(), "mesh.scale.x");
     RequireFinite(emitter.meshScale.y(), "mesh.scale.y");
     RequireFinite(emitter.meshScale.z(), "mesh.scale.z");
@@ -2224,6 +2625,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle burstInterval must be in [0, 60]");
+    }
+    if (emitter.burstDelay < 0.0f || emitter.burstDelay > 60.0f ||
+        emitter.burstPhase < 0.0f || emitter.burstPhase > 60.0f)
+    {
+        throw std::invalid_argument(
+            "Particle burstDelay/burstPhase must be in [0, 60]");
     }
     if (emitter.lodDistance < 0.0f)
     {
@@ -2684,6 +3091,47 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle flipbook playRate must be in [0, 16]");
+    }
+    if (emitter.flipbookStartFrameJitter < 0.0f ||
+        emitter.flipbookStartFrameJitter > 256.0f)
+    {
+        throw std::invalid_argument(
+            "Particle flipbook startFrameJitter must be in [0, 256]");
+    }
+    auto validateUvCurve = [](const std::vector<ParticleFlipbookUvKey>& keys,
+                              const char* field)
+    {
+        float previousTime = -1.0f;
+        for (const ParticleFlipbookUvKey& key : keys)
+        {
+            RequireFinite(key.time, field);
+            RequireFinite(key.value.x(), field);
+            RequireFinite(key.value.y(), field);
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousTime)
+            {
+                throw std::invalid_argument(
+                    std::string("Particle flipbook ") + field +
+                    " times must be in [0,1] and strictly increasing");
+            }
+            previousTime = key.time;
+        }
+    };
+    validateUvCurve(emitter.flipbookUvOffsetKeys, "uvOffsetKeys");
+    validateUvCurve(emitter.flipbookUvScaleKeys, "uvScaleKeys");
+    float previousRateTime = -1.0f;
+    for (const ParticleFlipbookRateKey& key : emitter.flipbookPlayRateKeys)
+    {
+        RequireFinite(key.time, "flipbook.playRateKeys.time");
+        RequireFinite(key.rate, "flipbook.playRateKeys.rate");
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time <= previousRateTime ||
+            key.rate < 0.0f || key.rate > 16.0f)
+        {
+            throw std::invalid_argument(
+                "Particle flipbook playRateKeys are invalid");
+        }
+        previousRateTime = key.time;
     }
     const uint32_t frameCount =
         emitter.flipbookColumns * emitter.flipbookRows;
@@ -3182,6 +3630,24 @@ void ParticleAssetLoader::Validate(const ParticleSystemAsset& asset)
                 emitter.name);
         }
         ValidateEmitter(emitter);
+    }
+    for (const ParticleEmitterAsset& emitter : asset.emitters)
+    {
+        if (emitter.spawnSource.mode != "parentEmitter")
+        {
+            continue;
+        }
+        if (emitter.spawnSource.parentEmitter == emitter.name)
+        {
+            throw std::invalid_argument(
+                "Particle spawnSource.parentEmitter cannot reference itself");
+        }
+        if (names.find(emitter.spawnSource.parentEmitter) == names.end())
+        {
+            throw std::invalid_argument(
+                "Particle spawnSource.parentEmitter is unknown: " +
+                emitter.spawnSource.parentEmitter);
+        }
     }
 }
 

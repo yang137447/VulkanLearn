@@ -14,6 +14,7 @@
 
 #include "particles/particleAsset.h"
 #include "particles/particleBeam.h"
+#include "particles/particleDataChannel.h"
 #include "particles/particleEvents.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleFrameStats.h"
@@ -24,6 +25,7 @@
 #include "particles/particleRenderIdentity.h"
 #include "particles/particleSdf.h"
 #include "particles/particleShadowCaster.h"
+#include "VertexDataStruct.h"
 #include "render/particles/particleGpuTimer.h"
 #include "resource/image/hostImage.h"
 
@@ -33,10 +35,12 @@ class ComputePipeline;
 class Texture;
 class RenderGraph;
 struct Renderpass;
+struct MeshAssetImportResult;
 
 namespace VL
 {
 class RendererBackendVulkan;
+namespace Animation { struct SkeletalAsset; }
 struct RenderScene;
 struct ParticleSystemSnapshot;
 
@@ -59,6 +63,14 @@ struct ParticleEventBatch
     std::string emitterKey;
     ParticleEventCounters counters;
     std::vector<ParticleEventRecord> records;
+};
+
+struct ParticleLightShadowCandidate
+{
+    std::string emitterKey;
+    Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    float radius = 0.0f;
+    bool castShadows = false;
 };
 
 // Niagara 式最小运行时：每个场景发射器拥有一段 GPU 粒子池，compute 负责
@@ -164,6 +176,17 @@ public:
     // renderSystem 在 RecordSimulation 之前调用；shadowMap 本体仍通过
     // particle pass 的 set 3 输入绑定，这里只提供级联矩阵与 bias。
     void SetShadowCascadeData(const ParticleShadowCascadeData& data);
+    // 每帧 localShadow 选灯前读取；返回灯光发射器的保守包围球。
+    std::vector<ParticleLightShadowCandidate>
+        GetParticleLightShadowCandidates() const;
+    // 把 localShadow 排名后的 slice 写回轻发射器；非投影灯传 invalid。
+    void SetParticleLightShadowBinding(
+        const std::string& emitterKey,
+        uint32_t slice,
+        float farCm,
+        float biasCm,
+        bool castShadows);
+    void ClearParticleLightShadowBindings();
 
     // 一次性 GPU 回读（调用方需保证设备空闲）。供脚本/调试层消费事件。
     bool DrainParticleEvents(
@@ -202,6 +225,12 @@ private:
         // ribbon 历史快照：history[0] 是上一帧，history[15] 最旧；
         // xyz = 记录时的模拟空间位置，w = 记录时的 age。
         std::array<Eigen::Vector4f, 16> history;
+        // skeletalTris/Bones 的逐粒子几何源：
+        // source0.xyz/source1.xyz/source2.xyz 是三角面或骨段端点；
+        // source0.w 为 0 none / 1 triangle / 2 bone，source2.w 保留。
+        Eigen::Vector4f source0;
+        Eigen::Vector4f source1;
+        Eigen::Vector4f source2;
     };
 
     // mesh 材质 set 1 的 std140 UBO；与 particleMesh.vert/frag 的
@@ -399,9 +428,46 @@ private:
         Eigen::Vector4f flipbookParams5;
         // x = EOO 打包纹理, y = EOO emissive 强度, z/w 保留。
         Eigen::Vector4f textureModeParams;
+        // x = source mode (0 none,1 tris,2 bones,3 parent), y = parent event
+        // (0 spawn,1 death,2 collision), z = perEvent, w = normalVelocityScale.
+        Eigen::Vector4f spawnSourceParams;
+        // xyz = parent/source offset (cm), w reserved.
+        Eigen::Vector4f spawnSourceOffset;
+        // x = burstDelay, y = burstPhase, z/w reserved.
+        Eigen::Vector4f burstTiming;
+        // x = emit spawn events for child emitters, y/z/w reserved.
+        Eigen::Vector4f spawnEventOutput;
+        // mesh/skeletal dissolve：x=start,y=end,z=edgeWidth,w=noiseScale。
+        Eigen::Vector4f dissolveParams;
+        // x=edgeStrength,y=noiseSpeed,z=enabled,w=reserved。
+        Eigen::Vector4f dissolveParams2;
+        // xyz=edgeColor。
+        Eigen::Vector4f dissolveEdgeColor;
+        // SubUV 逐寿命曲线。rate 是乘数；uv offset/scale 作用于 sprite UV。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookPlayRateKeys;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookUvOffsetKeys;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookUvScaleKeys;
+        std::array<Eigen::Vector4f, 2> flipbookRateKeyTimes;
+        std::array<Eigen::Vector4f, 2> flipbookUvKeyTimes;
+        // x=rateCount,y=offsetCount,z=scaleCount,w=startFrameJitter
+        Eigen::Vector4f flipbookParams6;
+        // ribbon 逐弧长颜色；ribbonUVParams.z 是 key count。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            ribbonColorKeys;
+        std::array<Eigen::Vector4f, 2> ribbonColorKeyTimes;
+        // xyz=volume min, w=enabled；xyz=1/extent,w=intensity。
+        Eigen::Vector4f translucencyVolumeMin;
+        Eigen::Vector4f translucencyVolumeInvExtent;
+        // 粒子灯阴影：x=slice,y=type,z=far,w=bias。
+        Eigen::Vector4f particleLightShadowParams;
+        // x=IES profile index, y=hasIes, z/w reserved。
+        Eigen::Vector4f particleLightIesParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 7792,
+        sizeof(FrameUniforms) == 8592,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -565,6 +631,63 @@ private:
     static_assert(
         offsetof(FrameUniforms, textureModeParams) == 7776,
         "ParticleFrame textureModeParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, spawnSourceParams) == 7792,
+        "ParticleFrame spawnSourceParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, spawnSourceOffset) == 7808,
+        "ParticleFrame spawnSourceOffset offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, burstTiming) == 7824,
+        "ParticleFrame burstTiming offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, spawnEventOutput) == 7840,
+        "ParticleFrame spawnEventOutput offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, dissolveParams) == 7856,
+        "ParticleFrame dissolveParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, dissolveParams2) == 7872,
+        "ParticleFrame dissolveParams2 offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, dissolveEdgeColor) == 7888,
+        "ParticleFrame dissolveEdgeColor offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookPlayRateKeys) == 7904,
+        "ParticleFrame flipbookPlayRateKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookUvOffsetKeys) == 8032,
+        "ParticleFrame flipbookUvOffsetKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookUvScaleKeys) == 8160,
+        "ParticleFrame flipbookUvScaleKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookRateKeyTimes) == 8288,
+        "ParticleFrame flipbookRateKeyTimes offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookUvKeyTimes) == 8320,
+        "ParticleFrame flipbookUvKeyTimes offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookParams6) == 8352,
+        "ParticleFrame flipbookParams6 offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonColorKeys) == 8368,
+        "ParticleFrame ribbonColorKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonColorKeyTimes) == 8496,
+        "ParticleFrame ribbonColorKeyTimes offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, translucencyVolumeMin) == 8528,
+        "ParticleFrame translucencyVolumeMin offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, translucencyVolumeInvExtent) == 8544,
+        "ParticleFrame translucencyVolumeInvExtent offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightShadowParams) == 8560,
+        "ParticleFrame particleLightShadowParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightIesParams) == 8576,
+        "ParticleFrame particleLightIesParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -575,6 +698,12 @@ private:
         float boundsRadius = 0.0f;
         ParticleFlipbookGpuTable flipbookTable;
         GpuBuffer particles;
+        // 当前帧父 emitter spawn/death/collision 事件；子 emitter 读取。
+        GpuBuffer spawnEvents;
+        // skeletalTris/skeletalBones 的 CPU/GPU 采样源。
+        GpuBuffer spawnSource;
+        uint32_t spawnSourceRecordCount = 0;
+        bool emitSpawnEvents = false;
         // GPU 计数/紧凑存活索引/事件缓冲：每帧由 fillBuffer 清零计数，
         // simulate 原子追加，finalize compute 把 alive 写回 indirectArgs。
         GpuBuffer counters;
@@ -631,6 +760,46 @@ private:
         float meshLocalBoundsRadius = 0.0f;
         // 网格导入失败时本发射器仍保持 mesh 资产，但绘制回退 billboard。
         bool meshFallbackBillboard = false;
+        // 骨骼网格粒子的 sections：每 section 独立顶点/索引/权重/palette/
+        // 材质，保证 per-section materialInstancePath 与 inverse bind 正确。
+        struct SkeletalSection
+        {
+            struct Influence
+            {
+                uint32_t joint = 0;
+                float weight = 0.0f;
+            };
+            GpuBuffer vertices;
+            GpuBuffer indices;
+            GpuBuffer skinInfluences;
+            std::vector<GpuBuffer> skinPalettes;
+            std::vector<vk::DescriptorSet> paletteSets;
+            std::vector<vk::DescriptorSet> materialSets;
+            uint32_t indexCount = 0;
+            ParticleMaterialParams material;
+            std::shared_ptr<Texture> albedo;
+            std::shared_ptr<Texture> normal;
+            std::shared_ptr<Texture> orm;
+            std::shared_ptr<Texture> emissive;
+            GpuBuffer materialUniform;
+            float localBoundsRadius = 0.0f;
+            std::vector<Eigen::Matrix4f> inverseBinds;
+            Eigen::Matrix4f meshToModel = Eigen::Matrix4f::Identity();
+            // CPU skinning source；每帧只更新 host-visible 顶点缓冲。
+            std::vector<Vertex> sourceVertices;
+            std::vector<uint32_t> sourceIndices;
+            std::vector<uint32_t> influenceOffsets;
+            std::vector<Influence> influences;
+            std::vector<Vertex> skinnedVertices;
+        };
+        std::shared_ptr<const Animation::SkeletalAsset> skeletalAsset;
+        std::size_t skeletalClipIndex = 0;
+        float skeletalPoseTime = 0.0f;
+        float skeletalPoseRate = 0.0f;
+        bool skeletalPoseLoop = true;
+        std::vector<SkeletalSection> skeletalSections;
+        // 用于每秒更新 palette 的累计时钟；run 时由 emitter.elapsedSeconds 驱动。
+        float skeletalPoseClock = 0.0f;
         uint32_t sortCapacity = 0;
         // 排序结束时 pair 表的奇偶性决定 graphics 绑定 A 还是 B。
         bool sortFinalUsesA = true;
@@ -656,6 +825,11 @@ private:
         uint32_t lightSlotBase = 0;
         uint32_t lightSlotCapacity = 0;
         uint32_t lightBufferGeneration = 0;
+        uint32_t iesProfileIndex = 0;
+        uint32_t particleLightShadowSlice = 0xFFFFFFFFu;
+        float particleLightShadowFar = 0.0f;
+        float particleLightShadowBias = 2.0f;
+        bool particleLightCastShadows = false;
         // mesh 专用方向光缓存；每帧在 RecordSimulation 里按场景方向光重算，
         // 不参与发射器资源重建。未启用时保持旧 unlit 输出。
         bool lightingEnabled = false;
@@ -733,6 +907,10 @@ private:
     void LoadEmitterMesh(
         EmitterResources& emitter,
         const std::string& emitterKey);
+    void LoadSkeletalEmitterMesh(
+        EmitterResources& emitter,
+        const std::string& emitterKey,
+        const MeshAssetImportResult& imported);
     void LoadEmitterMaterialTextures(
         EmitterResources& emitter,
         const std::string& emitterKey);
@@ -745,6 +923,10 @@ private:
     void CreateLightEmitterDescriptors(EmitterResources& emitter);
     void CreateFallbackLightingResources();
     void DestroyFallbackLightingResources();
+    void EnsureTranslucencyVolume();
+    void DestroyTranslucencyVolume();
+    void UpdateTranslucencyVolume(const RenderScene& renderScene);
+    void RebuildIesLut();
     std::shared_ptr<PipelineBase> GetOrCreateShadowPipeline(
         const Renderpass& renderPass,
         ParticleShadowCasterMode mode);
@@ -779,13 +961,15 @@ private:
         const std::string& error);
     const ParticleSystemAsset& ResolveParticleSystemAsset(
         const ParticleSystemSnapshot& snapshot,
-        const std::unordered_map<std::string, float>& runtimeParameters);
+        const ParticleDataChannelMap& dataChannels,
+        const std::unordered_map<std::string, float>& userParameters);
     void WarnUserParameterFailureOnce(
         const std::string& key,
         uint64_t signature,
         const std::string& error);
     void SynchronizeGlobalSort();
     void AssignParticleLightSlots();
+    void BindParentSpawnSources();
     void DestroyGlobalSortPool();
     bool CreateGlobalSortPool(
         const std::vector<std::string>& emitterKeys,
@@ -844,6 +1028,12 @@ private:
     // particle SSBO 与 sortedPairs，只替换顶点/片元 shader。
     std::shared_ptr<PipelineBase> meshAdditivePipeline;
     std::shared_ptr<PipelineBase> meshAlphaPipeline;
+    // 骨骼网格完整实例（与静态 mesh 共用顶点/材质合同，额外 set 2 蒙皮）。
+    // SkeletalMeshTris/Bones：逐粒子三角面/骨段，无顶点输入。
+    std::shared_ptr<PipelineBase> skeletalTriangleAdditivePipeline;
+    std::shared_ptr<PipelineBase> skeletalTriangleAlphaPipeline;
+    std::shared_ptr<PipelineBase> skeletalBoneAdditivePipeline;
+    std::shared_ptr<PipelineBase> skeletalBoneAlphaPipeline;
     // mesh/billboard/ribbon caster 管线按 shadow/localShadow 的
     // VkRenderPass 句柄 + caster 几何类型缓存；同一图里 CSM 与局部阴影
     // 使用不同 render pass，不能共用。
@@ -861,6 +1051,18 @@ private:
     std::shared_ptr<Texture> defaultNormalTexture;
     std::shared_ptr<Texture> defaultOrmTexture;
     std::shared_ptr<Texture> defaultEmissiveTexture;
+    std::shared_ptr<Texture> iesLutTexture;
+    uint64_t iesLutSignature = 0;
+    // 16^3 RGBA16F 世界空间辐照度体积，粒子/骨骼/ribbon 共享。
+    vk::Image translucencyVolumeImage{};
+    vk::DeviceMemory translucencyVolumeMemory{};
+    vk::ImageView translucencyVolumeView{};
+    vk::Sampler translucencyVolumeSampler{};
+    vk::DescriptorImageInfo translucencyVolumeDescriptor{};
+    GpuBuffer translucencyVolumeStaging{};
+    bool translucencyVolumeReady = false;
+    bool translucencyVolumeUploaded = false;
+    uint64_t translucencyVolumeSignature = 0;
     // 发射器包整体由 shared_ptr 持有：活跃表与 retire queue 共享同一所有权，
     // 最后一个 epoch 完成后才析构 descriptor pool、buffer 与纹理。
     std::unordered_map<std::string, std::shared_ptr<EmitterResources>>
@@ -907,6 +1109,7 @@ private:
     struct ParticleUserParameterCacheEntry
     {
         uint64_t signature = 0;
+        uint64_t channelSignature = 0;
         const nlohmann::json* authoringJson = nullptr;
         bool attempted = false;
         bool parsed = false;

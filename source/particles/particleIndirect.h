@@ -68,9 +68,10 @@ inline ParticleIndirectDrawShape BuildParticleIndirectDrawShape(
                     beamBranchCount))};
     }
 
-    const uint32_t verticesPerParticle = renderMode == "ribbon"
-        ? ParticleRibbonVerticesPerParticle(ribbonSegments)
-        : 6u;
+    const uint32_t verticesPerParticle =
+        renderMode == "ribbon"
+            ? ParticleRibbonVerticesPerParticle(ribbonSegments)
+            : (renderMode == "skeletalMeshTris" ? 3u : 6u);
     return ParticleIndirectDrawShape{
         false,
         0,

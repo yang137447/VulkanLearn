@@ -33,7 +33,8 @@ public static partial class NativeBridge
         private readonly List<ParticleMessage> particleMessages = [];
         // 数据通道不按 owner 分表：native World 只有一个全局命名空间，这里
         // 保存最近一帧副本供 Get 使用；Set/Clear 在同一帧内先更新本地值。
-        private readonly Dictionary<string, float> particleDataChannels = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ParticleDataChannelValue> particleDataChannels =
+            new(StringComparer.Ordinal);
         private readonly Dictionary<ulong, ParticleSubscription> particleSubscriptions = [];
         // native 兴趣按 Blueprint owner 计数；每个 owner 只在首个订阅/最后
         // 一个订阅移除时发命令，避免 A 的清理误删 B 的兴趣。
@@ -191,22 +192,23 @@ public static partial class NativeBridge
                 throw new ArgumentOutOfRangeException(nameof(value),
                     "Particle user parameter value must be finite and in [-1e6, 1e6].");
         }
-        private static void ValidateDataChannel(string key, float? value)
+        private static void ValidateDataChannel(string key,
+            ParticleDataChannelValue? value)
         {
             if (string.IsNullOrEmpty(key) || key.Contains('\0') ||
                 System.Text.Encoding.UTF8.GetByteCount(key) > 64)
                 throw new ArgumentException("Particle data channel key requires 1..64 UTF-8 bytes without NUL.", nameof(key));
-            if (value is { } number && (!float.IsFinite(number) || Math.Abs(number) > 1.0e6f))
-                throw new ArgumentOutOfRangeException(nameof(value),
-                    "Particle data channel value must be finite and in [-1e6, 1e6].");
+            value?.Validate(key);
         }
-        private float? ReadParticleData(Blueprint owner, string name)
+        private ParticleDataChannelValue? ReadParticleData(
+            Blueprint owner, string name)
         {
             RequireRead(owner);
             ValidateDataChannel(name, null);
             return particleDataChannels.TryGetValue(name, out var value) ? value : null;
         }
-        private void ChangeParticleData(Blueprint owner, string name, float? value)
+        private void ChangeParticleData(Blueprint owner, string name,
+            ParticleDataChannelValue? value)
         {
             Require(owner);
             ValidateDataChannel(name, value);
@@ -233,7 +235,9 @@ public static partial class NativeBridge
                 op = "data",
                 owner = owner.Handle.Id,
                 key = name,
-                value = value.Value
+                name,
+                type = value.Value.TypeName,
+                values = value.Value.ToCommandValues()
             });
             particleDataChannels[name] = value.Value;
             if (existed) undo.Add(() => particleDataChannels[name] = old);
@@ -551,27 +555,34 @@ public static partial class NativeBridge
             particleDataChannels.Clear();
             foreach (var entry in channels.EnumerateObject())
             {
-                if (entry.Value.ValueKind != JsonValueKind.Number ||
-                    entry.Name.Length == 0 || entry.Name.Contains('\0') ||
+                if (entry.Name.Length == 0 || entry.Name.Contains('\0') ||
                     System.Text.Encoding.UTF8.GetByteCount(entry.Name) > 64) continue;
-                float value = entry.Value.GetSingle();
-                if (!float.IsFinite(value) || Math.Abs(value) > 1.0e6f) continue;
+                if (!ParticleDataChannelValue.TryParse(entry.Value, out var value))
+                    continue;
                 if (particleDataChannels.Count >= 64 &&
                     !particleDataChannels.ContainsKey(entry.Name)) continue;
                 particleDataChannels[entry.Name] = value;
             }
         }
-        public Dictionary<string, float> ParticleDataChannelSnapshot() =>
+        public Dictionary<string, ParticleDataChannelValue> ParticleDataChannelSnapshot() =>
             new(particleDataChannels, StringComparer.Ordinal);
-        public void RestoreParticleDataChannels(IReadOnlyDictionary<string, float> values)
+        public void RestoreParticleDataChannels(
+            IReadOnlyDictionary<string, ParticleDataChannelValue> values)
         {
             particleDataChannels.Clear();
             foreach (var entry in values)
             {
                 if (string.IsNullOrEmpty(entry.Key) ||
                     System.Text.Encoding.UTF8.GetByteCount(entry.Key) > 64 ||
-                    entry.Key.Contains('\0') || !float.IsFinite(entry.Value) ||
-                    Math.Abs(entry.Value) > 1.0e6f) continue;
+                    entry.Key.Contains('\0')) continue;
+                try
+                {
+                    entry.Value.Validate(entry.Key);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    continue;
+                }
                 if (particleDataChannels.Count >= 64) break;
                 particleDataChannels[entry.Key] = entry.Value;
             }

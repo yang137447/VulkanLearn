@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleSceneLighting.glsl"
 #include "particleSoftDepth.glsl"
+#include "particleDissolve.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 2) in float vViewDepth;
@@ -11,6 +12,8 @@ layout(location = 5) in vec3 vWorldPosition;
 layout(location = 6) in vec3 vTangent;
 layout(location = 7) in float vTangentSign;
 layout(location = 8) in vec2 vUv;
+layout(location = 9) in float vLifeT;
+layout(location = 10) in float vSeed;
 
 layout(location = 0) out vec4 outColor;
 
@@ -116,6 +119,19 @@ void main()
     {
         opacity *= albedoSample.a;
     }
+    float dissolveVisibility = 1.0;
+    float dissolveEdge = 0.0;
+    EvaluateParticleDissolve(
+        vWorldPosition,
+        vLifeT,
+        vSeed,
+        dissolveVisibility,
+        dissolveEdge);
+    opacity *= dissolveVisibility;
+    if (dissolveVisibility < 1.0e-3)
+    {
+        discard;
+    }
     // u_alphaClipThreshold=0 关闭裁剪；大于 0 时对最终覆盖率做 alpha test。
     float alphaClipThreshold = material.materialParams.x;
     if (alphaClipThreshold > 1.0e-3 && opacity < alphaClipThreshold)
@@ -194,7 +210,9 @@ void main()
             lobes.diffuse +
             lobes.specular +
             (baseColor + diffuseIbl) * ambientScale * ambientOcclusion +
-            specularIbl * ambientScale;
+            specularIbl * ambientScale +
+            ParticleSampleTranslucencyVolume(vWorldPosition) *
+                ambientScale;
     }
     if (frame.materialPbr.z > 0.5)
     {
@@ -205,6 +223,10 @@ void main()
         }
         outColor.rgb += emissive * frame.materialEmissiveStrength.w;
     }
+    outColor.rgb +=
+        frame.dissolveEdgeColor.rgb *
+        frame.dissolveParams2.x *
+        dissolveEdge;
     outColor *= frame.colorTint;
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);

@@ -5,6 +5,7 @@
 #include "particleSorted.glsl"
 #include "particleAlive.glsl"
 #include "particleMeshTransform.glsl"
+#include "particleSkeletalSkin.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -25,6 +26,8 @@ layout(location = 5) out vec3 vWorldPosition;
 layout(location = 6) out vec3 vTangent;
 layout(location = 7) out float vTangentSign;
 layout(location = 8) out vec2 vUv;
+layout(location = 9) out float vLifeT;
+layout(location = 10) out float vSeed;
 
 // 与 vertex descriptor 的 billboard/ribbon 路径共用 binding 2，保证
 // descriptor set layout 完全一致；mesh v1 不采样纹理。
@@ -52,6 +55,8 @@ void CullVertex()
     vTangent = vec3(0.0);
     vTangentSign = 1.0;
     vUv = vec2(0.0);
+    vLifeT = 0.0;
+    vSeed = 0.0;
 }
 
 void main()
@@ -67,7 +72,19 @@ void main()
 
     // 非 localSpace 的模拟位置/速度在 spawn 时已经变换到世界空间；
     // mesh v1 拒绝 localSpace，因此这里不再重复乘 localToWorld。
-    vec3 localPosition = inPosition * frame.meshScale.xyz;
+    vec3 localPosition = inPosition;
+    vec3 localNormal = inNormal;
+    vec4 localTangent = inTangent;
+#if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
+    ParticleSkinVertex(
+        inPosition,
+        inNormal,
+        inTangent,
+        localPosition,
+        localNormal,
+        localTangent);
+#endif
+    localPosition *= frame.meshScale.xyz;
     vec3 worldPosition =
         ParticleMeshWorldPosition(particle, particleIndex, localPosition);
     gl_Position = frame.viewProjection * vec4(worldPosition, 1.0);
@@ -87,17 +104,19 @@ void main()
     vNormal = ParticleMeshWorldNormal(
         particle,
         particleIndex,
-        inNormal);
+        localNormal);
     vWorldPosition = worldPosition;
     // UV 变换与贴图采样只在 mesh 材质 set 中存在；无 MI 时是恒等变换。
     vUv = inTexCoord * material.uvScaleOffset.xy +
         material.uvScaleOffset.zw;
-    float tangentLength = length(inTangent.xyz);
+    vLifeT = ParticleMeshLifeT(particle);
+    vSeed = fract(float(particleIndex) * 0.61803398875);
+    float tangentLength = length(localTangent.xyz);
     vTangent = tangentLength > 1.0e-5
         ? ParticleMeshWorldTangent(
             particle,
             particleIndex,
-            inTangent.xyz / tangentLength)
+            localTangent.xyz / tangentLength)
         : vec3(0.0);
-    vTangentSign = inTangent.w < 0.0 ? -1.0 : 1.0;
+    vTangentSign = localTangent.w < 0.0 ? -1.0 : 1.0;
 }

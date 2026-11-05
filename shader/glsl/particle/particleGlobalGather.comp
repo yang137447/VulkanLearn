@@ -26,6 +26,8 @@ struct GatheredBillboard
     vec4 flags2;
     // x=EOO packed, y=EOO emissive strength, z/w reserved
     vec4 flags3;
+    // xy=sprite UV scale, zw=sprite UV offset
+    vec4 uvTransform;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer ParticleBuffer
@@ -247,5 +249,10 @@ void main()
         nextFrameIndex,
         atlasBlend);
     record.flags3 = frame.textureModeParams;
+    record.uvTransform = vec4(
+        EvaluateFlipbookUvCurve(
+            int(frame.flipbookParams6.z + 0.5), true, lifeT),
+        EvaluateFlipbookUvCurve(
+            int(frame.flipbookParams6.y + 0.5), false, lifeT));
     gatheredBuffer.records[slot] = record;
 }

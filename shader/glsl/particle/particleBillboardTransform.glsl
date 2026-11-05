@@ -42,6 +42,9 @@ bool ResolveParticleBillboardParticle(
     {
         particle.history[historyIndex] = vec4(0.0);
     }
+    particle.source0 = vec4(0.0);
+    particle.source1 = vec4(0.0);
+    particle.source2 = vec4(0.0);
 
     uint count = uint(particleBuffer.particles.length());
     if (drawIndex >= count)
@@ -276,6 +279,16 @@ bool BuildParticleBillboardVertex(
         spriteUV = mix(rect.xy, rect.zw, outVertex.localUV);
         spriteUV2 = mix(rect2.xy, rect2.zw, outVertex.localUV);
     }
+    vec2 uvScale = EvaluateFlipbookUvCurve(
+        int(frame.flipbookParams6.z + 0.5),
+        true,
+        lifeT);
+    vec2 uvOffset = EvaluateFlipbookUvCurve(
+        int(frame.flipbookParams6.y + 0.5),
+        false,
+        lifeT);
+    spriteUV = spriteUV * uvScale + uvOffset;
+    spriteUV2 = spriteUV2 * uvScale + uvOffset;
     vec2 atlasCell = vec2(
         mod(frameIndex, columns),
         floor(frameIndex / columns));

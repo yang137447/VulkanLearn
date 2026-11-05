@@ -780,12 +780,20 @@ void RuntimeCommandExecutor::ExecuteCommand(
         }
         const bool clear = command.particleDataChannelClear;
         std::string validationError;
-        if (!ExecuteParticleDataChannelCommand(
+        const bool applied = command.particleDataChannelTyped
+            ? ExecuteParticleDataChannelCommand(
+                *world,
+                clear,
+                command.particleDataChannelName,
+                command.particleDataChannelValue,
+                validationError)
+            : ExecuteParticleDataChannelCommand(
                 *world,
                 clear,
                 command.particleDataChannelName,
                 command.floatValue,
-                validationError))
+                validationError);
+        if (!applied)
         {
             diagnostics.ReportWarning(validationError);
             break;
@@ -796,7 +804,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
             command.particleDataChannelName +
             (clear
                 ? std::string()
-                : "=" + std::to_string(command.floatValue)));
+                : "=" + (command.particleDataChannelTyped
+                    ? command.particleDataChannelValue.ToJson().dump()
+                    : std::to_string(command.floatValue))));
         break;
     }
     case RuntimeCommandType::ReportParticleDataChannels:
@@ -809,12 +819,12 @@ void RuntimeCommandExecutor::ExecuteCommand(
                 "Particle data channels ignored because no active World exists.");
             break;
         }
-        std::map<std::string, float> ordered(
+        std::map<std::string, ParticleDataChannelValue> ordered(
             world->GetParticleDataChannels().begin(),
             world->GetParticleDataChannels().end());
         nlohmann::json channels = nlohmann::json::object();
         for (const auto& [name, value] : ordered)
-            channels[name] = value;
+            channels[name] = value.ToJson();
         const std::string line = channels.dump();
         std::cout << line << std::endl;
         diagnostics.ReportInfo(line);
