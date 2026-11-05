@@ -4,6 +4,78 @@
 `tool/terrain-ue-import/build_vulkanlearn_assets.py` 转成 VulkanLearn 的 `TR/SC/MI`
 和 VLP1。运行时不依赖 Blender。
 
+## Pegasus 阶段 01：高度场基座 + 一轮侵蚀
+
+这是当前复刻工作的进行中阶段（2026-11-05）。对应 Houdini
+`sop_pe_landscape.1.0.hda` 的前半段。**算法全部落在几何节点里**，Python 只负责
+建图与烘焙，不参与求值，所以所有参数都能在 Blender 界面里直接拖。
+
+```text
+Mesh Grid → Noise 1（大尺度山体）→ Noise 2（中尺度山脊）
+          → Coast（径向 + 噪声扰动，岛外落回海面）
+          → Distort（两个去相关噪声位移 UV）
+          → Remap → Capture Attribute（把字段锁成数据）
+          → Erode 一轮（8 邻域坡度 → 下坡流量 → stream-power 下切 → 热力塌落）
+          → Set Position（归一化高度 × Height Scale）
+```
+
+```powershell
+$blender = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\blender.exe"
+
+# 生成 .blend（直接在 Blender 里打开就能看/改节点图）
+& $blender --background --python tool\blender-terrain-import\build_pegasus_stage01.py -- `
+  --blend artifacts\pegasus\stage01\stage01.blend
+
+# 数值验收 + 预览图（hillshade / height / flow）
+& $blender --background --python tool\blender-terrain-import\check_pegasus_stage01.py -- `
+  --blend artifacts\pegasus\stage01\stage01.blend --preview-dir artifacts\pegasus\stage01
+```
+
+| 文件 | 作用 |
+|---|---|
+| `pegasus_stage01_gn.py` | 节点库：基座、侵蚀、socket 定位与连接工具 |
+| `build_pegasus_stage01.py` | 建整张图、写 `.blend`；`--cut base/erosion/full` 逐级调试 |
+| `check_pegasus_stage01.py` | 求值后打印高度/流量/海岸指标，输出预览 PNG |
+
+打开 `stage01.blend`，对象的 Geometry Nodes 修改器上就是
+`VL_Pegasus_Stage01_Heightfield_Erode`，15 个输入全部可调：
+
+| 输入 | 默认 | 对应 Houdini 参数 |
+|---|---:|---|
+| Height Scale | 800 m | heightfield Size.y |
+| Sea Level | 0.0 | — |
+| Noise 1 Amplitude / Element | 0.62 / 2400 m | `heightfield_noise1` amp 200 / element 900 |
+| Noise 2 Amplitude / Element | 0.16 / 280 m | `heightfield_noise2` amp 90 / element 280 |
+| Coast Wobble | 0.10 | 海岸线扰动 |
+| Distort Element | 800 m | `heightfield_distort` element_size |
+| Flow Merge | 0.85 | 汇水并入比例 |
+| Flow Exponent / Slope Exponent | 1.0 / 1.0 | stream-power `A^m S^n` |
+| Erosion Strength | 0.35 | `hydro_erosionrate` 的相对比例 |
+| Max Incision | 120 m | 单步下切上限 |
+| Talus Angle / Thermal Factor | 50° / 0.5 | `thermal_cutangle` / `thermal_removalrate` |
+
+验收读数（256²、8 km）：高度 -0.25..0.60（≈ -322..961 m）、海岸覆盖 16.5%、
+`erode_flow` 单轮 1.0、岛外角区高度标准差 0。
+
+### 已知偏差
+
+* **侵蚀是近似**：Houdini 的 `heightfield_erode` 是 GPU 体积算例，带降水、水体
+  输运与 `freezeframe` 迭代；这里用"下坡邻居流量并流 + stream-power 下切 +
+  一次热力塌落"近似，保留树枝状沟谷，但不是逐位复现。`erode_flow` 单轮上限约
+  `1/(1-Merge)`，长程汇水要靠多轮 Repeat（阶段 02）。
+* **Distort 不是 curl**：Blender 4D 噪声没有 curl，用两个去相关噪声当偏移场。
+* **海岸由程序生成**：原工程的海平面与岛屿轮廓来自 heightfield 底图。
+* **单位**：属性存归一化高度层（≈0..HeightScale 米），坡度在下切前换算成米/米；
+  早期直接用"归一化高度 / 米"得到 1e-4 量级坡度，下切恒为 0。
+
+### Blender 5.x 节点图的三个坑（已在代码里处理）
+
+1. `Set Position` 的 `Position`（绝对）与 `Offset`（相对）都是 VECTOR，按类型取
+   socket 会取错，导致整张网格被覆盖成偏移量。
+2. **字段在 `SetPosition` 之后会重新求值**：`coast`、噪声等依赖 `Position` 的
+   字段必须在位移前用 `Capture Attribute` 锁成数据，否则岛外海面退化成噪声。
+3. 海岸掩膜必须用 lerp 而不是"乘常数"，乘法会保留噪声幅度。
+
 ## 组成
 
 | 文件 | 作用 |
