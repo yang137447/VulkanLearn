@@ -23,6 +23,20 @@ for _stale in [m for m in list(sys.modules) if m.startswith("pegasus_erode_gn")]
 
 import pegasus_erode_gn as erode  # noqa: E402
 
+# ---------------------------------------------------------------- 基座常量
+# 全部来自 hython 直读原工程 `/obj/Erosion_Examples/heightfield_noise1`：
+#   amp = 500, elementsize = 500, oct = 8, lac = 1.841, rough = 0.5,
+#   basis = sparse, centernoise = on。
+BASE_AMP_M = 500.0
+BASE_ELEMENT_SIZE = 500.0
+BASE_OCTAVES = 8.0
+BASE_LACUNARITY = 1.841
+BASE_ROUGH = 0.5
+BASE_SEED = 0.0
+# height 属性的参考尺度：Houdini 场景里高度实际落在 ±80 m 量级，
+# 用 500 m（= amp）作为归一化基准，使属性值落在 ±1 内。
+BASE_REFERENCE_SCALE = 500.0
+
 # 名字、类型、默认、最小、最大、说明。默认值 = Houdini erode1 的真实参数。
 INPUTS = [
     ("Height Scale", "NodeSocketFloat", 100.0, 1.0, 5000.0,
@@ -114,90 +128,63 @@ def build_scene(size_m: float, resolution: int, iterations: int):
     # size_m 米。用 scale = size_m / element 才能得到与 Houdini element 对应的
     # 波长。早期把 scale 固定成 3.0，在 1 km 场景上等于 330 m 波长，结果全是
     # 高频碎屑，与基准的平滑大尺度山体完全不符。
+    # ---------------------------------------------------------------
+    # 基座地形：严格按 Houdini heightfield_noise1 的真实参数重建
+    #
+    # hython 直读 `/obj/Erosion_Examples/heightfield_noise1` 得到的值：
+    #   amp = 500 m, elementsize = 500 m, oct = 8, lac = 1.841,
+    #   rough = 0.5, basis = sparse, fractal = hmfT, centernoise = on,
+    #   场景 1000×1000 m / 512 采样。
+    #
+    # 场景只有 1 km 而 element 是 500 m ⇒ 整张图只有约 2 个大团块。早期用
+    # element 900 + oct 3 + 未归一化的坐标，得到的是逐格纯噪声，与基准的
+    # 平滑团块完全相反。
+    #
+    # 归一化约定（关键）：Houdini 的 element 是"噪声特征尺寸（米）"，在边长
+    # size_m 的网格上对应 size_m / element 次重复。Blender 的 Noise.Scale 在
+    # [0,1] UV 空间里就是"重复次数"，所以直接用 size_m / element。
+    # ---------------------------------------------------------------
     position = tree.nodes.new("GeometryNodeInputPosition")
     position.location = (-2400, 2400)
 
-    # Blender 的 Noise.Scale 是"世界坐标每单位长度的重复次数"。网格边长是
-    # size_m 米，直接用米制坐标时 scale=size_m/element 会让噪声在整张图上
-    # 只重复一两次，配合 Detail 就变成逐格纯噪声（实测相邻格差异占总振幅
-    # 16%，hillshade 全是碎渣）。所以先把位置归一化到 [0,1] 的 UV，
-    # 再让 Scale = size_m / element 表达真实波长。
-    normalized = erode.vector_math(tree, "DIVIDE", position.outputs["Position"],
-                                   (size_m, size_m, 1.0), (-2250, 2400))
-    normalized_xy = erode.combine_xyz(tree, None, None, 0.0, (-2100, 2400))
-    # 取 XY 分量、把 Z 归零，避免高度方向影响噪声。
     separate = tree.nodes.new("ShaderNodeSeparateXYZ")
-    separate.location = (-2150, 2400)
-    tree.links.new(normalized.outputs["Vector"], separate.inputs["Vector"])
-    uv = erode.combine_xyz(tree, separate.outputs["X"], separate.outputs["Y"],
-                           0.0, (-2000, 2400))
+    separate.location = (-2200, 2400)
+    tree.links.new(position.outputs["Position"], separate.inputs["Vector"])
+    # UV = position / size_m，范围 [-0.5, 0.5]
+    uv_x = erode.math_node(tree, "DIVIDE", separate.outputs["X"], size_m,
+                           (-2000, 2450))
+    uv_y = erode.math_node(tree, "DIVIDE", separate.outputs["Y"], size_m,
+                           (-2000, 2330))
+    uv = erode.combine_xyz(tree, uv_x.outputs[0], uv_y.outputs[0], 0.0,
+                           (-1850, 2400))
 
-    # UV 归一化到 [0,1] 之后，Noise.Scale 的含义变成"整张图上重复几次"，
-    # 所以正确的频率是 size_m / element（场景越大、同一 element 重复越多次），
-    # 而不是再乘一次 size_m。早期两次都乘了 size_m，噪声频率被压到接近 1，
-    # 逐格差异占总振幅 16%，整张图就是纯噪声。
-    large_noise = tree.nodes.new("ShaderNodeTexNoise")
-    large_noise.name = "VL_Base_Noise_Large"
-    large_noise.location = (-1850, 2500)
-    large_noise.noise_dimensions = "4D"
-    large_noise.inputs["Scale"].default_value = 1.0
-    large_noise.inputs["Detail"].default_value = 3.0
-    large_noise.inputs["Roughness"].default_value = 0.45
-    large_noise.inputs["W"].default_value = 17.0
-    tree.links.new(uv.outputs["Vector"], large_noise.inputs["Vector"])
+    # 频率 = size_m / elementsize：1000 / 500 = 2 次重复。
+    base_noise = tree.nodes.new("ShaderNodeTexNoise")
+    base_noise.name = "VL_Base_Noise_Sparse"
+    base_noise.location = (-1650, 2400)
+    base_noise.noise_dimensions = "4D"
+    base_noise.inputs["Scale"].default_value = size_m / BASE_ELEMENT_SIZE
+    base_noise.inputs["Detail"].default_value = BASE_OCTAVES
+    base_noise.inputs["Roughness"].default_value = BASE_ROUGH
+    base_noise.inputs["Lacunarity"].default_value = BASE_LACUNARITY
+    base_noise.inputs["W"].default_value = BASE_SEED
+    # sparse 噪声对应的 Perlin 基底；Distortion 保留一点点（Houdini 的
+    # disp = 0.1405，latticewarp 关闭）。
+    base_noise.inputs["Distortion"].default_value = 0.1405
+    tree.links.new(uv.outputs["Vector"], base_noise.inputs["Vector"])
 
-    small_noise = tree.nodes.new("ShaderNodeTexNoise")
-    small_noise.name = "VL_Base_Noise_Small"
-    small_noise.location = (-1850, 2280)
-    small_noise.noise_dimensions = "4D"
-    small_noise.inputs["Scale"].default_value = 2.0
-    small_noise.inputs["Detail"].default_value = 2.0
-    small_noise.inputs["Roughness"].default_value = 0.5
-    small_noise.inputs["W"].default_value = 41.0
-    tree.links.new(uv.outputs["Vector"], small_noise.inputs["Vector"])
-
-    # amp 200 : 90 → 权重 0.69 : 0.31
-    large_term = erode.math_node(tree, "MULTIPLY", large_noise.outputs["Fac"],
-                                 0.69, (-2000, 2500))
-    small_term = erode.math_node(tree, "MULTIPLY", small_noise.outputs["Fac"],
-                                 0.31, (-2000, 2280))
-    combined = erode.math_node(tree, "ADD", large_term.outputs[0],
-                               small_term.outputs[0], (-1800, 2400))
-    # 居中到 0 附近：height 是归一化层，正负都允许（Houdini 同样如此）。
-    #
-    # 幅度必须压到"山体总落差 ≈ 1 个单位"的尺度：height 之后要乘 Height Scale
-    # （米）。早期直接减 0.5 就交给侵蚀，噪声逐格抖动被放大成陡坡，hillshade
-    # 全是碎渣。Houdini 的 heightfield 本身就是连续场，这里补一个低通平滑来
-    # 模拟它的连续尺度。
-    centered = erode.math_node(tree, "SUBTRACT", combined.outputs[0], 0.5,
-                               (-1600, 2400))
-    # 低通：再采一遍更低频的噪声，把逐格抖动平滑掉（等价于 heightfield 的
-    # 连续插值采样），并按山体高度预算缩放。
-    smooth_noise = tree.nodes.new("ShaderNodeTexNoise")
-    smooth_noise.name = "VL_Base_Smooth"
-    smooth_noise.location = (-2000, 2100)
-    smooth_noise.noise_dimensions = "4D"
-    smooth_noise.inputs["Scale"].default_value = size_m / 2200.0
-    smooth_noise.inputs["Detail"].default_value = 2.0
-    smooth_noise.inputs["Roughness"].default_value = 0.5
-    smooth_noise.inputs["W"].default_value = 7.0
-    tree.links.new(position.outputs["Position"], smooth_noise.inputs["Vector"])
-    smooth_centered = erode.math_node(tree, "SUBTRACT",
-                                      smooth_noise.outputs["Fac"], 0.5,
-                                      (-1800, 2100))
-    # 大尺度轮廓 0.75 + 细节 0.25，整体压到 ±0.15（约 ±15 m 的基座起伏，
-    # 剩余幅度留给侵蚀去塑造）。
-    smooth_scaled = erode.math_node(tree, "MULTIPLY", smooth_centered.outputs[0],
-                                    0.30, (-1600, 2100))
-    detail_scaled = erode.math_node(tree, "MULTIPLY", centered.outputs[0],
-                                    0.08, (-1400, 2400))
-    relief = erode.math_node(tree, "ADD", smooth_scaled.outputs[0],
-                             detail_scaled.outputs[0], (-1200, 2300))
-    centered = relief
+    # centernoise = on ⇒ 噪声以 0 为中心，振幅 ±amp。
+    centered = erode.math_node(tree, "SUBTRACT", base_noise.outputs["Fac"], 0.5,
+                               (-1450, 2400))
+    # 振幅换算成归一化层：amp 米 / Height Scale 米。
+    # height 属性是"米 / Height Scale"的归一化量，后面再乘回 Height Scale。
+    relief = erode.math_node(tree, "MULTIPLY", centered.outputs[0],
+                             BASE_AMP_M / BASE_REFERENCE_SCALE,
+                             (-1250, 2400))
 
     geometry = grid.outputs["Mesh"]
     for index, (layer, value) in enumerate(
-            (("height", centered.outputs[0]), ("water", None),
+            (("height", relief.outputs[0]), ("water", None),
              ("debris", None), ("sediment", None), ("bedrock", None))):
         node = erode.store_attribute(tree, geometry, layer, value,
                                      (-1800 + index * 200, 2400))

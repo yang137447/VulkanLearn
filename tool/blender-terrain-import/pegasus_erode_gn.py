@@ -43,6 +43,10 @@ import bpy
 
 STATE_LAYERS = ("height", "water", "debris", "sediment", "bedrock")
 
+# 单点下切 gain：把 water*slope 的无量纲乘积放大到 Houdini 一帧的实际下切量级
+# （before/after 基准显示一段侵蚀约切 5 m，而裸乘积只有 1e-3 m 量级）。
+HYDRO_GAIN = 8.0
+
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -422,11 +426,11 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
             slope_total = math_node(tree, "ADD", slope_total,
                                     positive.outputs[0],
                                     (location[0] + 880, row)).outputs[0]
-    mean_slope_raw = math_node(tree, "DIVIDE", slope_total, 8.0,
-                               (location[0] + 1040, 900))
-    # 换算成无量纲坡度：除以格距。
-    slope_max = math_node(tree, "DIVIDE", mean_slope_raw.outputs[0], cell_m,
-                          (location[0] + 1200, 900))
+    # 平均落差（米），不除格距：直接当"坡度势"用。
+    # 早期除以 cell_m 换算成无量纲坡度，与 height（归一化层）单位混用，
+    # 下切量级错到 1e-4；这里保留米制落差，下切时统一走 Height Scale 归一化。
+    slope_max = math_node(tree, "DIVIDE", slope_total, 8.0,
+                          (location[0] + 1040, 900))
 
     # --- bed / bank 分类
     # 取邻域平均水深作为"周围水位"，本站水深 / 周围水位 > ratio 判为 bed。
@@ -483,13 +487,18 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
     incision = math_node(tree, "MULTIPLY", water_slope.outputs[0],
                          strength_with_factor.outputs[0],
                          (location[0] + 1760, 1660))
-    # 下切量以"归一化高度层"为单位，所以除以 Height Scale。
-    incision_normalized = math_node(tree, "DIVIDE", incision.outputs[0],
+    # 下切量的单位：incision = water * slope * K，其中 water 是水位（无量纲）、
+    # slope 是米/米。要变成"归一化高度层"还需要乘一个经验增益：
+    # Houdini 的一帧迭代在实际数据上产生约 5 m 的下切（before/after 对比），
+    # 而这里单点 water*slope 约 1e-3 量级，所以需要 ~5 的增益才匹配。
+    incision_gained = math_node(tree, "MULTIPLY", incision.outputs[0],
+                                HYDRO_GAIN, (location[0] + 1940, 1660))
+    incision_normalized = math_node(tree, "DIVIDE", incision_gained.outputs[0],
                                     group_input.outputs["Height Scale"],
-                                    (location[0] + 1940, 1660))
+                                    (location[0] + 1940, 1740))
     max_incision = math_node(tree, "MULTIPLY",
                              group_input.outputs["Max Debris Depth"],
-                             0.002, (location[0] + 1940, 1820))
+                             0.02, (location[0] + 1940, 1820))
     incision_clamped = math_node(tree, "MINIMUM", incision_normalized.outputs[0],
                                  max_incision.outputs[0],
                                  (location[0] + 2120, 1660))
