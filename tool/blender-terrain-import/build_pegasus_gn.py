@@ -33,6 +33,15 @@ from pegasus_gn_core import (
     link as _link,
     new_node as _new_node,
 )
+from terrain_erosion import (
+    ErosionDiagnostics,
+    ErosionParams,
+    border_fade,
+    erode,
+    flow_accumulation,
+    river_mask,
+    taper_to_sea_level,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,6 +62,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--paint-resolution", type=int, default=2048)
     parser.add_argument("--material-uv-scale", type=float, default=8.0)
     parser.add_argument("--terrain-type", default="alpine", choices=sorted(PRESETS))
+    parser.add_argument(
+        "--boundary-width-m", type=float, default=100.0,
+        help="physical-width sea-level taper at the tile edge")
+    parser.add_argument(
+        "--river-mask", action=argparse.BooleanOptionalAction, default=True,
+        help="derive a dendritic river/valley mask from final flow accumulation")
+    parser.add_argument(
+        "--river-percentile", type=float, default=98.5,
+        help="drainage-area percentile that starts the river mask")
     parser.add_argument("--erode", action=argparse.BooleanOptionalAction, default=True,
                         help="run stream-power erosion on the rasterized height field")
     parser.add_argument("--erosion-iterations", type=int, default=10)
@@ -138,7 +156,7 @@ def _smooth_ramp(values: np.ndarray, low_percentile: float,
 
 
 def _derive_masks(height_m: np.ndarray, size_m: float, coast: np.ndarray,
-                  ridge_hint: np.ndarray) -> dict[str, np.ndarray]:
+                  ridge_hint: np.ndarray, river: np.ndarray | None) -> dict[str, np.ndarray]:
     """Derives every layer mask from the displaced height field."""
     cell = size_m / max(height_m.shape[1] - 1, 1)
     gradient_y, gradient_x = np.gradient(height_m, cell)
@@ -159,16 +177,23 @@ def _derive_masks(height_m: np.ndarray, size_m: float, coast: np.ndarray,
     slope_mask = land * slope_n
     ridge_mask = land * ridge_n * _smooth_ramp(height_m, 45.0, 85.0)
     highland = land * height_n * (1.0 - 0.5 * slope_n)
+    river_mask = (
+        land * np.clip(river, 0.0, 1.0)
+        if river is not None else np.zeros_like(height_m)
+    )
 
-    total = lowland + slope_mask + ridge_mask + highland
+    total = lowland + slope_mask + ridge_mask + highland + river_mask
     safe = np.maximum(total, 1.0e-6)
     valid = total > 1.0e-6
-    return {
+    masks = {
         "lowland": np.where(valid, lowland / safe, 0.0),
         "slope": np.where(valid, slope_mask / safe, 0.0),
         "ridge": np.where(valid, ridge_mask / safe, 0.0),
         "highland": np.where(valid, highland / safe, 0.0),
     }
+    if river is not None:
+        masks["river"] = np.where(valid, river_mask / safe, 0.0)
+    return masks
 
 
 def _bilinear(height_m: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
@@ -185,21 +210,6 @@ def _bilinear(height_m: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     top = height_m[y0, x0] * (1.0 - fx) + height_m[y0, x1] * fx
     bottom = height_m[y1, x0] * (1.0 - fx) + height_m[y1, x1] * fx
     return top * (1.0 - fy) + bottom * fy
-
-
-def _border_taper(height_m: np.ndarray, width_ratio: float = 0.015) -> np.ndarray:
-    """Pulls the four map edges down to sea level.
-
-    The engine builds chunk skirts from the border vertices; a tile whose land
-    reaches the border produces a striped vertical wall.
-    """
-    rows, columns = height_m.shape
-    u = np.linspace(0.0, 1.0, columns)[None, :]
-    v = np.linspace(0.0, 1.0, rows)[:, None]
-    edge = np.minimum(np.minimum(u, 1.0 - u), np.minimum(v, 1.0 - v))
-    t = np.clip(edge / width_ratio, 0.0, 1.0)
-    taper = t * t * (3.0 - 2.0 * t)
-    return height_m * taper
 
 
 def _normalize_relief(height: np.ndarray, coast: np.ndarray,
@@ -244,13 +254,17 @@ def _sample_scatter(height_m: np.ndarray, size_m: float, density: float,
     return points
 
 
-def _write_manifest(args, height_path: Path, mask_paths: dict[str, Path]) -> None:
+def _write_manifest(args, height_path: Path, mask_paths: dict[str, Path],
+                    include_river: bool) -> None:
     layer_specs = [
         ("Gravel Ground", "lowland", 0, [0.0, 0.45], [0.0, 30.0], 16.0),
         ("Slope Rock", "slope", 7, [0.0, 1.0], [18.0, 90.0], 14.0),
         ("Ridge Rock", "ridge", 2, [0.25, 1.0], [20.0, 90.0], 12.0),
         ("Highland Volcanic", "highland", 2, [0.45, 1.0], [0.0, 90.0], 12.0),
     ]
+    if include_river:
+        layer_specs.append(
+            ("River Bed", "river", 6, [0.0, 1.0], [0.0, 45.0], 24.0))
     texture_base = args.layer_texture_root.resolve()
     layers = []
     for name, mask_name, texture_index, height_range, slope_range, uv_scale in layer_specs:
@@ -285,10 +299,10 @@ def _write_manifest(args, height_path: Path, mask_paths: dict[str, Path]) -> Non
         "description": (
             "Blender 5.2 Geometry Nodes 生成的 Pegasus 风格地形：GN 负责域扭曲、海岸、"
             "脊状多重分形山脉、Voronoi 山脊网络与岩层阶地；坡度/曲率 mask 由最终高度场反算；"
-            "材质使用 KiteDemo PBR 占位。"
+            "侵蚀后重做边缘海平面 taper，并用汇流面积生成河网 mask；材质使用 KiteDemo PBR 占位。"
         ),
         "sceneDescription": (
-            "Blender Geometry Nodes producer 验收场景：GN 地形高度场、坡度/脊线 mask、"
+            "Blender Geometry Nodes producer 验收场景：GN 地形高度场、坡度/脊线/河网 mask、"
             "KiteDemo 地表纹理数组；不依赖 Houdini 运行时。"
         ),
         "environment": {
@@ -345,15 +359,11 @@ def main() -> int:
         args.resolution, args.resolution)
     height = _normalize_relief(height, attributes["vl_coast"].reshape(height.shape))
     height_m = height * args.height_scale_m
-    height_m = _border_taper(height_m)
-    height = height_m / args.height_scale_m
+    cell_size = args.size_m / max(args.resolution - 1, 1)
     erosion_stats = None
     if args.erode:
-        from terrain_erosion import ErosionDiagnostics, ErosionParams, erode
-
-        cell_size = args.size_m / max(args.resolution - 1, 1)
         diagnostics = ErosionDiagnostics()
-        eroded, flow_area, fill_depth = erode(
+        eroded, _, fill_depth = erode(
             height_m, cell_size,
             ErosionParams(
                 iterations=args.erosion_iterations,
@@ -369,11 +379,6 @@ def main() -> int:
                 detail_restore=args.erosion_detail_restore),
             diagnostics)
         height_m = np.clip(eroded, 0.0, args.height_scale_m)
-        height = height_m / args.height_scale_m
-        flow_path = args.output_dir / "flow_accumulation.png"
-        flow_visual = np.log1p(flow_area / max(cell_size * cell_size, 1.0e-6))
-        flow_visual /= max(float(flow_visual.max()), 1.0e-6)
-        _write_gray16_png(flow_path, np.clip(flow_visual, 0.0, 1.0) * 65535.0)
         erosion_stats = {
             "iterations": args.erosion_iterations,
             "thermalIterations": args.thermal_iterations,
@@ -385,27 +390,51 @@ def main() -> int:
             "depositionSlopeDeg": args.erosion_deposition_slope_deg,
             "depositionLengthM": args.erosion_deposition_length_m,
             "maxFillDepthM": float(fill_depth.max()),
-            "meanFlowAreaM2": float(flow_area.mean()),
-            "maxFlowAreaM2": float(flow_area.max()),
             "erodedVolumeM3": diagnostics.eroded_volume_m3,
             "depositedVolumeM3": diagnostics.deposited_volume_m3,
             "exportedSedimentM3": diagnostics.exported_sediment_m3,
             "upliftVolumeM3": diagnostics.uplift_volume_m3,
-            "flowTexture": str(flow_path.resolve()),
         }
+
+    # Erosion routes flow through the original rim; taper afterwards as well so
+    # the exported tile cannot end in a vertical wall or single-cell teeth.
+    height_m = taper_to_sea_level(
+        height_m, cell_size, args.boundary_width_m)
+    height = height_m / args.height_scale_m
+
+    flow_area = flow_accumulation(
+        height_m, cell_size, args.erosion_flow_method)
+    flow_path = args.output_dir / "flow_accumulation.png"
+    flow_visual = np.log1p(flow_area / max(cell_size * cell_size, 1.0e-6))
+    flow_visual /= max(float(flow_visual.max()), 1.0e-6)
+    _write_gray16_png(flow_path, np.clip(flow_visual, 0.0, 1.0) * 65535.0)
+    if erosion_stats is not None:
+        erosion_stats["meanFlowAreaM2"] = float(flow_area.mean())
+        erosion_stats["maxFlowAreaM2"] = float(flow_area.max())
+        erosion_stats["flowTexture"] = str(flow_path.resolve())
 
     height_path = args.output_dir / "heightmap_gn.png"
     _write_gray16_png(height_path, height * 65535.0)
 
-    masks = _derive_masks(height_m, args.size_m,
-                          attributes["vl_coast"].reshape(height.shape),
-                          attributes["vl_relief"].reshape(height.shape))
+    coast = attributes["vl_coast"].reshape(height.shape)
+    coast_mask = np.clip(coast, 0.0, 1.0) * border_fade(
+        height.shape, cell_size, args.boundary_width_m)
+    river = (
+        river_mask(flow_area, cell_size, coast_mask > 0.05,
+                   args.river_percentile)
+        if args.river_mask else None
+    )
+    river_coverage = (
+        float(np.mean(river > 0.05)) if river is not None else 0.0)
+    masks = _derive_masks(
+        height_m, args.size_m, coast_mask,
+        attributes["vl_relief"].reshape(height.shape), river)
     mask_paths: dict[str, Path] = {}
     for name, values in masks.items():
         path = args.output_dir / f"mask_gn_{name}.png"
         _write_gray16_png(path, np.clip(values, 0.0, 1.0) * 65535.0)
         mask_paths[name] = path
-    _write_manifest(args, height_path, mask_paths)
+    _write_manifest(args, height_path, mask_paths, args.river_mask)
 
     marker_mesh = bpy.data.meshes.new("VL_Pegasus_ScatterMarker.mesh")
     marker_mesh.from_pydata([(0.0, 0.0, 0.0)], [], [])
@@ -448,6 +477,11 @@ def main() -> int:
         "attributes": list(TERRAIN_ATTRIBUTES),
         "maskSource": "height-field",
         "terrainType": args.terrain_type,
+        "boundaryWidthM": args.boundary_width_m,
+        "riverMask": args.river_mask,
+        "riverPercentile": args.river_percentile,
+        "riverCoverage": river_coverage,
+        "flowAccumulation": str(flow_path.resolve()),
         "shapePreset": PRESETS[args.terrain_type].__dict__,
         "erosion": erosion_stats,
         "manifest": str(args.manifest.resolve()),

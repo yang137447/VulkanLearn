@@ -1799,3 +1799,18 @@ BP 实窗检查被用户 Escape 中止，因此本轮未完成最终 BP 视口�
   `Maps/SC_model_preview` 与四个 `SC_tressfx_female*` 场景的 `wind` 对象
   未进入 `scene.schema.json` 的 10 个 `oneOf` 分支。该缺口在本次实例化改动前
   已存在；本场景的 mesh 对象直接按 `$defs.meshObject` 校验为 0 问题。
+
+## 2026-11-05 PCG 河网与边界收敛
+
+`tool/blender-terrain-import` 的 producer 改为在侵蚀后重新做物理宽度 sea-level
+taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
+
+- `terrain_erosion_tests` 6 项通过；新增边界渐隐/海平面归零和河网通道测试。
+- 512² alpine 冒烟（`--boundary-width-m 400 --river-percentile 98.5`）
+  生成连续枝状 `mask_gn_river.png`；转换器输出 5 层 TR + 2048² VLP1。
+- 1024² alpine 默认切片已重新生成，TR 为
+  Gravel/Slope/Ridge/Highland/River Bed 5 层；引擎加载成功并截图。
+- 1024² 预览指标：`radial_symmetry=0.7785`、`anisotropy=1.5659`、
+  `ridge_density=0.0990`、`drainage_length_km=2.577`。
+- 当前河网是面积阈值 mask，不是水面或水力求解；边框 taper 仍是单 tile 的
+  矩形海平面过渡，多 tile 拼接前需要周期性海岸/侵蚀方案。

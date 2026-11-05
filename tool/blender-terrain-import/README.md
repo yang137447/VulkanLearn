@@ -53,6 +53,12 @@
 + `detail_restore` 仍保留为可选的“低频面侵蚀 + 高频贴回”，但 MFD 默认
 `pre_smooth_iterations=0`，不再依赖它把 D8 的碎沟连起来。
 
+侵蚀后 producer 再用物理宽度 `--boundary-width-m` 做一次海平面 taper，
+把每条边的最后一段平滑压到 0；只做侵蚀前的 taper 会让边界格继续参与汇流，
+导出后留下锯齿状竖墙。最终高度场重新计算 MFD 汇流面积，并按
+`--river-percentile` 阈出 0..1 的河网 mask；`River Bed` 层使用 0..1 高度窗口
+和 0..45° 坡度窗口，河道跨海拔仍然保留。
+
 旧显式路径保留为 `method="explicit"`（`flow_accumulation` MFD + 封顶下切），
 仅用于 A/B 对比。只依赖 numpy，可脱离 Blender 单独运行；512² × 10 轮
 MFD + 沉积实测约 20s，纯 D8 约 11s；1024² 完整 producer 约 90s。
@@ -100,6 +106,9 @@ py -3 tool\terrain-ue-import\build_vulkanlearn_assets.py `
 * `--erosion-deposition 1.0`（0 关闭）、`--erosion-deposition-length-m 1000`
 * `--erosion-uplift 0.0`（每步抬升米数）
 * `--thermal-iterations 6`
+* `--boundary-width-m 100`（最终海平面 taper 的物理宽度）
+* `--river-percentile 98.5`（汇流面积进入河网 mask 的百分位）
+* `--no-river-mask`（生成 4 层地表，不生成 River Bed 层）
 * `--camera-position x y z`、`--camera-rotation pitch yaw roll`（写入 manifest，单位 cm/度）
 
 ## 验收
@@ -183,7 +192,10 @@ Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
 * `ridge_density` / `valley_density` — 两者接近说明是各向同性噪声，不是脊谷网络
 * `drainage_length_km` — 连续谷线总长，衡量树枝状水系
 
-### 2026-11-05 六地貌 1024² 默认参数
+### 2026-11-05 六地貌 1024² 默认参数（河网批次之前）
+
+下表是加入 `River Bed` 层和侵蚀后边界 taper 之前、4 层地表的基线；
+当前默认输出为 5 层，不能把下表当作带河网资产的验收数据。
 
 | 预设 | anisotropy | drainage_km | slope_p50° | deposited / exported (M m³) |
 |---|---:|---:|---:|---:|
@@ -198,6 +210,23 @@ Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
 `artifacts/gn_biomes/contact_sheet.png`。coastal 东侧边缘仍有条带，后续应优先
 检查海岸权重与边界 taper，而不是直接调侵蚀系数。
 
+### 2026-11-05 河网与边界二次收敛
+
+512² alpine 冒烟（`--boundary-width-m 400 --river-percentile 98.5`）：
+
+* `mask_gn_river.png` 出现连续枝状主河道，不再是均匀噪声斑点；
+* 侵蚀后边界重新 taper，hillshade 不再有侵蚀造成的单格锯齿竖墙；
+* `flow_accumulation.png`、`mask_gn_river.png` 与 `River Bed` 层写入 manifest；
+* 4 个地表层加 River Bed 共 5 层，转换器仍按现有 VLP1/top-4 路径消费。
+
+1024² alpine 默认切片：河网 mask 覆盖 1.35% texel，预览指标
+`radial_symmetry=0.7785`、`anisotropy=1.5659`、`ridge_density=0.0990`、
+`drainage_length_km=2.577`；转换器输出 5 层 TR/MI/VLP1，引擎加载截图在
+`VukanLearnResources/Generated/Screenshots/pegasus_gn_river_final.bmp`。
+
+边界 taper 是矩形海平面过渡，不是海岸线建模；需要真正不规则海岸时应继续改
+GN 的 `coast` 场，而不是把 taper 宽度无限调大。
+
 ## 已知边界
 
 * 沉积是 transport-limitation 代理：按坡度和沉积长度尺度在平坦格回填，
@@ -205,7 +234,10 @@ Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
   `deposition_length_m` 会把更多泥沙送出网格、保留更多河道；调小则填谷更明显。
 * 抬升是均匀的 `uplift_m`，出口固定为基准面；没有空间变化的抬升场或岩性差异。
 * MFD 比 D8 慢约 2×；1024² 资产需要更长侵蚀时间。
-* 没有 VDB 云、HLOD、路网、河流水面；`dune` 之外没有风沙输运。
+* 河网是汇流面积阈值 mask，不是水力求解、水面 mesh 或流量动画。
+* 边界 taper 是矩形海平面过渡，不是海岸线建模；多 tile 拼接前需要改成周期性
+  海岸/侵蚀，不能直接依赖单 tile 的边框 taper。
+* 没有 VDB 云、HLOD、路网或水面；`dune` 之外没有风沙输运。
 * 导出 scatter 点来自侵蚀后的高度场；`.blend` 里的 GN scatter 只作预览。
 * 引擎侧 chunk LOD 已改为边界缝合，不再使用裙边；粗 LOD 的边界环固定用
   step=1 法线，内侧粗顶点按到边界的距离混向细法线，避免过渡带明暗线。

@@ -19,9 +19,12 @@ import numpy as np
 from terrain_erosion import (
     ErosionDiagnostics,
     ErosionParams,
+    border_fade,
     erode,
     flow_accumulation,
     implicit_stream_power_erode,
+    river_mask,
+    taper_to_sea_level,
 )
 
 
@@ -143,6 +146,34 @@ class TerrainErosionTests(unittest.TestCase):
             1.0 - math.exp(-4.0 / 1000.0),
             places=12,
         )
+
+    def test_border_taper_reaches_sea_level_on_every_edge(self) -> None:
+        height = np.full((40, 40), 100.0, dtype=np.float64)
+        tapered = taper_to_sea_level(height, 10.0, 50.0)
+        self.assertEqual(float(tapered[0, 20]), 0.0)
+        self.assertEqual(float(tapered[-1, 20]), 0.0)
+        self.assertEqual(float(tapered[20, 0]), 0.0)
+        self.assertEqual(float(tapered[20, -1]), 0.0)
+        self.assertAlmostEqual(float(tapered[20, 20]), 100.0)
+        self.assertLess(float(tapered[4, 20]), float(tapered[5, 20]))
+        self.assertFalse(np.any(border_fade((40, 40), 10.0, 0.0) < 1.0))
+
+    def test_river_mask_marks_the_drainage_channel(self) -> None:
+        flow_area = np.full((32, 32), 1.0, dtype=np.float64)
+        flow_area[:, 15:17] = 1.0e6
+        flow_area[16, 15:17] = 5.0e6
+        land = np.ones((32, 32), dtype=bool)
+        land[0, :] = False
+
+        mask = river_mask(flow_area, 10.0, land, 90.0)
+        self.assertGreater(float(mask[16, 16]), 0.5)
+        self.assertEqual(float(mask[16, 0]), 0.0)
+        self.assertEqual(float(mask[0, 16]), 0.0)
+        self.assertTrue(np.all(np.isfinite(mask)))
+        self.assertTrue(np.all((mask >= 0.0) & (mask <= 1.0)))
+
+        with self.assertRaises(ValueError):
+            river_mask(flow_area, 10.0, land, 100.0)
 
 
 if __name__ == "__main__":

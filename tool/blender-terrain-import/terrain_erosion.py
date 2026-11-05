@@ -424,6 +424,94 @@ def flow_accumulation(
     return _flow_from_filled(filled, cell_size, method)
 
 
+def border_fade(
+    shape: tuple[int, int],
+    cell_size: float,
+    width_m: float,
+) -> np.ndarray:
+    """Smooth 0..1 fade from a rectangle's outer edge into its interior.
+
+    ``width_m`` is a physical distance, so the same terrain produces the same
+    coastal rim at every raster resolution.  A non-positive width disables the
+    fade and returns an all-ones mask.
+    """
+    if len(shape) != 2 or shape[0] < 2 or shape[1] < 2:
+        raise ValueError("shape must be a 2D grid of at least 2x2")
+    if not np.isfinite(cell_size) or cell_size <= 0.0:
+        raise ValueError("cell_size must be positive and finite")
+    if not np.isfinite(width_m) or width_m < 0.0:
+        raise ValueError("width_m must be finite and non-negative")
+    rows, columns = int(shape[0]), int(shape[1])
+    if width_m == 0.0:
+        return np.ones((rows, columns), dtype=np.float64)
+
+    x = np.arange(columns, dtype=np.float64) * cell_size
+    y = np.arange(rows, dtype=np.float64) * cell_size
+    distance_x = np.minimum(x, x[-1] - x)
+    distance_y = np.minimum(y, y[-1] - y)
+    distance = np.minimum(distance_y[:, None], distance_x[None, :])
+    t = np.clip(distance / width_m, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def taper_to_sea_level(
+    z: np.ndarray,
+    cell_size: float,
+    width_m: float,
+    sea_level_m: float = 0.0,
+) -> np.ndarray:
+    """Blend a height field to ``sea_level_m`` over the outer boundary band.
+
+    The producer runs this after erosion as well as before export so a tile's
+    last cells cannot become the vertical wall seen in hillshade/preview.
+    """
+    height = _as_heightfield(z)
+    if not np.isfinite(sea_level_m):
+        raise ValueError("sea_level_m must be finite")
+    fade = border_fade(height.shape, cell_size, width_m)
+    return sea_level_m + (height - sea_level_m) * fade
+
+
+def river_mask(
+    flow_area_m2: np.ndarray,
+    cell_size: float,
+    land_mask: np.ndarray,
+    threshold_percentile: float = 98.5,
+) -> np.ndarray:
+    """Turn drainage area into a 0..1 river/valley mask.
+
+    The threshold is percentile-based because absolute drainage area changes
+    with tile size and resolution.  ``threshold_percentile`` selects the
+    channel cells; the next 0.8 percentile supplies a soft shoulder so the
+    mask does not disappear when the PNG is quantized to 8/16 bit.
+    """
+    area = np.asarray(flow_area_m2, dtype=np.float64)
+    land = np.asarray(land_mask, dtype=bool)
+    if area.shape != land.shape or area.ndim != 2:
+        raise ValueError("flow_area_m2 and land_mask must be matching 2D arrays")
+    if not np.isfinite(cell_size) or cell_size <= 0.0:
+        raise ValueError("cell_size must be positive and finite")
+    if not 50.0 <= threshold_percentile < 100.0:
+        raise ValueError("threshold_percentile must be in [50, 100)")
+
+    result = np.zeros(area.shape, dtype=np.float64)
+    valid = land & np.isfinite(area) & (area > 0.0)
+    if not valid.any():
+        return result
+
+    cell_area = cell_size * cell_size
+    log_area = np.log1p(np.maximum(area, 0.0) / cell_area)
+    samples = log_area[valid]
+    low = float(np.percentile(samples, threshold_percentile))
+    high = float(np.percentile(
+        samples, min(99.999, threshold_percentile + 0.8)))
+    span = max(high - low, 0.25)
+    t = np.clip((log_area - low) / span, 0.0, 1.0)
+    result = t * t * (3.0 - 2.0 * t)
+    result[~valid] = 0.0
+    return result
+
+
 def _normalize_area(
     area: np.ndarray, cell_size: float, mode: str, scale: float
 ) -> np.ndarray:
