@@ -198,6 +198,8 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 translucencyVolumeInvExtent; // xyz 1/extent, w intensity
     vec4 particleLightShadowParams;  // slice,type,far,bias
     vec4 particleLightIesParams;     // profileIndex,hasIes,0,0
+    // mesh 溶解外推：x=半径随寿命推进(0..1), y=总外推比, z=启用, w=保留。
+    vec4 puffParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](

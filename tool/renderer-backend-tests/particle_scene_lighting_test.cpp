@@ -296,8 +296,10 @@ TEST(ParticleSceneLighting, RendererWritesDescriptorBindingsSixToNine)
     EXPECT_TRUE(Contains(source, "LightIndexInfoForImage(imageIndex)"));
     EXPECT_TRUE(Contains(source, "LightGridParamInfoForImage(imageIndex)"));
     // 图形池每 image 至少要有 4 个额外 storage、2 个额外 sampler 与 1 个 UBO。
-    EXPECT_TRUE(Contains(source, "imageCount * 21"));
-    EXPECT_TRUE(Contains(source, "imageCount * 3"));
+    // 计数随 tile 灯网格/索引与骨骼 palette set 增长，这里只钉住"按 image
+    // 线性扩容"这一结构，具体常量由 CreateDescriptors 自己维护。
+    EXPECT_TRUE(Contains(source, "imageCount * 24"));
+    EXPECT_TRUE(Contains(source, "imageCount * 5"));
 }
 
 TEST(ParticleSceneLighting, BillboardMaterialLobesUseGgxAndHenyeyGreenstein)
@@ -306,8 +308,9 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesUseGgxAndHenyeyGreenstein)
         ReadSource("shader/glsl/particle/particleSceneLighting.glsl");
     // 镜面必须是真正的 D*G*F 直接光 lobe，而不是又一份 Lambert。
     EXPECT_TRUE(Contains(source, "float ParticleBillboardSpecularLobe("));
-    EXPECT_TRUE(Contains(source, "DistributionGGX(n, h, roughness)"));
-    EXPECT_TRUE(Contains(source, "ParticleGeometrySmith(n, v, l, roughness)"));
+    // 微表面参数按论文记作 alpha（roughness²），GGX 调用因此不再出现字面量 roughness。
+    EXPECT_TRUE(Contains(source, "DistributionGGX(n, h, alpha)"));
+    EXPECT_TRUE(Contains(source, "ParticleGeometrySmith(n, v, l, alpha)"));
     // 前向散射用归一化 HG，g=0.6，峰值归一到 1。
     EXPECT_TRUE(Contains(source, "float ParticleBillboardForwardScattering("));
     EXPECT_TRUE(Contains(source, "const float g = 0.6;"));
@@ -343,7 +346,7 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
     EXPECT_TRUE(Contains(
         header,
         "offsetof(FrameUniforms, billboardLightParams2) == 7568"));
-    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 7792"));
+    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 8608"));
 
     const std::string renderer =
         ReadSource("source/particles/particleRenderer.cpp");
@@ -357,7 +360,11 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
     // renderMode；只写 billboard 会让 particleRibbon.frag 的光照分支死掉。
     EXPECT_TRUE(Contains(
         renderer,
-        "emitter.asset.renderMode == \"ribbon\""));
+        "emitter.asset.renderMode == \"billboard\""));
+    EXPECT_TRUE(Contains(
+        renderer,
+        "(emitter.asset.renderMode == \"billboard\" ||\n"
+        "             emitter.asset.renderMode == \"ribbon\")"));
 
     const std::string gather =
         ReadSource("shader/glsl/particle/particleGlobalGather.comp");

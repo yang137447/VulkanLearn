@@ -217,8 +217,11 @@ float ParticleBillboardSpecularLobe(
         return 0.0;
     }
     vec3 h = normalize(l + v);
-    float distribution = DistributionGGX(n, h, roughness);
-    float geometry = ParticleGeometrySmith(n, v, l, roughness);
+    // 微表面参数按论文记作 alpha = roughness²（与 GGX/Smith 定义一致）；
+    // 直接传 perceptual roughness 会让 D 峰过宽、G 偏松。
+    float alpha = roughness * roughness;
+    float distribution = DistributionGGX(n, h, alpha);
+    float geometry = ParticleGeometrySmith(n, v, l, alpha);
     float fresnel = 0.04 + 0.96 * pow(
         clamp(1.0 - max(dot(h, v), 0.0), 0.0, 1.0),
         5.0);

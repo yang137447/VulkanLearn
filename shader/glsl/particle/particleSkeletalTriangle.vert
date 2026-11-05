@@ -52,8 +52,10 @@ void main()
     vec3 sourcePosition = vertex == 0
         ? particle.source0.xyz
         : (vertex == 1 ? particle.source1.xyz : particle.source2.xyz);
-    vec3 worldPosition = ParticleMeshWorldPosition(
-        particle, particleIndex, sourcePosition * frame.meshScale.xyz);
+    // 三角面源在 spawn 时与骨骼网格 model space 对齐（面片重心 + 模型空间偏移），
+    // 粒子当前位置已在模拟空间；meshScale 是作者对模型局部的逐轴缩放。
+    vec3 worldPosition = particle.positionAge.xyz +
+        mat3(frame.localToWorld) * (sourcePosition * frame.meshScale.xyz);
     gl_Position = frame.viewProjection * vec4(worldPosition, 1.0);
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
     vColor = EvaluateColorCurve(ParticleMeshLifeT(particle));
@@ -66,8 +68,10 @@ void main()
     {
         localNormal = vec3(0.0, 1.0, 0.0);
     }
-    vNormal = ParticleMeshWorldNormal(
-        particle, particleIndex, normalize(localNormal));
+    // 面法线只做模型空间到世界空间的旋转/缩放，不再叠加逐粒子朝向基：
+    // 三角面粒子的意义就是把原网格表面的朝向原样带到世界空间。
+    vNormal = normalize(
+        mat3(frame.localToWorld) * normalize(localNormal));
     vWorldPosition = worldPosition;
     vUv = vec2(
         vertex == 0 ? 0.0 : (vertex == 1 ? 1.0 : 0.5),

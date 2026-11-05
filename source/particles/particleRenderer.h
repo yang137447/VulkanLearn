@@ -25,6 +25,8 @@
 #include "particles/particleRenderIdentity.h"
 #include "particles/particleSdf.h"
 #include "particles/particleShadowCaster.h"
+#include "particles/particleSkeletalPose.h"
+#include "particles/particleSpawnSource.h"
 #include "VertexDataStruct.h"
 #include "render/particles/particleGpuTimer.h"
 #include "resource/image/hostImage.h"
@@ -465,9 +467,11 @@ private:
         Eigen::Vector4f particleLightShadowParams;
         // x=IES profile index, y=hasIes, z/w reserved。
         Eigen::Vector4f particleLightIesParams;
+        // mesh 溶解外推：x=半径随寿命推进(0..1), y=总外推比, z=启用, w=保留。
+        Eigen::Vector4f puffParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 8592,
+        sizeof(FrameUniforms) == 8608,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -688,6 +692,9 @@ private:
     static_assert(
         offsetof(FrameUniforms, particleLightIesParams) == 8576,
         "ParticleFrame particleLightIesParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, puffParams) == 8592,
+        "ParticleFrame puffParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -769,9 +776,12 @@ private:
                 uint32_t joint = 0;
                 float weight = 0.0f;
             };
+            // 蒙皮顶点缓冲只保存绑定姿态：解耦的粒子实例共享同一份几何，
+            // 真正的形变在顶点着色器里按关节 palette 计算（GPU skinning）。
             GpuBuffer vertices;
             GpuBuffer indices;
-            GpuBuffer skinInfluences;
+            // 每个 swapchain image 一份 palette SSBO：CPU 每帧写当前姿态的
+            // jointModel × inverseBind，避免与在飞帧复用同一段 buffer。
             std::vector<GpuBuffer> skinPalettes;
             std::vector<vk::DescriptorSet> paletteSets;
             std::vector<vk::DescriptorSet> materialSets;
@@ -785,7 +795,8 @@ private:
             float localBoundsRadius = 0.0f;
             std::vector<Eigen::Matrix4f> inverseBinds;
             Eigen::Matrix4f meshToModel = Eigen::Matrix4f::Identity();
-            // CPU skinning source；每帧只更新 host-visible 顶点缓冲。
+            // CPU 侧蒙皮源（绑定姿态顶点 + CSR 权重）；只用于构建三角面/骨段
+            // spawn 源，不参与每帧顶点更新。
             std::vector<Vertex> sourceVertices;
             std::vector<uint32_t> sourceIndices;
             std::vector<uint32_t> influenceOffsets;
@@ -798,8 +809,10 @@ private:
         float skeletalPoseRate = 0.0f;
         bool skeletalPoseLoop = true;
         std::vector<SkeletalSection> skeletalSections;
-        // 用于每秒更新 palette 的累计时钟；run 时由 emitter.elapsedSeconds 驱动。
-        float skeletalPoseClock = 0.0f;
+        // 文件 + 文件大小 + 修改时间 + 片段 + 播放模式；变化时重建骨骼网格资源。
+        std::string skeletalSourceKey;
+        // 最近一次写入 palette 的姿态键；同一帧内多个骨骼发射器可共享采样结果。
+        ParticleSkeletalPoseKey skeletalPoseKey;
         uint32_t sortCapacity = 0;
         // 排序结束时 pair 表的奇偶性决定 graphics 绑定 A 还是 B。
         bool sortFinalUsesA = true;
@@ -1029,6 +1042,8 @@ private:
     std::shared_ptr<PipelineBase> meshAdditivePipeline;
     std::shared_ptr<PipelineBase> meshAlphaPipeline;
     // 骨骼网格完整实例（与静态 mesh 共用顶点/材质合同，额外 set 2 蒙皮）。
+    std::shared_ptr<PipelineBase> skeletalMeshAdditivePipeline;
+    std::shared_ptr<PipelineBase> skeletalMeshAlphaPipeline;
     // SkeletalMeshTris/Bones：逐粒子三角面/骨段，无顶点输入。
     std::shared_ptr<PipelineBase> skeletalTriangleAdditivePipeline;
     std::shared_ptr<PipelineBase> skeletalTriangleAlphaPipeline;

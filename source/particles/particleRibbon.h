@@ -12,7 +12,7 @@ namespace VL
 // ribbon 保存 16 个历史采样点（不含当前位置），顶点阶段先按弧长
 // 重采样到 1..32 段。固定历史深度避免把模拟帧率直接暴露给条带形状。
 inline constexpr uint32_t kParticleRibbonHistorySamples = 16;
-inline constexpr uint32_t kMaxParticleRibbonSegments = 64;
+inline constexpr uint32_t kMaxParticleRibbonSegments = 32;
 
 inline uint32_t ClampParticleRibbonSegments(uint32_t segments)
 {

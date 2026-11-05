@@ -16,6 +16,11 @@ namespace VL
 
 // mesh 粒子独占的 descriptor set 1 合同。billboard/ribbon/beam 不含该 set。
 inline constexpr uint32_t kParticleMaterialSetIndex = 1;
+// 骨骼网格粒子独占的 descriptor set 2：每个 swapchain image 一份关节 palette
+// SSBO。只有 VL_SKINNED_MESH 变体声明它，静态 mesh 与骨骼三角面/骨段管线
+// 都不含该 set。
+inline constexpr uint32_t kParticleSkinSetIndex = 2;
+inline constexpr uint32_t kParticleSkinPaletteBinding = 0;
 inline constexpr uint32_t kParticleMaterialUniformBinding = 0;
 inline constexpr uint32_t kParticleMaterialAlbedoBinding = 1;
 inline constexpr uint32_t kParticleMaterialNormalBinding = 2;

@@ -50,10 +50,13 @@ void main()
     }
     vec3 localStart = particle.source0.xyz * frame.meshScale.xyz;
     vec3 localEnd = particle.source1.xyz * frame.meshScale.xyz;
-    vec3 startWorld = ParticleMeshWorldPosition(
-        particle, particleIndex, localStart);
-    vec3 endWorld = ParticleMeshWorldPosition(
-        particle, particleIndex, localEnd);
+    // 与三角面源一致：source 已包含面片/骨段相对粒子重心的模型空间偏移，
+    // 世界位置只叠加粒子当前位置与模型空间旋转，不再套逐粒子朝向基。
+    mat3 modelLinear = mat3(frame.localToWorld);
+    vec3 startWorld =
+        particle.positionAge.xyz + modelLinear * localStart;
+    vec3 endWorld =
+        particle.positionAge.xyz + modelLinear * localEnd;
     vec3 tangent = endWorld - startWorld;
     float tangentLength = length(tangent);
     vec3 view = normalize(frame.cameraPosition.xyz -
@@ -72,9 +75,17 @@ void main()
     vColor = EvaluateColorCurve(ParticleMeshLifeT(particle));
     vColor.a *= frame.render.w;
     vSoftness = frame.render.z;
-    vec3 normal = cross(side, normalize(tangent + vec3(1.0e-6)));
-    vNormal = dot(normal, normal) > 1.0e-10
-        ? normalize(normal) : frame.cameraRight.xyz;
+    // 骨段是圆柱薄片：两条对角三角形翻转绕序，按片元朝向翻回，否则背面会在
+    // 双面关闭时消失；法线取视图投影平面内的垂线而不是固定的 X 轴叉积。
+    vec3 segmentAxis = tangentLength > 1.0e-5
+        ? tangent / tangentLength
+        : normalize(view);
+    vec3 flatNormal = normalize(cross(side, segmentAxis));
+    if (!gl_FrontFacing)
+    {
+        flatNormal = -flatNormal;
+    }
+    vNormal = normalize(flatNormal + view * 1.0e-3);
     vWorldPosition = worldPosition;
     vUv = vec2(along, corner.y * 0.5 + 0.5);
     vLifeT = ParticleMeshLifeT(particle);

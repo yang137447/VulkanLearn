@@ -53,6 +53,58 @@
 
 namespace VL
 {
+
+namespace
+{
+
+// 骨骼网格粒子资源构建期间使用的 CPU 蒙皮参考。palette/matrix 语义与
+// particleSkeletalSkin.glsl 完全一致：p = Σ w · (model_j · inverseBind_j) · p_bind。
+template <typename Section>
+void SkinParticleSkeletalSection(
+    Section& section,
+    const std::vector<Eigen::Matrix4f>& models)
+{
+    section.skinnedVertices = section.sourceVertices;
+    for (size_t vertexIndex = 0;
+         vertexIndex < section.sourceVertices.size();
+         ++vertexIndex)
+    {
+        Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
+        const uint32_t begin = section.influenceOffsets.at(vertexIndex);
+        const uint32_t end = section.influenceOffsets.at(vertexIndex + 1);
+        for (uint32_t index = begin; index < end; ++index)
+        {
+            const auto& influence = section.influences.at(index);
+            if (influence.joint >= models.size() ||
+                influence.joint >= section.inverseBinds.size())
+            {
+                continue;
+            }
+            skin += influence.weight *
+                models[influence.joint] *
+                section.inverseBinds[influence.joint];
+        }
+        Vertex& target = section.skinnedVertices[vertexIndex];
+        const Vertex& source = section.sourceVertices[vertexIndex];
+        target.position =
+            (skin * Eigen::Vector4f(
+                source.position.x(),
+                source.position.y(),
+                source.position.z(),
+                1.0f)).head<3>();
+        const Eigen::Matrix3f linear = skin.block<3, 3>(0, 0);
+        target.normal = (linear.inverse().transpose() * source.normal).normalized();
+        Eigen::Vector3f tangent = linear * source.tangent.head<3>();
+        tangent -= target.normal * target.normal.dot(tangent);
+        if (tangent.squaredNorm() > 1.0e-10f)
+        {
+            target.tangent.head<3>() = tangent.normalized();
+        }
+    }
+}
+
+} // namespace
+
 namespace
 {
 
@@ -456,6 +508,25 @@ GraphicsPipelineLayoutDesc BuildParticleMeshLayout()
         texture.name = textureNames[index];
         bindings.push_back(std::move(texture));
     }
+    return layout;
+}
+
+// 骨骼完整实例（mesh 模式 + 骨骼资产）额外独占 set 2：一个只读关节
+// palette SSBO。palette 按 swapchain image 写，顶点着色器读取当前姿态。
+GraphicsPipelineLayoutDesc BuildParticleSkeletalLayout()
+{
+    GraphicsPipelineLayoutDesc layout = BuildParticleMeshLayout();
+    layout.overrideSets[kParticleSkinSetIndex] = true;
+    std::vector<ShaderBinding>& bindings =
+        layout.setBindings[kParticleSkinSetIndex];
+    ShaderBinding palette;
+    palette.set = kParticleSkinSetIndex;
+    palette.binding = kParticleSkinPaletteBinding;
+    palette.type = vk::DescriptorType::eStorageBuffer;
+    palette.descriptorCount = 1;
+    palette.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    palette.name = "SkinPalette";
+    bindings.push_back(std::move(palette));
     return layout;
 }
 
@@ -874,6 +945,29 @@ void ParticleRenderer::Initialize(
         vk::CullModeFlagBits::eNone,
         GraphicsPipelineBlendMode::Additive,
         meshLayout);
+    // 骨骼完整实例：同一份 mesh shader，但打开 VL_SKINNED_MESH 并追加
+    // set 2 的 palette。骨骼资产无论作者写 mesh 还是骨骼粒子模式都走这条
+    // 管线；skeletalMeshTris/Bones 是无顶点输入的独立管线。
+    ShaderVariantKey skeletalMeshVariant = meshVariant;
+    skeletalMeshVariant.macros.push_back("VL_SKINNED_MESH=1");
+    const GraphicsShaderVariantArtifact& skeletalMeshArtifact =
+        factory.PrepareGraphicsShaderVariant(skeletalMeshVariant);
+    const GraphicsPipelineLayoutDesc skeletalMeshLayout =
+        BuildParticleSkeletalLayout();
+    skeletalMeshAdditivePipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        meshContract,
+        skeletalMeshArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::Additive,
+        skeletalMeshLayout);
+    skeletalMeshAlphaPipeline = factory.CreateGraphicsPipeline(
+        &particlePass->renderPass,
+        meshContract,
+        skeletalMeshArtifact,
+        vk::CullModeFlagBits::eNone,
+        GraphicsPipelineBlendMode::AlphaBlend,
+        skeletalMeshLayout);
     meshAlphaPipeline = factory.CreateGraphicsPipeline(
         &particlePass->renderPass,
         meshContract,
@@ -1044,6 +1138,8 @@ void ParticleRenderer::Shutdown(RendererBackendVulkan& renderer)
     distortionPipeline.reset();
     meshAdditivePipeline.reset();
     meshAlphaPipeline.reset();
+    skeletalMeshAdditivePipeline.reset();
+    skeletalMeshAlphaPipeline.reset();
     skeletalTriangleAdditivePipeline.reset();
     skeletalTriangleAlphaPipeline.reset();
     skeletalBoneAdditivePipeline.reset();
@@ -3921,79 +4017,11 @@ void ParticleRenderer::LoadSkeletalEmitterMesh(
     emitter.skeletalPoseTime = emitter.asset.skeletalPose.time;
     emitter.skeletalPoseRate = emitter.asset.skeletalPose.rate;
     emitter.skeletalPoseLoop = emitter.asset.skeletalPose.loop;
-
-    const auto computeModels = [&](float clock)
-    {
-        std::vector<Eigen::Matrix4f> models;
-        models.reserve(asset.mesh.joints.size());
-        if (emitter.asset.skeletalPose.clip.empty())
-        {
-            for (const Joint& joint : asset.mesh.joints)
-            {
-                models.push_back(joint.restModel);
-            }
-            return models;
-        }
-        const Clip& clip = asset.clips.at(emitter.skeletalClipIndex);
-        float time = emitter.skeletalPoseTime + clock;
-        if (emitter.skeletalPoseLoop)
-        {
-            const float duration = std::max(
-                clip.runtime ? clip.runtime->duration() : 0.0f,
-                1.0e-4f);
-            time = std::fmod(time, duration);
-            if (time < 0.0f)
-            {
-                time += duration;
-            }
-        }
-        const LocalPose locals = SampleLocals(asset.mesh, clip, time);
-        return LocalToModels(asset.mesh, locals);
-    };
-    const auto skinVertices = [&](EmitterResources::SkeletalSection& section,
-                                  const std::vector<Eigen::Matrix4f>& models)
-    {
-        section.skinnedVertices = section.sourceVertices;
-        for (size_t vertexIndex = 0;
-             vertexIndex < section.sourceVertices.size();
-             ++vertexIndex)
-        {
-            Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
-            const uint32_t begin = section.influenceOffsets.at(vertexIndex);
-            const uint32_t end = section.influenceOffsets.at(vertexIndex + 1);
-            for (uint32_t index = begin; index < end; ++index)
-            {
-                const auto& influence = section.influences.at(index);
-                if (influence.joint >= models.size() ||
-                    influence.joint >= section.inverseBinds.size())
-                {
-                    continue;
-                }
-                skin += influence.weight *
-                    models[influence.joint] *
-                    section.inverseBinds[influence.joint];
-            }
-            Vertex& target = section.skinnedVertices[vertexIndex];
-            const Vertex& source = section.sourceVertices[vertexIndex];
-            target.position =
-                (skin * Eigen::Vector4f(
-                    source.position.x(),
-                    source.position.y(),
-                    source.position.z(),
-                    1.0f)).head<3>();
-            const Eigen::Matrix3f linear = skin.block<3, 3>(0, 0);
-            const Eigen::Matrix3f normalMatrix =
-                linear.inverse().transpose();
-            target.normal = (normalMatrix * source.normal).normalized();
-            Eigen::Vector3f tangent =
-                linear * source.tangent.head<3>();
-            tangent -= target.normal * target.normal.dot(tangent);
-            if (tangent.squaredNorm() > 1.0e-10f)
-            {
-                target.tangent.head<3>() = tangent.normalized();
-            }
-        }
-    };
+    // 资产生成：绑定/静止姿态只用来烘焙 spawn 源与包围半径；每帧播放姿态
+    // 由 RecordSimulation 写入各 image 的 palette，顶点着色器完成蒙皮。
+    const std::shared_ptr<const std::vector<Eigen::Matrix4f>> restModels =
+        SampleParticleSkeletalModels(
+            asset, emitter.skeletalClipIndex, 0.0f, false);
     const auto createHostBuffer = [&](vk::DeviceSize bytes,
                                       vk::BufferUsageFlags usage,
                                       const std::string& name)
@@ -4009,282 +4037,281 @@ void ParticleRenderer::LoadSkeletalEmitterMesh(
         result.memory = allocation.second;
         return result;
     };
-
-    const std::vector<Eigen::Matrix4f> models = computeModels(0.0f);
-    std::vector<std::array<float, 16>> sourceRecords;
-    std::vector<float> sourceWeights;
-    for (size_t sectionIndex = 0;
-         sectionIndex < asset.mesh.sections.size();
-         ++sectionIndex)
+    const auto uploadHostBuffer = [&](GpuBuffer& buffer,
+                                      const void* data,
+                                      vk::DeviceSize bytes,
+                                      const char* what)
     {
-        const SkinSection& source = asset.mesh.sections[sectionIndex];
-        if (source.vertices.empty() || source.indices.empty())
-        {
-            continue;
-        }
-        EmitterResources::SkeletalSection section;
-        section.sourceVertices = source.vertices;
-        section.sourceIndices = source.indices;
-        section.influenceOffsets = source.influenceOffsets;
-        section.influences.reserve(source.influences.size());
-        for (const Influence& influence : source.influences)
-        {
-            section.influences.push_back(
-                {influence.joint, influence.weight});
-        }
-        section.inverseBinds = source.inverseBinds;
-        section.meshToModel = source.meshToModel;
-        skinVertices(section, models);
-        section.indexCount =
-            static_cast<uint32_t>(section.sourceIndices.size());
-        section.vertices = createHostBuffer(
-            static_cast<vk::DeviceSize>(
-                section.skinnedVertices.size() * sizeof(Vertex)),
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            "ParticleSkeletalVertices:" + emitterKey +
-                "/" + std::to_string(sectionIndex));
-        section.indices = createHostBuffer(
-            static_cast<vk::DeviceSize>(
-                section.sourceIndices.size() * sizeof(uint32_t)),
-            vk::BufferUsageFlagBits::eIndexBuffer,
-            "ParticleSkeletalIndices:" + emitterKey +
-                "/" + std::to_string(sectionIndex));
-        void* mapped = backend->MapMemory(
-            section.vertices.memory,
-            static_cast<vk::DeviceSize>(
-                section.skinnedVertices.size() * sizeof(Vertex)));
+        void* mapped = backend->MapMemory(buffer.memory, bytes);
         if (mapped == nullptr)
-        {
-            throw std::runtime_error("skeletal vertex map failed");
-        }
-        std::memcpy(
-            mapped,
-            section.skinnedVertices.data(),
-            section.skinnedVertices.size() * sizeof(Vertex));
-        backend->UnmapMemory(section.vertices.memory);
-        mapped = backend->MapMemory(
-            section.indices.memory,
-            static_cast<vk::DeviceSize>(
-                section.sourceIndices.size() * sizeof(uint32_t)));
-        if (mapped == nullptr)
-        {
-            throw std::runtime_error("skeletal index map failed");
-        }
-        std::memcpy(
-            mapped,
-            section.sourceIndices.data(),
-            section.sourceIndices.size() * sizeof(uint32_t));
-        backend->UnmapMemory(section.indices.memory);
-        for (const Vertex& vertex : section.skinnedVertices)
-        {
-            const Eigen::Vector3f scaled(
-                vertex.position.x() * emitter.asset.meshScale.x(),
-                vertex.position.y() * emitter.asset.meshScale.y(),
-                vertex.position.z() * emitter.asset.meshScale.z());
-            emitter.meshLocalBoundsRadius = std::max(
-                emitter.meshLocalBoundsRadius, scaled.norm());
-        }
-
-        std::string materialPath =
-            sectionIndex < imported.sectionPlans.size()
-                ? imported.sectionPlans[sectionIndex].materialInstancePath
-                : std::string();
-        if (materialPath.empty())
-        {
-            materialPath = emitter.asset.materialInstancePath;
-        }
-        if (!materialPath.empty())
-        {
-            std::string materialError;
-            section.material = LoadParticleMaterialInstance(
-                materialPath, materialError);
-            if (!section.material.valid && !materialError.empty())
-            {
-                WarnMaterialFallbackOnce(
-                    emitterKey + "#" + std::to_string(sectionIndex),
-                    materialPath,
-                    materialError);
-            }
-        }
-        section.albedo = ResolveMaterialTexture(
-            emitterKey + "#" + std::to_string(sectionIndex),
-            section.material.albedoMap,
-            HostImage::TextureSemantic::Color,
-            defaultTexture);
-        section.normal = ResolveMaterialTexture(
-            emitterKey + "#" + std::to_string(sectionIndex),
-            section.material.normalMap,
-            HostImage::TextureSemantic::Normal,
-            defaultNormalTexture);
-        section.orm = ResolveMaterialTexture(
-            emitterKey + "#" + std::to_string(sectionIndex),
-            section.material.ormMap,
-            HostImage::TextureSemantic::Data,
-            defaultOrmTexture);
-        section.emissive = ResolveMaterialTexture(
-            emitterKey + "#" + std::to_string(sectionIndex),
-            section.material.emissiveMap,
-            HostImage::TextureSemantic::Color,
-            defaultEmissiveTexture);
-        section.materialUniform = createHostBuffer(
-            sizeof(ParticleMaterialUniforms),
-            vk::BufferUsageFlagBits::eUniformBuffer,
-            "ParticleSkeletalMaterial:" + emitterKey +
-                "/" + std::to_string(sectionIndex));
-        void* materialMapped = backend->MapMemory(
-            section.materialUniform.memory,
-            sizeof(ParticleMaterialUniforms));
-        if (materialMapped == nullptr)
         {
             throw std::runtime_error(
-                "skeletal material uniform map failed");
+                std::string("skeletal ") + what + " map failed");
         }
-        const ParticleMaterialParams& params = section.material;
-        ParticleMaterialUniforms uniforms{};
-        uniforms.uvScaleOffset = Eigen::Vector4f(
-            params.uvScale.x(),
-            params.uvScale.y(),
-            params.uvOffset.x(),
-            params.uvOffset.y());
-        uniforms.textureFlags = Eigen::Vector4f(
-            params.albedoMap.empty() ? 0.0f : 1.0f,
-            params.normalMap.empty() ? 0.0f : 1.0f,
-            params.ormMap.empty() ? 0.0f : 1.0f,
-            params.emissiveMap.empty() ? 0.0f : 1.0f);
-        uniforms.materialParams = Eigen::Vector4f(
-            params.alphaClipThreshold,
-            params.ambientOcclusion,
-            params.normalStrength,
-            0.0f);
-        std::memcpy(
-            materialMapped,
-            &uniforms,
-            sizeof(ParticleMaterialUniforms));
-        backend->UnmapMemory(section.materialUniform.memory);
+        std::memcpy(mapped, data, static_cast<size_t>(bytes));
+        backend->UnmapMemory(buffer.memory);
+    };
 
-        if (emitter.asset.renderMode == "skeletalMeshTris")
-        {
-            for (size_t index = 0;
-                 index + 2 < section.sourceIndices.size();
-                 index += 3)
-            {
-                const Vertex& v0 =
-                    section.skinnedVertices[section.sourceIndices[index]];
-                const Vertex& v1 =
-                    section.skinnedVertices[section.sourceIndices[index + 1]];
-                const Vertex& v2 =
-                    section.skinnedVertices[section.sourceIndices[index + 2]];
-                const Eigen::Vector3f crossValue =
-                    (v1.position - v0.position).cross(
-                        v2.position - v0.position);
-                const float area = crossValue.norm() * 0.5f;
-                if (area <= 1.0e-8f)
-                {
-                    continue;
-                }
-                std::array<float, 16> record{};
-                record[0] = v0.position.x();
-                record[1] = v0.position.y();
-                record[2] = v0.position.z();
-                record[4] = v1.position.x();
-                record[5] = v1.position.y();
-                record[6] = v1.position.z();
-                record[8] = v2.position.x();
-                record[9] = v2.position.y();
-                record[10] = v2.position.z();
-                const Eigen::Vector3f normal = crossValue.normalized();
-                record[12] = normal.x();
-                record[13] = normal.y();
-                record[14] = normal.z();
-                sourceRecords.push_back(record);
-                sourceWeights.push_back(area);
-            }
-        }
-        else if (emitter.asset.renderMode == "skeletalMeshBones")
-        {
-            for (size_t jointIndex = 0;
-                 jointIndex < asset.mesh.joints.size();
-                 ++jointIndex)
-            {
-                const int parent = asset.mesh.joints[jointIndex].parent;
-                if (parent < 0 ||
-                    static_cast<size_t>(parent) >= models.size())
-                {
-                    continue;
-                }
-                const Eigen::Vector3f a =
-                    models[static_cast<size_t>(parent)].block<3, 1>(0, 3);
-                const Eigen::Vector3f b =
-                    models[jointIndex].block<3, 1>(0, 3);
-                const float length = (b - a).norm();
-                if (length <= 1.0e-4f)
-                {
-                    continue;
-                }
-                std::array<float, 16> record{};
-                record[0] = a.x();
-                record[1] = a.y();
-                record[2] = a.z();
-                record[4] = b.x();
-                record[5] = b.y();
-                record[6] = b.z();
-                const Eigen::Vector3f axis = (b - a) / length;
-                record[8] = axis.x();
-                record[9] = axis.y();
-                record[10] = axis.z();
-                sourceRecords.push_back(record);
-                sourceWeights.push_back(length);
-            }
-        }
-        emitter.skeletalSections.push_back(std::move(section));
-    }
-    if (emitter.skeletalSections.empty())
+    std::vector<ParticleSpawnSourceRecord> sourceRecords;
+    std::vector<float> sourceWeights;
+    std::vector<GpuBuffer> pendingBuffers;
+    const auto releasePending = [&]()
     {
-        throw std::runtime_error("skeletal mesh has no non-empty sections");
-    }
-    emitter.meshIndexCount = 0;
-    for (const EmitterResources::SkeletalSection& section :
-         emitter.skeletalSections)
+        for (GpuBuffer& buffer : pendingBuffers)
+        {
+            DestroyBuffer(*backend, buffer);
+        }
+        pendingBuffers.clear();
+    };
+    try
     {
-        emitter.meshIndexCount += section.indexCount;
-    }
-    emitter.meshFallbackBillboard = false;
+        for (size_t sectionIndex = 0;
+             sectionIndex < asset.mesh.sections.size();
+             ++sectionIndex)
+        {
+            const SkinSection& source = asset.mesh.sections[sectionIndex];
+            if (source.vertices.empty() || source.indices.empty())
+            {
+                continue;
+            }
+            EmitterResources::SkeletalSection section;
+            section.sourceVertices = source.vertices;
+            section.sourceIndices = source.indices;
+            section.influenceOffsets = source.influenceOffsets;
+            section.influences.reserve(source.influences.size());
+            for (const Influence& influence : source.influences)
+            {
+                section.influences.push_back(
+                    {influence.joint, influence.weight});
+            }
+            section.inverseBinds = source.inverseBinds;
+            section.meshToModel = source.meshToModel;
+            section.indexCount =
+                static_cast<uint32_t>(section.sourceIndices.size());
+            // 顶点缓冲保存绑定姿态：GPU skinning 的输入，绝不能写蒙皮后的
+            // 顶点，否则每帧再蒙皮会让形变逐帧累积。
+            section.vertices = createHostBuffer(
+                static_cast<vk::DeviceSize>(
+                    section.sourceVertices.size() * sizeof(Vertex)),
+                vk::BufferUsageFlagBits::eVertexBuffer,
+                "ParticleSkeletalVertices:" + emitterKey +
+                    "/" + std::to_string(sectionIndex));
+            pendingBuffers.push_back(section.vertices);
+            uploadHostBuffer(
+                section.vertices,
+                section.sourceVertices.data(),
+                static_cast<vk::DeviceSize>(
+                    section.sourceVertices.size() * sizeof(Vertex)),
+                "vertex");
+            section.indices = createHostBuffer(
+                static_cast<vk::DeviceSize>(
+                    section.sourceIndices.size() * sizeof(uint32_t)),
+                vk::BufferUsageFlagBits::eIndexBuffer,
+                "ParticleSkeletalIndices:" + emitterKey +
+                    "/" + std::to_string(sectionIndex));
+            pendingBuffers.push_back(section.indices);
+            uploadHostBuffer(
+                section.indices,
+                section.sourceIndices.data(),
+                static_cast<vk::DeviceSize>(
+                    section.sourceIndices.size() * sizeof(uint32_t)),
+                "index");
+            // 每个 image 一份 palette：CPU 在 RecordSimulation 里写当前姿态，
+            // 不能与仍在飞的帧共用同一段 buffer。
+            const vk::DeviceSize paletteBytes =
+                static_cast<vk::DeviceSize>(std::max<size_t>(
+                    section.inverseBinds.size(), 1u)) *
+                sizeof(Eigen::Matrix4f) * 2u;
+            const uint32_t imageCount =
+                backend->GetSwapchainImageCount();
+            section.skinPalettes.reserve(imageCount);
+            for (uint32_t imageIndex = 0;
+                 imageIndex < imageCount;
+                 ++imageIndex)
+            {
+                GpuBuffer palette = createHostBuffer(
+                    paletteBytes,
+                    vk::BufferUsageFlagBits::eStorageBuffer,
+                    "ParticleSkeletalPalette:" + emitterKey +
+                        "/" + std::to_string(sectionIndex) +
+                        "/" + std::to_string(imageIndex));
+                pendingBuffers.push_back(palette);
+                section.skinPalettes.push_back(palette);
+            }
 
-    const size_t recordCount = std::min<size_t>(
-        sourceRecords.size(), 65536);
-    if (recordCount > 0)
+            // 静态包围球按绑定姿态估计，与播放姿态的差异由剔除的保守
+            // 留白吸收；这里不追求精确。
+            SkinParticleSkeletalSection(section, *restModels);
+            for (const Vertex& vertex : section.skinnedVertices)
+            {
+                const Eigen::Vector3f scaled(
+                    vertex.position.x() * emitter.asset.meshScale.x(),
+                    vertex.position.y() * emitter.asset.meshScale.y(),
+                    vertex.position.z() * emitter.asset.meshScale.z());
+                section.localBoundsRadius = std::max(
+                    section.localBoundsRadius, scaled.norm());
+            }
+            emitter.meshLocalBoundsRadius = std::max(
+                emitter.meshLocalBoundsRadius,
+                section.localBoundsRadius);
+
+            std::string materialPath =
+                sectionIndex < imported.sectionPlans.size()
+                    ? imported.sectionPlans[sectionIndex].materialInstancePath
+                    : std::string();
+            if (materialPath.empty())
+            {
+                materialPath = emitter.asset.materialInstancePath;
+            }
+            if (!materialPath.empty())
+            {
+                std::string materialError;
+                section.material = LoadParticleMaterialInstance(
+                    materialPath, materialError);
+                if (!section.material.valid && !materialError.empty())
+                {
+                    WarnMaterialFallbackOnce(
+                        emitterKey + "#" + std::to_string(sectionIndex),
+                        materialPath,
+                        materialError);
+                }
+            }
+            section.albedo = ResolveMaterialTexture(
+                emitterKey + "#" + std::to_string(sectionIndex),
+                section.material.albedoMap,
+                HostImage::TextureSemantic::Color,
+                defaultTexture);
+            section.normal = ResolveMaterialTexture(
+                emitterKey + "#" + std::to_string(sectionIndex),
+                section.material.normalMap,
+                HostImage::TextureSemantic::Normal,
+                defaultNormalTexture);
+            section.orm = ResolveMaterialTexture(
+                emitterKey + "#" + std::to_string(sectionIndex),
+                section.material.ormMap,
+                HostImage::TextureSemantic::Data,
+                defaultOrmTexture);
+            section.emissive = ResolveMaterialTexture(
+                emitterKey + "#" + std::to_string(sectionIndex),
+                section.material.emissiveMap,
+                HostImage::TextureSemantic::Color,
+                defaultEmissiveTexture);
+            section.materialUniform = createHostBuffer(
+                sizeof(ParticleMaterialUniforms),
+                vk::BufferUsageFlagBits::eUniformBuffer,
+                "ParticleSkeletalMaterial:" + emitterKey +
+                    "/" + std::to_string(sectionIndex));
+            pendingBuffers.push_back(section.materialUniform);
+            const ParticleMaterialParams& params = section.material;
+            ParticleMaterialUniforms uniforms{};
+            uniforms.uvScaleOffset = Eigen::Vector4f(
+                params.uvScale.x(),
+                params.uvScale.y(),
+                params.uvOffset.x(),
+                params.uvOffset.y());
+            uniforms.textureFlags = Eigen::Vector4f(
+                params.albedoMap.empty() ? 0.0f : 1.0f,
+                params.normalMap.empty() ? 0.0f : 1.0f,
+                params.ormMap.empty() ? 0.0f : 1.0f,
+                params.emissiveMap.empty() ? 0.0f : 1.0f);
+            uniforms.materialParams = Eigen::Vector4f(
+                params.alphaClipThreshold,
+                params.ambientOcclusion,
+                params.normalStrength,
+                0.0f);
+            uploadHostBuffer(
+                section.materialUniform,
+                &uniforms,
+                sizeof(ParticleMaterialUniforms),
+                "material uniform");
+
+            if (emitter.asset.renderMode == "skeletalMeshTris")
+            {
+                for (size_t index = 0;
+                     index + 2 < section.sourceIndices.size();
+                     index += 3)
+                {
+                    const Vertex& v0 =
+                        section.skinnedVertices[section.sourceIndices[index]];
+                    const Vertex& v1 =
+                        section.skinnedVertices[section.sourceIndices[index + 1]];
+                    const Vertex& v2 =
+                        section.skinnedVertices[section.sourceIndices[index + 2]];
+                    sourceRecords.push_back(
+                        BuildParticleSpawnTriangleRecord(
+                            v0.position, v1.position, v2.position));
+                }
+            }
+            else if (emitter.asset.renderMode == "skeletalMeshBones")
+            {
+                for (size_t jointIndex = 0;
+                     jointIndex < asset.mesh.joints.size();
+                     ++jointIndex)
+                {
+                    const int parent = asset.mesh.joints[jointIndex].parent;
+                    if (parent < 0 ||
+                        static_cast<size_t>(parent) >= restModels->size() ||
+                        jointIndex >= restModels->size())
+                    {
+                        continue;
+                    }
+                    sourceRecords.push_back(
+                        BuildParticleSpawnBoneRecord(
+                            restModels->at(
+                                static_cast<size_t>(parent)).block<3, 1>(0, 3),
+                            restModels->at(jointIndex).block<3, 1>(0, 3)));
+                }
+            }
+            emitter.skeletalSections.push_back(std::move(section));
+        }
+        if (emitter.skeletalSections.empty())
+        {
+            throw std::runtime_error(
+                "skeletal mesh has no non-empty sections");
+        }
+        emitter.meshIndexCount = 0;
+        for (const EmitterResources::SkeletalSection& section :
+             emitter.skeletalSections)
+        {
+            emitter.meshIndexCount += section.indexCount;
+        }
+        emitter.meshFallbackBillboard = false;
+
+        // spawn 源（三角面面积加权 / 骨段长度加权）写成 host-visible SSBO，
+        // 与 particleSimulate.comp 的逆 CDF 采样共享同一份前缀和布局。
+        std::vector<float> packedFloats;
+        const uint32_t kind =
+            emitter.asset.renderMode == "skeletalMeshTris"
+                ? kParticleSpawnSourceTriangle
+                : kParticleSpawnSourceBone;
+        const uint32_t recordCount = PackParticleSpawnSource(
+            sourceRecords, kind, packedFloats);
+        emitter.spawnSourceRecordCount = recordCount;
+        if (recordCount > 0 && !emitter.spawnSource.buffer)
+        {
+            // 真实记录一旦就绪就替换 CreateBuffers 的 16 字节占位缓冲；
+            // 占位缓冲此时尚未被任何 descriptor 引用，可以安全销毁。
+            emitter.spawnSource = createHostBuffer(
+                static_cast<vk::DeviceSize>(packedFloats.size() * sizeof(float)),
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                "ParticleSpawnSource:" + emitterKey);
+            uploadHostBuffer(
+                emitter.spawnSource,
+                packedFloats.data(),
+                static_cast<vk::DeviceSize>(packedFloats.size() * sizeof(float)),
+                "spawn source");
+        }
+    }
+    catch (...)
     {
-        const vk::DeviceSize bytes =
-            sizeof(uint32_t) * 4 +
-            static_cast<vk::DeviceSize>(recordCount) *
-                sizeof(float) * 16;
-        emitter.spawnSource = createHostBuffer(
-            bytes,
-            vk::BufferUsageFlagBits::eStorageBuffer,
-            "ParticleSpawnSource:" + emitterKey);
-        void* mapped = backend->MapMemory(
-            emitter.spawnSource.memory, bytes);
-        if (mapped == nullptr)
+        releasePending();
+        for (EmitterResources::SkeletalSection& section :
+             emitter.skeletalSections)
         {
-            throw std::runtime_error("spawn source map failed");
+            section.skinPalettes.clear();
         }
-        auto* words = static_cast<uint32_t*>(mapped);
-        words[0] = emitter.asset.renderMode == "skeletalMeshTris" ? 1u : 2u;
-        words[1] = static_cast<uint32_t>(recordCount);
-        words[2] = 0;
-        words[3] = 0;
-        float* data = reinterpret_cast<float*>(words + 4);
-        float cdf = 0.0f;
-        for (size_t index = 0; index < recordCount; ++index)
-        {
-            cdf += sourceWeights[index];
-            std::array<float, 16> record = sourceRecords[index];
-            record[3] = cdf;
-            std::memcpy(data + index * 16, record.data(), sizeof(float) * 16);
-        }
-        emitter.spawnSourceRecordCount =
-            static_cast<uint32_t>(recordCount);
-        backend->UnmapMemory(emitter.spawnSource.memory);
+        emitter.skeletalSections.clear();
+        throw;
     }
 }
 
@@ -4612,6 +4639,8 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
     emitter.indirectShape = indirectShape;
     emitter.indirectIndexed = indirectShape.indexed;
 
+    // 静态 mesh 的单材质 UBO；骨骼网格的材质 UBO 由 LoadSkeletalEmitterMesh
+    // 按 section 创建，与 per-section materialSets 一一对应，这里不再创建。
     if (emitter.asset.renderMode == "mesh")
     {
         const auto materialAllocation = backend->CreateBuffer(
@@ -4724,16 +4753,20 @@ void ParticleRenderer::CreateDescriptors(
     // graphics 新增的 2 个 storage 是场景灯/GPU 粒子灯 SSBO（binding 6/7）；
     // 再新增 2 个 storage 是 tile 灯网格/索引（binding 10/11）。
     // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
+    // 骨骼完整实例再追加每 section 每 image 一个 palette storage set 2，
+    // 数量与 materialSetCount 相同。
+    const uint32_t paletteSetCount = materialSetCount;
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer,
          imageCount * 6 + materialSetCount},
-        {vk::DescriptorType::eStorageBuffer, imageCount * 24},
+        {vk::DescriptorType::eStorageBuffer,
+         imageCount * 24 + materialSetCount + paletteSetCount},
         {vk::DescriptorType::eCombinedImageSampler,
          imageCount * 5 + materialSetCount * 4}};
     vk::DescriptorPoolCreateInfo poolInfo;
     poolInfo
         .setPoolSizes(poolSizes)
-        .setMaxSets(imageCount * 6 + materialSetCount);
+        .setMaxSets(imageCount * 6 + materialSetCount + paletteSetCount);
     emitter.descriptorPool = backend->CreateDescriptorPool(
         poolInfo,
         "ParticleDescriptors:" + emitter.key);
@@ -4780,6 +4813,25 @@ void ParticleRenderer::CreateDescriptors(
                 backend->AllocateDescriptorSets(
                     allocate,
                     section.materialSets);
+            }
+        }
+
+        // 骨骼完整实例额外需要 set 2 的 palette；tri/bone 管线没有 set 2，
+        // 只给带顶点输入的骨骼网格分配。
+        if (meshMaterial && !emitter.skeletalSections.empty() &&
+            skeletalMeshAdditivePipeline)
+        {
+            std::vector<vk::DescriptorSetLayout> paletteLayouts(
+                imageCount,
+                skeletalMeshAdditivePipeline->GetDescriptorSetLayouts().at(
+                    kParticleSkinSetIndex));
+            for (auto& section : emitter.skeletalSections)
+            {
+                allocate.setSetLayouts(paletteLayouts);
+                section.paletteSets.resize(imageCount);
+                backend->AllocateDescriptorSets(
+                    allocate,
+                    section.paletteSets);
             }
         }
 
@@ -5139,6 +5191,25 @@ void ParticleRenderer::CreateDescriptors(
                         materialWrites.push_back(textureWrite);
                     }
                     backend->UpdateDescriptorSets(materialWrites);
+                    // palette 按 image 写：绘制时该 image 的 palette 就是
+                    // 本帧姿态，不与在飞的上一帧共享同一段 buffer。
+                    if (imageIndex < section.paletteSets.size() &&
+                        imageIndex < section.skinPalettes.size())
+                    {
+                        const vk::DescriptorBufferInfo paletteInfo(
+                            section.skinPalettes.at(imageIndex).buffer,
+                            0,
+                            VK_WHOLE_SIZE);
+                        vk::WriteDescriptorSet paletteWrite;
+                        paletteWrite
+                            .setDstSet(section.paletteSets.at(imageIndex))
+                            .setDstBinding(kParticleSkinPaletteBinding)
+                            .setDescriptorCount(1)
+                            .setDescriptorType(
+                                vk::DescriptorType::eStorageBuffer)
+                            .setBufferInfo(paletteInfo);
+                        backend->UpdateDescriptorSets({paletteWrite});
+                    }
                 }
             }
 
@@ -5457,7 +5528,6 @@ void ParticleRenderer::DestroyEmitterResources(
     {
         DestroyBuffer(rendererBackend, section.vertices);
         DestroyBuffer(rendererBackend, section.indices);
-        DestroyBuffer(rendererBackend, section.skinInfluences);
         for (GpuBuffer& palette : section.skinPalettes)
         {
             DestroyBuffer(rendererBackend, palette);
@@ -5765,6 +5835,13 @@ void ParticleRenderer::RecordSimulation(
                 ? lhsDepth < rhsDepth
                 : lhs < rhs;
         });
+    // 骨骼粒子姿态采样结果的单帧缓存：同一 (资产, 片段, 时间) 只采样一次，
+    // 多个发射器共享同一份模型矩阵。
+    const Animation::SkeletalAsset* skeletalPoseFrameAsset = nullptr;
+    std::size_t skeletalPoseFrameClip = 0;
+    float skeletalPoseFrameTime = 0.0f;
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>>
+        skeletalPoseFrameModels;
     for (const std::string& key : simulationOrder)
     {
         const auto emitterIt = emitters.find(key);
@@ -5818,99 +5895,96 @@ void ParticleRenderer::RecordSimulation(
         ++frameStats.visibleEmitters;
         emitter.culled = false;
 
-        // 骨骼完整 mesh 的 CPU skinning：只有作者设置了非零 poseRate 才
-        // 每帧改写 host-visible 顶点流。rate=0 时保持加载期姿态。
-        if (!emitter.skeletalSections.empty() &&
-            emitter.skeletalAsset &&
-            std::abs(emitter.skeletalPoseRate) > 1.0e-6f)
+        // 骨骼网格粒子：GPU skinning。CPU 只按当前姿态写每 image 的 palette
+        // （jointModel · inverseBind），顶点着色器在绘制时完成蒙皮；
+        // rate=0 时 palette 停在作者姿态，不需要每帧重写。
+        //
+        // 姿态时间来自 emitter 自己的 elapsedSeconds（不是一个全局时钟），
+        // 同一资产的不同发射器因此可以各自停在不同帧。采样结果按
+        // (资产, 片段, 时间) 缓存，同帧多次命中只算一次。
+        if (!emitter.skeletalSections.empty() && emitter.skeletalAsset)
         {
             const auto& asset = *emitter.skeletalAsset;
-            std::vector<Eigen::Matrix4f> models;
-            models.reserve(asset.mesh.joints.size());
-            if (emitter.asset.skeletalPose.clip.empty())
+            float poseTime = emitter.skeletalPoseTime;
+            if (std::abs(emitter.skeletalPoseRate) > 1.0e-6f)
             {
-                for (const Animation::Joint& joint : asset.mesh.joints)
-                {
-                    models.push_back(joint.restModel);
-                }
+                const float duration =
+                    asset.clips.empty() ||
+                        emitter.skeletalClipIndex >= asset.clips.size()
+                    ? 0.0f
+                    : (asset.clips.at(emitter.skeletalClipIndex).runtime
+                        ? asset.clips.at(emitter.skeletalClipIndex)
+                              .runtime->duration()
+                        : 0.0f);
+                poseTime = WrapParticleSkeletalPoseTime(
+                    emitter.skeletalPoseTime,
+                    emitter.elapsedSeconds,
+                    emitter.skeletalPoseRate,
+                    duration,
+                    emitter.skeletalPoseLoop);
             }
-            else
+            const ParticleSkeletalPoseKey poseKey{
+                &asset,
+                emitter.skeletalClipIndex,
+                poseTime};
+            // 姿态未变（rate=0 或同一帧重复记录）时跳过 palette 重写；
+            // 对应 image 的 palette buffer 仍是该姿态，不会读到旧帧。
+            if (emitter.skeletalPoseKey == poseKey &&
+                emitter.skeletalPoseKey.asset != nullptr &&
+                !emitter.skeletalSections.front().skinPalettes.empty())
             {
-                const Animation::Clip& clip =
-                    asset.clips.at(emitter.skeletalClipIndex);
-                float time = emitter.skeletalPoseTime +
-                    emitter.elapsedSeconds * emitter.skeletalPoseRate;
-                if (emitter.skeletalPoseLoop)
-                {
-                    const float duration = std::max(
-                        clip.runtime ? clip.runtime->duration() : 0.0f,
-                        1.0e-4f);
-                    time = std::fmod(time, duration);
-                    if (time < 0.0f)
-                    {
-                        time += duration;
-                    }
-                }
-                const Animation::LocalPose locals =
-                    Animation::SampleLocals(asset.mesh, clip, time);
-                models = Animation::LocalToModels(asset.mesh, locals);
+                continue;
             }
-            for (auto& section : emitter.skeletalSections)
+            if (skeletalPoseFrameAsset != poseKey.asset ||
+                skeletalPoseFrameClip != poseKey.clipIndex ||
+                skeletalPoseFrameTime != poseKey.time)
             {
-                for (size_t vertexIndex = 0;
-                     vertexIndex < section.sourceVertices.size();
-                     ++vertexIndex)
+                skeletalPoseFrameModels = SampleParticleSkeletalModels(
+                    asset, poseKey.clipIndex, poseTime, false);
+                skeletalPoseFrameAsset = poseKey.asset;
+                skeletalPoseFrameClip = poseKey.clipIndex;
+                skeletalPoseFrameTime = poseKey.time;
+            }
+            const std::vector<Eigen::Matrix4f>& models =
+                *skeletalPoseFrameModels;
+            for (EmitterResources::SkeletalSection& section :
+                 emitter.skeletalSections)
+            {
+                if (imageIndex >= section.skinPalettes.size())
                 {
-                    Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
-                    const uint32_t begin =
-                        section.influenceOffsets.at(vertexIndex);
-                    const uint32_t end =
-                        section.influenceOffsets.at(vertexIndex + 1);
-                    for (uint32_t influenceIndex = begin;
-                         influenceIndex < end;
-                         ++influenceIndex)
-                    {
-                        const auto& influence =
-                            section.influences.at(influenceIndex);
-                        if (influence.joint >= models.size() ||
-                            influence.joint >= section.inverseBinds.size())
-                        {
-                            continue;
-                        }
-                        skin += influence.weight *
-                            models[influence.joint] *
-                            section.inverseBinds[influence.joint];
-                    }
-                    Vertex& target =
-                        section.skinnedVertices[vertexIndex];
-                    const Vertex& source =
-                        section.sourceVertices[vertexIndex];
-                    target.position =
-                        (skin * Eigen::Vector4f(
-                            source.position.x(),
-                            source.position.y(),
-                            source.position.z(),
-                            1.0f)).head<3>();
-                    const Eigen::Matrix3f linear =
-                        skin.block<3, 3>(0, 0);
-                    const Eigen::Matrix3f normalMatrix =
-                        linear.inverse().transpose();
-                    target.normal =
-                        (normalMatrix * source.normal).normalized();
+                    continue;
                 }
+                const size_t jointCount = std::max<size_t>(
+                    section.inverseBinds.size(), 1u);
+                const vk::DeviceSize paletteBytes =
+                    static_cast<vk::DeviceSize>(jointCount) *
+                    sizeof(Eigen::Matrix4f) * 2u;
                 void* mapped = backend->MapMemory(
-                    section.vertices.memory,
-                    static_cast<vk::DeviceSize>(
-                        section.skinnedVertices.size() * sizeof(Vertex)));
-                if (mapped != nullptr)
+                    section.skinPalettes.at(imageIndex).memory,
+                    paletteBytes);
+                if (mapped == nullptr)
                 {
-                    std::memcpy(
-                        mapped,
-                        section.skinnedVertices.data(),
-                        section.skinnedVertices.size() * sizeof(Vertex));
-                    backend->UnmapMemory(section.vertices.memory);
+                    continue;
                 }
+                auto* writer = static_cast<Eigen::Matrix4f*>(mapped);
+                for (size_t joint = 0; joint < jointCount; ++joint)
+                {
+                    Eigen::Matrix4f palette = Eigen::Matrix4f::Identity();
+                    if (joint < models.size() &&
+                        joint < section.inverseBinds.size())
+                    {
+                        palette =
+                            models[joint] * section.inverseBinds[joint];
+                    }
+                    // 第二份矩阵是上一帧姿态，供 shader 需要时做逐顶点插值；
+                    // 当前实现只用 current，previous 写同一值保持布局稳定。
+                    writer[joint] = palette;
+                    writer[jointCount + joint] = palette;
+                }
+                backend->UnmapMemory(
+                    section.skinPalettes.at(imageIndex).memory);
             }
+            emitter.skeletalPoseKey = poseKey;
         }
 
         // 固定步长：帧间余量进入 accumulator，只推进完整步；最多 8 步/帧
@@ -6185,8 +6259,20 @@ void ParticleRenderer::RecordSimulation(
             if (event == "collision") return 2.0f;
             return 1.0f;
         };
+        // 作者没写 spawnSource 时，骨骼粒子模式默认从自己的骨骼网格采样；
+        // 载入的网格不是骨骼网格时把模式降为 none，让粒子回落到 shape 采样，
+        // 而不是永远读一个空的 spawn 源。
+        std::string spawnMode = emitter.asset.spawnSource.mode;
+        const bool skeletalRenderMode =
+            emitter.asset.renderMode == "skeletalMeshTris" ||
+            emitter.asset.renderMode == "skeletalMeshBones";
+        if (emitter.skeletalSections.empty() &&
+            (spawnMode == "skeletalTris" || spawnMode == "skeletalBones"))
+        {
+            spawnMode = "none";
+        }
         uniforms.spawnSourceParams = Eigen::Vector4f(
-            spawnModeCode(emitter.asset.spawnSource.mode),
+            spawnModeCode(spawnMode),
             parentEventCode(emitter.asset.spawnSource.parentEvent),
             static_cast<float>(emitter.asset.spawnSource.perEvent),
             emitter.asset.spawnSource.normalVelocityScale);
@@ -6213,6 +6299,36 @@ void ParticleRenderer::RecordSimulation(
         uniforms.dissolveParams2 = Eigen::Vector4f(
             emitter.asset.dissolve.edgeStrength,
             emitter.asset.dissolve.noiseSpeed,
+            emitter.asset.dissolve.enabled ? 1.0f : 0.0f,
+            0.0f);
+        // 溶解外推沿用作者的溶解区间：可见性在 lifetime × start 开始下降，
+        // 到 lifetime × end 消失；这里把同一段归一化寿命映射成外壳推进量，
+        // 让面片在变透明的同时微微膨胀，而不是先鼓起来再消失。
+        const float dissolveStart = std::clamp(
+            emitter.asset.dissolve.start, 0.0f, 1.0f);
+        const float dissolveSpan = std::max(
+            std::clamp(emitter.asset.dissolve.end, 0.0f, 1.0f) -
+                dissolveStart,
+            1.0e-4f);
+        // 寿命在这一帧的平均推进位置即外推阶段；由 GPU 逐粒子计算会多占
+        // 一个 varying，这里用发射器平均寿命估计，视觉上足够连续。
+        const float averageLifetime = 0.5f *
+            (emitter.asset.lifetimeMin + emitter.asset.lifetimeMax);
+        const float puffPhase = averageLifetime > 1.0e-4f
+            ? std::clamp(
+                (emitter.elapsedSeconds - dissolveStart * averageLifetime) /
+                    (dissolveSpan * averageLifetime),
+                0.0f,
+                1.0f)
+            : 0.0f;
+        uniforms.puffParams = Eigen::Vector4f(
+            puffPhase,
+            emitter.asset.dissolve.enabled
+                ? std::clamp(
+                    emitter.asset.dissolve.edgeWidth * 4.0f,
+                    0.0f,
+                    1.0f)
+                : 0.0f,
             emitter.asset.dissolve.enabled ? 1.0f : 0.0f,
             0.0f);
         uniforms.dissolveEdgeColor = Eigen::Vector4f(
@@ -7296,9 +7412,16 @@ void ParticleRenderer::RecordGraphics(
         }
         else if (mesh || skeletalMesh)
         {
+            // 骨骼完整实例必须使用 VL_SKINNED_MESH 变体并绑定 set 2，
+            // 静态 mesh 继续走不带蒙皮的管线。
+            const bool skinned = skeletalMesh;
             pipeline = emitter.asset.additive
-                ? meshAdditivePipeline
-                : meshAlphaPipeline;
+                ? (skinned
+                    ? skeletalMeshAdditivePipeline
+                    : meshAdditivePipeline)
+                : (skinned
+                    ? skeletalMeshAlphaPipeline
+                    : meshAlphaPipeline);
         }
         else if (beam)
         {
@@ -7368,6 +7491,16 @@ void ParticleRenderer::RecordGraphics(
                         pipeline->GetPipelineLayout(),
                         kParticleMaterialSetIndex,
                         section.materialSets.at(imageIndex),
+                        nullptr);
+                }
+                // 骨骼完整实例的顶点着色器按 set 2 的当前姿态 palette 蒙皮。
+                if (imageIndex < section.paletteSets.size())
+                {
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        pipeline->GetPipelineLayout(),
+                        kParticleSkinSetIndex,
+                        section.paletteSets.at(imageIndex),
                         nullptr);
                 }
                 const vk::DeviceSize vertexOffset = 0;
@@ -7667,7 +7800,13 @@ ParticleShadowCasterMode ParticleRenderer::ResolveShadowCasterMode(
     {
         return ParticleShadowCasterMode::None;
     }
+    // 骨骼完整实例的几何在 section 缓冲里（meshVertices/meshIndices 为空），
+    // 因此这里按 section 判定可用性，不能只看静态 mesh 缓冲。
+    const bool skeletalGeometryValid =
+        !emitter.skeletalSections.empty() &&
+        emitter.meshIndexCount > 0;
     if (mode == ParticleShadowCasterMode::Mesh &&
+        !skeletalGeometryValid &&
         (emitter.meshIndexCount == 0 ||
          !emitter.meshVertices.buffer ||
          !emitter.meshIndices.buffer))
@@ -7849,7 +7988,52 @@ void ParticleRenderer::RecordShadow(
             emitter.graphicsSets.at(imageIndex),
             nullptr);
 
-        if (mode == ParticleShadowCasterMode::Mesh)
+        if (mode == ParticleShadowCasterMode::Mesh &&
+            !emitter.skeletalSections.empty())
+        {
+            // 骨骼 caster 逐 section 绘制；palette 已由 RecordSimulation 写入
+            // 当前 image，阴影与可见网格看到同一姿态。
+            const vk::DeviceSize vertexOffset = 0;
+            for (auto& section : emitter.skeletalSections)
+            {
+                if (imageIndex < section.paletteSets.size())
+                {
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        pipeline->GetPipelineLayout(),
+                        kParticleSkinSetIndex,
+                        section.paletteSets.at(imageIndex),
+                        nullptr);
+                }
+                commandBuffer.bindVertexBuffers(
+                    0,
+                    1,
+                    &section.vertices.buffer,
+                    &vertexOffset);
+                commandBuffer.bindIndexBuffer(
+                    section.indices.buffer,
+                    0,
+                    vk::IndexType::eUint32);
+                if (emitter.indirectArgs.buffer)
+                {
+                    commandBuffer.drawIndexedIndirect(
+                        emitter.indirectArgs.buffer,
+                        0,
+                        1,
+                        sizeof(vk::DrawIndexedIndirectCommand));
+                }
+                else
+                {
+                    commandBuffer.drawIndexed(
+                        section.indexCount,
+                        emitter.asset.maxParticles,
+                        0,
+                        0,
+                        0);
+                }
+            }
+        }
+        else if (mode == ParticleShadowCasterMode::Mesh)
         {
             const vk::DeviceSize vertexOffset = 0;
             commandBuffer.bindVertexBuffers(

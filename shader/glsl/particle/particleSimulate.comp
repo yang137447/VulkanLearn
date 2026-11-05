@@ -621,9 +621,41 @@ uint SpawnSourceCount()
     return min(spawnSource.header.y, 65536u);
 }
 
-// 骨骼源按粒子 index 一一映射到三角面/骨段，与 UE 的“每三角形一个
-// 粒子”语义一致：maxParticles 足够大时整个网格会被覆盖，不会因为
-// 随机采样出现缺洞；index 溢出源数量时由调用方拒绝生成。
+// 权重前缀和总长（三角形为累计面积，骨段为累计长度），由 CPU 与源项一起写入。
+float SpawnSourceTotalWeight()
+{
+    uint count = SpawnSourceCount();
+    if (count == 0u)
+    {
+        return 1.0;
+    }
+    return max(spawnSource.data[(count - 1u) * 4u + 3u], 1.0e-6);
+}
+
+// 按权重（面积/长度）做逆 CDF 采样，并返回命中的源项下标；命中项由调用方
+// 在同一个原子计数器下独占，因此同一帧内不会出现两个粒子挤在同一面片。
+uint PickSpawnSourceByWeight(float weightSample)
+{
+    uint count = SpawnSourceCount();
+    uint low = 0u;
+    uint high = count - 1u;
+    while (low < high)
+    {
+        uint middle = (low + high) >> 1;
+        if (spawnSource.data[middle * 4u + 3u] < weightSample)
+        {
+            low = middle + 1u;
+        }
+        else
+        {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+// 源项在骨骼网格 model space 中记录；粒子中心 = 面片/骨段重心 + 模型空间
+// 偏移（emitter 的 localToWorld 只在世界空间模拟时应用一次）。
 bool SampleSkeletalSpawnSource(
     uint sourceIndex,
     inout uint randomState,
@@ -643,7 +675,13 @@ bool SampleSkeletalSpawnSource(
     {
         return false;
     }
-    uint record = sourceIndex % count;
+    // sourceIndex 是已独占的计数器序号：超出源数量时说明本帧源用尽。
+    if (sourceIndex >= count)
+    {
+        return false;
+    }
+    uint record = PickSpawnSourceByWeight(
+        Random(randomState) * SpawnSourceTotalWeight());
     vec4 a = spawnSource.data[record * 4u + 0u];
     vec4 b = spawnSource.data[record * 4u + 1u];
     vec4 c = spawnSource.data[record * 4u + 2u];
@@ -652,8 +690,13 @@ bool SampleSkeletalSpawnSource(
         p0 = a.xyz;
         p1 = b.xyz;
         p2 = c.xyz;
-        normal = normalize(cross(p1 - p0, p2 - p0));
-        return length(normal) > 0.0;
+        vec3 crossValue = cross(p1 - p0, p2 - p0);
+        if (dot(crossValue, crossValue) <= 1.0e-12)
+        {
+            return false;
+        }
+        normal = normalize(crossValue);
+        return true;
     }
     p0 = a.xyz;
     p1 = b.xyz;

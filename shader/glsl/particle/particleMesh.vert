@@ -119,4 +119,21 @@ void main()
             localTangent.xyz / tangentLength)
         : vec3(0.0);
     vTangentSign = localTangent.w < 0.0 ? -1.0 : 1.0;
+    // 溶解把面片推离以粒子重心为中心的球面：中心点位移为 0，边缘按
+    // dissolve 参数抬升，保证溶解后轮廓向外扩张而不是整体平移。
+    // CPU 已逐帧算出溶解外壳推进参数（puffParams），这里只做一次缩放；
+    // 未启用溶解时 z=0，等价于原顶点位置。范围由 CPU 保证有界。
+    vec3 dissolvePosition = localPosition *
+        (1.0 + (frame.puffParams.z > 0.5 ? frame.puffParams.y : 0.0));
+    bool puffMoved = dissolvePosition != localPosition;
+    if (puffMoved)
+    {
+        vec3 pushedPosition = ParticleMeshWorldPosition(
+            particle,
+            particleIndex,
+            dissolvePosition);
+        gl_Position = frame.viewProjection * vec4(pushedPosition, 1.0);
+        vViewDepth = -(frame.view * vec4(pushedPosition, 1.0)).z;
+        vWorldPosition = pushedPosition;
+    }
 }
