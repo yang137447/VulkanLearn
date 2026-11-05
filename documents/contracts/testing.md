@@ -1805,7 +1805,8 @@ BP 实窗检查被用户 Escape 中止，因此本轮未完成最终 BP 视口�
 `tool/blender-terrain-import` 的 producer 改为在侵蚀后重新做物理宽度 sea-level
 taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 
-- `terrain_erosion_tests` 6 项通过；新增边界渐隐/海平面归零和河网通道测试。
+- `terrain_erosion_tests` 7 项通过；新增边界渐隐/海平面归零、河网通道和
+  2×2 tiling 共享边界/pageOrigin/UV scale 测试。
 - 512² alpine 冒烟（`--boundary-width-m 400 --river-percentile 98.5`）
   生成连续枝状 `mask_gn_river.png`；转换器输出 5 层 TR + 2048² VLP1。
 - 1024² alpine 默认切片已重新生成，TR 为
@@ -1814,3 +1815,20 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
   `ridge_density=0.0990`、`drainage_length_km=2.577`。
 - 当前河网是面积阈值 mask，不是水面或水力求解；边框 taper 仍是单 tile 的
   矩形海平面过渡，多 tile 拼接前需要周期性海岸/侵蚀方案。
+
+## 2026-11-05 Pegasus 4×4 PCG tile 场景
+
+新增 `build_pegasus_tiled.py` / `split_pegasus_tiles.py` /
+`assemble_pegasus_tiles.py`，把 4km 全局场切成 16 个 1km tile：
+
+- 全局高度/mask 重采样到 `4 × 256 + 1 = 1025`，相邻 tile 共用边界采样；
+  tile_00/tile_01 与 tile_00/tile_04 的高度接缝最大差均实测为 0。
+- 每 tile 输出 257² 高度、5 层 mask、TR/MI/VLP1；`pageOrigin` 按
+  `(8×gridX, 8×gridZ)` 写入，16 块正好覆盖 32×32 VT 页表。
+- 合并场景 `SC_terrain_pegasus_4x4.json` 加载 16 个 terrain placement；
+  `terrainchunk stats` 报告 `groups=256 chunks=256 meshDraws=256`。
+- `terrainlayer stats` 报告 `globalLayers=5 sourceSets=1 dedupedLayers=75`，
+  共享纹理数组与 layer key 生效。
+- 当前每个 tile 仍独立计算边界法线，跨 tile 法线接缝可见；`lodLevels=1`
+  用来避免跨 placement LOD 裂缝。下一个 runtime 改动是 heightmap overscan
+  + `heightmapMargin`，再做跨 tile LOD 邻接选择。

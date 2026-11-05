@@ -11,11 +11,17 @@ break when routing or the sediment ledger changes.
 
 from __future__ import annotations
 
+import json
 import math
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+import split_pegasus_tiles
+from png16_io import read_gray16, write_gray16
 from terrain_erosion import (
     ErosionDiagnostics,
     ErosionParams,
@@ -174,6 +180,82 @@ class TerrainErosionTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             river_mask(flow_area, 10.0, land, 100.0)
+
+
+class TerrainTilingTests(unittest.TestCase):
+    def test_splitter_shares_boundary_samples_and_page_origins(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="vl-pegasus-tiles-") as temp:
+            root = Path(temp)
+            source_dir = root / "Global"
+            source_dir.mkdir()
+            resource_root = root / "Resources"
+            resource_root.mkdir()
+
+            samples = np.arange(81, dtype=np.float64).reshape(9, 9) * 800.0
+            height_path = source_dir / "heightmap.png"
+            write_gray16(height_path, samples)
+            layers = []
+            for index, name in enumerate(("Lowland", "Rock")):
+                mask_path = source_dir / f"mask_{index}.png"
+                write_gray16(mask_path, np.full((9, 9), 32767.5))
+                layers.append({
+                    "name": name,
+                    "weightmapPath": str(mask_path),
+                    "uvScale": 8.0,
+                    "heightRange": [0.0, 1.0],
+                    "slopeRange": [0.0, 90.0],
+                })
+            manifest = {
+                "assetName": "tiling_test",
+                "heightmapPath": str(height_path),
+                "size": [200000.0, 200000.0],
+                "heightScale": 80000.0,
+                "heightOffset": 0.0,
+                "materialUvScale": 8.0,
+                "layers": layers,
+            }
+            manifest_path = source_dir / "blender_gn_import.json"
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            output_root = resource_root / "Generated/Tiles"
+            old_argv = sys.argv
+            try:
+                sys.argv = [
+                    "split_pegasus_tiles.py",
+                    "--source-manifest", str(manifest_path),
+                    "--resource-root", str(resource_root),
+                    "--output-root", str(output_root),
+                    "--tile-grid", "2",
+                    "--tile-resolution", "4",
+                    "--tile-size-m", "1000",
+                    "--page-tiles-per-side", "2",
+                ]
+                split_pegasus_tiles.main()
+            finally:
+                sys.argv = old_argv
+
+            layout = json.loads(
+                (output_root / "tile_layout.json").read_text(encoding="utf-8"))
+            self.assertEqual(layout["tileGrid"], 2)
+            self.assertEqual(len(layout["tiles"]), 4)
+
+            tile0 = read_gray16(output_root / "tile_00/Source/heightmap_gn_tile.png")
+            tile1 = read_gray16(output_root / "tile_01/Source/heightmap_gn_tile.png")
+            tile2 = read_gray16(output_root / "tile_02/Source/heightmap_gn_tile.png")
+            self.assertEqual(tile0.shape, (5, 5))
+            np.testing.assert_array_equal(tile0[:, -1], tile1[:, 0])
+            np.testing.assert_array_equal(tile0[-1, :], tile2[0, :])
+
+            tile1_manifest = json.loads(
+                (output_root / "tile_01/blender_gn_import.json").read_text(
+                    encoding="utf-8"))
+            self.assertEqual(tile1_manifest["pageOrigin"], [2, 0])
+            self.assertEqual(tile1_manifest["pageTilesPerSide"], 2)
+            self.assertAlmostEqual(
+                tile1_manifest["materialUvScale"], 4.0)
+            self.assertAlmostEqual(
+                tile1_manifest["layers"][0]["uvScale"], 4.0)
 
 
 if __name__ == "__main__":

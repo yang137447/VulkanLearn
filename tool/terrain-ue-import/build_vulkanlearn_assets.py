@@ -30,6 +30,7 @@ manifest 的核心字段：
     description / sceneDescription: 可选的中文 TR/SC 描述覆盖
     gridResolution / chunkQuads / lodLevels: 可选网格覆盖
     lodDistances / chunkResidencyDistances: 可选 LOD 距离数组覆盖
+    pageOrigin / pageTilesPerSide: 可选全局 32x32 VT 页表区域
 
 16-bit weightmap 会先按 257 归一化再写入 VLP1，避免 PIL 直接截断低 8 位。
 输出的 TR 使用 16-bit PNG 高度图；纹理数组统一到 textureResolution，
@@ -134,6 +135,8 @@ class ManifestSpec:
     lod_levels: int | None
     lod_distances_cm: tuple[float, ...] | None
     chunk_residency_distances_cm: tuple[float, ...] | None
+    page_origin: tuple[int, int] | None
+    page_tiles_per_side: int | None
     layers: tuple[LayerInput, ...]
 
 
@@ -1037,6 +1040,24 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         ("chunkresidencydistances", "chunk_residency_distances"),
         "chunkResidencyDistances",
     )
+    raw_page_origin = _first(top, "pageorigin", "page_origin")
+    page_origin: tuple[int, int] | None = None
+    if raw_page_origin is not None:
+        if (not isinstance(raw_page_origin, list) or
+                len(raw_page_origin) != 2 or
+                not all(isinstance(value, int) and not isinstance(value, bool)
+                        for value in raw_page_origin)):
+            _fail("pageOrigin must be two integers")
+        page_origin = (raw_page_origin[0], raw_page_origin[1])
+        if not all(0 <= value < 32 for value in page_origin):
+            _fail("pageOrigin values must be in [0, 31]")
+    page_tiles_per_side = _optional_bounded_int(
+        top, ("pagetilesperside", "page_tiles_per_side"),
+        "pageTilesPerSide", 1, 32)
+    if page_origin is not None and page_tiles_per_side is not None:
+        if (page_origin[0] + page_tiles_per_side > 32 or
+                page_origin[1] + page_tiles_per_side > 32):
+            _fail("pageOrigin + pageTilesPerSide exceeds the 32x32 page table")
 
     weightmaps = _read_weightmap_records(_first(top, "weightmaps"), base)
     layers = _build_layers(top, weightmaps, base)
@@ -1069,6 +1090,8 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         lod_levels=lod_levels,
         lod_distances_cm=lod_distances,
         chunk_residency_distances_cm=chunk_residency_distances,
+        page_origin=page_origin,
+        page_tiles_per_side=page_tiles_per_side,
         layers=layers,
     )
 
@@ -1573,6 +1596,10 @@ def _convert(
     }
     if paint_path_value is not None:
         tr_json["paintPath"] = paint_path_value
+    if spec.page_origin is not None:
+        tr_json["pageOrigin"] = list(spec.page_origin)
+    if spec.page_tiles_per_side is not None:
+        tr_json["pageTilesPerSide"] = spec.page_tiles_per_side
     if _write_json_atomic(tr_path, tr_json):
         changed_files += 1
     else:
@@ -1742,6 +1769,10 @@ def _self_test_verify(
         _fail("self-test explicit lodDistances override was not honored")
     if tr.get("chunkResidencyDistances") != [440.0]:
         _fail("self-test explicit chunkResidencyDistances override was not honored")
+    if tr.get("pageOrigin") != [8, 8]:
+        _fail("self-test explicit pageOrigin override was not honored")
+    if tr.get("pageTilesPerSide") != 8:
+        _fail("self-test explicit pageTilesPerSide override was not honored")
     if len(tr.get("lodDistances", [])) != tr["lodLevels"] - 1:
         _fail("self-test lodDistances length is wrong")
     if all(layer.get("sourceResolution") != 512 for layer in tr["layers"]):
@@ -1912,6 +1943,8 @@ def _run_self_test(verbose: bool) -> None:
             "lodLevels": 2,
             "lodDistances": [400.0],
             "chunkResidencyDistances": [440.0],
+            "pageOrigin": [8, 8],
+            "pageTilesPerSide": 8,
             "weightmaps": weightmaps,
             "layers": layers,
         }

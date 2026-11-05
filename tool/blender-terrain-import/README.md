@@ -227,6 +227,45 @@ Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
 边界 taper 是矩形海平面过渡，不是海岸线建模；需要真正不规则海岸时应继续改
 GN 的 `coast` 场，而不是把 taper 宽度无限调大。
 
+### Pegasus 4×4 PCG tile 场景
+
+一键生成 4km 全局场、切成 16 个 1km tile、转换资产并合并场景：
+
+```powershell
+py -3 tool\blender-terrain-import\build_pegasus_tiled.py `
+  --resource-root "$res" --verbose
+```
+
+输出：
+
+```text
+Generated\BlenderPegasusGN\Tiles\
+  Global\Source\heightmap_gn.png
+  Global\Source\mask_gn_*.png
+  tile_00..tile_15\Source\heightmap_gn_tile.png
+  tile_00..tile_15\TR_*.json / MI_*.json
+  tile_layout.json
+  SC_terrain_pegasus_4x4.json
+```
+
+`--reuse-global` 跳过 4km 全局场重烘；`--split-only` 只生成 tile 输入与
+manifest，不跑 16 次资产转换。
+
+切分规则：
+
+* 全局高度/权重先重采样到 `tileGrid × tileResolution + 1`，相邻 tile 共用一条
+  边界采样；实测高度接缝最大差为 0。
+* 每个 tile 为 1km、`gridResolution=256`、`chunkQuads=64`、`lodLevels=1`，
+  因此不会出现跨 tile LOD 裂缝；16 个 tile 共 256 个 geometry draw。
+* `pageTilesPerSide=8`，16 个 tile 正好铺满 32×32 全局 VT 页表。
+* 所有 tile 共享同名 layer key、第一份 texture arrays 和同一套 camera/environment；
+  `terrainlayer stats` 显示 `globalLayers=5 sourceSets=1 dedupedLayers=75`。
+
+当前限制：每个 tile 的边界法线仍按本 tile 的单侧差分计算，跨 tile 法线有可见
+接缝；`lodLevels>1` 还没有跨 placement 的 LOD 邻接选择。下一步应先做
+heightmap overscan + runtime `heightmapMargin`（位置用 tile UV、法线/高度用
+带一圈邻接采样的 UV），再开跨 tile LOD。
+
 ## 已知边界
 
 * 沉积是 transport-limitation 代理：按坡度和沉积长度尺度在平坦格回填，
