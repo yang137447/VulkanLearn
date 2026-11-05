@@ -63,6 +63,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--material-uv-scale", type=float, default=8.0)
     parser.add_argument("--terrain-type", default="alpine", choices=sorted(PRESETS))
     parser.add_argument(
+        "--macro-island", action=argparse.BooleanOptionalAction, default=False,
+        help="apply an internal irregular island envelope instead of a rectangular rim")
+    parser.add_argument(
         "--boundary-width-m", type=float, default=100.0,
         help="physical-width sea-level taper at the tile edge")
     parser.add_argument(
@@ -230,6 +233,52 @@ def _normalize_relief(height: np.ndarray, coast: np.ndarray,
     return scaled * np.clip(coast, 0.0, 1.0)
 
 
+def _island_envelope(shape: tuple[int, int], seed: int) -> np.ndarray:
+    """Elongated, rotated island footprint with a harbor indentation."""
+    rows, columns = shape
+    x = np.linspace(-1.0, 1.0, columns, dtype=np.float64)[None, :]
+    y = np.linspace(-1.0, 1.0, rows, dtype=np.float64)[:, None]
+    rotation = np.radians(-18.0 + 6.0 * np.sin(float(seed) * 0.031))
+    rotated_x = x * np.cos(rotation) - y * np.sin(rotation)
+    rotated_y = x * np.sin(rotation) + y * np.cos(rotation)
+    radius = np.hypot(rotated_x / 0.96, rotated_y / 0.73)
+    angle = np.arctan2(rotated_y, rotated_x)
+    phase = float(seed) * 0.173
+    irregularity = (
+        0.075 * np.sin(5.0 * angle + phase)
+        + 0.036 * np.sin(9.0 * angle - phase * 1.7)
+        + 0.020 * np.cos(13.0 * angle + phase * 0.6)
+    )
+    harbor = np.exp(
+        -(
+            ((rotated_x - 0.46) / 0.24) ** 2
+            + ((rotated_y + 0.18) / 0.28) ** 2
+        )
+    )
+    irregularity += harbor * 0.22
+    radius += irregularity
+    t = np.clip((radius - 0.80) / 0.20, 0.0, 1.0)
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+
+def _island_spine(shape: tuple[int, int], seed: int) -> np.ndarray:
+    """Offset mountain spine so relief reads as a range, not a central cone."""
+    rows, columns = shape
+    x = np.linspace(-1.0, 1.0, columns, dtype=np.float64)[None, :]
+    y = np.linspace(-1.0, 1.0, rows, dtype=np.float64)[:, None]
+    rotation = np.radians(-18.0 + 6.0 * np.sin(float(seed) * 0.031))
+    rotated_x = x * np.cos(rotation) - y * np.sin(rotation)
+    rotated_y = x * np.sin(rotation) + y * np.cos(rotation)
+    curve = (
+        0.10 * np.sin(2.4 * rotated_x + float(seed) * 0.11)
+        + 0.05 * np.sin(5.2 * rotated_x - float(seed) * 0.07)
+    )
+    distance = rotated_y - curve
+    spine = np.exp(-(distance / 0.24) ** 2)
+    along = 1.0 - np.clip((np.abs(rotated_x) - 0.62) / 0.28, 0.0, 1.0)
+    return spine * along
+
+
 def _sample_scatter(height_m: np.ndarray, size_m: float, density: float,
                     seed: int) -> list[dict[str, float]]:
     """Places scatter points on the eroded surface, skipping sea and cliffs."""
@@ -358,6 +407,13 @@ def main() -> int:
     height = np.clip(attributes["vl_height"], 0.0, 1.0).reshape(
         args.resolution, args.resolution)
     height = _normalize_relief(height, attributes["vl_coast"].reshape(height.shape))
+    coast = attributes["vl_coast"].reshape(height.shape)
+    if args.macro_island:
+        envelope = _island_envelope(height.shape, args.seed)
+        spine = _island_spine(height.shape, args.seed)
+        height = np.clip(height + 0.16 * spine * envelope, 0.0, 1.0)
+        height *= envelope
+        coast *= envelope
     height_m = height * args.height_scale_m
     cell_size = args.size_m / max(args.resolution - 1, 1)
     erosion_stats = None
@@ -416,7 +472,6 @@ def main() -> int:
     height_path = args.output_dir / "heightmap_gn.png"
     _write_gray16_png(height_path, height * 65535.0)
 
-    coast = attributes["vl_coast"].reshape(height.shape)
     coast_mask = np.clip(coast, 0.0, 1.0) * border_fade(
         height.shape, cell_size, args.boundary_width_m)
     river = (
@@ -477,6 +532,7 @@ def main() -> int:
         "attributes": list(TERRAIN_ATTRIBUTES),
         "maskSource": "height-field",
         "terrainType": args.terrain_type,
+        "macroIsland": args.macro_island,
         "boundaryWidthM": args.boundary_width_m,
         "riverMask": args.river_mask,
         "riverPercentile": args.river_percentile,

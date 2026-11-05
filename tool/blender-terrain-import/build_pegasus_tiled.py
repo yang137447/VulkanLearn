@@ -34,6 +34,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--page-tiles-per-side", type=int, default=8)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--terrain-type", default="alpine")
+    parser.add_argument(
+        "--macro-island", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--scatter-density", type=float, default=0.0024)
     parser.add_argument("--reuse-global", action="store_true")
     parser.add_argument("--split-only", action="store_true")
@@ -76,6 +78,7 @@ def main() -> int:
             "--size-m", str(args.tile_grid * args.tile_size_m),
             "--seed", str(args.seed),
             "--terrain-type", str(args.terrain_type),
+            "--macro-island" if args.macro_island else "--no-macro-island",
             "--scatter-density", str(args.scatter_density),
         ], args.verbose)
     elif not global_manifest.is_file():
