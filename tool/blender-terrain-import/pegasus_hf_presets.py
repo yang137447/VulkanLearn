@@ -48,14 +48,17 @@ def build_pegasus_terrain_group():
          "每边顶点数。"),
         ("Height Scale", "NodeSocketFloat", 500.0, 1.0, 5000.0,
          "米与归一化层的换算基准。"),
-        ("Noise Amplitude", "NodeSocketFloat", 500.0, 0.0, 5000.0,
+        ("Noise Amplitude", "NodeSocketFloat", 385.0, 0.0, 5000.0,
          "噪声振幅（米），对应 amp。"),
         ("Noise Element Size", "NodeSocketFloat", 500.0, 1.0, 100000.0,
          "噪声特征尺寸（米），对应 elementsize。"),
         ("Noise Octaves", "NodeSocketFloat", 8.0, 1.0, 16.0,
          "分形层数，对应 oct。"),
-        ("Noise Lacunarity", "NodeSocketFloat", 1.841, 1.0, 4.0,
+        ("Noise Lacunarity", "NodeSocketFloat", 2.2, 1.0, 4.0,
          "层间频率倍率，对应 lac。"),
+        ("Noise Roughness", "NodeSocketFloat", 0.5, 0.0, 1.0,
+         "层间振幅衰减，对应 rough。这是控制高频含量与坡度的主开关："
+         "0.5 时每层减半、第 8 层只剩 1/128；调高会显著增加陡坡与沟谷。"),
         ("Distort Amplitude", "NodeSocketFloat", 140.0, 0.0, 5000.0,
          "扭曲强度（米），对应 distort amp。"),
         ("Distort Element Size", "NodeSocketFloat", 800.0, 1.0, 100000.0,
@@ -98,6 +101,7 @@ def build_pegasus_terrain_group():
     core.link(tree, p["Noise Element Size"], noise.inputs["Element Size"])
     core.link(tree, p["Noise Octaves"], noise.inputs["Octaves"])
     core.link(tree, p["Noise Lacunarity"], noise.inputs["Lacunarity"])
+    core.link(tree, p["Noise Roughness"], noise.inputs["Roughness"])
 
     distort = _instance(tree, groups["VL_HF_Distort"], (-1200, 0))
     core.link(tree, p["Size"], distort.inputs["Size"])

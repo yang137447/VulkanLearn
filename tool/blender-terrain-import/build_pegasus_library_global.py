@@ -43,10 +43,10 @@ import pegasus_hf_nodes as base_nodes  # noqa: E402
 import pegasus_hf_presets as presets  # noqa: E402
 
 # Houdini heightfield_noise1 的真实参数（4 km 场景按比例放大 element）
-NOISE_AMPLITUDE_M = 500.0
+NOISE_AMPLITUDE_M = 385.0
 NOISE_ELEMENT_M = 500.0
 NOISE_OCTAVES = 8.0
-NOISE_LACUNARITY = 1.841
+NOISE_LACUNARITY = 2.2
 DISTORT_AMPLITUDE_M = 140.0
 DISTORT_ELEMENT_M = 800.0
 HEIGHT_SCALE_M = 500.0
