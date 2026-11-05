@@ -75,16 +75,16 @@ void main()
     vColor = EvaluateColorCurve(ParticleMeshLifeT(particle));
     vColor.a *= frame.render.w;
     vSoftness = frame.render.z;
-    // 骨段是圆柱薄片：两条对角三角形翻转绕序，按片元朝向翻回，否则背面会在
-    // 双面关闭时消失；法线取视图投影平面内的垂线而不是固定的 X 轴叉积。
+    // 骨段是圆柱薄片：两条对角三角形翻转绕序，双面朝向在片元阶段处理
+    // （顶点阶段没有 gl_FrontFacing）。法线取切线与视线构成平面内的垂线，
+    // 再向视线微微偏置，避免正对相机时法线退化。
     vec3 segmentAxis = tangentLength > 1.0e-5
         ? tangent / tangentLength
         : normalize(view);
-    vec3 flatNormal = normalize(cross(side, segmentAxis));
-    if (!gl_FrontFacing)
-    {
-        flatNormal = -flatNormal;
-    }
+    vec3 flatNormal = cross(side, segmentAxis);
+    flatNormal = dot(flatNormal, flatNormal) > 1.0e-10
+        ? normalize(flatNormal)
+        : frame.cameraRight.xyz;
     vNormal = normalize(flatNormal + view * 1.0e-3);
     vWorldPosition = worldPosition;
     vUv = vec2(along, corner.y * 0.5 + 0.5);

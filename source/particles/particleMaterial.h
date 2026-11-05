@@ -21,6 +21,7 @@ inline constexpr uint32_t kParticleMaterialSetIndex = 1;
 // 都不含该 set。
 inline constexpr uint32_t kParticleSkinSetIndex = 2;
 inline constexpr uint32_t kParticleSkinPaletteBinding = 0;
+inline constexpr uint32_t kParticleSkinInfluenceBinding = 1;
 inline constexpr uint32_t kParticleMaterialUniformBinding = 0;
 inline constexpr uint32_t kParticleMaterialAlbedoBinding = 1;
 inline constexpr uint32_t kParticleMaterialNormalBinding = 2;

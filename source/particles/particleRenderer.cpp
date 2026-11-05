@@ -525,8 +525,16 @@ GraphicsPipelineLayoutDesc BuildParticleSkeletalLayout()
     palette.type = vk::DescriptorType::eStorageBuffer;
     palette.descriptorCount = 1;
     palette.stageFlags = vk::ShaderStageFlagBits::eVertex;
-    palette.name = "SkinPalette";
+    palette.name = "ParticleSkinPalette";
     bindings.push_back(std::move(palette));
+    ShaderBinding influences;
+    influences.set = kParticleSkinSetIndex;
+    influences.binding = kParticleSkinInfluenceBinding;
+    influences.type = vk::DescriptorType::eStorageBuffer;
+    influences.descriptorCount = 1;
+    influences.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    influences.name = "ParticleSkinInfluences";
+    bindings.push_back(std::move(influences));
     return layout;
 }
 
@@ -1648,10 +1656,33 @@ void ParticleRenderer::UpdateTranslucencyVolume(
         voxels.data(),
         voxels.size() * sizeof(float));
     backend->UnmapMemory(translucencyVolumeStaging.memory);
-    vk::CommandBuffer command = backend->BeginSingleTimeCommands();
+    // 上传不能用 BeginSingleTimeCommands：它只做子资源范围屏障，而该图同时
+    // 以 SHADER_READ_ONLY 绑定在已录制的 GPU 图 pass 里，没有队列级屏障把
+    // 绘制队列的读写出队就提交 transfer，校验会报告布局竞态。这里改用
+    // 带队列级屏障的独立提交（等待绘制/计算完成 -> TRANSFER -> SHADER_READ）。
     const vk::ImageLayout oldLayout = translucencyVolumeUploaded
         ? vk::ImageLayout::eShaderReadOnlyOptimal
         : vk::ImageLayout::eUndefined;
+    vk::CommandBuffer command = backend->BeginSingleTimeCommands();
+    // 队列级屏障：等主渲染队列所有读写（包括以 SHADER_READ_ONLY 绑定该图的
+    // 已提交 pass）完成，再让 transfer 写入 staging 与 back-sync 读取可见。
+    vk::MemoryBarrier queueBarrier;
+    queueBarrier
+        .setSrcAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite |
+            vk::AccessFlagBits::eTransferWrite |
+            vk::AccessFlagBits::eMemoryRead)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eTransferWrite |
+            vk::AccessFlagBits::eTransferRead);
+    command.pipelineBarrier(
+        vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eAllCommands,
+        {},
+        queueBarrier,
+        nullptr,
+        nullptr);
     backend->TransitionImageLayout(
         translucencyVolumeImage,
         1,
@@ -1683,6 +1714,20 @@ void ParticleRenderer::UpdateTranslucencyVolume(
         vk::ImageLayout::eTransferDstOptimal,
         vk::ImageLayout::eShaderReadOnlyOptimal,
         1);
+    // 收尾：transfer 写入在提交后对后续所有读取可见。
+    vk::MemoryBarrier readBarrier;
+    readBarrier
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eMemoryRead);
+    command.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eAllCommands,
+        {},
+        readBarrier,
+        nullptr,
+        nullptr);
     backend->EndSingleTimeCommands(command);
     translucencyVolumeUploaded = true;
 }
@@ -2503,6 +2548,63 @@ bool ParticleRenderer::IsGlobalSortEmitter(
         key) != globalSortPool.emitterKeys.end();
 }
 
+void ParticleRenderer::EnsureSpawnSourceBindings(
+    EmitterResources& emitter)
+{
+    // 只在 CreateDescriptors 重新分配 computeSets（资源重建）或父发射器
+    // 选择变化时写入；每帧重复写会让 descriptor 校验失去意义。
+    if (!emitter.spawnSourceBindingsDirty)
+    {
+        return;
+    }
+    const uint32_t imageCount = backend->GetSwapchainImageCount();
+    for (uint32_t imageIndex = 0;
+         imageIndex < imageCount &&
+         imageIndex < emitter.computeSets.size();
+         ++imageIndex)
+    {
+        const vk::DescriptorBufferInfo spawnSourceInfo(
+            emitter.spawnSource.buffer,
+            0,
+            VK_WHOLE_SIZE);
+        const vk::DescriptorBufferInfo parentSpawnEventInfo(
+            emitter.spawnEvents.buffer,
+            0,
+            VK_WHOLE_SIZE);
+        const vk::DescriptorBufferInfo spawnEventOutInfo(
+            emitter.spawnEvents.buffer,
+            0,
+            VK_WHOLE_SIZE);
+        vk::WriteDescriptorSet spawnSourceWrite;
+        spawnSourceWrite
+            .setDstSet(emitter.computeSets.at(imageIndex))
+            .setDstBinding(6)
+            .setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+            .setBufferInfo(spawnSourceInfo);
+        vk::WriteDescriptorSet parentSpawnWrite;
+        parentSpawnWrite
+            .setDstSet(emitter.computeSets.at(imageIndex))
+            .setDstBinding(7)
+            .setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+            .setBufferInfo(parentSpawnEventInfo);
+        vk::WriteDescriptorSet spawnEventOutWrite;
+        spawnEventOutWrite
+            .setDstSet(emitter.computeSets.at(imageIndex))
+            .setDstBinding(8)
+            .setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+            .setBufferInfo(spawnEventOutInfo);
+        std::vector<vk::WriteDescriptorSet> writes{
+            spawnSourceWrite,
+            parentSpawnWrite,
+            spawnEventOutWrite};
+        backend->UpdateDescriptorSets(writes);
+    }
+    emitter.spawnSourceBindingsDirty = false;
+}
+
 void ParticleRenderer::BindParentSpawnSources()
 {
     for (auto& [key, emitter] : emitters)
@@ -2550,6 +2652,12 @@ void ParticleRenderer::BindParentSpawnSources()
                 .setBufferInfo(parentInfo);
             backend->UpdateDescriptorSets({write});
         }
+    }
+    // 父发射器选择完成后统一写 spawn 源/父事件/事件输出三个 binding。
+    for (auto& [key, emitter] : emitters)
+    {
+        (void)key;
+        EnsureSpawnSourceBindings(*emitter);
     }
 }
 
@@ -4116,6 +4224,42 @@ void ParticleRenderer::LoadSkeletalEmitterMesh(
                 static_cast<vk::DeviceSize>(
                     section.sourceIndices.size() * sizeof(uint32_t)),
                 "index");
+            // CSR 影响流与 GPU 顶点缓冲同生命周期；权重按 uint bitcast
+            // 打包，与 particleSkeletalSkin.glsl 的 uintBitsToFloat 对齐。
+            std::vector<uint32_t> packedInfluences;
+            packedInfluences.reserve(
+                section.influenceOffsets.size() +
+                section.influences.size() * 2u);
+            for (uint32_t offset : section.influenceOffsets)
+            {
+                packedInfluences.push_back(offset * 2u);
+            }
+            for (const EmitterResources::SkeletalSection::Influence& influence :
+                 section.influences)
+            {
+                uint32_t weightBits = 0;
+                std::memcpy(
+                    &weightBits, &influence.weight, sizeof(float));
+                packedInfluences.push_back(influence.joint);
+                packedInfluences.push_back(weightBits);
+            }
+            section.skinInfluences = createHostBuffer(
+                static_cast<vk::DeviceSize>(
+                    std::max<size_t>(packedInfluences.size(), 1u) *
+                    sizeof(uint32_t)),
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                "ParticleSkeletalInfluences:" + emitterKey +
+                    "/" + std::to_string(sectionIndex));
+            pendingBuffers.push_back(section.skinInfluences);
+            if (!packedInfluences.empty())
+            {
+                uploadHostBuffer(
+                    section.skinInfluences,
+                    packedInfluences.data(),
+                    static_cast<vk::DeviceSize>(
+                        packedInfluences.size() * sizeof(uint32_t)),
+                    "influence");
+            }
             // 每个 image 一份 palette：CPU 在 RecordSimulation 里写当前姿态，
             // 不能与仍在飞的帧共用同一段 buffer。
             const vk::DeviceSize paletteBytes =
@@ -4755,7 +4899,8 @@ void ParticleRenderer::CreateDescriptors(
     // combined 新增 2 个是 IBL cubemap 与 BRDF LUT（binding 8/9）。
     // 骨骼完整实例再追加每 section 每 image 一个 palette storage set 2，
     // 数量与 materialSetCount 相同。
-    const uint32_t paletteSetCount = materialSetCount;
+    // 每个 palette set 2 有两个 storage（palette + 影响流）。
+    const uint32_t paletteSetCount = materialSetCount * 2u;
     std::vector<vk::DescriptorPoolSize> poolSizes{
         {vk::DescriptorType::eUniformBuffer,
          imageCount * 6 + materialSetCount},
@@ -4890,18 +5035,6 @@ void ParticleRenderer::CreateDescriptors(
                 emitter.sdfData.buffer,
                 0,
                 VK_WHOLE_SIZE);
-            const vk::DescriptorBufferInfo spawnSourceInfo(
-                emitter.spawnSource.buffer,
-                0,
-                VK_WHOLE_SIZE);
-            const vk::DescriptorBufferInfo parentSpawnEventInfo(
-                emitter.spawnEvents.buffer,
-                0,
-                VK_WHOLE_SIZE);
-            const vk::DescriptorBufferInfo spawnEventOutInfo(
-                emitter.spawnEvents.buffer,
-                0,
-                VK_WHOLE_SIZE);
             const vk::DescriptorBufferInfo debugCounterInfo(
                 emitter.debugCounters.buffer,
                 0,
@@ -4956,37 +5089,21 @@ void ParticleRenderer::CreateDescriptors(
                 .setDescriptorCount(1)
                 .setDescriptorType(vk::DescriptorType::eStorageBuffer)
                 .setBufferInfo(sdfInfo);
-            vk::WriteDescriptorSet spawnSourceWrite;
-            spawnSourceWrite
-                .setDstSet(emitter.computeSets.at(imageIndex))
-                .setDstBinding(6)
-                .setDescriptorCount(1)
-                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-                .setBufferInfo(spawnSourceInfo);
-            vk::WriteDescriptorSet parentSpawnWrite;
-            parentSpawnWrite
-                .setDstSet(emitter.computeSets.at(imageIndex))
-                .setDstBinding(7)
-                .setDescriptorCount(1)
-                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-                .setBufferInfo(parentSpawnEventInfo);
-            vk::WriteDescriptorSet spawnEventOutWrite;
-            spawnEventOutWrite
-                .setDstSet(emitter.computeSets.at(imageIndex))
-                .setDstBinding(8)
-                .setDescriptorCount(1)
-                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-                .setBufferInfo(spawnEventOutInfo);
-            backend->UpdateDescriptorSets(
-                {uniformWrite,
-                 particleWrite,
-                 aliveWrite,
-                 counterWrite,
-                 eventWrite,
-                 sdfWrite,
-                 spawnSourceWrite,
-                 parentSpawnWrite,
-                 spawnEventOutWrite});
+            // 单个 vk::DescriptorSet 的写入必须一次批量提交：下面会复用
+            // uniformWrite/particleWrite 并修改它们的 dstSet，若分批更新，
+            // 前面的写入对象会被改写成别的 set，spawn 源/事件三个 binding
+            // 就永远停留在默认的不初始化状态。
+            std::vector<vk::WriteDescriptorSet> computeWrites{
+                uniformWrite,
+                particleWrite,
+                aliveWrite,
+                counterWrite,
+                eventWrite,
+                sdfWrite};
+            backend->UpdateDescriptorSets(computeWrites);
+            // spawn 源/父事件依赖 BindParentSpawnSources 选择的父发射器，
+            // 在 Synchronize 末尾统一写入（见 EnsureSpawnSourceBindings）。
+            emitter.spawnSourceBindingsDirty = true;
 
             vk::WriteDescriptorSet sortedWrite;
             sortedWrite
@@ -5190,7 +5307,6 @@ void ParticleRenderer::CreateDescriptors(
                                 materialTextures[slot]->GetDescriptorInfo());
                         materialWrites.push_back(textureWrite);
                     }
-                    backend->UpdateDescriptorSets(materialWrites);
                     // palette 按 image 写：绘制时该 image 的 palette 就是
                     // 本帧姿态，不与在飞的上一帧共享同一段 buffer。
                     if (imageIndex < section.paletteSets.size() &&
@@ -5208,8 +5324,25 @@ void ParticleRenderer::CreateDescriptors(
                             .setDescriptorType(
                                 vk::DescriptorType::eStorageBuffer)
                             .setBufferInfo(paletteInfo);
-                        backend->UpdateDescriptorSets({paletteWrite});
+                        const vk::DescriptorBufferInfo influenceInfo(
+                            section.skinInfluences.buffer,
+                            0,
+                            VK_WHOLE_SIZE);
+                        vk::WriteDescriptorSet influenceWrite;
+                        influenceWrite
+                            .setDstSet(section.paletteSets.at(imageIndex))
+                            .setDstBinding(kParticleSkinInfluenceBinding)
+                            .setDescriptorCount(1)
+                            .setDescriptorType(
+                                vk::DescriptorType::eStorageBuffer)
+                            .setBufferInfo(influenceInfo);
+                        // 材质 set 1 与蒙皮 set 2 是两个不同的 descriptor set，
+                        // 可以合并到同一次 UpdateDescriptorSets；分开提交不会
+                        // 互相覆盖写入对象。
+                        materialWrites.push_back(paletteWrite);
+                        materialWrites.push_back(influenceWrite);
                     }
+                    backend->UpdateDescriptorSets(materialWrites);
                 }
             }
 
@@ -5528,6 +5661,7 @@ void ParticleRenderer::DestroyEmitterResources(
     {
         DestroyBuffer(rendererBackend, section.vertices);
         DestroyBuffer(rendererBackend, section.indices);
+        DestroyBuffer(rendererBackend, section.skinInfluences);
         for (GpuBuffer& palette : section.skinPalettes)
         {
             DestroyBuffer(rendererBackend, palette);

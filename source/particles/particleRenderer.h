@@ -769,6 +769,9 @@ private:
         bool meshFallbackBillboard = false;
         // 骨骼网格粒子的 sections：每 section 独立顶点/索引/权重/palette/
         // 材质，保证 per-section materialInstancePath 与 inverse bind 正确。
+        // spawn 源/父事件三个 binding 依赖 BindParentSpawnSources 选择的父
+        // 发射器；CreateDescriptors 之后由 EnsureSpawnSourceBindings 统一写入。
+        bool spawnSourceBindingsDirty = true;
         struct SkeletalSection
         {
             struct Influence
@@ -780,6 +783,8 @@ private:
             // 真正的形变在顶点着色器里按关节 palette 计算（GPU skinning）。
             GpuBuffer vertices;
             GpuBuffer indices;
+            // CSR 影响流（顶点区间 + (关节, 权重) 对），set 2 binding 1。
+            GpuBuffer skinInfluences;
             // 每个 swapchain image 一份 palette SSBO：CPU 每帧写当前姿态的
             // jointModel × inverseBind，避免与在飞帧复用同一段 buffer。
             std::vector<GpuBuffer> skinPalettes;
@@ -983,6 +988,10 @@ private:
     void SynchronizeGlobalSort();
     void AssignParticleLightSlots();
     void BindParentSpawnSources();
+    // 写入 compute set 0 的 spawn 源（binding 6）、父事件（binding 7）与事件
+    // 输出（binding 8）。CreateDescriptors 分配 computeSets 时这些绑定还没
+    // 选定，BindParentSpawnSources 之后统一写一次。
+    void EnsureSpawnSourceBindings(EmitterResources& emitter);
     void DestroyGlobalSortPool();
     bool CreateGlobalSortPool(
         const std::vector<std::string>& emitterKeys,

@@ -629,7 +629,9 @@ float SpawnSourceTotalWeight()
     {
         return 1.0;
     }
-    return max(spawnSource.data[(count - 1u) * 4u + 3u], 1.0e-6);
+    // 显式取 w 分量：record 是 vec4，直接用默认 float 构造函数会触发
+    // glslang 的隐式截断报错。
+    return max(spawnSource.data[(count - 1u) * 4u + 3u].w, 1.0e-6);
 }
 
 // 按权重（面积/长度）做逆 CDF 采样，并返回命中的源项下标；命中项由调用方
@@ -642,7 +644,7 @@ uint PickSpawnSourceByWeight(float weightSample)
     while (low < high)
     {
         uint middle = (low + high) >> 1;
-        if (spawnSource.data[middle * 4u + 3u] < weightSample)
+        if (spawnSource.data[middle * 4u + 3u].w < weightSample)
         {
             low = middle + 1u;
         }
@@ -805,8 +807,9 @@ bool SpawnParticle(
         localVelocity =
             parentVelocity * 0.25 + localVelocity * 0.75;
         // 生命周期由子发射器作者化决定；父寿命只作为事件记录保留，
-        // 不强制继承，否则短命火花会被长命 leader 拖长。
-        (void)parentLifetime;
+        // 不强制继承，否则短命火花会被长命 leader 拖长。这里把父寿命
+        // 折算成逐粒子寿命抖动（±10%），让事件链上的粒子不同步消失。
+        lifetime *= 0.9 + 0.2 * fract(parentLifetime);
     }
     else if (IsSkeletalSpawnSource())
     {
