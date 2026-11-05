@@ -37,6 +37,7 @@
 #include "particles/particleMesh.h"
 #include "particles/particleRibbon.h"
 #include "particles/particleShadowCaster.h"
+#include "particles/particleSkeletalPreflight.h"
 #include "particles/particleTextureReference.h"
 #include "particles/particleUserParameterOverride.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -4103,6 +4104,89 @@ void ParticleRenderer::LoadSkeletalEmitterMesh(
     }
     emitter.skeletalAsset = imported.modelResource.skeletalAsset;
     const SkeletalAsset& asset = *emitter.skeletalAsset;
+    // 加载期预检：关节 palette、section、影响区间与骨段数必须在烘焙 GPU
+    // 资源之前成立。失败直接抛出，上层沿用 mesh 的 billboard 回退与一次告警，
+    // 避免运行时读空的 palette 或缺失面片。
+    ParticleSkeletalPreflightInput preflightInput;
+    preflightInput.jointCount = asset.mesh.joints.size();
+    preflightInput.jointParents.reserve(asset.mesh.joints.size());
+    for (const Joint& joint : asset.mesh.joints)
+    {
+        preflightInput.jointParents.push_back(joint.parent);
+    }
+    for (const SkinSection& section : asset.mesh.sections)
+    {
+        ParticleSkeletalSectionInspection inspection;
+        inspection.vertexCount = section.vertices.size();
+        inspection.indexCount = section.indices.size();
+        inspection.influenceCount = section.influences.size();
+        inspection.inverseBindCount = section.inverseBinds.size();
+        inspection.influenceOffsetCount = section.influenceOffsets.size();
+        for (size_t vertexIndex = 0;
+             vertexIndex + 1 < section.influenceOffsets.size();
+             ++vertexIndex)
+        {
+            const uint32_t begin = section.influenceOffsets[vertexIndex];
+            const uint32_t end = section.influenceOffsets[vertexIndex + 1];
+            if (begin > end || end > section.influences.size())
+            {
+                inspection.structuralError =
+                    "influence range is out of bounds at vertex " +
+                    std::to_string(vertexIndex);
+                break;
+            }
+            inspection.maxInfluencesPerVertex = std::max(
+                inspection.maxInfluencesPerVertex, end - begin);
+            for (uint32_t influenceIndex = begin;
+                 influenceIndex < end;
+                 ++influenceIndex)
+            {
+                const Influence& influence =
+                    section.influences[influenceIndex];
+                if (influence.joint >= asset.mesh.joints.size())
+                {
+                    inspection.structuralError =
+                        "influence references out-of-range joint " +
+                        std::to_string(influence.joint);
+                    break;
+                }
+                if (!std::isfinite(influence.weight) ||
+                    influence.weight < 0.0f)
+                {
+                    inspection.structuralError =
+                        "influence weight must be finite and non-negative";
+                    break;
+                }
+            }
+            if (!inspection.structuralError.empty())
+            {
+                break;
+            }
+        }
+        preflightInput.sections.push_back(std::move(inspection));
+    }
+    preflightInput.wantTriangles =
+        emitter.asset.renderMode == "skeletalMeshTris";
+    preflightInput.wantBones =
+        emitter.asset.renderMode == "skeletalMeshBones";
+    const ParticleSkeletalPreflight preflight =
+        ValidateParticleSkeletalPreflight(preflightInput);
+    if (!preflight.ok())
+    {
+        throw std::runtime_error(preflight.error);
+    }
+    if (preflight.requiredMaxParticles > emitter.asset.maxParticles)
+    {
+        // 源项数量超过池容量时 shader 会按 sourceIndex < count 静默丢弃；
+        // 加载期告警一次，让作者把 maxParticles 调到需要的数量。
+        WarnMeshFallbackOnce(
+            emitterKey + "#skeletalCapacity",
+            emitter.asset.meshPath,
+            "skeletal sources (" +
+                std::to_string(preflight.requiredMaxParticles) +
+                ") exceed maxParticles (" +
+                std::to_string(emitter.asset.maxParticles) + ")");
+    }
     emitter.skeletalClipIndex = 0;
     if (!emitter.asset.skeletalPose.clip.empty())
     {

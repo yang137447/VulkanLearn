@@ -164,6 +164,7 @@ add_executable(material_instance_editor_production_tests
     particleRenderIdentityTests.cpp
     particleRibbonTests.cpp
     particleRuntimeCommandTests.cpp
+    particleSkeletalPreflightTests.cpp
     particleSimulationDeltaTests.cpp
     particleTextureReferenceTests.cpp
     "${VULKANLEARN_SOURCE_DIR}/source/material/materialDescriptorSchema.cpp"
@@ -179,7 +180,8 @@ add_executable(material_instance_editor_production_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewTypes.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewAdapter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp")
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp"    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleSkeletalPreflight.cpp"
+)
 target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
