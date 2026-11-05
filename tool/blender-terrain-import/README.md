@@ -256,14 +256,15 @@ manifest，不跑 16 次资产转换。
 * 全局高度/权重先按 `--heightmap-margin` 扩一圈再重采样；默认 margin=1，
   每个 tile 高度图为 259²（`gridResolution + 2*margin + 1`），相邻 tile
   共享边界高度。mesh 边界采样落在内圈，法线梯度可以读到另一侧 overscan。
-* 每个 tile 为 1km、`gridResolution=256`、`chunkQuads=64`、`lodLevels=1`，
-  因此不会出现跨 tile LOD 裂缝；16 个 tile 共 256 个 geometry draw。
+* 每个 tile 为 1km、`gridResolution=256`、`chunkQuads=64`；默认
+  `lodLevels=3`、LOD 阈值 1.25km/2.5km。粗 LOD 的边界缝合环仍按 LOD0
+  间距生成，所以相邻 tile 即使选择不同 LOD，边界顶点和法线仍一致。
 * `pageTilesPerSide=8`，16 个 tile 正好铺满 32×32 全局 VT 页表。
 * 所有 tile 共享同名 layer key、第一份 texture arrays 和同一套 camera/environment；
   `terrainlayer stats` 显示 `globalLayers=5 sourceSets=1 dedupedLayers=75`。
 
-当前限制：`lodLevels>1` 还没有跨 placement 的 LOD 邻接选择；边界法线已使用
-heightmap overscan（`heightmapMargin=1`），但多 tile LOD 仍固定为 1。
+当前限制：跨 tile 的 LOD 选择各自独立，依赖边界缝合环保证水密；没有统一的
+邻接优先级或 HLOD。边界法线使用 heightmap overscan（`heightmapMargin=1`）。
 
 ## 已知边界
 

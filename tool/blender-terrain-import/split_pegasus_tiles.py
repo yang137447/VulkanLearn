@@ -28,6 +28,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tile-resolution", type=int, default=256)
     parser.add_argument("--heightmap-margin", type=int, default=1)
     parser.add_argument("--tile-size-m", type=float, default=1000.0)
+    parser.add_argument("--lod-levels", type=int, default=3)
+    parser.add_argument(
+        "--lod-distances-m", type=float, nargs="+", default=None,
+        metavar="M")
     parser.add_argument("--page-tiles-per-side", type=int, default=8)
     parser.add_argument("--asset-prefix", default="blender_gn_pegasus_tile")
     parser.add_argument("--texture-resolution", type=int, default=1024)
@@ -111,6 +115,29 @@ def main() -> int:
             "heightmap-margin must be smaller than tile-resolution")
     if args.tile_size_m <= 0.0:
         raise RuntimeError("tile-size-m must be positive")
+    if not 1 <= args.lod_levels <= 4:
+        raise RuntimeError("lod-levels must be in [1, 4]")
+    coarsest_step = 1 << (args.lod_levels - 1)
+    if args.tile_resolution % coarsest_step != 0:
+        raise RuntimeError(
+            "tile-resolution must be divisible by the coarsest LOD step")
+    if args.lod_levels <= 1:
+        lod_distances_m: list[float] = []
+    elif args.lod_distances_m is None:
+        lod_distances_m = [
+            1250.0 * float(index + 1)
+            for index in range(args.lod_levels - 1)
+        ]
+    else:
+        lod_distances_m = [float(value) for value in args.lod_distances_m]
+    if len(lod_distances_m) != args.lod_levels - 1:
+        raise RuntimeError("lod-distances-m requires lodLevels-1 values")
+    if any(value <= 0.0 for value in lod_distances_m):
+        raise RuntimeError("lod-distances-m values must be positive")
+    if any(
+            lod_distances_m[index] >= lod_distances_m[index + 1]
+            for index in range(len(lod_distances_m) - 1)):
+        raise RuntimeError("lod-distances-m values must be strictly ascending")
     if not 1 <= args.page_tiles_per_side <= 32:
         raise RuntimeError("page-tiles-per-side must be in [1, 32]")
     if args.tile_grid * args.page_tiles_per_side > 32:
@@ -226,7 +253,9 @@ def main() -> int:
                 "cameraRotation": source.get("cameraRotation"),
                 "gridResolution": args.tile_resolution,
                 "chunkQuads": max(1, args.tile_resolution // 4),
-                "lodLevels": 1,
+                "lodLevels": args.lod_levels,
+                "lodDistances": [
+                    float(value) * 100.0 for value in lod_distances_m],
                 "heightmapMargin": args.heightmap_margin,
                 "pageOrigin": [
                     grid_x * args.page_tiles_per_side,
@@ -257,6 +286,9 @@ def main() -> int:
         "tileResolution": args.tile_resolution,
         "tileSamples": tile_samples,
         "heightmapMargin": args.heightmap_margin,
+        "lodLevels": args.lod_levels,
+        "lodDistancesCm": [
+            float(value) * 100.0 for value in lod_distances_m],
         "tileSizeCm": tile_size_cm,
         "pageTilesPerSide": args.page_tiles_per_side,
         "cameraPosition": source.get("cameraPosition"),

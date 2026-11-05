@@ -1824,14 +1824,14 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 - 全局高度/mask 重采样到 `4 × 256 + 1 = 1025`，相邻 tile 共用边界采样；
   tile_00/tile_01 与 tile_00/tile_04 的高度接缝最大差均实测为 0。
 - 每 tile 输出 259² 高度（`heightmapMargin=1` overscan）、5 层 mask、
-  TR/MI/VLP1；`pageOrigin` 按
+  TR/MI/VLP1；默认三级 LOD（1.25km/2.5km 阈值），`pageOrigin` 按
   `(8×gridX, 8×gridZ)` 写入，16 块正好覆盖 32×32 VT 页表。
-- `terrain_tests` 注册 270 项，全部通过；新增 margin UV transform、overscan
-  边缘法线、TR margin 往返/尺寸拒绝和 validator 边界测试。
+- `terrain_tests` 注册 271 项，全部通过；新增 margin UV transform、overscan
+  边缘法线、跨 tile LOD 边界顶点/法线、TR margin 往返/尺寸拒绝和 validator
+  边界测试。
 - 合并场景 `SC_terrain_pegasus_4x4.json` 加载 16 个 terrain placement；
   `terrainchunk stats` 报告 `groups=256 chunks=256 meshDraws=256`。
 - `terrainlayer stats` 报告 `globalLayers=5 sourceSets=1 dedupedLayers=75`，
   共享纹理数组与 layer key 生效。
-- `heightmapMargin=1` 让 mesh 边界法线读取本 tile 外的邻接样本；跨 tile
-  高度/法线使用同一采样。`lodLevels=1` 仍用来避免跨 placement LOD 裂缝，
-  跨 tile LOD 邻接选择尚未实现。
+- `heightmapMargin=1` 让 mesh 边界法线读取本 tile 外的邻接样本；三级 LOD
+  实跑报告 `drawnByLevel=1:49,2:207`，粗 LOD 的边界缝合环保持跨 tile 水密。

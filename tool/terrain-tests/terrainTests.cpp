@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -353,6 +354,63 @@ TEST(TerrainMeshBuilder, MarginEdgeNormalsUseOverscan)
     EXPECT_TRUE(chunk.vertices[0].normal.isApprox(expected, 1.0e-5f));
     EXPECT_TRUE(chunk.vertices[4].normal.isApprox(expected, 1.0e-5f));
     EXPECT_FLOAT_EQ(chunk.vertices[0].position.y(), 100.0f);
+}
+
+TEST(TerrainMeshBuilder, CrossTileLodBoundaryMatchesWithOverscan)
+{
+    const auto sourceHeight = [](uint32_t x, uint32_t y) {
+        return 0.2f + 0.03f * static_cast<float>(x) +
+            0.02f * static_cast<float>(y) +
+            0.004f * static_cast<float>(x * y);
+    };
+    auto makeTile = [&](uint32_t offsetX, uint32_t offsetZ) {
+        VL::TerrainBuildPlan plan = MakePlan(
+            MakeHeightmap(7, 7, [&](uint32_t x, uint32_t y) {
+                return sourceHeight(x + offsetX, y + offsetZ);
+            }));
+        plan.desc.gridResolution = 4;
+        plan.desc.chunkQuads = 4;
+        plan.desc.heightmapMargin = 1;
+        plan.desc.size = Eigen::Vector2f(400.0f, 400.0f);
+        plan.desc.heightScale = 400.0f;
+        plan.desc.lodLevels = 2;
+        return plan;
+    };
+    const VL::TerrainBuildPlan left = makeTile(0, 0);
+    const VL::TerrainBuildPlan right = makeTile(4, 0);
+
+    auto compare = [&](uint32_t leftLod, uint32_t rightLod) {
+        const std::vector<VL::TerrainMeshChunk> leftChunks =
+            VL::TerrainMeshBuilder::BuildChunks(left, leftLod);
+        const std::vector<VL::TerrainMeshChunk> rightChunks =
+            VL::TerrainMeshBuilder::BuildChunks(right, rightLod);
+        ASSERT_EQ(leftChunks.size(), 1u);
+        ASSERT_EQ(rightChunks.size(), 1u);
+        std::map<int, const Vertex*> leftEdge;
+        std::map<int, const Vertex*> rightEdge;
+        for (const Vertex& vertex : leftChunks.front().vertices)
+        {
+            if (std::abs(vertex.position.x() - 200.0f) < 0.01f)
+                leftEdge[static_cast<int>(std::lround(vertex.position.z()))] = &vertex;
+        }
+        for (const Vertex& vertex : rightChunks.front().vertices)
+        {
+            if (std::abs(vertex.position.x() + 200.0f) < 0.01f)
+                rightEdge[static_cast<int>(std::lround(vertex.position.z()))] = &vertex;
+        }
+        ASSERT_GE(leftEdge.size(), 4u);
+        for (const auto& [z, vertex] : leftEdge)
+        {
+            const auto found = rightEdge.find(z);
+            ASSERT_NE(found, rightEdge.end());
+            EXPECT_FLOAT_EQ(vertex->position.y(), found->second->position.y());
+            EXPECT_TRUE(vertex->normal.isApprox(found->second->normal, 1.0e-5f));
+        }
+    };
+
+    compare(0, 0);
+    compare(1, 0);
+    compare(1, 1);
 }
 
 TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)

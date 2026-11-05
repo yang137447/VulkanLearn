@@ -27,6 +27,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tile-grid", type=int, default=4)
     parser.add_argument("--tile-resolution", type=int, default=256)
     parser.add_argument("--heightmap-margin", type=int, default=1)
+    parser.add_argument("--lod-levels", type=int, default=3)
+    parser.add_argument(
+        "--lod-distances-m", type=float, nargs=2, default=(1250.0, 2500.0))
     parser.add_argument("--tile-size-m", type=float, default=1000.0)
     parser.add_argument("--page-tiles-per-side", type=int, default=8)
     parser.add_argument("--seed", type=int, default=17)
@@ -87,6 +90,9 @@ def main() -> int:
         "--tile-grid", str(args.tile_grid),
         "--tile-resolution", str(args.tile_resolution),
         "--heightmap-margin", str(args.heightmap_margin),
+        "--lod-levels", str(args.lod_levels),
+        "--lod-distances-m", str(args.lod_distances_m[0]),
+        str(args.lod_distances_m[1]),
         "--tile-size-m", str(args.tile_size_m),
         "--page-tiles-per-side", str(args.page_tiles_per_side),
     ], args.verbose)

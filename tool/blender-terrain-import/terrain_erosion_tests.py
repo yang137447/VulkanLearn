@@ -227,7 +227,7 @@ class TerrainTilingTests(unittest.TestCase):
                     "--resource-root", str(resource_root),
                     "--output-root", str(output_root),
                     "--tile-grid", "2",
-                    "--tile-resolution", "4",
+                    "--tile-resolution", "16",
                     "--tile-size-m", "1000",
                     "--page-tiles-per-side", "2",
                 ]
@@ -239,17 +239,19 @@ class TerrainTilingTests(unittest.TestCase):
                 (output_root / "tile_layout.json").read_text(encoding="utf-8"))
             self.assertEqual(layout["tileGrid"], 2)
             self.assertEqual(len(layout["tiles"]), 4)
-            self.assertEqual(layout["tileSamples"], 7)
+            self.assertEqual(layout["tileSamples"], 19)
             self.assertEqual(layout["heightmapMargin"], 1)
+            self.assertEqual(layout["lodLevels"], 3)
+            self.assertEqual(layout["lodDistancesCm"], [125000.0, 250000.0])
 
             tile0 = read_gray16(output_root / "tile_00/Source/heightmap_gn_tile.png")
             tile1 = read_gray16(output_root / "tile_01/Source/heightmap_gn_tile.png")
             tile2 = read_gray16(output_root / "tile_02/Source/heightmap_gn_tile.png")
-            self.assertEqual(tile0.shape, (7, 7))
-            np.testing.assert_array_equal(tile0[:, 4:7], tile1[:, 0:3])
-            np.testing.assert_array_equal(tile0[4:7, :], tile2[0:3, :])
-            np.testing.assert_array_equal(tile0[:, 5], tile1[:, 1])
-            np.testing.assert_array_equal(tile0[5, :], tile2[1, :])
+            self.assertEqual(tile0.shape, (19, 19))
+            np.testing.assert_array_equal(tile0[:, 16:19], tile1[:, 0:3])
+            np.testing.assert_array_equal(tile0[16:19, :], tile2[0:3, :])
+            np.testing.assert_array_equal(tile0[:, 17], tile1[:, 1])
+            np.testing.assert_array_equal(tile0[17, :], tile2[1, :])
 
             tile1_manifest = json.loads(
                 (output_root / "tile_01/blender_gn_import.json").read_text(
@@ -257,6 +259,9 @@ class TerrainTilingTests(unittest.TestCase):
             self.assertEqual(tile1_manifest["pageOrigin"], [2, 0])
             self.assertEqual(tile1_manifest["pageTilesPerSide"], 2)
             self.assertEqual(tile1_manifest["heightmapMargin"], 1)
+            self.assertEqual(tile1_manifest["lodLevels"], 3)
+            self.assertEqual(
+                tile1_manifest["lodDistances"], [125000.0, 250000.0])
             self.assertAlmostEqual(
                 tile1_manifest["materialUvScale"], 4.0)
             self.assertAlmostEqual(
