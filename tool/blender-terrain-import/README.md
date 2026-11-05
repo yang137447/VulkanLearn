@@ -114,6 +114,46 @@ py -3 tool\terrain-ue-import\build_vulkanlearn_assets.py `
 如果把该解释器路径传给 CMake 的 `VULKANLEARN_TERRAIN_EROSION_PYTHON`，
 同一脚本也会注册成 CTest 项 `terrain_erosion_tests`。
 
+### Pegasus 植被切片
+
+资源里已有的 Bistro `FillOut_BushTree.glb` 含一棵完整的 Italian Cypress。
+先用 Blender 抽出独立树原型：
+
+```powershell
+& $blender --background --python tool\blender-terrain-import\extract_pegasus_vegetation.py -- `
+  --source "$res\Maps\SC_bistro_exterior_modular\Source\Models\bistro_modular\FillOut\FillOut_BushTree.glb" `
+  --output "$res\Generated\BlenderPegasusGN\Vegetation\cypress.glb" `
+  --metadata "$res\Generated\BlenderPegasusGN\Vegetation\cypress.metadata.json"
+```
+
+再按 GN scatter 点生成确定性场景（默认 122 棵、独立 TR/MI 的 `u_uvScale=128`）：
+
+```powershell
+& 'D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe' `
+  tool\blender-terrain-import\build_pegasus_vegetation_scene.py `
+  --resource-root "$res"
+```
+
+生成：
+
+```text
+Generated\BlenderPegasusGN\Vegetation\SM_pegasus_cypress.json
+Generated\BlenderPegasusGN\SC_terrain_pegasus_cypress_grove.json
+Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove.json
+Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
+```
+
+运行：
+
+```powershell
+.\build\bin\main.exe --no-dev-ui `
+  --initial-scene Generated/BlenderPegasusGN/SC_terrain_pegasus_cypress_grove.json
+```
+
+当前切片只有 Italian Cypress；每棵树仍是独立 mesh object/draw，没有实例化、
+草地或风。下一步是先做 `DrawIndexedInstanced` + `VEG_*.json`，再把树/石/草
+批量铺开；不要把这一版的 draw 数当作最终性能基线。
+
 可视化验收：
 
 ```powershell
