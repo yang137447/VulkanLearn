@@ -4639,7 +4639,7 @@ void ParticleRenderer::RecordSimulation(
         uniforms.softParams = Eigen::Vector4f(
             emitter.asset.softParticleDistance,
             emitter.asset.softParticles ? 1.0f : 0.0f,
-            0.0f,
+            emitter.asset.softParticleTapRadius,
             0.0f);
         uniforms.colorStart = emitter.asset.colorStart;
         uniforms.colorEnd = emitter.asset.colorEnd;
@@ -4710,6 +4710,16 @@ void ParticleRenderer::RecordSimulation(
         uniforms.flipbookParams2 = Eigen::Vector4f(
             emitter.asset.flipbookLoop ? 1.0f : 0.0f,
             emitter.asset.flipbookRandomStartFrame ? 1.0f : 0.0f,
+            0.0f,
+            0.0f);
+        uniforms.flipbookParams5 = Eigen::Vector4f(
+            emitter.asset.flipbookPerParticle ? 1.0f : 0.0f,
+            emitter.asset.flipbookBlend ? 1.0f : 0.0f,
+            emitter.asset.flipbookPlayRate,
+            0.0f);
+        uniforms.textureModeParams = Eigen::Vector4f(
+            emitter.asset.eooPacked ? 1.0f : 0.0f,
+            emitter.asset.eooEmissiveStrength,
             0.0f,
             0.0f);
         uniforms.sortParams = Eigen::Vector4f(
@@ -4796,7 +4806,29 @@ void ParticleRenderer::RecordSimulation(
                     emitter.asset.ribbonSegments)),
             emitter.asset.ribbonFade,
             emitter.asset.ribbonWidth,
+            // 只有 ribbon 需要 16 槽历史搬移；其它模式保持原模拟成本。
+            emitter.asset.renderMode == "ribbon" ? 1.0f : 0.0f);
+        uniforms.ribbonUVParams = Eigen::Vector4f(
+            emitter.asset.ribbonUVTiling,
+            static_cast<float>(std::min<size_t>(
+                emitter.asset.ribbonWidthKeys.size(),
+                kMaxParticleCurveKeys)),
+            0.0f,
             0.0f);
+        uniforms.ribbonWidthKeys.fill(Eigen::Vector4f::Zero());
+        uniforms.ribbonWidthKeyTimes.fill(Eigen::Vector4f::Zero());
+        for (size_t keyIndex = 0;
+             keyIndex < emitter.asset.ribbonWidthKeys.size() &&
+             keyIndex < kMaxParticleCurveKeys;
+             ++keyIndex)
+        {
+            const ParticleRibbonWidthKey& key =
+                emitter.asset.ribbonWidthKeys[keyIndex];
+            uniforms.ribbonWidthKeys[keyIndex] =
+                Eigen::Vector4f(key.time, key.width, 0.0f, 0.0f);
+            uniforms.ribbonWidthKeyTimes[keyIndex / 4][keyIndex % 4] =
+                key.time;
+        }
         uniforms.meshParams = Eigen::Vector4f(
             static_cast<float>(ParticleMeshAlignmentCode(
                 emitter.asset.meshAlignment)),
@@ -4923,7 +4955,7 @@ void ParticleRenderer::RecordSimulation(
                 emitter.asset.billboardForwardScattering,
                 0.0f,
                 2.0f),
-            0.0f);
+            std::clamp(emitter.asset.billboardDensity, 0.0f, 0.25f));
         // beam 端点是发射器局部空间作者数据，渲染前统一乘 emitter.model；
         // localSpace 对 beam 没有额外含义。
         const Eigen::Vector3f beamStartWorld =
@@ -6203,8 +6235,8 @@ bool ParticleRenderer::DumpParticles(
     std::string& outError)
 {
     static_assert(
-        sizeof(GpuParticle) == sizeof(Eigen::Vector4f) * 5,
-        "Particle dump assumes the std430 Particle layout is five vec4s.");
+        sizeof(GpuParticle) == sizeof(Eigen::Vector4f) * 18,
+        "Particle dump assumes the std430 Particle layout is 18 vec4s.");
 
     if (!initialized || backend != &readbackBackend)
     {

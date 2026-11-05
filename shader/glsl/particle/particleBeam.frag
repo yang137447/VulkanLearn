@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -26,12 +27,11 @@ layout(std430, set = 0, binding = 5) buffer ParticleDebug
 void main()
 {
     // 与 ribbon 相同的 sceneDepth/软粒子逻辑。
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView =
-        frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        frame.softParams.z,
+        frame.invProjection);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -57,7 +57,15 @@ void main()
     if (frame.flipbookParams.y > 0.5)
     {
         vec4 sprite = texture(particleTexture, vAtlasUV);
-        color *= sprite.rgb;
+        if (frame.textureModeParams.x > 0.5)
+        {
+            color +=
+                vColor.rgb * sprite.r * frame.textureModeParams.y;
+        }
+        else
+        {
+            color *= sprite.rgb;
+        }
         alpha *= sprite.a;
     }
     outColor = vec4(color, alpha * softFade);

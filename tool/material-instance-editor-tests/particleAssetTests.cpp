@@ -2032,7 +2032,7 @@ TEST(ParticleAsset, RibbonFieldsRejectInvalidValues)
         std::invalid_argument);
 
     document = MultiEmitterDocument();
-    document["emitters"][0]["ribbonSegments"] = 4;
+    document["emitters"][0]["ribbonSegments"] = 33;
     EXPECT_THROW(
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_ribbon_segments.json"),
@@ -2051,6 +2051,85 @@ TEST(ParticleAsset, RibbonFieldsRejectInvalidValues)
     EXPECT_THROW(
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_ribbon_fade.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, SubUvSoftParticleAndEooFieldsRoundTrip)
+{
+    Json document = MultiEmitterDocument();
+    Json& emitter = document["emitters"][0];
+    emitter["flipbook"] = Json{
+        {"perParticle", true},
+        {"blend", true},
+        {"playRate", 1.5}};
+    emitter["softParticleTapRadius"] = 6.0;
+    emitter["billboardDensity"] = 0.01;
+    emitter["eooPacked"] = true;
+    emitter["eooEmissiveStrength"] = 2.5;
+    emitter["ribbonUVTiling"] = 3.0;
+    emitter["ribbonWidthKeys"] = Json::array({
+        Json{{"time", 0.0}, {"width", 1.0}},
+        Json{{"time", 0.5}, {"width", 0.4}},
+        Json{{"time", 1.0}, {"width", 0.05}}});
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_subuv_soft_eoo.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_TRUE(asset.emitters[0].flipbookPerParticle);
+    EXPECT_TRUE(asset.emitters[0].flipbookBlend);
+    EXPECT_FLOAT_EQ(asset.emitters[0].flipbookPlayRate, 1.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].softParticleTapRadius, 6.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].billboardDensity, 0.01f);
+    EXPECT_TRUE(asset.emitters[0].eooPacked);
+    EXPECT_FLOAT_EQ(asset.emitters[0].eooEmissiveStrength, 2.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].ribbonUVTiling, 3.0f);
+    ASSERT_EQ(asset.emitters[0].ribbonWidthKeys.size(), 3u);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].ribbonWidthKeys[1].width, 0.4f);
+
+    Json invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["flipbook"] = Json{
+        {"perParticle", true}, {"playRate", 17.0}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_subuv_rate.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["softParticleTapRadius"] = 33.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_soft_radius.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["billboardDensity"] = 0.3;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_density.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["eooEmissiveStrength"] = 17.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_eoo_strength.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["ribbonUVTiling"] = 0.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_ribbon_uv.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["ribbonWidthKeys"] = Json::array({
+        Json{{"time", 0.5}, {"width", 1.0}},
+        Json{{"time", 0.2}, {"width", 0.5}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_ribbon_width_keys.json"),
         std::invalid_argument);
 }
 

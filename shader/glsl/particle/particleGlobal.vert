@@ -16,6 +16,8 @@ struct GatheredBillboard
     vec4 lightDirection;
     vec4 lightColor;
     vec4 lightParams2;
+    vec4 flags2;
+    vec4 flags3;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -62,6 +64,13 @@ layout(location = 13) out flat vec3 vLightDirection;
 layout(location = 14) out flat vec3 vLightColor;
 layout(location = 15) out flat vec3 vLightingNormal;
 layout(location = 16) out flat vec4 vLightParams2;
+layout(location = 17) out vec2 vAtlasUV2;
+layout(location = 18) out float vAtlasBlend;
+layout(location = 19) out float vSize;
+layout(location = 20) out float vDensity;
+layout(location = 21) out float vSoftTapRadius;
+layout(location = 22) out float vEooPacked;
+layout(location = 23) out float vEooEmissiveStrength;
 
 void main()
 {
@@ -85,6 +94,13 @@ void main()
         vLightDirection = vec3(0.0);
         vLightColor = vec3(0.0);
         vLightingNormal = vec3(0.0);
+        vAtlasUV2 = vec2(0.0);
+        vAtlasBlend = 0.0;
+        vSize = 0.0;
+        vDensity = 0.0;
+        vSoftTapRadius = 0.0;
+        vEooPacked = 0.0;
+        vEooEmissiveStrength = 0.0;
         return;
     }
     uint recordIndex = uint(sortedPairs.pairs[drawIndex].y);
@@ -107,6 +123,13 @@ void main()
         vLightDirection = vec3(0.0);
         vLightColor = vec3(0.0);
         vLightingNormal = vec3(0.0);
+        vAtlasUV2 = vec2(0.0);
+        vAtlasBlend = 0.0;
+        vSize = 0.0;
+        vDensity = 0.0;
+        vSoftTapRadius = 0.0;
+        vEooPacked = 0.0;
+        vEooEmissiveStrength = 0.0;
         return;
     }
 
@@ -154,12 +177,31 @@ void main()
         vec2(record.params.z, record.params.w);
     vAtlasUV = clamp(
         vAtlasUV, cellMin + halfTexel, cellMax - halfTexel);
+    vec2 atlasCell2 = vec2(
+        mod(record.flags2.z, record.params.z),
+        floor(record.flags2.z / record.params.z));
+    vec2 atlasUV2 = (atlasCell2 +
+        vec2(vSpriteUV.x, 1.0 - vSpriteUV.y)) /
+        vec2(record.params.z, record.params.w);
+    vec2 cellMin2 =
+        atlasCell2 / vec2(record.params.z, record.params.w);
+    vec2 cellMax2 =
+        (atlasCell2 + vec2(1.0)) /
+        vec2(record.params.z, record.params.w);
+    vAtlasUV2 = clamp(
+        atlasUV2, cellMin2 + halfTexel, cellMax2 - halfTexel);
     vTextureIndex = int(record.frame.w);
     vSoftParams = record.flags.zw;
     vHasTexture = record.flags.y;
     vWorldPosition = worldPosition;
     vLightParams = record.lightParams;
     vLightParams2 = record.lightParams2;
+    vAtlasBlend = record.flags2.w;
+    vSize = record.centerSize.w;
+    vDensity = record.flags2.y;
+    vSoftTapRadius = record.flags2.x;
+    vEooPacked = record.flags3.x;
+    vEooEmissiveStrength = record.flags3.y;
     vLightDirection = record.lightDirection.xyz;
     vLightColor = record.lightColor.rgb;
     vec3 lightingNormal = cross(record.rightRot.xyz, record.upSoft.xyz);

@@ -372,10 +372,24 @@ void SpawnParticle(
         Eigen::Vector4f(position.x(), position.y(), position.z(), age);
     particle.velocityLife =
         Eigen::Vector4f(velocity.x(), velocity.y(), velocity.z(), lifetime);
-    // 新粒子的三个历史点都等于生成位置；首帧 ribbon 退化为零长度。
-    particle.history0 = particle.positionAge;
-    particle.history1 = particle.positionAge;
-    particle.history2 = particle.positionAge;
+    // 新粒子的 16 个历史点都等于生成位置；首帧 ribbon 退化为零长度。
+    particle.history.fill(particle.positionAge);
+    if (emitter.asset.renderMode == "ribbon")
+    {
+        constexpr float historyStep = 1.0f / 60.0f;
+        for (size_t historyIndex = 0;
+             historyIndex < particle.history.size();
+             ++historyIndex)
+        {
+            const float backSeconds =
+                historyStep * static_cast<float>(historyIndex + 1);
+            particle.history[historyIndex].head<3>() =
+                particle.positionAge.head<3>() -
+                particle.velocityLife.head<3>() * backSeconds;
+            particle.history[historyIndex].w() =
+                std::max(particle.positionAge.w() - backSeconds, 0.0f);
+        }
+    }
 }
 
 void IntegrateParticle(
@@ -400,10 +414,15 @@ void IntegrateParticle(
         return;
     }
 
-    // 历史右移在积分之前：history0 记录本帧起点。
-    particle.history2 = particle.history1;
-    particle.history1 = particle.history0;
-    particle.history0 = particle.positionAge;
+    // 历史右移在积分之前：history[0] 记录本帧起点。
+    for (size_t historyIndex = particle.history.size() - 1;
+         historyIndex > 0;
+         --historyIndex)
+    {
+        particle.history[historyIndex] =
+            particle.history[historyIndex - 1];
+    }
+    particle.history[0] = particle.positionAge;
 
     Eigen::Vector3f position = particle.positionAge.head<3>();
     Eigen::Vector3f velocity = particle.velocityLife.head<3>();

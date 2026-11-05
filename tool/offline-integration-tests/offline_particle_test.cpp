@@ -187,9 +187,7 @@ void ExpectSameParticles(
             const VL::OfflineParticle& b = rightParticles[index];
             EXPECT_EQ(a.positionAge, b.positionAge) << index;
             EXPECT_EQ(a.velocityLife, b.velocityLife) << index;
-            EXPECT_EQ(a.history0, b.history0) << index;
-            EXPECT_EQ(a.history1, b.history1) << index;
-            EXPECT_EQ(a.history2, b.history2) << index;
+            EXPECT_EQ(a.history, b.history) << index;
         }
     }
 }
@@ -281,9 +279,7 @@ VL::OfflineParticleSystemState SingleParticleState(
         position.x(), position.y(), position.z(), 0.5f);
     particle.velocityLife =
         Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
-    particle.history0 = particle.positionAge;
-    particle.history1 = particle.positionAge;
-    particle.history2 = particle.positionAge;
+    particle.history.fill(particle.positionAge);
     return state;
 }
 

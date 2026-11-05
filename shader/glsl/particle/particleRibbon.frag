@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
 #include "particleSceneLighting.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -61,11 +62,11 @@ float Fbm(vec2 p)
 void main()
 {
     // 与 billboard 相同的 sceneDepth/软粒子逻辑。
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView = frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        frame.softParams.z,
+        frame.invProjection);
 
     if (vViewDepth >= sceneViewDepth)
     {
@@ -85,12 +86,26 @@ void main()
     float edge = smoothstep(0.0, edgeWidth, vUV.y) *
         smoothstep(0.0, edgeWidth, 1.0 - vUV.y);
     float alpha = edge;
+    vec3 albedo = vColor.rgb;
+    vec3 emission = vec3(0.0);
     if (frame.flipbookParams.y > 0.5)
     {
         vec4 sprite = texture(particleTexture, vAtlasUV);
-        outColor = vec4(
-            vColor.rgb * sprite.rgb,
-            vColor.a * sprite.a * alpha);
+        if (frame.textureModeParams.x > 0.5)
+        {
+            albedo = vColor.rgb * mix(1.0, sprite.g, 0.35);
+            emission = vColor.rgb * sprite.r *
+                frame.textureModeParams.y;
+            if (frame.billboardLightParams.x < 0.5)
+            {
+                albedo = vec3(0.0);
+            }
+        }
+        else
+        {
+            albedo = vColor.rgb * sprite.rgb;
+        }
+        alpha *= sprite.a;
     }
     else
     {
@@ -100,11 +115,8 @@ void main()
             0.18,
             0.82,
             Fbm(noiseUv + vec2(vTime * 0.2, 0.0)));
-        outColor = vec4(
-            vColor.rgb,
-            vColor.a * alpha * mix(1.0, erosion, 0.6));
+        alpha *= mix(1.0, erosion, 0.6);
     }
-    outColor.a *= softFade;
     if (frame.billboardLightParams.x > 0.5)
     {
         // ribbon 没有稳定的几何法线：条带始终面向相机，因此把视线方向
@@ -119,9 +131,9 @@ void main()
                 vWorldPosition,
                 facingNormal);
         }
-        outColor.rgb = CalculateParticleBillboardSceneLighting(
+        albedo = CalculateParticleBillboardSceneLighting(
             localShadowMap,
-            outColor.rgb,
+            albedo,
             vWorldPosition,
             facingNormal,
             frame.cameraPosition.xyz,
@@ -130,7 +142,9 @@ void main()
             clamp(frame.billboardLightParams2.x, 0.0, 1.0),
             clamp(frame.billboardLightParams2.y, 0.02, 1.0),
             clamp(frame.billboardLightParams2.z, 0.0, 2.0),
-            directionalShadow);
+            directionalShadow,
+            frame.ribbonParams.z * 2.0,
+            clamp(frame.billboardLightParams2.w, 0.0, 0.25));
     }
     else if (frame.shadowParams.w > 0.5)
     {
@@ -140,8 +154,9 @@ void main()
             shadowMap,
             vWorldPosition,
             facingNormal);
-        outColor.rgb *= mix(1.0, shadow, 0.5);
+        albedo *= mix(1.0, shadow, 0.5);
     }
+    outColor = vec4(albedo + emission, alpha * softFade);
     outColor *= frame.colorTint;
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);

@@ -74,9 +74,17 @@ inline float ComputeParticleEmitterLocalRadius(
     // ribbon 条带在切线两侧各外扩 ribbonWidth；历史点都在运动轨迹内，
     // 因此只需要额外加上横向半宽。mesh 的视觉半径来自导入网格顶点，
     // 而不是 billboard size 曲线。
-    const float ribbonHalfWidth = asset.renderMode == "ribbon"
-        ? std::max(asset.ribbonWidth, 0.0f)
-        : 0.0f;
+    float ribbonHalfWidth = 0.0f;
+    if (asset.renderMode == "ribbon")
+    {
+        float maxWidthScale = 1.0f;
+        for (const ParticleRibbonWidthKey& key : asset.ribbonWidthKeys)
+        {
+            maxWidthScale = std::max(maxWidthScale, key.width);
+        }
+        ribbonHalfWidth =
+            std::max(asset.ribbonWidth, 0.0f) * maxWidthScale;
+    }
     const float visualRadius =
         asset.renderMode == "mesh" && meshLocalBoundsRadius > 0.0f
         ? std::max(meshLocalBoundsRadius, 0.0f)

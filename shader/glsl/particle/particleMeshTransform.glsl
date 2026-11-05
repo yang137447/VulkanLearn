@@ -34,12 +34,12 @@ bool ResolveParticleMeshParticle(
     out Particle particle)
 {
     particleIndex = 0;
-    particle = Particle(
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0));
+    particle.positionAge = vec4(0.0);
+    particle.velocityLife = vec4(0.0);
+    for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+    {
+        particle.history[historyIndex] = vec4(0.0);
+    }
 
     uint count = uint(particleBuffer.particles.length());
     if (drawIndex >= count)

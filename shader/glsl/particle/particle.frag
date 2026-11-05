@@ -3,6 +3,7 @@
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
 #include "particleSceneLighting.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -13,6 +14,9 @@ layout(location = 5) in vec2 vAtlasUV;
 layout(location = 6) in float vViewDepth;
 layout(location = 7) in vec3 vWorldPosition;
 layout(location = 8) in vec3 vLightingNormal;
+layout(location = 9) in vec2 vAtlasUV2;
+layout(location = 10) in float vAtlasBlend;
+layout(location = 11) in float vSize;
 
 layout(location = 0) out vec4 outColor;
 
@@ -66,11 +70,11 @@ float Fbm(vec2 p)
 void main()
 {
     // 像素坐标直接对应 sceneDepth 的 texel，不依赖 UV 翻转或 NDC 朝向。
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView = frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        frame.softParams.z,
+        frame.invProjection);
 
     // 被不透明几何遮挡的粒子直接剔除；软粒子开关只控制交线附近的 alpha 淡出。
     if (vViewDepth >= sceneViewDepth)
@@ -96,12 +100,33 @@ void main()
     float radial = pow(
         1.0 - radius,
         mix(1.0, 3.0, clamp(vSoftness, 0.0, 1.0)));
+    vec3 albedo = vColor.rgb;
+    vec3 emission = vec3(0.0);
+    float alpha = vColor.a * radial;
     if (frame.flipbookParams.y > 0.5)
     {
-        vec4 sprite = texture(particleTexture, vAtlasUV);
-        outColor = vec4(
-            vColor.rgb * sprite.rgb,
-            vColor.a * sprite.a * radial);
+        vec4 sprite = mix(
+            texture(particleTexture, vAtlasUV),
+            texture(particleTexture, vAtlasUV2),
+            vAtlasBlend);
+        if (frame.textureModeParams.x > 0.5)
+        {
+            // R=Emissive, G=Occlusion, A=Opacity；B 通道不可用。
+            // EOO 自发光不能被场景光照再次衰减；unlit 时只保留 R 通道，
+            // 避免把恒定的作者颜色当成整张卡片的自发光底板。
+            albedo = vColor.rgb * mix(1.0, sprite.g, 0.35);
+            emission = vColor.rgb * sprite.r *
+                frame.textureModeParams.y;
+            if (frame.billboardLightParams.x < 0.5)
+            {
+                albedo = vec3(0.0);
+            }
+        }
+        else
+        {
+            albedo = vColor.rgb * sprite.rgb;
+        }
+        alpha *= sprite.a;
     }
     else
     {
@@ -111,10 +136,8 @@ void main()
             0.18,
             0.82,
             Fbm(noiseUv + vec2(vTime * 0.2, 0.0)));
-        float alpha = radial * mix(1.0, erosion, 0.72);
-        outColor = vec4(vColor.rgb, vColor.a * alpha);
+        alpha *= mix(1.0, erosion, 0.72);
     }
-    outColor.a *= softFade;
     if (frame.billboardLightParams.x > 0.5)
     {
         // 方向光共用同一套 CSM（以主方向光的级联为准）；点光/聚光/粒子灯
@@ -127,9 +150,9 @@ void main()
                 vWorldPosition,
                 normalize(vLightingNormal));
         }
-        outColor.rgb = CalculateParticleBillboardSceneLighting(
+        albedo = CalculateParticleBillboardSceneLighting(
             localShadowMap,
-            outColor.rgb,
+            albedo,
             vWorldPosition,
             vLightingNormal,
             frame.cameraPosition.xyz,
@@ -138,7 +161,9 @@ void main()
             clamp(frame.billboardLightParams2.x, 0.0, 1.0),
             clamp(frame.billboardLightParams2.y, 0.02, 1.0),
             clamp(frame.billboardLightParams2.z, 0.0, 2.0),
-            directionalShadow);
+            directionalShadow,
+            vSize,
+            clamp(frame.billboardLightParams2.w, 0.0, 0.25));
     }
     else if (frame.shadowParams.w > 0.5)
     {
@@ -146,8 +171,9 @@ void main()
             shadowMap,
             vWorldPosition,
             vLightingNormal);
-        outColor.rgb *= mix(1.0, shadow, 0.5);
+        albedo *= mix(1.0, shadow, 0.5);
     }
+    outColor = vec4(albedo + emission, alpha * softFade);
     outColor *= frame.colorTint;
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);

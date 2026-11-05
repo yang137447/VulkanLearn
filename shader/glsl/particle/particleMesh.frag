@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSceneLighting.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 2) in float vViewDepth;
@@ -72,11 +73,11 @@ vec3 ReconstructParticleTangent(
 
 void main()
 {
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView = frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        frame.softParams.z,
+        frame.invProjection);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;

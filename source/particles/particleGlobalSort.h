@@ -12,9 +12,9 @@ namespace VL
 // 全局 bitonic 网络的 dispatch 成本失控。
 constexpr uint32_t kParticleGlobalSortCapacity = 8192;
 constexpr uint32_t kParticleGlobalTextureSlots = 8;
-// GatheredBillboard 的 std430 stride：8 个基础 vec4 + 4 个逐发射器光照 vec4。
+// GatheredBillboard 的 std430 stride：10 个基础 vec4 + 4 个逐发射器光照 vec4。
 // shader 侧三处结构体定义必须与这个值保持同步。
-constexpr uint32_t kParticleGlobalRecordVec4Count = 12;
+constexpr uint32_t kParticleGlobalRecordVec4Count = 14;
 
 // CPU 镜像：一个已聚集的透明 billboard 粒子。GPU gather 写入同样的
 // 字段顺序；CPU 侧只用于确定性排序测试与容量决策。

@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSprite.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -54,11 +55,11 @@ float Fbm(vec2 p)
 void main()
 {
     // 被不透明几何遮挡的扰动粒子不产生偏移，避免把背景像素拖进前景。
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView = frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        frame.softParams.z,
+        frame.invProjection);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;

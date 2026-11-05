@@ -17,8 +17,9 @@ TEST(ParticleRibbon, SegmentsClampToSupportedRange)
     EXPECT_EQ(ClampParticleRibbonSegments(1), 1u);
     EXPECT_EQ(ClampParticleRibbonSegments(2), 2u);
     EXPECT_EQ(ClampParticleRibbonSegments(3), 3u);
-    EXPECT_EQ(ClampParticleRibbonSegments(4), 3u);
-    EXPECT_EQ(ClampParticleRibbonSegments(100), 3u);
+    EXPECT_EQ(ClampParticleRibbonSegments(4), 4u);
+    EXPECT_EQ(ClampParticleRibbonSegments(32), 32u);
+    EXPECT_EQ(ClampParticleRibbonSegments(100), 32u);
 }
 
 TEST(ParticleRibbon, VertexCountScalesWithSegments)
@@ -27,13 +28,27 @@ TEST(ParticleRibbon, VertexCountScalesWithSegments)
     EXPECT_EQ(ParticleRibbonVerticesPerParticle(2), 12u);
     EXPECT_EQ(ParticleRibbonVerticesPerParticle(3), 18u);
     // 越界段数按 clamp 处理，不能把 draw 顶点数放大到任意值。
-    EXPECT_EQ(ParticleRibbonVerticesPerParticle(9), 18u);
+    EXPECT_EQ(ParticleRibbonVerticesPerParticle(9), 54u);
+    EXPECT_EQ(ParticleRibbonVerticesPerParticle(64), 192u);
 
     EXPECT_EQ(ParticleRibbonVertexCount(2048, 3), 36864u);
     EXPECT_EQ(ParticleRibbonVertexCount(0, 3), 0u);
     EXPECT_EQ(
         ParticleRibbonVertexCount(65536, 3),
         static_cast<uint64_t>(65536) * 18u);
+}
+
+TEST(ParticleRibbon, WidthCurveClampsAndInterpolates)
+{
+    std::vector<ParticleRibbonWidthKey> keys{
+        ParticleRibbonWidthKey{0.0f, 0.5f},
+        ParticleRibbonWidthKey{1.0f, 1.5f}};
+    EXPECT_FLOAT_EQ(EvaluateParticleRibbonWidth(keys, -1.0f), 0.5f);
+    EXPECT_FLOAT_EQ(EvaluateParticleRibbonWidth(keys, 0.5f), 1.0f);
+    EXPECT_FLOAT_EQ(EvaluateParticleRibbonWidth(keys, 2.0f), 1.5f);
+    EXPECT_FLOAT_EQ(
+        EvaluateParticleRibbonWidth({}, 0.5f),
+        1.0f);
 }
 
 TEST(ParticleRibbon, LocalVertexMapsToSegment)

@@ -240,10 +240,12 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
     if (IsOneOf(field,
         {"renderMode", "billboardAlignment", "billboardNormal",
             "billboardUp", "ribbonWidth",
-            "ribbonSegments", "ribbonFade", "mesh", "beam", "light",
+            "ribbonSegments", "ribbonFade", "ribbonUVTiling",
+            "ribbonWidthKeys", "mesh", "beam", "light",
             "decal",
             "opacity",
             "softness", "softParticles", "softParticleDistance",
+            "softParticleTapRadius",
             "distortionStrength",
             "additive", "meshLighting", "meshAmbient",
             "castShadows",
@@ -251,6 +253,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "billboardLighting", "billboardAmbient",
             "billboardLightingStrength", "billboardSpecular",
             "billboardRoughness", "billboardForwardScattering",
+            "billboardDensity", "eooPacked", "eooEmissiveStrength",
             "beam.colorKeys", "beam.widthKeys", "beam.arcs"}) ||
         HasPrefix(field, "mesh.") ||
         HasPrefix(field, "beam.") ||

@@ -17,6 +17,9 @@ struct ParticleBillboardVertex
     vec4 color;
     vec2 localUV;
     vec2 atlasUV;
+    vec2 atlasUV2;
+    float atlasBlend;
+    float size;
     float viewDepth;
     float seed;
     float time;
@@ -33,12 +36,12 @@ bool ResolveParticleBillboardParticle(
     out Particle particle)
 {
     particleIndex = 0;
-    particle = Particle(
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0),
-        vec4(0.0));
+    particle.positionAge = vec4(0.0);
+    particle.velocityLife = vec4(0.0);
+    for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+    {
+        particle.history[historyIndex] = vec4(0.0);
+    }
 
     uint count = uint(particleBuffer.particles.length());
     if (drawIndex >= count)
@@ -129,77 +132,23 @@ bool BuildParticleBillboardVertex(
     float rows = max(frame.curveParams.w, 1.0);
     float startFrame = frame.flipbookParams.z;
     float endFrame = frame.flipbookParams.w;
-    float frameCount = endFrame - startFrame + 1.0;
+    float frameCount = max(endFrame - startFrame + 1.0, 1.0);
 
-    // 局部帧号（0..frameCount-1）。有逐帧时长表时按累计时长选帧，
-    // 否则沿用 fps / 寿命驱动的等长帧选择。
-    float localFrameIndex = 0.0;
-    if (frame.flipbookParams3.x > 0.5)
-    {
-        int durationCount = clamp(
-            int(frame.flipbookParams3.z + 0.5), 1, 256);
-        float totalWeight = 0.0;
-        for (int index = 0; index < durationCount; ++index)
-        {
-            totalWeight += FlipbookDuration(index);
-        }
-        float phaseWeight = 0.0;
-        if (frame.flipbookParams.x > 0.0)
-        {
-            // fps>0：一轮固定 frameCount/fps 秒；duration 只是相对权重。
-            float totalSeconds =
-                frameCount / frame.flipbookParams.x;
-            float cycle = time / totalSeconds;
-            if (frame.flipbookParams2.y > 0.5)
-            {
-                cycle += fract(seed);
-            }
-            cycle = frame.flipbookParams2.x > 0.5
-                ? mod(cycle, 1.0)
-                : min(cycle, 1.0);
-            phaseWeight = cycle * totalWeight;
-        }
-        else
-        {
-            // fps=0：整轮按寿命播放，权重只决定各帧占比。
-            phaseWeight = lifeT * totalWeight;
-        }
-        int selected = durationCount - 1;
-        float accumulated = 0.0;
-        for (int index = 0; index < durationCount; ++index)
-        {
-            float duration = FlipbookDuration(index);
-            if (phaseWeight < accumulated + duration)
-            {
-                selected = index;
-                break;
-            }
-            accumulated += duration;
-        }
-        localFrameIndex = float(selected);
-    }
-    else if (frame.flipbookParams.x > 0.0)
-    {
-        // randomStartFrame 只改变时间相位；loop 关闭时推进到最后一帧后停住。
-        // 帧号必须离散：连续 phase 直接取 mod 会让 atlas cell 变成小数，
-        // 在相邻图集单元之间跨帧采样，并与 pivot 的整数帧不一致。
-        float phase = time * frame.flipbookParams.x;
-        if (frame.flipbookParams2.y > 0.5)
-        {
-            phase += fract(seed);
-        }
-        float stepped = floor(phase);
-        localFrameIndex = frame.flipbookParams2.x > 0.5
-            ? mod(stepped, frameCount)
-            : min(stepped, frameCount - 1.0);
-    }
-    else
-    {
-        // fps=0 时用寿命归一化时间走完闭区间，天然只播放一次。
-        localFrameIndex = min(floor(lifeT * frameCount), frameCount - 1.0);
-    }
+    // 局部帧号（0..frameCount-1）。逐粒子/emitter、离散/线性混合都在
+    // particleCommon.glsl 的 EvaluateParticleFlipbook 中统一处理。
+    ParticleFlipbookFrame flipbook = EvaluateParticleFlipbook(
+        lifeT,
+        particle.positionAge.w,
+        seed);
+    float localFrameIndex = flipbook.localFrameIndex;
+    float nextLocalFrameIndex = flipbook.nextLocalFrameIndex;
+    float atlasBlend = flipbook.blend;
     float frameIndex = clamp(
         localFrameIndex + startFrame,
+        startFrame,
+        endFrame);
+    float nextFrameIndex = clamp(
+        nextLocalFrameIndex + startFrame,
         startFrame,
         endFrame);
 
@@ -314,21 +263,31 @@ bool BuildParticleBillboardVertex(
     outVertex.localUV = corner * 0.5 + 0.5;
     // quad 局部 UV 继续供程序化圆盘使用；图集采样走逐帧 UV rect。
     vec2 spriteUV = outVertex.localUV;
+    vec2 spriteUV2 = outVertex.localUV;
     if (frame.flipbookParams3.w > 0.5)
     {
         // rect 是 sprite 空间 [0,1] 的子矩形，索引同样是区间内局部帧号。
         int uvIndex = clamp(
             int(floor(localFrameIndex)), 0, int(frameCount) - 1);
+        int uvIndex2 = clamp(
+            int(floor(nextLocalFrameIndex)), 0, int(frameCount) - 1);
         vec4 rect = FlipbookUvRect(uvIndex);
+        vec4 rect2 = FlipbookUvRect(uvIndex2);
         spriteUV = mix(rect.xy, rect.zw, outVertex.localUV);
+        spriteUV2 = mix(rect2.xy, rect2.zw, outVertex.localUV);
     }
     vec2 atlasCell = vec2(
         mod(frameIndex, columns),
         floor(frameIndex / columns));
+    vec2 atlasCell2 = vec2(
+        mod(nextFrameIndex, columns),
+        floor(nextFrameIndex / columns));
     // 图集按 top-down 行存储，而 billboard 的 vUV 以左下为 0；
     // 在 cell 内翻转 V，避免火焰/烟雾纹理上下颠倒。
     vec2 atlasUV = (atlasCell +
         vec2(spriteUV.x, 1.0 - spriteUV.y)) / vec2(columns, rows);
+    vec2 atlasUV2 = (atlasCell2 +
+        vec2(spriteUV2.x, 1.0 - spriteUV2.y)) / vec2(columns, rows);
 
     // 图集禁止 mipmap 后仍会被相邻 cell 的线性过滤采到。把 UV 内缩半个
     // texel 到当前 cell 边界内，保留上面的 V 翻转与 cell 布局。
@@ -340,6 +299,14 @@ bool BuildParticleBillboardVertex(
         atlasUV,
         cellMin + halfTexel,
         cellMax - halfTexel);
+    vec2 cellMin2 = atlasCell2 / vec2(columns, rows);
+    vec2 cellMax2 = (atlasCell2 + vec2(1.0)) / vec2(columns, rows);
+    outVertex.atlasUV2 = clamp(
+        atlasUV2,
+        cellMin2 + halfTexel,
+        cellMax2 - halfTexel);
+    outVertex.atlasBlend = atlasBlend;
+    outVertex.size = size;
     outVertex.viewDepth =
         -(frame.view * vec4(worldPosition, 1.0)).z;
     outVertex.seed = seed;

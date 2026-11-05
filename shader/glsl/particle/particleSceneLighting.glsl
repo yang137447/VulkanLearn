@@ -270,6 +270,26 @@ vec3 AccumulateParticleBillboardMaterialLobes(
         forwardScattering * transmission * baseColor / PI);
 }
 
+// 半透明烟体积近似：光穿过 sprite 的路径越长，透过率越低。
+// halfThickness 是粒子世界半尺寸（cm），density 是作者消光系数（1/cm）。
+// 视线与光线越接近平行，穿过的体积越厚；clamp 防止掠射角除零。
+float ParticleBillboardTransmittance(
+    vec3 surfaceToLight,
+    vec3 viewDirection,
+    float halfThickness,
+    float density)
+{
+    if (density <= 0.0 || halfThickness <= 0.0)
+    {
+        return 1.0;
+    }
+    float cosine = abs(dot(
+        ParticleBillboardSafeDirection(surfaceToLight),
+        ParticleBillboardSafeDirection(viewDirection)));
+    float pathLength = (2.0 * halfThickness) / max(cosine, 0.15);
+    return exp(-density * pathLength);
+}
+
 // 环境漫反射近似：粒子 UBO 不含 GPU 写的 SH 系数，无法在 CPU 侧复制；
 // 预过滤 cubemap 的最高 mip 已接近全粗糙方向平均，直接作为 irradiance
 // 近似可保持与场景 IBL 同量级，且不需要额外 UBO 通道。
@@ -635,23 +655,32 @@ vec3 ParticleBillboardDirectionalContribution(
     float specularStrength,
     float roughness,
     float forwardScattering,
-    float directionalShadow)
+    float directionalShadow,
+    float halfThickness,
+    float density)
 {
     vec3 lightDirection = ParticleBillboardSafeDirection(
         -light.directionPad.xyz);
+    vec3 viewDirectionSafe =
+        ParticleBillboardSafeDirection(viewDirection);
     float wrapped = ParticleWrappedDiffuse(
         dot(normal, lightDirection),
         0.5);
     vec3 radiance =
         light.colorIntensity.xyz *
         light.colorIntensity.w *
-        directionalShadow;
+        directionalShadow *
+        ParticleBillboardTransmittance(
+            lightDirection,
+            viewDirectionSafe,
+            halfThickness,
+            density);
     return
         baseColor / PI * radiance * wrapped +
         AccumulateParticleBillboardMaterialLobes(
             baseColor,
             normal,
-            viewDirection,
+            viewDirectionSafe,
             lightDirection,
             radiance,
             specularStrength,
@@ -668,7 +697,9 @@ vec3 ParticleBillboardPointContribution(
     vec3 pixelPosition,
     float specularStrength,
     float roughness,
-    float forwardScattering)
+    float forwardScattering,
+    float halfThickness,
+    float density)
 {
     vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
     float distanceSquared = dot(offsetToLight, offsetToLight);
@@ -682,10 +713,17 @@ vec3 ParticleBillboardPointContribution(
     float wrapped = ParticleWrappedDiffuse(
         dot(normal, normalize(offsetToLight)),
         0.5);
+    vec3 viewDirectionSafe =
+        ParticleBillboardSafeDirection(viewDirection);
     vec3 radiance =
         attenuation *
         light.colorIntensity.xyz *
         light.colorIntensity.w *
+        ParticleBillboardTransmittance(
+            normalize(offsetToLight),
+            viewDirectionSafe,
+            halfThickness,
+            density) *
         SampleLocalLightShadow(
             localShadowMap,
             light.shadowParams,
@@ -698,7 +736,7 @@ vec3 ParticleBillboardPointContribution(
         AccumulateParticleBillboardMaterialLobes(
             baseColor,
             normal,
-            viewDirection,
+            viewDirectionSafe,
             offsetToLight,
             radiance,
             specularStrength,
@@ -715,7 +753,9 @@ vec3 ParticleBillboardSpotContribution(
     vec3 pixelPosition,
     float specularStrength,
     float roughness,
-    float forwardScattering)
+    float forwardScattering,
+    float halfThickness,
+    float density)
 {
     vec3 offsetToLight = light.positionRadius.xyz - pixelPosition;
     vec3 surfaceToLight = ParticleBillboardSafeDirection(offsetToLight);
@@ -739,10 +779,17 @@ vec3 ParticleBillboardSpotContribution(
     float wrapped = ParticleWrappedDiffuse(
         dot(normal, surfaceToLight),
         0.5);
+    vec3 viewDirectionSafe =
+        ParticleBillboardSafeDirection(viewDirection);
     vec3 radiance =
         attenuation *
         light.colorIntensity.xyz *
         light.colorIntensity.w *
+        ParticleBillboardTransmittance(
+            surfaceToLight,
+            viewDirectionSafe,
+            halfThickness,
+            density) *
         SampleLocalLightShadow(
             localShadowMap,
             light.shadowParams,
@@ -755,7 +802,7 @@ vec3 ParticleBillboardSpotContribution(
         AccumulateParticleBillboardMaterialLobes(
             baseColor,
             normal,
-            viewDirection,
+            viewDirectionSafe,
             surfaceToLight,
             radiance,
             specularStrength,
@@ -773,7 +820,9 @@ vec3 AccumulateParticleBillboardLightByIndex(
     float specularStrength,
     float roughness,
     float forwardScattering,
-    float directionalShadow)
+    float directionalShadow,
+    float halfThickness,
+    float density)
 {
     int lightCount =
         particleSceneLights.spotLightOffset +
@@ -794,7 +843,9 @@ vec3 AccumulateParticleBillboardLightByIndex(
             specularStrength,
             roughness,
             forwardScattering,
-            directionalShadow);
+            directionalShadow,
+            halfThickness,
+            density);
     }
     if (lightIndex < particleSceneLights.spotLightOffset)
     {
@@ -807,7 +858,9 @@ vec3 AccumulateParticleBillboardLightByIndex(
             pixelPosition,
             specularStrength,
             roughness,
-            forwardScattering);
+            forwardScattering,
+            halfThickness,
+            density);
     }
     return ParticleBillboardSpotContribution(
         light,
@@ -818,7 +871,9 @@ vec3 AccumulateParticleBillboardLightByIndex(
         pixelPosition,
         specularStrength,
         roughness,
-        forwardScattering);
+        forwardScattering,
+        halfThickness,
+        density);
 }
 
 vec3 CalculateParticleBillboardSceneLighting(
@@ -832,7 +887,9 @@ vec3 CalculateParticleBillboardSceneLighting(
     float specularStrength,
     float roughness,
     float forwardScattering,
-    float directionalShadow)
+    float directionalShadow,
+    float halfThickness,
+    float density)
 {
     vec3 normal = normalize(lightingNormal);
     vec3 viewDirection = ParticleBillboardSafeDirection(
@@ -858,7 +915,9 @@ vec3 CalculateParticleBillboardSceneLighting(
                 specularStrength,
                 roughness,
                 forwardScattering,
-                directionalShadow);
+                directionalShadow,
+                halfThickness,
+                density);
         }
     }
     else
@@ -875,7 +934,9 @@ vec3 CalculateParticleBillboardSceneLighting(
                 specularStrength,
                 roughness,
                 forwardScattering,
-                directionalShadow);
+                directionalShadow,
+                halfThickness,
+                density);
         }
 
         offset = particleSceneLights.pointLightOffset;
@@ -891,7 +952,9 @@ vec3 CalculateParticleBillboardSceneLighting(
                 pixelPosition,
                 specularStrength,
                 roughness,
-                forwardScattering);
+                forwardScattering,
+                halfThickness,
+                density);
         }
 
         offset = particleSceneLights.spotLightOffset;
@@ -907,7 +970,9 @@ vec3 CalculateParticleBillboardSceneLighting(
                 pixelPosition,
                 specularStrength,
                 roughness,
-                forwardScattering);
+                forwardScattering,
+                halfThickness,
+                density);
         }
     }
 
@@ -934,7 +999,12 @@ vec3 CalculateParticleBillboardSceneLighting(
         vec3 radiance =
             attenuation *
             light.colorIntensity.xyz *
-            light.colorIntensity.w;
+            light.colorIntensity.w *
+            ParticleBillboardTransmittance(
+                offsetToLight,
+                viewDirection,
+                halfThickness,
+                density);
         lighting += baseColor / PI * radiance * wrapped;
         lighting += AccumulateParticleBillboardMaterialLobes(
             baseColor,

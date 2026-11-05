@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -90,9 +91,7 @@ struct OfflineParticle
 {
     Eigen::Vector4f positionAge = Eigen::Vector4f::Zero();
     Eigen::Vector4f velocityLife = Eigen::Vector4f::Zero();
-    Eigen::Vector4f history0 = Eigen::Vector4f::Zero();
-    Eigen::Vector4f history1 = Eigen::Vector4f::Zero();
-    Eigen::Vector4f history2 = Eigen::Vector4f::Zero();
+    std::array<Eigen::Vector4f, 16> history{};
 
     bool Alive() const noexcept
     {

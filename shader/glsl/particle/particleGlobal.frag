@@ -2,6 +2,7 @@
 
 #include "particleCommon.glsl"
 #include "particleSceneLighting.glsl"
+#include "particleSoftDepth.glsl"
 
 layout(location = 0) in vec4 vColor;
 layout(location = 1) in vec2 vUV;
@@ -20,6 +21,13 @@ layout(location = 13) in flat vec3 vLightDirection;
 layout(location = 14) in flat vec3 vLightColor;
 layout(location = 15) in flat vec3 vLightingNormal;
 layout(location = 16) in flat vec4 vLightParams2;
+layout(location = 17) in vec2 vAtlasUV2;
+layout(location = 18) in float vAtlasBlend;
+layout(location = 19) in float vSize;
+layout(location = 20) in float vDensity;
+layout(location = 21) in float vSoftTapRadius;
+layout(location = 22) in float vEooPacked;
+layout(location = 23) in float vEooEmissiveStrength;
 
 layout(location = 0) out vec4 outColor;
 
@@ -85,12 +93,11 @@ float Fbm(vec2 p)
 
 void main()
 {
-    float deviceDepth = texture(
+    float sceneViewDepth = SampleParticleSceneViewDepth(
         sceneDepth,
-        gl_FragCoord.xy / vec2(textureSize(sceneDepth, 0))).r;
-    vec4 sceneView =
-        frame.invProjection * vec4(0.0, 0.0, deviceDepth, 1.0);
-    float sceneViewDepth = -sceneView.z / sceneView.w;
+        gl_FragCoord.xy,
+        vSoftTapRadius,
+        frame.invProjection);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -115,12 +122,30 @@ void main()
         1.0 - radius,
         mix(1.0, 3.0, clamp(vSoftness, 0.0, 1.0)));
     int textureIndex = clamp(vTextureIndex, 0, 7);
+    vec3 albedo = vColor.rgb;
+    vec3 emission = vec3(0.0);
+    float alpha = vColor.a * radial;
     if (vHasTexture > 0.5)
     {
-        vec4 sprite = SampleParticleTexture(textureIndex, vAtlasUV);
-        outColor = vec4(
-            vColor.rgb * sprite.rgb,
-            vColor.a * sprite.a * radial);
+        vec4 sprite = mix(
+            SampleParticleTexture(textureIndex, vAtlasUV),
+            SampleParticleTexture(textureIndex, vAtlasUV2),
+            vAtlasBlend);
+        if (vEooPacked > 0.5)
+        {
+            // R=Emissive, G=Occlusion, A=Opacity；B 通道不可用。
+            albedo = vColor.rgb * mix(1.0, sprite.g, 0.35);
+            emission = vColor.rgb * sprite.r * vEooEmissiveStrength;
+            if (vLightParams.x < 0.5)
+            {
+                albedo = vec3(0.0);
+            }
+        }
+        else
+        {
+            albedo = vColor.rgb * sprite.rgb;
+        }
+        alpha *= sprite.a;
     }
     else
     {
@@ -129,18 +154,15 @@ void main()
             0.18,
             0.82,
             Fbm(noiseUv + vec2(vTime * 0.2, 0.0)));
-        outColor = vec4(
-            vColor.rgb,
-            vColor.a * radial * mix(1.0, erosion, 0.72));
+        alpha *= mix(1.0, erosion, 0.72);
     }
-    outColor.a *= softFade;
     if (vLightParams.x > 0.5)
     {
         // 全局池当前没有逐发射器 CSM 绑定（v1 明确不消费 shadowMap），
         // 因此这里只做无阴影的完整场景光照；开关关闭时保持 unlit 原输出。
-        outColor.rgb = CalculateParticleBillboardSceneLighting(
+        albedo = CalculateParticleBillboardSceneLighting(
             localShadowMap,
-            outColor.rgb,
+            albedo,
             vWorldPosition,
             vLightingNormal,
             frame.cameraPosition.xyz,
@@ -149,8 +171,11 @@ void main()
             clamp(vLightParams2.x, 0.0, 1.0),
             clamp(vLightParams2.y, 0.02, 1.0),
             clamp(vLightParams2.z, 0.0, 2.0),
-            1.0);
+            1.0,
+            vSize,
+            vDensity);
     }
+    outColor = vec4(albedo + emission, alpha * softFade);
     if (outColor.a > 0.0)
         atomicAdd(particleDebug.fragments, 1u);
 }

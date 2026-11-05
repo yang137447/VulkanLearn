@@ -664,9 +664,24 @@ bool SpawnParticle(
         lifetime);
     // 新生成（含 prewarm）的历史点全部等于生成位置：首帧 ribbon 会退化成
     // 零长度条带，随后由每帧的历史右移逐渐拉开。
-    particle.history0 = particle.positionAge;
-    particle.history1 = particle.positionAge;
-    particle.history2 = particle.positionAge;
+    for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+    {
+        particle.history[historyIndex] = particle.positionAge;
+    }
+    // ribbon 的首帧/爆发帧还没有真实历史：沿速度回填一条稳定尾迹，
+    // 避免所有段重合导致 bow-tie。后续模拟帧会自然右移覆盖回填值。
+    if (frame.ribbonParams.w > 0.5)
+    {
+        const float historyStep = 1.0 / 60.0;
+        for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+        {
+            float backSeconds =
+                historyStep * float(historyIndex + 1);
+            particle.history[historyIndex] = vec4(
+                simulationPosition - simulationVelocity * backSeconds,
+                max(age - backSeconds, 0.0));
+        }
+    }
     if (!prewarm && frame.eventParams.x > 0.5)
     {
         EmitParticleEvent(
@@ -712,9 +727,10 @@ bool SimulateParticle(
             {
                 particle.positionAge = vec4(0.0);
                 particle.velocityLife = vec4(0.0);
-                particle.history0 = vec4(0.0);
-                particle.history1 = vec4(0.0);
-                particle.history2 = vec4(0.0);
+                for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+                {
+                    particle.history[historyIndex] = vec4(0.0);
+                }
                 return false;
             }
         }
@@ -767,14 +783,18 @@ bool SimulateParticle(
     // scale=0 时本帧完全冻结（不衰老、不移动、不碰撞，也不推进历史），
     // 但不会影响其它粒子或系统时间。prewarm 在 SpawnParticle 内直接按
     // 随机年龄解析积分，故意不应用这条曲线。
-    // 历史右移必须在积分之前：history0 记录本帧起点，当前位置经过积分后
-    // 成为下一帧的 history0。死亡分支不更新历史，避免把尸体位置写进条带。
+    // 历史右移必须在积分之前：history[0] 记录本帧起点，当前位置经过积分后
+    // 成为下一帧的 history[0]。死亡分支不更新历史，避免把尸体位置写进条带。
     // 固定步长积累不足一帧时 dt=0，历史保持不动，避免重复采样同一位置。
-    if (stepSeconds > 0.0)
+    // 只有 ribbon 发射器支付 16 次历史搬移，billboard/mesh 保持原成本。
+    if (stepSeconds > 0.0 && frame.ribbonParams.w > 0.5)
     {
-        particle.history2 = particle.history1;
-        particle.history1 = particle.history0;
-        particle.history0 = particle.positionAge;
+        for (int historyIndex = 15; historyIndex > 0; --historyIndex)
+        {
+            particle.history[historyIndex] =
+                particle.history[historyIndex - 1];
+        }
+        particle.history[0] = particle.positionAge;
     }
 
     vec3 position = particle.positionAge.xyz;

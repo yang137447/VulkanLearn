@@ -199,10 +199,9 @@ private:
     {
         Eigen::Vector4f positionAge;
         Eigen::Vector4f velocityLife;
-        // ribbon 历史快照：xyz = 记录时的模拟空间位置，w = 记录时的 age。
-        Eigen::Vector4f history0;
-        Eigen::Vector4f history1;
-        Eigen::Vector4f history2;
+        // ribbon 历史快照：history[0] 是上一帧，history[15] 最旧；
+        // xyz = 记录时的模拟空间位置，w = 记录时的 age。
+        std::array<Eigen::Vector4f, 16> history;
     };
 
     // mesh 材质 set 1 的 std140 UBO；与 particleMesh.vert/frag 的
@@ -392,9 +391,17 @@ private:
         // billboard/ribbon 材质近似：x = specular 强度, y = roughness,
         // z = 前向散射权重, w 保留。追加在末尾以保持既有字段偏移不变。
         Eigen::Vector4f billboardLightParams2;
+        // ribbon 追加参数：x = UV 平铺次数, y = width key count, z/w 保留。
+        Eigen::Vector4f ribbonUVParams;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys> ribbonWidthKeys;
+        std::array<Eigen::Vector4f, 2> ribbonWidthKeyTimes;
+        // SubUV 扩展：x = per-particle 播放, y = 线性混合, z = playRate。
+        Eigen::Vector4f flipbookParams5;
+        // x = EOO 打包纹理, y = EOO emissive 强度, z/w 保留。
+        Eigen::Vector4f textureModeParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 7584,
+        sizeof(FrameUniforms) == 7792,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -543,6 +550,21 @@ private:
     static_assert(
         offsetof(FrameUniforms, billboardLightParams2) == 7568,
         "ParticleFrame billboardLightParams2 offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonUVParams) == 7584,
+        "ParticleFrame ribbonUVParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonWidthKeys) == 7600,
+        "ParticleFrame ribbonWidthKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonWidthKeyTimes) == 7728,
+        "ParticleFrame ribbonWidthKeyTimes offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookParams5) == 7760,
+        "ParticleFrame flipbookParams5 offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, textureModeParams) == 7776,
+        "ParticleFrame textureModeParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {

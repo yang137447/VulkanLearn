@@ -127,8 +127,8 @@ TEST(ParticleSpriteShadow, RibbonCasterSharesVisibleGeometry)
         "shader/glsl/particle/particleRibbonShadow.frag");
 
     EXPECT_NE(transform.find("BuildParticleRibbonVertex"), std::string::npos);
-    EXPECT_NE(transform.find("particle.history0"), std::string::npos);
-    EXPECT_NE(transform.find("particle.history2"), std::string::npos);
+    EXPECT_NE(transform.find("particle.history[historyIndex]"), std::string::npos);
+    EXPECT_NE(transform.find("vec3 points[17]"), std::string::npos);
     EXPECT_NE(visible.find("particleRibbonTransform.glsl"), std::string::npos);
     EXPECT_NE(vertex.find("particleRibbonTransform.glsl"), std::string::npos);
     EXPECT_EQ(visible.find("kParticleCorners"), std::string::npos);

@@ -2,13 +2,17 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <vector>
+
+#include "particles/particleAsset.h"
 
 namespace VL
 {
 
-// ribbon 每个粒子最多消费 3 段：current->history0、history0->history1、
-// history1->history2。段数少于 3 时尾部历史点不参与绘制。
-inline constexpr uint32_t kMaxParticleRibbonSegments = 3;
+// ribbon 保存 16 个历史采样点（不含当前位置），顶点阶段先按弧长
+// 重采样到 1..32 段。固定历史深度避免把模拟帧率直接暴露给条带形状。
+inline constexpr uint32_t kParticleRibbonHistorySamples = 16;
+inline constexpr uint32_t kMaxParticleRibbonSegments = 32;
 
 inline uint32_t ClampParticleRibbonSegments(uint32_t segments)
 {
@@ -53,6 +57,42 @@ inline float ParticleRibbonTailParameter(
         (clampedSegment + std::clamp(alongSegment, 0.0f, 1.0f)) /
         static_cast<float>(count);
     return std::clamp(t, 0.0f, 1.0f);
+}
+
+// 与 ribbon shader 的宽度曲线采样保持一致：空表恒为 1，首尾外 clamp，
+// 段内按 time 线性插值。
+inline float EvaluateParticleRibbonWidth(
+    const std::vector<ParticleRibbonWidthKey>& keys,
+    float t)
+{
+    if (keys.empty())
+    {
+        return 1.0f;
+    }
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+    if (clamped <= keys.front().time)
+    {
+        return keys.front().width;
+    }
+    if (clamped >= keys.back().time)
+    {
+        return keys.back().width;
+    }
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const float t0 = keys[index].time;
+        const float t1 = keys[index + 1].time;
+        if (clamped >= t0 && clamped <= t1)
+        {
+            const float span = t1 - t0;
+            const float weight = span > 1.0e-6f
+                ? (clamped - t0) / span
+                : 0.0f;
+            return keys[index].width +
+                (keys[index + 1].width - keys[index].width) * weight;
+        }
+    }
+    return keys.back().width;
 }
 
 } // namespace VL

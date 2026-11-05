@@ -11,6 +11,9 @@ layout(location = 5) out vec2 vAtlasUV;
 layout(location = 6) out float vViewDepth;
 layout(location = 7) out vec3 vWorldPosition;
 layout(location = 8) out vec3 vLightingNormal;
+layout(location = 9) out vec2 vAtlasUV2;
+layout(location = 10) out float vAtlasBlend;
+layout(location = 11) out float vSize;
 
 void main()
 {
@@ -34,6 +37,9 @@ void main()
         vViewDepth = 0.0;
         vWorldPosition = vec3(0.0);
         vLightingNormal = vec3(0.0);
+        vAtlasUV2 = vec2(0.0);
+        vAtlasBlend = 0.0;
+        vSize = 0.0;
         return;
     }
 
@@ -45,6 +51,9 @@ void main()
     vSeed = vertex.seed;
     vTime = vertex.time;
     vAtlasUV = vertex.atlasUV;
+    vAtlasUV2 = vertex.atlasUV2;
+    vAtlasBlend = vertex.atlasBlend;
+    vSize = vertex.size;
     vViewDepth = vertex.viewDepth;
     vWorldPosition = vertex.worldPosition;
     vLightingNormal = vertex.lightingNormal;

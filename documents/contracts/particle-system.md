@@ -196,10 +196,11 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
 
 ## GPU 布局
 
-- 每个发射器拥有独立的 `ParticleBuffer`（`std430`，每粒子 80 字节 = 5 个 `vec4`）与每 swapchain image 一份
+- 每个发射器拥有独立的 `ParticleBuffer`（`std430`，每粒子 288 字节 = 18 个 `vec4`）与每 swapchain image 一份
   `ParticleFrameUniforms`（`std140`）。
-  `Particle` 依次是 `positionAge`、`velocityLife`、`history0`、`history1`、`history2`；
-  三个 history 的 `xyz` 是记录时的模拟空间位置、`w` 是记录时的 age，供 ribbon 使用。
+  `Particle` 依次是 `positionAge`、`velocityLife`、`history[16]`；
+  `history[i]` 的 `xyz` 是记录时的模拟空间位置、`w` 是记录时的 age，
+  `history[0]` 是上一帧，`history[15]` 最旧，供 ribbon 弧长重采样使用。
 - compute 与 graphics 的公共 binding 语义：
   - `set 0, binding 0`：`ParticleFrameUniforms`
   - `set 0, binding 1`：粒子 storage buffer
@@ -212,6 +213,8 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   pass input 计划创建，`ParticleRenderer` 只在管线反射使用 set 3 时绑定。`set 3, binding 1`
   是 particle pass 的 CSM `shadowMap`；全局 alpha billboard 的 fragment shader 不采样
   CSM，但仍显式声明这两个 binding 的管线布局，以匹配 pass 描述符集的固定布局。
+  软粒子深度读取使用中心 + 四向十字共 5 个 tap，取最近不透明表面的视深度；
+  `softParticleTapRadius` 控制像素半径，0 退回单采样。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
   `particle/particleMesh`，beam variant 名为 `particle/particleBeam`，distortion variant
@@ -760,8 +763,12 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   `billboardNormal` 不平行（`|dot| < 0.999`）。渲染时先构造
   `right = normalize(cross(up, normal))`，再用 `cross(normal, right)` 正交化上方向。
 - `ribbonWidth`：ribbon 世界空间半宽（cm），默认 `5`，必须 `> 0` 且有限。
-- `ribbonSegments`：ribbon 段数，默认 `3`，范围 `[1, 3]`；受历史点数限制。
+- `ribbonSegments`：ribbon 输出段数，默认 `3`，范围 `[1, 32]`；历史固定 16 点，
+  顶点阶段按弧长重采样到该段数。
 - `ribbonFade`：尾端 alpha 衰减，默认 `1`，范围 `[0, 1]`；`0` 不衰减，`1` 时最旧端完全透明。
+- `ribbonUVTiling`：沿弧长的 UV 平铺次数，默认 `1`，范围 `(0, 64]`。
+- `ribbonWidthKeys`：可选逐弧长宽度乘数，最多 8 个
+  `{ "time": 0..1, "width": 0..8 }`；time 严格递增，空表恒为 1。
 - `distortionStrength`：默认 `0.02`，范围 `[0, 0.25]`，仅
   `renderMode: "distortion"` 使用。它是屏幕高度归一化偏移的最大比例
   （`1.0` = 一个屏幕高度），与视口宽高比无关；消费端把 x 除以 `width / height`
@@ -860,6 +867,9 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   前向散射项，让逆光烟产生透光感。三项都只在 `billboardLighting: true` 时
   生效，并共享 `billboardLightingStrength` 的 authored→lit 插值。ribbon
   也使用同一组参数（法线取面向相机的视线方向）。
+- `billboardDensity`：默认 `0`，范围 `[0, 0.25]`（1/cm）。大于 0 时片元按
+  `exp(-density * 2 * halfSize / max(|dot(L,V)|, 0.15))` 逐灯衰减直接光与 GPU 粒子灯，
+  用薄片厚度近似半透明烟的透光；ambient/IBL 不衰减。
 - `rotation`：billboard 初始旋转角，单位度，任意有限数，默认 `0`。
 - `rotationSpeed`：随时间累加的旋转速度，单位度/秒，默认 `0`，范围 `[-3600, 3600]`。
 - `rotationRandom`：默认 `false`；为 `true` 时每个粒子用稳定相位叠加 `[0,360)` 度的初始角。
@@ -869,11 +879,19 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
 - `texture`：相对资源根的图集路径；为空时走程序化形状。作者侧保存/validate 只接受
   `png/jpg/jpeg/tga/bmp`，必须留在 resource root 内且文件存在；运行时仍保留存在性检查，
   单个纹理解码或 GPU 创建失败时回退 1x1 白图并记录一次 warning，不终止渲染线程。
+- `eooPacked`：默认 `false`。UE NiagaraExamples 的 EOO 图集按
+  `R=Emissive / G=Occlusion / B=unused / A=Opacity` 解码；albedo 使用作者颜色，
+  R 进入独立自发光项，避免 B=0 被当成彩色贴图或整张卡片被当成常量自发光。
+- `eooEmissiveStrength`：默认 `1`，范围 `[0, 16]`；只乘 EOO 的 R 自发光项。
 - `flipbook: { "columns": 1..16, "rows": 1..16, "fps": 0..240, "startFrame", "endFrame",
-  "loop", "randomStartFrame" }`：`startFrame`/`endFrame` 是 atlas 内的闭区间帧号，省略
+  "loop", "randomStartFrame", "perParticle", "blend", "playRate" }`：`startFrame`/`endFrame`
+  是 atlas 内的闭区间帧号，省略
   `endFrame` 时解析为 `columns*rows-1`；两者都必须落在 atlas 内且 `endFrame >= startFrame`。
   `fps=0` 时按寿命在区间内播放一轮；`fps>0` 时按模拟时间推进，`loop=true` 回绕，
   `loop=false` 停在 `endFrame`。`randomStartFrame` 控制是否用粒子 index 打散起始相位。
+  `perParticle=true` 时相位由逐粒子年龄驱动；`blend=true` 时在相邻两帧之间线性混合
+  （几何/pivot/rotation 使用当前帧，纹理在 frame A/B 间插值）；`playRate` 默认 `1`、
+  范围 `[0,16]`，同时乘到 fps 与寿命驱动模式。
 - `flipbook.frameDurations: [weight, ...]`：可选逐帧相对时长权重表，长度必须为 `0` 或精确等于
   `endFrame-startFrame+1`，每项 `>0`。非空时按权重分配帧时间，但一轮总时长仍由
   `frameCount/fps`（或 `fps=0` 时的寿命）决定，语义见「Flipbook 逐帧时长与轴心」。
@@ -889,6 +907,8 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   交线附近的 alpha 淡出。
 - `softParticleDistance`：cm，默认 `25`，范围 `[0, 10000]`。片元用 `clamp((sceneDepth -
   particleDepth) / softParticleDistance, 0, 1)` 缩放 alpha。
+- `softParticleTapRadius`：软粒子 sceneDepth 十字采样半径（像素），默认 `4`，
+  范围 `[0, 32]`；0 退回单采样。5 个 tap 取最近不透明表面，兼顾深度碰撞与交线淡出。
 - `sortParticles`：默认 `false`。所有 alpha 发射器（billboard/ribbon/mesh）必须为 `true`，否则资产校验以
   “alpha blend requires sortParticles=true” 拒绝；每帧在 compute 中按相机 view-space
   深度执行 GPU bitonic sort。additive 发射器应保持关闭，排序不会改变加法结果。
@@ -991,13 +1011,14 @@ pending/在途期间继续显示用户刚输入的表值；表格使用独立滚
 ```text
 totalWeight = sum(frameDurations[0..frameCount-1])
 fps > 0:
-    totalSeconds = frameCount / fps
-    cycle = elapsedSeconds / totalSeconds
+    totalSeconds = frameCount / (fps * playRate)
+    timeBase = perParticle ? particleAge : elapsedSeconds
+    cycle = timeBase / totalSeconds
     cycle += randomStartFrame ? fract(seed) : 0
     cycle = loop ? mod(cycle, 1) : min(cycle, 1)
     phaseWeight = cycle * totalWeight
 fps == 0:
-    phaseWeight = clamp(lifeT, 0, 1) * totalWeight
+    phaseWeight = clamp(lifeT * playRate, 0, 1) * totalWeight
 selected = 第一个满足 phaseWeight < accumulated + weight[i] 的 i，否则回落最后一帧
 ```
 
@@ -1009,9 +1030,11 @@ selected = 第一个满足 phaseWeight < accumulated + weight[i] 的 i，否则�
 `frameDurations` 时继续使用等长帧的 `fps` / 寿命节奏；`randomStartFrame` 统一使用
 `fract(particleIndex * 0.61803398875)`，保证相位落在 `[0,1)`。
 
-所有模式在采样图集前都把帧号取整成离散整数（`fps>0` 分支先 `floor(phase)` 再按
-`loop` 取模或夹住，`fps==0` 与时长表分支本身已产生整数帧），因此 `atlasCell` 不会出现
-小数、不会在相邻图集单元之间跨 cell 混合，轴心取到的帧号也与实际采样帧一致。
+`flipbook.blend=false` 时所有模式在采样图集前都把帧号取整成离散整数
+（`fps>0` 分支先 `floor(phase)` 再按 `loop` 取模或夹住），因此 `atlasCell`
+不会出现小数、不会在相邻图集单元之间跨 cell 混合。`blend=true` 时几何/pivot/rotation
+仍使用当前整数帧，fragment 对 frame A/B 的 sprite 采样做线性插值；几何不会在
+相邻 cell 之间变形。
 
 有 `framePivots` 时，取当前帧在区间内的局部索引（0..frameCount-1）对应的 `(u,v)`，反向
 平移 billboard quad 中心，使精灵图上的该锚点落在粒子中心：
@@ -1104,40 +1127,46 @@ UV rect 是 sprite 空间（`[0,1]`）而不是 atlas 绝对空间；V 翻转只
 ### Ribbon 条带
 
 `renderMode: "ribbon"` 时每个粒子改成一条面向相机的条带；`billboard`（默认）路径完全不变。
-粒子池里的 `history0/history1/history2` 每帧在积分前右移：`history2 = history1`、
-`history1 = history0`、`history0 = 当前 position`，随后执行原有运动/碰撞积分。死亡帧不更新
-历史。spawn（含 burst 与 prewarm）把三个历史点都初始化为生成位置，因此首帧条带退化为
-零长度；prewarm 不做历史回溯，只从当前位置开始积累。
+粒子池里的 `history[16]` 每帧在积分前右移（`history[15]=history[14]` …
+`history[1]=history[0]`、`history[0]=当前 position`），随后执行原有运动/碰撞积分；
+死亡帧不更新历史。spawn/burst 用速度沿时间回填 16 个历史点，prewarm 同样回填，
+因此首帧即可看到稳定尾迹，而不是所有段重合的 bow-tie。
 
-顶点数由段数决定：`maxParticles * ribbonSegments * 6`，每个粒子内 `segment = localVertex / 6`。
-每段使用 `points[segment]` 与 `points[segment+1]`，其中
-`points = {current, history0, history1, history2}`；`history0` 是上一帧位置，
-`history2` 最旧。条带宽度与朝向：
+顶点数由段数决定：`maxParticles * ribbonSegments * 6`，`ribbonSegments` 范围 `[1,32]`；
+每个粒子内 `segment = localVertex / 6`。顶点阶段把
+`points = {current, history[0], …, history[15]}` 组成 17 点折线，计算累计弧长，
+再按输出段等分弧长重采样。低帧率或不等距历史不会让条带变成折线，也不再把模拟
+帧率直接暴露给宽度/UV。
+
+条带宽度与朝向：
 
 ```text
 viewport 宽度方向：
-t      = p1 - p0
-view   = normalize(cameraPosition - (p0 + p1) * 0.5)
-side   = normalize(cross(t, view)) * ribbonWidth
-world  = mix(p0, p1, u) + side * v        // u∈[0,1], v∈{-1,+1}
+t      = normalize(pointAt(t + eps) - pointAt(t - eps))
+view   = normalize(cameraPosition - pointAt(t))
+side   = normalize(cross(t, view))
+width  = ribbonWidth * EvaluateRibbonWidth(t)
+world  = pointAt(t) + side * v * width    // t∈[0,1] 当前→尾部, v∈{-1,+1}
 ```
 
-`t` 过短或 `cross(t, view)` 退化时用 `cameraRight` 作为横向，避免首帧 normalize(0)。
-`ribbonWidth` 是世界空间半宽（cm），所以条带总宽是 `2 * ribbonWidth`。尾端 alpha：
+`t` 过短或 `cross(t, view)` 退化时用 `cameraRight` 作为横向，避免 normalize(0)。
+`ribbonWidth` 是世界空间半宽（cm），所以条带总宽是 `2 * ribbonWidth`。
+`ribbonWidthKeys` 是逐弧长乘数曲线（最多 8 个 key，`width ∈ [0,8]`）；
+空表恒为 1。尾端 alpha：
 
 ```text
-tailT  = (segment + u) / ribbonSegments
-alpha *= mix(1.0, 1.0 - tailT, ribbonFade)
+alpha *= mix(1.0, 1.0 - t, ribbonFade)
 ```
 
-`ribbonFade=0` 不衰减，`=1` 时最旧端完全透明。`vUV = (u, v*0.5+0.5)`：`x` 沿条带
-从当前端到尾部，`y` 是横向。片元沿用 billboard 的 `sceneDepth`/软粒子逻辑，但 alpha
-形状只软化 `vUV.y` 两端，不做圆盘 radial；有纹理时采样整张 `particleTexture`，
-不消费 flipbook 帧选择。
+`ribbonFade=0` 不衰减，`=1` 时最旧端完全透明。`vUV = (t * ribbonUVTiling, v*0.5+0.5)`：
+`x` 沿弧长从当前端到尾部并按 `ribbonUVTiling` 平铺（>1 时在 shader 内 `fract`），
+`y` 是横向。片元沿用 billboard 的软粒子逻辑；alpha 形状只软化 `vUV.y` 两端，
+不做圆盘 radial；有纹理时采样整张 `particleTexture`，不消费 flipbook 帧选择。
+EOO 打包纹理（见下文）只在 ribbon 纹理分支按 R/A 解码。
 
-条带依赖固定帧率的历史采样：低帧率或大 dt 会让相邻历史点间距变大，条带会显得折线化；
-暂停时 `simulationDeltaSeconds = 0`，历史不会重复写入同一点。`ribbonWidth` 会额外计入
-发射器包围球半径，因此剔除、距离淡出与跨发射器排序都覆盖条带横向范围。
+暂停时 `simulationDeltaSeconds = 0`，历史不会重复写入同一点。`ribbonWidth` 与
+最大宽度 key 会额外计入发射器包围球半径，因此剔除、距离淡出与跨发射器排序
+都覆盖条带横向范围。
 
 ### Beam 电弧
 
@@ -1470,7 +1499,7 @@ ribbon 为 `maxParticles * ribbonSegments * 6`；mesh 为
 `particlestats` 本身不等待设备空闲，因此仍不包含 alive 回读、GPU overdraw
 或显存带宽。alive 由 C# 订阅驱动的 `particletelemetry` 回填；`particledump`
 输出每个非全局 emitter 的 `overdrawFragments`（通过 discard 的片元原子计数）和
-`estimatedParticleBufferReadBytes`（aliveCount × 80 字节的读取规模估算，
+`estimatedParticleBufferReadBytes`（aliveCount × 288 字节的读取规模估算，
 不是硬件显存带宽计数器）。全局排序池的对应值在 dump 根字段
 `globalAliveParticles` / `globalOverdrawFragments` /
 `globalEstimatedParticleBufferReadBytes`；其绘制耗时由 `__global__` GPU 计时覆盖。
@@ -1582,7 +1611,8 @@ decal 仍走代码维护的 DBuffer shader，没有 Material Graph。
 已落地：多发射器容器与结构编辑（复制新增/删除/移动，作为一次 `modify` 支持整体
 undo/redo）、draft-live 预览、曲线/Flipbook 结构化编辑、逐帧时长/轴心/UV rect/旋转、平面/盒体
 碰撞、`localSpace`、`fixedBounds`、`burstInterval` 周期重触发、多级 LOD、发射器级跨发射器
-透明排序、逐粒子 billboard 旋转、ribbon 条带（3 段历史）、静态 mesh 实例化、纹理热切换、
+透明排序、逐粒子 billboard 旋转、ribbon 条带（16 点历史 + 弧长重采样 + 宽度/UV 曲线）、
+逐粒子 SubUV 播放与线性混合、5-tap 软粒子、EOO 通道解码、静态 mesh 实例化、纹理热切换、
 shader reload 提交后粒子管线重建、v2 模块栈与运行时用户参数、GPU 存活计数/indirect
 instanceCount、全局 alpha billboard 排序、平面/盒体/胶囊/SDF/三角网格碰撞、全局标量
 Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件与遥测、固定步长/
@@ -1597,7 +1627,8 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
 - flipbook 已有逐帧时长表、逐帧静态轴心、逐帧 UV rect 与逐帧旋转，但没有轴心/UV/旋转
   动画时间线；图集最大 16×16（256 帧），帧区间仍由 `startFrame`/`endFrame` 指定。
   UV rect 与旋转表受 64 帧 GPU 表限制，超过 64 帧的区间不能作者化这两张表。
-- 软粒子只读取单采样 `sceneDepth`。alpha billboard 在
+- 软粒子使用中心 + 四向十字 5 个 `sceneDepth` tap，取最近不透明表面；没有逐像素
+  厚度缓冲或时域去噪。alpha billboard 在
   `renderMode=billboard && sortParticles && !additive` 且总容量 ≤ 8192、唯一纹理 ≤ 8 时走
   全局 gather + 全局 bitonic + 单次 `drawIndirect`（`particleGlobalGather.comp` /
   `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；ribbon/mesh 与超限场景回退到
@@ -1657,9 +1688,10 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   共同采样；forward transparent 不接收，normal 合成使用 whiteout/大圆混合，而不是逐层 RNM。
   动态与静态 decal 共享 64 个可见实例；静态 decal 先占槽，超出时粒子路径按 emitter
   顺序截断。
-- ribbon 只保留最近 3 帧历史，没有子步/弧长重采样、逐顶点宽度曲线、纹理平铺、
-  per-particle rotation/pivot 或逐粒子跨发射器全局排序。首帧与 prewarm 之后历史点
-  全等于当前位置，条带要经过若干帧才拉开；条带长度与形状直接依赖模拟帧率。
+- ribbon 固定 16 点历史 + 顶点阶段弧长重采样，支持逐弧长宽度曲线与 UV 平铺；
+  没有子步采样、逐顶点 pivot/rotation 或逐粒子跨发射器全局排序。spawn/burst
+  用速度回填历史，首帧不会退化为零长度；运行中历史仍按模拟帧采样，极低帧率
+  会损失轨迹细节。
 - mesh 支持静态 SM、全部 section 合并、粒子颜色曲线与顶点色相乘；可选
   `materialInstancePath`（MI_*.json）只读取 `u_baseColor/u_emissive/u_emissiveStrength/
   u_roughness/u_metallic` 数值子集，缺失或解析失败回退内置默认值并只告警一次。
@@ -1815,8 +1847,39 @@ SDF 三角网格碰撞，核心/烟/尘/烟柱进入全局 alpha 排序；`explo
 该案例是结构/视觉对齐，不是 UE 资产的直接移植：`ExplosionScorch` 使用
 BeforeLighting DBuffer decal（见 `decal-runtime.md`）；Light Renderer 由 GPU 粒子池和
 独立 light emit compute 生成；
-没有 UE Material Graph/SubUV 的完整语义；粒子图集与 decal 图案为程序化等价物。
+没有 UE Material Graph；SubUV 采用逐粒子播放/线性混合子集；粒子图集与 decal 图案
+为程序化等价物。
 启动与验收细节见该目录的 `README.md`。
+
+`Maps/SC_particle_ue_firework/SC_ue_firework.json` 对齐 UE 5.8
+`NiagaraExamples/FX_Misc/NS_FireworkBurst`（Leaders + Burst、GPU sprite、
+`User.Burst Color/Brightness`、`Ring Radius`、`Spread`）。VulkanLearn 用
+`rocket_leader`、`burst_core`、`ring_sparks`、`willow_sparks`、`crackle`、
+`burst_smoke`、`firework_light` 重建升空拖尾、8×8 爆心 SubUV、环形火花、
+柳叶长尾、连续碎火、残烟和 900 cd GPU 粒子灯。`rocket_leader` 是 28 段
+ribbon，使用 16 点历史、弧长重采样、逐弧长宽度曲线与 UV 平铺；爆心/碎火使用
+UE 导出的 EOO 图集（`eooPacked=true`），R 通道作为自发光、A 作为不透明度。
+该案例没有 UE 的 Leader→Burst 属性绑定：爆心与拖尾在同一 4 s 周期触发，
+环形速度来自盒式随机分布而不是 UE 径向速度模块。
+
+`Maps/SC_particle_ue_fire/SC_ue_fire.json` 对齐 UE 5.8
+`NiagaraExamples/FX_Misc/NS_Fire`（BaseLight / Lights / FlamesOnly /
+FlamesAndEmbers / Smoke）。VulkanLearn 用 `flames_core`、`flames_roil`、
+`smoke_lit`、`embers`、`heat_haze`、`fire_light`、`wispy_smoke` 重建火球、
+翻滚火舌、受光烟、余烬、热扰动、火焰灯和细烟；火焰/烟图集来自 UE EOO 导出，
+SubUV 按逐粒子年龄播放并在相邻帧线性混合。`smoke_lit` 开启 5-tap 软粒子、
+`billboardLighting`、`billboardDensity` 逐灯透光与全局 alpha 排序；
+`heat_haze` 走独立 distortion 缓冲。它不复制 UE 的 Material Graph、真实
+StaticMeshLocation 绑定或逐粒子碰撞。
+
+`Maps/SC_particle_ue_smoke/SC_ue_smoke.json` 同时对齐 UE 5.8
+`NiagaraExamples/FX_Smoke/NS_Chimney_Smoke` 与 `NS_Smoke_Plume`，场景内放
+`PS_ue_chimney_smoke`（`chimney_smoke` + `ne_smoke`）和
+`PS_ue_smoke_plume`（`smoke_plume` + `wispy`）两个粒子系统。四个发射器都用
+`T_SmokePuffLight_EOO_Loop` / `T_Smoke_Wispy` 的 8×8 SubUV、逐粒子混合、
+wind/curl、5-tap 软粒子、`billboardDensity` 与全局 alpha 排序；烟柱尺寸/寿命
+比烟囱更大。没有 UE 的 VectorNoise 节点图、逐灯 transmittance 阴影或真实
+Translucency Volume。
 
 `Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json` 对齐 UE 5.8
 `NiagaraExamples/FX_Weapons/Impacts/NS_Impact_Concrete`。UE 系统由

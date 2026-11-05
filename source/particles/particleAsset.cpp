@@ -19,6 +19,7 @@
 #include "particles/particleMesh.h"
 #include "particles/particleMeshCollision.h"
 #include "particles/particleMeshReference.h"
+#include "particles/particleRibbon.h"
 #include "particles/particleSdf.h"
 #include "particles/particleTextureReference.h"
 
@@ -497,6 +498,10 @@ ParticleEmitterAsset ParseEmitter(
         json,
         "billboardForwardScattering",
         emitter.billboardForwardScattering);
+    emitter.billboardDensity = ReadFiniteFloat(
+        json,
+        "billboardDensity",
+        emitter.billboardDensity);
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
@@ -515,6 +520,50 @@ ParticleEmitterAsset ParseEmitter(
         json, "ribbonSegments", emitter.ribbonSegments);
     emitter.ribbonFade = ReadFiniteFloat(
         json, "ribbonFade", emitter.ribbonFade);
+    emitter.ribbonUVTiling = ReadFiniteFloat(
+        json, "ribbonUVTiling", emitter.ribbonUVTiling);
+    if (json.contains("ribbonWidthKeys"))
+    {
+        const nlohmann::json& widthKeys = json.at("ribbonWidthKeys");
+        if (!widthKeys.is_array())
+        {
+            throw std::invalid_argument(
+                "Particle ribbonWidthKeys requires an array");
+        }
+        if (widthKeys.size() > kMaxParticleCurveKeys)
+        {
+            throw std::invalid_argument(
+                "Particle ribbonWidthKeys allows at most 8 keys");
+        }
+        emitter.ribbonWidthKeys.clear();
+        emitter.ribbonWidthKeys.reserve(widthKeys.size());
+        float previousTime = -1.0f;
+        for (const nlohmann::json& entry : widthKeys)
+        {
+            if (!entry.is_object())
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonWidthKeys entry must be an object");
+            }
+            ParticleRibbonWidthKey key;
+            key.time = ReadFiniteFloat(entry, "time", 0.0f);
+            key.width = ReadFiniteFloat(entry, "width", 1.0f);
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousTime)
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonWidthKeys times must be in [0,1] "
+                    "and strictly increasing");
+            }
+            if (key.width < 0.0f || key.width > 8.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle ribbonWidthKeys width must be in [0,8]");
+            }
+            previousTime = key.time;
+            emitter.ribbonWidthKeys.push_back(key);
+        }
+    }
     if (json.contains("beam"))
     {
         const nlohmann::json& beam = json.at("beam");
@@ -848,6 +897,8 @@ ParticleEmitterAsset ParseEmitter(
         json.value("softParticles", emitter.softParticles);
     emitter.softParticleDistance = ReadFiniteFloat(
         json, "softParticleDistance", emitter.softParticleDistance);
+    emitter.softParticleTapRadius = ReadFiniteFloat(
+        json, "softParticleTapRadius", emitter.softParticleTapRadius);
     emitter.sortParticles =
         json.value("sortParticles", emitter.sortParticles);
     // sortOrder 与 sortParticles 一样按展平后的 emitter 根字段解析；它不
@@ -1359,6 +1410,10 @@ ParticleEmitterAsset ParseEmitter(
 
     emitter.texturePath =
         json.value("texture", emitter.texturePath);
+    emitter.eooPacked = json.value(
+        "eooPacked", emitter.eooPacked);
+    emitter.eooEmissiveStrength = ReadFiniteFloat(
+        json, "eooEmissiveStrength", emitter.eooEmissiveStrength);
     if (json.contains("flipbook"))
     {
         const nlohmann::json& flipbook = json.at("flipbook");
@@ -1387,6 +1442,16 @@ ParticleEmitterAsset ParseEmitter(
         emitter.flipbookRandomStartFrame = flipbook.value(
             "randomStartFrame",
             emitter.flipbookRandomStartFrame);
+        emitter.flipbookPerParticle = flipbook.value(
+            "perParticle",
+            emitter.flipbookPerParticle);
+        emitter.flipbookBlend = flipbook.value(
+            "blend",
+            emitter.flipbookBlend);
+        emitter.flipbookPlayRate = ReadFiniteFloat(
+            flipbook,
+            "playRate",
+            emitter.flipbookPlayRate);
 
         if (flipbook.contains("frameDurations"))
         {
@@ -1576,6 +1641,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.fixedBoundsExtent.z(), "fixedBounds.extent.z");
     RequireFinite(emitter.spawnRate, "spawnRate");
     RequireFinite(emitter.ribbonWidth, "ribbonWidth");
+    RequireFinite(emitter.ribbonUVTiling, "ribbonUVTiling");
     RequireFinite(emitter.ribbonFade, "ribbonFade");
     RequireFinite(emitter.beam.start.x(), "beam.start.x");
     RequireFinite(emitter.beam.start.y(), "beam.start.y");
@@ -1693,6 +1759,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.rotationSpeed, "rotationSpeed");
     RequireFinite(emitter.softness, "softness");
     RequireFinite(emitter.softParticleDistance, "softParticleDistance");
+    RequireFinite(emitter.softParticleTapRadius, "softParticleTapRadius");
     RequireFinite(emitter.opacity, "opacity");
     RequireFinite(emitter.distortionStrength, "distortionStrength");
     RequireFinite(emitter.maxDrawDistance, "maxDrawDistance");
@@ -1703,6 +1770,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.lodDistance, "lodDistance");
     RequireFinite(emitter.lodSpawnRateScale, "lodSpawnRateScale");
     RequireFinite(emitter.flipbookFramesPerSecond, "flipbook.fps");
+    RequireFinite(emitter.flipbookPlayRate, "flipbook.playRate");
+    RequireFinite(emitter.eooEmissiveStrength, "eooEmissiveStrength");
     for (int channel = 0; channel < 4; ++channel)
     {
         RequireFinite(emitter.colorStart[channel], "colorStart");
@@ -1877,15 +1946,22 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle ribbonWidth must be positive");
     }
-    if (emitter.ribbonSegments < 1 || emitter.ribbonSegments > 3)
+    if (emitter.ribbonSegments < 1 ||
+        emitter.ribbonSegments > kMaxParticleRibbonSegments)
     {
         throw std::invalid_argument(
-            "Particle ribbonSegments must be in [1, 3]");
+            "Particle ribbonSegments must be in [1, 32]");
     }
     if (emitter.ribbonFade < 0.0f || emitter.ribbonFade > 1.0f)
     {
         throw std::invalid_argument(
             "Particle ribbonFade must be in [0, 1]");
+    }
+    if (emitter.ribbonUVTiling <= 0.0f ||
+        emitter.ribbonUVTiling > 64.0f)
+    {
+        throw std::invalid_argument(
+            "Particle ribbonUVTiling must be in (0, 64]");
     }
     if (emitter.beam.segments < kMinParticleBeamSegments ||
         emitter.beam.segments > kMaxParticleBeamSegments)
@@ -2443,6 +2519,18 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle softParticleDistance must be in [0, 10000]");
     }
+    if (emitter.softParticleTapRadius < 0.0f ||
+        emitter.softParticleTapRadius > 32.0f)
+    {
+        throw std::invalid_argument(
+            "Particle softParticleTapRadius must be in [0, 32]");
+    }
+    if (emitter.billboardDensity < 0.0f ||
+        emitter.billboardDensity > 0.25f)
+    {
+        throw std::invalid_argument(
+            "Particle billboardDensity must be in [0, 0.25]");
+    }
     // 当前 bitonic sort 每个 pass 一次 dispatch；4096 已需要 78 个 pass。
     // 排序池必须覆盖整个 particle pool，因此不能在排序开启时静默截断。
     if (emitter.sortParticles &&
@@ -2471,6 +2559,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle alpha blend requires sortParticles=true");
+    }
+    if (emitter.eooEmissiveStrength < 0.0f ||
+        emitter.eooEmissiveStrength > 16.0f)
+    {
+        throw std::invalid_argument(
+            "Particle eooEmissiveStrength must be in [0, 16]");
     }
     if (emitter.opacity < 0.0f || emitter.opacity > 1.0f)
     {
@@ -2584,6 +2678,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle flipbook fps must be in [0, 240]");
+    }
+    if (emitter.flipbookPlayRate < 0.0f ||
+        emitter.flipbookPlayRate > 16.0f)
+    {
+        throw std::invalid_argument(
+            "Particle flipbook playRate must be in [0, 16]");
     }
     const uint32_t frameCount =
         emitter.flipbookColumns * emitter.flipbookRows;

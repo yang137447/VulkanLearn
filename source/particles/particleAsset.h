@@ -79,6 +79,14 @@ struct ParticleSizeKey
     float size = 1.0f;
 };
 
+// ribbon 宽度曲线按“当前端(0) -> 最旧历史端(1)”的弧长参数采样；
+// width 是 ribbonWidth 的乘数，而不是绝对半宽。
+struct ParticleRibbonWidthKey
+{
+    float time = 0.0f;
+    float width = 1.0f;
+};
+
 // 粒子归一化年龄 lifeT 对应的时间倍率。scale=0 冻结本帧，1 正常，
 // >1 加速衰老；time/scale 都参与作者校验并打包进 GPU 曲线表。
 struct ParticleLifetimeScaleKey
@@ -209,8 +217,8 @@ struct ParticleEmitterAsset
     // 只有渲染时乘 localToWorld。v1 不允许与世界空间碰撞组合。
     bool localSpace = false;
 
-    // billboard 是默认路径；ribbon 用当前点与最近 3 个历史点组成相机朝向
-    // 条带；mesh 用静态网格按粒子实例化；beam 在作者化起止点之间绘制
+    // billboard 是默认路径；ribbon 用固定 16 个历史采样点组成相机朝向
+    // 条带并在顶点阶段按弧长重采样；mesh 用静态网格按粒子实例化；beam 在作者化起止点之间绘制
     // 多条带噪声的并行电弧，不消费粒子池；distortion 仍消费粒子池，
     // 但不写 sceneColor，而是在独立 pass 里把屏幕空间 UV 偏移写入
     // RGBA16F distortion 缓冲，由 toneMapping 合成。ribbonWidth 是世界空间
@@ -244,6 +252,9 @@ struct ParticleEmitterAsset
     // （见 ParticleRenderer::Synchronize），避免把原本 unlit 的资产意外压黑。
     bool billboardLighting = false;
     float billboardAmbient = 0.2f;
+    // 半透明体积近似：1/cm 消光系数。0 表示不做逐灯 transmittance。
+    // 片元按光路穿过 sprite 的近似长度衰减直接光与粒子灯。
+    float billboardDensity = 0.0f;
     // billboard/ribbon 光照替换比例（0..1）：0 = 完全保留 authored 颜色，
     // 1 = 完全使用场景光照。sprite 是体积感卡片，逐像素直接光按固体表面
     // 全量求值会过曝，所以用插值而不是纯乘法；默认 1 表示完全使用场景光照。
@@ -259,6 +270,10 @@ struct ParticleEmitterAsset
     float ribbonWidth = 5.0f;
     uint32_t ribbonSegments = 3;
     float ribbonFade = 1.0f;
+    // ribbon 沿弧长的 UV 平铺次数；1 表示整张纹理覆盖当前端到尾部。
+    float ribbonUVTiling = 1.0f;
+    // 可选的逐弧长宽度曲线；空表保持恒定 ribbonWidth。
+    std::vector<ParticleRibbonWidthKey> ribbonWidthKeys;
     // mesh 渲染：路径相对资源根，scale 是网格局部缩放，alignment 是
     // world|camera|velocity。v1 不使用 size 曲线，也不支持 localSpace。
     std::string meshPath;
@@ -379,6 +394,8 @@ struct ParticleEmitterAsset
     // 软粒子：片元采样 sceneDepth，在几何交线附近淡出；距离单位为 cm。
     bool softParticles = true;
     float softParticleDistance = 25.0f;
+    // 软粒子深度采样的十字半径（像素）；0 退回单采样。
+    float softParticleTapRadius = 4.0f;
     // alpha billboard 必须开启：按相机视图深度做 back-to-front GPU 排序。
     // additive 发射器应保持 false，排序不会改变加法混合结果，只会增加 dispatch。
     bool sortParticles = false;
@@ -420,6 +437,10 @@ struct ParticleEmitterAsset
     // fps=0 时按粒子寿命播放一轮；fps>0 时按模拟时间推进，loop 决定是否回绕。
     // randomStartFrame 只影响 fps>0 的时间起步相位，不改变帧区间本身。
     std::string texturePath;
+    // UE NiagaraExamples 的 EOO 打包图：R=Emissive、G=Occlusion、
+    // B=unused、A=Opacity。开启后 albedo 使用作者颜色，R 作为自发光项。
+    bool eooPacked = false;
+    float eooEmissiveStrength = 1.0f;
     uint32_t flipbookColumns = 1;
     uint32_t flipbookRows = 1;
     float flipbookFramesPerSecond = 0.0f;
@@ -429,6 +450,12 @@ struct ParticleEmitterAsset
     uint32_t flipbookEndFrame = 0;
     bool flipbookLoop = true;
     bool flipbookRandomStartFrame = true;
+    // true 时 SubUV 相位由逐粒子年龄驱动，而不是系统模拟时间。
+    bool flipbookPerParticle = false;
+    // true 时在相邻两帧之间线性混合；关闭时保持离散帧选择。
+    bool flipbookBlend = false;
+    // 播放速度倍率；同时作用于 fps 与寿命驱动模式。
+    float flipbookPlayRate = 1.0f;
     // 非空时必须与帧区间长度 endFrame-startFrame+1 完全一致。
     // 每项是 >0 的相对时长权重：fps>0 时一轮固定为 frameCount/fps 秒，
     // 每帧实际秒数 = weight / totalWeight * frameCount / fps；

@@ -8,11 +8,9 @@ struct Particle
     // localSpace 发射器保存局部坐标；其余发射器保存世界坐标。
     vec4 positionAge;   // xyz = simulation-space position, w = age seconds
     vec4 velocityLife;  // xyz = simulation-space velocity, w = lifetime seconds
-    // 最近 3 帧的位置快照，供 ribbon 条带使用；xyz 是记录时的模拟空间
-    // 位置，w 是记录时的 age。history0 是上一帧位置，history2 最旧。
-    vec4 history0;
-    vec4 history1;
-    vec4 history2;
+    // 最近 16 帧的位置快照，供 ribbon 条带使用；xyz 是记录时的模拟空间
+    // 位置，w 是记录时的 age。history[0] 是上一帧，history[15] 最旧。
+    vec4 history[16];
 };
 
 // std140 布局与 particleRenderer.h::FrameUniforms 一一对应。
@@ -159,6 +157,14 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     // billboard/ribbon 材质近似：x = specular 强度, y = roughness,
     // z = 前向散射权重, w 保留。追加在末尾，既有偏移不变。
     vec4 billboardLightParams2;
+    // ribbon 追加参数：x = UV 平铺次数, y = width key count, z/w 保留。
+    vec4 ribbonUVParams;
+    vec4 ribbonWidthKeys[8];
+    vec4 ribbonWidthKeyTimes[2];
+    // SubUV 扩展：x = per-particle 播放, y = 线性混合, z = playRate。
+    vec4 flipbookParams5;
+    // x = EOO 打包纹理, y = EOO emissive 强度, z/w 保留。
+    vec4 textureModeParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -266,6 +272,180 @@ float EvaluateSizeCurve(float t)
         }
     }
     return frame.sizeKeys[count - 1].y;
+}
+
+float RibbonWidthKeyTime(int index)
+{
+    return index < 4
+        ? frame.ribbonWidthKeyTimes[0][index]
+        : frame.ribbonWidthKeyTimes[1][index - 4];
+}
+
+// ribbon 宽度是 ribbonWidth 的乘数；空表恒为 1。
+float EvaluateRibbonWidth(float t)
+{
+    int count = int(frame.ribbonUVParams.y);
+    if (count <= 0)
+    {
+        return 1.0;
+    }
+    float clamped = clamp(t, 0.0, 1.0);
+    if (clamped <= RibbonWidthKeyTime(0))
+    {
+        return frame.ribbonWidthKeys[0].y;
+    }
+    if (clamped >= RibbonWidthKeyTime(count - 1))
+    {
+        return frame.ribbonWidthKeys[count - 1].y;
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = RibbonWidthKeyTime(index);
+        float t1 = RibbonWidthKeyTime(index + 1);
+        if (clamped >= t0 && clamped <= t1)
+        {
+            float weight = (clamped - t0) / max(t1 - t0, 1.0e-5);
+            return mix(
+                frame.ribbonWidthKeys[index].y,
+                frame.ribbonWidthKeys[index + 1].y,
+                weight);
+        }
+    }
+    return frame.ribbonWidthKeys[count - 1].y;
+}
+
+struct ParticleFlipbookFrame
+{
+    // 当前帧（几何/pivot/rotation 使用）与用于线性混合的下一帧。
+    float localFrameIndex;
+    float nextLocalFrameIndex;
+    float blend;
+};
+
+// 统一 emitter 时间与逐粒子年龄两种 SubUV 播放。blend 关闭时 next 与
+// blend 不参与采样；durations 表仍只按相对权重分配帧时间。
+ParticleFlipbookFrame EvaluateParticleFlipbook(
+    float lifeT,
+    float particleAge,
+    float seed)
+{
+    float startFrame = frame.flipbookParams.z;
+    float endFrame = frame.flipbookParams.w;
+    float frameCount = max(endFrame - startFrame + 1.0, 1.0);
+    float playRate = clamp(frame.flipbookParams5.z, 0.0, 16.0);
+    float fps = frame.flipbookParams.x * playRate;
+    bool perParticle = frame.flipbookParams5.x > 0.5;
+    bool blendEnabled = frame.flipbookParams5.y > 0.5;
+    bool loop = frame.flipbookParams2.x > 0.5;
+    float timeBase = perParticle ? particleAge : frame.simulation.z;
+
+    float localFrame = 0.0;
+    float nextFrame = 0.0;
+    float blend = 0.0;
+    if (frame.flipbookParams3.x > 0.5)
+    {
+        int durationCount = clamp(
+            int(frame.flipbookParams3.z + 0.5), 1, 256);
+        float totalWeight = 0.0;
+        for (int index = 0; index < durationCount; ++index)
+        {
+            totalWeight += FlipbookDuration(index);
+        }
+        float phaseWeight = 0.0;
+        if (fps > 0.0)
+        {
+            float totalSeconds = frameCount / fps;
+            float cycle = timeBase / totalSeconds;
+            if (frame.flipbookParams2.y > 0.5)
+            {
+                cycle += fract(seed);
+            }
+            cycle = loop ? mod(cycle, 1.0) : min(cycle, 1.0);
+            phaseWeight = cycle * totalWeight;
+        }
+        else
+        {
+            phaseWeight = clamp(lifeT * playRate, 0.0, 1.0) *
+                totalWeight;
+        }
+        int selected = durationCount - 1;
+        float accumulated = 0.0;
+        for (int index = 0; index < durationCount; ++index)
+        {
+            float duration = FlipbookDuration(index);
+            if (phaseWeight < accumulated + duration)
+            {
+                selected = index;
+                blend = clamp(
+                    (phaseWeight - accumulated) /
+                        max(duration, 1.0e-5),
+                    0.0,
+                    1.0);
+                break;
+            }
+            accumulated += duration;
+        }
+        localFrame = float(selected);
+        int next = selected + 1;
+        if (next >= durationCount)
+        {
+            next = loop ? 0 : durationCount - 1;
+            if (!loop)
+            {
+                blend = 0.0;
+            }
+        }
+        nextFrame = float(next);
+    }
+    else if (fps > 0.0)
+    {
+        float phase = timeBase * fps;
+        if (frame.flipbookParams2.y > 0.5)
+        {
+            // 逐粒子模式用 frame 单位偏移；emitter 模式沿用旧的相位偏移。
+            phase += fract(seed) * (perParticle ? frameCount : 1.0);
+        }
+        if (loop)
+        {
+            phase = mod(phase, frameCount);
+        }
+        else
+        {
+            phase = min(phase, frameCount - 1.0);
+        }
+        float stepped = floor(phase);
+        localFrame = loop ? mod(stepped, frameCount) : stepped;
+        blend = fract(phase);
+        nextFrame = localFrame + 1.0;
+        if (nextFrame >= frameCount)
+        {
+            nextFrame = loop ? 0.0 : frameCount - 1.0;
+            if (!loop)
+            {
+                blend = 0.0;
+            }
+        }
+    }
+    else
+    {
+        float phase =
+            clamp(lifeT * playRate, 0.0, 1.0) * frameCount;
+        localFrame = min(floor(phase), frameCount - 1.0);
+        blend = fract(phase);
+        nextFrame = localFrame + 1.0;
+        if (nextFrame >= frameCount)
+        {
+            nextFrame = frameCount - 1.0;
+            blend = 0.0;
+        }
+    }
+
+    ParticleFlipbookFrame result;
+    result.localFrameIndex = clamp(localFrame, 0.0, frameCount - 1.0);
+    result.nextLocalFrameIndex =
+        clamp(nextFrame, 0.0, frameCount - 1.0);
+    result.blend = blendEnabled ? clamp(blend, 0.0, 1.0) : 0.0;
+    return result;
 }
 
 // 按 lifeT = age / lifetime 取时间倍率：空表恒为 1，首尾外 clamp，

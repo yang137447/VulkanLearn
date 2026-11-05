@@ -343,7 +343,7 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
     EXPECT_TRUE(Contains(
         header,
         "offsetof(FrameUniforms, billboardLightParams2) == 7568"));
-    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 7584"));
+    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 7792"));
 
     const std::string renderer =
         ReadSource("source/particles/particleRenderer.cpp");

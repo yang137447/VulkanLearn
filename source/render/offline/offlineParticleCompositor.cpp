@@ -582,11 +582,54 @@ void RasterizeRibbon(
         particle.positionAge.w() / std::max(lifetime, 1.0e-6f), 0.0f, 1.0f);
     const uint32_t segments =
         ClampParticleRibbonSegments(asset.ribbonSegments);
-    const Eigen::Vector3f points[4] = {
-        SimulationPosition(emitter, particle.positionAge),
-        SimulationPosition(emitter, particle.history0),
-        SimulationPosition(emitter, particle.history1),
-        SimulationPosition(emitter, particle.history2)};
+    std::array<Eigen::Vector3f, 17> points;
+    points[0] = SimulationPosition(emitter, particle.positionAge);
+    for (size_t historyIndex = 0;
+         historyIndex < particle.history.size();
+         ++historyIndex)
+    {
+        points[historyIndex + 1] = SimulationPosition(
+            emitter, particle.history[historyIndex]);
+    }
+    std::array<float, 17> cumulative{};
+    for (size_t index = 1; index < points.size(); ++index)
+    {
+        cumulative[index] = cumulative[index - 1] +
+            (points[index] - points[index - 1]).norm();
+    }
+    const float totalLength = cumulative.back();
+    const auto pointAt = [&](float normalized) -> Eigen::Vector3f {
+        if (!(totalLength > 1.0e-5f))
+        {
+            return points[0];
+        }
+        const float target =
+            std::clamp(normalized, 0.0f, 1.0f) * totalLength;
+        for (size_t index = 1; index < points.size(); ++index)
+        {
+            if (target <= cumulative[index])
+            {
+                const float span = std::max(
+                    cumulative[index] - cumulative[index - 1], 1.0e-6f);
+                const float weight = std::clamp(
+                    (target - cumulative[index - 1]) / span,
+                    0.0f,
+                    1.0f);
+                return points[index - 1] +
+                    (points[index] - points[index - 1]) * weight;
+            }
+        }
+        return points.back();
+    };
+    const auto tangentAt = [&](float normalized) -> Eigen::Vector3f {
+        constexpr float epsilon = 0.01f;
+        const Eigen::Vector3f before = pointAt(normalized - epsilon);
+        const Eigen::Vector3f after = pointAt(normalized + epsilon);
+        const Eigen::Vector3f tangent = after - before;
+        return tangent.squaredNorm() > 1.0e-10f
+            ? tangent.normalized()
+            : Eigen::Vector3f::Zero();
+    };
     const Eigen::Vector4f colorSample = EvaluateColorCurve(asset, lifeT);
     const Eigen::Vector3f rgb(
         colorSample.x() * emitter.colorTint.x(),
@@ -603,36 +646,40 @@ void RasterizeRibbon(
 
     for (uint32_t segment = 0; segment < segments; ++segment)
     {
-        const Eigen::Vector3f start = points[segment];
-        const Eigen::Vector3f end = points[segment + 1];
-        const Eigen::Vector3f tangent = end - start;
-        const float tangentLength = tangent.norm();
-        if (!(tangentLength > 1.0e-5f))
-        {
-            continue;
-        }
-        const Eigen::Vector3f midpoint = (start + end) * 0.5f;
-        const Eigen::Vector3f viewOffset = camera.position - midpoint;
-        Eigen::Vector3f viewDirection = camera.right;
-        if (viewOffset.squaredNorm() > 1.0e-10f)
-        {
-            viewDirection = viewOffset.normalized();
-        }
-        Eigen::Vector3f side = tangent.cross(viewDirection);
-        if (side.squaredNorm() > 1.0e-10f)
-        {
-            side.normalize();
-        }
-        else
-        {
-            side = camera.right;
-        }
-        side *= asset.ribbonWidth;
-
         // 世界空间条带四角 -> 屏幕空间四边形；属性 (along, across)。
         OfflineQuadVertex quad[4];
-        const Eigen::Vector3f worldCorners[4] = {
-            start - side, start + side, end + side, end - side};
+        const float startT =
+            static_cast<float>(segment) / static_cast<float>(segments);
+        const float endT =
+            static_cast<float>(segment + 1) /
+            static_cast<float>(segments);
+        Eigen::Vector3f worldCorners[4];
+        for (int endpoint = 0; endpoint < 2; ++endpoint)
+        {
+            const float t = endpoint == 0 ? startT : endT;
+            const Eigen::Vector3f position = pointAt(t);
+            const Eigen::Vector3f tangent = tangentAt(t);
+            Eigen::Vector3f viewDirection = camera.right;
+            const Eigen::Vector3f viewOffset = camera.position - position;
+            if (viewOffset.squaredNorm() > 1.0e-10f)
+            {
+                viewDirection = viewOffset.normalized();
+            }
+            Eigen::Vector3f side = tangent.cross(viewDirection);
+            if (side.squaredNorm() > 1.0e-10f)
+            {
+                side.normalize();
+            }
+            else
+            {
+                side = camera.right;
+            }
+            const float width = asset.ribbonWidth *
+                EvaluateParticleRibbonWidth(asset.ribbonWidthKeys, t);
+            side *= width;
+            worldCorners[endpoint * 2 + 0] = position - side;
+            worldCorners[endpoint * 2 + 1] = position + side;
+        }
         const Eigen::Vector2f attributes[4] = {
             Eigen::Vector2f(0.0f, -1.0f),
             Eigen::Vector2f(0.0f, 1.0f),
@@ -672,14 +719,13 @@ void RasterizeRibbon(
                 const float edge =
                     SmoothStep(0.0f, edgeWidth, acrossUv) *
                     SmoothStep(0.0f, edgeWidth, 1.0f - acrossUv);
-                const float tailT = ParticleRibbonTailParameter(
-                    segment, along, segments);
+                const float tailT = Mix(startT, endT, along);
                 const float tailAlpha = Mix(1.0f, 1.0f - tailT, fade);
 
                 // ribbon 的 vUV.x 就是段内 along（0..1），不要再加 0.5；
                 // 尾端位置只通过 tailAlpha 进入，噪声相位仍按段内坐标。
                 const Eigen::Vector2f noiseUv(
-                    along * 5.0f,
+                    tailT * 5.0f,
                     acrossUv * 2.0f);
                 const Eigen::Vector2f animated =
                     noiseUv + Eigen::Vector2f(seed, -time * 0.35f);
