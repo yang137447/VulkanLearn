@@ -23,10 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 for _stale in [m for m in list(sys.modules)
                if m.startswith(("pegasus_hf_core", "pegasus_hf_nodes",
-                                "pegasus_hf_erode", "pegasus_hf_presets"))]:
+                                "pegasus_hf_erode", "pegasus_hf_presets",
+                                "pegasus_hf_layers"))]:
     del sys.modules[_stale]
 
 import pegasus_hf_erode as erode_nodes  # noqa: E402
+import pegasus_hf_layers as layer_nodes  # noqa: E402
 import pegasus_hf_nodes as nodes  # noqa: E402
 import pegasus_hf_presets as presets  # noqa: E402
 
@@ -42,7 +44,8 @@ def main() -> int:
     args = _parse_args()
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    groups = list(nodes.build_all()) + list(erode_nodes.build_all())
+    groups = (list(nodes.build_all()) + list(erode_nodes.build_all())
+              + list(layer_nodes.build_all()))
     groups += list(presets.build_all())
     # preset 会重新构建子组，早先拿到的引用可能已被删除，按名字重取。
     names = {group.name for group in groups}

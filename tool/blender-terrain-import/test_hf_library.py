@@ -18,6 +18,7 @@ for _stale in [m for m in list(sys.modules)
     del sys.modules[_stale]
 
 import pegasus_hf_erode as erode_nodes  # noqa: E402
+import pegasus_hf_layers as layer_nodes  # noqa: E402
 import pegasus_hf_nodes as nodes  # noqa: E402
 import pegasus_hf_presets as presets  # noqa: E402
 
@@ -67,9 +68,29 @@ def evaluate(tree, label: str) -> None:
               f"mean={values.mean():.5f}")
 
 
+def evaluate_layers(tree, label: str, layers) -> None:
+    """求值并检查指定层的范围。"""
+    mesh = bpy.data.meshes.new(f"t_{label}")
+    obj = bpy.data.objects.new(f"o_{label}", mesh)
+    bpy.context.collection.objects.link(obj)
+    modifier = obj.modifiers.new("gn", "NODES")
+    modifier.node_group = tree
+    bpy.context.view_layer.update()
+    data = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
+    print(f"TEST {label}: verts={len(data.vertices)}")
+    for layer in layers:
+        values = attribute(data, layer)
+        if values is None:
+            print(f"TEST {label}.{layer}: MISSING")
+            continue
+        print(f"TEST {label}.{layer}: min={values.min():.5f} "
+              f"max={values.max():.5f} nonzero={int((values != 0).sum())}")
+
+
 def main() -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    base = list(nodes.build_all()) + list(erode_nodes.build_all())
+    base = (list(nodes.build_all()) + list(erode_nodes.build_all())
+            + list(layer_nodes.build_all()))
     groups = {group.name: group for group in base}
     for group in presets.build_all():
         groups[group.name] = group
@@ -167,6 +188,39 @@ def main() -> None:
             socket.default_value = 64
     pre.links.new(preset_node.outputs[0], pre_out.inputs["Geometry"])
     evaluate(pre, "preset")
+
+    # 层操作与掩膜组：逐个接在 noise 之后验证
+    for name, params, layers in (
+        ("VL_HF_LayerCopy", {"Source Layer": "height",
+                              "Destination Layer": "bedrock"}, ("bedrock",)),
+        ("VL_HF_Layer", {"Layer": "water", "Value": 0.25}, ("water",)),
+        ("VL_HF_LayerClear", {"Layer": "water", "Value": 0.0}, ("water",)),
+        ("VL_HF_Crop", {"Layer": "height", "Threshold": 0.0,
+                         "Keep Below": False}, ("height",)),
+        ("VL_HF_MaskByFeature", {"Output Layer": "mask", "Use Slope": True,
+                                  "Min Slope": 5.0, "Max Slope": 80.0,
+                                  "Cell Size": 15.87}, ("mask",)),
+        ("VL_HF_Blur", {"Layer": "height", "Cell Size": 15.87,
+                         "Radius": 2.0, "Strength": 0.5,
+                         "Method": "shrink"}, ("height",)),
+    ):
+        single = bpy.data.node_groups.new(f"VL_HF_Test_{name}", "GeometryNodeTree")
+        single.interface.new_socket(name="Geometry", in_out="INPUT",
+                                    socket_type="NodeSocketGeometry")
+        single.interface.new_socket(name="Geometry", in_out="OUTPUT",
+                                    socket_type="NodeSocketGeometry")
+        single_out = single.nodes.new("NodeGroupOutput")
+        hf4 = instance(single, groups["VL_HF_Heightfield"], (-1800, 0),
+                       {"Size": 1000.0, "Samples": 32})
+        nz4 = instance(single, groups["VL_HF_Noise"], (-1300, 0),
+                       {"Size": 1000.0, "Amplitude": 500.0,
+                        "Element Size": 500.0, "Octaves": 8.0,
+                        "Lacunarity": 1.841, "Height Scale": 500.0})
+        op = instance(single, groups[name], (-800, 0), params)
+        single.links.new(hf4.outputs[0], nz4.inputs[0])
+        single.links.new(nz4.outputs[0], op.inputs[0])
+        single.links.new(op.outputs[0], single_out.inputs["Geometry"])
+        evaluate_layers(single, name, layers)
 
 
 main()

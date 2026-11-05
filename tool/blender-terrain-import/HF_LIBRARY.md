@@ -44,7 +44,27 @@ Houdini 节点，场景只需拼接。
 | `VL_HF_Distort` | `heightfield_distort` | Amplitude / Element Size / Roughness / Seed |
 | `VL_HF_Remap` | `heightfield_remap` | Layer / From Min / From Max / To Min / To Max / Clamp |
 | `VL_HF_Resample` | `heightfield_resample` | Size / Samples |
-| `VL_HF_Blur` | `heightfield_blur` | Layer / Cell Size / Radius / Strength |
+| `VL_HF_Blur` | `heightfield_blur` | Layer / Cell Size / Radius / Strength / **Method** |
+
+`VL_HF_Blur` 的 `Method` 支持 Houdini 的全部五种：
+
+| Method | 行为 |
+|---|---|
+| `blur` | 8 邻域平均，按 Strength 与原值混合 |
+| `boxblur` | 等权平均（与 blur 的区别在 Houdini 里是权重核不同） |
+| `expand` | 取邻域**最大**——掩膜膨胀 |
+| `shrink` | 取邻域**最小**——掩膜收缩（Pegasus 的 `heightfield_maskshrink1` 就是它） |
+| `sharpen` | 原值 + (原值 − 平均) × Strength，锐化 |
+
+### 层与掩膜
+
+| 组 | Houdini 节点 | 用途 |
+|---|---|---|
+| `VL_HF_LayerCopy` | `heightfield_copylayer` | 把 Source Layer 复制到 Destination Layer（Houdini 用了 71 次） |
+| `VL_HF_Layer` | `heightfield_layer` | 向层写常量，可乘掩膜层 |
+| `VL_HF_LayerClear` | `heightfield_layerclear` | 把层重置为固定值 |
+| `VL_HF_Crop` | `heightfield_crop` | 按高度阈值保留/剔除，其余填 Crop Value |
+| `VL_HF_MaskByFeature` | `heightfield_maskbyfeature` | 坡度 / 高度 / 曲率三类特征掩膜，可叠加与反转 |
 
 ### 侵蚀算子
 
@@ -110,6 +130,19 @@ TEST erode_group.height  -0.14288 .. 0.18866
 TEST erode_group.water    0.14851 .. 0.23885
 TEST erode_group.flow     1.00000 .. 1.79299
 TEST preset.height       -0.14287 .. 0.18862
+TEST VL_HF_LayerCopy.bedrock      -0.13932 .. 0.19021   层复制正确
+TEST VL_HF_Layer.water             0.25000（恒定）       常量写入正确
+TEST VL_HF_LayerClear.water        0.00000（全零）        清空正确
+TEST VL_HF_Crop.height             0.00000 .. 0.19021    裁剪生效（546/1024 保留）
+TEST VL_HF_MaskByFeature.mask      0.00000 .. 1.00000    掩膜生效（1006/1024 非零）
+TEST VL_HF_Blur.height(shrink)   -0.13822 .. 0.17160    收缩生效
+```
+
+`Freeze Frames` 语义验证（同一地形，迭代 20 次）：
+
+```
+frames=1  height max=0.18913  mean=0.01379
+frames=5  height max=0.18462  mean=0.01194   ← 多帧累积侵蚀更深
 ```
 
 ## 实现文件

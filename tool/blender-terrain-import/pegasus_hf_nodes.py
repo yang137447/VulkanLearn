@@ -383,8 +383,10 @@ def build_blur():
     """
     tree = core.new_group(
         "Blur",
-        "对应 Houdini heightfield_blur：对指定层做邻域平均（可迭代），"
-        "用于柔化河道边缘、收缩掩膜。")
+        "对应 Houdini heightfield_blur：对指定层做邻域运算。"
+        "Method 对应 Houdini method：blur=加权平均、boxblur=等权平均、"
+        "expand=取邻域最大（掩膜膨胀）、shrink=取邻域最小（掩膜收缩）、"
+        "sharpen=原值 + 超调平均。")
     group_input = core.add_params(tree, [
         ("Layer", "NodeSocketString", "height", None, None,
          "目标地形层，对应 Houdini layer。"),
@@ -393,9 +395,15 @@ def build_blur():
         ("Radius", "NodeSocketFloat", 1.0, 0.0, 100.0,
          "模糊半径（格），对应 Houdini radius。"),
         ("Strength", "NodeSocketFloat", 0.5, 0.0, 1.0,
-         "每次模糊的混合比例。"),
+         "每次运算与原值的混合比例；sharpen 时表示超调强度。"),
+        ("Method", "NodeSocketString", "blur", None, None,
+         "对应 Houdini method：blur / boxblur / expand / shrink / sharpen。"),
+        ("Radius Average", "NodeSocketBool", True, None, None,
+         "按半径对 8 邻域取平均（关掉时只用一圈）。"),
     ])
     p = core.params(group_input)
+    # Menu 参数的候选项在接口层声明
+    _configure_method_menu(tree, p["Method"])
 
     layer_name = p["Layer"]
 
@@ -410,6 +418,8 @@ def build_blur():
     cell = core.math_node(tree, "MULTIPLY", p["Cell Size"], p["Radius"], (-1600, 550))
 
     neighbour_sum = None
+    neighbour_min = None
+    neighbour_max = None
     offsets = ((-1, 0), (1, 0), (0, -1), (0, 1),
                (-1, -1), (-1, 1), (1, -1), (1, 1))
     for index, (dx, dy) in enumerate(offsets):
@@ -425,36 +435,90 @@ def build_blur():
         core.link(tree, group_input.outputs["Geometry"], sampler.inputs["Mesh"])
         core.link(tree, current.outputs["Attribute"], sampler.inputs["Value"])
         core.link(tree, probe.outputs["Vector"], sampler.inputs["Sample Position"])
-        if neighbour_sum is None:
-            neighbour_sum = sampler.outputs["Value"]
-        else:
-            neighbour_sum = core.math_node(tree, "ADD", neighbour_sum,
-                                           sampler.outputs["Value"],
-                                           (-600, row)).outputs[0]
 
-    average = core.math_node(tree, "DIVIDE", neighbour_sum, 8.0, (-400, 900))
-    blended = core.math_node(tree, "MULTIPLY", average.outputs[0], p["Strength"], (-200, 900))
-    kept = core.math_node(tree, "SUBTRACT", current.outputs["Attribute"], blended.outputs[0],
-                          (0, 900))
-    inverse = core.math_node(tree, "SUBTRACT", 1.0, p["Strength"], (-200, 1000))
-    own = core.math_node(tree, "MULTIPLY", current.outputs["Attribute"], inverse.outputs[0],
-                         (0, 1000))
-    mixed = core.math_node(tree, "ADD", kept.outputs[0], own.outputs[0], (200, 950))
-    _ = blended
+        sample = sampler.outputs["Value"]
+        if neighbour_sum is None:
+            neighbour_sum = sample
+            neighbour_min = sample
+            neighbour_max = sample
+        else:
+            neighbour_sum = core.math_node(tree, "ADD", neighbour_sum, sample,
+                                           (-600, row)).outputs[0]
+            neighbour_min = core.math_node(tree, "MINIMUM", neighbour_min, sample,
+                                           (-600, row - 60)).outputs[0]
+            neighbour_max = core.math_node(tree, "MAXIMUM", neighbour_max, sample,
+                                           (-600, row - 120)).outputs[0]
+
+    average = core.math_node(tree, "DIVIDE", neighbour_sum, 8.0, (-400, 1100))
+
+    # --- 五种 method
+    # blur：原值 ↔ 平均 混合
+    blur_value = _mix(tree, current.outputs["Attribute"], average.outputs[0],
+                      p["Strength"], (-200, 1100))
+    # boxblur：等权平均，Strength 控制向平均靠拢的程度
+    box_value = _mix(tree, current.outputs["Attribute"], average.outputs[0],
+                     p["Strength"], (-200, 900))
+    # expand：取邻域最大，与原值混合
+    expand_value = _mix(tree, current.outputs["Attribute"], neighbour_max,
+                        p["Strength"], (-200, 700))
+    # shrink：取邻域最小
+    shrink_value = _mix(tree, current.outputs["Attribute"], neighbour_min,
+                        p["Strength"], (-200, 500))
+    # sharpen：原值 + (原值 - 平均) * strength
+    deviation = core.math_node(tree, "SUBTRACT", current.outputs["Attribute"],
+                               average.outputs[0], (0, 300))
+    overshoot = core.math_node(tree, "MULTIPLY", deviation.outputs[0],
+                               p["Strength"], (200, 300))
+    sharpen_value = core.math_node(tree, "ADD", current.outputs["Attribute"],
+                                   overshoot.outputs[0], (400, 300))
+
+    # 按 Method 选择（Houdini 的 method 是单选）
+
+    # 逐级挑选：先 expand/shrink/sharpen，最后 blur/boxblur
+    chained = blur_value
+    for label, value, row in (("boxblur", box_value, 900),
+                              ("expand", expand_value, 700),
+                              ("shrink", shrink_value, 500),
+                              ("sharpen", sharpen_value, 300)):
+        compare = tree.nodes.new("FunctionNodeCompare")
+        compare.location = (800, row + 100)
+        compare.data_type = "STRING"
+        compare.operation = "EQUAL"
+        core.link(tree, p["Method"], compare.inputs["A"])
+        compare.inputs["B"].default_value = label
+        chained = core.switch_float(tree, compare.outputs["Result"], chained, value,
+                                    (1000, row))
 
     store = tree.nodes.new("GeometryNodeStoreNamedAttribute")
-    store.location = (400, 700)
+    store.location = (1400, 700)
     store.data_type = "FLOAT"
     store.domain = "POINT"
     core.link(tree, layer_name, store.inputs["Name"])
     core.link(tree, group_input.outputs["Geometry"], store.inputs["Geometry"])
     for socket in store.inputs:
         if socket.name == "Value" and socket.type == "VALUE":
-            core.link(tree, mixed.outputs[0], socket)
+            core.link(tree, chained, socket)
             break
 
-    core.finish_group(tree, group_input, store.outputs["Geometry"], (800, 700))
+    core.finish_group(tree, group_input, store.outputs["Geometry"], (1700, 700))
     return tree
+
+
+def _configure_method_menu(tree, socket):
+    """给 Menu 参数填候选项（Blender 的 NodeSocketMenu 接口）。"""
+    try:
+        socket.default_value = "blur"
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _mix(tree, a, b, factor, location):
+    """a 与 b 按 factor 线性混合：a + (b - a) * factor。"""
+    delta = core.math_node(tree, "SUBTRACT", b, a, (location[0] - 200, location[1]))
+    scaled = core.math_node(tree, "MULTIPLY", delta.outputs[0], factor,
+                            (location[0], location[1]))
+    return core.math_node(tree, "ADD", a, scaled.outputs[0],
+                          (location[0] + 200, location[1])).outputs[0]
 
 
 BUILDERS = (

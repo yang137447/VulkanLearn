@@ -218,6 +218,8 @@ def build_erode_group():
          "每次迭代的水量传递比例。"),
         ("Freeze Frames", "NodeSocketInt", 1, 1, 100,
          "冻结帧数，对应 Houdini freezeframe（Pegasus 用 5）。"),
+        ("Freeze Enabled", "NodeSocketBool", True, None, None,
+         "是否冻结（对应 dofreeze）。关闭时 Freeze Frames 参数不生效。"),
     ])
     # params 只用于取需要数值/连接的具体 socket（如非几何输入）
     params = core.params(group_input)
@@ -228,7 +230,11 @@ def build_erode_group():
     frame_in = tree.nodes.new("GeometryNodeRepeatInput")
     frame_in.location = (9000, 200)
     frame_in.pair_with_output(frame_out)
-    core.link(tree, params["Freeze Frames"], frame_in.inputs["Iterations"])
+    # 冻结语义：dofreeze=on 时跑 Freeze Frames 帧并保留结果；
+    # 关闭时只跑一帧（等价于 Houdini 的 freezeframe 不生效）。
+    one_frame = core.switch_float(tree, params["Freeze Enabled"],
+                                  1.0, params["Freeze Frames"], (7600, 1600))
+    core.link(tree, one_frame, frame_in.inputs["Iterations"])
     core.link(tree, group_input.outputs["Geometry"], frame_in.inputs[1])
 
     # 一帧内部：降水 → 蒸发 → 水扩散×N → 水力 → 热力
