@@ -140,6 +140,10 @@ class ManifestSpec:
     page_origin: tuple[int, int] | None
     page_tiles_per_side: int | None
     layers: tuple[LayerInput, ...]
+    # MI 的 u_terrainLayerMode；None 表示不覆盖（沿用材质默认 0 = legacy 数组路径）。
+    # 多 tile 的 4 km 场景需要显式设 1 才能启用 layer page table / atlas 流式。
+    # 带默认值，所以必须排在所有无默认字段之后。
+    terrain_layer_mode: float | None = None
 
 
 @dataclass
@@ -1013,6 +1017,14 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         "materialUvScale")
     if material_uv_scale <= 0.0:
         _fail("materialUvScale must be positive")
+    # 可选：显式选择地形的层 VT 路径（0 = legacy 数组，1 = page table/atlas）。
+    # 不写则沿用 M_terrain 的材质默认值，避免无谓覆盖。
+    raw_layer_mode = _first(top, "terrainlayermode", "terrain_layer_mode")
+    terrain_layer_mode: float | None = None
+    if raw_layer_mode is not None:
+        terrain_layer_mode = _require_number(raw_layer_mode, "terrainLayerMode")
+        if terrain_layer_mode not in (0.0, 1.0):
+            _fail("terrainLayerMode must be 0 or 1")
     description = _first(top, "description", default="")
     scene_description = _first(top, "scenedescription", "scene_description", default="")
     if not isinstance(description, str) or not isinstance(scene_description, str):
@@ -1084,6 +1096,7 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         flip_vertical=flip_vertical,
         invert_normal_green=invert_normal_green,
         material_uv_scale=_clean_float(material_uv_scale),
+        terrain_layer_mode=terrain_layer_mode,
         description=description.strip(),
         scene_description=scene_description.strip(),
         environment=environment,
@@ -1556,13 +1569,20 @@ def _convert(
 
     mi_path = _guard_output(
         output_root, output_root / f"MI_terrain_{spec.asset_name}.json")
+    # `terrainLayerMode` 是 manifest 级开关（默认不写，沿用材质默认值 0）：
+    #   0 = mode 0，M_terrain 直接按 globalId 采 sampler2DArray（legacy 快路径）
+    #   1 = mode 1，走 layer page table + atlas 的虚拟纹理路径，
+    #       由 terrainFeedback pass 驱动页驻留（4 km 多 tile 场景必须用它，
+    #       否则 16 块 tile 全部走 mode 0，VT 流式链路不会启动）
+    # self-test 断言"不要冗余覆盖"针对的是默认 0 的情况，这里显式区分。
+    mi_parameters = {"u_uvScale": spec.material_uv_scale}
+    if spec.terrain_layer_mode is not None:
+        mi_parameters["u_terrainLayerMode"] = float(spec.terrain_layer_mode)
     mi_json = {
         "name": f"MI_terrain_{spec.asset_name}",
         "type": "materialInstance",
         "material": "shader/glsl/M_terrain.json",
-        "parameters": {
-            "u_uvScale": spec.material_uv_scale,
-        },
+        "parameters": mi_parameters,
         "textures": {
             "layerTable": _asset_path(resource_root, placeholder_path),
             "layerIds": _asset_path(resource_root, placeholder_path),

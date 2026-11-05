@@ -243,6 +243,11 @@ def main() -> int:
                 "textureResolution": args.texture_resolution,
                 "paintResolution": args.paint_resolution,
                 "materialUvScale": material_uv_scale / base_uv_scale_divisor,
+                # 多 tile 场景必须走层 page table / atlas 的虚拟纹理路径：
+                # mode 0 的 legacy 数组直采只用 globalId，16 块 tile 全部挤在
+                # 同一组数组里，terrainFeedback 不会产生有效反馈（实测
+                # visibleLayers=0 / resident=4/512）。这里随 manifest 透传。
+                "terrainLayerMode": source.get("terrainLayerMode", 1.0),
                 "invertNormalGreen": source.get("invertNormalGreen", True),
                 "flipVertical": source.get("flipVertical", False),
                 "description": source.get("description", ""),
