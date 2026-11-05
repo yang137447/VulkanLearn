@@ -39,7 +39,7 @@ BASE_REFERENCE_SCALE = 500.0
 
 # 名字、类型、默认、最小、最大、说明。默认值 = Houdini erode1 的真实参数。
 INPUTS = [
-    ("Height Scale", "NodeSocketFloat", 100.0, 1.0, 5000.0,
+    ("Height Scale", "NodeSocketFloat", 500.0, 1.0, 5000.0,
      "高度单位换算（米）。Houdini heightfield 的 size.y。"),
     ("Cell Size", "NodeSocketFloat", 4.0, 0.01, 1000.0,
      "格距（米）。由 size_m / (resolution - 1) 自动设定。"),
@@ -185,7 +185,8 @@ def build_scene(size_m: float, resolution: int, iterations: int):
     geometry = grid.outputs["Mesh"]
     for index, (layer, value) in enumerate(
             (("height", relief.outputs[0]), ("water", None),
-             ("debris", None), ("sediment", None), ("bedrock", None))):
+             ("flow", None), ("debris", None),
+             ("sediment", None), ("bedrock", None))):
         node = erode.store_attribute(tree, geometry, layer, value,
                                      (-1800 + index * 200, 2400))
         geometry = node.outputs["Geometry"]
