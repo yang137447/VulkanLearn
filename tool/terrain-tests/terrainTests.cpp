@@ -238,6 +238,32 @@ TEST(TerrainHeightmap, AppliesScaleAndOffset)
     EXPECT_FLOAT_EQ(VL::TerrainHeightmap::SampleHeightCm(desc, image, 0.5f, 0.5f), 75.0f);
 }
 
+TEST(TerrainHeightmap, MarginUvTransformUsesInnerSamples)
+{
+    HostImage image = MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; });
+    VL::TerrainAssetDesc desc = MakeDesc();
+    desc.gridResolution = 2;
+    desc.heightmapMargin = 1;
+    const VL::TerrainHeightmap::MeshUvTransform transform =
+        VL::TerrainHeightmap::MeshUvTransformFor(desc, image);
+    EXPECT_FLOAT_EQ(transform.offsetU, 0.25f);
+    EXPECT_FLOAT_EQ(transform.offsetV, 0.25f);
+    EXPECT_FLOAT_EQ(transform.scaleU, 0.5f);
+    EXPECT_FLOAT_EQ(transform.scaleV, 0.5f);
+    const Eigen::Vector2f low = transform.Apply(0.0f, 0.0f);
+    const Eigen::Vector2f high = transform.Apply(1.0f, 1.0f);
+    EXPECT_FLOAT_EQ(low.x(), 0.25f);
+    EXPECT_FLOAT_EQ(low.y(), 0.25f);
+    EXPECT_FLOAT_EQ(high.x(), 0.75f);
+    EXPECT_FLOAT_EQ(high.y(), 0.75f);
+
+    HostImage wrongSize = MakeHeightmap(
+        4, 5, [](uint32_t, uint32_t) { return 0.5f; });
+    EXPECT_THROW(
+        VL::TerrainHeightmap::MeshUvTransformFor(desc, wrongSize),
+        std::exception);
+}
+
 TEST(TerrainHeightmap, RejectsNonFiniteSamples)
 {
     HostImage image = MakeHeightmap(2, 2, [](uint32_t, uint32_t) { return 0.5f; });
@@ -304,6 +330,29 @@ TEST(TerrainMeshBuilder, ChunkEdgeNormalsStayContinuous)
     const Vertex& leftEdge = chunks[0].vertices[2];
     const Vertex& rightEdge = chunks[1].vertices[0];
     EXPECT_TRUE(leftEdge.normal.isApprox(rightEdge.normal, 1.0e-5f));
+}
+
+TEST(TerrainMeshBuilder, MarginEdgeNormalsUseOverscan)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t) {
+            return static_cast<float>(x) * 0.25f;
+        }));
+    plan.desc.gridResolution = 2;
+    plan.desc.chunkQuads = 2;
+    plan.desc.heightmapMargin = 1;
+    plan.desc.size = Eigen::Vector2f(200.0f, 200.0f);
+    plan.desc.heightScale = 400.0f;
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    ASSERT_EQ(chunk.vertices.size(), 9u);
+    const Eigen::Vector3f expected =
+        Eigen::Vector3f(-1.0f, 1.0f, 0.0f).normalized();
+    EXPECT_TRUE(chunk.vertices[0].normal.isApprox(expected, 1.0e-5f));
+    EXPECT_TRUE(chunk.vertices[4].normal.isApprox(expected, 1.0e-5f));
+    EXPECT_FLOAT_EQ(chunk.vertices[0].position.y(), 100.0f);
 }
 
 TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
@@ -2171,6 +2220,23 @@ TEST(TerrainValidator, RejectsGridThatIsNotDivisibleByChunk)
     EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
 }
 
+TEST(TerrainValidator, AcceptsAndRejectsHeightmapMargin)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapMargin"] = 1;
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    asset["heightmapMargin"] = 5;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["heightmapMargin"] = 17;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
 TEST(TerrainValidator, RejectsInvalidLayerRanges)
 {
     nlohmann::json asset = BuildTerrainJson();
@@ -2495,6 +2561,61 @@ TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
     EXPECT_EQ(plan.heightmap->width, 2u);
     EXPECT_EQ(plan.heightmap->height, 2u);
     EXPECT_EQ(plan.heightmap->format, HostImage::PixelFormat::RGBA32_FLOAT);
+}
+
+TEST_F(TerrainTest, LoadsHeightmapMarginAndRejectsWrongExtent)
+{
+    HostImage heightmap;
+    heightmap.width = 5;
+    heightmap.height = 5;
+    heightmap.channels = 4;
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = heightmap.width * heightmap.GetPixelSize();
+    heightmap.data.resize(
+        static_cast<size_t>(heightmap.rowStrideBytes) * heightmap.height);
+    uint16_t* halfPixels = reinterpret_cast<uint16_t*>(heightmap.data.data());
+    for (size_t index = 0; index < heightmap.data.size() / sizeof(uint16_t); ++index)
+        halfPixels[index] = 0x3800;
+
+    const auto heightmapPath = directory / "heightmap_margin.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto materialPath = directory / "MI_terrain_margin.json";
+    std::ofstream materialStream(materialPath);
+    materialStream << nlohmann::json({
+        {"name", "MI_terrain_margin"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    materialStream.close();
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = materialPath.string();
+    asset["gridResolution"] = 2;
+    asset["chunkQuads"] = 1;
+    asset["heightmapMargin"] = 1;
+    const auto terrainPath = directory / "TR_terrain_margin.json";
+    std::ofstream terrainStream(terrainPath);
+    terrainStream << asset.dump(2);
+    terrainStream.close();
+
+    const VL::TerrainBuildPlan plan =
+        VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    EXPECT_EQ(plan.desc.heightmapMargin, 1u);
+    ASSERT_TRUE(plan.heightmap != nullptr);
+    EXPECT_EQ(plan.heightmap->width, 5u);
+    EXPECT_EQ(plan.heightmap->height, 5u);
+
+    asset["heightmapMargin"] = 2;
+    std::ofstream mismatchStream(terrainPath);
+    mismatchStream << asset.dump(2);
+    mismatchStream.close();
+    EXPECT_THROW(
+        VL::TerrainAssetLoader::Prepare(terrainPath.string()),
+        std::exception);
 }
 
 TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)

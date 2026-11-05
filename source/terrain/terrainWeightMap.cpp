@@ -87,13 +87,23 @@ SampleState SampleAt(
 {
     const TerrainAssetDesc& desc = plan.desc;
     const HostImage& image = *plan.heightmap;
-    const float height = TerrainHeightmap::SampleHeightCm(desc, image, u, v);
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(desc, image);
+    const Eigen::Vector2f heightUv = heightUvTransform.Apply(u, v);
+    const float height = TerrainHeightmap::SampleHeightCm(
+        desc, image, heightUv.x(), heightUv.y());
     const float du = 1.0f / static_cast<float>(resolution);
     const float dv = du;
-    const float left = TerrainHeightmap::SampleHeightCm(desc, image, u - du, v);
-    const float right = TerrainHeightmap::SampleHeightCm(desc, image, u + du, v);
-    const float down = TerrainHeightmap::SampleHeightCm(desc, image, u, v - dv);
-    const float up = TerrainHeightmap::SampleHeightCm(desc, image, u, v + dv);
+    const float heightStepU = du * heightUvTransform.scaleU;
+    const float heightStepV = dv * heightUvTransform.scaleV;
+    const float left = TerrainHeightmap::SampleHeightCm(
+        desc, image, heightUv.x() - heightStepU, heightUv.y());
+    const float right = TerrainHeightmap::SampleHeightCm(
+        desc, image, heightUv.x() + heightStepU, heightUv.y());
+    const float down = TerrainHeightmap::SampleHeightCm(
+        desc, image, heightUv.x(), heightUv.y() - heightStepV);
+    const float up = TerrainHeightmap::SampleHeightCm(
+        desc, image, heightUv.x(), heightUv.y() + heightStepV);
     const float worldDx = 2.0f * du * desc.size.x();
     const float worldDz = 2.0f * dv * desc.size.y();
     const Eigen::Vector3f normal = Eigen::Vector3f(
@@ -200,6 +210,8 @@ TerrainTileCandidateList BuildTileCandidates(
     float maxHeight = 0.0f;
     float minSlope = 90.0f;
     float maxSlope = 0.0f;
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(plan.desc, *plan.heightmap);
     constexpr uint32_t CandidateSamples = 16;
     for (uint32_t sampleZ = 0; sampleZ < CandidateSamples; ++sampleZ)
     {
@@ -259,8 +271,11 @@ TerrainTileCandidateList BuildTileCandidates(
                          (static_cast<float>(sampleZ) + 0.5f) *
                              static_cast<float>(tileResolution) / PaintSamples) /
                         static_cast<float>(resolution);
+                    const Eigen::Vector2f paintUv =
+                        heightUvTransform.Apply(u, v);
                     painted = plan.layerPaint->HasPaint(
-                        static_cast<uint32_t>(layer), u, v);
+                        static_cast<uint32_t>(layer),
+                        paintUv.x(), paintUv.y());
                 }
             }
             if (painted)
@@ -288,6 +303,8 @@ void BakeTile(
     uint8_t* outWeights)
 {
     const uint32_t tileResolution = resolution / tilesPerSide;
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(plan.desc, *plan.heightmap);
     std::vector<float> weights;
     weights.reserve(tile.layerIds.size());
     for (uint32_t y = 0; y < tileResolution; ++y)
@@ -307,7 +324,12 @@ void BakeTile(
             {
                 float weight = LayerWeight(plan.desc.layers[layerId], layerId, state);
                 if (plan.layerPaint)
-                    weight = plan.layerPaint->Blend(layerId, u, v, weight);
+                {
+                    const Eigen::Vector2f paintUv =
+                        heightUvTransform.Apply(u, v);
+                    weight = plan.layerPaint->Blend(
+                        layerId, paintUv.x(), paintUv.y(), weight);
+                }
                 weights.push_back(std::max(0.0f, weight));
             }
             uint8_t ids[TopLayerCount];

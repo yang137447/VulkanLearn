@@ -57,6 +57,7 @@ std::string TerrainChunkResourceKey(
         "|heightOffset=" + std::to_string(desc.heightOffset) +
         "|grid=" + std::to_string(desc.gridResolution) +
         "|chunkQuads=" + std::to_string(desc.chunkQuads) +
+        "|heightmapMargin=" + std::to_string(desc.heightmapMargin) +
         // pageOrigin/pageTilesPerSide 决定 texCoord1，也属于顶点数据输入。
         "|pageOrigin=" + std::to_string(desc.pageOrigin.x()) + "," +
         std::to_string(desc.pageOrigin.y()) +
@@ -110,6 +111,8 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
     const float normalBlendCells = std::min(
         kNormalBlendCells, static_cast<float>(quadsPerChunk));
     const float grid = static_cast<float>(desc.gridResolution);
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(desc, *plan.heightmap);
     // 全局页 UV 是 [0,1] 的归一化坐标；最后一列/行的顶点恰好落在页边界上，
     // 直接采样会落进邻居页。按半个页 texel 内缩，内部顶点保持精确值。
     const float pageEdgeInset =
@@ -150,20 +153,28 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                                     float fineNormalWeight) {
                 const float u = static_cast<float>(globalX) / grid;
                 const float v = static_cast<float>(globalZ) / grid;
+                const Eigen::Vector2f heightUv =
+                    heightUvTransform.Apply(u, v);
                 const float height = TerrainHeightmap::SampleHeightCm(
-                    desc, *plan.heightmap, u, v);
+                    desc, *plan.heightmap, heightUv.x(), heightUv.y());
                 auto gradientNormal = [&](uint32_t step) {
                     const float stepUv = static_cast<float>(step) / grid;
+                    const float heightStepU = stepUv * heightUvTransform.scaleU;
+                    const float heightStepV = stepUv * heightUvTransform.scaleV;
                     const float stepDx = 2.0f * stepUv * desc.size.x();
                     const float stepDz = 2.0f * stepUv * desc.size.y();
                     const float left = TerrainHeightmap::SampleHeightCm(
-                        desc, *plan.heightmap, u - stepUv, v);
+                        desc, *plan.heightmap,
+                        heightUv.x() - heightStepU, heightUv.y());
                     const float right = TerrainHeightmap::SampleHeightCm(
-                        desc, *plan.heightmap, u + stepUv, v);
+                        desc, *plan.heightmap,
+                        heightUv.x() + heightStepU, heightUv.y());
                     const float down = TerrainHeightmap::SampleHeightCm(
-                        desc, *plan.heightmap, u, v - stepUv);
+                        desc, *plan.heightmap,
+                        heightUv.x(), heightUv.y() - heightStepV);
                     const float up = TerrainHeightmap::SampleHeightCm(
-                        desc, *plan.heightmap, u, v + stepUv);
+                        desc, *plan.heightmap,
+                        heightUv.x(), heightUv.y() + heightStepV);
 
                     // u 对应 +X、v 对应 +Z；梯度法线取 (-dh/dx, 1, -dh/dz)。
                     Eigen::Vector3f normal(
@@ -343,6 +354,8 @@ std::vector<TerrainChunkBounds> TerrainMeshBuilder::ComputeChunkBounds(
 
     const uint32_t chunkCount = desc.gridResolution / desc.chunkQuads;
     const float grid = static_cast<float>(desc.gridResolution);
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(desc, *plan.heightmap);
 
     std::vector<TerrainChunkBounds> bounds;
     bounds.reserve(static_cast<size_t>(chunkCount) * chunkCount);
@@ -368,10 +381,13 @@ std::vector<TerrainChunkBounds> TerrainMeshBuilder::ComputeChunkBounds(
                         chunkZ * desc.chunkQuads + localZ;
                     const float u = static_cast<float>(globalX) / grid;
                     const float v = static_cast<float>(globalZ) / grid;
+                    const Eigen::Vector2f heightUv =
+                        heightUvTransform.Apply(u, v);
                     const Eigen::Vector3f position(
                         (u - 0.5f) * desc.size.x(),
                         TerrainHeightmap::SampleHeightCm(
-                            desc, *plan.heightmap, u, v),
+                            desc, *plan.heightmap,
+                            heightUv.x(), heightUv.y()),
                         (v - 0.5f) * desc.size.y());
                     if (first)
                     {

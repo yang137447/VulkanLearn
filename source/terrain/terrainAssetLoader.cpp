@@ -41,6 +41,7 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         desc.heightOffset = asset.at("heightOffset").get<float>();
         desc.gridResolution = asset.at("gridResolution").get<uint32_t>();
         desc.chunkQuads = asset.at("chunkQuads").get<uint32_t>();
+        desc.heightmapMargin = asset.value("heightmapMargin", 0u);
         // CPU 几何 LOD：validator 已保证级数与步长/距离表合法。旧 TR 不写时
         // lodLevels=1、距离表为空，网格生成与历史行为完全一致。
         desc.lodLevels = asset.value("lodLevels", 1u);
@@ -113,6 +114,19 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         }
         if (heightmap->width < 2 || heightmap->height < 2)
             throw std::runtime_error("Heightmap requires at least 2x2 pixels: " + desc.heightmapPath);
+        if (desc.heightmapMargin > 0)
+        {
+            const uint32_t expected =
+                desc.gridResolution + 2 * desc.heightmapMargin + 1;
+            if (heightmap->width != expected || heightmap->height != expected)
+            {
+                throw std::runtime_error(
+                    "Heightmap with heightmapMargin requires exactly " +
+                    std::to_string(expected) + "x" +
+                    std::to_string(expected) + " pixels: " +
+                    desc.heightmapPath);
+            }
+        }
 
         TerrainBuildPlan plan;
         plan.desc = std::move(desc);

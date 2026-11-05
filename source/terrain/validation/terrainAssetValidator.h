@@ -81,6 +81,7 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             entry.key() != "size" &&
             entry.key() != "heightScale" && entry.key() != "heightOffset" &&
             entry.key() != "gridResolution" && entry.key() != "chunkQuads" &&
+            entry.key() != "heightmapMargin" &&
             entry.key() != "lodLevels" && entry.key() != "lodDistances" &&
             entry.key() != "chunkResidencyDistances" &&
             entry.key() != "pageOrigin" && entry.key() != "pageTilesPerSide" &&
@@ -122,9 +123,14 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
     RequireFiniteNumber(asset, "heightOffset", "Terrain " + assetPath);
     const uint32_t gridResolution = RequirePositiveInteger(asset, "gridResolution", "Terrain " + assetPath);
     const uint32_t chunkQuads = RequirePositiveInteger(asset, "chunkQuads", "Terrain " + assetPath);
+    const uint32_t heightmapMargin = OptionalBoundedInteger(
+        asset, "heightmapMargin", "Terrain " + assetPath, 0u, 0u, 16u);
     if (chunkQuads > gridResolution || gridResolution % chunkQuads != 0)
         throw std::invalid_argument(
             "Terrain gridResolution must be a positive multiple of chunkQuads: " + assetPath);
+    if (heightmapMargin > gridResolution)
+        throw std::invalid_argument(
+            "Terrain heightmapMargin must be <= gridResolution: " + assetPath);
 
     // CPU 几何 LOD：只声明可生成的级数，运行时选择尚未接入。最粗一级的
     // 合并步长必须整除 chunkQuads，否则该级网格无法生成，必须在预检期拒绝，

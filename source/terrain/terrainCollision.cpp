@@ -104,6 +104,8 @@ JPH::ShapeRefC BuildHeightFieldShape(
 {
     const TerrainAssetDesc& desc = plan.desc;
     const float inverseCountMinusOne = 1.0f / static_cast<float>(sampleCount - 1);
+    const TerrainHeightmap::MeshUvTransform heightUvTransform =
+        TerrainHeightmap::MeshUvTransformFor(desc, *plan.heightmap);
     std::vector<float> samples(static_cast<size_t>(sampleCount) * sampleCount);
     for (uint32_t y = 0; y < sampleCount; ++y)
     {
@@ -111,9 +113,11 @@ JPH::ShapeRefC BuildHeightFieldShape(
         for (uint32_t x = 0; x < sampleCount; ++x)
         {
             const float u = static_cast<float>(x) * inverseCountMinusOne;
+            const Eigen::Vector2f heightUv = heightUvTransform.Apply(u, v);
             // 与渲染网格同一采样口径：u 对应 +X、v 对应 +Z，world Y 由模型矩阵的
             // scale.y 缩放，因此样本先乘 placement.scale.y 再换算成米。
-            const float heightCm = TerrainHeightmap::SampleHeightCm(desc, *plan.heightmap, u, v);
+            const float heightCm = TerrainHeightmap::SampleHeightCm(
+                desc, *plan.heightmap, heightUv.x(), heightUv.y());
             const float heightMeters = heightCm * placement.scale.y() * CmToMeter;
             if (!std::isfinite(heightMeters))
                 throw std::invalid_argument("Terrain collision heightmap contains non-finite samples");

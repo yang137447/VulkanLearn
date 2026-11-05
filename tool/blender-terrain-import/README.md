@@ -253,18 +253,17 @@ manifest，不跑 16 次资产转换。
 
 切分规则：
 
-* 全局高度/权重先重采样到 `tileGrid × tileResolution + 1`，相邻 tile 共用一条
-  边界采样；实测高度接缝最大差为 0。
+* 全局高度/权重先按 `--heightmap-margin` 扩一圈再重采样；默认 margin=1，
+  每个 tile 高度图为 259²（`gridResolution + 2*margin + 1`），相邻 tile
+  共享边界高度。mesh 边界采样落在内圈，法线梯度可以读到另一侧 overscan。
 * 每个 tile 为 1km、`gridResolution=256`、`chunkQuads=64`、`lodLevels=1`，
   因此不会出现跨 tile LOD 裂缝；16 个 tile 共 256 个 geometry draw。
 * `pageTilesPerSide=8`，16 个 tile 正好铺满 32×32 全局 VT 页表。
 * 所有 tile 共享同名 layer key、第一份 texture arrays 和同一套 camera/environment；
   `terrainlayer stats` 显示 `globalLayers=5 sourceSets=1 dedupedLayers=75`。
 
-当前限制：每个 tile 的边界法线仍按本 tile 的单侧差分计算，跨 tile 法线有可见
-接缝；`lodLevels>1` 还没有跨 placement 的 LOD 邻接选择。下一步应先做
-heightmap overscan + runtime `heightmapMargin`（位置用 tile UV、法线/高度用
-带一圈邻接采样的 UV），再开跨 tile LOD。
+当前限制：`lodLevels>1` 还没有跨 placement 的 LOD 邻接选择；边界法线已使用
+heightmap overscan（`heightmapMargin=1`），但多 tile LOD 仍固定为 1。
 
 ## 已知边界
 

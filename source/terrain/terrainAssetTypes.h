@@ -219,6 +219,10 @@ struct TerrainAssetDesc
     float heightOffset = 0.0f;
     uint32_t gridResolution = 256;
     uint32_t chunkQuads = 64;
+    // heightmap 四周的 overscan 采样数（0 = 历史全图 UV [0,1]）。
+    // margin>0 时高度图必须恰好为 gridResolution + 2*margin + 1 个样本，
+    // mesh 用内圈采样，边缘法线因此能读到相邻 tile 的一圈高度。
+    uint32_t heightmapMargin = 0;
     // 该地形在全局 page table 中的 tile 原点与本地 tile 边长。
     Eigen::Vector2i pageOrigin = Eigen::Vector2i(0, 0);
     uint32_t pageTilesPerSide = 8;

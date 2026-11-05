@@ -239,19 +239,24 @@ class TerrainTilingTests(unittest.TestCase):
                 (output_root / "tile_layout.json").read_text(encoding="utf-8"))
             self.assertEqual(layout["tileGrid"], 2)
             self.assertEqual(len(layout["tiles"]), 4)
+            self.assertEqual(layout["tileSamples"], 7)
+            self.assertEqual(layout["heightmapMargin"], 1)
 
             tile0 = read_gray16(output_root / "tile_00/Source/heightmap_gn_tile.png")
             tile1 = read_gray16(output_root / "tile_01/Source/heightmap_gn_tile.png")
             tile2 = read_gray16(output_root / "tile_02/Source/heightmap_gn_tile.png")
-            self.assertEqual(tile0.shape, (5, 5))
-            np.testing.assert_array_equal(tile0[:, -1], tile1[:, 0])
-            np.testing.assert_array_equal(tile0[-1, :], tile2[0, :])
+            self.assertEqual(tile0.shape, (7, 7))
+            np.testing.assert_array_equal(tile0[:, 4:7], tile1[:, 0:3])
+            np.testing.assert_array_equal(tile0[4:7, :], tile2[0:3, :])
+            np.testing.assert_array_equal(tile0[:, 5], tile1[:, 1])
+            np.testing.assert_array_equal(tile0[5, :], tile2[1, :])
 
             tile1_manifest = json.loads(
                 (output_root / "tile_01/blender_gn_import.json").read_text(
                     encoding="utf-8"))
             self.assertEqual(tile1_manifest["pageOrigin"], [2, 0])
             self.assertEqual(tile1_manifest["pageTilesPerSide"], 2)
+            self.assertEqual(tile1_manifest["heightmapMargin"], 1)
             self.assertAlmostEqual(
                 tile1_manifest["materialUvScale"], 4.0)
             self.assertAlmostEqual(

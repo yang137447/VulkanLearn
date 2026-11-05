@@ -2,9 +2,9 @@
 
 This script intentionally stays outside Blender's dependency graph: it reads
 the PNG16 height/mask outputs and writes per-tile PNG16 inputs plus import
-manifests.  The tile grid includes one shared sample row/column on every
-internal boundary, so adjacent tiles sample exactly the same height and mask
-values at the seam.
+manifests.  Tiles overlap by a configurable heightmap margin; the runtime maps
+mesh UV to the inner samples, so edge normals read the neighbouring tile's
+height while adjacent meshes still share exactly the same boundary height.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--tile-grid", type=int, default=4)
     parser.add_argument("--tile-resolution", type=int, default=256)
+    parser.add_argument("--heightmap-margin", type=int, default=1)
     parser.add_argument("--tile-size-m", type=float, default=1000.0)
     parser.add_argument("--page-tiles-per-side", type=int, default=8)
     parser.add_argument("--asset-prefix", default="blender_gn_pegasus_tile")
@@ -72,6 +73,16 @@ def _resample(values: np.ndarray, target: int) -> np.ndarray:
     return top * (1.0 - fy)[:, None] + bottom * fy[:, None]
 
 
+def _resample_with_margin(
+    values: np.ndarray,
+    target: int,
+    margin: int,
+) -> np.ndarray:
+    if margin > 0:
+        values = np.pad(values, margin, mode="edge")
+    return _resample(values, target)
+
+
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -93,6 +104,11 @@ def main() -> int:
         raise RuntimeError("tile-grid must be at least 2")
     if args.tile_resolution < 2:
         raise RuntimeError("tile-resolution must be at least 2")
+    if not 0 <= args.heightmap_margin <= 16:
+        raise RuntimeError("heightmap-margin must be in [0, 16]")
+    if args.heightmap_margin >= args.tile_resolution:
+        raise RuntimeError(
+            "heightmap-margin must be smaller than tile-resolution")
     if args.tile_size_m <= 0.0:
         raise RuntimeError("tile-size-m must be positive")
     if not 1 <= args.page_tiles_per_side <= 32:
@@ -126,9 +142,17 @@ def main() -> int:
         layer_masks.append(
             read_gray16(mask_path).astype(np.float64) / 65535.0)
 
-    sample_grid = args.tile_grid * args.tile_resolution + 1
-    height_global = _resample(height, sample_grid)
-    masks_global = [_resample(mask, sample_grid) for mask in layer_masks]
+    tile_samples = args.tile_resolution + args.heightmap_margin * 2 + 1
+    sample_grid = (
+        args.tile_grid * args.tile_resolution +
+        args.heightmap_margin * 2 + 1)
+    height_global = _resample_with_margin(
+        height, sample_grid, args.heightmap_margin)
+    masks_global = [
+        _resample_with_margin(
+            mask, sample_grid, args.heightmap_margin)
+        for mask in layer_masks
+    ]
 
     size_cm = [float(value) for value in source["size"]]
     tile_size_cm = args.tile_size_m * 100.0
@@ -153,8 +177,8 @@ def main() -> int:
 
             start_x = grid_x * args.tile_resolution
             start_z = grid_z * args.tile_resolution
-            end_x = start_x + args.tile_resolution + 1
-            end_z = start_z + args.tile_resolution + 1
+            end_x = start_x + tile_samples
+            end_z = start_z + tile_samples
             tile_height = height_global[start_z:end_z, start_x:end_x]
             tile_height_path = source_dir / "heightmap_gn_tile.png"
             write_gray16(
@@ -203,6 +227,7 @@ def main() -> int:
                 "gridResolution": args.tile_resolution,
                 "chunkQuads": max(1, args.tile_resolution // 4),
                 "lodLevels": 1,
+                "heightmapMargin": args.heightmap_margin,
                 "pageOrigin": [
                     grid_x * args.page_tiles_per_side,
                     grid_z * args.page_tiles_per_side,
@@ -230,6 +255,8 @@ def main() -> int:
         "sourceManifest": str(source_path),
         "tileGrid": args.tile_grid,
         "tileResolution": args.tile_resolution,
+        "tileSamples": tile_samples,
+        "heightmapMargin": args.heightmap_margin,
         "tileSizeCm": tile_size_cm,
         "pageTilesPerSide": args.page_tiles_per_side,
         "cameraPosition": source.get("cameraPosition"),
@@ -243,7 +270,7 @@ def main() -> int:
         "layout": str(layout_path),
         "tiles": len(tiles),
         "sampleGrid": sample_grid,
-        "tileSamples": args.tile_resolution + 1,
+        "tileSamples": tile_samples,
     }, ensure_ascii=False, indent=2))
     return 0
 

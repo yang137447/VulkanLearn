@@ -55,6 +55,14 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
   退化为 layer 0。几何高度仍是 `sample*heightScale+heightOffset`，不受该钳制影响。
 - `gridResolution` 是总 quad 数，`chunkQuads` 是每块 quad 数；两者必须为正整数，
   `chunkQuads <= gridResolution` 且 `gridResolution % chunkQuads == 0`。
+- `heightmapMargin`（可选，0..16，默认 0）是高度图四周的 overscan 采样数。
+  大于 0 时高度图必须恰好为
+  `gridResolution + 2*heightmapMargin + 1` 方形样本；mesh 的位置仍覆盖
+  `size`，但高度/法线、层权重/VLP1 与 Jolt 高度场统一把 mesh UV 映射到
+  内圈，边界差分因此能读取 tile 外的一圈邻接样本。margin=0 保持历史
+  `[0,1]` 全图采样。
+  `heightmapMargin>0` 的资产当前面向离线 PCG tile；编辑器 Sculpt/Paint
+  仍按完整高度图 UV 计算笔刷，尚未抵消 overscan。
 - `pageOrigin`（可选，默认 `[0,0]`）和 `pageTilesPerSide`（可选，默认 8）决定该地形
   在全局 32×32 page table 中占用的 tile 区域；`pageOrigin + pageTilesPerSide <= 32`。
 - `lodLevels`（可选，1..4，默认 1）与 `lodDistances`（可选，cm、严格升序、

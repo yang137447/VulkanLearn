@@ -30,6 +30,7 @@ manifest 的核心字段：
     description / sceneDescription: 可选的中文 TR/SC 描述覆盖
     gridResolution / chunkQuads / lodLevels: 可选网格覆盖
     lodDistances / chunkResidencyDistances: 可选 LOD 距离数组覆盖
+    heightmapMargin: 可选的网格外圈 overscan 采样数（默认 0）
     pageOrigin / pageTilesPerSide: 可选全局 32x32 VT 页表区域
 
 16-bit weightmap 会先按 257 归一化再写入 VLP1，避免 PIL 直接截断低 8 位。
@@ -135,6 +136,7 @@ class ManifestSpec:
     lod_levels: int | None
     lod_distances_cm: tuple[float, ...] | None
     chunk_residency_distances_cm: tuple[float, ...] | None
+    heightmap_margin: int
     page_origin: tuple[int, int] | None
     page_tiles_per_side: int | None
     layers: tuple[LayerInput, ...]
@@ -1040,6 +1042,9 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         ("chunkresidencydistances", "chunk_residency_distances"),
         "chunkResidencyDistances",
     )
+    heightmap_margin = _optional_bounded_int(
+        top, ("heightmapmargin", "heightmap_margin"),
+        "heightmapMargin", 0, 16) or 0
     raw_page_origin = _first(top, "pageorigin", "page_origin")
     page_origin: tuple[int, int] | None = None
     if raw_page_origin is not None:
@@ -1090,6 +1095,7 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         lod_levels=lod_levels,
         lod_distances_cm=lod_distances,
         chunk_residency_distances_cm=chunk_residency_distances,
+        heightmap_margin=heightmap_margin,
         page_origin=page_origin,
         page_tiles_per_side=page_tiles_per_side,
         layers=layers,
@@ -1596,6 +1602,8 @@ def _convert(
     }
     if paint_path_value is not None:
         tr_json["paintPath"] = paint_path_value
+    if spec.heightmap_margin > 0:
+        tr_json["heightmapMargin"] = spec.heightmap_margin
     if spec.page_origin is not None:
         tr_json["pageOrigin"] = list(spec.page_origin)
     if spec.page_tiles_per_side is not None:

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace VL
 {
@@ -46,6 +47,40 @@ float ReadPixel(const HostImage& image, uint32_t x, uint32_t y)
 }
 
 } // namespace
+
+MeshUvTransform MeshUvTransformFor(
+    const TerrainAssetDesc& desc,
+    const HostImage& image)
+{
+    MeshUvTransform transform;
+    if (desc.heightmapMargin == 0)
+        return transform;
+    if (image.width < 2 || image.height < 2)
+        throw std::runtime_error("Terrain heightmap requires at least 2x2 pixels");
+    const uint32_t expectedWidth =
+        desc.gridResolution + 2 * desc.heightmapMargin + 1;
+    const uint32_t expectedHeight =
+        desc.gridResolution + 2 * desc.heightmapMargin + 1;
+    if (image.width != expectedWidth || image.height != expectedHeight)
+    {
+        throw std::runtime_error(
+            "Terrain heightmap with margin requires exactly "
+            "gridResolution + 2*heightmapMargin + 1 samples: expected " +
+            std::to_string(expectedWidth) + "x" +
+            std::to_string(expectedHeight) + ", got " +
+            std::to_string(image.width) + "x" +
+            std::to_string(image.height));
+    }
+    const float margin = static_cast<float>(desc.heightmapMargin);
+    const float grid = static_cast<float>(desc.gridResolution);
+    const float spanU = static_cast<float>(image.width - 1);
+    const float spanV = static_cast<float>(image.height - 1);
+    transform.offsetU = margin / spanU;
+    transform.offsetV = margin / spanV;
+    transform.scaleU = grid / spanU;
+    transform.scaleV = grid / spanV;
+    return transform;
+}
 
 float SampleNormalized(const HostImage& image, float u, float v)
 {
