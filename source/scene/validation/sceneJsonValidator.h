@@ -187,6 +187,13 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                     object.at(field).get<std::string>().empty())
                     throw std::invalid_argument(std::string("Mesh requires path: ") + field);
             }
+            if (object.contains("instancesPath") &&
+                (!object.at("instancesPath").is_string() ||
+                 object.at("instancesPath").get<std::string>().empty()))
+            {
+                throw std::invalid_argument(
+                    "Mesh instancesPath must be a non-empty string");
+            }
         }
         if (type == "terrain")
         {

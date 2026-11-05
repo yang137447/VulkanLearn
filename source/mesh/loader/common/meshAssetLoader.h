@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 #include "../../meshAssetTypes.h"
+#include "../../vegetationAsset.h"
 
 // Load request shared by scene validation and runtime mesh loading.
 // It contains resolved mesh descriptor data and the import request consumed by model importers.
@@ -17,6 +18,9 @@ struct MeshAssetLoadRequest
     // CPU 参考 solver、GPU group config SSBO 与行为身份都消费这一份解析结果。
     std::vector<TressfxSimulationConfig> tressfxGroupConfigs;
     std::shared_ptr<const TressfxPlacementResources> tressfxResources;
+    // 可选的静态实例清单；场景预检加载后由渲染器直接消费，避免重复读 JSON。
+    std::string instancesPath;
+    std::shared_ptr<const VL::VegetationAsset> vegetation;
 };
 
 // Result of importing one mesh asset into CPU-side sections plus per-section material mapping.

@@ -138,6 +138,7 @@ py -3 tool\terrain-ue-import\build_vulkanlearn_assets.py `
 
 ```text
 Generated\BlenderPegasusGN\Vegetation\SM_pegasus_cypress.json
+Generated\BlenderPegasusGN\Vegetation\VEG_pegasus_cypress.json
 Generated\BlenderPegasusGN\SC_terrain_pegasus_cypress_grove.json
 Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove.json
 Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
@@ -150,9 +151,21 @@ Generated\BlenderPegasusGN\TR_terrain_blender_gn_pegasus_grove_mi.json
   --initial-scene Generated/BlenderPegasusGN/SC_terrain_pegasus_cypress_grove.json
 ```
 
-当前切片只有 Italian Cypress；每棵树仍是独立 mesh object/draw，没有实例化、
-草地或风。下一步是先做 `DrawIndexedInstanced` + `VEG_*.json`，再把树/石/草
-批量铺开；不要把这一版的 draw 数当作最终性能基线。
+当前切片只有 Italian Cypress；122 棵树由一个 `CypressGrove` mesh 对象消费
+`VEG_pegasus_cypress.json`，叶/干两个 section 各产生一个 instanced draw。
+`InstanceVertex.params` 已携带 `windPhase`/`seed`，但运行时还没有接入风；
+草地、每实例 LOD 和逐实例剔除仍是后续工作。
+
+快速核对 draw 数：
+
+```powershell
+.\build\bin\main.exe --no-dev-ui --worker-thread-count 1 `
+  --initial-scene Generated/BlenderPegasusGN/SC_terrain_pegasus_cypress_grove.json `
+  --console-command "terrainchunk stats" --console-command-delay 120
+```
+
+应在 `terrainchunk stats` 看到 16 个 terrain chunk 加 2 个 cypress section，
+合计 `meshDraws=18`。
 
 可视化验收：
 

@@ -1,7 +1,10 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "mesh/vegetationAsset.h"
 #include "terrain/terrainAssetLoader.h"
+#include "commonFunction.h"
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -31,6 +34,42 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         {
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
             MeshAssetLoader::PrepareTressfxPlacement(*objectPlan.meshLoadRequest, objectJson);
+            if (objectJson.contains("instancesPath"))
+            {
+                const std::string instancesPath =
+                    objectJson.at("instancesPath").get<std::string>();
+                const std::string normalizedInstancesPath =
+                    std::filesystem::path(instancesPath)
+                        .lexically_normal()
+                        .generic_string();
+                VL::VegetationAsset vegetation;
+                std::string error;
+                const std::filesystem::path resolved =
+                    CommonFunction::Path(instancesPath);
+                if (!VL::LoadVegetationAsset(resolved, vegetation, error))
+                    throw std::runtime_error(error);
+                if (!vegetation.meshPath.empty())
+                {
+                    const std::string declaredMesh =
+                        std::filesystem::path(
+                            CommonFunction::Path(vegetation.meshPath))
+                            .lexically_normal().string();
+                    const std::string sceneMesh =
+                        std::filesystem::path(
+                            CommonFunction::Path(
+                                objectJson.at("modelPath").get<std::string>()))
+                            .lexically_normal().string();
+                    if (declaredMesh != sceneMesh)
+                        throw std::runtime_error(
+                            "Vegetation mesh does not match scene modelPath: " +
+                            instancesPath);
+                }
+                objectPlan.meshLoadRequest->instancesPath =
+                    normalizedInstancesPath;
+                objectPlan.meshLoadRequest->vegetation =
+                    std::make_shared<const VL::VegetationAsset>(
+                        std::move(vegetation));
+            }
         }
         else if (objectPlan.objectType == "terrain")
         {

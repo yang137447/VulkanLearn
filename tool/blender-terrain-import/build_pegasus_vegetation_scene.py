@@ -6,6 +6,7 @@ assembly:
 
     terrain scene + scatter_points.json
       -> SM_pegasus_cypress.json
+      -> VEG_pegasus_cypress.json
       -> SC_terrain_pegasus_cypress_grove.json
 
 It can also emit a scene-local TR/MI pair with a finer ``u_uvScale`` so the
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 from pathlib import Path
 
@@ -42,6 +44,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out-mesh",
         default="Generated/BlenderPegasusGN/Vegetation/SM_pegasus_cypress.json",
+    )
+    parser.add_argument(
+        "--out-instances",
+        default="Generated/BlenderPegasusGN/Vegetation/VEG_pegasus_cypress.json",
     )
     parser.add_argument("--count", type=int, default=122)
     parser.add_argument(
@@ -177,20 +183,44 @@ def main() -> int:
     scene["name"] = "SC_terrain_pegasus_cypress_grove"
     scene["description"] = (
         "Pegasus 复刻切片：从 Bistro FillOut 资产抽出的 Italian Cypress 原型，"
-        "按 Blender GN scatter 点确定性落位；当前逐对象 draw，实例化是后续工作。"
+        "按 Blender GN scatter 点确定性落位；122 个实例通过 VEG 清单合并为"
+        "叶/干两个 instanced draw，windPhase/seed 留给后续自有风系统。"
     )
+    instances = []
     for index, point in enumerate(picked):
         scale = rng.uniform(args.scale_min, args.scale_max)
-        scene["objects"].append(
+        yaw = math.radians(rng.uniform(0.0, 360.0))
+        instances.append(
             {
-                "name": f"Cypress_{index:03d}",
-                "type": "mesh",
-                "modelPath": mesh_relative,
                 "position": [float(value) for value in point["position"]],
-                "rotation": [0.0, rng.uniform(0.0, 360.0), 0.0],
+                "rotation": [0.0, math.sin(yaw * 0.5), 0.0, math.cos(yaw * 0.5)],
                 "scale": [scale, scale, scale],
+                "windPhase": rng.random(),
+                "lodBias": 0.0,
+                "variant": 0,
+                "seed": index,
             }
         )
+
+    _write_json(
+        _resource_path(root, str(args.out_instances)),
+        {
+            "version": 1,
+            "mesh": mesh_relative,
+            "instances": instances,
+        },
+    )
+    scene["objects"].append(
+        {
+            "name": "CypressGrove",
+            "type": "mesh",
+            "modelPath": mesh_relative,
+            "instancesPath": str(args.out_instances),
+            "position": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0],
+            "scale": [1.0, 1.0, 1.0],
+        }
+    )
 
     _write_json(_resource_path(root, str(args.out_scene)), scene)
     print(
@@ -201,6 +231,8 @@ def main() -> int:
                 "trees": len(picked),
                 "candidates": len(candidates),
                 "uvScale": args.uv_scale,
+                "instances": str(args.out_instances),
+                "instancedDraws": 2,
             },
             ensure_ascii=False,
         )

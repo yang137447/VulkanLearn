@@ -49,6 +49,11 @@ public:
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer);
+    // 静态植被/石头批量实例。空列表等价于一个 identity 实例；矩阵按列主序
+    // 写入 binding 1 的 InstanceVertex 流。params.x=windPhase, .y=lodBias,
+    // .z=variant, .w=seed，留给后续风/植被系统消费。
+    void SetInstances(std::vector<struct InstanceVertex> instances);
+    uint32_t GetInstanceCount() const { return instanceCount; }
     // 固定拓扑软体每帧只更新顶点位置/法线；动态模式使用 host-visible 顶点缓冲。
     // 调用方必须保持顶点数量不变，拓扑变化时创建新的 RenderableObject。
     void UpdateVertices(const std::vector<struct Vertex>& vertices);
@@ -298,6 +303,8 @@ private:
 
     void CreateIndexBuffer();
     void DestroyIndexBuffer();
+    void CreateInstanceBuffer();
+    void DestroyInstanceBuffer();
     void CreateSkinInfluenceBuffer();
     void CreateTressfxPositionBuffer();
     void CreateTressfxGuideGroupBuffers();
@@ -336,6 +343,10 @@ private:
     vk::Buffer indexBuffer = nullptr;
     vk::DeviceMemory indexBufferMemory = nullptr;
     vk::DescriptorBufferInfo indexBufferInfo;
+    std::vector<struct InstanceVertex> instanceData;
+    uint32_t instanceCount = 1;
+    vk::Buffer instanceBuffer = nullptr;
+    vk::DeviceMemory instanceBufferMemory = nullptr;
     vk::Buffer skinInfluenceBuffer = nullptr;
     vk::DeviceMemory skinInfluenceMemory = nullptr;
     vk::DescriptorBufferInfo skinInfluenceInfo;

@@ -659,6 +659,8 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
         0,
         sizeof(UiVertex),
         vk::VertexInputRate::eVertex);
+    const std::vector<vk::VertexInputBindingDescription> bindings{
+        bindingDescription};
     std::vector<vk::VertexInputAttributeDescription> attributes;
     attributes.emplace_back(0, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, position));
     attributes.emplace_back(1, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, texCoord));
@@ -676,7 +678,7 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
         renderPass,
         pipelineLayout,
         shaderStages,
-        bindingDescription,
+        bindings,
         attributes,
         "UI Overlay Straight Alpha",
         vk::SampleCountFlagBits::e1,
@@ -694,7 +696,7 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
         renderPass,
         pipelineLayout,
         shaderStages,
-        bindingDescription,
+        bindings,
         attributes,
         "UI Overlay Premultiplied Alpha",
         vk::SampleCountFlagBits::e1,

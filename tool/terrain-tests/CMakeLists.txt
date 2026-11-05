@@ -13,6 +13,7 @@ terrainLayerRegistryTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
     terrainChunkResidencyTests.cpp
+    vegetationAssetTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
     ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
@@ -39,6 +40,7 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/tressfxGeometryCache.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
+    ${PROJECT_SOURCE_DIR}/source/mesh/vegetationAsset.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/resourceRetireQueue.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp

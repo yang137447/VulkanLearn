@@ -51,7 +51,8 @@
 | `source/ui/sceneObjectTypeSupport.h` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/game-ui-stack.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
-| `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html` | — |
+| `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
+| `source/VertexDataStruct.h`、`source/mesh/vegetationAsset.*`、`source/render/resource/rendererMeshLoader.*`、`schema/scene.schema.json` | `contracts/vegetation-instancing.md` | — |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
@@ -101,6 +102,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | `contracts/material-mesh-pass-composition.md` | 改材质求值、Base/ShadowDepth 模板、Composer 身份或 Shadow 路由时 |
 | `contracts/animation-runtime-skinning.md` | 改骨骼 SM 加载、动画时钟/快照、蒙皮 SSBO、姿态/速度历史或动画预览控件时 |
 | `contracts/shader-structure-and-material-function.md` | 改 Shader Structure、Material Inputs/Function 组合或 Shading Model 边界时 |
+| `contracts/vegetation-instancing.md` | 改 `VEG_*.json`、静态实例顶点 ABI、instanced draw 或实例包围盒时 |
 | `contracts/testing.md` | 改测试入口、测试目标或新增测试时 |
 | `contracts/boundary-rules.generated.md` | 想知道 64 条边界规则各是什么、作用于哪些路径时（**生成物，勿手工编辑**） |
 | `contracts/README.md` | 想知道契约层的写作与校验约定时 |

@@ -112,6 +112,7 @@ RenderableObject::RenderableObject(
     CreateVertexBuffer();
     // 创建索引缓冲区
     CreateIndexBuffer();
+    CreateInstanceBuffer();
 }
 RenderableObject::RenderableObject(
     std::shared_ptr<const MeshAssetImportResult> importedResource,
@@ -214,6 +215,7 @@ RenderableObject::RenderableObject(
     UpdateLocalBounds();
     CreateVertexBuffer();
     CreateIndexBuffer();
+    CreateInstanceBuffer();
     try
     {
         CreateSkinInfluenceBuffer();
@@ -249,6 +251,7 @@ RenderableObject::RenderableObject(
     dynamicVertices = true;
     CreateVertexBuffer();
     CreateIndexBuffer();
+    CreateInstanceBuffer();
 }
 
 const std::vector<Vertex>& RenderableObject::GetVertices() const
@@ -272,6 +275,7 @@ RenderableObject::~RenderableObject()
     DestroyIndexBuffer();
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
+    DestroyInstanceBuffer();
     rendererBackend = nullptr;
 }
 
@@ -1645,11 +1649,73 @@ void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
 {
     // viewport/scissor 由 PassRuntime 按 pass 统一设置，避免每个对象把中心
     // 视口覆盖回整张资源。
-    commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
+    const vk::Buffer vertexBuffers[2] = {vertexBuffer, instanceBuffer};
+    const vk::DeviceSize vertexOffsets[2] = {vertexBufferInfo.offset, 0};
+    commandBuffer.bindVertexBuffers(0, 2, vertexBuffers, vertexOffsets);
     commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
     const size_t count = fixedCapacity ? drawIndexCount : GetIndices().size();
     if (count == 0) return;
-    commandBuffer.drawIndexed(static_cast<uint32_t>(count), 1, 0, 0, 0);
+    commandBuffer.drawIndexed(
+        static_cast<uint32_t>(count),
+        instanceCount,
+        0,
+        0,
+        0);
+}
+
+void RenderableObject::SetInstances(std::vector<InstanceVertex> instances)
+{
+    if (instanceData.size() == instances.size() &&
+        (instanceData.empty() ||
+         std::memcmp(instanceData.data(), instances.data(),
+             instanceData.size() * sizeof(InstanceVertex)) == 0))
+    {
+        return;
+    }
+    instanceData = std::move(instances);
+    if (instanceData.empty())
+        instanceData.push_back(InstanceVertex{});
+    DestroyInstanceBuffer();
+    CreateInstanceBuffer();
+}
+
+void RenderableObject::CreateInstanceBuffer()
+{
+    const std::vector<InstanceVertex> fallback{InstanceVertex{}};
+    const std::vector<InstanceVertex>& source =
+        instanceData.empty() ? fallback : instanceData;
+    const vk::DeviceSize bufferSize =
+        static_cast<vk::DeviceSize>(source.size() * sizeof(InstanceVertex));
+    std::tie(instanceBuffer, instanceBufferMemory) =
+        rendererBackend->CreateBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "InstanceBuffer (" + name + ")");
+    try
+    {
+        void* mapped = rendererBackend->MapMemory(instanceBufferMemory, bufferSize);
+        std::memcpy(mapped, source.data(), static_cast<size_t>(bufferSize));
+        rendererBackend->UnmapMemory(instanceBufferMemory);
+    }
+    catch (...)
+    {
+        rendererBackend->DestroyBuffer(instanceBuffer, instanceBufferMemory);
+        instanceBuffer = nullptr;
+        instanceBufferMemory = nullptr;
+        throw;
+    }
+    instanceCount = static_cast<uint32_t>(source.size());
+}
+
+void RenderableObject::DestroyInstanceBuffer()
+{
+    if (!rendererBackend || !instanceBuffer)
+        return;
+    rendererBackend->DestroyBuffer(instanceBuffer, instanceBufferMemory);
+    instanceBuffer = nullptr;
+    instanceBufferMemory = nullptr;
 }
 
 void RenderableObject::CreateVertexBuffer()

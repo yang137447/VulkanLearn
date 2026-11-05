@@ -1779,3 +1779,23 @@ BP 实窗检查被用户 Escape 中止，因此本轮未完成最终 BP 视口�
   `objectsByLevel=0:16,1:16,2:16`，画面无空洞。
 - 六地貌 1024² 默认 producer 全部跑通，侵蚀/沉积/输出体积质量账误差均 < 1e-15；
   证据 `artifacts/gn_biomes/contact_sheet.png` 与各目录 `blender_pegasus_gn_metadata.json`。
+
+## 2026-11-05 静态植被实例化
+
+`codex/terrain-openworld` 的 Pegasus cypress 切片改为 `VEG_pegasus_cypress.json`
+实例清单，Debug MinGW 实测：
+
+- `terrain_tests` 注册 266 项，全部通过；新增 8 项
+  `VegetationAssetTest.*`，覆盖 VEG 解析、四元数归一化、实例参数打包、
+  变换后包围盒以及缺 mesh/position、零 scale、负 variant、空实例列表拒绝。
+- `SC_terrain_pegasus_cypress_grove.json` 单线程运行 122 棵实例树；
+  `terrainchunk stats` 报告 16 个 terrain chunk 加叶/干两个 section，
+  `meshDraws=18`。截图
+  `VukanLearnResources/Generated/Screenshots/pegasus_instanced_p2_final.bmp`
+  已人工检查，树位/材质与逐对象基线一致。
+- `terrain_erosion_tests` 1 项通过；`py -3 tool/validate-docs.py` 通过；
+  `pwsh -File tool/architecture-boundary-audit.ps1` 通过。
+- `py -3 tool/validate_scene_schema.py` 的全资源扫描仍有 5 个既有失败：
+  `Maps/SC_model_preview` 与四个 `SC_tressfx_female*` 场景的 `wind` 对象
+  未进入 `scene.schema.json` 的 10 个 `oneOf` 分支。该缺口在本次实例化改动前
+  已存在；本场景的 mesh 对象直接按 `$defs.meshObject` 校验为 0 问题。
