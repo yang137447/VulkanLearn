@@ -10,6 +10,92 @@ Houdini heightfield + masks
   -> VulkanLearn 地形编辑器
 ```
 
+> **注意（2026-11-05 起）。** 下文"数据来源"一节描述的 G66 导出 fixture
+> **已停用**：那条路只是拿别人的烘焙结果，不是 Pegasus 的实现。当前的复刻
+> 路线是解出 Pegasus 原始 Houdini 工程的节点实现，在 Blender 几何节点里
+> 重建；见本文末尾的 **"Project Pegasus 原始工程解码"**。
+
+## Project Pegasus 原始工程解码
+
+官方 Pegasus 工程（`$PEGASUSPROJECT` 指向的那套）已下载解包到仓库外的
+`D:\YYBWorkSpace\Pegasus\`，**不入库**（SideFX 教程资产有独立授权条款，
+只能本地使用）。它交付的是 `.hip`/`.hda`，不是 FBX/glTF，所以第一步是
+把二进制容器解成可读配方。
+
+### 容器格式（实测，`houdini_archive.py`）
+
+`.hda` 与 `.hip` 都是 Houdini 私有二进制，但结构一致：
+
+```text
+[INDX 索引段]               .hip 没有这一段，直接以 ".start" 开始
+070707 + 70 位十进制 + 名字 + NUL + 内容      <- 一个"子记录"
+（成员体可能被 gzip 包一层；TRAILER!!! 结束）
+```
+
+* 名字从第 76 字节开始、以 NUL 结束。索引段里的 `070707` 只有 16 位数字且
+  没有名字，不会被当成子记录。
+* 成员体有两种排布：明文（Pegasus 的 `.hda`）与 gzip 压缩（.hip 的
+  `.OPs`、部分 `.def/.parm`），所以脚本对整文件"直接切"和"解压后切"两种
+  都试，取成员更多的那一种。
+* `.hda` 的节点名形如 `hdaroot/<node>.<init|def|parm|order|inp>`，
+  子网络是 `hdaroot/a/b/<node>`；`.hip` 的节点名是 `obj/geo1/...`。
+
+### 解码
+
+```powershell
+py -3 tool\houdini-terrain-import\decode_pegasus.py --check   # 只看统计
+py -3 tool\houdini-terrain-import\decode_pegasus.py           # 写配方
+py -3 tool\houdini-terrain-import\decode_pegasus.py --json    # 机器可读
+```
+
+输出 `D:\YYBWorkSpace\Pegasus\decoded\<asset>\`：
+
+```text
+network.txt   节点顺序、连线、每个节点的参数、VEX snippet
+network.json 同内容的机器可读版本
+```
+
+当前解码结果（2026-11-05）：
+
+| 资产 | 节点 | 连线 | VEX |
+|---|---:|---:|---:|
+| `sop_pe_landscape.1.0.hda` | 48 | 56 | 0 |
+| `ProjectFiles_LandscapeCreation_HFErodeExamples.hip` | 404 | 439 | 0 |
+| `Landscape_Workflow_01_Overview.hip` | 61 | 60 | 4 |
+| `sop_PE_heightfield_paths.2.0.hda`（Linescape） | 82 | 96 | 4 |
+| `sop_PE_Load_Landscape.2.hda` | 71 | — | 2 |
+| `sop_PE_Unreal_Instances.2.0.hda` | 23 | — | 4 |
+
+### 已知的 Pegasus 地形主链（`sop_pe_landscape.1.0.hda`）
+
+```text
+heightfield -> heightfield_project <- merge3(road/river 曲线 → polyextrude)
+            -> heightfield_maskbyobject -> maskshrink -> maskblur  (mask)
+heightfield_noise1 (worleyFB/hmfT, amp 200, element 900)  -> noise2 (sparse, amp 90, 280)
+            -> heightfield_distort1 (curl, amp 140, element 800)
+            -> heightfield_remap1 -> heightfield_erode1   (Hydro, freeze frame 5)
+            -> heightfield_remap2 -> heightfield_erode2   (再侵蚀一轮)
+            -> heightfield_resample1 -> masknoise1 -> heightfield_distort2
+            -> heightfield_remap3 -> heightfield_erode3
+            -> heightfield_resample2 -> masknoise2 -> heightfield_distort3
+            -> heightfield_erode4
+            -> remap_bedrock -> remap_debris -> remap_water -> remap_sediment
+            -> blast_mask -> attrib_unreal_material -> output
+```
+
+Erode 2.0 的关键参数（两轮一致）：`hydro_erosionrate 1`、`hydro_bankangle 20`、
+`water_spreaditers 140`、`rain_amount 0.9`、`rain_density 0.05`、
+`rain_evaporation 0.04`、`debris_quant 0.25`、`debris_reposeangle 15`、
+`thermal_cutangle 50`、`thermal_erosionrate 0.03`、`seed 4278`、
+`dofreeze on` / `freezeframe 5`。
+
+这套链的"四段 侵蚀 → resample → distort"就是 Pegasus 地表特征（冲沟 +
+崩积锥 + 后期扰动）的来源，也是几何节点复刻时要逐段对应实现的部分。
+
+## 数据来源（历史，已停用）
+
+以下 G66 路径只保留为历史记录，不再作为复刻数据来源。
+
 Pegasus 本身是 SideFX 的 Houdini + UE5 教程工程，不是可安装的运行时 SDK。
 官方 `.hip`/`.hda` 需要 Houdini 商业或 Indie 授权；本机 Houdini 19.5
 当前没有可用 license（`localhost:1715` 无授权服务），所以本工具只处理
