@@ -45,7 +45,7 @@ STATE_LAYERS = ("height", "water", "debris", "sediment", "bedrock")
 
 # 单点下切 gain：把 water*slope 的无量纲乘积放大到 Houdini 一帧的实际下切量级
 # （before/after 基准显示一段侵蚀约切 5 m，而裸乘积只有 1e-3 m 量级）。
-HYDRO_GAIN = 40.0
+HYDRO_GAIN = 8.0
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -427,12 +427,41 @@ def build_water_spread(tree, group_input, geometry, cell_m: float,
     new_water_clamped = math_node(tree, "MAXIMUM", new_water.outputs[0], 0.0,
                                   (location[0] + 1880, location[1] + 600))
 
-    # --- 汇水强度：经过本格的水量累积（上游叠加，形成主河道）
-    accumulated = math_node(tree, "ADD", flow, reach_share.outputs[0],
-                            (location[0] + 1560, location[1] + 200))
-    new_flow = math_node(tree, "ADD", accumulated.outputs[0],
-                         new_water_clamped.outputs[0],
-                         (location[0] + 1720, location[1] + 200))
+    # --- 汇水面积 accumulation：**只累加上游流进来的水**，不再叠加自身历史。
+    #
+    # 早期写成 `flow + inflow + water`，每轮无界累加，40 轮后所有格子都被
+    # 推到同一个 37 左右的值，上游信号被淹没、河网完全分化不出来
+    # （实测 flow 只在 32..42 之间波动，p50 与 p99 只差 3.4）。
+    # 正确语义是汇水面积：本格收到的上游来水 + 本格的降雨。
+    # --- 汇水面积（flow）：每格自身产流 1 格，上游把它的汇水面积并进来。
+    #
+    # flow 的物理含义是"上游有多少个格子流经此处"，所以山脊≈1、主河道可到
+    # 几百。早期把每格产流写成 0.02 并加 MINIMUM(flow,1) 削顶，flow 均值只有
+    # 0.064，driver=flow*slope≈0.017，下切比 Houdini 弱 30 倍。
+    #
+    # 正确做法：flow 以"格数"为单位增长，Repeat 迭代 N 次后最长的汇流路径
+    # 能累积到 N 级量级，主河道与坡面自然拉开数量级差。
+    inflow_cells = math_node(tree, "MULTIPLY", reach_share.outputs[0], 8.0,
+                             (location[0] + 1560, location[1] + 120))
+    # 每格自有产流只在第一轮计入：用 "flow 还不够 1 时才补" 的写法。
+    # 直接每轮 +1 会让 40 轮后所有格子都落在 40 附近（实测 40.0..42.7），
+    # 量级差被抹平，河网看不出来。
+    needs_seed = tree.nodes.new("FunctionNodeCompare")
+    needs_seed.location = (location[0] + 1560, location[1] - 20)
+    needs_seed.data_type = "FLOAT"
+    needs_seed.operation = "LESS_THAN"
+    link(tree, flow, needs_seed.inputs["A"])
+    needs_seed.inputs["B"].default_value = 1.0
+    seed_value = switch_float(tree, needs_seed.outputs["Result"], 0.0, 1.0,
+                              (location[0] + 1720, location[1] - 20))
+    grown = math_node(tree, "ADD", flow, inflow_cells.outputs[0],
+                      (location[0] + 1720, location[1] + 160))
+    grown = math_node(tree, "ADD", grown.outputs[0], seed_value,
+                      (location[0] + 1720, location[1] + 60))
+    # 收敛上限：汇水面积不超过总格数，避免长链无界增长。
+    max_cells = float(128 * 128)
+    new_flow = math_node(tree, "MINIMUM", grown.outputs[0], max_cells,
+                         (location[0] + 1880, location[1] + 160))
 
     stored_water = store_attribute(tree, geometry, "water",
                                    new_water_clamped.outputs[0],
@@ -545,15 +574,21 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
     # --- 驱动项：汇水 × 坡度。flow 已经在 Repeat 区里累积了上游来水，
     #     所以主河道（flow 大）下切最狠，坡面（flow≈0）几乎不动。
     #     flow 的量级在 [0, ~1]，坡度是无量纲比值。
-    driver = math_node(tree, "MULTIPLY", flow, slope,
-                       (location[0] + 1580, 1560))
-    # flow 先做饱和压缩，避免主河道无限加深：f/(1+f)。
-    flow_sat = math_node(tree, "DIVIDE", flow,
-                         math_node(tree, "ADD", flow, 1.0,
-                                   (location[0] + 1400, 1420)).outputs[0],
-                         (location[0] + 1580, 1420))
-    driver = math_node(tree, "MULTIPLY", flow_sat.outputs[0], slope,
+    # 汇水权重：直接归一化到 [0,1]（除以当前最大值量级），
+    # 不用 f/(1+f) 饱和——flow 只有 0..0.18，饱和后几乎削平，
+    # 下切被压到 1e-3 量级，实测 97% 的下切其实来自热力侵蚀。
+    # 汇水权重直接用 flow 本身（单位=格数），不做 MINIMUM(flow,1) 削顶：
+    # 一刀切到 1.0 会把山脊和主河道拉平，下切量对 flow 完全不敏感
+    # （实测 flow 从 0.18 变到 5.16，incision 一动不动）。
+    # 用对数压缩保留量级差又避免主河道无限加深。
+    flow_log = math_node(tree, "LOGARITHM", flow,
+                         location=(location[0] + 1400, 1420))
+    flow_log.inputs[1].default_value = 10.0
+    flow_one = math_node(tree, "ADD", flow_log.outputs[0], 1.0,
+                         location=(location[0] + 1560, 1420))
+    driver = math_node(tree, "MULTIPLY", flow_one.outputs[0], slope,
                        (location[0] + 1760, 1480))
+    flow_sat = flow_one
     incision = math_node(tree, "MULTIPLY", driver.outputs[0],
                          strength.outputs[0], (location[0] + 1940, 1600))
     # 换算到归一化高度层
