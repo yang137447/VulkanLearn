@@ -614,11 +614,17 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
   `SetUserParameter(key, value)` / `ClearUserParameter(key)`。预算 scale 为
   `[0,16]`，`maxTotalParticles` 上限 `1_000_000`；用户参数 key 为 `1..64`
   UTF-8 字节且不含 NUL，最多 64 个，value 有限且 `|v| <= 1e6`。
-- 全局数据通道：`Particles.Data` 暴露 `Set(name, value)`、`Clear(name)`、
-  `Get(name)`（缺失返回 null）和 `TryGet(name, out value)`。它写入当前 active
+- 全局数据通道：`Particles.Data` 暴露 `Set(name, float)`、`Set(name, ParticleDataChannelValue)`、
+  `Clear(name)`、`Get(name)`（只读标量通道，缺失或非标量返回 null）和
+  `TryGet(name, out value)`，以及按类型读写的便捷方法：`Float`/`Int`/`Bool`/
+  `Vector2`/`Vector3`/`Vector4`/`Quaternion` 写入，`GetFloat`/`GetInt`/`GetBool`/
+  `GetVector2`/`GetVector3`/`GetVector4`/`GetQuaternion` 读取。`ParticleDataChannelValue`
+  携带 `ParticleDataChannelType`（`Float/Vec2/Vec3/Vec4/Int/Bool/Quat`）与一个
+  `Vector4` 分量载体，`Quat` 是 `(x,y,z,w)`。它写入当前 active
   World 的全局表，不属于任何粒子实例，也不改变 `SetUserParameter` 的逐实例
-  语义；key 为 `1..64` UTF-8 字节且不含 NUL，value 有限且 `|v| <= 1e6`，全局最多
-  64 项。`Set`/`Clear` 经所属 owner 校验后进入 `particleCommands`，同一帧内
+  语义；key 为 `1..64` UTF-8 字节且不含 NUL，所有分量有限且 `|v| <= 1e6`（`Int`
+  必须整数值、`Bool` 只接受 0/1），全局最多 64 项。类型不匹配的读取返回 null，
+  `Set` 已存在且类型不同的通道会整体替换该通道。`Set`/`Clear` 经所属 owner 校验后进入 `particleCommands`，同一帧内
   `Get` 立即看到本地写入；native 在 Play 开始的 `start` 请求中下发一次，并在每个
   `tick` 请求中继续下发 `particleDataChannels` 冻结副本。`Clear` 对不存在的 key
   幂等返回，Console 的缺失 key clear 仍报“未找到”。Stop/Destroy 的 EndPlay 回调仍可读取
@@ -626,7 +632,9 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
   Blueprint 共享的全局镜像，World 通道始终保留；热重载通过 migration snapshot 恢复镜像，
   `OnReload` 可立即读取。
   渲染器在 v2 `$Name` 重解析时以数据通道为基底、逐实例用户参数覆盖同名项；
-  作者资产仍需声明同名默认 `userParameters`，未知引用仍在加载期拒绝。
+  作者资产仍需声明同名默认 `userParameters`，未知引用仍在加载期拒绝。只有标量通道
+  参与 `$Name` 替换。粒子资产的 `materialBindings` 可直接把任意类型通道接到
+  材质/精灵参数，见 `particle-system.md` 的 `materialBindings`。
 - 附着：`AttachTo(targetKind, targetName, component?, localPosition?,
   localRotation?, localScale?)` 与 `Detach()`。`targetKind` 为 `mesh` 或
   `component`；局部 TRS 省略时为零/单位值。目标不存在仍接受命令，但 telemetry

@@ -7017,11 +7017,26 @@ void ParticleRenderer::RecordSimulation(
                 const ParticleDataChannelValue& value = found->second;
                 if (parameter == "baseColor")
                 {
+                    // 颜色通道的数值范围与资产校验一致：RGB 在 [0,64]，
+                    // alpha 在 [0,1]。写进 UBO 前夹取，非法通道值不能把
+                    // 材质推到 HDR 爆亮或负值。
                     readColor(value, uniforms.materialBaseColor);
+                    uniforms.materialBaseColor.head<3>() =
+                        uniforms.materialBaseColor.head<3>()
+                            .cwiseMax(0.0f)
+                            .cwiseMin(64.0f);
+                    uniforms.materialBaseColor.w() = std::clamp(
+                        uniforms.materialBaseColor.w(), 0.0f, 1.0f);
                 }
                 else if (parameter == "color")
                 {
                     readColor(value, uniforms.colorTint);
+                    uniforms.colorTint.head<3>() =
+                        uniforms.colorTint.head<3>()
+                            .cwiseMax(0.0f)
+                            .cwiseMin(64.0f);
+                    uniforms.colorTint.w() =
+                        std::clamp(uniforms.colorTint.w(), 0.0f, 1.0f);
                 }
                 else if (parameter == "emissive")
                 {

@@ -206,18 +206,31 @@ particleuser <system> clear <key>
 
 ```text
 particledata <name> <value>
+particledata <name> vec2 <x> <y>
+particledata <name> vec3 <x> <y> <z>
+particledata <name> vec4 <x> <y> <z> <w>
+particledata <name> quat <x> <y> <z> <w>
+particledata <name> int <value>
+particledata <name> bool <true|false>
 particledata <name> clear
 particledata
 ```
 
-数据通道是当前 active World 的全局命名标量表，与逐实例 `userParameters` 是
-两个命名空间：它最多 64 项，key 为 `1..64` UTF-8 字节且不含 NUL，value 必须有限且
-`|value| <= 1e6`。`particledata` 不带参数时按 key 排序打印当前表的 JSON；
+数据通道是当前 active World 的全局命名**类型化**表，与逐实例 `userParameters` 是
+两个命名空间：它最多 64 项，key 为 `1..64` UTF-8 字节且不含 NUL。每条通道记录
+`float`/`vec2`/`vec3`/`vec4`/`int`/`bool`/`quat` 之一，所有分量必须有限且
+`|v| <= 1e6`；`int` 必须是整数值，`bool` 只接受 0/1 或 `true`/`false`，`quat` 不要求
+归一化（渲染侧按作者值使用）。写入已存在的通道时若类型不同，先前的值被整体替换，
+读取侧（`$Name` 重解析、`materialBindings`、C#）看到的是新类型。不带类型关键字的
+单个 `<value>` 写作 `float`。`particledata` 不带参数时按 key 排序打印当前表的 JSON；
 `clear` 只删除已存在的项，对缺失 key 报“未找到”而不是隐式创建。命令在
 Console 投递前与执行端各校验一次，非法 key/value 或超过上限不会产生 World
 副作用。每个快照通过 `WorldSnapshot::particleDataChannels` 发布冻结副本；
 渲染器在 v2 模块 `$Name` 重解析时把该全局表作为基底，再由逐实例
-`userParameters` 覆盖同名项。
+`userParameters` 覆盖同名项；只有标量通道（`float`/`int`/`bool`，取 x 分量）能参与
+`$Name` 数值替换，向量/四元数通道出现在 `$Name` 位置按未知参数在加载期拒绝。
+`materialBindings` 与 C# 的 `GetFloat/GetInt/GetBool/GetVector*/GetQuaternion`
+按类型读取，类型不匹配的读取返回未找到。
 
 ## Particle Telemetry
 

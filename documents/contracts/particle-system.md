@@ -821,6 +821,57 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   表示程序化外观，非空路径由 `DecalRenderer::Synchronize` 加载并在失败时回退默认纹理。
   `sortOrder` 是 `[0, 255]` 整数。`decal` 必须是对象；缺失、非对象、未知 response
   或任何越界/非有限值都在加载期拒绝。decal 发射器不要求也不需要 `sortParticles`。
+- `renderMode: "skeletalMeshTris"` / `"skeletalMeshBones"`：骨骼网格粒子。两者都通过
+  `mesh.path` 指向骨骼 SM 资产（含 SK/片段），运行时用 `MeshAssetLoader` 导入为
+  `SkeletalAsset`；加载失败与 mesh 相同，回退 billboard 并只告警一次。
+  - `skeletalMeshTris` 为每个粒子输出一个从网格表面采样到的三角面片：中心是面片重心，
+    顶点为重心相对坐标；面法线是网格模型空间叉积。
+  - `skeletalMeshBones` 为每个粒子输出一段骨棒（圆柱薄片）：中心是骨段中点，端点为
+    重心相对坐标，面法线取切线与视线平面的垂线；`skeletalBoneRadius`（默认 `0.35` cm，
+    范围 `[0.01, 100]`）是骨棒半宽。
+  - 两种模式都**没有顶点输入**，逐粒子展开 3/6 个顶点；`maxParticles` 决定同屏面片数量。
+  - GPU skinning：顶点缓冲保存绑定姿态，`particleSkeletalSkin.glsl` 在顶点着色器里按
+    set 2 的关节 palette（每个 swapchain image 一份）与 CSR 影响流计算
+    `Σ w · (model_j · inverseBind_j) · p_bind`。palette 每帧写入当前姿态，因此同一帧的
+    可见网格、CSM/局部阴影 caster 看到完全相同的姿态。
+  - 每 section 独立材质：每个骨骼 section 拥有自己的 `materialInstancePath`（section 的
+    `sectionPlans[].materialInstancePath`，缺失时回退发射器级
+    `materialInstancePath`）、数值参数与四张贴图，绘制时逐 section 绑定 set 1。
+- `skeletalPose`：可选，`{ "clip": "", "time": 0, "rate": 0, "loop": true }`。
+  `clip` 为空时使用绑定/静止姿态；否则必须是资产中存在的片段 id（未知片段在加载期拒绝）。
+  `time` 是起始秒数（`>= 0`），`rate` 是播放倍率（`[-16, 16]`；`0` 表示冻结在该帧），
+  `loop` 决定时钟回绕到片段时长还是夹在末尾。姿态时间由**发射器自己的**
+  `elapsedSeconds` 驱动，因此同一骨骼网格的不同发射器可以停在不同帧。
+- `spawnSource`：可选，`{ "mode": "none", "parentEmitter": "", "parentEvent": "death",
+  "perEvent": 1, "offset": [0,0,0], "normalVelocityScale": 0 }`。
+  - `mode` 可为 `none`、`skeletalTris`、`skeletalBones`、`parentEmitter`。缺省时骨骼粒子
+    renderMode 自动推导为对应的 `skeletalTris`/`skeletalBones`；载入的网格不是骨骼网格时
+    运行期降级为 `none`（回落到形状采样），不会读空源。
+  - 骨骼源的记录由**绑定姿态**的网格烘焙：三角形按面积、骨段按长度累加成前缀和，
+    shader 以总长做逆 CDF 采样，因此大面积三角形/长骨头分到更多粒子；同一帧内每个
+    源项由原子计数器独占，不会出现两个粒子挤在同一面片。
+  - `parentEmitter` 必须指向同一 `PS_*.json` 内另一个存在的发射器名（不能是自身），
+    `parentEvent` 只能是 `spawn`、`death`、`collision`，`perEvent` 在 `[1, 64]`。
+    父发射器每帧最多写 1024 条事件记录；子发射器消费**同一帧**父发射器的事件，
+    模拟顺序按依赖深度排序（与 unordered_map 迭代顺序无关）。`offset` 是加到事件
+    位置上的模拟空间偏移（cm）。
+  - `normalVelocityScale > 0` 时用源法线（三角面法线或骨段轴向）替换作者初速度方向，
+    大小即该值。
+- `dissolve`：可选，mesh（含骨骼网格）粒子的溶解/alpha erosion，
+  `{ "enabled": false, "start": 0.2, "end": 0.9, "edgeWidth": 0.08,
+  "edgeColor": [1,0.35,0.05], "edgeStrength": 4, "noiseScale": 4, "noiseSpeed": 0.6 }`。
+  片元用 4 阶 value-noise FBM 与 `lifeT` 推进的阈值做 `smoothstep` erosion：阈值从
+  `start` 推进到 `end`（都是归一化寿命，`end >= start`），`edgeWidth` 是边缘宽度
+  （`[0, 0.5]`），阈值附近保留 `edgeColor × edgeStrength` 的自发光边缘。顶点阶段同时把
+  顶点沿粒子重心方向按同一段溶解区间微微外推（外推量 = `edgeWidth × 4`，夹到 `[0, 1]`），
+  使面片变透明前略微膨胀。`noiseScale` 在 `(0, 64]`，`noiseSpeed` 在 `[0, 16]`。
+- `materialBindings`：可选，把 World 级 typed Data Channel 绑定到材质/精灵参数。key 只能是
+  `baseColor`、`emissive`、`emissiveStrength`、`roughness`、`metallic`、`opacity` 或
+  `color`，value 是非空通道名。绑定在每个发射器每帧读取 World
+  `particleDataChannels`（通道不存在时保留作者值），数值子集与 MI 数值参数共享同一套
+  范围夹取（`roughness >= 0.02`、`metallic/opacity ∈ [0,1]`，`baseColor` 与 `color`
+  RGBA 通道 `[0, 64]`）。它不是 Material Graph：只覆盖 `ParticleMaterialUniforms` 与
+  `colorTint` 已有的标量/颜色槽位。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
   `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
   "materialInstancePath": "..."? }`。
