@@ -21,9 +21,28 @@ float Fract(float value)
     return value - std::floor(value);
 }
 
+// 晶格点哈希。旧实现是 GLSL 风格的 fract(sin(...))：每个 texel 每层 4 次
+// 超越函数调用，128² 的一页要十几万次 sin，实测 4.2 ms/页——页驻留预算
+// 16 页/帧时就是 68 ms/帧的渲染线程停顿。整数哈希与 sin 哈希同为 [0,1)
+// 均匀分布，但只有乘加和移位；噪声分布不变，只是取样相位不同。
+uint32_t LatticeHash(uint32_t x, uint32_t y)
+{
+    uint32_t hash = x * 1664525u + y * 1013904223u;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bu;
+    hash ^= hash >> 16;
+    return hash;
+}
+
 float Hash(float x, float y)
 {
-    return Fract(std::sin(x * 127.1f + y * 311.7f) * 43758.5453123f);
+    const uint32_t bits = LatticeHash(
+        static_cast<uint32_t>(static_cast<int32_t>(x)),
+        static_cast<uint32_t>(static_cast<int32_t>(y)));
+    // 取高 24 位映射到 [0,1)，保证 float 精确可表示且不出现 1.0。
+    return static_cast<float>(bits >> 8) * (1.0f / 16777216.0f);
 }
 
 float ValueNoise(float x, float y)
@@ -79,6 +98,17 @@ uint8_t GlobalLayerId(
     return layerIdMap[localLayer];
 }
 
+SampleState MakeSampleState(
+    const TerrainAssetDesc& desc,
+    float u,
+    float v,
+    uint32_t resolution,
+    float height,
+    float left,
+    float right,
+    float down,
+    float up);
+
 SampleState SampleAt(
     const TerrainBuildPlan& plan,
     float u,
@@ -104,6 +134,25 @@ SampleState SampleAt(
         desc, image, heightUv.x(), heightUv.y() - heightStepV);
     const float up = TerrainHeightmap::SampleHeightCm(
         desc, image, heightUv.x(), heightUv.y() + heightStepV);
+    return MakeSampleState(desc, u, v, resolution, height, left, right, down, up);
+}
+
+// 由中心/四邻高度构造采样状态。BakeTile 先铺一张 (res+2)² 高度网格再一次
+// 生成，避免每个 texel 重复采样 4 个邻居；SampleAt 保留单点入口给候选层
+// 统计等零散调用。
+SampleState MakeSampleState(
+    const TerrainAssetDesc& desc,
+    float u,
+    float v,
+    uint32_t resolution,
+    float height,
+    float left,
+    float right,
+    float down,
+    float up)
+{
+    const float du = 1.0f / static_cast<float>(resolution);
+    const float dv = du;
     const float worldDx = 2.0f * du * desc.size.x();
     const float worldDz = 2.0f * dv * desc.size.y();
     const Eigen::Vector3f normal = Eigen::Vector3f(
@@ -305,6 +354,36 @@ void BakeTile(
     const uint32_t tileResolution = resolution / tilesPerSide;
     const TerrainHeightmap::MeshUvTransform heightUvTransform =
         TerrainHeightmap::MeshUvTransformFor(plan.desc, *plan.heightmap);
+    const HostImage& image = *plan.heightmap;
+    const uint32_t globalX0 = tileX * tileResolution;
+    const uint32_t globalY0 = tileZ * tileResolution;
+    // 高度网格含 1 texel 边界：每个 texel 的法线用左右/上下邻居做中心差分，
+    // 邻居采样与相邻 texel 的中心采样完全重合。旧实现每 texel 采样 5 次，
+    // 128² 页要 8.2 万次 SampleHeightCm；这里是 (res+2)² ≈ 1.7 万次。
+    const uint32_t gridSide = tileResolution + 2;
+    std::vector<float> heightGrid(
+        static_cast<size_t>(gridSide) * gridSide);
+    {
+        const float du = 1.0f / static_cast<float>(resolution);
+        for (uint32_t gy = 0; gy < gridSide; ++gy)
+        {
+            for (uint32_t gx = 0; gx < gridSide; ++gx)
+            {
+                // 与 SampleAt 的采样位置逐项一致：中心 u/v 及其 ±1 texel。
+                const float u = (static_cast<float>(globalX0) + 0.5f) /
+                        static_cast<float>(resolution) +
+                    (static_cast<float>(static_cast<int32_t>(gx) - 1)) * du;
+                const float v = (static_cast<float>(globalY0) + 0.5f) /
+                        static_cast<float>(resolution) +
+                    (static_cast<float>(static_cast<int32_t>(gy) - 1)) * du;
+                const Eigen::Vector2f heightUv =
+                    heightUvTransform.Apply(u, v);
+                heightGrid[static_cast<size_t>(gy) * gridSide + gx] =
+                    TerrainHeightmap::SampleHeightCm(
+                        plan.desc, image, heightUv.x(), heightUv.y());
+            }
+        }
+    }
     std::vector<float> weights;
     weights.reserve(tile.layerIds.size());
     for (uint32_t y = 0; y < tileResolution; ++y)
@@ -317,7 +396,18 @@ void BakeTile(
                 (static_cast<float>(globalX) + 0.5f) / static_cast<float>(resolution);
             const float v =
                 (static_cast<float>(globalY) + 0.5f) / static_cast<float>(resolution);
-            const SampleState state = SampleAt(plan, u, v, resolution);
+            const size_t rowCenter =
+                static_cast<size_t>(y + 1) * gridSide + (x + 1);
+            const SampleState state = MakeSampleState(
+                plan.desc,
+                u,
+                v,
+                resolution,
+                heightGrid[rowCenter],
+                heightGrid[rowCenter - 1],
+                heightGrid[rowCenter + 1],
+                heightGrid[rowCenter - gridSide],
+                heightGrid[rowCenter + gridSide]);
 
             weights.clear();
             for (uint8_t layerId : tile.layerIds)
@@ -461,6 +551,29 @@ TerrainPageData TerrainWeightMapBuilder::BuildPage(
         layerIdMap,
         plan.desc.layers.size());
     return result;
+}
+
+TerrainTileCandidateList TerrainWeightMapBuilder::BuildPageCandidates(
+    const TerrainBuildPlan& plan,
+    uint32_t tilesPerSide,
+    uint32_t pageResolution,
+    uint32_t tileX,
+    uint32_t tileZ)
+{
+    if (!plan.heightmap || plan.desc.layers.empty() || plan.desc.layers.size() > 256)
+        throw std::runtime_error("Terrain page requires a heightmap and 1..256 layers");
+    if (tilesPerSide == 0 || pageResolution == 0 || tileX >= tilesPerSide || tileZ >= tilesPerSide)
+        throw std::runtime_error("Terrain page tile is outside the terrain");
+    const uint64_t resolution64 =
+        static_cast<uint64_t>(tilesPerSide) * static_cast<uint64_t>(pageResolution);
+    if (resolution64 > 8192)
+        throw std::runtime_error("Terrain page resolution is too large");
+    return BuildTileCandidates(
+        plan,
+        static_cast<uint32_t>(resolution64),
+        tilesPerSide,
+        tileX,
+        tileZ);
 }
 
 TerrainVirtualTexture TerrainWeightMapBuilder::BuildVirtualTexture(

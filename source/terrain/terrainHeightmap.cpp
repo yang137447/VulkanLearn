@@ -111,6 +111,13 @@ float SampleNormalized(const HostImage& image, float u, float v)
     return top + (bottom - top) * fy;
 }
 
+float ReadNormalizedPixel(const HostImage& image, uint32_t x, uint32_t y)
+{
+    if (x >= image.width || y >= image.height || image.data.empty())
+        throw std::runtime_error("Terrain heightmap pixel is out of bounds");
+    return ReadPixel(image, x, y);
+}
+
 float SampleHeightCm(
     const TerrainAssetDesc& desc,
     const HostImage& image,

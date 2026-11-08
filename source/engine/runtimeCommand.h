@@ -82,6 +82,9 @@ enum class RuntimeCommandType
     // 当前帧实际出图数。只读诊断，不改渲染状态。
     ReportTerrainChunkStatistics,
     ReportTerrainCollisionStatistics,
+    // Console `terrain parity [tileX tileZ]`：同一覆盖页 CPU/GPU 烘焙逐 texel
+    // 比较；intValue = tileX * 32 + tileZ，渲染线程帧边界同步执行一次。
+    RunTerrainPageBakeParity,
     SetTerrainResidentCapacity,
     // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
     SetTerrainLayerResidentCapacity,

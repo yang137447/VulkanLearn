@@ -71,6 +71,16 @@ public:
         uint32_t tileZ,
         const std::vector<uint8_t>& layerIdMap = {});
 
+    // 只计算一个 page 的候选层（局部层号，不重映射到 globalId）。
+    // GPU 烘焙把这份列表作为 job 输入，保证与 CPU BuildPage 的
+    // SelectTop4 输入顺序完全一致；列表为空时 GPU 侧按层 0 兜底。
+    static TerrainTileCandidateList BuildPageCandidates(
+        const TerrainBuildPlan& plan,
+        uint32_t tilesPerSide,
+        uint32_t pageResolution,
+        uint32_t tileX,
+        uint32_t tileZ);
+
     static TerrainVirtualTexture BuildVirtualTexture(
         const TerrainBuildPlan& plan,
         uint32_t tilesPerSide,

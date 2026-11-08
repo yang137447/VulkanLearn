@@ -29,6 +29,7 @@ namespace VL
 class RendererBackendVulkan;
 class TerrainFeedbackGpuRing;
 class TerrainLayerFeedbackGpuRing;
+class TerrainPageBakeGpu;
 struct RendererResourceLoadContext;
 
 struct TerrainPageGpuResources
@@ -162,6 +163,10 @@ struct TerrainStreamingStats
     // 累计成功写入 GPU 的 atlas 页数，以及本帧实际提交的页数。
     uint64_t uploadedPagesTotal = 0;
     uint32_t lastUploadedPages = 0;
+    // GPU compute 烘焙页（与 CPU preload/atlas upload 分开统计）。
+    uint64_t gpuBakedPagesTotal = 0;
+    uint32_t lastGpuBakedPages = 0;
+    uint32_t pendingGpuBakeJobs = 0;
     uint64_t lastFeedbackEpoch = 0;
     TerrainFeedbackApplyStats lastFeedbackApply;
     // L2 层页统计：atlas 已创建但 shader 尚未消费，用于确认布局/预算。
@@ -302,6 +307,9 @@ struct TerrainStreamingState
     // 每帧上传 ring；BuildUploadBatch 的 CPU 快照写进当前 frameIndex 的槽位，
     // 在 scene pass 前随主帧提交。
     std::shared_ptr<TerrainUploadGpuRing> uploadRing;
+    // 覆盖页 GPU 烘焙：输入 SSBO + 每帧输出 buffer + compute pipeline。
+    // 为 null 时 pageManager 保持 CPU 烘焙路径。
+    std::shared_ptr<TerrainPageBakeGpu> pageBake;
     // World 级共享层表定义；GPU layerResources.layerTable 由它生成。
     // S1 起这是 registry 的全局层列表（globalId == 下标），不再是首个 TR 的
     // 局部层列表。
@@ -320,6 +328,8 @@ struct TerrainStreamingState
     TerrainFeedbackApplyStats latestFeedbackApply;
     uint64_t uploadedPagesTotal = 0;
     uint32_t lastUploadedPages = 0;
+    uint64_t gpuBakedPagesTotal = 0;
+    uint32_t lastGpuBakedPages = 0;
     uint64_t layerUploadedPagesTotal = 0;
     uint64_t layerUploadedBytesTotal = 0;
     // 本帧成功 Commit 的层页数；PublishStats 后清零，只显示一帧。

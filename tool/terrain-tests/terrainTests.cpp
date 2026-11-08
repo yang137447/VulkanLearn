@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -3181,6 +3182,50 @@ TEST(TerrainFeedbackApply, HonorsPerFrameLimitAndRotatesDeferredRequests)
     EXPECT_EQ(second.deferredRequests, 1u);
     EXPECT_EQ(pending.size(), 3u);
     EXPECT_EQ(pending.front().deferredRequestCount, 0u);
+}
+
+TEST(TerrainFeedbackApply, DedupesFullPageTableByStablePageIndex)
+{
+    // 满页表 + 全 miss 是首屏驻留的最坏输入：旧实现每个 miss 页都线性扫描
+    // pendingRequests 并比较 placementId，实测 72 ms/帧。这里锁定去重的
+    // 结构语义：同一页只入队一次，且每个请求都解析到稳定的页下标。
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(0, 0, 0);
+    VL::TerrainBuildPlan plan = MakePagePlan(32);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 1;
+    summary.pages.reserve(1024);
+    for (uint32_t y = 0; y < 32; ++y)
+        for (uint32_t x = 0; x < 32; ++x)
+            summary.pages.push_back({x, y, 100, true, 1});
+
+    std::vector<VL::TerrainPageRequest> pending;
+    const VL::TerrainFeedbackApplyStats first =
+        manager.ApplyFeedback(summary, 0, 0, pending);
+    EXPECT_EQ(first.queuedRequests, 1024u);
+    ASSERT_EQ(pending.size(), 1024u);
+
+    // 同一份反馈重复到达：只能提升 priority，不能重复入队。
+    const VL::TerrainFeedbackApplyStats second =
+        manager.ApplyFeedback(summary, 0, 0, pending);
+    EXPECT_EQ(second.queuedRequests, 0u);
+    ASSERT_EQ(pending.size(), 1024u);
+
+    constexpr uint32_t kInvalidPageIndex =
+        std::numeric_limits<uint32_t>::max();
+    std::set<uint32_t> pageIndices;
+    for (const VL::TerrainPageRequest& request : pending)
+    {
+        ASSERT_NE(request.pageIndex, kInvalidPageIndex);
+        EXPECT_TRUE(pageIndices.insert(request.pageIndex).second);
+        const VL::TerrainPageManager::PageState* state =
+            manager.FindPageByVirtual(request.tileX, request.tileZ);
+        ASSERT_NE(state, nullptr);
+        EXPECT_EQ(state->key.placementId, path);
+    }
 }
 
 TEST(TerrainPageManager, QuarantineBlocksSlotUntilReleaseEpoch)

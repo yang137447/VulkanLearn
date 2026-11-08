@@ -14,6 +14,22 @@ namespace VL
 
 struct TerrainUploadBatch;
 
+// 一次 GPU 页烘焙请求。CPU 只负责描述目标 tile/物理槽位与候选层列表，
+// 128² 的逐 texel ID/权重由 compute shader 生成。
+struct TerrainPageBakeJob
+{
+    uint64_t jobId = 0;
+    uint32_t pageIndex = 0;
+    uint32_t registrationIndex = 0;
+    uint32_t tileX = 0;
+    uint32_t tileZ = 0;
+    uint32_t physicalPageX = 0;
+    uint32_t physicalPageY = 0;
+    uint64_t contentRevision = 0;
+    // 局部层号；与 CPU BuildPage 的 BuildTileCandidates 输出顺序一致。
+    std::vector<uint8_t> candidateLayers;
+};
+
 // C2c/P3：World 级地形页管理器的 CPU 侧 residency/eviction 与 streaming 决策。
 // 虚拟页（页表项所在位置）与物理页（atlas 槽位）是两套坐标：
 //   virtualPage   = registration.pageOrigin + 本地 tile，决定 texCoord1 查表位置；
@@ -102,6 +118,12 @@ public:
         // 连续请求失败的次数；用于同优先级 miss 的轮转，避免高优先级页
         // 长期抢不到安全槽位时把其他页饿死。
         uint32_t deferredRequestCount = 0;
+        // 候选层在注册/编辑提交时预计算；GPU 烘焙 job 直接消费它，
+        // 渲染线程不再做任何 16×16 高度/绘制探测。
+        std::vector<uint8_t> candidateLayers;
+        // GPU 烘焙页的 CPU atlas 镜像没有随之更新；L4a 覆盖页推导
+        // 需要 CPU 内容时必须显式重建一次。
+        bool cpuContentValid = true;
     };
 
     struct Stats
@@ -174,6 +196,13 @@ public:
         const Registration& registration,
         uint32_t tilesPerSide = 2,
         uint32_t priority = 0);
+
+    // Renderer 创建 GPU 烘焙资源后打开；默认关闭，保证纯 CPU 单测/preload
+    // 仍走 TerrainWeightMapBuilder::BuildPage。
+    void SetGpuPageBakeEnabled(bool enabled) { gpuPageBakeEnabled = enabled; }
+    bool GpuPageBakeEnabled() const { return gpuPageBakeEnabled; }
+    // 当前等待随下一批上传一起提交的 GPU 烘焙 job 数。
+    size_t PendingGpuBakeJobCount() const { return pendingGpuBakeJobs.size(); }
 
     // 未驻留时按 tile 生成 page 数据并写入 atlas；frame 参与 LRU，priority 只升不降。
     // 第一个参数是 placementId（见 Registration::placementId），不是 assetPath。
@@ -327,6 +356,7 @@ public:
     const PageState* FindPage(const PageKey& key) const;
     const PageState* FindPageByVirtual(uint32_t virtualPageX, uint32_t virtualPageY) const;
     const std::vector<PageState>& Pages() const { return pages; }
+    const std::vector<TerrainBuildPlan>& Plans() const { return plans; }
 
     // L4a：读取一个覆盖页的 top-4 层 ID/权重（RGBA8，PageResolution²）。
     // 常驻页直接读 CPU atlas 镜像；allowRebuild=true 且页未驻留时用与
@@ -337,6 +367,8 @@ public:
         bool allowRebuild,
         std::vector<uint8_t>& ids,
         std::vector<uint8_t>& weights) const;
+    // GPU 烘焙页的 CPU atlas 镜像是否可信；L4a 回退据此决定是否重建。
+    bool PageHasCpuContent(const PageKey& key) const;
 
     uint32_t ResidentCount() const { return residentCount; }
     uint64_t RequestCount() const { return stats.requestCount; }
@@ -373,7 +405,9 @@ public:
     // 不直接清 dirty；GPU 提交成功后才 Commit，失败则 Abort 只解 pin、保留 dirty。
     // maxAtlasPages = 0 表示不限；非 0 时按物理槽位升序截断，并把“指向被截断
     // 物理槽位”的页表项一起留下，保证页表不会先于 atlas 内容生效。
-    TerrainUploadBatch BuildUploadBatch(uint32_t maxAtlasPages = 0);
+    TerrainUploadBatch BuildUploadBatch(
+        uint32_t maxAtlasPages = 0,
+        uint32_t maxGpuBakeJobs = 0);
     void CommitUploadBatch(const TerrainUploadBatch& batch);
     void AbortUploadBatch(const TerrainUploadBatch& batch);
 
@@ -394,7 +428,8 @@ private:
         PageState& page,
         uint64_t frame,
         uint32_t priority,
-        uint64_t completedEpoch);
+        uint64_t completedEpoch,
+        bool gpuBake);
     bool EvictPageAt(PageState& page);
     bool AllocatePhysicalSlot(
         uint32_t& physicalPageX,
@@ -411,6 +446,14 @@ private:
     size_t FindEvictionCandidateIndex(uint64_t completedEpoch) const;
     void MarkPageTableDirty(uint32_t virtualPageX, uint32_t virtualPageY);
     void MarkAtlasPageDirty(uint32_t physicalPageX, uint32_t physicalPageY);
+    // 已有页状态时的命中标记：feedback 每帧要处理上千页，不能再按 PageKey
+    // （含 std::string）线性查找。
+    bool MarkPageUsedAtEpoch(
+        PageState& page,
+        uint64_t epoch,
+        uint32_t priority);
+    PageState* PageAtIndex(uint32_t pageIndex);
+    const PageState* PageAtIndex(uint32_t pageIndex) const;
     PageState* FindPageByVirtualMutable(uint32_t virtualPageX, uint32_t virtualPageY);
     PageState* FindPageByPhysicalMutable(uint32_t physicalPageX, uint32_t physicalPageY);
     const TerrainBuildPlan* FindPlan(const std::string& placementId) const;
@@ -421,6 +464,9 @@ private:
         uint32_t physicalPageY,
         const std::vector<uint8_t>& atlas,
         std::vector<uint8_t>& destination) const;
+    // 预计算/刷新一个 placement 的所有页候选层；GPU job 只读这份缓存。
+    void RebuildPlacementPageCandidates(size_t registrationIndex);
+    void RemovePendingGpuBakeJobsForPage(uint32_t pageIndex);
 
     std::vector<uint8_t> pageTable;
     std::vector<uint8_t> idAtlas;
@@ -447,6 +493,14 @@ private:
     // registrations/plans/layerIdMaps 三者索引一一对应。
     std::vector<std::vector<uint8_t>> layerIdMaps;
     std::vector<PageState> pages;
+    // 虚拟页槽位 -> pages 下标。pages 只追加不删除，因此下标在整个 manager
+    // 生命周期内稳定；feedback 每帧的“可见页 -> 页状态”必须 O(1)。
+    std::vector<uint32_t> pageIndexByVirtual;
+    // 已创建但尚未随主帧提交的 GPU 烘焙 job；BuildUploadBatch 冻结快照，
+    // Commit 后按 jobId 删除，Abort 则保留供下一帧重试。
+    std::vector<TerrainPageBakeJob> pendingGpuBakeJobs;
+    uint64_t nextGpuBakeJobId = 1;
+    bool gpuPageBakeEnabled = false;
     Stats stats;
     uint32_t residentCount = 0;
     uint32_t freePhysicalSlotCount = UsablePhysicalSlotCount;
@@ -465,13 +519,17 @@ struct TerrainUploadBatch
     uint64_t batchId = 0;
     std::vector<TerrainPageManager::PageTableUpload> pageTableUploads;
     std::vector<TerrainPageManager::AtlasPageUpload> atlasUploads;
+    // 与 pageTableUploads 同批提交的 GPU 烘焙 job；输出 buffer 的槽位
+    // 下标就是本 vector 的下标。
+    std::vector<TerrainPageBakeJob> gpuBakeJobs;
     // Build 时本批次实际增加的 pin（每页去重一次）；Commit/Abort 只解除这些，
     // 不碰调用方或其他批次已经持有的 pin。
     std::vector<TerrainPageManager::PageKey> newlyPinnedPages;
 
     bool Empty() const noexcept
     {
-        return pageTableUploads.empty() && atlasUploads.empty();
+        return pageTableUploads.empty() && atlasUploads.empty() &&
+            gpuBakeJobs.empty();
     }
 };
 

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "terrain/terrainWeightMap.h"
@@ -14,6 +15,14 @@ namespace
 {
 
 constexpr size_t InvalidIndex = static_cast<size_t>(-1);
+// pages 下标无效值；TerrainPageRequest::pageIndex 用它表示“尚未解析”。
+constexpr uint32_t InvalidPageIndex = std::numeric_limits<uint32_t>::max();
+
+size_t VirtualPageSlot(uint32_t virtualPageX, uint32_t virtualPageY)
+{
+    return static_cast<size_t>(virtualPageY) * TerrainPageManager::PageTableSize +
+        virtualPageX;
+}
 
 // BuildUploadBatch 的 pin 去重：同一页可能同时出现在页表与 atlas 上传里，
 // 本批只增加一次 pin 并记录一次，Commit/Abort 才不会重复解 pin。
@@ -58,6 +67,7 @@ void TerrainPageManager::EnsureStorage()
     physicalAtlasDirty.assign(static_cast<size_t>(PageSlotCount), 0);
     virtualPageTableRevision.assign(static_cast<size_t>(PageSlotCount), 0);
     physicalAtlasRevision.assign(static_cast<size_t>(PageSlotCount), 0);
+    pageIndexByVirtual.assign(static_cast<size_t>(PageSlotCount), InvalidPageIndex);
     freePhysicalSlotCount = UsablePhysicalSlotCount;
 }
 
@@ -130,6 +140,8 @@ void TerrainPageManager::RegisterTerrain(
             page.virtualPageX = globalX;
             page.virtualPageY = globalY;
             pages.push_back(std::move(page));
+            pageIndexByVirtual[VirtualPageSlot(globalX, globalY)] =
+                static_cast<uint32_t>(pages.size() - 1);
         }
     }
 
@@ -141,6 +153,9 @@ void TerrainPageManager::RegisterTerrain(
     registrations.push_back(std::move(registration));
     plans.push_back(plan);
     layerIdMaps.push_back(layerIdMap);
+    // 候选层是 GPU job 的输入，放在注册期一次算完；渲染线程请求页时
+    // 只读缓存，不再做 16×16 高度/绘制探测。
+    RebuildPlacementPageCandidates(registrations.size() - 1);
 
     // C2b 兼容：默认注册即全量常驻；测试和多地形按需加载可以关闭 preload。
     if (!preload) return;
@@ -170,6 +185,7 @@ void TerrainPageManager::UpdateLayerPaint(
             "Terrain layer paint dimensions do not match the registered layer table: " +
             placementId);
     plans[index].layerPaint = std::move(paint);
+    RebuildPlacementPageCandidates(index);
 }
 
 void TerrainPageManager::UpdateHeightmap(
@@ -197,6 +213,7 @@ void TerrainPageManager::UpdateHeightmap(
             "heightmap: " + placementId);
     }
     plans[index].heightmap = std::move(heightmap);
+    RebuildPlacementPageCandidates(index);
 }
 
 void TerrainPageManager::InvalidatePlacementPages(const std::string& placementId)
@@ -287,28 +304,37 @@ const TerrainPageManager::PageState* TerrainPageManager::FindPage(const PageKey&
     return nullptr;
 }
 
+TerrainPageManager::PageState* TerrainPageManager::PageAtIndex(uint32_t pageIndex)
+{
+    if (pageIndex >= pages.size())
+        return nullptr;
+    return &pages[pageIndex];
+}
+
+const TerrainPageManager::PageState* TerrainPageManager::PageAtIndex(
+    uint32_t pageIndex) const
+{
+    if (pageIndex >= pages.size())
+        return nullptr;
+    return &pages[pageIndex];
+}
+
 TerrainPageManager::PageState* TerrainPageManager::FindPageByVirtualMutable(
     uint32_t virtualPageX,
     uint32_t virtualPageY)
 {
-    for (PageState& page : pages)
-    {
-        if (page.virtualPageX == virtualPageX && page.virtualPageY == virtualPageY)
-            return &page;
-    }
-    return nullptr;
+    if (virtualPageX >= PageTableSize || virtualPageY >= PageTableSize)
+        return nullptr;
+    return PageAtIndex(pageIndexByVirtual[VirtualPageSlot(virtualPageX, virtualPageY)]);
 }
 
 const TerrainPageManager::PageState* TerrainPageManager::FindPageByVirtual(
     uint32_t virtualPageX,
     uint32_t virtualPageY) const
 {
-    for (const PageState& page : pages)
-    {
-        if (page.virtualPageX == virtualPageX && page.virtualPageY == virtualPageY)
-            return &page;
-    }
-    return nullptr;
+    if (virtualPageX >= PageTableSize || virtualPageY >= PageTableSize)
+        return nullptr;
+    return PageAtIndex(pageIndexByVirtual[VirtualPageSlot(virtualPageX, virtualPageY)]);
 }
 
 const TerrainBuildPlan* TerrainPageManager::FindPlan(
@@ -351,7 +377,7 @@ bool TerrainPageManager::ReadPageLayers(
 {
     const PageState* page = FindPage(key);
     if (page == nullptr) return false;
-    if (page->resident)
+    if (page->resident && page->cpuContentValid)
     {
         // 常驻页的 CPU atlas 镜像与 GPU 上传内容同源，避免再采样一次高度图。
         CopyAtlasPage(page->physicalPageX, page->physicalPageY, idAtlas, ids);
@@ -375,6 +401,12 @@ bool TerrainPageManager::ReadPageLayers(
     ids = data.ids;
     weights = data.weights;
     return true;
+}
+
+bool TerrainPageManager::PageHasCpuContent(const PageKey& key) const
+{
+    const PageState* page = FindPage(key);
+    return page != nullptr && page->cpuContentValid;
 }
 
 TerrainPageManager::PageState* TerrainPageManager::FindPageByPhysicalMutable(
@@ -479,19 +511,42 @@ bool TerrainPageManager::MakeResident(
     PageState& page,
     uint64_t frame,
     uint32_t priority,
-    uint64_t completedEpoch)
+    uint64_t completedEpoch,
+    bool gpuBake)
 {
     const Registration& registration = registrations[registrationIndex];
-    // 只烘焙当前 tile，避免为了一个页复制整张地形权重图。
-    const TerrainPageData data = TerrainWeightMapBuilder::BuildPage(
-        plans[registrationIndex],
-        registration.tilesPerSide,
-        PageResolution,
-        page.key.tileX,
-        page.key.tileZ,
-        LayerIdMapForPlanIndex(registrationIndex));
+    // CPU 路径先烘焙再占槽，避免烘焙抛异常时泄漏槽位；GPU 路径不在这里
+    // 烘焙，槽位分配失败直接返回，job 尚未入队。
+    TerrainPageData data;
+    if (!gpuBake)
+    {
+        data = TerrainWeightMapBuilder::BuildPage(
+            plans[registrationIndex],
+            registration.tilesPerSide,
+            PageResolution,
+            page.key.tileX,
+            page.key.tileZ,
+            LayerIdMapForPlanIndex(registrationIndex));
+    }
+    // GPU job 的候选层也必须先算好：如果这里抛异常，物理槽位还没有分配，
+    // 不会留下 occupancy 已置位但没有驻留页的泄漏状态。
+    std::vector<uint8_t> gpuCandidates;
+    if (gpuBake)
+    {
+        gpuCandidates = page.candidateLayers;
+        if (gpuCandidates.empty())
+        {
+            gpuCandidates =
+                TerrainWeightMapBuilder::BuildPageCandidates(
+                    plans[registrationIndex],
+                    registration.tilesPerSide,
+                    PageResolution,
+                    page.key.tileX,
+                    page.key.tileZ).layerIds;
+            page.candidateLayers = gpuCandidates;
+        }
+    }
 
-    // 烘焙成功后再占用物理槽位，避免烘焙抛异常时泄漏槽位。
     uint32_t physicalPageX = 0;
     uint32_t physicalPageY = 0;
     if (!AllocatePhysicalSlot(physicalPageX, physicalPageY, completedEpoch))
@@ -508,22 +563,46 @@ bool TerrainPageManager::MakeResident(
     pageTable[pageEntry + 3] = 255;
     MarkPageTableDirty(page.virtualPageX, page.virtualPageY);
 
-    for (uint32_t y = 0; y < PageResolution; ++y)
+    if (gpuBake)
     {
-        const size_t srcOffset = static_cast<size_t>(y) * PageResolution * 4;
-        const size_t dstOffset =
-            ((static_cast<size_t>(physicalPageY) * PageResolution + y) * AtlasResolution +
-             static_cast<size_t>(physicalPageX) * PageResolution) * 4;
-        std::memcpy(
-            idAtlas.data() + dstOffset,
-            data.ids.data() + srcOffset,
-            static_cast<size_t>(PageResolution) * 4);
-        std::memcpy(
-            weightAtlas.data() + dstOffset,
-            data.weights.data() + srcOffset,
-            static_cast<size_t>(PageResolution) * 4);
+        // 只记录 job + 页表项。atlas 内容由 compute 写进 per-frame
+        // storage buffer，再走现有 buffer→image copy。
+        TerrainPageBakeJob job;
+        job.jobId = nextGpuBakeJobId++;
+        job.pageIndex = static_cast<uint32_t>(&page - pages.data());
+        job.registrationIndex = static_cast<uint32_t>(registrationIndex);
+        job.tileX = page.key.tileX;
+        job.tileZ = page.key.tileZ;
+        job.physicalPageX = physicalPageX;
+        job.physicalPageY = physicalPageY;
+        job.candidateLayers = std::move(gpuCandidates);
+        page.contentRevision += 1;
+        job.contentRevision = page.contentRevision;
+        pendingGpuBakeJobs.push_back(std::move(job));
+        page.cpuContentValid = false;
+        // 不标记 atlas dirty；GPU job 是这条物理槽位的唯一内容来源。
     }
-    MarkAtlasPageDirty(physicalPageX, physicalPageY);
+    else
+    {
+        for (uint32_t y = 0; y < PageResolution; ++y)
+        {
+            const size_t srcOffset = static_cast<size_t>(y) * PageResolution * 4;
+            const size_t dstOffset =
+                ((static_cast<size_t>(physicalPageY) * PageResolution + y) * AtlasResolution +
+                 static_cast<size_t>(physicalPageX) * PageResolution) * 4;
+            std::memcpy(
+                idAtlas.data() + dstOffset,
+                data.ids.data() + srcOffset,
+                static_cast<size_t>(PageResolution) * 4);
+            std::memcpy(
+                weightAtlas.data() + dstOffset,
+                data.weights.data() + srcOffset,
+                static_cast<size_t>(PageResolution) * 4);
+        }
+        MarkAtlasPageDirty(physicalPageX, physicalPageY);
+        page.cpuContentValid = true;
+        ++page.contentRevision;
+    }
 
     page.resident = true;
     page.lastUsedFrame = frame;
@@ -537,7 +616,6 @@ bool TerrainPageManager::MakeResident(
     // 新驻留页同样算一次“最近触碰”，避免它带着上一次淘汰前的旧 epoch
     // 一出生就成为 epoch-aware LRU 的最老候选。
     page.lastTouchedEpoch = std::max(page.lastTouchedEpoch, residentEpoch);
-    ++page.contentRevision;
     page.priority = priority;
     ++residentCount;
     return true;
@@ -621,7 +699,12 @@ bool TerrainPageManager::RequestPageInternal(
     const uint64_t allocationEpoch =
         useEpochWindow ? completedEpoch : std::numeric_limits<uint64_t>::max();
     return MakeResident(
-        registrationIndex, *page, frame, priority, allocationEpoch);
+        registrationIndex,
+        *page,
+        frame,
+        priority,
+        allocationEpoch,
+        gpuPageBakeEnabled && useEpochWindow);
 }
 
 bool TerrainPageManager::MarkUsed(
@@ -657,6 +740,20 @@ bool TerrainPageManager::SetPagePriority(
 }
 
 bool TerrainPageManager::MarkPageUsedAtEpoch(
+    PageState& page,
+    uint64_t epoch,
+    uint32_t priority)
+{
+    if (!page.resident) return false;
+    page.lastSeenEpoch = std::max(page.lastSeenEpoch, epoch);
+    // recency 与安全窗分开记录：lastSeenEpoch 决定“能否淘汰”，
+    // lastTouchedEpoch 决定“同优先级/同窗口内先淘汰谁”。
+    page.lastTouchedEpoch = std::max(page.lastTouchedEpoch, epoch);
+    page.priority = std::max(page.priority, priority);
+    return true;
+}
+
+bool TerrainPageManager::MarkPageUsedAtEpoch(
     const std::string& placementId,
     uint32_t tileX,
     uint32_t tileZ,
@@ -668,13 +765,7 @@ bool TerrainPageManager::MarkPageUsedAtEpoch(
     key.tileX = tileX;
     key.tileZ = tileZ;
     PageState* page = FindPageMutable(key);
-    if (!page || !page->resident) return false;
-    page->lastSeenEpoch = std::max(page->lastSeenEpoch, epoch);
-    // recency 与安全窗分开记录：lastSeenEpoch 决定“能否淘汰”，
-    // lastTouchedEpoch 决定“同优先级/同窗口内先淘汰谁”。
-    page->lastTouchedEpoch = std::max(page->lastTouchedEpoch, epoch);
-    page->priority = std::max(page->priority, priority);
-    return true;
+    return page != nullptr && MarkPageUsedAtEpoch(*page, epoch, priority);
 }
 
 bool TerrainPageManager::CanEvictPageAt(
@@ -865,9 +956,12 @@ bool TerrainPageManager::EvictPageAt(PageState& page)
     ++physicalAtlasRevision[physicalSlot];
     // 只隔离物理槽位；virtualReserved 保留，避免其他地形注册到同一虚拟坐标。
     QuarantinePhysicalSlot(physicalPageX, physicalPageY, page.lastSeenEpoch);
+    RemovePendingGpuBakeJobsForPage(
+        static_cast<uint32_t>(&page - pages.data()));
     page.resident = false;
     page.physicalPageX = 0;
     page.physicalPageY = 0;
+    page.cpuContentValid = true;
     ++page.contentRevision;
     --residentCount;
     ++stats.evictionCount;
@@ -1034,6 +1128,55 @@ void TerrainPageManager::CopyAtlasPage(
     }
 }
 
+void TerrainPageManager::RebuildPlacementPageCandidates(
+    size_t registrationIndex)
+{
+    if (registrationIndex >= plans.size() ||
+        registrationIndex >= registrations.size())
+        return;
+    const TerrainBuildPlan& plan = plans[registrationIndex];
+    const Registration& registration = registrations[registrationIndex];
+    const bool canBuild =
+        plan.heightmap && !plan.desc.layers.empty() &&
+        plan.desc.layers.size() <= 256 && registration.tilesPerSide != 0;
+    for (PageState& page : pages)
+    {
+        if (page.key.placementId != registration.placementId)
+            continue;
+        page.candidateLayers.clear();
+        if (!canBuild)
+            continue;
+        try
+        {
+            page.candidateLayers =
+                TerrainWeightMapBuilder::BuildPageCandidates(
+                    plan,
+                    registration.tilesPerSide,
+                    PageResolution,
+                    page.key.tileX,
+                    page.key.tileZ).layerIds;
+        }
+        catch (const std::exception&)
+        {
+            // 预计算失败不改变注册语义；真正请求该页时仍走原错误路径。
+            page.candidateLayers.clear();
+        }
+    }
+}
+
+void TerrainPageManager::RemovePendingGpuBakeJobsForPage(uint32_t pageIndex)
+{
+    pendingGpuBakeJobs.erase(
+        std::remove_if(
+            pendingGpuBakeJobs.begin(),
+            pendingGpuBakeJobs.end(),
+            [pageIndex](const TerrainPageBakeJob& job)
+            {
+                return job.pageIndex == pageIndex;
+            }),
+        pendingGpuBakeJobs.end());
+}
+
 bool TerrainPageManager::CollectDirtyUploads(
     std::vector<PageTableUpload>& pageTableUploads,
     std::vector<AtlasPageUpload>& atlasUploads)
@@ -1131,12 +1274,28 @@ bool TerrainPageManager::ConsumeDirtyUploads(
     return true;
 }
 
-TerrainUploadBatch TerrainPageManager::BuildUploadBatch(uint32_t maxAtlasPages)
+TerrainUploadBatch TerrainPageManager::BuildUploadBatch(
+    uint32_t maxAtlasPages,
+    uint32_t maxGpuBakeJobs)
 {
     TerrainUploadBatch batch;
     batch.batchId = nextUploadBatchId++;
-    if (!CollectDirtyUploads(batch.pageTableUploads, batch.atlasUploads))
+    const bool hasCpuUploads =
+        CollectDirtyUploads(batch.pageTableUploads, batch.atlasUploads);
+    // job 是冻结快照；Commit 才真正从 pending 列表移除，Abort 会保留。
+    batch.gpuBakeJobs = pendingGpuBakeJobs;
+    if (!hasCpuUploads && batch.gpuBakeJobs.empty())
         return batch;
+
+    std::unordered_set<uint32_t> deferredJobPages;
+    if (maxGpuBakeJobs != 0 && batch.gpuBakeJobs.size() > maxGpuBakeJobs)
+    {
+        // 输出 buffer 槽位有限时只提交前 N 个；被留下的 job 连页表项一起
+        // 推迟，避免 GPU 页表先指向尚未烘焙的物理槽位。
+        for (size_t index = maxGpuBakeJobs; index < batch.gpuBakeJobs.size(); ++index)
+            deferredJobPages.insert(batch.gpuBakeJobs[index].pageIndex);
+        batch.gpuBakeJobs.resize(maxGpuBakeJobs);
+    }
 
     if (maxAtlasPages != 0 && batch.atlasUploads.size() > maxAtlasPages)
     {
@@ -1167,6 +1326,22 @@ TerrainUploadBatch TerrainPageManager::BuildUploadBatch(uint32_t maxAtlasPages)
                 }),
             batch.pageTableUploads.end());
     }
+    if (!deferredJobPages.empty())
+    {
+        batch.pageTableUploads.erase(
+            std::remove_if(
+                batch.pageTableUploads.begin(),
+                batch.pageTableUploads.end(),
+                [this, &deferredJobPages](const PageTableUpload& upload)
+                {
+                    const PageState* page =
+                        FindPageByVirtual(upload.virtualPageX, upload.virtualPageY);
+                    return page != nullptr &&
+                        deferredJobPages.count(static_cast<uint32_t>(
+                            page - pages.data())) != 0;
+                }),
+            batch.pageTableUploads.end());
+    }
 
     // pin 本批真正涉及到的页：页表项对应的虚拟页和 atlas 页当前所属的常驻页。
     // 页表项与 atlas 上传可能指向同一页，按 PageKey 去重；原本已经 pin 的页
@@ -1183,6 +1358,8 @@ TerrainUploadBatch TerrainPageManager::BuildUploadBatch(uint32_t maxAtlasPages)
             FindPageByPhysicalMutable(upload.physicalPageX, upload.physicalPageY),
             batch);
     }
+    for (const TerrainPageBakeJob& job : batch.gpuBakeJobs)
+        PinUploadBatchPage(PageAtIndex(job.pageIndex), batch);
     return batch;
 }
 
@@ -1193,6 +1370,22 @@ void TerrainPageManager::CommitUploadBatch(const TerrainUploadBatch& batch)
     // 只有 revision 未变的槽位会被 CommitDirtyUploads 清 dirty；
     // 收集后又被改脏的页继续保持 dirty，等下一批携带新内容上传。
     CommitDirtyUploads(batch.pageTableUploads, batch.atlasUploads);
+    if (!batch.gpuBakeJobs.empty())
+    {
+        std::unordered_set<uint64_t> committed;
+        committed.reserve(batch.gpuBakeJobs.size());
+        for (const TerrainPageBakeJob& job : batch.gpuBakeJobs)
+            committed.insert(job.jobId);
+        pendingGpuBakeJobs.erase(
+            std::remove_if(
+                pendingGpuBakeJobs.begin(),
+                pendingGpuBakeJobs.end(),
+                [&committed](const TerrainPageBakeJob& job)
+                {
+                    return committed.count(job.jobId) != 0;
+                }),
+            pendingGpuBakeJobs.end());
+    }
     for (const PageKey& key : batch.newlyPinnedPages)
         UnpinPage(key.placementId, key.tileX, key.tileZ);
 }
@@ -1206,6 +1399,7 @@ void TerrainPageManager::AbortUploadBatch(const TerrainUploadBatch& batch)
 
 bool TerrainPageManager::HasDirtyUploads() const
 {
+    if (!pendingGpuBakeJobs.empty()) return true;
     if (virtualPageTableDirty.empty() || physicalAtlasDirty.empty()) return false;
     return std::any_of(
                virtualPageTableDirty.begin(), virtualPageTableDirty.end(),
@@ -1223,24 +1417,44 @@ TerrainFeedbackApplyStats TerrainPageManager::ApplyFeedback(
 {
     TerrainFeedbackApplyStats stats;
 
+    // 挂起请求按页状态下标索引。旧实现为每个 miss 页线性扫描
+    // pendingRequests 并比较 std::string placementId，最坏是
+    // “可见页数 × 挂起请求数”≈ 每帧 100 万次字符串比较（实测 72 ms/帧，
+    // 把首屏驻留拖成 ~8 秒 13 fps）。pages 只追加不删除，下标稳定，
+    // 因此这里用哈希表把去重和 priority 提升都降成 O(1)。
+    std::unordered_map<uint32_t, uint32_t> queuedByPageIndex;
+    queuedByPageIndex.reserve(pendingRequests.size() + summary.pages.size());
+    for (uint32_t requestIndex = 0;
+         requestIndex < pendingRequests.size();
+         ++requestIndex)
+    {
+        TerrainPageRequest& request = pendingRequests[requestIndex];
+        if (request.pageIndex == InvalidPageIndex)
+        {
+            // 兼容由旧路径/测试直接按 PageKey 构造的请求：只解析一次。
+            const PageKey key{
+                request.placementId, request.tileX, request.tileZ};
+            const PageState* state = FindPage(key);
+            if (state == nullptr)
+                continue;
+            request.pageIndex = static_cast<uint32_t>(state - pages.data());
+        }
+        queuedByPageIndex.emplace(request.pageIndex, requestIndex);
+    }
+
     // 1. 先处理本帧反馈：命中页推进 lastSeenEpoch；miss 页按虚拟坐标入队。
     //    summary.pages 已按 priority 降序，但 pending 会跨帧保留，仍需重新排序。
     for (const TerrainFeedbackPageRecord& page : summary.pages)
     {
-        const PageState* state =
-            FindPageByVirtual(page.virtualPageX, page.virtualPageY);
+        PageState* state =
+            FindPageByVirtualMutable(page.virtualPageX, page.virtualPageY);
         if (state == nullptr)
         {
             // 未注册页（例如 M_pbr 地形）只统计，不请求、不抛错。
             ++stats.unregisteredPages;
             continue;
         }
-        if (MarkPageUsedAtEpoch(
-                state->key.placementId,
-                state->key.tileX,
-                state->key.tileZ,
-                summary.copiedEpoch,
-                page.priority))
+        if (MarkPageUsedAtEpoch(*state, summary.copiedEpoch, page.priority))
         {
             ++stats.markedPages;
         }
@@ -1250,28 +1464,27 @@ TerrainFeedbackApplyStats TerrainPageManager::ApplyFeedback(
         if (state->resident)
             continue;
 
-        bool alreadyQueued = false;
-        for (TerrainPageRequest& request : pendingRequests)
+        const uint32_t pageIndex =
+            static_cast<uint32_t>(state - pages.data());
+        const auto queuedIt = queuedByPageIndex.find(pageIndex);
+        if (queuedIt != queuedByPageIndex.end())
         {
-            if (request.placementId == state->key.placementId &&
-                request.tileX == state->key.tileX &&
-                request.tileZ == state->key.tileZ)
-            {
-                request.priority = std::max(
-                    request.priority,
-                    static_cast<uint32_t>(page.priority));
-                alreadyQueued = true;
-                break;
-            }
-        }
-        if (alreadyQueued)
+            TerrainPageRequest& request =
+                pendingRequests[queuedIt->second];
+            request.priority = std::max(
+                request.priority,
+                static_cast<uint32_t>(page.priority));
             continue;
+        }
 
         TerrainPageRequest request;
         request.placementId = state->key.placementId;
         request.tileX = state->key.tileX;
         request.tileZ = state->key.tileZ;
+        request.pageIndex = pageIndex;
         request.priority = page.priority;
+        queuedByPageIndex.emplace(
+            pageIndex, static_cast<uint32_t>(pendingRequests.size()));
         pendingRequests.push_back(std::move(request));
         ++stats.queuedRequests;
     }
@@ -1293,9 +1506,7 @@ TerrainFeedbackApplyStats TerrainPageManager::ApplyFeedback(
             pendingRequests.end(),
             [this, &visiblePages](const TerrainPageRequest& request)
             {
-                const PageKey key{
-                    request.placementId, request.tileX, request.tileZ};
-                const PageState* state = FindPage(key);
+                const PageState* state = PageAtIndex(request.pageIndex);
                 if (state == nullptr || state->resident)
                     return true;
                 const uint32_t pageKey =

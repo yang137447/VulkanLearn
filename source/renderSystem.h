@@ -153,6 +153,9 @@ public:
     // L4e：调试用强制目标 mip（-1 = 自动，0..4 = 覆盖）。只影响 mode 1；
     // 写入 streaming state 的 atomic，渲染线程帧首应用到 M_terrain/feedback。
     void RequestTerrainLayerForceMip(int forceMip);
+    // 控制台 `terrain parity [tileX tileZ]`：渲染线程空闲时对同一页分别做
+    // CPU 与 GPU 烘焙并逐 texel 比较。调试入口，会同步等待一次 GPU。
+    void RequestTerrainPageBakeParity(int tileX, int tileZ);
     // 正常 Console `hair trace` 的 GT 侧入口：只记录值语义请求，由渲染线程在
     // RecordHairSimulation 中转发给 HairSimulationPass。GT 与渲染线程在
     // workerThreadCount=2 时并发，因此用互斥量保护这唯一一个待消费槽。
@@ -556,6 +559,7 @@ private:
     void PublishTerrainStreamingStats(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
         uint64_t completedEpoch);
+    void RunTerrainPageBakeParityIfRequested();
 
     struct TerrainFeedbackReport
     {
@@ -597,6 +601,9 @@ private:
     // GT RuntimeClock 原始 delta 的跨线程累加器；RT 每帧 exchange(0) 取走。
     // 用 atomic 是因为 GT/RT 可能并行运行；CAS 累加见 SetSimulationFrameDeltas。
     std::atomic<float> windPendingDeltaSeconds{0.0f};
+    std::atomic<bool> terrainPageBakeParityRequested{false};
+    std::atomic<int32_t> terrainPageBakeParityTileX{0};
+    std::atomic<int32_t> terrainPageBakeParityTileZ{0};
     // 不足一个 1/60 s 步长的余量；超过 0.25 s 的长卡顿只追 15 步，避免 gust 一次性补发。
     double windTickAccumulator = 0.0;
     VL::SceneWindRuntime sceneWindRuntime;

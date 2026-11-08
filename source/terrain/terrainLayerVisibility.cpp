@@ -176,7 +176,12 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
         {
             std::vector<uint8_t> ids;
             std::vector<uint8_t> weights;
-            const bool allowRebuild = rebuildBudget != 0 && !page->resident;
+            // GPU 烘焙页没有同步更新 CPU atlas 镜像；L4a 回退第一次读到
+            // 这类页时仍需 CPU 重建一次，之后由 coverPageCache 复用。
+            const bool allowRebuild =
+                rebuildBudget != 0 &&
+                (!page->resident ||
+                 !coverPages.PageHasCpuContent(page->key));
             if (!coverPages.ReadPageLayers(
                     page->key, allowRebuild, ids, weights))
             {

@@ -36,6 +36,7 @@
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainPageBakeGpu.h"
 #include "render/resource/terrainFeedbackGpu.h"
 #include "render/resource/terrainLayerFeedbackGpu.h"
 #include "render/resource/resourceRetireQueue.h"
@@ -51,6 +52,7 @@
 #include "world/world.h"
 #include "scene/sceneAssetTypes.h"
 #include "terrain/terrainPageManager.h"
+#include "terrain/terrainWeightMap.h"
 #include "terrain/terrainLayerTable.h"
 
 namespace
@@ -1235,6 +1237,157 @@ void RenderSystem::RequestScreenshot(std::string path)
     pendingScreenshotPath = std::move(path);
 }
 
+void RenderSystem::RequestTerrainPageBakeParity(int tileX, int tileZ)
+{
+    terrainPageBakeParityTileX.store(tileX, std::memory_order_relaxed);
+    terrainPageBakeParityTileZ.store(tileZ, std::memory_order_relaxed);
+    terrainPageBakeParityRequested.store(true, std::memory_order_release);
+}
+
+void RenderSystem::RunTerrainPageBakeParityIfRequested()
+{
+    if (!terrainPageBakeParityRequested.exchange(
+            false, std::memory_order_acquire))
+        return;
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming || streaming->pageManager.Registrations().empty())
+    {
+        std::cout << "[TerrainParity] No registered terrain placement."
+                  << std::endl;
+        return;
+    }
+    if (!streaming->pageBake || !streaming->pageBake->Available())
+    {
+        std::cout << "[TerrainParity] GPU page bake unavailable: "
+                  << (streaming->pageBake
+                          ? streaming->pageBake->UnavailableReason()
+                          : std::string("resource not created"))
+                  << std::endl;
+        return;
+    }
+
+    VL::TerrainPageManager& pageManager = streaming->pageManager;
+    const VL::TerrainPageManager::Registration& registration =
+        pageManager.Registrations().front();
+    int tileX = terrainPageBakeParityTileX.load(std::memory_order_relaxed);
+    int tileZ = terrainPageBakeParityTileZ.load(std::memory_order_relaxed);
+    if (tileX < 0 || tileZ < 0 ||
+        static_cast<uint32_t>(tileX) >= registration.tilesPerSide ||
+        static_cast<uint32_t>(tileZ) >= registration.tilesPerSide)
+    {
+        tileX = 0;
+        tileZ = 0;
+    }
+
+    try
+    {
+        const VL::TerrainBuildPlan& plan = pageManager.Plans().front();
+        const VL::TerrainPageData cpu =
+            VL::TerrainWeightMapBuilder::BuildPage(
+                plan,
+                registration.tilesPerSide,
+                VL::TerrainPageManager::PageResolution,
+                static_cast<uint32_t>(tileX),
+                static_cast<uint32_t>(tileZ),
+                pageManager.PlacementLayerIdMap(plan.placementId.empty()
+                    ? plan.desc.assetPath : plan.placementId));
+
+        std::vector<uint8_t> gpuIds;
+        std::vector<uint8_t> gpuWeights;
+        std::string error;
+        if (!streaming->pageBake->BakePageSync(
+                pageManager,
+                0,
+                static_cast<uint32_t>(tileX),
+                static_cast<uint32_t>(tileZ),
+                gpuIds,
+                gpuWeights,
+                error))
+        {
+            std::cout << "[TerrainParity] GPU bake failed: " << error
+                      << std::endl;
+            return;
+        }
+
+        size_t idMismatchBytes = 0;
+        size_t weightMismatchBytes = 0;
+        size_t mismatchedTexels = 0;
+        uint32_t worstIdDiff = 0;
+        uint32_t worstWeightDiff = 0;
+        const size_t texelCount =
+            static_cast<size_t>(VL::TerrainPageManager::PageResolution) *
+            VL::TerrainPageManager::PageResolution;
+        if (cpu.ids.size() != gpuIds.size() ||
+            cpu.weights.size() != gpuWeights.size())
+        {
+            std::cout << "[TerrainParity] Size mismatch cpuIds="
+                      << cpu.ids.size() << " gpuIds=" << gpuIds.size()
+                      << " cpuWeights=" << cpu.weights.size()
+                      << " gpuWeights=" << gpuWeights.size() << std::endl;
+            return;
+        }
+        for (size_t index = 0; index < cpu.ids.size(); ++index)
+        {
+            const uint32_t idDiff = static_cast<uint32_t>(
+                std::abs(static_cast<int>(cpu.ids[index]) -
+                         static_cast<int>(gpuIds[index])));
+            const uint32_t weightDiff = static_cast<uint32_t>(
+                std::abs(static_cast<int>(cpu.weights[index]) -
+                         static_cast<int>(gpuWeights[index])));
+            if (idDiff != 0) ++idMismatchBytes;
+            if (weightDiff != 0) ++weightMismatchBytes;
+            worstIdDiff = std::max(worstIdDiff, idDiff);
+            worstWeightDiff = std::max(worstWeightDiff, weightDiff);
+        }
+        for (size_t texel = 0; texel < texelCount; ++texel)
+        {
+            const size_t base = texel * 4;
+            bool mismatch = false;
+            for (size_t channel = 0; channel < 4; ++channel)
+            {
+                if (cpu.ids[base + channel] != gpuIds[base + channel] ||
+                    cpu.weights[base + channel] != gpuWeights[base + channel])
+                {
+                    mismatch = true;
+                    break;
+                }
+            }
+            if (mismatch) ++mismatchedTexels;
+        }
+
+        size_t paintedTexels = 0;
+        if (plan.layerPaint && !plan.layerPaint->Empty())
+        {
+            for (uint8_t opacity : plan.layerPaint->opacity)
+            {
+                if (opacity != 0) ++paintedTexels;
+            }
+        }
+        std::cout << "[TerrainParity] placement=" << registration.placementId
+                  << " tile=" << tileX << "," << tileZ
+                  << " layers=" << plan.desc.layers.size()
+                  << " paintNonZeroTexels=" << paintedTexels
+                  << " cpuBakeCandidates=" << cpu.candidates.layerIds.size()
+                  << std::endl;
+        std::cout << "[TerrainParity] idMismatchBytes=" << idMismatchBytes
+                  << " weightMismatchBytes=" << weightMismatchBytes
+                  << " mismatchedTexels=" << mismatchedTexels
+                  << "/" << texelCount
+                  << " worstIdDiff=" << worstIdDiff
+                  << " worstWeightDiff=" << worstWeightDiff
+                  << " result="
+                  << ((idMismatchBytes == 0 && weightMismatchBytes == 0)
+                          ? "PASS" : "FAIL")
+                  << std::endl;
+    }
+    catch (const std::exception& exception)
+    {
+        std::cout << "[TerrainParity] Exception: " << exception.what()
+                  << std::endl;
+    }
+}
+
 void RenderSystem::ConsumeTerrainFeedback(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming,
     uint64_t completedEpoch,
@@ -1712,6 +1865,10 @@ void RenderSystem::PublishTerrainStreamingStats(
     stats.preloadDeferredCount = pageManager.PreloadDeferredCount();
     stats.uploadedPagesTotal = streaming->uploadedPagesTotal;
     stats.lastUploadedPages = streaming->lastUploadedPages;
+    stats.gpuBakedPagesTotal = streaming->gpuBakedPagesTotal;
+    stats.lastGpuBakedPages = streaming->lastGpuBakedPages;
+    stats.pendingGpuBakeJobs =
+        static_cast<uint32_t>(pageManager.PendingGpuBakeJobCount());
     stats.lastFeedbackEpoch = streaming->lastConsumedFeedbackEpoch;
     stats.lastFeedbackApply = streaming->latestFeedbackApply;
     // L2 层页：与覆盖页完全独立的一组驻留/上传计数。
@@ -1865,6 +2022,9 @@ void RenderSystem::ReportTerrainStatistics() const
         << " preloadDeferred=" << stats.preloadDeferredCount
         << " uploadedPages=" << stats.uploadedPagesTotal
         << " lastUploaded=" << stats.lastUploadedPages
+        << " gpuBakedPages=" << stats.gpuBakedPagesTotal
+        << " lastGpuBaked=" << stats.lastGpuBakedPages
+        << " gpuBakePending=" << stats.pendingGpuBakeJobs
         << " lastFeedbackEpoch=" << stats.lastFeedbackEpoch
         << std::endl;
     std::cout
@@ -4281,6 +4441,9 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         throw std::runtime_error("RenderSystem renderer backend is not set");
     }
 
+    // 调试 parity 命令在帧边界执行；内部 WaitIdle + 单次 submit。
+    RunTerrainPageBakeParityIfRequested();
+
     const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
     if (consumedSnapshot)
     {
@@ -4643,6 +4806,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     VL::TerrainUploadTransaction terrainUploadTransaction;
     VL::TerrainLayerUploadTransaction terrainLayerUploadTransaction;
     uint32_t terrainUploadPageCount = 0;
+    uint32_t terrainGpuBakeJobCount = 0;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport
         ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
@@ -4725,7 +4889,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         {
             VL::TerrainUploadBatch uploadBatch =
                 terrainFeedbackStreaming->pageManager.BuildUploadBatch(
-                    terrainFeedbackStreaming->maxUploadPagesPerFrame);
+                    terrainFeedbackStreaming->maxUploadPagesPerFrame,
+                    VL::TerrainPageBakeGpu::MaxJobsPerFrame);
             if (!uploadBatch.Empty())
             {
                 try
@@ -4734,6 +4899,17 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                         terrainFeedbackStreaming->uploadRing->Write(
                             frameIndex,
                             uploadBatch);
+                    // compute 先烘焙 job 对应的物理槽位；buffer→image copy
+                    // 与页表上传仍在同一个主帧 command buffer、scene pass 之前。
+                    if (terrainFeedbackStreaming->pageBake &&
+                        !uploadBatch.gpuBakeJobs.empty())
+                    {
+                        terrainFeedbackStreaming->pageBake->Record(
+                            commandBuffer,
+                            frameIndex,
+                            uploadBatch.gpuBakeJobs,
+                            terrainFeedbackStreaming->pageResources);
+                    }
                     VL::RecordTerrainPageUploads(
                         commandBuffer,
                         terrainFeedbackStreaming->pageResources,
@@ -4741,7 +4917,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                         terrainFeedbackStreaming->uploadRing->Buffer(frameIndex),
                         offsets);
                     terrainUploadPageCount =
-                        static_cast<uint32_t>(uploadBatch.atlasUploads.size());
+                        static_cast<uint32_t>(
+                            uploadBatch.atlasUploads.size() +
+                            uploadBatch.gpuBakeJobs.size());
+                    terrainGpuBakeJobCount =
+                        static_cast<uint32_t>(uploadBatch.gpuBakeJobs.size());
                     terrainUploadTransaction.Begin(
                         terrainFeedbackStreaming,
                         std::move(uploadBatch));
@@ -5007,6 +5187,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     {
         terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;
         terrainFeedbackStreaming->lastUploadedPages = terrainUploadPageCount;
+        terrainFeedbackStreaming->gpuBakedPagesTotal += terrainGpuBakeJobCount;
+        terrainFeedbackStreaming->lastGpuBakedPages = terrainGpuBakeJobCount;
         PublishTerrainStreamingStats(
             terrainFeedbackStreaming,
             frameContext.completedEpoch);

@@ -542,6 +542,20 @@ World 中摆放多次，只要对象名不同。
   dirty 并只释放本批 pin。每帧最多上传
   `TerrainPageManager::MaxUploadPagesPerFrame` = 8 个 atlas 页，剩余 dirty 下一帧继续。
   默认路径没有 `device.waitIdle()`，也没有逐页 submit。
+- 生产 `RequestPageAtEpoch` 的页内容烘焙在 GPU compute 上完成
+  （`source/render/resource/terrainPageBakeGpu.*`，
+  `shader/glsl/terrain/terrainPageBake.comp`）：`MakeResident` 只分配物理槽位、
+  写页表项并入队一条 `TerrainPageBakeJob`，不再同步调用
+  `TerrainWeightMapBuilder::BuildPage`。每帧 `BuildUploadBatch` 把 job 快照放进
+  batch；`RenderSystem` 在 scene pass 前按 job 绑定 SSBO 并 dispatch
+  （`local_size=16×16`、每页 8×8 个 workgroup），随后一次 compute→transfer
+  barrier，把 per-frame **device-local** storage buffer 用现有
+  buffer→image copy 路径写进 `layerIds`/`layerWeights`，再录制页表上传。
+  全程同一个主帧 command buffer，不等待 GPU；`SubmitFrame` 成功后才删除 pending
+  job，失败保留到下一帧。`RequestPage`（preload/测试/离线）仍走原 CPU 实现。
+  每个 placement 的归一化高度图、层参数、`.vlpaint` weights/opacity 在 GPU 侧
+  常驻 SSBO；paint opacity 按每 4 texel 打包成一个 uint。候选层列表在
+  `RegisterTerrain` 及 sculpt/paint 提交后预计算，渲染线程不做 16×16 探测。
 - P3 的 `ApplyFeedback` 在 feedback 回读完成后执行：已注册命中页调用
   `MarkPageUsedAtEpoch(copiedEpoch, priority)`，同时推进 `lastSeenEpoch`（安全窗）
   与 `lastTouchedEpoch`（epoch-aware LRU recency）；已注册 miss 页进入跨帧 `pendingPageRequests`
@@ -550,7 +564,8 @@ World 中摆放多次，只要对象名不同。
   失败项保留到下一帧并记录 `deferredRequests`。未注册虚拟页（例如 M_pbr 地形）只计数、
   不请求、不抛错。pending 队列每帧按当前 feedback 可见页清理：相机移走后不可见的旧
   miss 不再占用烘焙预算，重新可见时会再次入队。新请求页在同帧 `BuildUploadBatch`
-  中上传。只有同时具备 `TR.layers` 且材质绑定 `layerTable` 的地形才设置
+  中提交；GPU 烘焙页只上传页表项，atlas 内容来自同批 compute 输出。只有同时具备
+  `TR.layers` 且材质绑定 `layerTable` 的地形才设置
   `terrainFeedbackEligible`；layerless 的 M_pbr/M_unlit 地形不进入 feedback，
   也不在 `TerrainPageManager` 注册，因此不会误推进其他地形的页。
 - 物理槽位淘汰不再清零/上传 atlas：`EvictPageAt` 只让页表失效并清理该槽位未发布的
@@ -582,7 +597,8 @@ World 中摆放多次，只要对象名不同。
   被引用或 pin 的页不能被淘汰。`uploadPinCount` 是计数而不是 bool：重叠上传批次
   各自持有一份 pin，任意一批 Commit/Abort 只释放自己那一次。
 - `RequestPageAtEpoch` 是 streaming 入口：容量/物理槽位不足时只淘汰已过安全窗的页，
-  没有安全候选就返回 false；旧 `RequestPage` 保留给 preload/加载期，仍走无窗口 LRU。
+  没有安全候选就返回 false；GPU 烘焙启用时它只入队 job，不执行 CPU 烘焙。
+  旧 `RequestPage` 保留给 preload/加载期，仍走无窗口 LRU 和 CPU `BuildPage`。
   新驻留页的 `lastSeenEpoch` 取本帧已提交 epoch（`currentFrame+1`，与 feedback
   frameTag 同源）；加载期还没有提交过时退回已消费 feedback epoch。
 - `RenderSystem` 在每帧 `BeginFrame` 后**先**把 `feedbackSubmittedEpoch`、
@@ -844,9 +860,11 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 
 - 对每个有效覆盖页记录，`TerrainPageManager::FindPageByVirtual` 找到 placement/tile；
   未注册虚拟页跳过并计入 `skippedCoverPages`。
-- 覆盖页的 top-4 ID/权重来自 `TerrainPageManager::ReadPageLayers`：常驻页直接读
-  CPU atlas 镜像；非驻留页用同一 `TerrainWeightMapBuilder::BuildPage` kernel 临时
-  重建（不写 atlas、不改变驻留状态）。重建每帧最多
+- 覆盖页的 top-4 ID/权重来自 `TerrainPageManager::ReadPageLayers`：CPU 烘焙的
+  常驻页直接读 CPU atlas 镜像；GPU 烘焙页没有同步的 CPU 镜像
+  （`PageHasCpuContent=false`），第一次被 L4a 读到时会用同一
+  `TerrainWeightMapBuilder::BuildPage` kernel 临时重建一次（不写 atlas、不改变
+  驻留状态），之后由 cover-page cache 复用。非驻留页同样重建。重建每帧最多
   `maxCoverPageRebuildsPerFrame`（默认 4）张，其余下一帧再试。
 - 每个 texel 的 4 个槽位按层号累加权重并除以 texel 数，得到该层的页内平均覆盖率；
   低于 `minLayerWeight`（0.05）的层丢弃，最多保留覆盖率最高的 4 层。
@@ -1179,7 +1197,8 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
 - 控制台 `terrainfeedback` 打印最近一次已完成回读的 `epoch/tag/validTexels/
   distinctPages/missPages/maxPriority/staleTexels` 和前 8 个高优先级页。
   `terrain stats` 打印驻留/预算/虚拟页/可立即分配空槽位/隔离槽位/请求/
-  `requestHits`/未命中/淘汰/preload deferred/累计与最近一帧上传页数，以及最近一次
+  `requestHits`/未命中/淘汰/preload deferred/累计与最近一帧上传页数/
+  GPU 烘焙累计与最近一帧页数/待提交 job 数，以及最近一次
   ApplyFeedback 的 `feedbackHits`/missPages/queued/attempted/accepted/deferred/
   unregistered/pending。`requestHits` 只表示 `RequestPage` 命中；GPU 可见页命中应看
   `feedbackHits`（即 ApplyFeedback 的 markedPages）。stats 发布前会先回收已到期的

@@ -27,6 +27,7 @@
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/terrainFeedbackGpu.h"
 #include "render/resource/terrainLayerFeedbackGpu.h"
+#include "render/resource/terrainPageBakeGpu.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "terrain/terrainPageManager.h"
 #include "terrain/terrainLayerRegistry.h"
@@ -541,6 +542,25 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         // 初始 2×2 页会写脏页表和 atlas；这一整批就是 streaming state 的初始版本。
         terrainStreaming->NotifyContentChanged();
         ApplyTerrainStreamingUploads(*rendererBackend, *terrainStreaming);
+
+        // CPU 初始页上传完成后打开 GPU 烘焙：之后所有 RequestPageAtEpoch
+        // 只记录 job，渲染线程不再同步烘焙 128² 层权重。
+        terrainStreaming->pageBake =
+            std::make_shared<TerrainPageBakeGpu>(
+                *rendererBackend,
+                *pipelineFactory,
+                terrainPageManager);
+        if (terrainStreaming->pageBake->Available())
+        {
+            terrainPageManager.SetGpuPageBakeEnabled(true);
+        }
+        else
+        {
+            std::cerr
+                << "[Terrain] Falling back to CPU page bake: "
+                << terrainStreaming->pageBake->UnavailableReason()
+                << std::endl;
+        }
     }
     if (hasTerrainLayers)
     {

@@ -120,6 +120,10 @@ struct TerrainPageRequest
     std::string placementId;
     uint32_t tileX = 0;
     uint32_t tileZ = 0;
+    // TerrainPageManager 内的稳定页下标；pages 只追加不删除，下标在 manager
+    // 生命周期内有效。pending 去重与可见性检查走本字段，避免每帧对
+    // placementId 字符串做线性扫描。
+    uint32_t pageIndex = 0xFFFFFFFFu;
     uint32_t priority = 0;
     uint32_t deferredRequestCount = 0;
 };

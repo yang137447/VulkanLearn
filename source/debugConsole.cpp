@@ -869,7 +869,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
         if (!(commandStream >> action))
         {
             std::cout
-                << "Usage: terrain <stats|capacity N>"
+                << "Usage: terrain <stats|capacity N|parity [tileX tileZ]>"
                 << std::endl;
             return;
         }
@@ -894,10 +894,30 @@ void DebugConsole::ProcessCommand(const std::string& line)
                 VL::RuntimeCommandType::SetTerrainResidentCapacity;
             runtimeCommand.intValue = capacity;
         }
+        else if (action == "parity")
+        {
+            int tileX = 0;
+            int tileZ = 0;
+            if (commandStream >> tileX)
+            {
+                if (!(commandStream >> tileZ))
+                    tileZ = 0;
+            }
+            if (tileX < 0 || tileX > 31 || tileZ < 0 || tileZ > 31)
+            {
+                std::cout
+                    << "Usage: terrain parity [tileX tileZ] (0..31)"
+                    << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::RunTerrainPageBakeParity;
+            runtimeCommand.intValue = tileX * 32 + tileZ;
+        }
         else
         {
             std::cout
-                << "Usage: terrain <stats|capacity N>"
+                << "Usage: terrain <stats|capacity N|parity [tileX tileZ]>"
                 << std::endl;
             return;
         }
@@ -1127,6 +1147,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
     std::cout << "  terrain stats - report terrain residency/upload statistics\n";
+    std::cout << "  terrain parity [x z] - compare CPU/GPU bake for one page\n";
     std::cout << "  terrain capacity N - set resident page budget for the active World\n";
     std::cout << "  terrainfeedback - report completed terrain feedback page statistics (read-only)\n";
     std::cout << "  terrainlayerstats - report layer-page atlas residency/format statistics\n";

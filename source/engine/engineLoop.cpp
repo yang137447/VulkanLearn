@@ -52,6 +52,7 @@
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainPageBakeGpu.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
@@ -1698,6 +1699,11 @@ void EngineLoop::ApplyQueuedUiActions()
                             terrainPaintSession->PaintData());
                         streaming->pageManager.InvalidatePlacementPages(
                             terrainPaintSessionPlacementId);
+                        if (streaming->pageBake)
+                        {
+                            streaming->pageBake->RefreshPlacement(
+                                terrainPaintSessionPlacementId);
+                        }
                     }
                     catch (const std::exception& exception)
                     {
@@ -2328,6 +2334,8 @@ bool EngineLoop::ApplyTerrainEditUpdate(World& world)
             streaming->pageManager.UpdateHeightmap(
                 update.placementId, update.heightmap);
             streaming->pageManager.InvalidatePlacementPages(update.placementId);
+            if (streaming->pageBake)
+                streaming->pageBake->RefreshPlacement(update.placementId);
         }
         catch (const std::exception& exception)
         {

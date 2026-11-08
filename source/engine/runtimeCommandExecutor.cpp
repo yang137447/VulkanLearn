@@ -935,6 +935,11 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::ReportTerrainCollisionStatistics:
         executionResult.terrainCollisionStatisticsRequested = true;
         break;
+    case RuntimeCommandType::RunTerrainPageBakeParity:
+        renderSystem.RequestTerrainPageBakeParity(
+            command.intValue / 32,
+            command.intValue % 32);
+        break;
     case RuntimeCommandType::SetTerrainResidentCapacity:
         // 只写 active streaming state 的 atomic；真正的 page manager 变更在
         // 渲染线程帧首消费，避免 GT 与渲染线程同时改驻留状态。
