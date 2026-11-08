@@ -510,8 +510,22 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     }
     if (!terrainPageManager.Registrations().empty())
     {
+        // 驻留预算必须覆盖整个世界，否则 LRU 会在世界内部切出一条直线：
+        // 一侧的页常驻、另一侧永远缺页（实测 4×4 tile × 8×8 页 = 1024 页，
+        // 而默认预算只有 512，近半张图的层权重读成 0）。
+        // 上限是全部物理槽位数（1024）。
+        uint32_t registeredPages = 0;
+        for (const TerrainPageManager::Registration& registration :
+             terrainPageManager.Registrations())
+        {
+            registeredPages +=
+                registration.tilesPerSide * registration.tilesPerSide;
+        }
         terrainPageManager.SetResidentCapacity(
-            TerrainPageManager::DefaultResidentCapacity);
+            ComputeTerrainResidentCapacity(
+                registeredPages,
+                TerrainPageManager::DefaultResidentCapacity,
+                TerrainPageManager::UsablePhysicalSlotCount));
         CreateTerrainPageAtlasGpuResources(
             *rendererBackend,
             terrainStreaming->pageResources);

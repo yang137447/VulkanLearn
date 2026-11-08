@@ -174,13 +174,14 @@ TEST(TerrainPageManagerP31, ReclaimExpiredQuarantinesUpdatesCountsIdempotently)
     EXPECT_EQ(manager.PhysicalSlotReleaseEpoch(0, 0), 0u);
     EXPECT_TRUE(manager.IsPhysicalSlotAvailable(0, 0, 13));
 
-    // 重复调用不重复计数；fallback 物理槽位永远不可回收/分配。
+    // 重复调用不重复计数。
     EXPECT_EQ(manager.ReclaimExpiredQuarantines(13), 0u);
     EXPECT_EQ(manager.ReclaimExpiredQuarantines(
                   std::numeric_limits<uint64_t>::max()), 0u);
-    EXPECT_FALSE(manager.IsPhysicalSlotAvailable(
-        VL::TerrainPageManager::FallbackPageX,
-        VL::TerrainPageManager::FallbackPageY,
+    // 不再保留 fallback 物理槽位：最后一个槽位同样是可分配的普通槽位。
+    EXPECT_TRUE(manager.IsPhysicalSlotAvailable(
+        VL::TerrainPageManager::PageTableSize - 1,
+        VL::TerrainPageManager::PageTableSize - 1,
         std::numeric_limits<uint64_t>::max()));
 }
 

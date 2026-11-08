@@ -213,6 +213,17 @@ struct TerrainStreamingStats
     std::array<uint32_t, 3> layerFallbackLevelPages{};
     // 有效 feedback texel 的目标 mip 分布（回退级分布的基准）。
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerTargetMipSlots{};
+    // 全局 mip 预算：容量上限、去重页集总页数、页集数、被预算夹住的
+    // 细化次数，以及可见需求/去重页集各自的 mip 分布。
+    uint32_t layerPageBudget = 0;
+    uint32_t layerBudgetPages = 0;
+    uint32_t layerBudgetSets = 0;
+    uint32_t layerBudgetClampedRefinements = 0;
+    bool layerBudgetExceeded = false;
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1>
+        layerBudgetEntriesByMip{};
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1>
+        layerBudgetSetsByMip{};
     std::array<uint32_t, TerrainLayerMaxMipLevel + 1> layerMipRequestCounts{};
     uint32_t layerDirtyPages = 0;
     uint32_t layerDirtyPageTableEntries = 0;

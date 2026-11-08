@@ -177,6 +177,20 @@ consume + 录制 + 提交 + present 统一计入 `renderRecord`，`submitPresent
 随帧率上限明显下降，说明它此前主要是在等 GPU/swapchain；若基本不变，则剩余部分更可能是
 渲染线程 CPU 工作。契约只记录这一归属，不在运行时尝试进一步拆分。
 
+### Present 模式与 `other`
+
+`--present-mode auto|fifo|mailbox|immediate` 在创建 device/swapchain 前选择 present policy。
+`auto` 保持 mailbox → immediate → fifo 的优先顺序；`immediate` 用于不限帧率验收，可能撕裂，
+且必须在 surface 支持时才会真正启用。启动日志打印实际选中的 `[Vulkan] Present mode: ...`。
+
+当 present 受显示器/DWM/前台状态限制时，`other` 会吸收等待时间，不能把
+`other = cpuMs - 已测阶段` 直接当成 CPU 工作。2026-11-06 Release 的 9-tile 1K 地形
+（`SC_terrain_scale_09.json`，`--no-dev-ui --present-mode immediate`）实测：
+前台稳定段 `fps=240.000`、`worldSnapshot≈0.32 ms`、`submitPresent≈1.1 ms`、
+`gpuTotalMs≈0.5 ms`、`other≈2.7 ms`；窗口失去前台后系统降到约 60–66 fps，
+同一帧工作只剩 `other≈14 ms` 的 present/节流等待。Debug+validation 的差异不能作为
+Release 的 CPU 上限结论。
+
 ## 共享快照（CPU + GPU）
 
 `source/core/performanceSnapshot.h` 定义唯一快照 `PerformanceSnapshot`；`GpuPassTimer::Snapshot()`

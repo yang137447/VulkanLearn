@@ -28,12 +28,14 @@ public:
     static constexpr uint32_t PageResolution = TerrainPageResolution;
     static constexpr uint32_t AtlasResolution = PageTableSize * PageResolution;
     static constexpr uint32_t PageSlotCount = PageTableSize * PageTableSize;
-    // 保留最后一页作为缺页 fallback 的**物理 atlas 槽位**。它不再是虚拟页：
-    // 页表里没有 (31,31) 的保留项，所以 32×32 单地形可以合法使用这个虚拟坐标。
-    // 可用物理槽位数恒为 PageSlotCount - 1。
-    static constexpr uint32_t FallbackPageX = PageTableSize - 1;
-    static constexpr uint32_t FallbackPageY = PageTableSize - 1;
-    static constexpr uint32_t UsablePhysicalSlotCount = PageSlotCount - 1;
+    // 全部 32×32 物理槽位都可分配。
+    //
+    // 早先这里保留 (31,31) 给"缺页 fallback 采样"，但 shader 的缺页分支
+    // （mf_terrainLayerBlend.glsl: invalidPage）直接输出中性表面
+    // （baseColor 0.18 / roughness 0.9 / 几何法线），从不采样任何保底页。
+    // 于是那个保留槽位是死占：32×32 单面对 4×4 tile × 8×8 页 = 1024 个
+    // 虚拟页时，正好差 1 页永远驻留不了，全景视角出现一个可见灰块。
+    static constexpr uint32_t UsablePhysicalSlotCount = PageSlotCount;
     // CPU 侧淘汰安全窗下限：页最后一次被看到后至少经过这么多 epoch 才允许自动淘汰。
     // 有效窗口由 EvictionWindowFrames() 给出，取 max(下限, framesInFlight + 1)，
     // 同时覆盖“feedback 回读有 2 帧延迟”和“提交队列里仍有 in-flight 帧”。
@@ -42,7 +44,7 @@ public:
     static constexpr uint64_t EvictionHysteresisFrames = 2;
     // P3 流式默认预算：必须大于可见 working set，否则被淘汰的页会立刻因 feedback
     // 重新可见，中性页就变成配置结果而不是真实缺页。32×32 宽视野实测约 415 页，
-    // 因此默认取 512；它仍小于 1023 个可用物理槽位。
+    // 因此默认取 512；它只是下限，World 加载后会把容量抬到注册页数（上限 1024）。
     static constexpr uint32_t DefaultResidentCapacity = 512;
     // 每帧最多把多少个 miss 页转成请求；反馈页按 priority 降序处理。
     static constexpr uint32_t MaxPageRequestsPerFrame = 8;
@@ -282,7 +284,7 @@ public:
     void SetResidentCapacityAtEpoch(uint32_t capacity, uint64_t completedEpoch);
     uint32_t ResidentCapacity() const { return residentCapacity; }
     // 当前可立即分配的空物理 atlas 槽位数：被常驻页占用或仍在 quarantine 的
-    // 槽位都不算，fallback 槽位也不计入。过期的 quarantine 需先经过
+    // 槽位都不算。过期的 quarantine 需先经过
     // ReclaimExpiredQuarantines（AllocatePhysicalSlot 会自动调用）才回到这里。
     uint32_t ImmediatelyAllocatablePhysicalSlotCount() const
     {
@@ -297,13 +299,13 @@ public:
     uint32_t QuarantinedPhysicalSlotCount() const { return quarantinedPhysicalSlotCount; }
     // 回收 releaseEpoch <= completedEpoch 的隔离槽位，返回本次回收数量。
     // 回收后槽位变为普通空闲槽位（occupancy=0、free++、quarantine--、
-    // releaseEpoch=0）；fallback 物理槽位永不回收；重复调用不重复计数。
+    // releaseEpoch=0）；重复调用不重复计数。
     uint32_t ReclaimExpiredQuarantines(uint64_t completedEpoch);
     // 槽位隔离到哪个 completedEpoch 之后才允许复用；未隔离返回 0。
     uint64_t PhysicalSlotReleaseEpoch(
         uint32_t physicalPageX,
         uint32_t physicalPageY) const;
-    // 在给定 completedEpoch 下该物理槽位是否可分配。fallback 槽位恒为 false。
+    // 在给定 completedEpoch 下该物理槽位是否可分配。
     bool IsPhysicalSlotAvailable(
         uint32_t physicalPageX,
         uint32_t physicalPageY,

@@ -44,7 +44,7 @@ def attribute(data, name: str) -> np.ndarray | None:
     return values
 
 
-def evaluate(tree, label: str) -> None:
+def evaluate(tree, label: str):
     mesh = bpy.data.meshes.new(f"test_{label}")
     obj = bpy.data.objects.new(f"obj_{label}", mesh)
     bpy.context.collection.objects.link(obj)
@@ -56,16 +56,17 @@ def evaluate(tree, label: str) -> None:
     count = len(data.vertices)
     print(f"TEST {label}: verts={count}")
     if count == 0:
-        print(f"TEST {label}: FAILED (empty geometry)")
-        return
+        raise AssertionError(f"{label}: empty geometry")
     for layer in ("height", "water", "flow"):
         values = attribute(data, layer)
         if values is None:
-            print(f"TEST {label}.{layer}: MISSING")
-            continue
+            raise AssertionError(f"{label}.{layer}: missing attribute")
+        if not np.isfinite(values).all():
+            raise AssertionError(f"{label}.{layer}: non-finite values")
         print(f"TEST {label}.{layer}: "
               f"min={values.min():.5f} max={values.max():.5f} "
               f"mean={values.mean():.5f}")
+    return data
 
 
 def evaluate_layers(tree, label: str, layers) -> None:
@@ -111,7 +112,7 @@ def main() -> None:
                       "Lacunarity": 1.841, "Height Scale": 500.0})
     distort = instance(tree, groups["VL_HF_Distort"], (-800, 0),
                        {"Size": 1000.0, "Amplitude": 140.0,
-                        "Element Size": 800.0, "Height Scale": 500.0})
+                        "Element Size": 800.0})
     # remap 的 From 区间要包住噪声的实际输出范围（height 层是 ±1 归一化）
     remap = instance(tree, groups["VL_HF_Remap"], (-300, 0),
                      {"Layer": "height", "From Min": -1.0, "From Max": 1.0,
@@ -186,8 +187,19 @@ def main() -> None:
     for socket in preset_node.inputs:
         if socket.name == "Samples":
             socket.default_value = 64
+        elif socket.name == "Work Samples":
+            # 测试场景只有 64 格；Work Samples 必须跟着走，否则会先升采样到
+            # 512 再降回来，既慢又让 Grid Cells 与真实网格不符。
+            socket.default_value = 64
     pre.links.new(preset_node.outputs[0], pre_out.inputs["Geometry"])
-    evaluate(pre, "preset")
+    preset_data = evaluate(pre, "preset")
+    # 汇水面积是"上游格数"，物理上不可能超过总格数；超过说明累积出现了
+    # 环流/未归一化（曾经溢出成 inf 并把整条链变成 NaN）。
+    preset_flow = attribute(preset_data, "flow")
+    if float(preset_flow.max()) > len(preset_data.vertices) + 1e-3:
+        raise AssertionError(
+            f"preset.flow exceeds cell count: {preset_flow.max()} > "
+            f"{len(preset_data.vertices)}")
 
     # 层操作与掩膜组：逐个接在 noise 之后验证
     for name, params, layers in (

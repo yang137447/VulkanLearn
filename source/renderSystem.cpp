@@ -8,6 +8,7 @@
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -1351,6 +1352,15 @@ bool RenderSystem::ApplyTerrainLayerExactFeedback(
     // L4e：相机前向移动时预取细一级 mip 的子页，使用独立每帧名额。
     config.prefetchFinerMipEnabled = streaming->layerPrefetchMoving;
     config.prefetchPagesPerFrame = streaming->maxLayerPrefetchPagesPerFrame;
+    // 全局页预算：以层页管理器的驻留容量为上限做 mip 分配。
+    //
+    // 契约要求“选定 mip 后必须请求该 mip 的全部页”，所以每层页数是 mip 的
+    // 离散函数。不给上限时，每个 tile 的每个层都按屏幕像素独立选 mip，
+    // 多 tile 场景的总页数可达容量的数倍，淘汰永远追不上请求，每帧
+    // 请求->淘汰->再请求 永不收敛。分配器按屏幕覆盖优先级（近处优先）
+    // 细化，并保证去重后的完整页集总页数 <= 容量（工作集本身超容量时
+    // 保持最粗集并允许稳定超预算）。
+    config.layerPageBudget = streaming->layerPageManager.ResidentCapacity();
 
     streaming->latestLayerExactFeedback =
         streaming->layerVisibilityResolver.ApplyExact(
@@ -1756,6 +1766,14 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerPrefetchPages = exact.prefetchPages;
         stats.layerPrefetchRequests = exact.prefetchRequests;
         stats.layerPrefetchAccepted = exact.prefetchAccepted;
+        stats.layerPageBudget = layerPages.ResidentCapacity();
+        stats.layerBudgetPages = exact.budgetTotalPages;
+        stats.layerBudgetSets = exact.budgetAllocatedSets;
+        stats.layerBudgetClampedRefinements =
+            exact.budgetClampedRefinements;
+        stats.layerBudgetExceeded = exact.budgetExceeded;
+        stats.layerBudgetEntriesByMip = exact.budgetEntriesByMip;
+        stats.layerBudgetSetsByMip = exact.budgetSetsByMip;
     }
     else
     {
@@ -1779,6 +1797,15 @@ void RenderSystem::PublishTerrainStreamingStats(
         stats.layerPrefetchPages = 0;
         stats.layerPrefetchRequests = 0;
         stats.layerPrefetchAccepted = 0;
+        // 覆盖页回退路径不做需求级预算分配；控制台必须显示 0，而不是沿用
+        // 上一帧精确路径的旧值。
+        stats.layerPageBudget = 0;
+        stats.layerBudgetPages = 0;
+        stats.layerBudgetSets = 0;
+        stats.layerBudgetClampedRefinements = 0;
+        stats.layerBudgetExceeded = false;
+        stats.layerBudgetEntriesByMip = {};
+        stats.layerBudgetSetsByMip = {};
     }
     stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
     stats.layerDirtyPages = layerPages.DirtyPageCount();
@@ -1979,6 +2006,32 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " fallbackBlendPages=" << stats.layerFallbackBlendPages
         << " avgColorPages=" << stats.layerAvgColorPages
         << std::endl;
+    // 全局预算：pages/sets 是去重后的 (layer,mip) 全页集，必须 <= pageBudget
+    // 才能保证请求不会与淘汰互相追尾。entries 是可见 (layer,targetMip) 需求
+    // 分布，sets 是最终驻留页集分布；近处需求的细 mip 应优先出现。
+    std::cout
+        << "[TerrainLayer] pageBudget=" << stats.layerPageBudget
+        << " budgetPages=" << stats.layerBudgetPages
+        << " budgetSets=" << stats.layerBudgetSets
+        << " budgetClamped=" << stats.layerBudgetClampedRefinements
+        << " budgetExceeded=" << (stats.layerBudgetExceeded ? 1 : 0)
+        << " budgetEntries=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerBudgetEntriesByMip[mip];
+    }
+    std::cout << " budgetMips=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerBudgetSetsByMip[mip];
+    }
+    std::cout << std::endl;
 }
 
 void RenderSystem::ReportTerrainLodStatistics() const
@@ -2657,6 +2710,11 @@ uint64_t RenderSystem::GetActiveWorldGeneration() const noexcept
     return activeWorld
         ? activeWorld->GetGeneration()
         : 0;
+}
+
+void RenderSystem::SetPickingSceneEnabled(bool enabled) noexcept
+{
+    pickingSceneEnabled = enabled;
 }
 
 std::optional<VL::Editor::Selection::MaterialInstanceSelection>
@@ -4151,9 +4209,10 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
     }
 
     VL::WorldSnapshot snapshot = std::move(snapshotResult.Value());
-    currentOfflineSnapshot = std::make_shared<const VL::WorldSnapshot>(snapshot);
     if (offlineMode && offlineCoordinator)
     {
+        currentOfflineSnapshot =
+            std::make_shared<const VL::WorldSnapshot>(snapshot);
         offlineSettings.width = GetSceneRenderExtent().width;
         offlineSettings.height = GetSceneRenderExtent().height;
         const auto target = offlineCameraMotionPolicy.Decide(
@@ -4165,16 +4224,25 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
             offlineCoordinator->Observe(currentOfflineSnapshot,
                 activeOfflineWorldAssets, *target);
     }
-    auto pickingRenderSceneResult = rendererFrontend.BuildRenderScene(snapshot);
-    if (pickingRenderSceneResult.IsFailure())
+    if (pickingSceneEnabled)
     {
-        throw std::runtime_error(
-            VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
+        auto pickingRenderSceneResult =
+            rendererFrontend.BuildRenderScene(snapshot);
+        if (pickingRenderSceneResult.IsFailure())
+        {
+            throw std::runtime_error(
+                VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
+        }
+        pickingRenderScene = std::move(pickingRenderSceneResult.Value());
+        ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
+        RebuildRenderSceneMaterialGroups(pickingRenderScene);
+        hasPickingRenderScene = true;
     }
-    pickingRenderScene = std::move(pickingRenderSceneResult.Value());
-    ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
-    RebuildRenderSceneMaterialGroups(pickingRenderScene);
-    hasPickingRenderScene = true;
+    else
+    {
+        // 保留容器容量以便重新打开编辑器时复用；只撤销可拾取状态。
+        hasPickingRenderScene = false;
+    }
     worldSnapshotQueue.Publish(std::move(snapshot));
     if (advanceSimulation)
     {
@@ -4452,7 +4520,6 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             uiOverlayRenderer.SynchronizeTextures(*currentUiRenderSnapshot);
         }
     }
-
     // 统计 query pool 在 backend BeginFrame 之前创建：此时本帧命令缓冲尚未开始录制。
     // 未开启采集时这里只做两次原子读取，不创建任何 Vulkan 对象。
     if (!offlineMode)

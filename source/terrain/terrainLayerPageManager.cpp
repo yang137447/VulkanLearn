@@ -405,6 +405,7 @@ bool TerrainLayerPageManager::CanEvictPageAt(
     const TerrainLayerPageKey& key,
     uint64_t completedEpoch) const
 {
+    if (IsPageProtected(key)) return false;
     const PageState* page = FindPage(key);
     if (page == nullptr || !page->resident) return false;
     if (page->referenceCount > 0 || page->uploadPinCount > 0) return false;
@@ -414,6 +415,7 @@ bool TerrainLayerPageManager::CanEvictPageAt(
 bool TerrainLayerPageManager::EvictPageAt(PageState& page)
 {
     if (!page.resident) return false;
+    if (IsPageProtected(page.key)) return false;
     // 被引用或正被上传批次 pin 住的页不能淘汰。
     if (page.referenceCount > 0 || page.uploadPinCount > 0) return false;
     ReleasePhysicalPage(page);
@@ -438,6 +440,7 @@ TerrainLayerPageManager::PageState* TerrainLayerPageManager::FindEvictionCandida
     {
         const PageState& page = iterator->second;
         if (!page.resident) continue;
+        if (IsPageProtected(iterator->first)) continue;
         if (page.referenceCount > 0 || page.uploadPinCount > 0) continue;
         // 安全窗之外才允许进入候选；window 用加法比较，避免下溢。
         if (page.lastSeenEpoch + window > completedEpoch) continue;
@@ -537,6 +540,20 @@ void TerrainLayerPageManager::SetGpuEpochContext(
     gpuLastSubmittedEpoch = lastSubmittedEpoch;
     gpuLastConsumedFeedbackEpoch = lastConsumedFeedbackEpoch;
     gpuFramesInFlight = framesInFlight;
+}
+
+void TerrainLayerPageManager::SetProtectedPages(
+    const std::map<TerrainLayerPageKey, uint32_t>& protectedPageSet)
+{
+    protectedPages.clear();
+    for (const auto& entry : protectedPageSet)
+        protectedPages.insert(entry.first);
+}
+
+bool TerrainLayerPageManager::IsPageProtected(
+    const TerrainLayerPageKey& key) const
+{
+    return protectedPages.find(key) != protectedPages.end();
 }
 
 uint64_t TerrainLayerPageManager::EvictionWindowFrames() const

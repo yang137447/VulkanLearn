@@ -19,6 +19,7 @@
 #include "resource/image/hostImage.h"
 #include "resource/image/textureIO.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "scene/validation/sceneJsonValidator.h"
@@ -1274,28 +1275,37 @@ TEST(TerrainPageManager, AccumulatesNonOverlappingTerrainPages)
     EXPECT_THROW(manager.RegisterTerrain(first), std::exception);
 }
 
-TEST(TerrainPageManager, FallbackKeepsPhysicalSlotButNotVirtualPage)
+TEST(TerrainPageManager, LastPageSlotIsAllocatable)
 {
+    // 容量公式：下限 512、上限物理槽位；必须覆盖全部注册页。
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(64, 512, 1024), 512u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(1023, 512, 1024), 1023u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(1024, 512, 1024), 1024u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(4096, 512, 1024), 1024u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(0, 512, 1024), 512u);
+
     VL::TerrainPageManager manager;
     VL::TerrainBuildPlan plan = MakePagePlan(8);
     const std::string placement = plan.desc.assetPath;
-    // (31,31) 不再被 fallback 预留，因此覆盖最后一格的 8×8 区域可以注册。
+    // 覆盖最后一格的 8×8 区域可以注册。
     plan.desc.pageOrigin = Eigen::Vector2i(24, 24);
     manager.RegisterTerrain(plan, false);
 
-    const size_t fallbackSlot =
-        static_cast<size_t>(VL::TerrainPageManager::FallbackPageY) *
+    const size_t lastSlot =
+        static_cast<size_t>(VL::TerrainPageManager::PageTableSize - 1) *
             VL::TerrainPageManager::PageTableSize +
-        VL::TerrainPageManager::FallbackPageX;
-    // 页表没有 fallback 保留项；虚拟 (31,31) 是普通页。
-    EXPECT_EQ(manager.PageTable()[fallbackSlot * 4 + 3], 0u);
+        (VL::TerrainPageManager::PageTableSize - 1);
+    // 页表里没有预留项；虚拟 (31,31) 是普通页。
+    EXPECT_EQ(manager.PageTable()[lastSlot * 4 + 3], 0u);
     EXPECT_FALSE(manager.IsResident(
-        VL::TerrainPageManager::FallbackPageX,
-        VL::TerrainPageManager::FallbackPageY));
-    // fallback 只占物理 atlas 槽位，因此可用物理槽位仍比总槽位少 1。
+        VL::TerrainPageManager::PageTableSize - 1,
+        VL::TerrainPageManager::PageTableSize - 1));
+    // 全部 1024 个物理槽位都可分配（不再为缺页 fallback 保留一个）。
     EXPECT_EQ(
         manager.AvailablePhysicalSlotCount(),
         VL::TerrainPageManager::UsablePhysicalSlotCount);
+    EXPECT_EQ(VL::TerrainPageManager::UsablePhysicalSlotCount,
+              VL::TerrainPageManager::PageSlotCount);
 
     // 该区域的最后一个 tile 正好落在虚拟 (31,31)，可以正常驻留/淘汰。
     ASSERT_TRUE(manager.RequestPage(placement, 7, 7, 1));
@@ -1305,7 +1315,7 @@ TEST(TerrainPageManager, FallbackKeepsPhysicalSlotButNotVirtualPage)
     ASSERT_NE(page, nullptr);
     EXPECT_EQ(page->virtualPageX, 31u);
     EXPECT_EQ(page->virtualPageY, 31u);
-    // fallback 物理槽位 (31,31) 仍保留给缺页采样，普通页从槽位 0 分配。
+    // 普通页从槽位 0 开始分配。
     EXPECT_EQ(page->physicalPageX, 0u);
     EXPECT_EQ(page->physicalPageY, 0u);
     ASSERT_TRUE(manager.EvictPage(placement, 7, 7));
@@ -1683,10 +1693,6 @@ TEST(TerrainPageManager, FirstPreloadUploadContainsEveryRegisteredPage)
         for (size_t channel = 0; channel < 4; ++channel)
             EXPECT_EQ(upload.entry[channel], manager.PageTable()[entry + channel]);
         EXPECT_EQ(upload.entry[3], 255u);
-        // 上传项必须是真实虚拟页；页表里不存在 fallback 保留项。
-        EXPECT_FALSE(
-            upload.virtualPageX == VL::TerrainPageManager::FallbackPageX &&
-            upload.virtualPageY == VL::TerrainPageManager::FallbackPageY);
     }
 
     // 每个驻留页各输出一次完整 128×128 RGBA 页，不再整张 atlas 全量上传。
@@ -3191,10 +3197,10 @@ TEST(TerrainPageManager, QuarantineBlocksSlotUntilReleaseEpoch)
     EXPECT_EQ(manager.PhysicalSlotReleaseEpoch(0, 0), 23u);
     EXPECT_FALSE(manager.IsPhysicalSlotAvailable(0, 0, 22));
     EXPECT_TRUE(manager.IsPhysicalSlotAvailable(0, 0, 23));
-    // fallback 物理槽位永远不参与分配。
-    EXPECT_FALSE(manager.IsPhysicalSlotAvailable(
-        VL::TerrainPageManager::FallbackPageX,
-        VL::TerrainPageManager::FallbackPageY,
+    // 不再保留 fallback 物理槽位：最后一个槽位也可分配。
+    EXPECT_TRUE(manager.IsPhysicalSlotAvailable(
+        VL::TerrainPageManager::PageTableSize - 1,
+        VL::TerrainPageManager::PageTableSize - 1,
         std::numeric_limits<uint64_t>::max()));
 
     // quarantine 未过期时请求会拿下一个空闲槽位；旧槽位内容不被覆盖。

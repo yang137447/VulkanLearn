@@ -423,12 +423,35 @@ namespace CommonFunction
 
     inline uint32_t FindMemoryType(vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, uint32_t typeFilter, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
-        for (uint32_t i = 0; i < physicalDeviceMemoryProperties.memoryTypeCount; i++)
+        const auto find = [&](vk::MemoryPropertyFlags flags)
+            -> std::optional<uint32_t>
         {
-            if ((typeFilter & (1 << i)) && (physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & memoryPropertyFlags) == memoryPropertyFlags)
+            for (uint32_t i = 0;
+                 i < physicalDeviceMemoryProperties.memoryTypeCount;
+                 ++i)
             {
-                return i;
+                if ((typeFilter & (1 << i)) &&
+                    (physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags &
+                        flags) == flags)
+                {
+                    return i;
+                }
             }
+            return std::nullopt;
+        };
+
+        if (const std::optional<uint32_t> exact = find(memoryPropertyFlags))
+            return *exact;
+
+        // HOST_CACHED 是读回性能提示，不是功能要求。没有 cached 型时退回
+        // 同一组 HOST_VISIBLE|HOST_COHERENT 内存，避免为了性能标志直接失败。
+        if ((memoryPropertyFlags & vk::MemoryPropertyFlagBits::eHostCached) !=
+            vk::MemoryPropertyFlags{})
+        {
+            const vk::MemoryPropertyFlags fallback =
+                memoryPropertyFlags & ~vk::MemoryPropertyFlagBits::eHostCached;
+            if (const std::optional<uint32_t> relaxed = find(fallback))
+                return *relaxed;
         }
         throw std::runtime_error("Failed to find suitable memory type!");
     }

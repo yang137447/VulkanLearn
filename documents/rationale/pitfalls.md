@@ -163,6 +163,62 @@
 - 证据：四个缺陷均由像素探针发现；`artifacts/rmlui-editor/` 下的探针脚本记录了方法与全部测量值
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-11
 
+### [uncached-readback-bandwidth] `HOST_VISIBLE` 不等于 CPU 能快速读
+
+- 适用场景：feedback / readback ring、任何常驻 map 后由 CPU 逐 texel 解析的 GPU buffer
+- 失败表现：GPU pass 只有 2–5 ms，但每帧 `submitPresent` 固定多出 ~50 ms；9-tile 1K 地形
+  只有 11–14 fps。`TryConsume` 内部 64 KiB cover feedback 约 11 ms、256 KiB layer feedback
+  约 36 ms，和算法复杂度完全不相称
+- 根因：`HOST_VISIBLE | HOST_COHERENT` 可能落在 write-combined/BAR 型内存，CPU 逐字节
+  读取会跨 PCIe 做未缓存访问。`std::map` 不是主因；换成 flat table 后耗时几乎不变，
+  换成 `HOST_CACHED` 后同一次回读降到 0.23 ms / 0.38 ms
+- 规避动作：CPU 要读的回读 buffer 优先请求
+  `HOST_VISIBLE | HOST_COHERENT | HOST_CACHED`；没有 cached 型时再退回 coherent。
+  聚合用定长/flat 表，不要在每 texel 上做 `std::map` 或分配。不要用“GPU 才几毫秒”
+  推断渲染不是瓶颈——先看 readback 内存类型和 CPU 读带宽
+- 证据：2026-11-06，RTX 3080，`SC_terrain_scale_09.json`（9×1K 分层地形）；
+  修复前 `coverRead≈11 ms / layerRead≈36 ms`，修复后 `≈0.23/0.38 ms`，
+  同一场景 CPU `submitPresent` 从 ~50 ms 降到 ~5 ms，稳定态约 40–46 fps（另一次运行
+  受 chunk streaming 的 `other` 影响为 ~24 fps），GPU 始终只有 2–4 ms
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-06
+- 相关：`documents/contracts/terrain.md` 的 feedback readback 与 summary 段
+
+### [runtime-editor-frame-products] 运行时帧不要构建编辑器专用快照
+
+- 适用场景：`--no-dev-ui`、运行时 HUD、gameplay/线上帧路径
+- 失败表现：GPU 只有 3–4 ms，但 `worldSnapshot` 固定约 10.5 ms；9-tile 1K 地形
+  在 RTX 3080 上只有 ~49 fps，继续提高帧率时发现 CPU 还在为编辑器做无用工作
+- 根因：`PublishSnapshotFromActiveWorld` 每帧无条件构建完整 picking `RenderScene`，
+  即使开发者 UI 不可见、根本不会拾取；同时无条件深拷贝整份 `WorldSnapshot` 给
+  `currentOfflineSnapshot`，即使不是 offline；`WorldSnapshotBuilder` 还对同一 LOD 组
+  的每个级重复计算 AABB/距离/切换状态，并每帧重建 RuntimeId 字符串
+- 规避动作：picking scene 只在 `developerUiVisible` 时构建；offline 快照副本只在
+  offline 分支创建；LOD 组状态每帧每组算一次；RuntimeId 按 World 代际缓存。
+  任何“只服务编辑器/导出”的帧产品都必须显式挂在对应模式上
+- 证据：2026-11-06，`SC_terrain_scale_09.json`；修复后 `worldSnapshot`
+  `10.6 ms → 6.2 ms`，CPU `20.3 ms → 17.2 ms`，9-tile 稳定段从 ~49 fps
+  提升到 53–60 fps（多数帧 58–60），GPU 仍为 3–4 ms
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-06
+- 相关：`source/renderSystem.cpp` 的 `PublishSnapshotFromActiveWorld`、
+  `source/world/worldSnapshotBuilder.cpp`
+
+### [present-mode-masks-frame-cost] 60 fps 不一定是渲染慢
+
+- 适用场景：GPU 利用率很低、`worldSnapshot`/`submitPresent` 很小，但 FPS 固定在 60 附近
+- 失败表现：Release 9-tile 地形 `gpuTotalMs≈0.5`、`worldSnapshot≈0.32`、
+  `submitPresent≈1.1`，但 `other≈14 ms`、FPS≈60；容易被误判成 CPU/驱动瓶颈
+- 根因：`fifo`/DWM/窗口失焦会按显示刷新率阻塞 present，等待时间被
+  `cpuMs - 已测阶段` 计入 `other`；这不是引擎计算
+- 规避动作：启动日志读取 `[Vulkan] Present mode: ...`；性能上限验收用
+  `--present-mode immediate` 并保持窗口前台；不要把 Debug/validation 的 CPU
+  数字当作 Release 上限
+- 证据：2026-11-06，Release，`SC_terrain_scale_09.json --no-dev-ui
+  --present-mode immediate`；前台稳定 `240.000 fps`（`worldSnapshot≈0.32`,
+  `submitPresent≈1.1`, `gpuTotalMs≈0.5`, `other≈2.7`），窗口失去前台后降到
+  `60–66 fps` 且 `other≈14 ms`
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-06
+- 相关：`documents/contracts/gpu-pass-timing.md` 的 Present 模式与 `other` 段
+
 ## 待确认候选
 
 尚未完成证据核查或负责人确认的候选。**实现不得默认依赖这些内容。**

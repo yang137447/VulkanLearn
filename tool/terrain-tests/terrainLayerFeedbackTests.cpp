@@ -56,7 +56,7 @@ void WriteSlotTexel(
     const size_t offset =
         static_cast<size_t>(slot) * VL::TerrainLayerFeedbackImageBytes +
         texelIndex * VL::TerrainLayerFeedbackTexelBytes;
-    ASSERT_LT(offset + VL::TerrainLayerFeedbackTexelBytes, buffer.size());
+    ASSERT_LE(offset + VL::TerrainLayerFeedbackTexelBytes, buffer.size());
     VL::EncodeTerrainLayerFeedbackTexel(
         texel, buffer.data() + offset);
 }
@@ -211,6 +211,71 @@ TEST(TerrainLayerFeedbackSummary, OrdersByCoveragePriority)
     EXPECT_EQ(summary.pages[1].layerId, 1u);
     // 覆盖率 1/4 -> sqrt(0.25) * 255 ≈ 128。
     EXPECT_EQ(summary.pages[1].priority, 128u);
+}
+
+TEST(TerrainLayerFeedbackSummary, SummarizesFullFourSlotBufferAndResetsScratch)
+{
+    std::vector<uint8_t> buffer = MakeFeedbackBuffer();
+    for (uint32_t slot = 0;
+         slot < VL::TerrainLayerFeedbackSlotCount;
+         ++slot)
+    {
+        for (uint32_t texelIndex = 0;
+             texelIndex < VL::TerrainLayerFeedbackTexelsPerImage;
+             ++texelIndex)
+        {
+            VL::TerrainLayerFeedbackTexel texel;
+            texel.layerId = slot;
+            texel.mip = slot;
+            texel.pageIndex = texelIndex % 256u;
+            texel.valid = true;
+            texel.frameTag = 23;
+            WriteSlotTexel(buffer, slot, texelIndex, texel);
+        }
+    }
+
+    const VL::TerrainLayerFeedbackFrameSummary first =
+        SummaryFrom(buffer, 23, 10);
+    EXPECT_EQ(first.validTexelCount,
+        VL::TerrainLayerFeedbackTexelsPerImage *
+            VL::TerrainLayerFeedbackSlotCount);
+    EXPECT_EQ(first.invalidTexelCount, 0u);
+    EXPECT_EQ(first.staleTexelCount, 0u);
+    EXPECT_EQ(first.distinctPageCount, 1024u);
+    EXPECT_EQ(first.pages.size(), 1024u);
+    for (uint32_t slot = 0;
+         slot < VL::TerrainLayerFeedbackSlotCount;
+         ++slot)
+    {
+        EXPECT_EQ(first.slotSampleCount[slot],
+            VL::TerrainLayerFeedbackTexelsPerImage);
+    }
+
+    // 同一个 scratch 第二次调用必须从 0 开始，不能沿用上一帧计数。
+    buffer.assign(buffer.size(), 0);
+    WriteSlotTexel(buffer, 0, 0, VL::TerrainLayerFeedbackTexel{
+        9, 1, 2, true, 24});
+    const VL::TerrainLayerFeedbackFrameSummary second =
+        SummaryFrom(buffer, 24, 11);
+    EXPECT_EQ(second.validTexelCount, 1u);
+    EXPECT_EQ(second.distinctPageCount, 1u);
+    EXPECT_EQ(second.pages[0].sampleCount, 1u);
+}
+
+TEST(TerrainLayerFeedbackSummary, RejectsMipOutsideEncodedRange)
+{
+    std::vector<uint8_t> buffer = MakeFeedbackBuffer();
+    // 手工写入 valid + mip=7；编码器本身拒绝该值，解码端必须也能防御。
+    buffer[0] = 0;       // layerId
+    buffer[1] = 0;       // pageIndex
+    buffer[2] = 0x87;    // valid | 7
+    buffer[3] = 12;      // frameTag
+    const VL::TerrainLayerFeedbackFrameSummary summary =
+        SummaryFrom(buffer, 12, 1);
+    EXPECT_EQ(summary.validTexelCount, 0u);
+    EXPECT_GE(summary.invalidTexelCount, 1u);
+    EXPECT_EQ(summary.distinctPageCount, 0u);
+    EXPECT_TRUE(summary.pages.empty());
 }
 
 TEST(TerrainLayerExactFeedback, RequestsExactPageAndMip)

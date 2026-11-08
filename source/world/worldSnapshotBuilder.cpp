@@ -323,6 +323,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     {
         previousViewProjection.reset();
         previousObjectModels.clear();
+        objectRuntimeIds.clear();
         lodGroupStates.clear();
         lodStats = TerrainLodStatsSnapshot{};
         previousWorldGeneration = world.GetGeneration();
@@ -366,6 +367,20 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     // 实际存在的级位图：它是“resident”的唯一事实来源（World 里没有的级
     // 就是没驻留），既能决定兜底级，也能给 stats 报各级对象数。
     std::unordered_map<std::string, uint32_t> lodGroupLevelMasks;
+    auto objectRuntimeId = [&](const std::string& objectName,
+                               const WorldMeshObject& meshObject)
+    {
+        const std::string& key = meshObject.lodGroupId.empty()
+            ? objectName
+            : meshObject.lodGroupId;
+        auto inserted = objectRuntimeIds.try_emplace(key, 0);
+        if (inserted.second)
+        {
+            inserted.first->second = WorldMeshObjectRuntimeId(
+                world, objectName, meshObject);
+        }
+        return inserted.first->second;
+    };
     std::array<uint32_t, TerrainMaxLodLevels> residentObjectsByLevel{};
     for (const auto& [objectName, meshObject] : world.GetMeshObjects())
     {
@@ -376,6 +391,13 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         lodGroupLevelMasks[meshObject.lodGroupId] |=
             1u << meshObject.lodLevel;
         ++residentObjectsByLevel[meshObject.lodLevel];
+        const auto representativeIt =
+            lodGroupRepresentatives.find(meshObject.lodGroupId);
+        if (representativeIt == lodGroupRepresentatives.end() ||
+            meshObject.lodLevel == 0)
+        {
+            lodGroupRepresentatives[meshObject.lodGroupId] = &meshObject;
+        }
     }
     uint32_t drawnChunks = 0;
     std::array<uint32_t, TerrainMaxLodLevels> drawnByLevel{};
@@ -388,21 +410,19 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         // 也避免 previousObjectModels 把同一 chunk 的多级当成不同对象。
         const bool hasLodGroup = !meshObject.lodGroupId.empty();
         const RuntimeId objectId =
-            WorldMeshObjectRuntimeId(world, objectName, meshObject);
-
-        const auto previousModelIt = previousObjectModels.find(objectId);
-        const Eigen::Matrix4f previousModel =
-            previousModelIt != previousObjectModels.end()
-                ? previousModelIt->second
-                : meshObject.model;
-
-        bool selected = desc.hasSelectedDraw &&
-            desc.selectedObjectId == objectId &&
-            (desc.selectedAllMaterialSlots ||
-             desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex);
+            objectRuntimeId(objectName, meshObject);
 
         if (!hasLodGroup)
         {
+            const auto previousModelIt = previousObjectModels.find(objectId);
+            const Eigen::Matrix4f previousModel =
+                previousModelIt != previousObjectModels.end()
+                    ? previousModelIt->second
+                    : meshObject.model;
+            const bool selected = desc.hasSelectedDraw &&
+                desc.selectedObjectId == objectId &&
+                (desc.selectedAllMaterialSlots ||
+                 desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex);
             snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
                 objectName,
                 objectId,
@@ -427,70 +447,75 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
                 state).first;
         }
         LodGroupState& state = stateIt->second;
-        visitedLodGroups.insert(meshObject.lodGroupId);
-
-        // 组 AABB 来自 LOD0，与当前级无关；每帧重新投影，因此 World 内
-        // 的对象变换（若有）不需要额外通知。
-        const std::array<Eigen::Vector3f, 8> groupCorners = BuildWorldCorners(
-            meshObject.lodGroupBoundsMin,
-            meshObject.lodGroupBoundsMax,
-            meshObject.model);
-        Eigen::Vector3f groupWorldMin;
-        Eigen::Vector3f groupWorldMax;
-        ComputeWorldBounds(groupCorners, groupWorldMin, groupWorldMax);
-        const float distanceCm = TerrainLodDistanceToAabbCm(
-            snapshot.camera.position,
-            groupWorldMin,
-            groupWorldMax);
-        const uint32_t previousLevel =
-            state.initialized ? state.level : 0;
-        const uint32_t nextLevel = TerrainSelectLodLevelHysteresis(
-            distanceCm,
-            meshObject.lodDistancesCm,
-            state.initialized,
-            previousLevel);
-        if (state.initialized && nextLevel != state.level)
+        const bool firstVisit = visitedLodGroups.insert(
+            meshObject.lodGroupId).second;
+        if (firstVisit)
         {
-            ++state.switchCount;
-            ++lodSwitchedLastFrame;
-        }
-        state.level = nextLevel;
-        state.lastDistanceCm = distanceCm;
-        state.initialized = true;
+            // 组 AABB 来自 LOD0，与当前级无关；每个组只投影一次。
+            const std::array<Eigen::Vector3f, 8> groupCorners =
+                BuildWorldCorners(
+                    meshObject.lodGroupBoundsMin,
+                    meshObject.lodGroupBoundsMax,
+                    meshObject.model);
+            Eigen::Vector3f groupWorldMin;
+            Eigen::Vector3f groupWorldMax;
+            ComputeWorldBounds(groupCorners, groupWorldMin, groupWorldMax);
+            const float distanceCm = TerrainLodDistanceToAabbCm(
+                snapshot.camera.position,
+                groupWorldMin,
+                groupWorldMax);
+            const uint32_t previousLevel =
+                state.initialized ? state.level : 0;
+            const uint32_t nextLevel = TerrainSelectLodLevelHysteresis(
+                distanceCm,
+                meshObject.lodDistancesCm,
+                state.initialized,
+                previousLevel);
+            if (state.initialized && nextLevel != state.level)
+            {
+                ++state.switchCount;
+                ++lodSwitchedLastFrame;
+            }
+            state.level = nextLevel;
+            state.lastDistanceCm = distanceCm;
+            state.initialized = true;
 
-        // 兜底代表优先 LOD0：遍历顺序不确定，所以只要见到 LOD0 就覆盖。
-        const auto representativeIt =
-            lodGroupRepresentatives.find(meshObject.lodGroupId);
-        if (representativeIt == lodGroupRepresentatives.end() ||
-            meshObject.lodLevel == 0)
-        {
-            lodGroupRepresentatives[meshObject.lodGroupId] = &meshObject;
+            // 目标级没驻留时不能留空洞：沿更粗方向找最近的 resident 级。
+            // 加载期驻留保证最粗一级一定存在，因此这个循环最坏也会停在
+            // coarsest；若 World 因资产缺陷一级都没有，才走下面的代表兜底。
+            const uint32_t residentMask =
+                lodGroupLevelMasks[meshObject.lodGroupId];
+            uint32_t drawnLevel =
+                std::min(state.level, TerrainMaxLodLevels);
+            while (drawnLevel < TerrainMaxLodLevels &&
+                (residentMask & (1u << drawnLevel)) == 0)
+            {
+                ++drawnLevel;
+            }
+            if (drawnLevel >= TerrainMaxLodLevels)
+                drawnLevel = HighestResidentLevel(residentMask);
+            state.drawnLevel = drawnLevel;
+            state.residentLevelMask = residentMask;
         }
 
-        // 目标级没驻留时不能留空洞：沿更粗方向找最近的 resident 级。
-        // 加载期驻留保证最粗一级一定存在，因此这个循环最坏也会停在
-        // coarsest；若 World 因资产缺陷一级都没有，才走下面的代表兜底。
-        const uint32_t residentMask =
-            lodGroupLevelMasks[meshObject.lodGroupId];
-        uint32_t drawnLevel = std::min(state.level, TerrainMaxLodLevels);
-        while (drawnLevel < TerrainMaxLodLevels &&
-            (residentMask & (1u << drawnLevel)) == 0)
-        {
-            ++drawnLevel;
-        }
-        if (drawnLevel >= TerrainMaxLodLevels)
-            drawnLevel = HighestResidentLevel(residentMask);
-        if (drawnLevel >= TerrainMaxLodLevels)
+        if (state.drawnLevel >= TerrainMaxLodLevels)
             continue;
-        state.drawnLevel = drawnLevel;
-        state.residentLevelMask = residentMask;
-
-        if (meshObject.lodLevel != drawnLevel)
+        if (meshObject.lodLevel != state.drawnLevel)
+            continue;
+        if (!emittedLodGroups.insert(meshObject.lodGroupId).second)
             continue;
 
-        emittedLodGroups.insert(meshObject.lodGroupId);
+        const auto previousModelIt = previousObjectModels.find(objectId);
+        const Eigen::Matrix4f previousModel =
+            previousModelIt != previousObjectModels.end()
+                ? previousModelIt->second
+                : meshObject.model;
+        const bool selected = desc.hasSelectedDraw &&
+            desc.selectedObjectId == objectId &&
+            (desc.selectedAllMaterialSlots ||
+             desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex);
         ++drawnChunks;
-        ++drawnByLevel[drawnLevel];
+        ++drawnByLevel[state.drawnLevel];
         snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
             objectName,
             objectId,
@@ -622,6 +647,7 @@ void WorldSnapshotBuilder::Reset()
     previousWorldGeneration.reset();
     previousViewProjection.reset();
     previousObjectModels.clear();
+    objectRuntimeIds.clear();
     lodGroupStates.clear();
     lodStats = TerrainLodStatsSnapshot{};
 }
@@ -635,6 +661,8 @@ void WorldSnapshotBuilder::Swap(
         other.previousViewProjection);
     previousObjectModels.swap(
         other.previousObjectModels);
+    objectRuntimeIds.swap(
+        other.objectRuntimeIds);
     lodGroupStates.swap(
         other.lodGroupStates);
     std::swap(lodStats, other.lodStats);

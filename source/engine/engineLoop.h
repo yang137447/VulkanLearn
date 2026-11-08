@@ -144,6 +144,7 @@ private:
         PlatformWindow& window,
         std::vector<const char*>& vulkanExtensions,
         DeveloperUiLaunchMode developerUiMode,
+        PresentModePreference presentMode,
         bool forceShaderRebuild);
     RuntimeResult<void> LoadInitialWorldAndRenderer(
         const std::string& initialSceneOverride);

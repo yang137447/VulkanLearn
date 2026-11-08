@@ -1,17 +1,21 @@
 #include "terrain/terrainFeedback.h"
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
-#include <unordered_map>
 
 namespace VL
 {
 namespace
 {
 
-uint32_t PageKey(uint32_t pageX, uint32_t pageY)
+constexpr uint32_t TerrainFeedbackPageCount =
+    1u << (TerrainFeedbackPageBitCount * 2u);
+
+uint32_t PageIndex(uint32_t pageX, uint32_t pageY)
 {
-    return (pageY << 8u) | (pageX & 0xFFu);
+    return (pageY << TerrainFeedbackPageBitCount) |
+        (pageX & TerrainFeedbackPageMask);
 }
 
 } // namespace
@@ -79,16 +83,14 @@ TerrainFeedbackFrameSummary SummarizeTerrainFeedback(
             "Terrain feedback summary requires non-null texels");
     }
 
-    struct Aggregate
-    {
-        TerrainFeedbackPageRecord record;
-    };
-
     TerrainFeedbackFrameSummary summary;
     summary.frameTag = expectedFrameTag;
 
-    std::unordered_map<uint32_t, Aggregate> pageAggregates;
-    pageAggregates.reserve(256);
+    // 页坐标是 5+5 bit，总共固定 1024 个槽位。逐 texel 做 hash/map
+    // 会在这个 128×128 回读里产生大量桶查找和重哈希；定长表是 O(1)
+    // 直接索引，且和格式版本 1 的 32×32 页表上界完全一致。
+    std::array<TerrainFeedbackPageRecord, TerrainFeedbackPageCount> pages{};
+    std::array<uint32_t, TerrainFeedbackPageCount> sampleCounts{};
 
     const size_t texelCount = byteCount / TerrainFeedbackTexelBytes;
     for (size_t index = 0; index < texelCount; ++index)
@@ -111,27 +113,28 @@ TerrainFeedbackFrameSummary SummarizeTerrainFeedback(
         ++summary.validTexelCount;
         summary.maxPriority = std::max(summary.maxPriority, texel.priority);
 
-        const uint32_t key = PageKey(texel.virtualPageX, texel.virtualPageY);
-        auto inserted = pageAggregates.emplace(key, Aggregate{});
-        TerrainFeedbackPageRecord& page = inserted.first->second.record;
-        if (inserted.second)
-        {
-            page.virtualPageX = texel.virtualPageX;
-            page.virtualPageY = texel.virtualPageY;
-        }
+        const uint32_t pageIndex =
+            PageIndex(texel.virtualPageX, texel.virtualPageY);
+        TerrainFeedbackPageRecord& page = pages[pageIndex];
+        page.virtualPageX = texel.virtualPageX;
+        page.virtualPageY = texel.virtualPageY;
         page.miss = page.miss || texel.miss;
         page.priority = std::max(page.priority, texel.priority);
-        ++page.sampleCount;
+        ++sampleCounts[pageIndex];
     }
 
-    summary.distinctPageCount =
-        static_cast<uint32_t>(pageAggregates.size());
-    summary.pages.reserve(pageAggregates.size());
-    for (const auto& [key, aggregate] : pageAggregates)
+    summary.pages.reserve(TerrainFeedbackPageCount);
+    for (uint32_t pageIndex = 0;
+         pageIndex < TerrainFeedbackPageCount;
+         ++pageIndex)
     {
-        (void)key;
-        summary.pages.push_back(aggregate.record);
-        if (aggregate.record.miss)
+        if (sampleCounts[pageIndex] == 0)
+            continue;
+        TerrainFeedbackPageRecord record = pages[pageIndex];
+        record.sampleCount = sampleCounts[pageIndex];
+        summary.pages.push_back(record);
+        ++summary.distinctPageCount;
+        if (record.miss)
             ++summary.missPageCount;
     }
 

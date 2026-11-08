@@ -215,9 +215,10 @@ void RendererBackendVulkan::CollectThumbnailImages()
 
 void RendererBackendVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
-    SDL_Window* window)
+    SDL_Window* window,
+    VL::PresentModePreference presentMode)
 {
-    rhiDevice->Initialize(instanceExtensions, window);
+    rhiDevice->Initialize(instanceExtensions, window, presentMode);
     frameFenceEpochs.assign(rhiDevice->GetFrameFenceCount(), 0);
     initialized = true;
 }

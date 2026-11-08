@@ -1969,6 +1969,11 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         {
             streamingState.layerUvScale = uvScale;
             streamingState.layerUvScaleInitialized = true;
+            // 单向来源：这是 World 内层 UV 的唯一真值。feedback pass 的
+            // materialInstance 不参与判定，renderSystem 每帧把该值推给它。
+            std::cout << "[TerrainLayer] u_uvScale=" << uvScale
+                      << " resolved from M_terrain instance ("
+                      << plan.desc.assetPath << ")" << std::endl;
         }
         else if (vtRequested &&
                  std::abs(streamingState.layerUvScale - uvScale) > 1.0e-4f)

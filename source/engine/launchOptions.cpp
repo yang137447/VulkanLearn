@@ -260,6 +260,32 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--present-mode")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--present-mode requires auto, fifo, mailbox, or immediate.";
+                return options;
+            }
+            const std::string mode = argv[++i];
+            if (mode == "auto")
+                options.presentMode = PresentModePreference::Auto;
+            else if (mode == "fifo")
+                options.presentMode = PresentModePreference::Fifo;
+            else if (mode == "mailbox")
+                options.presentMode = PresentModePreference::Mailbox;
+            else if (mode == "immediate")
+                options.presentMode = PresentModePreference::Immediate;
+            else
+            {
+                options.errorMessage =
+                    "--present-mode must be auto, fifo, mailbox, or immediate.";
+                return options;
+            }
+            continue;
+        }
+
         if (argument == "--initial-scene")
         {
             if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
@@ -369,6 +395,7 @@ void PrintLaunchUsage()
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
+        << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
         << "       main.exe [--gpu-stats]\n"
         << "       main.exe [--prerender-skin]\n"
         << "       main.exe [--perf-jsonl <path>]\n"
@@ -380,6 +407,7 @@ void PrintLaunchUsage()
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
+        << "  --present-mode <mode>               Swapchain present mode: auto, fifo, mailbox, immediate (default auto = mailbox-first).\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
         << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"

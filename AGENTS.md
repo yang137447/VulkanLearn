@@ -352,10 +352,10 @@ formats must match. `TerrainPageManager` has CPU-side resident/eviction/LRU/prio
 `terrainlayerstats` prints `globalLayers / sourceSets / dedupedLayers / capacity`. Multi-biome mode 0
 still indexes each MI's `sampler2DArray` by globalId, so mode 0 arrays must be laid out per globalId;
 mode 1 is not affected.
-Registration is keyed by `placementId`, not `assetPath`; fallback reserves only the physical atlas
-slot `(31,31)`, so virtual `(31,31)` is an ordinary page and a 32×32 single terrain registers; a
-missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry normal) instead of
-sampling layer 0.
+Registration is keyed by `placementId`, not `assetPath`; all 32×32 physical atlas slots (1024) are
+allocatable — a missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry
+normal) directly in the shader, so no fallback page is reserved and a 32×32 single terrain
+registers. The World raises the resident capacity to cover every registered page (capped at 1024).
 `RegisterTerrain(preload=true)` records `preloadDeferredCount` and keeps going when capacity
 cannot evict. The renderer creates zero page table/atlas textures, then `BuildUploadBatch` /
 `RecordTerrainPageUploads` records the page-table and atlas subregion copies into one command

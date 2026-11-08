@@ -126,6 +126,9 @@ private:
     // caches them by stable object id instead of asking RenderSystem to write
     // back into mutable World objects after command submission.
     std::unordered_map<RuntimeId, Eigen::Matrix4f> previousObjectModels;
+    // 同一 World 内 namespace 字符串不会变化；缓存 objectName/lodGroupId ->
+    // RuntimeId，避免每帧对每个 LOD draw 重建字符串并做 FNV。
+    std::unordered_map<std::string, RuntimeId> objectRuntimeIds;
     std::unordered_map<std::string, LodGroupState> lodGroupStates;
     TerrainLodStatsSnapshot lodStats;
 };

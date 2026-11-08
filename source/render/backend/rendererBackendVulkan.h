@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "render/rhi/presentMode.h"
+
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
@@ -90,7 +92,10 @@ public:
     RendererBackendVulkan();
     ~RendererBackendVulkan();
 
-    void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
+    void Initialize(
+        std::vector<const char*>& instanceExtensions,
+        SDL_Window* window,
+        VL::PresentModePreference presentMode);
     void WaitIdle();
     RendererBackendResourceIdentityCounts
         CaptureResourceIdentityCounts() const noexcept;

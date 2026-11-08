@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
+#include <string>
 #include "commonFunction.h"
 #include "vulkanDebug.h"
 
@@ -247,22 +249,39 @@ void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target)
     std::vector<vk::PresentModeKHR> presentModes = physicalDevices[kGpuIndex].getSurfacePresentModesKHR(target.surface);
     assert(!presentModes.empty());
     // 确定一下显示模式
-    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
-    for (const auto &availablePresentMode : presentModes)
+    const auto supports = [&presentModes](vk::PresentModeKHR mode)
     {
-        //如果也支持VK_PRESENT_MODE_MAILBOX_KHR模式，由于其效率高，便选用
-        if (availablePresentMode == vk::PresentModeKHR::eMailbox)
-        {
-            presentMode = availablePresentMode;
-            break;
-        }
-        //如果没能用上VK_PRESENT_MODE_MAILBOX_KHR模式，但有VK_PRESENT_MODE_IMMEDIATE_KHR模式
-        //也比VK_PRESENT_MODE_FIFO_KHR模式强，故选用
-        else if (availablePresentMode == vk::PresentModeKHR::eImmediate)
-        {
-            presentMode = availablePresentMode;
-        }
+        return std::find(presentModes.begin(), presentModes.end(), mode) !=
+            presentModes.end();
+    };
+    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
+    switch (presentModePreference)
+    {
+    case VL::PresentModePreference::Fifo:
+        break;
+    case VL::PresentModePreference::Mailbox:
+        if (supports(vk::PresentModeKHR::eMailbox))
+            presentMode = vk::PresentModeKHR::eMailbox;
+        break;
+    case VL::PresentModePreference::Immediate:
+        if (supports(vk::PresentModeKHR::eImmediate))
+            presentMode = vk::PresentModeKHR::eImmediate;
+        break;
+    case VL::PresentModePreference::Auto:
+        if (supports(vk::PresentModeKHR::eMailbox))
+            presentMode = vk::PresentModeKHR::eMailbox;
+        else if (supports(vk::PresentModeKHR::eImmediate))
+            presentMode = vk::PresentModeKHR::eImmediate;
+        break;
     }
+    target.presentMode = presentMode;
+    std::cout << "[Vulkan] Present mode: "
+              << (presentMode == vk::PresentModeKHR::eImmediate
+                      ? "immediate"
+                      : presentMode == vk::PresentModeKHR::eMailbox
+                          ? "mailbox"
+                          : "fifo")
+              << std::endl;
     // 确定surface的高度和宽度
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
     {

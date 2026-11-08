@@ -9,6 +9,8 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "render/rhi/presentMode.h"
+
 #include "baseStructs.h"
 #include "presentTarget.h"
 #include "render/backend/swapchainFrameResult.h"
@@ -89,7 +91,10 @@ struct VulkanSwapchainImageSyncResources
 class RHIDeviceVulkan
 {
 public:
-    void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
+    void Initialize(
+        std::vector<const char*>& instanceExtensions,
+        SDL_Window* window,
+        VL::PresentModePreference presentMode);
     bool IsInitialized() const { return initialized; }
 
     void WaitIdle();

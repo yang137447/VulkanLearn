@@ -209,8 +209,6 @@ def build_distort():
          "噪声粗糙度，对应 Houdini rough。"),
         ("Seed", "NodeSocketFloat", 0.0, 0.0, 1000.0,
          "噪声种子。"),
-        ("Height Scale", "NodeSocketFloat", 500.0, 1.0, 5000.0,
-         "把米换算成归一化层。"),
     ])
     p = core.params(group_input)
 
@@ -242,12 +240,13 @@ def build_distort():
     core.link(tree, seed_y.outputs[0], noise_y.inputs["W"])
     core.link(tree, uv.outputs["Vector"], noise_y.inputs["Vector"])
 
-    # 偏移量：米 → 归一化层
-    amp_norm = core.math_node(tree, "DIVIDE", p["Amplitude"], p["Height Scale"], (-1000, 550))
+    # 偏移量作用在**世界坐标**上（Probe Position = Position + Offset），
+    # 单位必须是米。height 层是归一化的（z / Height Scale），但这里不是写层，
+    # 是移动采样点；再除以 Height Scale 会让 140 m 的扭曲退化成 0.28 m。
     offset_x_raw = core.math_node(tree, "SUBTRACT", noise_x.outputs["Fac"], 0.5, (-800, 950))
     offset_y_raw = core.math_node(tree, "SUBTRACT", noise_y.outputs["Fac"], 0.5, (-800, 750))
-    offset_x = core.math_node(tree, "MULTIPLY", offset_x_raw.outputs[0], amp_norm.outputs[0], (-600, 950))
-    offset_y = core.math_node(tree, "MULTIPLY", offset_y_raw.outputs[0], amp_norm.outputs[0], (-600, 750))
+    offset_x = core.math_node(tree, "MULTIPLY", offset_x_raw.outputs[0], p["Amplitude"], (-600, 950))
+    offset_y = core.math_node(tree, "MULTIPLY", offset_y_raw.outputs[0], p["Amplitude"], (-600, 750))
 
     # 采样位移后的位置，取 height
     height = core.read_layer(tree, "height", (-600, 500))

@@ -35,7 +35,8 @@ TerrainLayerFeedbackGpuRing::TerrainLayerFeedbackGpuRing(
                     slotBytes,
                     vk::BufferUsageFlagBits::eTransferDst,
                     vk::MemoryPropertyFlagBits::eHostVisible |
-                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                        vk::MemoryPropertyFlagBits::eHostCoherent |
+                        vk::MemoryPropertyFlagBits::eHostCached,
                     "TerrainLayerFeedbackRing" + std::to_string(slot));
             buffers.push_back(created.first);
             memories.push_back(created.second);

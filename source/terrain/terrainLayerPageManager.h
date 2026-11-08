@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "terrain/terrainAssetTypes.h"
@@ -241,6 +242,15 @@ public:
     // 与提交队列中的 in-flight 帧。
     uint64_t EvictionWindowFrames() const;
 
+    // 本帧选中的完整页集。被保护的页不会成为容量/LRU 淘汰候选：选中页集
+    // 若被淘汰，下一帧又会被请求回来，形成“请求 -> 淘汰 -> 再请求”的
+    // 追尾。预算分配保证正常配置下页集总页数 <= ResidentCapacity；若可见
+    // 工作集本身大于容量，已驻留选中页也不淘汰，新请求 deferred；若容量是在
+    // 页集已加载后降低，则保持暂时超预算，而不是反复抖动。
+    void SetProtectedPages(
+        const std::map<TerrainLayerPageKey, uint32_t>& protectedPageSet);
+    bool IsPageProtected(const TerrainLayerPageKey& key) const;
+
     // 降预算：只淘汰安全窗外的页；没有安全候选时允许暂时超预算。
     void SetResidentCapacityAtEpoch(uint32_t capacity, uint64_t completedEpoch);
     void SetResidentCapacity(uint32_t capacity);
@@ -322,6 +332,8 @@ private:
     std::vector<uint32_t> layerMipStride;
     // 所有被请求过的页（含非驻留），保留 revision/pin/deferred 状态。
     std::map<TerrainLayerPageKey, PageState> pages;
+    // 本帧选中的完整页集；不参与容量/LRU 淘汰。
+    std::set<TerrainLayerPageKey> protectedPages;
     // 物理槽位状态：occupancy 覆盖常驻 + 隔离 + fallback；
     // quarantined 表示淘汰后仍可能被 in-flight 帧采样，releaseEpoch 前不可复用。
     std::vector<uint8_t> physicalOccupancy;

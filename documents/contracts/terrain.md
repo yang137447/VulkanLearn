@@ -501,9 +501,9 @@ World 中摆放多次，只要对象名不同。
 - 物理槽位由 `TerrainPageManager` 从最低可分配槽位给出，淘汰后进入 CPU quarantine，
   到期后可被任意虚拟页复用；
   页表位置（`virtualPageX/Y`）注册后不变，atlas 位置（`physicalPageX/Y`）只在 resident
-  期间有效。fallback 只保留**物理 atlas 槽位** `(31,31)`：页表里不再有该虚拟坐标的保留项，
-  fallback 页也不进入 dirty/resident 统计；虚拟 `(31,31)` 现在是普通页，`pageTilesPerSide=32`
-  的单地形因此可以注册。
+  期间有效。**全部 32×32 物理槽位（1024）都可分配**：不再为缺页保留任何保底物理页。
+  缺页由 shader 的 `invalidPage` 分支直接输出中性表面，不依赖保底页内容；虚拟 `(31,31)`
+  是普通页，`pageTilesPerSide=32` 的单地形因此可以注册。
 - `TerrainPageManager` 的注册身份是 `placementId`（场景对象身份），不是 `assetPath`。
   同一 `assetPath` 可以注册多次；同一 `placementId` 重复注册、或虚拟区域重叠都会在
   `RegisterTerrain` 抛错，错误信息同时带 `assetPath` 与 `placementId`。所有公开页 API
@@ -513,11 +513,16 @@ World 中摆放多次，只要对象名不同。
   `Stats::preloadDeferredCount`，不会死循环。生产 renderer 在 P3 改为
   `RegisterTerrain(preload=false)`：注册只建立虚拟页与物理槽位身份，不烘焙页面。
   每个 placement 只预取中心 2×2 页（clamp 到地形范围）作为初始可见集合，其余页由
-  feedback 逐帧请求。resident budget 默认 `TerrainPageManager::DefaultResidentCapacity`
-  = 512，仍小于 32×32 的 1024 个虚拟页与 1023 个可用物理槽位。512 来自实测：
-  2km/32×32 宽视野 working set 约 415 页。budget 必须大于实际可见 working set；
-  不足时安全窗内的页不能被淘汰，未驻留可见页会保持中性表面，直到通过
-  `terrain capacity N` 提高预算（这是预算配置问题，不是 feedback 失效）。
+  feedback 逐帧请求。resident budget 的**下限**是
+  `TerrainPageManager::DefaultResidentCapacity` = 512（实测 2km/32×32 宽视野
+  working set 约 415 页）。World 注册完成后，loader 会把容量抬到
+  `min(max(512, 已注册虚拟页数), UsablePhysicalSlotCount)`——4×4 tile × 8×8 页
+  = **1024 个虚拟页**，`UsablePhysicalSlotCount` 也是 1024（全部 32×32 槽位可分配；
+  缺页由 shader 直接输出中性表面，不再保留任何保底物理页），因此容量取 1024。
+  **这条必须成立**：容量若停在 512，LRU 会在世界内部切出
+  一条直线，线外的层 ID/权重读成 0、地形退化为默认层（实测近半张图无材质）。
+  预算不足时安全窗内的页仍不会被淘汰，未驻留可见页保持中性表面；
+  `terrain capacity N` 可手动覆盖。
 - renderer 先用零数据创建 page table/atlas。加载期初始上传走
   `TerrainPageManager::BuildUploadBatch` 收集 dirty 并把页表项、ID atlas 页和权重
   atlas 页打包进一个 staging buffer；`RecordTerrainPageUploads` 在**同一个**
@@ -556,7 +561,7 @@ World 中摆放多次，只要对象名不同。
   会把已到期的隔离槽位真正转成空槽位并同步 `free/quarantine` 计数；`AllocatePhysicalSlot`
   开头和每帧 stats 发布前都会调用它，因此不需要等下一次分配才回收。
   `ImmediatelyAllocatablePhysicalSlotCount()` 表示当前可立即分配的空槽位；仍被
-  resident 占用或仍在 quarantine 的槽位都不计入。fallback 物理槽位永远不参与分配/回收。
+  resident 占用或仍在 quarantine 的槽位都不计入。没有永久保留的槽位。
 - P0 已把 `TerrainPageManager`、page table/atlas 的 GPU texture 和 World 共享层表收进
   `TerrainStreamingState`，随 `RendererResourceCache::WorldLocalResourcePackage` 一起发布；
   coordinator 不再使用函数局部 page manager。完整 World 候选创建新 state，MI 预览与
@@ -590,11 +595,10 @@ World 中摆放多次，只要对象名不同。
   旧 `SetResidentCapacity` 仍保留无窗口 LRU 语义，只供加载期/测试使用。
   本帧请求页在 `BuildUploadBatch` 中被 pin，不会同帧被淘汰；淘汰出的物理槽位
   始终走 quarantine，不会让 in-flight 帧采样到被覆盖的 atlas。
-- page table 的无效项是 `A=0`。shader 缺页时仍把页坐标 remap 到物理 `(31,31)`
-  （该槽位不参与分配，atlas 零初始化），但最终输出用缺页掩码替换为中性表面：
-  baseColor 0.18、roughness 0.9、metallic 0、AO 1、几何法线/切线。有效页的
-  `invalidPage=0`，输出与原采样路径逐位一致。物理 `(31,31)` 继续保留不分配，
-  对应虚拟坐标可以正常注册。
+- page table 的无效项是 `A=0`。shader 缺页时把页坐标 remap 到物理 `(31,31)` 只是为了让
+  采样坐标保持在 atlas 界内；该槽位现在是普通可分配槽位，其内容随后被缺页掩码替换，
+  不参与最终输出。缺页输出是中性表面：baseColor 0.18、roughness 0.9、metallic 0、AO 1、
+  几何法线/切线。有效页的 `invalidPage=0`，输出与原采样路径逐位一致。
 - `layerTable` 是 256×4 `RGBA32F` LUT：row0 height/slope、row1 noise/blendEdge/
   `uvScale`/`uvRotation`、row2 `pagesPerSide`/`pageTableBase`/`sourceSet`/`flags`、
   row3 `avgColor`/reserved。mode 0 只消费 row1（v 坐标 `0.375`）的每层 UV 参数；
@@ -795,6 +799,13 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
   `mip = clamp(round(log2(texelsPerPixel)), 0, maxMip)`，其中
   `maxMip = min(log2(pagesPerSide(mip0)), u_layerMaxMip)`。mip 由层自身纹素密度
   决定，不使用 atlas UV 的导数。
+- `u_uvScale` 的**唯一来源是地形的 `M_terrain` 材质实例**。`RendererTerrainLoader`
+  在注册第一个 layer-table 地形时把该值写进 `TerrainStreamingState::layerUvScale`
+  并打印 `[TerrainLayer] u_uvScale=<v> resolved from M_terrain instance (<TR>)`；
+  同一 World 内所有 layer-VT 地形必须给出相同的值，否则加载期直接抛错。
+  `terrainFeedback` pass 的材质实例**不是**权威来源：`RenderSystem` 每帧把
+  `layerUvScale` 推给 pass 材质，因此 `MI_terrainFeedback.json` 里不要重复写
+  `u_uvScale`（写了也不生效，只会造成两个来源的错觉）。
 - 虚拟页：`pagesPerSide(mip) = max(1, pagesPerSide(mip0) >> mip)`；
   先 `fract(layerUv)` 实现 repeat，再按该 mip 的 `pagesPerSide` 切页。页表 texel
   总量正好是 `perLayerStride(mip) * 256`，所以 shader 用
@@ -853,8 +864,10 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 - 每帧最多 `maxLayerPageRequestsPerFrame`（16）个 `RequestPageAtEpoch`；失败项进入
   跨帧 `pendingLayerPageRequests`，按 priority 降序、同优先级按 `deferredRequestCount`
   轮转，不会丢失。
-- 续命范围只覆盖本帧 feedback 真正命中的候选页：覆盖页路径里就是“选中 mip 的全部
-  页”，精确路径里就是屏幕真正采样到的层页。不再刷新“可见层的所有历史 mip”——
+- 续命范围只覆盖本帧选中的完整页集：覆盖页路径里是“选中 mip 的全部页”，
+  精确生产路径里是预算分配后每个选中 `(layer, mip)` 的全部页；
+  `layerPageBudget=0` 的对照路径才是屏幕真正采样到的层页。不再刷新
+  “可见层的所有历史 mip”——
   那会让每帧把整层所有 mip 刷成最新，capacity 对可见集完全失效（实测
   capacity 64 时 resident 长期停在 248）。
 - 淘汰：`idleEvictionEpochs`（默认 180 epoch）之外未再被看到的层页在
@@ -913,11 +926,13 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   保证不被采样。编译器合同：1..4 个 worldTexture 输入（binding 0..N-1）、
   1..5 张固定 128×128 RGBA8 颜色输出、恰好 1 张 D32 深度输出。
 - CPU：`TerrainLayerFeedbackGpuRing`（`source/render/resource/terrainLayerFeedbackGpu.*`）
-  每帧一张 host-visible/coherent buffer（4×16 KiB），4 张图在一次录制里
+  每帧一张 host-visible/coherent/cached buffer（4×16 KiB；无 cached 型时退回
+  coherent），4 张图在一次录制里
   `ColorAttachment → TransferSrc → copy → ColorAttachment`，epoch 门禁复用
   `TerrainFeedbackRingState`。`SummarizeTerrainLayerFeedback` 丢弃 valid=0 与
   frameTag 不匹配的 texel，按 `(layerId, mip, pageIndex)` 去重，用帧内最大
-  sampleCount 归一到 1..255 的 priority。
+  sampleCount 归一到 1..255 的 priority。聚合使用 flat count 表而不是
+  `std::map`；65,536 texel 的逐项树查找会让 CPU 回读固定多出几十毫秒。
 - 导数作用域：GLSL 规定 `dFdx/dFdy` 在非 uniform 控制流里未定义，而
   `miss` 与 top-4 权重都是逐片元值。shader **无条件**算完 4 个 slot 的
   layerUv/mip/页号（固定 4 次迭代、无 break/continue），最后只用权重与
@@ -926,9 +941,12 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   取导数。`u_feedbackScaleX/Y = screen/128` 把 feedback 的每像素变化换算回主视图
   尺度（1280 宽时约 3.3 级 mip），否则层页 mip 会被系统性选粗、驻留欠配。
 - `TerrainLayerVisibilityResolver::ApplyExact` 把 pageIndex 还原成 `(pageX,pageY)`，
-  越界项计入 `outOfRangePages`；中心页已驻留时不扩邻域，缺页时才按
-  `exactFeedbackNeighborhoodRadius`（默认 1）扩一圈做 prefetch（邻域 priority 减半）。
-  命中页推进 `lastSeenEpoch`/`lastTouchedEpoch`，未驻留页进入与 L4a 相同的跨帧队列，
+  越界项计入 `outOfRangePages`。生产路径（`layerPageBudget != 0`）先按
+  `(layer, targetMip)` 归并可见需求，再走“全局层页 mip 预算”一节；只有
+  `layerPageBudget = 0` 的对照/测试路径才逐页请求，并在中心页缺页时按
+  `exactFeedbackNeighborhoodRadius`（默认 1）扩一圈做 prefetch（邻域 priority
+  减半），已驻留时不扩。两条路径的命中页都会推进
+  `lastSeenEpoch`/`lastTouchedEpoch`，未驻留页进入与 L4a 相同的跨帧队列，
   每帧请求/上传预算、quarantine、Commit/Abort 语义完全一致。
 - 精确 feedback 可用时它就是唯一驱动层页驻留的路径；L4a 的覆盖页推导只在
   ring 还没产出（启动、回读延迟）或精确 feedback 饥饿（见下一节）时作为
@@ -938,10 +956,13 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
 
 `M_terrain` 在目标 mip 的页表项无效时会向更粗 mip 回退（L4a 已有行为）；
 但只有更粗 mip 的页也在驻留集里，回退才真的有内容可采，否则仍然是
-catalog row3 的 `avgColor`。L4c 让 CPU 在目标页缺页时同时预取粗页：
+catalog row3 的 `avgColor`。生产预算路径会为每个 `(layer, targetMip)` 需求
+保留一个不低于目标的完整页集，因此回退目标是预算选中的更粗页集；下面这套
+逐页粗 mip 扩容用于 `layerPageBudget = 0` 的对照/测试路径：
 
 - 入口是 `TerrainLayerVisibilityResolver::ExpandCoarserFallbackCandidates`，
-  L4a（覆盖页推导）与 L4b（精确 feedback）两条路径共用。
+  L4a（覆盖页推导）与 L4b（`layerPageBudget = 0` 的精确 feedback 对照路径）
+  共用；生产预算路径不调用它，避免绕过去重页集预算。
 - 只对**缺页**的目标页扩容：目标页已驻留时不加粗页，否则候选集会凭空
   变大、capacity 被“假可见”页撑爆。
 - 每粗一级的页坐标是 `(pageX >> level, pageY >> level)`，与 shader 在
@@ -961,6 +982,51 @@ catalog row3 的 `avgColor`。L4c 让 CPU 在目标页缺页时同时预取粗�
   分布）。这些值只在手动执行 `terrainlayer stats` 时打印，不逐帧刷屏。
 
 本阶段的 shader 仍是硬切换；L4e 才加入按 mip 差的 `avgColor` 混合（见下一节）。
+
+## 全局层页 mip 预算（生产路径）
+
+层页是平铺资产，shader 的 UV 可能落到该 mip 的任意页；因此每个选中的
+`(layer, mip)` 都是“全部页”的固定成本。多地形场景中同一全局层会在近处和
+远处同时出现，shader 对不同像素会报告不同目标 mip。若每个 `(layer, targetMip)`
+都独立按屏幕像素请求，7 个 1K tile × 4 层全部选 mip0 需要 1792 页，超过默认
+`ResidentCapacity=512` 3.5 倍，每帧“请求 -> 淘汰 -> 再请求”无法收敛（实测
+CPU 600 ms/帧）。生产路径由 `TerrainLayerMipBudget`
+（`source/terrain/terrainLayerMipBudget.*`）在容量内统一分配：
+
+- 输入是精确 feedback 归并出的 `(layer, targetMip)` 需求；同一层可以有多个
+  目标 mip。需求的 priority 取该 `(layer, targetMip)` 在本帧反馈里的最大
+  sampleCount 归一值。透视投影下近处地形占更多屏幕像素，因此高 priority 是
+  “更近、应优先清晰”的排序键。
+- 每个需求先从该层允许的最粗 `maxMip`（层自身 mip 链与 sourceSet 取小）起步；
+  按 priority 降序依次向 `targetMip` 细化。细化一级只有在去重后的
+  `(layer, mip)` 页集总页数仍不超过 `layerPageBudget` 时才提交；预算不足就停在
+  当前 mip，继续下一个需求。
+- 分配绝不越过 feedback 目标：shader 不会采样更细的 mip，给更细页只会白占
+  容量。同一层的近处目标 mip0 与远处目标 mip3 可以同时保留，分别请求
+  mip0 与 mip3 的完整页集。
+- 每个参与分配的可见层始终保留其最粗 mip 的完整页集（所有支持分辨率下都是
+  1 页）。128×128 feedback 欠采样漏掉某个远处目标 mip 时，shader 仍能沿
+  mip 链回退到这张有内容的尾页，而不是 `avgColor`；成本是每层 1 页。
+- 去重后的每个 `(layer, mip)` 都必须请求全部页并在本帧
+  `MarkPageUsedAtEpoch`；旧的、不再被预算选中的 pending 请求会从队列删除，
+  已驻留旧页交给 idle 安全窗淘汰。
+- `RenderSystem` 每帧把 `layerPageBudget` 设为层页管理器的
+  `ResidentCapacity()`。分配器同时写 `budgetExceeded`：如果所有需求落在最粗
+  mip 仍然超过容量（例如容量被 console 降到低于可见需求数），调用方停止
+  细化；已驻留选中页不淘汰，空槽不足的请求留在 pending，而不是继续淘汰
+  选中页追预算。
+- 选中页集通过 `TerrainLayerPageManager::SetProtectedPages` 排除在容量/LRU
+  淘汰之外。正常预算内，页集加载完成后 resident 不再抖动；工作集大于容量时
+  也不会出现“刚请求就被淘汰”。容量若在页集加载后降低，驻留会暂时超预算，
+  直到可见页集缩小或用户恢复容量。
+- `layerPageBudget = 0` 只保留给对照/测试，生产路径不会使用。
+
+控制台 `terrainlayer stats` 的预算行：
+`pageBudget`（容量上限）、`budgetPages`（去重页集总页数）、
+`budgetSets`（去重 `(layer,mip)` 页集数）、`budgetClamped`（因预算不足停下的
+细化次数）、`budgetExceeded`（最粗工作集仍超预算）、
+`budgetEntries=0..4`（可见 `(layer,targetMip)` 需求最终落到的 mip 分布）、
+`budgetMips=0..4`（最终驻留页集分布）。近处需求应优先出现在更小的 mip 编号。
 
 ## 精确 feedback 饥饿保护（L4d）
 
@@ -1048,7 +1114,10 @@ L4d 在 `TerrainLayerVisibilityResolver` 里增加饥饿保护：
 `terrainlayer stats`（手动执行）新增一行：
 `forceMip` / `prefetchMoving` / `prefetchPages` / `prefetchRequests` /
 `prefetchAccepted` / `fallbackBlendPages` / `avgColorPages`。预取请求不计入
-`mipRequests`（那是本帧可见页请求），也不计入 `feedbackHits`。
+`mipRequests`（那是本帧可见页请求），也不计入 `feedbackHits`。生产预算路径的
+`pageBudget` / `budgetPages` / `budgetSets` / `budgetClamped` /
+`budgetExceeded` / `budgetEntries=0..4` / `budgetMips=0..4` 另有一行，见
+“全局层页 mip 预算（生产路径）”。
 
 ## Feedback pass（P2/P3）
 
@@ -1090,14 +1159,18 @@ P2 增加了一个**独立的小 pass**，只产出可见页反馈；P3 由 CPU 
   `R[0..4]=virtualPageX`、`R.bit5=miss`、`R.bit6=valid`、`R.bit7=0`；
   `G[0..4]=virtualPageY`；`B=priority`；`A=frameTag`。`frameTag = (submittedEpoch % 255) + 1`，
   0 保留为未写入；32×32 page table 恰好需要 5+5 bit，扩展到 64×64 必须升级格式版本。
-- `TerrainStreamingState::feedbackRing` 是 World-local 的 host-visible/coherent ring，
+- `TerrainStreamingState::feedbackRing` 是 World-local 的 host-visible/coherent/cached ring
+  （无 cached 型时退回 coherent），
   槽数等于后端 `GetFrameFenceCount()`（当前 2），常驻映射、不每帧创建/销毁 buffer。
   帧末在所有 scene pass 之后把当前 swapchain image 的 `terrainFeedback` 从
   `ColorAttachmentOptimal` 转到 `TransferSrcOptimal`，`CopyImageToBuffer` 后转回
   `ColorAttachmentOptimal`；下一帧 render pass 仍以 `Undefined/clear` 取得内容。
 - CPU 只在 `BeginFrame` 已等待该 frameIndex fence 后调用 `TryConsume`，并要求
   `copiedEpoch <= completedEpoch`；成功后立即清 pending，因此同一槽位只解析一次。
-  未完成的槽位不会被读取。该 ring 随 `WorldLocalResourcePackage` 一起退休。
+  未完成的槽位不会被读取。`SummarizeTerrainFeedback` 用固定 32×32 页槽聚合；
+  直接逐字节解析未缓存 BAR 会让 64 KiB 回读产生约 11 ms 的 CPU 开销，因此
+  readback ring 必须优先分配 cached 内存。该 ring 随
+  `WorldLocalResourcePackage` 一起退休。
 - 控制台 `terrainfeedback` 打印最近一次已完成回读的 `epoch/tag/validTexels/
   distinctPages/missPages/maxPriority/staleTexels` 和前 8 个高优先级页。
   `terrain stats` 打印驻留/预算/虚拟页/可立即分配空槽位/隔离槽位/请求/
@@ -1213,6 +1286,8 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   RuntimeId 跨级稳定、两个组独立选择、无 LOD 组对象保持原 draw 与 RuntimeId，
   以及“目标级未驻留时回退到 resident 的更粗一级 / 只剩 coarsest 仍出图”
   和 `drawnChunks / drawnByLevel / residentObjectsByLevel / totalMeshDraws` 计数。
+  组 AABB/距离/切换状态每帧按 group 只计算一次，RuntimeId 按 World 代际缓存；
+  编辑器 picking RenderScene 只在开发者 UI 可见时重建，运行时 HUD 路径不生成。
 - 几何 chunk 驻留：`terrain_tests --gtest_filter=TerrainChunkResidency.*`
   覆盖窗口默认推导（`lodDistances × 1.1`）、显式窗口优先、最粗一级恒驻留、
   闭区间边界、世界空间 AABB 距离、无相机时回到全量；
@@ -1291,7 +1366,7 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   当前宽视野 working set（实测约 415 页）应最终收敛到 `missPages=0`、`pending=0`、
   `resident<=512`，不存在加载期 46 秒全量 preload。
 - CPU 页面生命周期：`terrain_tests` 覆盖 per-tile 烘焙与全量结果一致、请求/命中/未命中、
-  LRU 淘汰、优先级/引用保护、淘汰后 page table 无效、fallback 物理槽位保留和 pageOrigin 重叠拒绝；
+  LRU 淘汰、优先级/引用保护、淘汰后 page table 无效、最后一个物理槽位可分配和 pageOrigin 重叠拒绝；
   P0 另覆盖 epoch 安全窗、新页初始 epoch、pin 拒绝淘汰、页内容 revision
   与上传确认、state revision 幂等，以及 `SetGpuEpochContext` 不改变旧 LRU。P1 覆盖
   `BuildUploadBatch`/`CommitUploadBatch`/`AbortUploadBatch` 的 pin 生命周期、收集后
@@ -1305,6 +1380,9 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `[0,1]`，以及 MI 预览候选提交后仍指向同一个 `TerrainStreamingState`。
 - P2 feedback：`terrain_tests` 覆盖 texel 编解码、frameTag 回绕、无效/过期 texel
   丢弃、distinct/miss 页聚合、ring 未完成不消费、完成后只消费一次、槽位复用和 tag 范围；
+  `TerrainLayerFeedbackSummary.SummarizesFullFourSlotBufferAndResetsScratch` 覆盖
+  完整 65,536 texel 与 flat scratch 复位，`RejectsMipOutsideEncodedRange` 覆盖
+  越界 mip 的防御；
   `vl_renderer_backend_tests` 覆盖编译器的 128×128 单颜色 + 128×128 `D32_SFLOAT` 深度/
   禁 MSAA/swapChain/GBuffer/非 D32 格式合同、`ColorAttachment -> TransferSrc -> ColorAttachment` 往返与 headless 回读，
   并把读回内容交给同一 CPU summary 验证。手工 smoke 用 `terrainfeedback` 观察
@@ -1313,7 +1391,7 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - P3.1 覆盖：feedback 命中同时推进 `lastSeenEpoch`/`lastTouchedEpoch` 并改变
   epoch-aware 淘汰顺序；有效安全窗按 `max(2, framesInFlight+1)` 计算；
   `SetResidentCapacityAtEpoch` 在窗口内/持续可见时保持超预算，只回收窗口外的页；隔离槽位到期后
-  不分配也会被回收、分配时也会先回收再复用且 fallback 永不回收；capacity=1/8 压测终止；
+  不分配也会被回收、分配时也会先回收再复用；capacity=1/8 压测终止；
   `materialUsesLayerTable && TerrainUsesVirtualPages` 的四组合 eligibility 纯函数；
   layerless 地形与分层地形同 World 时只计入 unregistered、不污染页驻留；
   网格最后列/行半 texel 内缩；编译器拒绝非 D32 feedback 深度。
@@ -1360,6 +1438,13 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
     每层 1 页且已驻留，因此不触发粗页预取）。
   - 与 L4b 基线二进制（同一份源码去掉 L4c）对比：mode 1、`SC_terrain_b32`、
     `SC_terrain_m3`、`SC_terrain_b32_bc7` 四张截图 **最大通道差 0**（逐字节一致）。
+- 全局层页 mip 预算：`tool/terrain-tests/terrainLayerMipBudgetTests.cpp` 覆盖
+  每层 mip 链/target 钳制、预算内收敛、近处优先、同层远近双 mip、重复需求
+  去重、最粗工作集仍超预算的 `budgetExceeded` 路径；
+  `terrainLayerVisibilityTests.cpp` 覆盖“feedback 只命中一页也请求选中 mip
+  全部页”“目标 mip2 不装 mip0”“预算紧张时近处拿细 mip”“同一层 mip0+mip3
+  同时驻留”“capacity 等于选中页集时后续帧 accepted=0/evictions=0”。
+  `terrainLayerPageManagerTests.cpp` 覆盖受保护页集不被容量/LRU 淘汰。
   - `terrainlayer capacity 8` / `16`：`resident=20/8`、`resident=20/16`，
     没有新增淘汰或回退像素。可见页每帧都被 feedback 看到，落在 GPU 安全窗内，
     capacity 不能淘汰它们——因此在这个场景里 `capacity 8/16` **无法制造缺页**，

@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "render/rhi/presentMode.h"
+
 namespace VL
 {
 
@@ -39,6 +41,9 @@ struct LaunchOptions
     std::optional<std::string> perfJsonlPath;
     // 自动化输入验收：启动后主动抢占 OS 键盘焦点，仅显式 flag 生效。
     bool focusWindow = false;
+    // Auto keeps the existing mailbox-first policy. Immediate is the uncapped
+    // benchmark path; it may tear and depends on the surface supporting it.
+    PresentModePreference presentMode = PresentModePreference::Auto;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;
     // 帧率验收工具：0 = 不限速（默认行为完全不变），正整数表示渲染主循环的目标节拍。

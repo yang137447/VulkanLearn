@@ -1,5 +1,13 @@
 """Depression-filling, flow-accumulation and stream-power terrain erosion.
 
+算法来源（按这些论文的默认形式实现，不针对某个商用软件做拟合）：
+
+* 填洼：Barnes, Lehman & Mulla (2014), priority-flood + epsilon。
+* 汇流：O'Callaghan & Mark (1984) D8；Quinn et al. (1991) MFD。
+* 河道下切：Braun & Willett (2013) 隐式 stream power ``E = K A^m S^n``，
+  默认 ``m = 0.5, n = 1``（SPL 的常用凹度指数）。
+* 坡面：Roering et al. (1999) 临界坡扩散的离散形式（``thermal_erode``）。
+
 Pure numpy/standard-library implementation.  It deliberately does not import
 ``bpy``, does not call into scipy, and does not vendor code from another
 project.  The module is designed to post-process the 16-bit heightmaps produced
@@ -127,6 +135,19 @@ class ErosionParams:
     # 需要强抑制高频碎沟的资产做对照。
     pre_smooth_iterations: int = 0
     detail_restore: float = 0.0
+    # 汇流网络重建周期。0 = 整次侵蚀只建一次并复用（默认）。
+    #
+    # 每迭代重建是 Braun & Willett 原始写法，但填洼 / 汇流累积 / 拓扑层号
+    # 在 1024² 上各要 1.6–3.3 s，占总耗时的 88%；而隐式求解本身只有 0.4 s。
+    # 对 Pegasus 这种“总下切 < 2 m”的浅侵蚀，网络在一次运行内几乎不变，
+    # 复用后单次求解从 ~94 s 降到 ~12 s。真的需要跟随抬升时把这里设成 1。
+    network_refresh: int = 0
+    # 是否在路由前填洼。填洼会让 `filled` 与真实高度不一致：洼地被抬高，
+    # 而隐式求解的 ``value >= max_downstream`` 钳制是按 filled 的上下游关系
+    # 做的，结果是把整片洼地抬到下游高度（实测 rms 2.78 m、均值 +0.75 m，
+    # 且与 k 无关）。Pegasus 的浅侵蚀不需要填洼：洼地当作局部汇，不产生
+    # 下切即可。需要真实河网连续性时再打开。
+    fill_sinks: bool = False
 
 
 @dataclass
@@ -311,6 +332,149 @@ class _FlowEdges:
     weights: np.ndarray
     steps: np.ndarray
     offsets: np.ndarray
+
+
+@dataclass
+class FlowNetwork:
+    """A filled surface plus its complete drainage network.
+
+    Building this is the expensive part (fill + weights + accumulation +
+    topological levels).  The implicit solve only consumes it, so one network
+    can serve every time step of a run — and, via :func:`save_flow_network`,
+    every subsequent parameter iteration on the same heightmap.
+    """
+
+    filled: np.ndarray
+    weights: list[np.ndarray]
+    best_slope: np.ndarray
+    edges: "_FlowEdges | None"
+    area: np.ndarray
+    level: np.ndarray
+    # 预计算的分层求解计划（见 :func:`_build_solve_plan`）。网络固定时每次
+    # 求解都要重算 argsort / repeat / cumsum，12 次迭代就是十几秒的纯开销。
+    plan: list["_LevelPlan"] | None = None
+
+
+@dataclass
+class _LevelPlan:
+    """Everything one topological level needs, precomputed once."""
+
+    index: np.ndarray
+    edge_index: np.ndarray
+    source_local: np.ndarray
+    target: np.ndarray
+    weight: np.ndarray
+    distance: np.ndarray
+    inverse_distance: np.ndarray
+    inv_sum: np.ndarray
+    has_edge: np.ndarray
+
+
+def _build_solve_plan(edges: "_FlowEdges | None",
+                      level: np.ndarray,
+                      cell_size: float) -> list[_LevelPlan]:
+    if edges is None:
+        return []
+    flat_level = level.ravel()
+    order = np.argsort(flat_level, kind="stable")
+    counts = np.bincount(flat_level)
+    offsets = np.concatenate(([0], np.cumsum(counts)))
+    plans: list[_LevelPlan] = []
+    for current in range(1, counts.size):
+        begin = offsets[current]
+        end = offsets[current + 1]
+        if begin == end:
+            continue
+        index = order[begin:end]
+        left = edges.offsets[index]
+        right = edges.offsets[index + 1]
+        edge_counts = right - left
+        total = int(edge_counts.sum())
+        if total == 0:
+            continue
+        starts = np.repeat(left, edge_counts)
+        local = np.arange(total, dtype=np.int64) - np.repeat(
+            np.cumsum(edge_counts) - edge_counts, edge_counts
+        )
+        edge_index = starts + local
+        source_local = np.repeat(np.arange(index.size), edge_counts)
+        distance = np.maximum(edges.steps[edge_index] * cell_size, 1e-6)
+        weight = edges.weights[edge_index]
+        inverse_distance = weight / distance
+        plans.append(_LevelPlan(
+            index=index,
+            edge_index=edge_index,
+            source_local=source_local,
+            target=edges.targets[edge_index],
+            weight=weight,
+            distance=distance,
+            inverse_distance=inverse_distance,
+            inv_sum=np.bincount(source_local, weights=inverse_distance,
+                                minlength=index.size),
+            has_edge=edge_counts > 0,
+        ))
+    return plans
+
+
+def build_flow_network(
+    z: np.ndarray,
+    cell_size: float,
+    fill_epsilon: float = _FILL_EPSILON_M,
+    flow_method: str = "mfd",
+    fill_sinks: bool = False,
+) -> FlowNetwork:
+    """Fill depressions and derive the full drainage network."""
+
+    surface = _as_heightfield(z)
+    if fill_sinks:
+        filled, _ = fill_depressions(surface, cell_size, fill_epsilon)
+    else:
+        filled = surface
+    weights, _, best_slope = _flow_weights(filled, cell_size, flow_method)
+    edges = _csr_flow_edges(weights, filled)
+    area = _accumulate_from_weights(filled, cell_size, weights, edges)
+    level = _topological_levels_multi(filled, edges)
+    return FlowNetwork(filled=filled, weights=weights, best_slope=best_slope,
+                       edges=edges, area=area, level=level)
+
+
+def save_flow_network(network: FlowNetwork, path: Path | str) -> None:
+    """Cache a network as a single ``.npz`` (arrays only, no pickle)."""
+
+    payload: dict[str, np.ndarray] = {
+        "filled": network.filled,
+        "best_slope": network.best_slope,
+        "area": network.area,
+        "level": network.level,
+        "weights": np.stack(network.weights),
+        "has_edges": np.asarray(network.edges is not None),
+    }
+    if network.edges is not None:
+        payload["targets"] = network.edges.targets
+        payload["edge_weights"] = network.edges.weights
+        payload["steps"] = network.edges.steps
+        payload["offsets"] = network.edges.offsets
+    np.savez(str(path), **payload)
+
+
+def load_flow_network(path: Path | str) -> FlowNetwork:
+    with np.load(str(path)) as data:
+        edges = None
+        if bool(data["has_edges"]):
+            edges = _FlowEdges(
+                targets=data["targets"],
+                weights=data["edge_weights"],
+                steps=data["steps"],
+                offsets=data["offsets"],
+            )
+        return FlowNetwork(
+            filled=data["filled"],
+            weights=[data["weights"][i] for i in range(data["weights"].shape[0])],
+            best_slope=data["best_slope"],
+            edges=edges,
+            area=data["area"],
+            level=data["level"],
+        )
 
 
 def _csr_flow_edges(
@@ -699,6 +863,7 @@ def _solve_implicit_network_multi(
     n: float,
     dt: float,
     uplift: float,
+    plan: list[_LevelPlan] | None = None,
 ) -> np.ndarray:
     """One implicit solve on a fixed multi-receiver drainage network.
 
@@ -717,51 +882,40 @@ def _solve_implicit_network_multi(
         return solved.reshape(surface.shape)
     area_flat = area.ravel()
     lifted = previous + uplift * dt
-    flat_level = level.ravel()
-    order = np.argsort(flat_level, kind="stable")
-    counts = np.bincount(flat_level)
-    offsets = np.concatenate(([0], np.cumsum(counts)))
+    if plan is None:
+        plan = _build_solve_plan(edges, level, cell_size)
 
-    for current in range(1, counts.size):
-        begin = offsets[current]
-        end = offsets[current + 1]
-        if begin == end:
-            continue
-        index = order[begin:end]
-        left = edges.offsets[index]
-        right = edges.offsets[index + 1]
-        edge_counts = right - left
-        total = int(edge_counts.sum())
-        if total == 0:
-            continue
-        starts = np.repeat(left, edge_counts)
-        local = np.arange(total, dtype=np.int64) - np.repeat(
-            np.cumsum(edge_counts) - edge_counts, edge_counts
-        )
-        edge_index = starts + local
-        source_local = np.repeat(np.arange(index.size), edge_counts)
-        target = edges.targets[edge_index]
-        weight = edges.weights[edge_index]
-        distance = np.maximum(
-            edges.steps[edge_index] * cell_size, 1.0e-6
-        )
-        inverse_distance = weight / distance
+    for entry in plan:
+        index = entry.index
+        target = entry.target
+        weight = entry.weight
+        distance = entry.distance
+        source_local = entry.source_local
+        has_edge = entry.has_edge
         downstream = solved[target]
-        inv_sum = np.bincount(
-            source_local, weights=inverse_distance, minlength=index.size
-        )
+        # 只接受**真实高度更低**的接收者。
+        #
+        # 网络可以建在填洼后的表面上（`filled >= z`），此时洼地内部的
+        # "下游"在真实高度上反而更高。若不加这层掩膜，钳制
+        # ``value >= max_downstream`` 会把整片洼地抬到下游高度
+        # （实测 rms 2.78 m、均值 +0.75 m）。填洼只用来保证路由连通，
+        # 物理高度必须按真实地表比较。
+        source_heights = previous[index][source_local]
+        valid = downstream < source_heights
+        weight = weight * valid
+        inverse_distance = entry.inverse_distance * valid
+        inv_sum = np.bincount(source_local, weights=inverse_distance,
+                              minlength=index.size)
         downstream_sum = np.bincount(
             source_local,
             weights=inverse_distance * downstream,
             minlength=index.size,
         )
         max_downstream = np.full(index.size, -np.inf, dtype=np.float64)
-        np.maximum.at(max_downstream, source_local, downstream)
+        if np.any(valid):
+            np.maximum.at(max_downstream, source_local[valid], downstream[valid])
 
         value = previous[index].copy()
-        has_edge = edge_counts > 0
-        if not np.any(has_edge):
-            continue
         coefficient = (
             k * dt * np.power(np.maximum(area_flat[index], 1.0), m)
         )
@@ -911,6 +1065,10 @@ def implicit_stream_power_erode(
     deposition_slope_deg: float = _DEPOSITION_SLOPE_DEG,
     deposition_length_m: float = 1000.0,
     diagnostics: ErosionDiagnostics | None = None,
+    network: FlowNetwork | None = None,
+    network_refresh: int = 0,
+    fill_sinks: bool = False,
+    layers: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Braun & Willett (2013) implicit stream-power incision.
 
@@ -948,14 +1106,24 @@ def implicit_stream_power_erode(
 
     surface = _as_heightfield(z)
     cell_area = cell_size * cell_size
-    for _ in range(int(iterations)):
-        filled, _ = fill_depressions(surface, cell_size, fill_epsilon)
-        weights, _, best_slope = _flow_weights(
-            filled, cell_size, flow_method
-        )
-        edges = _csr_flow_edges(weights, filled)
-        area = _accumulate_from_weights(filled, cell_size, weights, edges)
-        level = _topological_levels_multi(filled, edges)
+    if layers is not None:
+        # 沉积台账：debris = 累计沉积，sediment = 累计被带走（净侵蚀 - 沉积）。
+        layers.setdefault("debris", np.zeros_like(surface))
+        layers.setdefault("sediment", np.zeros_like(surface))
+    refresh = max(0, int(network_refresh))
+    for step in range(int(iterations)):
+        rebuild = network is None or (refresh > 0 and step > 0 and step % refresh == 0)
+        if rebuild:
+            network = build_flow_network(
+                surface, cell_size, fill_epsilon, flow_method, fill_sinks
+            )
+        assert network is not None
+        edges = network.edges
+        area = network.area
+        level = network.level
+        best_slope = network.best_slope
+        if network.plan is None:
+            network.plan = _build_solve_plan(edges, level, cell_size)
         previous = surface
         surface = _solve_implicit_network_multi(
             surface,
@@ -968,6 +1136,7 @@ def implicit_stream_power_erode(
             n,
             dt,
             uplift,
+            network.plan,
         )
         incision = np.maximum(previous - surface, 0.0)
         if diagnostics is not None:
@@ -991,6 +1160,9 @@ def implicit_stream_power_erode(
                 deposition_length_m,
             )
             surface = surface + deposited
+            if layers is not None:
+                layers["debris"] += deposited
+                layers["sediment"] += np.maximum(incision - deposited, 0.0)
             if diagnostics is not None:
                 diagnostics.deposited_volume_m3 += (
                     float(deposited.sum()) * cell_area
@@ -1073,11 +1245,19 @@ def erode(
     cell_size: float,
     params: ErosionParams | None = None,
     diagnostics: ErosionDiagnostics | None = None,
+    network: FlowNetwork | None = None,
+    compute_final_flow: bool = True,
+    layers: dict[str, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Stream-power incision followed by thermal relaxation.
 
     Returns ``(z_eroded, flow_area_m2, fill_depth_m)``.  The returned flow area
     and fill depth describe the final surface.
+
+    ``compute_final_flow=False`` reuses the network's flow area instead of
+    re-filling and re-accumulating the eroded surface.  That last pass costs
+    ~7 s at 1024² and only exists to describe the *result*; asset baking gets
+    the same mask from the network it already built.
     """
 
     settings = params if params is not None else ErosionParams()
@@ -1094,6 +1274,11 @@ def erode(
             for _ in range(settings.pre_smooth_iterations):
                 base = _smooth3x3(base, 0.5)
             residual = array - base
+        if network is None and not compute_final_flow:
+            network = build_flow_network(
+                base, cell_size, settings.fill_epsilon, settings.flow_method,
+                settings.fill_sinks,
+            )
         eroded = implicit_stream_power_erode(
             base,
             cell_size,
@@ -1109,6 +1294,10 @@ def erode(
             settings.deposition_slope_deg,
             settings.deposition_length_m,
             diagnostics,
+            network,
+            settings.network_refresh,
+            settings.fill_sinks,
+            layers,
         )
         if residual is not None and settings.detail_restore > 0.0:
             eroded = eroded + residual * settings.detail_restore
@@ -1138,8 +1327,18 @@ def erode(
         settings.thermal_rate,
     )
 
-    filled, fill_depth = fill_depressions(eroded, cell_size, settings.fill_epsilon)
-    flow_area = _flow_from_filled(filled, cell_size, "mfd")
+    if compute_final_flow:
+        filled, fill_depth = fill_depressions(
+            eroded, cell_size, settings.fill_epsilon
+        )
+        flow_area = _flow_from_filled(filled, cell_size, "mfd")
+    else:
+        if network is None:
+            raise ValueError(
+                "compute_final_flow=False requires a network"
+            )
+        flow_area = network.area
+        fill_depth = np.zeros_like(flow_area)
     return eroded, flow_area, fill_depth
 
 

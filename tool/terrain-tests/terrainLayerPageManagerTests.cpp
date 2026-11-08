@@ -1,6 +1,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <vector>
@@ -892,4 +893,41 @@ TEST(TerrainLayerVTL3, CatalogSourceResolutionMustMatchSquareSourceExtent)
         {MakeLayer(512), MakeLayer(1024)},
         512,
         512));
+}
+
+TEST(TerrainLayerPageManagerTest, ProtectedWorkingSetSurvivesCapacityEviction)
+{
+    VL::TerrainLayerPageManager manager;
+    manager.ConfigureLayers({MakeLayer(512)});
+    manager.SetResidentCapacity(2);
+    manager.SetGpuEpochContext(10, 10, 2);
+
+    const VL::TerrainLayerPageKey first = PageKey(0, 0, 0, 0);
+    const VL::TerrainLayerPageKey second = PageKey(0, 0, 1, 0);
+    const VL::TerrainLayerPageKey third = PageKey(0, 0, 2, 0);
+    ASSERT_TRUE(manager.RequestPage(first));
+    ASSERT_TRUE(manager.RequestPage(second));
+
+    // 选中页集不能被当成普通 LRU 候选。
+    const std::map<VL::TerrainLayerPageKey, uint32_t> protectedFirst = {
+        {first, 255}};
+    manager.SetProtectedPages(protectedFirst);
+    EXPECT_FALSE(manager.CanEvictPageAt(first, 20));
+    EXPECT_TRUE(manager.CanEvictPageAt(second, 20));
+    EXPECT_FALSE(manager.EvictPage(first));
+
+    // 请求新页时只能淘汰未受保护的 second。
+    ASSERT_TRUE(manager.RequestPageAtEpoch(third, 1, 200, 20));
+    EXPECT_TRUE(manager.IsResident(first));
+    EXPECT_FALSE(manager.IsResident(second));
+    EXPECT_TRUE(manager.IsResident(third));
+
+    // 工作集大于容量时允许暂时超预算，但不能一边请求一边淘汰自己。
+    const std::map<VL::TerrainLayerPageKey, uint32_t> protectedAll = {
+        {first, 255}, {third, 255}};
+    manager.SetProtectedPages(protectedAll);
+    manager.SetResidentCapacityAtEpoch(1, 30);
+    EXPECT_EQ(manager.ResidentCount(), 2u);
+    EXPECT_FALSE(manager.EvictPage(first));
+    EXPECT_FALSE(manager.EvictPage(third));
 }

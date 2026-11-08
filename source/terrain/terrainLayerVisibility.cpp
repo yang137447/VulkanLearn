@@ -260,6 +260,7 @@ TerrainLayerVisibilityStats TerrainLayerVisibilityResolver::Apply(
 
     const uint64_t seenEpoch =
         summary.copiedEpoch != 0 ? summary.copiedEpoch : completedEpoch;
+    layerPages.SetProtectedPages(candidates);
     // 候选页里已经驻留的那部分就是本帧真正的 feedback hit。
     for (const auto& [key, priority] : visibleCandidates)
     {
@@ -337,6 +338,7 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
         {
             const std::map<TerrainLayerPageKey, uint32_t> noCandidates;
             const std::array<bool, 256> noLayersSeen{};
+            layerPages.SetProtectedPages(noCandidates);
             const CandidateCommitResult committed = CommitCandidates(
                 noCandidates,
                 noLayersSeen,
@@ -380,12 +382,26 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
 
     std::map<TerrainLayerPageKey, uint32_t> candidates;
     std::array<bool, 256> layerSeen{};
+    std::array<uint32_t, 256> layerPriority{};
+    std::array<uint32_t, 256> layerTargetMask{};
+    std::array<std::array<uint32_t, TerrainLayerMaxMipLevel + 1>, 256>
+        targetPriorities{};
 
-    // 1. 逐条精确页记录：pageIndex 还原成 (pageX,pageY)。只有中心页**缺页**
-    //    时才按 radius 扩一圈邻域作为 prefetch：128×128 feedback 会漏采样
-    //    细长/远处的页，邻域能补上；已驻留页不需要邻域，否则候选集会凭空
-    //    膨胀到可见页的数倍，capacity 又会被“假可见”撑爆。
-    //    中心页保留原 priority，邻域降档，避免邻域抢占请求名额。
+    struct ParsedFeedbackPage
+    {
+        uint32_t layerId = 0;
+        uint32_t mip = 0;
+        uint32_t pageX = 0;
+        uint32_t pageY = 0;
+        uint32_t sampleCount = 0;
+        uint32_t priority = 1;
+    };
+    std::vector<ParsedFeedbackPage> parsedPages;
+    parsedPages.reserve(summary.pages.size());
+
+    // 1. 先只做校验和需求归并：同一个全局层可以在多个 tile/距离上出现，
+    //    目标 mip 也可能不同。预算输入必须是 (layer, targetMip) 需求，
+    //    不能先压成“每层一个目标”，否则远处像素会采到没有请求的页。
     for (const TerrainLayerFeedbackRecord& record : summary.pages)
     {
         const uint32_t layerId = record.layerId;
@@ -394,53 +410,163 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
             ++stats.outOfRangePages;
             continue;
         }
-        if (record.mip > TerrainLayerMaxMipLevel ||
-            record.mip >= config.sourceMipLevels)
+        const uint32_t maxMip =
+            MaxMipForLayer(layerPages, layerId, config);
+        if (record.mip > maxMip)
         {
             ++stats.outOfRangePages;
             continue;
         }
-        const uint32_t side = layerPages.PagesPerSide(layerId, record.mip);
+        const uint32_t side =
+            layerPages.PagesPerSide(layerId, record.mip);
         if (side == 0 || record.pageIndex >= side * side)
         {
             ++stats.outOfRangePages;
             continue;
         }
-        const uint32_t pageX = record.pageIndex % side;
-        const uint32_t pageY = record.pageIndex / side;
-        const uint32_t priority = std::max<uint32_t>(1, record.priority);
-        const uint32_t prefetchPriority = std::max<uint32_t>(1, priority / 2);
 
+        ParsedFeedbackPage parsed;
+        parsed.layerId = layerId;
+        parsed.mip = record.mip;
+        parsed.pageX = record.pageIndex % side;
+        parsed.pageY = record.pageIndex / side;
+        parsed.sampleCount = record.sampleCount;
+        parsed.priority = std::max<uint32_t>(1, record.priority);
+        parsedPages.push_back(parsed);
+
+        stats.targetMipSlots[record.mip] += record.sampleCount;
         layerSeen[layerId] = true;
+        layerPriority[layerId] =
+            std::max(layerPriority[layerId], parsed.priority);
+        layerTargetMask[layerId] |= 1u << record.mip;
+        targetPriorities[layerId][record.mip] = std::max(
+            targetPriorities[layerId][record.mip], parsed.priority);
+    }
+    for (uint32_t layerId = 0; layerId < layerSeen.size(); ++layerId)
+    {
+        if (layerSeen[layerId]) ++stats.visibleLayers;
+    }
 
-        TerrainLayerPageKey centerKey;
-        centerKey.layerId = layerId;
-        centerKey.mip = record.mip;
-        centerKey.pageX = pageX;
-        centerKey.pageY = pageY;
-        // L4c：目标页缺页就是 shader 会走更粗 mip 混合的 texel。按 texel
-        // 计数（不按 distinct 页），控制台据此估算“本帧多少像素在混合”。
-        if (!layerPages.IsResident(centerKey))
+    std::vector<PrefetchCandidate> prefetchCandidates;
+    const bool budgetAllocated = config.layerPageBudget != 0;
+    if (budgetAllocated)
+    {
+        // 2. 全局预算分配：每个 (layer, targetMip) 需求独立决定是否降价到
+        //    更粗 mip。分配结果去重后，每个 (layer, mip) 都必须请求完整页集。
+        std::vector<TerrainLayerMipBudgetEntry> entries;
+        for (uint32_t layerId = 0; layerId < config.layerCount; ++layerId)
         {
-            ++stats.fallbackSlots;
-            // L4e：区分“有粗页可混”和“只能纯 avgColor”。shader 从
-            // target+1 逐级向粗找第一个有效页，因此任一更粗祖先驻留即
-            // 可产生渐变。
+            if (!layerSeen[layerId])
+                continue;
+            const uint32_t maxMip =
+                MaxMipForLayer(layerPages, layerId, config);
+            const uint32_t basePagesPerSide =
+                layerPages.LayerSourceResolution(layerId) /
+                TerrainPageResolution;
+            for (uint32_t mip = 0;
+                 mip <= TerrainLayerMaxMipLevel;
+                 ++mip)
+            {
+                if ((layerTargetMask[layerId] & (1u << mip)) == 0)
+                    continue;
+                TerrainLayerMipBudgetEntry entry;
+                entry.layerId = layerId;
+                entry.priority = static_cast<uint8_t>(
+                    std::min<uint32_t>(
+                        255, targetPriorities[layerId][mip]));
+                entry.basePagesPerSide = basePagesPerSide;
+                entry.maxMip = maxMip;
+                entry.targetMip = mip;
+                entries.push_back(entry);
+            }
+        }
+
+        TerrainLayerMipBudgetConfig budgetConfig;
+        budgetConfig.pageBudget = config.layerPageBudget;
+        const TerrainLayerMipBudgetResult allocation =
+            AllocateTerrainLayerMips(entries, budgetConfig);
+        stats.budgetTotalPages = allocation.totalPages;
+        stats.budgetAllocatedSets = allocation.allocatedSets;
+        stats.budgetClampedRefinements = allocation.clampedRefinements;
+        stats.budgetExceeded = allocation.budgetExceeded;
+        stats.budgetEntriesByMip = allocation.entriesByMip;
+        stats.budgetSetsByMip = allocation.selectedSetsByMip;
+
+        for (const TerrainLayerMipBudgetResult::Selection& selection :
+             allocation.selections)
+        {
+            const uint32_t side =
+                layerPages.PagesPerSide(
+                    selection.layerId, selection.mip);
+            const uint32_t priority = std::max<uint32_t>(
+                1, layerPriority[selection.layerId]);
+            for (uint32_t pageY = 0; pageY < side; ++pageY)
+            {
+                for (uint32_t pageX = 0; pageX < side; ++pageX)
+                {
+                    TerrainLayerPageKey key;
+                    key.layerId = selection.layerId;
+                    key.mip = selection.mip;
+                    key.pageX = pageX;
+                    key.pageY = pageY;
+                    auto inserted = candidates.emplace(key, priority);
+                    if (!inserted.second)
+                    {
+                        inserted.first->second =
+                            std::max(inserted.first->second, priority);
+                    }
+                }
+            }
+        }
+
+        // 被预算取消的旧 mip 请求不能继续占每帧名额，否则会和新选中页
+        // 互相追尾。保留驻留页交给 idle 安全窗淘汰。
+        pendingRequests.erase(
+            std::remove_if(
+                pendingRequests.begin(),
+                pendingRequests.end(),
+                [&candidates](const TerrainLayerPageRequest& request)
+                {
+                    return candidates.find(request.key) == candidates.end();
+                }),
+            pendingRequests.end());
+
+        for (const auto& [key, priority] : candidates)
+        {
+            if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
+                ++stats.markedPages;
+        }
+
+        // 预算路径的 telemetry：shader 仍按逐像素目标 mip 采样，目标页缺失
+        // 时会向更粗 mip 回退。这里统计“正在回退”的 texel，不等同于请求页。
+        std::set<TerrainLayerPageKey> missingTargets;
+        for (const ParsedFeedbackPage& page : parsedPages)
+        {
+            TerrainLayerPageKey targetKey;
+            targetKey.layerId = page.layerId;
+            targetKey.mip = page.mip;
+            targetKey.pageX = page.pageX;
+            targetKey.pageY = page.pageY;
+            if (layerPages.IsResident(targetKey))
+                continue;
+            missingTargets.insert(targetKey);
+            stats.fallbackSlots += page.sampleCount;
             bool hasCoarser = false;
-            const uint32_t maxMip = MaxMipForLayer(layerPages, layerId, config);
-            for (uint32_t coarser = record.mip + 1;
+            const uint32_t maxMip =
+                MaxMipForLayer(layerPages, page.layerId, config);
+            for (uint32_t coarser = page.mip + 1;
                  coarser <= maxMip && !hasCoarser;
                  ++coarser)
             {
                 const uint32_t ancestorSide =
-                    layerPages.PagesPerSide(layerId, coarser);
+                    layerPages.PagesPerSide(page.layerId, coarser);
                 if (ancestorSide == 0) continue;
-                const uint32_t shift = coarser - record.mip;
+                const uint32_t shift = coarser - page.mip;
                 TerrainLayerPageKey ancestorKey;
-                ancestorKey.layerId = layerId;
+                ancestorKey.layerId = page.layerId;
                 ancestorKey.mip = coarser;
-                ancestorKey.pageX = pageX >> shift;
-                ancestorKey.pageY = pageY >> shift;
+                ancestorKey.pageX = page.pageX >> shift;
+                ancestorKey.pageY = page.pageY >> shift;
                 if (ancestorKey.pageX >= ancestorSide ||
                     ancestorKey.pageY >= ancestorSide)
                     continue;
@@ -449,61 +575,111 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
             if (hasCoarser) ++stats.fallbackBlendPages;
             else ++stats.avgColorPages;
         }
-        stats.targetMipSlots[record.mip] += record.sampleCount;
-        const uint32_t radius = layerPages.IsResident(centerKey)
-            ? 0u
-            : config.exactFeedbackNeighborhoodRadius;
-        const uint32_t minX = radius > pageX ? 0 : pageX - radius;
-        const uint32_t minY = radius > pageY ? 0 : pageY - radius;
-        const uint32_t maxX = std::min(pageX + radius, side - 1);
-        const uint32_t maxY = std::min(pageY + radius, side - 1);
-        for (uint32_t y = minY; y <= maxY; ++y)
+        stats.fallbackTargetPages =
+            static_cast<uint32_t>(missingTargets.size());
+    }
+    else
+    {
+        // 3. 旧路径（仅用于 layerPageBudget=0 的对照/测试）：逐条 feedback
+        //    页请求目标页，并在缺页时扩邻域/粗 mip 预取。
+        for (const ParsedFeedbackPage& page : parsedPages)
         {
-            for (uint32_t x = minX; x <= maxX; ++x)
+            const uint32_t layerId = page.layerId;
+            TerrainLayerPageKey centerKey;
+            centerKey.layerId = layerId;
+            centerKey.mip = page.mip;
+            centerKey.pageX = page.pageX;
+            centerKey.pageY = page.pageY;
+            const uint32_t side = layerPages.PagesPerSide(
+                layerId, page.mip);
+            if (side == 0)
+                continue;
+            const uint32_t prefetchPriority =
+                std::max<uint32_t>(1, page.priority / 2);
+            if (!layerPages.IsResident(centerKey))
             {
-                TerrainLayerPageKey key;
-                key.layerId = layerId;
-                key.mip = record.mip;
-                key.pageX = x;
-                key.pageY = y;
-                const bool center = x == pageX && y == pageY;
-                const uint32_t candidatePriority =
-                    center ? priority : prefetchPriority;
-                auto inserted = candidates.emplace(key, candidatePriority);
-                if (!inserted.second)
+                ++stats.fallbackSlots;
+                bool hasCoarser = false;
+                const uint32_t maxMip =
+                    MaxMipForLayer(layerPages, layerId, config);
+                for (uint32_t coarser = page.mip + 1;
+                     coarser <= maxMip && !hasCoarser;
+                     ++coarser)
                 {
-                    inserted.first->second = std::max(
-                        inserted.first->second, candidatePriority);
+                    const uint32_t ancestorSide =
+                        layerPages.PagesPerSide(layerId, coarser);
+                    if (ancestorSide == 0) continue;
+                    const uint32_t shift = coarser - page.mip;
+                    TerrainLayerPageKey ancestorKey;
+                    ancestorKey.layerId = layerId;
+                    ancestorKey.mip = coarser;
+                    ancestorKey.pageX = page.pageX >> shift;
+                    ancestorKey.pageY = page.pageY >> shift;
+                    if (ancestorKey.pageX >= ancestorSide ||
+                        ancestorKey.pageY >= ancestorSide)
+                        continue;
+                    hasCoarser = layerPages.IsResident(ancestorKey);
+                }
+                if (hasCoarser) ++stats.fallbackBlendPages;
+                else ++stats.avgColorPages;
+            }
+            const uint32_t radius = layerPages.IsResident(centerKey)
+                ? 0u
+                : config.exactFeedbackNeighborhoodRadius;
+            const uint32_t minX =
+                radius > page.pageX ? 0 : page.pageX - radius;
+            const uint32_t minY =
+                radius > page.pageY ? 0 : page.pageY - radius;
+            const uint32_t maxX =
+                std::min(page.pageX + radius, side - 1);
+            const uint32_t maxY =
+                std::min(page.pageY + radius, side - 1);
+            for (uint32_t y = minY; y <= maxY; ++y)
+            {
+                for (uint32_t x = minX; x <= maxX; ++x)
+                {
+                    TerrainLayerPageKey key;
+                    key.layerId = layerId;
+                    key.mip = page.mip;
+                    key.pageX = x;
+                    key.pageY = y;
+                    const bool center =
+                        x == page.pageX && y == page.pageY;
+                    const uint32_t candidatePriority =
+                        center ? page.priority : prefetchPriority;
+                    auto inserted =
+                        candidates.emplace(key, candidatePriority);
+                    if (!inserted.second)
+                    {
+                        inserted.first->second = std::max(
+                            inserted.first->second,
+                            candidatePriority);
+                    }
                 }
             }
         }
-    }
-    // L4c：缺页的反馈页同时把同一 UV 区域的更粗 mip 页加入候选。粗页优先
-    // 级略低，且仍受 maxRequestsPerFrame 限制。
-    // 只把扩展前的候选计入 feedback hit；粗页是预取，不是本帧可见页。
-    const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
-        visibleCandidates(candidates.begin(), candidates.end());
-    // L4e：预取候选必须在可见页请求提交之前收集：此时目标页还没被本帧
-    // 请求成驻留页，“当前页是否已驻留”才是真正的前置条件。
-    const std::vector<PrefetchCandidate> prefetchCandidates =
-        CollectFinerMipPrefetch(summary, layerPages, config, stats);
-    ExpandCoarserFallbackCandidates(
-        candidates,
-        layerPages,
-        config,
-        stats.fallbackTargetPages,
-        stats.fallbackLevelPages);
-    stats.candidatePages = static_cast<uint32_t>(candidates.size());
-    for (uint32_t layerId = 0; layerId < layerSeen.size(); ++layerId)
-    {
-        if (layerSeen[layerId]) ++stats.visibleLayers;
+
+        const std::vector<std::pair<TerrainLayerPageKey, uint32_t>>
+            visibleCandidates(candidates.begin(), candidates.end());
+        prefetchCandidates =
+            CollectFinerMipPrefetch(summary, layerPages, config, stats);
+        ExpandCoarserFallbackCandidates(
+            candidates,
+            layerPages,
+            config,
+            stats.fallbackTargetPages,
+            stats.fallbackLevelPages);
+        for (const auto& [key, priority] : visibleCandidates)
+        {
+            if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
+                ++stats.markedPages;
+        }
     }
 
-    for (const auto& [key, priority] : visibleCandidates)
-    {
-        if (layerPages.MarkPageUsedAtEpoch(key, seenEpoch, priority))
-            ++stats.markedPages;
-    }
+    stats.candidatePages = static_cast<uint32_t>(candidates.size());
+    // 选中页集就是本帧的驻留工作集：容量淘汰只能处理工作集之外的页，
+    // 否则“请求完再被淘汰”仍会形成 600 ms/帧的追尾。
+    layerPages.SetProtectedPages(candidates);
 
     const CandidateCommitResult committed = CommitCandidates(
         candidates,
@@ -524,7 +700,8 @@ TerrainLayerExactFeedbackStats TerrainLayerVisibilityResolver::ApplyExact(
     stats.evictedPages = committed.evictedPages;
     stats.mipRequestCounts = committed.mipRequestCounts;
     stats.pendingRequests = static_cast<uint32_t>(pendingRequests.size());
-    // L4e：可见页提交之后再发预取请求，使用独立名额且不挤占本帧采样页。
+    // L4e：预算路径已经按完整页集驻留，不再额外请求细一级 mip；否则会
+    // 绕过预算，重新制造“预取页挤掉选中页”的循环。
     for (const PrefetchCandidate& candidate : prefetchCandidates)
     {
         if (layerPages.IsResident(candidate.key))

@@ -218,10 +218,19 @@ def sample_nearest(tree, geometry, value, position, location=(0, 0)):
     return node.outputs["Value"]
 
 
-def sample_at_offset(tree, geometry, value, base_position, dx: float, dy: float,
-                     location=(0, 0)):
-    """取 (base_position + (dx, dy, 0)) 处的属性值。"""
-    offset = combine_xyz(tree, dx, dy, 0.0, (location[0], location[1] - 120))
+def sample_at_offset(tree, geometry, value, base_position, dx: int, dy: int,
+                     cell, location=(0, 0)):
+    """取 ``base_position + (dx, dy) * cell`` 处的属性值。
+
+    ``cell`` 可以是 float，也可以是 socket——格距必须跟着实际分辨率走，
+    不能在建组时焊死成 4 m（4 km / 128 格时真实格距是 31.5 m）。
+    """
+    offset_x = math_node(tree, "MULTIPLY", cell, float(dx),
+                         (location[0] - 200, location[1] - 60))
+    offset_y = math_node(tree, "MULTIPLY", cell, float(dy),
+                         (location[0] - 200, location[1] - 180))
+    offset = combine_xyz(tree, offset_x.outputs[0], offset_y.outputs[0], 0.0,
+                         (location[0], location[1] - 120))
     probe = vector_math(tree, "ADD", base_position, offset.outputs["Vector"],
                         location)
     return sample_nearest(tree, geometry, value, probe.outputs["Vector"],
@@ -248,12 +257,18 @@ def add_inputs(tree, specs) -> None:
 
 def build_precipitation(tree, group_input, geometry, seed_w=1.0,
                         location=(-2000, 1600), evaporation=False):
-    """降水 / 蒸发：water += rain_amount。
+    """降水 / 蒸发。
 
-    Houdini 的降水节点只有 `rain_amount` / `rain_density` / `rain_expandradius`
-    / `rain_blurradius` / `seed`。其中 density 与 expandradius 是"落点分布"，
-    在网格场求解里表现为水量的空间抖动；这里用 4D 噪声实现同样的效果
-    （density 越大、抖动越碎）。蒸发节点就是 `rain_amount = -0.04` 的同一节点。
+    降水：``water += rain_amount × rain_density``（米 → 归一化层）。
+    ``rain_density`` 是落点覆盖率（0..1），所以面平均降水深度是
+    ``amount × density``。旧实现只把 density 当噪声频率，等于每帧给
+    **每个**格子加 0.2 m，5 帧后 water 均匀堆到 0.907 m、几乎没有方差，
+    河道完全消失。
+
+    蒸发：``water *= (1 - rain_evaporation)``。参数标签是
+    "Evaporation Rate"、范围 0..1，按每帧比例处理。若按 0.04 m/帧的
+    深度扣，5 帧 0.05 m 的降水会被全部扣光，与参考水层对不上
+    （参考 water 均值 0.024 m、最大 1.535 m）。
 
     返回 (新几何, 新 water socket)。
     """
@@ -261,7 +276,7 @@ def build_precipitation(tree, group_input, geometry, seed_w=1.0,
     position.location = (location[0], location[1] + 260)
     water = named_attribute(tree, "water", (location[0], location[1] + 120))
 
-    # 落点抖动：值域 [-0.5, 0.5]，乘以 rain_amount 后成为 ±50% 的水量起伏。
+    # 落点抖动：Fac 均值 0.5，所以 (Fac + 0.5) 的均值为 1，只改空间分布。
     jitter = tree.nodes.new("ShaderNodeTexNoise")
     jitter.location = (location[0] + 180, location[1] + 400)
     jitter.noise_dimensions = "4D"
@@ -273,26 +288,30 @@ def build_precipitation(tree, group_input, geometry, seed_w=1.0,
     density_freq = math_node(tree, "MULTIPLY", group_input.outputs["Rain Density"],
                             0.35, (location[0] + 180, location[1] + 540))
     link(tree, density_freq.outputs[0], jitter.inputs["Scale"])
-    jitter_centered = math_node(tree, "SUBTRACT", jitter.outputs["Fac"], 0.5,
-                                (location[0] + 380, location[1] + 400))
-    jitter_amount = (group_input.outputs["Rain Evaporation"] if evaporation
-                     else group_input.outputs["Rain Amount"])
-    jitter_scaled = math_node(tree, "MULTIPLY", jitter_centered.outputs[0],
-                              jitter_amount,
-                              (location[0] + 560, location[1] + 400))
-    rate = (math_node(tree, "MULTIPLY", group_input.outputs["Rain Evaporation"], -1.0,
-                      (location[0] + 720, location[1] + 500)).outputs[0]
-            if evaporation else group_input.outputs["Rain Amount"])
-    rain_with_jitter = math_node(tree, "ADD", rate,
-                                 jitter_scaled.outputs[0],
-                                 (location[0] + 720, location[1] + 340))
-    rain_positive = rain_with_jitter
+    if evaporation:
+        keep = math_node(tree, "SUBTRACT", 1.0,
+                         group_input.outputs["Rain Evaporation"],
+                         (location[0] + 560, location[1] + 400))
+        new_water = math_node(tree, "MULTIPLY", water, keep.outputs[0],
+                              (location[0] + 860, location[1] + 160))
+    else:
+        patch = math_node(tree, "ADD", jitter.outputs["Fac"], 0.5,
+                          (location[0] + 380, location[1] + 400))
+        mean_depth = math_node(tree, "MULTIPLY",
+                               group_input.outputs["Rain Amount"],
+                               group_input.outputs["Rain Density"],
+                               (location[0] + 560, location[1] + 520))
+        depth = math_node(tree, "MULTIPLY", mean_depth.outputs[0],
+                          patch.outputs[0], (location[0] + 720, location[1] + 400))
+        normalized = math_node(tree, "DIVIDE", depth.outputs[0],
+                               group_input.outputs["Height Scale"],
+                               (location[0] + 880, location[1] + 400))
+        new_water = math_node(tree, "ADD", water, normalized.outputs[0],
+                              (location[0] + 1040, location[1] + 160))
 
-    added = math_node(tree, "ADD", water, rain_positive.outputs[0],
-                      (location[0] + 1040, location[1] + 160))
-    stored = store_attribute(tree, geometry, "water", added.outputs[0],
+    stored = store_attribute(tree, geometry, "water", new_water.outputs[0],
                              (location[0] + 1220, location[1] + 160))
-    return stored.outputs["Geometry"], added.outputs[0]
+    return stored.outputs["Geometry"], new_water.outputs[0]
 
 
 def switch_float(tree, condition, false_value, true_value, location=(0, 0)):
@@ -311,25 +330,29 @@ def switch_float(tree, condition, false_value, true_value, location=(0, 0)):
     return node.outputs["Output"]
 
 
-def build_water_spread(tree, group_input, geometry, cell_m: float,
+def build_water_spread(tree, group_input, geometry, cell, total_cells,
                        location=(-1600, 1000)):
-    """水的一步**沿坡搬运**（`water_spreaditers` 的一次迭代）。
+    """水的一步保守多向搬运 + 汇水面积累积（``water_spreaditers`` 的一次迭代）。
 
     Houdini 原文：``'The number of iterations of water spreading simulation to
     do. More iterations result in longer and less dense incisions.'``
 
-    这一步是整个侵蚀能否成型的关键。早期实现做的是"对称摊平"（把水位差
-    均分给 8 个邻居），它只会把水抹匀，不会形成河道；一旦调大下切系数，
-    结果是满屏尖刺而不是沟谷。
+    每个格子按各下坡方向的落差权重，把自己 ``alpha`` 比例的水分给 8 邻域::
 
-    正确的做法是**单向沿坡**：
+        send_i = alpha * water * drop_i / Σ_j drop_j
 
-    1. 找出 8 邻域里水位最低的那个方向（下坡方向）。
-    2. 把自己的一部分水交给那个方向（不回流，守恒的是"离开的水"）。
-    3. 同时从 8 邻域**低处**接收它们流过来的水。
-    4. `flow`（汇水强度）随经过的水量累积：上游多轮积累的水会沿着坡一路
-       叠加，形成主河道；Repeat 区迭代 `water_spreaditers` 次之后，水就
-       自动汇聚成树枝状沟谷网络。
+    接收端对**同一对格子**求值完全相同的表达式（在邻格上算
+    ``alpha * water_n * drop(n→self) / Σ_j drop(n→j)``），所以总水量守恒。
+    旧实现把 ``min(drop, water) / 8`` 直接抹掉、根本没有按方向路由到邻格，
+    实测水均匀堆到 0.907（p1..p99 只有 0.86..0.99），既没有河道，也就
+    没有水力侵蚀。
+
+    汇水面积 ``flow``（单位：格）用同一组权重累积::
+
+        A' = 1 + alpha * Σ_n share_n * A_n
+
+    山脊 ≈ 1、主河道可达上万，水力侵蚀因此可以按 ``A / 总格数`` 归一化，
+    不再需要一个拍脑袋的汇水常数。
 
     返回 (新几何, 新 water socket, 新 flow socket)。
     """
@@ -338,143 +361,175 @@ def build_water_spread(tree, group_input, geometry, cell_m: float,
     water = named_attribute(tree, "water", (location[0], location[1] + 280))
     height = named_attribute(tree, "height", (location[0], location[1] + 140))
     flow = named_attribute(tree, "flow", (location[0], location[1] + 0))
+    alpha = group_input.outputs["Water Spread Rate"]
 
     surface = math_node(tree, "ADD", height, water,
                         (location[0] + 140, location[1] + 300))
 
-    # --- 找最低邻格（下坡方向）
-    lowest_surface = None
-    lowest_dx = None
-    lowest_dy = None
+    # --- 第一步：本格朝 8 个方向的总落差 Σ_j max(surface - surface_j, 0)
+    total_drop = None
+    height_drop = None
     for index, (dx, dy) in enumerate(neighbours8()):
-        row = location[1] + 900 - index * 210
+        row = location[1] + 900 - index * 190
         neighbour = sample_at_offset(
             tree, geometry, surface, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
-        if lowest_surface is None:
-            lowest_surface = neighbour
-            lowest_dx = dx
-            lowest_dy = dy
-            continue
-        lower = tree.nodes.new("FunctionNodeCompare")
-        lower.location = (location[0] + 400, row + 60)
-        lower.data_type = "FLOAT"
-        lower.operation = "LESS_THAN"
-        link(tree, neighbour, lower.inputs["A"])
-        link(tree, lowest_surface, lower.inputs["B"])
-        pick_surface = switch_float(tree, lower.outputs["Result"],
-                                    lowest_surface, neighbour,
-                                    (location[0] + 580, row))
-        # lowest_dx/dy 在前几轮里已经是 socket，不能再 float()；
-        # 统一转成 socket 表达式。
-        pick_dx = switch_float(tree, lower.outputs["Result"], lowest_dx,
-                               float(dx), (location[0] + 580, row - 70))
-        pick_dy = switch_float(tree, lower.outputs["Result"], lowest_dy,
-                               float(dy), (location[0] + 580, row - 140))
-        lowest_surface = pick_surface
-        lowest_dx = pick_dx
-        lowest_dy = pick_dy
-
-    # --- 流出的水：自身水位高于最低邻格的那部分
-    drop = math_node(tree, "SUBTRACT", surface.outputs[0], lowest_surface,
-                     (location[0] + 760, location[1] + 700))
-    drop_positive = math_node(tree, "MAXIMUM", drop.outputs[0], 0.0,
-                              (location[0] + 920, location[1] + 700))
-    carried = math_node(tree, "MULTIPLY", drop_positive.outputs[0],
-                        group_input.outputs["Water Spread Rate"],
-                        (location[0] + 1080, location[1] + 700))
-    # 不能流走比自己拥有的还多的水。
-    leaving = math_node(tree, "MINIMUM", carried.outputs[0], water,
-                        (location[0] + 1240, location[1] + 700))
-
-    # --- 流入的水：8 邻域中**会流向我**的那些格子贡献的水量。
-    # 判定"邻格流向我的"= 邻格水位高于我。这与上面的单向流出配对，
-    # 保证同一对格子之间只有高处向低处的水流。
-    inflow = None
-    for index, (dx, dy) in enumerate(neighbours8()):
-        row = location[1] + 300 - index * 200
-        neighbour_surface = sample_at_offset(
-            tree, geometry, surface, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
-        neighbour_water = sample_at_offset(
-            tree, geometry, water, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row - 70))
-        higher = math_node(tree, "SUBTRACT", neighbour_surface,
-                           surface.outputs[0], (location[0] + 400, row))
-        higher_positive = math_node(tree, "MAXIMUM", higher.outputs[0], 0.0,
-                                    (location[0] + 560, row))
-        share = math_node(tree, "MULTIPLY", higher_positive.outputs[0],
-                          group_input.outputs["Water Spread Rate"],
-                          (location[0] + 720, row))
-        receive = math_node(tree, "MINIMUM", share.outputs[0], neighbour_water,
-                            (location[0] + 880, row))
-        if inflow is None:
-            inflow = receive.outputs[0]
+            dx, dy, cell, (location[0] + 200, row))
+        neighbour_height = sample_at_offset(
+            tree, geometry, height, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row - 60))
+        drop = math_node(tree, "SUBTRACT", surface.outputs[0], neighbour,
+                         (location[0] + 400, row))
+        positive = math_node(tree, "MAXIMUM", drop.outputs[0], 0.0,
+                             (location[0] + 560, row))
+        terrain_drop = math_node(tree, "SUBTRACT", height, neighbour_height,
+                                 (location[0] + 400, row - 60))
+        terrain_positive = math_node(tree, "MAXIMUM",
+                                     terrain_drop.outputs[0], 0.0,
+                                     (location[0] + 560, row - 60))
+        if total_drop is None:
+            total_drop = positive.outputs[0]
+            height_drop = terrain_positive.outputs[0]
         else:
-            inflow = math_node(tree, "ADD", inflow, receive.outputs[0],
-                               (location[0] + 1040, row)).outputs[0]
+            total_drop = math_node(tree, "ADD", total_drop, positive.outputs[0],
+                                   (location[0] + 720, row)).outputs[0]
+            height_drop = math_node(tree, "ADD", height_drop,
+                                    terrain_positive.outputs[0],
+                                    (location[0] + 720, row - 60)).outputs[0]
 
-    # 8 邻域均分，保证两侧（流出 / 流入）口径一致。
-    leave_share = math_node(tree, "DIVIDE", leaving.outputs[0], 8.0,
-                            (location[0] + 1400, location[1] + 700))
-    reach_share = math_node(tree, "DIVIDE", inflow, 8.0,
-                            (location[0] + 1200, location[1] + 300))
+    # 分母下限：平地上所有 share 恒为 0，不会除零也不会凭空产生水。
+    safe_total = math_node(tree, "MAXIMUM", total_drop, 1e-6,
+                           (location[0] + 880, location[1] + 700))
+    safe_height_total = math_node(tree, "MAXIMUM", height_drop, 1e-6,
+                                  (location[0] + 880, location[1] + 560))
+    has_downhill = tree.nodes.new("FunctionNodeCompare")
+    has_downhill.location = (location[0] + 880, location[1] + 900)
+    has_downhill.data_type = "FLOAT"
+    has_downhill.operation = "GREATER_THAN"
+    link(tree, total_drop, has_downhill.inputs["A"])
+    has_downhill.inputs["B"].default_value = 1e-6
 
-    new_water = math_node(tree, "SUBTRACT", water, leave_share.outputs[0],
-                          (location[0] + 1560, location[1] + 600))
-    new_water = math_node(tree, "ADD", new_water.outputs[0],
-                          reach_share.outputs[0], (location[0] + 1720, location[1] + 600))
+    # 总落差必须先落成属性再被邻域采样：直接对「内含采样节点的派生场」
+    # 再做 SampleNearestSurface 会触发嵌套求值，实测整条链出 NaN。
+    outflow_stored = store_attribute(tree, geometry, "__outflow", safe_total,
+                                     (location[0] + 1000, location[1] + 900))
+    outflow_stored = store_attribute(tree, outflow_stored.outputs["Geometry"],
+                                     "__outflow_h", safe_height_total,
+                                     (location[0] + 1000, location[1] + 760))
+    pass_geometry = outflow_stored.outputs["Geometry"]
+    outflow_attribute = named_attribute(tree, "__outflow",
+                                        (location[0] + 1000, location[1] + 1150))
+    outflow_height_attribute = named_attribute(
+        tree, "__outflow_h", (location[0] + 1000, location[1] + 1320))
+
+    # --- 第二步：从 8 邻域接收，同时累积汇水面积
+    received = None
+    new_flow = None
+    for index, (dx, dy) in enumerate(neighbours8()):
+        row = location[1] + 300 - index * 210
+        neighbour_surface = sample_at_offset(
+            tree, pass_geometry, surface, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row))
+        neighbour_water = sample_at_offset(
+            tree, pass_geometry, water, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row - 70))
+        neighbour_total = sample_at_offset(
+            tree, pass_geometry, outflow_attribute, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row - 150))
+        neighbour_flow = sample_at_offset(
+            tree, pass_geometry, flow, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row - 230))
+        neighbour_height = sample_at_offset(
+            tree, pass_geometry, height, position.outputs["Position"],
+            dx, dy, cell, (location[0] + 200, row - 310))
+        neighbour_height_total = sample_at_offset(
+            tree, pass_geometry, outflow_height_attribute,
+            position.outputs["Position"], dx, dy, cell,
+            (location[0] + 200, row - 390))
+
+        rise = math_node(tree, "SUBTRACT", neighbour_surface,
+                         surface.outputs[0], (location[0] + 400, row))
+        rise_positive = math_node(tree, "MAXIMUM", rise.outputs[0], 0.0,
+                                  (location[0] + 560, row))
+        share = math_node(tree, "DIVIDE", rise_positive.outputs[0],
+                          neighbour_total, (location[0] + 720, row))
+        share_alpha = math_node(tree, "MULTIPLY", share.outputs[0], alpha,
+                                (location[0] + 880, row))
+        # 汇水面积用**地形**落差累积：水面会随流动改变方向、形成 A→B→A
+        # 的环流，用它累积会无界放大甚至饱和到整个流域；地形落差是静态
+        # 有向无环图，收敛到真实汇水面积。
+        rise_terrain = math_node(tree, "SUBTRACT", neighbour_height, height,
+                                 (location[0] + 400, row - 310))
+        rise_terrain_positive = math_node(tree, "MAXIMUM",
+                                          rise_terrain.outputs[0], 0.0,
+                                          (location[0] + 560, row - 310))
+        area_share = math_node(tree, "DIVIDE", rise_terrain_positive.outputs[0],
+                               neighbour_height_total,
+                               (location[0] + 720, row - 310))
+        carry = math_node(tree, "MULTIPLY", neighbour_water,
+                          share_alpha.outputs[0], (location[0] + 1040, row))
+        area = math_node(tree, "MULTIPLY", neighbour_flow,
+                         area_share.outputs[0], (location[0] + 1040, row - 80))
+
+        if received is None:
+            received = carry.outputs[0]
+        else:
+            received = math_node(tree, "ADD", received, carry.outputs[0],
+                                 (location[0] + 1200, row)).outputs[0]
+        if new_flow is None:
+            new_flow = area.outputs[0]
+        else:
+            new_flow = math_node(tree, "ADD", new_flow, area.outputs[0],
+                                 (location[0] + 1200, row - 80)).outputs[0]
+
+    # 有下坡 → 流走 alpha；完全平坦 → 全部保留。
+    keep_fraction = math_node(tree, "SUBTRACT", 1.0, alpha,
+                              (location[0] + 1400, location[1] + 760))
+    keep = switch_float(tree, has_downhill.outputs["Result"], 1.0,
+                        keep_fraction.outputs[0],
+                        (location[0] + 1400, location[1] + 620))
+    kept = math_node(tree, "MULTIPLY", water, keep,
+                     (location[0] + 1560, location[1] + 600))
+    new_water = math_node(tree, "ADD", kept.outputs[0], received,
+                          (location[0] + 1720, location[1] + 600))
     new_water_clamped = math_node(tree, "MAXIMUM", new_water.outputs[0], 0.0,
                                   (location[0] + 1880, location[1] + 600))
+    # 本格自身的产流：1 格。
+    #
+    # 上限是总格数：水面随水流动而变，方向可能出现 A→B→A 的循环，
+    # 汇水面积会在迭代中无界放大（实测 20 轮就到 6.4e7 > N），40 轮直接
+    # 溢出成 inf，再经 sqrt/乘法把整条链变成 NaN。物理上汇水面积本来就
+    # 不可能超过总格数。
+    new_flow_total = math_node(tree, "ADD", new_flow, 1.0,
+                               (location[0] + 1560, location[1] + 200))
+    new_flow_clamped = math_node(tree, "MINIMUM", new_flow_total.outputs[0],
+                                 total_cells, (location[0] + 1720, location[1] + 200))
 
-    # --- 汇水面积 accumulation：**只累加上游流进来的水**，不再叠加自身历史。
-    #
-    # 早期写成 `flow + inflow + water`，每轮无界累加，40 轮后所有格子都被
-    # 推到同一个 37 左右的值，上游信号被淹没、河网完全分化不出来
-    # （实测 flow 只在 32..42 之间波动，p50 与 p99 只差 3.4）。
-    # 正确语义是汇水面积：本格收到的上游来水 + 本格的降雨。
-    # --- 汇水面积（flow）：每格自身产流 1 格，上游把它的汇水面积并进来。
-    #
-    # flow 的物理含义是"上游有多少个格子流经此处"，所以山脊≈1、主河道可到
-    # 几百。早期把每格产流写成 0.02 并加 MINIMUM(flow,1) 削顶，flow 均值只有
-    # 0.064，driver=flow*slope≈0.017，下切比 Houdini 弱 30 倍。
-    #
-    # 正确做法：flow 以"格数"为单位增长，Repeat 迭代 N 次后最长的汇流路径
-    # 能累积到 N 级量级，主河道与坡面自然拉开数量级差。
-    inflow_cells = math_node(tree, "MULTIPLY", reach_share.outputs[0], 8.0,
-                             (location[0] + 1560, location[1] + 120))
-    # 每格自有产流只在第一轮计入：用 "flow 还不够 1 时才补" 的写法。
-    # 直接每轮 +1 会让 40 轮后所有格子都落在 40 附近（实测 40.0..42.7），
-    # 量级差被抹平，河网看不出来。
-    needs_seed = tree.nodes.new("FunctionNodeCompare")
-    needs_seed.location = (location[0] + 1560, location[1] - 20)
-    needs_seed.data_type = "FLOAT"
-    needs_seed.operation = "LESS_THAN"
-    link(tree, flow, needs_seed.inputs["A"])
-    needs_seed.inputs["B"].default_value = 1.0
-    seed_value = switch_float(tree, needs_seed.outputs["Result"], 0.0, 1.0,
-                              (location[0] + 1720, location[1] - 20))
-    grown = math_node(tree, "ADD", flow, inflow_cells.outputs[0],
-                      (location[0] + 1720, location[1] + 160))
-    grown = math_node(tree, "ADD", grown.outputs[0], seed_value,
-                      (location[0] + 1720, location[1] + 60))
-    # 收敛上限：汇水面积不超过总格数，避免长链无界增长。
-    max_cells = float(128 * 128)
-    new_flow = math_node(tree, "MINIMUM", grown.outputs[0], max_cells,
-                         (location[0] + 1880, location[1] + 160))
-
-    stored_water = store_attribute(tree, geometry, "water",
+    stored_water = store_attribute(tree, pass_geometry, "water",
                                    new_water_clamped.outputs[0],
                                    (location[0] + 2060, location[1] + 600))
     stored_flow = store_attribute(tree, stored_water.outputs["Geometry"],
-                                  "flow", new_flow.outputs[0],
+                                  "flow", new_flow_clamped.outputs[0],
                                   (location[0] + 2240, location[1] + 200))
-    return (stored_flow.outputs["Geometry"], new_water_clamped.outputs[0],
-            new_flow.outputs[0])
+    cleanup = tree.nodes.new("GeometryNodeRemoveAttribute")
+    cleanup.location = (location[0] + 2380, location[1] + 200)
+    for socket in cleanup.inputs:
+        if socket.name == "Geometry":
+            link(tree, stored_flow.outputs["Geometry"], socket)
+        elif socket.name == "Name" and socket.type == "STRING":
+            socket.default_value = "__outflow"
+    cleanup_height = tree.nodes.new("GeometryNodeRemoveAttribute")
+    cleanup_height.location = (location[0] + 2520, location[1] + 200)
+    for socket in cleanup_height.inputs:
+        if socket.name == "Geometry":
+            link(tree, cleanup.outputs["Geometry"], socket)
+        elif socket.name == "Name" and socket.type == "STRING":
+            socket.default_value = "__outflow_h"
+    return (cleanup_height.outputs["Geometry"], new_water_clamped.outputs[0],
+            new_flow_clamped.outputs[0])
 
 
 def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
-                        location=(-1200, 400)):
+                        total_cells: float, location=(-1200, 400)):
     """水力侵蚀：按汇水强度下切 + bed/bank 分型 + 挟沙沉积。
 
     对应 Houdini `heightfield_erode_hydro` 的参数：
@@ -509,7 +564,7 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
         row = location[1] + 900 - index * 220
         neighbour = sample_at_offset(
             tree, geometry, height, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
+            dx, dy, cell_m, (location[0] + 200, row))
         neighbour_m = math_node(tree, "MULTIPLY", neighbour,
                                 group_input.outputs["Height Scale"],
                                 (location[0] + 400, row))
@@ -535,7 +590,7 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
         row = location[1] + 2000 - index * 200
         neighbour_water = sample_at_offset(
             tree, geometry, water, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
+            dx, dy, cell_m, (location[0] + 200, row))
         if neighbour_water_sum is None:
             neighbour_water_sum = neighbour_water
         else:
@@ -559,7 +614,16 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
         group_input.outputs["Bank Erosion Factor"],
         group_input.outputs["Bed Erosion Factor"], (location[0] + 1220, 2000))
 
-    # --- 下切强度：erodability × erosionrate × bank_angle 调制 × bed/bank 乘数
+    # --- 下切强度（按 Houdini 官方文档语义重建）
+    #
+    # 官方 heightfield_erode_hydro 原文：
+    #   Global Erosion Rate: "how many meters of the eroding layer is eroded
+    #     **every iteration**"
+    #   Erodability: "softness ... higher values cause deeper incisions"
+    #   Erosion Rate: "a **multiplier on Erodability**"
+    #   Slope Factor: "how much the slope would **affect** the erosion amount"
+    # 早期把下切写成 ``flow × slope × K`` —— 乘积在平坦处趋于 0，沟谷切不深，
+    # 曲率只有基准的 0.42 倍。正确形式是"每迭代固定米数 × 各项系数"。
     hydro_k = math_node(tree, "MULTIPLY", group_input.outputs["Hydro Erodability"],
                         group_input.outputs["Hydro Erosion Rate"],
                         (location[0] + 1220, 1750))
@@ -571,41 +635,70 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
     strength = math_node(tree, "MULTIPLY", strength.outputs[0], factor,
                          (location[0] + 1580, 1800))
 
-    # --- 驱动项：汇水 × 坡度。flow 已经在 Repeat 区里累积了上游来水，
-    #     所以主河道（flow 大）下切最狠，坡面（flow≈0）几乎不动。
-    #     flow 的量级在 [0, ~1]，坡度是无量纲比值。
-    # 汇水权重：直接归一化到 [0,1]（除以当前最大值量级），
-    # 不用 f/(1+f) 饱和——flow 只有 0..0.18，饱和后几乎削平，
-    # 下切被压到 1e-3 量级，实测 97% 的下切其实来自热力侵蚀。
-    # 汇水权重直接用 flow 本身（单位=格数），不做 MINIMUM(flow,1) 削顶：
-    # 一刀切到 1.0 会把山脊和主河道拉平，下切量对 flow 完全不敏感
-    # （实测 flow 从 0.18 变到 5.16，incision 一动不动）。
-    # 用对数压缩保留量级差又避免主河道无限加深。
-    flow_log = math_node(tree, "LOGARITHM", flow,
-                         location=(location[0] + 1400, 1420))
-    flow_log.inputs[1].default_value = 10.0
-    flow_one = math_node(tree, "ADD", flow_log.outputs[0], 1.0,
-                         location=(location[0] + 1560, 1420))
-    driver = math_node(tree, "MULTIPLY", flow_one.outputs[0], slope,
-                       (location[0] + 1760, 1480))
-    flow_sat = flow_one
-    incision = math_node(tree, "MULTIPLY", driver.outputs[0],
-                         strength.outputs[0], (location[0] + 1940, 1600))
-    # 换算到归一化高度层
-    incision_norm = math_node(tree, "DIVIDE", incision.outputs[0],
+    # --- 汇水权重：标准 stream power 的 A^m 项，m = 1。
+    #
+    # flow 是**汇水面积（单位：格）**，除以总格数得到无量纲面积比 A/N。
+    # 山脊 A/N ≈ 1/N、主河道 A/N ≈ 0.1..0.5，所以下切自然集中在河道里，
+    # 而不是像旧实现那样用
+    # map_range(log10(flow)+1, 1..2 → 0.15..1) 把所有格子都推到 1
+    # （实测侵蚀高度差 rms 2.16 m，参考只有 0.084 m）。
+    #
+    # m 的取值由参考的**分布**定：m=0.5 时坡面背景下切 0.17 m、参考只有
+    # 0.02 m（每格都掉 10 cm 以上，而参考只有 10% 的格子超过 10 cm）。
+    # m=1（输运限制型 stream power 的常用取值）把 A/N 直接当权重，
+    # 平均下切与河道峰值都落在参考量级上（见 sweep --stage full）。
+    area_ratio = math_node(tree, "DIVIDE", flow, total_cells,
+                           (location[0] + 1400, 1420))
+    area_positive = math_node(tree, "MAXIMUM", area_ratio.outputs[0], 0.0,
+                              (location[0] + 1560, 1420))
+    flow_weight = math_node(tree, "MINIMUM", area_positive.outputs[0], 1.0,
+                            (location[0] + 1720, 1420)).outputs[0]
+    # 挟沙容量按汇水面积（格）计，单位与 flow 一致。
+    flow_sat = flow
+
+    # --- Slope Factor：坡度对侵蚀量的**影响系数**（1 + slopeFactor × slope），
+    #     不是直接把坡度当成乘积项。
+    slope_effect = math_node(tree, "MULTIPLY", slope,
+                             group_input.outputs["Erodability Slope Factor"],
+                             (location[0] + 1400, 1620))
+    slope_factor = math_node(tree, "ADD", slope_effect.outputs[0], 1.0,
+                             (location[0] + 1560, 1620))
+
+    # --- Global Erosion Rate：每迭代的基准下切（米 → 归一化层）
+    base_incision = math_node(tree, "DIVIDE",
+                              group_input.outputs["Global Erosion Rate"],
                               group_input.outputs["Height Scale"],
-                              (location[0] + 2120, 1600))
-    # 单次下切上限（米 → 归一化层）
-    cap = math_node(tree, "DIVIDE", group_input.outputs["Max Debris Depth"],
-                    group_input.outputs["Height Scale"],
-                    (location[0] + 2120, 1760))
+                              (location[0] + 1720, 1780))
+
+    # --- 下切量 = 基准米数 × 可蚀性 × 坡度系数 × 汇水权重
+    incision = math_node(tree, "MULTIPLY", base_incision.outputs[0],
+                         strength.outputs[0], (location[0] + 1880, 1780))
+    incision = math_node(tree, "MULTIPLY", incision.outputs[0],
+                         slope_factor.outputs[0], (location[0] + 2040, 1780))
+    incision = math_node(tree, "MULTIPLY", incision.outputs[0],
+                         flow_weight, (location[0] + 2200, 1780))
+    incision_norm = incision
+
+    # --- 单帧下切上限：
+    #     * Max Debris Depth：碎屑层厚度上限
+    #     * Global Erosion Rate：HDA 里 parmtag units 是 "m1frame-1"，
+    #       即每帧最多降低多少米，是硬上限而不是乘数
+    debris_cap = math_node(tree, "DIVIDE", group_input.outputs["Max Debris Depth"],
+                           group_input.outputs["Height Scale"],
+                           (location[0] + 2200, 1940))
+    frame_cap = math_node(tree, "DIVIDE",
+                          group_input.outputs["Global Erosion Rate"],
+                          group_input.outputs["Height Scale"],
+                          (location[0] + 2200, 2060))
+    cap = math_node(tree, "MINIMUM", debris_cap.outputs[0],
+                    frame_cap.outputs[0], (location[0] + 2340, 2000))
     incision_clamped = math_node(tree, "MINIMUM", incision_norm.outputs[0],
-                                 cap.outputs[0], (location[0] + 2300, 1600))
+                                 cap.outputs[0], (location[0] + 2500, 1780))
 
     # --- 挟沙：被侵蚀的物质进入 sediment，超过挟沙容量的部分沉积回地表
     carried = math_node(tree, "ADD", sediment, incision_clamped.outputs[0],
                         (location[0] + 2300, 1400))
-    capacity = math_node(tree, "MULTIPLY", flow_sat.outputs[0],
+    capacity = math_node(tree, "MULTIPLY", flow_sat,
                          group_input.outputs["Sediment Capacity"],
                          (location[0] + 2120, 1280))
     capacity = math_node(tree, "MULTIPLY", capacity.outputs[0], slope,
@@ -620,13 +713,10 @@ def build_hydro_erosion(tree, group_input, geometry, cell_m: float,
     net_cut = math_node(tree, "SUBTRACT", incision_clamped.outputs[0],
                         deposition.outputs[0], (location[0] + 2840, 1600))
 
-    # --- removal rate：物质被彻底带走
-    removed = math_node(tree, "MULTIPLY", net_cut.outputs[0],
-                        group_input.outputs["Removal Rate"],
-                        (location[0] + 3020, 1600))
-    total_cut = math_node(tree, "ADD", net_cut.outputs[0], removed.outputs[0],
-                          (location[0] + 3200, 1600))
-    new_height = math_node(tree, "SUBTRACT", height, total_cut.outputs[0],
+    # --- removal rate：决定被蚀物质里多少被彻底带走（其余进入 debris）。
+    #     height 层的高度损失始终是 net_cut —— 旧实现写成
+    #     ``net_cut + net_cut × removal``，等于凭空多削 10%。
+    new_height = math_node(tree, "SUBTRACT", height, net_cut.outputs[0],
                            (location[0] + 3380, 1600))
     new_sediment = math_node(tree, "MAXIMUM", deposition.outputs[0], 0.0,
                              (location[0] + 3200, 1340))
@@ -666,7 +756,7 @@ def build_thermal_erosion(tree, group_input, geometry, cell_m: float,
         row = location[1] + 900 - index * 200
         neighbour = sample_at_offset(
             tree, geometry, height, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
+            dx, dy, cell_m, (location[0] + 200, row))
         if neighbour_sum is None:
             neighbour_sum = neighbour
         else:
@@ -693,7 +783,7 @@ def build_thermal_erosion(tree, group_input, geometry, cell_m: float,
         row = location[1] + 300 - index * 180
         neighbour = sample_at_offset(
             tree, geometry, height, position.outputs["Position"],
-            dx * cell_m, dy * cell_m, (location[0] + 200, row))
+            dx, dy, cell_m, (location[0] + 200, row))
         neighbour_m = math_node(tree, "MULTIPLY", neighbour,
                                 group_input.outputs["Height Scale"],
                                 (location[0] + 400, row))
@@ -721,9 +811,17 @@ def build_thermal_erosion(tree, group_input, geometry, cell_m: float,
     over_normalized = math_node(tree, "DIVIDE", over_positive.outputs[0],
                                 group_input.outputs["Height Scale"],
                                 (location[0] + 1680, 500))
-    # 最终塌落量：日照/松弛项 + 超角项，整体乘 thermal removal rate。
+    # 最终塌落量：松弛项 + 超角项，**两项都要先乘 thermal erosion rate**。
+    #
+    # 超角项原本直接是"超过休止角的全部高差"，只乘了 removal rate(0.7)，
+    # 等于每帧把坡面一次性削到休止角 —— 实测地形整体下降 1.7 m、最大 37 m，
+    # 而参考 5 帧总共只有 rms 0.084 m / max 1.87 m。erosionrate=0.03 是
+    # 每帧的松弛比例，两项都必须受它约束。
+    over_scaled = math_node(tree, "MULTIPLY", over_normalized.outputs[0],
+                            group_input.outputs["Thermal Erosion Rate"],
+                            (location[0] + 1680, 640))
     collapse = math_node(tree, "ADD", erode_amount.outputs[0],
-                         over_normalized.outputs[0], (location[0] + 1840, 700))
+                         over_scaled.outputs[0], (location[0] + 1840, 700))
     collapse_scaled = math_node(tree, "MULTIPLY", collapse.outputs[0],
                                 group_input.outputs["Thermal Removal Rate"],
                                 (location[0] + 2020, 700))
@@ -742,19 +840,26 @@ def build_thermal_erosion(tree, group_input, geometry, cell_m: float,
     return stored_debris.outputs["Geometry"], new_height.outputs[0], new_debris.outputs[0]
 
 
-def build_erosion_frame(tree, group_input, geometry, cell_m: float,
+def build_erosion_frame(tree, group_input, geometry, cell, total_cells,
                         location=(0, 0)):
-    """一帧内部的完整求解顺序（与 Houdini 的四个求解节点一一对应）。
+    """一帧内部的完整求解顺序，与 Houdini 的求解器接法一致。
+
+    Houdini 的输入图（``_erode_solvers.json``）是：
 
     ```text
-    precipitation → evaporate → water spread × N → hydro → thermal
+    erode_thermal → precipitation → erode_hydro → evaporate
     ```
+
+    即热力侵蚀在最前、蒸发在最后；水扩散是 ``erode_hydro`` 内部的
+    ``water_spreaditers`` 次迭代。旧实现写成
+    ``precipitation → evaporate → spread → hydro → thermal``：雨水刚落下就被
+    蒸发掉、热力侵蚀又跑到最后，与参考的演化顺序相反。
     """
+    thermal_geometry, _, _ = build_thermal_erosion(
+        tree, group_input, geometry, cell, (location[0] + 0, location[1] - 400))
     stage_geometry, _ = build_precipitation(
-        tree, group_input, geometry, location=(location[0] + 0, location[1] + 1600))
-    evaporate_geometry, _ = build_precipitation(
-        tree, group_input, stage_geometry, seed_w=2.0,
-        location=(location[0] + 1600, location[1] + 1600), evaporation=True)
+        tree, group_input, thermal_geometry,
+        location=(location[0] + 0, location[1] + 1600))
 
     # 水扩散：`water_spreaditers` 次。
     #
@@ -773,28 +878,29 @@ def build_erosion_frame(tree, group_input, geometry, cell_m: float,
     repeat_in.inputs["Iterations"].default_value = 1
     link(tree, group_input.outputs["Water Spread Iterations"],
          repeat_in.inputs["Iterations"])
-    link(tree, evaporate_geometry, repeat_in.inputs[1])
+    link(tree, stage_geometry, repeat_in.inputs[1])
     spread_geometry, _, spread_flow = build_water_spread(
-        tree, group_input, repeat_in.outputs[1], cell_m,
+        tree, group_input, repeat_in.outputs[1], cell, total_cells,
         (location[0] + 3500, location[1] + 1100))
     link(tree, spread_geometry, repeat_out.inputs[0])
 
     hydro_geometry, _ = build_hydro_erosion(
-        tree, group_input, repeat_out.outputs[0], cell_m,
+        tree, group_input, repeat_out.outputs[0], cell, total_cells,
         (location[0] + 5000, location[1] + 600))
-    thermal_geometry, _, _ = build_thermal_erosion(
-        tree, group_input, hydro_geometry, cell_m,
-        (location[0] + 5000, location[1] - 400))
-    return thermal_geometry
+    evaporate_geometry, _ = build_precipitation(
+        tree, group_input, hydro_geometry, seed_w=2.0,
+        location=(location[0] + 6800, location[1] + 1600), evaporation=True)
+    return evaporate_geometry
 
 
 def build_erode_group(size_m: float, resolution: int, inputs, iterations: int = 1):
-    cell_m = size_m / max(resolution - 1, 1)
     """建出完整的 Erode 节点组。
 
     ``inputs`` 是 add_inputs 用的规格表；``iterations`` 是外层帧数
     （Houdini 的 `freezeframe`，Pegasus 用 5）。
     """
+    cell_m = size_m / max(resolution - 1, 1)
+    total_cells = float(resolution * resolution)
     tree = bpy.data.node_groups.new("VL_Pegasus_Erode", "GeometryNodeTree")
     tree.interface.new_socket(name="Geometry", in_out="INPUT",
                               socket_type="NodeSocketGeometry")
@@ -816,7 +922,8 @@ def build_erode_group(size_m: float, resolution: int, inputs, iterations: int = 
     frame_in.pair_with_output(frame_out)
     frame_in.inputs["Iterations"].default_value = int(iterations)
 
-    internal = build_erosion_frame(tree, group_input, frame_in.outputs[1], cell_m)
+    internal = build_erosion_frame(tree, group_input, frame_in.outputs[1],
+                                   cell_m, total_cells)
     link(tree, internal, frame_out.inputs[0])
     link(tree, frame_out.outputs[0], group_output.inputs["Geometry"])
     return tree

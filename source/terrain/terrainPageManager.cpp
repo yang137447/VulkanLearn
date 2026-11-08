@@ -59,13 +59,6 @@ void TerrainPageManager::EnsureStorage()
     virtualPageTableRevision.assign(static_cast<size_t>(PageSlotCount), 0);
     physicalAtlasRevision.assign(static_cast<size_t>(PageSlotCount), 0);
     freePhysicalSlotCount = UsablePhysicalSlotCount;
-
-    // fallback 只保留物理 atlas 槽位 (31,31)：shader 缺页分支直接采样它，
-    // 读到全零 ID/权重。页表不再写 (31,31) 保留项，因此该虚拟坐标可以正常
-    // 分配给 32×32 单地形；IsResident(31,31) 也恢复为普通页语义。
-    const size_t fallbackSlot =
-        static_cast<size_t>(FallbackPageY) * PageTableSize + FallbackPageX;
-    physicalOccupancy[fallbackSlot] = 1;
 }
 
 void TerrainPageManager::RegisterTerrain(
@@ -155,7 +148,7 @@ void TerrainPageManager::RegisterTerrain(
     {
         for (uint32_t tileX = 0; tileX < tilesPerSide; ++tileX)
         {
-            // 1024 虚拟页对 1023 物理槽位：最后一批请求会触发淘汰或无法驻留。
+            // 容量不足时最后一批请求会触发淘汰或无法驻留。
             // 失败只记一次 deferred，然后继续注册，不把容量问题变成异常/死循环。
             if (!RequestPage(placementId, tileX, tileZ))
                 ++stats.preloadDeferredCount;
@@ -434,7 +427,7 @@ bool TerrainPageManager::AllocatePhysicalSlot(
     // 过期隔离槽位与普通空槽位等价。先回收，保证 free 计数、quarantine 计数
     // 和实际可分配结果一致；回收是幂等的，不会重复计数。
     ReclaimExpiredQuarantines(completedEpoch);
-    // 从低槽位开始找，保证测试和画面结果可复现；fallback 槽位已标占用会被跳过。
+    // 从低槽位开始找，保证测试和画面结果可复现。
     for (uint32_t slot = 0; slot < PageSlotCount; ++slot)
     {
         if (physicalOccupancy[slot] == 0)
@@ -799,7 +792,6 @@ bool TerrainPageManager::IsPhysicalSlotAvailable(
         static_cast<size_t>(physicalPageY) * PageTableSize + physicalPageX;
     if (physicalOccupancy[slot] == 0)
         return true;
-    // fallback 槽位永远保持占用且不进入 quarantine，因此不会被分配。
     return physicalSlotQuarantined[slot] != 0 &&
         physicalSlotReleaseEpoch[slot] <= completedEpoch;
 }
@@ -807,14 +799,10 @@ bool TerrainPageManager::IsPhysicalSlotAvailable(
 uint32_t TerrainPageManager::ReclaimExpiredQuarantines(uint64_t completedEpoch)
 {
     if (physicalSlotQuarantined.empty()) return 0;
-    const size_t fallbackSlot =
-        static_cast<size_t>(FallbackPageY) * PageTableSize + FallbackPageX;
     uint32_t reclaimed = 0;
     for (uint32_t slot = 0; slot < PageSlotCount; ++slot)
     {
         if (physicalSlotQuarantined[slot] == 0) continue;
-        // fallback 物理槽位是缺页采样的保底内容，永不复用/回收。
-        if (static_cast<size_t>(slot) == fallbackSlot) continue;
         if (physicalSlotReleaseEpoch[slot] > completedEpoch) continue;
         physicalSlotQuarantined[slot] = 0;
         physicalSlotReleaseEpoch[slot] = 0;
@@ -983,8 +971,8 @@ bool TerrainPageManager::EvictLeastRecentlyUsed(uint64_t completedEpoch)
 
 void TerrainPageManager::SetResidentCapacity(uint32_t capacity)
 {
-    // 0 会让 RequestPage 永远腾不出空间；fallback 物理槽位不可用，因此上限是
-    // UsablePhysicalSlotCount。降低预算时立即按 LRU 淘汰，真正限制驻留页数。
+    // 0 会让 RequestPage 永远腾不出空间；上限是 UsablePhysicalSlotCount。
+    // 降低预算时立即按 LRU 淘汰，真正限制驻留页数。
     residentCapacity = std::clamp(capacity, 1u, UsablePhysicalSlotCount);
     while (residentCount > residentCapacity)
     {

@@ -218,6 +218,9 @@ public:
     void RefreshResolvedSceneAfterShaderReload();
     std::string GetResolvedShaderGenerationFingerprint() const;
     uint64_t GetActiveWorldGeneration() const noexcept;
+    // 编辑器拾取/模型上下文只在开发者 UI 可见时需要；运行时 HUD 或
+    // --no-dev-ui 下跳过整份 picking RenderScene 的逐帧重建。
+    void SetPickingSceneEnabled(bool enabled) noexcept;
     std::optional<VL::Editor::Selection::MaterialInstanceSelection>
     PickMaterialInstanceAt(
         float mouseX,
@@ -633,6 +636,7 @@ private:
     // currentRenderScene 时与鼠标事件并发读写同一对象。
     VL::RenderScene pickingRenderScene;
     bool hasPickingRenderScene = false;
+    bool pickingSceneEnabled = true;
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
     bool offlineMode = false;

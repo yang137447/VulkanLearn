@@ -9,6 +9,7 @@
 
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerFeedback.h"
+#include "terrain/terrainLayerMipBudget.h"
 #include "terrain/terrainLayerPageManager.h"
 #include "terrain/terrainLayerSources.h"
 #include "terrain/terrainPageManager.h"
@@ -80,6 +81,16 @@ struct TerrainLayerVisibilityConfig
     // 不挤占本帧可见页请求；每个请求仍走 RequestPageAtEpoch 的容量/安全窗。
     bool prefetchFinerMipEnabled = false;
     uint32_t prefetchPagesPerFrame = 4;
+    // 全局页预算：把“每个可见需求选哪个 mip”从按屏幕像素独立决定，改为
+    // 在容量约束下统一分配（见 terrainLayerMipBudget.h）。契约要求“选定
+    // mip 后必须请求该 mip 的全部页”，因此每个 (layer, mip) 页集是固定
+    // 成本；多 tile 场景若各自按像素选 mip，总页数可达容量的数倍，每帧
+    // “请求->淘汰->再请求”永不收敛（实测 7 个 1K tile × 4 层需要 1792 页
+    // vs 容量 512，每帧 CPU 600 ms）。分配器按屏幕覆盖优先级（近处优先）
+    // 细化，并对去重后的 (layer, mip) 页集记账，保证总页数 <= 预算；
+    // 同一层的近处和远处可以各保留一个 mip，避免整层只有一个级别。
+    // 0 表示关闭预算（退化为按 record.mip 直接使用反馈的目标 mip）。
+    uint32_t layerPageBudget = 0;
 };
 
 struct TerrainLayerVisibilityStats
@@ -146,6 +157,17 @@ struct TerrainLayerExactFeedbackStats
     bool starved = false;
     // 本帧生效的 idle 窗口补偿 epoch（饥饿期间随饥饿帧数增长并封顶）。
     uint64_t idleGraceEpochs = 0;
+    // 全局 mip 预算分配的产物：本帧分配出的总页数、去重页集数、因预算
+    // 不足被拒绝的细化次数、最粗工作集仍超预算的标记，以及各 mip 承载的
+    // 可见需求/页集分布。
+    // layerPageBudget=0 时全为 0。
+    // 控制台据此确认“近处是否真的拿到了细 mip”。
+    uint32_t budgetTotalPages = 0;
+    uint32_t budgetAllocatedSets = 0;
+    uint32_t budgetClampedRefinements = 0;
+    bool budgetExceeded = false;
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> budgetEntriesByMip{};
+    std::array<uint32_t, TerrainLayerMaxMipLevel + 1> budgetSetsByMip{};
 };
 
 // 层页 feedback 的健康状态，跨帧保存在 resolver 里。它只描述“精确 feedback

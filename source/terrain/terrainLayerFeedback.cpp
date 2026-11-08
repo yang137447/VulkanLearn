@@ -2,20 +2,25 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <stdexcept>
+#include <vector>
 
 namespace VL
 {
 namespace
 {
 
-// (layerId, mip, pageIndex) 打包成一个 32 位键，便于 std::map 聚合去重。
-// layerId 8 bit、mip 3 bit、pageIndex 8 bit，总 19 bit，远小于 32。
-uint32_t PackPageKey(uint32_t layerId, uint32_t mip, uint32_t pageIndex)
+constexpr uint32_t LayerCount = 256;
+constexpr uint32_t MipCount = TerrainLayerFeedbackMaxMip + 1;
+constexpr uint32_t PageCount = 256;
+constexpr uint32_t AggregateSlotCount = LayerCount * MipCount * PageCount;
+
+uint32_t AggregateIndex(
+    uint32_t layerId,
+    uint32_t mip,
+    uint32_t pageIndex)
 {
-    return (layerId << 11) | ((mip & TerrainLayerFeedbackMipMask) << 8) |
-        (pageIndex & 0xFFu);
+    return ((layerId * MipCount + mip) * PageCount) + pageIndex;
 }
 
 } // namespace
@@ -75,7 +80,24 @@ TerrainLayerFeedbackFrameSummary SummarizeTerrainLayerFeedback(
     summary.frameTag = expectedFrameTag;
 
     const size_t texelCount = byteCount / TerrainLayerFeedbackTexelBytes;
-    std::map<uint32_t, uint32_t> counts;
+    // 65,536 个 texel 每帧都做 std::map 查找会产生数十毫秒 CPU 开销。
+    // 这里用一次分配的 flat count 表；只扫描本帧首次出现的 key，并在
+    // 析构时把用过的槽位清零，下一次调用无需整表 memset。
+    static thread_local std::vector<uint32_t> counts(AggregateSlotCount, 0);
+    static thread_local std::vector<uint32_t> usedIndices;
+    usedIndices.clear();
+    struct ScratchReset
+    {
+        std::vector<uint32_t>& counts;
+        std::vector<uint32_t>& usedIndices;
+        ~ScratchReset()
+        {
+            for (uint32_t index : usedIndices)
+                counts[index] = 0;
+            usedIndices.clear();
+        }
+    } scratchReset{counts, usedIndices};
+
     uint32_t maxSampleCount = 0;
     for (size_t texelIndex = 0; texelIndex < texelCount; ++texelIndex)
     {
@@ -83,6 +105,13 @@ TerrainLayerFeedbackFrameSummary SummarizeTerrainLayerFeedback(
             DecodeTerrainLayerFeedbackTexel(
                 texels + texelIndex * TerrainLayerFeedbackTexelBytes);
         if (!texel.valid)
+        {
+            ++summary.invalidTexelCount;
+            continue;
+        }
+        // 编码只有 3 bit mip，但合法范围是 0..4；越界值会让 flat 索引
+        // 落到相邻 layer 槽位，必须在聚合前拒绝。
+        if (texel.mip > TerrainLayerFeedbackMaxMip)
         {
             ++summary.invalidTexelCount;
             continue;
@@ -98,21 +127,28 @@ TerrainLayerFeedbackFrameSummary SummarizeTerrainLayerFeedback(
         if (slot < TerrainLayerFeedbackSlotCount)
             ++summary.slotSampleCount[slot];
 
-        uint32_t& count = counts[PackPageKey(
-            texel.layerId, texel.mip, texel.pageIndex)];
-        ++count;
-        maxSampleCount = std::max(maxSampleCount, count);
+        const uint32_t aggregateIndex =
+            AggregateIndex(texel.layerId, texel.mip, texel.pageIndex);
+        uint32_t& sampleCount = counts[aggregateIndex];
+        if (sampleCount == 0)
+            usedIndices.push_back(aggregateIndex);
+        ++sampleCount;
+        maxSampleCount = std::max(maxSampleCount, sampleCount);
     }
 
-    summary.distinctPageCount = static_cast<uint32_t>(counts.size());
-    summary.pages.reserve(counts.size());
-    for (const auto& entry : counts)
+    summary.distinctPageCount = static_cast<uint32_t>(usedIndices.size());
+    summary.pages.reserve(usedIndices.size());
+    for (uint32_t aggregateIndex : usedIndices)
     {
+        const uint32_t pageIndex = aggregateIndex % PageCount;
+        const uint32_t layerMip = aggregateIndex / PageCount;
+        const uint32_t mip = layerMip % MipCount;
+        const uint32_t layerId = layerMip / MipCount;
         TerrainLayerFeedbackRecord record;
-        record.pageIndex = entry.first & 0xFFu;
-        record.mip = (entry.first >> 8) & TerrainLayerFeedbackMipMask;
-        record.layerId = entry.first >> 11;
-        record.sampleCount = entry.second;
+        record.pageIndex = pageIndex;
+        record.mip = mip;
+        record.layerId = layerId;
+        record.sampleCount = counts[aggregateIndex];
         // 相对覆盖率：让近景/大面积层排到请求队列前面，同时压进 1..255，
         // 与页表 A 通道（priority）的既有取值范围一致。
         const float ratio =

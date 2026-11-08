@@ -869,3 +869,197 @@ TEST(TerrainLayerVisibility, StarvationBeyondGraceAllowsSlowDecay)
     }
     EXPECT_EQ(layerPages.ResidentCount(), 0u);
 }
+
+// 预算路径的核心不变量：选中的 (layer, mip) 必须请求该 mip 的全部页。
+// feedback 只命中 1 页，但 shader 的平铺 UV 可能落到任意页。
+TEST(TerrainLayerVisibility, BudgetExactFeedbackRequestsWholeSelectedMip)
+{
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.layerPageBudget = 512;
+    config.exactFeedbackNeighborhoodRadius = 0;
+
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.copiedEpoch = 10;
+    summary.validTexelCount = 10;
+    summary.pages = {{0, 0, 5, 10, 255}};
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            summary, layerPages, pending, 10, 10, config);
+
+    EXPECT_EQ(stats.budgetTotalPages, 17u);
+    EXPECT_EQ(stats.budgetAllocatedSets, 2u);
+    EXPECT_EQ(stats.budgetSetsByMip[0], 1u);
+    EXPECT_EQ(stats.budgetSetsByMip[2], 1u);
+    EXPECT_EQ(stats.candidatePages, 17u);
+    EXPECT_EQ(stats.acceptedRequests, 17u);
+    EXPECT_TRUE(pending.empty());
+    for (uint32_t y = 0; y < 4; ++y)
+    {
+        for (uint32_t x = 0; x < 4; ++x)
+            EXPECT_TRUE(layerPages.IsResident(Key(0, 0, x, y)));
+    }
+    // 最粗尾页作为 feedback 欠采样时的回退内容。
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 2, 0, 0)));
+}
+
+// 分配不能越过 feedback 目标：目标 mip2 时只驻留 4 页，不装 mip0 的 64 页。
+TEST(TerrainLayerVisibility, BudgetExactFeedbackStopsAtTargetMip)
+{
+    std::vector<VL::TerrainLayerDesc> layers = MakeLayerDesc(1);
+    layers[0].sourceResolution = 1024;
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(layers);
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.sourceMipLevels = 4;
+    config.layerPageBudget = 512;
+    config.exactFeedbackNeighborhoodRadius = 0;
+
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.copiedEpoch = 10;
+    summary.validTexelCount = 10;
+    // 1K mip2 每边 2 页；pageIndex 0 是 (0,0)。
+    summary.pages = {{0, 2, 0, 10, 255}};
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            summary, layerPages, pending, 10, 10, config);
+
+    EXPECT_EQ(stats.budgetTotalPages, 5u);
+    EXPECT_EQ(stats.budgetEntriesByMip[2], 1u);
+    EXPECT_EQ(stats.budgetSetsByMip[2], 1u);
+    EXPECT_EQ(stats.budgetSetsByMip[3], 1u);
+    EXPECT_EQ(stats.mipRequestCounts[2], 4u);
+    EXPECT_EQ(stats.mipRequestCounts[3], 1u);
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 2, 0, 0)));
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 2, 1, 1)));
+    EXPECT_FALSE(layerPages.IsResident(Key(0, 0, 0, 0)));
+}
+
+// 预算紧张时，近处需求先拿细 mip，远处需求停在粗 mip。
+TEST(TerrainLayerVisibility, BudgetPrioritizesNearerFeedback)
+{
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(2));
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(2);
+    // 512² mip0 是 16 页，另有 1 页最粗回退。20 页预算让近处层拿满
+    // mip0（16+1 页），远处层停在最粗 mip2（1 页），仍然比近处粗。
+    config.layerPageBudget = 20;
+    config.maxRequestsPerFrame = 128;
+    config.exactFeedbackNeighborhoodRadius = 0;
+
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.copiedEpoch = 10;
+    summary.validTexelCount = 20;
+    // layer 1 是近处（priority 255），layer 0 是远处（priority 64）。
+    summary.pages = {
+        {0, 0, 5, 10, 64},
+        {1, 0, 5, 10, 255},
+    };
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            summary, layerPages, pending, 10, 10, config);
+
+    EXPECT_EQ(stats.budgetEntriesByMip[0], 1u);
+    EXPECT_EQ(stats.budgetEntriesByMip[2], 1u);
+    EXPECT_EQ(stats.budgetSetsByMip[0], 1u);
+    EXPECT_EQ(stats.budgetSetsByMip[2], 2u);
+    EXPECT_EQ(stats.mipRequestCounts[0], 16u);
+    EXPECT_EQ(stats.mipRequestCounts[2], 2u);
+    EXPECT_TRUE(layerPages.IsResident(Key(1, 0, 0, 0)));
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 2, 0, 0)));
+}
+
+// 同一个全局层同时出现在近处和远处时，必须同时保留两个页集；只保留最细
+// 一级会让远处像素采样到未请求的粗 mip 页。
+TEST(TerrainLayerVisibility, BudgetKeepsNearAndFarMipsForSameLayer)
+{
+    std::vector<VL::TerrainLayerDesc> layers = MakeLayerDesc(1);
+    layers[0].sourceResolution = 1024;
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(layers);
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.sourceMipLevels = 4;
+    config.layerPageBudget = 512;
+    config.maxRequestsPerFrame = 128;
+    config.exactFeedbackNeighborhoodRadius = 0;
+
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.copiedEpoch = 10;
+    summary.validTexelCount = 20;
+    // 同一层的近处目标 mip0 + 远处目标 mip3。
+    summary.pages = {
+        {0, 0, 0, 10, 255},
+        {0, 3, 0, 10, 32},
+    };
+    const VL::TerrainLayerExactFeedbackStats stats =
+        resolver.ApplyExact(
+            summary, layerPages, pending, 10, 10, config);
+
+    EXPECT_EQ(stats.budgetTotalPages, 65u);
+    EXPECT_EQ(stats.budgetAllocatedSets, 2u);
+    EXPECT_EQ(stats.budgetEntriesByMip[0], 1u);
+    EXPECT_EQ(stats.budgetEntriesByMip[3], 1u);
+    EXPECT_EQ(stats.mipRequestCounts[0], 64u);
+    EXPECT_EQ(stats.mipRequestCounts[3], 1u);
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 0, 0)));
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 0, 7, 7)));
+    EXPECT_TRUE(layerPages.IsResident(Key(0, 3, 0, 0)));
+}
+
+// 预算与容量相等时，选中页集必须稳定驻留：后续帧不能出现
+// “请求 -> 淘汰 -> 再请求”的追尾。
+TEST(TerrainLayerVisibility, BudgetSelectedWorkingSetStaysStable)
+{
+    VL::TerrainLayerPageManager layerPages;
+    layerPages.ConfigureLayers(MakeLayerDesc(1));
+    layerPages.SetResidentCapacity(17);
+    layerPages.SetGpuEpochContext(10, 0, 2);
+
+    VL::TerrainLayerVisibilityResolver resolver;
+    std::vector<VL::TerrainLayerPageRequest> pending;
+    VL::TerrainLayerVisibilityConfig config = MakeConfig(1);
+    config.layerPageBudget = 17;
+    config.maxRequestsPerFrame = 64;
+    config.exactFeedbackNeighborhoodRadius = 0;
+
+    VL::TerrainLayerFeedbackFrameSummary summary;
+    summary.validTexelCount = 10;
+    summary.pages = {{0, 0, 5, 10, 255}};
+    for (uint64_t frame = 0; frame < 8; ++frame)
+    {
+        const uint64_t epoch = 10 + frame;
+        summary.copiedEpoch = epoch;
+        layerPages.SetGpuEpochContext(epoch, epoch, 2);
+        const VL::TerrainLayerExactFeedbackStats stats =
+            resolver.ApplyExact(
+                summary, layerPages, pending, frame, epoch, config);
+        EXPECT_EQ(layerPages.ResidentCount(), 17u);
+        EXPECT_TRUE(pending.empty());
+        if (frame == 0)
+        {
+            EXPECT_EQ(stats.acceptedRequests, 17u);
+        }
+        else
+        {
+            EXPECT_EQ(stats.acceptedRequests, 0u);
+            EXPECT_EQ(stats.evictedPages, 0u);
+        }
+    }
+}

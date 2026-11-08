@@ -44,8 +44,10 @@ void RequireFrameSyncIndex(const char* resourceName, uint32_t index, size_t size
 
 void RHIDeviceVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
-    SDL_Window* window)
+    SDL_Window* window,
+    VL::PresentModePreference presentMode)
 {
+    VulkanManager::GetInstance().SetPresentModePreference(presentMode);
     VulkanManager::GetInstance().Init(instanceExtensions, window);
     initialized = true;
 }

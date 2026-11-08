@@ -31,6 +31,7 @@ import bpy
 
 import pegasus_hf_core as core
 from pegasus_erode_gn import (
+    build_erosion_frame,
     build_hydro_erosion,
     build_precipitation,
     build_thermal_erosion,
@@ -46,13 +47,18 @@ PRECIPITATION_PARAMS = [
     ("Rain Density", "NodeSocketFloat", 0.05, 0.001, 1.0,
      "雨点疏密，对应 rain_density。低=窄河道，高=宽河道。"),
     ("Rain Evaporation", "NodeSocketFloat", 0.04, 0.0, 1.0,
-     "蒸发量，对应 rain_evaporation（单独成组时由蒸发节点使用）。"),
+     "每帧蒸发比例（对应 rain_evaporation），water *= (1 - rate)。"),
     ("Seed", "NodeSocketFloat", 0.0, 0.0, 1000.0, "对应 seed。"),
+    ("Height Scale", "NodeSocketFloat", 500.0, 1.0, 5000.0,
+     "米与归一化层的换算基准。"),
 ]
 
 HYDRO_PARAMS = [
+    ("Global Erosion Rate", "NodeSocketFloat", 1.0, 0.0, 50.0,
+     "每帧最多降低多少米（对应 globalerosionrate）。"
+     "HDA 里的 parmtag 是 units 'm1frame-1'，即米/帧的硬上限。"),
     ("Hydro Erodability", "NodeSocketFloat", 1.0, 0.0, 100.0,
-     "可蚀性，对应 erodability。"),
+     "可蚀性（岩层软硬），对应 erodability。"),
     ("Hydro Erosion Rate", "NodeSocketFloat", 0.4, 0.0, 100.0,
      "可蚀性的乘数，对应 erosionrate。"),
     ("Bank Angle", "NodeSocketFloat", 70.0, 0.0, 90.0,
@@ -71,6 +77,12 @@ HYDRO_PARAMS = [
      "单位水流挟沙量，对应 bed_sedimentcap。"),
     ("Bed Deposition Rate", "NodeSocketFloat", 0.01, 0.0, 1.0,
      "多余沉积物转 debris 的速率，对应 bed_depositionrate。"),
+    ("Erodability Slope Factor", "NodeSocketFloat", 0.8, 0.0, 5.0,
+     "坡度对侵蚀量的影响系数，对应 erodability_slopefactor。"
+     "下切按 (1 + slopeFactor × slope) 放大，不是直接把坡度当乘积项。"),
+    ("Cell Size", "NodeSocketFloat", 3.92, 0.01, 10000.0, "格距（米）。"),
+    ("Grid Cells", "NodeSocketFloat", 65536.0, 1.0, 1e9,
+     "总格数（Samples²），用于把汇水面积归一化成 A / A_total。"),
     ("Height Scale", "NodeSocketFloat", 500.0, 1.0, 5000.0,
      "米与归一化层的换算基准。"),
 ]
@@ -93,6 +105,8 @@ SPREAD_PARAMS = [
     ("Cell Size", "NodeSocketFloat", 4.0, 0.01, 10000.0, "格距（米）。"),
     ("Water Spread Rate", "NodeSocketFloat", 0.95, 0.0, 1.0,
      "每次迭代的水量传递比例。"),
+    ("Grid Cells", "NodeSocketFloat", 65536.0, 1.0, 1e9,
+     "总格数（Samples²），汇水面积的上限。"),
 ]
 
 
@@ -132,7 +146,9 @@ def build_water_spread_group():
         "flow。对应 Houdini water_spreaditers 的单次迭代，外层用 Repeat 迭代。")
     group_input = core.add_params(tree, SPREAD_PARAMS)
     geometry, _, _ = build_water_spread(
-        tree, group_input, group_input.outputs["Geometry"], 4.0, location=(-400, 0))
+        tree, group_input, group_input.outputs["Geometry"],
+        group_input.outputs["Cell Size"], group_input.outputs["Grid Cells"],
+        location=(-400, 0))
     core.finish_group(tree, group_input, geometry, (1800, 0))
     return tree
 
@@ -143,11 +159,10 @@ def build_hydro_group():
         "对应 Houdini heightfield_erode_hydro：按汇水强度 flow × 坡度下切地表，"
         "河床/河岸按水柱高度比分类并各用不同乘数，超出挟沙容量的部分沉积。")
     group_input = core.add_params(tree, HYDRO_PARAMS)
-    # HYDRO 组没有独立的 Cell Size 参数：格距由调用方按地形分辨率给出，
-    # 这里用规范的默认值（1 km / 256 样本 ≈ 3.92 m）。
-    cell = 3.92
     geometry, _ = build_hydro_erosion(
-        tree, group_input, group_input.outputs["Geometry"], cell, location=(-400, 0))
+        tree, group_input, group_input.outputs["Geometry"],
+        group_input.outputs["Cell Size"], group_input.outputs["Grid Cells"],
+        location=(-400, 0))
     core.finish_group(tree, group_input, geometry, (2400, 0))
     return tree
 
@@ -168,8 +183,8 @@ def build_thermal_group():
 def build_erode_group():
     """组合组：对应 Houdini ``heightfield_erode::2.0``。
 
-    内部顺序与 Houdini 一致：
-    ``precipitation → evaporate → water spread ×N → hydro → thermal``，
+    内部顺序与 Houdini 的求解器接法一致：
+    ``thermal → precipitation → (water spread ×N + hydro) → evaporate``，
     外层再套一层帧循环（Houdini 的 freezeframe）。
     """
     tree = core.new_group(
@@ -188,8 +203,12 @@ def build_erode_group():
          "蒸发量，对应 rain_evaporation。"),
         ("Water Spread Iterations", "NodeSocketInt", 120, 0, 400,
          "水扩散迭代数，对应 water_spreaditers。"),
+        ("Global Erosion Rate", "NodeSocketFloat", 1.0, 0.0, 50.0,
+         "每帧最多降低多少米，对应 globalerosionrate（units m1frame-1）。"),
         ("Hydro Erodability", "NodeSocketFloat", 1.5, 0.0, 100.0,
          "可蚀性，对应 hydro_erodability。"),
+        ("Erodability Slope Factor", "NodeSocketFloat", 0.8, 0.0, 5.0,
+         "坡度对侵蚀量的影响系数，对应 erodability_slopefactor。"),
         ("Hydro Erosion Rate", "NodeSocketFloat", 1.0, 0.0, 100.0,
          "可蚀性乘数，对应 hydro_erosionrate。"),
         ("Bank Angle", "NodeSocketFloat", 20.0, 0.0, 90.0,
@@ -216,6 +235,8 @@ def build_erode_group():
          "水柱高度比阈值，对应 bank_maxbankbedwaterratio。"),
         ("Water Spread Rate", "NodeSocketFloat", 0.95, 0.0, 1.0,
          "每次迭代的水量传递比例。"),
+        ("Grid Cells", "NodeSocketFloat", 65536.0, 1.0, 1e9,
+         "总格数（Samples²），用于把汇水面积归一化成 A / A_total。"),
         ("Freeze Frames", "NodeSocketInt", 1, 1, 100,
          "冻结帧数，对应 Houdini freezeframe（Pegasus 用 5）。"),
         ("Freeze Enabled", "NodeSocketBool", True, None, None,
@@ -237,42 +258,23 @@ def build_erode_group():
     core.link(tree, one_frame, frame_in.inputs["Iterations"])
     core.link(tree, group_input.outputs["Geometry"], frame_in.inputs[1])
 
-    # 一帧内部：降水 → 蒸发 → 水扩散×N → 水力 → 热力
-    rain_geo, _ = build_precipitation(
-        tree, group_input, frame_in.outputs[1], location=(-1200, 1600))
-    evaporate_params = dict(params)
-    evap_geo, _ = build_precipitation(
-        tree, group_input, rain_geo, seed_w=2.0, location=(600, 1600), evaporation=True)
-    _ = evaporate_params
+    # 一帧内部：thermal → rain → [spread × N + hydro] → evaporate。
+    # 复用 pegasus_erode_gn.build_erosion_frame，避免这里再维护一份
+    # 顺序/格距/归一化都不一致的副本。
+    frame_geometry = build_erosion_frame(
+        tree, group_input, frame_in.outputs[1],
+        params["Cell Size"], params["Grid Cells"], location=(-1200, 0))
+    core.link(tree, frame_geometry, frame_out.inputs[0])
 
-    spread_out = tree.nodes.new("GeometryNodeRepeatOutput")
-    spread_out.location = (6200, 1500)
-    spread_in = tree.nodes.new("GeometryNodeRepeatInput")
-    spread_in.location = (3600, 1700)
-    spread_in.pair_with_output(spread_out)
-    core.link(tree, params["Water Spread Iterations"], spread_in.inputs["Iterations"])
-    core.link(tree, evap_geo, spread_in.inputs[1])
-    cell = params["Cell Size"]
-    spread_geo, _, _ = build_water_spread(
-        tree, group_input, spread_in.outputs[1], 4.0, location=(3700, 1100))
-    core.link(tree, spread_geo, spread_out.inputs[0])
-
-    hydro_geo, _ = build_hydro_erosion(
-        tree, group_input, spread_out.outputs[0], 4.0, location=(6400, 600))
-    thermal_geo, _, _ = build_thermal_erosion(
-        tree, group_input, hydro_geo, 4.0, location=(6400, -400))
-    _ = cell
-
-    core.link(tree, thermal_geo, frame_out.inputs[0])
-
-    # 输出前把 height 变成位移，方便直接看到地形
-    height = core.read_layer(tree, "height", (9200, 600))
-    scaled = core.math_node(tree, "MULTIPLY", height, params["Height Scale"],
-                            (9400, 600))
-    offset = core.combine_xyz(tree, 0.0, 0.0, scaled.outputs[0], (9600, 600))
-    positioned = core.set_position(tree, frame_out.outputs[0],
-                                   offset.outputs["Vector"], (9800, 300))
-    core.finish_group(tree, group_input, positioned.outputs["Geometry"], (10200, 300))
+    # 层算子只改属性、不改几何位置。
+    #
+    # 之前这里把 height 写成 Z 位移"方便直接看到地形"，但预设要把侵蚀结果
+    # 升采样回输出分辨率：SampleNearestSurface 是 3D 最近邻，面对一张
+    # ±60 m 起伏的网格，平面探针会取到错误的顶点，升采样结果完全错乱
+    # （实测侵蚀高度差从 0.09 m 变成 0.49 m）。高度位移应该由最终场景
+    # 构建负责，而不是侵蚀组。
+    core.finish_group(tree, group_input, frame_out.outputs["Geometry"],
+                      (10200, 300))
     return tree
 
 

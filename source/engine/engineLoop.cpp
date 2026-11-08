@@ -190,6 +190,7 @@ RuntimeResult<void> EngineLoop::Init(
         platformWindow,
         platformApplication.GetVulkanExtensions(),
         launchOptions.developerUiMode,
+        launchOptions.presentMode,
         launchOptions.forceShaderRebuild);
     if (runtimeResult.IsFailure())
     {
@@ -439,6 +440,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     PlatformWindow& window,
     std::vector<const char*>& vulkanExtensions,
     DeveloperUiLaunchMode developerUiMode,
+    PresentModePreference presentMode,
     bool forceShaderRebuild)
 {
     // Material parameter includes are generated before shader compilation so
@@ -453,7 +455,8 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         forceShaderRebuild);
 
     rendererBackend = std::make_unique<RendererBackendVulkan>();
-    rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
+    rendererBackend->Initialize(
+        vulkanExtensions, window.GetNativeHandle(), presentMode);
     rendererBackendInitialized = true;
     terrainChunkStreamer = std::make_unique<TerrainChunkStreamer>();
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
@@ -2827,6 +2830,8 @@ void EngineLoop::SynchronizeSceneViewport()
     const auto aspect = ViewportAspect(rect);
     auto& renderSystem = RenderSystem::GetInstance();
     renderSystem.SetSceneViewport(rect, uiSubsystem->IsSceneViewportEnabled());
+    renderSystem.SetPickingSceneEnabled(
+        uiSubsystem->IsDeveloperUiVisible());
     const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
     if (aspect && world && world->GetRenderCamera())
     {
