@@ -206,6 +206,19 @@ RuntimeResult<void> EngineLoop::Init(
     RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);
     gpuStatsEnabled = launchOptions.gpuStats;
     nextUiSectionStats = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    if (launchOptions.perfJsonlPath.has_value() || launchOptions.gpuStats)
+    {
+        // 计时读数只在优化构建里有意义：Debug（-O0）会把数毫秒的一帧放大到
+        // 数百毫秒，而页流式吞吐 = 每帧上传页数 × 帧率，于是会被误读成
+        // "页加载慢"。这里必须在启动期点明，避免再拿非优化构建的结论做架构决策。
+#if !defined(NDEBUG)
+        std::cout
+            << "[Diagnostics][Warning] This build is not optimized (NDEBUG is "
+               "undefined). Frame timings and streaming throughput are not "
+               "representative; use a Release build for performance work."
+            << std::endl;
+#endif
+    }
     if (launchOptions.perfJsonlPath.has_value())
     {
         // --perf-jsonl 的时间序列需要 pass 数据，因此同时开启采集；

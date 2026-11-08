@@ -551,8 +551,24 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             layerRegistry.DedupedLayerCount();
         // 层页虚拟编号依赖各层源分辨率，必须在创建页表/请求页之前配置。
         terrainStreaming->layerPageManager.ConfigureLayers(worldTerrainLayers);
+        // 与覆盖页同一条规则：驻留预算必须覆盖整个世界的层页虚拟页数，
+        // 否则 LRU 会在世界内部切出一条边界，界外的层页永远“请求 -> 淘汰 ->
+        // 再请求”。上限是层页管理器的可用物理槽位（fallback 槽位除外）。
+        // 全 1K 层时每层 mip0..3 = 85 页：4 层 340 页仍取下限 512；
+        // 2K 层（341 页/层）或更多层会把容量抬到物理上限，再由 mip 预算在
+        // 容量内做粗化分配，而不是靠淘汰追尾。
+        uint32_t layerVirtualPages = 0;
+        for (size_t layerIndex = 0; layerIndex < worldTerrainLayers.size();
+             ++layerIndex)
+        {
+            layerVirtualPages += terrainStreaming->layerPageManager
+                .TotalPagesForLayer(static_cast<uint32_t>(layerIndex));
+        }
         terrainStreaming->layerPageManager.SetResidentCapacity(
-            TerrainLayerPageManager::DefaultResidentCapacity);
+            ComputeTerrainResidentCapacity(
+                layerVirtualPages,
+                TerrainLayerPageManager::DefaultResidentCapacity,
+                terrainStreaming->layerPageManager.UsablePhysicalPageCount()));
         terrainStreaming->layerResources =
             CreateTerrainLayerGpuResources(
                 *rendererBackend,

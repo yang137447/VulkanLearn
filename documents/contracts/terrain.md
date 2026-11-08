@@ -988,9 +988,14 @@ catalog row3 的 `avgColor`。生产预算路径会为每个 `(layer, targetMip)
 层页是平铺资产，shader 的 UV 可能落到该 mip 的任意页；因此每个选中的
 `(layer, mip)` 都是“全部页”的固定成本。多地形场景中同一全局层会在近处和
 远处同时出现，shader 对不同像素会报告不同目标 mip。若每个 `(layer, targetMip)`
-都独立按屏幕像素请求，7 个 1K tile × 4 层全部选 mip0 需要 1792 页，超过默认
-`ResidentCapacity=512` 3.5 倍，每帧“请求 -> 淘汰 -> 再请求”无法收敛（实测
-CPU 600 ms/帧）。生产路径由 `TerrainLayerMipBudget`
+都独立按屏幕像素请求，7 个 1K tile × 4 层全部选 mip0 需要 1792 页，超过全部
+物理槽位（1024），每帧“请求 -> 淘汰 -> 再请求”无法收敛（实测 CPU 600 ms/帧）。
+层页驻留容量与覆盖页共用同一公式
+`min(max(DefaultResidentCapacity=512, Σ 每个全局层 TotalPagesForLayer), UsablePhysicalPageCount)`：
+全 1K 的 4 层世界是 340 页，容量保持 512；2K × 8 层是 2728 页，容量抬到
+物理上限（1023），再由本节的 mip 预算在容量内粗化。容量若小于世界的虚拟页数，
+LRU 会在世界内部切出一条边界，界外的层页永远“请求 -> 淘汰 -> 再请求”。
+生产路径由 `TerrainLayerMipBudget`
 （`source/terrain/terrainLayerMipBudget.*`）在容量内统一分配：
 
 - 输入是精确 feedback 归并出的 `(layer, targetMip)` 需求；同一层可以有多个

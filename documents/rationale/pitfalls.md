@@ -219,6 +219,27 @@
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-06
 - 相关：`documents/contracts/gpu-pass-timing.md` 的 Present 模式与 `other` 段
 
+### [streaming-throughput-follows-fps] 页流式吞吐 = 每帧上传页数 × 帧率，Debug 构建会把"加载慢"放大百倍
+
+- 适用场景：地形层页（VT）补页慢、`terrainlayer stats` 的 `dirtyPages` 越积越多、
+  `pending` 不下降
+- 失败表现：`--perf-jsonl` 里 `gpuTotalMs≈0.8`（GPU 几乎空转），`submitPresent`
+  窗口平均 374→610 ms 且随帧数上升；`terrainlayer forcemip 0` 之后 31 s 仍有
+  `dirtyPages=88`、`pending=80`、`uploadedPages=92`，`lastValidEpoch` 只有 11
+- 根因：补页速率是 `maxLayerPageUploadsPerFrame(8)` × 帧率。`build/` 是
+  `CMAKE_BUILD_TYPE=Debug`（`-O0`、无 `NDEBUG`），同样的代码一帧要几百毫秒，
+  帧率掉两个数量级，8 页/帧就退化成十几页/秒；这不是流式架构慢
+- 规避动作：性能与流式验收只能用 Release（`build-vscode/release`，`-O3 -DNDEBUG`）；
+  现在开启 `--perf-jsonl` 或 `--gpu-stats` 时，非优化构建会在启动期打印
+  `[Diagnostics][Warning] This build is not optimized ...`
+- 证据：2026-11-08，`SC_terrain_pegasus_4x4.json --no-dev-ui`。
+  Release：`terrainlayer forcemip 0`（需求 260 页）后 1.3 s `resident=260`、
+  `dirtyPages=80`，2.7 s 时 `dirtyPages=0`、`uploadedPages=260`。Debug：同一命令
+  31 s 后 `resident=180/512`、`uploadedPages=92`、`dirtyPages=88`、`pending=80`
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-08
+- 相关：`source/render/resource/rendererTerrainLoader.h` 的
+  `maxLayerPageUploadsPerFrame`、`documents/contracts/terrain.md` 的层页预算段
+
 ## 待确认候选
 
 尚未完成证据核查或负责人确认的候选。**实现不得默认依赖这些内容。**

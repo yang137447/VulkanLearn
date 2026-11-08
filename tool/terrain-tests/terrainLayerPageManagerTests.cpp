@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "resource/image/hostImage.h"
+#include "render/resource/rendererResourceLoadCoordinator.h"
 #include "terrain/terrainAssetTypes.h"
 #include "terrain/terrainLayerPageManager.h"
 #include "terrain/terrainLayerTable.h"
@@ -492,6 +493,37 @@ TEST(TerrainLayerPageManagerTest, RejectsLayerCountAndLateReconfigure)
     VL::TerrainLayerPageManager late;
     ASSERT_TRUE(late.RequestPage(PageKey(0, 0, 0, 0)));
     EXPECT_THROW(late.ConfigureLayers({MakeLayer(2048)}), std::exception);
+}
+
+TEST(TerrainLayerPageManagerTest, ResidentCapacityCoversConfiguredVirtualPages)
+{
+    // 层页驻留容量与覆盖页共用同一公式：下限是 DefaultResidentCapacity，
+    // 上限是可用物理槽位，中间必须覆盖世界的全部虚拟页。
+    const auto derivedCapacity = [](VL::TerrainLayerPageManager& manager,
+                                     uint32_t layerCount) {
+        uint32_t virtualPages = 0;
+        for (uint32_t layerId = 0; layerId < layerCount; ++layerId)
+            virtualPages += manager.TotalPagesForLayer(layerId);
+        return VL::ComputeTerrainResidentCapacity(
+            virtualPages,
+            VL::TerrainLayerPageManager::DefaultResidentCapacity,
+            manager.UsablePhysicalPageCount());
+    };
+
+    // 4×4 tile 场景去重后是 4 个 1K 全局层：每层 85 页，共 340 页。
+    // 低于下限 512，容量保持 512。
+    VL::TerrainLayerPageManager oneK;
+    oneK.ConfigureLayers(std::vector<VL::TerrainLayerDesc>(4, MakeLayer(1024)));
+    EXPECT_EQ(oneK.TotalPagesForLayer(0), 85u);
+    EXPECT_EQ(derivedCapacity(oneK, 4), 512u);
+
+    // 2K 层每层 341 页：8 层 = 2728 页，超过 1024 个物理槽位。
+    // 容量必须抬到可用槽位上限，而不是停在 512 让 LRU 在世界内部追尾。
+    VL::TerrainLayerPageManager twoK;
+    twoK.ConfigureLayers(std::vector<VL::TerrainLayerDesc>(8, MakeLayer(2048)));
+    EXPECT_EQ(twoK.TotalPagesForLayer(0), 341u);
+    EXPECT_EQ(derivedCapacity(twoK, 8),
+        VL::TerrainLayerPageManager::DefaultPhysicalPageCount - 1);
 }
 
 TEST(TerrainLayerPageManagerTest, DecodesPhysicalPageIntoSlices)
