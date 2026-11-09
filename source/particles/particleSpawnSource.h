@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -116,14 +117,17 @@ inline uint32_t PackParticleSpawnSource(
     }
     const uint32_t count = static_cast<uint32_t>(records.size());
     outFloats.assign(4u + static_cast<size_t>(count) * 16u, 0.0f);
-    outFloats[0] = static_cast<float>(kind);
-    outFloats[1] = static_cast<float>(count);
+    // shader 的 header 是 std430 uvec4；这里必须写整数位模式，不能写
+    // float 数值，否则 GPU 会把 1.0f 的位模式当成 kind/count。
+    std::memcpy(&outFloats[0], &kind, sizeof(kind));
+    std::memcpy(&outFloats[1], &count, sizeof(count));
     float cumulative = 0.0f;
     for (uint32_t index = 0; index < count; ++index)
     {
         cumulative += records[index].weight;
         std::array<float, 16> record = records[index].data;
         record[3] = cumulative;
+        record[15] = cumulative;
         std::copy(
             record.begin(),
             record.end(),
