@@ -91,10 +91,10 @@
         },
         "u_layerMaxMip": {
             "type": "float",
-            "default": 4.0,
+            "default": 6.0,
             "range": {
                 "min": 0.0,
-                "max": 4.0
+                "max": 6.0
             },
             "description": "maximum VT layer page-table mip; per-layer effective max is derived from catalog pagesPerSide"
         },
@@ -103,9 +103,63 @@
             "default": -1.0,
             "range": {
                 "min": -1.0,
-                "max": 4.0
+                "max": 6.0
             },
-            "description": "-1 = auto mip from derivatives; 0..4 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+            "description": "-1 = auto mip from derivatives; 0..6 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+        },
+        "u_detailUvScale": {
+            "type": "float",
+            "default": 6.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "near-field detail sampling multiplier relative to the base layer UV"
+        },
+        "u_detailFadeStartM": {
+            "type": "float",
+            "default": 40.0,
+            "range": {
+                "min": 0.0,
+                "max": 5000.0
+            },
+            "description": "camera distance in meters where near-field detail starts fading out"
+        },
+        "u_detailFadeEndM": {
+            "type": "float",
+            "default": 160.0,
+            "range": {
+                "min": 1.0,
+                "max": 8000.0
+            },
+            "description": "camera distance in meters where near-field detail has fully faded out"
+        },
+        "u_detailStrength": {
+            "type": "float",
+            "default": 0.35,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "near-field detail albedo and normal blend strength"
+        },
+        "u_macroUvScale": {
+            "type": "float",
+            "default": 0.15,
+            "range": {
+                "min": 0.01,
+                "max": 1.0
+            },
+            "description": "macro variation sampling multiplier relative to the base layer UV; far below 1 for large-scale breakup"
+        },
+        "u_macroStrength": {
+            "type": "float",
+            "default": 0.25,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "macro albedo luma modulation strength used to suppress distant tiling"
         }
     },
     "textures": {
@@ -154,6 +208,14 @@
             "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         },
         "layerPageTable4": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable5": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable6": {
             "type": "sampler2D",
             "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         },

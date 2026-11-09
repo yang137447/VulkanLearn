@@ -1757,10 +1757,12 @@ void RenderSystem::RequestTerrainLayerPreload()
 
 void RenderSystem::RequestTerrainLayerForceMip(int forceMip)
 {
-    if (forceMip < -1 || forceMip > 4)
+    if (forceMip < -1 ||
+        forceMip > static_cast<int>(VL::TerrainLayerPageManager::MaxMipLevel))
     {
         std::cout
-            << "[TerrainLayer] forceMip must be -1 (auto) or 0..4."
+            << "[TerrainLayer] forceMip must be -1 (auto) or 0.."
+            << VL::TerrainLayerPageManager::MaxMipLevel << "."
             << std::endl;
         return;
     }
@@ -2094,7 +2096,7 @@ void RenderSystem::ReportTerrainLayerStatistics() const
         << " dedupedLayers=" << stats.layerDedupedLayers
         << " capacity=" << VL::TerrainLayerTable::MaxLayers
         << std::endl;
-    // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
+    // L4a：可见层与每帧预算。mip0..6 是本帧成功请求的页数分布。
     std::cout
         << "[TerrainLayer] visibleLayers=" << stats.layerVisibleLayers
         // feedbackHits 才是“本帧 GPU 真的看到并续命的层页”；requested 是

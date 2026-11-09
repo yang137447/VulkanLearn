@@ -49,10 +49,10 @@ import pegasus_hf_presets as presets  # noqa: E402
 # 这两组数字会对不上：按原值生成时 std 只有参考的 0.49×。这里改为按参考
 # 高度场的谱统计标定，在 128 与 256 格上都落在
 # std 1.00× / slope_p95 1.01× / curv_norm 0.98×。
-NOISE_AMPLITUDE_M = 360.0
-NOISE_ELEMENT_M = 2000.0
-DETAIL_AMPLITUDE_M = 65.0
-DETAIL_ELEMENT_M = 400.0
+NOISE_AMPLITUDE_M = 1050.0
+NOISE_ELEMENT_M = 900.0
+DETAIL_AMPLITUDE_M = 600.0
+DETAIL_ELEMENT_M = 200.0
 NOISE_OCTAVES = 8.0
 NOISE_LACUNARITY = 1.841
 # 扭曲用 Houdini 原值（140 m / 800 m）。早期为了让"修好单位后的扭曲"
@@ -91,6 +91,26 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--material-uv-scale", type=float, default=128.0)
     parser.add_argument("--asset-name", default="blender_gn_pegasus")
     parser.add_argument("--output-relative", default="Generated/BlenderPegasusGN")
+    parser.add_argument("--noise-amplitude", type=float,
+                        default=NOISE_AMPLITUDE_M)
+    parser.add_argument("--noise-element", type=float,
+                        default=NOISE_ELEMENT_M)
+    parser.add_argument("--detail-amplitude", type=float,
+                        default=DETAIL_AMPLITUDE_M)
+    parser.add_argument("--detail-element", type=float,
+                        default=DETAIL_ELEMENT_M)
+    parser.add_argument("--noise-distortion", type=float, default=0.1405,
+                        help="Blender Perlin distortion; large values create "
+                             "fixed radial/swirl features")
+    parser.add_argument("--rhythm-strength", type=float, default=0.85,
+                        help="detail density mask strength (0 = uniform)")
+    parser.add_argument("--rhythm-element", type=float, default=3000.0,
+                        help="low-frequency rhythm mask element size in meters")
+    parser.add_argument(
+        "--macro-island", action=argparse.BooleanOptionalAction, default=True,
+        help="apply the irregular island envelope and mountain spine")
+    parser.add_argument("--spine-strength", type=float, default=0.16,
+                        help="normalized mountain-spine strength")
     parser.add_argument("--scatter-density", type=float, default=0.0024)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--no-erosion", action="store_true",
@@ -124,7 +144,59 @@ def _write_png16(path: Path, gray: np.ndarray) -> None:
         stream.write(chunk(b"IEND", b""))
 
 
-def _build_scene(size_m: float, resolution: int, erosion_enabled: bool = True):
+def _island_envelope(shape: tuple[int, int], seed: int) -> np.ndarray:
+    """Elongated, rotated island footprint with a harbor indentation."""
+    rows, columns = shape
+    x = np.linspace(-1.0, 1.0, columns, dtype=np.float64)[None, :]
+    y = np.linspace(-1.0, 1.0, rows, dtype=np.float64)[:, None]
+    rotation = np.radians(-18.0 + 6.0 * np.sin(float(seed) * 0.031))
+    rotated_x = x * np.cos(rotation) - y * np.sin(rotation)
+    rotated_y = x * np.sin(rotation) + y * np.cos(rotation)
+    radius = np.hypot(rotated_x / 0.96, rotated_y / 0.73)
+    angle = np.arctan2(rotated_y, rotated_x)
+    phase = float(seed) * 0.173
+    irregularity = (
+        0.075 * np.sin(5.0 * angle + phase)
+        + 0.036 * np.sin(9.0 * angle - phase * 1.7)
+        + 0.020 * np.cos(13.0 * angle + phase * 0.6)
+    )
+    harbor = np.exp(
+        -(((rotated_x - 0.46) / 0.24) ** 2
+          + ((rotated_y + 0.18) / 0.28) ** 2)
+    )
+    irregularity += harbor * 0.22
+    radius += irregularity
+    t = np.clip((radius - 0.80) / 0.20, 0.0, 1.0)
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+
+def _island_spine(shape: tuple[int, int], seed: int) -> np.ndarray:
+    """Offset mountain spine so relief reads as a range, not a central cone."""
+    rows, columns = shape
+    x = np.linspace(-1.0, 1.0, columns, dtype=np.float64)[None, :]
+    y = np.linspace(-1.0, 1.0, rows, dtype=np.float64)[:, None]
+    rotation = np.radians(-18.0 + 6.0 * np.sin(float(seed) * 0.031))
+    rotated_x = x * np.cos(rotation) - y * np.sin(rotation)
+    rotated_y = x * np.sin(rotation) + y * np.cos(rotation)
+    curve = (
+        0.10 * np.sin(2.4 * rotated_x + float(seed) * 0.11)
+        + 0.05 * np.sin(5.2 * rotated_x - float(seed) * 0.07)
+    )
+    distance = rotated_y - curve
+    spine = np.exp(-(distance / 0.24) ** 2)
+    along = 1.0 - np.clip((np.abs(rotated_x) - 0.62) / 0.28, 0.0, 1.0)
+    return spine * along
+
+
+def _build_scene(size_m: float, resolution: int, erosion_enabled: bool = True,
+                 noise_amplitude: float = NOISE_AMPLITUDE_M,
+                 noise_element: float = NOISE_ELEMENT_M,
+                 detail_amplitude: float = DETAIL_AMPLITUDE_M,
+                 detail_element: float = DETAIL_ELEMENT_M,
+                 noise_distortion: float = 0.1405,
+                 rhythm_strength: float = 0.85,
+                 rhythm_element: float = 3000.0,
+                 seed: int = 17):
     """用节点库搭出地形链并返回求值后的对象。"""
     # preset 依赖已存在的基础组，必须在它们之后构建
     groups = (list(base_nodes.build_all()) + list(erode_nodes.build_all())
@@ -148,11 +220,15 @@ def _build_scene(size_m: float, resolution: int, erosion_enabled: bool = True):
     preset.inputs["Samples"].default_value = resolution
     preset.inputs["Work Samples"].default_value = min(WORK_SAMPLES, resolution)
     preset.inputs["Height Scale"].default_value = HEIGHT_SCALE_M
-    preset.inputs["Noise Amplitude"].default_value = NOISE_AMPLITUDE_M
+    preset.inputs["Noise Amplitude"].default_value = noise_amplitude
     # 标定值是 4 km 场上的绝对尺度（米），不再按场景尺寸缩放。
-    preset.inputs["Noise Element Size"].default_value = NOISE_ELEMENT_M
-    preset.inputs["Detail Amplitude"].default_value = DETAIL_AMPLITUDE_M
-    preset.inputs["Detail Element Size"].default_value = DETAIL_ELEMENT_M
+    preset.inputs["Noise Element Size"].default_value = noise_element
+    preset.inputs["Detail Amplitude"].default_value = detail_amplitude
+    preset.inputs["Detail Element Size"].default_value = detail_element
+    preset.inputs["Noise Seed"].default_value = float(seed)
+    preset.inputs["Noise Distortion"].default_value = noise_distortion
+    preset.inputs["Rhythm Strength"].default_value = rhythm_strength
+    preset.inputs["Rhythm Element Size"].default_value = rhythm_element
     preset.inputs["Noise Octaves"].default_value = NOISE_OCTAVES
     preset.inputs["Noise Lacunarity"].default_value = NOISE_LACUNARITY
     preset.inputs["Distort Amplitude"].default_value = DISTORT_AMPLITUDE_M
@@ -182,8 +258,18 @@ def main() -> int:
     out_dir = args.output_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    obj = _build_scene(args.size_m, args.resolution,
-                       erosion_enabled=not args.no_erosion)
+    obj = _build_scene(
+        args.size_m, args.resolution,
+        erosion_enabled=not args.no_erosion,
+        noise_amplitude=args.noise_amplitude,
+        noise_element=args.noise_element,
+        detail_amplitude=args.detail_amplitude,
+        detail_element=args.detail_element,
+        noise_distortion=args.noise_distortion,
+        rhythm_strength=args.rhythm_strength,
+        rhythm_element=args.rhythm_element,
+        seed=args.seed,
+    )
     evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
     data = evaluated.data
     count = len(data.vertices)
@@ -197,6 +283,18 @@ def main() -> int:
     # 归一化到 [0,1] 写 PNG16（与 build_pegasus_gn.py 的 heightmap_gn.png 对齐）
     low, high = float(grid.min()), float(grid.max())
     normalized = (grid - low) / max(high - low, 1e-9)
+    envelope = None
+    if args.macro_island:
+        envelope = _island_envelope(normalized.shape, args.seed)
+        spine = _island_spine(normalized.shape, args.seed)
+        normalized = np.clip(
+            normalized + args.spine_strength * spine * envelope, 0.0, 1.0)
+        normalized *= envelope
+        grid = low + normalized * (high - low)
+        low, high = float(grid.min()), float(grid.max())
+        normalized = (grid - low) / max(high - low, 1e-9)
+        print(f"GLOBAL macro island enabled: "
+              f"height {low:.2f} .. {high:.2f} m")
     # --no-erosion 时写 heightmap_shape.png：它是 erode_pegasus_global.py 的
     # 输入，保留下来才能在不重烘造型的前提下反复调侵蚀参数。
     height_path = out_dir / (
@@ -219,10 +317,12 @@ def main() -> int:
             continue
         values = np.zeros(count, dtype=np.float32)
         data.attributes[layer].data.foreach_get("value", values)
-        layer_stats[layer] = {"min": float(values.min()),
-                              "max": float(values.max()),
-                              "mean": float(values.mean())}
         layer_grid = values.reshape(side, side, order="F")
+        if envelope is not None:
+            layer_grid = layer_grid * envelope
+        layer_stats[layer] = {"min": float(layer_grid.min()),
+                              "max": float(layer_grid.max()),
+                              "mean": float(layer_grid.mean())}
         layer_low, layer_high = float(layer_grid.min()), float(layer_grid.max())
         if layer_high - layer_low > 1e-9:
             _write_png16(out_dir / f"mask_gn_{layer}.png",
@@ -303,6 +403,16 @@ def main() -> int:
         "layers": [],
         "gridResolution": args.resolution,
         "generatorStats": layer_stats,
+        "macroIsland": bool(args.macro_island),
+        "spineStrength": args.spine_strength,
+        "noiseAmplitudeM": args.noise_amplitude,
+        "noiseElementM": args.noise_element,
+        "detailAmplitudeM": args.detail_amplitude,
+        "detailElementM": args.detail_element,
+        "noiseDistortion": args.noise_distortion,
+        "rhythmStrength": args.rhythm_strength,
+        "rhythmElementM": args.rhythm_element,
+        "seed": args.seed,
         "sourceLow": low,
         "sourceHigh": high,
     }

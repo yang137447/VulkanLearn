@@ -75,7 +75,7 @@ inline uint32_t SelectMip(
 }
 
 // L4e：console `terrainlayer forcemip` 的 CPU 参考。forcedMip < 0 表示自动；
-// 0..4 覆盖自动结果后再按该层实际 mip 链 clamp。shader 的
+// 0..6 覆盖自动结果后再按该层实际 mip 链 clamp。shader 的
 // TerrainLayerTargetMip（terrainLayerVTMath.glsl）必须与此完全一致。
 inline uint32_t ResolveTargetMip(
     uint32_t autoMip,

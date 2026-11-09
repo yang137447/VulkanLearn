@@ -703,7 +703,7 @@ L1 实现 CPU 数据与决策；L2 把层页真正送进 GPU；L3 让 shader 在
   （`pagesPerSide == 0`）返回全零条目，`layerId >= 256` 抛 `std::out_of_range`。
   `AreLayersIdentical` 现在也比较 `sourceResolution`、`avgColor`、`sourceSet`、`flags`。
 - 每层 mip 链固定按 128² 页切分：512 为 mip0..2（4/2/1 页/边，21 页），
-  1024 为 mip0..3（8/4/2/1，85 页），2048 为 mip0..4（16/8/4/2/1，341 页；
+  1024 为 mip0..3（8/4/2/1，85 页），2048 为 mip0..6（16/8/4/2/1，341 页；
   mip4 是 128² 尾页）。helper 在 `terrainAssetTypes.h`
   （`TerrainLayerMipCount` / `TerrainLayerPagesPerSide` / `TerrainLayerTotalPages`）。
 - `TerrainLayerPageManager`（`source/terrain/terrainLayerPageManager.*`）管理
@@ -916,7 +916,7 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   `avgColor`。这样逐帧收敛期间只是分辨率暂时偏低，不会整页变平均色。
 - `terrainlayerstats` 第二行区分 `feedbackHits`（本帧命中并续命的已驻留页）、
   `requested`（本帧尝试请求数，含失败/deferred）、`accepted`（其中成功数）、
-  `uploadedLast`、`pending` 与 mip0..4 的请求分布；第一行不再打印恒为 0 的
+  `uploadedLast`、`pending` 与 mip0..6 的请求分布；第一行不再打印恒为 0 的
   `hits`（那是 `RequestPage` 命中已驻留页的次数，调用方在请求前已过滤）。
   `terrainlayer capacity N` / `terrainlayer preload` 都由 Console 写 atomic/flag，
   渲染线程帧首消费。

@@ -126,7 +126,8 @@ TerrainLayerPageManager::PageTableLayoutForMip(uint32_t mip) const
 {
     if (mip > MaxMipLevel)
         throw std::out_of_range(
-            "Terrain layer page table mip must be <= 4; got " +
+            "Terrain layer page table mip must be <= " +
+            std::to_string(MaxMipLevel) + "; got " +
             std::to_string(mip));
     return PageTableLayoutForEntries(VirtualPageTableSize(mip));
 }

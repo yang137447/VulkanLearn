@@ -70,6 +70,14 @@ def build_pegasus_terrain_group():
          "噪声振幅（米），对应 amp。"),
         ("Noise Element Size", "NodeSocketFloat", 500.0, 1.0, 100000.0,
          "噪声特征尺寸（米），对应 elementsize。"),
+        ("Noise Seed", "NodeSocketFloat", 0.0, 0.0, 1000.0,
+         "噪声 4D W 种子；不同 seed 会移动中心特征，避免固定放射纹。"),
+        ("Noise Distortion", "NodeSocketFloat", 0.1405, 0.0, 4.0,
+         "噪声坐标扭曲；Perlin 基函数下过大会产生旋涡/放射纹。"),
+        ("Rhythm Strength", "NodeSocketFloat", 0.85, 0.0, 1.0,
+         "细节疏密强度；0 = 全局平铺，1 = 细节只留在低频 mask 的高值带。"),
+        ("Rhythm Element Size", "NodeSocketFloat", 3000.0, 100.0, 100000.0,
+         "低频疏密 mask 的特征尺寸（米），控制大块疏/密区域。"),
         ("Noise Octaves", "NodeSocketFloat", 8.0, 1.0, 16.0,
          "分形层数，对应 oct。"),
         ("Noise Lacunarity", "NodeSocketFloat", 2.2, 1.0, 4.0,
@@ -130,6 +138,8 @@ def build_pegasus_terrain_group():
     core.link(tree, p["Height Scale"], noise.inputs["Height Scale"])
     core.link(tree, p["Noise Amplitude"], noise.inputs["Amplitude"])
     core.link(tree, p["Noise Element Size"], noise.inputs["Element Size"])
+    core.link(tree, p["Noise Seed"], noise.inputs["Seed"])
+    core.link(tree, p["Noise Distortion"], noise.inputs["Distortion"])
     core.link(tree, p["Noise Octaves"], noise.inputs["Octaves"])
     core.link(tree, p["Noise Lacunarity"], noise.inputs["Lacunarity"])
     core.link(tree, p["Noise Roughness"], noise.inputs["Roughness"])
@@ -142,9 +152,55 @@ def build_pegasus_terrain_group():
     core.link(tree, p["Height Scale"], detail.inputs["Height Scale"])
     core.link(tree, p["Detail Amplitude"], detail.inputs["Amplitude"])
     core.link(tree, p["Detail Element Size"], detail.inputs["Element Size"])
+    detail_seed = core.math_node(
+        tree, "ADD", p["Noise Seed"], 37.0, (-1600, -220))
+    core.link(tree, detail_seed.outputs[0], detail.inputs["Seed"])
+    core.link(tree, p["Noise Distortion"], detail.inputs["Distortion"])
     core.link(tree, p["Noise Octaves"], detail.inputs["Octaves"])
     core.link(tree, p["Noise Lacunarity"], detail.inputs["Lacunarity"])
     core.link(tree, p["Noise Roughness"], detail.inputs["Roughness"])
+
+    # 低频 rhythm mask：把 detail 从“全图平铺”改成有疏密带的叠加。
+    rhythm_pos = tree.nodes.new("GeometryNodeInputPosition")
+    rhythm_pos.location = (-1900, -420)
+    rhythm_sep = tree.nodes.new("ShaderNodeSeparateXYZ")
+    rhythm_sep.location = (-1750, -420)
+    core.link(tree, rhythm_pos.outputs["Position"], rhythm_sep.inputs["Vector"])
+    rhythm_uv_x = core.math_node(
+        tree, "DIVIDE", rhythm_sep.outputs["X"], p["Size"], (-1600, -380))
+    rhythm_uv_y = core.math_node(
+        tree, "DIVIDE", rhythm_sep.outputs["Y"], p["Size"], (-1600, -500))
+    rhythm_uv = core.combine_xyz(
+        tree, rhythm_uv_x.outputs[0], rhythm_uv_y.outputs[0], 0.0,
+        (-1450, -420))
+    rhythm_scale = core.math_node(
+        tree, "DIVIDE", p["Size"], p["Rhythm Element Size"], (-1600, -620))
+    rhythm_noise = tree.nodes.new("ShaderNodeTexNoise")
+    rhythm_noise.location = (-1250, -420)
+    rhythm_noise.noise_dimensions = "4D"
+    rhythm_noise.inputs["Detail"].default_value = 2.0
+    rhythm_noise.inputs["Roughness"].default_value = 0.5
+    core.link(tree, rhythm_scale.outputs[0], rhythm_noise.inputs["Scale"])
+    core.link(tree, rhythm_uv.outputs["Vector"], rhythm_noise.inputs["Vector"])
+    rhythm_seed = core.math_node(
+        tree, "ADD", p["Noise Seed"], 101.0, (-1450, -620))
+    core.link(tree, rhythm_seed.outputs[0], rhythm_noise.inputs["W"])
+    rhythm_raw = core.math_node(
+        tree, "SUBTRACT", rhythm_noise.outputs["Fac"], 0.35, (-1050, -380))
+    rhythm_t = core.math_node(
+        tree, "DIVIDE", rhythm_raw.outputs[0], 0.30, (-900, -380))
+    rhythm_clamped = core.math_node(
+        tree, "MAXIMUM", rhythm_t.outputs[0], 0.0, (-750, -380))
+    rhythm_clamped = core.math_node(
+        tree, "MINIMUM", rhythm_clamped.outputs[0], 1.0, (-600, -380))
+    rhythm_inv = core.math_node(
+        tree, "SUBTRACT", 1.0, rhythm_clamped.outputs[0], (-450, -380))
+    rhythm_scaled = core.math_node(
+        tree, "MULTIPLY", rhythm_inv.outputs[0], p["Rhythm Strength"],
+        (-300, -380))
+    rhythm_mask = core.math_node(
+        tree, "SUBTRACT", 1.0, rhythm_scaled.outputs[0], (-150, -380))
+    core.link(tree, rhythm_mask.outputs[0], detail.inputs["Mask"])
 
     distort = _instance(tree, groups["VL_HF_Distort"], (-1200, 0))
     core.link(tree, p["Size"], distort.inputs["Size"])

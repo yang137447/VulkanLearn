@@ -150,7 +150,7 @@ public:
     // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。
     void RequestTerrainLayerResidentCapacity(uint32_t capacity);
     void RequestTerrainLayerPreload();
-    // L4e：调试用强制目标 mip（-1 = 自动，0..4 = 覆盖）。只影响 mode 1；
+    // L4e：调试用强制目标 mip（-1 = 自动，0..6 = 覆盖）。只影响 mode 1；
     // 写入 streaming state 的 atomic，渲染线程帧首应用到 M_terrain/feedback。
     void RequestTerrainLayerForceMip(int forceMip);
     // 控制台 `terrain parity [tileX tileZ]`：渲染线程空闲时对同一页分别做

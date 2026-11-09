@@ -138,10 +138,12 @@ void main()
         // L4e：与 M_terrain 共用同一份强制 mip 覆盖。feedback 必须报告
         // shader 真正想采的目标 mip，而不是自动导数结果，否则 console
         // `terrainlayer forcemip` 后 CPU 驻留与 GPU 采样会错位。
-        const int autoMip = TerrainLayerMipForUv(
-            layerUv,
+        // mip 由全局 page UV 决定，和 M_terrain 的全分辨率采样同一套公式。
+        const int autoMip = TerrainLayerMipForPageUv(
+            inPageUv,
             pagesPerSide,
             maxMip,
+            u_pageTableSize,
             u_layerPageResolution,
             max(vec2(1.0), vec2(u_feedbackScaleX, u_feedbackScaleY)));
         const int mip =

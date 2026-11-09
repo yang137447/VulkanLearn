@@ -3,6 +3,7 @@
 
 #include "../engine/materialContext.glsl"
 #include "../engine/materialInputs.glsl"
+#include "../common/commonUbo.glsl"
 #include "mf_normal.glsl"
 #include "mf_terrainLayerVT.glsl"
 
@@ -106,6 +107,52 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         }
     }
 
+    // 远景 macro + 近景 detail 统一后处理：mode 0 直接采样数组，
+    // mode 1 也仍用 layerAlbedo/layerNormal 数组做这两层，不走 VT 页表。
+    const int detailLayer = ids[0];
+    const vec4 detailExtra = TerrainLayerExtra(detailLayer);
+    const vec2 detailUv =
+        context.texCoord * u_uvScale * detailExtra.z * u_detailUvScale;
+    const vec3 detailAlbedo =
+        texture(layerAlbedo, vec3(detailUv, float(detailLayer))).rgb;
+    const vec3 detailNormalTS =
+        texture(layerNormal, vec3(detailUv, float(detailLayer))).xyz * 2.0 - 1.0;
+    const vec3 detailNormalWorld =
+        TransformMaterialNormalToWorld(context, detailNormalTS);
+
+    // 参数按米定义；World 单位是 cm。
+    const float viewDistance =
+        length(context.worldPosition - uboVP.cameraPosition);
+    const float detailStart = u_detailFadeStartM * 100.0;
+    const float detailEnd = max(u_detailFadeEndM * 100.0, detailStart + 1.0);
+    float detailFade = 1.0 - clamp(
+        (viewDistance - detailStart) / (detailEnd - detailStart),
+        0.0,
+        1.0);
+    detailFade *= detailFade;
+    const float detailWeight = u_detailStrength * detailFade;
+
+    const float detailLuma =
+        dot(detailAlbedo, vec3(0.299, 0.587, 0.114));
+    albedo.rgb *= mix(
+        1.0,
+        clamp(detailLuma * 2.0, 0.6, 1.4),
+        detailWeight);
+    const vec3 baseNormal = dot(blendedNormal, blendedNormal) > 1.0e-8
+        ? normalize(blendedNormal) : worldNormal;
+    blendedNormal = mix(baseNormal, detailNormalWorld, detailWeight);
+
+    // macro 不随距离淡出，专门压制远处的平铺重复感。
+    const vec2 macroUv = context.texCoord * u_uvScale * u_macroUvScale;
+    const vec3 macroAlbedo =
+        texture(layerAlbedo, vec3(macroUv, float(detailLayer))).rgb;
+    const float macroLuma =
+        dot(macroAlbedo, vec3(0.299, 0.587, 0.114));
+    albedo.rgb *= mix(
+        1.0,
+        clamp(0.75 + macroLuma, 0.7, 1.3),
+        u_macroStrength);
+
     if (u_debugMode > 2.5)
     {
         inputs.baseColor = vec3(0.0);
@@ -130,7 +177,7 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     }
     if (u_debugMode > 4.5)
     {
-        // 5 = VT mip（0..4）。mode 0 没有页表 mip，输出 0。
+        // 5 = VT mip（0..6）。mode 0 没有页表 mip，输出 0。
         inputs.baseColor = vec3(0.0);
         inputs.emissiveColor = vec3(vtDebugMip / float(TERRAIN_VT_MAX_MIP));
         inputs.roughness = 1.0;

@@ -156,6 +156,20 @@ def main() -> int:
         if isinstance(obj, dict) and obj.get("type") != "terrain"
     ]
     merged_objects = [entry["terrain"] for entry in scenes] + merged_objects
+    span_cm = float(layout.get("tileGrid", 4)) * float(
+        layout.get("tileSizeCm", 100000.0))
+    height_scale_cm = float(tiles[0]["manifest"].get("heightScale", 0.0))
+    height_scale_m = height_scale_cm / 100.0
+    for obj in merged_objects:
+        if obj.get("type") == "camera":
+            if height_scale_m < 250.0:
+                obj["position"] = [0.0, span_cm * 0.25, span_cm * 0.8]
+                obj["rotation"] = [-15.0, 0.0, 0.0]
+            else:
+                obj["position"] = [0.0, span_cm * 0.75, span_cm * 1.6]
+                obj["rotation"] = [-25.0, 0.0, 0.0]
+            obj["far_clip"] = max(
+                float(obj.get("far_clip", 0.0)), span_cm * 3.0)
     merged = {
         "name": "SC_terrain_pegasus_4x4",
         "type": "scene",

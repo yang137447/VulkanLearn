@@ -15,6 +15,81 @@ Houdini heightfield + masks
 > 路线是解出 Pegasus 原始 Houdini 工程的节点实现，在 Blender 几何节点里
 > 重建；见本文末尾的 **"Project Pegasus 原始工程解码"**。
 
+> **2026-11-09 更新。** 几何节点复刻已停止（`anisotropy` 1.03 vs Houdini
+> 1.28，属于结构差异而非参数差异）。当前出货路径是**直接接入 Houdini
+> 4 km 导出**，见下面「Pegasus 4 km 导出直连」。GN 代码保留为对照实现。
+
+## Pegasus 4 km 导出直连
+
+输入目录（仓库外，不入库）：
+
+```text
+D:\YYBWorkSpace\Pegasus\decoded\_ref4km\
+  manifest.json                     sizeM=4000, samples=1024, tileGrid=4
+  global\height_after_height.png    最终高度 -62.61..84.78 m
+  global\height_after_water.png     水深 0..1.535 m（22.9% texel 非零）
+  global\height_after_debris.png    碎屑厚度 0..1.048 m
+  global\height_after_sediment.png  沉积厚度 0..0.920 m
+  global\height_after_bedrock.png   基岩面高度
+```
+
+注意 `height_after_<name>` 是 Houdini heightfield 的**层名**：`water` /
+`debris` / `sediment` 是米制厚度，只有 `height` / `bedrock` 是高度。
+
+一键生成 4×4 资产：
+
+```powershell
+$py = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe"
+$res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLearnResources"
+
+# 1) 单位换算 + 权重归一化 + manifest
+& $py tool\houdini-terrain-import\prepare_pegasus_4km.py `
+  --export-root D:\YYBWorkSpace\Pegasus\decoded\_ref4km `
+  --resource-root $res `
+  --output-relative Generated/HoudiniPegasus4km
+
+# 2) 4x4 切片（复用 GN 路线已验证的脚本）
+& $py tool\blender-terrain-import\split_pegasus_tiles.py `
+  --source-manifest "$res\Generated\HoudiniPegasus4km\houdini_pegasus_import.json" `
+  --resource-root $res --output-root "$res\Generated\HoudiniPegasus4km" `
+  --tile-grid 4 --tile-resolution 256 --heightmap-margin 1 `
+  --lod-levels 3 --lod-distances-m 1250 2500 --tile-size-m 1000 `
+  --page-tiles-per-side 8 --asset-prefix houdini_pegasus_tile
+
+# 3) 16 tile 合并成场景
+& $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
+  --resource-root $res `
+  --tile-layout "$res\Generated\HoudiniPegasus4km\tile_layout.json" --verbose
+```
+
+输出：
+
+```text
+Generated\HoudiniPegasus4km\
+  Source\heightmap.png              # 归一化高度
+  Source\Layer_g_{base,rock,water,debris,sediment}.png
+  houdini_pegasus_4km_source.json   # 描述符（含原始导出来源）
+  houdini_pegasus_import.json       # prepare_pegasus_import 产出
+  tile_00..tile_15\ TR/MI/SC
+  SC_terrain_pegasus_4x4.json       # 合并场景
+```
+
+remap 规则（Houdini 官方曲线未导出，暂用分位数定标）：
+
+| 层 | 归一化 |
+| --- | --- |
+| `River Water` | `clamp(depth / 0.35, 0, 1)` |
+| `Scree Debris` | `clamp(depth / 0.25, 0, 1)` |
+| `River Silt` | `clamp(depth / 0.15, 0, 1)` |
+| `Rock Face` | 坡度的 `smoothstep(p90, p99)`（缓地形上绝对角度不触发） |
+| `Gravel Ground` | `1 − 其余四项`，再整体归一化 |
+
+`prepare_pegasus_import.py` 会检查掩膜逐 texel 求和 ≈ 255；实测 253.6。
+
+引擎验收（1280×720，Debug）：`globalLayers=5`、`visibleLayers=5`、
+`resident=776/1024`、`missPages=0`、`groups=256 chunks=338 meshDraws=256`。
+截图 `artifacts/houdini_ingest/houdini_far.png` 与 `houdini_top.png`。
+
 ## Project Pegasus 原始工程解码
 
 官方 Pegasus 工程（`$PEGASUSPROJECT` 指向的那套）已下载解包到仓库外的

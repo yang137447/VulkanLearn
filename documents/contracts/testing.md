@@ -1835,3 +1835,222 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
   共享纹理数组与 layer key 生效。
 - `heightmapMargin=1` 让 mesh 边界法线读取本 tile 外的邻接样本；三级 LOD
   实跑报告 `drawnByLevel=1:49,2:207`，粗 LOD 的边界缝合环保持跨 tile 水密。
+
+## 2026-11-09 Pegasus 高度场对标与 v2 4×4 烘焙
+
+对当前 GN 4 km 高度图和 Houdini bg43 参考做了同网格对标，并把第一版造型
+参数、macro island/spine 以及实际出货链接进 producer。证据归档见
+[Pegasus 高度场对标记录](../rationale/pegasus-heightfield-comparison-record.md)。
+
+> **重要更正：** 下面的 502.5 m 参考是 **2 km bg43**
+> （`HoudiniPegasus`），不是 4 km 生产基准。4 km 基准
+> `Pegasus\decoded\_ref4km` 只有 147.7 m 高差、std 26.8 m、slope p95 11.7°；
+> 老 v1（123.7 m / 27.1 m / 12.0°）与它基本一致，v2 的 524.4 m 是相对
+> 4 km 基准的过冲。v2 只能算“2 km bg43 观感”标定，不能作为 4 km 出货结论。
+
+- 对标输入：`Generated/BlenderPegasusGN/Global/Source/heightmap_gn.png`
+  （1024²、4000 m、`heightScale=123.694 m`）与
+  `Generated/HoudiniPegasus/Source/heightmap.png`（4065²、2048.5 m、
+  `heightScale=512.707 m`）。
+- 对标结果（1024²，2 km bg43）：当前 123.7 m / std 27.1 m / slope p95
+  12.0° / curvature p95 0.0168；参考 502.5 m / 100.5 m / 64.4° / 0.298。
+  归一化 std 比 0.91×，但绝对高差 4.06×、`tan(slope p95)` 9.9×、
+  curvature 17.7×。归一化统计不能代替绝对量级验收。
+- 4 km 生产基准（`_ref4km/height_before_height.png`，1024²）：147.7 m /
+  26.8 m / 11.7° / 0.0169；老 v1 为 123.7 m / 27.1 m / 12.0° / 0.0180，
+  量级已对齐；v2 为 524.4 m / 144.1 m / 63.2° / 0.167，是 3.5× 过冲。
+- 参数扫描：`tune_g`（noise 1050/900 + detail 600/200 + macro island）
+  得到 524.4 m / 79.8 m / 67.6° / 0.285；加上 v2 侵蚀（`K=1e-4`）后
+  std=144.11 m。
+- 一键链修正：`build_pegasus_tiled.py` 现在调用
+  `build_pegasus_library_global.py` + `erode_pegasus_global.py` + split +
+  assemble；新资产输出 `Generated/BlenderPegasusGN_v2/`。
+- 场景相机：4×4 合并场景改为 3 km 高、6.4 km 远、`far_clip=12 km`；
+  默认 `SC_terrain_pegasus_4x4` 不再被新山体埋进地里。
+- 引擎加载（`Generated/BlenderPegasusGN_v2/SC_terrain_pegasus_4x4.json`，
+  1280×720）：`resident=841/1024`、`feedbackHits=825`、`missPages=0`、
+  `pending=0`；`terrainlayer` 为 `pageBudget=512`、`visibleLayers=4`、
+  `starvedFrames=0`；`terrainchunk` 为 `groups=256 chunks=256`、
+  远景 `drawnByLevel=2:256`。截图
+  `artifacts/v2/pegasus_v2.bmp`。
+- 回归：`terrain_tests` 294/294 通过；`py -3 tool\validate-docs.py` 通过；
+  修改的三个 Python producer 文件 `py_compile` 通过。
+- v2 的 `terrain parity` 未取得输出（当前 Debug 二进制的 console 没有打印
+  `TerrainParity`）；v1 的 CPU/GPU 页烘焙 parity 仍是
+  `idMismatchBytes=0 / weightMismatchBytes=0 / mismatchedTexels=0/16384`。
+- `terrain_erosion_tests` 7 项中 6 项通过；
+  `test_deposition_preserves_sediment_mass` 在
+  `21.0002 >= 21.0481` 处失败。该用例只跑 `terrain_erosion.py`，不经过本次
+  producer 改动，属于既有/环境敏感断言，本次没有修改。
+- 性能：当前 `build/` 为 Debug（`NDEBUG` 未定义），
+  `--perf-jsonl` 的 `fps≈10`、`gpuTotalMs≈0.52`、`submitPresent≈366–514 ms`
+  不能作为 Release/1080p 结论；Pegasus 4×4 的 1080p Release 与 Play 碰撞
+  验收仍未完成。
+- 画面已知限制：岛屿外围是 0 高度方板，water 掩膜尚未接入 `M_terrain`；
+  山体内部仍是较均匀的碎脊，缺少参考里的少数大山体和主河谷。下一步需要
+  macro landform/valley mask，而不是继续加噪声。
+- 阶段对比（Blender vs Houdini 4 km `_ref4km`，Houdini 数据用同一套
+  Blender hillshade/Cycles 渲染）：
+  `artifacts/stage_compare/S2_blender_v1_vs_houdini.png`、
+  `artifacts/stage_compare/S3_blender_v1_vs_houdini.png`、
+  `artifacts/stage_compare/S3_blender_v2_vs_houdini.png`、
+  `artifacts/stage_compare/S4_blender_v1_masks_vs_houdini.png`。
+- 中心放射伪影：`VL_HF_PegasusTerrain` 的 `VL_HF_Noise` 之前没有接 `Seed`，
+  两个 noise 实际都是 seed=0；`--seed` 只影响 macro island。已增加
+  `Noise Seed` / `Noise Distortion` 接线和 producer `--noise-distortion`，
+  detail 使用 `seed+37`。新候选
+  `Generated/BlenderPegasusGN_v1_seed17`（noise 360/2000 + detail 65/400、
+  seed 17、distortion 0、`K=3e-6`、无 macro island）得到
+  112.5 m / 21.0 m / 10.9° / 0.0173；参考 `_ref4km` 为
+  147.7 m / 26.8 m / 11.7° / 0.0169。中心固定放射特征消失，对比图
+  `artifacts/stage_compare/S2_blender_v1_seed17_vs_houdini.png`。
+  最终标定把 noise 调到 450/2200、detail 保持 65/400，得到
+  shape 149.1 m / 29.1 m / 12.5° / 0.0176、eroded
+  149.1 m / 29.2 m / 12.6° / 0.0190；资产
+  `Generated/BlenderPegasusGN_v1_calibrated/`，对比图
+  `artifacts/stage_compare/S2_blender_calibrated_vs_houdini.png`、
+  `S3_blender_calibrated_vs_houdini.png`。
+- `config/config.json` 的 `initScene` 已切到 calibrated 候选。
+- 疏密节奏候选 `Generated/BlenderPegasusGN_v1_rhythm`：`VL_HF_Noise` 增加
+  `Mask` 输入，preset 增加低频 `Rhythm` mask；参数
+  `noise 420/2200 + detail 110/400 + rhythm 1.0/1200`、seed 17、
+  distortion 0、无 macro island、`K=3e-6`。shape
+  144.7 m / 27.5 m / 12.9° / 0.0186，eroded 144.7 / 27.5 / 13.0° /
+  0.0200；参考 `_ref4km` 147.7 / 26.8 / 11.7° / 0.0169。对比图
+  `artifacts/rhythm/rhythm_final_compare.png`、
+  `artifacts/stage_compare/S2_blender_rhythm_vs_houdini.png`。
+  `config/config.json` 已切到 `v1_rhythm`。
+- 四段侵蚀候选 `Generated/BlenderPegasusGN_v1_rhythm_chain`：
+  `--erodibility 5e-6 --chain pegasus --chain-k 1.0`；chain
+  144.7 m / 27.5 m / 13.4° / 0.0227，参考 `_ref4km` after
+  147.7 / 26.9 / 11.9° / 0.0206。1e-4 会出现明显方向性条纹，3e-6
+  几乎不可见；5e-6 作为当前平衡点。对比图
+  `artifacts/stage_compare/S3_blender_rhythm_chain_vs_houdini.png`。
+  `config/config.json` 已切到 `v1_rhythm_chain`。
+- Houdini 分辨率链候选 `Generated/BlenderPegasusGN_v1_rhythm_resampled`：
+  `erode1/2 @512 → erode3/4 @256 + domain warp → upsample 1024`，
+  `--chain-resample --chain-warp`。结果 144.7 m / 28.0 m / 12.1° / 0.0094；
+  参考 after 147.7 / 26.9 / 11.9° / 0.0206。坡度对齐，curvature 偏低是
+  256→1024 升采样抹掉高频。对比图
+  `artifacts/chain_erode/chain_resampled_compare.png`、
+  `artifacts/stage_compare/S3_blender_rhythm_resampled_vs_houdini.png`。
+  `config/config.json` 已切到它。
+- S4 派生层按 Houdini remap 对齐：`bedrock` 改为侵蚀前 shape 的高度层
+  （不再是常量 1），`debris/sediment` 改为绝对米制后 0..1 clamp
+  （不再按峰值归一化）。最终 resampled 资产已重烘；对比图
+  `artifacts/stage_compare/S4_blender_rhythm_resampled_masks_vs_houdini.png`。
+  water/debris/sediment 的通道分布仍与 Houdini 有差异，材质尚未接入。
+- S4 材质层已接入：追加 `Scree Debris`（mask_gn_debris）和
+  `River Silt`（mask_gn_sediment），TR/MI 变为 6 层；本地 Megascans 仅
+  有 UE `.uasset`，本轮用 KiteDemo `layer_05/layer_01` 占位。
+- detail restore：`--chain-detail-restore 1.0` 把 resampled 链的
+  curvature 从 0.0094 拉回 0.0171；最终 144.7 / 27.8 / 12.7° / 0.0171，
+  参考 after 147.7 / 26.9 / 11.9° / 0.0206。最终资产
+  `Generated/BlenderPegasusGN_v1_rhythm_resampled/`（6 层），
+  对比图 `artifacts/chain_erode/restore_compare.png`、
+  `artifacts/stage_compare/S3_blender_final_rhythm_vs_houdini.png`。
+  water 材质、Megascans 源图导出、1080p Release 性能和碰撞仍未验。
+
+## 2026-11-09 Pegasus 河流阶段（PE_heightfield_paths）
+
+`tool/blender-terrain-import/river_paths.py` 把 Houdini Linescape 的
+「waypoint 路径 → 投影 → 切河床 → 双层 mask」搬到离线管线，插在侵蚀之后
+（paths HDA 消费侵蚀输出；侵蚀前切河床会被填平）。本轮重烘
+`Generated/BlenderPegasusGN_v1_rhythm_river/`：
+
+- 参数：noise 420/2200 + detail 110/400 + rhythm 1.0/1200、seed 17、
+  `K=5e-6`、`chain pegasus + resample + warp + detail restore 1.0`；
+  river `width 110 m / water core 60.5 m / depth 6 m / bank 160 m /
+  branches 3 / smooth 2`。
+- 高度：143.2 m / std 27.5 m / slope p95 12.3° / curvature p95 0.0153；
+  参考 `_ref4km` after 147.7 / 26.9 / 11.9° / 0.0206。
+- 覆盖：河道核心 mask > 0.5 占 3.62%，河岸环 7.71%；16 块 tile 的
+  `mask_gn_River Water_07.png` 均非空。
+- 层：TR/MI 追加 `River Bank` + `River Water`，共 **8 层**；
+  `_append_derived_layers` 只在 mask 存在时追加。
+- 引擎（1280×720，Debug，`--frame-limit 60`）：
+  `globalLayers=8 sourceSets=1 dedupedLayers=120`、
+  `visibleLayers=8 exactPages=8 starvedFrames=0`、
+  `resident=766/1024 feedbackHits=751 missPages=0 pending=0`、
+  `groups=256 chunks=256 meshDraws=256 drawnByLevel=1:62,2:194`。
+- 截图：`artifacts/river_stage/river_far.png`、
+  `artifacts/river_stage/river_close.png`；阶段对比
+  `artifacts/stage_compare/S5_blender_river_vs_houdini.png`、
+  `S5_river_masks_vs_houdini.png`。
+- 回归：`river_paths.py` / `build_pegasus_tiled.py` `py_compile` 通过。
+
+已知限制（写进 `documents/rationale/pitfalls.md`）：模糊 mask 必须归一化，
+8 邻域最短路会给出折线河，`M_terrain` 是 Opaque 所以「水面」不会是透明水体。
+河网密度仍低于 Houdini 的 10 轮 each-to-each；Megascans 仍是 KiteDemo 占位；
+1080p Release 性能与 Play 碰撞未复验。
+
+## 2026-11-09 Pegasus 路线切换：Houdini 导出直连
+
+GN 复刻停止（`anisotropy` 1.03 vs Houdini 1.28），4 km 地形改为直接消费
+Houdini 导出。决定与数据映射见
+[路线切换记录](../rationale/pegasus-pipeline-pivot-houdini.md)。
+
+新增 `tool/houdini-terrain-import/prepare_pegasus_4km.py`：读取
+`Pegasus/decoded/_ref4km` 的 `height/water/debris/sediment/bedrock` 层，
+按 0.35 / 0.25 / 0.15 m 定标成权重，坡度 p90..p99 生成岩石权重，与兜底
+地表归一化后写 `Layer_g_*.png`，再调用既有 `prepare_pegasus_import.py`
+生成 manifest。
+
+实测：
+
+- `prepare_pegasus_import.py` 校验通过：1024×1024、5 层、
+  `sampledMaskSum=253.61`、`heightScaleCm=14739.28`、
+  `heightOffsetCm=-6261.47`；高度范围 −62.61..84.78 m。
+- 覆盖率（权重 > 0.5）：rock 3.46%、water 4.51%、debris 2.79%、
+  sediment 3.60%、base 83.66%。
+- 切片/合并复用原链路：16 tile、5 层 TR/MI、
+  `SC_terrain_pegasus_4x4.json`（19 objects）。
+- 引擎（1280×720，Debug，`--frame-limit 60`）：
+  `globalLayers=5 sourceSets=1 dedupedLayers=75`、
+  `visibleLayers=5 exactPages=5 starvedFrames=0`、
+  `resident=776/1024 feedbackHits=760 missPages=0 pending=0`、
+  `groups=256 chunks=338 meshDraws=256 drawnByLevel=1:63,2:193`。
+- 截图：`artifacts/houdini_ingest/houdini_far.png`、
+  `houdini_top.png`；层语义检查 `artifacts/houdini_ingest/houdini_layers.png`。
+
+`config/config.json` 已指向
+`Generated/HoudiniPegasus4km/SC_terrain_pegasus_4x4.json`。
+GN 资产 `Generated/BlenderPegasusGN_v1_rhythm_river/` 保留为对照，
+不再作为出货路径。
+
+### 构建类型对帧率的影响（2026-11-09 实测）
+
+同一份 `Generated/HoudiniPegasus4km/SC_terrain_pegasus_4x4.json`，
+1280×720、`--no-dev-ui`、`--frame-limit 240`：
+
+| 构建 | fps | cpuMs | submitPresent | worldSnapshot | GPU total | geometry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `build-vscode/development` | 180–240 | 4.2–5.6 | 2.9–3.7 ms | 0.86–1.2 ms | 0.9–1.1 ms | 0.5–0.7 ms |
+| `build`（Debug） | ~1.3 | ~750 | **503–742 ms** | 13–14 ms | 3.0–3.5 ms | 1.6–2.0 ms |
+
+差距几乎全部在 `submitPresent`（present/wait 路径），不是地形：
+`terrainFeedback` 两边都是 0.04–0.6 ms。**正常迭代用 development 构建，
+`build/` 只在查问题时用。** 证据：`artifacts/perf/develop.jsonl` /
+`artifacts/perf/debug.jsonl`。
+
+### 层 VT 的 mip 选择改为 page-UV 口径（2026-11-10）
+
+问题：feedback 用层的 `uvScale` 导数乘 `pagesPerSide × pageResolution` 选 mip，
+把“每个 repeat 的 texel 数”重复乘了一次 tiling 倍数，结果比正确值高 3–4 级；
+整片 4 km 只驻留 **5 个页**（每层 1 页），画面发糊，且远近都是同一 mip。
+
+修复：新增 `terrainLayerVTMath.glsl::TerrainLayerMipForPageUv`，用全局 page UV
+（`texCoord1`）的导数直接算“一个像素覆盖多少 mip0 页 texel”，再减去
+`log2(pageTableSize / pagesPerSide)` 的层页偏移。`pass/terrainFeedback.frag`
+（乘 screen/128 的 feedback 缩放）与 `mf_terrainLayerVT.glsl`（全分辨率）
+现在用同一套公式，驻留的页就是采样要用的页。
+
+实测（`Generated/HoudiniPegasus4km/`，development 构建，1280×720）：
+
+| 场景 | targetMips (0..6) | resident | budgetSets |
+|---|---|---:|---:|
+| 远景 `SC_terrain_pegasus_4x4.json` | `3789/11082/5387/657/0/0/0` | 425/512 | 20 |
+| 贴地 `SC_houdini_pegasus_4km_ground.json` | `10/556/913/442/0/0/0` | 425/512 | 20 |
+
+修复前两者都是单一 mip（远景全 mip3、驻留 5 页）。截图
+`artifacts/river_stage/river_far.png`（远景，细节恢复）。

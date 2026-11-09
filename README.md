@@ -66,6 +66,33 @@ cmake -S . -B build -G "MinGW Makefiles"
 cmake --build build -j
 ```
 
+### 3. 构建类型：日常迭代用 development，Debug 只用来查问题
+
+`build/` 是 Debug（关闭优化、带校验），适合定位崩溃和断言，不适合看帧率。
+日常迭代直接用已经配置好的 development 构建：
+
+```powershell
+build-vscode\development\bin\main.exe --no-dev-ui
+```
+
+同一份地形场景（16 tile、256 chunk、5 层材质，1280×720、`--no-dev-ui`）
+实测：
+
+| 构建 | fps | `submitPresent` | `worldSnapshot` | GPU total | `geometry` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `build-vscode/development` | 180–240 | 2.9–3.7 ms | 0.86–1.2 ms | 0.9–1.1 ms | 0.5–0.7 ms |
+| `build`（Debug） | ~1.3 | 503–742 ms | 13–14 ms | 3.0–3.5 ms | 1.6–2.0 ms |
+
+地形本身很轻：`geometry` 0.5–2.0 ms、`terrainFeedback` 0.04–0.6 ms。
+Debug 的差距几乎全部落在 `submitPresent`（present/wait 路径），不是地形几何。
+**性能与流式相关的验收一律用 development/Release，`build/` 的数字不能当作结论。**
+
+另外，窗口失焦时 present 会被 DWM 限制，想测上限请保持窗口前台，或使用
+`--present-mode immediate`。
+
+`build/` 这棵树的产物仍在 `build/bin`；下面两段（MinGW `PATH` 与产物位置）
+对两种构建都适用。
+
 如果你的 MinGW 环境没有自动进入 `PATH`，请先确保 `g++`、`gcc` 和 `mingw32-make` 可用，再执行上面的 CMake 命令。
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。

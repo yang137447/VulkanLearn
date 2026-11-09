@@ -427,8 +427,8 @@ cover page's top-4 layers into (layer, mip, that mip's full page set), limited t
 `TerrainLayerUploadGpuRing`. Only pages that the current frame's feedback actually hit are refreshed:
 pages of a visible layer that are not candidates use a short 16-epoch idle window, so residency
 tracks the visible working set instead of every historical mip; pages that leave view are evicted
-after a 180-epoch idle window plus the GPU safety window. `MipForPriority` has five levels
-(`>=192/>=128/>=64/>=32/else` → mip0..4) so 2K mip4 is reachable, and `TerrainLayerDesc::avgColor`
+after a 180-epoch idle window plus the GPU safety window. `MipForPriority` has seven levels
+(`>=192/>=128/>=64/>=32/>=16/>=8/else` → mip0..6) so 2K mip4 and 4K mip6 are reachable, and `TerrainLayerDesc::avgColor`
 defaults to neutral 0.18 instead of black. L4b adds a precise per-slot layer feedback on the same
 pass: four fixed 128×128 `R8G8B8A8_UNORM` attachments (`terrainLayerFeedback0..3`) encode
 `R=layerId, G=pageIndex, B=mip|valid, A=frameTag`, sharing the cover RT's D32 depth. The pass now

@@ -240,6 +240,70 @@
 - 相关：`source/render/resource/rendererTerrainLoader.h` 的
   `maxLayerPageUploadsPerFrame`、`documents/contracts/terrain.md` 的层页预算段
 
+### [terrain-normalized-statistics-hide-absolute-relief] 归一化地形统计会把“整体压平”判成通过
+
+- 适用场景：任何用 `std` / `slope_p95` / `curvature` 对比 Houdini、World Machine
+  或参考高度场的地形造型流程
+- 失败表现：统计表显示 `std 1.01×`、`slope_p95 1.01×`，但引擎里地形像一块
+  缓坡；只看归一化指标会误以为造型已经对齐
+- 根因：把两边各自归一到 0..1 后再比较，只验证了高度分布和相对形状，
+  丢掉了 `heightScale` / 绝对高差；同一形状可以被整体压扁 4× 而统计量仍接近
+- 规避动作：每次对标同时记录**绝对高差、绝对 std、slope p95、curvature p95**
+  和归一化 CDF；只有绝对量级与坡度量级都接近时才算通过。发现 `std` 接近但
+  `slope`/`curvature` 差一个量级时，优先查高频细节、macro envelope 和侵蚀，
+  不要继续加低频噪声振幅
+- 证据：2026-11-09，`SC_terrain_pegasus_4x4` 的 `heightmap_gn.png` 高差
+  123.7 m / std 27.1 m / slope p95 12.0° / curvature p95 0.0168；2 km
+  Houdini bg43 参考 502.5 m / 100.5 m / 64.4° / 0.298。归一化 std 比为 0.91×，
+  但绝对高差 4.06×、`tan(slope p95)` 9.9×、curvature 17.7×。扫描后
+  `tune_g`（noise 1050/900 + detail 600/200）把绝对量级拉回参考附近，但
+  形态仍是均匀碎脊，说明还需要 macro island/spine 与多轮侵蚀
+- **补充（同日更正）**：上面的 bg43 是 2 km 观感参考；4 km 生产基准
+  `_ref4km` 只有 147.7 m / 26.8 m / 11.7° / 0.0169，老 v1 已基本对齐。
+  不要把 2 km bg43 的高差直接套到 4 km 场景
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`documents/rationale/pegasus-heightfield-comparison-record.md`、
+  `artifacts/heightfield_compare.py`、`artifacts/pegasus_height_compare_island.png`
+
+### [terrain-reference-scene-mismatch] 同一个 Houdini 工程里可能存在多个不同尺度的“参考”
+
+- 适用场景：同时存在 `HoudiniPegasus`（2 km bg43）与
+  `Pegasus\decoded\_ref4km`（4 km 侵蚀基准）等地形资产时
+- 失败表现：拿 2 km bg43 的 502.5 m 高差去标定 4 km 场景，结果 v2 变成
+  524.4 m，而 4 km `_ref4km` 只有 147.7 m；相对目标高差 3.5×、坡度约 5.3×
+- 根因：两份 Houdini 数据的 **场景尺度、用途和高度范围都不同**；只看
+  “Houdini” 这个名字会把观感参考误当成生产基准
+- 规避动作：每个目标场景先固定一个 reference 文件路径、世界尺寸和
+  `heightScale`，并在对标记录里写明来源；阶段对比必须用同一目标的
+  reference。4 km 生产用 `_ref4km`，2 km bg43 只能作为观感/材质参考
+- 证据：2026-11-09，`_ref4km/height_before_height.png` 为 147.7 m，
+  老 v1 为 123.7 m；2 km bg43 为 502.5 m，v2 为 524.4 m。阶段对比图
+  `artifacts/stage_compare/S2_blender_v1_vs_houdini.png`、
+  `S3_blender_v1_vs_houdini.png`、`S3_blender_v2_vs_houdini.png`
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`documents/rationale/pegasus-heightfield-comparison-record.md`
+
+### [terrain-noise-seed-not-wired] `--seed` 没有接到 noise 时，会留下固定中心伪影
+
+- 适用场景：用 geometry nodes 复刻 `heightfield_noise`，同时提供 `--seed`
+  参数让用户换地形
+- 失败表现：换 seed 后整体地形几乎不变，且高度图中心固定出现放射/旋涡亮脊；
+  用户会以为是 Houdini 参考本身长了这个东西
+- 根因：`VL_HF_PegasusTerrain` 的 noise 实例没有把 `Seed` 输入接到 preset；
+  两个 noise 一直是 `seed=0`。`--seed` 只影响 macro island 和层掩膜。
+  Blender 的 `ShaderNodeTexNoise` 是 Perlin 基函数，seed=0 +
+  `Distortion=0.1405` 会在中心形成固定特征；Houdini 用的是 `worleyFB`
+- 规避动作：所有会改变形态的随机参数都必须在 preset 里显式接线，并在
+  manifest 记录实际 seed；noise1/noise2 使用不同 seed（例如 detail =
+  seed + 37）。如果 Perlin 中心仍不稳定，优先降低 `Distortion` 或换
+  Voronoi/worley 基函数，而不是继续调振幅
+- 证据：2026-11-09，Blender v1 S2 中心放射亮脊；把 `Noise Seed` 接到
+  preset 并改用 `seed=17, distortion=0` 后该特征消失。候选资产
+  `Generated/BlenderPegasusGN_v1_seed17`，对比图
+  `artifacts/stage_compare/S2_blender_v1_seed17_vs_houdini.png`
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`documents/rationale/pegasus-heightfield-comparison-record.md` §10
+
 ## 待确认候选
 
 尚未完成证据核查或负责人确认的候选。**实现不得默认依赖这些内容。**
@@ -248,6 +312,79 @@
   已有测量测试覆盖当前三种行类型，但"新增行类型必须保持等高"这条约束尚未写进契约文档的正式条款。
 - `[scene-actor-identity]` actor 身份字符串（分组键 + 名称）的稳定性契约尚未明确：
   改名或改分组键会让选择/展开状态失效，当前只靠 World 换代时清空来兜底。
+
+### [terrain-river-mask-normalization] 细线的模糊 mask 必须重新归一化到 1
+
+- 适用场景：用「画线 → 高斯模糊」生成河道/道路/遮罩，并把 mask 同时用作
+  高度切深和材质权重
+- 失败表现：河流几乎看不见；河床只切了 1~2 m（参数写的是 6 m），
+  `mask_gn_river*.png` 的最大值只有 0.30 左右
+- 根因：`GaussianBlur(radius=R)` 的 `R` 是**标准差**。110 m 宽（约 28 texel）
+  的线在 R ≈ 41 texel 下峰值只有 `28 / (sqrt(2π)·41) ≈ 0.27`；不归一化就等于
+  把切深和权重同时乘了 0.27
+- 规避动作：模糊后按整幅最大值归一化（`values / values.max()`），再
+  `clip(0,1)`；河岸环用 `corridor × (1 − channel)` 派生，保证河道中心属于水面
+  而不是河岸
+- 证据：2026-11-09 `river_paths.py` 第一版 `bank max≈0.35`，归一化后
+  `bank/water max = 1.000`，6 m 切深在预览里可见
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`tool/blender-terrain-import/river_paths.py` `_rasterize()`
+
+### [terrain-river-grid-shortest-path] 8 邻域最短路在缓地形上会给出折线河
+
+- 适用场景：用 Dijkstra / A*（8 邻域）在高度场上找河道、道路或流线
+- 失败表现：河流是长直段 + 90°/45° 硬转角，甚至出现矩形绕行；平滑几次后
+  仍然是「L 形」而不是自然河曲
+- 根因：缓坡上各方向代价几乎相等，最短路退化成栅格阶梯；抬高高度权重只会
+  把直段换成绕障碍的直角折线，不会产生河曲
+- 规避动作：按 Houdini 的真实数据流做——先给一条平滑蜿蜒中心线
+  （正弦/样条），再沿法线局部投影到谷底（±45 m）；只在用户显式给稀疏
+  waypoints 时才用最短路连接。支流要选**离汇合点最近的边界**作为源头，并做
+  线段相交检测，否则会横穿主河形成不可能的编织环
+- 证据：2026-11-09 同一高度场，Dijkstra 版本出现矩形绕行；改成
+  「正弦中心线 + 局部谷底投影 + Chaikin」后得到自然河曲。预览
+  `artifacts/river_test3/river_preview.png`
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`tool/blender-terrain-import/river_paths.py` `_auto_curves()` /
+  `_snap_to_valley()` / `_path_crosses()`
+
+### [terrain-opaque-water-layer] 地形材质是 Opaque，水面层不会真的透明
+
+- 适用场景：想用 `M_terrain` 的材质层表现河流、湖泊或湿地
+- 失败表现：水面看起来像「深色湿痕」，没有反射、折射、透明和流动感；
+  调 albedo 只能让它更亮或更暗
+- 根因：`mf_terrainLayerBlend.glsl` 固定 `inputs.opacity = 1.0`、
+  `opacityMask = 1.0`，`M_terrain` 走 Opaque 管线；水面层只是 top-4 混合里
+  的一张 albedo/normal/pbr 贴图，没有独立水面 pass
+- 规避动作：把「有水」当成**湿润度调制**（低 roughness + 深色 albedo +
+  轻微法线扰动）来验收；要做真正的水体，需要独立的透明水面 pass
+  （深度写关闭、按地形深度做折射/泡沫），不要指望换一张贴图
+- 证据：2026-11-09 `River Water` 层已进 8 层表且 `visibleLayers=8`，
+  截图中河道清晰可辨但呈深色带状，无高光反射
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`shader/glsl/materialFunction/mf_terrainLayerBlend.glsl`、
+  `documents/contracts/terrain.md`
+
+### [terrain-river-carve-order] 河床要在侵蚀之后切，否则会被下一轮侵蚀填平
+
+- 适用场景：把 `PE_heightfield_paths` 一类的河道投影接进「造型 → 侵蚀」链
+- 失败表现：河道在高度图上很清楚，但侵蚀后只剩一条浅痕；6 m 切深在引擎里
+  几乎看不出，河岸环也变宽变糊
+- 根因：Houdini 的 paths HDA 位于侵蚀网络**下游**，消费的是侵蚀后的高度场；
+  它自身只输出 `mask/road/slope` 层，`Heightfield` 输出直接来自
+  `IN_Heightfield`。把切河床放在侵蚀前，等于让 stream power 和热力松弛
+  先把河道重新填成 V 形缓坡
+- 规避动作：`build_pegasus_tiled.py` 的顺序固定为
+  `shape --no-erosion → erode → river_paths → split → assemble`；
+  `river_paths.py` 的 `--meta` 要用侵蚀后的 `sourceLow/sourceHigh`，
+  切完再把 manifest 的 `heightmapPath`/`sourceLow`/`sourceHigh` 指向
+  `heightmap_river.png`
+- 证据：2026-11-09 同一组参数，侵蚀前切的版本河道在引擎里是一条浅色暗带；
+  改成侵蚀后切，剖面保持 6 m 深度，`heightmap_river.png`
+  范围 -61.37..81.78 m
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-09
+- 相关：`tool/blender-terrain-import/build_pegasus_tiled.py` 的
+  `if args.river:` 分支
 
 ## 维护规则
 

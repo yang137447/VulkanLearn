@@ -25,7 +25,9 @@ inline constexpr uint32_t TerrainPageResolution = 128;
 // 1K 层得到 mip0..3（8/4/2/1 页/边，共 85 页）；2K 层多一级 mip4
 // （1 页/边，共 341 页）；512 层只有 mip0..2（4/2/1，共 21 页）。
 // 2K 的 mip4 是 128² 的“尾页”，与设计 §4.4 的 tail 页对应。
-inline constexpr uint32_t TerrainLayerMaxMipLevel = 4;
+// 全局上限 6 供 4K（mip5）/8K（mip6）源图使用；每层实际 mip 链仍由
+// sourceResolution 与 catalog pagesPerSide 决定。
+inline constexpr uint32_t TerrainLayerMaxMipLevel = 6;
 
 inline bool IsSupportedTerrainLayerSourceResolution(uint32_t resolution)
 {
