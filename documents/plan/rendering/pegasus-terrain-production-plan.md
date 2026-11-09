@@ -54,6 +54,13 @@ Houdini 导出（height + water/debris/sediment）
 下表 S2/S3/S3b 的“完成度”从此描述的是 **GN 对照实现**；出货地形的高度直接
 来自 Houdini，不再有复刻误差。
 
+> **2026-11-10 追加更正：** 当前 `_ref4km` 并不是飞马岛，而是
+> `tool/houdini-terrain-import/export_pegasus_4km.py` 把
+> `HFErodeExamples.hip` 的 1 km 侵蚀示例放大到 4 km 的结果（无海岸线、
+> 147.7 m 低起伏）。岛的真实数据在 UE `Pegasus_Demo.uproject` 的 Landscape
+> 和 `Pegasus_Landscape_Layers.bgeo.sc`。要先从 UE/Houdini 导出一份岛的
+> height + 层，才能做海岛形态；证据见对标记录 §0.1。
+
 ## 1. 目标与边界
 
 - 目标：一张 4 km × 4 km、1024² 源高度场，切成 4×4 个 1 km tile，

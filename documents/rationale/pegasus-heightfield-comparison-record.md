@@ -27,6 +27,28 @@ Houdini 参考。它其实是 **2 km、约 502.5 m 高差**的观感/导入参�
 - v2 的 macro island、multi-pass 思路可以保留，但高度/坡度必须重新标定到
   `_ref4km` 量级，否则不能作为 4 km 出货资产。
 
+### 0.1 `_ref4km` 是侵蚀示例地形，不是飞马岛（2026-11-10）
+
+`_ref4km` 由 `tool/houdini-terrain-import/export_pegasus_4km.py` 生成：脚本加载
+的是 `HFErodeExamples.hip` 的 `/obj/Erosion_Examples/heightfield1`，把
+`sizex/sizey` 从 1 km 放大到 4000 m、`gridsamples` 提到 1024，再跑同一条侵蚀
+链导出。manifest 里的 `freezeFrames=5 / tileGrid=4 / samples=1024` 与该脚本
+默认值一致。
+
+因此：
+
+- 它不是 Pegasus 的岛屿 landscape，**没有海岸线**，也不是 4 km 生产基准；
+- 它的 147.7 m 高差和低起伏形态只代表 SideFX 的侵蚀示例；
+- 真正的飞马岛在 UE 工程
+  `D:\YYBWorkSpace\Pegasus\LandscapeWorkflow\ProjectFiles_LandscapeWorkflow\Unreal\Pegasus_Demo.uproject`
+  的 Landscape，以及
+  `Landscape Heightfield Layers\Pegasus_Landscape_Layers.bgeo.sc`（Houdini 层）；
+- 要复刻岛，需要从 UE 导出 Landscape heightmap（或从 Houdini 重新导出
+  height + 各层），再按 8 km（8×8 tile）或多 region 切分。
+
+本文下面所有 `_ref4km` 对比结论仍然有效——它们是“侵蚀示例地形”的对比，
+不是“飞马岛”的对比。
+
 ## 1. 输入
 
 | 项 | 当前 GN 4 km | Houdini 参考 |
