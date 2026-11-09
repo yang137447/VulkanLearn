@@ -318,3 +318,62 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 3. 16 km 规模：是 4×4 个 4 km tile（16×16 = 256 个 1 km tile），
    还是先做单一 4 km。
 4. 碰撞：沿用 Jolt heightfield 的整块地形，还是按 chunk 分块。
+
+## 7. 后续接入路线（2026-11-10）
+
+4 km 地形已经走通「Houdini 导出 → 4×4 tile → 引擎」，VT mip 也按 page UV
+分层。剩下的是内容、性能和规模，按依赖顺序分四段。
+
+### A. 资产补全
+
+| 项 | 现状 | 下一步 | 验收 |
+| --- | --- | --- | --- |
+| 材质贴图 | `Scree Debris` / `River Silt` / `River Bank` / `River Water` 仍是 KiteDemo + 占位水面 | 从 UE 导出 Megascans PNG，替换 `prepare_pegasus_4km.py` 里的 `layer_XX` / `water_*` 路径后重跑 split | MI 贴图路径指向 Megascans，`terrainlayer stats` 无变化 |
+| 源分辨率 | Houdini 1024² / 4 km（3.91 m/texel） | 重新导出 2048² 或 4096²，`--tile-resolution 512/1024` | 近景网格间距 ≤ 2 m；顶点内存从 27.9 MB 增至 ~112/450 MB |
+| 水面 | `River Water` 是 Opaque 材质层 | 二选一：湿润度调制（低 roughness）或独立透明 water pass | 河面有反射/颜色，且不破坏地形深度 |
+| 河岸/基岩 | `River Bank` 用 gravel 占位 | Megascans 碎石/岩壁；`bedrock` 高度层可再导出一张露头 mask | 层过渡无接缝 |
+
+### B. 散布接入（`PE_Unreal_Instances`）
+
+Houdini 的散布 HDA 输出点属性与我们的 `VEG_*.json` 是 1:1 的：
+
+| Houdini 属性 | VEG 字段 | 说明 |
+| --- | --- | --- |
+| `P` | `position` | 米 → cm |
+| `orient` | `rotation` | `[x,y,z,w]`，需归一化 |
+| `scale` / `pscale` | `scale` | 统一缩放 |
+| `unreal_instance` | `variant` | 资产路径列表的索引 |
+| `N` | — | 可用于贴地校正 |
+| `unreal_foliage_attachment_*` | — | 暂不支持，先忽略 |
+
+步骤：
+
+1. Houdini 导出 `points.json`（`P/orient/scale/unreal_instance`）；
+2. 新增 `tool/houdini-terrain-import/build_houdini_vegetation.py`，把每个
+   `unreal_instance` 映射到 `SM_*.json` → `variant`，生成 `VEG_*.json`；
+3. 场景里挂 `mesh` 对象消费 VEG（现有 `CypressGrove` 路径已验证）；
+4. 校验：实例数、`meshDraws`、树贴地/尺寸、风相位。
+
+### C. 引擎验收
+
+| 项 | 命令/证据 | 通过标准 |
+| --- | --- | --- |
+| Play 碰撞 | `terraincollision stats` | Play 后 16 个 placement 都有 body，玩家不穿地 |
+| 1080p Release 性能 | `--perf-jsonl` + `gpustats` | 1080p ≥ 60 fps，`pageBudget` 不持续超限 |
+| VT 驻留 | `terrainlayer stats` | `targetMips` 分层、`fallbackSlots=0`、无持续 `pending` |
+| 远景 | 截图 + `terrainchunk stats` | 4 km 边界外无空洞，LOD 切换无跳变 |
+
+当前 1280×720 development 实测：远景 `targetMips=3789/11082/5387/657`、
+`resident=425/512`、GPU ~0.9 ms。1080p Release 需要把页预算与上传队列一起
+复测。
+
+### D. 规模化（16 km）
+
+当前 32×32 页表正好铺满 4 km（125 m/页），16 tile 已经是这张表的上限。
+16 km 需要：
+
+1. 多 Region 各自持有页表/atlas（或把页表扩到 128×128）；
+2. tile 数 16 → 256，`pageTilesPerSide` 相应下调；
+3. LOD 距离与 chunk residency 距离按 4× 重新标定。
+
+在这之前不建议先做 16 km——会把页表和流式的问题掩盖在规模里。
