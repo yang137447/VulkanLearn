@@ -14,6 +14,7 @@
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
 | `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 64 条规则索引（生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
 | `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
+| `py -3 tool/validation/particle/particle_niagara_acceptance.py [--smoke] [--write-budget]` | 资源工作树与 UE 参考工程可访问；`--smoke` 需已构建 `main.exe` | 49 个 UE Niagara 目标的 README 映射、PS/gallery JSON、texture/mesh/MI 引用与 PS 静态指标；`--smoke` 逐 gallery headless 启动并采集 `Scene.LoadFailed`、VUID、粒子帧统计和 baseline+20% 性能预算 | 改 `Maps/SC_particle_ue_*`、`PS_*.json`、性能预算或增删 UE 特效后 |
 | `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 65 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |

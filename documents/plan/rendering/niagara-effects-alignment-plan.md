@@ -54,10 +54,59 @@
 - 生成 1280x720 截图，能看到该 NS 的主体形态。
 - README 记录 UE 系统名、VL 资产名、发射器角色和近似/替身说明。
 
+## 自动验收
+
+工具：`tool/validation/particle/particle_niagara_acceptance.py`，PowerShell 入口
+`tool/validation/particle/run_particle_acceptance.ps1`。用法见同目录 `README.md`。
+
+```powershell
+# 静态：目标推导 + README 映射 + PS/gallery JSON + texture/mesh/MI 引用
+py -3 tool/validation/particle/particle_niagara_acceptance.py
+
+# 静态 + 全量 gallery headless 冒烟
+py -3 tool/validation/particle/particle_niagara_acceptance.py --smoke
+```
+
+目标推导固定为：扫描 `NS_*.uasset`，排除 `FX_Markers/**`（编辑器标记）、
+`NS_Boundary*`（Boundary 调试）、`Utilities/**`（SpriteGeneration 工具）和
+`Materials/**`（SubUV 参考）。当前 67 个扫描项排除 18 个，得到 49 个目标；
+数量与 `--expect-targets` 不一致时脚本失败。
+
+映射优先读 gallery README 中同一行的 `NS_*` / `PS_*.json` 对；没有显式对时按
+名称相似度在同目录选择，最后才退化为目录级映射。矩阵里的 `mapping_source`
+记录实际规则。
+
+输出（gitignored）：`artifacts/particle-niagara-acceptance/` 下的
+`acceptance-matrix.md`、`acceptance-result.json`、`smoke/*.stdout.txt` /
+`*.stderr.txt` 与截图副本。矩阵每行包含 UE 源、VL PS、gallery、截图、状态、
+Budget、README 近似/替身摘录和 VUID；另有 17 个 gallery 的性能预算表、
+48 个 PS 的静态指标表。
+
+性能预算口径：
+
+- 每个 gallery 从第 120 帧起连续提交 3 次 `particlestats`，截图在第 123 帧提交。
+- `particles` / `drawCalls` / `vertices` / `gpuMs` 取三次峰值；
+  `gpuAvgMs` / `gpuMaxMs` 取最后一次累计值。
+- 预算判定使用 `particles` / `drawCalls` / `vertices` / `gpuAvgMs`。
+  `gpuMs` 是单帧瞬时值、`gpuMaxMs` 是整轮最坏单帧，只展示、不参与
+  PASS/OVER，避免启动上传尖峰误报。
+- 预算 = baseline × 1.20；`--write-budget` 按逐指标最大值合并多次测量，
+  预算文件为 `tool/validation/particle/particle_performance_budget.json`。
+- 静态指标检查 emitter 数、`renderMode` 分布、`maxParticles` 总和/单 emitter
+  最大值、纹理引用；异常大/空/重复 renderer 记 WARN。
+
+2026-11-10 基线：49 target / 48 PS / 17 gallery；静态 **0 FAIL**、0 静态
+WARN；全量 smoke **49 PASS / 0 WARN / 0 FAIL**，17/17 截图落盘，VUID **0**；
+17/17 gallery 在预算内。明细以每次生成的 `acceptance-matrix.md` 为准。
+
 ## 已知替身与近似
 
-- UE `NS_Dino_*` 的恐龙骨骼资产尚未导入 VL；当前使用 `SK_UEFN_Mannequin` 的绑定姿态作为骨骼 mesh 替身，结构对齐但模型外观不等价。
-- Player Teleport 使用静态 mesh shard + dissolve，不是骨骼表面三角 dissolve。
+- UE `NS_Dino_*` 已导入真实 `SKM_DinoDragon` LOD1 作为骨骼粒子源；当前使用绑定姿态，不加载动画片段。
+- Player Teleport 已改为真实 Manny/Quinn LOD1 的 `skeletalMeshTris` 骨骼表面
+  dissolve（共用 `particleDissolve.glsl`），程序化 shard 降为第二层辅助细节。
 - Footstep / NDC 的脚印与弹孔使用程序化/复用贴图；NDC 事件用连续粒子流近似。
 - 缺失 UE 贴图的特效使用程序化纹理/圆盘/噪声 fallback；后续拿到导出图后可替换，不改变发射器结构。
-- 粒子 pass 的既有 `VUID-vkCmdDraw-None-09600`、`VUID-vkCmdFillBuffer-dstBuffer-00029` 仍未处理。
+- 粒子 pass 的 `VUID-vkCmdDraw-None-09600`、`VUID-vkCmdFillBuffer-dstBuffer-00029`、
+  `VUID-vkUpdateDescriptorSets-None-03047` 已修复；2026-11-10 全量 smoke 的
+  17 个 gallery 均无 VUID。`particledump` 诊断命令仍可能触发
+  `VUID-VkBufferMemoryBarrier-size-01188`，不在正常 smoke 路径上。

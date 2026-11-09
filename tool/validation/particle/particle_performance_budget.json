@@ -1,0 +1,414 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-10T03:38:27",
+  "policy": {
+    "margin_percent": 20.0,
+    "budget_metrics": [
+      "particles",
+      "drawCalls",
+      "vertices",
+      "gpuAvgMs"
+    ],
+    "informational_metrics": [
+      "gpuMs",
+      "gpuMaxMs"
+    ],
+    "baseline_merge": "max(existing baseline, this measurement)",
+    "measurement": "three adjacent particlestats samples; particles/drawCalls/vertices/gpuMs use the peak, gpuAvgMs/gpuMaxMs use the final cumulative sample; gpuMs and gpuMaxMs are informational only because a single outlier frame is too noisy for pass/over",
+    "budget_formula": "baseline * (1 + margin_percent/100)",
+    "command": "py -3 tool/validation/particle/particle_niagara_acceptance.py --smoke --write-budget --main-exe build\\bin\\main.exe"
+  },
+  "galleries": {
+    "SC_particle_ue_explosion": {
+      "dir": "Maps/SC_particle_ue_explosion",
+      "scenes": {
+        "Maps/SC_particle_ue_explosion/SC_particle_ue_explosion.json": {
+          "baseline": {
+            "particles": 653,
+            "drawCalls": 4,
+            "vertices": 12120,
+            "gpuMs": 3.701,
+            "gpuAvgMs": 4.566,
+            "gpuMaxMs": 10.53
+          },
+          "budget": {
+            "particles": 784,
+            "drawCalls": 5,
+            "vertices": 14544,
+            "gpuMs": 4.441,
+            "gpuAvgMs": 5.479,
+            "gpuMaxMs": 12.636
+          }
+        }
+      }
+    },
+    "SC_particle_ue_explosion_variants": {
+      "dir": "Maps/SC_particle_ue_explosion_variants",
+      "scenes": {
+        "Maps/SC_particle_ue_explosion_variants/SC_ue_explosion_variants.json": {
+          "baseline": {
+            "particles": 1322,
+            "drawCalls": 17,
+            "vertices": 37770,
+            "gpuMs": 4.864,
+            "gpuAvgMs": 4.686,
+            "gpuMaxMs": 12.21
+          },
+          "budget": {
+            "particles": 1587,
+            "drawCalls": 21,
+            "vertices": 45324,
+            "gpuMs": 5.837,
+            "gpuAvgMs": 5.623,
+            "gpuMaxMs": 14.652
+          }
+        }
+      }
+    },
+    "SC_particle_ue_fire": {
+      "dir": "Maps/SC_particle_ue_fire",
+      "scenes": {
+        "Maps/SC_particle_ue_fire/SC_ue_fire.json": {
+          "baseline": {
+            "particles": 712,
+            "drawCalls": 5,
+            "vertices": 4800,
+            "gpuMs": 20.289,
+            "gpuAvgMs": 17.907,
+            "gpuMaxMs": 97.704
+          },
+          "budget": {
+            "particles": 855,
+            "drawCalls": 6,
+            "vertices": 5760,
+            "gpuMs": 24.347,
+            "gpuAvgMs": 21.488,
+            "gpuMaxMs": 117.245
+          }
+        }
+      }
+    },
+    "SC_particle_ue_firework": {
+      "dir": "Maps/SC_particle_ue_firework",
+      "scenes": {
+        "Maps/SC_particle_ue_firework/SC_ue_firework.json": {
+          "baseline": {
+            "particles": 403,
+            "drawCalls": 6,
+            "vertices": 3912,
+            "gpuMs": 0.499,
+            "gpuAvgMs": 0.097,
+            "gpuMaxMs": 0.507
+          },
+          "budget": {
+            "particles": 484,
+            "drawCalls": 8,
+            "vertices": 4695,
+            "gpuMs": 0.599,
+            "gpuAvgMs": 0.116,
+            "gpuMaxMs": 0.608
+          }
+        }
+      }
+    },
+    "SC_particle_ue_footstep": {
+      "dir": "Maps/SC_particle_ue_footstep",
+      "scenes": {
+        "Maps/SC_particle_ue_footstep/SC_ue_footstep_gallery.json": {
+          "baseline": {
+            "particles": 166,
+            "drawCalls": 5,
+            "vertices": 5700,
+            "gpuMs": 0.394,
+            "gpuAvgMs": 0.45,
+            "gpuMaxMs": 0.889
+          },
+          "budget": {
+            "particles": 200,
+            "drawCalls": 6,
+            "vertices": 6840,
+            "gpuMs": 0.473,
+            "gpuAvgMs": 0.54,
+            "gpuMaxMs": 1.067
+          }
+        }
+      }
+    },
+    "SC_particle_ue_impact": {
+      "dir": "Maps/SC_particle_ue_impact",
+      "scenes": {
+        "Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json": {
+          "baseline": {
+            "particles": 245,
+            "drawCalls": 4,
+            "vertices": 6720,
+            "gpuMs": 6.548,
+            "gpuAvgMs": 3.417,
+            "gpuMaxMs": 13.135
+          },
+          "budget": {
+            "particles": 294,
+            "drawCalls": 5,
+            "vertices": 8064,
+            "gpuMs": 7.858,
+            "gpuAvgMs": 4.1,
+            "gpuMaxMs": 15.762
+          }
+        }
+      }
+    },
+    "SC_particle_ue_impact_variants": {
+      "dir": "Maps/SC_particle_ue_impact_variants",
+      "scenes": {
+        "Maps/SC_particle_ue_impact_variants/SC_ue_impact_variants.json": {
+          "baseline": {
+            "particles": 689,
+            "drawCalls": 13,
+            "vertices": 7890,
+            "gpuMs": 0.578,
+            "gpuAvgMs": 0.556,
+            "gpuMaxMs": 1.094
+          },
+          "budget": {
+            "particles": 827,
+            "drawCalls": 16,
+            "vertices": 9468,
+            "gpuMs": 0.694,
+            "gpuAvgMs": 0.667,
+            "gpuMaxMs": 1.313
+          }
+        }
+      }
+    },
+    "SC_particle_ue_misc": {
+      "dir": "Maps/SC_particle_ue_misc",
+      "scenes": {
+        "Maps/SC_particle_ue_misc/SC_particle_ue_misc.json": {
+          "baseline": {
+            "particles": 58368,
+            "drawCalls": 16,
+            "vertices": 190476,
+            "gpuMs": 0.273,
+            "gpuAvgMs": 0.858,
+            "gpuMaxMs": 2.106
+          },
+          "budget": {
+            "particles": 70042,
+            "drawCalls": 20,
+            "vertices": 228572,
+            "gpuMs": 0.328,
+            "gpuAvgMs": 1.03,
+            "gpuMaxMs": 2.527
+          }
+        }
+      }
+    },
+    "SC_particle_ue_muzzle": {
+      "dir": "Maps/SC_particle_ue_muzzle",
+      "scenes": {
+        "Maps/SC_particle_ue_muzzle/SC_ue_muzzle_flash.json": {
+          "baseline": {
+            "particles": 46,
+            "drawCalls": 7,
+            "vertices": 2520,
+            "gpuMs": 0.229,
+            "gpuAvgMs": 0.249,
+            "gpuMaxMs": 0.44
+          },
+          "budget": {
+            "particles": 56,
+            "drawCalls": 9,
+            "vertices": 3024,
+            "gpuMs": 0.275,
+            "gpuAvgMs": 0.299,
+            "gpuMaxMs": 0.528
+          }
+        }
+      }
+    },
+    "SC_particle_ue_ndc": {
+      "dir": "Maps/SC_particle_ue_ndc",
+      "scenes": {
+        "Maps/SC_particle_ue_ndc/SC_ue_ndc_gallery.json": {
+          "baseline": {
+            "particles": 264,
+            "drawCalls": 8,
+            "vertices": 7500,
+            "gpuMs": 0.746,
+            "gpuAvgMs": 0.665,
+            "gpuMaxMs": 1.491
+          },
+          "budget": {
+            "particles": 317,
+            "drawCalls": 10,
+            "vertices": 9000,
+            "gpuMs": 0.895,
+            "gpuAvgMs": 0.798,
+            "gpuMaxMs": 1.789
+          }
+        }
+      }
+    },
+    "SC_particle_ue_pickup": {
+      "dir": "Maps/SC_particle_ue_pickup",
+      "scenes": {
+        "Maps/SC_particle_ue_pickup/SC_ue_pickup_gallery.json": {
+          "baseline": {
+            "particles": 383,
+            "drawCalls": 13,
+            "vertices": 7944,
+            "gpuMs": 1.309,
+            "gpuAvgMs": 1.045,
+            "gpuMaxMs": 2.016
+          },
+          "budget": {
+            "particles": 460,
+            "drawCalls": 16,
+            "vertices": 9533,
+            "gpuMs": 1.571,
+            "gpuAvgMs": 1.254,
+            "gpuMaxMs": 2.419
+          }
+        }
+      }
+    },
+    "SC_particle_ue_player": {
+      "dir": "Maps/SC_particle_ue_player",
+      "scenes": {
+        "Maps/SC_particle_ue_player/SC_ue_player_gallery.json": {
+          "baseline": {
+            "particles": 131781,
+            "drawCalls": 21,
+            "vertices": 445092,
+            "gpuMs": 0.378,
+            "gpuAvgMs": 0.353,
+            "gpuMaxMs": 3.308
+          },
+          "budget": {
+            "particles": 158138,
+            "drawCalls": 26,
+            "vertices": 534111,
+            "gpuMs": 0.454,
+            "gpuAvgMs": 0.424,
+            "gpuMaxMs": 3.97
+          }
+        }
+      }
+    },
+    "SC_particle_ue_skeletalmesh": {
+      "dir": "Maps/SC_particle_ue_skeletalmesh",
+      "scenes": {
+        "Maps/SC_particle_ue_skeletalmesh/SC_niagara_skeletalmesh_gallery.json": {
+          "baseline": {
+            "particles": 126000,
+            "drawCalls": 3,
+            "vertices": 378000,
+            "gpuMs": 0.096,
+            "gpuAvgMs": 0.211,
+            "gpuMaxMs": 0.585
+          },
+          "budget": {
+            "particles": 151200,
+            "drawCalls": 4,
+            "vertices": 453600,
+            "gpuMs": 0.115,
+            "gpuAvgMs": 0.253,
+            "gpuMaxMs": 0.702
+          }
+        }
+      }
+    },
+    "SC_particle_ue_smoke": {
+      "dir": "Maps/SC_particle_ue_smoke",
+      "scenes": {
+        "Maps/SC_particle_ue_smoke/SC_ue_smoke.json": {
+          "baseline": {
+            "particles": 964,
+            "drawCalls": 1,
+            "vertices": 6144,
+            "gpuMs": 4.382,
+            "gpuAvgMs": 4.99,
+            "gpuMaxMs": 13.231
+          },
+          "budget": {
+            "particles": 1157,
+            "drawCalls": 2,
+            "vertices": 7373,
+            "gpuMs": 5.258,
+            "gpuAvgMs": 5.988,
+            "gpuMaxMs": 15.877
+          }
+        }
+      }
+    },
+    "SC_particle_ue_sparks": {
+      "dir": "Maps/SC_particle_ue_sparks",
+      "scenes": {
+        "Maps/SC_particle_ue_sparks/SC_ue_sparks_gallery.json": {
+          "baseline": {
+            "particles": 865,
+            "drawCalls": 14,
+            "vertices": 25890,
+            "gpuMs": 0.383,
+            "gpuAvgMs": 0.341,
+            "gpuMaxMs": 0.502
+          },
+          "budget": {
+            "particles": 1038,
+            "drawCalls": 17,
+            "vertices": 31068,
+            "gpuMs": 0.46,
+            "gpuAvgMs": 0.409,
+            "gpuMaxMs": 0.602
+          }
+        }
+      }
+    },
+    "SC_particle_ue_tesla": {
+      "dir": "Maps/SC_particle_ue_tesla",
+      "scenes": {
+        "Maps/SC_particle_ue_tesla/SC_ue_tesla_coil.json": {
+          "baseline": {
+            "particles": 204,
+            "drawCalls": 11,
+            "vertices": 9792,
+            "gpuMs": 0.926,
+            "gpuAvgMs": 0.719,
+            "gpuMaxMs": 1.529
+          },
+          "budget": {
+            "particles": 245,
+            "drawCalls": 14,
+            "vertices": 11751,
+            "gpuMs": 1.111,
+            "gpuAvgMs": 0.863,
+            "gpuMaxMs": 1.835
+          }
+        }
+      }
+    },
+    "SC_particle_ue_trails": {
+      "dir": "Maps/SC_particle_ue_trails",
+      "scenes": {
+        "Maps/SC_particle_ue_trails/SC_ue_trails_gallery.json": {
+          "baseline": {
+            "particles": 650,
+            "drawCalls": 10,
+            "vertices": 44520,
+            "gpuMs": 0.677,
+            "gpuAvgMs": 0.925,
+            "gpuMaxMs": 2.209
+          },
+          "budget": {
+            "particles": 780,
+            "drawCalls": 12,
+            "vertices": 53424,
+            "gpuMs": 0.812,
+            "gpuAvgMs": 1.11,
+            "gpuMaxMs": 2.651
+          }
+        }
+      }
+    }
+  }
+}
