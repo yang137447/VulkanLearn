@@ -15,6 +15,7 @@
 #include "particles/particleAsset.h"
 #include "particles/particleBeam.h"
 #include "particles/particleDataChannel.h"
+#include "particles/particleDecalGpu.h"
 #include "particles/particleEvents.h"
 #include "particles/particleFlipbook.h"
 #include "particles/particleFrameStats.h"
@@ -126,6 +127,14 @@ public:
         const RenderScene& renderScene,
         vk::Extent2D renderExtent);
 
+    // 半分辨率软深度过滤 compute：读 sceneDepth，写 linear view depth。
+    void RecordSoftDepth(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const Renderpass& renderPass,
+        const RenderGraph& graph,
+        const RenderScene& renderScene);
+
     // 由 particle pass 在已开始的 sceneColor 窗口内调用；sceneDepth 走 set 3。
     void RecordGraphics(
         vk::CommandBuffer commandBuffer,
@@ -207,10 +216,32 @@ public:
     {
         return resolvedSystemAssets;
     }
+    // renderMode="decal" 且已经分配到 GPU 池的 emitter。ParticleDecalRuntime
+    // 用它决定哪些 decal 不再走 CPU 模拟；条目即使本帧没有存活粒子也会
+    // 保留一个空 vector，避免路径在 0 粒子时误切回 CPU。
+    const std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>>&
+        GetDecalGpuInstances() const noexcept
+    {
+        return decalGpuInstances;
+    }
     const ParticleFrameStats& GetFrameStats() const noexcept
     {
         return frameStats;
     }
+    // 粒子级运行时命令：console/GT 在帧间调用，实际写入发生在下一次
+    // RecordSimulation，保证请求缓冲不会与在飞帧并发。
+    bool RequestParticleKill(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        uint32_t particleIndex,
+        std::string& outError);
+    bool RequestParticleSpawnAt(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        const Eigen::Vector3f& worldPosition,
+        float lifetimeSeconds,
+        std::string& outError);
 
 private:
     struct GpuBuffer
@@ -249,6 +280,33 @@ private:
     static_assert(
         sizeof(ParticleMaterialUniforms) == 48,
         "ParticleMaterialUniforms std140 layout must match particleMesh shaders");
+
+    // particleDecalGather.comp 的 set 0 binding 4。std140 下四个 vec4，
+    // 与 shader 的 size/rotation/colorOpacity 一一对应。
+    struct DecalGatherUniforms
+    {
+        Eigen::Vector4f size;
+        Eigen::Vector4f rotation;
+        Eigen::Vector4f colorOpacity;
+        Eigen::Vector4f reserved;
+    };
+    static_assert(
+        sizeof(DecalGatherUniforms) == 64,
+        "DecalGatherUniforms std140 layout must match particleDecalGather.comp");
+
+    // particleSimulate.comp set 0 binding 9 的逐 emitter 运行时请求。
+    // header = uvec4(count, 0, 0, 0)，随后最多 16 条 32 字节记录。
+    struct ParticleRuntimeRequestGpu
+    {
+        Eigen::Vector4f positionLifetime;
+        uint32_t kind = 0;
+        uint32_t particleIndex = 0;
+        uint32_t reserved0 = 0;
+        uint32_t reserved1 = 0;
+    };
+    static_assert(
+        sizeof(ParticleRuntimeRequestGpu) == 32,
+        "ParticleRuntimeRequestGpu must match particleSimulate.comp std430");
 
     // std140 布局必须与 shader/particle/particleCommon.glsl 保持一致。
     struct FrameUniforms
@@ -469,9 +527,50 @@ private:
         Eigen::Vector4f particleLightIesParams;
         // mesh 溶解外推：x=半径随寿命推进(0..1), y=总外推比, z=启用, w=保留。
         Eigen::Vector4f puffParams;
+        // 逐粒子灯亮度/颜色曲线：keys[i].xy=(lifeT, brightness)；
+        // colors[i].rgb=逐 key 颜色乘数；params.x=key count。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            particleLightBrightnessKeys;
+        Eigen::Vector4f particleLightBrightnessParams;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            particleLightBrightnessColors;
+        // 颜色曲线切线。标量 size 切线塞进 sizeKeys 的 z/w，不额外占
+        // 数组；全部追加在末尾，旧字段偏移不变。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            colorTangentIn;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            colorTangentOut;
+        // x = curve interpolation code (0 linear, 1 hermite, 2 bezier),
+        // y/z/w reserved.
+        Eigen::Vector4f curveInterpolationParams;
+        // flipbook 播放相位时间线；pivotKeys.x=time、yz=pivot，
+        // rotationKeys=(time, degrees, tangentIn, tangentOut)。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookPivotKeys;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookPivotTangentIn;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookPivotTangentOut;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            flipbookRotationKeys;
+        // x = pivot key count, y = rotation key count, z/w reserved.
+        Eigen::Vector4f flipbookTimelineParams;
+        // x = LOD renderScale, y = smoothstep blend, z/w reserved.
+        Eigen::Vector4f lodParams;
+        // ribbon/beam 颜色切线（标量切线存放在对应 key 的 z/w）。
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            ribbonColorTangentIn;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            ribbonColorTangentOut;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            beamColorTangentIn;
+        std::array<Eigen::Vector4f, kMaxParticleCurveKeys>
+            beamColorTangentOut;
+        // x = ribbonPivot, y = ribbonTwist degrees, z/w reserved.
+        Eigen::Vector4f ribbonShapeParams;
     };
     static_assert(
-        sizeof(FrameUniforms) == 8608,
+        sizeof(FrameUniforms) == 10224,
         "ParticleFrame std140 size must match particleCommon.glsl");
     static_assert(
         offsetof(FrameUniforms, meshScale) == 5392,
@@ -695,6 +794,57 @@ private:
     static_assert(
         offsetof(FrameUniforms, puffParams) == 8592,
         "ParticleFrame puffParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightBrightnessKeys) == 8608,
+        "ParticleFrame particleLightBrightnessKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightBrightnessParams) == 8736,
+        "ParticleFrame particleLightBrightnessParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, particleLightBrightnessColors) == 8752,
+        "ParticleFrame particleLightBrightnessColors offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, colorTangentIn) == 8880,
+        "ParticleFrame colorTangentIn offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, colorTangentOut) == 9008,
+        "ParticleFrame colorTangentOut offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, curveInterpolationParams) == 9136,
+        "ParticleFrame curveInterpolationParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookPivotKeys) == 9152,
+        "ParticleFrame flipbookPivotKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookPivotTangentIn) == 9280,
+        "ParticleFrame flipbookPivotTangentIn offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookPivotTangentOut) == 9408,
+        "ParticleFrame flipbookPivotTangentOut offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookRotationKeys) == 9536,
+        "ParticleFrame flipbookRotationKeys offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, flipbookTimelineParams) == 9664,
+        "ParticleFrame flipbookTimelineParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, lodParams) == 9680,
+        "ParticleFrame lodParams offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonColorTangentIn) == 9696,
+        "ParticleFrame ribbonColorTangentIn offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonColorTangentOut) == 9824,
+        "ParticleFrame ribbonColorTangentOut offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamColorTangentIn) == 9952,
+        "ParticleFrame beamColorTangentIn offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, beamColorTangentOut) == 10080,
+        "ParticleFrame beamColorTangentOut offset must match particleCommon.glsl");
+    static_assert(
+        offsetof(FrameUniforms, ribbonShapeParams) == 10208,
+        "ParticleFrame ribbonShapeParams offset must match particleCommon.glsl");
 
     struct EmitterResources
     {
@@ -716,6 +866,9 @@ private:
         GpuBuffer counters;
         GpuBuffer aliveIndices;
         GpuBuffer events;
+        // F2：GT 写入的 kill/spawn 请求；header + 16 条记录。
+        GpuBuffer runtimeRequests;
+        uint32_t nextRuntimeSpawnSlot = 0;
         /* 图形片元 overdraw 计数；每帧清零，particledump 回读。 */
         GpuBuffer debugCounters;
         // 可选 SDF 体素；无 SDF 时绑定 1 个 float 的占位 buffer。
@@ -767,6 +920,22 @@ private:
         float meshLocalBoundsRadius = 0.0f;
         // 网格导入失败时本发射器仍保持 mesh 资产，但绘制回退 billboard。
         bool meshFallbackBillboard = false;
+        // 静态 mesh 的逐 section 资源；sectionPlans 存在时替代合并缓冲。
+        struct StaticSection
+        {
+            GpuBuffer vertices;
+            GpuBuffer indices;
+            uint32_t indexCount = 0;
+            ParticleMaterialParams material;
+            std::shared_ptr<Texture> albedo;
+            std::shared_ptr<Texture> normal;
+            std::shared_ptr<Texture> orm;
+            std::shared_ptr<Texture> emissive;
+            GpuBuffer materialUniform;
+            std::vector<vk::DescriptorSet> materialSets;
+            float localBoundsRadius = 0.0f;
+        };
+        std::vector<StaticSection> staticSections;
         // 骨骼网格粒子的 sections：每 section 独立顶点/索引/权重/palette/
         // 材质，保证 per-section materialInstancePath 与 inverse bind 正确。
         // spawn 源/父事件三个 binding 依赖 BindParentSpawnSources 选择的父
@@ -862,6 +1031,16 @@ private:
         ParticleGpuTimer gpuTimer;
         // SDF 碰撞体；与资产共享只读数据。
         std::shared_ptr<const ParticleSdfAsset> sdf;
+        // renderMode="decal" 专用 gather 输出。每个 swapchain image 一份，
+        // 避免在飞帧共享同一段读回缓冲；readback 保持 host-visible 映射。
+        struct DecalGatherImage
+        {
+            GpuBuffer params;
+            GpuBuffer output;
+            GpuBuffer readback;
+            vk::DescriptorSet set;
+        };
+        std::vector<DecalGatherImage> decalGatherImages;
         // 创建 descriptor 时的场景光照代际；换代后必须重建 set 0 的
         // binding 6..9，否则会继续采样已退休的 buffer/cubemap。
         uint32_t sceneLightingGeneration = 0;
@@ -938,7 +1117,16 @@ private:
         HostImage::TextureSemantic semantic,
         const std::shared_ptr<Texture>& fallback);
     void CreateDescriptors(EmitterResources& emitter);
+    void CreateDecalEmitterDescriptors(EmitterResources& emitter);
     void CreateLightEmitterDescriptors(EmitterResources& emitter);
+    void ReadbackDecalGather(
+        EmitterResources& emitter,
+        uint32_t imageIndex);
+    void RecordDecalGather(
+        vk::CommandBuffer commandBuffer,
+        EmitterResources& emitter,
+        uint32_t imageIndex,
+        float lodRenderScale);
     void CreateFallbackLightingResources();
     void DestroyFallbackLightingResources();
     void EnsureTranslucencyVolume();
@@ -992,6 +1180,9 @@ private:
     // 输出（binding 8）。CreateDescriptors 分配 computeSets 时这些绑定还没
     // 选定，BindParentSpawnSources 之后统一写一次。
     void EnsureSpawnSourceBindings(EmitterResources& emitter);
+    EmitterResources* FindEmitterBySceneAndName(
+        const std::string& sceneObjectName,
+        const std::string& emitterName);
     void DestroyGlobalSortPool();
     bool CreateGlobalSortPool(
         const std::vector<std::string>& emitterKeys,
@@ -1033,6 +1224,19 @@ private:
     std::shared_ptr<ComputePipeline> globalGatherPipeline;
     std::shared_ptr<ComputePipeline> globalSortInitPipeline;
     std::shared_ptr<ComputePipeline> particleLightEmitPipeline;
+    std::shared_ptr<ComputePipeline> decalGatherPipeline;
+    std::shared_ptr<ComputePipeline> softDepthPipeline;
+    struct SoftDepthResources
+    {
+        vk::DescriptorPool descriptorPool{};
+        std::vector<vk::DescriptorSet> sets;
+        std::vector<GpuBuffer> uniforms;
+        uint64_t signature = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+    SoftDepthResources softDepthResources;
+    void DestroySoftDepthResources();
     std::shared_ptr<PipelineBase> additivePipeline;
     std::shared_ptr<PipelineBase> alphaPipeline;
     // ribbon 与 billboard 共用 descriptor set layout 与 particle SSBO，
@@ -1093,6 +1297,21 @@ private:
         emitters;
     std::unordered_map<std::string, ParticleSystemAsset>
         resolvedSystemAssets;
+    // 上次 gather 回读的紧凑 decal 记录。RecordSimulation 在上一帧 fence
+    // 之后解析；ParticleDecalRuntime 在下一帧 Update 消费，因此有 1 帧
+    // 的确定性延迟，但不会读到在飞帧数据。
+    std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>>
+        decalGpuInstances;
+    struct PendingParticleRequest
+    {
+        std::string emitterKey;
+        bool kill = false;
+        uint32_t particleIndex = 0;
+        Eigen::Vector3f position = Eigen::Vector3f::Zero();
+        float lifetime = 0.0f;
+    };
+    std::vector<PendingParticleRequest> pendingParticleRequests;
     // per-swapchain-image，由 RendererFrameResources 持有；这里只保存引用。
     std::vector<vk::Buffer> particleLightBuffers;
     uint32_t particleLightBufferGeneration = 0;

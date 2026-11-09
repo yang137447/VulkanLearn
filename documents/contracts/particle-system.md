@@ -38,8 +38,9 @@
   条带、静态 SM 网格实例化，在作者化起止点之间生成多条带噪声的 beam 合成，或在独立
   distortion pass 中把屏幕高度归一化偏移写入 RGBA16F 缓冲。`renderMode: "light"`
   复用 GPU 模拟池并由独立 compute 生成最多 64 盏 per-particle light；
-  `renderMode: "decal"` 是 CPU 侧例外：它不分配 GPU 池，而是共享同一份固定步长/burst
-  模拟，把存活粒子映射成最多 64 个可见 DBuffer decal。
+  `renderMode: "decal"` 复用普通 GPU 模拟池与 `particleSimulate.comp`，再由
+  `particleDecalGather.comp` 压成最多 64 条紧凑记录；无 GPU 池时保留
+  `ParticleCpuEmitterRuntime` 作为 fallback。
   粒子 decal 与静态 decal 共用 `decalStencil` D24S8 union mask（bit0）、64 槽实例
   排序和 `DecalRenderer`；粒子侧不额外创建 stencil 资源或独立 decal pass。
 - 粒子图形 pass 可选接收完整场景光照：billboard/ribbon 用 wrapped Lambert 消费全部
@@ -91,7 +92,7 @@ SC_*.json particleSystem
     -> bloomPrefilter 与 toneMapping 按同一公式映射 sceneUV
     -> particleLightEmit compute（renderMode=="light"）
     -> ParticleLightSSBO（set 0 binding 4）-> deferred/forward lighting
-    -> ParticleDecalRuntime::Synchronize/Update（renderMode=="decal"）
+    -> ParticleDecalRuntime::Synchronize/Update（GPU 回读优先，CPU fallback）
     -> 追加 RenderScene::decals -> DecalRenderer::Synchronize
     -> decalStencil pass（D24S8 bit0 union mask）-> decals pass（stencil gate + DBuffer）
 ```
@@ -213,8 +214,9 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   pass input 计划创建，`ParticleRenderer` 只在管线反射使用 set 3 时绑定。`set 3, binding 1`
   是 particle pass 的 CSM `shadowMap`；全局 alpha billboard 的 fragment shader 不采样
   CSM，但仍显式声明这两个 binding 的管线布局，以匹配 pass 描述符集的固定布局。
-  软粒子深度读取使用中心 + 四向十字共 5 个 tap，取最近不透明表面的视深度；
-  `softParticleTapRadius` 控制像素半径，0 退回单采样。
+  `set 3, binding 3` 是半分辨率 `particleSoftDepth` 线性视深度纹理。
+  软粒子优先做双边上采样；资源为 1x1/不可用时回退中心 + 四向十字 5 个 tap。
+  `softParticleTapRadius` 控制 fallback 像素半径，0 退回单采样。
 - compute pipeline 名为 `particle/particleSimulate`；billboard graphics variant 名为
   `particle/particle`，ribbon variant 名为 `particle/particleRibbon`，mesh variant 名为
   `particle/particleMesh`，beam variant 名为 `particle/particleBeam`，distortion variant
@@ -650,9 +652,11 @@ beam 的自动中心是变换后的线段中点，局部半径见「Beam 电弧�
 （`sceneName|assetPath|emitterName`）字典序升序排序，不使用 `unordered_map` 的迭代
 顺序参与 tie-break。`sortOrder` 是主序，否则深度排序会把作者的层级意图重新打散。
 
-发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard、总容量 ≤ 8192 且唯一纹理 ≤ 8
-时，所有参与发射器 gather 到一个全局记录池，做一次全局逐粒子 bitonic 排序后
-`drawIndirect`；additive/ribbon/mesh/beam/distortion 或超限场景保留逐发射器路径。
+发射器级顺序仍按包围球远→近作为回退。满足 alpha billboard 或 alpha ribbon、
+总容量 ≤ 8192 且唯一纹理 ≤ 8 时，所有参与发射器 gather 到一个全局记录池，
+做一次全局逐 quad bitonic 排序后 `drawIndirect`；ribbon 容量按
+`maxParticles × ribbonSegments` 估算。additive/mesh/beam/distortion 或超限场景
+保留逐发射器路径。
 beam 与 distortion 永远不进入 gather 记录池。全局路径与未参与发射器
 之间仍是发射器级先后近似；发射器集合增删导致排序表短暂失配时，未进入排序表的池按原
 map 顺序补画。全局 alpha 池本身作为一个特殊 draw item 参与同一份排序：`sortOrder`
@@ -747,9 +751,8 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   mesh 用静态 SM 网格按粒子实例化；beam 在作者化起止点之间生成多条带噪声的并行弧；
   distortion 仍消费粒子池，但绘制到独立 UV 偏移缓冲；light 不渲染几何，复用 GPU
   模拟池并写入独立 per-particle light SSBO，详见「Light 粒子灯（GPU per-particle light）」；
-  decal 同样不渲染
-  几何，由 CPU 运行时把存活粒子映射为 BeforeLighting DBuffer decal，详见
-  「Decal 粒子贴花（CPU）」。
+  decal 同样不渲染几何；GPU simulate 后的存活粒子由 gather 回读并映射为
+  BeforeLighting DBuffer decal，详见「Decal 粒子贴花（GPU 模拟 + CPU fallback）」。
 - `billboardAlignment`：仅 `renderMode: "billboard"` 使用，默认 `"camera"`，可选
   `"camera"`、`"velocity"` 或 `"fixed"`。`velocity` 用粒子速度方向构造 billboard 基，
   让 quad 的法线对齐速度；`fixed` 用作者化的发射器局部基固定 quad 朝向，适合枪口闪光等
@@ -960,6 +963,8 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   particleDepth) / softParticleDistance, 0, 1)` 缩放 alpha。
 - `softParticleTapRadius`：软粒子 sceneDepth 十字采样半径（像素），默认 `4`，
   范围 `[0, 32]`；0 退回单采样。5 个 tap 取最近不透明表面，兼顾深度碰撞与交线淡出。
+- `softParticleThickness`：cm，默认 `0`，范围 `[0, 10000]`。非零时按局部深度差
+  限制 fade 增长率，避免薄几何在软深度过滤边缘出现硬切；0 保持旧行为。
 - `sortParticles`：默认 `false`。所有 alpha 发射器（billboard/ribbon/mesh）必须为 `true`，否则资产校验以
   “alpha blend requires sortParticles=true” 拒绝；每帧在 compute 中按相机 view-space
   深度执行 GPU bitonic sort。additive 发射器应保持关闭，排序不会改变加法结果。
@@ -1416,9 +1421,9 @@ color   = mix(baseColor, direct + ambient, billboardLightingStrength)
   authored 颜色，1 完全使用光照，避免纯乘法在暗场景掉亮度、在强光附近过曝。
 - 全局 alpha 排序仍排除 `billboardShadows=true` 的发射器，因此 CSM 路径始终
   走逐发射器绘制；全局路径的 gather 记录携带同一组 lighting 参数。
-- 全局 gather 记录新增 `lightParams`、`lightDirection`、`lightColor` 三个 `vec4`；
-  `GatheredBillboard` 的 std430 stride 从 8 个 `vec4` 变为 11 个。gather、sort-init、
-  global vertex/fragment 四处结构体必须同步。
+- 全局 gather 记录包含 `lightParams`、`lightDirection`、`lightColor`、`corner3Kind`
+  与 `color2`；`GatheredBillboard` 的 std430 stride 为 17 个 `vec4`。gather、
+  sort-init、global vertex/fragment 四处结构体必须同步。
 - 该照明已覆盖全部场景灯与 GPU 粒子灯并接入 IBL，但 sprite 只做 wrapped Lambert
   （没有镜面 lobe），仍不提供法线贴图或完整 Material Graph；GPU 粒子灯不投影。
 
@@ -1599,10 +1604,22 @@ beam/indirect draw、全局 gather 或排序。World 的 authored/budgeted capac
   截断结果不依赖 `unordered_map` 迭代顺序。每个粒子写 `base + particleIndex`，用
   `atomicMax(header.count, slot + 1)` 发布 high-water；空槽保持零强度，由着色器跳过。
 - 每个存活粒子的颜色/强度：
-  `color = mix(colorStart.rgb, colorEnd.rgb, lifeT) * colorTint.rgb`，
+  `color = mix(colorStart.rgb, colorEnd.rgb, lifeT) * colorTint.rgb *
+  light.brightnessKeys.color(lifeT)`，
   `alpha = clamp(mix(colorStart.a, colorEnd.a, lifeT) * colorTint.a, 0, 1)`，
-  `intensity = light.intensity * (1 - lifeT) * alpha`，`radius = light.radius`。
-  发射时乘 `100^2`，不经过 CPU 量化或回读。
+  `brightness = light.brightnessKeys.brightness(lifeT)`（空表为 1），
+  `intensity = light.intensity * (1 - lifeT) * alpha * brightness`，
+  `radius = light.radius`。颜色曲线空表时为白色。发射时乘 `100^2`，不经过 CPU
+  量化或回读。
+- `light.brightnessKeys` 是逐寿命曲线，最多 8 个 key；每个 key 为
+  `{time, brightness, color?}`，`time` 必须在 `[0,1]` 且严格递增（加载器不排序、
+  不截断作者数据），`brightness` 与 `color` 各通道必须在 `[0,64]`。`brightness`
+  也可写成 `value`。求值规则与 CPU `EvaluateParticleLightBrightness` /
+  `EvaluateParticleLightColor` 一致：首尾外 clamp，区间内分段线性插值，单 key
+  为常量。空表等价于亮度 1、颜色白。
+- `light.iesProfile` 是 64 个线性样本、覆盖 `0..pi` 极角的可选角度剖面，空表为
+  各向同性。`light.iesTexture` 是同一字段的兼容别名；两者可以单独出现，但同一
+  light 对象同时声明两者会在加载期拒绝，避免作者误以为后者覆盖前者。
 - 每帧 `BeginFrame` 等待该 image fence 后，host 清零 `header + 64 entries`，发布
   host-write → compute/fragment barrier；粒子 simulate 后插入 compute write → compute
   read/write barrier，再执行 light emit；`RecordSimulation` 末尾的 compute →
@@ -1614,22 +1631,33 @@ beam/indirect draw、全局 gather 或排序。World 的 authored/budgeted capac
   prewarm。World 换代通过 `ParticleRenderer::Synchronize` 重建/回收池与描述符包。
 - 编辑器粒子缩略图在创建 `RendererFrameResources` 后绑定同一 light buffer；离线
   `OfflineParticleSimulation` 仍跳过 light 发射器，不分配粒子数组、不推进时间。
-- 仍没有逐粒子光纹理、逐粒子阴影、逐粒子 IES 或光源曲线；light 发射器本身不产生
-  可见 draw call。
+- 已有逐发射器 IES 角度剖面与逐寿命亮度/颜色曲线；仍没有逐粒子光纹理（cookie）、
+  逐粒子阴影贴图或逐粒子独立 IES/曲线；light 发射器本身不产生可见 draw call。
 
-编辑器能力表公开 `renderMode` 的 `light` 选项以及 `light.intensity`、`light.radius`；
-字段仍写入 v2 renderer 模块的 `fields`。没有独立的 Light 模块页，也没有 Material Graph。
+编辑器能力表公开 `renderMode` 的 `light` 选项以及 `light.intensity`、`light.radius`、
+`light.iesProfile`、`light.brightnessKeys`（Array，可 reset）、`light.castShadows`、
+`light.shadowBias`；`light.iesTexture` 只作为兼容别名参与加载，不重复暴露成第二个
+字段。字段仍写入 v2 renderer 模块的 `fields`，Emitter 页显示同一组 light 字段。
+没有独立的 Light 模块页，也没有 Material Graph。
 
-## Decal 粒子贴花（CPU）
+## Decal 粒子贴花（GPU 模拟 + CPU fallback）
 
-`renderMode: "decal"` 与 light 共用 `ParticleCpuEmitterRuntime` 的固定步长、burst 绝对周期、
-shape/gravity/drag 积分、局部/世界空间与 SplitMix64 确定性随机。它不创建 GPU 粒子池，也不进入
-compute simulate、indirect draw、全局 gather 或排序；`ParticleRenderer::Synchronize`、
-World 的 authored/budgeted capacity 与离线粒子模拟都会跳过 decal 发射器。
+`renderMode: "decal"` 现在与 billboard/ribbon 一样分配普通 GPU 粒子池并复用
+`particleSimulate.comp` 的固定步长、burst、shape/gravity/drag、局部/世界空间与确定性随机。
+它不进入粒子 indirect draw、全局 gather 或透明排序；模拟结束后由独立
+`particleDecalGather.comp` 读取存活索引，按最多 64 条紧凑记录写入
+`ParticleDecalGpuInstance`（position/lifeT、size、rotation、color、opacity、slot）。
+World 的 authored/budgeted capacity 把 decal 计入普通 GPU 池预算；`beam` 与 `light`
+仍不参与该预算。没有 GPU 池（或池尚未建立）时，`ParticleCpuEmitterRuntime` 继续作为
+fallback 按旧的 CPU 语义模拟。
 
-- 运行时由 `ParticleDecalRuntime` 拥有逐发射器状态，身份仍是场景对象名 + `assetPath` +
-  发射器名。每帧先移除上一帧追加到 `RenderScene::decals` 的动态条目，再按当前存活粒子重建，
-  不累加旧快照。
+- `ParticleRenderer::RecordSimulation` 在 simulate 后 dispatch gather，把输出复制到
+  逐 swapchain image 的 host-visible 读回缓冲；下一次同 image 提交前在上一帧 fence 之后
+  解析，最多回读 64 条。缓存按 emitter key 发布，`ParticleDecalRuntime` 在下一帧消费，
+  因此 GPU decal 有 1 帧确定性延迟，但不读取在飞帧数据。
+- 运行时仍由 `ParticleDecalRuntime` 拥有场景顺序的 decal emitter 列表，身份是
+  场景对象名 + `assetPath` + 发射器名。每帧先移除上一帧追加到 `RenderScene::decals`
+  的动态条目，再按当前 GPU 记录（无 GPU 池时用 CPU particles）重建，不累加旧快照。
 - 每个存活粒子输出一个 `DecalSnapshot`。`decalId` 由发射器 key 与稳定粒子槽位派生，
   不包含 burst 代际；槽位取发射器内最小空闲索引。因此同一槽位反复 burst/重生成时
   `DecalRenderer` 可以继续复用同一纹理集。
@@ -1644,14 +1672,25 @@ World 的 authored/budgeted capacity 与离线粒子模拟都会跳过 decal 发
   直接来自 `decal`。程序化噪声相位由稳定 decalId 派生。
 - `DecalRenderer` 固定 64 个实例槽。`ParticleDecalRuntime` 先删除上一帧动态条目，再统计
   当前剩余可见静态 `RenderScene::decals` 数量；动态容量是 `64 - 静态可见数量`。超出时按
-  particleSystems 顺序与 emitter 顺序确定性截断，再从后往前移除尾部粒子。静态 decal
-  原样保留，不会被运行时改写或排序。
+  particleSystems 顺序与 emitter 顺序确定性截断。GPU gather 同样把记录数限制在 64；
+  静态 decal 优先占槽并原样保留，不会被运行时改写或排序。
 - `RenderSystem` 在 `DecalRenderer::Synchronize` 之前完成
   `ParticleDecalRuntime::Synchronize/Update`。实例 SSBO、逐 swapchain image 实例缓冲和
   每槽 material descriptor 都是固定容量，没有逐帧 SSBO/descriptor 扩容路径。
-- World/实例隐藏、`enabledEmitterMask` 与 Pause 语义与 light 相同。离线渲染和编辑器缩略图
-  不运行该 CPU 运行时；`OfflineParticleSimulation` 跳过 decal 发射器，不分配粒子数组、
+- World/实例隐藏、`enabledEmitterMask` 与 Pause 语义不变：隐藏/禁用时 GPU 池冻结且
+  动态 decal 被移除；Pause 时模拟 dt 为 0，decal 保持原位。离线渲染和编辑器缩略图
+  仍不运行该运行时；`OfflineParticleSimulation` 跳过 decal 发射器，不分配粒子数组、
   不推进 `elapsedSeconds`，只保留发射器槽位供索引/掩码稳定。
+
+粒子级运行时命令通过 GT 投递到 `ParticleRenderer`：
+
+- `particlekill <system> <emitter> <particleIndex>`：在下一次 simulate 中把稳定槽位
+  标记为死亡；越界索引、未知 system/emitter、beam 无池或隐藏/禁用 emitter 会被拒绝。
+- `particlespawnat <system> <emitter> <x> <y> <z> [lifetime]`：在 CPU 侧轮转选择稳定
+  槽位，下一次 simulate 写入显式位置与寿命；`localSpace` emitter 会把世界坐标转换回
+  模拟空间，lifetime 省略时使用 emitter 的 `lifetimeMax`。
+- 请求缓冲固定为 header + 16 条 32 字节记录，绑定在 simulate set 0 binding 9；
+  超量请求或非有限参数会被拒绝。C# 暂无专用包装，console 是当前主入口。
 
 编辑器能力表公开 `renderMode` 的 `decal` 选项，以及 `decal.size`、`decal.rotation`、
 `decal.color`、材质/响应/贴图/sortOrder 字段；它们归入 v2 renderer 模块并显示在 Emitter 页。
@@ -1670,23 +1709,43 @@ Data Channels、发射器级运行时 spawn/destroy/restart/enable、C# 事件�
 确定性随机、mesh 材质数值子集与 CSM 接收阴影、离线 CPU 粒子渲染、动态缩略图与逐发射器
 GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射器/全局路径的光照记录，以及
 `renderMode: "light"` 的 GPU per-particle 点光（独立 compute，每场景最多 64 盏）、
-`renderMode: "decal"` 的 CPU 粒子贴花（与静态 decal 共享每场景最多 64 个可见实例）。
+`renderMode: "decal"` 的 GPU 模拟/回读粒子贴花（CPU fallback；与静态 decal 共享每场景最多
+64 个可见实例）。
 
 仍未完成：
 
-- 曲线 key 上限 8；没有 Hermite/Bezier 切线，只有分段线性插值。
-- flipbook 已有逐帧时长表、逐帧静态轴心、逐帧 UV rect 与逐帧旋转，但没有轴心/UV/旋转
-  动画时间线；图集最大 16×16（256 帧），帧区间仍由 `startFrame`/`endFrame` 指定。
+- 曲线 key 上限 8；`curveInterpolation` 取 `linear`（默认，旧资产按分段线性）、
+  `hermite` 或 `bezier`。覆盖 `colorKeys`、`sizeKeys`、`ribbonWidthKeys`、
+  `ribbonColorKeys`、`beam.colorKeys` 与 `beam.widthKeys`：每个 key 可带
+  可选 `tangentIn`/`tangentOut`，颜色曲线是 vec4、标量曲线是 float，缺省为 0。
+  `hermite` 把切线解释为归一化时间上的 `dValue/dTime`；`bezier` 把切线解释为
+  控制柄相对端点的偏移（`c1 = p0 + tangentOut`、`c2 = p1 - tangentIn`），
+  CPU 上传边界按 `m0 = 3*(c1-p0)`、`m1 = 3*(p1-c2)` 转成 Hermite 斜率，
+  GPU 只实现 Hermite 求值，因此 Bezier 不会产生第二套 shader 数学。
+  `lifetimeScaleKeys` 始终线性；flipbook 时间线复用同一 `curveInterpolation`。
+  剔除半径对 Hermite 超调按每段采样最大值保守外扩，不只读 key 端点值。
+- flipbook 已有逐帧时长表、逐帧静态轴心、逐帧 UV rect 与逐帧旋转；新增
+  `flipbook.framePivotKeys` / `frameRotationKeys` 播放相位时间线（最多 8 key，
+  可带 tangent，复用 `curveInterpolation` 的 Hermite 求值）。时间线按
+  `flipbookPerParticle` 选择粒子年龄或 emitter 模拟时间，非空时与逐帧表叠加，
+  pivot key 以 0.5 为中性、叠加的是相对锚点偏移，rotation key 直接加角度；
+  空表保持旧行为；UV rect 仍没有时间线。图集最大 16×16（256 帧），帧区间仍由
+  `startFrame`/`endFrame` 指定。
   UV rect 与旋转表受 64 帧 GPU 表限制，超过 64 帧的区间不能作者化这两张表。
-- 软粒子使用中心 + 四向十字 5 个 `sceneDepth` tap，取最近不透明表面；没有逐像素
-  厚度缓冲或时域去噪。alpha billboard 在
-  `renderMode=billboard && sortParticles && !additive` 且总容量 ≤ 8192、唯一纹理 ≤ 8 时走
+- 软粒子新增 `particleSoftDepth` 半分辨率 compute pass：读取 `sceneDepth`，转换为
+  线性视深度并做 3x3 深度感知模糊，输出 `R32_SFLOAT` texture2D；particle pass 的
+  set 3 binding 3 采样它并以深度感知双边上采样还原。资源不可用/1x1 时保留中心 +
+  四向十字 5 tap fallback；没有时域去噪。alpha billboard/ribbon 在
+  `sortParticles && !additive` 且总容量（ribbon 按 quad 数）≤ 8192、
+  唯一纹理 ≤ 8 时走
   全局 gather + 全局 bitonic + 单次 `drawIndirect`（`particleGlobalGather.comp` /
-  `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；ribbon/mesh 与超限场景回退到
+  `particleGlobalSortInit.comp` / `particleGlobal.vert/frag`）；mesh 与超限场景回退到
   逐发射器排序。全局路径使用固定索引分支选择 8 槽纹理，无纹理时保留程序化 FBM 形状；
   gather 记录携带逐发射器 `billboardLighting` / `billboardAmbient` /
   `billboardLightingStrength` / 方向光参数，因此 lit 与 unlit alpha billboard 可以同池
-  排序。开启 `billboardShadows` 的发射器仍留在逐发射器路径以保留 CSM。全局池作为
+  排序。ribbon 记录携带四角/首尾颜色/kind，global vertex 按 kind 展开；
+  ribbon shadow 始终逐 emitter。开启 `billboardShadows` 的 billboard 仍留在逐发射器
+  路径以保留 CSM。全局池作为
   一个 draw item 参与同一份排序表（最小 `sortOrder` + 池的背景边缘深度），与其它
   未参与发射器之间仍是发射器级先后近似。
   事件 v1 已支持 spawn/death/collision 三类有界 GPU 记录（4096 条/发射器）与
@@ -1699,8 +1758,11 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   调试回读、CPU 帧级预算统计与 particle graphics pass 的 GPU timestamp 计时已支持
   （`particlestats`/`particledump` 的 `gpuMs` 与逐 emitter 项）；非全局 emitter
   的 GPU overdraw 通过 `particledump.overdrawFragments` 提供，带宽仅有读取规模估算。
-  World 级和发射器级运行时增删都已支持，粒子级 spawn/destroy 仍没有。LOD 最多 4 档且只缩放连续发射预算，
-  没有距离淡入淡出或渲染 LOD。
+  World 级和发射器级运行时增删都已支持，粒子级 spawn/destroy 仍没有。LOD 最多 4 档：
+  每档同时缩放连续发射预算（`spawnRateScale`）与渲染尺寸（`renderScale`），
+  `fadeRange>0` 时在档位边界前用 smoothstep 插值，`fadeRange=0` 保持旧硬切；
+  LOD 不改变池容量，alpha 仍由既有 `maxDrawDistance`/`fadeDistance` 距离 fade 独占，
+  避免重复相乘。
 - 碰撞支持无限平面、轴对齐盒体、胶囊、有限体素 SDF 和三角网格：
   `collision.type=sdf` 用 `collision.sdf.path` 直接读 `particleSdf`；
   `collision.type=mesh` 用 `collision.mesh.path` 读 `particleCollisionMesh`
@@ -1722,35 +1784,44 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   把存活数写回 `drawIndirect` 的 `instanceCount`；图形阶段不再使用 CPU 容量/存活猜测。
   未使用 `VK_KHR_draw_indirect_count`；CPU 仍提交容量上界的单条间接命令。
 - light 发射器已有 GPU 模拟池与独立 `particleLightEmit` compute，颜色/alpha 消费
-  `colorKeys` 曲线，输出仍是固定 64 槽的点光 SSBO：没有光纹理、阴影贴图、逐粒子 IES
-  或独立的强度曲线；越过 64 槽的请求按稳定 emitter key 顺序截断。light 发射器不产生
-  可见 draw call，也不参与排序/indirect。
+  `colorKeys` 曲线，并可叠加逐发射器 IES 角度剖面与逐寿命亮度/颜色曲线；输出仍是
+  固定 64 槽的点光 SSBO。没有光纹理 cookie、逐粒子阴影贴图或逐粒子独立 IES/曲线；
+  越过 64 槽的请求按稳定 emitter key 顺序截断。light 发射器不产生可见 draw call，
+  也不参与排序/indirect。
 - 粒子场景光照：billboard/ribbon 在 `billboardLighting` 开关下接收全部方向光/点光/聚光
   + GPU 粒子灯 + IBL，mesh 在 `meshLighting` 下走完整 DefaultLit。仍有的边界：sprite 只做
   wrapped Lambert、无镜面 lobe；场景点光/聚光可开启局部阴影（八面体点光 +
   透视聚光图集），GPU 粒子灯不投影；CSM 只作用于方向光；
   IBL 漫反射用预过滤 cubemap 的最高 mip 近似 irradiance，因为粒子 UBO 不携带 GPU 写的
   SH 系数；没有 UE 的 Translucency Volume 模式。
-- decal 发射器同样没有 GPU 模拟/回读，也没有 particle-generated decal pass：它只把 CPU
-  粒子映射为 `DecalSnapshot`，再走现有静态 decal 的 64 槽 DBuffer 路径。因此它不产生
-  HitScan/碰撞事件，不会按命中面自动对齐，也没有逐粒子贴花图集或
+- decal 发射器已有 GPU 模拟与逐 emitter gather/回读，但没有 particle-generated decal
+  pass：它把紧凑 GPU 记录（无 GPU 池时用 CPU particles）映射为 `DecalSnapshot`，
+  再走现有静态 decal 的 64 槽 DBuffer 路径。因此它仍不产生 HitScan/碰撞事件，
+  不会按命中面自动对齐，也没有逐粒子贴花图集或
   UE Niagara Decal Renderer 的逐粒子材质图；硬件 stencil 只提供 bit0 union mask，
   不区分单个 decal ID。DBuffer 现在由 deferred 与 forward opaque
   共同采样；forward transparent 不接收，normal 合成使用 whiteout/大圆混合，而不是逐层 RNM。
   动态与静态 decal 共享 64 个可见实例；静态 decal 先占槽，超出时粒子路径按 emitter
   顺序截断。
-- ribbon 固定 16 点历史 + 顶点阶段弧长重采样，支持逐弧长宽度曲线与 UV 平铺；
-  没有子步采样、逐顶点 pivot/rotation 或逐粒子跨发射器全局排序。spawn/burst
-  用速度回填历史，首帧不会退化为零长度；运行中历史仍按模拟帧采样，极低帧率
-  会损失轨迹细节。
-- mesh 支持静态 SM、全部 section 合并、粒子颜色曲线与顶点色相乘；可选
+- ribbon 固定 16 点历史 + 顶点阶段弧长重采样，支持逐弧长宽度/颜色曲线、曲线切线、
+  UV 平铺、`ribbonPivot` 横向偏移与 `ribbonTwist` 绕切线扭转；可见与 shadow 共用
+  `BuildParticleRibbonVertex`。历史在每个实际推进的 fixed step 内右移一次，CCD
+  子步不额外采样（等价 `ribbonHistoryInterval=1`）；spawn/burst 仍用速度回填历史，
+  首帧不会退化为零长度，死亡分支不写历史。逐粒子跨发射器全局排序仍未覆盖 ribbon。
+- mesh 支持静态 SM；有 `sectionPlans` 时按 section 建独立顶点/索引/材质与
+  逐 section `drawIndexedIndirect`（共享的 `instanceCount` 由 finalize compute
+  按命令步长写入），没有 sectionPlans 的旧资产回退为全部 section 合并；粒子
+  颜色曲线与顶点色相乘；可选
   `materialInstancePath`（MI_*.json）只读取 `u_baseColor/u_emissive/u_emissiveStrength/
   u_roughness/u_metallic` 数值子集，缺失或解析失败回退内置默认值并只告警一次。
   片元使用完整 DefaultLit（全部方向光/点光/聚光 + GPU 粒子灯，GGX + Fresnel + Smith
-  + IBL），方向光采样 particle pass 的 CSM `shadowMap`（set 3 binding 1）。没有完整
-  Material 图/纹理/宏、每 section 材质、LOD、蒙皮、localSpace 或 size 曲线。网格朝向
-  旋转只绕局部 Y 轴，mesh scale 不参与 `maxScreenSize` 的 billboard 钳制。导入失败
-  静默回退 billboard 而不是显示错误几何。
+  + IBL），方向光采样 particle pass 的 CSM `shadowMap`（set 3 binding 1）。静态与骨骼
+  mesh 都支持 `localSpace`：粒子中心整体经 `localToWorld` 变换，法线/切线用线性部分；
+  `mesh.useSizeCurve` 开启时按 `EvaluateSizeCurve(lifeT)/EvaluateSizeCurve(0)` 乘
+  `mesh.sizeScale` 到局部缩放，`lifeT=0` 保持原尺寸；可见、shadow 与剔除共用该乘数。
+  仍没有完整 Material 图/纹理/宏与 mesh LOD。网格朝向旋转
+  只绕局部 Y 轴，mesh scale 不参与 `maxScreenSize` 的 billboard 钳制。导入失败静默
+  回退 billboard 而不是显示错误几何。
 - `burstInterval > 0` 的周期重触发没有相位偏移、次数上限或单次 burst 计数；周期从
   发射器累计模拟时间 0 起算，`particlerestart` 会把它重新归零。
 - 粒子 compute/graphics pipeline 不在 shader reload 的候选事务内：reload 提交后
@@ -1938,7 +2009,8 @@ Translucency Volume。
 和 `NE_Impact_Sprite` 组成；VulkanLearn 用 `impact_flash`、`impact_sparks`、
 `impact_dust`、`impact_chips`、`impact_smoke`、`impact_light`、`impact_decal`
 七个发射器重建闪光、火花、尘、混凝土碎块、残留烟和墙面贴花，并以
-`burstInterval = 2.5s` 循环。墙面 decal 由 `impact_decal` 的 CPU 粒子运行时生成，
+`burstInterval = 2.5s` 循环。墙面 decal 由 `impact_decal` 的 GPU 模拟/gather 回读生成
+（无 GPU 池时回落到 CPU 运行时），
 使用 `T_Impact_Concrete_*` 的 albedo/normal/ORM 贴图，经
 `decalResponse = colorNormalRoughness` 写入 DBuffer。
 尘与残留烟开启 `billboardLighting`，由撞击闪光与场景补光染色；碎块 mesh 走
@@ -1946,7 +2018,7 @@ Translucency Volume。
 
 该案例同样不是 UE 资产直接移植：`NE_Impact_LightDecal` 的光强由
 `impact_light` 的 GPU per-particle 点光复刻，墙面 decal 由 `impact_decal` 的
-CPU particle-driven decal 生成，不再保留静态 `ImpactCrater` 场景对象。没有 UE Material Graph；
+particle-driven decal 生成，不再保留静态 `ImpactCrater` 场景对象。没有 UE Material Graph；
 碎块复用 `SM_rock`，贴图与 decal
 图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
 
@@ -1984,6 +2056,6 @@ bloomPrefilter 与 toneMapping 共同消费；没有 UE flipbook 动画；没有
 `branchStart` / `branchLength` / `branchSpread` 生成分支，两个
 `renderMode: "light"` 发射器每 0.7 s 生成 150 cd / 900 cm 的 GPU per-particle 灯。
 左右落地弧启用 `beam.hitScan`（y=10 的地面平面），`tesla_smoke` 以连续 billboard
-补充线圈上方的薄烟，左右 `tesla_node_decal_*` 通过 CPU 粒子 decal 重建
+补充线圈上方的薄烟，左右 `tesla_node_decal_*` 通过粒子 decal 重建
 `Tesla_Node_Decals` 的节点辉光。它仍不是 UE 资产直接移植：HitScan 是受控平面命中，
 不是任意物理 mesh raycast；节点 decal 没有材质图；Material Graph 仍未复刻。

@@ -163,6 +163,7 @@ add_executable(material_instance_editor_production_tests
     particlePreviewUpdateTests.cpp
     particleRenderIdentityTests.cpp
     particleRibbonTests.cpp
+    particleSoftDepthTests.cpp
     particleRuntimeCommandTests.cpp
     particleSkeletalPreflightTests.cpp
     particleSimulationDeltaTests.cpp

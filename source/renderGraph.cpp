@@ -1182,6 +1182,7 @@ void RenderGraph::RenderInitialize(
         Renderpass& renderpass = renderpasses.at(passName);
         // 专用 compute / 自带 pipeline 的 pass 不经过 Material pass 描述符。
         if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth ||
             renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
             renderpass.type == VL::RenderGraphPassType::FogComposite ||
             renderpass.type == VL::RenderGraphPassType::LightCulling)
@@ -1240,6 +1241,7 @@ void RenderGraph::RefreshRuntimeDescriptors(
     for (auto& [passName, renderpass] : renderpasses)
     {
         if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth ||
             renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
             renderpass.type == VL::RenderGraphPassType::FogComposite ||
             renderpass.type == VL::RenderGraphPassType::LightCulling)
@@ -1665,6 +1667,14 @@ Renderpass RenderGraph::CreateRenderpass(
                 resourcesResolve.at(renderpass.outputResources.at(0));
             renderpass.width = fogResources.at(0).width;
             renderpass.height = fogResources.at(0).height;
+            return renderpass;
+        }
+        if (renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth)
+        {
+            const auto& softDepthResources =
+                resourcesResolve.at(renderpass.outputResources.at(0));
+            renderpass.width = softDepthResources.at(0).width;
+            renderpass.height = softDepthResources.at(0).height;
             return renderpass;
         }
         // tile 光照聚类是纯 compute 节点：不创建 VkRenderPass/framebuffer，

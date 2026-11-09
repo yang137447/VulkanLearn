@@ -98,3 +98,44 @@ TEST(ParticleMeshShadow, ShadersReuseMeshTransformAndWriteDepth)
     EXPECT_EQ(vertex.find("set = 3"), std::string::npos);
     EXPECT_EQ(fragment.find("set = 3"), std::string::npos);
 }
+
+TEST(ParticleMeshShadow, LocalSpaceAndSizeCurveShareVisibleAndShadowPath)
+{
+    const std::string transform = ReadSource(
+        "shader/glsl/particle/particleMeshTransform.glsl");
+    EXPECT_NE(transform.find("ParticleMeshWorldCenter"), std::string::npos);
+    EXPECT_NE(transform.find("ParticleMeshSizeScale"), std::string::npos);
+    EXPECT_NE(transform.find("ParticleMeshLocalOffset"), std::string::npos);
+    EXPECT_NE(transform.find(
+        "frame.localToWorld *\n            vec4(particle.positionAge.xyz, 1.0)"),
+        std::string::npos);
+
+    const std::string mesh = ReadSource(
+        "shader/glsl/particle/particleMesh.vert");
+    const std::string shadow = ReadSource(
+        "shader/glsl/particle/particleShadow.vert");
+    EXPECT_NE(mesh.find("ParticleMeshSizeScale(meshLifeT)"), std::string::npos);
+    EXPECT_NE(shadow.find("ParticleMeshSizeScale(meshLifeT)"), std::string::npos);
+    EXPECT_NE(mesh.find("ParticleMeshWorldPosition"), std::string::npos);
+    EXPECT_NE(shadow.find("ParticleMeshWorldPosition"), std::string::npos);
+
+    const std::string triangle = ReadSource(
+        "shader/glsl/particle/particleSkeletalTriangle.vert");
+    const std::string bone = ReadSource(
+        "shader/glsl/particle/particleSkeletalBone.vert");
+    EXPECT_NE(triangle.find("ParticleMeshSizeScale(skeletalLifeT)"),
+        std::string::npos);
+    EXPECT_NE(triangle.find("frame.localToWorld * vec4("),
+        std::string::npos);
+    EXPECT_NE(bone.find("ParticleMeshSizeScale(skeletalLifeT)"),
+        std::string::npos);
+    EXPECT_NE(bone.find("ParticleMeshWorldCenter(particle)"),
+        std::string::npos);
+
+    const std::string renderer = ReadSource(
+        "source/particles/particleRenderer.cpp");
+    EXPECT_NE(renderer.find("emitter.asset.meshUseSizeCurve ? 1.0f : 0.0f"),
+        std::string::npos);
+    EXPECT_NE(renderer.find("emitter.asset.meshSizeScale"),
+        std::string::npos);
+}

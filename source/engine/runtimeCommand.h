@@ -40,6 +40,11 @@ enum class RuntimeCommandType
     SpawnParticleEmitter,
     DestroyParticleEmitter,
     RestartParticleEmitter,
+    // 粒子级运行时命令：stringValue=场景对象名，particleEmitterName=发射器名。
+    // KillParticle 使用 intValue=稳定槽位索引；SpawnParticleAt 使用
+    // particleSpawnPosition 与 floatValue=寿命（0 取 emitter.lifetimeMax）。
+    KillParticle,
+    SpawnParticleAt,
     // 实例/World 粒子预算与命名用户参数；都是 runtime-only。
     SetParticleSystemBudget,
     SetParticleSystemUserParameter,

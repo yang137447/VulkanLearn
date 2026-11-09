@@ -51,6 +51,35 @@ TEST(ParticleRibbon, WidthCurveClampsAndInterpolates)
         1.0f);
 }
 
+TEST(ParticleRibbon, WidthAndColorCurvesSupportHermiteTangents)
+{
+    std::vector<ParticleRibbonWidthKey> widths{
+        ParticleRibbonWidthKey{0.0f, 0.0f, 0.0f, 3.0f},
+        ParticleRibbonWidthKey{1.0f, 1.0f, 0.0f, 0.0f}};
+    EXPECT_NEAR(
+        EvaluateParticleRibbonWidth(
+            widths, 0.5f, ParticleCurveInterpolation::Hermite),
+        0.875f,
+        1.0e-5f);
+    EXPECT_NEAR(
+        EvaluateParticleRibbonWidth(
+            widths, 0.5f, ParticleCurveInterpolation::Linear),
+        0.5f,
+        1.0e-5f);
+
+    std::vector<ParticleRibbonColorKey> colors{
+        ParticleRibbonColorKey{
+            0.0f, Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f),
+            Eigen::Vector4f::Zero(),
+            Eigen::Vector4f(3.0f, 0.0f, 0.0f, 0.0f)},
+        ParticleRibbonColorKey{
+            1.0f, Eigen::Vector4f(1.0f, 1.0f, 1.0f, 1.0f)}};
+    const Eigen::Vector4f middle = EvaluateParticleRibbonColor(
+        colors, 0.5f, Eigen::Vector4f::Zero(),
+        ParticleCurveInterpolation::Hermite);
+    EXPECT_NEAR(middle.x(), 0.875f, 1.0e-5f);
+}
+
 TEST(ParticleRibbon, LocalVertexMapsToSegment)
 {
     for (uint32_t segment = 0; segment < 3; ++segment)

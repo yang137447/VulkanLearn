@@ -138,12 +138,11 @@ void RefreshParticleRuntime(
         if (!slot.active) continue;
         ++system.telemetry.activeEmitterCount;
         if (slot.enabled) ++system.telemetry.enabledEmitterCount;
-        // beam/light/decal 不消费 GPU 粒子池：beam 直接绘制，light/decal
-        // 由 CPU 运行时生成场景点光或 DBuffer 贴花；三者都不计入
-        // authored/budgetedCapacity，也不消耗其它 emitter 的总预算。
+        // beam 直接绘制，light 由独立 emit compute 输出场景点光；两者
+        // 不计入 authored/budgetedCapacity。decal 复用普通 GPU 模拟池，
+        // 必须与 billboard/ribbon 一样参与总预算。
         if (slot.asset.renderMode == "beam" ||
-            slot.asset.renderMode == "light" ||
-            slot.asset.renderMode == "decal")
+            slot.asset.renderMode == "light")
         {
             system.telemetry.emitters.back().budgetedMaxParticles =
                 slot.asset.renderMode == "beam"
@@ -973,11 +972,10 @@ ParticleSystemBudget World::GetEffectiveParticleBudget(
     for (const auto& slot : target->second.emitterSlots)
     {
         if (!slot.active) continue;
-        // beam 直接绘制、light/decal 由 CPU 运行时生成点光或贴花，都不分配
-        // 模拟池，因此不参与有效容量/预算消耗。
+        // beam 直接绘制、light 走独立 emit compute，不参与普通模拟池容量；
+        // decal 与普通 GPU emitter 一样消耗预算。
         if (slot.asset.renderMode == "beam" ||
-            slot.asset.renderMode == "light" ||
-            slot.asset.renderMode == "decal") continue;
+            slot.asset.renderMode == "light") continue;
         const uint32_t scaled =
             ScaledParticleCapacity(slot.asset.maxParticles,
                 result.emitterBudgetScale);

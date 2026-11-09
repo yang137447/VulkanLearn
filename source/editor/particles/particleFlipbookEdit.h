@@ -23,6 +23,8 @@ inline constexpr size_t kMaxFrames = 256;
 inline constexpr size_t kMaxUvFrames = 64;
 // 逐帧旋转在 UBO 里每 vec4 打包 4 帧，GPU 表固定 16 项（最多 64 帧）。
 inline constexpr size_t kMaxRotationFrames = 64;
+// 播放相位时间线最多 8 个 key，与运行时 GPU 曲线容量一致。
+inline constexpr size_t kMaxTimelineKeys = 8;
 
 namespace detail
 {
@@ -140,6 +142,26 @@ inline bool HasFlipbookRotations(const nlohmann::json& emitter)
         flipbook->contains("frameRotations") &&
         flipbook->at("frameRotations").is_array() &&
         !flipbook->at("frameRotations").empty();
+}
+
+inline bool HasFlipbookPivotKeys(const nlohmann::json& emitter)
+{
+    const nlohmann::json* flipbook =
+        detail::FlipbookObject(emitter);
+    return flipbook != nullptr &&
+        flipbook->contains("framePivotKeys") &&
+        flipbook->at("framePivotKeys").is_array() &&
+        !flipbook->at("framePivotKeys").empty();
+}
+
+inline bool HasFlipbookRotationKeys(const nlohmann::json& emitter)
+{
+    const nlohmann::json* flipbook =
+        detail::FlipbookObject(emitter);
+    return flipbook != nullptr &&
+        flipbook->contains("frameRotationKeys") &&
+        flipbook->at("frameRotationKeys").is_array() &&
+        !flipbook->at("frameRotationKeys").empty();
 }
 
 inline nlohmann::json EnsureFlipbookDurations(
@@ -448,6 +470,184 @@ inline nlohmann::json UniformFlipbookRotations(
     for (size_t index = 0; index < frameCount; ++index)
         result.push_back(value);
     return result;
+}
+
+inline nlohmann::json EnsureFlipbookPivotKeys(
+    const nlohmann::json& emitter)
+{
+    const nlohmann::json* flipbook =
+        detail::FlipbookObject(emitter);
+    nlohmann::json result = nlohmann::json::array();
+    if (flipbook != nullptr &&
+        flipbook->contains("framePivotKeys") &&
+        flipbook->at("framePivotKeys").is_array())
+    {
+        for (const nlohmann::json& entry :
+             flipbook->at("framePivotKeys"))
+        {
+            if (result.size() >= kMaxTimelineKeys) break;
+            if (!entry.is_object()) continue;
+            float time = 0.0f;
+            if (!detail::ReadFinite(entry.value("time", 0.0f), time))
+                continue;
+            float u = 0.5f;
+            float v = 0.5f;
+            if (entry.contains("pivot") &&
+                entry.at("pivot").is_array() &&
+                entry.at("pivot").size() == 2)
+            {
+                detail::ReadFinite(entry.at("pivot").at(0), u);
+                detail::ReadFinite(entry.at("pivot").at(1), v);
+            }
+            nlohmann::json normalized{
+                {"time", std::clamp(time, 0.0f, 1.0f)},
+                {"pivot", nlohmann::json::array({
+                    std::clamp(u, -8.0f, 8.0f),
+                    std::clamp(v, -8.0f, 8.0f)})}};
+            for (const char* tangent :
+                 {"tangentIn", "tangentOut"})
+            {
+                if (!entry.contains(tangent) ||
+                    !entry.at(tangent).is_array() ||
+                    entry.at(tangent).size() != 2)
+                    continue;
+                float tx = 0.0f;
+                float ty = 0.0f;
+                if (!detail::ReadFinite(
+                        entry.at(tangent).at(0), tx) ||
+                    !detail::ReadFinite(
+                        entry.at(tangent).at(1), ty))
+                    continue;
+                normalized[tangent] =
+                    nlohmann::json::array({tx, ty});
+            }
+            result.push_back(std::move(normalized));
+        }
+    }
+    if (result.empty())
+    {
+        result.push_back(nlohmann::json{
+            {"time", 0.0f},
+            {"pivot", nlohmann::json::array({0.5f, 0.5f})}});
+        result.push_back(nlohmann::json{
+            {"time", 1.0f},
+            {"pivot", nlohmann::json::array({0.5f, 0.5f})}});
+    }
+    return result;
+}
+
+inline nlohmann::json EnsureFlipbookRotationKeys(
+    const nlohmann::json& emitter)
+{
+    const nlohmann::json* flipbook =
+        detail::FlipbookObject(emitter);
+    nlohmann::json result = nlohmann::json::array();
+    if (flipbook != nullptr &&
+        flipbook->contains("frameRotationKeys") &&
+        flipbook->at("frameRotationKeys").is_array())
+    {
+        for (const nlohmann::json& entry :
+             flipbook->at("frameRotationKeys"))
+        {
+            if (result.size() >= kMaxTimelineKeys) break;
+            if (!entry.is_object()) continue;
+            float time = 0.0f;
+            if (!detail::ReadFinite(entry.value("time", 0.0f), time))
+                continue;
+            float degrees = 0.0f;
+            detail::ReadFinite(entry.value("degrees", 0.0f), degrees);
+            nlohmann::json normalized{
+                {"time", std::clamp(time, 0.0f, 1.0f)},
+                {"degrees", degrees}};
+            for (const char* tangent :
+                 {"tangentIn", "tangentOut"})
+            {
+                float value = 0.0f;
+                if (entry.contains(tangent) &&
+                    detail::ReadFinite(entry.at(tangent), value))
+                {
+                    normalized[tangent] = value;
+                }
+            }
+            result.push_back(std::move(normalized));
+        }
+    }
+    if (result.empty())
+    {
+        result.push_back(nlohmann::json{
+            {"time", 0.0f}, {"degrees", 0.0f}});
+        result.push_back(nlohmann::json{
+            {"time", 1.0f}, {"degrees", 0.0f}});
+    }
+    return result;
+}
+
+inline bool SetTimelineKeyTime(
+    nlohmann::json& keys,
+    size_t index,
+    float time)
+{
+    if (!keys.is_array() || index >= keys.size() ||
+        !std::isfinite(time))
+    {
+        return false;
+    }
+    if (!keys.at(index).is_object()) return false;
+    const float clamped = std::clamp(time, 0.0f, 1.0f);
+    if (index > 0)
+    {
+        float previous = 0.0f;
+        detail::ReadFinite(
+            keys.at(index - 1).value("time", 0.0f), previous);
+        if (clamped < previous + 0.001f) return false;
+    }
+    if (index + 1 < keys.size())
+    {
+        float next = 1.0f;
+        detail::ReadFinite(
+            keys.at(index + 1).value("time", 1.0f), next);
+        if (clamped > next - 0.001f) return false;
+    }
+    keys.at(index)["time"] = clamped;
+    return true;
+}
+
+inline bool SetFlipbookPivotKeyAxis(
+    nlohmann::json& keys,
+    size_t index,
+    char axis,
+    float value)
+{
+    if (!keys.is_array() || index >= keys.size() ||
+        !keys.at(index).is_object() || !std::isfinite(value))
+    {
+        return false;
+    }
+    const char lower = axis >= 'A' && axis <= 'Z'
+        ? static_cast<char>(axis - 'A' + 'a') : axis;
+    if (lower != 'u' && lower != 'v') return false;
+    nlohmann::json& pivot = keys.at(index)["pivot"];
+    if (!pivot.is_array() || pivot.size() != 2)
+    {
+        pivot = nlohmann::json::array({0.5f, 0.5f});
+    }
+    pivot[lower == 'u' ? 0 : 1] =
+        std::clamp(value, -8.0f, 8.0f);
+    return true;
+}
+
+inline bool SetFlipbookRotationKeyDegrees(
+    nlohmann::json& keys,
+    size_t index,
+    float degrees)
+{
+    if (!keys.is_array() || index >= keys.size() ||
+        !keys.at(index).is_object() || !std::isfinite(degrees))
+    {
+        return false;
+    }
+    keys.at(index)["degrees"] = degrees;
+    return true;
 }
 
 } // namespace VL::ParticleFlipbookEdit

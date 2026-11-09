@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -10,6 +11,114 @@
 namespace VL
 {
 
+// Hermite 会超出端点值的包络（例如 size 曲线 0 -> 1 带正切线时中段可
+// 能 >1）。剔除半径必须按采样最大值而不是只看 key 值，否则大尺寸粒子
+// 会被提前剔除。linear 路径保持原“逐 key 取最大”的字节等价行为。
+struct ParticleScalarCurveSample
+{
+    float time = 0.0f;
+    float value = 0.0f;
+    float tangentIn = 0.0f;
+    float tangentOut = 0.0f;
+};
+
+inline float MaxParticleScalarCurveValue(
+    const std::vector<ParticleScalarCurveSample>& keys,
+    ParticleCurveInterpolation interpolation,
+    float initial)
+{
+    float maximum = initial;
+    for (const ParticleScalarCurveSample& key : keys)
+    {
+        maximum = std::max(maximum, key.value);
+    }
+    if (keys.size() < 2 ||
+        interpolation == ParticleCurveInterpolation::Linear)
+    {
+        return maximum;
+    }
+    const float tangentScale =
+        ParticleCurveTangentScale(interpolation);
+    // 每段 16 个等距样本；Hermite 是三次多项式，这个密度对包围球
+    // 的保守性足够，且只发生在资产/发射器重建路径，不在逐帧热点。
+    constexpr int samplesPerSegment = 16;
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const ParticleScalarCurveSample& left = keys[index];
+        const ParticleScalarCurveSample& right = keys[index + 1];
+        const float span = right.time - left.time;
+        if (!(span > 0.0f))
+        {
+            continue;
+        }
+        for (int sample = 0; sample <= samplesPerSegment; ++sample)
+        {
+            const float u = static_cast<float>(sample) /
+                static_cast<float>(samplesPerSegment);
+            maximum = std::max(
+                maximum,
+                ParticleHermiteScalar(
+                    left.value,
+                    right.value,
+                    left.tangentOut * tangentScale,
+                    right.tangentIn * tangentScale,
+                    u,
+                    span));
+        }
+    }
+    return maximum;
+}
+
+inline float EvaluateParticleScalarCurveValue(
+    const std::vector<ParticleScalarCurveSample>& keys,
+    ParticleCurveInterpolation interpolation,
+    float t)
+{
+    if (keys.empty())
+    {
+        return 0.0f;
+    }
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+    if (clamped <= keys.front().time)
+    {
+        return keys.front().value;
+    }
+    if (clamped >= keys.back().time)
+    {
+        return keys.back().value;
+    }
+    const float tangentScale =
+        ParticleCurveTangentScale(interpolation);
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const ParticleScalarCurveSample& left = keys[index];
+        const ParticleScalarCurveSample& right = keys[index + 1];
+        if (clamped < left.time || clamped > right.time)
+        {
+            continue;
+        }
+        const float span = right.time - left.time;
+        if (!(span > 1.0e-6f))
+        {
+            return right.value;
+        }
+        const float u = (clamped - left.time) / span;
+        if (interpolation == ParticleCurveInterpolation::Linear)
+        {
+            return left.value +
+                (right.value - left.value) * u;
+        }
+        return ParticleHermiteScalar(
+            left.value,
+            right.value,
+            left.tangentOut * tangentScale,
+            right.tangentIn * tangentScale,
+            u,
+            span);
+    }
+    return keys.back().value;
+}
+
 // 发射器包围球半径的纯 CPU 估算。剔除、距离淡出、minScreenSize 与跨发射器
 // 透明排序都消费同一个值，因此必须把“粒子能走多远”和“billboard 有多大”
 // 一起算进去，否则大尺寸低速烟雾会提前消失。
@@ -17,6 +126,13 @@ inline float ComputeParticleEmitterLocalRadius(
     const ParticleEmitterAsset& asset,
     float meshLocalBoundsRadius = 0.0f)
 {
+    // LOD renderScale 可能放大视觉尺寸；包围球按最大档位保守外扩。
+    float maxLodRenderScale = 1.0f;
+    for (const ParticleLodTier& tier : asset.lodTiers)
+    {
+        maxLodRenderScale = std::max(
+            maxLodRenderScale, tier.renderScale);
+    }
     // beam 不消费粒子池；包围球只需覆盖端点、横向半宽、噪声包络和
     // 端点抖动。继续叠加寿命/速度/重力会得到与画面无关的巨大球体。
     if (asset.renderMode == "beam")
@@ -37,6 +153,18 @@ inline float ComputeParticleEmitterLocalRadius(
                         std::sqrt(3.0f) *
                         std::max(asset.beam.endpointJitter, 0.0f)
                 : 0.0f;
+        std::vector<ParticleScalarCurveSample> beamWidthKeys;
+        beamWidthKeys.reserve(asset.beam.widthKeys.size());
+        for (const ParticleBeamWidthKey& key : asset.beam.widthKeys)
+        {
+            beamWidthKeys.push_back({
+                key.time,
+                key.width,
+                key.tangentIn,
+                key.tangentOut});
+        }
+        const float beamWidthScale = MaxParticleScalarCurveValue(
+            beamWidthKeys, asset.curveInterpolation, 1.0f);
         return 0.5f *
                 mainLength +
             branchReach +
@@ -44,7 +172,9 @@ inline float ComputeParticleEmitterLocalRadius(
             // 端点抖动是三个独立轴，最坏 sqrt(3) 倍。
             std::sqrt(2.0f) *
                 std::max(asset.beam.noiseAmplitude, 0.0f) +
-            std::max(asset.beam.width, 0.0f) +
+            std::max(asset.beam.width, 0.0f) *
+                std::max(1.0f, beamWidthScale) *
+                maxLodRenderScale +
             std::sqrt(3.0f) *
                 std::max(asset.beam.endpointJitter, 0.0f);
     }
@@ -64,10 +194,37 @@ inline float ComputeParticleEmitterLocalRadius(
 
     float maxBillboardHalfSize =
         std::max(asset.sizeStart, asset.sizeEnd);
+    std::vector<ParticleScalarCurveSample> sizeKeys;
+    sizeKeys.reserve(asset.sizeKeys.size());
     for (const ParticleSizeKey& key : asset.sizeKeys)
     {
-        maxBillboardHalfSize =
-            std::max(maxBillboardHalfSize, key.size);
+        sizeKeys.push_back({
+            key.time,
+            key.size,
+            key.tangentIn,
+            key.tangentOut});
+    }
+    maxBillboardHalfSize = MaxParticleScalarCurveValue(
+        sizeKeys, asset.curveInterpolation, maxBillboardHalfSize);
+    const bool meshVisual =
+        asset.renderMode == "mesh" ||
+        asset.renderMode == "skeletalMeshTris" ||
+        asset.renderMode == "skeletalMeshBones";
+    float meshSizeFactor = 1.0f;
+    if (meshVisual && asset.meshUseSizeCurve)
+    {
+        const float baseSize = sizeKeys.empty()
+            ? std::max(asset.sizeStart, 1.0e-4f)
+            : EvaluateParticleScalarCurveValue(
+                sizeKeys, asset.curveInterpolation, 0.0f);
+        const float maxSize = sizeKeys.empty()
+            ? std::max(asset.sizeStart, asset.sizeEnd)
+            : MaxParticleScalarCurveValue(
+                sizeKeys, asset.curveInterpolation, 0.0f);
+        meshSizeFactor = std::max(
+            1.0f,
+            maxSize / std::max(baseSize, 1.0e-4f) *
+                asset.meshSizeScale);
     }
 
     const float lifetime = std::max(asset.lifetimeMax, 0.0f);
@@ -77,18 +234,28 @@ inline float ComputeParticleEmitterLocalRadius(
     float ribbonHalfWidth = 0.0f;
     if (asset.renderMode == "ribbon")
     {
-        float maxWidthScale = 1.0f;
+        std::vector<ParticleScalarCurveSample> widthKeys;
+        widthKeys.reserve(asset.ribbonWidthKeys.size());
         for (const ParticleRibbonWidthKey& key : asset.ribbonWidthKeys)
         {
-            maxWidthScale = std::max(maxWidthScale, key.width);
+            widthKeys.push_back({
+                key.time,
+                key.width,
+                key.tangentIn,
+                key.tangentOut});
         }
+        const float maxWidthScale = MaxParticleScalarCurveValue(
+            widthKeys, asset.curveInterpolation, 1.0f);
         ribbonHalfWidth =
-            std::max(asset.ribbonWidth, 0.0f) * maxWidthScale;
+            std::max(asset.ribbonWidth, 0.0f) *
+            maxWidthScale * maxLodRenderScale *
+            (1.0f + std::abs(asset.ribbonPivot));
     }
     const float visualRadius =
-        asset.renderMode == "mesh" && meshLocalBoundsRadius > 0.0f
+        (meshVisual && meshLocalBoundsRadius > 0.0f
         ? std::max(meshLocalBoundsRadius, 0.0f)
-        : maxBillboardHalfSize;
+        : maxBillboardHalfSize) * maxLodRenderScale *
+            (meshVisual ? meshSizeFactor : 1.0f);
     return asset.shapeRadius +
         lifetime *
             (maxSpeed.norm() +

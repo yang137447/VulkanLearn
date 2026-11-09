@@ -1081,6 +1081,56 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     pass.name));
             }
         }
+        if (pass.type == RenderGraphPassType::ParticleSoftDepth)
+        {
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 || inputs.empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth requires exactly one output, at least one input, and no MSAA/material.",
+                    pass.name));
+            }
+            const CompiledRenderGraphResource* target = nullptr;
+            for (const auto& resource : compiledGraph.resources)
+            {
+                if (resource.name == outputs[0].resource) target = &resource;
+            }
+            if (!target || target->type != "texture2D" ||
+                target->format != "R32_SFLOAT" ||
+                !target->initializeShaderRead ||
+                std::find(target->usage.begin(), target->usage.end(), "storage") == target->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "sampled") == target->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth output must be an initialized storage+sampled R32_SFLOAT texture2D.",
+                    pass.name));
+            }
+            bool hasSceneDepthInput = false;
+            for (const CompiledRenderGraphPassInputDescriptor& input : inputs)
+            {
+                if (input.source != "renderGraph")
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidParticleSoftDepth",
+                        "ParticleSoftDepth inputs must be graph resources with explicit bindings.",
+                        pass.name));
+                }
+                hasSceneDepthInput = hasSceneDepthInput ||
+                    input.resource == "sceneDepth";
+            }
+            if (!hasSceneDepthInput)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth requires sceneDepth as an input.",
+                    pass.name));
+            }
+        }
         if (pass.type == RenderGraphPassType::FogComposite)
         {
             // 合成 pass 只允许写 sceneColor；fog volume 必须作为采样输入，
@@ -1206,6 +1256,7 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             // 不参与 framebuffer attachment 布局；统一从 shaderRead 转到 GENERAL。
             const bool isStorageWritePass =
                 pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::ParticleSoftDepth ||
                 pass.type == RenderGraphPassType::VolumetricFog;
             if (isStorageWritePass)
                 AddBarrier(pass, output.resource, CompiledRenderGraphBarrierType::ShaderReadToStorage);
@@ -1266,6 +1317,7 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         {
             const bool isStorageWritePass =
                 pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::ParticleSoftDepth ||
                 pass.type == RenderGraphPassType::VolumetricFog;
             previousResourceUses[output.resource] = isStorageWritePass
                 ? ResourcePreviousUse::Storage : ResourcePreviousUse::Attachment;

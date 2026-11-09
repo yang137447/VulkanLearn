@@ -12,6 +12,7 @@
 #include <Eigen/Dense>
 #include <nlohmann/json.hpp>
 
+#include "particles/particleCurve.h"
 #include "particles/particleLimits.h"
 #include "world/decalResponse.h"
 
@@ -71,12 +72,17 @@ struct ParticleColorKey
 {
     float time = 0.0f;
     Eigen::Vector4f color = Eigen::Vector4f::Ones();
+    // Hermite 斜率或 Bezier 控制柄偏移；语义见 particleCurve.h。
+    Eigen::Vector4f tangentIn = Eigen::Vector4f::Zero();
+    Eigen::Vector4f tangentOut = Eigen::Vector4f::Zero();
 };
 
 struct ParticleSizeKey
 {
     float time = 0.0f;
     float size = 1.0f;
+    float tangentIn = 0.0f;
+    float tangentOut = 0.0f;
 };
 
 // ribbon 宽度曲线按“当前端(0) -> 最旧历史端(1)”的弧长参数采样；
@@ -85,6 +91,8 @@ struct ParticleRibbonWidthKey
 {
     float time = 0.0f;
     float width = 1.0f;
+    float tangentIn = 0.0f;
+    float tangentOut = 0.0f;
 };
 
 // 粒子归一化年龄 lifeT 对应的时间倍率。scale=0 冻结本帧，1 正常，
@@ -101,6 +109,8 @@ struct ParticleBeamColorKey
 {
     float time = 0.0f;
     Eigen::Vector4f color = Eigen::Vector4f::Ones();
+    Eigen::Vector4f tangentIn = Eigen::Vector4f::Zero();
+    Eigen::Vector4f tangentOut = Eigen::Vector4f::Zero();
 };
 
 struct ParticleBeamWidthKey
@@ -108,6 +118,8 @@ struct ParticleBeamWidthKey
     float time = 0.0f;
     // [0,1] 归一化乘数；基础 beam.width 仍是最大半宽，包围球无需放大。
     float width = 1.0f;
+    float tangentIn = 0.0f;
+    float tangentOut = 0.0f;
 };
 
 // 逐主弧调色与形态覆盖。分支继承所属主弧；颜色是基础颜色曲线的乘性
@@ -132,11 +144,15 @@ struct ParticleBeamHitScanAsset
     float maxDistance = 2000.0f;
 };
 
-// 单级 LOD：相机距离越过 distance 后，连续发射预算乘 spawnRateScale。
+// 单级 LOD：相机距离越过 distance 后，连续发射预算乘 spawnRateScale，
+// 渲染尺寸乘 renderScale；fadeRange>0 时在边界前用 smoothstep 过渡，
+// 0 保持旧的硬切行为。
 struct ParticleLodTier
 {
     float distance = 0.0f;
     float spawnRateScale = 1.0f;
+    float renderScale = 1.0f;
+    float fadeRange = 0.0f;
 };
 
 // 单个发射器的作者数据。多发射器 PS 里每个 entries 共享同一套字段；
@@ -176,6 +192,15 @@ struct ParticleBeamAsset
 // particleLightEmit compute 按粒子年龄输出瞬时点光，不写 sceneColor。
 // intensity 单位是 cd，radius 单位是 cm，颜色来自 colorStart/colorEnd 的
 // RGB 与 alpha。
+// 粒子灯逐寿命曲线 key：time 归一化到 [0,1]，brightness 是功率乘数，
+// color 是逐寿命颜色乘数（默认白，乘到 colorKeys 结果上）。
+struct ParticleLightBrightnessKey
+{
+    float time = 0.0f;
+    float brightness = 1.0f;
+    Eigen::Vector3f color = Eigen::Vector3f::Ones();
+};
+
 struct ParticleLightAsset
 {
     float intensity = 300.0f;
@@ -186,6 +211,13 @@ struct ParticleLightAsset
     // 粒子灯是否复用 localShadowMap 的逐灯点光切片。
     bool castShadows = false;
     float shadowBias = 2.0f;
+    // 逐像素光源纹理（IES 风格角度剖面）：64 个线性强度样本，覆盖 0..pi
+    // 极角；空表表示各向同性。与 iesProfile 等价，保留两个名字是为了兼容
+    // 已经写 iesProfile 的资产。
+    std::vector<float> iesTexture;
+    // 逐寿命亮度曲线（归一化寿命 -> 功率乘数），最多 8 个 key，可同时带
+    // 可选的逐寿命颜色乘数；空表时亮度恒为 1、颜色取 colorKeys。
+    std::vector<ParticleLightBrightnessKey> brightnessKeys;
 };
 
 // Skeletal mesh particle 的固定/循环姿态选择。clip 为空时使用 bind/rest pose。
@@ -239,10 +271,30 @@ struct ParticleFlipbookUvKey
     Eigen::Vector2f value = Eigen::Vector2f::Zero();
 };
 
+// flipbook 播放相位驱动的 pivot/rotation 时间线；time 是归一化播放相位
+// [0,1]，非空时叠加到逐帧 pivot/rotation 表上。
+struct ParticleFlipbookPivotKey
+{
+    float time = 0.0f;
+    Eigen::Vector2f pivot = Eigen::Vector2f(0.5f, 0.5f);
+    Eigen::Vector2f tangentIn = Eigen::Vector2f::Zero();
+    Eigen::Vector2f tangentOut = Eigen::Vector2f::Zero();
+};
+
+struct ParticleFlipbookRotationKey
+{
+    float time = 0.0f;
+    float degrees = 0.0f;
+    float tangentIn = 0.0f;
+    float tangentOut = 0.0f;
+};
+
 struct ParticleRibbonColorKey
 {
     float time = 0.0f;
     Eigen::Vector4f color = Eigen::Vector4f::Ones();
+    Eigen::Vector4f tangentIn = Eigen::Vector4f::Zero();
+    Eigen::Vector4f tangentOut = Eigen::Vector4f::Zero();
 };
 
 // renderMode=="decal" 的 CPU 粒子贴花参数。size 与场景 decal 同义：
@@ -292,6 +344,10 @@ struct ParticleEmitterAsset
     // “省略对象”和“对象存在但数值等于默认值”。
     ParticleLightAsset light;
     bool hasLight = false;
+    // colorKeys/sizeKeys 的插值模式；linear 保持旧资产的分段线性行为。
+    // ribbon/beam 曲线、lifetimeScaleKeys 与 flipbook 时间线仍为线性。
+    ParticleCurveInterpolation curveInterpolation =
+        ParticleCurveInterpolation::Linear;
     // 只有 renderMode=="decal" 需要作者提供 decal 对象；hasDecal 区分
     // “省略对象”和“对象存在但数值等于默认值”。
     ParticleDecalAsset decal;
@@ -335,6 +391,9 @@ struct ParticleEmitterAsset
     float ribbonFade = 1.0f;
     // ribbon 沿弧长的 UV 平铺次数；1 表示整张纹理覆盖当前端到尾部。
     float ribbonUVTiling = 1.0f;
+    // 条带横向偏移（[-1,1] 个宽度）与绕切线的扭转角（度）。
+    float ribbonPivot = 0.0f;
+    float ribbonTwist = 0.0f;
     // 可选的逐弧长宽度曲线；空表保持恒定 ribbonWidth。
     std::vector<ParticleRibbonWidthKey> ribbonWidthKeys;
     // 可选的逐弧长颜色曲线；空表保持粒子寿命颜色。
@@ -344,6 +403,10 @@ struct ParticleEmitterAsset
     std::string meshPath;
     Eigen::Vector3f meshScale = Eigen::Vector3f::Ones();
     std::string meshAlignment = "world";
+    // true 时把 size 曲线在 lifeT=0 处归一化后乘到 mesh/骨骼局部缩放；
+    // sizeScale 是该乘数的作者上限/倍率，默认 1 保持旧资产不变。
+    bool meshUseSizeCurve = false;
+    float meshSizeScale = 1.0f;
     // 可选材质实例（MI_*.json）。只消费数值子集 baseColor/emissive/
     // roughness/metallic；空字符串表示使用内置 unlit/默认 PBR 回退。
     std::string materialInstancePath;
@@ -476,6 +539,8 @@ struct ParticleEmitterAsset
     float softParticleDistance = 25.0f;
     // 软粒子深度采样的十字半径（像素）；0 退回单采样。
     float softParticleTapRadius = 4.0f;
+    // 局部深度差上限（cm）；0 表示只使用 softParticleDistance。
+    float softParticleThickness = 0.0f;
     // alpha billboard 必须开启：按相机视图深度做 back-to-front GPU 排序。
     // additive 发射器应保持 false，排序不会改变加法混合结果，只会增加 dispatch。
     bool sortParticles = false;
@@ -542,6 +607,9 @@ struct ParticleEmitterAsset
     std::vector<ParticleFlipbookRateKey> flipbookPlayRateKeys;
     std::vector<ParticleFlipbookUvKey> flipbookUvOffsetKeys;
     std::vector<ParticleFlipbookUvKey> flipbookUvScaleKeys;
+    // 播放相位时间线；最多 8 key，时间严格递增，空表保持旧行为。
+    std::vector<ParticleFlipbookPivotKey> flipbookFramePivotKeys;
+    std::vector<ParticleFlipbookRotationKey> flipbookFrameRotationKeys;
     // 非空时必须与帧区间长度 endFrame-startFrame+1 完全一致。
     // 每项是 >0 的相对时长权重：fps>0 时一轮固定为 frameCount/fps 秒，
     // 每帧实际秒数 = weight / totalWeight * frameCount / fps；

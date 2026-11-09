@@ -133,3 +133,59 @@ TEST(ParticleLod, NonFiniteDistanceWithTiersDoesNotScale)
             emitter, std::numeric_limits<float>::infinity()),
         100.0f);
 }
+
+TEST(ParticleLod, RenderScaleDefaultsToOneAndDoesNotChangePool)
+{
+    ParticleEmitterAsset emitter = TieredEmitter();
+    const ParticleLodState state =
+        EffectiveParticleLod(emitter, 0.0f);
+    EXPECT_FLOAT_EQ(state.renderScale, 1.0f);
+    EXPECT_FLOAT_EQ(state.spawnRateScale, 1.0f);
+    EXPECT_FLOAT_EQ(state.blend, 1.0f);
+
+    emitter.lodTiers[0].renderScale = 0.5f;
+    const ParticleLodState near = EffectiveParticleLod(
+        emitter, 1500.0f);
+    EXPECT_FLOAT_EQ(near.renderScale, 0.5f);
+    EXPECT_EQ(emitter.maxParticles, 2048u);
+}
+
+TEST(ParticleLod, FadeRangeZeroKeepsHardCut)
+{
+    ParticleEmitterAsset emitter;
+    emitter.lodTiers = {
+        ParticleLodTier{2000.0f, 0.4f, 0.5f, 0.0f}};
+    const ParticleLodState before =
+        EffectiveParticleLod(emitter, 1999.0f);
+    EXPECT_FLOAT_EQ(before.spawnRateScale, 1.0f);
+    EXPECT_FLOAT_EQ(before.renderScale, 1.0f);
+    const ParticleLodState at =
+        EffectiveParticleLod(emitter, 2000.0f);
+    EXPECT_FLOAT_EQ(at.spawnRateScale, 0.4f);
+    EXPECT_FLOAT_EQ(at.renderScale, 0.5f);
+}
+
+TEST(ParticleLod, FadeRangeSmoothstepsSpawnAndRenderScale)
+{
+    ParticleEmitterAsset emitter;
+    emitter.lodTiers = {
+        ParticleLodTier{2000.0f, 0.5f, 0.5f, 1000.0f}};
+    const ParticleLodState start =
+        EffectiveParticleLod(emitter, 1000.0f);
+    EXPECT_FLOAT_EQ(start.spawnRateScale, 1.0f);
+    EXPECT_FLOAT_EQ(start.renderScale, 1.0f);
+    EXPECT_FLOAT_EQ(start.blend, 0.0f);
+
+    // t = 0.5 -> smoothstep = 0.5；spawn/render 从 1 插到 0.5。
+    const ParticleLodState middle =
+        EffectiveParticleLod(emitter, 1500.0f);
+    EXPECT_NEAR(middle.spawnRateScale, 0.75f, 1.0e-5f);
+    EXPECT_NEAR(middle.renderScale, 0.75f, 1.0e-5f);
+    EXPECT_NEAR(middle.blend, 0.5f, 1.0e-5f);
+
+    const ParticleLodState end =
+        EffectiveParticleLod(emitter, 2000.0f);
+    EXPECT_FLOAT_EQ(end.spawnRateScale, 0.5f);
+    EXPECT_FLOAT_EQ(end.renderScale, 0.5f);
+    EXPECT_FLOAT_EQ(end.blend, 1.0f);
+}

@@ -52,13 +52,19 @@ void main()
     vec3 sourcePosition = vertex == 0
         ? particle.source0.xyz
         : (vertex == 1 ? particle.source1.xyz : particle.source2.xyz);
-    // 三角面源在 spawn 时与骨骼网格 model space 对齐（面片重心 + 模型空间偏移），
-    // 粒子当前位置已在模拟空间；meshScale 是作者对模型局部的逐轴缩放。
-    vec3 worldPosition = particle.positionAge.xyz +
-        mat3(frame.localToWorld) * (sourcePosition * frame.meshScale.xyz);
+    // 三角面源在 spawn 时与骨骼网格 model space 对齐。localSpace 时
+    // 粒子中心仍是局部坐标，必须和模型空间偏移一起整体变换。
+    float skeletalLifeT = ParticleMeshLifeT(particle);
+    vec3 localOffset = sourcePosition * frame.meshScale.xyz *
+        frame.lodParams.x * ParticleMeshSizeScale(skeletalLifeT);
+    vec3 worldPosition = frame.shape.z > 0.5
+        ? (frame.localToWorld * vec4(
+            particle.positionAge.xyz + localOffset, 1.0)).xyz
+        : particle.positionAge.xyz +
+            mat3(frame.localToWorld) * localOffset;
     gl_Position = frame.viewProjection * vec4(worldPosition, 1.0);
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
-    vColor = EvaluateColorCurve(ParticleMeshLifeT(particle));
+    vColor = EvaluateColorCurve(skeletalLifeT);
     vColor.a *= frame.render.w;
     vSoftness = frame.render.z;
     vec3 e1 = particle.source1.xyz - particle.source0.xyz;
@@ -76,6 +82,6 @@ void main()
     vUv = vec2(
         vertex == 0 ? 0.0 : (vertex == 1 ? 1.0 : 0.5),
         vertex == 2 ? 1.0 : 0.0);
-    vLifeT = ParticleMeshLifeT(particle);
+    vLifeT = skeletalLifeT;
     vSeed = fract(float(particleIndex) * 0.61803398875);
 }

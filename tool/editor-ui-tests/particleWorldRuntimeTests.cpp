@@ -632,7 +632,7 @@ TEST(ParticleWorldRuntime, LightDoesNotConsumeParticleBudget)
     EXPECT_EQ(particle.budget.effectiveCapacity, 128u);
 }
 
-TEST(ParticleWorldRuntime, DecalDoesNotConsumeParticleBudget)
+TEST(ParticleWorldRuntime, DecalConsumesParticleBudget)
 {
     VL::World world = MakeParticleWorld();
     VL::WorldParticleSystem system =
@@ -657,12 +657,12 @@ TEST(ParticleWorldRuntime, DecalDoesNotConsumeParticleBudget)
         result.Value().particleSystems.front();
     ASSERT_EQ(particle.telemetry.emitters.size(), 2u);
     EXPECT_EQ(
-        particle.telemetry.emitters[0].budgetedMaxParticles, 0u);
+        particle.telemetry.emitters[0].budgetedMaxParticles, 3u);
     EXPECT_EQ(
         particle.telemetry.emitters[1].budgetedMaxParticles, 128u);
-    // decal 只由 CPU runtime 写 DecalSnapshot，不分配粒子池。
-    EXPECT_EQ(particle.telemetry.authoredCapacity, 128u);
-    EXPECT_EQ(particle.budget.effectiveCapacity, 128u);
+    // decal 复用普通 GPU 模拟池并参与总预算。
+    EXPECT_EQ(particle.telemetry.authoredCapacity, 131u);
+    EXPECT_EQ(particle.budget.effectiveCapacity, 131u);
 }
 
 TEST(ParticleWorldRuntime, RendererTelemetryIsExplicitlyUnavailableUntilFed)

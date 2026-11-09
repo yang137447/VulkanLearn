@@ -17,6 +17,7 @@ layout(location = 0) out vec4 outColor;
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
 layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 
 layout(std140, set = 1, binding = 0) uniform ParticleMaterialUniform
 {
@@ -37,11 +38,13 @@ layout(std430, set = 0, binding = 5) buffer ParticleDebug
 
 void main()
 {
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -49,11 +52,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) /
-                max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     vec3 baseColor = vColor.rgb;

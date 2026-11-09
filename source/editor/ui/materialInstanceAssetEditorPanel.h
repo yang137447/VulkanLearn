@@ -9,6 +9,7 @@
 
 #include <RmlUi/Core/EventListener.h>
 
+#include "particles/particleCurve.h"
 #include "editor/ui/materialInstanceEditorView.h"
 #include "editor/ui/editorDockingController.h"
 #include "editor/ui/editorContentBrowserController.h"
@@ -212,7 +213,11 @@ private:
     void SubmitParticleAssetCommand(EditorCommandType type, const std::string& path);
     std::string ParticleFieldsMarkup() const;
     std::string ParticleModuleStackMarkup() const;
-    std::string ParticleCurveMarkup(const nlohmann::json& keys, const std::string& curve) const;
+    std::string ParticleCurveMarkup(
+        const nlohmann::json& keys,
+        const std::string& curve,
+        ParticleCurveInterpolation interpolation =
+            ParticleCurveInterpolation::Linear) const;
     nlohmann::json ParticleCurveKeys(const nlohmann::json& emitter,
         const std::string& curve, const std::string& fieldPath) const;
     const nlohmann::json* ActiveParticleEmitter(std::string& fieldPrefix) const;

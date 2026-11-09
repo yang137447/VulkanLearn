@@ -28,6 +28,8 @@ layout(location = 20) in float vDensity;
 layout(location = 21) in float vSoftTapRadius;
 layout(location = 22) in float vEooPacked;
 layout(location = 23) in float vEooEmissiveStrength;
+layout(location = 24) in flat float vKind;
+layout(location = 25) in flat float vSoftThickness;
 
 layout(location = 0) out vec4 outColor;
 
@@ -38,6 +40,7 @@ layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
 // 全局 alpha 池不消费 CSM，但它与逐发射器 billboard 共用 material/descriptor
 // 布局；局部光阴影仍按 set 3 binding 2 声明并参与点光/聚光采样。
 layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 
 layout(set = 0, binding = 3) uniform sampler2D particleTextures[8];
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
@@ -93,11 +96,13 @@ float Fbm(vec2 p)
 
 void main()
 {
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         vSoftTapRadius,
-        frame.invProjection);
+        frame.invProjection,
+        vSoftThickness);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -106,11 +111,73 @@ void main()
     float softFade = 1.0;
     if (vSoftParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) /
-                max(vSoftParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            vSoftParams.x,
+            vSoftThickness);
+    }
+
+    if (vKind > 0.5)
+    {
+        // Ribbon：矩形横截面只软化 v 两端，不做 billboard 圆盘裁剪。
+        float edgeWidth = mix(
+            0.02, 0.5, clamp(vSoftness, 0.0, 1.0));
+        float edge = smoothstep(0.0, edgeWidth, vUV.y) *
+            smoothstep(0.0, edgeWidth, 1.0 - vUV.y);
+        float alpha = vColor.a * edge;
+        vec3 albedo = vColor.rgb;
+        vec3 emission = vec3(0.0);
+        if (vHasTexture > 0.5)
+        {
+            vec4 sprite = SampleParticleTexture(
+                clamp(vTextureIndex, 0, 7), vAtlasUV);
+            if (vEooPacked > 0.5)
+            {
+                albedo = vColor.rgb * mix(1.0, sprite.g, 0.35);
+                emission = vColor.rgb * sprite.r *
+                    vEooEmissiveStrength;
+                if (vLightParams.x < 0.5)
+                {
+                    albedo = vec3(0.0);
+                }
+            }
+            else
+            {
+                albedo = vColor.rgb * sprite.rgb;
+            }
+            alpha *= sprite.a;
+        }
+        else
+        {
+            vec2 noiseUv = vec2(vUV.x * 5.0, vUV.y * 2.0) +
+                vec2(vSeed, -vTime * 0.35);
+            float erosion = smoothstep(
+                0.18,
+                0.82,
+                Fbm(noiseUv + vec2(vTime * 0.2, 0.0)));
+            alpha *= mix(1.0, erosion, 0.6);
+        }
+        if (vLightParams.x > 0.5)
+        {
+            albedo = CalculateParticleBillboardSceneLighting(
+                localShadowMap,
+                albedo,
+                vWorldPosition,
+                vLightingNormal,
+                frame.cameraPosition.xyz,
+                clamp(vLightParams.y, 0.0, 1.0),
+                clamp(vLightParams.z, 0.0, 1.0),
+                clamp(vLightParams2.x, 0.0, 1.0),
+                clamp(vLightParams2.y, 0.02, 1.0),
+                clamp(vLightParams2.z, 0.0, 2.0),
+                1.0,
+                vSize,
+                vDensity);
+        }
+        outColor = vec4(albedo + emission, alpha * softFade);
+        if (outColor.a > 0.0)
+            atomicAdd(particleDebug.fragments, 1u);
+        return;
     }
 
     float radius = length(vUV * 2.0 - 1.0);

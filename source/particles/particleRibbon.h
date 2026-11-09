@@ -63,7 +63,9 @@ inline float ParticleRibbonTailParameter(
 // 段内按 time 线性插值。
 inline float EvaluateParticleRibbonWidth(
     const std::vector<ParticleRibbonWidthKey>& keys,
-    float t)
+    float t,
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear)
 {
     if (keys.empty())
     {
@@ -78,6 +80,8 @@ inline float EvaluateParticleRibbonWidth(
     {
         return keys.back().width;
     }
+    const float tangentScale =
+        ParticleCurveTangentScale(interpolation);
     for (size_t index = 0; index + 1 < keys.size(); ++index)
     {
         const float t0 = keys[index].time;
@@ -88,11 +92,73 @@ inline float EvaluateParticleRibbonWidth(
             const float weight = span > 1.0e-6f
                 ? (clamped - t0) / span
                 : 0.0f;
+            if (interpolation != ParticleCurveInterpolation::Linear)
+            {
+                return ParticleHermiteScalar(
+                    keys[index].width,
+                    keys[index + 1].width,
+                    keys[index].tangentOut * tangentScale,
+                    keys[index + 1].tangentIn * tangentScale,
+                    weight,
+                    span);
+            }
             return keys[index].width +
                 (keys[index + 1].width - keys[index].width) * weight;
         }
     }
     return keys.back().width;
+}
+
+inline Eigen::Vector4f EvaluateParticleRibbonColor(
+    const std::vector<ParticleRibbonColorKey>& keys,
+    float t,
+    const Eigen::Vector4f& fallback,
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear)
+{
+    if (keys.empty())
+    {
+        return fallback;
+    }
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+    if (clamped <= keys.front().time)
+    {
+        return keys.front().color;
+    }
+    if (clamped >= keys.back().time)
+    {
+        return keys.back().color;
+    }
+    const float tangentScale =
+        ParticleCurveTangentScale(interpolation);
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const float t0 = keys[index].time;
+        const float t1 = keys[index + 1].time;
+        if (clamped < t0 || clamped > t1)
+        {
+            continue;
+        }
+        const float span = t1 - t0;
+        if (!(span > 1.0e-6f))
+        {
+            return keys[index + 1].color;
+        }
+        const float weight = (clamped - t0) / span;
+        if (interpolation != ParticleCurveInterpolation::Linear)
+        {
+            return ParticleHermiteVector4(
+                keys[index].color,
+                keys[index + 1].color,
+                keys[index].tangentOut * tangentScale,
+                keys[index + 1].tangentIn * tangentScale,
+                weight,
+                span);
+        }
+        return keys[index].color +
+            (keys[index + 1].color - keys[index].color) * weight;
+    }
+    return keys.back().color;
 }
 
 } // namespace VL

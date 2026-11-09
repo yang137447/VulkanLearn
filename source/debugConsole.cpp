@@ -693,6 +693,106 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "particlekill")
+    {
+        std::string systemName;
+        std::string emitterName;
+        std::string indexToken;
+        std::string extra;
+        if (!(commandStream >> systemName >> emitterName >> indexToken) ||
+            (commandStream >> extra))
+        {
+            std::cout
+                << "Usage: particlekill <system> <emitter> <particleIndex>"
+                << std::endl;
+            return;
+        }
+        int particleIndex = -1;
+        if (!ParseConsoleInt(indexToken, particleIndex))
+        {
+            std::cout
+                << "Usage: particlekill <system> <emitter> <particleIndex>"
+                << std::endl;
+            return;
+        }
+        std::string validationError;
+        if (!VL::ValidateParticleKillRequest(
+                systemName, emitterName, particleIndex,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::KillParticle;
+        runtimeCommand.stringValue = std::move(systemName);
+        runtimeCommand.particleEmitterName = std::move(emitterName);
+        runtimeCommand.intValue = particleIndex;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle kill queued: " << runtimeCommand.stringValue
+            << "." << runtimeCommand.particleEmitterName
+            << " slot=" << particleIndex << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlespawnat")
+    {
+        const char* usage =
+            "Usage: particlespawnat <system> <emitter> <x> <y> <z> "
+            "[lifetime]";
+        std::string systemName;
+        std::string emitterName;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        if (!(commandStream >> systemName >> emitterName >> x >> y >> z))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        float lifetime = 0.0f;
+        std::string lifetimeToken;
+        if (commandStream >> lifetimeToken)
+        {
+            if (!ParseConsoleFloat(lifetimeToken, lifetime))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            std::string extra;
+            if (commandStream >> extra)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+        }
+        const Eigen::Vector3f position(x, y, z);
+        std::string validationError;
+        if (!VL::ValidateParticleSpawnAtRequest(
+                systemName, emitterName, position, lifetime,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SpawnParticleAt;
+        runtimeCommand.stringValue = std::move(systemName);
+        runtimeCommand.particleEmitterName = std::move(emitterName);
+        runtimeCommand.particleSpawnPosition = position;
+        runtimeCommand.floatValue = lifetime;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle spawn-at queued: " << runtimeCommand.stringValue
+            << "." << runtimeCommand.particleEmitterName
+            << " at (" << x << ", " << y << ", " << z << ")"
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "particleparam")
     {
         const char* usage =
@@ -1417,6 +1517,8 @@ void DebugConsole::PrintHelp() const
     std::cout << "  particlespawn <name> <PS_asset_path> [x y z] - add a particle system instance to the active World\n";
     std::cout << "  particledestroy <name> - remove a particle system instance from the active World\n";
     std::cout << "  particlerestart <name> - reset one particle system instance (simulation time, prewarm, cull)\n";
+    std::cout << "  particlekill <system> <emitter> <particleIndex> - clear one stable GPU particle slot\n";
+    std::cout << "  particlespawnat <system> <emitter> <x> <y> <z> [lifetime] - spawn one GPU particle at a world position\n";
     std::cout << "  particleparam <name> <spawnRateScale <scale>|colorTint <r> <g> <b> <a>|emitter <index> <0|1>|reset> - runtime-only particle overrides\n";
     std::cout << "  particleemitter <system> <spawn <sourceIndex> [name]|destroy <index|name>|restart <index|name>|enable <index|name> <0|1>> - emitter lifecycle\n";
     std::cout << "  particlebudget <system|world> <maxTotal> <emitterScale> - runtime particle budget\n";

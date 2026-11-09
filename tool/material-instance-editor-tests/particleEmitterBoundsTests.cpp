@@ -73,6 +73,26 @@ TEST(ParticleEmitterBounds, SizeKeysLargerThanEndpointsWin)
         ComputeParticleEmitterLocalRadius(emitter), 30.0f);
 }
 
+TEST(ParticleEmitterBounds, MeshSizeCurveScaleWidensBounds)
+{
+    ParticleEmitterAsset emitter = BoundsTestEmitter();
+    emitter.renderMode = "mesh";
+    emitter.meshUseSizeCurve = true;
+    emitter.meshSizeScale = 2.0f;
+    emitter.sizeStart = 10.0f;
+    emitter.sizeEnd = 10.0f;
+    emitter.sizeKeys = {
+        ParticleSizeKey{0.0f, 10.0f},
+        ParticleSizeKey{1.0f, 30.0f}};
+
+    // max/base * sizeScale = 30/10 * 2 = 6；网格自身半径 10 -> 60。
+    EXPECT_FLOAT_EQ(
+        ComputeParticleEmitterLocalRadius(emitter, 10.0f), 60.0f);
+    emitter.meshUseSizeCurve = false;
+    EXPECT_FLOAT_EQ(
+        ComputeParticleEmitterLocalRadius(emitter, 10.0f), 10.0f);
+}
+
 TEST(ParticleEmitterBounds, ModelScaleUsesLargestLinearColumn)
 {
     ParticleEmitterAsset emitter = BoundsTestEmitter();

@@ -124,6 +124,19 @@ public:
     // 运行时 restart：只重置该场景对象名下发射器的模拟时间/预热/清池/剔除
     // 状态；不重新加载 PS 资产，也不重建纹理或 GPU 池。
     void RestartParticleSystems(const std::string& sceneObjectName);
+    // 粒子级运行时命令：解析到具体 emitter 的 GPU 池后，由下一次
+    // RecordSimulation 在稳定槽位上执行 kill / spawn。
+    bool KillParticle(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        uint32_t particleIndex,
+        std::string& outMessage);
+    bool SpawnParticleAt(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        const Eigen::Vector3f& worldPosition,
+        float lifetimeSeconds,
+        std::string& outMessage);
     // 事件回读：调用方需处于安全点；内部会等待设备空闲，然后把每个
     // 发射器的 bounded 事件记录复制到 CPU。供脚本/调试层消费。
     bool DrainParticleEvents(

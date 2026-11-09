@@ -48,15 +48,20 @@ void main()
         CullVertex();
         return;
     }
-    vec3 localStart = particle.source0.xyz * frame.meshScale.xyz;
-    vec3 localEnd = particle.source1.xyz * frame.meshScale.xyz;
-    // 与三角面源一致：source 已包含面片/骨段相对粒子重心的模型空间偏移，
-    // 世界位置只叠加粒子当前位置与模型空间旋转，不再套逐粒子朝向基。
+    float skeletalLifeT = ParticleMeshLifeT(particle);
+    float sizeScale = ParticleMeshSizeScale(skeletalLifeT);
+    vec3 localStart = particle.source0.xyz *
+        frame.meshScale.xyz * frame.lodParams.x * sizeScale;
+    vec3 localEnd = particle.source1.xyz *
+        frame.meshScale.xyz * frame.lodParams.x * sizeScale;
+    // 与三角面源一致：source 是模型空间偏移；localSpace 时粒子中心
+    // 也必须先整体变换到世界。
     mat3 modelLinear = mat3(frame.localToWorld);
+    vec3 center = ParticleMeshWorldCenter(particle);
     vec3 startWorld =
-        particle.positionAge.xyz + modelLinear * localStart;
+        center + modelLinear * localStart;
     vec3 endWorld =
-        particle.positionAge.xyz + modelLinear * localEnd;
+        center + modelLinear * localEnd;
     vec3 tangent = endWorld - startWorld;
     float tangentLength = length(tangent);
     vec3 view = normalize(frame.cameraPosition.xyz -
@@ -66,13 +71,18 @@ void main()
         : frame.cameraRight.xyz;
     vec2 corner = kParticleCorners[uint(gl_VertexIndex) % 6u];
     float along = corner.x * 0.5 + 0.5;
-    // meshParams.y 是作者化骨段半径（局部 cm）；meshScale 仍缩放端点。
-    float radius = max(frame.meshParams.y, 0.01);
+    // meshParams.y 是作者化骨段半径（局部 cm）；localSpace 还要乘模型缩放。
+    float modelScale = frame.shape.z > 0.5
+        ? max(length(modelLinear[0]),
+            max(length(modelLinear[1]), length(modelLinear[2])))
+        : 1.0;
+    float radius = max(frame.meshParams.y, 0.01) *
+        frame.lodParams.x * sizeScale * modelScale;
     vec3 worldPosition =
         mix(startWorld, endWorld, along) + side * (corner.y * radius);
     gl_Position = frame.viewProjection * vec4(worldPosition, 1.0);
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
-    vColor = EvaluateColorCurve(ParticleMeshLifeT(particle));
+    vColor = EvaluateColorCurve(skeletalLifeT);
     vColor.a *= frame.render.w;
     vSoftness = frame.render.z;
     // 骨段是圆柱薄片：两条对角三角形翻转绕序，双面朝向在片元阶段处理
@@ -88,6 +98,6 @@ void main()
     vNormal = normalize(flatNormal + view * 1.0e-3);
     vWorldPosition = worldPosition;
     vUv = vec2(along, corner.y * 0.5 + 0.5);
-    vLifeT = ParticleMeshLifeT(particle);
+    vLifeT = skeletalLifeT;
     vSeed = fract(float(particleIndex) * 0.61803398875);
 }

@@ -1,0 +1,113 @@
+#version 450
+
+// renderMode="decal" 的 GPU 粒子池先走 particleSimulate.comp，再由本 pass
+// 把存活粒子压成最多 64 条 DecalGpuInstance。CPU 每帧只回读这条紧凑
+// 输出，不再维护第二套 CPU 粒子模拟。
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+
+layout(std430, set = 0, binding = 1) readonly buffer ParticleDecalSource
+{
+    Particle particles[];
+} decalParticles;
+
+layout(std430, set = 0, binding = 2) readonly buffer ParticleDecalAlive
+{
+    uint indices[];
+} decalAlive;
+
+layout(std430, set = 0, binding = 3) readonly buffer ParticleDecalCounters
+{
+    uint alive;
+    uint events;
+    uint spawn;
+    uint death;
+    uint collision;
+    uint capacity;
+} decalCounters;
+
+layout(std140, set = 0, binding = 4) uniform DecalGatherParams
+{
+    // xyz = decal size (cm, 已乘 LOD renderScale), w reserved
+    vec4 size;
+    // xyz = decal rotation degrees, w reserved
+    vec4 rotation;
+    // rgb = decal.color, a = decal.opacity
+    vec4 colorOpacity;
+    vec4 reserved;
+} decalParams;
+
+struct DecalGpuInstance
+{
+    vec4 positionLifeT;
+    vec4 sizeRotation;
+    vec4 rotationStable;
+    vec4 colorOpacity;
+    vec4 lifeInfo;
+};
+
+layout(std430, set = 0, binding = 5) buffer ParticleDecalOutput
+{
+    uvec4 header;
+    DecalGpuInstance instances[64];
+} decalOutput;
+
+void main()
+{
+    uint recordIndex = gl_GlobalInvocationID.x;
+    uint aliveCount = min(decalCounters.alive, 64u);
+    if (recordIndex >= aliveCount)
+    {
+        return;
+    }
+
+    uint particleIndex = decalAlive.indices[recordIndex];
+    if (particleIndex >= decalParticles.particles.length())
+    {
+        return;
+    }
+    Particle particle = decalParticles.particles[particleIndex];
+    if (!IsParticleAlive(particle))
+    {
+        return;
+    }
+
+    float lifeT = clamp(
+        particle.positionAge.w / max(particle.velocityLife.w, 1.0e-6),
+        0.0,
+        1.0);
+    float lifeAlpha = mix(
+        frame.colorStart.a, frame.colorEnd.a, lifeT);
+    vec3 lifeColor = mix(
+        frame.colorStart.rgb, frame.colorEnd.rgb, lifeT);
+
+    uint writeIndex = atomicAdd(decalOutput.header.x, 1u);
+    if (writeIndex >= 64u)
+    {
+        return;
+    }
+
+    DecalGpuInstance instance;
+    // position 保持模拟空间；CPU 按 localSpace 决定是否乘 model。
+    instance.positionLifeT =
+        vec4(particle.positionAge.xyz, lifeT);
+    instance.sizeRotation =
+        vec4(decalParams.size.xyz, 0.0);
+    instance.rotationStable =
+        vec4(decalParams.rotation.xyz, float(particleIndex));
+    instance.colorOpacity = vec4(
+        decalParams.colorOpacity.rgb *
+            lifeColor * frame.colorTint.rgb,
+        clamp(
+            decalParams.colorOpacity.a *
+                lifeAlpha * frame.colorTint.a,
+            0.0,
+            1.0));
+    instance.lifeInfo = vec4(
+        particle.positionAge.w,
+        particle.velocityLife.w,
+        float(particleIndex),
+        0.0);
+    decalOutput.instances[writeIndex] = instance;
+}

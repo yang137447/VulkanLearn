@@ -8,6 +8,15 @@ add_executable(vl_renderer_backend_tests
     decal_stencil_graph_test.cpp
     decal_emissive_test.cpp
     particle_light_gpu_test.cpp
+    particle_light_brightness_test.cpp
+    particle_curve_tangent_test.cpp
+    particle_flipbook_timeline_test.cpp
+    particle_lod_render_test.cpp
+    particle_ribbon_history_test.cpp
+    particle_ribbon_global_sort_test.cpp
+    particle_soft_depth_test.cpp
+    particle_decal_gpu_test.cpp
+    particle_runtime_command_test.cpp
     particle_scene_lighting_test.cpp
     particle_mesh_shadow_test.cpp
     particle_sprite_shadow_test.cpp

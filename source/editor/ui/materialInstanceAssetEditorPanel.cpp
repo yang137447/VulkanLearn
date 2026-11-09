@@ -107,6 +107,10 @@ bool ParticleFieldInModule(
             field == "billboardForwardScattering" ||
             field == "light.intensity" ||
             field == "light.radius" ||
+            field == "light.iesProfile" ||
+            field == "light.brightnessKeys" ||
+            field == "light.castShadows" ||
+            field == "light.shadowBias" ||
             field == "decal.size" ||
             field == "decal.rotation" ||
             field == "decal.color" ||
@@ -3160,14 +3164,33 @@ std::string MaterialInstanceAssetEditorPanel::ParticleFieldsMarkup() const
             ? "emitters." + std::to_string(emitterIndex) + "."
             : std::string();
         std::string curveMarkup = ParticleModuleStackMarkup();
+        const ParticleCurveInterpolation interpolation =
+            ParticleCurveEdit::ReadInterpolation(flattenedEmitter);
         curveMarkup += ParticleCurveMarkup(
             ParticleCurveKeys(flattenedEmitter, "colorKeys",
                 prefix + "colorKeys"),
-            "colorKeys");
+            "colorKeys",
+            interpolation);
         curveMarkup += ParticleCurveMarkup(
             ParticleCurveKeys(flattenedEmitter, "sizeKeys",
                 prefix + "sizeKeys"),
-            "sizeKeys");
+            "sizeKeys",
+            interpolation);
+        const std::string interpolationField =
+            prefix + "curveInterpolation";
+        curveMarkup +=
+            "<div class=\"particle-field-row\"><span>"
+            "curveInterpolation</span>"
+            "<input type=\"text\" data-action=\"particle-field\""
+            " data-field=\"" + Text(interpolationField) +
+            "\" data-value-type=\"string\" value=\"" +
+            Text(ParticleCurveInterpolationName(interpolation)) +
+            "\"/><button class=\"particle-field-reset\""
+            " data-action=\"particle-field-reset\" data-field=\"" +
+            Text(interpolationField) +
+            "\">Reset</button></div>"
+            "<p class=\"muted\">linear | hermite | bezier; tangentIn/"
+            "tangentOut are saved inside each key.</p>";
         return curveMarkup;
     }
     // 模块栈放在字段表单最上方：v1 显示升级入口，v2 显示结构操作。
@@ -3738,7 +3761,8 @@ void MaterialInstanceAssetEditorPanel::HandleParticleFlipbookTableAction(
 
 std::string MaterialInstanceAssetEditorPanel::ParticleCurveMarkup(
     const nlohmann::json& keys,
-    const std::string& curve) const
+    const std::string& curve,
+    ParticleCurveInterpolation interpolation) const
 {
     using namespace ParticleCurveEdit;
     const bool colorCurve = curve == "colorKeys";
@@ -3767,7 +3791,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleCurveMarkup(
         if (colorCurve)
         {
             style += " background-color: " +
-                ColorHex(SampleColor(keys, time)) + ";";
+                ColorHex(SampleColor(keys, time, interpolation)) + ";";
         }
         markup += "<span class=\"particle-curve-marker\" style=\"" +
             style + "\"></span>";
@@ -3785,7 +3809,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleCurveMarkup(
                 ? static_cast<float>(sample) / divisor : 0.0f;
             markup += "<span class=\"particle-curve-swatch\""
                 " style=\"background-color: " +
-                ColorHex(SampleColor(keys, time)) +
+                ColorHex(SampleColor(keys, time, interpolation)) +
                 ";\"></span>";
         }
         markup += "</div>";
@@ -3800,7 +3824,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleCurveMarkup(
         {
             const float time = kPreviewSamples > 1
                 ? static_cast<float>(sample) / divisor : 0.0f;
-            samples[sample] = SampleSize(keys, time);
+            samples[sample] = SampleSize(keys, time, interpolation);
             maximum = std::max(maximum, samples[sample]);
         }
         markup += "<div class=\"particle-curve-bars\">";
@@ -3831,7 +3855,7 @@ std::string MaterialInstanceAssetEditorPanel::ParticleCurveMarkup(
         if (colorCurve)
         {
             const std::array<float, 4> color =
-                SampleColor(keys, time);
+                SampleColor(keys, time, interpolation);
             for (size_t channel = 0; channel < 4; ++channel)
             {
                 markup += "<span class=\"particle-curve-channel\">" +
@@ -4000,8 +4024,11 @@ void MaterialInstanceAssetEditorPanel::HandleParticleCurveAdd(
     const std::string fieldPath = prefix + curve;
     nlohmann::json keys = ParticleCurveKeys(
         *emitter, curve, fieldPath);
+    const ParticleCurveInterpolation interpolation =
+        ParticleCurveEdit::ReadInterpolation(
+            ParticleEmitterForEdit(*emitter));
     if (!ParticleCurveEdit::AddKey(
-        keys, curve == "colorKeys"))
+        keys, curve == "colorKeys", interpolation))
     {
         localStatus = keys.size() >= ParticleCurveEdit::kMaxKeys
             ? std::string("A curve holds at most 8 keys.")

@@ -200,6 +200,33 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 particleLightIesParams;     // profileIndex,hasIes,0,0
     // mesh 溶解外推：x=半径随寿命推进(0..1), y=总外推比, z=启用, w=保留。
     vec4 puffParams;
+    // 逐粒子灯亮度/颜色曲线：keys[i].xy=(lifeT, brightness)，
+    // colors[i].rgb=逐 key 颜色乘数；params.x=key count，y/z/w 保留。
+    vec4 particleLightBrightnessKeys[8];
+    vec4 particleLightBrightnessParams;
+    vec4 particleLightBrightnessColors[8];
+    // 曲线切线（追加在末尾，既有偏移不变）。颜色切线是独立 vec4 数组；
+    // size 标量切线写进 sizeKeys 的 z/w。
+    vec4 colorTangentIn[8];
+    vec4 colorTangentOut[8];
+    // x = interpolation code (0 linear, 1 hermite, 2 bezier).
+    vec4 curveInterpolationParams;
+    // flipbook 播放相位时间线：pivotKeys.x=time、yz=pivot；
+    // rotationKeys=(time, degrees, tangentIn, tangentOut)。
+    vec4 flipbookPivotKeys[8];
+    vec4 flipbookPivotTangentIn[8];
+    vec4 flipbookPivotTangentOut[8];
+    vec4 flipbookRotationKeys[8];
+    // x = pivot key count, y = rotation key count.
+    vec4 flipbookTimelineParams;
+    // x = LOD renderScale, y = smoothstep blend, z/w reserved.
+    vec4 lodParams;
+    vec4 ribbonColorTangentIn[8];
+    vec4 ribbonColorTangentOut[8];
+    vec4 beamColorTangentIn[8];
+    vec4 beamColorTangentOut[8];
+    // x = ribbonPivot, y = ribbonTwist degrees.
+    vec4 ribbonShapeParams;
 } frame;
 
 const vec2 kParticleCorners[6] = vec2[6](
@@ -221,6 +248,50 @@ float ColorKeyTime(int index)
     return index < 4
         ? frame.colorKeyTimes[0][index]
         : frame.colorKeyTimes[1][index - 4];
+}
+
+// 0 = linear；1 = hermite；2 = bezier。Bezier 在 CPU 上传边界已转成
+// Hermite 斜率，因此 GPU 对所有非零模式都按 Hermite 求值。
+int ParticleCurveMode()
+{
+    return int(frame.curveInterpolationParams.x + 0.5);
+}
+
+// 与 source/particles/particleCurve.h 的 ParticleHermiteScalar 同一公式。
+float ParticleHermiteScalar(
+    float p0,
+    float p1,
+    float m0,
+    float m1,
+    float u,
+    float span)
+{
+    float u2 = u * u;
+    float u3 = u2 * u;
+    float h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+    float h10 = u3 - 2.0 * u2 + u;
+    float h01 = -2.0 * u3 + 3.0 * u2;
+    float h11 = u3 - u2;
+    return h00 * p0 + h10 * span * m0 +
+        h01 * p1 + h11 * span * m1;
+}
+
+vec4 ParticleHermiteVector4(
+    vec4 p0,
+    vec4 p1,
+    vec4 m0,
+    vec4 m1,
+    float u,
+    float span)
+{
+    float u2 = u * u;
+    float u3 = u2 * u;
+    float h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+    float h10 = u3 - 2.0 * u2 + u;
+    float h01 = -2.0 * u3 + 3.0 * u2;
+    float h11 = u3 - u2;
+    return h00 * p0 + h10 * span * m0 +
+        h01 * p1 + h11 * span * m1;
 }
 
 // 帧时长/轴心按需从打包数组里取；GLSL 450 允许 UBO 数组动态索引。
@@ -247,6 +318,101 @@ float FlipbookRotation(int index)
     return frame.flipbookFrameRotations[index / 4][index % 4];
 }
 
+// 时间线 key 的 time 是归一化播放相位；空表返回中性值。切线已在 CPU
+// 上传边界按 curveInterpolation 转成 Hermite 斜率。
+vec2 EvaluateFlipbookPivotTimeline(float t)
+{
+    int count = int(frame.flipbookTimelineParams.x + 0.5);
+    if (count <= 0)
+    {
+        return vec2(0.5);
+    }
+    if (count == 1)
+    {
+        return frame.flipbookPivotKeys[0].yz;
+    }
+    float clamped = clamp(t, 0.0, 1.0);
+    if (clamped <= frame.flipbookPivotKeys[0].x)
+    {
+        return frame.flipbookPivotKeys[0].yz;
+    }
+    if (clamped >= frame.flipbookPivotKeys[count - 1].x)
+    {
+        return frame.flipbookPivotKeys[count - 1].yz;
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = frame.flipbookPivotKeys[index].x;
+        float t1 = frame.flipbookPivotKeys[index + 1].x;
+        if (clamped >= t0 && clamped <= t1)
+        {
+            float span = max(t1 - t0, 1.0e-5);
+            float u = (clamped - t0) / span;
+            vec2 p0 = frame.flipbookPivotKeys[index].yz;
+            vec2 p1 = frame.flipbookPivotKeys[index + 1].yz;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteVector4(
+                    vec4(p0, 0.0, 0.0),
+                    vec4(p1, 0.0, 0.0),
+                    vec4(frame.flipbookPivotTangentOut[index].xy, 0.0, 0.0),
+                    vec4(frame.flipbookPivotTangentIn[index + 1].xy, 0.0, 0.0),
+                    u,
+                    span).xy;
+            }
+            return mix(p0, p1, u);
+        }
+    }
+    return frame.flipbookPivotKeys[count - 1].yz;
+}
+
+float EvaluateFlipbookRotationTimeline(float t)
+{
+    int count = int(frame.flipbookTimelineParams.y + 0.5);
+    if (count <= 0)
+    {
+        return 0.0;
+    }
+    if (count == 1)
+    {
+        return frame.flipbookRotationKeys[0].y;
+    }
+    float clamped = clamp(t, 0.0, 1.0);
+    if (clamped <= frame.flipbookRotationKeys[0].x)
+    {
+        return frame.flipbookRotationKeys[0].y;
+    }
+    if (clamped >= frame.flipbookRotationKeys[count - 1].x)
+    {
+        return frame.flipbookRotationKeys[count - 1].y;
+    }
+    for (int index = 0; index < count - 1; ++index)
+    {
+        float t0 = frame.flipbookRotationKeys[index].x;
+        float t1 = frame.flipbookRotationKeys[index + 1].x;
+        if (clamped >= t0 && clamped <= t1)
+        {
+            float span = max(t1 - t0, 1.0e-5);
+            float u = (clamped - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteScalar(
+                    frame.flipbookRotationKeys[index].y,
+                    frame.flipbookRotationKeys[index + 1].y,
+                    frame.flipbookRotationKeys[index].w,
+                    frame.flipbookRotationKeys[index + 1].z,
+                    u,
+                    span);
+            }
+            return mix(
+                frame.flipbookRotationKeys[index].y,
+                frame.flipbookRotationKeys[index + 1].y,
+                u);
+        }
+    }
+    return frame.flipbookRotationKeys[count - 1].y;
+}
+
 vec4 EvaluateColorCurve(float t)
 {
     int count = int(frame.curveParams.x);
@@ -268,7 +434,18 @@ vec4 EvaluateColorCurve(float t)
         float t1 = ColorKeyTime(index + 1);
         if (t >= t0 && t <= t1)
         {
-            float alpha = (t - t0) / max(t1 - t0, 1.0e-5);
+            float span = max(t1 - t0, 1.0e-5);
+            float alpha = (t - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteVector4(
+                    frame.colorKeys[index],
+                    frame.colorKeys[index + 1],
+                    frame.colorTangentOut[index],
+                    frame.colorTangentIn[index + 1],
+                    alpha,
+                    span);
+            }
             return mix(
                 frame.colorKeys[index],
                 frame.colorKeys[index + 1],
@@ -299,7 +476,18 @@ float EvaluateSizeCurve(float t)
         float t1 = frame.sizeKeys[index + 1].x;
         if (t >= t0 && t <= t1)
         {
-            float alpha = (t - t0) / max(t1 - t0, 1.0e-5);
+            float span = max(t1 - t0, 1.0e-5);
+            float alpha = (t - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteScalar(
+                    frame.sizeKeys[index].y,
+                    frame.sizeKeys[index + 1].y,
+                    frame.sizeKeys[index].w,
+                    frame.sizeKeys[index + 1].z,
+                    alpha,
+                    span);
+            }
             return mix(
                 frame.sizeKeys[index].y,
                 frame.sizeKeys[index + 1].y,
@@ -339,7 +527,18 @@ float EvaluateRibbonWidth(float t)
         float t1 = RibbonWidthKeyTime(index + 1);
         if (clamped >= t0 && clamped <= t1)
         {
-            float weight = (clamped - t0) / max(t1 - t0, 1.0e-5);
+            float span = max(t1 - t0, 1.0e-5);
+            float weight = (clamped - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteScalar(
+                    frame.ribbonWidthKeys[index].y,
+                    frame.ribbonWidthKeys[index + 1].y,
+                    frame.ribbonWidthKeys[index].w,
+                    frame.ribbonWidthKeys[index + 1].z,
+                    weight,
+                    span);
+            }
             return mix(
                 frame.ribbonWidthKeys[index].y,
                 frame.ribbonWidthKeys[index + 1].y,
@@ -378,10 +577,22 @@ vec4 EvaluateRibbonColor(float t, vec4 fallback)
         float t1 = RibbonColorKeyTime(index + 1);
         if (clamped >= t0 && clamped <= t1)
         {
+            float span = max(t1 - t0, 1.0e-5);
+            float weight = (clamped - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteVector4(
+                    frame.ribbonColorKeys[index],
+                    frame.ribbonColorKeys[index + 1],
+                    frame.ribbonColorTangentOut[index],
+                    frame.ribbonColorTangentIn[index + 1],
+                    weight,
+                    span);
+            }
             return mix(
                 frame.ribbonColorKeys[index],
                 frame.ribbonColorKeys[index + 1],
-                (clamped - t0) / max(t1 - t0, 1.0e-5));
+                weight);
         }
     }
     return frame.ribbonColorKeys[count - 1];
@@ -393,6 +604,8 @@ struct ParticleFlipbookFrame
     float localFrameIndex;
     float nextLocalFrameIndex;
     float blend;
+    // 归一化播放相位 [0,1]，驱动 pivot/rotation 时间线。
+    float timelineT;
 };
 
 float FlipbookRateKeyTime(int index)
@@ -505,6 +718,7 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
     float localFrame = 0.0;
     float nextFrame = 0.0;
     float blend = 0.0;
+    float timelineT = 0.0;
     if (frame.flipbookParams3.x > 0.5)
     {
         int durationCount = clamp(
@@ -531,6 +745,8 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
             phaseWeight = clamp(lifeT * playRate, 0.0, 1.0) *
                 totalWeight;
         }
+        timelineT = totalWeight > 0.0
+            ? phaseWeight / totalWeight : 0.0;
         int selected = durationCount - 1;
         float accumulated = 0.0;
         for (int index = 0; index < durationCount; ++index)
@@ -576,6 +792,7 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
         {
             phase = min(phase, frameCount - 1.0);
         }
+        timelineT = phase / frameCount;
         float stepped = floor(phase);
         localFrame = loop ? mod(stepped, frameCount) : stepped;
         blend = fract(phase);
@@ -593,6 +810,7 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
     {
         float phase =
             clamp(lifeT * playRate, 0.0, 1.0) * frameCount;
+        timelineT = clamp(lifeT * playRate, 0.0, 1.0);
         localFrame = min(floor(phase), frameCount - 1.0);
         blend = fract(phase);
         nextFrame = localFrame + 1.0;
@@ -608,6 +826,7 @@ ParticleFlipbookFrame EvaluateParticleFlipbook(
     result.nextLocalFrameIndex =
         clamp(nextFrame, 0.0, frameCount - 1.0);
     result.blend = blendEnabled ? clamp(blend, 0.0, 1.0) : 0.0;
+    result.timelineT = clamp(timelineT, 0.0, 1.0);
     if (perParticle)
     {
         result.localFrameIndex = mod(

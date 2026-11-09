@@ -110,3 +110,29 @@ TEST(ParticleMeshMaterial, RendererOwnsMeshMaterialSet)
     EXPECT_NE(renderer.find("DestroyBuffer(rendererBackend, emitter.materialUniform)"),
         std::string::npos);
 }
+
+TEST(ParticleMeshMaterial, StaticSectionsKeepPerSectionGeometryAndMaterial)
+{
+    const std::string renderer = ReadSource(
+        "source/particles/particleRenderer.cpp");
+    EXPECT_NE(renderer.find("useSectionPlans"), std::string::npos);
+    EXPECT_NE(renderer.find("emitter.staticSections"), std::string::npos);
+    EXPECT_NE(renderer.find("imported.sectionPlans[sectionIndex]"),
+        std::string::npos);
+    EXPECT_NE(renderer.find("section.materialSets"), std::string::npos);
+    EXPECT_NE(renderer.find("section.materialUniform"), std::string::npos);
+    // 多 section 时逐条 DrawIndexedIndirectCommand；instanceCount 由
+    // finalize compute 按命令步长写入。
+    EXPECT_NE(renderer.find("indirectStride"), std::string::npos);
+    EXPECT_NE(renderer.find("sectionIndex) *\n                            indirectStride"),
+        std::string::npos);
+    EXPECT_NE(renderer.find("emitter.meshIndexCount += section.indexCount"),
+        std::string::npos);
+    EXPECT_NE(renderer.find("!emitter.staticSections.empty()"),
+        std::string::npos);
+
+    const std::string finalize = ReadSource(
+        "shader/glsl/particle/particleFinalizeCount.comp");
+    EXPECT_NE(finalize.find("command * 5 + 1"), std::string::npos);
+    EXPECT_NE(finalize.find("command < 64u"), std::string::npos);
+}

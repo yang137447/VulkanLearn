@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <string>
 #include <string_view>
 
@@ -78,6 +79,58 @@ inline bool ValidateParticleEmitterEnabledValue(
         return false;
     }
     outError.clear();
+    return true;
+}
+
+// F2 粒子级命令：console 与 GT 执行端共用参数校验；GPU 池范围与
+// World emitter 身份由执行端继续检查。
+inline bool ValidateParticleKillRequest(
+    const std::string& systemName,
+    const std::string& emitterName,
+    int particleIndex,
+    std::string& outError)
+{
+    outError.clear();
+    if (systemName.empty() || emitterName.empty())
+    {
+        outError =
+            "particlekill requires <system> <emitter> <particleIndex>.";
+        return false;
+    }
+    if (particleIndex < 0)
+    {
+        outError = "particlekill particleIndex must be >= 0.";
+        return false;
+    }
+    return true;
+}
+
+inline bool ValidateParticleSpawnAtRequest(
+    const std::string& systemName,
+    const std::string& emitterName,
+    const Eigen::Vector3f& position,
+    float lifetimeSeconds,
+    std::string& outError)
+{
+    outError.clear();
+    if (systemName.empty() || emitterName.empty())
+    {
+        outError =
+            "particlespawnat requires <system> <emitter> <x> <y> <z> "
+            "[lifetime].";
+        return false;
+    }
+    if (!position.allFinite())
+    {
+        outError = "particlespawnat position must be finite.";
+        return false;
+    }
+    if (!std::isfinite(lifetimeSeconds) || lifetimeSeconds < 0.0f)
+    {
+        outError =
+            "particlespawnat lifetime must be finite and >= 0.";
+        return false;
+    }
     return true;
 }
 

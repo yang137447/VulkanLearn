@@ -156,6 +156,25 @@ Json DecalEmitterDocument()
     })json");
 }
 
+ParticleDecalGpuInstance MakeGpuDecalInstance(
+    uint32_t slot,
+    const Eigen::Vector3f& position,
+    float size)
+{
+    ParticleDecalGpuInstance instance;
+    instance.positionLifeT =
+        Eigen::Vector4f(position.x(), position.y(), position.z(), 0.25f);
+    instance.sizeRotation =
+        Eigen::Vector4f(size, size, size, 0.0f);
+    instance.rotationStable =
+        Eigen::Vector4f(0.0f, 0.0f, 0.0f, static_cast<float>(slot));
+    instance.colorOpacity =
+        Eigen::Vector4f(0.2f, 0.4f, 0.6f, 0.5f);
+    instance.lifeInfo =
+        Eigen::Vector4f(1.0f, 4.0f, static_cast<float>(slot), 0.0f);
+    return instance;
+}
+
 } // namespace
 
 TEST(ParticleAsset, DecalModeParsesDefaultsAndRejectsInvalidFields)
@@ -751,4 +770,129 @@ TEST(ParticleDecalRuntime, ResolvedAssetsSeparateSameNamedSystems)
     };
     EXPECT_TRUE(hasColor(Eigen::Vector3f(1.0f, 0.0f, 0.0f)));
     EXPECT_TRUE(hasColor(Eigen::Vector3f(0.0f, 1.0f, 0.0f)));
+}
+
+TEST(ParticleDecalRuntime, GpuRecordsReplaceCpuAndKeepFallback)
+{
+    ParticleEmitterAsset gpuEmitter =
+        MakeDecalEmitter("gpu", 41, 4, 10.0f);
+    ParticleEmitterAsset cpuEmitter =
+        MakeDecalEmitter("cpu", 43, 1, 10.0f);
+    RenderScene scene;
+    ParticleSystemSnapshot snapshot =
+        MakeSnapshot("Mixed", gpuEmitter);
+    snapshot.asset.emitters.push_back(cpuEmitter);
+    scene.particleSystems.push_back(snapshot);
+
+    const std::string gpuKey = BuildParticleEmitterKey(
+        snapshot.name, snapshot.assetPath, gpuEmitter.name);
+    std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>> gpuInstances;
+    gpuInstances[gpuKey] = {
+        MakeGpuDecalInstance(0, Eigen::Vector3f(10.0f, 0.0f, 0.0f), 200.0f),
+        MakeGpuDecalInstance(1, Eigen::Vector3f(20.0f, 0.0f, 0.0f), 200.0f)};
+
+    ParticleDecalRuntime runtime;
+    runtime.Synchronize(scene, {}, gpuInstances);
+    // GPU emitter 已被排除；只有 CPU fallback emitter 被跟踪。
+    EXPECT_EQ(runtime.GetTrackedEmitterCount(), 1u);
+    runtime.Update(scene, kMaxDecalInstances, gpuInstances);
+
+    ASSERT_EQ(scene.decals.size(), 3u);
+    EXPECT_EQ(runtime.GetLiveDecalCount(), 3u);
+    int gpuCount = 0;
+    int cpuCount = 0;
+    for (const DecalSnapshot& decal : scene.decals)
+    {
+        gpuCount += decal.name.rfind("gpu#", 0) == 0 ? 1 : 0;
+        cpuCount += decal.name.rfind("cpu#", 0) == 0 ? 1 : 0;
+    }
+    EXPECT_EQ(gpuCount, 2);
+    EXPECT_EQ(cpuCount, 1);
+    EXPECT_EQ(
+        scene.decals[0].decalId,
+        ParticleDecalStableId(gpuKey, 0u));
+    EXPECT_EQ(
+        scene.decals[1].decalId,
+        ParticleDecalStableId(gpuKey, 1u));
+}
+
+TEST(ParticleDecalRuntime, GpuRecordsRespectStaticCapacity)
+{
+    ParticleEmitterAsset emitter =
+        MakeDecalEmitter("gpu", 47, 80, 10.0f);
+    RenderScene scene;
+    for (uint64_t index = 0; index < 60; ++index)
+    {
+        scene.decals.push_back(MakeStaticDecal(9000 + index));
+    }
+    scene.particleSystems.push_back(
+        MakeSnapshot("Capacity", emitter));
+    const std::string key = BuildParticleEmitterKey(
+        "Capacity",
+        scene.particleSystems.front().assetPath,
+        emitter.name);
+    std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>> gpuInstances;
+    for (uint32_t slot = 0; slot < 80; ++slot)
+    {
+        gpuInstances[key].push_back(MakeGpuDecalInstance(
+            slot,
+            Eigen::Vector3f(static_cast<float>(slot), 0.0f, 0.0f),
+            100.0f));
+    }
+
+    ParticleDecalRuntime runtime;
+    runtime.Synchronize(scene, {}, gpuInstances);
+    runtime.Update(scene, kMaxDecalInstances, gpuInstances);
+    EXPECT_EQ(scene.decals.size(), kMaxDecalInstances);
+    EXPECT_EQ(runtime.GetLiveDecalCount(), 4u);
+    EXPECT_EQ(
+        scene.decals.back().decalId,
+        ParticleDecalStableId(key, 3u));
+}
+
+TEST(ParticleDecalRuntime, GpuRecordsFollowVisibility)
+{
+    ParticleEmitterAsset emitter =
+        MakeDecalEmitter("gpu", 53, 4, 10.0f);
+    RenderScene scene;
+    scene.particleSystems.push_back(
+        MakeSnapshot("Hidden", emitter));
+    const std::string key = BuildParticleEmitterKey(
+        "Hidden",
+        scene.particleSystems.front().assetPath,
+        emitter.name);
+    std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>> gpuInstances;
+    gpuInstances[key] = {
+        MakeGpuDecalInstance(0, Eigen::Vector3f::Zero(), 100.0f)};
+
+    ParticleDecalRuntime runtime;
+    runtime.Synchronize(scene, {}, gpuInstances);
+    runtime.Update(scene, kMaxDecalInstances, gpuInstances);
+    ASSERT_EQ(scene.decals.size(), 1u);
+
+    scene.particleSystems.front().visible = false;
+    runtime.Synchronize(scene, {}, gpuInstances);
+    runtime.Update(scene, kMaxDecalInstances, gpuInstances);
+    EXPECT_TRUE(scene.decals.empty());
+    EXPECT_EQ(runtime.GetLiveDecalCount(), 0u);
+}
+
+TEST(ParticleDecalGpu, InstanceLayoutMatchesGatherShaderContract)
+{
+    EXPECT_EQ(kParticleDecalGpuCapacity, kMaxDecalInstances);
+    EXPECT_EQ(sizeof(DecalGpuHeader), 16u);
+    EXPECT_EQ(sizeof(ParticleDecalGpuInstance), 80u);
+    EXPECT_EQ(offsetof(ParticleDecalGpuInstance, positionLifeT), 0u);
+    EXPECT_EQ(offsetof(ParticleDecalGpuInstance, sizeRotation), 16u);
+    EXPECT_EQ(offsetof(ParticleDecalGpuInstance, rotationStable), 32u);
+    EXPECT_EQ(offsetof(ParticleDecalGpuInstance, colorOpacity), 48u);
+    EXPECT_EQ(offsetof(ParticleDecalGpuInstance, lifeInfo), 64u);
+    EXPECT_EQ(
+        kParticleDecalGatherBytes,
+        sizeof(DecalGpuHeader) +
+            sizeof(ParticleDecalGpuInstance) *
+                kParticleDecalGpuCapacity);
 }

@@ -65,6 +65,24 @@ layout(std430, set = 0, binding = 8) buffer ParticleSpawnEventsOut
     vec4 data[];
 } spawnEventsOut;
 
+// 运行时按稳定槽位 kill / spawn 请求。header.x = 本 emitter 本帧请求数，
+// CPU 在 GT 上写入后由本 pass 消费；最多 16 条，超出部分拒绝。
+const uint kParticleRequestCapacity = 16u;
+
+struct ParticleRuntimeRequest
+{
+    // xyz = simulation-space position, w = lifetime seconds (spawn only)
+    vec4 positionLifetime;
+    // x = kind (0 kill, 1 spawn), y = stable particle index, z/w reserved
+    uvec4 kindIndex;
+};
+
+layout(std430, set = 0, binding = 9) readonly buffer ParticleRuntimeRequests
+{
+    uvec4 header;
+    ParticleRuntimeRequest requests[];
+} runtimeRequests;
+
 // 轻量 PCG hash：同一 index 在时间推进后得到不连续随机流，
 // 避免 CPU 维护逐粒子随机种子 buffer。
 uint Hash(uint value)
@@ -988,6 +1006,32 @@ bool SpawnParticle(
     return IsParticleAlive(particle);
 }
 
+// 运行时 spawn：绕开发射形状/父事件采样，直接在稳定槽位写入显式位置与
+// 寿命；速度仍使用 emitter 的 velocity 区间，保持与普通生成一致的运动。
+void SpawnParticleAtPosition(
+    inout Particle particle,
+    inout uint randomState,
+    vec3 position,
+    float lifetime)
+{
+    particle.source0 = vec4(0.0);
+    particle.source1 = vec4(0.0);
+    particle.source2 = vec4(0.0);
+    for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+    {
+        particle.history[historyIndex] = vec4(0.0);
+    }
+    vec3 velocity = mix(
+        frame.velocityMinLifetimeMin.xyz,
+        frame.velocityMaxLifetimeMax.xyz,
+        vec3(Random(randomState),
+             Random(randomState),
+             Random(randomState)));
+    particle.positionAge = vec4(position, 0.0);
+    particle.velocityLife = vec4(
+        velocity, max(lifetime, 1.0e-4));
+}
+
 // 单粒子一帧（或固定步长的多个子步）推进。返回值是推进后的存活状态；
 // 事件在状态确定后统一写，避免死亡/碰撞分支各自遗漏。
 bool SimulateParticle(
@@ -1096,20 +1140,6 @@ bool SimulateParticle(
     // scale=0 时本帧完全冻结（不衰老、不移动、不碰撞，也不推进历史），
     // 但不会影响其它粒子或系统时间。prewarm 在 SpawnParticle 内直接按
     // 随机年龄解析积分，故意不应用这条曲线。
-    // 历史右移必须在积分之前：history[0] 记录本帧起点，当前位置经过积分后
-    // 成为下一帧的 history[0]。死亡分支不更新历史，避免把尸体位置写进条带。
-    // 固定步长积累不足一帧时 dt=0，历史保持不动，避免重复采样同一位置。
-    // 只有 ribbon 发射器支付 16 次历史搬移，billboard/mesh 保持原成本。
-    if (stepSeconds > 0.0 && frame.ribbonParams.w > 0.5)
-    {
-        for (int historyIndex = 15; historyIndex > 0; --historyIndex)
-        {
-            particle.history[historyIndex] =
-                particle.history[historyIndex - 1];
-        }
-        particle.history[0] = particle.positionAge;
-    }
-
     vec3 position = particle.positionAge.xyz;
     vec3 velocity = particle.velocityLife.xyz;
     float age = particle.positionAge.w;
@@ -1133,6 +1163,20 @@ bool SimulateParticle(
         {
             age = lifetime;
             break;
+        }
+
+        // 每个实际推进的固定步长记录一次历史：history[0] 是本步起点。
+        // CCD 子步不再额外采样（等价 ribbonHistoryInterval=1）；死亡分支
+        // 在 age 达到 lifetime 时提前 break，不写历史。
+        if (frame.ribbonParams.w > 0.5)
+        {
+            for (int historyIndex = 15; historyIndex > 0; --historyIndex)
+            {
+                particle.history[historyIndex] =
+                    particle.history[historyIndex - 1];
+            }
+            particle.history[0] = vec4(
+                position, max(age - deltaSeconds, 0.0));
         }
 
         // 模拟空间积分：世界空间发射器使用世界坐标；localSpace 发射器
@@ -1255,8 +1299,44 @@ void main()
 
     Particle particle = particleBuffer.particles[index];
     bool wasAlive = IsParticleAlive(particle);
-    bool alive = SimulateParticle(
-        index, particle, randomState, wasAlive);
+    bool killed = false;
+    uint requestCount = min(
+        runtimeRequests.header.x,
+        kParticleRequestCapacity);
+    for (uint requestIndex = 0;
+         requestIndex < requestCount;
+         ++requestIndex)
+    {
+        ParticleRuntimeRequest request =
+            runtimeRequests.requests[requestIndex];
+        if (request.kindIndex.y != index)
+        {
+            continue;
+        }
+        uint kind = request.kindIndex.x;
+        if (kind == 0u)
+        {
+            // 清 alive：把 lifetime 归零并让 age 达到 lifetime。本帧
+            // 不再调用 SimulateParticle，避免连续发射器立刻补回同槽位。
+            particle.positionAge.w = particle.velocityLife.w;
+            particle.velocityLife.w = 0.0;
+            killed = true;
+        }
+        else if (kind == 1u)
+        {
+            SpawnParticleAtPosition(
+                particle,
+                randomState,
+                request.positionLifetime.xyz,
+                request.positionLifetime.w);
+            wasAlive = false;
+        }
+        break;
+    }
+    bool alive = killed
+        ? false
+        : SimulateParticle(
+            index, particle, randomState, wasAlive);
     particleBuffer.particles[index] = particle;
 
     if (alive)

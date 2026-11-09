@@ -19,6 +19,8 @@ struct GatheredBillboard
     vec4 flags2;
     vec4 flags3;
     vec4 uvTransform;
+    vec4 corner3Kind;
+    vec4 color2;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -72,6 +74,8 @@ layout(location = 20) out float vDensity;
 layout(location = 21) out float vSoftTapRadius;
 layout(location = 22) out float vEooPacked;
 layout(location = 23) out float vEooEmissiveStrength;
+layout(location = 24) out flat float vKind;
+layout(location = 25) out flat float vSoftThickness;
 
 void main()
 {
@@ -102,6 +106,8 @@ void main()
         vSoftTapRadius = 0.0;
         vEooPacked = 0.0;
         vEooEmissiveStrength = 0.0;
+        vKind = 0.0;
+        vSoftThickness = 0.0;
         return;
     }
     uint recordIndex = uint(sortedPairs.pairs[drawIndex].y);
@@ -131,11 +137,64 @@ void main()
         vSoftTapRadius = 0.0;
         vEooPacked = 0.0;
         vEooEmissiveStrength = 0.0;
+        vKind = 0.0;
+        vSoftThickness = 0.0;
         return;
     }
 
     GatheredBillboard record = gatheredBuffer.records[recordIndex];
     vec2 corner = kParticleCorners[uint(gl_VertexIndex) % 6u];
+
+    if (record.corner3Kind.w > 0.5)
+    {
+        float u = corner.x * 0.5 + 0.5;
+        float v = corner.y * 0.5 + 0.5;
+        vec3 bottom = mix(
+            record.centerSize.xyz, record.rightRot.xyz, u);
+        vec3 top = mix(
+            record.upSoft.xyz, record.corner3Kind.xyz, u);
+        vec3 worldPosition = mix(bottom, top, v);
+        vec2 uv = vec2(
+            mix(record.uvRect.x, record.uvRect.z, u),
+            mix(record.uvRect.y, record.uvRect.w, v));
+
+        gl_Position =
+            frame.viewProjection * vec4(worldPosition, 1.0);
+        vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
+        vColor = mix(record.color, record.color2, u);
+        vUV = uv;
+        vSpriteUV = uv;
+        vec2 atlasSize = ParticleTextureSize(int(record.frame.w));
+        vec2 halfTexel = vec2(0.5) / max(atlasSize, vec2(1.0));
+        vAtlasUV = clamp(
+            vec2(uv.x, 1.0 - uv.y),
+            halfTexel,
+            vec2(1.0) - halfTexel);
+        vAtlasUV2 = vAtlasUV;
+        vAtlasBlend = 0.0;
+        vTextureIndex = int(record.frame.w);
+        vSoftness = record.upSoft.w;
+        vSeed = record.params.x;
+        vTime = record.params.y;
+        vSoftParams = record.flags.zw;
+        vHasTexture = record.flags.y;
+        vWorldPosition = worldPosition;
+        vLightParams = record.lightParams;
+        vLightParams2 = record.lightParams2;
+        vSize = record.centerSize.w;
+        vDensity = record.flags2.y;
+        vSoftTapRadius = record.flags2.x;
+        vEooPacked = record.flags3.x;
+        vEooEmissiveStrength = record.flags3.y;
+        vLightDirection = record.lightDirection.xyz;
+        vLightColor = record.lightColor.rgb;
+        vLightingNormal = normalize(
+            frame.cameraPosition.xyz - worldPosition);
+        vKind = 1.0;
+        vSoftThickness = record.flags2.z;
+        return;
+    }
+
     float rotationCos = cos(record.rightRot.w);
     float rotationSin = sin(record.rightRot.w);
     vec2 rotatedCorner = vec2(
@@ -212,4 +271,6 @@ void main()
     vLightingNormal = lightingNormalLength > 1.0e-5
         ? lightingNormal / lightingNormalLength
         : normalize(frame.cameraPosition.xyz - worldPosition);
+    vKind = 0.0;
+    vSoftThickness = 0.0;
 }

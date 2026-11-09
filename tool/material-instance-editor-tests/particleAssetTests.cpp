@@ -12,6 +12,7 @@
 
 #include "editor/command/assetDocumentFields.h"
 #include "particles/particleAsset.h"
+#include "particles/particleEmitterBounds.h"
 #include "particles/particleLifetime.h"
 #include "particles/particleShadowCaster.h"
 #include "render/rendergraph/renderGraphPassType.h"
@@ -43,6 +44,17 @@ Json MultiEmitterDocument()
             }
         })}
     };
+}
+
+Json ParticleLightDocument()
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["renderMode"] = "light";
+    document["emitters"][0]["maxParticles"] = 64;
+    document["emitters"][0]["light"] = Json{
+        {"intensity", 300.0},
+        {"radius", 700.0}};
+    return document;
 }
 
 } // namespace
@@ -843,7 +855,8 @@ TEST(ParticleAsset, LodTiersParseAndKeepLegacyFallback)
     document["emitters"][0]["lod"] = Json{
         {"tiers", Json::array({
             Json{{"distance", 1000.0}, {"spawnRateScale", 0.6}},
-            Json{{"distance", 3000.0}, {"spawnRateScale", 0.25}}
+            Json{{"distance", 3000.0}, {"spawnRateScale", 0.25},
+                 {"renderScale", 0.5}, {"fadeRange", 400.0}}
         })}};
 
     const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
@@ -851,8 +864,12 @@ TEST(ParticleAsset, LodTiersParseAndKeepLegacyFallback)
     ASSERT_EQ(asset.emitters[0].lodTiers.size(), 2u);
     EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[0].distance, 1000.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[0].spawnRateScale, 0.6f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[0].renderScale, 1.0f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[0].fadeRange, 0.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[1].distance, 3000.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[1].spawnRateScale, 0.25f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[1].renderScale, 0.5f);
+    EXPECT_FLOAT_EQ(asset.emitters[0].lodTiers[1].fadeRange, 400.0f);
     // 兼容字段仍被解析，运行时只在 tiers 为空时回退使用。
     EXPECT_FLOAT_EQ(asset.emitters[0].lodDistance, 500.0f);
     EXPECT_FLOAT_EQ(asset.emitters[0].lodSpawnRateScale, 0.9f);
@@ -892,6 +909,22 @@ TEST(ParticleAsset, LodTiersRejectInvalidOrderingAndRanges)
     EXPECT_THROW(
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_lod_scale_tier.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["lod"]["tiers"] = Json::array({
+        Json{{"distance", 1000.0}, {"spawnRateScale", 0.5},
+             {"renderScale", 4.5}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lod_render_scale.json"),
+        std::invalid_argument);
+
+    document["emitters"][0]["lod"]["tiers"] = Json::array({
+        Json{{"distance", 1000.0}, {"spawnRateScale", 0.5},
+             {"fadeRange", -1.0}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_lod_fade_range.json"),
         std::invalid_argument);
 }
 
@@ -2816,18 +2849,23 @@ TEST(ParticleAsset, MeshFieldsRejectInvalidConfiguration)
         std::invalid_argument);
 }
 
-TEST(ParticleAsset, MeshRejectsLocalSpace)
+TEST(ParticleAsset, MeshAndSkeletalAcceptLocalSpace)
 {
     Json document = MultiEmitterDocument();
     document["emitters"][0]["renderMode"] = "mesh";
     document["emitters"][0]["localSpace"] = true;
     document["emitters"][0]["mesh"] = Json{
         {"path", "Common/Meshes/SM_cube.json"}};
+    document["emitters"][1]["renderMode"] = "skeletalMeshTris";
+    document["emitters"][1]["localSpace"] = true;
+    document["emitters"][1]["mesh"] = Json{
+        {"path", "Common/Meshes/SK_cube.json"}};
 
-    EXPECT_THROW(
-        ParticleAssetLoader::ParseJson(
-            document, "Maps/SC_test/PS_mesh_local_space.json"),
-        std::invalid_argument);
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_mesh_local_space.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_TRUE(asset.emitters[0].localSpace);
+    EXPECT_TRUE(asset.emitters[1].localSpace);
 }
 
 TEST(ParticleAsset, CapabilitiesExposeMeshFields)
@@ -2848,6 +2886,36 @@ TEST(ParticleAsset, CapabilitiesExposeMeshFields)
     EXPECT_TRUE(hasField("mesh.path"));
     EXPECT_TRUE(hasField("mesh.scale"));
     EXPECT_TRUE(hasField("mesh.alignment"));
+    EXPECT_TRUE(hasField("mesh.useSizeCurve"));
+    EXPECT_TRUE(hasField("mesh.sizeScale"));
+}
+
+TEST(ParticleAsset, MeshSizeCurveFieldsParseAndValidate)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["renderMode"] = "mesh";
+    document["emitters"][0]["mesh"] = Json{
+        {"path", "Common/Meshes/SM_cube.json"}};
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_mesh_size_default.json");
+    EXPECT_FALSE(asset.emitters[0].meshUseSizeCurve);
+    EXPECT_FLOAT_EQ(asset.emitters[0].meshSizeScale, 1.0f);
+
+    document["emitters"][0]["mesh"]["useSizeCurve"] = true;
+    document["emitters"][0]["mesh"]["sizeScale"] = 2.5;
+    document["emitters"][0]["sizeKeys"] = Json::array({
+        Json{{"time", 0.0}, {"size", 10.0}},
+        Json{{"time", 1.0}, {"size", 30.0}}});
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_mesh_size.json");
+    EXPECT_TRUE(asset.emitters[0].meshUseSizeCurve);
+    EXPECT_FLOAT_EQ(asset.emitters[0].meshSizeScale, 2.5f);
+
+    document["emitters"][0]["mesh"]["sizeScale"] = 0.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_mesh_size_zero.json"),
+        std::invalid_argument);
 }
 
 TEST(ParticleAsset, MeshLightingDefaultsToEnabledWithAmbient)
@@ -4047,6 +4115,179 @@ TEST(ParticleEditorFields, NewFieldRangesAndEnumsAreEnforced)
         "emitters.0.collision.type", std::string("mesh"))));
 }
 
+TEST(ParticleAsset, LightBrightnessKeysParseColorAndEnforceBounds)
+{
+    Json document = ParticleLightDocument();
+    Json keys = Json::array();
+    for (int key = 0; key < 8; ++key)
+    {
+        keys.push_back(Json{
+            {"time", static_cast<double>(key) / 7.0},
+            {"brightness", static_cast<double>(key)},
+            {"color", Json::array({0.5, 1.0, 2.0})}});
+    }
+    document["emitters"][0]["light"]["brightnessKeys"] = keys;
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_light_curve_bounds.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    const ParticleLightAsset& light = asset.emitters[0].light;
+    ASSERT_EQ(light.brightnessKeys.size(), 8u);
+    EXPECT_FLOAT_EQ(light.brightnessKeys.back().time, 1.0f);
+    EXPECT_FLOAT_EQ(light.brightnessKeys.back().brightness, 7.0f);
+    EXPECT_TRUE(light.brightnessKeys.back().color.isApprox(
+        Eigen::Vector3f(0.5f, 1.0f, 2.0f)));
+
+    Json tooMany = document;
+    tooMany["emitters"][0]["light"]["brightnessKeys"].push_back(
+        Json{{"time", 1.0}, {"brightness", 1.0}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            tooMany, "Maps/SC_test/PS_light_curve_too_many.json"),
+        std::invalid_argument);
+
+    const auto parseKeys = [](Json keysToParse)
+    {
+        Json candidate = ParticleLightDocument();
+        candidate["emitters"][0]["light"]["brightnessKeys"] =
+            std::move(keysToParse);
+        return ParticleAssetLoader::ParseJson(
+            candidate, "Maps/SC_test/PS_light_curve_invalid.json");
+    };
+
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.0}, {"brightness", 1.0}},
+        Json{{"time", 0.5}, {"brightness", 1.0}},
+        Json{{"time", 0.5}, {"brightness", 1.0}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.5}, {"brightness", 1.0}},
+        Json{{"time", 0.25}, {"brightness", 1.0}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", -0.01}, {"brightness", 1.0}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 1.01}, {"brightness", 1.0}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.0}, {"brightness", -0.01}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.0}, {"brightness", 64.01}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.0}, {"brightness", 1.0},
+            {"color", Json::array({-0.01, 1.0, 1.0})}}})),
+        std::invalid_argument);
+    EXPECT_THROW(parseKeys(Json::array({
+        Json{{"time", 0.0}, {"brightness", 1.0},
+            {"color", Json::array({1.0, 64.01, 1.0})}}})),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, LightIesTextureIsIesProfileAliasButBothAreRejected)
+{
+    Json document = ParticleLightDocument();
+    document["emitters"][0]["light"]["iesTexture"] =
+        Json::array({1.0, 0.5, 0.25});
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_light_ies_texture.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    ASSERT_EQ(asset.emitters[0].light.iesTexture.size(), 3u);
+    ASSERT_EQ(asset.emitters[0].light.iesProfile.size(), 3u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].light.iesProfile[1], 0.5f);
+
+    document = ParticleLightDocument();
+    document["emitters"][0]["light"]["iesProfile"] =
+        Json::array({1.0, 0.75});
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_light_ies_profile.json");
+    ASSERT_EQ(asset.emitters[0].light.iesProfile.size(), 2u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].light.iesProfile[1], 0.75f);
+
+    document["emitters"][0]["light"]["iesTexture"] =
+        Json::array({1.0, 0.5});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_light_ies_conflict.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleEditorFields, LightCurveCapabilityAndV2ModuleWriteBack)
+{
+    Json document = ParticleLightDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    ASSERT_TRUE(capabilities["emitters"].is_array());
+    ASSERT_EQ(capabilities["emitters"].size(), 2u);
+    const Json& emitterFields = capabilities["emitters"][0]["fields"];
+    const Json* brightnessKeys = FindParticleCapability(
+        emitterFields, "light.brightnessKeys");
+    ASSERT_NE(brightnessKeys, nullptr);
+    EXPECT_EQ(brightnessKeys->value("type", std::string()), "array");
+    EXPECT_TRUE(brightnessKeys->value("resettable", false));
+    // iesTexture 只是 iesProfile 的兼容别名，不在能力表里暴露第二行。
+    EXPECT_EQ(FindParticleCapability(emitterFields, "light.iesTexture"),
+        nullptr);
+
+    Json v2 = Json{
+        {"name", "PS_v2_light_curve"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"emitters", Json::array({Json{
+            {"name", "glow"},
+            {"modules", Json::array({
+                Json{{"type", "emitter"}, {"fields", Json{
+                    {"maxParticles", 64}}}},
+                Json{{"type", "renderer"}, {"fields", Json{
+                    {"renderMode", "light"},
+                    {"light", Json{
+                        {"intensity", 300.0},
+                        {"radius", 700.0}}}}}}})}
+        }})}
+    };
+    ApplyAssetChanges(
+        v2, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorChange(
+            "emitters.0.light.brightnessKeys",
+            Json::array({
+                Json{{"time", 0.0}, {"brightness", 0.25},
+                    {"color", Json::array({1.0, 0.5, 0.5})}},
+                Json{{"time", 1.0}, {"brightness", 2.0},
+                    {"color", Json::array({0.5, 0.5, 1.0})}}}))});
+
+    // 字段必须写进 renderer 模块的 fields.light，而不是 emitter 根对象。
+    EXPECT_FALSE(v2["emitters"][0].contains("light"));
+    const Json& modules = v2["emitters"][0]["modules"];
+    const Json* renderer = nullptr;
+    for (const Json& module : modules)
+    {
+        if (module.value("type", std::string()) == "renderer")
+            renderer = &module;
+    }
+    ASSERT_NE(renderer, nullptr);
+    ASSERT_TRUE(renderer->at("fields").contains("light"));
+    ASSERT_TRUE(renderer->at("fields").at("light").contains(
+        "brightnessKeys"));
+
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        v2, "Maps/SC_test/PS_v2_light_curve.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    ASSERT_EQ(asset.emitters[0].light.brightnessKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].light.brightnessKeys[0].brightness,
+        0.25f);
+    EXPECT_TRUE(asset.emitters[0].light.brightnessKeys[1].color.isApprox(
+        Eigen::Vector3f(0.5f, 0.5f, 1.0f)));
+
+    ApplyAssetChanges(
+        v2, EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorReset("emitters.0.light.brightnessKeys")});
+    asset = ParticleAssetLoader::ParseJson(
+        v2, "Maps/SC_test/PS_v2_light_curve_reset.json");
+    EXPECT_TRUE(asset.emitters[0].light.brightnessKeys.empty());
+}
+
 TEST(ParticleAsset, V2EventsDeterminismAndRendererModulesFlatten)
 {
     const Json document = Json{
@@ -4085,4 +4326,470 @@ TEST(ParticleAsset, V2EventsDeterminismAndRendererModulesFlatten)
     EXPECT_TRUE(emitter.billboardShadows);
     EXPECT_EQ(emitter.materialInstancePath,
         "Maps/SC_test/Materials/MI_z.json");
+}
+
+TEST(ParticleAsset, CurveInterpolationDefaultsAndRejectsUnknown)
+{
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(),
+        "Maps/SC_test/PS_curve_default.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    EXPECT_EQ(
+        asset.emitters[0].curveInterpolation,
+        ParticleCurveInterpolation::Linear);
+
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["curveInterpolation"] = "hermite";
+    document["emitters"][1]["curveInterpolation"] = "bezier";
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_curve_modes.json");
+    EXPECT_EQ(
+        asset.emitters[0].curveInterpolation,
+        ParticleCurveInterpolation::Hermite);
+    EXPECT_EQ(
+        asset.emitters[1].curveInterpolation,
+        ParticleCurveInterpolation::Bezier);
+
+    document["emitters"][0]["curveInterpolation"] = "spline";
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_curve_unknown.json"),
+        std::invalid_argument);
+    document["emitters"][0]["curveInterpolation"] = 1.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_curve_wrong_type.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, CurveTangentsParseForColorAndSize)
+{
+    Json document = MultiEmitterDocument();
+    Json& emitter = document["emitters"][0];
+    emitter["curveInterpolation"] = "bezier";
+    emitter["colorKeys"] = Json::array({
+        Json{{"time", 0.0},
+             {"color", Json::array({1.0, 1.0, 1.0, 1.0})},
+             {"tangentOut", Json::array({0.1, 0.2, 0.3})}},
+        Json{{"time", 1.0},
+             {"color", Json::array({0.0, 0.0, 0.0, 0.0})},
+             {"tangentIn", Json::array({-0.4, -0.5, -0.6, -0.7})}}});
+    emitter["sizeKeys"] = Json::array({
+        Json{{"time", 0.0}, {"size", 5.0},
+             {"tangentOut", 2.5}},
+        Json{{"time", 1.0}, {"size", 20.0},
+             {"tangentIn", -1.5}}});
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_curve_tangents.json");
+    const ParticleEmitterAsset& parsed = asset.emitters[0];
+    EXPECT_EQ(
+        parsed.curveInterpolation,
+        ParticleCurveInterpolation::Bezier);
+    ASSERT_EQ(parsed.colorKeys.size(), 2u);
+    EXPECT_TRUE(parsed.colorKeys[0].tangentOut.isApprox(
+        Eigen::Vector4f(0.1f, 0.2f, 0.3f, 0.0f)));
+    EXPECT_TRUE(parsed.colorKeys[1].tangentIn.isApprox(
+        Eigen::Vector4f(-0.4f, -0.5f, -0.6f, -0.7f)));
+    ASSERT_EQ(parsed.sizeKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(parsed.sizeKeys[0].tangentOut, 2.5f);
+    EXPECT_FLOAT_EQ(parsed.sizeKeys[1].tangentIn, -1.5f);
+}
+
+TEST(ParticleAsset, CurveTangentsRejectNonFiniteValues)
+{
+    const double infinity =
+        std::numeric_limits<double>::infinity();
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["colorKeys"] = Json::array({
+        Json{{"time", 0.0},
+             {"color", Json::array({1.0, 1.0, 1.0, 1.0})},
+             {"tangentOut", Json::array({0.0, infinity, 0.0})}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_curve_inf_color.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["sizeKeys"] = Json::array({
+        Json{{"time", 0.0}, {"size", 1.0},
+             {"tangentIn", infinity}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_curve_inf_size.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleAsset, HermiteOvershootWidensBoundsConservatively)
+{
+    const std::vector<ParticleScalarCurveSample> keys{
+        {0.0f, 1.0f, 0.0f, 8.0f},
+        {1.0f, 1.0f, 0.0f, 0.0f}};
+    EXPECT_FLOAT_EQ(
+        MaxParticleScalarCurveValue(
+            keys, ParticleCurveInterpolation::Linear, 1.0f),
+        1.0f);
+    EXPECT_GT(
+        MaxParticleScalarCurveValue(
+            keys, ParticleCurveInterpolation::Hermite, 1.0f),
+        1.0f);
+    EXPECT_GT(
+        MaxParticleScalarCurveValue(
+            keys, ParticleCurveInterpolation::Bezier, 1.0f),
+        2.0f);
+}
+
+TEST(ParticleEditorFields, CurveInterpolationAndTangentFieldsAreExposed)
+{
+    const Json document = MultiEmitterDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const Json& fields = capabilities["emitters"][0]["fields"];
+
+    const Json* interpolation =
+        FindParticleCapability(fields, "curveInterpolation");
+    ASSERT_NE(interpolation, nullptr);
+    EXPECT_EQ(interpolation->value("type", std::string()), "string");
+    EXPECT_TRUE(interpolation->value("resettable", false));
+    ASSERT_TRUE(interpolation->at("enum").is_array());
+    EXPECT_NE(std::find(
+        interpolation->at("enum").begin(),
+        interpolation->at("enum").end(),
+        Json("hermite")),
+        interpolation->at("enum").end());
+    EXPECT_NE(std::find(
+        interpolation->at("enum").begin(),
+        interpolation->at("enum").end(),
+        Json("bezier")),
+        interpolation->at("enum").end());
+
+    for (const char* name : {"colorKeys", "sizeKeys"})
+    {
+        const Json* curve = FindParticleCapability(fields, name);
+        ASSERT_NE(curve, nullptr) << name;
+        ASSERT_TRUE(curve->contains("entryFields")) << name;
+        EXPECT_NE(std::find(
+            curve->at("entryFields").begin(),
+            curve->at("entryFields").end(),
+            Json("tangentIn")),
+            curve->at("entryFields").end()) << name;
+        EXPECT_NE(std::find(
+            curve->at("entryFields").begin(),
+            curve->at("entryFields").end(),
+            Json("tangentOut")),
+            curve->at("entryFields").end()) << name;
+    }
+}
+
+TEST(ParticleEditorFields, CurveInterpolationV2WritesCurvesModuleAndResets)
+{
+    Json document = Json{
+        {"name", "PS_v2_curve_interpolation"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"emitters", Json::array({Json{
+            {"name", "spark"},
+            {"modules", Json::array({
+                Json{{"type", "curves"}, {"fields", Json::object()}}})}
+        }})}
+    };
+    ApplyAssetChanges(
+        document,
+        EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorChange(
+            "emitters.0.curveInterpolation", std::string("hermite"))});
+
+    const Json& modules = document["emitters"][0]["modules"];
+    ASSERT_EQ(modules.size(), 1u);
+    EXPECT_EQ(modules[0].value("type", std::string()), "curves");
+    EXPECT_EQ(
+        modules[0].at("fields").value("curveInterpolation", std::string()),
+        "hermite");
+
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_v2_curve_interpolation.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_EQ(
+        asset.emitters[0].curveInterpolation,
+        ParticleCurveInterpolation::Hermite);
+
+    ApplyAssetChanges(
+        document,
+        EditorAssetDocumentKind::ParticleSystem,
+        {ParticleEditorReset("emitters.0.curveInterpolation")});
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_v2_curve_interpolation_reset.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_EQ(
+        asset.emitters[0].curveInterpolation,
+        ParticleCurveInterpolation::Linear);
+}
+
+TEST(ParticleAsset, FlipbookTimelineKeysParseAndValidate)
+{
+    Json document = MultiEmitterDocument();
+    Json& flipbook = document["emitters"][0]["flipbook"];
+    flipbook = Json{
+        {"columns", 4},
+        {"rows", 4},
+        {"framePivotKeys", Json::array({
+            Json{{"time", 0.0},
+                 {"pivot", Json::array({0.25, 0.75})},
+                 {"tangentOut", Json::array({0.5, -0.5})}},
+            Json{{"time", 1.0},
+                 {"pivot", Json::array({0.5, 0.5})},
+                 {"tangentIn", Json::array({-0.5, 0.5})}}})},
+        {"frameRotationKeys", Json::array({
+            Json{{"time", 0.0}, {"degrees", -15.0},
+                 {"tangentOut", 2.0}},
+            Json{{"time", 1.0}, {"degrees", 45.0},
+                 {"tangentIn", -2.0}}})}};
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_flipbook_timeline.json");
+    ASSERT_EQ(asset.emitters.size(), 2u);
+    const ParticleEmitterAsset& emitter = asset.emitters[0];
+    ASSERT_EQ(emitter.flipbookFramePivotKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        emitter.flipbookFramePivotKeys[0].pivot.x(), 0.25f);
+    EXPECT_FLOAT_EQ(
+        emitter.flipbookFramePivotKeys[0].tangentOut.y(), -0.5f);
+    ASSERT_EQ(emitter.flipbookFrameRotationKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        emitter.flipbookFrameRotationKeys[1].degrees, 45.0f);
+    EXPECT_FLOAT_EQ(
+        emitter.flipbookFrameRotationKeys[1].tangentIn, -2.0f);
+}
+
+TEST(ParticleAsset, FlipbookTimelineKeysRejectInvalidAuthoring)
+{
+    auto documentWithPivotKeys = [](const Json& keys)
+    {
+        Json document = MultiEmitterDocument();
+        document["emitters"][0]["flipbook"] = Json{
+            {"columns", 4},
+            {"rows", 4},
+            {"framePivotKeys", keys}};
+        return document;
+    };
+
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            documentWithPivotKeys(Json::array()),
+            "Maps/SC_test/PS_flipbook_empty_keys.json"),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            documentWithPivotKeys(Json::array({
+                Json{{"time", 0.5}, {"pivot", Json::array({0.5, 0.5})}},
+                Json{{"time", 0.5}, {"pivot", Json::array({0.5, 0.5})}}})),
+            "Maps/SC_test/PS_flipbook_duplicate_times.json"),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            documentWithPivotKeys(Json::array({
+                Json{{"time", 0.0},
+                     {"pivot", Json::array({9.0, 0.5})}}})),
+            "Maps/SC_test/PS_flipbook_pivot_range.json"),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            documentWithPivotKeys(Json::array({
+                Json{{"time", 0.0},
+                     {"pivot", Json::array({0.5, 0.5})},
+                     {"tangentOut",
+                      Json::array({0.0,
+                          std::numeric_limits<double>::infinity()})}}})),
+            "Maps/SC_test/PS_flipbook_inf_tangent.json"),
+        std::invalid_argument);
+
+    Json tooMany = MultiEmitterDocument();
+    Json keys = Json::array();
+    for (int index = 0; index < 9; ++index)
+    {
+        keys.push_back(Json{
+            {"time", static_cast<double>(index) / 9.0},
+            {"pivot", Json::array({0.5, 0.5})}});
+    }
+    tooMany["emitters"][0]["flipbook"] = Json{
+        {"columns", 4}, {"rows", 4},
+        {"framePivotKeys", keys}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            tooMany, "Maps/SC_test/PS_flipbook_many_keys.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleEditorFields, FlipbookTimelineKeysAreExposed)
+{
+    const Json document = MultiEmitterDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const Json& fields = capabilities["emitters"][0]["fields"];
+    for (const char* name : {
+        "flipbook.framePivotKeys",
+        "flipbook.frameRotationKeys"})
+    {
+        const Json* curve = FindParticleCapability(fields, name);
+        ASSERT_NE(curve, nullptr) << name;
+        ASSERT_TRUE(curve->contains("entryFields")) << name;
+        EXPECT_NE(std::find(
+            curve->at("entryFields").begin(),
+            curve->at("entryFields").end(),
+            Json("tangentIn")),
+            curve->at("entryFields").end()) << name;
+        EXPECT_NE(std::find(
+            curve->at("entryFields").begin(),
+            curve->at("entryFields").end(),
+            Json("tangentOut")),
+            curve->at("entryFields").end()) << name;
+    }
+}
+
+TEST(ParticleEditorFields, LodTierRenderFieldsAreExposed)
+{
+    const Json document = MultiEmitterDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const Json& fields = capabilities["emitters"][0]["fields"];
+    const Json* tiers = FindParticleCapability(fields, "lod.tiers");
+    ASSERT_NE(tiers, nullptr);
+    ASSERT_TRUE(tiers->contains("entryFields"));
+    for (const char* name : {
+        "distance", "spawnRateScale", "renderScale", "fadeRange"})
+    {
+        EXPECT_NE(std::find(
+            tiers->at("entryFields").begin(),
+            tiers->at("entryFields").end(),
+            Json(name)),
+            tiers->at("entryFields").end()) << name;
+    }
+}
+
+TEST(ParticleAsset, RibbonBeamCurveTangentsAndShapeParse)
+{
+    Json document = MultiEmitterDocument();
+    Json& emitter = document["emitters"][0];
+    emitter["curveInterpolation"] = "bezier";
+    emitter["ribbonPivot"] = 0.25;
+    emitter["ribbonTwist"] = 45.0;
+    emitter["ribbonWidthKeys"] = Json::array({
+        Json{{"time", 0.0}, {"width", 1.0},
+             {"tangentOut", 0.5}},
+        Json{{"time", 1.0}, {"width", 0.5},
+             {"tangentIn", -0.5}}});
+    emitter["ribbonColorKeys"] = Json::array({
+        Json{{"time", 0.0},
+             {"color", Json::array({1.0, 0.0, 0.0, 1.0})},
+             {"tangentOut", Json::array({0.1, 0.2, 0.3, 0.0})}}});
+    emitter["beam"] = Json{
+        {"colorKeys", Json::array({
+            Json{{"time", 0.0},
+                 {"color", Json::array({1.0, 1.0, 1.0, 1.0})},
+                 {"tangentOut", Json::array({0.3, 0.3, 0.3, 0.0})}},
+            Json{{"time", 1.0},
+                 {"color", Json::array({0.0, 0.0, 1.0, 1.0})},
+                 {"tangentIn", Json::array({-0.3, -0.3, 0.0, 0.0})}}})},
+        {"widthKeys", Json::array({
+            Json{{"time", 0.0}, {"width", 1.0},
+                 {"tangentOut", 0.5}},
+            Json{{"time", 1.0}, {"width", 0.2},
+                 {"tangentIn", -0.5}}})}};
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_ribbon_curve_tangents.json");
+    const ParticleEmitterAsset& parsed = asset.emitters[0];
+    EXPECT_FLOAT_EQ(parsed.ribbonPivot, 0.25f);
+    EXPECT_FLOAT_EQ(parsed.ribbonTwist, 45.0f);
+    ASSERT_EQ(parsed.ribbonWidthKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(parsed.ribbonWidthKeys[0].tangentOut, 0.5f);
+    ASSERT_EQ(parsed.ribbonColorKeys.size(), 1u);
+    EXPECT_FLOAT_EQ(parsed.ribbonColorKeys[0].tangentOut.x(), 0.1f);
+    ASSERT_EQ(parsed.beam.colorKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(parsed.beam.colorKeys[0].tangentOut.x(), 0.3f);
+    ASSERT_EQ(parsed.beam.widthKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(parsed.beam.widthKeys[1].tangentIn, -0.5f);
+}
+
+TEST(ParticleAsset, RibbonShapeAndCurveTangentRangesAreValidated)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["ribbonPivot"] = 1.5;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_ribbon_pivot_range.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["ribbonTwist"] = 4000.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_ribbon_twist_range.json"),
+        std::invalid_argument);
+
+    document = MultiEmitterDocument();
+    document["emitters"][0]["ribbonWidthKeys"] = Json::array({
+        Json{{"time", 0.0}, {"width", 1.0},
+             {"tangentOut",
+              std::numeric_limits<double>::infinity()}}});
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_ribbon_inf_tangent.json"),
+        std::invalid_argument);
+}
+
+TEST(ParticleEditorFields, RibbonAndBeamCurveTangentFieldsAreExposed)
+{
+    const Json document = MultiEmitterDocument();
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem, document);
+    const Json& fields = capabilities["emitters"][0]["fields"];
+    for (const char* name : {
+        "ribbonWidthKeys", "ribbonColorKeys",
+        "beam.colorKeys", "beam.widthKeys"})
+    {
+        const Json* curve = FindParticleCapability(fields, name);
+        ASSERT_NE(curve, nullptr) << name;
+        ASSERT_TRUE(curve->contains("entryFields")) << name;
+        EXPECT_NE(std::find(
+            curve->at("entryFields").begin(),
+            curve->at("entryFields").end(),
+            Json("tangentIn")),
+            curve->at("entryFields").end()) << name;
+    }
+    EXPECT_NE(FindParticleCapability(fields, "ribbonPivot"), nullptr);
+    EXPECT_NE(FindParticleCapability(fields, "ribbonTwist"), nullptr);
+}
+
+TEST(ParticleAsset, SoftParticleThicknessParsesAndValidates)
+{
+    ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        MultiEmitterDocument(), "Maps/SC_test/PS_soft_default.json");
+    EXPECT_FLOAT_EQ(asset.emitters[0].softParticleThickness, 0.0f);
+
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["softParticleThickness"] = 40.0;
+    asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_soft_thickness.json");
+    EXPECT_FLOAT_EQ(asset.emitters[0].softParticleThickness, 40.0f);
+
+    document["emitters"][0]["softParticleThickness"] = -1.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_soft_thickness_negative.json"),
+        std::invalid_argument);
+    document["emitters"][0]["softParticleThickness"] = 10001.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_soft_thickness_large.json"),
+        std::invalid_argument);
+
+    const Json capabilities = DescribeAssetCapabilities(
+        EditorAssetDocumentKind::ParticleSystem,
+        MultiEmitterDocument());
+    EXPECT_NE(
+        FindParticleCapability(
+            capabilities["emitters"][0]["fields"],
+            "softParticleThickness"),
+        nullptr);
 }

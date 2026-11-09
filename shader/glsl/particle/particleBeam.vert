@@ -197,7 +197,18 @@ vec4 EvaluateBeamColorCurve(float t)
         float t1 = BeamColorKeyTime(index + 1);
         if (t >= t0 && t <= t1)
         {
-            float weight = (t - t0) / max(t1 - t0, 1.0e-5);
+            float span = max(t1 - t0, 1.0e-5);
+            float weight = (t - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteVector4(
+                    frame.beamColorKeys[index],
+                    frame.beamColorKeys[index + 1],
+                    frame.beamColorTangentOut[index],
+                    frame.beamColorTangentIn[index + 1],
+                    weight,
+                    span);
+            }
             return mix(
                 frame.beamColorKeys[index],
                 frame.beamColorKeys[index + 1],
@@ -229,7 +240,18 @@ float BeamWidthScaleAt(float t)
         float t1 = frame.beamWidthKeys[index + 1].x;
         if (t >= t0 && t <= t1)
         {
-            float weight = (t - t0) / max(t1 - t0, 1.0e-5);
+            float span = max(t1 - t0, 1.0e-5);
+            float weight = (t - t0) / span;
+            if (ParticleCurveMode() != 0)
+            {
+                return ParticleHermiteScalar(
+                    frame.beamWidthKeys[index].y,
+                    frame.beamWidthKeys[index + 1].y,
+                    frame.beamWidthKeys[index].w,
+                    frame.beamWidthKeys[index + 1].z,
+                    weight,
+                    span);
+            }
             return mix(
                 frame.beamWidthKeys[index].y,
                 frame.beamWidthKeys[index + 1].y,
@@ -416,9 +438,9 @@ void main()
     float taper0 = BeamTaper(t0, isBranch);
     float taper1 = BeamTaper(t1, isBranch);
     float arcWidthScale = clamp(arcParams.x, 0.0, 1.0);
-    float halfWidth0 = frame.beamEnd.w * branchWeight *
+    float halfWidth0 = frame.beamEnd.w * frame.lodParams.x * branchWeight *
         arcWidthScale * BeamWidthScaleAt(t0) * mix(0.25, 1.0, taper0);
-    float halfWidth1 = frame.beamEnd.w * branchWeight *
+    float halfWidth1 = frame.beamEnd.w * frame.lodParams.x * branchWeight *
         arcWidthScale * BeamWidthScaleAt(t1) * mix(0.25, 1.0, taper1);
     float halfWidth = mix(halfWidth0, halfWidth1, along);
     vec3 worldPosition =

@@ -18,6 +18,7 @@ layout(location = 0) out vec4 outColor;
 // 与 ribbon 相同的 particle pass set 3 输入。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
 {
     uint fragments;
@@ -27,11 +28,13 @@ layout(std430, set = 0, binding = 5) buffer ParticleDebug
 void main()
 {
     // 与 ribbon 相同的 sceneDepth/软粒子逻辑。
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -39,11 +42,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) /
-                max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     // 电弧横截面：中心亮核 + 两侧快速衰减，不做 FBM 侵蚀，保持干净的

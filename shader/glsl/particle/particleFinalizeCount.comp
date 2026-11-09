@@ -24,5 +24,14 @@ void main()
 {
     // 容量来自 counter.capacity（创建时写入，fillBuffer 不覆盖），
     // args[1] 每帧被本 shader 覆盖，不能作为下一帧的上限。
-    indirectArgs.words[1] = min(counters.alive, counters.capacity);
+    uint instanceCount =
+        min(counters.alive, counters.capacity);
+    // 静态 mesh 逐 section 的 DrawIndexedIndirectCommand 连续存放：
+    // 每条命令 5 个 uint，instanceCount 在 [1]。CPU 为每个 emitter 的
+    // indirect 缓冲至少保留 64 条命令空间，因此这里可以无分支地同步
+    // 所有可能 section；未被 draw 的命令不影响渲染。
+    for (uint command = 0; command < 64u; ++command)
+    {
+        indirectArgs.words[command * 5 + 1] = instanceCount;
+    }
 }

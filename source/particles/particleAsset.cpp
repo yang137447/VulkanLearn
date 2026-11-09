@@ -59,6 +59,68 @@ Eigen::Vector3f ReadVec3(
     return result;
 }
 
+Eigen::Vector2f ReadVec2(
+    const nlohmann::json& object,
+    const char* field,
+    const Eigen::Vector2f& fallback)
+{
+    if (!object.contains(field))
+    {
+        return fallback;
+    }
+    const nlohmann::json& value = object.at(field);
+    if (!value.is_array() || value.size() != 2)
+    {
+        throw std::invalid_argument(
+            std::string("Particle vector requires two components: ") +
+            field);
+    }
+    Eigen::Vector2f result;
+    for (int axis = 0; axis < 2; ++axis)
+    {
+        const nlohmann::json& component = value.at(axis);
+        if (!component.is_number() ||
+            !std::isfinite(component.get<float>()))
+        {
+            throw std::invalid_argument(
+                std::string("Particle vector is not finite: ") + field);
+        }
+        result[axis] = component.get<float>();
+    }
+    return result;
+}
+
+Eigen::Vector2f ReadVec2Tangent(
+    const nlohmann::json& object,
+    const char* field)
+{
+    if (!object.contains(field))
+    {
+        return Eigen::Vector2f::Zero();
+    }
+    const nlohmann::json& value = object.at(field);
+    if (!value.is_array() || value.size() != 2)
+    {
+        throw std::invalid_argument(
+            std::string("Particle curve tangent requires two "
+                "components: ") + field);
+    }
+    Eigen::Vector2f result = Eigen::Vector2f::Zero();
+    for (int axis = 0; axis < 2; ++axis)
+    {
+        const nlohmann::json& component = value.at(axis);
+        if (!component.is_number() ||
+            !std::isfinite(component.get<float>()))
+        {
+            throw std::invalid_argument(
+                std::string("Particle curve tangent is not finite: ") +
+                field);
+        }
+        result[axis] = component.get<float>();
+    }
+    return result;
+}
+
 Eigen::Vector4f ReadVec4(
     const nlohmann::json& object,
     const char* field,
@@ -84,6 +146,40 @@ Eigen::Vector4f ReadVec4(
         {
             throw std::invalid_argument(
                 std::string("Particle color is not finite: ") + field);
+        }
+        result[channel] = component.get<float>();
+    }
+    return result;
+}
+
+// 颜色切线允许省略 alpha（默认 0，而不是颜色 key 的 1），因为 alpha 的
+// 导数在缺省时应当是“不变”而不是“不透明”。
+Eigen::Vector4f ReadVec4Tangent(
+    const nlohmann::json& object,
+    const char* field)
+{
+    if (!object.contains(field))
+    {
+        return Eigen::Vector4f::Zero();
+    }
+    const nlohmann::json& value = object.at(field);
+    if (!value.is_array() ||
+        (value.size() != 3 && value.size() != 4))
+    {
+        throw std::invalid_argument(
+            std::string("Particle curve tangent requires three or four "
+                "components: ") + field);
+    }
+    Eigen::Vector4f result = Eigen::Vector4f::Zero();
+    for (size_t channel = 0; channel < value.size(); ++channel)
+    {
+        const nlohmann::json& component = value.at(channel);
+        if (!component.is_number() ||
+            !std::isfinite(component.get<float>()))
+        {
+            throw std::invalid_argument(
+                std::string("Particle curve tangent is not finite: ") +
+                field);
         }
         result[channel] = component.get<float>();
     }
@@ -517,6 +613,22 @@ ParticleEmitterAsset ParseEmitter(
             "'skeletalMeshTris', 'skeletalMeshBones', "
             "'beam', 'distortion', 'light' or 'decal'");
     }
+    if (json.contains("curveInterpolation"))
+    {
+        if (!json.at("curveInterpolation").is_string())
+        {
+            throw std::invalid_argument(
+                "Particle curveInterpolation must be a string");
+        }
+        if (!ParseParticleCurveInterpolation(
+                json.at("curveInterpolation").get<std::string>(),
+                emitter.curveInterpolation))
+        {
+            throw std::invalid_argument(
+                "Particle curveInterpolation must be 'linear', "
+                "'hermite' or 'bezier'");
+        }
+    }
     emitter.ribbonWidth = ReadFiniteFloat(
         json, "ribbonWidth", emitter.ribbonWidth);
     emitter.ribbonSegments = ReadCountField(
@@ -525,6 +637,10 @@ ParticleEmitterAsset ParseEmitter(
         json, "ribbonFade", emitter.ribbonFade);
     emitter.ribbonUVTiling = ReadFiniteFloat(
         json, "ribbonUVTiling", emitter.ribbonUVTiling);
+    emitter.ribbonPivot = ReadFiniteFloat(
+        json, "ribbonPivot", emitter.ribbonPivot);
+    emitter.ribbonTwist = ReadFiniteFloat(
+        json, "ribbonTwist", emitter.ribbonTwist);
     if (json.contains("ribbonWidthKeys"))
     {
         const nlohmann::json& widthKeys = json.at("ribbonWidthKeys");
@@ -551,6 +667,10 @@ ParticleEmitterAsset ParseEmitter(
             ParticleRibbonWidthKey key;
             key.time = ReadFiniteFloat(entry, "time", 0.0f);
             key.width = ReadFiniteFloat(entry, "width", 1.0f);
+            key.tangentIn = ReadFiniteFloat(
+                entry, "tangentIn", 0.0f);
+            key.tangentOut = ReadFiniteFloat(
+                entry, "tangentOut", 0.0f);
             if (key.time < 0.0f || key.time > 1.0f ||
                 key.time <= previousTime)
             {
@@ -588,6 +708,8 @@ ParticleEmitterAsset ParseEmitter(
             ParticleRibbonColorKey key;
             key.time = ReadFiniteFloat(entry, "time", 0.0f);
             key.color = ReadVec4(entry, "color", key.color);
+            key.tangentIn = ReadVec4Tangent(entry, "tangentIn");
+            key.tangentOut = ReadVec4Tangent(entry, "tangentOut");
             if (key.time < 0.0f || key.time > 1.0f ||
                 key.time <= previousTime)
             {
@@ -654,6 +776,10 @@ ParticleEmitterAsset ParseEmitter(
                     keyJson, "time", key.time);
                 key.color = ReadVec4(
                     keyJson, "color", key.color);
+                key.tangentIn = ReadVec4Tangent(
+                    keyJson, "tangentIn");
+                key.tangentOut = ReadVec4Tangent(
+                    keyJson, "tangentOut");
                 emitter.beam.colorKeys.push_back(key);
             }
         }
@@ -678,6 +804,10 @@ ParticleEmitterAsset ParseEmitter(
                     keyJson, "time", key.time);
                 key.width = ReadFiniteFloat(
                     keyJson, "width", key.width);
+                key.tangentIn = ReadFiniteFloat(
+                    keyJson, "tangentIn", 0.0f);
+                key.tangentOut = ReadFiniteFloat(
+                    keyJson, "tangentOut", 0.0f);
                 emitter.beam.widthKeys.push_back(key);
             }
         }
@@ -761,31 +891,96 @@ ParticleEmitterAsset ParseEmitter(
             "castShadows", emitter.light.castShadows);
         emitter.light.shadowBias = ReadFiniteFloat(
             light, "shadowBias", emitter.light.shadowBias);
-        if (light.contains("iesProfile"))
+        // iesProfile 与 iesTexture 是同一种逐像素角度剖面的两个名字；
+        // 同时出现时拒绝，避免作者以为后者会覆盖前者。
+        if (light.contains("iesProfile") && light.contains("iesTexture"))
         {
-            const nlohmann::json& ies = light.at("iesProfile");
+            throw std::invalid_argument(
+                "Particle light must not declare both iesProfile and "
+                "iesTexture");
+        }
+        const char* iesField = light.contains("iesTexture")
+            ? "iesTexture"
+            : (light.contains("iesProfile") ? "iesProfile" : nullptr);
+        if (iesField != nullptr)
+        {
+            const nlohmann::json& ies = light.at(iesField);
             if (!ies.is_array() || ies.size() > 64)
             {
                 throw std::invalid_argument(
-                    "Particle light.iesProfile allows at most 64 samples");
+                    std::string("Particle light.") + iesField +
+                    " allows at most 64 samples");
             }
-            emitter.light.iesProfile.clear();
+            std::vector<float>& samples = light.contains("iesTexture")
+                ? emitter.light.iesTexture
+                : emitter.light.iesProfile;
+            samples.clear();
             for (const nlohmann::json& sample : ies)
             {
                 if (!sample.is_number())
                 {
                     throw std::invalid_argument(
-                        "Particle light.iesProfile samples must be numbers");
+                        std::string("Particle light.") + iesField +
+                        " samples must be numbers");
                 }
                 const float value = sample.get<float>();
                 if (!std::isfinite(value) || value < 0.0f || value > 64.0f)
                 {
                     throw std::invalid_argument(
-                        "Particle light.iesProfile samples must be finite "
-                        "and in [0,64]");
+                        std::string("Particle light.") + iesField +
+                        " samples must be finite and in [0,64]");
                 }
-                emitter.light.iesProfile.push_back(value);
+                samples.push_back(value);
             }
+            // 两个名字共用同一份数据，运行时只看 iesProfile。
+            if (!emitter.light.iesTexture.empty())
+            {
+                emitter.light.iesProfile = emitter.light.iesTexture;
+            }
+        }
+        if (light.contains("brightnessKeys"))
+        {
+            const nlohmann::json& keys = light.at("brightnessKeys");
+            if (!keys.is_array() || keys.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle light.brightnessKeys allows at most 8 keys");
+            }
+            emitter.light.brightnessKeys.clear();
+            float previousTime = -1.0f;
+            for (const nlohmann::json& entry : keys)
+            {
+                if (!entry.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle light.brightnessKeys entry must be an "
+                        "object");
+                }
+                ParticleLightBrightnessKey key;
+                key.time = ReadFiniteFloat(entry, "time", 0.0f);
+                // 兼容只写 brightness 的简写：同一 key 也接受 "value"。
+                key.brightness = ReadFiniteFloat(
+                    entry,
+                    entry.contains("brightness") ? "brightness" : "value",
+                    key.brightness);
+                key.color = ReadVec3(entry, "color", key.color);
+                if (key.time < 0.0f || key.time > 1.0f ||
+                    key.time <= previousTime)
+                {
+                    throw std::invalid_argument(
+                        "Particle light.brightnessKeys times must be in "
+                        "[0,1] and strictly increasing");
+                }
+                if (key.brightness < 0.0f || key.brightness > 64.0f)
+                {
+                    throw std::invalid_argument(
+                        "Particle light.brightnessKeys brightness must be "
+                        "in [0,64]");
+                }
+                previousTime = key.time;
+                emitter.light.brightnessKeys.push_back(key);
+            }
+            // 没有逐寿命颜色时，颜色乘数保持白，亮度曲线只缩放功率。
         }
     }
     if (json.contains("decal"))
@@ -882,6 +1077,10 @@ ParticleEmitterAsset ParseEmitter(
         }
         emitter.meshScale = ReadVec3(
             mesh, "scale", emitter.meshScale);
+        emitter.meshUseSizeCurve = mesh.value(
+            "useSizeCurve", emitter.meshUseSizeCurve);
+        emitter.meshSizeScale = ReadFiniteFloat(
+            mesh, "sizeScale", emitter.meshSizeScale);
         if (mesh.contains("alignment"))
         {
             if (!mesh.at("alignment").is_string())
@@ -1067,6 +1266,8 @@ ParticleEmitterAsset ParseEmitter(
         json, "softParticleDistance", emitter.softParticleDistance);
     emitter.softParticleTapRadius = ReadFiniteFloat(
         json, "softParticleTapRadius", emitter.softParticleTapRadius);
+    emitter.softParticleThickness = ReadFiniteFloat(
+        json, "softParticleThickness", emitter.softParticleThickness);
     emitter.sortParticles =
         json.value("sortParticles", emitter.sortParticles);
     // sortOrder 与 sortParticles 一样按展平后的 emitter 根字段解析；它不
@@ -1124,6 +1325,10 @@ ParticleEmitterAsset ParseEmitter(
                     entry,
                     "spawnRateScale",
                     tier.spawnRateScale);
+                tier.renderScale = ReadFiniteFloat(
+                    entry, "renderScale", tier.renderScale);
+                tier.fadeRange = ReadFiniteFloat(
+                    entry, "fadeRange", tier.fadeRange);
                 emitter.lodTiers.push_back(tier);
             }
         }
@@ -1533,6 +1738,10 @@ ParticleEmitterAsset ParseEmitter(
             key.time = ReadFiniteFloat(keyJson, "time", key.time);
             key.color = ReadVec4(
                 keyJson, "color", key.color);
+            key.tangentIn = ReadVec4Tangent(
+                keyJson, "tangentIn");
+            key.tangentOut = ReadVec4Tangent(
+                keyJson, "tangentOut");
             emitter.colorKeys.push_back(key);
         }
         std::sort(
@@ -1564,6 +1773,10 @@ ParticleEmitterAsset ParseEmitter(
             ParticleSizeKey key;
             key.time = ReadFiniteFloat(keyJson, "time", key.time);
             key.size = ReadFiniteFloat(keyJson, "size", key.size);
+            key.tangentIn = ReadFiniteFloat(
+                keyJson, "tangentIn", 0.0f);
+            key.tangentOut = ReadFiniteFloat(
+                keyJson, "tangentOut", 0.0f);
             emitter.sizeKeys.push_back(key);
         }
         std::sort(
@@ -1709,6 +1922,96 @@ ParticleEmitterAsset ParseEmitter(
                 }
                 previousTime = key.time;
                 emitter.flipbookPlayRateKeys.push_back(key);
+            }
+        }
+
+        if (flipbook.contains("framePivotKeys"))
+        {
+            const nlohmann::json& keys =
+                flipbook.at("framePivotKeys");
+            if (!keys.is_array() || keys.empty() ||
+                keys.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.framePivotKeys requires 1..8 "
+                    "entries");
+            }
+            float previousTime = -1.0f;
+            for (const nlohmann::json& entry : keys)
+            {
+                if (!entry.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.framePivotKeys entry must be "
+                        "an object");
+                }
+                ParticleFlipbookPivotKey key;
+                key.time = ReadFiniteFloat(entry, "time", 0.0f);
+                key.pivot = ReadVec2(
+                    entry, "pivot", key.pivot);
+                key.tangentIn = ReadVec2Tangent(
+                    entry, "tangentIn");
+                key.tangentOut = ReadVec2Tangent(
+                    entry, "tangentOut");
+                if (key.time < 0.0f || key.time > 1.0f ||
+                    key.time <= previousTime)
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.framePivotKeys times must be "
+                        "in [0,1] and strictly increasing");
+                }
+                for (int axis = 0; axis < 2; ++axis)
+                {
+                    if (key.pivot[axis] < -8.0f ||
+                        key.pivot[axis] > 8.0f)
+                    {
+                        throw std::invalid_argument(
+                            "Particle flipbook.framePivotKeys pivot must "
+                            "be in [-8,8]");
+                    }
+                }
+                previousTime = key.time;
+                emitter.flipbookFramePivotKeys.push_back(key);
+            }
+        }
+
+        if (flipbook.contains("frameRotationKeys"))
+        {
+            const nlohmann::json& keys =
+                flipbook.at("frameRotationKeys");
+            if (!keys.is_array() || keys.empty() ||
+                keys.size() > kMaxParticleCurveKeys)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.frameRotationKeys requires 1..8 "
+                    "entries");
+            }
+            float previousTime = -1.0f;
+            for (const nlohmann::json& entry : keys)
+            {
+                if (!entry.is_object())
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.frameRotationKeys entry must "
+                        "be an object");
+                }
+                ParticleFlipbookRotationKey key;
+                key.time = ReadFiniteFloat(entry, "time", 0.0f);
+                key.degrees = ReadFiniteFloat(
+                    entry, "degrees", 0.0f);
+                key.tangentIn = ReadFiniteFloat(
+                    entry, "tangentIn", 0.0f);
+                key.tangentOut = ReadFiniteFloat(
+                    entry, "tangentOut", 0.0f);
+                if (key.time < 0.0f || key.time > 1.0f ||
+                    key.time <= previousTime)
+                {
+                    throw std::invalid_argument(
+                        "Particle flipbook.frameRotationKeys times must "
+                        "be in [0,1] and strictly increasing");
+                }
+                previousTime = key.time;
+                emitter.flipbookFrameRotationKeys.push_back(key);
             }
         }
 
@@ -2019,6 +2322,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.softness, "softness");
     RequireFinite(emitter.softParticleDistance, "softParticleDistance");
     RequireFinite(emitter.softParticleTapRadius, "softParticleTapRadius");
+    RequireFinite(emitter.softParticleThickness, "softParticleThickness");
     RequireFinite(emitter.opacity, "opacity");
     RequireFinite(emitter.distortionStrength, "distortionStrength");
     RequireFinite(emitter.maxDrawDistance, "maxDrawDistance");
@@ -2045,6 +2349,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     if (emitter.renderMode != "billboard" &&
         emitter.renderMode != "ribbon" &&
         emitter.renderMode != "mesh" &&
+        emitter.renderMode != "skeletalMeshTris" &&
+        emitter.renderMode != "skeletalMeshBones" &&
         emitter.renderMode != "beam" &&
         emitter.renderMode != "distortion" &&
         emitter.renderMode != "light" &&
@@ -2070,6 +2376,45 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
                 "Particle light.radius must be positive");
         }
         RequireFinite(emitter.light.shadowBias, "light.shadowBias");
+        float previousBrightnessTime = -1.0f;
+        for (const ParticleLightBrightnessKey& key :
+             emitter.light.brightnessKeys)
+        {
+            RequireFinite(key.time, "light.brightnessKeys.time");
+            RequireFinite(key.brightness, "light.brightnessKeys.brightness");
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                RequireFinite(key.color[channel],
+                    "light.brightnessKeys.color");
+                if (key.color[channel] < 0.0f ||
+                    key.color[channel] > 64.0f)
+                {
+                    throw std::invalid_argument(
+                        "Particle light.brightnessKeys color must be in "
+                        "[0,64]");
+                }
+            }
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousBrightnessTime)
+            {
+                throw std::invalid_argument(
+                    "Particle light.brightnessKeys times must be in [0,1] "
+                    "and strictly increasing");
+            }
+            if (key.brightness < 0.0f || key.brightness > 64.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle light.brightnessKeys brightness must be in "
+                    "[0,64]");
+            }
+            previousBrightnessTime = key.time;
+        }
+        if (emitter.light.iesProfile.size() > 64 ||
+            emitter.light.iesTexture.size() > 64)
+        {
+            throw std::invalid_argument(
+                "Particle light IES profile allows at most 64 samples");
+        }
         if (emitter.light.shadowBias < 0.0f ||
             emitter.light.shadowBias > 100.0f)
         {
@@ -2230,6 +2575,40 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle ribbonUVTiling must be in (0, 64]");
     }
+    if (emitter.ribbonPivot < -1.0f ||
+        emitter.ribbonPivot > 1.0f)
+    {
+        throw std::invalid_argument(
+            "Particle ribbonPivot must be in [-1, 1]");
+    }
+    if (!std::isfinite(emitter.ribbonTwist) ||
+        emitter.ribbonTwist < -3600.0f ||
+        emitter.ribbonTwist > 3600.0f)
+    {
+        throw std::invalid_argument(
+            "Particle ribbonTwist must be finite and in [-3600, 3600]");
+    }
+    float previousRibbonWidthTime = -1.0f;
+    for (const ParticleRibbonWidthKey& key : emitter.ribbonWidthKeys)
+    {
+        RequireFinite(key.time, "ribbonWidthKeys.time");
+        RequireFinite(key.width, "ribbonWidthKeys.width");
+        RequireFinite(key.tangentIn, "ribbonWidthKeys.tangentIn");
+        RequireFinite(key.tangentOut, "ribbonWidthKeys.tangentOut");
+        if (key.time < 0.0f || key.time > 1.0f ||
+            key.time <= previousRibbonWidthTime)
+        {
+            throw std::invalid_argument(
+                "Particle ribbonWidthKeys times must be in [0,1] "
+                "and strictly increasing");
+        }
+        if (key.width < 0.0f || key.width > 8.0f)
+        {
+            throw std::invalid_argument(
+                "Particle ribbonWidthKeys width must be in [0,8]");
+        }
+        previousRibbonWidthTime = key.time;
+    }
     float previousRibbonColorTime = -1.0f;
     for (const ParticleRibbonColorKey& key : emitter.ribbonColorKeys)
     {
@@ -2243,6 +2622,10 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         for (int channel = 0; channel < 4; ++channel)
         {
             RequireFinite(key.color[channel], "ribbonColorKeys.color");
+            RequireFinite(
+                key.tangentIn[channel], "ribbonColorKeys.tangentIn");
+            RequireFinite(
+                key.tangentOut[channel], "ribbonColorKeys.tangentOut");
             if (key.color[channel] < 0.0f || key.color[channel] > 64.0f)
             {
                 throw std::invalid_argument(
@@ -2319,6 +2702,14 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     float previousBeamColorTime = -1.0f;
     for (const ParticleBeamColorKey& key : emitter.beam.colorKeys)
     {
+        RequireFinite(key.time, "beam.colorKeys.time");
+        for (int channel = 0; channel < 4; ++channel)
+        {
+            RequireFinite(
+                key.tangentIn[channel], "beam.colorKeys.tangentIn");
+            RequireFinite(
+                key.tangentOut[channel], "beam.colorKeys.tangentOut");
+        }
         if (key.time < 0.0f || key.time > 1.0f ||
             key.time <= previousBeamColorTime)
         {
@@ -2340,6 +2731,10 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     float previousBeamWidthTime = -1.0f;
     for (const ParticleBeamWidthKey& key : emitter.beam.widthKeys)
     {
+        RequireFinite(key.time, "beam.widthKeys.time");
+        RequireFinite(key.width, "beam.widthKeys.width");
+        RequireFinite(key.tangentIn, "beam.widthKeys.tangentIn");
+        RequireFinite(key.tangentOut, "beam.widthKeys.tangentOut");
         if (key.time < 0.0f || key.time > 1.0f ||
             key.time <= previousBeamWidthTime)
         {
@@ -2546,10 +2941,17 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.meshScale.x(), "mesh.scale.x");
     RequireFinite(emitter.meshScale.y(), "mesh.scale.y");
     RequireFinite(emitter.meshScale.z(), "mesh.scale.z");
+    RequireFinite(emitter.meshSizeScale, "mesh.sizeScale");
     if (emitter.meshScale.squaredNorm() <= 1.0e-12f)
     {
         throw std::invalid_argument(
             "Particle mesh.scale must be non-zero");
+    }
+    if (emitter.meshSizeScale <= 0.0f ||
+        emitter.meshSizeScale > 100.0f)
+    {
+        throw std::invalid_argument(
+            "Particle mesh.sizeScale must be in (0, 100]");
     }
     if (!IsParticleMeshAlignment(emitter.meshAlignment))
     {
@@ -2610,11 +3012,6 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
             throw std::invalid_argument(
                 "Particle mesh renderMode requires a non-empty mesh.path");
         }
-        if (emitter.localSpace)
-        {
-            throw std::invalid_argument(
-                "Particle mesh renderMode does not support localSpace=true");
-        }
     }
     if (emitter.spawnRate < 0.0f || emitter.spawnRate > 100000.0f)
     {
@@ -2652,7 +3049,9 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         const ParticleLodTier& tier = emitter.lodTiers[index];
         if (!std::isfinite(tier.distance) ||
-            !std::isfinite(tier.spawnRateScale))
+            !std::isfinite(tier.spawnRateScale) ||
+            !std::isfinite(tier.renderScale) ||
+            !std::isfinite(tier.fadeRange))
         {
             throw std::invalid_argument(
                 "Particle lod tier values must be finite");
@@ -2667,6 +3066,17 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         {
             throw std::invalid_argument(
                 "Particle lod tier spawnRateScale must be in [0, 1]");
+        }
+        if (tier.renderScale < 0.0f ||
+            tier.renderScale > 4.0f)
+        {
+            throw std::invalid_argument(
+                "Particle lod tier renderScale must be in [0, 4]");
+        }
+        if (tier.fadeRange < 0.0f)
+        {
+            throw std::invalid_argument(
+                "Particle lod tier fadeRange must be non-negative");
         }
         // 选择规则是“已越过的最远档位”，乱序或重复距离会让档位含义
         // 依赖数组顺序；要求严格递增才能保证结果唯一。
@@ -2932,6 +3342,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle softParticleTapRadius must be in [0, 32]");
     }
+    if (emitter.softParticleThickness < 0.0f ||
+        emitter.softParticleThickness > 10000.0f)
+    {
+        throw std::invalid_argument(
+            "Particle softParticleThickness must be in [0, 10000]");
+    }
     if (emitter.billboardDensity < 0.0f ||
         emitter.billboardDensity > 0.25f)
     {
@@ -3020,6 +3436,13 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         throw std::invalid_argument(
             "Particle curve key count exceeds GPU capacity");
     }
+    const int interpolationCode =
+        ParticleCurveInterpolationCode(emitter.curveInterpolation);
+    if (interpolationCode < 0 || interpolationCode > 2)
+    {
+        throw std::invalid_argument(
+            "Particle curveInterpolation is not supported");
+    }
     float previousColorTime = -1.0f;
     for (const ParticleColorKey& key : emitter.colorKeys)
     {
@@ -3027,6 +3450,10 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         for (int channel = 0; channel < 4; ++channel)
         {
             RequireFinite(key.color[channel], "colorKeys.color");
+            RequireFinite(
+                key.tangentIn[channel], "colorKeys.tangentIn");
+            RequireFinite(
+                key.tangentOut[channel], "colorKeys.tangentOut");
         }
         if (key.time < 0.0f || key.time > 1.0f ||
             key.time <= previousColorTime)
@@ -3041,6 +3468,8 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         RequireFinite(key.time, "sizeKeys.time");
         RequireFinite(key.size, "sizeKeys.size");
+        RequireFinite(key.tangentIn, "sizeKeys.tangentIn");
+        RequireFinite(key.tangentOut, "sizeKeys.tangentOut");
         if (key.time < 0.0f || key.time > 1.0f ||
             key.time <= previousSizeTime)
         {
@@ -3250,6 +3679,83 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
                 throw std::invalid_argument(
                     "Particle flipbook frameRotations must all be finite");
             }
+        }
+    }
+    if (!emitter.flipbookFramePivotKeys.empty())
+    {
+        if (emitter.flipbookFramePivotKeys.size() >
+            kMaxParticleCurveKeys)
+        {
+            throw std::invalid_argument(
+                "Particle flipbook.framePivotKeys allows at most 8 keys");
+        }
+        float previousTime = -1.0f;
+        for (const ParticleFlipbookPivotKey& key :
+             emitter.flipbookFramePivotKeys)
+        {
+            RequireFinite(key.time, "flipbook.framePivotKeys.time");
+            RequireFinite(
+                key.pivot.x(), "flipbook.framePivotKeys.pivot.x");
+            RequireFinite(
+                key.pivot.y(), "flipbook.framePivotKeys.pivot.y");
+            RequireFinite(
+                key.tangentIn.x(),
+                "flipbook.framePivotKeys.tangentIn.x");
+            RequireFinite(
+                key.tangentIn.y(),
+                "flipbook.framePivotKeys.tangentIn.y");
+            RequireFinite(
+                key.tangentOut.x(),
+                "flipbook.framePivotKeys.tangentOut.x");
+            RequireFinite(
+                key.tangentOut.y(),
+                "flipbook.framePivotKeys.tangentOut.y");
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousTime)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.framePivotKeys times must be in "
+                    "[0,1] and strictly increasing");
+            }
+            if (key.pivot.x() < -8.0f || key.pivot.x() > 8.0f ||
+                key.pivot.y() < -8.0f || key.pivot.y() > 8.0f)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.framePivotKeys pivot must be in "
+                    "[-8,8]");
+            }
+            previousTime = key.time;
+        }
+    }
+    if (!emitter.flipbookFrameRotationKeys.empty())
+    {
+        if (emitter.flipbookFrameRotationKeys.size() >
+            kMaxParticleCurveKeys)
+        {
+            throw std::invalid_argument(
+                "Particle flipbook.frameRotationKeys allows at most 8 "
+                "keys");
+        }
+        float previousTime = -1.0f;
+        for (const ParticleFlipbookRotationKey& key :
+             emitter.flipbookFrameRotationKeys)
+        {
+            RequireFinite(
+                key.time, "flipbook.frameRotationKeys.time");
+            RequireFinite(
+                key.degrees, "flipbook.frameRotationKeys.degrees");
+            RequireFinite(
+                key.tangentIn, "flipbook.frameRotationKeys.tangentIn");
+            RequireFinite(
+                key.tangentOut, "flipbook.frameRotationKeys.tangentOut");
+            if (key.time < 0.0f || key.time > 1.0f ||
+                key.time <= previousTime)
+            {
+                throw std::invalid_argument(
+                    "Particle flipbook.frameRotationKeys times must be "
+                    "in [0,1] and strictly increasing");
+            }
+            previousTime = key.time;
         }
     }
 }

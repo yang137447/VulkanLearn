@@ -236,7 +236,8 @@ void ParticleCpuEmitterRuntime::Synchronize(
     const RenderScene& renderScene,
     const std::unordered_map<std::string, ParticleSystemAsset>&
         resolvedSystemAssets,
-    std::string_view renderMode)
+    std::string_view renderMode,
+    const std::unordered_set<std::string>* excludeKeys)
 {
     orderedStates.clear();
     if (!hasWorldGeneration ||
@@ -306,6 +307,11 @@ void ParticleCpuEmitterRuntime::Synchronize(
 
             const std::string key = BuildParticleEmitterKey(
                 snapshot.name, snapshot.assetPath, emitter.name);
+            if (excludeKeys != nullptr &&
+                excludeKeys->find(key) != excludeKeys->end())
+            {
+                continue;
+            }
             desired.insert(key);
             const uint64_t signature =
                 BuildStateSignature(emitter);

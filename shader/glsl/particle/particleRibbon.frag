@@ -21,6 +21,7 @@ layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
 // 局部光阴影图集：与 billboard/mesh 共用 particle pass 的 binding 2。
 layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
 {
     uint fragments;
@@ -62,11 +63,13 @@ float Fbm(vec2 p)
 void main()
 {
     // 与 billboard 相同的 sceneDepth/软粒子逻辑。
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
 
     if (vViewDepth >= sceneViewDepth)
     {
@@ -75,10 +78,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) / max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     // 条带横截面是矩形：只软化 vUV.y 两端，不做圆盘 radial 裁剪。

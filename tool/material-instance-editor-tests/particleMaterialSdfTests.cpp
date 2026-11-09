@@ -218,7 +218,7 @@ TEST(ParticleGlobalSort, SortsBackToFrontWithStableTieBreak)
 TEST(ParticleGlobalSort, CapacityAndTextureLimits)
 {
     static_assert(
-        kParticleGlobalRecordVec4Count == 15u,
+        kParticleGlobalRecordVec4Count == 17u,
         "GatheredBillboard must keep 11 base + 4 lighting vec4 fields");
     EXPECT_TRUE(CanUseParticleGlobalSort(1, 0));
     EXPECT_TRUE(CanUseParticleGlobalSort(

@@ -30,6 +30,8 @@ enum class RenderGraphPassType
     DecalStencil,
     // 粒子 billboard 不经过 Material schema，由 ParticleRenderer 直接绑定
     // 自己的 UBO/SSBO；该类型只负责在图中声明 sceneColor/sceneDepth 的合成顺序。
+    // 半分辨率软粒子深度过滤：读 sceneDepth，写线性视深度 texture2D。
+    ParticleSoftDepth,
     Particle,
     // 屏幕空间折射/热扰动：粒子 emitter 只写 UV 偏移缓冲，不碰 sceneColor；
     // toneMapping 在最终合成时采样该缓冲并偏移场景颜色。独立 pass 让粒子
@@ -57,11 +59,11 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十五个：编辑器网格、自动曝光、Decal、DecalStencil、粒子、屏幕空间扰动、
+// 十六个：编辑器网格、自动曝光、Decal、DecalStencil、软深度、粒子、屏幕空间扰动、
 // 局部光阴影、体积雾注入与体积雾合成各自追加，
 // 合并后必须都在表里，
 // 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 15>
+inline constexpr std::array<RenderGraphPassTypeName, 16>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -72,6 +74,7 @@ inline constexpr std::array<RenderGraphPassTypeName, 15>
         {RenderGraphPassType::AutoExposure, "autoExposure"},
         {RenderGraphPassType::Decal, "decal"},
         {RenderGraphPassType::DecalStencil, "decalStencil"},
+        {RenderGraphPassType::ParticleSoftDepth, "particleSoftDepth"},
         {RenderGraphPassType::Particle, "particle"},
         {RenderGraphPassType::Distortion, "distortion"},
         {RenderGraphPassType::LocalShadow, "localShadow"},

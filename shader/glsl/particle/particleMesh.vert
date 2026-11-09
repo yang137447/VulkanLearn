@@ -70,8 +70,8 @@ void main()
         return;
     }
 
-    // 非 localSpace 的模拟位置/速度在 spawn 时已经变换到世界空间；
-    // mesh v1 拒绝 localSpace，因此这里不再重复乘 localToWorld。
+    // ParticleMeshWorldPosition 统一负责 localSpace 的局部→世界变换，
+    // 可见与 shadow 路径必须共用它。
     vec3 localPosition = inPosition;
     vec3 localNormal = inNormal;
     vec4 localTangent = inTangent;
@@ -84,13 +84,15 @@ void main()
         localNormal,
         localTangent);
 #endif
-    localPosition *= frame.meshScale.xyz;
+    float meshLifeT = ParticleMeshLifeT(particle);
+    localPosition *= frame.meshScale.xyz * frame.lodParams.x *
+        ParticleMeshSizeScale(meshLifeT);
     vec3 worldPosition =
         ParticleMeshWorldPosition(particle, particleIndex, localPosition);
     gl_Position = frame.viewProjection * vec4(worldPosition, 1.0);
     vViewDepth = -(frame.view * vec4(worldPosition, 1.0)).z;
 
-    vColor = EvaluateColorCurve(ParticleMeshLifeT(particle)) * inColor;
+    vColor = EvaluateColorCurve(meshLifeT) * inColor;
     vColor.a *= frame.render.w;
     // 纹理尺寸门控只用于保留 binding 2；mesh v1 不采样纹理。
     float textureGate = clamp(
@@ -109,7 +111,7 @@ void main()
     // UV 变换与贴图采样只在 mesh 材质 set 中存在；无 MI 时是恒等变换。
     vUv = inTexCoord * material.uvScaleOffset.xy +
         material.uvScaleOffset.zw;
-    vLifeT = ParticleMeshLifeT(particle);
+    vLifeT = meshLifeT;
     vSeed = fract(float(particleIndex) * 0.61803398875);
     float tangentLength = length(localTangent.xyz);
     vTangent = tangentLength > 1.0e-5

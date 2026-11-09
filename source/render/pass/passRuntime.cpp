@@ -88,6 +88,7 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
         return;
     case RenderGraphPassType::Unknown:
     case RenderGraphPassType::AutoExposure:
+    case RenderGraphPassType::ParticleSoftDepth:
     // LightCulling 由 RenderSystem 直接录制（它不经过 pass material，
     // 且需要先上传本帧灯光）；走到这里说明调用路径错误。
     case RenderGraphPassType::LightCulling:

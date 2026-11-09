@@ -36,9 +36,11 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
             {"renderMode", "billboardAlignment", "billboardNormal",
                 "billboardUp", "ribbonWidth",
                 "ribbonSegments", "ribbonFade", "mesh", "beam", "light",
+                "ribbonPivot", "ribbonTwist",
                 "decal",
                 "opacity",
                 "softness", "softParticles", "softParticleDistance",
+                "softParticleTapRadius", "softParticleThickness",
                 "distortionStrength",
                 "additive", "meshLighting", "meshAmbient", "castShadows",
                 "materialInstancePath", "billboardShadows",
@@ -68,8 +70,8 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
         {"events", "Particle Events", {"events"}},
         {"flipbook", "Flipbook", {"texture", "flipbook"}},
         {"lod", "LOD",
-            {"lod", "lodDistance", "lodSpawnRateScale"}},
-        {"curves", "Curves", {}},
+            {"lod", "lod.tiers", "lodDistance", "lodSpawnRateScale"}},
+        {"curves", "Curves", {"curveInterpolation"}},
         {"bounds", "Fixed Bounds", {"useFixedBounds", "fixedBounds"}},
         {"culling", "Culling",
             {"maxDrawDistance", "fadeDistance", "minScreenSize",
@@ -241,6 +243,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         {"renderMode", "billboardAlignment", "billboardNormal",
             "billboardUp", "ribbonWidth",
             "ribbonSegments", "ribbonFade", "ribbonUVTiling",
+            "ribbonPivot", "ribbonTwist",
             "ribbonWidthKeys", "ribbonColorKeys", "mesh", "beam", "light",
             "skeletalPose.clip", "skeletalPose.time",
             "skeletalPose.rate", "skeletalPose.loop",
@@ -254,7 +257,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
             "decal",
             "opacity",
             "softness", "softParticles", "softParticleDistance",
-            "softParticleTapRadius",
+            "softParticleTapRadius", "softParticleThickness",
             "distortionStrength",
             "additive", "meshLighting", "meshAmbient",
             "castShadows",
@@ -280,6 +283,7 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
     if (IsOneOf(field, {"colorStart", "colorEnd", "colorKeys"}))
         return "update.color";
     if (IsOneOf(field, {"size", "sizeKeys"})) return "update.size";
+    if (field == "curveInterpolation") return "curves";
     if (IsOneOf(field,
         {"rotation", "rotationSpeed", "rotationRandom"}))
         return "update.rotation";

@@ -77,6 +77,48 @@ float ParticleMeshLifeT(Particle particle)
         1.0);
 }
 
+// localSpace 粒子的模拟位置是发射器局部坐标，必须先整体变换到世界；
+// 非 localSpace 保持不变。
+vec3 ParticleMeshWorldCenter(Particle particle)
+{
+    return frame.shape.z > 0.5
+        ? (frame.localToWorld *
+            vec4(particle.positionAge.xyz, 1.0)).xyz
+        : particle.positionAge.xyz;
+}
+
+// mesh size 曲线乘数：lifeT=0 处归一化为 1，sizeScale 是作者倍率。
+float ParticleMeshSizeScale(float lifeT)
+{
+    if (frame.meshParams.z < 0.5)
+    {
+        return 1.0;
+    }
+    float base = EvaluateSizeCurve(0.0);
+    if (!(base > 1.0e-5))
+    {
+        base = 1.0;
+    }
+    return EvaluateSizeCurve(lifeT) / base * frame.meshScale.w;
+}
+
+// camera/velocity 朝向不消费 localToWorld 作为朝向基；localSpace 时
+// 仍需要模型线性部分把网格局部偏移/方向带到世界。
+vec3 ParticleMeshLocalOffset(vec3 localPosition)
+{
+    if (frame.shape.z > 0.5 &&
+        int(frame.meshParams.x + 0.5) != 0)
+    {
+        return mat3(frame.localToWorld) * localPosition;
+    }
+    return localPosition;
+}
+
+vec3 ParticleMeshLocalDirection(vec3 localDirection)
+{
+    return ParticleMeshLocalOffset(localDirection);
+}
+
 // 朝向基与 particleMesh.vert 的历史语义一致：world 用发射器 localToWorld，
 // camera 用相机基，velocity 用速度方向；速度退化时回退相机基。
 mat3 ParticleMeshOrientation(Particle particle)
@@ -97,6 +139,10 @@ mat3 ParticleMeshOrientation(Particle particle)
     if (alignment == 2)
     {
         vec3 forward = particle.velocityLife.xyz;
+        if (frame.shape.z > 0.5)
+        {
+            forward = mat3(frame.localToWorld) * forward;
+        }
         float forwardLength = length(forward);
         if (forwardLength > 1.0e-5)
         {
@@ -140,7 +186,8 @@ vec3 ParticleMeshWorldPosition(
 {
     mat3 basis = ParticleMeshOrientation(particle);
     mat3 rotation = ParticleMeshRotation(particle, particleIndex);
-    return particle.positionAge.xyz + rotation * basis * localPosition;
+    return ParticleMeshWorldCenter(particle) +
+        rotation * basis * ParticleMeshLocalOffset(localPosition);
 }
 
 vec3 ParticleMeshWorldNormal(
@@ -150,7 +197,8 @@ vec3 ParticleMeshWorldNormal(
 {
     mat3 basis = ParticleMeshOrientation(particle);
     mat3 rotation = ParticleMeshRotation(particle, particleIndex);
-    return normalize(rotation * basis * localNormal);
+    return normalize(rotation * basis *
+        ParticleMeshLocalDirection(localNormal));
 }
 
 // 切线使用与位置/法线完全相同的朝向基与逐粒子旋转；非均匀 meshScale 与
@@ -162,7 +210,8 @@ vec3 ParticleMeshWorldTangent(
 {
     mat3 basis = ParticleMeshOrientation(particle);
     mat3 rotation = ParticleMeshRotation(particle, particleIndex);
-    return rotation * basis * localTangent;
+    return rotation * basis *
+        ParticleMeshLocalDirection(localTangent);
 }
 
 #endif

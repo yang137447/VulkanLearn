@@ -22,7 +22,10 @@ void main()
         return;
     }
 
-    vec3 localPosition = inPosition * frame.meshScale.xyz;
+    float meshLifeT = ParticleMeshLifeT(particle);
+    vec3 localPosition =
+        inPosition * frame.meshScale.xyz * frame.lodParams.x *
+        ParticleMeshSizeScale(meshLifeT);
     vec3 worldPosition =
         ParticleMeshWorldPosition(particle, particleIndex, localPosition);
     gl_Position = frame.shadowViewProj * vec4(worldPosition, 1.0);

@@ -71,7 +71,10 @@ public:
         const RenderScene& renderScene,
         const std::unordered_map<std::string, ParticleSystemAsset>&
             resolvedSystemAssets,
-        std::string_view renderMode);
+        std::string_view renderMode,
+        // 已经由 GPU 池接管的 emitter key；这些 key 不建立/保留 CPU 状态，
+        // 使 GPU 失败时下一次 Synchronize 能自然回落到 CPU 模拟。
+        const std::unordered_set<std::string>* excludeKeys = nullptr);
     // capacity 是本帧允许存在的 CPU 粒子总数。超出时按 particleSystems /
     // emitter 顺序保留前面的粒子，并从后往前截断。
     void Simulate(const RenderScene& renderScene, uint32_t capacity);

@@ -398,6 +398,18 @@
             ]
         },
         {
+            "name": "particleSoftDepth",
+            "type": "texture2D",
+            "format": "R32_SFLOAT",
+            "widthScale": 0.5,
+            "heightScale": 0.5,
+            "initialLayout": "shaderRead",
+            "usage": [
+                "storage",
+                "sampled"
+            ]
+        },
+        {
             "name": "decalStencil",
             "format": "D24_UNORM_S8_UINT",
             "widthScale": 1,
@@ -1031,6 +1043,23 @@
             ]
         },
         {
+            "name": "particleSoftDepth",
+            "type": "particleSoftDepth",
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "particleSoftDepth",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "particle",
             "type": "particle",
             "needMsaa": false,
@@ -1052,6 +1081,10 @@
                 {
                     "resource": "localShadowMap",
                     "binding": 2
+                },
+                {
+                    "resource": "particleSoftDepth",
+                    "binding": 3
                 }
             ],
             "output": [
@@ -1076,6 +1109,10 @@
                 {
                     "resource": "sceneDepth",
                     "binding": 0
+                },
+                {
+                    "resource": "particleSoftDepth",
+                    "binding": 3
                 }
             ],
             "output": [

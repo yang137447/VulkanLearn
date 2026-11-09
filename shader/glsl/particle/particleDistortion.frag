@@ -19,6 +19,7 @@ layout(location = 0) out vec4 outDistortion;
 
 // distortion pass 只把 sceneDepth 作为图输入；没有 shadowMap 绑定。
 layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 
 float Hash21(vec2 p)
 {
@@ -55,11 +56,13 @@ float Fbm(vec2 p)
 void main()
 {
     // 被不透明几何遮挡的扰动粒子不产生偏移，避免把背景像素拖进前景。
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -68,10 +71,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) / max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     float radius = length(vUV * 2.0 - 1.0);

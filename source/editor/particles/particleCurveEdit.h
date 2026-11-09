@@ -4,12 +4,14 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "core/editorBuild.h"
+#include "particles/particleCurve.h"
 #include "particles/particleLimits.h"
 
 static_assert(VL_WITH_EDITOR != 0,
@@ -95,6 +97,65 @@ inline Json ColorJson(const std::array<float, 4>& color)
     return Json::array({color[0], color[1], color[2], color[3]});
 }
 
+// 切线允许负数与 HDR；不能复用颜色值的非负/clamp 规则。
+inline bool ReadTangentArray(
+    const Json& key,
+    const char* field,
+    std::array<float, 4>& tangent)
+{
+    tangent = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (!key.is_object() || !key.contains(field))
+    {
+        return false;
+    }
+    const Json& value = key.at(field);
+    if (!value.is_array() ||
+        (value.size() != 3 && value.size() != 4))
+    {
+        return false;
+    }
+    for (size_t channel = 0; channel < value.size(); ++channel)
+    {
+        if (!value.at(channel).is_number())
+        {
+            return false;
+        }
+        const double number = value.at(channel).get<double>();
+        if (!std::isfinite(number) ||
+            !std::isfinite(static_cast<float>(number)))
+        {
+            return false;
+        }
+        tangent[channel] = static_cast<float>(number);
+    }
+    return true;
+}
+
+inline bool ReadScalarTangent(
+    const Json& key,
+    const char* field,
+    float& tangent)
+{
+    tangent = 0.0f;
+    if (!key.is_object() || !key.contains(field))
+    {
+        return false;
+    }
+    const Json& value = key.at(field);
+    if (!value.is_number())
+    {
+        return false;
+    }
+    const double number = value.get<double>();
+    if (!std::isfinite(number) ||
+        !std::isfinite(static_cast<float>(number)))
+    {
+        return false;
+    }
+    tangent = static_cast<float>(number);
+    return true;
+}
+
 inline void SortByTime(Json& keys)
 {
     std::stable_sort(
@@ -109,12 +170,49 @@ inline void SortByTime(Json& keys)
 
 } // namespace detail
 
+inline ParticleCurveInterpolation ParseInterpolation(
+    std::string_view text)
+{
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear;
+    if (!ParseParticleCurveInterpolation(text, interpolation))
+    {
+        throw std::invalid_argument(
+            "Unknown particle curve interpolation: " +
+            std::string(text));
+    }
+    return interpolation;
+}
+
+// 从 emitter 读取作者插值；缺省 linear，未知值直接拒绝而不是静默降级。
+inline ParticleCurveInterpolation ReadInterpolation(
+    const nlohmann::json& emitter)
+{
+    if (!emitter.is_object() ||
+        !emitter.contains("curveInterpolation"))
+    {
+        return ParticleCurveInterpolation::Linear;
+    }
+    const nlohmann::json& value =
+        emitter.at("curveInterpolation");
+    if (!value.is_string())
+    {
+        throw std::invalid_argument(
+            "Particle curveInterpolation must be a string");
+    }
+    return ParseInterpolation(value.get<std::string>());
+}
+
 inline std::array<float, 4> SampleColor(
     const nlohmann::json& keys,
-    float time);
+    float time,
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear);
 inline float SampleSize(
     const nlohmann::json& keys,
-    float time);
+    float time,
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear);
 
 inline nlohmann::json ReadColorKeys(const nlohmann::json& emitter)
 {
@@ -143,6 +241,17 @@ inline nlohmann::json ReadColorKeys(const nlohmann::json& emitter)
                 ? detail::ColorJson(detail::ReadColor(
                     key.at("color"), fallback))
                 : detail::ColorJson(fallback);
+            std::array<float, 4> tangent{};
+            if (detail::ReadTangentArray(
+                    key, "tangentIn", tangent))
+            {
+                normalized["tangentIn"] = detail::ColorJson(tangent);
+            }
+            if (detail::ReadTangentArray(
+                    key, "tangentOut", tangent))
+            {
+                normalized["tangentOut"] = detail::ColorJson(tangent);
+            }
             result.push_back(std::move(normalized));
             if (result.size() >= kMaxKeys) break;
         }
@@ -199,6 +308,17 @@ inline nlohmann::json ReadSizeKeys(const nlohmann::json& emitter)
             normalized["time"] = detail::Clamp01(
                 static_cast<float>(rawTime));
             normalized["size"] = std::max(0.0f, size);
+            float tangent = 0.0f;
+            if (detail::ReadScalarTangent(
+                    key, "tangentIn", tangent))
+            {
+                normalized["tangentIn"] = tangent;
+            }
+            if (detail::ReadScalarTangent(
+                    key, "tangentOut", tangent))
+            {
+                normalized["tangentOut"] = tangent;
+            }
             result.push_back(std::move(normalized));
             if (result.size() >= kMaxKeys) break;
         }
@@ -238,7 +358,11 @@ inline nlohmann::json ReadSizeKeys(const nlohmann::json& emitter)
     return result;
 }
 
-inline bool AddKey(nlohmann::json& keys, bool colorCurve)
+inline bool AddKey(
+    nlohmann::json& keys,
+    bool colorCurve,
+    ParticleCurveInterpolation interpolation =
+        ParticleCurveInterpolation::Linear)
 {
     using detail::Json;
     if (!keys.is_array() || keys.size() >= kMaxKeys) return false;
@@ -286,9 +410,10 @@ inline bool AddKey(nlohmann::json& keys, bool colorCurve)
     Json key = Json::object();
     key["time"] = time;
     if (colorCurve)
-        key["color"] = detail::ColorJson(SampleColor(keys, time));
+        key["color"] = detail::ColorJson(
+            SampleColor(keys, time, interpolation));
     else
-        key["size"] = SampleSize(keys, time);
+        key["size"] = SampleSize(keys, time, interpolation);
     keys.push_back(std::move(key));
     detail::SortByTime(keys);
     return true;
@@ -382,12 +507,15 @@ inline void SetSize(
 
 inline std::array<float, 4> SampleColor(
     const nlohmann::json& keys,
-    float time)
+    float time,
+    ParticleCurveInterpolation interpolation)
 {
     struct Point
     {
         float time = 0.0f;
         std::array<float, 4> color = {1.0f, 1.0f, 1.0f, 1.0f};
+        std::array<float, 4> tangentIn = {0.0f, 0.0f, 0.0f, 0.0f};
+        std::array<float, 4> tangentOut = {0.0f, 0.0f, 0.0f, 0.0f};
     };
     std::vector<Point> points;
     if (keys.is_array())
@@ -409,6 +537,10 @@ inline std::array<float, 4> SampleColor(
                     key.at("color"),
                     {1.0f, 1.0f, 1.0f, 1.0f})
                 : std::array<float, 4>{1.0f, 1.0f, 1.0f, 1.0f};
+            detail::ReadTangentArray(
+                key, "tangentIn", point.tangentIn);
+            detail::ReadTangentArray(
+                key, "tangentOut", point.tangentOut);
             points.push_back(point);
         }
     }
@@ -432,6 +564,40 @@ inline std::array<float, 4> SampleColor(
         const float span = right.time - left.time;
         if (span <= 0.0f) return left.color;
         const float amount = (time - left.time) / span;
+        if (interpolation != ParticleCurveInterpolation::Linear)
+        {
+            const float tangentScale =
+                ParticleCurveTangentScale(interpolation);
+            Eigen::Vector4f tangentM0;
+            Eigen::Vector4f tangentM1;
+            Eigen::Vector4f colorLeft;
+            Eigen::Vector4f colorRight;
+            for (size_t channel = 0; channel < 4; ++channel)
+            {
+                colorLeft[static_cast<int>(channel)] =
+                    left.color[channel];
+                colorRight[static_cast<int>(channel)] =
+                    right.color[channel];
+                tangentM0[static_cast<int>(channel)] =
+                    left.tangentOut[channel] * tangentScale;
+                tangentM1[static_cast<int>(channel)] =
+                    right.tangentIn[channel] * tangentScale;
+            }
+            const Eigen::Vector4f result = ParticleHermiteVector4(
+                colorLeft,
+                colorRight,
+                tangentM0,
+                tangentM1,
+                amount,
+                span);
+            std::array<float, 4> color{};
+            for (size_t channel = 0; channel < 4; ++channel)
+            {
+                color[channel] =
+                    result[static_cast<int>(channel)];
+            }
+            return color;
+        }
         std::array<float, 4> color = left.color;
         for (size_t channel = 0; channel < 4; ++channel)
         {
@@ -446,12 +612,15 @@ inline std::array<float, 4> SampleColor(
 
 inline float SampleSize(
     const nlohmann::json& keys,
-    float time)
+    float time,
+    ParticleCurveInterpolation interpolation)
 {
     struct Point
     {
         float time = 0.0f;
         float size = 1.0f;
+        float tangentIn = 0.0f;
+        float tangentOut = 0.0f;
     };
     std::vector<Point> points;
     if (keys.is_array())
@@ -471,6 +640,10 @@ inline float SampleSize(
             point.size = detail::ReadFloat(key, "size", 1.0f);
             if (!std::isfinite(point.size)) point.size = 0.0f;
             point.size = std::max(0.0f, point.size);
+            detail::ReadScalarTangent(
+                key, "tangentIn", point.tangentIn);
+            detail::ReadScalarTangent(
+                key, "tangentOut", point.tangentOut);
             points.push_back(point);
         }
     }
@@ -493,6 +666,18 @@ inline float SampleSize(
         const float span = right.time - left.time;
         if (span <= 0.0f) return left.size;
         const float amount = (time - left.time) / span;
+        if (interpolation != ParticleCurveInterpolation::Linear)
+        {
+            const float tangentScale =
+                ParticleCurveTangentScale(interpolation);
+            return ParticleHermiteScalar(
+                left.size,
+                right.size,
+                left.tangentOut * tangentScale,
+                right.tangentIn * tangentScale,
+                amount,
+                span);
+        }
         return left.size + (right.size - left.size) * amount;
     }
     return points.back().size;

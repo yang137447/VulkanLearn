@@ -242,3 +242,76 @@ TEST(ParticleFlipbookEdit, UniformRotationsRespectFrameLimit)
     EXPECT_TRUE(
         UniformFlipbookRotations(kMaxRotationFrames + 1).is_null());
 }
+
+TEST(ParticleFlipbookEdit, MissingTimelineKeysProduceNeutralDefaults)
+{
+    const Json emitter = EmitterWithRange(0, 3);
+    EXPECT_FALSE(HasFlipbookPivotKeys(emitter));
+    EXPECT_FALSE(HasFlipbookRotationKeys(emitter));
+
+    const Json pivots = EnsureFlipbookPivotKeys(emitter);
+    ASSERT_EQ(pivots.size(), 2u);
+    EXPECT_FLOAT_EQ(pivots.at(0).at("time").get<float>(), 0.0f);
+    EXPECT_FLOAT_EQ(
+        pivots.at(0).at("pivot").at(0).get<float>(), 0.5f);
+    EXPECT_FLOAT_EQ(pivots.at(1).at("time").get<float>(), 1.0f);
+
+    const Json rotations = EnsureFlipbookRotationKeys(emitter);
+    ASSERT_EQ(rotations.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        rotations.at(0).at("degrees").get<float>(), 0.0f);
+    EXPECT_FLOAT_EQ(
+        rotations.at(1).at("time").get<float>(), 1.0f);
+}
+
+TEST(ParticleFlipbookEdit, TimelineKeysPreservePivotAndTangents)
+{
+    Json emitter = EmitterWithRange(0, 3);
+    emitter["flipbook"]["framePivotKeys"] = Json::array({
+        Json{{"time", 0.0},
+             {"pivot", Json::array({0.25, 0.75})},
+             {"tangentOut", Json::array({0.5, -0.5})}},
+        Json{{"time", 1.0},
+             {"pivot", Json::array({0.5, 0.5})}}});
+    emitter["flipbook"]["frameRotationKeys"] = Json::array({
+        Json{{"time", 0.0}, {"degrees", -15.0},
+             {"tangentOut", 2.0}},
+        Json{{"time", 1.0}, {"degrees", 45.0}}});
+
+    EXPECT_TRUE(HasFlipbookPivotKeys(emitter));
+    EXPECT_TRUE(HasFlipbookRotationKeys(emitter));
+    const Json pivots = EnsureFlipbookPivotKeys(emitter);
+    ASSERT_EQ(pivots.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        pivots.at(0).at("pivot").at(0).get<float>(), 0.25f);
+    EXPECT_FLOAT_EQ(
+        pivots.at(0).at("tangentOut").at(1).get<float>(), -0.5f);
+    const Json rotations = EnsureFlipbookRotationKeys(emitter);
+    ASSERT_EQ(rotations.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        rotations.at(0).at("degrees").get<float>(), -15.0f);
+    EXPECT_FLOAT_EQ(
+        rotations.at(0).at("tangentOut").get<float>(), 2.0f);
+}
+
+TEST(ParticleFlipbookEdit, TimelineSettersEnforceOrderingAndRanges)
+{
+    Json pivots = EnsureFlipbookPivotKeys(Json::object());
+    ASSERT_TRUE(SetTimelineKeyTime(pivots, 0, 0.25f));
+    EXPECT_FLOAT_EQ(pivots.at(0).at("time").get<float>(), 0.25f);
+    EXPECT_FALSE(SetTimelineKeyTime(pivots, 0, 1.0f));
+    EXPECT_TRUE(SetFlipbookPivotKeyAxis(pivots, 0, 'u', 0.75f));
+    EXPECT_TRUE(SetFlipbookPivotKeyAxis(pivots, 0, 'v', 9.0f));
+    EXPECT_FLOAT_EQ(
+        pivots.at(0).at("pivot").at(0).get<float>(), 0.75f);
+    EXPECT_FLOAT_EQ(
+        pivots.at(0).at("pivot").at(1).get<float>(), 8.0f);
+    EXPECT_FALSE(SetFlipbookPivotKeyAxis(pivots, 0, 'x', 0.5f));
+
+    Json rotations = EnsureFlipbookRotationKeys(Json::object());
+    EXPECT_TRUE(SetTimelineKeyTime(rotations, 1, 0.75f));
+    EXPECT_TRUE(SetFlipbookRotationKeyDegrees(rotations, 1, -90.0f));
+    EXPECT_FLOAT_EQ(
+        rotations.at(1).at("degrees").get<float>(), -90.0f);
+    EXPECT_FALSE(SetTimelineKeyTime(rotations, 1, 0.0f));
+}

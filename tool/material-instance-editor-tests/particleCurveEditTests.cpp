@@ -288,3 +288,134 @@ TEST(ParticleCurveEdit, EditedColorAndSizeCurvesRoundTripThroughAssetValidation)
     EXPECT_NEAR(asset.emitters[0].colorKeys[1].color.w(), 0.5f, 1e-5f);
     EXPECT_NEAR(asset.emitters[0].sizeKeys[1].size, 7.5f, 1e-5f);
 }
+
+TEST(ParticleCurveEdit, ReadKeysPreservesOptionalTangents)
+{
+    const Json emitter{
+        {"curveInterpolation", "hermite"},
+        {"colorKeys", Json::array({
+            Json{{"time", 0.0},
+                 {"color", Json::array({1.0, 1.0, 1.0, 1.0})},
+                 {"tangentOut", Json::array({0.1, -0.2, 3.0})}},
+            Json{{"time", 1.0},
+                 {"color", Json::array({0.0, 0.0, 0.0, 0.0})},
+                 {"tangentIn", Json::array({-0.1, 0.2, -3.0, 0.5})}}})},
+        {"sizeKeys", Json::array({
+            Json{{"time", 0.0}, {"size", 10.0},
+                 {"tangentOut", 4.0}},
+            Json{{"time", 1.0}, {"size", 2.0},
+                 {"tangentIn", -4.0}}})}};
+
+    const Json colors = ReadColorKeys(emitter);
+    ASSERT_EQ(colors.size(), 2u);
+    ASSERT_TRUE(colors.at(0).contains("tangentOut"));
+    EXPECT_NEAR(
+        colors.at(0).at("tangentOut").at(1).get<float>(),
+        -0.2f, 1e-6f);
+    EXPECT_NEAR(
+        colors.at(1).at("tangentIn").at(3).get<float>(),
+        0.5f, 1e-6f);
+
+    const Json sizes = ReadSizeKeys(emitter);
+    ASSERT_EQ(sizes.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        sizes.at(0).at("tangentOut").get<float>(), 4.0f);
+    EXPECT_FLOAT_EQ(
+        sizes.at(1).at("tangentIn").get<float>(), -4.0f);
+    EXPECT_EQ(
+        ReadInterpolation(emitter),
+        ParticleCurveInterpolation::Hermite);
+}
+
+TEST(ParticleCurveEdit, SamplingUsesHermiteAndBezierConversion)
+{
+    const Json colorKeys = Json::array({
+        Json{{"time", 0.0},
+             {"color", Json::array({0.0, 0.0, 0.0, 1.0})},
+             {"tangentOut", Json::array({3.0, 0.0, 0.0, 0.0})}},
+        Json{{"time", 1.0},
+             {"color", Json::array({1.0, 1.0, 1.0, 1.0})},
+             {"tangentIn", Json::array({0.0, 0.0, 0.0, 0.0})}}});
+    const auto hermite = SampleColor(
+        colorKeys, 0.5f, ParticleCurveInterpolation::Hermite);
+    EXPECT_NEAR(hermite[0], 0.875f, 1e-5f);
+    EXPECT_NEAR(hermite[1], 0.5f, 1e-5f);
+
+    // 同样的作者数字在 bezier 模式下是控制柄，斜率乘 3；中段更高。
+    const auto bezier = SampleColor(
+        colorKeys, 0.5f, ParticleCurveInterpolation::Bezier);
+    EXPECT_GT(bezier[0], hermite[0]);
+
+    const Json sizeKeys = Json::array({
+        Json{{"time", 0.0}, {"size", 0.0},
+             {"tangentOut", 3.0}},
+        Json{{"time", 1.0}, {"size", 1.0}}});
+    EXPECT_NEAR(
+        SampleSize(
+            sizeKeys, 0.5f,
+            ParticleCurveInterpolation::Hermite),
+        0.875f, 1e-5f);
+    EXPECT_NEAR(
+        SampleSize(
+            sizeKeys, 0.5f,
+            ParticleCurveInterpolation::Linear),
+        0.5f, 1e-5f);
+}
+
+TEST(ParticleCurveEdit, UnknownInterpolationIsRejected)
+{
+    const Json emitter{
+        {"curveInterpolation", "spline"}};
+    EXPECT_THROW(
+        ReadInterpolation(emitter),
+        std::invalid_argument);
+    EXPECT_THROW(
+        ParseInterpolation("catmull"),
+        std::invalid_argument);
+}
+
+TEST(ParticleCurveEdit, AddKeySamplesWithTheAuthoredInterpolation)
+{
+    Json keys = Json::array({
+        Json{{"time", 0.0}, {"size", 0.0},
+             {"tangentOut", 3.0}},
+        Json{{"time", 1.0}, {"size", 1.0}}});
+    ASSERT_TRUE(AddKey(
+        keys, false, ParticleCurveInterpolation::Hermite));
+    ASSERT_EQ(keys.size(), 3u);
+    // 最大空隙 0..1 的中点时间仍是 0.5，但值取 Hermite 曲线。
+    EXPECT_NEAR(keys.at(1).at("time").get<float>(), 0.5f, 1e-5f);
+    EXPECT_NEAR(keys.at(1).at("size").get<float>(), 0.875f, 1e-5f);
+    // 新 key 不凭空发明切线。
+    EXPECT_FALSE(keys.at(1).contains("tangentIn"));
+    EXPECT_FALSE(keys.at(1).contains("tangentOut"));
+}
+
+TEST(ParticleCurveEdit, TangentCurvesRoundTripThroughAssetValidation)
+{
+    Json document = MinimalDocument();
+    Json& emitter = document["emitters"][0];
+    emitter["curveInterpolation"] = "bezier";
+    Json colorKeys = ReadColorKeys(emitter);
+    colorKeys.at(0)["tangentOut"] =
+        Json::array({0.5, 0.25, 0.0, 0.0});
+    colorKeys.at(1)["tangentIn"] =
+        Json::array({-0.5, -0.25, 0.0, 0.0});
+    emitter["colorKeys"] = colorKeys;
+    Json sizeKeys = ReadSizeKeys(emitter);
+    sizeKeys.at(0)["tangentOut"] = 2.0;
+    sizeKeys.at(1)["tangentIn"] = -2.0;
+    emitter["sizeKeys"] = sizeKeys;
+
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_curve_tangent_roundtrip.json");
+    ASSERT_EQ(asset.emitters.size(), 1u);
+    EXPECT_EQ(
+        asset.emitters[0].curveInterpolation,
+        ParticleCurveInterpolation::Bezier);
+    ASSERT_EQ(asset.emitters[0].colorKeys.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].colorKeys[0].tangentOut.x(), 0.5f);
+    EXPECT_FLOAT_EQ(
+        asset.emitters[0].sizeKeys[1].tangentIn, -2.0f);
+}

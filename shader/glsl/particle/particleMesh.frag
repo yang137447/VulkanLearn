@@ -23,6 +23,7 @@ layout(set = 3, binding = 0) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
 // 局部光阴影图集是 particle pass 的第三个图输入（binding 2）。
 layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 // 与 billboard/ribbon 共用 set 0 binding 2；v1 不采样，只用尺寸门控
 // 让反射出的 stageFlags 保持 Vertex|Fragment，descriptor set 可复用。
 layout(set = 0, binding = 2) uniform sampler2D particleTexture;
@@ -76,11 +77,13 @@ vec3 ReconstructParticleTangent(
 
 void main()
 {
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
     if (vViewDepth >= sceneViewDepth)
     {
         discard;
@@ -89,10 +92,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) / max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     // 材质 v1 子集：baseColor 乘粒子颜色曲线与 albedo 贴图；

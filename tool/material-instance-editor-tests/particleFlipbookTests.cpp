@@ -315,3 +315,105 @@ TEST(ParticleFlipbook, RotationTableUsesLocalFrameIndices)
     EXPECT_FLOAT_EQ(table.rotations[0].y(), 20.0f);
     EXPECT_FLOAT_EQ(table.rotations[0].z(), 0.0f);
 }
+
+TEST(ParticleFlipbook, TimelineKeysPackPivotsAndRotationsWithTangents)
+{
+    ParticleEmitterAsset emitter = EmitterWithFrames(0, 3);
+    emitter.curveInterpolation = ParticleCurveInterpolation::Bezier;
+    ParticleFlipbookPivotKey pivot0;
+    pivot0.time = 0.0f;
+    pivot0.pivot = Eigen::Vector2f(0.25f, 0.75f);
+    pivot0.tangentOut = Eigen::Vector2f(1.0f, -1.0f);
+    ParticleFlipbookPivotKey pivot1;
+    pivot1.time = 1.0f;
+    pivot1.pivot = Eigen::Vector2f(0.5f, 0.5f);
+    pivot1.tangentIn = Eigen::Vector2f(-1.0f, 1.0f);
+    emitter.flipbookFramePivotKeys = {pivot0, pivot1};
+
+    ParticleFlipbookRotationKey rotation0;
+    rotation0.time = 0.0f;
+    rotation0.degrees = -15.0f;
+    rotation0.tangentOut = 2.0f;
+    ParticleFlipbookRotationKey rotation1;
+    rotation1.time = 1.0f;
+    rotation1.degrees = 45.0f;
+    rotation1.tangentIn = -2.0f;
+    emitter.flipbookFrameRotationKeys = {rotation0, rotation1};
+
+    const ParticleFlipbookGpuTable table =
+        BuildParticleFlipbookGpuTable(emitter);
+    EXPECT_FLOAT_EQ(table.timelineParams.x(), 2.0f);
+    EXPECT_FLOAT_EQ(table.timelineParams.y(), 2.0f);
+    EXPECT_FLOAT_EQ(table.pivotKeys[0].x(), 0.0f);
+    EXPECT_FLOAT_EQ(table.pivotKeys[0].y(), 0.25f);
+    EXPECT_FLOAT_EQ(table.pivotKeys[0].z(), 0.75f);
+    // Bezier 控制柄在 CPU 上传边界乘 3。
+    EXPECT_FLOAT_EQ(table.pivotTangentOut[0].x(), 3.0f);
+    EXPECT_FLOAT_EQ(table.pivotTangentOut[0].y(), -3.0f);
+    EXPECT_FLOAT_EQ(table.pivotTangentIn[1].x(), -3.0f);
+    EXPECT_FLOAT_EQ(table.rotationKeys[0].y(), -15.0f);
+    EXPECT_FLOAT_EQ(table.rotationKeys[0].w(), 6.0f);
+    EXPECT_FLOAT_EQ(table.rotationKeys[1].z(), -6.0f);
+}
+
+TEST(ParticleFlipbook, TimelineEvaluatorsMirrorHermiteSampling)
+{
+    std::vector<ParticleFlipbookPivotKey> pivots;
+    ParticleFlipbookPivotKey pivot0;
+    pivot0.time = 0.0f;
+    pivot0.pivot = Eigen::Vector2f(0.0f, 0.0f);
+    pivot0.tangentOut = Eigen::Vector2f(3.0f, -3.0f);
+    ParticleFlipbookPivotKey pivot1;
+    pivot1.time = 1.0f;
+    pivot1.pivot = Eigen::Vector2f(1.0f, 1.0f);
+    pivots = {pivot0, pivot1};
+
+    const Eigen::Vector2f middle =
+        EvaluateParticleFlipbookPivotTimeline(
+            pivots, 0.5f, ParticleCurveInterpolation::Hermite);
+    EXPECT_NEAR(middle.x(), 0.875f, 1.0e-5f);
+    EXPECT_NEAR(middle.y(), 0.125f, 1.0e-5f);
+    EXPECT_TRUE(
+        EvaluateParticleFlipbookPivotTimeline(
+            {}, 0.5f, ParticleCurveInterpolation::Hermite)
+            .isApprox(Eigen::Vector2f(0.5f, 0.5f)));
+
+    std::vector<ParticleFlipbookRotationKey> rotations;
+    ParticleFlipbookRotationKey rotation0;
+    rotation0.time = 0.0f;
+    rotation0.degrees = 0.0f;
+    rotation0.tangentOut = 3.0f;
+    ParticleFlipbookRotationKey rotation1;
+    rotation1.time = 1.0f;
+    rotation1.degrees = 1.0f;
+    rotations = {rotation0, rotation1};
+    EXPECT_NEAR(
+        EvaluateParticleFlipbookRotationTimeline(
+            rotations, 0.5f, ParticleCurveInterpolation::Hermite),
+        0.875f,
+        1.0e-5f);
+    EXPECT_FLOAT_EQ(
+        EvaluateParticleFlipbookRotationTimeline(
+            {}, 0.5f, ParticleCurveInterpolation::Hermite),
+        0.0f);
+}
+
+TEST(ParticleFlipbook, TimelinePhaseUsesEmitterOrParticleTimeBase)
+{
+    const float weights[] = {1.0f, 1.0f};
+    ParticleFlipbookPhaseInput input;
+    input.framesPerSecond = 2.0f;
+    input.loop = false;
+    input.randomStartFrame = false;
+    input.weights = weights;
+    input.frameCount = 2;
+    input.elapsedSeconds = 0.25f;
+    input.particleAgeSeconds = 0.5f;
+
+    input.perParticle = false;
+    EXPECT_NEAR(
+        ComputeParticleFlipbookTimelinePhase(input), 0.25f, 1.0e-5f);
+    input.perParticle = true;
+    EXPECT_NEAR(
+        ComputeParticleFlipbookTimelinePhase(input), 0.5f, 1.0e-5f);
+}

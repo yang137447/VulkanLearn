@@ -298,7 +298,7 @@ TEST(ParticleSceneLighting, RendererWritesDescriptorBindingsSixToNine)
     // 图形池每 image 至少要有 4 个额外 storage、2 个额外 sampler 与 1 个 UBO。
     // 计数随 tile 灯网格/索引与骨骼 palette set 增长，这里只钉住"按 image
     // 线性扩容"这一结构，具体常量由 CreateDescriptors 自己维护。
-    EXPECT_TRUE(Contains(source, "imageCount * 24"));
+    EXPECT_TRUE(Contains(source, "imageCount * 25"));
     EXPECT_TRUE(Contains(source, "imageCount * 5"));
 }
 
@@ -346,7 +346,10 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
     EXPECT_TRUE(Contains(
         header,
         "offsetof(FrameUniforms, billboardLightParams2) == 7568"));
-    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 8608"));
+    EXPECT_TRUE(Contains(header, "sizeof(FrameUniforms) == 10224"));
+    EXPECT_TRUE(Contains(
+        header,
+        "offsetof(FrameUniforms, particleLightBrightnessColors) == 8752"));
 
     const std::string renderer =
         ReadSource("source/particles/particleRenderer.cpp");

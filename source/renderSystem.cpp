@@ -1346,6 +1346,60 @@ void RenderSystem::RestartParticleSystems(
     particleRenderer.RestartParticleSystems(sceneObjectName);
 }
 
+bool RenderSystem::KillParticle(
+    const std::string& sceneObjectName,
+    const std::string& emitterName,
+    uint32_t particleIndex,
+    std::string& outMessage)
+{
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    std::string error;
+    if (!particleRenderer.RequestParticleKill(
+            sceneObjectName, emitterName, particleIndex, error))
+    {
+        outMessage = "Particle kill rejected: " + error;
+        return false;
+    }
+    outMessage =
+        "Particle kill queued: " + sceneObjectName + "." +
+        emitterName + " slot=" + std::to_string(particleIndex);
+    return true;
+}
+
+bool RenderSystem::SpawnParticleAt(
+    const std::string& sceneObjectName,
+    const std::string& emitterName,
+    const Eigen::Vector3f& worldPosition,
+    float lifetimeSeconds,
+    std::string& outMessage)
+{
+    if (renderThreadIdleCallback)
+    {
+        renderThreadIdleCallback();
+    }
+    std::string error;
+    if (!particleRenderer.RequestParticleSpawnAt(
+            sceneObjectName,
+            emitterName,
+            worldPosition,
+            lifetimeSeconds,
+            error))
+    {
+        outMessage = "Particle spawn rejected: " + error;
+        return false;
+    }
+    outMessage =
+        "Particle spawn queued: " + sceneObjectName + "." +
+        emitterName + " at (" +
+        std::to_string(worldPosition.x()) + ", " +
+        std::to_string(worldPosition.y()) + ", " +
+        std::to_string(worldPosition.z()) + ")";
+    return true;
+}
+
 bool RenderSystem::DrainParticleEvents(
     uint32_t maxPerEmitter,
     std::vector<VL::ParticleEventBatch>& outBatches,
@@ -3749,8 +3803,12 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         // 按冻结列表同步纹理集；实例 SSBO 固定 64 槽，不做逐帧扩容。
         particleDecalRuntime.Synchronize(
             currentRenderScene,
-            particleRenderer.GetResolvedSystemAssets());
-        particleDecalRuntime.Update(currentRenderScene);
+            particleRenderer.GetResolvedSystemAssets(),
+            particleRenderer.GetDecalGpuInstances());
+        particleDecalRuntime.Update(
+            currentRenderScene,
+            VL::kMaxDecalInstances,
+            particleRenderer.GetDecalGpuInstances());
         if (frameResources.EnsureLightCapacity(
                 currentRenderScene.lights.size(),
                 *rendererBackend))
@@ -4032,6 +4090,22 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                     volumetricFog->Record(
                         commandBuffer, swapChainImageIndex, renderPass);
                 }
+                continue;
+            }
+            if (renderPass.type ==
+                VL::RenderGraphPassType::ParticleSoftDepth)
+            {
+                PassBarrier::PrepareForPass(
+                    commandBuffer,
+                    renderGraph,
+                    passIndex,
+                    swapChainImageIndex);
+                particleRenderer.RecordSoftDepth(
+                    commandBuffer,
+                    swapChainImageIndex,
+                    renderPass,
+                    renderGraph,
+                    currentRenderScene);
                 continue;
             }
             // tile 光照聚类：compute 只写帧拥有的 SSBO，没有 framebuffer。

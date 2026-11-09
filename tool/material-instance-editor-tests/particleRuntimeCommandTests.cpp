@@ -231,3 +231,82 @@ TEST(ParticleRuntimeCommand, EmitterEnabledValueAcceptsOnlyZeroOrOne)
     EXPECT_FALSE(ValidateParticleEmitterEnabledValue(-1, error));
     EXPECT_FALSE(error.empty());
 }
+
+TEST(ParticleRuntimeCommand, KillAcceptsStableSlotAndRejectsInvalidInput)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleKillRequest(
+        "Impact", "sparks", 0, error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleKillRequest(
+        "Impact", "sparks", 31, error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleKillRequest(
+        "", "sparks", 0, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleKillRequest(
+        "Impact", "", 0, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleKillRequest(
+        "Impact", "sparks", -1, error));
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ParticleRuntimeCommand, SpawnAtAcceptsFinitePositionAndLifetime)
+{
+    std::string error;
+    EXPECT_TRUE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "sparks",
+        Eigen::Vector3f(12.0f, -4.0f, 90.0f),
+        0.0f,
+        error));
+    EXPECT_TRUE(error.empty());
+    EXPECT_TRUE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "sparks",
+        Eigen::Vector3f::Zero(),
+        1.25f,
+        error));
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_FALSE(ValidateParticleSpawnAtRequest(
+        "",
+        "sparks",
+        Eigen::Vector3f::Zero(),
+        1.0f,
+        error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "",
+        Eigen::Vector3f::Zero(),
+        1.0f,
+        error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "sparks",
+        Eigen::Vector3f(
+            std::numeric_limits<float>::quiet_NaN(),
+            0.0f,
+            0.0f),
+        1.0f,
+        error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "sparks",
+        Eigen::Vector3f::Zero(),
+        -0.1f,
+        error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(ValidateParticleSpawnAtRequest(
+        "Impact",
+        "sparks",
+        Eigen::Vector3f::Zero(),
+        std::numeric_limits<float>::infinity(),
+        error));
+    EXPECT_FALSE(error.empty());
+}

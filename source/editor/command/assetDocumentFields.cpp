@@ -162,6 +162,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "light.radius", ValueKind::Number, false, "cm",
         "", false, false, 0.0001, std::numeric_limits<double>::quiet_NaN()},
     {K::ParticleSystem, "", "light.iesProfile", ValueKind::Array, true},
+    {K::ParticleSystem, "", "light.brightnessKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "light.castShadows", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "light.shadowBias", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "decal.size", ValueKind::Vector3, true, "cm"},
@@ -217,11 +218,18 @@ const Field fields[] = {
     {K::ParticleSystem, "", "ribbonSegments", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonFade", ValueKind::Number, true},
     {K::ParticleSystem, "", "ribbonUVTiling", ValueKind::Number, true},
+    {K::ParticleSystem, "", "ribbonPivot", ValueKind::Number, true,
+        "", "", false, false, -1.0, 1.0},
+    {K::ParticleSystem, "", "ribbonTwist", ValueKind::Number, true,
+        "degrees", "", false, false, -3600.0, 3600.0},
     {K::ParticleSystem, "", "ribbonWidthKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "ribbonColorKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "mesh.path", ValueKind::Text, true, "asset_path"},
     {K::ParticleSystem, "", "mesh.scale", ValueKind::Vector3, true},
     {K::ParticleSystem, "", "mesh.alignment", ValueKind::Text, true, "", "world|camera|velocity"},
+    {K::ParticleSystem, "", "mesh.useSizeCurve", ValueKind::Boolean, true},
+    {K::ParticleSystem, "", "mesh.sizeScale", ValueKind::Number, true,
+        "", "", false, false, 0.0001, 100.0},
     {K::ParticleSystem, "", "mesh.materialInstancePath", ValueKind::Text, true, "asset_path"},
     {K::ParticleSystem, "", "skeletalPose.clip", ValueKind::Text, true},
     {K::ParticleSystem, "", "skeletalPose.time", ValueKind::Number, true, "s"},
@@ -296,6 +304,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "softParticles", ValueKind::Boolean, true},
     {K::ParticleSystem, "", "softParticleDistance", ValueKind::Number, false, "cm"},
     {K::ParticleSystem, "", "softParticleTapRadius", ValueKind::Number, false, "px"},
+    {K::ParticleSystem, "", "softParticleThickness", ValueKind::Number, false, "cm"},
     {K::ParticleSystem, "", "sortParticles", ValueKind::Boolean, true},
     // 透明排序层：值越小越早绘制。整数与范围在协议边界拒绝，避免
     // 编辑器写入 1.5 / 1001 后运行时才失败。
@@ -349,8 +358,12 @@ const Field fields[] = {
     {K::ParticleSystem, "", "flipbook.framePivots", ValueKind::Array, true},
     {K::ParticleSystem, "", "flipbook.frameUVs", ValueKind::Array, true},
     {K::ParticleSystem, "", "flipbook.frameRotations", ValueKind::Array, true},
+    {K::ParticleSystem, "", "flipbook.framePivotKeys", ValueKind::Array, true},
+    {K::ParticleSystem, "", "flipbook.frameRotationKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "colorKeys", ValueKind::Array, true},
     {K::ParticleSystem, "", "sizeKeys", ValueKind::Array, true},
+    {K::ParticleSystem, "", "curveInterpolation", ValueKind::Text, true,
+        "", "linear|hermite|bezier"},
     // 受控的结构字段：不属于任何编辑模块，只用于整条发射器数组增删/重排。
     {K::ParticleSystem, "", "emitters", ValueKind::Array},
     {K::Blueprint, "", "name", ValueKind::Text},
@@ -365,6 +378,25 @@ const Field fields[] = {
     {K::Blueprint, "", "rotation", ValueKind::Vector3, true, "degrees"},
     {K::Blueprint, "", "scale", ValueKind::Vector3, true}
 };
+
+const char* CurveEntryFields(const std::string& name)
+{
+    if (name == "colorKeys")
+        return "time|color|tangentIn|tangentOut";
+    if (name == "sizeKeys")
+        return "time|size|tangentIn|tangentOut";
+    if (name == "flipbook.framePivotKeys")
+        return "time|pivot|tangentIn|tangentOut";
+    if (name == "flipbook.frameRotationKeys")
+        return "time|degrees|tangentIn|tangentOut";
+    if (name == "lod.tiers")
+        return "distance|spawnRateScale|renderScale|fadeRange";
+    if (name == "ribbonWidthKeys" || name == "beam.widthKeys")
+        return "time|width|tangentIn|tangentOut";
+    if (name == "ribbonColorKeys" || name == "beam.colorKeys")
+        return "time|color|tangentIn|tangentOut";
+    return "";
+}
 
 bool MatchesScope(const std::string& type, const std::string& scope)
 {
@@ -782,6 +814,24 @@ Json FieldDescription(const Field& field)
     if (field.integer) result["integer"] = true;
     if (std::isfinite(field.minimum)) result["minimum"] = field.minimum;
     if (std::isfinite(field.maximum)) result["maximum"] = field.maximum;
+    // 曲线数组的 key 结构随数组一起编辑；能力表显式列出切线字段名，
+    // 避免编辑器把 tangentIn/tangentOut 当成未知作者数据丢弃。
+    const std::string entryFields = CurveEntryFields(field.name);
+    if (!entryFields.empty())
+    {
+        result["entryFields"] = Json::array();
+        size_t start = 0;
+        while (start <= entryFields.size())
+        {
+            const size_t end = entryFields.find('|', start);
+            result["entryFields"].push_back(entryFields.substr(
+                start,
+                end == std::string::npos
+                    ? std::string::npos : end - start));
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
     if (*field.options)
     {
         result["enum"] = Json::array();

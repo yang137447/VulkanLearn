@@ -56,6 +56,83 @@ inline constexpr std::size_t ParticleLightSSBOSize()
         sizeof(ParticleLightGPU) * kMaxParticleLights;
 }
 
+// 逐粒子灯亮度：UE Niagara Light Renderer 的 "Brightness Scale" 曲线语义的
+// VulkanLearn 子集。GPU 端 particleLightEmit.comp 逐字实现同一公式：
+//   brightness = interp(keys, lifeT)  （空表恒为 1，首尾外 clamp，段内线性）
+//   color      = colorCurve * colorTint * colorKey(lifeT)
+//   intensity  = authoredIntensity * (1 - lifeT) * alpha * brightness
+// brightness 缩放功率，colorKey 单独缩放 RGB；空表分别保持 1 和白色，
+// 让作者能单独让灯"先亮后灭"、"先灭后亮"或改变色温而不影响功率曲线。
+inline float EvaluateParticleLightBrightness(
+    const std::vector<std::pair<float, float>>& keys,
+    float lifeT)
+{
+    if (keys.empty())
+    {
+        return 1.0f;
+    }
+    const float clamped = std::clamp(lifeT, 0.0f, 1.0f);
+    if (clamped <= keys.front().first)
+    {
+        return keys.front().second;
+    }
+    if (clamped >= keys.back().first)
+    {
+        return keys.back().second;
+    }
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const float t0 = keys[index].first;
+        const float t1 = keys[index + 1].first;
+        if (clamped >= t0 && clamped <= t1)
+        {
+            const float span = t1 - t0;
+            const float weight = span > 1.0e-6f
+                ? (clamped - t0) / span
+                : 0.0f;
+            return keys[index].second +
+                (keys[index + 1].second - keys[index].second) * weight;
+        }
+    }
+    return keys.back().second;
+}
+
+// 逐粒子灯颜色乘数曲线，与 brightness 共用同一 key 时间轴与分段线性
+// 规则（空表恒为白，首尾外 clamp）。GPU 端逐字实现同一插值。
+inline Eigen::Vector3f EvaluateParticleLightColor(
+    const std::vector<std::pair<float, Eigen::Vector3f>>& keys,
+    float lifeT)
+{
+    if (keys.empty())
+    {
+        return Eigen::Vector3f::Ones();
+    }
+    const float clamped = std::clamp(lifeT, 0.0f, 1.0f);
+    if (clamped <= keys.front().first)
+    {
+        return keys.front().second;
+    }
+    if (clamped >= keys.back().first)
+    {
+        return keys.back().second;
+    }
+    for (size_t index = 0; index + 1 < keys.size(); ++index)
+    {
+        const float t0 = keys[index].first;
+        const float t1 = keys[index + 1].first;
+        if (clamped >= t0 && clamped <= t1)
+        {
+            const float span = t1 - t0;
+            const float weight = span > 1.0e-6f
+                ? (clamped - t0) / span
+                : 0.0f;
+            return keys[index].second +
+                (keys[index + 1].second - keys[index].second) * weight;
+        }
+    }
+    return keys.back().second;
+}
+
 // 每个 light 发射器在全局 64 槽中的确定性子区间。
 struct ParticleLightSlot
 {

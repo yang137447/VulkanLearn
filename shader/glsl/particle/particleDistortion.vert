@@ -76,7 +76,7 @@ void main()
             max(particle.velocityLife.w, 1.0e-4),
         0.0,
         1.0);
-    float size = EvaluateSizeCurve(lifeT);
+    float size = EvaluateSizeCurve(lifeT) * frame.lodParams.x;
 
     // localSpace 发射器只在渲染边界变换到世界空间；distortion 与 billboard
     // 共用同一套中心、尺寸与视深度语义。
@@ -119,6 +119,7 @@ void main()
     float frameCount = endFrame - startFrame + 1.0;
 
     float localFrameIndex = 0.0;
+    float timelineT = 0.0;
     if (frame.flipbookParams3.x > 0.5)
     {
         int durationCount = clamp(
@@ -142,10 +143,12 @@ void main()
                 ? mod(cycle, 1.0)
                 : min(cycle, 1.0);
             phaseWeight = cycle * totalWeight;
+            timelineT = cycle;
         }
         else
         {
             phaseWeight = lifeT * totalWeight;
+            timelineT = clamp(lifeT, 0.0, 1.0);
         }
         int selected = durationCount - 1;
         float accumulated = 0.0;
@@ -169,6 +172,7 @@ void main()
             phase += fract(vSeed);
         }
         float stepped = floor(phase);
+        timelineT = clamp(phase / frameCount, 0.0, 1.0);
         localFrameIndex = frame.flipbookParams2.x > 0.5
             ? mod(stepped, frameCount)
             : min(stepped, frameCount - 1.0);
@@ -176,6 +180,7 @@ void main()
     else
     {
         localFrameIndex = min(floor(lifeT * frameCount), frameCount - 1.0);
+        timelineT = clamp(lifeT, 0.0, 1.0);
     }
     float frameIndex = clamp(
         localFrameIndex + startFrame,
@@ -188,6 +193,10 @@ void main()
         int rotationIndex = clamp(
             int(floor(localFrameIndex)), 0, int(frameCount) - 1);
         frameRotation = FlipbookRotation(rotationIndex);
+    }
+    if (frame.flipbookTimelineParams.y > 0.5)
+    {
+        frameRotation += EvaluateFlipbookRotationTimeline(timelineT);
     }
 
     float rotationDegrees =
@@ -205,13 +214,18 @@ void main()
         corner.x * rotationCos - corner.y * rotationSin,
         corner.x * rotationSin + corner.y * rotationCos);
 
-    vec2 pivotOffset = vec2(0.0);
+    vec2 pivot = vec2(0.5);
     if (frame.flipbookParams3.y > 0.5)
     {
         int pivotIndex = clamp(
             int(floor(localFrameIndex)), 0, int(frameCount) - 1);
-        pivotOffset = (vec2(0.5) - FlipbookPivot(pivotIndex)) * 2.0;
+        pivot = FlipbookPivot(pivotIndex);
     }
+    if (frame.flipbookTimelineParams.x > 0.5)
+    {
+        pivot += EvaluateFlipbookPivotTimeline(timelineT) - vec2(0.5);
+    }
+    vec2 pivotOffset = (vec2(0.5) - pivot) * 2.0;
 
     vec3 billboardRight = frame.cameraRight.xyz;
     vec3 billboardUp = frame.cameraUp.xyz;

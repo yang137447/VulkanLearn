@@ -473,6 +473,112 @@ void RuntimeCommandExecutor::ExecuteCommand(
             "Particle system restarted: " + command.stringValue);
         break;
     }
+    case RuntimeCommandType::KillParticle:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle kill ignored because no active World exists.");
+            break;
+        }
+        std::string validationError;
+        if (!ValidateParticleKillRequest(
+                command.stringValue,
+                command.particleEmitterName,
+                command.intValue,
+                validationError))
+        {
+            diagnostics.ReportWarning(validationError);
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle kill found no system named: " +
+                command.stringValue);
+            break;
+        }
+        uint32_t stableIndex = 0;
+        if (!world->FindParticleEmitterIndex(
+                command.stringValue,
+                command.particleEmitterName,
+                stableIndex))
+        {
+            diagnostics.ReportWarning(
+                "Particle kill found no emitter named: " +
+                command.stringValue + "." +
+                command.particleEmitterName);
+            break;
+        }
+        std::string message;
+        if (!renderSystem.KillParticle(
+                command.stringValue,
+                command.particleEmitterName,
+                static_cast<uint32_t>(command.intValue),
+                message))
+        {
+            diagnostics.ReportWarning(message);
+            break;
+        }
+        diagnostics.ReportInfo(message);
+        break;
+    }
+    case RuntimeCommandType::SpawnParticleAt:
+    {
+        const std::shared_ptr<World>& world =
+            worldManager.GetActiveWorld();
+        if (!world)
+        {
+            diagnostics.ReportWarning(
+                "Particle spawn-at ignored because no active World exists.");
+            break;
+        }
+        std::string validationError;
+        if (!ValidateParticleSpawnAtRequest(
+                command.stringValue,
+                command.particleEmitterName,
+                command.particleSpawnPosition,
+                command.floatValue,
+                validationError))
+        {
+            diagnostics.ReportWarning(validationError);
+            break;
+        }
+        if (world->FindParticleSystem(command.stringValue) == nullptr)
+        {
+            diagnostics.ReportWarning(
+                "Particle spawn-at found no system named: " +
+                command.stringValue);
+            break;
+        }
+        uint32_t stableIndex = 0;
+        if (!world->FindParticleEmitterIndex(
+                command.stringValue,
+                command.particleEmitterName,
+                stableIndex))
+        {
+            diagnostics.ReportWarning(
+                "Particle spawn-at found no emitter named: " +
+                command.stringValue + "." +
+                command.particleEmitterName);
+            break;
+        }
+        std::string message;
+        if (!renderSystem.SpawnParticleAt(
+                command.stringValue,
+                command.particleEmitterName,
+                command.particleSpawnPosition,
+                command.floatValue,
+                message))
+        {
+            diagnostics.ReportWarning(message);
+            break;
+        }
+        diagnostics.ReportInfo(message);
+        break;
+    }
     case RuntimeCommandType::SetParticleSystemParameter:
     {
         const std::shared_ptr<World>& world =

@@ -20,6 +20,11 @@ struct GatheredBillboard
     vec4 lightDirection;
     vec4 lightColor;
     vec4 lightParams2;
+    vec4 flags2;
+    vec4 flags3;
+    vec4 uvTransform;
+    vec4 corner3Kind;
+    vec4 color2;
 };
 
 layout(std430, set = 0, binding = 1) readonly buffer GatheredBuffer
@@ -55,7 +60,15 @@ void main()
         pairBuffer.pairs[index] = vec4(-3.402823466e38);
         return;
     }
-    vec3 center = gatheredBuffer.records[index].centerSize.xyz;
+    GatheredBillboard record = gatheredBuffer.records[index];
+    vec3 center = record.centerSize.xyz;
+    if (record.corner3Kind.w > 0.5)
+    {
+        center = (record.centerSize.xyz +
+            record.rightRot.xyz +
+            record.upSoft.xyz +
+            record.corner3Kind.xyz) * 0.25;
+    }
     float depth = -(frame.view * vec4(center, 1.0)).z;
     pairBuffer.pairs[index] = vec4(depth, float(index), 0.0, 0.0);
 }

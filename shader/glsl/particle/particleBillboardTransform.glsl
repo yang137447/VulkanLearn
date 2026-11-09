@@ -91,7 +91,7 @@ bool BuildParticleBillboardVertex(
             max(particle.velocityLife.w, 1.0e-4),
         0.0,
         1.0);
-    float size = EvaluateSizeCurve(lifeT);
+    float size = EvaluateSizeCurve(lifeT) * frame.lodParams.x;
 
     // localSpace 发射器的模拟坐标是局部的，只在这里变换到世界；
     // 屏幕尺寸、深度与 billboard 都以变换后的世界中心为准。
@@ -164,6 +164,11 @@ bool BuildParticleBillboardVertex(
             int(floor(localFrameIndex)), 0, int(frameCount) - 1);
         frameRotation = FlipbookRotation(rotationIndex);
     }
+    if (frame.flipbookTimelineParams.y > 0.5)
+    {
+        frameRotation +=
+            EvaluateFlipbookRotationTimeline(flipbook.timelineT);
+    }
 
     // Billboard 在相机平面内绕自身中心旋转；UV 仍由未旋转的 corner 生成。
     float rotationDegrees =
@@ -183,13 +188,20 @@ bool BuildParticleBillboardVertex(
 
     // 轴心：精灵图上的锚点落在粒子中心，等价于把 quad 中心反向平移。
     // 索引使用区间内的局部帧号，而不是 atlas 绝对帧号。
-    vec2 pivotOffset = vec2(0.0);
+    vec2 pivot = vec2(0.5);
     if (frame.flipbookParams3.y > 0.5)
     {
         int pivotIndex = clamp(
             int(floor(localFrameIndex)), 0, int(frameCount) - 1);
-        pivotOffset = (vec2(0.5) - FlipbookPivot(pivotIndex)) * 2.0;
+        pivot = FlipbookPivot(pivotIndex);
     }
+    if (frame.flipbookTimelineParams.x > 0.5)
+    {
+        // 时间线 pivot 以 0.5 为中性；叠加的是相对锚点的偏移。
+        pivot +=
+            EvaluateFlipbookPivotTimeline(flipbook.timelineT) - vec2(0.5);
+    }
+    vec2 pivotOffset = (vec2(0.5) - pivot) * 2.0;
 
     // Billboard 朝向基：默认跟随相机平面；velocity 模式让 quad 的法线
     // 对齐粒子速度，适合拖尾/火花；fixed 模式使用作者化的世界空间

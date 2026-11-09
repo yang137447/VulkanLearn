@@ -7,6 +7,8 @@
 
 #include <Eigen/Geometry>
 
+#include "particles/particleEmitterKey.h"
+#include "particles/particleLod.h"
 #include "render/frontend/renderScene.h"
 
 namespace VL
@@ -15,18 +17,6 @@ namespace
 {
 
 constexpr float kDegreesToRadians = 3.14159265358979323846f / 180.0f;
-
-uint64_t HashString(std::string_view value, uint64_t seed)
-{
-    constexpr uint64_t fnvPrime = 1099511628211ull;
-    uint64_t hash = seed == 0 ? 14695981039346656037ull : seed;
-    for (unsigned char character : value)
-    {
-        hash ^= character;
-        hash *= fnvPrime;
-    }
-    return hash;
-}
 
 Eigen::Matrix3f RotationDegreesToBasis(const Eigen::Vector3f& rotation)
 {
@@ -70,21 +60,116 @@ Eigen::Matrix3f EmitterOrientation(const Eigen::Matrix4f& model)
     return quaternion.toRotationMatrix();
 }
 
+Eigen::Matrix4f BuildEmitterModel(
+    const ParticleSystemSnapshot& snapshot,
+    const ParticleEmitterAsset& emitter)
+{
+    Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+    translation.block<3, 1>(0, 3) = emitter.localPosition;
+    return snapshot.model * translation;
+}
+
 } // namespace
 
 void ParticleDecalRuntime::Reset()
 {
     simulation.Reset();
     dynamicDecalIds.clear();
+    orderedEmitters.clear();
+    gpuEmitters.clear();
+    liveDecalCount = 0;
 }
 
 void ParticleDecalRuntime::Synchronize(
     const RenderScene& renderScene,
     const std::unordered_map<std::string, ParticleSystemAsset>&
-        resolvedSystemAssets)
+        resolvedSystemAssets,
+    const std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>>&
+        gpuInstances)
 {
+    orderedEmitters.clear();
+    gpuEmitters.clear();
+    std::unordered_set<std::string> gpuKeys;
+
+    // 这里的过滤顺序必须与 ParticleCpuEmitterRuntime::Synchronize 保持
+    // 一致：同一个 decal emitter 只能出现在 CPU 或 GPU 一条路径上，
+    // 预算截断也仍按 World snapshot / emitter 顺序确定性推进。
+    for (const ParticleSystemSnapshot& snapshot :
+         renderScene.particleSystems)
+    {
+        if (!snapshot.visible)
+        {
+            continue;
+        }
+        std::unordered_map<std::string,
+            const ParticleEmitterTelemetry*> telemetryByName;
+        telemetryByName.reserve(snapshot.telemetry.emitters.size());
+        for (const ParticleEmitterTelemetry& telemetry :
+             snapshot.telemetry.emitters)
+        {
+            if (!telemetry.name.empty())
+            {
+                telemetryByName.emplace(telemetry.name, &telemetry);
+            }
+        }
+        const std::string resolvedKey = BuildParticleSystemAssetKey(
+            snapshot.name, snapshot.assetPath);
+        const auto resolvedIt =
+            resolvedSystemAssets.find(resolvedKey);
+        const ParticleSystemAsset& resolvedAsset =
+            resolvedIt != resolvedSystemAssets.end()
+                ? resolvedIt->second
+                : snapshot.asset;
+
+        for (size_t emitterIndex = 0;
+             emitterIndex < resolvedAsset.emitters.size();
+             ++emitterIndex)
+        {
+            const ParticleEmitterAsset& emitter =
+                resolvedAsset.emitters[emitterIndex];
+            if (emitter.renderMode != "decal")
+            {
+                continue;
+            }
+            if (emitterIndex >= kMaxParticleEmitters ||
+                ((snapshot.runtime.enabledEmitterMask >>
+                    emitterIndex) & 1u) == 0)
+            {
+                continue;
+            }
+            const auto telemetryIt =
+                telemetryByName.find(emitter.name);
+            if (telemetryIt != telemetryByName.end())
+            {
+                const ParticleEmitterTelemetry& telemetry =
+                    *telemetryIt->second;
+                if (!telemetry.active || !telemetry.enabled)
+                {
+                    continue;
+                }
+            }
+
+            const std::string key = BuildParticleEmitterKey(
+                snapshot.name, snapshot.assetPath, emitter.name);
+            const bool gpu =
+                gpuInstances.find(key) != gpuInstances.end();
+            if (gpu)
+            {
+                gpuKeys.insert(key);
+                GpuEmitterState state;
+                state.key = key;
+                state.emitter = emitter;
+                state.model = BuildEmitterModel(snapshot, emitter);
+                state.colorTint = snapshot.runtime.colorTint;
+                gpuEmitters[key] = std::move(state);
+            }
+            orderedEmitters.push_back(OrderedEmitter{key, gpu});
+        }
+    }
+
     simulation.Synchronize(
-        renderScene, resolvedSystemAssets, "decal");
+        renderScene, resolvedSystemAssets, "decal", &gpuKeys);
 }
 
 void ParticleDecalRuntime::RemoveDynamicDecals(RenderScene& renderScene)
@@ -119,12 +204,8 @@ void ParticleDecalRuntime::EmitDecalSnapshot(
             : 1.0f,
         0.0f, 1.0f);
 
-    // 粒子槽位稳定，且 decalId 不包含 burst 代际，因此 DecalRenderer 的
-    // 纹理集可在同一发射器反复 burst/重生成时复用，不会按生命周期换 key。
-    const uint64_t decalId = HashString(
-        "particle-decal|" + state.key + "#" +
-            std::to_string(particle.slot),
-        0x9E3779B97F4A7C15ull);
+    const uint64_t decalId = ParticleDecalStableId(
+        state.key, particle.slot);
 
     const Eigen::Vector3f position = emitter.localSpace
         ? (state.model * Eigen::Vector4f(
@@ -134,8 +215,14 @@ void ParticleDecalRuntime::EmitDecalSnapshot(
     const Eigen::Matrix3f orientation =
         EmitterOrientation(state.model) *
         RotationDegreesToBasis(settings.rotation);
+    const Eigen::Vector3f emitterCenter =
+        (state.model * Eigen::Vector4f(
+            0.0f, 0.0f, 0.0f, 1.0f)).head<3>();
+    const ParticleLodState lod = EffectiveParticleLod(
+        emitter,
+        (emitterCenter - renderScene.camera.position).norm());
     const Eigen::Vector3f halfExtent =
-        settings.size * 0.5f;
+        settings.size * 0.5f * lod.renderScale;
 
     DecalSnapshot snapshot;
     snapshot.decalId = decalId;
@@ -164,14 +251,80 @@ void ParticleDecalRuntime::EmitDecalSnapshot(
         settings.opacity * lifeAlpha, 0.0f, 1.0f);
     snapshot.edgeSoftness = settings.edgeSoftness;
     snapshot.noiseStrength = settings.noiseStrength;
-    // 用稳定槽位派生程序化噪声相位；同一 decalId 的纹理/参数身份不变。
     snapshot.randomSeed = static_cast<float>(
         (decalId >> 40) & 0xFFFFu) / 65535.0f;
     snapshot.roughness = settings.roughness;
     snapshot.metallic = settings.metallic;
     snapshot.ambientOcclusion = settings.ambientOcclusion;
-    // 运行时 colorTint 同时控制 albedo 与 emissive 的 RGB；alpha 已通过
-    // snapshot.opacity → coverage 统一淡出，不在 RGB 上再乘一次。
+    snapshot.emissive =
+        settings.emissive.cwiseProduct(state.colorTint.head<3>());
+    snapshot.emissiveStrength = settings.emissiveStrength;
+    snapshot.responseMask = settings.responseMask;
+    snapshot.normalStrength = settings.normalStrength;
+    snapshot.albedoMap = settings.albedoMap;
+    snapshot.normalMap = settings.normalMap;
+    snapshot.ormMap = settings.ormMap;
+    snapshot.sortOrder = settings.sortOrder;
+    snapshot.visible = true;
+    snapshot.persistentTextureSet = true;
+
+    renderScene.decals.push_back(std::move(snapshot));
+    dynamicDecalIds.insert(decalId);
+}
+
+void ParticleDecalRuntime::EmitDecalSnapshotFromGpu(
+    const GpuEmitterState& state,
+    const ParticleDecalGpuInstance& instance,
+    RenderScene& renderScene)
+{
+    const ParticleEmitterAsset& emitter = state.emitter;
+    const ParticleDecalAsset& settings = emitter.decal;
+    const uint32_t slot = static_cast<uint32_t>(
+        std::max(instance.rotationStable.w(), 0.0f) + 0.5f);
+    const uint64_t decalId =
+        ParticleDecalStableId(state.key, slot);
+
+    const Eigen::Vector3f localPosition =
+        instance.positionLifeT.head<3>();
+    const Eigen::Vector3f position = emitter.localSpace
+        ? (state.model * Eigen::Vector4f(
+            localPosition.x(), localPosition.y(),
+            localPosition.z(), 1.0f)).head<3>()
+        : localPosition;
+    const Eigen::Vector3f rotation =
+        instance.rotationStable.head<3>();
+    const Eigen::Matrix3f orientation =
+        EmitterOrientation(state.model) *
+        RotationDegreesToBasis(rotation);
+    // gather 参数已经乘过 LOD renderScale，尺寸直接按 GPU 记录消费，
+    // 不再在这里重复乘一次。
+    const Eigen::Vector3f halfExtent =
+        instance.sizeRotation.head<3>() * 0.5f;
+
+    DecalSnapshot snapshot;
+    snapshot.decalId = decalId;
+    snapshot.name = emitter.name + "#" + std::to_string(slot);
+    snapshot.decalToWorld = Eigen::Matrix4f::Identity();
+    snapshot.decalToWorld.block<3, 3>(0, 0) =
+        orientation * halfExtent.asDiagonal();
+    snapshot.decalToWorld.block<3, 1>(0, 3) = position;
+
+    snapshot.color = Eigen::Vector4f(
+        instance.colorOpacity.x(),
+        instance.colorOpacity.y(),
+        instance.colorOpacity.z(),
+        1.0f);
+    snapshot.opacity = std::clamp(
+        instance.colorOpacity.w(), 0.0f, 1.0f);
+    snapshot.edgeSoftness = settings.edgeSoftness;
+    snapshot.noiseStrength = settings.noiseStrength;
+    snapshot.randomSeed = static_cast<float>(
+        (decalId >> 40) & 0xFFFFu) / 65535.0f;
+    snapshot.roughness = settings.roughness;
+    snapshot.metallic = settings.metallic;
+    snapshot.ambientOcclusion = settings.ambientOcclusion;
+    // colorOpacity 已包含实例 colorTint 的 RGB；emissive 仍按同一 tint
+    // 缩放，保持与 CPU 路径的材质语义一致。
     snapshot.emissive =
         settings.emissive.cwiseProduct(state.colorTint.head<3>());
     snapshot.emissiveStrength = settings.emissiveStrength;
@@ -190,9 +343,13 @@ void ParticleDecalRuntime::EmitDecalSnapshot(
 
 void ParticleDecalRuntime::Update(
     RenderScene& renderScene,
-    uint32_t maxTotalDecals)
+    uint32_t maxTotalDecals,
+    const std::unordered_map<
+        std::string, std::vector<ParticleDecalGpuInstance>>&
+        gpuInstances)
 {
     RemoveDynamicDecals(renderScene);
+    liveDecalCount = 0;
 
     uint32_t staticDecalCount = 0;
     for (const DecalSnapshot& decal : renderScene.decals)
@@ -202,19 +359,71 @@ void ParticleDecalRuntime::Update(
             ++staticDecalCount;
         }
     }
-    const uint32_t dynamicCapacity =
+    uint32_t dynamicCapacity =
         staticDecalCount < maxTotalDecals
             ? maxTotalDecals - staticDecalCount
             : 0u;
 
+    // 只有非 GPU 接管（或无 GPU 池）的 decal emitter 仍在 CPU runtime 中；
+    // Simulate 的容量同样使用全局剩余槽位，保持与旧路径一致。
     simulation.Simulate(renderScene, dynamicCapacity);
+
+    std::unordered_map<std::string,
+        const ParticleCpuEmitterRuntime::EmitterState*> cpuStates;
+    cpuStates.reserve(simulation.GetOrderedStates().size());
     for (const ParticleCpuEmitterRuntime::EmitterState* state :
          simulation.GetOrderedStates())
     {
-        for (const ParticleCpuEmitterRuntime::Particle& particle :
-             state->particles)
+        cpuStates.emplace(state->key, state);
+    }
+
+    for (const OrderedEmitter& ordered : orderedEmitters)
+    {
+        if (dynamicCapacity == 0)
         {
-            EmitDecalSnapshot(*state, particle, renderScene);
+            break;
+        }
+        if (ordered.gpu)
+        {
+            const auto instanceIt =
+                gpuInstances.find(ordered.key);
+            const auto stateIt = gpuEmitters.find(ordered.key);
+            if (instanceIt == gpuInstances.end() ||
+                stateIt == gpuEmitters.end())
+            {
+                continue;
+            }
+            for (const ParticleDecalGpuInstance& instance :
+                 instanceIt->second)
+            {
+                if (dynamicCapacity == 0)
+                {
+                    break;
+                }
+                EmitDecalSnapshotFromGpu(
+                    stateIt->second, instance, renderScene);
+                --dynamicCapacity;
+                ++liveDecalCount;
+            }
+            continue;
+        }
+
+        const auto stateIt = cpuStates.find(ordered.key);
+        if (stateIt == cpuStates.end())
+        {
+            continue;
+        }
+        for (const ParticleCpuEmitterRuntime::Particle& particle :
+             stateIt->second->particles)
+        {
+            if (dynamicCapacity == 0)
+            {
+                break;
+            }
+            EmitDecalSnapshot(
+                *stateIt->second, particle, renderScene);
+            --dynamicCapacity;
+            ++liveDecalCount;
         }
     }
 }

@@ -28,6 +28,8 @@ layout(set = 3, binding = 1) uniform sampler2DArrayShadow shadowMap;
 // 局部光阴影图集：particle pass 的第三个 set 3 输入。点光/聚光按
 // Light.shadowParams 选择 slice 与投影方式，见 common/localShadowSampling.glsl。
 layout(set = 3, binding = 2) uniform sampler2DArrayShadow localShadowMap;
+// 半分辨率线性视深度；资源占位时回退 5-tap。
+layout(set = 3, binding = 3) uniform sampler2D softDepth;
 // overdraw 调试计数；只在片元最终写出时累加一次。
 layout(std430, set = 0, binding = 5) buffer ParticleDebug
 {
@@ -70,11 +72,13 @@ float Fbm(vec2 p)
 void main()
 {
     // 像素坐标直接对应 sceneDepth 的 texel，不依赖 UV 翻转或 NDC 朝向。
-    float sceneViewDepth = SampleParticleSceneViewDepth(
+    float sceneViewDepth = SampleParticleSoftViewDepth(
+        softDepth,
         sceneDepth,
         gl_FragCoord.xy,
         frame.softParams.z,
-        frame.invProjection);
+        frame.invProjection,
+        frame.softParams.w);
 
     // 被不透明几何遮挡的粒子直接剔除；软粒子开关只控制交线附近的 alpha 淡出。
     if (vViewDepth >= sceneViewDepth)
@@ -84,10 +88,10 @@ void main()
     float softFade = 1.0;
     if (frame.softParams.y > 0.5)
     {
-        softFade = clamp(
-            (sceneViewDepth - vViewDepth) / max(frame.softParams.x, 0.001),
-            0.0,
-            1.0);
+        softFade = ParticleSoftFade(
+            sceneViewDepth - vViewDepth,
+            frame.softParams.x,
+            frame.softParams.w);
     }
 
     // 程序化软圆盘 + 漂移噪声：先用自包含 FBM 近似火焰/烟雾的边缘侵蚀，
