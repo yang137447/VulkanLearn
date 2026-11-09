@@ -835,8 +835,10 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   - 两种模式都**没有顶点输入**，逐粒子展开 3/6 个顶点；`maxParticles` 决定同屏面片数量。
   - GPU skinning：顶点缓冲保存绑定姿态，`particleSkeletalSkin.glsl` 在顶点着色器里按
     set 2 的关节 palette（每个 swapchain image 一份）与 CSR 影响流计算
-    `Σ w · (model_j · inverseBind_j) · p_bind`。palette 每帧写入当前姿态，因此同一帧的
-    可见网格、CSM/局部阴影 caster 看到完全相同的姿态。
+    `Σ w · (model_j · inverseBind_j) · p_bind`。palette 逐 swapchain image 写入，
+    "已写入"判定也逐 image 记录；姿态未变时只跳过 palette 重写，固定步长、UBO、
+    dispatch 与绘制仍照常推进，因此 `rate = 0` 的静止姿态发射器不会冻结模拟。
+    同一帧的可见网格、CSM/局部阴影 caster 看到完全相同的姿态。
   - 每 section 独立材质：每个骨骼 section 拥有自己的 `materialInstancePath`（section 的
     `sectionPlans[].materialInstancePath`，缺失时回退发射器级
     `materialInstancePath`）、数值参数与四张贴图，绘制时逐 section 绑定 set 1。
@@ -868,6 +870,11 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   （`[0, 0.5]`），阈值附近保留 `edgeColor × edgeStrength` 的自发光边缘。顶点阶段同时把
   顶点沿粒子重心方向按同一段溶解区间微微外推（外推量 = `edgeWidth × 4`，夹到 `[0, 1]`），
   使面片变透明前略微膨胀。`noiseScale` 在 `(0, 64]`，`noiseSpeed` 在 `[0, 16]`。
+  `skeletalMeshTris` / `skeletalMeshBones` 的片元体
+  （`particleSkeletalFragmentBody.glsl`）直接复用同一份 `particleDissolve.glsl`、
+  同一组 `frame.dissolveParams*` 与同一条边缘自发光公式；骨骼三角面因此在绑定姿态
+  表面做完整 dissolve，而不是另写一套噪声。源项本身按绑定姿态烘焙，dissolve 只影响
+  可见性/边缘自发光，不改变逐粒子三角形位置。
 - `materialBindings`：可选，把 World 级 typed Data Channel 绑定到材质/精灵参数。key 只能是
   `baseColor`、`emissive`、`emissiveStrength`、`roughness`、`metallic`、`opacity` 或
   `color`，value 是非空通道名。绑定在每个发射器每帧读取 World

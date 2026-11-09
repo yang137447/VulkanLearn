@@ -21,6 +21,7 @@ add_executable(vl_renderer_backend_tests
     particle_mesh_shadow_test.cpp
     particle_sprite_shadow_test.cpp
     particle_mesh_material_test.cpp
+    particle_skeletal_dissolve_test.cpp
     local_shadow_math_test.cpp
     volumetric_fog_test.cpp
     light_culling_test.cpp

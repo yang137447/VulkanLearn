@@ -940,6 +940,10 @@ private:
         // 材质，保证 per-section materialInstancePath 与 inverse bind 正确。
         // spawn 源/父事件三个 binding 依赖 BindParentSpawnSources 选择的父
         // 发射器；CreateDescriptors 之后由 EnsureSpawnSourceBindings 统一写入。
+        // binding 7 的目标单独记录：只有父 emitter 的 spawnEvents 缓冲真的
+        // 变化时才重写 descriptor，避免上一帧 command buffer 仍 pending 时
+        // 更新同一个 set（VUID-vkUpdateDescriptorSets-None-03047）。
+        vk::Buffer spawnEventSource = nullptr;
         bool spawnSourceBindingsDirty = true;
         struct SkeletalSection
         {
@@ -985,8 +989,10 @@ private:
         std::vector<SkeletalSection> skeletalSections;
         // 文件 + 文件大小 + 修改时间 + 片段 + 播放模式；变化时重建骨骼网格资源。
         std::string skeletalSourceKey;
-        // 最近一次写入 palette 的姿态键；同一帧内多个骨骼发射器可共享采样结果。
-        ParticleSkeletalPoseKey skeletalPoseKey;
+        // 每个 swapchain image 最近一次写入 palette 的姿态键。palette 本身
+        // 是逐 image 缓冲，rate=0（静止姿态）时也必须保证每个 image 至少
+        // 写过一次，否则第二张在飞帧会读空的 palette。
+        std::vector<ParticleSkeletalPoseKey> skeletalPoseKeys;
         uint32_t sortCapacity = 0;
         // 排序结束时 pair 表的奇偶性决定 graphics 绑定 A 还是 B。
         bool sortFinalUsesA = true;

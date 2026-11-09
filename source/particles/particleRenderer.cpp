@@ -11,6 +11,7 @@
 #include <limits>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -1675,40 +1676,39 @@ void ParticleRenderer::UpdateTranslucencyVolume(
         voxels.data(),
         voxels.size() * sizeof(float));
     backend->UnmapMemory(translucencyVolumeStaging.memory);
-    // 上传不能用 BeginSingleTimeCommands：它只做子资源范围屏障，而该图同时
-    // 以 SHADER_READ_ONLY 绑定在已录制的 GPU 图 pass 里，没有队列级屏障把
-    // 绘制队列的读写出队就提交 transfer，校验会报告布局竞态。这里改用
-    // 带队列级屏障的独立提交（等待绘制/计算完成 -> TRANSFER -> SHADER_READ）。
+    // 布局转换必须和 copyBufferToImage 录制在同一个 command buffer 里：
+    // backend->TransitionImageLayout 会各自提交一个一次性 command buffer，
+    // 等 copy 提交时图已经被转回 SHADER_READ_ONLY，校验会报
+    // VUID-vkCmdDraw-None-09600（期望 TRANSFER_DST，实际 SHADER_READ_ONLY）。
+    // 这里用一条独立提交承载 读->TRANSFER -> copy -> SHADER_READ 的完整链。
     const vk::ImageLayout oldLayout = translucencyVolumeUploaded
         ? vk::ImageLayout::eShaderReadOnlyOptimal
         : vk::ImageLayout::eUndefined;
     vk::CommandBuffer command = backend->BeginSingleTimeCommands();
-    // 队列级屏障：等主渲染队列所有读写（包括以 SHADER_READ_ONLY 绑定该图的
-    // 已提交 pass）完成，再让 transfer 写入 staging 与 back-sync 读取可见。
-    vk::MemoryBarrier queueBarrier;
-    queueBarrier
+    vk::ImageMemoryBarrier toTransfer;
+    toTransfer
+        .setOldLayout(oldLayout)
+        .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setImage(translucencyVolumeImage)
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1))
         .setSrcAccessMask(
-            vk::AccessFlagBits::eShaderRead |
-            vk::AccessFlagBits::eShaderWrite |
-            vk::AccessFlagBits::eTransferWrite |
-            vk::AccessFlagBits::eMemoryRead)
-        .setDstAccessMask(
-            vk::AccessFlagBits::eTransferWrite |
-            vk::AccessFlagBits::eTransferRead);
+            oldLayout == vk::ImageLayout::eUndefined
+                ? vk::AccessFlags{}
+                : vk::AccessFlagBits::eShaderRead |
+                    vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
     command.pipelineBarrier(
-        vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eAllCommands,
+        oldLayout == vk::ImageLayout::eUndefined
+            ? vk::PipelineStageFlagBits::eTopOfPipe
+            : vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eTransfer,
         {},
-        queueBarrier,
         nullptr,
-        nullptr);
-    backend->TransitionImageLayout(
-        translucencyVolumeImage,
-        1,
-        vk::Format::eR32G32B32A32Sfloat,
-        oldLayout,
-        vk::ImageLayout::eTransferDstOptimal,
-        1);
+        nullptr,
+        toTransfer);
     vk::BufferImageCopy copy;
     copy
         .setBufferOffset(0)
@@ -1726,27 +1726,19 @@ void ParticleRenderer::UpdateTranslucencyVolume(
         vk::ImageLayout::eTransferDstOptimal,
         1,
         &copy);
-    backend->TransitionImageLayout(
-        translucencyVolumeImage,
-        1,
-        vk::Format::eR32G32B32A32Sfloat,
-        vk::ImageLayout::eTransferDstOptimal,
-        vk::ImageLayout::eShaderReadOnlyOptimal,
-        1);
-    // 收尾：transfer 写入在提交后对后续所有读取可见。
-    vk::MemoryBarrier readBarrier;
-    readBarrier
+    vk::ImageMemoryBarrier toShaderRead = toTransfer;
+    toShaderRead
+        .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-        .setDstAccessMask(
-            vk::AccessFlagBits::eShaderRead |
-            vk::AccessFlagBits::eMemoryRead);
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
     command.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
         vk::PipelineStageFlagBits::eAllCommands,
         {},
-        readBarrier,
         nullptr,
-        nullptr);
+        nullptr,
+        toShaderRead);
     backend->EndSingleTimeCommands(command);
     translucencyVolumeUploaded = true;
 }
@@ -2777,7 +2769,9 @@ void ParticleRenderer::EnsureSpawnSourceBindings(
             0,
             VK_WHOLE_SIZE);
         const vk::DescriptorBufferInfo parentSpawnEventInfo(
-            emitter.spawnEvents.buffer,
+            emitter.spawnEventSource
+                ? emitter.spawnEventSource
+                : emitter.spawnEvents.buffer,
             0,
             VK_WHOLE_SIZE);
         const vk::DescriptorBufferInfo spawnEventOutInfo(
@@ -2816,12 +2810,17 @@ void ParticleRenderer::EnsureSpawnSourceBindings(
 
 void ParticleRenderer::BindParentSpawnSources()
 {
+    // 先算每个 emitter 的 set 0 binding 7 目标：默认读自己的当前帧事件
+    // 缓冲，子 emitter 改读父 emitter 的缓冲。只有目标真的变化时才置
+    // dirty，避免每帧重写仍在上一帧 command buffer 里的 descriptor set
+    // （VUID-vkUpdateDescriptorSets-None-03047）。
+    std::unordered_map<std::string, vk::Buffer> desiredSources;
+    desiredSources.reserve(emitters.size());
     for (auto& [key, emitter] : emitters)
     {
         emitter->emitSpawnEvents = false;
+        desiredSources.emplace(key, emitter->spawnEvents.buffer);
     }
-    const uint32_t imageCount =
-        backend->GetSwapchainImageCount();
     for (auto& [childKey, child] : emitters)
     {
         if (child->asset.spawnSource.mode != "parentEmitter")
@@ -2843,29 +2842,17 @@ void ParticleRenderer::BindParentSpawnSources()
             continue;
         }
         parentIt->second->emitSpawnEvents = true;
-        const vk::DescriptorBufferInfo parentInfo(
-            parentIt->second->spawnEvents.buffer,
-            0,
-            VK_WHOLE_SIZE);
-        for (uint32_t imageIndex = 0;
-             imageIndex < imageCount &&
-             imageIndex < child->computeSets.size();
-             ++imageIndex)
-        {
-            vk::WriteDescriptorSet write;
-            write
-                .setDstSet(child->computeSets.at(imageIndex))
-                .setDstBinding(7)
-                .setDescriptorCount(1)
-                .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-                .setBufferInfo(parentInfo);
-            backend->UpdateDescriptorSets({write});
-        }
+        desiredSources[childKey] = parentIt->second->spawnEvents.buffer;
     }
     // 父发射器选择完成后统一写 spawn 源/父事件/事件输出三个 binding。
     for (auto& [key, emitter] : emitters)
     {
-        (void)key;
+        const vk::Buffer desired = desiredSources.at(key);
+        if (emitter->spawnEventSource != desired)
+        {
+            emitter->spawnEventSource = desired;
+            emitter->spawnSourceBindingsDirty = true;
+        }
         EnsureSpawnSourceBindings(*emitter);
     }
 }
@@ -5192,7 +5179,8 @@ void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
             std::max(emitter.asset.maxParticles, 1u));
     const auto aliveAllocation = backend->CreateBuffer(
         aliveBytes,
-        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal,
         "ParticleAliveIndices:" + emitter.key);
     emitter.aliveIndices.buffer = aliveAllocation.first;
@@ -7178,12 +7166,17 @@ void ParticleRenderer::RecordSimulation(
         emitter.culled = false;
 
         // 骨骼网格粒子：GPU skinning。CPU 只按当前姿态写每 image 的 palette
-        // （jointModel · inverseBind），顶点着色器在绘制时完成蒙皮；
-        // rate=0 时 palette 停在作者姿态，不需要每帧重写。
+        // （jointModel · inverseBind），顶点着色器在绘制时完成蒙皮。
         //
         // 姿态时间来自 emitter 自己的 elapsedSeconds（不是一个全局时钟），
         // 同一资产的不同发射器因此可以各自停在不同帧。采样结果按
         // (资产, 片段, 时间) 缓存，同帧多次命中只算一次。
+        //
+        // palette 是逐 swapchain image 的缓冲，"已写入"判定也必须逐 image
+        // 记录。姿态未变时只能跳过 palette 重写，不能 continue：固定步长、
+        // UBO 写入、dispatch 与绘制都在后面，rate=0 的发射器同样必须推进
+        // 模拟。历史实现用 continue 跳过整段更新，导致静止姿态下粒子冻结，
+        // 资源侧只能把 rate 写成 1.0 绕过。
         if (!emitter.skeletalSections.empty() && emitter.skeletalAsset)
         {
             const auto& asset = *emitter.skeletalAsset;
@@ -7209,64 +7202,72 @@ void ParticleRenderer::RecordSimulation(
                 &asset,
                 emitter.skeletalClipIndex,
                 poseTime};
-            // 姿态未变（rate=0 或同一帧重复记录）时跳过 palette 重写；
-            // 对应 image 的 palette buffer 仍是该姿态，不会读到旧帧。
-            if (emitter.skeletalPoseKey == poseKey &&
-                emitter.skeletalPoseKey.asset != nullptr &&
-                !emitter.skeletalSections.front().skinPalettes.empty())
+            if (imageIndex >= emitter.skeletalPoseKeys.size())
             {
-                continue;
+                emitter.skeletalPoseKeys.resize(imageIndex + 1);
             }
-            if (skeletalPoseFrameAsset != poseKey.asset ||
-                skeletalPoseFrameClip != poseKey.clipIndex ||
-                skeletalPoseFrameTime != poseKey.time)
+            const ParticleSkeletalPoseKey& imagePoseKey =
+                emitter.skeletalPoseKeys[imageIndex];
+            // 只有本 image 的 palette 已经写过同一姿态时才可跳过重写。
+            const bool poseUnchanged =
+                imagePoseKey == poseKey &&
+                imagePoseKey.asset != nullptr &&
+                !emitter.skeletalSections.front().skinPalettes.empty();
+            if (!poseUnchanged)
             {
-                skeletalPoseFrameModels = SampleParticleSkeletalModels(
-                    asset, poseKey.clipIndex, poseTime, false);
-                skeletalPoseFrameAsset = poseKey.asset;
-                skeletalPoseFrameClip = poseKey.clipIndex;
-                skeletalPoseFrameTime = poseKey.time;
-            }
-            const std::vector<Eigen::Matrix4f>& models =
-                *skeletalPoseFrameModels;
-            for (EmitterResources::SkeletalSection& section :
-                 emitter.skeletalSections)
-            {
-                if (imageIndex >= section.skinPalettes.size())
+                if (skeletalPoseFrameAsset != poseKey.asset ||
+                    skeletalPoseFrameClip != poseKey.clipIndex ||
+                    skeletalPoseFrameTime != poseKey.time)
                 {
-                    continue;
+                    skeletalPoseFrameModels = SampleParticleSkeletalModels(
+                        asset, poseKey.clipIndex, poseTime, false);
+                    skeletalPoseFrameAsset = poseKey.asset;
+                    skeletalPoseFrameClip = poseKey.clipIndex;
+                    skeletalPoseFrameTime = poseKey.time;
                 }
-                const size_t jointCount = std::max<size_t>(
-                    section.inverseBinds.size(), 1u);
-                const vk::DeviceSize paletteBytes =
-                    static_cast<vk::DeviceSize>(jointCount) *
-                    sizeof(Eigen::Matrix4f) * 2u;
-                void* mapped = backend->MapMemory(
-                    section.skinPalettes.at(imageIndex).memory,
-                    paletteBytes);
-                if (mapped == nullptr)
+                const std::vector<Eigen::Matrix4f>& models =
+                    *skeletalPoseFrameModels;
+                for (EmitterResources::SkeletalSection& section :
+                     emitter.skeletalSections)
                 {
-                    continue;
-                }
-                auto* writer = static_cast<Eigen::Matrix4f*>(mapped);
-                for (size_t joint = 0; joint < jointCount; ++joint)
-                {
-                    Eigen::Matrix4f palette = Eigen::Matrix4f::Identity();
-                    if (joint < models.size() &&
-                        joint < section.inverseBinds.size())
+                    if (imageIndex >= section.skinPalettes.size())
                     {
-                        palette =
-                            models[joint] * section.inverseBinds[joint];
+                        continue;
                     }
-                    // 第二份矩阵是上一帧姿态，供 shader 需要时做逐顶点插值；
-                    // 当前实现只用 current，previous 写同一值保持布局稳定。
-                    writer[joint] = palette;
-                    writer[jointCount + joint] = palette;
+                    const size_t jointCount = std::max<size_t>(
+                        section.inverseBinds.size(), 1u);
+                    const vk::DeviceSize paletteBytes =
+                        static_cast<vk::DeviceSize>(jointCount) *
+                        sizeof(Eigen::Matrix4f) * 2u;
+                    void* mapped = backend->MapMemory(
+                        section.skinPalettes.at(imageIndex).memory,
+                        paletteBytes);
+                    if (mapped == nullptr)
+                    {
+                        continue;
+                    }
+                    auto* writer = static_cast<Eigen::Matrix4f*>(mapped);
+                    for (size_t joint = 0; joint < jointCount; ++joint)
+                    {
+                        Eigen::Matrix4f palette =
+                            Eigen::Matrix4f::Identity();
+                        if (joint < models.size() &&
+                            joint < section.inverseBinds.size())
+                        {
+                            palette =
+                                models[joint] * section.inverseBinds[joint];
+                        }
+                        // 第二份矩阵是上一帧姿态，供 shader 需要时做逐顶点
+                        // 插值；当前实现只用 current，previous 写同一值保持
+                        // 布局稳定。
+                        writer[joint] = palette;
+                        writer[jointCount + joint] = palette;
+                    }
+                    backend->UnmapMemory(
+                        section.skinPalettes.at(imageIndex).memory);
                 }
-                backend->UnmapMemory(
-                    section.skinPalettes.at(imageIndex).memory);
+                emitter.skeletalPoseKeys[imageIndex] = poseKey;
             }
-            emitter.skeletalPoseKey = poseKey;
         }
 
         // 固定步长：帧间余量进入 accumulator，只推进完整步；最多 8 步/帧
