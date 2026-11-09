@@ -43,8 +43,10 @@ Houdini 参考。它其实是 **2 km、约 502.5 m 高差**的观感/导入参�
   `D:\YYBWorkSpace\Pegasus\LandscapeWorkflow\ProjectFiles_LandscapeWorkflow\Unreal\Pegasus_Demo.uproject`
   的 Landscape，以及
   `Landscape Heightfield Layers\Pegasus_Landscape_Layers.bgeo.sc`（Houdini 层）；
-- 要复刻岛，需要从 UE 导出 Landscape heightmap（或从 Houdini 重新导出
-  height + 各层），再按 8 km（8×8 tile）或多 region 切分。
+- 岛已在 2026-11-10 用本机 Houdini 22 从 `Pegasus_Landscape_Layers.bgeo.sc`
+  导出：`Pegasus/decoded/island`（4032 m × 4032 m，height 0.01–424.26 m，
+  water/debris/sediment/bedrock 层），资产见
+  `Generated/HoudiniPegasusIsland/`（16 tile、6 层，含 Sea）。
 
 本文下面所有 `_ref4km` 对比结论仍然有效——它们是“侵蚀示例地形”的对比，
 不是“飞马岛”的对比。

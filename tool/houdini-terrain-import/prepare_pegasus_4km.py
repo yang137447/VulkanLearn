@@ -125,7 +125,10 @@ def main() -> int:
     sediment_weight = np.clip(
         sediment / max(args.sediment_full_m, 1e-6), 0.0, 1.0)
 
-    stack = np.stack([rock, water_weight, debris_weight, sediment_weight])
+    # 岛外的平地是 y≈0 的海面；单独一层，否则会按地形纹理渲染成陆地。
+    sea_weight = 1.0 - _smoothstep(height, 0.0, 3.0)
+    stack = np.stack([rock, water_weight, debris_weight, sediment_weight,
+                      sea_weight])
     covered = np.clip(stack.sum(axis=0), 0.0, 1.0)
     base = 1.0 - covered
     weights = np.stack([base] + [row for row in stack])
@@ -140,7 +143,7 @@ def main() -> int:
     normalized = (height - height_low) / max(height_high - height_low, 1e-9)
     _write_gray(height_path, normalized)
 
-    names = ("base", "rock", "water", "debris", "sediment")
+    names = ("base", "rock", "water", "debris", "sediment", "sea")
     mask_paths = {}
     for name, values in zip(names, weights):
         path = source_out / f"Layer_g_{name}.png"
@@ -154,10 +157,11 @@ def main() -> int:
         ("River Water", "water", None, [0.0, 1.0], [0.0, 90.0], 4.0),
         ("Scree Debris", "debris", "layer_05", [0.0, 1.0], [0.0, 90.0], 5.0),
         ("River Silt", "sediment", "layer_01", [0.0, 1.0], [0.0, 90.0], 6.0),
+        ("Sea", "sea", None, [0.0, 1.0], [0.0, 90.0], 2.0),
     ]
     layers = []
     for name, key, prefix, height_range, slope_range, uv_scale in layer_specs:
-        if key == "water":
+        if key in ("water", "sea"):
             texture_root = water_root
             albedo, normal, pbr, height_map = (
                 "water_albedo.png", "water_normal.png",
