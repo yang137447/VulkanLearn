@@ -1170,8 +1170,8 @@ build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair
 
 日志应出现同样的 `World/graph transaction committed` 与
 `[TressFX] GPU guide simulation dispatch` 行（`objects=1 guides=40334 points=1290688 passes=9 sdfObjects=1`），
-stderr 为空、无 Vulkan validation 输出。该路径没有退出命令，验证后终止进程；
-这不作为正常 teardown 证据。
+stderr 为空、无 Vulkan validation 输出。该路径用 `--exit-after-frames <N>` 或控制台 `quit`
+正常退出；外部强制终止不构成正常 teardown 证据。
 
 两时刻截图用 Console 命令，两次运行分别使用不同的帧延迟（延迟从命令排队后开始计数）：
 
@@ -1386,8 +1386,8 @@ computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
 
 端到端渲染改动没有自动化门禁，必须出图核对。**两个已知陷阱**：
 
-1. **`main.exe` 不会自行退出，也没有 quit 控制台命令。** 不自己终止就会泄漏进程并锁住
-   `build\bin\main.exe`，使下一次构建失败。
+1. **采集结束后用 `--exit-after-frames <N>` 或控制台 `quit` 正常退出。** 外部强制终止会跳过
+   teardown，并可能锁住 `build\bin\main.exe` 使下一次构建失败。
 2. **截图 BMP 可能是半截文件。** 读取像素前必须确认文件大小稳定且达到预期
    （1280×720 的 24 位 BMP 载荷是 2764800 字节）。
 

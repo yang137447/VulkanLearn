@@ -184,6 +184,7 @@ RuntimeResult<void> EngineLoop::Init(
     // --frame-limit 只服务帧率验收，不参与渲染资源或脚本配置；
     // 0 表示保持原有的不限速行为。
     frameLimitHz = launchOptions.frameLimitHz;
+    SetExitAfterFrames(launchOptions.exitAfterFrames);
 
     auto inputResult = GetSubsystems().GetInputSubsystem().Initialize(platformWindow);
     if (inputResult.IsFailure())
@@ -273,6 +274,16 @@ int EngineLoop::Run()
         const std::chrono::steady_clock::time_point frameStart =
             std::chrono::steady_clock::now();
         Tick();
+        ++completedFrames;
+
+        // --exit-after-frames：烟测/打包验收需要进程自然结束；外部强制终止
+        // 不构成 teardown 证据。
+        if (exitAfterFrames > 0 && completedFrames >= exitAfterFrames &&
+            !shouldClose)
+        {
+            exitCode = 0;
+            shouldClose = true;
+        }
 
         if (frameLimitHz <= 0)
         {
@@ -416,6 +427,11 @@ void EngineLoop::QueueRuntimeCommand(RuntimeCommand command)
 void EngineLoop::SetExitAfterRuntimeTests(bool enabled)
 {
     exitAfterRuntimeTests = enabled;
+}
+
+void EngineLoop::SetExitAfterFrames(int frames)
+{
+    exitAfterFrames = frames > 0 ? frames : 0;
 }
 
 void EngineLoop::QueueLaunchConsoleCommands(const std::vector<std::string>& lines, int delayFrames)
@@ -739,6 +755,13 @@ void EngineLoop::Tick()
         destructibleRuntimes.get(),
         projectileRuntime.get());
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
+
+    if (commandResult.quitRequested)
+    {
+        exitCode = 0;
+        shouldClose = true;
+        return;
+    }
 
     ProcessRequestedWorldTransition(commandResult);
     if (commandResult.terrainFeedbackStatisticsRequested)

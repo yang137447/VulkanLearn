@@ -79,6 +79,8 @@ public:
     int GetExitCode() const noexcept { return exitCode; }
     void QueueRuntimeCommand(RuntimeCommand command);
     void SetExitAfterRuntimeTests(bool enabled);
+    // 完成 frames 帧后请求正常退出（退出码 0）；<= 0 表示不限制。
+    void SetExitAfterFrames(int frames);
     // 启动期控制台脚本入口：转发给 ConsoleSubsystem，延迟若干帧后提交，
     // 让 showcase / debug 截图可以脚本化复现。
     void QueueLaunchConsoleCommands(
@@ -193,6 +195,8 @@ private:
     int exitCode = 0;
     // 渲染主循环节拍上限（Hz）；0 = 不限速。只影响 Run() 的补帧，不改变固定 60 Hz 物理子步。
     int frameLimitHz = 0;
+    int exitAfterFrames = 0;
+    int completedFrames = 0;
     std::vector<PlatformEvent> platformEvents;
 
     std::unique_ptr<ShaderCompiler> shaderCompiler;

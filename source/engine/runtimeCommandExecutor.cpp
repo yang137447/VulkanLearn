@@ -958,6 +958,10 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::PrintPerformanceJson:
         renderSystem.PrintPerformanceJson();
         break;
+    case RuntimeCommandType::QuitApplication:
+        executionResult.quitRequested = true;
+        diagnostics.ReportInfo("Quit requested.");
+        break;
     case RuntimeCommandType::RequestHairTrace:
         // 只校验值语义并登记；GPU buffer/文件由渲染线程在 Record 中创建，
         // Console/GT 不直接接触 World 或 Vulkan 资源。

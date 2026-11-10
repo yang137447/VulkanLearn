@@ -503,6 +503,21 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "quit")
+    {
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << "Usage: quit" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::QuitApplication;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
+
     if (command == "offline")
     {
         std::string action;
@@ -1160,6 +1175,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";
     std::cout << "  gpustats - print the latest per-pass GPU timing table (enables collection if needed)\n";
     std::cout << "  perf json - print one line of JSON with FPS, CPU frame ms, GPU total and per-pass ms\n";
+    std::cout << "  quit - request a clean application exit (exit code 0)\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const
