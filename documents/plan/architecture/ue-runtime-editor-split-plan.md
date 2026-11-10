@@ -6,7 +6,8 @@
 - Created: 2026-11-10
 - Base: `8f1055c` (`master`)
 - Worktree: `codex/ue-runtime-editor-split`
-- State: planned, not implemented
+- State: implemented through P13; P4a physical directory moves deferred by the documented
+  fallback (30+ active worktrees); CMake ownership and include gates are in force instead
 - Review verdict: **approve with changes**; both independent reviews are incorporated below
 - Related:
   - `documents/plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
@@ -21,7 +22,32 @@ This plan follows Unreal's product shape, not Android product flavors:
 - Runtime data never contains editor types.
 - The game package contains only the runtime dependency closure.
 
-The plan does not claim the current repository already has these properties. It is a migration plan.
+This document started as a migration plan. The outcome after P0–P13 is recorded below; the
+remaining deferred item is P4a (physical directory moves), not the target/flavor/packaging work.
+
+## Outcome
+
+- Targets: `vl_runtime`, `vl_editor_asset_core`, `vl_editor`, `vl_editor_widgets`;
+  `main_game` links only `vl_runtime`, `main_editor` links `vl_editor`, compatibility `main.exe`
+  is a post-build copy of `main_editor.exe`.
+- Game-only Release build is green; `compile_commands.json` contains zero `source/editor/`
+  translation units for that configuration, `linkLibs.rsp` has no `vl_editor*`, and `nm -C`
+  finds no editor panel/terrain-thumbnail symbols in `main_game.exe`.
+- Runtime→editor includes are zero outside `source/editor/**`; `engineLoop.*`,
+  `runtimeCommandExecutor.*`, `debugConsole.*` and the runtime UI headers no longer name editor
+  types. `IEditorHost`/`NullEditorHost` and `IEditorUiShell` are the runtime seams.
+- Packaging: game flavor requires `main_game.exe` plus the CMake-written flavor marker, copies
+  only the runtime UI manifest, ships the shader/MI/debug-SPV closure, strips `editorGrid`
+  before the asset scan, includes the gameplay default glass-crack material, and passes
+  `tool/validate-game-package.ps1` on a real `SC_fracture_playground` package.
+- File sizes after decomposition (line counts):
+  `renderSystem.cpp` 1,483; `engineLoop.cpp` 1,325; `materialInstanceAssetEditorPanel.cpp` 1,711;
+  `materialInstanceDocumentService.cpp` 540; `renderableObject.cpp` 291;
+  `rendererTerrainLoader.cpp` 489.
+- Verification: editor+game build, game-only Release build, both-off configure failure,
+  `--exit-after-frames` smoke for both executables, packaged-game smoke with `misses=0`,
+  full editor/material/script/terrain/renderer/export test sets, `validate-docs.py`,
+  boundary audit and generated rule index all pass.
 
 ## Decision
 
