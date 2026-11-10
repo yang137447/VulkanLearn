@@ -211,11 +211,13 @@ TR 字段（已通过校验与透传，置换 pass 尚未消费）：
 
 ### 8.1 近景的两个已知限制（2026-11-11 实测）
 
-- **材质边界在 <10 m 处呈块状/锯齿**：top-4 的 ID/权重图每页只有
-  128²（≈1 m/texel），`round(layerIds)` 会按权重 texel 切换层集合。
-  近处一个 texel 覆盖很多像素，边界因此呈米级块状。这不是 height blend
-  造成的（把强度设 0 仍存在）；要修只能提高权重图分辨率、改为全层权重，
-  或对 ID 过渡做混合。
+- ~~材质边界在 <10 m 处呈块状/锯齿~~：**已改为逐层权重数组**
+  （`T_terrain_kitedemo_weights_array`，按 TR 层序切片，16-bit，clamp），
+  shader 用 `u_terrainWeightMapMode=1` 直接取 top-4，不再经过 ID 图的
+  `round` 量化。近景边界恢复连续。
+  遗留：VT 页驻留的 feedback 仍按 ID 图 top-4 推导，权重第 5 名以后的层
+  可能没被预取（权重小，暂未观察到缺页）；后续把 `pass/terrainFeedback.frag`
+  也切到权重数组即可。
 - **贴图在 <5 m 处偏糊**：1 K 层纹理在 252 m 重复下是 0.25 m/texel。
   近景 detail 层（`u_detailUvScale=6`）只做亮度/法线增强；真正的解法是
   2 K 源或独立 detail 贴图。height blend 现已限制在 8–45 m 之外生效，

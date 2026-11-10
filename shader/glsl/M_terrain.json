@@ -258,6 +258,15 @@
                 "max": 8.0
             },
             "description": "top-4 height-blend sharpening; 0 reproduces pure linear weights"
+        },
+        "u_terrainWeightMapMode": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "0 = top-4 IDs from the baked ID/weight atlas; 1 = continuous per-layer weight array"
         }
     },
     "textures": {
@@ -340,6 +349,10 @@
         "globalMasks": {
             "type": "sampler2D",
             "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerWeightMaps": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
         }
     },
     "shaderEvaluation": {

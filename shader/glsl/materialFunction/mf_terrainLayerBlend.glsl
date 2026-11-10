@@ -58,8 +58,61 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     const vec2 atlasUv =
         (vec2(pageCoord) * u_pageResolution + localUv * u_pageResolution) /
         atlasResolution;
-    const ivec4 topIds = ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
-    vec4 topWeights = texture(layerWeights, atlasUv);
+    ivec4 topIds;
+    vec4 topWeights;
+    if (u_terrainWeightMapMode > 0.5)
+    {
+        // 直接采逐层权重数组：权重是连续的，不需要 top-4 ID 的量化与
+        // `round`，层边界的抖动/块状来自 ID 图，而不是权重本身。
+        // 掩码图带 1 texel margin（grid+3），采样时内缩一个 texel。
+        const ivec3 weightSize = textureSize(layerWeightMaps, 0);
+        const float weightSpan = float(weightSize.x - 1);
+        const vec2 weightUv =
+            (vec2(1.0) + context.texCoord * (weightSpan - 2.0)) / weightSpan;
+        float w0 = -1.0;
+        float w1 = -1.0;
+        float w2 = -1.0;
+        float w3 = -1.0;
+        int i0 = 0;
+        int i1 = 0;
+        int i2 = 0;
+        int i3 = 0;
+        for (int layer = 0; layer < weightSize.z; ++layer)
+        {
+            const float weight = texture(
+                layerWeightMaps, vec3(weightUv, float(layer))).r;
+            if (weight > w0)
+            {
+                w3 = w2; i3 = i2;
+                w2 = w1; i2 = i1;
+                w1 = w0; i1 = i0;
+                w0 = weight; i0 = layer;
+            }
+            else if (weight > w1)
+            {
+                w3 = w2; i3 = i2;
+                w2 = w1; i2 = i1;
+                w1 = weight; i1 = layer;
+            }
+            else if (weight > w2)
+            {
+                w3 = w2; i3 = i2;
+                w2 = weight; i2 = layer;
+            }
+            else if (weight > w3)
+            {
+                w3 = weight; i3 = layer;
+            }
+        }
+        topIds = ivec4(i0, i1, i2, i3);
+        topWeights = vec4(
+            max(w0, 0.0), max(w1, 0.0), max(w2, 0.0), max(w3, 0.0));
+    }
+    else
+    {
+        topIds = ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
+        topWeights = texture(layerWeights, atlasUv);
+    }
     float weightSum = topWeights.x + topWeights.y + topWeights.z + topWeights.w;
     if (weightSum < 1.0e-4)
     {

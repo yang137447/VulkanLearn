@@ -1526,11 +1526,28 @@ def _convert(
         "T_terrain_kitedemo_normal_array", normal_sources, "linear")
     pbr_json = _texture_json(
         "T_terrain_kitedemo_pbr_array", pbr_sources, "linear")
+    # 逐层权重数组：直接用切片顺序当层号，避免 top-4 ID 图的量化/取整。
+    # clamp 边界：tile 边缘不能采样到邻居 tile 的权重。
+    weight_sources = [
+        _asset_path(resource_root, layer.weightmap) for layer in spec.layers]
+    weights_json_path = _guard_output(
+        output_root, textures_dir / "T_terrain_kitedemo_weights_array.json")
+    weights_json = {
+        "name": "T_terrain_kitedemo_weights_array",
+        "type": "textureArray",
+        "sources": weight_sources,
+        "colorSpace": "linear",
+        "mipmaps": True,
+        "filter": "linear",
+        "wrapMode": "clamp",
+        "bitDepth": 16,
+    }
     for path, value in (
             (albedo_json_path, albedo_json),
             (normal_json_path, normal_json),
             (pbr_json_path, pbr_json),
-            (height_json_path, height_json)):
+            (height_json_path, height_json),
+            (weights_json_path, weights_json)):
         if _write_json_atomic(path, value):
             changed_files += 1
         else:
@@ -1598,6 +1615,11 @@ def _convert(
     mi_parameters = {"u_uvScale": spec.material_uv_scale}
     if spec.terrain_layer_mode is not None:
         mi_parameters["u_terrainLayerMode"] = float(spec.terrain_layer_mode)
+    # 逐层权重数组可用时优先走它（连续权重，不做 top-4 ID 量化）。
+    layers_use_weight_maps = bool(spec.layers) and all(
+        layer.weightmap is not None for layer in spec.layers)
+    if layers_use_weight_maps:
+        mi_parameters["u_terrainWeightMapMode"] = 1.0
     mi_json = {
         "name": f"MI_terrain_{spec.asset_name}",
         "type": "materialInstance",
@@ -1612,6 +1634,7 @@ def _convert(
             "layerNormal": _asset_path(resource_root, normal_json_path),
             "layerPbr": _asset_path(resource_root, pbr_json_path),
             "layerHeight": _asset_path(resource_root, height_json_path),
+            "layerWeightMaps": _asset_path(resource_root, weights_json_path),
         },
     }
     if _write_json_atomic(mi_path, mi_json):
