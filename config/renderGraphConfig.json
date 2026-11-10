@@ -651,7 +651,7 @@
             ]
         },
         {
-            "name": "forwardTransparent",
+            "name": "singleWaterLayer",
             "type": "forwardTransparent",
             "needMsaa": false,
             "pipelineState": {

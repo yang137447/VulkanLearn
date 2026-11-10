@@ -47,9 +47,14 @@ Houdini 导出（height + water/debris/sediment）
   -> split_pegasus_tiles.py -> assemble_pegasus_tiles.py
 ```
 
-切片/LOD/VT/场景合并全部复用原链路。当前出货资产
-`Generated/HoudiniPegasus4km/`（16 tile、5 层）。决定与数据映射见
+切片/LOD/VT/场景合并全部复用原链路。决定与数据映射见
 [路线切换记录](../../rationale/pegasus-pipeline-pivot-houdini.md)。
+
+> **2026-11-10 资产替换：** 当前出货资产是
+> `Generated/HoudiniPegasusIsland/`（16 tile、6 层、4032 m 见方）。
+> 早期的 `Generated/HoudiniPegasus4km/` 来自 `_ref4km`（见下方更正），
+> 连同它的 `SC_houdini_pegasus_4km_top/ground/veryclose` 观测场景一起退役删除，
+> 不再作为正式案例。
 
 下表 S2/S3/S3b 的“完成度”从此描述的是 **GN 对照实现**；出货地形的高度直接
 来自 Houdini，不再有复刻误差。
@@ -74,7 +79,8 @@ Houdini 导出（height + water/debris/sediment）
 | 阶段 | 内容 | 产物 | 状态 |
 |---|---|---|---|
 | S1 参考 | 解码 Houdini HDA 参数；导出 4 km 基准（erosion before/after + 4 层） | `decoded/_ref4km/global`、参数表 | ✅ 冻结 |
-| **S0 Houdini 直连** | `prepare_pegasus_4km.py` 把高度 + water/debris/sediment 归一化成 5 层 | `Generated/HoudiniPegasus4km/` | ✅ **当前出货路径** |
+| **S0 Houdini 直连** | `prepare_pegasus_4km.py` 把高度 + 层权重归一化后切片 | `Generated/HoudiniPegasusIsland/` | ✅ **当前出货路径** |
+| S0b 4 km 参考 | 早期 `_ref4km` 放大示例（非飞马岛） | ~~`Generated/HoudiniPegasus4km/`~~ | ❌ 2026-11-10 退役删除 |
 | S2 造型（备用） | heightfield → noise×2 → distort | `heightmap_shape.png` | 🅿️ GN 对照实现，停止对齐 |
 | S3 水文（备用） | 填洼 → 汇流 → 隐式 stream power → 坡面松弛 | `heightmap_gn.png` | 🅿️ GN 对照实现 |
 | S3b 河流（备用） | 投影蜿蜒河道 → 切河床 → 双层 mask | `mask_gn_river*.png` | 🅿️ 无 Houdini 数据时的 fallback |
@@ -337,7 +343,7 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 | --- | --- | --- | --- |
 | 材质贴图 | `Scree Debris` / `River Silt` / `River Bank` / `River Water` 仍是 KiteDemo + 占位水面 | 从 UE 导出 Megascans PNG，替换 `prepare_pegasus_4km.py` 里的 `layer_XX` / `water_*` 路径后重跑 split | MI 贴图路径指向 Megascans，`terrainlayer stats` 无变化 |
 | 源分辨率 | Houdini 1024² / 4 km（3.91 m/texel） | 重新导出 2048² 或 4096²，`--tile-resolution 512/1024` | 近景网格间距 ≤ 2 m；顶点内存从 27.9 MB 增至 ~112/450 MB |
-| 水面 | `River Water` 是 Opaque 材质层 | 二选一：湿润度调制（低 roughness）或独立透明 water pass | 河面有反射/颜色，且不破坏地形深度 |
+| 水面 | 已改为独立水面网格 + `singleWaterLayer` pass（见 §8）；`River Water` / `Sea` 层降级为水下底色 | 后续做深度感知的吸收/岸边透明度 | 海面有菲涅尔与天空反射，海岸线不 z-fight |
 | 河岸/基岩 | `River Bank` 用 gravel 占位 | Megascans 碎石/岩壁；`bedrock` 高度层可再导出一张露头 mask | 层过渡无接缝 |
 
 ### B. 散布接入（`PE_Unreal_Instances`）
@@ -384,3 +390,38 @@ Houdini 的散布 HDA 输出点属性与我们的 `VEG_*.json` 是 1:1 的：
 3. LOD 距离与 chunk residency 距离按 4× 重新标定。
 
 在这之前不建议先做 16 km——会把页表和流式的问题掩盖在规模里。
+
+## 8. 独立水面（`singleWaterLayer`，2026-11-10）
+
+水面不再由地形材质层冒充。地形里的 `River Water` / `Sea` 只保留成水下底色和湿痕，
+真正的水面是一张独立的平面 mesh，由专用 pass 绘制。
+
+### 8.1 组成
+
+| 层 | 文件 | 说明 |
+| --- | --- | --- |
+| pass | `config/renderGraphConfig.json` | 实例名 `singleWaterLayer`，`type` 仍是 `forwardTransparent`：`depthTest=true` / `depthWrite=false` / `sceneColor load` 正是水面需要的合同，C++ 侧零改动 |
+| 母材质 | `shader/glsl/M_water.json` + `.vertex/.surface.glsl` | `TransparentAlphaBlend`、`DefaultLit`；菲涅尔 + IBL 天空反射 + 世界空间解析涌浪 |
+| 材质实例 | `Common/Materials/MI_water.json` | 全部走 M_ 默认值；MI 不得重复声明与默认相同的参数（引擎会报 "redundantly repeats"） |
+| 网格 | `Generated/HoudiniPegasusIsland/Water/water_plane.obj` / `SM_water_plane.json` | 100 km 见方、cm 单位、`+Y` 法线、世界 CW 绕序（loader 会再翻一次） |
+| 场景对象 | 两个岛场景的 `SeaSurface` | `y = 100 cm`，即海平面抬高 1 m，避免与地形最低点共面 |
+
+生成器：`tool/blender-terrain-import/make_water_plane.py`（改尺寸/分段后重跑即可）。
+
+### 8.2 着色要点
+
+- 基色是吸收后的深色（`u_waterDeepColor`），不做"亮蓝塑料"式的浅色插值；
+- 掠射角靠**环境 IBL 镜面**给出天空反射，`u_waterSpecular = 0.25` 对应水的
+  F0 = 0.02（IOR 1.333）；
+- 法线只有三组解析正弦波的斜率累加（长涌浪 ~300/480 m、碎浪 ~85/34 m、细波
+  ~10/4 m），按相机距离分级淡出，另加几百米尺度的斑块调制打散规则条纹；
+- 本 pass 的深度附件同时是 depthTest 输入，**不能**再采样 `sceneDepth`，所以
+  暂时没有折射/厚度吸收，`u_waterOpacity` 默认 1.0。
+
+### 8.3 验收与已知限制
+
+- 1280×720 development：俯视与贴海两个视角都可见菲涅尔渐变、天空反射和涌浪；
+- 把相机 near 从 10 cm 提到 100 m 后，4 km 处的深度精度从 ~16 m 回到 ~1 cm，
+  水面/地形不再逐像素 z-fight；
+- 海岸线仍是 3.9 m 网格间距下的锯齿（256²/1 km tile），需要等源分辨率提升；
+- 岛的方形边界与"高台"外形来自 4 km Houdini 导出本身，不是水面造成的。

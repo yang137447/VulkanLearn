@@ -17,6 +17,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-scene", type=Path)
     parser.add_argument("--skip-convert", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--water-plane-mesh",
+        help="SM_*.json path (relative to the resource root) for the SeaSurface "
+        "mesh; when omitted the merged scene has no independent water plane",
+    )
+    parser.add_argument(
+        "--water-plane-height-cm",
+        type=float,
+        default=100.0,
+        help="world Y offset of the water plane in cm (default 100 = 1 m above "
+        "sea level, so it never z-fights the terrain minimum)",
+    )
+    parser.add_argument(
+        "--camera-near-clip-cm",
+        type=float,
+        default=10000.0,
+        help="camera near clip in cm for merged scenes (default 10000; the old "
+        "10 cm near plane loses depth precision at 4 km and z-fights the sea)",
+    )
     return parser.parse_args()
 
 
@@ -156,12 +175,26 @@ def main() -> int:
         if isinstance(obj, dict) and obj.get("type") != "terrain"
     ]
     merged_objects = [entry["terrain"] for entry in scenes] + merged_objects
+    if args.water_plane_mesh:
+        # 独立水面必须排在地形之后、灯光/相机之前，便于人读场景时保持地形块连续。
+        merged_objects.insert(
+            len(scenes),
+            {
+                "name": "SeaSurface",
+                "type": "mesh",
+                "modelPath": args.water_plane_mesh,
+                "position": [0.0, args.water_plane_height_cm, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+        )
     span_cm = float(layout.get("tileGrid", 4)) * float(
         layout.get("tileSizeCm", 100000.0))
     height_scale_cm = float(tiles[0]["manifest"].get("heightScale", 0.0))
     height_scale_m = height_scale_cm / 100.0
     for obj in merged_objects:
         if obj.get("type") == "camera":
+            obj["near_clip"] = args.camera_near_clip_cm
             if height_scale_m < 250.0:
                 obj["position"] = [0.0, span_cm * 0.25, span_cm * 0.8]
                 obj["rotation"] = [-15.0, 0.0, 0.0]

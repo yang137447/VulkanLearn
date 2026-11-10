@@ -59,8 +59,16 @@ $res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLear
 # 3) 16 tile 合并成场景
 & $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
   --resource-root $res `
-  --tile-layout "$res\Generated\HoudiniPegasus4km\tile_layout.json" --verbose
+  --tile-layout "$res\Generated\HoudiniPegasus4km\tile_layout.json" `
+  --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" `
+  --verbose
 ```
+
+`--water-plane-mesh` 会在 16 个 terrain 之后插入 `SeaSurface`（默认 `y = 100 cm`），
+并把相机 `near_clip` 提到 100 m；两者都是必需项——10 cm near 在 4 km 处只有
+约 16 m 深度精度，水面会和地形逐像素 z-fight。平面网格由
+`tool\blender-terrain-import\make_water_plane.py --output $res\Generated\HoudiniPegasusIsland\Water\water_plane.obj`
+生成。
 
 输出：
 

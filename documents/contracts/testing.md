@@ -1986,6 +1986,11 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 
 ## 2026-11-09 Pegasus 路线切换：Houdini 导出直连
 
+> **2026-11-10 退役：** 本节测的是 `_ref4km`（`HFErodeExamples.hip` 放大到
+> 4 km 的示例，不是飞马岛）。`Generated/HoudiniPegasus4km/` 及
+> `SC_houdini_pegasus_4km_top/ground/veryclose` 已删除，下面只保留为历史证据；
+> 当前资产是 `Generated/HoudiniPegasusIsland/`。
+
 GN 复刻停止（`anisotropy` 1.03 vs Houdini 1.28），4 km 地形改为直接消费
 Houdini 导出。决定与数据映射见
 [路线切换记录](../rationale/pegasus-pipeline-pivot-houdini.md)。
@@ -2013,8 +2018,10 @@ Houdini 导出。决定与数据映射见
 - 截图：`artifacts/houdini_ingest/houdini_far.png`、
   `houdini_top.png`；层语义检查 `artifacts/houdini_ingest/houdini_layers.png`。
 
-`config/config.json` 已指向
-`Generated/HoudiniPegasus4km/SC_terrain_pegasus_4x4.json`。
+`config/config.json` 现在指向
+`Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`（20 objects，
+含独立水面 `SeaSurface`）。下方 4 km 的驻留/帧率数字是在已退役的
+`HoudiniPegasus4km` 参考资产上测的，只作为历史证据，不代表当前资产。
 GN 资产 `Generated/BlenderPegasusGN_v1_rhythm_river/` 保留为对照，
 不再作为出货路径。
 

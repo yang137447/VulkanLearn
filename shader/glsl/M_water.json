@@ -1,0 +1,85 @@
+{
+    "name": "M_water",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "TransparentAlphaBlend",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_waterDeepColor": {
+            "type": "vec3",
+            "default": [0.015, 0.070, 0.110],
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "deep-water linear red",
+                    "range": {"min": 0.0, "max": 1.0}
+                },
+                "y": {
+                    "name": "green",
+                    "description": "deep-water linear green",
+                    "range": {"min": 0.0, "max": 1.0}
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "deep-water linear blue",
+                    "range": {"min": 0.0, "max": 1.0}
+                }
+            },
+            "description": "grazing/fresnel-off water color"
+        },
+        "u_waterShallowColor": {
+            "type": "vec3",
+            "default": [0.050, 0.180, 0.240],
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "fresnel-on linear red",
+                    "range": {"min": 0.0, "max": 1.0}
+                },
+                "y": {
+                    "name": "green",
+                    "description": "fresnel-on linear green",
+                    "range": {"min": 0.0, "max": 1.0}
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "fresnel-on linear blue",
+                    "range": {"min": 0.0, "max": 1.0}
+                }
+            },
+            "description": "fresnel-on water color"
+        },
+        "u_waterRoughness": {
+            "type": "float",
+            "default": 0.06,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "base roughness; drops toward 0.01 at grazing angles"
+        },
+        "u_waterOpacity": {
+            "type": "float",
+            "default": 0.82,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "base opacity; fresnel pushes it toward 1"
+        },
+        "u_waterFresnelPower": {
+            "type": "float",
+            "default": 5.0,
+            "range": {"min": 1.0, "max": 8.0},
+            "description": "fresnel exponent"
+        },
+        "u_waterRippleStrength": {
+            "type": "float",
+            "default": 1.0,
+            "range": {"min": 0.0, "max": 4.0},
+            "description": "world-space procedural ripple normal slope multiplier"
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "M_water.vertex.glsl",
+        "surface": "M_water.surface.glsl"
+    }
+}
