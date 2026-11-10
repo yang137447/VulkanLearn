@@ -53,6 +53,23 @@ TEST(TressfxDynamics, RootsRemainFixedAndSegmentsStayNearRestLength)
         EXPECT_NEAR((positions[i + 1] - positions[i]).norm(), 1.0f, 2e-3f);
 }
 
+TEST(TressfxDynamics, GravityPrecompensationKeepsAuthoredShape)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
+    config.globalShapeStiffness = 0.2f;
+    config.globalShapeEffectiveRange = 1.0f;
+    config.bendStiffness = 0.0f;
+    config.iterations = 8;
+    const std::vector<Eigen::Vector3f> rest = CurvedChain();
+    GuideSimulation simulation(rest, 1, 4, {0, 1, 1, 1}, config);
+    for (int step = 0; step < 200; ++step)
+        simulation.Step(0.0125f);
+    for (size_t point = 0; point < rest.size(); ++point)
+        EXPECT_NEAR((simulation.Positions()[point] - rest[point]).norm(),
+            0.0f, 1.0e-3f);
+}
+
 TEST(TressfxDynamics, PauseAndResetAreDeterministic)
 {
     SimulationConfig config;

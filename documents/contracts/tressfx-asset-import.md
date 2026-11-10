@@ -322,8 +322,8 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 | `maxDt` | 0.016 | `(0,0.016]` | 兼容字段。GPU 原生调度与 `GuideSimulation::StepFrame` 都不读它（每 substep 固定 0.0125 s）；只有旧的 `GuideSimulation::Step(dt)` 变量步长入口仍 clamp 到 `[0,maxDt]`。资产校验保留 `(0,0.016]`。 |
 | `bendStiffness` | 0.3 | `[0,1]` | 映射到 LocalShape pass 的逐顶点 `Stiffness` 标量；pass 内再乘 0.5（TressFX 公式）。0 关闭。未提供 `localShapeStiffness` 时整条 strand 使用该标量。 |
 | `localShapeStiffness` | 空（未作者） | 数组，1..64 项，每项 `[0,1]` | 可选作者逐顶点 LocalShape Stiffness。第 i 项 = 源曲线在 `i/N` 处的采样值（`TressFXComponent.cpp:706-710`），N = guide 资产的 `pointsPerStrand`；长度必须等于该 TFX 的 `pointsPerStrand`，否则导入期硬错误。加载期对 >0.95 的值 clamp 到 0.95 并向 stderr 记录字段/索引/资产路径（源 `FMath::Min(value, 0.95f)`）；省略时回退到 `bendStiffness` 标量。 |
-| `globalShapeStiffness` | 0 | `[0,1]` | TressFX Integration 的 global shape 强度；0 关闭，既有资产外观不变。 |
-| `globalShapeEffectiveRange` | 0 | `[0,1]` | 作用范围占每根 strand 顶点数的比例；0 关闭。 |
+| `globalShapeStiffness` | 0 | `[0,1]` | global shape 每步回拉比例 `k`。目标不是蒙皮 rest，而是重力预补偿后的 `rest - (1-k)·g·dt²/k`，使作者造型成为静止不动点；0 关闭。`k` 与回正时间 `τ` 的关系为 `k = 1 - exp(-dt/τ)`。 |
+| `globalShapeEffectiveRange` | 0 | `[0,1]` | 作用范围占每根 strand 顶点数的比例；0 关闭。覆盖不到的可动点没有位置目标，重力会让自由尾段整体旋转，因此保形场景应设为 1.0。 |
 | `vspCoefficient` | 0 | `[0,1]` | TressFX VSP 基础系数；0 表示关闭，Host 不录制 VSP dispatch。 |
 | `vspAccelThresholdMax` | 140 | `(0,1e7]` | 二阶位置差幅值阈值，单位厘米，未除 dt²；超过时强制 VspCoeff = 1。默认 140 对应源默认 1.4 world m；名字沿用源 `Accel`，不是厘米/秒²。 |
 | `vspStiffness` | 空（未作者） | 数组，1..64 项，每项 `[0,1]` | 可选作者逐顶点 VSPStiffness。第 i 项 = 源曲线在 `i/N` 处的采样值（`TressFXComponent.cpp:687-691`），长度必须等于该 TFX 的 `pointsPerStrand`，否则导入期硬错误。只在 `VspCoeff < 0.9` 时乘入（源 patch 10153-10160）；省略时回退到根前缀(1)→梢部(0)的线性近似。 |

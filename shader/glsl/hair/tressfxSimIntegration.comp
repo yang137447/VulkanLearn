@@ -133,7 +133,15 @@ void main()
         && group.globalShapeEffectiveRange > 0.0
         && float(local) < group.globalShapeEffectiveRange * float(pointsPerGuide))
     {
-        tempPos.xyz += group.globalShapeStiffness * (initialPos - tempPos.xyz);
+        // 重力预补偿：按实际顺序（先重力、再 global shape）求不动点：
+        //   rest = rest + g dt² + k (target - rest - g dt²)
+        //   target = rest - (1-k) g dt² / k
+        // 连续弹簧模型的 -g/k 少了 (1-k) 项，不能直接照搬。
+        float dt = params.controls.x;
+        vec3 target = initialPos -
+            params.gravity.xyz * dt * dt *
+                ((1.0 - group.globalShapeStiffness) / group.globalShapeStiffness);
+        tempPos.xyz += group.globalShapeStiffness * (target - tempPos.xyz);
     }
 
     currentPositions.positions[point] = tempPos;

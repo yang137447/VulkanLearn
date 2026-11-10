@@ -577,6 +577,54 @@ guide，7 个逐 guide/逐点 pass 按 slot 映射回原始索引；SdfCollide �
 `globalShapeStiffness=1.0` 的旧配置，截图里头发仍会塌/炸。这是独立的物理
 保形问题（全范围 global shape + 重力预补偿），不与 follow 绑定混在一起验收。
 
+### 12. 全范围 global shape 与重力预补偿（2026-11-11）
+
+**问题**：`range=0.346` 只覆盖 32 点里的 11 点，其余 21 点没有位置目标。
+局部形状约束只保相邻段夹角；整条自由尾段绕边界点做刚体旋转时夹角不变，
+重力因此把尾段整段转下去。零风 CPU 参考解实测发梢平均下垂 8.99 cm、最大
+13.74 cm，根→梢角度变化最大 43.9°，段长拉伸 3.28×。
+
+**推导**：按实际更新顺序（先 Verlet 重力、再 global shape）求不动点。设作者
+造型为 `x`，单步重力增量为 `G = g·dt²`，global shape 比例为 `k`：
+
+```text
+x'  = x + G
+x'' = x' + k (target - x')
+```
+
+令 `x'' = x` 且速度为零：
+
+```text
+0 = (1-k) G + k (target - x)
+target = x - (1-k) G / k
+```
+
+连续弹簧模型给出 `-G/k`；离散顺序多出的 `(1-k)` 来自重力已经先写进 `x'`，
+不能省略。该目标让作者 rest 成为整条约束流水线的精确不动点：global shape
+抵消本步重力，local shape 与长度约束在 rest 处残差为零。
+
+`k` 不是经验刚度，而是回正时间 `τ` 的离散步长：
+
+```text
+k = 1 - exp(-dt / τ),  dt = 0.0125 s
+```
+
+本轮取 `τ=0.4 s → k=0.0308`；`range=1.0` 覆盖全部可动点。
+
+**验证**：
+
+- 新增 `TressfxSolverMath.GlobalShapePrecompensationCancelsGravityPerStep`
+  与 `TressfxDynamics.GravityPrecompensationKeepsAuthoredShape`，200 步后
+  可动点相对 rest 偏差 < 1e-3 cm。
+- 正式 Female、2k guide + 40k follow，同场景 240 帧截图：
+  `Generated/Screenshots/hair-40k.bmp`（旧配置）是覆盖面部的散乱发束；
+  `hair-precomp.bmp`（range=1.0、k=0.0308）恢复为完整长发轮廓。
+- 运行日志仍为 `simGuides=2000 passes=10`，validation error 0。
+
+**边界**：这一轮解决的是「静止/缓变时造型被重力拉塌」。风下最大偏移、
+发束整体性（clump/质心）、碰撞与长度约束的顺序/迭代仍分别验收；不能因为
+截图变好就声称全部物理问题结清。
+
 ### 下一步（本目标继续）
 
 1. 绕 Y 旋转 trace 已完成（2026-11-10，见上）；teleport 的过冲/衰减尚未
