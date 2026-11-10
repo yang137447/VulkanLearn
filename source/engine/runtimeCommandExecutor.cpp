@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
-#include "engine/editorActorEditHost.h"
+#include "engine/editorHost.h"
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeTestHooks.h"
 #include "input/inputSubsystem.h"
@@ -243,7 +243,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     const DiagnosticsSubsystem& diagnostics,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments,
+    IEditorHost* editorHost,
     DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
@@ -264,7 +264,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             executionResult,
             input,
             scripts,
-            sceneDocuments,
+            editorHost,
             destructibleRuntimes,
             projectileRuntime);
     }
@@ -281,7 +281,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
     RuntimeCommandExecutionResult& executionResult,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments,
+    IEditorHost* editorHost,
     DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
@@ -686,8 +686,8 @@ void RuntimeCommandExecutor::ExecuteCommand(
                 diagnostics.ReportWarning("Actor preview rejected: " + error);
             break;
         }
-        else if (sceneDocuments && !PrepareEditorActorEdit(
-            sceneDocuments, activeWorld->GetScenePath(), command.actorProperty.identity, error))
+        else if (editorHost && !editorHost->PrepareActorEdit(
+            activeWorld->GetScenePath(), command.actorProperty.identity, error))
         {
             // 文档身份必须先验证，避免 World 接受了修改却没有可保存的作者目标。
         }
@@ -695,8 +695,8 @@ void RuntimeCommandExecutor::ExecuteCommand(
         {
             if (command.actorProperty.property == EditorActorProperty::CastShadows)
                 renderSystem.SetCsmSettings(activeWorld->GetCsmSettings());
-            if (sceneDocuments)
-                RecordEditorActorEdit(sceneDocuments, *activeWorld, command.actorProperty);
+            if (editorHost)
+                editorHost->RecordActorEdit(*activeWorld, command.actorProperty);
             break;
         }
         diagnostics.ReportWarning("Actor edit rejected: " + error);

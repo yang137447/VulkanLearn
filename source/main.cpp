@@ -1,11 +1,13 @@
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/engineLoop.h"
+#include "editor/editorHost.h"
 #include "engine/launchOptions.h"
 #include "engine/runtimeConfig.h"
 #include "platform/platformApplication.h"
 
 #include <iostream>
 #include <filesystem>
+#include <memory>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -71,7 +73,11 @@ int main(int argc, char **argv)
     }
 
     VL::EngineLoop engineLoop;
-    auto initResult = engineLoop.Init(platformApplication, runtimeConfig, launchOptions);
+    auto initResult = engineLoop.Init(
+        platformApplication,
+        runtimeConfig,
+        launchOptions,
+        std::make_unique<VL::EditorHost>());
     if (initResult.IsFailure())
     {
         diagnostics.ReportRuntimeError("EngineLoop init failed", initResult.Error());

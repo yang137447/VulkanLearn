@@ -4,6 +4,7 @@
 #include <chrono>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include "gameExporter.h"
 #include "shader/build/contentHash.h"
 
@@ -103,6 +104,119 @@ protected:
         options.dotnetRoot = root / "dotnet";
         Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/8.0.20/coreclr.dll", "runtime");
         Write(options.dotnetRoot / "host/fxr/8.0.20/hostfxr.dll", "host");
+    }
+
+    Json ShaderArtifact(const std::string& kind, const std::string& normalizedKey,
+        const std::vector<std::pair<std::string, std::string>>& outputs,
+        const std::vector<std::string>& dependencies,
+        const std::vector<std::string>& primarySources)
+    {
+        Json artifact = {{"kind", kind}, {"normalizedKey", normalizedKey},
+            {"sourceFingerprint", normalizedKey}, {"abiFingerprint", normalizedKey},
+            {"outputs", Json::object()}, {"dependencies", Json::array()},
+            {"primarySources", Json::array()}};
+        for (const auto& [role, relative] : outputs)
+        {
+            const auto path = options.projectRoot / "shader" / relative;
+            Write(path, "spirv:" + relative);
+            artifact["outputs"][role] = {{"path", relative},
+                {"digest", VL::ContentHasher::HashFile(path).ToHex()}};
+        }
+        for (const auto& relative : dependencies)
+        {
+            const auto path = options.projectRoot / "shader/glsl" / relative;
+            Write(path, "glsl:" + relative);
+            artifact["dependencies"].push_back({{"path", relative},
+                {"digest", VL::ContentHasher::HashFile(path).ToHex()},
+                {"requestingSources", Json::array()}, {"minimumIncludeDepth", 1}});
+        }
+        for (const auto& identity : primarySources)
+        {
+            const auto path = options.projectRoot / "shader/glsl" / identity;
+            if (!fs::exists(path)) Write(path, "primary:" + identity);
+            artifact["primarySources"].push_back({{"identity", identity},
+                {"digest", VL::ContentHasher::HashFile(path).ToHex()}});
+        }
+        return artifact;
+    }
+
+    void WriteGameShaderCache()
+    {
+        Json artifacts = Json::object();
+        uint32_t index = 0;
+        auto add = [&artifacts, &index](const Json& artifact)
+        {
+            artifacts[std::to_string(++index)] = artifact;
+        };
+        for (const auto* shader : {
+                 "engine/skinnedDeform.comp",
+                 "terrain/terrainPageBake.comp",
+                 "generator/skyToCubemap.comp",
+                 "generator/skySHGenerate.comp",
+                 "generator/prefilterEnvMap.comp",
+                 "generator/equirectToCubemap.comp",
+                 "hair/tressfxSkinning.comp",
+                 "hair/tressfxSimCollision.comp",
+                 "hair/tressfxSimIntegration.comp",
+                 "hair/tressfxSimLengthWind.comp",
+                 "hair/tressfxSimLocalShape.comp",
+                 "hair/tressfxSimSdfClear.comp",
+                 "hair/tressfxSimSdfCollide.comp",
+                 "hair/tressfxSimSdfSplat.comp",
+                 "hair/tressfxSimStrandLevel.comp",
+                 "hair/tressfxSimVsp.comp"})
+        {
+            const std::string name = shader;
+            const std::string stem = std::filesystem::path(name).stem().string();
+            const std::string folder = std::filesystem::path(name).parent_path().generic_string();
+            add(ShaderArtifact("StageEntry",
+                "kind=StageEntry|path=" + name + "|stage=compute|macros=|target=Vulkan1.4",
+                {{"runtimeCompute", "spv/" + folder + "/" + stem + "_comp.spv"},
+                 {"debugCompute", "spv/" + folder + "/" + stem + "_comp.debug"}},
+                {name}, {name}));
+        }
+        add(ShaderArtifact("GraphicsPair",
+            "kind=GraphicsPair|shaderName=uiOverlay|renderMode=Opaque|shadingModel=SHADING_MODEL_UNLIT|macros=|target=Vulkan1.4",
+            {{"runtimeVertex", "spv/uiOverlay.vert.spv"},
+             {"runtimeFragment", "spv/uiOverlay.frag.spv"},
+             {"debugVertex", "spv/uiOverlay.vert.debug"},
+             {"debugFragment", "spv/uiOverlay.frag.debug"}},
+            {"uiOverlay.vert", "uiOverlay.frag"}, {"uiOverlay.vert", "uiOverlay.frag"}));
+        add(ShaderArtifact("MaterialGraphicsPair",
+            "kind=MaterialGraphicsPair|materialSource=M_glass_crack.json|pass=Base|features=writesEveryPixel=1|usesOpacityMask=0|modifiesMeshPosition=0|twoSided=0|vertexFactory=StaticMesh|compileTarget=Vulkan1.4|variant=shaderName=glass_crack|renderMode=Opaque|shadingModel=SHADING_MODEL_UNLIT|macros=|vertexEvaluation=M_glass_crack.vertex.glsl|surfaceEvaluation=M_glass_crack.surface.glsl|parameterInclude=generate/M_glass_crackParamter.glsl",
+            {{"runtimeVertex", "spv/material/glass_crack.vert.spv"},
+             {"runtimeFragment", "spv/material/glass_crack.frag.spv"},
+             {"debugVertex", "spv/material/glass_crack.vert.debug"},
+             {"debugFragment", "spv/material/glass_crack.frag.debug"}},
+            {"M_glass_crack.vertex.glsl", "M_glass_crack.surface.glsl",
+             "common/function.glsl", "generate/M_glass_crackParamter.glsl"},
+            {"__composed__/glass_crack.vert", "__composed__/glass_crack.frag"}));
+        WriteJson(options.projectRoot / "shader/spv/shader-build-cache.json",
+            {{"schemaVersion", 1}, {"hashAlgorithm", "BLAKE3-256"},
+             {"compilePolicy", "ShaderCompilePolicyV1;configuration=Release;optimization=performance;runtime=optimized;reflection=debug-info+ENABLE_DEBUG_VIEW;abi=ShaderAbiSignatureV2"},
+             {"targetEnvironment", "Vulkan1.4"}, {"artifacts", artifacts}});
+    }
+
+    void EnableGameFlavor()
+    {
+        options.flavor = VL::GameExportFlavor::Game;
+        Write(options.binaryDirectory / "main_game.exe", Pe());
+        WriteJson(options.binaryDirectory / "vl_build_flavor.json",
+            {{"flavor", "game"}, {"editorEnabled", false}});
+        Write(options.projectRoot / "ui/runtime-hud.rcss", "body { color: #fff; }");
+        WriteJson(options.projectRoot / "ui/localization.json", {{"en-US", Json::object()}});
+        WriteJson(options.projectRoot / "ui/runtime-ui.manifest.json",
+            {{"format", 1}, {"files", Json::array(
+                {"runtime-hud.rml", "runtime-hud.rcss", "localization.json"})}});
+        WriteJson(resources / "Common/Materials/MI_glass_crack.json",
+            {{"type", "materialInstance"}, {"material", "shader/glsl/M_glass_crack.json"}});
+        WriteJson(options.projectRoot / "shader/glsl/M_glass_crack.json",
+            {{"name", "M_glass_crack"}, {"type", "material"},
+             {"shaderEvaluation", {{"vertex", "M_glass_crack.vertex.glsl"},
+                                   {"surface", "M_glass_crack.surface.glsl"}}}});
+        Write(options.projectRoot / "shader/glsl/M_glass_crack.vertex.glsl", "void main(){}");
+        Write(options.projectRoot / "shader/glsl/M_glass_crack.surface.glsl", "vec3 surface(){}");
+        WriteGameShaderCache();
     }
 
     fs::path root;
@@ -340,5 +454,146 @@ TEST_F(GameExportTest, WrongArchitectureNativeImageCannotBePublished)
     Write(options.binaryDirectory / "main.exe", arm);
     EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
     EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, DevFlavorKeepsFullUiTreeAndRecordsFallback)
+{
+    Write(options.projectRoot / "ui/editor-workspace.rml", "<rml/>");
+    Write(options.projectRoot / "ui/widgets/editor-widgets.rcss", "body {}");
+    VL::ExportGame(options);
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/editor-workspace.rml"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/widgets/editor-widgets.rcss"));
+    const auto manifest = ReadJson(options.outputDirectory / "game-export-manifest.json");
+    EXPECT_TRUE(manifest.at("uiFallback"));
+    EXPECT_EQ(manifest.at("flavor"), "dev");
+}
+
+TEST_F(GameExportTest, GameFlavorRequiresMainGameAndBuildMarker)
+{
+    options.flavor = VL::GameExportFlavor::Game;
+    EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
+    EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorRejectsEditorBuildMarker)
+{
+    EnableGameFlavor();
+    WriteJson(options.binaryDirectory / "vl_build_flavor.json",
+        {{"flavor", "editor"}, {"editorEnabled", true}});
+    EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
+    EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorCopiesOnlyRuntimeUiManifestClosure)
+{
+    EnableGameFlavor();
+    Write(options.projectRoot / "ui/editor-workspace.rml", "<rml/>");
+    Write(options.projectRoot / "ui/editor-workspace.rcss", "body {}");
+    Write(options.projectRoot / "ui/widgets/editor-widgets.rcss", "body {}");
+    Write(options.projectRoot / "ui/icons/play.png", "icon");
+    VL::ExportGame(options);
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/runtime-hud.rml"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/runtime-hud.rcss"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/localization.json"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "ui/runtime-ui.manifest.json"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "ui/editor-workspace.rml"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "ui/widgets"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "ui/icons"));
+    const auto manifest = ReadJson(options.outputDirectory / "game-export-manifest.json");
+    EXPECT_FALSE(manifest.at("uiFallback"));
+    EXPECT_EQ(manifest.at("flavor"), "game");
+    EXPECT_NO_THROW(VL::VerifyGamePackage(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorFailsWhenRuntimeUiClosureIsIncomplete)
+{
+    EnableGameFlavor();
+    Write(options.projectRoot / "ui/runtime-hud.rcss", "body { background-image: url(missing.png); }");
+    EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
+    EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorStripsEditorGridBeforeAssetScan)
+{
+    EnableGameFlavor();
+    WriteJson(options.projectRoot / "config/renderGraphConfig.json",
+        {{"resources", Json::array({{{"name", "selectionMask"}},
+                                    {{"name", "sceneColor"}}})},
+         {"passes", Json::array({{{"name", "editorGrid"}, {"type", "editorGrid"},
+                                  {"materialInstancePath", "Common/Materials/Pass/MI_editorGrid.json"}}})}});
+    WriteJson(resources / "Common/Materials/Pass/MI_editorGrid.json",
+        {{"type", "materialInstance"}, {"material", "shader/glsl/pass/M_editorGrid.json"}});
+    WriteJson(options.projectRoot / "shader/glsl/pass/M_editorGrid.json",
+        {{"name", "M_editorGrid"}, {"type", "material"}});
+    VL::ExportGame(options);
+    const auto graph = ReadJson(options.outputDirectory / "config/renderGraphConfig.json");
+    EXPECT_TRUE(graph.at("passes").empty());
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "resources/Common/Materials/Pass/MI_editorGrid.json"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "shader/glsl/pass/M_editorGrid.json"));
+    EXPECT_NO_THROW(VL::VerifyGamePackage(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorRetainsDebugSpirvAndMaterialEvaluations)
+{
+    EnableGameFlavor();
+    VL::ExportGame(options);
+    const auto manifest = ReadJson(options.outputDirectory / "shader/runtime-shader.manifest.json");
+    bool sawDebugVertex = false;
+    bool sawDebugFragment = false;
+    for (const auto& [id, artifact] : manifest.at("artifacts").items())
+    {
+        static_cast<void>(id);
+        for (const auto& [role, output] : artifact.at("outputs").items())
+        {
+            if (role == "debugVertex") sawDebugVertex = true;
+            if (role == "debugFragment") sawDebugFragment = true;
+            EXPECT_TRUE(fs::is_regular_file(options.outputDirectory / "shader" / output.at("path").get<std::string>()));
+            EXPECT_EQ(output.at("digest"), VL::ContentHasher::HashFile(
+                options.outputDirectory / "shader" / output.at("path").get<std::string>()).ToHex());
+        }
+    }
+    EXPECT_TRUE(sawDebugVertex);
+    EXPECT_TRUE(sawDebugFragment);
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "shader/glsl/M_glass_crack.json"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "shader/glsl/M_glass_crack.vertex.glsl"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "shader/glsl/M_glass_crack.surface.glsl"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "shader/glsl/generate"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "shader/spv/shader-build-cache.json"));
+    EXPECT_NO_THROW(VL::VerifyGamePackage(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorGameplayDefaultGlassCrackMaterialIsIncluded)
+{
+    EnableGameFlavor();
+    VL::ExportGame(options);
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "resources/Common/Materials/MI_glass_crack.json"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "shader/glsl/M_glass_crack.json"));
+}
+
+TEST_F(GameExportTest, GameFlavorFailsWithoutShaderBuildCache)
+{
+    EnableGameFlavor();
+    fs::remove(options.projectRoot / "shader/spv/shader-build-cache.json");
+    EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
+    EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, GameFlavorRejectsDebugCompilePolicy)
+{
+    EnableGameFlavor();
+    auto cache = ReadJson(options.projectRoot / "shader/spv/shader-build-cache.json");
+    cache["compilePolicy"] =
+        "ShaderCompilePolicyV1;configuration=Debug;optimization=none;runtime=debug;reflection=debug-info+ENABLE_DEBUG_VIEW;abi=ShaderAbiSignatureV2";
+    WriteJson(options.projectRoot / "shader/spv/shader-build-cache.json", cache);
+    EXPECT_THROW(VL::ExportGame(options), std::runtime_error);
+    EXPECT_FALSE(fs::exists(options.outputDirectory));
+}
+
+TEST_F(GameExportTest, VerifyGamePackageRejectsEditorContentLeak)
+{
+    EnableGameFlavor();
+    VL::ExportGame(options);
+    Write(options.outputDirectory / "ui/editor-workspace.rml", "<rml/>");
+    EXPECT_THROW(VL::VerifyGamePackage(options.outputDirectory), std::runtime_error);
 }
 } // namespace

@@ -1,4 +1,4 @@
-#include "engine/terrainEditApply.h"
+#include "editor/terrain/terrainEditApply.h"
 
 #include <algorithm>
 #include <exception>

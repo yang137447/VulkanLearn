@@ -19,10 +19,7 @@
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
 #include "engine/modelPreviewCamera.h"
-#include "engine/editorThumbnailScheduler.h"
-#include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
-#include "ui/uiEditorViewModelSections.h"
 #include "ui/viewModel/runtimeUiSections.h"
 #include "engine/worldGraphTransactionCoordinator.h"
 #include "shader/reload/shaderReloadRuntime.h"
@@ -36,11 +33,10 @@ namespace VL
 {
 
 class PlatformApplication;
-class EditorThumbnailRenderSession;
+class IEditorHost;
 class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
-class EditorViewportGrid;
 class RenderThread;
 class TerrainChunkStreamer;
 class RuntimeConfig;
@@ -55,8 +51,6 @@ class ProjectileRuntime;
 namespace Physics { class FractureImpactWorld; }
 class SubsystemCollection;
 class WorldCandidatePreparer;
-namespace Editor { class TerrainEditSession; }
-namespace Editor { class TerrainPaintSession; }
 enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
@@ -76,7 +70,8 @@ public:
     RuntimeResult<void> Init(
         PlatformApplication& platformApplication,
         const RuntimeConfig& runtimeConfig,
-        const LaunchOptions& launchOptions);
+        const LaunchOptions& launchOptions,
+        std::unique_ptr<IEditorHost> editorHost);
     int Run();
     void Shutdown();
     int GetExitCode() const noexcept { return exitCode; }
@@ -96,7 +91,6 @@ private:
     void Tick();
     void PumpPlatformEvents();
     void ApplyQueuedUiActions();
-    bool ApplyTerrainEditUpdate(World& world);
     void UpdateUiInputPolicy();
     void UpdateUiViewModel(
         float deltaTime,
@@ -136,7 +130,6 @@ private:
         const World& world,
         uint64_t generation);
     void SynchronizeSceneViewport();
-    void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
     // --perf-jsonl：按墙钟每秒把同一份 Performance 快照追加一行。
     void TickPerformanceJsonl();
@@ -190,6 +183,7 @@ private:
     PlatformApplication* platformApplication = nullptr;
     PlatformWindow* window = nullptr;
     std::unique_ptr<GameInstance> gameInstance;
+    std::unique_ptr<IEditorHost> editorHost;
     bool shouldClose = false;
     bool rendererBackendInitialized = false;
     bool shutdownCompleted = false;
@@ -207,8 +201,6 @@ private:
     std::unique_ptr<ShaderReloadRuntime> shaderReloadRuntime;
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
-    // 编辑器参考网格由 editor 组合根持有；RenderSystem 只看到覆盖层接口。
-    std::unique_ptr<EditorViewportGrid> editorViewportGrid;
     std::unique_ptr<TerrainChunkStreamer> terrainChunkStreamer;
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
@@ -232,14 +224,6 @@ private:
     std::optional<std::filesystem::path> pendingBuiltAssembly;
     uint64_t pendingBuildWorldGeneration = 0;
     uint64_t autoPlayWorldGeneration = 0;
-    // Landscape Sculpt CPU session：只由 GT 在 UiAction 边界创建/推进；GPU 更新
-    // 每帧最多一次，rendererBackend 为空时保留 dirty 并给出诊断。
-    std::unique_ptr<Editor::TerrainEditSession> terrainEditSession;
-    uint64_t terrainEditSessionGeneration = 0;
-    std::string terrainEditSessionPlacementId;
-    std::unique_ptr<Editor::TerrainPaintSession> terrainPaintSession;
-    uint64_t terrainPaintSessionGeneration = 0;
-    std::string terrainPaintSessionPlacementId;
     std::string scriptBuildOutput;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     // 必须在 worldGraphTransactionCoordinator 之前声明：事务持有本对象的引用，
@@ -250,10 +234,6 @@ private:
     std::unique_ptr<Controller> controller;
     ModelPreviewCamera modelPreviewCamera;
     std::unique_ptr<UiSubsystem> uiSubsystem;
-    std::unique_ptr<EditorThumbnailRenderSession> thumbnailSession;
-    std::optional<Editor::ThumbnailRenderRequest> thumbnailRequest;
-    uint64_t thumbnailSessionEpoch = 0;
-    EditorThumbnailScheduler thumbnailScheduler;
     uint64_t uiFrameIndex = 0;
     // 视图模型可见性/刷新节拍：隐藏时不构建编辑器分节；可见时按 10 Hz 重新采样
     // 时间/进度驱动的节，事件只强制自己声明的节（见 UiSectionMask）。
@@ -269,14 +249,10 @@ private:
     bool uiViewModelSectionFirstRefresh = true;
     // 脚本节输入版本：由已有代数/状态组合，不引入第二份权威状态。
     uint64_t uiScriptsSectionRevision = 0;
-    // 大纲节内容缓存：只在 World 换代/命令/选中事件重建，静止帧复用同一份指针。
-    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> uiSceneActors;
-    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> uiSceneModels;
     // --gpu-stats：每秒读取一次 UiSubsystem 的分节/面板计数。
     std::chrono::steady_clock::time_point nextUiSectionStats{};
     bool gpuStatsEnabled = false;
     std::unique_ptr<UiAnimationPreviewCache> uiAnimationPreviewCache;
-    std::string pendingScriptBlueprintSelection;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;
     // 时间序列由 GT 写盘，避免渲染线程做文件 I/O；未开启时 IsOpen() 为 false。

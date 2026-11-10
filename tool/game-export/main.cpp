@@ -33,7 +33,16 @@ int main(int argc, char** argv)
             {
                 std::cout << "vl_export_game --project-root <root> --initial-scene <resource-relative.json> "
                     "--output <new-directory> [--dynamic-assets <json-array-file>] "
-                    "[--binary-directory <directory>] [--dotnet-root <directory>]\n";
+                    "[--binary-directory <directory>] [--dotnet-root <directory>] "
+                    "[--flavor dev|game]\n"
+                    "vl_export_game --verify-package <directory>\n";
+                return 0;
+            }
+            if (argument == "--verify-package")
+            {
+                if (++index == argc) throw std::invalid_argument("Missing value for --verify-package");
+                VL::VerifyGamePackage(argv[index]);
+                std::cout << nlohmann::json{{"ok", true}, {"verified", argv[index]}}.dump() << '\n';
                 return 0;
             }
             if (++index == argc) throw std::invalid_argument("Missing value for " + argument);
@@ -43,6 +52,12 @@ int main(int argc, char** argv)
             else if (argument == "--output") options.outputDirectory = value;
             else if (argument == "--binary-directory") options.binaryDirectory = value;
             else if (argument == "--dotnet-root") options.dotnetRoot = value;
+            else if (argument == "--flavor")
+            {
+                if (value == "dev") options.flavor = VL::GameExportFlavor::Dev;
+                else if (value == "game") options.flavor = VL::GameExportFlavor::Game;
+                else throw std::invalid_argument("Unknown export flavor: " + value);
+            }
             else if (argument == "--dynamic-assets")
             {
                 std::ifstream input(value);

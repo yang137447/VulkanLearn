@@ -42,6 +42,10 @@ struct EditorActorPropertyEdit
     bool preview = false;
 };
 
+// Runtime-facing name for the neutral edit DTO; the editor keeps the original
+// name as an alias so existing panels and command codecs compile unchanged.
+using ActorPropertyEdit = EditorActorPropertyEdit;
+
 // 命令边界校验数值、类型、对象与代数，成功后只修改 GT World，不接触文件或 GPU。
 bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     std::string& error);

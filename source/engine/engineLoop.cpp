@@ -11,13 +11,12 @@
 #include "SDL3/SDL.h"
 #include "controller.h"
 #include "engine/gameInstance.h"
+#include "engine/nullEditorHost.h"
 #include "engine/modelPreviewRequest.h"
 #include "engine/modelPreviewRotation.h"
-#include "engine/blueprintPreviewRequest.h"
 #include "script/scriptBuildService.h"
 #include "script/scriptBuildDiagnostics.h"
-#include "script/scriptSourceLocation.h"
-#include "engine/blueprintPreviewTransform.h"
+#include "pipeline/pipelineFactory.h"
 #include "engine/blueprintAssetLoadSession.h"
 #include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
@@ -30,19 +29,10 @@
 #include "physics/runtime/fractureImpactWorld.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
-#include "editor/scene/editorSceneActorBuilder.h"
-#include "editor/scene/scriptBlueprintAuthoring.h"
-#include "editor/service/sceneDocumentService.h"
-#include "editor/terrain/terrainEditSession.h"
-#include "editor/terrain/terrainPaintSession.h"
-#include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "engine/editorHost.h"
 #include "render/frontend/scenePicking.h"
-#include "render/editor/editorViewportGrid.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
-#include "pipeline/pipelineFactory.h"
-#include "engine/editorThumbnailRenderSession.h"
-#include "engine/terrainEditApply.h"
 #include "engine/terrainChunkStreamer.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
@@ -59,7 +49,6 @@
 #include "renderSystem.h"
 #include "sceneNode.h"
 #include "shaderCompiler.h"
-#include "terrain/terrainPaintFile.h"
 #include "terrain/terrainPageManager.h"
 #include "engine/worldCandidatePreparer.h"
 #include "world/world.h"
@@ -140,15 +129,6 @@ RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     return graphFault;
 }
 
-TerrainBrushShape ToTerrainBrushShape(int shape)
-{
-    if (shape == 0)
-        return TerrainBrushShape::Circle;
-    if (shape == 1)
-        return TerrainBrushShape::Square;
-    throw std::invalid_argument("Unknown terrain brush shape.");
-}
-
 } // namespace
 
 EngineLoop::EngineLoop() = default;
@@ -162,7 +142,8 @@ EngineLoop::~EngineLoop()
 RuntimeResult<void> EngineLoop::Init(
     PlatformApplication& platformApplication,
     const RuntimeConfig& runtimeConfig,
-    const LaunchOptions& launchOptions)
+    const LaunchOptions& launchOptions,
+    std::unique_ptr<IEditorHost> host)
 {
     PlatformWindow& platformWindow = platformApplication.GetWindow();
     if (!platformWindow.IsValid())
@@ -174,6 +155,7 @@ RuntimeResult<void> EngineLoop::Init(
 
     this->platformApplication = &platformApplication;
     this->window = &platformWindow;
+    editorHost = host ? std::move(host) : std::make_unique<NullEditorHost>();
     gameInstance = std::make_unique<GameInstance>(runtimeConfig);
     runtimeValidationServices =
         std::make_unique<RuntimeValidationServices>(*this);
@@ -203,6 +185,27 @@ RuntimeResult<void> EngineLoop::Init(
     if (runtimeResult.IsFailure())
     {
         return runtimeResult;
+    }
+
+    // 编辑器组合根在 runtime 系统就绪后接管所有编辑器状态；game 构建传入
+    // NullEditorHost，后续调用点不需要特性判断。
+    EditorHostInit editorHostInit;
+    editorHostInit.window = &platformWindow;
+    editorHostInit.runtimeConfig = &runtimeConfig;
+    editorHostInit.commandBus = &GetSubsystems().GetCommandBus();
+    editorHostInit.diagnostics = &GetSubsystems().GetDiagnosticsSubsystem();
+    editorHostInit.worldManager = &GetSubsystems().GetWorldManager();
+    editorHostInit.scripts = &GetSubsystems().GetScriptRuntime();
+    editorHostInit.renderSystem = &RenderSystem::GetInstance();
+    editorHostInit.rendererBackend = rendererBackend.get();
+    editorHostInit.pipelineFactory = pipelineFactory.get();
+    editorHostInit.ui = uiSubsystem.get();
+    editorHostInit.waitForRenderThreadIdle =
+        [this]() { WaitForRenderThreadIdle(); };
+    auto editorHostResult = editorHost->Initialize(editorHostInit);
+    if (editorHostResult.IsFailure())
+    {
+        return editorHostResult;
     }
 
     RenderSystem::GetInstance().SetInitialOfflineMode(launchOptions.offlineRender);
@@ -343,6 +346,10 @@ void EngineLoop::Shutdown()
     {
         rendererBackend->WaitIdle();
     }
+    if (editorHost)
+    {
+        editorHost->Shutdown();
+    }
 
     // Stop the CPU compile worker before any Vulkan teardown. The worker never
     // touches Vulkan, and dropping its in-flight candidate here guarantees no
@@ -380,17 +387,6 @@ void EngineLoop::Shutdown()
 
     if (rendererBackendInitialized)
     {
-        // 参考网格由 editor 组合根持有；先断开 runtime 的裸指针，再在
-        // device 仍有效且 WaitIdle 之后释放 GPU 缓冲。
-        RenderSystem::GetInstance().SetEditorViewportOverlay(nullptr);
-        if (editorViewportGrid)
-        {
-            if (rendererBackend)
-            {
-                editorViewportGrid->Shutdown(*rendererBackend);
-            }
-            editorViewportGrid.reset();
-        }
         // 碎片池/箭矢网格可能仍被上一帧 command buffer 引用；必须等 WaitIdle
         // 之后再销毁，不能跟随 CPU/物理对象一起提前释放。
         if (destructibleRuntimes)
@@ -406,8 +402,6 @@ void EngineLoop::Shutdown()
             projectileRuntime->Shutdown();
             projectileRuntime.reset();
         }
-        thumbnailSession.reset();
-        thumbnailRequest.reset();
         if (uiSubsystem)
         {
             RenderSystem::GetInstance().SetUiRenderSnapshotQueue(nullptr);
@@ -514,9 +508,6 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend->Initialize(
         vulkanExtensions, window.GetNativeHandle(), presentMode);
     rendererBackendInitialized = true;
-    editorViewportGrid = std::make_unique<EditorViewportGrid>();
-    RenderSystem::GetInstance().SetEditorViewportOverlay(
-        editorViewportGrid.get());
     terrainChunkStreamer = std::make_unique<TerrainChunkStreamer>();
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
 
@@ -709,7 +700,7 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
     }
 
     auto consoleResult = GetSubsystems().GetConsoleSubsystem().Initialize(GetSubsystems().GetCommandBus(),
-        uiSubsystem ? uiSubsystem->GetEditorCommandRuntime() : nullptr);
+        editorHost ? editorHost->ConsoleSink() : nullptr);
     if (consoleResult.IsFailure())
     {
         return consoleResult;
@@ -767,7 +758,7 @@ void EngineLoop::Tick()
         GetSubsystems().GetDiagnosticsSubsystem(),
         &GetSubsystems().GetInputSubsystem(),
         &GetSubsystems().GetScriptRuntime(),
-        uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr,
+        editorHost.get(),
         destructibleRuntimes.get(),
         projectileRuntime.get());
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
@@ -837,32 +828,20 @@ void EngineLoop::Tick()
          activeWorldBeforeCommand.scenePath !=
              commandResult.activeWorldAfterCommand.scenePath))
     {
-        terrainEditSession.reset();
-        terrainEditSessionGeneration = 0;
-        terrainEditSessionPlacementId.clear();
-        terrainPaintSession.reset();
-        terrainPaintSessionGeneration = 0;
-        terrainPaintSessionPlacementId.clear();
         uiSubsystem->NotifyWorldChanged(
             commandResult.activeWorldAfterCommand.scenePath,
             commandResult.activeWorldAfterCommand.generation);
-        if (auto* documents = uiSubsystem->GetSceneDocuments())
+        if (editorHost)
         {
-            std::string error;
-            const auto edits = documents->ReplayEdits(
-                commandResult.activeWorldAfterCommand.scenePath,
-                commandResult.activeWorldAfterCommand.generation, error);
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
             // 草稿跨 World 保留；只在换代后重放，不重复入文档，不修改观察相机。
             if (world)
-                for (const auto& edit : edits)
-                {
-                    if (!ApplyEditorActorProperty(*world, edit, error)) break;
-                    if (edit.property == EditorActorProperty::CastShadows)
-                        RenderSystem::GetInstance().SetCsmSettings(world->GetCsmSettings());
-                }
-            if (!error.empty())
-                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error);
+                editorHost->ReplaySceneEditsAfterWorldChange(
+                    commandResult.activeWorldAfterCommand.scenePath,
+                    commandResult.activeWorldAfterCommand.generation,
+                    *world);
+            else
+                editorHost->ResetAuthoringSessions();
         }
     }
 
@@ -1105,10 +1084,12 @@ void EngineLoop::Tick()
     // 即使当前没有 World，也要持续补音频流，避免设备欠载造成爆音。
     if (audioRuntime) audioRuntime->Update();
 
-    if (uiSubsystem != nullptr)
+    if (editorHost != nullptr)
     {
         // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
-        uiSubsystem->TickMaterialInstanceEditor();
+        const auto& activeWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorld();
+        editorHost->Tick(simulationDelta, activeWorld.get());
     }
     {
         CpuFrameStageScope uiStage(cpuFrameProfiler, CpuFrameStage::UiViewModel);
@@ -1117,7 +1098,8 @@ void EngineLoop::Tick()
         UpdateUiViewModel(simulationDelta, commandResult);
     }
     SynchronizeSceneViewport();
-    TickEditorThumbnails();
+    if (editorHost != nullptr)
+        editorHost->TickThumbnails(platformEvents);
 
     if (terrainChunkStreamer != nullptr && rendererBackend != nullptr)
     {
@@ -1435,386 +1417,14 @@ void EngineLoop::ApplyQueuedUiActions()
 {
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
     // 同一 drain 内所有 ApplyBrush 先只改 CPU session；End/Cancel/Undo/Redo
-    // 只置脏标记，循环结束后最多重建一次 GPU 网格。
-    bool terrainEditNeedsRebuild = false;
+    // 只置脏标记，循环结束后最多重建一次 GPU 网格。该累积状态归编辑器 host。
+    RuntimeCommandExecutionResult editorActionResult;
+    if (editorHost) editorHost->BeginUiActionBatch();
     for (const UiAction& action : actions)
     {
-        if (action.type == UiActionType::TerrainEdit)
-        {
-            auto& scripts = GetSubsystems().GetScriptRuntime();
-            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-            std::string error;
-            if (!world)
-                error = "Terrain sculpt requires an active World.";
-            else if (action.terrainBrush.worldGeneration != world->GetGeneration())
-                error = "The World changed since this terrain brush event.";
-            else if (!scripts.IsEditing())
-                error = "Stop gameplay before sculpting terrain.";
-            else if (RenderSystem::GetInstance().IsOfflineMode() ||
-                std::filesystem::path(world->GetScenePath()).filename() ==
-                    "SC_model_preview.json")
-                error = "Terrain sculpt requires a realtime authoring level.";
-
-            const TerrainCollisionInstance* instance = nullptr;
-            if (error.empty())
-            {
-                for (const TerrainCollisionInstance& candidate :
-                     world->GetTerrainCollisionInstances())
-                    if (candidate.placementId == action.terrainBrush.placementId)
-                    {
-                        instance = &candidate;
-                        break;
-                    }
-                if (instance == nullptr)
-                    error = "Terrain placement was not found in the active World: " +
-                        action.terrainBrush.placementId;
-            }
-
-            if (error.empty() &&
-                (!terrainEditSession ||
-                 terrainEditSessionGeneration != world->GetGeneration() ||
-                 terrainEditSessionPlacementId != action.terrainBrush.placementId))
-            {
-                // 同一 drain 内从 A 切到 B 或结束 A 后立刻 Begin B 时，先把
-                // A 的 dirty 预览/取消结果提交到 GPU，不能只保留 B 的新 session。
-                if (terrainEditSession && rendererBackend != nullptr &&
-                    terrainEditSessionGeneration == world->GetGeneration())
-                {
-                    if (!ApplyTerrainEditUpdate(*world))
-                        error = "Previous terrain sculpt update failed; retry after the renderer recovers.";
-                }
-                if (error.empty())
-                {
-                    terrainEditSession.reset();
-                    auto candidate = std::make_unique<Editor::TerrainEditSession>();
-                    if (!Editor::TerrainEditSession::Create(*instance, *candidate, error))
-                    {
-                        candidate.reset();
-                    }
-                    else
-                    {
-                        terrainEditSession = std::move(candidate);
-                        terrainEditSessionGeneration = world->GetGeneration();
-                        terrainEditSessionPlacementId = action.terrainBrush.placementId;
-                    }
-                }
-            }
-
-            if (error.empty() && terrainEditSession)
-            {
-                const auto operation = action.terrainBrush.operation;
-                try
-                {
-                    if (operation == TerrainBrushOperation::BeginStroke)
-                    {
-                        if (!terrainEditSession->BeginStroke())
-                            error = "A terrain sculpt stroke is already active.";
-                    }
-                    else if (operation == TerrainBrushOperation::ApplyBrush)
-                    {
-                        if (!terrainEditSession->IsStrokeActive())
-                            error = "Terrain brush received ApplyBrush without BeginStroke.";
-                        else
-                        {
-                            TerrainSculptBrush brush;
-                            if (action.terrainBrush.mode == 0)
-                                brush.mode = TerrainSculptMode::Raise;
-                            else if (action.terrainBrush.mode == 1)
-                                brush.mode = TerrainSculptMode::Lower;
-                            else if (action.terrainBrush.mode == 2)
-                                brush.mode = TerrainSculptMode::Smooth;
-                            else
-                                throw std::invalid_argument("Unknown terrain sculpt mode.");
-                            brush.shape =
-                                ToTerrainBrushShape(action.terrainBrush.shape);
-                            brush.centerUv = Eigen::Vector2f(
-                                action.terrainBrush.u, action.terrainBrush.v);
-                            brush.radiusUv = action.terrainBrush.radiusUv;
-                            brush.strength = action.terrainBrush.strength;
-                            brush.falloff = action.terrainBrush.falloff;
-                            // 半径外/clamp 后无数值变化不是错误；一次 drain 内只做
-                            // 一次 GPU 重建，拖动期间仍能看到实时地形预览。
-                            if (terrainEditSession->ApplyBrush(brush))
-                                terrainEditNeedsRebuild = true;
-                        }
-                    }
-                    else if (operation == TerrainBrushOperation::EndStroke)
-                    {
-                        if (!terrainEditSession->IsStrokeActive())
-                            error = "Terrain brush received EndStroke without BeginStroke.";
-                        else if (terrainEditSession->EndStroke())
-                            terrainEditNeedsRebuild = true;
-                    }
-                    else if (operation == TerrainBrushOperation::CancelStroke)
-                    {
-                        if (!terrainEditSession->IsStrokeActive())
-                            error = "Terrain brush received CancelStroke without BeginStroke.";
-                        else
-                        {
-                            const uint64_t revision = terrainEditSession->Revision();
-                            terrainEditSession->CancelStroke();
-                            // 未改过高度的空笔画 Cancel 不应支付一次全地形上传。
-                            terrainEditNeedsRebuild =
-                                terrainEditSession->Revision() != revision;
-                        }
-                    }
-                    else if (operation == TerrainBrushOperation::Undo)
-                    {
-                        if (!terrainEditSession->Undo())
-                            error = "No terrain stroke is available to undo.";
-                        else
-                            terrainEditNeedsRebuild = true;
-                    }
-                    else if (operation == TerrainBrushOperation::Redo)
-                    {
-                        if (!terrainEditSession->Redo())
-                            error = "No terrain stroke is available to redo.";
-                        else
-                            terrainEditNeedsRebuild = true;
-                    }
-                    else if (operation == TerrainBrushOperation::SaveHeightmap)
-                    {
-                        const std::filesystem::path path =
-                            std::filesystem::path(CommonFunction::GetResourcePath()) /
-                            terrainEditSession->Desc().heightmapPath;
-                        if (terrainEditSession->SaveHeightmap(path, error))
-                            scripts.SetFeedback("Heightmap saved: " + path.string());
-                    }
-                }
-                catch (const std::exception& exception)
-                {
-                    error = exception.what();
-                }
-            }
-            if (!error.empty())
-            {
-                scripts.SetFeedback(error);
-                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
-            }
+        World* activeWorld = GetSubsystems().GetWorldManager().GetActiveWorld().get();
+        if (editorHost && editorHost->ApplyUiAction(action, activeWorld, editorActionResult))
             continue;
-        }
-        if (action.type == UiActionType::TerrainPaint)
-        {
-            auto& scripts = GetSubsystems().GetScriptRuntime();
-            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-            std::string error;
-            if (!world)
-                error = "Terrain paint requires an active World.";
-            else if (action.terrainPaint.worldGeneration != world->GetGeneration())
-                error = "The World changed since this terrain paint event.";
-            else if (!scripts.IsEditing())
-                error = "Stop gameplay before painting terrain layers.";
-            else if (RenderSystem::GetInstance().IsOfflineMode() ||
-                std::filesystem::path(world->GetScenePath()).filename() ==
-                    "SC_model_preview.json")
-                error = "Terrain paint requires a realtime authoring level.";
-
-            const TerrainCollisionInstance* instance = nullptr;
-            if (error.empty())
-            {
-                for (const TerrainCollisionInstance& candidate :
-                     world->GetTerrainCollisionInstances())
-                    if (candidate.placementId == action.terrainPaint.placementId)
-                    {
-                        instance = &candidate;
-                        break;
-                    }
-                if (instance == nullptr)
-                    error = "Terrain placement was not found in the active World: " +
-                        action.terrainPaint.placementId;
-            }
-            if (error.empty() &&
-                (!terrainPaintSession ||
-                 terrainPaintSessionGeneration != world->GetGeneration() ||
-                 terrainPaintSessionPlacementId != action.terrainPaint.placementId))
-            {
-                terrainPaintSession.reset();
-                auto candidate = std::make_unique<Editor::TerrainPaintSession>();
-                if (!Editor::TerrainPaintSession::Create(*instance, *candidate, error))
-                    candidate.reset();
-                else
-                {
-                    terrainPaintSession = std::move(candidate);
-                    terrainPaintSessionGeneration = world->GetGeneration();
-                    terrainPaintSessionPlacementId = action.terrainPaint.placementId;
-                }
-            }
-
-            bool invalidate = false;
-            if (error.empty() && terrainPaintSession)
-            {
-                const auto operation = action.terrainPaint.operation;
-                try
-                {
-                    if (operation == TerrainBrushOperation::BeginStroke)
-                    {
-                        if (!terrainPaintSession->BeginStroke())
-                            error = "A terrain paint stroke is already active.";
-                    }
-                    else if (operation == TerrainBrushOperation::ApplyBrush)
-                    {
-                        if (!terrainPaintSession->IsStrokeActive())
-                            error = "Terrain paint received ApplyBrush without BeginStroke.";
-                        else
-                        {
-                            Editor::TerrainPaintBrush brush;
-                            brush.layerIndex = action.terrainPaint.layerIndex;
-                            brush.shape =
-                                ToTerrainBrushShape(action.terrainPaint.shape);
-                            brush.centerUv = Eigen::Vector2f(
-                                action.terrainPaint.u, action.terrainPaint.v);
-                            brush.radiusUv = action.terrainPaint.radiusUv;
-                            brush.strength = action.terrainPaint.strength;
-                            brush.falloff = action.terrainPaint.falloff;
-                            brush.opacity = action.terrainPaint.opacity;
-                            brush.flow = action.terrainPaint.flow;
-                            brush.noise = action.terrainPaint.noise;
-                            brush.noiseSeed = action.terrainPaint.noiseSeed;
-                            brush.erase = action.terrainPaint.erase;
-                            if (terrainPaintSession->ApplyBrush(brush))
-                                invalidate = true;
-                        }
-                    }
-                    else if (operation == TerrainBrushOperation::EndStroke)
-                    {
-                        if (!terrainPaintSession->IsStrokeActive())
-                            error = "Terrain paint received EndStroke without BeginStroke.";
-                        else invalidate = terrainPaintSession->EndStroke();
-                    }
-                    else if (operation == TerrainBrushOperation::CancelStroke)
-                    {
-                        if (!terrainPaintSession->IsStrokeActive())
-                            error = "Terrain paint received CancelStroke without BeginStroke.";
-                        else
-                        {
-                            const uint64_t revision = terrainPaintSession->Revision();
-                            terrainPaintSession->CancelStroke();
-                            invalidate = terrainPaintSession->Revision() != revision;
-                        }
-                    }
-                    else if (operation == TerrainBrushOperation::Undo)
-                    {
-                        if (!terrainPaintSession->Undo())
-                            error = "No terrain paint stroke is available to undo.";
-                        else invalidate = true;
-                    }
-                    else if (operation == TerrainBrushOperation::Redo)
-                    {
-                        if (!terrainPaintSession->Redo())
-                            error = "No terrain paint stroke is available to redo.";
-                        else invalidate = true;
-                    }
-                    else if (operation == TerrainBrushOperation::SavePaint)
-                    {
-                        if (terrainPaintSession->IsStrokeActive())
-                            error = "Finish or cancel the paint stroke before saving.";
-                        else
-                        {
-                            const auto paint = terrainPaintSession->PaintData();
-                            if (!paint || paint->Empty())
-                                error = "Terrain paint has no edited data to save.";
-                            else if (terrainPaintSession->PaintPath().empty())
-                                error =
-                                    "TR has no paintPath; add one to persist terrain paint.";
-                            else
-                            {
-                                std::filesystem::path path;
-                                std::string pathError;
-                                if (!ResolveTerrainPaintPath(
-                                        CommonFunction::GetResourcePath(),
-                                        terrainPaintSession->PaintPath(),
-                                        path,
-                                        pathError))
-                                    error = pathError;
-                                else if (SaveTerrainLayerPaintFile(path, *paint, error))
-                                    scripts.SetFeedback(
-                                        "Terrain paint saved: " + path.string());
-                            }
-                        }
-                    }
-                }
-                catch (const std::exception& exception)
-                {
-                    error = exception.what();
-                }
-            }
-            if (error.empty() && invalidate)
-            {
-                // 先更新 World 的 placement 快照：Play/Stop 或切换 Actor 会销毁
-                // 会话，重建时必须从最新覆盖层继续，而不是回到加载期旧快照。
-                if (!world->UpdateTerrainPlacementLayerPaint(
-                        terrainPaintSessionPlacementId,
-                        terrainPaintSession->PaintData()))
-                    error = "Terrain paint placement disappeared from the active World.";
-                else
-                {
-                    try
-                    {
-                        const auto streaming =
-                            RendererResourceCache::GetInstance().GetTerrainStreaming();
-                        if (!streaming)
-                            throw std::runtime_error(
-                                "Terrain paint requires layered terrain pages.");
-                        WaitForRenderThreadIdle();
-                        streaming->pageManager.UpdateLayerPaint(
-                            terrainPaintSessionPlacementId,
-                            terrainPaintSession->PaintData());
-                        streaming->pageManager.InvalidatePlacementPages(
-                            terrainPaintSessionPlacementId);
-                        if (streaming->pageBake)
-                        {
-                            streaming->pageBake->RefreshPlacement(
-                                terrainPaintSessionPlacementId);
-                        }
-                    }
-                    catch (const std::exception& exception)
-                    {
-                        error = std::string("Terrain paint page update failed: ") +
-                            exception.what();
-                    }
-                }
-            }
-            if (!error.empty())
-            {
-                scripts.SetFeedback(error);
-                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
-            }
-            continue;
-        }
-        if (action.type == UiActionType::OpenScriptSource ||
-            (action.type == UiActionType::CreateScriptBlueprintAsset && action.script.contains("class")))
-        {
-            auto& scripts = GetSubsystems().GetScriptRuntime();
-            std::string error;
-            try
-            {
-                if (action.type == UiActionType::OpenScriptSource)
-                {
-                    const auto url = ScriptSourceEditorUrl(CommonFunction::GetResourcePath(),
-                        scripts.Classes(), action.stringValue);
-                    if (!SDL_OpenURL(url.c_str())) throw std::runtime_error(SDL_GetError());
-                }
-                else
-                {
-                    // 从类创建只依赖当前类目录，不依赖场景选中态或预览 World；不执行用户回调。
-                    if (!scripts.IsEditing()) throw std::runtime_error("Stop gameplay before creating Blueprints");
-                    if (!uiSubsystem || !uiSubsystem->GetSceneDocuments())
-                        throw std::runtime_error("Blueprint authoring is unavailable");
-                    if (uiSubsystem->GetSceneDocuments()->CreateScriptBlueprintFromClass(action.stringValue,
-                        action.script.at("class").get<std::string>(), action.script.at("name").get<std::string>(),
-                        scripts.Classes(), error))
-                    {
-                        scripts.SetFeedback("Blueprint asset created: " + action.stringValue);
-                        uiSubsystem->RequestRefreshAssetCatalog();
-                        continue;
-                    }
-                }
-            }
-            catch (const std::exception& exception) { error = exception.what(); }
-            scripts.SetFeedback(error);
-            if (!error.empty()) GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Script");
-            continue;
-        }
         if (action.type == UiActionType::CompileScripts || action.type == UiActionType::SetAutoCompileScripts)
         {
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
@@ -1848,15 +1458,8 @@ void EngineLoop::ApplyQueuedUiActions()
             if (!error.empty()) GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Script");
             continue;
         }
-        if (action.type == UiActionType::ControlScripts || action.type == UiActionType::ReloadScripts ||
-            action.type == UiActionType::AddScriptBlueprint || action.type == UiActionType::SetScriptProperty ||
-            action.type == UiActionType::AddScriptComponent || action.type == UiActionType::RemoveScriptComponent ||
-            action.type == UiActionType::SetScriptLogicComponent ||
-            action.type == UiActionType::AddScriptLogicComponent || action.type == UiActionType::RemoveScriptLogicComponent ||
-            action.type == UiActionType::RenameScriptBlueprint || action.type == UiActionType::DuplicateScriptBlueprint ||
-            action.type == UiActionType::DeleteScriptBlueprint || action.type == UiActionType::SetScriptPhysics ||
-            action.type == UiActionType::UndoSceneEdit || action.type == UiActionType::RedoSceneEdit ||
-            action.type == UiActionType::CreateScriptBlueprintAsset || action.type == UiActionType::SetScriptComponent)
+        if (action.type == UiActionType::ControlScripts ||
+            action.type == UiActionType::ReloadScripts)
         {
             auto& scripts = GetSubsystems().GetScriptRuntime();
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
@@ -1872,12 +1475,7 @@ void EngineLoop::ApplyQueuedUiActions()
                 if (scripts.IsEditing()) TickBlueprintAssets();
                 scripts.Control(*world, static_cast<ScriptPlayState>(action.intValue), error);
                 // Play/Stop 都会切换编辑上下文；CPU 高度副本不能跨状态继续用。
-                terrainEditSession.reset();
-                terrainEditSessionGeneration = 0;
-                terrainEditSessionPlacementId.clear();
-                terrainPaintSession.reset();
-                terrainPaintSessionGeneration = 0;
-                terrainPaintSessionPlacementId.clear();
+                if (editorHost) editorHost->ResetAuthoringSessions();
                 if (scripts.IsEditing()) TickBlueprintAssets();
             }
             else if (action.type == UiActionType::ReloadScripts)
@@ -1890,25 +1488,6 @@ void EngineLoop::ApplyQueuedUiActions()
                 {
                     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo("Gameplay assembly reloaded", "Script");
                     continue;
-                }
-            }
-            else if (uiSubsystem && uiSubsystem->GetSceneDocuments())
-            {
-                std::string id;
-                if (StageScriptBlueprintAction(*world, scripts, *uiSubsystem->GetSceneDocuments(),
-                    action, id, error))
-                {
-                    if (action.type == UiActionType::CreateScriptBlueprintAsset)
-                    {
-                        scripts.SetFeedback("Blueprint asset created: " + action.stringValue);
-                        uiSubsystem->RequestRefreshAssetCatalog();
-                        continue;
-                    }
-                    pendingScriptBlueprintSelection = id.empty() ? "" : "blueprintInstance|" + id;
-                    RuntimeCommand command;
-                    command.type = RuntimeCommandType::LoadWorld;
-                    command.stringValue = world->GetScenePath();
-                    QueueRuntimeCommand(std::move(command));
                 }
             }
             scripts.SetFeedback(error);
@@ -1953,114 +1532,10 @@ void EngineLoop::ApplyQueuedUiActions()
                     float(rect.width) / float(rect.height), float(rect.width));
             continue;
         }
-        if (action.type == UiActionType::TransformBlueprintPreview)
-        {
-            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-            if (world && uiSubsystem && uiSubsystem->GetEditorCommandRuntime() &&
-                GetSubsystems().GetScriptRuntime().IsEditing() && !RenderSystem::GetInstance().IsOfflineMode())
-                for (const auto& document : uiSubsystem->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments)
-                    if (document.assetPath == action.blueprintTransform.assetPath)
-                    {
-                        ApplyBlueprintPreviewTransform(*world, action.blueprintTransform,
-                            document.documentRevision, document.document);
-                        break;
-                    }
-            continue;
-        }
-        if (action.type == UiActionType::FrameEditorActor)
-        {
-            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-            if (world) FrameEditorActor(*world, action.actorProperty.worldGeneration,
-                action.actorProperty.identity);
-            continue;
-        }
-
         RuntimeCommand command;
         command.sourceText = "ui";
         switch (action.type)
         {
-        case UiActionType::PreviewBlueprint:
-        {
-            // UI 只传地址和 revision；候选几何必须来自 GT 文档 owner 已接受的草稿。
-            if (!uiSubsystem || !uiSubsystem->GetEditorCommandRuntime() ||
-                !GetSubsystems().GetScriptRuntime().IsEditing() ||
-                RenderSystem::GetInstance().IsOfflineMode()) continue;
-            const auto& documents = uiSubsystem->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments;
-            bool found = false;
-            for (const auto& document : documents)
-                if (document.assetPath == action.stringValue &&
-                    document.documentRevision == action.blueprintPreviewRevision)
-                {
-                    command.extraSceneObjects = BuildBlueprintPreviewObjects(action.stringValue,
-                        action.blueprintPreviewRevision, document.documentRevision, document.document);
-                    found = true;
-                    break;
-                }
-            if (!found) continue;
-            command.type = RuntimeCommandType::LoadWorld;
-            command.stringValue = ModelPreviewScenePath;
-            break;
-        }
-        case UiActionType::PreviewMaterial:
-            command.type = RuntimeCommandType::LoadWorld;
-            command.stringValue = ModelPreviewScenePath;
-            command.extraSceneObjects = BuildMaterialPreviewObjects(action.stringValue);
-            break;
-        case UiActionType::PreviewModel:
-            command.type = RuntimeCommandType::LoadWorld;
-            command.stringValue = ModelPreviewScenePath;
-            command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
-            // 厘米骨骼/TFX 资产按原尺度预览，不继承旧静态模型注入的 43 倍尺度。
-            try
-            {
-                const auto buildPlan =
-                    MeshAssetLoader::Prepare(action.stringValue).buildPlan;
-                if (buildPlan.assetType == "tressfx")
-                {
-                    // 带 skinning 的毛发需要源角色姿态，视口不承担；由蓝图 TressFX
-                    // 组件承载。这里硬拒绝，不能静默剥掉 skinning 后假装可预览。
-                    if (buildPlan.tressfxSimulation.skinning)
-                    {
-                        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
-                            "TressFX hair preview skipped: asset declares simulation.skinning "
-                            "and is authored by the Blueprint TressFX component: " +
-                            action.stringValue);
-                        continue;
-                    }
-                    command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
-                }
-                else if (buildPlan.IsSkeletal())
-                    command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
-            }
-            catch (const std::exception& error)
-            {
-                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error.what());
-                continue;
-            }
-            break;
-        case UiActionType::PreviewRetarget:
-            try
-            {
-                const auto target = MeshAssetLoader::Prepare(action.retargetPreviewModel).buildPlan;
-                if (!target.IsSkeletal() || target.animationSourceModelPath.empty() ||
-                    target.retargetProfilePath.empty() ||
-                    std::filesystem::weakly_canonical(CommonFunction::Path(target.retargetProfilePath)) !=
-                    std::filesystem::weakly_canonical(CommonFunction::Path(action.stringValue)))
-                    throw std::invalid_argument("Retarget preview model must reference the opened RT profile");
-                const auto source = MeshAssetLoader::Prepare(target.animationSourceModelPath).buildPlan;
-                if (!source.IsSkeletal() || !source.animationSourceModelPath.empty())
-                    throw std::invalid_argument("Retarget preview source must be a non-retargeted skeletal mesh");
-                command.type = RuntimeCommandType::LoadWorld;
-                command.stringValue = ModelPreviewScenePath;
-                command.extraSceneObjects = BuildRetargetPreviewObjects(
-                    action.retargetPreviewModel, target.animationSourceModelPath, action.stringValue);
-            }
-            catch (const std::exception& error)
-            {
-                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error.what());
-                continue;
-            }
-            break;
         case UiActionType::ControlAnimationPreview:
             command.type = RuntimeCommandType::ControlAnimation;
             command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
@@ -2283,23 +1758,9 @@ void EngineLoop::ApplyQueuedUiActions()
         GetSubsystems().GetCommandBus().Queue(std::move(command));
     }
 
-    if (terrainEditNeedsRebuild && terrainEditSession)
-    {
-        const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-        if (!world || world->GetGeneration() != terrainEditSessionGeneration)
-        {
-            terrainEditSession.reset();
-            terrainEditSessionGeneration = 0;
-            terrainEditSessionPlacementId.clear();
-        }
-        else if (rendererBackend == nullptr)
-        {
-            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
-                "Terrain sculpt CPU edit kept dirty, but no renderer backend is available.",
-                "Terrain");
-        }
-        else ApplyTerrainEditUpdate(*world);
-    }
+    if (editorHost)
+        editorHost->EndUiActionBatch(
+            GetSubsystems().GetWorldManager().GetActiveWorld().get());
 
     // RmlUi 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
     // 确保选择描边与常规视口拾取走同一个稳定帧边界。
@@ -2330,95 +1791,6 @@ void EngineLoop::ApplyQueuedUiActions()
             RenderSystem::GetInstance().ClearSelectedMaterialInstance();
         }
     }
-}
-
-bool EngineLoop::ApplyTerrainEditUpdate(World& world)
-{
-    if (!terrainEditSession || rendererBackend == nullptr) return false;
-    WaitForRenderThreadIdle();
-    Editor::TerrainMeshUpdate update = terrainEditSession->BuildUpdate();
-    // 加载期驻留窗口会跳过部分 (chunk, LOD)；CPU 编辑仍要对整张高度图
-    // 生成 dirty，但 GPU 只能替换 World 里真实存在的对象。
-    const auto& meshObjects = world.GetMeshObjects();
-    update.chunks.erase(std::remove_if(update.chunks.begin(), update.chunks.end(),
-        [&meshObjects, &update](const Editor::TerrainChunkMeshUpdate& chunk)
-        {
-            const auto found = meshObjects.find(chunk.objectName);
-            return found == meshObjects.end() || !found->second.isTerrain ||
-                found->second.terrainPlacementId != update.placementId;
-        }), update.chunks.end());
-    if (update.chunks.empty() && !update.heightmap) return false;
-
-    // 分层地形的覆盖页权重由高度/坡度烘焙，几何与权重必须在同一次提交里
-    // 一起推进。必须在替换 GPU 网格前确认页管理器可用，否则宁可拒绝本次
-    // 提交，也不能留下“新几何 + 旧权重”的持久分叉。
-    const bool layered = !update.desc.layers.empty();
-    std::shared_ptr<TerrainStreamingState> streaming;
-    if (layered)
-    {
-        streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
-        const bool registered = streaming &&
-            std::any_of(
-                streaming->pageManager.Registrations().begin(),
-                streaming->pageManager.Registrations().end(),
-                [&update](const TerrainPageManager::Registration& registration)
-                {
-                    return registration.placementId == update.placementId;
-                });
-        if (!registered)
-        {
-            const std::string message = streaming
-                ? "Terrain sculpt requires a placement registered with the "
-                    "layered terrain page manager: " + update.placementId
-                : "Terrain sculpt requires layered terrain streaming state.";
-            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
-                message, "Terrain");
-            GetSubsystems().GetScriptRuntime().SetFeedback(message);
-            return false;
-        }
-    }
-
-    TerrainEditApplyStats stats;
-    std::string error;
-    if (!ApplyTerrainMeshUpdate(world, *rendererBackend, update, stats, error))
-    {
-        const std::string message = "Terrain sculpt GPU update failed: " + error;
-        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(message, "Terrain");
-        GetSubsystems().GetScriptRuntime().SetFeedback(message);
-        return false;
-    }
-    if (layered)
-    {
-        try
-        {
-            // 与网格替换同处一个 render-thread-idle 边界：先换 plan 的高度图
-            // 快照，再失效驻留覆盖页，feedback 下一轮就会按新高度重新烘焙。
-            streaming->pageManager.UpdateHeightmap(
-                update.placementId, update.heightmap);
-            streaming->pageManager.InvalidatePlacementPages(update.placementId);
-            if (streaming->pageBake)
-                streaming->pageBake->RefreshPlacement(update.placementId);
-        }
-        catch (const std::exception& exception)
-        {
-            // 几何已经提交但权重尚未跟上；保留 dirty 让下一笔重试，
-            // 不能在这里 ResetDirty 把分叉固化成已同步状态。
-            const std::string message =
-                std::string("Terrain sculpt page update failed: ") +
-                exception.what();
-            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
-                message, "Terrain");
-            GetSubsystems().GetScriptRuntime().SetFeedback(message);
-            return false;
-        }
-    }
-    terrainEditSession->ResetDirty();
-    if (stats.renderableObjects != 0 || stats.worldChunks != 0)
-        GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
-            "Terrain sculpt updated " + std::to_string(stats.renderableObjects) +
-            " renderable objects and " + std::to_string(stats.worldChunks) +
-            " World chunks.", "Terrain");
-    return true;
 }
 
 void EngineLoop::UpdateUiInputPolicy()
@@ -2528,14 +1900,14 @@ void EngineLoop::BuildUiScriptsSection(
     section.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
     section.scripts.autoCompile = autoCompileScripts;
     section.scripts.buildOutput = scriptBuildOutput;
-    if (world && uiSubsystem->GetSceneDocuments())
+    if (world && editorHost)
     {
         // CanUndo 内部做 weakly_canonical，是隐藏状态下最贵的一段；只在脚本节
         // 真正重建时求值（选中/命令/世界换代/编译状态事件），静止帧不重复执行。
         section.scripts.canUndo =
-            uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath());
+            editorHost->CanUndo(world->GetScenePath(), false);
         section.scripts.canRedo =
-            uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath(), true);
+            editorHost->CanUndo(world->GetScenePath(), true);
     }
 }
 
@@ -2666,46 +2038,11 @@ void EngineLoop::BuildUiOfflineSection(
 
 void EngineLoop::BuildUiSceneOutlinerContent()
 {
-    // 大纲列表是逐帧替换的不可变数组：内容变化时换新指针，静止帧复用旧指针，
-    // 这样大纲分节版本不会因为 10 Hz 轮询而推进。
+    // 大纲/MI 模型快照的构建与所有权都在编辑器 host；runtime 只触发一次发布。
     const std::shared_ptr<World>& world =
         GetSubsystems().GetWorldManager().GetActiveWorld();
-    auto actors =
-        std::make_shared<std::vector<EditorUi::EditorSceneActorSnapshot>>();
-    if (world != nullptr)
-    {
-        *actors = BuildEditorSceneActors(*world);
-    }
-    uiSceneActors = std::move(actors);
-
-    auto models =
-        std::make_shared<std::vector<EditorUi::MaterialInstanceModelSnapshot>>();
-    const auto contexts =
-        RenderSystem::GetInstance().GetMaterialInstanceModelContexts();
-    models->reserve(contexts.size());
-    for (const VL::MaterialInstanceModelContext& model : contexts)
-    {
-        EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
-        modelSnapshot.worldGeneration = model.worldGeneration;
-        modelSnapshot.scenePath = model.scenePath;
-        modelSnapshot.objectId = model.objectId;
-        modelSnapshot.displayName = model.displayName;
-        modelSnapshot.objectIdentity = model.objectIdentity;
-        modelSnapshot.actorIdentity = model.actorIdentity;
-        modelSnapshot.materials.reserve(model.materials.size());
-        for (const VL::MaterialInstanceModelMaterial& material :
-             model.materials)
-        {
-            EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
-            materialSnapshot.objectId = material.objectId;
-            materialSnapshot.materialSlotIndex = material.materialSlotIndex;
-            materialSnapshot.materialSlotName = material.materialSlotName;
-            materialSnapshot.materialInstancePath = material.materialInstancePath;
-            modelSnapshot.materials.push_back(std::move(materialSnapshot));
-        }
-        models->push_back(std::move(modelSnapshot));
-    }
-    uiSceneModels = std::move(models);
+    if (editorHost)
+        editorHost->BuildUiSections(world.get());
 }
 
 void EngineLoop::BuildUiViewModelSections(
@@ -2757,8 +2094,6 @@ void EngineLoop::BuildUiViewModelSections(
     if ((rebuild & UiSectionBit(UiSectionId::SceneOutliner)) != 0)
     {
         BuildUiSceneOutlinerContent();
-        uiSubsystem->SetSceneActors(uiSceneActors);
-        uiSubsystem->SetMaterialInstanceSceneModels(uiSceneModels);
     }
 }
 
@@ -2852,13 +2187,6 @@ void EngineLoop::UpdateUiViewModel(
     frame.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
     frame.cameraMoveSpeed = controller != nullptr ? controller->GetMoveVelocity() : 1000.0f;
     FillUiViewModelLiveFrame(frame, buildMode, activeWorld);
-    // 脚本驱动的选中请求在判定脏标记之前处理，选中高亮才能在同一个 GT 帧重建。
-    if (!pendingScriptBlueprintSelection.empty() &&
-        uiSubsystem->RequestActorSelection(pendingScriptBlueprintSelection))
-    {
-        pendingScriptBlueprintSelection.clear();
-    }
-
     const ScriptPlayState scriptState = scriptRuntime.IsEditing()
         ? ScriptPlayState::Editing
         : (scriptRuntime.IsPaused() ? ScriptPlayState::Paused : ScriptPlayState::Playing);
@@ -2921,43 +2249,6 @@ void EngineLoop::SynchronizeSceneViewport()
         // 在 World snapshot 冻结前更新投影；渲染、阴影视锥、离线相机与拾取共享同一相机。
         auto& camera = *world->GetRenderCamera();
         camera.SetProjection(camera.GetHFOV(), *aspect, camera.GetClipNear(), camera.GetClipFar());
-    }
-}
-
-void EngineLoop::TickEditorThumbnails()
-{
-    if (!uiSubsystem) return;
-    auto* library = uiSubsystem->GetThumbnailLibrary();
-    if (!library) return;
-    if (thumbnailRequest && !library->IsRenderRequestCurrent(*thumbnailRequest))
-    {
-        thumbnailRequest.reset();
-    }
-    if (!thumbnailScheduler.CanAdvance(std::chrono::steady_clock::now(), platformEvents,
-        uiSubsystem->CanRenderThumbnails())) return;
-    // 上一帧 RT 已归还所有权；这里不调用活动 World 的加载事务，也不重绑活动图。
-    if (!thumbnailRequest)
-    {
-        thumbnailRequest = library->TakeRenderRequest();
-        if (!thumbnailRequest) return;
-        // Refresh 丢弃会话缓存，但不在 GT 等待旧的 CPU 导入/解码；Begin 会拒绝迟到结果。
-        if (thumbnailSession && thumbnailSessionEpoch != thumbnailRequest->epoch) thumbnailSession->Reset();
-        thumbnailSessionEpoch = thumbnailRequest->epoch;
-        if (!thumbnailSession)
-            thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
-        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
-        return;
-    }
-    if (!thumbnailSession)
-    {
-        thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
-        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
-        return;
-    }
-    if (thumbnailSession->Step())
-    {
-        library->CompleteRenderRequest(*thumbnailRequest, thumbnailSession->Image(), thumbnailSession->Error());
-        thumbnailRequest.reset();
     }
 }
 
@@ -3031,7 +2322,8 @@ void EngineLoop::PumpPlatformEvents()
                     // 这样即使编辑器文档暂时不可用，点击结果仍立即可见。
                     RenderSystem::GetInstance().SetSelectedMaterialInstance(*selection);
                     const bool selected =
-                        uiSubsystem->SelectSceneObjectFromPick(*selection);
+                        editorHost != nullptr &&
+                        editorHost->SelectSceneObjectFromPick(*selection);
                     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
                         selected
                             ? "Selected scene object '" + selection->objectIdentity + "'."
@@ -3042,7 +2334,8 @@ void EngineLoop::PumpPlatformEvents()
                 else
                 {
                     RenderSystem::GetInstance().ClearSelectedMaterialInstance();
-                    uiSubsystem->ClearMaterialInstanceSceneSelection();
+                    if (editorHost != nullptr)
+                        editorHost->ClearMaterialInstanceSceneSelection();
                 }
             }
         }
@@ -3193,15 +2486,14 @@ EngineLoop::ExecuteWorldGraphTransaction(
     }
 
     nlohmann::json sceneDocument;
-    if (uiSubsystem)
-        if (auto* documents = uiSubsystem->GetSceneDocuments())
-        {
-            std::string error;
-            sceneDocument = documents->DraftForWorldLoad(scenePath, error);
-            if (!error.empty())
-                return RuntimeResult<WorldHandle>::Failure(
-                    MakeRuntimeError("Scene.DraftSourceChanged", error, scenePath));
-        }
+    if (editorHost)
+    {
+        std::string error;
+        sceneDocument = editorHost->DraftSceneDocument(scenePath, error);
+        if (!error.empty())
+            return RuntimeResult<WorldHandle>::Failure(
+                MakeRuntimeError("Scene.DraftSourceChanged", error, scenePath));
+    }
     auto result = worldGraphTransactionCoordinator->Execute(
         scenePath,
         materialDefinitionReload,
@@ -3381,7 +2673,7 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
         auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
 
         liveResizeMutationStarted = true;
-        thumbnailSession.reset();
+        if (editorHost) editorHost->ReleaseRendererResources();
         renderGraph.Shutdown(*rendererBackend);
         RenderSystem::GetInstance().ReleaseSwapchainDependentResources();
         rendererBackend->RecreateSwapchain(

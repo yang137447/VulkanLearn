@@ -9,13 +9,12 @@
 #include <utility>
 
 #include "engine/runtimeCommand.h"
-#include "editor/runtime/materialInstanceEditorRuntime.h"
-#include "editor/command/editorCommandJsonCodec.h"
+#include "engine/editorHost.h"
 #include "hair/hairConsoleCommand.h"
 #include "hair/tressfxLiveParams.h"
 
-DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
-    : commandBus(commandBus), editorRuntime(runtime)
+DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::IEditorConsoleSink* sink)
+    : commandBus(commandBus), editorConsoleSink(sink)
 {
 }
 
@@ -29,12 +28,16 @@ void DebugConsole::Update()
 {
     for (auto iterator = pendingEditorResults.begin(); iterator != pendingEditorResults.end();)
     {
-        const auto result = editorRuntime->GetCommandResult(*iterator);
-        if (result && VL::IsFinalEditorCommandStatus(result->status))
+        if (editorConsoleSink == nullptr)
         {
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(*result) << std::endl;
             iterator = pendingEditorResults.erase(iterator);
+            continue;
         }
+        bool isFinal = false;
+        const auto text = editorConsoleSink->PollResult(*iterator, isFinal);
+        if (text)
+            std::cout << *text << std::endl;
+        if (isFinal) iterator = pendingEditorResults.erase(iterator);
         else ++iterator;
     }
     while (_kbhit())
@@ -105,7 +108,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
 
     if (command == "editor")
     {
-        if (!editorRuntime)
+        if (editorConsoleSink == nullptr || !editorConsoleSink->IsAvailable())
         {
             std::cout << "Editor document host unavailable; enable --dev-ui or use vl_asset_edit." << std::endl;
             return;
@@ -114,9 +117,9 @@ void DebugConsole::ProcessCommand(const std::string& line)
         std::getline(commandStream, request);
         try
         {
-            const auto submitted = editorRuntime->SubmitJson(request);
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(submitted.result) << std::endl;
-            if (submitted.admission == VL::EditorCommandAdmission::Queued)
+            const auto submitted = editorConsoleSink->SubmitJson(request);
+            std::cout << submitted.text << std::endl;
+            if (submitted.queued)
                 pendingEditorResults.push_back(submitted.commandId);
         }
         catch (const std::exception& error) { std::cout << "Editor request rejected: " << error.what() << std::endl; }

@@ -24,6 +24,26 @@ add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
+# 打包器只信任与二进制同目录的 flavor 标记；当前单目标构建是 editor 过渡形态。
+# P4 拆出 main_game/main_editor 后，同名目标会自动写各自的标记。
+function(vl_write_build_flavor target flavor editor_enabled)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DVL_FLAVOR=${flavor}
+            -DVL_EDITOR_ENABLED=${editor_enabled}
+            -DVL_OUTPUT=$<TARGET_FILE_DIR:${target}>/vl_build_flavor.json
+            -P ${PROJECT_SOURCE_DIR}/tool/game-export/writeBuildFlavor.cmake
+        VERBATIM)
+endfunction()
+
+vl_write_build_flavor(main editor ON)
+if(TARGET main_editor)
+    vl_write_build_flavor(main_editor editor ON)
+endif()
+if(TARGET main_game)
+    vl_write_build_flavor(main_game game OFF)
+endif()
+
 # 候选事务、组件空间、UI 内联模板与 hair trace/曲线参数在 MinGW Debug 下
 # 超过 COFF 旧 section 上限。
 if(MINGW)
