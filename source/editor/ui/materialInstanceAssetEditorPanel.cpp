@@ -766,6 +766,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
         "viewport-snap-enabled", "viewport-snap-move", "viewport-snap-rotate", "viewport-snap-scale",
+        "viewport-camera-speed",
         "viewport-gizmo-overlay", "viewport-gizmo-capture",
         "viewport-brush-ring", "viewport-brush-ring-center",
         "viewport-tool-landscape", "viewport-landscape-controls",
@@ -1824,6 +1825,7 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     SetControlValue("viewport-snap-move", Number(sceneMoveSnap));
     SetControlValue("viewport-snap-rotate", Number(sceneRotateSnap));
     SetControlValue("viewport-snap-scale", Number(sceneScaleSnap));
+    SetControlValue("viewport-camera-speed", Number(cameraMoveSpeed));
     // 菜单只映射已有 debug view，不复制渲染状态；勾选与标题以运行时快照为准。
     const char* modes[] = {"Lit", "Base Color", "Emissive", "World Normal",
         "Roughness", "Metallic", "Ambient Occlusion", "Shadow", "Direct Lighting",
@@ -8154,6 +8156,26 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         if (action == "viewport-snap-move") sceneMoveSnap = number;
         else if (action == "viewport-snap-rotate") sceneRotateSnap = number;
         else sceneScaleSnap = number;
+        RefreshViewportToolbar();
+        return;
+    }
+    if (action == "camera-speed")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number) || number <= 0.0f)
+        {
+            localStatus = "Camera speed must be finite and greater than zero.";
+            RefreshViewportToolbar();
+            return;
+        }
+        cameraMoveSpeed = number;
+        if (runtimeActionSink != nullptr)
+        {
+            UiAction request;
+            request.type = UiActionType::SetCameraMoveSpeed;
+            request.floatValue = number;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
         RefreshViewportToolbar();
         return;
     }
