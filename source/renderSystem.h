@@ -30,6 +30,7 @@
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
+#include "render/environment/environmentRuntime.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
 #include "renderableObject.h"
@@ -43,6 +44,8 @@
 #include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/csmRuntime.h"
+#include "render/postprocess/postProcessControls.h"
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerFeedback.h"
 #include "render/shadow/shadowCasterCull.h"
@@ -360,15 +363,15 @@ public:
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
-    int GetToneMappingMode() const { return toneMappingMode; }
+    int GetToneMappingMode() const { return postProcessControls.GetToneMappingMode(); }
     bool SetBloomStrength(float value, std::string& outMessage);
-    float GetBloomStrength() const { return bloomStrength; }
+    float GetBloomStrength() const { return postProcessControls.GetBloomStrength(); }
     bool SetBloomThreshold(float value, std::string& outMessage);
-    float GetBloomThreshold() const { return bloomThreshold; }
+    float GetBloomThreshold() const { return postProcessControls.GetBloomThreshold(); }
     bool SetBloomKnee(float value, std::string& outMessage);
-    float GetBloomKnee() const { return bloomKnee; }
+    float GetBloomKnee() const { return postProcessControls.GetBloomKnee(); }
     bool SetBloomClamp(float value, std::string& outMessage);
-    float GetBloomClamp() const { return bloomClamp; }
+    float GetBloomClamp() const { return postProcessControls.GetBloomClamp(); }
     // Rebinding the active World invalidates all CPU-side render views derived
     // from the previous World. The next Render() builds a fresh snapshot and
     // resolved scene from the new generation.
@@ -485,72 +488,7 @@ private:
     // --gpu-stats 周期输出每级联 caster draw 的 before/after 计数。
     void LogShadowCasterCullStats() const;
 
-        // 用于使用boundingbox加速
-    std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
-        // 遍历场景物体，在lightspace确定 minZ 和 maxZ（每帧只投影一次，见下）
-    std::optional<std::pair<float, float>> ComputeCascadeLightSpaceZBounds(
-        const Eigen::Matrix3f& worldToShadowMatrix,
-        float minX,
-        float maxX,
-        float minY,
-        float maxY);
-    // caster 在光源空间的包围盒。投影只取决于光源朝向，同一帧的四个级联完全相同；
-    // 因此每帧投影一次缓存，逐级联只做 XY 过滤与 Z 合并，避免 N 级 × 全部 draw 的重复计算。
-    struct ShadowCasterLightSpaceBounds
-    {
-        float minX = 0.0f;
-        float maxX = 0.0f;
-        float minY = 0.0f;
-        float maxY = 0.0f;
-        float minZ = 0.0f;
-        float maxZ = 0.0f;
-    };
-    std::vector<ShadowCasterLightSpaceBounds> casterLightSpaceBounds;
-    bool casterLightSpaceBoundsValid = false;
-        // 将局部空间的aabb变换到世界空间
-    std::array<Eigen::Vector3f, 8> BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix) const;
-        // 计算某个空间下的aabb
-    void ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& corners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
-
-    // 阴影计算策略
-    enum class ShadowStrategy {
-        DynamicTightBox,    // 原始方案：最小面积矩形 (利用率高，闪烁)
-        StableBoundingSphere, // 基础稳定方案：外接球 (利用率低，极其稳定)
-        StableRectangular // 改良方案：稳定长方形 (利用率中，稳定)
-    };
-
-    struct ShadowProjectionParams {
-        Eigen::Matrix4f viewMatrix;
-        Eigen::Matrix4f projectionMatrix;
-        // 该级联接收面（相机 split）的光源空间 XY 范围，供 caster 预筛。
-        VL::ShadowCasterReceiverBounds casterReceiverBounds;
-    };
-
-    struct ShadowCascadeFrameData {
-        std::array<Eigen::Matrix4f, 4> view{};
-        std::array<Eigen::Matrix4f, 4> projection{};
-        std::array<Eigen::Matrix4f, 4> lightViewProj{};
-        // 逐级联接收面 XY 范围；与 lightViewProj 同帧同源。
-        std::array<VL::ShadowCasterReceiverBounds, 4> casterReceiverBounds{};
-        Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
-        std::array<Eigen::Vector4f, 4> bias{};
-        Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
-        uint64_t frameIndex = std::numeric_limits<uint64_t>::max();
-        uint64_t worldGeneration = 0;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        bool valid = false;
-    };
-
     void BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight);
-    ShadowProjectionParams CalculateShadowMatrixForCameraRange(
-        float splitNear,
-        float splitFar,
-        uint32_t passSizeWidth,
-        uint32_t passSizeHeight);
-    ShadowProjectionParams CalculateShadowMatrix_DynamicTight(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float sceneMaxZ, float sceneZRange);
-    ShadowProjectionParams CalculateShadowMatrix_StableSphere(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
-    ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
     
     // 环境IBL相关
     std::shared_ptr<Texture> GetActiveEnvironmentCube();
@@ -628,11 +566,7 @@ private:
     uint64_t selectedWorldGeneration = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
-    int toneMappingMode = 3;
-    float bloomStrength = 0.08f;
-    float bloomThreshold = 1.0f;
-    float bloomKnee = 0.5f;
-    float bloomClamp = 12.0f;
+    VL::PostProcessControls postProcessControls;
     float exposureDeltaSeconds = 1.0f / 60.0f;
     bool exposureClockInitialized = false;
     std::chrono::steady_clock::time_point exposureLastFrameTime;
@@ -653,16 +587,7 @@ private:
     WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
-    // GT authority. Never read this field directly from RT code; RT consumes a
-    // per-frame snapshot into frameCsmSettings at frame start.
-    VL::CsmSettings csmSettings;
-    mutable std::mutex csmSettingsMutex;
-    std::atomic<uint64_t> csmSettingsRevision{0};
-    // RT-owned per-frame snapshot; written only by SnapshotFrameCsmSettings().
-    VL::CsmSettings frameCsmSettings;
-    uint64_t frameCsmSettingsRevision = 0;
-    bool frameCsmSettingsInitialized = false;
-    ShadowCascadeFrameData shadowCascadeFrameData;
+    VL::CsmRuntime csmRuntime;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;
@@ -724,7 +649,6 @@ private:
         environmentIblBaker};
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
-    VL::EnvironmentGpuTimer environmentGpuTimer;
     // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
     VL::GpuPassTimer gpuPassTimer;
     // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。
@@ -732,11 +656,7 @@ private:
         frameShadowCasterCullStats{};
     std::atomic<bool> gpuPassStatsLoggingEnabled{false};
     uint32_t shadowCasterCullStatsFramesSinceLog = 0;
-    VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
-    VL::EnvironmentUpdateState environmentUpdateState;
-    std::shared_ptr<Texture> environmentUpdateSourceCube;
-    mutable std::mutex environmentDiagnosticsMutex;
-    VL::EnvironmentUpdateDiagnostics environmentDiagnostics;
+    VL::EnvironmentRuntime environmentRuntime;
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
     VL::UiViewportRect requestedSceneViewport;
     bool sceneViewportRequested = false;

@@ -55,7 +55,8 @@ enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
 struct WorldHandle;
-// 引擎内部的动画预览派生数据缓存；定义在 engineLoop.cpp，UI 侧不接触。
+struct EngineUiViewModelContext;
+// 引擎内部的动画预览派生数据缓存；定义在 engine/ui/engineUiViewModel.h。
 struct UiAnimationPreviewCache;
 
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
@@ -120,6 +121,9 @@ private:
     void BuildUiOfflineSection(
         UiOfflineSection& section,
         const RuntimeCommandExecutionResult& commandResult);
+    // 把 EngineLoop 现有成员打包成中性上下文，供 engine/ui 的分节构建器读取；
+    // 不复制世界/脚本/渲染权威状态。
+    EngineUiViewModelContext MakeUiViewModelContext();
     // 大纲/MI 模型列表按“内容变化”重建：未声明重建时复用同一份 shared_ptr，
     // 大纲节版本因此不会因为 10 Hz 轮询而推进。
     void BuildUiSceneOutlinerContent();

@@ -88,127 +88,32 @@ bool SameTextureOptions(const std::vector<EditorTextureAssetSnapshot>& a,
     return true;
 }
 
-// 文档命令的可用性统一作用在所有发出该命令的控件上，避免出现两套互相矛盾的启用状态。
-// 菜单和中央材质页使用同一份文档命令可用性。
-constexpr const char* DocumentCommandIds[] = {
-    "menu-file-save", "menu-file-revert", "menu-file-reload",
-    "menu-edit-reset", "menu-edit-validate", "material-save"};
-
-std::string Number(float value)
-{
-    std::ostringstream stream;
-    stream << std::setprecision(9) << value;
-    return stream.str();
-}
-
-std::string TerrainNumber(float value)
-{
-    std::ostringstream stream;
-    stream << std::setprecision(6) << value;
-    return stream.str();
-}
-
-std::string TerrainLayerRange(float minimum, float maximum)
-{
-    return TerrainNumber(minimum) + "-" + TerrainNumber(maximum);
-}
-
-std::string TerrainLayerColor(const TerrainLayerDesc& layer)
-{
-    const Eigen::Vector3f color = layer.avgColor;
-    const float sum = std::abs(color.x()) + std::abs(color.y()) + std::abs(color.z());
-    unsigned int red = 0;
-    unsigned int green = 0;
-    unsigned int blue = 0;
-    if (std::isfinite(sum) && sum > 0.01f)
-    {
-        red = UiSrgbHexByte(UiLinearToSrgb(color.x()));
-        green = UiSrgbHexByte(UiLinearToSrgb(color.y()));
-        blue = UiSrgbHexByte(UiLinearToSrgb(color.z()));
-    }
-    else
-    {
-        // 没有可用平均色时，用层身份哈希生成稳定的低饱和色；不能每帧随机。
-        const std::string& identity = layer.key.empty() ? layer.name : layer.key;
-        uint32_t hash = 2166136261u;
-        for (const unsigned char character : identity)
-        {
-            hash ^= character;
-            hash *= 16777619u;
-        }
-        red = 72u + (hash & 63u);
-        green = 78u + ((hash >> 8u) & 63u);
-        blue = 68u + ((hash >> 16u) & 63u);
-    }
-    std::ostringstream stream;
-    stream << '#' << std::uppercase << std::hex << std::setfill('0')
-        << std::setw(2) << red << std::setw(2) << green
-        << std::setw(2) << blue << "FF";
-    return stream.str();
-}
-
-std::string TerrainLayerSourceLabel(uint32_t sourceSet)
-{
-    return "set " + std::to_string(sourceSet);
-}
-
-bool TerrainLayerMatchesSearch(const TerrainLayerDesc& layer, const std::string& search)
-{
-    const std::string folded = FoldAsciiCase(search);
-    if (folded.empty()) return true;
-    const std::string haystack = FoldAsciiCase(layer.name + "\n" + layer.key + "\n" +
-        TerrainLayerSourceLabel(layer.sourceSet) + "\nsourceSet " +
-        std::to_string(layer.sourceSet));
-    return haystack.find(folded) != std::string::npos;
-}
-
-std::string TerrainLayerCardMarkup(const TerrainLayerDesc& layer, const std::string& color,
-    const std::string& spherePath, size_t index, bool selected, bool listView)
-{
-    const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
-    const std::string meta = TerrainLayerSourceLabel(layer.sourceSet) +
-        " &#183; uvScale " + TerrainNumber(layer.uvScale);
-    std::string classes = "terrain-layer-card ";
-    classes += listView ? "terrain-layer-list-card" : "terrain-layer-grid-card";
-    if (selected) classes += " selected";
-    std::string markup = "<button id=\"terrain-layer-card-" + std::to_string(index) +
-        "\" class=\"" + classes + "\" data-action=\"terrain-layer-select\" data-index=\"" +
-        std::to_string(index) + "\" title=\"" + Text(name) + "\">" +
-        "<div class=\"terrain-layer-swatch";
-    if (spherePath.empty())
-    {
-        markup += "\" style=\"background-color: " + color +
-            ";\"><div class=\"terrain-layer-swatch-highlight\"></div>";
-    }
-    else
-    {
-        // 有真实球体图时不能保留色块背景，否则 PNG 透明角落会露出方块。
-        markup += " has-image\"><img class=\"terrain-layer-swatch-image\" src=\"" +
-            Text(spherePath) + "\"/>";
-    }
-    markup += std::string("</div>") +
-        "<div class=\"terrain-layer-card-copy\">" +
-        "<span class=\"terrain-layer-card-name\">" + Text(name) + "</span>" +
-        "<span class=\"terrain-layer-card-meta\">" + meta + "</span>" +
-        "</div></button>";
-    return markup;
-}
-
-// 窗口计算必须与 RCSS 的固定卡片盒一致：144px 卡宽 + 6px 右间距 = 150px 单元格，
-// 116px 卡高 + 6px 下间距 = 122px 行高；列表行高为 34px 卡 + 4px 间距 = 38px。
-constexpr float TerrainLayerGridCellWidth = 150.0f;
-constexpr float TerrainLayerGridRowHeight = 122.0f;
-constexpr float TerrainLayerListRowHeight = 38.0f;
-constexpr float TerrainLayerFallbackViewportWidth = 320.0f;
-constexpr float TerrainLayerFallbackViewportHeight = 180.0f;
-constexpr size_t TerrainLayerVirtualizeThreshold = 12;
-
-int TerrainLayerGridColumns(float viewportWidth)
-{
-    if (!std::isfinite(viewportWidth) || viewportWidth <= 0.0f) return 1;
-    return std::max(1, static_cast<int>(std::floor(
-        viewportWidth / TerrainLayerGridCellWidth)));
-}
+using Panel::ActorCountLabel;
+using Panel::ActorPropertyRowMarkup;
+using Panel::DocumentCommandIds;
+using Panel::DocumentStatus;
+using Panel::FileLabel;
+using Panel::MaterialPanelId;
+using Panel::Number;
+using Panel::OutlinerActorRow;
+using Panel::OutlinerSlotRow;
+using Panel::PanelLabel;
+using Panel::PreviewStatus;
+using Panel::RenderStateOptions;
+using Panel::ResourcePanelId;
+using Panel::TerrainLayerCardMarkup;
+using Panel::TerrainLayerColor;
+using Panel::TerrainLayerFallbackViewportHeight;
+using Panel::TerrainLayerFallbackViewportWidth;
+using Panel::TerrainLayerGridCellWidth;
+using Panel::TerrainLayerGridColumns;
+using Panel::TerrainLayerGridRowHeight;
+using Panel::TerrainLayerListRowHeight;
+using Panel::TerrainLayerMatchesSearch;
+using Panel::TerrainLayerRange;
+using Panel::TerrainLayerSourceLabel;
+using Panel::TerrainLayerVirtualizeThreshold;
+using Panel::TerrainNumber;
 
 int TerrainBrushShapeIndex(Editor::BrushShape shape)
 {
@@ -298,12 +203,6 @@ std::string Pixels(float value)
     return std::to_string(std::lround(value)) + "px";
 }
 
-// 右键菜单的标题行与材质槽条目都只用资产文件名兜底，不把完整路径当标签。
-std::string FileLabel(const std::string& path)
-{
-    return std::filesystem::path(path).filename().string();
-}
-
 template<class T>
 bool ParseNumber(const std::string& text, T& value)
 {
@@ -360,80 +259,9 @@ std::string ControlValue(Rml::Element& element)
     return control->GetValue();
 }
 
-// HEAD(ImGui) 的范围解析语义，迁移后必须保持一致：通道范围 > 参数范围 > 按当前值推导的固定兜底。
-struct SliderRange
-{
-    float minValue = -1.0f;
-    float maxValue = 1.0f;
-};
-
-SliderRange ResolveSliderRange(const EditorParameterSnapshot& parameter,
-    const EditorParameterChannel& channel, float currentValue)
-{
-    if (channel.hasRange && std::isfinite(channel.minValue) &&
-        std::isfinite(channel.maxValue) && channel.minValue <= channel.maxValue)
-    {
-        return {channel.minValue, channel.maxValue};
-    }
-    if (parameter.hasRange && std::isfinite(parameter.minValue) &&
-        std::isfinite(parameter.maxValue) && parameter.minValue <= parameter.maxValue)
-    {
-        return {parameter.minValue, parameter.maxValue};
-    }
-
-    // 旧 M_ 文件没有范围时按默认值生成固定兜底，避免错误输入继续扩大可调区间。
-    // 基准是 defaultValue 而不是正在编辑的值：拖动过程中区间不能跟着漂移。
-    const float magnitude = std::abs(currentValue);
-    float extent = std::max(1.0f, magnitude * 2.0f);
-    if (!std::isfinite(extent)) extent = 1.0f;
-    return {-extent, extent};
-}
-
-// HEAD 的折叠分组名与默认展开状态：General / Render States / Parameters / Texture Bindings。
-// 键同时是 DOM id 后缀，切换只改既有分组元素的 class，不重建 DOM。
-constexpr const char* DetailsSectionKeys[] = {"general", "render-states", "parameters", "textures", "camera-exposure"};
-
-bool CameraExposureFieldEditable(EditorActorProperty property, ExposureMode mode)
-{
-    if (property == EditorActorProperty::CameraEv100) return mode == ExposureMode::Ev100;
-    if (property == EditorActorProperty::CameraExposureCompensation) return true;
-    return mode == ExposureMode::Auto;
-}
-
-std::string ActorPropertyRowMarkup(const EditorSceneActorEditableField& field)
-{
-    std::vector<UiWidgets::NumericComponent> components;
-    for (uint32_t component = 0; component < field.components; ++component)
-    {
-        UiWidgets::NumericComponent entry;
-        entry.id = SceneActorPropertyControlId(field.property, component);
-        static const char* axes[] = {"X", "Y", "Z"};
-        static const char* channels[] = {"R", "G", "B"};
-        entry.label = field.components == 1 ? "" :
-            (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
-        entry.value = SceneActorNumber(field.value[component]);
-        entry.change = {"actor-property", static_cast<size_t>(field.property), component};
-        entry.hasRange = field.hasRange;
-        entry.minValue = field.minValue;
-        entry.maxValue = field.maxValue;
-        components.push_back(std::move(entry));
-    }
-    return "<div class=\"actor-property-row\" id=\"" +
-        SceneActorPropertyControlId(field.property, 0) + "-row\">" +
-        UiWidgets::PropertyControlRow(field.label, UiWidgets::NumericComponents(components)) + "</div>";
-}
-
-std::string DetailsSectionId(const std::string& key)
-{
-    return std::string("details-section-") + key;
-}
-
-// 大纲选中 actor 的详情分组：每个类型一个分组，键由 SceneActorGroupSpecs() 派生，
-// 不在这里维护第二份类型清单。
-std::string ActorSectionKey(const std::string& groupKey)
-{
-    return "actor-" + groupKey;
-}
+using Panel::CameraExposureFieldEditable;
+using Panel::DetailsSectionId;
+using Panel::ActorSectionKey;
 
 // 运行时命令驱动的数值只在真正变化时提交，与运行时页 QueueChangedFloatAction 的语义一致。
 bool ChangedFloat(float value, float currentValue)
@@ -457,157 +285,8 @@ Rml::Element* FirstActorTextInput(Rml::Element& root)
     return nullptr;
 }
 
-// Details 强度以 lux 表示，保留物理光照迁移后的作者范围；不再受旧调试页滑条约束。
-constexpr float SunIntensityMin = 0.0f;
-constexpr float SunIntensityMax = 150000.0f;
-
-std::string ActorCountLabel(size_t count)
-{
-    return std::to_string(count) + (count == 1 ? " actor" : " actors");
-}
-
-// 树行只携带展示数据与动作地址；动作索引是 sceneActors 的下标，过滤只改变可见性。
-UiWidgets::TreeRowData OutlinerActorRow(size_t actorIndex, const EditorSceneActorSnapshot& actor,
-    bool selected, bool expanded, bool hasChildren)
-{
-    UiWidgets::TreeRowData row;
-    row.label = actor.displayName;
-    row.select = {"outliner-actor", actorIndex};
-    row.toggle = {"outliner-expand", actorIndex};
-    row.selected = selected;
-    row.hasChildren = hasChildren;
-    row.expanded = expanded;
-    row.icon = SceneActorGroupIcon(actor.type);
-    row.rowClass = "actor-row";
-    // 眼睛只出现在真正有渲染侧可见性状态的对象上；隐藏时行同时得到 hidden-row class，
-    // 让"这一行代表不可见对象"在图标之外还有第二个可测信号。
-    if (SceneActorHasVisibilityToggle(actor.type))
-    {
-        row.hiddenRow = !actor.visible;
-        row.hasTrailing = true;
-        row.trailing = {"outliner-visible", actorIndex};
-        row.trailingIcon = actor.visible ? "icons/eye.png" : "icons/eye-off.png";
-        row.trailingLabel = actor.visible ? "Hide in viewport" : "Show in viewport";
-        row.trailingAlternate = !actor.visible;
-    }
-    return row;
-}
-
-UiWidgets::TreeRowData OutlinerSlotRow(size_t actorIndex, size_t slotIndex,
-    const std::string& label, bool selected)
-{
-    UiWidgets::TreeRowData row;
-    row.label = label;
-    row.select = {"outliner-slot", actorIndex, static_cast<uint32_t>(slotIndex)};
-    row.depth = 1;
-    row.selected = selected;
-    row.icon = "icons/material-instance.png";
-    row.rowClass = "slot-row";
-    return row;
-}
-
-const char* DocumentStatus(EditorDocumentStatus status)
-{
-    switch (status)
-    {
-    case EditorDocumentStatus::Clean: return "Saved";
-    case EditorDocumentStatus::Dirty: return "Modified";
-    case EditorDocumentStatus::Saving: return "Saving";
-    case EditorDocumentStatus::SaveFailed: return "Save failed";
-    case EditorDocumentStatus::SourceChanged: return "Source changed";
-    }
-    return "";
-}
-
-const char* PreviewStatus(EditorPreviewStatus status)
-{
-    switch (status)
-    {
-    case EditorPreviewStatus::Connected: return "Connected";
-    case EditorPreviewStatus::Applying: return "Applying";
-    case EditorPreviewStatus::Unavailable: return "Unavailable";
-    case EditorPreviewStatus::Failed: return "Failed";
-    case EditorPreviewStatus::Disconnected: return "Disconnected";
-    }
-    return "";
-}
-
-// Window 菜单沿用停靠标签的显示名；面板集合本身仍由 DockWorkspace::Panels() 定义。
-const char* PanelLabel(const std::string& panel)
-{
-    if (panel == "viewport") return "Viewport";
-    if (panel == "outliner") return "Scene Outliner";
-    if (panel == "details") return "Details";
-    if (panel == "content") return "Content Browser";
-    if (panel == "renderer") return "Renderer";
-    if (panel == "log") return "Log";
-    if (panel == "terrain") return "Landscape";
-    if (panel == "performance") return "Performance";
-    return "Asset Editor";
-}
-
-std::string ResourcePanelId(const std::string& path)
-{
-    // 资源标签的身份在当前会话内必须稳定，关闭前一个标签时不能重命名仍停靠在其他区域的标签。
-    uint64_t hash = 1469598103934665603ull;
-    for (const unsigned char value : path)
-    {
-        hash ^= value;
-        hash *= 1099511628211ull;
-    }
-    std::ostringstream stream;
-    stream << "resource:" << std::hex << hash;
-    return stream.str();
-}
-
-std::string MaterialPanelId(const std::string& path)
-{
-    return "resource:material:" + ResourcePanelId(path).substr(9);
-}
-
-std::string RenderStateOptions(const std::string& name)
-{
-    std::string result;
-    if (name == "renderMode")
-    {
-        for (EditorMaterialRenderMode mode : {
-            EditorMaterialRenderMode::Opaque, EditorMaterialRenderMode::OpaqueClip,
-            EditorMaterialRenderMode::ForwardOpaque,
-            EditorMaterialRenderMode::TransparentAlphaBlend,
-            EditorMaterialRenderMode::TransparentAlphaBlendWriteDepth,
-            EditorMaterialRenderMode::TransparentAdditive,
-            EditorMaterialRenderMode::ThinTranslucent})
-        {
-            const std::string value(GetEditorMaterialRenderModeName(mode));
-            result += Option(value, value);
-        }
-    }
-    else if (name == "cullMode")
-    {
-        for (EditorMaterialCullMode mode : {
-            EditorMaterialCullMode::Back, EditorMaterialCullMode::Front,
-            EditorMaterialCullMode::None})
-        {
-            const std::string value(GetEditorMaterialCullModeName(mode));
-            result += Option(value, value);
-        }
-    }
-    else if (name == "shadingModel")
-    {
-        for (EditorMaterialShadingModel model : {
-            EditorMaterialShadingModel::DefaultLit, EditorMaterialShadingModel::Unlit,
-            EditorMaterialShadingModel::Subsurface, EditorMaterialShadingModel::PreintegratedSkin,
-            EditorMaterialShadingModel::ClearCoat, EditorMaterialShadingModel::SubsurfaceProfile,
-            EditorMaterialShadingModel::TwoSidedFoliage, EditorMaterialShadingModel::Hair,
-            EditorMaterialShadingModel::Cloth, EditorMaterialShadingModel::Eye,
-            EditorMaterialShadingModel::ThinTranslucent})
-        {
-            const std::string value(GetEditorMaterialShadingModelName(model));
-            result += Option(value, value);
-        }
-    }
-    return result;
-}
+using Panel::SunIntensityMax;
+using Panel::SunIntensityMin;
 
 EditorMaterialParameterValue CommandValue(const EditorParameterValue& value)
 {
@@ -672,259 +351,127 @@ MaterialInstanceAssetEditorPanel::~MaterialInstanceAssetEditorPanel()
 
 bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& candidate, std::string& error)
 {
-    for (const char* id : {
-        "scene-models", "material-slots", "material-slots-section", "asset-list", "material-editor", "actor-details-content",
-        "viewport-actor-overlay", "viewport-actor-lines", "viewport-actor-icons", "viewport-actor-visuals",
-        "material-preview-image", "material-preview-status", "material-frame",
-        "document-title", "document-status", "editor-notice", "details-content",
-        "offline-status", "offline-notice", "close-dialog", "close-document-name",
-        "mode-realtime", "mode-offline", "menu-file-save", "menu-file-revert",
-        "menu-file-reload", "menu-edit-reset", "menu-edit-validate",
-        "apply-preview", "restore-preview",
-        "offline-samples", "offline-bounces", "offline-lightSamples", "offline-seed",
-        "offline-aov", "offline-exposure", "offline-pause", "offline-resume",
-        "offline-stop", "offline-restart", "offline-export", "asset-search",
-        "close-document-status", "close-save", "editor-navigation",
-        "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
-        "content-browser-page", "renderer-page", "performance-page", "workspace-performance-tab",
-        "performance-fps", "performance-cpu-ms", "performance-gpu-ms", "performance-status",
-        "performance-passes", "editor-viewport-surface", "editor-viewport-image",
-        "workspace-log-tab", "log-page", "log-scroll", "log-rows", "log-count",
-        "workspace-terrain-tab", "terrain-page", "terrain-page-body", "terrain-empty", "terrain-summary",
-        "terrain-mode-sculpt", "terrain-mode-paint", "terrain-mode-layers",
-        "terrain-layer-search", "terrain-layer-view-grid", "terrain-layer-view-list",
-        "terrain-panel-filter-row",
-        "terrain-workspace", "terrain-brush-column", "terrain-brush-library-title",
-        "terrain-brush-library", "terrain-layer-library",
-        "terrain-layer-visible-count", "terrain-layer-scroll", "terrain-layer-cards",
-        "terrain-layer-top-spacer", "terrain-layer-bottom-spacer",
-        "terrain-layer-empty", "terrain-layer-status", "terrain-layer-hover-preview",
-        "terrain-layer-hover-image",
-        "terrain-surface-panel", "terrain-surface-size", "terrain-surface-height-scale",
-        "terrain-surface-layer-count", "terrain-surface-chunk-count",
-        "terrain-surface-section-count",
-        "log-output", "log-scripts", "log-output-tab", "log-scripts-tab",
-        "log-severity", "log-source", "log-search", "log-autoscroll", "log-clear",
-        "log-scripts-search", "log-scripts-summary", "log-scripts-rows",
-        "log-scripts-page", "log-scripts-prev", "log-scripts-next",
-        "workspace-viewport-tab", "workspace-outliner-tab", "workspace-details-tab",
-        "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
-        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-preview-panel",
-        "blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert",
-        "terrain-asset-editor", "terrain-asset-save", "terrain-asset-revert",
-        "retarget-asset-editor", "retarget-title", "retarget-identity", "retarget-status",
-        "retarget-bind", "retarget-calibrated", "retarget-front", "retarget-side", "retarget-top",
-        "retarget-anchor", "retarget-surface", "retarget-lines", "retarget-mappings",
-        "retarget-focus", "retarget-fit", "retarget-zoom", "retarget-all-bones",
-        "retarget-selection", "retarget-measurement", "retarget-prev", "retarget-next", "retarget-page",
-        "retarget-reference", "retarget-animation", "retarget-reference-toolbar", "retarget-reference-workspace",
-        "retarget-hierarchy", "retarget-hierarchy-source", "retarget-hierarchy-target", "retarget-details",
-        "retarget-editor-workspace", "retarget-center", "retarget-sidebar", "retarget-animation-assets",
-        "retarget-animation-workspace", "retarget-preview-surface", "retarget-preview-image", "retarget-preview-status",
-        "retarget-animation-tools", "retarget-animation-play", "retarget-animation-pause", "retarget-animation-clip",
-        "retarget-animation-time", "retarget-animation-status", "retarget-animation-frame",
-        "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
-        "resource-preview-icon", "resource-preview-status", "resource-preview-path",
-        "resource-preview-image",
-        "resource-animation-tools", "resource-animation-play", "resource-animation-pause",
-        "resource-animation-clip", "resource-animation-time", "resource-animation-status",
-        "viewport-motion-debug", "viewport-motion-status",
-        "viewport-motion-matching", "motion-matching-title", "motion-matching-database",
-        "motion-matching-query", "motion-matching-decision", "motion-matching-rows",
-        "motion-timeline-play", "motion-timeline-pause", "motion-timeline-seek", "motion-timeline-status",
-        "motion-replay", "motion-replay-seek", "motion-replay-status",
-        "motion-query-toggle", "motion-query-details", "motion-query-channels",
-        "motion-query-database", "motion-query-payload", "motion-query-component",
-        "resource-motion-features", "resource-motion-status", "resource-motion-values",
-        "resource-texture-image",
-        "resource-texture-fit",
-        "resource-frame",
-        "resource-model-tools", "resource-tool-select", "resource-tool-move", "resource-tool-rotate",
-        "resource-tool-scale", "resource-space-world", "resource-space-local", "resource-model-info",
-        "resource-model-name", "resource-model-path", "resource-model-status", "resource-model-fields",
-        "resource-model-description",
-        "resource-details-panel", "resource-json-inspector", "resource-json-title",
-        "resource-json-kind", "resource-json-path", "resource-json-description",
-        "resource-json-status", "resource-json-fields", "resource-json-search",
-        "resource-json-page", "resource-json-prev", "resource-json-next",
-        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield",
-        "workspace-undo", "workspace-redo", "workspace-reset",
-        "asset-sources", "asset-breadcrumbs", "asset-count", "asset-empty", "browser-selection",
-        "browser-back", "browser-forward", "browser-up", "browser-sources-toggle",
-        "browser-grid", "browser-list", "browser-recursive", "browser-sort", "browser-size",
-        "browser-sources-panel", "browser-type", "browser-refresh",
-        "material-instance-details", "json-inspector", "json-title", "json-kind", "json-path",
-        "json-description", "json-status", "json-fields", "json-search", "json-page", "json-prev", "json-next",
-        "editor-menubar", "menu-file", "menu-edit", "menu-window", "menu-help",
-        "menu-file-popup", "menu-window-popup", "menu-window-panels", "menu-file-levels",
-        "menu-file-save", "menu-file-revert", "menu-file-reload",
-        "menu-edit-reset", "menu-edit-validate", "menu-edit-undo", "menu-edit-redo",
-        "menu-window-reset", "menu-window-restore",
-        "about-dialog", "about-close",
-        "editor-context-menu", "editor-context-menu-title", "editor-context-menu-items",
-        "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
-        "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
-        "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
-        "viewport-snap-enabled", "viewport-snap-move", "viewport-snap-rotate", "viewport-snap-scale",
-        "viewport-gizmo-overlay", "viewport-gizmo-capture",
-        "viewport-brush-ring", "viewport-brush-ring-center",
-        "viewport-tool-landscape", "viewport-landscape-controls",
-        "viewport-landscape-sculpt", "viewport-landscape-paint",
-        "viewport-landscape-write",
-        "viewport-brush-settings", "viewport-brush-mode-0", "viewport-brush-mode-1",
-        "viewport-brush-mode-2", "viewport-brush-radius", "viewport-brush-strength",
-        "viewport-brush-falloff", "terrain-sculpt-settings", "viewport-paint-settings",
-        "viewport-paint-mode", "terrain-paint-radius", "terrain-paint-hardness",
-        "terrain-paint-opacity", "terrain-paint-flow",
-        "viewport-paint-erase",
-        "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe",
-        "viewport-axis-indicator", "viewport-axis-bar-x", "viewport-axis-bar-y",
-        "viewport-axis-bar-z", "viewport-axis-label-x", "viewport-axis-label-y",
-        "viewport-axis-label-z"})
-    {
-        if (candidate.GetElementById(id) == nullptr)
-        {
-            error = std::string("Editor workspace is missing element: ") + id;
-            return false;
-        }
-    }
-    return true;
+    return Panel::ValidateEditorPanelDocument(candidate, error);
 }
 
 bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, std::string& error)
 {
-    if (!ValidateDocument(candidate, error)) return false;
-    Detach();
-    document = &candidate;
-    document->AddEventListener("click", this);
-    document->AddEventListener("change", this);
-    document->AddEventListener("dblclick", this);
-    document->AddEventListener("mousedown", this, true);
-    document->AddEventListener("mousemove", this, true);
-    document->AddEventListener("mouseup", this, true);
-    document->AddEventListener("mousescroll", this, true);
-    document->AddEventListener("dragstart", this);
-    document->AddEventListener("dragdrop", this);
-    document->AddEventListener("dragend", this);
-    document->AddEventListener("keydown", this, true);
-    if (!docking.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    // 编辑器启动必须有一个可见的关卡编辑入口；停靠布局可能记住了 Content/Details 标签，
-    // 但不能让默认启动场景变成“只有资产浏览器没有视口”。
-    docking.SetPanelVisible("viewport", true);
-    docking.Activate("viewport");
-    widgetDocument.Attach(candidate);
-    if (!brushLibrary.Attach(candidate, "terrain-brush-library", error))
-    {
-        Detach();
-        return false;
-    }
-    retargetEditor.Attach(candidate);
-    if (!contentBrowser.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    if (!jsonInspector.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    if (!resourceJsonInspector.Attach(candidate, error, "resource-json"))
-    {
-        Detach();
-        return false;
-    }
-    terrainAssetEditor.SetCommandSink(commandSink);
-    if (!terrainAssetEditor.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    if (!logPanel.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    if (!performancePanel.Attach(candidate, error))
-    {
-        Detach();
-        return false;
-    }
-    detailsIdentity.clear();
-    actorDetailsIdentity.clear();
-    terrainSummarySignature.clear();
-    blueprintAssetIdentity.clear();
-    RefreshWorkspace();
-    RefreshLists();
-    RefreshDetails();
-    UpdateRuntimeView(runtimeView);
-    return true;
+    Panel::EditorPanelBootstrapContext context = BootstrapContext();
+    return Panel::AttachEditorPanel(context, candidate, error);
 }
 
 void MaterialInstanceAssetEditorPanel::Detach()
 {
-    CancelBlueprintViewportDrag();
-    CancelSceneGizmoDrag();
-    CancelTerrainBrushStroke();
-    ClearTerrainBrushHit();
-    landscapeToolActive = false;
-    actorDragPath.clear();
-    textureViewSource.clear();
-    ResetTextureView();
-    previewDragButton = -1;
-    runtimeControlsCurrent = false;
-    motionMatchingRowsMounted = false;
-    motionMatchingVisible = false;
-    motionMatchingQueryExpanded = false;
-    motionMatchingQueryChannels.clear();
-    motionMatchingRefreshTime = -1;
-    motionMatchingRefreshKey.clear();
-    textureOptionsDirty = true;
-    textureOptionSelections.clear();
-    brushLibrary.Detach();
-    brushLibraryCatalogDomain = -1;
-    if (document != nullptr)
-    {
-        document->RemoveEventListener("click", this);
-        document->RemoveEventListener("change", this);
-        document->RemoveEventListener("dblclick", this);
-        document->RemoveEventListener("mousedown", this, true);
-        document->RemoveEventListener("mousemove", this, true);
-        document->RemoveEventListener("mouseup", this, true);
-        document->RemoveEventListener("mousescroll", this, true);
-        document->RemoveEventListener("dragstart", this);
-        document->RemoveEventListener("dragdrop", this);
-        document->RemoveEventListener("dragend", this);
-        document->RemoveEventListener("keydown", this, true);
-        contentBrowser.Detach();
-        logPanel.Detach();
-        performancePanel.Detach();
-        jsonInspector.Detach();
-        resourceJsonInspector.Detach();
-        docking.Detach();
-        document = nullptr;
-    }
-    terrainAssetEditor.Detach();
-    widgetDocument.Detach();
-    retargetEditor.Detach();
-    axisIndicatorSignature.clear();
-    terrainSummarySignature.clear();
-    terrainLayerLibrarySignature.clear();
-    terrainLayerSourceKey.clear();
-    terrainLayerWindow = TerrainLayerWindowState{};
-    terrainLayerWindowDirty = true;
-    terrainLayerScrollResetPending = true;
-    terrainLayerLastScrollTop = -1.0f;
-    // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
-    outlinerMounted = false;
-    sceneGizmoMarkupMounted = false;
-    // 右键菜单的目标属于旧文档的 DOM，重新接上后必须先回到"没有菜单"。
-    contextMenuKind = ContextMenuKind::None;
-    contextMenuTarget.clear();
+    Panel::EditorPanelBootstrapContext context = BootstrapContext();
+    Panel::DetachEditorPanel(context);
+}
+
+Panel::OutlinerViewContext MaterialInstanceAssetEditorPanel::OutlinerView()
+{
+    Panel::OutlinerViewContext context;
+    context.document = &document;
+    context.widgetDocument = &widgetDocument;
+    context.snapshot = &snapshot;
+    context.expansion = &outlinerExpansion;
+    context.query = &outlinerQuery;
+    context.typeFilter = &outlinerTypeFilter;
+    context.sortOrder = &outlinerSortOrder;
+    context.rows = &outlinerRows;
+    context.builtSortOrder = &outlinerBuiltSortOrder;
+    context.builtExpansion = &outlinerBuiltExpansion;
+    context.builtQuery = &outlinerBuiltQuery;
+    context.builtTypeFilter = &outlinerBuiltTypeFilter;
+    context.rowSignature = &outlinerRowSignature;
+    context.rowsRevision = &outlinerRowsRevision;
+    context.mountedWindow = &outlinerMountedWindow;
+    context.mounted = &outlinerMounted;
+    context.mountedRevision = &outlinerMountedRevision;
+    context.mountedVisuals = &outlinerMountedVisuals;
+    context.rowHeight = &outlinerRowHeight;
+    context.treeWorldGeneration = &treeWorldGeneration;
+    context.showActorVisualization = showActorVisualization;
+    context.closeContextMenu = [this] { CloseContextMenu(); };
+    return context;
+}
+
+Panel::DetailsViewContext MaterialInstanceAssetEditorPanel::DetailsView()
+{
+    Panel::DetailsViewContext context;
+    context.widgetDocument = &widgetDocument;
+    context.snapshot = &snapshot;
+    context.runtimeView = &runtimeView;
+    context.collapsedSections = &collapsedSections;
+    context.detailsIdentity = &detailsIdentity;
+    context.actorDetailsIdentity = &actorDetailsIdentity;
+    context.textureOptionsDirty = &textureOptionsDirty;
+    context.refreshingControls = &refreshingControls;
+    context.viewingJson = viewingJson;
+    context.resourceEditorVisible = resourceEditorVisible;
+    context.localStatus = &localStatus;
+    context.sceneLogicComponentsMarkup =
+        [this](const EditorSceneActorSnapshot& actor) { return SceneLogicComponentsMarkup(actor); };
+    context.refreshActorValues =
+        [this](const EditorSceneActorSnapshot* actor) { RefreshActorValues(actor); };
+    context.refreshControls = [this] { RefreshControls(); };
+    return context;
+}
+
+Panel::EditorPanelBootstrapContext MaterialInstanceAssetEditorPanel::BootstrapContext()
+{
+    Panel::EditorPanelBootstrapContext context;
+    context.document = &document;
+    context.listener = this;
+    context.docking = &docking;
+    context.widgetDocument = &widgetDocument;
+    context.brushLibrary = &brushLibrary;
+    context.retargetEditor = &retargetEditor;
+    context.contentBrowser = &contentBrowser;
+    context.jsonInspector = &jsonInspector;
+    context.resourceJsonInspector = &resourceJsonInspector;
+    context.terrainAssetEditor = &terrainAssetEditor;
+    context.commandSink = commandSink;
+    context.logPanel = &logPanel;
+    context.performancePanel = &performancePanel;
+    context.detailsIdentity = &detailsIdentity;
+    context.actorDetailsIdentity = &actorDetailsIdentity;
+    context.terrainSummarySignature = &terrainSummarySignature;
+    context.blueprintAssetIdentity = &blueprintAssetIdentity;
+    context.runtimeView = &runtimeView;
+    context.refreshWorkspace = [this] { RefreshWorkspace(); };
+    context.refreshLists = [this] { RefreshLists(); };
+    context.refreshDetails = [this] { RefreshDetails(); };
+    context.updateRuntimeView = [this](const UiViewModelSnapshot& value) { UpdateRuntimeView(value); };
+    context.cancelBlueprintViewportDrag = [this] { CancelBlueprintViewportDrag(); };
+    context.cancelSceneGizmoDrag = [this] { CancelSceneGizmoDrag(); };
+    context.cancelTerrainBrushStroke = [this] { CancelTerrainBrushStroke(); };
+    context.clearTerrainBrushHit = [this] { ClearTerrainBrushHit(); };
+    context.resetTextureView = [this] { ResetTextureView(); };
+    context.resetTerrainLayerWindow = [this] { terrainLayerWindow = TerrainLayerWindowState{}; };
+    context.landscapeToolActive = &landscapeToolActive;
+    context.actorDragPath = &actorDragPath;
+    context.textureViewSource = &textureViewSource;
+    context.previewDragButton = &previewDragButton;
+    context.runtimeControlsCurrent = &runtimeControlsCurrent;
+    context.motionMatchingRowsMounted = &motionMatchingRowsMounted;
+    context.motionMatchingVisible = &motionMatchingVisible;
+    context.motionMatchingQueryExpanded = &motionMatchingQueryExpanded;
+    context.motionMatchingQueryChannels = &motionMatchingQueryChannels;
+    context.motionMatchingRefreshTime = &motionMatchingRefreshTime;
+    context.motionMatchingRefreshKey = &motionMatchingRefreshKey;
+    context.textureOptionsDirty = &textureOptionsDirty;
+    context.textureOptionSelections = &textureOptionSelections;
+    context.brushLibraryCatalogDomain = &brushLibraryCatalogDomain;
+    context.axisIndicatorSignature = &axisIndicatorSignature;
+    context.terrainLayerLibrarySignature = &terrainLayerLibrarySignature;
+    context.terrainLayerSourceKey = &terrainLayerSourceKey;
+    context.terrainLayerWindowDirty = &terrainLayerWindowDirty;
+    context.terrainLayerScrollResetPending = &terrainLayerScrollResetPending;
+    context.terrainLayerLastScrollTop = &terrainLayerLastScrollTop;
+    context.outlinerMounted = &outlinerMounted;
+    context.sceneGizmoMarkupMounted = &sceneGizmoMarkupMounted;
+    context.contextMenuKind = &contextMenuKind;
+    context.contextMenuTarget = &contextMenuTarget;
+    return context;
 }
 
 void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink)
@@ -1323,17 +870,17 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
 
 void MaterialInstanceAssetEditorPanel::SetMarkup(const std::string& id, std::string markup)
 {
-    widgetDocument.SetMarkup(id, std::move(markup));
+    Panel::SetPanelMarkup(widgetDocument, id, std::move(markup));
 }
 
 void MaterialInstanceAssetEditorPanel::SetControlValue(const std::string& id, const std::string& value)
 {
-    widgetDocument.SetControlValue(id, value);
+    Panel::SetPanelControlValue(widgetDocument, id, value);
 }
 
 void MaterialInstanceAssetEditorPanel::SetDisabled(const std::string& id, bool disabled)
 {
-    widgetDocument.SetDisabled(id, disabled);
+    Panel::SetPanelDisabled(widgetDocument, id, disabled);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshWorkspace()
@@ -1793,14 +1340,7 @@ void MaterialInstanceAssetEditorPanel::RefreshLevelMenu()
 
 std::string MaterialInstanceAssetEditorPanel::WindowMenuMarkup() const
 {
-    std::string markup;
-    const auto& panels = UiWidgets::DockWorkspace::Panels();
-    for (size_t index = 0; index < panels.size(); ++index)
-    {
-        markup += UiWidgets::MenuItem("menu-window-" + panels[index], {"menu-window", index},
-            PanelLabel(panels[index]), docking.IsPanelVisible(panels[index]), false);
-    }
-    return markup;
+    return Panel::BuildWindowMenuMarkup(docking);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
@@ -2927,69 +2467,20 @@ void MaterialInstanceAssetEditorPanel::ApplyContextMenuState()
 // 重新查目标，查不到就给出诊断，而不是退回面板的当前选择。
 std::string MaterialInstanceAssetEditorPanel::ContextMenuItemsMarkup() const
 {
-    std::string markup;
-    if (contextMenuKind == ContextMenuKind::Actor)
-    {
-        const EditorSceneActorSnapshot* actor = ContextMenuActor();
-        if (actor == nullptr) return markup;
-        // 可见性开关只对真正持有渲染侧可见性状态的对象给出命令；相机/环境/风剖面没有这一
-        // 状态，因此与大纲行尾的眼睛同一规则：不显示条目，也不放一个点了没有反应的假条目。
-        if (SceneActorHasVisibilityToggle(actor->type))
-        {
-            markup += UiWidgets::MenuItem("context-outliner-visible",
-                {"context-outliner-visible", 0},
-                actor->visible ? "Hide in Viewport" : "Show in Viewport", false, false);
-        }
-        // mesh 的材质槽走与点击槽行完全相同的选择路由（打开 MI 文档并同步视口描边）。
-        const MaterialInstanceModelSnapshot model = MeshSceneActorModel(*actor);
-        for (size_t index = 0; index < model.materials.size(); ++index)
-        {
-            const auto& material = model.materials[index];
-            markup += UiWidgets::MenuItem("context-actor-material-" + std::to_string(index),
-                {"context-actor-material", index},
-                "Open " + (material.materialSlotName.empty()
-                    ? FileLabel(material.materialInstancePath) : material.materialSlotName),
-                false, false);
-        }
-    }
-    else if (contextMenuKind == ContextMenuKind::BlueprintClass)
-    {
-        markup += UiWidgets::MenuItem("context-class-create", {"context-class-create", 0},
-            "Create Blueprint Asset...", false, !runtimeView.scripts.available ||
-                runtimeView.scripts.state != ScriptPlayState::Editing);
-        markup += UiWidgets::MenuItem("context-class-source", {"context-class-source", 0},
-            "Open in VS Code", false, false);
-    }
-    else if (contextMenuKind == ContextMenuKind::BrowserAsset)
-    {
-        markup += UiWidgets::MenuItem("context-browser-open", {"context-browser-open", 0},
-            "Open", false, false);
-        for (const auto& asset : snapshot.modifiedDocuments)
-            if (asset.assetPath == contextMenuTarget)
-                markup += UiWidgets::MenuItem("context-browser-save", {"context-browser-save", 0},
-                    "Save...", false, false);
-    }
-    else if (contextMenuKind == ContextMenuKind::Viewport)
-    {
-        // 与视口工具条共用 SetDebugViewMode：菜单只多给出勾选状态，没有第二条 UI→renderer 路径。
-        // 条目下标就是 debug view 取值（工具条的 view mode 也这样寻址）。
-        markup += UiWidgets::MenuItem("context-view-lit", {"context-view-mode", 0},
-            "Lit", runtimeView.debugViewMode == 0, false);
-        markup += UiWidgets::MenuItem("context-view-unlit", {"context-view-mode", 1},
-            "Unlit", runtimeView.debugViewMode == 1, false);
-        markup += "<div class=\"menu-separator\"></div>";
-        markup += UiWidgets::MenuItem("context-save-all", {"context-save-all", 0},
-            "Save Modified Assets...", false, snapshot.modifiedDocuments.empty());
-    }
-    return markup;
+    Panel::ContextMenuMarkupInput input;
+    input.kind = contextMenuKind;
+    input.actor = contextMenuKind == ContextMenuKind::Actor ? ContextMenuActor() : nullptr;
+    input.target = &contextMenuTarget;
+    input.modifiedDocuments = &snapshot.modifiedDocuments;
+    input.scriptsAvailable = runtimeView.scripts.available;
+    input.scriptState = runtimeView.scripts.state;
+    input.debugViewMode = runtimeView.debugViewMode;
+    return Panel::ContextMenuItemsMarkup(input);
 }
 
 const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::ContextMenuActor() const
 {
-    if (contextMenuTarget.empty()) return nullptr;
-    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
-        if (actor.identity == contextMenuTarget) return &actor;
-    return nullptr;
+    return Panel::FindContextMenuActor(contextMenuTarget, snapshot);
 }
 
 // 只读目录（缺目录时退回旧 MI 资产列表）里查路径：既是"资产还是目录"的判据，
@@ -2997,73 +2488,32 @@ const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::ContextMenuAct
 bool MaterialInstanceAssetEditorPanel::FindCatalogAssetKind(const std::string& path,
     EditorAssetKind& kind, std::string& name) const
 {
-    if (snapshot.assetCatalog != nullptr)
-    {
-        for (const auto& asset : snapshot.assetCatalog->assets)
-        {
-            if (asset.assetPath != path) continue;
-            kind = asset.kind;
-            name = asset.name.empty() ? FileLabel(path) : asset.name;
-            return true;
-        }
-        return false;
-    }
-    for (const auto& asset : snapshot.assets)
-    {
-        if (asset.assetPath != path) continue;
-        kind = EditorAssetKind::MaterialInstance;
-        name = FileLabel(path);
-        return true;
-    }
-    return false;
+    return Panel::FindCatalogAssetKind(snapshot, path, kind, name);
 }
 
 void MaterialInstanceAssetEditorPanel::ToggleContextActorVisibility()
 {
-    if (runtimeActionSink == nullptr) return;
-    const EditorSceneActorSnapshot* actor = ContextMenuActor();
-    if (actor == nullptr)
-    {
-        // 目标只在打开菜单时存在过（World 换代、对象改名）：拒绝执行并说明原因，
-        // 不退回面板的当前选择，否则会悄悄改到另一个对象。
-        localStatus = "The context menu target is no longer in the active world.";
-        return;
-    }
-    UiAction request;
-    request.type = UiActionType::SetActorVisible;
-    request.stringValue = actor->identity;
-    request.intValue = actor->visible ? 0 : 1;
-    runtimeActionSink->RequestRuntimeAction(std::move(request));
+    Panel::ToggleContextActorVisibility(contextMenuTarget, snapshot,
+        [this](UiAction action) {
+            if (runtimeActionSink != nullptr) runtimeActionSink->RequestRuntimeAction(std::move(action));
+        },
+        localStatus);
 }
 
 void MaterialInstanceAssetEditorPanel::OpenContextActorMaterial(size_t slotIndex)
 {
-    const EditorSceneActorSnapshot* actor = ContextMenuActor();
-    if (actor == nullptr)
-    {
-        localStatus = "The context menu target is no longer in the active world.";
-        return;
-    }
-    const MaterialInstanceModelSnapshot model = MeshSceneActorModel(*actor);
-    if (slotIndex >= model.materials.size())
-    {
-        localStatus = "The context menu target no longer has that material slot.";
-        return;
-    }
-    SelectModelMaterial(model, slotIndex);
+    Panel::OpenContextActorMaterial(contextMenuTarget, slotIndex, snapshot,
+        [this](const MaterialInstanceModelSnapshot& model, size_t index) {
+            SelectModelMaterial(model, index);
+        },
+        localStatus);
 }
 
 void MaterialInstanceAssetEditorPanel::OpenContextBrowserAsset()
 {
-    const std::string path = contextMenuTarget;
-    EditorAssetKind kind = EditorAssetKind::MaterialInstance;
-    std::string name;
-    if (path.empty() || !FindCatalogAssetKind(path, kind, name))
-    {
-        localStatus = "The context menu target is no longer in the asset catalog.";
-        return;
-    }
-    OpenBrowserAsset(path);
+    Panel::OpenContextBrowserAsset(contextMenuTarget, snapshot,
+        [this](const std::string& path) { OpenBrowserAsset(path); },
+        localStatus);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshLists()
@@ -3091,326 +2541,72 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
 // 选择态与"已挂载 actor 的可见性"合成一个重挂签名：两者都只改已挂载行的
 // class/文本/眼睛图标，不改变行集合，但对 markup 是可见变化。
 // 可见性按稳定身份生成，因此名字相同但换了对象（World 换代）时签名仍然变化。
-std::string MaterialInstanceAssetEditorPanel::OutlinerMountedVisuals() const
+std::string MaterialInstanceAssetEditorPanel::OutlinerMountedVisuals()
 {
-    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
-    std::string visuals = snapshot.selectedActorIdentity + "\n" +
-        (snapshot.selectedMaterialSlotIndex
-            ? std::to_string(*snapshot.selectedMaterialSlotIndex) : std::string());
-    for (size_t index = outlinerMountedWindow.begin; index < outlinerMountedWindow.end; ++index)
-    {
-        if (index >= outlinerRows.size()) break;
-        const EditorSceneActorRow& row = outlinerRows[index];
-        if (row.isSlot || row.actorIndex >= actors.size()) continue;
-        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
-        if (!SceneActorHasVisibilityToggle(actor.type)) continue;
-        visuals += "\n" + actor.identity + (actor.visible ? "=1" : "=0");
-    }
-    return visuals;
+    return Panel::OutlinerMountedVisuals(OutlinerView());
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
 {
-    if (document == nullptr) return;
-    widgetDocument.SetClass("viewport-actor-visuals", "selected", showActorVisualization);
-    auto* surface = document->GetElementById("editor-viewport-surface");
-    if (surface == nullptr || !surface->IsVisible(true)) return;
-    const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
-    const auto& actors = OutlinerActors();
-    const EditorSceneCameraActor* view = nullptr;
-    for (const auto& actor : actors)
-        if (actor.type == EditorSceneActorType::Camera)
-        {
-            view = actor.hasViewportCamera ? &actor.viewportCamera : &actor.camera;
-            break;
-        }
-    std::string linesMarkup;
-    std::string iconsMarkup;
-    std::vector<EditorActorVisualLine> lines;
-    if (showActorVisualization && view && size.x > 0 && size.y > 0)
-    {
-        // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
-        // 网格/环境/场景风没有可投影的世界位置，不摆视口图标。
-        for (size_t index = 0; index < actors.size(); ++index)
-        {
-            const auto& actor = actors[index];
-            if (actor.type == EditorSceneActorType::Mesh ||
-                actor.type == EditorSceneActorType::Environment ||
-                actor.type == EditorSceneActorType::SceneWind)
-                continue;
-            const bool selected = actor.identity == snapshot.selectedActorIdentity;
-            if (selected && actor.visible)
-            {
-                lines = BuildActorVisualLines(actor, *view, size.x, size.y);
-                // 按未裁剪的图示拓扑挂载固定槽位；跨近面/屏幕边界只隐藏槽位，不重新布局。
-                size_t capacity = 0;
-                switch (actor.type)
-                {
-                case EditorSceneActorType::PointLight: capacity = 3 * 24; break;
-                case EditorSceneActorType::SpotLight: capacity = 2 * (32 + 4); break;
-                case EditorSceneActorType::DirectionalLight: capacity = 3; break;
-                case EditorSceneActorType::Camera: capacity = 8; break;
-                case EditorSceneActorType::SquareAreaLight: capacity = 5; break;
-                case EditorSceneActorType::Script:
-                    capacity = actor.scriptPhysics.is_null() ? 0 :
-                        actor.scriptPhysics.value("shape", "box") == "box" ? 12 : 100;
-                    break;
-                default: break;
-                }
-                for (size_t line = 0; line < capacity; ++line)
-                    linesMarkup += "<div id=\"actor-visual-line-" + std::to_string(line) +
-                        "\" class=\"actor-visual-line\"></div>";
-            }
-            // 结构只含 actor 身份/事件地址；位置与屏幕内外状态绝不能进入 markup 缓存键。
-            iconsMarkup += "<button id=\"actor-visual-icon-" + std::to_string(index) +
-                "\" class=\"actor-visual-icon\" data-generation=\"" +
-                std::to_string(actor.worldGeneration) + "\" data-action=\"viewport-actor\" data-index=\"" + std::to_string(index) +
-                "\" title=\"" + Text(actor.displayName) + "\"><img src=\"" +
-                Text(SceneActorGroupIcon(actor.type)) + "\"/></button>";
-        }
-    }
-    // RmlUi 布局失效会遍历整份编辑器文档；固定盒只更新绘制 transform/visibility，
-    // 既避免相机移动触发整页文字测量，也保留图标的指针双击目标身份。
-    SetMarkup("viewport-actor-lines", std::move(linesMarkup));
-    SetMarkup("viewport-actor-icons", std::move(iconsMarkup));
-    auto* lineLayer = document->GetElementById("viewport-actor-lines");
-    for (int index = 0; index < lineLayer->GetNumChildren(); ++index)
-    {
-        const std::string id = "actor-visual-line-" + std::to_string(index);
-        const bool visible = static_cast<size_t>(index) < lines.size();
-        widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
-        if (!visible) continue;
-        const auto& line = lines[index];
-        const Eigen::Vector2f delta = line.end - line.begin;
-        const float angle = std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f;
-        widgetDocument.SetProperty(id, "transform",
-            "translate(" + Number(line.begin.x()) + "px, " + Number(line.begin.y()) +
-            "px) rotate(" + Number(angle) + "deg) scaleX(" + Number(delta.norm()) + ")");
-    }
-    Rml::ElementList icons;
-    document->GetElementById("viewport-actor-icons")->QuerySelectorAll(icons, "[data-action=viewport-actor]");
-    for (auto* icon : icons)
-    {
-        const size_t index = icon->GetAttribute<size_t>("data-index", actors.size());
-        const bool selected = index < actors.size() && actors[index].identity == snapshot.selectedActorIdentity;
-        const std::string id = icon->GetId();
-        widgetDocument.SetClass(id, "selected", selected);
-        const auto& actor = actors[index];
-        Eigen::Vector2f pixel;
-        // Terrain 是编辑器身份，不是灯；World 里它只有 chunk mesh 根位置，
-        // 不能用默认零值的 light.position 冒充地形坐标。
-        const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
-            ? actor.camera.position
-            : (actor.type == EditorSceneActorType::Script ||
-                actor.type == EditorSceneActorType::Terrain) ? actor.position : actor.light.position;
-        const bool visible = actor.visible && view &&
-            ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
-        widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
-        if (visible)
-            widgetDocument.SetProperty(id, "transform",
-                "translate(" + Number(pixel.x() - 12) + "px, " + Number(pixel.y() - 12) + "px)");
-    }
+    Panel::RefreshActorVisualization(OutlinerView());
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshOutliner()
 {
-    // 面板可能在 RML 热重载里处于 Detach 状态，而 UiSubsystem 仍逐帧 Build：
-    // 这里必须先确认文档存在，窗口计算会直接读元素几何。
-    if (document == nullptr) return;
-    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
-    // World 换代时展开集合、搜索与选中态都不再指向同一个对象，统一回到初始状态。
-    // 排序是面板偏好，与 Content Browser 的排序键一样跨目录/换代保留。
-    const uint64_t generation = actors.empty() ? 0 : actors.front().worldGeneration;
-    if (treeWorldGeneration != generation)
-    {
-        outlinerExpansion.expandedActors.clear();
-        outlinerQuery.clear();
-        outlinerTypeFilter = "all";
-        treeWorldGeneration = generation;
-        // 换代后旧的稳定身份不再指向任何对象：已打开的右键菜单连同它的目标一起收起。
-        CloseContextMenu();
-        SetControlValue("outliner-search", std::string());
-        SetControlValue("outliner-type", outlinerTypeFilter);
-    }
-    SetControlValue("outliner-sort", SceneActorSortOrderKey(outlinerSortOrder));
-
-    // 行集合只在真正变化时重建：actor 内容签名 + 搜索/过滤/排序/展开折叠状态。
-    // 静止帧因此不重新排序，也不重新分配行标签。
-    if (OutlinerRowsNeedRebuild(actors)) RebuildOutlinerRows(actors);
-
-    // 行高先按上一帧已挂载的行实测（首帧读不到布局时保持 RCSS 兜底），
-    // 再由滚动偏移与可视高度算出本帧窗口，与 Content Browser 的 VisibleWindow 同序。
-    MeasureOutlinerRowHeight();
-    const EditorSceneActorWindow window = OutlinerWindow();
-    // 选择态不重挂 DOM：RmlUi 的双击要求两次 click 的目标节点身份保持不变。
-    const std::string visuals = OutlinerMountedVisuals();
-    if (!outlinerMounted ||
-        outlinerMountedRevision != outlinerRowsRevision ||
-        !SameSceneActorWindow(outlinerMountedWindow, window))
-    {
-        SetMarkup("scene-models", OutlinerRowsMarkup(window));
-        outlinerMounted = true;
-        outlinerMountedRevision = outlinerRowsRevision;
-        outlinerMountedWindow = window;
-        outlinerMountedVisuals = visuals;
-    }
-    else if (outlinerMountedVisuals != visuals)
-    {
-        RefreshOutlinerVisuals();
-        outlinerMountedVisuals = visuals;
-    }
-
-    // 计数只统计 actor；展开的材质槽不增加 actor 数。
-    size_t visibleActors = 0;
-    for (const EditorSceneActorRow& row : outlinerRows)
-        if (!row.isSlot) ++visibleActors;
-    const size_t total = actors.size();
-    SetMarkup("outliner-count", Text(visibleActors == total
-        ? ActorCountLabel(total)
-        : std::to_string(visibleActors) + " / " + ActorCountLabel(total)));
-    const std::string emptyMessage = outlinerRows.empty()
-        ? (total == 0 ? "No actors in the active world."
-                      : "No actors match the current filter.")
-        : std::string();
-    SetMarkup("outliner-empty", Text(emptyMessage));
-    // 空状态时收起树容器：flex:1 的空容器会把提示文字顶到面板底部。
-    widgetDocument.SetProperty("outliner-empty", "display",
-        emptyMessage.empty() ? "none" : "block");
-    widgetDocument.SetProperty("scene-models", "display",
-        emptyMessage.empty() ? "block" : "none");
+    Panel::RefreshOutlinerView(OutlinerView());
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshOutlinerVisuals()
 {
-    const auto& actors = OutlinerActors();
-    Rml::Element* list = document->GetElementById("scene-models");
-    size_t rowIndex = outlinerMountedWindow.begin;
-    for (int index = 0; index < list->GetNumChildren(); ++index)
-    {
-        Rml::Element* element = list->GetChild(index);
-        if (!element->IsClassSet("tree-row") || rowIndex >= outlinerRows.size()) continue;
-        const auto& row = outlinerRows[rowIndex++];
-        const auto& actor = actors[row.actorIndex];
-        const bool selected = actor.identity == snapshot.selectedActorIdentity &&
-            (!row.isSlot || snapshot.selectedMaterialSlotIndex == row.materialSlotIndex);
-        auto* label = element->QuerySelector(".list-item");
-        if (label && label->IsClassSet("selected") != selected) label->SetClass("selected", selected);
-        if (row.isSlot || !SceneActorHasVisibilityToggle(actor.type)) continue;
-        if (element->IsClassSet("hidden-row") != !actor.visible)
-            element->SetClass("hidden-row", !actor.visible);
-        auto* eye = element->QuerySelector("[data-action=outliner-visible]");
-        if (!eye) continue;
-        if (eye->IsClassSet("alternate") == !actor.visible) continue;
-        eye->SetClass("alternate", !actor.visible);
-        const std::string hint = actor.visible ? "Hide in viewport" : "Show in viewport";
-        eye->SetAttribute("title", hint);
-        eye->SetAttribute("aria-label", hint);
-        eye->GetChild(0)->SetAttribute("src", actor.visible ? "icons/eye.png" : "icons/eye-off.png");
-    }
+    Panel::RefreshOutlinerVisuals(OutlinerView());
 }
 
 bool MaterialInstanceAssetEditorPanel::OutlinerRowsNeedRebuild(
-    const std::vector<EditorSceneActorSnapshot>& actors) const
+    const std::vector<EditorSceneActorSnapshot>& actors)
 {
-    return SceneActorRowsSignature(actors) != outlinerRowSignature ||
-        outlinerQuery != outlinerBuiltQuery ||
-        outlinerTypeFilter != outlinerBuiltTypeFilter ||
-        outlinerSortOrder != outlinerBuiltSortOrder ||
-        !SameSceneActorExpansion(outlinerExpansion, outlinerBuiltExpansion);
+    return Panel::OutlinerRowsNeedRebuild(OutlinerView(), actors);
 }
 
 void MaterialInstanceAssetEditorPanel::RebuildOutlinerRows(
     const std::vector<EditorSceneActorSnapshot>& actors)
 {
-    outlinerRows = BuildSceneActorRows(
-        actors, outlinerQuery, outlinerTypeFilter, outlinerSortOrder, outlinerExpansion);
-    outlinerRowSignature = SceneActorRowsSignature(actors);
-    outlinerBuiltQuery = outlinerQuery;
-    outlinerBuiltTypeFilter = outlinerTypeFilter;
-    outlinerBuiltSortOrder = outlinerSortOrder;
-    outlinerBuiltExpansion = outlinerExpansion;
-    ++outlinerRowsRevision;
+    Panel::RebuildOutlinerRows(OutlinerView(), actors);
 }
 
-EditorSceneActorWindow MaterialInstanceAssetEditorPanel::OutlinerWindow() const
-{    auto* list = document->GetElementById("scene-models");
-    const auto& box = list->GetBox();
-    const float paddingY = box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top) +
-        box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Bottom);
-    const float clientHeight = list->GetClientHeight() - paddingY;
-    const float scroll = list->GetScrollTop() -
-        box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top);
-    return ComputeSceneActorWindow(
-        outlinerRows.size(), clientHeight, scroll, outlinerRowHeight);
+EditorSceneActorWindow MaterialInstanceAssetEditorPanel::OutlinerWindow()
+{
+    return Panel::OutlinerWindow(OutlinerView());
 }
 
 // 树行高度由 RCSS 统一决定（.tree-row 的内容是 .tree-toggle 与 .list-item），
 // 这里读已挂载行的 margin box 校正兜底值——正如 Content Browser 读首个可见条目。
 // 首帧或刚替换的 DOM 还没有布局，读到 0 时保持上一次的值。
 void MaterialInstanceAssetEditorPanel::MeasureOutlinerRowHeight(){
-    if (document == nullptr) return;
-    auto* list = document->GetElementById("scene-models");
-    for (int index = 0; index < list->GetNumChildren(); ++index)
-    {
-        Rml::Element* child = list->GetChild(index);
-        if (!child->IsClassSet("tree-row")) continue;
-        const auto measured = child->GetBox().GetSize(Rml::BoxArea::Margin);
-        if (measured.y > 0.0f) outlinerRowHeight = measured.y;
-        return;
-    }
+    Panel::MeasureOutlinerRowHeight(OutlinerView());
 }
 
 // 只把窗口内的行挂进 DOM，上下各一个 spacer 保留未挂载行的高度：
 // 滚动范围因此与整棵树一致，"窗口化"不等于"截断到前 N 行"。
 std::string MaterialInstanceAssetEditorPanel::OutlinerRowsMarkup(
-    const EditorSceneActorWindow& window) const
+    const EditorSceneActorWindow& window)
 {
-    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
-    std::string markup;
-    if (window.top > 0.0f)
-        markup += "<div class=\"outliner-spacer\" style=\"height: " +
-            std::to_string(window.top) + "px;\"></div>";
-    for (size_t index = window.begin; index < window.end && index < outlinerRows.size(); ++index)
-    {
-        const EditorSceneActorRow& row = outlinerRows[index];
-        if (row.actorIndex >= actors.size()) continue;
-        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
-        const bool selected = actor.identity == snapshot.selectedActorIdentity;
-        if (row.isSlot)
-        {
-            markup += UiWidgets::TreeRow(OutlinerSlotRow(row.actorIndex, row.slotIndex, row.label,
-                selected && snapshot.selectedMaterialSlotIndex == row.materialSlotIndex));
-            continue;
-        }
-        markup += UiWidgets::TreeRow(OutlinerActorRow(row.actorIndex, actor, selected,
-            row.expanded, row.hasChildren));
-    }
-    if (window.bottom > 0.0f)
-        markup += "<div class=\"outliner-spacer\" style=\"height: " +
-            std::to_string(window.bottom) + "px;\"></div>";
-    return markup;
+    return Panel::OutlinerRowsMarkup(outlinerRows, OutlinerActors(),
+        snapshot.selectedActorIdentity, snapshot.selectedMaterialSlotIndex, window);
 }
 
 const std::vector<EditorSceneActorSnapshot>& MaterialInstanceAssetEditorPanel::OutlinerActors() const
 {
-    return SceneActorList(snapshot.sceneActors);
+    return Panel::OutlinerActors(snapshot);
 }
 
 const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedActor() const
 {
-    if (snapshot.selectedActorIdentity.empty()) return nullptr;
-    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
-        if (actor.identity == snapshot.selectedActorIdentity) return &actor;
-    return nullptr;
+    return Panel::FindSelectedActor(snapshot);
 }
 
 const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::PreviewWindActor() const
 {
-    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
-        if (actor.type == EditorSceneActorType::SceneWind &&
-            actor.identity == "wind|PreviewWind")
-            return &actor;
-    return nullptr;
+    return Panel::FindPreviewWindActor(snapshot);
 }
 
 void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActorSnapshot& actor)
@@ -3431,252 +2627,20 @@ void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActo
 
 void MaterialInstanceAssetEditorPanel::RefreshDetails()
 {
-    WidgetRefreshScope refresh(refreshingControls);
-    const EditorSceneActorSnapshot* actor = SelectedActor();
-    const EditorSceneActorGroupSpec* actorSpec =
-        actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
-    std::string scriptStructure;
-    if (actor && actor->type == EditorSceneActorType::Script)
-    {
-        if (actor->scriptPhysics.is_object())
-            for (const auto& joint : actor->scriptPhysics.value("constraints", nlohmann::json::array()))
-                scriptStructure += joint.at("id").get<std::string>() + ":" + joint.at("type").get<std::string>() + ";";
-        for (const auto& node : actor->scriptComponents)
-            scriptStructure += node.value("id", "root") + "|" + node.at("type").get<std::string>() +
-                "|" + node.value("parent", "") + ";";
-        for (const auto& property : actor->scriptProperties.items())
-            scriptStructure += property.key() + ":" + property.value().type_name() + ";";
-        scriptStructure += actor->scriptComponentInstanceEditable.dump();
-        scriptStructure += SceneLogicStructure(*actor);
-        for (const auto& type : runtimeView.scripts.classes)
-            if (ScriptTypeNameMatches(type, actor->scriptClass)) scriptStructure += type.at("properties").dump();
-    }
-    const std::string actorIdentity = actor == nullptr || actorSpec == nullptr
-        ? "no-actor" : std::to_string(actor->worldGeneration) + "|" +
-            actor->identity + "|" + actorSpec->key + "|" + scriptStructure;
-    if (actorDetailsIdentity != actorIdentity)
-    {
-        actorDetailsIdentity = actorIdentity;
-        SetMarkup("actor-details-content", actor != nullptr ? ActorSectionMarkup(*actor) : "");
-    }
-    RefreshActorValues(actor);
-    if (viewingJson || resourceEditorVisible)
-    {
-        for (const char* id : DocumentCommandIds)
-            SetDisabled(id, true);
-        SetMarkup("editor-notice", Text(localStatus));
-        return;
-    }
-    // 材质正文与 actor Details 分开缓存；选择对象不会重建材质输入控件。
-    const std::string identity = (snapshot.activeDocument
-            ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest
-            : "closed");
-    if (identity != detailsIdentity)
-    {
-        textureOptionsDirty = true;
-        detailsIdentity = identity;
-        std::string markup;
-        if (snapshot.activeDocument)
-        {
-            const auto& asset = *snapshot.activeDocument;
-            // General 承载当前面板没有单独展示的文档身份：MI 路径、M_ schema、摘要与 revision。
-            std::string general;
-            general += UiWidgets::PropertyInfo("MI Asset", asset.assetPath);
-            general += UiWidgets::PropertyInfo("M_ schema", asset.baseMaterialPath);
-            general += UiWidgets::PropertyInfo("Schema digest", asset.schemaDigest);
-            general += UiWidgets::PropertyInfo("Revision", std::to_string(asset.revision));
-            markup += UiWidgets::CollapsibleSection(DetailsSectionId("general"), "general",
-                "General", general, {"section"}, IsSectionExpanded("general"));
-
-            std::string renderStates;
-            for (size_t index = 0; index < asset.renderStates.size(); ++index)
-            {
-                const auto& state = asset.renderStates[index];
-                renderStates += UiWidgets::PropertyRow(state.name,
-                    UiWidgets::Select("state-" + std::to_string(index), {"state", index},
-                        RenderStateOptions(state.name)),
-                    "reset-state-" + std::to_string(index), {"reset-state", index});
-            }
-            markup += UiWidgets::CollapsibleSection(DetailsSectionId("render-states"), "render-states",
-                "Render States", renderStates, {"section"}, IsSectionExpanded("render-states"));
-
-            std::string parameters;
-            for (size_t index = 0; index < asset.parameters.size(); ++index)
-            {
-                const auto& parameter = asset.parameters[index];
-                std::vector<UiWidgets::NumericComponent> components;
-                const bool color = parameter.type == EditorParameterType::Color;
-                for (uint32_t component = 0; component < parameter.effectiveValue.ComponentCount(); ++component)
-                {
-                    static const char* names[] = {"X", "Y", "Z", "W"};
-                    const auto& channel = parameter.channels[component];
-                    UiWidgets::NumericComponent entry;
-                    entry.id = "parameter-" + std::to_string(index) + "-" + std::to_string(component);
-                    entry.label = channel.name.empty() ? names[component] : channel.name;
-                    entry.value = Number(parameter.effectiveValue.values[component]);
-                    entry.change = {"parameter", index, component};
-                    // HEAD 对 Color 分量不使用滑条（它走 ColorPicker4），这里保持同一分工：
-                    // 线性 RGBA 分量仍是文本输入，颜色只多一个 sRGB 读数与色块。
-                    if (!color)
-                    {
-                        const SliderRange range = ResolveSliderRange(parameter, channel,
-                            parameter.defaultValue.values[component]);
-                        entry.hasRange = true;
-                        entry.minValue = range.minValue;
-                        entry.maxValue = range.maxValue;
-                    }
-                    components.push_back(std::move(entry));
-                }
-                std::string controls;
-                if (color)
-                {
-                    controls += UiWidgets::ColorPreview("color-swatch-" + std::to_string(index),
-                        "color-hex-" + std::to_string(index),
-                        UiWidgets::MakeColorReadout(parameter.effectiveValue.values));
-                }
-                controls += UiWidgets::NumericComponents(components);
-                parameters += UiWidgets::PropertyGroup(parameter.name, controls,
-                    "reset-parameter-" + std::to_string(index), {"reset-parameter", index},
-                    parameter.description);
-            }
-            markup += UiWidgets::CollapsibleSection(DetailsSectionId("parameters"), "parameters",
-                "Parameters", parameters, {"section"}, IsSectionExpanded("parameters"));
-
-            std::string textures;
-            for (size_t index = 0; index < asset.textures.size(); ++index)
-            {
-                const auto& texture = asset.textures[index];
-                std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
-                for (const auto& candidate : snapshot.textureAssets)
-                {
-                    if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
-                        options += Option(candidate.assetPath, candidate.assetPath);
-                }
-                textures += UiWidgets::PropertyGroup(texture.slotName,
-                    UiWidgets::Select("texture-" + std::to_string(index), {"texture", index}, options),
-                    "reset-texture-" + std::to_string(index), {"reset-texture", index}, texture.description);
-            }
-            markup += UiWidgets::CollapsibleSection(DetailsSectionId("textures"), "textures",
-                "Texture Bindings", textures, {"section"}, IsSectionExpanded("textures"));
-        }
-        SetMarkup("details-content", UiWidgets::VerticalBox(markup));
-        // 新 DOM 不复用旧选择器的 markup 缓存。
-        if (snapshot.activeDocument)
-        {
-            for (size_t index = 0; index < snapshot.activeDocument->textures.size(); ++index)
-                widgetDocument.ForgetMarkup("texture-" + std::to_string(index));
-        }
-    }
-    ApplySectionState();
-    RefreshControls();
+    Panel::RefreshDetailsView(DetailsView());
 }
 
 std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
     const EditorSceneActorSnapshot& actor)
 {
-    const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(actor.type);
-    if (spec == nullptr) return std::string();
-    // 只读字段每个值都带 id：值随 World、相机或运行时命令变化时只刷新这一项，
-    // 不重建分组 DOM（重建会丢焦点与滚动位置）。
-    std::string body;
-    for (const auto& field : SceneActorEditableFields(actor))
-    {
-        if (CameraExposureField(field.property) == nullptr)
-            body += ActorPropertyRowMarkup(field);
-    }
-    for (const EditorSceneActorField& field : SceneActorFields(actor))
-        body += UiWidgets::PropertyInfo(field.label, field.value, field.id);
-    if (actor.type == EditorSceneActorType::Script)
-    {
-        body += UiWidgets::PropertyControlRow("Name",
-            UiWidgets::Input("script-blueprint-name", {"script-blueprint-name"}, actor.displayName) +
-            "<button id=\"script-blueprint-duplicate\" class=\"browser-icon\" data-action=\"script-blueprint-duplicate\" "
-            "title=\"Duplicate Blueprint\"><img src=\"icons/copy.png\"/></button>"
-            "<button id=\"script-blueprint-delete\" class=\"browser-icon\" data-action=\"script-blueprint-delete\" "
-            "title=\"Delete Blueprint\"><img src=\"icons/trash.png\"/></button>");
-        body += UiWidgets::PropertyInfo("Blueprint", actor.scriptBlueprintPath.empty() ? "(inline)" : actor.scriptBlueprintPath);
-        body += UiWidgets::CollapsibleSection("script-physics-section", "script-physics", "Physics",
-            ScriptPhysicsControls("script-", actor.scriptPhysics.is_object() ? actor.scriptPhysics : nlohmann::json::object()),
-            {"section"}, IsSectionExpanded("script-physics"));
-        if (actor.scriptSpawned) body += UiWidgets::PropertyInfo("Lifetime", "Spawned");
-        body += ScriptComponentControls(actor);
-        body += UiWidgets::PropertyControlRow("Add Component",
-            UiWidgets::Select("script-component-kind", {"script-component-kind"},
-                ScriptComponentOptions()) +
-            "<button id=\"script-component-add\" class=\"browser-icon\" data-action=\"script-component-add\" "
-            "title=\"Add component\"><img src=\"icons/plus.png\"/></button>");
-        body += UiWidgets::PropertyControlRow("Mesh Asset",
-            UiWidgets::Input("script-component-mesh", {"script-component-mesh"}, ""));
-        body += SceneLogicComponentsMarkup(actor);
-        size_t index = 0;
-        for (const auto& property : actor.scriptProperties.items())
-        {
-            const std::string id = "script-property-" + std::to_string(index);
-            const UiWidgets::WidgetAction change{"script-property", index};
-            const auto& value = property.value();
-            const auto field = ScriptPropertyField(runtimeView.scripts.classes, actor.scriptClass, property.key(), value);
-            const std::string reset = "<button id=\"script-reset-" + std::to_string(index) +
-                "\" class=\"browser-icon\" data-action=\"script-reset\" data-index=\"" +
-                std::to_string(index) + "\" title=\"Restore inherited value\"><img src=\"icons/refresh.png\"/></button>";
-            body += "<div class=\"actor-property-row\">" +
-                ScriptPropertyRow(property.key(), id, change, field, value, reset) + "</div>";
-            ++index;
-        }
-        body += UiWidgets::PropertyControlRow("New Asset",
-            UiWidgets::Input("script-asset-path", {"script-asset-path"}, "Common/Blueprints/BP_object.json") +
-            "<button id=\"script-asset-create\" class=\"browser-icon\" data-action=\"script-asset-create\" "
-            "title=\"Create Blueprint from this instance\"><img src=\"icons/save.png\"/></button>");
-    }
-    if (actor.primaryDirectionalLight) body += PrimaryDirectionalLightControls(actor);
-    const std::string key = ActorSectionKey(spec->key);
-    std::string markup = UiWidgets::CollapsibleSection(DetailsSectionId(key), key, actor.displayName, body,
-        {"section"}, IsSectionExpanded(key));
-    if (actor.type == EditorSceneActorType::Camera)
-    {
-        std::string exposure = "<div class=\"actor-property-row\">" +
-            UiWidgets::PropertyControlRow("Exposure Mode",
-            "<div class=\"horizontal-box segmented\">" +
-            UiWidgets::Button("actor-exposure-manual", {"actor-exposure-manual"}, "Manual") +
-            UiWidgets::Button("actor-exposure-auto", {"actor-exposure-auto"}, "Auto") + "</div>") + "</div>";
-        exposure += "<div id=\"actor-exposure-physical-row\">" +
-            UiWidgets::PropertyInfo("Camera EV100 (physical)", "", "actor-exposure-physical-ev") + "</div>";
-        for (const auto& field : SceneActorEditableFields(actor))
-            if (CameraExposureField(field.property) != nullptr)
-                exposure += ActorPropertyRowMarkup(field);
-        markup += UiWidgets::CollapsibleSection(DetailsSectionId("camera-exposure"),
-            "camera-exposure", "Exposure", exposure, {"section"},
-            IsSectionExpanded("camera-exposure"));
-    }
-    return markup;
+    return Panel::BuildActorSectionMarkup(actor, collapsedSections, runtimeView,
+        [this](const EditorSceneActorSnapshot& value) { return SceneLogicComponentsMarkup(value); });
 }
 
 std::string MaterialInstanceAssetEditorPanel::PrimaryDirectionalLightControls(
     const EditorSceneActorSnapshot& actor) const
 {
-    // 仓库里已经存在的两条运行时命令：SetSunIntensity 与 SetCsmCastShadows。
-    // 它们只作用于主方向光（WorldBuilder 约定：场景里第一个 directionalLight），
-    // 因此这两个控件只在这一行出现，并且不在只读字段里重复同一个值。
-    std::vector<UiWidgets::NumericComponent> components;
-    UiWidgets::NumericComponent intensity;
-    intensity.id = "actor-sun-intensity";
-    intensity.label = "Intensity";
-    intensity.value = SceneActorNumber(actor.light.intensity);
-    intensity.change = {"actor-sun-intensity", 0};
-    // 范围与运行时页的 sun 滑条一致（0..150000 lux）；滑条只影响拖动粒度，文本输入仍是精确值。
-    intensity.hasRange = true;
-    intensity.minValue = SunIntensityMin;
-    intensity.maxValue = SunIntensityMax;
-    components.push_back(std::move(intensity));
-
-    std::string markup = UiWidgets::NumericComponents(components);
-    // CSM 开关沿用运行时页的两个按钮而不是下拉：RmlUi 的 select 在程序化写值时会
-    // 自己派发 change，同一帧可能提交两次；点击只产生一个事件，语义与运行时页一致。
-    markup += UiWidgets::PropertyControlRow("Cast Shadows (CSM)",
-        UiWidgets::Button("actor-csm-enable", {"actor-csm-enable", 0}, "Enabled",
-            UiWidgets::ButtonStyle::Command, runtimeView.csmCastShadows) +
-        UiWidgets::Button("actor-csm-disable", {"actor-csm-disable", 0}, "Disabled",
-            UiWidgets::ButtonStyle::Command, !runtimeView.csmCastShadows));
-    return markup;
+    return Panel::PrimaryDirectionalLightControls(actor, runtimeView);
 }
 
 // 作者字段与模式高亮都跟随冻结快照；焦点控件（正在拖动/输入）不会被回写。
@@ -3821,15 +2785,7 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
 
 void MaterialInstanceAssetEditorPanel::ApplySectionState()
 {
-    // 展开状态只落在既有分组元素的 class 上：重建 DOM 会丢焦点和滚动位置，
-    // 而面板每帧都从冻结快照刷新，静止帧必须写 0 次属性（SetClass 自带值缓存）。
-    for (const char* key : DetailsSectionKeys)
-        widgetDocument.SetClass(DetailsSectionId(key), "collapsed", !IsSectionExpanded(key));
-    for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
-    {
-        const std::string key = ActorSectionKey(spec.key);
-        widgetDocument.SetClass(DetailsSectionId(key), "collapsed", !IsSectionExpanded(key));
-    }
+    Panel::ApplySectionStateView(widgetDocument, collapsedSections);
 }
 
 void MaterialInstanceAssetEditorPanel::ToggleSection(const std::string& key)
