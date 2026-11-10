@@ -63,6 +63,19 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rock-percentile-high", type=float, default=99.0)
     parser.add_argument("--material-uv-scale", type=float, default=16.0)
     parser.add_argument(
+        "--beach-floor-m",
+        type=float,
+        default=14.0,
+        help="land floor of this landscape (its cliff top); the beach ring "
+        "starts here",
+    )
+    parser.add_argument(
+        "--beach-width-m",
+        type=float,
+        default=30.0,
+        help="width of the coastal sand ring measured in plan view",
+    )
+    parser.add_argument(
         "--terrain-texture-root", type=Path, default=None,
         help="Megascans 打包目录；默认 <res>/Generated/Megascans/Textures/Source")
     return parser.parse_args()
@@ -130,8 +143,24 @@ def main() -> int:
 
     # 岛外的平地是 y≈0 的海面；单独一层，否则会按地形纹理渲染成陆地。
     sea_weight = 1.0 - _smoothstep(height, 0.0, 3.0)
+    # 海滩：这块 landscape 没有 0.3–10 m 的缓坡带——岛面在 14 m 处直接被
+    # 切断成 60°+ 的崖壁。因此沙层不是按绝对高度取带，而是沿“陆地边缘”
+    # 向内取固定宽度（默认 30 m）的环带，再滤掉陡坡，得到一条等宽海岸线。
+    # 崖顶高度随资产变化，`--beach-floor-m` 需要按新地形重新标定。
+    land = height > args.beach_floor_m
+    beach_cells = max(1, int(round(args.beach_width_m / max(cell, 1.0e-6))))
+    inner = land.copy()
+    for _ in range(beach_cells):
+        inner = (inner & np.roll(inner, 1, axis=0) &
+                 np.roll(inner, -1, axis=0) &
+                 np.roll(inner, 1, axis=1) &
+                 np.roll(inner, -1, axis=1))
+    beach_weight = (
+        (land & ~inner).astype(np.float64) *
+        (1.0 - _smoothstep(slope, 20.0, 40.0)) *
+        (1.0 - sea_weight))
     stack = np.stack([rock, water_weight, debris_weight, sediment_weight,
-                      sea_weight])
+                      sea_weight, beach_weight])
     covered = np.clip(stack.sum(axis=0), 0.0, 1.0)
     base = 1.0 - covered
     weights = np.stack([base] + [row for row in stack])
@@ -146,7 +175,7 @@ def main() -> int:
     normalized = (height - height_low) / max(height_high - height_low, 1e-9)
     _write_gray(height_path, normalized)
 
-    names = ("base", "rock", "water", "debris", "sediment", "sea")
+    names = ("base", "rock", "water", "debris", "sediment", "sea", "sand")
     mask_paths = {}
     for name, values in zip(names, weights):
         path = source_out / f"Layer_g_{name}.png"
@@ -161,6 +190,7 @@ def main() -> int:
         ("Scree Debris", "debris", "debris", [0.0, 1.0], [0.0, 90.0], 5.0),
         ("River Silt", "sediment", "silt", [0.0, 1.0], [0.0, 90.0], 6.0),
         ("Sea", "sea", None, [0.0, 1.0], [0.0, 90.0], 2.0),
+        ("Beach Sand", "sand", "sand", [0.0, 1.0], [0.0, 90.0], 2.0),
     ]
     megascans_root = (
         args.terrain_texture_root.resolve()
