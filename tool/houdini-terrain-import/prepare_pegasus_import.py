@@ -203,6 +203,11 @@ def _build_manifest(source: dict[str, Any], resource_root: Path) -> dict[str, An
                 raw_layer.get("uvRotation", 0.0), f"layers[{index}].uvRotation"),
             "noise": _require_number(
                 raw_layer.get("noise", 0.0), f"layers[{index}].noise"),
+            # 置换规范字段：峰峰值（米）与是否存在真实 16-bit 高度。
+            "displacementM": _require_number(
+                raw_layer.get("displacementM", 0.0),
+                f"layers[{index}].displacementM"),
+            "hasHeight": bool(raw_layer.get("hasHeight", False)),
         })
 
     mask_sum = _sample_mask_sum(masks, expected)

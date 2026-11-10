@@ -166,25 +166,35 @@ def main() -> int:
         args.terrain_texture_root.resolve()
         if args.terrain_texture_root is not None
         else resource_root / "Generated/Megascans/Textures/Source")
+    layer_meta_path = megascans_root / "layers.json"
+    layer_meta = (_load_json(layer_meta_path)
+                  if layer_meta_path.is_file() else {})
+
+    def _pbr_name(root: Path, prefix: str) -> str:
+        # ORM 是当前规范；旧资产仍可回落到 _pbr.png。
+        orm = f"{prefix}_orm.png"
+        return orm if (root / orm).is_file() else f"{prefix}_pbr.png"
+
     layers = []
     for name, key, prefix, height_range, slope_range, uv_scale in layer_specs:
         if key in ("water", "sea"):
             texture_root = water_root
             albedo, normal, pbr, height_map = (
                 "water_albedo.png", "water_normal.png",
-                "water_pbr.png", "water_height16.png")
+                _pbr_name(texture_root, "water"), "water_height16.png")
         elif (megascans_root / f"{prefix}_albedo.png").is_file():
             texture_root = megascans_root
             albedo = f"{prefix}_albedo.png"
             normal = f"{prefix}_normal.png"
-            pbr = f"{prefix}_pbr.png"
+            pbr = _pbr_name(texture_root, prefix)
             height_map = f"{prefix}_height16.png"
         else:
             texture_root = resource_root / "Generated/KiteDemo/Textures/Source"
             albedo = f"{prefix}_albedo.png"
             normal = f"{prefix}_normal.png"
-            pbr = f"{prefix}_pbr.png"
+            pbr = _pbr_name(texture_root, prefix)
             height_map = f"{prefix}_height16.png"
+        meta = layer_meta.get(prefix, {})
         layers.append({
             "name": name,
             "mask": mask_paths[key].name,
@@ -199,6 +209,8 @@ def main() -> int:
             "uvScale": uv_scale,
             "uvRotation": 0.0,
             "noise": 0.03,
+            "displacementM": float(meta.get("displacementM", 0.0)),
+            "hasHeight": bool(meta.get("hasHeight", False)),
         })
 
     source_descriptor = {

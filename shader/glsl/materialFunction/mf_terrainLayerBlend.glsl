@@ -217,9 +217,10 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     // 缺页输出中性表面（0.18 灰、roughness 0.9、几何法线）；有效页的
     // invalidPage=0，mix 的尾项严格为 0，输出与原值逐位一致。
     inputs.baseColor = mix(albedo.rgb, vec3(0.18), invalidPage);
-    inputs.roughness = mix(pbr.r, 0.9, invalidPage);
-    inputs.metallic = mix(pbr.g, 0.0, invalidPage);
-    inputs.ambientOcclusion = mix(pbr.b, 1.0, invalidPage);
+    // ORM 打包（与 UE/Substance 一致）：R=AO、G=roughness、B=metallic。
+    inputs.ambientOcclusion = mix(pbr.r, 1.0, invalidPage);
+    inputs.roughness = mix(pbr.g, 0.9, invalidPage);
+    inputs.metallic = mix(pbr.b, 0.0, invalidPage);
     inputs.opacity = 1.0;
     inputs.opacityMask = 1.0;
     inputs.normal = normalize(mix(blendedNormal, worldNormal, invalidPage));

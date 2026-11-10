@@ -180,6 +180,11 @@ struct TerrainLayerDesc
     // key 只是身份，不参与 catalog 采样；参数哈希不作为 ID（内容一改 ID 就漂移）。
     // 放在结构体末尾，保持既有聚合初始化（name/height/... 顺序）源码兼容。
     std::string key;
+    // 置换规范（documents/plan/rendering/terrain-texture-packing.md）：
+    // 位移峰峰值（米）与"是否有真实 16-bit 高度源"。置换 pass 尚未接入，
+    // 现阶段只做校验与透传，避免资产先写好字段却无法加载。
+    float displacementM = 0.0f;
+    bool hasHeight = false;
 };
 
 // 编辑器 layer paint 的绝对覆盖层。weights/opacity 按 layer-major 排列：

@@ -155,7 +155,8 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         {
             // 缺页必须用 catalog 的平均色，不能回落到 layer 0。
             albedoLayer = vec4(colorRow.rgb, 1.0);
-            pbrLayer = vec4(0.9, 0.0, 1.0, 0.0);
+            // ORM：AO=1、roughness=0.9、metallic=0。
+            pbrLayer = vec4(1.0, 0.9, 0.0, 0.0);
             normalLayer = worldNormal;
         }
         else
@@ -191,9 +192,9 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         }
         albedoLayer.rgb =
             mix(albedoLayer.rgb, colorRow.rgb, coarseBlend);
-        // pbr 约定 x=roughness / y=metallic / z=AO；缺页的中性值是
-        // roughness 0.9、metallic 0、AO 1，与 L3 的无效页一致。
-        pbrLayer = mix(pbrLayer, vec4(0.9, 0.0, 1.0, 0.0), coarseBlend);
+        // pbr 是 ORM：x=AO / y=roughness / z=metallic；缺页的中性值是
+        // AO 1、roughness 0.9、metallic 0，与 L3 的无效页一致。
+        pbrLayer = mix(pbrLayer, vec4(1.0, 0.9, 0.0, 0.0), coarseBlend);
         const vec3 blendedNormal =
             mix(normalLayer, worldNormal, coarseBlend);
         normalLayer = dot(blendedNormal, blendedNormal) > 1.0e-8

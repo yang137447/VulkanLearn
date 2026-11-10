@@ -350,6 +350,9 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 > 继续走我们自己的 6 层栈，权重由 `prepare_pegasus_4km.py` 从 Houdini 体积
 > 派生；需要更贴最终版时改的是 **Houdini 导出**（增加 mask/volume）或该脚本，
 > 不是解 UE 的 bitpack。`T_Pegasus_Landscape_Colour/AO` 只作为对齐参考。
+>
+> 贴图通道、16-bit 高度、AO 烘焙与全局图口径见
+> [地形贴图打包规范](terrain-texture-packing.md)。
 
 ### B. 散布接入（`PE_Unreal_Instances`）
 

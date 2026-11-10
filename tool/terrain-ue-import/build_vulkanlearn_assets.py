@@ -108,6 +108,9 @@ class LayerInput:
     noise: float
     uv_scale: float
     uv_rotation: float
+    # 层高度（米，峰峰值）与是否真有 16-bit 高度源；置换尚未启用时只记录。
+    displacement_m: float = 0.0
+    has_height: bool = False
 
 
 @dataclass(frozen=True)
@@ -929,6 +932,12 @@ def _build_layers(
             _fail(f"layer {name} uvScale must be positive")
         uv_rotation = _require_number(
             _first(record, "uvrotation", default=0.0), f"layer {name} uvRotation")
+        displacement_m = _require_number(
+            _first(record, "displacementm", default=0.0),
+            f"layer {name} displacementM")
+        if displacement_m < 0.0:
+            _fail(f"layer {name} displacementM must be non-negative")
+        has_height = bool(_first(record, "hasheight", default=False))
 
         layers.append(LayerInput(
             name=name,
@@ -942,6 +951,8 @@ def _build_layers(
             noise=_clean_float(noise),
             uv_scale=_clean_float(uv_scale),
             uv_rotation=_clean_float(uv_rotation),
+            displacement_m=_clean_float(displacement_m),
+            has_height=has_height,
         ))
 
     if weightmaps:
@@ -1492,6 +1503,8 @@ def _convert(
             "sourceResolution": extent,
             "avgColor": avg_color,
             "sourceSet": 0,
+            "displacementM": layer.displacement_m,
+            "hasHeight": layer.has_height,
         })
 
     albedo_json_path = _guard_output(
