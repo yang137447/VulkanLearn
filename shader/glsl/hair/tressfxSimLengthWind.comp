@@ -9,6 +9,7 @@
 // 但少了同组内 strand 的并行度。偶数边/奇数边的分组和先后顺序保持不变：
 // 每组内部的边互不共享顶点，因此组内串行与并行结果相同。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -33,9 +34,10 @@ const float TressfxClampPositionDeltaCm = 30.0;
 
 void main()
 {
-    uint guide = gl_GlobalInvocationID.x;
-    if (guide >= params.counts.y)
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= TressfxSimulationGuideCount())
         return;
+    uint guide = TressfxSimulationGuide(slot);
 
     uint pointsPerGuide = TressfxPointsPerGuide();
     uint root = guide * pointsPerGuide;

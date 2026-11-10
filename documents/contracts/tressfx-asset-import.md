@@ -342,6 +342,41 @@ renderable 缓存身份包含完整有效配置、外部资源内容摘要和需
 按封闭对象校验，未知键直接失败。全部有效数值、两条曲线、角色绑定与碰撞配置
 共同进入 renderable 行为身份；只改默认值不重新导入 ribbon 几何。
 
+### 顶层 simulationGuideCount（Follow 绑定，导入层）
+
+TF 描述符可选顶层 `simulationGuideCount`（非负整数；0 或省略 = 全部 guide）。
+它不属于 `simulationDefaults`，不参与放置或分组 overrides：几何导入期用它从
+`.tfx` 的 guide 中选出参与模拟的子集，其余 guide 作为 follow。该字段进入
+几何缓存键（`|simGuides=N`），避免不同子集复用同一份绑定数据。
+
+导入期行为：
+
+- 用最远点采样（FPS）选 N 根模拟 guide，种子取最靠近根点质心的 guide；
+  40,334 根选 2,000 根时，原始发根到最近模拟 guide 的距离为
+  均值 0.16 cm、p95 0.27 cm、最大 0.33 cm。
+- 每根原始 guide 先在根点最近的 16 根模拟 guide 中筛选，再按整根 rest 的
+  均方距离选来源；只按根点最近会把长发绑到形状差很远的 guide。
+- 逐点在来源 guide 的 rest frame 下存 offset；frame 由切线 + 每根 guide 的
+  参考轴（与切线最不平行的世界轴）构造。静止时 `guidePos + frame * offset`
+  逐点还原作者造型，40,334 根实测最大误差 2.3e-05 cm。
+- 数据保存在 `MeshSection::tressfxSimulationGuideIndices`、
+  `tressfxFollowGuideIndex`、`tressfxFollowOffset`、`tressfxGuideFrameRef`；
+  `simulationGuideCount=0` 时四个数组都为空，不增加导入内存。
+
+运行时行为（GPU backend）：
+
+- 模拟 dispatch 只覆盖 N 根 guide。新增的 simulation index SSBO 把紧凑
+  slot 映射回原始 guide；Integration/StrandLevel/VSP/LocalShape/LengthWind/
+  Collision/SdfCollide 都按同一映射取原始 guide，group 配置与 strand-level
+  数据仍按原始索引读写。
+- 参数块中 `counts.y/z` 保留完整 groom 的 guide/点总数，`windParams.y`
+  保存实际模拟 guide 数；模拟 pass 用后者做 bounds，follow 插值用前者。
+- `FollowInterpolation` 在 SdfCollide 之后、trace/渲染之前运行：模拟 guide
+  直接跳过；follow 用来源 guide 的当前逐点 frame 旋转导入期 offset，写回
+  同一份完整位置 buffer。渲染发丝数、ribbon 顶点/索引和图形绑定不变。
+- CPU 参考 backend 与 follow 绑定不兼容，加载期硬错误；`simulationGuideCount=0`
+  时上传恒等索引表，所有 pass 走同一条 slot 映射路径。
+
 ### 分组（groups）
 
 TF 描述符可选 `groups` 数组，把 `.tfx` 的 guide 划分为具名组。缺省（或不写）即无分组，
@@ -741,9 +776,12 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 9. **SdfCollide**：每根 strand 串行；跳过 `local < rootFixedPoints` 与不可移动点；
    三线性采样**有符号**距离，`distance > margin` 早退（内部点为负，因此总会处理）；
    用同一场做半步长中心差分梯度，梯度退化（平方长度 <= 1e-12）时跳过；否则
-   `position += normalize(gradient) * (margin - distance)`。梯度指向距离增大的
-   外侧，因此穿进代理内部的点会穿过表面被推到外侧。只写 current，不写
-   previous（参考 shader 的 previous 重写是注释掉的）。
+    解 `d(x)=margin` 的 Newton 步：
+    `Δx = (margin-d)·∇d / max(|∇d|², |∇d|)`。`|∇d|>=1` 时是 Newton 步；
+    `|∇d|<1` 时退回 1-Lipschitz 的归一化全量投影，避免小梯度把步长放大。
+    最后把 `|Δx|` 限制在一个 SDF 网格单元 `cellSize` 内：三线性线性化只在当前
+    单元有效。梯度指向距离增大的外侧，因此穿进代理内部的点会穿过表面被推到
+    外侧。只写 current，不写 previous。
 
 ### 运行时 SDF 碰撞（`hairCollision.mesh`）
 
@@ -839,6 +877,10 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
   代理若增长到数万顶点需要改 GPU 归约（TressFX 的 `ICMBox` 路径）。
 - 碰撞是位置投影，不重写 previous positions，因此没有摩擦、没有碰撞速度冲量，
   接触略黏；参考 shader 同样把 previous 写入注释掉了。
+- SDF 投影使用带保护的 Newton 步（见 SdfCollide）：正式 Female（48³、margin 1 cm）
+  零风静止 A/B 中，全量投影的峰值抖动 1.757–1.824 cm/frame、SDF 最大穿透
+  2.249–2.455 cm；安全 Newton 两次运行分别为峰值 0.133–0.242 cm/frame、
+  SDF 最大穿透 1.140–1.143 cm。胶囊仍使用解析最近点的全量投影。
 - 胶囊碰撞仍然存在；声明 `mesh` 不会禁用胶囊，两者在长度 pass 之后先后执行
   （胶囊先、SDF 后），重叠区域的最终位置取决于这个固定顺序。
 - 分辨率固定 48..64、作者 `cellSize` 只是目标；实际格距随域边长变化，细长
@@ -962,8 +1004,9 @@ descriptor，也不修改资产文件。编辑器毛发视口的 Reset 按钮发
   **必须给名字**（没有“全部对象”语义，与 `hair reset` 不同）。
 - 可覆盖字段（单位与作者字段一致）：`gravity`（3 个分量）、`damping`、
   `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
-  `vspCoefficient`、`vspAccelThresholdMax`。`wind` 不是可覆盖字段：它来自场景 `wind`
-  对象，`simulationDefaults.wind` 与 overrides 的 `wind` 在加载期即被拒绝。
+  `vspCoefficient`、`vspAccelThresholdMax`、`windGain`。`wind` 不是可覆盖字段：
+  它来自场景 `wind` 对象，`simulationDefaults.wind` 与 overrides 的 `wind` 在加载期
+  即被拒绝。
 - 值域按作者字段校验，**越界或非有限直接拒绝，不夹取**；`iterations` 必须是
   `[1,16]` 内的整数，`vspAccelThresholdMax` 属于 `(0,1e7]`。
 - 需要重载的字段一律拒绝并提示：`enabled`、`backend`、`rootFixedPoints`、`maxDt`、
@@ -1086,7 +1129,8 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
 显式限制：碰撞是作者解析胶囊 + 可选的有符号 SDF 代理，没有 `.tfxmesh` 解析器、
 follow hair、深度阴影、OIT、LOD；两种碰撞都只做位置投影，不修改 previous
 positions，因此没有摩擦、没有碰撞速度冲量，接触略黏且可能抖动；胶囊按作者顺序、
-SDF 在胶囊之后执行，重叠区域的最终位置取决于这个顺序。
+SDF 在胶囊之后执行，重叠区域的最终位置取决于这个顺序；SDF 投影使用带保护的
+Newton 步，不使用经验松弛系数。
 VSP 与 global shape 默认关闭，只在资产显式作者时启用；`vspCoefficient > 0` 时
 Host 才录制 VSP dispatch。VSP 阈值默认 140 cm（源默认 1.4 world m 的同量纲换算，
 不是旧的 5000 cm）。逐顶点 VSP/LocalShape 曲线数据路径已对齐（可选数组、UBO、

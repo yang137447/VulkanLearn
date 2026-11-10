@@ -6,6 +6,7 @@
 // 不缩放），不可移动点写回 InitialPos，可移动点做 Verlet 积分，再做 global shape。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSimGroupCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -60,14 +61,16 @@ vec3 TressfxInitialPosition(uint point, uint pointsPerGuide, vec3 restPos)
 
 void main()
 {
-    uint point = gl_GlobalInvocationID.x;
-    if (point >= params.counts.z)
+    uint slotPoint = gl_GlobalInvocationID.x;
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    if (slotPoint >= TressfxSimulationGuideCount() * pointsPerGuide)
         return;
 
-    uint pointsPerGuide = TressfxPointsPerGuide();
-    uint local = point % pointsPerGuide;
+    uint guide;
+    uint point = TressfxSimulationPoint(slotPoint, pointsPerGuide, guide);
+    uint local = slotPoint % pointsPerGuide;
     uint rootFixedPoints = TressfxRootFixedPoints();
-    TressfxGroupSimulationValues group = TressfxGroupSimulation(point / pointsPerGuide);
+    TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
 
     vec3 restPos = restPositions.positions[point].xyz;
     // 不可移动点整步保持在 InitialPos；可移动点只用它做 global shape 目标。

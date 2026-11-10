@@ -51,6 +51,11 @@ constexpr uint32_t PenetrationStatsBinding = 16;
 // 共用同一 buffer）。只有 Integration/StrandLevel/Vsp/LocalShape 声明。
 constexpr uint32_t GroupSimulationConfigBinding = 17;
 constexpr uint32_t GuideGroupIdBinding = 18;
+// 路线 B：模拟 slot -> 原始 guide 索引；follow 插值使用后三个。
+constexpr uint32_t SimulationGuideIndexBinding = 19;
+constexpr uint32_t FollowGuideIndexBinding = 20;
+constexpr uint32_t FollowOffsetBinding = 21;
+constexpr uint32_t FollowFrameRefBinding = 22;
 
 // 每个对象需要 GuideSimulationPassCount * GuideSimulationParamBufferCount
 // 个 set（9 * 2 = 18），外加 2 个 reset/换基首轮 Integration set；按 64 预留，
@@ -58,7 +63,7 @@ constexpr uint32_t GuideGroupIdBinding = 18;
 constexpr uint32_t DescriptorSetsPerPool = 64;
 // SdfSplat 是单个 set 的峰值：代理顶点/索引/距离网格/代理影响流/palette 共
 // 5 个 SSBO（Collision 只有 current + colliders，SdfCollide 只有 current + grid）。
-constexpr uint32_t StorageBuffersPerSet = 10;
+constexpr uint32_t StorageBuffersPerSet = 12;
 constexpr uint32_t UniformBuffersPerSet = 2;
 
 struct PassBinding
@@ -85,6 +90,7 @@ constexpr PassBinding IntegrationBindings[] = {
     {SkinningPaletteBinding, vk::DescriptorType::eStorageBuffer},
     {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
     {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding StrandLevelBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -96,6 +102,7 @@ constexpr PassBinding StrandLevelBindings[] = {
     {SkinningPaletteBinding, vk::DescriptorType::eStorageBuffer},
     {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
     {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding VspBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -104,6 +111,7 @@ constexpr PassBinding VspBindings[] = {
     {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
     {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
     {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding LocalShapeBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -112,18 +120,21 @@ constexpr PassBinding LocalShapeBindings[] = {
     {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
     {GroupSimulationConfigBinding, vk::DescriptorType::eStorageBuffer},
     {GuideGroupIdBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding LengthWindBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
     {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {RestLengthsBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding CollisionBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
     {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {CollidersBinding, vk::DescriptorType::eStorageBuffer},
     {PenetrationStatsBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding SdfClearBindings[] = {
     {SdfParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -144,6 +155,14 @@ constexpr PassBinding SdfCollideBindings[] = {
     {SdfParamsBinding, vk::DescriptorType::eUniformBuffer},
     {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
     {PenetrationStatsBinding, vk::DescriptorType::eStorageBuffer},
+    {SimulationGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding FollowInterpolationBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {FollowGuideIndexBinding, vk::DescriptorType::eStorageBuffer},
+    {FollowOffsetBinding, vk::DescriptorType::eStorageBuffer},
+    {FollowFrameRefBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding SkinningBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -172,6 +191,8 @@ constexpr PassDefinition PassDefinitions[] = {
         static_cast<uint32_t>(std::size(SdfSplatBindings))},
     {"hair/tressfxSimSdfCollide", SdfCollideBindings,
         static_cast<uint32_t>(std::size(SdfCollideBindings))},
+    {"hair/tressfxSimFollowInterpolation", FollowInterpolationBindings,
+        static_cast<uint32_t>(std::size(FollowInterpolationBindings))},
 };
 static_assert(std::size(PassDefinitions) == VL::Hair::GuideSimulationPassCount,
     "PassDefinitions must cover every GuideSimulationPass in order");
@@ -183,6 +204,10 @@ constexpr bool PassUsesSdf(VL::Hair::GuideSimulationPass pass)
     return pass == VL::Hair::GuideSimulationPass::SdfClear ||
         pass == VL::Hair::GuideSimulationPass::SdfSplat ||
         pass == VL::Hair::GuideSimulationPass::SdfCollide;
+}
+constexpr bool PassUsesFollow(VL::Hair::GuideSimulationPass pass)
+{
+    return pass == VL::Hair::GuideSimulationPass::FollowInterpolation;
 }
 
 // dispatch 前：上一帧 vertex shader 读过 current positions，本帧 compute 要写同一 buffer。
@@ -781,7 +806,7 @@ void HairSimulationPass::CreateObjectDescriptors(
     // vulkan-hpp 的 setBufferInfo 只保存指针（ArrayProxyNoTemporaries），因此
     // DescriptorBufferInfo 必须比 UpdateDescriptorSets 活得更久；这里按
     // [frame slot][binding] 放在函数级数组里，元素地址稳定。
-    std::array<std::array<vk::DescriptorBufferInfo, GuideGroupIdBinding + 1>,
+    std::array<std::array<vk::DescriptorBufferInfo, FollowFrameRefBinding + 1>,
         GuideSimulationParamBufferCount>
         bindingInfos{};
     // reset 首轮 Integration 的 binding 0 换成独立参数块，其余 binding 与正常
@@ -791,7 +816,7 @@ void HairSimulationPass::CreateObjectDescriptors(
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
         resetParamInfos[slot] = object.GetTressfxResetParamsInfo(slot);
-        std::array<vk::DescriptorBufferInfo, GuideGroupIdBinding + 1>& infos =
+        std::array<vk::DescriptorBufferInfo, FollowFrameRefBinding + 1>& infos =
             bindingInfos[slot];
         infos[ParamsBinding] = object.GetTressfxParamsInfo(slot);
         infos[CurrentPositionsBinding] = object.GetTressfxPositionInfo();
@@ -817,15 +842,24 @@ void HairSimulationPass::CreateObjectDescriptors(
         infos[GroupSimulationConfigBinding] =
             object.GetTressfxGuideGroupConfigInfo(slot);
         infos[GuideGroupIdBinding] = object.GetTressfxGuideGroupIdInfo();
+        infos[SimulationGuideIndexBinding] =
+            object.GetTressfxSimulationGuideInfo();
+        infos[FollowGuideIndexBinding] = object.GetTressfxFollowGuideInfo();
+        infos[FollowOffsetBinding] = object.GetTressfxFollowOffsetInfo();
+        infos[FollowFrameRefBinding] = object.GetTressfxFollowFrameRefInfo();
     }
 
     const bool hasSdfCollision = object.HasTressfxSdfCollision();
+    const bool hasFollowBinding = object.HasTressfxFollowBinding();
     std::vector<vk::WriteDescriptorSet> writes;
     for (uint32_t pass = 0; pass < GuideSimulationPassCount; ++pass)
     {
         // 未声明 collision.mesh 的对象没有 SDF buffer；Sdf* pass 的 set 保持
         // 空句柄，Host 也不会录制这三个 dispatch。
         if (!hasSdfCollision && PassUsesSdf(static_cast<VL::Hair::GuideSimulationPass>(pass)))
+            continue;
+        if (!hasFollowBinding &&
+            PassUsesFollow(static_cast<VL::Hair::GuideSimulationPass>(pass)))
             continue;
         const PassDefinition& definition = PassDefinitions[pass];
         const vk::DescriptorPool pool =
@@ -921,6 +955,11 @@ void HairSimulationPass::CreateObjectDescriptors(
             object.GetTressfxGuideGroupConfigInfo(slot).buffer;
     }
     descriptors.guideGroupIds = object.GetTressfxGuideGroupIdInfo().buffer;
+    descriptors.simulationGuides =
+        object.GetTressfxSimulationGuideInfo().buffer;
+    descriptors.followGuide = object.GetTressfxFollowGuideInfo().buffer;
+    descriptors.followOffset = object.GetTressfxFollowOffsetInfo().buffer;
+    descriptors.followFrameRef = object.GetTressfxFollowFrameRefInfo().buffer;
 }
 
 HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescriptors(
@@ -978,7 +1017,12 @@ bool HairSimulationPass::MatchesObjectDescriptors(
                 object.GetTressfxGuideGroupConfigInfo(slot).buffer;
     }
     matches = matches &&
-        descriptors.guideGroupIds == object.GetTressfxGuideGroupIdInfo().buffer;
+        descriptors.guideGroupIds == object.GetTressfxGuideGroupIdInfo().buffer &&
+        descriptors.simulationGuides ==
+            object.GetTressfxSimulationGuideInfo().buffer &&
+        descriptors.followGuide == object.GetTressfxFollowGuideInfo().buffer &&
+        descriptors.followOffset == object.GetTressfxFollowOffsetInfo().buffer &&
+        descriptors.followFrameRef == object.GetTressfxFollowFrameRefInfo().buffer;
     return matches;
 }
 
@@ -1242,6 +1286,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         std::shared_ptr<RenderableObject> object;
         uint32_t guideCount = 0;
         uint32_t pointCount = 0;
+        uint32_t simulationGuideCount = 0;
         size_t drawPacketIndex = 0;
         bool ownerConflict = false;
     };
@@ -1262,9 +1307,12 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                     continue;
                 const uint32_t guideCount = object->GetTressfxGuideCount();
                 const uint32_t pointsPerGuide = object->GetTressfxPointsPerGuide();
+                const uint32_t simulationGuideCount =
+                    object->GetTressfxSimulationGuideCount();
                 // 先算完再 move：braced-init-list 从左到右求值，move 之后 object 已为空。
                 dispatches.push_back({std::move(object), guideCount,
-                    guideCount * pointsPerGuide, draw.drawPacketIndex, false});
+                    guideCount * pointsPerGuide, simulationGuideCount,
+                    draw.drawPacketIndex, false});
             }
         }
     }
@@ -1337,17 +1385,20 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         // 一次性诊断：确认 GPU backend 真正录到了多 pass dispatch，而不是静默回退。
         uint32_t totalGuides = 0;
         uint32_t totalPoints = 0;
+        uint32_t simulationGuides = 0;
         uint32_t sdfObjects = 0;
         for (const Dispatch& dispatch : dispatches)
         {
             totalGuides += dispatch.guideCount;
             totalPoints += dispatch.pointCount;
+            simulationGuides += dispatch.simulationGuideCount;
             if (dispatch.object->HasTressfxSdfCollision())
                 ++sdfObjects;
         }
         std::cout << "[TressFX] GPU guide simulation dispatch: objects="
                   << dispatches.size() << " guides=" << totalGuides
                   << " points=" << totalPoints
+                  << " simGuides=" << simulationGuides
                   << " passes=" << GuideSimulationPassCount
                   << " sdfObjects=" << sdfObjects << std::endl;
         reportedFirstDispatch = true;
@@ -1552,7 +1603,8 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             false,
             Eigen::Matrix4f::Identity(),
             false,
-            hairDraw.model);
+            hairDraw.model,
+            dispatch.simulationGuideCount);
         // motion.w 的 bit2：Integration/StrandLevel 是否读取逐 strand 多骨权重。
         // 没有 pose/palette 的帧回退单根骨矩阵，避免读到全零 palette。
         if (!skinning.strandBones.empty() && jointMatrices && !jointMatrices->empty())
@@ -1583,11 +1635,16 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         const bool sdfDomainValid = object.HasTressfxSdfCollision() &&
             object.WriteTressfxSdfParams(state.frameContext.skinningMatrix, jointMatrices,
                 frameSlot);
+        const uint32_t simulationPointCount =
+            dispatch.simulationGuideCount * object.GetTressfxPointsPerGuide();
         const uint32_t vertexGroupCount =
-            (dispatch.pointCount + GuideSimulationWorkgroupSize - 1) /
+            (simulationPointCount + GuideSimulationWorkgroupSize - 1) /
             GuideSimulationWorkgroupSize;
         const uint32_t strandGroupCount =
-            (dispatch.guideCount + GuideSimulationWorkgroupSize - 1) /
+            (dispatch.simulationGuideCount + GuideSimulationWorkgroupSize - 1) /
+            GuideSimulationWorkgroupSize;
+        const uint32_t followGroupCount =
+            (dispatch.pointCount + GuideSimulationWorkgroupSize - 1) /
             GuideSimulationWorkgroupSize;
         // trace 元数据里的 dispatch 数只统计该对象的 pass；RecordPass 内部累加。
         uint32_t objectDispatchCount = 0;
@@ -1651,6 +1708,12 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                     state.sets[PassIndex(GuideSimulationPass::SdfCollide)][frameSlot],
                     strandGroupCount, anyDispatch, objectDispatchCount);
         }
+        // 路线 B：follow 在全部 guide 模拟完成后重建到同一份 40k 位置 buffer。
+        if (object.HasTressfxFollowBinding())
+            RecordPass(commandBuffer,
+                GuideSimulationPass::FollowInterpolation,
+                state.sets[PassIndex(GuideSimulationPass::FollowInterpolation)][frameSlot],
+                followGroupCount, anyDispatch, objectDispatchCount);
 
         if (traceThisObject)
             traceInfo.dispatchCount = objectDispatchCount;

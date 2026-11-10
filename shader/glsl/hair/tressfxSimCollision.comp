@@ -7,6 +7,7 @@
 // - 固定点跳过：不可移动点在 integration pass 写 w = 0。
 // - 胶囊按作者顺序逐个应用，重叠区域结果取决于该顺序。
 #include "tressfxSimCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -28,9 +29,10 @@ layout(set = 0, binding = 16, std430) buffer PenetrationStats
 
 void main()
 {
-    uint guide = gl_GlobalInvocationID.x;
-    if (guide >= params.counts.y)
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= TressfxSimulationGuideCount())
         return;
+    uint guide = TressfxSimulationGuide(slot);
 
     uint pointsPerGuide = TressfxPointsPerGuide();
     uint root = guide * pointsPerGuide;

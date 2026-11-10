@@ -9,6 +9,7 @@
 // `GlobalVertexIndex - 1`（首根 strand 会越界）；作者资产使用 >= 2。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSimGroupCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -29,9 +30,10 @@ layout(set = 0, binding = 6, std430) readonly buffer StrandLevelData
 
 void main()
 {
-    uint guide = gl_GlobalInvocationID.x;
-    if (guide >= params.counts.y)
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= TressfxSimulationGuideCount())
         return;
+    uint guide = TressfxSimulationGuide(slot);
 
     TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
     // 标量为 0 但作者数组存在时仍要逐点求解；只有两者都缺席才整体关闭。

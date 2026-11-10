@@ -7,6 +7,7 @@
 // 与位置同步，避免 VSP 引入虚假速度。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSimGroupCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -27,17 +28,18 @@ layout(set = 0, binding = 6, std430) readonly buffer StrandLevelData
 
 void main()
 {
-    uint point = gl_GlobalInvocationID.x;
-    if (point >= params.counts.z)
+    uint slotPoint = gl_GlobalInvocationID.x;
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    if (slotPoint >= TressfxSimulationGuideCount() * pointsPerGuide)
         return;
 
-    uint pointsPerGuide = TressfxPointsPerGuide();
-    uint local = point % pointsPerGuide;
+    uint guide;
+    uint point = TressfxSimulationPoint(slotPoint, pointsPerGuide, guide);
+    uint local = slotPoint % pointsPerGuide;
     // 根前缀由骨骼矩阵固定，VSP 不参与。
     if (local < TressfxRootFixedPoints())
         return;
 
-    uint guide = point / pointsPerGuide;
     TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
     // Host 在任一组 vspCoefficient > 0 时录制本 pass；系数为 0 的组逐组早退。
     if (group.vspCoefficient <= 0.0)

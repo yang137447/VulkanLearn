@@ -146,7 +146,8 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     bool resetPositions = false,
     Eigen::Matrix4f historyToCurrentLocal = Eigen::Matrix4f::Identity(),
     bool rebaseOnly = false,
-    Eigen::Matrix4f hairModel = Eigen::Matrix4f::Identity())
+    Eigen::Matrix4f hairModel = Eigen::Matrix4f::Identity(),
+    uint32_t simulationGuideCount = 0)
 {
     GuideSimulationParams params;
     const Eigen::Matrix3f worldToHair = hairModel.block<3, 3>(0, 0).inverse();
@@ -196,6 +197,11 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     // 现算 beta；段长和发丝质量已在系数推导中约掉。
     params.windParams.x() = TressfxHairDragRatePerSpeed(
         config.windGain, config.strandRadius);
+    // 路线 B：counts.y/z 仍是完整 groom 的 guide/点总数（follow 插值按它取
+    // 全量），windParams.y 是实际参与模拟的 guide 数。模拟 pass 用后者做
+    // bounds 与 slot→原始 guide 映射；0 表示全部参与模拟。
+    params.windParams.y() = static_cast<float>(
+        simulationGuideCount > 0 ? simulationGuideCount : guideCount);
     return params;
 }
 

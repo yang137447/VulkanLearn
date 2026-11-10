@@ -1042,6 +1042,20 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             loadPlan.strandRadius <= 0.0f)
             throw std::runtime_error("TressFX strandRadius must be finite and positive: " +
                 std::string(meshAssetPath));
+        // 顶层 simulationGuideCount 只控制模拟子集，不改变 .tfx 或渲染发丝数。
+        // 0 / 缺省 = 全部 guide 参与模拟；具体上界在读取 .tfx 后校验。
+        if (effectiveMeshAssetJson.contains("simulationGuideCount"))
+        {
+            const auto& value = effectiveMeshAssetJson.at("simulationGuideCount");
+            if (!value.is_number_integer() || value.is_number_float() ||
+                value.get<int64_t>() < 0 ||
+                value.get<int64_t>() > std::numeric_limits<uint32_t>::max())
+                throw std::runtime_error(
+                    "TressFX simulationGuideCount must be a non-negative integer: " +
+                    std::string(meshAssetPath));
+            loadPlan.tressfxSimulationGuideCount =
+                static_cast<uint32_t>(value.get<int64_t>());
+        }
         // 阻力的质量归一化需要半径；把它随已校验的 simulation 配置带进运行时。
         loadPlan.tressfxSimulation.strandRadius = loadPlan.strandRadius;
         if (std::filesystem::path(loadPlan.modelDataPath).extension() != ".tfx" ||
@@ -1055,7 +1069,8 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             effectiveMeshAssetJson, meshAssetPath);
         std::ostringstream identity;
         // 几何身份只含几何输入；默认值变更在 renderable 有效配置键中体现。
-        identity << "|tressfx-geometry-v2|radius=" << std::hexfloat << loadPlan.strandRadius;
+        identity << "|tressfx-geometry-v2|radius=" << std::hexfloat << loadPlan.strandRadius
+                 << "|simGuides=" << std::dec << loadPlan.tressfxSimulationGuideCount;
         loadPlan.modelCacheKey += identity.str();
         if (!loadPlan.tressfxGuideGroups.empty())
             loadPlan.tressfxGroupBindingKey =

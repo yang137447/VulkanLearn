@@ -178,6 +178,15 @@ RenderableObject::RenderableObject(
             section.vertices.size() == pointCount * 2)
         {
             tressfxGuideCount = static_cast<uint32_t>(pointCount / pointsPerGuide);
+            tressfxHasFollowBinding =
+                !section.tressfxSimulationGuideIndices.empty();
+            tressfxSimulationGuideCount = tressfxHasFollowBinding
+                ? static_cast<uint32_t>(section.tressfxSimulationGuideIndices.size())
+                : tressfxGuideCount;
+            if (tressfxHasFollowBinding &&
+                tressfxSimulationConfig.backend != TressfxSimulationBackend::Gpu)
+                throw std::runtime_error(
+                    "TressFX follow binding requires the GPU backend: " + name);
             tressfxPointsPerGuide = section.tressfxPointsPerStrand;
             std::string groupError;
             if (!VL::Hair::ValidateTressfxGroupPreviewBinding(
@@ -884,6 +893,55 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     const vk::DeviceSize positionBytes =
         static_cast<vk::DeviceSize>(pointCount) * sizeof(Eigen::Vector4f);
 
+    // 路线 B：模拟 dispatch 的紧凑 guide 索引。没有 follow 数据时上传
+    // 0..guideCount-1 的恒等表，shader 因此可以无条件走 slot 映射。
+    std::vector<uint32_t> simulationGuides(tressfxGuideCount);
+    for (uint32_t guide = 0; guide < tressfxGuideCount; ++guide)
+        simulationGuides[guide] = guide;
+    if (tressfxHasFollowBinding)
+        simulationGuides = section.tressfxSimulationGuideIndices;
+    const vk::DeviceSize simulationGuideBytes =
+        static_cast<vk::DeviceSize>(simulationGuides.size()) * sizeof(uint32_t);
+    std::tie(tressfxSimulationGuideBuffer, tressfxSimulationGuideMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(*rendererBackend,
+            simulationGuides.data(), simulationGuideBytes,
+            "TressFXSimulationGuides: " + name);
+    tressfxSimulationGuideInfo.setBuffer(tressfxSimulationGuideBuffer)
+        .setOffset(0).setRange(simulationGuideBytes);
+
+    if (tressfxHasFollowBinding)
+    {
+        const vk::DeviceSize followGuideBytes =
+            static_cast<vk::DeviceSize>(section.tressfxFollowGuideIndex.size()) *
+            sizeof(uint32_t);
+        std::tie(tressfxFollowGuideBuffer, tressfxFollowGuideMemory) =
+            CreateUploadedDeviceLocalStorageBuffer(*rendererBackend,
+                section.tressfxFollowGuideIndex.data(), followGuideBytes,
+                "TressFXFollowGuideIndex: " + name);
+        tressfxFollowGuideInfo.setBuffer(tressfxFollowGuideBuffer)
+            .setOffset(0).setRange(followGuideBytes);
+
+        const vk::DeviceSize followOffsetBytes =
+            static_cast<vk::DeviceSize>(section.tressfxFollowOffset.size()) *
+            sizeof(Eigen::Vector4f);
+        std::tie(tressfxFollowOffsetBuffer, tressfxFollowOffsetMemory) =
+            CreateUploadedDeviceLocalStorageBuffer(*rendererBackend,
+                section.tressfxFollowOffset.data(), followOffsetBytes,
+                "TressFXFollowOffsets: " + name);
+        tressfxFollowOffsetInfo.setBuffer(tressfxFollowOffsetBuffer)
+            .setOffset(0).setRange(followOffsetBytes);
+
+        const vk::DeviceSize frameRefBytes =
+            static_cast<vk::DeviceSize>(section.tressfxGuideFrameRef.size()) *
+            sizeof(Eigen::Vector4f);
+        std::tie(tressfxFollowFrameRefBuffer, tressfxFollowFrameRefMemory) =
+            CreateUploadedDeviceLocalStorageBuffer(*rendererBackend,
+                section.tressfxGuideFrameRef.data(), frameRefBytes,
+                "TressFXFollowFrameRefs: " + name);
+        tressfxFollowFrameRefInfo.setBuffer(tressfxFollowFrameRefBuffer)
+            .setOffset(0).setRange(frameRefBytes);
+    }
+
     // previous positions：初值与 current 一样来自 rest；w 不用作逆质量。
     std::vector<Eigen::Vector4f> initialPoints(pointCount);
     for (size_t point = 0; point < pointCount; ++point)
@@ -1503,6 +1561,18 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxStrandLevelBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxStrandLevelBuffer, tressfxStrandLevelMemory);
+        if (tressfxSimulationGuideBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxSimulationGuideBuffer, tressfxSimulationGuideMemory);
+        if (tressfxFollowGuideBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxFollowGuideBuffer, tressfxFollowGuideMemory);
+        if (tressfxFollowOffsetBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxFollowOffsetBuffer, tressfxFollowOffsetMemory);
+        if (tressfxFollowFrameRefBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxFollowFrameRefBuffer, tressfxFollowFrameRefMemory);
         for (auto& target : tressfxColliderTargets)
         {
             if (target.mapped)
@@ -1599,6 +1669,14 @@ void RenderableObject::DestroyTressfxBuffers()
     tressfxRestLengthMemory = nullptr;
     tressfxStrandLevelBuffer = nullptr;
     tressfxStrandLevelMemory = nullptr;
+    tressfxSimulationGuideBuffer = nullptr;
+    tressfxSimulationGuideMemory = nullptr;
+    tressfxFollowGuideBuffer = nullptr;
+    tressfxFollowGuideMemory = nullptr;
+    tressfxFollowOffsetBuffer = nullptr;
+    tressfxFollowOffsetMemory = nullptr;
+    tressfxFollowFrameRefBuffer = nullptr;
+    tressfxFollowFrameRefMemory = nullptr;
     tressfxColliderBuffer = nullptr;
     tressfxColliderMemory = nullptr;
     tressfxSdfGridBuffer = nullptr;
