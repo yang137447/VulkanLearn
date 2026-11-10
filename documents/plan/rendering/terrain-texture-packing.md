@@ -144,6 +144,19 @@ ao = 1 - mean(occlusion)
 2. 没有 16-bit 高度的层不开位移（`displacementM = 0`）；
 3. 全局图与 tiling 图的色彩空间不能混（只有 albedo/colour 是 sRGB）。
 
+### 6.1 层权重来源（沙滩）
+
+沙层权重**不按高度阈值猜**，直接取 Houdini / UE 导出的 `T_Terrain_IDMAP.png`：
+打包层 ID `0x88` 就是项目的默认沙层，占 45.1%，与 baked colour 的米色平原
+完全吻合。`prepare_pegasus_4km.py --beach-id-map` 只把这个 ID 读成权重，
+**不是**把 UE 的 ID-map 材质管线搬进来；其余层仍由 Houdini 体积派生。
+
+证据：按 ID 值统计 colour 图均值，`0x88` → `(0.914, 0.730, 0.449)`（沙），
+`0x00/0x11/0xCC/0xDD` → `(0.47–0.51, 0.50–0.54, 0.10)`（草），
+`0x55/0x44/0x99/0x22` → 深棕（土壤/石南）。
+
+没有 ID 图时才退回 baked colour 的米色阈值，再退回 30 m 环带近似。
+
 ## 7. 管线入口
 
 打包：`tool/houdini-terrain-import/build_megascans_layers.py`

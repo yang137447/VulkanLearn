@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] /
                        "blender-terrain-import"))
@@ -74,6 +75,20 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=30.0,
         help="width of the coastal sand ring measured in plan view",
+    )
+    parser.add_argument(
+        "--beach-id-map",
+        type=Path,
+        default=None,
+        help="Houdini/UE exported T_Terrain_IDMAP.png; sand takes the packed "
+        "layer id 0x88 (the project's default sand layer)",
+    )
+    parser.add_argument(
+        "--beach-colour-map",
+        type=Path,
+        default=None,
+        help="Pegasus baked landscape colour PNG; when present the sand "
+        "weight is taken from its bright tan flats instead of the ring",
     )
     parser.add_argument(
         "--terrain-texture-root", type=Path, default=None,
@@ -143,22 +158,41 @@ def main() -> int:
 
     # 岛外的平地是 y≈0 的海面；单独一层，否则会按地形纹理渲染成陆地。
     sea_weight = 1.0 - _smoothstep(height, 0.0, 3.0)
-    # 海滩：这块 landscape 没有 0.3–10 m 的缓坡带——岛面在 14 m 处直接被
-    # 切断成 60°+ 的崖壁。因此沙层不是按绝对高度取带，而是沿“陆地边缘”
-    # 向内取固定宽度（默认 30 m）的环带，再滤掉陡坡，得到一条等宽海岸线。
-    # 崖顶高度随资产变化，`--beach-floor-m` 需要按新地形重新标定。
-    land = height > args.beach_floor_m
-    beach_cells = max(1, int(round(args.beach_width_m / max(cell, 1.0e-6))))
-    inner = land.copy()
-    for _ in range(beach_cells):
-        inner = (inner & np.roll(inner, 1, axis=0) &
-                 np.roll(inner, -1, axis=0) &
-                 np.roll(inner, 1, axis=1) &
-                 np.roll(inner, -1, axis=1))
-    beach_weight = (
-        (land & ~inner).astype(np.float64) *
-        (1.0 - _smoothstep(slope, 20.0, 40.0)) *
-        (1.0 - sea_weight))
+    # 沙滩：飞马岛的沙地是环绕岛屿的大片平坦沙原。权重直接取 Houdini/UE
+    # 导出的层 ID 图：0x88 是项目的默认沙层（占 45.1%，与 baked colour 的
+    # 米色区域完全吻合）。拿不到 ID 图时才退回 colour 近似 / 30 m 环带。
+    beach_weight = None
+    if args.beach_id_map is not None and args.beach_id_map.is_file():
+        with Image.open(args.beach_id_map) as image:
+            ids = np.asarray(image.convert("L"))
+        if ids.shape != (samples, samples):
+            ids = np.asarray(
+                Image.fromarray(ids).resize(
+                    (samples, samples), Image.Resampling.NEAREST))
+        beach_weight = (ids == 0x88).astype(np.float64)
+    elif (args.beach_colour_map is not None and
+          args.beach_colour_map.is_file()):
+        with Image.open(args.beach_colour_map) as image:
+            colour = image.convert("RGB").resize(
+                (samples, samples), Image.Resampling.BILINEAR)
+        rgb = np.asarray(colour, dtype=np.float64) / 255.0
+        red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+        beach_weight = np.where(
+            (red > 0.70) & (green > 0.50) & (blue > 0.30), 1.0, 0.0)
+    if beach_weight is None:
+        land = height > args.beach_floor_m
+        beach_cells = max(1, int(round(args.beach_width_m /
+                                       max(cell, 1.0e-6))))
+        inner = land.copy()
+        for _ in range(beach_cells):
+            inner = (inner & np.roll(inner, 1, axis=0) &
+                     np.roll(inner, -1, axis=0) &
+                     np.roll(inner, 1, axis=1) &
+                     np.roll(inner, -1, axis=1))
+        beach_weight = (
+            (land & ~inner).astype(np.float64) *
+            (1.0 - _smoothstep(slope, 20.0, 40.0)))
+    beach_weight = beach_weight * (1.0 - sea_weight)
     stack = np.stack([rock, water_weight, debris_weight, sediment_weight,
                       sea_weight, beach_weight])
     covered = np.clip(stack.sum(axis=0), 0.0, 1.0)
