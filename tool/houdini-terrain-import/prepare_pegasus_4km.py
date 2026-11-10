@@ -84,6 +84,15 @@ def _parse_args() -> argparse.Namespace:
         "layer id 0x88 (the project's default sand layer)",
     )
     parser.add_argument(
+        "--beach-map-rotation",
+        type=int,
+        default=270,
+        choices=(0, 90, 180, 270),
+        help="in-plane rotation (degrees, counter-clockwise) applied to the "
+        "project's baked maps before sampling; AO-vs-cavity correlation puts "
+        "the real offset at 270",
+    )
+    parser.add_argument(
         "--beach-colour-map",
         type=Path,
         default=None,
@@ -165,6 +174,8 @@ def main() -> int:
     if args.beach_id_map is not None and args.beach_id_map.is_file():
         with Image.open(args.beach_id_map) as image:
             ids = np.asarray(image.convert("L"))
+        if args.beach_map_rotation:
+            ids = np.rot90(ids, args.beach_map_rotation // 90)
         if ids.shape != (samples, samples):
             ids = np.asarray(
                 Image.fromarray(ids).resize(
@@ -173,7 +184,12 @@ def main() -> int:
     elif (args.beach_colour_map is not None and
           args.beach_colour_map.is_file()):
         with Image.open(args.beach_colour_map) as image:
-            colour = image.convert("RGB").resize(
+            colour = image.convert("RGB")
+            if args.beach_map_rotation:
+                colour = colour.rotate(
+                    args.beach_map_rotation, expand=True,
+                    resample=Image.Resampling.BILINEAR)
+            colour = colour.resize(
                 (samples, samples), Image.Resampling.BILINEAR)
         rgb = np.asarray(colour, dtype=np.float64) / 255.0
         red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]

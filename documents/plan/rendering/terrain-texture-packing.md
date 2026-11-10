@@ -157,6 +157,18 @@ ao = 1 - mean(occlusion)
 
 没有 ID 图时才退回 baked colour 的米色阈值，再退回 30 m 环带近似。
 
+### 6.2 项目 baked 贴图的平面旋转
+
+`T_Terrain_IDMAP` / `T_Pegasus_Landscape_Colour` / `AO` / `T_Terrain_wetness`
+与我们的高度图**不是同一 UV 朝向**：相对高度图旋转 **270°（逆时针）**。
+
+证据：把 `T_Pegasus_Landscape_AO` 与高度图腔体（`blur(h) - h`）做相关性，
+8 种朝向里只有 `rot270` 显著（r=0.476），其余 ≤0.04（`0°` 仅 0.0006）。
+水平翻转/90° 都不能解释，只有 270° 旋转吻合。
+
+因此 `prepare_pegasus_4km.py` 的 `--beach-map-rotation` 默认 270，在采样
+ID/colour 之前先旋转；换地形或换导出时必须重新验证该角度。
+
 ## 7. 管线入口
 
 打包：`tool/houdini-terrain-import/build_megascans_layers.py`
