@@ -7,14 +7,13 @@
     "repository": {
       "url": "https://github.com/yang137447/VulkanLearn.git",
       "provider": "github",
-      "revision": "48089dba6b5f79152944a8029b28ddc379ab35aa"
+      "revision": "ecdf011f826c9142909dc1bc295a403f66af793a"
     },
     "locale": "zh-CN",
     "quality_profile": "showcase"
   },
   "mainPath": [
     "idle",
-    "graph-ready",
     "world-ready",
     "binding-ready",
     "commit-prepped",
@@ -25,8 +24,8 @@
     {
       "id": "idle",
       "type": "start",
-      "label": "空闲",
-      "sublabel": "当前 World 正在渲染",
+      "label": "Idle",
+      "sublabel": "渲染中",
       "step": "00",
       "tag": "current",
       "sources": [
@@ -39,10 +38,10 @@
       ]
     },
     {
-      "id": "graph-ready",
+      "id": "world-ready",
       "type": "active",
-      "label": "候选图已构建",
-      "sublabel": "PreparedRenderGraphState",
+      "label": "候选就绪",
+      "sublabel": "Graph + World",
       "step": "01",
       "tag": "isolated",
       "sources": [
@@ -51,17 +50,7 @@
           "line": 193,
           "end_line": 198,
           "label": "候选图加载"
-        }
-      ]
-    },
-    {
-      "id": "world-ready",
-      "type": "active",
-      "label": "候选 World 已构建",
-      "sublabel": "WorldCandidatePreparer::Prepare",
-      "step": "02",
-      "tag": "isolated",
-      "sources": [
+        },
         {
           "path": "source/engine/worldGraphTransactionCoordinator.cpp",
           "line": 205,
@@ -73,9 +62,9 @@
     {
       "id": "binding-ready",
       "type": "active",
-      "label": "运行时绑定已准备",
-      "sublabel": "PrepareRuntimeBinding",
-      "step": "03",
+      "label": "绑定就绪",
+      "sublabel": "Bind",
+      "step": "02",
       "tag": "isolated",
       "sources": [
         {
@@ -89,9 +78,9 @@
     {
       "id": "commit-prepped",
       "type": "decision",
-      "label": "提交前校验",
-      "sublabel": "产物身份仍为当前",
-      "step": "04",
+      "label": "校验",
+      "sublabel": "通过",
+      "step": "03",
       "tag": "gate",
       "sources": [
         {
@@ -105,9 +94,9 @@
     {
       "id": "commit",
       "type": "active",
-      "label": "无抛提交",
-      "sublabel": "World / 图 / 绑定 / 管线 / 制品",
-      "step": "05",
+      "label": "提交",
+      "sublabel": "swap",
+      "step": "04",
       "tag": "atomic",
       "sources": [
         {
@@ -121,8 +110,8 @@
     {
       "id": "commit-failed",
       "type": "failure",
-      "label": "准备失败",
-      "sublabel": "live 状态未被触碰",
+      "label": "失败",
+      "sublabel": "未变",
       "tag": "terminal",
       "sources": [
         {
@@ -136,9 +125,9 @@
     {
       "id": "committed",
       "type": "success",
-      "label": "已提交",
-      "sublabel": "新代际生效，旧资源待退休",
-      "step": "06",
+      "label": "完成",
+      "sublabel": "生效",
+      "step": "05",
       "tag": "terminal",
       "sources": [
         {
@@ -152,12 +141,8 @@
   "transitions": [
     {
       "from": "idle",
-      "to": "graph-ready",
-      "label": "请求切换"
-    },
-    {
-      "from": "graph-ready",
-      "to": "world-ready"
+      "to": "world-ready",
+      "label": "切换"
     },
     {
       "from": "world-ready",
@@ -170,37 +155,37 @@
     {
       "from": "commit-prepped",
       "to": "commit",
-      "label": "校验通过"
+      "label": "通过"
     },
     {
       "from": "commit-prepped",
       "to": "commit-failed",
       "variant": "security",
-      "label": "身份已过期"
+      "label": "过期"
     },
     {
       "from": "world-ready",
       "to": "commit-failed",
       "variant": "security",
-      "label": "准备失败"
+      "label": "失败"
     },
     {
       "from": "commit",
       "to": "committed",
       "variant": "emphasis",
-      "label": "提交成功"
+      "label": "提交"
     },
     {
       "from": "commit-failed",
       "to": "idle",
       "variant": "dashed",
-      "label": "仍渲染旧 World"
+      "label": "旧 World"
     },
     {
       "from": "committed",
       "to": "idle",
       "variant": "dashed",
-      "label": "下一帧继续"
+      "label": "继续"
     }
   ],
   "cards": [
