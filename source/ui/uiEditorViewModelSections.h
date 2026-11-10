@@ -18,8 +18,8 @@
 namespace VL
 {
 
-// 大纲节。归属：UiSubsystem（它同时拥有 actor 列表、MI 模型列表与选中态）。
-// 版本源：UiSubsystem 的 outlinerRevision，只在指针替换或选中态变化时推进。
+// 大纲节。归属：EditorUiShell（它同时拥有 actor 列表、MI 模型列表与选中态）。
+// 版本源：EditorUiShell 的 outlinerRevision，只在指针替换或选中态变化时推进。
 struct UiSceneOutlinerSection
 {
     std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors;
@@ -29,7 +29,7 @@ struct UiSceneOutlinerSection
     std::optional<uint32_t> selectedMaterialSlotIndex;
 };
 
-// 资产节。归属：UiSubsystem（日志存储、JSON 资产库、缩略图库都由 GT 轮询）。
+// 资产节。归属：EditorUiShell（日志存储、JSON 资产库、缩略图库都由 GT 轮询）。
 // 载荷本身就是各库已经发布好的不可变快照；同一 revision 重复 Poll 得到同一个
 // shared_ptr，因此“N 次构建无变化”只发布一次。
 struct UiAssetsSection
@@ -100,6 +100,44 @@ public:
     }
 
     UiSectionVersions Versions() const noexcept { return VL::VersionsOf(view); }
+
+private:
+    UiSectionSlot<UiSceneOutlinerSection> sceneOutliner;
+    UiSectionSlot<UiAssetsSection> assets;
+};
+
+// 编辑器侧独立 store：只发布大纲/资产两节。运行时 UI 使用
+// UiRuntimeSectionStore，二者通过 UiSectionVersions 合并，不复制运行时载荷。
+class UiEditorSectionStore
+{
+public:
+    bool PublishSceneOutliner(UiSceneOutlinerSection value, uint64_t inputRevision)
+    {
+        return sceneOutliner.Publish(std::move(value), inputRevision);
+    }
+    bool PublishAssets(UiAssetsSection value)
+    {
+        return assets.PublishIfChanged(std::move(value));
+    }
+
+    const UiSnapshotSection<UiSceneOutlinerSection>& SceneOutliner() const noexcept
+    {
+        return sceneOutliner.Section();
+    }
+    const UiSnapshotSection<UiAssetsSection>& Assets() const noexcept
+    {
+        return assets.Section();
+    }
+
+    // 只返回编辑器两节的版本；其余位保持 0，运行时按位或合并。
+    UiSectionVersions Versions() const noexcept
+    {
+        UiSectionVersions versions;
+        versions.versions[static_cast<size_t>(UiSectionId::SceneOutliner)] =
+            SceneOutliner().version;
+        versions.versions[static_cast<size_t>(UiSectionId::Assets)] = Assets().version;
+        return versions;
+    }
 
 private:
     UiSectionSlot<UiSceneOutlinerSection> sceneOutliner;

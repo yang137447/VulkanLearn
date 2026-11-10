@@ -19,6 +19,7 @@
 #include "editor/terrain/terrainEditApply.h"
 #include "editor/terrain/terrainEditSession.h"
 #include "editor/terrain/terrainPaintSession.h"
+#include "editor/ui/editorUiShell.h"
 #include "editor/ui/materialInstanceEditorView.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/blueprintPreviewTransform.h"
@@ -145,6 +146,20 @@ RuntimeResult<void> EditorHost::Initialize(const EditorHostInit& hostInit)
     init = hostInit;
     if (init.renderSystem == nullptr)
         init.renderSystem = &RenderSystem::GetInstance();
+
+    if (init.ui != nullptr)
+    {
+        init.ui->SetEditorUiShell(nullptr);
+        uiShell.reset();
+        uiShell = std::make_unique<EditorUiShell>();
+        auto shellResult = init.ui->SetEditorUiShell(uiShell.get());
+        if (shellResult.IsFailure())
+        {
+            uiShell.reset();
+            return shellResult;
+        }
+    }
+
     consoleSink = std::make_unique<ConsoleSinkImpl>(*this);
     viewportGrid = std::make_unique<EditorViewportGrid>();
     if (init.renderSystem != nullptr)
@@ -155,6 +170,9 @@ RuntimeResult<void> EditorHost::Initialize(const EditorHostInit& hostInit)
 
 void EditorHost::Shutdown()
 {
+    if (init.ui != nullptr)
+        init.ui->SetEditorUiShell(nullptr);
+    uiShell.reset();
     ReleaseRendererResources();
     if (init.renderSystem != nullptr)
         init.renderSystem->SetEditorViewportOverlay(nullptr);
@@ -175,12 +193,12 @@ void EditorHost::ReleaseRendererResources()
 
 Editor::SceneDocumentService* EditorHost::SceneDocuments() const
 {
-    return init.ui != nullptr ? init.ui->GetSceneDocuments() : nullptr;
+    return uiShell != nullptr ? uiShell->SceneDocuments() : nullptr;
 }
 
 Editor::MaterialInstanceEditorRuntime* EditorHost::EditorRuntime() const
 {
-    return init.ui != nullptr ? init.ui->GetEditorCommandRuntime() : nullptr;
+    return uiShell != nullptr ? uiShell->EditorRuntime() : nullptr;
 }
 
 void EditorHost::WaitForRenderIdle()
@@ -255,13 +273,13 @@ bool EditorHost::ApplyUiAction(
         return ApplyScriptAuthoringAction(action, world);
     case UiActionType::TransformBlueprintPreview:
         if (world != nullptr && init.ui != nullptr &&
-            init.ui->GetEditorCommandRuntime() != nullptr &&
+            uiShell != nullptr && uiShell->EditorRuntime() != nullptr &&
             init.scripts != nullptr && init.scripts->IsEditing() &&
             init.renderSystem != nullptr &&
             !init.renderSystem->IsOfflineMode())
         {
             for (const auto& document :
-                 init.ui->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments)
+                 uiShell->EditorRuntime()->GetSnapshot().blueprintDocuments)
             {
                 if (document.assetPath == action.blueprintTransform.assetPath)
                 {
@@ -828,12 +846,13 @@ bool EditorHost::ApplyPreviewAction(const UiAction& action, World* world)
     case UiActionType::PreviewBlueprint:
     {
         // UI 只传地址和 revision；候选几何必须来自 GT 文档 owner 已接受的草稿。
-        if (init.ui == nullptr || init.ui->GetEditorCommandRuntime() == nullptr ||
+        if (init.ui == nullptr || uiShell == nullptr ||
+            uiShell->EditorRuntime() == nullptr ||
             init.scripts == nullptr || !init.scripts->IsEditing() ||
             init.renderSystem->IsOfflineMode())
             return true;
         const auto& documents =
-            init.ui->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments;
+            uiShell->EditorRuntime()->GetSnapshot().blueprintDocuments;
         bool found = false;
         for (const auto& document : documents)
             if (document.assetPath == action.stringValue &&
@@ -951,7 +970,7 @@ void EditorHost::TickThumbnails(
     if (init.ui == nullptr || init.rendererBackend == nullptr ||
         init.pipelineFactory == nullptr || init.runtimeConfig == nullptr)
         return;
-    auto* library = init.ui->GetThumbnailLibrary();
+    auto* library = uiShell != nullptr ? uiShell->ThumbnailLibrary() : nullptr;
     if (library == nullptr)
         return;
     if (thumbnailRequest && !library->IsRenderRequestCurrent(*thumbnailRequest))

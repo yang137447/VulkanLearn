@@ -14,6 +14,7 @@ namespace VL
 
 class EditorThumbnailRenderSession;
 class EditorViewportGrid;
+class EditorUiShell;
 class World;
 
 namespace Editor
@@ -93,6 +94,7 @@ private:
     EditorHostInit init;
     bool initialized = false;
 
+    std::unique_ptr<EditorUiShell> uiShell;
     std::unique_ptr<EditorViewportGrid> viewportGrid;
 
     std::unique_ptr<Editor::TerrainEditSession> terrainEditSession;
