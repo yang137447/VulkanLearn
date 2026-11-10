@@ -342,9 +342,14 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 | 项 | 现状 | 下一步 | 验收 |
 | --- | --- | --- | --- |
 | 材质贴图 | `Scree Debris` / `River Silt` / `River Bank` / `River Water` 仍是 KiteDemo + 占位水面 | 从 UE 导出 Megascans PNG，替换 `prepare_pegasus_4km.py` 里的 `layer_XX` / `water_*` 路径后重跑 split | MI 贴图路径指向 Megascans，`terrainlayer stats` 无变化 |
-| 源分辨率 | Houdini 1024² / 4 km（3.91 m/texel） | 重新导出 2048² 或 4096²，`--tile-resolution 512/1024` | 近景网格间距 ≤ 2 m；顶点内存从 27.9 MB 增至 ~112/450 MB |
+| 源分辨率 | 已按源体积原生 2017² 导出（4032 m → **2.0 m/sample**），`--tile-resolution 512` | —（已完成 2026-11-10） | 近景网格间距 1.97 m；`totalIfAllBytes≈793 MB`，俯视 LOD2 时 45.9 MB |
 | 水面 | 已改为独立水面网格 + `singleWaterLayer` pass（见 §8）；`River Water` / `Sea` 层降级为水下底色 | 后续做深度感知的吸收/岸边透明度 | 海面有菲涅尔与天空反射，海岸线不 z-fight |
 | 河岸/基岩 | `River Bank` 用 gravel 占位 | Megascans 碎石/岩壁；`bedrock` 高度层可再导出一张露头 mask | 层过渡无接缝 |
+
+> **层语义决定（2026-11-10）：** 不接入 UE 的 `T_Terrain_IDMAP.png`。地形层
+> 继续走我们自己的 6 层栈，权重由 `prepare_pegasus_4km.py` 从 Houdini 体积
+> 派生；需要更贴最终版时改的是 **Houdini 导出**（增加 mask/volume）或该脚本，
+> 不是解 UE 的 bitpack。`T_Pegasus_Landscape_Colour/AO` 只作为对齐参考。
 
 ### B. 散布接入（`PE_Unreal_Instances`）
 

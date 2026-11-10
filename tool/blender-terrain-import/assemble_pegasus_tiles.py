@@ -36,6 +36,13 @@ def _parse_args() -> argparse.Namespace:
         help="camera near clip in cm for merged scenes (default 10000; the old "
         "10 cm near plane loses depth precision at 4 km and z-fights the sea)",
     )
+    parser.add_argument(
+        "--camera-far-clip-cm",
+        type=float,
+        default=6000000.0,
+        help="camera far clip in cm for merged scenes (default 60 km so the "
+        "100 km sea plane reaches past the top of the frame)",
+    )
     return parser.parse_args()
 
 
@@ -202,7 +209,9 @@ def main() -> int:
                 obj["position"] = [0.0, span_cm * 0.75, span_cm * 1.6]
                 obj["rotation"] = [-25.0, 0.0, 0.0]
             obj["far_clip"] = max(
-                float(obj.get("far_clip", 0.0)), span_cm * 3.0)
+                float(obj.get("far_clip", 0.0)),
+                span_cm * 3.0,
+                args.camera_far_clip_cm)
     merged = {
         "name": "SC_terrain_pegasus_4x4",
         "type": "scene",

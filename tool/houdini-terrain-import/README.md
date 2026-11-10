@@ -19,6 +19,53 @@ Houdini heightfield + masks
 > 1.28，属于结构差异而非参数差异）。当前出货路径是**直接接入 Houdini
 > 4 km 导出**，见下面「Pegasus 4 km 导出直连」。GN 代码保留为对照实现。
 
+## Pegasus 岛屿（当前正式资产，2026-11-10）
+
+正式资产不再用 `_ref4km`，而是直接采样 Pegasus 工程里的岛屿 landscape 缓存：
+
+```text
+SourceContent\Pegasus\Landscape\Landscape Heightfield Layers\
+  Pegasus_Landscape_Layers.bgeo.sc        height 2017², Layer0/1/2 = 高度偏移
+  Pegasus_Landscape_Later_1_Source.bgeo.sc 2016², mask/water/debris/sediment/bedrock
+```
+
+**不使用 UE 的 `T_Terrain_IDMAP.png`**。层权重由我们自己的
+`prepare_pegasus_4km.py` 从 Houdini 的体积派生（water/debris/sediment 深度、
+坡度百分位出岩石、`height<3 m` 出海面），需要改层语义时改 Houdini 导出或该
+脚本，而不是去解 UE 的 bitpack。当前 6 层：`Gravel Ground / Rock Face /
+River Water / Scree Debris / River Silt / Sea`。
+
+```powershell
+$py = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe"
+$res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLearnResources"
+
+# 1) hython 采样：2017² = 4032 m / 2.0 m，与源体积 1:1
+cmd /c "artifacts\run_hython.bat tool\houdini-terrain-import\export_pegasus_island.py -- --out D:\YYBWorkSpace\Pegasus\decoded\island2k --samples 2017"
+
+# 2) 单位换算 + 6 层权重 + manifest
+& $py tool\houdini-terrain-import\prepare_pegasus_4km.py `
+  --export-root D:\YYBWorkSpace\Pegasus\decoded\island2k `
+  --resource-root $res --output-relative Generated/HoudiniPegasusIsland
+
+# 3) 4×4 切片，每 tile 512（1.97 m）
+& $py tool\blender-terrain-import\split_pegasus_tiles.py `
+  --source-manifest "$res\Generated\HoudiniPegasusIsland\houdini_pegasus_import.json" `
+  --resource-root $res --output-root "$res\Generated\HoudiniPegasusIsland" `
+  --tile-grid 4 --tile-resolution 512 --heightmap-margin 1 `
+  --lod-levels 3 --lod-distances-m 1250 2500 --tile-size-m 1008 `
+  --page-tiles-per-side 8 --asset-prefix houdini_island_tile
+
+# 4) 合并场景（同时插入独立水面、把相机 near/far 调到 100 m / 60 km）
+& $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
+  --resource-root $res `
+  --tile-layout "$res\Generated\HoudiniPegasusIsland\tile_layout.json" `
+  --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" --verbose
+```
+
+实测（1280×720 development）：`gridResolution=512`、`chunkQuads=128`、
+`totalIfAllBytes≈793 MB`（含全部 LOD），俯视相机全部落在 LOD2 时
+`vertexBytes=45.9 MB`。
+
 ## Pegasus 4 km 导出直连
 
 输入目录（仓库外，不入库）：
