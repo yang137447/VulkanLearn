@@ -27,6 +27,7 @@
 #include "particles/particleCollision.h"
 #include "particles/particleBudget.h"
 #include "particles/particleBeam.h"
+#include "particles/particleAttributeBindings.h"
 #include "particles/particleBurst.h"
 #include "particles/particleDeterminism.h"
 #include "particles/particleDump.h"
@@ -7138,8 +7139,11 @@ void ParticleRenderer::RecordSimulation(
         emitter.gpuTimer.BeginFrame(commandBuffer, imageIndex);
         const Eigen::Vector3f currentSpawnUnitPosition =
             emitter.model.block<3, 1>(0, 3);
+        const ParticleBoundSpawnAttributes boundSpawnAttributes =
+            BindParticleSpawnAttributes(
+                emitter.asset, renderScene.particleDataChannels);
         const auto trackSpawnUnitPosition = [&](bool simulate) {
-            if (emitter.asset.spawnPerUnit <= 0.0f)
+            if (boundSpawnAttributes.spawnPerUnit <= 0.0f)
             {
                 emitter.pendingSpawnUnitDistance = 0.0f;
                 return;
@@ -7335,7 +7339,7 @@ void ParticleRenderer::RecordSimulation(
             emitter.pendingSpawnUnitDistance > 0.0f)
         {
             spawnPerUnitRate = ParticleSpawnPerUnitRate(
-                emitter.asset.spawnPerUnit,
+                boundSpawnAttributes.spawnPerUnit,
                 emitter.pendingSpawnUnitDistance,
                 simulationFrameSeconds);
             emitter.pendingSpawnUnitDistance = 0.0f;
@@ -7443,7 +7447,7 @@ void ParticleRenderer::RecordSimulation(
         const ParticleLodState lod =
             EffectiveParticleLod(emitter.asset, lodDistance);
         uniforms.simulation = Eigen::Vector4f(
-            (emitter.asset.spawnRate + spawnPerUnitRate) *
+            (boundSpawnAttributes.spawnRate + spawnPerUnitRate) *
                 lod.spawnRateScale * emitter.spawnRateScale,
             simulationStepSeconds,
             emitter.elapsedSeconds,
@@ -7722,7 +7726,7 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.maxScreenSize,
             // prewarm 的稳态池填充使用作者 spawnRate 乘实例倍率；LOD 只
             // 影响 simulation.x 的连续发射预算。
-            emitter.asset.spawnRate * emitter.spawnRateScale,
+            boundSpawnAttributes.spawnRate * emitter.spawnRateScale,
             globalSortPool.active
                 ? static_cast<float>(
                     globalSortPool.textureSlotByKey.count(key) > 0
@@ -7775,7 +7779,7 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.burstInterval,
             static_cast<float>(EffectiveParticleBurstCount(
                 emitter.asset.maxParticles,
-                emitter.asset.burstCount)),
+                boundSpawnAttributes.burstCount)),
             0.0f,
             0.0f);
         uniforms.rotationParams = Eigen::Vector4f(

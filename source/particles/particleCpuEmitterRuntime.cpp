@@ -5,6 +5,7 @@
 #include <string>
 
 #include "particles/particleBurst.h"
+#include "particles/particleAttributeBindings.h"
 #include "particles/particleEmitterKey.h"
 #include "render/frontend/renderScene.h"
 
@@ -348,6 +349,12 @@ void ParticleCpuEmitterRuntime::Synchronize(
                 state.emitter = emitter;
             }
             state.restartEpoch = restartEpoch;
+            const ParticleBoundSpawnAttributes bound =
+                BindParticleSpawnAttributes(
+                    emitter, renderScene.particleDataChannels);
+            state.emitter.spawnRate = bound.spawnRate;
+            state.emitter.spawnPerUnit = bound.spawnPerUnit;
+            state.emitter.burstCount = bound.burstCount;
             state.model = BuildEmitterModel(snapshot, emitter);
             state.colorTint = snapshot.runtime.colorTint;
             state.spawnRateScale =

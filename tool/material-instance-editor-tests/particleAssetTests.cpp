@@ -836,6 +836,27 @@ TEST(ParticleAsset, BurstCountAndSpawnPerUnitParseAndValidate)
         std::invalid_argument);
 }
 
+TEST(ParticleAsset, AttributeBindingsParseAndRejectUnsupportedParameters)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["attributeBindings"] = {
+        {"spawnRate", "WindSpeed"},
+        {"spawnPerUnit", "Travel"},
+        {"burstCount", "BurstSize"}};
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_attribute_bindings.json");
+    ASSERT_EQ(asset.emitters[0].attributeBindings.size(), 3u);
+    EXPECT_EQ(asset.emitters[0].attributeBindings.at("spawnRate"),
+        "WindSpeed");
+
+    document["emitters"][0]["attributeBindings"] = {
+        {"gravity", "Wind"}};
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            document, "Maps/SC_test/PS_attribute_unsupported.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, LodFieldsParseAndValidate)
 {
     Json document = MultiEmitterDocument();

@@ -1211,6 +1211,27 @@ ParticleEmitterAsset ParseEmitter(
                 binding.value().get<std::string>();
         }
     }
+    if (json.contains("attributeBindings"))
+    {
+        const nlohmann::json& bindings = json.at("attributeBindings");
+        if (!bindings.is_object())
+        {
+            throw std::invalid_argument(
+                "Particle attributeBindings must be an object");
+        }
+        for (auto binding = bindings.begin();
+             binding != bindings.end(); ++binding)
+        {
+            if (!binding.value().is_string() ||
+                binding.value().get<std::string>().empty())
+            {
+                throw std::invalid_argument(
+                    "Particle attributeBindings values must be non-empty strings");
+            }
+            emitter.attributeBindings[binding.key()] =
+                binding.value().get<std::string>();
+        }
+    }
     // mesh 照明与几何参数同属 renderer 层；非 mesh 模式也可以作者化，
     // 但渲染端只在 renderMode=="mesh" 时消费。
     emitter.meshLighting = json.value(
@@ -2941,6 +2962,22 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
         {
             throw std::invalid_argument(
                 "Particle materialBindings channel must be non-empty");
+        }
+    }
+    for (const auto& [parameter, channel] : emitter.attributeBindings)
+    {
+        if (parameter != "spawnRate" &&
+            parameter != "spawnPerUnit" &&
+            parameter != "burstCount")
+        {
+            throw std::invalid_argument(
+                "Particle attributeBindings has unsupported parameter: " +
+                parameter);
+        }
+        if (channel.empty())
+        {
+            throw std::invalid_argument(
+                "Particle attributeBindings channel must be non-empty");
         }
     }
     RequireFinite(emitter.meshScale.x(), "mesh.scale.x");

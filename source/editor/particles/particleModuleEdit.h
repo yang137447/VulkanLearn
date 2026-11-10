@@ -51,7 +51,8 @@ inline const std::vector<ParticleModuleSpec>& ParticleModuleSpecs()
                 "beam.hitScan"}},
         {"spawn.rate", "Spawn Rate",
             {"spawnRate", "spawnPerUnit", "burst", "burstInterval",
-                "burstCount", "burstDelay", "burstPhase"}},
+                "burstCount", "burstDelay", "burstPhase",
+                "attributeBindings"}},
         {"spawn.shapeSphere", "Sphere Location", {"shape"}},
         {"spawn.velocity", "Initial Velocity", {"velocity"}},
         {"update.lifetime", "Lifetime",
@@ -274,7 +275,8 @@ inline std::string ParticleModuleTypeForField(std::string_view field)
         HasPrefix(field, "decal."))
         return "renderer";
     if (IsOneOf(field, {"spawnRate", "spawnPerUnit", "burst",
-            "burstInterval", "burstCount", "burstDelay", "burstPhase"}))
+            "burstInterval", "burstCount", "burstDelay", "burstPhase",
+            "attributeBindings"}))
         return "spawn.rate";
     if (field == "shape" || HasPrefix(field, "shape."))
         return "spawn.shapeSphere";

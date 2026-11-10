@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "particles/particleBurst.h"
+#include "particles/particleAttributeBindings.h"
 
 using namespace VL;
 
@@ -70,4 +71,31 @@ TEST(ParticleBurst, SpawnPerUnitConvertsDistanceToRateAndRejectsInvalidInput)
         ParticleSpawnPerUnitRate(0.5f, 0.0f, 0.1f), 0.0f);
     EXPECT_FLOAT_EQ(
         ParticleSpawnPerUnitRate(0.5f, 10.0f, 0.0f), 0.0f);
+}
+
+TEST(ParticleBurst, AttributeBindingsOverrideScalarSpawnFieldsOnly)
+{
+    ParticleEmitterAsset emitter;
+    emitter.spawnRate = 10.0f;
+    emitter.spawnPerUnit = 0.1f;
+    emitter.burstCount = 20;
+    emitter.maxParticles = 100;
+    emitter.attributeBindings = {
+        {"spawnRate", "Rate"},
+        {"spawnPerUnit", "Travel"},
+        {"burstCount", "Burst"}};
+    ParticleDataChannelMap channels;
+    channels["Rate"] = ParticleDataChannelValue::MakeFloat(50.0f);
+    channels["Travel"] = ParticleDataChannelValue::MakeFloat(0.5f);
+    channels["Burst"] = ParticleDataChannelValue::MakeInt(64);
+    const ParticleBoundSpawnAttributes bound =
+        BindParticleSpawnAttributes(emitter, channels);
+    EXPECT_FLOAT_EQ(bound.spawnRate, 50.0f);
+    EXPECT_FLOAT_EQ(bound.spawnPerUnit, 0.5f);
+    EXPECT_EQ(bound.burstCount, 64u);
+
+    channels["Rate"] = ParticleDataChannelValue::MakeVec3(1, 2, 3);
+    const ParticleBoundSpawnAttributes fallback =
+        BindParticleSpawnAttributes(emitter, channels);
+    EXPECT_FLOAT_EQ(fallback.spawnRate, 10.0f);
 }

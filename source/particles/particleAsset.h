@@ -426,6 +426,9 @@ struct ParticleEmitterAsset
     // 运行时 Data Channel -> 材质/精灵参数绑定。key 是受控参数名，
     // value 是 World 级 typed channel 名。
     std::unordered_map<std::string, std::string> materialBindings;
+    // 发射器标量属性 -> World typed Data Channel。当前支持 spawnRate、
+    // spawnPerUnit 与 burstCount；GPU/CPU 在每个模拟帧读取同一份通道值。
+    std::unordered_map<std::string, std::string> attributeBindings;
     // 粒子是否作为阴影 caster 写入 CSM 与局部阴影图。mesh 写真实三角形，
     // billboard/ribbon 用固定阈值的 alpha-test 近似可见卡片；beam/light/
     // decal 忽略该开关。mesh 导入失败回退 billboard 时不投影。

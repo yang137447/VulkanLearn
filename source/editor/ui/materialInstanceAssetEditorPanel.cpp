@@ -160,7 +160,7 @@ bool ParticleFieldInModule(
             field == "spawnRate" || field == "burst" ||
             field == "spawnPerUnit" || field == "burstInterval" ||
             field == "burstCount" || field == "burstDelay" ||
-            field == "burstPhase" ||
+            field == "burstPhase" || field == "attributeBindings" ||
             field == "lodDistance" ||
             field == "lodSpawnRateScale" ||
             field == "lod.tiers" ||

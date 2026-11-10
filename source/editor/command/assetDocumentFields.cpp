@@ -294,6 +294,7 @@ const Field fields[] = {
     {K::ParticleSystem, "", "burstPhase", ValueKind::Number, true, "s"},
     {K::ParticleSystem, "", "spawnRate", ValueKind::Number},
     {K::ParticleSystem, "", "spawnPerUnit", ValueKind::Number, true, "1/cm"},
+    {K::ParticleSystem, "", "attributeBindings", ValueKind::Object, true},
     {K::ParticleSystem, "", "lodDistance", ValueKind::Number, true, "cm"},
     {K::ParticleSystem, "", "lodSpawnRateScale", ValueKind::Number, true},
     {K::ParticleSystem, "", "lod.tiers", ValueKind::Array, true},
