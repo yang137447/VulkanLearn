@@ -1645,15 +1645,26 @@ void RenderableObject::CreateSkinInfluenceBuffer()
     skinInfluenceInfo.setBuffer(skinInfluenceBuffer).setOffset(0).setRange(size);
 }
 
-void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
+void RenderableObject::Draw(
+    vk::CommandBuffer &commandBuffer,
+    uint32_t frameSlot)
 {
     // viewport/scissor 由 PassRuntime 按 pass 统一设置，避免每个对象把中心
     // 视口覆盖回整张资源。
-    const vk::Buffer vertexBuffers[2] = {vertexBuffer, instanceBuffer};
-    const vk::DeviceSize vertexOffsets[2] = {vertexBufferInfo.offset, 0};
+    const uint32_t slot = frameSlot % DynamicMeshFrameSlotCount;
+    const vk::Buffer boundVertexBuffer =
+        dynamicVertices ? dynamicVertexBuffers[slot] : vertexBuffer;
+    const vk::DescriptorBufferInfo& boundVertexInfo =
+        dynamicVertices ? dynamicVertexBufferInfos[slot] : vertexBufferInfo;
+    const vk::Buffer boundIndexBuffer =
+        fixedCapacity ? dynamicIndexBuffers[slot] : indexBuffer;
+    const vk::Buffer vertexBuffers[2] = {boundVertexBuffer, instanceBuffer};
+    const vk::DeviceSize vertexOffsets[2] = {boundVertexInfo.offset, 0};
     commandBuffer.bindVertexBuffers(0, 2, vertexBuffers, vertexOffsets);
-    commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
-    const size_t count = fixedCapacity ? drawIndexCount : GetIndices().size();
+    commandBuffer.bindIndexBuffer(
+        boundIndexBuffer, 0, vk::IndexType::eUint32);
+    const size_t count =
+        fixedCapacity ? dynamicIndexCounts[slot] : GetIndices().size();
     if (count == 0) return;
     commandBuffer.drawIndexed(
         static_cast<uint32_t>(count),
@@ -1720,39 +1731,56 @@ void RenderableObject::DestroyInstanceBuffer()
 
 void RenderableObject::CreateVertexBuffer()
 {
-    if (fixedCapacity)
+    if (dynamicVertices)
     {
-        const vk::DeviceSize bufferSize = vertexCapacity * sizeof(Vertex);
-        std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
-            bufferSize,
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent,
-            "PooledVertexBuffer (" + name + ")");
-        vertexBufferInfo.setBuffer(vertexBuffer).setOffset(0).setRange(bufferSize);
+        // 软体碎片拓扑固定，顶点数量不会变化；按 swapchain 槽各建一份
+        // host-visible 缓冲，GT 更新永远不会写进仍在飞行的帧。
+        const auto& sourceVertices = GetVertices();
+        vk::DeviceSize bufferSize = fixedCapacity
+            ? static_cast<vk::DeviceSize>(vertexCapacity * sizeof(Vertex))
+            : static_cast<vk::DeviceSize>(
+                sourceVertices.size() * sizeof(Vertex));
+        bufferSize = std::max<vk::DeviceSize>(bufferSize, sizeof(Vertex));
+        for (uint32_t slot = 0; slot < DynamicMeshFrameSlotCount; ++slot)
+        {
+            std::tie(dynamicVertexBuffers[slot],
+                dynamicVertexMemories[slot]) =
+                rendererBackend->CreateBuffer(
+                    bufferSize,
+                    vk::BufferUsageFlagBits::eVertexBuffer,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "DynamicVertexBuffer[" + std::to_string(slot) +
+                        "] (" + name + ")");
+            void* data = rendererBackend->MapMemory(
+                dynamicVertexMemories[slot], bufferSize);
+            if (fixedCapacity)
+            {
+                std::memset(data, 0, static_cast<size_t>(bufferSize));
+            }
+            else if (!sourceVertices.empty())
+            {
+                std::memcpy(data, sourceVertices.data(),
+                    static_cast<size_t>(bufferSize));
+            }
+            else
+            {
+                std::memset(data, 0, static_cast<size_t>(bufferSize));
+            }
+            rendererBackend->UnmapMemory(dynamicVertexMemories[slot]);
+            dynamicVertexBufferInfos[slot]
+                .setBuffer(dynamicVertexBuffers[slot])
+                .setOffset(0)
+                .setRange(bufferSize);
+        }
+        vertexBufferInfo = dynamicVertexBufferInfos[0];
+        // 固定容量对象在第一次 UpdateDynamicMesh 前没有内容；非固定动态
+        // 对象已经把初始顶点复制进全部槽位。
+        dynamicContentInitialized.store(!fixedCapacity);
         return;
     }
     const auto& sourceVertices = GetVertices();
     vk::DeviceSize bufferSize = sourceVertices.size() * sizeof(Vertex);
-    if (dynamicVertices)
-    {
-        // 软体碎片拓扑固定，顶点数量不会变化；用 host-visible 缓冲避免每帧
-        // 创建 staging buffer 和一次额外的 device-local 拷贝。
-        std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
-            bufferSize,
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent,
-            "DynamicVertexBuffer (" + name + ")");
-        void* data = rendererBackend->MapMemory(vertexBufferMemory, bufferSize);
-        std::memcpy(data, sourceVertices.data(), static_cast<size_t>(bufferSize));
-        rendererBackend->UnmapMemory(vertexBufferMemory);
-        vertexBufferInfo
-            .setBuffer(vertexBuffer)
-            .setOffset(0)
-            .setRange(bufferSize);
-        return;
-    }
 
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
@@ -1789,7 +1817,49 @@ void RenderableObject::CreateVertexBuffer()
         .setRange(sourceVertices.size() * sizeof(Vertex));
 }
 
-void RenderableObject::UpdateVertices(const std::vector<Vertex>& updatedVertices)
+void RenderableObject::WriteDynamicVertexSlot(
+    uint32_t slot,
+    const std::vector<Vertex>& updatedVertices)
+{
+    if (slot >= DynamicMeshFrameSlotCount || updatedVertices.empty())
+        return;
+    if (!dynamicVertexMemories[slot])
+        throw std::logic_error("Dynamic vertex slot is not allocated");
+    const vk::DeviceSize bufferSize =
+        static_cast<vk::DeviceSize>(updatedVertices.size() * sizeof(Vertex));
+    void* data = rendererBackend->MapMemory(
+        dynamicVertexMemories[slot], bufferSize);
+    std::memcpy(data, updatedVertices.data(),
+        static_cast<size_t>(bufferSize));
+    rendererBackend->UnmapMemory(dynamicVertexMemories[slot]);
+}
+
+void RenderableObject::WriteDynamicIndexSlot(
+    uint32_t slot,
+    const std::vector<uint32_t>& updatedIndices)
+{
+    if (slot >= DynamicMeshFrameSlotCount || updatedIndices.empty())
+        return;
+    if (!dynamicIndexMemories[slot])
+        throw std::logic_error("Dynamic index slot is not allocated");
+    const vk::DeviceSize bufferSize =
+        static_cast<vk::DeviceSize>(
+            updatedIndices.size() * sizeof(uint32_t));
+    void* data = rendererBackend->MapMemory(
+        dynamicIndexMemories[slot], bufferSize);
+    std::memcpy(data, updatedIndices.data(),
+        static_cast<size_t>(bufferSize));
+    rendererBackend->UnmapMemory(dynamicIndexMemories[slot]);
+}
+
+void RenderableObject::ResetDynamicContentForReuse()
+{
+    dynamicContentInitialized.store(false, std::memory_order_release);
+}
+
+void RenderableObject::UpdateVertices(
+    const std::vector<Vertex>& updatedVertices,
+    uint32_t frameSlot)
 {
     if (imported)
         throw std::logic_error("Imported meshes cannot be updated in place");
@@ -1800,39 +1870,50 @@ void RenderableObject::UpdateVertices(const std::vector<Vertex>& updatedVertices
             "Dynamic vertex updates must preserve the vertex count");
     if (updatedVertices.empty()) return;
 
-    const vk::DeviceSize bufferSize =
-        static_cast<vk::DeviceSize>(updatedVertices.size() * sizeof(Vertex));
-    void* data = rendererBackend->MapMemory(vertexBufferMemory, bufferSize);
-    std::memcpy(data, updatedVertices.data(), static_cast<size_t>(bufferSize));
-    rendererBackend->UnmapMemory(vertexBufferMemory);
+    const uint32_t slot = frameSlot % DynamicMeshFrameSlotCount;
+    if (!dynamicContentInitialized.load(std::memory_order_acquire))
+    {
+        // 首次内容写入必须覆盖全部槽位；此前对象尚未进入任何已提交帧。
+        for (uint32_t target = 0; target < DynamicMeshFrameSlotCount; ++target)
+            WriteDynamicVertexSlot(target, updatedVertices);
+        dynamicContentInitialized.store(true, std::memory_order_release);
+    }
+    else
+    {
+        WriteDynamicVertexSlot(slot, updatedVertices);
+    }
     vertices = updatedVertices;
     UpdateLocalBounds();
 }
 
 void RenderableObject::UpdateDynamicMesh(
     const std::vector<Vertex>& updatedVertices,
-    const std::vector<uint32_t>& updatedIndices)
+    const std::vector<uint32_t>& updatedIndices,
+    uint32_t frameSlot)
 {
     if (imported) throw std::logic_error("Imported meshes cannot be updated in place");
     if (!fixedCapacity)
         throw std::logic_error("UpdateDynamicMesh requires a fixed-capacity mesh");
     if (updatedVertices.size() > vertexCapacity || updatedIndices.size() > indexCapacity)
         throw std::invalid_argument("Dynamic mesh update exceeds its capacity");
-    if (!updatedVertices.empty())
+    const uint32_t slot = frameSlot % DynamicMeshFrameSlotCount;
+    if (!dynamicContentInitialized.load(std::memory_order_acquire))
     {
-        const vk::DeviceSize size =
-            static_cast<vk::DeviceSize>(updatedVertices.size() * sizeof(Vertex));
-        void* data = rendererBackend->MapMemory(vertexBufferMemory, size);
-        std::memcpy(data, updatedVertices.data(), static_cast<size_t>(size));
-        rendererBackend->UnmapMemory(vertexBufferMemory);
+        for (uint32_t target = 0; target < DynamicMeshFrameSlotCount; ++target)
+        {
+            WriteDynamicVertexSlot(target, updatedVertices);
+            WriteDynamicIndexSlot(target, updatedIndices);
+            dynamicIndexCounts[target] =
+                static_cast<uint32_t>(updatedIndices.size());
+        }
+        dynamicContentInitialized.store(true, std::memory_order_release);
     }
-    if (!updatedIndices.empty())
+    else
     {
-        const vk::DeviceSize size =
-            static_cast<vk::DeviceSize>(updatedIndices.size() * sizeof(uint32_t));
-        void* data = rendererBackend->MapMemory(indexBufferMemory, size);
-        std::memcpy(data, updatedIndices.data(), static_cast<size_t>(size));
-        rendererBackend->UnmapMemory(indexBufferMemory);
+        WriteDynamicVertexSlot(slot, updatedVertices);
+        WriteDynamicIndexSlot(slot, updatedIndices);
+        dynamicIndexCounts[slot] =
+            static_cast<uint32_t>(updatedIndices.size());
     }
     vertices = updatedVertices;
     indices = updatedIndices;
@@ -1842,7 +1923,24 @@ void RenderableObject::UpdateDynamicMesh(
 
 void RenderableObject::DestroyVertexBuffer()
 {
-    if (rendererBackend != nullptr)
+    if (rendererBackend == nullptr)
+        return;
+    if (dynamicVertices)
+    {
+        for (uint32_t slot = 0; slot < DynamicMeshFrameSlotCount; ++slot)
+        {
+            if (!dynamicVertexBuffers[slot]) continue;
+            rendererBackend->DestroyBuffer(
+                dynamicVertexBuffers[slot],
+                dynamicVertexMemories[slot]);
+            dynamicVertexBuffers[slot] = nullptr;
+            dynamicVertexMemories[slot] = nullptr;
+        }
+        vertexBuffer = nullptr;
+        vertexBufferMemory = nullptr;
+        return;
+    }
+    if (vertexBuffer)
     {
         rendererBackend->DestroyBuffer(vertexBuffer, vertexBufferMemory);
         vertexBuffer = nullptr;
@@ -1854,14 +1952,30 @@ void RenderableObject::CreateIndexBuffer()
 {
     if (fixedCapacity)
     {
-        const vk::DeviceSize bufferSize = indexCapacity * sizeof(uint32_t);
-        std::tie(indexBuffer, indexBufferMemory) = rendererBackend->CreateBuffer(
-            bufferSize,
-            vk::BufferUsageFlagBits::eIndexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent,
-            "PooledIndexBuffer (" + name + ")");
-        indexBufferInfo.setBuffer(indexBuffer).setOffset(0).setRange(bufferSize);
+        const vk::DeviceSize bufferSize =
+            static_cast<vk::DeviceSize>(
+                std::max<size_t>(indexCapacity, 1) * sizeof(uint32_t));
+        for (uint32_t slot = 0; slot < DynamicMeshFrameSlotCount; ++slot)
+        {
+            std::tie(dynamicIndexBuffers[slot],
+                dynamicIndexMemories[slot]) =
+                rendererBackend->CreateBuffer(
+                    bufferSize,
+                    vk::BufferUsageFlagBits::eIndexBuffer,
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                        vk::MemoryPropertyFlagBits::eHostCoherent,
+                    "DynamicIndexBuffer[" + std::to_string(slot) +
+                        "] (" + name + ")");
+            void* data = rendererBackend->MapMemory(
+                dynamicIndexMemories[slot], bufferSize);
+            std::memset(data, 0, static_cast<size_t>(bufferSize));
+            rendererBackend->UnmapMemory(dynamicIndexMemories[slot]);
+            dynamicIndexBufferInfos[slot]
+                .setBuffer(dynamicIndexBuffers[slot])
+                .setOffset(0)
+                .setRange(bufferSize);
+        }
+        indexBufferInfo = dynamicIndexBufferInfos[0];
         return;
     }
     const auto& sourceIndices = GetIndices();
@@ -1899,7 +2013,24 @@ void RenderableObject::CreateIndexBuffer()
 
 void RenderableObject::DestroyIndexBuffer()
 {
-    if (rendererBackend != nullptr)
+    if (rendererBackend == nullptr)
+        return;
+    if (fixedCapacity)
+    {
+        for (uint32_t slot = 0; slot < DynamicMeshFrameSlotCount; ++slot)
+        {
+            if (!dynamicIndexBuffers[slot]) continue;
+            rendererBackend->DestroyBuffer(
+                dynamicIndexBuffers[slot],
+                dynamicIndexMemories[slot]);
+            dynamicIndexBuffers[slot] = nullptr;
+            dynamicIndexMemories[slot] = nullptr;
+        }
+        indexBuffer = nullptr;
+        indexBufferMemory = nullptr;
+        return;
+    }
+    if (indexBuffer)
     {
         rendererBackend->DestroyBuffer(indexBuffer, indexBufferMemory);
         indexBuffer = nullptr;

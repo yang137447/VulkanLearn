@@ -696,14 +696,63 @@ void RenderSystem::SetUiOverlayShaderPaths(std::string vertexPath, std::string f
 
 void RenderSystem::SetCsmSettings(const VL::CsmSettings& settings)
 {
+    std::lock_guard<std::mutex> lock(csmSettingsMutex);
     csmSettings = settings;
+    csmSettingsRevision.fetch_add(1, std::memory_order_release);
+}
+
+VL::CsmSettings RenderSystem::GetCsmSettings() const
+{
+    std::lock_guard<std::mutex> lock(csmSettingsMutex);
+    return csmSettings;
+}
+
+void RenderSystem::SnapshotFrameCsmSettings()
+{
+    VL::CsmSettings snapshot;
+    uint64_t revision = 0;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        snapshot = csmSettings;
+        revision = csmSettingsRevision.load(std::memory_order_acquire);
+    }
+    if (frameCsmSettingsInitialized && revision == frameCsmSettingsRevision)
+    {
+        return;
+    }
+    frameCsmSettings = snapshot;
+    frameCsmSettingsRevision = revision;
+    frameCsmSettingsInitialized = true;
+    // RT-owned cascade cache: RT is the only writer.
     shadowCascadeFrameData.valid = false;
+}
+
+void RenderSystem::SetRendererMutationSafePoint(std::function<void()> safePoint)
+{
+    std::lock_guard<std::mutex> lock(rendererMutationSafePointMutex);
+    rendererMutationSafePoint = std::move(safePoint);
+}
+
+void RenderSystem::WaitForRendererMutationSafePoint()
+{
+    std::function<void()> safePoint;
+    {
+        std::lock_guard<std::mutex> lock(rendererMutationSafePointMutex);
+        safePoint = rendererMutationSafePoint;
+    }
+    if (safePoint)
+    {
+        safePoint();
+    }
 }
 
 bool RenderSystem::SetCsmCastShadows(bool enabled, std::string& outMessage)
 {
-    csmSettings.castShadows = enabled;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.castShadows = enabled;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage = std::string("CSM ") + (enabled ? "enabled." : "disabled.");
     return true;
 }
@@ -718,8 +767,11 @@ bool RenderSystem::SetCsmDynamicShadowDistance(
         return false;
     }
 
-    csmSettings.dynamicShadowDistance = distance;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.dynamicShadowDistance = distance;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage = "CSM shadow distance set to " + std::to_string(distance);
     return true;
 }
@@ -735,8 +787,11 @@ bool RenderSystem::SetCsmCascadeCount(
         return false;
     }
 
-    csmSettings.cascadeCount = cascadeCount;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.cascadeCount = cascadeCount;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM cascade count set to " +
         std::to_string(cascadeCount);
@@ -754,8 +809,11 @@ bool RenderSystem::SetCsmCascadeDistributionExponent(
         return false;
     }
 
-    csmSettings.cascadeDistributionExponent = exponent;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.cascadeDistributionExponent = exponent;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM cascade distribution exponent set to " +
         std::to_string(exponent);
@@ -773,8 +831,11 @@ bool RenderSystem::SetCsmCascadeTransitionFraction(
         return false;
     }
 
-    csmSettings.cascadeTransitionFraction = fraction;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.cascadeTransitionFraction = fraction;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM cascade transition fraction set to " +
         std::to_string(fraction);
@@ -792,8 +853,11 @@ bool RenderSystem::SetCsmShadowDistanceFadeoutFraction(
         return false;
     }
 
-    csmSettings.shadowDistanceFadeoutFraction = fraction;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.shadowDistanceFadeoutFraction = fraction;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM shadow distance fadeout fraction set to " +
         std::to_string(fraction);
@@ -810,8 +874,11 @@ bool RenderSystem::SetCsmShadowBias(
         return false;
     }
 
-    csmSettings.shadowBias = value;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.shadowBias = value;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage = "CSM shadow bias set to " + std::to_string(value);
     return true;
 }
@@ -826,8 +893,11 @@ bool RenderSystem::SetCsmShadowSlopeBias(
         return false;
     }
 
-    csmSettings.shadowSlopeBias = value;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.shadowSlopeBias = value;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM shadow slope bias set to " +
         std::to_string(value);
@@ -845,8 +915,11 @@ bool RenderSystem::SetCsmShadowCascadeBiasDistribution(
         return false;
     }
 
-    csmSettings.shadowCascadeBiasDistribution = value;
-    shadowCascadeFrameData.valid = false;
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings.shadowCascadeBiasDistribution = value;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
     outMessage =
         "CSM shadow cascade bias distribution set to " +
         std::to_string(value);
@@ -916,7 +989,8 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     simulationDeltaSeconds = 0.0f;
     gameSimulationDeltaSeconds = 0.0f;
     hairSimulationDeltaSeconds = 0.0f;
-    shadowCascadeFrameData.valid = false;
+    // shadowCascadeFrameData is RT-owned. The next frame invalidates it via the
+    // CSM revision or world-generation check; GT must not touch it here.
     if (activeWorld)
     {
         windResponseProfiles.Configure(activeWorld->GetWindResponseProfiles());
@@ -1030,6 +1104,9 @@ bool RenderSystem::SetOfflineMode(bool enabled, std::string& message)
     {
         if (!activeWorld || !activeOfflineWorldAssets)
             throw std::runtime_error("No active frozen World");
+        // Graph/cache/runtime-binding ownership changes while RT may still be
+        // recording. Serialize the complete mode switch against RT.
+        WaitForRendererMutationSafePoint();
         if (enabled)
         {
             VL::WorldSnapshotBuilder builder;
@@ -1234,6 +1311,7 @@ void RenderSystem::Render()
 
 void RenderSystem::RequestScreenshot(std::string path)
 {
+    std::lock_guard<std::mutex> lock(pendingScreenshotPathMutex);
     pendingScreenshotPath = std::move(path);
 }
 
@@ -2404,25 +2482,28 @@ void RenderSystem::ApplyTressfxGroupBindingPreviewRequests()
     }
     if (requests.empty()) return;
 
-    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
     for (const VL::Hair::TressfxGroupBindingPreviewRequest& request : requests)
     {
         if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
-        const VL::RenderDrawPacket* targetPacket = nullptr;
-        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
-            if (packet.debugName == request.objectName)
-            {
-                targetPacket = &packet;
-                break;
-            }
-        if (targetPacket == nullptr) continue;
-        const std::shared_ptr<RenderableObject>* object =
-            resourceCache.GetRenderableObject(targetPacket->mesh.key);
-        if (object == nullptr || *object == nullptr) continue;
+        // Resolved draws hold strong renderable references; never re-resolve a
+        // cache pointer here, because GT may retire the cache entry mid-frame.
+        std::shared_ptr<RenderableObject> object;
+        for (const auto& material : currentResolvedRenderScene.materialGroups)
+            for (const auto& instance : material.materialInstances)
+                for (const auto& draw : instance.draws)
+                {
+                    if (!draw.renderableObject) continue;
+                    const VL::RenderDrawPacket& packet =
+                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                    if (packet.debugName != request.objectName) continue;
+                    object = draw.renderableObject;
+                    break;
+                }
+        if (!object) continue;
         const VL::Hair::TressfxGroupBinding binding =
             VL::Hair::MakeTressfxGroupBinding(request);
         std::string error;
-        if (!(*object)->UpdateTressfxGroupBinding(binding, error))
+        if (!object->UpdateTressfxGroupBinding(binding, error))
         {
             std::cout << "[TressFX][Warning] group binding preview rejected: "
                       << error << " object=" << request.objectName << std::endl;
@@ -2439,23 +2520,24 @@ void RenderSystem::ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex
     }
     if (requests.empty()) return;
 
-    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
     for (const VL::Hair::TressfxBrushPreviewRequest& request : requests)
     {
         if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
-        const VL::RenderDrawPacket* targetPacket = nullptr;
-        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
-            if (packet.debugName == request.objectName)
-            {
-                targetPacket = &packet;
-                break;
-            }
-        if (targetPacket == nullptr) continue;
-        const std::shared_ptr<RenderableObject>* object =
-            resourceCache.GetRenderableObject(targetPacket->mesh.key);
-        if (object == nullptr || *object == nullptr) continue;
+        std::shared_ptr<RenderableObject> object;
+        for (const auto& material : currentResolvedRenderScene.materialGroups)
+            for (const auto& instance : material.materialInstances)
+                for (const auto& draw : instance.draws)
+                {
+                    if (!draw.renderableObject) continue;
+                    const VL::RenderDrawPacket& packet =
+                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                    if (packet.debugName != request.objectName) continue;
+                    object = draw.renderableObject;
+                    break;
+                }
+        if (!object) continue;
         std::string error;
-        if (!(*object)->SetTressfxBrushPreview(request.targetGroupId,
+        if (!object->SetTressfxBrushPreview(request.targetGroupId,
                 request.mode, request.weights, swapchainImageIndex, error))
         {
             std::cout << "[TressFX][Warning] brush preview rejected: " << error
@@ -2473,8 +2555,8 @@ void RenderSystem::ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex
                     if (packet.debugName != request.objectName) continue;
                     VL::RendererObjectGpuResources& resources =
                         draw.objectResourceEntry->GetResources();
-                    resources.tressfxBrushActive = (*object)->HasTressfxBrushPreview();
-                    resources.tressfxBrushRemoveMode = (*object)->TressfxBrushRemoveMode();
+                    resources.tressfxBrushActive = object->HasTressfxBrushPreview();
+                    resources.tressfxBrushRemoveMode = object->TressfxBrushRemoveMode();
                 }
     }
 }
@@ -2518,13 +2600,15 @@ void RenderSystem::PrintPerformanceJson()
 
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
 {
-    // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。
+    // GT/RT 并发：请求由互斥量保护；隐藏视口时保留最后有效尺寸，不触发离线重启。
+    std::lock_guard<std::mutex> lock(sceneViewportMutex);
     sceneViewportRequested = enabled;
     if (rect.width != 0 && rect.height != 0) requestedSceneViewport = rect;
 }
 
 vk::Extent2D RenderSystem::GetSceneRenderExtent() const
 {
+    std::lock_guard<std::mutex> lock(sceneViewportMutex);
     if (sceneViewportRequested && requestedSceneViewport.width != 0 && requestedSceneViewport.height != 0)
         return {requestedSceneViewport.width, requestedSceneViewport.height};
     return rendererBackend->GetSwapchainExtent();
@@ -2676,9 +2760,9 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     // 不重建 World 或改相机/对象作者状态。
     for (auto& draw : prepared.renderScene.drawPackets)
     {
-        const auto* instance = candidateCache.GetMaterialInstance(draw.materialInstance.key);
-        if (instance && *instance)
-            draw.material.key = (*instance)->GetBaseMaterial().lock()->GetMaterialKey();
+        const auto instance = candidateCache.GetMaterialInstance(draw.materialInstance.key);
+        if (instance)
+            draw.material.key = instance->GetBaseMaterial().lock()->GetMaterialKey();
     }
     RebuildRenderSceneMaterialGroups(prepared.renderScene);
 
@@ -2781,7 +2865,11 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.resolvedRenderScene.materialGroups);
     windResponseProfiles.Swap(
         prepared.windResponseProfiles);
-    swap(csmSettings, prepared.csmSettings);
+    {
+        std::lock_guard<std::mutex> lock(csmSettingsMutex);
+        csmSettings = prepared.csmSettings;
+        csmSettingsRevision.fetch_add(1, std::memory_order_release);
+    }
 
     std::shared_ptr<void> retiredLightBuffer =
         frameResources.CommitPreparedLightCapacity(
@@ -2797,7 +2885,6 @@ RenderSystem::CommitPreparedRuntimeBinding(
     nextSnapshotFrameIndex =
         prepared.nextSnapshotFrameIndex;
     ClearSelectedMaterialInstance();
-    shadowCascadeFrameData.valid = false;
     environmentUpdateState.Reset();
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();
@@ -3273,6 +3360,7 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             auto published = std::make_shared<VL::OfflineWorldAssets>(*candidate);
             // GPU 仍是旧版本；回切实时必须按此成功 Apply 的冻结值重建。
             published->realtimePrepared = false;
+            WaitForRendererMutationSafePoint();
             activeOfflineWorldAssets = std::move(published);
             result.status = PreviewAdapterOperationStatus::Completed;
             result.failureStage = PreviewAdapterFailureStage::None;
@@ -3464,6 +3552,9 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
                     "modelProfile changed before preview commit: " + reference);
         }
         VL::ValidateOfflineTexturesStillCurrent(*preparedOfflineAssets);
+        // Candidate resources are isolated; only the publication below touches
+        // state that RT reads. Wait exactly at the ownership hand-off.
+        WaitForRendererMutationSafePoint();
         pipelineFactory->CommitPreparedCandidate(
             std::move(preparedPipelineCommit));
         VL::RendererResourceCache::WorldLocalResourcePackageHandle retiredPackage =
@@ -3572,14 +3663,14 @@ void RenderSystem::UploadLightsForPass(
 
 bool RenderSystem::IsCsmEnabled() const
 {
-    return csmSettings.castShadows;
+    return frameCsmSettings.castShadows;
 }
 
 bool RenderSystem::IsShadowCascadeActive(
     uint32_t cascadeIndex) const
 {
-    return csmSettings.castShadows &&
-        cascadeIndex < csmSettings.cascadeCount;
+    return frameCsmSettings.castShadows &&
+        cascadeIndex < frameCsmSettings.cascadeCount;
 }
 
 bool RenderSystem::GetShadowCascadeLightViewProjection(
@@ -3589,7 +3680,7 @@ bool RenderSystem::GetShadowCascadeLightViewProjection(
     // shadowCascadeFrameData 在 UpdateShadowGlobalUBOForPass 里按本帧、本 pass
     // 分辨率构建；这里返回的矩阵与刚写入 shadow UBO 的级联完全同源。
     if (!shadowCascadeFrameData.valid ||
-        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= frameCsmSettings.cascadeCount ||
         cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
     {
         return false;
@@ -3611,7 +3702,7 @@ bool RenderSystem::GetShadowCascadeCasterReceiverBounds(
     VL::ShadowCasterReceiverBounds& outBounds) const
 {
     if (!shadowCascadeFrameData.valid ||
-        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= frameCsmSettings.cascadeCount ||
         cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
     {
         return false;
@@ -3630,7 +3721,7 @@ void RenderSystem::LogShadowCasterCullStats() const
     std::ostringstream message;
     message << "shadow caster culling (drawn/candidates):";
     for (uint32_t cascadeIndex = 0;
-         cascadeIndex < csmSettings.cascadeCount;
+         cascadeIndex < frameCsmSettings.cascadeCount;
          ++cascadeIndex)
     {
         const VL::ShadowCasterCullStats& stats =
@@ -3709,7 +3800,7 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     ubo.viewProjection = ubo.projection * ubo.view;
     ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.previousViewProjection = previousViewProjection;
-    if (csmSettings.castShadows)
+    if (frameCsmSettings.castShadows)
     {
         if (!shadowCascadeFrameData.valid)
         {
@@ -3808,7 +3899,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(
 
     BuildShadowCascadeFrameData(passSizeWidth, passSizeHeight);
     const uint32_t activeCascadeIndex =
-        std::min(cascadeIndex, csmSettings.cascadeCount - 1);
+        std::min(cascadeIndex, frameCsmSettings.cascadeCount - 1);
 
     UBOGlobal ubo;
     ubo.view = shadowCascadeFrameData.view[activeCascadeIndex];
@@ -3838,6 +3929,10 @@ void RenderSystem::UpdateUBOGlobalForShadow(
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
 {
+    if (!frameCsmSettingsInitialized)
+    {
+        SnapshotFrameCsmSettings();
+    }
     // 如果本帧已经计算过相同场景、相同分辨率的 cascade 数据，直接复用缓存
     if (shadowCascadeFrameData.valid &&
         shadowCascadeFrameData.frameIndex == currentFrame &&
@@ -3853,7 +3948,7 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
     const float cascadeFar =
         std::max(
             cascadeNear + 0.1f,
-            csmSettings.dynamicShadowDistance);
+            frameCsmSettings.dynamicShadowDistance);
 
     shadowCascadeFrameData.view.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.projection.fill(Eigen::Matrix4f::Identity());
@@ -3863,21 +3958,24 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
     // 本帧 caster 的光源空间包围盒要重新投影：角色/头发/风每帧都可能动。
     casterLightSpaceBoundsValid = false;
     shadowCascadeFrameData.csmParameters = Eigen::Vector4f(
-        csmSettings.cascadeTransitionFraction,
-        csmSettings.shadowDistanceFadeoutFraction,
-        static_cast<float>(csmSettings.cascadeCount),
-        csmSettings.dynamicShadowDistance);
+        frameCsmSettings.cascadeTransitionFraction,
+        frameCsmSettings.shadowDistanceFadeoutFraction,
+        static_cast<float>(frameCsmSettings.cascadeCount),
+        frameCsmSettings.dynamicShadowDistance);
 
     float previousSplit = cascadeNear;
-    for (uint32_t cascadeIndex = 0; cascadeIndex < csmSettings.cascadeCount; ++cascadeIndex)
+    for (uint32_t cascadeIndex = 0;
+         cascadeIndex < frameCsmSettings.cascadeCount;
+         ++cascadeIndex)
     {
-        const float p = static_cast<float>(cascadeIndex + 1) / static_cast<float>(csmSettings.cascadeCount);
+        const float p = static_cast<float>(cascadeIndex + 1) /
+            static_cast<float>(frameCsmSettings.cascadeCount);
         // UE 风格 Distribution Exponent：指数越大，越多分辨率集中到相机附近。
         // 最后一级始终精确落在 Dynamic Shadow Distance。
         const float splitFraction =
             std::pow(
                 p,
-                csmSettings.cascadeDistributionExponent);
+                frameCsmSettings.cascadeDistributionExponent);
         const float splitFar =
             cascadeNear +
             (cascadeFar - cascadeNear) * splitFraction;
@@ -3898,21 +3996,21 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
         // Distribution 为 0 时各级相同，为 1 时按级联序号逐级增大。
         const float cascadeBiasScale =
             1.0f +
-            csmSettings.shadowCascadeBiasDistribution *
+            frameCsmSettings.shadowCascadeBiasDistribution *
                 static_cast<float>(cascadeIndex);
         shadowCascadeFrameData.bias[cascadeIndex] =
             Eigen::Vector4f(
-                csmSettings.shadowBias *
+                frameCsmSettings.shadowBias *
                     VL::CsmSettings::MaxReceiverDepthBias *
                     cascadeBiasScale,
-                csmSettings.shadowSlopeBias *
+                frameCsmSettings.shadowSlopeBias *
                     VL::CsmSettings::MaxSlopeBiasMultiplier,
                 0.0f,
                 0.0f);
         previousSplit = splitFar;
     }
 
-    for (uint32_t cascadeIndex = csmSettings.cascadeCount;
+    for (uint32_t cascadeIndex = frameCsmSettings.cascadeCount;
          cascadeIndex < VL::CsmSettings::MaxCascadeCount;
          ++cascadeIndex)
     {
@@ -4037,7 +4135,7 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
 
     float minZ = defaultMinZ;
     float maxZ = defaultMaxZ;
-    if (csmSettings.lightSpaceCasterBounds)
+    if (frameCsmSettings.lightSpaceCasterBounds)
     {
         // Performance note: this scans all draw packets once per cascade. Current scenes are small
         // enough for this straightforward path; if profiling shows CPU pressure here, precompute
@@ -4334,6 +4432,22 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     PublishSnapshotFromActiveWorld(true);
 }
 
+void RenderSystem::QueueDynamicVertices(
+    std::string meshKey,
+    std::vector<Vertex> vertices)
+{
+    dynamicMeshUpdateQueue.QueueVertices(std::move(meshKey), std::move(vertices));
+}
+
+void RenderSystem::QueueDynamicMesh(
+    std::string meshKey,
+    std::vector<Vertex> vertices,
+    std::vector<uint32_t> indices)
+{
+    dynamicMeshUpdateQueue.QueueMesh(
+        std::move(meshKey), std::move(vertices), std::move(indices));
+}
+
 void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
 {
     if (!activeWorld)
@@ -4441,6 +4555,10 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         throw std::runtime_error("RenderSystem renderer backend is not set");
     }
 
+    // Freeze the GT-owned CSM settings for the complete frame. All shadow
+    // cascade/UBO code below reads frameCsmSettings, never the GT field.
+    SnapshotFrameCsmSettings();
+
     // 调试 parity 命令在帧边界执行；内部 WaitIdle + 单次 submit。
     RunTerrainPageBakeParityIfRequested();
 
@@ -4474,11 +4592,14 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
 void RenderSystem::BuildResolvedRenderScene()
 {
     const auto& resourceCache = VL::RendererResourceCache::GetInstance();
+    // Hold the cache for the complete resolve: GT candidates/packages may swap
+    // concurrently with RT, and the getters below must observe one stable set.
+    auto frameLock = resourceCache.LockForFrame();
     for (auto& draw : currentRenderScene.drawPackets)
     {
-        const auto* instance = resourceCache.GetMaterialInstance(draw.materialInstance.key);
-        if (instance && *instance)
-            draw.material.key = (*instance)->GetBaseMaterial().lock()->GetMaterialKey();
+        const auto instance = resourceCache.GetMaterialInstance(draw.materialInstance.key);
+        if (instance)
+            draw.material.key = instance->GetBaseMaterial().lock()->GetMaterialKey();
     }
     RebuildRenderSceneMaterialGroups(currentRenderScene);
     // 放置级（per-placement）对象必须在 resolve 之前拥有自己的 RenderableObject，
@@ -4515,13 +4636,13 @@ void RenderSystem::EnsurePlacementRenderables(
         if (draw.mesh.key.empty())
             throw std::runtime_error(
                 "Placement-scoped draw packet has no instance mesh key: " + draw.debugName);
-        const std::shared_ptr<RenderableObject>* existing =
+        const std::shared_ptr<RenderableObject> existing =
             resourceCache.GetRenderableObject(draw.mesh.key);
-        if (existing != nullptr && *existing != nullptr)
+        if (existing != nullptr)
             continue;
-        const std::shared_ptr<RenderableObject>* templateObject =
+        const std::shared_ptr<RenderableObject> templateObject =
             resourceCache.GetRenderableObject(draw.placementTemplateMeshKey);
-        if (templateObject == nullptr || *templateObject == nullptr)
+        if (templateObject == nullptr)
             throw std::runtime_error(
                 "Placement template renderable is missing: template=" +
                 draw.placementTemplateMeshKey + " instance=" + draw.mesh.key);
@@ -4533,19 +4654,19 @@ void RenderSystem::EnsurePlacementRenderables(
             {
                 if (candidate.sceneObjectIdentity !=
                     draw.placementBinding.sourceSceneObject) continue;
-                const std::shared_ptr<RenderableObject>* found =
+                const std::shared_ptr<RenderableObject> found =
                     resourceCache.GetRenderableObject(candidate.mesh.key);
-                if (found != nullptr && *found != nullptr) sourceObject = found->get();
+                if (found != nullptr) sourceObject = found.get();
                 break;
             }
         // 克隆本身不感知类型；绑定（毛发骨骼等）由通用 resolver 按 Kind 分派。
         std::shared_ptr<RenderableObject> clone =
-            (*templateObject)->CloneForPlacement(draw.debugName,
+            templateObject->CloneForPlacement(draw.debugName,
                 draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr,
                 draw.placementBinding.tressfxGroupConfigs.empty()
                     ? nullptr : &draw.placementBinding.tressfxGroupConfigs);
         std::string bindingError;
-        if (!VL::ApplyPlacementBinding(draw.placementBinding, **templateObject,
+        if (!VL::ApplyPlacementBinding(draw.placementBinding, *templateObject,
                 sourceObject, *clone, placementBindingCache, bindingError))
             throw std::runtime_error(bindingError + " instance=" + draw.mesh.key);
         resourceCache.BindRenderableObject(draw.mesh.key, clone);
@@ -4652,7 +4773,10 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
-    
+    // Hold one frame-stable cache view across environment binding and
+    // object-resource creation so GT candidates cannot swap mid-initialize.
+    auto frameLock = resourceCache.LockForFrame();
+
     PrepareEnvironmentResources(); // 环境光照的资源准备
 
     RenderGraph::GetInstance().RefreshRuntimeDescriptors(*rendererBackend, descriptorContext);
@@ -4667,6 +4791,90 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
         prerenderSkinEnabled);
 
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
+}
+
+void RenderSystem::ApplyQueuedDynamicMeshUpdates(uint32_t frameSlot)
+{
+    auto updates = dynamicMeshUpdateQueue.Drain();
+    if (updates.empty())
+        return;
+
+    // Resolved draws own strong references to their RenderableObject, so a
+    // lookup through this frame's resolved scene cannot dangle even if GT
+    // removes the cache entry concurrently.
+    std::unordered_map<std::string, std::shared_ptr<RenderableObject>>
+        renderablesByMeshKey;
+    for (const VL::ResolvedMaterialGroup& materialGroup :
+         currentResolvedRenderScene.materialGroups)
+    {
+        for (const VL::ResolvedMaterialInstanceGroup& instanceGroup :
+             materialGroup.materialInstances)
+        {
+            for (const VL::ResolvedDrawPacket& draw : instanceGroup.draws)
+            {
+                if (draw.drawPacketIndex >=
+                        currentRenderScene.drawPackets.size() ||
+                    !draw.renderableObject)
+                {
+                    continue;
+                }
+                const std::string& meshKey =
+                    currentRenderScene.drawPackets[draw.drawPacketIndex]
+                        .mesh.key;
+                if (meshKey.empty()) continue;
+                renderablesByMeshKey.emplace(meshKey, draw.renderableObject);
+            }
+        }
+    }
+
+    for (auto& [meshKey, update] : updates)
+    {
+        const auto found = renderablesByMeshKey.find(meshKey);
+        if (found == renderablesByMeshKey.end() || !found->second)
+        {
+            // A GT tick can queue content before its snapshot reaches RT.
+            // Keep it for a couple of frames; a mesh key that never appears is
+            // dropped with one diagnostic.
+            const auto attempts = ++missingDynamicMeshAttempts[meshKey];
+            if (attempts <= 2)
+            {
+                dynamicMeshUpdateQueue.RequeueIfAbsent(
+                    meshKey, std::move(update));
+                continue;
+            }
+            missingDynamicMeshAttempts.erase(meshKey);
+            if (reportedMissingDynamicMeshKeys.insert(meshKey).second)
+            {
+                std::cerr
+                    << "[DynamicMesh] Dropping update for missing mesh key: "
+                    << meshKey << std::endl;
+            }
+            continue;
+        }
+        missingDynamicMeshAttempts.erase(meshKey);
+        try
+        {
+            if (update.replacesIndices)
+            {
+                found->second->UpdateDynamicMesh(
+                    update.vertices, update.indices, frameSlot);
+            }
+            else
+            {
+                found->second->UpdateVertices(update.vertices, frameSlot);
+            }
+        }
+        catch (const std::exception& error)
+        {
+            if (reportedMissingDynamicMeshKeys.insert(
+                    meshKey + "#error").second)
+            {
+                std::cerr
+                    << "[DynamicMesh] Update failed for mesh key '"
+                    << meshKey << "': " << error.what() << std::endl;
+            }
+        }
+    }
 }
 
 void RenderSystem::RecordAndSubmitCurrentRenderScene()
@@ -4706,6 +4914,10 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     frameShadowCasterCullStats = {};
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
+    // GT publishes dynamic mesh content instead of writing host-visible buffers.
+    // Apply it to this image's slot before any pass records a draw.
+    ApplyQueuedDynamicMeshUpdates(
+        swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount);
     // ghost 权重按 swapchain 槽写入；必须在拿到本帧 slot 之后更新，避免覆盖
     // 另一 frame-in-flight 仍在读取的 buffer。
     // 草稿 binding 先于 ghost/选中状态应用，保证本帧 shader 读到同一份组号表。
@@ -5156,9 +5368,12 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
-    const std::optional<std::string> screenshotPath =
-        std::move(pendingScreenshotPath);
-    pendingScreenshotPath.reset();
+    std::optional<std::string> screenshotPath;
+    {
+        std::lock_guard<std::mutex> lock(pendingScreenshotPathMutex);
+        screenshotPath = std::move(pendingScreenshotPath);
+        pendingScreenshotPath.reset();
+    }
 
     bool screenshotRecorded = false;
     std::string screenshotRecordError;
@@ -5563,14 +5778,14 @@ std::shared_ptr<Texture> RenderSystem::GetEnvironmentCube(
         case VL::EnvironmentType::ProceduralSky:
             return proceduralSkyCubeGenerator.GetActiveEnvironmentCube();
         case VL::EnvironmentType::Hdri:
-            const std::shared_ptr<Texture>* environmentCube = 
+            const std::shared_ptr<Texture> environmentCube =
                 resourceCache.GetWorldTexture(
                     "environmentCube");
-            if(environmentCube == nullptr || *environmentCube == nullptr)
+            if(environmentCube == nullptr)
             {
                 throw std::runtime_error("Environment cube not found");
             }
-            return *environmentCube;
+            return environmentCube;
     }
     throw std::runtime_error("Unknown environment type");
 }

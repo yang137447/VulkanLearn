@@ -22,7 +22,6 @@ class RuntimeConfig;
 class RuntimeTestHooks;
 class DestructibleRuntimeRegistry;
 class ProjectileRuntime;
-class WorldTransitionCoordinator;
 class ScriptRuntimeSubsystem;
 namespace Editor { class SceneDocumentService; }
 
@@ -75,7 +74,6 @@ public:
         CommandBus& commandBus,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
@@ -109,7 +107,6 @@ private:
         const RuntimeCommand& command,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
@@ -137,7 +134,6 @@ private:
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(
         const RuntimeCommand& command,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult) const;

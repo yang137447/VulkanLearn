@@ -3,6 +3,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     scriptPhysicsMeshGeometryTests.cpp
     scriptTerrainCollisionTests.cpp
     worldBuilderTerrainCollisionTests.cpp
+    worldGameplayPlanTests.cpp
     scriptAnimationTests.cpp
     scriptTemplateExtensionTests.cpp
     scriptTimeTests.cpp
@@ -35,6 +36,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/loading/worldBuilder.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/loading/worldGameplayPlanBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/render/shadow/csmSettings.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldAnimation.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
@@ -43,6 +45,8 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/diagnosticsSubsystem.cpp")
 target_include_directories(script_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
+target_compile_definitions(script_tests PRIVATE
+    VL_SOURCE_DIR="${PROJECT_SOURCE_DIR}/source")
 # 足部质量与放置行为夹具超过 MinGW COFF section 上限；只放宽这些目标文件格式。
 if(MINGW)
     set_source_files_properties(scriptAnimationTests.cpp scriptRuntimeTests.cpp

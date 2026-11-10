@@ -22,7 +22,7 @@
 #include "engine/editorThumbnailScheduler.h"
 #include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
-#include "world/loading/worldGraphTransactionCoordinator.h"
+#include "engine/worldGraphTransactionCoordinator.h"
 #include "shader/reload/shaderReloadRuntime.h"
 #include "physics/fracture/fractureBudget.h"
 
@@ -51,7 +51,7 @@ class DestructibleRuntimeRegistry;
 class ProjectileRuntime;
 namespace Physics { class FractureImpactWorld; }
 class SubsystemCollection;
-class WorldTransitionCoordinator;
+class WorldCandidatePreparer;
 namespace Editor { class TerrainEditSession; }
 namespace Editor { class TerrainPaintSession; }
 enum class RenderGraphReleaseMode;
@@ -152,6 +152,7 @@ private:
     RuntimeResult<void> RecreateRendererForWindowResize(uint32_t width, uint32_t height);
     RuntimeResult<void> ReloadRenderGraphResources();
     RuntimeResult<void> ReloadRenderGraphResources(VL::RenderGraphReleaseMode releaseMode);
+    void WaitForRenderFrameSlot();
     void WaitForRenderThreadIdle();
     void PollRenderThreadFatalError();
     void ProcessShaderRuntimeRequests(
@@ -232,7 +233,9 @@ private:
     std::string terrainPaintSessionPlacementId;
     std::string scriptBuildOutput;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
-    std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
+    // 必须在 worldGraphTransactionCoordinator 之前声明：事务持有本对象的引用，
+    // 逆序析构保证事务先于候选构建器销毁。
+    std::unique_ptr<WorldCandidatePreparer> worldCandidatePreparer;
     std::unique_ptr<WorldGraphTransactionCoordinator>
         worldGraphTransactionCoordinator;
     std::unique_ptr<Controller> controller;

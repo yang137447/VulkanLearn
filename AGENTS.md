@@ -208,16 +208,45 @@ The current startup sequence is split between `source/main.cpp` and
    - load the render graph from `RuntimeConfig::GetRenderGraphJson()`
    - initialize the `RenderSystem` resources required by World/Graph candidate preparation
    - load and publish the initial World through the same
-     `WorldTransitionCoordinator::PrepareWorldLoad()` +
+     `WorldCandidatePreparer::Prepare()` +
      `WorldGraphTransactionCoordinator` transaction used by runtime replacement
    - finalize initial-only render objects such as the UI overlay after the
      World/Graph transaction commits
-   - start the render thread only when `workerThreadCount == 2`
+   - start the render thread only when `workerThreadCount == 2`; the render loop is
+     bounded async, not a recording-only thread
    - initialize the console subsystem
 5. Queue launch-time runtime commands, if any
 6. Enter the update + render loop
 
 If a change affects boot behavior, verify it against this order.
+
+### Render Loop Concurrency
+
+`workerThreadCount == 1` is fully synchronous. `workerThreadCount == 2` runs the
+bounded async pipeline in `source/render/renderThread.*`:
+
+- At most one frame may be outstanding (`RenderFrameBudget::kMaxFramesAhead = 1`).
+  `SubmitFrame()` never waits; GT continues the rest of the tick and the next
+  simulation step while RT records, then `WaitForRenderFrameSlot()` blocks before
+  publishing the next snapshot if that frame has not finished. Do not add a
+  per-frame `WaitForRenderThreadIdle()` after `SubmitFrame()`.
+- The snapshot mailbox is latest-wins. If a pending snapshot is replaced, its
+  `hairSimulationDeltaSeconds` accumulates into the replacement, so dropped frames
+  cannot lose simulation time.
+- Structural renderer mutations stay at explicit safe points: swapchain resize,
+  render-graph reload, World/Graph transaction commit, shader reload, offline-mode
+  switch, material-instance preview commit, blueprint asset commit, terrain
+  paint/sculpt, and shutdown. Per-frame publishing and simulation must not call
+  `device.waitIdle()`.
+- `RendererResourceCache` getters, `ResourceRetireQueue`, `MaterialInstance`
+  parameter state, the thumbnail registry, and the Vulkan submission gate are
+  synchronized for concurrent GT/RT access. Resolved draws hold strong
+  `RenderableObject` references; retirement epochs must cover
+  published-but-not-yet-recorded snapshots.
+- Soft-body and glass dynamic meshes do not write host-visible buffers directly
+  from GT. They publish through `RenderSystem::QueueDynamicVertices` /
+  `QueueDynamicMesh`, and `RenderableObject` keeps three frame slots so an
+  in-flight frame never aliases the slot GT is writing.
 
 ## Important Directories
 

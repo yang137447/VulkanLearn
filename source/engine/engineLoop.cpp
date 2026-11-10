@@ -60,7 +60,7 @@
 #include "shaderCompiler.h"
 #include "terrain/terrainPaintFile.h"
 #include "terrain/terrainPageManager.h"
-#include "world/loading/worldTransitionCoordinator.h"
+#include "engine/worldCandidatePreparer.h"
 #include "world/world.h"
 #include "ui/uiRenderSnapshot.h"
 #include "animation/motionFeatures.h"
@@ -151,7 +151,11 @@ TerrainBrushShape ToTerrainBrushShape(int shape)
 } // namespace
 
 EngineLoop::EngineLoop() = default;
-EngineLoop::~EngineLoop() = default;
+EngineLoop::~EngineLoop()
+{
+    // The callback captures this; never leave it installed after destruction.
+    RenderSystem::GetInstance().SetRendererMutationSafePoint({});
+}
 
 RuntimeResult<void> EngineLoop::Init(
     PlatformApplication& platformApplication,
@@ -311,6 +315,22 @@ void EngineLoop::Shutdown()
         return;
     }
 
+    // The async render thread owns GPU state until it stops. Stop it before any
+    // renderer-dependent teardown (shader reload, fracture, caches, graph) so
+    // pipelines/materials/descriptors can never be destroyed under a live frame.
+    if (renderThread)
+    {
+        // Drop the mutation callback first: a late safe-point call must not wait
+        // on a worker that is already shutting down.
+        RenderSystem::GetInstance().SetRendererMutationSafePoint({});
+        renderThread->Stop();
+        renderThread.reset();
+    }
+    if (rendererBackendInitialized && rendererBackend)
+    {
+        rendererBackend->WaitIdle();
+    }
+
     // Stop the CPU compile worker before any Vulkan teardown. The worker never
     // touches Vulkan, and dropping its in-flight candidate here guarantees no
     // callback can run after device resources are released.
@@ -347,13 +367,6 @@ void EngineLoop::Shutdown()
 
     if (rendererBackendInitialized)
     {
-        if (renderThread)
-        {
-            renderThread->Stop();
-            renderThread.reset();
-        }
-
-        rendererBackend->WaitIdle();
         // 碎片池/箭矢网格可能仍被上一帧 command buffer 引用；必须等 WaitIdle
         // 之后再销毁，不能跟随 CPU/物理对象一起提前释放。
         if (destructibleRuntimes)
@@ -590,12 +603,12 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
             GetRuntimeConfig().ResolvePath("uiOverlay_vert.spv"),
             GetRuntimeConfig().ResolvePath("uiOverlay_frag.spv"));
     }
-    worldTransitionCoordinator = std::make_unique<WorldTransitionCoordinator>(
+    worldCandidatePreparer = std::make_unique<WorldCandidatePreparer>(
         GetSubsystems().GetWorldManager(),
         resourceLoadCoordinator,
         GetRuntimeConfig().GetWindowAspectRatio(),
         GetRuntimeConfig().GetShadowCascadeCount());
-    worldTransitionCoordinator->SetScriptRuntime(&GetSubsystems().GetScriptRuntime());
+    worldCandidatePreparer->SetScriptRuntime(&GetSubsystems().GetScriptRuntime());
     return RuntimeResult<void>::Success();
 }
 
@@ -609,7 +622,7 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
             *rendererBackend,
             *shaderCompiler,
             *pipelineFactory,
-            *worldTransitionCoordinator,
+            *worldCandidatePreparer,
             GetSubsystems().GetWorldManager(),
             *controller,
             GetRuntimeConfig(),
@@ -648,6 +661,10 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
     {
         renderThread = std::make_unique<RenderThread>();
         renderThread->Start(renderSystem);
+        // Structural renderer mutations (offline mode, MI preview commit) are
+        // still serialized against RT; they ask for this safe point explicitly.
+        renderSystem.SetRendererMutationSafePoint(
+            [this]() { WaitForRenderThreadIdle(); });
         worldGraphTransactionCoordinator->SetRenderThread(
             renderThread.get());
         GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
@@ -674,6 +691,13 @@ void EngineLoop::Tick()
 
     // CPU 阶段按 GT Tick 归零；早退帧不 Commit，下一帧 BeginFrame 会丢弃残余累加值。
     cpuFrameProfiler.BeginFrame();
+
+    // GT 可能退休仍被“已发布但 RT 尚未解析”的快照引用的资源。把待渲染帧数
+    // 计入退休下界，确保这些引用不会在当前帧被提前释放。
+    VL::ResourceRetireQueue::GetInstance().SetPendingRenderFrames(
+        renderThread && renderThread->IsRunning()
+            ? renderThread->GetPendingFrameCount()
+            : 0);
 
     GetSubsystems().GetConsoleSubsystem().Update();
 
@@ -706,7 +730,6 @@ void EngineLoop::Tick()
         GetSubsystems().GetCommandBus(),
         RenderSystem::GetInstance(),
         GetSubsystems().GetWorldManager(),
-        *worldTransitionCoordinator,
         runtimeTests,
         GetRuntimeConfig(),
         GetSubsystems().GetDiagnosticsSubsystem(),
@@ -1079,24 +1102,24 @@ void EngineLoop::Tick()
         PROFILE_SCOPE("RenderLoop");
         if (renderThread && renderThread->IsRunning())
         {
-            // 这里是多线程模式。GT 只发布世界快照并唤醒渲染线程；
-            // RT 随后完成消费、命令录制、提交与 present，GT 无法在不拆分
-            // 线程边界的前提下观测这些内部区间，因此它们被 submitPresent 的
-            // 等待吸收（契约里明确记录这一归属）。
-            {
-                CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
-                RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
-            }
-            {
-                CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
-                renderThread->SubmitFrame();
-            }
+            // 这里是多线程模式。GT 只发布世界快照并唤醒渲染线程；RT 随后
+            // 完成消费、命令录制、提交与 present。GT 只在“上一帧仍未归还
+            // 帧槽”时阻塞（最多领先一帧），随后立即发布本帧并继续 Tick，
+            // 不再等待本帧录制完成。
             {
                 CpuFrameStageScope waitStage(cpuFrameProfiler, CpuFrameStage::SubmitPresent);
-                // V1 keeps the GT/RT split deterministic instead of fully async:
-                // RT owns frame recording, while GT waits before touching renderer
-                // resources again.
-                WaitForRenderThreadIdle();
+                WaitForRenderFrameSlot();
+            }
+            if (!shouldClose)
+            {
+                {
+                    CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
+                    RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+                }
+                {
+                    CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
+                    renderThread->SubmitFrame();
+                }
             }
         }
         else
@@ -3065,6 +3088,15 @@ void EngineLoop::WaitForRenderThreadIdle()
         renderThread->WaitUntilIdle();
         PollRenderThreadFatalError();
     }
+}
+
+void EngineLoop::WaitForRenderFrameSlot()
+{
+    if (renderThread && renderThread->IsRunning())
+    {
+        renderThread->WaitForFrameSlot();
+    }
+    PollRenderThreadFatalError();
 }
 
 void EngineLoop::PollRenderThreadFatalError()

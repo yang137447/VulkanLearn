@@ -184,12 +184,12 @@ bool ApplyTerrainMeshUpdate(
     {
         CacheSnapshot snapshot;
         snapshot.resourceKey = chunk.resourceKey;
-        const std::shared_ptr<RenderableObject>* existing =
+        const std::shared_ptr<RenderableObject> existing =
             cache.GetRenderableObject(chunk.resourceKey);
-        if (existing != nullptr && *existing != nullptr)
+        if (existing != nullptr)
         {
             snapshot.existed = true;
-            snapshot.object = *existing;
+            snapshot.object = existing;
         }
         oldCacheBindings.push_back(std::move(snapshot));
     }

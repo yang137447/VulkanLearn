@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -137,7 +138,7 @@ public:
         RHIBufferHandle source,
         RHIBufferHandle destination,
         vk::DeviceSize size);
-    const VulkanBufferResource& GetVulkanBufferResource(RHIBufferHandle bufferHandle) const;
+    VulkanBufferResource GetVulkanBufferResource(RHIBufferHandle bufferHandle) const;
 
     RHIImageHandle CreateImage(
         uint32_t width,
@@ -187,7 +188,7 @@ public:
         vk::Format format,
         const std::string& debugName);
     void DestroyImageView(RHIImageViewHandle imageViewHandle);
-    const VulkanImageViewResource& GetVulkanImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    VulkanImageViewResource GetVulkanImageViewResource(RHIImageViewHandle imageViewHandle) const;
     RHIImageViewHandle RegisterImageView(vk::ImageView imageView);
 
     RHISamplerHandle Create2DSampler(const std::string& debugName);
@@ -199,7 +200,7 @@ public:
     RHISamplerHandle CreateSampler(const vk::SamplerCreateInfo& createInfo, const std::string& debugName);
     RHISamplerHandle CreateCubeSampler(float maxLod, const std::string& debugName);
     void DestroySampler(RHISamplerHandle samplerHandle);
-    const VulkanSamplerResource& GetVulkanSamplerResource(RHISamplerHandle samplerHandle) const;
+    VulkanSamplerResource GetVulkanSamplerResource(RHISamplerHandle samplerHandle) const;
     RHISamplerHandle RegisterSampler(vk::Sampler sampler);
     RHISamplerHandle CreateDepthSampler(const std::string& debugName);
     RHISamplerHandle CreateDepthCompareSampler(const std::string& debugName);
@@ -296,13 +297,13 @@ public:
         RHIImageHandle imageHandle,
         RHIImageViewHandle imageViewHandle,
         RHISamplerHandle samplerHandle);
-    const VulkanImageResource& GetVulkanImageResource(RHIImageHandle imageHandle) const;
+    VulkanImageResource GetVulkanImageResource(RHIImageHandle imageHandle) const;
 
     RHIDescriptorSetLayoutHandle CreateDescriptorSetLayout(
         const vk::DescriptorSetLayoutCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyDescriptorSetLayout(RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle);
-    const VulkanDescriptorSetLayoutResource& GetVulkanDescriptorSetLayoutResource(
+    VulkanDescriptorSetLayoutResource GetVulkanDescriptorSetLayoutResource(
         RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
     RHIDescriptorSetLayoutHandle RegisterDescriptorSetLayout(
         vk::DescriptorSetLayout descriptorSetLayout,
@@ -312,7 +313,7 @@ public:
         const vk::DescriptorPoolCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyDescriptorPool(RHIDescriptorPoolHandle descriptorPoolHandle);
-    const VulkanDescriptorPoolResource& GetVulkanDescriptorPoolResource(
+    VulkanDescriptorPoolResource GetVulkanDescriptorPoolResource(
         RHIDescriptorPoolHandle descriptorPoolHandle) const;
     std::vector<RHIDescriptorSetHandle> AllocateDescriptorSets(
         RHIDescriptorPoolHandle descriptorPoolHandle,
@@ -320,7 +321,7 @@ public:
     void FreeDescriptorSet(
         RHIDescriptorPoolHandle descriptorPoolHandle,
         RHIDescriptorSetHandle descriptorSetHandle);
-    const VulkanDescriptorSetResource& GetVulkanDescriptorSetResource(
+    VulkanDescriptorSetResource GetVulkanDescriptorSetResource(
         RHIDescriptorSetHandle descriptorSetHandle) const;
     void UpdateDescriptorSets(const std::vector<RHIDescriptorWrite>& writeDescriptorSets);
     void SetDescriptorSetDebugName(
@@ -330,14 +331,14 @@ public:
         const vk::RenderPassCreateInfo2& createInfo,
         const std::string& debugName);
     void DestroyRenderPass(RHIRenderPassHandle renderPassHandle);
-    const VulkanRenderPassResource& GetVulkanRenderPassResource(
+    VulkanRenderPassResource GetVulkanRenderPassResource(
         RHIRenderPassHandle renderPassHandle) const;
     RHIFramebufferHandle CreateFramebuffer(
         RHIRenderPassHandle renderPassHandle,
         const vk::FramebufferCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyFramebuffer(RHIFramebufferHandle framebufferHandle);
-    const VulkanFramebufferResource& GetVulkanFramebufferResource(
+    VulkanFramebufferResource GetVulkanFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
@@ -366,6 +367,7 @@ private:
     vk::PhysicalDevice& GetPhysicalDevice();
     vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
     vk::CommandPool& GetCommandPool();
+    vk::CommandPool& GetSingleTimeCommandPool();
     vk::Queue& GetGraphicsQueue();
     // 呈现目标的入口。取代原来的无参 GetSwapchain()：后端要的不是"那个 swapchain"，
     // 而是"这个后端负责的呈现目标"，后者才带得动第二个窗口。
@@ -374,21 +376,24 @@ private:
     std::vector<vk::Fence>& GetTaskFinishedFences();
     std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
 
-    const VulkanBufferResource& RequireBufferResource(RHIBufferHandle bufferHandle) const;
-    const VulkanImageResource& RequireImageResource(RHIImageHandle imageHandle) const;
-    const VulkanImageViewResource& RequireImageViewResource(RHIImageViewHandle imageViewHandle) const;
-    const VulkanSamplerResource& RequireSamplerResource(RHISamplerHandle samplerHandle) const;
-    const VulkanDescriptorSetLayoutResource& RequireDescriptorSetLayoutResource(
+    VulkanBufferResource RequireBufferResource(RHIBufferHandle bufferHandle) const;
+    VulkanImageResource RequireImageResource(RHIImageHandle imageHandle) const;
+    VulkanImageViewResource RequireImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    VulkanSamplerResource RequireSamplerResource(RHISamplerHandle samplerHandle) const;
+    VulkanDescriptorSetLayoutResource RequireDescriptorSetLayoutResource(
         RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
-    const VulkanDescriptorPoolResource& RequireDescriptorPoolResource(
+    VulkanDescriptorPoolResource RequireDescriptorPoolResource(
         RHIDescriptorPoolHandle descriptorPoolHandle) const;
-    const VulkanDescriptorSetResource& RequireDescriptorSetResource(
+    VulkanDescriptorSetResource RequireDescriptorSetResource(
         RHIDescriptorSetHandle descriptorSetHandle) const;
-    const VulkanRenderPassResource& RequireRenderPassResource(
+    VulkanRenderPassResource RequireRenderPassResource(
         RHIRenderPassHandle renderPassHandle) const;
-    const VulkanFramebufferResource& RequireFramebufferResource(
+    VulkanFramebufferResource RequireFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
 
+    // Covers every CPU-side handle map below. Vulkan API calls stay outside
+    // this lock; lookup copies the small handle record under a shared lock.
+    mutable std::shared_mutex resourceMapMutex;
     bool initialized = false;
     uint64_t nextBufferId = 1;
     std::unordered_map<uint64_t, VulkanBufferResource> buffers;

@@ -26,7 +26,6 @@
 #include "renderSystem.h"
 #include "sceneNode.h"
 #include "shader/build/atomicFile.h"
-#include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
 #include "animation/skeletalPlayback.h"
 #include "script/scriptRuntime.h"
@@ -240,7 +239,6 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     CommandBus& commandBus,
     RenderSystem& renderSystem,
     WorldManager& worldManager,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
@@ -261,7 +259,6 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             command,
             renderSystem,
             worldManager,
-            worldTransitionCoordinator,
             runtimeTestHooks,
             runtimeConfig,
             diagnostics,
@@ -279,7 +276,6 @@ void RuntimeCommandExecutor::ExecuteCommand(
     const RuntimeCommand& command,
     RenderSystem& renderSystem,
     WorldManager& worldManager,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
@@ -296,7 +292,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
         // 整 World 重载会换掉 generation 和全部 actor，sweep 的起点/身份随即失效，
         // 因此在这里显式取消，避免它在新 World 上继续写同名对象。
         CancelMeshSweep(diagnostics);
-        ApplyLoadWorld(command, worldTransitionCoordinator, runtimeConfig, diagnostics, executionResult);
+        ApplyLoadWorld(command, runtimeConfig, diagnostics, executionResult);
         break;
     case RuntimeCommandType::RunShaderReloadTest:
         ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
@@ -1320,7 +1316,6 @@ void RuntimeCommandExecutor::CancelMeshSweep(
 
 void RuntimeCommandExecutor::ApplyLoadWorld(
     const RuntimeCommand& command,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
     RuntimeCommandExecutionResult& executionResult) const

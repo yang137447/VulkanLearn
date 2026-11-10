@@ -283,7 +283,7 @@
             <a href="#data">11. 核心数据模型</a>
             <a href="#snapshot">12. WorldSnapshot 生成与消费</a>
             <a href="#thread">13. 线程与数据边界图</a>
-            <a href="#state">14. World 切换状态机</a>
+            <a href="#state">14. World / RenderGraph 事务生命周期</a>
             <a href="#lifecycle">15. 生命周期时序</a>
             <a href="#resources">16. 资源与 GPU 生命周期</a>
             <a href="#contracts">17. 核心接口契约</a>
@@ -320,7 +320,7 @@
                     <strong>V1 必须完成</strong>
                     <ul class="dense-list">
                         <li>建立 <code>EngineLoop</code>，让 <code>main.cpp</code> 只保留平台启动、窗口创建和顶层调度。</li>
-                        <li>把场景加载拆成 <code>WorldLoader</code>、<code>WorldBuilder</code>、<code>WorldTransitionCoordinator</code> 三段。</li>
+                        <li>把场景加载拆成 <code>WorldLoader</code>、<code>WorldGameplayPlanBuilder</code>、<code>RendererResourceLoadCoordinator</code>、<code>WorldBuilder</code>、<code>WorldCandidatePreparer</code> 五段：作者计划、渲染资产与 World 组装各自拥有数据。</li>
                         <li>让 <code>World</code> 成为 Gameplay 数据唯一归属，渲染层只读 <code>WorldSnapshot</code>。</li>
                         <li>分离 <code>RendererFrontend</code>、<code>FrameGraphCompiler</code>、<code>RendererBackendVulkan</code> 和 <code>RHIDeviceVulkan</code>。</li>
                         <li>把 Platform、Input、Console、Asset、Material、Shader、Config、Diagnostics 放进明确 subsystem 边界。</li>
@@ -421,9 +421,9 @@
                     <rect class="outer" x="20" y="366" width="1640" height="176" fill="#27384e" stroke="#657f9f"/>
                     <text class="ttl" x="42" y="396">3. Runtime Orchestration Layer（事务、校验、事件）</text>
                     <rect class="box" x="42" y="420" width="310" height="92" fill="#314966" stroke="#7894b8"/>
-                    <text class="subttl" x="58" y="444">WorldTransitionCoordinator</text>
-                    <text class="tiny" x="58" y="462">State Machine: Idle / Validate / Build</text>
-                    <text class="tiny" x="58" y="480">Swap / Retire / Failed</text>
+                    <text class="subttl" x="58" y="444">WorldCandidatePreparer</text>
+                    <text class="tiny" x="58" y="462">Prepare / Validate / Commit</text>
+                    <text class="tiny" x="58" y="480">Retire + bounded async safe points</text>
                     <rect class="box" x="372" y="420" width="230" height="92" fill="#314966" stroke="#7894b8"/>
                     <text class="subttl" x="388" y="444">WorldManager</text>
                     <text class="tiny" x="388" y="462">active / staging / retiring</text>
@@ -729,9 +729,9 @@
                     </tr>
                     <tr>
                         <td><strong>State Machine</strong></td>
-                        <td><code>WorldTransitionCoordinator</code>、swapchain recreate、engine lifecycle</td>
-                        <td>让 Validate、BuildStaging、Swap、Retire、Failed 等阶段可追踪、可回滚。</td>
-                        <td>只用于真实存在状态迁移和失败恢复的流程；普通顺序代码不用硬套状态机。</td>
+                        <td><code>WorldCandidatePreparer</code> + <code>WorldGraphTransactionCoordinator</code>、swapchain recreate、engine lifecycle</td>
+                        <td>让隔离准备、提交前校验、无抛提交和 GPU epoch 退休四个阶段可追踪、可回滚。</td>
+                        <td>只用于真实存在准备/提交边界和失败恢复的流程；不需要在代码里保留一个没有读者的状态 enum。</td>
                     </tr>
                     <tr>
                         <td><strong>Builder</strong></td>
@@ -935,7 +935,7 @@
                     <tr>
                         <td>切场景命令</td>
                         <td>ConsoleSubsystem 发 <code>LoadWorldCommand</code> 到 <code>CommandBus</code>，<code>RuntimeCommandExecutor</code> 返回请求后由 <code>EngineLoop</code> 在安全点调用 <code>WorldGraphTransactionCoordinator</code>。</td>
-                        <td>Console 不直接调用 loader/render system；启动与 active World reload 都先通过 <code>WorldTransitionCoordinator::PrepareWorldLoad()</code> 构建隔离的 World-local resource package，再与候选 RenderGraph、runtime binding 和 view target 一起提交。失败不会修改 active owner，成功后各 owner generation 一起前进。</td>
+                        <td>Console 不直接调用 loader/render system；启动与 active World reload 都先通过 <code>WorldCandidatePreparer::Prepare()</code> 构建隔离的 World-local resource package，再与候选 RenderGraph、runtime binding 和 view target 一起提交。失败不会修改 active owner，成功后各 owner generation 一起前进。</td>
                     </tr>
                 </tbody>
             </table>
@@ -997,7 +997,7 @@
   -> FrameGraph/Backend writes descriptor sets</code></pre>
             <p class="rule">绑定规则：shader reflection 是材质参数和 descriptor binding 的真实裁判；JSON 负责提供正确数据，运行时渲染路径不做重复兜底。</p>
             <p class="rule">数据正确性边界：scene object <code>type</code> 必须在 scene validation 阶段识别；mesh asset <code>materialSlots</code> 必须是非空有序数组，并且数量与源模型 material slot 数一致。未知 scene object type、缺失 slot、slot 数不一致或 section 无法按源 slot 序号映射，都应加载失败；禁止用 unsafe fallback material 或 renderer 侧静默跳过掩盖资产错误。</p>
-            <p class="rule">加载错误域：scene / mesh validation 失败在 <code>WorldLoader</code> 边界归类为 <code>Scene.LoadFailed</code> 或 <code>Mesh.LoadFailed</code>；renderer resource load 阶段失败在 <code>WorldTransitionCoordinator</code> 边界归类为 <code>Material.LoadFailed</code>、<code>Texture.LoadFailed</code>、<code>Mesh.LoadFailed</code>、<code>Shader.LoadFailed</code> 或保底 <code>WorldTransition.LoadFailed</code>。</p>
+            <p class="rule">加载错误域：scene / mesh validation 失败在 <code>WorldLoader</code> 边界归类为 <code>Scene.LoadFailed</code> 或 <code>Mesh.LoadFailed</code>；renderer resource load 阶段失败在 <code>WorldCandidatePreparer</code> 边界归类为 <code>Material.LoadFailed</code>、<code>Texture.LoadFailed</code>、<code>Mesh.LoadFailed</code>、<code>Hair.LoadFailed</code>、<code>Shader.LoadFailed</code> 或保底 <code>WorldTransition.LoadFailed</code>。</p>
         </section>
 
         <section id="renderer-vulkan-backend">
@@ -1229,7 +1229,11 @@
                 </div>
                 <div class="card">
                     <strong>WorldBuildPlan</strong>
-                    <p class="muted">由 loader 输出的纯数据计划，包含 scene path、对象计划、资源引用、pass material 需求和校验结果。</p>
+                    <p class="muted">由 <code>WorldLoader</code> 输出的纯作者数据：scene JSON、<code>SceneAssetBuildPlan</code> 与 <code>WorldGameplayPlans</code>（balloon / glassPane / projectile）。它只保存作者材质路径，不出现 renderer cache、material key 或 Vulkan 类型。</p>
+                </div>
+                <div class="card">
+                    <strong>WorldAssemblyAssets</strong>
+                    <p class="muted">由 <code>RendererResourceLoadCoordinator</code> 输出的渲染侧纯数据：mesh/wind 计划与 <code>ResolvedMaterialBinding</code>（规范化 MI 路径 → material key / materialInstance key）。<code>WorldBuilder</code> 合并该结果与 <code>WorldBuildPlan</code> 后构造 <code>World</code>，不接触渲染缓存指针。</p>
                 </div>
                 <div class="card">
                     <strong>WorldSnapshot</strong>
@@ -1258,7 +1262,14 @@
                 <tbody>
                     <tr>
                         <td><code>WorldBuildPlan</code></td>
-                        <td><code>WorldLoader</code></td>
+                        <td><code>WorldLoader</code> / <code>WorldGameplayPlanBuilder</code></td>
+                        <td>GT</td>
+                        <td>一次加载事务内</td>
+                        <td><code>RendererResourceLoadCoordinator</code>（只读材质请求）、<code>WorldBuilder</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>WorldAssemblyAssets</code></td>
+                        <td><code>RendererResourceLoadCoordinator</code></td>
                         <td>GT</td>
                         <td>一次加载事务内</td>
                         <td><code>WorldBuilder</code></td>
@@ -1465,7 +1476,7 @@ if (snapshot.has_value()) {
             </div>
 
             <h3>当前源码链路</h3>
-            <p class="muted">当前工程已经有 <code>workerThreadCount=2</code> 的专用 Render Thread；同步模式和 RT 模式都走同一套 snapshot mailbox 协议：GT 构建 snapshot 并发布到 mailbox，渲染侧消费快照、构建 <code>RenderScene</code>，再进入 Vulkan draw path。</p>
+            <p class="muted">当前工程已经有 <code>workerThreadCount=2</code> 的有界异步 Render Thread；同步模式和 RT 模式都走同一套 snapshot mailbox 协议：GT 构建 snapshot 并发布到 mailbox，渲染侧消费快照、构建 <code>RenderScene</code>，再进入 Vulkan draw path。RT 模式允许一个未完成帧，GT 不再在 <code>SubmitFrame()</code> 后逐帧等待录制完成。</p>
             <pre><code>RenderSystem::RefreshRenderSceneFromActiveWorld()
   -> WorldSnapshotBuilder::Build(*activeWorld, buildDesc)
        validate worldGeneration and active camera
@@ -1718,20 +1729,16 @@ std::optional&lt;WorldSnapshotPtr&gt; WorldSnapshotQueue::ConsumeLatest()
             </div>
 
             <h3>慢 RT 的 latest-wins 行为</h3>
-            <pre><code>GT publishes snapshot A
-RT consumes A and starts BuildRenderScene(A)
+            <pre><code>GT publishes snapshot A, RT starts BuildRenderScene(A)
+GT 在 A 未归还帧槽前不会发布 B（WaitForRenderFrameSlot）
 
-GT publishes snapshot B while RT still holds A
-  mailbox now points to B
-  A is still alive because RT owns shared_ptr(A)
-
-GT publishes snapshot C before RT consumes B
-  mailbox replaces B with C
-  B can be released if nobody else holds it
+若发布端在同一帧/命令批处理里连续发布 B、C：
+  mailbox 只保留 C；B 可释放（若无人持有）
+  B 的 hairSimulationDeltaSeconds 累加进 C
 
 RT finishes A, then consumes latest snapshot
   RT gets C, not stale B</code></pre>
-            <p class="rule">实时渲染通常更关心最新状态，而不是把过期帧全部排队提交。这个 mailbox 语义会牺牲“每帧必达”，换来低延迟和清晰生命周期。</p>
+            <p class="rule">实时渲染通常更关心最新状态，而不是把过期帧全部排队提交。这个 mailbox 语义会牺牲“每帧必达”，换来低延迟和清晰生命周期；有界异步循环正常路径下最多只有一个未完成帧，latest-wins 主要用于同一帧内多次发布、测试和异常背压。</p>
 
             <h3>相关设计模式</h3>
             <table>
@@ -1903,12 +1910,16 @@ while (renderRunning) {
                     <path class="flow" d="M1040 364 L1040 392 L215 392 L215 252"/>
                 </svg>
             </div>
+            <p class="rule">有界异步：最多一个未完成帧。<code>RenderThread::SubmitFrame()</code> 只登记请求并唤醒 RT，不等待；GT 继续本帧剩余工作和下一次模拟，但在发布下一份 snapshot 前调用 <code>WaitForRenderFrameSlot()</code>，只有上一帧仍未归还帧槽时才阻塞。帧槽归还发生在 RT 完成 consume + 录制 + submit/present 之后，也就是 RT 停止引用 GT 已发布状态的时刻。</p>
+            <p class="rule">latest-wins：RT 正在录制时，GT 期间发布的新请求会折叠成下一帧的一次请求；被替换的 pending snapshot 必须把 <code>hairSimulationDeltaSeconds</code> 累加进替代 snapshot，不能因为丢帧丢时间。<code>WorldSnapshotQueue</code> 仍是唯一跨线程交接点。</p>
+            <p class="rule">显式 safe point：swapchain resize、render graph reload、World/Graph 事务提交、shader reload、offline mode 切换、material preview 提交、blueprint asset commit、terrain paint/sculpt 和 shutdown 才等待 RT idle 或 device idle。每帧渲染路径不得用 <code>WaitForRenderThreadIdle()</code> 伪装成异步。</p>
+            <p class="muted">并发数据结构：<code>RendererResourceCache</code> 的 getter 在锁内取强引用副本，<code>ResourceRetireQueue</code> 在锁外析构资源，<code>MaterialInstance</code> 参数读写使用 <code>shared_mutex</code>，resolved draw 持有 <code>shared_ptr&lt;RenderableObject&gt;</code>。soft-body / glass 的动态顶点不直接写 host-visible buffer，而是经 <code>RenderSystem::QueueDynamicVertices</code> / <code>QueueDynamicMesh</code> 进入 RT 消费队列；<code>RenderableObject</code> 使用 3 个 frame slot，避免 GT 写入正在被 in-flight 帧引用的槽。</p>
         </section>
 
         <section id="state">
-            <h2>14) World 切换状态机（详细）</h2>
+            <h2>14) World / RenderGraph 事务生命周期（详细）</h2>
             <div class="diagram-wrap">
-                <svg width="1260" height="420" viewBox="0 0 1260 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="World transition state machine">
+                <svg width="1260" height="420" viewBox="0 0 1260 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="World and RenderGraph transaction lifecycle">
                     <defs>
                         <marker id="arrC" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
                             <path d="M0,0 L10,5 L0,10 z" fill="#9ec8ff"/>
@@ -1924,38 +1935,38 @@ while (renderRunning) {
 
                     <rect class="node" x="40" y="150" width="170" height="92"/>
                     <text class="ttl" x="58" y="180">Idle</text>
-                    <text class="tx" x="58" y="198">等待请求</text>
-                    <text class="tx" x="58" y="214">允许新 transition</text>
+                    <text class="tx" x="58" y="198">当前 World 继续渲染</text>
+                    <text class="tx" x="58" y="214">可在帧边界发起事务</text>
 
                     <rect class="node" x="250" y="58" width="190" height="92"/>
-                    <text class="ttl" x="268" y="88">Validating</text>
-                    <text class="tx" x="268" y="106">Scene 路径/Schema/依赖</text>
-                    <text class="tx" x="268" y="122">保存 rollback 锚点</text>
+                    <text class="ttl" x="268" y="88">Prepare（隔离）</text>
+                    <text class="tx" x="268" y="106">WorldCandidatePreparer</text>
+                    <text class="tx" x="268" y="122">WorldLoader / 校验 / candidate graph</text>
 
                     <rect class="node" x="250" y="240" width="190" height="92"/>
-                    <text class="ttl" x="268" y="270">BuildingStaging</text>
-                    <text class="tx" x="268" y="288">构建 stagingWorld</text>
-                    <text class="tx" x="268" y="304">申请 world-local 资源</text>
+                    <text class="ttl" x="268" y="270">Render assets</text>
+                    <text class="tx" x="268" y="288">RendererResourceLoadCoordinator</text>
+                    <text class="tx" x="268" y="304">mesh/wind + material bindings</text>
 
                     <rect class="node" x="490" y="150" width="190" height="92"/>
-                    <text class="ttl" x="508" y="180">Swapping</text>
-                    <text class="tx" x="508" y="198">active = staging</text>
-                    <text class="tx" x="508" y="214">触发 OnWorldChanged</text>
+                    <text class="ttl" x="508" y="180">Pre-commit 校验</text>
+                    <text class="tx" x="508" y="198">源身份 / view target</text>
+                    <text class="tx" x="508" y="214">等待 RT idle，准备退休</text>
 
                     <rect class="node" x="730" y="150" width="190" height="92"/>
-                    <text class="ttl" x="748" y="180">Retiring</text>
-                    <text class="tx" x="748" y="198">旧 World 入 retire 队列</text>
-                    <text class="tx" x="748" y="214">等待 GPU safe point</text>
+                    <text class="ttl" x="748" y="180">无抛提交</text>
+                    <text class="tx" x="748" y="198">World / graph / cache / binding</text>
+                    <text class="tx" x="748" y="214">ownership move/swap</text>
 
                     <rect class="node" x="970" y="150" width="210" height="92"/>
-                    <text class="ttl" x="988" y="180">CommitComplete</text>
-                    <text class="tx" x="988" y="198">清理 staging 状态</text>
-                    <text class="tx" x="988" y="214">返回 Idle</text>
+                    <text class="ttl" x="988" y="180">GPU epoch 退休</text>
+                    <text class="tx" x="988" y="198">旧 World / graph / cache</text>
+                    <text class="tx" x="988" y="214">light buffer 待 fence 完成</text>
 
                     <rect class="node" x="490" y="286" width="190" height="92" style="fill:#3a2a33;stroke:#94616d"/>
-                    <text class="ttl" x="508" y="316">Failed</text>
-                    <text class="tx" x="508" y="334">恢复 old activeWorld</text>
-                    <text class="tx" x="508" y="350">上报 error + 回到 Idle</text>
+                    <text class="ttl" x="508" y="316">Prepare failed</text>
+                    <text class="tx" x="508" y="334">live owner 未被触碰</text>
+                    <text class="tx" x="508" y="350">上报 error + 继续旧 World</text>
 
                     <path class="flow" d="M210 196 L250 104"/>
                     <path class="flow" d="M210 196 L250 286"/>
@@ -1969,7 +1980,8 @@ while (renderRunning) {
                     <path class="flow fail" d="M585 378 L585 402 L125 402 L125 242"/>
                 </svg>
             </div>
-            <p class="muted">失败策略：任何阶段失败都必须保证旧 <code>activeWorld</code> 可继续运行，不能出现半切换状态。</p>
+            <p class="rule">实际实现没有持久化状态 enum。事务是一次调用内的 prepare → validate → commit → retire 序列：<code>WorldCandidatePreparer::Prepare()</code> 在隔离副本中完成 scene 校验、gameplay 计划、renderer 资源与候选 <code>World</code>；<code>WorldGraphTransactionCoordinator::Execute()</code> 复核源身份、view target 与 RT idle，然后执行无抛 ownership swap，最后把旧 World、World-local 资源、RenderGraph 和 frame light buffer 登记为 prepared retirements。</p>
+            <p class="muted">失败策略：任何 prepare 阶段失败都直接返回 <code>RuntimeResult</code> 的 failure，旧 <code>activeWorld</code>、graph、runtime binding 与正式 shader 制品保持不变；提交点之后没有回滚路径，因此所有可能失败的校验都必须发生在提交之前。</p>
         </section>
 
         <section id="lifecycle">
@@ -1996,14 +2008,14 @@ while (renderRunning) {
                     <tr>
                         <td class="nowrap">InitEngine</td>
                         <td><code>EngineLoop::Init</code></td>
-                        <td>创建 GameInstance、初始化 SubsystemCollection、PipelineFactory、RendererResourceLoadCoordinator、RenderGraph、WorldTransitionCoordinator、ShaderReloadRuntime 和 WorldGraphTransactionCoordinator；先调用 <code>RenderSystem::InitializeWorldTransactionResources()</code> 建立候选事务需要的 frame/descriptor/environment 基础资源，通过统一候选事务发布初始 World/Graph/runtime binding，再调用 <code>FinalizeInitialRenderObjectInitialization()</code> 创建 UI overlay，最后根据 <code>workerThreadCount</code> 决定同步渲染或启动专用 RT</td>
+                        <td>创建 GameInstance、初始化 SubsystemCollection、PipelineFactory、RendererResourceLoadCoordinator、RenderGraph、WorldCandidatePreparer、ShaderReloadRuntime 和 WorldGraphTransactionCoordinator；先调用 <code>RenderSystem::InitializeWorldTransactionResources()</code> 建立候选事务需要的 frame/descriptor/environment 基础资源，通过统一候选事务发布初始 World/Graph/runtime binding，再调用 <code>FinalizeInitialRenderObjectInitialization()</code> 创建 UI overlay，最后根据 <code>workerThreadCount</code> 决定同步渲染或启动有界异步 RT</td>
                         <td>可运行的 engine context</td>
                         <td>销毁已创建 subsystem，退出</td>
                     </tr>
                     <tr>
                         <td class="nowrap">LoadInitialWorld</td>
                         <td><code>WorldGraphTransactionCoordinator::Execute</code></td>
-                        <td>校验 <code>config/config.json -> initScene</code> 或进程级 <code>--initial-scene</code> 覆盖，调用 <code>PrepareWorldLoad</code> 构建 staging World 与隔离资源包，并准备候选 RenderGraph/runtime binding</td>
+                        <td>校验 <code>config/config.json -> initScene</code> 或进程级 <code>--initial-scene</code> 覆盖，调用 <code>WorldCandidatePreparer::Prepare()</code> 构建隔离候选 World 与资源包，并准备候选 RenderGraph/runtime binding</td>
                         <td>activeWorld、WorldSubsystemHost、初始 WorldSnapshot</td>
                         <td>启动失败；不进入主循环</td>
                     </tr>
@@ -2017,7 +2029,7 @@ while (renderRunning) {
                     <tr>
                         <td class="nowrap">WorldSwitch</td>
                         <td>Console/UI/测试命令</td>
-                        <td>通过与启动相同的 prepare 路径构建 staging owners，全部可失败步骤成功后原子替换 active World/resource cache/RenderGraph/RenderSystem/Controller</td>
+                        <td>通过与启动相同的 prepare 路径构建候选 owners，全部可失败步骤成功后原子替换 active World/resource cache/RenderGraph/RenderSystem/Controller</td>
                         <td>新 owner generation 一致，旧 World/graph/resources 在 live swap 后进入 retire</td>
                         <td>旧 active owners 与正式 Shader artifact/include 保持不变</td>
                     </tr>
@@ -2043,15 +2055,17 @@ while (renderRunning) {
   if workerThreadCount == 1:
       RenderSystem::Render()
   if workerThreadCount == 2:
+      RenderThread::WaitForRenderFrameSlot()
       RenderSystem::PublishSnapshotFromActiveWorld()
       RenderThread::SubmitFrame()
   ResourceRetireQueue::CollectCompletedEpoch</code></pre>
+            <p class="muted"><code>SubmitFrame()</code> 只登记请求并唤醒 RT；GT 不在同一帧等待录制完成。帧槽只在 RT 完成 consume + record + submit/present 后归还，因此最多一个未完成帧，GT 在发布下一份 snapshot 前会等待该帧槽。</p>
         </section>
 
         <section id="resources">
             <h2>16) 资源与 GPU 生命周期</h2>
             <p class="summary">当前代码里 <code>RendererResourceLoadCoordinator</code>、<code>ResolvedRenderSceneBuilder</code>、<code>RenderGraph</code> 和 <code>RenderSystem</code> 都会间接碰到材质、贴图、descriptor 和 pass 资源。V1 需要继续按 owner 拆开，否则 World 切换仍然会产生隐式悬空引用。</p>
-            <p class="muted">当前实现把资源表集中到 <code>RendererResourceCache</code> 并拆出 global / world-local 清理边界。<code>RendererResourceLoadCoordinator</code> 可以向隔离的 candidate cache package 加载 material、texture、mesh/renderable 与 environment 资源，并把纯数据 <code>MeshObjectBuildPlan</code> 汇总到 <code>RendererWorldResourceLoadResult</code>；<code>WorldTransitionCoordinator::PrepareWorldLoad()</code> 使用该 package 构建 staging World。candidate 继承已有 process-global texture identity；初始 candidate 可以 lazy 创建缺失的 BRDF LUT，<code>CommitCandidate()</code> 与 World-local package 一起发布这些首次全局绑定。已存在的 global binding 不允许被候选替换或删除，相关冲突在 prepare 阶段失败。<code>WorldGraphTransactionCoordinator</code> 再把 candidate package 与 <code>PreparedRenderGraphState</code>、pipeline cache candidate、runtime binding、正式 Shader artifact/include publication 和退休记录组成单一事务。prepare 不触碰 active cache；最终 live publication 是预校验后的 ownership move/swap，成功后才激活退休。普通材质贴图上传、mesh vertex/index buffer 上传、BRDF LUT、environment cubemap/prefilter 与 Texture/RenderableObject 销毁仍走 <code>RendererBackendVulkan</code> 门面，底层 Vulkan 生命周期由 <code>RHIDeviceVulkan</code> 和对应 lifecycle handles 管理。</p>
+            <p class="muted">当前实现把资源表集中到 <code>RendererResourceCache</code> 并拆出 global / world-local 清理边界。<code>WorldLoader</code> 只产出纯作者计划 <code>WorldBuildPlan</code>（含 <code>WorldGameplayPlans</code>）；<code>RendererResourceLoadCoordinator</code> 向隔离的 candidate cache package 加载 material、texture、mesh/renderable 与 environment 资源，并只返回 <code>WorldAssemblyAssets</code>（mesh/wind 计划 + <code>ResolvedMaterialBinding</code>），不再解析 gameplay 参数。<code>WorldCandidatePreparer::Prepare()</code> 合并两份纯数据，由 <code>WorldBuilder::BuildFromLoadedScene()</code> 构建候选 World。candidate 继承已有 process-global texture identity；初始 candidate 可以 lazy 创建缺失的 BRDF LUT，<code>CommitCandidate()</code> 与 World-local package 一起发布这些首次全局绑定。已存在的 global binding 不允许被候选替换或删除，相关冲突在 prepare 阶段失败。<code>WorldGraphTransactionCoordinator</code>（位于 <code>source/engine/</code>）再把 candidate package 与 <code>PreparedRenderGraphState</code>、pipeline cache candidate、runtime binding、正式 Shader artifact/include publication 和退休记录组成单一事务。prepare 不触碰 active cache；最终 live publication 是预校验后的 ownership move/swap，成功后才激活退休。普通材质贴图上传、mesh vertex/index buffer 上传、BRDF LUT、environment cubemap/prefilter 与 Texture/RenderableObject 销毁仍走 <code>RendererBackendVulkan</code> 门面，底层 Vulkan 生命周期由 <code>RHIDeviceVulkan</code> 和对应 lifecycle handles 管理。</p>
             <table>
                 <thead>
                     <tr>
@@ -2118,7 +2132,9 @@ while (renderRunning) {
             <ul class="dense-list">
                 <li>当前 <code>RendererBackendVulkan::SubmitFrame</code> 在 backend 内部生成 <code>submittedEpoch</code>，submit 后记录到 frame fence 槽；下一次复用该 fence 前把对应 epoch 交给 <code>ResourceRetireQueue::CollectCompletedEpoch()</code>。</li>
                 <li>world-local 资源释放请求进入 <code>ResourceRetireQueue</code>，队列用 <code>shared_ptr&lt;void&gt;</code> 延寿已有资源对象，避免 GPU in-flight 时触发 Vulkan destroy。</li>
-                <li>retire 条件为 <code>resource.lastUsedEpoch &lt;= completedEpoch</code>；shutdown 时先 <code>device.waitIdle()</code>，再 <code>ForceReleaseAll()</code> 清空退役队列。</li>
+                <li>retire 条件为 <code>resource.lastUsedEpoch &lt;= completedEpoch</code>；有界异步下 GT 还必须覆盖“已发布但尚未被 RT 录制”的 snapshot，不能只看 <code>lastSubmittedEpoch</code>。</li>
+                <li><code>ResourceRetireQueue</code> 在锁内分区、锁外释放资源；<code>RendererResourceCache</code> getter 返回锁内取得的 <code>shared_ptr</code> 副本，不让指针指向可能重哈希的 map。shutdown 时先停止 RT、<code>device.waitIdle()</code>，再 <code>ForceReleaseAll()</code> 清空退役队列。</li>
+                <li><code>VulkanSubmissionGate</code> 只串行化 <code>vkQueueSubmit</code> / <code>vkQueuePresentKHR</code> / <code>vkDeviceWaitIdle</code> 与 command-buffer 分配释放；命令录制、fence 等待和 pass 执行不持有该锁。</li>
                 <li>开发期记录资源名、owner generation 和 epoch，方便定位泄漏。</li>
             </ul>
         </section>
@@ -2138,11 +2154,11 @@ while (renderRunning) {
                 </thead>
                 <tbody>
                     <tr>
-                        <td><code>IWorldTransitionCoordinator</code></td>
-                        <td>load/reload/unload 请求、当前 activeWorld、资源完成事件</td>
-                        <td>状态机推进结果、active world 切换事件、retire 请求</td>
-                        <td>失败时保留旧 activeWorld，返回结构化错误</td>
-                        <td>GT only</td>
+                        <td><code>WorldCandidatePreparer</code></td>
+                        <td>scene path、active RenderGraph、reload batch、prepare options</td>
+                        <td><code>PreparedWorldTransition</code>（候选 World、resource package、pass material bindings、graphics candidate、offline assets）</td>
+                        <td>失败时丢弃候选，返回结构化错误；旧 active owners 不变</td>
+                        <td>GT only；候选构建期间不触碰 active cache</td>
                     </tr>
                     <tr>
                         <td><code>IWorldManager</code></td>
@@ -2160,10 +2176,10 @@ while (renderRunning) {
                     </tr>
                     <tr>
                         <td><code>IWorldBuilder</code></td>
-                        <td><code>WorldBuildPlan</code>、AssetManager、WorldResourceCache</td>
-                        <td>完整 stagingWorld、初始 WorldSnapshot 所需数据</td>
-                        <td>构建失败销毁 stagingWorld，不能污染 activeWorld</td>
-                        <td>GT 写；资源上传按 Vulkan backend 规则排队</td>
+                        <td><code>WorldBuildPlan</code>、<code>WorldAssemblyAssets</code>、generation</td>
+                        <td>完整候选 World、初始 WorldSnapshot 所需数据</td>
+                        <td>构建失败销毁候选 World；缺失材质绑定返回 <code>WorldBuilder.MaterialBindingMissing</code>，不能污染 activeWorld</td>
+                        <td>GT 写；不持有 renderer cache 指针</td>
                     </tr>
                     <tr>
                         <td><code>IWorldSnapshotBuilder</code></td>
@@ -2301,7 +2317,7 @@ struct RuntimeResult {
                     <tr>
                         <td>3</td>
                         <td>把 camera/light/environment metadata 创建迁入 <code>WorldBuilder</code></td>
-                        <td>能构建 active/staging World，失败不改 activeWorld；renderer resource loaders 显式留边界</td>
+                        <td>能构建 active/candidate World，失败不改 activeWorld；renderer resource loaders 显式留边界</td>
                         <td>继续把 gameplay 对象写进 renderer resource loader 状态</td>
                     </tr>
                     <tr>
@@ -2395,7 +2411,7 @@ struct RuntimeResult {
                         <td>启动流程</td>
                         <td>从仓库根目录启动；shader 编译、render graph、initScene、初始渲染都通过新 EngineLoop</td>
                         <td><code>cmake --build build -j</code> + 手动运行 <code>build/bin/main.exe</code></td>
-                        <td>入口绕过 <code>WorldTransitionCoordinator</code> 直接调用旧 scene load 或旧渲染初始化路径</td>
+                        <td>入口绕过 <code>WorldCandidatePreparer::Prepare()</code> / <code>WorldGraphTransactionCoordinator::Execute()</code> 直接调用旧 scene load 或旧渲染初始化路径</td>
                     </tr>
                     <tr>
                         <td>Platform/Input</td>
@@ -2414,6 +2430,12 @@ struct RuntimeResult {
                         <td>World/Graph 候选事务无崩溃、无黑屏、无半切换状态</td>
                         <td><code>build/bin/main.exe --world-graph-transaction-test --exit-after-tests</code> 验证 World/Graph 事务的失败回滚、成功提交、资源 retire 与 fatal resize 契约。</td>
                         <td>失败后 activeWorld 为空、camera 丢失、旧资源提前释放</td>
+                    </tr>
+                    <tr>
+                        <td>有界异步渲染</td>
+                        <td><code>workerThreadCount=2</code> 时最多一个未完成帧；<code>SubmitFrame()</code> 不等待，GT 只在上一帧未归还帧槽时阻塞；RT 异常不能把 GT 卡死在帧槽等待里</td>
+                        <td><code>ctest --test-dir build -R "RenderFrameBudget|DynamicMeshUpdateQueue|ResourceRetireQueueConcurrent|WorldSnapshotDelta|ResolvedDrawLifetime" --output-on-failure</code>；<code>build/bin/main.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats</code>（手动运行并关闭）</td>
+                        <td>恢复每帧 <code>WaitForRenderThreadIdle()</code>，或 GT 写入仍在 in-flight 帧引用的动态网格槽</td>
                     </tr>
                     <tr>
                         <td>数据边界</td>
@@ -2541,13 +2563,13 @@ struct RuntimeResult {
                 <tbody>
                     <tr>
                         <td>World / Load</td>
-                        <td><code>WorldManager</code>、<code>WorldTransitionCoordinator</code>、<code>WorldBuilder</code>、<code>RuntimeResult</code> 已形成 scene load / rollback 事务边界；mesh runtime 已进入 <code>WorldMeshObject</code>，mesh section 与 terrain chunk 计划都通过 <code>MeshObjectBuildPlan</code> 汇入 <code>WorldBuildPlan</code>；unknown scene object type、mesh <code>materialSlots</code> 缺失或无法按源 slot 映射都会在 load/validation 边界失败，不再流入 renderer 侧 fallback；load failure 已按 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code> 分类。</td>
+                        <td><code>WorldManager</code>、<code>WorldCandidatePreparer</code>、<code>WorldGraphTransactionCoordinator</code>、<code>WorldBuilder</code>、<code>RuntimeResult</code> 已形成 prepare / commit / retire 事务边界；<code>WorldBuildPlan</code> 是纯作者数据（含 <code>WorldGameplayPlans</code>），renderer 只返回 <code>WorldAssemblyAssets</code>，mesh runtime 进入 <code>WorldMeshObject</code>；unknown scene object type、mesh <code>materialSlots</code> 缺失或无法按源 slot 映射都会在 load/validation 边界失败，不再流入 renderer 侧 fallback；load failure 已按 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code> 分类。</td>
                         <td>terrain、material、texture、shader reflection 的 plan/result 仍需继续统一到 Asset 构建计划边界。</td>
                     </tr>
                     <tr>
                         <td>GT -> Renderer</td>
-                        <td><code>WorldSnapshot</code>、<code>WorldSnapshotQueue</code>、<code>RenderScene</code>、<code>ResolvedRenderScene</code> 已形成只读数据流；<code>WorldSnapshotBuilder</code> 从 <code>World::GetMeshObjects()</code> 生成 mesh draw snapshot。</td>
-                        <td>snapshot 仍携带 logical resource keys，由 <code>ResolvedRenderScene</code> 在 renderer cache 中解析 backend entries。</td>
+                        <td><code>WorldSnapshot</code>、<code>WorldSnapshotQueue</code>、<code>RenderScene</code>、<code>ResolvedRenderScene</code> 已形成只读数据流；<code>WorldSnapshotBuilder</code> 从 <code>World::GetMeshObjects()</code> 生成 mesh draw snapshot。GT 可领先一帧发布，latest-wins 折叠 pending 请求并累加 hair delta。</td>
+                        <td>snapshot 仍携带 logical resource keys，由 <code>ResolvedRenderScene</code> 在 renderer cache 中解析 backend entries；resolved draw 持有强引用，cache 移除 key 不得使 in-flight 帧悬空。</td>
                     </tr>
                     <tr>
                         <td>Renderer / Vulkan Backend</td>

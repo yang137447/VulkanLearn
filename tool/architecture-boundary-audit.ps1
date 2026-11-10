@@ -172,6 +172,32 @@ function Test-SourcePatternsAbsent {
     }
 }
 
+function Test-AsyncRenderLoopNoImmediateIdleWait {
+    param(
+        [System.Collections.Generic.List[string]]$Failures,
+        [string]$RuleName = "Bounded async render loop no immediate idle wait"
+    )
+
+    $relativePath = "source/engine/engineLoop.cpp"
+    $path = Resolve-RepoPath $relativePath
+    if (!(Test-Path -LiteralPath $path)) {
+        Add-Failure $Failures "${RuleName}: missing expected file '$relativePath'."
+        return
+    }
+
+    # The async branch publishes and returns to Tick. A per-frame
+    # WaitForRenderThreadIdle() directly after SubmitFrame() recreates the
+    # synchronous pipeline under a different name, so forbid the sequence while
+    # leaving the explicit mutation safe points in the same file untouched.
+    $text = Get-Content -LiteralPath $path -Raw
+    $pattern = 'renderThread->SubmitFrame\(\)\s*;\s*(?:\r?\n[^\r\n]*){0,3}\r?\n[^\r\n]*WaitForRenderThreadIdle\(\)'
+    $match = [regex]::Match($text, $pattern)
+    if ($match.Success) {
+        $line = ($text.Substring(0, $match.Index) -split "`n").Count
+        Add-Failure $Failures "${RuleName}: '${relativePath}:${line}' waits for the render thread immediately after SubmitFrame(); use WaitForRenderFrameSlot() before publishing instead."
+    }
+}
+
 function Test-VulkanManagerBoundary {
     param([System.Collections.Generic.List[string]]$Failures)
 
@@ -437,7 +463,9 @@ Test-FilePatternsAbsent `
         '\bDrawableObject\b',
         '\bGetCommandBufferBeginInfo\s*\(',
         '\bcommandBufferBeginInfo\b',
-        '\bsubmitInfo\b',
+        # A by-reference submit parameter is not a cached submit path; the old
+        # VulkanManager member (a stored vk::SubmitInfo) is what this forbids.
+        '\bvk::SubmitInfo\s+\w+\s*;',
         '\bpiplineStageFlags\b'
     ) `
     -RuleName "Removed VulkanManager cached submit path"
@@ -675,29 +703,120 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/render/resource/rendererResourceLoadCoordinator.h" `
+    -RelativePath "source/world/worldBuildPlan.h" `
     -Patterns @(
-        'struct RendererWorldResourceLoadResult',
-        'std::vector<MeshObjectBuildPlan> meshObjectPlans'
+        'struct WorldBuildPlan',
+        'WorldGameplayPlans gameplay;',
+        'struct WorldAssemblyAssets',
+        'std::unordered_map<std::string, ResolvedMaterialBinding> materialBindings;'
     ) `
-    -RuleName "Renderer resource load result contract"
+    -RuleName "World build plan pure data contract"
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/world/loading/worldLoader.h" `
+    -RelativePath "source/world/loading/worldGameplayPlanBuilder.h" `
     -Patterns @(
-        'std::vector<MeshObjectBuildPlan> meshObjectPlans'
+        'class WorldGameplayPlanBuilder',
+        'RuntimeResult<WorldGameplayPlans> Build\('
     ) `
-    -RuleName "World build plan mesh object contract"
+    -RuleName "World gameplay plan builder contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/render/resource/rendererResourceLoadCoordinator.h" `
+    -Patterns @(
+        'using RendererWorldResourceLoadResult = WorldAssemblyAssets',
+        'LoadRendererResources\(',
+        'const WorldBuildPlan& worldBuildPlan'
+    ) `
+    -RuleName "Renderer resource load result contract"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/render/resource/rendererResourceLoadCoordinator.cpp"
+    ) `
+    -Patterns @(
+        '\bsoftBodyObjectPlans\b',
+        '\bglassObjectPlans\b',
+        '\bprojectileSettings\b',
+        '\bSoftBodyObjectBuildPlan\b',
+        '\bGlassObjectBuildPlan\b',
+        '#include\s+"world/loading/worldLoader\.h"'
+    ) `
+    -RuleName "Renderer gameplay plan boundary"
+
+Test-DirectoryPatternsAbsent `
+    -Failures $failures `
+    -RelativeDirectory "source/render" `
+    -Patterns @(
+        '\bsoftBodyObjectPlans\b',
+        '\bglassObjectPlans\b',
+        '\bprojectileSettings\b',
+        '#include\s+"world/loading/worldLoader\.h"'
+    ) `
+    -RuleName "Renderer world loader include boundary"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/worldCandidatePreparer.h" `
+    -Patterns @(
+        'class WorldCandidatePreparer',
+        'RuntimeResult<PreparedWorldTransition> Prepare\('
+    ) `
+    -RuleName "World transaction engine ownership contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/preparedWorldTransition.h" `
+    -Patterns @(
+        'struct PreparedWorldTransition'
+    ) `
+    -RuleName "Prepared world transition contract"
+
+Test-PathsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/world/loading/worldTransitionCoordinator.h",
+        "source/world/loading/worldTransitionCoordinator.cpp",
+        "source/world/loading/worldGraphTransactionCoordinator.h",
+        "source/world/loading/worldGraphTransactionCoordinator.cpp"
+    ) `
+    -RuleName "World transaction ownership cutover"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/world/loading/worldBuilder.h" `
+    -Patterns @(
+        'const WorldBuildPlan& worldBuildPlan',
+        'WorldAssemblyAssets assemblyAssets'
+    ) `
+    -RuleName "WorldBuilder assembly assets contract"
 
 Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/world/loading/worldBuilder.cpp" `
     -Patterns @(
-        'worldBuildPlan\.meshObjectPlans',
+        'worldBuildPlan\.gameplay',
+        'assemblyAssets\.meshObjectPlans',
+        'WorldBuilder\.MaterialBindingMissing',
         'world->AddMeshObject\('
     ) `
     -RuleName "WorldBuilder mesh object plan consumption"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/engineLoop.cpp" `
+    -Patterns @(
+        'WaitForRenderFrameSlot\(\)',
+        'renderThread->SubmitFrame\(\)',
+        'SetRendererMutationSafePoint\('
+    ) `
+    -RuleName "Bounded async render loop contract"
+
+Test-AsyncRenderLoopNoImmediateIdleWait `
+    -Failures $failures `
+    -RuleName "Bounded async render loop no immediate idle wait"
 
 # Runtime validation hooks and feature tests must apply pressure through
 # CommandBus or the one explicit adapter. Only RuntimeValidationServices.cpp
@@ -710,7 +829,7 @@ Test-FilePatternsAbsent `
         "source/engine/runtimeTestHooks.cpp"
     ) `
     -Patterns @(
-        '#include\s+"world/loading/worldTransitionCoordinator\.h"',
+        '#include\s+"engine/worldCandidatePreparer\.h"',
         '#include\s+"renderSystem\.h"',
         '#include\s+"renderGraph\.h"',
         'RequestWorldLoad\(',
@@ -1161,11 +1280,13 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/world/loading/worldTransitionCoordinator.cpp" `
+    -RelativePath "source/engine/worldCandidatePreparer.cpp" `
     -Patterns @(
         'ClassifyRendererResourceLoadError',
         'Material.LoadFailed',
         'Texture.LoadFailed',
+        'Mesh.LoadFailed',
+        'Hair.LoadFailed',
         'Shader.LoadFailed',
         'WorldTransition.LoadFailed'
     ) `

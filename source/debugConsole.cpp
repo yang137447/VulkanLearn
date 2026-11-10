@@ -1124,7 +1124,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom threshold <value> - set bloom threshold\n";
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
-    std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  loadworld <scene-path> - request scene load through the World transaction\n";
     std::cout << "  mesh transform <identity> <px> <py> <pz> [rx ry rz] - absolute placement (cm, degrees; scale=1)\n";
     std::cout << "  mesh offset <identity> <dx> <dy> <dz> - add a delta to the current placement\n";
     std::cout << "  mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds> - linear placement over GT frames\n";

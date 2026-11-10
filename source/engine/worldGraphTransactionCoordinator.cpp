@@ -1,4 +1,4 @@
-#include "world/loading/worldGraphTransactionCoordinator.h"
+#include "engine/worldGraphTransactionCoordinator.h"
 
 #include <exception>
 #include <filesystem>
@@ -24,7 +24,7 @@
 #include "renderSystem.h"
 #include "shader/build/contentHash.h"
 #include "shaderCompiler.h"
-#include "world/loading/worldTransitionCoordinator.h"
+#include "engine/worldCandidatePreparer.h"
 #include "world/worldManager.h"
 
 namespace VL
@@ -157,7 +157,7 @@ WorldGraphTransactionCoordinator::WorldGraphTransactionCoordinator(
     RendererBackendVulkan& rendererBackend,
     ShaderCompiler& shaderCompiler,
     PipelineFactory& pipelineFactory,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
+    WorldCandidatePreparer& worldCandidatePreparer,
     WorldManager& worldManager,
     Controller& controller,
     const RuntimeConfig& runtimeConfig,
@@ -166,7 +166,7 @@ WorldGraphTransactionCoordinator::WorldGraphTransactionCoordinator(
     : rendererBackend(rendererBackend)
     , shaderCompiler(shaderCompiler)
     , pipelineFactory(pipelineFactory)
-    , worldTransitionCoordinator(worldTransitionCoordinator)
+    , worldCandidatePreparer(worldCandidatePreparer)
     , worldManager(worldManager)
     , controller(controller)
     , runtimeConfig(runtimeConfig)
@@ -197,13 +197,19 @@ WorldGraphTransactionCoordinator::Execute(
             BuildRenderGraphTestFaultInjection(faultInjection));
         candidateGraph->Load(runtimeConfig.GetRenderGraphJson());
 
+        WorldCandidatePrepareOptions prepareOptions;
+        prepareOptions.offlineOnly =
+            RenderSystem::GetInstance().IsOfflineMode();
+        prepareOptions.prerenderSkin =
+            RenderSystem::GetInstance().IsPrerenderSkinEnabled();
         auto preparedWorldResult =
-            worldTransitionCoordinator.PrepareWorldLoad(
+            worldCandidatePreparer.Prepare(
                 scenePath,
                 candidateGraph->GetGraph(),
                 materialDefinitionReload,
                 extraSceneObjects,
-                sceneDocument);
+                sceneDocument,
+                prepareOptions);
         if (preparedWorldResult.IsFailure())
         {
             return RuntimeResult<WorldHandle>::Failure(

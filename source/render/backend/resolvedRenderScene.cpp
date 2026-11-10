@@ -20,8 +20,8 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
 
     for (const MaterialDrawGroup& materialGroup : renderScene.materialGroups)
     {
-        const std::shared_ptr<Material>* material = resourceCache.GetMaterial(materialGroup.material.key);
-        if (material == nullptr || *material == nullptr)
+        const std::shared_ptr<Material> material = resourceCache.GetMaterial(materialGroup.material.key);
+        if (material == nullptr)
         {
             return RuntimeResult<ResolvedRenderScene>::Failure(MakeRuntimeError(
                 "ResolvedRenderScene.MissingMaterial",
@@ -31,17 +31,17 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
         }
 
         ResolvedMaterialGroup resolvedMaterialGroup;
-        resolvedMaterialGroup.material = *material;
+        resolvedMaterialGroup.material = material;
         // 在 ResolvedScene 边界只解析一次 ShadowCaster 路由。资源创建和绘制阶段
         // 都消费这个结果，不能再次根据 renderMode 或 pipeline 指针各自判断。
-        resolvedMaterialGroup.shadowCaster = ResolveMaterialShadowCaster(**material);
+        resolvedMaterialGroup.shadowCaster = ResolveMaterialShadowCaster(*material);
         resolvedMaterialGroup.materialInstances.reserve(materialGroup.materialInstances.size());
 
         for (const MaterialInstanceDrawGroup& materialInstanceGroup : materialGroup.materialInstances)
         {
-            const std::shared_ptr<MaterialInstance>* materialInstance =
+            const std::shared_ptr<MaterialInstance> materialInstance =
                 resourceCache.GetMaterialInstance(materialInstanceGroup.materialInstance.key);
-            if (materialInstance == nullptr || *materialInstance == nullptr)
+            if (materialInstance == nullptr)
             {
                 return RuntimeResult<ResolvedRenderScene>::Failure(MakeRuntimeError(
                     "ResolvedRenderScene.MissingMaterialInstance",
@@ -51,7 +51,7 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
             }
 
             ResolvedMaterialInstanceGroup resolvedInstanceGroup;
-            resolvedInstanceGroup.materialInstance = *materialInstance;
+            resolvedInstanceGroup.materialInstance = materialInstance;
             resolvedInstanceGroup.draws.reserve(materialInstanceGroup.drawPacketIndices.size());
 
             for (size_t drawPacketIndex : materialInstanceGroup.drawPacketIndices)
@@ -68,9 +68,9 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
                 }
 
                 const RenderDrawPacket& packet = renderScene.drawPackets.at(drawPacketIndex);
-                const std::shared_ptr<RenderableObject>* renderableObject =
+                const std::shared_ptr<RenderableObject> renderableObject =
                     resourceCache.GetRenderableObject(packet.mesh.key);
-                if (renderableObject == nullptr || *renderableObject == nullptr)
+                if (renderableObject == nullptr)
                 {
                     return RuntimeResult<ResolvedRenderScene>::Failure(MakeRuntimeError(
                         "ResolvedRenderScene.MissingRenderableObject",
@@ -81,13 +81,13 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
 
                 ResolvedDrawPacket resolvedDraw;
                 resolvedDraw.drawPacketIndex = drawPacketIndex;
-                resolvedDraw.renderableObject = *renderableObject;
+                resolvedDraw.renderableObject = renderableObject;
 
-                const std::shared_ptr<RendererObjectResourceEntry>* objectResourceEntry =
+                const std::shared_ptr<RendererObjectResourceEntry> objectResourceEntry =
                     resourceCache.GetObjectResource(packet.debugName);
                 if (objectResourceEntry != nullptr)
                 {
-                    resolvedDraw.objectResourceEntry = *objectResourceEntry;
+                    resolvedDraw.objectResourceEntry = objectResourceEntry;
                 }
 
                 resolvedInstanceGroup.draws.push_back(resolvedDraw);

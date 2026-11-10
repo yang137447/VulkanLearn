@@ -2231,9 +2231,9 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                     chunk.chunkX,
                     chunk.chunkZ,
                     lodLevel);
-            const std::shared_ptr<RenderableObject>* cached =
+            const std::shared_ptr<RenderableObject> cached =
                 resourceCache.GetRenderableObject(chunkKey);
-            if (cached == nullptr || *cached == nullptr)
+            if (cached == nullptr)
             {
                 resourceCache.BindRenderableObject(
                     chunkKey,

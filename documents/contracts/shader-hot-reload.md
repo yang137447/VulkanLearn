@@ -149,7 +149,7 @@ M_*.json 稳定变化
   `M_*.json` 同批变化也是 all-or-nothing。
 - RenderGraph Pass Material 在候选 graph 中重新校验 pipeline contract 与输入。
 - 初始 World、运行时 World reload 和 M_ 定义 reload 都调用
-  `WorldTransitionCoordinator::PrepareWorldLoad()`，再由
+  `WorldCandidatePreparer::Prepare()`，再由
   `WorldGraphTransactionCoordinator` 协调 candidate graph、pipeline cache、
   runtime binding、正式文件发布、live owner swap 与 retire activation。旧的
   mutable cache snapshot/restore World 加载路径已删除。

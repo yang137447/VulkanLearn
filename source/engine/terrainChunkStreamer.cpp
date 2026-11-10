@@ -358,9 +358,9 @@ bool TerrainChunkStreamer::UploadChunk(
         chunk.chunkX,
         chunk.chunkZ,
         result.id.lodLevel);
-    const std::shared_ptr<RenderableObject>* cached =
+    const std::shared_ptr<RenderableObject> cached =
         cache.GetRenderableObject(resourceKey);
-    if (cached == nullptr || *cached == nullptr)
+    if (cached == nullptr)
     {
         cache.BindRenderableObject(
             resourceKey,

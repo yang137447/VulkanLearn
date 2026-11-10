@@ -47,6 +47,7 @@ void ResourceRetireQueue::Retire(
     retiredResource.ownerGeneration = ownerGeneration;
     retiredResource.lastUsedEpoch = lastUsedEpoch;
     retiredResource.resource = std::move(resource);
+    std::lock_guard<std::mutex> lock(mutex);
     pendingResources.push_back(std::move(retiredResource));
 }
 
@@ -54,6 +55,7 @@ PreparedResourceRetirements
 ResourceRetireQueue::PrepareRetirements(
     std::vector<RetiredResource> resources) const
 {
+    std::lock_guard<std::mutex> lock(mutex);
     PreparedResourceRetirements prepared;
     prepared.resources.reserve(
         pendingResources.size() + resources.size());
@@ -83,29 +85,64 @@ void ResourceRetireQueue::CommitPreparedRetirements(
     retirements.resources.erase(
         emptyBegin,
         retirements.resources.end());
-    pendingResources.swap(retirements.resources);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        pendingResources.swap(retirements.resources);
+    }
+    // swap 到参数里的旧 pending 在锁外析构，避免 allocator/Vulkan 析构路径
+    // 在持有退休队列锁时运行。
 }
 
 void ResourceRetireQueue::MarkFrameSubmitted(uint64_t submittedEpoch)
 {
+    std::lock_guard<std::mutex> lock(mutex);
     lastSubmittedEpoch = std::max(lastSubmittedEpoch, submittedEpoch);
+}
+
+void ResourceRetireQueue::SetPendingRenderFrames(size_t frames)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    pendingRenderFrames = frames;
 }
 
 void ResourceRetireQueue::CollectCompletedEpoch(uint64_t completedEpoch)
 {
-    lastCompletedEpoch = std::max(lastCompletedEpoch, completedEpoch);
+    std::vector<RetiredResource> keep;
+    std::vector<RetiredResource> released;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        lastCompletedEpoch = std::max(lastCompletedEpoch, completedEpoch);
 
-    auto keepBegin = std::remove_if(
-        pendingResources.begin(),
-        pendingResources.end(),
-        CompletedEpochRetirePredicate(lastCompletedEpoch));
-    pendingResources.erase(keepBegin, pendingResources.end());
+        keep.reserve(pendingResources.size());
+        released.reserve(pendingResources.size());
+        const CompletedEpochRetirePredicate canRetire(lastCompletedEpoch);
+        for (RetiredResource& resource : pendingResources)
+        {
+            if (canRetire(resource))
+            {
+                released.push_back(std::move(resource));
+            }
+            else
+            {
+                keep.push_back(std::move(resource));
+            }
+        }
+        pendingResources.swap(keep);
+    }
+    // 最后一个 shared_ptr 必须在这里释放，而不是在 mutex 内。
+    keep.clear();
+    released.clear();
 }
 
 void ResourceRetireQueue::ForceReleaseAll()
 {
-    pendingResources.clear();
-    lastCompletedEpoch = std::max(lastCompletedEpoch, lastSubmittedEpoch);
+    std::vector<RetiredResource> released;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        released.swap(pendingResources);
+        lastCompletedEpoch = std::max(lastCompletedEpoch, lastSubmittedEpoch);
+    }
+    released.clear();
 }
 
 std::weak_ptr<void>
@@ -113,6 +150,7 @@ ResourceRetireQueue::FindPendingResourceForTest(
     std::string_view debugName,
     uint64_t ownerGeneration) const noexcept
 {
+    std::lock_guard<std::mutex> lock(mutex);
     for (const RetiredResource& resource :
          pendingResources)
     {
@@ -123,6 +161,28 @@ ResourceRetireQueue::FindPendingResourceForTest(
         }
     }
     return {};
+}
+
+uint64_t ResourceRetireQueue::GetLastSubmittedEpoch() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    // Published-but-unresolved snapshots may still reference resources that GT
+    // is about to retire. Report a conservative floor; MarkFrameSubmitted and
+    // CollectCompletedEpoch keep using the real epochs.
+    return lastSubmittedEpoch +
+        static_cast<uint64_t>(pendingRenderFrames);
+}
+
+uint64_t ResourceRetireQueue::GetLastCompletedEpoch() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return lastCompletedEpoch;
+}
+
+size_t ResourceRetireQueue::GetPendingCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return pendingResources.size();
 }
 
 } // namespace VL

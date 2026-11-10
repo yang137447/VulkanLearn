@@ -16,6 +16,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderableObject.h"
+#include "renderSystem.h"
 #include "sceneNode.h"
 #include "vertexDataStruct.h"
 
@@ -705,7 +706,9 @@ void GlassRuntime::RebuildCrackMesh(World& world, Instance& instance)
         world.AddMeshObject(descriptor.name + "~cracks", std::move(mesh));
         instance.crackMeshAdded = true;
     }
-    instance.crackMesh->UpdateDynamicMesh(vertices, indices);
+    // 裂纹 overlay 由渲染线程在 swapchain slot 上更新；GT 只提交最新内容。
+    RenderSystem::GetInstance().QueueDynamicMesh(
+        instance.crackMeshKey, vertices, indices);
     Eigen::Vector3f minimum = vertices.front().position;
     Eigen::Vector3f maximum = vertices.front().position;
     for (const Vertex& vertex : vertices)
@@ -911,7 +914,6 @@ void GlassRuntime::SpawnShard(
     }
     std::shared_ptr<RenderableObject> object =
         AcquireShardMesh(vertices.size(), fragment.indices.size());
-    object->UpdateDynamicMesh(vertices, fragment.indices);
     RendererResourceCache::GetInstance().BindRenderableObject(meshKey, object);
 
     WorldMeshObject mesh;
@@ -958,6 +960,10 @@ void GlassRuntime::SpawnShard(
         RemoveMeshObject(world, shardName, meshKey, true);
         return;
     }
+    // 只有 shard 成功进入物理世界后才发布初始几何；否则对象会退回池，
+    // 队列里不应留下一个永远找不到的 mesh key。
+    RenderSystem::GetInstance().QueueDynamicMesh(
+        meshKey, std::move(vertices), fragment.indices);
 
     Shard shard;
     shard.name = shardName;
@@ -1331,14 +1337,17 @@ void GlassRuntime::RemoveMeshObject(
     world.RemoveMeshObject(meshObjectName);
     RendererResourceCache& cache = RendererResourceCache::GetInstance();
     std::shared_ptr<RenderableObject> retired;
-    const auto* cached = cache.GetRenderableObject(meshKey);
-    if (cached != nullptr && *cached) retired = *cached;
+    const auto cached = cache.GetRenderableObject(meshKey);
+    if (cached != nullptr) retired = cached;
     cache.BindRenderableObject(meshKey, {});
     if (retired)
     {
         if (returnToShardPool)
         {
             // 只有调用方明确声明“这是碎片池 mesh”时才复用；不再用容量反推类型。
+            // 复位内容标记后，复用时的第一次更新会写入全部槽位，避免残留
+            // 上一片碎片的几何仍在别的 swapchain slot 里。
+            retired->ResetDynamicContentForReuse();
             pendingShardMeshes.push_back({
                 ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(),
                 std::move(retired)});

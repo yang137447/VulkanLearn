@@ -35,7 +35,7 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 
 VulkanManager::~VulkanManager()
 {
-    device.waitIdle(); //等待设备空闲
+    GlobalVulkanSubmissionGate().WaitIdle(device);
     for (VL::PresentTarget &target : presentTargets)
     {
         DestroyTargetSyncObjects(target);
@@ -57,7 +57,10 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
         return;
     }
 
-    device.waitIdle(); //等待设备空闲
+    // 重建会销毁并替换这个目标的 swapchain 图像、view 和同步对象。
+    // 调用方必须先让渲染线程停在安全点；这里的 device idle 同时与在途 submit/present
+    // 串行化，但不能替代“渲染线程不再录制该目标”的所有权约束。
+    GlobalVulkanSubmissionGate().WaitIdle(device);
 
     VL::PresentTarget &target = defaultTarget();
     target.requestedExtent = vk::Extent2D{
@@ -405,21 +408,36 @@ void VulkanManager::CreateCommandPool()
     commandPoolCreateInfo
         .setQueueFamilyIndex(graphicsQueueFamilyIndex.value())
         .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-    commandPool = device.createCommandPool(commandPoolCreateInfo);
+    commandPool = GlobalVulkanSubmissionGate().CreateCommandPool(
+        device, commandPoolCreateInfo);
     assert(commandPool);
     VulkanDebug::SetObjectName(device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Main");
+
+    singleTimeCommandPool = GlobalVulkanSubmissionGate().CreateCommandPool(
+        device, commandPoolCreateInfo);
+    assert(singleTimeCommandPool);
+    VulkanDebug::SetObjectName(
+        device,
+        singleTimeCommandPool,
+        vk::ObjectType::eCommandPool,
+        "CommandPool: SingleTime");
 }
 
 void VulkanManager::DestroyCommandPool()
 {
+    if (singleTimeCommandPool)
+    {
+        GlobalVulkanSubmissionGate().DestroyCommandPool(
+            device, singleTimeCommandPool);
+    }
+
     if (!commandPool)
     {
         return;
     }
     // 池的销毁会连带释放从它分配出去的命令缓冲，因此调用方必须先确保
     // 各目标的命令缓冲已经不再被引用（本函数只在设备级关闭路径上被调用）。
-    device.destroyCommandPool(commandPool);
-    commandPool = nullptr;
+    GlobalVulkanSubmissionGate().DestroyCommandPool(device, commandPool);
 }
 
 void VulkanManager::CreateTargetCommandBuffers(VL::PresentTarget &target)
@@ -432,9 +450,8 @@ void VulkanManager::CreateTargetCommandBuffers(VL::PresentTarget &target)
         .setCommandPool(commandPool)
         .setLevel(vk::CommandBufferLevel::ePrimary)
         .setCommandBufferCount(static_cast<uint32_t>(target.commandBuffers.size()));
-    vk::Result result = device.allocateCommandBuffers(
-        &commandBufferAllocateInfo, target.commandBuffers.data());
-    assert(result == vk::Result::eSuccess);
+    target.commandBuffers =
+        GlobalVulkanSubmissionGate().AllocateCommandBuffers(device, commandBufferAllocateInfo);
 
     for (size_t i = 0; i < target.commandBuffers.size(); i++)
     {
@@ -451,9 +468,8 @@ void VulkanManager::DestroyTargetCommandBuffers(VL::PresentTarget &target)
         target.commandBuffers.clear();
         return;
     }
-    device.freeCommandBuffers(commandPool,
-        static_cast<uint32_t>(target.commandBuffers.size()), target.commandBuffers.data());
-    target.commandBuffers.clear();
+    GlobalVulkanSubmissionGate().FreeCommandBuffers(
+        device, commandPool, target.commandBuffers);
 }
 
 void VulkanManager::CreateFrameSyncObjects()

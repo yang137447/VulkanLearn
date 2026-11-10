@@ -5,12 +5,14 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <utility>
 #include <nlohmann/json.hpp>
@@ -30,6 +32,7 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
+#include "renderableObject.h"
 #include "render/resource/placementBindingResolver.h"
 #include "render/offline/offlineCameraMotionPolicy.h"
 #include "render/offline/offlineDisplayVulkan.h"
@@ -111,6 +114,20 @@ public:
     // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
     // immediately; in workerThreadCount=2 RenderThread consumes it later.
     void PublishSnapshotFromActiveWorld();
+    // Dynamic mesh producers (softbody/glass) never write host-visible buffers
+    // on GT. They publish the latest content per mesh key; the render thread
+    // applies it to the swapchain frame slot before recording passes.
+    void QueueDynamicVertices(
+        std::string meshKey,
+        std::vector<struct Vertex> vertices);
+    void QueueDynamicMesh(
+        std::string meshKey,
+        std::vector<struct Vertex> vertices,
+        std::vector<uint32_t> indices);
+    size_t GetPendingDynamicMeshUpdateCountForTest() const
+    {
+        return dynamicMeshUpdateQueue.PendingCount();
+    }
     // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
     // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
     // frameDelta/gameDelta/hairDelta 是各自已夹取的模拟 delta；windDelta 是
@@ -203,7 +220,7 @@ public:
     vk::Extent2D GetSceneRenderExtent() const;
     void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
     void SetCsmSettings(const VL::CsmSettings& settings);
-    const VL::CsmSettings& GetCsmSettings() const noexcept { return csmSettings; }
+    VL::CsmSettings GetCsmSettings() const;
     bool SetCsmCastShadows(bool enabled, std::string& outMessage);
     bool SetCsmDynamicShadowDistance(float distance, std::string& outMessage);
     bool SetCsmCascadeCount(uint32_t cascadeCount, std::string& outMessage);
@@ -252,20 +269,37 @@ public:
         bool prepareOffline = false);
     std::shared_ptr<const VL::OfflineWorldAssets>
     CaptureOfflineWorldAssets() const noexcept { return activeOfflineWorldAssets; }
-    bool IsOfflineMode() const noexcept { return offlineMode; }
-    void SetInitialOfflineMode(bool enabled) noexcept { offlineMode = enabled; }
+    bool IsOfflineMode() const noexcept { return offlineMode.load(std::memory_order_acquire); }
+    void SetInitialOfflineMode(bool enabled) noexcept
+    {
+        offlineMode.store(enabled, std::memory_order_release);
+    }
     // --prerender-skin：启动时固定，必须在加载初始 World 之前设置，因为材质
     // shader variant 与对象 GPU 资源都按它选择。
     void SetPrerenderSkinEnabled(bool enabled) noexcept { prerenderSkinEnabled = enabled; }
     bool IsPrerenderSkinEnabled() const noexcept { return prerenderSkinEnabled; }
     bool SetOfflineMode(bool enabled, std::string& message);
     bool SetOfflineSetting(const std::string& name, int value, std::string& message);
-    void SetOfflineAov(VL::OfflineAov aov) noexcept { offlineAov = aov; }
+    void SetOfflineAov(VL::OfflineAov aov) noexcept
+    {
+        offlineAov.store(aov, std::memory_order_release);
+    }
     bool SetOfflineExposure(float exposure, std::string& message);
     void ControlOfflineSession(int command);
     const VL::OfflineRenderSettings& GetOfflineSettings() const noexcept { return offlineSettings; }
-    VL::OfflineAov GetOfflineAov() const noexcept { return offlineAov; }
-    float GetOfflineExposure() const noexcept { return offlineExposure; }
+    VL::OfflineAov GetOfflineAov() const noexcept
+    {
+        return offlineAov.load(std::memory_order_acquire);
+    }
+    float GetOfflineExposure() const noexcept
+    {
+        return offlineExposure.load(std::memory_order_acquire);
+    }
+    // Structural renderer mutations still require RT to be idle. EngineLoop
+    // installs a callback that implements WaitForRenderThreadIdle(); without a
+    // render thread the call is a no-op.
+    void SetRendererMutationSafePoint(std::function<void()> safePoint);
+    void WaitForRendererMutationSafePoint();
     VL::Offline::SessionState GetOfflineState() const;
     std::string GetOfflineError() const;
     std::shared_ptr<const VL::OfflinePublishedResult> CaptureOfflineResult() const;
@@ -385,6 +419,9 @@ private:
     void PublishSnapshotFromActiveWorld(bool advanceSimulation);
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
+    // RT frame-start snapshot of the GT-owned CSM settings. Invalidates the
+    // RT shadow-cascade cache when the GT revision changed.
+    void SnapshotFrameCsmSettings();
     // 放置级（per-placement）网格：resolve 之前确保每个实例键都有独立
     // RenderableObject（从模板克隆、共享导入几何），并按 placementBinding 的 Kind
     // 交给通用 resolver 应用绑定。当前唯一 provider 是 GPU 毛发，但流程不含
@@ -396,6 +433,7 @@ private:
     void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
+    void ApplyQueuedDynamicMeshUpdates(uint32_t frameSlot);
     void AdvanceSceneWind();
     void AdvanceSceneWindTick();
     void UpdateExposureFrameTiming();
@@ -610,11 +648,24 @@ private:
     WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
+    // GT authority. Never read this field directly from RT code; RT consumes a
+    // per-frame snapshot into frameCsmSettings at frame start.
     VL::CsmSettings csmSettings;
+    mutable std::mutex csmSettingsMutex;
+    std::atomic<uint64_t> csmSettingsRevision{0};
+    // RT-owned per-frame snapshot; written only by SnapshotFrameCsmSettings().
+    VL::CsmSettings frameCsmSettings;
+    uint64_t frameCsmSettingsRevision = 0;
+    bool frameCsmSettingsInitialized = false;
     ShadowCascadeFrameData shadowCascadeFrameData;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;
+    VL::DynamicMeshUpdateQueue dynamicMeshUpdateQueue;
+    // RT-only: one warning per mesh key, otherwise a missing object spams every
+    // frame while its World entry is being torn down.
+    std::unordered_set<std::string> reportedMissingDynamicMeshKeys;
+    std::unordered_map<std::string, int> missingDynamicMeshAttempts;
     VL::RendererFrontend rendererFrontend;
     VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
     VL::PassRuntime passRuntime;
@@ -646,11 +697,11 @@ private:
     bool pickingSceneEnabled = true;
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
-    bool offlineMode = false;
+    std::atomic<bool> offlineMode{false};
     bool prerenderSkinEnabled = false;
     VL::OfflineRenderSettings offlineSettings{0, 0, 32, 2, 1, 0};
-    VL::OfflineAov offlineAov = VL::OfflineAov::Combined;
-    float offlineExposure = 1.0f;
+    std::atomic<VL::OfflineAov> offlineAov{VL::OfflineAov::Combined};
+    std::atomic<float> offlineExposure{1.0f};
     std::unique_ptr<VL::OfflineRenderCoordinator> offlineCoordinator;
     VL::OfflineDisplayVulkan offlineDisplay;
     VL::WorldSnapshotPtr currentOfflineSnapshot;
@@ -674,7 +725,7 @@ private:
     // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。
     std::array<VL::ShadowCasterCullStats, VL::CsmSettings::MaxCascadeCount>
         frameShadowCasterCullStats{};
-    bool gpuPassStatsLoggingEnabled = false;
+    std::atomic<bool> gpuPassStatsLoggingEnabled{false};
     uint32_t shadowCasterCullStatsFramesSinceLog = 0;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
@@ -684,6 +735,7 @@ private:
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
     VL::UiViewportRect requestedSceneViewport;
     bool sceneViewportRequested = false;
+    mutable std::mutex sceneViewportMutex;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     mutable std::mutex terrainFeedbackStatisticsMutex;
@@ -693,6 +745,7 @@ private:
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
     // 确保回读不会与仍在录制的 command buffer 交叉。
     std::optional<std::string> pendingScreenshotPath;
+    mutable std::mutex pendingScreenshotPathMutex;
     // hair trace 请求跨 GT/渲染线程；渲染线程每帧只取一次，取走后由
     // HairSimulationPass 在 Record 中消费。未请求时只有一次加锁读取。
     std::mutex hairTraceRequestMutex;
@@ -713,4 +766,6 @@ private:
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;
+    std::mutex rendererMutationSafePointMutex;
+    std::function<void()> rendererMutationSafePoint;
 };

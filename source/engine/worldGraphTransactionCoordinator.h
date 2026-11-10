@@ -19,7 +19,7 @@ class RendererBackendVulkan;
 class RuntimeConfig;
 class RenderThread;
 class WorldManager;
-class WorldTransitionCoordinator;
+class WorldCandidatePreparer;
 struct MaterialDefinitionReloadBatch;
 struct WorldHandle;
 
@@ -49,7 +49,7 @@ public:
         RendererBackendVulkan& rendererBackend,
         ShaderCompiler& shaderCompiler,
         PipelineFactory& pipelineFactory,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
+        WorldCandidatePreparer& worldCandidatePreparer,
         WorldManager& worldManager,
         Controller& controller,
         const RuntimeConfig& runtimeConfig,
@@ -75,7 +75,7 @@ private:
     RendererBackendVulkan& rendererBackend;
     ShaderCompiler& shaderCompiler;
     PipelineFactory& pipelineFactory;
-    WorldTransitionCoordinator& worldTransitionCoordinator;
+    WorldCandidatePreparer& worldCandidatePreparer;
     WorldManager& worldManager;
     Controller& controller;
     const RuntimeConfig& runtimeConfig;

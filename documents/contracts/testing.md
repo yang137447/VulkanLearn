@@ -13,10 +13,10 @@
 | 命令 | 前提 | 验证内容 | 何时运行 |
 | --- | --- | --- | --- |
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
-| `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 64 条规则索引（生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
+| `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 74 条规则索引（生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
 | `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
 | `py -3 tool/validate_model_descriptors.py` | 资源工作树可访问 | 扫描正式 SM_/TF_ 描述符，共享无依赖 schema checker 支持同级引用、封闭字段与数值边界 | 改 model/TressFX schema 或正式描述符后 |
-| `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 65 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
+| `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 74 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |
 | `ctest --test-dir build -R <regex> --output-on-failure` | 已构建对应目标 | 模块测试 | 见下"改动 → 验证" |
@@ -35,6 +35,41 @@
 | `material_instance_editor_production_tests` | 12 | 独立 TressFX 草稿发布与保存反馈 |
 | `game_export_tests` | 20 | 放置代理/权重依赖闭包，不把 skinning.source 当文件 |
 | `material_schema_tests` | 29 | TressFX 工厂/材质路径边界 |
+
+### 有界异步渲染与事务所有权（2026-11-10）
+
+本轮把 `workerThreadCount=2` 从“GT 提交后立即等待”的录制线程改为有界异步：GT 最多
+领先一帧，`SubmitFrame()` 不阻塞，只有上一帧未归还帧槽时 `WaitForRenderFrameSlot()`
+才等待。对应测试：
+
+- `vl_renderer_backend_tests` 新增 `render_frame_budget_test.cpp`（帧预算、latest-wins、
+  abort 不使 GT 死锁）、`resource_retire_queue_test.cpp`（并发 retire/collect）、
+  `world_snapshot_delta_test.cpp`（被替换 snapshot 的 hair delta 累加）、
+  `resolved_draw_lifetime_test.cpp`（cache 移除后 in-flight draw 仍持强引用）、
+  `dynamic_mesh_update_queue_test.cpp`（latest-wins、不同 key 保留、并发发布/排空）。
+- `material_schema_tests` 新增目标 `material_instance_thread_safety_tests`：参数提交是事务性的，
+  并发 snapshot 不观察到半更新状态。
+- `script_tests` 新增 `worldGameplayPlanTests.cpp`：`WorldGameplayPlanBuilder` 的默认值、
+  作者材质路径、缺失绑定与 renderer 不得解析 gameplay 的静态边界。
+
+验证命令：
+
+```powershell
+cmake --build build --target vl_renderer_backend_tests material_instance_thread_safety_tests script_tests -j 4
+ctest --test-dir build -R "RenderFrameBudget|ResourceRetireQueue|WorldSnapshotDelta|ResolvedDrawLifetime|DynamicMeshUpdateQueue|MaterialInstanceThreadSafety|WorldGameplayPlan" --output-on-failure
+build\bin\main.exe --world-graph-transaction-test --exit-after-tests
+build\bin\main.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats   # 手动运行并关闭；观察 GT 不再逐帧等待 RT
+```
+
+构建注意：MinGW 下不要用无上限 `-j`；并发 `cc1plus` 会耗尽内存，使用 `-j4`。C# 开启时
+`main` 依赖 `vl_gameplay`，构建前把临时目录指到工作区，避免用户 `TEMP` 权限或 NuGet
+锁阻塞：
+
+```powershell
+$env:TEMP = "<worktree>\.tmp"
+$env:TMP = $env:TEMP
+$env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
+```
 
 下表保留较早目标覆盖基线；数量由上表及各专项的带日期实测记录更新。
 

@@ -5,7 +5,7 @@
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`48970c01c95860722de2d28700bb6911768ad4f9`
+生成源 revision：`6cbbc7603a864463a1cc4cf417f6f00fc7d20276`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
@@ -30,9 +30,18 @@
 | SceneObject wrapper file cutover | path must not exist | `source/sceneObject.h`, `source/sceneObject.cpp` |
 | Renderer cache mesh binding cutover | pattern must not match anywhere in source | `（全仓库源码树）` |
 | Mesh object build plan contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World build plan pure data contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World gameplay plan builder contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Renderer resource load result contract | pattern must match in a file | `（路径由脚本内条件生成）` |
-| World build plan mesh object contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Renderer gameplay plan boundary | pattern must not match in a file | `source/render/resource/rendererResourceLoadCoordinator.cpp` |
+| Renderer world loader include boundary | pattern must not match in a directory | `（全仓库源码树）` |
+| World transaction engine ownership contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Prepared world transition contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World transaction ownership cutover | path must not exist | `source/world/loading/worldTransitionCoordinator.h`, `source/world/loading/worldTransitionCoordinator.cpp`, `source/world/loading/worldGraphTransactionCoordinator.h`, `source/world/loading/worldGraphTransactionCoordinator.cpp` |
+| WorldBuilder assembly assets contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | WorldBuilder mesh object plan consumption | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Bounded async render loop contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Bounded async render loop no immediate idle wait | Test-AsyncRenderLoopNoImmediateIdleWait | `（路径由脚本内条件生成）` |
 | Runtime test hook command boundary | pattern must not match in a file | `source/engine/runtimeTestHooks.h`, `source/engine/runtimeTestHooks.cpp` |
 | Redundant Vulkan device abstraction cutover | path must not exist | `source/render/rhi/rhiDevice.h` |
 | Vulkan device boundary concrete-only contract | pattern must not match in a file | `source/render/rhi/vulkan/rhiDeviceVulkan.h` |
@@ -75,4 +84,4 @@
 | World graph retire queue validation | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Architecture final validation script contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 
-共 65 条规则。
+共 74 条规则。

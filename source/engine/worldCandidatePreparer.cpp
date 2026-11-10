@@ -1,19 +1,21 @@
-#include "world/loading/worldTransitionCoordinator.h"
+#include "engine/worldCandidatePreparer.h"
 
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "commonFunction.h"
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
-#include "renderSystem.h"
 #include "sceneNode.h"
 #include "world/loading/worldBuilder.h"
 #include "world/loading/worldLoader.h"
+#include "world/worldBuildPlan.h"
 #include "script/scriptRuntime.h"
 
 namespace VL
@@ -83,7 +85,7 @@ void ConfigureInitialCamera(Camera& camera, float aspectRatio)
 
 } // namespace
 
-WorldTransitionCoordinator::WorldTransitionCoordinator(
+WorldCandidatePreparer::WorldCandidatePreparer(
     WorldManager& worldManager,
     RendererResourceLoadCoordinator& resourceLoadCoordinator,
     float initialCameraAspectRatio,
@@ -96,28 +98,26 @@ WorldTransitionCoordinator::WorldTransitionCoordinator(
 }
 
 RuntimeResult<PreparedWorldTransition>
-WorldTransitionCoordinator::PrepareWorldLoad(
+WorldCandidatePreparer::Prepare(
     const std::string& scenePath,
     RenderGraph& pipelineContractGraph,
     const MaterialDefinitionReloadBatch* materialDefinitionReload,
     const nlohmann::json& extraSceneObjects,
-    const nlohmann::json& sceneDocument)
+    const nlohmann::json& sceneDocument,
+    WorldCandidatePrepareOptions options)
 {
     if (scenePath.empty())
     {
-        state = WorldTransitionState::Failed;
         return RuntimeResult<PreparedWorldTransition>::Failure(
             MakeRuntimeError(
                 "WorldTransition.EmptyScenePath",
                 "Cannot load a world from an empty scene path."));
     }
 
-    state = WorldTransitionState::Validating;
     WorldLoader worldLoader;
     auto worldBuildPlanResult = worldLoader.Load(scenePath, extraSceneObjects, sceneDocument);
     if (worldBuildPlanResult.IsFailure())
     {
-        state = WorldTransitionState::Failed;
         return RuntimeResult<PreparedWorldTransition>::Failure(
             worldBuildPlanResult.Error());
     }
@@ -126,7 +126,6 @@ WorldTransitionCoordinator::PrepareWorldLoad(
 
     try
     {
-        state = WorldTransitionState::Loading;
         const uint64_t worldGeneration =
             worldManager.GetNextWorldGeneration();
         RendererResourceCache& activeCache =
@@ -158,36 +157,28 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             &prepared.passMaterialBindings;
         loadContext.offlineWorldAssets =
             prepared.offlineWorldAssets.get();
-        loadContext.offlineOnly = RenderSystem::GetInstance().IsOfflineMode();
+        loadContext.offlineOnly = options.offlineOnly;
         // 预蒙皮是启动级开关：候选 World 的材质变体与对象 buffer 必须与
         // RenderSystem 后续帧录制使用同一个值。
-        loadContext.prerenderSkin = RenderSystem::GetInstance().IsPrerenderSkinEnabled();
+        loadContext.prerenderSkin = options.prerenderSkin;
         prepared.offlineWorldAssets->realtimePrepared = !loadContext.offlineOnly;
 
-        RendererWorldResourceLoadResult resourceLoadResult =
+        WorldAssemblyAssets assemblyAssets =
             resourceLoadCoordinator.LoadRendererResources(
                 worldBuildPlan,
                 loadContext);
-        worldBuildPlan.meshObjectPlans =
-            std::move(resourceLoadResult.meshObjectPlans);
-        worldBuildPlan.windResponseProfiles =
-            std::move(resourceLoadResult.windResponseProfiles);
-        worldBuildPlan.softBodyObjectPlans =
-            std::move(resourceLoadResult.softBodyObjectPlans);
-        worldBuildPlan.glassObjectPlans =
-            std::move(resourceLoadResult.glassObjectPlans);
-        worldBuildPlan.projectileSettings =
-            std::move(resourceLoadResult.projectileSettings);
+        // gameplay 计划已在 WorldLoader 中产出；这里只合并渲染器派生的
+        // 网格/风计划与材质绑定。不得把 gameplay 参数写回加载计划。
 
         WorldBuilder worldBuilder;
         auto worldResult =
             worldBuilder.BuildFromLoadedScene(
                 worldGeneration,
                 worldBuildPlan,
+                std::move(assemblyAssets),
                 shadowCascadeCount);
         if (worldResult.IsFailure())
         {
-            state = WorldTransitionState::Failed;
             return RuntimeResult<PreparedWorldTransition>::Failure(
                 worldResult.Error());
         }
@@ -206,13 +197,11 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             std::move(loadContext.pendingGeneratedFiles);
         prepared.activation =
             worldManager.PrepareActivation(prepared.world);
-        state = WorldTransitionState::Active;
         return RuntimeResult<PreparedWorldTransition>::Success(
             std::move(prepared));
     }
     catch (const std::exception& exception)
     {
-        state = WorldTransitionState::Failed;
         const std::string errorMessage = exception.what();
         return RuntimeResult<PreparedWorldTransition>::Failure(
             MakeRuntimeError(

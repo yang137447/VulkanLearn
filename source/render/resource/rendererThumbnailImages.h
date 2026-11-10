@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 #include <vulkan/vulkan.hpp>
@@ -33,6 +34,7 @@ private:
         std::shared_ptr<Image> image;
     };
     RendererBackendVulkan& backend;
+    mutable std::mutex mutex;
     uint64_t nextId = 1;
     std::unordered_map<uint64_t, Entry> images;
 };

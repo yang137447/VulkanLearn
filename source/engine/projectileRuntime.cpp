@@ -351,8 +351,8 @@ void ProjectileRuntime::RemoveArrowMesh(World& world, const Arrow& arrow)
     world.RemoveMeshObject(arrow.name);
     RendererResourceCache& cache = RendererResourceCache::GetInstance();
     std::shared_ptr<RenderableObject> retired;
-    const auto* cached = cache.GetRenderableObject(arrow.meshKey);
-    if (cached != nullptr && *cached) retired = *cached;
+    const auto cached = cache.GetRenderableObject(arrow.meshKey);
+    if (cached != nullptr) retired = cached;
     cache.BindRenderableObject(arrow.meshKey, {});
     if (retired)
     {
