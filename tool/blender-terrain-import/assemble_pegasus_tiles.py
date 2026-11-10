@@ -82,6 +82,12 @@ def _rewrite_shared_textures(
     verbose: bool,
 ) -> None:
     shared: dict[str, str] = {}
+    # 全局（非平铺）图对所有 tile 相同：宏观色 + AO/湿度。打包脚本见
+    # tool/houdini-terrain-import/bake_global_maps.py。
+    global_textures = {
+        "globalColour": "Generated/HoudiniPegasusIsland/Global/T_global_colour.json",
+        "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
+    }
     for tile_index, tile in enumerate(tile_entries):
         output_root = resource_root / tile["outputRelative"]
         mi_path = output_root / f"MI_terrain_{tile['assetName']}.json"
@@ -102,10 +108,25 @@ def _rewrite_shared_textures(
                 if textures.get(key) != value:
                     textures[key] = value
                     changed = True
+            for key, value in global_textures.items():
+                if textures.get(key) != value:
+                    textures[key] = value
+                    changed = True
             if changed:
                 _write_json(mi_path, mi)
                 if verbose:
                     print(f"shared textures -> {mi_path}")
+        if tile_index == 0:
+            # 第一个 tile 也要写 global 图（它已经有 layer 表）。
+            changed = False
+            for key, value in global_textures.items():
+                if textures.get(key) != value:
+                    textures[key] = value
+                    changed = True
+            if changed:
+                _write_json(mi_path, mi)
+                if verbose:
+                    print(f"global textures -> {mi_path}")
 
 
 def main() -> int:

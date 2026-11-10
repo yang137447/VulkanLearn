@@ -42,6 +42,9 @@ public:
         std::optional<FileFormat> formatHint = std::nullopt;
         bool genMipmaps = false;
         int forceChannels = 0;
+        // Decode 16-bit PNGs without the 8-bit truncation stbi_load applies.
+        // Used by terrain height arrays; ignored for HDR/EXR/container sources.
+        bool forceSixteenBit = false;
     };
 
     struct SaveOptions

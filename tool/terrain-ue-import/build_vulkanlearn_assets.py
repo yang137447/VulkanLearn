@@ -1513,9 +1513,15 @@ def _convert(
         output_root, textures_dir / "T_terrain_kitedemo_normal_array.json")
     pbr_json_path = _guard_output(
         output_root, textures_dir / "T_terrain_kitedemo_pbr_array.json")
+    height_json_path = _guard_output(
+        output_root, textures_dir / "T_terrain_kitedemo_height_array.json")
     albedo_json = _texture_json(
         "T_terrain_kitedemo_albedo_array", albedo_sources, "srgb")
     albedo_json["displacementSources"] = displacement_sources
+    # 16-bit 高度数组：运行时按层 ID 直接采 R16_UNORM，不进 VT 页表。
+    height_json = _texture_json(
+        "T_terrain_kitedemo_height_array", displacement_sources, "linear")
+    height_json["bitDepth"] = 16
     normal_json = _texture_json(
         "T_terrain_kitedemo_normal_array", normal_sources, "linear")
     pbr_json = _texture_json(
@@ -1523,7 +1529,8 @@ def _convert(
     for path, value in (
             (albedo_json_path, albedo_json),
             (normal_json_path, normal_json),
-            (pbr_json_path, pbr_json)):
+            (pbr_json_path, pbr_json),
+            (height_json_path, height_json)):
         if _write_json_atomic(path, value):
             changed_files += 1
         else:
@@ -1604,6 +1611,7 @@ def _convert(
             "layerAlbedo": _asset_path(resource_root, albedo_json_path),
             "layerNormal": _asset_path(resource_root, normal_json_path),
             "layerPbr": _asset_path(resource_root, pbr_json_path),
+            "layerHeight": _asset_path(resource_root, height_json_path),
         },
     }
     if _write_json_atomic(mi_path, mi_json):

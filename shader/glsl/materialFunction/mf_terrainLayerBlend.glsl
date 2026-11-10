@@ -70,6 +70,63 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     int ids[4] = int[4](topIds.x, topIds.y, topIds.z, topIds.w);
     float weights[4] = float[4](topWeights.x, topWeights.y, topWeights.z, topWeights.w);
 
+    // Height blend: the ID/weight atlas gives a linear cross-fade, which looks
+    // muddy where two layers meet. Re-weighting by each layer's 16-bit height
+    // (0..1, mean 0.5) keeps the ordering and narrows the transition, the
+    // classic "height + inverted weight" scheme. strength 0 is a no-op.
+    if (u_heightBlendStrength > 0.0)
+    {
+        float scores[4];
+        float scoreMax = -1.0e9;
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const int layer = ids[slot];
+            if (weights[slot] <= 1.0e-5)
+            {
+                scores[slot] = -1.0e9;
+                continue;
+            }
+            const vec4 extra = TerrainLayerExtra(layer);
+            const float angle = extra.w;
+            const mat2 rotation =
+                mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
+            const vec2 uv =
+                rotation * (context.texCoord * u_uvScale * extra.z);
+            const float height =
+                texture(layerHeight, vec3(uv, float(layer))).r;
+            // 换算成米：每层归一化到 0..1 后直接用会让平整沙层和岩石
+            // 拥有同样的起伏幅度；乘 displacementM 才能保留相对高差。
+            const float displacementM =
+                TerrainLayerCatalogRow(layer, 3).w;
+            const float heightMeters = (height - 0.5) * displacementM;
+            scores[slot] =
+                heightMeters * u_heightBlendStrength + (1.0 - weights[slot]);
+            scoreMax = max(scoreMax, scores[slot]);
+        }
+        float total = 0.0;
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            float weight = weights[slot];
+            if (weight > 1.0e-5)
+                weight *= clamp(scores[slot] - scoreMax + 1.0, 0.0, 1.0);
+            weights[slot] = weight;
+            total += weight;
+        }
+        if (total > 1.0e-5)
+        {
+            for (int slot = 0; slot < 4; ++slot)
+                weights[slot] /= total;
+        }
+        else
+        {
+            weights[0] = 1.0;
+            weights[1] = 0.0;
+            weights[2] = 0.0;
+            weights[3] = 0.0;
+        }
+        topWeights = vec4(weights[0], weights[1], weights[2], weights[3]);
+    }
+
     vec4 albedo = vec4(0.0);
     vec4 pbr = vec4(0.0);
     vec3 blendedNormal = vec3(0.0);
@@ -153,6 +210,19 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         clamp(0.75 + macroLuma, 0.7, 1.3),
         u_macroStrength);
 
+    // 全局（非平铺）图：世界对齐的宏观色 + AO + 湿度。
+    // 这些图在打包时已按本地形朝向旋转过，shader 不再做任何翻转。
+    const vec2 globalUv =
+        (context.worldPosition.xz - u_globalOriginCm) /
+        max(u_globalSizeCm, 1.0);
+    const vec2 globalClamped = clamp(globalUv, vec2(0.0), vec2(1.0));
+    const vec3 macroColour = texture(globalColour, globalClamped).rgb;
+    const vec4 globalMasks = texture(globalMasks, globalClamped);
+    // 直接向宏观色混合，而不是只传色相：烘好的图本身已经带了大尺度绿/紫
+    // 分布，除以亮度会把蓝通道压到 0.4 左右，叠加干燥草地后整体发褐。
+    // 1.5 的增益补偿 bake 进去的遮蔽，tiling 仍保留近景细节。
+    albedo.rgb = mix(albedo.rgb, macroColour * 1.5, u_globalColourWeight);
+
     if (u_debugMode > 2.5)
     {
         inputs.baseColor = vec3(0.0);
@@ -216,10 +286,16 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
 
     // 缺页输出中性表面（0.18 灰、roughness 0.9、几何法线）；有效页的
     // invalidPage=0，mix 的尾项严格为 0，输出与原值逐位一致。
-    inputs.baseColor = mix(albedo.rgb, vec3(0.18), invalidPage);
+    const float wetness =
+        clamp(globalMasks.g * u_globalWetnessStrength, 0.0, 1.0);
+    const float globalAo =
+        mix(1.0, globalMasks.r, u_globalAoStrength);
+    inputs.baseColor =
+        mix(albedo.rgb, vec3(0.18), invalidPage) * (1.0 - 0.3 * wetness);
     // ORM 打包（与 UE/Substance 一致）：R=AO、G=roughness、B=metallic。
-    inputs.ambientOcclusion = mix(pbr.r, 1.0, invalidPage);
-    inputs.roughness = mix(pbr.g, 0.9, invalidPage);
+    inputs.ambientOcclusion = mix(pbr.r, 1.0, invalidPage) * globalAo;
+    inputs.roughness =
+        mix(mix(pbr.g, 0.9, invalidPage), 0.08, wetness * 0.8);
     inputs.metallic = mix(pbr.b, 0.0, invalidPage);
     inputs.opacity = 1.0;
     inputs.opacityMask = 1.0;

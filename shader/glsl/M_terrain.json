@@ -160,6 +160,53 @@
                 "max": 1.0
             },
             "description": "macro albedo luma modulation strength used to suppress distant tiling"
+        },
+        "u_globalOriginCm": {
+            "type": "vec2",
+            "default": [-201600.0, -201600.0],
+            "channels": {
+                "x": {
+                    "name": "originX",
+                    "description": "world X of the global map's lower-left corner in cm",
+                    "range": {"min": -10000000.0, "max": 10000000.0}
+                },
+                "y": {
+                    "name": "originZ",
+                    "description": "world Z of the global map's lower-left corner in cm",
+                    "range": {"min": -10000000.0, "max": 10000000.0}
+                }
+            },
+            "description": "world-space origin of the non-tiling global colour/mask maps"
+        },
+        "u_globalSizeCm": {
+            "type": "float",
+            "default": 403200.0,
+            "range": {"min": 1.0, "max": 100000000.0},
+            "description": "world-space side length covered by the global maps in cm"
+        },
+        "u_globalColourWeight": {
+            "type": "float",
+            "default": 0.55,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "how strongly the macro colour map tints the tiling albedo (hue only, brightness preserved)"
+        },
+        "u_globalAoStrength": {
+            "type": "float",
+            "default": 1.0,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "multiplier for the global AO channel"
+        },
+        "u_globalWetnessStrength": {
+            "type": "float",
+            "default": 0.6,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "wetness influence on roughness and albedo darkening"
+        },
+        "u_heightBlendStrength": {
+            "type": "float",
+            "default": 4.0,
+            "range": {"min": 0.0, "max": 8.0},
+            "description": "top-4 height-blend sharpening; 0 reproduces pure linear weights"
         }
     },
     "textures": {
@@ -230,6 +277,18 @@
         "layerPbrAtlas": {
             "type": "sampler2DArray",
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "layerHeight": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "globalColour": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "globalMasks": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         }
     },
     "shaderEvaluation": {

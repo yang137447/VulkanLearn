@@ -192,8 +192,16 @@ TR 字段（已通过校验与透传，置换 pass 尚未消费）：
 ## 8. 待办
 
 1. ~~16-bit displacement~~（已完成：Poly Haven 4K EXR → 16-bit PNG）；
-2. 绑定 `layerHeight`（R16）并实现 height blend；
+2. ~~绑定 `layerHeight`（R16）并实现 height blend~~（已完成：`bitDepth:16` 走
+   `stbi_load_16` → `R16_UNORM`，按层 ID 直采；混合用
+   `(h-0.5) × displacementM` 换算到米，避免平整沙层和岩石同幅起伏）；
 3. 细分置换：近场 tessellation（2 m 网格 → 4×4/8×8），shadow pass 同步，
    factor 在 chunk 边界保持一致；碰撞仍用 CPU 高度图，细部不参与；
-4. 全局图 `colour` / `masks` 绑定进 `M_terrain`；
+4. ~~全局图 `colour` / `masks` 绑定进 `M_terrain`~~（已完成：世界对齐 UV，
+   colour 以 0.55 权重直接混入 albedo，masks 的 R=AO、G=wetness 进入
+   AO/roughness/albedo）；
 5. 图集压缩（BC5 normal / BC7 albedo/orm）与 2 K 主角层。
+
+全局图打包：`tool/houdini-terrain-import/bake_global_maps.py`，输出
+`Generated/HoudiniPegasusIsland/Global/{T_global_colour,T_global_masks}.json`，
+在 270° 旋转后烘焙；`assemble_pegasus_tiles.py` 把它们写进每个 tile 的 MI。
