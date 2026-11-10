@@ -57,6 +57,14 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/retargetAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelBootstrap.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelActionRouter.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelChangeRouter.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/terrainPanelController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneViewportController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairPanelController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairBrushController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/materialEditorView.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/blueprintAssetView.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/actorMarkup.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneOutlinerView.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneDetailsView.cpp"
@@ -107,6 +115,14 @@ if(MINGW)
     # 主 RmlUi 套件的模板实例数已超过 MinGW 标准 COFF section 上限。
     set_source_files_properties(editorUiTests.cpp blueprintViewportInteractionTests.cpp
         "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelActionRouter.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelChangeRouter.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/terrainPanelController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneViewportController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairPanelController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairBrushController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/materialEditorView.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/blueprintAssetView.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()

@@ -1,4 +1,7 @@
 #include "renderSystem.h"
+#include "render/preview/materialPreviewDraftParsing.h"
+#include "render/preview/materialPreviewRuntime.h"
+#include "render/offline/offlineDisplayExposure.h"
 #include "passBarrier.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/offline/offlineGroomAsset.h"
@@ -58,78 +61,6 @@
 namespace
 {
 
-float ResolveOfflineDisplayExposure(
-    const VL::OfflinePublishedResult* result,
-    float manualExposure,
-    const VL::CameraSnapshot& fallbackCamera)
-{
-    if (result &&
-        result->manifest.contains("camera") &&
-        result->manifest["camera"].is_object() &&
-        result->manifest["camera"].contains("exposureScale") &&
-        result->manifest["camera"]["exposureScale"].is_number())
-    {
-        return manualExposure *
-            result->manifest["camera"]["exposureScale"].get<float>();
-    }
-    return manualExposure * VL::ExposureScale(fallbackCamera.exposure);
-}
-
-using PreviewRenderStateValues = std::map<std::string, std::string>;
-
-struct NumericPreviewDraftParseResult
-{
-    std::optional<MaterialInstanceNumericParameterValues> values;
-    std::optional<nlohmann::json> serializedJson;
-    PreviewRenderStateValues renderStates;
-    std::string errorMessage;
-};
-
-PreviewRenderStateValues BuildPreviewRenderStateValues(
-    const nlohmann::json& effectiveMaterialInstanceJson)
-{
-    PreviewRenderStateValues result;
-    result.emplace(
-        "shadingModel",
-        effectiveMaterialInstanceJson.at("shadingModel").get<std::string>());
-    const nlohmann::json& renderStates =
-        effectiveMaterialInstanceJson.at("renderStates");
-    if (!renderStates.is_object())
-    {
-        throw std::runtime_error(
-            "Material instance preview render states must be a JSON object.");
-    }
-    for (const auto& [name, value] : renderStates.items())
-    {
-        if (!value.is_string())
-        {
-            throw std::runtime_error(
-                "Material instance preview render state must be a string: " +
-                name);
-        }
-        result.emplace(name, value.get<std::string>());
-    }
-    return result;
-}
-
-bool ReadFinitePreviewNumber(
-    const nlohmann::json& value,
-    float& outValue)
-{
-    if (!value.is_number())
-    {
-        return false;
-    }
-
-    const double doubleValue = value.get<double>();
-    const float floatValue = static_cast<float>(doubleValue);
-    if (!std::isfinite(doubleValue) || !std::isfinite(floatValue))
-    {
-        return false;
-    }
-    outValue = floatValue;
-    return true;
-}
 
 void ApplyMaterialOverrideToRenderScene(
     VL::RenderScene& renderScene,
@@ -199,428 +130,9 @@ void RebuildRenderSceneMaterialGroupsImpl(VL::RenderScene& renderScene)
     }
 }
 
-NumericPreviewDraftParseResult ParseNumericPreviewDraft(
-    const VL::MaterialInstancePreviewDraft& draft,
-    const VL::NormalizedMaterialInstancePath& expectedPath,
-    const MaterialInstanceStateSnapshot::TextureMap& activeTextures,
-    const nlohmann::json& frozenDefinition)
-{
-    NumericPreviewDraftParseResult result;
-    const VL::MaterialInstancePreviewPathNormalizationResult
-        draftPath =
-            VL::NormalizeMaterialInstancePath(
-                draft.materialInstancePath);
-    if (!draftPath.Succeeded())
-    {
-        result.errorMessage = draftPath.errorMessage;
-        return result;
-    }
-    if (draftPath.path->value != expectedPath.value)
-    {
-        result.errorMessage =
-            "Material instance preview draft does not match the connected MI path.";
-        return result;
-    }
-    if (draft.serializedWorkingDraft.empty())
-    {
-        result.errorMessage =
-            "Material instance preview draft must contain serialized content.";
-        return result;
-    }
-
-    try
-    {
-        const nlohmann::json materialInstanceJson =
-            nlohmann::json::parse(draft.serializedWorkingDraft);
-        if (!materialInstanceJson.is_object())
-        {
-            result.errorMessage =
-                "Material instance preview draft must be a JSON object.";
-            return result;
-        }
-        if (materialInstanceJson.contains("textures"))
-        {
-            const nlohmann::json& textures = materialInstanceJson.at("textures");
-            if (!textures.is_object())
-            {
-                result.errorMessage =
-                    "Material instance preview textures must be a JSON object.";
-                return result;
-            }
-
-            // 数值 preview 不创建 descriptor；只有能用 active MI 的稳定 asset
-            // identity 证明纹理未变化时，才允许携带原有 texture override。
-            for (const auto& [textureName, textureValue] : textures.items())
-            {
-                if (!textureValue.is_string())
-                {
-                    result.errorMessage =
-                        "Material instance texture preview changes are unavailable: " +
-                        textureName;
-                    return result;
-                }
-
-                const auto activeTextureIt = activeTextures.find(textureName);
-                if (activeTextureIt == activeTextures.end() ||
-                    !activeTextureIt->second.textureAssetIdentity.has_value() ||
-                    MaterialAssetUtils::NormalizeAssetPath(
-                        textureValue.get<std::string>()) !=
-                        MaterialAssetUtils::NormalizeAssetPath(
-                            *activeTextureIt->second.textureAssetIdentity))
-                {
-                    result.errorMessage =
-                        "Material instance texture preview changes are unavailable: " +
-                        textureName;
-                    return result;
-                }
-            }
-        }
-
-        const MaterialInstanceResolveResult resolved =
-            MaterialInstanceResolver::ResolveWithDefinition(
-                expectedPath.value,
-                materialInstanceJson, frozenDefinition);
-        PreviewRenderStateValues renderStates =
-            BuildPreviewRenderStateValues(
-                resolved.effectiveMaterialInstanceJson);
-        result.renderStates = renderStates;
-        result.serializedJson = materialInstanceJson;
-        const nlohmann::json& parameters =
-            resolved.effectiveMaterialInstanceJson.at("parameters");
-        if (!parameters.is_object())
-        {
-            result.errorMessage =
-                "Material instance preview parameters must be a JSON object.";
-            return result;
-        }
-
-        MaterialInstanceNumericParameterValues values;
-        for (const auto& [parameterName, parameterValue] : parameters.items())
-        {
-            if (parameterValue.is_number())
-            {
-                float scalarValue = 0.0f;
-                if (!ReadFinitePreviewNumber(parameterValue, scalarValue))
-                {
-                    result.errorMessage =
-                        "Material instance preview numeric value is invalid: " +
-                        parameterName;
-                    return result;
-                }
-                values.emplace(parameterName, scalarValue);
-                continue;
-            }
-
-            if (!parameterValue.is_array() ||
-                (parameterValue.size() != 2 &&
-                 parameterValue.size() != 3 &&
-                 parameterValue.size() != 4))
-            {
-                result.errorMessage =
-                    "Material instance preview parameter must be float, vec2, vec3, or vec4: " +
-                    parameterName;
-                return result;
-            }
-
-            float components[4] = {};
-            for (size_t componentIndex = 0;
-                 componentIndex < parameterValue.size();
-                 ++componentIndex)
-            {
-                if (!ReadFinitePreviewNumber(
-                        parameterValue.at(componentIndex),
-                        components[componentIndex]))
-                {
-                    result.errorMessage =
-                        "Material instance preview numeric value is invalid: " +
-                        parameterName;
-                    return result;
-                }
-            }
-
-            if (parameterValue.size() == 2)
-            {
-                values.emplace(
-                    parameterName,
-                    Eigen::Vector2f(components[0], components[1]));
-            }
-            else if (parameterValue.size() == 3)
-            {
-                values.emplace(
-                    parameterName,
-                    Eigen::Vector3f(
-                        components[0],
-                        components[1],
-                        components[2]));
-            }
-            else
-            {
-                values.emplace(
-                    parameterName,
-                    Eigen::Vector4f(
-                        components[0],
-                        components[1],
-                        components[2],
-                        components[3]));
-            }
-        }
-        result.values = std::move(values);
-    }
-    catch (const std::exception& exception)
-    {
-        result.errorMessage =
-            std::string("Material instance preview draft validation failed: ") +
-            exception.what();
-    }
-    return result;
-}
 
 } // namespace
 
-class RenderSystem::MaterialInstancePreviewSession final
-    : public VL::IRendererMaterialInstancePreviewSession
-{
-public:
-    MaterialInstancePreviewSession(
-        RenderSystem& ownerValue,
-        VL::MaterialInstancePreviewWorldIdentity worldValue,
-        VL::NormalizedMaterialInstancePath pathValue,
-        uint64_t ownerGenerationValue,
-        std::shared_ptr<MaterialInstance> materialInstanceValue,
-        MaterialInstanceNumericParameterValues baselineParametersValue,
-        MaterialInstanceStateSnapshot::TextureMap baselineTexturesValue,
-        PreviewRenderStateValues baselineRenderStatesValue,
-        VL::MaterialInstancePreviewDraft baselineDraftValue)
-        : owner(ownerValue)
-        , world(std::move(worldValue))
-        , materialInstancePath(std::move(pathValue))
-        , ownerGeneration(ownerGenerationValue)
-        , materialInstance(std::move(materialInstanceValue))
-        , baselineParameters(std::move(baselineParametersValue))
-        , baselineTextures(std::move(baselineTexturesValue))
-        , baselineRenderStates(std::move(baselineRenderStatesValue))
-        , activeRenderStates(baselineRenderStates)
-        , baselineDraft(std::move(baselineDraftValue))
-    {
-    }
-
-    VL::MaterialInstancePreviewAdapterResult Apply(
-        const VL::MaterialInstancePreviewDraft& draft) override
-    {
-        return Commit(draft, false);
-    }
-
-    VL::MaterialInstancePreviewAdapterResult RestoreBaseline(
-        const VL::MaterialInstancePreviewDraft& baselineDraft) override
-    {
-        // 仍使用调用方 revision 参与门禁，但内容来自 connect 时捕获的源快照，
-        // 避免外部 document 在连接期间改写 baseline 后影响运行时 Restore。
-        VL::MaterialInstancePreviewDraft restoreDraft =
-            this->baselineDraft;
-        restoreDraft.documentRevision = baselineDraft.documentRevision;
-        return Commit(restoreDraft, true);
-    }
-
-private:
-    VL::MaterialInstancePreviewAdapterResult Commit(
-        const VL::MaterialInstancePreviewDraft& draft,
-        bool restoreBaseline)
-    {
-        if (owner.offlineMode)
-            return owner.CommitMaterialInstancePreviewDraft(world, materialInstancePath, draft);
-        const auto activeWorld = owner.GetActiveWorldIdentity();
-        if (!activeWorld || *activeWorld != world ||
-            !owner.activeOfflineWorldAssets ||
-            !owner.activeOfflineWorldAssets->materialDefinitions.count(
-                materialInstancePath.value))
-        {
-            VL::MaterialInstancePreviewAdapterResult result;
-            result.status = VL::PreviewAdapterOperationStatus::Failed;
-            result.failureStage = VL::PreviewAdapterFailureStage::Prepare;
-            result.message = "Material instance preview lost its frozen World definition.";
-            return result;
-        }
-        NumericPreviewDraftParseResult parsed =
-        ParseNumericPreviewDraft(
-                draft,
-                materialInstancePath,
-                baselineTextures,
-                owner.activeOfflineWorldAssets->materialDefinitions.at(
-                    materialInstancePath.value));
-        if (!parsed.values.has_value())
-        {
-            VL::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::PreviewAdapterOperationStatus::Failed;
-            result.failureStage =
-                VL::PreviewAdapterFailureStage::Prepare;
-            result.message = std::move(parsed.errorMessage);
-            return result;
-        }
-
-        const bool renderStateChanged =
-            parsed.renderStates != activeRenderStates;
-
-        const std::optional<
-            VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
-            currentCapture =
-                VL::RendererResourceCache::GetInstance()
-                    .CaptureMaterialInstanceForGeneration(
-                        ownerGeneration,
-                        materialInstancePath.value);
-        if (!currentCapture.has_value() ||
-            currentCapture->ownerGeneration != ownerGeneration ||
-            currentCapture->materialInstance.get() != materialInstance.get())
-        {
-            VL::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::PreviewAdapterOperationStatus::Failed;
-            result.failureStage =
-                VL::PreviewAdapterFailureStage::Prepare;
-            result.message =
-                "Material instance preview target is no longer the active World-local MI.";
-            return result;
-        }
-
-        if (renderStateChanged)
-        {
-            VL::MaterialInstancePreviewAdapterResult result =
-                owner.CommitMaterialInstancePreviewDraft(
-                    world,
-                    materialInstancePath,
-                    draft);
-            if (result.status ==
-                VL::PreviewAdapterOperationStatus::Completed)
-            {
-                const std::optional<
-                    VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
-                    replacementCapture =
-                        VL::RendererResourceCache::GetInstance()
-                            .CaptureMaterialInstanceForGeneration(
-                                ownerGeneration,
-                                materialInstancePath.value);
-                if (!replacementCapture.has_value() ||
-                    !replacementCapture->materialInstance)
-                {
-                    result.status =
-                        VL::PreviewAdapterOperationStatus::Failed;
-                    result.failureStage =
-                        VL::PreviewAdapterFailureStage::Commit;
-                    result.liveSwapCommitted = false;
-                    result.replacesLiveResource = false;
-                    result.message =
-                        "Material instance preview committed without an active replacement MI.";
-                    return result;
-                }
-                materialInstance = replacementCapture->materialInstance;
-                ownerGeneration = replacementCapture->ownerGeneration;
-                activeRenderStates = parsed.renderStates;
-            }
-            return result;
-        }
-
-        std::shared_ptr<const VL::OfflineWorldAssets> preparedOfflineAssets;
-        try
-        {
-            preparedOfflineAssets = owner.PrepareOfflineMaterialPreview(
-                materialInstancePath.value, *parsed.serializedJson);
-        }
-        catch (const std::exception& exception)
-        {
-            VL::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::PreviewAdapterOperationStatus::Failed;
-            result.failureStage =
-                VL::PreviewAdapterFailureStage::Prepare;
-            result.message =
-                std::string("Offline material preview prepare failed: ") +
-                exception.what();
-            return result;
-        }
-        try
-        {
-            // 外部 profile 可能在准备与数值提交之间变化；先复核字节身份，
-            // 否则 GPU 草稿与冻结 CPU 参数会指向不同版本。
-            for (const auto& [reference, captured] :
-                 preparedOfflineAssets->modelProfileDigests)
-            {
-                const auto& path =
-                    preparedOfflineAssets->modelProfilePaths.at(reference);
-                if (!std::filesystem::is_regular_file(path) ||
-                    VL::ContentHasher::HashFile(path).ToHex() != captured)
-                    throw std::runtime_error(
-                        "modelProfile changed before preview commit: " + reference);
-            }
-            VL::ValidateOfflineTexturesStillCurrent(*preparedOfflineAssets);
-            materialInstance->CommitNumericParameterValues(
-                restoreBaseline ? baselineParameters : *parsed.values);
-        }
-        catch (const std::exception& exception)
-        {
-            VL::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::PreviewAdapterOperationStatus::Failed;
-            result.failureStage =
-                VL::PreviewAdapterFailureStage::Commit;
-            result.message =
-                std::string("Material instance numeric preview commit failed: ") +
-                exception.what();
-            return result;
-        }
-        owner.activeOfflineWorldAssets.swap(preparedOfflineAssets);
-
-        VL::MaterialInstancePreviewAdapterResult result;
-        result.status =
-            VL::PreviewAdapterOperationStatus::Completed;
-        result.runtimeResourceGeneration = ownerGeneration;
-        result.liveSwapCommitted = true;
-        result.replacesLiveResource = false;
-        result.message = restoreBaseline
-            ? "Material instance numeric preview baseline restored."
-            : "Material instance numeric preview applied.";
-        return result;
-    }
-
-    RenderSystem& owner;
-    VL::MaterialInstancePreviewWorldIdentity world;
-    VL::NormalizedMaterialInstancePath materialInstancePath;
-    uint64_t ownerGeneration = 0;
-    std::shared_ptr<MaterialInstance> materialInstance;
-    MaterialInstanceNumericParameterValues baselineParameters;
-    MaterialInstanceStateSnapshot::TextureMap baselineTextures;
-    PreviewRenderStateValues baselineRenderStates;
-    PreviewRenderStateValues activeRenderStates;
-    VL::MaterialInstancePreviewDraft baselineDraft;
-};
-
-class RenderSystem::OfflineMaterialInstancePreviewSession final
-    : public VL::IRendererMaterialInstancePreviewSession
-{
-public:
-    OfflineMaterialInstancePreviewSession(RenderSystem& owner,
-        VL::MaterialInstancePreviewWorldIdentity world,
-        VL::NormalizedMaterialInstancePath path,
-        VL::MaterialInstancePreviewDraft baseline)
-        : owner(owner), world(std::move(world)), path(std::move(path)),
-          baseline(std::move(baseline)) {}
-    VL::MaterialInstancePreviewAdapterResult Apply(
-        const VL::MaterialInstancePreviewDraft& draft) override
-    {
-        return owner.CommitMaterialInstancePreviewDraft(world, path, draft);
-    }
-    VL::MaterialInstancePreviewAdapterResult RestoreBaseline(
-        const VL::MaterialInstancePreviewDraft& draft) override
-    {
-        auto restored = baseline;
-        restored.documentRevision = draft.documentRevision;
-        return owner.CommitMaterialInstancePreviewDraft(world, path, restored);
-    }
-private:
-    RenderSystem& owner;
-    VL::MaterialInstancePreviewWorldIdentity world;
-    VL::NormalizedMaterialInstancePath path;
-    VL::MaterialInstancePreviewDraft baseline;
-};
 
 RenderSystem::~RenderSystem()
 {
@@ -772,8 +284,7 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     worldSnapshotBuilder.Reset();
     currentRenderScene = VL::RenderScene();
     currentResolvedRenderScene = VL::ResolvedRenderScene();
-    pickingRenderScene = VL::RenderScene();
-    hasPickingRenderScene = false;
+    pickingRuntime.ResetPickingScene();
     hasMaterialInstancePreviewMaterialOverride = false;
     materialInstancePreviewOverridePath.clear();
     materialInstancePreviewOverrideMaterialKey.clear();
@@ -995,7 +506,7 @@ bool RenderSystem::ExportOffline(const VL::OfflinePublishedResult& result,
         VL::ExportOfflineResult(
             result,
             directory,
-            ResolveOfflineDisplayExposure(
+            VL::ResolveOfflineDisplayExposure(
                 &result,
                 offlineExposure,
                 currentRenderScene.camera));
@@ -1052,153 +563,12 @@ void RenderSystem::RequestScreenshot(std::string path)
 
 void RenderSystem::RequestTerrainPageBakeParity(int tileX, int tileZ)
 {
-    terrainPageBakeParityTileX.store(tileX, std::memory_order_relaxed);
-    terrainPageBakeParityTileZ.store(tileZ, std::memory_order_relaxed);
-    terrainPageBakeParityRequested.store(true, std::memory_order_release);
+    terrainFeedbackRuntime.RequestTerrainPageBakeParity(tileX, tileZ);
 }
 
 void RenderSystem::RunTerrainPageBakeParityIfRequested()
 {
-    if (!terrainPageBakeParityRequested.exchange(
-            false, std::memory_order_acquire))
-        return;
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming || streaming->pageManager.Registrations().empty())
-    {
-        std::cout << "[TerrainParity] No registered terrain placement."
-                  << std::endl;
-        return;
-    }
-    if (!streaming->pageBake || !streaming->pageBake->Available())
-    {
-        std::cout << "[TerrainParity] GPU page bake unavailable: "
-                  << (streaming->pageBake
-                          ? streaming->pageBake->UnavailableReason()
-                          : std::string("resource not created"))
-                  << std::endl;
-        return;
-    }
-
-    VL::TerrainPageManager& pageManager = streaming->pageManager;
-    const VL::TerrainPageManager::Registration& registration =
-        pageManager.Registrations().front();
-    int tileX = terrainPageBakeParityTileX.load(std::memory_order_relaxed);
-    int tileZ = terrainPageBakeParityTileZ.load(std::memory_order_relaxed);
-    if (tileX < 0 || tileZ < 0 ||
-        static_cast<uint32_t>(tileX) >= registration.tilesPerSide ||
-        static_cast<uint32_t>(tileZ) >= registration.tilesPerSide)
-    {
-        tileX = 0;
-        tileZ = 0;
-    }
-
-    try
-    {
-        const VL::TerrainBuildPlan& plan = pageManager.Plans().front();
-        const VL::TerrainPageData cpu =
-            VL::TerrainWeightMapBuilder::BuildPage(
-                plan,
-                registration.tilesPerSide,
-                VL::TerrainPageManager::PageResolution,
-                static_cast<uint32_t>(tileX),
-                static_cast<uint32_t>(tileZ),
-                pageManager.PlacementLayerIdMap(plan.placementId.empty()
-                    ? plan.desc.assetPath : plan.placementId));
-
-        std::vector<uint8_t> gpuIds;
-        std::vector<uint8_t> gpuWeights;
-        std::string error;
-        if (!streaming->pageBake->BakePageSync(
-                pageManager,
-                0,
-                static_cast<uint32_t>(tileX),
-                static_cast<uint32_t>(tileZ),
-                gpuIds,
-                gpuWeights,
-                error))
-        {
-            std::cout << "[TerrainParity] GPU bake failed: " << error
-                      << std::endl;
-            return;
-        }
-
-        size_t idMismatchBytes = 0;
-        size_t weightMismatchBytes = 0;
-        size_t mismatchedTexels = 0;
-        uint32_t worstIdDiff = 0;
-        uint32_t worstWeightDiff = 0;
-        const size_t texelCount =
-            static_cast<size_t>(VL::TerrainPageManager::PageResolution) *
-            VL::TerrainPageManager::PageResolution;
-        if (cpu.ids.size() != gpuIds.size() ||
-            cpu.weights.size() != gpuWeights.size())
-        {
-            std::cout << "[TerrainParity] Size mismatch cpuIds="
-                      << cpu.ids.size() << " gpuIds=" << gpuIds.size()
-                      << " cpuWeights=" << cpu.weights.size()
-                      << " gpuWeights=" << gpuWeights.size() << std::endl;
-            return;
-        }
-        for (size_t index = 0; index < cpu.ids.size(); ++index)
-        {
-            const uint32_t idDiff = static_cast<uint32_t>(
-                std::abs(static_cast<int>(cpu.ids[index]) -
-                         static_cast<int>(gpuIds[index])));
-            const uint32_t weightDiff = static_cast<uint32_t>(
-                std::abs(static_cast<int>(cpu.weights[index]) -
-                         static_cast<int>(gpuWeights[index])));
-            if (idDiff != 0) ++idMismatchBytes;
-            if (weightDiff != 0) ++weightMismatchBytes;
-            worstIdDiff = std::max(worstIdDiff, idDiff);
-            worstWeightDiff = std::max(worstWeightDiff, weightDiff);
-        }
-        for (size_t texel = 0; texel < texelCount; ++texel)
-        {
-            const size_t base = texel * 4;
-            bool mismatch = false;
-            for (size_t channel = 0; channel < 4; ++channel)
-            {
-                if (cpu.ids[base + channel] != gpuIds[base + channel] ||
-                    cpu.weights[base + channel] != gpuWeights[base + channel])
-                {
-                    mismatch = true;
-                    break;
-                }
-            }
-            if (mismatch) ++mismatchedTexels;
-        }
-
-        size_t paintedTexels = 0;
-        if (plan.layerPaint && !plan.layerPaint->Empty())
-        {
-            for (uint8_t opacity : plan.layerPaint->opacity)
-            {
-                if (opacity != 0) ++paintedTexels;
-            }
-        }
-        std::cout << "[TerrainParity] placement=" << registration.placementId
-                  << " tile=" << tileX << "," << tileZ
-                  << " layers=" << plan.desc.layers.size()
-                  << " paintNonZeroTexels=" << paintedTexels
-                  << " cpuBakeCandidates=" << cpu.candidates.layerIds.size()
-                  << std::endl;
-        std::cout << "[TerrainParity] idMismatchBytes=" << idMismatchBytes
-                  << " weightMismatchBytes=" << weightMismatchBytes
-                  << " mismatchedTexels=" << mismatchedTexels
-                  << "/" << texelCount
-                  << " worstIdDiff=" << worstIdDiff
-                  << " worstWeightDiff=" << worstWeightDiff
-                  << " result="
-                  << ((idMismatchBytes == 0 && weightMismatchBytes == 0)
-                          ? "PASS" : "FAIL")
-                  << std::endl;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cout << "[TerrainParity] Exception: " << exception.what()
-                  << std::endl;
-    }
+    terrainFeedbackRuntime.RunTerrainPageBakeParityIfRequested();
 }
 
 void RenderSystem::ConsumeTerrainFeedback(
@@ -1206,1095 +576,130 @@ void RenderSystem::ConsumeTerrainFeedback(
     uint64_t completedEpoch,
     uint32_t frameIndex)
 {
-    if (!streaming || !streaming->feedbackRing)
-        return;
-
-    // BeginFrame 已经等待过该 frameIndex 的 fence；TryConsume 再用 epoch
-    // 复核一次，避免 swapchain/frame ring 重建后误读尚未完成的槽。
-    std::optional<VL::TerrainFeedbackFrameSummary> summary =
-        streaming->feedbackRing->TryConsume(frameIndex, completedEpoch);
-    if (!summary.has_value())
-        return;
-
-    streaming->lastConsumedFeedbackEpoch = std::max(
-        streaming->lastConsumedFeedbackEpoch,
-        summary->copiedEpoch);
-    // P3：feedback -> 命中页推进 lastSeenEpoch；miss 页按 priority 进入请求队列。
-    // 请求在本帧 BuildUploadBatch 之前完成，所以同帧就能把新页写进 GPU。
-    streaming->latestFeedbackApply = streaming->pageManager.ApplyFeedback(
-        *summary,
-        completedEpoch,
-        streaming->maxPageRequestsPerFrame,
-        streaming->pendingPageRequests);
-    // L4b：层号+层页+mip 的专用 feedback 是主路径；只有它本帧不可用时才
-    // 退回 L4a 的覆盖页推导（启动/首帧/backpressure）。
-    bool appliedExactLayerFeedback = false;
-    if (streaming->layerVTRequested && streaming->layerFeedbackRing)
-    {
-        const std::optional<VL::TerrainLayerFeedbackFrameSummary>
-            layerSummary = streaming->layerFeedbackRing->TryConsume(
-                frameIndex,
-                completedEpoch);
-        if (layerSummary.has_value())
-        {
-            appliedExactLayerFeedback = ApplyTerrainLayerExactFeedback(
-                streaming,
-                *layerSummary,
-                completedEpoch,
-                frameIndex);
-        }
-    }
-    if (!appliedExactLayerFeedback)
-    {
-        // L4a：覆盖页推导只作为回退/prefetch，不再与精确路径同时写驻留。
-        ApplyTerrainLayerFeedback(
-            streaming, *summary, completedEpoch, frameIndex);
-    }
-    StoreTerrainFeedbackSummary(streaming, *summary);
-}
-
-void RenderSystem::ApplyTerrainLayerFeedback(
-    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-    const VL::TerrainFeedbackFrameSummary& summary,
-    uint64_t completedEpoch,
-    uint32_t frameIndex)
-{
-    if (!streaming || !streaming->layerVTRequested)
-        return;
-    if (!streaming->layerResources.atlasesCreated ||
-        streaming->layerDefinitions.empty())
-        return;
-
-    VL::TerrainLayerVisibilityConfig config;
-    config.layerCount =
-        static_cast<uint32_t>(streaming->layerDefinitions.size());
-    // 三张源数组的 mip 链可能不同，只请求三张都能 copy 的级别。
-    const uint32_t sourceMipLevels =
-        VL::TerrainSourceMinMipLevels(streaming->layerSources);
-    config.sourceMipLevels = std::max(1u, sourceMipLevels);
-    config.sourceSets = &streaming->layerSources;
-    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
-    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
-    config.idleEvictionEnabled =
-        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
-
-    streaming->latestLayerVisibility =
-        streaming->layerVisibilityResolver.Apply(
-            summary,
-            streaming->pageManager,
-            streaming->layerPageManager,
-            streaming->pendingLayerPageRequests,
-            frameIndex,
-            completedEpoch,
-            config);
-    streaming->latestLayerFeedbackExact = false;
-}
-
-bool RenderSystem::ApplyTerrainLayerExactFeedback(
-    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-    const VL::TerrainLayerFeedbackFrameSummary& summary,
-    uint64_t completedEpoch,
-    uint32_t frameIndex)
-{
-    if (!streaming || !streaming->layerVTRequested)
-        return false;
-    if (!streaming->layerResources.atlasesCreated ||
-        streaming->layerDefinitions.empty())
-        return false;
-    // 精确 feedback 本帧没有任何有效 texel（例如地形完全不在屏幕内）时
-    // 仍要走精确路径：空集合表示“没有可见层”，不能退回覆盖页推导去
-    // 复活整层页。
-    VL::TerrainLayerVisibilityConfig config;
-    config.layerCount =
-        static_cast<uint32_t>(streaming->layerDefinitions.size());
-    const uint32_t sourceMipLevels =
-        VL::TerrainSourceMinMipLevels(streaming->layerSources);
-    config.sourceMipLevels = std::max(1u, sourceMipLevels);
-    config.sourceSets = &streaming->layerSources;
-    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
-    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
-    config.idleEvictionEnabled =
-        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
-    // L4e：相机前向移动时预取细一级 mip 的子页，使用独立每帧名额。
-    config.prefetchFinerMipEnabled = streaming->layerPrefetchMoving;
-    config.prefetchPagesPerFrame = streaming->maxLayerPrefetchPagesPerFrame;
-    // 全局页预算：以层页管理器的驻留容量为上限做 mip 分配。
-    //
-    // 契约要求“选定 mip 后必须请求该 mip 的全部页”，所以每层页数是 mip 的
-    // 离散函数。不给上限时，每个 tile 的每个层都按屏幕像素独立选 mip，
-    // 多 tile 场景的总页数可达容量的数倍，淘汰永远追不上请求，每帧
-    // 请求->淘汰->再请求 永不收敛。分配器按屏幕覆盖优先级（近处优先）
-    // 细化，并保证去重后的完整页集总页数 <= 容量（工作集本身超容量时
-    // 保持最粗集并允许稳定超预算）。
-    config.layerPageBudget = streaming->layerPageManager.ResidentCapacity();
-
-    streaming->latestLayerExactFeedback =
-        streaming->layerVisibilityResolver.ApplyExact(
-            summary,
-            streaming->layerPageManager,
-            streaming->pendingLayerPageRequests,
-            frameIndex,
-            completedEpoch,
-            config);
-    streaming->latestLayerFeedbackExact = true;
-    // 饥饿帧（没有任何可信的有效 texel）不能当作“全部不可见”：驻留集在
-    // resolver 内保持不变，这里返回 false 让调用方继续走覆盖页推导（L4a），
-    // 用覆盖页反馈重新估计可见层，等覆盖页恢复后精确路径自动接管。
-    return !streaming->latestLayerExactFeedback.starved;
+    terrainFeedbackRuntime.ConsumeTerrainFeedback(
+        streaming, completedEpoch, frameIndex);
 }
 
 void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    const bool layerFeedbackEnabled =
-        streaming && streaming->layerVTRequested &&
-        streaming->layerResources.atlasesCreated;
-    const RenderGraph& renderGraph = RenderGraph::GetInstance();
-    for (const auto& [passName, renderpass] :
-         renderGraph.GetRenderpasses())
-    {
-        (void)passName;
-        if (renderpass.type != VL::RenderGraphPassType::TerrainFeedback)
-            continue;
-        const std::shared_ptr<MaterialInstance> passMaterial =
-            renderpass.materialInstance.lock();
-        if (!passMaterial)
-            continue;
-        // 这里只写 MI 参数；真正的 UBO 上传发生在 feedback pass 录制时。
-        if (passMaterial->HasParameter("u_pageTableSize"))
-        {
-            passMaterial->SetParameter(
-                "u_pageTableSize",
-                static_cast<float>(VL::TerrainPageManager::PageTableSize));
-        }
-        if (passMaterial->HasParameter("u_frameTag"))
-        {
-            passMaterial->SetParameter(
-                "u_frameTag",
-                static_cast<float>(frameTag));
-        }
-        // 与 M_terrain 共用同一半 texel 内缩；分辨率必须来自 page manager。
-        if (passMaterial->HasParameter("u_pageResolution"))
-        {
-            passMaterial->SetParameter(
-                "u_pageResolution",
-                static_cast<float>(VL::TerrainPageManager::PageResolution));
-        }
-        // L4b：层页 feedback 与 M_terrain 共享同一套层 UV/页公式参数。
-        if (passMaterial->HasParameter("u_uvScale") && streaming)
-        {
-            passMaterial->SetParameter(
-                "u_uvScale",
-                streaming->layerUvScale);
-        }
-        if (passMaterial->HasParameter("u_layerPageResolution"))
-        {
-            passMaterial->SetParameter(
-                "u_layerPageResolution",
-                static_cast<float>(
-                    VL::TerrainLayerPageManager::PageResolution));
-        }
-        if (passMaterial->HasParameter("u_layerMaxMip"))
-        {
-            passMaterial->SetParameter(
-                "u_layerMaxMip",
-                static_cast<float>(
-                    VL::TerrainLayerPageManager::MaxMipLevel));
-        }
-        // L4e：feedback 与 M_terrain 必须报告同一目标 mip；console 的
-        // forcemip 两边都从这里取值。
-        if (passMaterial->HasParameter("u_layerForceMip") && streaming)
-        {
-            passMaterial->SetParameter(
-                "u_layerForceMip",
-                static_cast<float>(
-                    streaming->layerForceMip.load(
-                        std::memory_order_relaxed)));
-        }
-        if (passMaterial->HasParameter("u_layerFeedbackEnabled"))
-        {
-            passMaterial->SetParameter(
-                "u_layerFeedbackEnabled",
-                layerFeedbackEnabled ? 1.0f : 0.0f);
-        }
-        // feedback pass 固定 128×128，而 M_terrain 在全屏分辨率上取导数。
-        // 不换算的话 feedback 的每像素变化被放大 screen/128 倍，mip 会系统性
-        // 选粗（1280 宽时约 3.3 级），层页驻留就会欠配。
-        const vk::Extent2D renderExtent = GetSceneRenderExtent();
-        if (passMaterial->HasParameter("u_feedbackScaleX"))
-        {
-            passMaterial->SetParameter(
-                "u_feedbackScaleX",
-                static_cast<float>(std::max(1u, renderExtent.width)) /
-                    static_cast<float>(VL::TerrainFeedbackResolution));
-        }
-        if (passMaterial->HasParameter("u_feedbackScaleY"))
-        {
-            passMaterial->SetParameter(
-                "u_feedbackScaleY",
-                static_cast<float>(std::max(1u, renderExtent.height)) /
-                    static_cast<float>(VL::TerrainFeedbackResolution));
-        }
-    }
-}
-
-void RenderSystem::StoreTerrainFeedbackSummary(
-    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-    const VL::TerrainFeedbackFrameSummary& summary)
-{
-    TerrainFeedbackReport report;
-    report.summary = summary;
-
-    if (streaming && streaming->feedbackRing)
-    {
-        report.hasPendingFrameTagRange =
-            streaming->feedbackRing->PendingTagRange(
-                report.oldestPendingFrameTag,
-                report.newestPendingFrameTag);
-    }
-
-    std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
-    latestTerrainFeedbackReport = std::move(report);
-}
-
-void RenderSystem::ReportTerrainFeedbackStatistics() const
-{
-    TerrainFeedbackReport report;
-    {
-        std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
-        if (!latestTerrainFeedbackReport.has_value())
-        {
-            std::cout
-                << "[TerrainFeedback] No completed feedback frame yet."
-                << std::endl;
-            return;
-        }
-        report = *latestTerrainFeedbackReport;
-    }
-
-    const VL::TerrainFeedbackFrameSummary& summary = report.summary;
-    std::cout
-        << "[TerrainFeedback] epoch=" << summary.copiedEpoch
-        << " tag=" << static_cast<uint32_t>(summary.frameTag)
-        << " validTexels=" << summary.validTexelCount
-        << " distinctPages=" << summary.distinctPageCount
-        << " missPages=" << summary.missPageCount
-        << " maxPriority=" << static_cast<uint32_t>(summary.maxPriority)
-        << " staleTexels=" << summary.staleTexelCount;
-    if (report.hasPendingFrameTagRange)
-    {
-        std::cout
-            << " pendingTags=["
-            << static_cast<uint32_t>(report.oldestPendingFrameTag)
-            << ".."
-            << static_cast<uint32_t>(report.newestPendingFrameTag)
-            << "]";
-    }
-    std::cout << std::endl;
-
-    // 只打印前几个高优先级页，避免 32×32 全量刷屏；miss 页单独标出。
-    const size_t pageCount =
-        std::min<size_t>(summary.pages.size(), 8);
-    for (size_t index = 0; index < pageCount; ++index)
-    {
-        const VL::TerrainFeedbackPageRecord& page =
-            summary.pages[index];
-        std::cout
-            << "  page(" << page.virtualPageX << ","
-            << page.virtualPageY << ")"
-            << " priority=" << static_cast<uint32_t>(page.priority)
-            << " miss=" << (page.miss ? 1 : 0)
-            << " samples=" << page.sampleCount
-            << std::endl;
-    }
+    terrainFeedbackRuntime.PrepareTerrainFeedbackPass(
+        frameTag, GetSceneRenderExtent());
 }
 
 void RenderSystem::RequestTerrainResidentCapacity(uint32_t capacity)
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[Terrain] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-    streaming->RequestResidentCapacity(capacity);
-    std::cout
-        << "[Terrain] Resident capacity request queued: "
-        << capacity << std::endl;
+    terrainFeedbackRuntime.RequestTerrainResidentCapacity(capacity);
 }
 
 void RenderSystem::RequestTerrainLayerResidentCapacity(uint32_t capacity)
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[TerrainLayer] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-    streaming->requestedLayerResidentCapacity.store(
-        capacity, std::memory_order_relaxed);
-    // 设置预算意味着回到 streaming 语义：重新启用 idle 淘汰。
-    streaming->layerIdleEvictionEnabled.store(true, std::memory_order_relaxed);
-    std::cout
-        << "[TerrainLayer] Resident capacity request queued: "
-        << capacity << std::endl;
+    terrainFeedbackRuntime.RequestTerrainLayerResidentCapacity(capacity);
 }
 
 void RenderSystem::RequestTerrainLayerPreload()
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[TerrainLayer] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-    // 对照路径：请求全部层页；像素仍由逐帧上传 ring 分批写进 atlas。
-    streaming->requestedLayerPreload.store(true, std::memory_order_relaxed);
-    // 关闭 idle 淘汰，否则非可见层会在 3 秒后被清掉，失去对照意义。
-    streaming->layerIdleEvictionEnabled.store(false, std::memory_order_relaxed);
-    std::cout
-        << "[TerrainLayer] Full layer preload request queued "
-        << "(idle eviction disabled until 'terrainlayer capacity N')."
-        << std::endl;
+    terrainFeedbackRuntime.RequestTerrainLayerPreload();
 }
 
 void RenderSystem::RequestTerrainLayerForceMip(int forceMip)
 {
-    if (forceMip < -1 || forceMip > 4)
-    {
-        std::cout
-            << "[TerrainLayer] forceMip must be -1 (auto) or 0..4."
-            << std::endl;
-        return;
-    }
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[TerrainLayer] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-    // 只写 atomic；渲染线程帧首把值同步到 M_terrain 与 feedback pass。
-    streaming->layerForceMip.store(forceMip, std::memory_order_relaxed);
-    std::cout
-        << "[TerrainLayer] Forced target mip: "
-        << (forceMip < 0 ? std::string("auto") : std::to_string(forceMip))
-        << std::endl;
+    terrainFeedbackRuntime.RequestTerrainLayerForceMip(forceMip);
 }
 
 void RenderSystem::ApplyTerrainLayerForceMip(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming)
 {
-    if (!streaming || !streaming->layerVTRequested)
-        return;
-    const float forceMip = static_cast<float>(
-        streaming->layerForceMip.load(std::memory_order_relaxed));
-    // 只在值变化或有新实例登记时写入：SetParameter 会标脏材质 UBO。
-    if (forceMip == streaming->lastAppliedLayerForceMip &&
-        streaming->layerVTMaterials.size() ==
-            streaming->lastAppliedLayerMaterialCount)
-    {
-        return;
-    }
-    for (const std::weak_ptr<MaterialInstance>& weakMaterial :
-         streaming->layerVTMaterials)
-    {
-        const std::shared_ptr<MaterialInstance> material = weakMaterial.lock();
-        if (material && material->HasParameter("u_layerForceMip"))
-            material->SetParameter("u_layerForceMip", forceMip);
-    }
-    streaming->lastAppliedLayerForceMip = forceMip;
-    streaming->lastAppliedLayerMaterialCount =
-        streaming->layerVTMaterials.size();
+    terrainFeedbackRuntime.ApplyTerrainLayerForceMip(streaming);
 }
 
 void RenderSystem::UpdateTerrainCameraPrefetch(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming)
 {
-    if (!streaming)
-        return;
-    if (!streaming->layerVTRequested)
-    {
-        streaming->layerPrefetchMoving = false;
-        return;
-    }
-    const Eigen::Vector3f position = currentRenderScene.camera.position;
-    if (!hasTerrainPrefetchCameraPosition)
-    {
-        lastTerrainPrefetchCameraPosition = position;
-        hasTerrainPrefetchCameraPosition = true;
-        streaming->layerPrefetchMoving = false;
-        return;
-    }
-    const Eigen::Vector3f delta = position - lastTerrainPrefetchCameraPosition;
-    lastTerrainPrefetchCameraPosition = position;
-    const float distance = delta.norm();
-    // 只有“向前走”才提高细一级 mip 的需求：横向平移/转头不会让目标
-    // mip 变细，预取反而会和当前可见页抢槽位。
-    const float forwardDistance =
-        delta.dot(currentRenderScene.camera.forward);
-    streaming->layerPrefetchMoving =
-        distance > streaming->layerPrefetchMinForwardCm &&
-        forwardDistance > 0.5f * distance;
+    terrainFeedbackRuntime.UpdateTerrainCameraPrefetch(
+        streaming,
+        currentRenderScene.camera.position,
+        currentRenderScene.camera.forward);
 }
 
 void RenderSystem::PublishTerrainStreamingStats(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming,
     uint64_t completedEpoch)
 {
-    if (!streaming)
-        return;
-    VL::TerrainStreamingStats stats;
-    stats.statsPublished = true;
-    VL::TerrainPageManager& pageManager = streaming->pageManager;
-    // 统计刷新时顺带回收已过隔离期的槽位：free/quarantine 必须反映当前
-    // completedEpoch，而不是“等下一次分配才更新”的惰性值。
-    pageManager.ReclaimExpiredQuarantines(completedEpoch);
-    stats.residentPages = pageManager.ResidentCount();
-    stats.residentCapacity = pageManager.ResidentCapacity();
-    stats.virtualPages = static_cast<uint32_t>(pageManager.Pages().size());
-    stats.registrations =
-        static_cast<uint32_t>(pageManager.Registrations().size());
-    stats.freePhysicalSlots =
-        pageManager.ImmediatelyAllocatablePhysicalSlotCount();
-    stats.quarantinedPhysicalSlots =
-        pageManager.QuarantinedPhysicalSlotCount();
-    stats.requestCount = pageManager.RequestCount();
-    stats.hitCount = pageManager.PageHitCount();
-    stats.missCount = pageManager.PageMissCount();
-    stats.evictionCount = pageManager.EvictionCount();
-    stats.preloadDeferredCount = pageManager.PreloadDeferredCount();
-    stats.uploadedPagesTotal = streaming->uploadedPagesTotal;
-    stats.lastUploadedPages = streaming->lastUploadedPages;
-    stats.gpuBakedPagesTotal = streaming->gpuBakedPagesTotal;
-    stats.lastGpuBakedPages = streaming->lastGpuBakedPages;
-    stats.pendingGpuBakeJobs =
-        static_cast<uint32_t>(pageManager.PendingGpuBakeJobCount());
-    stats.lastFeedbackEpoch = streaming->lastConsumedFeedbackEpoch;
-    stats.lastFeedbackApply = streaming->latestFeedbackApply;
-    // L2 层页：与覆盖页完全独立的一组驻留/上传计数。
-    VL::TerrainLayerPageManager& layerPages = streaming->layerPageManager;
-    // 与覆盖页一致：统计必须反映当前 completedEpoch，而不是等下次分配
-    // 才惰性回收隔离槽位。
-    layerPages.ReclaimExpiredQuarantines(completedEpoch);
-    const VL::TerrainLayerPageManager::Stats layerStats =
-        layerPages.SnapshotStats();
-    stats.layerResidentPages = layerStats.residentPageCount;
-    stats.layerResidentCapacity = layerStats.residentCapacity;
-    stats.layerPhysicalPages = layerPages.PhysicalPageCount();
-    stats.layerFreePhysicalPages = layerStats.freePhysicalPageCount;
-    stats.layerQuarantinedPhysicalPages =
-        layerStats.quarantinedPhysicalPageCount;
-    stats.layerRequestCount = layerStats.requestCount;
-    stats.layerHitCount = layerStats.hitCount;
-    stats.layerMissCount = layerStats.missCount;
-    stats.layerEvictionCount = layerStats.evictionCount;
-    stats.layerUploadedPagesTotal = streaming->layerUploadedPagesTotal;
-    stats.layerUploadedBytesTotal = streaming->layerUploadedBytesTotal;
-    // S1/S2：全局层数 / sourceSet 数 / 去重掉的局部层数。
-    stats.layerGlobalLayers =
-        static_cast<uint32_t>(streaming->layerDefinitions.size());
-    stats.layerSourceSetCount =
-        static_cast<uint32_t>(streaming->layerSources.size());
-    stats.layerDedupedLayers = streaming->layerDedupedLayerCount;
-    // L4a：可见层推导与逐帧预算的实时值。
-    stats.layerVisibleLayers =
-        streaming->latestLayerVisibility.visibleLayers;
-    if (streaming->latestLayerFeedbackExact)
-    {
-        // L4b 精确路径：命中/请求/挂起都来自层号+层页+mip 的专用 feedback。
-        const VL::TerrainLayerExactFeedbackStats& exact =
-            streaming->latestLayerExactFeedback;
-        stats.layerVisibleLayers = exact.visibleLayers;
-        stats.layerFeedbackHits = exact.markedPages;
-        stats.layerRequestedPages = exact.attemptedRequests;
-        stats.layerAcceptedPages = exact.acceptedRequests;
-        stats.layerPendingRequests = exact.pendingRequests;
-        stats.layerMipRequestCounts = exact.mipRequestCounts;
-        stats.layerExactFeedbackSlots = exact.validSlots;
-        stats.layerExactFeedbackPages = exact.distinctPages;
-        // L4c：粗 mip 回退的估算输入（比例由控制台换成像素数）。
-        stats.layerFallbackSlots = exact.fallbackSlots;
-        stats.layerFallbackTargetPages = exact.fallbackTargetPages;
-        stats.layerFallbackLevelPages = exact.fallbackLevelPages;
-        stats.layerTargetMipSlots = exact.targetMipSlots;
-        // L4e：区分“有粗页可混”和“只能 avgColor”，以及相机前向预取量。
-        stats.layerFallbackBlendPages = exact.fallbackBlendPages;
-        stats.layerAvgColorPages = exact.avgColorPages;
-        stats.layerPrefetchPages = exact.prefetchPages;
-        stats.layerPrefetchRequests = exact.prefetchRequests;
-        stats.layerPrefetchAccepted = exact.prefetchAccepted;
-        stats.layerPageBudget = layerPages.ResidentCapacity();
-        stats.layerBudgetPages = exact.budgetTotalPages;
-        stats.layerBudgetSets = exact.budgetAllocatedSets;
-        stats.layerBudgetClampedRefinements =
-            exact.budgetClampedRefinements;
-        stats.layerBudgetExceeded = exact.budgetExceeded;
-        stats.layerBudgetEntriesByMip = exact.budgetEntriesByMip;
-        stats.layerBudgetSetsByMip = exact.budgetSetsByMip;
-    }
-    else
-    {
-        const VL::TerrainLayerVisibilityStats& cover =
-            streaming->latestLayerVisibility;
-        stats.layerFeedbackHits = cover.markedPages;
-        stats.layerRequestedPages = cover.attemptedRequests;
-        stats.layerAcceptedPages = cover.acceptedRequests;
-        stats.layerPendingRequests = cover.pendingRequests;
-        stats.layerMipRequestCounts = cover.mipRequestCounts;
-        stats.layerExactFeedbackSlots = 0;
-        stats.layerExactFeedbackPages = 0;
-        stats.layerFallbackSlots = 0;
-        stats.layerFallbackTargetPages = cover.fallbackTargetPages;
-        stats.layerFallbackLevelPages = cover.fallbackLevelPages;
-        stats.layerTargetMipSlots = {};
-        // 覆盖页路径没有精确的“目标 mip 页”信息，混合分类保持 0；
-        // 预取量同样只由精确路径统计。
-        stats.layerFallbackBlendPages = 0;
-        stats.layerAvgColorPages = 0;
-        stats.layerPrefetchPages = 0;
-        stats.layerPrefetchRequests = 0;
-        stats.layerPrefetchAccepted = 0;
-        // 覆盖页回退路径不做需求级预算分配；控制台必须显示 0，而不是沿用
-        // 上一帧精确路径的旧值。
-        stats.layerPageBudget = 0;
-        stats.layerBudgetPages = 0;
-        stats.layerBudgetSets = 0;
-        stats.layerBudgetClampedRefinements = 0;
-        stats.layerBudgetExceeded = false;
-        stats.layerBudgetEntriesByMip = {};
-        stats.layerBudgetSetsByMip = {};
-    }
-    stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
-    stats.layerDirtyPages = layerPages.DirtyPageCount();
-    stats.layerDirtyPageTableEntries =
-        layerPages.DirtyPageTableEntryCount();
-    stats.layerAtlasSlices = streaming->layerResources.atlasSlices;
-    stats.layerAtlasBytesPerMap =
-        streaming->layerResources.atlasBytesPerMap;
-    stats.layerAtlasBytesTotal =
-        streaming->layerResources.atlasBytesTotal;
-    stats.layerAtlasReady = streaming->layerResources.atlasesCreated;
-    // 饥饿状态直接来自 resolver 的跨帧健康记录：精确路径与覆盖页回退
-    // 都会写同一份状态，控制台读数与实际驻留策略一致。
-    const VL::TerrainLayerFeedbackHealth& feedbackHealth =
-        streaming->layerVisibilityResolver.FeedbackHealth();
-    stats.layerStarvedFrames = feedbackHealth.starvedFrames;
-    stats.layerLastValidFeedbackEpoch =
-        feedbackHealth.lastValidFeedbackEpoch;
-    stats.layerUsedCoverFallback =
-        feedbackHealth.starvedFrames != 0;
-    stats.layerIdleGraceEpochs = feedbackHealth.starvationCreditEpochs;
-    stats.layerForceMip = static_cast<float>(
-        streaming->layerForceMip.load(std::memory_order_relaxed));
-    stats.layerPrefetchMoving = streaming->layerPrefetchMoving;
-    streaming->PublishStats(stats);
-    // 本帧上传数只显示一帧；累计值继续保留。
-    streaming->lastUploadedPages = 0;
-    streaming->lastLayerUploadedPages = 0;
+    terrainFeedbackRuntime.PublishTerrainStreamingStats(
+        streaming, completedEpoch);
+}
+
+void RenderSystem::ReportTerrainFeedbackStatistics() const
+{
+    terrainFeedbackRuntime.ReportTerrainFeedbackStatistics();
 }
 
 void RenderSystem::ReportTerrainStatistics() const
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[Terrain] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-
-    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
-    const VL::TerrainFeedbackApplyStats& apply = stats.lastFeedbackApply;
-    std::cout
-        << "[Terrain] resident=" << stats.residentPages
-        << "/" << stats.residentCapacity
-        << " virtualPages=" << stats.virtualPages
-        << " registrations=" << stats.registrations
-        << " freeSlots=" << stats.freePhysicalSlots
-        << " quarantined=" << stats.quarantinedPhysicalSlots
-        << " requests=" << stats.requestCount
-        // requestHits 只统计 RequestPage 命中；feedbackHits 才是 GPU 可见页命中。
-        << " requestHits=" << stats.hitCount
-        << " misses=" << stats.missCount
-        << " evictions=" << stats.evictionCount
-        << " preloadDeferred=" << stats.preloadDeferredCount
-        << " uploadedPages=" << stats.uploadedPagesTotal
-        << " lastUploaded=" << stats.lastUploadedPages
-        << " gpuBakedPages=" << stats.gpuBakedPagesTotal
-        << " lastGpuBaked=" << stats.lastGpuBakedPages
-        << " gpuBakePending=" << stats.pendingGpuBakeJobs
-        << " lastFeedbackEpoch=" << stats.lastFeedbackEpoch
-        << std::endl;
-    std::cout
-        << "[Terrain] feedbackHits=" << apply.markedPages
-        << " missPages=" << apply.missPagesSeen
-        << " queued=" << apply.queuedRequests
-        << " attempted=" << apply.attemptedRequests
-        << " accepted=" << apply.succeededRequests
-        << " deferred=" << apply.deferredRequests
-        << " unregistered=" << apply.unregisteredPages
-        << " pending=" << apply.pendingRequests
-        << std::endl;
+    VL::TerrainFeedbackRuntime::ReportTerrainStatistics();
 }
 
 void RenderSystem::ReportTerrainLayerStatistics() const
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[TerrainLayer] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
-    // 首帧之前渲染线程还没发布快照，整行 0 会被误读成“没有驻留页”。
-    if (!stats.statsPublished)
-    {
-        std::cout
-            << "[TerrainLayer] stats not published yet."
-            << std::endl;
-        return;
-    }
-    const VL::TerrainLayerGpuResources& resources =
-        streaming->layerResources;
-    std::cout
-        << "[TerrainLayer] resident=" << stats.layerResidentPages
-        << "/" << stats.layerResidentCapacity
-        << " physical=" << stats.layerPhysicalPages
-        << " free=" << stats.layerFreePhysicalPages
-        << " quarantined=" << stats.layerQuarantinedPhysicalPages
-        << " requests=" << stats.layerRequestCount
-        // 旧 `hits` 是 RequestPage 命中已驻留页的次数；调用方在请求前就会
-        // 过滤常驻页，因此它恒为 0。真正的命中看第二行 feedbackHits。
-        << " misses=" << stats.layerMissCount
-        << " evictions=" << stats.layerEvictionCount
-        << " uploadedPages=" << stats.layerUploadedPagesTotal
-        << " uploadedBytes=" << stats.layerUploadedBytesTotal
-        << " dirtyPages=" << stats.layerDirtyPages
-        << " dirtyPageTable=" << stats.layerDirtyPageTableEntries
-        << std::endl;
-    // 饥饿保护：starvedFrames 是连续没有有效精确 feedback 的帧数；
-    // usedCoverFallback=1 表示本帧可见层来自覆盖页推导；idleGrace 是
-    // 当前加到 idle 窗口上的补偿 epoch（饥饿期间随帧数增长并封顶）。
-    std::cout
-        << "[TerrainLayer] starvedFrames=" << stats.layerStarvedFrames
-        << " lastValidEpoch=" << stats.layerLastValidFeedbackEpoch
-        << " usedCoverFallback=" << (stats.layerUsedCoverFallback ? 1 : 0)
-        << " idleGrace=" << stats.layerIdleGraceEpochs
-        << std::endl;
-    // S1/S2：全局层 / sourceSet / 去重统计。globalLayers 是 catalog 的真实
-    // 层数（globalId 0..N-1）；deduped 是跨 TR 复用同一个 key 省下的层数。
-    std::cout
-        << "[TerrainLayer] globalLayers=" << stats.layerGlobalLayers
-        << " sourceSets=" << stats.layerSourceSetCount
-        << " dedupedLayers=" << stats.layerDedupedLayers
-        << " capacity=" << VL::TerrainLayerTable::MaxLayers
-        << std::endl;
-    // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
-    std::cout
-        << "[TerrainLayer] visibleLayers=" << stats.layerVisibleLayers
-        // feedbackHits 才是“本帧 GPU 真的看到并续命的层页”；requested 是
-        // 本帧尝试请求数（含失败/deferred），accepted 是其中成功的部分。
-        << " feedbackHits=" << stats.layerFeedbackHits
-        << " exactSlots=" << stats.layerExactFeedbackSlots
-        << " exactPages=" << stats.layerExactFeedbackPages
-        << " requested=" << stats.layerRequestedPages
-        << " accepted=" << stats.layerAcceptedPages
-        << " uploadedLast=" << stats.layerLastUploadedPages
-        << " pending=" << stats.layerPendingRequests
-        << " mipRequests=";
-    for (uint32_t mip = 0;
-         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
-         ++mip)
-    {
-        if (mip != 0) std::cout << "/";
-        std::cout << stats.layerMipRequestCounts[mip];
-    }
-    std::cout << std::endl;
-    // L4c：粗 mip 回退。exactSlots 是有效 feedback texel 数，fallbackSlots 是
-    // 其中目标 mip 缺页的部分（shader 会退到更粗 mip；若没有更粗页则显示
-    // avgColor）。因此 fallbackSlots/exactSlots × 渲染分辨率是“本帧会走
-    // 回退路径的像素数”的上界估计；fallbackLevels=+1/+2/+3 是本帧新增的
-    // 粗 mip 预取页数；targetMips 是 feedback texel 的目标 mip 分布。
-    const vk::Extent2D fallbackExtent = GetSceneRenderExtent();
-    const double fallbackPixels =
-        stats.layerExactFeedbackSlots == 0
-            ? 0.0
-            : static_cast<double>(stats.layerFallbackSlots) /
-                static_cast<double>(stats.layerExactFeedbackSlots) *
-                static_cast<double>(fallbackExtent.width) *
-                static_cast<double>(fallbackExtent.height);
-    std::cout
-        << "[TerrainLayer] fallbackSlots=" << stats.layerFallbackSlots
-        << " fallbackPages=" << stats.layerFallbackTargetPages
-        << " fallbackLevels=" << stats.layerFallbackLevelPages[0] << "/"
-        << stats.layerFallbackLevelPages[1] << "/"
-        << stats.layerFallbackLevelPages[2]
-        << " fallbackPixels~=" << static_cast<uint64_t>(fallbackPixels)
-        << " targetMips=";
-    for (uint32_t mip = 0;
-         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
-         ++mip)
-    {
-        if (mip != 0) std::cout << "/";
-        std::cout << stats.layerTargetMipSlots[mip];
-    }
-    std::cout
-        << std::endl;
-    std::cout
-        << "[TerrainLayer] atlasReady=" << (stats.layerAtlasReady ? 1 : 0)
-        << " slices=" << stats.layerAtlasSlices
-        << " bytesPerMap=" << stats.layerAtlasBytesPerMap
-        << " atlasBytes=" << stats.layerAtlasBytesTotal
-        << " albedo=" << vk::to_string(resources.albedoFormat)
-        << " normal=" << vk::to_string(resources.normalFormat)
-        << " pbr=" << vk::to_string(resources.pbrFormat)
-        << std::endl;
-    // L4e：强制 mip 与相机前向预取。fallbackBlendPages 表示目标页缺页但
-    // 有更粗驻留页（shader 按 mip 差渐变）；avgColorPages 表示连粗页都
-    // 没有，整页显示 avgColor。prefetchMoving=1 才会产生 prefetchRequests。
-    std::cout
-        << "[TerrainLayer] forceMip=" << stats.layerForceMip
-        << " prefetchMoving=" << (stats.layerPrefetchMoving ? 1 : 0)
-        << " prefetchPages=" << stats.layerPrefetchPages
-        << " prefetchRequests=" << stats.layerPrefetchRequests
-        << " prefetchAccepted=" << stats.layerPrefetchAccepted
-        << " fallbackBlendPages=" << stats.layerFallbackBlendPages
-        << " avgColorPages=" << stats.layerAvgColorPages
-        << std::endl;
-    // 全局预算：pages/sets 是去重后的 (layer,mip) 全页集，必须 <= pageBudget
-    // 才能保证请求不会与淘汰互相追尾。entries 是可见 (layer,targetMip) 需求
-    // 分布，sets 是最终驻留页集分布；近处需求的细 mip 应优先出现。
-    std::cout
-        << "[TerrainLayer] pageBudget=" << stats.layerPageBudget
-        << " budgetPages=" << stats.layerBudgetPages
-        << " budgetSets=" << stats.layerBudgetSets
-        << " budgetClamped=" << stats.layerBudgetClampedRefinements
-        << " budgetExceeded=" << (stats.layerBudgetExceeded ? 1 : 0)
-        << " budgetEntries=";
-    for (uint32_t mip = 0;
-         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
-         ++mip)
-    {
-        if (mip != 0) std::cout << "/";
-        std::cout << stats.layerBudgetEntriesByMip[mip];
-    }
-    std::cout << " budgetMips=";
-    for (uint32_t mip = 0;
-         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
-         ++mip)
-    {
-        if (mip != 0) std::cout << "/";
-        std::cout << stats.layerBudgetSetsByMip[mip];
-    }
-    std::cout << std::endl;
+    VL::TerrainFeedbackRuntime::ReportTerrainLayerStatistics(
+        GetSceneRenderExtent());
 }
 
 void RenderSystem::ReportTerrainLodStatistics() const
 {
-    const VL::TerrainLodStatsSnapshot& stats =
-        worldSnapshotBuilder.GetTerrainLodStats();
-    if (!stats.valid)
-    {
-        std::cout
-            << "[TerrainLOD] stats not published yet."
-            << std::endl;
-        return;
-    }
-
-    std::cout
-        << "[TerrainLOD] groups=" << stats.groupCount
-        << " switchedLastFrame=" << stats.switchedLastFrame
-        << " frame=" << stats.frameIndex
-        << " generation=" << stats.worldGeneration
-        << std::endl;
-    for (const VL::TerrainLodGroupStats& group : stats.groups)
-    {
-        std::cout
-            << "[TerrainLOD] group=" << group.groupId
-            << " level=" << group.level << "/" << group.levelCount
-            << " distCm="
-            << static_cast<long long>(std::llround(group.distanceCm))
-            << " switches=" << group.switchCount
-            << std::endl;
-    }
+    VL::TerrainFeedbackRuntime::ReportTerrainLodStatistics(
+        worldSnapshotBuilder.GetTerrainLodStats());
 }
 
 void RenderSystem::ReportTerrainChunkStatistics() const
 {
-    const std::shared_ptr<VL::TerrainStreamingState> streaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    if (!streaming)
-    {
-        std::cout
-            << "[TerrainChunk] No active terrain streaming state."
-            << std::endl;
-        return;
-    }
-
-    // 加载期快照：只在 World 加载时写一次，运行时不会再变。
-    const VL::TerrainChunkResidencyStats chunkStats =
-        streaming->SnapshotChunkStats();
-    if (!chunkStats.valid)
-    {
-        std::cout
-            << "[TerrainChunk] No terrain chunk residency was recorded."
-            << std::endl;
-        return;
-    }
-
-    uint32_t groupCount = 0;
-    for (const VL::TerrainChunkPlacementStats& placement :
-         chunkStats.placements)
-    {
-        groupCount += placement.chunksPerSide * placement.chunksPerSide;
-    }
-    std::cout
-        << "[TerrainChunk] placements=" << chunkStats.placements.size()
-        << " groups=" << groupCount
-        << " chunks=" << chunkStats.TotalChunks()
-        << " skippedChunks=" << chunkStats.TotalSkippedChunks()
-        << " vertexBytes=" << chunkStats.TotalVertexBytes()
-        << " indexBytes=" << chunkStats.TotalIndexBytes()
-        << " skippedVertexBytes=" << chunkStats.TotalSkippedVertexBytes()
-        << " skippedIndexBytes=" << chunkStats.TotalSkippedIndexBytes()
-        << " totalIfAllBytes="
-        << chunkStats.TotalVertexBytes() + chunkStats.TotalIndexBytes() +
-            chunkStats.TotalSkippedVertexBytes() +
-            chunkStats.TotalSkippedIndexBytes()
-        << std::endl;
-
-    for (const VL::TerrainChunkPlacementStats& placement :
-         chunkStats.placements)
-    {
-        std::cout
-            << "[TerrainChunk] placement=" << placement.placementId
-            << " asset=" << placement.assetPath
-            << " groups="
-            << placement.chunksPerSide * placement.chunksPerSide
-            << " chunksPerSide=" << placement.chunksPerSide
-            << " levels=" << placement.lodLevelCount
-            << " residency=" << (placement.residencyEnabled ? "on" : "off");
-        if (!placement.residencyDistancesCm.empty())
-        {
-            std::cout << " windowsCm=";
-            for (size_t index = 0;
-                 index < placement.residencyDistancesCm.size();
-                 ++index)
-            {
-                if (index != 0) std::cout << ",";
-                std::cout << static_cast<long long>(
-                    std::llround(placement.residencyDistancesCm[index]));
-            }
-        }
-        std::cout << std::endl;
-        for (const VL::TerrainChunkLevelStats& level : placement.levels)
-        {
-            std::cout
-                << "[TerrainChunk]   level=" << level.lodLevel
-                << " stitched=" << (level.stitched ? 1 : 0)
-                << " chunks=" << level.chunkCount
-                << "/" << level.chunkCount + level.skippedChunkCount
-                << " vertices=" << level.vertexCount
-                << " indices=" << level.indexCount
-                << " bytes=" << level.vertexBytes + level.indexBytes
-                << " skippedBytes="
-                << level.skippedVertexBytes + level.skippedIndexBytes
-                << std::endl;
-        }
-    }
-
-    const VL::TerrainLodStatsSnapshot& lodStats =
-        worldSnapshotBuilder.GetTerrainLodStats();
-    if (!lodStats.valid)
-    {
-        std::cout
-            << "[TerrainChunk] draw stats not published yet."
-            << std::endl;
-        return;
-    }
-    std::cout
-        << "[TerrainChunk] draw groups=" << lodStats.groupCount
-        << " drawnChunks=" << lodStats.drawnChunks
-        << " meshDraws=" << lodStats.totalMeshDraws
-        << " switchedLastFrame=" << lodStats.switchedLastFrame
-        << " frame=" << lodStats.frameIndex
-        << std::endl;
-    std::cout << "[TerrainChunk] drawnByLevel=";
-    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
-    {
-        if (level != 0) std::cout << ",";
-        std::cout << level << ":" << lodStats.drawnByLevel[level];
-    }
-    std::cout << " objectsByLevel=";
-    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
-    {
-        if (level != 0) std::cout << ",";
-        std::cout << level << ":" << lodStats.residentObjectsByLevel[level];
-    }
-    std::cout << std::endl;
+    VL::TerrainFeedbackRuntime::ReportTerrainChunkStatistics(
+        worldSnapshotBuilder.GetTerrainLodStats());
 }
 
 void RenderSystem::RequestHairTrace(std::string path, uint32_t frames,
     uint32_t guideStride)
 {
-    VL::Hair::HairTraceRequest request;
-    request.path = std::move(path);
-    request.frames = frames;
-    request.guideStride = guideStride;
-    std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
-    pendingHairTraceRequest = std::move(request);
+    hairRuntime.RequestHairTrace(std::move(path), frames, guideStride);
 }
 
 void RenderSystem::RequestHairSimulationReset(std::string objectName)
 {
-    std::lock_guard<std::mutex> lock(hairResetRequestMutex);
-    pendingHairResetRequest = std::move(objectName);
+    hairRuntime.RequestHairSimulationReset(std::move(objectName));
 }
 
 void RenderSystem::RequestHairSimulationParameter(
     const VL::Hair::HairLiveParameterRequest& request)
 {
-    std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
-    // 队列有界：滑杆拖动时一帧可能累积多条；超过上限先丢最旧的意图，
-    // 保留最新值，避免没有渲染帧时无限增长。
-    if (pendingHairLiveParameters.size() >= 64)
-        pendingHairLiveParameters.erase(pendingHairLiveParameters.begin());
-    pendingHairLiveParameters.push_back(request);
+    hairRuntime.RequestHairSimulationParameter(request);
 }
 
 void RenderSystem::RequestTressfxBrushPreview(
     const VL::Hair::TressfxBrushPreviewRequest& request)
 {
-    std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
-    if (pendingTressfxBrushPreviews.size() >= 64)
-        pendingTressfxBrushPreviews.erase(pendingTressfxBrushPreviews.begin());
-    pendingTressfxBrushPreviews.push_back(request);
+    hairRuntime.RequestTressfxBrushPreview(request);
 }
 
 void RenderSystem::RequestTressfxGroupBindingPreview(
     const VL::Hair::TressfxGroupBindingPreviewRequest& request)
 {
-    std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
-    // 同一对象的草稿结构更新只需要最新一份；拖拽编辑时避免队列被旧 binding 占满。
-    for (auto entry = pendingTressfxGroupBindingPreviews.begin();
-         entry != pendingTressfxGroupBindingPreviews.end(); ++entry)
-        if (entry->objectName == request.objectName &&
-            entry->worldGeneration == request.worldGeneration)
-        {
-            *entry = request;
-            return;
-        }
-    if (pendingTressfxGroupBindingPreviews.size() >= 16)
-        pendingTressfxGroupBindingPreviews.erase(
-            pendingTressfxGroupBindingPreviews.begin());
-    pendingTressfxGroupBindingPreviews.push_back(request);
+    hairRuntime.RequestTressfxGroupBindingPreview(request);
 }
 
 void RenderSystem::ApplyTressfxGroupBindingPreviewRequests()
 {
-    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest> requests;
-    {
-        std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
-        requests.swap(pendingTressfxGroupBindingPreviews);
-    }
-    if (requests.empty()) return;
-
-    for (const VL::Hair::TressfxGroupBindingPreviewRequest& request : requests)
-    {
-        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
-        // Resolved draws hold strong renderable references; never re-resolve a
-        // cache pointer here, because GT may retire the cache entry mid-frame.
-        std::shared_ptr<RenderableObject> object;
-        for (const auto& material : currentResolvedRenderScene.materialGroups)
-            for (const auto& instance : material.materialInstances)
-                for (const auto& draw : instance.draws)
-                {
-                    if (!draw.renderableObject) continue;
-                    const VL::RenderDrawPacket& packet =
-                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
-                    if (packet.debugName != request.objectName) continue;
-                    object = draw.renderableObject;
-                    break;
-                }
-        if (!object) continue;
-        const VL::Hair::TressfxGroupBinding binding =
-            VL::Hair::MakeTressfxGroupBinding(request);
-        std::string error;
-        if (!object->UpdateTressfxGroupBinding(binding, error))
-        {
-            std::cout << "[TressFX][Warning] group binding preview rejected: "
-                      << error << " object=" << request.objectName << std::endl;
-        }
-    }
+    hairRuntime.ApplyTressfxGroupBindingPreviewRequests(
+        currentRenderScene, currentResolvedRenderScene);
 }
 
 void RenderSystem::ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex)
 {
-    std::vector<VL::Hair::TressfxBrushPreviewRequest> requests;
-    {
-        std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
-        requests.swap(pendingTressfxBrushPreviews);
-    }
-    if (requests.empty()) return;
-
-    for (const VL::Hair::TressfxBrushPreviewRequest& request : requests)
-    {
-        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
-        std::shared_ptr<RenderableObject> object;
-        for (const auto& material : currentResolvedRenderScene.materialGroups)
-            for (const auto& instance : material.materialInstances)
-                for (const auto& draw : instance.draws)
-                {
-                    if (!draw.renderableObject) continue;
-                    const VL::RenderDrawPacket& packet =
-                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
-                    if (packet.debugName != request.objectName) continue;
-                    object = draw.renderableObject;
-                    break;
-                }
-        if (!object) continue;
-        std::string error;
-        if (!object->SetTressfxBrushPreview(request.targetGroupId,
-                request.mode, request.weights, swapchainImageIndex, error))
-        {
-            std::cout << "[TressFX][Warning] brush preview rejected: " << error
-                      << " object=" << request.objectName << std::endl;
-            continue;
-        }
-        // UBO 的 brush 状态属于对象资源包；在 draw 录制前同步，保证本帧读到新值。
-        for (auto& material : currentResolvedRenderScene.materialGroups)
-            for (auto& instance : material.materialInstances)
-                for (auto& draw : instance.draws)
-                {
-                    if (!draw.objectResourceEntry) continue;
-                    const VL::RenderDrawPacket& packet =
-                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
-                    if (packet.debugName != request.objectName) continue;
-                    VL::RendererObjectGpuResources& resources =
-                        draw.objectResourceEntry->GetResources();
-                    resources.tressfxBrushActive = object->HasTressfxBrushPreview();
-                    resources.tressfxBrushRemoveMode = object->TressfxBrushRemoveMode();
-                }
-    }
+    hairRuntime.ApplyTressfxBrushPreviewRequests(
+        currentRenderScene,
+        currentResolvedRenderScene,
+        swapchainImageIndex);
 }
+
 
 void RenderSystem::PrintGpuPassStats()
 {
@@ -2451,12 +856,16 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     snapshotDesc.environmentIntensity =
         environmentIntensity;
     snapshotDesc.hasSelectedDraw =
-        hasSelectedDraw && selectedWorldGeneration == prepared.world->GetGeneration();
+        pickingRuntime.HasSelectedDraw() &&
+        pickingRuntime.SelectedWorldGeneration() ==
+            prepared.world->GetGeneration();
     snapshotDesc.selectedAllMaterialSlots =
-        selectedAllMaterialSlots &&
-        selectedWorldGeneration == prepared.world->GetGeneration();
-    snapshotDesc.selectedObjectId = selectedObjectId;
-    snapshotDesc.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+        pickingRuntime.SelectedAllMaterialSlots() &&
+        pickingRuntime.SelectedWorldGeneration() ==
+            prepared.world->GetGeneration();
+    snapshotDesc.selectedObjectId = pickingRuntime.SelectedObjectId();
+    snapshotDesc.selectedMaterialSlotIndex =
+        pickingRuntime.SelectedMaterialSlotIndex();
     auto snapshotResult =
         prepared.snapshotBuilder.Build(
             *prepared.world,
@@ -2690,7 +1099,7 @@ uint64_t RenderSystem::GetActiveWorldGeneration() const noexcept
 
 void RenderSystem::SetPickingSceneEnabled(bool enabled) noexcept
 {
-    pickingSceneEnabled = enabled;
+    pickingRuntime.SetSceneEnabled(enabled);
 }
 
 std::optional<VL::MaterialInstanceSelection>
@@ -2700,127 +1109,54 @@ RenderSystem::PickMaterialInstanceAt(
     uint32_t viewportWidth,
     uint32_t viewportHeight) const
 {
-    if (!activeWorld || !hasPickingRenderScene ||
-        pickingRenderScene.worldGeneration != activeWorld->GetGeneration())
+    if (!activeWorld)
     {
         return std::nullopt;
     }
-
-    VL::ScenePickRequest request;
-    request.mouseX = mouseX;
-    request.mouseY = mouseY;
-    request.viewportWidth = viewportWidth;
-    request.viewportHeight = viewportHeight;
-    return VL::SceneObjectPicker().Pick(
-        pickingRenderScene,
+    return pickingRuntime.Pick(
         activeWorld->GetScenePath(),
-        request);
+        activeWorld->GetGeneration(),
+        mouseX,
+        mouseY,
+        viewportWidth,
+        viewportHeight);
 }
 
 std::vector<VL::MaterialInstanceModelContext>
 RenderSystem::GetMaterialInstanceModelContexts() const
 {
-    if (!activeWorld || !hasPickingRenderScene ||
-        pickingRenderScene.worldGeneration != activeWorld->GetGeneration())
+    if (!activeWorld)
     {
         return {};
     }
-
-    std::vector<VL::MaterialInstanceModelContext> result;
-    std::unordered_map<std::string, std::size_t> modelIndices;
-    modelIndices.reserve(pickingRenderScene.drawPackets.size());
-    for (const VL::RenderDrawPacket& drawPacket : pickingRenderScene.drawPackets)
-    {
-        if (drawPacket.objectId == 0 || !drawPacket.materialInstance.IsValid())
-        {
-            continue;
-        }
-        const std::string objectIdentity = drawPacket.sceneObjectIdentity.empty()
-            ? drawPacket.debugName
-            : drawPacket.sceneObjectIdentity;
-        if (objectIdentity.empty())
-        {
-            continue;
-        }
-
-        const std::string key = std::to_string(drawPacket.objectId) + "|" +
-            objectIdentity;
-        auto [iterator, inserted] = modelIndices.emplace(key, result.size());
-        if (inserted)
-        {
-            result.push_back(
-                VL::AggregateSceneModel(
-                    pickingRenderScene,
-                    activeWorld->GetScenePath(),
-                    drawPacket.objectId,
-                    objectIdentity));
-        }
-        static_cast<void>(iterator);
-    }
-
-    std::sort(
-        result.begin(),
-        result.end(),
-        [](const auto& left, const auto& right)
-        {
-            const std::string& leftName = left.displayName.empty()
-                ? left.objectIdentity
-                : left.displayName;
-            const std::string& rightName = right.displayName.empty()
-                ? right.objectIdentity
-                : right.displayName;
-            if (leftName != rightName)
-            {
-                return leftName < rightName;
-            }
-            return left.objectIdentity < right.objectIdentity;
-        });
-    return result;
+    return pickingRuntime.GetModelContexts(
+        activeWorld->GetScenePath(),
+        activeWorld->GetGeneration());
 }
 
 void RenderSystem::SetSelectedMaterialInstanceModel(
     const VL::MaterialInstanceModelContext& model)
 {
-    if (!activeWorld || model.worldGeneration != activeWorld->GetGeneration() ||
-        model.objectId == 0)
-    {
-        ClearSelectedMaterialInstance();
-        return;
-    }
-
-    hasSelectedDraw = true;
-    selectedAllMaterialSlots = true;
-    selectedObjectId = model.objectId;
-    selectedMaterialSlotIndex = 0;
-    selectedWorldGeneration = model.worldGeneration;
+    pickingRuntime.SetSelectedMaterialInstanceModel(
+        model,
+        activeWorld ? activeWorld->GetGeneration() : 0,
+        activeWorld != nullptr);
 }
 
 void RenderSystem::SetSelectedMaterialInstance(
     const VL::MaterialInstanceSelection& selection)
 {
-    if (!activeWorld ||
-        selection.worldGeneration != activeWorld->GetGeneration() ||
-        selection.objectId == 0)
-    {
-        ClearSelectedMaterialInstance();
-        return;
-    }
-
-    hasSelectedDraw = true;
-    selectedAllMaterialSlots = false;
-    selectedObjectId = selection.objectId;
-    selectedMaterialSlotIndex = selection.materialSlotIndex;
-    selectedWorldGeneration = selection.worldGeneration;
+    pickingRuntime.SetSelectedMaterialInstance(
+        selection,
+        activeWorld ? activeWorld->GetGeneration() : 0,
+        activeWorld != nullptr);
 }
 
 void RenderSystem::ClearSelectedMaterialInstance() noexcept
 {
-    hasSelectedDraw = false;
-    selectedAllMaterialSlots = false;
-    selectedObjectId = 0;
-    selectedMaterialSlotIndex = 0;
-    selectedWorldGeneration = 0;
+    pickingRuntime.ClearSelectedMaterialInstance();
 }
+
 
 std::unique_ptr<VL::IMaterialInstancePreviewAdapter>
 RenderSystem::CreateMaterialInstancePreviewAdapter()
@@ -2902,7 +1238,7 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
         baseline.materialInstancePath = command.materialInstancePath.value;
         baseline.documentRevision = command.documentRevision.value_or(0);
         baseline.serializedWorkingDraft = found->second.dump();
-        outSession = std::make_shared<OfflineMaterialInstancePreviewSession>(
+        outSession = VL::MakeOfflineMaterialInstancePreviewSession(
             *this, command.world, command.materialInstancePath, std::move(baseline));
         result.status = PreviewAdapterOperationStatus::Completed;
         result.runtimeResourceGeneration = command.world.generation;
@@ -2947,8 +1283,8 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
                 materialInstanceJson,
                 activeOfflineWorldAssets->materialDefinitions.at(
                     command.materialInstancePath.value));
-        const PreviewRenderStateValues baselineRenderStates =
-            BuildPreviewRenderStateValues(
+        const VL::PreviewRenderStateValues baselineRenderStates =
+            VL::BuildPreviewRenderStateValues(
                 resolved.effectiveMaterialInstanceJson);
         VL::MaterialInstancePreviewDraft baselineDraft;
         baselineDraft.materialInstancePath =
@@ -2957,7 +1293,7 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
             command.documentRevision.value_or(0);
         baselineDraft.serializedWorkingDraft =
             materialInstanceJson.dump();
-        outSession = std::make_shared<MaterialInstancePreviewSession>(
+        outSession = VL::MakeMaterialInstancePreviewSession(
             *this,
             command.world,
             command.materialInstancePath,
@@ -3142,8 +1478,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         return result;
     }
 
-    NumericPreviewDraftParseResult parsed =
-        ParseNumericPreviewDraft(
+    VL::NumericPreviewDraftParseResult parsed =
+        VL::ParseNumericPreviewDraft(
             draft,
             materialInstancePath,
             activeCapture->materialInstance->CaptureStateSnapshot().textures,
@@ -3251,7 +1587,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             replacementMaterial->GetMaterialKey();
         std::string replacementPath = materialInstancePath.value;
         std::string replacementKey = replacementMaterialKey;
-        VL::RenderScene candidatePickingRenderScene = pickingRenderScene;
+        VL::RenderScene candidatePickingRenderScene =
+            pickingRuntime.CopyPickingScene();
         ApplyMaterialOverrideToRenderScene(
             candidatePickingRenderScene,
             materialInstancePath.value,
@@ -3290,7 +1627,7 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         activeCache.CommitCandidate(std::move(candidateCache));
         std::swap(currentRenderScene, candidateRenderScene);
         std::swap(currentResolvedRenderScene, candidateResolvedRenderScene);
-        std::swap(pickingRenderScene, candidatePickingRenderScene);
+        pickingRuntime.SwapPickingScene(candidatePickingRenderScene);
         activeOfflineWorldAssets.swap(preparedOfflineAssets);
 
         hasMaterialInstancePreviewMaterialOverride = true;
@@ -3457,12 +1794,15 @@ void RenderSystem::DrawEditorGridGeometry(
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
-    UpdateUBOGlobalWithProjectionTransform(
+    frameRecorder.UpdateGlobalUBO(
         commandBuffer,
-        1.0f,
-        1.0f,
-        0.0f,
-        0.0f);
+        frameResources,
+        swapChainImageIndex,
+        currentRenderScene,
+        hasRenderScene,
+        [this] { RefreshRenderSceneFromActiveWorld(); },
+        csmRuntime,
+        currentFrame);
 }
 
 void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
@@ -3472,132 +1812,24 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     float projectionOffsetX,
     float projectionOffsetY)
 {
-    PROFILE_FUNCTION();
-    if (!hasRenderScene)
-    {
-        RefreshRenderSceneFromActiveWorld();
-    }
-
-    UBOGlobal ubo;
-    const VL::CameraSnapshot& camera = currentRenderScene.camera;
-    Eigen::Matrix4f projection = camera.projection;
-    Eigen::Matrix4f previousViewProjection = camera.previousViewProjection;
-    if (!std::isfinite(projectionScaleX) || projectionScaleX <= 0.0f ||
-        !std::isfinite(projectionScaleY) || projectionScaleY <= 0.0f ||
-        !std::isfinite(projectionOffsetX) ||
-        !std::isfinite(projectionOffsetY))
-    {
-        projectionScaleX = 1.0f;
-        projectionScaleY = 1.0f;
-        projectionOffsetX = 0.0f;
-        projectionOffsetY = 0.0f;
-    }
-    projection.row(0) =
-        projectionScaleX * camera.projection.row(0) +
-        projectionOffsetX * camera.projection.row(3);
-    projection.row(1) =
-        projectionScaleY * camera.projection.row(1) +
-        projectionOffsetY * camera.projection.row(3);
-    previousViewProjection.row(0) =
-        projectionScaleX * camera.previousViewProjection.row(0) +
-        projectionOffsetX * camera.previousViewProjection.row(3);
-    previousViewProjection.row(1) =
-        projectionScaleY * camera.previousViewProjection.row(1) +
-        projectionOffsetY * camera.previousViewProjection.row(3);
-    ubo.view = camera.view;
-    ubo.projection = projection;
-    ubo.invView = ubo.view.inverse();
-    ubo.invProjection = ubo.projection.inverse();
-    ubo.viewProjection = ubo.projection * ubo.view;
-    ubo.invViewProjection = ubo.viewProjection.inverse();
-    ubo.previousViewProjection = previousViewProjection;
-    const VL::CsmSettings& frameSettings =
-        csmRuntime.GetFrameSettings();
-    if (frameSettings.castShadows)
-    {
-        if (!csmRuntime.GetFrameData().valid)
-        {
-            BuildShadowCascadeFrameData(1, 1);
-        }
-        const VL::ShadowCascadeFrameData& cascadeData =
-            csmRuntime.GetFrameData();
-        ubo.lightViewProj = cascadeData.lightViewProj;
-        ubo.cascadeSplits = cascadeData.cascadeSplits;
-        ubo.shadowBias = cascadeData.bias;
-        ubo.csmParameters = cascadeData.csmParameters;
-    }
-    else
-    {
-        // Zero cascade splits is the GPU-side disabled flag consumed by
-        // CalculateCsmShadow; keep every shadow field explicitly neutral.
-        ubo.cascadeSplits = Eigen::Vector4f::Zero();
-        ubo.shadowBias.fill(Eigen::Vector4f::Zero());
-        ubo.csmParameters = Eigen::Vector4f::Zero();
-        for (Eigen::Matrix4f& lightViewProj : ubo.lightViewProj)
-        {
-            lightViewProj = Eigen::Matrix4f::Identity();
-        }
-    }
-    ubo.cameraPosition = camera.position;
-    // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
-    ubo.debugViewMode = currentRenderScene.debugViewMode;
-    ubo.environmentIntensity = currentRenderScene.environment.intensity;
-    ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
-    ubo.skyParameters = currentRenderScene.environment.skyParameters;
-    const float cameraExposureScale = VL::ExposureScale(camera.exposure);
-    const bool autoExposureEnabled =
-        camera.exposure.mode == VL::ExposureMode::Auto;
-    std::string exposureMessage;
-    (void)VL::SetPassVectorComponent(
-        "toneMapping",
-        "u_toneMappingParams",
-        0,
-        cameraExposureScale,
-        "Tone mapping pass material instance is expired.",
-        exposureMessage);
-    (void)VL::SetPassVector(
-        "toneMapping",
-        "u_exposureSettings",
-        Eigen::Vector4f(autoExposureEnabled ? 1.0f : 0.0f, 0, 0, 0),
-        exposureMessage);
-    // Bloom 阈值属于曝光后空间，与最终合成共用同一冻结相机，输出仍保留场景线性单位。
-    (void)VL::SetPassVectorComponent(
-        "bloomPrefilter",
-        "u_bloomPrefilterParams",
-        3,
-        cameraExposureScale,
-        "Bloom prefilter material instance is expired.",
-        exposureMessage);
-    (void)VL::SetPassVector(
-        "bloomPrefilter",
-        "u_exposureSettings",
-        Eigen::Vector4f(autoExposureEnabled ? 1.0f : 0.0f, 0, 0, 0),
-        exposureMessage);
-    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+    frameRecorder.UpdateGlobalUBOWithProjectionTransform(
+        commandBuffer,
+        frameResources,
+        swapChainImageIndex,
+        currentRenderScene,
+        hasRenderScene,
+        [this] { RefreshRenderSceneFromActiveWorld(); },
+        csmRuntime,
+        currentFrame,
+        projectionScaleX,
+        projectionScaleY,
+        projectionOffsetX,
+        projectionOffsetY);
 }
 
 void RenderSystem::UpdateExposureFrameTiming()
 {
-    const auto now = std::chrono::steady_clock::now();
-    if (!exposureClockInitialized)
-    {
-        exposureLastFrameTime = now;
-        exposureClockInitialized = true;
-        exposureDeltaSeconds = 1.0f / 60.0f;
-        // 首帧也发布 CPU 时长，避免 Performance 页在第一个读回窗口前空着 FPS。
-        gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
-        return;
-    }
-
-    const double elapsed = std::chrono::duration<double>(
-        now - exposureLastFrameTime).count();
-    exposureLastFrameTime = now;
-    // 眼适应不应因断点、窗口拖拽或首帧长暂停瞬间跳到目标值。
-    exposureDeltaSeconds = static_cast<float>(
-        std::clamp(elapsed, 1.0 / 240.0, 0.1));
-    // Performance 通道复用这一个 frame delta，不另建帧率时钟；
-    // 因此它和自动曝光看到的 CPU 帧间隔完全一致（含同样的 1/240..0.1 s 收敛区间）。
-    gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
+    frameRecorder.UpdateExposureFrameTiming(gpuPassTimer);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(
@@ -3606,44 +1838,18 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     uint32_t passSizeHeight,
     uint32_t cascadeIndex)
 {
-    PROFILE_FUNCTION();
-    if (!hasRenderScene)
-    {
-        RefreshRenderSceneFromActiveWorld();
-    }
-
-    BuildShadowCascadeFrameData(passSizeWidth, passSizeHeight);
-    const uint32_t activeCascadeIndex =
-        std::min(
-            cascadeIndex,
-            csmRuntime.GetFrameSettings().cascadeCount - 1);
-
-    UBOGlobal ubo;
-    const VL::ShadowCascadeFrameData& cascadeData =
-        csmRuntime.GetFrameData();
-    ubo.view = cascadeData.view[activeCascadeIndex];
-    ubo.projection = cascadeData.projection[activeCascadeIndex];
-    ubo.invView = ubo.view.inverse();
-    ubo.invProjection = ubo.projection.inverse();
-    ubo.viewProjection = ubo.projection * ubo.view;
-    ubo.invViewProjection = ubo.viewProjection.inverse();
-    ubo.previousViewProjection = ubo.viewProjection;
-    ubo.lightViewProj = cascadeData.lightViewProj;
-    ubo.cascadeSplits = cascadeData.cascadeSplits;
-    ubo.shadowBias = cascadeData.bias;
-    ubo.csmParameters = cascadeData.csmParameters;
-    // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
-    ubo.debugViewMode = currentRenderScene.debugViewMode;
-    ubo.environmentIntensity = currentRenderScene.environment.intensity;
-    ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
-    ubo.skyParameters = currentRenderScene.environment.skyParameters;
-    {
-        Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
-        Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
-        ubo.cameraPosition = -(rotT.transpose() * trans);
-    }
-
-    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+    frameRecorder.UpdateShadowGlobalUBO(
+        commandBuffer,
+        frameResources,
+        swapChainImageIndex,
+        currentRenderScene,
+        hasRenderScene,
+        [this] { RefreshRenderSceneFromActiveWorld(); },
+        csmRuntime,
+        currentFrame,
+        passSizeWidth,
+        passSizeHeight,
+        cascadeIndex);
 }
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
@@ -3706,12 +1912,16 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
     buildDesc.hasSelectedDraw =
-        hasSelectedDraw && selectedWorldGeneration == activeWorld->GetGeneration();
+        pickingRuntime.HasSelectedDraw() &&
+        pickingRuntime.SelectedWorldGeneration() ==
+            activeWorld->GetGeneration();
     buildDesc.selectedAllMaterialSlots =
-        selectedAllMaterialSlots &&
-        selectedWorldGeneration == activeWorld->GetGeneration();
-    buildDesc.selectedObjectId = selectedObjectId;
-    buildDesc.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+        pickingRuntime.SelectedAllMaterialSlots() &&
+        pickingRuntime.SelectedWorldGeneration() ==
+            activeWorld->GetGeneration();
+    buildDesc.selectedObjectId = pickingRuntime.SelectedObjectId();
+    buildDesc.selectedMaterialSlotIndex =
+        pickingRuntime.SelectedMaterialSlotIndex();
 
     auto snapshotResult = worldSnapshotBuilder.Build(*activeWorld, buildDesc);
     if (snapshotResult.IsFailure())
@@ -3735,7 +1945,7 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
             offlineCoordinator->Observe(currentOfflineSnapshot,
                 activeOfflineWorldAssets, *target);
     }
-    if (pickingSceneEnabled)
+    if (pickingRuntime.IsSceneEnabled())
     {
         auto pickingRenderSceneResult =
             rendererFrontend.BuildRenderScene(snapshot);
@@ -3744,15 +1954,15 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
             throw std::runtime_error(
                 VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
         }
-        pickingRenderScene = std::move(pickingRenderSceneResult.Value());
+        VL::RenderScene pickingRenderScene =
+            std::move(pickingRenderSceneResult.Value());
         ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
         RebuildRenderSceneMaterialGroups(pickingRenderScene);
-        hasPickingRenderScene = true;
+        pickingRuntime.SetPickingScene(std::move(pickingRenderScene));
     }
     else
     {
-        // 保留容器容量以便重新打开编辑器时复用；只撤销可拾取状态。
-        hasPickingRenderScene = false;
+        pickingRuntime.InvalidatePickingScene();
     }
     worldSnapshotQueue.Publish(std::move(snapshot));
     if (advanceSimulation)
@@ -3855,149 +2065,12 @@ void RenderSystem::BuildResolvedRenderScene()
 void RenderSystem::EnsurePlacementRenderables(
     const VL::RenderScene& renderScene, VL::RendererResourceCache& resourceCache)
 {
-    // World 换代时旧键的帧计数没有意义；整包由 transaction 退休，这里只重置跟踪。
-    if (renderScene.worldGeneration != placementWorldGeneration)
-    {
-        placementAbsentFrames.clear();
-        placementObjectNames.clear();
-        placementLiveCount = 0;
-        placementCacheCount = 0;
-        placementRuntimeCount = 0;
-        placementBindingCache.clear();
-        placementWorldGeneration = renderScene.worldGeneration;
-    }
-    for (const VL::RenderDrawPacket& draw : renderScene.drawPackets)
-    {
-        if (draw.placementTemplateMeshKey.empty())
-            continue;
-        if (draw.mesh.key.empty())
-            throw std::runtime_error(
-                "Placement-scoped draw packet has no instance mesh key: " + draw.debugName);
-        const std::shared_ptr<RenderableObject> existing =
-            resourceCache.GetRenderableObject(draw.mesh.key);
-        if (existing != nullptr)
-            continue;
-        const std::shared_ptr<RenderableObject> templateObject =
-            resourceCache.GetRenderableObject(draw.placementTemplateMeshKey);
-        if (templateObject == nullptr)
-            throw std::runtime_error(
-                "Placement template renderable is missing: template=" +
-                draw.placementTemplateMeshKey + " instance=" + draw.mesh.key);
-        // 模板未解析绑定时（例如异步预加载的蓝图资产），解析需要来源 draw 的骨骼
-        // 资产。按 sceneObjectIdentity 在本帧快照里找来源对象；缺失交给 handler 报错。
-        const RenderableObject* sourceObject = nullptr;
-        if (!draw.placementBinding.sourceSceneObject.empty())
-            for (const VL::RenderDrawPacket& candidate : renderScene.drawPackets)
-            {
-                if (candidate.sceneObjectIdentity !=
-                    draw.placementBinding.sourceSceneObject) continue;
-                const std::shared_ptr<RenderableObject> found =
-                    resourceCache.GetRenderableObject(candidate.mesh.key);
-                if (found != nullptr) sourceObject = found.get();
-                break;
-            }
-        // 克隆本身不感知类型；绑定（毛发骨骼等）由通用 resolver 按 Kind 分派。
-        std::shared_ptr<RenderableObject> clone =
-            templateObject->CloneForPlacement(draw.debugName,
-                draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr,
-                draw.placementBinding.tressfxGroupConfigs.empty()
-                    ? nullptr : &draw.placementBinding.tressfxGroupConfigs);
-        std::string bindingError;
-        if (!VL::ApplyPlacementBinding(draw.placementBinding, *templateObject,
-                sourceObject, *clone, placementBindingCache, bindingError))
-            throw std::runtime_error(bindingError + " instance=" + draw.mesh.key);
-        resourceCache.BindRenderableObject(draw.mesh.key, clone);
-        placementAbsentFrames[draw.mesh.key] = 0;
-        placementObjectNames[draw.mesh.key] = draw.debugName;
-        std::cout << "[Placement] instance renderable: object=" << draw.debugName
-                  << " template=" << draw.placementTemplateMeshKey
-                  << " kind=" << static_cast<int>(draw.placementBinding.kind) << std::endl;
-    }
+    placementRuntime.EnsurePlacementRenderables(renderScene, resourceCache);
 }
 
 void RenderSystem::PrunePlacementRenderables(const VL::RenderScene& renderScene)
 {
-    if (renderScene.worldGeneration != placementWorldGeneration)
-    {
-        // 换代由 World package 统一退休；旧键的帧计数没有意义。
-        placementAbsentFrames.clear();
-        placementObjectNames.clear();
-        placementLiveCount = 0;
-        placementCacheCount = 0;
-        placementWorldGeneration = renderScene.worldGeneration;
-        return;
-    }
-    std::set<std::string> live;
-    for (const VL::RenderDrawPacket& draw : renderScene.drawPackets)
-        if (!draw.placementTemplateMeshKey.empty())
-            live.insert(draw.mesh.key);
-    // 只在存活数变化时打一行：spawn 后 1、destroy 后 0，同时作为无泄漏计数。
-    if (live.size() != placementLiveCount)
-    {
-        placementLiveCount = live.size();
-        std::cout << "[Placement] live placement renderables: " << placementLiveCount
-                  << std::endl;
-    }
-    // 活动包里实际持有的 placement-scoped renderable 数；包级释放后必须回到 0。
-    const size_t cacheCount =
-        VL::RendererResourceCache::GetInstance().CountPlacementScopedRenderableObjects();
-    if (cacheCount != placementCacheCount)
-    {
-        placementCacheCount = cacheCount;
-        std::cout << "[Placement] placement-scoped renderables in cache: " << cacheCount
-                  << std::endl;
-    }
-    std::vector<std::string> retired;
-    for (auto it = placementAbsentFrames.begin(); it != placementAbsentFrames.end();)
-    {
-        if (live.count(it->first) != 0)
-        {
-            // 本帧还在快照里：清零缺失计数。不能删除跟踪项，否则对象第一次存活
-            // 就会失去跟踪，销毁时永远不会退休（泄漏）。
-            it->second = 0;
-            ++it;
-            continue;
-        }
-        if (++it->second >= 2)
-            retired.push_back(it->first);
-        ++it;
-    }
-    if (!retired.empty())
-    {
-        const uint64_t lastSubmittedEpoch =
-            VL::ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch();
-        for (const std::string& key : retired)
-        {
-            placementAbsentFrames.erase(key);
-            const auto nameIt = placementObjectNames.find(key);
-            const std::string objectName =
-                nameIt != placementObjectNames.end() ? nameIt->second : std::string("<unknown>");
-            std::shared_ptr<RenderableObject> object =
-                VL::RendererResourceCache::GetInstance().TakeRenderableObject(key);
-            if (object == nullptr)
-            {
-                // 蓝图资产释放路径可能已经先摘走了这个 renderable；这里只记录事实，
-                // 不能重复退休同一个键。
-                std::cout << "[Placement] instance renderable released by package: object="
-                          << objectName << " key=" << key << std::endl;
-                placementObjectNames.erase(key);
-                continue;
-            }
-            // 上一帧可能还在 GPU 上引用它；按已提交 epoch 交给统一退休队列。
-            VL::ResourceRetireQueue::GetInstance().RetireShared(
-                key, renderScene.worldGeneration, lastSubmittedEpoch, std::move(object));
-            placementObjectNames.erase(key);
-            std::cout << "[Placement] instance renderable retired: object=" << objectName
-                      << " key=" << key << std::endl;
-        }
-    }
-    // 由 Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后必须回到 0。
-    if (placementObjectNames.size() != placementRuntimeCount)
-    {
-        placementRuntimeCount = placementObjectNames.size();
-        std::cout << "[Placement] runtime placement renderables: "
-                  << placementRuntimeCount << std::endl;
-    }
+    placementRuntime.PrunePlacementRenderables(renderScene);
 }
 
 void RenderSystem::InitializeCurrentRenderSceneResources()
@@ -4028,653 +2101,60 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
 }
 
-void RenderSystem::ApplyQueuedDynamicMeshUpdates(uint32_t frameSlot)
-{
-    auto updates = dynamicMeshUpdateQueue.Drain();
-    if (updates.empty())
-        return;
-
-    // Resolved draws own strong references to their RenderableObject, so a
-    // lookup through this frame's resolved scene cannot dangle even if GT
-    // removes the cache entry concurrently.
-    std::unordered_map<std::string, std::shared_ptr<RenderableObject>>
-        renderablesByMeshKey;
-    for (const VL::ResolvedMaterialGroup& materialGroup :
-         currentResolvedRenderScene.materialGroups)
-    {
-        for (const VL::ResolvedMaterialInstanceGroup& instanceGroup :
-             materialGroup.materialInstances)
-        {
-            for (const VL::ResolvedDrawPacket& draw : instanceGroup.draws)
-            {
-                if (draw.drawPacketIndex >=
-                        currentRenderScene.drawPackets.size() ||
-                    !draw.renderableObject)
-                {
-                    continue;
-                }
-                const std::string& meshKey =
-                    currentRenderScene.drawPackets[draw.drawPacketIndex]
-                        .mesh.key;
-                if (meshKey.empty()) continue;
-                renderablesByMeshKey.emplace(meshKey, draw.renderableObject);
-            }
-        }
-    }
-
-    for (auto& [meshKey, update] : updates)
-    {
-        const auto found = renderablesByMeshKey.find(meshKey);
-        if (found == renderablesByMeshKey.end() || !found->second)
-        {
-            // A GT tick can queue content before its snapshot reaches RT.
-            // Keep it for a couple of frames; a mesh key that never appears is
-            // dropped with one diagnostic.
-            const auto attempts = ++missingDynamicMeshAttempts[meshKey];
-            if (attempts <= 2)
-            {
-                dynamicMeshUpdateQueue.RequeueIfAbsent(
-                    meshKey, std::move(update));
-                continue;
-            }
-            missingDynamicMeshAttempts.erase(meshKey);
-            if (reportedMissingDynamicMeshKeys.insert(meshKey).second)
-            {
-                std::cerr
-                    << "[DynamicMesh] Dropping update for missing mesh key: "
-                    << meshKey << std::endl;
-            }
-            continue;
-        }
-        missingDynamicMeshAttempts.erase(meshKey);
-        try
-        {
-            if (update.replacesIndices)
-            {
-                found->second->UpdateDynamicMesh(
-                    update.vertices, update.indices, frameSlot);
-            }
-            else
-            {
-                found->second->UpdateVertices(update.vertices, frameSlot);
-            }
-        }
-        catch (const std::exception& error)
-        {
-            if (reportedMissingDynamicMeshKeys.insert(
-                    meshKey + "#error").second)
-            {
-                std::cerr
-                    << "[DynamicMesh] Update failed for mesh key '"
-                    << meshKey << "': " << error.what() << std::endl;
-            }
-        }
-    }
-}
 
 void RenderSystem::RecordAndSubmitCurrentRenderScene()
 {
-    const RenderGraph& renderGraph = RenderGraph::GetInstance();
-
-    if (uiRenderSnapshotQueue != nullptr)
+    if (rendererBackend == nullptr)
     {
-        std::shared_ptr<const VL::UiRenderSnapshot> latestUiSnapshot =
-            uiRenderSnapshotQueue->ConsumeLatest();
-        if (latestUiSnapshot != nullptr)
-        {
-            currentUiRenderSnapshot = std::move(latestUiSnapshot);
-            uiOverlayRenderer.SynchronizeTextures(*currentUiRenderSnapshot);
-        }
+        throw std::runtime_error("RenderSystem renderer backend is not set");
     }
-    // 统计 query pool 在 backend BeginFrame 之前创建：此时本帧命令缓冲尚未开始录制。
-    // 未开启采集时这里只做两次原子读取，不创建任何 Vulkan 对象。
-    if (!offlineMode)
-    {
-        gpuPassTimer.PrepareFrame(currentFrame % MAX_FRAMES_IN_FLIGHT);
-    }
-    // Backend owns swapchain frame synchronization. RenderSystem only records
-    // pass work into the command buffer it receives for this image.
-    VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
-    if (!frameContext.ready)
-    {
-        // acquire 失败没有提交；保留帧号和截图请求，等待 GT 重建 swapchain。
-        return;
-    }
-    // 相机历史同样绑定真实提交，不能使用可能未被渲染的 GT 快照历史。
-    currentRenderScene.camera.previousViewProjection =
-        submittedViewProjection && submittedCameraGeneration == currentRenderScene.worldGeneration
-        ? *submittedViewProjection : currentRenderScene.camera.viewProjection;
-    uiOverlayRenderer.CollectRetiredTextures();
-    // 每帧重新累计：诊断输出只描述刚刚录制完的这一帧。
-    frameShadowCasterCullStats = {};
-    uint32_t frameIndex = frameContext.frameIndex;
-    swapChainImageIndex = frameContext.swapchainImageIndex;
-    // GT publishes dynamic mesh content instead of writing host-visible buffers.
-    // Apply it to this image's slot before any pass records a draw.
-    ApplyQueuedDynamicMeshUpdates(
-        swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount);
-    // ghost 权重按 swapchain 槽写入；必须在拿到本帧 slot 之后更新，避免覆盖
-    // 另一 frame-in-flight 仍在读取的 buffer。
-    // 草稿 binding 先于 ghost/选中状态应用，保证本帧 shader 读到同一份组号表。
-    ApplyTressfxGroupBindingPreviewRequests();
-    ApplyTressfxBrushPreviewRequests(swapChainImageIndex);
-    vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
-    // 每帧固定同一个 World-local streaming state；不要让世界交换发生在
-    // BeginFrame 消费和帧末回读之间时出现两份 ring/page table。
-    const std::shared_ptr<VL::TerrainStreamingState> terrainFeedbackStreaming =
-        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
-    // 本帧提交 epoch 必须与 SubmitFrame 记录的 epoch 相同（currentFrame + 1），
-    // feedback frameTag 也由它推导。先把 GPU 上下文回灌给 page manager，
-    // 新驻留页才能以“本帧提交”而不是过期 feedback epoch 起算安全窗。
-    const uint64_t feedbackSubmittedEpoch =
-        static_cast<uint64_t>(currentFrame) + 1;
-    // Console 的预算命令只写 atomic；这里在渲染线程、任何驻留变更之前消费，
-    // 保证本帧 feedback/淘汰/上传都看到同一个 residentCapacity。
-    if (terrainFeedbackStreaming)
-    {
-        const uint32_t requestedCapacity =
-            terrainFeedbackStreaming->ConsumeRequestedResidentCapacity();
-        if (requestedCapacity != 0)
+    VL::RenderFrameRecorderContext context{
+        *rendererBackend,
+        passRuntime,
+        *this,
+        currentRenderScene,
+        currentResolvedRenderScene,
+        gpuPassTimer,
+        uiOverlayRenderer,
+        uiRenderSnapshotQueue,
+        currentUiRenderSnapshot,
+        terrainFeedbackRuntime,
+        hairRuntime,
+        dynamicMeshUpdateQueue,
+        offlineCoordinator.get(),
+        offlineDisplay,
+        offlineMode,
+        offlineAov,
+        offlineExposure,
+        frameShadowCasterCullStats.data(),
+        currentFrame,
+        swapChainImageIndex,
+        submittedCameraGeneration,
+        submittedViewProjection,
+        submittedFrameSerial,
+        gpuPassStatsLoggingEnabled,
+        shadowCasterCullStatsFramesSinceLog,
+        pendingScreenshotPath,
+        pendingScreenshotPathMutex,
+        GetSceneRenderExtent(),
+        [this] { AdvanceSceneWind(); },
+        [this](vk::CommandBuffer& commandBuffer)
         {
-            // 降预算也必须遵守 GPU 安全窗：窗口内的可见页暂时允许超预算，
-            // 不能为了立刻回到预算而淘汰本帧/上一帧仍在采样的页。
-            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
-                requestedCapacity,
-                frameContext.completedEpoch);
-        }
-        else if (terrainFeedbackStreaming->pageManager.ResidentCount() >
-                 terrainFeedbackStreaming->pageManager.ResidentCapacity())
+            UpdateUBOGlobal(commandBuffer);
+        },
+        [this](vk::CommandBuffer& commandBuffer, uint32_t imageIndex)
         {
-            // 上一次降预算若因安全窗暂时超预算，后续帧继续尝试收敛；
-            // 没有安全候选时该方法仍是 no-op，不会形成死循环。
-            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
-                terrainFeedbackStreaming->pageManager.ResidentCapacity(),
-                frameContext.completedEpoch);
-        }
-
-        // L4a 层页预算/命令：与覆盖页相同，只在渲染线程消费 atomic。
-        const uint32_t requestedLayerCapacity =
-            terrainFeedbackStreaming->requestedLayerResidentCapacity.exchange(
-                0, std::memory_order_relaxed);
-        if (requestedLayerCapacity != 0)
+            RecordEnvironmentIbl(commandBuffer, imageIndex);
+        },
+        [this](vk::CommandBuffer& commandBuffer, uint32_t imageIndex)
         {
-            terrainFeedbackStreaming->layerPageManager
-                .SetResidentCapacityAtEpoch(
-                    requestedLayerCapacity, frameContext.completedEpoch);
-        }
-        if (terrainFeedbackStreaming->requestedLayerPreload.exchange(
-                false, std::memory_order_relaxed))
-        {
-            VL::RequestTerrainLayerPreload(*terrainFeedbackStreaming);
-        }
-    }
-    // epoch 上下文必须先于 ApplyFeedback：ApplyFeedback 内新驻留的页要用
-    // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
-    if (terrainFeedbackStreaming)
-    {
-        // L4e：相机位移只在本帧提交时推进，确保预取方向与真正渲染的帧一致。
-        UpdateTerrainCameraPrefetch(terrainFeedbackStreaming);
-        // console 的强制 mip 在 feedback 消费之前写进材质，feedback 与
-        // M_terrain 才会在同帧使用同一个目标 mip。
-        ApplyTerrainLayerForceMip(terrainFeedbackStreaming);
-        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            rendererBackend->GetFrameFenceCount());
-        // 层页页表/atlas 的物理槽位复用也走同一安全窗；feedback 命中与
-        // RequestPageAtEpoch 都在本函数之后发生。
-        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            rendererBackend->GetFrameFenceCount());
-    }
-    // P3：消费已完成回读 -> ApplyFeedback（命中推进 epoch、miss 入请求队列）。
-    ConsumeTerrainFeedback(
-        terrainFeedbackStreaming,
-        frameContext.completedEpoch,
-        frameIndex);
-    if (terrainFeedbackStreaming)
-    {
-        // Consume 可能推进 lastConsumedFeedbackEpoch；再次写回上下文，使
-        // page manager 的统计/加载期回退值与本帧实际消费进度一致。
-        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            rendererBackend->GetFrameFenceCount());
-        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            rendererBackend->GetFrameFenceCount());
-    }
-    const uint8_t feedbackFrameTag =
-        VL::TerrainFeedbackFrameTagForEpoch(feedbackSubmittedEpoch);
-    // 本帧上传事务：只有 SubmitFrame 成功后才 Commit；任何提前返回/异常
-    // 都会在析构里 Abort，保留 dirty 与 pin，避免 GPU 与 CPU 内容错位。
-    VL::TerrainUploadTransaction terrainUploadTransaction;
-    VL::TerrainLayerUploadTransaction terrainLayerUploadTransaction;
-    uint32_t terrainUploadPageCount = 0;
-    uint32_t terrainGpuBakeJobCount = 0;
-    const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
-    const RenderResource* viewportOutput = renderToViewport
-        ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
-    if (renderToViewport && viewportOutput == nullptr)
-        throw std::runtime_error("Editor scene viewport has no graph-owned output target.");
-    // 自动曝光按帧推进：它读上一帧的直方图并产出本帧的 EV，因此必须在录制之前更新。
-    UpdateExposureFrameTiming();
-
-    {
-        VulkanDebug::ScopedRegion frameRegion(
-            commandBuffer,
-            "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
-            VulkanDebug::DebugCategory::eDefault);
-
-        // Tick every tree species once so shadow and geometry consume the same
-        // per-object wind state for the complete frame.
-        if (offlineMode)
-        {
-            const auto result = CaptureOfflineResult();
-            const auto preview = offlineCoordinator
-                ? offlineCoordinator->CapturePreview() : nullptr;
-            // RT 只消费冻结的完整 film 或视口专用部分预览；导出接口不见预览。
-            offlineDisplay.Record(commandBuffer, swapChainImageIndex,
-                result ? result->film : nullptr, preview, offlineAov,
-                // 曝光取 master 的解析结果（手动/Auto 两模式），视口三个参数保留我方的：
-                // 编辑器视口输出与 graph 代数是本分支引入的，master 侧没有。
-                ResolveOfflineDisplayExposure(
-                    result.get(),
-                    offlineExposure,
-                    currentRenderScene.camera),
-                viewportOutput, renderGraph.GetOwnerGeneration(), GetSceneRenderExtent());
-        }
-        else
-        {
-        // 读回发生在这里：backend BeginFrame 已等待本 frame slot 的 fence，上一批查询必然就绪。
-        // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
-        gpuPassTimer.BeginFrame(commandBuffer, frameIndex);
-        AdvanceSceneWind();
-        // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
-        // but environmentSH is GPU-owned and must not be overwritten by this upload.
-        UpdateUBOGlobal(commandBuffer);
-        // Generate the procedural sky cubemap and write environmentSH before graphics
-        // passes read global lighting data.
-        RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
-        // guide 模拟必须在任何 pass 读取 current positions 之前完成本帧 dispatch。
-        // 只有本帧确实在采集时才做 HasWork 扫描；关闭 --gpu-stats 且未执行 gpustats
-        // 时，统计路径对每帧的正常渲染只增加一次原子读取和一次分支。
-        const auto& hairSimulation = renderGraph.GetHairSimulation();
-        const bool hairWillRecord =
-            gpuPassTimer.IsFrameActive() &&
-            hairSimulation &&
-            hairSimulation->HasWork(currentResolvedRenderScene, currentRenderScene);
-        const bool hairTimed = hairWillRecord &&
-            gpuPassTimer.BeginPass(commandBuffer, "hairSimulation");
-        RecordHairSimulation(commandBuffer, frameIndex);
-        if (hairWillRecord)
-        {
-            gpuPassTimer.EndPass(commandBuffer, hairTimed);
-        }
-
-        // GPU 预蒙皮必须早于任何 Shadow/Geometry pass：本帧 palette 先在 CPU 侧
-        // 写入 image 槽，compute 再一次性生成顶点结果，后续顶点着色器只读。
-        const auto& skinDeform = renderGraph.GetSkinDeform();
-        const bool skinDeformWillRecord =
-            gpuPassTimer.IsFrameActive() &&
-            skinDeform &&
-            skinDeform->HasWork(currentResolvedRenderScene);
-        const bool skinDeformTimed = skinDeformWillRecord &&
-            gpuPassTimer.BeginPass(commandBuffer, "skinnedDeform");
-        RecordSkinDeform(commandBuffer, swapChainImageIndex);
-        if (skinDeformWillRecord)
-        {
-            gpuPassTimer.EndPass(commandBuffer, skinDeformTimed);
-        }
-
-        // scene pass 之前提交本帧地形页：Build -> 打包进 staging ring ->
-        // 同一个主帧 command buffer 录制。剩余 dirty 页下一帧继续。
-        if (terrainFeedbackStreaming &&
-            terrainFeedbackStreaming->uploadRing)
-        {
-            VL::TerrainUploadBatch uploadBatch =
-                terrainFeedbackStreaming->pageManager.BuildUploadBatch(
-                    terrainFeedbackStreaming->maxUploadPagesPerFrame,
-                    VL::TerrainPageBakeGpu::MaxJobsPerFrame);
-            if (!uploadBatch.Empty())
-            {
-                try
-                {
-                    const VL::TerrainUploadStagingOffsets offsets =
-                        terrainFeedbackStreaming->uploadRing->Write(
-                            frameIndex,
-                            uploadBatch);
-                    // compute 先烘焙 job 对应的物理槽位；buffer→image copy
-                    // 与页表上传仍在同一个主帧 command buffer、scene pass 之前。
-                    if (terrainFeedbackStreaming->pageBake &&
-                        !uploadBatch.gpuBakeJobs.empty())
-                    {
-                        terrainFeedbackStreaming->pageBake->Record(
-                            commandBuffer,
-                            frameIndex,
-                            uploadBatch.gpuBakeJobs,
-                            terrainFeedbackStreaming->pageResources);
-                    }
-                    VL::RecordTerrainPageUploads(
-                        commandBuffer,
-                        terrainFeedbackStreaming->pageResources,
-                        uploadBatch,
-                        terrainFeedbackStreaming->uploadRing->Buffer(frameIndex),
-                        offsets);
-                    terrainUploadPageCount =
-                        static_cast<uint32_t>(
-                            uploadBatch.atlasUploads.size() +
-                            uploadBatch.gpuBakeJobs.size());
-                    terrainGpuBakeJobCount =
-                        static_cast<uint32_t>(uploadBatch.gpuBakeJobs.size());
-                    terrainUploadTransaction.Begin(
-                        terrainFeedbackStreaming,
-                        std::move(uploadBatch));
-                }
-                catch (...)
-                {
-                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
-                    terrainFeedbackStreaming->pageManager.AbortUploadBatch(
-                        uploadBatch);
-                    throw;
-                }
-            }
-        }
-
-        // L4a：层页上传与覆盖页上传同一时机（scene pass 之前）。页表 texel
-        // 走 staging ring；albedo/normal/pbr atlas 是 GPU→GPU copy，不需要
-        // staging。剩余 dirty 页下一帧继续，Commit 在 SubmitFrame 之后。
-        if (terrainFeedbackStreaming &&
-            terrainFeedbackStreaming->layerVTRequested &&
-            terrainFeedbackStreaming->layerUploadRing)
-        {
-            VL::TerrainLayerUploadBatch layerBatch =
-                terrainFeedbackStreaming->layerPageManager.BuildUploadBatch(
-                    terrainFeedbackStreaming->maxLayerPageUploadsPerFrame);
-            if (!layerBatch.Empty())
-            {
-                try
-                {
-                    const vk::DeviceSize stagingOffset =
-                        terrainFeedbackStreaming->layerUploadRing->Write(
-                            frameIndex, layerBatch);
-                    VL::RecordTerrainLayerPageUploads(
-                        commandBuffer,
-                        terrainFeedbackStreaming->layerPageManager,
-                        terrainFeedbackStreaming->layerResources,
-                        terrainFeedbackStreaming->layerSources,
-                        layerBatch,
-                        terrainFeedbackStreaming->layerUploadRing->Buffer(
-                            frameIndex),
-                        stagingOffset);
-                    terrainLayerUploadTransaction.Begin(
-                        terrainFeedbackStreaming,
-                        std::move(layerBatch));
-                }
-                catch (...)
-                {
-                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
-                    terrainFeedbackStreaming->layerPageManager
-                        .AbortUploadBatch(layerBatch);
-                    throw;
-                }
-            }
-        }
-
-        // feedback pass 的 u_frameTag 必须与下面回读登记的 epoch tag 一致。
-        PrepareTerrainFeedbackPass(feedbackFrameTag);
-
-        const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
-        for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
-        {
-            const auto& renderPassName = renderPassOrdered[passIndex];
-            std::string renderPassScopeName = "RenderPass:" + renderPassName;
-            PROFILE_SCOPE(renderPassScopeName.c_str());
-            const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
-            if (currentRenderScene.environment.type == VL::EnvironmentType::None)
-            {
-                const auto instance = renderPass.materialInstance.lock();
-                const auto material = instance ? instance->GetBaseMaterial().lock() : nullptr;
-                if (material && material->GetShaderVariantKey().shaderName == "pass/sky")
-                    continue;
-            }
-
-            // 参考网格是编辑器视口的显示辅助：视口不可见（运行页面、无 UI、资源编辑器
-            // 全屏）时整个 pass 不录制，运行时画面与截图保持与接入前一致。
-            if (renderPass.type == VL::RenderGraphPassType::EditorGrid &&
-                !renderToViewport)
-            {
-                continue;
-            }
-
-            // pass 本身可能开启 render pass 实例，因此 timestamp 必须在实例外 bracket：
-            // BeginPass 在 ScopedRegion 之前写 begin timestamp，EndPass 在录制完成后写
-            // end timestamp；两端都在 pass 实例外，因此不受 render pass 内部阶段限制。
-            const bool passTimed =
-                gpuPassTimer.BeginPass(commandBuffer, renderPassName);
-
-            VulkanDebug::ScopedRegion passRegion(
-                commandBuffer,
-                renderPassName,
-                VulkanDebug::DebugCategory::ePass);
-
-            if (renderPass.type == VL::RenderGraphPassType::AutoExposure)
-            {
-                PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
-                renderGraph.GetAutoExposure()->Record(commandBuffer, swapChainImageIndex,
-                    currentRenderScene.camera.exposure, exposureDeltaSeconds);
-                gpuPassTimer.EndPass(commandBuffer, passTimed);
-                continue;
-            }
-            VL::PassRuntimeContext passContext{
-                commandBuffer,
-                renderPass,
-                renderGraph,
-                passIndex,
-                swapChainImageIndex,
-                currentRenderScene,
-                currentResolvedRenderScene,
-                *this,
-                renderToViewport
-            };
-            // 阴影 pass 把 before/after draw 数写回这里；非阴影 pass 不接收统计指针。
-            VL::ShadowCasterCullStats shadowCasterCullStats;
-            shadowCasterCullStats.cascadeIndex = renderPass.shadowCascadeIndex;
-            if (renderPass.type == VL::RenderGraphPassType::Shadow)
-            {
-                passContext.shadowCasterCullStats = &shadowCasterCullStats;
-            }
-            passRuntime.RecordPass(renderPassName, passContext);
-            if (renderPass.type == VL::RenderGraphPassType::Shadow &&
-                shadowCasterCullStats.cascadeIndex <
-                    VL::CsmSettings::MaxCascadeCount)
-            {
-                frameShadowCasterCullStats[shadowCasterCullStats.cascadeIndex] =
-                    shadowCasterCullStats;
-            }
-            gpuPassTimer.EndPass(commandBuffer, passTimed);
-        }
-
-        // 与 GPU 表同周期（120 帧）输出；只有 --gpu-stats 打开时才打印。
-        if (gpuPassStatsLoggingEnabled)
-        {
-            ++shadowCasterCullStatsFramesSinceLog;
-            if (shadowCasterCullStatsFramesSinceLog >=
-                VL::kGpuPassTimingWindowFrames)
-            {
-                shadowCasterCullStatsFramesSinceLog = 0;
-                LogShadowCasterCullStats();
-            }
-        }
-        }
-
-        if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)
-        {
-            if (viewportOutput != nullptr)
-            {
-                // 场景 attachment 写入先完成，RmlUi 图像再采样；布局和句柄只在 RT 消费。
-                vk::ImageMemoryBarrier barrier;
-                barrier.setImage(viewportOutput->image)
-                    .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1})
-                    .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-                    .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
-                commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                    vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, barrier);
-            }
-            VulkanDebug::ScopedRegion uiRegion(
-                commandBuffer,
-                "UI Overlay",
-                VulkanDebug::DebugCategory::eDefault);
-            const RenderResource* debugDepth = nullptr;
-            if (!offlineMode && currentUiRenderSnapshot->debugDepthTest)
-                debugDepth = PassBarrier::BeginSceneDepthRead(commandBuffer, renderGraph, swapChainImageIndex);
-            uiOverlayRenderer.Record(
-                commandBuffer,
-                swapChainImageIndex,
-                *currentUiRenderSnapshot,
-                viewportOutput ? viewportOutput->imageView : vk::ImageView{},
-                viewportOutput ? viewportOutput->sampler : vk::Sampler{},
-                debugDepth ? debugDepth->GetShaderDescriptorView() : vk::ImageView{},
-                debugDepth ? debugDepth->sampler : vk::Sampler{});
-            if (debugDepth) PassBarrier::EndSceneDepthRead(commandBuffer, renderGraph, swapChainImageIndex);
-        }
-    }
-
-    if (!offlineMode)
-    {
-        if (terrainFeedbackStreaming &&
-            terrainFeedbackStreaming->feedbackRing)
-        {
-            // terrainFeedback 是 graph-owned 的 per-swapchain-image RT；
-            // 帧末把当前 image 拷进该 frameIndex 的 host-visible ring 槽。
-            const auto& resolveResources =
-                renderGraph.GetResourcesResolve();
-            const auto feedbackIt =
-                resolveResources.find("terrainFeedback");
-            if (feedbackIt != resolveResources.end() &&
-                swapChainImageIndex < feedbackIt->second.size())
-            {
-                terrainFeedbackStreaming->feedbackRing->RecordCopy(
-                    commandBuffer,
-                    feedbackIt->second[swapChainImageIndex].image,
-                    frameIndex,
-                    feedbackSubmittedEpoch,
-                    feedbackFrameTag);
-            }
-            // L4b：4 张层页 attachment 与覆盖页 RT 在同一次录制里回读。
-            // 只有真正使用 layer mode 1 时才记录，mode 0 不产生额外拷贝。
-            if (terrainFeedbackStreaming->layerVTRequested &&
-                terrainFeedbackStreaming->layerFeedbackRing)
-            {
-                std::array<vk::Image, VL::TerrainLayerFeedbackSlotCount>
-                    layerImages{};
-                bool allPresent = true;
-                for (uint32_t slot = 0;
-                     slot < VL::TerrainLayerFeedbackSlotCount;
-                     ++slot)
-                {
-                    const auto layerIt = resolveResources.find(
-                        "terrainLayerFeedback" + std::to_string(slot));
-                    if (layerIt == resolveResources.end() ||
-                        swapChainImageIndex >= layerIt->second.size())
-                    {
-                        allPresent = false;
-                        break;
-                    }
-                    layerImages[slot] =
-                        layerIt->second[swapChainImageIndex].image;
-                }
-                if (allPresent)
-                {
-                    terrainFeedbackStreaming->layerFeedbackRing->RecordCopy(
-                        commandBuffer,
-                        layerImages,
-                        frameIndex,
-                        feedbackSubmittedEpoch,
-                        feedbackFrameTag);
-                }
-            }
-        }
-    }
-
-    std::optional<std::string> screenshotPath;
-    {
-        std::lock_guard<std::mutex> lock(pendingScreenshotPathMutex);
-        screenshotPath = std::move(pendingScreenshotPath);
-        pendingScreenshotPath.reset();
-    }
-
-    bool screenshotRecorded = false;
-    std::string screenshotRecordError;
-    if (screenshotPath.has_value())
-    {
-        screenshotRecorded = rendererBackend->RecordSwapchainScreenshot(
-            frameContext,
-            screenshotPath.value(),
-            screenshotRecordError);
-        if (!screenshotRecorded)
-        {
-            std::cout << "[Diagnostics][Warning] Screenshot record failed: " <<
-                screenshotRecordError << std::endl;
-        }
-    }
-
-    // 本帧查询随 SubmitFrame 进入 GPU；下次复用该 frame slot 时（fence 已等待）再读回。
-    gpuPassTimer.EndFrame();
-    // RenderSystem only records pass commands. Queue, semaphore, fence,
-    // swapchain, present, and retire epoch details stay backend-owned.
-    rendererBackend->SubmitFrame(frameContext, currentFrame);
-    // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
-    terrainUploadTransaction.Commit();
-    terrainLayerUploadTransaction.Commit();
-    if (terrainFeedbackStreaming)
-    {
-        terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;
-        terrainFeedbackStreaming->lastUploadedPages = terrainUploadPageCount;
-        terrainFeedbackStreaming->gpuBakedPagesTotal += terrainGpuBakeJobCount;
-        terrainFeedbackStreaming->lastGpuBakedPages = terrainGpuBakeJobCount;
-        PublishTerrainStreamingStats(
-            terrainFeedbackStreaming,
-            frameContext.completedEpoch);
-    }
-    ++submittedFrameSerial;
-    submittedCameraGeneration = currentRenderScene.worldGeneration;
-    submittedViewProjection = currentRenderScene.camera.viewProjection;
-    if (!offlineMode)
-        for (const auto& material : currentResolvedRenderScene.materialGroups)
-            for (const auto& instance : material.materialInstances)
-                for (const auto& draw : instance.draws)
-                {
-                    const auto& packet = currentRenderScene.drawPackets.at(draw.drawPacketIndex);
-                    if (packet.skinPose && draw.objectResourceEntry)
-                        draw.objectResourceEntry->GetResources().submittedSkin.Commit(
-                            packet.skinPose, packet.model, submittedFrameSerial);
-                }
-    if (!offlineMode && renderGraph.GetAutoExposure())
-        renderGraph.GetAutoExposure()->OnFrameSubmitted();
-
-    if (screenshotRecorded)
-    {
-        std::string screenshotError;
-        if (rendererBackend->CompleteSwapchainScreenshot(screenshotError))
-        {
-            std::cout << "[Diagnostics][Info] Screenshot saved: " <<
-                screenshotPath.value() << std::endl;
-        }
-        else
-        {
-            std::cout << "[Diagnostics][Warning] Screenshot failed: " <<
-                screenshotError << std::endl;
-        }
-    }
-
-    currentFrame = currentFrame + 1;
+            RecordSkinDeform(commandBuffer, imageIndex);
+        },
+        [this] { return CaptureOfflineResult(); },
+        [this] { LogShadowCasterCullStats(); },
+        [this] { RefreshRenderSceneFromActiveWorld(); },
+    };
+    frameRecorder.RecordAndSubmitCurrentRenderScene(context);
 }
 
 void RenderSystem::RenderInitialize()
@@ -4890,45 +2370,6 @@ void RenderSystem::PrepareEnvironmentResources(
         environmentIblBaker);
 }
 
-void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_t frameSlot)
-{
-    const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation();
-    if (!hairSimulation)
-        return;
-    // GT 侧只登记请求；这里在渲染线程把它交给 pass。trace 的资源创建/拷贝
-    // 全部发生在 Record 内，Console 线程不触碰 GPU。
-    std::optional<VL::Hair::HairTraceRequest> traceRequest;
-    {
-        std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
-        traceRequest = std::move(pendingHairTraceRequest);
-        pendingHairTraceRequest.reset();
-    }
-    if (traceRequest)
-        hairSimulation->BeginTrace(*traceRequest);
-    // 复位请求只在存在 pass 时消费；没有 pass 就保留到下一个可录制帧，
-    // 避免把请求丢在无 World/无 graph 的帧里。
-    std::optional<std::string> resetRequest;
-    {
-        std::lock_guard<std::mutex> lock(hairResetRequestMutex);
-        resetRequest = std::move(pendingHairResetRequest);
-        pendingHairResetRequest.reset();
-    }
-    if (resetRequest)
-        hairSimulation->RequestReset(std::move(*resetRequest));
-    // 实时参数覆盖与复位同构：GT 只登记，渲染线程每帧取走一次。没有 pass 时
-    // 上面的提前 return 会保留队列，避免把请求丢在无 World/无 graph 的帧里。
-    std::vector<VL::Hair::HairLiveParameterRequest> liveParameters;
-    {
-        std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
-        liveParameters.swap(pendingHairLiveParameters);
-    }
-    for (const auto& parameter : liveParameters)
-        hairSimulation->RequestLiveParameter(parameter);
-    // 每帧只调用一次，且在所有 graphics pass 之前：本帧所有读取 current positions 的
-    // vertex shader 都看到同一份已经完成 dispatch 的位置。
-    hairSimulation->Record(
-        commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot);
-}
 
 void RenderSystem::RecordSkinDeform(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
 {

@@ -89,8 +89,8 @@
       "sources": [
         {
           "path": "source/renderSystem.cpp",
-          "line": 2835,
-          "end_line": 2839,
+          "line": 1906,
+          "end_line": 1910,
           "label": "PublishSnapshotFromActiveWorld"
         }
       ]
@@ -264,7 +264,7 @@
       "items": [
         "两条路径都每帧发布快照：多线程走发布 + 提交帧，单线程直接 Render()",
         "因此可见性开关下一帧即上屏，不需要 World 事务",
-        "见 source/engine/engineLoop.cpp:575 与 source/renderSystem.cpp:2835"
+        "见 source/engine/engineLoop.cpp:575 与 source/renderSystem.cpp:1906"
       ]
     },
     {

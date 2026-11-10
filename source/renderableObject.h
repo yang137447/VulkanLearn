@@ -18,6 +18,7 @@
 #include "hair/tressfxGroupPaint.h"
 #include "hair/tressfxGroupBinding.h"
 #include "mesh/meshAssetTypes.h"
+#include "render/renderable/tressfxRenderable.h"
 
 struct MeshAssetImportResult;
 struct Vertex;
@@ -419,13 +420,8 @@ private:
     void DestroyTressfxBuffers();
 
     // 每个 frame-in-flight 槽一份 params UBO，避免主机写当前槽时覆盖仍在飞的上一帧参数。
-    struct TressfxParamsTarget
-    {
-        vk::Buffer buffer = nullptr;
-        vk::DeviceMemory memory = nullptr;
-        void* mapped = nullptr;
-        vk::DescriptorBufferInfo info;
-    };
+    // 缓冲槽布局定义在 render/renderable/tressfxRenderable.h，facade 仍持有权威数组。
+    using TressfxParamsTarget = VL::TressfxBufferTarget;
 
     std::string name;
     VL::RendererBackendVulkan* rendererBackend = nullptr;

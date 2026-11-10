@@ -32,6 +32,8 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/environment/environmentRuntime.h"
 #include "render/frontend/renderScene.h"
+#include "render/frame/renderWorldSnapshot.h"
+#include "render/frame/renderFrameRecorder.h"
 #include "render/frontend/rendererFrontend.h"
 #include "renderableObject.h"
 #include "render/resource/placementBindingResolver.h"
@@ -39,13 +41,16 @@
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
 #include "render/frontend/scenePicking.h"
+#include "render/hair/hairRuntime.h"
 #include "render/pass/passRuntime.h"
+#include "render/picking/renderPicking.h"
 #include "render/overlay/editorViewportOverlay.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
 #include "render/shadow/csmRuntime.h"
 #include "render/postprocess/postProcessControls.h"
+#include "render/terrain/terrainFeedbackRuntime.h"
 #include "terrain/terrainFeedback.h"
 #include "terrain/terrainLayerFeedback.h"
 #include "render/shadow/shadowCasterCull.h"
@@ -69,6 +74,8 @@ struct OfflineWorldAssets;
 struct TerrainStreamingState;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
+class MaterialInstancePreviewSession;
+class OfflineMaterialInstancePreviewSession;
 }
 
 namespace VL
@@ -383,8 +390,8 @@ public:
         shaderReloadCoordinator = coordinator;
     }
 private:
-    class MaterialInstancePreviewSession;
-    class OfflineMaterialInstancePreviewSession;
+    friend class VL::MaterialInstancePreviewSession;
+    friend class VL::OfflineMaterialInstancePreviewSession;
 
     RenderSystem()
         : materialInstancePreviewAdapter(*this)
@@ -441,7 +448,6 @@ private:
     void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
-    void ApplyQueuedDynamicMeshUpdates(uint32_t frameSlot);
     void AdvanceSceneWind();
     void AdvanceSceneWindTick();
     void UpdateExposureFrameTiming();
@@ -512,20 +518,6 @@ private:
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
         uint64_t completedEpoch,
         uint32_t frameIndex);
-    // L4a：覆盖页 feedback -> 可见层/mip -> 层页请求与淘汰。只在 mode 1
-    // 且层页上传资源就绪时执行；mode 0 不进入本函数。
-    void ApplyTerrainLayerFeedback(
-        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-        const VL::TerrainFeedbackFrameSummary& summary,
-        uint64_t completedEpoch,
-        uint32_t frameIndex);
-    // L4b：层号 + 层页 + mip 的精确 feedback。返回 true 表示本帧使用了
-    // 精确路径，覆盖页推导不再参与层页驻留（只保留覆盖页自身的驻留）。
-    bool ApplyTerrainLayerExactFeedback(
-        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-        const VL::TerrainLayerFeedbackFrameSummary& summary,
-        uint64_t completedEpoch,
-        uint32_t frameIndex);
     // L4e：把 console 的强制 mip 写进已登记的 M_terrain 实例；只在值或
     // 实例集合变化时写，避免每帧改材质 UBO。
     void ApplyTerrainLayerForceMip(
@@ -534,42 +526,20 @@ private:
     void UpdateTerrainCameraPrefetch(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming);
     void PrepareTerrainFeedbackPass(uint8_t frameTag);
-    void StoreTerrainFeedbackSummary(
-        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
-        const VL::TerrainFeedbackFrameSummary& summary);
     void PublishTerrainStreamingStats(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
         uint64_t completedEpoch);
     void RunTerrainPageBakeParityIfRequested();
 
-    struct TerrainFeedbackReport
-    {
-        VL::TerrainFeedbackFrameSummary summary;
-        bool hasPendingFrameTagRange = false;
-        uint8_t oldestPendingFrameTag = 0;
-        uint8_t newestPendingFrameTag = 0;
-    };
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
-    // L4e：相机预取用的上一帧相机位置；只反映真正提交的帧。
-    Eigen::Vector3f lastTerrainPrefetchCameraPosition =
-        Eigen::Vector3f::Zero();
-    bool hasTerrainPrefetchCameraPosition = false;
     uint64_t nextSnapshotFrameIndex = 0;
     float simulationDeltaSeconds = 0.0f;
     float gameSimulationDeltaSeconds = 0.0f;
     float hairSimulationDeltaSeconds = 0.0f;
-    bool hasSelectedDraw = false;
-    bool selectedAllMaterialSlots = false;
-    VL::RuntimeId selectedObjectId = 0;
-    uint32_t selectedMaterialSlotIndex = 0;
-    uint64_t selectedWorldGeneration = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     VL::PostProcessControls postProcessControls;
-    float exposureDeltaSeconds = 1.0f / 60.0f;
-    bool exposureClockInitialized = false;
-    std::chrono::steady_clock::time_point exposureLastFrameTime;
     bool hasRenderScene = false;
     // 风模拟时间。严格按固定 1/60 s 步长递增；不要把它当成帧时间。
     double currentWindTimeSeconds = 0.0;
@@ -578,9 +548,6 @@ private:
     // GT RuntimeClock 原始 delta 的跨线程累加器；RT 每帧 exchange(0) 取走。
     // 用 atomic 是因为 GT/RT 可能并行运行；CAS 累加见 SetSimulationFrameDeltas。
     std::atomic<float> windPendingDeltaSeconds{0.0f};
-    std::atomic<bool> terrainPageBakeParityRequested{false};
-    std::atomic<int32_t> terrainPageBakeParityTileX{0};
-    std::atomic<int32_t> terrainPageBakeParityTileZ{0};
     // 不足一个 1/60 s 步长的余量；超过 0.25 s 的长卡顿只追 15 步，避免 gust 一次性补发。
     double windTickAccumulator = 0.0;
     VL::SceneWindRuntime sceneWindRuntime;
@@ -592,39 +559,19 @@ private:
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;
     VL::DynamicMeshUpdateQueue dynamicMeshUpdateQueue;
-    // RT-only: one warning per mesh key, otherwise a missing object spams every
-    // frame while its World entry is being torn down.
-    std::unordered_set<std::string> reportedMissingDynamicMeshKeys;
-    std::unordered_map<std::string, int> missingDynamicMeshAttempts;
     VL::RendererFrontend rendererFrontend;
     VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
     VL::PassRuntime passRuntime;
     // 编辑器参考网格几何：只由 editorGrid pass 消费；runtime 不拥有实现。
     VL::IEditorViewportOverlay* editorViewportOverlay = nullptr;
     VL::RenderScene currentRenderScene;
-    // 放置级 renderable 键 → 连续缺失帧数。只在 RT 访问；World 换代时清空
-    // （整包由 transaction 退休）。
-    std::unordered_map<std::string, int> placementAbsentFrames;
-    // 放置级 renderable 键 → debugName；退休日志需要对象身份，不能只报键。
-    std::unordered_map<std::string, std::string> placementObjectNames;
-    // 上一帧放置级 draw 数；只在变化时打一条日志，兼作 spawn/destroy 的存活计数。
-    size_t placementLiveCount = 0;
-    // 活动包里 placement-scoped renderable 数；变化时打一条，作为无泄漏核对。
-    size_t placementCacheCount = 0;
-    // Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后应回到 0。
-    size_t placementRuntimeCount = 0;
-    // 放置绑定解析结果的跨实例缓存，键见 MakePlacementBindingCacheKey。
-    VL::PlacementBindingCache placementBindingCache;
-    uint64_t placementWorldGeneration = 0;
+    VL::PlacementRenderableRuntime placementRuntime;
+    VL::RenderFrameRecorder frameRecorder;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;
     uint64_t submittedFrameSerial = 0;
     VL::ResolvedRenderScene currentResolvedRenderScene;
-    // 拾取只读 GT 发布快照时生成的副本，避免 worker render thread 更新
-    // currentRenderScene 时与鼠标事件并发读写同一对象。
-    VL::RenderScene pickingRenderScene;
-    bool hasPickingRenderScene = false;
-    bool pickingSceneEnabled = true;
+    VL::RenderPickingRuntime pickingRuntime;
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
     std::atomic<bool> offlineMode{false};
@@ -657,37 +604,20 @@ private:
     std::atomic<bool> gpuPassStatsLoggingEnabled{false};
     uint32_t shadowCasterCullStatsFramesSinceLog = 0;
     VL::EnvironmentRuntime environmentRuntime;
+    VL::TerrainFeedbackRuntime terrainFeedbackRuntime;
+    VL::HairRuntime hairRuntime;
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
     VL::UiViewportRect requestedSceneViewport;
     bool sceneViewportRequested = false;
     mutable std::mutex sceneViewportMutex;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
-    mutable std::mutex terrainFeedbackStatisticsMutex;
-    std::optional<TerrainFeedbackReport> latestTerrainFeedbackReport;
     std::string uiVertexShaderPath;
     std::string uiFragmentShaderPath;
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
     // 确保回读不会与仍在录制的 command buffer 交叉。
     std::optional<std::string> pendingScreenshotPath;
     mutable std::mutex pendingScreenshotPathMutex;
-    // hair trace 请求跨 GT/渲染线程；渲染线程每帧只取一次，取走后由
-    // HairSimulationPass 在 Record 中消费。未请求时只有一次加锁读取。
-    std::mutex hairTraceRequestMutex;
-    std::optional<VL::Hair::HairTraceRequest> pendingHairTraceRequest;
-    // 复位请求与 trace 同构：GT 只写这里，渲染线程每帧取走一次；未请求时
-    // 只有一次加锁读取。空字符串表示所有 GPU guide 对象。
-    std::mutex hairResetRequestMutex;
-    std::optional<std::string> pendingHairResetRequest;
-    // 实时参数覆盖：一帧可能有多条（滑杆拖动），用小队列而不是单槽；队列有界，
-    // 过期意图先丢弃，避免无渲染帧时无限累积。
-    std::mutex hairLiveParameterMutex;
-    std::vector<VL::Hair::HairLiveParameterRequest> pendingHairLiveParameters;
-    std::mutex tressfxBrushPreviewMutex;
-    std::vector<VL::Hair::TressfxBrushPreviewRequest> pendingTressfxBrushPreviews;
-    std::mutex tressfxGroupBindingPreviewMutex;
-    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest>
-        pendingTressfxGroupBindingPreviews;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

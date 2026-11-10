@@ -9,7 +9,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <nlohmann/json.hpp>
 
@@ -75,6 +77,44 @@ inline Json MakeManagedMaterialInstanceJson(const Json& source)
         }
     }
     return managed;
+}
+
+// 渲染状态字段/取值到持久化名称的转换被 overrides 与 batch 两个切片共用，
+// 因此从 facade 的匿名 namespace 提升到这里；行为与原实现逐字一致。
+inline std::string RenderStateFieldName(EditorMaterialRenderStateField field)
+{
+    return std::string(GetEditorMaterialRenderStateFieldName(field));
+}
+
+inline std::string RenderStateValueName(
+    EditorMaterialRenderStateField field,
+    const EditorMaterialRenderStateValue& value)
+{
+    if (!IsEditorMaterialRenderStateValueCompatible(field, value))
+    {
+        ThrowServiceError(
+            EditorErrorCode::InvalidPayload,
+            "material render state value does not match its field");
+    }
+
+    return std::visit(
+        [](const auto& typedValue)
+        {
+            using ValueType = std::decay_t<decltype(typedValue)>;
+            if constexpr (std::is_same_v<ValueType, EditorMaterialRenderMode>)
+            {
+                return std::string(GetEditorMaterialRenderModeName(typedValue));
+            }
+            else if constexpr (std::is_same_v<ValueType, EditorMaterialCullMode>)
+            {
+                return std::string(GetEditorMaterialCullModeName(typedValue));
+            }
+            else
+            {
+                return std::string(GetEditorMaterialShadingModelName(typedValue));
+            }
+        },
+        value);
 }
 
 } // namespace VL::Editor::MaterialDocumentDetail

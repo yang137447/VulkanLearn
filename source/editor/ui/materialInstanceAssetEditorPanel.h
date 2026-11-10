@@ -26,6 +26,7 @@
 #include "editor/ui/terrainBrushInteraction.h"
 #include "editor/ui/tressfxHairPreview.h"
 #include "editor/ui/tressfxGroupEditor.h"
+#include "editor/ui/panel/editorPanelActionRouter.h"
 #include "editor/ui/panel/editorPanelBootstrap.h"
 #include "editor/ui/panel/sceneDetailsView.h"
 #include "editor/ui/panel/sceneOutlinerView.h"
@@ -40,6 +41,7 @@ namespace Rml
 {
 class Element;
 class ElementDocument;
+class Event;
 }
 
 namespace VL::Animation { struct MotionCandidate; }
@@ -168,6 +170,11 @@ public:
     void ProcessEvent(Rml::Event& event) override;
 
 private:
+    friend void Panel::HandlePanelClick(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action);
+    friend void Panel::HandlePanelChange(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action, const Rml::Event* event);
+
     enum class TerrainPanelMode
     {
         Sculpt,
