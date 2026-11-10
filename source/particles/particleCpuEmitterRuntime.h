@@ -63,6 +63,10 @@ public:
         // 稳定性上限保护。
         float burstElapsedSeconds = 0.0f;
         bool initialBurstDone = false;
+        Eigen::Vector3f lastSpawnUnitPosition =
+            Eigen::Vector3f::Zero();
+        bool hasSpawnUnitPosition = false;
+        float pendingSpawnUnitDistance = 0.0f;
         uint64_t nextSerial = 0;
     };
 
@@ -95,6 +99,7 @@ private:
     void AdvanceEmitterStep(
         EmitterState& state,
         float stepSeconds,
+        float spawnPerUnitRate,
         uint32_t& globalLiveCount);
     void SpawnParticle(
         EmitterState& state,

@@ -1255,8 +1255,12 @@ ParticleEmitterAsset ParseEmitter(
         json, "burstDelay", emitter.burstDelay);
     emitter.burstPhase = ReadFiniteFloat(
         json, "burstPhase", emitter.burstPhase);
+    emitter.burstCount = ReadCountField(
+        json, "burstCount", emitter.burstCount);
     emitter.spawnRate = ReadFiniteFloat(
         json, "spawnRate", emitter.spawnRate);
+    emitter.spawnPerUnit = ReadFiniteFloat(
+        json, "spawnPerUnit", emitter.spawnPerUnit);
     emitter.drag = ReadFiniteFloat(json, "drag", emitter.drag);
     emitter.softness = ReadFiniteFloat(
         json, "softness", emitter.softness);
@@ -2330,6 +2334,7 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     RequireFinite(emitter.minScreenSize, "minScreenSize");
     RequireFinite(emitter.maxScreenSize, "maxScreenSize");
     RequireFinite(emitter.burstInterval, "burstInterval");
+    RequireFinite(emitter.spawnPerUnit, "spawnPerUnit");
     RequireFinite(emitter.lodDistance, "lodDistance");
     RequireFinite(emitter.lodSpawnRateScale, "lodSpawnRateScale");
     RequireFinite(emitter.flipbookFramesPerSecond, "flipbook.fps");
@@ -3028,6 +3033,18 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         throw std::invalid_argument(
             "Particle burstDelay/burstPhase must be in [0, 60]");
+    }
+    if (emitter.burstCount > 0 &&
+        emitter.burstCount > emitter.maxParticles)
+    {
+        throw std::invalid_argument(
+            "Particle burstCount must be zero or <= maxParticles");
+    }
+    if (emitter.spawnPerUnit < 0.0f ||
+        emitter.spawnPerUnit > 100000.0f)
+    {
+        throw std::invalid_argument(
+            "Particle spawnPerUnit must be in [0, 100000]");
     }
     if (emitter.lodDistance < 0.0f)
     {

@@ -446,7 +446,11 @@ struct ParticleEmitterAsset
     // 首次 burst 的延迟与周期相位（秒）；spawnSource=parentEmitter 时忽略。
     float burstDelay = 0.0f;
     float burstPhase = 0.0f;
+    // 单次 burst 的粒子数；0 表示沿用 maxParticles 的旧语义。
+    uint32_t burstCount = 0;
     float spawnRate = 200.0f;
+    // 发射器模型每移动 1 cm 生成的粒子数；与 spawnRate 叠加。
+    float spawnPerUnit = 0.0f;
     float lifetimeMin = 1.0f;
     float lifetimeMax = 1.5f;
     // 按 lifeT = age / lifetime 采样时间倍率，乘到本帧模拟 delta 与年龄

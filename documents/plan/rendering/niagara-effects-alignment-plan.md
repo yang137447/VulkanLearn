@@ -106,6 +106,9 @@ WARN；全量 smoke **49 PASS / 0 WARN / 0 FAIL**，17/17 截图落盘，VUID **
   dissolve（共用 `particleDissolve.glsl`），程序化 shard 降为第二层辅助细节。
 - Footstep / NDC 的脚印与弹孔使用程序化/复用贴图；NDC 事件用连续粒子流近似。
 - 缺失 UE 贴图的特效使用程序化纹理/圆盘/噪声 fallback；后续拿到导出图后可替换，不改变发射器结构。
+- `burstCount`、`burstDelay`、`burstPhase` 与 `spawnPerUnit` 已进入运行时；现有 gallery 的
+  UE stateless spawn count / loop duration / spawn spacing 仍不可从二进制直接读取，继续使用
+  视觉近似值。拿到 UE 编辑器导出参数后可只改资产，不再改运行时。
 - 粒子 pass 的 `VUID-vkCmdDraw-None-09600`、`VUID-vkCmdFillBuffer-dstBuffer-00029`、
   `VUID-vkUpdateDescriptorSets-None-03047` 已修复；2026-11-10 全量 smoke 的
   17 个 gallery 均无 VUID。`particledump` 诊断命令仍可能触发

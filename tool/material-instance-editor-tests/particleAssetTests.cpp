@@ -801,6 +801,41 @@ TEST(ParticleAsset, BurstIntervalParsesAndValidates)
         std::invalid_argument);
 }
 
+TEST(ParticleAsset, BurstCountAndSpawnPerUnitParseAndValidate)
+{
+    Json document = MultiEmitterDocument();
+    document["emitters"][0]["burst"] = true;
+    document["emitters"][0]["burstCount"] = 64;
+    document["emitters"][0]["spawnPerUnit"] = 0.5;
+    const ParticleSystemAsset asset = ParticleAssetLoader::ParseJson(
+        document, "Maps/SC_test/PS_burst_count.json");
+    EXPECT_EQ(asset.emitters[0].burstCount, 64u);
+    EXPECT_FLOAT_EQ(asset.emitters[0].spawnPerUnit, 0.5f);
+    EXPECT_EQ(asset.emitters[1].burstCount, 0u);
+    EXPECT_FLOAT_EQ(asset.emitters[1].spawnPerUnit, 0.0f);
+
+    const uint32_t maxParticles = asset.emitters[0].maxParticles;
+    Json invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["burstCount"] = maxParticles + 1;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_burst_count_too_large.json"),
+        std::invalid_argument);
+
+    invalid = MultiEmitterDocument();
+    invalid["emitters"][0]["spawnPerUnit"] = -1.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_spawn_unit_negative.json"),
+        std::invalid_argument);
+
+    invalid["emitters"][0]["spawnPerUnit"] = 100001.0;
+    EXPECT_THROW(
+        ParticleAssetLoader::ParseJson(
+            invalid, "Maps/SC_test/PS_spawn_unit_too_large.json"),
+        std::invalid_argument);
+}
+
 TEST(ParticleAsset, LodFieldsParseAndValidate)
 {
     Json document = MultiEmitterDocument();

@@ -1054,6 +1054,23 @@ bool SimulateParticle(
         // 首帧预热只填稳态存活量：spawnRate * 平均寿命；burst 仍整池喷发。
         // spawnRate=0 的连续发射器预热后保持全池死亡，不能凭空填满。
         bool burst = frame.shape.y > 0.5;
+        uint burstCount = uint(clamp(
+            frame.burstParams.y,
+            1.0,
+            float(count)));
+        if (burst && index >= burstCount)
+        {
+            particle.positionAge = vec4(0.0);
+            particle.velocityLife = vec4(0.0);
+            for (int historyIndex = 0; historyIndex < 16; ++historyIndex)
+            {
+                particle.history[historyIndex] = vec4(0.0);
+            }
+            particle.source0 = vec4(0.0);
+            particle.source1 = vec4(0.0);
+            particle.source2 = vec4(0.0);
+            return false;
+        }
         if (!burst)
         {
             float averageLifetime = 0.5 *
@@ -1101,7 +1118,15 @@ bool SimulateParticle(
                 floor(previousTime / burstInterval);
         if (crossedStart || crossedCycle)
         {
-            return SpawnParticle(index, particle, randomState, false);
+            uint burstCount = uint(clamp(
+                frame.burstParams.y,
+                1.0,
+                float(count)));
+            if (index < burstCount)
+            {
+                return SpawnParticle(
+                    index, particle, randomState, false);
+            }
         }
     }
 

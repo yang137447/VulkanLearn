@@ -169,8 +169,8 @@ active World 的粒子系统实例（命令格式见 [调试命令](debug-runtim
 
 - `spawnRateScale`：默认 `1`，范围 `[0, 16]`。它乘在连续发射预算上，并参与 prewarm 的
   稳态目标数 `min(maxParticles, spawnRate * spawnRateScale * 0.5 * (lifetimeMin +
-  lifetimeMax))`。`burst: true` 的整池喷发不受它影响，`burstInterval` 周期重触发仍按整池
-  执行。
+  lifetimeMax))`。`burst: true` 的 burst 数量不受它影响，`burstInterval` 周期重触发仍按
+  `burstCount`（0 时为 `maxParticles`）执行。
 - `colorTint`：默认 `(1,1,1,1)`。RGB 每分量在 `[0, 16]` 且全部有限，允许 HDR 增亮；
   alpha 在 `[0, 1]`。渲染时乘到 billboard、ribbon、mesh 与 beam 四种 renderMode 的最终颜色，
   alpha 乘到最终不透明度。
@@ -249,6 +249,7 @@ Destroy 的 EndPlay 也可读取，但 owner 清理不会清空其他 Blueprint 
   `y = bounce`、`z = friction`、`w = radius`）、`collisionPlane`（`normal.xyz, offset`）、
   `collisionBoxMin`（`min.xyz, killOnCollision`）与 `collisionBoxMax`（`max.xyz, 0`）。
   C++ 与 GLSL 必须保持完全相同的 std140 顺序。
+- `burstParams`：`x = burstInterval`、`y = 有效 burstCount`、`z/w = 0`。
 - `burstParams` 之后是 `rotationParams`：`x = rotation`（度）、`y = rotationSpeed`（度/秒）、
   `z = rotationRandom`（0/1）、`w = 0`。
 - `rotationParams` 之后是 UBO 末尾的 `flipbookFrameRotations[16]`（每 `vec4` 打包 4 帧的
@@ -491,9 +492,12 @@ value-noise 势场，三个分量使用互不相同的固定偏移；shader 以 
   多个周期也只重触发一次。
 - prewarm 分支不读 `burstInterval`，仍然整池喷发一次作为首帧状态。
 
-周期从发射器累计模拟时间 0 起算，没有逐发射器相位偏移；发射器被剔除时时间冻结，重新可见
-后不会补算不可见期间的周期。CPU 镜像 `ParticleBurstCycleCrossed(previousTime, time,
-interval)` 与 shader 使用同一公式。
+`burstDelay` 与 `burstPhase` 都是秒、范围 `[0, 60]`；shader 把两者相加作为首轮触发
+偏移，`localTime` 首次跨过 0 时触发，之后每隔 `burstInterval` 再触发。`burstCount`
+是单次 burst 的粒子数，`0` 保持旧资产“整池”语义，非零时必须 `<= maxParticles`。
+周期从发射器累计模拟时间 0 起算；发射器被剔除时时间冻结，重新可见后不会补算不可见期间
+的周期。CPU 镜像 `ParticleBurstDue(previousTime, time, interval, delay, phase)` 与
+shader 使用同一偏移/跨周期公式。
 
 ## LOD 发射预算
 
@@ -720,8 +724,15 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
 
 - `spawnRate`：连续发射率（粒子/秒）；`burst: true` 时忽略连续发射，只在
   `burstInterval == 0` 时于首帧把整池喷出。
+- `spawnPerUnit`：发射器模型每移动 1 cm 生成的粒子数，默认 `0`、范围 `[0, 100000]`；
+  运行时会与 `spawnRate` 叠加，再乘实例/LOD 发射倍率。静止时不产生额外粒子；隐藏、禁用
+  或剔除期间不累计位移。
 - `burstInterval`：秒，默认 `0`，范围 `[0, 60]`。`burst: true` 且该值 `> 0` 时按周期
   整池重触发；`0` 保持一次性 burst 语义。详见「Burst 重触发」。
+- `burstCount`：单次 burst 粒子数，默认 `0`（等价 `maxParticles`），非零时必须不超过
+  `maxParticles`。
+- `burstDelay` / `burstPhase`：秒，默认 `0`，范围 `[0, 60]`；两者之和决定首轮 burst
+  偏移。
 - `lod.tiers: [{ "distance": cm, "spawnRateScale": 0..1 }, ...]`：多级 LOD，最多 4 档，
   距离严格递增。按发射器中心到相机距离选择已越过的最远档位缩放连续发射预算；
   burst、prewarm 池填充、寿命、尺寸与渲染不受影响。
@@ -992,7 +1003,8 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   `capsule.radius`、`sdf.path`、`mesh.path`、`bounce`、`friction`、`radius`、
   `killOnCollision` 与 `ccd`。各类型公式、默认值和边界见「碰撞」。
 
-`maxParticles` 上限 65536；`spawnRate` 上限 100000。球体采样使用 `cbrt` 半径分布，避免粒子堆在球心。
+`maxParticles` 上限 65536；`spawnRate` / `spawnPerUnit` 上限 100000。球体采样使用
+`cbrt` 半径分布，避免粒子堆在球心。
 排序开启时 `maxParticles` 上限为 4096。
 light 发射器的 `maxParticles` 另受 64 上限约束。
 
@@ -1004,7 +1016,9 @@ drag、shapeRadius、曲线 key、逐帧时长/轴心/UV 等）必须是有限�
 四个可见性字段都必须是非负有限数。`maxDrawDistance == 0` 时 `fadeDistance` 必须也是 `0`；
 `maxDrawDistance > 0` 时 `fadeDistance` 不得大于 `maxDrawDistance`。
 
-`burstInterval` 必须在 `[0, 60]`；`lodDistance` 非负；`lodSpawnRateScale` 在 `[0, 1]`；
+`burstInterval` / `burstDelay` / `burstPhase` 必须在 `[0, 60]`；`burstCount` 为 `0`
+或不超过 `maxParticles`；`spawnPerUnit` 在 `[0, 100000]`；`lodDistance` 非负；
+`lodSpawnRateScale` 在 `[0, 1]`；
 `lod.tiers` 最多 4 项，`distance` 非负且严格递增，`spawnRateScale` 在 `[0, 1]`。
 `rotationSpeed` 必须在 `[-3600, 3600]`；`rotation` 只要求有限，不做角度回绕。
 
@@ -1829,8 +1843,9 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   仍没有完整 Material 图/纹理/宏与 mesh LOD。网格朝向旋转
   只绕局部 Y 轴，mesh scale 不参与 `maxScreenSize` 的 billboard 钳制。导入失败静默
   回退 billboard 而不是显示错误几何。
-- `burstInterval > 0` 的周期重触发没有相位偏移、次数上限或单次 burst 计数；周期从
-  发射器累计模拟时间 0 起算，`particlerestart` 会把它重新归零。
+- burst 已支持固定 `burstCount`、首轮 `burstDelay + burstPhase` 和周期重触发；仍没有
+  UE 的逐周期 count 曲线、循环次数上限或按 emitter 属性绑定动态改 count。`spawnPerUnit`
+  只累计发射器模型的世界位移，不消费父粒子属性/速度；`particlerestart` 会归零时间与位移。
 - 粒子 compute/graphics pipeline 不在 shader reload 的候选事务内：reload 提交后
   `ParticleRenderer::InvalidatePipelines` 等待设备空闲并丢弃旧管线，下一次 Render 用当前
   shader 源码重建，粒子年龄/排序结果/纹理缓存会重置。若新粒子 shader 编译失败，失败发生在
@@ -1839,8 +1854,9 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   预览 World，在缩略图会话内按 30 个有界固定步（默认 `1/60` 秒）推进 simulation 后
   绘制 particle pass；成图进入 GPU image token，不写磁盘缓存。离线渲染路径在导出结果中
   发布 CPU 粒子 overlay，支持 billboard/ribbon 的确定性固定步合成；mesh/SDF 纹理细节与
-  实时 Vulkan 路径不完全等价；离线仿真消费作者资产并忽略 World 级 Data Channels 与
-  运行时 `userParameters`（见 rationale/particle-offline-rendering.md）。
+  实时 Vulkan 路径不完全等价；离线仿真消费作者资产并忽略 World 级 Data Channels、
+  运行时 `userParameters` 与 `spawnPerUnit` 的逐帧模型位移
+  （见 rationale/particle-offline-rendering.md）。
 
 编辑器字段修改走标准 `particle.modify` 草稿命令，保存走 `particle.save`；
 `particle.get_document/get_capabilities/validate/revert/reload/close/undo/redo` 与

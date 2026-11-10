@@ -359,7 +359,7 @@ private:
         Eigen::Vector4f collisionBoxMin;
         // max.xyz, reserved
         Eigen::Vector4f collisionBoxMax;
-        // x = burstInterval, y/z/w reserved
+        // x = burstInterval, y = effective burstCount, z/w reserved
         Eigen::Vector4f burstParams;
         // x = base rotation degrees, y = rotation speed degrees/sec,
         // z = random initial angle enabled, w = reserved
@@ -997,6 +997,12 @@ private:
         // 排序结束时 pair 表的奇偶性决定 graphics 绑定 A 还是 B。
         bool sortFinalUsesA = true;
         float elapsedSeconds = 0.0f;
+        // Spawn Per Unit 的跨帧位移基准。隐藏/剔除期间也持续更新，避免
+        // 重新可见时把整段移动距离一次性补发成粒子。
+        Eigen::Vector3f lastSpawnUnitPosition =
+            Eigen::Vector3f::Zero();
+        bool hasSpawnUnitPosition = false;
+        float pendingSpawnUnitDistance = 0.0f;
         // fixedTimeStep>0 时按固定步长推进；accumulator 吸收帧间余量，
         // fixedStepIndex 作为确定性随机的离散时间。
         float fixedStepAccumulator = 0.0f;

@@ -89,7 +89,9 @@ uint64_t BuildStateSignature(const ParticleEmitterAsset& emitter)
     MixUint32(hash, emitter.localSpace ? 1u : 0u);
     MixUint32(hash, emitter.randomSeed);
     MixFloat(hash, emitter.burstInterval);
+    MixUint32(hash, emitter.burstCount);
     MixFloat(hash, emitter.spawnRate);
+    MixFloat(hash, emitter.spawnPerUnit);
     MixFloat(hash, emitter.lifetimeMin);
     MixFloat(hash, emitter.lifetimeMax);
     MixFloat(hash, emitter.drag);
@@ -220,6 +222,9 @@ void ParticleCpuEmitterRuntime::ResetEmitterState(EmitterState& state)
     state.elapsedSeconds = 0.0f;
     state.burstElapsedSeconds = 0.0f;
     state.initialBurstDone = false;
+    state.lastSpawnUnitPosition = Eigen::Vector3f::Zero();
+    state.hasSpawnUnitPosition = false;
+    state.pendingSpawnUnitDistance = 0.0f;
     state.fixedStep = ParticleFixedStepState{};
     state.burstGeneration = 0;
     state.nextSerial = 0;
@@ -443,6 +448,7 @@ void ParticleCpuEmitterRuntime::SpawnParticle(
 void ParticleCpuEmitterRuntime::AdvanceEmitterStep(
     EmitterState& state,
     float stepSeconds,
+    float spawnPerUnitRate,
     uint32_t& globalLiveCount)
 {
     if (!(stepSeconds > 0.0f))
@@ -557,10 +563,45 @@ void ParticleCpuEmitterRuntime::Simulate(
                 emitter.fixedTimeStep,
                 8u,
                 state->fixedStep);
+        float spawnPerUnitRate = 0.0f;
+        if (emitter.spawnPerUnit > 0.0f)
+        {
+            const Eigen::Vector3f currentPosition =
+                state->model.block<3, 1>(0, 3);
+            if (!state->hasSpawnUnitPosition)
+            {
+                state->lastSpawnUnitPosition = currentPosition;
+                state->hasSpawnUnitPosition = true;
+            }
+            else
+            {
+                state->pendingSpawnUnitDistance +=
+                    (currentPosition -
+                        state->lastSpawnUnitPosition).norm();
+                state->lastSpawnUnitPosition = currentPosition;
+            }
+            const float stepFrameSeconds =
+                tick.stepSeconds *
+                static_cast<float>(tick.steps);
+            if (stepFrameSeconds > 0.0f &&
+                state->pendingSpawnUnitDistance > 0.0f)
+            {
+                spawnPerUnitRate = ParticleSpawnPerUnitRate(
+                    emitter.spawnPerUnit,
+                    state->pendingSpawnUnitDistance,
+                    stepFrameSeconds);
+                state->pendingSpawnUnitDistance = 0.0f;
+            }
+        }
+        else
+        {
+            state->pendingSpawnUnitDistance = 0.0f;
+        }
         for (uint32_t step = 0; step < tick.steps; ++step)
         {
             AdvanceEmitterStep(
-                *state, tick.stepSeconds, globalLiveCount);
+                *state, tick.stepSeconds, spawnPerUnitRate,
+                globalLiveCount);
         }
         const float frameSeconds =
             tick.stepSeconds * static_cast<float>(tick.steps);
@@ -586,14 +627,17 @@ void ParticleCpuEmitterRuntime::Simulate(
         {
             if (initialBurst)
             {
-                burstDue = true;
+                burstDue = state->burstElapsedSeconds >=
+                    emitter.burstDelay + emitter.burstPhase;
             }
             else if (emitter.burstInterval > 0.0f)
             {
-                burstDue = ParticleBurstCycleCrossed(
+                burstDue = ParticleBurstDue(
                     previousBurstTime,
                     state->burstElapsedSeconds,
-                    emitter.burstInterval);
+                    emitter.burstInterval,
+                    emitter.burstDelay,
+                    emitter.burstPhase);
             }
         }
         if (burstDue)
@@ -620,13 +664,19 @@ void ParticleCpuEmitterRuntime::Simulate(
         {
             if (burstDue)
             {
+                const uint32_t burstCount =
+                    EffectiveParticleBurstCount(
+                        emitter.maxParticles,
+                        emitter.burstCount);
                 spawnCount = std::min(
-                    perEmitterAvailable, globalAvailable);
+                    std::min(burstCount, perEmitterAvailable),
+                    globalAvailable);
             }
         }
         else
         {
-            const float rate = std::max(emitter.spawnRate, 0.0f) *
+            const float rate = std::max(
+                emitter.spawnRate + spawnPerUnitRate, 0.0f) *
                 std::max(state->spawnRateScale, 0.0f);
             state->spawnAccumulator += rate * frameSeconds;
             const uint32_t requested = static_cast<uint32_t>(

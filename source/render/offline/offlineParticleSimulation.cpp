@@ -5,6 +5,7 @@
 #include <limits>
 
 #include "particles/particleCollision.h"
+#include "particles/particleBurst.h"
 #include "particles/particleEmitterBounds.h"
 #include "particles/particleLifetime.h"
 #include "particles/particleLod.h"
@@ -590,7 +591,18 @@ void StepOfflineParticleSystem(
 
             if (prewarm)
             {
-                if (!asset.burst)
+                const uint32_t burstCount =
+                    EffectiveParticleBurstCount(
+                        asset.maxParticles, asset.burstCount);
+                if (asset.burst)
+                {
+                    if (index >= burstCount)
+                    {
+                        emitter.particles[index] = OfflineParticle{};
+                        continue;
+                    }
+                }
+                else
                 {
                     const float averageLifetime =
                         0.5f * (asset.lifetimeMin + asset.lifetimeMax);
@@ -613,8 +625,14 @@ void StepOfflineParticleSystem(
             {
                 const float time = emitter.elapsedSeconds;
                 const float previousTime = std::max(time - dt, 0.0f);
-                if (std::floor(time / asset.burstInterval) >
-                    std::floor(previousTime / asset.burstInterval))
+                const uint32_t burstCount =
+                    EffectiveParticleBurstCount(
+                        asset.maxParticles, asset.burstCount);
+                if (index < burstCount &&
+                    ParticleBurstDue(
+                        previousTime, time,
+                        asset.burstInterval,
+                        asset.burstDelay, asset.burstPhase))
                 {
                     SpawnParticle(emitter, index, state, false);
                     continue;

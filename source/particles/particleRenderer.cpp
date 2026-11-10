@@ -27,6 +27,7 @@
 #include "particles/particleCollision.h"
 #include "particles/particleBudget.h"
 #include "particles/particleBeam.h"
+#include "particles/particleBurst.h"
 #include "particles/particleDeterminism.h"
 #include "particles/particleDump.h"
 #include "particles/particleEmitterBounds.h"
@@ -7120,6 +7121,13 @@ void ParticleRenderer::RecordSimulation(
         ReadbackDecalGather(emitter, imageIndex);
         if (emitter.frameUniforms.size() <= imageIndex)
         {
+            if (emitter.asset.spawnPerUnit > 0.0f)
+            {
+                emitter.lastSpawnUnitPosition =
+                    emitter.model.block<3, 1>(0, 3);
+                emitter.hasSpawnUnitPosition = true;
+                emitter.pendingSpawnUnitDistance = 0.0f;
+            }
             emitter.culled = true;
             ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
@@ -7128,10 +7136,41 @@ void ParticleRenderer::RecordSimulation(
         // 每 image 每帧回收上一轮 query，并重置本轮时间戳。即使随后被
         // 剔除，也保持计时器状态与帧边界同步。
         emitter.gpuTimer.BeginFrame(commandBuffer, imageIndex);
+        const Eigen::Vector3f currentSpawnUnitPosition =
+            emitter.model.block<3, 1>(0, 3);
+        const auto trackSpawnUnitPosition = [&](bool simulate) {
+            if (emitter.asset.spawnPerUnit <= 0.0f)
+            {
+                emitter.pendingSpawnUnitDistance = 0.0f;
+                return;
+            }
+            if (!emitter.hasSpawnUnitPosition ||
+                emitter.needsClear || emitter.prewarm)
+            {
+                emitter.lastSpawnUnitPosition =
+                    currentSpawnUnitPosition;
+                emitter.hasSpawnUnitPosition = true;
+                emitter.pendingSpawnUnitDistance = 0.0f;
+                return;
+            }
+            if (!simulate)
+            {
+                emitter.lastSpawnUnitPosition =
+                    currentSpawnUnitPosition;
+                emitter.pendingSpawnUnitDistance = 0.0f;
+                return;
+            }
+            emitter.pendingSpawnUnitDistance +=
+                (currentSpawnUnitPosition -
+                    emitter.lastSpawnUnitPosition).norm();
+            emitter.lastSpawnUnitPosition =
+                currentSpawnUnitPosition;
+        };
         // 作者隐藏、发射器禁用与视锥剔除共用"冻结"路径：不推进 elapsed/prewarm，
         // 不清池、不排序、不 dispatch，也不进入 RecordGraphics 的绘制列表。
         if (!emitter.visible || !emitter.enabled)
         {
+            trackSpawnUnitPosition(false);
             emitter.culled = true;
             ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
@@ -7158,12 +7197,14 @@ void ParticleRenderer::RecordSimulation(
         if (emitter.culled)
         {
             // 冻结整个发射器状态：不推进时间、不写 UBO、不清池、不 dispatch。
+            trackSpawnUnitPosition(false);
             ClearParticleRuntimeCounters(commandBuffer, emitter);
             ++frameStats.culledEmitters;
             continue;
         }
         ++frameStats.visibleEmitters;
         emitter.culled = false;
+        trackSpawnUnitPosition(true);
 
         // 骨骼网格粒子：GPU skinning。CPU 只按当前姿态写每 image 的 palette
         // （jointModel · inverseBind），顶点着色器在绘制时完成蒙皮。
@@ -7286,11 +7327,23 @@ void ParticleRenderer::RecordSimulation(
         const float simulationStepSeconds =
             fixedStepTick.stepSeconds;
         const uint32_t simulationSteps = fixedStepTick.steps;
+        const float simulationFrameSeconds =
+            simulationStepSeconds *
+            static_cast<float>(simulationSteps);
+        float spawnPerUnitRate = 0.0f;
+        if (simulationFrameSeconds > 0.0f &&
+            emitter.pendingSpawnUnitDistance > 0.0f)
+        {
+            spawnPerUnitRate = ParticleSpawnPerUnitRate(
+                emitter.asset.spawnPerUnit,
+                emitter.pendingSpawnUnitDistance,
+                simulationFrameSeconds);
+            emitter.pendingSpawnUnitDistance = 0.0f;
+        }
         if (emitter.asset.fixedTimeStep > 0.0f)
         {
             emitter.elapsedSeconds +=
-                simulationStepSeconds *
-                static_cast<float>(simulationSteps);
+                simulationFrameSeconds;
         }
         else
         {
@@ -7390,7 +7443,7 @@ void ParticleRenderer::RecordSimulation(
         const ParticleLodState lod =
             EffectiveParticleLod(emitter.asset, lodDistance);
         uniforms.simulation = Eigen::Vector4f(
-            emitter.asset.spawnRate *
+            (emitter.asset.spawnRate + spawnPerUnitRate) *
                 lod.spawnRateScale * emitter.spawnRateScale,
             simulationStepSeconds,
             emitter.elapsedSeconds,
@@ -7720,7 +7773,9 @@ void ParticleRenderer::RecordSimulation(
             0.0f);
         uniforms.burstParams = Eigen::Vector4f(
             emitter.asset.burstInterval,
-            0.0f,
+            static_cast<float>(EffectiveParticleBurstCount(
+                emitter.asset.maxParticles,
+                emitter.asset.burstCount)),
             0.0f,
             0.0f);
         uniforms.rotationParams = Eigen::Vector4f(

@@ -54,7 +54,7 @@ layout(std140, set = 0, binding = 0) uniform ParticleFrame
     vec4 collisionPlane;             // normal.xyz, offset
     vec4 collisionBoxMin;            // min.xyz, killOnCollision
     vec4 collisionBoxMax;            // max.xyz, reserved
-    vec4 burstParams;                // x = burstInterval, y/z/w reserved
+    vec4 burstParams;                // x = burstInterval, y = burstCount, z/w reserved
     // x = base rotation degrees, y = speed degrees/sec, z = random start, w reserved
     vec4 rotationParams;
     vec4 flipbookFrameRotations[16]; // 每 vec4 打包 4 帧的角度（度）

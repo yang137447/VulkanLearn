@@ -46,3 +46,28 @@ TEST(ParticleBurst, LongRunningTimeStillCrossesOnBoundary)
     EXPECT_TRUE(ParticleBurstCycleCrossed(3599.9f, 3600.1f, 1.0f));
     EXPECT_FALSE(ParticleBurstCycleCrossed(3600.1f, 3600.9f, 1.0f));
 }
+
+TEST(ParticleBurst, EffectiveCountAndDelayPhaseFollowAuthoringContract)
+{
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 0), 512u);
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 64), 64u);
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 1024), 512u);
+
+    // delay + phase = 1.5 s：只跨过这个起点时触发一次。
+    EXPECT_FALSE(ParticleBurstDue(0.0f, 1.4f, 2.0f, 1.0f, 0.5f));
+    EXPECT_TRUE(ParticleBurstDue(1.4f, 1.6f, 2.0f, 1.0f, 0.5f));
+    EXPECT_FALSE(ParticleBurstDue(1.6f, 3.4f, 2.0f, 1.0f, 0.5f));
+    EXPECT_TRUE(ParticleBurstDue(3.4f, 3.6f, 2.0f, 1.0f, 0.5f));
+}
+
+TEST(ParticleBurst, SpawnPerUnitConvertsDistanceToRateAndRejectsInvalidInput)
+{
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 10.0f, 0.1f), 50.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.0f, 10.0f, 0.1f), 0.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 0.0f, 0.1f), 0.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 10.0f, 0.0f), 0.0f);
+}

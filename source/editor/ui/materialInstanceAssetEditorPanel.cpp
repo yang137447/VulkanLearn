@@ -158,7 +158,9 @@ bool ParticleFieldInModule(
             field == "deterministicRandom" ||
             field == "fixedTimeStep" ||
             field == "spawnRate" || field == "burst" ||
-            field == "burstInterval" ||
+            field == "spawnPerUnit" || field == "burstInterval" ||
+            field == "burstCount" || field == "burstDelay" ||
+            field == "burstPhase" ||
             field == "lodDistance" ||
             field == "lodSpawnRateScale" ||
             field == "lod.tiers" ||
