@@ -678,7 +678,7 @@ std::shared_ptr<Texture> DecalRenderer::ResolveTexture(
         std::shared_ptr<Texture> texture =
             std::make_shared<Texture>(
                 *backend,
-                loadDesc.source,
+                loadDesc.sources.front(),
                 ToTextureCreateDesc(loadDesc));
         textureCache[cacheKey] = texture;
         return texture;

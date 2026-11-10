@@ -6,6 +6,7 @@
 #include <cctype>
 #include <limits>
 #include <map>
+#include <cstdint>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -17,15 +18,8 @@ namespace
 using Json = nlohmann::json;
 using K = EditorAssetDocumentKind;
 enum class ValueKind {
-    Text,
-    Boolean,
-    Number,
-    Vector3,
-    Strings,
-    Channels,
-    Object,
-    Array,
-    UserParameters
+    Text, Boolean, Number, Integer, Vector2, Vector2Integer, Vector3,
+    NumberArray, Strings, Channels, Object, Array, UserParameters
 };
 struct Field
 {
@@ -102,13 +96,39 @@ const Field fields[] = {
     {K::Scene, "camera", "exposure.autoSpeedUp", ValueKind::Number, true, "1/s"},
     {K::Scene, "camera", "exposure.autoSpeedDown", ValueKind::Number, true, "1/s"},
     {K::Scene, "camera", "exposure.autoTargetGray", ValueKind::Number, true, "linear"},
+    // terrain 字段只改场景摆放与 TR 引用；高度图、分层等资产内部参数仍由 TR 编辑器维护。
+    {K::Scene, "terrain", "terrainPath", ValueKind::Text, false, "asset_path"},
+    {K::Scene, "terrain", "pageOrigin", ValueKind::Vector2Integer, true},
+    {K::Scene, "terrain", "pageTilesPerSide", ValueKind::Integer, true},
+    {K::Scene, "wind", "direction", ValueKind::Vector3},
+    {K::Scene, "wind", "strength", ValueKind::Number, false, "cm/s"},
+    {K::Scene, "wind", "gust.amplitude", ValueKind::Number},
+    {K::Scene, "wind", "gust.frequency", ValueKind::Number},
+    {K::Scene, "wind", "gust.turbulence", ValueKind::Number},
     {K::Mesh, "", "name", ValueKind::Text},
     {K::Mesh, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    {K::Tressfx, "", "name", ValueKind::Text},
+    {K::Tressfx, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    // TressFX 默认模拟标量由独立文档拥有；放置覆盖不写回这里。作者值由
+    // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
+    {K::Tressfx, "", "simulationDefaults.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Tressfx, "", "simulationDefaults.damping", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.iterations", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.bendStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.globalShapeEffectiveRange", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspCoefficient", ValueKind::Number},
+    {K::Tressfx, "", "simulationDefaults.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
+    {K::Tressfx, "", "simulationDefaults.windGain", ValueKind::Number},
+    // 分组整体作为数组写入：形状、名称与区间由 MeshAssetValidator 在 modify/save 时校验。
+    {K::Tressfx, "", "groups", ValueKind::Array, true},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
+    {K::Tressfx, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
     {K::Texture, "", "name", ValueKind::Text},
     {K::Texture, "", "source", ValueKind::Text, false, "source_path"},
+    {K::Texture, "", "sources", ValueKind::Strings, false, "source_path"},
     {K::Texture, "", "colorSpace", ValueKind::Text, false, "", "linear|srgb"},
     {K::Texture, "", "mipmaps", ValueKind::Boolean, true},
     {K::Texture, "", "filter", ValueKind::Text, true, "", "linear|nearest"},
@@ -376,7 +396,36 @@ const Field fields[] = {
     {K::Blueprint, "", "scriptComponents", ValueKind::Array, true},
     {K::Blueprint, "", "physics", ValueKind::Object, true},
     {K::Blueprint, "", "rotation", ValueKind::Vector3, true, "degrees"},
-    {K::Blueprint, "", "scale", ValueKind::Vector3, true}
+    {K::Blueprint, "", "scale", ValueKind::Vector3, true},
+    // Terrain 资产页：顶层只改 TR 描述，不读/写高度图像素。
+    {K::Terrain, "", "name", ValueKind::Text},
+    {K::Terrain, "", "description", ValueKind::Text, true},
+    {K::Terrain, "", "heightmapPath", ValueKind::Text, false, "source_path"},
+    {K::Terrain, "", "paintPath", ValueKind::Text, true, "source_path"},
+    {K::Terrain, "", "materialInstancePath", ValueKind::Text, false, "asset_path"},
+    {K::Terrain, "", "size", ValueKind::Vector2, false, "cm"},
+    {K::Terrain, "", "heightScale", ValueKind::Number, false, "cm"},
+    {K::Terrain, "", "heightOffset", ValueKind::Number, false, "cm"},
+    {K::Terrain, "", "gridResolution", ValueKind::Integer},
+    {K::Terrain, "", "chunkQuads", ValueKind::Integer},
+    {K::Terrain, "", "lodLevels", ValueKind::Integer, true},
+    {K::Terrain, "", "lodDistances", ValueKind::NumberArray, true, "cm"},
+    {K::Terrain, "", "chunkResidencyDistances", ValueKind::NumberArray, true, "cm"},
+    {K::Terrain, "", "pageOrigin", ValueKind::Vector2Integer, true},
+    {K::Terrain, "", "pageTilesPerSide", ValueKind::Integer, true},
+    // 整表层只用于 Add/Remove/重排；逐字段编辑走 layer scope。
+    {K::Terrain, "", "layers", ValueKind::Array, true},
+    {K::Terrain, "layer", "name", ValueKind::Text},
+    {K::Terrain, "layer", "key", ValueKind::Text, true},
+    {K::Terrain, "layer", "heightRange", ValueKind::Vector2},
+    {K::Terrain, "layer", "slopeRange", ValueKind::Vector2, false, "degrees"},
+    {K::Terrain, "layer", "noise", ValueKind::Number, true},
+    {K::Terrain, "layer", "uvScale", ValueKind::Number, true},
+    {K::Terrain, "layer", "uvRotation", ValueKind::Number, true, "degrees"},
+    {K::Terrain, "layer", "sourceResolution", ValueKind::Integer, true},
+    {K::Terrain, "layer", "avgColor", ValueKind::Vector3, true, "linear_rgb"},
+    {K::Terrain, "layer", "sourceSet", ValueKind::Integer, true},
+    {K::Terrain, "layer", "flags", ValueKind::Integer, true}
 };
 
 const char* CurveEntryFields(const std::string& name)
@@ -407,6 +456,12 @@ bool MatchesScope(const std::string& type, const std::string& scope)
 
 std::string Scope(const EditorAssetFieldChange& change)
 {
+    if (change.layerIndex)
+    {
+        if (change.objectIdentity || change.slotIndex || change.expectedSlotName)
+            throw std::invalid_argument("Layer identity cannot be combined with object or slot identity");
+        return "layer";
+    }
     if (change.objectIdentity)
     {
         const auto separator = change.objectIdentity->find('|');
@@ -458,8 +513,15 @@ const Field& FindField(K kind, const EditorAssetFieldChange& change)
     if (change.objectIdentity && (kind != K::Scene || change.slotIndex ||
         change.expectedSlotName || change.expectedEmitterName))
         throw std::invalid_argument("objectIdentity is only valid for scene object fields");
+    if (change.layerIndex.has_value() != change.expectedLayerName.has_value() ||
+        (change.layerIndex && kind != K::Terrain) ||
+        (change.expectedLayerName && change.expectedLayerName->empty()))
+        throw std::invalid_argument("Terrain layers require layerIndex and non-empty expectedLayerName");
+    if (change.layerIndex &&
+        (change.objectIdentity || change.slotIndex || change.expectedSlotName))
+        throw std::invalid_argument("Layer identity cannot be combined with object or slot identity");
     if (change.slotIndex.has_value() != change.expectedSlotName.has_value() ||
-        (change.slotIndex && kind != K::Mesh) ||
+        (change.slotIndex && kind != K::Mesh && kind != K::Tressfx) ||
         (change.expectedSlotName && change.expectedSlotName->empty()))
         throw std::invalid_argument("Mesh slots require slotIndex and non-empty expectedSlotName");
     ParticleFieldPath particlePath;
@@ -486,7 +548,11 @@ const char* TypeName(ValueKind type)
     switch (type)
     {
     case ValueKind::Text: return "string"; case ValueKind::Boolean: return "boolean";
-    case ValueKind::Number: return "number"; case ValueKind::Vector3: return "vec3";
+    case ValueKind::Number: return "number"; case ValueKind::Integer: return "integer";
+    case ValueKind::Vector2: return "vec2";
+    case ValueKind::Vector2Integer: return "vec2_int";
+    case ValueKind::Vector3: return "vec3";
+    case ValueKind::NumberArray: return "number_array";
     case ValueKind::Strings: return "string_array"; case ValueKind::Channels: return "channel_descriptions";
     case ValueKind::Object: return "object"; case ValueKind::Array: return "array";
     case ValueKind::UserParameters: return "object";
@@ -529,6 +595,51 @@ EditorAssetFieldValue DecodeValue(const Json& value, const Field& field)
             if (std::isfinite(field.maximum) && number > field.maximum)
                 break;
             return number;
+        }
+        break;
+    case ValueKind::Integer:
+        if (value.is_number_unsigned())
+        {
+            if (value.get<uint64_t>() <= static_cast<uint64_t>(INT64_MAX))
+                return static_cast<int64_t>(value.get<uint64_t>());
+        }
+        else if (value.is_number_integer())
+        {
+            return value.get<int64_t>();
+        }
+        break;
+    case ValueKind::Vector2:
+        if (value.is_array() && value.size() == 2)
+        {
+            std::array<double, 2> vector{};
+            for (size_t index = 0; index < 2; ++index)
+            {
+                if (!value[index].is_number() || !std::isfinite(value[index].get<double>()) ||
+                    !std::isfinite(static_cast<float>(value[index].get<double>())))
+                    throw std::invalid_argument("Vector components must be finite: " + std::string(field.name));
+                vector[index] = value[index].get<double>();
+            }
+            return vector;
+        }
+        break;
+    case ValueKind::Vector2Integer:
+        if (value.is_array() && value.size() == 2 &&
+            value[0].is_number_integer() && value[1].is_number_integer())
+            return std::array<int64_t, 2>{value[0].get<int64_t>(), value[1].get<int64_t>()};
+        break;
+    case ValueKind::NumberArray:
+        if (value.is_array())
+        {
+            std::vector<double> numbers;
+            numbers.reserve(value.size());
+            for (const auto& item : value)
+            {
+                if (!item.is_number() || !std::isfinite(item.get<double>()) ||
+                    !std::isfinite(static_cast<float>(item.get<double>())))
+                    throw std::invalid_argument("Number array components must be finite: " + std::string(field.name));
+                numbers.push_back(item.get<double>());
+            }
+            return numbers;
         }
         break;
     case ValueKind::Vector3:
@@ -622,6 +733,16 @@ Json* Target(Json& document, const EditorAssetFieldChange& change)
             slots.at(*change.slotIndex).at("name") != *change.expectedSlotName)
             throw std::invalid_argument("Mesh slot identity changed");
         return &slots.at(*change.slotIndex);
+    }
+    if (change.layerIndex)
+    {
+        if (!document.contains("layers") || !document.at("layers").is_array())
+            throw std::invalid_argument("Terrain document has no layer table");
+        auto& layers = document.at("layers");
+        if (*change.layerIndex >= layers.size() ||
+            layers.at(*change.layerIndex).at("name") != *change.expectedLayerName)
+            throw std::invalid_argument("Terrain layer identity changed");
+        return &layers.at(*change.layerIndex);
     }
     return &document;
 }
@@ -955,6 +1076,8 @@ Json EncodeAssetChanges(const std::vector<EditorAssetFieldChange>& changes, K ki
         if (change.slotIndex) item["slotIndex"] = *change.slotIndex;
         if (change.expectedSlotName) item["expectedSlotName"] = *change.expectedSlotName;
         if (change.expectedEmitterName) item["expectedEmitterName"] = *change.expectedEmitterName;
+        if (change.layerIndex) item["layerIndex"] = *change.layerIndex;
+        if (change.expectedLayerName) item["expectedLayerName"] = *change.expectedLayerName;
         if (!targets.insert(item.dump()).second) throw std::invalid_argument("Duplicate target field");
         if (change.reset)
         {
@@ -983,7 +1106,8 @@ std::vector<EditorAssetFieldChange> DecodeAssetChanges(const Json& changes, K ki
         for (const auto& entry : item.items())
             if (entry.key() != "field" && entry.key() != "value" && entry.key() != "reset" &&
                 entry.key() != "objectIdentity" && entry.key() != "slotIndex" &&
-                entry.key() != "expectedSlotName" && entry.key() != "expectedEmitterName")
+                entry.key() != "expectedSlotName" && entry.key() != "expectedEmitterName" &&
+                entry.key() != "layerIndex" && entry.key() != "expectedLayerName")
                 throw std::invalid_argument("Unknown change property: " + entry.key());
         EditorAssetFieldChange change;
         change.field = item.at("field").get<std::string>();
@@ -997,6 +1121,20 @@ std::vector<EditorAssetFieldChange> DecodeAssetChanges(const Json& changes, K ki
         }
         if (item.contains("expectedSlotName")) change.expectedSlotName = item.at("expectedSlotName").get<std::string>();
         if (item.contains("expectedEmitterName")) change.expectedEmitterName = item.at("expectedEmitterName").get<std::string>();
+        if (item.contains("layerIndex"))
+        {
+            const auto& index = item.at("layerIndex");
+            if (!index.is_number_integer() || index.get<double>() < 0 ||
+                index.get<double>() > UINT32_MAX)
+                throw std::invalid_argument("layerIndex must be uint32");
+            change.layerIndex = index.get<uint32_t>();
+        }
+        if (item.contains("expectedLayerName"))
+        {
+            change.expectedLayerName = item.at("expectedLayerName").get<std::string>();
+            if (change.expectedLayerName->empty())
+                throw std::invalid_argument("expectedLayerName must be non-empty");
+        }
         if (item.contains("reset"))
         {
             if (item.at("reset") != true || item.contains("value"))
@@ -1079,7 +1217,7 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
         result["cameraRotationClearsLookAt"] = true;
         result["intensitySemantics"] = "authored_value_in_final_intensityUnit";
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["slots"] = Json::array();
         const auto& slots = document.at("materialSlots");
@@ -1166,6 +1304,16 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
                 {"fields", implicitFields}});
         }
     }
+    if (kind == K::Terrain)
+    {
+        result["layers"] = Json::array();
+        const Json layers = document.value("layers", Json::array());
+        for (size_t index = 0; index < layers.size(); ++index)
+            result["layers"].push_back({
+                {"layerIndex", index},
+                {"expectedLayerName", layers[index].value("name", std::string())},
+                {"fields", FieldList(kind, "layer")}});
+    }
     return result;
 }
 
@@ -1181,6 +1329,17 @@ Json ProjectEditableAsset(K kind, const Json& document)
         for (const auto& emitter : document.at("emitters"))
             result["emitters"].push_back(Projection(kind, "", emitter));
     }
+    if (kind == K::Tressfx && document.contains("simulationDefaults"))
+    {
+        // enabled/backend 不开放写能力，但 UI 必须用同一作者投影判断 live/Reset。
+        // 保留对象存在性与原始缺省，不能在投影时把运行期缺省值烘成作者字段。
+        if (!result.contains("simulationDefaults"))
+            result["simulationDefaults"] = Json::object();
+        const auto& defaults = document.at("simulationDefaults");
+        for (const char* field : {"enabled", "backend"})
+            if (defaults.contains(field))
+                result["simulationDefaults"][field] = defaults.at(field);
+    }
     if (kind == K::Scene)
     {
         result["worldUnit"] = document.at("worldUnit");
@@ -1192,11 +1351,18 @@ Json ProjectEditableAsset(K kind, const Json& document)
             result["objects"].push_back(std::move(projected));
         }
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["materialSlots"] = Json::array();
         for (const auto& slot : document.at("materialSlots"))
             result["materialSlots"].push_back(Projection(kind, "slot", slot));
+    }
+    if (kind == K::Terrain)
+    {
+        result["layers"] = Json::array();
+        const Json layers = document.value("layers", Json::array());
+        for (const auto& layer : layers)
+            result["layers"].push_back(Projection(kind, "layer", layer));
     }
     return result;
 }

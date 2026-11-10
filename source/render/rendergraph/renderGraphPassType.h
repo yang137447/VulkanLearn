@@ -50,7 +50,10 @@ enum class RenderGraphPassType
     // （lightGrid/lightIndices/lightGridParams）由 RendererFrameResources
     // 按 swapchain image 持有，graph 只负责把它排在光照数据上传之后、
     // geometry 之前。
-    LightCulling
+    LightCulling,
+    // 独立 128×128 feedback RT：只遍历 terrain draw packet，不碰 GBuffer。
+    // 当前只产出可见页统计与回读 ring，不驱动驻留/淘汰。
+    TerrainFeedback
 };
 
 struct RenderGraphPassTypeName
@@ -59,11 +62,10 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-// 十六个：编辑器网格、自动曝光、Decal、DecalStencil、软深度、粒子、屏幕空间扰动、
-// 局部光阴影、体积雾注入与体积雾合成各自追加，
-// 合并后必须都在表里，
-// 否则 ParseRenderGraphPassType 解析不出对应名字（配置里写了却当成未知 pass）。
-inline constexpr std::array<RenderGraphPassTypeName, 16>
+// 十七个：编辑器网格、自动曝光、Decal、DecalStencil、软深度、粒子、屏幕空间扰动、
+// 局部光阴影、体积雾注入/合成、屏幕空间光照聚类与地形 feedback 各自追加；
+// 合并后必须都在表里，否则 ParseRenderGraphPassType 解析不出对应名字。
+inline constexpr std::array<RenderGraphPassTypeName, 17>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
@@ -80,7 +82,8 @@ inline constexpr std::array<RenderGraphPassTypeName, 16>
         {RenderGraphPassType::LocalShadow, "localShadow"},
         {RenderGraphPassType::VolumetricFog, "volumetricFog"},
         {RenderGraphPassType::FogComposite, "fogComposite"},
-        {RenderGraphPassType::LightCulling, "lightCulling"}
+        {RenderGraphPassType::LightCulling, "lightCulling"},
+        {RenderGraphPassType::TerrainFeedback, "terrainFeedback"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

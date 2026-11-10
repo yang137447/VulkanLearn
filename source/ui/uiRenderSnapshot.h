@@ -120,9 +120,6 @@ struct UiViewModelSnapshot
     double environmentShGpuMs = 0.0;
     double environmentPrefilterGpuMs = 0.0;
     double environmentCommitGpuMs = 0.0;
-    float speedTreeStrength = 0.35f;
-    bool speedTreeGustingEnabled = true;
-    uint32_t speedTreeWindProfileCount = 0;
     bool developerUiVisible = false;
     // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
     float cameraMoveSpeed = 1000.0f;

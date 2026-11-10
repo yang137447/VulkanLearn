@@ -1,0 +1,71 @@
+add_executable(terrain_tests
+    terrainTests.cpp
+    terrainHeightmapIOTests.cpp
+    terrainHeightmapEditorTests.cpp
+    terrainPaintFileTests.cpp
+    terrainTressfxStubs.cpp
+    terrainPageManagerP31Tests.cpp
+    terrainLayerFeedbackTests.cpp
+    terrainLayerPageManagerTests.cpp
+    terrainLayerVisibilityTests.cpp
+    terrainLayerMipBudgetTests.cpp
+    terrainLayerStreamingQualityTests.cpp
+terrainLayerRegistryTests.cpp
+    terrainCollisionTests.cpp
+    terrainCollisionInstanceTests.cpp
+    terrainChunkResidencyTests.cpp
+    vegetationAssetTests.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
+    ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapIO.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapEditor.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapWriter.cpp
+    ${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainPaintSession.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerTable.cpp
+${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerRegistry.cpp
+${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPageManager.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerVisibility.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerMipBudget.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainChunkResidency.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainPageManager.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp
+    ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp
+    ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/resource/tressfxGeometryCache.cpp
+    ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
+    ${PROJECT_SOURCE_DIR}/source/mesh/vegetationAsset.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/resource/resourceRetireQueue.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/ddsTexture.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp
+)
+
+target_include_directories(terrain_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/source
+)
+
+target_link_libraries(terrain_tests
+    PRIVATE
+        Vulkan::Vulkan
+        Eigen3
+        Json
+        stb_image
+        OpenEXR::OpenEXR
+        Jolt
+        vl_hair_assets
+        vl_fracture_core
+        vl_animation_assets
+)
+
+vulkanlearn_add_gtest(terrain_tests)

@@ -43,6 +43,13 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::SaveMeshDocument, "mesh.save", 1, true, true, false},
     {EditorCommandType::RevertMeshDocument, "mesh.revert", 1, true, true, false},
     {EditorCommandType::ReloadMeshDocument, "mesh.reload", 1, true, true, false},
+    {EditorCommandType::GetTressfxDocument, "tressfx.get_document", 1, false, false, false},
+    {EditorCommandType::GetTressfxCapabilities, "tressfx.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyTressfxDocument, "tressfx.modify", 1, true, true, false},
+    {EditorCommandType::ValidateTressfxDocument, "tressfx.validate", 1, false, false, false},
+    {EditorCommandType::SaveTressfxDocument, "tressfx.save", 1, true, true, false},
+    {EditorCommandType::RevertTressfxDocument, "tressfx.revert", 1, true, true, false},
+    {EditorCommandType::ReloadTressfxDocument, "tressfx.reload", 1, true, true, false},
     {EditorCommandType::GetTextureDocument, "texture.get_document", 1, false, false, false},
     {EditorCommandType::GetTextureCapabilities, "texture.get_capabilities", 1, false, false, false},
     {EditorCommandType::ModifyTextureDocument, "texture.modify", 1, true, true, false},
@@ -69,6 +76,13 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::CloseParticleDocument, "particle.close", 1, false, false, false},
     {EditorCommandType::UndoParticleDocument, "particle.undo", 1, true, true, false},
     {EditorCommandType::RedoParticleDocument, "particle.redo", 1, true, true, false},
+    {EditorCommandType::GetTerrainDocument, "terrain.get_document", 1, false, false, false},
+    {EditorCommandType::GetTerrainCapabilities, "terrain.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyTerrainDocument, "terrain.modify", 1, true, true, false},
+    {EditorCommandType::ValidateTerrainDocument, "terrain.validate", 1, false, false, false},
+    {EditorCommandType::SaveTerrainDocument, "terrain.save", 1, true, true, false},
+    {EditorCommandType::RevertTerrainDocument, "terrain.revert", 1, true, true, false},
+    {EditorCommandType::ReloadTerrainDocument, "terrain.reload", 1, true, true, false},
     {EditorCommandType::ConnectMaterialInstancePreview, "material.preview.connect", 1, false, false, true},
     {EditorCommandType::DisconnectMaterialInstancePreview, "material.preview.disconnect", 1, false, false, false},
     {EditorCommandType::ApplyMaterialInstancePreview, "material.preview.apply", 1, false, false, true},
@@ -584,10 +598,14 @@ std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandT
         return EditorAssetDocumentKind::Scene;
     if (type >= EditorCommandType::GetMeshDocument && type <= EditorCommandType::ReloadMeshDocument)
         return EditorAssetDocumentKind::Mesh;
+    if (type >= EditorCommandType::GetTressfxDocument && type <= EditorCommandType::ReloadTressfxDocument)
+        return EditorAssetDocumentKind::Tressfx;
     if (type >= EditorCommandType::GetTextureDocument && type <= EditorCommandType::ReloadTextureDocument)
         return EditorAssetDocumentKind::Texture;
     if (type >= EditorCommandType::GetBlueprintDocument && type <= EditorCommandType::RedoBlueprintDocument)
         return EditorAssetDocumentKind::Blueprint;
+    if (type >= EditorCommandType::GetTerrainDocument && type <= EditorCommandType::ReloadTerrainDocument)
+        return EditorAssetDocumentKind::Terrain;
     if (type >= EditorCommandType::GetParticleDocument && type <= EditorCommandType::RedoParticleDocument)
         return EditorAssetDocumentKind::ParticleSystem;
     return std::nullopt;
@@ -598,25 +616,39 @@ std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType ty
     switch (type)
     {
     case EditorCommandType::GetSceneDocument: case EditorCommandType::GetMeshDocument:
+    case EditorCommandType::GetTressfxDocument:
     case EditorCommandType::GetTextureDocument: case EditorCommandType::GetBlueprintDocument:
+    case EditorCommandType::GetTerrainDocument:
     case EditorCommandType::GetParticleDocument: return EditorAssetOperation::GetDocument;
     case EditorCommandType::GetSceneCapabilities: case EditorCommandType::GetMeshCapabilities:
+    case EditorCommandType::GetTressfxCapabilities:
     case EditorCommandType::GetTextureCapabilities: case EditorCommandType::GetBlueprintCapabilities:
+    case EditorCommandType::GetTerrainCapabilities:
     case EditorCommandType::GetParticleCapabilities: return EditorAssetOperation::GetCapabilities;
     case EditorCommandType::ModifySceneDocument: case EditorCommandType::ModifyMeshDocument:
+    case EditorCommandType::ModifyTressfxDocument:
     case EditorCommandType::ModifyTextureDocument: case EditorCommandType::ModifyBlueprintDocument:
+    case EditorCommandType::ModifyTerrainDocument:
     case EditorCommandType::ModifyParticleDocument: return EditorAssetOperation::Modify;
     case EditorCommandType::ValidateSceneDocument: case EditorCommandType::ValidateMeshDocument:
+    case EditorCommandType::ValidateTressfxDocument:
     case EditorCommandType::ValidateTextureDocument: case EditorCommandType::ValidateBlueprintDocument:
+    case EditorCommandType::ValidateTerrainDocument:
     case EditorCommandType::ValidateParticleDocument: return EditorAssetOperation::Validate;
     case EditorCommandType::SaveSceneDocument: case EditorCommandType::SaveMeshDocument:
+    case EditorCommandType::SaveTressfxDocument:
     case EditorCommandType::SaveTextureDocument: case EditorCommandType::SaveBlueprintDocument:
+    case EditorCommandType::SaveTerrainDocument:
     case EditorCommandType::SaveParticleDocument: return EditorAssetOperation::Save;
     case EditorCommandType::RevertSceneDocument: case EditorCommandType::RevertMeshDocument:
+    case EditorCommandType::RevertTressfxDocument:
     case EditorCommandType::RevertTextureDocument: case EditorCommandType::RevertBlueprintDocument:
+    case EditorCommandType::RevertTerrainDocument:
     case EditorCommandType::RevertParticleDocument: return EditorAssetOperation::Revert;
     case EditorCommandType::ReloadSceneDocument: case EditorCommandType::ReloadMeshDocument:
+    case EditorCommandType::ReloadTressfxDocument:
     case EditorCommandType::ReloadTextureDocument: case EditorCommandType::ReloadBlueprintDocument:
+    case EditorCommandType::ReloadTerrainDocument:
     case EditorCommandType::ReloadParticleDocument: return EditorAssetOperation::Reload;
     case EditorCommandType::CloseParticleDocument: return EditorAssetOperation::Close;
     case EditorCommandType::UndoParticleDocument: return EditorAssetOperation::Undo;

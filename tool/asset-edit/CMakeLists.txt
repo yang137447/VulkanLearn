@@ -12,7 +12,8 @@ add_executable(vl_asset_edit
     "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
-    "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp")
+    "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp")
 target_include_directories(vl_asset_edit PRIVATE "${PROJECT_SOURCE_DIR}/source")
 target_compile_definitions(vl_asset_edit PRIVATE VL_WITH_EDITOR=1)
 target_link_libraries(vl_asset_edit PRIVATE Json Eigen3 Vulkan::Vulkan BLAKE3::blake3 Threads::Threads)

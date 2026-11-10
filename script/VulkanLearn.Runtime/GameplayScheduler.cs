@@ -755,9 +755,17 @@ public static partial class NativeBridge
                 if (!rays.Remove(id, out var ray)) continue;
                 sentRays.Remove(id);
                 if (!CanRun(ray.Owner, ray.Component)) continue;
-                RaycastHit? hit = result.TryGetProperty("blueprint", out var target)
-                    ? new(new(context.Id, target.GetString()!), Vector(result.GetProperty("point")),
-                        Vector(result.GetProperty("normal")), result.GetProperty("distance").GetSingle()) : null;
+                var hasBlueprint = result.TryGetProperty("blueprint", out var target);
+                var terrain = result.TryGetProperty("terrain", out var terrainTarget)
+                    ? terrainTarget.GetString() : null;
+                RaycastHit? hit = (hasBlueprint || terrain != null)
+                    ? new(hasBlueprint
+                            ? new BlueprintHandle(context.Id, target.GetString()!)
+                            : default,
+                        Vector(result.GetProperty("point")),
+                        Vector(result.GetProperty("normal")),
+                        result.GetProperty("distance").GetSingle(),
+                        terrain) : null;
                 Invoke(ray.Owner, "Raycast", () => ray.Callback(hit), ray.Component);
             }
         }

@@ -383,6 +383,9 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     const EditorActorPropertyEdit& edit)
 {
     if (IsPreviewScene(actor.scenePath)) return;
+    // Gizmo 拖动中的预览只属于 live World；命令端不得把每帧预览写进草稿或历史。
+    // 释放时的 commit 才走这里，完整 Transform 只 push 一次快照。
+    if (edit.preview) return;
     auto& document = documents.at(Normalize(actor.scenePath));
     auto& object = *FindActor(document.draft, actor.identity);
     auto previous = document.draft;
@@ -403,6 +406,15 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     }
     else switch (edit.property)
     {
+    case P::Transform:
+        object["position"] = Vector(actor.position);
+        if (actor.type != EditorUi::EditorSceneActorType::SquareAreaLight)
+            object["rotation"] = Vector(actor.rotation);
+        if (actor.type == EditorUi::EditorSceneActorType::Mesh ||
+            actor.type == EditorUi::EditorSceneActorType::Terrain ||
+            actor.type == EditorUi::EditorSceneActorType::Script)
+            object["scale"] = Vector(actor.scale);
+        break;
     case P::Position: object["position"] = Vector(actor.position); break;
     case P::Rotation: object["rotation"] = Vector(actor.rotation); break;
     case P::Scale: object["scale"] = Vector(actor.scale); break;
@@ -425,10 +437,37 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     case P::CameraNear: object["near_clip"] = actor.camera.clipNear; break;
     case P::CameraFar: object["far_clip"] = actor.camera.clipFar; break;
     case P::CastShadows: object["shadow"]["castShadows"] = actor.castShadows; break;
+    case P::WindDirection:
+        object["direction"] = Vector(actor.worldWind.direction);
+        break;
+    case P::WindStrength:
+        object["strength"] = actor.worldWind.strengthCmPerSec;
+        break;
+    case P::WindGustAmplitude:
+        // Gust 滑条归零即关闭：删除整个 gust 对象，重载后才能保持关闭语义。
+        if (actor.worldWind.gustAmplitude <= 0.0f)
+        {
+            object.erase("gust");
+            break;
+        }
+        [[fallthrough]];
+    case P::WindGustFrequency:
+    case P::WindGustTurbulence:
+    {
+        // 场景风只有作者了 gust 才会被读取；从无到有编辑时补齐三个字段，
+        // 保证保存后的 JSON 仍通过 ValidateSceneWindJson 的封闭校验。
+        auto& gust = object["gust"];
+        if (!gust.is_object()) gust = nlohmann::json::object();
+        gust["amplitude"] = actor.worldWind.gustAmplitude;
+        gust["frequency"] = actor.worldWind.gustFrequency;
+        gust["turbulence"] = actor.worldWind.gustTurbulence;
+        break;
+    }
     default: break; // 曝光字段已由上方具名映射处理。
     }
     if (actor.type == EditorUi::EditorSceneActorType::Camera &&
-        (edit.property == P::Position || edit.property == P::Rotation))
+        (edit.property == P::Position || edit.property == P::Rotation ||
+         edit.property == P::Transform))
     {
         // look_at 在加载时优先于 rotation；变换后以实际朝向写 TRS，不能留下旧 target 覆盖新旋转。
         object["rotation"] = Vector(actor.rotation);
@@ -445,7 +484,8 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     {
         // API 草稿可能尚未应用到 live World；UI 单分量编辑不能用旧 World 的其它分量覆盖它。
         const char* field = edit.property == P::Position ? "position" : edit.property == P::Rotation ? "rotation"
-            : edit.property == P::Scale ? "scale" : edit.property == P::Color ? "color" : nullptr;
+            : edit.property == P::Scale ? "scale" : edit.property == P::Color ? "color"
+            : edit.property == P::WindDirection ? "direction" : nullptr;
         if (field)
         {
             const auto component = object.at(field).at(edit.component);

@@ -1,0 +1,23 @@
+add_executable(vl_tfx_inspect main.cpp)
+target_link_libraries(vl_tfx_inspect PRIVATE vl_hair_assets Json)
+# 离线 SDF 生成器：只读 OBJ、只写 SDF 文件，不启动引擎、不创建 Vulkan 资源。
+add_executable(vl_build_sdf buildSdf.cpp)
+target_link_libraries(vl_build_sdf PRIVATE vl_hair_assets Eigen3 Json)
+# 离线碰撞代理生成器：只读身体 OBJ、只写低模代理 OBJ，不启动引擎、不创建 Vulkan 资源。
+add_executable(vl_build_collision_proxy buildCollisionProxy.cpp)
+target_link_libraries(vl_build_collision_proxy PRIVATE vl_hair_assets Eigen3 Json)
+# 40k guide 笔刷基准：只测 CPU 采样/选择/会话分析，不注册 ctest。
+add_executable(vl_hair_brush_benchmark tressfxBrushBenchmark.cpp)
+target_link_libraries(vl_hair_brush_benchmark PRIVATE vl_hair_assets Eigen3)
+if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
+    add_executable(vl_female_fbx femaleFbx.cpp)
+    target_link_libraries(vl_female_fbx PRIVATE vl_animation_assets assimp Json)
+    if(MINGW)
+        target_link_options(vl_female_fbx PRIVATE -municode)
+    endif()
+endif()
+if(MINGW)
+    target_link_options(vl_tfx_inspect PRIVATE -municode)
+    target_link_options(vl_build_sdf PRIVATE -municode)
+    target_link_options(vl_build_collision_proxy PRIVATE -municode)
+endif()

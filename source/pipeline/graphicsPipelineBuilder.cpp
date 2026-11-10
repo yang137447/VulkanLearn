@@ -22,7 +22,7 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     if (desc.pipelineStateDesc.bUseVertexInput)
     {
         pipelineVertexInputStateCreateInfo
-            .setVertexBindingDescriptions(desc.vertexInputBindingDescription)
+            .setVertexBindingDescriptions(desc.vertexInputBindingDescriptions)
             .setVertexAttributeDescriptions(desc.vertexInputAttributeDescriptions);
     }
 

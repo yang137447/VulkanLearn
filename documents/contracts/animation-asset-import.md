@@ -47,6 +47,12 @@ ozz SkeletonBuilder 的输出顺序逐项与导入的深度优先索引核对。
 无权重骨的 offset 不参与绑定残差判定；其层级仍保留。
 这些是导入校验，不是逐帧 shader 防御。
 
+导入器在 `ReadSection()` 末尾用 `ComputeJointBindBounds()` 生成运行期姿态包围盒数据
+`SkinSection::jointBindBounds`（与 `inverseBinds` 同下标）和
+`jointBindWeightSumError`。每个关节的绑定空间 AABB 收集所有把该关节作为任一影响的
+顶点；运行期只把盒子角点变换后求并集，不再逐顶点蒙皮。该数据的语义、保守性与
+未初始化时的回退路径见 [动画播放与 GPU 蒙皮](animation-runtime-skinning.md)。
+
 ## 片段采样
 
 片段保留原始 TRS 与根轨道，再由固定 ozz AnimationBuilder 构建压缩轨道。
@@ -82,6 +88,81 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
 }
 ```
 
+需要把 GASP 动作复用到另一套角色骨架时，目标 SM 可以把动作源和显式重定向
+profile 成对声明：
+
+```json
+"skinning": {
+  "skeleton": "Maps/SC_cc5/Skeletons/SK_CC5.json",
+  "clips": [],
+  "sourceModel": "Maps/SC_gasp/Meshes/SM_gasp.json",
+  "retarget": "Maps/SC_cc5/Retarget/RT_CC5_From_GASP.json"
+}
+```
+
+这种资产中，目标 `skeleton`、网格 sections、权重、inverse bind、渲染骨架、IK
+和 bounds 归目标 SM 所有；`sourceModel` 只提供 source skeleton 上的 clips 和
+montages。`sourceModel` 必须是非 retarget 的骨骼 SM，不能再套一层
+`sourceModel`；目标也不能同时声明自己的 `clips` 或 `montages`。`retarget` 必须是
+`vl.retarget.v1`，使用显式 source/target joint mapping，不自动猜名，并且
+`sourceSkeleton`/`targetSkeleton` 必须分别等于两份 SK 的 `id`。
+
+```json
+{
+  "format": "vl.retarget.v1",
+  "sourceSkeleton": "SK_UEFN_Mannequin",
+  "targetSkeleton": "SK_CC5",
+  "sourceRoot": "root",
+  "targetRoot": "CC_Base_BoneRoot",
+  "joints": [
+    {"source": "root", "target": "CC_Base_BoneRoot"},
+    {"source": "pelvis", "target": "CC_Base_Hip"}
+  ]
+}
+```
+
+示例骨名仅说明格式；每个角色必须按实际导入的 SK 名称填写，root pair 必须显式包含
+在 `joints` 中，同一 source 或 target joint 不允许重复映射。
+
+profile 可选 `sourcePose` / `targetPose`；省略任一项表示该侧直接使用 bind pose。
+每侧只有一个具名校准姿态，名称是作者标签，不是可切换的姿态库。例如：
+
+```json
+"targetPose": {
+  "name": "AlignedToGasp",
+  "rotationOffsets": [
+    {"joint": "Shoulder_L", "rotation": [0, 0, 0.1305261922, 0.9914448614]}
+  ]
+}
+```
+
+上例骨名及角度只是格式示例。`rotation` 为有限单位四元数 `[x,y,z,w]`，
+模长误差容差 `0.0001`；校准局部旋转为 **`R_bindLocal * R_offset`**，
+即在原 bind 骨轴中右乘偏移，再由父链传播到模型空间。每个偏移须引用本侧已存在的
+非根 joint，同一侧 joint 不可重复；偏移可用于未映射的骨骼。对象要求非空 `name`
+及数组 `rotationOffsets`，拒绝该对象/偏移条目内的未知字段、缺字段或错误类型。
+索引 0 的 locomotion root 禁止作者旋转偏移，避免改变播放器根 TRS 和根运动的消费基底。
+源/目标原始 bind、权重及 inverse bind 均保持不变，偏移只构建单独的参考姿态副本。
+编辑器 JSON 形状提示由 `schema/retarget_profile.schema.json` 提供。
+独立查看页的可选 `preview` 保存资源根相对 `sourceSkeletonPath` /
+`targetSkeletonPath`，worker 检查两个 SK 身份与 profile 相同；正式运行时仍从 SM
+加载自己的 SK/FBX，不由 preview 路径重定向。
+可选 `preview.targetModelPath` 启用真实源/目标动画预览；GT 核对该目标 SM 使用当前
+RT，再从其 `sourceModel` 取得源模型，复用正式导入/重定向/蒙皮。
+标签页的测量语义见
+[UI 组件体系](ui-component-system.md#retarget-参考姿态标签)。
+骨名、重复、根约束和单位四元数仍由生产解析/加载边界核对。
+
+运行时先在 source skeleton 上采样，再按
+`R_target(t) = R_source(t) * inverse(R_sourceReference) * R_targetReference`
+求 target 模型空间旋转并还原局部姿态；source 恰为校准参考时输出 target 校准参考。
+引用模型空间参考旋转在播放器创建时编译，不逐帧重读 JSON 或重新求校准姿态。
+目标骨长、目标局部平移/缩放保留，未映射目标 joint 保留其**校准后的局部旋转**
+并继承父骨动作；未配置偏移时等于原局部 bind。
+只把 source root 相对原始 bind 的局部平移差传给 target root，
+不做身高比例缩放。两套
+骨架都要求单根、root 为 joint 0 且 parent-first 拓扑。
+
 `skinning.skeleton` 是骨骼 SM 的**必需字段**：根骨、关节表、槽位、曲线注册表都以这份 SK 为
 唯一来源。旧 `skinning.root` 已删除且没有兼容分支——出现即拒绝
 （`Mesh skinning.root is no longer supported; use skinning.skeleton`），即使同时给了
@@ -99,6 +180,8 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
 3. **FBX 网格**：`ReadMesh` 以 SK 的 `root` 为根；随后 `ValidateSkeletonAgainstMesh` 逐项
    对照关节数量、顺序、名称、父子与 `restLocal`（容差 `1e-5`）。FBX 仍是几何/权重/绑定 TRS
    的来源，SK 是权威校验清单，不反向驱动导入。
+   若声明 `sourceModel`，此时先导入非 retarget 的源 SM，再读 profile（≤4 MiB）并校验
+   两份 SK id、映射、root 和拓扑；profile 摘要及源 SM 的完整输入清单纳入目标身份。
 4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。sidecar 的
    `sequence` 字段必须等于 `clips[].id`；曲线名必须在 SK `curves` 注册、`tracks` 必须是 SK
    关节；sidecar `duration` 与 FBX `raw.duration` 差 ≤`1e-5`。摘要与路径进入缓存键与
@@ -122,9 +205,10 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
 | 0（可选） | SM 描述符路径 → `descriptorIdentity` | `ImportSections`（非空时） |
 | 1 | `skinning.skeleton` → SK 文件摘要 | loader |
 | 2 | `modelDataPath` → FBX 摘要 | loader |
-| 3 | 每个 `clips[].path` → 片段 FBX 摘要 | loader |
-| 4 | 每个 `clips[].sequence` → sidecar 摘要 | loader |
-| 5 | 每个 `montages[].path` → Montage 摘要 | loader |
+| 3（retarget 分支） | `skinning.retarget` → retarget profile 摘要 | loader |
+| 4（retarget 分支） | `skinning.sourceModel` 的完整 `sourceInputs` | loader |
+| 3 起（普通分支） | 每个 `clips[].path` → 片段 FBX 摘要，其后紧跟可选 sidecar 摘要 | loader |
+| 逐 clip 之后（普通分支） | 每个 `montages[].path` → Montage 摘要 | loader |
 
 Motion Matching 数据库的 `CaptureMotionDatabaseInputs` 也把 `skinning.skeleton` 指向的 SK
 文件摘要加入输入清单（在源/schema/model/FBX 之后、member FBX 之前）；改 SK 会改变
@@ -132,7 +216,9 @@ Motion Matching 数据库的 `CaptureMotionDatabaseInputs` 也把 `skinning.skel
 
 ## 缓存键
 
-`modelCacheKey` 由规划层与 loader 分两段拼接（各段以 `|` 连接），顺序固定：
+`modelCacheKey` 由规划层与 loader 分两段拼接（各段以 `|` 连接）。规划层先写
+sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK 摘要，
+随后写 retarget 分支或普通分支的摘要：
 
 | 段 | 内容 | 写入时机 |
 | --- | --- | --- |
@@ -141,13 +227,17 @@ Motion Matching 数据库的 `CaptureMotionDatabaseInputs` 也把 `skinning.skel
 | `clip=<id>:<path>` | 每个 clip 一项，按 `clips[]` 顺序 | 规划层 |
 | `sequence=<id>:<path>` | 每个带 `sequence` 的 clip 一项 | 规划层 |
 | `montage=<path>` | 每个 Montage 一项，按 `montages[]` 顺序 | 规划层 |
+| `animationSourceModel=<path>` | retarget 目标的 sourceModel 路径 | 规划层 |
+| `retarget=<path>` | retarget profile 路径 | 规划层 |
 | `skeletonBlake3=<hex>` | SK 文件摘要 | loader |
 | `sequenceBlake3=<id>:<hex>` | 每个 sidecar 一项 | loader |
 | `montageBlake3=<id>:<hex>` | 每个 Montage 一项 | loader |
+| `retargetBlake3=<hex>` | retarget profile 摘要 | loader |
+| `animationInput=<path>:<hex>` | sourceModel 的每个 source input | loader |
 | `generateSmoothNormals`、`section=<name>` | 静态导入选项（骨骼导入拒绝这些选项） | 规划层 |
 
-旧 `|skinning=<root>` 段随 `skinning.root` 一起删除；骨骼 SM 的最小键是
-`<modelDataPath>|skeleton=<SK path>|clip=<id>:<path>`。
+旧 `|skinning=<root>` 段随 `skinning.root` 一起删除；无片段骨骼 SM 的最小规划键是
+`<modelDataPath>|skeleton=<SK path>`，普通动画资产再按序追加 clip 项。
 
 `MeshAnimationClipPlan::sequenceDigest`、`MeshAnimationMontagePlan::digest` 由 loader 回填，
 随导入计划一起发布，供调用方核对同一代资产；渲染资源缓存以 `modelCacheKey` 为键。
@@ -169,7 +259,7 @@ Motion Matching 数据库的 `CaptureMotionDatabaseInputs` 也把 `skinning.skel
 
 ## 验证
 
-根 GoogleTest 目标 `animation_preflight_tests`（255 项）中，`SkeletalImport`（30 项）覆盖
+根 GoogleTest 目标 `animation_preflight_tests` 中，`SkeletalImport`（30 项）覆盖
 手算轴向、父骨保留、九影响权重、MikkTSpace 展开、绑定姿态、缺轨、根位移、
 旋转/缩放和损坏资产拒绝；`AnimationSkeleton`（17 项）覆盖 SK 拓扑/槽位/曲线注册表、
 FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（14 项）
@@ -178,6 +268,11 @@ FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSeq
 装配/target 旋转/Static pose/section link/入口 `startTime`；`MotionWarping`（28 项）覆盖
 平移、旋转与 Static/Bone warp point；`NotifyPlayback`（11 项）覆盖 notify 执行。测试通过
 根 helper 注册，没有新增 runtime test 标志。
+
+`AnimationRetarget` 覆盖显式映射/骨架拓扑拒绝、不同 rest axes/骨长、未映射骨、
+根平移差、source 采样与 target palette、in-place/混合、source Montage/catalog、
+不完整 source/profile 与嵌套 source 拒绝、descriptor 配对/cache key，
+以及 retarget Motion Matching 在磁盘访问前拒绝。
 
 资源侧三层资产已在 `Maps/SC_gasp/` 提交：SK 35457 B（91 物理骨 + 2 虚拟骨、13 条曲线
 注册、`DefaultSlot`）；**31 个** `Source/*.anim.json` 共 829,022 B，**19 个**

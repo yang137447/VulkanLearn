@@ -1,6 +1,8 @@
-add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests.cpp
+add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scriptBlueprintAuthoringTests.cpp
     scriptGameplayTests.cpp scriptAssetReloadTests.cpp scriptAssemblyReloadTests.cpp scriptBuildTests.cpp
     scriptPhysicsMeshGeometryTests.cpp
+    scriptTerrainCollisionTests.cpp
+    worldBuilderTerrainCollisionTests.cpp
     scriptAnimationTests.cpp
     scriptTemplateExtensionTests.cpp
     scriptTimeTests.cpp
@@ -22,11 +24,19 @@ add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
     "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptRuntime.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptAssemblyMigration.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptBuildService.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptPhysics.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp"
+    "${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp"
+    "${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/loading/worldBuilder.cpp"
+    "${PROJECT_SOURCE_DIR}/source/render/shadow/csmSettings.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldAnimation.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
@@ -35,11 +45,13 @@ add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests
     "${PROJECT_SOURCE_DIR}/source/engine/diagnosticsSubsystem.cpp")
 target_include_directories(script_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
 target_compile_definitions(script_tests PRIVATE VL_WITH_EDITOR=1)
-# 动态足部质量夹具让该翻译单元超过 MinGW COFF section/文件上限；只放宽该目标文件格式。
+# 足部质量、放置行为与动态足部质量夹具超过 MinGW COFF section/文件上限；
+# 只放宽这些目标文件格式。
 if(MINGW)
-    set_source_files_properties(scriptAnimationTests.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+    set_source_files_properties(scriptAnimationTests.cpp scriptRuntimeTests.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
-target_link_libraries(script_tests PRIVATE vl_script_host vl_animation_assets vl_debug_draw assimp Eigen3 Json Vulkan::Vulkan vl_offline_core BLAKE3::blake3)
+target_link_libraries(script_tests PRIVATE vl_script_host vl_animation_assets vl_debug_draw assimp Eigen3 Json Vulkan::Vulkan vl_offline_core BLAKE3::blake3 Jolt)
 if(TARGET vl_gameplay)
     add_custom_target(vl_script_fixtures
         COMMAND "${VULKANLEARN_DOTNET_EXECUTABLE}" build

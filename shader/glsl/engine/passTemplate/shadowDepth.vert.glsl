@@ -19,6 +19,11 @@ layout(location = 7) in vec2 inTexCoord1;
 layout(location = 4) in vec4 inTangent;
 layout(location = 5) in vec4 inSpeedTreeWindBranch1;
 layout(location = 6) in vec4 inSpeedTreeWindBranch2;
+layout(location = 8) in vec4 inInstanceModel0;
+layout(location = 9) in vec4 inInstanceModel1;
+layout(location = 10) in vec4 inInstanceModel2;
+layout(location = 11) in vec4 inInstanceModel3;
+layout(location = 12) in vec4 inInstanceParams;
 
 #if MATERIAL_USES_OPACITY_MASK
 layout(location = 0) out MaterialVaryings v2f;
@@ -40,12 +45,15 @@ void main()
     vertexInput.localTangent = inTangent;
     vertexInput.speedTreeWindBranch1 = inSpeedTreeWindBranch1;
     vertexInput.speedTreeWindBranch2 = inSpeedTreeWindBranch2;
+    vertexInput.instanceParams = inInstanceParams;
 
 #if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
     ApplySkinnedVertexFactory(vertexInput);
 #endif
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
-    mat4 modelMatrix = uboM.model;
+    mat4 instanceModel = mat4(
+        inInstanceModel0, inInstanceModel1, inInstanceModel2, inInstanceModel3);
+    mat4 modelMatrix = uboM.model * instanceModel;
     vec4 worldPosition = modelMatrix * vec4(vertex.localPosition, 1.0);
     gl_Position = uboVP.projection * uboVP.view * worldPosition;
 

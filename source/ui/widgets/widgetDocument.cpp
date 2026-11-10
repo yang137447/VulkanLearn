@@ -1,6 +1,7 @@
 #include "ui/widgets/widgetDocument.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <utility>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -48,6 +49,24 @@ void WidgetDocument::SetMarkup(const std::string& id, std::string markup)
     if (cached != markupCache.end() && cached->second == markup) return;
     if (auto* element = document->GetElementById(id))
     {
+        // 诊断：markup 必须只承载结构。若调用方把实时值拼进 markup，替换会销毁
+        // 正在拖动的滑块/正在输入的文本；焦点在这里给出明确信号。
+        if (auto* focus = document->GetContext()->GetFocusElement())
+        {
+            bool focusedInside = false;
+            for (Rml::Element* ancestor = focus; ancestor != nullptr;
+                ancestor = ancestor->GetParentNode())
+            {
+                if (ancestor == element)
+                {
+                    focusedInside = true;
+                    break;
+                }
+            }
+            if (focusedInside)
+                std::fprintf(stderr,
+                    "[WidgetDocument] SetMarkup replaced focused subtree: %s\n", id.c_str());
+        }
         InvalidateDescendants(*element);
         // RmlUi 将 option 移到内部 widget；替换 DOM 不会自动清理旧选项。
         if (auto* selector = dynamic_cast<Rml::ElementFormControlSelect*>(element))
@@ -78,8 +97,11 @@ void WidgetDocument::SetControlValue(const std::string& id, const std::string& v
     if (document == nullptr) return;
     Rml::Element* element = document->GetElementById(id);
     auto* control = dynamic_cast<Rml::ElementFormControl*>(element);
-    // 文本可处于未完成状态；只有非焦点控件才接收快照，不抢夺用户输入。
-    if (control == nullptr || document->GetContext()->GetFocusElement() == control) return;
+    // 文本输入可处于未完成状态；只有这类焦点控件才拒绝快照。
+    // select 的焦点只表示菜单归属，文档切换后仍必须接收新的选择状态。
+    if (control == nullptr) return;
+    if (document->GetContext()->GetFocusElement() == control &&
+        dynamic_cast<Rml::ElementFormControlInput*>(control) != nullptr) return;
     if (ReportsSameValue(element, control->GetValue(), value)) return;
     control->SetValue(value);
 }

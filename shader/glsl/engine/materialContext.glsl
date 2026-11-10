@@ -9,11 +9,15 @@ struct MaterialVertexInput
     vec3 localNormal;
     vec4 vertexColor;
     vec2 texCoord;
-    // texCoord1 只表示资产真实存在的第二套 UV；导入链路不会用 UV0 合成该通道。
+    // 普通网格只传真实 UV1；TressFX 原始流在工厂前为半径/根梢参数，
+    // 工厂消费后转换为 ribbon UV，不能把这套特殊 ABI 用在 StaticMesh 上。
     vec2 texCoord1;
     vec4 localTangent;
     vec4 speedTreeWindBranch1;
     vec4 speedTreeWindBranch2;
+    // per-instance 参数：x=windPhase, y=lodBias, z=variant, w=seed。
+    // 当前静态实例只透传；后续自有风系统从这里取相位/种子。
+    vec4 instanceParams;
 };
 
 struct MaterialVertex
@@ -24,6 +28,7 @@ struct MaterialVertex
     vec2 texCoord;
     vec2 texCoord1;
     vec4 localTangent;
+    vec4 instanceParams;
 };
 
 MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
@@ -35,6 +40,7 @@ MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
     vertex.texCoord = vertexInput.texCoord;
     vertex.texCoord1 = vertexInput.texCoord1;
     vertex.localTangent = vertexInput.localTangent;
+    vertex.instanceParams = vertexInput.instanceParams;
     return vertex;
 }
 

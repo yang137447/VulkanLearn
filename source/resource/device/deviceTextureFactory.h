@@ -26,6 +26,7 @@ struct DeviceTextureResource
     vk::Image image;
     vk::DeviceMemory imageMemory;
     uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;
     vk::Format format = vk::Format::eUndefined;
 };
 

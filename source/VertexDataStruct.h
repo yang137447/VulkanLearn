@@ -30,11 +30,24 @@ struct Vertex
         : position(pos), normal(nor), color(col), texCoord(tex), tangent(tan) {}
 };
 
+// 静态植被/石头实例流。矩阵按列主序存放，四列对应 location 8..11 的四个 vec4；
+// params 留给逐实例参数：x=windPhase, y=lodBias, z=variant, w=seed。
+// 风系统后续可以直接消费 windPhase/seed，不需要再改顶点 ABI。
+struct InstanceVertex
+{
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector4f params = Eigen::Vector4f::Zero();
+};
+
+static_assert(sizeof(InstanceVertex) == 80, "InstanceVertex ABI must stay 80 bytes");
+static_assert(offsetof(InstanceVertex, params) == 64, "InstanceVertex params offset must stay 64");
+
 namespace VertexInfo{
-    static vk::VertexInputBindingDescription vertexInputBindingDescription = {
-        0, // binding
-        sizeof(Vertex), // stride
-        vk::VertexInputRate::eVertex, // inputRate
+    static std::vector<vk::VertexInputBindingDescription> vertexInputBindingDescriptions = {
+        vk::VertexInputBindingDescription(
+            0, sizeof(Vertex), vk::VertexInputRate::eVertex),
+        vk::VertexInputBindingDescription(
+            1, sizeof(InstanceVertex), vk::VertexInputRate::eInstance),
     };
 
     static std::vector<vk::VertexInputAttributeDescription> vertexInputAttributeDescriptions = {
@@ -93,6 +106,23 @@ namespace VertexInfo{
             0, // binding
             vk::Format::eR32G32B32A32Sfloat, // format
             offsetof(Vertex, speedTreeWindBranch2) // offset
-        )
+        ),
+        // per-instance model：四列 mat4。
+        vk::VertexInputAttributeDescription(
+            8, 1, vk::Format::eR32G32B32A32Sfloat,
+            offsetof(InstanceVertex, model) + 0),
+        vk::VertexInputAttributeDescription(
+            9, 1, vk::Format::eR32G32B32A32Sfloat,
+            offsetof(InstanceVertex, model) + 16),
+        vk::VertexInputAttributeDescription(
+            10, 1, vk::Format::eR32G32B32A32Sfloat,
+            offsetof(InstanceVertex, model) + 32),
+        vk::VertexInputAttributeDescription(
+            11, 1, vk::Format::eR32G32B32A32Sfloat,
+            offsetof(InstanceVertex, model) + 48),
+        // per-instance 参数，当前只透传给材质；风接入时直接使用。
+        vk::VertexInputAttributeDescription(
+            12, 1, vk::Format::eR32G32B32A32Sfloat,
+            offsetof(InstanceVertex, params)),
     };
-} // namespace VertexFormat
+} // namespace VertexInfo

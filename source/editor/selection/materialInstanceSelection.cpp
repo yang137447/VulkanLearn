@@ -216,6 +216,9 @@ MaterialInstanceModelContext AggregateSceneModel(
         {
             continue;
         }
+        if (drawPacket.isTerrain)
+            model.actorIdentity =
+                "terrain|" + std::string(objectIdentity);
 
         if (model.displayName.empty())
         {

@@ -262,7 +262,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
 
     void ConfigureScene()
     {
-        auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, cache, 4));
+        auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, 4));
         // 粒子预览使用 SC_particle_preview 自带相机；ModelPreviewCamera 只认识
         // SC_model_preview 的模型包围盒，不能套到固定粒子预览场景上。
         if (!particleAssetThumbnail)
@@ -480,7 +480,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 if (!LoadPreviewMesh(plan.sceneJson.at("objects").at(object.objectIndex),
                     *object.meshLoadRequest, context, loaded)) break;
                 plan.meshObjectPlans.insert(plan.meshObjectPlans.end(), loaded.objectPlans.begin(), loaded.objectPlans.end());
-                if (loaded.speedTreeWindProfile) plan.speedTreeWindProfiles.push_back(*loaded.speedTreeWindProfile);
+                if (loaded.windResponseProfile) plan.windResponseProfiles.push_back(*loaded.windResponseProfile);
                 ++objectIndex;
             }
             else ++stage;

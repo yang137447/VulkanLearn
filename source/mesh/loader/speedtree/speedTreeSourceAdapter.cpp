@@ -314,7 +314,7 @@ namespace
         return ReadU32LE(data, ReadOakTableFieldAddress(data, tableOffset, fieldIndex)) != 0;
     }
 
-    SpeedTreeWindCurve ReadOakWindCurve(
+    WindResponseCurve ReadOakWindCurve(
         const std::vector<uint8_t>& data,
         size_t curveOffset,
         const char* curveName)
@@ -329,7 +329,7 @@ namespace
                 "' is not the expected 20-point curve");
         }
 
-        SpeedTreeWindCurve curve;
+        WindResponseCurve curve;
         for (uint32_t curveIndex = 0; curveIndex < ExpectedCurveCount; ++curveIndex)
         {
             curve.values[curveIndex] = ReadF32LE(data, curveOffset + 4 + static_cast<size_t>(curveIndex) * 4);
@@ -337,12 +337,12 @@ namespace
         return curve;
     }
 
-    SpeedTreeWindBranchConfig ReadOakWindBranchConfig(
+    WindResponseLayer ReadOakWindBranchConfig(
         const std::vector<uint8_t>& data,
         size_t tableOffset,
         const char* branchName)
     {
-        SpeedTreeWindBranchConfig branch;
+        WindResponseLayer branch;
         branch.bend = ReadOakWindCurve(
             data,
             ReadOakTableFieldAddress(data, tableOffset, 0),
@@ -367,11 +367,11 @@ namespace
         return branch;
     }
 
-    SpeedTreeWindRippleConfig ReadOakWindRippleConfig(
+    WindResponseRipple ReadOakWindRippleConfig(
         const std::vector<uint8_t>& data,
         size_t tableOffset)
     {
-        SpeedTreeWindRippleConfig ripple;
+        WindResponseRipple ripple;
         ripple.planar = ReadOakWindCurve(
             data,
             ReadOakTableFieldAddress(data, tableOffset, 0),
@@ -393,13 +393,13 @@ namespace
         return ripple;
     }
 
-    SpeedTreeWindConfig ReadOakWindConfig(const std::vector<uint8_t>& data)
+    WindResponse ReadOakWindConfig(const std::vector<uint8_t>& data)
     {
         // Runtime SDK exports from Modeler 10.0 and 10.2 place the Games 9
         // 20-field wind configuration at root index 10. Keep the version
         // whitelist explicit until another format version is inspected.
         const size_t windTableOffset = ReadOakRootTableAddress(data, 10);
-        SpeedTreeWindConfig wind;
+        WindResponse wind;
 
         const size_t commonTableOffset = ReadOakTableFieldAddress(data, windTableOffset, 0);
         wind.common.strengthResponse = ReadOakTableFieldFloat(data, commonTableOffset, 0);
@@ -1054,7 +1054,7 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
     sourceData.vertexPackerProgram = "Standard.lua";
     sourceData.materialNames = materialNames;
     const auto sourceBounds = ReadOakSourceBounds(data);
-    const SpeedTreeWindConfig windConfig = ReadOakWindConfig(data);
+    const WindResponse windConfig = ReadOakWindConfig(data);
     const size_t blockIndex = SelectHighestLodBlockIndex(blocks);
     const GeometryBlock& block = blocks[blockIndex];
     std::vector<MaterialSection> sections = block.sections;

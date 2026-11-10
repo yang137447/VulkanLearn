@@ -27,10 +27,24 @@ add_executable(vl_renderer_backend_tests
     volumetric_fog_test.cpp
     light_culling_test.cpp
     pass_pipeline_contract_test.cpp
-    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
-    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/shadow/localShadowMath.cpp
     ${PROJECT_SOURCE_DIR}/source/render/lightCulling/lightCulling.cpp
+    buffer_to_image_regions_test.cpp
+    frame_epoch_ring_test.cpp
+    terrain_feedback_pass_test.cpp
+    terrain_feedback_readback_test.cpp
+    terrain_layer_atlas_gpu_test.cpp
+    gpu_pass_timings_test.cpp
+    performance_snapshot_test.cpp
+    cpu_frame_profiler_test.cpp
+    shadow_caster_cull_test.cpp
+    skin_deform_test.cpp
+    speedtree_wind_system_test.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/shadow/shadowCasterCull.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/foliage/speedTreeWindSystem.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
 )
 target_include_directories(vl_renderer_backend_tests PRIVATE ${CMAKE_SOURCE_DIR}/source)
 target_link_libraries(vl_renderer_backend_tests PRIVATE Vulkan::Vulkan Json Eigen3)

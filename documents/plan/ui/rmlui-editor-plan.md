@@ -2,6 +2,9 @@
 
 日期：2026-10-11。当前工作分支：`codex/rmlui-editor`。
 
+地形笔刷、层库与 Landscape 停靠页的后续阶段见
+[地形笔刷与层库 UI 计划](terrain-brush-layer-ui-plan.md)；本文不重复其阶段划分。
+
 ## 隔离方式
 
 代码基于原仓库已提交 HEAD 建立独立 worktree，不包含原工作目录未提交开发。
@@ -24,8 +27,9 @@
   网格/列表、排序、类型筛选、三档卡片尺寸与显式 Refresh；
   索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选择，双击 MI 保持可编辑，
   双击 Scene 复用现有 World/RenderGraph 事务切换关卡并打开只读 JSON inspector；
-  双击 Mesh、Texture、Terrain 进入独立资源编辑器标签，展示类型预览占位和只读 JSON
-  Details；不加载模型、纹理像素或 `data` 引用。
+  双击 Mesh、Texture 进入独立资源编辑器标签，展示类型预览占位和只读 JSON
+  Details；双击 Terrain 进入可编辑 TR 资产页（顶层字段 + layers 表），保存/回退
+  走 `terrain.*` 标准资产命令。非 TR 页不加载模型、纹理像素或 `data` 引用。
 - JSON inspector 支持字段展开、路径/值搜索、诊断和每页最多 64 行；
   任意层级的 `data` 字段及子树不展示、不保留，不读取引用的 payload 文件。
   内嵌 data 仍做语法/输入校验，并非完全跳过其字节读取或词法解析。
@@ -98,11 +102,11 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
    原生多窗口仍是后续能力。
 3. 独立视口：本批完成 renderer-owned 场景纹理、相机 aspect、拾取坐标、
    离线显示和既有 resize 生命周期；自适应 backing 分辨率仍是后续能力。
-4. 场景文档：本轮已完成只读的 World actor 树与 actor Details（含两条既有运行时命令）；
-   通过命令增删对象、编辑 Transform，并用 gizmo 驱动同一事务仍是后续。
+4. 场景文档：已完成 World actor 树、actor Details、完整 TRS 编辑与关卡三轴 gizmo；
+   通过命令增删/复制/改名对象仍是后续。
 5. Undo/Redo：以文档命令为单位，覆盖多字段 batch、脏状态和预览恢复；
    不从 UI 回调直接修改 World。
-6. 资产工作流：本批已完成五类 JSON 目录、Mesh/Texture/Terrain 资源标签和非 MI 只读查看；
+6. 资产工作流：已五类 JSON 目录、Mesh/Texture 只读资源标签、Terrain 可编辑 TR 页和非 MI 只读查看；
    通用资产注册/导入、真实缩略图、模型几何预览、拖放、纹理像素查看器和
    明确色彩空间的调色板仍属后续能力。Scene 切换仍不等于场景文档编辑。
 
@@ -114,20 +118,38 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 
 - 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名；
   场景文档阶段（第 4 项）要连命令、Transform 编辑和 gizmo 一起做。
-- 完全没有 Undo/Redo（第 5 项）；`Edit` 菜单里的 Undo/Redo 只是常驻禁用的占位。
+- Scene 变换与 Blueprint 有各自的有界文档 Undo/Redo；跨资产历史、Actor 增删/改名
+  和 Terrain Sculpt 与 Scene 历史合并仍未实现。
 - 逐 actor 可见性只有运行时语义：开关不写场景 JSON、`SceneAssetValidator` 不认识、
   没有 `SaveVisibilityToScene`；重载场景一律全部可见。
   持久化属于场景文档阶段，和 transform 编辑同一批。
   第 7 批已修正它的多 section 边界（整 actor 写入，见下节），语义本身未变。
-- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时。
+- 地形编辑：TR 资产页、Sculpt Raise/Lower/Smooth、脏 chunk 重建与会话 Undo 已接入；
+  仍缺 layer weight paint、高度图/层纹理预览和 Sculpt 结果写回高度图。
 - 大纲行窗口化只覆盖世界 actor 树；通用 `TreeRow` 组件、模型树与 Sources 树仍整棵挂载。
   改名、拖放、重父级、多选都不存在。
 - 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
 - 没有原生多窗口，没有 IME。
 - 场景仍按 swapchain 全尺寸渲染，UI 以完整 UV 采样；视口不是按停靠尺寸渲染。
 - 材质实例的纹理覆盖只在保存 JSON 后生效，不做 live descriptor 替换。
-- 视口工具条的变换工具与坐标系没有渲染后端；Wireframe 没有 wireframe 光栅模式，
-  也没有对应的 debug view。
+- 关卡视口的变换工具与坐标系已接 gizmo；资源编辑器模型预览标签仍只有本地高亮。
+  Wireframe 没有 wireframe 光栅模式，也没有对应的 debug view。
+
+### 2026-11-01 地形分支补记
+
+上面“2026-10-11 核对”是当时的快照；地形分支改变了其中几项，后续不要再按旧结论推导：
+
+- 关卡视口已有 Move/Rotate/Scale gizmo、World/Local、吸附，以及拖拽松手后的一条
+  Scene Undo；Actor 的增/删/复制/改名、多选与拖放仍然不存在。
+- Terrain 页与运行时链路已接通：TR 顶层/图层字段、LOD/分页、heightmap 预览
+  （PNG/JPG/BMP/TGA；EXR 显示不可用）、Sculpt（含带 layers 的地形）与脏 chunk
+  重建、Save Heightmap、Paint（图层/Erase/覆盖页重烘焙），以及显式 `paintPath`
+  指向 `.vlpaint` 的 Save Paint 持久化。
+- 内容浏览器已有真实缩略图渲染（EditorThumbnailLibrary / EditorThumbnailRenderSession）。
+  缩略图预览网格与纹理在主线程同步加载，Debug 构建下打开/刷新面板会出现明显停顿；
+  这是既有性能问题，不是地形编辑独有。
+- 仍然没有：Terrain Sculpt/Paint 的会话 undo 合并进 Edit 菜单的 Scene 历史、
+  Play 中实时重建 Jolt 地形碰撞、层纹理/source-set 预览。
 
 ## 验证边界
 
@@ -326,7 +348,7 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
   **同一选择连跑两次都是 262/262**，没有出现间歇失败。
 - `ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure`
   **22/22 通过**，与基线一致；材质槽 → MI 文档流程与视口拾取描边未回归
-  （mesh actor 与材质槽仍走原来的 `RequestModelSelection` / `RequestMaterialSelection`）。
+  （mesh/Terrain actor 与材质槽仍走原来的 `RequestModelSelection` / `RequestMaterialSelection`）。
 - 出图：从仓库根用 `--dev-ui` 启动 `main.exe` 后，由
   `artifacts/rmlui-editor/outliner_probe.py`（gitignored）用 `SendInput` 驱动真实窗口、
   经 `tool/validation/console_inject.ps1` 注入 `screenshot`，再用

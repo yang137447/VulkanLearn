@@ -17,6 +17,10 @@ Montage id、target 位置/可选世界旋转与 loop/rate/inPlace 播放参数�
 骨名/warp 布尔/旋转方法全部来自 Montage 资产；C# 不持有窗口的激活/顺序/进度状态，
 也不做窗口提取、顺序应用、target 换算、骨偏移、平移或旋转 warp 数学。
 
+retarget 目标播放器传入 `AnimationAsset()` 的 source skeleton 和 source clip：
+Bone provider 的骨名、末帧偏移及根轨道都保持 source 语义，目标骨长不参与 warp point
+重算。因此普通 Montage 能播放不代表不同身材角色的手脚接触位置已通过校正。
+
 | 职责 | 所有者 | 可核对位置 |
 | --- | --- | --- |
 | 按资产顺序装配窗口；不排序、不去重 | `BuildMontageWarpWindows` | `source/animation/animationScriptData.cpp` |

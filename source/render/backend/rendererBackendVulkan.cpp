@@ -13,6 +13,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "pipeline/graphicsPipelineBuilder.h"
 #include "profiler.h"
+#include "render/backend/frameEpochRing.h"
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererThumbnailImages.h"
@@ -214,9 +215,10 @@ void RendererBackendVulkan::CollectThumbnailImages()
 
 void RendererBackendVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
-    SDL_Window* window)
+    SDL_Window* window,
+    VL::PresentModePreference presentMode)
 {
-    rhiDevice->Initialize(instanceExtensions, window);
+    rhiDevice->Initialize(instanceExtensions, window, presentMode);
     frameFenceEpochs.assign(rhiDevice->GetFrameFenceCount(), 0);
     initialized = true;
 }
@@ -553,6 +555,11 @@ uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
     return rhiDevice->GetGraphicsTimestampValidBits();
 }
 
+bool RendererBackendVulkan::SupportsTimestampQueries()
+{
+    return rhiDevice->SupportsTimestampQueries();
+}
+
 bool RendererBackendVulkan::SupportsDualSourceBlend() const
 {
     // 材质加载只读取 backend 的能力快照，避免把 Vulkan 设备细节泄漏到资源层。
@@ -582,6 +589,14 @@ void RendererBackendVulkan::ReadTimestampQueryPair(
     std::array<uint64_t, 2>& timestamps)
 {
     rhiDevice->ReadTimestampQueryPair(queryPool, firstQuery, timestamps);
+}
+
+bool RendererBackendVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    return rhiDevice->TryReadTimestampQueryPair(queryPool, firstQuery, timestamps);
 }
 
 RHIBufferHandle RendererBackendVulkan::RequireBufferHandle(vk::Buffer buffer) const
@@ -672,7 +687,8 @@ void RendererBackendVulkan::CreatePerSwapchainBufferSet(
     vk::DeviceSize bufferSize,
     vk::BufferUsageFlags usage,
     vk::MemoryPropertyFlags memoryPropertyFlags,
-    const std::string& debugNamePrefix)
+    const std::string& debugNamePrefix,
+    bool mapMemory)
 {
     if (bufferSize == 0)
     {
@@ -706,9 +722,46 @@ void RendererBackendVulkan::CreatePerSwapchainBufferSet(
         bufferSet.bufferHandles[i] = bufferHandle;
         bufferSet.buffers[i] = bufferResource.buffer;
         bufferSet.bufferMemories[i] = bufferResource.memory;
-        bufferSet.buffersMapped[i] = rhiDevice->MapBufferMemory(bufferHandle, bufferSize);
+        // device-local 内存不可 map；调用方按用途选择是否保留主机映射。
+        bufferSet.buffersMapped[i] = mapMemory
+            ? rhiDevice->MapBufferMemory(bufferHandle, bufferSize)
+            : nullptr;
     }
 
+    SetupDescriptorBufferInfos(bufferSet);
+}
+
+void RendererBackendVulkan::CreateBufferSet(
+    Buffer& bufferSet,
+    vk::DeviceSize bufferSize,
+    vk::BufferUsageFlags usage,
+    vk::MemoryPropertyFlags memoryPropertyFlags,
+    const std::string& debugName,
+    bool mapMemory)
+{
+    if (bufferSize == 0)
+    {
+        throw std::invalid_argument(
+            "RendererBackendVulkan cannot create a zero-sized buffer set: " +
+            debugName);
+    }
+
+    if (!bufferSet.buffers.empty())
+    {
+        DestroyBufferSet(bufferSet);
+    }
+
+    RHIBufferHandle bufferHandle = rhiDevice->CreateBuffer(
+        bufferSize, usage, memoryPropertyFlags, debugName);
+    BindBufferHandle(bufferHandle);
+    const VulkanBufferResource& bufferResource = rhiDevice->GetVulkanBufferResource(bufferHandle);
+
+    bufferSet.bufferHandles = { bufferHandle };
+    bufferSet.buffers = { bufferResource.buffer };
+    bufferSet.bufferMemories = { bufferResource.memory };
+    bufferSet.buffersMapped = {
+        mapMemory ? rhiDevice->MapBufferMemory(bufferHandle, bufferSize) : nullptr };
+    bufferSet.bufferSize = static_cast<uint32_t>(bufferSize);
     SetupDescriptorBufferInfos(bufferSet);
 }
 
@@ -1121,6 +1174,8 @@ std::pair<vk::Image, vk::DeviceMemory> RendererBackendVulkan::CreateImage(
     const VulkanImageResource& imageResource = rhiDevice->GetVulkanImageResource(imageHandle);
     imageDebugNamesByImage[static_cast<VkImage>(imageResource.image)] =
         debugName;
+    imageExtentsByImage[static_cast<VkImage>(imageResource.image)] =
+        vk::Extent2D{ width, height };
     return { imageResource.image, imageResource.memory };
 }
 
@@ -1134,7 +1189,20 @@ std::pair<vk::Image, vk::DeviceMemory> RendererBackendVulkan::CreateImage(
     const VulkanImageResource& imageResource = rhiDevice->GetVulkanImageResource(imageHandle);
     imageDebugNamesByImage[static_cast<VkImage>(imageResource.image)] =
         debugName;
+    imageExtentsByImage[static_cast<VkImage>(imageResource.image)] =
+        vk::Extent2D{
+            createInfo.extent.width,
+            createInfo.extent.height };
     return { imageResource.image, imageResource.memory };
+}
+
+vk::Extent2D RendererBackendVulkan::GetImageExtent(vk::Image image) const
+{
+    const auto found =
+        imageExtentsByImage.find(static_cast<VkImage>(image));
+    return found != imageExtentsByImage.end()
+        ? found->second
+        : vk::Extent2D{0, 0};
 }
 
 void RendererBackendVulkan::TransitionImageLayout(
@@ -1143,6 +1211,7 @@ void RendererBackendVulkan::TransitionImageLayout(
     vk::Format format,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
     uint32_t layerCount)
 {
     rhiDevice->TransitionImageLayout(
@@ -1151,6 +1220,7 @@ void RendererBackendVulkan::TransitionImageLayout(
         format,
         oldLayout,
         newLayout,
+        baseArrayLayer,
         layerCount);
 }
 
@@ -1355,9 +1425,155 @@ void RendererBackendVulkan::CopyBufferToImage(
     vk::Buffer buffer,
     vk::Image image,
     uint32_t width,
-    uint32_t height)
+    uint32_t height,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes,
+    uint32_t bufferRowLength)
 {
-    rhiDevice->CopyBufferToImage(RequireBufferHandle(buffer), RequireImageHandle(image), width, height);
+    rhiDevice->CopyBufferToImage(
+        RequireBufferHandle(buffer),
+        RequireImageHandle(image),
+        width,
+        height,
+        baseArrayLayer,
+        layerCount,
+        layerBytes,
+        bufferRowLength);
+}
+
+void RendererBackendVulkan::CopyBufferToImageRegion(
+    vk::Buffer buffer,
+    vk::Image image,
+    vk::DeviceSize bufferOffset,
+    uint32_t bufferRowLength,
+    uint32_t imageOffsetX,
+    uint32_t imageOffsetY,
+    uint32_t width,
+    uint32_t height,
+    uint32_t mipLevel,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes)
+{
+    rhiDevice->CopyBufferToImageRegion(
+        RequireBufferHandle(buffer),
+        RequireImageHandle(image),
+        bufferOffset,
+        bufferRowLength,
+        imageOffsetX,
+        imageOffsetY,
+        width,
+        height,
+        mipLevel,
+        baseArrayLayer,
+        layerCount,
+        layerBytes);
+}
+
+void RendererBackendVulkan::CopyBufferToImageRegions(
+    vk::Buffer buffer,
+    vk::Image image,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    rhiDevice->CopyBufferToImageRegions(
+        RequireBufferHandle(buffer),
+        RequireImageHandle(image),
+        regions);
+}
+
+void RendererBackendVulkan::RecordTransitionImageLayout(
+    vk::CommandBuffer commandBuffer,
+    vk::Image image,
+    uint32_t mipLevels,
+    vk::Format format,
+    vk::ImageLayout oldLayout,
+    vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    rhiDevice->RecordTransitionImageLayout(
+        commandBuffer,
+        RequireImageHandle(image),
+        mipLevels,
+        format,
+        oldLayout,
+        newLayout,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RendererBackendVulkan::RecordCopyBufferToImageRegions(
+    vk::CommandBuffer commandBuffer,
+    vk::Buffer buffer,
+    vk::Image image,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    rhiDevice->RecordCopyBufferToImageRegions(
+        commandBuffer,
+        RequireBufferHandle(buffer),
+        RequireImageHandle(image),
+        regions);
+}
+
+void RendererBackendVulkan::RecordClearColorImage(
+    vk::CommandBuffer commandBuffer,
+    vk::Image image,
+    vk::ImageLayout layout,
+    vk::ClearColorValue clearValue,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    rhiDevice->RecordClearColorImage(
+        commandBuffer,
+        RequireImageHandle(image),
+        layout,
+        clearValue,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RendererBackendVulkan::RecordCopyImageRegions(
+    vk::CommandBuffer commandBuffer,
+    vk::Image source,
+    vk::Image destination,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    rhiDevice->RecordCopyImageRegions(
+        commandBuffer,
+        RequireImageHandle(source),
+        RequireImageHandle(destination),
+        regions);
+}
+
+void RendererBackendVulkan::CopyImageRegions(
+    vk::Image source,
+    vk::Image destination,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    rhiDevice->CopyImageRegions(
+        RequireImageHandle(source),
+        RequireImageHandle(destination),
+        regions);
+}
+
+void RendererBackendVulkan::RecordCopyImageToBuffer(
+    vk::CommandBuffer commandBuffer,
+    vk::Image image,
+    vk::Buffer buffer,
+    uint32_t width,
+    uint32_t height,
+    bool flipY,
+    vk::DeviceSize rowBytes)
+{
+    rhiDevice->RecordCopyImageToBuffer(
+        commandBuffer,
+        RequireImageHandle(image),
+        RequireBufferHandle(buffer),
+        width,
+        height,
+        flipY,
+        rowBytes);
 }
 
 void RendererBackendVulkan::CopyImageToBuffer(
@@ -1381,9 +1597,17 @@ void RendererBackendVulkan::GenerateMipmaps(
     vk::Image image,
     uint32_t width,
     uint32_t height,
-    uint32_t mipLevels)
+    uint32_t mipLevels,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
 {
-    rhiDevice->GenerateMipmaps(RequireImageHandle(image), width, height, mipLevels);
+    rhiDevice->GenerateMipmaps(
+        RequireImageHandle(image),
+        width,
+        height,
+        mipLevels,
+        baseArrayLayer,
+        layerCount);
 }
 
 RHIImageHandle RendererBackendVulkan::GetImageHandle(vk::Image image) const
@@ -1432,6 +1656,8 @@ void RendererBackendVulkan::DestroyImageResource(
         UnbindSamplerHandle(samplerHandle);
     }
     imageDebugNamesByImage.erase(
+        static_cast<VkImage>(image));
+    imageExtentsByImage.erase(
         static_cast<VkImage>(image));
     UnbindImageHandle(imageHandle);
     rhiDevice->DestroyImageResource(imageHandle, imageViewHandle, samplerHandle);
@@ -1495,6 +1721,8 @@ void RendererBackendVulkan::DestroyImageResource(
         rhiDevice->GetVulkanImageResource(
             imageHandle).image;
     imageDebugNamesByImage.erase(
+        static_cast<VkImage>(image));
+    imageExtentsByImage.erase(
         static_cast<VkImage>(image));
     UnbindImageHandle(imageHandle);
     rhiDevice->DestroyImageResource(imageHandle, imageViewHandle, samplerHandle);
@@ -1778,12 +2006,12 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
         rhiDevice->WaitForFence(frameSync.taskFinishedFence);
     }
 
-    if (frameContext.frameIndex < frameFenceEpochs.size() &&
-        frameFenceEpochs[frameContext.frameIndex] != 0)
+    frameContext.completedEpoch =
+        ConsumeCompletedFrameEpoch(frameFenceEpochs, frameContext.frameIndex);
+    if (frameContext.completedEpoch != 0)
     {
         ResourceRetireQueue::GetInstance().CollectCompletedEpoch(
-            frameFenceEpochs[frameContext.frameIndex]);
-        frameFenceEpochs[frameContext.frameIndex] = 0;
+            frameContext.completedEpoch);
     }
     CollectThumbnailImages();
 
@@ -1827,6 +2055,13 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
     frameContext.commandBuffer.begin(beginInfo);
     frameContext.ready = true;
     return frameContext;
+}
+
+uint32_t RendererBackendVulkan::GetFrameFenceCount() const
+{
+    if (!initialized)
+        return 0;
+    return rhiDevice->GetFrameFenceCount();
 }
 
 void RendererBackendVulkan::SubmitFrame(
@@ -1908,10 +2143,10 @@ void RendererBackendVulkan::SubmitFrame(
         rhiDevice->SubmitToGraphicsQueue(submitInfo, submitPlan.taskFinishedFence);
     }
 
-    if (submitPlan.frameIndex < frameFenceEpochs.size())
-    {
-        frameFenceEpochs[submitPlan.frameIndex] = submitPlan.submittedEpoch;
-    }
+    RecordSubmittedFrameEpoch(
+        frameFenceEpochs,
+        submitPlan.frameIndex,
+        submitPlan.submittedEpoch);
     ResourceRetireQueue::GetInstance().MarkFrameSubmitted(submitPlan.submittedEpoch);
     hasSubmittedFrame = true;
     lastSubmittedFrameIndex = submitPlan.frameIndex;

@@ -38,7 +38,8 @@ std::string RowContent(const std::string& icon, const std::string& label)
 std::string ActionAttributes(const WidgetAction& action)
 {
     return " data-action=\"" + Text(action.name) + "\" data-index=\"" +
-        std::to_string(action.index) + "\" data-component=\"" + std::to_string(action.component) + "\"";
+        std::to_string(action.index) + "\" data-component=\"" + std::to_string(action.component) + "\"" +
+        (action.key.empty() ? std::string() : " data-key=\"" + Text(action.key) + "\"");
 }
 
 std::string Button(const std::string& id, const WidgetAction& action,

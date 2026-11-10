@@ -3,10 +3,10 @@
 #include <exception>
 
 #include "commonFunction.h"
-#include "render/resource/rendererResourceCache.h"
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
 #include "world/localLightShadowSettings.h"
+#include "world/loading/terrainCollisionInstances.h"
 #include "render/lighting/physicalLighting.h"
 
 namespace VL
@@ -249,7 +249,6 @@ void AddSpotLightIfFirst(World& world, std::shared_ptr<SpotLight> light)
 RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
     uint64_t generation,
     const WorldBuildPlan& worldBuildPlan,
-    const RendererResourceCache& resourceCache,
     uint32_t shadowCascadeCount) const
 {
     try
@@ -257,8 +256,14 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         std::shared_ptr<World> world = std::make_shared<World>(
             generation,
             worldBuildPlan.scenePath);
+        world->SetNativeGameplay(
+            worldBuildPlan.sceneJson.value("runtimeMode", "authoring") ==
+            "gameplay");
+        world->SetProjectileSettings(worldBuildPlan.projectileSettings);
 
         WorldEnvironment environment;
+        // 风缺省为无风；场景有 wind 对象时由校验器保证最多一个。
+        WorldWind wind;
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
         CsmSettings csmSettings;
 
@@ -427,6 +432,10 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                     objectPlan.objectName,
                     std::move(particleSystem));
             }
+            else if (type == "wind")
+            {
+                wind = ReadSceneWind(objectJson);
+            }
         }
 
         if (!world->GetCamera())
@@ -437,15 +446,30 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 worldBuildPlan.scenePath));
         }
 
+        // 地形碰撞只保留作者计划与 TRS；渲染 chunk 计划不参与，Play 时再创建 body。
+        auto terrainInstances = BuildTerrainCollisionInstances(
+            worldBuildPlan.sceneAssetPlan,
+            worldBuildPlan.sceneJson);
+        if (terrainInstances.IsFailure())
+        {
+            return RuntimeResult<std::shared_ptr<World>>::Failure(
+                terrainInstances.Error());
+        }
+        for (TerrainCollisionInstance& instance : terrainInstances.Value())
+        {
+            world->AddTerrainCollisionInstance(std::move(instance));
+        }
+
         if (primaryDirectionalLight)
             SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
+        world->SetWind(wind);
         world->SetCsmSettings(std::move(csmSettings));
 
-        for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)
+        for (const WindResponseProfile& profile : worldBuildPlan.windResponseProfiles)
         {
-            world->AddSpeedTreeWindProfile(profile);
+            world->AddWindResponseProfile(profile);
         }
 
         for (const auto& [name, value] :
@@ -479,10 +503,71 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
             object.collisionTriangles = meshObjectPlan.collisionTriangles;
             object.meshKey = meshObjectPlan.meshKey;
+            object.tressfxGroupBinding = meshObjectPlan.tressfxGroupBinding;
+            object.tressfxGroupConfigs = meshObjectPlan.tressfxGroupConfigs;
+            object.placementBinding = meshObjectPlan.placementBinding;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
             object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
+            object.terrainFeedbackEligible =
+                meshObjectPlan.terrainFeedbackEligible;
+            object.lodGroupId = meshObjectPlan.lodGroupId;
+            object.lodLevel = meshObjectPlan.lodLevel;
+            object.lodLevelCount = meshObjectPlan.lodLevelCount;
+            object.lodDistancesCm = meshObjectPlan.lodDistancesCm;
+            object.lodGroupBoundsMin = meshObjectPlan.lodGroupBoundsMin;
+            object.lodGroupBoundsMax = meshObjectPlan.lodGroupBoundsMax;
+            object.isTerrain = meshObjectPlan.isTerrain;
+            object.terrainAssetPath = meshObjectPlan.terrainAssetPath;
+            object.terrainPlacementId = meshObjectPlan.terrainPlacementId;
+            object.windResponseProfileKey = meshObjectPlan.windResponseProfileKey;
+            object.tressfxPointsPerGuide = meshObjectPlan.tressfxPointsPerGuide;
+            object.tressfxRootCloud = meshObjectPlan.tressfxRootCloud;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
+        }
+
+        for (const SoftBodyObjectBuildPlan& softBodyPlan : worldBuildPlan.softBodyObjectPlans)
+        {
+            WorldSoftBodyObject object;
+            object.name = softBodyPlan.objectName;
+            object.profileKey = softBodyPlan.profileKey;
+            object.model = softBodyPlan.model;
+            object.scenePosition = softBodyPlan.scenePosition;
+            object.sceneRotation = softBodyPlan.sceneRotation;
+            object.sceneScale = softBodyPlan.sceneScale;
+            object.subdivisions = softBodyPlan.subdivisions;
+            object.siteCount = softBodyPlan.siteCount;
+            object.radius = softBodyPlan.radius;
+            object.thickness = softBodyPlan.thickness;
+            object.pressure = softBodyPlan.pressure;
+            object.burstStrain = softBodyPlan.burstStrain;
+            object.restContraction = softBodyPlan.restContraction;
+            object.seed = softBodyPlan.seed;
+            object.materialKey = softBodyPlan.materialKey;
+            object.materialInstanceKey = softBodyPlan.materialInstanceKey;
+            world->AddSoftBodyObject(softBodyPlan.objectName, std::move(object));
+        }
+
+        for (const GlassObjectBuildPlan& glassPlan : worldBuildPlan.glassObjectPlans)
+        {
+            WorldGlassObject object;
+            object.name = glassPlan.objectName;
+            object.profileKey = glassPlan.profileKey;
+            object.model = glassPlan.model;
+            object.scenePosition = glassPlan.scenePosition;
+            object.sceneRotation = glassPlan.sceneRotation;
+            object.sceneScale = glassPlan.sceneScale;
+            object.width = glassPlan.width;
+            object.height = glassPlan.height;
+            object.thickness = glassPlan.thickness;
+            object.siteCount = glassPlan.siteCount;
+            object.seed = glassPlan.seed;
+            object.subfracture = glassPlan.subfracture;
+            object.materialKey = glassPlan.materialKey;
+            object.materialInstanceKey = glassPlan.materialInstanceKey;
+            object.crackMaterialKey = glassPlan.crackMaterialKey;
+            object.crackMaterialInstanceKey = glassPlan.crackMaterialInstanceKey;
+            world->AddGlassObject(glassPlan.objectName, std::move(object));
         }
 
         return RuntimeResult<std::shared_ptr<World>>::Success(std::move(world));

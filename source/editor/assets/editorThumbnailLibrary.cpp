@@ -53,6 +53,7 @@ std::filesystem::path ResolveSource(const std::filesystem::path& root, const std
 bool UsesGpuThumbnail(EditorUi::EditorAssetKind kind)
 {
     return kind == EditorUi::EditorAssetKind::Mesh ||
+        kind == EditorUi::EditorAssetKind::Tressfx ||
         kind == EditorUi::EditorAssetKind::MaterialInstance ||
         kind == EditorUi::EditorAssetKind::ParticleSystem;
 }
@@ -200,6 +201,8 @@ Thumbnail Generate(const std::filesystem::path& root, const std::filesystem::pat
         !parsed.diagnostic.empty()) throw std::runtime_error("Invalid thumbnail asset descriptor");
     if (parsed.kind != EditorUi::EditorAssetKind::Texture)
         throw std::runtime_error("Rendered thumbnail is not available for this asset type");
+    if (parsed.textureSource.empty())
+        throw std::runtime_error("Rendered thumbnail is not available for texture array assets");
     if (parsed.textureColorSpace != "srgb" && parsed.textureColorSpace != "linear")
         throw std::runtime_error("Texture colorSpace must be srgb or linear");
     const auto source = ReadBounded(ResolveSource(root, parsed.textureSource), 64 * 1024 * 1024);

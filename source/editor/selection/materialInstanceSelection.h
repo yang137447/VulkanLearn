@@ -39,6 +39,9 @@ struct MaterialInstanceModelContext
     uint64_t worldGeneration = 0;
     std::string scenePath;
     std::string objectIdentity;
+    // 编辑器大纲的稳定 actor 身份（例如 terrain|Landscape）；视口拾取没有
+    // 这份上下文时留空，由调用方回退到 mesh|objectIdentity。
+    std::string actorIdentity;
     std::vector<MaterialInstanceModelMaterial> materials;
     RuntimeId objectId = 0;
     std::string displayName;

@@ -11,7 +11,9 @@ The terrain system is intentionally small:
 - render it through World-owned terrain/object runtime data, `WorldSnapshot`, renderer resource loading, `RenderableObject`, and `MaterialInstance`
 - keep terrain material textures in the existing `MI_*.json` and `T_*.json` asset system
 
-This is not yet a streaming terrain, clipmap, virtual texture, or tiled LOD system.
+This MVP plan predates the current streaming terrain. Today's chunk mesh, virtual texture,
+CPU LOD and residency behavior is defined by `contracts/terrain.md`; this file is
+historical planning context, not a statement about the current runtime.
 
 ## Scene Entry
 

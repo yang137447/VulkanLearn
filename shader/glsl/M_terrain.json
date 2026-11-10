@@ -1,0 +1,177 @@
+{
+    "name": "M_terrain",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_uvScale": {
+            "type": "float",
+            "default": 64.0,
+            "range": {
+                "min": 0.1,
+                "max": 1024.0
+            },
+            "description": "terrain UV tiling factor applied to all three texture arrays"
+        },
+        "u_pageTableSize": {
+            "type": "float",
+            "default": 32.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "global page table side in tiles; terrain texCoord1 carries the per-terrain page origin"
+        },
+        "u_pageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "atlas page resolution in texels; atlas side = u_pageTableSize * u_pageResolution"
+        },
+        "u_debugMode": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 5.0
+            },
+            "description": "0 = shaded terrain, 1 = top-4 weights, 2 = top-4 layer indices, 3 = blended albedo, 4 = VT physical page, 5 = VT mip (4/5 only affect layer-mode 1)"
+        },
+        "u_terrainLayerMode": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "0 = legacy layerAlbedo/Normal/Pbr array fast path, 1 = layer-page-table/atlas virtual-texture path"
+        },
+        "u_layerPageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "VT layer page resolution in texels; must match TerrainLayerPageManager::PageResolution"
+        },
+        "u_layerAtlasResolution": {
+            "type": "float",
+            "default": 4096.0,
+            "range": {
+                "min": 1024.0,
+                "max": 8192.0
+            },
+            "description": "VT layer atlas slice side in texels; L2 creates 4096x4096 slices"
+        },
+        "u_layerPagesPerAtlasSlice": {
+            "type": "float",
+            "default": 1024.0,
+            "range": {
+                "min": 1.0,
+                "max": 4096.0
+            },
+            "description": "physical layer pages packed into one atlas array slice (32x32 tiles)"
+        },
+        "u_layerTilesPerAtlasSide": {
+            "type": "float",
+            "default": 32.0,
+            "range": {
+                "min": 1.0,
+                "max": 64.0
+            },
+            "description": "tile count per atlas slice side; physicalPage -> tileX/tileY"
+        },
+        "u_layerMaxMip": {
+            "type": "float",
+            "default": 4.0,
+            "range": {
+                "min": 0.0,
+                "max": 4.0
+            },
+            "description": "maximum VT layer page-table mip; per-layer effective max is derived from catalog pagesPerSide"
+        },
+        "u_layerForceMip": {
+            "type": "float",
+            "default": -1.0,
+            "range": {
+                "min": -1.0,
+                "max": 4.0
+            },
+            "description": "-1 = auto mip from derivatives; 0..4 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+        }
+    },
+    "textures": {
+        "layerTable": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "pageTable": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "layerIds": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "layerWeights": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "layerAlbedo": {
+            "type": "sampler2DArray",
+            "default": null
+        },
+        "layerNormal": {
+            "type": "sampler2DArray",
+            "default": null
+        },
+        "layerPbr": {
+            "type": "sampler2DArray",
+            "default": null
+        },
+        "layerPageTable0": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable1": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable2": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable3": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable4": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerAlbedoAtlas": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "layerNormalAtlas": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "layerPbrAtlas": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        }
+    },
+    "shaderEvaluation": {
+        "vertex": "M_terrain.vertex.glsl",
+        "surface": "M_terrain.surface.glsl"
+    }
+}

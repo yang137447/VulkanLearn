@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "render/rhi/vulkan/presentTarget.h"
+#include "render/rhi/presentMode.h"
 
 struct SDL_Window;
 
@@ -21,6 +22,11 @@ public:
     {
         static VulkanManager inst;
         return inst;
+    }
+
+    void SetPresentModePreference(VL::PresentModePreference preference)
+    {
+        presentModePreference = preference;
     }
 
 private:
@@ -152,6 +158,8 @@ private:
 
     // 每窗口一套呈现状态。多窗口接入前只有目标 0；`Init` 创建它。
     std::vector<VL::PresentTarget> presentTargets;
+    VL::PresentModePreference presentModePreference =
+        VL::PresentModePreference::Auto;
 
     // 帧级、跨目标共享（按 MAX_FRAMES_IN_FLIGHT 分配）。
     std::vector<vk::Semaphore> imageAcquiredSemaphores;

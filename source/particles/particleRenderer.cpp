@@ -5009,7 +5009,7 @@ std::shared_ptr<Texture> ParticleRenderer::ResolveMaterialTexture(
         std::shared_ptr<Texture> texture =
             std::make_shared<Texture>(
                 *backend,
-                loadDesc.source,
+                loadDesc.sources.front(),
                 ToTextureCreateDesc(loadDesc));
         textureCache[cacheKey] = texture;
         return texture;

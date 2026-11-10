@@ -44,8 +44,10 @@ void RequireFrameSyncIndex(const char* resourceName, uint32_t index, size_t size
 
 void RHIDeviceVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
-    SDL_Window* window)
+    SDL_Window* window,
+    VL::PresentModePreference presentMode)
 {
+    VulkanManager::GetInstance().SetPresentModePreference(presentMode);
     VulkanManager::GetInstance().Init(instanceExtensions, window);
     initialized = true;
 }
@@ -150,6 +152,13 @@ uint32_t RHIDeviceVulkan::GetGraphicsTimestampValidBits()
     return VulkanManager::GetInstance().GetGraphicsQueueTimestampValidBits();
 }
 
+bool RHIDeviceVulkan::SupportsTimestampQueries()
+{
+    // timestampComputeAndGraphics 决定 graphics/compute 队列能否写 timestamp；
+    // 具体队列的 timestampValidBits 仍由 GetGraphicsTimestampValidBits 单独校验。
+    return GetPhysicalDevice().getProperties().limits.timestampComputeAndGraphics != 0;
+}
+
 bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
 {
     // 由 VulkanManager 返回创建逻辑设备时实际启用的状态，避免误用仅物理支持的结果。
@@ -217,6 +226,32 @@ void RHIDeviceVulkan::ReadTimestampQueryPair(
     {
         throw std::runtime_error("Failed to read Vulkan timestamp query results.");
     }
+}
+
+bool RHIDeviceVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    // 刻意不传 VK_QUERY_RESULT_WAIT_BIT：统计路径绝不允许阻塞渲染线程。
+    const VkResult result = vkGetQueryPoolResults(
+        static_cast<VkDevice>(GetDevice()),
+        static_cast<VkQueryPool>(queryPool),
+        firstQuery,
+        static_cast<uint32_t>(timestamps.size()),
+        sizeof(timestamps),
+        timestamps.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY)
+    {
+        return false;
+    }
+    if (result != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to read Vulkan timestamp query results.");
+    }
+    return true;
 }
 
 vk::PhysicalDevice& RHIDeviceVulkan::GetPhysicalDevice()
@@ -499,6 +534,7 @@ void RHIDeviceVulkan::TransitionImageLayout(
     vk::Format format,
     vk::ImageLayout oldLayout,
     vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
     uint32_t layerCount)
 {
     const VulkanImageResource& resource = RequireImageResource(imageHandle);
@@ -513,6 +549,7 @@ void RHIDeviceVulkan::TransitionImageLayout(
         GetGraphicsQueue(),
         oldLayout,
         newLayout,
+        baseArrayLayer,
         layerCount);
 }
 
@@ -753,7 +790,11 @@ void RHIDeviceVulkan::CopyBufferToImage(
     RHIBufferHandle bufferHandle,
     RHIImageHandle imageHandle,
     uint32_t width,
-    uint32_t height)
+    uint32_t height,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes,
+    uint32_t bufferRowLength)
 {
     const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
     const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
@@ -766,7 +807,176 @@ void RHIDeviceVulkan::CopyBufferToImage(
         buffer,
         image,
         width,
-        height);
+        height,
+        false,
+        0,
+        baseArrayLayer,
+        layerCount,
+        layerBytes,
+        bufferRowLength);
+}
+
+void RHIDeviceVulkan::CopyBufferToImageRegion(
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    vk::DeviceSize bufferOffset,
+    uint32_t bufferRowLength,
+    uint32_t imageOffsetX,
+    uint32_t imageOffsetY,
+    uint32_t width,
+    uint32_t height,
+    uint32_t mipLevel,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes)
+{
+    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    vk::Buffer buffer = bufferResource.buffer;
+    vk::Image image = imageResource.image;
+    CommonFunction::CopyBufferToImageRegion(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetCommandPool(),
+        buffer,
+        image,
+        bufferOffset,
+        bufferRowLength,
+        imageOffsetX,
+        imageOffsetY,
+        width,
+        height,
+        mipLevel,
+        baseArrayLayer,
+        layerCount,
+        layerBytes);
+}
+
+void RHIDeviceVulkan::CopyBufferToImageRegions(
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    vk::Buffer buffer = bufferResource.buffer;
+    vk::Image image = imageResource.image;
+    CommonFunction::CopyBufferToImageRegions(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetCommandPool(),
+        buffer,
+        image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordTransitionImageLayout(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    uint32_t mipLevels,
+    vk::Format format,
+    vk::ImageLayout oldLayout,
+    vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordTransitionImageLayout(
+        commandBuffer,
+        imageResource.image,
+        mipLevels,
+        format,
+        oldLayout,
+        newLayout,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RHIDeviceVulkan::RecordCopyBufferToImageRegions(
+    vk::CommandBuffer commandBuffer,
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordCopyBufferToImageRegions(
+        commandBuffer,
+        bufferResource.buffer,
+        imageResource.image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordClearColorImage(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    vk::ImageLayout layout,
+    vk::ClearColorValue clearValue,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordClearColorImage(
+        commandBuffer,
+        imageResource.image,
+        layout,
+        clearValue,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RHIDeviceVulkan::RecordCopyImageRegions(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle sourceHandle,
+    RHIImageHandle destinationHandle,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    const VulkanImageResource& source = RequireImageResource(sourceHandle);
+    const VulkanImageResource& destination =
+        RequireImageResource(destinationHandle);
+    CommonFunction::RecordCopyImageRegions(
+        commandBuffer,
+        source.image,
+        destination.image,
+        regions);
+}
+
+void RHIDeviceVulkan::CopyImageRegions(
+    RHIImageHandle sourceHandle,
+    RHIImageHandle destinationHandle,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    const VulkanImageResource& source = RequireImageResource(sourceHandle);
+    const VulkanImageResource& destination =
+        RequireImageResource(destinationHandle);
+    CommonFunction::CopyImageRegions(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetCommandPool(),
+        source.image,
+        destination.image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordCopyImageToBuffer(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    RHIBufferHandle bufferHandle,
+    uint32_t width,
+    uint32_t height,
+    bool flipY,
+    vk::DeviceSize rowBytes)
+{
+    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
+    CommonFunction::RecordCopyImageToBuffer(
+        commandBuffer,
+        imageResource.image,
+        bufferResource.buffer,
+        width,
+        height,
+        flipY,
+        rowBytes);
 }
 
 void RHIDeviceVulkan::CopyImageToBuffer(
@@ -797,7 +1007,9 @@ void RHIDeviceVulkan::GenerateMipmaps(
     RHIImageHandle imageHandle,
     uint32_t width,
     uint32_t height,
-    uint32_t mipLevels)
+    uint32_t mipLevels,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
 {
     const VulkanImageResource& resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
@@ -808,7 +1020,9 @@ void RHIDeviceVulkan::GenerateMipmaps(
         image,
         width,
         height,
-        mipLevels);
+        mipLevels,
+        baseArrayLayer,
+        layerCount);
 }
 
 void RHIDeviceVulkan::DestroyImageResource(

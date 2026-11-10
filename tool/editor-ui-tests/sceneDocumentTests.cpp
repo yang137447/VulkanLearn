@@ -106,6 +106,34 @@ TEST_F(SceneDocumentTest, PositionSavePreservesUntouchedFieldsAndOriginalNumeric
     EXPECT_TRUE(service->ModifiedDocuments().empty());
 }
 
+TEST_F(SceneDocumentTest, CompleteTransformCommitCreatesOneUndoAndPreviewDoesNotTouchTheDraft)
+{
+    auto actor = Point();
+    actor.position = Eigen::Vector3f(10, 20, 30);
+    actor.rotation = Eigen::Vector3f(5, 10, 15);
+    EditorActorPropertyEdit transform;
+    transform.worldGeneration = 1;
+    transform.identity = actor.identity;
+    transform.property = EditorActorProperty::Transform;
+    transform.transformPosition = {10, 20, 30};
+    transform.transformRotation = {5, 10, 15};
+    transform.transformScale = {1, 1, 1};
+    transform.preview = true;
+
+    // 预览只属于 live World；即使调用端误交到文档服务，也不得改草稿或历史。
+    service->RecordActorEdit(actor, transform);
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+    EXPECT_FALSE(service->CanUndo(path.string()));
+
+    transform.preview = false;
+    service->RecordActorEdit(actor, transform);
+    EXPECT_TRUE(service->CanUndo(path.string()));
+    std::string error;
+    ASSERT_TRUE(service->Undo(path.string(), false, error)) << error;
+    EXPECT_FALSE(service->CanUndo(path.string()));
+    EXPECT_TRUE(service->CanUndo(path.string(), true));
+}
+
 TEST_F(SceneDocumentTest, ScriptBlueprintCreateAndPropertySaveRetainPersistentIdentity)
 {
     Json actor{{"type", "blueprintInstance"}, {"id", "persistent-a"}, {"name", "Rotator"},
@@ -664,6 +692,67 @@ TEST_F(SceneDocumentTest, PathEscapeAndAmbiguousActorAreRejected)
     Write(source);
     ASSERT_TRUE(service->Open(path.string(), error));
     EXPECT_FALSE(service->PrepareActorEdit(path.string(), "pointLight|Point", error));
+}
+
+TEST_F(SceneDocumentTest, WindActorStagesAuthorNameFieldsAndSaves)
+{
+    const auto windPath = root / "Maps/SC_wind.json";
+    Json scene = source;
+    scene["objects"].push_back({
+        {"name", "MainWind"}, {"type", "wind"},
+        {"direction", {1, 0, 0}}, {"strength", 200}});
+    std::ofstream(windPath) << scene.dump(4);
+
+    SceneDocumentService windService(root);
+    std::string error;
+    ASSERT_TRUE(windService.Open(windPath.string(), error)) << error;
+
+    EditorSceneActorSnapshot actor;
+    actor.scenePath = windPath.string();
+    actor.identity = "wind|MainWind";
+    actor.type = EditorSceneActorType::SceneWind;
+    actor.worldWind.direction = Eigen::Vector3f::UnitX();
+    actor.worldWind.strengthCmPerSec = 800.0f;
+    actor.worldWind.gustEnabled = true;
+    actor.worldWind.gustAmplitude = 0.4f;
+    actor.worldWind.gustFrequency = 0.8f;
+    actor.worldWind.gustTurbulence = 0.3f;
+    ASSERT_TRUE(windService.PrepareActorEdit(actor.scenePath, actor.identity, error)) << error;
+    windService.RecordActorEdit(actor,
+        {1, actor.identity, EditorActorProperty::WindStrength, 0, 800});
+    windService.RecordActorEdit(actor,
+        {1, actor.identity, EditorActorProperty::WindGustAmplitude, 0, 0.4f});
+
+    const auto documents = windService.ModifiedDocuments();
+    ASSERT_EQ(documents.size(), 1u);
+    EditorCommandEnvelope command;
+    command.commandId = 24;
+    command.type = EditorCommandType::SaveSceneDocument;
+    command.payload = MaterialInstanceAssetPathPayload{"Maps/SC_wind.json"};
+    command.expectedDocumentRevision = documents.front().revision;
+    ASSERT_EQ(windService.Save(command).status, EditorCommandStatus::Succeeded);
+
+    std::ifstream file(windPath);
+    const Json saved = Json::parse(file);
+    file.close();
+    const Json& wind = saved["objects"][2];
+    EXPECT_EQ(wind["strength"], 800);
+    EXPECT_EQ(wind["gust"]["amplitude"], 0.4f);
+    EXPECT_EQ(wind["gust"]["frequency"], 0.8f);
+    EXPECT_EQ(wind["gust"]["turbulence"], 0.3f);
+    EXPECT_EQ(wind["name"], "MainWind");
+
+    // Gust 滑条归零会删除 gust 对象，重载后保持关闭；再次非零编辑会补全整段对象。
+    actor.worldWind.gustAmplitude = 0.0f;
+    windService.RecordActorEdit(actor,
+        {1, actor.identity, EditorActorProperty::WindGustAmplitude, 0, 0.0f});
+    const auto zeroDocuments = windService.ModifiedDocuments();
+    ASSERT_EQ(zeroDocuments.size(), 1u);
+    command.expectedDocumentRevision = zeroDocuments.front().revision;
+    ASSERT_EQ(windService.Save(command).status, EditorCommandStatus::Succeeded);
+    std::ifstream zeroFile(windPath);
+    const Json zeroSaved = Json::parse(zeroFile);
+    EXPECT_FALSE(zeroSaved["objects"][2].contains("gust"));
 }
 
 TEST_F(SceneDocumentTest, SceneSaveProtocolRoundTripsAndRequiresRevision)

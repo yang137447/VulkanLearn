@@ -36,8 +36,8 @@ git show HEAD:source/editor/ui/materialInstanceAssetEditorPanel.cpp
 | 大纲逐 actor 可见性 | 无 | 无 | 第 6 轮新增：World 可见性状态 + 快照过滤 + 眼睛开关（仅运行时） |
 | 多 section actor 的整 actor 隐藏 | 不适用 | 第 6 轮只对单 section 生效 | 第 7 轮修正：按 `sceneObjectIdentity` 一次写全所有 section |
 | 大纲多选 / 拖放 | 无 | 无 | 未排期，属于场景文档阶段 |
-| gizmo / 变换编辑 | 无 | 无 | 未排期，需先改场景数据模型 |
-| Undo / Redo | 无 | 无 | 未排期；Edit 菜单已留禁用占位 |
+| gizmo / 变换编辑 | 无 | 无 | 已新增关卡三轴 gizmo、World/Local 与吸附 |
+| Undo / Redo | 无 | 无 | 场景变换/Blueprint 已有文档历史；跨资产历史仍缺 |
 
 **HEAD 也没有**的东西不要记成迁移损失：菜单栏、视口工具条、面板显隐、场景树、
 gizmo、Undo/Redo 在迁移前同样不存在。它们属于"向 UE 对齐"的新增工作，不是回归。
@@ -98,17 +98,18 @@ sRGB 色块与十六进制、可折叠分类。色块为只读；HSV 取色器�
   复用 `WorldSnapshotBuilder` 的 `BuildWorld*LightSnapshot`）、相机七个字段、
   环境（type/intensity/cubeSize/hdrPath/对象名）、SpeedTree 风剖面
   （key、source bounds、common 标量与 do* 开关）。
-- **树形状**：`SceneActorGroupSpecs()` 固定分组顺序（Meshes / Directional Lights /
-  Point Lights / Spot Lights / Square Area Lights / Cameras / Environments /
-  SpeedTree Wind Profiles），组内按显示名做 ASCII 大小写不敏感比较、再按稳定身份打破平局；
+- **树形状**：`SceneActorGroupSpecs()` 固定分组顺序（Directional Lights / Point Lights /
+  Spot Lights / Square Area Lights / Cameras / Environments / SpeedTree Wind Profiles /
+  Terrains / Meshes / Blueprint Instances），组内按显示名做 ASCII 大小写不敏感比较、再按稳定身份打破平局；
   分组可折叠，折叠只影响行是否挂进 DOM，不改筛选计数。每行一个类型图标。
 - **搜索与过滤**：搜索复用 Content Browser 的 `FoldAsciiCase`（现已提取到
   `source/editor/ui/editorTextMatch.h`，两处共用一份），只折叠 ASCII 大小写、
   保留 UTF-8 多字节名称；类型过滤取值就是分组键；底部计数显示筛选结果
   （`N / M actors`）。三者都不提交资产或运行时命令。
-- **选择**：mesh actor → 既有 `RequestModelSelection`；材质槽 → 既有
-  `RequestMaterialSelection`（MI 文档与 Material Slots 行为不变）；
-  非网格 actor → 新 `RequestActorSelection(稳定身份)`，并要求 EngineLoop
+- **选择**：mesh/Terrain actor → 既有 `RequestModelSelection`；材质槽 → 既有
+  `RequestMaterialSelection`（MI 文档与 Material Slots 行为不变）；Terrain 通过
+  `actorIdentity` 保留 `terrain|name`。相机、环境、风剖面等非网格 actor →
+  `RequestActorSelection(稳定身份)`，并要求 EngineLoop
   清掉渲染端 mesh 描边，避免大纲与视口各留一个选中对象。
 - **Details**：`#details-content` 里新增一个以类型命名的可折叠分组
   （键 `actor-<分组键>`，与 General/Render States/Parameters/Texture Bindings 并列），
@@ -129,12 +130,15 @@ sRGB 色块与十六进制、可折叠分类。色块为只读；HSV 取色器�
   正是这个分支一直在删的东西。
   **（第 6 轮已落地，且证明"必须改场景 schema/validator"这一半是错的：
   可见性做成 World 侧运行时状态即可，见下文第 6 轮。）**
-- **没有地形节点**：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
-  （`source/terrain.h`/`terrain.cpp` 在本 worktree 中不存在，尽管 `AGENTS.md` 仍引用它们）；
-  场景选择器只把 `"terrain"` 列进受支持类型（`source/ui/sceneObjectTypeSupport.h`），
-  资产浏览器只有 Terrain JSON 元数据。因此大纲不凭空造地形行。
-- 没有 transform 编辑、gizmo、增/删/改名、Undo/Redo、拖放；大纲没有虚拟化
-  （每帧重建 markup 字符串后由值缓存决定是否写 DOM，与迁移前的模型树同一策略）。
+- **已有独立 Terrain actor**：本 worktree 已接入 terrain 运行时（场景资产计划、chunk mesh、
+  页表/流式与碰撞实例均已存在）；`World` 中的地形仍是带同一 `sceneObjectIdentity`
+  的 chunk mesh，但 Outliner 已在 Terrains 分组中呈现独立 Terrain actor，
+  Details 显示 TR 路径与各 section 的材质槽，Transform/可见性复用 mesh actor 路径。
+  场景选择器把 `"terrain"` 和普通场景类型一起列入受支持类型
+  （`source/ui/sceneObjectTypeSupport.h`），否则含地形的关卡会出现在
+  File/Content Browser 中却无法经 `LoadWorld` 打开；资产浏览器仍只有 Terrain JSON 元数据。
+- 没有增/删/改名、拖放；大纲没有虚拟化（每帧重建 markup 字符串后由值缓存决定是否
+  写 DOM，与迁移前的模型树同一策略）。transform 编辑与关卡 gizmo 已在后续轮次接入。
 - 环境对象名来自新增的 `WorldEnvironment::name`（由 `worldBuilder` 从场景 JSON 写入）；
   场景没有 environment 对象时回退到固定标签 `Environment`。
 
@@ -266,7 +270,6 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 - 逐 actor 可见性的**持久化**：第 6 轮加了运行时开关，但它不写场景 JSON、
   `SceneAssetValidator` 不认识、也没有保存命令；重载场景后全部可见。
 - 多选、拖放/重父级、改名：大纲一次只有一个选中身份，挂载行与事件地址一对一。
-- transform 编辑与 gizmo：没有渲染后端，也没有命令。
 - 通用虚拟化：窗口化只在世界 actor 树上实现，通用 `TreeRow`、模型树与 Sources 树未变。
 
 ## 第 6 轮：逐 actor 可见性（World / 快照 / 大纲）
@@ -546,16 +549,18 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
    最后发现是 `UiSubsystem` 在 developer UI 可见时把 `#hud` 显式设为
    `display: none`——元素本身按设计不显示，与颜色格式无关。
 
-## 尚未实现能力清单（2026-10-12 核对，第八轮后）
+## 尚未实现能力清单（2026-11-01 核对，地形编辑批次后）
 
 以下在 HEAD 与当前分支中都不存在，属于新增而非回归：
 
-- gizmo、变换编辑、场景对象增删改 / 重命名 / 重父级
-- Undo / Redo（Edit 菜单为禁用占位）
+- 场景对象增删改 / 重命名 / 重父级；gizmo 与场景变换编辑已实现，但只有单选
+- 跨资产 Undo / Redo；Scene 变换与 Blueprint 各自已有有界文档历史
 - 逐 actor 可见性的持久化：第 6 轮加了运行时 World 状态、快照过滤与大纲眼睛，
   但开关不写场景 JSON、`SceneAssetValidator` 不认识、也没有保存命令；
   重新加载场景一律全部可见。要走持久化得连 transform 编辑一起做场景文档阶段。
-- 地形节点（`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时）
+- 地形编辑：独立 TR 资产编辑页、Sculpt Raise/Lower/Smooth、layer Paint/Erase、
+  脏 chunk/覆盖页重建、高度图写回与撤销已接入；仍缺高度图/层纹理图像预览，
+  Paint 不进入 Scene Undo 且不持久化
 - 大纲多选、重命名、父级/文件夹层级、actor 增删
 - 资产缩略图、模型几何预览、纹理像素查看
 - 原生多窗口、IME 输入

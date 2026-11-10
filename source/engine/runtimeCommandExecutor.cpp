@@ -1,6 +1,8 @@
 #include "engine/runtimeCommandExecutor.h"
 
 #include <algorithm>
+#include "engine/destructibleRuntime.h"
+#include "engine/projectileRuntime.h"
 #include <cmath>
 #include <filesystem>
 #include <exception>
@@ -82,9 +84,10 @@ bool ApplyActorVisibility(
     switch (identity.type)
     {
     case EditorSceneActorType::Mesh:
-        // 网格 actor 的身份就是 sceneObjectIdentity（大纲按它聚合 section），
-        // 因此这里一次写全该 actor 的所有 section，而不是找同名的单个渲染对象。
         return world.SetMeshSceneObjectVisible(identity.name, visible);
+    case EditorSceneActorType::Terrain:
+        // 地形在 World 里仍是 chunk mesh；同名 Mesh/Terrain 必须按类型分开写入。
+        return world.SetTerrainSceneObjectVisible(identity.name, visible);
     case EditorSceneActorType::DirectionalLight:
     case EditorSceneActorType::PointLight:
     case EditorSceneActorType::SpotLight:
@@ -93,11 +96,13 @@ bool ApplyActorVisibility(
         return world.SetSquareAreaLightVisible(identity.name, visible);
     case EditorSceneActorType::ParticleSystem:
         return world.SetParticleSystemVisible(identity.name, visible);
-    // 相机 / 环境 / 风剖面没有渲染侧可见性；调用方已用
-    // SceneActorHasVisibilityToggle() 挡住，这里不提供任何默认成功路径。
+    // 相机 / 环境 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
+    //（destroyed）。调用方已用 SceneActorHasVisibilityToggle() 挡住，这里不提供任何
+    // 默认成功路径。
     case EditorSceneActorType::Camera:
     case EditorSceneActorType::Environment:
-    case EditorSceneActorType::WindProfile:
+    case EditorSceneActorType::SceneWind:
+    case EditorSceneActorType::Script:
         return false;
     }
     return false;
@@ -255,9 +260,14 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     const DiagnosticsSubsystem& diagnostics,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments) const
+    Editor::SceneDocumentService* sceneDocuments,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
+    ProjectileRuntime* projectileRuntime) const
 {
     RuntimeCommandExecutionResult executionResult;
+    // sweep 是显式命令驱动的有限时长运动：这里每个 GT 帧推进一次，未激活时为零开销。
+    // 必须在 drain 之前推进，保证本帧新入队的命令仍然只改变意图、不额外多走一步。
+    TickMeshSweep(worldManager, diagnostics);
     std::vector<RuntimeCommand> commands = commandBus.Drain();
     for (const RuntimeCommand& command : commands)
     {
@@ -272,7 +282,9 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             executionResult,
             input,
             scripts,
-            sceneDocuments);
+            sceneDocuments,
+            destructibleRuntimes,
+            projectileRuntime);
     }
     return executionResult;
 }
@@ -288,11 +300,16 @@ void RuntimeCommandExecutor::ExecuteCommand(
     RuntimeCommandExecutionResult& executionResult,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments) const
+    Editor::SceneDocumentService* sceneDocuments,
+    DestructibleRuntimeRegistry* destructibleRuntimes,
+    ProjectileRuntime* projectileRuntime) const
 {
     switch (command.type)
     {
     case RuntimeCommandType::LoadWorld:
+        // 整 World 重载会换掉 generation 和全部 actor，sweep 的起点/身份随即失效，
+        // 因此在这里显式取消，避免它在新 World 上继续写同名对象。
+        CancelMeshSweep(diagnostics);
         ApplyLoadWorld(command, worldTransitionCoordinator, runtimeConfig, diagnostics, executionResult);
         break;
     case RuntimeCommandType::UpdateParticlePreview:
@@ -1078,6 +1095,40 @@ void RuntimeCommandExecutor::ExecuteCommand(
         catch (const std::invalid_argument& error) { diagnostics.ReportWarning(error.what()); }
         break;
     }
+    case RuntimeCommandType::ImpactSoftBody:
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Balloon))
+        {
+            diagnostics.ReportWarning(
+                "softbody impact target not found: " + command.stringValue);
+            break;
+        }
+        break;
+    case RuntimeCommandType::ImpactGlassPane:
+        if (destructibleRuntimes == nullptr ||
+            !destructibleRuntimes->LaunchImpact(command.stringValue,
+                command.floatValue,
+                Physics::FractureMaterialProfile::Glass))
+        {
+            diagnostics.ReportWarning(
+                "glass impact target not found: " + command.stringValue);
+            break;
+        }
+        break;
+    case RuntimeCommandType::FireProjectile:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (projectileRuntime == nullptr || !world || !world->GetRenderCamera())
+        {
+            diagnostics.ReportWarning(
+                "shoot command ignored because the projectile runtime is unavailable");
+            break;
+        }
+        projectileRuntime->Fire(*world, *world->GetRenderCamera());
+        break;
+    }
     case RuntimeCommandType::ControlMotionReplay:
     {
         const auto& world = worldManager.GetActiveWorld();
@@ -1368,6 +1419,14 @@ void RuntimeCommandExecutor::ExecuteCommand(
         std::string error;
         if (!activeWorld)
             error = "No active World.";
+        else if (command.actorProperty.preview)
+        {
+            // 拖动预览只改 live World，不要求文档可编辑、不写草稿/历史；
+            // 释放时同一 Transform 以 preview=false 再进来一次，才产生单笔 Undo。
+            if (!ApplyEditorActorProperty(*activeWorld, command.actorProperty, error))
+                diagnostics.ReportWarning("Actor preview rejected: " + error);
+            break;
+        }
         else if (sceneDocuments && !sceneDocuments->PrepareActorEdit(
             activeWorld->GetScenePath(), command.actorProperty.identity, error))
         {
@@ -1386,45 +1445,14 @@ void RuntimeCommandExecutor::ExecuteCommand(
         diagnostics.ReportWarning("Actor edit rejected: " + error);
         break;
     }
+    case RuntimeCommandType::SetMeshPlacement:
+        ApplyMeshPlacement(command, worldManager, diagnostics);
+        break;
     case RuntimeCommandType::SetProceduralSkyParameters:
         ApplyProceduralSkyParameters(
             command,
             worldManager,
             diagnostics);
-        break;
-    case RuntimeCommandType::SetSpeedTreeStrength:
-        if (renderSystem.SetSpeedTreeStrength(command.floatValue))
-        {
-            diagnostics.ReportInfo(
-                "SpeedTree strength target set to " + std::to_string(command.floatValue) +
-                " (range 0..1; response time applies).");
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree strength ignored because no wind-enabled tree is active.");
-        }
-        break;
-    case RuntimeCommandType::SetSpeedTreeGustingEnabled:
-        if (renderSystem.SetSpeedTreeGustingEnabled(command.intValue != 0))
-        {
-            diagnostics.ReportInfo(
-                std::string("SpeedTree gusting ") +
-                (command.intValue != 0 ? "enabled." : "disabled."));
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree gust toggle ignored because no wind-enabled tree is active.");
-        }
-        break;
-    case RuntimeCommandType::ForceSpeedTreeGust:
-        if (renderSystem.ForceSpeedTreeGust())
-        {
-            diagnostics.ReportInfo("SpeedTree gust forced.");
-        }
-        else
-        {
-            diagnostics.ReportWarning("SpeedTree gust ignored because no wind-enabled tree is active or gusting is disabled.");
-        }
         break;
     case RuntimeCommandType::SetToneMappingMode:
         ApplyToneMappingMode(command.intValue, renderSystem, diagnostics);
@@ -1601,6 +1629,22 @@ void RuntimeCommandExecutor::ExecuteCommand(
             diagnostics.ReportInfo("Assembly reload committed");
         break;
     }
+    case RuntimeCommandType::SetScriptPlayState:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode() || !scripts)
+        {
+            diagnostics.ReportWarning("Script play state unavailable");
+            break;
+        }
+        const auto state = static_cast<ScriptPlayState>(command.intValue);
+        std::string error;
+        if (!scripts->Control(*world, state, error))
+            diagnostics.ReportWarning("Script play state rejected: " + error);
+        else
+            diagnostics.ReportInfo("Script play state: " + std::to_string(command.intValue));
+        break;
+    }
     case RuntimeCommandType::ReloadShaders:
         executionResult.shaderReloadRequested = true;
         executionResult.shaderReloadScope =
@@ -1609,7 +1653,405 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::ReportShaderCacheStatistics:
         executionResult.shaderCacheStatisticsRequested = true;
         break;
+    case RuntimeCommandType::ReportTerrainFeedbackStatistics:
+        executionResult.terrainFeedbackStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainStatistics:
+        executionResult.terrainStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainLayerStatistics:
+        executionResult.terrainLayerStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainLodStatistics:
+        executionResult.terrainLodStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainChunkStatistics:
+        executionResult.terrainChunkStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::ReportTerrainCollisionStatistics:
+        executionResult.terrainCollisionStatisticsRequested = true;
+        break;
+    case RuntimeCommandType::RunTerrainPageBakeParity:
+        renderSystem.RequestTerrainPageBakeParity(
+            command.intValue / 32,
+            command.intValue % 32);
+        break;
+    case RuntimeCommandType::SetTerrainResidentCapacity:
+        // 只写 active streaming state 的 atomic；真正的 page manager 变更在
+        // 渲染线程帧首消费，避免 GT 与渲染线程同时改驻留状态。
+        renderSystem.RequestTerrainResidentCapacity(
+            static_cast<uint32_t>(std::max(command.intValue, 0)));
+        break;
+    case RuntimeCommandType::SetTerrainLayerResidentCapacity:
+        renderSystem.RequestTerrainLayerResidentCapacity(
+            static_cast<uint32_t>(std::max(command.intValue, 0)));
+        break;
+    case RuntimeCommandType::RequestTerrainLayerPreload:
+        renderSystem.RequestTerrainLayerPreload();
+        break;
+    case RuntimeCommandType::SetTerrainLayerForceMip:
+        // 只写 streaming state 的 atomic；M_terrain/feedback 在渲染线程帧首同步。
+        renderSystem.RequestTerrainLayerForceMip(command.intValue);
+    case RuntimeCommandType::PrintGpuPassStats:
+        renderSystem.PrintGpuPassStats();
+        break;
+    case RuntimeCommandType::PrintPerformanceJson:
+        renderSystem.PrintPerformanceJson();
+        break;
+    case RuntimeCommandType::RequestHairTrace:
+        // 只校验值语义并登记；GPU buffer/文件由渲染线程在 Record 中创建，
+        // Console/GT 不直接接触 World 或 Vulkan 资源。
+        if (command.stringValue.empty() || command.hairTraceFrames == 0 ||
+            command.hairTraceGuideStride == 0)
+        {
+            diagnostics.ReportWarning(
+                "Hair trace rejected: path must be non-empty and frames/stride positive");
+            break;
+        }
+        renderSystem.RequestHairTrace(command.stringValue, command.hairTraceFrames,
+            command.hairTraceGuideStride);
+        diagnostics.ReportInfo("Hair trace queued: file=" + command.stringValue +
+            " frames=" + std::to_string(command.hairTraceFrames) +
+            " guideStride=" + std::to_string(command.hairTraceGuideStride));
+        break;
+    case RuntimeCommandType::ResetHairSimulation:
+        // 只登记值语义；ResetPositions 由渲染线程在下一个正 delta 帧执行，
+        // 不重载 World、不重新解析 TFX。
+        renderSystem.RequestHairSimulationReset(command.stringValue);
+        diagnostics.ReportInfo(command.stringValue.empty()
+            ? "Hair reset queued for all TressFX objects"
+            : "Hair reset queued for object \"" + command.stringValue + "\"");
+        break;
+    case RuntimeCommandType::SetHairSimulationParameter:
+    {
+        // 字段白名单与值域在 GT 先收口；失败不排队，避免把非法参数带进下一帧
+        // 的 params UBO。对象是否存在/是否 GPU backend 由渲染线程判定。
+        VL::Hair::HairLiveParameterRequest request = command.hairLiveParameter;
+        std::string rejection;
+        if (!VL::Hair::ValidateHairLiveParameterRequest(request, rejection))
+        {
+            diagnostics.ReportWarning("Hair parameter rejected: " + rejection);
+            break;
+        }
+        std::string values;
+        for (uint32_t index = 0; index < request.valueCount; ++index)
+        {
+            if (index != 0) values += ",";
+            values += std::to_string(request.values[index]);
+        }
+        renderSystem.RequestHairSimulationParameter(request);
+        diagnostics.ReportInfo("Hair parameter queued: object=" + request.objectName +
+            " field=" + request.field + " value=" + values);
+        break;
     }
+    case RuntimeCommandType::SetTressfxGroupPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        if (command.sourceText == "ui" &&
+            command.actorProperty.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("TressFX group preview rejected for stale World");
+            break;
+        }
+        TressfxGroupPreviewState preview;
+        preview.selectedGroup = command.tressfxSelectedGroup;
+        preview.groupColors =
+            (command.tressfxGroupFlags & TressfxGroupPreviewColors) != 0u;
+        preview.solo = (command.tressfxGroupFlags & TressfxGroupPreviewSolo) != 0u;
+        world->SetTressfxGroupPreview(preview);
+        diagnostics.ReportInfo(
+            "TressFX group preview: selected=" +
+            std::to_string(preview.selectedGroup) +
+            " colors=" + std::to_string(preview.groupColors) +
+            " solo=" + std::to_string(preview.solo));
+        break;
+    }
+    case RuntimeCommandType::SetTressfxGroupBindingPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        VL::Hair::TressfxGroupBindingPreviewRequest request =
+            command.tressfxGroupBindingPreview;
+        if (command.sourceText == "ui" &&
+            request.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning(
+                "TressFX group binding preview rejected for stale World");
+            break;
+        }
+        std::string rejection;
+        if (!VL::Hair::ValidateTressfxGroupBindingPreviewRequest(request, rejection))
+        {
+            diagnostics.ReportWarning(
+                "TressFX group binding preview rejected: " + rejection);
+            break;
+        }
+        renderSystem.RequestTressfxGroupBindingPreview(request);
+        diagnostics.ReportInfo(
+            "TressFX group binding preview queued: object=" + request.objectName +
+            " groups=" + std::to_string(request.groupNames.size()) +
+            " revision=" + std::to_string(request.draftRevision));
+        break;
+    }
+    case RuntimeCommandType::SetTressfxBrushPreview:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        VL::Hair::TressfxBrushPreviewRequest request = command.tressfxBrushPreview;
+        if (command.sourceText == "ui" &&
+            request.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("TressFX brush preview rejected for stale World");
+            break;
+        }
+        std::string rejection;
+        if (!VL::Hair::ValidateTressfxBrushPreviewRequest(request, rejection))
+        {
+            diagnostics.ReportWarning("TressFX brush preview rejected: " + rejection);
+            break;
+        }
+        // 世界空间圆环属于 active World 的 GT 会话状态：固定 owner/publisher/category/key
+        // 让每次 hover 覆盖上一帧，不累积 debug item。退出笔刷或 stamp 无效时显式移除。
+        Debug::Style ringStyle;
+        ringStyle.owner = "Editor";
+        ringStyle.publisher = "TressfxBrush";
+        ringStyle.category = "TressfxBrush";
+        ringStyle.key = "cursor";
+        ringStyle.depth = Debug::DepthMode::DepthTest;
+        ringStyle.thickness = 2.0f;
+        // 预览状态持续到显式清除；不由 duration 过期，避免鼠标静止时圆环闪烁。
+        ringStyle.duration = -1.0f;
+        ringStyle.color = request.mode == VL::Hair::GroupPaintMode::Remove
+            ? Debug::Color{1.0f, 0.32f, 0.18f, 1.0f}
+            : Debug::Color{0.95f, 0.83f, 0.37f, 1.0f};
+        if (request.ringVisible)
+        {
+            const Eigen::Vector3f normal = request.ringNormal.normalized();
+            const Eigen::Quaternionf orientation =
+                Eigen::Quaternionf::FromTwoVectors(Eigen::Vector3f::UnitY(), normal);
+            world->GetDebugDraw().DrawDebugCircle(
+                request.ringCenter, request.ringRadiusWorld, orientation, ringStyle);
+        }
+        else
+        {
+            world->GetDebugDraw().RemoveKey(
+                ringStyle.owner, ringStyle.publisher, ringStyle.category, ringStyle.key);
+        }
+        // 纯圆环清除没有对象名（切到非头发预览时），不应进入 RT 的对象查找。
+        if (!request.objectName.empty())
+            renderSystem.RequestTressfxBrushPreview(request);
+        // hover 只更新圆环；按鼠标频率打印会淹没诊断输出，只在 ghost 变化时记录。
+        if (!request.weights.empty() || !request.ringVisible)
+            diagnostics.ReportInfo("TressFX brush preview queued: object=" +
+                request.objectName + " target=" + std::to_string(request.targetGroupId) +
+                " guides=" + std::to_string(request.weights.size()) +
+                " ring=" + std::to_string(request.ringVisible));
+        break;
+    }
+    }
+}
+
+void RuntimeCommandExecutor::ApplyMeshPlacement(
+    const RuntimeCommand& command,
+    WorldManager& worldManager,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    const MeshPlacementRequest& request = command.meshPlacement;
+    const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+    if (!activeWorld)
+    {
+        diagnostics.ReportWarning(
+            "Mesh placement ignored because no active World exists.");
+        return;
+    }
+
+    // UI 预览命令可能在同批 LoadWorld 之前入队；执行时再次拒绝旧代数，Console 不受此门控。
+    if (command.sourceText == "ui" &&
+        command.actorProperty.worldGeneration != activeWorld->GetGeneration())
+    {
+        diagnostics.ReportWarning("Mesh preview placement rejected because the World generation changed.");
+        return;
+    }
+
+    // 绝对/增量/扫掠共用同一条身份校验：scene identity 不在当前 World 时必须拒绝并给出
+    // 诊断，而不是静默改不到东西。加载中的新 World 可能同名，所以这里始终查活动 World。
+    Eigen::Vector3f currentPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f currentRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f currentScale = Eigen::Vector3f::Ones();
+    if (!activeWorld->GetMeshSceneObjectTransform(
+        request.identity, currentPosition, currentRotation, currentScale))
+    {
+        diagnostics.ReportWarning(
+            "Mesh placement rejected because the scene object identity is not in the active World: " +
+            request.identity);
+        return;
+    }
+
+    if (command.meshPlacementMode == MeshPlacementMode::Absolute)
+    {
+        if (!request.position.allFinite() || !request.rotation.allFinite())
+        {
+            diagnostics.ReportWarning(
+                "Mesh placement rejected because the transform is not finite: " +
+                request.identity);
+            return;
+        }
+        // 绝对命令固定 scale=1：scale 会重标定局部 rest length/胶囊/SDF 度量，
+        // 不属于本夹具要验证的 placement 惯性，因此不在命令面开放。
+        if (!activeWorld->SetMeshSceneObjectTransform(
+            request.identity, request.position, request.rotation,
+            Eigen::Vector3f::Ones()))
+        {
+            diagnostics.ReportWarning(
+                "Mesh transform rejected because the actor disappeared during execution: " +
+                request.identity);
+            return;
+        }
+        diagnostics.ReportInfo(
+            "Mesh " + request.identity + " transform: position=" +
+            FormatVector3(request.position) + " rotation=" +
+            FormatVector3(request.rotation) + " scale=" +
+            FormatVector3(Eigen::Vector3f::Ones()));
+        return;
+    }
+
+    if (command.meshPlacementMode == MeshPlacementMode::Offset)
+    {
+        if (!request.delta.allFinite())
+        {
+            diagnostics.ReportWarning(
+                "Mesh offset rejected because the delta is not finite: " +
+                request.identity);
+            return;
+        }
+        // 增量只叠加 position，保留当前 rotation/scale：否则一次平移会把朝向复位，
+        // 让"连续平移"和"转身"两类证据混在一起。
+        const Eigen::Vector3f nextPosition = currentPosition + request.delta;
+        if (!nextPosition.allFinite() ||
+            !activeWorld->SetMeshSceneObjectTransform(
+                request.identity, nextPosition, currentRotation, currentScale))
+        {
+            diagnostics.ReportWarning(
+                "Mesh offset rejected because the actor is gone or the result is not finite: " +
+                request.identity);
+            return;
+        }
+        diagnostics.ReportInfo(
+            "Mesh " + request.identity + " offset: delta=" +
+            FormatVector3(request.delta) + " position=" +
+            FormatVector3(nextPosition) + " rotation=" +
+            FormatVector3(currentRotation));
+        return;
+    }
+
+    // Sweep：两个 identity 同时从当前根位置线性推进到 start+delta。角色与发丝必须一起动，
+    // 否则 sourceToHair 会变，验的就不再是"共同 Actor placement"。
+    if (request.secondIdentity.empty())
+    {
+        diagnostics.ReportWarning(
+            "Mesh sweep rejected because a second scene object identity is required.");
+        return;
+    }
+    if (!std::isfinite(request.seconds) || request.seconds <= 0.0f)
+    {
+        diagnostics.ReportWarning(
+            "Mesh sweep rejected because the duration must be finite and positive.");
+        return;
+    }
+    if (!request.delta.allFinite())
+    {
+        diagnostics.ReportWarning(
+            "Mesh sweep rejected because the delta is not finite.");
+        return;
+    }
+    Eigen::Vector3f secondPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f secondRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f secondScale = Eigen::Vector3f::Ones();
+    if (!activeWorld->GetMeshSceneObjectTransform(
+        request.secondIdentity, secondPosition, secondRotation, secondScale))
+    {
+        diagnostics.ReportWarning(
+            "Mesh sweep rejected because the second scene object identity is not in the active World: " +
+            request.secondIdentity);
+        return;
+    }
+
+    // 新 sweep 直接替换旧状态，避免两个隐式运动源同时写同一个 actor。
+    if (meshSweep.active)
+        diagnostics.ReportInfo("Mesh sweep replaced the previously active sweep.");
+
+    meshSweep.active = true;
+    meshSweep.identity = request.identity;
+    meshSweep.secondIdentity = request.secondIdentity;
+    meshSweep.startPosition = currentPosition;
+    meshSweep.secondStartPosition = secondPosition;
+    meshSweep.rotation = currentRotation;
+    meshSweep.secondRotation = secondRotation;
+    meshSweep.scale = currentScale;
+    meshSweep.secondScale = secondScale;
+    meshSweep.delta = request.delta;
+    meshSweep.seconds = request.seconds;
+    meshSweep.started = std::chrono::steady_clock::now();
+    diagnostics.ReportInfo(
+        "Mesh sweep started: a=" + request.identity + " b=" + request.secondIdentity +
+        " delta=" + FormatVector3(request.delta) +
+        " seconds=" + std::to_string(request.seconds));
+}
+
+void RuntimeCommandExecutor::TickMeshSweep(
+    WorldManager& worldManager,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    if (!meshSweep.active) return;
+
+    const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+    if (!activeWorld)
+    {
+        meshSweep.active = false;
+        diagnostics.ReportWarning(
+            "Mesh sweep stopped because the active World disappeared.");
+        return;
+    }
+
+    // 位置由"起点 + 总位移 * t"直接算出，而不是每帧累加：GT 掉帧或命令注入延迟只会
+    // 改变采样点，不会让总位移漂移；t 被截断在 1，所以停下的位置精确等于 start+delta。
+    const double elapsedSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - meshSweep.started).count();
+    const double progress = elapsedSeconds / static_cast<double>(meshSweep.seconds);
+    const float t = static_cast<float>(progress >= 1.0 ? 1.0 : (progress < 0.0 ? 0.0 : progress));
+    const Eigen::Vector3f position = meshSweep.startPosition + meshSweep.delta * t;
+    const Eigen::Vector3f secondPosition = meshSweep.secondStartPosition + meshSweep.delta * t;
+    const bool firstApplied = activeWorld->SetMeshSceneObjectTransform(
+        meshSweep.identity, position, meshSweep.rotation, meshSweep.scale);
+    const bool secondApplied = activeWorld->SetMeshSceneObjectTransform(
+        meshSweep.secondIdentity, secondPosition, meshSweep.secondRotation,
+        meshSweep.secondScale);
+    if (!firstApplied || !secondApplied)
+    {
+        meshSweep.active = false;
+        diagnostics.ReportWarning(
+            "Mesh sweep stopped because an actor left the active World: " +
+            (firstApplied ? meshSweep.secondIdentity : meshSweep.identity));
+        return;
+    }
+
+    if (progress < 1.0) return;
+    meshSweep.active = false;
+    diagnostics.ReportInfo(
+        "Mesh sweep finished: a=" + meshSweep.identity + " position=" +
+        FormatVector3(position) + " b=" + meshSweep.secondIdentity + " position=" +
+        FormatVector3(secondPosition));
+}
+
+void RuntimeCommandExecutor::CancelMeshSweep(
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    if (!meshSweep.active) return;
+    meshSweep.active = false;
+    diagnostics.ReportInfo(
+        "Mesh sweep cancelled by World reload: a=" + meshSweep.identity +
+        " b=" + meshSweep.secondIdentity);
 }
 
 void RuntimeCommandExecutor::ApplyLoadWorld(

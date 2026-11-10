@@ -26,6 +26,8 @@ public:
 private:
     vk::Buffer vertexBuffer;
     vk::DeviceMemory vertexMemory;
+    vk::Buffer instanceBuffer;
+    vk::DeviceMemory instanceMemory;
     uint32_t vertexCount = 0;
 };
 

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
@@ -20,14 +21,19 @@
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
 #include "render/volumetricFog/volumetricFogSettings.h"
-#include "world/worldSnapshot.h"
 #include "particles/particleAsset.h"
 #include "particles/particleDataChannel.h"
 #include "particles/particleRuntimeState.h"
+#include "terrain/terrainCollisionTypes.h"
+#include "scene/placementBinding.h"
+#include "world/worldSnapshot.h"
+#include "world/worldWind.h"
+#include "world/projectileSettings.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
 #include "debug/drawDebug.h"
+#include "hair/tressfxGroupPreviewState.h"
 #include <map>
 
 class Camera;
@@ -39,6 +45,8 @@ class SpotLight;
 namespace VL
 {
 namespace Animation { class SkeletalPlayback; struct SkinPose; }
+namespace Hair { class TressfxRootCloud; }
+namespace Hair { struct TressfxGroupBinding; }
 class ScriptWorldContext;
 struct ScriptTemplateExtension;
 
@@ -194,6 +202,81 @@ struct WorldMeshObject
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+    bool terrainFeedbackEligible = false;
+    // 地形几何 LOD 组与级号；非地形/单级地形为空组、级号 0。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
+    uint32_t lodLevelCount = 1;
+    std::vector<float> lodDistancesCm;
+    Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
+    // 地形 chunk 仍是普通 WorldMeshObject；独立 Terrain 身份只属于编辑器
+    // 展示/身份层，不引入第二套 World 地形类型。
+    bool isTerrain = false;
+    std::string terrainAssetPath;
+    // 同一 TR 的多处摆放必须能区分各自 chunk；为空表示非地形。
+    std::string terrainPlacementId;
+    std::string windResponseProfileKey;
+    // TressFX 顶点工厂反推 guideIndex 用的每根 guide 点数；非头发为 0。
+    uint32_t tressfxPointsPerGuide = 0;
+    // 发根选择缓存只读共享；编辑器快照按 object.model 变换到世界空间。
+    std::shared_ptr<const Hair::TressfxRootCloud> tressfxRootCloud;
+    // 已保存资产的 guide->group 映射与组名；组编辑只替换这份只读绑定。
+    std::shared_ptr<const Hair::TressfxGroupBinding> tressfxGroupBinding;
+    // placement 解析后的每组模拟配置（0 = Default，k = 第 k 个命名组）。
+    // 编辑器只读它显示 asset default；求解器仍从 placementBinding 消费。
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> tressfxGroupConfigs;
+    // 放置级（per-placement）网格：placementTemplateMeshKey 非空表示本对象在 spawn
+    // 时从该模板 RenderableObject 克隆独立实例（共享导入几何、独立 GPU 状态）；
+    // placementBinding 描述如何解析自身绑定（Kind + 参数），由渲染线程按 Kind 分派。
+    std::string placementTemplateMeshKey;
+    PlacementBinding placementBinding;
+};
+
+// 场景里声明的橡皮软体对象。它只保存作者参数和已解析的材质 key；
+// RubberShell 粒子、动态网格和爆裂状态由 GT 侧运行时持有，不进入 World。
+struct WorldSoftBodyObject
+{
+    std::string name;
+    std::string profileKey;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    int subdivisions = 2;
+    int siteCount = 16;
+    double radius = 20.0;
+    double thickness = 0.2;
+    double pressure = 10.0;
+    double burstStrain = 0.35;
+    double restContraction = 0.75;
+    uint64_t seed = 0;
+    std::string materialKey;
+    std::string materialInstanceKey;
+    bool visible = true;
+};
+
+// 场景里声明的运行时玻璃板。完整板网格、碎片和二次碎裂状态由 GT 侧
+// GlassRuntime 持有；World 只保存作者参数与已解析的材质 key。
+struct WorldGlassObject
+{
+    std::string name;
+    std::string profileKey;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
+    double width = 100.0;
+    double height = 100.0;
+    double thickness = 0.6;
+    int siteCount = 32;
+    uint64_t seed = 0;
+    bool subfracture = true;
+    std::string materialKey;
+    std::string materialInstanceKey;
+    std::string crackMaterialKey;
+    std::string crackMaterialInstanceKey;
+    bool visible = true;
 };
 
 // 粒子发射器是 World 级渲染对象；粒子缓冲本身归渲染器所有，
@@ -254,6 +337,16 @@ public:
 
     uint64_t GetGeneration() const { return generation; }
     const std::string& GetScenePath() const { return scenePath; }
+    bool IsNativeGameplay() const { return nativeGameplay; }
+    void SetNativeGameplay(bool value) { nativeGameplay = value; }
+    const ProjectileSettings& GetProjectileSettings() const
+    {
+        return projectileSettings;
+    }
+    void SetProjectileSettings(ProjectileSettings value)
+    {
+        projectileSettings = std::move(value);
+    }
 
     void SetViewTarget(std::shared_ptr<SceneNode> viewTarget);
     std::weak_ptr<SceneNode> GetViewTarget() const { return viewTarget; }
@@ -271,6 +364,19 @@ public:
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
+    // 场景全局风；与 environment 同属一次 World 构建，随 World 的发布/替换整体切换。
+    void SetWind(WorldWind wind);
+    const WorldWind& GetWind() const { return wind; }
+    // 头发分组预览是 World 的会话状态，不写资产；快照构建时冻结到每个 mesh draw。
+    void SetTressfxGroupPreview(TressfxGroupPreviewState state)
+    {
+        tressfxGroupPreview = state;
+    }
+    const TressfxGroupPreviewState& GetTressfxGroupPreview() const
+    {
+        return tressfxGroupPreview;
+    }
+
     void SetCsmSettings(CsmSettings settings);
     const CsmSettings& GetCsmSettings() const { return csmSettings; }
 
@@ -285,15 +391,41 @@ public:
     // 也不推进 World 代数；渲染快照下一帧自然读取新资产。
     size_t UpdateParticleSystemAsset(const std::string& assetPath,
         ParticleSystemAsset asset);
-    void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
+    void AddWindResponseProfile(WindResponseProfile profile);
+    void AddSoftBodyObject(std::string name, WorldSoftBodyObject object);
+    void AddGlassObject(std::string name, WorldGlassObject object);
+    bool RemoveMeshObject(const std::string& name);
+    bool SetMeshObjectLocalBounds(const std::string& name,
+        const Eigen::Vector3f& minimum, const Eigen::Vector3f& maximum);
+    bool SetMeshObjectModel(const std::string& name, const Eigen::Matrix4f& model);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
+    // 地形碰撞摆放是 World 的只读加载期数据：WorldBuilder 从场景计划一次性写入，
+    // Play 时 ScriptPhysicsWorld 读取它创建静态 heightfield；渲染路径不消费。
+    void AddTerrainCollisionInstance(TerrainCollisionInstance instance);
+    // 地形编辑提交：只命中指定 placement 的 chunk（单层名字无 ::lodN，
+    // lodLevel 必须为 0）。多层 LOD0 同时更新共享的组包围盒。
+    bool UpdateTerrainChunkBounds(const std::string& placementId,
+        uint32_t chunkX, uint32_t chunkZ, uint32_t lodLevel,
+        const Eigen::Vector3f& localBoundsMin,
+        const Eigen::Vector3f& localBoundsMax);
+    // 更新下一次 Play 重建 Jolt heightfield 用的不可变高度图快照。
+    bool UpdateTerrainPlacementHeightmap(const std::string& placementId,
+        std::shared_ptr<const HostImage> heightmap);
+    // 编辑器 paint 提交：保留当前覆盖层快照，供 Play/Stop 或切换 Actor 后
+    // 重建 TerrainPaintSession 时恢复；不影响下一次 Play 的碰撞高度图。
+    bool UpdateTerrainPlacementLayerPaint(const std::string& placementId,
+        std::shared_ptr<const TerrainLayerPaintData> paint);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
     const std::unordered_map<std::string, WorldDecal>& GetDecals() const { return decals; }
     const std::unordered_map<std::string, WorldParticleSystem>& GetParticleSystems() const { return particleSystems; }
+    const std::vector<TerrainCollisionInstance>& GetTerrainCollisionInstances() const
+    { return terrainCollisionInstances; }
+    const std::unordered_map<std::string, WorldSoftBodyObject>& GetSoftBodyObjects() const { return softBodyObjects; }
+    const std::unordered_map<std::string, WorldGlassObject>& GetGlassObjects() const { return glassObjects; }
     void TickAnimations(float deltaSeconds);
     // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
     bool ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value);
@@ -309,7 +441,7 @@ public:
     Debug::DrawDebug& GetDebugDraw() { return debugDraw; }
     const Debug::DrawDebug& GetDebugDraw() const { return debugDraw; }
     std::shared_ptr<const Debug::Snapshot> CaptureDebugDraw(const Animation::MotionDebugView& motion);
-    const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
+    const std::unordered_map<std::string, WindResponseProfile>& GetWindResponseProfiles() const { return windResponseProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
@@ -319,13 +451,16 @@ public:
 
     // 逐对象可见性写入端：只有 RuntimeCommandExecutor 在命令执行边界调用，
     // UI 回调不持有 World。名字不存在时返回 false，由调用方给出诊断而不是静默忽略。
-    // 这里的入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
-    // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染侧消费规则。
+    // 这些入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
+    // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染快照的过滤。
     //
     // 网格按场景对象身份（MeshSceneObjectIdentity）写入，不是按 section 键：
     // 多 section 模型在 meshObjects 里是多个条目，identity 本身不是任何一个条目的键，
     // 因此"一个 actor 一个可见性"要求这里一次写全该 identity 的所有 section。
+    // scene JSON 的 type|name 才是唯一身份；World 内部仍按 isTerrain 分开写，
+    // 防止同名的普通 mesh 与地形 actor 互相串写。
     bool SetMeshSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible);
+    bool SetTerrainSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible);
     bool SetLightVisible(const std::string& name, bool visible);
     // 方形面光在 World 里按值保存（不是 shared_ptr），因此单独一个入口。
     bool SetSquareAreaLightVisible(const std::string& name, bool visible);
@@ -426,11 +561,19 @@ public:
     // 每帧在快照构建时调用；没有附着时返回作者 model。
     Eigen::Matrix4f ResolveParticleSystemModel(
         const WorldParticleSystem& system, bool& resolved) const;
+    bool SetTerrainSceneObjectTransform(const std::string& identity,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
+    // 只读读回该 actor 的根 TRS（度数与场景 JSON 语义一致）。同一 identity 的所有
+    // section 共享 scene TRS，因此取第一个命中项即可；返回 false 表示身份不在当前
+    // World。Console 的增量位移/sweep 起点用它读当前 placement，不复制 World 表。
+    bool GetMeshSceneObjectTransform(const std::string& identity,
+        Eigen::Vector3f& position, Eigen::Vector3f& rotation,
+        Eigen::Vector3f& scale) const;
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
-    // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
-    // 只要还有可见 section 就算可见。两个入口共用同一份 identity 推导，
-    // 因此"行显示什么"与"点击会写什么"不会漂移。
+    // 读取端：与普通 mesh actor 行同一条规则——只要还有可见 section 就算可见。
+    // 地形行使用自己的 chunk 快照，不通过该入口读取。
     bool IsMeshSceneObjectVisible(const std::string& sceneObjectIdentity) const;
     // 作者声明与执行上下文都属于 World，渲染快照不携带托管实例或其指针。
     void SetScriptBlueprints(nlohmann::json actors) { scriptBlueprints = std::move(actors); }
@@ -456,7 +599,9 @@ public:
         uint32_t component, float value);
     void ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visible = true);
     void CloneScriptBlueprintMeshes(const std::string& templateId, const nlohmann::json& actor);
-    void RemoveScriptBlueprintMeshes(const std::string& id);
+    // removeTemplateEntries=false 供 SynchronizeScriptComponentMeshes 内部使用：
+    // 重建同一个 actor 的网格时不能把它自己的模板条目一并删掉。
+    void RemoveScriptBlueprintMeshes(const std::string& id, bool removeTemplateEntries = true);
     void PrepareScriptComponentMeshTemplates();
     void SynchronizeScriptComponentMeshes(const nlohmann::json& actor);
     void SetScriptTemplates(nlohmann::json templates) { scriptTemplates = std::move(templates); }
@@ -468,7 +613,7 @@ public:
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateExtension(
         const std::string& path, const std::string& digest, const nlohmann::json& declaration,
         const std::vector<WorldMeshObject>& meshes,
-        const std::vector<SpeedTreeWindProfile>& profiles) const;
+        const std::vector<WindResponseProfile>& profiles) const;
     std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateRemoval(const std::string& path) const;
     void CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept;
     void SwapScriptConfiguration(nlohmann::json& actors, nlohmann::json& templates,
@@ -483,20 +628,29 @@ private:
     friend struct ScriptTemplateExtension;
     void AppendScriptComponentMeshTemplate(const nlohmann::json& blueprint);
     void RecordScriptMotion(float deltaSeconds);
-    // 对属于同一个场景对象身份的每个 mesh section 施加同一操作，返回是否至少命中一个。
-    // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用，避免"大纲认得的名字
-    // World 不认得"这类静默失配。
+    // 对属于同一个场景对象身份、且地形标志匹配的每个 mesh section 施加同一操作。
+    // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用；terrain 过滤则
+    // 区分同名的普通 mesh 与地形 actor。
     template <typename ApplyFn>
-    bool ForEachMeshObjectInSceneObject(const std::string& sceneObjectIdentity, ApplyFn&& apply);
+    bool ForEachMeshObjectInSceneObject(
+        const std::string& sceneObjectIdentity, bool terrain, ApplyFn&& apply);
+    bool SetSceneObjectTransform(const std::string& identity, bool terrain,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
 
     uint64_t generation = 0;
     std::string scenePath;
+    // 无 C# Play 状态的 native 试玩场景；编辑器场景保持 authoring。
+    bool nativeGameplay = false;
+    ProjectileSettings projectileSettings;
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     std::shared_ptr<Camera> editorCamera;
     std::shared_ptr<Camera> scriptCamera;
     bool editorViewEnabled = false;
     WorldEnvironment environment;
+    WorldWind wind;
+    TressfxGroupPreviewState tressfxGroupPreview;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, WorldDecal> decals;
@@ -507,12 +661,16 @@ private:
     ParticleDataChannelMap particleDataChannels;
     std::vector<WorldParticleRuntimeEvent> particleRuntimeEvents;
     std::unordered_set<std::string> particleEventCaptureOwners;
-    std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
+    std::unordered_map<std::string, WindResponseProfile> windResponseProfiles;
+    std::unordered_map<std::string, WorldSoftBodyObject> softBodyObjects;
+    std::unordered_map<std::string, WorldGlassObject> glassObjects;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
     std::unordered_map<std::string, WorldSquareAreaLight> squareAreaLights;
+    // 每个 terrain placement 一份；同一 TR 多摆放按 placementId 区分。
+    std::vector<TerrainCollisionInstance> terrainCollisionInstances;
     nlohmann::json scriptBlueprints = nlohmann::json::array();
     nlohmann::json scriptBlueprintSources = nlohmann::json::array();
     // 运行时 TRS 与作者声明分离；逻辑 Actor 没有网格时仍能在 Details 回显。
@@ -525,6 +683,10 @@ private:
     std::unordered_map<std::string, Eigen::Matrix4f> scriptComponentMatrices;
     std::unordered_map<std::string, std::vector<WorldMeshObject>> scriptComponentMeshTemplates;
     std::unordered_map<std::string, std::string> scriptComponentMeshStructures;
+    // 运行时 spawn 创建的逐 actor 模板键：模板键对 tressfx 组件包含父组件身份，
+    // 因此每个 spawn 都有新键；actor 销毁时按这张表回收，避免模板池随 spawn 增长。
+    // 共享网格的模板键是 actor 无关的，不会记录在这里。
+    std::unordered_map<std::string, std::vector<std::string>> scriptActorTemplateKeys;
     // 派生组件灯只持有规范物理值，不进入作者灯表，也不替换 CSM 主方向光。
     std::unordered_map<std::string, LightSnapshot> scriptLights;
     bool motionDebugEnabled = false;

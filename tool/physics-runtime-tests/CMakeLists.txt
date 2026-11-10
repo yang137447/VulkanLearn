@@ -1,0 +1,4 @@
+add_executable(physics_runtime_tests fractureImpactWorldTests.cpp)
+target_include_directories(physics_runtime_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
+target_link_libraries(physics_runtime_tests PRIVATE vl_physics_runtime)
+vulkanlearn_add_gtest(physics_runtime_tests)

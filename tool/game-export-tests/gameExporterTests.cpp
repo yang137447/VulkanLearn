@@ -164,6 +164,23 @@ TEST_F(GameExportTest, SpawnAndDynamicAssetsFollowTheSameRecursiveClosure)
     EXPECT_TRUE(fs::exists(options.outputDirectory / "resources/Common/SM_next.json"));
 }
 
+TEST_F(GameExportTest, TressfxPlacementExportsProxyAndWeightsButNotSourceIdentity)
+{
+    Json object = {{"type", "mesh"}};
+    object["tressfx"]["skinning"] = {
+        {"source", "CharacterBody"}, {"rootBone", "Head"},
+        {"boneWeights", "HairInputs/weights.tfxbone"}};
+    object["tressfx"]["hairCollision"] = {
+        {"mesh", {{"path", "HairInputs/proxy.obj"}}}};
+    Scene(Json::array({object}));
+    Write(resources / "HairInputs/weights.tfxbone", "weights");
+    Write(resources / "HairInputs/proxy.obj", "proxy");
+    EXPECT_NO_THROW(VL::ExportGame(options));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "resources/HairInputs/weights.tfxbone"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "resources/HairInputs/proxy.obj"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "resources/CharacterBody"));
+}
+
 TEST_F(GameExportTest, GraphMaterialsAndShaderDefaultTexturesAreDependencies)
 {
     WriteJson(options.projectRoot / "config/renderGraphConfig.json",

@@ -1,0 +1,3385 @@
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+
+#include "materialInstance.h"
+#include "resource/image/hostImage.h"
+#include "resource/image/textureIO.h"
+#include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/resource/rendererResourceLoadCoordinator.h"
+#include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "scene/validation/sceneJsonValidator.h"
+#include "terrain/terrainAssetLoader.h"
+#include "terrain/terrainFeedback.h"
+#include "terrain/terrainHeightmap.h"
+#include "terrain/terrainLayerTable.h"
+#include "terrain/terrainMeshBuilder.h"
+#include "terrain/terrainPageManager.h"
+#include "terrain/terrainWeightMap.h"
+#include "terrain/validation/terrainAssetValidator.h"
+
+// terrain_tests 不链接 renderer/material 实现；缓存级用例只验证 package 的
+// 继承策略，不会构造 MaterialInstance 或 RendererObjectResourceEntry。
+// 下面三个符号是 rendererResourceCache.cpp 的链接依赖，用最小替身满足。
+MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
+{
+    return MaterialInstanceStateSnapshot(std::string(), {}, {});
+}
+
+void MaterialInstance::ShutdownRenderResources()
+{
+}
+
+void VL::RendererObjectResourceEntry::Shutdown()
+{
+}
+
+namespace
+{
+
+HostImage MakeHeightmap(
+    uint32_t width,
+    uint32_t height,
+    const std::function<float(uint32_t, uint32_t)>& value)
+{
+    HostImage image;
+    image.width = width;
+    image.height = height;
+    image.channels = 4;
+    image.format = HostImage::PixelFormat::RGBA32_FLOAT;
+    image.semantic = HostImage::TextureSemantic::Data;
+    image.rowStrideBytes = width * image.GetPixelSize();
+    image.data.resize(static_cast<size_t>(image.rowStrideBytes) * height);
+    float* pixels = reinterpret_cast<float*>(image.data.data());
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            const float sample = value(x, y);
+            const size_t index = (static_cast<size_t>(y) * width + x) * 4;
+            pixels[index + 0] = sample;
+            pixels[index + 1] = sample;
+            pixels[index + 2] = sample;
+            pixels[index + 3] = 1.0f;
+        }
+    }
+    return image;
+}
+
+VL::TerrainAssetDesc MakeDesc()
+{
+    VL::TerrainAssetDesc desc;
+    desc.assetPath = "Generated/Validation/TerrainTests/TR_terrain_tests.json";
+    desc.name = "TR_terrain_tests";
+    desc.heightmapPath = "Generated/Validation/TerrainTests/heightmap.png";
+    desc.size = Eigen::Vector2f(1000.0f, 1000.0f);
+    desc.heightScale = 100.0f;
+    desc.heightOffset = 0.0f;
+    desc.gridResolution = 4;
+    desc.chunkQuads = 2;
+    desc.materialInstancePath = "Generated/Validation/TerrainTests/MI_terrain_tests.json";
+    return desc;
+}
+
+VL::TerrainBuildPlan MakePlan(const HostImage& heightmap)
+{
+    VL::TerrainBuildPlan plan;
+    plan.desc = MakeDesc();
+    plan.heightmap = std::make_shared<const HostImage>(heightmap);
+    return plan;
+}
+
+VL::TerrainBuildPlan MakePagePlan(uint32_t tilesPerSide)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.layers = {
+        {"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f},
+        {"b", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    plan.desc.pageOrigin = Eigen::Vector2i(0, 0);
+    plan.desc.pageTilesPerSide = tilesPerSide;
+    return plan;
+}
+
+VL::TerrainPageManager::PageKey MakePageKey(
+    const std::string& path,
+    uint32_t tileX,
+    uint32_t tileZ)
+{
+    VL::TerrainPageManager::PageKey key;
+    key.placementId = path;
+    key.tileX = tileX;
+    key.tileZ = tileZ;
+    return key;
+}
+
+size_t PageTableEntryOffset(uint32_t virtualPageX, uint32_t virtualPageY)
+{
+    return (static_cast<size_t>(virtualPageY) * VL::TerrainPageManager::PageTableSize +
+        virtualPageX) * 4;
+}
+
+size_t AtlasPageByteOffset(uint32_t physicalPageX, uint32_t physicalPageY)
+{
+    return ((static_cast<size_t>(physicalPageY) * VL::TerrainPageManager::PageResolution) *
+                VL::TerrainPageManager::AtlasResolution +
+            static_cast<size_t>(physicalPageX) * VL::TerrainPageManager::PageResolution) * 4;
+}
+
+size_t TerrainPageByteSize()
+{
+    return static_cast<size_t>(VL::TerrainPageManager::PageResolution) *
+        VL::TerrainPageManager::PageResolution * 4;
+}
+
+bool BatchContainsPhysicalSlot(
+    const VL::TerrainUploadBatch& batch,
+    uint32_t physicalPageX,
+    uint32_t physicalPageY)
+{
+    for (const VL::TerrainPageManager::AtlasPageUpload& upload : batch.atlasUploads)
+    {
+        if (upload.physicalPageX == physicalPageX &&
+            upload.physicalPageY == physicalPageY)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+nlohmann::json BuildTerrainJson()
+{
+    return {
+        {"name", "TR_terrain_tests"},
+        {"type", "terrain"},
+        {"heightmapPath", "Generated/Validation/TerrainTests/heightmap.png"},
+        {"size", {1000.0, 1000.0}},
+        {"heightScale", 100.0},
+        {"heightOffset", 0.0},
+        {"gridResolution", 4},
+        {"chunkQuads", 2},
+        {"materialInstancePath", "Generated/Validation/TerrainTests/MI_terrain_tests.json"},
+        {"layers", {
+            {{"name", "leaf"}, {"heightRange", {0.0, 1.0}}, {"slopeRange", {0.0, 30.0}}, {"noise", 0.2}},
+            {{"name", "rock"}, {"heightRange", {0.2, 1.0}}, {"slopeRange", {25.0, 90.0}}, {"noise", 0.3}}}}};
+}
+
+nlohmann::json BuildTerrainSceneJson()
+{
+    return {
+        {"name", "Terrain schema test"},
+        {"type", "scene"},
+        {"worldUnit", "cm"},
+        {"description", "Terrain runtime smoke schema validation."},
+        {"objects", {
+            {{"name", "Terrain"}, {"type", "terrain"}, {"terrainPath", "Generated/Validation/TerrainTests/TR.json"},
+             {"position", {0.0, 0.0, 0.0}}, {"rotation", {0.0, 0.0, 0.0}}, {"scale", {1.0, 1.0, 1.0}}},
+            {{"name", "Sun"}, {"type", "directionalLight"}, {"position", {0.0, 100.0, 0.0}},
+             {"rotation", {-30.0, 0.0, 0.0}}, {"color", {1.0, 1.0, 1.0}},
+             {"intensity", 10000.0}, {"intensityUnit", "lux"}},
+            {{"name", "Camera"}, {"type", "camera"}, {"fov", 50.0}, {"near_clip", 1.0}, {"far_clip", 10000.0},
+             {"position", {0.0, 100.0, 500.0}}, {"rotation", {0.0, 0.0, 0.0}}, {"scale", {1.0, 1.0, 1.0}},
+             {"exposure", {
+                 {"mode", "ev100"}, {"ev100", 0.0}, {"aperture", 4.0},
+                 {"shutterSeconds", 0.008}, {"iso", 100.0}, {"compensation", 0.0}}}},
+        }}};
+}
+
+class TerrainTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        const auto id = std::chrono::steady_clock::now().time_since_epoch().count();
+        directory = std::filesystem::temp_directory_path() /
+            ("vulkanlearn_terrain_" + std::to_string(id));
+        ASSERT_TRUE(std::filesystem::create_directory(directory));
+    }
+
+    void TearDown() override
+    {
+        std::filesystem::remove_all(directory);
+    }
+
+    std::filesystem::path directory;
+};
+
+} // namespace
+
+TEST(TerrainHeightmap, BilinearSampleUsesAlphaCenteredUv)
+{
+    HostImage image = MakeHeightmap(2, 2, [](uint32_t x, uint32_t y) {
+        return static_cast<float>(y * 2 + x) * 0.25f;
+    });
+    EXPECT_FLOAT_EQ(VL::TerrainHeightmap::SampleNormalized(image, 0.0f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(VL::TerrainHeightmap::SampleNormalized(image, 1.0f, 1.0f), 0.75f);
+    EXPECT_FLOAT_EQ(VL::TerrainHeightmap::SampleNormalized(image, 0.5f, 0.5f), 0.375f);
+}
+
+TEST(TerrainHeightmap, AppliesScaleAndOffset)
+{
+    HostImage image = MakeHeightmap(2, 2, [](uint32_t, uint32_t) { return 0.5f; });
+    VL::TerrainAssetDesc desc = MakeDesc();
+    desc.heightScale = 100.0f;
+    desc.heightOffset = 25.0f;
+    EXPECT_FLOAT_EQ(VL::TerrainHeightmap::SampleHeightCm(desc, image, 0.5f, 0.5f), 75.0f);
+}
+
+TEST(TerrainHeightmap, MarginUvTransformUsesInnerSamples)
+{
+    HostImage image = MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; });
+    VL::TerrainAssetDesc desc = MakeDesc();
+    desc.gridResolution = 2;
+    desc.heightmapMargin = 1;
+    const VL::TerrainHeightmap::MeshUvTransform transform =
+        VL::TerrainHeightmap::MeshUvTransformFor(desc, image);
+    EXPECT_FLOAT_EQ(transform.offsetU, 0.25f);
+    EXPECT_FLOAT_EQ(transform.offsetV, 0.25f);
+    EXPECT_FLOAT_EQ(transform.scaleU, 0.5f);
+    EXPECT_FLOAT_EQ(transform.scaleV, 0.5f);
+    const Eigen::Vector2f low = transform.Apply(0.0f, 0.0f);
+    const Eigen::Vector2f high = transform.Apply(1.0f, 1.0f);
+    EXPECT_FLOAT_EQ(low.x(), 0.25f);
+    EXPECT_FLOAT_EQ(low.y(), 0.25f);
+    EXPECT_FLOAT_EQ(high.x(), 0.75f);
+    EXPECT_FLOAT_EQ(high.y(), 0.75f);
+
+    HostImage wrongSize = MakeHeightmap(
+        4, 5, [](uint32_t, uint32_t) { return 0.5f; });
+    EXPECT_THROW(
+        VL::TerrainHeightmap::MeshUvTransformFor(desc, wrongSize),
+        std::exception);
+}
+
+TEST(TerrainHeightmap, RejectsNonFiniteSamples)
+{
+    HostImage image = MakeHeightmap(2, 2, [](uint32_t, uint32_t) { return 0.5f; });
+    float* pixels = reinterpret_cast<float*>(image.data.data());
+    pixels[0] = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(
+        VL::TerrainHeightmap::SampleNormalized(image, 0.0f, 0.0f),
+        std::exception);
+}
+
+TEST(TerrainMeshBuilder, SplitsGridIntoChunksWithExpectedCounts)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    const std::vector<VL::TerrainMeshChunk> chunks = VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
+    {
+        EXPECT_EQ(chunk.vertices.size(), 9u);
+        EXPECT_EQ(chunk.indices.size(), 24u);
+        for (uint32_t index : chunk.indices)
+            EXPECT_LT(index, chunk.vertices.size());
+    }
+}
+
+TEST(TerrainMeshBuilder, FlatHeightmapProducesUpNormalsAndExpectedPositions)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    const std::vector<VL::TerrainMeshChunk> chunks = VL::TerrainMeshBuilder::BuildChunks(plan);
+    const VL::TerrainMeshChunk& first = chunks.front();
+    EXPECT_TRUE(first.boundsMin.isApprox(Eigen::Vector3f(-500.0f, 50.0f, -500.0f)));
+    EXPECT_TRUE(first.boundsMax.isApprox(Eigen::Vector3f(0.0f, 50.0f, 0.0f)));
+    for (const Vertex& vertex : first.vertices)
+    {
+        EXPECT_FLOAT_EQ(vertex.position.y(), 50.0f);
+        EXPECT_TRUE(vertex.normal.isApprox(Eigen::Vector3f(0.0f, 1.0f, 0.0f)));
+    }
+}
+
+TEST(TerrainMeshBuilder, SlopeProducesGradientNormal)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t) {
+            return static_cast<float>(x) * 0.25f;
+        }));
+    const std::vector<VL::TerrainMeshChunk> chunks = VL::TerrainMeshBuilder::BuildChunks(plan);
+    // u=0.25 的中心顶点，高度从 0 升到 100，坡度 0.1。
+    const Vertex& vertex = chunks.front().vertices[1];
+    const Eigen::Vector3f expected =
+        Eigen::Vector3f(-0.1f, 1.0f, 0.0f).normalized();
+    EXPECT_TRUE(vertex.normal.isApprox(expected, 1.0e-4f));
+}
+
+TEST(TerrainMeshBuilder, ChunkEdgeNormalsStayContinuous)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    const std::vector<VL::TerrainMeshChunk> chunks = VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 4u);
+    // chunks 顺序为 (0,0),(1,0),(0,1),(1,1)；边界 u=0.5 的共享顶点应使用同一全局梯度。
+    const Vertex& leftEdge = chunks[0].vertices[2];
+    const Vertex& rightEdge = chunks[1].vertices[0];
+    EXPECT_TRUE(leftEdge.normal.isApprox(rightEdge.normal, 1.0e-5f));
+}
+
+TEST(TerrainMeshBuilder, MarginEdgeNormalsUseOverscan)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t) {
+            return static_cast<float>(x) * 0.25f;
+        }));
+    plan.desc.gridResolution = 2;
+    plan.desc.chunkQuads = 2;
+    plan.desc.heightmapMargin = 1;
+    plan.desc.size = Eigen::Vector2f(200.0f, 200.0f);
+    plan.desc.heightScale = 400.0f;
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    ASSERT_EQ(chunk.vertices.size(), 9u);
+    const Eigen::Vector3f expected =
+        Eigen::Vector3f(-1.0f, 1.0f, 0.0f).normalized();
+    EXPECT_TRUE(chunk.vertices[0].normal.isApprox(expected, 1.0e-5f));
+    EXPECT_TRUE(chunk.vertices[4].normal.isApprox(expected, 1.0e-5f));
+    EXPECT_FLOAT_EQ(chunk.vertices[0].position.y(), 100.0f);
+}
+
+TEST(TerrainMeshBuilder, CrossTileLodBoundaryMatchesWithOverscan)
+{
+    const auto sourceHeight = [](uint32_t x, uint32_t y) {
+        return 0.2f + 0.03f * static_cast<float>(x) +
+            0.02f * static_cast<float>(y) +
+            0.004f * static_cast<float>(x * y);
+    };
+    auto makeTile = [&](uint32_t offsetX, uint32_t offsetZ) {
+        VL::TerrainBuildPlan plan = MakePlan(
+            MakeHeightmap(7, 7, [&](uint32_t x, uint32_t y) {
+                return sourceHeight(x + offsetX, y + offsetZ);
+            }));
+        plan.desc.gridResolution = 4;
+        plan.desc.chunkQuads = 4;
+        plan.desc.heightmapMargin = 1;
+        plan.desc.size = Eigen::Vector2f(400.0f, 400.0f);
+        plan.desc.heightScale = 400.0f;
+        plan.desc.lodLevels = 2;
+        return plan;
+    };
+    const VL::TerrainBuildPlan left = makeTile(0, 0);
+    const VL::TerrainBuildPlan right = makeTile(4, 0);
+
+    auto compare = [&](uint32_t leftLod, uint32_t rightLod) {
+        const std::vector<VL::TerrainMeshChunk> leftChunks =
+            VL::TerrainMeshBuilder::BuildChunks(left, leftLod);
+        const std::vector<VL::TerrainMeshChunk> rightChunks =
+            VL::TerrainMeshBuilder::BuildChunks(right, rightLod);
+        ASSERT_EQ(leftChunks.size(), 1u);
+        ASSERT_EQ(rightChunks.size(), 1u);
+        std::map<int, const Vertex*> leftEdge;
+        std::map<int, const Vertex*> rightEdge;
+        for (const Vertex& vertex : leftChunks.front().vertices)
+        {
+            if (std::abs(vertex.position.x() - 200.0f) < 0.01f)
+                leftEdge[static_cast<int>(std::lround(vertex.position.z()))] = &vertex;
+        }
+        for (const Vertex& vertex : rightChunks.front().vertices)
+        {
+            if (std::abs(vertex.position.x() + 200.0f) < 0.01f)
+                rightEdge[static_cast<int>(std::lround(vertex.position.z()))] = &vertex;
+        }
+        ASSERT_GE(leftEdge.size(), 4u);
+        for (const auto& [z, vertex] : leftEdge)
+        {
+            const auto found = rightEdge.find(z);
+            ASSERT_NE(found, rightEdge.end());
+            EXPECT_FLOAT_EQ(vertex->position.y(), found->second->position.y());
+            EXPECT_TRUE(vertex->normal.isApprox(found->second->normal, 1.0e-5f));
+        }
+    };
+
+    compare(0, 0);
+    compare(1, 0);
+    compare(1, 1);
+}
+
+TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
+{
+    // 线性坡面让中心差分法线有闭式解，便于逐值钉住 LOD0 语义。
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
+    {
+        // LOD0 没有额外边界几何：3×3 顶点、4 个格子各 2 个三角形。
+        EXPECT_EQ(chunk.lodLevel, 0u);
+        EXPECT_EQ(chunk.vertices.size(), 9u);
+        EXPECT_EQ(chunk.indices.size(), 24u);
+    }
+
+    // 索引顺序必须仍是历史循环的 a,b,c / b,d,c。
+    const std::vector<uint32_t> expectedIndices = {
+        0, 1, 3, 1, 4, 3,
+        1, 2, 4, 2, 5, 4,
+        3, 4, 6, 4, 7, 6,
+        4, 5, 7, 5, 8, 7};
+    EXPECT_EQ(chunks.front().indices, expectedIndices);
+
+    const VL::TerrainMeshChunk& first = chunks.front();
+    EXPECT_TRUE(first.vertices[0].position.isApprox(
+        Eigen::Vector3f(-500.0f, 0.0f, -500.0f)));
+    EXPECT_TRUE(first.vertices[1].position.isApprox(
+        Eigen::Vector3f(-250.0f, 10.0f, -500.0f)));
+    EXPECT_TRUE(first.vertices[3].position.isApprox(
+        Eigen::Vector3f(-500.0f, 10.0f, -250.0f)));
+    EXPECT_TRUE(first.vertices[4].position.isApprox(
+        Eigen::Vector3f(-250.0f, 20.0f, -250.0f)));
+    // 中心顶点（u=v=0.25）避开边界钳制，两个方向都有梯度。
+    EXPECT_TRUE(first.vertices[4].normal.isApprox(
+        Eigen::Vector3f(-0.04f, 1.0f, -0.04f).normalized(), 1.0e-5f))
+        << "actual=" << first.vertices[4].normal.transpose();
+    EXPECT_TRUE(first.vertices[3].texCoord.isApprox(
+        Eigen::Vector2f(0.0f, 0.25f)));
+    // 没有任何顶点被额外边界几何拉到地表以下。
+    EXPECT_FLOAT_EQ(first.boundsMin.y(), 0.0f);
+}
+
+TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendStitchBand)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 8;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(lod0.size(), 1u);
+    EXPECT_EQ(lod0.front().vertices.size(), 81u);
+
+    // 更粗的 LOD 在四条边上都补一圈 LOD0 间距的边界环。
+    const uint32_t chunkQuads = 8;
+    const uint32_t ringVertices = chunkQuads * 4;
+    const uint32_t expectedQuads[] = {0u, 4u, 2u, 1u};
+    for (uint32_t lod = 1; lod <= 3; ++lod)
+    {
+        const uint32_t quads = expectedQuads[lod];
+        const uint32_t baseVertices = (quads + 1) * (quads + 1);
+        const uint32_t step = 1u << lod;
+        const uint32_t interiorCells = quads > 1 ? quads - 2 : 0;
+        const uint32_t interiorIndices = interiorCells * interiorCells * 6;
+        const uint32_t bandIndices = 4u * quads * (step + 1u) * 3u;
+        const std::vector<VL::TerrainMeshChunk> chunks =
+            VL::TerrainMeshBuilder::BuildChunks(plan, lod);
+        ASSERT_EQ(chunks.size(), 1u);
+        const VL::TerrainMeshChunk& chunk = chunks.front();
+        EXPECT_EQ(chunk.lodLevel, lod);
+        EXPECT_EQ(chunk.vertices.size(), baseVertices + ringVertices);
+        EXPECT_EQ(chunk.indices.size(), interiorIndices + bandIndices);
+        for (uint32_t index : chunk.indices)
+            EXPECT_LT(index, chunk.vertices.size());
+
+        // 每个 LOD 的基础顶点都落在 LOD0 的同名网格点上（步长 2^lod），
+        // 位置与法线一致 —— 这是“法线连续、无 T 形接缝”的 CPU 证据。
+        const uint32_t lodStep = 1u << lod;
+        const uint32_t lod0Row = (8 + 1);
+        for (uint32_t localZ = 0; localZ <= quads; ++localZ)
+        {
+            for (uint32_t localX = 0; localX <= quads; ++localX)
+            {
+                const uint32_t lodVertexIndex = localZ * (quads + 1) + localX;
+                const uint32_t lod0VertexIndex =
+                    (localZ * lodStep) * lod0Row + localX * lodStep;
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].position.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].position, 1.0e-4f));
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].normal.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].normal, 1.0e-5f));
+                EXPECT_TRUE(chunk.vertices[lodVertexIndex].texCoord.isApprox(
+                    lod0.front().vertices[lod0VertexIndex].texCoord, 1.0e-7f));
+            }
+        }
+    }
+}
+
+TEST(TerrainMeshBuilder, StitchBandVerticesStayOnBoundaryAndInsideBounds)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 4u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    const uint32_t quads = 2;
+    const uint32_t baseVertices = (quads + 1) * (quads + 1);
+    const uint32_t ringVertices = 4u * plan.desc.chunkQuads;
+    ASSERT_EQ(chunk.vertices.size(), baseVertices + ringVertices);
+
+    // 边界环必须精确落在 chunk 的四条边界线上，且不超出 AABB。
+    for (uint32_t index = baseVertices; index < chunk.vertices.size(); ++index)
+    {
+        const Eigen::Vector3f& position = chunk.vertices[index].position;
+        const bool onBoundary =
+            std::abs(position.x() - chunk.boundsMin.x()) < 1.0e-4f ||
+            std::abs(position.x() - chunk.boundsMax.x()) < 1.0e-4f ||
+            std::abs(position.z() - chunk.boundsMin.z()) < 1.0e-4f ||
+            std::abs(position.z() - chunk.boundsMax.z()) < 1.0e-4f;
+        EXPECT_TRUE(onBoundary);
+        EXPECT_TRUE(position.x() >= chunk.boundsMin.x() - 1.0e-4f &&
+                    position.x() <= chunk.boundsMax.x() + 1.0e-4f);
+        EXPECT_TRUE(position.z() >= chunk.boundsMin.z() - 1.0e-4f &&
+                    position.z() <= chunk.boundsMax.z() + 1.0e-4f);
+        EXPECT_TRUE(position.y() >= chunk.boundsMin.y() - 1.0e-4f &&
+                    position.y() <= chunk.boundsMax.y() + 1.0e-4f);
+    }
+}
+
+TEST(TerrainMeshBuilder, StitchBandKeepsClockwiseFrontFace)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
+    {
+        for (size_t index = 0; index < chunk.indices.size(); index += 3)
+        {
+            const Eigen::Vector3f& a = chunk.vertices[chunk.indices[index]].position;
+            const Eigen::Vector3f& b = chunk.vertices[chunk.indices[index + 1]].position;
+            const Eigen::Vector3f& c = chunk.vertices[chunk.indices[index + 2]].position;
+            const Eigen::Vector3f normal = (b - a).cross(c - a);
+            ASSERT_GT(normal.norm(), 1.0e-6f);
+            // 引擎 front face 为顺时针；地形自身的几何法线朝下，仍从上方可见。
+            // 过渡带必须与内部网格同向，否则会被 Back culling 剔掉。
+            EXPECT_LT(normal.y(), -1.0e-6f);
+        }
+    }
+}
+
+TEST(TerrainMeshBuilder, StitchBandIsWatertightAcrossLodLevels)
+{
+    // 相邻 chunk 差一级 LOD 时，共享边界必须由同一组 LOD0 采样点构成。
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x * x + y * y) * 0.05f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(lod0.size(), 4u);
+    ASSERT_EQ(lod1.size(), 4u);
+
+    // 索引顺序是 chunkZ 外层、chunkX 内层：(0,0)=0、(1,0)=1。
+    const VL::TerrainMeshChunk& coarse = lod1[0];
+    const VL::TerrainMeshChunk& fine = lod0[1];
+    const float sharedX = fine.vertices.front().position.x();
+
+    auto boundarySamples = [sharedX](const VL::TerrainMeshChunk& chunk) {
+        // 只统计被索引引用的顶点：粗 LOD 的基础网格仍保留一条未被绘制的
+        // 边界列，它不参与实际网格，不能算进缝合结果。
+        std::vector<bool> used(chunk.vertices.size(), false);
+        for (uint32_t index : chunk.indices)
+            used[index] = true;
+        std::vector<std::pair<float, float>> samples;
+        for (size_t index = 0; index < chunk.vertices.size(); ++index)
+        {
+            if (!used[index])
+                continue;
+            const Vertex& vertex = chunk.vertices[index];
+            if (std::abs(vertex.position.x() - sharedX) < 1.0e-3f)
+                samples.emplace_back(vertex.position.z(), vertex.position.y());
+        }
+        std::sort(samples.begin(), samples.end());
+        // 角落会同时被两条边引用，按位置去重。
+        samples.erase(
+            std::unique(samples.begin(), samples.end(),
+                [](const auto& lhs, const auto& rhs) {
+                    return std::abs(lhs.first - rhs.first) < 1.0e-3f &&
+                           std::abs(lhs.second - rhs.second) < 1.0e-3f;
+                }),
+            samples.end());
+        return samples;
+    };
+
+    const auto coarseSamples = boundarySamples(coarse);
+    const auto fineSamples = boundarySamples(fine);
+    ASSERT_EQ(coarseSamples.size(), fineSamples.size());
+    for (size_t index = 0; index < coarseSamples.size(); ++index)
+    {
+        EXPECT_NEAR(coarseSamples[index].first, fineSamples[index].first, 1.0e-3f);
+        EXPECT_NEAR(coarseSamples[index].second, fineSamples[index].second, 1.0e-3f);
+    }
+}
+
+TEST(TerrainMeshBuilder, CoarseLodNormalsMatchAcrossChunkBoundary)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 4;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 4u);
+    // chunks 顺序 (0,0),(1,0),(0,1),(1,1)；lod1 每 chunk 3×3 基础顶点，
+    // 右边界与右邻居的左边界采样同一世界位置。
+    constexpr uint32_t row = 3;
+    for (uint32_t localZ = 0; localZ < row; ++localZ)
+    {
+        const Vertex& leftEdge = chunks[0].vertices[localZ * row + (row - 1)];
+        const Vertex& rightEdge = chunks[1].vertices[localZ * row];
+        EXPECT_TRUE(leftEdge.position.isApprox(rightEdge.position, 1.0e-4f));
+        EXPECT_TRUE(leftEdge.normal.isApprox(rightEdge.normal, 1.0e-5f));
+    }
+}
+
+TEST(TerrainMeshBuilder, StitchBandBlendsCoarseNormalsTowardFineEdge)
+{
+    const auto height = [](uint32_t x, uint32_t y) {
+        return 0.5f +
+            0.22f * std::sin(static_cast<float>(x) * 0.9f) *
+                std::cos(static_cast<float>(y) * 0.7f) +
+            0.12f * std::sin(static_cast<float>(x + y) * 1.9f);
+    };
+    VL::TerrainBuildPlan plan = MakePlan(MakeHeightmap(33, 33, height));
+    plan.desc.gridResolution = 32;
+    plan.desc.chunkQuads = 16;
+
+    const std::vector<VL::TerrainMeshChunk> lod0 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(lod0.size(), 4u);
+    ASSERT_EQ(lod1.size(), 4u);
+
+    const VL::TerrainMeshChunk& coarse = lod1.front();
+    const VL::TerrainMeshChunk& fine = lod0.front();
+    const uint32_t quads = plan.desc.chunkQuads / 2;
+    const uint32_t verticesPerRow = quads + 1;
+    const uint32_t ringBase = verticesPerRow * verticesPerRow;
+    ASSERT_EQ(coarse.vertices.size(), ringBase + 4u * plan.desc.chunkQuads);
+
+    // 边界环与 LOD0 在同一位置必须使用完全相同的 step=1 法线。
+    for (uint32_t j = 0; j < plan.desc.chunkQuads; ++j)
+    {
+        const Vertex& boundary = coarse.vertices[ringBase + j];
+        const Vertex& lod0Vertex = fine.vertices[j];
+        ASSERT_TRUE(boundary.position.isApprox(lod0Vertex.position, 1.0e-4f));
+        EXPECT_TRUE(boundary.normal.isApprox(lod0Vertex.normal, 1.0e-5f));
+    }
+
+    // 第一条粗网格线（距底边一个粗格）应被混向细法线；纯粗法线应与它不同。
+    const uint32_t localX = quads / 2;
+    const uint32_t coarseIndex = verticesPerRow + localX;
+    const uint32_t globalX = localX * 2;
+    const uint32_t globalZ = 2;
+    const uint32_t lod0Index = globalZ * 33 + globalX;
+    const Eigen::Vector3f& blended = coarse.vertices[coarseIndex].normal;
+    const Eigen::Vector3f& fineNormal = fine.vertices[lod0Index].normal;
+
+    const float u = static_cast<float>(globalX) / 32.0f;
+    const float v = static_cast<float>(globalZ) / 32.0f;
+    const float stepUv = 2.0f / 32.0f;
+    const float stepDx = 2.0f * stepUv * plan.desc.size.x();
+    const float stepDz = 2.0f * stepUv * plan.desc.size.y();
+    const float left = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u - stepUv, v);
+    const float right = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u + stepUv, v);
+    const float down = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u, v - stepUv);
+    const float up = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, u, v + stepUv);
+    const Eigen::Vector3f pureCoarse(
+        -(right - left) / stepDx,
+        1.0f,
+        -(up - down) / stepDz);
+    const Eigen::Vector3f expectedPureCoarse = pureCoarse.normalized();
+
+    EXPECT_GT((blended - expectedPureCoarse).norm(), 1.0e-4f)
+        << "edge-adjacent coarse normal was not blended";
+    EXPECT_LT((blended - fineNormal).norm(), (expectedPureCoarse - fineNormal).norm())
+        << "blended normal should be closer to the LOD0 normal than the raw coarse normal";
+
+    // 距离四条边都超过混合宽度的内部顶点保持纯粗法线。
+    const uint32_t interiorIndex = 4 * verticesPerRow + 4;
+    const Eigen::Vector3f& interior = coarse.vertices[interiorIndex].normal;
+    const float interiorU = static_cast<float>(4 * 2) / 32.0f;
+    const float interiorV = static_cast<float>(4 * 2) / 32.0f;
+    const float interiorLeft = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU - stepUv, interiorV);
+    const float interiorRight = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU + stepUv, interiorV);
+    const float interiorDown = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU, interiorV - stepUv);
+    const float interiorUp = VL::TerrainHeightmap::SampleHeightCm(
+        plan.desc, *plan.heightmap, interiorU, interiorV + stepUv);
+    const Eigen::Vector3f interiorCoarse = Eigen::Vector3f(
+        -(interiorRight - interiorLeft) / stepDx,
+        1.0f,
+        -(interiorUp - interiorDown) / stepDz).normalized();
+    EXPECT_TRUE(interior.isApprox(interiorCoarse, 1.0e-5f));
+}
+
+TEST(TerrainMeshBuilder, StitchBandNormalsMatchAcrossDifferentLods)
+{
+    VL::TerrainBuildPlan plan = MakePlan(MakeHeightmap(33, 33,
+        [](uint32_t x, uint32_t y) {
+            return 0.5f +
+                0.22f * std::sin(static_cast<float>(x) * 0.9f) *
+                    std::cos(static_cast<float>(y) * 0.7f) +
+                0.12f * std::sin(static_cast<float>(x + y) * 1.9f);
+        }));
+    plan.desc.gridResolution = 32;
+    plan.desc.chunkQuads = 16;
+
+    const std::vector<VL::TerrainMeshChunk> lod1 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    const std::vector<VL::TerrainMeshChunk> lod2 =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 2);
+    ASSERT_EQ(lod1.size(), 4u);
+    ASSERT_EQ(lod2.size(), 4u);
+
+    const uint32_t edge = plan.desc.chunkQuads;
+    const uint32_t lod1RingBase =
+        (plan.desc.chunkQuads / 2 + 1) * (plan.desc.chunkQuads / 2 + 1);
+    const uint32_t lod2RingBase =
+        (plan.desc.chunkQuads / 4 + 1) * (plan.desc.chunkQuads / 4 + 1);
+
+    // (0,0) 的右边界与 (1,0) 的左边界共享 x=16 的 LOD0 采样点。
+    for (uint32_t j = 0; j < edge; ++j)
+    {
+        const Vertex& lod1Edge =
+            lod1[0].vertices[lod1RingBase + edge + j];
+        const Vertex& lod2Edge =
+            lod2[0].vertices[lod2RingBase + edge + j];
+        // z=0 是邻居的底边起点；z=1..edge-1 由邻居左边界的 1..edge-1
+        // 采样点覆盖。
+        const uint32_t neighbourIndex = j == 0
+            ? lod1RingBase
+            : lod1RingBase + 3 * edge + (edge - j);
+        const uint32_t neighbourIndex2 = j == 0
+            ? lod2RingBase
+            : lod2RingBase + 3 * edge + (edge - j);
+        const Vertex& lod1Neighbour = lod1[1].vertices[neighbourIndex];
+        const Vertex& lod2Neighbour = lod2[1].vertices[neighbourIndex2];
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod2Edge.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.normal.isApprox(lod2Edge.normal, 1.0e-5f));
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod1Neighbour.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.position.isApprox(lod2Neighbour.position, 1.0e-4f));
+        EXPECT_TRUE(lod1Edge.normal.isApprox(lod1Neighbour.normal, 1.0e-5f));
+        EXPECT_TRUE(lod2Edge.normal.isApprox(lod2Neighbour.normal, 1.0e-5f));
+        EXPECT_TRUE(lod1Neighbour.normal.isApprox(lod2Neighbour.normal, 1.0e-5f));
+    }
+}
+
+TEST(TerrainMeshBuilder, RejectsLodStepLargerThanChunkQuads)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+    // lod2 的步长是 4，chunkQuads=2 无法整除。
+    EXPECT_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 2), std::exception);
+    EXPECT_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 4), std::exception);
+    EXPECT_NO_THROW(VL::TerrainMeshBuilder::BuildChunks(plan, 1));
+}
+
+TEST(TerrainLod, SelectsLevelAtAscendingThresholds)
+{
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+    EXPECT_EQ(VL::TerrainSelectLodLevel(-10.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(0.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(999.0f, distances), 0u);
+    // 到达阈值即切到下一级（闭区间左端属于更粗一级）。
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1000.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1999.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(2000.0f, distances), 2u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(1.0e9f, distances), 2u);
+
+    const std::vector<float> none;
+    EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, none), 0u);
+}
+
+TEST(TerrainLod, DerivesDefaultDistancesFromTerrainSize)
+{
+    VL::TerrainAssetDesc desc = MakeDesc();
+    desc.size = Eigen::Vector2f(1000.0f, 2000.0f);
+
+    // 默认只有 LOD0 -> 空阈值表。
+    EXPECT_TRUE(VL::TerrainLodDistancesCm(desc).empty());
+
+    desc.lodLevels = 3;
+    const std::vector<float> derived = VL::TerrainLodDistancesCm(desc);
+    ASSERT_EQ(derived.size(), 2u);
+    EXPECT_FLOAT_EQ(derived[0], 2000.0f / 3.0f);
+    EXPECT_FLOAT_EQ(derived[1], 4000.0f / 3.0f);
+
+    // 显式距离优先于推导值。
+    desc.lodDistancesCm = {1234.0f, 5678.0f};
+    EXPECT_EQ(VL::TerrainLodDistancesCm(desc), desc.lodDistancesCm);
+}
+
+TEST(TerrainLod, HysteresisKeepsLevelInsideTheBand)
+{
+    const std::vector<float> distances = {1000.0f, 2000.0f};
+
+    // 首次选择没有历史级，与纯函数一致。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            990.0f, distances, false, 0),
+        0u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            1000.0f, distances, false, 0),
+        1u);
+
+    // 当前在 LOD1：变粗要越过 distances[1]=2000 的 +10%，变细要低于
+    // distances[0]=1000 的 -10%。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            1050.0f, distances, true, 1),
+        1u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            2201.0f, distances, true, 1),
+        2u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            950.0f, distances, true, 1),
+        1u);
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            899.0f, distances, true, 1),
+        0u);
+
+    // 超过最后一个阈值后保持最粗一级。
+    EXPECT_EQ(
+        VL::TerrainSelectLodLevelHysteresis(
+            100000.0f, distances, true, 2),
+        2u);
+}
+
+TEST(TerrainLod, AabbDistanceUsesTheNearestPoint)
+{
+    const Eigen::Vector3f boundsMin(-100.0f, -10.0f, -100.0f);
+    const Eigen::Vector3f boundsMax(100.0f, 10.0f, 100.0f);
+
+    // 点在盒内：距离为 0，而不是到中心的距离。
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f::Zero(), boundsMin, boundsMax),
+        0.0f);
+    // 单轴、三轴最近点距离。
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f(0.0f, 0.0f, 500.0f), boundsMin, boundsMax),
+        400.0f);
+    EXPECT_FLOAT_EQ(
+        VL::TerrainLodDistanceToAabbCm(
+            Eigen::Vector3f(300.0f, 0.0f, 500.0f), boundsMin, boundsMax),
+        std::sqrt(200.0f * 200.0f + 400.0f * 400.0f));
+}
+
+TEST(TerrainMeshBuilder, Lod0HasNoStitchBand)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(chunks.size(), 4u);
+    for (const VL::TerrainMeshChunk& chunk : chunks)
+    {
+        // LOD0 的边界本来就是 LOD0 间距，不需要额外边界环或过渡带。
+        EXPECT_EQ(chunk.vertices.size(), 9u);
+        EXPECT_EQ(chunk.indices.size(), 24u);
+    }
+}
+
+TEST(TerrainMeshBuilder, ChunkResourceKeyDistinguishesLodLevel)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 8;
+
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1));
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 2));
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1));
+    // 默认参数仍是 LOD0。
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0),
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0));
+
+    // LOD0 的几何与 lodLevels 无关；单级与多级资产可以共享同一个 LOD0 缓冲。
+    VL::TerrainBuildPlan multiLodPlan = plan;
+    multiLodPlan.desc.lodLevels = 3;
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 0),
+        VL::TerrainChunkResourceKey(multiLodPlan, 0, 0, 0));
+
+    // lodDistances 只影响运行时选择，不得改变单级网格的资源 key。
+    VL::TerrainBuildPlan retuned = plan;
+    retuned.desc.lodLevels = 3;
+    retuned.desc.lodDistancesCm = {100.0f, 200.0f};
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(plan, 0, 0, 1),
+        VL::TerrainChunkResourceKey(retuned, 0, 0, 1));
+    EXPECT_THROW(
+        VL::TerrainChunkResourceKey(plan, 0, 0, VL::TerrainMaxLodLevels),
+        std::invalid_argument);
+}
+
+TEST(TerrainAssetTypes, OnlyLayeredTerrainUsesVirtualPages)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    // 没有 layers 的地形走普通材质，不参与共享 VT 页表。
+    EXPECT_FALSE(VL::TerrainUsesVirtualPages(plan));
+
+    plan.desc.layers = {{"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    EXPECT_TRUE(VL::TerrainUsesVirtualPages(plan));
+}
+
+TEST(TerrainAssetTypes, FeedbackEligibilityRequiresLayersAndLayerTable)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+
+    // 两个条件必须同时成立：layerless M_pbr 即使材质意外声明 layerTable，
+    // 也不能进入 feedback；反之只有 layers 但材质没绑定层表也不进入。
+    EXPECT_FALSE(VL::TerrainParticipatesInFeedback(plan, false));
+    EXPECT_FALSE(VL::TerrainParticipatesInFeedback(plan, true));
+
+    plan.desc.layers = {{"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    EXPECT_FALSE(VL::TerrainParticipatesInFeedback(plan, false));
+    EXPECT_TRUE(VL::TerrainParticipatesInFeedback(plan, true));
+}
+
+TEST(TerrainMeshBuilder, PageUvInsetsOnlyTheGlobalLastColumnAndRow)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 2;
+    plan.desc.pageOrigin = Eigen::Vector2i(4, 6);
+    plan.desc.pageTilesPerSide = 8;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan);
+    ASSERT_EQ(chunks.size(), 4u);
+
+    const float pageInset =
+        0.5f / (static_cast<float>(VL::TerrainPageResolution) *
+            static_cast<float>(VL::TerrainPageTableSize));
+    // globalX/globalZ=4 是页边界上的最后一列/行，必须内缩半个页 texel。
+    const float expectedMaxU = (4.0f + 8.0f) / 32.0f - pageInset;
+    const float expectedMaxV = (6.0f + 8.0f) / 32.0f - pageInset;
+    EXPECT_NEAR(chunks[1].vertices[2].texCoord1.x(), expectedMaxU, 1.0e-7f);
+    EXPECT_NEAR(chunks[2].vertices[6].texCoord1.y(), expectedMaxV, 1.0e-7f);
+    EXPECT_NEAR(chunks[3].vertices[8].texCoord1.x(), expectedMaxU, 1.0e-7f);
+    EXPECT_NEAR(chunks[3].vertices[8].texCoord1.y(), expectedMaxV, 1.0e-7f);
+
+    // 内部列 globalX=1 / 内部行 globalZ=1 保持精确的页内坐标，不得内缩。
+    EXPECT_NEAR(
+        chunks[0].vertices[1].texCoord1.x(), (4.0f + 2.0f) / 32.0f, 1.0e-7f);
+    EXPECT_NEAR(
+        chunks[0].vertices[3].texCoord1.y(), (6.0f + 2.0f) / 32.0f, 1.0e-7f);
+}
+
+TEST(TerrainLayerTable, PacksHeightSlopeAndNoiseIntoFourRows)
+{
+    std::vector<VL::TerrainLayerDesc> layers(8);
+    for (uint32_t index = 0; index < 8; ++index)
+    {
+        layers[index].name = "layer" + std::to_string(index);
+        layers[index].heightMin = 0.1f * index;
+        layers[index].heightMax = 0.2f + 0.1f * index;
+        layers[index].slopeMin = 1.0f * index;
+        layers[index].slopeMax = 10.0f + 1.0f * index;
+        layers[index].noise = 0.05f * index;
+        layers[index].uvScale = 1.0f + 0.1f * index;
+        layers[index].uvRotation = 10.0f * index;
+    }
+    const HostImage image = VL::TerrainLayerTable::BuildImage(layers);
+    ASSERT_EQ(image.width, 256u);
+    ASSERT_EQ(image.height, 4u);
+    ASSERT_EQ(image.format, HostImage::PixelFormat::RGBA32_FLOAT);
+    const float* pixels = reinterpret_cast<const float*>(image.data.data());
+    const size_t row0 = 3 * 4;
+    EXPECT_FLOAT_EQ(pixels[row0 + 0], 0.3f);
+    EXPECT_FLOAT_EQ(pixels[row0 + 1], 0.5f);
+    EXPECT_FLOAT_EQ(pixels[row0 + 2], 3.0f);
+    EXPECT_FLOAT_EQ(pixels[row0 + 3], 13.0f);
+    const size_t row1 = static_cast<size_t>(256) * 4 + 3 * 4;
+    EXPECT_FLOAT_EQ(pixels[row1 + 0], 0.15f);
+    EXPECT_FLOAT_EQ(pixels[row1 + 1], 0.05f);
+    EXPECT_FLOAT_EQ(pixels[row1 + 2], 1.3f);
+    EXPECT_FLOAT_EQ(pixels[row1 + 3], 30.0f * 3.14159265358979323846f / 180.0f);
+    // row2：默认 1K -> 8 页/边；pageTableBase 是前 3 层的 85 页累加。
+    const size_t row2 = static_cast<size_t>(256) * 8 + 3 * 4;
+    EXPECT_FLOAT_EQ(pixels[row2 + 0], 8.0f);
+    EXPECT_FLOAT_EQ(pixels[row2 + 1], 3.0f * 85.0f);
+    EXPECT_FLOAT_EQ(pixels[row2 + 2], 0.0f);
+    EXPECT_FLOAT_EQ(pixels[row2 + 3], 0.0f);
+    // row3：未写 avgColor 时取中性灰 0.18。全黑会让 mode 1 的缺页块
+    // 在光照下像空洞，因此默认值必须是中性回退色而不是 0。
+    const size_t row3 = static_cast<size_t>(256) * 12 + 3 * 4;
+    EXPECT_FLOAT_EQ(pixels[row3 + 0], 0.18f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 1], 0.18f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 2], 0.18f);
+    EXPECT_FLOAT_EQ(pixels[row3 + 3], 0.0f);
+}
+
+TEST(TerrainLayerTable, RejectsMoreThanMaxLayers)
+{
+    std::vector<VL::TerrainLayerDesc> layers(257);
+    EXPECT_THROW(VL::TerrainLayerTable::BuildImage(layers), std::exception);
+}
+
+TEST(TerrainLayerTable, DetectsLayerDefinitionMismatch)
+{
+    VL::TerrainLayerDesc layer;
+    layer.name = "grass";
+    layer.heightMin = 0.1f;
+    layer.heightMax = 0.6f;
+    layer.slopeMin = 0.0f;
+    layer.slopeMax = 30.0f;
+    layer.noise = 0.2f;
+    const std::vector<VL::TerrainLayerDesc> first{layer};
+    EXPECT_TRUE(VL::TerrainLayerTable::AreLayersIdentical(first, first));
+
+    VL::TerrainLayerDesc changed = layer;
+    changed.heightMax = 0.7f;
+    EXPECT_FALSE(VL::TerrainLayerTable::AreLayersIdentical(first, {changed}));
+}
+
+TEST(TerrainWeightMap, PacksTopFourIdsAndNormalizedWeights)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.layers = {
+        {"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f},
+        {"b", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f},
+        {"c", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f},
+        {"d", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    const VL::TerrainWeightMap map = VL::TerrainWeightMapBuilder::Build(plan, 8, 2);
+    ASSERT_EQ(map.width, 8u);
+    ASSERT_EQ(map.height, 8u);
+    ASSERT_EQ(map.ids.size(), 8u * 8u * 4u);
+    ASSERT_EQ(map.weights.size(), map.ids.size());
+    ASSERT_EQ(map.tiles.size(), 4u);
+    for (size_t texel = 0; texel < 8u * 8u; ++texel)
+    {
+        int weightSum = 0;
+        for (size_t slot = 0; slot < 4; ++slot)
+        {
+            EXPECT_LT(map.ids[texel * 4 + slot], 4);
+            weightSum += map.weights[texel * 4 + slot];
+        }
+        EXPECT_GE(weightSum, 250);
+    }
+}
+
+TEST(TerrainWeightMap, PaintOverrideAddsAWeightOutsideItsHeightBand)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    auto paint = std::make_shared<VL::TerrainLayerPaintData>();
+    paint->width = 8;
+    paint->height = 8;
+    paint->layerCount = 2;
+    paint->weights.assign(8u * 8u * 2u, 0.0f);
+    paint->opacity.assign(8u * 8u * 2u, 0u);
+    for (size_t index = 0; index < 8u * 8u; ++index)
+    {
+        paint->weights[8u * 8u + index] = 1.0f;
+        paint->opacity[8u * 8u + index] = 255;
+    }
+    plan.layerPaint = paint;
+
+    const VL::TerrainWeightMap map = VL::TerrainWeightMapBuilder::Build(plan, 8, 2);
+    for (size_t texel = 0; texel < 8u * 8u; ++texel)
+    {
+        bool foundHigh = false;
+        for (size_t slot = 0; slot < 4; ++slot)
+            foundHigh = foundHigh || map.ids[texel * 4 + slot] == 1;
+        EXPECT_TRUE(foundHigh) << texel;
+    }
+}
+
+TEST(TerrainWeightMap, TileCandidatesFollowHeightBands)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(17, 17, [](uint32_t x, uint32_t) {
+            return x < 8 ? 0.0f : 1.0f;
+        }));
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    const VL::TerrainWeightMap map = VL::TerrainWeightMapBuilder::Build(plan, 8, 2);
+    ASSERT_EQ(map.tiles.size(), 4u);
+    // 过渡带的 tile 可以同时包含低/高两层；这里只断言每个 tile 至少包含预期层。
+    EXPECT_NE(std::find(map.tiles[0].layerIds.begin(), map.tiles[0].layerIds.end(), 0),
+        map.tiles[0].layerIds.end());
+    EXPECT_NE(std::find(map.tiles[1].layerIds.begin(), map.tiles[1].layerIds.end(), 1),
+        map.tiles[1].layerIds.end());
+    EXPECT_NE(std::find(map.tiles[2].layerIds.begin(), map.tiles[2].layerIds.end(), 0),
+        map.tiles[2].layerIds.end());
+    EXPECT_NE(std::find(map.tiles[3].layerIds.begin(), map.tiles[3].layerIds.end(), 1),
+        map.tiles[3].layerIds.end());
+}
+
+TEST(TerrainWeightMap, PageTableMapsTilesToAtlasPages)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    plan.desc.layers = {
+        {"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f},
+        {"b", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    const VL::TerrainVirtualTexture vt =
+        VL::TerrainWeightMapBuilder::BuildVirtualTexture(plan, 2, 4, 4);
+    EXPECT_EQ(vt.pageTableSize, 4u);
+    EXPECT_EQ(vt.tilesPerSide, 2u);
+    EXPECT_EQ(vt.pageResolution, 4u);
+    EXPECT_EQ(vt.atlasResolution, 16u);
+    ASSERT_EQ(vt.pageTable.size(), 4u * 4u * 4u);
+    EXPECT_EQ(vt.pageTable[0], 0u);
+    EXPECT_EQ(vt.pageTable[1], 0u);
+    EXPECT_EQ(vt.pageTable[4], 1u);
+    EXPECT_EQ(vt.pageTable[5], 0u);
+    EXPECT_EQ(vt.pageTable[16], 0u);
+    EXPECT_EQ(vt.pageTable[17], 1u);
+    EXPECT_EQ(vt.pageTable[20], 1u);
+    EXPECT_EQ(vt.pageTable[21], 1u);
+    EXPECT_EQ(vt.ids.size(), 16u * 16u * 4u);
+    EXPECT_EQ(vt.weights.size(), vt.ids.size());
+}
+
+TEST(TerrainWeightMap, BuildPageMatchesVirtualTextureTile)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(17, 17, [](uint32_t x, uint32_t y) {
+            return 0.5f + 0.25f * static_cast<float>(x + y) / 32.0f;
+        }));
+    plan.desc.layers = {
+        {"low", 0.0f, 0.55f, 0.0f, 90.0f, 0.1f},
+        {"high", 0.5f, 1.0f, 0.0f, 90.0f, 0.1f}};
+    plan.desc.pageOrigin = Eigen::Vector2i(0, 0);
+
+    constexpr uint32_t pageResolution = 4;
+    const VL::TerrainPageData page =
+        VL::TerrainWeightMapBuilder::BuildPage(plan, 2, pageResolution, 1, 1);
+    const VL::TerrainVirtualTexture vt =
+        VL::TerrainWeightMapBuilder::BuildVirtualTexture(plan, 2, pageResolution, 4);
+
+    ASSERT_EQ(page.ids.size(), pageResolution * pageResolution * 4);
+    ASSERT_EQ(page.weights.size(), page.ids.size());
+    ASSERT_EQ(vt.tiles.size(), 4u);
+    // tile 顺序是 row-major，(1,1) 对应 index 3。
+    EXPECT_EQ(page.candidates.layerIds, vt.tiles[3].layerIds);
+
+    const uint32_t globalX = 1;
+    const uint32_t globalY = 1;
+    for (uint32_t y = 0; y < pageResolution; ++y)
+    {
+        const size_t pageOffset = static_cast<size_t>(y) * pageResolution * 4;
+        const size_t atlasOffset =
+            ((static_cast<size_t>(globalY) * pageResolution + y) * vt.atlasResolution +
+             static_cast<size_t>(globalX) * pageResolution) * 4;
+        EXPECT_EQ(
+            std::memcmp(page.ids.data() + pageOffset, vt.ids.data() + atlasOffset,
+                static_cast<size_t>(pageResolution) * 4),
+            0);
+        EXPECT_EQ(
+            std::memcmp(page.weights.data() + pageOffset, vt.weights.data() + atlasOffset,
+                static_cast<size_t>(pageResolution) * 4),
+            0);
+    }
+}
+
+TEST(TerrainPageManager, AccumulatesNonOverlappingTerrainPages)
+{
+    VL::TerrainBuildPlan first = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; }));
+    first.desc.layers = {
+        {"a", 0.0f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    first.desc.pageTilesPerSide = 2;
+    first.desc.pageOrigin = Eigen::Vector2i(0, 0);
+
+    VL::TerrainBuildPlan second = first;
+    second.desc.assetPath = "Generated/Validation/TerrainTests/TR_second.json";
+    second.desc.pageOrigin = Eigen::Vector2i(2, 1);
+
+    VL::TerrainPageManager manager;
+    manager.RegisterTerrain(first);
+    manager.RegisterTerrain(second);
+    EXPECT_EQ(manager.Registrations().size(), 2u);
+    EXPECT_TRUE(manager.IsResident(0, 0));
+    EXPECT_TRUE(manager.IsResident(1, 1));
+    EXPECT_TRUE(manager.IsResident(2, 1));
+    EXPECT_TRUE(manager.IsResident(3, 2));
+    EXPECT_FALSE(manager.IsResident(4, 4));
+    // 第二个地形从物理槽位 4 开始（第一个地形占 0..3），
+    // 因此虚拟页 (2,1) 的页表项内容是物理坐标 (4,0)，而不是虚拟坐标 (2,1)。
+    const size_t pageEntry =
+        (static_cast<size_t>(1) * VL::TerrainPageManager::PageTableSize + 2) * 4;
+    EXPECT_EQ(manager.PageTable()[pageEntry + 0], 4u);
+    EXPECT_EQ(manager.PageTable()[pageEntry + 1], 0u);
+    EXPECT_EQ(manager.PageTable()[pageEntry + 3], 255u);
+    EXPECT_THROW(manager.RegisterTerrain(first), std::exception);
+}
+
+TEST(TerrainPageManager, LastPageSlotIsAllocatable)
+{
+    // 容量公式：下限 512、上限物理槽位；必须覆盖全部注册页。
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(64, 512, 1024), 512u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(1023, 512, 1024), 1023u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(1024, 512, 1024), 1024u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(4096, 512, 1024), 1024u);
+    EXPECT_EQ(VL::ComputeTerrainResidentCapacity(0, 512, 1024), 512u);
+
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(8);
+    const std::string placement = plan.desc.assetPath;
+    // 覆盖最后一格的 8×8 区域可以注册。
+    plan.desc.pageOrigin = Eigen::Vector2i(24, 24);
+    manager.RegisterTerrain(plan, false);
+
+    const size_t lastSlot =
+        static_cast<size_t>(VL::TerrainPageManager::PageTableSize - 1) *
+            VL::TerrainPageManager::PageTableSize +
+        (VL::TerrainPageManager::PageTableSize - 1);
+    // 页表里没有预留项；虚拟 (31,31) 是普通页。
+    EXPECT_EQ(manager.PageTable()[lastSlot * 4 + 3], 0u);
+    EXPECT_FALSE(manager.IsResident(
+        VL::TerrainPageManager::PageTableSize - 1,
+        VL::TerrainPageManager::PageTableSize - 1));
+    // 全部 1024 个物理槽位都可分配（不再为缺页 fallback 保留一个）。
+    EXPECT_EQ(
+        manager.AvailablePhysicalSlotCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount);
+    EXPECT_EQ(VL::TerrainPageManager::UsablePhysicalSlotCount,
+              VL::TerrainPageManager::PageSlotCount);
+
+    // 该区域的最后一个 tile 正好落在虚拟 (31,31)，可以正常驻留/淘汰。
+    ASSERT_TRUE(manager.RequestPage(placement, 7, 7, 1));
+    EXPECT_TRUE(manager.IsResident(31, 31));
+    const VL::TerrainPageManager::PageState* page =
+        manager.FindPage(MakePageKey(placement, 7, 7));
+    ASSERT_NE(page, nullptr);
+    EXPECT_EQ(page->virtualPageX, 31u);
+    EXPECT_EQ(page->virtualPageY, 31u);
+    // 普通页从槽位 0 开始分配。
+    EXPECT_EQ(page->physicalPageX, 0u);
+    EXPECT_EQ(page->physicalPageY, 0u);
+    ASSERT_TRUE(manager.EvictPage(placement, 7, 7));
+    EXPECT_FALSE(manager.IsResident(31, 31));
+
+    // 重叠的虚拟区域仍拒绝，即使它只覆盖 (31,31)。
+    VL::TerrainBuildPlan overlapping = plan;
+    overlapping.placementId = "terrain|Overlapping";
+    overlapping.desc.pageOrigin = Eigen::Vector2i(31, 31);
+    overlapping.desc.pageTilesPerSide = 1;
+    EXPECT_THROW(manager.RegisterTerrain(overlapping, false), std::exception);
+}
+
+TEST(TerrainPageManager, DistinguishesVirtualPageFromPhysicalAtlasSlot)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    plan.desc.pageOrigin = Eigen::Vector2i(5, 3);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 1, 2));
+
+    const VL::TerrainPageManager::PageState* first =
+        manager.FindPage(MakePageKey(path, 0, 0));
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->virtualPageX, 5u);
+    EXPECT_EQ(first->virtualPageY, 3u);
+    EXPECT_EQ(first->physicalPageX, 0u);
+    EXPECT_EQ(first->physicalPageY, 0u);
+
+    const VL::TerrainPageManager::PageState* second =
+        manager.FindPage(MakePageKey(path, 1, 1));
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(second->virtualPageX, 6u);
+    EXPECT_EQ(second->virtualPageY, 4u);
+    EXPECT_EQ(second->physicalPageX, 1u);
+    EXPECT_EQ(second->physicalPageY, 0u);
+
+    // 页表项写在虚拟坐标 (6,4)，内容是物理槽位 (1,0)。
+    const size_t virtualEntry = PageTableEntryOffset(6, 4);
+    EXPECT_EQ(manager.PageTable()[virtualEntry + 0], 1u);
+    EXPECT_EQ(manager.PageTable()[virtualEntry + 1], 0u);
+    EXPECT_EQ(manager.PageTable()[virtualEntry + 3], 255u);
+
+    // atlas 数据只出现在物理槽位 (1,0)，虚拟坐标 (6,4) 处仍为空。
+    EXPECT_NE(manager.WeightAtlas()[AtlasPageByteOffset(1, 0)], 0u);
+    EXPECT_EQ(manager.WeightAtlas()[AtlasPageByteOffset(6, 4)], 0u);
+}
+
+TEST(TerrainPageManager, UpdateHeightmapRebakesInvalidatedPagesFromNewHeights)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+    plan.heightmap = std::make_shared<const HostImage>(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.0f; }));
+    const std::string path = plan.desc.assetPath;
+    const VL::TerrainPageManager::PageKey key = MakePageKey(path, 0, 0);
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    std::vector<uint8_t> ids;
+    std::vector<uint8_t> weights;
+    ASSERT_TRUE(manager.ReadPageLayers(key, false, ids, weights));
+    EXPECT_EQ(ids[0], 0u);
+    EXPECT_EQ(weights[0], 255u);
+
+    manager.UpdateHeightmap(
+        path,
+        std::make_shared<const HostImage>(
+            MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 1.0f; })));
+    manager.InvalidatePlacementPages(path);
+    const VL::TerrainPageManager::PageState* invalidated =
+        manager.FindPage(key);
+    ASSERT_NE(invalidated, nullptr);
+    EXPECT_FALSE(invalidated->resident);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    ASSERT_TRUE(manager.ReadPageLayers(key, false, ids, weights));
+    // 只有确实按新高度重新烘焙，top-1 层才会从 low 变成 high。
+    EXPECT_EQ(ids[0], 1u);
+    EXPECT_EQ(weights[0], 255u);
+}
+
+TEST(TerrainPageManager, EvictedPhysicalSlotIsReusedByAnotherVirtualPage)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    plan.desc.pageOrigin = Eigen::Vector2i(9, 9);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 0, 2));
+    EXPECT_EQ(
+        manager.AvailablePhysicalSlotCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount - 2);
+
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+    EXPECT_EQ(
+        manager.AvailablePhysicalSlotCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount - 2);
+    // 淘汰后的槽位先进入 quarantine，不能立刻算作可分配空闲槽。
+    EXPECT_EQ(manager.QuarantinedPhysicalSlotCount(), 1u);
+
+    // (0,1) 应复用刚释放的物理槽位 0，而不是顺序拿到槽位 2。
+    ASSERT_TRUE(manager.RequestPage(path, 0, 1, 3));
+    const VL::TerrainPageManager::PageState* reused =
+        manager.FindPage(MakePageKey(path, 0, 1));
+    ASSERT_NE(reused, nullptr);
+    EXPECT_EQ(reused->virtualPageX, 9u);
+    EXPECT_EQ(reused->virtualPageY, 10u);
+    EXPECT_EQ(reused->physicalPageX, 0u);
+    EXPECT_EQ(reused->physicalPageY, 0u);
+    EXPECT_EQ(
+        manager.AvailablePhysicalSlotCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount - 2);
+
+    // 旧虚拟页失效，新虚拟页映射到物理槽位 0。
+    EXPECT_FALSE(manager.IsResident(9, 9));
+    EXPECT_TRUE(manager.IsResident(9, 10));
+    for (size_t channel = 0; channel < 4; ++channel)
+        EXPECT_EQ(manager.PageTable()[PageTableEntryOffset(9, 9) + channel], 0u);
+    EXPECT_EQ(manager.PageTable()[PageTableEntryOffset(9, 10) + 0], 0u);
+    EXPECT_EQ(manager.PageTable()[PageTableEntryOffset(9, 10) + 1], 0u);
+    EXPECT_EQ(manager.PageTable()[PageTableEntryOffset(9, 10) + 3], 255u);
+    EXPECT_NE(manager.WeightAtlas()[AtlasPageByteOffset(0, 0)], 0u);
+}
+
+TEST(TerrainPageManager, UploadDescriptorsSeparateVirtualAndPhysicalCoordinates)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    plan.desc.pageOrigin = Eigen::Vector2i(5, 3);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    // 非 preload 注册不再产生 fallback 页表项，也没有其他待上传内容。
+    EXPECT_FALSE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_TRUE(pageTableUploads.empty());
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 1, 2));
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+
+    ASSERT_EQ(pageTableUploads.size(), 2u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageX, 5u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageY, 3u);
+    EXPECT_EQ(pageTableUploads[0].entry[0], 0u);
+    EXPECT_EQ(pageTableUploads[0].entry[1], 0u);
+    EXPECT_EQ(pageTableUploads[1].virtualPageX, 6u);
+    EXPECT_EQ(pageTableUploads[1].virtualPageY, 4u);
+    EXPECT_EQ(pageTableUploads[1].entry[0], 1u);
+    EXPECT_EQ(pageTableUploads[1].entry[1], 0u);
+    EXPECT_EQ(pageTableUploads[1].entry[3], 255u);
+
+    ASSERT_EQ(atlasUploads.size(), 2u);
+    EXPECT_EQ(atlasUploads[0].physicalPageX, 0u);
+    EXPECT_EQ(atlasUploads[0].physicalPageY, 0u);
+    EXPECT_EQ(atlasUploads[1].physicalPageX, 1u);
+    EXPECT_EQ(atlasUploads[1].physicalPageY, 0u);
+    for (const auto& upload : atlasUploads)
+    {
+        EXPECT_FALSE(
+            upload.physicalPageX == 6u && upload.physicalPageY == 4u);
+    }
+}
+
+TEST(TerrainPageManager, LoweringResidentCapacityEvictsImmediately)
+{
+    VL::TerrainPageManager manager;
+    manager.SetResidentCapacity(4);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 0, 2));
+    ASSERT_TRUE(manager.RequestPage(path, 0, 1, 3));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 1, 4));
+    ASSERT_EQ(manager.ResidentCount(), 4u);
+
+    manager.SetResidentCapacity(2);
+    EXPECT_EQ(manager.ResidentCount(), 2u);
+    EXPECT_EQ(manager.EvictionCount(), 2u);
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 1)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 1, 1)));
+    // 两个被淘汰的槽位进入 quarantine，free 计数不会立即回升。
+    EXPECT_EQ(
+        manager.AvailablePhysicalSlotCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount - 4);
+    EXPECT_EQ(manager.QuarantinedPhysicalSlotCount(), 2u);
+}
+
+TEST(TerrainPageManager, ResidentCapacityClampsToUsablePhysicalSlots)
+{
+    VL::TerrainPageManager manager;
+    manager.SetResidentCapacity(0);
+    EXPECT_EQ(manager.ResidentCapacity(), 1u);
+    manager.SetResidentCapacity(VL::TerrainPageManager::PageSlotCount + 100);
+    EXPECT_EQ(
+        manager.ResidentCapacity(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount);
+}
+
+TEST(TerrainPageManager, RequestTracksHitAndMissCounts)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    EXPECT_EQ(manager.ResidentCount(), 0u);
+
+    EXPECT_TRUE(manager.RequestPage(path, 0, 0, 10));
+    EXPECT_EQ(manager.RequestCount(), 1u);
+    EXPECT_EQ(manager.PageMissCount(), 1u);
+    EXPECT_EQ(manager.PageHitCount(), 0u);
+    EXPECT_EQ(manager.ResidentCount(), 1u);
+
+    EXPECT_TRUE(manager.RequestPage(path, 0, 0, 11));
+    EXPECT_EQ(manager.RequestCount(), 2u);
+    EXPECT_EQ(manager.PageMissCount(), 1u);
+    EXPECT_EQ(manager.PageHitCount(), 1u);
+    EXPECT_EQ(manager.ResidentCount(), 1u);
+
+    EXPECT_TRUE(manager.RequestPage(path, 1, 0, 12));
+    EXPECT_EQ(manager.RequestCount(), 3u);
+    EXPECT_EQ(manager.PageMissCount(), 2u);
+    EXPECT_EQ(manager.ResidentCount(), 2u);
+}
+
+TEST(TerrainPageManager, EvictionInvalidatesPageTableAndQuarantinesSlot)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    const size_t entry = 0; // 全局页表坐标 (0,0)
+    EXPECT_EQ(manager.PageTable()[entry + 0], 0u);
+    EXPECT_EQ(manager.PageTable()[entry + 1], 0u);
+    EXPECT_EQ(manager.PageTable()[entry + 3], 255u);
+    EXPECT_NE(manager.WeightAtlas()[0], 0u);
+
+    EXPECT_TRUE(manager.EvictPage(path, 0, 0));
+    EXPECT_EQ(manager.ResidentCount(), 0u);
+    EXPECT_EQ(manager.EvictionCount(), 1u);
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_FALSE(manager.IsResident(0, 0));
+    for (size_t index = 0; index < 4; ++index)
+        EXPECT_EQ(manager.PageTable()[entry + index], 0u);
+    // 淘汰不清 atlas：旧 in-flight 帧可能仍采样该物理槽位，内容必须保留到
+    // quarantine 结束；页表 A=0 已让它对新帧不可达。
+    EXPECT_NE(manager.WeightAtlas()[0], 0u);
+    EXPECT_EQ(manager.QuarantinedPhysicalSlotCount(), 1u);
+    EXPECT_EQ(manager.PhysicalSlotReleaseEpoch(0, 0), 1u);
+
+    EXPECT_FALSE(manager.EvictPage(path, 0, 0));
+    EXPECT_EQ(manager.EvictionCount(), 1u);
+
+    // 释放后的槽位可以由同一虚拟页重新占用。
+    EXPECT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    EXPECT_EQ(manager.ResidentCount(), 1u);
+    EXPECT_EQ(manager.PageTable()[entry + 3], 255u);
+}
+
+TEST(TerrainPageManager, LeastRecentlyUsedPageIsEvictedAtCapacity)
+{
+    VL::TerrainPageManager manager;
+    manager.SetResidentCapacity(2);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 0, 2));
+    // (0,0) 最近被使用，(1,0) 成为 LRU。
+    ASSERT_TRUE(manager.MarkUsed(path, 0, 0, 3));
+    ASSERT_TRUE(manager.RequestPage(path, 0, 1, 4));
+
+    EXPECT_EQ(manager.ResidentCount(), 2u);
+    EXPECT_EQ(manager.EvictionCount(), 1u);
+    EXPECT_EQ(manager.PageMissCount(), 3u);
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 1)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+
+    const size_t evictedEntry =
+        (static_cast<size_t>(0) * VL::TerrainPageManager::PageTableSize + 1) * 4;
+    for (size_t index = 0; index < 4; ++index)
+        EXPECT_EQ(manager.PageTable()[evictedEntry + index], 0u);
+    const size_t liveEntry =
+        (static_cast<size_t>(0) * VL::TerrainPageManager::PageTableSize + 0) * 4;
+    EXPECT_EQ(manager.PageTable()[liveEntry + 3], 255u);
+    EXPECT_EQ(manager.PageTable()[liveEntry + 0], 0u);
+    EXPECT_EQ(manager.PageTable()[liveEntry + 1], 0u);
+    // (0,1) 复用了被淘汰的 (1,0) 的物理槽位 1，虚拟坐标与物理槽位因此不同。
+    const size_t reusedEntry =
+        (static_cast<size_t>(1) * VL::TerrainPageManager::PageTableSize + 0) * 4;
+    EXPECT_EQ(manager.PageTable()[reusedEntry + 0], 1u);
+    EXPECT_EQ(manager.PageTable()[reusedEntry + 1], 0u);
+    EXPECT_EQ(manager.PageTable()[reusedEntry + 3], 255u);
+}
+
+TEST(TerrainPageManager, PriorityProtectsPageFromLruEviction)
+{
+    VL::TerrainPageManager manager;
+    manager.SetResidentCapacity(2);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 10, 5));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 0, 20, 1));
+    // 预算满时优先淘汰优先级最低的 (1,0)，而不是更旧的 (0,0)。
+    ASSERT_TRUE(manager.RequestPage(path, 0, 1, 30, 0));
+
+    EXPECT_EQ(manager.EvictionCount(), 1u);
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 1)));
+}
+
+TEST(TerrainPageManager, RepeatedRequestDoesNotAllocateAnotherPage)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 3));
+
+    EXPECT_EQ(manager.ResidentCount(), 1u);
+    EXPECT_EQ(manager.RequestCount(), 3u);
+    EXPECT_EQ(manager.PageMissCount(), 1u);
+    EXPECT_EQ(manager.PageHitCount(), 2u);
+    EXPECT_EQ(manager.EvictionCount(), 0u);
+
+    // 再请求第二个页时仍有预算，不应触发淘汰。
+    ASSERT_TRUE(manager.RequestPage(path, 1, 1, 4));
+    EXPECT_EQ(manager.ResidentCount(), 2u);
+    EXPECT_EQ(manager.EvictionCount(), 0u);
+}
+
+TEST(TerrainPageManager, FirstPreloadUploadContainsEveryRegisteredPage)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    manager.RegisterTerrain(plan, true);
+    ASSERT_EQ(manager.ResidentCount(), 4u);
+    EXPECT_TRUE(manager.HasDirtyUploads());
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_FALSE(manager.HasDirtyUploads());
+
+    // 2×2 地形页：fallback 已与虚拟页表解耦，首次上传只包含真实地形页。
+    ASSERT_EQ(pageTableUploads.size(), 4u);
+    for (const auto& upload : pageTableUploads)
+    {
+        const size_t entry =
+            PageTableEntryOffset(upload.virtualPageX, upload.virtualPageY);
+        for (size_t channel = 0; channel < 4; ++channel)
+            EXPECT_EQ(upload.entry[channel], manager.PageTable()[entry + channel]);
+        EXPECT_EQ(upload.entry[3], 255u);
+    }
+
+    // 每个驻留页各输出一次完整 128×128 RGBA 页，不再整张 atlas 全量上传。
+    ASSERT_EQ(atlasUploads.size(), 4u);
+    const size_t pageBytes = TerrainPageByteSize();
+    const size_t rowBytes = static_cast<size_t>(VL::TerrainPageManager::PageResolution) * 4;
+    for (const auto& upload : atlasUploads)
+    {
+        ASSERT_EQ(upload.ids.size(), pageBytes);
+        ASSERT_EQ(upload.weights.size(), pageBytes);
+        const size_t atlasOffset =
+            AtlasPageByteOffset(upload.physicalPageX, upload.physicalPageY);
+        EXPECT_EQ(std::memcmp(
+                      upload.ids.data(), manager.IdAtlas().data() + atlasOffset, rowBytes),
+            0);
+        EXPECT_EQ(std::memcmp(
+                      upload.weights.data(), manager.WeightAtlas().data() + atlasOffset, rowBytes),
+            0);
+    }
+}
+
+TEST(TerrainPageManager, RequestUploadsOnlyTheNewPage)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    // 非 preload 注册不再产生 fallback 页表项，也没有 atlas 页。
+    EXPECT_FALSE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_TRUE(pageTableUploads.empty());
+    EXPECT_TRUE(atlasUploads.empty());
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    // 只上传刚变常驻的一页，不重复输出未变化的页。
+    ASSERT_EQ(pageTableUploads.size(), 1u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageX, 0u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageY, 0u);
+    EXPECT_EQ(pageTableUploads[0].entry[3], 255u);
+    ASSERT_EQ(atlasUploads.size(), 1u);
+    EXPECT_EQ(atlasUploads[0].physicalPageX, 0u);
+    EXPECT_EQ(atlasUploads[0].physicalPageY, 0u);
+    EXPECT_EQ(atlasUploads[0].ids.size(), TerrainPageByteSize());
+    EXPECT_EQ(atlasUploads[0].weights.size(), TerrainPageByteSize());
+
+    // 命中已驻留页不改变 atlas/页表内容，不产生上传。
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    EXPECT_FALSE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_TRUE(pageTableUploads.empty());
+    EXPECT_TRUE(atlasUploads.empty());
+}
+
+TEST(TerrainPageManager, ConsumeIsEmptyUntilPageStateChanges)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, true);
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_FALSE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_FALSE(manager.HasDirtyUploads());
+
+    // 使用时间与优先级只影响 CPU 侧淘汰策略，不改变 GPU 内容。
+    ASSERT_TRUE(manager.MarkUsed(path, 0, 0, 10));
+    ASSERT_TRUE(manager.SetPagePriority(path, 1, 1, 5));
+    EXPECT_FALSE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+}
+
+TEST(TerrainPageManager, DirtyRemainsUntilCommit)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    manager.RegisterTerrain(plan, true);
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.CollectDirtyUploads(pageTableUploads, atlasUploads));
+    const size_t pageTableCount = pageTableUploads.size();
+    const size_t atlasCount = atlasUploads.size();
+    ASSERT_GT(pageTableCount, 0u);
+    ASSERT_GT(atlasCount, 0u);
+
+    // 未 Commit 时重复收集仍返回同一批 dirty 页，上传失败可以安全重试。
+    ASSERT_TRUE(manager.CollectDirtyUploads(pageTableUploads, atlasUploads));
+    EXPECT_EQ(pageTableUploads.size(), pageTableCount);
+    EXPECT_EQ(atlasUploads.size(), atlasCount);
+
+    manager.CommitDirtyUploads(pageTableUploads, atlasUploads);
+    EXPECT_FALSE(manager.CollectDirtyUploads(pageTableUploads, atlasUploads));
+}
+
+TEST(TerrainPageManager, UploadBatchPinsInvolvedPagesUntilCommit)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, true);
+
+    // 首次上传只包含 2×2 地形页；Build 不直接清 dirty。
+    VL::TerrainUploadBatch batch = manager.BuildUploadBatch();
+    ASSERT_FALSE(batch.Empty());
+    EXPECT_EQ(batch.batchId, 1u);
+    EXPECT_EQ(batch.pageTableUploads.size(), 4u);
+    EXPECT_EQ(batch.atlasUploads.size(), 4u);
+    EXPECT_EQ(batch.newlyPinnedPages.size(), 4u);
+    EXPECT_TRUE(manager.HasDirtyUploads());
+    for (uint32_t tileZ = 0; tileZ < 2; ++tileZ)
+    {
+        for (uint32_t tileX = 0; tileX < 2; ++tileX)
+            EXPECT_TRUE(manager.IsPagePinned(path, tileX, tileZ));
+    }
+
+    // 同一份 dirty 再次 Build 会产生第二个独立批次；它必须持有自己的 pin，
+    // 否则先结束的批次会把仍在飞行中的页提前解 pin。
+    VL::TerrainUploadBatch overlapping = manager.BuildUploadBatch();
+    EXPECT_EQ(overlapping.pageTableUploads.size(), batch.pageTableUploads.size());
+    EXPECT_EQ(overlapping.atlasUploads.size(), batch.atlasUploads.size());
+    EXPECT_EQ(overlapping.newlyPinnedPages.size(), 4u);
+
+    manager.CommitUploadBatch(batch);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+    for (uint32_t tileZ = 0; tileZ < 2; ++tileZ)
+    {
+        for (uint32_t tileX = 0; tileX < 2; ++tileX)
+            EXPECT_TRUE(manager.IsPagePinned(path, tileX, tileZ));
+    }
+
+    // overlapping 仍持有第二份 pin；它结束后才真正解 pin。
+    manager.AbortUploadBatch(overlapping);
+    for (uint32_t tileZ = 0; tileZ < 2; ++tileZ)
+    {
+        for (uint32_t tileX = 0; tileX < 2; ++tileX)
+            EXPECT_FALSE(manager.IsPagePinned(path, tileX, tileZ));
+    }
+}
+
+TEST(TerrainPageManager, UploadBatchAbortKeepsDirtyAndUnpins)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, true);
+
+    VL::TerrainUploadBatch failed = manager.BuildUploadBatch();
+    ASSERT_FALSE(failed.Empty());
+    manager.AbortUploadBatch(failed);
+
+    // 失败不改变 dirty：下一批仍能拿到同样的内容，并且重新 pin。
+    EXPECT_TRUE(manager.HasDirtyUploads());
+    for (uint32_t tileZ = 0; tileZ < 2; ++tileZ)
+    {
+        for (uint32_t tileX = 0; tileX < 2; ++tileX)
+            EXPECT_FALSE(manager.IsPagePinned(path, tileX, tileZ));
+    }
+
+    VL::TerrainUploadBatch retried = manager.BuildUploadBatch();
+    EXPECT_EQ(retried.pageTableUploads.size(), failed.pageTableUploads.size());
+    EXPECT_EQ(retried.atlasUploads.size(), failed.atlasUploads.size());
+    EXPECT_EQ(retried.newlyPinnedPages.size(), 4u);
+
+    manager.CommitUploadBatch(retried);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+}
+
+TEST(TerrainPageManager, UploadBatchCommitKeepsPageRedirtiedAfterCollection)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    // 非 preload 注册不产生任何待上传内容。
+    VL::TerrainUploadBatch initial = manager.BuildUploadBatch();
+    EXPECT_TRUE(initial.Empty());
+    ASSERT_FALSE(manager.HasDirtyUploads());
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    VL::TerrainUploadBatch resident = manager.BuildUploadBatch();
+    ASSERT_FALSE(resident.Empty());
+    manager.CommitUploadBatch(resident);
+    ASSERT_FALSE(manager.HasDirtyUploads());
+
+    // 淘汰页 (0,0)：页表失效 + atlas 清零进入 dirty，但此时没有常驻页可 pin。
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+    VL::TerrainUploadBatch stale = manager.BuildUploadBatch();
+    ASSERT_FALSE(stale.Empty());
+    EXPECT_TRUE(stale.newlyPinnedPages.empty());
+
+    // 收集后又重新驻留同一页（复用同一物理槽位），revision 前进。
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    manager.CommitUploadBatch(stale);
+
+    // 旧批次不能把新内容标记成已上传：两个槽位都必须保持 dirty。
+    EXPECT_TRUE(manager.HasDirtyUploads());
+    VL::TerrainUploadBatch fresh = manager.BuildUploadBatch();
+    ASSERT_EQ(fresh.pageTableUploads.size(), 1u);
+    EXPECT_EQ(fresh.pageTableUploads[0].virtualPageX, 0u);
+    EXPECT_EQ(fresh.pageTableUploads[0].entry[3], 255u);
+    ASSERT_EQ(fresh.atlasUploads.size(), 1u);
+    EXPECT_EQ(fresh.atlasUploads[0].physicalPageX, 0u);
+
+    manager.CommitUploadBatch(fresh);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+}
+
+TEST(TerrainPageManager, UploadBatchAtlasLimitTruncatesConsistently)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    manager.RegisterTerrain(plan, true);
+    ASSERT_EQ(manager.ResidentCount(), 4u);
+
+    // 只允许本批写 2 个物理 atlas 页；页表必须同步截断为“这 2 页”，
+    // 不能先发布指向未上传 atlas 页的有效项。
+    VL::TerrainUploadBatch first = manager.BuildUploadBatch(2);
+    ASSERT_EQ(first.atlasUploads.size(), 2u);
+    ASSERT_EQ(first.pageTableUploads.size(), 2u);
+    for (const VL::TerrainPageManager::PageTableUpload& upload :
+         first.pageTableUploads)
+    {
+        ASSERT_NE(upload.entry[3], 0u);
+        EXPECT_TRUE(BatchContainsPhysicalSlot(
+            first, upload.entry[0], upload.entry[1]));
+    }
+
+    manager.CommitUploadBatch(first);
+    EXPECT_TRUE(manager.HasDirtyUploads());
+
+    // 剩余 2 个 atlas 页与它们对应的页表项在下一批继续，最终收敛。
+    VL::TerrainUploadBatch second = manager.BuildUploadBatch(2);
+    ASSERT_EQ(second.atlasUploads.size(), 2u);
+    ASSERT_EQ(second.pageTableUploads.size(), 2u);
+    for (const VL::TerrainPageManager::PageTableUpload& upload :
+         second.pageTableUploads)
+    {
+        ASSERT_NE(upload.entry[3], 0u);
+        EXPECT_TRUE(BatchContainsPhysicalSlot(
+            second, upload.entry[0], upload.entry[1]));
+    }
+    manager.CommitUploadBatch(second);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+}
+
+TEST(TerrainPageManager, EvictionUploadsOnlyInvalidEntry)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    // 淘汰只上传页表失效项；atlas 页保持旧内容，由 quarantine 保护到复用。
+    ASSERT_EQ(pageTableUploads.size(), 1u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageX, 0u);
+    EXPECT_EQ(pageTableUploads[0].virtualPageY, 0u);
+    for (size_t channel = 0; channel < 4; ++channel)
+        EXPECT_EQ(pageTableUploads[0].entry[channel], 0u);
+
+    EXPECT_TRUE(atlasUploads.empty());
+}
+
+TEST(TerrainPageManager, ReRequestAfterEvictionUploadsAgain)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+
+    // 淘汰保留的旧 atlas 内容必须在重新驻留后被新内容覆盖上传。
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 2));
+    ASSERT_TRUE(manager.HasDirtyUploads());
+    ASSERT_TRUE(manager.ConsumeDirtyUploads(pageTableUploads, atlasUploads));
+    ASSERT_EQ(pageTableUploads.size(), 1u);
+    EXPECT_EQ(pageTableUploads[0].entry[3], 255u);
+    ASSERT_EQ(atlasUploads.size(), 1u);
+    ASSERT_EQ(atlasUploads[0].ids.size(), TerrainPageByteSize());
+    EXPECT_NE(atlasUploads[0].weights[0], 0u);
+}
+
+TEST(TerrainPageManager, EpochHysteresisDelaysSafeEviction)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.MarkPageUsedAtEpoch(path, 0, 0, 10, 4));
+
+    // 安全窗内不允许淘汰：lastSeenEpoch(10) + 2 > completedEpoch(11)。
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 11));
+    EXPECT_FALSE(manager.EvictLeastRecentlyUsed(11));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+
+    EXPECT_TRUE(manager.CanEvictAt(path, 0, 0, 12));
+    EXPECT_TRUE(manager.EvictLeastRecentlyUsed(12));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+}
+
+TEST(TerrainPageManager, PinnedPageCannotBeEvicted)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.MarkPageUsedAtEpoch(path, 0, 0, 10));
+    ASSERT_TRUE(manager.PinPageForUpload(path, 0, 0));
+
+    EXPECT_TRUE(manager.IsPagePinned(path, 0, 0));
+    // 即使已经过了安全窗，pin 的页也拒绝显式和自动淘汰。
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 100));
+    EXPECT_FALSE(manager.EvictPage(path, 0, 0));
+    EXPECT_FALSE(manager.EvictLeastRecentlyUsed(100));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+
+    ASSERT_TRUE(manager.UnpinPage(path, 0, 0));
+    EXPECT_TRUE(manager.CanEvictAt(path, 0, 0, 100));
+    EXPECT_TRUE(manager.EvictPage(path, 0, 0));
+}
+
+TEST(TerrainPageManager, ContentRevisionAdvancesUntilUploadCommits)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    const VL::TerrainPageManager::PageState* page =
+        manager.FindPageByVirtual(0, 0);
+    ASSERT_NE(page, nullptr);
+    const uint64_t residentRevision = page->contentRevision;
+    EXPECT_GT(residentRevision, 0u);
+    EXPECT_LT(page->uploadedRevision, residentRevision);
+
+    std::vector<VL::TerrainPageManager::PageTableUpload> pageTableUploads;
+    std::vector<VL::TerrainPageManager::AtlasPageUpload> atlasUploads;
+    ASSERT_TRUE(manager.CollectDirtyUploads(pageTableUploads, atlasUploads));
+    manager.CommitDirtyUploads(pageTableUploads, atlasUploads);
+    EXPECT_EQ(manager.FindPageByVirtual(0, 0)->uploadedRevision, residentRevision);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+
+    // 淘汰同样是一次内容变更，会再次产生待上传版本。
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+    EXPECT_GT(manager.FindPage(MakePageKey(path, 0, 0))->contentRevision, residentRevision);
+    EXPECT_TRUE(manager.HasDirtyUploads());
+}
+
+TEST(TerrainStreamingState, RevisionsAreMonotonicAndMarkUploadedIsIdempotent)
+{
+    VL::TerrainStreamingState streaming;
+    EXPECT_FALSE(streaming.HasPendingUpload());
+
+    streaming.NotifyContentChanged();
+    streaming.NotifyContentChanged();
+    EXPECT_EQ(streaming.pendingUploadRevision, 2u);
+    EXPECT_TRUE(streaming.HasPendingUpload());
+
+    streaming.MarkUploaded(1);
+    EXPECT_EQ(streaming.uploadedRevision, 1u);
+    EXPECT_TRUE(streaming.HasPendingUpload());
+
+    // 重复确认旧版本不能回退 uploadedRevision。
+    streaming.MarkUploaded(1);
+    EXPECT_EQ(streaming.uploadedRevision, 1u);
+
+    streaming.MarkUploaded(2);
+    EXPECT_EQ(streaming.uploadedRevision, 2u);
+    EXPECT_FALSE(streaming.HasPendingUpload());
+    streaming.MarkUploaded(1);
+    EXPECT_EQ(streaming.uploadedRevision, 2u);
+}
+
+TEST(TerrainPageManager, SetGpuEpochContextDoesNotChangeExistingLru)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(50, 40, 2);
+    manager.SetResidentCapacity(2);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage(path, 1, 0, 2));
+    ASSERT_TRUE(manager.MarkUsed(path, 0, 0, 3));
+    ASSERT_TRUE(manager.RequestPage(path, 0, 1, 4));
+
+    // RequestPage 仍走旧 LRU；epoch 上下文只供 streaming 安全窗使用。
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 1)));
+    EXPECT_EQ(manager.LastSubmittedEpoch(), 50u);
+    EXPECT_EQ(manager.LastConsumedFeedbackEpoch(), 40u);
+    EXPECT_EQ(manager.FramesInFlight(), 2u);
+}
+
+TEST(TerrainPageManager, NewResidentPageStartsAtConsumedEpoch)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(100, 100, 2);
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    // 新页从当前已消费 feedback 的 epoch 起算，不能在出生当帧或下一帧被淘汰。
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 100));
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 101));
+    // framesInFlight=2 时有效安全窗是 max(2, 2+1)=3。
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 102));
+    EXPECT_TRUE(manager.CanEvictAt(path, 0, 0, 103));
+}
+
+TEST(TerrainPageManager, PlacementIdFallsBackToAssetPath)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    ASSERT_TRUE(plan.placementId.empty());
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_EQ(manager.Registrations().size(), 1u);
+    // 旧测试/旧资产不写 placementId 时，注册身份仍回退为 TR 路径。
+    EXPECT_EQ(manager.Registrations()[0].placementId, plan.desc.assetPath);
+    EXPECT_TRUE(manager.RequestPage(plan.desc.assetPath, 0, 0, 1));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(plan.desc.assetPath, 0, 0)));
+}
+
+TEST(TerrainPageManager, SameTerrainCanBeRegisteredTwiceWithDifferentPlacements)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan first = MakePagePlan(2);
+    first.placementId = "terrain|TerrainA";
+    first.desc.pageOrigin = Eigen::Vector2i(0, 0);
+
+    VL::TerrainBuildPlan second = first;
+    second.placementId = "terrain|TerrainB";
+    second.desc.pageOrigin = Eigen::Vector2i(8, 0);
+
+    manager.RegisterTerrain(first, false);
+    manager.RegisterTerrain(second, false);
+    ASSERT_EQ(manager.Registrations().size(), 2u);
+    EXPECT_EQ(manager.Registrations()[0].terrainAssetPath, first.desc.assetPath);
+    EXPECT_EQ(manager.Registrations()[1].terrainAssetPath, first.desc.assetPath);
+
+    ASSERT_TRUE(manager.RequestPage("terrain|TerrainA", 0, 0, 1));
+    ASSERT_TRUE(manager.RequestPage("terrain|TerrainB", 0, 0, 2));
+    const VL::TerrainPageManager::PageState* pageA =
+        manager.FindPage(MakePageKey("terrain|TerrainA", 0, 0));
+    const VL::TerrainPageManager::PageState* pageB =
+        manager.FindPage(MakePageKey("terrain|TerrainB", 0, 0));
+    ASSERT_NE(pageA, nullptr);
+    ASSERT_NE(pageB, nullptr);
+    EXPECT_EQ(pageA->virtualPageX, 0u);
+    EXPECT_EQ(pageB->virtualPageX, 8u);
+    // 两个 placement 各有独立物理槽位，页内容相同但生命周期互不影响。
+    EXPECT_EQ(pageA->physicalPageX, 0u);
+    EXPECT_EQ(pageB->physicalPageX, 1u);
+
+    ASSERT_TRUE(manager.EvictPage("terrain|TerrainA", 0, 0));
+    EXPECT_FALSE(manager.IsResident(0, 0));
+    EXPECT_TRUE(manager.IsResident(8, 0));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey("terrain|TerrainB", 0, 0)));
+
+    // 同一 placementId 重复注册仍被拒绝，即使换了 pageOrigin。
+    VL::TerrainBuildPlan duplicate = second;
+    duplicate.desc.pageOrigin = Eigen::Vector2i(16, 0);
+    EXPECT_THROW(manager.RegisterTerrain(duplicate, false), std::exception);
+}
+
+TEST(TerrainPageManager, FullPageTableRegistersAndUsesLastVirtualPage)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(VL::TerrainPageManager::PageTableSize);
+    const std::string placement = plan.desc.assetPath;
+    // 32×32 覆盖整张页表；fallback 不再占虚拟坐标，注册必须成功。
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_EQ(manager.Registrations().size(), 1u);
+    EXPECT_EQ(
+        manager.Pages().size(),
+        static_cast<size_t>(VL::TerrainPageManager::PageSlotCount));
+
+    // 最后一格虚拟 (31,31) 是普通页，可以正常驻留并映射到物理槽位。
+    ASSERT_TRUE(manager.RequestPage(placement, 31, 31, 1));
+    EXPECT_TRUE(manager.IsResident(31, 31));
+    const VL::TerrainPageManager::PageState* last =
+        manager.FindPage(MakePageKey(placement, 31, 31));
+    ASSERT_NE(last, nullptr);
+    EXPECT_EQ(last->virtualPageX, 31u);
+    EXPECT_EQ(last->virtualPageY, 31u);
+    EXPECT_EQ(last->physicalPageX, 0u);
+    EXPECT_EQ(last->physicalPageY, 0u);
+}
+
+TEST(TerrainPageManager, PreloadDefersInsteadOfLoopingWhenCapacityCannotEvict)
+{
+    VL::TerrainPageManager manager;
+    manager.SetResidentCapacity(1);
+
+    VL::TerrainBuildPlan held = MakePagePlan(1);
+    held.placementId = "terrain|Held";
+    const std::string heldPlacement = held.placementId;
+    manager.RegisterTerrain(held, false);
+    ASSERT_TRUE(manager.RequestPage(heldPlacement, 0, 0, 1));
+    ASSERT_TRUE(manager.PinPageForUpload(heldPlacement, 0, 0));
+
+    VL::TerrainBuildPlan blocked = MakePagePlan(1);
+    blocked.placementId = "terrain|Blocked";
+    blocked.desc.pageOrigin = Eigen::Vector2i(4, 0);
+    // 唯一的驻留候选被 pin，preload 无法腾位；必须记录 deferred 后返回，
+    // 不能无限重试，也不能把异常抛到注册调用之外。
+    EXPECT_NO_THROW(manager.RegisterTerrain(blocked, true));
+    EXPECT_EQ(manager.PreloadDeferredCount(), 1u);
+    EXPECT_EQ(manager.ResidentCount(), 1u);
+    EXPECT_LE(
+        manager.ResidentCount(),
+        VL::TerrainPageManager::UsablePhysicalSlotCount);
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(heldPlacement, 0, 0)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(blocked.placementId, 0, 0)));
+}
+
+TEST(TerrainMeshBuilder, ChunkResourceKeyIncludesPlacementIdentity)
+{
+    const HostImage heightmap =
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 0.5f; });
+    VL::TerrainBuildPlan first = MakePlan(heightmap);
+    first.placementId = "terrain|TerrainA";
+    VL::TerrainBuildPlan second = first;
+    second.placementId = "terrain|TerrainB";
+
+    // 同一 TR 的两次摆放不能共享 chunk 资源 key。
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(first, 0, 0),
+        VL::TerrainChunkResourceKey(second, 0, 0));
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(first, 0, 0),
+        VL::TerrainChunkResourceKey(first, 1, 0));
+    EXPECT_EQ(
+        VL::TerrainChunkResourceKey(first, 0, 0),
+        VL::TerrainChunkResourceKey(first, 0, 0));
+
+    // placementId 为空时回退 assetPath，与旧资产 key 语义一致。
+    VL::TerrainBuildPlan legacy = first;
+    legacy.placementId.clear();
+    EXPECT_EQ(
+        legacy.desc.assetPath,
+        VL::TerrainPlacementIdentity(legacy));
+    EXPECT_NE(
+        VL::TerrainChunkResourceKey(legacy, 0, 0),
+        VL::TerrainChunkResourceKey(first, 0, 0));
+}
+
+TEST(TerrainValidator, AcceptsCurrentTerrainSchema)
+{
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        BuildTerrainJson(), "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, RejectsUnknownField)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["unknown"] = true;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, RejectsGridThatIsNotDivisibleByChunk)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["gridResolution"] = 5;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, AcceptsAndRejectsHeightmapMargin)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapMargin"] = 1;
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    asset["heightmapMargin"] = 5;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["heightmapMargin"] = 17;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, RejectsInvalidLayerRanges)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["heightRange"] = {0.5, 0.1};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["layers"][0]["slopeRange"] = {0.0, 91.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["layers"][0]["noise"] = -1.0;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, RejectsPageOriginOutsideGlobalTable)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["pageOrigin"] = {30, 0};
+    asset["pageTilesPerSide"] = 8;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["pageOrigin"] = {8, 8};
+    asset["pageTilesPerSide"] = 8;
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, RejectsMoreThanMaxLayers)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"] = nlohmann::json::array();
+    for (int index = 0; index < 257; ++index)
+    {
+        asset["layers"].push_back({
+            {"name", "layer" + std::to_string(index)},
+            {"heightRange", {0.0, 1.0}},
+            {"slopeRange", {0.0, 90.0}}});
+    }
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, AcceptsOptionalLayerCatalogFields)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["sourceResolution"] = 2048;
+    asset["layers"][0]["avgColor"] = {0.25, 0.5, 0.75};
+    asset["layers"][0]["sourceSet"] = 3;
+    asset["layers"][0]["flags"] = 5;
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 三档源分辨率都必须接受。
+    for (const uint32_t resolution : {512u, 1024u, 2048u})
+    {
+        nlohmann::json probe = BuildTerrainJson();
+        probe["layers"][0]["sourceResolution"] = resolution;
+        EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+            probe, "TR_terrain_tests.json"));
+    }
+}
+
+TEST(TerrainValidator, RejectsInvalidOptionalLayerCatalogFields)
+{
+    // 只允许 512/1024/2048：256 太小、4096 超出设计档位、1536 不是 128 的整数页。
+    for (const int resolution : {256, 1536, 4096})
+    {
+        nlohmann::json asset = BuildTerrainJson();
+        asset["layers"][0]["sourceResolution"] = resolution;
+        EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+            asset, "TR_terrain_tests.json"), std::exception);
+    }
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["avgColor"] = {0.5, 0.5};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+    asset = BuildTerrainJson();
+    asset["layers"][0]["avgColor"] = {0.5, 0.5, 1.5};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["layers"][0]["sourceSet"] = 256;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+    asset = BuildTerrainJson();
+    asset["layers"][0]["flags"] = 65536;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["layers"][0]["compression"] = "bc7";
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, AcceptsAndRejectsLayerKey)
+{
+    // 显式 key 是跨 TR 共享层的身份；非空、<=256 字符。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["key"] = "biome/leaf";
+    asset["layers"][1]["key"] = "biome/rock";
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    nlohmann::json probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = "";
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = 7;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    // 超过 256 字符的 key 拒绝，避免诊断/日志被超长身份撑爆。
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = std::string(257, 'k');
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    // 同一个 TR 内显式 key 重复（缺省 key 也会因重名重复）。
+    probe = BuildTerrainJson();
+    probe["layers"][0]["key"] = "biome/same";
+    probe["layers"][1]["key"] = "biome/same";
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+
+    probe = BuildTerrainJson();
+    probe["layers"][1]["name"] = probe["layers"][0]["name"];
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        probe, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, AcceptsLodLevelsAndAscendingDistances)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = {500.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 4 级需要 chunkQuads 能被最粗步长 8 整除。
+    asset = BuildTerrainJson();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 8;
+    asset["lodLevels"] = 4;
+    asset["lodDistances"] = {100.0, 200.0, 300.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 只有 LOD0 时允许显式空距离表。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["lodDistances"] = nlohmann::json::array();
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, AcceptsChunkResidencyDistances)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = {500.0};
+    asset["chunkResidencyDistances"] = {600.0};
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    // 只有 LOD0 时允许显式空驻留表（最粗一级永远驻留）。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["chunkResidencyDistances"] = nlohmann::json::array();
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+}
+
+TEST(TerrainValidator, RejectsInvalidChunkResidencyDistances)
+{
+    // 长度必须等于 lodLevels-1。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {100.0, 200.0};
+    asset["chunkResidencyDistances"] = {150.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 必须严格升序。
+    asset["chunkResidencyDistances"] = {300.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 必须为正有限数。
+    asset["chunkResidencyDistances"] = {0.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 非数组。
+    asset["chunkResidencyDistances"] = 100.0;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST(TerrainValidator, RejectsInvalidLodFields)
+{
+    // 级数必须在 1..4。
+    for (const int levels : {0, 5})
+    {
+        nlohmann::json asset = BuildTerrainJson();
+        asset["lodLevels"] = levels;
+        EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+            asset, "TR_terrain_tests.json"), std::exception);
+    }
+
+    // 距离表长度必须严格等于 lodLevels-1。
+    nlohmann::json asset = BuildTerrainJson();
+    asset["lodLevels"] = 2;
+    asset["lodDistances"] = nlohmann::json::array();
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 1;
+    asset["lodDistances"] = {500.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // 非升序、非正数、非有限数都必须拒绝。
+    asset = BuildTerrainJson();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 8;
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {200.0, 100.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = {200.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = {0.0, 200.0};
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    asset["lodDistances"] = nlohmann::json::array();
+    asset["lodDistances"].push_back("near");
+    asset["lodDistances"].push_back(200.0);
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+
+    // chunkQuads 不能被最粗步长整除时必须在预检期失败，而不是等到烘焙网格。
+    asset = BuildTerrainJson();
+    asset["lodLevels"] = 3;
+    EXPECT_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"), std::exception);
+}
+
+TEST_F(TerrainTest, LoadsDescriptorAndDecodesHeightmap)
+{
+    HostImage heightmap;
+    heightmap.width = 2;
+    heightmap.height = 2;
+    heightmap.channels = 4;
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = 16;
+    const uint16_t halfPixels[4][4] = {
+        {0x0000, 0x0000, 0x0000, 0x3C00},
+        {0x3400, 0x3400, 0x3400, 0x3C00},
+        {0x3800, 0x3800, 0x3800, 0x3C00},
+        {0x3C00, 0x3C00, 0x3C00, 0x3C00}};
+    heightmap.data.resize(sizeof(halfPixels));
+    std::memcpy(heightmap.data.data(), halfPixels, sizeof(halfPixels));
+    const auto heightmapPath = directory / "heightmap.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto materialPath = directory / "MI_terrain_tests.json";
+    std::ofstream materialStream(materialPath);
+    materialStream << nlohmann::json({
+        {"name", "MI_terrain_tests"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    materialStream.close();
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["layers"][0]["sourceResolution"] = 2048;
+    asset["layers"][0]["avgColor"] = {0.25, 0.5, 0.75};
+    asset["layers"][0]["sourceSet"] = 3;
+    asset["layers"][0]["flags"] = 9;
+    asset["layers"][0]["key"] = "biome/leaf";
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = materialPath.string();
+    asset["gridResolution"] = 2;
+    asset["chunkQuads"] = 1;
+    const auto terrainPath = directory / "TR_terrain_tests.json";
+    std::ofstream terrainStream(terrainPath);
+    terrainStream << asset.dump(2);
+    terrainStream.close();
+
+    const VL::TerrainBuildPlan plan = VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    EXPECT_EQ(plan.desc.name, "TR_terrain_tests");
+    EXPECT_EQ(plan.desc.gridResolution, 2u);
+    EXPECT_EQ(plan.desc.chunkQuads, 1u);
+    ASSERT_EQ(plan.desc.layers.size(), 2u);
+    // L1 可选字段往返；第二层没写时保持默认值，证明旧 TR 兼容。
+    EXPECT_EQ(plan.desc.layers[0].sourceResolution, 2048u);
+    EXPECT_EQ(plan.desc.layers[0].sourceSet, 3u);
+    EXPECT_EQ(plan.desc.layers[0].flags, 9u);
+    // S1：显式 key 往返；未写 key 的层保持空串，由 registry 回退缺省身份。
+    EXPECT_EQ(plan.desc.layers[0].key, "biome/leaf");
+    EXPECT_TRUE(plan.desc.layers[1].key.empty());
+    EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.x(), 0.25f);
+    EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.y(), 0.5f);
+    EXPECT_FLOAT_EQ(plan.desc.layers[0].avgColor.z(), 0.75f);
+    EXPECT_EQ(plan.desc.layers[1].sourceResolution, 1024u);
+    EXPECT_EQ(plan.desc.layers[1].sourceSet, 0u);
+    EXPECT_EQ(plan.desc.layers[1].flags, 0u);
+    EXPECT_FLOAT_EQ(plan.desc.layers[1].avgColor.x(), 0.18f);
+    ASSERT_TRUE(plan.heightmap != nullptr);
+    EXPECT_EQ(plan.heightmap->width, 2u);
+    EXPECT_EQ(plan.heightmap->height, 2u);
+    EXPECT_EQ(plan.heightmap->format, HostImage::PixelFormat::RGBA32_FLOAT);
+}
+
+TEST_F(TerrainTest, LoadsHeightmapMarginAndRejectsWrongExtent)
+{
+    HostImage heightmap;
+    heightmap.width = 5;
+    heightmap.height = 5;
+    heightmap.channels = 4;
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = heightmap.width * heightmap.GetPixelSize();
+    heightmap.data.resize(
+        static_cast<size_t>(heightmap.rowStrideBytes) * heightmap.height);
+    uint16_t* halfPixels = reinterpret_cast<uint16_t*>(heightmap.data.data());
+    for (size_t index = 0; index < heightmap.data.size() / sizeof(uint16_t); ++index)
+        halfPixels[index] = 0x3800;
+
+    const auto heightmapPath = directory / "heightmap_margin.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto materialPath = directory / "MI_terrain_margin.json";
+    std::ofstream materialStream(materialPath);
+    materialStream << nlohmann::json({
+        {"name", "MI_terrain_margin"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    materialStream.close();
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = materialPath.string();
+    asset["gridResolution"] = 2;
+    asset["chunkQuads"] = 1;
+    asset["heightmapMargin"] = 1;
+    const auto terrainPath = directory / "TR_terrain_margin.json";
+    std::ofstream terrainStream(terrainPath);
+    terrainStream << asset.dump(2);
+    terrainStream.close();
+
+    const VL::TerrainBuildPlan plan =
+        VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    EXPECT_EQ(plan.desc.heightmapMargin, 1u);
+    ASSERT_TRUE(plan.heightmap != nullptr);
+    EXPECT_EQ(plan.heightmap->width, 5u);
+    EXPECT_EQ(plan.heightmap->height, 5u);
+
+    asset["heightmapMargin"] = 2;
+    std::ofstream mismatchStream(terrainPath);
+    mismatchStream << asset.dump(2);
+    mismatchStream.close();
+    EXPECT_THROW(
+        VL::TerrainAssetLoader::Prepare(terrainPath.string()),
+        std::exception);
+}
+
+TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)
+{
+    HostImage heightmap;
+    heightmap.width = 2;
+    heightmap.height = 2;
+    heightmap.channels = 4;
+    // EXR 走 half 通道；0x3800 = 0.5。
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = heightmap.width * heightmap.GetPixelSize();
+    heightmap.data.resize(
+        static_cast<size_t>(heightmap.rowStrideBytes) * heightmap.height);
+    uint16_t* halfPixels = reinterpret_cast<uint16_t*>(heightmap.data.data());
+    for (size_t index = 0; index < heightmap.data.size() / sizeof(uint16_t); ++index)
+        halfPixels[index] = 0x3800;
+
+    const auto heightmapPath = directory / "heightmap_lod.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto materialPath = directory / "MI_terrain_lod.json";
+    std::ofstream materialStream(materialPath);
+    materialStream << nlohmann::json({
+        {"name", "MI_terrain_lod"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    materialStream.close();
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = materialPath.string();
+    asset["gridResolution"] = 8;
+    asset["chunkQuads"] = 4;
+    asset["lodLevels"] = 3;
+    asset["lodDistances"] = {1234.5, 5678.0};
+    const auto terrainPath = directory / "TR_terrain_lod.json";
+    std::ofstream terrainStream(terrainPath);
+    terrainStream << asset.dump(2);
+    terrainStream.close();
+
+    const VL::TerrainBuildPlan plan =
+        VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    EXPECT_EQ(plan.desc.lodLevels, 3u);
+    ASSERT_EQ(plan.desc.lodDistancesCm.size(), 2u);
+    EXPECT_FLOAT_EQ(plan.desc.lodDistancesCm[0], 1234.5f);
+    EXPECT_FLOAT_EQ(plan.desc.lodDistancesCm[1], 5678.0f);
+
+    // 旧 TR 不写 LOD 字段：级数 1、距离表为空，默认推导也为空。
+    asset.erase("lodLevels");
+    asset.erase("lodDistances");
+    const auto legacyPath = directory / "TR_terrain_lod_legacy.json";
+    std::ofstream legacyStream(legacyPath);
+    legacyStream << asset.dump(2);
+    legacyStream.close();
+    const VL::TerrainBuildPlan legacy =
+        VL::TerrainAssetLoader::Prepare(legacyPath.string());
+    EXPECT_EQ(legacy.desc.lodLevels, 1u);
+    EXPECT_TRUE(legacy.desc.lodDistancesCm.empty());
+    EXPECT_TRUE(VL::TerrainLodDistancesCm(legacy.desc).empty());
+
+    // 只写级数时按地形最长边均分：1000cm、3 级 -> {333.33, 666.67}。
+    asset["lodLevels"] = 3;
+    const auto derivedPath = directory / "TR_terrain_lod_derived.json";
+    std::ofstream derivedStream(derivedPath);
+    derivedStream << asset.dump(2);
+    derivedStream.close();
+    const VL::TerrainBuildPlan derived =
+        VL::TerrainAssetLoader::Prepare(derivedPath.string());
+    const std::vector<float> distances = VL::TerrainLodDistancesCm(derived.desc);
+    ASSERT_EQ(distances.size(), 2u);
+    EXPECT_FLOAT_EQ(distances[0], 1000.0f / 3.0f);
+    EXPECT_FLOAT_EQ(distances[1], 2000.0f / 3.0f);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(333.0f, distances), 0u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(500.0f, distances), 1u);
+    EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, distances), 2u);
+}
+
+TEST(TerrainSceneSchema, AcceptsTerrainSceneObject)
+{
+    const nlohmann::json scene = BuildTerrainSceneJson();
+    EXPECT_NO_THROW(VL::ValidateSceneAssetJson(scene));
+}
+
+TEST(TerrainSceneSchema, AcceptsPageRegionOverrides)
+{
+    nlohmann::json scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {24, 24};
+    scene["objects"][0]["pageTilesPerSide"] = 8;
+    EXPECT_NO_THROW(VL::ValidateSceneAssetJson(scene));
+
+    // 只覆盖 pageTilesPerSide 也合法；与 TR pageOrigin 的组合由页管理器最终裁定。
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageTilesPerSide"] = 32;
+    EXPECT_NO_THROW(VL::ValidateSceneAssetJson(scene));
+}
+
+TEST(TerrainSceneSchema, RejectsInvalidPageRegionOverrides)
+{
+    nlohmann::json scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {-1, 0};
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {32, 0};
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {0, 0, 0};
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {0.5, 0};
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageTilesPerSide"] = 0;
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageTilesPerSide"] = 33;
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+
+    // pageOrigin + pageTilesPerSide 必须整体落在 32×32 页表内。
+    scene = BuildTerrainSceneJson();
+    scene["objects"][0]["pageOrigin"] = {24, 24};
+    scene["objects"][0]["pageTilesPerSide"] = 9;
+    EXPECT_THROW(VL::ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
+TEST(TerrainFeedback, TexelPackingRoundTripsAllFields)
+{
+    VL::TerrainFeedbackTexel source;
+    source.virtualPageX = 17;
+    source.virtualPageY = 29;
+    source.priority = 203;
+    source.frameTag = 77;
+    source.miss = true;
+    source.valid = true;
+
+    uint8_t bytes[VL::TerrainFeedbackTexelBytes] = {};
+    VL::EncodeTerrainFeedbackTexel(source, bytes);
+    const VL::TerrainFeedbackTexel decoded =
+        VL::DecodeTerrainFeedbackTexel(bytes);
+
+    EXPECT_EQ(decoded.virtualPageX, 17u);
+    EXPECT_EQ(decoded.virtualPageY, 29u);
+    EXPECT_EQ(decoded.priority, 203u);
+    EXPECT_EQ(decoded.frameTag, 77u);
+    EXPECT_TRUE(decoded.miss);
+    EXPECT_TRUE(decoded.valid);
+    // R 的 bit5/bit6 与页坐标互不重叠。
+    EXPECT_EQ(bytes[0], 17u | 0x20u | 0x40u);
+    EXPECT_EQ(bytes[1], 29u);
+}
+
+TEST(TerrainFeedback, FrameTagIsOneBasedAndWrapsBefore255)
+{
+    EXPECT_EQ(VL::TerrainFeedbackFrameTagForEpoch(0), 1u);
+    EXPECT_EQ(VL::TerrainFeedbackFrameTagForEpoch(254), 255u);
+    EXPECT_EQ(VL::TerrainFeedbackFrameTagForEpoch(255), 1u);
+    EXPECT_EQ(VL::TerrainFeedbackFrameTagForEpoch(256), 2u);
+}
+
+TEST(TerrainFeedback, SummarySkipsInvalidAndStaleTexels)
+{
+    std::vector<uint8_t> texels(7 * VL::TerrainFeedbackTexelBytes, 0);
+    const auto write = [&](size_t index, const VL::TerrainFeedbackTexel& texel)
+    {
+        VL::EncodeTerrainFeedbackTexel(
+            texel,
+            texels.data() + index * VL::TerrainFeedbackTexelBytes);
+    };
+
+    // 0：clear 值（valid=0）里的非零 page 坐标必须被忽略。
+    write(0, VL::TerrainFeedbackTexel{
+        19, 19, 51, 99, false, false });
+    // 1：有效但帧 tag 过期。
+    write(1, VL::TerrainFeedbackTexel{
+        4, 5, 200, 76, false, true });
+    // 2/3：同一页重复命中，miss 只要出现一次就记 miss 页。
+    write(2, VL::TerrainFeedbackTexel{
+        4, 5, 80, 77, false, true });
+    write(3, VL::TerrainFeedbackTexel{
+        4, 5, 190, 77, true, true });
+    // 4：另一页，无 miss。
+    write(4, VL::TerrainFeedbackTexel{
+        6, 7, 120, 77, false, true });
+    // 5：同样有效但 tag 不匹配。
+    write(5, VL::TerrainFeedbackTexel{
+        8, 9, 255, 1, true, true });
+    // 6：未写入。
+    write(6, VL::TerrainFeedbackTexel{});
+
+    const VL::TerrainFeedbackFrameSummary summary =
+        VL::SummarizeTerrainFeedback(
+            texels.data(),
+            texels.size(),
+            77);
+
+    EXPECT_EQ(summary.frameTag, 77u);
+    EXPECT_EQ(summary.validTexelCount, 3u);
+    EXPECT_EQ(summary.invalidTexelCount, 2u);
+    EXPECT_EQ(summary.staleTexelCount, 2u);
+    EXPECT_EQ(summary.distinctPageCount, 2u);
+    EXPECT_EQ(summary.missPageCount, 1u);
+    EXPECT_EQ(summary.maxPriority, 190u);
+    ASSERT_EQ(summary.pages.size(), 2u);
+    EXPECT_EQ(summary.pages[0].virtualPageX, 4u);
+    EXPECT_EQ(summary.pages[0].virtualPageY, 5u);
+    EXPECT_TRUE(summary.pages[0].miss);
+    EXPECT_EQ(summary.pages[0].sampleCount, 2u);
+    EXPECT_EQ(summary.pages[1].virtualPageX, 6u);
+    EXPECT_EQ(summary.pages[1].virtualPageY, 7u);
+    EXPECT_FALSE(summary.pages[1].miss);
+}
+
+TEST(TerrainFeedback, RingWaitsForCompletedEpochThenConsumesOnce)
+{
+    VL::TerrainFeedbackRingState ring(2);
+    ring.Record(0, 9, 10);
+    EXPECT_TRUE(ring.IsPending(0));
+
+    // 旧 epoch 未完成：不得解析。
+    EXPECT_FALSE(ring.TryConsume(0, 8).has_value());
+    EXPECT_TRUE(ring.IsPending(0));
+
+    const auto completed = ring.TryConsume(0, 9);
+    ASSERT_TRUE(completed.has_value());
+    EXPECT_EQ(completed->copiedEpoch, 9u);
+    EXPECT_EQ(completed->frameTag, 10u);
+    EXPECT_FALSE(ring.IsPending(0));
+    // 完成后只能消费一次。
+    EXPECT_FALSE(ring.TryConsume(0, 9).has_value());
+
+    // 槽位可复用；新 epoch 继续等待自己的 fence。
+    ring.Record(0, 11, 12);
+    EXPECT_TRUE(ring.IsPending(0));
+    EXPECT_FALSE(ring.TryConsume(0, 10).has_value());
+    ASSERT_TRUE(ring.TryConsume(0, 11).has_value());
+}
+
+TEST(TerrainFeedback, RingReportsPendingTagRangeAndRejectsZeroTag)
+{
+    VL::TerrainFeedbackRingState ring(2);
+    uint8_t oldest = 0;
+    uint8_t newest = 0;
+    EXPECT_FALSE(ring.PendingTagRange(oldest, newest));
+
+    ring.Record(0, 3, 4);
+    ring.Record(1, 4, 9);
+    ASSERT_TRUE(ring.PendingTagRange(oldest, newest));
+    EXPECT_EQ(oldest, 4u);
+    EXPECT_EQ(newest, 9u);
+
+    EXPECT_THROW(ring.Record(0, 5, 0), std::invalid_argument);
+    EXPECT_THROW(ring.Record(2, 5, 3), std::out_of_range);
+}
+
+TEST(TerrainPageManager, NewResidentPageStartsAtSubmittedEpoch)
+{
+    VL::TerrainPageManager manager;
+    // 本帧已提交 120、最近消费的 feedback 仍是 100：新页必须从 120 起算，
+    // 否则它一出生就落在安全窗之外。
+    manager.SetGpuEpochContext(120, 100, 2);
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 121));
+    EXPECT_FALSE(manager.CanEvictAt(path, 0, 0, 122));
+    EXPECT_TRUE(manager.CanEvictAt(path, 0, 0, 123));
+}
+
+TEST(TerrainPageManager, RequestPageAtEpochWaitsForSafeEvictionWindow)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(20, 18, 2);
+    manager.SetResidentCapacity(1);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    // 页 (0,0) 在 epoch 20 出生；容量已满，安全窗内必须拒绝腾位。
+    EXPECT_FALSE(manager.RequestPageAtEpoch(path, 1, 0, 2, 0, 21));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+    EXPECT_EQ(manager.EvictionCount(), 0u);
+
+    // framesInFlight=2 时安全窗为 3；epoch 22 仍在窗口内，epoch 23 才允许淘汰。
+    EXPECT_FALSE(manager.RequestPageAtEpoch(path, 1, 0, 3, 0, 22));
+    EXPECT_TRUE(manager.RequestPageAtEpoch(path, 1, 0, 3, 0, 23));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+    EXPECT_EQ(manager.EvictionCount(), 1u);
+}
+
+TEST(TerrainPageManager, LegacyRequestPageKeepsUnwindowedLru)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(20, 18, 2);
+    manager.SetResidentCapacity(1);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    // 旧 RequestPage 是 preload/加载期入口，仍走无安全窗 LRU；
+    // streaming 的安全窗只由 RequestPageAtEpoch 消费。
+    EXPECT_TRUE(manager.RequestPage(path, 1, 0, 2));
+    EXPECT_FALSE(manager.IsPageResident(MakePageKey(path, 0, 0)));
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+}
+
+TEST(TerrainPageManager, OverlappingBatchesHoldIndependentPinsUntilBothRelease)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, true);
+
+    VL::TerrainUploadBatch first = manager.BuildUploadBatch();
+    ASSERT_EQ(first.newlyPinnedPages.size(), 1u);
+    ASSERT_TRUE(manager.IsPagePinned(path, 0, 0));
+    VL::TerrainUploadBatch second = manager.BuildUploadBatch();
+    ASSERT_EQ(second.newlyPinnedPages.size(), 1u);
+
+    // 先结束第二批：第一批仍持有 pin，页不能提前解 pin。
+    manager.CommitUploadBatch(second);
+    EXPECT_TRUE(manager.IsPagePinned(path, 0, 0));
+    manager.AbortUploadBatch(first);
+    EXPECT_FALSE(manager.IsPagePinned(path, 0, 0));
+}
+
+TEST(TerrainPageManager, AbortedBatchDoesNotReleaseAnotherBatchPin)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, true);
+
+    VL::TerrainUploadBatch first = manager.BuildUploadBatch();
+    VL::TerrainUploadBatch second = manager.BuildUploadBatch();
+    ASSERT_EQ(first.newlyPinnedPages.size(), 1u);
+    ASSERT_EQ(second.newlyPinnedPages.size(), 1u);
+    ASSERT_TRUE(manager.IsPagePinned(path, 0, 0));
+
+    manager.AbortUploadBatch(first);
+    EXPECT_TRUE(manager.IsPagePinned(path, 0, 0));
+    manager.CommitUploadBatch(second);
+    EXPECT_FALSE(manager.IsPagePinned(path, 0, 0));
+}
+
+TEST(TerrainWeightMap, ZeroHeightScaleUsesMidHeightInsteadOfThrowing)
+{
+    VL::TerrainBuildPlan plan = MakePagePlan(1);
+    plan.desc.heightScale = 0.0f;
+    plan.desc.heightOffset = 1234.0f;
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"mid", 0.45f, 0.55f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+
+    VL::TerrainPageData page;
+    ASSERT_NO_THROW(
+        page = VL::TerrainWeightMapBuilder::BuildPage(plan, 1, 32, 0, 0));
+    // 平地归一化高度固定 0.5，正好落在 mid 层窗口内。
+    EXPECT_EQ(page.ids[0], 1u);
+    EXPECT_EQ(page.weights[0], 255u);
+}
+
+TEST(TerrainWeightMap, NegativeHeightScaleClampsNormalizedHeight)
+{
+    // float 高度图允许样本超出 [0,1]；负 heightScale 让几何翻转，但归一化
+    // 高度仍是样本值 (height-offset)/scale == sample，必须钳制到 [0,1]，
+    // 否则所有层窗口都可能不命中而静默退化为 layer 0。
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t, uint32_t) { return 1.5f; }));
+    plan.desc.heightScale = -100.0f;
+    plan.desc.heightOffset = 0.0f;
+    plan.desc.pageOrigin = Eigen::Vector2i(0, 0);
+    plan.desc.pageTilesPerSide = 1;
+    plan.desc.layers = {
+        {"low", 0.0f, 0.4f, 0.0f, 90.0f, 0.0f},
+        {"high", 0.6f, 1.0f, 0.0f, 90.0f, 0.0f}};
+
+    VL::TerrainPageData page;
+    ASSERT_NO_THROW(
+        page = VL::TerrainWeightMapBuilder::BuildPage(plan, 1, 32, 0, 0));
+    EXPECT_EQ(page.ids[0], 1u);
+    EXPECT_EQ(page.weights[0], 255u);
+}
+
+TEST(TerrainResourceCache, MaterialPreviewKeepsActiveTerrainStreamingState)
+{
+    VL::RendererResourceCache& cache = VL::RendererResourceCache::GetInstance();
+    cache.Clear();
+
+    auto streaming = std::make_shared<VL::TerrainStreamingState>();
+    streaming->pendingUploadRevision = 7;
+    cache.BindTerrainStreaming(streaming);
+
+    VL::RendererResourceCache candidate = cache.BeginActiveWorldCandidate(11);
+    ASSERT_EQ(candidate.GetTerrainStreaming().get(), streaming.get());
+
+    VL::RendererResourceCache::WorldLocalResourcePackageHandle retired =
+        cache.CommitCandidate(std::move(candidate));
+    // MI 预览只替换材质/MI，提交后 active World 仍必须指向同一个 streaming state。
+    ASSERT_NE(cache.GetTerrainStreaming(), nullptr);
+    EXPECT_EQ(cache.GetTerrainStreaming().get(), streaming.get());
+    EXPECT_EQ(cache.GetTerrainStreaming()->pendingUploadRevision, 7u);
+    ASSERT_NE(retired, nullptr);
+    EXPECT_EQ(retired->terrainStreaming.get(), streaming.get());
+
+    // Blueprint 扩展候选仍是只读共享，不受本次修复影响。
+    VL::RendererResourceCache extension =
+        cache.BeginWorldExtensionCandidate(12);
+    EXPECT_EQ(extension.GetTerrainStreaming().get(), streaming.get());
+
+    cache.Clear();
+}
+
+TEST(TerrainFeedbackApply, MarksHitsQueuesMissesAndSkipsUnregisteredPages)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(10, 10, 2);
+    VL::TerrainBuildPlan plan = MakePagePlan(4);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 12;
+    summary.pages = {
+        {0, 0, 40, false, 3},
+        {1, 0, 200, true, 5},
+        // 未注册的虚拟页（例如同一 World 里 M_pbr 地形）必须跳过而不是抛错。
+        {31, 31, 255, true, 1}};
+
+    std::vector<VL::TerrainPageRequest> pending;
+    const VL::TerrainFeedbackApplyStats stats =
+        manager.ApplyFeedback(summary, 11, 4, pending);
+
+    EXPECT_EQ(stats.markedPages, 1u);
+    EXPECT_EQ(stats.missPagesSeen, 1u);
+    EXPECT_EQ(stats.queuedRequests, 1u);
+    EXPECT_EQ(stats.attemptedRequests, 1u);
+    EXPECT_EQ(stats.succeededRequests, 1u);
+    EXPECT_EQ(stats.deferredRequests, 0u);
+    EXPECT_EQ(stats.unregisteredPages, 1u);
+    EXPECT_TRUE(pending.empty());
+
+    const VL::TerrainPageManager::PageState* hit =
+        manager.FindPage(MakePageKey(path, 0, 0));
+    ASSERT_NE(hit, nullptr);
+    EXPECT_EQ(hit->lastSeenEpoch, 12u);
+    EXPECT_EQ(hit->priority, 40u);
+    EXPECT_TRUE(manager.IsPageResident(MakePageKey(path, 1, 0)));
+}
+
+TEST(TerrainFeedbackApply, HonorsPerFrameLimitAndRotatesDeferredRequests)
+{
+    VL::TerrainPageManager manager;
+    // capacity=1 且页出生在 epoch 0：completed=0 时安全窗不成立，请求必然失败。
+    manager.SetGpuEpochContext(0, 0, 0);
+    manager.SetResidentCapacity(1);
+    VL::TerrainBuildPlan plan = MakePagePlan(4);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 0));
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 1;
+    summary.pages = {
+        {1, 0, 200, true, 4},
+        {2, 0, 200, true, 4},
+        {3, 0, 200, true, 4}};
+
+    std::vector<VL::TerrainPageRequest> pending;
+    const VL::TerrainFeedbackApplyStats first =
+        manager.ApplyFeedback(summary, 0, 1, pending);
+    EXPECT_EQ(first.queuedRequests, 3u);
+    EXPECT_EQ(first.attemptedRequests, 1u);
+    EXPECT_EQ(first.succeededRequests, 0u);
+    EXPECT_EQ(first.deferredRequests, 1u);
+    ASSERT_EQ(pending.size(), 3u);
+    // 失败页 deferred+1，下一帧被排到同优先级队尾，避免永远抢第一位。
+    EXPECT_FALSE(pending.front().tileX == 1u &&
+        pending.front().tileZ == 0u);
+
+    const VL::TerrainFeedbackApplyStats second =
+        manager.ApplyFeedback(summary, 0, 1, pending);
+    EXPECT_EQ(second.queuedRequests, 0u);
+    EXPECT_EQ(second.attemptedRequests, 1u);
+    EXPECT_EQ(second.deferredRequests, 1u);
+    EXPECT_EQ(pending.size(), 3u);
+    EXPECT_EQ(pending.front().deferredRequestCount, 0u);
+}
+
+TEST(TerrainFeedbackApply, DedupesFullPageTableByStablePageIndex)
+{
+    // 满页表 + 全 miss 是首屏驻留的最坏输入：旧实现每个 miss 页都线性扫描
+    // pendingRequests 并比较 placementId，实测 72 ms/帧。这里锁定去重的
+    // 结构语义：同一页只入队一次，且每个请求都解析到稳定的页下标。
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(0, 0, 0);
+    VL::TerrainBuildPlan plan = MakePagePlan(32);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 1;
+    summary.pages.reserve(1024);
+    for (uint32_t y = 0; y < 32; ++y)
+        for (uint32_t x = 0; x < 32; ++x)
+            summary.pages.push_back({x, y, 100, true, 1});
+
+    std::vector<VL::TerrainPageRequest> pending;
+    const VL::TerrainFeedbackApplyStats first =
+        manager.ApplyFeedback(summary, 0, 0, pending);
+    EXPECT_EQ(first.queuedRequests, 1024u);
+    ASSERT_EQ(pending.size(), 1024u);
+
+    // 同一份反馈重复到达：只能提升 priority，不能重复入队。
+    const VL::TerrainFeedbackApplyStats second =
+        manager.ApplyFeedback(summary, 0, 0, pending);
+    EXPECT_EQ(second.queuedRequests, 0u);
+    ASSERT_EQ(pending.size(), 1024u);
+
+    constexpr uint32_t kInvalidPageIndex =
+        std::numeric_limits<uint32_t>::max();
+    std::set<uint32_t> pageIndices;
+    for (const VL::TerrainPageRequest& request : pending)
+    {
+        ASSERT_NE(request.pageIndex, kInvalidPageIndex);
+        EXPECT_TRUE(pageIndices.insert(request.pageIndex).second);
+        const VL::TerrainPageManager::PageState* state =
+            manager.FindPageByVirtual(request.tileX, request.tileZ);
+        ASSERT_NE(state, nullptr);
+        EXPECT_EQ(state->key.placementId, path);
+    }
+}
+
+TEST(TerrainPageManager, QuarantineBlocksSlotUntilReleaseEpoch)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(20, 18, 2);
+    VL::TerrainBuildPlan plan = MakePagePlan(2);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 1));
+    ASSERT_TRUE(manager.EvictPage(path, 0, 0));
+    // release = max(lastSeen=20, submitted=20) + framesInFlight(2) + 1
+    EXPECT_EQ(manager.PhysicalSlotReleaseEpoch(0, 0), 23u);
+    EXPECT_FALSE(manager.IsPhysicalSlotAvailable(0, 0, 22));
+    EXPECT_TRUE(manager.IsPhysicalSlotAvailable(0, 0, 23));
+    // 不再保留 fallback 物理槽位：最后一个槽位也可分配。
+    EXPECT_TRUE(manager.IsPhysicalSlotAvailable(
+        VL::TerrainPageManager::PageTableSize - 1,
+        VL::TerrainPageManager::PageTableSize - 1,
+        std::numeric_limits<uint64_t>::max()));
+
+    // quarantine 未过期时请求会拿下一个空闲槽位；旧槽位内容不被覆盖。
+    ASSERT_TRUE(manager.RequestPageAtEpoch(path, 1, 0, 2, 0, 22));
+    const VL::TerrainPageManager::PageState* page =
+        manager.FindPage(MakePageKey(path, 1, 0));
+    ASSERT_NE(page, nullptr);
+    EXPECT_EQ(page->physicalPageX, 1u);
+    EXPECT_EQ(page->physicalPageY, 0u);
+}
+
+TEST(TerrainFeedbackApply, LayerlessPlacementInSameWorldDoesNotPolluteFeedback)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan layered = MakePagePlan(2);
+    layered.placementId = "terrain|Layered";
+    layered.desc.pageOrigin = Eigen::Vector2i(0, 0);
+    manager.RegisterTerrain(layered, false);
+    // 命中页必须已驻留，MarkPageUsedAtEpoch 才会推进 recency。
+    ASSERT_TRUE(manager.RequestPage(layered.placementId, 0, 0, 1));
+
+    VL::TerrainBuildPlan layerless = MakePagePlan(2);
+    layerless.placementId = "terrain|Layerless";
+    layerless.desc.assetPath =
+        "Generated/Validation/TerrainTests/TR_layerless.json";
+    layerless.desc.layers.clear();
+    layerless.desc.pageOrigin = Eigen::Vector2i(2, 2);
+    // rendererResourceLoadCoordinator 会跳过没有 layers 的摆放，因此该地形
+    // 在页表里没有注册项；它的 feedback 页只能计入 unregistered。
+    ASSERT_FALSE(VL::TerrainUsesVirtualPages(layerless));
+    ASSERT_EQ(manager.Registrations().size(), 1u);
+
+    VL::TerrainFeedbackFrameSummary summary;
+    summary.copiedEpoch = 12;
+    summary.pages = {
+        {0, 0, 40, false, 3},
+        {2, 2, 200, true, 3}};
+
+    std::vector<VL::TerrainPageRequest> pending;
+    const VL::TerrainFeedbackApplyStats stats =
+        manager.ApplyFeedback(summary, 11, 4, pending);
+
+    EXPECT_EQ(stats.markedPages, 1u);
+    EXPECT_EQ(stats.missPagesSeen, 0u);
+    EXPECT_EQ(stats.queuedRequests, 0u);
+    EXPECT_EQ(stats.unregisteredPages, 1u);
+    EXPECT_TRUE(pending.empty());
+    EXPECT_FALSE(manager.IsResident(2, 2));
+    EXPECT_EQ(manager.EvictionCount(), 0u);
+}
+
+TEST(TerrainFeedbackApply, DropsPendingRequestsThatLeaveTheView)
+{
+    VL::TerrainPageManager manager;
+    manager.SetGpuEpochContext(0, 0, 0);
+    manager.SetResidentCapacity(1);
+    VL::TerrainBuildPlan plan = MakePagePlan(4);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    ASSERT_TRUE(manager.RequestPage(path, 0, 0, 0));
+
+    VL::TerrainFeedbackFrameSummary firstView;
+    firstView.copiedEpoch = 1;
+    firstView.pages = {
+        {1, 0, 200, true, 4},
+        {2, 0, 200, true, 4},
+        {3, 0, 200, true, 4}};
+    std::vector<VL::TerrainPageRequest> pending;
+    manager.ApplyFeedback(firstView, 0, 3, pending);
+    ASSERT_EQ(pending.size(), 3u);
+
+    // 相机转走后只剩 (2,0) 可见；不可见的 pending 必须丢弃，不能继续烘焙。
+    VL::TerrainFeedbackFrameSummary secondView;
+    secondView.copiedEpoch = 2;
+    secondView.pages = {{2, 0, 200, true, 4}};
+    manager.ApplyFeedback(secondView, 0, 3, pending);
+    ASSERT_EQ(pending.size(), 1u);
+    EXPECT_EQ(pending[0].tileX, 2u);
+    EXPECT_EQ(pending[0].tileZ, 0u);
+}
+
+TEST(TerrainPageManager, UploadBatchCapConvergesAcrossFrames)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(4);
+    const std::string path = plan.desc.assetPath;
+    manager.RegisterTerrain(plan, false);
+    for (uint32_t tileZ = 0; tileZ < 4; ++tileZ)
+        for (uint32_t tileX = 0; tileX < 4; ++tileX)
+            ASSERT_TRUE(manager.RequestPage(path, tileX, tileZ, 1));
+
+    uint32_t uploadedPages = 0;
+    uint32_t batchCount = 0;
+    while (manager.HasDirtyUploads() && batchCount < 8)
+    {
+        const VL::TerrainUploadBatch batch = manager.BuildUploadBatch(4);
+        ASSERT_FALSE(batch.Empty());
+        EXPECT_LE(batch.atlasUploads.size(), 4u);
+        for (const VL::TerrainPageManager::PageTableUpload& upload :
+             batch.pageTableUploads)
+        {
+            if (upload.entry[3] == 0)
+                continue;
+            EXPECT_TRUE(BatchContainsPhysicalSlot(
+                batch, upload.entry[0], upload.entry[1]));
+        }
+        uploadedPages +=
+            static_cast<uint32_t>(batch.atlasUploads.size());
+        manager.CommitUploadBatch(batch);
+        ++batchCount;
+    }
+    EXPECT_FALSE(manager.HasDirtyUploads());
+    EXPECT_EQ(uploadedPages, 16u);
+    EXPECT_EQ(batchCount, 4u);
+}
+
+TEST(TerrainPageManager, PreloadFalseRegistersWithoutBakingPages)
+{
+    VL::TerrainPageManager manager;
+    VL::TerrainBuildPlan plan = MakePagePlan(8);
+    manager.RegisterTerrain(plan, false);
+
+    EXPECT_EQ(manager.ResidentCount(), 0u);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+    EXPECT_TRUE(manager.BuildUploadBatch(4).Empty());
+
+    // 加载期“中心 2×2 初始集合”：只请求 4 页，剩余页交给 feedback。
+    ASSERT_EQ(manager.Registrations().size(), 1u);
+    EXPECT_EQ(
+        manager.RequestInitialTerrainPages(manager.Registrations()[0]),
+        4u);
+    EXPECT_EQ(manager.ResidentCount(), 4u);
+    const VL::TerrainUploadBatch batch = manager.BuildUploadBatch(8);
+    EXPECT_EQ(batch.atlasUploads.size(), 4u);
+    manager.CommitUploadBatch(batch);
+    EXPECT_FALSE(manager.HasDirtyUploads());
+}

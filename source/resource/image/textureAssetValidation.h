@@ -9,15 +9,55 @@
 inline void ValidateTextureAssetJson(const nlohmann::json& asset)
 {
     if (!asset.is_object()) throw std::invalid_argument("Texture asset must be an object");
+    if (!asset.contains("type") || !asset.at("type").is_string())
+        throw std::invalid_argument("Texture type must be texture or textureArray");
+    const std::string type = asset.at("type").get<std::string>();
+    const bool isArray = type == "textureArray";
+    if (type != "texture" && !isArray)
+        throw std::invalid_argument("Texture type must be texture or textureArray");
     for (const auto& entry : asset.items())
         if (entry.key() != "name" && entry.key() != "type" && entry.key() != "source" &&
+            entry.key() != "sources" &&
+            entry.key() != "displacementSources" &&
             entry.key() != "colorSpace" && entry.key() != "mipmaps" && entry.key() != "filter" &&
             entry.key() != "wrapMode" && entry.key() != "channelsDescription")
             throw std::invalid_argument("Unknown texture field: " + entry.key());
-    if (asset.at("type") != "texture") throw std::invalid_argument("Texture type must be texture");
-    for (const char* field : {"name", "source", "colorSpace"})
+    for (const char* field : {"name", "colorSpace"})
         if (!asset.at(field).is_string() || asset.at(field).get<std::string>().empty())
             throw std::invalid_argument(std::string("Texture requires non-empty string: ") + field);
+    if (isArray)
+    {
+        if (asset.contains("source"))
+            throw std::invalid_argument("Texture array must use sources, not source");
+        if (!asset.contains("sources") || !asset.at("sources").is_array() || asset.at("sources").empty())
+            throw std::invalid_argument("Texture array requires non-empty sources");
+        for (const auto& source : asset.at("sources"))
+            if (!source.is_string() || source.get<std::string>().empty())
+                throw std::invalid_argument("Texture array sources must be non-empty strings");
+        // displacementSources 是层 source-set 的编辑器侧 16-bit 位移源，运行时不上传。
+        // 若存在必须与 sources 同序同长，避免预览按 slice 取到错层。
+        if (asset.contains("displacementSources"))
+        {
+            if (!asset.at("displacementSources").is_array() ||
+                asset.at("displacementSources").size() != asset.at("sources").size())
+                throw std::invalid_argument(
+                    "Texture array displacementSources must match sources");
+            for (const auto& source : asset.at("displacementSources"))
+                if (!source.is_string() || source.get<std::string>().empty())
+                    throw std::invalid_argument(
+                        "Texture array displacementSources must be non-empty strings");
+        }
+    }
+    else
+    {
+        if (asset.contains("sources"))
+            throw std::invalid_argument("Single texture must use source, not sources");
+        if (asset.contains("displacementSources"))
+            throw std::invalid_argument(
+                "Single texture must not use displacementSources");
+        if (!asset.at("source").is_string() || asset.at("source").get<std::string>().empty())
+            throw std::invalid_argument("Texture requires non-empty string: source");
+    }
     for (const char* field : {"colorSpace", "filter", "wrapMode"})
     {
         if (!asset.contains(field)) continue;

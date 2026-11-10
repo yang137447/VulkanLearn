@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -14,11 +15,19 @@ enum class EditorActorProperty : uint8_t
     AreaSize, Normal, CameraFov, CameraNear, CameraFar, CastShadows,
     CameraExposureMode, CameraEv100, CameraExposureCompensation,
     CameraAutoMinEv100, CameraAutoMaxEv100, CameraAutoSpeedUp, CameraAutoSpeedDown,
-    CameraAutoTargetGray
+    CameraAutoTargetGray,
+    // 完整 TRS 一次提交：position/rotation/scale 三个数组必须同时有效。
+    // 追加在末尾，避免已有数值枚举在 UI/命令序列化中重编号。
+    Transform,
+    // 场景全局 wind 对象：方向、强度、阵风参数。阵风开启由“写入任一非零阵风参数”
+    // 表达，不额外引入布尔控件；全零时运行期等效关闭。
+    WindDirection, WindStrength, WindGustAmplitude, WindGustFrequency, WindGustTurbulence
 };
 
-// UI 只提交单个分量的编辑意图；GT 执行端从当前对象读取其它分量，
-// 避免同帧连续输入用旧快照覆盖彼此。代数阻止旧关卡事件修改新关卡同名对象。
+// UI 提交编辑意图；单分量路径由 GT 从当前对象读取其它分量，避免同帧连续
+// 输入互相覆盖。Transform 路径携带完整 TRS，保证一次拖拽只产生一笔 Scene
+// 历史。preview 只表示"实时写 live World"，命令执行端不得写入 Scene 草稿。
+// 代数阻止旧关卡事件修改新关卡同名对象。
 struct EditorActorPropertyEdit
 {
     uint64_t worldGeneration = 0;
@@ -26,6 +35,11 @@ struct EditorActorPropertyEdit
     EditorActorProperty property = EditorActorProperty::Position;
     uint32_t component = 0;
     float value = 0.0f;
+    std::array<float, 3> transformPosition{0, 0, 0};
+    std::array<float, 3> transformRotation{0, 0, 0};
+    std::array<float, 3> transformScale{1, 1, 1};
+    // Gizmo 拖动中的每帧预览：World 立即变化，但 Scene 文档与撤销历史保持不动。
+    bool preview = false;
 };
 
 // 命令边界校验数值、类型、对象与代数，成功后只修改 GT World，不接触文件或 GPU。

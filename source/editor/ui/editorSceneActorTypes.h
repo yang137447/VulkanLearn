@@ -9,12 +9,16 @@
 
 #include "world/worldSnapshot.h"
 
+namespace VL { struct TerrainBuildPlan; }
+namespace VL::Hair { class TressfxRootCloud; }
+namespace VL::Hair { struct TressfxGroupBinding; }
+
 namespace VL::EditorUi
 {
 
-// 大纲 actor 的类型。除 WindProfile 外均与场景 JSON 的对象 type 一一对应；
-// WindProfile 是网格导入产生的风剖面（不是场景对象），Script 只表达 World 里
-// 确实存在的 C# Blueprint 状态。
+// 大纲 actor 的类型。Mesh..Environment 与 SceneWind 和场景 JSON 的对象 type 一一对应；
+// ParticleSystem/Terrain 同样是场景对象；Script 只表达 World 里确实存在的蓝图实例状态。
+// SpeedTree 每物种的响应曲线数据属于网格资产，不作为场景 actor 出现在大纲里。
 enum class EditorSceneActorType : uint8_t
 {
     Mesh,
@@ -25,7 +29,8 @@ enum class EditorSceneActorType : uint8_t
     Camera,
     Environment,
     ParticleSystem,
-    WindProfile,
+    Terrain,
+    SceneWind,
     Script
 };
 
@@ -42,7 +47,16 @@ struct EditorSceneMeshSectionSnapshot
     std::string materialInstancePath;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
-    std::string windProfileKey;
+    // 根点云保持 model/head-local；worldFromLocal 是当前 actor 的完整模型矩阵，
+    // 由 SurfaceBrush 在采样时用于世界空间 ray/平面。两者都是只读快照。
+    std::shared_ptr<const VL::Hair::TressfxRootCloud> tressfxRootCloud;
+    Eigen::Matrix4f tressfxRootLocalToWorld = Eigen::Matrix4f::Identity();
+    // 已保存资产的 guide->group 映射与组名；草稿组按名称映射到 GPU group id，
+    // 不能直接用草稿下标。点云不再携带组号。
+    std::shared_ptr<const VL::Hair::TressfxGroupBinding> tressfxGroupBinding;
+    // placement 解析后的每组模拟配置；Groups 检查器的 asset default 从这里读取。
+    // 为空表示该 section 没有 TressFX 求解或预览快照未发布。
+    std::shared_ptr<const std::vector<TressfxSimulationConfig>> tressfxGroupConfigs;
 };
 
 // 相机发布 Details 的作者曝光与辅助线需要的基向量/投影参数；
@@ -78,30 +92,18 @@ struct EditorSceneEnvironmentActor
     std::string hdrPath;
 };
 
-// 风剖面的曲线表（每个 20 点 × 5 条）不属于展示字段，这里只冻结标量与开关，
-// 与 SpeedTreeWindProfile 的字段同名，便于后续编辑轮直接映射回去。
-struct EditorSceneWindActor
+// 场景级全局风（World::GetWind()）。全场景至多一个，身份使用场景 JSON 的作者 name；
+// 每物种的 SpeedTree 响应曲线属于网格资产，不再作为大纲 actor。
+struct EditorSceneWorldWindActor
 {
-    std::string key;
-    Eigen::Vector3f sourceBoundsMin = Eigen::Vector3f::Zero();
-    Eigen::Vector3f sourceBoundsMax = Eigen::Vector3f::Zero();
-    float strengthResponse = 0.0f;
-    float directionResponse = 0.0f;
+    // 已归一化的风向；长度由 strengthCmPerSec 单独表达。
+    Eigen::Vector3f direction = Eigen::Vector3f::UnitX();
+    float strengthCmPerSec = 0.0f;
+    // 阵风是连续噪声调制，没有离散阵风事件；关闭时三个数值保持 0。
+    bool gustEnabled = false;
+    float gustAmplitude = 0.0f;
     float gustFrequency = 0.0f;
-    float gustStrengthMin = 0.0f;
-    float gustStrengthMax = 0.0f;
-    float gustDurationMin = 0.0f;
-    float gustDurationMax = 0.0f;
-    float gustRiseScalar = 0.0f;
-    float gustFallScalar = 0.0f;
-    float sharedStartHeight = 0.0f;
-    float branch1StretchLimit = 0.0f;
-    float branch2StretchLimit = 0.0f;
-    bool doShared = false;
-    bool doBranch1 = false;
-    bool doBranch2 = false;
-    bool doRipple = false;
-    bool doShimmer = false;
+    float gustTurbulence = 0.0f;
 };
 
 // 冻结的只读 actor 行 + 类型化参数。UI 只接收值语义：没有 World、SceneNode 或
@@ -115,11 +117,14 @@ struct EditorSceneActorSnapshot
     // 展开状态的键，不是 DOM 索引，也不能当作 GPU 资源身份。
     std::string identity;
     std::string displayName;
-    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。网格、四类灯与
-    // 粒子系统真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
+    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。网格/地形、四类灯
+    // 与粒子系统真正有渲染侧可见性；相机/环境/场景风固定为 true，也不显示眼睛控件。
     bool visible = true;
-    // 只有 Mesh 使用；其余类型为空。
+    // 只有 Mesh/Terrain 使用；其余类型为空。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
+    // 仅 Terrain 使用：TR 资产路径与 World 加载期准备好的只读计划。
+    std::string terrainAssetPath;
+    std::shared_ptr<const TerrainBuildPlan> terrainPlan;
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;
@@ -151,11 +156,12 @@ struct EditorSceneActorSnapshot
     nlohmann::json scriptPhysics = nullptr;
     bool scriptSpawned = false;
     EditorSceneEnvironmentActor environment;
-    EditorSceneWindActor wind;
     // 粒子系统只冻结展示所需的作者资产路径与发射器数量；模拟与 GPU 缓冲
     // 仍归渲染器所有，UI 不持有 ParticleSystemAsset 或任何 GPU 句柄。
     std::string particleAssetPath;
     uint32_t particleEmitterCount = 0;
+    // 场景级全局风对象。
+    EditorSceneWorldWindActor worldWind;
 };
 
 } // namespace VL::EditorUi

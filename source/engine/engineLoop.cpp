@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <filesystem>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -14,6 +15,7 @@
 #include "engine/gameInstance.h"
 #include "engine/modelPreviewRequest.h"
 #include "engine/particlePreviewRequest.h"
+#include "engine/modelPreviewRotation.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "script/scriptBuildService.h"
 #include "script/scriptBuildDiagnostics.h"
@@ -23,11 +25,19 @@
 #include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
+#include "audio/audioRuntime.h"
+#include "engine/destructibleRuntime.h"
+#include "engine/softBodyRuntime.h"
+#include "engine/glassRuntime.h"
+#include "engine/projectileRuntime.h"
+#include "physics/runtime/fractureImpactWorld.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/scene/scriptBlueprintAuthoring.h"
 #include "editor/service/sceneDocumentService.h"
+#include "editor/terrain/terrainEditSession.h"
+#include "editor/terrain/terrainPaintSession.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
@@ -35,6 +45,8 @@
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
 #include "engine/editorThumbnailRenderSession.h"
+#include "engine/terrainEditApply.h"
+#include "engine/terrainChunkStreamer.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
@@ -43,20 +55,76 @@
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainPageBakeGpu.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
 #include "sceneNode.h"
 #include "shaderCompiler.h"
+#include "terrain/terrainPaintFile.h"
+#include "terrain/terrainPageManager.h"
 #include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
 #include "ui/uiRenderSnapshot.h"
+#include "animation/motionFeatures.h"
 #include "animation/skeletalPlayback.h"
 
 namespace VL
 {
+
+// 动画预览派生数据：只有 active World 换代或 preview_model 播放器身份变化时失效。
+// schema/通道名/clip 列表与播放时间无关，不能每帧重算。
+struct UiAnimationPreviewCache
+{
+    const Animation::SkeletalPlayback* player = nullptr;
+    uint64_t worldGeneration = 0;
+    std::vector<std::string> clipIds;
+    Animation::FeatureSchema schema;
+    std::vector<std::string> featureChannels;
+};
+
 namespace
 {
+
+// 开发者 UI 隐藏且 motion debug 关闭时复用的冻结空视图：避免每帧为
+// CaptureDebugDraw 构造一个禁用的 MotionDebugView，也避免缓存随场景增长。
+const std::shared_ptr<const Animation::MotionDebugView>& DisabledMotionDebugView()
+{
+    static const std::shared_ptr<const Animation::MotionDebugView> view =
+        std::make_shared<const Animation::MotionDebugView>();
+    return view;
+}
+
+// 调试叠层的 UI 可见状态签名。快照几何每帧都新分配，但面板只消费
+// 开关/类别/owner/计数这些字段；用它们的签名判断“这一节是否真的变了”。
+uint64_t UiDebugDrawSignature(const Debug::Snapshot& snapshot)
+{
+    UiSectionRevision revision;
+    revision.Mix(snapshot.enabled ? 1u : 0u)
+        .Mix(snapshot.visibleCount)
+        .Mix(snapshot.storedCount);
+    for (const char character : snapshot.ownerFilter)
+    {
+        revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+    }
+    for (const auto& category : snapshot.categories)
+    {
+        revision.Mix(category.enabled ? 1u : 0u).Mix(category.count);
+        for (const char character : category.name)
+        {
+            revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+        }
+    }
+    for (const auto& owner : snapshot.owners)
+    {
+        for (const char character : owner)
+        {
+            revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+        }
+    }
+    return revision.Value();
+}
 
 RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     const WorldGraphTransactionTestFaultInjection& injection)
@@ -73,6 +141,15 @@ RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     graphFault.failPassMaterialContract =
         injection.failPassMaterialContract;
     return graphFault;
+}
+
+TerrainBrushShape ToTerrainBrushShape(int shape)
+{
+    if (shape == 0)
+        return TerrainBrushShape::Circle;
+    if (shape == 1)
+        return TerrainBrushShape::Square;
+    throw std::invalid_argument("Unknown terrain brush shape.");
 }
 
 } // namespace
@@ -118,6 +195,7 @@ RuntimeResult<void> EngineLoop::Init(
         platformWindow,
         platformApplication.GetVulkanExtensions(),
         launchOptions.developerUiMode,
+        launchOptions.presentMode,
         launchOptions.forceShaderRebuild);
     if (runtimeResult.IsFailure())
     {
@@ -125,6 +203,40 @@ RuntimeResult<void> EngineLoop::Init(
     }
 
     RenderSystem::GetInstance().SetInitialOfflineMode(launchOptions.offlineRender);
+    // 必须在 LoadInitialWorldAndRenderer 之前设置：材质 shader variant 与对象
+    // GPU 资源在 World 加载事务里按该 flag 选择预蒙皮路径。
+    RenderSystem::GetInstance().SetPrerenderSkinEnabled(launchOptions.prerenderSkin);
+    // 必须在 LoadInitialWorldAndRenderer 之前设置：帧资源初始化时按该标志决定是否
+    // 在首次采集时创建 timestamp query pool。
+    RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);
+    gpuStatsEnabled = launchOptions.gpuStats;
+    nextUiSectionStats = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    if (launchOptions.perfJsonlPath.has_value() || launchOptions.gpuStats)
+    {
+        // 计时读数只在优化构建里有意义：Debug（-O0）会把数毫秒的一帧放大到
+        // 数百毫秒，而页流式吞吐 = 每帧上传页数 × 帧率，于是会被误读成
+        // "页加载慢"。这里必须在启动期点明，避免再拿非优化构建的结论做架构决策。
+#if !defined(NDEBUG)
+        std::cout
+            << "[Diagnostics][Warning] This build is not optimized (NDEBUG is "
+               "undefined). Frame timings and streaming throughput are not "
+               "representative; use a Release build for performance work."
+            << std::endl;
+#endif
+    }
+    if (launchOptions.perfJsonlPath.has_value())
+    {
+        // --perf-jsonl 的时间序列需要 pass 数据，因此同时开启采集；
+        // 打开失败必须在启动时给出原因，不能留下"看似在跑但文件为空"的假象。
+        std::string jsonlError;
+        if (!perfJsonl.Open(*launchOptions.perfJsonlPath, jsonlError))
+        {
+            return RuntimeResult<void>::Failure(
+                MakeRuntimeError("EngineLoop.PerfJsonl", jsonlError));
+        }
+        RenderSystem::GetInstance().EnableGpuPassCollection();
+        nextPerfJsonlWrite = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    }
     auto worldResult = LoadInitialWorldAndRenderer(
         launchOptions.initialSceneOverride);
     if (worldResult.IsFailure())
@@ -206,6 +318,7 @@ void EngineLoop::Shutdown()
     // Stop the CPU compile worker before any Vulkan teardown. The worker never
     // touches Vulkan, and dropping its in-flight candidate here guarantees no
     // callback can run after device resources are released.
+    perfJsonl.Close();
     const DiagnosticsSubsystem& diagnostics =
         GetSubsystems().GetDiagnosticsSubsystem();
     if (scriptBuild) scriptBuild->Shutdown();
@@ -215,6 +328,22 @@ void EngineLoop::Shutdown()
     BlueprintAssetLoadSession::WaitForWorkers();
     loadedBlueprintAssets.clear();
     GetSubsystems().GetScriptRuntime().Shutdown();
+    if (fractureWorld)
+    {
+        fractureWorld->Clear();
+        fractureWorld.reset();
+    }
+    if (fractureBudget)
+    {
+        fractureBudget->Reset();
+        fractureBudget.reset();
+    }
+    fractureBudgetGeneration = 0;
+    if (audioRuntime)
+    {
+        audioRuntime->Shutdown();
+        audioRuntime.reset();
+    }
     if (shaderReloadRuntime)
     {
         shaderReloadRuntime->Shutdown();
@@ -229,6 +358,21 @@ void EngineLoop::Shutdown()
         }
 
         rendererBackend->WaitIdle();
+        // 碎片池/箭矢网格可能仍被上一帧 command buffer 引用；必须等 WaitIdle
+        // 之后再销毁，不能跟随 CPU/物理对象一起提前释放。
+        if (destructibleRuntimes)
+        {
+            destructibleRuntimes->Shutdown();
+            destructibleRuntimes.reset();
+        }
+        if (projectileRuntime)
+        {
+            if (const auto activeWorld =
+                    GetSubsystems().GetWorldManager().GetActiveWorld())
+                projectileRuntime->Clear(*activeWorld);
+            projectileRuntime->Shutdown();
+            projectileRuntime.reset();
+        }
         thumbnailSession.reset();
         thumbnailRequest.reset();
         if (uiSubsystem)
@@ -315,6 +459,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     PlatformWindow& window,
     std::vector<const char*>& vulkanExtensions,
     DeveloperUiLaunchMode developerUiMode,
+    PresentModePreference presentMode,
     bool forceShaderRebuild)
 {
     // Material parameter includes are generated before shader compilation so
@@ -329,8 +474,10 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         forceShaderRebuild);
 
     rendererBackend = std::make_unique<RendererBackendVulkan>();
-    rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
+    rendererBackend->Initialize(
+        vulkanExtensions, window.GetNativeHandle(), presentMode);
     rendererBackendInitialized = true;
+    terrainChunkStreamer = std::make_unique<TerrainChunkStreamer>();
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
     RenderSystem::GetInstance().SetResourceRoot(
         GetRuntimeConfig().GetResourcePath());
@@ -360,6 +507,33 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     RenderGraph::GetInstance().LoadRenderGraph(
         GetRuntimeConfig().GetRenderGraphJson(),
         *rendererBackend);
+    audioRuntime = std::make_unique<AudioRuntime>(
+        GetSubsystems().GetDiagnosticsSubsystem(),
+        CommonFunction::GetResourcePath());
+    // 气球、玻璃和可见箭矢共用一个 Jolt 冲击世界：同一支箭可以命中任意目标。
+    fractureWorld = std::make_unique<Physics::FractureImpactWorld>();
+    // 全场景碎片预算也是单实例：玻璃/气球通过它统一降级，World 换代归零。
+    fractureBudget = std::make_unique<Physics::Fracture::FractureBudget>();
+    destructibleRuntimes = std::make_unique<DestructibleRuntimeRegistry>(
+        GetSubsystems().GetDiagnosticsSubsystem());
+    destructibleRuntimes->Add(std::make_unique<SoftBodyRuntime>(
+        *rendererBackend,
+        GetSubsystems().GetDiagnosticsSubsystem(),
+        audioRuntime.get(),
+        *fractureWorld,
+        *fractureBudget,
+        *destructibleRuntimes));
+    destructibleRuntimes->Add(std::make_unique<GlassRuntime>(
+        *rendererBackend,
+        GetSubsystems().GetDiagnosticsSubsystem(),
+        audioRuntime.get(),
+        *fractureWorld,
+        *fractureBudget,
+        *destructibleRuntimes));
+    projectileRuntime = std::make_unique<ProjectileRuntime>(
+        *rendererBackend,
+        GetSubsystems().GetDiagnosticsSubsystem(),
+        *fractureWorld);
 
     const UiSettings& uiSettings = GetRuntimeConfig().GetUiSettings();
     const auto& scriptSettings = GetRuntimeConfig().GetScriptSettings();
@@ -507,6 +681,9 @@ void EngineLoop::Tick()
 {
     PROFILE_SCOPE("Frame");
 
+    // CPU 阶段按 GT Tick 归零；早退帧不 Commit，下一帧 BeginFrame 会丢弃残余累加值。
+    cpuFrameProfiler.BeginFrame();
+
     GetSubsystems().GetConsoleSubsystem().Update();
 
     ApplyQueuedUiActions();
@@ -544,10 +721,36 @@ void EngineLoop::Tick()
         GetSubsystems().GetDiagnosticsSubsystem(),
         &GetSubsystems().GetInputSubsystem(),
         &GetSubsystems().GetScriptRuntime(),
-        uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr);
+        uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr,
+        destructibleRuntimes.get(),
+        projectileRuntime.get());
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
+    if (commandResult.terrainFeedbackStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainFeedbackStatistics();
+    }
+    if (commandResult.terrainStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainStatistics();
+    }
+    if (commandResult.terrainLayerStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainLayerStatistics();
+    }
+    if (commandResult.terrainLodStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainLodStatistics();
+    }
+    if (commandResult.terrainChunkStatisticsRequested)
+    {
+        RenderSystem::GetInstance().ReportTerrainChunkStatistics();
+    }
+    if (commandResult.terrainCollisionStatisticsRequested)
+    {
+        GetSubsystems().GetScriptRuntime().ReportTerrainCollisionStatistics();
+    }
     if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
     {
         const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};
@@ -581,6 +784,12 @@ void EngineLoop::Tick()
          activeWorldBeforeCommand.scenePath !=
              commandResult.activeWorldAfterCommand.scenePath))
     {
+        terrainEditSession.reset();
+        terrainEditSessionGeneration = 0;
+        terrainEditSessionPlacementId.clear();
+        terrainPaintSession.reset();
+        terrainPaintSessionGeneration = 0;
+        terrainPaintSessionPlacementId.clear();
         uiSubsystem->NotifyWorldChanged(
             commandResult.activeWorldAfterCommand.scenePath,
             commandResult.activeWorldAfterCommand.generation);
@@ -634,7 +843,12 @@ void EngineLoop::Tick()
     constexpr float MaxSimulationDelta = 0.1f;
     const float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
 
-    PumpPlatformEvents();
+    // input 由两段不连续区间组成（平台事件轮询 + 动作状态更新），其余 UI 策略
+    // 与命令执行归入 other；同一阶段的多个区间在累加器里相加。
+    {
+        CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        PumpPlatformEvents();
+    }
     if (shouldClose)
     {
         return;
@@ -681,36 +895,112 @@ void EngineLoop::Tick()
         return;
     }
 
-    GetSubsystems().GetInputSubsystem().UpdateActionState();
+    {
+        CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        GetSubsystems().GetInputSubsystem().UpdateActionState();
+    }
 
     {
         PROFILE_SCOPE("Update");
         auto& scripts = GetSubsystems().GetScriptRuntime();
         const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-        // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
-        if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
-        TickBlueprintAssets();
-        // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
-        TickScriptBuild(deltaTime);
-        if (world && world->GetGeneration() != autoPlayWorldGeneration &&
-            GetRuntimeConfig().GetScriptSettings().autoPlay &&
-            !RenderSystem::GetInstance().IsOfflineMode() &&
-            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
+        if (world && audioRuntime && world->GetRenderCamera())
         {
-            // 导出的游戏在正式World提交后进入同一Play入口；每代只启动一次，Stop不会自行重启。
-            autoPlayWorldGeneration = world->GetGeneration();
-            if (!world->GetScriptBlueprints().empty())
+            audioRuntime->SetListenerPosition(world->GetRenderCamera()->GetPosition());
+            // pan 需要相机朝向；只读取现有渲染相机，不修改它。
+            audioRuntime->SetListenerOrientation(
+                world->GetRenderCamera()->GetForwardVector(),
+                world->GetRenderCamera()->GetUpVector());
+        }
+        {
+            // scripts 覆盖蓝图资产轮询、自动 Play 判定、编辑控制器与脚本 Tick；
+            // DebugDraw 的帧边界清理也随脚本状态一起计入这里。
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
+            if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
+            TickBlueprintAssets();
+            // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
+            TickScriptBuild(deltaTime);
+            if (world && world->GetGeneration() != autoPlayWorldGeneration &&
+                GetRuntimeConfig().GetScriptSettings().autoPlay &&
+                !RenderSystem::GetInstance().IsOfflineMode() &&
+                std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
+            {
+                // 导出的游戏在正式World提交后进入同一Play入口；每代只启动一次，Stop不会自行重启。
+                autoPlayWorldGeneration = world->GetGeneration();
+                if (!world->GetScriptBlueprints().empty())
+                {
+                    std::string error;
+                    if (!scripts.Control(*world, ScriptPlayState::Playing, error))
+                        GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
+                }
+            }
+            // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
+            if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
             {
                 std::string error;
-                if (!scripts.Control(*world, ScriptPlayState::Playing, error))
-                    GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
+                scripts.Control(*world, ScriptPlayState::Editing, error);
+            }
+            if (scripts.IsEditing())
+                controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
+            scripts.Tick(world, simulationDelta,
+                GetSubsystems().GetInputSubsystem().GetActionState(),
+                GetSubsystems().GetDiagnosticsSubsystem());
+        }
+        {
+            // 可破坏物会话跟着 Play/Editing 状态切换；先恢复作者场景再步进共享冲击世界。
+            const bool offline = RenderSystem::GetInstance().IsOfflineMode();
+            const bool nativeGameplay = world && world->IsNativeGameplay();
+            const bool sessionActive = world && !offline &&
+                (nativeGameplay || !scripts.IsEditing());
+            const bool gameplayActive = sessionActive &&
+                (nativeGameplay || !scripts.IsPaused());
+            const bool editingNow =
+                world && !offline && !nativeGameplay && scripts.IsEditing();
+            if (editingNow && destructibleSessionActive)
+            {
+                // Stop 进入 Editing 时恢复作者场景；Pause 只冻结，不重置。
+                if (destructibleRuntimes) destructibleRuntimes->Reset(*world);
+                if (fractureBudget) fractureBudget->Reset();
+                if (projectileRuntime) projectileRuntime->Clear(*world);
+            }
+            destructibleSessionActive = sessionActive;
+
+            std::vector<Physics::FractureImpact> impacts;
+            if (gameplayActive && fractureWorld)
+            {
+                try
+                {
+                    // 共享冲击世界每帧只步进一次；事件再分发给 registry。
+                    impacts = fractureWorld->Step(simulationDelta);
+                }
+                catch (const std::exception& error)
+                {
+                    GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+                        std::string("Fracture physics step failed: ") +
+                        error.what());
+                }
+                const auto& input = GetSubsystems().GetInputSubsystem().GetActionState();
+                if (projectileRuntime && world->GetRenderCamera() &&
+                    input.gameplay.contains("actions") &&
+                    input.gameplay["actions"].contains("Fire") &&
+                    input.gameplay["actions"]["Fire"].value("pressed", false))
+                {
+                    projectileRuntime->Fire(*world, *world->GetRenderCamera());
+                }
+                if (destructibleRuntimes)
+                {
+                    destructibleRuntimes->HandleImpacts(*world, impacts);
+                    destructibleRuntimes->Tick(*world, simulationDelta);
+                }
+                if (projectileRuntime)
+                    projectileRuntime->Tick(*world, simulationDelta, impacts);
             }
         }
-        // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
-        if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
         {
-            std::string error;
-            scripts.Control(*world, ScriptPlayState::Editing, error);
+            // 调试绘制时间推进只随脚本编辑模式走，归入 scripts 的第二段区间。
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         }
         if (scripts.IsEditing())
             controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
@@ -721,47 +1011,125 @@ void EngineLoop::Tick()
         // Editing 保持编辑器时间。必须在 Tick 之后、发布快照之前写入。
         RenderSystem::GetInstance().SetPendingSimulationDelta(
             scripts.ParticleDeltaOr(simulationDelta));
-        if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
-        if (world && !RenderSystem::GetInstance().IsOfflineMode())
-            world->TickAnimations(simulationDelta);
-        if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
-            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
-            scripts.PollBlueprintAssetChanges(*world, deltaTime))
+        // 普通动画的编辑预览独立于 C# Play；绑定蓝图角色的发丝则消费
+        // 同一份 scaled dt。冻结后交给 RT，不让曝光墙钟绕过 Pause/TimeScale。
+        const float gameSimulationDelta =
+            scripts.ContextTime().at("deltaTime").get<float>();
+        const float hairSimulationDelta = scripts.IsEditing()
+            ? simulationDelta : gameSimulationDelta;
+        // 风使用 RuntimeClock 的原始 deltaTime，而不是已夹到 0.1 s 的 simulationDelta：
+        // master SpeedTree 用连续墙钟，风自身的 1/60 固定步长和 0.25 s 追帧上限会消化
+        // 长帧；这里若用夹取后的值，hitch 时风会永久变慢。
+        RenderSystem::GetInstance().SetSimulationFrameDeltas(
+            simulationDelta, gameSimulationDelta, hairSimulationDelta, deltaTime);
         {
-            // ACT 内容变化仍经过下一帧正式 World/Graph 事务；不在观察器里修改活动资源或作者草稿。
-            RuntimeCommand command;
-            command.type = RuntimeCommandType::LoadWorld;
-            command.stringValue = world->GetScenePath();
-            QueueRuntimeCommand(std::move(command));
-            scripts.SetFeedback("Actor asset changed; reloading scene");
+            CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
+            // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
+            if (world && !RenderSystem::GetInstance().IsOfflineMode())
+                world->TickAnimations(simulationDelta);
+        }
+        {
+            CpuFrameStageScope hairStage(cpuFrameProfiler, CpuFrameStage::HairSimulation);
+            if (!RenderSystem::GetInstance().IsOfflineMode())
+            {
+                // 场景风在游戏线程只读一次，随同一帧的 World 换代整体切换；没有活动
+                // World（或场景未作者 wind）时用默认 WorldWind（强度 0），CPU 参考
+                // solver 因此保持静止。阵风相位属于渲染线程的 windTimeSeconds，这里
+                // 不复制也不另造时钟。
+                const VL::WorldWind sceneWind =
+                    world ? world->GetWind() : VL::WorldWind{};
+                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(
+                    hairSimulationDelta, sceneWind);
+            }
+        }
+        {
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
+                std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
+                scripts.PollBlueprintAssetChanges(*world, deltaTime))
+            {
+                // ACT 内容变化仍经过下一帧正式 World/Graph 事务；不在观察器里修改活动资源或作者草稿。
+                RuntimeCommand command;
+                command.type = RuntimeCommandType::LoadWorld;
+                command.stringValue = world->GetScenePath();
+                QueueRuntimeCommand(std::move(command));
+                scripts.SetFeedback("Actor asset changed; reloading scene");
+            }
         }
     }
+
+    // 即使当前没有 World，也要持续补音频流，避免设备欠载造成爆音。
+    if (audioRuntime) audioRuntime->Update();
 
     if (uiSubsystem != nullptr)
     {
         // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
         uiSubsystem->TickMaterialInstanceEditor();
     }
-    UpdateUiViewModel(simulationDelta, commandResult);
+    {
+        CpuFrameStageScope uiStage(cpuFrameProfiler, CpuFrameStage::UiViewModel);
+        // UI 视图模型包含编辑器快照收集与 SetPerformanceSnapshot；面板自身按 5 Hz
+        // 读冻结副本，不在这里重写 DOM。
+        UpdateUiViewModel(simulationDelta, commandResult);
+    }
     SynchronizeSceneViewport();
     TickEditorThumbnails();
+
+    if (terrainChunkStreamer != nullptr && rendererBackend != nullptr)
+    {
+        const auto& streamingWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorld();
+        if (streamingWorld)
+        {
+            if (const auto camera = streamingWorld->GetRenderCamera())
+            {
+                PROFILE_SCOPE("TerrainChunkStreaming");
+                terrainChunkStreamer->Update(
+                    *streamingWorld,
+                    *rendererBackend,
+                    RendererResourceCache::GetInstance(),
+                    camera->GetPosition());
+            }
+        }
+    }
 
     {
         PROFILE_SCOPE("RenderLoop");
         if (renderThread && renderThread->IsRunning())
         {
-            // 这里是多线程模式
-            RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
-            renderThread->SubmitFrame();
-            // V1 keeps the GT/RT split deterministic instead of fully async:
-            // RT owns frame recording, while GT waits before touching renderer
-            // resources again.
-            WaitForRenderThreadIdle();
+            // 这里是多线程模式。GT 只发布世界快照并唤醒渲染线程；
+            // RT 随后完成消费、命令录制、提交与 present，GT 无法在不拆分
+            // 线程边界的前提下观测这些内部区间，因此它们被 submitPresent 的
+            // 等待吸收（契约里明确记录这一归属）。
+            {
+                CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
+                RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+            }
+            {
+                CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
+                renderThread->SubmitFrame();
+            }
+            {
+                CpuFrameStageScope waitStage(cpuFrameProfiler, CpuFrameStage::SubmitPresent);
+                // V1 keeps the GT/RT split deterministic instead of fully async:
+                // RT owns frame recording, while GT waits before touching renderer
+                // resources again.
+                WaitForRenderThreadIdle();
+            }
         }
         else
         {
-            // 这里是单线程模式
-            RenderSystem::GetInstance().Render();
+            // 这里是单线程模式。世界快照发布仍单独计时；consume + 命令录制 +
+            // submit + present 在 RenderLatestSnapshotOrLastGood 内串行完成，
+            // 统一计入 renderRecord，submitPresent 在本模式下没有独立样本（n/a）。
+            {
+                CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
+                RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+            }
+            {
+                CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
+                RenderSystem::GetInstance().RenderLatestSnapshotOrLastGood();
+            }
         }
 
     }
@@ -788,11 +1156,25 @@ void EngineLoop::Tick()
         particleEventTimeSeconds = 0.0;
     }
 
+    // CPU 阶段测量到渲染段结束为止：FPS 标题、JSONL 与调试绘制收尾留在 other。
+    // 冻结样本立即并入 GpuPassTimer 持有的唯一快照，随后 perf json/JSONL 与
+    // 下一帧的面板读到的是 CPU 阶段 + GPU pass 的同一份组装结果。
+    {
+        const std::vector<PerformancePassSample>& cpuStages =
+            cpuFrameProfiler.CommitFrame();
+        RenderSystem::GetInstance().PublishCpuStageSamples(
+            cpuStages,
+            cpuFrameProfiler.WindowFrameCount());
+    }
+
     {
         PROFILE_SCOPE("FPS");
         GetSubsystems().GetFpsTool().Calculate(deltaTime);
         window->SetTitle(GetSubsystems().GetFpsTool().getTitle());
     }
+
+    TickPerformanceJsonl();
+    TickUiSectionStats();
 
     PROFILE_FRAME();
 
@@ -944,6 +1326,60 @@ void EngineLoop::PollParticleRuntimeBridge(World& world)
     }
 }
 
+void EngineLoop::TickPerformanceJsonl()
+{
+    if (!perfJsonl.IsOpen())
+    {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextPerfJsonlWrite)
+    {
+        return;
+    }
+    // 固定墙钟节奏：渲染变慢时不补写、不批量刷行，agent 看到的时间序列
+    // 与真实运行时长一一对应。第一行在启动满 1 秒后写出。
+    nextPerfJsonlWrite = now + std::chrono::seconds(1);
+    perfJsonl.Append(
+        FormatPerformanceJson(RenderSystem::GetInstance().CapturePerformanceSnapshot()));
+}
+
+void EngineLoop::TickUiSectionStats()
+{
+    if (!gpuStatsEnabled || uiSubsystem == nullptr)
+    {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextUiSectionStats)
+    {
+        return;
+    }
+    nextUiSectionStats = now + std::chrono::seconds(1);
+    // 诊断计数只在 --gpu-stats 下读取：证明静止帧没有分节重建/面板重建，
+    // 交互帧才产生脏集。计数每秒归零，读出的是“每秒次数”。
+    const UiSubsystem::RefreshStats stats = uiSubsystem->ConsumeRefreshStats();
+    std::cout << "[UI] sections/s=" << stats.sectionPublishes
+        << " panelBuilds/s=" << stats.panelBuilds
+        << " runtimeViews/s=" << stats.runtimeViewUpdates
+        << " bindingDirty/s=" << stats.bindingDirtyWrites
+        // 第 3 层诊断：rmlUpdates + skipped ≈ 可见帧数；snapshotPublishes 通常
+        // 等于 rmlUpdates，只有 DrawDebug 逐帧变化时才会更多。
+        << " rmlUpdates/s=" << stats.rmlUpdates
+        << " snapshotPublishes/s=" << stats.snapshotPublishes
+        << " skipped/s=" << stats.skippedUpdates;
+    for (size_t index = 0; index < UiSectionCount; ++index)
+    {
+        if (stats.sectionPublishesById[index] == 0)
+        {
+            continue;
+        }
+        std::cout << ' ' << UiSectionName(static_cast<UiSectionId>(index)) << ':'
+            << stats.sectionPublishesById[index];
+    }
+    std::cout << std::endl;
+}
+
 void EngineLoop::TickScriptBuild(float deltaTime)
 {
     if (!scriptBuild) return;
@@ -952,6 +1388,8 @@ void EngineLoop::TickScriptBuild(float deltaTime)
     bool newCandidate = false;
     if (auto result = scriptBuild->Poll())
     {
+        // 编译结果会改变编辑器脚本页的输出/状态文本：绕过 10 Hz 节拍立即重建。
+        uiViewModelScriptBuildPending = true;
         scriptBuildOutput = std::move(result->log);
         auto& diagnostics = GetSubsystems().GetDiagnosticsSubsystem();
         for (const auto& entry : ParseScriptBuildDiagnostics(scriptBuildOutput))
@@ -996,6 +1434,8 @@ void EngineLoop::TickScriptBuild(float deltaTime)
         {
             if (scriptBuild->ObserveChanges(deltaTime))
             {
+                // 工作从 idle 进入 running：Busy 状态是可见回馈，立即刷新一次。
+                uiViewModelScriptBuildPending = true;
                 std::string error;
                 if (!scriptBuild->Request(world->GetGeneration(), error)) scripts.SetFeedback(error);
                 else scripts.SetFeedback("Source changed; compiling Gameplay...");
@@ -1115,8 +1555,353 @@ void EngineLoop::TickBlueprintAssets()
 void EngineLoop::ApplyQueuedUiActions()
 {
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
+    // 同一 drain 内所有 ApplyBrush 先只改 CPU session；End/Cancel/Undo/Redo
+    // 只置脏标记，循环结束后最多重建一次 GPU 网格。
+    bool terrainEditNeedsRebuild = false;
     for (const UiAction& action : actions)
     {
+        if (action.type == UiActionType::TerrainEdit)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world)
+                error = "Terrain sculpt requires an active World.";
+            else if (action.terrainBrush.worldGeneration != world->GetGeneration())
+                error = "The World changed since this terrain brush event.";
+            else if (!scripts.IsEditing())
+                error = "Stop gameplay before sculpting terrain.";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() ==
+                    "SC_model_preview.json")
+                error = "Terrain sculpt requires a realtime authoring level.";
+
+            const TerrainCollisionInstance* instance = nullptr;
+            if (error.empty())
+            {
+                for (const TerrainCollisionInstance& candidate :
+                     world->GetTerrainCollisionInstances())
+                    if (candidate.placementId == action.terrainBrush.placementId)
+                    {
+                        instance = &candidate;
+                        break;
+                    }
+                if (instance == nullptr)
+                    error = "Terrain placement was not found in the active World: " +
+                        action.terrainBrush.placementId;
+            }
+
+            if (error.empty() &&
+                (!terrainEditSession ||
+                 terrainEditSessionGeneration != world->GetGeneration() ||
+                 terrainEditSessionPlacementId != action.terrainBrush.placementId))
+            {
+                // 同一 drain 内从 A 切到 B 或结束 A 后立刻 Begin B 时，先把
+                // A 的 dirty 预览/取消结果提交到 GPU，不能只保留 B 的新 session。
+                if (terrainEditSession && rendererBackend != nullptr &&
+                    terrainEditSessionGeneration == world->GetGeneration())
+                {
+                    if (!ApplyTerrainEditUpdate(*world))
+                        error = "Previous terrain sculpt update failed; retry after the renderer recovers.";
+                }
+                if (error.empty())
+                {
+                    terrainEditSession.reset();
+                    auto candidate = std::make_unique<Editor::TerrainEditSession>();
+                    if (!Editor::TerrainEditSession::Create(*instance, *candidate, error))
+                    {
+                        candidate.reset();
+                    }
+                    else
+                    {
+                        terrainEditSession = std::move(candidate);
+                        terrainEditSessionGeneration = world->GetGeneration();
+                        terrainEditSessionPlacementId = action.terrainBrush.placementId;
+                    }
+                }
+            }
+
+            if (error.empty() && terrainEditSession)
+            {
+                const auto operation = action.terrainBrush.operation;
+                try
+                {
+                    if (operation == TerrainBrushOperation::BeginStroke)
+                    {
+                        if (!terrainEditSession->BeginStroke())
+                            error = "A terrain sculpt stroke is already active.";
+                    }
+                    else if (operation == TerrainBrushOperation::ApplyBrush)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received ApplyBrush without BeginStroke.";
+                        else
+                        {
+                            TerrainSculptBrush brush;
+                            if (action.terrainBrush.mode == 0)
+                                brush.mode = TerrainSculptMode::Raise;
+                            else if (action.terrainBrush.mode == 1)
+                                brush.mode = TerrainSculptMode::Lower;
+                            else if (action.terrainBrush.mode == 2)
+                                brush.mode = TerrainSculptMode::Smooth;
+                            else
+                                throw std::invalid_argument("Unknown terrain sculpt mode.");
+                            brush.shape =
+                                ToTerrainBrushShape(action.terrainBrush.shape);
+                            brush.centerUv = Eigen::Vector2f(
+                                action.terrainBrush.u, action.terrainBrush.v);
+                            brush.radiusUv = action.terrainBrush.radiusUv;
+                            brush.strength = action.terrainBrush.strength;
+                            brush.falloff = action.terrainBrush.falloff;
+                            // 半径外/clamp 后无数值变化不是错误；一次 drain 内只做
+                            // 一次 GPU 重建，拖动期间仍能看到实时地形预览。
+                            if (terrainEditSession->ApplyBrush(brush))
+                                terrainEditNeedsRebuild = true;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::EndStroke)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received EndStroke without BeginStroke.";
+                        else if (terrainEditSession->EndStroke())
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::CancelStroke)
+                    {
+                        if (!terrainEditSession->IsStrokeActive())
+                            error = "Terrain brush received CancelStroke without BeginStroke.";
+                        else
+                        {
+                            const uint64_t revision = terrainEditSession->Revision();
+                            terrainEditSession->CancelStroke();
+                            // 未改过高度的空笔画 Cancel 不应支付一次全地形上传。
+                            terrainEditNeedsRebuild =
+                                terrainEditSession->Revision() != revision;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::Undo)
+                    {
+                        if (!terrainEditSession->Undo())
+                            error = "No terrain stroke is available to undo.";
+                        else
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::Redo)
+                    {
+                        if (!terrainEditSession->Redo())
+                            error = "No terrain stroke is available to redo.";
+                        else
+                            terrainEditNeedsRebuild = true;
+                    }
+                    else if (operation == TerrainBrushOperation::SaveHeightmap)
+                    {
+                        const std::filesystem::path path =
+                            std::filesystem::path(CommonFunction::GetResourcePath()) /
+                            terrainEditSession->Desc().heightmapPath;
+                        if (terrainEditSession->SaveHeightmap(path, error))
+                            scripts.SetFeedback("Heightmap saved: " + path.string());
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    error = exception.what();
+                }
+            }
+            if (!error.empty())
+            {
+                scripts.SetFeedback(error);
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
+            }
+            continue;
+        }
+        if (action.type == UiActionType::TerrainPaint)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world)
+                error = "Terrain paint requires an active World.";
+            else if (action.terrainPaint.worldGeneration != world->GetGeneration())
+                error = "The World changed since this terrain paint event.";
+            else if (!scripts.IsEditing())
+                error = "Stop gameplay before painting terrain layers.";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() ==
+                    "SC_model_preview.json")
+                error = "Terrain paint requires a realtime authoring level.";
+
+            const TerrainCollisionInstance* instance = nullptr;
+            if (error.empty())
+            {
+                for (const TerrainCollisionInstance& candidate :
+                     world->GetTerrainCollisionInstances())
+                    if (candidate.placementId == action.terrainPaint.placementId)
+                    {
+                        instance = &candidate;
+                        break;
+                    }
+                if (instance == nullptr)
+                    error = "Terrain placement was not found in the active World: " +
+                        action.terrainPaint.placementId;
+            }
+            if (error.empty() &&
+                (!terrainPaintSession ||
+                 terrainPaintSessionGeneration != world->GetGeneration() ||
+                 terrainPaintSessionPlacementId != action.terrainPaint.placementId))
+            {
+                terrainPaintSession.reset();
+                auto candidate = std::make_unique<Editor::TerrainPaintSession>();
+                if (!Editor::TerrainPaintSession::Create(*instance, *candidate, error))
+                    candidate.reset();
+                else
+                {
+                    terrainPaintSession = std::move(candidate);
+                    terrainPaintSessionGeneration = world->GetGeneration();
+                    terrainPaintSessionPlacementId = action.terrainPaint.placementId;
+                }
+            }
+
+            bool invalidate = false;
+            if (error.empty() && terrainPaintSession)
+            {
+                const auto operation = action.terrainPaint.operation;
+                try
+                {
+                    if (operation == TerrainBrushOperation::BeginStroke)
+                    {
+                        if (!terrainPaintSession->BeginStroke())
+                            error = "A terrain paint stroke is already active.";
+                    }
+                    else if (operation == TerrainBrushOperation::ApplyBrush)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received ApplyBrush without BeginStroke.";
+                        else
+                        {
+                            Editor::TerrainPaintBrush brush;
+                            brush.layerIndex = action.terrainPaint.layerIndex;
+                            brush.shape =
+                                ToTerrainBrushShape(action.terrainPaint.shape);
+                            brush.centerUv = Eigen::Vector2f(
+                                action.terrainPaint.u, action.terrainPaint.v);
+                            brush.radiusUv = action.terrainPaint.radiusUv;
+                            brush.strength = action.terrainPaint.strength;
+                            brush.falloff = action.terrainPaint.falloff;
+                            brush.opacity = action.terrainPaint.opacity;
+                            brush.flow = action.terrainPaint.flow;
+                            brush.noise = action.terrainPaint.noise;
+                            brush.noiseSeed = action.terrainPaint.noiseSeed;
+                            brush.erase = action.terrainPaint.erase;
+                            if (terrainPaintSession->ApplyBrush(brush))
+                                invalidate = true;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::EndStroke)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received EndStroke without BeginStroke.";
+                        else invalidate = terrainPaintSession->EndStroke();
+                    }
+                    else if (operation == TerrainBrushOperation::CancelStroke)
+                    {
+                        if (!terrainPaintSession->IsStrokeActive())
+                            error = "Terrain paint received CancelStroke without BeginStroke.";
+                        else
+                        {
+                            const uint64_t revision = terrainPaintSession->Revision();
+                            terrainPaintSession->CancelStroke();
+                            invalidate = terrainPaintSession->Revision() != revision;
+                        }
+                    }
+                    else if (operation == TerrainBrushOperation::Undo)
+                    {
+                        if (!terrainPaintSession->Undo())
+                            error = "No terrain paint stroke is available to undo.";
+                        else invalidate = true;
+                    }
+                    else if (operation == TerrainBrushOperation::Redo)
+                    {
+                        if (!terrainPaintSession->Redo())
+                            error = "No terrain paint stroke is available to redo.";
+                        else invalidate = true;
+                    }
+                    else if (operation == TerrainBrushOperation::SavePaint)
+                    {
+                        if (terrainPaintSession->IsStrokeActive())
+                            error = "Finish or cancel the paint stroke before saving.";
+                        else
+                        {
+                            const auto paint = terrainPaintSession->PaintData();
+                            if (!paint || paint->Empty())
+                                error = "Terrain paint has no edited data to save.";
+                            else if (terrainPaintSession->PaintPath().empty())
+                                error =
+                                    "TR has no paintPath; add one to persist terrain paint.";
+                            else
+                            {
+                                std::filesystem::path path;
+                                std::string pathError;
+                                if (!ResolveTerrainPaintPath(
+                                        CommonFunction::GetResourcePath(),
+                                        terrainPaintSession->PaintPath(),
+                                        path,
+                                        pathError))
+                                    error = pathError;
+                                else if (SaveTerrainLayerPaintFile(path, *paint, error))
+                                    scripts.SetFeedback(
+                                        "Terrain paint saved: " + path.string());
+                            }
+                        }
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    error = exception.what();
+                }
+            }
+            if (error.empty() && invalidate)
+            {
+                // 先更新 World 的 placement 快照：Play/Stop 或切换 Actor 会销毁
+                // 会话，重建时必须从最新覆盖层继续，而不是回到加载期旧快照。
+                if (!world->UpdateTerrainPlacementLayerPaint(
+                        terrainPaintSessionPlacementId,
+                        terrainPaintSession->PaintData()))
+                    error = "Terrain paint placement disappeared from the active World.";
+                else
+                {
+                    try
+                    {
+                        const auto streaming =
+                            RendererResourceCache::GetInstance().GetTerrainStreaming();
+                        if (!streaming)
+                            throw std::runtime_error(
+                                "Terrain paint requires layered terrain pages.");
+                        WaitForRenderThreadIdle();
+                        streaming->pageManager.UpdateLayerPaint(
+                            terrainPaintSessionPlacementId,
+                            terrainPaintSession->PaintData());
+                        streaming->pageManager.InvalidatePlacementPages(
+                            terrainPaintSessionPlacementId);
+                        if (streaming->pageBake)
+                        {
+                            streaming->pageBake->RefreshPlacement(
+                                terrainPaintSessionPlacementId);
+                        }
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        error = std::string("Terrain paint page update failed: ") +
+                            exception.what();
+                    }
+                }
+            }
+            if (!error.empty())
+            {
+                scripts.SetFeedback(error);
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Terrain");
+            }
+            continue;
+        }
         if (action.type == UiActionType::OpenScriptSource ||
             (action.type == UiActionType::CreateScriptBlueprintAsset && action.script.contains("class")))
         {
@@ -1207,6 +1992,13 @@ void EngineLoop::ApplyQueuedUiActions()
                 // 同批Stop/Play也必须先移除上一上下文的动态模板，不能把它们当成新场景常驻资产。
                 if (scripts.IsEditing()) TickBlueprintAssets();
                 scripts.Control(*world, static_cast<ScriptPlayState>(action.intValue), error);
+                // Play/Stop 都会切换编辑上下文；CPU 高度副本不能跨状态继续用。
+                terrainEditSession.reset();
+                terrainEditSessionGeneration = 0;
+                terrainEditSessionPlacementId.clear();
+                terrainPaintSession.reset();
+                terrainPaintSessionGeneration = 0;
+                terrainPaintSessionPlacementId.clear();
                 if (scripts.IsEditing()) TickBlueprintAssets();
             }
             else if (action.type == UiActionType::ReloadScripts)
@@ -1353,11 +2145,50 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
             command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
-            // 厘米骨骼资产按原尺度预览，不继承旧静态模型的 43 倍注入尺度。
+            // 厘米骨骼/TFX 资产按原尺度预览，不继承旧静态模型注入的 43 倍尺度。
             try
             {
-                if (MeshAssetLoader::Prepare(action.stringValue).buildPlan.IsSkeletal())
+                const auto buildPlan =
+                    MeshAssetLoader::Prepare(action.stringValue).buildPlan;
+                if (buildPlan.assetType == "tressfx")
+                {
+                    // 带 skinning 的毛发需要源角色姿态，视口不承担；由蓝图 TressFX
+                    // 组件承载。这里硬拒绝，不能静默剥掉 skinning 后假装可预览。
+                    if (buildPlan.tressfxSimulation.skinning)
+                    {
+                        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                            "TressFX hair preview skipped: asset declares simulation.skinning "
+                            "and is authored by the Blueprint TressFX component: " +
+                            action.stringValue);
+                        continue;
+                    }
                     command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
+                }
+                else if (buildPlan.IsSkeletal())
+                    command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
+            }
+            catch (const std::exception& error)
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error.what());
+                continue;
+            }
+            break;
+        case UiActionType::PreviewRetarget:
+            try
+            {
+                const auto target = MeshAssetLoader::Prepare(action.retargetPreviewModel).buildPlan;
+                if (!target.IsSkeletal() || target.animationSourceModelPath.empty() ||
+                    target.retargetProfilePath.empty() ||
+                    std::filesystem::weakly_canonical(CommonFunction::Path(target.retargetProfilePath)) !=
+                    std::filesystem::weakly_canonical(CommonFunction::Path(action.stringValue)))
+                    throw std::invalid_argument("Retarget preview model must reference the opened RT profile");
+                const auto source = MeshAssetLoader::Prepare(target.animationSourceModelPath).buildPlan;
+                if (!source.IsSkeletal() || !source.animationSourceModelPath.empty())
+                    throw std::invalid_argument("Retarget preview source must be a non-retargeted skeletal mesh");
+                command.type = RuntimeCommandType::LoadWorld;
+                command.stringValue = ModelPreviewScenePath;
+                command.extraSceneObjects = BuildRetargetPreviewObjects(
+                    action.retargetPreviewModel, target.animationSourceModelPath, action.stringValue);
             }
             catch (const std::exception& error)
             {
@@ -1515,21 +2346,94 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::SetActorProperty;
             command.actorProperty = action.actorProperty;
             break;
-        case UiActionType::SetSpeedTreeStrength:
-            command.type = RuntimeCommandType::SetSpeedTreeStrength;
-            command.floatValue = action.floatValue;
+        case UiActionType::RotatePreviewModel:
+        {
+            // 旋转的是预览对象，不是相机：毛发物理只对根点世界位置变化产生响应。
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            if (!world) continue;
+            const auto rotation = BuildModelPreviewRotationCommand(action.previewRotation,
+                world->GetGeneration(), world->GetScenePath());
+            if (!rotation) continue;
+            command = *rotation;
             break;
-        case UiActionType::SetSpeedTreeGustingEnabled:
-            command.type = RuntimeCommandType::SetSpeedTreeGustingEnabled;
-            command.intValue = action.intValue;
+        }
+        case UiActionType::ResetHairSimulation:
+            // 预览世界只有一个毛发对象，空目标即“所有 tressfx 对象”。
+            command.type = RuntimeCommandType::ResetHairSimulation;
+            command.stringValue.clear();
             break;
-        case UiActionType::ForceSpeedTreeGust:
-            command.type = RuntimeCommandType::ForceSpeedTreeGust;
+        case UiActionType::SetHairSimulationParameter:
+            // 视口里的实时覆盖只作用于预览对象；作者值由独立的 Save to Asset 写入。
+            command.type = RuntimeCommandType::SetHairSimulationParameter;
+            command.stringValue.clear();
+            command.hairLiveParameter.objectName = "preview_model";
+            command.hairLiveParameter.field = action.previewHairParameter.field;
+            command.hairLiveParameter.valueCount = action.previewHairParameter.valueCount;
+            for (uint32_t component = 0; component < 3; ++component)
+                command.hairLiveParameter.values[component] =
+                    action.previewHairParameter.values[component];
+            break;
+        case UiActionType::SetTressfxGroupPreview:
+            command.type = RuntimeCommandType::SetTressfxGroupPreview;
+            command.actorProperty.worldGeneration = action.previewTressfxGroup.worldGeneration;
+            command.tressfxSelectedGroup = action.previewTressfxGroup.selectedGroup;
+            command.tressfxGroupFlags = action.previewTressfxGroup.flags;
+            break;
+        case UiActionType::SetTressfxGroupBindingPreview:
+            command.type = RuntimeCommandType::SetTressfxGroupBindingPreview;
+            command.actorProperty.worldGeneration =
+                action.previewTressfxGroupBinding.worldGeneration;
+            command.tressfxGroupBindingPreview.objectName =
+                action.previewTressfxGroupBinding.objectName;
+            command.tressfxGroupBindingPreview.worldGeneration =
+                action.previewTressfxGroupBinding.worldGeneration;
+            command.tressfxGroupBindingPreview.draftRevision =
+                action.previewTressfxGroupBinding.draftRevision;
+            command.tressfxGroupBindingPreview.guideGroupIds =
+                action.previewTressfxGroupBinding.guideGroupIds;
+            command.tressfxGroupBindingPreview.groupNames =
+                action.previewTressfxGroupBinding.groupNames;
+            command.tressfxGroupBindingPreview.bindingKey =
+                action.previewTressfxGroupBinding.bindingKey;
+            break;
+        case UiActionType::SetTressfxBrushPreview:
+            command.type = RuntimeCommandType::SetTressfxBrushPreview;
+            command.actorProperty.worldGeneration =
+                action.previewTressfxBrush.worldGeneration;
+            command.tressfxBrushPreview.objectName = action.previewTressfxBrush.objectName;
+            command.tressfxBrushPreview.worldGeneration =
+                action.previewTressfxBrush.worldGeneration;
+            command.tressfxBrushPreview.targetGroupId =
+                action.previewTressfxBrush.targetGroupId;
+            command.tressfxBrushPreview.mode = action.previewTressfxBrush.mode;
+            command.tressfxBrushPreview.weights = action.previewTressfxBrush.weights;
+            command.tressfxBrushPreview.ringVisible = action.previewTressfxBrush.ringVisible;
+            command.tressfxBrushPreview.ringCenter = action.previewTressfxBrush.ringCenter;
+            command.tressfxBrushPreview.ringNormal = action.previewTressfxBrush.ringNormal;
+            command.tressfxBrushPreview.ringRadiusWorld = action.previewTressfxBrush.ringRadiusWorld;
             break;
         default:
             continue;
         }
         GetSubsystems().GetCommandBus().Queue(std::move(command));
+    }
+
+    if (terrainEditNeedsRebuild && terrainEditSession)
+    {
+        const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+        if (!world || world->GetGeneration() != terrainEditSessionGeneration)
+        {
+            terrainEditSession.reset();
+            terrainEditSessionGeneration = 0;
+            terrainEditSessionPlacementId.clear();
+        }
+        else if (rendererBackend == nullptr)
+        {
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                "Terrain sculpt CPU edit kept dirty, but no renderer backend is available.",
+                "Terrain");
+        }
+        else ApplyTerrainEditUpdate(*world);
     }
 
     // RmlUi 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
@@ -1561,6 +2465,95 @@ void EngineLoop::ApplyQueuedUiActions()
             RenderSystem::GetInstance().ClearSelectedMaterialInstance();
         }
     }
+}
+
+bool EngineLoop::ApplyTerrainEditUpdate(World& world)
+{
+    if (!terrainEditSession || rendererBackend == nullptr) return false;
+    WaitForRenderThreadIdle();
+    Editor::TerrainMeshUpdate update = terrainEditSession->BuildUpdate();
+    // 加载期驻留窗口会跳过部分 (chunk, LOD)；CPU 编辑仍要对整张高度图
+    // 生成 dirty，但 GPU 只能替换 World 里真实存在的对象。
+    const auto& meshObjects = world.GetMeshObjects();
+    update.chunks.erase(std::remove_if(update.chunks.begin(), update.chunks.end(),
+        [&meshObjects, &update](const Editor::TerrainChunkMeshUpdate& chunk)
+        {
+            const auto found = meshObjects.find(chunk.objectName);
+            return found == meshObjects.end() || !found->second.isTerrain ||
+                found->second.terrainPlacementId != update.placementId;
+        }), update.chunks.end());
+    if (update.chunks.empty() && !update.heightmap) return false;
+
+    // 分层地形的覆盖页权重由高度/坡度烘焙，几何与权重必须在同一次提交里
+    // 一起推进。必须在替换 GPU 网格前确认页管理器可用，否则宁可拒绝本次
+    // 提交，也不能留下“新几何 + 旧权重”的持久分叉。
+    const bool layered = !update.desc.layers.empty();
+    std::shared_ptr<TerrainStreamingState> streaming;
+    if (layered)
+    {
+        streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        const bool registered = streaming &&
+            std::any_of(
+                streaming->pageManager.Registrations().begin(),
+                streaming->pageManager.Registrations().end(),
+                [&update](const TerrainPageManager::Registration& registration)
+                {
+                    return registration.placementId == update.placementId;
+                });
+        if (!registered)
+        {
+            const std::string message = streaming
+                ? "Terrain sculpt requires a placement registered with the "
+                    "layered terrain page manager: " + update.placementId
+                : "Terrain sculpt requires layered terrain streaming state.";
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                message, "Terrain");
+            GetSubsystems().GetScriptRuntime().SetFeedback(message);
+            return false;
+        }
+    }
+
+    TerrainEditApplyStats stats;
+    std::string error;
+    if (!ApplyTerrainMeshUpdate(world, *rendererBackend, update, stats, error))
+    {
+        const std::string message = "Terrain sculpt GPU update failed: " + error;
+        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(message, "Terrain");
+        GetSubsystems().GetScriptRuntime().SetFeedback(message);
+        return false;
+    }
+    if (layered)
+    {
+        try
+        {
+            // 与网格替换同处一个 render-thread-idle 边界：先换 plan 的高度图
+            // 快照，再失效驻留覆盖页，feedback 下一轮就会按新高度重新烘焙。
+            streaming->pageManager.UpdateHeightmap(
+                update.placementId, update.heightmap);
+            streaming->pageManager.InvalidatePlacementPages(update.placementId);
+            if (streaming->pageBake)
+                streaming->pageBake->RefreshPlacement(update.placementId);
+        }
+        catch (const std::exception& exception)
+        {
+            // 几何已经提交但权重尚未跟上；保留 dirty 让下一笔重试，
+            // 不能在这里 ResetDirty 把分叉固化成已同步状态。
+            const std::string message =
+                std::string("Terrain sculpt page update failed: ") +
+                exception.what();
+            GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                message, "Terrain");
+            GetSubsystems().GetScriptRuntime().SetFeedback(message);
+            return false;
+        }
+    }
+    terrainEditSession->ResetDirty();
+    if (stats.renderableObjects != 0 || stats.worldChunks != 0)
+        GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+            "Terrain sculpt updated " + std::to_string(stats.renderableObjects) +
+            " renderable objects and " + std::to_string(stats.worldChunks) +
+            " World chunks.", "Terrain");
+    return true;
 }
 
 void EngineLoop::UpdateUiInputPolicy()
@@ -1609,6 +2602,365 @@ void EngineLoop::UpdateUiInputPolicy()
     inputSubsystem.SetRelativeMouseModeAllowed(relativeAllowed);
 }
 
+void EngineLoop::FillUiViewModelLiveFrame(
+    UiViewModelFrameValues& frame,
+    UiViewModelBuildMode buildMode,
+    const WorldHandle& activeWorld)
+{
+    frame.activeWorldPath = activeWorld.scenePath;
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    frame.offlineMode = renderSystem.IsOfflineMode();
+    if (buildMode == UiViewModelBuildMode::RuntimeHud)
+    {
+        // 运行时 HUD 每帧只冻结游戏文本；类/性能 JSON 属于编辑器面板，不进入这里。
+        frame.hudView = GetSubsystems().GetScriptRuntime().HudView(
+            activeWorld.generation);
+    }
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!world || frame.offlineMode)
+    {
+        return;
+    }
+    // DrawDebug 叠层在沉浸模式仍然显示，因此逐帧冻结相机动图；Motion 的
+    // 历史/匹配模型只在开启时构建，关闭时复用一个冻结空视图，避免每个
+    // FullEditor 帧都分配一份禁用视图并让相机分节每 10 Hz 误判为变化。
+    frame.motionWorldGeneration = world->GetGeneration();
+    if (world->IsMotionDebugEnabled())
+    {
+        frame.motionDebug = world->CaptureMotionDebug();
+    }
+    else
+    {
+        frame.motionDebug = DisabledMotionDebugView();
+    }
+    frame.debugDraw = world->CaptureDebugDraw(*frame.motionDebug);
+    if (const auto& camera = world->GetRenderCamera())
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            frame.motionCamera.position[axis] = camera->GetPosition()[axis];
+            frame.motionCamera.forward[axis] = camera->GetForwardVector()[axis];
+            frame.motionCamera.right[axis] = camera->GetRightVector()[axis];
+            frame.motionCamera.up[axis] = camera->GetUpVector()[axis];
+        }
+        frame.motionCamera.horizontalFovDegrees = camera->GetHFOV();
+        frame.motionCamera.clipNear = camera->GetClipNear();
+        frame.motionCamera.clipFar = camera->GetClipFar();
+    }
+}
+
+void EngineLoop::BuildUiScriptsSection(
+    UiScriptsSection& section,
+    const WorldHandle& activeWorld)
+{
+    const ScriptRuntimeSubsystem& scriptRuntime = GetSubsystems().GetScriptRuntime();
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+
+    section.scripts = scriptRuntime.View(activeWorld.generation);
+    section.scripts.buildAvailable = scriptBuild && scriptBuild->Available();
+    section.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
+    section.scripts.autoCompile = autoCompileScripts;
+    section.scripts.buildOutput = scriptBuildOutput;
+    if (world && uiSubsystem->GetSceneDocuments())
+    {
+        // CanUndo 内部做 weakly_canonical，是隐藏状态下最贵的一段；只在脚本节
+        // 真正重建时求值（选中/命令/世界换代/编译状态事件），静止帧不重复执行。
+        section.scripts.canUndo =
+            uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath());
+        section.scripts.canRedo =
+            uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath(), true);
+    }
+}
+
+void EngineLoop::BuildUiAnimationSection(
+    UiAnimationPreviewSection& section,
+    const WorldHandle& activeWorld)
+{
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!world)
+    {
+        return;
+    }
+    // 动画时间是时间相关值：允许随 10 Hz 刷新节拍变化；暂停且数值不变时
+    // 分节发布会按值比较，不提升版本。
+    CaptureUiAnimationPreview(section, *world, activeWorld.generation);
+}
+
+void EngineLoop::BuildUiPerformanceSection(UiPerformanceSection& section)
+{
+    // 与 perf json/JSONL 共用同一份冻结快照；这里只做一次值拷贝，
+    // 面板随后按自己的 5 Hz 节奏读取，不逐帧接触 RenderSystem。
+    section.performance = RenderSystem::GetInstance().CapturePerformanceSnapshot();
+    // 脚本时间/计数器同样属于时间序列；它们不进入事件驱动的脚本分节，
+    // 否则 Log 的 Scripts 页在静止帧会显示过期的时间。
+    section.scriptPerformance =
+        GetSubsystems().GetScriptRuntime().PerformanceView();
+}
+
+void EngineLoop::BuildUiViewportCameraSection(
+    UiViewportCameraSection& section,
+    const UiViewModelFrameValues& frameValues)
+{
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    section.debugViewMode = renderSystem.GetDebugViewMode();
+    section.toneMappingMode = renderSystem.GetToneMappingMode();
+    section.motionWorldGeneration = frameValues.motionWorldGeneration;
+    section.motionDebug = frameValues.motionDebug;
+    section.debugDraw = frameValues.debugDraw;
+    if (frameValues.debugDraw)
+    {
+        section.debugDrawSignature = UiDebugDrawSignature(*frameValues.debugDraw);
+    }
+    section.motionCamera = frameValues.motionCamera;
+    section.cameraMoveSpeed = controller != nullptr ? controller->GetMoveVelocity() : 1000.0f;
+    if (world && world->GetCamera())
+    {
+        section.hasCamera = true;
+        section.cameraExposure = world->GetCamera()->GetExposure();
+    }
+}
+
+void EngineLoop::BuildUiEnvironmentLightingSection(
+    UiEnvironmentLightingSection& section,
+    const WorldHandle& activeWorld)
+{
+    (void)activeWorld;
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    section.bloomStrength = renderSystem.GetBloomStrength();
+    section.bloomThreshold = renderSystem.GetBloomThreshold();
+    section.bloomKnee = renderSystem.GetBloomKnee();
+    section.bloomClamp = renderSystem.GetBloomClamp();
+    const CsmSettings& csmSettings = renderSystem.GetCsmSettings();
+    section.csmCastShadows = csmSettings.castShadows;
+    section.csmDynamicShadowDistance = csmSettings.dynamicShadowDistance;
+    section.csmDynamicShadowCascades = csmSettings.cascadeCount;
+    section.csmCascadeDistributionExponent = csmSettings.cascadeDistributionExponent;
+    section.csmCascadeTransitionFraction = csmSettings.cascadeTransitionFraction;
+    section.csmShadowDistanceFadeoutFraction = csmSettings.shadowDistanceFadeoutFraction;
+    section.csmShadowBias = csmSettings.shadowBias;
+    section.csmShadowSlopeBias = csmSettings.shadowSlopeBias;
+    section.csmShadowCascadeBiasDistribution = csmSettings.shadowCascadeBiasDistribution;
+    section.environmentIntensity = renderSystem.GetEnvironmentIntensity();
+    section.sunIntensity = 1.0f;
+    if (world && world->GetPrimaryDirectionalLight())
+    {
+        section.sunIntensity = world->GetPrimaryDirectionalLight()->GetIntensity();
+    }
+    const EnvironmentUpdateDiagnostics environmentDiagnostics =
+        renderSystem.GetEnvironmentUpdateDiagnostics();
+    section.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;
+    section.environmentPendingGeneration = environmentDiagnostics.progress.pendingGeneration;
+    section.environmentUpdateStage = ToString(environmentDiagnostics.progress.stage);
+    section.environmentCubemapFacesCompleted =
+        environmentDiagnostics.progress.cubemapFacesCompleted;
+    section.environmentCubemapFaceCount = environmentDiagnostics.progress.cubemapFaceCount;
+    section.environmentShUpdatesCompleted = environmentDiagnostics.progress.shUpdatesCompleted;
+    section.environmentPrefilterMipsCompleted =
+        environmentDiagnostics.progress.prefilterMipsCompleted;
+    section.environmentPrefilterMipCount = environmentDiagnostics.progress.prefilterMipCount;
+    section.environmentUsesPreviousResources =
+        environmentDiagnostics.progress.usingPreviousResources;
+    section.environmentGpuTimingSupported = environmentDiagnostics.gpuTiming.supported;
+    section.environmentCubemapGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Cubemap).lastMilliseconds;
+    section.environmentShGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::SphericalHarmonics).lastMilliseconds;
+    section.environmentPrefilterGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds;
+    section.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Commit).lastMilliseconds;
+}
+
+void EngineLoop::BuildUiOfflineSection(
+    UiOfflineSection& section,
+    const RuntimeCommandExecutionResult& commandResult)
+{
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    section.offlineMode = renderSystem.IsOfflineMode();
+    section.state = static_cast<int>(renderSystem.GetOfflineState());
+    section.samples = renderSystem.GetOfflineSettings().samples;
+    section.bounces = renderSystem.GetOfflineSettings().bounces;
+    section.lightSamples = renderSystem.GetOfflineSettings().lightSamples;
+    section.seed = renderSystem.GetOfflineSettings().seed;
+    section.aov = static_cast<int>(renderSystem.GetOfflineAov());
+    section.exposure = renderSystem.GetOfflineExposure();
+    section.error = renderSystem.GetOfflineError();
+    if (const auto result = renderSystem.CaptureOfflineResult())
+    {
+        section.completedSamples = result->film->completedSamples;
+    }
+    section.modeFeedback = commandResult.offlineUiModeFeedback;
+}
+
+void EngineLoop::BuildUiSceneOutlinerContent()
+{
+    // 大纲列表是逐帧替换的不可变数组：内容变化时换新指针，静止帧复用旧指针，
+    // 这样大纲分节版本不会因为 10 Hz 轮询而推进。
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    auto actors =
+        std::make_shared<std::vector<EditorUi::EditorSceneActorSnapshot>>();
+    if (world != nullptr)
+    {
+        *actors = BuildEditorSceneActors(*world);
+    }
+    uiSceneActors = std::move(actors);
+
+    auto models =
+        std::make_shared<std::vector<EditorUi::MaterialInstanceModelSnapshot>>();
+    const auto contexts =
+        RenderSystem::GetInstance().GetMaterialInstanceModelContexts();
+    models->reserve(contexts.size());
+    for (const Editor::Selection::MaterialInstanceModelContext& model : contexts)
+    {
+        EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
+        modelSnapshot.worldGeneration = model.worldGeneration;
+        modelSnapshot.scenePath = model.scenePath;
+        modelSnapshot.objectId = model.objectId;
+        modelSnapshot.displayName = model.displayName;
+        modelSnapshot.objectIdentity = model.objectIdentity;
+        modelSnapshot.actorIdentity = model.actorIdentity;
+        modelSnapshot.materials.reserve(model.materials.size());
+        for (const Editor::Selection::MaterialInstanceModelMaterial& material :
+             model.materials)
+        {
+            EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
+            materialSnapshot.objectId = material.objectId;
+            materialSnapshot.materialSlotIndex = material.materialSlotIndex;
+            materialSnapshot.materialSlotName = material.materialSlotName;
+            materialSnapshot.materialInstancePath = material.materialInstancePath;
+            modelSnapshot.materials.push_back(std::move(materialSnapshot));
+        }
+        models->push_back(std::move(modelSnapshot));
+    }
+    uiSceneModels = std::move(models);
+}
+
+void EngineLoop::BuildUiViewModelSections(
+    UiViewModelSectionUpdate& sections,
+    UiSectionMask rebuild,
+    const UiViewModelFrameValues& frameValues,
+    const WorldHandle& activeWorld,
+    const RuntimeCommandExecutionResult& commandResult)
+{
+    if ((rebuild & UiSectionBit(UiSectionId::Scripts)) != 0)
+    {
+        UiScriptsSection scripts;
+        BuildUiScriptsSection(scripts, activeWorld);
+        // 调用方已经确认这一节需要重建；输入版本仍显式递增，供存储层做
+        // “同一输入只发布一次”的防御性去重。
+        sections.scriptsRevision = ++uiScriptsSectionRevision;
+        sections.scripts = std::move(scripts);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Animation)) != 0)
+    {
+        UiAnimationPreviewSection animation;
+        BuildUiAnimationSection(animation, activeWorld);
+        sections.animation = std::move(animation);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Performance)) != 0)
+    {
+        UiPerformanceSection performance;
+        BuildUiPerformanceSection(performance);
+        sections.performance = std::move(performance);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::ViewportCamera)) != 0)
+    {
+        UiViewportCameraSection viewport;
+        BuildUiViewportCameraSection(viewport, frameValues);
+        sections.viewportCamera = std::move(viewport);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::EnvironmentLighting)) != 0)
+    {
+        UiEnvironmentLightingSection environment;
+        BuildUiEnvironmentLightingSection(environment, activeWorld);
+        sections.environmentLighting = std::move(environment);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Offline)) != 0)
+    {
+        UiOfflineSection offline;
+        BuildUiOfflineSection(offline, commandResult);
+        sections.offline = std::move(offline);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::SceneOutliner)) != 0)
+    {
+        BuildUiSceneOutlinerContent();
+        uiSubsystem->SetSceneActors(uiSceneActors);
+        uiSubsystem->SetMaterialInstanceSceneModels(uiSceneModels);
+    }
+}
+
+void EngineLoop::CaptureUiAnimationPreview(
+    UiAnimationPreviewSection& section,
+    const World& world,
+    uint64_t generation)
+{
+    for (const auto& entry : world.GetMeshObjects())
+    {
+        if (!entry.second.animation ||
+            entry.second.sceneObjectIdentity != "preview_model")
+        {
+            continue;
+        }
+        const auto& player = *entry.second.animation;
+        const auto& animation = player.Asset().AnimationAsset();
+        if (!uiAnimationPreviewCache)
+        {
+            uiAnimationPreviewCache = std::make_unique<UiAnimationPreviewCache>();
+        }
+        UiAnimationPreviewCache& cache = *uiAnimationPreviewCache;
+        // 先比较代数：换代后的旧 player 指针不能解引用，也不能作为缓存命中依据。
+        const bool cacheHit = cache.worldGeneration == generation &&
+            cache.player == &player &&
+            cache.clipIds.size() == animation.clips.size();
+        if (!cacheHit)
+        {
+            cache.player = &player;
+            cache.worldGeneration = generation;
+            cache.clipIds.clear();
+            cache.clipIds.reserve(animation.clips.size());
+            for (const auto& clip : animation.clips)
+            {
+                cache.clipIds.push_back(clip.id);
+            }
+            // schema 只由骨架决定；通道名只由 schema 决定。二者随播放器身份缓存。
+            cache.schema = Animation::PreviewFeatureSchema(animation.mesh);
+            cache.featureChannels = Animation::FeatureChannelNames(cache.schema);
+        }
+        section.worldGeneration = generation;
+        section.clips = cache.clipIds;
+        section.clip = player.SelectedClip();
+        section.time = player.Time();
+        section.duration = player.Duration();
+        section.playing = player.IsPlaying();
+        section.jointCount = player.Asset().mesh.joints.size();
+        if (!animation.clips.empty())
+        {
+            const auto& clip = animation.clips.at(player.SelectedClip());
+            section.featureChannels = cache.featureChannels;
+            if (Animation::CanExtractClipFeatures(
+                    clip, cache.schema, player.Time(), player.IsLooping()))
+            {
+                section.features = Animation::ExtractClipFeatures(
+                    animation.mesh, clip, cache.schema, player.Time(), player.IsLooping());
+                section.featureStatus = "Root heading | cm, cm/s | pre-IK";
+            }
+            else
+            {
+                section.featureStatus = "Incomplete nonloop feature window";
+            }
+        }
+        break;
+    }
+}
+
 void EngineLoop::UpdateUiViewModel(
     float deltaTime,
     const RuntimeCommandExecutionResult& commandResult)
@@ -1618,158 +2970,75 @@ void EngineLoop::UpdateUiViewModel(
         return;
     }
 
-    UiViewModelSnapshot snapshot;
-    snapshot.scripts = GetSubsystems().GetScriptRuntime().View(
-        GetSubsystems().GetWorldManager().GetActiveWorldHandle().generation);
-    snapshot.scripts.buildAvailable = scriptBuild && scriptBuild->Available();
-    snapshot.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
-    snapshot.scripts.autoCompile = autoCompileScripts;
-    snapshot.scripts.buildOutput = scriptBuildOutput;
-    const auto& scriptWorld = GetSubsystems().GetWorldManager().GetActiveWorld();
-    if (scriptWorld && uiSubsystem->GetSceneDocuments())
-    {
-        snapshot.scripts.canUndo = uiSubsystem->GetSceneDocuments()->CanUndo(scriptWorld->GetScenePath());
-        snapshot.scripts.canRedo = uiSubsystem->GetSceneDocuments()->CanUndo(scriptWorld->GetScenePath(), true);
-    }
-    snapshot.frameIndex = uiFrameIndex++;
-    snapshot.deltaTimeSeconds = deltaTime;
-    snapshot.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
-    snapshot.cameraMoveSpeed = controller->GetMoveVelocity();
-    const RenderSystem& renderSystem = RenderSystem::GetInstance();
-    snapshot.debugViewMode = renderSystem.GetDebugViewMode();
-    snapshot.toneMappingMode = renderSystem.GetToneMappingMode();
-    snapshot.offlineMode = renderSystem.IsOfflineMode();
-    snapshot.offlineState = static_cast<int>(renderSystem.GetOfflineState());
-    snapshot.offlineSamples = renderSystem.GetOfflineSettings().samples;
-    snapshot.offlineBounces = renderSystem.GetOfflineSettings().bounces;
-    snapshot.offlineLightSamples = renderSystem.GetOfflineSettings().lightSamples;
-    snapshot.offlineSeed = renderSystem.GetOfflineSettings().seed;
-    snapshot.offlineAov = static_cast<int>(renderSystem.GetOfflineAov());
-    snapshot.offlineExposure = renderSystem.GetOfflineExposure();
-    snapshot.offlineError = renderSystem.GetOfflineError();
-    snapshot.offlineModeFeedback = commandResult.offlineUiModeFeedback;
-    if (const auto result = renderSystem.CaptureOfflineResult())
-        snapshot.offlineCompletedSamples = result->film->completedSamples;
-    snapshot.bloomStrength = renderSystem.GetBloomStrength();
-    snapshot.bloomThreshold = renderSystem.GetBloomThreshold();
-    snapshot.bloomKnee = renderSystem.GetBloomKnee();
-    snapshot.bloomClamp = renderSystem.GetBloomClamp();
-    const CsmSettings& csmSettings = renderSystem.GetCsmSettings();
-    snapshot.csmCastShadows = csmSettings.castShadows;
-    snapshot.csmDynamicShadowDistance =
-        csmSettings.dynamicShadowDistance;
-    snapshot.csmDynamicShadowCascades =
-        csmSettings.cascadeCount;
-    snapshot.csmCascadeDistributionExponent =
-        csmSettings.cascadeDistributionExponent;
-    snapshot.csmCascadeTransitionFraction =
-        csmSettings.cascadeTransitionFraction;
-    snapshot.csmShadowDistanceFadeoutFraction =
-        csmSettings.shadowDistanceFadeoutFraction;
-    snapshot.csmShadowBias = csmSettings.shadowBias;
-    snapshot.csmShadowSlopeBias =
-        csmSettings.shadowSlopeBias;
-    snapshot.csmShadowCascadeBiasDistribution =
-        csmSettings.shadowCascadeBiasDistribution;
-    snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
-    snapshot.sunIntensity = 1.0f;
-    const std::shared_ptr<World>& uiActiveWorld =
-        GetSubsystems().GetWorldManager().GetActiveWorld();
-    if (uiActiveWorld && uiActiveWorld->GetCamera())
-    {
-        snapshot.hasCamera = true;
-        snapshot.cameraExposure = uiActiveWorld->GetCamera()->GetExposure();
-    }
-    if (uiActiveWorld && uiActiveWorld->GetPrimaryDirectionalLight())
-    {
-        snapshot.sunIntensity =
-            uiActiveWorld->GetPrimaryDirectionalLight()->GetIntensity();
-    }
-    const EnvironmentUpdateDiagnostics environmentDiagnostics =
-        renderSystem.GetEnvironmentUpdateDiagnostics();
-    snapshot.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;
-    snapshot.environmentPendingGeneration = environmentDiagnostics.progress.pendingGeneration;
-    snapshot.environmentUpdateStage = ToString(environmentDiagnostics.progress.stage);
-    snapshot.environmentCubemapFacesCompleted =
-        environmentDiagnostics.progress.cubemapFacesCompleted;
-    snapshot.environmentCubemapFaceCount = environmentDiagnostics.progress.cubemapFaceCount;
-    snapshot.environmentShUpdatesCompleted = environmentDiagnostics.progress.shUpdatesCompleted;
-    snapshot.environmentPrefilterMipsCompleted =
-        environmentDiagnostics.progress.prefilterMipsCompleted;
-    snapshot.environmentPrefilterMipCount = environmentDiagnostics.progress.prefilterMipCount;
-    snapshot.environmentUsesPreviousResources =
-        environmentDiagnostics.progress.usingPreviousResources;
-    snapshot.environmentGpuTimingSupported = environmentDiagnostics.gpuTiming.supported;
-    snapshot.environmentCubemapGpuMs = environmentDiagnostics.gpuTiming
-        .Get(EnvironmentGpuProduct::Cubemap).lastMilliseconds;
-    snapshot.environmentShGpuMs = environmentDiagnostics.gpuTiming
-        .Get(EnvironmentGpuProduct::SphericalHarmonics).lastMilliseconds;
-    snapshot.environmentPrefilterGpuMs = environmentDiagnostics.gpuTiming
-        .Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds;
-    snapshot.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
-        .Get(EnvironmentGpuProduct::Commit).lastMilliseconds;
-    snapshot.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
-    snapshot.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
-    snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
-    const WorldHandle& activeWorld = GetSubsystems().GetWorldManager().GetActiveWorldHandle();
-    snapshot.activeWorldPath = activeWorld.scenePath;
-    if (uiActiveWorld && !snapshot.offlineMode)
-    {
-        snapshot.motionWorldGeneration = uiActiveWorld->GetGeneration();
-        snapshot.motionDebug = uiActiveWorld->CaptureMotionDebug();
-        snapshot.debugDraw = uiActiveWorld->CaptureDebugDraw(*snapshot.motionDebug);
-        if (const auto& camera = uiActiveWorld->GetRenderCamera())
-        {
-            for (int axis = 0; axis < 3; ++axis)
-            {
-                snapshot.motionCamera.position[axis] = camera->GetPosition()[axis];
-                snapshot.motionCamera.forward[axis] = camera->GetForwardVector()[axis];
-                snapshot.motionCamera.right[axis] = camera->GetRightVector()[axis];
-                snapshot.motionCamera.up[axis] = camera->GetUpVector()[axis];
-            }
-            snapshot.motionCamera.horizontalFovDegrees = camera->GetHFOV();
-            snapshot.motionCamera.clipNear = camera->GetClipNear();
-            snapshot.motionCamera.clipFar = camera->GetClipFar();
-        }
-    }
-    if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
-        for (const auto& entry : world->GetMeshObjects())
-            if (entry.second.animation && entry.second.sceneObjectIdentity == "preview_model")
-            {
-                const auto& player = *entry.second.animation;
-                snapshot.animationWorldGeneration = world->GetGeneration();
-                for (const auto& clip : player.Asset().clips) snapshot.animationClips.push_back(clip.id);
-                snapshot.animationClip = player.SelectedClip();
-                snapshot.animationTime = player.Time();
-                snapshot.animationDuration = player.Duration();
-                snapshot.animationPlaying = player.IsPlaying();
-                snapshot.animationJointCount = player.Asset().mesh.joints.size();
-                if (!player.Asset().clips.empty())
-                {
-                    const auto schema = Animation::PreviewFeatureSchema(player.Asset().mesh);
-                    const auto& clip = player.Asset().clips.at(player.SelectedClip());
-                    snapshot.animationFeatureChannels = Animation::FeatureChannelNames(schema);
-                    if (Animation::CanExtractClipFeatures(clip, schema, player.Time(), player.IsLooping()))
-                    {
-                        snapshot.animationFeatures = Animation::ExtractClipFeatures(
-                            player.Asset().mesh, clip, schema, player.Time(), player.IsLooping());
-                        snapshot.animationFeatureStatus = "Root heading | cm, cm/s | pre-IK";
-                    }
-                    else snapshot.animationFeatureStatus = "Incomplete nonloop feature window";
-                }
-                break;
-            }
-    uiSubsystem->SetMaterialInstanceSceneModels(
-        renderSystem.GetMaterialInstanceModelContexts());
-    // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。
-    // 在同一个稳定帧边界拍出值语义副本，UI 回调里不再访问 World。
-    uiSubsystem->SetSceneActors(uiActiveWorld != nullptr
-        ? BuildEditorSceneActors(*uiActiveWorld)
-        : std::vector<EditorUi::EditorSceneActorSnapshot>{});
+    const auto now = std::chrono::steady_clock::now();
+    const auto& worldManager = GetSubsystems().GetWorldManager();
+    const WorldHandle& activeWorld = worldManager.GetActiveWorldHandle();
+    const ScriptRuntimeSubsystem& scriptRuntime = GetSubsystems().GetScriptRuntime();
+
+    // 可见性决定构建档位：编辑器隐藏时绝不构建编辑器分节，沉浸模式只保留 DrawDebug。
+    const UiViewModelBuildMode buildMode = DecideUiViewModelBuildMode(
+        true,
+        uiSubsystem->IsDeveloperUiVisible(),
+        uiSubsystem->IsRuntimeHudVisible());
+
+    UiViewModelFrameValues frame;
+    frame.frameIndex = uiFrameIndex++;
+    frame.deltaTimeSeconds = deltaTime;
+    frame.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
+    frame.cameraMoveSpeed = controller != nullptr ? controller->GetMoveVelocity() : 1000.0f;
+    FillUiViewModelLiveFrame(frame, buildMode, activeWorld);
+    // 脚本驱动的选中请求在判定脏标记之前处理，选中高亮才能在同一个 GT 帧重建。
     if (!pendingScriptBlueprintSelection.empty() &&
         uiSubsystem->RequestActorSelection(pendingScriptBlueprintSelection))
+    {
         pendingScriptBlueprintSelection.clear();
-    uiSubsystem->Update(snapshot);
+    }
+
+    const ScriptPlayState scriptState = scriptRuntime.IsEditing()
+        ? ScriptPlayState::Editing
+        : (scriptRuntime.IsPaused() ? ScriptPlayState::Paused : ScriptPlayState::Playing);
+    // 脚本编译状态没有逐帧比较大字符串：TickScriptBuild 在工作开始/轮询结果时置脏。
+    const bool buildStateDirty = uiViewModelScriptBuildPending;
+    uiViewModelScriptBuildPending = false;
+    // 事件路径只重脏自己声明的分节；先单独消费掩码，避免短路求值把它留到下一帧。
+    const UiSectionMask requested = uiSubsystem->ConsumeViewModelRefreshSections();
+    const bool visibilityOrModeChanged = buildMode != uiViewModelBuildMode;
+    const bool worldChanged =
+        activeWorld.generation != lastUiViewModelWorldGeneration ||
+        activeWorld.scenePath != lastUiViewModelWorldPath;
+    // World 换代/可见性切换等于所有输入都换了一份：全部节重建。
+    const bool rebuildAll = visibilityOrModeChanged || worldChanged ||
+        commandResult.worldChanged || commandResult.loadWorldAttempted;
+    UiSectionMask forced = requested;
+    if (commandResult.offlineUiModeFeedback.has_value() ||
+        frame.offlineMode != lastUiViewModelOfflineMode)
+    {
+        forced |= UiSectionBit(UiSectionId::Offline);
+    }
+    if (scriptState != lastUiViewModelScriptState || buildStateDirty)
+    {
+        forced |= UiSectionBit(UiSectionId::Scripts);
+    }
+    const bool forceRefresh = rebuildAll || forced != 0;
+    const bool editorSnapshotDue = ShouldBuildEditorViewModel(
+        buildMode, uiViewModelRefresh, now, forceRefresh);
+
+    UiViewModelSectionUpdate sections;
+    if (editorSnapshotDue)
+    {
+        const UiSectionMask rebuild = PlanUiEditorSectionRefresh(
+            forced, rebuildAll, uiViewModelSectionFirstRefresh);
+        BuildUiViewModelSections(
+            sections, rebuild, frame, activeWorld, commandResult);
+        uiViewModelRefresh.MarkRefreshed(now);
+        uiViewModelSectionFirstRefresh = false;
+    }
+    uiSubsystem->Update(sections, frame, buildMode, editorSnapshotDue);
+    uiViewModelBuildMode = buildMode;
+    lastUiViewModelWorldGeneration = activeWorld.generation;
+    lastUiViewModelWorldPath = activeWorld.scenePath;
+    lastUiViewModelOfflineMode = frame.offlineMode;
+    lastUiViewModelScriptState = scriptState;
 }
 
 void EngineLoop::SynchronizeSceneViewport()
@@ -1779,6 +3048,8 @@ void EngineLoop::SynchronizeSceneViewport()
     const auto aspect = ViewportAspect(rect);
     auto& renderSystem = RenderSystem::GetInstance();
     renderSystem.SetSceneViewport(rect, uiSubsystem->IsSceneViewportEnabled());
+    renderSystem.SetPickingSceneEnabled(
+        uiSubsystem->IsDeveloperUiVisible());
     const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
     if (aspect && world && world->GetRenderCamera())
     {
@@ -2081,6 +3352,25 @@ EngineLoop::ExecuteWorldGraphTransaction(
         particleDocuments);
     if (result.IsSuccess())
     {
+        const auto& activeWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorld();
+        // 新 World 的代理和碎片不能继承上一代：先清空共享世界，再让各运行时注册。
+        if (fractureWorld) fractureWorld->Clear();
+        // 预算账本与碎片同属一个 World 代；只在 generation 真变化时归零，
+        // 材质重载等同代事务不能抹掉仍在场上的碎片计数。
+        if (activeWorld && fractureBudget &&
+            fractureBudgetGeneration != activeWorld->GetGeneration())
+        {
+            fractureBudget->Reset();
+            fractureBudgetGeneration = activeWorld->GetGeneration();
+        }
+        if (projectileRuntime && activeWorld) projectileRuntime->Clear(*activeWorld);
+        if (activeWorld)
+        {
+            if (destructibleRuntimes)
+                destructibleRuntimes->SynchronizeWorld(*activeWorld);
+            if (projectileRuntime) projectileRuntime->SynchronizeWorld(*activeWorld);
+        }
         GetSubsystems().GetScriptRuntime().SynchronizeWorld(
             GetSubsystems().GetWorldManager().GetActiveWorld());
         GetSubsystems().GetScriptRuntime().SetFeedback("");

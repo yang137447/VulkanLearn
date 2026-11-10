@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-11-10T03:38:27",
+  "generated_at": "2026-11-10T14:47:28",
   "policy": {
     "margin_percent": 20.0,
     "budget_metrics": [
@@ -27,17 +27,17 @@
             "particles": 653,
             "drawCalls": 4,
             "vertices": 12120,
-            "gpuMs": 3.701,
-            "gpuAvgMs": 4.566,
-            "gpuMaxMs": 10.53
+            "gpuMs": 5.547,
+            "gpuAvgMs": 5.089,
+            "gpuMaxMs": 25.37
           },
           "budget": {
             "particles": 784,
             "drawCalls": 5,
             "vertices": 14544,
-            "gpuMs": 4.441,
-            "gpuAvgMs": 5.479,
-            "gpuMaxMs": 12.636
+            "gpuMs": 6.656,
+            "gpuAvgMs": 6.107,
+            "gpuMaxMs": 30.444
           }
         }
       }
@@ -74,7 +74,7 @@
             "drawCalls": 5,
             "vertices": 4800,
             "gpuMs": 20.289,
-            "gpuAvgMs": 17.907,
+            "gpuAvgMs": 20.504,
             "gpuMaxMs": 97.704
           },
           "budget": {
@@ -82,7 +82,7 @@
             "drawCalls": 6,
             "vertices": 5760,
             "gpuMs": 24.347,
-            "gpuAvgMs": 21.488,
+            "gpuAvgMs": 24.605,
             "gpuMaxMs": 117.245
           }
         }
@@ -121,7 +121,7 @@
             "vertices": 5700,
             "gpuMs": 0.394,
             "gpuAvgMs": 0.45,
-            "gpuMaxMs": 0.889
+            "gpuMaxMs": 1.116
           },
           "budget": {
             "particles": 200,
@@ -129,7 +129,7 @@
             "vertices": 6840,
             "gpuMs": 0.473,
             "gpuAvgMs": 0.54,
-            "gpuMaxMs": 1.067
+            "gpuMaxMs": 1.339
           }
         }
       }
@@ -165,17 +165,17 @@
             "particles": 689,
             "drawCalls": 13,
             "vertices": 7890,
-            "gpuMs": 0.578,
+            "gpuMs": 0.714,
             "gpuAvgMs": 0.556,
-            "gpuMaxMs": 1.094
+            "gpuMaxMs": 4.249
           },
           "budget": {
             "particles": 827,
             "drawCalls": 16,
             "vertices": 9468,
-            "gpuMs": 0.694,
+            "gpuMs": 0.857,
             "gpuAvgMs": 0.667,
-            "gpuMaxMs": 1.313
+            "gpuMaxMs": 5.099
           }
         }
       }
@@ -188,17 +188,17 @@
             "particles": 58368,
             "drawCalls": 16,
             "vertices": 190476,
-            "gpuMs": 0.273,
+            "gpuMs": 0.324,
             "gpuAvgMs": 0.858,
-            "gpuMaxMs": 2.106
+            "gpuMaxMs": 5.22
           },
           "budget": {
             "particles": 70042,
             "drawCalls": 20,
             "vertices": 228572,
-            "gpuMs": 0.328,
+            "gpuMs": 0.389,
             "gpuAvgMs": 1.03,
-            "gpuMaxMs": 2.527
+            "gpuMaxMs": 6.264
           }
         }
       }
@@ -211,17 +211,17 @@
             "particles": 46,
             "drawCalls": 7,
             "vertices": 2520,
-            "gpuMs": 0.229,
+            "gpuMs": 1.061,
             "gpuAvgMs": 0.249,
-            "gpuMaxMs": 0.44
+            "gpuMaxMs": 1.061
           },
           "budget": {
             "particles": 56,
             "drawCalls": 9,
             "vertices": 3024,
-            "gpuMs": 0.275,
+            "gpuMs": 1.273,
             "gpuAvgMs": 0.299,
-            "gpuMaxMs": 0.528
+            "gpuMaxMs": 1.273
           }
         }
       }
@@ -234,17 +234,17 @@
             "particles": 264,
             "drawCalls": 8,
             "vertices": 7500,
-            "gpuMs": 0.746,
+            "gpuMs": 2.906,
             "gpuAvgMs": 0.665,
-            "gpuMaxMs": 1.491
+            "gpuMaxMs": 3.09
           },
           "budget": {
             "particles": 317,
             "drawCalls": 10,
             "vertices": 9000,
-            "gpuMs": 0.895,
+            "gpuMs": 3.487,
             "gpuAvgMs": 0.798,
-            "gpuMaxMs": 1.789
+            "gpuMaxMs": 3.708
           }
         }
       }
@@ -259,7 +259,7 @@
             "vertices": 7944,
             "gpuMs": 1.309,
             "gpuAvgMs": 1.045,
-            "gpuMaxMs": 2.016
+            "gpuMaxMs": 2.057
           },
           "budget": {
             "particles": 460,
@@ -267,7 +267,7 @@
             "vertices": 9533,
             "gpuMs": 1.571,
             "gpuAvgMs": 1.254,
-            "gpuMaxMs": 2.419
+            "gpuMaxMs": 2.468
           }
         }
       }
@@ -281,7 +281,7 @@
             "drawCalls": 21,
             "vertices": 445092,
             "gpuMs": 0.378,
-            "gpuAvgMs": 0.353,
+            "gpuAvgMs": 0.547,
             "gpuMaxMs": 3.308
           },
           "budget": {
@@ -289,7 +289,7 @@
             "drawCalls": 26,
             "vertices": 534111,
             "gpuMs": 0.454,
-            "gpuAvgMs": 0.424,
+            "gpuAvgMs": 0.656,
             "gpuMaxMs": 3.97
           }
         }
@@ -305,7 +305,7 @@
             "vertices": 378000,
             "gpuMs": 0.096,
             "gpuAvgMs": 0.211,
-            "gpuMaxMs": 0.585
+            "gpuMaxMs": 2.857
           },
           "budget": {
             "particles": 151200,
@@ -313,7 +313,7 @@
             "vertices": 453600,
             "gpuMs": 0.115,
             "gpuAvgMs": 0.253,
-            "gpuMaxMs": 0.702
+            "gpuMaxMs": 3.428
           }
         }
       }
@@ -327,16 +327,16 @@
             "drawCalls": 1,
             "vertices": 6144,
             "gpuMs": 4.382,
-            "gpuAvgMs": 4.99,
-            "gpuMaxMs": 13.231
+            "gpuAvgMs": 5.409,
+            "gpuMaxMs": 33.507
           },
           "budget": {
             "particles": 1157,
             "drawCalls": 2,
             "vertices": 7373,
             "gpuMs": 5.258,
-            "gpuAvgMs": 5.988,
-            "gpuMaxMs": 15.877
+            "gpuAvgMs": 6.491,
+            "gpuMaxMs": 40.208
           }
         }
       }
@@ -349,17 +349,17 @@
             "particles": 865,
             "drawCalls": 14,
             "vertices": 25890,
-            "gpuMs": 0.383,
+            "gpuMs": 0.543,
             "gpuAvgMs": 0.341,
-            "gpuMaxMs": 0.502
+            "gpuMaxMs": 1.015
           },
           "budget": {
             "particles": 1038,
             "drawCalls": 17,
             "vertices": 31068,
-            "gpuMs": 0.46,
+            "gpuMs": 0.652,
             "gpuAvgMs": 0.409,
-            "gpuMaxMs": 0.602
+            "gpuMaxMs": 1.218
           }
         }
       }
@@ -374,7 +374,7 @@
             "vertices": 9792,
             "gpuMs": 0.926,
             "gpuAvgMs": 0.719,
-            "gpuMaxMs": 1.529
+            "gpuMaxMs": 2.893
           },
           "budget": {
             "particles": 245,
@@ -382,7 +382,7 @@
             "vertices": 11751,
             "gpuMs": 1.111,
             "gpuAvgMs": 0.863,
-            "gpuMaxMs": 1.835
+            "gpuMaxMs": 3.472
           }
         }
       }
@@ -397,7 +397,7 @@
             "vertices": 44520,
             "gpuMs": 0.677,
             "gpuAvgMs": 0.925,
-            "gpuMaxMs": 2.209
+            "gpuMaxMs": 3.627
           },
           "budget": {
             "particles": 780,
@@ -405,7 +405,7 @@
             "vertices": 53424,
             "gpuMs": 0.812,
             "gpuAvgMs": 1.11,
-            "gpuMaxMs": 2.651
+            "gpuMaxMs": 4.352
           }
         }
       }

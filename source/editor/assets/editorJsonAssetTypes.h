@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -17,6 +18,8 @@ enum class EditorAssetKind : uint8_t {
     Texture,
     Terrain,
     Blueprint,
+    Retarget,
+    Tressfx,
     ParticleSystem
 };
 enum class EditorJsonValueKind : uint8_t { Object, Array, String, Number, Boolean, Null };
@@ -29,6 +32,12 @@ struct EditorJsonAssetEntry
     std::string name;
     std::string description;
     std::string diagnostic;
+    // 顶层 type 原值；目录按它区分 mesh/speedtree/tressfx，而不是文件名前缀。
+    std::string type;
+    // tressfx 描述符声明了 simulation.skinning：毛发视口不预览它，由蓝图组件承载。
+    bool tressfxSkinning = false;
+    // tressfx 的 .tfx guide 数；0 表示未知或不可用（文件缺失/头损坏/非 tressfx）。
+    uint32_t tressfxGuideCount = 0;
 };
 
 struct EditorJsonAssetCatalogSnapshot
@@ -74,6 +83,34 @@ struct EditorThumbnailSnapshot
     std::unordered_map<std::string, EditorThumbnail> entries;
 };
 
+// worker 从正式 SK 与 retarget 求值后冻结的作者参考姿态，不拥有 FBX、播放器或 World。
+// bind/reference 均为厘米、Y-up 模型空间；局部轴供检查手腕等仅看骨段位置无法发现的扭转。
+struct EditorRetargetJoint
+{
+    std::string name;
+    int parent = -1;
+    std::array<float, 3> bindPosition{}, referencePosition{};
+    std::array<std::array<float, 3>, 3> bindAxes{}, referenceAxes{};
+};
+
+struct EditorRetargetMapping
+{
+    int source = -1, target = -1;
+    // 只有两边的祖先都落在同一映射时才比较骨段，跨链映射不伪造角误差。
+    int ancestor = -1;
+};
+
+struct EditorRetargetPreview
+{
+    std::string sourceSkeleton, targetSkeleton;
+    std::string sourcePose, targetPose;
+    std::string targetModelPath;
+    std::vector<EditorRetargetJoint> source, target;
+    std::vector<EditorRetargetMapping> mappings;
+    size_t sourceOffsets = 0, targetOffsets = 0;
+    size_t defaultAnchor = 0;
+};
+
 struct EditorJsonDocumentSnapshot
 {
     uint64_t revision = 0;
@@ -87,6 +124,13 @@ struct EditorJsonDocumentSnapshot
     std::string textureColorSpace;
     std::string previewDiagnostic;
     std::shared_ptr<const EditorTexturePreview> texturePreview;
+    std::shared_ptr<const EditorRetargetPreview> retargetPreview;
+    // 与目录条目同源的顶层 type / tressfx skinning 摘要；工作线程一次解析后冻结，
+    // UI 不再读文件判断“这是不是毛发、要不要挡预览”。
+    std::string type;
+    bool tressfxSkinning = false;
+    // 与目录条目同源的 guide 数，供 Groups 编辑器校验 end <= guideCount。
+    uint32_t tressfxGuideCount = 0;
 };
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)

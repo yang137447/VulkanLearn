@@ -8,13 +8,18 @@
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include "core/runtimeResult.h"
+#include "core/logStore.h"
 #include "sceneNode.h"
 #include "materialInstance.h"
 #include "material.h"
@@ -23,16 +28,24 @@
 #include "pipeline/pipelineFactory.h"
 #include "commonFunction.h"
 #include "renderGraph.h"
+#include "hair/hairSimulationPass.h"
+#include "render/skinning/skinDeformPass.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/placementBindingResolver.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainPageBakeGpu.h"
+#include "render/resource/terrainFeedbackGpu.h"
+#include "render/resource/terrainLayerFeedbackGpu.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/shadow/localShadowMath.h"
 #include "render/volumetricFog/volumetricFogRenderer.h"
 #include "render/lightCulling/lightCullingRenderer.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
+#include "renderableObject.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "particles/particleDump.h"
@@ -43,6 +56,9 @@
 #include "vulkanDebug.h"
 #include "world/world.h"
 #include "scene/sceneAssetTypes.h"
+#include "terrain/terrainPageManager.h"
+#include "terrain/terrainWeightMap.h"
+#include "terrain/terrainLayerTable.h"
 
 namespace
 {
@@ -895,46 +911,25 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     materialInstancePreviewOverrideMaterialKey.clear();
     hasRenderScene = false;
     ClearSelectedMaterialInstance();
-    windClockInitialized = false;
     currentWindTimeSeconds = 0.0;
+    windClockInitialized = false;
+    windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
+    windTickAccumulator = 0.0;
+    sceneWindRuntime.Reset();
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
+    simulationDeltaSeconds = 0.0f;
+    gameSimulationDeltaSeconds = 0.0f;
+    hairSimulationDeltaSeconds = 0.0f;
     shadowCascadeFrameData.valid = false;
     if (activeWorld)
     {
-        speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
-        (void)speedTreeWindProfiles.SetStrength(speedTreeStrength);
-        (void)speedTreeWindProfiles.SetGustingEnabled(speedTreeGustingEnabled);
+        windResponseProfiles.Configure(activeWorld->GetWindResponseProfiles());
     }
     else
     {
-        speedTreeWindProfiles.Reset();
+        windResponseProfiles.Reset();
     }
-}
-
-bool RenderSystem::ForceSpeedTreeGust()
-{
-    return speedTreeWindProfiles.ForceGust();
-}
-
-bool RenderSystem::SetSpeedTreeStrength(float strength)
-{
-    if (!speedTreeWindProfiles.SetStrength(strength))
-    {
-        return false;
-    }
-    speedTreeStrength = strength;
-    return true;
-}
-
-bool RenderSystem::SetSpeedTreeGustingEnabled(bool enabled)
-{
-    if (!speedTreeWindProfiles.SetGustingEnabled(enabled))
-    {
-        return false;
-    }
-    speedTreeGustingEnabled = enabled;
-    return true;
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -1236,6 +1231,8 @@ void RenderSystem::Render()
     PROFILE_SCOPE("RenderSystem::Render");
     // Single-thread compatibility path: GT publishes the same immutable
     // snapshot that the optional RT consumes, then renders it immediately.
+    // EngineLoop 的 Tick 为了给 CPU 阶段分别计时，直接调用下面两步而不是本函数；
+    // 这里保留组合入口给需要一次性完成 publish+render 的调用方。
     PublishSnapshotFromActiveWorld();
     RenderLatestSnapshotOrLastGood();
 }
@@ -1437,6 +1434,1285 @@ void RenderSystem::SetPendingSimulationDelta(float seconds)
         : 0.0f;
 }
 
+void RenderSystem::RequestTerrainPageBakeParity(int tileX, int tileZ)
+{
+    terrainPageBakeParityTileX.store(tileX, std::memory_order_relaxed);
+    terrainPageBakeParityTileZ.store(tileZ, std::memory_order_relaxed);
+    terrainPageBakeParityRequested.store(true, std::memory_order_release);
+}
+
+void RenderSystem::RunTerrainPageBakeParityIfRequested()
+{
+    if (!terrainPageBakeParityRequested.exchange(
+            false, std::memory_order_acquire))
+        return;
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming || streaming->pageManager.Registrations().empty())
+    {
+        std::cout << "[TerrainParity] No registered terrain placement."
+                  << std::endl;
+        return;
+    }
+    if (!streaming->pageBake || !streaming->pageBake->Available())
+    {
+        std::cout << "[TerrainParity] GPU page bake unavailable: "
+                  << (streaming->pageBake
+                          ? streaming->pageBake->UnavailableReason()
+                          : std::string("resource not created"))
+                  << std::endl;
+        return;
+    }
+
+    VL::TerrainPageManager& pageManager = streaming->pageManager;
+    const VL::TerrainPageManager::Registration& registration =
+        pageManager.Registrations().front();
+    int tileX = terrainPageBakeParityTileX.load(std::memory_order_relaxed);
+    int tileZ = terrainPageBakeParityTileZ.load(std::memory_order_relaxed);
+    if (tileX < 0 || tileZ < 0 ||
+        static_cast<uint32_t>(tileX) >= registration.tilesPerSide ||
+        static_cast<uint32_t>(tileZ) >= registration.tilesPerSide)
+    {
+        tileX = 0;
+        tileZ = 0;
+    }
+
+    try
+    {
+        const VL::TerrainBuildPlan& plan = pageManager.Plans().front();
+        const VL::TerrainPageData cpu =
+            VL::TerrainWeightMapBuilder::BuildPage(
+                plan,
+                registration.tilesPerSide,
+                VL::TerrainPageManager::PageResolution,
+                static_cast<uint32_t>(tileX),
+                static_cast<uint32_t>(tileZ),
+                pageManager.PlacementLayerIdMap(plan.placementId.empty()
+                    ? plan.desc.assetPath : plan.placementId));
+
+        std::vector<uint8_t> gpuIds;
+        std::vector<uint8_t> gpuWeights;
+        std::string error;
+        if (!streaming->pageBake->BakePageSync(
+                pageManager,
+                0,
+                static_cast<uint32_t>(tileX),
+                static_cast<uint32_t>(tileZ),
+                gpuIds,
+                gpuWeights,
+                error))
+        {
+            std::cout << "[TerrainParity] GPU bake failed: " << error
+                      << std::endl;
+            return;
+        }
+
+        size_t idMismatchBytes = 0;
+        size_t weightMismatchBytes = 0;
+        size_t mismatchedTexels = 0;
+        uint32_t worstIdDiff = 0;
+        uint32_t worstWeightDiff = 0;
+        const size_t texelCount =
+            static_cast<size_t>(VL::TerrainPageManager::PageResolution) *
+            VL::TerrainPageManager::PageResolution;
+        if (cpu.ids.size() != gpuIds.size() ||
+            cpu.weights.size() != gpuWeights.size())
+        {
+            std::cout << "[TerrainParity] Size mismatch cpuIds="
+                      << cpu.ids.size() << " gpuIds=" << gpuIds.size()
+                      << " cpuWeights=" << cpu.weights.size()
+                      << " gpuWeights=" << gpuWeights.size() << std::endl;
+            return;
+        }
+        for (size_t index = 0; index < cpu.ids.size(); ++index)
+        {
+            const uint32_t idDiff = static_cast<uint32_t>(
+                std::abs(static_cast<int>(cpu.ids[index]) -
+                         static_cast<int>(gpuIds[index])));
+            const uint32_t weightDiff = static_cast<uint32_t>(
+                std::abs(static_cast<int>(cpu.weights[index]) -
+                         static_cast<int>(gpuWeights[index])));
+            if (idDiff != 0) ++idMismatchBytes;
+            if (weightDiff != 0) ++weightMismatchBytes;
+            worstIdDiff = std::max(worstIdDiff, idDiff);
+            worstWeightDiff = std::max(worstWeightDiff, weightDiff);
+        }
+        for (size_t texel = 0; texel < texelCount; ++texel)
+        {
+            const size_t base = texel * 4;
+            bool mismatch = false;
+            for (size_t channel = 0; channel < 4; ++channel)
+            {
+                if (cpu.ids[base + channel] != gpuIds[base + channel] ||
+                    cpu.weights[base + channel] != gpuWeights[base + channel])
+                {
+                    mismatch = true;
+                    break;
+                }
+            }
+            if (mismatch) ++mismatchedTexels;
+        }
+
+        size_t paintedTexels = 0;
+        if (plan.layerPaint && !plan.layerPaint->Empty())
+        {
+            for (uint8_t opacity : plan.layerPaint->opacity)
+            {
+                if (opacity != 0) ++paintedTexels;
+            }
+        }
+        std::cout << "[TerrainParity] placement=" << registration.placementId
+                  << " tile=" << tileX << "," << tileZ
+                  << " layers=" << plan.desc.layers.size()
+                  << " paintNonZeroTexels=" << paintedTexels
+                  << " cpuBakeCandidates=" << cpu.candidates.layerIds.size()
+                  << std::endl;
+        std::cout << "[TerrainParity] idMismatchBytes=" << idMismatchBytes
+                  << " weightMismatchBytes=" << weightMismatchBytes
+                  << " mismatchedTexels=" << mismatchedTexels
+                  << "/" << texelCount
+                  << " worstIdDiff=" << worstIdDiff
+                  << " worstWeightDiff=" << worstWeightDiff
+                  << " result="
+                  << ((idMismatchBytes == 0 && weightMismatchBytes == 0)
+                          ? "PASS" : "FAIL")
+                  << std::endl;
+    }
+    catch (const std::exception& exception)
+    {
+        std::cout << "[TerrainParity] Exception: " << exception.what()
+                  << std::endl;
+    }
+}
+
+void RenderSystem::ConsumeTerrainFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->feedbackRing)
+        return;
+
+    // BeginFrame 已经等待过该 frameIndex 的 fence；TryConsume 再用 epoch
+    // 复核一次，避免 swapchain/frame ring 重建后误读尚未完成的槽。
+    std::optional<VL::TerrainFeedbackFrameSummary> summary =
+        streaming->feedbackRing->TryConsume(frameIndex, completedEpoch);
+    if (!summary.has_value())
+        return;
+
+    streaming->lastConsumedFeedbackEpoch = std::max(
+        streaming->lastConsumedFeedbackEpoch,
+        summary->copiedEpoch);
+    // P3：feedback -> 命中页推进 lastSeenEpoch；miss 页按 priority 进入请求队列。
+    // 请求在本帧 BuildUploadBatch 之前完成，所以同帧就能把新页写进 GPU。
+    streaming->latestFeedbackApply = streaming->pageManager.ApplyFeedback(
+        *summary,
+        completedEpoch,
+        streaming->maxPageRequestsPerFrame,
+        streaming->pendingPageRequests);
+    // L4b：层号+层页+mip 的专用 feedback 是主路径；只有它本帧不可用时才
+    // 退回 L4a 的覆盖页推导（启动/首帧/backpressure）。
+    bool appliedExactLayerFeedback = false;
+    if (streaming->layerVTRequested && streaming->layerFeedbackRing)
+    {
+        const std::optional<VL::TerrainLayerFeedbackFrameSummary>
+            layerSummary = streaming->layerFeedbackRing->TryConsume(
+                frameIndex,
+                completedEpoch);
+        if (layerSummary.has_value())
+        {
+            appliedExactLayerFeedback = ApplyTerrainLayerExactFeedback(
+                streaming,
+                *layerSummary,
+                completedEpoch,
+                frameIndex);
+        }
+    }
+    if (!appliedExactLayerFeedback)
+    {
+        // L4a：覆盖页推导只作为回退/prefetch，不再与精确路径同时写驻留。
+        ApplyTerrainLayerFeedback(
+            streaming, *summary, completedEpoch, frameIndex);
+    }
+    StoreTerrainFeedbackSummary(streaming, *summary);
+}
+
+void RenderSystem::ApplyTerrainLayerFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainFeedbackFrameSummary& summary,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return;
+    if (!streaming->layerResources.atlasesCreated ||
+        streaming->layerDefinitions.empty())
+        return;
+
+    VL::TerrainLayerVisibilityConfig config;
+    config.layerCount =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    // 三张源数组的 mip 链可能不同，只请求三张都能 copy 的级别。
+    const uint32_t sourceMipLevels =
+        VL::TerrainSourceMinMipLevels(streaming->layerSources);
+    config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.sourceSets = &streaming->layerSources;
+    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
+    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
+    config.idleEvictionEnabled =
+        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
+
+    streaming->latestLayerVisibility =
+        streaming->layerVisibilityResolver.Apply(
+            summary,
+            streaming->pageManager,
+            streaming->layerPageManager,
+            streaming->pendingLayerPageRequests,
+            frameIndex,
+            completedEpoch,
+            config);
+    streaming->latestLayerFeedbackExact = false;
+}
+
+bool RenderSystem::ApplyTerrainLayerExactFeedback(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainLayerFeedbackFrameSummary& summary,
+    uint64_t completedEpoch,
+    uint32_t frameIndex)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return false;
+    if (!streaming->layerResources.atlasesCreated ||
+        streaming->layerDefinitions.empty())
+        return false;
+    // 精确 feedback 本帧没有任何有效 texel（例如地形完全不在屏幕内）时
+    // 仍要走精确路径：空集合表示“没有可见层”，不能退回覆盖页推导去
+    // 复活整层页。
+    VL::TerrainLayerVisibilityConfig config;
+    config.layerCount =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    const uint32_t sourceMipLevels =
+        VL::TerrainSourceMinMipLevels(streaming->layerSources);
+    config.sourceMipLevels = std::max(1u, sourceMipLevels);
+    config.sourceSets = &streaming->layerSources;
+    config.maxRequestsPerFrame = streaming->maxLayerPageRequestsPerFrame;
+    config.idleEvictionEpochs = streaming->layerIdleEvictionEpochs;
+    config.idleEvictionEnabled =
+        streaming->layerIdleEvictionEnabled.load(std::memory_order_relaxed);
+    // L4e：相机前向移动时预取细一级 mip 的子页，使用独立每帧名额。
+    config.prefetchFinerMipEnabled = streaming->layerPrefetchMoving;
+    config.prefetchPagesPerFrame = streaming->maxLayerPrefetchPagesPerFrame;
+    // 全局页预算：以层页管理器的驻留容量为上限做 mip 分配。
+    //
+    // 契约要求“选定 mip 后必须请求该 mip 的全部页”，所以每层页数是 mip 的
+    // 离散函数。不给上限时，每个 tile 的每个层都按屏幕像素独立选 mip，
+    // 多 tile 场景的总页数可达容量的数倍，淘汰永远追不上请求，每帧
+    // 请求->淘汰->再请求 永不收敛。分配器按屏幕覆盖优先级（近处优先）
+    // 细化，并保证去重后的完整页集总页数 <= 容量（工作集本身超容量时
+    // 保持最粗集并允许稳定超预算）。
+    config.layerPageBudget = streaming->layerPageManager.ResidentCapacity();
+
+    streaming->latestLayerExactFeedback =
+        streaming->layerVisibilityResolver.ApplyExact(
+            summary,
+            streaming->layerPageManager,
+            streaming->pendingLayerPageRequests,
+            frameIndex,
+            completedEpoch,
+            config);
+    streaming->latestLayerFeedbackExact = true;
+    // 饥饿帧（没有任何可信的有效 texel）不能当作“全部不可见”：驻留集在
+    // resolver 内保持不变，这里返回 false 让调用方继续走覆盖页推导（L4a），
+    // 用覆盖页反馈重新估计可见层，等覆盖页恢复后精确路径自动接管。
+    return !streaming->latestLayerExactFeedback.starved;
+}
+
+void RenderSystem::PrepareTerrainFeedbackPass(uint8_t frameTag)
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    const bool layerFeedbackEnabled =
+        streaming && streaming->layerVTRequested &&
+        streaming->layerResources.atlasesCreated;
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
+    for (const auto& [passName, renderpass] :
+         renderGraph.GetRenderpasses())
+    {
+        (void)passName;
+        if (renderpass.type != VL::RenderGraphPassType::TerrainFeedback)
+            continue;
+        const std::shared_ptr<MaterialInstance> passMaterial =
+            renderpass.materialInstance.lock();
+        if (!passMaterial)
+            continue;
+        // 这里只写 MI 参数；真正的 UBO 上传发生在 feedback pass 录制时。
+        if (passMaterial->HasParameter("u_pageTableSize"))
+        {
+            passMaterial->SetParameter(
+                "u_pageTableSize",
+                static_cast<float>(VL::TerrainPageManager::PageTableSize));
+        }
+        if (passMaterial->HasParameter("u_frameTag"))
+        {
+            passMaterial->SetParameter(
+                "u_frameTag",
+                static_cast<float>(frameTag));
+        }
+        // 与 M_terrain 共用同一半 texel 内缩；分辨率必须来自 page manager。
+        if (passMaterial->HasParameter("u_pageResolution"))
+        {
+            passMaterial->SetParameter(
+                "u_pageResolution",
+                static_cast<float>(VL::TerrainPageManager::PageResolution));
+        }
+        // L4b：层页 feedback 与 M_terrain 共享同一套层 UV/页公式参数。
+        if (passMaterial->HasParameter("u_uvScale") && streaming)
+        {
+            passMaterial->SetParameter(
+                "u_uvScale",
+                streaming->layerUvScale);
+        }
+        if (passMaterial->HasParameter("u_layerPageResolution"))
+        {
+            passMaterial->SetParameter(
+                "u_layerPageResolution",
+                static_cast<float>(
+                    VL::TerrainLayerPageManager::PageResolution));
+        }
+        if (passMaterial->HasParameter("u_layerMaxMip"))
+        {
+            passMaterial->SetParameter(
+                "u_layerMaxMip",
+                static_cast<float>(
+                    VL::TerrainLayerPageManager::MaxMipLevel));
+        }
+        // L4e：feedback 与 M_terrain 必须报告同一目标 mip；console 的
+        // forcemip 两边都从这里取值。
+        if (passMaterial->HasParameter("u_layerForceMip") && streaming)
+        {
+            passMaterial->SetParameter(
+                "u_layerForceMip",
+                static_cast<float>(
+                    streaming->layerForceMip.load(
+                        std::memory_order_relaxed)));
+        }
+        if (passMaterial->HasParameter("u_layerFeedbackEnabled"))
+        {
+            passMaterial->SetParameter(
+                "u_layerFeedbackEnabled",
+                layerFeedbackEnabled ? 1.0f : 0.0f);
+        }
+        // feedback pass 固定 128×128，而 M_terrain 在全屏分辨率上取导数。
+        // 不换算的话 feedback 的每像素变化被放大 screen/128 倍，mip 会系统性
+        // 选粗（1280 宽时约 3.3 级），层页驻留就会欠配。
+        const vk::Extent2D renderExtent = GetSceneRenderExtent();
+        if (passMaterial->HasParameter("u_feedbackScaleX"))
+        {
+            passMaterial->SetParameter(
+                "u_feedbackScaleX",
+                static_cast<float>(std::max(1u, renderExtent.width)) /
+                    static_cast<float>(VL::TerrainFeedbackResolution));
+        }
+        if (passMaterial->HasParameter("u_feedbackScaleY"))
+        {
+            passMaterial->SetParameter(
+                "u_feedbackScaleY",
+                static_cast<float>(std::max(1u, renderExtent.height)) /
+                    static_cast<float>(VL::TerrainFeedbackResolution));
+        }
+    }
+}
+
+void RenderSystem::StoreTerrainFeedbackSummary(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    const VL::TerrainFeedbackFrameSummary& summary)
+{
+    TerrainFeedbackReport report;
+    report.summary = summary;
+
+    if (streaming && streaming->feedbackRing)
+    {
+        report.hasPendingFrameTagRange =
+            streaming->feedbackRing->PendingTagRange(
+                report.oldestPendingFrameTag,
+                report.newestPendingFrameTag);
+    }
+
+    std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
+    latestTerrainFeedbackReport = std::move(report);
+}
+
+void RenderSystem::ReportTerrainFeedbackStatistics() const
+{
+    TerrainFeedbackReport report;
+    {
+        std::lock_guard<std::mutex> lock(terrainFeedbackStatisticsMutex);
+        if (!latestTerrainFeedbackReport.has_value())
+        {
+            std::cout
+                << "[TerrainFeedback] No completed feedback frame yet."
+                << std::endl;
+            return;
+        }
+        report = *latestTerrainFeedbackReport;
+    }
+
+    const VL::TerrainFeedbackFrameSummary& summary = report.summary;
+    std::cout
+        << "[TerrainFeedback] epoch=" << summary.copiedEpoch
+        << " tag=" << static_cast<uint32_t>(summary.frameTag)
+        << " validTexels=" << summary.validTexelCount
+        << " distinctPages=" << summary.distinctPageCount
+        << " missPages=" << summary.missPageCount
+        << " maxPriority=" << static_cast<uint32_t>(summary.maxPriority)
+        << " staleTexels=" << summary.staleTexelCount;
+    if (report.hasPendingFrameTagRange)
+    {
+        std::cout
+            << " pendingTags=["
+            << static_cast<uint32_t>(report.oldestPendingFrameTag)
+            << ".."
+            << static_cast<uint32_t>(report.newestPendingFrameTag)
+            << "]";
+    }
+    std::cout << std::endl;
+
+    // 只打印前几个高优先级页，避免 32×32 全量刷屏；miss 页单独标出。
+    const size_t pageCount =
+        std::min<size_t>(summary.pages.size(), 8);
+    for (size_t index = 0; index < pageCount; ++index)
+    {
+        const VL::TerrainFeedbackPageRecord& page =
+            summary.pages[index];
+        std::cout
+            << "  page(" << page.virtualPageX << ","
+            << page.virtualPageY << ")"
+            << " priority=" << static_cast<uint32_t>(page.priority)
+            << " miss=" << (page.miss ? 1 : 0)
+            << " samples=" << page.sampleCount
+            << std::endl;
+    }
+}
+
+void RenderSystem::RequestTerrainResidentCapacity(uint32_t capacity)
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[Terrain] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    streaming->RequestResidentCapacity(capacity);
+    std::cout
+        << "[Terrain] Resident capacity request queued: "
+        << capacity << std::endl;
+}
+
+void RenderSystem::RequestTerrainLayerResidentCapacity(uint32_t capacity)
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    streaming->requestedLayerResidentCapacity.store(
+        capacity, std::memory_order_relaxed);
+    // 设置预算意味着回到 streaming 语义：重新启用 idle 淘汰。
+    streaming->layerIdleEvictionEnabled.store(true, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Resident capacity request queued: "
+        << capacity << std::endl;
+}
+
+void RenderSystem::RequestTerrainLayerPreload()
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    // 对照路径：请求全部层页；像素仍由逐帧上传 ring 分批写进 atlas。
+    streaming->requestedLayerPreload.store(true, std::memory_order_relaxed);
+    // 关闭 idle 淘汰，否则非可见层会在 3 秒后被清掉，失去对照意义。
+    streaming->layerIdleEvictionEnabled.store(false, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Full layer preload request queued "
+        << "(idle eviction disabled until 'terrainlayer capacity N')."
+        << std::endl;
+}
+
+void RenderSystem::RequestTerrainLayerForceMip(int forceMip)
+{
+    if (forceMip < -1 || forceMip > 4)
+    {
+        std::cout
+            << "[TerrainLayer] forceMip must be -1 (auto) or 0..4."
+            << std::endl;
+        return;
+    }
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    // 只写 atomic；渲染线程帧首把值同步到 M_terrain 与 feedback pass。
+    streaming->layerForceMip.store(forceMip, std::memory_order_relaxed);
+    std::cout
+        << "[TerrainLayer] Forced target mip: "
+        << (forceMip < 0 ? std::string("auto") : std::to_string(forceMip))
+        << std::endl;
+}
+
+void RenderSystem::ApplyTerrainLayerForceMip(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
+{
+    if (!streaming || !streaming->layerVTRequested)
+        return;
+    const float forceMip = static_cast<float>(
+        streaming->layerForceMip.load(std::memory_order_relaxed));
+    // 只在值变化或有新实例登记时写入：SetParameter 会标脏材质 UBO。
+    if (forceMip == streaming->lastAppliedLayerForceMip &&
+        streaming->layerVTMaterials.size() ==
+            streaming->lastAppliedLayerMaterialCount)
+    {
+        return;
+    }
+    for (const std::weak_ptr<MaterialInstance>& weakMaterial :
+         streaming->layerVTMaterials)
+    {
+        const std::shared_ptr<MaterialInstance> material = weakMaterial.lock();
+        if (material && material->HasParameter("u_layerForceMip"))
+            material->SetParameter("u_layerForceMip", forceMip);
+    }
+    streaming->lastAppliedLayerForceMip = forceMip;
+    streaming->lastAppliedLayerMaterialCount =
+        streaming->layerVTMaterials.size();
+}
+
+void RenderSystem::UpdateTerrainCameraPrefetch(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
+{
+    if (!streaming)
+        return;
+    if (!streaming->layerVTRequested)
+    {
+        streaming->layerPrefetchMoving = false;
+        return;
+    }
+    const Eigen::Vector3f position = currentRenderScene.camera.position;
+    if (!hasTerrainPrefetchCameraPosition)
+    {
+        lastTerrainPrefetchCameraPosition = position;
+        hasTerrainPrefetchCameraPosition = true;
+        streaming->layerPrefetchMoving = false;
+        return;
+    }
+    const Eigen::Vector3f delta = position - lastTerrainPrefetchCameraPosition;
+    lastTerrainPrefetchCameraPosition = position;
+    const float distance = delta.norm();
+    // 只有“向前走”才提高细一级 mip 的需求：横向平移/转头不会让目标
+    // mip 变细，预取反而会和当前可见页抢槽位。
+    const float forwardDistance =
+        delta.dot(currentRenderScene.camera.forward);
+    streaming->layerPrefetchMoving =
+        distance > streaming->layerPrefetchMinForwardCm &&
+        forwardDistance > 0.5f * distance;
+}
+
+void RenderSystem::PublishTerrainStreamingStats(
+    const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+    uint64_t completedEpoch)
+{
+    if (!streaming)
+        return;
+    VL::TerrainStreamingStats stats;
+    stats.statsPublished = true;
+    VL::TerrainPageManager& pageManager = streaming->pageManager;
+    // 统计刷新时顺带回收已过隔离期的槽位：free/quarantine 必须反映当前
+    // completedEpoch，而不是“等下一次分配才更新”的惰性值。
+    pageManager.ReclaimExpiredQuarantines(completedEpoch);
+    stats.residentPages = pageManager.ResidentCount();
+    stats.residentCapacity = pageManager.ResidentCapacity();
+    stats.virtualPages = static_cast<uint32_t>(pageManager.Pages().size());
+    stats.registrations =
+        static_cast<uint32_t>(pageManager.Registrations().size());
+    stats.freePhysicalSlots =
+        pageManager.ImmediatelyAllocatablePhysicalSlotCount();
+    stats.quarantinedPhysicalSlots =
+        pageManager.QuarantinedPhysicalSlotCount();
+    stats.requestCount = pageManager.RequestCount();
+    stats.hitCount = pageManager.PageHitCount();
+    stats.missCount = pageManager.PageMissCount();
+    stats.evictionCount = pageManager.EvictionCount();
+    stats.preloadDeferredCount = pageManager.PreloadDeferredCount();
+    stats.uploadedPagesTotal = streaming->uploadedPagesTotal;
+    stats.lastUploadedPages = streaming->lastUploadedPages;
+    stats.gpuBakedPagesTotal = streaming->gpuBakedPagesTotal;
+    stats.lastGpuBakedPages = streaming->lastGpuBakedPages;
+    stats.pendingGpuBakeJobs =
+        static_cast<uint32_t>(pageManager.PendingGpuBakeJobCount());
+    stats.lastFeedbackEpoch = streaming->lastConsumedFeedbackEpoch;
+    stats.lastFeedbackApply = streaming->latestFeedbackApply;
+    // L2 层页：与覆盖页完全独立的一组驻留/上传计数。
+    VL::TerrainLayerPageManager& layerPages = streaming->layerPageManager;
+    // 与覆盖页一致：统计必须反映当前 completedEpoch，而不是等下次分配
+    // 才惰性回收隔离槽位。
+    layerPages.ReclaimExpiredQuarantines(completedEpoch);
+    const VL::TerrainLayerPageManager::Stats layerStats =
+        layerPages.SnapshotStats();
+    stats.layerResidentPages = layerStats.residentPageCount;
+    stats.layerResidentCapacity = layerStats.residentCapacity;
+    stats.layerPhysicalPages = layerPages.PhysicalPageCount();
+    stats.layerFreePhysicalPages = layerStats.freePhysicalPageCount;
+    stats.layerQuarantinedPhysicalPages =
+        layerStats.quarantinedPhysicalPageCount;
+    stats.layerRequestCount = layerStats.requestCount;
+    stats.layerHitCount = layerStats.hitCount;
+    stats.layerMissCount = layerStats.missCount;
+    stats.layerEvictionCount = layerStats.evictionCount;
+    stats.layerUploadedPagesTotal = streaming->layerUploadedPagesTotal;
+    stats.layerUploadedBytesTotal = streaming->layerUploadedBytesTotal;
+    // S1/S2：全局层数 / sourceSet 数 / 去重掉的局部层数。
+    stats.layerGlobalLayers =
+        static_cast<uint32_t>(streaming->layerDefinitions.size());
+    stats.layerSourceSetCount =
+        static_cast<uint32_t>(streaming->layerSources.size());
+    stats.layerDedupedLayers = streaming->layerDedupedLayerCount;
+    // L4a：可见层推导与逐帧预算的实时值。
+    stats.layerVisibleLayers =
+        streaming->latestLayerVisibility.visibleLayers;
+    if (streaming->latestLayerFeedbackExact)
+    {
+        // L4b 精确路径：命中/请求/挂起都来自层号+层页+mip 的专用 feedback。
+        const VL::TerrainLayerExactFeedbackStats& exact =
+            streaming->latestLayerExactFeedback;
+        stats.layerVisibleLayers = exact.visibleLayers;
+        stats.layerFeedbackHits = exact.markedPages;
+        stats.layerRequestedPages = exact.attemptedRequests;
+        stats.layerAcceptedPages = exact.acceptedRequests;
+        stats.layerPendingRequests = exact.pendingRequests;
+        stats.layerMipRequestCounts = exact.mipRequestCounts;
+        stats.layerExactFeedbackSlots = exact.validSlots;
+        stats.layerExactFeedbackPages = exact.distinctPages;
+        // L4c：粗 mip 回退的估算输入（比例由控制台换成像素数）。
+        stats.layerFallbackSlots = exact.fallbackSlots;
+        stats.layerFallbackTargetPages = exact.fallbackTargetPages;
+        stats.layerFallbackLevelPages = exact.fallbackLevelPages;
+        stats.layerTargetMipSlots = exact.targetMipSlots;
+        // L4e：区分“有粗页可混”和“只能 avgColor”，以及相机前向预取量。
+        stats.layerFallbackBlendPages = exact.fallbackBlendPages;
+        stats.layerAvgColorPages = exact.avgColorPages;
+        stats.layerPrefetchPages = exact.prefetchPages;
+        stats.layerPrefetchRequests = exact.prefetchRequests;
+        stats.layerPrefetchAccepted = exact.prefetchAccepted;
+        stats.layerPageBudget = layerPages.ResidentCapacity();
+        stats.layerBudgetPages = exact.budgetTotalPages;
+        stats.layerBudgetSets = exact.budgetAllocatedSets;
+        stats.layerBudgetClampedRefinements =
+            exact.budgetClampedRefinements;
+        stats.layerBudgetExceeded = exact.budgetExceeded;
+        stats.layerBudgetEntriesByMip = exact.budgetEntriesByMip;
+        stats.layerBudgetSetsByMip = exact.budgetSetsByMip;
+    }
+    else
+    {
+        const VL::TerrainLayerVisibilityStats& cover =
+            streaming->latestLayerVisibility;
+        stats.layerFeedbackHits = cover.markedPages;
+        stats.layerRequestedPages = cover.attemptedRequests;
+        stats.layerAcceptedPages = cover.acceptedRequests;
+        stats.layerPendingRequests = cover.pendingRequests;
+        stats.layerMipRequestCounts = cover.mipRequestCounts;
+        stats.layerExactFeedbackSlots = 0;
+        stats.layerExactFeedbackPages = 0;
+        stats.layerFallbackSlots = 0;
+        stats.layerFallbackTargetPages = cover.fallbackTargetPages;
+        stats.layerFallbackLevelPages = cover.fallbackLevelPages;
+        stats.layerTargetMipSlots = {};
+        // 覆盖页路径没有精确的“目标 mip 页”信息，混合分类保持 0；
+        // 预取量同样只由精确路径统计。
+        stats.layerFallbackBlendPages = 0;
+        stats.layerAvgColorPages = 0;
+        stats.layerPrefetchPages = 0;
+        stats.layerPrefetchRequests = 0;
+        stats.layerPrefetchAccepted = 0;
+        // 覆盖页回退路径不做需求级预算分配；控制台必须显示 0，而不是沿用
+        // 上一帧精确路径的旧值。
+        stats.layerPageBudget = 0;
+        stats.layerBudgetPages = 0;
+        stats.layerBudgetSets = 0;
+        stats.layerBudgetClampedRefinements = 0;
+        stats.layerBudgetExceeded = false;
+        stats.layerBudgetEntriesByMip = {};
+        stats.layerBudgetSetsByMip = {};
+    }
+    stats.layerLastUploadedPages = streaming->lastLayerUploadedPages;
+    stats.layerDirtyPages = layerPages.DirtyPageCount();
+    stats.layerDirtyPageTableEntries =
+        layerPages.DirtyPageTableEntryCount();
+    stats.layerAtlasSlices = streaming->layerResources.atlasSlices;
+    stats.layerAtlasBytesPerMap =
+        streaming->layerResources.atlasBytesPerMap;
+    stats.layerAtlasBytesTotal =
+        streaming->layerResources.atlasBytesTotal;
+    stats.layerAtlasReady = streaming->layerResources.atlasesCreated;
+    // 饥饿状态直接来自 resolver 的跨帧健康记录：精确路径与覆盖页回退
+    // 都会写同一份状态，控制台读数与实际驻留策略一致。
+    const VL::TerrainLayerFeedbackHealth& feedbackHealth =
+        streaming->layerVisibilityResolver.FeedbackHealth();
+    stats.layerStarvedFrames = feedbackHealth.starvedFrames;
+    stats.layerLastValidFeedbackEpoch =
+        feedbackHealth.lastValidFeedbackEpoch;
+    stats.layerUsedCoverFallback =
+        feedbackHealth.starvedFrames != 0;
+    stats.layerIdleGraceEpochs = feedbackHealth.starvationCreditEpochs;
+    stats.layerForceMip = static_cast<float>(
+        streaming->layerForceMip.load(std::memory_order_relaxed));
+    stats.layerPrefetchMoving = streaming->layerPrefetchMoving;
+    streaming->PublishStats(stats);
+    // 本帧上传数只显示一帧；累计值继续保留。
+    streaming->lastUploadedPages = 0;
+    streaming->lastLayerUploadedPages = 0;
+}
+
+void RenderSystem::ReportTerrainStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[Terrain] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+
+    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
+    const VL::TerrainFeedbackApplyStats& apply = stats.lastFeedbackApply;
+    std::cout
+        << "[Terrain] resident=" << stats.residentPages
+        << "/" << stats.residentCapacity
+        << " virtualPages=" << stats.virtualPages
+        << " registrations=" << stats.registrations
+        << " freeSlots=" << stats.freePhysicalSlots
+        << " quarantined=" << stats.quarantinedPhysicalSlots
+        << " requests=" << stats.requestCount
+        // requestHits 只统计 RequestPage 命中；feedbackHits 才是 GPU 可见页命中。
+        << " requestHits=" << stats.hitCount
+        << " misses=" << stats.missCount
+        << " evictions=" << stats.evictionCount
+        << " preloadDeferred=" << stats.preloadDeferredCount
+        << " uploadedPages=" << stats.uploadedPagesTotal
+        << " lastUploaded=" << stats.lastUploadedPages
+        << " gpuBakedPages=" << stats.gpuBakedPagesTotal
+        << " lastGpuBaked=" << stats.lastGpuBakedPages
+        << " gpuBakePending=" << stats.pendingGpuBakeJobs
+        << " lastFeedbackEpoch=" << stats.lastFeedbackEpoch
+        << std::endl;
+    std::cout
+        << "[Terrain] feedbackHits=" << apply.markedPages
+        << " missPages=" << apply.missPagesSeen
+        << " queued=" << apply.queuedRequests
+        << " attempted=" << apply.attemptedRequests
+        << " accepted=" << apply.succeededRequests
+        << " deferred=" << apply.deferredRequests
+        << " unregistered=" << apply.unregisteredPages
+        << " pending=" << apply.pendingRequests
+        << std::endl;
+}
+
+void RenderSystem::ReportTerrainLayerStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainLayer] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+    const VL::TerrainStreamingStats stats = streaming->SnapshotStats();
+    // 首帧之前渲染线程还没发布快照，整行 0 会被误读成“没有驻留页”。
+    if (!stats.statsPublished)
+    {
+        std::cout
+            << "[TerrainLayer] stats not published yet."
+            << std::endl;
+        return;
+    }
+    const VL::TerrainLayerGpuResources& resources =
+        streaming->layerResources;
+    std::cout
+        << "[TerrainLayer] resident=" << stats.layerResidentPages
+        << "/" << stats.layerResidentCapacity
+        << " physical=" << stats.layerPhysicalPages
+        << " free=" << stats.layerFreePhysicalPages
+        << " quarantined=" << stats.layerQuarantinedPhysicalPages
+        << " requests=" << stats.layerRequestCount
+        // 旧 `hits` 是 RequestPage 命中已驻留页的次数；调用方在请求前就会
+        // 过滤常驻页，因此它恒为 0。真正的命中看第二行 feedbackHits。
+        << " misses=" << stats.layerMissCount
+        << " evictions=" << stats.layerEvictionCount
+        << " uploadedPages=" << stats.layerUploadedPagesTotal
+        << " uploadedBytes=" << stats.layerUploadedBytesTotal
+        << " dirtyPages=" << stats.layerDirtyPages
+        << " dirtyPageTable=" << stats.layerDirtyPageTableEntries
+        << std::endl;
+    // 饥饿保护：starvedFrames 是连续没有有效精确 feedback 的帧数；
+    // usedCoverFallback=1 表示本帧可见层来自覆盖页推导；idleGrace 是
+    // 当前加到 idle 窗口上的补偿 epoch（饥饿期间随帧数增长并封顶）。
+    std::cout
+        << "[TerrainLayer] starvedFrames=" << stats.layerStarvedFrames
+        << " lastValidEpoch=" << stats.layerLastValidFeedbackEpoch
+        << " usedCoverFallback=" << (stats.layerUsedCoverFallback ? 1 : 0)
+        << " idleGrace=" << stats.layerIdleGraceEpochs
+        << std::endl;
+    // S1/S2：全局层 / sourceSet / 去重统计。globalLayers 是 catalog 的真实
+    // 层数（globalId 0..N-1）；deduped 是跨 TR 复用同一个 key 省下的层数。
+    std::cout
+        << "[TerrainLayer] globalLayers=" << stats.layerGlobalLayers
+        << " sourceSets=" << stats.layerSourceSetCount
+        << " dedupedLayers=" << stats.layerDedupedLayers
+        << " capacity=" << VL::TerrainLayerTable::MaxLayers
+        << std::endl;
+    // L4a：可见层与每帧预算。mip0..4 是本帧成功请求的页数分布。
+    std::cout
+        << "[TerrainLayer] visibleLayers=" << stats.layerVisibleLayers
+        // feedbackHits 才是“本帧 GPU 真的看到并续命的层页”；requested 是
+        // 本帧尝试请求数（含失败/deferred），accepted 是其中成功的部分。
+        << " feedbackHits=" << stats.layerFeedbackHits
+        << " exactSlots=" << stats.layerExactFeedbackSlots
+        << " exactPages=" << stats.layerExactFeedbackPages
+        << " requested=" << stats.layerRequestedPages
+        << " accepted=" << stats.layerAcceptedPages
+        << " uploadedLast=" << stats.layerLastUploadedPages
+        << " pending=" << stats.layerPendingRequests
+        << " mipRequests=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerMipRequestCounts[mip];
+    }
+    std::cout << std::endl;
+    // L4c：粗 mip 回退。exactSlots 是有效 feedback texel 数，fallbackSlots 是
+    // 其中目标 mip 缺页的部分（shader 会退到更粗 mip；若没有更粗页则显示
+    // avgColor）。因此 fallbackSlots/exactSlots × 渲染分辨率是“本帧会走
+    // 回退路径的像素数”的上界估计；fallbackLevels=+1/+2/+3 是本帧新增的
+    // 粗 mip 预取页数；targetMips 是 feedback texel 的目标 mip 分布。
+    const vk::Extent2D fallbackExtent = GetSceneRenderExtent();
+    const double fallbackPixels =
+        stats.layerExactFeedbackSlots == 0
+            ? 0.0
+            : static_cast<double>(stats.layerFallbackSlots) /
+                static_cast<double>(stats.layerExactFeedbackSlots) *
+                static_cast<double>(fallbackExtent.width) *
+                static_cast<double>(fallbackExtent.height);
+    std::cout
+        << "[TerrainLayer] fallbackSlots=" << stats.layerFallbackSlots
+        << " fallbackPages=" << stats.layerFallbackTargetPages
+        << " fallbackLevels=" << stats.layerFallbackLevelPages[0] << "/"
+        << stats.layerFallbackLevelPages[1] << "/"
+        << stats.layerFallbackLevelPages[2]
+        << " fallbackPixels~=" << static_cast<uint64_t>(fallbackPixels)
+        << " targetMips=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerTargetMipSlots[mip];
+    }
+    std::cout
+        << std::endl;
+    std::cout
+        << "[TerrainLayer] atlasReady=" << (stats.layerAtlasReady ? 1 : 0)
+        << " slices=" << stats.layerAtlasSlices
+        << " bytesPerMap=" << stats.layerAtlasBytesPerMap
+        << " atlasBytes=" << stats.layerAtlasBytesTotal
+        << " albedo=" << vk::to_string(resources.albedoFormat)
+        << " normal=" << vk::to_string(resources.normalFormat)
+        << " pbr=" << vk::to_string(resources.pbrFormat)
+        << std::endl;
+    // L4e：强制 mip 与相机前向预取。fallbackBlendPages 表示目标页缺页但
+    // 有更粗驻留页（shader 按 mip 差渐变）；avgColorPages 表示连粗页都
+    // 没有，整页显示 avgColor。prefetchMoving=1 才会产生 prefetchRequests。
+    std::cout
+        << "[TerrainLayer] forceMip=" << stats.layerForceMip
+        << " prefetchMoving=" << (stats.layerPrefetchMoving ? 1 : 0)
+        << " prefetchPages=" << stats.layerPrefetchPages
+        << " prefetchRequests=" << stats.layerPrefetchRequests
+        << " prefetchAccepted=" << stats.layerPrefetchAccepted
+        << " fallbackBlendPages=" << stats.layerFallbackBlendPages
+        << " avgColorPages=" << stats.layerAvgColorPages
+        << std::endl;
+    // 全局预算：pages/sets 是去重后的 (layer,mip) 全页集，必须 <= pageBudget
+    // 才能保证请求不会与淘汰互相追尾。entries 是可见 (layer,targetMip) 需求
+    // 分布，sets 是最终驻留页集分布；近处需求的细 mip 应优先出现。
+    std::cout
+        << "[TerrainLayer] pageBudget=" << stats.layerPageBudget
+        << " budgetPages=" << stats.layerBudgetPages
+        << " budgetSets=" << stats.layerBudgetSets
+        << " budgetClamped=" << stats.layerBudgetClampedRefinements
+        << " budgetExceeded=" << (stats.layerBudgetExceeded ? 1 : 0)
+        << " budgetEntries=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerBudgetEntriesByMip[mip];
+    }
+    std::cout << " budgetMips=";
+    for (uint32_t mip = 0;
+         mip <= VL::TerrainLayerPageManager::MaxMipLevel;
+         ++mip)
+    {
+        if (mip != 0) std::cout << "/";
+        std::cout << stats.layerBudgetSetsByMip[mip];
+    }
+    std::cout << std::endl;
+}
+
+void RenderSystem::ReportTerrainLodStatistics() const
+{
+    const VL::TerrainLodStatsSnapshot& stats =
+        worldSnapshotBuilder.GetTerrainLodStats();
+    if (!stats.valid)
+    {
+        std::cout
+            << "[TerrainLOD] stats not published yet."
+            << std::endl;
+        return;
+    }
+
+    std::cout
+        << "[TerrainLOD] groups=" << stats.groupCount
+        << " switchedLastFrame=" << stats.switchedLastFrame
+        << " frame=" << stats.frameIndex
+        << " generation=" << stats.worldGeneration
+        << std::endl;
+    for (const VL::TerrainLodGroupStats& group : stats.groups)
+    {
+        std::cout
+            << "[TerrainLOD] group=" << group.groupId
+            << " level=" << group.level << "/" << group.levelCount
+            << " distCm="
+            << static_cast<long long>(std::llround(group.distanceCm))
+            << " switches=" << group.switchCount
+            << std::endl;
+    }
+}
+
+void RenderSystem::ReportTerrainChunkStatistics() const
+{
+    const std::shared_ptr<VL::TerrainStreamingState> streaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming)
+    {
+        std::cout
+            << "[TerrainChunk] No active terrain streaming state."
+            << std::endl;
+        return;
+    }
+
+    // 加载期快照：只在 World 加载时写一次，运行时不会再变。
+    const VL::TerrainChunkResidencyStats chunkStats =
+        streaming->SnapshotChunkStats();
+    if (!chunkStats.valid)
+    {
+        std::cout
+            << "[TerrainChunk] No terrain chunk residency was recorded."
+            << std::endl;
+        return;
+    }
+
+    uint32_t groupCount = 0;
+    for (const VL::TerrainChunkPlacementStats& placement :
+         chunkStats.placements)
+    {
+        groupCount += placement.chunksPerSide * placement.chunksPerSide;
+    }
+    std::cout
+        << "[TerrainChunk] placements=" << chunkStats.placements.size()
+        << " groups=" << groupCount
+        << " chunks=" << chunkStats.TotalChunks()
+        << " skippedChunks=" << chunkStats.TotalSkippedChunks()
+        << " vertexBytes=" << chunkStats.TotalVertexBytes()
+        << " indexBytes=" << chunkStats.TotalIndexBytes()
+        << " skippedVertexBytes=" << chunkStats.TotalSkippedVertexBytes()
+        << " skippedIndexBytes=" << chunkStats.TotalSkippedIndexBytes()
+        << " totalIfAllBytes="
+        << chunkStats.TotalVertexBytes() + chunkStats.TotalIndexBytes() +
+            chunkStats.TotalSkippedVertexBytes() +
+            chunkStats.TotalSkippedIndexBytes()
+        << std::endl;
+
+    for (const VL::TerrainChunkPlacementStats& placement :
+         chunkStats.placements)
+    {
+        std::cout
+            << "[TerrainChunk] placement=" << placement.placementId
+            << " asset=" << placement.assetPath
+            << " groups="
+            << placement.chunksPerSide * placement.chunksPerSide
+            << " chunksPerSide=" << placement.chunksPerSide
+            << " levels=" << placement.lodLevelCount
+            << " residency=" << (placement.residencyEnabled ? "on" : "off");
+        if (!placement.residencyDistancesCm.empty())
+        {
+            std::cout << " windowsCm=";
+            for (size_t index = 0;
+                 index < placement.residencyDistancesCm.size();
+                 ++index)
+            {
+                if (index != 0) std::cout << ",";
+                std::cout << static_cast<long long>(
+                    std::llround(placement.residencyDistancesCm[index]));
+            }
+        }
+        std::cout << std::endl;
+        for (const VL::TerrainChunkLevelStats& level : placement.levels)
+        {
+            std::cout
+                << "[TerrainChunk]   level=" << level.lodLevel
+                << " stitched=" << (level.stitched ? 1 : 0)
+                << " chunks=" << level.chunkCount
+                << "/" << level.chunkCount + level.skippedChunkCount
+                << " vertices=" << level.vertexCount
+                << " indices=" << level.indexCount
+                << " bytes=" << level.vertexBytes + level.indexBytes
+                << " skippedBytes="
+                << level.skippedVertexBytes + level.skippedIndexBytes
+                << std::endl;
+        }
+    }
+
+    const VL::TerrainLodStatsSnapshot& lodStats =
+        worldSnapshotBuilder.GetTerrainLodStats();
+    if (!lodStats.valid)
+    {
+        std::cout
+            << "[TerrainChunk] draw stats not published yet."
+            << std::endl;
+        return;
+    }
+    std::cout
+        << "[TerrainChunk] draw groups=" << lodStats.groupCount
+        << " drawnChunks=" << lodStats.drawnChunks
+        << " meshDraws=" << lodStats.totalMeshDraws
+        << " switchedLastFrame=" << lodStats.switchedLastFrame
+        << " frame=" << lodStats.frameIndex
+        << std::endl;
+    std::cout << "[TerrainChunk] drawnByLevel=";
+    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
+    {
+        if (level != 0) std::cout << ",";
+        std::cout << level << ":" << lodStats.drawnByLevel[level];
+    }
+    std::cout << " objectsByLevel=";
+    for (uint32_t level = 0; level < VL::TerrainMaxLodLevels; ++level)
+    {
+        if (level != 0) std::cout << ",";
+        std::cout << level << ":" << lodStats.residentObjectsByLevel[level];
+    }
+    std::cout << std::endl;
+}
+
+void RenderSystem::RequestHairTrace(std::string path, uint32_t frames,
+    uint32_t guideStride)
+{
+    VL::Hair::HairTraceRequest request;
+    request.path = std::move(path);
+    request.frames = frames;
+    request.guideStride = guideStride;
+    std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
+    pendingHairTraceRequest = std::move(request);
+}
+
+void RenderSystem::RequestHairSimulationReset(std::string objectName)
+{
+    std::lock_guard<std::mutex> lock(hairResetRequestMutex);
+    pendingHairResetRequest = std::move(objectName);
+}
+
+void RenderSystem::RequestHairSimulationParameter(
+    const VL::Hair::HairLiveParameterRequest& request)
+{
+    std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
+    // 队列有界：滑杆拖动时一帧可能累积多条；超过上限先丢最旧的意图，
+    // 保留最新值，避免没有渲染帧时无限增长。
+    if (pendingHairLiveParameters.size() >= 64)
+        pendingHairLiveParameters.erase(pendingHairLiveParameters.begin());
+    pendingHairLiveParameters.push_back(request);
+}
+
+void RenderSystem::RequestTressfxBrushPreview(
+    const VL::Hair::TressfxBrushPreviewRequest& request)
+{
+    std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
+    if (pendingTressfxBrushPreviews.size() >= 64)
+        pendingTressfxBrushPreviews.erase(pendingTressfxBrushPreviews.begin());
+    pendingTressfxBrushPreviews.push_back(request);
+}
+
+void RenderSystem::RequestTressfxGroupBindingPreview(
+    const VL::Hair::TressfxGroupBindingPreviewRequest& request)
+{
+    std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
+    // 同一对象的草稿结构更新只需要最新一份；拖拽编辑时避免队列被旧 binding 占满。
+    for (auto entry = pendingTressfxGroupBindingPreviews.begin();
+         entry != pendingTressfxGroupBindingPreviews.end(); ++entry)
+        if (entry->objectName == request.objectName &&
+            entry->worldGeneration == request.worldGeneration)
+        {
+            *entry = request;
+            return;
+        }
+    if (pendingTressfxGroupBindingPreviews.size() >= 16)
+        pendingTressfxGroupBindingPreviews.erase(
+            pendingTressfxGroupBindingPreviews.begin());
+    pendingTressfxGroupBindingPreviews.push_back(request);
+}
+
+void RenderSystem::ApplyTressfxGroupBindingPreviewRequests()
+{
+    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest> requests;
+    {
+        std::lock_guard<std::mutex> lock(tressfxGroupBindingPreviewMutex);
+        requests.swap(pendingTressfxGroupBindingPreviews);
+    }
+    if (requests.empty()) return;
+
+    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    for (const VL::Hair::TressfxGroupBindingPreviewRequest& request : requests)
+    {
+        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
+        const VL::RenderDrawPacket* targetPacket = nullptr;
+        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
+            if (packet.debugName == request.objectName)
+            {
+                targetPacket = &packet;
+                break;
+            }
+        if (targetPacket == nullptr) continue;
+        const std::shared_ptr<RenderableObject>* object =
+            resourceCache.GetRenderableObject(targetPacket->mesh.key);
+        if (object == nullptr || *object == nullptr) continue;
+        const VL::Hair::TressfxGroupBinding binding =
+            VL::Hair::MakeTressfxGroupBinding(request);
+        std::string error;
+        if (!(*object)->UpdateTressfxGroupBinding(binding, error))
+        {
+            std::cout << "[TressFX][Warning] group binding preview rejected: "
+                      << error << " object=" << request.objectName << std::endl;
+        }
+    }
+}
+
+void RenderSystem::ApplyTressfxBrushPreviewRequests(uint32_t swapchainImageIndex)
+{
+    std::vector<VL::Hair::TressfxBrushPreviewRequest> requests;
+    {
+        std::lock_guard<std::mutex> lock(tressfxBrushPreviewMutex);
+        requests.swap(pendingTressfxBrushPreviews);
+    }
+    if (requests.empty()) return;
+
+    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    for (const VL::Hair::TressfxBrushPreviewRequest& request : requests)
+    {
+        if (request.worldGeneration != currentRenderScene.worldGeneration) continue;
+        const VL::RenderDrawPacket* targetPacket = nullptr;
+        for (const VL::RenderDrawPacket& packet : currentRenderScene.drawPackets)
+            if (packet.debugName == request.objectName)
+            {
+                targetPacket = &packet;
+                break;
+            }
+        if (targetPacket == nullptr) continue;
+        const std::shared_ptr<RenderableObject>* object =
+            resourceCache.GetRenderableObject(targetPacket->mesh.key);
+        if (object == nullptr || *object == nullptr) continue;
+        std::string error;
+        if (!(*object)->SetTressfxBrushPreview(request.targetGroupId,
+                request.mode, request.weights, swapchainImageIndex, error))
+        {
+            std::cout << "[TressFX][Warning] brush preview rejected: " << error
+                      << " object=" << request.objectName << std::endl;
+            continue;
+        }
+        // UBO 的 brush 状态属于对象资源包；在 draw 录制前同步，保证本帧读到新值。
+        for (auto& material : currentResolvedRenderScene.materialGroups)
+            for (auto& instance : material.materialInstances)
+                for (auto& draw : instance.draws)
+                {
+                    if (!draw.objectResourceEntry) continue;
+                    const VL::RenderDrawPacket& packet =
+                        currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                    if (packet.debugName != request.objectName) continue;
+                    VL::RendererObjectGpuResources& resources =
+                        draw.objectResourceEntry->GetResources();
+                    resources.tressfxBrushActive = (*object)->HasTressfxBrushPreview();
+                    resources.tressfxBrushRemoveMode = (*object)->TressfxBrushRemoveMode();
+                }
+    }
+}
+
+void RenderSystem::PrintGpuPassStats()
+{
+    // 控制台按需启用采集；Snapshot 只读最近一次读回的窗口，不等待渲染线程。
+    gpuPassTimer.RequestCollection();
+    const VL::GpuPassStatsSnapshot snapshot = gpuPassTimer.Snapshot();
+    if (!snapshot.gpuTimingSupported)
+    {
+        std::cout << "[GPU] pass timing is unavailable on this device "
+                     "(timestamp queries unsupported or timestampPeriod == 0)."
+                  << std::endl;
+        return;
+    }
+    if (!snapshot.collecting || snapshot.passes.empty())
+    {
+        // 首次启用采集时还没有可打印的表；让渲染线程在第一次读回后补打一张，
+        // 这样单次 'gpustats' 命令也能在接下来一两帧后给出数据。
+        gpuPassTimer.RequestPrint();
+        std::cout << "[GPU] pass timing collection enabled; no completed samples "
+                     "have been read back yet. A table will be logged after the next readback."
+                  << std::endl;
+        return;
+    }
+
+    const std::string table = VL::FormatGpuPassTimingTable(
+        VL::ToGpuPassTimingTable(snapshot));
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", table);
+    std::cout << "[Diagnostics][Info] " << table << std::endl;
+}
+
+void RenderSystem::PrintPerformanceJson()
+{
+    // 与 Performance 页消费同一个 GpuPassTimer 快照：面板、perf json 和
+    // --perf-jsonl 只是同一份值的三个消费者，没有第二套计时或序列化规则。
+    gpuPassTimer.RequestCollection();
+    std::cout << VL::FormatPerformanceJson(gpuPassTimer.Snapshot()) << std::endl;
+}
+
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
 {
     // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。
@@ -1477,6 +2753,9 @@ void RenderSystem::RebuildSwapchainDependentResources()
             *pipelineFactory, *rendererBackend, descriptorContext);
         renderGraph.InitializeLightCulling(
             *pipelineFactory, *rendererBackend, descriptorContext);
+        renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+        if (prerenderSkinEnabled)
+            renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
         // ShutdownFrameResources 会释放粒子管线、默认纹理和发射器池；
@@ -1527,6 +2806,9 @@ void RenderSystem::RebuildRenderGraphDependentResources()
         *pipelineFactory, *rendererBackend, descriptorContext);
     renderGraph.InitializeLightCulling(
         *pipelineFactory, *rendererBackend, descriptorContext);
+    renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
 }
@@ -1667,6 +2949,9 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.InitializeLightCulling(
         *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1678,14 +2963,11 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         descriptorContext,
         prepared.renderScene,
         prepared.resolvedRenderScene,
-        candidateCache);
+        candidateCache,
+        prerenderSkinEnabled);
 
-    prepared.speedTreeWindProfiles.Configure(
-        prepared.world->GetSpeedTreeWindProfiles());
-    (void)prepared.speedTreeWindProfiles.SetStrength(
-        speedTreeStrength);
-    (void)prepared.speedTreeWindProfiles
-        .SetGustingEnabled(speedTreeGustingEnabled);
+    prepared.windResponseProfiles.Configure(
+        prepared.world->GetWindResponseProfiles());
     prepared.nextSnapshotFrameIndex =
         nextSnapshotFrameIndex + 1;
     return prepared;
@@ -1708,6 +2990,9 @@ RenderSystem::CommitPreparedRuntimeBinding(
         currentRenderScene.frameIndex,
         prepared.renderScene.frameIndex);
     swap(
+        currentRenderScene.hairSimulationDeltaSeconds,
+        prepared.renderScene.hairSimulationDeltaSeconds);
+    swap(
         currentRenderScene.camera,
         prepared.renderScene.camera);
     currentRenderScene.drawPackets.swap(
@@ -1723,21 +3008,29 @@ RenderSystem::CommitPreparedRuntimeBinding(
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);
+    // 场景作者目标与场级解析结果随同一代 RenderScene 提交；头发消费 resolvedWind，
+    // 植被消费 wind 目标并在每 profile 内维护自己的响应/gust 状态。
+    swap(currentRenderScene.wind, prepared.renderScene.wind);
+    swap(currentRenderScene.resolvedWind, prepared.renderScene.resolvedWind);
+    swap(currentRenderScene.windTimeSeconds, prepared.renderScene.windTimeSeconds);
     swap(
         currentRenderScene.debugViewMode,
         prepared.renderScene.debugViewMode);
     currentResolvedRenderScene.materialGroups.swap(
         prepared.resolvedRenderScene.materialGroups);
-    speedTreeWindProfiles.Swap(
-        prepared.speedTreeWindProfiles);
+    windResponseProfiles.Swap(
+        prepared.windResponseProfiles);
     swap(csmSettings, prepared.csmSettings);
 
     std::shared_ptr<void> retiredLightBuffer =
         frameResources.CommitPreparedLightCapacity(
             std::move(prepared.lightCapacity));
     hasRenderScene = true;
-    windClockInitialized = false;
     currentWindTimeSeconds = 0.0;
+    windClockInitialized = false;
+    windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
+    windTickAccumulator = 0.0;
+    sceneWindRuntime.Reset();
     initializedRenderWorldGeneration =
         currentRenderScene.worldGeneration;
     nextSnapshotFrameIndex =
@@ -1778,6 +3071,9 @@ void RenderSystem::PrepareRenderGraphReload(
         *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.InitializeLightCulling(
         *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1817,6 +3113,11 @@ uint64_t RenderSystem::GetActiveWorldGeneration() const noexcept
     return activeWorld
         ? activeWorld->GetGeneration()
         : 0;
+}
+
+void RenderSystem::SetPickingSceneEnabled(bool enabled) noexcept
+{
+    pickingSceneEnabled = enabled;
 }
 
 std::optional<VL::Editor::Selection::MaterialInstanceSelection>
@@ -2315,6 +3616,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             *preparedOfflineAssets);
         loadContext.offlineWorldAssets = frozenGpuAssets.get();
         loadContext.useFrozenMaterials = true;
+        // MI 预览候选复用主渲染的预蒙皮选择，避免同一材质在预览里切回混合路径。
+        loadContext.prerenderSkin = prerenderSkinEnabled;
 
         VL::RendererMaterialLoader materialLoader(
             *pipelineFactory,
@@ -2364,7 +3667,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             descriptorContext,
             candidateRenderScene,
             candidateResolvedRenderScene,
-            candidateCache);
+            candidateCache,
+            prerenderSkinEnabled);
 
         PipelineFactory::PreparedGraphicsCandidateCommit preparedPipelineCommit =
             pipelineFactory->PrepareCandidateCommit(graphicsCandidateState);
@@ -2490,13 +3794,16 @@ void RenderSystem::UpdateObjectUBOForPass(
     // addresses backend-owned object GPU resources through the resolved draw
     // packet.
     const SpeedTreeWindStateGPU* windState =
-        speedTreeWindProfiles.FindGpuState(drawPacket.speedTreeWindProfileKey);
+        windResponseProfiles.FindGpuState(drawPacket.windResponseProfileKey);
     objectResources.submittedSkin.RetainIfSubmittedAt(submittedFrameSerial);
     frameResources.UpdateObjectUniformBuffer(
         swapChainImageIndex,
         objectResources,
         drawPacket,
-        windState);
+        windState,
+        // 有 pre-skin 输出 buffer 的对象已在帧前上传完整 palette；没有该 buffer
+        // 的蒙皮对象仍按原路径逐 draw 上传，避免 flag 与对象资源不一致时漏写。
+        !prerenderSkinEnabled || !objectResources.skinDeform.HasResources());
 }
 
 void RenderSystem::UploadLightsForPass(
@@ -2914,6 +4221,67 @@ void RenderSystem::RecordParticleShadowCasters(
         renderPass);
 }
 
+bool RenderSystem::GetShadowCascadeLightViewProjection(
+    uint32_t cascadeIndex,
+    Eigen::Matrix4f& outLightViewProjection) const
+{
+    // shadowCascadeFrameData 在 UpdateShadowGlobalUBOForPass 里按本帧、本 pass
+    // 分辨率构建；这里返回的矩阵与刚写入 shadow UBO 的级联完全同源。
+    if (!shadowCascadeFrameData.valid ||
+        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
+    {
+        return false;
+    }
+
+    const Eigen::Matrix4f& lightViewProjection =
+        shadowCascadeFrameData.lightViewProj[cascadeIndex];
+    if (!lightViewProjection.allFinite())
+    {
+        return false;
+    }
+
+    outLightViewProjection = lightViewProjection;
+    return true;
+}
+
+bool RenderSystem::GetShadowCascadeCasterReceiverBounds(
+    uint32_t cascadeIndex,
+    VL::ShadowCasterReceiverBounds& outBounds) const
+{
+    if (!shadowCascadeFrameData.valid ||
+        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
+    {
+        return false;
+    }
+
+    outBounds = shadowCascadeFrameData.casterReceiverBounds[cascadeIndex];
+    return outBounds.valid &&
+        outBounds.worldToLight.allFinite() &&
+        outBounds.lightSpaceXyMinMax.allFinite();
+}
+
+void RenderSystem::LogShadowCasterCullStats() const
+{
+    // 统计的是最近一帧的 draw 数，不是窗口平均：级联覆盖是离散的，
+    // 平均值会把“某级联恰好 0 draw”这个关键证据抹平。
+    std::ostringstream message;
+    message << "shadow caster culling (drawn/candidates):";
+    for (uint32_t cascadeIndex = 0;
+         cascadeIndex < csmSettings.cascadeCount;
+         ++cascadeIndex)
+    {
+        const VL::ShadowCasterCullStats& stats =
+            frameShadowCasterCullStats[cascadeIndex];
+        message << " cascade" << cascadeIndex << ' '
+                << stats.submittedDraws << '/' << stats.casterDraws;
+    }
+    const std::string line = message.str();
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", line);
+    std::cout << "[Diagnostics][Info] " << line << std::endl;
+}
+
 void RenderSystem::DrawEditorGridGeometry(
     vk::CommandBuffer& commandBuffer)
 {
@@ -3136,6 +4504,8 @@ void RenderSystem::UpdateExposureFrameTiming()
         exposureLastFrameTime = now;
         exposureClockInitialized = true;
         exposureDeltaSeconds = 1.0f / 60.0f;
+        // 首帧也发布 CPU 时长，避免 Performance 页在第一个读回窗口前空着 FPS。
+        gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
         return;
     }
 
@@ -3146,6 +4516,9 @@ void RenderSystem::UpdateExposureFrameTiming()
     exposureDeltaSeconds = static_cast<float>(
         std::clamp(elapsed, 1.0 / 240.0, 0.1));
     animationTimeSeconds += exposureDeltaSeconds;
+    // Performance 通道复用这一个 frame delta，不另建帧率时钟；
+    // 因此它和自动曝光看到的 CPU 帧间隔完全一致（含同样的 1/240..0.1 s 收敛区间）。
+    gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(
@@ -3218,6 +4591,8 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
     shadowCascadeFrameData.lightViewProj.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.cascadeSplits = Eigen::Vector4f::Zero();
     shadowCascadeFrameData.bias.fill(Eigen::Vector4f::Zero());
+    // 本帧 caster 的光源空间包围盒要重新投影：角色/头发/风每帧都可能动。
+    casterLightSpaceBoundsValid = false;
     shadowCascadeFrameData.csmParameters = Eigen::Vector4f(
         csmSettings.cascadeTransitionFraction,
         csmSettings.shadowDistanceFadeoutFraction,
@@ -3246,6 +4621,8 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
         shadowCascadeFrameData.view[cascadeIndex] = params.viewMatrix;
         shadowCascadeFrameData.projection[cascadeIndex] = params.projectionMatrix;
         shadowCascadeFrameData.lightViewProj[cascadeIndex] = params.projectionMatrix * params.viewMatrix;
+        shadowCascadeFrameData.casterReceiverBounds[cascadeIndex] =
+            params.casterReceiverBounds;
         shadowCascadeFrameData.cascadeSplits[cascadeIndex] = splitFar;
 
         // 用户只编辑 UE 风格的全局 Bias。每级实际接收面 Bias 在这里派生，
@@ -3425,6 +4802,13 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
         params = CalculateShadowMatrix_StableRectangular(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(passSizeWidth), maxZ, zFar);
         break;
     }
+
+    // 接收面范围取自相机 split 的 8 个角点，和阴影拟合使用同一份
+    // light-space 坐标；caster 预筛不依赖后续按 caster 扩张的 Z 范围。
+    params.casterReceiverBounds.worldToLight = worldToShadowMatrix;
+    params.casterReceiverBounds.lightSpaceXyMinMax =
+        Eigen::Vector4f(minX, minY, maxX, maxY);
+    params.casterReceiverBounds.valid = true;
 
     return params;
 }
@@ -3669,7 +5053,7 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
 
 void RenderSystem::RefreshRenderSceneFromActiveWorld()
 {
-    PublishSnapshotFromActiveWorld();
+    PublishSnapshotFromActiveWorld(false);
     if (!ConsumeLatestSnapshotIntoRenderScene())
     {
         throw std::runtime_error("WorldSnapshotQueue did not return the snapshot just published");
@@ -3677,6 +5061,11 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
 }
 
 void RenderSystem::PublishSnapshotFromActiveWorld()
+{
+    PublishSnapshotFromActiveWorld(true);
+}
+
+void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
 {
     if (!activeWorld)
     {
@@ -3686,7 +5075,14 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();
     buildDesc.frameIndex = nextSnapshotFrameIndex++;
-    buildDesc.simulationDeltaSeconds = pendingSimulationDeltaSeconds;
+    // resize/图重建只刷新姿态，不拥有新的 GT 时间片；普通帧成功发布后
+    // 领取一次 delta，避免组合 Render 或重复发布用新 frameIndex 重放旧时间。
+    if (advanceSimulation)
+    {
+        buildDesc.simulationDeltaSeconds = pendingSimulationDeltaSeconds;
+        buildDesc.gameSimulationDeltaSeconds = gameSimulationDeltaSeconds;
+        buildDesc.hairSimulationDeltaSeconds = hairSimulationDeltaSeconds;
+    }
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
     buildDesc.hasSelectedDraw =
@@ -3704,9 +5100,10 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     }
 
     VL::WorldSnapshot snapshot = std::move(snapshotResult.Value());
-    currentOfflineSnapshot = std::make_shared<const VL::WorldSnapshot>(snapshot);
     if (offlineMode && offlineCoordinator)
     {
+        currentOfflineSnapshot =
+            std::make_shared<const VL::WorldSnapshot>(snapshot);
         offlineSettings.width = GetSceneRenderExtent().width;
         offlineSettings.height = GetSceneRenderExtent().height;
         const auto target = offlineCameraMotionPolicy.Decide(
@@ -3718,17 +5115,32 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
             offlineCoordinator->Observe(currentOfflineSnapshot,
                 activeOfflineWorldAssets, *target);
     }
-    auto pickingRenderSceneResult = rendererFrontend.BuildRenderScene(snapshot);
-    if (pickingRenderSceneResult.IsFailure())
+    if (pickingSceneEnabled)
     {
-        throw std::runtime_error(
-            VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
+        auto pickingRenderSceneResult =
+            rendererFrontend.BuildRenderScene(snapshot);
+        if (pickingRenderSceneResult.IsFailure())
+        {
+            throw std::runtime_error(
+                VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
+        }
+        pickingRenderScene = std::move(pickingRenderSceneResult.Value());
+        ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
+        RebuildRenderSceneMaterialGroups(pickingRenderScene);
+        hasPickingRenderScene = true;
     }
-    pickingRenderScene = std::move(pickingRenderSceneResult.Value());
-    ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
-    RebuildRenderSceneMaterialGroups(pickingRenderScene);
-    hasPickingRenderScene = true;
+    else
+    {
+        // 保留容器容量以便重新打开编辑器时复用；只撤销可拾取状态。
+        hasPickingRenderScene = false;
+    }
     worldSnapshotQueue.Publish(std::move(snapshot));
+    if (advanceSimulation)
+    {
+        simulationDeltaSeconds = 0.0f;
+        gameSimulationDeltaSeconds = 0.0f;
+        hairSimulationDeltaSeconds = 0.0f;
+    }
 }
 
 bool RenderSystem::ConsumeLatestSnapshotIntoRenderScene()
@@ -3760,6 +5172,9 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         throw std::runtime_error("RenderSystem renderer backend is not set");
     }
 
+    // 调试 parity 命令在帧边界执行；内部 WaitIdle + 单次 submit。
+    RunTerrainPageBakeParityIfRequested();
+
     const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
     if (consumedSnapshot)
     {
@@ -3775,7 +5190,8 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             // 不覆盖 GPU 正在读取的旧包，仍由 World-local cache 随 epoch 退休。
             VL::RendererObjectResourceRegistry registry;
             registry.InitializeResolvedSceneResources(*rendererBackend, BuildRendererDescriptorContext(),
-                currentRenderScene, currentResolvedRenderScene, VL::RendererResourceCache::GetInstance());
+                currentRenderScene, currentResolvedRenderScene, VL::RendererResourceCache::GetInstance(),
+                prerenderSkinEnabled);
         }
     }
     else if (!hasRenderScene)
@@ -3841,6 +5257,10 @@ void RenderSystem::BuildResolvedRenderScene()
             draw.material.key = (*instance)->GetBaseMaterial().lock()->GetMaterialKey();
     }
     RebuildRenderSceneMaterialGroups(currentRenderScene);
+    // 放置级（per-placement）对象必须在 resolve 之前拥有自己的 RenderableObject，
+    // 否则 ResolvedRenderSceneBuilder 会因为 cache 缺键整帧失败。
+    EnsurePlacementRenderables(currentRenderScene, VL::RendererResourceCache::GetInstance());
+    PrunePlacementRenderables(currentRenderScene);
     auto resolvedSceneResult = resolvedRenderSceneBuilder.Build(currentRenderScene, resourceCache);
     if (resolvedSceneResult.IsFailure())
     {
@@ -3885,6 +5305,154 @@ void RenderSystem::ConfigureParticleSceneLighting()
         frameResources.GetLightGridParamBufferInfos());
 }
 
+void RenderSystem::EnsurePlacementRenderables(
+    const VL::RenderScene& renderScene, VL::RendererResourceCache& resourceCache)
+{
+    // World 换代时旧键的帧计数没有意义；整包由 transaction 退休，这里只重置跟踪。
+    if (renderScene.worldGeneration != placementWorldGeneration)
+    {
+        placementAbsentFrames.clear();
+        placementObjectNames.clear();
+        placementLiveCount = 0;
+        placementCacheCount = 0;
+        placementRuntimeCount = 0;
+        placementBindingCache.clear();
+        placementWorldGeneration = renderScene.worldGeneration;
+    }
+    for (const VL::RenderDrawPacket& draw : renderScene.drawPackets)
+    {
+        if (draw.placementTemplateMeshKey.empty())
+            continue;
+        if (draw.mesh.key.empty())
+            throw std::runtime_error(
+                "Placement-scoped draw packet has no instance mesh key: " + draw.debugName);
+        const std::shared_ptr<RenderableObject>* existing =
+            resourceCache.GetRenderableObject(draw.mesh.key);
+        if (existing != nullptr && *existing != nullptr)
+            continue;
+        const std::shared_ptr<RenderableObject>* templateObject =
+            resourceCache.GetRenderableObject(draw.placementTemplateMeshKey);
+        if (templateObject == nullptr || *templateObject == nullptr)
+            throw std::runtime_error(
+                "Placement template renderable is missing: template=" +
+                draw.placementTemplateMeshKey + " instance=" + draw.mesh.key);
+        // 模板未解析绑定时（例如异步预加载的蓝图资产），解析需要来源 draw 的骨骼
+        // 资产。按 sceneObjectIdentity 在本帧快照里找来源对象；缺失交给 handler 报错。
+        const RenderableObject* sourceObject = nullptr;
+        if (!draw.placementBinding.sourceSceneObject.empty())
+            for (const VL::RenderDrawPacket& candidate : renderScene.drawPackets)
+            {
+                if (candidate.sceneObjectIdentity !=
+                    draw.placementBinding.sourceSceneObject) continue;
+                const std::shared_ptr<RenderableObject>* found =
+                    resourceCache.GetRenderableObject(candidate.mesh.key);
+                if (found != nullptr && *found != nullptr) sourceObject = found->get();
+                break;
+            }
+        // 克隆本身不感知类型；绑定（毛发骨骼等）由通用 resolver 按 Kind 分派。
+        std::shared_ptr<RenderableObject> clone =
+            (*templateObject)->CloneForPlacement(draw.debugName,
+                draw.placementBinding.tressfx ? &*draw.placementBinding.tressfx : nullptr,
+                draw.placementBinding.tressfxGroupConfigs.empty()
+                    ? nullptr : &draw.placementBinding.tressfxGroupConfigs);
+        std::string bindingError;
+        if (!VL::ApplyPlacementBinding(draw.placementBinding, **templateObject,
+                sourceObject, *clone, placementBindingCache, bindingError))
+            throw std::runtime_error(bindingError + " instance=" + draw.mesh.key);
+        resourceCache.BindRenderableObject(draw.mesh.key, clone);
+        placementAbsentFrames[draw.mesh.key] = 0;
+        placementObjectNames[draw.mesh.key] = draw.debugName;
+        std::cout << "[Placement] instance renderable: object=" << draw.debugName
+                  << " template=" << draw.placementTemplateMeshKey
+                  << " kind=" << static_cast<int>(draw.placementBinding.kind) << std::endl;
+    }
+}
+
+void RenderSystem::PrunePlacementRenderables(const VL::RenderScene& renderScene)
+{
+    if (renderScene.worldGeneration != placementWorldGeneration)
+    {
+        // 换代由 World package 统一退休；旧键的帧计数没有意义。
+        placementAbsentFrames.clear();
+        placementObjectNames.clear();
+        placementLiveCount = 0;
+        placementCacheCount = 0;
+        placementWorldGeneration = renderScene.worldGeneration;
+        return;
+    }
+    std::set<std::string> live;
+    for (const VL::RenderDrawPacket& draw : renderScene.drawPackets)
+        if (!draw.placementTemplateMeshKey.empty())
+            live.insert(draw.mesh.key);
+    // 只在存活数变化时打一行：spawn 后 1、destroy 后 0，同时作为无泄漏计数。
+    if (live.size() != placementLiveCount)
+    {
+        placementLiveCount = live.size();
+        std::cout << "[Placement] live placement renderables: " << placementLiveCount
+                  << std::endl;
+    }
+    // 活动包里实际持有的 placement-scoped renderable 数；包级释放后必须回到 0。
+    const size_t cacheCount =
+        VL::RendererResourceCache::GetInstance().CountPlacementScopedRenderableObjects();
+    if (cacheCount != placementCacheCount)
+    {
+        placementCacheCount = cacheCount;
+        std::cout << "[Placement] placement-scoped renderables in cache: " << cacheCount
+                  << std::endl;
+    }
+    std::vector<std::string> retired;
+    for (auto it = placementAbsentFrames.begin(); it != placementAbsentFrames.end();)
+    {
+        if (live.count(it->first) != 0)
+        {
+            // 本帧还在快照里：清零缺失计数。不能删除跟踪项，否则对象第一次存活
+            // 就会失去跟踪，销毁时永远不会退休（泄漏）。
+            it->second = 0;
+            ++it;
+            continue;
+        }
+        if (++it->second >= 2)
+            retired.push_back(it->first);
+        ++it;
+    }
+    if (!retired.empty())
+    {
+        const uint64_t lastSubmittedEpoch =
+            VL::ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch();
+        for (const std::string& key : retired)
+        {
+            placementAbsentFrames.erase(key);
+            const auto nameIt = placementObjectNames.find(key);
+            const std::string objectName =
+                nameIt != placementObjectNames.end() ? nameIt->second : std::string("<unknown>");
+            std::shared_ptr<RenderableObject> object =
+                VL::RendererResourceCache::GetInstance().TakeRenderableObject(key);
+            if (object == nullptr)
+            {
+                // 蓝图资产释放路径可能已经先摘走了这个 renderable；这里只记录事实，
+                // 不能重复退休同一个键。
+                std::cout << "[Placement] instance renderable released by package: object="
+                          << objectName << " key=" << key << std::endl;
+                placementObjectNames.erase(key);
+                continue;
+            }
+            // 上一帧可能还在 GPU 上引用它；按已提交 epoch 交给统一退休队列。
+            VL::ResourceRetireQueue::GetInstance().RetireShared(
+                key, renderScene.worldGeneration, lastSubmittedEpoch, std::move(object));
+            placementObjectNames.erase(key);
+            std::cout << "[Placement] instance renderable retired: object=" << objectName
+                      << " key=" << key << std::endl;
+        }
+    }
+    // 由 Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后必须回到 0。
+    if (placementObjectNames.size() != placementRuntimeCount)
+    {
+        placementRuntimeCount = placementObjectNames.size();
+        std::cout << "[Placement] runtime placement renderables: "
+                  << placementRuntimeCount << std::endl;
+    }
+}
+
 void RenderSystem::InitializeCurrentRenderSceneResources()
 {
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
@@ -3906,7 +5474,8 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
         descriptorContext,
         currentRenderScene,
         currentResolvedRenderScene,
-        resourceCache);
+        resourceCache,
+        prerenderSkinEnabled);
 
     // 粒子同步统一由 RenderLatestSnapshotOrLastGood 在每帧 Consume 之后执行：
     // 这里再调一次会在 World 换代的第一帧重复 Ensure/Synchronize。resize 与
@@ -3929,7 +5498,12 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             uiOverlayRenderer.SynchronizeTextures(*currentUiRenderSnapshot);
         }
     }
-
+    // 统计 query pool 在 backend BeginFrame 之前创建：此时本帧命令缓冲尚未开始录制。
+    // 未开启采集时这里只做两次原子读取，不创建任何 Vulkan 对象。
+    if (!offlineMode)
+    {
+        gpuPassTimer.PrepareFrame(currentFrame % MAX_FRAMES_IN_FLIGHT);
+    }
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.
     VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
@@ -3943,9 +5517,111 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         submittedViewProjection && submittedCameraGeneration == currentRenderScene.worldGeneration
         ? *submittedViewProjection : currentRenderScene.camera.viewProjection;
     uiOverlayRenderer.CollectRetiredTextures();
+    // 每帧重新累计：诊断输出只描述刚刚录制完的这一帧。
+    frameShadowCasterCullStats = {};
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
+    // ghost 权重按 swapchain 槽写入；必须在拿到本帧 slot 之后更新，避免覆盖
+    // 另一 frame-in-flight 仍在读取的 buffer。
+    // 草稿 binding 先于 ghost/选中状态应用，保证本帧 shader 读到同一份组号表。
+    ApplyTressfxGroupBindingPreviewRequests();
+    ApplyTressfxBrushPreviewRequests(swapChainImageIndex);
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
+    // 每帧固定同一个 World-local streaming state；不要让世界交换发生在
+    // BeginFrame 消费和帧末回读之间时出现两份 ring/page table。
+    const std::shared_ptr<VL::TerrainStreamingState> terrainFeedbackStreaming =
+        VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    // 本帧提交 epoch 必须与 SubmitFrame 记录的 epoch 相同（currentFrame + 1），
+    // feedback frameTag 也由它推导。先把 GPU 上下文回灌给 page manager，
+    // 新驻留页才能以“本帧提交”而不是过期 feedback epoch 起算安全窗。
+    const uint64_t feedbackSubmittedEpoch =
+        static_cast<uint64_t>(currentFrame) + 1;
+    // Console 的预算命令只写 atomic；这里在渲染线程、任何驻留变更之前消费，
+    // 保证本帧 feedback/淘汰/上传都看到同一个 residentCapacity。
+    if (terrainFeedbackStreaming)
+    {
+        const uint32_t requestedCapacity =
+            terrainFeedbackStreaming->ConsumeRequestedResidentCapacity();
+        if (requestedCapacity != 0)
+        {
+            // 降预算也必须遵守 GPU 安全窗：窗口内的可见页暂时允许超预算，
+            // 不能为了立刻回到预算而淘汰本帧/上一帧仍在采样的页。
+            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
+                requestedCapacity,
+                frameContext.completedEpoch);
+        }
+        else if (terrainFeedbackStreaming->pageManager.ResidentCount() >
+                 terrainFeedbackStreaming->pageManager.ResidentCapacity())
+        {
+            // 上一次降预算若因安全窗暂时超预算，后续帧继续尝试收敛；
+            // 没有安全候选时该方法仍是 no-op，不会形成死循环。
+            terrainFeedbackStreaming->pageManager.SetResidentCapacityAtEpoch(
+                terrainFeedbackStreaming->pageManager.ResidentCapacity(),
+                frameContext.completedEpoch);
+        }
+
+        // L4a 层页预算/命令：与覆盖页相同，只在渲染线程消费 atomic。
+        const uint32_t requestedLayerCapacity =
+            terrainFeedbackStreaming->requestedLayerResidentCapacity.exchange(
+                0, std::memory_order_relaxed);
+        if (requestedLayerCapacity != 0)
+        {
+            terrainFeedbackStreaming->layerPageManager
+                .SetResidentCapacityAtEpoch(
+                    requestedLayerCapacity, frameContext.completedEpoch);
+        }
+        if (terrainFeedbackStreaming->requestedLayerPreload.exchange(
+                false, std::memory_order_relaxed))
+        {
+            VL::RequestTerrainLayerPreload(*terrainFeedbackStreaming);
+        }
+    }
+    // epoch 上下文必须先于 ApplyFeedback：ApplyFeedback 内新驻留的页要用
+    // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
+    if (terrainFeedbackStreaming)
+    {
+        // L4e：相机位移只在本帧提交时推进，确保预取方向与真正渲染的帧一致。
+        UpdateTerrainCameraPrefetch(terrainFeedbackStreaming);
+        // console 的强制 mip 在 feedback 消费之前写进材质，feedback 与
+        // M_terrain 才会在同帧使用同一个目标 mip。
+        ApplyTerrainLayerForceMip(terrainFeedbackStreaming);
+        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+        // 层页页表/atlas 的物理槽位复用也走同一安全窗；feedback 命中与
+        // RequestPageAtEpoch 都在本函数之后发生。
+        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+    }
+    // P3：消费已完成回读 -> ApplyFeedback（命中推进 epoch、miss 入请求队列）。
+    ConsumeTerrainFeedback(
+        terrainFeedbackStreaming,
+        frameContext.completedEpoch,
+        frameIndex);
+    if (terrainFeedbackStreaming)
+    {
+        // Consume 可能推进 lastConsumedFeedbackEpoch；再次写回上下文，使
+        // page manager 的统计/加载期回退值与本帧实际消费进度一致。
+        terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
+            feedbackSubmittedEpoch,
+            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
+            rendererBackend->GetFrameFenceCount());
+    }
+    const uint8_t feedbackFrameTag =
+        VL::TerrainFeedbackFrameTagForEpoch(feedbackSubmittedEpoch);
+    // 本帧上传事务：只有 SubmitFrame 成功后才 Commit；任何提前返回/异常
+    // 都会在析构里 Abort，保留 dirty 与 pin，避免 GPU 与 CPU 内容错位。
+    VL::TerrainUploadTransaction terrainUploadTransaction;
+    VL::TerrainLayerUploadTransaction terrainLayerUploadTransaction;
+    uint32_t terrainUploadPageCount = 0;
+    uint32_t terrainGpuBakeJobCount = 0;
     const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
     const RenderResource* viewportOutput = renderToViewport
         ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
@@ -3980,7 +5656,10 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
         else
         {
-        AdvanceSpeedTreeWindProfiles();
+        // 读回发生在这里：backend BeginFrame 已等待本 frame slot 的 fence，上一批查询必然就绪。
+        // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
+        gpuPassTimer.BeginFrame(commandBuffer, frameIndex);
+        AdvanceSceneWind();
         // shadowSlice/shadowFar 必须在 geometry/forward 的 UploadLightsForPass
         // 之前写回冻结快照；LocalShadow pass 也消费同一份选灯结果。
         PrepareLocalShadowLights();
@@ -4008,6 +5687,133 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // Generate the procedural sky cubemap and write environmentSH before graphics
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
+        // guide 模拟必须在任何 pass 读取 current positions 之前完成本帧 dispatch。
+        // 只有本帧确实在采集时才做 HasWork 扫描；关闭 --gpu-stats 且未执行 gpustats
+        // 时，统计路径对每帧的正常渲染只增加一次原子读取和一次分支。
+        const auto& hairSimulation = renderGraph.GetHairSimulation();
+        const bool hairWillRecord =
+            gpuPassTimer.IsFrameActive() &&
+            hairSimulation &&
+            hairSimulation->HasWork(currentResolvedRenderScene, currentRenderScene);
+        const bool hairTimed = hairWillRecord &&
+            gpuPassTimer.BeginPass(commandBuffer, "hairSimulation");
+        RecordHairSimulation(commandBuffer, frameIndex);
+        if (hairWillRecord)
+        {
+            gpuPassTimer.EndPass(commandBuffer, hairTimed);
+        }
+
+        // GPU 预蒙皮必须早于任何 Shadow/Geometry pass：本帧 palette 先在 CPU 侧
+        // 写入 image 槽，compute 再一次性生成顶点结果，后续顶点着色器只读。
+        const auto& skinDeform = renderGraph.GetSkinDeform();
+        const bool skinDeformWillRecord =
+            gpuPassTimer.IsFrameActive() &&
+            skinDeform &&
+            skinDeform->HasWork(currentResolvedRenderScene);
+        const bool skinDeformTimed = skinDeformWillRecord &&
+            gpuPassTimer.BeginPass(commandBuffer, "skinnedDeform");
+        RecordSkinDeform(commandBuffer, swapChainImageIndex);
+        if (skinDeformWillRecord)
+        {
+            gpuPassTimer.EndPass(commandBuffer, skinDeformTimed);
+        }
+
+        // scene pass 之前提交本帧地形页：Build -> 打包进 staging ring ->
+        // 同一个主帧 command buffer 录制。剩余 dirty 页下一帧继续。
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->uploadRing)
+        {
+            VL::TerrainUploadBatch uploadBatch =
+                terrainFeedbackStreaming->pageManager.BuildUploadBatch(
+                    terrainFeedbackStreaming->maxUploadPagesPerFrame,
+                    VL::TerrainPageBakeGpu::MaxJobsPerFrame);
+            if (!uploadBatch.Empty())
+            {
+                try
+                {
+                    const VL::TerrainUploadStagingOffsets offsets =
+                        terrainFeedbackStreaming->uploadRing->Write(
+                            frameIndex,
+                            uploadBatch);
+                    // compute 先烘焙 job 对应的物理槽位；buffer→image copy
+                    // 与页表上传仍在同一个主帧 command buffer、scene pass 之前。
+                    if (terrainFeedbackStreaming->pageBake &&
+                        !uploadBatch.gpuBakeJobs.empty())
+                    {
+                        terrainFeedbackStreaming->pageBake->Record(
+                            commandBuffer,
+                            frameIndex,
+                            uploadBatch.gpuBakeJobs,
+                            terrainFeedbackStreaming->pageResources);
+                    }
+                    VL::RecordTerrainPageUploads(
+                        commandBuffer,
+                        terrainFeedbackStreaming->pageResources,
+                        uploadBatch,
+                        terrainFeedbackStreaming->uploadRing->Buffer(frameIndex),
+                        offsets);
+                    terrainUploadPageCount =
+                        static_cast<uint32_t>(
+                            uploadBatch.atlasUploads.size() +
+                            uploadBatch.gpuBakeJobs.size());
+                    terrainGpuBakeJobCount =
+                        static_cast<uint32_t>(uploadBatch.gpuBakeJobs.size());
+                    terrainUploadTransaction.Begin(
+                        terrainFeedbackStreaming,
+                        std::move(uploadBatch));
+                }
+                catch (...)
+                {
+                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
+                    terrainFeedbackStreaming->pageManager.AbortUploadBatch(
+                        uploadBatch);
+                    throw;
+                }
+            }
+        }
+
+        // L4a：层页上传与覆盖页上传同一时机（scene pass 之前）。页表 texel
+        // 走 staging ring；albedo/normal/pbr atlas 是 GPU→GPU copy，不需要
+        // staging。剩余 dirty 页下一帧继续，Commit 在 SubmitFrame 之后。
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->layerVTRequested &&
+            terrainFeedbackStreaming->layerUploadRing)
+        {
+            VL::TerrainLayerUploadBatch layerBatch =
+                terrainFeedbackStreaming->layerPageManager.BuildUploadBatch(
+                    terrainFeedbackStreaming->maxLayerPageUploadsPerFrame);
+            if (!layerBatch.Empty())
+            {
+                try
+                {
+                    const vk::DeviceSize stagingOffset =
+                        terrainFeedbackStreaming->layerUploadRing->Write(
+                            frameIndex, layerBatch);
+                    VL::RecordTerrainLayerPageUploads(
+                        commandBuffer,
+                        terrainFeedbackStreaming->layerPageManager,
+                        terrainFeedbackStreaming->layerResources,
+                        terrainFeedbackStreaming->layerSources,
+                        layerBatch,
+                        terrainFeedbackStreaming->layerUploadRing->Buffer(
+                            frameIndex),
+                        stagingOffset);
+                    terrainLayerUploadTransaction.Begin(
+                        terrainFeedbackStreaming,
+                        std::move(layerBatch));
+                }
+                catch (...)
+                {
+                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
+                    terrainFeedbackStreaming->layerPageManager
+                        .AbortUploadBatch(layerBatch);
+                    throw;
+                }
+            }
+        }
+
+        // feedback pass 的 u_frameTag 必须与下面回读登记的 epoch tag 一致。
+        PrepareTerrainFeedbackPass(feedbackFrameTag);
 
         // 该 image 的 fence 已在 BeginFrame 内等待；这里回收上一轮 GPU 计时，
         // 并在录制 particle pass 之前 reset 本帧查询槽位。
@@ -4066,6 +5872,12 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 continue;
             }
 
+            // pass 本身可能开启 render pass 实例，因此 timestamp 必须在实例外 bracket：
+            // BeginPass 在 ScopedRegion 之前写 begin timestamp，EndPass 在录制完成后写
+            // end timestamp；两端都在 pass 实例外，因此不受 render pass 内部阶段限制。
+            const bool passTimed =
+                gpuPassTimer.BeginPass(commandBuffer, renderPassName);
+
             VulkanDebug::ScopedRegion passRegion(
                 commandBuffer,
                 renderPassName,
@@ -4076,6 +5888,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
                 renderGraph.GetAutoExposure()->Record(commandBuffer, swapChainImageIndex,
                     currentRenderScene.camera.exposure, exposureDeltaSeconds);
+                gpuPassTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             // 体积雾注入是独立 compute：没有 framebuffer，也不需要 pass material。
@@ -4137,7 +5950,34 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 *this,
                 renderToViewport
             };
+            // 阴影 pass 把 before/after draw 数写回这里；非阴影 pass 不接收统计指针。
+            VL::ShadowCasterCullStats shadowCasterCullStats;
+            shadowCasterCullStats.cascadeIndex = renderPass.shadowCascadeIndex;
+            if (renderPass.type == VL::RenderGraphPassType::Shadow)
+            {
+                passContext.shadowCasterCullStats = &shadowCasterCullStats;
+            }
             passRuntime.RecordPass(renderPassName, passContext);
+            if (renderPass.type == VL::RenderGraphPassType::Shadow &&
+                shadowCasterCullStats.cascadeIndex <
+                    VL::CsmSettings::MaxCascadeCount)
+            {
+                frameShadowCasterCullStats[shadowCasterCullStats.cascadeIndex] =
+                    shadowCasterCullStats;
+            }
+            gpuPassTimer.EndPass(commandBuffer, passTimed);
+        }
+
+        // 与 GPU 表同周期（120 帧）输出；只有 --gpu-stats 打开时才打印。
+        if (gpuPassStatsLoggingEnabled)
+        {
+            ++shadowCasterCullStatsFramesSinceLog;
+            if (shadowCasterCullStatsFramesSinceLog >=
+                VL::kGpuPassTimingWindowFrames)
+            {
+                shadowCasterCullStatsFramesSinceLog = 0;
+                LogShadowCasterCullStats();
+            }
         }
         LogLocalShadowCasterStatistics();
         }
@@ -4178,6 +6018,63 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    if (!offlineMode)
+    {
+        if (terrainFeedbackStreaming &&
+            terrainFeedbackStreaming->feedbackRing)
+        {
+            // terrainFeedback 是 graph-owned 的 per-swapchain-image RT；
+            // 帧末把当前 image 拷进该 frameIndex 的 host-visible ring 槽。
+            const auto& resolveResources =
+                renderGraph.GetResourcesResolve();
+            const auto feedbackIt =
+                resolveResources.find("terrainFeedback");
+            if (feedbackIt != resolveResources.end() &&
+                swapChainImageIndex < feedbackIt->second.size())
+            {
+                terrainFeedbackStreaming->feedbackRing->RecordCopy(
+                    commandBuffer,
+                    feedbackIt->second[swapChainImageIndex].image,
+                    frameIndex,
+                    feedbackSubmittedEpoch,
+                    feedbackFrameTag);
+            }
+            // L4b：4 张层页 attachment 与覆盖页 RT 在同一次录制里回读。
+            // 只有真正使用 layer mode 1 时才记录，mode 0 不产生额外拷贝。
+            if (terrainFeedbackStreaming->layerVTRequested &&
+                terrainFeedbackStreaming->layerFeedbackRing)
+            {
+                std::array<vk::Image, VL::TerrainLayerFeedbackSlotCount>
+                    layerImages{};
+                bool allPresent = true;
+                for (uint32_t slot = 0;
+                     slot < VL::TerrainLayerFeedbackSlotCount;
+                     ++slot)
+                {
+                    const auto layerIt = resolveResources.find(
+                        "terrainLayerFeedback" + std::to_string(slot));
+                    if (layerIt == resolveResources.end() ||
+                        swapChainImageIndex >= layerIt->second.size())
+                    {
+                        allPresent = false;
+                        break;
+                    }
+                    layerImages[slot] =
+                        layerIt->second[swapChainImageIndex].image;
+                }
+                if (allPresent)
+                {
+                    terrainFeedbackStreaming->layerFeedbackRing->RecordCopy(
+                        commandBuffer,
+                        layerImages,
+                        frameIndex,
+                        feedbackSubmittedEpoch,
+                        feedbackFrameTag);
+                }
+            }
+        }
+    }
+
     const std::optional<std::string> screenshotPath =
         std::move(pendingScreenshotPath);
     pendingScreenshotPath.reset();
@@ -4197,9 +6094,24 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    // 本帧查询随 SubmitFrame 进入 GPU；下次复用该 frame slot 时（fence 已等待）再读回。
+    gpuPassTimer.EndFrame();
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
+    // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
+    terrainUploadTransaction.Commit();
+    terrainLayerUploadTransaction.Commit();
+    if (terrainFeedbackStreaming)
+    {
+        terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;
+        terrainFeedbackStreaming->lastUploadedPages = terrainUploadPageCount;
+        terrainFeedbackStreaming->gpuBakedPagesTotal += terrainGpuBakeJobCount;
+        terrainFeedbackStreaming->lastGpuBakedPages = terrainGpuBakeJobCount;
+        PublishTerrainStreamingStats(
+            terrainFeedbackStreaming,
+            frameContext.completedEpoch);
+    }
     ++submittedFrameSerial;
     submittedCameraGeneration = currentRenderScene.worldGeneration;
     submittedViewProjection = currentRenderScene.camera.viewProjection;
@@ -4284,13 +6196,58 @@ RenderSystem::BuildRendererDescriptorContext(
     return descriptorContext;
 }
 
-void RenderSystem::AdvanceSpeedTreeWindProfiles()
+// 风时间按固定 1/60 s 步长推进，步进量来自 EngineLoop 的 RuntimeClock 真实 delta。
+// master 的 SpeedTree 风时钟是墙钟；当前分支若每渲染帧都加 1/60，在 240 FPS 下会比
+// master 快 4 倍。这里保留固定步长（CWindStateMgr/SceneWindRuntime 的数值稳定），
+// 只让“每秒推进多少步”跟随引擎真实时间。
+void RenderSystem::AdvanceSceneWindTick()
 {
-    speedTreeWindProfiles.AdvanceTo(GetSpeedTreeWindTimeSeconds());
+    constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
+    // 一步同时推进场级解析（头发）和每 profile 的 CWindStateMgr（植被）。
+    // 两个消费者必须看到同一个 currentWindTimeSeconds，否则阵风相位会分叉。
+    const VL::ResolvedSceneWind resolvedWind =
+        sceneWindRuntime.Advance(currentRenderScene.wind, currentWindTimeSeconds);
+    currentRenderScene.windTimeSeconds = currentWindTimeSeconds;
+    currentRenderScene.resolvedWind = resolvedWind;
+    windResponseProfiles.AdvanceToSceneWind(
+        currentWindTimeSeconds, currentRenderScene.wind);
+    currentWindTimeSeconds += kSceneWindTickSeconds;
+}
+
+void RenderSystem::AdvanceSceneWind()
+{
+    constexpr double kSceneWindTickSeconds = 1.0 / 60.0;
+    if (!windClockInitialized)
+    {
+        windClockInitialized = true;
+        // 首帧只做 time=0 的目标采样；此时 GT 可能已经积累了一帧 delta，清零避免
+        // 同一渲染帧里立刻再走一步，导致第一帧强度从目标值跳开。
+        windPendingDeltaSeconds.store(0.0f, std::memory_order_relaxed);
+        windTickAccumulator = 0.0;
+        AdvanceSceneWindTick();
+        return;
+    }
+
+    // exchange 而不是 load 后清零：GT 可能在读取后立刻追加下一帧 delta；
+    // 原子交换保证每一份 GT delta 只被 RT 消费一次。
+    const double elapsed = std::max(0.0, static_cast<double>(
+        windPendingDeltaSeconds.exchange(0.0f, std::memory_order_relaxed)));
+    // 调试断点/长卡顿后最多追 0.25 s（15 步），避免一次补几百步让 gust 连续爆发。
+    windTickAccumulator = std::min(windTickAccumulator + elapsed, 0.25);
+    // 一帧内可以补多步；严格按时间顺序推进，保持 CWindStateMgr 的 RNG/gust 状态机顺序。
+    while (windTickAccumulator >= kSceneWindTickSeconds)
+    {
+        AdvanceSceneWindTick();
+        windTickAccumulator -= kSceneWindTickSeconds;
+    }
 }
 
 void RenderSystem::ShutdownRenderObject()
 {
+    // trace 可能还有 1..2 个 frame slot pending；这里显式等一次队列并写盘。
+    // 调用方（EngineLoop::Shutdown）已停止渲染线程，且 backend 仍然有效。
+    if (const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation())
+        hairSimulation->FinishTrace(true);
     offlineCoordinator.reset();
     offlineDisplay.Shutdown();
     materialInstancePreviewAdapter.Reset();
@@ -4348,6 +6305,8 @@ void RenderSystem::InitializeFrameResources()
     }
     environmentGpuTimer.Initialize(*rendererBackend);
     particleGpuTimer.Initialize(*rendererBackend);
+    // query pool 在首次采集时才创建；--gpu-stats 关闭时这里只记录能力快照。
+    gpuPassTimer.Initialize(*rendererBackend, MAX_FRAMES_IN_FLIGHT);
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -4357,6 +6316,8 @@ void RenderSystem::ShutdownFrameResources()
         return;
     }
 
+    // 先销毁统计 query pool，再释放 swapchain 相关帧资源。
+    gpuPassTimer.Shutdown(*rendererBackend);
     environmentGpuTimer.Shutdown(*rendererBackend);
     particleGpuTimer.Shutdown(*rendererBackend);
     decalRenderer.Shutdown(*rendererBackend);
@@ -4387,21 +6348,6 @@ void RenderSystem::ValidateFrameResourceDescriptors()
     {
         throw std::runtime_error("RenderSystem cannot expose frame resource descriptors before frame resources are initialized");
     }
-}
-
-double RenderSystem::GetSpeedTreeWindTimeSeconds()
-{
-    if (!windClockInitialized)
-    {
-        windStartTime = std::chrono::steady_clock::now();
-        windClockInitialized = true;
-        currentWindTimeSeconds = 0.0;
-        return currentWindTimeSeconds;
-    }
-
-    currentWindTimeSeconds = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - windStartTime).count();
-    return currentWindTimeSeconds;
 }
 
 std::pair<float, float> RenderSystem::ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const
@@ -4438,53 +6384,71 @@ std::optional<std::pair<float, float>> RenderSystem::ComputeCascadeLightSpaceZBo
     float minX,
     float maxX,
     float minY,
-    float maxY) const
+    float maxY)
 {
     if (currentRenderScene.drawPackets.empty())
     {
         return std::nullopt;
     }
 
+    // 投影只取决于光源朝向：四个级联共用同一份 worldToShadowMatrix，因此每帧
+    // 只投影一次并缓存；逐级联只按相机 slice 的 XY 范围过滤，再合并 Z。
+    // 之前每个级联都重扫全部 draw packet，等于 4 倍的投影计算。
+    if (!casterLightSpaceBoundsValid)
+    {
+        const Eigen::Vector3f lightSpaceXAxis = worldToShadowMatrix.row(0).transpose();
+        const Eigen::Vector3f lightSpaceYAxis = worldToShadowMatrix.row(1).transpose();
+        const Eigen::Vector3f lightSpaceZAxis = worldToShadowMatrix.row(2).transpose();
+        const Eigen::Vector3f absLightSpaceXAxis = lightSpaceXAxis.cwiseAbs();
+        const Eigen::Vector3f absLightSpaceYAxis = lightSpaceYAxis.cwiseAbs();
+        const Eigen::Vector3f absLightSpaceZAxis = lightSpaceZAxis.cwiseAbs();
+
+        casterLightSpaceBounds.clear();
+        casterLightSpaceBounds.reserve(currentRenderScene.drawPackets.size());
+        for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+        {
+            // Current limitation: SpeedTree world bounds describe the undeformed
+            // mesh and exclude vertex-shader wind displacement. The foliage bounds
+            // contract must eventually provide expanded caster bounds so strong
+            // wind cannot clip branch shadows from the CSM light-space Z range.
+            const Eigen::Vector3f center =
+                (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
+            const Eigen::Vector3f extent =
+                (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
+
+            ShadowCasterLightSpaceBounds bounds;
+            const float projectedCenterX = lightSpaceXAxis.dot(center);
+            const float projectedRadiusX = absLightSpaceXAxis.dot(extent);
+            bounds.minX = projectedCenterX - projectedRadiusX;
+            bounds.maxX = projectedCenterX + projectedRadiusX;
+            const float projectedCenterY = lightSpaceYAxis.dot(center);
+            const float projectedRadiusY = absLightSpaceYAxis.dot(extent);
+            bounds.minY = projectedCenterY - projectedRadiusY;
+            bounds.maxY = projectedCenterY + projectedRadiusY;
+            const float projectedCenterZ = lightSpaceZAxis.dot(center);
+            const float projectedRadiusZ = absLightSpaceZAxis.dot(extent);
+            bounds.minZ = projectedCenterZ - projectedRadiusZ;
+            bounds.maxZ = projectedCenterZ + projectedRadiusZ;
+            casterLightSpaceBounds.push_back(bounds);
+        }
+        casterLightSpaceBoundsValid = true;
+    }
+
     float minZ = std::numeric_limits<float>::max();
     float maxZ = std::numeric_limits<float>::lowest();
     bool hasCaster = false;
-    const Eigen::Vector3f lightSpaceXAxis = worldToShadowMatrix.row(0).transpose();
-    const Eigen::Vector3f lightSpaceYAxis = worldToShadowMatrix.row(1).transpose();
-    const Eigen::Vector3f lightSpaceZAxis = worldToShadowMatrix.row(2).transpose();
-    const Eigen::Vector3f absLightSpaceXAxis = lightSpaceXAxis.cwiseAbs();
-    const Eigen::Vector3f absLightSpaceYAxis = lightSpaceYAxis.cwiseAbs();
-    const Eigen::Vector3f absLightSpaceZAxis = lightSpaceZAxis.cwiseAbs();
-
-    for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+    for (const ShadowCasterLightSpaceBounds& bounds : casterLightSpaceBounds)
     {
-        // Current limitation: SpeedTree world bounds describe the undeformed
-        // mesh and exclude vertex-shader wind displacement. The foliage bounds
-        // contract must eventually provide expanded caster bounds so strong
-        // wind cannot clip branch shadows from the CSM light-space Z range.
-        const Eigen::Vector3f center = (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
-        const Eigen::Vector3f extent = (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
-        const float projectedCenterX = lightSpaceXAxis.dot(center);
-        const float projectedRadiusX = absLightSpaceXAxis.dot(extent);
-        const float objectMinX = projectedCenterX - projectedRadiusX;
-        const float objectMaxX = projectedCenterX + projectedRadiusX;
-        if (objectMaxX < minX || objectMinX > maxX)
+        if (bounds.maxX < minX || bounds.minX > maxX)
         {
             continue;
         }
-
-        const float projectedCenterY = lightSpaceYAxis.dot(center);
-        const float projectedRadiusY = absLightSpaceYAxis.dot(extent);
-        const float objectMinY = projectedCenterY - projectedRadiusY;
-        const float objectMaxY = projectedCenterY + projectedRadiusY;
-        if (objectMaxY < minY || objectMinY > maxY)
+        if (bounds.maxY < minY || bounds.minY > maxY)
         {
             continue;
         }
-
-        const float projectedCenterZ = lightSpaceZAxis.dot(center);
-        const float projectedRadiusZ = absLightSpaceZAxis.dot(extent);
-        minZ = std::min(minZ, projectedCenterZ - projectedRadiusZ);
-        maxZ = std::max(maxZ, projectedCenterZ + projectedRadiusZ);
+        minZ = std::min(minZ, bounds.minZ);
+        maxZ = std::max(maxZ, bounds.maxZ);
         hasCaster = true;
     }
 
@@ -4519,39 +6483,6 @@ void RenderSystem::ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& 
         outMin = outMin.cwiseMin(corner);
         outMax = outMax.cwiseMax(corner);
     }
-}
-
-void RenderSystem::ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax)
-{
-    outMin = (viewMatrix * Eigen::Vector4f(worldCorners[0].x(), worldCorners[0].y(), worldCorners[0].z(), 1.0f)).head<3>();
-    outMax = outMin;
-    for (const auto& corner : worldCorners)
-    {
-        Eigen::Vector3f viewCorner = (viewMatrix * Eigen::Vector4f(corner.x(), corner.y(), corner.z(), 1.0f)).head<3>();
-        outMin = outMin.cwiseMin(viewCorner);
-        outMax = outMax.cwiseMax(viewCorner);
-    }
-}
-
-bool RenderSystem::IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding)
-{
-    float minZView = viewMin.z();
-    float maxZView = viewMax.z();
-    float splitNearP = std::max(0.0f, splitNear - padding);
-    float splitFarP = splitFar + padding;
-    if (maxZView < -splitFarP || minZView > -splitNearP)
-    {
-        return false;
-    }
-    float zForXY = std::min(minZView, -splitNearP);
-    float distance = std::max(0.0f, -zForXY);
-    float halfWidth = std::tan(fovRad * 0.5f) * distance;
-    float halfHeight = halfWidth / aspect;
-    if (viewMax.x() < -halfWidth || viewMin.x() > halfWidth || viewMax.y() < -halfHeight || viewMin.y() > halfHeight)
-    {
-        return false;
-    }
-    return true;
 }
 
 std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
@@ -4613,6 +6544,84 @@ void RenderSystem::PrepareEnvironmentResources(
     resourceCache.BindWorldTexture(
         "prefilteredEnvironmentCube",
         prefilteredEnvironmentCube);
+}
+
+void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_t frameSlot)
+{
+    const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation();
+    if (!hairSimulation)
+        return;
+    // GT 侧只登记请求；这里在渲染线程把它交给 pass。trace 的资源创建/拷贝
+    // 全部发生在 Record 内，Console 线程不触碰 GPU。
+    std::optional<VL::Hair::HairTraceRequest> traceRequest;
+    {
+        std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
+        traceRequest = std::move(pendingHairTraceRequest);
+        pendingHairTraceRequest.reset();
+    }
+    if (traceRequest)
+        hairSimulation->BeginTrace(*traceRequest);
+    // 复位请求只在存在 pass 时消费；没有 pass 就保留到下一个可录制帧，
+    // 避免把请求丢在无 World/无 graph 的帧里。
+    std::optional<std::string> resetRequest;
+    {
+        std::lock_guard<std::mutex> lock(hairResetRequestMutex);
+        resetRequest = std::move(pendingHairResetRequest);
+        pendingHairResetRequest.reset();
+    }
+    if (resetRequest)
+        hairSimulation->RequestReset(std::move(*resetRequest));
+    // 实时参数覆盖与复位同构：GT 只登记，渲染线程每帧取走一次。没有 pass 时
+    // 上面的提前 return 会保留队列，避免把请求丢在无 World/无 graph 的帧里。
+    std::vector<VL::Hair::HairLiveParameterRequest> liveParameters;
+    {
+        std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
+        liveParameters.swap(pendingHairLiveParameters);
+    }
+    for (const auto& parameter : liveParameters)
+        hairSimulation->RequestLiveParameter(parameter);
+    // 每帧只调用一次，且在所有 graphics pass 之前：本帧所有读取 current positions 的
+    // vertex shader 都看到同一份已经完成 dispatch 的位置。
+    hairSimulation->Record(
+        commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot);
+}
+
+void RenderSystem::RecordSkinDeform(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
+{
+    if (!prerenderSkinEnabled)
+        return;
+    const auto& skinDeform = RenderGraph::GetInstance().GetSkinDeform();
+    if (!skinDeform)
+        return;
+
+    // 预蒙皮 compute 读的 palette 必须在本帧任何 draw 之前写入当前 image 槽。
+    // draw 路径在预蒙皮开启时不再重复上传，因此这里覆盖所有蒙皮 draw。
+    std::unordered_set<VL::RendererObjectGpuResources*> uploaded;
+    for (const auto& materialGroup : currentResolvedRenderScene.materialGroups)
+    {
+        for (const auto& instanceGroup : materialGroup.materialInstances)
+        {
+            for (const auto& draw : instanceGroup.draws)
+            {
+                if (!draw.objectResourceEntry)
+                    continue;
+                VL::RendererObjectGpuResources& resources =
+                    draw.objectResourceEntry->GetResources();
+                if (!resources.skinDeform.HasResources())
+                    continue;
+                if (!uploaded.insert(&resources).second)
+                    continue;
+                const auto& packet = currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                if (!packet.skinPose)
+                    continue;
+                resources.submittedSkin.RetainIfSubmittedAt(submittedFrameSerial);
+                frameResources.UpdateObjectSkinPalette(
+                    swapchainImageIndex, resources, packet);
+            }
+        }
+    }
+
+    skinDeform->Record(commandBuffer, currentResolvedRenderScene, swapchainImageIndex);
 }
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

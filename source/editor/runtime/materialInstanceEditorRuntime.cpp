@@ -244,19 +244,20 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
     initialized = false;
 }
 
-void MaterialInstanceEditorRuntime::Tick()
+bool MaterialInstanceEditorRuntime::Tick()
 {
     if (!initialized)
     {
-        return;
+        return false;
     }
 
     if (commandBus == nullptr)
     {
-        return;
+        return false;
     }
 
     PollPreview();
+    bool executedCommand = false;
 
     // 自动预览命令可能由本轮参数编辑追加到 bus；持续 drain，保证一次
     // 参数提交在同一个 UI/game tick 内完成 working draft -> live swap。
@@ -265,6 +266,8 @@ void MaterialInstanceEditorRuntime::Tick()
         const std::vector<EditorCommandEnvelope> commands = commandBus->Drain();
         for (const EditorCommandEnvelope& command : commands)
         {
+            // 任何编辑器命令都可能改变草稿/历史/预览/反馈，需要面板在下一帧立即重建。
+            executedCommand = true;
             EditorCommandResult result;
             try
             {
@@ -317,6 +320,7 @@ void MaterialInstanceEditorRuntime::Tick()
     PollPreview();
     ApplyRuntimeOverlay();
     RefreshModifiedDocuments();
+    return executedCommand;
 }
 
 void MaterialInstanceEditorRuntime::NotifyWorldChanged(
@@ -1448,6 +1452,8 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
         snapshot.blueprintDocuments = assetDocuments->BlueprintDocuments().DocumentSnapshots();
         snapshot.particleDocuments =
             assetDocuments->ParticleDocuments().DocumentSnapshots();
+        snapshot.terrainDocuments = assetDocuments->TerrainDocuments().DocumentSnapshots();
+        snapshot.tressfxDocuments = assetDocuments->TressfxDocuments().DocumentSnapshots();
         const auto scenes = assetDocuments->ModifiedDocuments();
         // GT 作者适配器绕过命令执行修改 Scene 草稿；发布保存列表时必须同步总线版本，
         // 否则上一次 Save 留下的 revision 会拒绝之后的合法保存。
@@ -1462,9 +1468,11 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
 {
     if (command.type != EditorCommandType::SaveSceneDocument &&
         command.type != EditorCommandType::SaveMeshDocument &&
+        command.type != EditorCommandType::SaveTressfxDocument &&
         command.type != EditorCommandType::SaveTextureDocument &&
         command.type != EditorCommandType::SaveBlueprintDocument &&
         command.type != EditorCommandType::SaveParticleDocument &&
+        command.type != EditorCommandType::SaveTerrainDocument &&
         command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
     const auto path = GetEditorCommandAssetPath(command);
     if (!path) return;

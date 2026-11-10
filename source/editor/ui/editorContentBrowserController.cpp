@@ -91,19 +91,21 @@ const char* KindFilter(EditorAssetKind kind)
     {
     case EditorAssetKind::MaterialInstance: return "material";
     case EditorAssetKind::Mesh: return "mesh";
+    case EditorAssetKind::Tressfx: return "tressfx";
     case EditorAssetKind::Scene: return "scene";
     case EditorAssetKind::Texture: return "texture";
     case EditorAssetKind::Terrain: return "terrain";
     case EditorAssetKind::Blueprint: return "blueprint";
     case EditorAssetKind::ParticleSystem: return "particle";
+    case EditorAssetKind::Retarget: return "retarget";
     }
     return "";
 }
 
 bool ValidFilter(const std::string& value)
 {
-    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain",
-             "particle", "blueprint", "csharp"})
+    for (const char* filter : {"all", "material", "mesh", "tressfx", "scene", "texture", "terrain",
+             "particle", "blueprint", "retarget", "csharp"})
         if (value == filter) return true;
     return false;
 }
@@ -651,7 +653,8 @@ std::vector<std::string> EditorContentBrowserController::VisibleThumbnailPaths()
     if (document == nullptr || !document->GetElementById("asset-list")->IsVisible(true) || !grid) return paths;
     for (const auto& node : visibleNodes)
         if (!node.entry->folder && (node.entry->kind == EditorAssetKind::Texture ||
-            node.entry->kind == EditorAssetKind::Mesh || node.entry->kind == EditorAssetKind::MaterialInstance ||
+            node.entry->kind == EditorAssetKind::Mesh || node.entry->kind == EditorAssetKind::Tressfx ||
+            node.entry->kind == EditorAssetKind::MaterialInstance ||
             node.entry->kind == EditorAssetKind::ParticleSystem))
             paths.push_back(node.entry->path);
     return paths;

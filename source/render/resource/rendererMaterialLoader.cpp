@@ -1,6 +1,7 @@
 #include "render/resource/rendererMaterialLoader.h"
 
 #include <fstream>
+#include <filesystem>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -389,7 +390,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         effectiveMaterialInstanceJson,
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
-        rendererBackend.SupportsDualSourceBlend());
+        rendererBackend.SupportsDualSourceBlend(),
+        loadContext.prerenderSkin);
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
         cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
     {
@@ -577,10 +579,31 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         }
         else
         {
-            texture = std::make_shared<Texture>(
-                rendererBackend,
-                textureLoadDesc.source,
-                ToTextureCreateDesc(textureLoadDesc));
+            const Texture::CreateDesc createDesc = ToTextureCreateDesc(textureLoadDesc);
+            if (textureLoadDesc.textureArray)
+            {
+                // 数组走 CPU 逐层解码；层序必须与材质 JSON 的 sources 顺序完全一致。
+                std::vector<std::filesystem::path> sources;
+                sources.reserve(textureLoadDesc.sources.size());
+                for (const std::string& source : textureLoadDesc.sources)
+                    sources.push_back(CommonFunction::Path(source));
+                // 数组的 V 方向策略按首层容器判定；混用 BC 与 LDR 源会被
+                // CombineArrayLayers 的格式一致性检查拒绝。
+                const HostImage image = TextureIO::LoadArray(
+                    sources,
+                    Texture::MaterialLoadOptionsForPath(createDesc, sources.front()));
+                texture = std::make_shared<Texture>(
+                    rendererBackend,
+                    image,
+                    createDesc);
+            }
+            else
+            {
+                texture = std::make_shared<Texture>(
+                    rendererBackend,
+                    textureLoadDesc.sources.front(),
+                    createDesc);
+            }
             resourceCache.BindTexture(textureCacheKey, texture);
         }
         materialInstance->SetTexture(

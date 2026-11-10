@@ -69,6 +69,13 @@ public:
     void Shutdown() noexcept;
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;
+    // 只冻结时间序列/计数器（Log 的 Scripts 页）；不复制蓝图类表。
+    // 与 View() 使用同一份 performance JSON，避免出现第二个计数器来源。
+    nlohmann::json PerformanceView() const;
+    // 仅运行时 HUD 可见时使用的轻量视图：只冻结 available/state/worldGeneration
+    // 和 hudLines，不复制蓝图类、组件类与性能 JSON。HUD 文本因此仍按帧更新，
+    // 而隐藏的编辑器不会被迫承担完整视图模型的分配。
+    ScriptRuntimeView HudView(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
     bool IsPlaying() const { return state == ScriptPlayState::Playing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
@@ -82,6 +89,10 @@ public:
             static_cast<float>(time.delta),
             fallback);
     }
+    // 只有 Play 才创建 ScriptPhysicsWorld；编辑器/普通预览保持 false。
+    bool HasPhysicsWorld() const;
+    // 只读诊断：Play 中输出已创建的地形 heightfield body 数量与 placement。
+    void ReportTerrainCollisionStatistics() const;
     const nlohmann::json& Classes() const { return classes; }
     const nlohmann::json& ComponentClasses() const { return componentClasses; }
     bool SetTimeScale(float value, std::string& error);
@@ -103,6 +114,7 @@ private:
         const nlohmann::json& templates = nlohmann::json::object(), uint64_t generation = 0,
         const nlohmann::json& animationCatalog = nlohmann::json::object(),
         const nlohmann::json& animationAssets = nlohmann::json::object());
+    void AppendHudLines(ScriptRuntimeView& view, uint64_t generation) const;
     void Apply(World& world, const nlohmann::json& response);
     void ApplyParticleCommands(World& world, const std::string& owner,
         const nlohmann::json& commands);

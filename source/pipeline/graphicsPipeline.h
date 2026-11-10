@@ -74,7 +74,7 @@ private:
 
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
 
-    vk::VertexInputBindingDescription vertexInputBindingDescription;
+    std::vector<vk::VertexInputBindingDescription> vertexInputBindingDescriptions;
     std::vector<vk::VertexInputAttributeDescription> vertexInputAttributeDescriptions;
     
     vk::PipelineCache pipelineCache;

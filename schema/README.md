@@ -6,12 +6,25 @@ Resource paths below are relative to `config/config.json -> resourcePath`. The r
 top-level directories — `Common/`, `Maps/`, `Generated/` — not a `resources/` tree.
 
 - Bind `scene.schema.json` only to `Maps/SC_*/SC_*.json`.
-- Bind `model_descriptor.schema.json` only to `Common/Meshes/SM_*.json` and `Maps/SC_*/Meshes/SM_*.json`.
+- Bind `model_descriptor.schema.json` to `Common/Meshes/SM_*.json`, `Maps/SC_*/Meshes/SM_*.json`
+  and the corresponding `TF_*.json` paths. TF keeps `type: "tressfx"` and has an independent
+  editor/document kind. `tressfx_behavior.schema.json` supplies shared definitions for
+  `simulationDefaults`, placement modes/overrides, skinning and external hairCollision;
+  it is referenced by model and scene schemas, not bound to standalone assets.
 - Bind `material_instance.schema.json` only to `Common/Materials/**/MI_*.json` and
   `Maps/SC_*/Materials/**/MI_*.json`.
 - Bind `texture-asset` JSON to `Common/Textures/T_*.json` and `Maps/SC_*/Textures/T_*.json`
   (format contract: `documents/contracts/texture-asset-json-v1.md`).
 - Bind `render_graph.schema.json` only to `config/renderGraphConfig.json`.
+- Bind `retarget_profile.schema.json` only to `Common/Retarget/RT_*.json` and
+  `Maps/SC_*/Retarget/RT_*.json`. It checks JSON shape; the production loader
+  additionally checks skeleton identity, joint names, unique mappings/offsets,
+  unit quaternions and the prohibition on locomotion-root rotation offsets.
+  Optional `preview` SK paths belong to the Retarget tab; the asset worker
+  validates root-relative paths and matching skeleton identities. Optional
+  `preview.targetModelPath` enables paired animation; GT checks that the SM
+  uses the opened RT and obtains its non-retargeted sourceModel. These fields
+  do not replace runtime SM skeleton references.
 - `hair_azimuthal_lut.schema.json` belongs to a generator input whose implementation was deleted on
   2026-09-12; it is retained for the paper-based rebuild. Do not bind it to any live asset.
 - Do not bind any schema to broad patterns like `*.json`.
@@ -72,7 +85,9 @@ Recommended VS Code workspace settings:
         {
             "fileMatch": [
                 "/Common/Meshes/SM_*.json",
-                "/Maps/SC_*/Meshes/SM_*.json"
+                "/Maps/SC_*/Meshes/SM_*.json",
+                "/Common/Meshes/TF_*.json",
+                "/Maps/SC_*/Meshes/TF_*.json"
             ],
             "url": "./schema/model_descriptor.schema.json"
         },

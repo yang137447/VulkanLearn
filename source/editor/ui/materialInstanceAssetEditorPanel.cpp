@@ -6,8 +6,11 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <exception>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <tuple>
 #include <utility>
@@ -23,11 +26,17 @@
 #include <RmlUi/Core/SystemInterface.h>
 
 #include "core/renderSession.h"
+#include "editor/brush/brushProfile.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorTextMatch.h"
 #include "editor/ui/editorViewportAxisIndicator.h"
 #include "editor/ui/editorActorVisualization.h"
 #include "editor/ui/scriptComponentControls.h"
+#include "editor/ui/tressfxGroupEditor.h"
+#include "hair/tressfxGroupBinding.h"
+#include "editor/ui/tressfxHairSimulationControls.h"
+#include "hair/tressfxGroupBinding.h"
+#include "hair/tressfxGroupPreviewState.h"
 #include "editor/ui/scriptPhysicsControls.h"
 #include "editor/ui/scriptPropertyControls.h"
 #include "editor/particles/particleCurveEdit.h"
@@ -41,6 +50,7 @@
 #include "ui/widgets/property/propertyWidgets.h"
 #include "ui/widgets/text/textWidgets.h"
 #include "ui/widgets/views/viewWidgets.h"
+#include "ui/uiColorTransform.h"
 
 namespace VL::EditorUi
 {
@@ -52,8 +62,19 @@ using UiWidgets::Option;
 using UiWidgets::WidgetAction;
 using UiWidgets::WidgetRefreshScope;
 
-bool SameOfflineControls(const UiViewModelSnapshot& a, const UiViewModelSnapshot& b)
+// 目录条目给 UI 一个同步的“这是不是 tressfx、有没有 simulation.skinning”判定，
+// 使打开资产时能立刻决定是否请求预览；快照到达后再作为权威来源复核。
+const EditorJsonAssetEntry* FindCatalogEntry(
+    const std::shared_ptr<const EditorJsonAssetCatalogSnapshot>& catalog,
+    const std::string& assetPath)
 {
+    if (!catalog) return nullptr;
+    for (const auto& entry : catalog->assets)
+        if (entry.assetPath == assetPath) return &entry;
+    return nullptr;
+}
+
+bool SameOfflineControls(const UiViewModelSnapshot& a, const UiViewModelSnapshot& b){
     return std::tie(a.offlineMode, a.offlineState, a.offlineSamples,
         a.offlineCompletedSamples, a.offlineBounces, a.offlineLightSamples,
         a.offlineSeed, a.offlineAov, a.offlineExposure, a.offlineError, a.offlineUiNotice) ==
@@ -370,6 +391,179 @@ void ApplyParticleDraftChange(
     }
 }
 
+std::string TerrainNumber(float value)
+{
+    std::ostringstream stream;
+    stream << std::setprecision(6) << value;
+    return stream.str();
+}
+
+std::string TerrainLayerRange(float minimum, float maximum)
+{
+    return TerrainNumber(minimum) + "-" + TerrainNumber(maximum);
+}
+
+std::string TerrainLayerColor(const TerrainLayerDesc& layer)
+{
+    const Eigen::Vector3f color = layer.avgColor;
+    const float sum = std::abs(color.x()) + std::abs(color.y()) + std::abs(color.z());
+    unsigned int red = 0;
+    unsigned int green = 0;
+    unsigned int blue = 0;
+    if (std::isfinite(sum) && sum > 0.01f)
+    {
+        red = UiSrgbHexByte(UiLinearToSrgb(color.x()));
+        green = UiSrgbHexByte(UiLinearToSrgb(color.y()));
+        blue = UiSrgbHexByte(UiLinearToSrgb(color.z()));
+    }
+    else
+    {
+        // 没有可用平均色时，用层身份哈希生成稳定的低饱和色；不能每帧随机。
+        const std::string& identity = layer.key.empty() ? layer.name : layer.key;
+        uint32_t hash = 2166136261u;
+        for (const unsigned char character : identity)
+        {
+            hash ^= character;
+            hash *= 16777619u;
+        }
+        red = 72u + (hash & 63u);
+        green = 78u + ((hash >> 8u) & 63u);
+        blue = 68u + ((hash >> 16u) & 63u);
+    }
+    std::ostringstream stream;
+    stream << '#' << std::uppercase << std::hex << std::setfill('0')
+        << std::setw(2) << red << std::setw(2) << green
+        << std::setw(2) << blue << "FF";
+    return stream.str();
+}
+
+std::string TerrainLayerSourceLabel(uint32_t sourceSet)
+{
+    return "set " + std::to_string(sourceSet);
+}
+
+bool TerrainLayerMatchesSearch(const TerrainLayerDesc& layer, const std::string& search)
+{
+    const std::string folded = FoldAsciiCase(search);
+    if (folded.empty()) return true;
+    const std::string haystack = FoldAsciiCase(layer.name + "\n" + layer.key + "\n" +
+        TerrainLayerSourceLabel(layer.sourceSet) + "\nsourceSet " +
+        std::to_string(layer.sourceSet));
+    return haystack.find(folded) != std::string::npos;
+}
+
+std::string TerrainLayerCardMarkup(const TerrainLayerDesc& layer, const std::string& color,
+    const std::string& spherePath, size_t index, bool selected, bool listView)
+{
+    const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
+    const std::string meta = TerrainLayerSourceLabel(layer.sourceSet) +
+        " &#183; uvScale " + TerrainNumber(layer.uvScale);
+    std::string classes = "terrain-layer-card ";
+    classes += listView ? "terrain-layer-list-card" : "terrain-layer-grid-card";
+    if (selected) classes += " selected";
+    std::string markup = "<button id=\"terrain-layer-card-" + std::to_string(index) +
+        "\" class=\"" + classes + "\" data-action=\"terrain-layer-select\" data-index=\"" +
+        std::to_string(index) + "\" title=\"" + Text(name) + "\">" +
+        "<div class=\"terrain-layer-swatch";
+    if (spherePath.empty())
+    {
+        markup += "\" style=\"background-color: " + color +
+            ";\"><div class=\"terrain-layer-swatch-highlight\"></div>";
+    }
+    else
+    {
+        // 有真实球体图时不能保留色块背景，否则 PNG 透明角落会露出方块。
+        markup += " has-image\"><img class=\"terrain-layer-swatch-image\" src=\"" +
+            Text(spherePath) + "\"/>";
+    }
+    markup += std::string("</div>") +
+        "<div class=\"terrain-layer-card-copy\">" +
+        "<span class=\"terrain-layer-card-name\">" + Text(name) + "</span>" +
+        "<span class=\"terrain-layer-card-meta\">" + meta + "</span>" +
+        "</div></button>";
+    return markup;
+}
+
+// 窗口计算必须与 RCSS 的固定卡片盒一致：144px 卡宽 + 6px 右间距 = 150px 单元格，
+// 116px 卡高 + 6px 下间距 = 122px 行高；列表行高为 34px 卡 + 4px 间距 = 38px。
+constexpr float TerrainLayerGridCellWidth = 150.0f;
+constexpr float TerrainLayerGridRowHeight = 122.0f;
+constexpr float TerrainLayerListRowHeight = 38.0f;
+constexpr float TerrainLayerFallbackViewportWidth = 320.0f;
+constexpr float TerrainLayerFallbackViewportHeight = 180.0f;
+constexpr size_t TerrainLayerVirtualizeThreshold = 12;
+
+int TerrainLayerGridColumns(float viewportWidth)
+{
+    if (!std::isfinite(viewportWidth) || viewportWidth <= 0.0f) return 1;
+    return std::max(1, static_cast<int>(std::floor(
+        viewportWidth / TerrainLayerGridCellWidth)));
+}
+
+int TerrainBrushShapeIndex(Editor::BrushShape shape)
+{
+    return shape == Editor::BrushShape::Square ? 1 : 0;
+}
+
+int TerrainBrushFalloffIndex(Editor::BrushFalloff falloff)
+{
+    return static_cast<int>(falloff);
+}
+
+float TerrainBrushFalloffValue(Editor::BrushFalloff falloff)
+{
+    // 当前地形核心只消费 0..1 的插值权重；Lut 尚未接入几何采样，
+    // 复用它最接近的平滑权重，避免预设选中后参数实际不生效。
+    switch (falloff)
+    {
+    case Editor::BrushFalloff::Linear: return 0.6f;
+    case Editor::BrushFalloff::Constant: return 0.0f;
+    case Editor::BrushFalloff::Smooth:
+    case Editor::BrushFalloff::Lut:
+    default: return 1.0f;
+    }
+}
+
+bool TerrainBrushValueMatches(float value, float expected)
+{
+    return std::abs(value - expected) <=
+        1.0e-5f * std::max(1.0f, std::abs(expected));
+}
+
+bool TerrainBrushValuesMatch(
+    const Editor::BrushProfile& profile,
+    float radiusCm,
+    float strength,
+    float falloff,
+    int shape)
+{
+    return TerrainBrushValueMatches(radiusCm, profile.radiusCm) &&
+        TerrainBrushValueMatches(strength, profile.strength) &&
+        TerrainBrushValueMatches(falloff, TerrainBrushFalloffValue(profile.falloff)) &&
+        shape == TerrainBrushShapeIndex(profile.shape);
+}
+
+bool TerrainSculptBrushMatches(
+    const Editor::BrushProfile& profile,
+    const TerrainSculptBrushState& state)
+{
+    return TerrainBrushValuesMatch(profile, state.radiusCm,
+        state.strength, state.falloff, state.shape);
+}
+
+bool TerrainPaintBrushMatches(
+    const Editor::PaintBrushPreset& preset,
+    const TerrainPaintBrushState& state)
+{
+    return TerrainBrushValueMatches(state.radiusCm, preset.profile.radiusCm) &&
+        TerrainBrushValueMatches(state.hardness, preset.hardness) &&
+        TerrainBrushValueMatches(state.opacity, preset.opacity) &&
+        TerrainBrushValueMatches(state.flow, preset.flow) &&
+        TerrainBrushValueMatches(state.noise, preset.profile.noise) &&
+        state.noiseSeed == preset.profile.noiseSeed &&
+        state.shape == TerrainBrushShapeIndex(preset.profile.shape);
+}
+
 std::string MotionNumber(double value)
 {
     std::ostringstream stream;
@@ -406,6 +600,39 @@ bool ParseNumber(const std::string& text, T& value)
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
     return !text.empty() && result.ec == std::errc() &&
         result.ptr == text.data() + text.size() && std::isfinite(static_cast<double>(value));
+}
+
+BlueprintGizmoMode SceneGizmoMode(const std::string& tool)
+{
+    return tool == "rotate" ? BlueprintGizmoMode::Rotate :
+        tool == "scale" ? BlueprintGizmoMode::Scale : BlueprintGizmoMode::Translate;
+}
+
+bool SceneGizmoSupportsActor(EditorSceneActorType type)
+{
+    // Environment/Wind 没有可写的 Actor Transform；其余场景对象都参与 UE 式
+    // Move/Rotate/Scale 中的至少一种。SquareAreaLight 只有位置和朝向法线，
+    // 不支持 authored scale/rotation，因此只显示平移 Gizmo。
+    return type != EditorSceneActorType::Environment &&
+        type != EditorSceneActorType::SceneWind;
+}
+
+bool SceneGizmoSupportsMode(EditorSceneActorType type, BlueprintGizmoMode mode)
+{
+    if (mode == BlueprintGizmoMode::Translate) return SceneGizmoSupportsActor(type);
+    if (mode == BlueprintGizmoMode::Rotate)
+        return SceneGizmoSupportsActor(type) && type != EditorSceneActorType::SquareAreaLight;
+    return type == EditorSceneActorType::Mesh || type == EditorSceneActorType::Terrain ||
+        type == EditorSceneActorType::Script;
+}
+
+Eigen::Quaternionf SceneGizmoRotation(const Eigen::Vector3f& degrees)
+{
+    // 与 World 的 YXZ 作者旋转约定一致；只用于 Local 轴方向，不改变 TRS 语义。
+    const Eigen::Vector3f radians = degrees * 0.017453292519943295f;
+    const Eigen::Quaternionf y(Eigen::AngleAxisf(radians.y(), Eigen::Vector3f::UnitY()));
+    const Eigen::Quaternionf x(Eigen::AngleAxisf(radians.x(), Eigen::Vector3f::UnitX()));
+    return y * x * Eigen::AngleAxisf(radians.z(), Eigen::Vector3f::UnitZ());
 }
 
 // 文本输入与范围控件都是 ElementFormControl，但取值路径不同：
@@ -476,6 +703,9 @@ std::string ActorPropertyRowMarkup(const EditorSceneActorEditableField& field)
             (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
         entry.value = SceneActorNumber(field.value[component]);
         entry.change = {"actor-property", static_cast<size_t>(field.property), component};
+        entry.hasRange = field.hasRange;
+        entry.minValue = field.minValue;
+        entry.maxValue = field.maxValue;
         components.push_back(std::move(entry));
     }
     return "<div class=\"actor-property-row\" id=\"" +
@@ -499,6 +729,22 @@ std::string ActorSectionKey(const std::string& groupKey)
 bool ChangedFloat(float value, float currentValue)
 {
     return std::abs(value - currentValue) > 0.0001f;
+}
+
+// actor-property 的文本输入嵌在属性行里；点击行的空白/标签区域时把焦点交给
+// 第一个文本输入，避免用户必须精确点中输入框才能编辑。
+Rml::Element* FirstActorTextInput(Rml::Element& root)
+{
+    for (int index = 0; index < root.GetNumChildren(); ++index)
+    {
+        Rml::Element* child = root.GetChild(index);
+        if (child == nullptr) continue;
+        if (child->GetTagName() == "input" &&
+            child->GetAttribute<Rml::String>("type", "") == "text")
+            return child;
+        if (Rml::Element* nested = FirstActorTextInput(*child)) return nested;
+    }
+    return nullptr;
 }
 
 // Details 强度以 lux 表示，保留物理光照迁移后的作者范围；不再受旧调试页滑条约束。
@@ -585,6 +831,8 @@ const char* PanelLabel(const std::string& panel)
     if (panel == "content") return "Content Browser";
     if (panel == "renderer") return "Renderer";
     if (panel == "log") return "Log";
+    if (panel == "terrain") return "Landscape";
+    if (panel == "performance") return "Performance";
     return "Asset Editor";
 }
 
@@ -686,6 +934,7 @@ Editor::Selection::MaterialInstanceModelContext SelectionModel(
     result.objectId = model.objectId;
     result.displayName = model.displayName;
     result.objectIdentity = model.objectIdentity;
+    result.actorIdentity = model.actorIdentity;
     for (const auto& material : model.materials)
     {
         Editor::Selection::MaterialInstanceModelMaterial item;
@@ -727,19 +976,46 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "offline-stop", "offline-restart", "offline-export", "asset-search",
         "close-document-status", "close-save", "editor-navigation",
         "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
-        "content-browser-page", "renderer-page", "editor-viewport-surface", "editor-viewport-image",
+        "content-browser-page", "renderer-page", "performance-page", "workspace-performance-tab",
+        "performance-fps", "performance-cpu-ms", "performance-gpu-ms", "performance-status",
+        "performance-passes", "editor-viewport-surface", "editor-viewport-image",
         "workspace-log-tab", "log-page", "log-scroll", "log-rows", "log-count",
+        "workspace-terrain-tab", "terrain-page", "terrain-page-body", "terrain-empty", "terrain-summary",
+        "terrain-mode-sculpt", "terrain-mode-paint", "terrain-mode-layers",
+        "terrain-layer-search", "terrain-layer-view-grid", "terrain-layer-view-list",
+        "terrain-panel-filter-row",
+        "terrain-workspace", "terrain-brush-column", "terrain-brush-library-title",
+        "terrain-brush-library", "terrain-layer-library",
+        "terrain-layer-visible-count", "terrain-layer-scroll", "terrain-layer-cards",
+        "terrain-layer-top-spacer", "terrain-layer-bottom-spacer",
+        "terrain-layer-empty", "terrain-layer-status", "terrain-layer-hover-preview",
+        "terrain-layer-hover-image",
+        "terrain-surface-panel", "terrain-surface-size", "terrain-surface-height-scale",
+        "terrain-surface-layer-count", "terrain-surface-chunk-count",
+        "terrain-surface-section-count",
         "log-output", "log-scripts", "log-output-tab", "log-scripts-tab",
         "log-severity", "log-source", "log-search", "log-autoscroll", "log-clear",
         "log-scripts-search", "log-scripts-summary", "log-scripts-rows",
         "log-scripts-page", "log-scripts-prev", "log-scripts-next",
         "workspace-viewport-tab", "workspace-outliner-tab", "workspace-details-tab",
         "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
-        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
+        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-preview-panel",
         "blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert",
         "particle-undo", "particle-redo", "particle-validate", "particle-revert", "particle-module-system",
         "particle-revert-dialog", "particle-revert-name",
         "particle-revert-confirm",
+        "terrain-asset-editor", "terrain-asset-save", "terrain-asset-revert",
+        "retarget-asset-editor", "retarget-title", "retarget-identity", "retarget-status",
+        "retarget-bind", "retarget-calibrated", "retarget-front", "retarget-side", "retarget-top",
+        "retarget-anchor", "retarget-surface", "retarget-lines", "retarget-mappings",
+        "retarget-focus", "retarget-fit", "retarget-zoom", "retarget-all-bones",
+        "retarget-selection", "retarget-measurement", "retarget-prev", "retarget-next", "retarget-page",
+        "retarget-reference", "retarget-animation", "retarget-reference-toolbar", "retarget-reference-workspace",
+        "retarget-hierarchy", "retarget-hierarchy-source", "retarget-hierarchy-target", "retarget-details",
+        "retarget-editor-workspace", "retarget-center", "retarget-sidebar", "retarget-animation-assets",
+        "retarget-animation-workspace", "retarget-preview-surface", "retarget-preview-image", "retarget-preview-status",
+        "retarget-animation-tools", "retarget-animation-play", "retarget-animation-pause", "retarget-animation-clip",
+        "retarget-animation-time", "retarget-animation-status", "retarget-animation-frame",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
@@ -764,7 +1040,8 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-json-kind", "resource-json-path", "resource-json-description",
         "resource-json-status", "resource-json-fields", "resource-json-search",
         "resource-json-page", "resource-json-prev", "resource-json-next",
-        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield", "workspace-reset",
+        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield",
+        "workspace-undo", "workspace-redo", "workspace-reset",
         "asset-sources", "asset-breadcrumbs", "asset-count", "asset-empty", "browser-selection",
         "browser-back", "browser-forward", "browser-up", "browser-sources-toggle",
         "browser-grid", "browser-list", "browser-recursive", "browser-sort", "browser-size",
@@ -781,6 +1058,18 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
+        "viewport-snap-enabled", "viewport-snap-move", "viewport-snap-rotate", "viewport-snap-scale",
+        "viewport-gizmo-overlay", "viewport-gizmo-capture",
+        "viewport-brush-ring", "viewport-brush-ring-center",
+        "viewport-tool-landscape", "viewport-landscape-controls",
+        "viewport-landscape-sculpt", "viewport-landscape-paint",
+        "viewport-landscape-write",
+        "viewport-brush-settings", "viewport-brush-mode-0", "viewport-brush-mode-1",
+        "viewport-brush-mode-2", "viewport-brush-radius", "viewport-brush-strength",
+        "viewport-brush-falloff", "terrain-sculpt-settings", "viewport-paint-settings",
+        "viewport-paint-mode", "terrain-paint-radius", "terrain-paint-hardness",
+        "terrain-paint-opacity", "terrain-paint-flow",
+        "viewport-paint-erase",
         "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe",
         "viewport-axis-indicator", "viewport-axis-bar-x", "viewport-axis-bar-y",
         "viewport-axis-bar-z", "viewport-axis-label-x", "viewport-axis-label-y",
@@ -821,6 +1110,12 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     docking.SetPanelVisible("viewport", true);
     docking.Activate("viewport");
     widgetDocument.Attach(candidate);
+    if (!brushLibrary.Attach(candidate, "terrain-brush-library", error))
+    {
+        Detach();
+        return false;
+    }
+    retargetEditor.Attach(candidate);
     if (!contentBrowser.Attach(candidate, error))
     {
         Detach();
@@ -836,13 +1131,25 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         Detach();
         return false;
     }
+    terrainAssetEditor.SetCommandSink(commandSink);
+    if (!terrainAssetEditor.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
     if (!logPanel.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
+    if (!performancePanel.Attach(candidate, error))
     {
         Detach();
         return false;
     }
     detailsIdentity.clear();
     actorDetailsIdentity.clear();
+    terrainSummarySignature.clear();
     blueprintAssetIdentity.clear();
     RefreshWorkspace();
     RefreshLists();
@@ -854,6 +1161,10 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
 void MaterialInstanceAssetEditorPanel::Detach()
 {
     CancelBlueprintViewportDrag();
+    CancelSceneGizmoDrag();
+    CancelTerrainBrushStroke();
+    ClearTerrainBrushHit();
+    landscapeToolActive = false;
     actorDragPath.clear();
     textureViewSource.clear();
     ResetTextureView();
@@ -867,6 +1178,8 @@ void MaterialInstanceAssetEditorPanel::Detach()
     motionMatchingRefreshKey.clear();
     textureOptionsDirty = true;
     textureOptionSelections.clear();
+    brushLibrary.Detach();
+    brushLibraryCatalogDomain = -1;
     if (document != nullptr)
     {
         document->RemoveEventListener("click", this);
@@ -882,15 +1195,26 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document->RemoveEventListener("keydown", this, true);
         contentBrowser.Detach();
         logPanel.Detach();
+        performancePanel.Detach();
         jsonInspector.Detach();
         resourceJsonInspector.Detach();
         docking.Detach();
         document = nullptr;
     }
+    terrainAssetEditor.Detach();
     widgetDocument.Detach();
+    retargetEditor.Detach();
     axisIndicatorSignature.clear();
+    terrainSummarySignature.clear();
+    terrainLayerLibrarySignature.clear();
+    terrainLayerSourceKey.clear();
+    terrainLayerWindow = TerrainLayerWindowState{};
+    terrainLayerWindowDirty = true;
+    terrainLayerScrollResetPending = true;
+    terrainLayerLastScrollTop = -1.0f;
     // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
     outlinerMounted = false;
+    sceneGizmoMarkupMounted = false;
     // 右键菜单的目标属于旧文档的 DOM，重新接上后必须先回到"没有菜单"。
     contextMenuKind = ContextMenuKind::None;
     contextMenuTarget.clear();
@@ -980,6 +1304,18 @@ void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)
 
 void MaterialInstanceAssetEditorPanel::RequestSave()
 {
+    if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Terrain &&
+        IsResourceEditorVisible())
+    {
+        const auto* terrain = TerrainDocument(tab->path);
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SaveTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = MaterialInstanceAssetPathPayload{tab->path};
+        Submit(std::move(command));
+        return;
+    }
     if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Blueprint &&
         IsResourceEditorVisible())
     {
@@ -1112,9 +1448,12 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
         EditorCommandEnvelope command;
         command.type = row.kind == EditorAssetKind::Scene
             ? EditorCommandType::SaveSceneDocument : row.kind == EditorAssetKind::Mesh
-            ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Texture
+            ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Tressfx
+            ? EditorCommandType::SaveTressfxDocument : row.kind == EditorAssetKind::Texture
             ? EditorCommandType::SaveTextureDocument : row.kind == EditorAssetKind::Blueprint
             ? EditorCommandType::SaveBlueprintDocument : row.kind == EditorAssetKind::ParticleSystem
+            ? EditorCommandType::SaveBlueprintDocument : row.kind == EditorAssetKind::Terrain
+            ? EditorCommandType::SaveTerrainDocument : row.kind == EditorAssetKind::ParticleSystem
             ? EditorCommandType::SaveParticleDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
         command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
@@ -1206,6 +1545,8 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             authored->documentRevision > particleHistoryCommandRevision)
             particleHistoryCommandAwaitingSnapshot = false;
     }
+    SynchronizeSceneGizmoSelection();
+    SynchronizeTerrainBrushSelection();
     if (blueprintCommandAwaitingSnapshot)
     {
         const auto* authored = BlueprintDocument(blueprintCommandPath);
@@ -1219,8 +1560,22 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     }
     saveAwaitingSnapshot = false;
     // 文档集合由服务拥有，停靠标签只是投影；关卡/贴图页面不会被每帧刷新抢走。
+    const bool closingMaterialActive = !closingMaterialPath.empty() &&
+        docking.IsPanelActive(MaterialPanelId(closingMaterialPath));
     RefreshDocumentTabs();
-    if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
+    bool materialClosed = !closingMaterialPath.empty();
+    for (const auto& tab : snapshot.documentTabs)
+        if (tab.assetPath == closingMaterialPath) materialClosed = false;
+    if (materialClosed)
+    {
+        // MI 关闭由 GT 确认；确认后才切邻页，不能被服务内部的 MI 选择覆盖跨类型邻居。
+        const std::string next = std::move(panelAfterMaterialClose);
+        closingMaterialPath.clear();
+        panelAfterMaterialClose.clear();
+        activateMaterialDocument = false;
+        if (closingMaterialActive) ActivateWorkspacePanel(next);
+    }
+    else if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
         !snapshot.selectedDocumentPath.empty())
     {
         docking.SetPanelVisible(MaterialPanelId(snapshot.selectedDocumentPath), true);
@@ -1231,17 +1586,26 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     RefreshWorkspace();
     resourceEditorVisible = IsResourceEditorVisible();
     logPanel.Build(snapshot.logs, docking.IsPanelActive("log"));
-    if (discardBlueprintThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    // 面板数据变化时顺带喂一次性能页（5 Hz 节流在性能页内部）；平时由
+    // UiSubsystem 在到期窗口单独调用 UpdatePerformance，不触发整份面板重建。
+    UpdatePerformance(snapshot.performance);
+    // UI 修改命令已入队但新草稿尚未发布时，关闭流程必须等到权威 revision。
+    const bool closingTressfxStaging = pendingCloseKind == EditorAssetKind::Tressfx &&
+        hairSimulationPath == pendingClosePath && hairSimulationPendingSave;
+    if (discardBlueprintThenClose &&
+        (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
-        if (!discardBlueprintCloseSubmitted)
+        if (!discardBlueprintCloseSubmitted && !closingTressfxStaging)
         {
             // 等上一帧的修改成为权威版本再回退，不能把旧 revision 的丢弃请求排在修改后面。
-            SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, pendingClosePath);
+            SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
+                ? EditorCommandType::RevertTressfxDocument : EditorCommandType::RevertBlueprintDocument,
+                pendingClosePath);
             discardBlueprintCloseSubmitted = true;
         }
-        else
+        else if (discardBlueprintCloseSubmitted)
         {
-            const auto* actor = BlueprintDocument(pendingClosePath);
+            const auto* actor = ResourceDocument(pendingClosePath);
             if (actor && !actor->dirty)
             {
                 CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
@@ -1251,19 +1615,22 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
         }
     }
-    else if (saveThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    else if (saveThenClose &&
+        (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
-        if (!saveCloseSubmitted)
+        if (!saveCloseSubmitted && !closingTressfxStaging)
         {
-            SubmitBlueprintAssetCommand(EditorCommandType::SaveBlueprintDocument, pendingClosePath);
+            SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
+                ? EditorCommandType::SaveTressfxDocument : EditorCommandType::SaveBlueprintDocument,
+                pendingClosePath);
             saveCloseSubmitted = true;
         }
-        else
+        else if (saveCloseSubmitted)
         {
             for (const auto& feedback : snapshot.saveFeedback)
                 if (feedback.assetPath == pendingClosePath && feedback.sequence > saveStartedSequence)
                 {
-                    const auto* actor = BlueprintDocument(pendingClosePath);
+                    const auto* actor = ResourceDocument(pendingClosePath);
                     if (feedback.succeeded && actor && !actor->dirty)
                     {
                         CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
@@ -1406,7 +1773,8 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             discardParticleThenClose ||
             (saveThenClose &&
              (pendingCloseKind == EditorAssetKind::Blueprint ||
-              pendingCloseKind == EditorAssetKind::ParticleSystem)));
+              pendingCloseKind == EditorAssetKind::ParticleSystem ||
+              pendingCloseKind == EditorAssetKind::Tressfx)));
     }
 }
 
@@ -1432,6 +1800,411 @@ void MaterialInstanceAssetEditorPanel::RefreshWorkspace()
     docking.Sync();
     RefreshMenus();
     RefreshViewportToolbar();
+    RefreshTerrainSummary();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainSummary()
+{
+    if (document == nullptr) return;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const bool terrainSelected =
+        actor != nullptr && actor->type == EditorSceneActorType::Terrain;
+
+    // 空状态与编辑工作区只随选中地形身份切换；层内容由层库自己的签名缓存。
+    const std::string signature = terrainSelected
+        ? actor->identity + "|" + std::to_string(actor->worldGeneration)
+        : "empty";
+    if (signature != terrainSummarySignature)
+    {
+        terrainSummarySignature = signature;
+        widgetDocument.SetProperty("terrain-empty", "display", terrainSelected ? "none" : "flex");
+        // 编辑器工作区始终保留：没有地形时笔刷库仍可选择默认笔刷，
+        // 层库只显示显式空状态，不伪造任何地形层。
+        widgetDocument.SetProperty("terrain-summary", "display", "flex");
+    }
+    RefreshTerrainLayerLibrary();
+    RefreshTerrainSurfacePanel(SelectedTerrainActor());
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainSurfacePanel(
+    const EditorSceneActorSnapshot* actor)
+{
+    if (document == nullptr) return;
+    if (actor == nullptr || actor->terrainPlan == nullptr)
+    {
+        SetMarkup("terrain-surface-size", "");
+        SetMarkup("terrain-surface-height-scale", "");
+        SetMarkup("terrain-surface-layer-count", "0");
+        SetMarkup("terrain-surface-chunk-count", "0");
+        SetMarkup("terrain-surface-section-count", "0");
+        return;
+    }
+
+    const TerrainAssetDesc& desc = actor->terrainPlan->desc;
+    SetMarkup("terrain-surface-size",
+        Text(TerrainNumber(desc.size.x()) + " x " + TerrainNumber(desc.size.y()) + " cm"));
+    SetMarkup("terrain-surface-height-scale", Text(TerrainNumber(desc.heightScale) + " cm"));
+    SetMarkup("terrain-surface-layer-count", Text(std::to_string(desc.layers.size())));
+
+    uint32_t chunksPerSide = 0;
+    if (desc.chunkQuads != 0)
+        chunksPerSide = desc.gridResolution / desc.chunkQuads;
+    SetMarkup("terrain-surface-chunk-count",
+        Text(std::to_string(chunksPerSide) + " x " + std::to_string(chunksPerSide) +
+            " (" + std::to_string(static_cast<uint64_t>(chunksPerSide) * chunksPerSide) + ")"));
+    SetMarkup("terrain-surface-section-count", Text(std::to_string(actor->sections.size())));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
+{
+    if (document == nullptr) return;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    const TerrainBuildPlan* plan = actor == nullptr ? nullptr : actor->terrainPlan.get();
+    const size_t layerCount = plan == nullptr ? 0 : plan->desc.layers.size();
+    if (layerCount == 0)
+    {
+        terrainPaintLayer = 0;
+        if (terrainPanelMode == TerrainPanelMode::Paint)
+            terrainPanelMode = TerrainPanelMode::Layers;
+    }
+    else if (terrainPaintLayer >= layerCount)
+    {
+        terrainPaintLayer = static_cast<uint32_t>(layerCount - 1);
+    }
+    const bool selectedValid = layerCount != 0 && terrainPaintLayer < layerCount;
+
+    auto* scroll = document->GetElementById("terrain-layer-scroll");
+    std::ostringstream sourceKey;
+    sourceKey << (actor == nullptr ? 0 : reinterpret_cast<uintptr_t>(plan)) << '|'
+        << (actor == nullptr ? std::string() : actor->identity) << '|'
+        << (actor == nullptr ? 0 : actor->worldGeneration) << '|' << layerCount;
+    if (sourceKey.str() != terrainLayerSourceKey)
+    {
+        terrainLayerSourceKey = sourceKey.str();
+        terrainLayerHoverActive = false;
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+    }
+    if (terrainLayerScrollResetPending)
+    {
+        if (scroll != nullptr) scroll->SetScrollTop(0.0f);
+        terrainLayerScrollResetPending = false;
+        terrainLayerWindowDirty = true;
+    }
+
+    const float scrollTop = scroll == nullptr ? 0.0f : scroll->GetScrollTop();
+    float viewportWidth = 0.0f;
+    float viewportHeight = 0.0f;
+    if (scroll != nullptr)
+    {
+        const Rml::Vector2f content = scroll->GetBox().GetSize(Rml::BoxArea::Content);
+        viewportWidth = content.x;
+        viewportHeight = content.y;
+    }
+    const bool viewportMeasured = std::isfinite(viewportWidth) &&
+        std::isfinite(viewportHeight) && viewportWidth > 0.0f && viewportHeight > 0.0f;
+    if (!viewportMeasured)
+    {
+        // 面板隐藏时布局尺寸可能为 0；沿用上一次有效尺寸，避免窗口在隐藏/显示之间抖动。
+        if (terrainLayerWindow.valid)
+        {
+            viewportWidth = terrainLayerWindow.viewportWidth;
+            viewportHeight = terrainLayerWindow.viewportHeight;
+        }
+        else
+        {
+            viewportWidth = TerrainLayerFallbackViewportWidth;
+            viewportHeight = TerrainLayerFallbackViewportHeight;
+        }
+    }
+    if (terrainLayerWindow.valid)
+    {
+        if (std::abs(viewportWidth - terrainLayerWindow.viewportWidth) > 0.5f ||
+            std::abs(viewportHeight - terrainLayerWindow.viewportHeight) > 0.5f ||
+            std::abs(scrollTop - terrainLayerLastScrollTop) > 0.5f)
+            terrainLayerWindowDirty = true;
+    }
+
+    size_t visibleCount = 0;
+    if (plan != nullptr)
+    {
+        for (size_t index = 0; index < layerCount; ++index)
+        {
+            if (TerrainLayerMatchesSearch(plan->desc.layers[index], terrainLayerSearch))
+                ++visibleCount;
+        }
+    }
+    if (!terrainLayerWindow.valid || terrainLayerWindowDirty ||
+        terrainLayerWindow.filteredCount != visibleCount ||
+        terrainLayerWindow.listView != terrainLayerListView)
+    {
+        TerrainLayerWindowState window;
+        window.valid = true;
+        window.listView = terrainLayerListView;
+        window.filteredCount = visibleCount;
+        window.viewportWidth = viewportWidth;
+        window.viewportHeight = viewportHeight;
+        window.columns = terrainLayerListView ? 1 : TerrainLayerGridColumns(viewportWidth);
+        const float rowHeight = terrainLayerListView ?
+            TerrainLayerListRowHeight : TerrainLayerGridRowHeight;
+        window.totalRows = terrainLayerListView ? static_cast<int>(visibleCount) :
+            static_cast<int>((visibleCount + static_cast<size_t>(window.columns) - 1) /
+                static_cast<size_t>(window.columns));
+        if (visibleCount <= TerrainLayerVirtualizeThreshold)
+        {
+            // 小集合全部挂载，避免为十几张卡片引入 spacer 和额外的布局分支。
+            window.firstRow = 0;
+            window.endRow = window.totalRows;
+            window.firstIndex = 0;
+            window.endIndex = visibleCount;
+            window.topSpacerHeight = 0.0f;
+            window.bottomSpacerHeight = 0.0f;
+        }
+        else
+        {
+            constexpr int OverscanRows = 1;
+            const int firstVisibleRow = std::max(0,
+                static_cast<int>(std::floor(scrollTop / rowHeight)));
+            const int lastVisibleRow = std::max(firstVisibleRow,
+                static_cast<int>(std::ceil((scrollTop + viewportHeight) / rowHeight)) - 1);
+            window.firstRow = std::max(0, firstVisibleRow - OverscanRows);
+            window.endRow = std::min(window.totalRows, lastVisibleRow + 1 + OverscanRows);
+            window.firstRow = std::min(window.firstRow,
+                std::max(0, window.totalRows - 1));
+            if (window.endRow <= window.firstRow)
+                window.endRow = std::min(window.totalRows, window.firstRow + 1);
+            window.firstIndex = std::min(visibleCount,
+                static_cast<size_t>(window.firstRow) *
+                    static_cast<size_t>(window.columns));
+            window.endIndex = std::min(visibleCount,
+                static_cast<size_t>(window.endRow) *
+                    static_cast<size_t>(window.columns));
+            window.topSpacerHeight = static_cast<float>(window.firstRow) * rowHeight;
+            window.bottomSpacerHeight =
+                static_cast<float>(window.totalRows - window.endRow) * rowHeight;
+        }
+        terrainLayerWindow = window;
+    }
+    terrainLayerWindowDirty = false;
+    terrainLayerLastScrollTop = scrollTop;
+
+    // 窗口范围进入签名：滚动到同一行内不重建，跨行才替换卡片 DOM。
+    std::ostringstream signature;
+    signature << sourceKey.str() << '|' << terrainPaintLayer << '|'
+        << static_cast<int>(terrainPanelMode) << '|' << terrainLayerListView << '|'
+        << terrainLayerSearch << '|' << terrainLayerWindow.columns << ','
+        << terrainLayerWindow.firstRow << ',' << terrainLayerWindow.endRow << ','
+        << static_cast<int>(std::lround(terrainLayerWindow.topSpacerHeight)) << ','
+        << static_cast<int>(std::lround(terrainLayerWindow.bottomSpacerHeight));
+    if (signature.str() == terrainLayerLibrarySignature) return;
+    terrainLayerLibrarySignature = signature.str();
+
+    widgetDocument.SetClass("terrain-layer-cards", "terrain-layer-grid", !terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-cards", "terrain-layer-list", terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-view-grid", "active", !terrainLayerListView);
+    widgetDocument.SetClass("terrain-layer-view-list", "active", terrainLayerListView);
+    HideTerrainLayerHoverPreview();
+
+    std::string cards;
+    size_t filteredIndex = 0;
+    if (plan != nullptr)
+    {
+        for (size_t index = 0; index < layerCount; ++index)
+        {
+            const TerrainLayerDesc& layer = plan->desc.layers[index];
+            if (!TerrainLayerMatchesSearch(layer, terrainLayerSearch)) continue;
+            if (filteredIndex >= terrainLayerWindow.firstIndex &&
+                filteredIndex < terrainLayerWindow.endIndex)
+            {
+                const VL::Editor::TerrainLayerPreviewPaths previews =
+                    TerrainPreviewPaths(plan->desc, index);
+                cards += TerrainLayerCardMarkup(layer, TerrainLayerColor(layer),
+                    previews.spherePath, index, selectedValid && terrainPaintLayer == index,
+                    terrainLayerListView);
+            }
+            ++filteredIndex;
+        }
+    }
+    widgetDocument.SetProperty("terrain-layer-top-spacer", "height",
+        Pixels(terrainLayerWindow.topSpacerHeight));
+    widgetDocument.SetProperty("terrain-layer-top-spacer", "display",
+        terrainLayerWindow.topSpacerHeight > 0.0f ? "block" : "none");
+    widgetDocument.SetProperty("terrain-layer-bottom-spacer", "height",
+        Pixels(terrainLayerWindow.bottomSpacerHeight));
+    widgetDocument.SetProperty("terrain-layer-bottom-spacer", "display",
+        terrainLayerWindow.bottomSpacerHeight > 0.0f ? "block" : "none");
+    SetMarkup("terrain-layer-cards", std::move(cards));
+    SetMarkup("terrain-layer-visible-count",
+        Text(std::to_string(visibleCount) + " / " + std::to_string(layerCount) +
+            (layerCount == 1 ? " layer" : " layers")));
+
+    std::string emptyText;
+    if (layerCount == 0)
+        emptyText = actor == nullptr
+            ? "Select a Landscape actor to browse layers."
+            : "This terrain has no authored layers.";
+    else if (visibleCount == 0)
+        emptyText = "No layers match \"" + terrainLayerSearch + "\".";
+    SetMarkup("terrain-layer-empty", emptyText.empty() ? std::string() : Text(emptyText));
+    widgetDocument.SetProperty("terrain-layer-empty", "display",
+        emptyText.empty() ? "none" : "block");
+
+    std::string status;
+    if (!selectedValid)
+    {
+        status = "No layer selected | 0 layers";
+    }
+    else
+    {
+        const TerrainLayerDesc& layer = plan->desc.layers[terrainPaintLayer];
+        const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
+        status = "Selected: " + name +
+            " | source set " + std::to_string(layer.sourceSet) +
+            " | uvScale " + TerrainNumber(layer.uvScale) +
+            " | height " + TerrainLayerRange(layer.heightMin, layer.heightMax) +
+            " | slope " + TerrainLayerRange(layer.slopeMin, layer.slopeMax) +
+            " | " + std::to_string(layerCount) + " layers";
+    }
+    SetMarkup("terrain-layer-status", Text(status));
+    // 选中只改卡片 class；重建后恢复原 scrollTop，不能把用户滚到的位置弹回顶部。
+    if (scroll != nullptr)
+        scroll->SetScrollTop(scrollTop);
+    // 卡片重建会清掉旧 DOM 目标；若鼠标仍停在层库上，用稳定层号在同一帧恢复悬停平面。
+    if (terrainPanelMode == TerrainPanelMode::Sculpt)
+        terrainLayerHoverActive = false;
+    if (terrainLayerHoverActive)
+    {
+        Rml::Element* hoveredCard = document->GetElementById(
+            "terrain-layer-card-" + std::to_string(terrainLayerHoverLayer));
+        if (hoveredCard != nullptr)
+        {
+            const Rml::Vector2f cardOffset =
+                hoveredCard->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const Rml::Vector2f cardSize =
+                hoveredCard->GetBox().GetSize(Rml::BoxArea::Border);
+            const bool pointerStillOnCard =
+                terrainLayerHoverScreenX >= cardOffset.x &&
+                terrainLayerHoverScreenY >= cardOffset.y &&
+                terrainLayerHoverScreenX < cardOffset.x + cardSize.x &&
+                terrainLayerHoverScreenY < cardOffset.y + cardSize.y;
+            if (pointerStillOnCard)
+            {
+                RefreshTerrainLayerHoverPreview(
+                    {terrainLayerHoverScreenX, terrainLayerHoverScreenY}, hoveredCard);
+            }
+            else
+            {
+                terrainLayerHoverActive = false;
+                HideTerrainLayerHoverPreview();
+            }
+        }
+        else
+        {
+            terrainLayerHoverActive = false;
+            HideTerrainLayerHoverPreview();
+        }
+    }
+}
+
+VL::Editor::TerrainLayerPreviewPaths MaterialInstanceAssetEditorPanel::TerrainPreviewPaths(
+    const TerrainAssetDesc& desc, size_t layerIndex)
+{
+    if (terrainLayerPreviewProvider != nullptr)
+        return terrainLayerPreviewProvider->Get(desc, layerIndex);
+    return terrainLayerPreviewCache.Get(desc, layerIndex);
+}
+
+void MaterialInstanceAssetEditorPanel::HideTerrainLayerHoverPreview()
+{
+    if (document == nullptr) return;
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "display", "none");
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerHoverPreview(
+    const Rml::Vector2f& screenPoint, const Rml::Element* target)
+{
+    if (document == nullptr)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const Rml::Element* card = target;
+    while (card != nullptr && card != document &&
+        card->GetAttribute<std::string>("data-action", "") != "terrain-layer-select")
+        card = card->GetParentNode();
+    if (card == nullptr || card == document)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const size_t index = card->GetAttribute<size_t>("data-index", 0);
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr || actor->terrainPlan == nullptr ||
+        index >= actor->terrainPlan->desc.layers.size())
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    Rml::Element* page = document->GetElementById("terrain-page");
+    Rml::Element* preview = document->GetElementById("terrain-layer-hover-preview");
+    if (page == nullptr || preview == nullptr)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    const Rml::Vector2f offset = page->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const Rml::Vector2f size = page->GetBox().GetSize(Rml::BoxArea::Content);
+    if (size.x <= 0.0f || size.y <= 0.0f)
+    {
+        terrainLayerHoverActive = false;
+        HideTerrainLayerHoverPreview();
+        return;
+    }
+    terrainLayerHoverActive = true;
+    terrainLayerHoverLayer = index;
+    terrainLayerHoverScreenX = screenPoint.x;
+    terrainLayerHoverScreenY = screenPoint.y;
+    constexpr float PreviewWidth = 160.0f;
+    constexpr float PreviewHeight = 112.0f;
+    // 容器仍有 -8° 旋转；留出旋转后的外接盒边距，避免贴边时被面板裁掉。
+    constexpr float PreviewMargin = 14.0f;
+    const float maximumX = std::max(PreviewMargin,
+        size.x - PreviewWidth - PreviewMargin);
+    const float maximumY = std::max(PreviewMargin,
+        size.y - PreviewHeight - PreviewMargin);
+    const float x = std::clamp(
+        screenPoint.x - offset.x + 16.0f, PreviewMargin, maximumX);
+    const float y = std::clamp(
+        screenPoint.y - offset.y - 18.0f, PreviewMargin, maximumY);
+    const VL::Editor::TerrainLayerPreviewPaths previews =
+        TerrainPreviewPaths(actor->terrainPlan->desc, index);
+    Rml::Element* image = document->GetElementById("terrain-layer-hover-image");
+    const bool hasPlaneImage = image != nullptr && !previews.planePath.empty();
+    if (image != nullptr)
+    {
+        if (hasPlaneImage)
+        {
+            if (terrainLayerHoverImageSource != previews.planePath)
+            {
+                image->SetAttribute("src", previews.planePath);
+                terrainLayerHoverImageSource = previews.planePath;
+            }
+            widgetDocument.SetProperty("terrain-layer-hover-image", "display", "block");
+        }
+        else
+        {
+            widgetDocument.SetProperty("terrain-layer-hover-image", "display", "none");
+        }
+    }
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "background-color",
+        TerrainLayerColor(actor->terrainPlan->desc.layers[index]));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "left", Pixels(x));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "top", Pixels(y));
+    widgetDocument.SetProperty("terrain-layer-hover-preview", "display", "block");
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshMenus()
@@ -1500,6 +2273,14 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
     SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
     SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+    if (auto* check = document->GetElementById("viewport-snap-enabled"))
+    {
+        if (sceneSnapEnabled && !check->HasAttribute("checked")) check->SetAttribute("checked", "checked");
+        if (!sceneSnapEnabled && check->HasAttribute("checked")) check->RemoveAttribute("checked");
+    }
+    SetControlValue("viewport-snap-move", Number(sceneMoveSnap));
+    SetControlValue("viewport-snap-rotate", Number(sceneRotateSnap));
+    SetControlValue("viewport-snap-scale", Number(sceneScaleSnap));
     // 菜单只映射已有 debug view，不复制渲染状态；勾选与标题以运行时快照为准。
     const char* modes[] = {"Lit", "Base Color", "Emissive", "World Normal",
         "Roughness", "Metallic", "Ambient Occlusion", "Shadow", "Direct Lighting",
@@ -1513,6 +2294,9 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     SetMarkup("viewport-view-title", std::string(mode >= 0 && mode < 13 ? modes[mode] : "Debug View") + " v");
     RefreshViewportAxisIndicator();
     RefreshActorVisualization();
+    RefreshSceneGizmo();
+    RefreshTerrainBrushUi();
+    RefreshHistoryControls();
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
@@ -1600,6 +2384,856 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
             std::string("rotate(") +
                 std::to_string(EditorUi::AxisIndicatorRotationDegrees(projection)) + "deg)");
     }
+}
+
+bool MaterialInstanceAssetEditorPanel::BuildSelectedSceneGizmo()
+{
+    sceneViewportGizmo = {};
+    if (document == nullptr || landscapeToolActive || IsAssetEditorVisible() || HasModal() ||
+        viewportTransformTool == "select")
+        return false;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr || !SceneGizmoSupportsActor(actor->type))
+        return false;
+    const BlueprintGizmoMode mode = SceneGizmoMode(viewportTransformTool);
+    if (!SceneGizmoSupportsMode(actor->type, mode))
+        return false;
+    const EditorSceneCameraActor* view = nullptr;
+    for (const EditorSceneActorSnapshot& candidate : OutlinerActors())
+        if (candidate.type == EditorSceneActorType::Camera)
+        {
+            view = candidate.hasViewportCamera ? &candidate.viewportCamera : &candidate.camera;
+            break;
+        }
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (view == nullptr || image == nullptr || !image->IsVisible(true))
+        return false;
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+    if (size.x <= 0 || size.y <= 0)
+        return false;
+
+    const Eigen::Vector3f position = sceneGizmoDragging ? sceneGizmoPosition : actor->position;
+    const Eigen::Vector3f rotation = sceneGizmoDragging ? sceneGizmoRotation : actor->rotation;
+    const Eigen::Vector3f scale = sceneGizmoDragging ? sceneGizmoScale : actor->scale;
+    // Gizmo 的原点始终是 actor 世界位置；Local 只改变三轴朝向。
+    // 父矩阵只携带原点与局部旋转，position 传 0，避免把作者位置投射两次。
+    Eigen::Quaternionf parentRotation = Eigen::Quaternionf::Identity();
+    Eigen::Matrix4f parentWorld = Eigen::Matrix4f::Identity();
+    parentWorld.block<3, 1>(0, 3) = position;
+    if (viewportTransformSpace == "local")
+    {
+        parentRotation = SceneGizmoRotation(rotation);
+        parentWorld.block<3, 3>(0, 0) = parentRotation.toRotationMatrix();
+    }
+    BlueprintViewportGizmo gizmo = BuildBlueprintViewportGizmo(*view, size.x, size.y,
+        parentWorld, parentRotation, Eigen::Vector3f::Zero(), Eigen::Vector3f::Zero(),
+        scale, mode);
+    if (!gizmo.valid) return false;
+    gizmo.initialValue = mode == BlueprintGizmoMode::Translate ? position :
+        mode == BlueprintGizmoMode::Rotate ? rotation : scale;
+    sceneViewportGizmo = gizmo;
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshSceneGizmo()
+{
+    if (document == nullptr) return;
+    if (!sceneGizmoMarkupMounted)
+    {
+        // 固定线段/命中槽位只挂载一次；相机移动和拖动只更新 transform/visibility，
+        // 避免每帧重建整段 DOM 触发布局。
+        std::string markup;
+        for (size_t axis = 0; axis < 3; ++axis)
+            for (size_t index = 0; index < 48; ++index)
+            {
+                const std::string suffix = std::to_string(axis) + "-" + std::to_string(index);
+                markup += "<div id=\"scene-gizmo-line-" + suffix +
+                    "\" class=\"actor-visual-line\"></div>";
+                markup += "<div id=\"scene-gizmo-hit-" + suffix +
+                    "\" data-action=\"scene-gizmo-axis\" data-axis=\"" +
+                    std::to_string(axis) + "\"></div>";
+            }
+        SetMarkup("viewport-gizmo-overlay", std::move(markup));
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "position", "absolute");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "left", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "top", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "width", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "height", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-overlay", "pointer-events", "none");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "position", "absolute");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "left", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "top", "0px");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "width", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "height", "100%");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "z-index", "2");
+        widgetDocument.SetProperty("viewport-gizmo-capture", "pointer-events", "auto");
+        sceneGizmoMarkupMounted = true;
+    }
+    const bool visible = BuildSelectedSceneGizmo();
+    static const char* colors[] = {"#e42a1f", "#2fd93f", "#3a5cfa"};
+    for (size_t axis = 0; axis < 3; ++axis)
+        for (size_t index = 0; index < 48; ++index)
+        {
+            const std::string suffix = std::to_string(axis) + "-" + std::to_string(index);
+            const std::string lineId = "scene-gizmo-line-" + suffix;
+            const std::string hitId = "scene-gizmo-hit-" + suffix;
+            const auto& lines = sceneViewportGizmo.axes[axis].lines;
+            const bool lineVisible = visible && index < lines.size();
+            widgetDocument.SetProperty(lineId, "visibility", lineVisible ? "visible" : "hidden");
+            widgetDocument.SetProperty(hitId, "visibility", lineVisible ? "visible" : "hidden");
+            // 命中由视图内的像素距离完成，和蓝图页一致；DOM 只负责画线。
+            // 若让 hit div 拦截指针，场景视口左键会绕过 Gizmo 命中测试。
+            widgetDocument.SetProperty(hitId, "pointer-events", "none");
+            if (!lineVisible) continue;
+            const auto& line = lines[index];
+            const Eigen::Vector2f delta = line.end - line.begin;
+            const std::string transform = "translate(" + Number(line.begin.x()) + "px, " +
+                Number(line.begin.y()) + "px) rotate(" +
+                Number(std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f) +
+                "deg) scaleX(" + Number(delta.norm()) + ")";
+            widgetDocument.SetProperty(lineId, "transform", transform);
+            widgetDocument.SetProperty(lineId, "background-color", colors[axis]);
+            widgetDocument.SetProperty(hitId, "position", "absolute");
+            widgetDocument.SetProperty(hitId, "left", "0px");
+            widgetDocument.SetProperty(hitId, "top", "-6px");
+            widgetDocument.SetProperty(hitId, "width", "1px");
+            widgetDocument.SetProperty(hitId, "height", "12px");
+            widgetDocument.SetProperty(hitId, "transform-origin", "0px 0px");
+            widgetDocument.SetProperty(hitId, "transform", transform);
+            widgetDocument.SetProperty(hitId, "background-color", "#00000000");
+            widgetDocument.SetProperty(hitId, "z-index", "1");
+        }
+    widgetDocument.SetProperty("viewport-gizmo-capture", "display",
+        sceneGizmoDragging ? "block" : "none");
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeSceneGizmoSelection()
+{
+    if (!sceneGizmoDragging) return;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const bool current = actor != nullptr &&
+        actor->worldGeneration == sceneGizmoGeneration &&
+        actor->identity == sceneGizmoIdentity && !IsAssetEditorVisible();
+    if (current) return;
+    // 同一 World 内切换/删除 actor 时恢复旧对象的 live 预览；World 换代时
+    // 旧代数命令本来就应被拒绝，直接丢弃本地手势，不把旧值写到新关卡。
+    CancelSceneGizmoDrag(actor != nullptr &&
+        actor->worldGeneration == sceneGizmoGeneration);
+}
+
+UiAction MaterialInstanceAssetEditorPanel::SceneGizmoAction(bool preview) const
+{
+    UiAction action;
+    action.type = UiActionType::SetActorProperty;
+    auto& edit = action.actorProperty;
+    edit.worldGeneration = sceneGizmoGeneration;
+    edit.identity = sceneGizmoIdentity;
+    edit.property = EditorActorProperty::Transform;
+    edit.preview = preview;
+    edit.transformPosition = {sceneGizmoPosition.x(), sceneGizmoPosition.y(), sceneGizmoPosition.z()};
+    edit.transformRotation = {sceneGizmoRotation.x(), sceneGizmoRotation.y(), sceneGizmoRotation.z()};
+    edit.transformScale = {sceneGizmoScale.x(), sceneGizmoScale.y(), sceneGizmoScale.z()};
+    return action;
+}
+
+bool MaterialInstanceAssetEditorPanel::BeginSceneGizmoDrag(size_t axis,
+    const Eigen::Vector2f& pixel, const Eigen::Vector2f& offset)
+{
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr || !sceneViewportGizmo.valid ||
+        axis >= sceneViewportGizmo.axes.size() ||
+        !sceneViewportGizmo.axes[axis].visible)
+        return false;
+    sceneGizmoDragging = true;
+    sceneGizmoAxis = axis;
+    sceneGizmoStart = pixel;
+    sceneGizmoOffset = offset;
+    sceneGizmoGeneration = actor->worldGeneration;
+    sceneGizmoIdentity = actor->identity;
+    sceneDragGizmo = sceneViewportGizmo;
+    sceneGizmoOriginalPosition = sceneGizmoPosition = actor->position;
+    sceneGizmoOriginalRotation = sceneGizmoRotation = actor->rotation;
+    sceneGizmoOriginalScale = sceneGizmoScale = actor->scale;
+    RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::UpdateSceneGizmoDrag(const Eigen::Vector2f& pixel)
+{
+    if (!sceneGizmoDragging || !sceneDragGizmo.valid) return false;
+    Eigen::Vector3f value;
+    const BlueprintGizmoMode mode = SceneGizmoMode(viewportTransformTool);
+    const float previousRotation = sceneGizmoRotation[sceneGizmoAxis];
+    if (!DragBlueprintViewportGizmo(sceneDragGizmo, sceneGizmoAxis, sceneGizmoStart,
+        pixel, value, previousRotation))
+        return false;
+    if (sceneSnapEnabled)
+    {
+        const float step = mode == BlueprintGizmoMode::Translate ? sceneMoveSnap :
+            mode == BlueprintGizmoMode::Rotate ? sceneRotateSnap : sceneScaleSnap;
+        Eigen::Vector3f snapped;
+        if (SnapBlueprintViewportValue(mode, sceneGizmoAxis,
+            sceneDragGizmo.initialValue, value, step, snapped))
+            value = snapped;
+        else value = sceneDragGizmo.initialValue;
+    }
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    // 刚体根只接受统一缩放；与蓝图编辑器保持同一规则。
+    if (mode == BlueprintGizmoMode::Scale && actor != nullptr &&
+        actor->type == EditorSceneActorType::Script && !actor->scriptPhysics.is_null())
+        value = Eigen::Vector3f::Constant(value[sceneGizmoAxis]);
+
+    sceneGizmoPosition = sceneGizmoOriginalPosition;
+    sceneGizmoRotation = sceneGizmoOriginalRotation;
+    sceneGizmoScale = sceneGizmoOriginalScale;
+    if (mode == BlueprintGizmoMode::Translate) sceneGizmoPosition = value;
+    else if (mode == BlueprintGizmoMode::Rotate) sceneGizmoRotation = value;
+    else sceneGizmoScale = value;
+    if (runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(SceneGizmoAction(true));
+    RefreshSceneGizmo();
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::CommitSceneGizmoDrag()
+{
+    if (!sceneGizmoDragging) return;
+    const bool changed =
+        !sceneGizmoPosition.isApprox(sceneGizmoOriginalPosition, 1.0e-6f) ||
+        !sceneGizmoRotation.isApprox(sceneGizmoOriginalRotation, 1.0e-6f) ||
+        !sceneGizmoScale.isApprox(sceneGizmoOriginalScale, 1.0e-6f);
+    const UiAction commit = SceneGizmoAction(false);
+    sceneGizmoDragging = false;
+    sceneGizmoIdentity.clear();
+    if (changed && runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(commit);
+    RefreshSceneGizmo();
+}
+
+void MaterialInstanceAssetEditorPanel::CancelSceneGizmoDrag(bool restore)
+{
+    if (!sceneGizmoDragging)
+    {
+        sceneGizmoAxis = 0;
+        sceneGizmoIdentity.clear();
+        return;
+    }
+    sceneGizmoPosition = sceneGizmoOriginalPosition;
+    sceneGizmoRotation = sceneGizmoOriginalRotation;
+    sceneGizmoScale = sceneGizmoOriginalScale;
+    if (restore && runtimeActionSink != nullptr)
+        runtimeActionSink->RequestRuntimeAction(SceneGizmoAction(true));
+    sceneGizmoDragging = false;
+    sceneGizmoIdentity.clear();
+    RefreshSceneGizmo();
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessSceneGizmoInput(Rml::Event& event)
+{
+    const auto& type = event.GetType();
+    if (type == "keydown" && event.GetParameter<int>("key_identifier", 0) == Rml::Input::KI_ESCAPE)
+    {
+        if (!sceneGizmoDragging) return false;
+        CancelSceneGizmoDrag();
+        return true;
+    }
+    if (document == nullptr) return false;
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (image == nullptr) return false;
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const bool left = event.GetParameter<int>("button", -1) == 0;
+    const Eigen::Vector2f pixel(event.GetParameter<float>("mouse_x", 0) - offset.x,
+        event.GetParameter<float>("mouse_y", 0) - offset.y);
+    if (sceneGizmoDragging)
+    {
+        // 拖动期间透明 capture 覆盖视口，所有鼠标事件都归本手势；
+        // 释放/取消前绝不进入场景拾取或相机导航。
+        if (type == "mousemove") UpdateSceneGizmoDrag(pixel);
+        else if (type == "mouseup" && left)
+        {
+            UpdateSceneGizmoDrag(pixel);
+            CommitSceneGizmoDrag();
+        }
+        if (type == "mousedown" || type == "mouseup" || type == "mousemove")
+            return true;
+    }
+    if (type != "mousedown" || !left) return false;
+    // 关卡视口的左键通常直接交给游戏/场景拾取；Gizmo 必须先在图像像素上
+    // 做一次命中测试，命中时才消费这次按下。这里与蓝图页共用同一数学。
+    if (event.GetTargetElement() == image && viewportTransformTool != "select")
+    {
+        if (const auto axis = HitBlueprintViewportGizmo(sceneViewportGizmo, pixel))
+            return BeginSceneGizmoDrag(*axis, pixel,
+                Eigen::Vector2f(offset.x, offset.y));
+        return false;
+    }
+    Rml::Element* target = event.GetTargetElement();
+    while (target != nullptr && target != document &&
+        !target->HasAttribute("data-action"))
+        target = target->GetParentNode();
+    if (target == nullptr || target == document ||
+        target->GetAttribute<std::string>("data-action", "") != "scene-gizmo-axis")
+        return false;
+    const size_t axis = target->GetAttribute<size_t>("data-axis", sceneViewportGizmo.axes.size());
+    return BeginSceneGizmoDrag(axis, pixel, Eigen::Vector2f(offset.x, offset.y));
+}
+
+bool MaterialInstanceAssetEditorPanel::IsTerrainSculptActive() const
+{
+    return landscapeToolActive && document != nullptr &&
+        !IsAssetEditorVisible() && !HasModal() &&
+        runtimeView.scripts.state == ScriptPlayState::Editing &&
+        !runtimeView.offlineMode;
+}
+
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedTerrainActor() const
+{
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    return actor != nullptr && actor->type == EditorSceneActorType::Terrain &&
+        actor->terrainPlan != nullptr ? actor : nullptr;
+}
+
+bool MaterialInstanceAssetEditorPanel::IsTerrainHistoryContext() const
+{
+    // 地形历史优先：只有 Landscape 工具激活、选中地形且没有进行中的 stroke 时才接管 Undo/Redo。
+    return landscapeToolActive && SelectedTerrainActor() != nullptr &&
+        IsTerrainSculptActive() && !terrainBrushStrokeActive;
+}
+
+float MaterialInstanceAssetEditorPanel::ActiveTerrainBrushRadiusCm() const
+{
+    return landscapePaintMode ? terrainPaintBrush.radiusCm : terrainSculptBrush.radiusCm;
+}
+
+float MaterialInstanceAssetEditorPanel::TerrainBrushRadiusUv() const
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr) return 0.0f;
+    const float worldSpan = actor->terrainPlan->desc.size.x() *
+        std::abs(actor->scale.x());
+    if (!std::isfinite(worldSpan) || worldSpan < 1.0e-3f) return 0.0f;
+    return std::clamp(ActiveTerrainBrushRadiusCm() / worldSpan, 1.0e-5f, 1.0f);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushRing()
+{
+    if (document == nullptr) return;
+    const int shape = landscapePaintMode ? terrainPaintBrush.shape : terrainSculptBrush.shape;
+    widgetDocument.SetClass("viewport-brush-ring", "square",
+        shape == TerrainBrushShapeIndex(Editor::BrushShape::Square));
+    const bool visible = TerrainBrushRingVisible() && IsTerrainSculptActive();
+    widgetDocument.SetProperty("viewport-brush-ring", "display", visible ? "block" : "none");
+    // RmlUi 的 Element::visible 只在 Display/Visibility 属性变化时刷新；
+    // 同时写 visibility 让隐藏状态下一帧一定生效，避免透明环继续吃掉视口事件。
+    widgetDocument.SetProperty("viewport-brush-ring", "visibility", visible ? "visible" : "hidden");
+    if (!visible) return;
+    const float radius = std::max(8.0f, terrainBrushRingRadiusPixels);
+    widgetDocument.SetProperty("viewport-brush-ring", "left",
+        Pixels(terrainBrushPixel.x() - radius));
+    widgetDocument.SetProperty("viewport-brush-ring", "top",
+        Pixels(terrainBrushPixel.y() - radius));
+    widgetDocument.SetProperty("viewport-brush-ring", "width", Pixels(radius * 2.0f));
+    widgetDocument.SetProperty("viewport-brush-ring", "height", Pixels(radius * 2.0f));
+}
+
+bool MaterialInstanceAssetEditorPanel::ActivateTerrainPaintMode()
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (actor == nullptr || actor->terrainPlan == nullptr ||
+        actor->terrainPlan->desc.layers.empty())
+    {
+        localStatus = "Paint requires a terrain with at least one layer.";
+        return false;
+    }
+    CancelTerrainBrushStroke();
+    ClearTerrainBrushHit();
+    landscapePaintMode = true;
+    landscapeToolActive = true;
+    viewportTransformTool = "select";
+    terrainPanelMode = TerrainPanelMode::Paint;
+    RefreshViewportToolbar();
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushLibrary()
+{
+    // 切换领域会重建分类下拉；RmlUi 在迁移 option 时会同步派发 change，
+    // 必须把这次程序化更新挡在宿主事件之外，否则 Build 会重入并销毁正在遍历的 option。
+    WidgetRefreshScope refresh(refreshingControls);
+    // Layers 只切换视图；笔刷列隐藏时仍按最近一次 Sculpt/Paint 工具决定目录，
+    // 这样从 Layers 返回时选中项和标题不会跳回另一套领域。
+    const bool paintDomain = terrainPanelMode == TerrainPanelMode::Paint ||
+        (terrainPanelMode == TerrainPanelMode::Layers && landscapePaintMode);
+    const int catalogDomain = paintDomain ? 1 : 0;
+    if (catalogDomain != brushLibraryCatalogDomain)
+    {
+        std::vector<UiWidgets::BrushLibraryEntry> entries;
+        if (paintDomain)
+        {
+            for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+            {
+                const Editor::BrushProfile& profile = preset.profile;
+                UiWidgets::BrushLibraryEntry entry;
+                entry.id = Editor::BrushProfileId(profile);
+                entry.name = profile.name;
+                entry.category = profile.category;
+                entry.shape = TerrainBrushShapeIndex(profile.shape);
+                entry.falloff = TerrainBrushFalloffIndex(profile.falloff);
+                entry.radiusCm = profile.radiusCm;
+                entry.strength = preset.opacity;
+                entries.push_back(std::move(entry));
+            }
+        }
+        else
+        {
+            for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+            {
+                UiWidgets::BrushLibraryEntry entry;
+                entry.id = Editor::BrushProfileId(profile);
+                entry.name = profile.name;
+                entry.category = profile.category;
+                entry.shape = TerrainBrushShapeIndex(profile.shape);
+                entry.falloff = TerrainBrushFalloffIndex(profile.falloff);
+                entry.radiusCm = profile.radiusCm;
+                entry.strength = profile.strength;
+                entries.push_back(std::move(entry));
+            }
+        }
+        brushLibrary.SetEntries(std::move(entries));
+        brushLibraryCatalogDomain = catalogDomain;
+    }
+    SetMarkup("terrain-brush-library-title",
+        paintDomain ? "Paint Brushes" : "Sculpt Brushes");
+    brushLibrary.SetSelectedId(paintDomain
+        ? terrainPaintBrush.presetId : terrainSculptBrush.presetId);
+    brushLibrary.Build();
+}
+
+void MaterialInstanceAssetEditorPanel::ApplyTerrainBrushPreset(const std::string& presetId)
+{
+    if (presetId.empty()) return;
+    const bool paintDomain = terrainPanelMode == TerrainPanelMode::Paint ||
+        (terrainPanelMode == TerrainPanelMode::Layers && landscapePaintMode);
+    if (paintDomain)
+    {
+        for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+        {
+            if (Editor::BrushProfileId(preset.profile) != presetId) continue;
+            terrainPaintBrush.radiusCm = preset.profile.radiusCm;
+            terrainPaintBrush.hardness = preset.hardness;
+            terrainPaintBrush.opacity = preset.opacity;
+            terrainPaintBrush.flow = preset.flow;
+            terrainPaintBrush.noise = preset.profile.noise;
+            terrainPaintBrush.noiseSeed = preset.profile.noiseSeed;
+            terrainPaintBrush.shape = TerrainBrushShapeIndex(preset.profile.shape);
+            terrainPaintBrush.presetId = presetId;
+            RefreshTerrainBrushUi();
+            return;
+        }
+        return;
+    }
+
+    for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+    {
+        if (Editor::BrushProfileId(profile) != presetId) continue;
+        terrainSculptBrush.radiusCm = profile.radiusCm;
+        terrainSculptBrush.strength = profile.strength;
+        terrainSculptBrush.falloff = TerrainBrushFalloffValue(profile.falloff);
+        terrainSculptBrush.shape = TerrainBrushShapeIndex(profile.shape);
+        terrainSculptBrush.presetId = presetId;
+        RefreshTerrainBrushUi();
+        return;
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeSculptBrushPresetId()
+{
+    for (const Editor::BrushProfile& profile : Editor::SculptBrushProfiles())
+    {
+        if (!TerrainSculptBrushMatches(profile, terrainSculptBrush)) continue;
+        terrainSculptBrush.presetId = Editor::BrushProfileId(profile);
+        return;
+    }
+    // 手动编辑后没有精确匹配的预设：保留用户数值，只取消预设高亮。
+    terrainSculptBrush.presetId.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizePaintBrushPresetId()
+{
+    for (const Editor::PaintBrushPreset& preset : Editor::PaintBrushProfiles())
+    {
+        if (!TerrainPaintBrushMatches(preset, terrainPaintBrush)) continue;
+        terrainPaintBrush.presetId = Editor::BrushProfileId(preset.profile);
+        return;
+    }
+    terrainPaintBrush.presetId.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushUi()
+{
+    if (document == nullptr) return;
+    SetViewportToolbarClass("viewport-tool-landscape", landscapeToolActive);
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    const size_t layerCount = actor != nullptr && actor->terrainPlan
+        ? actor->terrainPlan->desc.layers.size() : 0;
+    const bool hasLayers = layerCount != 0;
+    SetViewportToolbarClass("viewport-landscape-sculpt",
+        landscapeToolActive && !landscapePaintMode);
+    SetViewportToolbarClass("viewport-landscape-paint",
+        landscapeToolActive && landscapePaintMode);
+    SetDisabled("viewport-landscape-paint", !hasLayers);
+    SetDisabled("terrain-mode-sculpt", actor == nullptr);
+    SetDisabled("terrain-mode-paint", actor == nullptr || !hasLayers);
+    if (!hasLayers)
+    {
+        landscapePaintMode = false;
+        if (terrainPanelMode == TerrainPanelMode::Paint)
+            terrainPanelMode = TerrainPanelMode::Layers;
+    }
+    if (actor == nullptr && terrainPanelMode != TerrainPanelMode::Layers)
+        terrainPanelMode = TerrainPanelMode::Layers;
+    if (terrainPaintLayer >= layerCount)
+        terrainPaintLayer = layerCount == 0 ? 0 : static_cast<uint32_t>(layerCount - 1);
+
+    const bool sculptMode = terrainPanelMode == TerrainPanelMode::Sculpt;
+    const bool paintMode = terrainPanelMode == TerrainPanelMode::Paint;
+    const bool layersMode = terrainPanelMode == TerrainPanelMode::Layers;
+    // 两套领域共用同一个笔刷列：Sculpt/Paint 各自显示自己的目录与参数，
+    // Layers 只浏览层，不保留会被误认为可落笔的笔刷控件。
+    const bool brushVisible = actor != nullptr && !layersMode;
+    widgetDocument.SetProperty("terrain-brush-column", "display",
+        brushVisible ? "flex" : "none");
+    widgetDocument.SetProperty("viewport-brush-settings", "display",
+        brushVisible ? "flex" : "none");
+    widgetDocument.SetProperty("terrain-sculpt-settings", "display",
+        sculptMode && brushVisible ? "block" : "none");
+    for (int mode = 0; mode < 3; ++mode)
+        widgetDocument.SetClass("viewport-brush-mode-" + std::to_string(mode),
+            "active", sculptMode && brushVisible && terrainSculptMode == mode);
+    widgetDocument.SetProperty("viewport-landscape-controls", "display",
+        landscapeToolActive ? "flex" : "none");
+    widgetDocument.SetProperty("viewport-paint-settings", "display",
+        paintMode && landscapePaintMode && hasLayers && brushVisible ? "flex" : "none");
+    // Sculpt 右侧只看地形几何摘要；层卡属于 Paint/Layers，不能在 Sculpt 中抢空间。
+    widgetDocument.SetProperty("terrain-layer-library", "display",
+        sculptMode ? "none" : "flex");
+    widgetDocument.SetProperty("terrain-surface-panel", "display",
+        sculptMode && actor != nullptr ? "flex" : "none");
+    widgetDocument.SetProperty("terrain-panel-filter-row", "display",
+        sculptMode ? "none" : "flex");
+    if (sculptMode) HideTerrainLayerHoverPreview();
+    widgetDocument.SetClass("terrain-mode-sculpt", "active",
+        sculptMode);
+    widgetDocument.SetClass("terrain-mode-paint", "active",
+        paintMode);
+    widgetDocument.SetClass("terrain-mode-layers", "active",
+        layersMode);
+    SetViewportToolbarClass("viewport-paint-mode", !landscapePaintErase);
+    SetViewportToolbarClass("viewport-paint-erase", landscapePaintErase);
+    SetControlValue("viewport-brush-radius", Number(terrainSculptBrush.radiusCm));
+    SetControlValue("viewport-brush-strength", Number(terrainSculptBrush.strength));
+    SetControlValue("viewport-brush-falloff", Number(terrainSculptBrush.falloff));
+    SetControlValue("terrain-paint-radius", Number(terrainPaintBrush.radiusCm));
+    SetControlValue("terrain-paint-hardness", Number(terrainPaintBrush.hardness));
+    SetControlValue("terrain-paint-opacity", Number(terrainPaintBrush.opacity));
+    SetControlValue("terrain-paint-flow", Number(terrainPaintBrush.flow));
+    SetMarkup("viewport-landscape-write",
+        landscapePaintMode ? "Write Paint" : "Write Heightmap");
+    RefreshTerrainBrushLibrary();
+    RefreshTerrainBrushRing();
+    RefreshTerrainLayerLibrary();
+}
+
+void MaterialInstanceAssetEditorPanel::ClearTerrainBrushHit()
+{
+    if (!terrainBrushHit && terrainBrushPlacementId.empty()) return;
+    terrainBrushHit = false;
+    terrainBrushUv = Eigen::Vector2f::Zero();
+    terrainBrushPixel = Eigen::Vector2f::Zero();
+    terrainBrushWorldPoint = Eigen::Vector3f::Zero();
+    terrainBrushRingRadiusPixels = 0.0f;
+    terrainBrushPlacementId.clear();
+    RefreshTerrainBrushRing();
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateTerrainBrushHit(float mouseX, float mouseY)
+{
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (!IsTerrainSculptActive() || actor == nullptr)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    const EditorSceneCameraActor* camera = nullptr;
+    for (const EditorSceneActorSnapshot& candidate : OutlinerActors())
+        if (candidate.type == EditorSceneActorType::Camera)
+        {
+            camera = candidate.hasViewportCamera ? &candidate.viewportCamera : &candidate.camera;
+            break;
+        }
+    auto* image = document->GetElementById("editor-viewport-image");
+    if (camera == nullptr || image == nullptr || !image->IsVisible(true))
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+    const Eigen::Vector2f pixel(mouseX - offset.x, mouseY - offset.y);
+    if (size.x <= 0 || size.y <= 0 || pixel.x() < 0 || pixel.y() < 0 ||
+        pixel.x() >= size.x || pixel.y() >= size.y)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    TerrainBrushSurfaceHit hit;
+    try
+    {
+        hit = PickTerrainBrushSurface(*camera,
+            size.x, size.y, pixel, *actor->terrainPlan, actor->position,
+            actor->rotation, actor->scale);
+    }
+    catch (const std::exception&)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!hit.valid)
+    {
+        ClearTerrainBrushHit();
+        return;
+    }
+    terrainBrushHit = true;
+    terrainBrushUv = hit.uv;
+    terrainBrushPixel = pixel;
+    terrainBrushWorldPoint = hit.worldPosition;
+    terrainBrushGeneration = actor->worldGeneration;
+    terrainBrushPlacementId = actor->identity;
+    terrainBrushRingRadiusPixels = TerrainBrushRadiusPixels(*camera,
+        size.x, size.y, hit.worldPosition, ActiveTerrainBrushRadiusCm(), actor->scale);
+    RefreshTerrainBrushRing();
+}
+
+void MaterialInstanceAssetEditorPanel::SendTerrainBrushAction(
+    TerrainBrushOperation operation, bool includeBrush)
+{
+    if (runtimeActionSink == nullptr) return;
+    const bool strokeOperation = operation == TerrainBrushOperation::EndStroke ||
+        operation == TerrainBrushOperation::CancelStroke;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    // stroke 的结束/取消只依赖 Begin 时保存的 generation/placement：
+    // 中途切到普通 Mesh 或清空选择也必须能把 engine 的 active stroke 收尾。
+    if (strokeOperation)
+    {
+        if (terrainBrushGeneration == 0 || terrainBrushPlacementId.empty()) return;
+    }
+    else if (actor == nullptr)
+    {
+        return;
+    }
+    if ((operation == TerrainBrushOperation::BeginStroke ||
+         operation == TerrainBrushOperation::ApplyBrush) && !terrainBrushHit)
+        return;
+    UiAction action;
+    action.type = UiActionType::TerrainEdit;
+    auto& brush = action.terrainBrush;
+    brush.operation = operation;
+    brush.worldGeneration = strokeOperation ? terrainBrushGeneration : actor->worldGeneration;
+    brush.placementId = strokeOperation ? terrainBrushPlacementId : actor->identity;
+    if (includeBrush)
+    {
+        brush.u = terrainBrushUv.x();
+        brush.v = terrainBrushUv.y();
+        brush.strength = terrainSculptBrush.strength;
+        brush.falloff = terrainSculptBrush.falloff;
+        brush.mode = terrainSculptMode;
+        brush.shape = terrainSculptBrush.shape;
+    }
+    brush.radiusUv = strokeOperation ? 0.0f : TerrainBrushRadiusUv();
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::EndTerrainBrushStroke()
+{
+    if (!terrainBrushStrokeActive) return;
+    if (landscapePaintMode) SendTerrainPaintAction(TerrainBrushOperation::EndStroke, true);
+    else SendTerrainBrushAction(TerrainBrushOperation::EndStroke, true);
+    terrainBrushStrokeActive = false;
+    RefreshTerrainBrushUi();
+}
+
+void MaterialInstanceAssetEditorPanel::SendTerrainPaintAction(
+    TerrainBrushOperation operation, bool includeBrush)
+{
+    if (runtimeActionSink == nullptr) return;
+    const bool strokeOperation = operation == TerrainBrushOperation::EndStroke ||
+        operation == TerrainBrushOperation::CancelStroke;
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (strokeOperation)
+    {
+        if (terrainBrushGeneration == 0 || terrainBrushPlacementId.empty()) return;
+    }
+    else if (actor == nullptr || actor->terrainPlan == nullptr ||
+        actor->terrainPlan->desc.layers.empty())
+    {
+        return;
+    }
+    if ((operation == TerrainBrushOperation::BeginStroke ||
+         operation == TerrainBrushOperation::ApplyBrush) && !terrainBrushHit)
+        return;
+
+    UiAction action;
+    action.type = UiActionType::TerrainPaint;
+    auto& paint = action.terrainPaint;
+    paint.operation = operation;
+    paint.worldGeneration = strokeOperation ? terrainBrushGeneration : actor->worldGeneration;
+    paint.placementId = strokeOperation ? terrainBrushPlacementId : actor->identity;
+    paint.layerIndex = terrainPaintLayer;
+    paint.erase = landscapePaintErase;
+    if (includeBrush)
+    {
+        paint.u = terrainBrushUv.x();
+        paint.v = terrainBrushUv.y();
+        paint.radiusUv = TerrainBrushRadiusUv();
+        // Paint 的 opacity/flow/noise 各自表达独立语义；strength 固定为 1，
+        // 避免旧的 opacity*flow 中间映射再次压暗落笔。hardness 仍映射为 falloff。
+        paint.strength = 1.0f;
+        paint.falloff = std::clamp(1.0f - terrainPaintBrush.hardness, 0.0f, 1.0f);
+        paint.opacity = std::clamp(terrainPaintBrush.opacity, 0.0f, 1.0f);
+        paint.flow = std::clamp(terrainPaintBrush.flow, 0.0f, 1.0f);
+        paint.noise = std::clamp(terrainPaintBrush.noise, 0.0f, 1.0f);
+        paint.noiseSeed = terrainPaintBrush.noiseSeed;
+        paint.shape = terrainPaintBrush.shape;
+    }
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::CancelTerrainBrushStroke()
+{
+    if (!terrainBrushStrokeActive) return;
+    if (landscapePaintMode) SendTerrainPaintAction(TerrainBrushOperation::CancelStroke, true);
+    else SendTerrainBrushAction(TerrainBrushOperation::CancelStroke, true);
+    terrainBrushStrokeActive = false;
+    RefreshTerrainBrushUi();
+}
+
+void MaterialInstanceAssetEditorPanel::SynchronizeTerrainBrushSelection()
+{
+    if (!landscapeToolActive)
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!IsTerrainSculptActive())
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    if (terrainBrushStrokeActive && actor != nullptr &&
+        actor->worldGeneration != terrainBrushGeneration)
+    {
+        // World 换代后旧代数命令会被执行端拒绝；这里只丢弃本地手势，
+        // 不再发一笔注定失败、只会刷诊断的 CancelStroke。
+        terrainBrushStrokeActive = false;
+        ClearTerrainBrushHit();
+        return;
+    }
+    const bool differentActor = actor == nullptr ||
+        (terrainBrushGeneration != 0 && actor->worldGeneration != terrainBrushGeneration) ||
+        (!terrainBrushPlacementId.empty() && actor->identity != terrainBrushPlacementId);
+    if (terrainBrushStrokeActive && differentActor)
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        return;
+    }
+    if (!terrainBrushStrokeActive && terrainBrushHit && differentActor)
+        ClearTerrainBrushHit();
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event)
+{
+    if (event.GetType() != "keydown" || document == nullptr ||
+        IsAssetEditorVisible() || HasModal()) return false;
+    auto* focus = document->GetContext()->GetFocusElement();
+    if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
+    const int key = event.GetParameter<int>("key_identifier", 0);
+    const char* tool = nullptr;
+    if (key == Rml::Input::KI_Q) tool = "select";
+    else if (key == Rml::Input::KI_W) tool = "move";
+    else if (key == Rml::Input::KI_E) tool = "rotate";
+    else if (key == Rml::Input::KI_R) tool = "scale";
+    if (tool == nullptr) return false;
+    if (sceneGizmoDragging) CancelSceneGizmoDrag();
+    if (landscapeToolActive)
+    {
+        landscapeToolActive = false;
+        landscapePaintMode = false;
+        terrainPanelMode = TerrainPanelMode::Layers;
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+    }
+    viewportTransformTool = tool;
+    RefreshViewportToolbar();
+    RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessTerrainSculptPointer(
+    const std::string& type, int button, float mouseX, float mouseY)
+{
+    if (!IsTerrainSculptActive()) return false;
+    if (landscapePaintMode)
+    {
+        const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+        if (actor == nullptr || actor->terrainPlan == nullptr ||
+            actor->terrainPlan->desc.layers.empty())
+            return false;
+    }
+    if (type == "mouseleave")
+    {
+        ClearTerrainBrushHit();
+        return false;
+    }
+    const bool left = button == 0;
+    if (type == "mousemove")
+    {
+        UpdateTerrainBrushHit(mouseX, mouseY);
+        if (terrainBrushStrokeActive)
+        {
+            if (terrainBrushHit)
+            {
+                if (landscapePaintMode)
+                    SendTerrainPaintAction(TerrainBrushOperation::ApplyBrush, true);
+                else SendTerrainBrushAction(TerrainBrushOperation::ApplyBrush, true);
+            }
+            return true;
+        }
+        return false;
+    }
+    if (type == "mousedown" && left)
+    {
+        UpdateTerrainBrushHit(mouseX, mouseY);
+        if (!terrainBrushStrokeActive && terrainBrushHit)
+        {
+            terrainBrushStrokeActive = true;
+            if (landscapePaintMode)
+                SendTerrainPaintAction(TerrainBrushOperation::BeginStroke, true);
+            else SendTerrainBrushAction(TerrainBrushOperation::BeginStroke, true);
+            RefreshTerrainBrushUi();
+        }
+        // Landscape 左键永远不落到场景拾取/相机导航；无命中时只是空点击。
+        return true;
+    }
+    if (type == "mouseup" && left)
+    {
+        if (terrainBrushStrokeActive) EndTerrainBrushStroke();
+        return true;
+    }
+    return false;
 }
 
 // 工具条激活态只在真正变化时写一次 class；静止帧不重复触碰 RmlUi 样式，也不重建 markup。
@@ -1953,11 +3587,13 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
     if (showActorVisualization && view && size.x > 0 && size.y > 0)
     {
         // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
+        // 网格/环境/场景风没有可投影的世界位置，不摆视口图标。
         for (size_t index = 0; index < actors.size(); ++index)
         {
             const auto& actor = actors[index];
             if (actor.type == EditorSceneActorType::Mesh ||
-                actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+                actor.type == EditorSceneActorType::Environment ||
+                actor.type == EditorSceneActorType::SceneWind)
                 continue;
             const bool selected = actor.identity == snapshot.selectedActorIdentity;
             if (selected && actor.visible)
@@ -2019,13 +3655,13 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
         widgetDocument.SetClass(id, "selected", selected);
         const auto& actor = actors[index];
         Eigen::Vector2f pixel;
-        // 粒子 actor 没有灯光字段；图标必须投影到作者摆放原点，不能落到世界零点。
-        Eigen::Vector3f position = actor.light.position;
-        if (actor.type == EditorSceneActorType::Camera)
-            position = actor.camera.position;
-        else if (actor.type == EditorSceneActorType::Script ||
-            actor.type == EditorSceneActorType::ParticleSystem)
-            position = actor.position;
+        // Terrain/粒子是编辑器身份，不是灯；粒子没有灯光字段，地形只有
+        // chunk mesh 根位置，不能用默认零值的 light.position 冒充坐标。
+        const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
+            ? actor.camera.position
+            : (actor.type == EditorSceneActorType::Script ||
+                actor.type == EditorSceneActorType::Terrain ||
+                actor.type == EditorSceneActorType::ParticleSystem) ? actor.position : actor.light.position;
         const bool visible = actor.visible && view &&
             ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
         widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
@@ -2227,14 +3863,25 @@ const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedActor(
     return nullptr;
 }
 
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::PreviewWindActor() const
+{
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+        if (actor.type == EditorSceneActorType::SceneWind &&
+            actor.identity == "wind|PreviewWind")
+            return &actor;
+    return nullptr;
+}
+
 void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActorSnapshot& actor)
 {
     if (sceneSelectionSink == nullptr) return;
     FlushPendingEdits();
     ShowSceneDetails();
-    if (actor.type == EditorSceneActorType::Mesh)
+    if (actor.type == EditorSceneActorType::Mesh ||
+        actor.type == EditorSceneActorType::Terrain)
     {
-        // mesh actor 仍走迁移前的 MI 导航路由：整模型选择 + 视口描边完全一致。
+        // Terrain 的 chunk 复用 mesh 的 section/材质槽语义，因此选择路由与 Mesh 相同：
+        // 整模型选择 + 视口描边，不新增地形专属的资产编辑面板。
         sceneSelectionSink->RequestModelSelection(SelectionModel(MeshSceneActorModel(actor)));
         return;
     }
@@ -2505,10 +4152,17 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
     for (const auto& field : SceneActorEditableFields(*actor))
         for (uint32_t component = 0; component < field.components; ++component)
         {
-            SetControlValue(SceneActorPropertyControlId(field.property, component),
-                SceneActorNumber(field.value[component]));
-            SetDisabled(SceneActorPropertyControlId(field.property, component),
-                runtimeView.scripts.state != ScriptPlayState::Editing);
+            const std::string id = SceneActorPropertyControlId(field.property, component);
+            const std::string number = SceneActorNumber(field.value[component]);
+            SetControlValue(id, number);
+            SetDisabled(id, runtimeView.scripts.state != ScriptPlayState::Editing);
+            // 数值输入与滑条共享同一属性；只刷文本会让滑条的 value 属性停在
+            // DOM 创建时的旧值，下一次点击/拖动就会用旧值覆盖刚输入的数值。
+            if (field.hasRange)
+            {
+                SetControlValue(id + "-slider", number);
+                SetDisabled(id + "-slider", runtimeView.scripts.state != ScriptPlayState::Editing);
+            }
         }
     if (actor->type == EditorSceneActorType::Script)
     {
@@ -2662,6 +4316,9 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     resourceEditorVisible = true;
     localStatus.clear();
     RequestActiveResourceMetadata();
+    // 作者 owner 的生命周期属于资产标签，不能依赖 Simulation 段是否可见。
+    if (kind == EditorAssetKind::Tressfx)
+        RequestTressfxDocument(path);
     if (kind == EditorAssetKind::Blueprint)
     {
         EditorCommandEnvelope command;
@@ -2676,72 +4333,110 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
         command.payload = MaterialInstanceAssetPathPayload{path};
         Submit(std::move(command));
     }
-    if (kind == EditorAssetKind::Mesh && runtimeActionSink != nullptr)
+    if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Tressfx)
     {
-        // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
-        // 即使标签已打开也重新请求，保证切过关卡后再次双击仍能回到该模型。
-        RequestModelPreview(path);
+        // 毛发资产：目录扫描已带顶层 type 与 simulation.skinning，打开时即可决定
+        // 是否请求预览。带 skinning 的资产不进入视口（由蓝图 TressFX 组件承载），
+        // 这里直接跳过请求；快照到达后还会以作者文档复核一次。
+        const EditorJsonAssetEntry* entry = FindCatalogEntry(snapshot.assetCatalog, path);
+        hairPreviewPath = kind == EditorAssetKind::Tressfx ? path : std::string();
+        hairPreviewBlocked = entry != nullptr && entry->tressfxSkinning;
+        hairRotation.Reset();
+        if (hairPreviewBlocked)
+            localStatus = std::string(TressfxHairSkinnedAssetMessage);
+        else if (runtimeActionSink != nullptr)
+        {
+            // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
+            // 即使标签已打开也重新请求，保证切过关卡后再次双击仍能回到该模型。
+            RequestModelPreview(path);
+        }
     }
     RefreshResourceEditor();
     docking.SetPanelVisible(ResourcePanelId(path), true);
     docking.Activate(ResourcePanelId(path));
 }
 
-void MaterialInstanceAssetEditorPanel::CloseActiveResource()
+void MaterialInstanceAssetEditorPanel::RequestCloseResource(const std::string& path)
 {
-    const auto* active = resourceEditor.ActiveTab();
-    if (active == nullptr) return;
-    if (active->kind == EditorAssetKind::Blueprint)
+    for (const auto& tab : resourceEditor.Tabs())
     {
-        const auto* authored = BlueprintDocument(active->path);
-        if ((authored && authored->dirty) || pendingBlueprintPath == active->path)
+        if (tab.path != path) continue;
+        const auto* authored = ResourceDocument(path);
+        const auto* particle = ParticleDocument(path);
+        if ((authored && authored->dirty) || (particle && particle->dirty) ||
+            pendingBlueprintPath == path || pendingParticlePath == path ||
+            (particleCommandPath == path && !inFlightParticleChanges.empty()) ||
+            (hairSimulationPath == path && hairSimulationPendingSave))
         {
             FlushBlueprintAssetEdits();
-            pendingClosePath = active->path;
-            pendingCloseKind = EditorAssetKind::Blueprint;
+            FlushParticleAssetEdits();
+            pendingClosePath = path;
+            pendingCloseKind = tab.kind;
             saveThenClose = saveCloseSubmitted = false;
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
-            return;
-        }
-    }
-    if (active->kind == EditorAssetKind::ParticleSystem)
-    {
-        const auto* authored = ParticleDocument(active->path);
-        if ((authored && authored->dirty) ||
-            pendingParticlePath == active->path ||
-            (particleCommandPath == active->path &&
-             !inFlightParticleChanges.empty()))
-        {
-            FlushParticleAssetEdits();
-            pendingClosePath = active->path;
-            pendingCloseKind = EditorAssetKind::ParticleSystem;
-            saveThenClose = saveCloseSubmitted = false;
             discardParticleThenClose =
                 discardParticleCloseSubmitted = false;
             return;
         }
-        CloseDocument(active->path,
-            EditorDirtyDocumentPolicy::RequireClean);
+        CloseResource(path);
         return;
     }
-    resourceEditor.Close(active->path);
-    resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
-    if (!resourceEditorVisible) ReturnToLevel();
-    if (!resourceEditorVisible) localStatus.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::CloseResource(const std::string& path)
+{
+    const std::string next = docking.PanelAfterClose(ResourcePanelId(path));
+    resourceEditor.Close(path);
+    requestedTressfxDocuments.erase(path);
+    // 后台关闭只移除标签，不切预览 World，也不覆盖当前页面的选择。
     RefreshResourceEditor();
-    const auto* next = resourceEditor.ActiveTab();
-    if (next != nullptr)
+    if (!next.empty()) ActivateWorkspacePanel(next);
+}
+
+void MaterialInstanceAssetEditorPanel::ActivateWorkspacePanel(const std::string& panel)
+{
+    if (panel == "viewport")
     {
-        RequestActiveResourceMetadata();
-        docking.Activate(ResourcePanelId(next->path));
-        if (next->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
-            RequestModelPreview(next->path);
+        docking.SetPanelVisible("viewport", true);
+        ReturnToLevel();
+        return;
     }
+    const std::string path = docking.ResourcePathForPanel(panel);
+    if (path.empty()) return;
+    FlushPendingEdits();
+    FlushBlueprintAssetEdits();
+    viewingJson = false;
+    docking.SetPanelVisible(panel, true);
+    docking.Activate(panel);
+    if (panel.rfind("resource:material:", 0) == 0)
+    {
+        resourceEditorVisible = false;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SelectMaterialInstanceDocument;
+        command.payload = MaterialInstanceAssetPathPayload{path};
+        Submit(std::move(command));
+        return;
+    }
+    if (!resourceEditor.Activate(path)) return;
+    resourceEditorVisible = true;
+    RequestActiveResourceMetadata();
+    const auto* active = resourceEditor.ActiveTab();
+    if (active && (active->kind == EditorAssetKind::Mesh || active->kind == EditorAssetKind::Tressfx) &&
+        !HasCurrentModelPreview())
+        RequestModelPreview(path);
+    RefreshResourceEditor();
 }
 
 void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
 {
     const auto* active = resourceEditor.ActiveTab();
+    if (active != nullptr && active->kind == EditorAssetKind::Terrain)
+    {
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::GetTerrainDocument;
+        command.payload = MaterialInstanceAssetPathPayload{active->path};
+        Submit(std::move(command));
+    }
     // 读取器只保留最新请求；切回未完成的标签须补读，已缓存的标签不重复 IO。
     if (active != nullptr && (active->snapshot == nullptr || active->loading) &&
         jsonAssetRequestSink != nullptr)
@@ -2751,6 +4446,13 @@ void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
 void MaterialInstanceAssetEditorPanel::RequestResourceReload()
 {
     const auto* tab = resourceEditor.ActiveTab();
+    if (tab && tab->kind == EditorAssetKind::Retarget && tab->snapshot)
+    {
+        // GT 的 loading 快照可能晚一帧；请求发出就封住旧图像，直到新元数据 revision 到达。
+        reloadingRetargetPath = tab->path;
+        reloadingRetargetRevision = tab->snapshot->revision;
+        previewDragButton = -1;
+    }
     if (tab && tab->kind == EditorAssetKind::Blueprint)
     {
         if (!pendingBlueprintPath.empty()) { localStatus = "Save or revert pending edits before reloading."; return; }
@@ -2771,13 +4473,39 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
             tab->path);
         return;
     }
+    if (tab && tab->kind == EditorAssetKind::Terrain)
+    {
+        const auto* terrain = TerrainDocument(tab->path);
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::ReloadTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = ReloadMaterialInstanceDocumentPayload{
+            tab->path, EditorDirtyDocumentPolicy::RequireClean};
+        Submit(std::move(command));
+        return;
+    }
+    if (tab && tab->kind == EditorAssetKind::Tressfx)
+    {
+        const auto* authored = TressfxDocument(tab->path);
+        if (!authored || authored->dirty || hairSimulationPendingSave)
+        {
+            localStatus = "Save or revert pending edits before reloading.";
+            return;
+        }
+        SubmitResourceDocumentCommand(EditorCommandType::ReloadTressfxDocument, tab->path);
+        if (jsonAssetRequestSink != nullptr)
+            jsonAssetRequestSink->RequestOpenJsonAsset(tab->path);
+        return;
+    }
     resourceEditor.RequestReload();
     const std::string path = resourceEditor.ConsumeReloadRequest();
     if (path.empty()) return;
     if (jsonAssetRequestSink != nullptr)
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
     const auto* active = resourceEditor.ActiveTab();
-    if (active != nullptr && active->kind == EditorAssetKind::Mesh) RequestModelPreview(path);
+    if (active != nullptr && (active->kind == EditorAssetKind::Mesh || active->kind == EditorAssetKind::Tressfx))
+        RequestModelPreview(path);
 }
 
 const EditorAssetDocumentResultPayload*
@@ -4491,10 +6219,20 @@ void MaterialInstanceAssetEditorPanel::HandleParticleFieldReset(
 
 void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& path)
 {
+    // 打开、切标签与 Reload 共用入口；蒙皮资产只能由角色组件提供预览姿态。
+    const auto* active = resourceEditor.ActiveTab();
+    if (active && active->path == path && active->kind == EditorAssetKind::Tressfx)
+    {
+        const auto* entry = FindCatalogEntry(snapshot.assetCatalog, path);
+        const bool blocked = active->snapshot ? active->snapshot->tressfxSkinning :
+            entry != nullptr && entry->tressfxSkinning;
+        if (blocked) return;
+    }
     RequestAssetPreview(path, false);
 }
 
-void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& path, bool material)
+void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& path, bool material,
+    const std::string& retargetPath, uint64_t retargetRevision)
 {
     previewDragButton = -1;
     if (runtimeActionSink == nullptr) return;
@@ -4502,15 +6240,22 @@ void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& pa
         std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json" &&
         std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_particle_preview.json")
         levelWorldPath = runtimeView.activeWorldPath;
+    // 新的预览目标从零姿态开始；旋转只属于当前预览世界，不跨资产累积。
+    if (requestedPreviewPath != path) hairRotation.Reset();
     requestedPreviewPath = path;
+    requestedRetargetPath = retargetPath;
+    requestedRetargetRevision = retargetRevision;
+    initializedRetargetGeneration = 0;
     requestedPreviewMaterial = material;
     requestedPreviewBlueprint = false;
     requestedPreviewGeneration = 0;
     for (const auto& actor : OutlinerActors())
         requestedPreviewGeneration = std::max(requestedPreviewGeneration, actor.worldGeneration);
     UiAction request;
-    request.type = material ? UiActionType::PreviewMaterial : UiActionType::PreviewModel;
-    request.stringValue = path;
+    request.type = material ? UiActionType::PreviewMaterial : retargetPath.empty() ?
+        UiActionType::PreviewModel : UiActionType::PreviewRetarget;
+    request.stringValue = retargetPath.empty() ? path : retargetPath;
+    if (!retargetPath.empty()) request.retargetPreviewModel = path;
     runtimeActionSink->RequestRuntimeAction(std::move(request));
 }
 
@@ -4585,14 +6330,31 @@ uint64_t MaterialInstanceAssetEditorPanel::CurrentModelPreviewGeneration() const
 {
     if (requestedPreviewMaterial) return 0;
     const auto* active = resourceEditor.ActiveTab();
-    if (active == nullptr || active->kind != EditorAssetKind::Mesh ||
+    if (!active) return 0;
+    if (active->kind == EditorAssetKind::Retarget)
+    {
+        if (!retargetEditor.AnimationVisible() || active->loading || !active->snapshot ||
+            !active->snapshot->retargetPreview || active->path != requestedRetargetPath ||
+            active->snapshot->revision != requestedRetargetRevision) return 0;
+    }
+    else if ((active->kind != EditorAssetKind::Mesh && active->kind != EditorAssetKind::Tressfx) ||
         active->path != requestedPreviewPath) return 0;
     // JSON 读取完成不能证明 GPU 模型已加载；只在新预览 World 的冻结快照发布后展示。
     for (const auto& actor : OutlinerActors())
         if (actor.worldGeneration > requestedPreviewGeneration &&
             actor.sceneObjectIdentity == "preview_model" &&
             std::filesystem::path(actor.scenePath).filename() == "SC_model_preview.json")
+        {
+            if (active->kind == EditorAssetKind::Retarget)
+            {
+                bool paired = false;
+                for (const auto& source : OutlinerActors())
+                    paired |= source.worldGeneration == actor.worldGeneration &&
+                        source.sceneObjectIdentity == "preview_retarget_source|" + requestedRetargetPath;
+                if (!paired) continue;
+            }
             return actor.worldGeneration;
+        }
     return 0;
 }
 
@@ -4647,6 +6409,1790 @@ void MaterialInstanceAssetEditorPanel::RefreshMaterialPreview()
     }
 }
 
+bool MaterialInstanceAssetEditorPanel::IsActiveHairPreview() const
+{
+    const auto* active = resourceEditor.ActiveTab();
+    return active != nullptr && active->kind == EditorAssetKind::Tressfx &&
+        active->path == hairPreviewPath && !hairPreviewBlocked;
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairPreviewRotation(float deltaX, float deltaY)
+{
+    if (runtimeActionSink == nullptr || hairPreviewBlocked || deltaX == 0.0f) return;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (!generation) return;
+    // 累计角度由 UI 维护，GT 只写绝对 TRS；World 使用原始场景身份 preview_model。
+    hairRotation.Drag(deltaX, deltaY);
+    UiAction action;
+    action.type = UiActionType::RotatePreviewModel;
+    action.previewRotation = {generation, hairRotation.yaw, 0.0f};
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairReset()
+{
+    // 复位不是重载：渲染线程在下一个正 delta 帧走一次 ResetPositions，
+    // 20 MB TFX 不会被重新解析。
+    if (runtimeActionSink == nullptr || !IsActiveHairPreview()) return;
+    const auto* active = resourceEditor.ActiveTab();
+    const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+    if (!authored || !TressfxGpuSimulationDefaults(authored->document)) return;
+    if (!CurrentModelPreviewGeneration()) return;
+    UiAction action;
+    action.type = UiActionType::ResetHairSimulation;
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+namespace
+{
+// 面板当前值（可能是用户拖动后的会话值）优先于作者文档；缺字段时回退控件默认值。
+std::array<double, 3> PanelSimulationValue(
+    const nlohmann::json& values, const TressfxSimulationControl& control)
+{
+    std::array<double, 3> result = control.defaults;
+    if (!values.is_object() || !values.contains(control.field)) return result;
+    const auto& array = values.at(control.field);
+    if (!array.is_array() || array.size() != 3) return result;
+    for (std::size_t component = 0; component < 3; ++component)
+        if (array[component].is_number()) result[component] = array[component].get<double>();
+    return result;
+}
+
+struct HairGroupOverrideSpec
+{
+    const char* field;
+    const char* label;
+};
+
+// 只有这些字段允许按组覆盖；顺序就是检查器的显示顺序，与资产契约一致。
+constexpr HairGroupOverrideSpec HairGroupOverrideSpecs[] = {
+    {"damping", "Damping"},
+    {"bendStiffness", "Bend"},
+    {"globalShapeStiffness", "Global Shape"},
+    {"globalShapeEffectiveRange", "Shape Range"},
+    {"vspCoefficient", "VSP"},
+    {"vspAccelThresholdMax", "VSP Threshold"},
+};
+
+bool ParseHairGuideRange(const std::string& startText, const std::string& endText,
+    std::pair<uint32_t, uint32_t>& range, std::string& error)
+{
+    uint32_t start = 0;
+    uint32_t end = 0;
+    if (!ParseNumber(startText, start) || !ParseNumber(endText, end))
+    {
+        error = "A guide range requires two non-negative integers.";
+        return false;
+    }
+    range = {start, end};
+    return true;
+}
+
+// 色块只表达名称 hash 颜色；不写资产，也不使用 rgba()（RmlUi 会把小数 alpha 截成 0）。
+std::string HairGroupSwatch(const VL::Editor::TressfxGroupColor& color)
+{
+    return "<span class=\"hair-group-swatch\" style=\"background-color: rgb(" +
+        std::to_string(color.r) + "," + std::to_string(color.g) + "," +
+        std::to_string(color.b) + ");\"></span>";
+}
+
+// 资产默认值是当前 TF 文档解析后的值，不是写死的 UI 常量。
+double HairGroupAssetDefault(const nlohmann::json& simulation, const std::string& field)
+{
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    for (std::size_t index = 0; index < count; ++index)
+        if (field == controls[index].field)
+            return TressfxSimulationValue(simulation, controls[index])[0];
+    return 0.0;
+}
+
+// 已保存组的 asset default 取 placement 解析后的 TressfxSimulationConfig；
+// 没有预览快照（或新建/改名组尚未保存）时才回退到文档 simulationDefaults。
+bool ResolvedGroupSimulationValue(
+    const TressfxSimulationConfig& config, const std::string& field, double& value)
+{
+    if (field == "damping") value = config.damping;
+    else if (field == "bendStiffness") value = config.bendStiffness;
+    else if (field == "globalShapeStiffness") value = config.globalShapeStiffness;
+    else if (field == "globalShapeEffectiveRange") value = config.globalShapeEffectiveRange;
+    else if (field == "vspCoefficient") value = config.vspCoefficient;
+    else if (field == "vspAccelThresholdMax") value = config.vspAccelThresholdMax;
+    else return false;
+    return true;
+}
+
+double HairGroupAssetDefault(
+    const EditorSceneMeshSectionSnapshot* section,
+    bool savedGroup,
+    int32_t savedGroupIndex,
+    const nlohmann::json& simulation,
+    const std::string& field)
+{
+    if (savedGroup && section != nullptr && section->tressfxGroupConfigs &&
+        savedGroupIndex >= 0 &&
+        static_cast<size_t>(savedGroupIndex) < section->tressfxGroupConfigs->size())
+    {
+        double resolved = 0.0;
+        if (ResolvedGroupSimulationValue(
+                section->tressfxGroupConfigs->at(static_cast<size_t>(savedGroupIndex)),
+                field, resolved))
+            return resolved;
+    }
+    return HairGroupAssetDefault(simulation, field);
+}
+
+std::string HairGroupAssetDefaultText(
+    const EditorSceneMeshSectionSnapshot* section,
+    bool savedGroup,
+    int32_t savedGroupIndex,
+    const nlohmann::json& simulation,
+    const std::string& field)
+{
+    std::string text = TressfxSimulationText(HairGroupAssetDefault(
+        section, savedGroup, savedGroupIndex, simulation, field));
+    // 未保存组没有 placement 解析结果，必须显式提示显示的是文档回退值。
+    if (!savedGroup)
+        text += "; draft group - save and reload for placement-resolved value";
+    return text;
+}
+
+bool HairGroupsMatchDocument(const nlohmann::json& document, bool reset,
+    const nlohmann::json& value)
+{
+    const bool hasGroups = document.contains("groups") && !document.at("groups").is_null();
+    // 空的 `groups: []` 不是“无组”的规范写法；保存应把它改成删除键，
+    // 否则编辑器会一直提示没有变化，而校验层仍可能拒绝该数组。
+    if (reset) return !hasGroups;
+    return hasGroups && document.at("groups") == value;
+}
+
+Eigen::Vector2f ScreenCentroid(const std::vector<Eigen::Vector2f>& points)
+{
+    Eigen::Vector2f centroid = Eigen::Vector2f::Zero();
+    if (points.empty()) return centroid;
+    for (const Eigen::Vector2f& point : points) centroid += point;
+    return centroid / static_cast<float>(points.size());
+}
+} // namespace
+
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::TressfxDocument(
+    const std::string& path) const
+{
+    for (const auto& entry : snapshot.tressfxDocuments)
+        if (entry.assetPath == path) return &entry;
+    return nullptr;
+}
+
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::ResourceDocument(
+    const std::string& path) const
+{
+    const auto* blueprint = BlueprintDocument(path);
+    return blueprint != nullptr ? blueprint : TressfxDocument(path);
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitResourceDocumentCommand(
+    EditorCommandType type, const std::string& path)
+{
+    // 共用关闭/保存状态机，但 revision 始终来自该 kind 唯一的作者 owner。
+    const auto* authored = ResourceDocument(path);
+    if (!authored) return;
+    EditorCommandEnvelope command;
+    command.type = type;
+    command.expectedDocumentRevision = authored->documentRevision;
+    if (GetEditorAssetOperation(type) == EditorAssetOperation::Reload)
+        command.payload = ReloadMaterialInstanceDocumentPayload{path, EditorDirtyDocumentPolicy::RequireClean};
+    else command.payload = MaterialInstanceAssetPathPayload{path};
+    Submit(std::move(command));
+}
+
+void MaterialInstanceAssetEditorPanel::RequestTressfxDocument(const std::string& path)
+{
+    if (path.empty() || TressfxDocument(path) || !requestedTressfxDocuments.insert(path).second)
+        return;
+    // 快照晚于 UI 事件：按路径去重首次读取，不依赖某个 Details 段的可见性。
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::GetTressfxDocument;
+    command.payload = MaterialInstanceAssetPathPayload{path};
+    Submit(std::move(command));
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::string& path)
+{
+    if (path.empty() || (hairSimulationRequested && hairSimulationPath == path)) return;
+    hairSimulationPath = path;
+    hairSimulationRequested = true;
+    hairSimulationBoundRevision = 0;
+    hairSimulationSaveRevision = 0;
+    hairSimulationPendingSave = false;
+    hairSimulationSaveWaitTicks = 0;
+    hairSimulationObservedDefaults = nullptr;
+    hairSimulationValues = nlohmann::json::object();
+    hairSimulationStatus = "Reading simulation values...";
+    RequestTressfxDocument(path);
+}
+
+// 预览场景 SC_model_preview 自己的 wind 参数。它只改当前模型预览 World，
+// 不写关卡或头发资产；因此不会影响其他关卡的风。
+std::string HairPreviewWindRows(const EditorUi::EditorSceneActorSnapshot* wind)
+{
+    std::string rows = "<div class=\"hair-wind-heading\">Preview Wind</div>";
+    if (wind == nullptr)
+    {
+        rows += "<p class=\"hair-sim-note\">Preview scene has no PreviewWind object.</p>";
+        return rows;
+    }
+
+    std::vector<UiWidgets::NumericComponent> direction;
+    for (uint32_t component = 0; component < 3; ++component)
+    {
+        UiWidgets::NumericComponent entry;
+        entry.id = "hair-wind-direction-" + std::to_string(component);
+        entry.label = std::string(1, "XYZ"[component]);
+        entry.value = "0";
+        entry.change = {"hair-preview-wind", 0, component};
+        direction.push_back(std::move(entry));
+    }
+    rows += UiWidgets::PropertyControlRow("Direction",
+        UiWidgets::NumericComponents(direction));
+
+    UiWidgets::NumericComponent strength;
+    strength.id = "hair-wind-strength-0";
+    strength.value = "0";
+    strength.change = {"hair-preview-wind", 1, 0};
+    strength.hasRange = true;
+    strength.minValue = 0.0f;
+    strength.maxValue = 3270.0f;
+    rows += UiWidgets::PropertyControlRow("Strength (cm/s)",
+        UiWidgets::NumericComponents({strength}));
+
+    UiWidgets::NumericComponent gust;
+    gust.id = "hair-wind-gust-0";
+    gust.value = "0";
+    gust.change = {"hair-preview-wind", 2, 0};
+    gust.hasRange = true;
+    gust.minValue = 0.0f;
+    gust.maxValue = 1.0f;
+    rows += UiWidgets::PropertyControlRow("Gust",
+        UiWidgets::NumericComponents({gust}));
+    rows += "<p class=\"hair-sim-note\">Preview scene wind only. "
+        "This does not change the current level or save into the hair asset.</p>";
+    return rows;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair, bool hairBlocked)
+{
+    const auto* active = resourceEditor.ActiveTab();
+    const bool visible = isHair && !hairBlocked && active != nullptr;
+    widgetDocument.SetProperty("resource-hair-simulation", "display", visible ? "block" : "none");
+    if (!visible)
+    {
+        hairPreviewWindBound = false;
+        hairPreviewWindPath.clear();
+        return;
+    }
+    if (!hairSimulationRequested || hairSimulationPath != active->path)
+        RequestHairSimulationDocument(active->path);
+    const auto* previewWind = PreviewWindActor();
+    if (previewWind == nullptr)
+    {
+        hairPreviewWindBound = false;
+    }
+    else if (!hairPreviewWindBound || hairPreviewWindPath != active->path ||
+        hairPreviewWindGeneration != previewWind->worldGeneration)
+    {
+        // 只在新预览 World/资产绑定时取作者值；拖动期间快照晚一帧，不能每帧回写。
+        hairPreviewWind = previewWind->worldWind;
+        hairPreviewWindPath = active->path;
+        hairPreviewWindGeneration = previewWind->worldGeneration;
+        hairPreviewWindBound = true;
+    }
+    const auto* document = TressfxDocument(active->path);
+    if (document != nullptr)
+    {
+        // revision 前进可能来自 Simulation 自己的保存，也可能来自 Groups 保存。
+        // 只有 simulationDefaults 本身变化时才覆盖本地草稿，否则“保存 Groups”
+        // 会把尚未保存的 Simulation 编辑静默丢掉。
+        if (hairSimulationBoundRevision != document->documentRevision)
+        {
+            const uint64_t previousRevision = hairSimulationBoundRevision;
+            hairSimulationBoundRevision = document->documentRevision;
+            const nlohmann::json simulation = document->document.contains("simulationDefaults")
+                ? document->document.at("simulationDefaults") : nlohmann::json::object();
+            const bool changedExternally = hairSimulationObservedDefaults.is_null() ||
+                hairSimulationObservedDefaults != simulation;
+            if (changedExternally)
+            {
+                hairSimulationObservedDefaults = simulation;
+                std::size_t count = 0;
+                const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+                nlohmann::json values = nlohmann::json::object();
+                for (std::size_t index = 0; index < count; ++index)
+                {
+                    const auto current = TressfxSimulationValue(simulation, controls[index]);
+                    values[controls[index].field] = nlohmann::json::array(
+                        {current[0], current[1], current[2]});
+                }
+                hairSimulationValues = std::move(values);
+                // 保存成功后草稿回到 clean：明确提示要重载才会应用作者值并复位模拟。
+                hairSimulationStatus = previousRevision != 0 && !document->dirty
+                    ? "Defaults saved to the hair asset. Reload to apply inherited values and reset the simulation."
+                    : hairSimulationPendingSave ? hairSimulationStatus
+                    : "Values loaded from the asset draft.";
+            }
+        }
+        // modify 成功后草稿变 dirty 且 revision 前进；把保存交给既有 Save Content 弹窗，
+        // 由它按快照 revision 提交 tressfx.save。候选与草稿已相同的情况不推进 revision，
+        // 因此额外用值相等判定解锁，避免停在“正在暂存”。
+        if (hairSimulationPendingSave)
+        {
+            const nlohmann::json simulation = document->document.contains("simulationDefaults")
+                ? document->document.at("simulationDefaults") : nlohmann::json::object();
+            const bool staged = document->documentRevision > hairSimulationSaveRevision ||
+                (document->dirty && TressfxSimulationValuesMatch(simulation, hairSimulationValues));
+            if (staged)
+            {
+                hairSimulationPendingSave = false;
+                hairSimulationSaveWaitTicks = 0;
+                hairSimulationStatus = "Confirm the save in the Save Content dialog (writes the hair asset).";
+                if (pendingClosePath != active->path)
+                    OpenSaveDialog(active->path);
+            }
+            else if (++hairSimulationSaveWaitTicks > 180)
+            {
+                hairSimulationPendingSave = false;
+                hairSimulationSaveWaitTicks = 0;
+                hairSimulationStatus = snapshot.statusMessage.empty()
+                    ? "Save failed: the asset draft was not modified." : snapshot.statusMessage;
+            }
+        }
+    }
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    std::string rows;
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        std::vector<UiWidgets::NumericComponent> components;
+        for (uint32_t component = 0; component < controls[index].components; ++component)
+        {
+            UiWidgets::NumericComponent entry;
+            entry.id = "hair-sim-" + std::to_string(index) + "-" + std::to_string(component);
+            entry.label = controls[index].components == 1
+                ? std::string() : std::string(1, "XYZ"[component]);
+            // markup 只描述固定控件结构；值在挂载后单独同步，避免编辑时替换焦点/拖动节点。
+            entry.value = TressfxSimulationText(controls[index].defaults[component]);
+            entry.change = {"hair-sim", index, component};
+            if (controls[index].hasRange)
+            {
+                entry.hasRange = true;
+                entry.minValue = controls[index].minValue;
+                entry.maxValue = controls[index].maxValue;
+            }
+            components.push_back(std::move(entry));
+        }
+        std::string label = controls[index].label;
+        if (controls[index].unit[0] != '\0')
+            label += std::string(" (") + controls[index].unit + ")";
+        rows += UiWidgets::PropertyControlRow(label, UiWidgets::NumericComponents(components));
+    }
+    rows += HairPreviewWindRows(PreviewWindActor());
+    rows += "<div class=\"hair-sim-footer\">" +
+        UiWidgets::Button("hair-sim-save", {"hair-save"},
+            "Save to Hair Asset",
+            UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
+        "<span id=\"hair-sim-status\" class=\"hair-sim-status\"></span></div>";
+    // 这是资产级默认值编辑：保存写 TF_*.json，只影响未覆写这些字段的挂载；实时值只属于
+    // 当前预览会话。必须写清，避免作者误以为在改关卡里的这一根头发。
+    rows += "<p class=\"hair-sim-note\">Drag previews in this viewport only (not saved). "
+        "Save writes the hair asset defaults (TF_*.json): inherited placement values are affected, and reloading "
+        "resets the simulation. Placement overrides are edited in the Blueprint asset.</p>";
+    SetMarkup("resource-hair-simulation", UiWidgets::CollapsibleSection(
+        DetailsSectionId("hair-simulation"), "hair-simulation", "Simulation Defaults", rows,
+        {"section"}, IsSectionExpanded("hair-simulation")));
+    SetMarkup("hair-sim-status", Text(hairSimulationStatus));
+    SetDisabled("hair-sim-save", document == nullptr);
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        for (uint32_t component = 0; component < controls[index].components; ++component)
+        {
+            const std::string id = "hair-sim-" + std::to_string(index) + "-" + std::to_string(component);
+            SetControlValue(id, TressfxSimulationText(values[component]));
+            if (controls[index].hasRange)
+                SetControlValue(id + "-slider", TressfxSimulationText(values[component]));
+        }
+    }
+    if (hairPreviewWindBound)
+    {
+        for (uint32_t component = 0; component < 3; ++component)
+            SetControlValue("hair-wind-direction-" + std::to_string(component),
+                SceneActorNumber(hairPreviewWind.direction[component]));
+        SetControlValue("hair-wind-strength-0",
+            SceneActorNumber(hairPreviewWind.strengthCmPerSec));
+        SetControlValue("hair-wind-strength-0-slider",
+            SceneActorNumber(hairPreviewWind.strengthCmPerSec));
+        SetControlValue("hair-wind-gust-0",
+            SceneActorNumber(hairPreviewWind.gustAmplitude));
+        SetControlValue("hair-wind-gust-0-slider",
+            SceneActorNumber(hairPreviewWind.gustAmplitude));
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitHairSimulationLive(std::size_t controlIndex,
+    const std::array<double, 3>& values)
+{
+    if (runtimeActionSink == nullptr || runtimeView.offlineMode || !IsActiveHairPreview()) return;
+    const auto* active = resourceEditor.ActiveTab();
+    const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+    if (!authored || !TressfxGpuSimulationDefaults(authored->document)) return;
+    // 预览 World 还没发布时不要投递：命令队列不绑定 World 世代，早到的值会落到
+    // 之后出现的同名对象上。
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (!generation) return;
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    if (controlIndex >= count) return;
+    UiAction action;
+    action.type = UiActionType::SetHairSimulationParameter;
+    action.previewHairParameter.worldGeneration = generation;
+    action.previewHairParameter.field = controls[controlIndex].field;
+    action.previewHairParameter.valueCount = controls[controlIndex].components;
+    for (uint32_t component = 0; component < 3; ++component)
+        action.previewHairParameter.values[component] = static_cast<float>(values[component]);
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr) return;
+    const auto* document = TressfxDocument(active->path);
+    if (document == nullptr)
+    {
+        // 文档还没打开：先取一次，等快照到达后再提交修改。
+        RequestHairSimulationDocument(active->path);
+        hairSimulationRequested = true;
+        hairSimulationPendingSave = true;
+        hairSimulationSaveRevision = 0;
+        hairSimulationSaveWaitTicks = 0;
+        hairSimulationStatus = "Reading the asset document...";
+        return;
+    }
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    ModifyAssetDocumentPayload payload;
+    payload.assetPath = active->path;
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        EditorAssetFieldChange change;
+        change.field = std::string("simulationDefaults.") + controls[index].field;
+        if (controls[index].components == 1)
+            change.value = values[0];
+        else
+            change.value = std::array<double, 3>{values[0], values[1], values[2]};
+        payload.changes.push_back(std::move(change));
+    }
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::ModifyTressfxDocument;
+    command.expectedDocumentRevision = document->documentRevision;
+    command.payload = std::move(payload);
+    Submit(std::move(command));
+    hairSimulationPendingSave = true;
+    hairSimulationSaveRevision = document->documentRevision;
+    hairSimulationSaveWaitTicks = 0;
+    hairSimulationStatus = "Staging simulation values...";
+}
+
+void MaterialInstanceAssetEditorPanel::SelectHairGroup(int index)
+{
+    const int count = static_cast<int>(hairGroups.Groups().size());
+    if (index < -1 || index >= count) index = -1;
+    if (hairBrushStrokeActive) CancelHairBrushStroke(false);
+    if (index < 0 && hairGroupPaintActive) CancelHairBrushStroke(true);
+    hairGroupSelected = index;
+    // 切换目标组时收起逐组表单；range 文本已经由当前控制器生成，不能跨组复用。
+    hairGroupAddRangeActive = false;
+    hairGroupRangeStart.clear();
+    hairGroupRangeEnd.clear();
+    hairGroupRangeError.clear();
+    hairGroupCreateError.clear();
+    hairGroupStatus = index < 0
+        ? "Default is the implicit group 0. It cannot be renamed, deleted, edited or used as a paint target."
+        : "Preview uses the current Groups draft; Save to Hair Asset persists it.";
+    SubmitTressfxGroupPreview();
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitTressfxGroupPreview()
+{
+    if (runtimeActionSink == nullptr || !hairGroupsLoaded)
+        return;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (generation == 0)
+        return;
+    // binding 必须先于选中/笔刷状态入队，保证同一帧 shader 读到的 group id 表
+    // 与 UI 使用的草稿下标一致。
+    SubmitTressfxGroupBindingPreview();
+    // Default 只是隐式组 0，不应因为“选中行”就触发强高亮；只有命名组
+    // 才作为 selected group 提高 tint 强度。
+    int32_t selectedGroup = hairGroupSelected < 0
+        ? -1 : hairGroupSelected + 1;
+    const bool selectedIsPaintable = selectedGroup >= 0 && HairDraftBindingReady();
+    if (!selectedIsPaintable) selectedGroup = -1;
+    const uint32_t flags =
+        (hairGroupColors ? VL::TressfxGroupPreviewColors : 0u) |
+        (hairGroupSolo && selectedIsPaintable ? VL::TressfxGroupPreviewSolo : 0u);
+    // 绑定预览、切换组或开关时只发一次；World 快照刷新不会重复投递同一状态。
+    if (hairGroupPreviewSent && hairGroupPreviewSentGeneration == generation &&
+        hairGroupPreviewSentSelected == selectedGroup &&
+        hairGroupPreviewSentFlags == flags)
+        return;
+    UiAction action;
+    action.type = UiActionType::SetTressfxGroupPreview;
+    action.previewTressfxGroup.worldGeneration = generation;
+    action.previewTressfxGroup.selectedGroup = selectedGroup;
+    action.previewTressfxGroup.flags = flags;
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+    hairGroupPreviewSent = true;
+    hairGroupPreviewSentGeneration = generation;
+    hairGroupPreviewSentSelected = selectedGroup;
+    hairGroupPreviewSentFlags = flags;
+}
+
+std::shared_ptr<const VL::Hair::TressfxGroupBinding>
+MaterialInstanceAssetEditorPanel::EnsureHairDraftBinding()
+{
+    if (!hairGroupsLoaded || hairGroups.GuideCount() == 0)
+        return nullptr;
+    if (hairPaintDraftBinding && hairPaintDraftRevision == hairGroupsDraftRevision)
+        return hairPaintDraftBinding;
+    try
+    {
+        std::vector<VL::Hair::TressfxGroupDeclaration> declarations;
+        declarations.reserve(hairGroups.Groups().size());
+        for (const VL::Editor::TressfxGuideGroupDraft& group : hairGroups.Groups())
+            declarations.push_back({group.name, group.guideRanges});
+        hairPaintDraftBinding = VL::Hair::BuildTressfxGroupBinding(
+            declarations, hairGroups.GuideCount(),
+            "editor-draft:" + std::to_string(hairGroupsDraftRevision),
+            "TressFX editor draft");
+        hairGroupBindingPreviewError.clear();
+    }
+    catch (const std::exception& exception)
+    {
+        hairPaintDraftBinding.reset();
+        hairGroupBindingPreviewError = exception.what();
+        return nullptr;
+    }
+    hairPaintDraftRevision = hairGroupsDraftRevision;
+    return hairPaintDraftBinding;
+}
+
+bool MaterialInstanceAssetEditorPanel::HairDraftBindingReady() const
+{
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    return hairGroupBindingPreviewSent && !hairGroupBindingPreviewQueued && hairGroupsLoaded &&
+        hairGroupBindingPreviewSentRevision == hairGroupsDraftRevision &&
+        hairGroupBindingPreviewSentGeneration == CurrentModelPreviewGeneration() &&
+        section != nullptr &&
+        hairGroupBindingPreviewSentObject == section->objectName;
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitTressfxGroupBindingPreview()
+{
+    if (runtimeActionSink == nullptr || !hairGroupsLoaded)
+    {
+        hairGroupBindingPreviewSent = false;
+        hairGroupBindingPreviewQueued = false;
+        return;
+    }
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (generation == 0 || section == nullptr)
+    {
+        hairGroupBindingPreviewSent = false;
+        hairGroupBindingPreviewQueued = false;
+        return;
+    }
+    const std::shared_ptr<const VL::Hair::TressfxGroupBinding> binding =
+        EnsureHairDraftBinding();
+    if (!binding)
+    {
+        hairGroupBindingPreviewSent = false;
+        hairGroupBindingPreviewQueued = false;
+        if (hairGroupBindingPreviewError.empty())
+            hairGroupBindingPreviewError = "The Groups draft is not a valid TressFX binding.";
+        hairGroupStatus = "Group preview sync failed: " + hairGroupBindingPreviewError;
+        return;
+    }
+    if (hairGroupBindingPreviewSent &&
+        hairGroupBindingPreviewSentRevision == hairGroupsDraftRevision &&
+        hairGroupBindingPreviewSentGeneration == generation &&
+        hairGroupBindingPreviewSentObject == section->objectName)
+    {
+        // 至少有了一次后续刷新，且没有新草稿 revision：命令已经离开 UI 队列。
+        hairGroupBindingPreviewQueued = false;
+        return;
+    }
+    UiAction action;
+    action.type = UiActionType::SetTressfxGroupBindingPreview;
+    action.previewTressfxGroupBinding.worldGeneration = generation;
+    action.previewTressfxGroupBinding.draftRevision = hairGroupsDraftRevision;
+    action.previewTressfxGroupBinding.objectName = section->objectName;
+    action.previewTressfxGroupBinding.guideGroupIds = binding->guideGroupIds;
+    action.previewTressfxGroupBinding.groupNames = binding->groupNames;
+    action.previewTressfxGroupBinding.bindingKey = binding->key;
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+    hairGroupBindingPreviewSent = true;
+    hairGroupBindingPreviewQueued = true;
+    hairGroupBindingPreviewSentRevision = hairGroupsDraftRevision;
+    hairGroupBindingPreviewSentGeneration = generation;
+    hairGroupBindingPreviewSentObject = section->objectName;
+    hairGroupBindingPreviewError.clear();
+}
+
+const EditorSceneMeshSectionSnapshot* MaterialInstanceAssetEditorPanel::HairBrushSection() const
+{
+    if (!IsActiveHairPreview()) return nullptr;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (generation == 0) return nullptr;
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+    {
+        if (actor.worldGeneration != generation) continue;
+        for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
+            if (section.tressfxRootCloud && section.tressfxRootCloud->RootCount() != 0)
+                return &section;
+    }
+    return nullptr;
+}
+
+int32_t MaterialInstanceAssetEditorPanel::SavedHairGroupIndex(
+    const EditorSceneMeshSectionSnapshot* section, int draftIndex) const
+{
+    if (section == nullptr) return -1;
+    if (draftIndex < 0) return 0;
+    const auto& groups = hairGroups.Groups();
+    if (draftIndex >= static_cast<int>(groups.size())) return -1;
+    // 这里只用于读取已保存/placement 解析后的 asset default。预览 GPU 组号
+    // 已经改为草稿下标；不要再用该方法门控 Paint 可用性。
+    const std::string& name = groups[static_cast<size_t>(draftIndex)].originName;
+    if (name.empty()) return -1;
+    if (!section->tressfxGroupBinding)
+        return -1;
+    const auto& savedGroupNames = section->tressfxGroupBinding->groupNames;
+    for (size_t index = 0; index < savedGroupNames.size(); ++index)
+        if (savedGroupNames[index] == name)
+            return static_cast<int32_t>(index) + 1;
+    return -1;
+}
+
+bool MaterialInstanceAssetEditorPanel::HairBrushReady() const
+{
+    return IsActiveHairPreview() && hairGroupsLoaded &&
+        hairGroups.GuideCount() != 0 &&
+        hairGroupSelected >= 0 &&
+        hairGroupSelected < static_cast<int>(hairGroups.Groups().size()) &&
+        CurrentModelPreviewGeneration() != 0 && HairBrushSection() != nullptr &&
+        HairDraftBindingReady();
+}
+
+bool MaterialInstanceAssetEditorPanel::EnsureHairPaintSession(
+    const EditorSceneMeshSectionSnapshot* section)
+{
+    if (section == nullptr || !section->tressfxRootCloud)
+        return false;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (!EnsureHairDraftBinding())
+        return false;
+    if (hairPaint.HasSession() && generation == hairPaintSessionGeneration &&
+        hairPaintSessionBinding == hairPaintDraftBinding)
+        return true;
+    // 冲突分析使用当前草稿 binding：Replace Existing=OFF 时必须看到手填/撤销后的
+    // range，否则会把已属于其他组的 guide 当成 Default。几何选择仍用 root cloud。
+    hairPaint.BeginSession(hairPaintDraftBinding);
+    hairPaintSessionGeneration = generation;
+    hairPaintSessionBinding = hairPaintDraftBinding;
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::ResetHairPaintSession()
+{
+    hairPaint.ClearSession();
+    hairPaintSessionGeneration = 0;
+    hairPaintSessionBinding.reset();
+}
+
+std::string MaterialInstanceAssetEditorPanel::HairBrushConflictText(
+    const std::vector<VL::Hair::GroupPaintConflict>& conflicts) const
+{
+    std::string text;
+    for (size_t index = 0; index < conflicts.size(); ++index)
+    {
+        if (index != 0) text += "; ";
+        text += std::to_string(conflicts[index].guideCount) +
+            " guides belong to \"" + conflicts[index].groupName + "\"";
+    }
+    return text;
+}
+
+void MaterialInstanceAssetEditorPanel::ToggleHairGroupPaint(bool active)
+{
+    if (active && !HairBrushReady())
+    {
+        hairBrushStatus = "Select a named group with an available hair preview first; Default cannot be painted.";
+        return;
+    }
+    if (!active)
+    {
+        CancelHairBrushStroke(true);
+        return;
+    }
+    hairGroupPaintActive = true;
+    // 新一次 Paint Groups 会话从零开始；Ctrl+Z 只覆盖本次会话的提交。
+    hairPaintUndo.clear();
+    ResetHairPaintSession();
+    hairBrushStrokeActive = false;
+    hairBrushHits.clear();
+    hairBrushConflicts.clear();
+    hairBrushStamp = {};
+    hairLassoDragging = false;
+    hairLassoScreenPoints.clear();
+    hairBrushPreviewActive = false;
+    hairBrushRingSent = false;
+    hairBrushStatus = "Painting ready. Left drag adds, Shift adds, Alt removes; "
+        "Alt+wheel adjusts radius, Enter or release commits, Esc exits.";
+}
+
+bool MaterialInstanceAssetEditorPanel::PrepareHairBrushInputs(
+    VL::Hair::BrushViewport& viewport, VL::Hair::BrushCamera& camera,
+    VL::Hair::BrushSettings& settings) const
+{
+    if (document == nullptr) return false;
+    Rml::Element* image = document->GetElementById("resource-preview-image");
+    if (image == nullptr) return false;
+    const Rml::Vector2f imageOffset = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const Rml::Vector2f imageSize = image->GetBox().GetSize(Rml::BoxArea::Border);
+    if (imageSize.x <= 0.0f || imageSize.y <= 0.0f) return false;
+
+    viewport.x = static_cast<int32_t>(std::lround(imageOffset.x));
+    viewport.y = static_cast<int32_t>(std::lround(imageOffset.y));
+    viewport.width = static_cast<uint32_t>(std::lround(imageSize.x));
+    viewport.height = static_cast<uint32_t>(std::lround(imageSize.y));
+
+    camera.position = Eigen::Vector3f(runtimeView.motionCamera.position[0],
+        runtimeView.motionCamera.position[1], runtimeView.motionCamera.position[2]);
+    camera.forward = Eigen::Vector3f(runtimeView.motionCamera.forward[0],
+        runtimeView.motionCamera.forward[1], runtimeView.motionCamera.forward[2]);
+    camera.right = Eigen::Vector3f(runtimeView.motionCamera.right[0],
+        runtimeView.motionCamera.right[1], runtimeView.motionCamera.right[2]);
+    camera.up = Eigen::Vector3f(runtimeView.motionCamera.up[0],
+        runtimeView.motionCamera.up[1], runtimeView.motionCamera.up[2]);
+    camera.horizontalFovDegrees = runtimeView.motionCamera.horizontalFovDegrees;
+    camera.clipNear = runtimeView.motionCamera.clipNear;
+    camera.clipFar = runtimeView.motionCamera.clipFar;
+
+    settings.radiusPixels = hairBrushRadiusPx;
+    settings.maxNormalAngleDegrees = 60.0f;
+    settings.planeThicknessWorld = 0.0f;
+    settings.planeSearchRadiusWorld = 0.0f;
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::SampleHairBrushStamp(float screenX, float screenY)
+{
+    hairBrushCursorX = screenX;
+    hairBrushCursorY = screenY;
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (section == nullptr || !section->tressfxRootCloud)
+    {
+        hairBrushStamp = {};
+        return false;
+    }
+    VL::Hair::BrushViewport viewport;
+    VL::Hair::BrushCamera camera;
+    VL::Hair::BrushSettings settings;
+    if (!PrepareHairBrushInputs(viewport, camera, settings))
+    {
+        hairBrushStamp = {};
+        return false;
+    }
+    hairBrushStamp = VL::Hair::SurfaceBrush().Sample(
+        Eigen::Vector2f(screenX, screenY), viewport, camera,
+        *section->tressfxRootCloud, section->tressfxRootLocalToWorld, settings);
+    return hairBrushStamp.valid;
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateHairBrushSample(
+    float screenX, float screenY, bool applyToStroke)
+{
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (section == nullptr || !hairGroupsLoaded || hairGroupSelected < 0)
+    {
+        hairBrushStamp = {};
+        hairBrushHits.clear();
+        hairBrushConflicts.clear();
+        hairBrushStatus = "No hair root cloud is available for this preview.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    if (!EnsureHairPaintSession(section))
+    {
+        hairBrushStamp = {};
+        hairBrushHits.clear();
+        hairBrushConflicts.clear();
+        hairBrushStatus = "Hair group binding is unavailable; reload the asset.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    VL::Hair::BrushViewport viewport;
+    VL::Hair::BrushCamera camera;
+    VL::Hair::BrushSettings settings;
+    if (!PrepareHairBrushInputs(viewport, camera, settings) ||
+        !SampleHairBrushStamp(screenX, screenY))
+    {
+        hairBrushHits.clear();
+        hairBrushConflicts.clear();
+        hairBrushStatus = "Painting -> " +
+            hairGroups.Groups()[static_cast<size_t>(hairGroupSelected)].name +
+            " | no root surface under cursor";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    hairBrushHits.clear();
+    hairBrushConflicts.clear();
+    hairBrushHits = VL::Hair::RootCloudSelector().Select(
+        *section->tressfxRootCloud, hairBrushStamp,
+        section->tressfxRootLocalToWorld, settings);
+
+    if (!HairDraftBindingReady())
+    {
+        hairBrushStatus = "The Groups draft is still syncing to the preview; wait a frame and retry.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    // 草稿 binding 已同步，GPU 组号与控制器统一使用草稿下标。
+    const uint32_t targetGroupId = static_cast<uint32_t>(hairGroupSelected) + 1;
+    const VL::Hair::GroupPaintMode previewMode = applyToStroke
+        ? hairBrushStrokeMode : hairBrushMode;
+    const bool replace = hairBrushReplaceExisting;
+    // 会话共享当前草稿 binding；hover 不复制 guide 映射，也不改会话。
+    const VL::Hair::GroupPaintSummary summary = hairPaint.AnalyzeHits(
+        hairBrushHits, targetGroupId, previewMode, replace);
+    hairBrushConflicts = summary.conflicts;
+
+    std::ostringstream status;
+    status << "Painting -> "
+           << hairGroups.Groups()[static_cast<size_t>(hairGroupSelected)].name
+           << " | +" << summary.eligibleGuides << " guides in brush"
+           << " | r=" << std::fixed << std::setprecision(1)
+           << hairBrushStamp.radiusWorld << " cm";
+    if (hairBrushStamp.fallback)
+        status << " | plane fallback; screen ring fallback (PCA / -viewDir / nearest roots)";
+    const std::string conflicts = HairBrushConflictText(summary.conflicts);
+    if (!conflicts.empty()) status << " | " << conflicts;
+    hairBrushStatus = status.str();
+
+    if (applyToStroke)
+        hairPaint.AddHits(hairBrushHits);
+    // hover 也必须投递圆环；ghost 只在笔画期间有权重。
+    SubmitTressfxBrushPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::BeginHairBrushStroke(
+    float screenX, float screenY, bool shift, bool alt)
+{
+    if (!HairBrushReady())
+    {
+        hairBrushStatus = "The selected group is not paintable.";
+        return;
+    }
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (section == nullptr || !HairDraftBindingReady())
+    {
+        hairBrushStatus = "The Groups draft is still syncing to the preview; wait a frame and retry.";
+        return;
+    }
+    const uint32_t targetGroupId = static_cast<uint32_t>(hairGroupSelected) + 1;
+    hairBrushStrokeMode = alt ? VL::Hair::GroupPaintMode::Remove :
+        (shift ? VL::Hair::GroupPaintMode::Add : hairBrushMode);
+    if (!EnsureHairPaintSession(section))
+    {
+        hairBrushStatus = "Hair group binding is unavailable; reload the asset.";
+        return;
+    }
+    hairPaint.BeginStroke(targetGroupId, hairBrushStrokeMode, hairBrushReplaceExisting);
+    hairBrushStrokeActive = true;
+    UpdateHairBrushSample(screenX, screenY, true);
+}
+
+void MaterialInstanceAssetEditorPanel::BeginHairLassoStroke(
+    float screenX, float screenY, bool shift, bool alt)
+{
+    if (!HairBrushReady())
+    {
+        hairBrushStatus = "The selected group is not paintable.";
+        return;
+    }
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (section == nullptr || !HairDraftBindingReady())
+    {
+        hairBrushStatus = "The Groups draft is still syncing to the preview; wait a frame and retry.";
+        return;
+    }
+    const uint32_t targetGroupId = static_cast<uint32_t>(hairGroupSelected) + 1;
+    hairBrushStrokeMode = alt ? VL::Hair::GroupPaintMode::Remove :
+        (shift ? VL::Hair::GroupPaintMode::Add : hairBrushMode);
+    if (!EnsureHairPaintSession(section))
+    {
+        hairBrushStatus = "Hair group binding is unavailable; reload the asset.";
+        return;
+    }
+    hairPaint.BeginStroke(targetGroupId, hairBrushStrokeMode, hairBrushReplaceExisting);
+    hairBrushStrokeActive = true;
+    hairLassoDragging = true;
+    hairLassoScreenPoints.clear();
+    AppendHairLassoPoint(screenX, screenY);
+    // stamp 只提供套索平面；套索不在手势期间累积圆形命中。
+    SampleHairBrushStamp(screenX, screenY);
+    hairBrushHits.clear();
+    hairBrushConflicts.clear();
+    hairBrushStatus = hairBrushStamp.valid
+        ? "Lasso: drag to enclose roots; release commits, Esc cancels."
+        : "Lasso: no root surface under the cursor.";
+    SubmitTressfxBrushPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::AppendHairLassoPoint(float screenX, float screenY)
+{
+    if (!hairLassoDragging) return;
+    const Eigen::Vector2f point(screenX, screenY);
+    // 去掉亚像素抖动，避免一次手势生成数千个近重合顶点。
+    if (!hairLassoScreenPoints.empty() &&
+        (hairLassoScreenPoints.back() - point).norm() < 1.5f)
+        return;
+    hairLassoScreenPoints.push_back(point);
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateHairLassoPreview()
+{
+    if (!hairLassoDragging || hairLassoScreenPoints.size() < 3) return;
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    if (section == nullptr || !HairDraftBindingReady()) return;
+    const Eigen::Vector2f centroid = ScreenCentroid(hairLassoScreenPoints);
+    VL::Hair::BrushViewport viewport;
+    VL::Hair::BrushCamera camera;
+    VL::Hair::BrushSettings settings;
+    if (!SampleHairBrushStamp(centroid.x(), centroid.y()) ||
+        !PrepareHairBrushInputs(viewport, camera, settings))
+        return;
+    const auto hits = VL::Hair::RootCloudSelector().SelectLasso(
+        *section->tressfxRootCloud, hairBrushStamp, section->tressfxRootLocalToWorld,
+        viewport, camera, hairLassoScreenPoints, settings);
+    // 多边形可能变小，先重置同一笔的权重并集，再写入当前命中，避免 ghost 只增不减。
+    hairPaint.BeginStroke(static_cast<uint32_t>(hairGroupSelected) + 1,
+        hairBrushStrokeMode, hairBrushReplaceExisting);
+    hairPaint.AddHits(hits);
+    hairBrushHits = hits;
+    hairBrushStatus = "Lasso: " + std::to_string(hits.size()) +
+        " guides selected; release commits, Esc cancels.";
+    SubmitTressfxBrushPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::CommitHairLassoStroke()
+{
+    if (!hairLassoDragging) return;
+    previewDragButton = -1;
+    previewDragGeneration = 0;
+    hairLassoDragging = false;
+    if (!hairBrushStrokeActive || hairLassoScreenPoints.size() < 3)
+    {
+        hairPaint.CancelStroke();
+        hairBrushStrokeActive = false;
+        hairLassoScreenPoints.clear();
+        hairBrushStatus = "Lasso needs at least three points; the groups draft was not changed.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    const Eigen::Vector2f centroid = ScreenCentroid(hairLassoScreenPoints);
+
+    const EditorSceneMeshSectionSnapshot* section = HairBrushSection();
+    VL::Hair::BrushViewport viewport;
+    VL::Hair::BrushCamera camera;
+    VL::Hair::BrushSettings settings;
+    if (section == nullptr || !HairDraftBindingReady() ||
+        !SampleHairBrushStamp(centroid.x(), centroid.y()) ||
+        !PrepareHairBrushInputs(viewport, camera, settings))
+    {
+        hairPaint.CancelStroke();
+        hairBrushStrokeActive = false;
+        hairLassoScreenPoints.clear();
+        hairBrushStatus = "Lasso could not establish a brush plane; the groups draft was not changed.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    hairBrushHits = VL::Hair::RootCloudSelector().SelectLasso(
+        *section->tressfxRootCloud, hairBrushStamp, section->tressfxRootLocalToWorld,
+        viewport, camera, hairLassoScreenPoints, settings);
+    hairLassoScreenPoints.clear();
+    // 拖动期间 ghost 已按中间多边形更新；提交前用最终多边形重置同一笔的权重。
+    hairPaint.BeginStroke(static_cast<uint32_t>(hairGroupSelected) + 1,
+        hairBrushStrokeMode, hairBrushReplaceExisting);
+    hairPaint.AddHits(hairBrushHits);
+    if (hairBrushHits.empty())
+    {
+        hairPaint.CancelStroke();
+        hairBrushStrokeActive = false;
+        hairBrushStatus = "No guides inside the lasso; nothing was written to the groups draft.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    // 套索已经没有“松开前补一次圆形采样”的语义，命中已在上面一次性加入。
+    CommitHairBrushStroke(false);
+}
+
+void MaterialInstanceAssetEditorPanel::CommitHairBrushStroke(bool sampleCurrent)
+{
+    if (!hairBrushStrokeActive) return;
+    // 光标手势属于笔刷，提交后不能把 previewDragButton 留在左键状态，
+    // 否则下一次 hover 会被旧代码解释成“左键拖动旋转预览模型”。
+    previewDragButton = -1;
+    previewDragGeneration = 0;
+    // 圆形笔刷在松开前补一次采样，避免最后一段移动没有进入选择；套索已自行累积。
+    if (sampleCurrent)
+        UpdateHairBrushSample(hairBrushCursorX, hairBrushCursorY, true);
+    const auto commit = hairPaint.CommitStroke();
+    hairBrushStrokeActive = false;
+    hairBrushHits.clear();
+    if (!commit.has_value())
+    {
+        hairBrushStatus = "No guides selected; nothing was written to the groups draft.";
+        SubmitTressfxBrushPreview();
+        UpdateHairBrushOverlay();
+        return;
+    }
+    if (hairGroupSelected < 0)
+    {
+        SubmitTressfxBrushPreview();
+        return;
+    }
+    const std::string targetName =
+        hairGroups.Groups()[static_cast<size_t>(hairGroupSelected)].name;
+    // Undo 快照必须在写草稿前捕获，包含 overrides/名称/声明顺序。
+    if (hairPaintUndo.size() >= 16) hairPaintUndo.erase(hairPaintUndo.begin());
+    hairPaintUndo.push_back(hairGroups);
+    std::string error;
+    if (!hairGroups.ApplyPaintedGuides(static_cast<size_t>(hairGroupSelected),
+            commit->addGuides, commit->removeGuides, error))
+    {
+        hairPaintUndo.pop_back();
+        hairBrushStatus = "Paint commit rejected: " + error;
+        SubmitTressfxBrushPreview();
+        return;
+    }
+    int newIndex = -1;
+    for (size_t index = 0; index < hairGroups.Groups().size(); ++index)
+        if (hairGroups.Groups()[index].name == targetName)
+        {
+            newIndex = static_cast<int>(index);
+            break;
+        }
+    hairGroupSelected = newIndex;
+    if (hairGroupSelected < 0)
+    {
+        hairGroupPaintActive = false;
+        hairBrushStatus = "The target group became empty and was deleted.";
+    }
+    else
+    {
+        std::ostringstream status;
+        status << (commit->mode == VL::Hair::GroupPaintMode::Add ? "Added " : "Removed ")
+               << commit->addGuides.size() + commit->removeGuides.size()
+               << " guides " << (commit->mode == VL::Hair::GroupPaintMode::Add
+                   ? "to \"" : "from \"") << targetName << "\"";
+        const std::string conflicts = HairBrushConflictText(commit->conflicts);
+        if (!conflicts.empty()) status << " | " << conflicts;
+        status << " | saved only after Save to Hair Asset";
+        hairBrushStatus = status.str();
+    }
+    SubmitTressfxBrushPreview();
+    SubmitTressfxGroupPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::CancelHairBrushStroke(bool exitPaint)
+{
+    previewDragButton = -1;
+    previewDragGeneration = 0;
+    hairBrushStrokeActive = false;
+    hairPaint.CancelStroke();
+    hairBrushHits.clear();
+    hairBrushConflicts.clear();
+    hairBrushStamp = {};
+    hairLassoDragging = false;
+    hairLassoScreenPoints.clear();
+    if (exitPaint)
+    {
+        hairGroupPaintActive = false;
+        hairBrushStatus = "Paint mode cancelled; the groups draft was not changed.";
+    }
+    SubmitTressfxBrushPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitTressfxBrushPreview()
+{
+    if (runtimeActionSink == nullptr) return;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    // 切到非头发预览时仍要清掉上一帧圆环；此时没有 section/目标组，只发清除语义。
+    const bool hairPreview = IsActiveHairPreview();
+    const EditorSceneMeshSectionSnapshot* section = hairPreview ? HairBrushSection() : nullptr;
+    if (section == nullptr)
+    {
+        if (!hairBrushLastObjectName.empty())
+        {
+            UiAction clear;
+            clear.type = UiActionType::SetTressfxBrushPreview;
+            clear.previewTressfxBrush.worldGeneration = hairBrushLastGeneration;
+            clear.previewTressfxBrush.objectName = hairBrushLastObjectName;
+            clear.previewTressfxBrush.ringVisible = false;
+            runtimeActionSink->RequestRuntimeAction(std::move(clear));
+        }
+        hairBrushLastObjectName.clear();
+        hairBrushLastGeneration = 0;
+        hairBrushPreviewActive = false;
+        hairBrushRingSent = false;
+        return;
+    }
+    if (generation == 0) return;
+    const bool draftReady = HairDraftBindingReady();
+    const uint32_t targetGroupId = draftReady && hairGroupSelected >= 0
+        ? static_cast<uint32_t>(hairGroupSelected) + 1u : 0u;
+    // 直接填充 UiAction，避免“request -> action”两次完整权重拷贝。
+    UiAction action;
+    action.type = UiActionType::SetTressfxBrushPreview;
+    action.previewTressfxBrush.worldGeneration = generation;
+    action.previewTressfxBrush.objectName = section->objectName;
+    action.previewTressfxBrush.targetGroupId = targetGroupId;
+    action.previewTressfxBrush.mode =
+        hairBrushStrokeActive ? hairBrushStrokeMode : hairBrushMode;
+    if (hairBrushStrokeActive && draftReady && hairGroupSelected >= 0)
+    {
+        const auto& weights = hairPaint.StrokeWeights();
+        action.previewTressfxBrush.weights.reserve(weights.size());
+        for (const auto& [guide, weight] : weights)
+            action.previewTressfxBrush.weights.push_back({guide, weight});
+    }
+    const bool weightsActive = !action.previewTressfxBrush.weights.empty();
+
+    // 圆环与 ghost 分开去重：hover 只移动圆环时权重仍是空的，但也必须投递命令。
+    const bool ringVisible = hairPreview && hairGroupPaintActive && hairBrushStamp.valid;
+    bool ringChanged = !hairBrushRingSent || ringVisible != hairBrushRingSentVisible;
+    if (ringVisible)
+    {
+        ringChanged = ringChanged ||
+            !hairBrushStamp.position.isApprox(hairBrushRingSentCenter, 1.0e-4f) ||
+            !hairBrushStamp.normal.isApprox(hairBrushRingSentNormal, 1.0e-4f) ||
+            std::abs(hairBrushStamp.radiusWorld - hairBrushRingSentRadius) > 1.0e-4f;
+    }
+    const bool weightsChanged = weightsActive || hairBrushPreviewActive;
+    if (!ringChanged && !weightsChanged) return;
+
+    action.previewTressfxBrush.ringVisible = ringVisible;
+    if (ringVisible)
+    {
+        action.previewTressfxBrush.ringCenter = hairBrushStamp.position;
+        action.previewTressfxBrush.ringNormal = hairBrushStamp.normal;
+        action.previewTressfxBrush.ringRadiusWorld = hairBrushStamp.radiusWorld;
+    }
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+    hairBrushLastObjectName = section->objectName;
+    hairBrushLastGeneration = generation;
+    hairBrushPreviewActive = weightsActive;
+    hairBrushRingSent = true;
+    hairBrushRingSentVisible = ringVisible;
+    hairBrushRingSentCenter = hairBrushStamp.position;
+    hairBrushRingSentNormal = hairBrushStamp.normal;
+    hairBrushRingSentRadius = hairBrushStamp.radiusWorld;
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateHairBrushOverlay()
+{
+    const bool visible = hairGroupPaintActive &&
+        (hairBrushStamp.valid || hairLassoDragging);
+    widgetDocument.SetProperty("hair-brush-overlay", "display",
+        visible ? "block" : "none");
+    if (!visible)
+    {
+        widgetDocument.SetProperty("hair-brush-ring", "display", "none");
+        return;
+    }
+    Rml::Element* surface = document->GetElementById("resource-preview-surface");
+    if (surface == nullptr) return;
+    SetMarkup("hair-brush-hud", Text(hairBrushStatus));
+    // 正常路径由 World 的 DebugDraw 绘制贴合头皮工作面的圆环；只有平面 PCA/
+    // 退化回退时才显示屏幕圆环作为降级提示。
+    if (!hairBrushStamp.valid || !hairBrushStamp.fallback)
+    {
+        widgetDocument.SetProperty("hair-brush-ring", "display", "none");
+        return;
+    }
+    const Rml::Vector2f offset = surface->GetAbsoluteOffset(Rml::BoxArea::Border);
+    // 降级圆环不是命中依据：它按屏幕像素半径画在 cursor 处；实际选择仍由
+    // SurfaceBrush 的世界平面 H/normal/r_world 完成，状态栏给出真实 cm 值。
+    const float radiusPx = std::max(2.0f, hairBrushRadiusPx);
+    widgetDocument.SetProperty("hair-brush-ring", "display", "block");
+    widgetDocument.SetProperty("hair-brush-ring", "left",
+        std::to_string(std::lround(hairBrushCursorX - offset.x - radiusPx)) + "px");
+    widgetDocument.SetProperty("hair-brush-ring", "top",
+        std::to_string(std::lround(hairBrushCursorY - offset.y - radiusPx)) + "px");
+    widgetDocument.SetProperty("hair-brush-ring", "width",
+        std::to_string(std::lround(radiusPx * 2.0f)) + "px");
+    widgetDocument.SetProperty("hair-brush-ring", "height",
+        std::to_string(std::lround(radiusPx * 2.0f)) + "px");
+    widgetDocument.SetProperty("hair-brush-ring", "border-radius",
+        std::to_string(std::lround(radiusPx)) + "px");
+}
+
+void MaterialInstanceAssetEditorPanel::UndoLastHairBrushCommit()
+{
+    if (hairPaintUndo.empty())
+    {
+        hairBrushStatus = "No paint commit to undo in this session.";
+        return;
+    }
+    CancelHairBrushStroke(false);
+    hairGroups = std::move(hairPaintUndo.back());
+    hairPaintUndo.pop_back();
+    if (hairGroupSelected >= static_cast<int>(hairGroups.Groups().size()))
+        hairGroupSelected = static_cast<int>(hairGroups.Groups().size()) - 1;
+    hairBrushStatus = "Undid the previous paint commit in this session; Save was not performed.";
+    SubmitTressfxGroupPreview();
+    UpdateHairBrushOverlay();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshHairGroupsSection(bool isHair, bool hairBlocked)
+{
+    const auto* active = resourceEditor.ActiveTab();
+    const bool visible = isHair && active != nullptr;
+    widgetDocument.SetProperty("resource-hair-groups", "display", visible ? "block" : "none");
+    if (!visible)
+    {
+        // 隐藏时丢弃绑定身份，避免切回同一路径时误用上一个草稿的选中/表单状态。
+        hairGroupsPath.clear();
+        hairGroupsLoaded = false;
+        hairGroupsObservedDocument = nullptr;
+        hairGroupsBoundRevision = 0;
+        hairGroupsBoundGuideCount = 0;
+        hairGroupSelected = -1;
+        hairGroupPreviewSent = false;
+        hairGroupPreviewSentGeneration = 0;
+        hairGroupPreviewSentSelected = -2;
+        hairGroupPreviewSentFlags = 0;
+        hairGroupBindingPreviewSent = false;
+        hairGroupBindingPreviewQueued = false;
+        hairGroupBindingPreviewSentRevision = 0;
+        hairGroupBindingPreviewSentGeneration = 0;
+        hairGroupBindingPreviewSentObject.clear();
+        hairGroupBindingPreviewError.clear();
+        hairPaintDraftBinding.reset();
+        hairPaintDraftRevision = 0;
+        hairGroupPaintActive = false;
+        hairBrushStrokeActive = false;
+        hairBrushHits.clear();
+        hairBrushConflicts.clear();
+        hairBrushStamp = {};
+        hairLassoActive = false;
+        hairLassoDragging = false;
+        hairLassoScreenPoints.clear();
+        // section 即将失效；用最后一次对象名显式清除 RT ghost 权重。
+        if (runtimeActionSink != nullptr && !hairBrushLastObjectName.empty())
+        {
+            UiAction clear;
+            clear.type = UiActionType::SetTressfxBrushPreview;
+            clear.previewTressfxBrush.worldGeneration = hairBrushLastGeneration;
+            clear.previewTressfxBrush.objectName = hairBrushLastObjectName;
+            clear.previewTressfxBrush.ringVisible = false;
+            runtimeActionSink->RequestRuntimeAction(std::move(clear));
+        }
+        hairBrushLastObjectName.clear();
+        hairBrushLastGeneration = 0;
+        ResetHairPaintSession();
+        hairPaintUndo.clear();
+        hairBrushStatus.clear();
+        hairBrushPreviewActive = false;
+        hairGroupCreateActive = false;
+        hairGroupAddRangeActive = false;
+        hairGroupsPendingSave = false;
+        hairGroupsSaveWaitTicks = 0;
+        widgetDocument.SetProperty("hair-group-legend-overlay", "display", "none");
+        SubmitTressfxBrushPreview();
+        return;
+    }
+
+    // guideCount 只用于编辑期校验 end <= guideCount；文档快照优先，目录作为回退。
+    uint32_t guideCount = active->snapshot ? active->snapshot->tressfxGuideCount : 0;
+    if (guideCount == 0)
+    {
+        const EditorJsonAssetEntry* entry = FindCatalogEntry(snapshot.assetCatalog, active->path);
+        if (entry != nullptr) guideCount = entry->tressfxGuideCount;
+    }
+
+    const auto* document = TressfxDocument(active->path);
+    if (document == nullptr) RequestTressfxDocument(active->path);
+    if (hairGroupsPath != active->path)
+    {
+        hairGroupsPath = active->path;
+        hairGroupsLoaded = false;
+        hairGroupsObservedDocument = nullptr;
+        hairGroupsBoundRevision = 0;
+        hairGroupsBoundGuideCount = 0;
+        hairGroupSelected = -1;
+        hairGroupPreviewSent = false;
+        hairGroupPreviewSentGeneration = 0;
+        hairGroupPreviewSentSelected = -2;
+        hairGroupPreviewSentFlags = 0;
+        hairGroupBindingPreviewSent = false;
+        hairGroupBindingPreviewQueued = false;
+        hairGroupBindingPreviewSentRevision = 0;
+        hairGroupBindingPreviewSentGeneration = 0;
+        hairGroupBindingPreviewSentObject.clear();
+        hairGroupBindingPreviewError.clear();
+        hairPaintDraftBinding.reset();
+        hairPaintDraftRevision = 0;
+        hairGroupPaintActive = false;
+        hairBrushStrokeActive = false;
+        hairBrushHits.clear();
+        hairBrushConflicts.clear();
+        hairBrushStamp = {};
+        hairLassoActive = false;
+        hairLassoDragging = false;
+        hairLassoScreenPoints.clear();
+        ResetHairPaintSession();
+        hairPaintUndo.clear();
+        hairBrushStatus.clear();
+        hairBrushPreviewActive = false;
+        hairGroupCreateActive = false;
+        hairGroupCreateName.clear();
+        hairGroupCreateStart.clear();
+        hairGroupCreateEnd.clear();
+        hairGroupCreateError.clear();
+        hairGroupAddRangeActive = false;
+        hairGroupRangeStart.clear();
+        hairGroupRangeEnd.clear();
+        hairGroupRangeError.clear();
+        hairGroupStatus.clear();
+        hairGroupsPendingSave = false;
+        hairGroupsSaveRevision = 0;
+        hairGroupsSaveWaitTicks = 0;
+        hairGroupsPendingReset = false;
+        hairGroupsPendingValue = nlohmann::json();
+    }
+
+    if (document == nullptr)
+    {
+        widgetDocument.SetProperty("hair-group-legend-overlay", "display", "none");
+        SetMarkup("resource-hair-groups", UiWidgets::CollapsibleSection(
+            DetailsSectionId("hair-groups"), "hair-groups", "Groups",
+            "<p class=\"hair-group-note\">Reading the hair asset document...</p>",
+            {"section"}, IsSectionExpanded("hair-groups")));
+        widgetDocument.SetClass(DetailsSectionId("hair-groups"), "collapsed",
+            !IsSectionExpanded("hair-groups"));
+        SetMarkup("hair-group-status", Text(hairGroupStatus));
+        return;
+    }
+
+    // revision 前进可能来自 Simulation 保存；只有文档里的 groups 实际变化时才覆盖
+    // 本地草稿，否则两个独立草稿会在对方保存时互相丢弃未保存编辑。
+    const bool hasDocumentGroups = document->document.contains("groups") &&
+        document->document.at("groups").is_array() &&
+        !document->document.at("groups").empty();
+    const nlohmann::json currentGroups = hasDocumentGroups
+        ? document->document.at("groups") : nlohmann::json();
+    const bool groupsSectionChanged =
+        hairGroupsObservedDocument.is_null() != currentGroups.is_null() ||
+        (!hairGroupsObservedDocument.is_null() &&
+            hairGroupsObservedDocument != currentGroups);
+    if (hairGroupsBoundRevision != document->documentRevision ||
+        hairGroupsBoundGuideCount != guideCount)
+    {
+        const bool firstBind = hairGroupsBoundRevision == 0;
+        const bool guideCountChanged = hairGroupsBoundGuideCount != guideCount;
+        hairGroupsBoundRevision = document->documentRevision;
+        hairGroupsBoundGuideCount = guideCount;
+        if (firstBind || guideCountChanged || groupsSectionChanged)
+        {
+            // guideCount 改变会改变展开长度；旧 binding 不能继续复用。
+            hairPaintDraftBinding.reset();
+            hairPaintDraftRevision = 0;
+            std::string error;
+            hairGroupsObservedDocument = currentGroups;
+            if (!hairGroups.Load(document->document, guideCount, error))
+            {
+                hairGroupsLoaded = false;
+                hairGroupStatus = "Groups unavailable: " + error;
+                hairGroupSelected = -1;
+                hairGroupCreateActive = false;
+                hairGroupAddRangeActive = false;
+            }
+            else
+            {
+                hairGroupsLoaded = true;
+                if (hairGroupStatus.rfind("Groups unavailable:", 0) == 0) hairGroupStatus.clear();
+                const int count = static_cast<int>(hairGroups.Groups().size());
+                if (hairGroupSelected >= count) hairGroupSelected = count - 1;
+            }
+        }
+    }
+
+    // modify 成功后草稿变 dirty 且 revision 前进；保存交给既有 Save Content 弹窗。
+    if (hairGroupsPendingSave)
+    {
+        const bool staged = document->documentRevision > hairGroupsSaveRevision ||
+            (document->dirty && HairGroupsMatchDocument(document->document,
+                hairGroupsPendingReset, hairGroupsPendingValue));
+        if (staged)
+        {
+            hairGroupsPendingSave = false;
+            hairGroupsSaveWaitTicks = 0;
+            hairGroupStatus = "Confirm the save in the Save Content dialog (writes the hair asset).";
+            if (pendingClosePath != active->path) OpenSaveDialog(active->path);
+        }
+        else if (++hairGroupsSaveWaitTicks > 180)
+        {
+            hairGroupsPendingSave = false;
+            hairGroupsSaveWaitTicks = 0;
+            hairGroupStatus = snapshot.statusMessage.empty()
+                ? "Save failed: the asset draft was not modified." : snapshot.statusMessage;
+        }
+    }
+
+    const auto& groups = hairGroups.Groups();
+    // 草稿结构签名：只遍历组/range（不是 guide），用于让笔刷会话在 Add/Remove/
+    // Delete/撤销后重建冲突分析，而不是继续使用旧的共享 binding。
+    std::string draftSignature;
+    for (const VL::Editor::TressfxGuideGroupDraft& group : groups)
+    {
+        draftSignature += group.name;
+        draftSignature += ':';
+        for (const auto& range : group.guideRanges)
+        {
+            draftSignature += std::to_string(range.first);
+            draftSignature += ',';
+            draftSignature += std::to_string(range.second);
+            draftSignature += ';';
+        }
+        draftSignature += group.simulationOverrides.dump();
+        draftSignature += '|';
+    }
+    if (draftSignature != hairGroupsDraftSignature)
+    {
+        hairGroupsDraftSignature = std::move(draftSignature);
+        ++hairGroupsDraftRevision;
+    }
+    // 草稿 revision 变化后立刻同步一次 GPU binding；后续静帧 Refresh 不重复发送。
+    SubmitTressfxGroupBindingPreview();
+    const nlohmann::json simulation = document->document.contains("simulationDefaults")
+        ? document->document.at("simulationDefaults") : nlohmann::json::object();
+    const bool canPaint = hairGroupsLoaded && hairGroupSelected >= 0 &&
+        HairBrushSection() != nullptr && CurrentModelPreviewGeneration() != 0 &&
+        static_cast<size_t>(hairGroupSelected) < groups.size() &&
+        HairDraftBindingReady();
+    if (hairGroupPaintActive && !canPaint)
+        CancelHairBrushStroke(true);
+
+    std::string rows;
+    rows += "<p class=\"hair-group-note\">Groups are authored data. The preview uses the current "
+        "draft binding immediately; Save to Hair Asset persists names/ranges. Per-group "
+        "simulation overrides still take effect after save and reload; placement overrides "
+        "apply last.</p>";
+    if (hairBlocked)
+        rows += "<p class=\"hair-group-note\">Preview is unavailable for skinned hair; group "
+            "editing still saves to the asset.</p>";
+
+    // 预览开关只作用于当前 TF 预览 World；默认颜色开、Solo 关，避免关卡头发被染色。
+    rows += "<div class=\"hair-group-actions hair-group-preview-actions\">"
+        "<button id=\"hair-group-colors\" class=\"hair-group-toggle" +
+        std::string(hairGroupColors ? " active" : "") +
+        "\" data-action=\"hair-group-colors\">Group Colors: " +
+        (hairGroupColors ? "On" : "Off") + "</button>"
+        "<button id=\"hair-group-solo\" class=\"hair-group-toggle" +
+        std::string(hairGroupSolo ? " active" : "") +
+        "\" data-action=\"hair-group-solo\">Solo</button></div>";
+
+    // Paint 目标只能是有声明的命名组；Default(0) 永远不可写入。控件仍显示，
+    // 但无 preview generation / 根点云时禁用，状态行说明原因。
+    rows += "<div class=\"hair-group-paint-controls\">"
+        "<button id=\"hair-group-paint\" data-action=\"hair-group-paint\" class=\"" +
+        std::string(hairGroupPaintActive ? "active" : "") + "\"" +
+        (canPaint ? "" : " disabled=\"disabled\"") + ">" +
+        (hairGroupPaintActive ? "Stop Painting" : "Paint Groups") + "</button>"
+        "<label class=\"hair-group-paint-label\">Brush</label>" +
+        UiWidgets::Input("hair-brush-radius", {"hair-brush-radius"}, {}) +
+        "<span class=\"hair-group-paint-unit\">px</span>"
+        "<label class=\"hair-group-paint-label\">Mode</label>" +
+        UiWidgets::Select("hair-brush-mode", {"hair-brush-mode"},
+            UiWidgets::Option("add", "Add") + UiWidgets::Option("remove", "Remove")) +
+        "<label class=\"hair-group-paint-check\"><input id=\"hair-brush-replace\" "
+        "type=\"checkbox\" data-action=\"hair-brush-replace\"" +
+        std::string(hairBrushReplaceExisting ? " checked=\"checked\"" : "") +
+        "/><span>Replace existing</span></label>"
+        "<button id=\"hair-lasso\" data-action=\"hair-lasso-toggle\" class=\"hair-group-toggle" +
+        std::string(hairLassoActive ? " active" : "") + "\"" +
+        (canPaint ? "" : " disabled=\"disabled\"") + ">Lasso</button></div>";
+    if (hairGroupPaintActive)
+    {
+        rows += "<div class=\"hair-group-paint-state\">" +
+            Text(hairBrushStatus.empty() ? "Hover the preview to select roots." : hairBrushStatus) +
+            "</div>";
+    }
+    else if (!canPaint)
+    {
+        rows += "<div class=\"hair-group-paint-state\">Select a named group in a live hair preview; "
+            "the Groups draft must finish syncing to the renderable before painting.</div>";
+    }
+
+    const std::string defaultCount = hairGroups.GuideCount() == 0
+        ? std::string("--") : std::to_string(hairGroups.DefaultGuideCount()) + " guides";
+    rows += "<button id=\"hair-group-default\" class=\"hair-group-row" +
+        std::string(hairGroupSelected < 0 ? " selected" : "") +
+        "\" data-action=\"hair-group-default\">"
+        "<span class=\"hair-group-swatch hair-group-swatch-default\"></span>"
+        "<span class=\"hair-group-name\">Default</span>"
+        "<span class=\"hair-group-count\">" + Text(defaultCount) + "</span></button>";
+
+    for (std::size_t index = 0; index < groups.size(); ++index)
+    {
+        const VL::Editor::TressfxGuideGroupDraft& group = groups[index];
+        rows += "<button id=\"hair-group-row-" + std::to_string(index) +
+            "\" class=\"hair-group-row" +
+            (hairGroupSelected == static_cast<int>(index) ? " selected" : "") +
+            "\" data-action=\"hair-group-select\" data-index=\"" + std::to_string(index) + "\">" +
+            HairGroupSwatch(VL::Editor::TressfxGroupEditor::GroupColor(group.name)) +
+            "<span class=\"hair-group-name\">" + Text(group.name) + "</span>"
+            "<span class=\"hair-group-count\">" + std::to_string(hairGroups.GuideCountFor(index)) +
+            " guides</span>"
+            "<span class=\"hair-group-overrides\">" +
+            std::to_string(group.simulationOverrides.size()) + " overrides</span></button>";
+    }
+
+    // 视口图例的紧凑投影：只列色块 + 名称；完整 ranges/override 仍在组列表行里。
+    rows += "<div class=\"hair-group-legend\"><span class=\"hair-group-legend-title\">Legend</span>"
+        "<span class=\"hair-group-legend-item\">" +
+        HairGroupSwatch(VL::Hair::TressfxDefaultGroupColor()) +
+        "<span>Default</span></span>";
+    for (const VL::Editor::TressfxGuideGroupDraft& group : groups)
+    {
+        rows += "<span class=\"hair-group-legend-item\">" +
+            HairGroupSwatch(VL::Editor::TressfxGroupEditor::GroupColor(group.name)) +
+            "<span>" + Text(group.name) + "</span></span>";
+    }
+    rows += "</div>";
+
+    if (hairGroupCreateActive)
+    {
+        rows += "<div class=\"hair-group-form\">"
+            "<div class=\"hair-group-form-row\"><label class=\"hair-group-form-label\">Name</label>" +
+            UiWidgets::Input("hair-group-create-name", {"hair-group-create-field", 0, 0}, {}) +
+            "<button id=\"hair-group-create-submit\" data-action=\"hair-group-create-submit\">Create</button>"
+            "<button id=\"hair-group-create-cancel\" data-action=\"hair-group-create-cancel\">Cancel</button>"
+            "</div><div id=\"hair-group-create-error\" class=\"hair-group-status\"></div></div>";
+    }
+    else
+    {
+        rows += "<div class=\"hair-group-actions\">" +
+            UiWidgets::Button("hair-group-create-open", {"hair-group-create-open"}, "+ New Group") +
+            "</div>";
+    }
+
+    if (hairGroupSelected >= 0 && hairGroupSelected < static_cast<int>(groups.size()))
+    {
+        const std::size_t selected = static_cast<std::size_t>(hairGroupSelected);
+        const VL::Editor::TressfxGuideGroupDraft& group = groups[selected];
+        // 已保存组显示 placement 解析后的值；新建/改名的草稿组没有求解绑定，
+        // 只能回退文档 simulationDefaults，并在行内标注原因。
+        const EditorSceneMeshSectionSnapshot* assetSection = HairBrushSection();
+        const int32_t selectedSavedIndex =
+            SavedHairGroupIndex(assetSection, hairGroupSelected);
+        const bool selectedSaved = selectedSavedIndex >= 0;
+        rows += "<div class=\"hair-group-inspector\"><div class=\"hair-group-inspector-head\">" +
+            HairGroupSwatch(VL::Editor::TressfxGroupEditor::GroupColor(group.name)) +
+            "<span>Group: " + Text(group.name) + "</span></div>";
+        rows += UiWidgets::PropertyControlRow("Name",
+            UiWidgets::Input("hair-group-name", {"hair-group-rename"}, group.name));
+
+        // 区间不是作者要看的层级：Add/Remove 全部通过笔刷完成。
+        rows += "<p class=\"hair-group-note\">Guides are edited with the brush. "
+            "Use Paint Groups to add; switch to Remove or hold Alt to subtract.</p>";
+
+        rows += "<div class=\"hair-group-subhead\">Overrides</div>";
+        for (const HairGroupOverrideSpec& spec : HairGroupOverrideSpecs)
+        {
+            const bool inherited = !group.simulationOverrides.contains(spec.field);
+            rows += "<div class=\"hair-group-override-row\">"
+                "<label class=\"hair-group-override-label\">" + Text(spec.label) + "</label>"
+                "<input id=\"hair-group-override-" + std::string(spec.field) +
+                "\" type=\"checkbox\" data-action=\"hair-group-override-toggle\" data-key=\"" +
+                spec.field + "\"" + (inherited ? "" : " checked=\"checked\"") + "/>"
+                "<input id=\"hair-group-override-" + std::string(spec.field) +
+                "-value\" type=\"text\" data-action=\"hair-group-override-value\" data-key=\"" +
+                spec.field + "\" value=\"\"/>"
+                "<span class=\"hair-group-default\">(asset default " +
+                Text(HairGroupAssetDefaultText(assetSection, selectedSaved,
+                    selectedSavedIndex, simulation, spec.field)) +
+                ")</span></div>";
+        }
+        rows += "<div class=\"hair-group-actions\">" +
+            UiWidgets::Button("hair-group-clear-overrides", {"hair-group-clear-overrides"},
+                "Clear Overrides") +
+            UiWidgets::Button("hair-group-delete", {"hair-group-delete"}, "Delete Group") +
+            "</div></div>";
+    }
+
+    rows += "<div class=\"hair-group-footer\">" +
+        UiWidgets::Button("hair-group-save", {"hair-group-save"}, "Save to Hair Asset",
+            UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
+        "</div><span id=\"hair-group-status\" class=\"hair-group-status\"></span>"
+        "<span id=\"hair-brush-status\" class=\"hair-group-status\">" +
+        Text(hairBrushStatus) + "</span>";
+
+    SetMarkup("resource-hair-groups", UiWidgets::CollapsibleSection(
+        DetailsSectionId("hair-groups"), "hair-groups", "Groups", rows,
+        {"section"}, IsSectionExpanded("hair-groups")));
+    widgetDocument.SetClass(DetailsSectionId("hair-groups"), "collapsed",
+        !IsSectionExpanded("hair-groups"));
+
+    // 预览图左上角的紧凑图例：与同步到 GPU 的草稿 binding 同源；
+    // binding 尚未入队时隐藏，避免显示实际不存在的颜色。Group Colors 关闭时隐藏。
+    const EditorSceneMeshSectionSnapshot* legendSection = HairBrushSection();
+    std::string legend = "<span class=\"hair-group-legend-title\">Groups</span>"
+        "<span class=\"hair-group-legend-item\">" +
+        HairGroupSwatch(VL::Hair::TressfxDefaultGroupColor()) +
+        "Default</span>";
+    if (legendSection != nullptr && HairDraftBindingReady())
+        for (const VL::Editor::TressfxGuideGroupDraft& group : groups)
+            legend += "<span class=\"hair-group-legend-item\">" +
+                HairGroupSwatch(VL::Editor::TressfxGroupEditor::GroupColor(group.name)) +
+                Text(group.name) + "</span>";
+    SetMarkup("hair-group-legend-overlay", legend);
+    widgetDocument.SetProperty("hair-group-legend-overlay", "display",
+        hairGroupColors && legendSection != nullptr && HairDraftBindingReady()
+            ? "block" : "none");
+
+    // 结构 markup 不携带用户正在输入的值；只在这些控件挂载后同步一次。
+    SetControlValue("hair-group-create-name", hairGroupCreateName);
+    SetControlValue("hair-brush-radius", SceneActorNumber(hairBrushRadiusPx));
+    SetControlValue("hair-brush-mode",
+        hairBrushMode == VL::Hair::GroupPaintMode::Remove ? "remove" : "add");
+    if (hairGroupSelected >= 0 && hairGroupSelected < static_cast<int>(groups.size()))
+    {
+        const VL::Editor::TressfxGuideGroupDraft& group = groups[static_cast<std::size_t>(hairGroupSelected)];
+        const EditorSceneMeshSectionSnapshot* assetSection = HairBrushSection();
+        const int32_t selectedSavedIndex =
+            SavedHairGroupIndex(assetSection, hairGroupSelected);
+        const bool selectedSaved = selectedSavedIndex >= 0;
+        for (const HairGroupOverrideSpec& spec : HairGroupOverrideSpecs)
+        {
+            const bool inherited = !group.simulationOverrides.contains(spec.field);
+            const std::string valueId = "hair-group-override-" + std::string(spec.field) + "-value";
+            SetControlValue(valueId, TressfxSimulationText(inherited
+                ? HairGroupAssetDefault(assetSection, selectedSaved,
+                    selectedSavedIndex, simulation, spec.field)
+                : group.simulationOverrides.at(spec.field).get<double>()));
+            SetDisabled(valueId, inherited);
+        }
+    }
+
+    // Create 只在名称通过控制器校验时可用；新组从空组开始，guide 由笔刷填充。
+    // 因此必须在这里把校验失败原因写进行内错误，而不是等一个永远到不了的 submit。
+    bool createValid = false;
+    if (hairGroupCreateActive)
+    {
+        std::string error;
+        const bool anyInput = !hairGroupCreateName.empty();
+        VL::Editor::TressfxGroupEditor probe = hairGroups;
+        createValid = probe.AddEmptyGroup(hairGroupCreateName, error);
+        if (createValid || !anyInput) hairGroupCreateError.clear();
+        else hairGroupCreateError = error;
+    }
+    SetDisabled("hair-group-create-submit", !createValid);
+    SetMarkup("hair-group-create-error", Text(hairGroupCreateError));
+    SetMarkup("hair-group-status", Text(hairGroupStatus));
+    // 加载失败时控制器是空的；若仍允许保存，WriteGroupArray 会把原始 groups 删掉。
+    SetDisabled("hair-group-save", !hairGroupsLoaded);
+    SetDisabled("hair-group-paint", !canPaint);
+    SetDisabled("hair-group-select-viewport", !canPaint);
+    // 首次绑定或状态变化时投递一次预览；没有预览 generation 时保持静默。
+    SubmitTressfxGroupPreview();
+    // 组切换/加载失败导致 Paint 退出时，同步移除世界圆环。
+    SubmitTressfxBrushPreview();
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitHairGroupsSave()
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr) return;
+    if (!hairGroupsLoaded)
+    {
+        hairGroupStatus = "Groups could not be loaded; saving is disabled to protect the asset.";
+        return;
+    }
+    const auto* document = TressfxDocument(active->path);
+    if (document == nullptr)
+    {
+        RequestTressfxDocument(active->path);
+        hairGroupStatus = "Reading the asset document...";
+        return;
+    }
+
+    std::string error;
+    if (!hairGroups.Validate(error))
+    {
+        hairGroupStatus = error;
+        return;
+    }
+
+    nlohmann::json candidate = document->document;
+    hairGroups.WriteGroupArray(candidate);
+    const bool reset = !candidate.contains("groups");
+    const nlohmann::json value = reset ? nlohmann::json() : candidate.at("groups");
+    if (HairGroupsMatchDocument(document->document, reset, value))
+    {
+        hairGroupStatus = "No group changes to stage.";
+        return;
+    }
+
+    ModifyAssetDocumentPayload payload;
+    payload.assetPath = active->path;
+    EditorAssetFieldChange change;
+    change.field = "groups";
+    if (reset) change.reset = true;
+    else change.value = value;
+    payload.changes.push_back(std::move(change));
+
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::ModifyTressfxDocument;
+    command.expectedDocumentRevision = document->documentRevision;
+    command.payload = std::move(payload);
+    Submit(std::move(command));
+
+    hairGroupsPendingSave = true;
+    hairGroupsSaveRevision = document->documentRevision;
+    hairGroupsSaveWaitTicks = 0;
+    hairGroupsPendingReset = reset;
+    hairGroupsPendingValue = value;
+    hairGroupStatus = "Staging groups...";
+}
+
 void MaterialInstanceAssetEditorPanel::RequestPreviewCamera(ModelPreviewNavigation mode, float x, float y)
 {
     const uint64_t generation = CurrentPreviewCameraGeneration();
@@ -4668,10 +8214,88 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
     if (previewDragGeneration != generation) previewDragButton = -1;
     const bool imageHit = event.GetTargetElement() == document->GetElementById(
         IsMaterialEditorVisible() ? "material-preview-image" :
-            requestedPreviewBlueprint ? "blueprint-asset-preview-image" : "resource-preview-image");
+            requestedPreviewBlueprint ? "blueprint-asset-preview-image" :
+                !requestedRetargetPath.empty() ? "retarget-preview-image" : "resource-preview-image");
     const auto& type = event.GetType();
     const float x = event.GetParameter<float>("mouse_x", 0);
     const float y = event.GetParameter<float>("mouse_y", 0);
+    if (hairGroupPaintActive && IsActiveHairPreview() && HairBrushSection() != nullptr)
+    {
+        if (type == "mousedown" && imageHit &&
+            event.GetParameter<int>("button", -1) == 0)
+        {
+            CloseMenus();
+            CloseContextMenu();
+            if (hairLassoActive)
+                BeginHairLassoStroke(x, y,
+                    event.GetParameter<int>("shift_key", 0) != 0,
+                    event.GetParameter<int>("alt_key", 0) != 0);
+            else
+                BeginHairBrushStroke(x, y,
+                    event.GetParameter<int>("shift_key", 0) != 0,
+                    event.GetParameter<int>("alt_key", 0) != 0);
+            if (hairBrushStrokeActive)
+            {
+                previewDragButton = 0;
+                previewDragGeneration = generation;
+                previewPointerX = x;
+                previewPointerY = y;
+            }
+            return true;
+        }
+        if (type == "mousemove")
+        {
+            if (hairLassoDragging)
+            {
+                AppendHairLassoPoint(x, y);
+                // 每 3 个采样更新一次 ghost：整屏套索不必按鼠标频率重跑 40k 选择。
+                if (hairLassoScreenPoints.size() % 3 == 0)
+                    UpdateHairLassoPreview();
+                return true;
+            }
+            if (hairBrushStrokeActive)
+            {
+                UpdateHairBrushSample(x, y, true);
+                return true;
+            }
+            // 右键/中键相机拖动仍走原路径；hover 采样只在没有其它鼠标手势时生效。
+            if (previewDragButton < 0 && imageHit)
+            {
+                UpdateHairBrushSample(x, y, false);
+                return true;
+            }
+        }
+        if (type == "mouseup" && hairLassoDragging &&
+            event.GetParameter<int>("button", -1) == 0)
+        {
+            CommitHairLassoStroke();
+            previewDragButton = -1;
+            return true;
+        }
+        if (type == "mouseup" && hairBrushStrokeActive &&
+            event.GetParameter<int>("button", -1) == 0)
+        {
+            CommitHairBrushStroke();
+            previewDragButton = -1;
+            return true;
+        }
+        if (type == "mousescroll" && imageHit)
+        {
+            // 滚轮仍归相机缩放；只有 Alt+滚轮才调笔刷半径。未按 Alt 时不消费事件，
+            // 继续走下面通用的 RequestPreviewCamera(Zoom)。
+            if (event.GetParameter<int>("alt_key", 0) != 0)
+            {
+                const float delta = event.GetParameter<float>("wheel_delta_y", 0);
+                hairBrushRadiusPx = std::clamp(
+                    hairBrushRadiusPx + delta * 4.0f, 1.0f, 200.0f);
+                SetControlValue("hair-brush-radius", SceneActorNumber(hairBrushRadiusPx));
+                hairBrushStatus = "Brush radius: " +
+                    SceneActorNumber(hairBrushRadiusPx) + " px.";
+                UpdateHairBrushSample(x, y, hairBrushStrokeActive);
+                return true;
+            }
+        }
+    }
     if (type == "mousedown" && imageHit)
     {
         const int button = event.GetParameter<int>("button", -1);
@@ -4692,7 +8316,14 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
         previewPointerX = x;
         previewPointerY = y;
         if (dx != 0 || dy != 0)
-            RequestPreviewCamera(previewDragButton == 2 ? ModelPreviewNavigation::Pan : ModelPreviewNavigation::Orbit, dx, dy);
+        {
+            // 毛发视口：左键转模型（转根点才会触发毛发惯性），中/右键仍转相机。
+            // 相机绕轨道对物理没有作用，因此两条手势必须分开。
+            if (previewDragButton == 0 && IsActiveHairPreview())
+                RequestHairPreviewRotation(dx, dy);
+            else
+                RequestPreviewCamera(previewDragButton == 2 ? ModelPreviewNavigation::Pan : ModelPreviewNavigation::Orbit, dx, dy);
+        }
         return true;
     }
     if (type == "mouseup" && previewDragButton == event.GetParameter<int>("button", -2))
@@ -4778,14 +8409,14 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
     std::vector<EditorDockResourceTab> tabs;
     for (const auto& tab : resourceEditor.Tabs())
     {
-        const auto* authored =
-            tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(tab.path) :
-            tab.kind == EditorAssetKind::ParticleSystem ? ParticleDocument(tab.path) :
-            nullptr;
+        const auto* resource = ResourceDocument(tab.path);
+        const auto* particle = tab.kind == EditorAssetKind::ParticleSystem ? ParticleDocument(tab.path) : nullptr;
+        const auto* terrain = tab.kind == EditorAssetKind::Terrain ? TerrainDocument(tab.path) : nullptr;
+        const bool dirty = (resource && resource->dirty) || (particle && particle->dirty) ||
+            (terrain && terrain->dirty);
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
-            std::filesystem::path(tab.path).filename().string() +
-                (authored && authored->dirty ? " *" : ""),
-            EditorAssetKindIcon(tab.kind)});
+            std::filesystem::path(tab.path).filename().string() + (dirty ? " *" : ""),
+            EditorAssetKindIcon(tab.kind), -1});
     }
     for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
     {
@@ -4795,6 +8426,67 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
             EditorAssetKindIcon(EditorAssetKind::MaterialInstance), static_cast<int>(index)});
     }
     docking.SetResourceTabs(tabs);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshAnimationControls(const std::string& prefix, bool enabled)
+{
+    SetDisabled(prefix + "-play", !enabled || runtimeView.animationPlaying || runtimeView.animationClips.empty());
+    SetDisabled(prefix + "-pause", !enabled || !runtimeView.animationPlaying);
+    SetDisabled(prefix + "-clip", !enabled || runtimeView.animationClips.empty());
+    SetDisabled(prefix + "-time", !enabled || runtimeView.animationDuration <= 0);
+    if (!enabled) { SetMarkup(prefix + "-status", ""); return; }
+    SetMarkup(prefix + "-status", Text(std::to_string(runtimeView.animationJointCount) +
+        " joints | " + SceneActorNumber(runtimeView.animationTime) + " / " +
+        SceneActorNumber(runtimeView.animationDuration) + " s"));
+    std::string options;
+    for (size_t i = 0; i < runtimeView.animationClips.size(); ++i)
+        options += "<option value=\"" + std::to_string(i) + "\">" + Text(runtimeView.animationClips[i]) + "</option>";
+    widgetDocument.SetMarkup(prefix + "-clip", options);
+    widgetDocument.SetControlValue(prefix + "-clip", std::to_string(runtimeView.animationClip));
+    auto* timeline = document->GetElementById(prefix + "-time");
+    if (timeline != document->GetContext()->GetFocusElement())
+    {
+        timeline->SetAttribute("max", SceneActorNumber(runtimeView.animationDuration));
+        widgetDocument.SetControlValue(prefix + "-time", SceneActorNumber(runtimeView.animationTime));
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshRetargetAnimation(const EditorResourceEditorTab& tab)
+{
+    const auto values = !tab.loading && tab.snapshot ? tab.snapshot->retargetPreview : nullptr;
+    const bool visible = retargetEditor.AnimationVisible() && IsResourceEditorVisible();
+    if (visible && values && runtimeActionSink &&
+        (requestedRetargetPath != tab.path || requestedRetargetRevision != tab.snapshot->revision ||
+            requestedPreviewPath != values->targetModelPath || requestedPreviewBlueprint))
+    {
+        RequestAssetPreview(values->targetModelPath, false, tab.path, tab.snapshot->revision);
+    }
+    const uint64_t generation = visible ? CurrentModelPreviewGeneration() : 0;
+    const bool animated = generation && runtimeView.animationWorldGeneration == generation &&
+        runtimeView.animationJointCount != 0;
+    widgetDocument.SetProperty("retarget-preview-image", "display", generation ? "block" : "none");
+    widgetDocument.SetProperty("retarget-preview-status", "display", generation ? "none" : "block");
+    SetMarkup("retarget-preview-status", Text(values ? "Loading paired model preview..." :
+        tab.snapshot && !tab.snapshot->previewDiagnostic.empty() ? tab.snapshot->previewDiagnostic :
+        "Animation preview requires preview.targetModelPath"));
+    RefreshAnimationControls("retarget-animation", animated);
+    std::string assets;
+    if (animated)
+        for (size_t index = 0; index < runtimeView.animationClips.size(); ++index)
+            assets += UiWidgets::ListRow({"animation-browser-clip", index}, runtimeView.animationClips[index],
+                index == runtimeView.animationClip, "icons/play.png");
+    SetMarkup("retarget-animation-assets", std::move(assets));
+    SetDisabled("retarget-animation-frame", !generation);
+    if (animated && initializedRetargetGeneration != generation && !runtimeView.animationClips.empty())
+    {
+        initializedRetargetGeneration = generation;
+        UiAction action;
+        action.type = UiActionType::ControlAnimationPreview;
+        action.previewCamera.worldGeneration = generation;
+        action.stringValue = "previewClip";
+        action.floatValue = static_cast<float>(runtimeView.animationClip);
+        runtimeActionSink->RequestRuntimeAction(std::move(action));
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
@@ -5025,39 +8717,102 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         SetDisabled("particle-undo", true);
         SetDisabled("particle-redo", true);
     }
+    const bool terrainAsset = active && active->kind == EditorAssetKind::Terrain;
+    for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
+        widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
+    widgetDocument.SetProperty("terrain-asset-editor", "display", terrainAsset ? "block" : "none");
+    for (const char* id : {"terrain-asset-save", "terrain-asset-revert"})
+        widgetDocument.SetProperty(id, "display", terrainAsset ? "block" : "none");
+    widgetDocument.SetProperty("resource-preview-panel", "display",
+        blueprintAsset || terrainAsset ? "none" : "flex");
+    widgetDocument.SetProperty("resource-details-panel", "display",
+        blueprintAsset || terrainAsset ? "none" : "flex");
+    const bool retargetAsset = active && active->kind == EditorAssetKind::Retarget;
+    widgetDocument.SetClass("resource-editor", "retarget-active", retargetAsset);
+    for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
+        widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
+    widgetDocument.SetProperty("retarget-asset-editor", "display", retargetAsset ? "flex" : "none");
+    widgetDocument.SetProperty("resource-preview-panel", "display",
+        blueprintAsset || terrainAsset || retargetAsset ? "none" : "flex");
+    widgetDocument.SetProperty("resource-details-panel", "display",
+        blueprintAsset || terrainAsset || retargetAsset ? "none" : "flex");
+    if (retargetAsset)
+    {
+        for (const char* id : {"resource-model-tools", "resource-texture-tools"})
+            widgetDocument.SetClass(id, "visible", false);
+        SetDisabled("resource-reload", active->loading);
+        auto visibleTab = *active;
+        if (reloadingRetargetPath == active->path)
+        {
+            if (active->snapshot && active->snapshot->revision > reloadingRetargetRevision)
+                reloadingRetargetPath.clear();
+            else visibleTab.loading = true;
+        }
+        retargetEditor.Build(visibleTab);
+        RefreshRetargetAnimation(visibleTab);
+        return;
+    }
     if (blueprintAsset)
     {
+        terrainAssetEditor.Build(nullptr, false);
         for (const char* id : {"resource-model-tools", "resource-texture-tools"})
             widgetDocument.SetClass(id, "visible", false);
         SetDisabled("resource-reload", !BlueprintDocument(active->path));
         RefreshBlueprintAssetEditor();
         return;
     }
-    const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
-    const bool previewReady = HasCurrentModelPreview() || HasParticlePreview();
+    if (terrainAsset)
+    {
+        for (const char* id : {"resource-model-tools", "resource-texture-tools"})
+            widgetDocument.SetClass(id, "visible", false);
+        const auto* terrain = TerrainDocument(active->path);
+        SetDisabled("resource-reload", active->loading || terrain == nullptr);
+        SetMarkup("resource-preview-title", Text(terrain != nullptr &&
+            terrain->document.is_object() && terrain->document.contains("name")
+            ? terrain->document.value("name", std::string())
+            : std::filesystem::path(active->path).filename().string()));
+        SetMarkup("resource-preview-kind", "Terrain");
+        SetMarkup("resource-preview-path", Text(active->path));
+        terrainAssetEditor.Build(terrain, active->loading);
+        return;
+    }
+    terrainAssetEditor.Build(nullptr, false);
+    const bool isTressfx = active != nullptr && active->kind == EditorAssetKind::Tressfx;
+    const bool isMesh = active != nullptr && (active->kind == EditorAssetKind::Mesh || isTressfx);
+    // 快照到达后以作者文档为准复核毛发判定（目录可能缺失或过期）；目录只在
+    // 打开时提供同步判定，避免一帧内先请求了本不该加载的预览。
+    if (isMesh && !active->loading && active->snapshot)
+    {
+        if (active->snapshot->type == "tressfx")
+        {
+            hairPreviewPath = active->path;
+            hairPreviewBlocked = active->snapshot->tressfxSkinning;
+        }
+        else if (hairPreviewPath == active->path)
+        {
+            hairPreviewPath.clear();
+            hairPreviewBlocked = false;
+        }
+    }
+    else if (!isMesh || active->path != hairPreviewPath)
+    {
+        hairPreviewPath.clear();
+        hairPreviewBlocked = false;
+    }
+    const bool isHair = isTressfx && hairPreviewPath == active->path;
+    const bool hairBlocked = isHair && hairPreviewBlocked;
+    RefreshHairSimulationSection(isHair, hairBlocked);
+    // Groups 是 TF 资产级作者数据；即使 skinned 预览被阻断，也仍然允许编辑/保存。
+    RefreshHairGroupsSection(isHair, hairBlocked);
+    const bool previewReady =
+        (HasCurrentModelPreview() && !hairBlocked) || HasParticlePreview();
     const bool animated = isMesh && previewReady && runtimeView.animationWorldGeneration ==
         CurrentModelPreviewGeneration() && runtimeView.animationJointCount != 0;
     widgetDocument.SetProperty("resource-animation-tools", "display", animated ? "flex" : "none");
     widgetDocument.SetProperty("resource-motion-features", "display", animated ? "block" : "none");
     if (animated)
     {
-        SetDisabled("resource-animation-play", runtimeView.animationPlaying || runtimeView.animationClips.empty());
-        SetDisabled("resource-animation-pause", !runtimeView.animationPlaying);
-        SetMarkup("resource-animation-status", Text(std::to_string(runtimeView.animationJointCount) +
-            " joints | " + SceneActorNumber(runtimeView.animationTime) + " / " +
-            SceneActorNumber(runtimeView.animationDuration) + " s"));
-        std::string options;
-        for (size_t i = 0; i < runtimeView.animationClips.size(); ++i)
-            options += "<option value=\"" + std::to_string(i) + "\">" +
-                Text(runtimeView.animationClips[i]) + "</option>";
-        widgetDocument.SetMarkup("resource-animation-clip", options);
-        widgetDocument.SetControlValue("resource-animation-clip", std::to_string(runtimeView.animationClip));
-        auto* timeline = document->GetElementById("resource-animation-time");
-        if (timeline != document->GetContext()->GetFocusElement())
-        {
-            timeline->SetAttribute("max", SceneActorNumber(runtimeView.animationDuration));
-            widgetDocument.SetControlValue("resource-animation-time", SceneActorNumber(runtimeView.animationTime));
-        }
+        RefreshAnimationControls("resource-animation", true);
         SetMarkup("resource-motion-status", Text(runtimeView.animationFeatureStatus));
         // 固定通道结构，只更新数值 span；播放时不重建整表或改变 Details 滚动位置。
         std::string rows;
@@ -5100,6 +8855,12 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     widgetDocument.SetProperty("resource-preview-image", "display", previewReady ? "block" : "none");
     for (const char* id : {"resource-preview-icon", "resource-preview-status", "resource-preview-path"})
         widgetDocument.SetProperty(id, "display", previewReady || textureReady ? "none" : "block");
+    // 毛发工具只在可预览的 tressfx 资产上出现；挡预览时隐藏复位按钮，
+    // 让“没有视口”和“有视口但没东西可复位”在 UI 上不混淆。
+    widgetDocument.SetProperty("resource-hair-tools", "display", isHair && !hairBlocked ? "flex" : "none");
+    const auto* hairDocument = isHair ? TressfxDocument(active->path) : nullptr;
+    SetDisabled("resource-hair-reset", !previewReady || !hairDocument ||
+        !TressfxGpuSimulationDefaults(hairDocument->document));
     widgetDocument.SetClass("resource-model-tools", "visible", isMesh);
     widgetDocument.SetClass("resource-model-info", "visible", isMesh);
     for (const char* id : {"resource-tool-select", "resource-tool-move", "resource-tool-rotate", "resource-tool-scale",
@@ -5131,7 +8892,9 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     SetMarkup("resource-preview-path", Text(active->path));
     SetMarkup("resource-preview-status", active->loading
         ? (active->kind == EditorAssetKind::Texture ? "Loading texture preview..." : "Reading JSON metadata...")
-        : isMesh ? "Waiting for model preview" : active->snapshot && !active->snapshot->previewDiagnostic.empty()
+        : hairBlocked ? Text(std::string(TressfxHairSkinnedAssetMessage))
+        : isMesh ? (isHair ? "Waiting for hair preview" : "Waiting for model preview")
+        : active->snapshot && !active->snapshot->previewDiagnostic.empty()
             ? Text(active->snapshot->previewDiagnostic)
             : active->kind == EditorAssetKind::ParticleSystem
                 ? "Loading particle preview..."
@@ -5241,6 +9004,63 @@ void MaterialInstanceAssetEditorPanel::RefreshControls()
     textureOptionsDirty = false;
 }
 
+void MaterialInstanceAssetEditorPanel::RequestUndoRedo(bool redo)
+{
+    // 全局 Undo/Redo 按上下文路由，不新增第二套历史栈。
+    if (IsTerrainHistoryContext())
+    {
+        const TerrainBrushOperation operation = redo ?
+            TerrainBrushOperation::Redo : TerrainBrushOperation::Undo;
+        if (landscapePaintMode) SendTerrainPaintAction(operation, false);
+        else SendTerrainBrushAction(operation, false);
+        return;
+    }
+    if (RequestParticleHistory(redo)) return;
+    if (RequestBlueprintHistory(redo)) return;
+    if (!runtimeActionSink || HasModal() || runtimeView.scripts.state != ScriptPlayState::Editing ||
+        runtimeView.offlineMode || IsAssetEditorVisible() ||
+        !(redo ? runtimeView.scripts.canRedo : runtimeView.scripts.canUndo))
+        return;
+    UiAction request;
+    request.type = redo ? UiActionType::RedoSceneEdit : UiActionType::UndoSceneEdit;
+    request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshHistoryControls()
+{
+    if (document == nullptr) return;
+    bool canUndo = false;
+    bool canRedo = false;
+    if (IsTerrainHistoryContext())
+    {
+        // 地形历史尚无 canUndo/canRedo 快照；保持乐观，空历史由引擎反馈报告。
+        canUndo = canRedo = true;
+    }
+    else if (const auto* tab = resourceEditor.ActiveTab();
+        tab && tab->kind == EditorAssetKind::Blueprint && IsResourceEditorVisible())
+    {
+        const auto* authored = BlueprintDocument(tab->path);
+        const bool enabled = authored && runtimeView.scripts.available && !runtimeView.offlineMode &&
+            runtimeView.scripts.state == ScriptPlayState::Editing && pendingBlueprintPath.empty() &&
+            !blueprintCommandAwaitingSnapshot && !blueprintGizmoDragging && !HasModal();
+        canUndo = enabled && authored->canUndo;
+        canRedo = enabled && authored->canRedo;
+    }
+    else
+    {
+        const auto& scripts = runtimeView.scripts;
+        const bool enabled = !runtimeView.offlineMode && !IsAssetEditorVisible() &&
+            !HasModal() && scripts.state == ScriptPlayState::Editing;
+        canUndo = enabled && scripts.canUndo;
+        canRedo = enabled && scripts.canRedo;
+    }
+    SetDisabled("menu-edit-undo", !canUndo);
+    SetDisabled("menu-edit-redo", !canRedo);
+    SetDisabled("workspace-undo", !canUndo);
+    SetDisabled("workspace-redo", !canRedo);
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
 {
     if (document == nullptr) return;
@@ -5272,9 +9092,7 @@ void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
         if (button->GetAttribute<std::string>("title", "") != title) button->SetAttribute("title", title);
     }
     SetDisabled("script-placement-toggle", !canAuthor);
-    SetDisabled("menu-edit-undo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canUndo);
-    SetDisabled("menu-edit-redo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canRedo);
-    RefreshBlueprintHistoryControls();
+    RefreshHistoryControls();
     widgetDocument.SetProperty("script-placement", "display",
         scripts.available && scriptPlacementVisible ? "block" : "none");
     std::string options;
@@ -5283,6 +9101,21 @@ void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
     SetMarkup("script-class", std::move(options));
     SetMarkup("script-feedback", Text(scripts.feedback));
     widgetDocument.SetProperty("script-feedback", "display", scripts.feedback.empty() ? "none" : "block");
+}
+
+void MaterialInstanceAssetEditorPanel::UpdatePerformance(const PerformanceSnapshot& performance)
+{
+    // 面板自己按 5 Hz 取样；这里只传冻结快照、可见性与同一份 UI 单调时钟。
+    performancePanel.Build(performance, docking.IsPanelActive("performance"),
+        Rml::GetSystemInterface()->GetElapsedTime());
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateScriptPerformance(
+    const nlohmann::json& scriptPerformance)
+{
+    // Log 的 Scripts 页展示脚本时间/计数器；它是时间序列，随性能分节采样，
+    // 不通过事件驱动的脚本分节刷新。
+    logPanel.BuildPerformance(scriptPerformance, docking.IsPanelActive("log"));
 }
 
 void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapshot& view)
@@ -5347,7 +9180,6 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     RefreshViewportToolbar();
     RefreshScriptControls();
     contentBrowser.Build(snapshot, runtimeView.scripts.classes);
-    logPanel.BuildPerformance(runtimeView.scripts.performance, docking.IsPanelActive("log"));
     if (!refreshOffline || document == nullptr) return;
     SetControlValue("offline-samples", std::to_string(view.offlineSamples));
     SetControlValue("offline-bounces", std::to_string(view.offlineBounces));
@@ -5578,16 +9410,22 @@ void MaterialInstanceAssetEditorPanel::CloseDocument(
         if (!resourceEditorVisible) ReturnToLevel();
         return;
     }
+    if (TressfxDocument(path))
+    {
+        if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
+            SubmitResourceDocumentCommand(EditorCommandType::RevertTressfxDocument, path);
+        CloseResource(path);
+        return;
+    }
     if (BlueprintDocument(path))
     {
         if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
             SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, path);
-        resourceEditor.Close(path);
-        resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
-        RefreshResourceEditor();
-        if (!resourceEditorVisible) ReturnToLevel();
+        CloseResource(path);
         return;
     }
+    closingMaterialPath = path;
+    panelAfterMaterialClose = docking.PanelAfterClose(MaterialPanelId(path));
     EditorCommandEnvelope command;
     command.type = EditorCommandType::CloseMaterialInstanceAsset;
     command.payload = CloseMaterialInstanceAssetPayload{path, policy};
@@ -5616,6 +9454,22 @@ void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
 
 void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
 {
+    if (terrainAssetEditor.HandleClick(element, action)) return;
+    if (action == "terrain-asset-save" || action == "terrain-asset-revert")
+    {
+        const auto* tab = resourceEditor.ActiveTab();
+        const auto* terrain = tab && tab->kind == EditorAssetKind::Terrain
+            ? TerrainDocument(tab->path) : nullptr;
+        if (terrain == nullptr) return;
+        EditorCommandEnvelope command;
+        command.type = action == "terrain-asset-save"
+            ? EditorCommandType::SaveTerrainDocument
+            : EditorCommandType::RevertTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = MaterialInstanceAssetPathPayload{tab->path};
+        Submit(std::move(command));
+        return;
+    }
     if (action == "motion-timeline-play" || action == "motion-timeline-pause")
     {
         if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
@@ -5681,18 +9535,9 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         else RequestScriptEdit(UiActionType::SetScriptPhysics,
             {{"field", "constraint-remove"}, {"value", index}});
     }
-    else if (action == "scene-undo" || action == "scene-redo")
-    {
-        if (RequestParticleHistory(action == "scene-redo")) return;
-        if (RequestBlueprintHistory(action == "scene-redo")) return;
-        if (!runtimeActionSink || runtimeView.scripts.state != ScriptPlayState::Editing || runtimeView.offlineMode ||
-            IsAssetEditorVisible() || !(action == "scene-redo" ? runtimeView.scripts.canRedo : runtimeView.scripts.canUndo))
-            return;
-        UiAction request;
-        request.type = action == "scene-redo" ? UiActionType::RedoSceneEdit : UiActionType::UndoSceneEdit;
-        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
-        runtimeActionSink->RequestRuntimeAction(std::move(request));
-    }
+    else if (action == "workspace-undo" || action == "workspace-redo" ||
+        action == "scene-undo" || action == "scene-redo")
+        RequestUndoRedo(action == "workspace-redo" || action == "scene-redo");
     else if (action == "script-blueprint-duplicate") RequestScriptEdit(UiActionType::DuplicateScriptBlueprint);
     else if (action == "script-blueprint-delete") RequestScriptEdit(UiActionType::DeleteScriptBlueprint);
     else if (action == "script-component-add")
@@ -5797,8 +9642,171 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
     else if (action == "json-close") ShowMaterialDetails();
-    else if (action == "resource-close") CloseActiveResource();
     else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "hair-reset") RequestHairReset();
+    else if (action == "hair-save") SubmitHairSimulationSave();
+    else if (action == "hair-group-default") SelectHairGroup(-1);
+    else if (action == "hair-group-select") SelectHairGroup(static_cast<int>(index));
+    else if (action == "hair-group-colors")
+    {
+        hairGroupColors = !hairGroupColors;
+        hairGroupStatus = hairGroupColors
+            ? "Group colors enabled for this preview session."
+            : "Group colors disabled; the material appearance is restored.";
+        SubmitTressfxGroupPreview();
+    }
+    else if (action == "hair-group-solo")
+    {
+        hairGroupSolo = !hairGroupSolo;
+        hairGroupStatus = hairGroupSolo
+            ? "Solo enabled: only the selected group is drawn."
+            : "Solo disabled.";
+        SubmitTressfxGroupPreview();
+    }
+    else if (action == "hair-group-paint" || action == "hair-group-paint-start")
+    {
+        if (hairGroupPaintActive && action == "hair-group-paint")
+            ToggleHairGroupPaint(false);
+        else
+            ToggleHairGroupPaint(true);
+    }
+    else if (action == "hair-lasso-toggle")
+    {
+        // 切换工具时放弃未提交手势：套索点与圆形 ghost 都不能跨工具混用。
+        if (hairBrushStrokeActive) CancelHairBrushStroke(false);
+        hairLassoActive = !hairLassoActive;
+        hairLassoDragging = false;
+        hairLassoScreenPoints.clear();
+        hairBrushStatus = hairLassoActive
+            ? "Lasso: drag to enclose roots; release commits, Esc cancels."
+            : "Brush mode: left drag adds, Shift adds, Alt removes; Enter or release commits.";
+    }
+    else if (action == "hair-group-create-open")
+    {
+        hairGroupCreateActive = true;
+        hairGroupCreateName.clear();
+        hairGroupCreateStart.clear();
+        hairGroupCreateEnd.clear();
+        hairGroupCreateError.clear();
+        hairGroupStatus = "Enter a name; the group starts empty and is filled by the brush.";
+    }
+    else if (action == "hair-group-create-cancel")
+    {
+        hairGroupCreateActive = false;
+        hairGroupCreateName.clear();
+        hairGroupCreateStart.clear();
+        hairGroupCreateEnd.clear();
+        hairGroupCreateError.clear();
+        hairGroupStatus = "New group cancelled.";
+    }
+    else if (action == "hair-group-create-submit")
+    {
+        std::string error;
+        if (!hairGroups.AddEmptyGroup(hairGroupCreateName, error))
+        {
+            hairGroupCreateError = error;
+            return;
+        }
+        hairPaintUndo.clear();
+        // 新组追加在声明顺序末尾；后续组号/颜色由 vector 下标重新生成。
+        hairGroupSelected = static_cast<int>(hairGroups.Groups().size()) - 1;
+        hairGroupCreateActive = false;
+        hairGroupCreateName.clear();
+        hairGroupCreateStart.clear();
+        hairGroupCreateEnd.clear();
+        hairGroupCreateError.clear();
+        hairGroupStatus = "Empty group created. Paint guides, then Save to Hair Asset.";
+    }
+    else if (action == "hair-group-range-open")
+    {
+        if (hairGroupSelected < 0) return;
+        hairGroupAddRangeActive = true;
+        hairGroupRangeStart.clear();
+        hairGroupRangeEnd.clear();
+        hairGroupRangeError.clear();
+    }
+    else if (action == "hair-group-range-cancel")
+    {
+        hairGroupAddRangeActive = false;
+        hairGroupRangeStart.clear();
+        hairGroupRangeEnd.clear();
+        hairGroupRangeError.clear();
+    }
+    else if (action == "hair-group-range-submit")
+    {
+        if (hairGroupSelected < 0) return;
+        std::pair<uint32_t, uint32_t> range;
+        std::string error;
+        if (!ParseHairGuideRange(hairGroupRangeStart, hairGroupRangeEnd, range, error) ||
+            !hairGroups.AddRange(static_cast<std::size_t>(hairGroupSelected), range, error))
+        {
+            hairGroupRangeError = error;
+            return;
+        }
+        hairPaintUndo.clear();
+        hairGroupAddRangeActive = false;
+        hairGroupRangeStart.clear();
+        hairGroupRangeEnd.clear();
+        hairGroupRangeError.clear();
+        hairGroupStatus = "Guide range added to the asset draft.";
+    }
+    else if (action == "hair-group-range-remove")
+    {
+        if (hairGroupSelected < 0) return;
+        const int removedGroup = hairGroupSelected;
+        const std::size_t before = hairGroups.Groups().size();
+        std::string error;
+        if (!hairGroups.RemoveRange(static_cast<std::size_t>(hairGroupSelected), index, error))
+        {
+            hairGroupStatus = error;
+            return;
+        }
+        hairPaintUndo.clear();
+        const int after = static_cast<int>(hairGroups.Groups().size());
+        if (after < static_cast<int>(before))
+            hairGroupSelected = removedGroup > 0 ? removedGroup - 1 : -1;
+        if (hairGroupSelected >= after) hairGroupSelected = after - 1;
+        hairGroupAddRangeActive = false;
+        hairGroupStatus = after < static_cast<int>(before)
+            ? "Removed the last guide range and deleted the empty group; preview updated."
+            : "Guide range removed; preview updated.";
+    }
+    else if (action == "hair-group-clear-overrides")
+    {
+        if (hairGroupSelected < 0) return;
+        hairGroups.ClearOverrides(static_cast<std::size_t>(hairGroupSelected));
+        hairPaintUndo.clear();
+        hairGroupStatus = "Group overrides cleared in the asset draft.";
+    }
+    else if (action == "hair-group-delete")
+    {
+        if (hairGroupSelected < 0) return;
+        const int removedGroup = hairGroupSelected;
+        hairGroups.DeleteGroup(static_cast<std::size_t>(removedGroup));
+        hairPaintUndo.clear();
+        const int after = static_cast<int>(hairGroups.Groups().size());
+        hairGroupSelected = removedGroup > 0 ? removedGroup - 1 : -1;
+        if (hairGroupSelected >= after) hairGroupSelected = after - 1;
+        hairGroupAddRangeActive = false;
+        hairGroupStatus = "Group deleted from the draft; preview updated. Save to Hair Asset to persist it.";
+    }
+    else if (action == "hair-group-save") SubmitHairGroupsSave();
+    else if (action == "animation-browser-clip")
+    {
+        const auto* active = resourceEditor.ActiveTab();
+        const size_t index = element.GetAttribute<size_t>("data-index", runtimeView.animationClips.size());
+        if (active && active->kind == EditorAssetKind::Retarget && index < runtimeView.animationClips.size() &&
+            CurrentModelPreviewGeneration() && runtimeView.animationWorldGeneration == CurrentModelPreviewGeneration() &&
+            runtimeActionSink)
+        {
+            UiAction request;
+            request.type = UiActionType::ControlAnimationPreview;
+            request.previewCamera.worldGeneration = CurrentModelPreviewGeneration();
+            request.stringValue = "previewClip";
+            request.floatValue = static_cast<float>(index);
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+    }
     else if (action == "animation-play" || action == "animation-pause" ||
         action == "animation-clip" || action == "animation-time")
     {
@@ -5808,13 +9816,17 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
             UiAction request;
             request.type = UiActionType::ControlAnimationPreview;
             request.previewCamera.worldGeneration = CurrentModelPreviewGeneration();
-            request.stringValue = action == "animation-clip" ? "clip" :
+            request.stringValue = action == "animation-clip" ?
+                (!requestedRetargetPath.empty() ? "previewClip" : "clip") :
                 action == "animation-time" ? "seek" : "play";
             request.floatValue = action == "animation-play" ? 1.0f : 0.0f;
             if (action == "animation-clip" || action == "animation-time")
             {
-                auto* control = document->GetElementById(
-                    action == "animation-clip" ? "resource-animation-clip" : "resource-animation-time");
+                const auto* active = resourceEditor.ActiveTab();
+                const std::string prefix = active && active->kind == EditorAssetKind::Retarget ?
+                    "retarget-animation" : "resource-animation";
+                auto* control = document->GetElementById(prefix +
+                    (action == "animation-clip" ? "-clip" : "-time"));
                 try { request.floatValue = std::stof(ControlValue(*control)); }
                 catch (...) { return; }
             }
@@ -5989,16 +10001,110 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "about-open") aboutVisible = true;
     else if (action == "about-close") aboutVisible = false;
+    else if (action == "terrain-mode-layers")
+    {
+        terrainPanelMode = TerrainPanelMode::Layers;
+        RefreshTerrainBrushUi();
+        RefreshTerrainLayerLibrary();
+    }
+    else if (action == "terrain-layer-view-grid" || action == "terrain-layer-view-list")
+    {
+        terrainLayerListView = action == "terrain-layer-view-list";
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+        RefreshTerrainLayerLibrary();
+    }
+    else if (action == "brush-library-select")
+    {
+        ApplyTerrainBrushPreset(element.GetAttribute<std::string>("data-brush-id", ""));
+    }
+    else if (action == "terrain-layer-select")
+    {
+        const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+        const size_t count = actor == nullptr ? 0 : actor->terrainPlan->desc.layers.size();
+        const size_t index = element.GetAttribute<size_t>("data-index", count);
+        if (index < count)
+        {
+            terrainPaintLayer = static_cast<uint32_t>(index);
+            RefreshTerrainLayerLibrary();
+        }
+    }
+    else if (action == "viewport-tool-landscape")
+    {
+        landscapeToolActive = !landscapeToolActive;
+        if (landscapeToolActive)
+        {
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Sculpt;
+            if (sceneGizmoDragging) CancelSceneGizmoDrag();
+            viewportTransformTool = "select";
+        }
+        else
+        {
+            CancelTerrainBrushStroke();
+            ClearTerrainBrushHit();
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Layers;
+        }
+        RefreshViewportToolbar();
+    }
+    else if (action == "viewport-landscape-sculpt" || action == "terrain-mode-sculpt")
+    {
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
+        landscapePaintMode = false;
+        landscapeToolActive = true;
+        viewportTransformTool = "select";
+        terrainPanelMode = TerrainPanelMode::Sculpt;
+        RefreshViewportToolbar();
+    }
+    else if (action == "viewport-landscape-paint" || action == "terrain-mode-paint")
+    {
+        ActivateTerrainPaintMode();
+    }
+    else if (action == "viewport-paint-erase")
+    {
+        landscapePaintErase = true;
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-paint-mode")
+    {
+        landscapePaintErase = false;
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-brush-mode")
+    {
+        terrainSculptMode = std::clamp(element.GetAttribute<int>("data-mode", 0), 0, 2);
+        RefreshTerrainBrushUi();
+    }
+    else if (action == "viewport-landscape-write")
+    {
+        if (terrainBrushStrokeActive || runtimeActionSink == nullptr) return;
+        if (landscapePaintMode)
+            SendTerrainPaintAction(TerrainBrushOperation::SavePaint, false);
+        else
+            SendTerrainBrushAction(TerrainBrushOperation::SaveHeightmap, false);
+    }
     else if (action == "viewport-tool")
     {
-        // 工具条只切换本地高亮；数值 Transform 编辑走 Details，尚无视口 gizmo。
-        // 这里刻意不产生任何 UiAction/资产命令，避免用假开关冒充已实现的编辑能力。
+        // 工具条、Details 与 Gizmo 共用这一份模式状态；切工具前先把手势恢复到
+        // 原始 TRS，不能让一次半途拖动跨模式提交。
+        if (sceneGizmoDragging) CancelSceneGizmoDrag();
+        if (landscapeToolActive)
+        {
+            landscapeToolActive = false;
+            landscapePaintMode = false;
+            terrainPanelMode = TerrainPanelMode::Layers;
+            CancelTerrainBrushStroke();
+            ClearTerrainBrushHit();
+        }
         viewportTransformTool = element.GetAttribute<std::string>("data-tool", "select");
         RefreshViewportToolbar();
     }
     else if (action == "viewport-space")
     {
-        // 同上：World/Local 只是呈现状态，渲染器和相机不读取它。
+        // World/Local 只影响 Gizmo 轴方向，不改变渲染相机或场景坐标。
+        if (sceneGizmoDragging) CancelSceneGizmoDrag();
         viewportTransformSpace = element.GetAttribute<std::string>("data-space", "world");
         RefreshViewportToolbar();
     }
@@ -6049,6 +10155,18 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
                 SubmitParticleAssetCommand(
                     EditorCommandType::RevertParticleDocument,
                     active->path);
+            return;
+        }
+        if (const auto* tab = resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::Terrain && IsResourceEditorVisible())
+        {
+            const auto* terrain = TerrainDocument(tab->path);
+            if (terrain == nullptr) return;
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::RevertTerrainDocument;
+            command.expectedDocumentRevision = terrain->documentRevision;
+            command.payload = MaterialInstanceAssetPathPayload{tab->path};
+            Submit(std::move(command));
             return;
         }
         pendingEdits.clear();
@@ -6107,6 +10225,19 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
             RequestResourceReload();
             return;
         }
+        if (const auto* tab = resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::Terrain && IsResourceEditorVisible())
+        {
+            const auto* terrain = TerrainDocument(tab->path);
+            if (terrain == nullptr) return;
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::ReloadTerrainDocument;
+            command.expectedDocumentRevision = terrain->documentRevision;
+            command.payload = ReloadMaterialInstanceDocumentPayload{
+                tab->path, EditorDirtyDocumentPolicy::RequireClean};
+            Submit(std::move(command));
+            return;
+        }
         if (!snapshot.activeDocument) return;
         if (!pendingEdits.empty())
         {
@@ -6163,9 +10294,24 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         command.payload = MaterialInstanceAssetPathPayload{snapshot.documentTabs[index].assetPath};
         Submit(std::move(command));
     }
-    else if (action == "close" && index < snapshot.documentTabs.size())
+    else if (action == "close")
     {
-        const auto& tab = snapshot.documentTabs[index];
+        const std::string targetPanel = element.GetAttribute<std::string>("data-key", "");
+        const std::string targetPath = docking.ResourcePathForPanel(targetPanel);
+        if (!targetPath.empty() && targetPanel.rfind("resource:material:", 0) != 0)
+        {
+            RequestCloseResource(targetPath);
+            return;
+        }
+        size_t closeIndex = index;
+        if (!targetPanel.empty())
+        {
+            closeIndex = snapshot.documentTabs.size();
+            for (size_t candidate = 0; candidate < snapshot.documentTabs.size(); ++candidate)
+                if (snapshot.documentTabs[candidate].assetPath == targetPath) closeIndex = candidate;
+        }
+        if (closeIndex >= snapshot.documentTabs.size()) return;
+        const auto& tab = snapshot.documentTabs[closeIndex];
         if (tab.dirty || (!pendingEdits.empty() && pendingAssetPath == tab.assetPath))
         {
             FlushPendingEdits();
@@ -6186,7 +10332,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "close-discard")
     {
-        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        if (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx)
         {
             discardBlueprintThenClose = true;
             discardBlueprintCloseSubmitted = false;
@@ -6205,7 +10351,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "close-save")
     {
-        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        if (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx)
         {
             saveStartedSequence = 0;
             for (const auto& feedback : snapshot.saveFeedback)
@@ -6312,7 +10458,8 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
 }
 
-void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
+void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action,
+    const Rml::Event* event)
 {
     if (action == "particle-emitter")
     {
@@ -6351,6 +10498,207 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     {
         HandleParticleFlipbookTableEdit(element);
         RefreshResourceEditor();
+        return;
+    }
+    if (terrainAssetEditor.HandleChange(element, action)) return;
+    if (action == "terrain-layer-search")
+    {
+        terrainLayerSearch = ControlValue(element);
+        terrainLayerScrollResetPending = true;
+        terrainLayerWindowDirty = true;
+        RefreshTerrainLayerLibrary();
+        return;
+    }
+    if (action == "brush-library-search")
+    {
+        brushLibrary.SetQuery(ControlValue(element));
+        brushLibrary.Build();
+        return;
+    }
+    if (action == "brush-library-category")
+    {
+        brushLibrary.SetCategory(ControlValue(element));
+        brushLibrary.Build();
+        return;
+    }
+    if (action == "hair-group-rename")
+    {
+        if (hairGroupSelected < 0) return;
+        std::string error;
+        if (!hairGroups.RenameGroup(static_cast<std::size_t>(hairGroupSelected),
+            ControlValue(element), error))
+        {
+            // 重命名失败只写状态，控制器里的当前草稿保持原值。
+            hairGroupStatus = error;
+            return;
+        }
+        hairPaintUndo.clear();
+        hairGroupStatus = "Group renamed in the asset draft. Save to Hair Asset to write it.";
+        return;
+    }
+    if (action == "hair-brush-radius")
+    {
+        double value = 0.0;
+        if (!ParseNumber(ControlValue(element), value))
+        {
+            hairBrushStatus = "Brush radius must be a finite number of pixels.";
+            return;
+        }
+        hairBrushRadiusPx = static_cast<float>(std::clamp(value, 2.0, 500.0));
+        hairBrushStatus = "Brush radius: " +
+            SceneActorNumber(hairBrushRadiusPx) + " px (world radius follows cursor depth).";
+        return;
+    }
+    if (action == "hair-brush-mode")
+    {
+        hairBrushMode = ControlValue(element) == "remove"
+            ? VL::Hair::GroupPaintMode::Remove : VL::Hair::GroupPaintMode::Add;
+        hairBrushStatus = hairBrushMode == VL::Hair::GroupPaintMode::Remove
+            ? "Brush mode: Remove selected guides from the target group."
+            : "Brush mode: Add selected guides to the target group.";
+        return;
+    }
+    if (action == "hair-brush-replace")
+    {
+        hairBrushReplaceExisting = element.HasAttribute("checked");
+        hairBrushStatus = hairBrushReplaceExisting
+            ? "Replace existing is on: guides move from other groups."
+            : "Replace existing is off: guides in other groups are skipped.";
+        return;
+    }
+    if (action == "hair-group-create-field")
+    {
+        const std::size_t component = element.GetAttribute<std::size_t>("data-component", 0);
+        const std::string value = ControlValue(element);
+        if (component == 0) hairGroupCreateName = value;
+        else if (component == 1) hairGroupCreateStart = value;
+        else if (component == 2) hairGroupCreateEnd = value;
+        else return;
+        hairGroupCreateError.clear();
+        return;
+    }
+    if (action == "hair-group-range-field")
+    {
+        const std::size_t component = element.GetAttribute<std::size_t>("data-component", 0);
+        const std::string value = ControlValue(element);
+        if (component == 0) hairGroupRangeStart = value;
+        else if (component == 1) hairGroupRangeEnd = value;
+        else return;
+        hairGroupRangeError.clear();
+        return;
+    }
+    if (action == "hair-group-override-toggle")
+    {
+        if (hairGroupSelected < 0) return;
+        const std::string field = element.GetAttribute<std::string>("data-key", "");
+        if (!VL::Editor::TressfxGroupEditor::IsAllowedOverrideField(field)) return;
+        const std::size_t selected = static_cast<std::size_t>(hairGroupSelected);
+        if (!element.HasAttribute("checked"))
+        {
+            hairGroups.SetOverride(selected, field, std::nullopt);
+            hairPaintUndo.clear();
+            hairGroupStatus = "Override removed; the group inherits the asset default.";
+            return;
+        }
+        const auto* active = resourceEditor.ActiveTab();
+        const auto* document = active ? TressfxDocument(active->path) : nullptr;
+        const nlohmann::json simulation = document != nullptr && document->document.contains("simulationDefaults")
+            ? document->document.at("simulationDefaults") : nlohmann::json::object();
+        const EditorSceneMeshSectionSnapshot* assetSection = HairBrushSection();
+        const int32_t savedIndex = SavedHairGroupIndex(assetSection, hairGroupSelected);
+        // 勾选 override 先从当前资产默认值起步，避免用一个隐藏的硬编码初值覆盖。
+        if (!hairGroups.SetOverride(selected, field, HairGroupAssetDefault(
+                assetSection, savedIndex >= 0, savedIndex, simulation, field)))
+        {
+            hairGroupStatus = "Unable to enable this override.";
+            return;
+        }
+        hairPaintUndo.clear();
+        hairGroupStatus = "Override enabled from the current asset default; edit the value or clear overrides.";
+        return;
+    }
+    if (action == "hair-group-override-value")
+    {
+        if (hairGroupSelected < 0) return;
+        const std::string field = element.GetAttribute<std::string>("data-key", "");
+        double value = 0.0;
+        if (!ParseNumber(ControlValue(element), value))
+        {
+            hairGroupStatus = "A complete finite number is required.";
+            return;
+        }
+        if (!hairGroups.SetOverride(static_cast<std::size_t>(hairGroupSelected), field, value))
+        {
+            hairGroupStatus = "This field cannot be overridden per group.";
+            return;
+        }
+        hairPaintUndo.clear();
+        hairGroupStatus = "Override edited in the asset draft.";
+        return;
+    }
+    if (action == "hair-preview-wind" && runtimeActionSink != nullptr)
+    {
+        if (!IsActiveHairPreview() || runtimeView.offlineMode) return;
+        const auto* wind = PreviewWindActor();
+        if (wind == nullptr) return;
+        float number = 0.0f;
+        if (!ParseNumber(ControlValue(element), number))
+        {
+            localStatus = "A complete finite number is required.";
+            return;
+        }
+        const std::size_t index = element.GetAttribute<std::size_t>("data-index", 0);
+        const uint32_t component = element.GetAttribute<uint32_t>("data-component", 0);
+        EditorActorProperty property = EditorActorProperty::WindStrength;
+        if (index == 0)
+        {
+            if (component >= 3) return;
+            property = EditorActorProperty::WindDirection;
+        }
+        else if (index == 1) property = EditorActorProperty::WindStrength;
+        else if (index == 2) property = EditorActorProperty::WindGustAmplitude;
+        else return;
+        if (hairPreviewWindBound)
+        {
+            // 本地即时值优先于晚一帧到达的 actor 快照，拖动时滑块不会被旧值拉回。
+            if (index == 0) hairPreviewWind.direction[component] = number;
+            else if (index == 1) hairPreviewWind.strengthCmPerSec = number;
+            else hairPreviewWind.gustAmplitude = number;
+        }
+        UiAction request;
+        request.type = UiActionType::SetActorProperty;
+        request.actorProperty = {wind->worldGeneration, wind->identity, property, component, number};
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+        return;
+    }
+    if (action == "hair-sim")
+    {
+        // 拖动/输入只更新会话值并投递实时覆盖；保存是独立动作，不会自动写资产。
+        std::size_t count = 0;
+        const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+        const std::size_t index = element.GetAttribute<size_t>("data-index", 0);
+        const std::size_t component = element.GetAttribute<size_t>("data-component", 0);
+        if (index >= count || component >= controls[index].components) return;
+        // WidgetSlider 先发 change(value)，返回后才写 value 属性；读属性会落后一拍，
+        // 下一帧同步又把滑块拉回旧值。这里只消费该事件的新值，文本仍保留半成品输入。
+        const bool sliderChange = event != nullptr &&
+            element.GetAttribute<Rml::String>("type", "") == "range" &&
+            event->GetParameters().count("value") != 0;
+        const std::string text = sliderChange
+            ? Number(event->GetParameter<float>("value", 0.0f)) : ControlValue(element);
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str(), &end);
+        // 文本控件的半成品输入不能当成 0；只接受整段都是数字的值。
+        if (end == text.c_str() || *end != '\0' || !std::isfinite(value)) return;
+        auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        values[component] = value;
+        hairSimulationValues[controls[index].field] =
+            nlohmann::json::array({values[0], values[1], values[2]});
+        const auto* active = resourceEditor.ActiveTab();
+        const auto* authored = active ? TressfxDocument(active->path) : nullptr;
+        hairSimulationStatus = authored && TressfxGpuSimulationDefaults(authored->document)
+            ? "Live preview in this viewport (not saved)." : "Default value edited (not saved).";
+        SubmitHairSimulationLive(index, values);
         return;
     }
     if (action.rfind("debug-draw-", 0) == 0)
@@ -6443,6 +10791,112 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
+    if (action == "viewport-snap-enabled")
+    {
+        sceneSnapEnabled = element.HasAttribute("checked");
+        RefreshViewportToolbar();
+        return;
+    }
+    if (action == "viewport-snap-move" || action == "viewport-snap-rotate" ||
+        action == "viewport-snap-scale")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number) || number <= 0.0f)
+        {
+            localStatus = "Snap values must be finite and greater than zero.";
+            RefreshViewportToolbar();
+            return;
+        }
+        if (action == "viewport-snap-move") sceneMoveSnap = number;
+        else if (action == "viewport-snap-rotate") sceneRotateSnap = number;
+        else sceneScaleSnap = number;
+        RefreshViewportToolbar();
+        return;
+    }
+    if (action == "viewport-brush-radius" || action == "viewport-brush-strength" ||
+        action == "viewport-brush-falloff")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number))
+        {
+            localStatus = "Brush values must be finite numbers.";
+            RefreshTerrainBrushUi();
+            return;
+        }
+        if (action == "viewport-brush-radius")
+        {
+            if (number <= 0.0f)
+            {
+                localStatus = "Sculpt brush radius must be greater than zero.";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.radiusCm = number;
+        }
+        else if (action == "viewport-brush-strength")
+        {
+            if (number <= 0.0f || number > 1.0f)
+            {
+                localStatus = "Sculpt brush strength must be in (0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.strength = number;
+        }
+        else
+        {
+            if (number < 0.0f || number > 1.0f)
+            {
+                localStatus = "Sculpt brush falloff must be in [0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainSculptBrush.falloff = number;
+        }
+        SynchronizeSculptBrushPresetId();
+        RefreshTerrainBrushUi();
+        return;
+    }
+    if (action == "terrain-paint-radius" || action == "terrain-paint-hardness" ||
+        action == "terrain-paint-opacity" || action == "terrain-paint-flow")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number))
+        {
+            localStatus = "Paint brush values must be finite numbers.";
+            RefreshTerrainBrushUi();
+            return;
+        }
+        if (action == "terrain-paint-radius")
+        {
+            if (number <= 0.0f)
+            {
+                localStatus = "Paint brush radius must be greater than zero.";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            terrainPaintBrush.radiusCm = number;
+        }
+        else
+        {
+            if (number < 0.0f || number > 1.0f)
+            {
+                localStatus = action == "terrain-paint-hardness"
+                    ? "Paint hardness must be in [0, 1]."
+                    : action == "terrain-paint-opacity"
+                    ? "Paint opacity must be in [0, 1]."
+                    : "Paint flow must be in [0, 1].";
+                RefreshTerrainBrushUi();
+                return;
+            }
+            if (action == "terrain-paint-hardness") terrainPaintBrush.hardness = number;
+            else if (action == "terrain-paint-opacity") terrainPaintBrush.opacity = number;
+            else terrainPaintBrush.flow = number;
+        }
+        SynchronizePaintBrushPresetId();
+        RefreshTerrainBrushUi();
+        return;
+    }
     if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, false);
     else if (HandleSceneLogicEvent(element, action, false)) {}
     else if (HandleSceneCompositePropertyEvent(element, action, false)) {}
@@ -6500,6 +10954,10 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             actor->scriptSpawned || runtimeView.scripts.state != ScriptPlayState::Editing) return;
         const auto field = action.substr(17);
         const auto& node = actor->scriptComponents[index];
+        // 资产拥有的毛发字段不允许从关卡写：即使旧控件或脚本仍发出事件也直接丢弃。
+        // 绑定/权重只在蓝图资产页作者，关卡只能改放置与资产白名单授权的实例覆写。
+        if (node.value("type", "") == "tressfx" &&
+            (field == "modelPath" || field == "rootBone" || field == "weights")) return;
         if (field.rfind("collision", 0) == 0 && field != "collisionMask")
         {
             if (!actor->scriptBlueprintPath.empty()) return;
@@ -6813,9 +11271,9 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
         Submit(std::move(command));
     }
-    else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture ||
+    else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Tressfx || kind == EditorAssetKind::Texture ||
         kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint ||
-        kind == EditorAssetKind::ParticleSystem)
+        kind == EditorAssetKind::Retarget || kind == EditorAssetKind::ParticleSystem)
     {
         OpenResourceAsset(path, kind);
     }
@@ -6979,6 +11437,115 @@ bool MaterialInstanceAssetEditorPanel::ProcessParticleKeyboard(
 void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
 {
     if (refreshingControls || document == nullptr) return;
+    const auto& eventType = event.GetType();
+    if (eventType == "mousescroll")
+    {
+        // 滚轮默认滚动发生在捕获之后；这里只标脏，下一次 Build 再按新的 scrollTop 重算窗口。
+        auto* layerScroll = document->GetElementById("terrain-layer-scroll");
+        for (auto* element = event.GetTargetElement(); element != nullptr;
+            element = element->GetParentNode())
+        {
+            if (element == layerScroll)
+            {
+                terrainLayerWindowDirty = true;
+                break;
+            }
+        }
+    }
+    if (ProcessViewportShortcut(event))
+    {
+        event.StopPropagation();
+        return;
+    }
+    if (eventType == "mousemove")
+        RefreshTerrainLayerHoverPreview(event.GetUnprojectedMouseScreenPos(), event.GetTargetElement());
+    auto* sceneImage = document->GetElementById("editor-viewport-image");
+    auto* sceneSurface = document->GetElementById("editor-viewport-surface");
+    if (IsTerrainSculptActive() && sceneImage != nullptr &&
+        (event.GetTargetElement() == sceneImage ||
+         event.GetTargetElement() == sceneSurface) &&
+        (eventType == "mousedown" || eventType == "mousemove" || eventType == "mouseup"))
+    {
+        const int button = eventType == "mousemove" ? -1 :
+            event.GetParameter<int>("button", -1);
+        if (ProcessTerrainSculptPointer(eventType, button,
+            event.GetParameter<float>("mouse_x", 0.0f),
+            event.GetParameter<float>("mouse_y", 0.0f)))
+        {
+            event.StopPropagation();
+            return;
+        }
+    }
+    if (event.GetType() == "keydown" && !HasModal())
+    {
+        const int key = event.GetParameter<int>("key_identifier", 0);
+        const bool ctrl = event.GetParameter<int>("ctrl_key", 0) != 0;
+        if (ctrl && key == Rml::Input::KI_Z && IsActiveHairPreview() &&
+            !hairPaintUndo.empty())
+        {
+            UndoLastHairBrushCommit();
+            event.StopPropagation();
+            return;
+        }
+        if (key == Rml::Input::KI_ESCAPE &&
+            (hairGroupPaintActive || hairBrushStrokeActive))
+        {
+            CancelHairBrushStroke(true);
+            event.StopPropagation();
+            return;
+        }
+        if (hairGroupPaintActive && IsActiveHairPreview())
+        {
+            if (key == Rml::Input::KI_RETURN && hairBrushStrokeActive)
+            {
+                if (hairLassoDragging) CommitHairLassoStroke();
+                else CommitHairBrushStroke();
+                event.StopPropagation();
+                return;
+            }
+            if (key == Rml::Input::KI_OEM_4 || key == Rml::Input::KI_OEM_6)
+            {
+                const float delta = key == Rml::Input::KI_OEM_6 ? 2.0f : -2.0f;
+                hairBrushRadiusPx = std::clamp(hairBrushRadiusPx + delta, 2.0f, 500.0f);
+                SetControlValue("hair-brush-radius", SceneActorNumber(hairBrushRadiusPx));
+                hairBrushStatus = "Brush radius: " +
+                    SceneActorNumber(hairBrushRadiusPx) + " px.";
+                if (hairBrushStamp.valid)
+                {
+                    if (hairLassoDragging) SampleHairBrushStamp(hairBrushCursorX, hairBrushCursorY);
+                    else UpdateHairBrushSample(hairBrushCursorX, hairBrushCursorY,
+                        hairBrushStrokeActive);
+                }
+                event.StopPropagation();
+                return;
+            }
+        }
+    }
+    // Groups 的行内表单是面板本地状态：Esc 只取消当前表单，不触发文档/World 命令。
+    if (event.GetType() == "keydown" && !HasModal() &&
+        event.GetParameter<int>("key_identifier", 0) == Rml::Input::KI_ESCAPE)
+    {
+        if (hairGroupCreateActive || hairGroupAddRangeActive)
+        {
+            hairGroupCreateActive = false;
+            hairGroupCreateName.clear();
+            hairGroupCreateStart.clear();
+            hairGroupCreateEnd.clear();
+            hairGroupCreateError.clear();
+            hairGroupAddRangeActive = false;
+            hairGroupRangeStart.clear();
+            hairGroupRangeEnd.clear();
+            hairGroupRangeError.clear();
+            hairGroupStatus = "Group form cancelled.";
+            event.StopPropagation();
+            return;
+        }
+    }
+    if (ProcessSceneGizmoInput(event))
+    {
+        event.StopPropagation();
+        return;
+    }
     if (ProcessBlueprintAssetDrag(event)) return;
     if (ProcessParticleKeyboard(event))
     {
@@ -6989,6 +11556,23 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     {
         event.StopPropagation();
         return;
+    }
+    // 属性行的文本框较窄，用户点标签/行空白时也应该进入编辑，而不是只选中行。
+    Rml::Element* eventTarget = event.GetTargetElement();
+    if (event.GetType() == "click" && eventTarget != nullptr)
+    {
+        Rml::Element* row = eventTarget;
+        while (row != nullptr && row != document)
+        {
+            const std::string id = row->GetId();
+            if (id.size() > 4 && id.compare(id.size() - 4, 4, "-row") == 0)
+            {
+                if (Rml::Element* input = FirstActorTextInput(*row))
+                    input->Focus();
+                break;
+            }
+            row = row->GetParentNode();
+        }
     }
     if (event.GetType() == "change") runtimeControlsCurrent = false;
     // 点击菜单栏以外的任何位置都收起已展开的菜单；菜单项自身的收起在下面按 action 处理。
@@ -7001,28 +11585,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (docking.ProcessEvent(event, HasModal()))
     {
         const std::string activatedPanel = docking.ConsumeActivatedPanel();
-        if (activatedPanel == "viewport") ReturnToLevel();
-        const std::string path = docking.ResourcePathForPanel(activatedPanel);
-        if (activatedPanel.rfind("resource:material:", 0) == 0)
-        {
-            FlushPendingEdits();
-            viewingJson = false;
-            resourceEditorVisible = false;
-            EditorCommandEnvelope command;
-            command.type = EditorCommandType::SelectMaterialInstanceDocument;
-            command.payload = MaterialInstanceAssetPathPayload{path};
-            Submit(std::move(command));
-        }
-        else if (!path.empty() && resourceEditor.Activate(path))
-        {
-            FlushBlueprintAssetEdits();
-            RequestActiveResourceMetadata();
-            resourceEditorVisible = true;
-            const auto* active = resourceEditor.ActiveTab();
-            if (active != nullptr && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
-                RequestModelPreview(path);
-            RefreshResourceEditor();
-        }
+        ActivateWorkspacePanel(activatedPanel);
         event.StopPropagation();
         return;
     }
@@ -7056,7 +11619,9 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (event.GetType() == "click" && (action == "save-file" || action == "script-physics-trigger" ||
         action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
         action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
-        action == "log-autoscroll" || action == "animation-clip" || action == "animation-time" ||
+        action == "viewport-snap-enabled" ||
+        action == "log-autoscroll" || action == "retarget-all-bones" || action == "retarget-zoom" ||
+        action == "animation-clip" || action == "animation-time" ||
         action == "motion-debug" || action == "debug-draw-enabled" || action == "debug-draw-category" ||
         action == "debug-draw-owner")) return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
@@ -7064,6 +11629,14 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     try
     {
         std::optional<std::string> openAssetPath;
+        const auto* activeResource = resourceEditor.ActiveTab();
+        if (IsResourceEditorVisible() && activeResource &&
+            activeResource->kind == EditorAssetKind::Retarget && retargetEditor.ProcessEvent(event))
+        {
+            RefreshResourceEditor();
+            event.StopPropagation();
+            return;
+        }
         if (logPanel.ProcessEvent(event))
         {
             event.StopPropagation();
@@ -7084,7 +11657,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
             if (openAssetPath) OpenBrowserAsset(*openAssetPath);
         }
         else if (event.GetType() == "click") HandleClick(*element, action);
-        else if (event.GetType() == "change") HandleChange(*element, action);
+        else if (event.GetType() == "change") HandleChange(*element, action, &event);
         else if (event.GetType() == "dblclick" &&
             (action == "outliner-actor" || action == "viewport-actor") && runtimeActionSink != nullptr)
         {

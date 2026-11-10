@@ -9,16 +9,22 @@ namespace VL
 
 inline bool IsSupportedSceneObjectType(std::string_view type)
 {
+    // terrain 在 World 中仍落成 chunk mesh，但场景资产类型必须和普通对象一起
+    // 通过 UI 选择器；否则该关卡不会进入 sceneOptions，LoadWorld 会拒绝打开。
     return type == "mesh" ||
+        type == "terrain" ||
         type == "blueprintInstance" ||
         type == "directionalLight" ||
         type == "pointLight" ||
         type == "spotLight" ||
         type == "squareAreaLight" ||
+        type == "balloon" ||
+        type == "glassPane" ||
         type == "camera" ||
         type == "environment" ||
         type == "decal" ||
-        type == "particleSystem";
+        type == "particleSystem" ||
+        type == "wind";
 }
 
 inline bool HasSupportedSceneObjectTypes(const nlohmann::json& sceneJson)

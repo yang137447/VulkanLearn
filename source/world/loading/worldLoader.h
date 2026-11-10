@@ -20,10 +20,13 @@ struct WorldBuildPlan
     nlohmann::json authoredSceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
-    std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
     // 场景级 typed Data Channels；加载后写入 World，供 `$Name` 替换、
     // 材质绑定与 C# 读取共用同一份值。
     ParticleDataChannelMap particleDataChannels;
+    std::vector<WindResponseProfile> windResponseProfiles;
+    std::vector<SoftBodyObjectBuildPlan> softBodyObjectPlans;
+    std::vector<GlassObjectBuildPlan> glassObjectPlans;
+    ProjectileSettings projectileSettings;
 };
 
 // IO and validation stage for loading a World. It produces a pure build plan;

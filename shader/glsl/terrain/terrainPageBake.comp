@@ -1,0 +1,395 @@
+#version 450
+
+// 覆盖页 128² 层 ID/权重烘焙。数学逐项镜像
+// source/terrain/terrainWeightMap.cpp 的 BuildPage/SampleAt/MakeSampleState，
+// 候选层列表由 CPU 在注册期预计算并通过 params SSBO 传入。
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+struct BakeLayer
+{
+    float heightMin;
+    float heightMax;
+    float slopeMin;
+    float slopeMax;
+    float noise;
+    uint globalId;
+    uint pad0;
+    uint pad1;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer BakeParams
+{
+    uint tileX;
+    uint tileZ;
+    uint tilesPerSide;
+    uint layerCount;
+    uint resolution;
+    uint pageResolution;
+    uint heightWidth;
+    uint heightHeight;
+    uint paintWidth;
+    uint paintHeight;
+    uint hasPaint;
+    uint candidateCount;
+    float heightScale;
+    float heightOffset;
+    float uvOffsetU;
+    float uvOffsetV;
+    float uvScaleU;
+    float uvScaleV;
+    float sizeX;
+    float sizeY;
+    uint candidates[256];
+} bake;
+
+layout(std430, set = 0, binding = 1) readonly buffer Heights
+{
+    float values[];
+} heights;
+
+layout(std430, set = 0, binding = 2) readonly buffer Layers
+{
+    BakeLayer values[];
+} layers;
+
+layout(std430, set = 0, binding = 3) readonly buffer PaintWeights
+{
+    float values[];
+} paintWeights;
+
+layout(std430, set = 0, binding = 4) readonly buffer PaintOpacity
+{
+    uint values[];
+} paintOpacity;
+
+layout(std430, set = 0, binding = 5) writeonly buffer OutIds
+{
+    uint values[];
+} outIds;
+
+layout(std430, set = 0, binding = 6) writeonly buffer OutWeights
+{
+    uint values[];
+} outWeights;
+
+const uint TopLayerCount = 4u;
+const float HeightEdge = 0.05;
+const float SlopeEdge = 6.0;
+const float Pi = 3.14159265358979323846;
+
+float Fract(float value)
+{
+    return value - floor(value);
+}
+
+uint LatticeHash(uint x, uint y)
+{
+    uint hash = x * 1664525u + y * 1013904223u;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bu;
+    hash ^= hash >> 16;
+    return hash;
+}
+
+float Hash(float x, float y)
+{
+    const uint bits = LatticeHash(uint(int(x)), uint(int(y)));
+    return float(bits >> 8) * (1.0 / 16777216.0);
+}
+
+float ValueNoise(float x, float y)
+{
+    const float cellX = floor(x);
+    const float cellY = floor(y);
+    float fractionX = Fract(x);
+    float fractionY = Fract(y);
+    fractionX = fractionX * fractionX * (3.0 - 2.0 * fractionX);
+    fractionY = fractionY * fractionY * (3.0 - 2.0 * fractionY);
+    const float a = Hash(cellX, cellY);
+    const float b = Hash(cellX + 1.0, cellY);
+    const float c = Hash(cellX, cellY + 1.0);
+    const float d = Hash(cellX + 1.0, cellY + 1.0);
+    const float top = a + (b - a) * fractionX;
+    const float bottom = c + (d - c) * fractionX;
+    return top + (bottom - top) * fractionY;
+}
+
+float LowerWindow(float value, float minValue, float edge)
+{
+    if (minValue <= 0.0)
+        return 1.0;
+    const float t = clamp(
+        (value - (minValue - edge)) / (2.0 * edge), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float UpperWindow(float value, float maxValue, float upperBound, float edge)
+{
+    if (maxValue >= upperBound)
+        return 1.0;
+    const float t = clamp(
+        (value - (maxValue - edge)) / (2.0 * edge), 0.0, 1.0);
+    return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+
+float ReadHeightSample(float u, float v)
+{
+    const float clampedU = clamp(u, 0.0, 1.0);
+    const float clampedV = clamp(v, 0.0, 1.0);
+    const float x = clampedU * float(int(bake.heightWidth) - 1);
+    const float y = clampedV * float(int(bake.heightHeight) - 1);
+    const uint x0 = uint(floor(x));
+    const uint y0 = uint(floor(y));
+    const uint x1 = min(x0 + 1u, bake.heightWidth - 1u);
+    const uint y1 = min(y0 + 1u, bake.heightHeight - 1u);
+    const float fx = x - float(x0);
+    const float fy = y - float(y0);
+    const float h00 = heights.values[y0 * bake.heightWidth + x0];
+    const float h10 = heights.values[y0 * bake.heightWidth + x1];
+    const float h01 = heights.values[y1 * bake.heightWidth + x0];
+    const float h11 = heights.values[y1 * bake.heightWidth + x1];
+    const float top = h00 + (h10 - h00) * fx;
+    const float bottom = h01 + (h11 - h01) * fx;
+    return top + (bottom - top) * fy;
+}
+
+float SampleHeightCm(float u, float v)
+{
+    return ReadHeightSample(u, v) * bake.heightScale + bake.heightOffset;
+}
+
+struct SampleState
+{
+    float height;
+    float slope;
+    vec2 noiseUv;
+};
+
+SampleState MakeSampleState(
+    float u,
+    float v,
+    float height,
+    float left,
+    float right,
+    float down,
+    float up)
+{
+    const float du = 1.0 / float(int(bake.resolution));
+    const float dv = du;
+    const float worldDx = 2.0 * du * bake.sizeX;
+    const float worldDz = 2.0 * dv * bake.sizeY;
+    precise vec3 normal = normalize(vec3(
+        -(right - left) / worldDx,
+        1.0,
+        -(up - down) / worldDz));
+
+    SampleState state;
+    if (abs(bake.heightScale) < 1.0e-6)
+        state.height = 0.5;
+    else
+        state.height = clamp(
+            (height - bake.heightOffset) / bake.heightScale, 0.0, 1.0);
+    precise float slope =
+        acos(clamp(normal.y, -1.0, 1.0)) * 180.0 / Pi;
+    state.slope = slope;
+    state.noiseUv = vec2(
+        (u - 0.5) * bake.sizeX,
+        (v - 0.5) * bake.sizeY) * 0.002;
+    return state;
+}
+
+float LayerWeight(BakeLayer layer, uint layerId, SampleState state)
+{
+    const float heightWindow =
+        LowerWindow(state.height, layer.heightMin, HeightEdge) *
+        UpperWindow(state.height, layer.heightMax, 1.0, HeightEdge);
+    const float slopeWindow =
+        LowerWindow(state.slope, layer.slopeMin, SlopeEdge) *
+        UpperWindow(state.slope, layer.slopeMax, 90.0, SlopeEdge);
+    precise float noise = ValueNoise(
+        state.noiseUv.x + float(layerId) * 17.0,
+        state.noiseUv.y + float(layerId) * 9.0);
+    precise float result = max(
+        0.0,
+        heightWindow * slopeWindow *
+            (1.0 + (noise * 2.0 - 1.0) * layer.noise * 0.5));
+    return result;
+}
+
+float PaintBlend(uint layer, float u, float v, float base)
+{
+    if (bake.hasPaint == 0u || layer >= bake.layerCount)
+        return base;
+    const float x =
+        clamp(u, 0.0, 1.0) * float(int(bake.paintWidth) - 1);
+    const float y =
+        clamp(v, 0.0, 1.0) * float(int(bake.paintHeight) - 1);
+    const uint x0 = uint(floor(x));
+    const uint y0 = uint(floor(y));
+    const uint x1 = min(x0 + 1u, bake.paintWidth - 1u);
+    const uint y1 = min(y0 + 1u, bake.paintHeight - 1u);
+    const float fx = x - float(x0);
+    const float fy = y - float(y0);
+
+    const uint layerBase = layer * bake.paintWidth * bake.paintHeight;
+    const uint i00 = layerBase + y0 * bake.paintWidth + x0;
+    const uint i10 = layerBase + y0 * bake.paintWidth + x1;
+    const uint i01 = layerBase + y1 * bake.paintWidth + x0;
+    const uint i11 = layerBase + y1 * bake.paintWidth + x1;
+    const float w00 = paintWeights.values[i00];
+    const float w10 = paintWeights.values[i10];
+    const float w01 = paintWeights.values[i01];
+    const float w11 = paintWeights.values[i11];
+    const float a00 = float((paintOpacity.values[i00 >> 2] >> ((i00 & 3u) * 8u)) & 0xffu) / 255.0;
+    const float a10 = float((paintOpacity.values[i10 >> 2] >> ((i10 & 3u) * 8u)) & 0xffu) / 255.0;
+    const float a01 = float((paintOpacity.values[i01 >> 2] >> ((i01 & 3u) * 8u)) & 0xffu) / 255.0;
+    const float a11 = float((paintOpacity.values[i11 >> 2] >> ((i11 & 3u) * 8u)) & 0xffu) / 255.0;
+
+    precise float weight =
+        (w00 * (1.0 - fx) + w10 * fx) * (1.0 - fy) +
+        (w01 * (1.0 - fx) + w11 * fx) * fy;
+    precise float opacity =
+        (a00 * (1.0 - fx) + a10 * fx) * (1.0 - fy) +
+        (a01 * (1.0 - fx) + a11 * fx) * fy;
+    precise float result = base * (1.0 - opacity) + weight * opacity;
+    return result;
+}
+
+void SelectTop4(
+    float weights[256],
+    uint count,
+    out uint ids0, out uint ids1, out uint ids2, out uint ids3,
+    out uint weights0, out uint weights1,
+    out uint weights2, out uint weights3)
+{
+    float topWeights[4] = float[4](0.0, 0.0, 0.0, 0.0);
+    int topIndices[4] = int[4](0, 0, 0, 0);
+    for (uint index = 0u; index < count; ++index)
+    {
+        const float weight = weights[index];
+        for (uint slot = 0u; slot < TopLayerCount; ++slot)
+        {
+            if (weight > topWeights[slot])
+            {
+                for (uint move = TopLayerCount - 1u; move > slot; --move)
+                {
+                    topWeights[move] = topWeights[move - 1u];
+                    topIndices[move] = topIndices[move - 1u];
+                }
+                topWeights[slot] = weight;
+                topIndices[slot] = int(index);
+                break;
+            }
+        }
+    }
+
+    float sum = 0.0;
+    for (uint slot = 0u; slot < TopLayerCount; ++slot)
+        sum += topWeights[slot];
+    if (sum < 1.0e-4)
+    {
+        const uint fallbackLayer = bake.candidates[0];
+        ids0 = layers.values[fallbackLayer].globalId;
+        ids1 = 0u;
+        ids2 = 0u;
+        ids3 = 0u;
+        weights0 = 255u;
+        weights1 = 0u;
+        weights2 = 0u;
+        weights3 = 0u;
+        return;
+    }
+
+    uint ids[4];
+    uint outWeight[4];
+    for (uint slot = 0u; slot < TopLayerCount; ++slot)
+    {
+        const uint candidate = bake.candidates[uint(topIndices[slot])];
+        ids[slot] = layers.values[candidate].globalId;
+        outWeight[slot] = uint(clamp(
+            round(topWeights[slot] / sum * 255.0), 0.0, 255.0));
+    }
+    ids0 = ids[0];
+    ids1 = ids[1];
+    ids2 = ids[2];
+    ids3 = ids[3];
+    weights0 = outWeight[0];
+    weights1 = outWeight[1];
+    weights2 = outWeight[2];
+    weights3 = outWeight[3];
+}
+
+void main()
+{
+    const uint x = gl_WorkGroupID.x * 16u + gl_LocalInvocationID.x;
+    const uint y = gl_WorkGroupID.y * 16u + gl_LocalInvocationID.y;
+    if (x >= bake.pageResolution || y >= bake.pageResolution)
+        return;
+
+    const float du = 1.0 / float(int(bake.resolution));
+    const float baseU =
+        (float(int(bake.tileX * bake.pageResolution)) + 0.5) /
+        float(int(bake.resolution));
+    const float baseV =
+        (float(int(bake.tileZ * bake.pageResolution)) + 0.5) /
+        float(int(bake.resolution));
+    const float u = baseU + float(int(x)) * du;
+    const float v = baseV + float(int(y)) * du;
+
+    const float height = SampleHeightCm(
+        bake.uvOffsetU + u * bake.uvScaleU,
+        bake.uvOffsetV + v * bake.uvScaleV);
+    const float left = SampleHeightCm(
+        bake.uvOffsetU + (baseU + (float(int(x)) - 1.0) * du) * bake.uvScaleU,
+        bake.uvOffsetV + v * bake.uvScaleV);
+    const float right = SampleHeightCm(
+        bake.uvOffsetU + (baseU + (float(int(x)) + 1.0) * du) * bake.uvScaleU,
+        bake.uvOffsetV + v * bake.uvScaleV);
+    const float down = SampleHeightCm(
+        bake.uvOffsetU + u * bake.uvScaleU,
+        bake.uvOffsetV + (baseV + (float(int(y)) - 1.0) * du) * bake.uvScaleV);
+    const float up = SampleHeightCm(
+        bake.uvOffsetU + u * bake.uvScaleU,
+        bake.uvOffsetV + (baseV + (float(int(y)) + 1.0) * du) * bake.uvScaleV);
+    const SampleState state =
+        MakeSampleState(u, v, height, left, right, down, up);
+
+    float weights[256];
+    const uint candidateCount = min(bake.candidateCount, 256u);
+    for (uint index = 0u; index < candidateCount; ++index)
+    {
+        const uint layerId = bake.candidates[index];
+        if (layerId >= bake.layerCount)
+        {
+            weights[index] = 0.0;
+            continue;
+        }
+        float weight = LayerWeight(layers.values[layerId], layerId, state);
+        if (bake.hasPaint != 0u)
+        {
+            weight = PaintBlend(
+                layerId,
+                bake.uvOffsetU + u * bake.uvScaleU,
+                bake.uvOffsetV + v * bake.uvScaleV,
+                weight);
+        }
+        weights[index] = max(0.0, weight);
+    }
+
+    uint ids0, ids1, ids2, ids3;
+    uint weights0, weights1, weights2, weights3;
+    SelectTop4(
+        weights,
+        candidateCount,
+        ids0, ids1, ids2, ids3,
+        weights0, weights1, weights2, weights3);
+
+    const uint texel = y * bake.pageResolution + x;
+    outIds.values[texel] =
+        ids0 | (ids1 << 8) | (ids2 << 16) | (ids3 << 24);
+    outWeights.values[texel] =
+        weights0 | (weights1 << 8) | (weights2 << 16) | (weights3 << 24);
+}

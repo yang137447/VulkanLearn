@@ -33,7 +33,12 @@ TEST(DockWorkspaceTest, DefaultLayoutHasUeRegionsAndOneContentRendererStack)
     ASSERT_EQ(geometry.stacks.size(), 4u);
     EXPECT_EQ(geometry.splitters.size(), 3u);
     EXPECT_EQ(workspace.FindStack("content"), workspace.FindStack("renderer"));
+    EXPECT_EQ(workspace.FindStack("content"), workspace.FindStack("log"));
+    EXPECT_EQ(workspace.FindStack("content"), workspace.FindStack("performance"));
     EXPECT_NE(workspace.FindStack("outliner"), workspace.FindStack("details"));
+    const auto& bottomTabs = workspace.State().nodes.at(workspace.FindStack("content")).tabs;
+    EXPECT_EQ(bottomTabs, (std::vector<std::string>{
+        "content", "renderer", "log", "performance", "terrain"}));
     EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("content")).active, "content");
 }
 
@@ -89,6 +94,47 @@ TEST(DockWorkspaceTest, EveryEdgeCreatesAnIndependentSplit)
         EXPECT_EQ(geometry.stacks.size(), 5u);
         EXPECT_EQ(geometry.splitters.size(), 4u);
     }
+}
+
+TEST(DockWorkspaceTest, MaximizedStackIsTransientAndPreservesNormalAndFloatingGeometry)
+{
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.Float("details", {0.2f, 0.2f, 0.4f, 0.5f}));
+    const DockRect bounds{5, 9, 1280, 654};
+    const auto original = workspace.Layout(bounds);
+    const auto maximized = workspace.Layout(bounds, {}, workspace.FindStack("details"));
+    ASSERT_EQ(maximized.stacks.size(), 1u);
+    EXPECT_TRUE(maximized.splitters.empty());
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.x, bounds.x);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.y, bounds.y);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.width, bounds.width);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.height, bounds.height);
+    const auto restored = workspace.Layout(bounds);
+    ASSERT_EQ(restored.stacks.size(), original.stacks.size());
+    ASSERT_EQ(restored.splitters.size(), original.splitters.size());
+    for (size_t index = 0; index < original.stacks.size(); ++index)
+    {
+        EXPECT_EQ(restored.stacks[index].node, original.stacks[index].node);
+        EXPECT_EQ(restored.stacks[index].floating, original.stacks[index].floating);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.x, original.stacks[index].rect.x);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.y, original.stacks[index].rect.y);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.width, original.stacks[index].rect.width);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.height, original.stacks[index].rect.height);
+    }
+}
+
+TEST(DockWorkspaceTest, CloseCandidateUsesEligibleRightThenLeftNeighborWithoutChangingSelection)
+{
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.ReplaceResourcePanels({"resource:first", "resource:second", "resource:third"}));
+    ASSERT_TRUE(workspace.Activate("resource:second"));
+    EXPECT_EQ(workspace.TabAfterClose("resource:second",
+        {"resource:first", "resource:third"}, "viewport"), "resource:third");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {"resource:first"}, "viewport"), "resource:first");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {}, "viewport"), "viewport");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {}, "missing"), "");
+    EXPECT_EQ(workspace.TabAfterClose("resource:first", {"resource:third"}, "viewport"), "");
+    EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("resource:second")).active, "resource:second");
 }
 
 TEST(DockWorkspaceTest, FloatingBoundsStayInsideWorkspaceAndCanReattach)
@@ -178,7 +224,8 @@ TEST(DockWorkspaceTest, LastRootTabCannotFloatOrDisappearIntoFloatingStack)
 {
     DockWorkspace workspace;
     // 仅 Viewport 留在主树；其他常驻面板均浮动。
-    for (const char* panel : {"outliner", "details", "content", "renderer", "log"})
+    for (const char* panel : {"outliner", "details", "content", "renderer", "log",
+        "performance", "terrain"})
         ASSERT_TRUE(workspace.Float(panel, {0.2f, 0.2f, 0.4f, 0.5f}));
     EXPECT_FALSE(workspace.Float("viewport", {0, 0, 0.5f, 0.5f}));
     EXPECT_FALSE(workspace.Dock("viewport", workspace.FindStack("details"), DockEdge::Center));
@@ -212,6 +259,12 @@ TEST_F(DockPersistenceTest, JsonRoundTripRetainsSplitRatioActiveTabAndFloatingPo
     ASSERT_TRUE(workspace.Float("details", {0.2f, 0.1f, 0.4f, 0.6f}));
     std::string error;
     ASSERT_TRUE(WriteWorkspaceLayout(path, workspace.State(), error)) << error;
+    {
+        std::string contents(static_cast<size_t>(std::filesystem::file_size(path)), '\0');
+        std::ifstream stream(path);
+        stream.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+        EXPECT_NE(contents.find("\"version\": 3"), std::string::npos);
+    }
     DockLayoutState restored;
     ASSERT_TRUE(ReadWorkspaceLayout(path, restored, error)) << error;
     DockWorkspace actual;
@@ -222,6 +275,81 @@ TEST_F(DockPersistenceTest, JsonRoundTripRetainsSplitRatioActiveTabAndFloatingPo
     ASSERT_EQ(actual.State().floating.size(), 1u);
     EXPECT_FLOAT_EQ(actual.State().floating[0].rect.y, 0.1f);
     ASSERT_TRUE(WriteWorkspaceLayout(path, actual.State(), error)) << error;
+}
+
+TEST_F(DockPersistenceTest, VersionTwoLayoutMigratesLandscapeIntoContentStack)
+{
+    std::ofstream stream(path, std::ios::trunc);
+    stream << R"({
+        "version": 2,
+        "root": {
+            "axis": "horizontal",
+            "ratio": 0.69,
+            "first": {
+                "axis": "vertical",
+                "ratio": 0.62,
+                "first": {"tabs": ["viewport"], "active": "viewport"},
+                "second": {"tabs": ["content", "renderer", "log"], "active": "renderer"}
+            },
+            "second": {"tabs": ["outliner"], "active": "outliner"}
+        },
+        "floating": [
+            {"stack": {"tabs": ["details"], "active": "details"}, "rect": [0.2, 0.1, 0.4, 0.5]}
+        ]
+    })";
+    stream.close();
+
+    DockLayoutState restored;
+    std::string error;
+    ASSERT_TRUE(ReadWorkspaceLayout(path, restored, error)) << error;
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.Restore(std::move(restored), error)) << error;
+
+    const uint32_t contentStack = workspace.FindStack("content");
+    ASSERT_NE(contentStack, 0u);
+    const auto& tabs = workspace.State().nodes.at(contentStack).tabs;
+    const auto log = std::find(tabs.begin(), tabs.end(), "log");
+    const auto terrain = std::find(tabs.begin(), tabs.end(), "terrain");
+    ASSERT_NE(log, tabs.end());
+    ASSERT_NE(terrain, tabs.end());
+    EXPECT_EQ(terrain, log + 1);
+    // 迁移只追加缺页，旧布局的活动标签、分栏比例和浮动位置保持不变。
+    EXPECT_EQ(workspace.State().nodes.at(contentStack).active, "renderer");
+    EXPECT_FLOAT_EQ(workspace.State().nodes.at(workspace.State().root).ratio, 0.69f);
+    ASSERT_EQ(workspace.State().floating.size(), 1u);
+    EXPECT_FLOAT_EQ(workspace.State().floating[0].rect.y, 0.1f);
+    EXPECT_TRUE(DockWorkspace::Validate(workspace.State(), error)) << error;
+}
+
+TEST_F(DockPersistenceTest, VersionThreeLayoutWithoutLandscapeIsRejected)
+{
+    std::ofstream stream(path, std::ios::trunc);
+    stream << R"({
+        "version": 3,
+        "root": {
+            "axis": "horizontal",
+            "ratio": 0.69,
+            "first": {
+                "axis": "vertical",
+                "ratio": 0.62,
+                "first": {"tabs": ["viewport"], "active": "viewport"},
+                "second": {"tabs": ["content", "renderer", "log"], "active": "content"}
+            },
+            "second": {
+                "axis": "vertical",
+                "ratio": 0.32,
+                "first": {"tabs": ["outliner"], "active": "outliner"},
+                "second": {"tabs": ["details"], "active": "details"}
+            }
+        },
+        "floating": []
+    })";
+    stream.close();
+
+    DockLayoutState output;
+    std::string error;
+    EXPECT_FALSE(ReadWorkspaceLayout(path, output, error));
+    EXPECT_FALSE(error.empty());
 }
 
 TEST_F(DockPersistenceTest, InvalidJsonNeverReplacesOutputState)
@@ -242,7 +370,8 @@ TEST_F(DockPersistenceTest, InvalidJsonNeverReplacesOutputState)
 void HideAllButViewport(EditorDockingController& docking)
 {
     docking.SetPersistencePath({});
-    for (const char* panel : {"outliner", "details", "content", "renderer", "log"})
+    for (const char* panel : {"outliner", "details", "content", "renderer", "log",
+        "performance", "terrain"})
         EXPECT_TRUE(docking.SetPanelVisible(panel, false)) << panel;
 }
 
@@ -311,6 +440,53 @@ TEST(DockWorkspaceTest, ActivePanelHandsOffInsideItsOwnStack)
     ASSERT_TRUE(docking.SetPanelVisible("renderer", false));
     EXPECT_TRUE(docking.IsPanelActive("content"));
     EXPECT_FALSE(docking.IsPanelActive("renderer"));
+}
+
+TEST_F(DockPersistenceTest, LegacyLayoutsGainPerformanceInTheContentStackWithoutChangingFocus)
+{
+    // v2 布局没有 Performance：读入时并入 Content 标签组，活动页仍是 Log。
+    const std::string legacyV2 =
+        "{\"version\":2,\"root\":{\"axis\":\"horizontal\",\"ratio\":0.69,"
+        "\"first\":{\"axis\":\"vertical\",\"ratio\":0.62,"
+        "\"first\":{\"tabs\":[\"viewport\"],\"active\":\"viewport\"},"
+        "\"second\":{\"tabs\":[\"content\",\"renderer\",\"log\"],\"active\":\"log\"}},"
+        "\"second\":{\"axis\":\"vertical\",\"ratio\":0.32,"
+        "\"first\":{\"tabs\":[\"outliner\"],\"active\":\"outliner\"},"
+        "\"second\":{\"tabs\":[\"details\"],\"active\":\"details\"}}},\"floating\":[]}";
+    {
+        std::ofstream stream(path, std::ios::trunc);
+        stream << legacyV2;
+    }
+    DockLayoutState restored;
+    std::string error;
+    ASSERT_TRUE(ReadWorkspaceLayout(path, restored, error)) << error;
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.Restore(std::move(restored), error)) << error;
+    EXPECT_NE(workspace.FindStack("performance"), 0u);
+    EXPECT_EQ(workspace.FindStack("performance"), workspace.FindStack("content"));
+    EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("content")).active, "log");
+
+    // v1 完全没有 Log/Performance：两者都并入 Content，仍不抢活动页。
+    const std::string legacyV1 =
+        "{\"version\":1,\"root\":{\"axis\":\"horizontal\",\"ratio\":0.69,"
+        "\"first\":{\"axis\":\"vertical\",\"ratio\":0.62,"
+        "\"first\":{\"tabs\":[\"viewport\"],\"active\":\"viewport\"},"
+        "\"second\":{\"tabs\":[\"content\",\"renderer\"],\"active\":\"content\"}},"
+        "\"second\":{\"axis\":\"vertical\",\"ratio\":0.32,"
+        "\"first\":{\"tabs\":[\"outliner\"],\"active\":\"outliner\"},"
+        "\"second\":{\"tabs\":[\"details\"],\"active\":\"details\"}}},\"floating\":[]}";
+    {
+        std::ofstream stream(path, std::ios::trunc);
+        stream << legacyV1;
+    }
+    DockLayoutState upgraded;
+    ASSERT_TRUE(ReadWorkspaceLayout(path, upgraded, error)) << error;
+    DockWorkspace upgradedWorkspace;
+    ASSERT_TRUE(upgradedWorkspace.Restore(std::move(upgraded), error)) << error;
+    EXPECT_NE(upgradedWorkspace.FindStack("log"), 0u);
+    EXPECT_EQ(upgradedWorkspace.FindStack("log"), upgradedWorkspace.FindStack("performance"));
+    EXPECT_EQ(upgradedWorkspace.State().nodes.at(
+        upgradedWorkspace.FindStack("content")).active, "content");
 }
 
 TEST_F(DockPersistenceTest, VisibilityRoundTripsAndLegacyFilesWithoutHiddenKeyStayReadable)
@@ -722,6 +898,25 @@ TEST_F(DockRmlTest, WindowMenuResetAndRestoreFollowTheWorkspaceFile)
     panel->SetWorkspaceLayoutPath({});
     std::error_code cleanupError;
     std::filesystem::remove(path, cleanupError);
+}
+
+TEST_F(DockRmlTest, PerformanceTabIsRegisteredBesideLogAndConsumesTheFrozenSnapshot)
+{
+    auto* tab = document->GetElementById("workspace-performance-tab");
+    ASSERT_NE(tab, nullptr);
+    // 与 Log/Renderer 同属底部标签组；打开资产标签不会改变它的位置。
+    EXPECT_EQ(Stack("workspace-performance-tab"), Stack("workspace-log-tab"));
+    snapshot.performance = BuildPerformanceSnapshot(
+        {{"geometry", 2.0, 3}, {"deferredLighting", 6.0, 3}}, 3, true, true, 0.02);
+    document->GetElementById("workspace-performance-tab")->DispatchEvent("click", {});
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("performance-page")->IsVisible());
+    const std::string rows = document->GetElementById("performance-passes")->GetInnerRML();
+    EXPECT_NE(rows.find("geometry"), std::string::npos);
+    EXPECT_NE(rows.find("deferredLighting"), std::string::npos);
+    EXPECT_NE(document->GetElementById("performance-gpu-ms")->GetInnerRML().find("8.000"),
+        std::string::npos);
+    EXPECT_TRUE(system.errors.empty()) << Errors();
 }
 
 } // namespace

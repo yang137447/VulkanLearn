@@ -423,12 +423,35 @@ namespace CommonFunction
 
     inline uint32_t FindMemoryType(vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, uint32_t typeFilter, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
-        for (uint32_t i = 0; i < physicalDeviceMemoryProperties.memoryTypeCount; i++)
+        const auto find = [&](vk::MemoryPropertyFlags flags)
+            -> std::optional<uint32_t>
         {
-            if ((typeFilter & (1 << i)) && (physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & memoryPropertyFlags) == memoryPropertyFlags)
+            for (uint32_t i = 0;
+                 i < physicalDeviceMemoryProperties.memoryTypeCount;
+                 ++i)
             {
-                return i;
+                if ((typeFilter & (1 << i)) &&
+                    (physicalDeviceMemoryProperties.memoryTypes[i].propertyFlags &
+                        flags) == flags)
+                {
+                    return i;
+                }
             }
+            return std::nullopt;
+        };
+
+        if (const std::optional<uint32_t> exact = find(memoryPropertyFlags))
+            return *exact;
+
+        // HOST_CACHED 是读回性能提示，不是功能要求。没有 cached 型时退回
+        // 同一组 HOST_VISIBLE|HOST_COHERENT 内存，避免为了性能标志直接失败。
+        if ((memoryPropertyFlags & vk::MemoryPropertyFlagBits::eHostCached) !=
+            vk::MemoryPropertyFlags{})
+        {
+            const vk::MemoryPropertyFlags fallback =
+                memoryPropertyFlags & ~vk::MemoryPropertyFlagBits::eHostCached;
+            if (const std::optional<uint32_t> relaxed = find(fallback))
+                return *relaxed;
         }
         throw std::runtime_error("Failed to find suitable memory type!");
     }
@@ -840,12 +863,23 @@ namespace CommonFunction
         return CreateSamplerBase(device, samplerInfo, name);
     }
 
-    // layerCount 默认 1，保持所有单层图像的旧调用不变；texture2DArray
-    // （体积雾 32 层 storage image）必须显式传全部层，否则只有 layer 0
-    // 离开 UNDEFINED，后续 storage 读写会触发 imageLayout-09600。
-    inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t layerCount = 1)
+    // 只把 layout barrier 录制到调用方给的主帧 command buffer，不 submit。
+    // 流式上传需要在主帧里把“页表/atlas 写入”排在 scene pass 之前，不能用
+    // BeginSingleTimeCommands 另起一次提交；加载期同步路径仍复用同一个 barrier 逻辑。
+    inline void RecordTransitionImageLayout(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        uint32_t mipLevels,
+        vk::Format format,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1)
     {
-        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+        if (layerCount == 0)
+        {
+            throw std::invalid_argument("TransitionImageLayout requires at least one array layer");
+        }
 
         vk::ImageMemoryBarrier barrier;
         barrier
@@ -858,8 +892,8 @@ namespace CommonFunction
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(0)
                 .setLevelCount(mipLevels)
-                .setBaseArrayLayer(0)
-                .setLayerCount(std::max(layerCount, 1u)));
+                .setBaseArrayLayer(baseArrayLayer)
+                .setLayerCount(layerCount));
 
         vk::PipelineStageFlags sourceStage;
         vk::PipelineStageFlags destinationStage;
@@ -887,6 +921,62 @@ namespace CommonFunction
                 .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
             sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
             destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        else if(oldLayout == vk::ImageLayout::eShaderReadOnlyOptimal && newLayout == vk::ImageLayout::eTransferDstOptimal)
+        {
+            // 增量页上传：先把已发布的只读纹理重新置为 transfer 目标。
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eShaderRead)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+            sourceStage = vk::PipelineStageFlagBits::eFragmentShader;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        }
+        else if(oldLayout == vk::ImageLayout::eShaderReadOnlyOptimal && newLayout == vk::ImageLayout::eTransferSrcOptimal)
+        {
+            // 层 atlas 上传：源层纹理已作为材质采样源发布为只读，GPU 切页时
+            // 需要把它临时转成 transfer 源；完成后必须转回只读。
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eShaderRead)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+            sourceStage = vk::PipelineStageFlagBits::eFragmentShader;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        }
+        else if(oldLayout == vk::ImageLayout::eTransferSrcOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
+        {
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        else if(oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eTransferSrcOptimal)
+        {
+            // 写后回读：transfer 写与 transfer 读之间只需要 transfer 阶段的屏障。
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        }
+        else if(oldLayout == vk::ImageLayout::eColorAttachmentOptimal && newLayout == vk::ImageLayout::eTransferSrcOptimal)
+        {
+            // feedback 回读：render pass 的 color attachment 写入必须先对后续
+            // transfer read 可见，再允许 CopyImageToBuffer 读取该小 RT。
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+            sourceStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+            destinationStage = vk::PipelineStageFlagBits::eTransfer;
+        }
+        else if(oldLayout == vk::ImageLayout::eTransferSrcOptimal && newLayout == vk::ImageLayout::eColorAttachmentOptimal)
+        {
+            // 回读完成后恢复 attachment layout；下一帧 render pass 仍按
+            // Undefined/clear 取得内容，旧像素不会成为新帧输入。
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
+            sourceStage = vk::PipelineStageFlagBits::eTransfer;
+            destinationStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
         }
         else if(oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal)
         {
@@ -919,6 +1009,25 @@ namespace CommonFunction
             destinationStage,
             vk::DependencyFlags(),
             nullptr, nullptr, barrier);
+    }
+
+    inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout, uint32_t baseArrayLayer = 0, uint32_t layerCount = 1)
+    {
+        // 校验放在 Begin 之前，保持旧入口“非法参数不留下未提交 command buffer”的行为。
+        if (layerCount == 0)
+        {
+            throw std::invalid_argument("TransitionImageLayout requires at least one array layer");
+        }
+        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+        RecordTransitionImageLayout(
+            commandBuffer,
+            image,
+            mipLevels,
+            format,
+            oldLayout,
+            newLayout,
+            baseArrayLayer,
+            layerCount);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }
@@ -965,44 +1074,369 @@ namespace CommonFunction
         return regions;
     }
 
-    inline void CopyBufferToImage(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Buffer& buffer, vk::Image& image, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0)
+    // layerBytes 是缓冲区中相邻数组层之间的字节跨度；单层调用保持默认 0，行为与旧路径一致。
+    inline void CopyBufferToImage(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Buffer& buffer, vk::Image& image, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0, uint32_t baseArrayLayer = 0, uint32_t layerCount = 1, vk::DeviceSize layerBytes = 0, uint32_t bufferRowLength = 0)
     {
+        if (layerCount == 0)
+        {
+            throw std::invalid_argument("CopyBufferToImage requires at least one array layer");
+        }
+        if (layerCount > 1 && layerBytes == 0)
+        {
+            throw std::invalid_argument("Multi-layer CopyBufferToImage requires layerBytes");
+        }
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
         if (!flipY)
         {
-            vk::BufferImageCopy region;
-            region
-                .setBufferOffset(0)
-                .setBufferRowLength(0)
-                .setBufferImageHeight(0)
-                .setImageSubresource(vk::ImageSubresourceLayers()
-                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                    .setMipLevel(0)
-                    .setBaseArrayLayer(0)
-                    .setLayerCount(1))
-                .setImageOffset(vk::Offset3D{ 0, 0, 0 })
-                .setImageExtent(vk::Extent3D{ width, height, 1 });
-            commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
+            std::vector<vk::BufferImageCopy> regions;
+            regions.reserve(layerCount);
+            for (uint32_t layer = 0; layer < layerCount; ++layer)
+            {
+                vk::BufferImageCopy region;
+                region
+                    .setBufferOffset(static_cast<vk::DeviceSize>(layer) * layerBytes)
+                    .setBufferRowLength(bufferRowLength)
+                    .setBufferImageHeight(0)
+                    .setImageSubresource(vk::ImageSubresourceLayers()
+                        .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                        .setMipLevel(0)
+                        .setBaseArrayLayer(baseArrayLayer + layer)
+                        .setLayerCount(1))
+                    .setImageOffset(vk::Offset3D{ 0, 0, 0 })
+                    .setImageExtent(vk::Extent3D{ width, height, 1 });
+                regions.push_back(region);
+            }
+            commandBuffer.copyBufferToImage(
+                buffer,
+                image,
+                vk::ImageLayout::eTransferDstOptimal,
+                static_cast<uint32_t>(regions.size()),
+                regions.data());
         }
         else
         {
-            std::vector<vk::BufferImageCopy> regions = MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+            std::vector<vk::BufferImageCopy> regions;
+            regions.reserve(static_cast<size_t>(height) * layerCount);
+            for (uint32_t layer = 0; layer < layerCount; ++layer)
+            {
+                std::vector<vk::BufferImageCopy> layerRegions =
+                    MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+                for (vk::BufferImageCopy& region : layerRegions)
+                {
+                    region.bufferOffset += static_cast<vk::DeviceSize>(layer) * layerBytes;
+                    region.imageSubresource.baseArrayLayer = baseArrayLayer + layer;
+                }
+                regions.insert(regions.end(), layerRegions.begin(), layerRegions.end());
+            }
             commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, static_cast<uint32_t>(regions.size()), regions.data());
         }
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }
 
-    inline void CopyImageToBuffer(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, vk::Buffer& buffer, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0)
+    // 子区域上传：只覆盖目标 image 中 (imageOffsetX, imageOffsetY) 起、指定 mip/array layer 的 width×height。
+    // 调用方必须自行把 image 转为 eTransferDstOptimal；本函数只做 copy，不改变 layout。
+    inline void CopyBufferToImageRegion(
+        vk::Device& device,
+        vk::Queue& GraphicsQueue,
+        vk::CommandPool& commandPool,
+        vk::Buffer& buffer,
+        vk::Image& image,
+        vk::DeviceSize bufferOffset,
+        uint32_t bufferRowLength,
+        uint32_t imageOffsetX,
+        uint32_t imageOffsetY,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevel,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0)
     {
+        if (width == 0 || height == 0)
+        {
+            throw std::invalid_argument("CopyBufferToImageRegion requires non-zero width and height");
+        }
+        if (layerCount == 0)
+        {
+            throw std::invalid_argument("CopyBufferToImageRegion requires at least one array layer");
+        }
+        if (layerCount > 1 && layerBytes == 0)
+        {
+            throw std::invalid_argument("Multi-layer CopyBufferToImageRegion requires layerBytes");
+        }
+        if (bufferRowLength != 0 && bufferRowLength < width)
+        {
+            throw std::invalid_argument(
+                "CopyBufferToImageRegion bufferRowLength must be zero or at least width");
+        }
+        // vk::Offset3D 使用 int32；偏移加尺寸超出范围时，转换结果不可信，必须在源头拒绝。
+        if (static_cast<uint64_t>(imageOffsetX) + width > static_cast<uint64_t>(INT32_MAX) ||
+            static_cast<uint64_t>(imageOffsetY) + height > static_cast<uint64_t>(INT32_MAX))
+        {
+            throw std::invalid_argument(
+                "CopyBufferToImageRegion image offset plus extent exceeds int32 range");
+        }
+
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
+        std::vector<vk::BufferImageCopy> regions;
+        regions.reserve(layerCount);
+        for (uint32_t layer = 0; layer < layerCount; ++layer)
+        {
+            vk::BufferImageCopy region;
+            region
+                .setBufferOffset(bufferOffset + static_cast<vk::DeviceSize>(layer) * layerBytes)
+                .setBufferRowLength(bufferRowLength)
+                .setBufferImageHeight(0)
+                .setImageSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(mipLevel)
+                    .setBaseArrayLayer(baseArrayLayer + layer)
+                    .setLayerCount(1))
+                .setImageOffset(vk::Offset3D{
+                    static_cast<int32_t>(imageOffsetX),
+                    static_cast<int32_t>(imageOffsetY),
+                    0 })
+                .setImageExtent(vk::Extent3D{ width, height, 1 });
+            regions.push_back(region);
+        }
+
+        commandBuffer.copyBufferToImage(
+            buffer,
+            image,
+            vk::ImageLayout::eTransferDstOptimal,
+            static_cast<uint32_t>(regions.size()),
+            regions.data());
+
+        EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    // 同步/录制两条路径共用的 region 几何校验，保证非法输入在任何 Vulkan 调用
+    // 之前就被拒绝（空列表由调用方单独检查，错误文案保持各自入口的名字）。
+    inline void ValidateBufferImageCopyRegions(
+        const std::vector<vk::BufferImageCopy>& regions,
+        const char* callerName)
+    {
+        for (const vk::BufferImageCopy& region : regions)
+        {
+            if (region.imageExtent.width == 0 || region.imageExtent.height == 0 ||
+                region.imageExtent.depth == 0)
+            {
+                throw std::invalid_argument(
+                    std::string(callerName) + " requires non-zero region extent");
+            }
+            if (region.imageSubresource.layerCount == 0)
+            {
+                throw std::invalid_argument(
+                    std::string(callerName) + " requires at least one array layer per region");
+            }
+            if (region.imageOffset.x < 0 || region.imageOffset.y < 0 ||
+                region.imageOffset.z < 0)
+            {
+                throw std::invalid_argument(
+                    std::string(callerName) + " requires non-negative image offsets");
+            }
+            // 与单 region 版本相同的 int32 约束：偏移加尺寸必须仍能放进 vk::Offset3D 的坐标空间。
+            const int64_t maxX =
+                static_cast<int64_t>(region.imageOffset.x) + region.imageExtent.width;
+            const int64_t maxY =
+                static_cast<int64_t>(region.imageOffset.y) + region.imageExtent.height;
+            const int64_t maxZ =
+                static_cast<int64_t>(region.imageOffset.z) + region.imageExtent.depth;
+            if (maxX > INT32_MAX || maxY > INT32_MAX || maxZ > INT32_MAX)
+            {
+                throw std::invalid_argument(
+                    std::string(callerName) + " image offset plus extent exceeds int32 range");
+            }
+        }
+    }
+
+    // 只录制批量 copy，不 submit；布局与 staging 生命周期都由调用方负责。
+    // 所有 region 必须是同一 buffer/image 上的子区域，调用方需要先把 image
+    // 转到 eTransferDstOptimal。
+    inline void RecordCopyBufferToImageRegions(
+        vk::CommandBuffer commandBuffer,
+        vk::Buffer buffer,
+        vk::Image image,
+        const std::vector<vk::BufferImageCopy>& regions)
+    {
+        if (regions.empty())
+        {
+            throw std::invalid_argument("RecordCopyBufferToImageRegions requires at least one region");
+        }
+        // 所有几何约束在录制前校验：主帧 command buffer 一旦开始录制就很难回滚，
+        // 非法 region 必须在写入任何命令之前被拒绝。
+        ValidateBufferImageCopyRegions(regions, "RecordCopyBufferToImageRegions");
+        commandBuffer.copyBufferToImage(
+            buffer,
+            image,
+            vk::ImageLayout::eTransferDstOptimal,
+            static_cast<uint32_t>(regions.size()),
+            regions.data());
+    }
+
+    // 批量上传：所有 region 共用同一个 command buffer，一次 submit + wait。
+    // 与单 region 版本一样，调用方负责把 image 预置为 eTransferDstOptimal；
+    // 本函数只做 copy，不改变 layout。返回前 fence 已等到，因此调用方可以立即
+    // 复用或释放这一批 staging buffer，不会留下仍在 GPU 上的引用。
+    inline void CopyBufferToImageRegions(
+        vk::Device& device,
+        vk::Queue& GraphicsQueue,
+        vk::CommandPool& commandPool,
+        vk::Buffer& buffer,
+        vk::Image& image,
+        const std::vector<vk::BufferImageCopy>& regions)
+    {
+        // 先校验再 Begin：非法输入不会留下已开始录制、却永远不会被提交的 command buffer。
+        if (regions.empty())
+        {
+            throw std::invalid_argument("CopyBufferToImageRegions requires at least one region");
+        }
+        ValidateBufferImageCopyRegions(regions, "CopyBufferToImageRegions");
+        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+        RecordCopyBufferToImageRegions(commandBuffer, buffer, image, regions);
+        EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    // 只录制 vkCmdClearColorImage，不 submit。调用方负责先转到
+    // eTransferDstOptimal/eGeneral，并在之后转回采样 layout。
+    // 块压缩格式禁止使用 clearColor；BC atlas 必须走零 buffer 的 copy 路径。
+    inline void RecordClearColorImage(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        vk::ImageLayout layout,
+        vk::ClearColorValue clearValue,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1)
+    {
+        if (layerCount == 0)
+        {
+            throw std::invalid_argument(
+                "RecordClearColorImage requires at least one array layer");
+        }
+        if (layout != vk::ImageLayout::eTransferDstOptimal &&
+            layout != vk::ImageLayout::eGeneral)
+        {
+            throw std::invalid_argument(
+                "RecordClearColorImage requires TransferDst or General layout");
+        }
+        vk::ImageSubresourceRange range;
+        range
+            .setAspectMask(vk::ImageAspectFlagBits::eColor)
+            .setBaseMipLevel(0)
+            .setLevelCount(1)
+            .setBaseArrayLayer(baseArrayLayer)
+            .setLayerCount(layerCount);
+        commandBuffer.clearColorImage(image, layout, clearValue, range);
+    }
+
+    // image -> image 子区域复制的几何校验。源/目标必须是同一 queue family
+    // 且 image 已由调用方转到 TransferSrc/TransferDst。
+    inline void ValidateImageCopyRegions(
+        const std::vector<vk::ImageCopy>& regions)
+    {
+        for (const vk::ImageCopy& region : regions)
+        {
+            if (region.extent.width == 0 || region.extent.height == 0 ||
+                region.extent.depth == 0)
+            {
+                throw std::invalid_argument(
+                    "RecordCopyImageRegions requires non-zero extent");
+            }
+            if (region.srcSubresource.layerCount == 0 ||
+                region.dstSubresource.layerCount == 0)
+            {
+                throw std::invalid_argument(
+                    "RecordCopyImageRegions requires at least one array layer");
+            }
+            if (region.srcOffset.x < 0 || region.srcOffset.y < 0 ||
+                region.srcOffset.z < 0 || region.dstOffset.x < 0 ||
+                region.dstOffset.y < 0 || region.dstOffset.z < 0)
+            {
+                throw std::invalid_argument(
+                    "RecordCopyImageRegions requires non-negative image offsets");
+            }
+            const int64_t srcMaxX =
+                static_cast<int64_t>(region.srcOffset.x) + region.extent.width;
+            const int64_t srcMaxY =
+                static_cast<int64_t>(region.srcOffset.y) + region.extent.height;
+            const int64_t dstMaxX =
+                static_cast<int64_t>(region.dstOffset.x) + region.extent.width;
+            const int64_t dstMaxY =
+                static_cast<int64_t>(region.dstOffset.y) + region.extent.height;
+            if (srcMaxX > INT32_MAX || srcMaxY > INT32_MAX ||
+                dstMaxX > INT32_MAX || dstMaxY > INT32_MAX)
+            {
+                throw std::invalid_argument(
+                    "RecordCopyImageRegions offset plus extent exceeds int32 range");
+            }
+        }
+    }
+
+    // GPU->GPU 批量切页：一张源数组（按 mip/layer 子区域）写入 atlas 的
+    // 物理页。所有 region 共用一个 command buffer，页像素不经过 CPU。
+    inline void RecordCopyImageRegions(
+        vk::CommandBuffer commandBuffer,
+        vk::Image source,
+        vk::Image destination,
+        const std::vector<vk::ImageCopy>& regions)
+    {
+        if (regions.empty())
+        {
+            throw std::invalid_argument(
+                "RecordCopyImageRegions requires at least one region");
+        }
+        ValidateImageCopyRegions(regions);
+        commandBuffer.copyImage(
+            source,
+            vk::ImageLayout::eTransferSrcOptimal,
+            destination,
+            vk::ImageLayout::eTransferDstOptimal,
+            static_cast<uint32_t>(regions.size()),
+            regions.data());
+    }
+
+    // 同步版本：一次 submit + fence wait，调用方负责布局与资源存活。
+    inline void CopyImageRegions(
+        vk::Device& device,
+        vk::Queue& GraphicsQueue,
+        vk::CommandPool& commandPool,
+        vk::Image source,
+        vk::Image destination,
+        const std::vector<vk::ImageCopy>& regions)
+    {
+        if (regions.empty())
+        {
+            throw std::invalid_argument(
+                "CopyImageRegions requires at least one region");
+        }
+        ValidateImageCopyRegions(regions);
+        vk::CommandBuffer commandBuffer =
+            BeginSingleTimeCommands(device, commandPool);
+        RecordCopyImageRegions(commandBuffer, source, destination, regions);
+        EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    // 只录制 image -> buffer 的 copy；调用方负责把 image 转到 eTransferSrcOptimal
+    // 并保证 buffer 足够大、提交完成后才回读。
+    inline void RecordCopyImageToBuffer(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        vk::Buffer buffer,
+        uint32_t width,
+        uint32_t height,
+        bool flipY = false,
+        vk::DeviceSize rowBytes = 0,
+        // 多张图像写进同一个回读 buffer 时用；4 字节对齐由调用方保证。
+        vk::DeviceSize bufferOffset = 0)
+    {
         if (!flipY)
         {
             vk::BufferImageCopy region;
             region
-                .setBufferOffset(0)
+                .setBufferOffset(bufferOffset)
                 .setBufferRowLength(0)
                 .setBufferImageHeight(0)
                 .setImageSubresource(vk::ImageSubresourceLayers()
@@ -1017,13 +1451,25 @@ namespace CommonFunction
         else
         {
             std::vector<vk::BufferImageCopy> regions = MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+            if (bufferOffset != 0)
+            {
+                for (vk::BufferImageCopy& region : regions)
+                    region.bufferOffset += bufferOffset;
+            }
             commandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer, static_cast<uint32_t>(regions.size()), regions.data());
         }
+    }
+
+    inline void CopyImageToBuffer(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, vk::Buffer& buffer, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0)
+    {
+        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+        RecordCopyImageToBuffer(commandBuffer, image, buffer, width, height, flipY, rowBytes);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }
 
-    inline void GenerateMipmaps(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, uint32_t width, uint32_t height, uint32_t mipLevels)
+    // 单层 mip 链；调用方负责逐层循环，避免把不同数组层当成同一个子资源。
+    inline void GenerateMipmapsLayer(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, uint32_t width, uint32_t height, uint32_t mipLevels, uint32_t arrayLayer)
     {
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
@@ -1036,7 +1482,7 @@ namespace CommonFunction
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(0)
                 .setLevelCount(1)
-                .setBaseArrayLayer(0)
+                .setBaseArrayLayer(arrayLayer)
                 .setLayerCount(1));
 
         int32_t mipWidth = width;
@@ -1052,7 +1498,7 @@ namespace CommonFunction
                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
                     .setBaseMipLevel(i - 1)
                     .setLevelCount(1)
-                    .setBaseArrayLayer(0)
+                    .setBaseArrayLayer(arrayLayer)
                     .setLayerCount(1));
 
             commandBuffer.pipelineBarrier(
@@ -1072,7 +1518,7 @@ namespace CommonFunction
                 .setSrcSubresource(vk::ImageSubresourceLayers()
                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
                     .setMipLevel(i - 1)
-                    .setBaseArrayLayer(0)
+                    .setBaseArrayLayer(arrayLayer)
                     .setLayerCount(1))
                 .setDstOffsets
                 ({
@@ -1082,7 +1528,7 @@ namespace CommonFunction
                 .setDstSubresource(vk::ImageSubresourceLayers()
                     .setAspectMask(vk::ImageAspectFlagBits::eColor)
                     .setMipLevel(i)
-                    .setBaseArrayLayer(0)
+                    .setBaseArrayLayer(arrayLayer)
                     .setLayerCount(1));
 
             commandBuffer.blitImage(
@@ -1118,7 +1564,7 @@ namespace CommonFunction
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(mipLevels - 1)
                 .setLevelCount(1)
-                .setBaseArrayLayer(0)
+                .setBaseArrayLayer(arrayLayer)
                 .setLayerCount(1));
 
         commandBuffer.pipelineBarrier(
@@ -1129,5 +1575,25 @@ namespace CommonFunction
             barrier);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    inline void GenerateMipmaps(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, uint32_t width, uint32_t height, uint32_t mipLevels, uint32_t baseArrayLayer = 0, uint32_t layerCount = 1)
+    {
+        if (mipLevels == 0 || layerCount == 0)
+        {
+            throw std::invalid_argument("GenerateMipmaps requires mip levels and array layers");
+        }
+        for (uint32_t layer = 0; layer < layerCount; ++layer)
+        {
+            GenerateMipmapsLayer(
+                device,
+                GraphicsQueue,
+                commandPool,
+                image,
+                width,
+                height,
+                mipLevels,
+                baseArrayLayer + layer);
+        }
     }
 }

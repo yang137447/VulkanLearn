@@ -17,6 +17,7 @@
 
 #include "editor/command/editorCommand.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/selection/materialInstanceSelection.h"
 #include "editor/service/materialInstanceDocumentService.h"
 #include "render/camera/cameraExposure.h"
 #include "support/fakeMaterialInstancePreviewAdapter.h"
@@ -27,6 +28,26 @@ namespace
 using Json = nlohmann::json;
 using namespace VL;
 using namespace VL::Editor;
+
+TEST(MaterialInstanceEditorProduction, TerrainPickAggregationCarriesTheEditorActorIdentity)
+{
+    RenderScene renderScene;
+    renderScene.worldGeneration = 5;
+    RenderDrawPacket packet;
+    packet.objectId = 9;
+    packet.sceneObjectIdentity = "Landscape";
+    packet.materialSlotIndex = 0;
+    packet.materialSlotName = "Terrain";
+    packet.materialInstance = {std::string("MI_ground"), 1};
+    packet.isTerrain = true;
+    renderScene.drawPackets.push_back(std::move(packet));
+
+    const auto model = VL::Editor::Selection::AggregateSceneModel(
+        renderScene, "Maps/SC_terrain/Terrains/TR_ground.json", 9, "Landscape");
+    EXPECT_EQ(model.actorIdentity, "terrain|Landscape");
+    ASSERT_EQ(model.materials.size(), 1u);
+    EXPECT_EQ(model.materials[0].materialInstancePath, "MI_ground");
+}
 
 #ifndef VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR
 #define VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR "."
@@ -1591,6 +1612,37 @@ TEST(MaterialInstanceEditorProduction, BlueprintDocumentsPublishIndependentFroze
     ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
     EXPECT_TRUE(runtime.GetSnapshot().saveFeedback[0].succeeded);
     EXPECT_FALSE(runtime.GetSnapshot().activeDocument.has_value());
+}
+
+TEST(MaterialInstanceEditorProduction, TressfxPublishesIndependentDraftsAndSaveCompletion)
+{
+    ProductionFixture fixture;
+    const std::string path = "TF_test.json";
+    WriteJson(fixture.resourceRoot / path, {{"name", "Hair"}, {"type", "tressfx"},
+        {"modelDataPath", "guides.tfx"}, {"strandRadius", 0.035},
+        {"materialSlots", Json::array({{{"name", "hair"}, {"materialInstancePath", kMaterialInstancePath}}})}});
+    std::ofstream(fixture.resourceRoot / "guides.tfx") << "Document-only source";
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    SubmitRuntimeCommand(runtime, 801, EditorCommandType::GetTressfxDocument, MaterialInstanceAssetPathPayload{path});
+    ASSERT_EQ(runtime.GetSnapshot().tressfxDocuments.size(), 1u);
+    const auto frozen = runtime.GetSnapshot().tressfxDocuments;
+    EditorAssetFieldChange change;
+    change.field = "simulationDefaults.damping";
+    change.value = 0.02;
+    SubmitRuntimeCommand(runtime, 802, EditorCommandType::ModifyTressfxDocument,
+        ModifyAssetDocumentPayload{path, {change}}, 1);
+    ASSERT_EQ(runtime.GetCommandResult(802)->status, EditorCommandStatus::Succeeded);
+    ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+    EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments[0].kind, EditorUi::EditorAssetKind::Tressfx);
+    EXPECT_FALSE(frozen[0].document.contains("simulationDefaults"));
+    SubmitRuntimeCommand(runtime, 803, EditorCommandType::SaveTressfxDocument,
+        MaterialInstanceAssetPathPayload{path}, 2);
+    EXPECT_EQ(runtime.GetCommandResult(803)->status, EditorCommandStatus::Succeeded);
+    ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
+    EXPECT_TRUE(runtime.GetSnapshot().saveFeedback[0].succeeded);
+    EXPECT_EQ(runtime.GetSnapshot().saveFeedback[0].assetPath, path);
+    EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
 }
 
 TEST(MaterialInstanceEditorProduction, BlueprintHistoryAfterSavePublishesNewRevisionAndKeepsDiskUnchanged)
