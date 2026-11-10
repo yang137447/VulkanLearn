@@ -220,8 +220,21 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     const vec4 globalMasks = texture(globalMasks, globalClamped);
     // 直接向宏观色混合，而不是只传色相：烘好的图本身已经带了大尺度绿/紫
     // 分布，除以亮度会把蓝通道压到 0.4 左右，叠加干燥草地后整体发褐。
-    // 1.5 的增益补偿 bake 进去的遮蔽，tiling 仍保留近景细节。
-    albedo.rgb = mix(albedo.rgb, macroColour * 1.5, u_globalColourWeight);
+    // 1.5 的增益补偿 bake 进去的遮蔽。
+    //
+    // 全局图只有 2 m/texel，恒定权重会把近处 0.25 m/texel 的 tiling 细节
+    // 抹平；因此按相机距离从 near 权重淡入到 full 权重：近处靠 tiling，
+    // 远处才让宏观色接管（同时压制平铺重复）。
+    const float globalViewDistanceM =
+        length(context.worldPosition - uboVP.cameraPosition) * 0.01;
+    const float globalFadeStartM = u_globalFadeStartM;
+    const float globalFadeEndM =
+        max(u_globalFadeEndM, globalFadeStartM + 1.0);
+    const float macroFade = smoothstep(
+        globalFadeStartM, globalFadeEndM, globalViewDistanceM);
+    const float macroWeight = mix(
+        u_globalColourWeightNear, u_globalColourWeight, macroFade);
+    albedo.rgb = mix(albedo.rgb, macroColour * 1.5, macroWeight);
 
     if (u_debugMode > 2.5)
     {

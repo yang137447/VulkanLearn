@@ -190,6 +190,24 @@
             "range": {"min": 0.0, "max": 1.0},
             "description": "how strongly the macro colour map tints the tiling albedo (hue only, brightness preserved)"
         },
+        "u_globalColourWeightNear": {
+            "type": "float",
+            "default": 0.15,
+            "range": {"min": 0.0, "max": 1.0},
+            "description": "macro colour weight close to the camera; keeps tiling detail readable"
+        },
+        "u_globalFadeStartM": {
+            "type": "float",
+            "default": 40.0,
+            "range": {"min": 0.0, "max": 8000.0},
+            "description": "camera distance in metres where the macro colour starts fading in"
+        },
+        "u_globalFadeEndM": {
+            "type": "float",
+            "default": 400.0,
+            "range": {"min": 1.0, "max": 20000.0},
+            "description": "camera distance in metres where the macro colour reaches its full weight"
+        },
         "u_globalAoStrength": {
             "type": "float",
             "default": 1.0,
