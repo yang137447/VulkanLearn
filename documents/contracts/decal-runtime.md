@@ -10,7 +10,9 @@ geometry
   -> decalStencil（D24S8，unit cube 写 stencil bit0）
   -> decals（stencil test + 写 DBuffer A/B/C/D 与 DBufferMask）
   -> deferredLighting
-  -> forwardOpaque / sky / forwardTransparent / particle
+  -> forwardOpaque / sky
+  -> sceneColorCopyPass
+  -> forwardTransparent / particle
 ```
 
 `decalStencil` 是独立的 `RenderGraphPassType::DecalStencil`，只挂
@@ -49,7 +51,10 @@ unit cube、实例 SSBO、pipeline 与 descriptor，并额外拥有
 forward opaque 通过 set 3 binding 1..5 绑定 `dbufferA/B/C/D/Mask`，在材质
 forward shading 前调用同一个 `ApplyDecalDBuffer`。透明表面不读取 DBuffer：
 它在 deferred depth 之前时没有可靠的逐像素 decal 深度，直接把后方 opaque
-的贴花串到前方透明面上会产生错误遮挡。
+的贴花串到前方透明面上会产生错误遮挡。`sceneColorCopyPass` 在
+`forwardTransparent` 之前复制已经合成 decal 的 `sceneColor`；玻璃折射读取
+这份拷贝，因此背景 decal 出现在折射画面里，但玻璃表面本身不额外采样
+DBuffer。
 
 ## 场景对象
 

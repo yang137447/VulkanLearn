@@ -140,6 +140,16 @@
             ]
         },
         {
+            "name": "sceneColorCopy",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
             "name": "autoExposure",
             "format": "R32_SFLOAT",
             "widthSize": 1,
@@ -1001,6 +1011,31 @@
             ]
         },
         {
+            "name": "sceneColorCopyPass",
+            "type": "postProcess",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/Pass/MI_sceneColorCopy.json",
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sceneColor",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColorCopy",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "forwardTransparent",
             "type": "forwardTransparent",
             "needMsaa": false,
@@ -1022,6 +1057,14 @@
                 {
                     "resource": "dbufferEmissive",
                     "binding": 7
+                },
+                {
+                    "resource": "sceneColorCopy",
+                    "binding": 8
+                },
+                {
+                    "resource": "gbufferA",
+                    "binding": 9
                 }
             ],
             "output": [

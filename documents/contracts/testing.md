@@ -819,6 +819,14 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 
 ## 改动 → 验证
 
+屏幕空间玻璃折射的契约测试是 `GlassRefractionGraph.*`：
+`ctest --test-dir build -R '^GlassRefractionGraph\.' --output-on-failure`。
+它验证 `sceneColorCopy` 的格式/usage、copy pass 位于 `sky` 与
+`forwardTransparent` 之间、`forwardTransparent` 的 binding 8/9、
+`M_glassRefraction` 的 Unlit + `TransparentAlphaBlend` 路径，以及
+gallery MI 指向折射材质。画面验收运行 `SC_ue_impact_variants` headless
+screenshot；日志要求 `Scene.LoadFailed=0`、`VUID-` 0 次、stderr 为空。
+
 公共 [DrawDebug](debug-draw.md) 的 CPU 套件为 `debug_draw_tests`：
 几何、生命周期/帧命令时序、key/句柄、过滤、预算、投影和 Console 解析。
 `ScriptDebugDrawTest` 使用真实 CLR 验证 API、回滚、发布者、

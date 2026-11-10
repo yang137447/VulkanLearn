@@ -7,6 +7,7 @@ add_executable(vl_renderer_backend_tests
     decal_normal_blend_test.cpp
     decal_stencil_graph_test.cpp
     decal_emissive_test.cpp
+    glass_refraction_graph_test.cpp
     particle_light_gpu_test.cpp
     particle_light_brightness_test.cpp
     particle_curve_tangent_test.cpp

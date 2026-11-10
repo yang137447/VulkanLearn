@@ -2029,6 +2029,14 @@ particle-driven decal 生成，不再保留静态 `ImpactCrater` 场景对象。
 碎块复用 `SM_rock`，贴图与 decal
 图案为程序化等价物；只有碎块使用现有三角网格 ground 碰撞，火花不启用碰撞。
 
+`Maps/SC_particle_ue_impact_variants/SC_ue_impact_variants.json` 的玻璃靶墙使用
+`M_glassRefraction` + `MI_ue_gallery_wall_glass`：render graph 在 `sky` 之后
+复制 `sceneColorCopy`，`forwardTransparent` 用 set 3 binding 8/9 采样场景颜色
+拷贝与 `gbufferA`，按世界法线、视线和 IOR 计算屏幕空间折射偏移。它是
+`TransparentAlphaBlend` 的 Unlit 材质，不使用 Material Graph；decal 仍由
+`deferredLighting` 写入 `sceneColor`，所以弹孔会出现在玻璃背后的折射画面里。
+边界见 `contracts/glass-refraction.md`。
+
 ```powershell
 main.exe --initial-scene Maps/SC_particle_ue_impact/SC_ue_impact_concrete.json --no-dev-ui --focus-window
 ```

@@ -719,8 +719,10 @@ TEST(LocalShadowSampling, LightingEntryPointsConsumeShadowSampler)
         particleLighting,
         "vec3 CalculateParticleBillboardSceneLighting(\n"
         "    sampler2DArrayShadow localShadowMap,"));
-    // GPU 粒子灯明确不投影：合成 Light 时写 slice = -1。
-    EXPECT_TRUE(Contains(particleLighting, "vec4(-1.0),"));
+    // GPU 粒子灯现在走 ParticlePointLightGPU + shadowParams 的完整点光入口；
+    // 不再在 fragment 合成处硬编码无阴影 slice。
+    EXPECT_TRUE(Contains(particleLighting, "ParticlePointLightGPU light"));
+    EXPECT_TRUE(Contains(particleLighting, "AccumulateParticlePointLight("));
 
     const std::string deferredPass =
         ReadSource("shader/glsl/pass/deferredLighting.frag");

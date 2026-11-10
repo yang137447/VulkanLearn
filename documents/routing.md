@@ -45,6 +45,7 @@
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
+| `shader/glsl/M_glassRefraction.*`、`shader/glsl/M_glassRefraction.surface.glsl`、`config/renderGraphConfig.json` 的 `sceneColorCopy` / `forwardTransparent`、`tool/renderer-backend-tests/glass_refraction_graph_test.cpp` | `contracts/glass-refraction.md`、`contracts/vulkanlearn-architecture.html` | — |
 | 论文 case 验证：`tool/validation/**` | `rationale/shading-model-case-records.md`（证据归档）、`plan/rendering/shading-model-alignment-plan.md` | — |
 | 粒子特效验收：`tool/validation/particle/**` | `plan/rendering/niagara-effects-alignment-plan.md` | — |
 | `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]`、`[rmlui-shrink-to-fit-max-width]` 条 | — |
