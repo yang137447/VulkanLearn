@@ -63,7 +63,7 @@ cmake -S . -B build -G "MinGW Makefiles"
 执行以下命令进行编译：
 
 ```bash
-cmake --build build -j
+cmake --build build --target main_editor main_game main -j 4
 ```
 
 如果你的 MinGW 环境没有自动进入 `PATH`，请先确保 `g++`、`gcc` 和 `mingw32-make` 可用，再执行上面的 CMake 命令。
@@ -84,6 +84,16 @@ cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_BUILD_GAME=OFF
 `VULKANLEARN_ENABLE_EDITOR` 与 `VULKANLEARN_BUILD_GAME` 不能同时为 `OFF`；
 `VULKANLEARN_BUILD_LEGACY_MAIN=OFF` 可关闭 `main.exe` 兼容副本。
 
+两个入口都支持 `--exit-after-frames <N>` 正常退出，便于脚本化烟测：
+
+```powershell
+build\bin\main_editor.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 60
+build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 120 --worker-thread-count 2 --no-dev-ui
+```
+
+`main_game` 不加载编辑器文档、面板或 `editorGrid` pass；运行时/编辑器边界由
+`tool\architecture-boundary-audit.ps1` 与 configure 期 include 门禁共同守护。
+
 ### C# 蓝图 游戏逻辑
 
 Windows x64 安装 .NET 8 SDK 后开启：
@@ -91,7 +101,7 @@ Windows x64 安装 .NET 8 SDK 后开启：
 ```powershell
 cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON
 cmake --build build -j8
-.\build\bin\main.exe --dev-ui
+.\build\bin\main_editor.exe --dev-ui
 ```
 
 未进入 PATH 的 SDK 可通过 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.exe`
@@ -129,15 +139,30 @@ Compound/静态三角网格、碰撞过滤、Fixed/Hinge 约束、接触/Trigger
 Editing 时 BP JSON 内容变化自动走 World 事务重载，播放时延后至 Stop。
 构建配置决定托管 Debug/Release；`cmake --build build --target vl_script_package`
 把私有 .NET 8 运行时放入 `build/bin/managed/dotnet`，随程序及 managed 目录搬移。
-完整游戏包可直接导出到一个尚不存在的目录：
+开发包（dev flavor）可直接导出到一个尚不存在的目录：
 
 ```powershell
-cmake --build build --target main vl_export_game -j8
+cmake --build build --target main_editor vl_export_game -j 4
 .\build\bin\vl_export_game.exe --project-root . --initial-scene Maps/SC_actor_gameplay/SC_actor_gameplay.json --output artifacts/game-export
 ```
 
-导出器递归收集场景资产、shader、UI、原生 DLL、Gameplay 与私有 .NET 8，
-写入 `game-export-manifest.json`，关闭编辑器并自动 Play；导出后的 `main.exe` 可从任意工作目录启动。
+运行时-only 游戏包必须用 `main_game` 与 Release shader cache 导出；导出器拒绝
+`main.exe`、Debug cache 和缺失的 `vl_build_flavor.json`：
+
+```powershell
+cmake -S . -B build-game -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DVULKANLEARN_ENABLE_EDITOR=OFF
+cmake --build build-game --target main_game vl_export_game -j 4
+build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
+build-game\bin\vl_export_game.exe --project-root . --flavor game `
+  --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `
+  --output artifacts/game-package
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\validate-game-package.ps1 `
+  -PackagePath artifacts/game-package -VerifyTool build-game\bin\vl_export_game.exe
+```
+
+导出器收集场景资产、shader cache 闭包、运行时 UI manifest、原生 DLL、Gameplay 与私有 .NET 8，
+写入 `game-export-manifest.json`，关闭编辑器并自动 Play；`main_game.exe` 可从任意工作目录启动。
+游戏包校验还会启动包内 `main_game.exe`，要求 `misses=0` 且无编辑器 UI/shader 泄漏。
 运行时拼接出的额外 BP/资产路径需用 `--dynamic-assets assets.json` 显式列入，
 该文件内容是资源根相对路径的 JSON 字符串数组；不解析任意 C# 字符串。
 目标机器仍需 Windows x64 和兼容的 Vulkan 驱动，无需安装 .NET SDK。
@@ -197,7 +222,7 @@ Shader 也会按现有 Release 策略生成，不是仅关闭校验的单变量�
 ```powershell
 cmake -S . -B build-perf -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVULKANLEARN_ENABLE_VULKAN_VALIDATION=OFF -DVULKANLEARN_BUILD_TESTS=OFF -DVULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION=OFF
 cmake --build build-perf --target main -j4
-.\build-perf\bin\main.exe --initial-scene Maps/SC_sifi_head/SC_sifi_head.json
+.\build-perf\bin\main_editor.exe --initial-scene Maps/SC_sifi_head/SC_sifi_head.json
 ```
 
 对照时固定场景、窗口尺寸、相机和 Details 选中状态，排除启动与编译期间数据。
@@ -255,8 +280,8 @@ Color 参数目前通过 Linear RGBA 数值编辑，不提供旧的 sRGB 调色�
 `--dev-ui` 和 `--no-dev-ui` 可以覆盖配置中的开发者 UI 开关：
 
 ```bash
-build/bin/main.exe --dev-ui
-build/bin/main.exe --no-dev-ui
+build/bin/main_editor.exe --dev-ui
+build/bin/main_game.exe --no-dev-ui
 ```
 
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
@@ -323,8 +348,8 @@ AshikhminSlantedVelvet 的已验证配置，遇到不支持的环境、光源、
 Lambert 受控场景，启动不修改全局 `initScene`：
 
 ```powershell
-build/bin/main.exe --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
-build/bin/main.exe --offline --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
+build/bin/main_editor.exe --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
 ```
 
 离线-only 的 A/B 双片案例在
@@ -338,7 +363,7 @@ build/bin/main.exe --offline --initial-scene Maps/SC_offline_shared/SC_offline_s
 有效 UV 的 FBX 布面，观察真实几何下的两种离线散射响应：
 
 ```powershell
-build/bin/main.exe --offline --initial-scene Maps/SC_offline_cloth/SC_offline_cloth_drape.json --dev-ui
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_offline_cloth/SC_offline_cloth_drape.json --dev-ui
 ```
 
 这仍是自建几何对照，不是带人模服装的 S-17 验收或论文原图复刻。
@@ -351,8 +376,8 @@ Ashikhmin、Premože 与 Shirley 2000 Fig. 11 的 Satin / Velvet 是两种独立
 启动后设 `offline bounces 0`：
 
 ```powershell
-build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin.json
-build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin.json
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json
 ```
 
 Satin 的纤维方向取 UV0 U，MI 可通过 `u_fiberRotationDegrees` 旋转；
@@ -365,8 +390,8 @@ Fig. 13 的黑色与红色倾斜纤维 Velvet 使用独立离线模型
 两个场景仅改变染色，共用近观察方向的平行光和无地面背景：
 
 ```powershell
-build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black.json --console-command "offline bounces 0"
-build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red.json --console-command "offline bounces 0"
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black.json --console-command "offline bounces 0"
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red.json --console-command "offline bounces 0"
 ```
 
 束轴与法线夹角为论文的 40°，侧面微法线平均方向相应倾斜 50°；
@@ -381,7 +406,7 @@ Estévez 与 Kulla 2017 Fig. 1 的 A 臂红布粗糙度扫描使用独立论文�
 五块同源布面从左到右取 `r=0.15/0.25/0.40/0.65/1.0`：
 
 ```powershell
-build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_estevez_kulla_2017_sheen_roughness/SC_paper_case_estevez_kulla_2017_sheen_roughness.json --dev-ui
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_paper_case_estevez_kulla_2017_sheen_roughness/SC_paper_case_estevez_kulla_2017_sheen_roughness.json --dev-ui
 ```
 
 论文没有给出 Fig. 1 的完整相机、灯光和颜色数值；这里的平行光与灰色
@@ -394,7 +419,7 @@ Ashikhmin、Premože 与 Shirley 2000 §6.4 / Fig. 11 右图的 Velvet
 `offline bounces 0` 后再观察和导出：
 
 ```powershell
-build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json --dev-ui
+build/bin/main_editor.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json --dev-ui
 ```
 
 此 case 验证材质响应，不是 Fig. 11 的像素级复刻，也不增加 runtime `ShadingModelID`。
@@ -442,7 +467,7 @@ Oak 使用固定顶点和贴图接缝回归；其他树种自动选择各 sectio
 
 如果 Modeler 安装在其他位置，配置时传入
 `-DSPEEDTREE_MODELER_ROOT=<Modeler 根目录>`。没有 SDK 的机器会跳过这个可选目标，
-不会影响 `main.exe`。顶点对照目前是 CPU 上的双公式求值，不是 Vulkan shader 的
+不会影响编辑器/游戏可执行文件。顶点对照目前是 CPU 上的双公式求值，不是 Vulkan shader 的
 GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
 
 ## 运行时资源位置
@@ -463,7 +488,7 @@ GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
 不会改写配置文件：
 
 ```bash
-build/bin/main.exe --initial-scene Maps/SC_speedtree/SC_speedtree.json
+build/bin/main_editor.exe --initial-scene Maps/SC_speedtree/SC_speedtree.json
 ```
 
 ## Shader 增量编译与热重载
@@ -498,9 +523,9 @@ CPU 编译在独立 worker 完成，EngineLoop 在 Render Thread 安全点创建
 可重复验证入口（全部 `--exit-after-tests`，退出码 0 成功、2 失败，串行执行）：
 
 ```text
-build/bin/main.exe --shader-reload-test --exit-after-tests
-build/bin/main.exe --shader-compute-reload-test --exit-after-tests
-build/bin/main.exe --world-graph-transaction-test --exit-after-tests
+build/bin/main_editor.exe --shader-reload-test --exit-after-tests
+build/bin/main_editor.exe --shader-compute-reload-test --exit-after-tests
+build/bin/main_editor.exe --world-graph-transaction-test --exit-after-tests
 ```
 
 `--shader-force-rebuild` 强制重建全部启动 artifact。模块单元/集成测试统一由
@@ -548,7 +573,7 @@ Tracy 适合在开发过程中实时查看 CPU 函数耗时、帧率波动和内
 1.  **启动 Tracy**：
     运行下载的 `Tracy.exe`，点击界面的 **"Connect"** 按钮等待连接。
 2.  **运行程序**：
-    启动 `build/bin/main.exe`。
+    启动 `build/bin/main_editor.exe`。
 3.  **查看数据**：
     Tracy 会自动连接并开始滚动显示实时火焰图。
 
@@ -562,7 +587,7 @@ Nsight Systems 适合分析 CPU 与 GPU 的交互、Vulkan API 的调用时序�
 2.  **创建项目**：
     打开 Nsight Systems，创建一个新项目。
 3.  **配置目标**：
-    - **Target application**: 选择你的 `build/bin/main.exe`。
+    - **Target application**: 选择你的 `build/bin/main_editor.exe`。
     - **Working directory**: 建议设置为项目根目录 (例如 `D:\GitHub\VulkanLearn`)，并确保 `config/config.json` 中的 `resourcePath` 指向可用资源仓库。
 4.  **开始录制**：
     点击 **"Start"** 按钮，程序会自动运行。
@@ -616,9 +641,15 @@ while (running) {
 ```
 
 ## 目录结构
-- `source/`: 源代码
+- `source/`: 源代码；`vl_runtime`、`vl_editor_asset_core`、`vl_editor` 与
+  `vl_editor_widgets` 的源码归属由 `source/CMakeLists.txt` 决定
+- `source/editor/**`、`source/render/editor/**`: 编辑器专用源码，只由编辑器目标编译
+- `source/render/{frame,shadow,postprocess,environment,terrain,hair,picking,preview,world,renderable}/`:
+  `RenderSystem`、渲染对象与地形加载的生产模块
+- `source/engine/{frame,ui,script,window,perf}/`: `EngineLoop` 生产模块
 - `shader/`: GLSL 着色器
 - `resources/`: 不再作为运行时资产目录；运行时资产由 `config/config.json -> resourcePath` 指定
 - `config/`: 渲染管线和场景配置
 - `documents/`: 正式设计文档和规划文档
 - `extern/`: 第三方库 (SDL3, Assimp, GLM, Tracy, NVTX 等)
+- `tool/game-export/`、`tool/validate-game-package.ps1`: game flavor 导出闭包与包验证

@@ -19,6 +19,10 @@
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
 #include "engine/modelPreviewCamera.h"
+#include "engine/frame/engineFramePhases.h"
+#include "engine/script/engineScriptBuild.h"
+#include "engine/ui/engineUiActions.h"
+#include "engine/window/engineWindowLifecycle.h"
 #include "ui/uiSubsystem.h"
 #include "ui/viewModel/runtimeUiSections.h"
 #include "engine/worldGraphTransactionCoordinator.h"
@@ -175,6 +179,11 @@ private:
         WorldGraphTransactionTestFaultInjection injection) noexcept;
     void ProcessRequestedWorldTransition(
         RuntimeCommandExecutionResult& commandResult);
+
+    // 把 EngineLoop 现有成员打包成各模块的显式上下文；不复制权威状态。
+    EngineScriptBuildContext MakeScriptBuildContext();
+    EngineUiActionContext MakeUiActionContext();
+    EngineWindowLifecycleContext MakeWindowLifecycleContext();
 
     uint64_t GetShaderReloadWorldGeneration() const noexcept override;
     void WaitForShaderReloadSafePoint() override;

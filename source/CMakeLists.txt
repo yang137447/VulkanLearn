@@ -139,6 +139,18 @@ if(MINGW)
 endif()
 
 if(VULKANLEARN_ENABLE_EDITOR)
+    # 资产核心拥有不依赖 RmlUi/GPU 的命令、服务与持久化实现。它必须链接
+    # vl_runtime：contentHash/atomicFile/meshAssetValidator 等符号由运行时
+    # 归档提供，把同样的源再编一遍会在链接期产生重复定义。
+    file(GLOB_RECURSE editor_asset_core_sources CONFIGURE_DEPENDS
+        "editor/command/*.h" "editor/command/*.cpp"
+        "editor/service/*.h" "editor/service/*.cpp"
+        "editor/persistence/*.h" "editor/persistence/*.cpp")
+    add_library(vl_editor_asset_core STATIC ${editor_asset_core_sources})
+    target_include_directories(vl_editor_asset_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(vl_editor_asset_core PUBLIC vl_runtime)
+    vl_apply_runtime_options(vl_editor_asset_core)
+
     file(GLOB_RECURSE editor_sources CONFIGURE_DEPENDS
         "editor/*.h" "editor/*.cpp"
         "render/editor/*.h" "render/editor/*.cpp")
@@ -149,10 +161,28 @@ if(VULKANLEARN_ENABLE_EDITOR)
         "${CMAKE_CURRENT_SOURCE_DIR}/ui/uiViewModelSections.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/ui/uiEditorViewModelSections.h")
 
+    # 这三类源只属于资产核心；一旦同时留在 editor_sources 里，同一个 TU
+    # 会在两个静态库中各存一份，链接时按需拉取归档成员就会撞成重复符号。
+    list(FILTER editor_sources EXCLUDE REGEX "/source/editor/(command|service|persistence)/")
+
+    # configure 阶段先兜底：资产核心不得与运行时源或编辑器源重叠。
+    foreach(asset_core_source IN LISTS editor_asset_core_sources)
+        list(FIND sources "${asset_core_source}" runtime_source_index)
+        if(NOT runtime_source_index EQUAL -1)
+            message(FATAL_ERROR
+                "vl_editor_asset_core source '${asset_core_source}' is also compiled by vl_runtime")
+        endif()
+        list(FIND editor_sources "${asset_core_source}" editor_source_index)
+        if(NOT editor_source_index EQUAL -1)
+            message(FATAL_ERROR
+                "vl_editor_asset_core source '${asset_core_source}' is also compiled by vl_editor")
+        endif()
+    endforeach()
+
     add_library(vl_editor STATIC ${editor_sources})
     target_include_directories(vl_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(vl_editor
-        PUBLIC vl_runtime
+        PUBLIC vl_runtime vl_editor_asset_core
         PRIVATE vl_editor_widgets)
     vl_apply_runtime_options(vl_editor)
 

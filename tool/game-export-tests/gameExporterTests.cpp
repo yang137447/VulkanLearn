@@ -151,6 +151,9 @@ protected:
         for (const auto* shader : {
                  "engine/skinnedDeform.comp",
                  "terrain/terrainPageBake.comp",
+                 "pass/autoExposureHistogram.comp",
+                 "pass/autoExposureAdapt.comp",
+                 "generator/brfdLut.comp",
                  "generator/skyToCubemap.comp",
                  "generator/skySHGenerate.comp",
                  "generator/prefilterEnvMap.comp",
@@ -182,6 +185,13 @@ protected:
              {"debugVertex", "spv/uiOverlay.vert.debug"},
              {"debugFragment", "spv/uiOverlay.frag.debug"}},
             {"uiOverlay.vert", "uiOverlay.frag"}, {"uiOverlay.vert", "uiOverlay.frag"}));
+        add(ShaderArtifact("GraphicsPair",
+            "kind=GraphicsPair|shaderName=offlineDisplay|renderMode=Opaque|shadingModel=SHADING_MODEL_UNLIT|macros=|target=Vulkan1.4",
+            {{"runtimeVertex", "spv/offlineDisplay_vert.spv"},
+             {"runtimeFragment", "spv/offlineDisplay_frag.spv"},
+             {"debugVertex", "spv/offlineDisplay_vert.debug"},
+             {"debugFragment", "spv/offlineDisplay_frag.debug"}},
+            {"offlineDisplay.vert", "offlineDisplay.frag"}, {"offlineDisplay.vert", "offlineDisplay.frag"}));
         add(ShaderArtifact("MaterialGraphicsPair",
             "kind=MaterialGraphicsPair|materialSource=M_glass_crack.json|pass=Base|features=writesEveryPixel=1|usesOpacityMask=0|modifiesMeshPosition=0|twoSided=0|vertexFactory=StaticMesh|compileTarget=Vulkan1.4|variant=shaderName=glass_crack|renderMode=Opaque|shadingModel=SHADING_MODEL_UNLIT|macros=|vertexEvaluation=M_glass_crack.vertex.glsl|surfaceEvaluation=M_glass_crack.surface.glsl|parameterInclude=generate/M_glass_crackParamter.glsl",
             {{"runtimeVertex", "spv/material/glass_crack.vert.spv"},

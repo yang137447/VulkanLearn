@@ -1,3 +1,7 @@
+# 本目标刻意自带一份运行时切片（World/快照/地形/图像 IO 等 26 个 TU 也由
+# vl_runtime 拥有）。P5 只迁移资产核心；若在这里链接 vl_editor_asset_core，
+# 它传递的 vl_runtime 会与这 26 个 TU 重复，因此保留内联编译，迁移留给
+# 让这些测试直接链接 vl_editor 的后续阶段。
 add_executable(editor_ui_tests
     editorUiTests.cpp
     brushTests.cpp

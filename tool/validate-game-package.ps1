@@ -16,11 +16,11 @@ function Read-Json([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         Fail "missing JSON file: $Path"
     }
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 function Get-UiReferences([string]$Path) {
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
     $references = New-Object System.Collections.Generic.List[string]
     $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
     if ($extension -eq ".rml") {
@@ -182,12 +182,9 @@ foreach ($material in $shaderManifest.materials) {
         Fail "retained M_ asset is missing: $relative"
     }
 }
-foreach ($generated in $shaderManifest.generatedAtStartup) {
-    $relative = "shader/glsl/" + ($generated.path -replace '\\', '/')
-    if (Test-Path -LiteralPath (Join-Path $PackagePath $relative)) {
-        Fail "generated shader include was packaged: $relative"
-    }
-}
+# Pass materials depend on generated includes that the runtime does not
+# regenerate (only MI-referenced M_ assets are rebuilt at startup), so they
+# are shipped with their digests. MI-generated includes are ignored here.
 $cachePath = "shader/" + ($shaderManifest.cache.path -replace '\\', '/')
 if (-not (Test-Path -LiteralPath (Join-Path $PackagePath $cachePath) -PathType Leaf)) {
     Fail "packaged shader cache is missing: $cachePath"
@@ -218,7 +215,10 @@ $resolvedVerifyTool = Assert-VerifyTool $VerifyTool
 if ([string]::IsNullOrEmpty($resolvedVerifyTool)) {
     Fail "vl_export_game.exe --verify-package is required for digest verification; pass -VerifyTool"
 }
+$nativePreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $verifyOutput = & $resolvedVerifyTool --verify-package $PackagePath 2>&1
+$ErrorActionPreference = $nativePreference
 if ($LASTEXITCODE -ne 0) {
     Fail "vl_export_game --verify-package failed: $($verifyOutput -join ' ')"
 }
@@ -228,11 +228,14 @@ if (-not (Test-Path -LiteralPath $gameExecutable -PathType Leaf)) {
     Fail "game package must contain main_game.exe"
 }
 Push-Location $PackagePath
+$nativePreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 try {
     $smokeOutput = & $gameExecutable --exit-after-frames $SmokeFrames --no-dev-ui 2>&1
     $smokeExit = $LASTEXITCODE
 }
 finally {
+    $ErrorActionPreference = $nativePreference
     Pop-Location
 }
 $smokeText = $smokeOutput -join "`n"

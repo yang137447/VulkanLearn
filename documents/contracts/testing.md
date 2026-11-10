@@ -13,15 +13,82 @@
 | 命令 | 前提 | 验证内容 | 何时运行 |
 | --- | --- | --- | --- |
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
-| `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 74 条规则索引（生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
+| `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 90 条规则检查索引（81 个命名规则；生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
 | `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
 | `py -3 tool/validate_model_descriptors.py` | 资源工作树可访问 | 扫描正式 SM_/TF_ 描述符，共享无依赖 schema checker 支持同级引用、封闭字段与数值边界 | 改 model/TressFX schema 或正式描述符后 |
-| `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 74 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
+| `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 81 个命名的架构边界规则（90 条检查；禁止词、cutover、运行时/编辑器所有权、游戏包闭包、生命周期句柄采用等） | 改 `source/**`、`source/CMakeLists.txt` 或游戏导出脚本后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |
 | `ctest --test-dir build -R <regex> --output-on-failure` | 已构建对应目标 | 模块测试 | 见下"改动 → 验证" |
-| `.\build\bin\main.exe --dev-ui` | 已构建、`config/config.json` 可解析 | 端到端渲染/交互 | UI 或渲染路径改动后（见"手工与像素验证"） |
+| `.\build\bin\main_editor.exe --dev-ui` | 已构建、`config/config.json` 可解析 | 端到端渲染/交互 | UI 或渲染路径改动后（见"手工与像素验证"） |
 | `<blender-python> tool/blender-terrain-import/terrain_erosion_tests.py -v` | Blender 5.2 Python（含 numpy） | MFD/D8 汇流差异、沉积质量账、抬升耦合、沉积长度尺度 | 改 `tool/blender-terrain-import/terrain_erosion.py` 后；也可通过 `VULKANLEARN_TERRAIN_EROSION_PYTHON` 注册为 CTest 项 |
+
+## 构建矩阵与运行时/编辑器边界
+
+默认 configure 同时生成编辑器与游戏 flavor；两者共享 `vl_runtime`，但编辑器源码
+只进入编辑器目标。`VULKANLEARN_ENABLE_EDITOR` 与 `VULKANLEARN_BUILD_GAME` 同时
+为 `OFF` 时 configure 以非零退出码失败，这是受支持的最小失败用例。
+
+| 目的 | configure | 构建与断言 |
+| --- | --- | --- |
+| 编辑器 + 游戏 | `cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_BUILD_TESTS=ON` | `cmake --build build --target main_editor main_game main -j 4`；`main.exe` 是 `main_editor.exe` 的 POST_BUILD 副本，不二次编译 |
+| game-only Release | `cmake -S . -B build-game -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DVULKANLEARN_ENABLE_EDITOR=OFF` | `cmake --build build-game --target main_game -j 4`；`build-game/compile_commands.json` 中 `source/editor/` 条目数为 0；`linkLibs.rsp` 不含 `vl_editor`、`vl_editor_asset_core` |
+| 双 flavor 关闭 | `cmake -S . -B build-none -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_EDITOR=OFF -DVULKANLEARN_BUILD_GAME=OFF` | configure 退出码非 0，输出 `VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF` |
+
+`VULKANLEARN_BUILD_LEGACY_MAIN=OFF` 关闭 `main.exe` 兼容副本。构建 flavored
+可执行文件时 CMake 在二进制旁写 `vl_build_flavor.json`（`flavor` 与
+`editorEnabled`）；`vl_export_game --flavor game` 只接受 `editorEnabled=false`
+且 `flavor=game` 的 `main_game.exe`，拒绝 `main.exe`。
+
+### 运行时/编辑器边界门禁
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\architecture-boundary-audit.ps1
+py -3 tool\generate_boundary_rule_index.py --check
+py -3 tool\validate-docs.py
+```
+
+边界规则覆盖：`vl_runtime` 源列表过滤 `source/editor/**`、`source/render/editor/**`
+与编辑器专用入口；configure 阶段读取每个运行时源并拒绝编辑器头文件；`main_game`
+只链接 `vl_runtime`；运行时 UI 头不得包含编辑器实现；游戏包 UI manifest、
+shader cache 闭包与 debug SPV 保留。
+
+### 运行时烟测
+
+编辑器与游戏入口都用 `--exit-after-frames <N>` 正常退出。该参数统计完整
+`Tick()`；`--frame-limit` 是 1..1000 Hz 节拍上限，不是帧数。
+
+```powershell
+build\bin\main_editor.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 60
+build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 120 --worker-thread-count 2 --no-dev-ui
+```
+
+通过标准：退出码 0、出现 `EngineLoop teardown complete`、shader 统计 `misses=0`；
+game 版不得输出 `editorGrid`、`EditorHost`、`EditorUi`、`EditorJson` 或
+`BrushLibrary` 相关加载。
+
+### 游戏包导出与验证
+
+game flavor 的 shader cache 必须由 Release game 二进制重建；Debug cache 的
+`compilePolicy` 会被导出器拒绝。
+
+```powershell
+cmake --build build-game --target main_game vl_export_game -j 4
+build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
+build-game\bin\vl_export_game.exe --project-root . --flavor game `
+  --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `
+  --output artifacts/game-package
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\validate-game-package.ps1 `
+  -PackagePath artifacts/game-package `
+  -VerifyTool build-game\bin\vl_export_game.exe `
+  -SmokeFrames 120
+```
+
+验证脚本检查 `game-export-manifest.json`、`runtime-shader.manifest.json`、
+`vl_build_flavor.json`、`runtime-ui.manifest.json` 闭包、`selectionMask` 存在且
+`editorGrid` 被剥离、每个 MI 引用的 `M_*.json`/`shaderEvaluation` 与保留 SPV
+都在包内，并以 `--exit-after-frames` 启动包内 `main_game.exe`，要求退出码 0、
+`misses=0`、无 `Shader cache miss:`、无 Vulkan validation/VUID/threading 错误。
 
 ## 测试目标实测规模
 
@@ -57,8 +124,8 @@
 ```powershell
 cmake --build build --target vl_renderer_backend_tests material_instance_thread_safety_tests script_tests -j 4
 ctest --test-dir build -R "RenderFrameBudget|ResourceRetireQueue|WorldSnapshotDelta|ResolvedDrawLifetime|DynamicMeshUpdateQueue|MaterialInstanceThreadSafety|WorldGameplayPlan" --output-on-failure
-build\bin\main.exe --world-graph-transaction-test --exit-after-tests
-build\bin\main.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats   # 手动运行并关闭；观察 GT 不再逐帧等待 RT
+build\bin\main_editor.exe --world-graph-transaction-test --exit-after-tests
+build\bin\main_editor.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats   # 手动运行并关闭；观察 GT 不再逐帧等待 RT
 ```
 
 构建注意：MinGW 下不要用无上限 `-j`；并发 `cc1plus` 会耗尽内存，使用 `-j4`。C# 开启时
@@ -1375,9 +1442,9 @@ computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
 只有以下三个 runtime test 标志被支持，且**必须串行**执行（它们共用 `shader/spv/`）：
 
 ```powershell
-.\build\bin\main.exe --shader-reload-test --exit-after-tests
-.\build\bin\main.exe --shader-compute-reload-test --exit-after-tests
-.\build\bin\main.exe --world-graph-transaction-test --exit-after-tests
+.\build\bin\main_editor.exe --shader-reload-test --exit-after-tests
+.\build\bin\main_editor.exe --shader-compute-reload-test --exit-after-tests
+.\build\bin\main_editor.exe --world-graph-transaction-test --exit-after-tests
 ```
 
 不要新增 runtime test 标志，除非用户明确同意且能说明模块测试为何不足。退出码 0 = 通过，2 = 测试失败。
@@ -1387,13 +1454,13 @@ computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
 端到端渲染改动没有自动化门禁，必须出图核对。**两个已知陷阱**：
 
 1. **采集结束后用 `--exit-after-frames <N>` 或控制台 `quit` 正常退出。** 外部强制终止会跳过
-   teardown，并可能锁住 `build\bin\main.exe` 使下一次构建失败。
+   teardown，并可能锁住 `build\bin\main_editor.exe` 使下一次构建失败。
 2. **截图 BMP 可能是半截文件。** 读取像素前必须确认文件大小稳定且达到预期
    （1280×720 的 24 位 BMP 载荷是 2764800 字节）。
 
 ```powershell
 # 启动、等截图落盘、再终止（PowerShell 下命令串需要自带引号）
-$p = Start-Process -FilePath ".\build\bin\main.exe" `
+$p = Start-Process -FilePath ".\build\bin\main_editor.exe" `
     -ArgumentList '--dev-ui','--console-command','"screenshot check.bmp"','--console-command-delay','150' `
     -RedirectStandardOutput out.log -RedirectStandardError err.log -PassThru
 $shot = "..\VukanLearnResources\Generated\Screenshots\check.bmp"

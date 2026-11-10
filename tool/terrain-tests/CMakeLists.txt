@@ -1,3 +1,6 @@
+# 本目标自带 31 个 vl_runtime 也拥有的地形/资源/图像 IO TU，保持地形测试
+# 不依赖图形运行时即可运行。P5 不为它链接 vl_editor_asset_core（本目标也
+# 不消费资产核心），迁移留给让测试链接 vl_editor 的后续阶段。
 add_executable(terrain_tests
     terrainTests.cpp
     terrainHeightmapIOTests.cpp

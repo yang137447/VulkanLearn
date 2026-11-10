@@ -1,3 +1,6 @@
+# 本目标自带 21 个 vl_runtime 也拥有的 TU（脚本宿主、World、地形碰撞等），
+# 用于保持脚本测试的自包含切片。P5 不在此链接 vl_editor_asset_core，
+# 否则运行时 TU 重复；迁移属于让脚本测试链接 vl_editor 的后续工作。
 add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scriptBlueprintAuthoringTests.cpp
     scriptGameplayTests.cpp scriptAssetReloadTests.cpp scriptAssemblyReloadTests.cpp scriptBuildTests.cpp
     scriptPhysicsMeshGeometryTests.cpp

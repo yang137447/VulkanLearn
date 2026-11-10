@@ -271,6 +271,7 @@
         </div>
         <nav>
             <a href="#constraints">1. 已敲定约束</a>
+            <a href="#target-flavors">1.1 构建目标与 flavor 边界</a>
             <a href="#scope">2. V1 范围与非目标</a>
             <a href="#component">3. 组件与接口总图</a>
             <a href="#system-map">4. 非 World 系统总览</a>
@@ -287,7 +288,7 @@
             <a href="#lifecycle">15. 生命周期时序</a>
             <a href="#resources">16. 资源与 GPU 生命周期</a>
             <a href="#contracts">17. 核心接口契约</a>
-            <a href="#code-cutover">18. 代码收尾蓝图</a>
+            <a href="#code-cutover">18. 代码结构</a>
             <a href="#adapter">19. 一次性 Cutover 清单</a>
             <a href="#acceptance">20. 验收矩阵</a>
             <a href="#milestone">21. 里程碑与风险</a>
@@ -308,9 +309,97 @@
                 <span class="chip">无 API-neutral 设备过渡封装</span>
             </div>
             <p class="muted">这些约束是后续所有设计讨论的硬边界，新增方案不能违反它们。</p>
-            <p class="summary">本文档描述 VulkanLearn V1 的正式架构、当前完成基线和后续演进门槛。它的作用是把 <code>main.cpp</code>、<code>engineLoop.*</code>、<code>rendererResourceLoadCoordinator.*</code>、<code>renderSystem.*</code>、<code>renderGraph.*</code> 等现有职责重新划入稳定边界。</p>
+            <p class="summary">本文档描述 VulkanLearn V1 的正式架构、当前完成基线和后续演进门槛。它的作用是把入口、<code>engineLoop.*</code>、<code>rendererResourceLoadCoordinator.*</code>、<code>renderSystem.*</code>、<code>renderGraph.*</code> 等现有职责重新划入稳定边界。</p>
             <p class="rule">代码命名约定：<code>UE-Lite</code> 只作为前期架构路线名、文档背景和验收脚本名，不进入 C++ namespace。引擎侧新增代码统一放入 <code>VL</code> namespace，表示 Vulkan Learn / Vulkan Lite。</p>
             <p class="rule">2026-06-04 同步结论：旧 <code>RHIDevice</code> 抽象接口和早期 tutorial render path 已从当前架构基线移除；<code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code> 保留为 concrete Vulkan device boundary，<code>RHIBufferHandle</code>、<code>RHIImageHandle</code> 等 handle 只表示 Vulkan 资源生命周期 identity。后续扩展默认直接扩展 Vulkan-native backend / device boundary，不增加 DirectX/Metal/OpenGL 预留层、mock backend 或 API-neutral enum/createInfo/descriptor wrapper。</p>
+        </section>
+
+        <section id="target-flavors">
+            <h2>1.1) 构建目标与 flavor 边界（2026-11-11）</h2>
+            <p class="summary">运行时代码与编辑器代码共享同一套引擎静态库，但源码归属由 CMake 目标决定：编辑器源码只进入编辑器目标，游戏二进制不含编辑器符号、UI 文档或 shader pass。目录位置不是边界，目标归属和 configure 期 include 门禁才是。</p>
+
+            <div class="diagram-wrap">
+                <pre><code>main_editor.exe -&gt; vl_editor -&gt; vl_runtime
+                         \-> vl_editor_asset_core -&gt; vl_runtime
+                         \-> vl_editor_widgets  -&gt; vl_ui_widgets
+main_game.exe   -&gt; vl_runtime -&gt; vl_ui_widgets
+vl_asset_edit   -&gt; vl_editor_asset_core -&gt; vl_runtime
+main.exe        -&gt; POST_BUILD copy of main_editor.exe</code></pre>
+            </div>
+
+            <table>
+                <thead>
+                    <tr><th>目标 / 产物</th><th>拥有</th><th>链接约束</th></tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>vl_runtime</code>（STATIC）</td>
+                        <td>platform、engine lifecycle、world、scene、render、pipeline、resource、material、mesh、shader、terrain、audio、script、运行时 UI</td>
+                        <td>不得链接或包含 <code>vl_editor</code>、<code>vl_editor_asset_core</code>、<code>vl_editor_widgets</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>vl_editor_asset_core</code>（STATIC）</td>
+                        <td><code>source/editor/command/**</code>、<code>service/**</code>、<code>persistence/**</code>；不依赖 RmlUi 或 GPU</td>
+                        <td><code>PUBLIC vl_runtime</code>；这些 TU 不再进入 <code>vl_editor</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>vl_editor</code>（STATIC）</td>
+                        <td><code>source/editor/**</code> 的其余部分、<code>source/render/editor/**</code>、编辑器专用 engine 文件</td>
+                        <td><code>PUBLIC vl_runtime vl_editor_asset_core</code>，<code>PRIVATE vl_editor_widgets</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>vl_editor_widgets</code>（STATIC）</td>
+                        <td><code>ui/widgets/workspace/dockWorkspace.*</code>、<code>ui/widgets/editor/brushLibraryPanel.*</code></td>
+                        <td><code>PUBLIC vl_ui_widgets</code>；<code>vl_ui_widgets</code> 不包含这两个 TU</td>
+                    </tr>
+                    <tr>
+                        <td><code>main_editor</code> / <code>main_game</code></td>
+                        <td>各自唯一的 <code>main()</code> 组合根；<code>main_game</code> 注入 <code>NullEditorHost</code></td>
+                        <td><code>main_editor</code> 链接 <code>vl_editor</code>；<code>main_game</code> 只链接 <code>vl_runtime</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>main</code>（兼容目标）</td>
+                        <td>不编译第二份可执行文件</td>
+                        <td><code>main_editor</code> POST_BUILD 复制为 <code>main.exe</code>；<code>VULKANLEARN_BUILD_LEGACY_MAIN=OFF</code> 可关闭</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>源码归属与 include 门禁</h3>
+            <p><code>source/CMakeLists.txt</code> 从运行时递归源中排除 <code>source/editor/**</code>、<code>source/render/editor/**</code>、<code>editorThumbnailRenderSession.*</code>、<code>editorThumbnailScheduler.h</code>、<code>uiViewModelSections.h</code>、<code>uiEditorViewModelSections.h</code> 和三个入口 <code>main*.cpp</code>。这些文件保留在原目录，但只由编辑器目标编译。</p>
+            <p class="rule">configure 阶段逐个读取 <code>vl_runtime</code> 源文件；命中 <code>#include "editor/</code>、<code>#include "render/editor/</code>、<code>#include "ui/widgets/editor/</code> 或 <code>#include "ui/widgets/workspace/</code> 时直接 <code>FATAL_ERROR</code>。链接边界只能拦住符号，这一层在编译前拦住反向头文件依赖。</p>
+
+            <h3>CMake 选项与 flavor</h3>
+            <table>
+                <thead><tr><th>选项</th><th>默认</th><th>作用</th></tr></thead>
+                <tbody>
+                    <tr><td><code>VULKANLEARN_ENABLE_EDITOR</code></td><td><code>ON</code></td><td>构建 <code>vl_editor_asset_core</code>、<code>vl_editor</code>、<code>vl_editor_widgets</code>、<code>main_editor</code>、<code>vl_asset_edit</code> 与编辑器测试目标</td></tr>
+                    <tr><td><code>VULKANLEARN_BUILD_GAME</code></td><td><code>ON</code></td><td>构建只链接 <code>vl_runtime</code> 的 <code>main_game</code></td></tr>
+                    <tr><td><code>VULKANLEARN_BUILD_LEGACY_MAIN</code></td><td><code>ON</code></td><td>保留 <code>--target main</code> 与 <code>main.exe</code> 兼容副本</td></tr>
+                </tbody>
+            </table>
+            <p class="rule">两个 flavor 同时为 <code>OFF</code> 时 configure 失败：<code>VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF</code>。每个 flavored 可执行文件旁写 <code>vl_build_flavor.json</code>（<code>flavor</code>、<code>editorEnabled</code>）；双 flavor 共用 <code>bin/</code> 时另写 <code>vl_build_flavor.main_editor.json</code> 与 <code>vl_build_flavor.main_game.json</code>，目录主标记跟随 <code>main.exe</code> 的编辑器入口。</p>
+
+            <h3>运行时 / 编辑器接缝</h3>
+            <ul class="dense-list">
+                <li><code>source/engine/application.*</code> 提供 <code>RunApplication(argc, argv, createEditorHost)</code>；<code>main_editor.cpp</code> 创建 <code>EditorHost</code>，<code>main_game.cpp</code> 创建 <code>NullEditorHost</code>。</li>
+                <li><code>source/engine/editorHost.h</code> 是运行时拥有的窄接口，只命名运行时值类型；<code>EditorHostInit</code> 借出 window、config、CommandBus、WorldManager、ScriptRuntime、RenderSystem、RendererBackend、PipelineFactory、UiSubsystem 与 GT safe-point 回调。</li>
+                <li><code>EditorHost</code>（<code>source/editor/editorHost.*</code>）拥有编辑器文档、面板、缩略图、terrain 编辑、选择态与视图模型；<code>NullEditorHost</code> 让 game 保持无条件调用点。</li>
+                <li><code>UiSubsystem</code> 通过引用计数的 <code>RmlUiRuntime::Acquire/Release</code> 持有进程级 RmlUi 运行时，并拥有唯一的 <code>Rml::Context</code> 与 <code>Context::Update</code>；<code>RmlUiRuntime</code> 负责 <code>Rml::Initialise/Shutdown</code> 配对。<code>IEditorUiShell</code>（<code>source/ui/iEditorUiShell.h</code>）由 <code>EditorUiShell</code> 实现，只向同一 context 附接编辑器文档。</li>
+                <li><code>RenderSystem::SetEditorViewportOverlay</code> 接收 <code>IEditorViewportOverlay*</code>；编辑器网格的创建、绑定、绘制和释放由编辑器实现，运行时只持有接口指针。</li>
+                <li><code>EngineLoop</code> 在 game flavor 下从 render graph 移除 <code>editorGrid</code> pass，并让 shader compiler 排除 <code>pass/editorGrid</code>；编辑器 flavor 保留两者。</li>
+            </ul>
+
+            <h3>游戏包闭包</h3>
+            <ul class="dense-list">
+                <li>UI 只复制 <code>ui/runtime-ui.manifest.json</code> 声明的 HUD、本地化和引用资源；编辑器文档、widgets 与 icons 不进入包。</li>
+                <li>Shader 保留集由所需 shader 名集合与 <code>shader-build-cache.json</code> 的 <code>normalizedKey</code>（<code>shaderName</code>、<code>path</code>、<code>materialSource</code>）解析；<code>StageEntry</code>、<code>GraphicsPair</code>、<code>MaterialGraphicsPair</code> 是唯一 kind 语义。</li>
+                <li>每个 artifact 的所有 output role 都复制，包括 <code>debugVertex</code>、<code>debugFragment</code>、<code>debugCompute</code>；cache、ABI 反射与校验需要这些 SPV。</li>
+                <li>随包发送被 MI 引用的 <code>M_*.json</code> 及其 <code>shaderEvaluation</code> 顶点/表面文件；pass material 的 <code>generate/</code> include 以固定相对路径注释和 digest 随包发送，MI 引用的 include 由运行时启动重建。</li>
+                <li>cache 的 <code>compilePolicy</code> 必须包含 <code>configuration=Release;</code>；导出器拒绝 Debug cache，并要求二进制旁存在 <code>flavor=game</code>、<code>editorEnabled=false</code> 的 <code>vl_build_flavor.json</code> 与 <code>main_game.exe</code>。</li>
+                <li>导出前从 render graph 移除 <code>editorGrid</code>，但保留 <code>selectionMask</code>；<code>SC_fracture_playground</code> 未在场景 JSON 拼写的默认玻璃裂纹材质 <code>Common/Materials/MI_glass_crack.json</code> 由导出器补齐。</li>
+                <li><code>tool/validate-game-package.ps1</code> 校验 manifest、shader 闭包、flavor 标记、无编辑器 UI/shader 泄漏，并以 <code>--exit-after-frames</code> 启动包内 <code>main_game.exe</code>，要求退出码 0、<code>misses=0</code>、无 <code>Shader cache miss:</code> 与 Vulkan validation/threading 错误。</li>
+            </ul>
         </section>
 
         <section id="scope">
@@ -319,7 +408,7 @@
                 <div class="card">
                     <strong>V1 必须完成</strong>
                     <ul class="dense-list">
-                        <li>建立 <code>EngineLoop</code>，让 <code>main.cpp</code> 只保留平台启动、窗口创建和顶层调度。</li>
+                        <li>建立 <code>EngineLoop</code>，让 <code>main_editor.cpp</code>/<code>main_game.cpp</code> 只选择编辑器 host 并调用 <code>RunApplication</code>。</li>
                         <li>把场景加载拆成 <code>WorldLoader</code>、<code>WorldGameplayPlanBuilder</code>、<code>RendererResourceLoadCoordinator</code>、<code>WorldBuilder</code>、<code>WorldCandidatePreparer</code> 五段：作者计划、渲染资产与 World 组装各自拥有数据。</li>
                         <li>让 <code>World</code> 成为 Gameplay 数据唯一归属，渲染层只读 <code>WorldSnapshot</code>。</li>
                         <li>分离 <code>RendererFrontend</code>、<code>FrameGraphCompiler</code>、<code>RendererBackendVulkan</code> 和 <code>RHIDeviceVulkan</code>。</li>
@@ -330,7 +419,7 @@
                 <div class="card">
                     <strong>V1 明确不做</strong>
                     <ul class="dense-list">
-                        <li>不引入 UObject、反射系统、GC、编辑器、蓝图、Cook/DDC 全套内容管线。</li>
+                        <li>不引入 UObject、反射系统、GC 或 Cook/DDC 全套内容管线；编辑器只编辑本仓库的 JSON 场景/材质/蓝图资产。</li>
                         <li>不把 Actor/Component 做成复杂 ECS；保留学习项目可读性。</li>
                         <li>不并行维护旧 scene/resource 执行路径和新 World 执行路径。</li>
                         <li>不把 <code>RHIDeviceVulkan</code> 或 lifecycle handle 扩展成跨图形 API 的过渡封装。</li>
@@ -1029,7 +1118,7 @@
                     </tr>
                     <tr>
                         <td><code>FrameGraphCompiler</code></td>
-                        <td>编译 render graph JSON，管理 pass 顺序、attachment、layout transition、descriptor update plan。当前 <code>source/render/framegraph/frameGraphCompiler.*</code> 已生成自包含 <code>CompiledFrameGraph</code>，验证 resource/pass 引用、format/usage、尺寸字段、load/store op，生成 resource read/write access plan、pass 前 barrier plan 和 pass input descriptor plan，并把 pass 输入输出、descriptor binding 与颜色 attachment 数交给 <code>RenderGraph</code> 消费；descriptor write plan 已从 <code>Renderpass</code> 移到后端侧 <code>RendererDescriptorPlanCache</code>，descriptor 刷新通过 <code>RendererDescriptorContext</code> 显式接收 global UBO、light SSBO 与 resource cache，并把具体 <code>vk::WriteDescriptorSet</code> 解析统一交给 <code>RendererDescriptorWriter</code>。</td>
+                        <td>编译 render graph JSON，管理 pass 顺序、attachment、layout transition、descriptor update plan。当前 <code>source/render/rendergraph/renderGraphCompiler.*</code> 已生成自包含 <code>CompiledFrameGraph</code>，验证 resource/pass 引用、format/usage、尺寸字段、load/store op，生成 resource read/write access plan、pass 前 barrier plan 和 pass input descriptor plan，并把 pass 输入输出、descriptor binding 与颜色 attachment 数交给 <code>RenderGraph</code> 消费；descriptor write plan 已从 <code>Renderpass</code> 移到后端侧 <code>RendererDescriptorPlanCache</code>，descriptor 刷新通过 <code>RendererDescriptorContext</code> 显式接收 global UBO、light SSBO 与 resource cache，并把具体 <code>vk::WriteDescriptorSet</code> 解析统一交给 <code>RendererDescriptorWriter</code>。</td>
                         <td>renderGraphConfig、swapchain state、RenderScene resource needs</td>
                         <td>CompiledFrameGraph、PassRuntime、ResourceUsagePlan</td>
                     </tr>
@@ -1152,15 +1241,29 @@
                         <td>EngineLoop</td>
                         <td>应用生命周期、帧循环、窗口事件分发、退出流程</td>
                         <td>Platform、GameInstance、RendererBackend 的高层入口</td>
-                        <td>直接创建材质、直接遍历场景对象、直接更新 Vulkan descriptor</td>
-                        <td><code>source/engine/engineLoop.*</code>；从 <code>main.cpp</code> 迁出的启动与主循环代码</td>
+                        <td>直接创建材质、直接遍历场景对象、直接更新 Vulkan descriptor；持有编辑器文档或面板状态</td>
+                        <td><code>source/engine/engineLoop.*</code> 与 <code>source/engine/{frame,ui,script,window,perf}/</code>；入口在 <code>source/main_editor.cpp</code>/<code>main_game.cpp</code></td>
+                    </tr>
+                    <tr>
+                        <td>IEditorHost / NullEditorHost</td>
+                        <td>编辑器行为的运行时接缝；<code>EditorHostInit</code> 借出的系统指针</td>
+                        <td>运行时值类型、World、RenderSystem、UiSubsystem 的公开入口</td>
+                        <td>拥有 runtime subsystem 生命周期；在 game 构建中加载编辑器文档</td>
+                        <td><code>source/engine/editorHost.h</code>、<code>source/engine/nullEditorHost.*</code>、<code>source/editor/editorHost.*</code></td>
+                    </tr>
+                    <tr>
+                        <td>UiSubsystem / EditorUiShell</td>
+                        <td><code>UiSubsystem</code> 拥有唯一 RmlUi context、输入仲裁、<code>Context::Update</code> 与 UI 快照；<code>EditorUiShell</code> 拥有编辑器文档、面板和缩略图发布</td>
+                        <td><code>IEditorUiShell</code>、<code>IEditorUiRuntimeBridge</code>、RmlUi、运行时视图模型</td>
+                        <td><code>EditorUiShell</code> 初始化/销毁 RmlUi 或直接调用 <code>Context::Update</code>；运行时 UI 头包含编辑器实现</td>
+                        <td><code>source/ui/uiSubsystem.*</code>、<code>source/ui/iEditorUiShell.h</code>、<code>source/editor/ui/editorUiShell.*</code></td>
                     </tr>
                     <tr>
                         <td>GameInstance</td>
                         <td>跨 World 存活的运行时上下文，例如命令总线、全局配置、全局 subsystem</td>
                         <td>EngineSubsystem、WorldManager</td>
                         <td>持有具体 Actor/Component 指针</td>
-                        <td>目前散落在 <code>main.cpp</code>、<code>debugConsole.*</code>、<code>commonFunction.h</code></td>
+                        <td><code>source/engine/gameInstance.*</code> 持有 <code>SubsystemCollection</code>；入口只负责选择 <code>IEditorHost</code> 并调用 <code>RunApplication</code></td>
                     </tr>
                     <tr>
                         <td>WorldManager</td>
@@ -2000,7 +2103,7 @@ while (renderRunning) {
                 <tbody>
                     <tr>
                         <td class="nowrap">BootPlatform</td>
-                        <td><code>main.cpp</code> / <code>PlatformApplication</code></td>
+                        <td><code>main_editor.cpp</code>/<code>main_game.cpp</code> -> <code>RunApplication</code> / <code>PlatformApplication</code></td>
                         <td>SDL 初始化、Vulkan loader、窗口、扩展列表、基础配置</td>
                         <td>可用窗口句柄、Vulkan extension list、project/resource path</td>
                         <td>直接退出并打印明确错误</td>
@@ -2234,63 +2337,52 @@ struct RuntimeResult {
         </section>
 
         <section id="code-cutover">
-            <h2>18) 代码收尾蓝图</h2>
-            <p class="summary">无过渡期不等于一次提交完成所有文件。它的意思是最终切换点不维护双运行路径；实现上可以先在目标目录中搭骨架、编译通过、测试通过，再一次性替换入口。</p>
-            <h3>目标目录</h3>
+            <h2>18) 代码结构</h2>
+            <p class="summary">当前源码按运行时、编辑器、资源工具和测试库分层；编辑器目录保留在原位置，但目标归属由 CMake 决定。下表只列主要生产模块，不替代 <code>documents/routing.md</code> 的逐路径路由。</p>
+            <h3>当前目录</h3>
             <pre><code>source/
+  main_editor.cpp / main_game.cpp
   platform/
     platformApplication.h/.cpp
     platformWindow.h/.cpp
     fileSystem.h/.cpp
     runtimeClock.h/.cpp
   engine/
+    application.h/.cpp
     engineLoop.h/.cpp
     gameInstance.h/.cpp
     runtimeConfig.h/.cpp
-    subsystem/
-      engineSubsystem.h
-      worldSubsystem.h
+    editorHost.h / nullEditorHost.h/.cpp
+    consoleSubsystem.h/.cpp
+    diagnosticsSubsystem.h/.cpp
+    runtimeTestHooks.h/.cpp
+    frame/ ui/ script/ window/ perf/ testing/
   input/
     inputSubsystem.h/.cpp
     playerController.h/.cpp
   world/
-    world.h/.cpp
-    level.h/.cpp
-    actor.h/.cpp
-    actorComponent.h/.cpp
-    worldManager.h/.cpp
-    worldSnapshot.h/.cpp
+    world.h/.cpp, worldManager.h/.cpp, worldSnapshot.h/.cpp
+    actorIdentity.*, actorProperty.h/.cpp
     loading/
-      worldLoader.h/.cpp
-      worldBuilder.h/.cpp
-      worldTransitionCoordinator.h/.cpp
+      worldLoader.*, worldBuilder.*, worldTransitionCoordinator.*
   render/
-    frontend/
-      rendererFrontend.h/.cpp
-      renderScene.h/.cpp
-    graph/
-      frameGraphCompiler.h/.cpp
-      compiledFrameGraph.h/.cpp
-    backend/
-      rendererBackendVulkan.h/.cpp
-      rendererDrawExecutor.h/.cpp
-      rendererFrameResources.h/.cpp
-      rendererObjectGpuResources.h
-      rendererObjectResourceManager.h/.cpp
-      rendererObjectResourceRegistry.h/.cpp
-      resolvedRenderScene.h/.cpp
-    rhi/
-      rhiResourceHandles.h
-      vulkan/rhiDeviceVulkan.h/.cpp
+    renderSystem.*, renderGraph.* (root facades)
+    frontend/ backend/ rendergraph/ pass/ frame/ shadow/ postprocess/
+    environment/ terrain/ hair/ picking/ preview/ world/ renderable/
+    resource/ resource/terrain/ offline/ editor/ editorBridge/
+    overlay/ camera/ lighting/ skinning/ foliage/ rhi/vulkan/
   resource/
-    assetManager.h/.cpp
-    globalResourceCache.h/.cpp
-    worldResourceCache.h/.cpp
-    resourceRetireQueue.h/.cpp
-  tools/
-    consoleSubsystem.h/.cpp
-    diagnosticsSubsystem.h/.cpp
-    runtimeTestHooks.h/.cpp</code></pre>
+    assetManager.*, globalResourceCache.*, worldResourceCache.*,
+    resourceRetireQueue.*, image/, device/
+  editor/
+    editorHost.*, command/, service/, service/material/, persistence/
+    ui/, ui/panel/, scene/, selection/, preview/, runtime/, terrain/,
+    assets/, asset/, brush/
+  ui/
+    uiSubsystem.*, rmlUiRuntime.*, iEditorUiShell.h, rmlUiInterfaces.*
+    viewModel/, viewport/, widgets/ (widgets/editor and widgets/workspace are editor-only)
+  scene/ material/ mesh/ pipeline/ shader/ terrain/ audio/ script/ physics/ hair/ debug/
+  render/offline/core/ (pure CPU vl_offline_core)</code></pre>
             <h3>收尾顺序</h3>
             <table>
                 <thead>
@@ -2304,8 +2396,8 @@ struct RuntimeResult {
                 <tbody>
                     <tr>
                         <td>1</td>
-                        <td>抽出 <code>EngineLoop</code>，搬迁 <code>main.cpp</code> 主循环、事件分发、shutdown 顺序</td>
-                        <td><code>main.cpp</code> 只负责创建 <code>PlatformApplication</code>、调用 <code>EngineLoop::Init/Run/Shutdown</code>，再关闭平台层</td>
+                        <td>拆分入口与 <code>EngineLoop</code>：<code>main_editor</code>/<code>main_game</code> 选择 host，<code>RunApplication</code> 创建平台层，<code>EngineLoop</code> 承担主循环、事件分发与 shutdown</td>
+                        <td><code>main*.cpp</code> 只选择 <code>IEditorHost</code> 并调用 <code>RunApplication</code>；平台层与 <code>EngineLoop::Init/Run/Shutdown</code> 的关闭顺序由 <code>application.cpp</code> 统一执行</td>
                         <td>修改渲染 pass 行为</td>
                     </tr>
                     <tr>
@@ -2410,7 +2502,7 @@ struct RuntimeResult {
                     <tr>
                         <td>启动流程</td>
                         <td>从仓库根目录启动；shader 编译、render graph、initScene、初始渲染都通过新 EngineLoop</td>
-                        <td><code>cmake --build build -j</code> + 手动运行 <code>build/bin/main.exe</code></td>
+                    <td><code>cmake --build build --target main_editor main_game -j 4</code> + 手动运行 <code>build/bin/main_editor.exe</code> 或 <code>build/bin/main_game.exe --no-dev-ui</code></td>
                         <td>入口绕过 <code>WorldCandidatePreparer::Prepare()</code> / <code>WorldGraphTransactionCoordinator::Execute()</code> 直接调用旧 scene load 或旧渲染初始化路径</td>
                     </tr>
                     <tr>
@@ -2428,13 +2520,13 @@ struct RuntimeResult {
                     <tr>
                         <td>World 切换</td>
                         <td>World/Graph 候选事务无崩溃、无黑屏、无半切换状态</td>
-                        <td><code>build/bin/main.exe --world-graph-transaction-test --exit-after-tests</code> 验证 World/Graph 事务的失败回滚、成功提交、资源 retire 与 fatal resize 契约。</td>
+                    <td><code>build/bin/main_editor.exe --world-graph-transaction-test --exit-after-tests</code> 验证 World/Graph 事务的失败回滚、成功提交、资源 retire 与 fatal resize 契约。</td>
                         <td>失败后 activeWorld 为空、camera 丢失、旧资源提前释放</td>
                     </tr>
                     <tr>
                         <td>有界异步渲染</td>
                         <td><code>workerThreadCount=2</code> 时最多一个未完成帧；<code>SubmitFrame()</code> 不等待，GT 只在上一帧未归还帧槽时阻塞；RT 异常不能把 GT 卡死在帧槽等待里</td>
-                        <td><code>ctest --test-dir build -R "RenderFrameBudget|DynamicMeshUpdateQueue|ResourceRetireQueueConcurrent|WorldSnapshotDelta|ResolvedDrawLifetime" --output-on-failure</code>；<code>build/bin/main.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats</code>（手动运行并关闭）</td>
+                    <td><code>ctest --test-dir build -R "RenderFrameBudget|DynamicMeshUpdateQueue|ResourceRetireQueueConcurrent|WorldSnapshotDelta|ResolvedDrawLifetime" --output-on-failure</code>；<code>build/bin/main_game.exe --worker-thread-count 2 --frame-limit 60 --gpu-stats</code>（手动运行并关闭）</td>
                         <td>恢复每帧 <code>WaitForRenderThreadIdle()</code>，或 GT 写入仍在 in-flight 帧引用的动态网格槽</td>
                     </tr>
                     <tr>
@@ -2446,7 +2538,7 @@ struct RuntimeResult {
                     <tr>
                         <td>资源释放</td>
                         <td>保留的 shader reload、compute reload、World/Graph 事务均无 Vulkan validation error</td>
-                        <td><code>build/bin/main.exe --shader-reload-test --exit-after-tests</code>、<code>--shader-compute-reload-test</code>、<code>--world-graph-transaction-test</code> + Vulkan validation layer</td>
+                    <td><code>build/bin/main_editor.exe --shader-reload-test --exit-after-tests</code>、<code>--shader-compute-reload-test</code>、<code>--world-graph-transaction-test</code> + Vulkan validation layer</td>
                         <td>出现 use-after-free、descriptor 指向销毁 image view、framebuffer 悬空</td>
                     </tr>
                     <tr>
@@ -2695,13 +2787,13 @@ struct RuntimeResult {
             </table>
 
             <h3>最终验收命令组</h3>
-            <p class="rule">运行约束：runtime 验证命令必须串行执行。程序启动阶段会编译 shader 并写入 <code>shader/spv/</code> 反射/debug 输出，并发运行多个 <code>main.exe</code> 进程可能互相覆盖生成文件，导致非目标失败。</p>
+            <p class="rule">运行约束：runtime 验证命令必须串行执行。程序启动阶段会编译 shader 并写入 <code>shader/spv/</code> 反射/debug 输出，并发运行多个编辑器或游戏进程可能互相覆盖生成文件，导致非目标失败。</p>
             <p class="rule">推荐入口：<code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1</code>。脚本会串行执行下列矩阵，并把每一步日志写入 <code>artifacts/ue-lite-validation/&lt;timestamp&gt;/</code>。</p>
             <pre><code>cmake --build build -j
 powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1
-build\bin\main.exe --shader-reload-test --exit-after-tests
-build\bin\main.exe --shader-compute-reload-test --exit-after-tests
-build\bin\main.exe --world-graph-transaction-test --exit-after-tests
+build\bin\main_editor.exe --shader-reload-test --exit-after-tests
+build\bin\main_editor.exe --shader-compute-reload-test --exit-after-tests
+build\bin\main_editor.exe --world-graph-transaction-test --exit-after-tests
 
 
 

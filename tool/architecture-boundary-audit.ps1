@@ -809,10 +809,17 @@ Test-FilePatternsPresent `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
         'WaitForRenderFrameSlot\(\)',
-        'renderThread->SubmitFrame\(\)',
         'SetRendererMutationSafePoint\('
     ) `
     -RuleName "Bounded async render loop contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/frame/engineFramePhases.cpp" `
+    -Patterns @(
+        'renderThread->SubmitFrame\(\)'
+    ) `
+    -RuleName "Bounded async render loop submit contract"
 
 Test-AsyncRenderLoopNoImmediateIdleWait `
     -Failures $failures `
@@ -1201,11 +1208,18 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
-        'RecreateRendererForWindowResize',
+        'RecreateRendererForWindowResize'
+    ) `
+    -RuleName "Swapchain resize production lifecycle"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/window/engineWindowLifecycle.cpp" `
+    -Patterns @(
         'ReleaseSwapchainDependentResources',
         'RebuildSwapchainDependentResources'
     ) `
-    -RuleName "Swapchain resize production lifecycle"
+    -RuleName "Swapchain resize production lifecycle resources"
 
 Test-FilePatternsPresent `
     -Failures $failures `
@@ -1336,6 +1350,241 @@ Test-FilePatternsPresent `
         'artifacts/architecture-validation'
     ) `
     -RuleName "Architecture final validation script contract"
+
+# Runtime/editor target ownership is declared once in CMake and enforced twice:
+# the runtime source glob filters editor paths, and a configure-time read rejects
+# editor-only includes before any target is linked.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "CMakeLists.txt" `
+    -Patterns @(
+        'option\(VULKANLEARN_ENABLE_EDITOR',
+        'option\(VULKANLEARN_BUILD_GAME',
+        'option\(VULKANLEARN_BUILD_LEGACY_MAIN',
+        'if\(NOT VULKANLEARN_ENABLE_EDITOR AND NOT VULKANLEARN_BUILD_GAME\)',
+        'VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF'
+    ) `
+    -RuleName "Runtime editor target ownership"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/CMakeLists.txt" `
+    -Patterns @(
+        'list\(FILTER sources EXCLUDE REGEX "/source/editor/"\)',
+        'list\(FILTER sources EXCLUDE REGEX "/source/render/editor/"\)',
+        'editorThumbnailRenderSession',
+        '/source/main\\\\.cpp',
+        '/source/main_editor',
+        '/source/main_game',
+        'file\(READ "\$\{runtime_source\}" runtime_source_text\)',
+        'message\(FATAL_ERROR',
+        'vl_runtime source',
+        'add_library\(vl_runtime STATIC \$\{sources\}\)',
+        'add_library\(vl_editor_asset_core STATIC \$\{editor_asset_core_sources\}\)',
+        'add_library\(vl_editor STATIC \$\{editor_sources\}\)',
+        'list\(FILTER editor_sources EXCLUDE REGEX "/source/editor/\(command|service|persistence\)/"\)',
+        'add_executable\(main_editor main_editor\.cpp\)',
+        'add_executable\(main_game main_game\.cpp\)'
+    ) `
+    -RuleName "Runtime editor target ownership"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/main_game.cpp" `
+    -Patterns @(
+        '#include "engine/nullEditorHost\.h"',
+        'std::make_unique<VL::NullEditorHost>\(\)'
+    ) `
+    -RuleName "Game executable link boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/main_game.cpp",
+        "source/engine/nullEditorHost.h",
+        "source/engine/nullEditorHost.cpp"
+    ) `
+    -Patterns @(
+        '#include "(editor|render/editor)/',
+        '\bEditorUi::',
+        '\bEditor::'
+    ) `
+    -RuleName "Game executable link boundary"
+
+foreach ($linkFile in @("source/CMakeLists.txt")) {
+    $linkPath = Resolve-RepoPath $linkFile
+    if (!(Test-Path -LiteralPath $linkPath)) {
+        Add-Failure $failures "Game executable link boundary: missing expected file '$linkFile'."
+        continue
+    }
+    $linkText = Get-Content -LiteralPath $linkPath -Raw
+    $mainGameStart = $linkText.IndexOf('add_executable(main_game main_game.cpp)')
+    if ($mainGameStart -lt 0) {
+        Add-Failure $failures "Game executable link boundary: main_game target block is missing."
+        continue
+    }
+    $mainGameBody = $linkText.Substring($mainGameStart)
+    if ($mainGameBody -notmatch 'target_link_libraries\(\s*main_game\s+PRIVATE\s+vl_runtime\s*\)') {
+        Add-Failure $failures "Game executable link boundary: main_game must link vl_runtime as its only library target."
+    }
+    if ($mainGameBody -match 'vl_editor') {
+        Add-Failure $failures "Game executable link boundary: main_game block references an editor target."
+    }
+
+    $mainEditorStart = $linkText.IndexOf('add_executable(main_editor main_editor.cpp)')
+    $mainEditorEnd = $linkText.IndexOf('if(VULKANLEARN_BUILD_GAME)')
+    if ($mainEditorStart -lt 0 -or $mainEditorEnd -le $mainEditorStart) {
+        Add-Failure $failures "Game executable link boundary: main_editor target block is missing."
+    }
+    else {
+        $mainEditorBody = $linkText.Substring($mainEditorStart, $mainEditorEnd - $mainEditorStart)
+        if ($mainEditorBody -notmatch 'target_link_libraries\(\s*main_editor\s+PRIVATE\s+vl_editor\s*\)') {
+            Add-Failure $failures "Game executable link boundary: main_editor must link vl_editor."
+        }
+    }
+
+    $runtimeLink = [regex]::Match(
+        $linkText,
+        'target_link_libraries\(\s*vl_runtime\s+PUBLIC(?<body>[^\)]*)\)')
+    if (!$runtimeLink.Success) {
+        Add-Failure $failures "Game executable link boundary: vl_runtime PUBLIC link block is missing."
+    }
+    elseif ($runtimeLink.Groups["body"].Value -match 'vl_editor') {
+        Add-Failure $failures "Game executable link boundary: vl_runtime link interface references an editor target."
+    }
+}
+
+# The runtime UI may hold only the editor shell interface. Editor documents,
+# panels and textures are attached by the editor module through this seam.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/ui/iEditorUiShell.h" `
+    -Patterns @(
+        'class IEditorUiShell',
+        'class IEditorUiRuntimeBridge',
+        'virtual void Shutdown\(\) = 0;',
+        'ClearEditorUiShell'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/ui/uiSubsystem.h",
+        "source/ui/uiSubsystem.cpp",
+        "source/ui/iEditorUiShell.h",
+        "source/ui/rmlUiInterfaces.h",
+        "source/ui/rmlUiInterfaces.cpp",
+        "source/ui/uiAction.h",
+        "source/ui/viewModel/runtimeUiSections.h",
+        "source/ui/uiExternalTexture.h",
+        "source/ui/uiRenderSnapshot.h"
+    ) `
+    -Patterns @(
+        '#include "(editor|render/editor)/',
+        '#include "ui/widgets/(editor|workspace)/',
+        '\bEditorUi::',
+        '\bEditor::'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/ui/uiSubsystem.h" `
+    -Patterns @(
+        'IEditorUiShell\* editorUiShell',
+        'SetEditorUiShell\(IEditorUiShell\* shell\)'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+# Game packaging is a closure, not a directory copy. The exporter must resolve
+# the runtime UI manifest, strip the editor graph, require the game flavor
+# marker, and ship gameplay default materials that no scene JSON names.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "ui/runtime-ui.manifest.json" `
+    -Patterns @(
+        '"format": 1',
+        '"runtime-hud\.rml"',
+        '"localization\.json"'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePath "ui/runtime-ui.manifest.json" `
+    -Patterns @(
+        '"editor-',
+        '"widgets/'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'kRuntimeUiManifest',
+        'kEditorUiManifest',
+        'CopyUiClosure',
+        'ValidateUiManifest',
+        'StripEditorGraphForGame',
+        'kGameBuildMarker',
+        'editorEnabled',
+        'MI_glass_crack\.json'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/validate-game-package.ps1" `
+    -Patterns @(
+        'runtime-ui\.manifest\.json',
+        'editor-ui\.manifest\.json',
+        'game-export-manifest\.json',
+        'vl_build_flavor\.json',
+        '--exit-after-frames',
+        'misses=0'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+# Shader packaging follows cache artifact identity, not guessed file kinds.
+# Every output role is copied, including debug SPV, because the cache/ABI
+# reflection path requires them.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'shader/spv/shader-build-cache\.json',
+        'compilePolicy',
+        'configuration=Release;',
+        'MaterialGraphicsPair',
+        'materialSource',
+        'normalizedKey',
+        'shaderEvaluation',
+        'generatedAtStartup',
+        'for \(const auto& \[role, output\] : artifact\.at\("outputs"\)\.items\(\)\)'
+    ) `
+    -RuleName "Game shader cache closure"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'continue;[^\r\n]*debug(Vertex|Fragment|Compute)',
+        'if \(role == "debug'
+    ) `
+    -RuleName "Game shader cache closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/validate-game-package.ps1" `
+    -Patterns @(
+        'runtime-shader\.manifest\.json',
+        'retained shader output is missing',
+        '--verify-package',
+        'Shader cache miss'
+    ) `
+    -RuleName "Game shader cache closure"
 
 Test-VulkanManagerBoundary -Failures $failures
 Test-RendererBackendRawGetterBoundary -Failures $failures

@@ -550,6 +550,17 @@ includes at configure time. Move the files when the long-lived branches converge
 P4b also filters the `editorGrid` render-graph pass and its shader pair in game builds. That is an
 explicit flavor seam until P6a computes the packaged shader closure from a manifest.
 
+### P5 implementation note (2026-11-11)
+
+P5 added `vl_editor_asset_core` (STATIC) over `source/editor/{command,service,persistence}/**`,
+linked `PUBLIC vl_runtime` and applied `vl_apply_runtime_options`. `vl_editor` no longer compiles
+those three directories, `tool/asset-edit` links the library instead of nine source entries, and the
+material-instance editor tests link it in the main build while keeping their inline source list for
+standalone configuration. `editor_ui_tests` (26 duplicated runtime TUs), `script_tests` (21) and
+`terrain_tests` (31) keep their self-contained runtime slices; `editor_viewport_tests` only inlines
+one runtime TU and consumes no asset-core source. Migrating those four belongs to the follow-up
+that lets them link `vl_editor` directly.
+
 ### Phase-specific rules
 
 - P1/P2 must not promise all runtime headers are clean; P1 only adds neutral headers and forwarding,

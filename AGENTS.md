@@ -46,6 +46,10 @@ instead of stuffing everything into `README.md` or `AGENTS.md`.
 
 Current implemented areas include:
 
+- Runtime/editor target split: `main_editor`/`vl_editor`/`vl_editor_asset_core`
+  over `vl_runtime`, and runtime-only `main_game`; `source/CMakeLists.txt`
+  filters editor sources from `vl_runtime` and rejects editor includes at
+  configure time. See `documents/contracts/vulkanlearn-architecture.html`.
 - Optional Windows x64/.NET 8 C# Blueprint hosting, scene placement and Play/Pause/Stop;
   implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
 - Runtime fracture verticals: `balloon` soft-body burst and `glassPane` impact fracture
@@ -104,7 +108,7 @@ The codebase mixes engine experimentation and learning-oriented iteration. Prefe
 When onboarding to the repo, read in this order:
 
 1. `README.md`
-2. `source/main.cpp`
+2. `source/main_editor.cpp`, `source/main_game.cpp` and `source/engine/application.cpp`
 3. `source/commonFunction.h`
 4. `source/renderGraph.h` and `source/renderGraph.cpp`
 5. `source/scene/validation/sceneAssetValidator.*`, `source/world/loading/worldLoader.*` and `source/world/loading/worldBuilder.*` (scene asset validation and world build; the old monolithic `source/sceneLoader.cpp` no longer exists)
@@ -165,12 +169,56 @@ mirror; this is the only third-party download in the default configure path.
 Build:
 
 ```powershell
-cmake --build build -j
+cmake --build build --target main_editor main_game main -j 4
 ```
 
 Executable output:
 
-- `build/bin/main.exe`
+- `build/bin/main_editor.exe`: editor composition root, links `vl_editor` + `vl_runtime`
+- `build/bin/main_game.exe`: runtime-only composition root, links `vl_runtime` only
+- `build/bin/main.exe`: POST_BUILD copy of `main_editor.exe` for existing scripts
+
+Target graph and options:
+
+- `main_editor -> vl_editor -> vl_runtime`; `vl_editor` also links
+  `vl_editor_asset_core` and `vl_editor_widgets`
+- `main_game -> vl_runtime`; no `vl_runtime -> vl_editor` edge
+- `VULKANLEARN_ENABLE_EDITOR=OFF` builds only the game flavor
+  (`main_game`) and drops editor targets from the graph
+- `VULKANLEARN_BUILD_GAME=OFF` builds only editor targets
+- `VULKANLEARN_BUILD_LEGACY_MAIN=OFF` suppresses the `main.exe` copy
+- both flavor options `OFF` fails configure; at least one executable is required
+- editor sources stay under `source/editor/**`, `source/render/editor/**` and
+  editor-only engine/widget files but are compiled only by editor targets;
+  configure reads every `vl_runtime` source and rejects editor includes
+
+Runtime smoke:
+
+```powershell
+build\bin\main_editor.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 60
+build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 120 --worker-thread-count 2 --no-dev-ui
+```
+
+`--exit-after-frames <N>` exits with code 0 after `N` completed `Tick()` calls.
+`--frame-limit` is a 1..1000 Hz pacing cap, not a frame count. The console
+`quit` command requests the same clean shutdown path.
+
+Game-flavor packaging requires a Release game cache and the game binary:
+
+```powershell
+cmake --build build-game --target main_game vl_export_game -j 4
+build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
+build-game\bin\vl_export_game.exe --project-root . --flavor game `
+  --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `
+  --output artifacts/game-package
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\validate-game-package.ps1 `
+  -PackagePath artifacts/game-package -VerifyTool build-game\bin\vl_export_game.exe
+```
+
+The exporter rejects `main.exe`, Debug shader caches and missing
+`vl_build_flavor.json`; it copies the runtime UI manifest closure, all cached
+SPV output roles (including debug reflection), MI-referenced `M_*.json` and
+`shaderEvaluation` sources, and the gameplay default `MI_glass_crack.json`.
 
 Typical runtime expectation:
 
@@ -187,19 +235,24 @@ Current local build context:
 
 ## Startup Flow
 
-The current startup sequence is split between `source/main.cpp` and
-`source/engine/engineLoop.cpp`:
+The current startup sequence is split between the entry point,
+`source/engine/application.cpp` and `source/engine/engineLoop.cpp`:
 
-1. Parse launch options and runtime test flags in `source/engine/launchOptions.cpp`
-2. Load `RuntimeConfig`
+1. `main_editor.cpp` or `main_game.cpp` calls `VL::RunApplication` with an
+   `IEditorHost` factory (`EditorHost` or `NullEditorHost`)
+2. Parse launch options and runtime test flags in `source/engine/launchOptions.cpp`
+3. Load `RuntimeConfig`
    - discover project root through `FileSystem`
    - read `config/config.json`
    - read `config/renderGraphConfig.json`
    - cache startup fields such as window size, `initScene`, `resourcePath`, and worker thread mode
-3. Initialize `PlatformApplication`
+4. Initialize `PlatformApplication`
    - initialize SDL and the Vulkan loader-facing platform layer
    - create the SDL Vulkan window and collect required Vulkan extensions
-4. Initialize `EngineLoop`
+5. Initialize `EngineLoop`
+   - store the injected editor host; a null factory falls back to `NullEditorHost`
+   - build the runtime render graph from `config/renderGraphConfig.json` and
+     remove the `editorGrid` pass when `IEditorHost::IsEditorFlavor()` is false
    - initialize input
    - generate material parameter includes
    - compile shaders from `shader/glsl/` into `shader/spv/`
@@ -215,8 +268,10 @@ The current startup sequence is split between `source/main.cpp` and
    - start the render thread only when `workerThreadCount == 2`; the render loop is
      bounded async, not a recording-only thread
    - initialize the console subsystem
-5. Queue launch-time runtime commands, if any
-6. Enter the update + render loop
+   - initialize the editor host through `EditorHostInit`; the host attaches
+     `EditorUiShell` to the single `UiSubsystem` context
+6. Queue launch-time runtime commands, if any
+7. Enter the update + render loop
 
 If a change affects boot behavior, verify it against this order.
 
@@ -251,6 +306,13 @@ bounded async pipeline in `source/render/renderThread.*`:
 ## Important Directories
 
 - `source/`: engine and renderer source
+- `source/editor/**`, `source/render/editor/**`: editor-only sources; only
+  `vl_editor` compiles them (CMake ownership, not physical relocation)
+- `source/render/{frame,shadow,postprocess,environment,terrain,hair,picking,preview,world,renderable,resource/terrain}/`:
+  `RenderSystem`/`RenderableObject`/terrain-loader production modules
+- `source/engine/{frame,ui,script,window,perf}/`: `EngineLoop` production modules
+- `source/editor/ui/panel/`, `source/editor/service/material/`: decomposed editor
+  panel and material document service modules
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
@@ -265,6 +327,8 @@ bounded async pipeline in `source/render/renderThread.*`:
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
+- `tool/game-export/`, `tool/validate-game-package.ps1`: game-flavor closure,
+  flavor marker validation and packaged `main_game.exe` smoke
 - `source/render/offline/core/`: pure CPU `vl_offline_core` shared by VL's offline session and root GoogleTest suites. The former independent paper-image CLI and its fixed-case loader are retired; do not rebuild a second scene/material authoring path. See `documents/contracts/vl-offline-rendering.md`.
 - Offline B-arm correctness: Eq. 3 dye multiplies the entire volume term. Eq. 15 Q uses coverage-weighted per-family mean projection plus uncovered-area NoV, not the old unweighted sum or Lambert pore fill. Keep Eval/Sample/Pdf on the same curve discretization, groom and yarn rotation settings. The former CLI's Table II presets and fixed images are historical evidence, not active VL defaults; see the archived `documents/plan/rendering/archive/offline-paper-renderer-standalone.md`. Root GTest owns the current numerical regression.
 - `tool/offline-core-tests/` and `tool/offline-integration-tests/`: root GoogleTest module suites; `tool/validation/offline/` contains external VL stress/export checks and the groom fixture generator, not engine runtime test flags.
@@ -660,7 +724,7 @@ If asked to add or change a material:
 
 If asked to debug startup failures:
 
-- inspect `source/main.cpp`
+- inspect `source/main_editor.cpp`/`source/main_game.cpp` and `source/engine/application.cpp`
 - inspect `source/commonFunction.h`
 - inspect `config/config.json`
 - confirm runtime working directory assumptions
