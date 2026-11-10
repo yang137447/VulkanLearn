@@ -80,19 +80,39 @@ TEST(ParticleBurst, AttributeBindingsOverrideScalarSpawnFieldsOnly)
     emitter.spawnPerUnit = 0.1f;
     emitter.burstCount = 20;
     emitter.maxParticles = 100;
+    emitter.gravity = Eigen::Vector3f(0, -9.8f, 0);
+    emitter.wind = Eigen::Vector3f::Zero();
+    emitter.sizeStart = 10.0f;
+    emitter.sizeEnd = 20.0f;
+    emitter.opacity = 1.0f;
     emitter.attributeBindings = {
         {"spawnRate", "Rate"},
         {"spawnPerUnit", "Travel"},
-        {"burstCount", "Burst"}};
+        {"burstCount", "Burst"},
+        {"gravity", "Gravity"},
+        {"wind", "Wind"},
+        {"sizeStart", "SizeStart"},
+        {"sizeEnd", "SizeEnd"},
+        {"opacity", "Opacity"}};
     ParticleDataChannelMap channels;
     channels["Rate"] = ParticleDataChannelValue::MakeFloat(50.0f);
     channels["Travel"] = ParticleDataChannelValue::MakeFloat(0.5f);
     channels["Burst"] = ParticleDataChannelValue::MakeInt(64);
+    channels["Gravity"] = ParticleDataChannelValue::MakeVec3(0, -20, 0);
+    channels["Wind"] = ParticleDataChannelValue::MakeVec3(1, 2, 3);
+    channels["SizeStart"] = ParticleDataChannelValue::MakeFloat(30.0f);
+    channels["SizeEnd"] = ParticleDataChannelValue::MakeFloat(40.0f);
+    channels["Opacity"] = ParticleDataChannelValue::MakeFloat(0.25f);
     const ParticleBoundSpawnAttributes bound =
         BindParticleSpawnAttributes(emitter, channels);
     EXPECT_FLOAT_EQ(bound.spawnRate, 50.0f);
     EXPECT_FLOAT_EQ(bound.spawnPerUnit, 0.5f);
     EXPECT_EQ(bound.burstCount, 64u);
+    EXPECT_TRUE(bound.gravity.isApprox(Eigen::Vector3f(0, -20, 0)));
+    EXPECT_TRUE(bound.wind.isApprox(Eigen::Vector3f(1, 2, 3)));
+    EXPECT_FLOAT_EQ(bound.sizeStart, 30.0f);
+    EXPECT_FLOAT_EQ(bound.sizeEnd, 40.0f);
+    EXPECT_FLOAT_EQ(bound.opacity, 0.25f);
 
     channels["Rate"] = ParticleDataChannelValue::MakeVec3(1, 2, 3);
     const ParticleBoundSpawnAttributes fallback =

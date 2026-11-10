@@ -850,7 +850,7 @@ TEST(ParticleAsset, AttributeBindingsParseAndRejectUnsupportedParameters)
         "WindSpeed");
 
     document["emitters"][0]["attributeBindings"] = {
-        {"gravity", "Wind"}};
+        {"drag", "Wind"}};
     EXPECT_THROW(
         ParticleAssetLoader::ParseJson(
             document, "Maps/SC_test/PS_attribute_unsupported.json"),

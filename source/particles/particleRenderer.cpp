@@ -7426,9 +7426,9 @@ void ParticleRenderer::RecordSimulation(
             0.0f);
         uniforms.localToWorld = emitter.model;
         uniforms.gravityDrag = Eigen::Vector4f(
-            emitter.asset.gravity.x(),
-            emitter.asset.gravity.y(),
-            emitter.asset.gravity.z(),
+            boundSpawnAttributes.gravity.x(),
+            boundSpawnAttributes.gravity.y(),
+            boundSpawnAttributes.gravity.z(),
             emitter.asset.drag);
         uniforms.velocityMinLifetimeMin = Eigen::Vector4f(
             emitter.asset.velocityMin.x(),
@@ -7453,10 +7453,10 @@ void ParticleRenderer::RecordSimulation(
             emitter.elapsedSeconds,
             emitter.prewarm ? 1.0f : 0.0f);
         uniforms.render = Eigen::Vector4f(
-            emitter.asset.sizeStart,
-            emitter.asset.sizeEnd,
+            boundSpawnAttributes.sizeStart,
+            boundSpawnAttributes.sizeEnd,
             emitter.asset.softness,
-            emitter.asset.opacity * culling.opacityScale);
+            boundSpawnAttributes.opacity * culling.opacityScale);
         // 只传 renderScale/blend；alpha 仍由 culling.opacityScale 独占，
         // 避免 LOD 与距离 fade 重复相乘。
         uniforms.lodParams = Eigen::Vector4f(
@@ -7534,8 +7534,8 @@ void ParticleRenderer::RecordSimulation(
                 uniforms.sizeKeys[index] = Eigen::Vector4f(
                     index == 0 ? 0.0f : 1.0f,
                     index == 0
-                        ? emitter.asset.sizeStart
-                        : emitter.asset.sizeEnd,
+                        ? boundSpawnAttributes.sizeStart
+                        : boundSpawnAttributes.sizeEnd,
                     0.0f,
                     0.0f);
             }
@@ -7920,9 +7920,9 @@ void ParticleRenderer::RecordSimulation(
             emitter.asset.attractorPosition.z(),
             0.0f);
         uniforms.wind = Eigen::Vector4f(
-            emitter.asset.wind.x(),
-            emitter.asset.wind.y(),
-            emitter.asset.wind.z(),
+            boundSpawnAttributes.wind.x(),
+            boundSpawnAttributes.wind.y(),
+            boundSpawnAttributes.wind.z(),
             0.0f);
         // 每帧整表重写：空表也必须清掉上一份 UBO 内容，count=0 才是
         // “恒为 1”的唯一信号。

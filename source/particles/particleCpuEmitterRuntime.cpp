@@ -355,6 +355,11 @@ void ParticleCpuEmitterRuntime::Synchronize(
             state.emitter.spawnRate = bound.spawnRate;
             state.emitter.spawnPerUnit = bound.spawnPerUnit;
             state.emitter.burstCount = bound.burstCount;
+            state.emitter.gravity = bound.gravity;
+            state.emitter.wind = bound.wind;
+            state.emitter.sizeStart = bound.sizeStart;
+            state.emitter.sizeEnd = bound.sizeEnd;
+            state.emitter.opacity = bound.opacity;
             state.model = BuildEmitterModel(snapshot, emitter);
             state.colorTint = snapshot.runtime.colorTint;
             state.spawnRateScale =

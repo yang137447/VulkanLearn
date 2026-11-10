@@ -2968,7 +2968,12 @@ void ValidateEmitter(const ParticleEmitterAsset& emitter)
     {
         if (parameter != "spawnRate" &&
             parameter != "spawnPerUnit" &&
-            parameter != "burstCount")
+            parameter != "burstCount" &&
+            parameter != "gravity" &&
+            parameter != "wind" &&
+            parameter != "sizeStart" &&
+            parameter != "sizeEnd" &&
+            parameter != "opacity")
         {
             throw std::invalid_argument(
                 "Particle attributeBindings has unsupported parameter: " +

@@ -893,11 +893,13 @@ SSR 的 sceneColor/G-Buffer 屏幕采样入口复用上面的映射公式，而�
   范围夹取（`roughness >= 0.02`、`metallic/opacity ∈ [0,1]`，`baseColor` 与 `color`
   RGBA 通道 `[0, 64]`）。它不是 Material Graph：只覆盖 `ParticleMaterialUniforms` 与
   `colorTint` 已有的标量/颜色槽位。
-- `attributeBindings`：可选，把 World 级 typed Data Channel 绑定到发射器运行时标量属性。
-  key 只能是 `spawnRate`、`spawnPerUnit` 或 `burstCount`，value 是非空通道名。通道存在且为
-  `float/int/bool` 标量时覆盖作者值；向量/四元数或缺失通道保留作者值。运行时把
-  `spawnRate/spawnPerUnit` 夹到 `[0, 100000]`，`burstCount` 夹到 `[0, maxParticles]`；
-  GPU 与 CPU fallback 共用同一解析规则。它不是逐粒子 Attribute Get/Set，也不读取父粒子属性。
+- `attributeBindings`：可选，把 World 级 typed Data Channel 绑定到发射器运行时属性。
+  标量 key 支持 `spawnRate`、`spawnPerUnit`、`burstCount`、`sizeStart`、`sizeEnd`、`opacity`，
+  向量 key 支持 `gravity`、`wind`；value 是非空通道名。标量只接受 `float/int/bool`，向量至少
+  需要 2/3 分量（`gravity/wind` 用前三轴）；类型不匹配或缺失通道保留作者值。运行时把
+  `spawnRate/spawnPerUnit` 夹到 `[0, 100000]`，`burstCount` 夹到 `[0, maxParticles]`，
+  size 夹到 `[0, 1000]`、opacity 夹到 `[0, 1]`。GPU 与 CPU fallback 共用同一解析规则。
+  它不是逐粒子 Attribute Get/Set，也不读取父粒子属性。
 - `mesh`：`renderMode: "mesh"` 时必填，结构为
   `{ "path": "Common/Meshes/SM_cube.json", "scale": [1,1,1], "alignment": "world",
   "materialInstancePath": "..."? }`。
