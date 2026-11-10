@@ -14,6 +14,24 @@ option(VULKANLEARN_BUILD_ANIMATION_TOOLS
 
 option(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS "Build and host C# gameplay Blueprints (requires .NET 8 SDK)." OFF)
 
+option(VULKANLEARN_ENABLE_EDITOR
+    "Build editor libraries and the editor executable."
+    ON)
+
+option(VULKANLEARN_BUILD_GAME
+    "Build the runtime-only game executable."
+    ON)
+
+option(VULKANLEARN_BUILD_LEGACY_MAIN
+    "Copy main_editor.exe to main.exe for existing scripts."
+    ON)
+
+if(NOT VULKANLEARN_ENABLE_EDITOR AND NOT VULKANLEARN_BUILD_GAME)
+    message(FATAL_ERROR
+        "VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF; "
+        "at least one executable flavor must be selected.")
+endif()
+
 set(VULKANLEARN_TERRAIN_EROSION_PYTHON "" CACHE FILEPATH
     "Optional Python interpreter with numpy for terrain_erosion_tests.py.")
 
@@ -35,7 +53,9 @@ add_subdirectory(source/animation)
 add_subdirectory(source/debug)
 add_subdirectory(source/hair)
 add_subdirectory(source)
-add_subdirectory(tool/asset-edit)
+if(VULKANLEARN_ENABLE_EDITOR)
+    add_subdirectory(tool/asset-edit)
+endif()
 add_subdirectory(tool/game-export)
 add_subdirectory(tool/hair)
 if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
@@ -82,16 +102,18 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/shader-build-integration-tests)
     add_subdirectory(tool/material-schema-tests)
     add_subdirectory(tool/texture-asset-tests)
-    add_subdirectory(tool/terrain-tests)
-    add_subdirectory(tool/material-instance-editor-tests)
-    add_subdirectory(tool/editor-ui-tests)
-    add_subdirectory(tool/editor-viewport-tests)
+    if(VULKANLEARN_ENABLE_EDITOR)
+        add_subdirectory(tool/terrain-tests)
+        add_subdirectory(tool/material-instance-editor-tests)
+        add_subdirectory(tool/editor-ui-tests)
+        add_subdirectory(tool/editor-viewport-tests)
+        add_subdirectory(tool/script-tests)
+    endif()
     add_subdirectory(tool/offline-core-tests)
     add_subdirectory(tool/offline-integration-tests)
     add_subdirectory(tool/renderer-backend-tests)
     add_subdirectory(tool/ui-control-tests)
     add_subdirectory(tool/controller-tests)
-    add_subdirectory(tool/script-tests)
     add_subdirectory(tool/debug-draw-tests)
     add_subdirectory(tool/hair-tests)
     add_subdirectory(tool/game-export-tests)

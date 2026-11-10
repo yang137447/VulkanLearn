@@ -1161,6 +1161,11 @@ bool EditorHost::IsEnabled() const
     return init.ui != nullptr && init.ui->IsDeveloperUiEnabled();
 }
 
+bool EditorHost::IsEditorFlavor() const
+{
+    return true;
+}
+
 bool EditorHost::IsVisible() const
 {
     return init.ui != nullptr && init.ui->IsDeveloperUiVisible();

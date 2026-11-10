@@ -53,6 +53,7 @@ public:
         WorldManager& worldManager,
         Controller& controller,
         const RuntimeConfig& runtimeConfig,
+        const nlohmann::json& renderGraphJson,
         const DiagnosticsSubsystem& diagnostics,
         RenderThread* renderThread);
 
@@ -79,6 +80,7 @@ private:
     WorldManager& worldManager;
     Controller& controller;
     const RuntimeConfig& runtimeConfig;
+    nlohmann::json renderGraphJson;
     const DiagnosticsSubsystem& diagnostics;
     RenderThread* renderThread = nullptr;
     WorldGraphTransactionTestFaultInjection faultInjection;

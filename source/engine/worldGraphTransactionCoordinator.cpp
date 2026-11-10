@@ -161,6 +161,7 @@ WorldGraphTransactionCoordinator::WorldGraphTransactionCoordinator(
     WorldManager& worldManager,
     Controller& controller,
     const RuntimeConfig& runtimeConfig,
+    const nlohmann::json& renderGraphJson,
     const DiagnosticsSubsystem& diagnostics,
     RenderThread* renderThread)
     : rendererBackend(rendererBackend)
@@ -170,6 +171,7 @@ WorldGraphTransactionCoordinator::WorldGraphTransactionCoordinator(
     , worldManager(worldManager)
     , controller(controller)
     , runtimeConfig(runtimeConfig)
+    , renderGraphJson(renderGraphJson)
     , diagnostics(diagnostics)
     , renderThread(renderThread)
 {
@@ -195,7 +197,7 @@ WorldGraphTransactionCoordinator::Execute(
                 rendererBackend);
         candidateGraph->GetGraph().SetTestFaultInjection(
             BuildRenderGraphTestFaultInjection(faultInjection));
-        candidateGraph->Load(runtimeConfig.GetRenderGraphJson());
+        candidateGraph->Load(renderGraphJson);
 
         WorldCandidatePrepareOptions prepareOptions;
         prepareOptions.offlineOnly =

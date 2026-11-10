@@ -539,6 +539,17 @@ Each phase is one PR-sized change. Do not combine a behavior change with a file 
 | P12 | Runtime leaf splits: `renderableObject`, terrain loader | hair/renderer/terrain tests, runtime smoke | Each sub-PR |
 | P13 | Architecture contract, AGENTS, routing, testing, boundary rules, archify | `validate-docs.py`, boundary audit, rule index check | Docs-only revert |
 
+### P4b implementation note (2026-11-10)
+
+P4b landed target ownership, entry points and include gates **without the P4a physical moves**.
+The active worktree count makes directory-wide `git mv` conflict-heavy; `source/editor/**`,
+`source/render/editor/**` and the editor widget files stay where they are, but only `vl_editor`
+compiles them. `vl_runtime` filters those paths from its source glob and rejects editor-only
+includes at configure time. Move the files when the long-lived branches converge.
+
+P4b also filters the `editorGrid` render-graph pass and its shader pair in game builds. That is an
+explicit flavor seam until P6a computes the packaged shader closure from a manifest.
+
 ### Phase-specific rules
 
 - P1/P2 must not promise all runtime headers are clean; P1 only adds neutral headers and forwarding,

@@ -75,6 +75,7 @@ public:
     IEditorConsoleSink* ConsoleSink() override;
     IEditorViewportOverlay* ViewportOverlay() override;
 
+    bool IsEditorFlavor() const override;
     bool IsEnabled() const override;
     bool IsVisible() const override;
 

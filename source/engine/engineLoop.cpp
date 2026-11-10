@@ -129,6 +129,35 @@ RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     return graphFault;
 }
 
+nlohmann::json BuildRuntimeRenderGraphJson(
+    const nlohmann::json& source,
+    bool includeEditorPasses)
+{
+    if (includeEditorPasses)
+    {
+        return source;
+    }
+
+    nlohmann::json filtered = source;
+    auto passes = filtered.find("passes");
+    if (passes == filtered.end() || !passes->is_array())
+    {
+        return filtered;
+    }
+    for (auto pass = passes->begin(); pass != passes->end();)
+    {
+        if (pass->value("type", std::string()) == "editorGrid")
+        {
+            pass = passes->erase(pass);
+        }
+        else
+        {
+            ++pass;
+        }
+    }
+    return filtered;
+}
+
 } // namespace
 
 EngineLoop::EngineLoop() = default;
@@ -175,6 +204,10 @@ RuntimeResult<void> EngineLoop::Init(
     {
         return inputResult;
     }
+
+    runtimeRenderGraphJson = BuildRuntimeRenderGraphJson(
+        GetRuntimeConfig().GetRenderGraphJson(),
+        editorHost->IsEditorFlavor());
 
     auto runtimeResult = InitializeRuntimeSystems(
         platformWindow,
@@ -500,6 +533,12 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
         "Shader folder path: " + shaderFolderPath);
     shaderCompiler = std::make_unique<ShaderCompiler>();
+    if (!editorHost->IsEditorFlavor())
+    {
+        // P4b keeps editor-only shader pairs out of the game build surface;
+        // P6a replaces this explicit list with a manifest-derived closure.
+        shaderCompiler->SetExcludedShaderNames({"pass/editorGrid"});
+    }
     shaderCompiler->StartCompile(
         shaderFolderPath,
         forceShaderRebuild);
@@ -532,7 +571,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     resourceLoadCoordinator.SetRendererBackend(rendererBackend.get());
 
     RenderGraph::GetInstance().LoadRenderGraph(
-        GetRuntimeConfig().GetRenderGraphJson(),
+        runtimeRenderGraphJson,
         *rendererBackend);
     audioRuntime = std::make_unique<AudioRuntime>(
         GetSubsystems().GetDiagnosticsSubsystem(),
@@ -649,6 +688,7 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
             GetSubsystems().GetWorldManager(),
             *controller,
             GetRuntimeConfig(),
+            runtimeRenderGraphJson,
             GetSubsystems().GetDiagnosticsSubsystem(),
             nullptr);
 
@@ -2686,7 +2726,7 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
                 "Injected resize failure after swapchain recreation");
         }
         renderGraph.LoadRenderGraph(
-            GetRuntimeConfig().GetRenderGraphJson(),
+            runtimeRenderGraphJson,
             *rendererBackend);
         renderGraph.RestorePassMaterialInstances(passMaterialSnapshot);
         renderGraph.SetOwnerGeneration(
@@ -2738,8 +2778,7 @@ RuntimeResult<void> EngineLoop::ReloadRenderGraphResources(VL::RenderGraphReleas
                 BuildRenderGraphTestFaultInjection(
                     worldGraphTransactionTestFaultInjection));
         candidateGraph->Load(
-            GetRuntimeConfig()
-                .GetRenderGraphJson());
+            runtimeRenderGraphJson);
         candidateGraph->GetGraph()
             .RestorePassMaterialInstances(
                 renderGraph

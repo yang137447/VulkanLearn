@@ -141,6 +141,9 @@ public:
     virtual IEditorConsoleSink* ConsoleSink() = 0;
     virtual IEditorViewportOverlay* ViewportOverlay() = 0;
 
+    // Composition-root flavor. Unlike IsEnabled(), this is available before
+    // Initialize() and does not depend on developer-UI visibility.
+    virtual bool IsEditorFlavor() const = 0;
     virtual bool IsEnabled() const = 0;
     virtual bool IsVisible() const = 0;
 };

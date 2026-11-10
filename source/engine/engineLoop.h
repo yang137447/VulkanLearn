@@ -231,6 +231,7 @@ private:
     std::unique_ptr<WorldCandidatePreparer> worldCandidatePreparer;
     std::unique_ptr<WorldGraphTransactionCoordinator>
         worldGraphTransactionCoordinator;
+    nlohmann::json runtimeRenderGraphJson;
     std::unique_ptr<Controller> controller;
     ModelPreviewCamera modelPreviewCamera;
     std::unique_ptr<UiSubsystem> uiSubsystem;

@@ -77,6 +77,7 @@ bool NullEditorHost::SelectSceneObjectFromPick(
 void NullEditorHost::ClearMaterialInstanceSceneSelection() {}
 IEditorConsoleSink* NullEditorHost::ConsoleSink() { return nullptr; }
 IEditorViewportOverlay* NullEditorHost::ViewportOverlay() { return nullptr; }
+bool NullEditorHost::IsEditorFlavor() const { return false; }
 bool NullEditorHost::IsEnabled() const { return false; }
 bool NullEditorHost::IsVisible() const { return false; }
 

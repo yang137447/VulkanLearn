@@ -68,7 +68,21 @@ cmake --build build -j
 
 如果你的 MinGW 环境没有自动进入 `PATH`，请先确保 `g++`、`gcc` 和 `mingw32-make` 可用，再执行上面的 CMake 命令。
 
-编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
+编译成功后可执行文件位于 `build/bin`：
+
+- `main_editor.exe`：编辑器组合根，链接 `vl_editor` + `vl_runtime`
+- `main_game.exe`：运行时组合根，只链接 `vl_runtime`
+- `main.exe`：`main_editor.exe` 的兼容副本，供现有脚本继续使用
+
+默认三个目标都会构建。只要运行时或只要编辑器时使用：
+
+```bash
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_EDITOR=OFF
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_BUILD_GAME=OFF
+```
+
+`VULKANLEARN_ENABLE_EDITOR` 与 `VULKANLEARN_BUILD_GAME` 不能同时为 `OFF`；
+`VULKANLEARN_BUILD_LEGACY_MAIN=OFF` 可关闭 `main.exe` 兼容副本。
 
 ### C# 蓝图 游戏逻辑
 
