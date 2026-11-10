@@ -89,9 +89,9 @@ ao = 1 - mean(occlusion)
 
 只有 `hasHeight = true` 的层才烘焙 AO；其余层 `orm.R = 255`。
 
-> 现状：本地 Megascans 库的高度是 8-bit 且起伏平缓，烘出的 AO 很弱
-> （rock `aoMin≈0.91`、gravel `aoMean≈0.999`）。等 Bridge 的 16-bit
-> displacement 到位后，同一套算法会自然出细节。
+> 现状：改用 Poly Haven 的 16-bit displacement 后，AO 开始有意义
+> （rock `aoMean≈0.991`、`aoMin≈0.4`），但平缓材质（沙/草地）仍接近 1。
+> `--ao-height-scale` 默认 6，只影响 AO，不影响位移。
 
 ## 4. 全局宏图
 
@@ -121,13 +121,22 @@ ao = 1 - mean(occlusion)
 
 ## 6. 源数据与红线
 
-| 源 | 现状 |
+源改用 **Poly Haven（CC0）**，不再依赖本地 Megascans 库（其高度只有 8-bit）：
+
+| 层 | Poly Haven 资产 |
 | --- | --- |
-| `T_<Asset>_A/N/R` | 本地库齐备 |
-| `T_<Asset>_D` / `_H` | 仅 FlatgroundGravel1 / RockGround2 / RockMisc / SmoothSand |
-| `_AO` | 本地库没有，统一由高度烘焙 |
-| 16-bit displacement | 本地库是 8-bit；**Bridge 补 16-bit** |
-| 项目自带 4K EXR | `tlonbisya` / `wepoeaw`，已转 16-bit PNG 备用 |
+| Gravel Ground | `aerial_grass_rock` |
+| Rock Face | `rock_face_03` |
+| Scree Debris | `aerial_rocks_02` |
+| River Silt | `brown_mud_dry` |
+| Sand | `aerial_beach_01` |
+
+下载与暂存：`tool/houdini-terrain-import/fetch_polyhaven_layers.py`
+（diffuse / nor_dx / rough / displacement 4K；displacement 是 EXR，用
+`exr_to_png16.py` 转 16-bit PNG）。选 `nor_dx` 而不是 `nor_gl`，是为了
+沿用现有 `invertNormalGreen` 的 UE 法线约定。
+
+打包时用 `--no-tint`：Poly Haven 是自然配色，不再做沙漠素材的重染。
 
 红线：
 
@@ -157,7 +166,7 @@ TR 字段（已通过校验与透传，置换 pass 尚未消费）：
 
 ## 8. 待办
 
-1. **Bridge 补 16-bit displacement**（Rock/Gravel/Sand 先行，Debris/Silt 随后）；
+1. ~~16-bit displacement~~（已完成：Poly Haven 4K EXR → 16-bit PNG）；
 2. 绑定 `layerHeight`（R16）并实现 height blend；
 3. 细分置换：近场 tessellation（2 m 网格 → 4×4/8×8），shadow pass 同步，
    factor 在 chunk 边界保持一致；碰撞仍用 CPU 高度图，细部不参与；

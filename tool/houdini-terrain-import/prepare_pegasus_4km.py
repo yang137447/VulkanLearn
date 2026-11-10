@@ -165,7 +165,12 @@ def main() -> int:
     megascans_root = (
         args.terrain_texture_root.resolve()
         if args.terrain_texture_root is not None
-        else resource_root / "Generated/Megascans/Textures/Source")
+        else resource_root / "Generated/TerrainLayers/Textures/Source")
+    if not megascans_root.is_dir():
+        # 旧资产仍在 Megascans 目录；新管线输出到 TerrainLayers。
+        legacy = resource_root / "Generated/Megascans/Textures/Source"
+        if legacy.is_dir():
+            megascans_root = legacy
     layer_meta_path = megascans_root / "layers.json"
     layer_meta = (_load_json(layer_meta_path)
                   if layer_meta_path.is_file() else {})

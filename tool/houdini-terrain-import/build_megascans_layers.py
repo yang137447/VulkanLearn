@@ -80,6 +80,10 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="key=meters（峰峰值），可重复；覆盖内置默认")
     parser.add_argument("--no-ao", action="store_true", help="跳过 AO 烘焙")
+    parser.add_argument(
+        "--no-tint",
+        action="store_true",
+        help="不重染 albedo（Poly Haven 等自然配色素材应使用该选项）")
     parser.add_argument("--ao-radius-m", type=float, default=8.0)
     parser.add_argument("--ao-fine-radius-m", type=float, default=1.0)
     parser.add_argument("--ao-directions", type=int, default=16)
@@ -88,7 +92,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ao-height-scale",
         type=float,
-        default=1.0,
+        default=6.0,
         help="height multiplier used only while baking AO; texture relief is "
         "often exaggerated relative to the world displacement scale",
     )
@@ -258,7 +262,8 @@ def main() -> int:
         orm[:, :, 2] = 0
         orm[:, :, 3] = 255
 
-        _tint(albedo, key).convert("RGBA").save(output / f"{key}_albedo.png")
+        albedo_out = albedo if args.no_tint else _tint(albedo, key)
+        albedo_out.convert("RGBA").save(output / f"{key}_albedo.png")
         normal.save(output / f"{key}_normal.png")
         Image.fromarray(orm, mode="RGBA").save(output / f"{key}_orm.png")
         Image.fromarray(
