@@ -76,6 +76,13 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     // classic "height + inverted weight" scheme. strength 0 is a no-op.
     if (u_heightBlendStrength > 0.0)
     {
+        // 近处一个 texel 覆盖很多像素，逐 texel 的高度差会让层归属来回
+        // 翻转（近看是一块块锯齿）；中远景一个 texel 已经小于像素，
+        // 这种翻转自然消失。因此只在 8–45 m 之外启用高度加权。
+        const float blendDistanceM =
+            length(context.worldPosition - uboVP.cameraPosition) * 0.01;
+        const float heightBlendFade =
+            smoothstep(8.0, 45.0, blendDistanceM);
         float scores[4];
         float scoreMax = -1.0e9;
         for (int slot = 0; slot < 4; ++slot)
@@ -92,15 +99,23 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
                 mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
             const vec2 uv =
                 rotation * (context.texCoord * u_uvScale * extra.z);
+            // 显式 LOD 3：这个循环里有按权重 `continue` 的发散控制流，
+            // 隐式导数在非一致控制流下未定义。高度只用于比较，不需要
+            // 0.25 m 的 texel 精度；3 级 mip（约 2 m）让层过渡更平滑。
             const float height =
-                texture(layerHeight, vec3(uv, float(layer))).r;
+                textureLod(layerHeight, vec3(uv, float(layer)), 3.0).r;
             // 换算成米：每层归一化到 0..1 后直接用会让平整沙层和岩石
             // 拥有同样的起伏幅度；乘 displacementM 才能保留相对高差。
             const float displacementM =
                 TerrainLayerCatalogRow(layer, 3).w;
             const float heightMeters = (height - 0.5) * displacementM;
+            // 高度项必须**有上限**：每层高度都归一化到 0..1，texel 级噪声
+            // 足以让高度项压过权重差，出现逐 texel 的换层（近看是锯齿块）。
+            // 夹到 ±0.25 后它只能在权重接近时微调过渡，不能改变主次。
+            const float heightTerm = clamp(
+                heightMeters * u_heightBlendStrength, -0.25, 0.25);
             scores[slot] =
-                heightMeters * u_heightBlendStrength + (1.0 - weights[slot]);
+                heightTerm * heightBlendFade + (1.0 - weights[slot]);
             scoreMax = max(scoreMax, scores[slot]);
         }
         float total = 0.0;

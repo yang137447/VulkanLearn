@@ -89,6 +89,9 @@ def main() -> int:
                 "mipmaps": True,
                 "filter": "linear",
                 "wrapMode": "clamp",
+                # 世界对齐图必须和烘焙朝向一致；材质纹理默认的 V 翻转
+                # 会把它们相对地形上下镜像。
+                "flipY": False,
             }, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8")
 

@@ -105,6 +105,13 @@ ao = 1 - mean(occlusion)
 - wetness 用于压 roughness 与 albedo。
 - `T_Terrain_IDMAP` 不打包、不接入。
 
+色彩空间与朝向：
+
+- `T_global_colour` 声明 **sRGB**（采样时解码到线性）；`T_global_masks` 声明
+  **linear**（AO/wetness 是数据）。
+- 材质纹理默认在加载时翻转 V；全局图是世界对齐的，必须写
+  `"flipY": false`，否则相对地形上下镜像（`bake_global_maps.py` 已写入）。
+
 ## 5. 分辨率与存储
 
 | 项 | 规则 |
@@ -201,6 +208,18 @@ TR 字段（已通过校验与透传，置换 pass 尚未消费）：
    colour 以 0.55 权重直接混入 albedo，masks 的 R=AO、G=wetness 进入
    AO/roughness/albedo）；
 5. 图集压缩（BC5 normal / BC7 albedo/orm）与 2 K 主角层。
+
+### 8.1 近景的两个已知限制（2026-11-11 实测）
+
+- **材质边界在 <10 m 处呈块状/锯齿**：top-4 的 ID/权重图每页只有
+  128²（≈1 m/texel），`round(layerIds)` 会按权重 texel 切换层集合。
+  近处一个 texel 覆盖很多像素，边界因此呈米级块状。这不是 height blend
+  造成的（把强度设 0 仍存在）；要修只能提高权重图分辨率、改为全层权重，
+  或对 ID 过渡做混合。
+- **贴图在 <5 m 处偏糊**：1 K 层纹理在 252 m 重复下是 0.25 m/texel。
+  近景 detail 层（`u_detailUvScale=6`）只做亮度/法线增强；真正的解法是
+  2 K 源或独立 detail 贴图。height blend 现已限制在 8–45 m 之外生效，
+  阈值 `heightBlendFade` 写死在 shader 里。
 
 全局图打包：`tool/houdini-terrain-import/bake_global_maps.py`，输出
 `Generated/HoudiniPegasusIsland/Global/{T_global_colour,T_global_masks}.json`，

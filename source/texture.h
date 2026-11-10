@@ -26,6 +26,8 @@ public:
         bool textureArray = false;
         // 16-bit single-channel height sources keep R16_UNORM instead of RGBA8.
         bool sixteenBitHeight = false;
+        // 材质纹理默认按历史合同翻转 V；全局世界对齐贴图必须保持烘焙朝向。
+        bool flipY = true;
         std::string debugName;
     };
 
@@ -66,7 +68,9 @@ public:
     {
         TextureIO::LoadOptions options;
         options.semantic = createDesc.semantic;
-        options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
+        options.flipY = createDesc.flipY
+            ? TextureIO::LoadOptions::FlipYMode::ForceOn
+            : TextureIO::LoadOptions::FlipYMode::ForceOff;
         options.transfer = createDesc.transfer;
         options.forceSixteenBit = createDesc.sixteenBitHeight;
         options.forceChannels = createDesc.sixteenBitHeight ? 1 : 4;

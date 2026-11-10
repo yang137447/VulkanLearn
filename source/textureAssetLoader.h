@@ -18,6 +18,7 @@ struct TextureBindingLoadDesc
     bool generateMipmaps = true;
     // 16-bit single-channel height array (terrain layer height).
     bool sixteenBitHeight = false;
+    bool flipY = true;
     vk::Filter filter = vk::Filter::eLinear;
     vk::SamplerAddressMode wrapMode = vk::SamplerAddressMode::eRepeat;
 };
