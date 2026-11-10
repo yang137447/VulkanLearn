@@ -36,7 +36,8 @@
 #include "editor/terrain/terrainEditSession.h"
 #include "editor/terrain/terrainPaintSession.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
-#include "editor/selection/materialInstanceSelection.h"
+#include "render/frontend/scenePicking.h"
+#include "render/editor/editorViewportGrid.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
@@ -155,6 +156,7 @@ EngineLoop::~EngineLoop()
 {
     // The callback captures this; never leave it installed after destruction.
     RenderSystem::GetInstance().SetRendererMutationSafePoint({});
+    RenderSystem::GetInstance().SetEditorViewportOverlay(nullptr);
 }
 
 RuntimeResult<void> EngineLoop::Init(
@@ -378,6 +380,17 @@ void EngineLoop::Shutdown()
 
     if (rendererBackendInitialized)
     {
+        // 参考网格由 editor 组合根持有；先断开 runtime 的裸指针，再在
+        // device 仍有效且 WaitIdle 之后释放 GPU 缓冲。
+        RenderSystem::GetInstance().SetEditorViewportOverlay(nullptr);
+        if (editorViewportGrid)
+        {
+            if (rendererBackend)
+            {
+                editorViewportGrid->Shutdown(*rendererBackend);
+            }
+            editorViewportGrid.reset();
+        }
         // 碎片池/箭矢网格可能仍被上一帧 command buffer 引用；必须等 WaitIdle
         // 之后再销毁，不能跟随 CPU/物理对象一起提前释放。
         if (destructibleRuntimes)
@@ -501,6 +514,9 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend->Initialize(
         vulkanExtensions, window.GetNativeHandle(), presentMode);
     rendererBackendInitialized = true;
+    editorViewportGrid = std::make_unique<EditorViewportGrid>();
+    RenderSystem::GetInstance().SetEditorViewportOverlay(
+        editorViewportGrid.get());
     terrainChunkStreamer = std::make_unique<TerrainChunkStreamer>();
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
 
@@ -2289,7 +2305,7 @@ void EngineLoop::ApplyQueuedUiActions()
     // 确保选择描边与常规视口拾取走同一个稳定帧边界。
     if (uiSubsystem != nullptr)
     {
-        const std::optional<Editor::Selection::MaterialInstanceModelContext>
+        const std::optional<VL::MaterialInstanceModelContext>
             modelSelection =
                 uiSubsystem->ConsumeMaterialInstanceModelSelectionRequest();
         if (modelSelection.has_value())
@@ -2298,7 +2314,7 @@ void EngineLoop::ApplyQueuedUiActions()
                 modelSelection.value());
         }
 
-        const std::optional<Editor::Selection::MaterialInstanceSelection>
+        const std::optional<VL::MaterialInstanceSelection>
             materialSelection =
                 uiSubsystem->ConsumeMaterialInstanceSelectionRequest();
         if (materialSelection.has_value())
@@ -2667,7 +2683,7 @@ void EngineLoop::BuildUiSceneOutlinerContent()
     const auto contexts =
         RenderSystem::GetInstance().GetMaterialInstanceModelContexts();
     models->reserve(contexts.size());
-    for (const Editor::Selection::MaterialInstanceModelContext& model : contexts)
+    for (const VL::MaterialInstanceModelContext& model : contexts)
     {
         EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
         modelSnapshot.worldGeneration = model.worldGeneration;
@@ -2677,7 +2693,7 @@ void EngineLoop::BuildUiSceneOutlinerContent()
         modelSnapshot.objectIdentity = model.objectIdentity;
         modelSnapshot.actorIdentity = model.actorIdentity;
         modelSnapshot.materials.reserve(model.materials.size());
-        for (const Editor::Selection::MaterialInstanceModelMaterial& material :
+        for (const VL::MaterialInstanceModelMaterial& material :
              model.materials)
         {
             EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
@@ -2994,8 +3010,8 @@ void EngineLoop::PumpPlatformEvents()
             !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled() &&
             uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))
         {
-            const std::optional<Editor::Selection::ScenePickRequest> pickRequest =
-                Editor::Selection::BuildScenePickRequest(
+            const std::optional<VL::ScenePickRequest> pickRequest =
+                VL::BuildScenePickRequest(
                     event,
                     uiSubsystem->GetViewportWidth(),
                     uiSubsystem->GetViewportHeight());
@@ -3003,7 +3019,7 @@ void EngineLoop::PumpPlatformEvents()
             {
                 const auto point = uiSubsystem->GetSceneViewportPoint(pickRequest->mouseX, pickRequest->mouseY);
                 if (!point) continue;
-                const std::optional<Editor::Selection::MaterialInstanceSelection>
+                const std::optional<VL::MaterialInstanceSelection>
                     selection = RenderSystem::GetInstance().PickMaterialInstanceAt(
                         point->x,
                         point->y,

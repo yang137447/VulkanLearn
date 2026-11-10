@@ -1,11 +1,12 @@
-#include "editor/scene/editorActorProperty.h"
+#include "world/actorProperty.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
-#include "editor/scene/editorSceneActorBuilder.h"
-#include "editor/ui/editorSceneActorTree.h"
+#include "render/camera/cameraExposure.h"
 #include "sceneNode.h"
+#include "world/actorIdentity.h"
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 
@@ -80,12 +81,40 @@ bool SetLight(T& light, const EditorActorPropertyEdit& edit, std::string& error)
     }
     return Reject(error, "This property does not belong to this light.");
 }
+
+// 取景只需要蓝图实例的作者/运行时位置；与 BuildEditorSceneActors 的声明顺序一致：
+// 先读声明，再由运行时状态覆盖。
+bool ScriptActorPosition(const World& world, const std::string& id, Eigen::Vector3f& position)
+{
+    bool found = false;
+    const auto read = [&](const nlohmann::json& declaration)
+    {
+        if (declaration.at("id") != id) return;
+        found = true;
+        const auto& value = declaration.at("position");
+        position = Eigen::Vector3f(value[0].get<float>(), value[1].get<float>(),
+            value[2].get<float>());
+    };
+    for (const auto& declaration : world.GetScriptBlueprints()) read(declaration);
+    // 生成实例只有在带 `__spawnPath` 时才会成为大纲 actor；非生成的运行时状态
+    // 只覆盖已存在声明的位姿。
+    for (const auto& state : world.GetScriptBlueprintStates())
+        if (state.contains("__spawnPath")) read(state);
+    if (found)
+        for (const auto& state : world.GetScriptBlueprintStates())
+            if (state.at("id") == id)
+            {
+                const auto& value = state.at("position");
+                position = Eigen::Vector3f(value[0].get<float>(), value[1].get<float>(),
+                    value[2].get<float>());
+            }
+    return found;
+}
 } // namespace
 
 bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     std::string& error)
 {
-    using EditorUi::EditorSceneActorType;
     using P = EditorActorProperty;
     error.clear();
     if (edit.worldGeneration != world.GetGeneration())
@@ -111,8 +140,8 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
         if (edit.component >= (vector ? 3u : 1u))
             return Reject(error, "Unknown property component.");
     }
-    EditorUi::EditorSceneActorIdentity identity;
-    if (!EditorUi::ParseSceneActorIdentity(edit.identity, identity))
+    EditorSceneActorIdentity identity;
+    if (!ParseSceneActorIdentity(edit.identity, identity))
         return Reject(error, "Unknown actor identity.");
 
     if (identity.type == EditorSceneActorType::Script)
@@ -404,56 +433,115 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     return Reject(error, "Actor is not in the active World or is read-only.");
 }
 
-bool FrameEditorActor(World& world, uint64_t generation, const std::string& identity)
+bool FrameEditorActor(World& world, uint64_t generation, const std::string& identityString)
 {
     if (!world.IsEditorViewEnabled() || world.GetGeneration() != generation ||
         !world.GetRenderCamera()) return false;
-    for (const auto& actor : BuildEditorSceneActors(world))
+    EditorSceneActorIdentity identity;
+    if (!ParseSceneActorIdentity(identityString, identity)) return false;
+
+    Eigen::Vector3f target = Eigen::Vector3f::Zero();
+    float radius = 150.0f;
+    bool found = false;
+    switch (identity.type)
     {
-        if (actor.identity != identity) continue;
-        // 场景风与风剖面是全局/派生状态，没有可框选的空间位置。
-        if (actor.type == EditorUi::EditorSceneActorType::Environment ||
-            actor.type == EditorUi::EditorSceneActorType::SceneWind) return false;
-        Eigen::Vector3f target = actor.position;
-        float radius = 150.0f;
-        if (actor.type == EditorUi::EditorSceneActorType::Mesh ||
-            actor.type == EditorUi::EditorSceneActorType::Terrain)
+    case EditorSceneActorType::Mesh:
+    case EditorSceneActorType::Terrain:
+    {
+        // 蓝图生成的网格由 blueprintInstance actor 表达；这里与 BuildEditorSceneActors
+        // 一样跳过分组，避免同一对象出现第二个可框选身份。
+        if (identity.name.rfind("__blueprint/", 0) == 0) return false;
+        const bool terrain = identity.type == EditorSceneActorType::Terrain;
+        Eigen::Vector3f lower = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
+        Eigen::Vector3f upper = Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
+        for (const auto& entry : world.GetMeshObjects())
         {
-            Eigen::Vector3f lower = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
-            Eigen::Vector3f upper = Eigen::Vector3f::Constant(std::numeric_limits<float>::lowest());
+            const WorldMeshObject& object = entry.second;
+            if (object.isTerrain != terrain) continue;
+            if (MeshSceneObjectIdentity(object, entry.first) != identity.name) continue;
+            found = true;
             // 用所有 section 的变换后角点，而不是作者根位置：源模型可偏心，section 可相距很远；
             // 地形的 section 就是同一 placement 下的各个 chunk，取景必须包住整块地形。
-            for (const auto& section : actor.sections)
-            {
-                const auto& object = world.GetMeshObjects().at(section.objectName);
-                for (float x : {object.localBoundsMin.x(), object.localBoundsMax.x()})
-                    for (float y : {object.localBoundsMin.y(), object.localBoundsMax.y()})
-                        for (float z : {object.localBoundsMin.z(), object.localBoundsMax.z()})
-                        {
-                            const Eigen::Vector3f point =
-                                (object.model * Eigen::Vector4f(x, y, z, 1)).head<3>();
-                            lower = lower.cwiseMin(point);
-                            upper = upper.cwiseMax(point);
-                        }
-            }
-            target = (lower + upper) * 0.5f;
-            radius = std::max(1.0f, (upper - lower).norm() * 0.5f);
+            for (float x : {object.localBoundsMin.x(), object.localBoundsMax.x()})
+                for (float y : {object.localBoundsMin.y(), object.localBoundsMax.y()})
+                    for (float z : {object.localBoundsMin.z(), object.localBoundsMax.z()})
+                    {
+                        const Eigen::Vector3f point =
+                            (object.model * Eigen::Vector4f(x, y, z, 1)).head<3>();
+                        lower = lower.cwiseMin(point);
+                        upper = upper.cwiseMax(point);
+                    }
         }
-        const auto& view = world.GetRenderCamera();
-        const Eigen::Matrix4f projection = view->GetProjectionMatrix();
-        const float aspect = std::abs(projection(1, 1) / projection(0, 0));
-        const float halfFov = view->GetHFOV() * DegreesToRadians * 0.5f;
-        const float halfVerticalFov = std::atan(std::tan(halfFov) / aspect);
-        const float distance = std::max(radius + view->GetClipNear() * 2.0f,
-            1.2f * radius / std::sin(std::min(halfFov, halfVerticalFov)));
-        // 侧移让被取景的 Camera 有可见视锥；保留观察者 up，避免垂直视角与世界 Y 共线。
-        const Eigen::Vector3f offset =
-            (-view->GetForwardVector() + view->GetRightVector() * 0.3f).normalized();
-        view->SetCamera(target + offset * distance, target, view->GetUpVector());
-        view->SetProjection(view->GetHFOV(), aspect, view->GetClipNear(),
-            std::max(view->GetClipFar(), distance + radius * 2.0f));
-        return true;
+        if (!found) return false;
+        target = (lower + upper) * 0.5f;
+        radius = std::max(1.0f, (upper - lower).norm() * 0.5f);
+        break;
     }
-    return false;
+    case EditorSceneActorType::Script:
+        found = ScriptActorPosition(world, identity.name, target);
+        break;
+    case EditorSceneActorType::DirectionalLight:
+        if (const auto* light = FindNode(world.GetDirectionalLights(), identity.name))
+        {
+            target = light->GetPosition();
+            found = true;
+        }
+        break;
+    case EditorSceneActorType::PointLight:
+        if (const auto* light = FindNode(world.GetPointLights(), identity.name))
+        {
+            target = light->GetPosition();
+            found = true;
+        }
+        break;
+    case EditorSceneActorType::SpotLight:
+        if (const auto* light = FindNode(world.GetSpotLights(), identity.name))
+        {
+            target = light->GetPosition();
+            found = true;
+        }
+        break;
+    case EditorSceneActorType::SquareAreaLight:
+    {
+        const auto it = world.GetSquareAreaLights().find(identity.name);
+        if (it != world.GetSquareAreaLights().end())
+        {
+            target = it->second.position;
+            found = true;
+        }
+        break;
+    }
+    case EditorSceneActorType::Camera:
+        if (world.GetCamera() != nullptr)
+        {
+            const Camera& camera = *world.GetCamera();
+            if ((camera.GetName().empty() ? "Camera" : camera.GetName()) == identity.name)
+            {
+                target = camera.GetPosition();
+                found = true;
+            }
+        }
+        break;
+    // 场景风与风剖面是全局/派生状态，没有可框选的空间位置。
+    case EditorSceneActorType::Environment:
+    case EditorSceneActorType::SceneWind:
+        return false;
+    }
+    if (!found) return false;
+
+    const auto& view = world.GetRenderCamera();
+    const Eigen::Matrix4f projection = view->GetProjectionMatrix();
+    const float aspect = std::abs(projection(1, 1) / projection(0, 0));
+    const float halfFov = view->GetHFOV() * DegreesToRadians * 0.5f;
+    const float halfVerticalFov = std::atan(std::tan(halfFov) / aspect);
+    const float distance = std::max(radius + view->GetClipNear() * 2.0f,
+        1.2f * radius / std::sin(std::min(halfFov, halfVerticalFov)));
+    // 侧移让被取景的 Camera 有可见视锥；保留观察者 up，避免垂直视角与世界 Y 共线。
+    const Eigen::Vector3f offset =
+        (-view->GetForwardVector() + view->GetRightVector() * 0.3f).normalized();
+    view->SetCamera(target + offset * distance, target, view->GetUpVector());
+    view->SetProjection(view->GetHFOV(), aspect, view->GetClipNear(),
+        std::max(view->GetClipFar(), distance + radius * 2.0f));
+    return true;
 }
 } // namespace VL

@@ -1,8 +1,8 @@
-#include "editor/preview/materialInstancePreviewAdapter.h"
+#include "render/editorBridge/materialInstancePreviewAdapter.h"
 
 #include <utility>
 
-namespace VL::Editor::Preview
+namespace VL
 {
 namespace
 {
@@ -330,4 +330,4 @@ RendererOwnedMaterialInstancePreviewAdapter::ExecuteLiveUpdate(
     return result;
 }
 
-} // namespace VL::Editor::Preview
+} // namespace VL

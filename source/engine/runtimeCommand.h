@@ -10,6 +10,7 @@
 #include "debug/debugDrawControl.h"
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupPaint.h"
+#include "world/actorProperty.h"
 
 namespace VL
 {

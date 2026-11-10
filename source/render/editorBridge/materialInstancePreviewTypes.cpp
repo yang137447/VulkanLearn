@@ -1,11 +1,11 @@
-#include "editor/preview/materialInstancePreviewTypes.h"
+#include "render/editorBridge/materialInstancePreviewTypes.h"
 
 #include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <utility>
 
-namespace VL::Editor::Preview
+namespace VL
 {
 namespace
 {
@@ -190,8 +190,8 @@ bool operator==(
 }
 
 bool operator==(
-    const ApplyMaterialInstancePreviewPayload& left,
-    const ApplyMaterialInstancePreviewPayload& right) noexcept
+    const ApplyMaterialInstancePreviewDraftPayload& left,
+    const ApplyMaterialInstancePreviewDraftPayload& right) noexcept
 {
     return left.workingDraft == right.workingDraft;
 }
@@ -380,4 +380,4 @@ const char* ToString(PreviewAdapterFailureStage stage) noexcept
     return UnknownString();
 }
 
-} // namespace VL::Editor::Preview
+} // namespace VL

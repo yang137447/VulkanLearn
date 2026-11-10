@@ -62,8 +62,8 @@ add_executable(material_instance_editor_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstanceSparseCandidate.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewTypes.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewAdapter.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewTypes.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewAdapter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp")
 
 target_include_directories(material_instance_editor_tests
@@ -102,8 +102,8 @@ add_executable(material_instance_editor_landed_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstanceSparseCandidate.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewTypes.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewAdapter.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewTypes.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewAdapter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp")
 
 target_include_directories(material_instance_editor_landed_tests
@@ -143,8 +143,8 @@ add_executable(material_instance_editor_production_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstanceSparseCandidate.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/materialInstanceDocumentService.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/core/runtimeResult.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewTypes.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewAdapter.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewTypes.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewAdapter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp")
 target_sources(material_instance_editor_production_tests PRIVATE
@@ -153,6 +153,7 @@ target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/selection/materialInstanceSelection.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/render/frontend/scenePicking.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/physics/fracture/destructibleProfile.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp")

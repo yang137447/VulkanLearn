@@ -22,6 +22,8 @@
 #include "engine/editorThumbnailScheduler.h"
 #include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
+#include "ui/uiEditorViewModelSections.h"
+#include "ui/viewModel/runtimeUiSections.h"
 #include "engine/worldGraphTransactionCoordinator.h"
 #include "shader/reload/shaderReloadRuntime.h"
 #include "physics/fracture/fractureBudget.h"
@@ -38,6 +40,7 @@ class EditorThumbnailRenderSession;
 class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
+class EditorViewportGrid;
 class RenderThread;
 class TerrainChunkStreamer;
 class RuntimeConfig;
@@ -204,6 +207,8 @@ private:
     std::unique_ptr<ShaderReloadRuntime> shaderReloadRuntime;
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
+    // 编辑器参考网格由 editor 组合根持有；RenderSystem 只看到覆盖层接口。
+    std::unique_ptr<EditorViewportGrid> editorViewportGrid;
     std::unique_ptr<TerrainChunkStreamer> terrainChunkStreamer;
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
@@ -260,7 +265,7 @@ private:
     bool lastUiViewModelOfflineMode = false;
     ScriptPlayState lastUiViewModelScriptState = ScriptPlayState::Editing;
     // GT 拥有的六节（脚本/动画/性能/相机/环境/离线）；资产/大纲/状态由 UiSubsystem 发布。
-    UiViewModelSectionStore uiViewModelSections;
+    UiRuntimeSectionStore uiViewModelSections;
     bool uiViewModelSectionFirstRefresh = true;
     // 脚本节输入版本：由已有代数/状态组合，不引入第二份权威状态。
     uint64_t uiScriptsSectionRevision = 0;

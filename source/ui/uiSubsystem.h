@@ -15,7 +15,6 @@
 #include <RmlUi/Core/Input.h>
 
 #include "core/runtimeResult.h"
-#include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "ui/rmlUiInterfaces.h"
 #include "ui/rmlUiRuntime.h"
@@ -24,7 +23,7 @@
 #include "ui/uiRenderSnapshotQueue.h"
 #include "ui/uiUpdateScheduler.h"
 #include "ui/uiViewModelRefresh.h"
-#include "ui/uiViewModelSections.h"
+#include "ui/viewModel/runtimeUiSections.h"
 #include "ui/viewport/editorViewportGeometry.h"
 
 namespace Rml
@@ -40,6 +39,8 @@ namespace VL
 class CommandBus;
 class DiagnosticsSubsystem;
 class PlatformWindow;
+struct MaterialInstanceModelContext;
+struct MaterialInstanceSelection;
 
 namespace Editor
 {
@@ -47,19 +48,12 @@ namespace Editor
     class SceneDocumentService;
     class EditorJsonAssetLibrary;
     class EditorThumbnailLibrary;
-namespace Selection
-{
-struct MaterialInstanceSelection;
-}
-namespace Preview
-{
-class IMaterialInstancePreviewAdapter;
-}
 }
 
-namespace EditorUi
-{
-}
+// Opaque editor snapshot payloads. uiSubsystem.cpp casts them back to the
+// concrete editor vectors; this runtime header never names editor snapshot
+// types in its public surface.
+using UiEditorSnapshotPayload = std::shared_ptr<const void>;
 
 // Describes UI assets, viewport, localization, fonts, and runtime feature switches.
 // RuntimeConfig supplies it; UiSubsystem owns the resulting widget contexts.
@@ -77,8 +71,9 @@ struct UiSubsystemDesc
     bool hotReload = true;
     bool developerUiEnabled = true;
     bool developerUiVisible = false;
-    // EngineLoop 注入 renderer-owned adapter；UiSubsystem 不拥有也不直接调用它。
-    Editor::Preview::IMaterialInstancePreviewAdapter* previewAdapter = nullptr;
+    // Editor-side preview adapter passed as an opaque init handle. Only
+    // uiSubsystem.cpp casts it, so this runtime header stays editor-free.
+    void* previewAdapter = nullptr;
 };
 
 struct UiSceneOption
@@ -97,9 +92,7 @@ struct UiSceneOption
 
 // GT 拥有运行时与编辑器 RML 文档；RT 只消费冻结的 draw snapshot。
 // It publishes typed actions and immutable snapshots, but does not mutate renderer internals.
-class UiSubsystem : public EditorUi::IMaterialInstanceSceneSelectionSink,
-    public EditorUi::IEditorRuntimeActionSink,
-    public EditorUi::IEditorJsonAssetRequestSink
+class UiSubsystem
 {
 public:
     UiSubsystem();
@@ -133,23 +126,20 @@ public:
     // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
     void TickMaterialInstanceEditor();
     Editor::SceneDocumentService* GetSceneDocuments() const;
-    Editor::MaterialInstanceEditorRuntime* GetEditorCommandRuntime() const
-    { return materialInstanceEditorRuntime.get(); }
-    Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const { return thumbnailLibrary.get(); }
+    Editor::MaterialInstanceEditorRuntime* GetEditorCommandRuntime() const;
+    Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const;
     bool CanRenderThumbnails() const
     { return developerUiVisible && !sceneViewportInputActive && !editorPointerCaptured; }
     // 视口拾取只负责打开文档并记录导航来源，实际编辑仍经由 EditorCommand。
     bool SelectSceneObjectFromPick(
-        const Editor::Selection::MaterialInstanceSelection& selection);
+        const VL::MaterialInstanceSelection& selection);
     // MI 模型列表与大纲 actor 列表都是不可变数组的共享指针：同一份内容跨刷新复用，
     // 只有指针或选中态变化才提升大纲分节版本，避免每 100 ms 重挂面板 DOM。
-    void SetMaterialInstanceSceneModels(
-        std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> models);
-    void SetSceneActors(
-        std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors);
-    std::optional<Editor::Selection::MaterialInstanceModelContext>
+    void SetMaterialInstanceSceneModels(UiEditorSnapshotPayload models);
+    void SetSceneActors(UiEditorSnapshotPayload actors);
+    std::optional<VL::MaterialInstanceModelContext>
         ConsumeMaterialInstanceModelSelectionRequest();
-    std::optional<Editor::Selection::MaterialInstanceSelection>
+    std::optional<VL::MaterialInstanceSelection>
         ConsumeMaterialInstanceSelectionRequest();
     // 大纲选中非网格 actor 时要求清掉渲染端的 mesh 选中描边，避免出现
     // "大纲高亮灯光、视口还描着上一个网格" 的双选中态。
@@ -157,14 +147,14 @@ public:
     void ClearMaterialInstanceSceneSelection() noexcept;
 
     bool RequestModelSelection(
-        const Editor::Selection::MaterialInstanceModelContext& model) override;
+        const VL::MaterialInstanceModelContext& model);
     bool RequestMaterialSelection(
-        const Editor::Selection::MaterialInstanceSelection& selection) override;
-    bool RequestActorSelection(const std::string& actorIdentity) override;
+        const VL::MaterialInstanceSelection& selection);
+    bool RequestActorSelection(const std::string& actorIdentity);
     bool CancelBlueprintAssetDrag();
-    void RequestRuntimeAction(UiAction action) override;
-    void RequestOpenJsonAsset(const std::string& assetPath) override;
-    void RequestRefreshAssetCatalog() override;
+    void RequestRuntimeAction(UiAction action);
+    void RequestOpenJsonAsset(const std::string& assetPath);
+    void RequestRefreshAssetCatalog();
 
     bool IsInitialized() const { return initialized; }
     bool IsDeveloperUiVisible() const { return developerUiVisible; }
@@ -225,6 +215,10 @@ public:
     UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return snapshotPublisher.Queue(); }
 
 private:
+    // 编辑器运行时/面板/资产库/缩略图库/快照只存在于 .cpp；运行时头不暴露
+    // 编辑器类型，也不承担它们的析构。
+    struct Impl;
+
     void SetImmersiveView(bool enabled);
     using LocalizationTable = std::unordered_map<std::string, std::string>;
     using LocalizationDatabase = std::unordered_map<std::string, LocalizationTable>;
@@ -321,25 +315,10 @@ private:
     PlatformWindow* window = nullptr;
     CommandBus* commandBus = nullptr;
     const DiagnosticsSubsystem* diagnostics = nullptr;
-    std::unique_ptr<Editor::MaterialInstanceEditorRuntime>
-        materialInstanceEditorRuntime;
-    std::unique_ptr<EditorUi::MaterialInstanceAssetEditorPanel>
-        materialInstanceEditorPanel;
-    std::unique_ptr<Editor::EditorJsonAssetLibrary> jsonAssetLibrary;
-    std::unique_ptr<Editor::EditorThumbnailLibrary> thumbnailLibrary;
-    std::optional<EditorUi::MaterialInstanceModelSnapshot>
-        selectedModelMaterials;
+    std::unique_ptr<Impl> impl;
     std::optional<uint32_t> selectedMaterialSlotIndex;
-    // 大纲/MI 模型列表都是不可变数组：只有内容或选中态变化才提升大纲节版本。
-    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>
-        sceneModels;
-    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>>
-        sceneActors;
-    // 分节存储是视图模型的唯一权威：九个节各自持有不可变载荷与版本。
-    UiViewModelSectionStore sectionStore;
     // 已应用到面板/绑定的版本集合；ChangedFrom 产生本帧的脏集。
     UiSectionVersions appliedSectionVersions;
-    UiAssetsSection appliedAssets;
     UiPerformanceSection appliedPerformance;
     // 大纲节版本源：actor/模型指针替换或选中态变化时推进；不引入第二份选择状态。
     uint64_t outlinerRevision = 0;
@@ -357,10 +336,6 @@ private:
     // 大纲选中态是稳定身份（"mesh|…"、"pointLight|…"），World 换代时清空。
     std::string selectedActorIdentity;
     bool pendingSceneSelectionClear = false;
-    std::optional<Editor::Selection::MaterialInstanceModelContext>
-        pendingMaterialInstanceModelSelection;
-    std::optional<Editor::Selection::MaterialInstanceSelection>
-        pendingMaterialInstanceSelection;
     Rml::Context* rmlContext = nullptr;
     Rml::ElementDocument* runtimeDocument = nullptr;
     Rml::ElementDocument* editorDocument = nullptr;

@@ -261,15 +261,15 @@ void RebuildRenderSceneMaterialGroupsImpl(VL::RenderScene& renderScene)
 }
 
 NumericPreviewDraftParseResult ParseNumericPreviewDraft(
-    const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
-    const VL::Editor::Preview::NormalizedMaterialInstancePath& expectedPath,
+    const VL::MaterialInstancePreviewDraft& draft,
+    const VL::NormalizedMaterialInstancePath& expectedPath,
     const MaterialInstanceStateSnapshot::TextureMap& activeTextures,
     const nlohmann::json& frozenDefinition)
 {
     NumericPreviewDraftParseResult result;
-    const VL::Editor::Preview::MaterialInstancePreviewPathNormalizationResult
+    const VL::MaterialInstancePreviewPathNormalizationResult
         draftPath =
-            VL::Editor::Preview::NormalizeMaterialInstancePath(
+            VL::NormalizeMaterialInstancePath(
                 draft.materialInstancePath);
     if (!draftPath.Succeeded())
     {
@@ -439,19 +439,19 @@ NumericPreviewDraftParseResult ParseNumericPreviewDraft(
 } // namespace
 
 class RenderSystem::MaterialInstancePreviewSession final
-    : public VL::Editor::Preview::IRendererMaterialInstancePreviewSession
+    : public VL::IRendererMaterialInstancePreviewSession
 {
 public:
     MaterialInstancePreviewSession(
         RenderSystem& ownerValue,
-        VL::Editor::Preview::MaterialInstancePreviewWorldIdentity worldValue,
-        VL::Editor::Preview::NormalizedMaterialInstancePath pathValue,
+        VL::MaterialInstancePreviewWorldIdentity worldValue,
+        VL::NormalizedMaterialInstancePath pathValue,
         uint64_t ownerGenerationValue,
         std::shared_ptr<MaterialInstance> materialInstanceValue,
         MaterialInstanceNumericParameterValues baselineParametersValue,
         MaterialInstanceStateSnapshot::TextureMap baselineTexturesValue,
         PreviewRenderStateValues baselineRenderStatesValue,
-        VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraftValue)
+        VL::MaterialInstancePreviewDraft baselineDraftValue)
         : owner(ownerValue)
         , world(std::move(worldValue))
         , materialInstancePath(std::move(pathValue))
@@ -465,26 +465,26 @@ public:
     {
     }
 
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Apply(
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    VL::MaterialInstancePreviewAdapterResult Apply(
+        const VL::MaterialInstancePreviewDraft& draft) override
     {
         return Commit(draft, false);
     }
 
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult RestoreBaseline(
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& baselineDraft) override
+    VL::MaterialInstancePreviewAdapterResult RestoreBaseline(
+        const VL::MaterialInstancePreviewDraft& baselineDraft) override
     {
         // 仍使用调用方 revision 参与门禁，但内容来自 connect 时捕获的源快照，
         // 避免外部 document 在连接期间改写 baseline 后影响运行时 Restore。
-        VL::Editor::Preview::MaterialInstancePreviewDraft restoreDraft =
+        VL::MaterialInstancePreviewDraft restoreDraft =
             this->baselineDraft;
         restoreDraft.documentRevision = baselineDraft.documentRevision;
         return Commit(restoreDraft, true);
     }
 
 private:
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Commit(
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
+    VL::MaterialInstancePreviewAdapterResult Commit(
+        const VL::MaterialInstancePreviewDraft& draft,
         bool restoreBaseline)
     {
         if (owner.offlineMode)
@@ -495,9 +495,9 @@ private:
             !owner.activeOfflineWorldAssets->materialDefinitions.count(
                 materialInstancePath.value))
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
-            result.status = VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
-            result.failureStage = VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            VL::MaterialInstancePreviewAdapterResult result;
+            result.status = VL::PreviewAdapterOperationStatus::Failed;
+            result.failureStage = VL::PreviewAdapterFailureStage::Prepare;
             result.message = "Material instance preview lost its frozen World definition.";
             return result;
         }
@@ -510,11 +510,11 @@ private:
                     materialInstancePath.value));
         if (!parsed.values.has_value())
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            VL::MaterialInstancePreviewAdapterResult result;
             result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                VL::PreviewAdapterOperationStatus::Failed;
             result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+                VL::PreviewAdapterFailureStage::Prepare;
             result.message = std::move(parsed.errorMessage);
             return result;
         }
@@ -533,11 +533,11 @@ private:
             currentCapture->ownerGeneration != ownerGeneration ||
             currentCapture->materialInstance.get() != materialInstance.get())
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            VL::MaterialInstancePreviewAdapterResult result;
             result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                VL::PreviewAdapterOperationStatus::Failed;
             result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+                VL::PreviewAdapterFailureStage::Prepare;
             result.message =
                 "Material instance preview target is no longer the active World-local MI.";
             return result;
@@ -545,13 +545,13 @@ private:
 
         if (renderStateChanged)
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result =
+            VL::MaterialInstancePreviewAdapterResult result =
                 owner.CommitMaterialInstancePreviewDraft(
                     world,
                     materialInstancePath,
                     draft);
             if (result.status ==
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Completed)
+                VL::PreviewAdapterOperationStatus::Completed)
             {
                 const std::optional<
                     VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
@@ -564,9 +564,9 @@ private:
                     !replacementCapture->materialInstance)
                 {
                     result.status =
-                        VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                        VL::PreviewAdapterOperationStatus::Failed;
                     result.failureStage =
-                        VL::Editor::Preview::PreviewAdapterFailureStage::Commit;
+                        VL::PreviewAdapterFailureStage::Commit;
                     result.liveSwapCommitted = false;
                     result.replacesLiveResource = false;
                     result.message =
@@ -588,11 +588,11 @@ private:
         }
         catch (const std::exception& exception)
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            VL::MaterialInstancePreviewAdapterResult result;
             result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                VL::PreviewAdapterOperationStatus::Failed;
             result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+                VL::PreviewAdapterFailureStage::Prepare;
             result.message =
                 std::string("Offline material preview prepare failed: ") +
                 exception.what();
@@ -618,11 +618,11 @@ private:
         }
         catch (const std::exception& exception)
         {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            VL::MaterialInstancePreviewAdapterResult result;
             result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                VL::PreviewAdapterOperationStatus::Failed;
             result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Commit;
+                VL::PreviewAdapterFailureStage::Commit;
             result.message =
                 std::string("Material instance numeric preview commit failed: ") +
                 exception.what();
@@ -630,9 +630,9 @@ private:
         }
         owner.activeOfflineWorldAssets.swap(preparedOfflineAssets);
 
-        VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+        VL::MaterialInstancePreviewAdapterResult result;
         result.status =
-            VL::Editor::Preview::PreviewAdapterOperationStatus::Completed;
+            VL::PreviewAdapterOperationStatus::Completed;
         result.runtimeResourceGeneration = ownerGeneration;
         result.liveSwapCommitted = true;
         result.replacesLiveResource = false;
@@ -643,34 +643,34 @@ private:
     }
 
     RenderSystem& owner;
-    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world;
-    VL::Editor::Preview::NormalizedMaterialInstancePath materialInstancePath;
+    VL::MaterialInstancePreviewWorldIdentity world;
+    VL::NormalizedMaterialInstancePath materialInstancePath;
     uint64_t ownerGeneration = 0;
     std::shared_ptr<MaterialInstance> materialInstance;
     MaterialInstanceNumericParameterValues baselineParameters;
     MaterialInstanceStateSnapshot::TextureMap baselineTextures;
     PreviewRenderStateValues baselineRenderStates;
     PreviewRenderStateValues activeRenderStates;
-    VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraft;
+    VL::MaterialInstancePreviewDraft baselineDraft;
 };
 
 class RenderSystem::OfflineMaterialInstancePreviewSession final
-    : public VL::Editor::Preview::IRendererMaterialInstancePreviewSession
+    : public VL::IRendererMaterialInstancePreviewSession
 {
 public:
     OfflineMaterialInstancePreviewSession(RenderSystem& owner,
-        VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world,
-        VL::Editor::Preview::NormalizedMaterialInstancePath path,
-        VL::Editor::Preview::MaterialInstancePreviewDraft baseline)
+        VL::MaterialInstancePreviewWorldIdentity world,
+        VL::NormalizedMaterialInstancePath path,
+        VL::MaterialInstancePreviewDraft baseline)
         : owner(owner), world(std::move(world)), path(std::move(path)),
           baseline(std::move(baseline)) {}
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Apply(
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    VL::MaterialInstancePreviewAdapterResult Apply(
+        const VL::MaterialInstancePreviewDraft& draft) override
     {
         return owner.CommitMaterialInstancePreviewDraft(world, path, draft);
     }
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult RestoreBaseline(
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    VL::MaterialInstancePreviewAdapterResult RestoreBaseline(
+        const VL::MaterialInstancePreviewDraft& draft) override
     {
         auto restored = baseline;
         restored.documentRevision = draft.documentRevision;
@@ -678,9 +678,9 @@ public:
     }
 private:
     RenderSystem& owner;
-    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world;
-    VL::Editor::Preview::NormalizedMaterialInstancePath path;
-    VL::Editor::Preview::MaterialInstancePreviewDraft baseline;
+    VL::MaterialInstancePreviewWorldIdentity world;
+    VL::NormalizedMaterialInstancePath path;
+    VL::MaterialInstancePreviewDraft baseline;
 };
 
 RenderSystem::~RenderSystem()
@@ -2964,7 +2964,7 @@ void RenderSystem::SetPickingSceneEnabled(bool enabled) noexcept
     pickingSceneEnabled = enabled;
 }
 
-std::optional<VL::Editor::Selection::MaterialInstanceSelection>
+std::optional<VL::MaterialInstanceSelection>
 RenderSystem::PickMaterialInstanceAt(
     float mouseX,
     float mouseY,
@@ -2977,18 +2977,18 @@ RenderSystem::PickMaterialInstanceAt(
         return std::nullopt;
     }
 
-    VL::Editor::Selection::ScenePickRequest request;
+    VL::ScenePickRequest request;
     request.mouseX = mouseX;
     request.mouseY = mouseY;
     request.viewportWidth = viewportWidth;
     request.viewportHeight = viewportHeight;
-    return VL::Editor::Selection::SceneObjectPicker().Pick(
+    return VL::SceneObjectPicker().Pick(
         pickingRenderScene,
         activeWorld->GetScenePath(),
         request);
 }
 
-std::vector<VL::Editor::Selection::MaterialInstanceModelContext>
+std::vector<VL::MaterialInstanceModelContext>
 RenderSystem::GetMaterialInstanceModelContexts() const
 {
     if (!activeWorld || !hasPickingRenderScene ||
@@ -2997,7 +2997,7 @@ RenderSystem::GetMaterialInstanceModelContexts() const
         return {};
     }
 
-    std::vector<VL::Editor::Selection::MaterialInstanceModelContext> result;
+    std::vector<VL::MaterialInstanceModelContext> result;
     std::unordered_map<std::string, std::size_t> modelIndices;
     modelIndices.reserve(pickingRenderScene.drawPackets.size());
     for (const VL::RenderDrawPacket& drawPacket : pickingRenderScene.drawPackets)
@@ -3020,7 +3020,7 @@ RenderSystem::GetMaterialInstanceModelContexts() const
         if (inserted)
         {
             result.push_back(
-                VL::Editor::Selection::AggregateSceneModel(
+                VL::AggregateSceneModel(
                     pickingRenderScene,
                     activeWorld->GetScenePath(),
                     drawPacket.objectId,
@@ -3050,7 +3050,7 @@ RenderSystem::GetMaterialInstanceModelContexts() const
 }
 
 void RenderSystem::SetSelectedMaterialInstanceModel(
-    const VL::Editor::Selection::MaterialInstanceModelContext& model)
+    const VL::MaterialInstanceModelContext& model)
 {
     if (!activeWorld || model.worldGeneration != activeWorld->GetGeneration() ||
         model.objectId == 0)
@@ -3067,7 +3067,7 @@ void RenderSystem::SetSelectedMaterialInstanceModel(
 }
 
 void RenderSystem::SetSelectedMaterialInstance(
-    const VL::Editor::Selection::MaterialInstanceSelection& selection)
+    const VL::MaterialInstanceSelection& selection)
 {
     if (!activeWorld ||
         selection.worldGeneration != activeWorld->GetGeneration() ||
@@ -3093,15 +3093,15 @@ void RenderSystem::ClearSelectedMaterialInstance() noexcept
     selectedWorldGeneration = 0;
 }
 
-std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
+std::unique_ptr<VL::IMaterialInstancePreviewAdapter>
 RenderSystem::CreateMaterialInstancePreviewAdapter()
 {
-    VL::Editor::Preview::IRendererMaterialInstancePreviewOwner& owner = *this;
+    VL::IRendererMaterialInstancePreviewOwner& owner = *this;
     return std::make_unique<
-        VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter>(owner);
+        VL::RendererOwnedMaterialInstancePreviewAdapter>(owner);
 }
 
-std::optional<VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+std::optional<VL::MaterialInstancePreviewWorldIdentity>
 RenderSystem::GetActiveWorldIdentity() const
 {
     if (!activeWorld)
@@ -3109,20 +3109,20 @@ RenderSystem::GetActiveWorldIdentity() const
         return std::nullopt;
     }
 
-    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity identity;
+    VL::MaterialInstancePreviewWorldIdentity identity;
     identity.generation = activeWorld->GetGeneration();
     identity.scenePath = activeWorld->GetScenePath();
-    return VL::Editor::Preview::NormalizeWorldIdentity(std::move(identity));
+    return VL::NormalizeWorldIdentity(std::move(identity));
 }
 
-VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+VL::MaterialInstancePreviewAdapterResult
 RenderSystem::CaptureMaterialInstancePreviewSession(
-    const VL::Editor::Preview::MaterialInstancePreviewAdapterCommand& command,
+    const VL::MaterialInstancePreviewAdapterCommand& command,
     std::shared_ptr<
-        VL::Editor::Preview::IRendererMaterialInstancePreviewSession>&
+        VL::IRendererMaterialInstancePreviewSession>&
         outSession)
 {
-    using namespace VL::Editor::Preview;
+    using namespace VL;
 
     outSession.reset();
     MaterialInstancePreviewAdapterResult result;
@@ -3221,7 +3221,7 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
         const PreviewRenderStateValues baselineRenderStates =
             BuildPreviewRenderStateValues(
                 resolved.effectiveMaterialInstanceJson);
-        VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraft;
+        VL::MaterialInstancePreviewDraft baselineDraft;
         baselineDraft.materialInstancePath =
             command.materialInstancePath.value;
         baselineDraft.documentRevision =
@@ -3319,13 +3319,13 @@ RenderSystem::PrepareOfflineMaterialPreview(
     return candidate;
 }
 
-VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+VL::MaterialInstancePreviewAdapterResult
 RenderSystem::CommitMaterialInstancePreviewDraft(
-    const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
-    const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
-    const VL::Editor::Preview::MaterialInstancePreviewDraft& draft)
+    const VL::MaterialInstancePreviewWorldIdentity& world,
+    const VL::NormalizedMaterialInstancePath& materialInstancePath,
+    const VL::MaterialInstancePreviewDraft& draft)
 {
-    using namespace VL::Editor::Preview;
+    using namespace VL;
 
     MaterialInstancePreviewAdapterResult result;
     result.failureStage = PreviewAdapterFailureStage::Prepare;
@@ -3738,10 +3738,14 @@ void RenderSystem::DrawEditorGridGeometry(
     vk::CommandBuffer& commandBuffer)
 {
     // 管线与描述符集由 pass 流程绑定，这里只提交几何；网格顶点缓冲是静态
-    // 世界几何，首次绘制时创建，之后每帧复用同一份数据。
-    editorViewportGrid.EnsureCreated(*rendererBackend);
-    editorViewportGrid.Bind(commandBuffer);
-    editorViewportGrid.Draw(commandBuffer);
+    // 世界几何，由 editor 注入的覆盖层负责创建与生命周期。
+    if (editorViewportOverlay == nullptr || rendererBackend == nullptr)
+    {
+        return;
+    }
+    editorViewportOverlay->EnsureCreated(*rendererBackend);
+    editorViewportOverlay->Bind(commandBuffer);
+    editorViewportOverlay->Draw(commandBuffer);
 }
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
@@ -5561,7 +5565,6 @@ void RenderSystem::InitializeFrameResources()
 
     frameResources.Initialize(*rendererBackend);
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
-    editorViewportGrid.EnsureCreated(*rendererBackend);
     proceduralSkyCubeGenerator.Initialize(
         *pipelineFactory,
         *rendererBackend);
@@ -5612,7 +5615,6 @@ void RenderSystem::ShutdownFrameResources()
     environmentUpdateSourceCube.reset();
     
     frameResources.Shutdown(*rendererBackend);
-    editorViewportGrid.Shutdown(*rendererBackend);
 }
 
 void RenderSystem::ValidateFrameResourceDescriptors()

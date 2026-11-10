@@ -37,9 +37,9 @@
 #include "render/offline/offlineCameraMotionPolicy.h"
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
-#include "editor/selection/materialInstanceSelection.h"
+#include "render/frontend/scenePicking.h"
 #include "render/pass/passRuntime.h"
-#include "render/editor/editorViewportGrid.h"
+#include "render/overlay/editorViewportOverlay.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
@@ -49,7 +49,7 @@
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
-#include "editor/preview/materialInstancePreviewAdapter.h"
+#include "render/editorBridge/materialInstancePreviewAdapter.h"
 #include "hair/hairTraceFormat.h"
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupBinding.h"
@@ -94,7 +94,7 @@ struct PreparedRuntimeBinding
 // the snapshot mailbox.
 class RenderSystem
     : private VL::PassRuntimeServices
-    , private VL::Editor::Preview::IRendererMaterialInstancePreviewOwner
+    , private VL::IRendererMaterialInstancePreviewOwner
 {
 public:
     static RenderSystem& GetInstance()
@@ -241,26 +241,31 @@ public:
     // 编辑器拾取/模型上下文只在开发者 UI 可见时需要；运行时 HUD 或
     // --no-dev-ui 下跳过整份 picking RenderScene 的逐帧重建。
     void SetPickingSceneEnabled(bool enabled) noexcept;
-    std::optional<VL::Editor::Selection::MaterialInstanceSelection>
+    std::optional<VL::MaterialInstanceSelection>
     PickMaterialInstanceAt(
         float mouseX,
         float mouseY,
         uint32_t viewportWidth,
         uint32_t viewportHeight) const;
-    std::vector<VL::Editor::Selection::MaterialInstanceModelContext>
+    std::vector<VL::MaterialInstanceModelContext>
     GetMaterialInstanceModelContexts() const;
     void SetSelectedMaterialInstanceModel(
-        const VL::Editor::Selection::MaterialInstanceModelContext& model);
+        const VL::MaterialInstanceModelContext& model);
     void SetSelectedMaterialInstance(
-        const VL::Editor::Selection::MaterialInstanceSelection& selection);
+        const VL::MaterialInstanceSelection& selection);
     void ClearSelectedMaterialInstance() noexcept;
-    VL::Editor::Preview::IMaterialInstancePreviewAdapter&
+    VL::IMaterialInstancePreviewAdapter&
     GetMaterialInstancePreviewAdapter() noexcept
     {
         return materialInstancePreviewAdapter;
     }
-    std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
+    std::unique_ptr<VL::IMaterialInstancePreviewAdapter>
     CreateMaterialInstancePreviewAdapter();
+    // 编辑器注入的视口覆盖层；runtime 只持有裸指针，editor 负责生命周期。
+    void SetEditorViewportOverlay(VL::IEditorViewportOverlay* overlay) noexcept
+    {
+        editorViewportOverlay = overlay;
+    }
     VL::PreparedRuntimeBinding PrepareRuntimeBinding(
         std::shared_ptr<const VL::World> world,
         VL::RendererResourceCache& candidateCache,
@@ -382,19 +387,19 @@ private:
         : materialInstancePreviewAdapter(*this)
     {
     }
-    std::optional<VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+    std::optional<VL::MaterialInstancePreviewWorldIdentity>
     GetActiveWorldIdentity() const override;
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    VL::MaterialInstancePreviewAdapterResult
     CaptureMaterialInstancePreviewSession(
-        const VL::Editor::Preview::MaterialInstancePreviewAdapterCommand& command,
+        const VL::MaterialInstancePreviewAdapterCommand& command,
         std::shared_ptr<
-            VL::Editor::Preview::IRendererMaterialInstancePreviewSession>&
+            VL::IRendererMaterialInstancePreviewSession>&
             outSession) override;
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    VL::MaterialInstancePreviewAdapterResult
     CommitMaterialInstancePreviewDraft(
-        const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
-        const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override;
+        const VL::MaterialInstancePreviewWorldIdentity& world,
+        const VL::NormalizedMaterialInstancePath& materialInstancePath,
+        const VL::MaterialInstancePreviewDraft& draft) override;
     std::shared_ptr<const VL::OfflineWorldAssets>
     PrepareOfflineMaterialPreview(
         const std::string& materialInstancePath,
@@ -669,8 +674,8 @@ private:
     VL::RendererFrontend rendererFrontend;
     VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
     VL::PassRuntime passRuntime;
-    // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
-    VL::EditorViewportGrid editorViewportGrid;
+    // 编辑器参考网格几何：只由 editorGrid pass 消费；runtime 不拥有实现。
+    VL::IEditorViewportOverlay* editorViewportOverlay = nullptr;
     VL::RenderScene currentRenderScene;
     // 放置级 renderable 键 → 连续缺失帧数。只在 RT 访问；World 换代时清空
     // （整包由 transaction 退休）。
@@ -706,7 +711,7 @@ private:
     VL::OfflineDisplayVulkan offlineDisplay;
     VL::WorldSnapshotPtr currentOfflineSnapshot;
     VL::OfflineCameraMotionPolicy offlineCameraMotionPolicy;
-    VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter
+    VL::RendererOwnedMaterialInstancePreviewAdapter
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     PipelineFactory* pipelineFactory = nullptr;

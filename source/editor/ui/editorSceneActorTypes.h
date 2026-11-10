@@ -7,6 +7,7 @@
 
 #include <Eigen/Dense>
 
+#include "world/actorIdentity.h"
 #include "world/worldSnapshot.h"
 
 namespace VL { struct TerrainBuildPlan; }
@@ -16,22 +17,9 @@ namespace VL::Hair { struct TressfxGroupBinding; }
 namespace VL::EditorUi
 {
 
-// 大纲 actor 的类型。Mesh..Environment 与 SceneWind 和场景 JSON 的对象 type 一一对应；
-// Script 只表达 World 里确实存在的蓝图实例状态。SpeedTree 每物种的响应曲线数据
-// 属于网格资产，不作为场景 actor 出现在大纲里。
-enum class EditorSceneActorType : uint8_t
-{
-    Mesh,
-    DirectionalLight,
-    PointLight,
-    SpotLight,
-    SquareAreaLight,
-    Camera,
-    Environment,
-    SceneWind,
-    Script,
-    Terrain
-};
+// 类型的权威定义在运行时 world/actorIdentity.h；编辑器 UI 继续以
+// EditorUi::EditorSceneActorType 的写法引用它。
+using VL::EditorSceneActorType;
 
 // 一个 mesh actor 的渲染子对象。World 的 meshObjects 按 section 展开，
 // 多 section 模型因此有多个条目共享同一个 sceneObjectIdentity。

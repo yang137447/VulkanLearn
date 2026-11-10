@@ -81,10 +81,11 @@ add_executable(editor_ui_tests
     # 测试必须证明"大纲身份"就是 World 认得的那个键。
     "${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/actorIdentity.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/actorProperty.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorSceneActorBuilder.cpp"
-    "${PROJECT_SOURCE_DIR}/source/editor/scene/editorActorProperty.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/brush/brushProfile.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/brush/brushSampler.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainEditSession.cpp"
