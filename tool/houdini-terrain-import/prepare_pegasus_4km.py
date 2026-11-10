@@ -62,6 +62,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rock-percentile-low", type=float, default=90.0)
     parser.add_argument("--rock-percentile-high", type=float, default=99.0)
     parser.add_argument("--material-uv-scale", type=float, default=16.0)
+    parser.add_argument(
+        "--terrain-texture-root", type=Path, default=None,
+        help="Megascans 打包目录；默认 <res>/Generated/Megascans/Textures/Source")
     return parser.parse_args()
 
 
@@ -152,13 +155,17 @@ def main() -> int:
 
     water_root = resource_root / "Generated/PegasusWater/Textures/Source"
     layer_specs = [
-        ("Gravel Ground", "base", "layer_00", [0.0, 1.0], [0.0, 90.0], 4.0),
-        ("Rock Face", "rock", "layer_07", [0.0, 1.0], [0.0, 90.0], 3.5),
+        ("Gravel Ground", "base", "gravel", [0.0, 1.0], [0.0, 90.0], 4.0),
+        ("Rock Face", "rock", "rock", [0.0, 1.0], [0.0, 90.0], 3.5),
         ("River Water", "water", None, [0.0, 1.0], [0.0, 90.0], 4.0),
-        ("Scree Debris", "debris", "layer_05", [0.0, 1.0], [0.0, 90.0], 5.0),
-        ("River Silt", "sediment", "layer_01", [0.0, 1.0], [0.0, 90.0], 6.0),
+        ("Scree Debris", "debris", "debris", [0.0, 1.0], [0.0, 90.0], 5.0),
+        ("River Silt", "sediment", "silt", [0.0, 1.0], [0.0, 90.0], 6.0),
         ("Sea", "sea", None, [0.0, 1.0], [0.0, 90.0], 2.0),
     ]
+    megascans_root = (
+        args.terrain_texture_root.resolve()
+        if args.terrain_texture_root is not None
+        else resource_root / "Generated/Megascans/Textures/Source")
     layers = []
     for name, key, prefix, height_range, slope_range, uv_scale in layer_specs:
         if key in ("water", "sea"):
@@ -166,6 +173,12 @@ def main() -> int:
             albedo, normal, pbr, height_map = (
                 "water_albedo.png", "water_normal.png",
                 "water_pbr.png", "water_height16.png")
+        elif (megascans_root / f"{prefix}_albedo.png").is_file():
+            texture_root = megascans_root
+            albedo = f"{prefix}_albedo.png"
+            normal = f"{prefix}_normal.png"
+            pbr = f"{prefix}_pbr.png"
+            height_map = f"{prefix}_height16.png"
         else:
             texture_root = resource_root / "Generated/KiteDemo/Textures/Source"
             albedo = f"{prefix}_albedo.png"
