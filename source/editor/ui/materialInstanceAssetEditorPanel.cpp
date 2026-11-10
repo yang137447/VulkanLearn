@@ -3129,14 +3129,17 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
     std::vector<EditorActorVisualLine> lines;
     if (showActorVisualization && view && size.x > 0 && size.y > 0)
     {
-        // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
-        // 网格/环境/场景风没有可投影的世界位置，不摆视口图标。
+        // 视口 billboard 的通用规则：只给“没有实体模型、需要指示位置”的
+        // actor（灯、相机、脚本）画图标；有几何的对象靠模型本身定位。
+        // 网格、地形都有网格，环境/场景风是全局且没有可投影位置，
+        // 因此都不摆图标。图标是固定像素大小；只有选中对象才绘制辅助线。
         for (size_t index = 0; index < actors.size(); ++index)
         {
             const auto& actor = actors[index];
             if (actor.type == EditorSceneActorType::Mesh ||
                 actor.type == EditorSceneActorType::Environment ||
-                actor.type == EditorSceneActorType::SceneWind)
+                actor.type == EditorSceneActorType::SceneWind ||
+                actor.type == EditorSceneActorType::Terrain)
                 continue;
             const bool selected = actor.identity == snapshot.selectedActorIdentity;
             if (selected && actor.visible)
