@@ -4,8 +4,29 @@
 
 #include "SDL3/SDL.h"
 
+#include "commonFunction.h"
+
 namespace VL
 {
+
+namespace
+{
+    // The window icon is a small app asset, not a runtime resource: it lives
+    // next to the config files so a checkout always has it. Missing or
+    // unreadable icons fall back to the platform default instead of failing.
+    void ApplyWindowIcon(SDL_Window* window)
+    {
+        const std::string iconPath =
+            CommonFunction::GetProjectPath() + "/config/icon.bmp";
+        SDL_Surface* icon = SDL_LoadBMP(iconPath.c_str());
+        if (icon == nullptr)
+        {
+            return;
+        }
+        SDL_SetWindowIcon(window, icon);
+        SDL_DestroySurface(icon);
+    }
+}
 
 PlatformWindow::~PlatformWindow()
 {
@@ -78,6 +99,7 @@ RuntimeResult<void> PlatformWindow::Create(
     }
 
     currentTitle = title != nullptr ? title : "";
+    ApplyWindowIcon(window);
     return RuntimeResult<void>::Success();
 }
 
