@@ -101,10 +101,32 @@ struct MontageWindow
     float endTime = 0;
 };
 
+// 多 AnimSegment Montage 的一段。startTime/endTime 是 Montage-local 时间轴，
+// clipStartTime/clipEndTime 是该段在 Sequence sidecar 内的时间。段之间必须连续且
+// 不重叠；播放时钟始终是 Montage 时间轴，切段只替换被采样的 clip，不重启时钟。
+struct MontageSegment
+{
+    // 稳定诊断/feedback id；缺省为 segment_<index>。
+    std::string id;
+    std::string sequencePath;
+    std::string sequenceDigest;
+    // BindMontageSegments 从命中的 sidecar `sequence` 字段派生。
+    std::string derivedClipId;
+    float startTime = 0;
+    float endTime = 0;
+    float clipStartTime = 0;
+    // 0 表示未声明，绑定期按 sidecar duration 补齐。
+    float clipEndTime = 0;
+    // 该段源码时间相对 Montage 时间轴的倍率；与顶层 rateScale / PlayMontage rate 相乘。
+    float rateScale = 1;
+    // true 时源码时间在 [clipStartTime,clipEndTime) 内回绕；Montage 本身仍是一次性播放。
+    bool loop = false;
+};
+
 // AnimMontage 的数据层表示。所有字符串/数组归本结构所有；Montage 不复制骨骼、
 // 不复制曲线、不持有播放时钟或 notify 回调。身份字段：
 //   id              Montage JSON 的 `montage`（同一 SM 内唯一，catalog/C# 播放键）
-//   sequencePath    指向 Sequence sidecar 的资源相对路径（唯一权威，不写 clip id）
+//   sequencePath    单 sequence 资产指向 Sequence sidecar；多段资产为空
 //   sequenceDigest  可选的 `sequenceBlake3` 声明（64 hex；空表示未声明）
 //   derivedClipId   由 loader 从命中的 sidecar `sequence` 字段派生，仅供运行时诊断/播放
 //   sourcePath      Montage 自身资源相对路径（loader 填充；用于按路径索引）
@@ -117,6 +139,10 @@ struct Montage
     std::string derivedClipId;
     std::string slot;
     float length = 0;
+    // UE AnimMontage.RateScale；调用方 rate 与它相乘后再驱动 Montage 时间轴。
+    float rateScale = 1;
+    // 非空时 sequencePath/sequenceDigest 不参与播放，所有段按时间轴映射。
+    std::vector<MontageSegment> segments;
     std::vector<MontageSection> sections;
     std::vector<MontageNotify> notifies;
     std::vector<MontageWindow> windows;
@@ -161,4 +187,9 @@ struct MontageImportContext
 // 不采样曲线、不生成窗口曲线值；失败抛带 montage 路径与字段名的异常。
 std::string BindMontage(const Montage& montage, const MontageImportContext& context,
     std::string_view assetPath);
+
+// 多段绑定入口：逐段执行与 BindMontage 相同的 skeleton/sidecar/digest/clip 校验，
+// 返回每段派生 clip id（顺序与 montage.segments 相同）。单 sequence 资产返回一项。
+std::vector<std::string> BindMontageSegments(const Montage& montage,
+    const MontageImportContext& context, std::string_view assetPath);
 }

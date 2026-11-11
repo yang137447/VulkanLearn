@@ -7,10 +7,18 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     float Rate = 1, Vector3 RootMotion = default, float RootMotionYaw = 0,
     Vector3 RootMotionTotal = default, Vector3 RootMotionRemaining = default, string Warp = "",
     AnimationNotify[]? Notifies = null, string Montage = "", float MontageLength = 0,
-    Vector2 MontageRange = default);
+    Vector2 MontageRange = default, string SyncGroup = "", float SyncPhase = 0,
+    string SyncMarker = "", float SyncMarkerAlpha = 0, bool SyncActive = false,
+    string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
+    string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
+    int MontageSegment = 0, string MontageSegmentId = "");
+public readonly record struct AnimationSyncMarker(string Name, float Time);
+public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
+    float StartPosition, bool Loop, string SyncGroupScope = "Local");
 // 播放期一条 notify 事件；time 是实际发生时刻，startTime/duration 始终是作者原区间。
 public readonly record struct AnimationNotify(string Name, string Track, string Kind, string Phase,
-    float Time, float StartTime, float Duration, bool Interrupted);
+    float Time, float StartTime, float Duration, bool Interrupted,
+    int SegmentIndex = 0, string SegmentId = "");
 public readonly record struct MontageSectionInfo(string Name, float StartTime, float EndTime,
     string NextSection, float NextTime, string LinkMethod);
 // warp 字段只做数据透传；执行层支持 None|Bone|Static、Linear 与 Slerp；原生负责
@@ -25,10 +33,16 @@ public readonly record struct MontageNotifyInfo(string Kind, string Track, strin
 // 与旧 3 分量调用等价，原生不会把默认单位四元数当成目标朝向。
 public readonly record struct WarpTarget(Vector3 Location, Quaternion? Rotation = null);
 public readonly record struct MontageWindowInfo(string Target, float Start, float End);
+// 多 AnimSegment Montage 的一段；Start/End 是 Montage 时间轴，ClipStart/ClipEnd 是
+// sidecar 本地时间。C# 只读 catalog/feedback，不维护第二份段时钟。
+public readonly record struct MontageSegmentInfo(int Index, string SegmentId, string SequencePath,
+    string ClipId, float StartTime, float EndTime, float ClipStartTime, float ClipEndTime,
+    float RateScale, bool Loop);
 // catalog 的 Montage 数据；ClipId 由 loader 从 sidecar 的 `sequence` 字段派生，仅运行时诊断/播放。
 public readonly record struct MontageInfo(string Id, string SequencePath, string ClipId, float Length,
     string Slot, IReadOnlyList<MontageSectionInfo> Sections, IReadOnlyList<MontageNotifyInfo> Notifies,
-    IReadOnlyList<MontageWindowInfo> Windows);
+    IReadOnlyList<MontageWindowInfo> Windows, float RateScale = 1, string AssetPath = "",
+    IReadOnlyList<MontageSegmentInfo>? Segments = null);
 public readonly record struct SpeedMatchingState(bool Enabled, bool Active, float SourceSpeed, float ActualSpeed,
     float TargetRate, float Rate, float ResidualSpeed, string Reason);
 public readonly record struct FootPlacementFootState(bool Grounded, bool Planted, Vector3 Anchor,
@@ -40,13 +54,37 @@ public readonly record struct FootPlacementState(bool Enabled, bool Active, floa
     FootPlacementFootState Left, FootPlacementFootState Right, string Reason);
 public readonly record struct RootOffsetState(bool Enabled, bool Active, Vector3 WorldTranslation,
     float YawRadians, string Reason);
+public readonly record struct SlopeWarpingState(bool Enabled, bool Active, float SlopeAngle,
+    float TargetSlopeAngle, float AppliedSlopeAngle, float Weight, float PelvisOffset,
+    Vector3 GroundNormal, string SupportIdentity, string Reason);
+// PoseDriver 诊断只暴露代码与细节；曲线是只读求值结果，不回写姿态或播放器状态。
+public readonly record struct PoseDriverDiagnostic(string Driver, string Code, string Detail);
+public readonly record struct PoseDriverState(bool Enabled, bool Active, int SolvedDrivers,
+    string Asset, string Digest, IReadOnlyDictionary<string, float> Curves,
+    IReadOnlyList<PoseDriverDiagnostic> Diagnostics);
+// PostProcess（Twist/Helpers）姿态修正的只读反馈；诊断项标识被降级的条目。
+public readonly record struct PostProcessDiagnostic(string Entry, string Code, string Detail);
+public readonly record struct PostProcessState(bool Enabled, string Asset, string Digest,
+    int Entries, int TwistEntries, int HelperEntries, int ConstraintEntries, long Applications,
+    int RotatedBones, float MaxTwistDegrees,
+    IReadOnlyList<PostProcessDiagnostic> Diagnostics);
+public readonly record struct BonePhysicsBody(string Bone, string Parent, Vector3 Center,
+    Quaternion Rotation, float Radius, float HalfHeight, bool Simulated);
+public readonly record struct BonePhysicsState(bool Enabled, bool Active, int SimulatedBodies,
+    int Constraints, float MaxDisplacement, string Reason, BonePhysicsBody[]? Bodies = null);
 public readonly record struct MotionMatchingState(string DatabaseIdentity, bool QueryReady, string Decision,
     long SearchCount, string SelectedClip, float SelectedTime, SpeedMatchingState SpeedMatching = default);
 internal sealed record AnimationCommand(string Clip, bool Loop, float Rate, bool InPlace,
     string Database = "", string[]? AllowedClips = null, bool ActionLocked = false, bool MatchSpeed = false,
     bool FootPlacement = false, bool Inertialization = false, bool RootOffset = false,
     string FootLock = "Auto", string Montage = "", IReadOnlyDictionary<string, WarpTarget>? MontageTargets = null,
-    float MontageStartTime = 0);
+    float MontageStartTime = 0, bool Transition = false, float TransitionStartTime = 0, float BlendSeconds = 0,
+    string SyncGroup = "", float SyncPhase = -1);
+internal sealed record SlopeWarpingCommand(bool Enabled, float Weight, float MaxSlopeDegrees,
+    float PelvisHeightOffset, float FootCompensation, float ResponseSpeed, float MaxPelvisOffset);
+internal sealed record PoseDriverCommand(bool Enabled, string Asset);
+internal sealed record PostProcessCommand(bool Enabled, string Asset);
+internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -65,15 +103,143 @@ public sealed class AnimationPlayback
     internal MotionMatchingState MotionFeedback;
     internal FootPlacementState FootPlacementFeedback;
     internal RootOffsetState RootOffsetFeedback;
+    internal SlopeWarpingState SlopeWarpingFeedback;
+    internal SlopeWarpingCommand? PendingSlopeWarping;
+    internal SlopeWarpingCommand? ActiveSlopeWarping;
     internal string[] ClipIds = [];
     // clipId -> 曲线名（大小写不敏感）-> 键数据；只由 animation_catalog 的 assets 段填充。
     internal readonly Dictionary<string, Dictionary<string, AnimationCurve>> CurveData = new(StringComparer.Ordinal);
+    internal PoseDriverState PoseDriverFeedback = new(false, false, 0, "", "",
+        new Dictionary<string, float>(StringComparer.Ordinal), Array.Empty<PoseDriverDiagnostic>());
+    internal PoseDriverCommand? PendingPoseDriver;
+    internal PoseDriverCommand? ActivePoseDriver;
+    internal PostProcessState PostProcessFeedback = new(false, "", "", 0, 0, 0, 0, 0, 0, 0,
+        Array.Empty<PostProcessDiagnostic>());
+    internal PostProcessCommand? PendingPostProcess;
+    internal PostProcessCommand? ActivePostProcess;
+    internal BonePhysicsState BonePhysicsFeedback = default;
+    internal BonePhysicsCommand? PendingBonePhysics;
+    internal BonePhysicsCommand? ActiveBonePhysics;
+    internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationSyncMarker[]> ClipSyncMarkers = new(StringComparer.Ordinal);
     public IReadOnlyList<string> Clips { get { CheckAccess(); return Array.AsReadOnly(ClipIds); } }
     public AnimationState State { get { CheckAccess(); return Feedback; } }
     public MotionMatchingState Motion { get { CheckAccess(); return MotionFeedback; } }
     public FootPlacementState FootPlacement { get { CheckAccess(); return FootPlacementFeedback; } }
     public RootOffsetState RootOffset { get { CheckAccess(); return RootOffsetFeedback; } }
+    public SlopeWarpingState SlopeWarping { get { CheckAccess(); return SlopeWarpingFeedback; } }
+    public PoseDriverState PoseDriver { get { CheckAccess(); return PoseDriverFeedback; } }
+    public PostProcessState PostProcess { get { CheckAccess(); return PostProcessFeedback; } }
+    public BonePhysicsState BonePhysics { get { CheckAccess(); return BonePhysicsFeedback; } }
+
+    // UE PostProcess AnimBP 的 PoseDriver/DriveCurves 阶段。资产由资源侧声明，
+    // 原生按骨架解析 SourceBones 并求解 RBF；这里只提交开关与路径。
+    public void SetPoseDriver(bool enabled, string asset = "")
+    {
+        CheckRequest();
+        if (enabled)
+        {
+            if (string.IsNullOrEmpty(asset) || asset.Length > 1024 ||
+                !asset.EndsWith(".json", StringComparison.Ordinal) ||
+                asset.Contains('\\') || asset.Contains(':') ||
+                !(asset.StartsWith("Maps/", StringComparison.Ordinal) ||
+                    asset.StartsWith("Common/", StringComparison.Ordinal)))
+                throw new ArgumentException("Pose driver requires a formal resource path.", nameof(asset));
+        }
+        else asset = "";
+        var next = new PoseDriverCommand(enabled, asset);
+        if (ActivePoseDriver == next && PoseDriverFeedback.Enabled == next.Enabled) return;
+        ActivePoseDriver = next;
+        PendingPoseDriver = next;
+    }
+
+    // 缺少该曲线返回 false；曲线名大小写敏感，与 UE FName 一致。
+    public bool TryGetPoseCurve(string name, out float value)
+    {
+        CheckAccess();
+        return PoseDriverFeedback.Curves.TryGetValue(name, out value);
+    }
+
+    // UE PostProcess AnimBP 的 Twist/Helpers 阶段（当前实现 Twist ControlRig 的原生替代）。
+    public void SetPostProcess(bool enabled, string asset = "")
+    {
+        CheckRequest();
+        if (enabled)
+        {
+            if (string.IsNullOrEmpty(asset) || asset.Length > 1024 ||
+                !asset.EndsWith(".json", StringComparison.Ordinal) ||
+                asset.Contains('\\') || asset.Contains(':') ||
+                !(asset.StartsWith("Maps/", StringComparison.Ordinal) ||
+                    asset.StartsWith("Common/", StringComparison.Ordinal)))
+                throw new ArgumentException("Post-process requires a formal resource path.", nameof(asset));
+        }
+        else asset = "";
+        var next = new PostProcessCommand(enabled, asset);
+        if (ActivePostProcess == next && PostProcessFeedback.Enabled == next.Enabled) return;
+        ActivePostProcess = next;
+        PendingPostProcess = next;
+    }
+
+    // UE AnimNode_RigidBody 的正式原生替代：Jolt 骨骼刚体。
+    public void SetBonePhysics(bool enabled, string asset = "")
+    {
+        CheckRequest();
+        if (enabled)
+        {
+            if (string.IsNullOrEmpty(asset) || asset.Length > 1024 ||
+                !asset.EndsWith(".json", StringComparison.Ordinal) ||
+                asset.Contains('\\') || asset.Contains(':') ||
+                !(asset.StartsWith("Maps/", StringComparison.Ordinal) ||
+                    asset.StartsWith("Common/", StringComparison.Ordinal)))
+                throw new ArgumentException("Bone physics requires a formal resource path.", nameof(asset));
+        }
+        else asset = "";
+        var next = new BonePhysicsCommand(enabled, asset, BonePhysicsDebugRequested);
+        if (ActiveBonePhysics == next && BonePhysicsFeedback.Enabled == next.Enabled) return;
+        ActiveBonePhysics = next;
+        PendingBonePhysics = next;
+    }
+
+    // 只在需要时（例如起跳→落地）请求刚体描述，避免每帧多加 21 条 JSON。
+    public void SetBonePhysicsDebug(bool enabled)
+    {
+        CheckRequest();
+        if (BonePhysicsDebugRequested == enabled) return;
+        BonePhysicsDebugRequested = enabled;
+        // 复用同一条 configureBonePhysics：只改 debug 字段也要重新提交一次。
+        if (ActiveBonePhysics is { } active)
+            PendingBonePhysics = active with { Debug = enabled };
+    }
+
+    // 提交斜坡姿态修正参数；原生只改视觉局部 TRS，Actor 位置与 root motion 归胶囊。
+    public void SetSlopeWarping(bool enabled, float weight = 1, float maxSlopeDegrees = 45,
+        float pelvisHeightOffset = 0, float footCompensation = 1, float responseSpeed = 12,
+        float maxPelvisOffset = 30)
+    {
+        CheckRequest();
+        if (!float.IsFinite(weight) || weight < 0 || weight > 1)
+            throw new ArgumentOutOfRangeException(nameof(weight));
+        if (!float.IsFinite(maxSlopeDegrees) || maxSlopeDegrees < 0 || maxSlopeDegrees >= 90)
+            throw new ArgumentOutOfRangeException(nameof(maxSlopeDegrees));
+        if (!float.IsFinite(pelvisHeightOffset) || MathF.Abs(pelvisHeightOffset) > 200)
+            throw new ArgumentOutOfRangeException(nameof(pelvisHeightOffset));
+        if (!float.IsFinite(footCompensation) || footCompensation < 0 || footCompensation > 2)
+            throw new ArgumentOutOfRangeException(nameof(footCompensation));
+        if (!float.IsFinite(responseSpeed) || responseSpeed < 0 || responseSpeed > 120)
+            throw new ArgumentOutOfRangeException(nameof(responseSpeed));
+        if (!float.IsFinite(maxPelvisOffset) || maxPelvisOffset < 0 || maxPelvisOffset > 200)
+            throw new ArgumentOutOfRangeException(nameof(maxPelvisOffset));
+        var next = new SlopeWarpingCommand(enabled, weight, maxSlopeDegrees, pelvisHeightOffset,
+            footCompensation, responseSpeed, maxPelvisOffset);
+        // 蓝图每帧声明同一组参数；只在变化时提交，避免 Stop/换 World 时把
+        // 已销毁组件的配置请求留在命令队列里。
+        // 播放器在 Stop/换 World 时会重建并回到 disabled；反馈未追上声明值时重发一次。
+        if (ActiveSlopeWarping == next && SlopeWarpingFeedback.Enabled == next.Enabled) return;
+        ActiveSlopeWarping = next;
+        PendingSlopeWarping = next;
+    }
     // 只播放 clip；warp 的 target/窗口完全由 Montage 资产声明，这里不再接受 warpTargets。
     public void Play(string clip, bool loop = true, float rate = 1, bool inPlace = true)
     {
@@ -83,20 +249,134 @@ public sealed class AnimationPlayback
         Pending = new(clip, loop, rate, inPlace);
     }
 
+    // UE 状态机过渡：从当前显示姿态交叉淡入目标片段；startTime 是目标片段的入口秒。
+    // 与 Play 不同，TransitionTo 保留当前姿态作为 blend source，支持 0 秒硬切。
+    public void PlayTransition(string clip, float startTime, bool loop, float blendSeconds,
+        bool inPlace = true, float rate = 1, bool inertialization = false,
+        string syncGroup = "", float syncPhase = -1)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal)) throw new ArgumentException($"Unknown animation clip: {clip}");
+        if (!float.IsFinite(startTime) || startTime < 0)
+            throw new ArgumentOutOfRangeException(nameof(startTime));
+        if (!float.IsFinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+            throw new ArgumentOutOfRangeException(nameof(blendSeconds));
+        if (!float.IsFinite(rate) || rate <= 0 || rate > 4)
+            throw new ArgumentOutOfRangeException(nameof(rate));
+        // 相位必须配组；只有组没有相位是合法的（本次过渡不做相位对齐，
+        // 原生 TransitionToSynced 会按 startTime 直接进入）。
+        if (syncPhase >= 0 && string.IsNullOrEmpty(syncGroup))
+            throw new ArgumentException("Sync phase requires a sync group.", nameof(syncPhase));
+        if (syncGroup.Length > 128 || syncGroup.Contains('\0'))
+            throw new ArgumentException("Sync group is invalid.", nameof(syncGroup));
+        if (!float.IsFinite(syncPhase) || syncPhase < -1 || syncPhase > 1)
+            throw new ArgumentOutOfRangeException(nameof(syncPhase));
+        Pending = new(clip, loop, rate, inPlace, Inertialization: inertialization,
+            Transition: true, TransitionStartTime: startTime, BlendSeconds: blendSeconds,
+            SyncGroup: syncGroup, SyncPhase: syncPhase);
+    }
+
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
     // 纯读取，不推进时钟/姿态/notify；曲线键来自一次性 catalog，不逐帧跨桥。
     public float CurveValue(string clipId, string curveName, float time)
     {
         CheckAccess();
+        ValidateCurveArguments(clipId, curveName, time);
+        var curves = RequireCurves(clipId, nameof(clipId));
+        if (!curves.TryGetValue(curveName, out var curve))
+            throw new ArgumentException(
+                $"Unknown animation curve '{curveName}' for clip '{clipId}'. {DescribeCurves(curves)}",
+                nameof(curveName));
+        return SampleCurve(curve, curveName, clipId, time);
+    }
+
+    // 当前片段已发布的曲线名；已知片段没有 sidecar/曲线时返回空数组，未知片段是硬错误。
+    public IReadOnlyList<string> CurveNames(string clipId)
+    {
+        CheckAccess();
+        ValidateClipId(clipId);
+        if (!CurveData.TryGetValue(clipId, out var curves) || curves.Count == 0)
+            return Array.Empty<string>();
+        return Array.AsReadOnly(curves.Keys.ToArray());
+    }
+
+    // 曲线存在性查询；仍校验片段身份，避免把拼错的 clip 当成“曲线缺失”。
+    public bool HasCurve(string clipId, string curveName)
+    {
+        CheckAccess();
+        ValidateClipId(clipId);
+        if (string.IsNullOrEmpty(curveName))
+            throw new ArgumentException("Animation curve name is required.", nameof(curveName));
+        return CurveData.TryGetValue(clipId, out var curves) && curves.ContainsKey(curveName);
+    }
+
+    public bool HasCurrentCurve(string curveName)
+    {
+        var state = State;
+        return HasCurve(state.Clip, curveName);
+    }
+
+    // 只采样调用方显式列出的名字；不会把所有曲线复制进 State/feedback。
+    public IReadOnlyDictionary<string, float> CurveSnapshot(IReadOnlyList<string> names)
+    {
+        CheckAccess();
+        ArgumentNullException.ThrowIfNull(names);
+        if (names.Count == 0 || names.Count > 64)
+            throw new ArgumentOutOfRangeException(nameof(names), "Curve snapshot requires 1..64 names.");
+        var state = State;
+        var curves = RequireCurves(state.Clip, nameof(names));
+        var result = new Dictionary<string, float>(names.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
+        {
+            if (string.IsNullOrEmpty(name))
+                throw new ArgumentException("Animation curve name is required.", nameof(names));
+            if (!curves.TryGetValue(name, out var curve))
+                throw new ArgumentException(
+                    $"Unknown animation curve '{name}' for clip '{state.Clip}'. {DescribeCurves(curves)}",
+                    nameof(names));
+            if (!result.TryAdd(name, SampleCurve(curve, name, state.Clip, state.Time)))
+                throw new ArgumentException($"Duplicate animation curve '{name}' in snapshot request.", nameof(names));
+        }
+        return result;
+    }
+
+    private Dictionary<string, AnimationCurve> RequireCurves(string clipId, string parameterName)
+    {
+        ValidateClipId(clipId, parameterName);
+        if (!CurveData.TryGetValue(clipId, out var curves) || curves.Count == 0)
+            throw new ArgumentException(
+                $"Animation clip '{clipId}' has no published Float curves (no sidecar or an empty curve set).",
+                parameterName);
+        return curves;
+    }
+
+    private void ValidateClipId(string clipId, string parameterName = "clipId")
+    {
+        if (string.IsNullOrEmpty(clipId))
+            throw new ArgumentException("Animation clip id is required.", parameterName);
+        if (!ClipIds.Contains(clipId, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clipId}", parameterName);
+    }
+
+    private static void ValidateCurveArguments(string clipId, string curveName, float time)
+    {
         if (!float.IsFinite(time)) throw new ArgumentOutOfRangeException(nameof(time));
         if (string.IsNullOrEmpty(clipId))
             throw new ArgumentException("Animation clip id is required.", nameof(clipId));
         if (string.IsNullOrEmpty(curveName))
             throw new ArgumentException("Animation curve name is required.", nameof(curveName));
-        if (!CurveData.TryGetValue(clipId, out var curves))
-            throw new ArgumentException($"Unknown animation clip: {clipId}", nameof(clipId));
-        if (!curves.TryGetValue(curveName, out var curve))
-            throw new ArgumentException($"Unknown animation curve '{curveName}' for clip '{clipId}'.", nameof(curveName));
+    }
+
+    private static string DescribeCurves(Dictionary<string, AnimationCurve> curves)
+    {
+        const int limit = 12;
+        string[] names = curves.Keys.Take(limit).ToArray();
+        string suffix = curves.Count > limit ? $", ... ({curves.Count} total)" : "";
+        return $"Available curves: {string.Join(", ", names)}{suffix}.";
+    }
+
+    private static float SampleCurve(AnimationCurve curve, string curveName, string clipId, float time)
+    {
         float[] times = curve.Times, values = curve.Values;
         if (times.Length == 0)
             throw new ArgumentException($"Animation curve '{curveName}' for clip '{clipId}' has no keys.", nameof(curveName));
@@ -118,6 +398,62 @@ public sealed class AnimationPlayback
             throw new ArgumentException($"Unknown animation montage: {id}", nameof(id));
         return montage;
     }
+
+    // 动作层使用资源路径而不是 catalog id；AssetPath 来自原生 sourcePath。
+    public MontageInfo Montage(AssetId asset)
+    {
+        CheckAccess();
+        string path = asset.Path ?? "";
+        if (path.Length > 0)
+            foreach (var montage in Montages.Values)
+                if (string.Equals(montage.AssetPath, path, StringComparison.Ordinal))
+                    return montage;
+        throw new ArgumentException($"Unknown animation montage asset: {path}", nameof(asset));
+    }
+
+    // AnimBP Sequence Player 元数据；没有声明 player 的 clip 返回空数组。
+    public IReadOnlyList<AnimationPlayerInfo> Players(string clipId)
+    {
+        CheckAccess();
+        if (string.IsNullOrEmpty(clipId)) throw new ArgumentException("Animation clip id is required.", nameof(clipId));
+        return ClipPlayers.TryGetValue(clipId, out var players) ?
+            Array.AsReadOnly(players) : Array.Empty<AnimationPlayerInfo>();
+    }
+
+    public IReadOnlyList<AnimationSyncMarker> SyncMarkers(string clipId)
+    {
+        CheckAccess();
+        if (string.IsNullOrEmpty(clipId)) throw new ArgumentException("Animation clip id is required.", nameof(clipId));
+        return ClipSyncMarkers.TryGetValue(clipId, out var markers) ?
+            Array.AsReadOnly(markers) : Array.Empty<AnimationSyncMarker>();
+    }
+
+    // 第一个 Sequence Player 的入口起点；没有声明时返回 0。Stop/WalkStart 的 UE
+    // StartPosition 就在这里供动画蓝图读取。
+    public float StartPosition(string clipId) =>
+        Players(clipId) is { Count: > 0 } players ? players[0].StartPosition : 0;
+
+    public bool HasSyncGroup(string clipId, string group)
+    {
+        if (string.IsNullOrEmpty(group)) return false;
+        foreach (var player in Players(clipId))
+            if (player.SyncGroup == group && player.SyncMethod is "SyncGroup" or "MarkerSync") return true;
+        return false;
+    }
+
+    public string ActiveSyncGroup => State.SyncGroup;
+    public float SyncPhase => State.SyncPhase;
+    public string SyncMarker => State.SyncMarker;
+    public bool SyncActive => State.SyncActive;
+    public string SyncLeader => State.SyncLeader;
+    public string SyncRole => State.SyncRole;
+    public string SyncMethod => State.SyncMethod;
+    public string SyncEffectiveMethod => State.SyncEffectiveMethod;
+    public string SyncScope => State.SyncScope;
+    public string SyncDiagnostic => State.SyncDiagnostic;
+    // 常驻便捷采样：等价于 CurveValue(State.Clip, name, State.Time)，仍由调用方决定
+    // 何时消费；播放器不会自动执行曲线。
+    public float CurrentCurve(string name) { var state = State; return CurveValue(state.Clip, name, state.Time); }
 
     // 提交 Montage 播放意图；Montage 的 section 路由/provider/easing/target 校验在 C# 入口
     // 先给诊断，原生再按同一规则拒绝。clip id 由 catalog 从 sidecar 派生，调用方不提交。
@@ -257,6 +593,8 @@ public static partial class NativeBridge
         animation.ClipIds = context.AnimationCatalog.GetValueOrDefault(path) ?? [];
         animation.CurveData.Clear();
         animation.Montages.Clear();
+        animation.ClipPlayers.Clear();
+        animation.ClipSyncMarkers.Clear();
         if (!context.AnimationAssets.TryGetValue(path, out var assets) ||
             assets.ValueKind != JsonValueKind.Object) return;
         if (assets.TryGetProperty("curves", out var curves) && curves.ValueKind == JsonValueKind.Object)
@@ -269,6 +607,27 @@ public static partial class NativeBridge
                         curve.GetProperty("values").EnumerateArray().Select(value => value.GetSingle()).ToArray());
                 if (byName.Count > 0) animation.CurveData[clip.Name] = byName;
             }
+        if (assets.TryGetProperty("players", out var players) && players.ValueKind == JsonValueKind.Object)
+            foreach (var clip in players.EnumerateObject())
+            {
+                var values = clip.Value.EnumerateArray().Select(player => new AnimationPlayerInfo(
+                    player.GetProperty("syncGroup").GetString()!,
+                    player.GetProperty("syncRole").GetString()!,
+                    player.GetProperty("syncMethod").GetString()!,
+                    player.GetProperty("startPosition").GetSingle(),
+                    player.GetProperty("loop").GetBoolean(),
+                    player.TryGetProperty("syncGroupScope", out var scope) &&
+                        scope.ValueKind == JsonValueKind.String ? scope.GetString()! : "Local")).ToArray();
+                if (values.Length > 0) animation.ClipPlayers[clip.Name] = values;
+            }
+        if (assets.TryGetProperty("syncMarkers", out var markers) && markers.ValueKind == JsonValueKind.Object)
+            foreach (var clip in markers.EnumerateObject())
+            {
+                var values = clip.Value.EnumerateArray().Select(marker => new AnimationSyncMarker(
+                    marker.GetProperty("name").GetString()!,
+                    marker.GetProperty("time").GetSingle())).ToArray();
+                if (values.Length > 0) animation.ClipSyncMarkers[clip.Name] = values;
+            }
         if (assets.TryGetProperty("montages", out var montages) && montages.ValueKind == JsonValueKind.Array)
             foreach (var montage in montages.EnumerateArray())
             {
@@ -279,6 +638,20 @@ public static partial class NativeBridge
 
     private static MontageInfo ReadMontage(JsonElement value)
     {
+        var segments = new List<MontageSegmentInfo>();
+        if (value.TryGetProperty("segments", out var segmentValues))
+            foreach (var segment in segmentValues.EnumerateArray())
+                segments.Add(new(
+                    segment.TryGetProperty("index", out var index) ? index.GetInt32() : segments.Count,
+                    segment.GetProperty("segmentId").GetString()!,
+                    segment.GetProperty("sequencePath").GetString()!,
+                    segment.GetProperty("derivedClipId").GetString()!,
+                    segment.GetProperty("startTime").GetSingle(),
+                    segment.GetProperty("endTime").GetSingle(),
+                    segment.GetProperty("clipStartTime").GetSingle(),
+                    segment.GetProperty("clipEndTime").GetSingle(),
+                    segment.GetProperty("rateScale").GetSingle(),
+                    segment.GetProperty("loop").GetBoolean()));
         var sections = new List<MontageSectionInfo>();
         if (value.TryGetProperty("sections", out var sectionValues))
             foreach (var section in sectionValues.EnumerateArray())
@@ -319,7 +692,10 @@ public static partial class NativeBridge
             }
         return new(value.GetProperty("id").GetString()!, value.GetProperty("sequencePath").GetString()!,
             value.GetProperty("derivedClipId").GetString()!, value.GetProperty("length").GetSingle(),
-            value.GetProperty("slot").GetString()!, sections, notifies, windows);
+            value.GetProperty("slot").GetString()!, sections, notifies, windows,
+            value.TryGetProperty("rateScale", out var rateScale) ? rateScale.GetSingle() : 1,
+            value.TryGetProperty("path", out var path) ? path.GetString()! : "",
+            segments);
     }
 
     private static void UpdateAnimationCatalog(Context context, JsonElement catalog, JsonElement assets)
@@ -351,14 +727,22 @@ public static partial class NativeBridge
                         notify.GetProperty("track").GetString()!, notify.GetProperty("kind").GetString()!,
                         notify.GetProperty("phase").GetString()!, notify.GetProperty("time").GetSingle(),
                         notify.GetProperty("startTime").GetSingle(), notify.GetProperty("duration").GetSingle(),
-                        notify.GetProperty("interrupted").GetBoolean()));
+                        notify.GetProperty("interrupted").GetBoolean(),
+                        notify.TryGetProperty("segmentIndex", out var segmentIndex) ? segmentIndex.GetInt32() : 0,
+                        notify.TryGetProperty("segmentId", out var segmentId) ? segmentId.GetString()! : ""));
             var montageId = "";
             var montageLength = 0.0f;
             var montageRange = default(Vector2);
+            var montageSegment = 0;
+            var montageSegmentId = "";
             if (value.TryGetProperty("montage", out var montage) && montage.ValueKind == JsonValueKind.Object)
             {
                 montageId = montage.GetProperty("id").GetString()!;
                 montageLength = montage.GetProperty("length").GetSingle();
+                if (montage.TryGetProperty("segment", out var segment))
+                    montageSegment = segment.GetInt32();
+                if (montage.TryGetProperty("segmentId", out var segmentId))
+                    montageSegmentId = segmentId.GetString()!;
                 var range = montage.GetProperty("range");
                 montageRange = new(range[0].GetSingle(), range[1].GetSingle());
             }
@@ -371,7 +755,21 @@ public static partial class NativeBridge
                 value.TryGetProperty("rootMotionTotal", out var rootTotal) ? Vector(rootTotal) : Vector3.Zero,
                 value.TryGetProperty("rootMotionRemaining", out var rootRemaining) ? Vector(rootRemaining) : Vector3.Zero,
                 value.TryGetProperty("warp", out var warp) ? warp.GetString()! : "",
-                notifies.ToArray(), montageId, montageLength, montageRange);
+                notifies.ToArray(), montageId, montageLength, montageRange,
+                value.TryGetProperty("syncGroup", out var syncGroup) ? syncGroup.GetString()! : "",
+                value.TryGetProperty("syncPhase", out var syncPhase) ? syncPhase.GetSingle() : 0,
+                value.TryGetProperty("syncMarker", out var syncMarker) ? syncMarker.GetString()! : "",
+                value.TryGetProperty("syncMarkerAlpha", out var syncMarkerAlpha) ? syncMarkerAlpha.GetSingle() : 0,
+                value.TryGetProperty("syncActive", out var syncActive) && syncActive.GetBoolean(),
+                value.TryGetProperty("syncLeader", out var syncLeader) ? syncLeader.GetString()! : "",
+                value.TryGetProperty("syncRole", out var syncRole) ? syncRole.GetString()! : "",
+                value.TryGetProperty("syncMethod", out var syncMethod) ? syncMethod.GetString()! : "",
+                value.TryGetProperty("syncEffectiveMethod", out var syncEffectiveMethod) ?
+                    syncEffectiveMethod.GetString()! : "",
+                value.TryGetProperty("syncScope", out var syncScope) ? syncScope.GetString()! : "",
+                value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
+                    syncDiagnostic.GetString()! : "",
+                montageSegment, montageSegmentId);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -382,6 +780,75 @@ public static partial class NativeBridge
                     Vector(rootOffset.GetProperty("worldTranslation")), rootOffset.GetProperty("yawRadians").GetSingle(),
                     rootOffset.GetProperty("reason").GetString()!)
                 : new(false, false, Vector3.Zero, 0, "disabled");
+            component.Animation.SlopeWarpingFeedback = value.TryGetProperty("slopeWarping", out var slopeWarping)
+                ? new(slopeWarping.GetProperty("enabled").GetBoolean(),
+                    slopeWarping.GetProperty("active").GetBoolean(),
+                    slopeWarping.GetProperty("slopeAngle").GetSingle(),
+                    slopeWarping.GetProperty("targetSlopeAngle").GetSingle(),
+                    slopeWarping.GetProperty("appliedSlopeAngle").GetSingle(),
+                    slopeWarping.GetProperty("weight").GetSingle(),
+                    slopeWarping.GetProperty("pelvisOffset").GetSingle(),
+                    Vector(slopeWarping.GetProperty("groundNormal")),
+                    slopeWarping.GetProperty("supportIdentity").GetString()!,
+                    slopeWarping.GetProperty("reason").GetString()!)
+                : new(false, false, 0, 0, 0, 0, 0, new Vector3(0, 1, 0), "", "disabled");
+            if (value.TryGetProperty("poseDriver", out var poseDriver))
+            {
+                var curves = new Dictionary<string, float>(StringComparer.Ordinal);
+                if (poseDriver.TryGetProperty("curves", out var curveValues))
+                    foreach (var curve in curveValues.EnumerateObject())
+                        curves[curve.Name] = curve.Value.GetSingle();
+                var diagnostics = new List<PoseDriverDiagnostic>();
+                if (poseDriver.TryGetProperty("diagnostics", out var diagnosticValues))
+                    foreach (var diagnostic in diagnosticValues.EnumerateArray())
+                        diagnostics.Add(new(diagnostic.GetProperty("driver").GetString()!,
+                            diagnostic.GetProperty("code").GetString()!,
+                            diagnostic.GetProperty("detail").GetString()!));
+                component.Animation.PoseDriverFeedback = new(
+                    poseDriver.GetProperty("enabled").GetBoolean(),
+                    poseDriver.GetProperty("active").GetBoolean(),
+                    poseDriver.GetProperty("solvedDrivers").GetInt32(),
+                    poseDriver.GetProperty("asset").GetString()!,
+                    poseDriver.GetProperty("digest").GetString()!,
+                    curves, diagnostics);
+            }
+            else
+                component.Animation.PoseDriverFeedback = new(false, false, 0, "", "",
+                    new Dictionary<string, float>(StringComparer.Ordinal),
+                    Array.Empty<PoseDriverDiagnostic>());
+            if (value.TryGetProperty("postProcess", out var postProcess))
+            {
+                var postDiagnostics = new List<PostProcessDiagnostic>();
+                if (postProcess.TryGetProperty("diagnostics", out var postDiagnosticValues))
+                    foreach (var diagnostic in postDiagnosticValues.EnumerateArray())
+                        postDiagnostics.Add(new(diagnostic.GetProperty("entry").GetString()!,
+                            diagnostic.GetProperty("code").GetString()!,
+                            diagnostic.GetProperty("detail").GetString()!));
+                component.Animation.PostProcessFeedback = new(
+                    postProcess.GetProperty("enabled").GetBoolean(),
+                    postProcess.GetProperty("asset").GetString()!,
+                    postProcess.GetProperty("digest").GetString()!,
+                    postProcess.GetProperty("entries").GetInt32(),
+                    postProcess.GetProperty("twistEntries").GetInt32(),
+                    postProcess.GetProperty("helperEntries").GetInt32(),
+                    postProcess.GetProperty("constraintEntries").GetInt32(),
+                    postProcess.GetProperty("applications").GetInt64(),
+                    postProcess.GetProperty("rotatedBones").GetInt32(),
+                    postProcess.GetProperty("maxTwistDegrees").GetSingle(),
+                    postDiagnostics);
+            }
+            else
+                component.Animation.PostProcessFeedback = new(false, "", "", 0, 0, 0, 0, 0, 0, 0,
+                    Array.Empty<PostProcessDiagnostic>());
+            component.Animation.BonePhysicsFeedback = value.TryGetProperty("bonePhysics", out var bonePhysics)
+                ? new(bonePhysics.GetProperty("enabled").GetBoolean(),
+                    bonePhysics.GetProperty("active").GetBoolean(),
+                    bonePhysics.GetProperty("simulatedBodies").GetInt32(),
+                    bonePhysics.GetProperty("constraints").GetInt32(),
+                    bonePhysics.GetProperty("maxDisplacement").GetSingle(),
+                    bonePhysics.GetProperty("reason").GetString()!,
+                    ReadBonePhysicsBodies(bonePhysics))
+                : default;
             component.Animation.MotionFeedback = value.TryGetProperty("motion", out var motion)
                 ? new(motion.GetProperty("databaseIdentity").GetString()!, motion.GetProperty("queryReady").GetBoolean(),
                     motion.GetProperty("decision").GetString()!, motion.GetProperty("searchCount").GetInt64(),
@@ -425,6 +892,7 @@ public static partial class NativeBridge
     {
         var commands = new List<object>();
         foreach (var mesh in owner.Components.OfType<MeshComponent>())
+        {
             if (mesh.Animation.Pending is { } request)
             {
                 if (request.Database.Length > 0)
@@ -440,11 +908,74 @@ public static partial class NativeBridge
                         targets = request.MontageTargets?.ToDictionary(pair => pair.Key,
                             pair => DescribeWarpTarget(pair.Value),
                             StringComparer.Ordinal) ?? new Dictionary<string, float[]>() });
+                else if (request.Transition)
+                    commands.Add(new { component = mesh.Id, mode = "transitionTo", clip = request.Clip,
+                        startTime = request.TransitionStartTime, loop = request.Loop, rate = request.Rate,
+                        blendSeconds = request.BlendSeconds, inPlace = request.InPlace,
+                        inertialization = request.Inertialization, syncGroup = request.SyncGroup,
+                        syncPhase = request.SyncPhase });
                 else
                     commands.Add(new { component = mesh.Id, clip = request.Clip, loop = request.Loop,
                         rate = request.Rate, inPlace = request.InPlace });
                 mesh.Animation.Pending = null;
             }
+            // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的
+            // 旧边界，slope 作为后续候选组合应用到刚提交的播放状态上。
+            if (mesh.Animation.PendingSlopeWarping is { } slope)
+            {
+                commands.Add(new { component = mesh.Id, mode = "configureSlopeWarping",
+                    enabled = slope.Enabled, weight = slope.Weight,
+                    maxSlopeDegrees = slope.MaxSlopeDegrees,
+                    pelvisHeightOffset = slope.PelvisHeightOffset,
+                    footCompensation = slope.FootCompensation,
+                    responseSpeed = slope.ResponseSpeed, maxPelvisOffset = slope.MaxPelvisOffset });
+                mesh.Animation.PendingSlopeWarping = null;
+            }
+            // PoseDriver 与 slope 同属后处理配置，跟随播放命令之后应用；
+            // 关闭时也显式提交一次，确保播放器重建后不会继承旧的曲线输出。
+            if (mesh.Animation.PendingPoseDriver is { } poseDriver)
+            {
+                commands.Add(new { component = mesh.Id, mode = "configurePoseDriver",
+                    enabled = poseDriver.Enabled, asset = poseDriver.Asset });
+                mesh.Animation.PendingPoseDriver = null;
+            }
+            if (mesh.Animation.PendingPostProcess is { } postProcess)
+            {
+                commands.Add(new { component = mesh.Id, mode = "configurePostProcess",
+                    enabled = postProcess.Enabled, asset = postProcess.Asset });
+                mesh.Animation.PendingPostProcess = null;
+            }
+            if (mesh.Animation.PendingBonePhysics is { } bonePhysics)
+            {
+                commands.Add(new { component = mesh.Id, mode = "configureBonePhysics",
+                    enabled = bonePhysics.Enabled, asset = bonePhysics.Asset,
+                    debug = bonePhysics.Debug });
+                mesh.Animation.PendingBonePhysics = null;
+            }
+        }
         return commands.ToArray();
     }
+
+    private static BonePhysicsBody[]? ReadBonePhysicsBodies(JsonElement bonePhysics)
+    {
+        if (!bonePhysics.TryGetProperty("bodies", out var bodies) || bodies.ValueKind != JsonValueKind.Array)
+            return null;
+        var result = new BonePhysicsBody[bodies.GetArrayLength()];
+        var index = 0;
+        foreach (var body in bodies.EnumerateArray())
+        {
+            result[index++] = new BonePhysicsBody(
+                body.GetProperty("bone").GetString()!,
+                body.GetProperty("parent").GetString()!,
+                Vector(body.GetProperty("center")),
+                ReadQuaternion(body.GetProperty("rotation")),
+                body.GetProperty("radius").GetSingle(),
+                body.GetProperty("halfHeight").GetSingle(),
+                body.GetProperty("simulated").GetBoolean());
+        }
+        return result;
+    }
+
+    private static Quaternion ReadQuaternion(JsonElement value) =>
+        new(value[0].GetSingle(), value[1].GetSingle(), value[2].GetSingle(), value[3].GetSingle());
 }

@@ -323,7 +323,7 @@ def parse_sections(text: str, length: float) -> list[dict]:
 
 
 def parse_notifies(text: str, tracks: dict[int, str], length: float,
-                   warp_blocks: dict[str, str]) -> list[dict]:
+                   warp_blocks: dict[str, str], strict_end_link: bool = True) -> list[dict]:
     raw_notifies = assignments(text, "Notifies")
     notifies = []
     for index, value in sorted(raw_notifies):
@@ -345,7 +345,10 @@ def parse_notifies(text: str, tracks: dict[int, str], length: float,
             raise ExportError("Notify %r is outside the montage" % name)
         if is_warp_notify and (duration <= 0 or start_time + duration > length + 1e-3):
             raise ExportError("Warp notify %r is outside the montage" % name)
-        if end_time is not None and abs(start_time + duration - end_time) > 1e-3:
+        # UE 的 instant notify 有时把 EndLink 用作分支/segment 元数据，不能拿来
+        # 推断 time+duration；notifyState 仍必须严格对齐 EndLink。
+        if strict_end_link and end_time is not None and duration > 0 and \
+                abs(start_time + duration - end_time) > 1e-3:
             raise ExportError("Notify %r EndLink does not match time+duration" % name)
         track_index = property_value(outer, "TrackIndex")
         track_number = int(track_index) if track_index is not None else 0

@@ -1,11 +1,13 @@
 # 动画 Montage：数据与播放
 
-> 状态：当前契约。描述 `AM_*.json`（`vl.anim-montage.v1`）的解析、跨文件绑定校验、
-> 与 Skeleton/Sequence/SM 的引用关系、导入计划/`modelCacheKey`/`sourceInputs`，
-> 以及 `PlayMontage` 的播放范围、入口 `startTime`、section/link 推进、notify 执行、
-> warp（含旋转/Static）、catalog/feedback 与执行层拒绝矩阵。
-> **非 `Slerp` 旋转方法、Montage 混合、section 内 rate/offset、additive 与 sync marker
-> 执行不属于本契约**（数据保留，执行入口拒绝或不消费）。
+> 状态：当前契约。描述 `AM_*.json`（`vl.anim-montage.v1`）的解析、单 sequence 与
+> 多 `segments[]` 两种数据形状、跨文件绑定校验、与 Skeleton/Sequence/SM 的引用关系、
+> 导入计划/`modelCacheKey`/`sourceInputs`，以及 `PlayMontage` 的播放范围、入口
+> `startTime`、section/link 推进、段边界 clip 切换、notify 执行、warp（含旋转/Static）、
+> catalog/feedback 与执行层拒绝矩阵。
+> **非 `Slerp` 旋转方法、Montage 混合、section 内 rate/offset 与 additive 不属于本契约**
+> （数据保留，执行入口拒绝或不消费）。SyncGroup/MarkerSync 的运行时执行语义以
+> [动画运行时与蒙皮](animation-runtime-skinning.md) 为准。
 
 ## 所有权与入口
 
@@ -13,9 +15,9 @@
 | --- | --- | --- |
 | 解析 `AM_*.json`；不读文件、不算摘要、不接触骨架/Sequence | `VL::Animation::ParseMontage` | `source/animation/animationMontage.h`、`animationMontage.cpp` |
 | section link 时间换算（Absolute/Relative/Ratio） | `ResolveMontageSectionLinkTime` | `source/animation/animationMontage.cpp` |
-| 跨文件绑定（sidecar/SK/clip id）并派生 clip id | `VL::Animation::BindMontage` | `source/animation/animationMontage.cpp` |
+| 跨文件绑定（sidecar/SK/clip id）并派生 clip id | `VL::Animation::BindMontageSegments`（`BindMontage` 为单段兼容入口） | `source/animation/animationMontage.cpp` |
 | 校验 `skinning.montages` 清单、扩展 `modelCacheKey` | `MeshAssetValidator::BuildLoadPlan` | `source/mesh/validation/meshAssetValidator.cpp` |
-| 读取/哈希 Montage、调用 `ParseMontage`/`BindMontage`、填 `sourceInputs` | `MeshAssetLoader::ImportSections` | `source/mesh/loader/common/meshAssetLoader.cpp` |
+| 读取/哈希 Montage、调用 `ParseMontage`/`BindMontageSegments`、填 `sourceInputs` | `MeshAssetLoader::ImportSections` | `source/mesh/loader/common/meshAssetLoader.cpp` |
 | 持有导入后的 Montage 数据 | `SkeletalAsset::montages` | `source/animation/skeletalPlayback.h` |
 | 按 id 或资源相对路径查找（不改变所有权） | `SkeletalAsset::FindMontage` | `source/animation/skeletalPlayback.cpp` |
 | 执行校验、section/warp 装配、catalog 资产段与 notify feedback | `animationScriptData.*` | `source/animation/animationScriptData.h`、`animationScriptData.cpp` |
@@ -28,9 +30,9 @@
 `Montage::sourceDigest`，资源相对路径写入 `Montage::sourcePath`；JSON 自身不携带这两个字段。
 Montage 不复制骨骼表、不复制曲线值、不持有播放时钟或 notify 回调。
 
-文件大小上限 4 MiB（`MaxMontageJsonBytes`）；结构上限为 `sections` ≤64、`notifies` ≤64、
-warp 窗口 ≤8、名称 ≤64 字符、Montage id ≤256 字符、`length` ≤600 秒。上限只防止异常资产
-拖垮导入，不参与播放语义。
+文件大小上限 4 MiB（`MaxMontageJsonBytes`）；结构上限为 `segments` ≤64、`sections` ≤64、
+`notifies` ≤64、warp 窗口 ≤8、名称 ≤64 字符、Montage id ≤256 字符、`length` ≤600 秒。
+上限只防止异常资产拖垮导入，不参与播放语义。
 
 ## JSON schema
 
@@ -40,13 +42,29 @@ warp 窗口 ≤8、名称 ≤64 字符、Montage id ≤256 字符、`length` ≤
 | --- | --- | --- | --- |
 | `format` | string | 是 | 必须逐字为 `vl.anim-montage.v1` |
 | `montage` | string | 是 | Montage id；非空、≤256；同一 SM 的 `skinning.montages[].id` 必须逐字相等 |
-| `sequence` | string | 是 | **Sequence sidecar 的资源相对路径**；非空。clip id 不写在这里，由命中的 sidecar 派生 |
-| `sequenceBlake3` | string | 否 | sidecar 文件 BLAKE3-256（64 hex）；给了就在绑定期与 sidecar 实际摘要比对 |
+| `sequence` | string | 条件 | 单 sequence 资产的 **Sequence sidecar 资源相对路径**；非空。与 `segments` 互斥 |
+| `sequenceBlake3` | string | 否 | 单 sequence 资产的 sidecar BLAKE3-256（64 hex）；与 `segments` 互斥 |
+| `segments` | array | 条件 | 多 AnimSegment 资产；≥1、≤64。存在时不得再写顶层 `sequence`/`sequenceBlake3` |
+| `rateScale` | number | 否 | UE `AnimMontage.RateScale`，缺省 1；有限、`(0,4]`。调用方 `rate` 与它相乘 |
 | `slot` | string | 是 | 非空、≤64；必须已在 SK `slots` 注册（GASP 为 `DefaultSlot`） |
 | `length` | number | 是 | 秒、Montage-local；有限、>0、≤600 |
 | `sections` | array | 是 | ≥1、≤64；元素见下 |
 | `notifies` | array | 否 | ≤64；缺省为空。顺序即资产顺序，不按时间排序 |
 | `source` | object | 否 | 追溯信息（T3D 文件名、UE 包路径、导出脚本）；`dump()` 后原样保留，不参与运行时身份 |
+
+`segments[]`（多段资产；时间轴必须连续覆盖 `[0,length]`）：
+
+| 字段 | 类型 | 必需 | 语义与校验 |
+| --- | --- | --- | --- |
+| `id` | string | 否 | 段诊断/feedback 标识；非空、≤64、Montage 内唯一；缺省 `segment_<index>` |
+| `sequence` | string | 是 | **该段的 Sequence sidecar 资源相对路径**；非空 |
+| `sequenceBlake3` | string | 否 | 该 sidecar 的 BLAKE3-256；给了就检查 |
+| `startTime` | number | 是 | 段在 Montage 时间轴上的起点；≥0，必须等于前一段 `endTime` |
+| `endTime` | number | 是 | Montage 时间轴终点；>`startTime`、≤`length+1e-3`；最后一段必须结束于 `length` |
+| `clipStartTime` | number | 否 | 该段在 sidecar 内的源码起点；≥0，缺省 0 |
+| `clipEndTime` | number | 否 | sidecar 内源码终点；缺省 = sidecar duration；必须 `>clipStartTime` 且落在 duration 内 |
+| `rateScale` | number | 否 | 该段源码时间相对 Montage 时间轴的倍率；缺省 1、有限、`(0,4]` |
+| `loop` | bool | 否 | 该段源码时间在 `[clipStartTime,clipEndTime)` 回绕；缺省 false。Montage 本身仍一次性 |
 
 `sections[]`：
 
@@ -95,10 +113,18 @@ warp 窗口 ≤8、名称 ≤64 字符、Montage id ≤256 字符、`length` ≤
 | 顶层不是 JSON object | 拒绝（消息不带字段名） |
 | `format` 缺失/不是字符串/不等于 `vl.anim-montage.v1` | 拒绝 |
 | `montage` 缺失、非字符串、空、>256 | 拒绝 |
-| `sequence` 缺失、非字符串、空 | 拒绝（解析器只查非空；能否命中已加载 sidecar 由 `BindMontage` 检查） |
+| 无 `segments` 时 `sequence` 缺失、非字符串、空 | 拒绝（能否命中已加载 sidecar 由 `BindMontageSegments` 检查） |
+| `sequence`/`sequenceBlake3` 与 `segments` 同时存在 | 拒绝：两种形状互斥 |
 | `sequenceBlake3` 存在但不是 64 hex 字符串 | 拒绝 |
+| `segments` 非数组、空、>64 | 拒绝 |
+| segment 非 object；`sequence` 空；`id` 空/重复/超长 | 拒绝 |
+| segment `startTime < 0`、`endTime <= startTime`、`endTime > length+1e-3` | 拒绝 |
+| segment 起点不等于前一段 `endTime`（空洞/重叠） | 拒绝 |
+| 最后一段 `endTime` 不等于 `length`（容差 1e-3） | 拒绝 |
+| segment `clipStartTime < 0`；`clipEndTime <= clipStartTime`；`rateScale` 不在 `(0,4]` | 拒绝 |
 | `slot` 缺失、非字符串、空、>64 | 拒绝 |
 | `length` 缺失、非数、非有限、≤0、>600 | 拒绝 |
+| `rateScale` 存在但不是有限数或不在 `(0,4]` | 拒绝 |
 | `sections` 缺失、非数组、空、>64 | 拒绝 |
 | section 非 object；`name` 空/重复/超长；`startTime < 0`；`endTime <= startTime`；`endTime > length+1e-3` | 拒绝 |
 | `nextSection` 超长或指向不存在的 section | 拒绝（先收集全部名字，再校验引用） |
@@ -121,24 +147,29 @@ warp 窗口 ≤8、名称 ≤64 字符、Montage id ≤256 字符、`length` ≤
 （现在执行）、`provider=Static`（现在执行）、`warpRotation`/`rotationTimeMultiplier`
 （现在执行）、`rotationMethod` 非 `Slerp`（执行拒绝）、非 `Linear` easing（执行拒绝）。
 
-## BindMontage 跨文件校验
+## BindMontageSegments 跨文件校验
 
-`BindMontage` 在**所有 clip 与 sidecar 加载完成之后**执行，输入是 Montage、当前已加载的
+`BindMontageSegments` 在**所有 clip 与 sidecar 加载完成之后**执行，输入是 Montage、当前已加载的
 `SkeletonAsset`、本次 SM 导入的 sidecar 绑定列表（path → `SequenceData*` + 摘要）以及
-`skinning.clips[].id` 清单。校验顺序固定：
+`skinning.clips[].id` 清单。单 sequence 资产按一项绑定；多段资产逐段执行同一套校验。
+校验顺序固定：
 
 1. 必须有已加载的 Skeleton（`skeleton.id` 非空）；否则报 `skeleton` 字段错误。
-2. `montage.sequence` 必须**按字符串逐字命中**本次导入的某个 sidecar 路径；不按 clip id 猜测，
-   也不做路径归一化。未命中报 `sequence` 路径错误。
+2. 每个 `sequence` / `segments[i].sequence` 必须**按字符串逐字命中**本次导入的某个 sidecar
+   路径；不按 clip id 猜测，也不做路径归一化。未命中报对应字段路径。
 3. sidecar 的 `skeleton` 必须等于已加载 SK 的 `skeleton` id。
 4. sidecar 的 `skeletonBlake3` 与 SK 文件摘要都存在时，必须大小写不敏感相等。
-5. `sequenceBlake3` 若声明，必须等于 sidecar 文件摘要；sidecar 没有可用摘要则拒绝。
+5. `sequenceBlake3` / `segments[i].sequenceBlake3` 若声明，必须等于 sidecar 文件摘要；
+   sidecar 没有可用摘要则拒绝。
 6. `slot` 必须命中 SK `slots`。
 7. 每条 `provider=Bone` 的 warp，骨名必须是 SK 关节（大小写敏感匹配，`SkeletonAsset::JointIndex`）。
 8. sidecar 的 `sequence` 字段（派生的 clip id）必须已在本次 SM 的 `skinning.clips[].id` 中声明。
+9. 每段 `clipStartTime/clipEndTime` 必须落在该 sidecar 的 `duration` 内；非 `loop` 段的
+   Montage 时长 × `rateScale` 不得映射到 clipEnd 之后。`loop` 段只校验源码区间非空。
 
-成功后返回派生 clip id，loader 写入 `Montage::derivedClipId`；`BindMontage` 本身不采样曲线、
-不预计算窗口曲线值、不生成任何运行时窗口。
+成功后返回派生 clip id 列表；loader 把第一项写入 `Montage::derivedClipId`，并逐项写入
+`Montage::segments[].derivedClipId`。绑定本身不采样曲线、不预计算窗口曲线值、不生成任何
+运行时窗口。
 
 loader 另外校验 `montage.id == skinning.montages[].id`；不一致时报“id 与清单 id 不符”。
 `Montage::windows` 由带 `warp` 的 notify 按数组顺序派生（`target` + `[time, time+duration]`），
@@ -151,7 +182,8 @@ SkeletalAsset
   skeleton  <- SM skinning.skeleton（Maps/SC_gasp/Skeletons/SK_UEFN_Mannequin.json）
   clips[]   <- FBX + 可选 sidecar（<stem>.anim.json）
   montages[]<- SM skinning.montages[].path（AM_*.json）
-                 └─ montage.sequence -> 必须命中 clips[] 已加载的某个 sidecar
+                 ├─ montage.sequence -> 单段资产命中 clips[] 已加载的 sidecar
+                 └─ montage.segments[].sequence -> 多段资产逐段命中 sidecar
 ```
 
 | 层 | 提供什么 | Montage 如何使用 |
@@ -170,6 +202,8 @@ source asset，不按目标骨名重新绑定。目标只接收 retarget 后的�
 共 36,839 B：10 个 traversal（资源 `ebd7059`，46 条 notify、21 个 warp）+
 9 个 Catch（资源 `3574a3a`，46 条 notify、12 个 warp），合计 188 条 notify、33 个窗口；
 traversal 那批复制到 `tool/animation-tests/fixtures/montages/` 作为模块测试夹具。
+Echo 侧另有 3 个正式 Montage：`AM_VaultOver_Montage`、`AM_ReachOut_End_Montage` 与
+`AM_ReachOut_Montage_RM`（2 段 / 2 section / 3 notify / 2 warp / `rateScale=0.5`）。
 `skeleton` 现在是骨骼 SM 的必需字段；`clips[].sequence` 与 `montages` 仍是可选：
 `skinning.montages` 未写时导入计划里 `animationMontages` 为空，资产不含 Montage；
 没有 sidecar 的 clip 仍可播放，但没有曲线、序列 notify 或 Montage 覆盖层。
@@ -292,7 +326,24 @@ sourceInputs（loader 追加，按加载顺序）
 从 section 0 开始：单 section 的播放范围是 `[startTime, endTime]`；多 section（或单段
 自连接）安装 section 链，播放范围始终是当前 section 的 `[startTime, endTime]`，段末按
 `nextSection`/`linkMethod` 切到下一段。**只允许一次性播放**（`loop=true` 拒绝）；
-链式 Montage 的每个 section 必须在装配期证明落在已加载 clip 内。
+单 sequence 链式 Montage 的每个 section 必须在装配期证明落在已加载 clip 内；
+多段 Montage 由每段 `clipStartTime/clipEndTime` 与 `(endTime-startTime)*rateScale`
+的源码映射在装配期证明不越界。
+
+多 `segments[]` 资产的时间轴与 section 共用同一 Montage-local 域：
+
+- `time` 永远按 Montage 时间轴推进；段边界只替换 `selected` clip 与源码时间映射，
+  不重置 section 链、notify 活动区间或 Montage 时钟。
+- 段源码时间：`clipStartTime + (timeline - segment.startTime) * segment.rateScale`；
+  `loop=true` 时在 `[clipStartTime,clipEndTime)` 回绕，否则 clamp 到段源码区间。
+- 入口 `startTime`、section/link、notify 时间仍按 Montage 时间轴解释；每段映射只影响
+  姿态/根轨迹采样与 sidecar notify 的导出时间。
+- 顶层 `rateScale` 乘以调用方 `rate` 后驱动 Montage 时间轴；段级 `rateScale` 不改变
+  Montage 时间轴，只改变该段源码时间的前进速度。
+- 根运动按“实际移动过的子区间”在段内积分；切段本身不产生根位移。sidecar notify 在
+  绑定期映射到段所属的 Montage 时间（含段内循环的重复），Montage notify 保持作者时间。
+- warp 窗口也按段裁剪并映射到该段 clip 本地时间；跨段窗口在每段分别裁剪（当前只保证
+  Echo ReachOut 这种段边界 1e-4 s 内的跨界窗口，不声称等价 UE 的多段 modifier 合并）。
 
 link 时间（`ResolveMontageSectionLinkTime`，来自 UE `FAnimLinkableElement`）：
 
@@ -334,6 +385,9 @@ targetModel += offset.translation           （只消费平移）
 
 `SkeletalPlayback::SetPlaybackRange(start, end)`（秒、clip-local）是 Montage 截断的执行手段：
 
+单 sequence Montage 的 `time` 与 clip-local 相同；多 `segments[]` Montage 的 `time` 是
+Montage 时间轴，先经段映射再采样 clip，`Duration()` 仍是当前 section 范围长度。
+
 - 参数必须有限、`start >= 0`、`end > start`；`end` 越过片段末尾时按片段时长 clamp
   （Montage `length` 与 sequence `duration` 的导出误差走这条路径），clamp 后为空仍拒绝。
 - 范围只影响播放长度、根位移积分与 notify 有效域，不改变姿态采样；非 0 起点不移动当前
@@ -358,16 +412,20 @@ Sequence notifies 与（播放 Montage 时）Montage notifies 合并成一张按
 - 在 `Stop`、切片段、`TransitionTo`、循环回绕或一次性播放到达范围末尾时，仍活动的区间补
   `end(interrupted=true)`；循环回绕按“先尾部、后头部”处理，跨环区间得到 `end→begin`。
   `Seek` 清空活动状态且不补发被跳过的事件；暂停保留活动状态。
-- 反馈字段：`notifies[]` 每项含 `name/track/kind/phase/time/startTime/duration/interrupted`，
-  `montage` 含 `{id, length, range:[start,end]}`。C# 对应 `State.Notifies`、
-  `State.Montage`、`State.MontageLength`、`State.MontageRange`。反馈在脚本 tick 之前发布，
-  C# 看到的是上一动画 tick 的事件（既有反馈时序）。
+- 反馈字段：`notifies[]` 每项含 `name/track/kind/phase/time/startTime/duration/interrupted/
+  segmentIndex/segmentId`；`montage` 含 `{id,length,segment,segmentId,range:[start,end]}`。
+  C# 对应 `State.Notifies`、`State.Montage`、`State.MontageLength`、`State.MontageRange`、
+  `State.MontageSegment`、`State.MontageSegmentId`。反馈在脚本 tick 之前发布，C# 看到的是
+  上一动画 tick 的事件（既有反馈时序）。
 
 ## catalog 与曲线
 
 `World::ScriptAnimationAssets()` 按 modelPath 发布一次性资产段：
 `curves` 只包含“有 sidecar 且至少一条曲线”的 clip（`{name,times,values}`，键已排序）；
-`montages` 发布全部 sections/notifies 与 warp 元数据（`warpRotation`、
+`players` 发布每个 clip 的 `syncGroup/syncRole/syncMethod/syncGroupScope/startPosition/loop`，
+`syncMarkers` 发布 `{name,time}`（时间非降，允许同名重复）；两者都只在非空时出现。
+`montages` 发布 `path`、`rateScale`、全部 `segments[]`（segmentId/sequence/clip/
+时间轴/源码区间/rateScale/loop）、sections/notifies 与 warp 元数据（`warpRotation`、
 `rotationTimeMultiplier`、`rotationMethod` 等，**不含 `staticPose`**——它只由原生
 执行层消费）。它与旧 `catalog`（clip id 列表）一起随 `animation_catalog` 消息下发，
 C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `WarpTarget`（位置 +
@@ -375,7 +433,14 @@ C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `
 
 `AnimationPlayback.CurveValue(clipId, curveName, time)` 是 C# 侧参考采样：秒、clip-local、
 键间线性、区间外 clamp 到首/末值、单键常量；未知 clip/曲线与非有限时间都抛异常。
-原生 `SampleFloatCurve` 仍是同一规范的参考实现；曲线值只在 Sequence sidecar 保存一份。
+`CurrentCurve(name)` 等价于对当前 `State.Clip/State.Time` 调用 `CurveValue`，只是省去
+调用方拆状态。`CurveNames(clipId)`、`HasCurve(clipId, curveName)`、
+`HasCurrentCurve(name)` 与 `CurveSnapshot(names)` 提供查询/显式批量读取；
+`CurveSnapshot` 不复制整片段曲线，缺失诊断会列出候选曲线名。
+原生 `SkeletalPlayback::SampleCurve(name, time)` 与当前时钟重载复用
+`SampleFloatCurve`，未知曲线/无 sidecar 返回 `nullopt`，非有限时间拒绝。
+这些入口仍是手动采样，不存在逐帧自动曲线求值，曲线值也不进入 Frame feedback；
+曲线值只在 Sequence sidecar 保存一份。
 
 ## 执行层拒绝矩阵
 
@@ -401,6 +466,10 @@ C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `
 | 缺少 Montage 声明的 target，或多出未声明的 target | 拒绝，诊断带 montage id 与 target 名 |
 | 未知 Montage id | 拒绝（C# `Unknown animation montage` / 原生 `Script.UnknownAnimationMontage`） |
 | `derivedClipId` 为空、clip 未加载、或该 clip 没有 sidecar | 拒绝：Montage 必须绑定已加载的 sidecar |
+| `segments[]` 为空、段 id/clip 为空、段 `derivedClipId` 未加载 | 拒绝：多段资产必须在绑定期解析全部 clip |
+| 段时间轴空洞/重叠、最后一段未覆盖 Montage `length` | 拒绝：运行期不能出现无 clip 的时间区间 |
+| 段源码区间越出 sidecar duration，或非 loop 段映射超过 clipEnd | 拒绝 |
+| 段 `rateScale` 非有限或不在 `(0,4]`；顶层 `rateScale*rate` 越过 `(0,4]` | 拒绝 |
 | 旧 `clip` 请求携带 `warpTargets` | 拒绝：`Script.WarpTargetsDefinedByMontage`（warp target 由 Montage 资产声明） |
 
 `warpRotation`/`rotationTimeMultiplier`/`rotationMethod` 与 `staticPose` 都已进入执行层；
@@ -417,23 +486,33 @@ C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `
 - **Static offset 的旋转**：`staticPose` 的旋转参与 offset 计算，但只把平移加到目标。
 - **section 内 rate/offset、Montage 混合/blend-out**：未实现；资源侧用落地收口 +
   `ClearRootMotion` 替代 blend-out。
-- **additive 与 sync marker**：只保留数据，不执行。
+- **additive**：只保留数据，不执行。
+- **MarkerSync**：已执行。follower 用 leader 当前最近 marker 的同名区间 alpha 映射自己的
+  同名 marker 区间；缺 marker 回退 `SyncGroup` 并发布诊断。`Graph` 方法仍只保留数据，
+  执行层返回 `sync-graph-not-executed`，不参与运行时同步。
 - 没有运行时 30/60/120 Hz 的 Montage/包内矩阵；只有模块测试与场景矩阵。
 
 ## 验证
 
-`animation_preflight_tests` 相关套件（全量 255 项）：
+`animation_preflight_tests` 相关套件（全量 320 项）：
 
-- `AnimationMontage` 24 项（`tool/animation-tests/animationMontageTests.cpp`）：解析、
-  GASP 夹具计数、数据保留、跨文件绑定拒绝、`FindMontage`、缓存键、
-  `rotationMethod` 缺省/保留/类型拒绝。
-- `AnimationScriptData` 30 项（`tool/animation-tests/animationScriptDataTests.cpp`）：
+- `AnimationSyncGroup` 17 项（`tool/animation-tests/animationSyncGroupTests.cpp`）：
+  role 矩阵、weight/active leader election、Exclusive 退化、TransitionLeader/Follower、
+  Local/Component 分区、MarkerSync 同名区间与回退、循环回绕、30/60/120 Hz 相位误差、
+  Registry 容量零增长、`SkeletalPlayback` 持续 follower 集成，以及过渡源影子时钟
+  在整个混合窗口内驱动目标 follower；一次性源片段播完后影子节点退出选举。
+- `AnimationMontage` 27 项（`tool/animation-tests/animationMontageTests.cpp`）：解析、
+  GASP 夹具计数、数据保留、跨文件绑定拒绝、多 segment 时间轴/绑定/空洞/重叠/源码越界拒绝、
+  `FindMontage`、缓存键、`rotationMethod` 缺省/保留/类型拒绝。
+- `AnimationScriptData` 37 项（`tool/animation-tests/animationScriptDataTests.cpp`）：
   catalog 曲线筛选与序列化、notify feedback 字段、窗口装配顺序与 flags、
   目标旋转透传、Static pose 映射与拒绝、未知 provider/非 Linear 拒绝、
   `PlayMontage` 范围/notify/Seek、warped yaw 写通道、失败不改播放器；
   section：Absolute/Relative/Ratio、空 nextSection 停止、未知/越界 link 拒绝、
   边界 notify 只触发一次、前向空洞跳过并补 end、后向跳变 interrupted；
-  入口 `startTime`：跳过之前 notify/根位移、section 0 越界拒绝、多段链从入口开始。
+  segment：边界切 clip 不重启时钟、顶层 rateScale、section 自循环跨段、sidecar notify 段映射；
+  入口 `startTime`：跳过之前 notify/根位移、section 0 越界拒绝、多段链从入口开始；
+  原生曲线端点/中点/当前时钟/未知曲线/非有限时间/无 sidecar。
 - `NotifyPlayback` 11 项（`tool/animation-tests/notifyStateTests.cpp`）：瞬时/区间、
   越界 end interrupted、Stop/切片段/Transition、循环回绕、Seek 不补发、同名独立、
   范围 clamp、Montage 覆盖层合并与替换。

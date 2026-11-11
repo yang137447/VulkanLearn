@@ -1,0 +1,1637 @@
+{
+  "format": "vl.anim-pose-driver.v1",
+  "id": "EPD_EchoPostProcess",
+  "source": {
+    "engine": "UE 5.8.4",
+    "t3d": "artifacts/ue-echo-export/anim-audit/Echo_PostProcess_AnimBP.t3d",
+    "t3dBlake3": "174926dd361ab5e6387faf10855eb8bcd264ea71358be3d8b0debbc4bb7c8efa"
+  },
+  "drivers": [
+    {
+      "name": "PoseDriver_10",
+      "sourceBones": [
+        "neck_02"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 90.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "C_BipedHeadNeck_A_NeckMid_Jnt_0_0_4",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                5.674006,
+                0.0,
+                1e-06
+              ],
+              "rotation": {
+                "pitch": -0.082072,
+                "yaw": -0.904579,
+                "roll": 0.00062
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "C_BipedHeadNeck_A_NeckMid_Jnt_n11_44_n1",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                5.674006,
+                0.0,
+                1e-06
+              ],
+              "rotation": {
+                "pitch": -43.956341,
+                "yaw": 3.638547,
+                "roll": -11.218204
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "C_BipedHeadNeck_A_NeckMid_Jnt_11_n44_n1",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                5.674006,
+                0.0,
+                1e-06
+              ],
+              "rotation": {
+                "pitch": 43.794647,
+                "yaw": 3.602501,
+                "roll": 11.192045
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "C_BipedHeadNeck_A_NeckMid_Jnt_0_0_49",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                5.674006,
+                0.0,
+                1e-06
+              ],
+              "rotation": {
+                "pitch": -0.07296,
+                "yaw": -45.904617,
+                "roll": 0.030466
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "C_BipedHeadNeck_A_NeckMid_Jnt_0_0_n41",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                5.674006,
+                0.0,
+                1e-06
+              ],
+              "rotation": {
+                "pitch": -0.067407,
+                "yaw": 44.095428,
+                "roll": -0.026935
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_11",
+      "sourceBones": [
+        "lowerarm_l"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 30.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "L_BipedArm_A_Elbow_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                26.121986,
+                0.0,
+                3e-06
+              ],
+              "rotation": {
+                "pitch": -7e-06,
+                "yaw": 36.676525,
+                "roll": -2e-06
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Elbow_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                26.121815,
+                -0.000107,
+                4e-06
+              ],
+              "rotation": {
+                "pitch": 0.000184,
+                "yaw": 96.676544,
+                "roll": 0.000243
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Elbow_Jnt_0_0_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                26.121799,
+                -0.000208,
+                3e-06
+              ],
+              "rotation": {
+                "pitch": 0.000164,
+                "yaw": 126.676537,
+                "roll": 0.000397
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Elbow_Jnt_0_0_30",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                26.122086,
+                -2.3e-05,
+                7e-06
+              ],
+              "rotation": {
+                "pitch": -0.000157,
+                "yaw": 6.676543,
+                "roll": -2.1e-05
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Elbow_Jnt_0_0_n120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                26.121828,
+                -0.000307,
+                2e-06
+              ],
+              "rotation": {
+                "pitch": 6.8e-05,
+                "yaw": 156.676529,
+                "roll": 0.000521
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_12",
+      "sourceBones": [
+        "lowerarm_r"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 30.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "R_BipedArm_A_Elbow_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -26.121992,
+                0.0,
+                0.0
+              ],
+              "rotation": {
+                "pitch": 0.0,
+                "yaw": 36.676533,
+                "roll": 3e-06
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Elbow_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -26.122166,
+                -0.000107,
+                2e-06
+              ],
+              "rotation": {
+                "pitch": -0.000191,
+                "yaw": 96.676537,
+                "roll": -0.000241
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Elbow_Jnt_0_0_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -26.122181,
+                -0.000208,
+                -2e-06
+              ],
+              "rotation": {
+                "pitch": -0.000164,
+                "yaw": 126.676521,
+                "roll": -0.000398
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Elbow_Jnt_0_0_30",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -26.121891,
+                -2.2e-05,
+                2e-06
+              ],
+              "rotation": {
+                "pitch": 0.000164,
+                "yaw": 6.676543,
+                "roll": 2.1e-05
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Elbow_Jnt_0_0_n120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -26.12215,
+                -0.000307,
+                0.0
+              ],
+              "rotation": {
+                "pitch": -6.8e-05,
+                "yaw": 156.676544,
+                "roll": -0.000521
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_13",
+      "sourceBones": [
+        "calf_l"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 40.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.0,
+                "yaw": 1.032695,
+                "roll": -1e-06
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_45",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.004269,
+                "yaw": 46.0327,
+                "roll": -0.001036
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.007998,
+                "yaw": 91.032684,
+                "roll": 0.001295
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.009105,
+                "yaw": 121.032707,
+                "roll": 0.003994
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_n30",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": -0.001865,
+                "yaw": -28.967299,
+                "roll": 0.002313
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedLeg_A_Knee_Jnt_0_0_150",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.008627,
+                "yaw": 151.032684,
+                "roll": 0.006953
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_14",
+      "sourceBones": [
+        "calf_r"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 40.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.0,
+                "yaw": 1.032695,
+                "roll": -1e-06
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_45",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.004262,
+                "yaw": 46.0327,
+                "roll": -0.001037
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.007998,
+                "yaw": 91.032684,
+                "roll": 0.001205
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.009098,
+                "yaw": 121.032707,
+                "roll": 0.003999
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_n30",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": -0.001858,
+                "yaw": -28.967299,
+                "roll": 0.002311
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedLeg_A_Knee_Jnt_0_0_150",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                42.948368,
+                0.0,
+                -4e-06
+              ],
+              "rotation": {
+                "pitch": 0.008627,
+                "yaw": 151.032684,
+                "roll": 0.006939
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_16",
+      "sourceBones": [
+        "upperarm_r"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 50.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23747,
+                1.5e-05,
+                7e-06
+              ],
+              "rotation": {
+                "pitch": -45.167747,
+                "yaw": 4.425212,
+                "roll": -4.607868
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_35_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23746,
+                1.6e-05,
+                -7e-06
+              ],
+              "rotation": {
+                "pitch": -79.738556,
+                "yaw": 19.414881,
+                "roll": -18.537611
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n55_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23749,
+                1.5e-05,
+                4e-06
+              ],
+              "rotation": {
+                "pitch": 9.72373,
+                "yaw": 0.597076,
+                "roll": -3.294601
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23753,
+                -4.5e-05,
+                6.1e-05
+              ],
+              "rotation": {
+                "pitch": -17.790621,
+                "yaw": 69.46212,
+                "roll": -42.434784
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_0_n120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23752,
+                -0.000142,
+                4.6e-05
+              ],
+              "rotation": {
+                "pitch": 23.805523,
+                "yaw": 113.777435,
+                "roll": -39.816135
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_0_45",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23742,
+                -4e-06,
+                -4.8e-05
+              ],
+              "rotation": {
+                "pitch": -32.786457,
+                "yaw": -52.544254,
+                "roll": 33.287746
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_0_90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.2374,
+                -6.8e-05,
+                -7.6e-05
+              ],
+              "rotation": {
+                "pitch": -3.246785,
+                "yaw": -88.845901,
+                "roll": 45.260124
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n45_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.237541,
+                -0.000108,
+                5.9e-05
+              ],
+              "rotation": {
+                "pitch": 32.477589,
+                "yaw": 54.614063,
+                "roll": -57.209263
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n45_n150",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23749,
+                -0.000178,
+                4e-06
+              ],
+              "rotation": {
+                "pitch": 72.031242,
+                "yaw": 77.805191,
+                "roll": -82.058914
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n120_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.237501,
+                1.5e-05,
+                -1.3e-05
+              ],
+              "rotation": {
+                "pitch": 74.405853,
+                "yaw": -10.574428,
+                "roll": -12.164079
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_30_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23753,
+                -8.4e-05,
+                6.1e-05
+              ],
+              "rotation": {
+                "pitch": -17.59766,
+                "yaw": 113.029755,
+                "roll": -48.072536
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n15_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.23753,
+                -0.0001,
+                6.1e-05
+              ],
+              "rotation": {
+                "pitch": 13.685465,
+                "yaw": 80.247215,
+                "roll": -46.877975
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Shoulder_Jnt_0_n90_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -14.237502,
+                1.5e-05,
+                3e-06
+              ],
+              "rotation": {
+                "pitch": 44.648411,
+                "yaw": -2.058517,
+                "roll": -4.566849
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_17",
+      "sourceBones": [
+        "hand_l"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 50.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.1842,
+                0.0,
+                0.0
+              ],
+              "rotation": {
+                "pitch": -8.137944,
+                "yaw": -3.986064,
+                "roll": -62.963459
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_n60_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.184099,
+                2.1e-05,
+                3.2e-05
+              ],
+              "rotation": {
+                "pitch": 48.532116,
+                "yaw": 17.509205,
+                "roll": -48.634979
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_n120_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.184017,
+                1.7e-05,
+                -3.4e-05
+              ],
+              "rotation": {
+                "pitch": 60.421803,
+                "yaw": 134.394119,
+                "roll": 63.395504
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.183943,
+                -2.8e-05,
+                4.3e-05
+              ],
+              "rotation": {
+                "pitch": -16.174324,
+                "yaw": 57.029934,
+                "roll": -76.072159
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_0_60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.18437,
+                -0.000215,
+                2.6e-05
+              ],
+              "rotation": {
+                "pitch": 6.971342,
+                "yaw": -62.219017,
+                "roll": -63.379883
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Wrist_Jnt_0_60_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                24.184217,
+                -2.6e-05,
+                -0.000101
+              ],
+              "rotation": {
+                "pitch": -65.79509,
+                "yaw": -26.568232,
+                "roll": -53.168476
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_18",
+      "sourceBones": [
+        "hand_r"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 50.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.1842,
+                0.0,
+                2e-06
+              ],
+              "rotation": {
+                "pitch": -8.137944,
+                "yaw": -3.986067,
+                "roll": -62.963474
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_n60_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.184299,
+                2.1e-05,
+                3.3e-05
+              ],
+              "rotation": {
+                "pitch": 48.531998,
+                "yaw": 17.509716,
+                "roll": -48.635246
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_n120_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.18438,
+                1.3e-05,
+                -3.8e-05
+              ],
+              "rotation": {
+                "pitch": 60.421696,
+                "yaw": 134.394455,
+                "roll": 63.394501
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.184471,
+                -2.7e-05,
+                4.4e-05
+              ],
+              "rotation": {
+                "pitch": -16.174816,
+                "yaw": 57.029926,
+                "roll": -76.072563
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_0_60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.184036,
+                -0.000217,
+                2.3e-05
+              ],
+              "rotation": {
+                "pitch": 6.971922,
+                "yaw": -62.218887,
+                "roll": -63.380096
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "R_BipedArm_A_Wrist_Jnt_0_60_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                -24.184189,
+                -3.1e-05,
+                -0.000102
+              ],
+              "rotation": {
+                "pitch": -65.794785,
+                "yaw": -26.569904,
+                "roll": -53.166912
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PoseDriver_20",
+      "sourceBones": [
+        "upperarm_l"
+      ],
+      "evalSpaceBone": "",
+      "evalFromRefPose": false,
+      "driveSource": "Rotation",
+      "driveOutput": "Curves",
+      "rbf": {
+        "solverType": "Interpolative",
+        "radius": 50.0,
+        "automaticRadius": false,
+        "function": "Linear",
+        "distanceMethod": "SwingAngle",
+        "twistAxis": "X",
+        "weightThreshold": 0.0001,
+        "normalizeMethod": "OnlyNormalizeAboveOne",
+        "medianReference": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "medianMin": 45.0,
+        "medianMax": 60.0
+      },
+      "targets": [
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_0_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237472,
+                8e-06,
+                -1e-05
+              ],
+              "rotation": {
+                "pitch": -45.167633,
+                "yaw": 4.4253,
+                "roll": -4.60784
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_35_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237481,
+                8e-06,
+                -9e-06
+              ],
+              "rotation": {
+                "pitch": -79.738319,
+                "yaw": 19.416958,
+                "roll": -18.539692
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n55_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237452,
+                7e-06,
+                -1.3e-05
+              ],
+              "rotation": {
+                "pitch": 9.723825,
+                "yaw": 0.596892,
+                "roll": -3.294018
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_0_n60",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237421,
+                -5.2e-05,
+                4.5e-05
+              ],
+              "rotation": {
+                "pitch": -17.790155,
+                "yaw": 69.461784,
+                "roll": -42.434376
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_0_n120",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237419,
+                -0.000149,
+                4.5e-05
+              ],
+              "rotation": {
+                "pitch": 23.806057,
+                "yaw": 113.777122,
+                "roll": -39.81546
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_0_45",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237521,
+                -1.1e-05,
+                -5e-05
+              ],
+              "rotation": {
+                "pitch": -32.786697,
+                "yaw": -52.544334,
+                "roll": 33.288048
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_0_90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237549,
+                -7.6e-05,
+                -7.7e-05
+              ],
+              "rotation": {
+                "pitch": -3.247072,
+                "yaw": -88.846123,
+                "roll": 45.260773
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n45_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237401,
+                -0.000114,
+                4.2e-05
+              ],
+              "rotation": {
+                "pitch": 32.478046,
+                "yaw": 54.613506,
+                "roll": -57.208717
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n45_n150",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237451,
+                -0.000185,
+                -1.3e-05
+              ],
+              "rotation": {
+                "pitch": 72.0317,
+                "yaw": 77.80397,
+                "roll": -82.05883
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n120_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237441,
+                8e-06,
+                -2.9e-05
+              ],
+              "rotation": {
+                "pitch": 74.406136,
+                "yaw": -10.573836,
+                "roll": -12.162344
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_30_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237411,
+                -9.1e-05,
+                5.9e-05
+              ],
+              "rotation": {
+                "pitch": -17.597134,
+                "yaw": 113.029335,
+                "roll": -48.072052
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n15_n90",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237411,
+                -0.000108,
+                4.4e-05
+              ],
+              "rotation": {
+                "pitch": 13.685984,
+                "yaw": 80.246819,
+                "roll": -46.877426
+              }
+            }
+          ]
+        },
+        {
+          "drivenName": "L_BipedArm_A_Shoulder_Jnt_0_n90_0",
+          "scale": 1.0,
+          "distanceMethod": "Default",
+          "function": "Default",
+          "applyCustomCurve": false,
+          "transforms": [
+            {
+              "translation": [
+                14.237441,
+                8e-06,
+                -1.4e-05
+              ],
+              "rotation": {
+                "pitch": 44.648426,
+                "yaw": -2.058484,
+                "roll": -4.565856
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

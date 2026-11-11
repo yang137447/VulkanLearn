@@ -1,0 +1,350 @@
+{
+  "format": "vl.anim-post-process.v1",
+  "id": "EPP_EchoPostProcess",
+  "source": {
+    "engine": "UE 5.8.4",
+    "rig": "Echo_Twist_CtrlRig",
+    "rigJsonBlake3": "bcabbfde0b83e119fdc450d6f8a465ee128c4816c53c94ff8c222bfb7589a523",
+    "helpersJsonBlake3": "882e8db6d5bd9900f150210b8c6f58ce7193ecde927dc8e7cb6569d827365001",
+    "constraintsBlake3": "1567be7f5e1aa08ae468c603a6d4923f664f35dc55e23195939db73085a1dc58",
+    "constraintsSourceBlake3": "174926dd361ab5e6387faf10855eb8bcd264ea71358be3d8b0debbc4bb7c8efa"
+  },
+  "twist": [
+    {
+      "name": "foot_l",
+      "driverBone": "foot_l",
+      "twistAxis": "X",
+      "invert": false,
+      "targets": [
+        {
+          "bone": "calf_twist_01_l",
+          "weight": 1.0
+        },
+        {
+          "bone": "calf_twist_02_l",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "foot_r",
+      "driverBone": "foot_r",
+      "twistAxis": "X",
+      "invert": false,
+      "targets": [
+        {
+          "bone": "calf_twist_01_r",
+          "weight": 1.0
+        },
+        {
+          "bone": "calf_twist_02_r",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "hand_l",
+      "driverBone": "hand_l",
+      "twistAxis": "X",
+      "invert": false,
+      "targets": [
+        {
+          "bone": "lowerarm_twist_01_l",
+          "weight": 1.0
+        },
+        {
+          "bone": "lowerarm_twist_02_l",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "hand_r",
+      "driverBone": "hand_r",
+      "twistAxis": "X",
+      "invert": false,
+      "targets": [
+        {
+          "bone": "lowerarm_twist_01_r",
+          "weight": 1.0
+        },
+        {
+          "bone": "lowerarm_twist_02_r",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "thigh_l",
+      "driverBone": "thigh_l",
+      "twistAxis": "X",
+      "invert": true,
+      "targets": [
+        {
+          "bone": "thigh_twist_01_l",
+          "weight": 1.0
+        },
+        {
+          "bone": "thigh_twist_02_l",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "thigh_r",
+      "driverBone": "thigh_r",
+      "twistAxis": "X",
+      "invert": true,
+      "targets": [
+        {
+          "bone": "thigh_twist_01_r",
+          "weight": 1.0
+        },
+        {
+          "bone": "thigh_twist_02_r",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "upperarm_l",
+      "driverBone": "upperarm_l",
+      "twistAxis": "X",
+      "invert": true,
+      "targets": [
+        {
+          "bone": "upperarm_twist_01_l",
+          "weight": 1.0
+        },
+        {
+          "bone": "upperarm_twist_02_l",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "upperarm_r",
+      "driverBone": "upperarm_r",
+      "twistAxis": "X",
+      "invert": true,
+      "targets": [
+        {
+          "bone": "upperarm_twist_01_r",
+          "weight": 1.0
+        },
+        {
+          "bone": "upperarm_twist_02_r",
+          "weight": 0.5
+        }
+      ]
+    }
+  ],
+  "helpers": [
+    {
+      "name": "C_Scarf_A_Joint2_Jnt",
+      "projections": [
+        {
+          "child": "C_Scarf_A_Joint2_Jnt",
+          "oldParent": "spine_04",
+          "newParent": "spine_04",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "C_Scarf_A_Joint2_Jnt",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "C_Scarf_A_Joint3_Jnt",
+      "projections": [
+        {
+          "child": "C_Scarf_A_Joint3_Jnt",
+          "oldParent": "spine_04",
+          "newParent": "spine_04",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "C_Scarf_A_Joint3_Jnt",
+          "weight": 0.5
+        }
+      ]
+    },
+    {
+      "name": "C_Scarf_A_Root_Jnt",
+      "projections": [
+        {
+          "child": "C_Scarf_A_Root_Jnt",
+          "oldParent": "clavicle_l",
+          "newParent": "clavicle_l",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "C_Scarf_A_Root_Jnt",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "C_Skirt_A_BackRoot_Jnt",
+      "projections": [
+        {
+          "child": "C_Skirt_A_BackRoot_Jnt",
+          "oldParent": "pelvis",
+          "newParent": "pelvis",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "C_Skirt_A_BackRoot_Jnt",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "C_Skirt_A_FrontRoot_Jnt",
+      "projections": [
+        {
+          "child": "C_Skirt_A_FrontRoot_Jnt",
+          "oldParent": "L_Skirt_A_FrontRoot_Jnt",
+          "newParent": "L_Skirt_A_FrontRoot_Jnt",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        },
+        {
+          "child": "C_Skirt_A_FrontRoot_Jnt",
+          "oldParent": "R_Skirt_A_FrontRoot_Jnt",
+          "newParent": "R_Skirt_A_FrontRoot_Jnt",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.5,
+      "targets": [
+        {
+          "bone": "C_Skirt_A_FrontRoot_Jnt",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "L_Skirt_A_BackRoot_Jnt",
+      "projections": [
+        {
+          "child": "L_Skirt_A_BackRoot_Jnt",
+          "oldParent": "pelvis",
+          "newParent": "pelvis",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "L_Skirt_A_BackRoot_Jnt",
+          "weight": 1.0
+        }
+      ]
+    },
+    {
+      "name": "R_Skirt_A_BackRoot_Jnt",
+      "projections": [
+        {
+          "child": "R_Skirt_A_BackRoot_Jnt",
+          "oldParent": "pelvis",
+          "newParent": "pelvis",
+          "childInitial": true,
+          "oldParentInitial": true,
+          "newParentInitial": false
+        }
+      ],
+      "blendT": 0.0,
+      "targets": [
+        {
+          "bone": "R_Skirt_A_BackRoot_Jnt",
+          "weight": 1.0
+        }
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "name": "C_Scarf_A_Root_Jnt",
+      "bone": "C_Scarf_A_Root_Jnt",
+      "transformType": "Parent",
+      "offsetOption": "RefPose",
+      "targets": [
+        {
+          "bone": "spine_05",
+          "weight": 0.49
+        },
+        {
+          "bone": "clavicle_l",
+          "weight": 0.51
+        }
+      ]
+    },
+    {
+      "name": "R_Canister_A_Joint1_Jnt",
+      "bone": "R_Canister_A_Joint1_Jnt",
+      "transformType": "Parent",
+      "offsetOption": "RefPose",
+      "targets": [
+        {
+          "bone": "spine_02",
+          "weight": 0.212
+        },
+        {
+          "bone": "spine_01",
+          "weight": 0.283
+        },
+        {
+          "bone": "pelvis",
+          "weight": 0.505
+        }
+      ]
+    },
+    {
+      "name": "R_LargePouch_A_Joint1_Jnt",
+      "bone": "R_LargePouch_A_Joint1_Jnt",
+      "transformType": "Parent",
+      "offsetOption": "RefPose",
+      "targets": [
+        {
+          "bone": "spine_02",
+          "weight": 0.05
+        },
+        {
+          "bone": "spine_01",
+          "weight": 0.25
+        },
+        {
+          "bone": "pelvis",
+          "weight": 0.7
+        }
+      ]
+    }
+  ]
+}

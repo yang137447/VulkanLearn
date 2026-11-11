@@ -13,6 +13,7 @@
 #include <set>
 #include <algorithm>
 #include <filesystem>
+#include <cstdio>
 
 namespace VL
 {
@@ -184,7 +185,15 @@ nlohmann::json World::ScriptAnimationFeedback() const
                 nlohmann::json feedback{{"owner", actor.at("id")}, {"component", ScriptComponentId(node)},
                     {"clip", clips.empty() ? "" : clips.at(player.SelectedClip()).id},
                     {"time", player.Time()}, {"duration", player.Duration()},
-                    {"completed", player.Completed()}, {"playing", player.IsPlaying()}, {"rate", player.Rate()}};
+                    {"completed", player.Completed()}, {"playing", player.IsPlaying()}, {"rate", player.Rate()},
+                    {"syncGroup", player.SyncGroup()}, {"syncPhase", player.SyncPhase()},
+                    {"syncMarker", player.SyncMarkerName()}, {"syncMarkerAlpha", player.SyncMarkerAlpha()},
+                    {"syncActive", player.SyncActive()}, {"syncLeader", player.SyncLeader()},
+                    {"syncRole", player.CurrentSyncRoleName()},
+                    {"syncMethod", player.CurrentSyncAuthoredMethodName()},
+                    {"syncEffectiveMethod", player.CurrentSyncMethodName()},
+                    {"syncScope", player.CurrentSyncScopeName()},
+                    {"syncDiagnostic", player.SyncDiagnosticName()}};
                 const auto& rootMotion = player.RootMotionDelta();
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
@@ -201,6 +210,8 @@ nlohmann::json World::ScriptAnimationFeedback() const
                 feedback["notifies"] = Animation::BuildAnimationNotifyFeedback(player.FiredNotifies());
                 feedback["montage"] = {{"id", player.MontageId()},
                     {"length", player.MontageLength()},
+                    {"segment", player.MontageSegmentIndex()},
+                    {"segmentId", player.MontageSegmentId()},
                     {"range", nlohmann::json::array(
                         {player.PlaybackRangeStart(), player.PlaybackRangeEnd()})}};
                 const auto& placement = player.FootPlacement();
@@ -229,6 +240,94 @@ nlohmann::json World::ScriptAnimationFeedback() const
                 feedback["footPlacement"] = {{"enabled", placement.enabled}, {"active", placement.active},
                     {"pelvisOffset", placement.pelvisOffset}, {"reason", placement.reason},
                     {"lockMode", placement.lockMode}, {"feet", std::move(feet)}};
+                const auto& slope = player.SlopeWarping();
+                feedback["slopeWarping"] = {{"enabled", slope.enabled}, {"active", slope.active},
+                    {"slopeAngle", slope.slopeAngleDegrees},
+                    {"targetSlopeAngle", slope.targetSlopeAngleDegrees},
+                    {"appliedSlopeAngle", slope.appliedSlopeAngleDegrees},
+                    {"weight", slope.weight}, {"pelvisOffset", slope.pelvisOffset},
+                    {"groundNormal", {slope.groundNormal.x(), slope.groundNormal.y(),
+                        slope.groundNormal.z()}},
+                    {"supportIdentity", slope.supportIdentity}, {"reason", slope.reason}};
+                // PostProcess PoseDriver 曲线：只读诊断数据，不参与 locomotion 决策。
+                const auto poseDriver = player.SamplePoseDriver();
+                auto curves = nlohmann::json::object();
+                for (const auto& curve : poseDriver.curves)
+                    curves[curve.name] = curve.value;
+                auto diagnostics = nlohmann::json::array();
+                for (const auto& diagnostic : poseDriver.diagnostics)
+                    diagnostics.push_back({{"driver", diagnostic.driver},
+                        {"code", diagnostic.code}, {"detail", diagnostic.detail}});
+                feedback["poseDriver"] = {
+                    {"enabled", player.PoseDriverEnabled()},
+                    {"active", poseDriver.active},
+                    {"solvedDrivers", poseDriver.solvedDrivers},
+                    {"asset", player.PoseDriverAsset() ? player.PoseDriverAsset()->sourcePath : ""},
+                    {"digest", player.PoseDriverAsset() ? player.PoseDriverAsset()->sourceDigest : ""},
+                    {"curves", std::move(curves)}, {"diagnostics", std::move(diagnostics)}};
+                auto postProcessDiagnostics = nlohmann::json::array();
+                for (const auto& diagnostic : player.PostProcessDiagnostics())
+                    postProcessDiagnostics.push_back({{"entry", diagnostic.entry},
+                        {"code", diagnostic.code}, {"detail", diagnostic.detail}});
+                const auto* postAsset = player.PostProcess();
+                const auto& postStats = player.PostProcessStats();
+                feedback["postProcess"] = {
+                    {"enabled", player.PostProcessEnabled()},
+                    {"asset", postAsset ? postAsset->sourcePath : ""},
+                    {"digest", postAsset ? postAsset->sourceDigest : ""},
+                    {"entries", postAsset ? postAsset->twist.size() + postAsset->helpers.size() +
+                        postAsset->constraints.size() : 0u},
+                    {"twistEntries", postAsset ? postAsset->twist.size() : 0u},
+                    {"helperEntries", postAsset ? postAsset->helpers.size() : 0u},
+                    {"constraintEntries", postAsset ? postAsset->constraints.size() : 0u},
+                    {"applications", player.PostProcessApplications()},
+                    {"rotatedBones", postStats.rotatedBones},
+                    {"maxTwistDegrees", postStats.maxTwistDegrees},
+                    {"diagnostics", std::move(postProcessDiagnostics)}};
+                auto boneDiagnostics = nlohmann::json::array();
+                const auto boneSolver = bonePhysicsSolvers.find(identity);
+                if (boneSolver != bonePhysicsSolvers.end())
+                    for (const auto& diagnostic : boneSolver->second->BindDiagnostics())
+                        boneDiagnostics.push_back({{"set", diagnostic.set},
+                            {"code", diagnostic.code}, {"detail", diagnostic.detail}});
+                const auto& boneState = boneSolver != bonePhysicsSolvers.end() ?
+                    boneSolver->second->State() : Physics::BonePhysicsState{};
+                feedback["bonePhysics"] = {
+                    {"enabled", boneSolver != bonePhysicsSolvers.end()},
+                    {"active", boneState.active},
+                    {"simulatedBodies", boneState.simulatedBodies},
+                    {"constraints", boneState.constraints},
+                    {"maxDisplacement", boneState.maxDisplacement},
+                    {"reason", boneState.reason},
+                    {"diagnostics", std::move(boneDiagnostics)}};
+                const auto debugRequested = bonePhysicsDebug.find(identity);
+                if (debugRequested != bonePhysicsDebug.end() && debugRequested->second &&
+                    boneSolver != bonePhysicsSolvers.end())
+                {
+                    std::vector<Eigen::Matrix4f> globals;
+                    Eigen::Matrix4f component = Eigen::Matrix4f::Identity();
+                    for (const auto& entry : meshObjects)
+                        if (entry.second.sceneObjectIdentity == identity)
+                        {
+                            component = entry.second.model;
+                            break;
+                        }
+                    player.CopyPoseGlobals(component, globals);
+                    std::vector<Physics::BonePhysicsDebugBody> bodies;
+                    boneSolver->second->CollectDebugBodies(globals, bodies);
+                    auto array = nlohmann::json::array();
+                    for (const auto& body : bodies)
+                        array.push_back({
+                            {"bone", body.bone},
+                            {"parent", body.constraintParent},
+                            {"center", {body.center.x(), body.center.y(), body.center.z()}},
+                            {"rotation", {body.rotation.x(), body.rotation.y(),
+                                body.rotation.z(), body.rotation.w()}},
+                            {"radius", body.radius},
+                            {"halfHeight", body.halfHeight},
+                            {"simulated", body.simulated}});
+                    feedback["bonePhysics"]["bodies"] = std::move(array);
+                }
                 const auto& root = player.RootOffset();
                 feedback["inertialization"] = player.InertializationEnabled();
                 feedback["rootOffset"] = {{"enabled", root.enabled}, {"active", root.active},
@@ -260,6 +359,9 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
     if (!requests.is_array() || requests.size() > 128)
         throw std::invalid_argument("Script.InvalidAnimationBatch");
     std::map<Animation::SkeletalPlayback*, Animation::SkeletalPlayback> candidates;
+    std::map<std::string, std::shared_ptr<Physics::BonePhysicsSolver>> bonePhysicsCandidates;
+    std::set<std::string> bonePhysicsDisabled;
+    std::map<std::string, bool> bonePhysicsDebugCandidates;
     auto runtimeCandidates = motionRuntimes;
     auto databaseCandidates = motionDatabases;
     for (const auto& request : requests)
@@ -278,9 +380,144 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         for (const auto& entry : meshObjects)
             if (entry.second.sceneObjectIdentity == identity && entry.second.animation)
             { player = entry.second.animation.get(); targetMesh = &entry.second; break; }
-        if (!player || candidates.count(player)) throw std::invalid_argument("Script.InvalidAnimationTarget");
-        auto candidate = *player;
-        if (request.value("mode", std::string()) == "motionMatching")
+        const std::string mode = request.value("mode", std::string());
+        // 后处理配置（slope / pose driver）是紧随播放命令的附加候选，必须基于前一条
+        // 继续应用，否则会丢掉播放状态；其余命令仍保持“同一 batch 每个组件一条”。
+        const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
+            mode == "configurePoseDriver" || mode == "configurePostProcess" ||
+            mode == "configureBonePhysics";
+        if (!player || (!postProcessConfiguration && candidates.count(player)))
+            throw std::invalid_argument("Script.InvalidAnimationTarget");
+        const auto existing = candidates.find(player);
+        auto candidate = existing != candidates.end() ? existing->second : *player;
+        if (mode == "configureSlopeWarping")
+        {
+            if (!request.at("enabled").is_boolean() ||
+                !request.at("weight").is_number() ||
+                !request.at("maxSlopeDegrees").is_number() ||
+                !request.at("pelvisHeightOffset").is_number() ||
+                !request.at("footCompensation").is_number() ||
+                !request.at("responseSpeed").is_number() ||
+                !request.at("maxPelvisOffset").is_number())
+                throw std::invalid_argument("Script.InvalidSlopeWarpingRequest");
+            Animation::SlopeWarpingParameters parameters;
+            parameters.weight = request.at("weight").get<float>();
+            parameters.maxSlopeDegrees = request.at("maxSlopeDegrees").get<float>();
+            parameters.pelvisHeightOffset = request.at("pelvisHeightOffset").get<float>();
+            parameters.footCompensation = request.at("footCompensation").get<float>();
+            parameters.responseSpeed = request.at("responseSpeed").get<float>();
+            parameters.maxPelvisOffset = request.at("maxPelvisOffset").get<float>();
+            if (!std::isfinite(parameters.weight) || parameters.weight < 0 || parameters.weight > 1 ||
+                !std::isfinite(parameters.maxSlopeDegrees) || parameters.maxSlopeDegrees < 0 ||
+                parameters.maxSlopeDegrees >= 90 ||
+                !std::isfinite(parameters.pelvisHeightOffset) ||
+                std::abs(parameters.pelvisHeightOffset) > 200 ||
+                !std::isfinite(parameters.footCompensation) || parameters.footCompensation < 0 ||
+                parameters.footCompensation > 2 ||
+                !std::isfinite(parameters.responseSpeed) || parameters.responseSpeed < 0 ||
+                parameters.responseSpeed > 120 ||
+                !std::isfinite(parameters.maxPelvisOffset) || parameters.maxPelvisOffset < 0 ||
+                parameters.maxPelvisOffset > 200)
+                throw std::invalid_argument("Script.InvalidSlopeWarpingRequest");
+            if (request.at("enabled").get<bool>())
+                Animation::FootPlacementSolver::ValidateComponent(targetMesh->model);
+            candidate.SetSlopeWarpingParameters(parameters);
+            candidate.SetSlopeWarpingEnabled(request.at("enabled").get<bool>());
+        }
+        else if (mode == "configurePoseDriver")
+        {
+            if (!request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidPoseDriverRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearPoseDriver();
+            else
+            {
+                if (!request.at("asset").is_string())
+                    throw std::invalid_argument("Script.InvalidPoseDriverRequest");
+                const std::string assetPath = request.at("asset").get<std::string>();
+                if (assetPath.empty() || assetPath.size() > 1024)
+                    throw std::invalid_argument("Script.InvalidPoseDriverRequest");
+                if (motionResourceRoot.empty())
+                    throw std::invalid_argument("Pose driver resource root is not configured");
+                auto& cached = poseDriverSets[assetPath];
+                if (!cached)
+                    cached = Animation::LoadPoseDriverSet(motionResourceRoot, assetPath);
+                // SetPoseDriver 会按目标网格解析关节并预解 RBF；失败时整个候选被丢弃。
+                candidate.SetPoseDriver(cached);
+            }
+        }
+        else if (mode == "configurePostProcess")
+        {
+            if (!request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidPostProcessRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearPostProcess();
+            else
+            {
+                if (!request.at("asset").is_string())
+                    throw std::invalid_argument("Script.InvalidPostProcessRequest");
+                const std::string assetPath = request.at("asset").get<std::string>();
+                if (assetPath.empty() || assetPath.size() > 1024)
+                    throw std::invalid_argument("Script.InvalidPostProcessRequest");
+                if (motionResourceRoot.empty())
+                    throw std::invalid_argument("Post-process resource root is not configured");
+                auto& cached = postProcessAssets[assetPath];
+                if (!cached)
+                    cached = Animation::LoadPostProcessAsset(motionResourceRoot, assetPath);
+                candidate.SetPostProcess(cached);
+            }
+        }
+        else if (mode == "configureBonePhysics")
+        {
+            if (!request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidBonePhysicsRequest");
+            bonePhysicsDebugCandidates[identity] = request.value("debug", false);
+            if (!request.at("enabled").get<bool>())
+                bonePhysicsDisabled.insert(identity);
+            else
+            {
+                if (!request.at("asset").is_string())
+                    throw std::invalid_argument("Script.InvalidBonePhysicsRequest");
+                const std::string assetPath = request.at("asset").get<std::string>();
+                if (assetPath.empty() || assetPath.size() > 1024)
+                    throw std::invalid_argument("Script.InvalidBonePhysicsRequest");
+                if (motionResourceRoot.empty())
+                    throw std::invalid_argument("Bone physics resource root is not configured");
+                // 骨骼物理是可选配置：资产缺失/解析失败时只停用该组件，
+                // 不能让整批动画请求失败。
+                try
+                {
+                    auto& cached = bonePhysicsAssets[assetPath];
+                    if (!cached)
+                        cached = Physics::LoadBonePhysicsAsset(motionResourceRoot, assetPath);
+                    const auto& joints = player->Asset().mesh.joints;
+                    std::vector<std::string> names;
+                    std::vector<int> parents;
+                    std::vector<Eigen::Matrix4f> bindLocals;
+                    names.reserve(joints.size());
+                    parents.reserve(joints.size());
+                    bindLocals.reserve(joints.size());
+                    for (const auto& joint : joints)
+                    {
+                        names.push_back(joint.name);
+                        parents.push_back(joint.parent);
+                        bindLocals.push_back(joint.restLocal);
+                    }
+                    auto solver = std::make_shared<Physics::BonePhysicsSolver>(
+                        std::move(names), std::move(parents), std::move(bindLocals), cached);
+                    if (!solver->Valid())
+                        throw std::invalid_argument("Bone physics has no valid sets");
+                    bonePhysicsCandidates[identity] = std::move(solver);
+                    bonePhysicsDisabled.erase(identity);
+                }
+                catch (const std::exception&)
+                {
+                    bonePhysicsCandidates.erase(identity);
+                    bonePhysicsDisabled.insert(identity);
+                }
+            }
+        }
+        else if (mode == "motionMatching")
         {
             if (player->Asset().IsRetargeted())
                 throw std::invalid_argument(
@@ -369,6 +606,41 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             // Montage 播放段不属于 Motion Matching；旧搜索绑定不能继续驱动同一组件。
             runtimeCandidates.erase(identity);
         }
+        else if (request.value("mode", std::string()) == "transitionTo")
+        {
+            // UE AnimStateTransitionNode 的交叉淡入：目标片段入口秒 + blend 秒数。
+            // 与普通 clip 请求共用同一播放器；候选值失败不改变当前时钟/姿态。
+            if (!request.contains("clip") || !request.at("clip").is_string() ||
+                !request.contains("startTime") || !request.at("startTime").is_number() ||
+                !request.contains("blendSeconds") || !request.at("blendSeconds").is_number())
+                throw std::invalid_argument("Script.InvalidAnimationTransition");
+            const std::string clip = request.at("clip").get<std::string>();
+            const float startTime = request.at("startTime").get<float>();
+            const float blendSeconds = request.at("blendSeconds").get<float>();
+            const bool loop = request.value("loop", true);
+            const bool inPlace = request.value("inPlace", true);
+            const bool inertialization = request.value("inertialization", false);
+            const float rate = request.value("rate", 1.0f);
+            const std::string syncGroup = request.value("syncGroup", std::string());
+            const float syncPhase = request.value("syncPhase", -1.0f);
+            if (clip.empty() || clip.size() > 256 || !std::isfinite(startTime) || startTime < 0 ||
+                !std::isfinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10 ||
+                !std::isfinite(rate) || rate <= 0 || rate > 4 ||
+                syncGroup.size() > 128 || syncGroup.find('\0') != std::string::npos ||
+                !std::isfinite(syncPhase) || syncPhase < -1 || syncPhase > 1)
+                throw std::invalid_argument("Script.InvalidAnimationTransition");
+            candidate.SetFootPlacementEnabled(false);
+            candidate.SetInertializationEnabled(inertialization);
+            // 根策略切换必须硬切；初始播放器可能仍沿用资产默认 inPlace=false，
+            // 此时用零时长过渡把策略改正，而不是让正常状态过渡失败。
+            const float effectiveBlend = blendSeconds > 0 && candidate.InPlace() != inPlace ?
+                0.0f : blendSeconds;
+            candidate.TransitionToSynced(clip, startTime, loop, effectiveBlend, inPlace,
+                syncGroup, syncPhase);
+            candidate.SetRate(rate);
+            candidate.SetMotionWarpWindows({});
+            runtimeCandidates.erase(identity);
+        }
         else
         {
             // clip 请求不再携带 warp 窗口：warp target 由 Montage 资产声明，原生
@@ -383,10 +655,19 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             candidate.SetMotionWarpWindows({});
             runtimeCandidates.erase(identity);
         }
-        candidates.emplace(player, std::move(candidate));
+        candidates.insert_or_assign(player, std::move(candidate));
     }
     // 所有目标都能求值后才提交，同一组件的 sections 保留唯一时钟。
     for (auto& candidate : candidates) *candidate.first = std::move(candidate.second);
+    for (auto& entry : bonePhysicsCandidates)
+        bonePhysicsSolvers[entry.first] = std::move(entry.second);
+    for (const auto& identity : bonePhysicsDisabled)
+        bonePhysicsSolvers.erase(identity);
+    for (const auto& entry : bonePhysicsDebugCandidates)
+    {
+        if (entry.second) bonePhysicsDebug[entry.first] = true;
+        else bonePhysicsDebug.erase(entry.first);
+    }
     motionRuntimes.swap(runtimeCandidates);
     motionDatabases.swap(databaseCandidates);
 }
@@ -405,6 +686,54 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
             activeOwners.emplace(identity, &actor);
         }
     }
+    // 同步组每 tick 只解析一次：先收集所有会推进的播放器（过渡中的旧片段作为
+    // 只读影子节点），再回写 follower 的下一次对齐时间/速率。Registry 只保存
+    // 视图和 pointer，不拥有播放器，也不产生第二条姿态时钟。
+    syncGroupRegistry.BeginTick();
+    for (auto& entry : meshObjects)
+    {
+        auto& mesh = entry.second;
+        if (!mesh.animation) continue;
+        const auto owner = activeOwners.find(mesh.sceneObjectIdentity);
+        if (owner == activeOwners.end()) continue;
+        // 同一播放器被多个 section 共享时只注册一次；用现有节点扫描避免新增
+        // 每 tick 一组 unordered_set 的堆分配（Registry 本身也保持容量复用）。
+        bool alreadyRegistered = false;
+        for (const Animation::SyncGroupNode& node : syncGroupRegistry.Nodes())
+            if (node.playback == mesh.animation.get())
+            {
+                alreadyRegistered = true;
+                break;
+            }
+        if (alreadyRegistered) continue;
+        const std::string& actorId = owner->second->at("id").get_ref<const std::string&>();
+        Animation::SyncGroupNode target = mesh.animation->BuildSyncGroupNode(
+            mesh.sceneObjectIdentity, actorId, mesh.sceneObjectIdentity, false);
+        const std::string_view targetGroup = target.group;
+        const Animation::SyncGroupScope targetScope = target.scope;
+        syncGroupRegistry.AddNode(target);
+        if (!mesh.animation->HasSyncSourceClock()) continue;
+        Animation::SyncGroupNode source = mesh.animation->BuildSyncGroupNode(
+            mesh.sceneObjectIdentity, actorId, mesh.sceneObjectIdentity, true);
+        // 只有同一组、同一 scope 的过渡源才参与选举；跨组/跨 scope 不能靠名字
+        // 相同就互相驱动，否则 Component 组会污染另一个 Local 组。
+        if (!source.group.empty() && source.group == targetGroup && source.scope == targetScope)
+            syncGroupRegistry.AddNode(source);
+    }
+    syncGroupRegistry.Resolve();
+    {
+        const auto& nodes = syncGroupRegistry.Nodes();
+        const auto& results = syncGroupRegistry.Results();
+        for (size_t index = 0; index < nodes.size(); ++index)
+        {
+            const auto& node = nodes[index];
+            if (!node.playback || !node.canApply) continue;
+            std::string_view leader;
+            if (results[index].leaderIndex >= 0)
+                leader = nodes[static_cast<size_t>(results[index].leaderIndex)].identity;
+            node.playback->ApplySyncGroupResult(results[index], leader);
+        }
+    }
     // 组件身份索引避免每帧 Actor × Mesh 全表扫描；sections 仍只推进一次时钟。
     for (auto& entry : meshObjects)
     {
@@ -417,6 +746,7 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
             if (updated.insert(mesh.animation.get()).second)
             {
                 mesh.animation->ResetFootPlacement("owner-inactive");
+                mesh.animation->ResetSlopeWarping("owner-inactive");
                 mesh.animation->ResetRootOffset("owner-inactive");
             }
             mesh.skinPose = mesh.animation->Pose(mesh.skinSection);
@@ -460,13 +790,31 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
                 mesh.animation->ApplyVisualRoot(mesh.model, ScriptVector(actor, "bodyVelocity"), deltaSeconds);
             // 唯一播放器先完成搜索/基础姿态与视觉根，再同步接地；各 section 领取同批不可变结果。
             if (ground)
+            {
+                mesh.animation->ApplySlopeWarping(mesh.model, actor.value("grounded", false),
+                    actor.at("id").get<std::string>(), deltaSeconds, *ground);
                 mesh.animation->ApplyFootPlacement(mesh.model, actor.value("grounded", false),
                     actor.at("id").get<std::string>(), deltaSeconds, *ground);
+                // PostProcess 是最后一道姿态修正（UE 顺序：foot IK → PostProcess）。
+                mesh.animation->ApplyPostProcess(deltaSeconds);
+            }
             else if (deltaSeconds > 0 && mesh.animation->IsPlaying())
             {
                 mesh.animation->ResetFootPlacement("ground-unavailable");
+                mesh.animation->ResetSlopeWarping("ground-unavailable");
                 mesh.animation->ResetRootOffset("ground-unavailable");
+                mesh.animation->ApplyPostProcess(deltaSeconds);
             }
+        }
+        // 骨骼物理在 PostProcess 之后、蒙皮快照之前：kinematic 刚体跟随当前姿态，
+        // simulated 结果写回全局矩阵，再由播放器还原成局部姿态。
+        const auto bonePhysics = bonePhysicsSolvers.find(mesh.sceneObjectIdentity);
+        if (bonePhysics != bonePhysicsSolvers.end() && deltaSeconds > 0)
+        {
+            std::vector<Eigen::Matrix4f> globals;
+            mesh.animation->CopyPoseGlobals(mesh.model, globals);
+            if (bonePhysics->second->Solve(globals, deltaSeconds))
+                mesh.animation->ApplyPoseGlobals(mesh.model, globals);
         }
         mesh.skinPose = mesh.animation->Pose(mesh.skinSection);
         mesh.localBoundsMin = mesh.skinPose->boundsMin;
@@ -490,6 +838,8 @@ void World::ResetScriptAnimations()
 {
     motionTracks.clear();
     motionRuntimes.clear();
+    // 播放器即将换代；Registry 里的非拥有 pointer 必须先失效，下一 tick 重建。
+    syncGroupRegistry.BeginTick();
     std::map<Animation::SkeletalPlayback*, std::shared_ptr<Animation::SkeletalPlayback>> replacements;
     for (auto& entry : meshObjects)
     {

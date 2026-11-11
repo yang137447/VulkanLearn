@@ -339,10 +339,106 @@ float SkeletalPlayback::ClipDuration() const
 
 float SkeletalPlayback::PlaybackRangeEnd() const
 {
+    // 多段 Montage 的合法上界是 Montage 时间轴长度，不是当前 clip 的 1.333 s。
+    // rangeEnd 仍是“未设置”哨兵；section 推进只写内部范围，不改变段映射。
+    if (!montageSegments.empty())
+    {
+        const float timelineEnd = std::max(0.0f, montageTimelineLength);
+        if (playbackRangeEnd <= 0)
+            return timelineEnd;
+        return std::min(playbackRangeEnd, timelineEnd);
+    }
     const float clipEnd = ClipDuration();
     // end==0 是“未显式设置”的哨兵：范围末尾跟随当前片段，切片段后无需重新设置。
     if (playbackRangeEnd <= 0) return clipEnd;
     return std::min(playbackRangeEnd, clipEnd);
+}
+
+float SkeletalPlayback::MontageSourceTime(const MontageSegment& segment,
+    float timeline, float clipDuration) const
+{
+    const float clipStart = std::clamp(segment.clipStartTime, 0.0f,
+        std::max(0.0f, clipDuration));
+    const float declaredEnd = segment.clipEndTime > 0 ?
+        segment.clipEndTime : clipDuration;
+    const float clipEnd = std::max(clipStart,
+        std::min(declaredEnd, std::max(clipStart, clipDuration)));
+    const float local = (timeline - segment.startTime) * segment.rateScale;
+    if (!segment.loop)
+        return std::clamp(clipStart + local, clipStart, clipEnd);
+
+    const float span = clipEnd - clipStart;
+    if (!(span > 0) || !std::isfinite(local))
+        return clipStart;
+    float wrapped = std::fmod(local, span);
+    if (wrapped < 0) wrapped += span;
+    return clipStart + wrapped;
+}
+
+SkeletalPlayback::MontageSample SkeletalPlayback::SampleMontageTimeline(
+    float timeline, bool atEnd) const
+{
+    MontageSample result;
+    if (montageSegments.empty() || montageSegmentClips.size() != montageSegments.size())
+    {
+        result.clip = selected;
+        result.clipTime = timeline;
+        return result;
+    }
+
+    constexpr float tolerance = 1e-5f;
+    size_t segmentIndex = montageSegments.size() - 1;
+    for (size_t index = 0; index < montageSegments.size(); ++index)
+    {
+        const MontageSegment& segment = montageSegments[index];
+        if (timeline < segment.endTime - tolerance)
+        {
+            segmentIndex = index;
+            break;
+        }
+        if ((atEnd || index + 1 == montageSegments.size()) &&
+            timeline <= segment.endTime + tolerance)
+        {
+            segmentIndex = index;
+            break;
+        }
+    }
+    const MontageSegment& segment = montageSegments[segmentIndex];
+    result.segment = segmentIndex;
+    result.clip = montageSegmentClips[segmentIndex];
+    const float duration = asset->AnimationAsset().clips.at(result.clip).runtime->duration();
+    result.clipTime = MontageSourceTime(segment, timeline, duration);
+    return result;
+}
+
+Eigen::Vector3f SkeletalPlayback::MontageRootDelta(float from, float to) const
+{
+    if (!(to > from) || montageSegments.empty())
+        return Eigen::Vector3f::Zero();
+
+    Eigen::Vector3f total = Eigen::Vector3f::Zero();
+    float cursor = from;
+    for (size_t index = 0; index < montageSegments.size() && cursor < to; ++index)
+    {
+        const MontageSegment& segment = montageSegments[index];
+        const float begin = std::max(cursor, segment.startTime);
+        const float end = std::min(to, segment.endTime);
+        if (!(end > begin)) continue;
+        const Clip& clip = asset->AnimationAsset().clips.at(montageSegmentClips[index]);
+        const float duration = clip.runtime->duration();
+        total += RootTranslation(clip, MontageSourceTime(segment, end, duration)) -
+            RootTranslation(clip, MontageSourceTime(segment, begin, duration));
+        cursor = end;
+    }
+    return total;
+}
+
+void SkeletalPlayback::ClearMontageSegments()
+{
+    montageSegments.clear();
+    montageSegmentClips.clear();
+    montageSegment = 0;
+    montageTimelineLength = 0;
 }
 
 float SkeletalPlayback::Duration() const
@@ -352,8 +448,28 @@ float SkeletalPlayback::Duration() const
     return std::max(0.0f, PlaybackRangeEnd() - playbackRangeStart);
 }
 
+std::optional<float> SkeletalPlayback::SampleCurve(std::string_view name, float seconds) const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty()) return std::nullopt;
+    // 曲线归当前播放片段所有；Montage 只改变播放范围，不复制 Sequence 曲线。
+    return SampleFloatCurve(animation.clips.at(selected).sequence, name, seconds);
+}
+
+std::optional<float> SkeletalPlayback::SampleCurve(std::string_view name) const
+{
+    if (!montageSegments.empty())
+    {
+        const MontageSample sample = SampleMontageTimeline(time);
+        return SampleCurve(name, sample.clipTime);
+    }
+    return SampleCurve(name, time);
+}
+
 Eigen::Vector3f SkeletalPlayback::RootMotionTotal() const
 {
+    if (!montageSegments.empty())
+        return MontageRootDelta(PlaybackRangeStart(), PlaybackRangeEnd());
     const auto& animation = asset->AnimationAsset();
     if (animation.clips.empty()) return Eigen::Vector3f::Zero();
     const auto& clip = animation.clips.at(selected);
@@ -364,6 +480,8 @@ Eigen::Vector3f SkeletalPlayback::RootMotionTotal() const
 
 Eigen::Vector3f SkeletalPlayback::RootMotionRemaining() const
 {
+    if (!montageSegments.empty())
+        return MontageRootDelta(std::min(time, PlaybackRangeEnd()), PlaybackRangeEnd());
     const auto& animation = asset->AnimationAsset();
     if (animation.clips.empty()) return Eigen::Vector3f::Zero();
     const auto& clip = animation.clips.at(selected);
@@ -375,7 +493,53 @@ void SkeletalPlayback::RebuildNotifyEvents()
 {
     notifyEvents.clear();
     const auto& animation = asset->AnimationAsset();
-    if (!animation.clips.empty())
+    if (!montageSegments.empty())
+    {
+        // 多段资产把每段 sidecar 的 notify 映射到 Montage 时间轴。这样切 clip 时
+        // 事件表不需要重建，段边界也不会因为 clip 本地时间归零而重复/漏发。
+        for (size_t segmentIndex = 0; segmentIndex < montageSegments.size(); ++segmentIndex)
+        {
+            const MontageSegment& segment = montageSegments[segmentIndex];
+            const Clip& clip = animation.clips.at(montageSegmentClips.at(segmentIndex));
+            const float clipDuration = clip.runtime->duration();
+            const float clipStart = std::clamp(segment.clipStartTime, 0.0f,
+                std::max(0.0f, clipDuration));
+            const float clipEnd = std::max(clipStart, std::min(
+                segment.clipEndTime > 0 ? segment.clipEndTime : clipDuration,
+                std::max(clipStart, clipDuration)));
+            const float sourceSpan = clipEnd - clipStart;
+            const float timelineSpan = segment.endTime - segment.startTime;
+            const float rateScale = segment.rateScale;
+            const size_t loops = segment.loop && sourceSpan > 1e-5f && rateScale > 0 ?
+                static_cast<size_t>(std::ceil(timelineSpan * rateScale / sourceSpan)) : 1;
+            // 段内循环只重复 sidecar 事件；上限防止恶意短 clip 生成无限表。
+            for (size_t loop = 0; loop < std::min<size_t>(loops, 64); ++loop)
+            {
+                const float loopOffset = static_cast<float>(loop) * sourceSpan / rateScale;
+                for (const auto& notify : clip.sequence.notifies)
+                {
+                    const float sourceTime = notify.time;
+                    if (sourceTime < clipStart - 1e-5f ||
+                        sourceTime > clipEnd + 1e-5f)
+                        continue;
+                    NotifyEvent event;
+                    event.name = notify.name;
+                    event.track = notify.track;
+                    event.kind = notify.duration > 0 ? "notifyState" : "notify";
+                    event.time = segment.startTime + loopOffset +
+                        (sourceTime - clipStart) / rateScale;
+                    event.duration = notify.duration / rateScale;
+                    if (event.time < segment.startTime - 1e-5f ||
+                        event.time > segment.endTime + 1e-5f)
+                        continue;
+                    event.segmentIndex = static_cast<int>(segmentIndex);
+                    event.segmentId = segment.id;
+                    notifyEvents.push_back(std::move(event));
+                }
+            }
+        }
+    }
+    else if (!animation.clips.empty())
     {
         // Sequence notify 没有 kind 字段：duration==0 是 UE 瞬时 notify，duration>0 是
         // notifyState。time/duration 已经由解析器保留作者原值（可越过片段末尾），这里不裁剪。
@@ -401,6 +565,12 @@ void SkeletalPlayback::RebuildNotifyEvents()
         event.kind = notify.kind == "notifyState" && notify.duration > 0 ? "notifyState" : "notify";
         event.time = notify.time;
         event.duration = event.kind == "notifyState" ? notify.duration : 0.0f;
+        if (!montageSegments.empty())
+        {
+            const MontageSample sample = SampleMontageTimeline(notify.time);
+            event.segmentIndex = static_cast<int>(sample.segment);
+            event.segmentId = montageSegments.at(sample.segment).id;
+        }
         notifyEvents.push_back(std::move(event));
     }
     // 运行时事件表按时间排序；同刻事件用 stable_sort 保留作者顺序（Sequence 在前）。
@@ -438,6 +608,8 @@ void SkeletalPlayback::PushFired(const NotifyEvent& notify, const char* phase, f
     event.startTime = notify.time;
     event.duration = notify.duration;
     event.interrupted = interrupted;
+    event.segmentIndex = notify.segmentIndex;
+    event.segmentId = notify.segmentId;
     firedNotifies.push_back(std::move(event));
 }
 
@@ -529,15 +701,16 @@ void SkeletalPlayback::SetMontageNotifies(std::vector<MontageNotify> notifies,
 void SkeletalPlayback::SetPlaybackRange(float start, float end)
 {
     SetPlaybackRangeInternal(start, end);
-    // 范围是播放段身份：直接改范围等于开启新的播放段，旧 section 链不能继续沿用。
-    // SetMontageSections 会先写范围、再安装链（顺序固定，避免自己清掉自己）。
+    // section 链依赖范围；直接改范围时停止旧链。多段映射是独立的时间轴身份，
+    // 由 SetMontageSections 内部的 range 写入保留，不能在这里清掉。
     montageSections.clear();
     montageSection = 0;
 }
 
 void SkeletalPlayback::SetPlaybackRangeInternal(float start, float end)
 {
-    const float clipDuration = ClipDuration();
+    const float clipDuration = montageSegments.empty() ?
+        ClipDuration() : montageTimelineLength;
     if (!std::isfinite(start) || !std::isfinite(end) || start < 0 || !(end > start))
         throw std::invalid_argument("Playback range must be finite and increasing from a nonnegative start");
     // 播放范围不能延长资源：end 越过片段末尾时按片段末尾 clamp（Montage section 的
@@ -568,10 +741,70 @@ void SkeletalPlayback::SetMontageSections(std::vector<MontageSection> sections,
     montageSection = 0;
 }
 
+void SkeletalPlayback::SetMontageSegments(std::vector<MontageSegment> segments,
+    float length)
+{
+    if (segments.empty())
+    {
+        ClearMontageSegments();
+        RebuildNotifyEvents();
+        return;
+    }
+    if (!std::isfinite(length) || length <= 0)
+        throw std::invalid_argument("Montage segment timeline length must be positive");
+
+    std::vector<size_t> clipIndices;
+    clipIndices.reserve(segments.size());
+    float previousEnd = 0;
+    for (size_t index = 0; index < segments.size(); ++index)
+    {
+        const MontageSegment& segment = segments[index];
+        if (segment.derivedClipId.empty())
+            throw std::invalid_argument("Montage segment '" + segment.id +
+                "' has no derived clip id");
+        if (!std::isfinite(segment.startTime) || !std::isfinite(segment.endTime) ||
+            segment.startTime < 0 || !(segment.endTime > segment.startTime) ||
+            segment.endTime > length + 1e-3f ||
+            std::abs(segment.startTime - previousEnd) > 1e-3f)
+            throw std::invalid_argument("Montage segment timeline is not contiguous at '" +
+                segment.id + "'");
+        if (!std::isfinite(segment.rateScale) || segment.rateScale <= 0 ||
+            segment.rateScale > 4)
+            throw std::invalid_argument("Montage segment '" + segment.id +
+                "' has an invalid rateScale");
+        size_t clip = 0;
+        const auto& clips = asset->AnimationAsset().clips;
+        while (clip < clips.size() && clips[clip].id != segment.derivedClipId)
+            ++clip;
+        if (clip == clips.size() || clips[clip].sequence.id != segment.derivedClipId)
+            throw std::invalid_argument("Montage segment '" + segment.id +
+                "' requires a loaded sidecar clip '" + segment.derivedClipId + "'");
+        clipIndices.push_back(clip);
+        previousEnd = segment.endTime;
+    }
+    if (std::abs(previousEnd - length) > 1e-3f)
+        throw std::invalid_argument(
+            "Montage segments must cover the complete timeline");
+
+    montageSegments = std::move(segments);
+    montageSegmentClips = std::move(clipIndices);
+    montageTimelineLength = length;
+    const MontageSample sample = SampleMontageTimeline(std::clamp(time, 0.0f, length));
+    montageSegment = sample.segment;
+    selected = sample.clip;
+    RebuildNotifyEvents();
+}
+
 std::string SkeletalPlayback::MontageSectionName() const
 {
     return montageSections.empty() ? std::string() :
         montageSections.at(montageSection).name;
+}
+
+std::string SkeletalPlayback::MontageSegmentId() const
+{
+    return montageSegments.empty() ? std::string() :
+        montageSegments.at(montageSegment).id;
 }
 
 int SkeletalPlayback::MontageNextSectionIndex() const
@@ -593,6 +826,11 @@ void SkeletalPlayback::Stop()
     EndActiveNotifyStates(time, true, true);
     playing = false;
     explicitlyPaused = false;
+    ClearSyncSourceClock();
+    syncDecisionValid = false;
+    syncLeader.clear();
+    syncPendingValid = false;
+    syncPendingHasTime = false;
 }
 
 std::vector<std::shared_ptr<const SkinPose>> SkeletalPlayback::Evaluate(
@@ -661,7 +899,15 @@ LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
             std::fmod(next - double(rangeStart), double(rangeEnd - rangeStart)));
     }
     else sampleTime = float(std::min(next, double(rangeEnd)));
-    auto locals = Sample(selected, sampleTime);
+    size_t sampleClip = selected;
+    float clipSampleTime = sampleTime;
+    if (!montageSegments.empty())
+    {
+        const MontageSample sample = SampleMontageTimeline(sampleTime, sampleTime >= rangeEnd);
+        sampleClip = sample.clip;
+        clipSampleTime = sample.clipTime;
+    }
+    auto locals = Sample(sampleClip, clipSampleTime);
     const float elapsed = std::min(blendElapsed + aheadSeconds, blendDuration);
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
@@ -680,13 +926,56 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         throw std::invalid_argument("Playback delta must be finite and nonnegative");
     rootMotionDelta.setZero();
     rootMotionYawDelta = 0;
+    // 同步组对齐先于本 tick 的时间推进应用：跳变本身不产生根位移，
+    // 本帧根轨迹从对齐后的 time 到采样点，等价于 UE 的 follower 校正。
+    bool syncJumped = false;
+    if (syncPendingValid)
+    {
+        if (syncPendingHasTime && playing && deltaSeconds > 0)
+        {
+            const float rangeStart = PlaybackRangeStart();
+            const float rangeEnd = PlaybackRangeEnd();
+            float target = syncPendingTime;
+            if (looping && rangeEnd > rangeStart)
+            {
+                target = rangeStart + std::fmod(target - rangeStart, rangeEnd - rangeStart);
+                if (target < rangeStart) target += rangeEnd - rangeStart;
+            }
+            else
+                target = std::clamp(target, rangeStart, std::max(rangeStart, rangeEnd - 1e-4f));
+            if (std::abs(target - time) > 1e-5f)
+            {
+                // 相位跳变是硬跳变：递增 epoch，避免把跨相位差算成根位移。
+                time = target;
+                ++discontinuity;
+                syncJumped = true;
+            }
+        }
+        rate = std::clamp(syncPendingRate, AnimationSyncGroupRegistry::RateMin,
+            AnimationSyncGroupRegistry::RateMax);
+        syncPendingValid = false;
+        syncPendingHasTime = false;
+    }
     // 每个 Tick 重建“本反馈窗口”的事件：先并入控制面（Play/Stop/Select/TransitionTo）
     // 补发的 end，再追加本次位置穿越；未被读取的控制面事件不会在同帧 Tick 后丢失。
     firedNotifies = std::move(pendingNotifies);
     pendingNotifies.clear();
     if (!playing || Duration() == 0 || deltaSeconds == 0) return;
+    AdvanceSyncSourceClock(deltaSeconds);
+    if (syncJumped)
+    {
+        // 与 Seek 一样，相位跳变不补发被跳过的事件；只按新位置重建活动区间，
+        // 避免旧 notifyState 在时间跳变后继续悬空。
+        std::fill(notifyActive.begin(), notifyActive.end(), 0);
+        RefreshActiveNotifyStates();
+    }
     // 多 section Montage 走独立的推进器（见 TickMontageSections）；单 section/普通片段
     // 保持下面的原路径不变，避免既有行为因 section 支持发生位级漂移。
+    if (!montageSegments.empty())
+    {
+        TickSegmentedMontage(deltaSeconds, meshTransform, actorPosition, actorYaw);
+        return;
+    }
     if (!montageSections.empty())
     {
         TickMontageSections(deltaSeconds, meshTransform, actorPosition, actorYaw);
@@ -729,6 +1018,8 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     preIkModels = jointModels;
     motionModels = jointModels;
     visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
     displayedLocals.swap(locals);
     if (epoch == discontinuity)
     {
@@ -753,6 +1044,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         rootMotionYawDelta = yawDelta;
     }
     time = sampleTime;
+    RefreshSyncMarker();
     // notify 只在姿态求值成功后提交：异常 tick 不改变活动区间。事件按实际位置穿越触发，
     // 显式 seek/切片段不补发历史（见 Seek/Select 的清理）。
     if (wrapped)
@@ -778,9 +1070,37 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     {
         blendSource.clear();
         inertialization.Clear();
+        ClearSyncSourceClock();
     }
     if (Completed()) playing = false;
     discontinuity = epoch; // 仅保留原根的循环才会归零模型根轨迹。
+}
+
+void SkeletalPlayback::ClearSyncSourceClock()
+{
+    syncSourceValid = false;
+    syncSourceSelected = 0;
+    syncSourceTime = 0;
+    syncSourceRangeStart = 0;
+    syncSourceRangeEnd = 0;
+    syncSourceRate = 1;
+    syncSourceLooping = true;
+}
+
+void SkeletalPlayback::AdvanceSyncSourceClock(float deltaSeconds)
+{
+    if (!syncSourceValid) return;
+    const float length = syncSourceRangeEnd - syncSourceRangeStart;
+    if (!std::isfinite(length) || length <= 0) return;
+    double next = double(syncSourceTime) + double(deltaSeconds) * syncSourceRate;
+    if (syncSourceLooping)
+    {
+        next = double(syncSourceRangeStart) +
+            std::fmod(next - double(syncSourceRangeStart), double(length));
+        if (next < syncSourceRangeStart) next += length;
+    }
+    else next = std::min(next, double(syncSourceRangeEnd));
+    syncSourceTime = static_cast<float>(next);
 }
 
 void SkeletalPlayback::TickMontageSections(float deltaSeconds,
@@ -866,6 +1186,8 @@ void SkeletalPlayback::TickMontageSections(float deltaSeconds,
     preIkModels = jointModels;
     motionModels = jointModels;
     visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
     displayedLocals.swap(locals);
     rootMotionDelta = translation;
     float yawDelta = yaw;
@@ -881,6 +1203,171 @@ void SkeletalPlayback::TickMontageSections(float deltaSeconds,
     }
     else motionWarpState.clear();
     rootMotionYawDelta = yawDelta;
+    time = position;
+    RefreshActiveNotifyStates();
+    blendElapsed = elapsed;
+    if (IsBlending() && elapsed >= blendDuration)
+    {
+        blendSource.clear();
+        inertialization.Clear();
+    }
+    if (Completed()) playing = false;
+    discontinuity = epoch;
+}
+
+Eigen::Vector3f SkeletalPlayback::ApplySegmentedMontageWarp(
+    const MontageSegment& segment, const Clip& clip, float sourceFrom, float sourceTo,
+    const Eigen::Vector3f& rawDelta, const Eigen::Matrix4f& meshTransform,
+    const Eigen::Vector3f& actorPosition, float actorYaw, float& yawDelta) const
+{
+    if (motionWarp.Empty()) return rawDelta;
+
+    const float clipDuration = clip.runtime->duration();
+    std::vector<MotionWarpWindow> mapped;
+    mapped.reserve(motionWarp.Windows().size());
+    for (const MotionWarpWindow& window : motionWarp.Windows())
+    {
+        const float begin = std::max(window.startTime, segment.startTime);
+        const float end = std::min(window.endTime, segment.endTime);
+        if (!(end > begin)) continue;
+        // 窗口时间从 Montage 时间轴映射到该段 clip 本地时间；跨段窗口在每段
+        // 各自裁剪，避免用上一段的 clip 时间采样下一段的根/骨骼。
+        MotionWarpWindow local = window;
+        local.startTime = MontageSourceTime(segment, begin, clipDuration);
+        local.endTime = MontageSourceTime(segment, end, clipDuration);
+        if (!(local.endTime > local.startTime)) continue;
+        mapped.push_back(std::move(local));
+    }
+    if (mapped.empty()) return rawDelta;
+
+    MotionWarpRuntime mappedWarp;
+    mappedWarp.SetWindows(std::move(mapped));
+    return mappedWarp.Apply(asset->AnimationAsset().mesh, clip, sourceFrom, sourceTo,
+        rawDelta, meshTransform, actorPosition, actorYaw, &yawDelta);
+}
+
+void SkeletalPlayback::TickSegmentedMontage(float deltaSeconds,
+    const Eigen::Matrix4f* meshTransform, const Eigen::Vector3f* actorPosition,
+    float actorYaw)
+{
+    const auto& clips = asset->AnimationAsset().clips;
+    const float previousTime = time;
+    const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
+    double remaining = static_cast<double>(deltaSeconds) * rate;
+    float position = time;
+    Eigen::Vector3f translation = Eigen::Vector3f::Zero();
+    float yaw = 0;
+    int jumps = 0;
+    constexpr int maxSteps = 10;
+    constexpr float epsilon = 1e-5f;
+    int steps = 0;
+
+    while (remaining > epsilon && steps < maxSteps)
+    {
+        ++steps;
+        if (montageSections.empty()) break;
+        const MontageSection& section = montageSections.at(montageSection);
+        const float sectionEnd = section.endTime;
+        MontageSample sample = SampleMontageTimeline(position, position >= sectionEnd);
+        const size_t segmentIndex = sample.segment;
+        const MontageSegment& segment = montageSegments.at(segmentIndex);
+        const Clip& clip = clips.at(montageSegmentClips.at(segmentIndex));
+        const float clipDuration = clip.runtime->duration();
+
+        const double target = static_cast<double>(position) + remaining;
+        const float segmentEnd = std::min(sectionEnd, segment.endTime);
+        const float pieceStop = std::min(static_cast<float>(target), segmentEnd);
+        const bool reachesSectionEnd = pieceStop >= sectionEnd - epsilon;
+        if (!(pieceStop > position + epsilon))
+        {
+            // 已经站在段末：只推进段身份，不消耗时间。
+            if (segmentIndex + 1 < montageSegments.size() && position < sectionEnd)
+            {
+                montageSegment = segmentIndex + 1;
+                selected = montageSegmentClips[montageSegment];
+                ++jumps;
+                continue;
+            }
+            break;
+        }
+
+        const float sourceFrom = MontageSourceTime(segment, position, clipDuration);
+        const float sourceTo = MontageSourceTime(segment, pieceStop, clipDuration);
+        Eigen::Vector3f pieceDelta = RootTranslation(clip, sourceTo) -
+            RootTranslation(clip, sourceFrom);
+        float pieceYaw = YawFromQuaternion(RootRotation(clip, sourceTo) *
+            RootRotation(clip, sourceFrom).inverse());
+        if (!motionWarp.Empty() && meshTransform && actorPosition)
+        {
+            pieceDelta = ApplySegmentedMontageWarp(segment, clip, sourceFrom, sourceTo,
+                pieceDelta, *meshTransform, *actorPosition, actorYaw, pieceYaw);
+        }
+        translation += pieceDelta;
+        yaw = std::remainder(yaw + pieceYaw, 2.0f * 3.14159265358979323846f);
+
+        remaining -= std::max(0.0,
+            static_cast<double>(pieceStop) - static_cast<double>(position));
+        const float pieceStart = position;
+        position = pieceStop;
+        const int nextSection = reachesSectionEnd ? MontageNextSectionIndex() : -1;
+        ScanNotifySegment(static_cast<double>(pieceStart), static_cast<double>(pieceStop),
+            reachesSectionEnd && nextSection < 0);
+
+        if (reachesSectionEnd)
+        {
+            if (nextSection < 0)
+            {
+                EndActiveNotifyStates(sectionEnd, true, false);
+                break;
+            }
+            const float linkStart = ResolveMontageSectionLinkTime(section);
+            if (linkStart < sectionEnd - 1e-4f)
+                EndActiveNotifyStates(sectionEnd, true, false);
+            const MontageSection& next = montageSections.at(static_cast<size_t>(nextSection));
+            montageSection = static_cast<size_t>(nextSection);
+            SetPlaybackRangeInternal(next.startTime, next.endTime);
+            position = std::clamp(linkStart, PlaybackRangeStart(), PlaybackRangeEnd());
+            if (std::abs(position - sectionEnd) > 1e-4f) ++jumps;
+            continue;
+        }
+        if (segmentIndex + 1 < montageSegments.size() &&
+            position >= segment.endTime - epsilon)
+        {
+            montageSegment = segmentIndex + 1;
+            selected = montageSegmentClips[montageSegment];
+            ++jumps;
+            continue;
+        }
+        break;
+    }
+
+    const MontageSample finalSample = SampleMontageTimeline(position,
+        position >= PlaybackRangeEnd() - epsilon);
+    montageSegment = finalSample.segment;
+    selected = finalSample.clip;
+    auto locals = Sample(selected, finalSample.clipTime);
+    if (!inertialization.Empty() && elapsed < blendDuration)
+    {
+        const auto target = ReadKinematics(locals, asset->mesh.joints.size());
+        locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+    }
+    else if (!blendSource.empty() && elapsed < blendDuration)
+        locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
+    const uint64_t epoch = discontinuity + (jumps > 0 ? 1 : 0);
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
+    auto nextPoses = Evaluate(locals, epoch, nextModels);
+    poses.swap(nextPoses);
+    jointModels.swap(nextModels);
+    preIkModels = jointModels;
+    motionModels = jointModels;
+    visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
+    displayedLocals.swap(locals);
+    rootMotionDelta = translation;
+    rootMotionYawDelta = yaw;
+    motionWarpState = motionWarp.Empty() ? std::string() :
+        motionWarp.DebugState(previousTime);
     time = position;
     RefreshActiveNotifyStates();
     blendElapsed = elapsed;
@@ -915,6 +1402,7 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     candidate.inPlace = removeRoot;
     candidate.looping = loop;
     candidate.rate = 1;
+    candidate.requestedRate = 1;
     candidate.playing = true;
     candidate.explicitlyPaused = false;
     // 过渡开启新的播放段：旧 Montage 的播放范围/notify 覆盖不能带到新片段，
@@ -926,6 +1414,7 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     candidate.montageLength = 0;
     candidate.montageSections.clear();
     candidate.montageSection = 0;
+    candidate.ClearMontageSegments();
     candidate.blendElapsed = 0;
     candidate.blendDuration = blendSeconds;
     auto target = candidate.Sample(index, seconds);
@@ -941,6 +1430,8 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
         candidate.preIkModels = candidate.jointModels;
         candidate.motionModels = candidate.jointModels;
         candidate.visualLocals.clear();
+        candidate.slopeWarpedLocals.clear();
+        candidate.footPlacementSource.reset();
         candidate.rootOffset.Reset("hard-cut");
         candidate.ResetFootPlacement("hard-cut");
         ++candidate.discontinuity;
@@ -954,8 +1445,20 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
             // 速度只在过渡边界前看 1ms 的同一条姿态曲线，不推进第二个动画时钟。
             // ozz 压缩采样的导数为数值估计；有限 Hermite 对该估计满足 C1，不承诺任意源 C2。
             constexpr float step = 0.001f;
-            const auto sourceMotion = MeasureKinematics(displayedLocals, PreviewPose(step),
-                asset->mesh.joints.size(), step);
+            // 一次性片段播完时 playing=false，PreviewPose 会原样返回当前姿态，测出的速度是 0；
+            // 惯性化于是以零速度起步（整个过渡先“停一下”再加速），只在切换瞬间表现为一次顿挫。
+            // 这种情况回看一小步取片段自身的出帧速度：此时 displayedLocals 就是 rangeEnd 姿态，
+            // Completed() 又要求混合已结束，所以两者是同一条未混合曲线。
+            const float sourceFrom = std::max(PlaybackRangeStart(), time - step);
+            const float sourceDelta = time - sourceFrom;
+            std::vector<JointKinematics> sourceMotion;
+            // 只有“播完停在末尾”才回看；显式 Pause 停在片段中间时速度必须是 0。
+            if (!playing && !explicitlyPaused && !looping && sourceDelta > 1e-5f)
+                sourceMotion = MeasureKinematics(Sample(selected, sourceFrom), displayedLocals,
+                    asset->mesh.joints.size(), sourceDelta);
+            else
+                sourceMotion = MeasureKinematics(displayedLocals, PreviewPose(step),
+                    asset->mesh.joints.size(), step);
             const auto targetMotion = MeasureKinematics(target, candidate.Sample(index,
                 loop ? float(std::fmod(double(seconds) + step, candidate.Duration())) :
                     std::min(seconds + step, candidate.Duration())), asset->mesh.joints.size(), step);
@@ -968,12 +1471,231 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
             candidate.blendSource = displayedLocals;
         }
     }
+    // 过渡源保留一份只读影子相位时钟：follower 持续对齐需要知道旧 leader 的
+    // 归一化时间，但这里不复制姿态播放器，也不产生第二份 notify/根轨迹。
+    if (blendSeconds > 0)
+    {
+        candidate.syncSourceValid = true;
+        candidate.syncSourceSelected = selected;
+        candidate.syncSourceTime = time;
+        candidate.syncSourceRangeStart = PlaybackRangeStart();
+        candidate.syncSourceRangeEnd = PlaybackRangeEnd();
+        candidate.syncSourceRate = rate;
+        candidate.syncSourceLooping = looping;
+    }
+    else candidate.ClearSyncSourceClock();
+    candidate.syncDecisionValid = false;
+    candidate.syncLeader.clear();
+    candidate.syncPendingValid = false;
+    candidate.syncPendingHasTime = false;
     // 过渡是时钟跳变：先结束旧播放段的活动区间（interrupted），再按新片段重建事件表；
     // 新片段不补发目标位置之前的历史（与 seek 的“硬跳变不重放”语义一致）。
     candidate.EndActiveNotifyStates(previousTime, true, true);
     candidate.RebuildNotifyEvents();
     if (candidate.Completed()) candidate.playing = false;
     *this = std::move(candidate);
+    activeSyncGroup.clear();
+    RefreshSyncMarker();
+}
+
+void SkeletalPlayback::TransitionToSynced(const std::string& clipId, float seconds, bool loop,
+    float blendSeconds, bool removeRoot, const std::string& syncGroup, float syncPhase)
+{
+    float resolvedSeconds = seconds;
+    std::string matchedGroup;
+    if (!syncGroup.empty() && std::isfinite(syncPhase) && syncPhase >= 0)
+    {
+        const auto& clips = asset->AnimationAsset().clips;
+        size_t index = 0;
+        while (index < clips.size() && clips[index].id != clipId) ++index;
+        if (index < clips.size())
+        {
+            const SequenceData& sequence = clips[index].sequence;
+            for (const PlayerBinding& player : sequence.players)
+            {
+                if (player.syncGroup != syncGroup ||
+                    player.syncMethod == SyncMethod::DoNotSync ||
+                    player.syncMethod == SyncMethod::Graph) continue;
+                matchedGroup = syncGroup;
+                const float duration = clips[index].runtime->duration();
+                resolvedSeconds = std::clamp(syncPhase, 0.0f, 1.0f) * duration;
+                if (loop)
+                    resolvedSeconds = duration > 0 ? std::fmod(resolvedSeconds, duration) : 0;
+                else
+                    resolvedSeconds = std::min(resolvedSeconds, std::max(0.0f, duration - 1e-4f));
+                break;
+            }
+        }
+    }
+    TransitionTo(clipId, resolvedSeconds, loop, blendSeconds, removeRoot);
+    activeSyncGroup = std::move(matchedGroup);
+    RefreshSyncMarker();
+}
+
+float SkeletalPlayback::SyncPhase() const
+{
+    const float duration = ClipDuration();
+    if (duration <= 0 || !std::isfinite(time)) return 0;
+    float phase = time / duration;
+    if (looping) phase -= std::floor(phase);
+    return std::clamp(phase, 0.0f, 1.0f);
+}
+
+void SkeletalPlayback::RefreshSyncMarker()
+{
+    syncMarkerName.clear();
+    syncMarkerAlpha = 0;
+    const auto& sequence = asset->AnimationAsset().clips.at(selected).sequence;
+    if (sequence.syncMarkers.empty() || !std::isfinite(time)) return;
+    const SyncMarker* previous = nullptr;
+    const SyncMarker* next = nullptr;
+    for (const SyncMarker& marker : sequence.syncMarkers)
+    {
+        if (marker.time <= time) previous = &marker;
+        else
+        {
+            next = &marker;
+            break;
+        }
+    }
+    if (previous == nullptr) return;
+    syncMarkerName = previous->name;
+    if (next != nullptr && next->time > previous->time)
+        syncMarkerAlpha = std::clamp(
+            (time - previous->time) / (next->time - previous->time), 0.0f, 1.0f);
+}
+
+const PlayerBinding* SkeletalPlayback::SyncBinding() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty()) return nullptr;
+    const SequenceData& sequence = animation.clips.at(selected).sequence;
+    const PlayerBinding* fallback = nullptr;
+    for (const PlayerBinding& player : sequence.players)
+    {
+        if (player.syncGroup.empty() || player.syncMethod == SyncMethod::DoNotSync) continue;
+        if (fallback == nullptr) fallback = &player;
+        if (!activeSyncGroup.empty() && player.syncGroup == activeSyncGroup) return &player;
+    }
+    if (fallback != nullptr) return fallback;
+    return sequence.players.empty() ? nullptr : &sequence.players.front();
+}
+
+const PlayerBinding* SkeletalPlayback::SyncSourceBinding() const
+{
+    if (!syncSourceValid) return nullptr;
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty() || syncSourceSelected >= animation.clips.size()) return nullptr;
+    const SequenceData& sequence = animation.clips.at(syncSourceSelected).sequence;
+    const PlayerBinding* fallback = nullptr;
+    for (const PlayerBinding& player : sequence.players)
+    {
+        if (player.syncGroup.empty() || player.syncMethod == SyncMethod::DoNotSync) continue;
+        if (fallback == nullptr) fallback = &player;
+        if (!activeSyncGroup.empty() && player.syncGroup == activeSyncGroup) return &player;
+    }
+    if (fallback != nullptr) return fallback;
+    return sequence.players.empty() ? nullptr : &sequence.players.front();
+}
+
+const std::vector<SyncMarker>* SkeletalPlayback::SyncSourceMarkers() const
+{
+    if (!syncSourceValid) return nullptr;
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty() || syncSourceSelected >= animation.clips.size()) return nullptr;
+    return &animation.clips.at(syncSourceSelected).sequence.syncMarkers;
+}
+
+SyncGroupNode SkeletalPlayback::BuildSyncGroupNode(std::string_view identity,
+    std::string_view ownerKey, std::string_view localKey, bool source)
+{
+    SyncGroupNode node;
+    node.playback = this;
+    node.identity = identity;
+    node.ownerKey = ownerKey;
+    node.localKey = localKey;
+    node.canApply = !source;
+    node.active = playing;
+    node.transitioning = IsBlending();
+    const float alpha = BlendAlpha();
+
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty()) return node;
+    if (source)
+    {
+        if (!syncSourceValid || syncSourceSelected >= animation.clips.size())
+        {
+            node.method = SyncMethod::DoNotSync;
+            node.active = false;
+            return node;
+        }
+        // 影子时钟只代表交叉淡入的旧片段：混合结束后它已不在画面上；非循环片段
+        // 播完后相位 clamp 在 rangeEnd，继续当 leader 会把目标循环钉在末帧
+        // （表现就是“卡脚”）。两种情况都不能参与选举。
+        node.active = playing && IsBlending() &&
+            (syncSourceLooping || syncSourceTime < syncSourceRangeEnd - 1e-4f);
+        const SequenceData& sequence = animation.clips.at(syncSourceSelected).sequence;
+        node.time = syncSourceTime;
+        node.rangeStart = syncSourceRangeStart;
+        node.rangeEnd = syncSourceRangeEnd;
+        node.rate = syncSourceRate;
+        node.looping = syncSourceLooping;
+        node.markers = &sequence.syncMarkers;
+        node.weight = std::clamp(1.0f - alpha, 0.0f, 1.0f);
+        if (const PlayerBinding* binding = SyncSourceBinding())
+        {
+            node.group = binding->syncGroup;
+            node.role = binding->syncRole;
+            node.method = binding->syncMethod;
+            node.scope = binding->syncGroupScope;
+        }
+        return node;
+    }
+
+    const SequenceData& sequence = animation.clips.at(selected).sequence;
+    node.time = time;
+    node.rangeStart = PlaybackRangeStart();
+    node.rangeEnd = PlaybackRangeEnd();
+    node.rate = rate;
+    node.looping = looping;
+    node.markers = &sequence.syncMarkers;
+    node.weight = IsBlending() ? std::clamp(alpha, 0.0f, 1.0f) : 1.0f;
+    if (const PlayerBinding* binding = SyncBinding())
+    {
+        node.group = binding->syncGroup;
+        node.role = binding->syncRole;
+        node.method = binding->syncMethod;
+        node.scope = binding->syncGroupScope;
+    }
+    return node;
+}
+
+void SkeletalPlayback::ApplySyncGroupResult(const SyncGroupNodeResult& result,
+    std::string_view leaderIdentity)
+{
+    syncDecision = result;
+    syncDecisionValid = true;
+    syncLeader.assign(leaderIdentity);
+    syncPendingValid = true;
+    syncPendingHasTime = result.follower && result.hasFollow;
+    if (syncPendingHasTime)
+    {
+        syncPendingTime = result.followTime;
+        syncPendingRate = result.followRate;
+    }
+    else
+    {
+        // leader/无 leader/DoNotSync 都回到作者请求速率，避免上次 follower 的
+        // 时长比速率泄漏到下一段片段。
+        syncPendingTime = time;
+        syncPendingRate = requestedRate;
+    }
+}
+
+bool SkeletalPlayback::SyncActive() const
+{
+    return playing && syncDecisionValid && !syncDecision.doNotSync &&
+        (syncDecision.leader || syncDecision.follower);
 }
 
 void SkeletalPlayback::Play(const std::string& clipId, bool loop, float speed, bool removeRoot)
@@ -989,6 +1711,7 @@ void SkeletalPlayback::Play(const std::string& clipId, bool loop, float speed, b
     candidate.inPlace = removeRoot;
     candidate.looping = loop;
     candidate.rate = speed;
+    candidate.requestedRate = speed;
     candidate.playing = true;
     candidate.explicitlyPaused = false;
     candidate.inertializationEnabled = false;
@@ -1014,6 +1737,7 @@ void SkeletalPlayback::SetRate(float speed)
     if (!std::isfinite(speed) || speed <= 0 || speed > 4)
         throw std::invalid_argument("Animation rate must be in (0,4]");
     rate = speed;
+    requestedRate = speed;
 }
 
 void SkeletalPlayback::SetRootOffsetEnabled(bool enabled)
@@ -1044,6 +1768,7 @@ void SkeletalPlayback::ResetRootOffset(const char* reason)
     }
     preIkModels = motionModels;
     visualLocals.clear();
+    slopeWarpedLocals.clear();
     footPlacementSource.reset();
     footPlacement = std::move(nextFoot);
     rootOffset = std::move(nextRoot);
@@ -1083,6 +1808,8 @@ void SkeletalPlayback::ApplyVisualRoot(const Eigen::Matrix4f& component,
     preIkModels = models;
     jointModels.swap(models);
     visualLocals.swap(locals);
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
     rootOffset = std::move(candidate);
 }
 
@@ -1115,6 +1842,223 @@ const FootPlacementState& SkeletalPlayback::FootPlacement() const
     return footPlacement ? footPlacement->State() : disabled;
 }
 
+void SkeletalPlayback::SetSlopeWarpingEnabled(bool enabled)
+{
+    if (enabled)
+    {
+        if (!slopeWarping) slopeWarping.emplace(asset->mesh);
+        slopeWarping->SetParameters(slopeWarpingSettings);
+        slopeWarping->SetEnabled(true);
+        return;
+    }
+    if (!slopeWarping) slopeWarping.emplace(asset->mesh);
+    if (!slopeWarping->Enabled()) return;
+    // 先复位并恢复基础姿态，再关闭 solver；ResetSlopeWarping 需要读取 active 状态。
+    ResetSlopeWarping("disabled");
+    slopeWarping->SetEnabled(false);
+}
+
+bool SkeletalPlayback::SlopeWarpingEnabled() const
+{
+    return slopeWarping && slopeWarping->Enabled();
+}
+
+void SkeletalPlayback::SetSlopeWarpingParameters(const SlopeWarpingParameters& parameters)
+{
+    slopeWarpingSettings = parameters;
+    if (slopeWarping) slopeWarping->SetParameters(parameters);
+}
+
+void SkeletalPlayback::ResetSlopeWarping(const char* reason)
+{
+    if (!slopeWarping) return;
+    const bool wasActive = slopeWarping->State().active;
+    slopeWarping->Reset(reason);
+    if (!wasActive) return;
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
+    auto restored = Evaluate(visualLocals.empty() ? displayedLocals : visualLocals,
+        discontinuity, models);
+    poses.swap(restored);
+    jointModels.swap(models);
+    preIkModels = jointModels;
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
+}
+
+void SkeletalPlayback::ApplySlopeWarping(const Eigen::Matrix4f& component, bool grounded,
+    const std::string& owner, float deltaSeconds, const GroundProbe& probe)
+{
+    if (!slopeWarping || !slopeWarping->Enabled() || deltaSeconds <= 0 ||
+        explicitlyPaused || (!playing && !Completed())) return;
+    FootPlacementSolver::ValidateComponent(component);
+    const LocalPose& base = visualLocals.empty() ? displayedLocals : visualLocals;
+    auto candidate = *slopeWarping;
+    bool changed = false;
+    const auto solved = candidate.Solve(asset->mesh, base, *preIkModels, component,
+        grounded, owner, deltaSeconds, probe, changed);
+    if (!changed)
+    {
+        const bool wasActive = slopeWarping->State().active;
+        *slopeWarping = std::move(candidate);
+        if (wasActive)
+        {
+            std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
+            auto restored = Evaluate(base, discontinuity, models);
+            poses.swap(restored);
+            jointModels.swap(models);
+            preIkModels = jointModels;
+            slopeWarpedLocals.clear();
+            footPlacementSource.reset();
+        }
+        return;
+    }
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
+    auto corrected = Evaluate(solved, discontinuity, models);
+    poses.swap(corrected);
+    jointModels.swap(models);
+    preIkModels = jointModels;
+    slopeWarpedLocals = solved;
+    footPlacementSource.reset();
+    *slopeWarping = std::move(candidate);
+}
+
+const SlopeWarpingState& SkeletalPlayback::SlopeWarping() const
+{
+    static const SlopeWarpingState disabled;
+    return slopeWarping ? slopeWarping->State() : disabled;
+}
+
+void SkeletalPlayback::SetPoseDriver(std::shared_ptr<const PoseDriverSet> set)
+{
+    if (!set)
+    {
+        poseDriver.reset();
+        return;
+    }
+    // 绑定期解析关节并预解 RBF 系数；失败直接抛，候选播放器由上层整体丢弃。
+    poseDriver = std::make_shared<const PoseDriverSolver>(asset->mesh, std::move(set));
+}
+
+PoseDriverFrame SkeletalPlayback::SamplePoseDriver() const
+{
+    if (!poseDriver) return {};
+    // PostProcess 在基础 locomotion 与斜坡修正之后执行；足 IK 不在 UE PostProcess 之前，
+    // 所以这里刻意不使用 footPlacementSource。
+    const LocalPose& base = slopeWarpedLocals.empty() ? displayedLocals : slopeWarpedLocals;
+    if (base.empty()) return {};
+    return poseDriver->Solve(base);
+}
+
+void SkeletalPlayback::SetPostProcess(std::shared_ptr<const PostProcessAsset> asset)
+{
+    if (!asset)
+    {
+        postProcess.reset();
+        footPlacementLocals.clear();
+        return;
+    }
+    // PostProcess 按目标网格解析驱动骨/目标骨；缺骨只降级该条目，不使构造失败。
+    postProcess = std::make_shared<const PostProcessSolver>(this->asset->mesh, std::move(asset));
+}
+
+void SkeletalPlayback::ApplyPostProcess(float deltaSeconds)
+{
+    if (!postProcess || !postProcess->Valid() || deltaSeconds <= 0 || explicitlyPaused ||
+        (!playing && !Completed()))
+        return;
+    // 依次回退：足 IK 结果 → 斜坡修正 → 基础姿态。PostProcess 是最后一道姿态修正，
+    // 因此不能从 displayedLocals 重新求值，否则会丢掉足 IK。
+    // footPlacementSource==preIkModels 是足 IK 结果的唯一新鲜度标记；Tick/Reset 会换掉
+    // preIkModels，旧 IK 局部姿态随之失效。
+    const bool hasFootIk = !footPlacementLocals.empty() && footPlacementSource &&
+        footPlacementSource == preIkModels;
+    const LocalPose& base = hasFootIk ? footPlacementLocals :
+        (!slopeWarpedLocals.empty() ? slopeWarpedLocals : displayedLocals);
+    if (base.empty()) return;
+    LocalPose corrected = base;
+    if (!postProcess->Apply(corrected, &postProcessStats)) return;
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
+    auto next = Evaluate(corrected, discontinuity, models);
+    poses.swap(next);
+    jointModels.swap(models);
+    ++postProcessApplications;
+    // preIkModels 保持“足 IK 前”的语义，下一帧 FootPlacement 仍以它为求解源。
+}
+
+void SkeletalPlayback::CopyPoseGlobals(const Eigen::Matrix4f& component,
+    std::vector<Eigen::Matrix4f>& globals) const
+{
+    // 与 PostProcess 使用同一份“最终基础姿态”。
+    const bool hasFootIk = !footPlacementLocals.empty() && footPlacementSource &&
+        footPlacementSource == preIkModels;
+    const LocalPose& base = hasFootIk ? footPlacementLocals :
+        (!slopeWarpedLocals.empty() ? slopeWarpedLocals : displayedLocals);
+    if (base.empty())
+    {
+        globals.clear();
+        return;
+    }
+    globals = LocalToModels(asset->mesh, base);
+    for (auto& value : globals)
+        value = component * value;
+}
+
+void SkeletalPlayback::ApplyPoseGlobals(const Eigen::Matrix4f& component,
+    const std::vector<Eigen::Matrix4f>& globals)
+{
+    if (globals.size() != asset->mesh.joints.size() || globals.empty())
+        return;
+    const bool hasFootIk = !footPlacementLocals.empty() && footPlacementSource &&
+        footPlacementSource == preIkModels;
+    LocalPose base = hasFootIk ? footPlacementLocals :
+        (!slopeWarpedLocals.empty() ? slopeWarpedLocals : displayedLocals);
+    if (base.empty()) return;
+
+    const Eigen::Matrix4f inverseComponent = component.inverse();
+    std::vector<Eigen::Matrix4f> models(globals.size());
+    for (size_t joint = 0; joint < globals.size(); ++joint)
+        models[joint] = inverseComponent * globals[joint];
+    for (size_t joint = 0; joint < models.size(); ++joint)
+    {
+        const int parent = asset->mesh.joints[joint].parent;
+        const Eigen::Matrix4f parentModel = parent >= 0 ?
+            models[static_cast<size_t>(parent)] : Eigen::Matrix4f::Identity();
+        const Eigen::Matrix4f local = parentModel.inverse() * models[joint];
+        const size_t lane = joint % 4;
+        const auto& translation = local.block<3, 1>(0, 3);
+        auto& value = base[joint / 4].translation;
+        float lanes[4];
+        ozz::math::StorePtrU(value.x, lanes);
+        lanes[lane] = translation.x();
+        value.x = ozz::math::simd_float4::LoadPtrU(lanes);
+        ozz::math::StorePtrU(value.y, lanes);
+        lanes[lane] = translation.y();
+        value.y = ozz::math::simd_float4::LoadPtrU(lanes);
+        ozz::math::StorePtrU(value.z, lanes);
+        lanes[lane] = translation.z();
+        value.z = ozz::math::simd_float4::LoadPtrU(lanes);
+
+        const Eigen::Quaternionf rotation(local.block<3, 3>(0, 0));
+        auto& quaternion = base[joint / 4].rotation;
+        ozz::math::StorePtrU(quaternion.x, lanes);
+        lanes[lane] = rotation.x();
+        quaternion.x = ozz::math::simd_float4::LoadPtrU(lanes);
+        ozz::math::StorePtrU(quaternion.y, lanes);
+        lanes[lane] = rotation.y();
+        quaternion.y = ozz::math::simd_float4::LoadPtrU(lanes);
+        ozz::math::StorePtrU(quaternion.z, lanes);
+        lanes[lane] = rotation.z();
+        quaternion.z = ozz::math::simd_float4::LoadPtrU(lanes);
+        ozz::math::StorePtrU(quaternion.w, lanes);
+        lanes[lane] = rotation.w();
+        quaternion.w = ozz::math::simd_float4::LoadPtrU(lanes);
+    }
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> modelsOut;
+    auto next = Evaluate(base, discontinuity, modelsOut);
+    poses.swap(next);
+    jointModels.swap(modelsOut);
+}
+
 void SkeletalPlayback::ResetFootPlacement(const char* reason)
 {
     if (!footPlacement) return;
@@ -1122,7 +2066,8 @@ void SkeletalPlayback::ResetFootPlacement(const char* reason)
     if (jointModels != preIkModels)
     {
         std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
-        auto restored = Evaluate(visualLocals.empty() ? displayedLocals : visualLocals, discontinuity, models);
+        auto restored = Evaluate(!slopeWarpedLocals.empty() ? slopeWarpedLocals :
+            visualLocals.empty() ? displayedLocals : visualLocals, discontinuity, models);
         poses.swap(restored);
         jointModels = preIkModels;
     }
@@ -1143,7 +2088,9 @@ void SkeletalPlayback::ApplyFootPlacement(const Eigen::Matrix4f& component, bool
     }
     // 脚锁状态与求解后的各 section 姿态先在候选上完成；任何异常不污染活动反馈。
     auto candidate = *footPlacement;
-    const auto solved = candidate.Solve(asset->mesh, visualLocals.empty() ? displayedLocals : visualLocals, *preIkModels,
+    const auto solved = candidate.Solve(asset->mesh,
+        !slopeWarpedLocals.empty() ? slopeWarpedLocals :
+            visualLocals.empty() ? displayedLocals : visualLocals, *preIkModels,
         component, grounded, owner, deltaSeconds, probe);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> models;
     auto corrected = Evaluate(solved, discontinuity, models);
@@ -1152,6 +2099,7 @@ void SkeletalPlayback::ApplyFootPlacement(const Eigen::Matrix4f& component, bool
     jointModels.swap(models);
     *footPlacement = std::move(candidate);
     footPlacementSource = preIkModels;
+    footPlacementLocals = solved;
 }
 
 std::shared_ptr<SkeletalPlayback> SkeletalPlayback::NewInstance() const
@@ -1163,8 +2111,18 @@ void SkeletalPlayback::Seek(float seconds)
 {
     if (!std::isfinite(seconds) || seconds < PlaybackRangeStart() || seconds > PlaybackRangeEnd())
         throw std::invalid_argument("Seek must be inside the playback range");
+    size_t sampleClip = selected;
+    float clipTime = seconds;
+    size_t segmentIndex = montageSegment;
+    if (!montageSegments.empty())
+    {
+        const MontageSample sample = SampleMontageTimeline(seconds, seconds >= PlaybackRangeEnd());
+        sampleClip = sample.clip;
+        clipTime = sample.clipTime;
+        segmentIndex = sample.segment;
+    }
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
-    auto locals = Sample(selected, seconds);
+    auto locals = Sample(sampleClip, clipTime);
     auto next = Evaluate(locals, discontinuity + 1, nextModels);
     // 显式 seek 是硬跳变：清空活动区间且不补发被跳过的 begin/end（与 UE 的 seek 语义一致）。
     // 事件缓冲也一并丢弃，下一 Tick 只处理 seconds 之后的位置穿越。
@@ -1177,10 +2135,21 @@ void SkeletalPlayback::Seek(float seconds)
     preIkModels = jointModels;
     motionModels = jointModels;
     visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
     time = seconds;
+    selected = sampleClip;
+    montageSegment = segmentIndex;
+    activeSyncGroup.clear();
+    ClearSyncSourceClock();
+    syncDecisionValid = false;
+    syncLeader.clear();
+    syncPendingValid = false;
+    syncPendingHasTime = false;
+    RefreshSyncMarker();
     ++discontinuity;
     rootOffset.Reset("seek");
     ResetFootPlacement("seek");
@@ -1201,6 +2170,7 @@ void SkeletalPlayback::Select(size_t clipIndex)
     montageLength = 0;
     montageSections.clear();
     montageSection = 0;
+    ClearMontageSegments();
     playbackRangeStart = 0;
     playbackRangeEnd = 0;
     poses.swap(next);
@@ -1208,11 +2178,20 @@ void SkeletalPlayback::Select(size_t clipIndex)
     preIkModels = jointModels;
     motionModels = jointModels;
     visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
     selected = clipIndex;
     time = 0;
+    activeSyncGroup.clear();
+    ClearSyncSourceClock();
+    syncDecisionValid = false;
+    syncLeader.clear();
+    syncPendingValid = false;
+    syncPendingHasTime = false;
+    RefreshSyncMarker();
     ++discontinuity;
     rootOffset.Reset("select");
     ResetFootPlacement("select");

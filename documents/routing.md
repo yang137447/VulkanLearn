@@ -19,6 +19,7 @@
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |
+| `script/VulkanLearn.Runtime/AnimationGraph*.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationBlueprint.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationGraph.cs`、`tool/script-tests/scriptLocomotionTests.cpp`、`tool/script-tests/managed/AnimationGraphFixtures.cs` | `contracts/animation-runtime-skinning.md`、`contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/ui/panel/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
 | `source/editor/service/material/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | Runtime editor target ownership |
 | `source/script/**`、`script/**`、`tool/script-tests/**`、`source/editor/scene/scriptBlueprintAuthoring.*` | `contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
@@ -31,7 +32,10 @@
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationScriptData.*`、`source/world/worldAnimation.cpp`、`source/script/scriptRuntime.cpp`、`tool/animation-tests/animationScriptDataTests.cpp`、`tool/animation-tests/notifyStateTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
-| `source/animation/skeletalPlayback.*`、`source/animation/footPlacement.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/animation/skeletalPlayback.*`、`source/animation/animationSyncGroup.*`、`source/animation/footPlacement.*`、`source/animation/slopeWarping.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py`、`tool/animation-tests/animationSyncGroupTests.cpp`、`tool/animation-tests/slopeWarpingTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/animation/poseDriver.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_pose_driver.py`、`tool/animation-tests/poseDriverTests.cpp` | `contracts/animation-pose-driver.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
+| `source/animation/postProcess.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_post_process.py`、`tool/animation-tests/postProcessTests.cpp` | `contracts/animation-post-process.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
+| `source/physics/bonePhysics.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_bone_physics.py`、`tool/physics-runtime-tests/bonePhysicsTests.cpp` | `contracts/animation-bone-physics.md`、`contracts/animation-post-process.md`、`contracts/testing.md` | — |
 | `source/animation/motionWarping.*`、`source/script/scriptPhysics.cpp`、`script/VulkanLearn.Runtime/AnimationPlayback.cs`、`tool/animation-tests/motionWarpingTests.cpp` | `contracts/animation-motion-warping.md`、`contracts/animation-montage.md`、`contracts/testing.md` | — |
 | `source/animation/motionDatabase.*`、`source/animation/motionDebug.h`、`source/animation/motionFeatures.*`、`source/animation/motionHistory.*`、`source/animation/motionMatching.*`、`source/animation/motionRuntime.*`、`source/world/worldAnimation.cpp`、`tool/animation/motionDatabaseBuild.*`、`tool/animation/browse_motion_database.py`、`tool/animation/verify_gasp_motion_database.py`、`tool/animation/capture_gasp_p4.py`、`tool/animation/capture_gasp_p5.py`、`tool/animation-tests/motionDatabaseTests.cpp`、`tool/animation-tests/motionHistoryTests.cpp`、`tool/animation-tests/motionMatchingTests.cpp` | `contracts/animation-motion-features.md`、`contracts/testing.md` | — |
 | `source/animation/motionRuntimeDatabase.*` | `contracts/animation-asset-import.md`、`contracts/animation-motion-features.md`、`contracts/testing.md` | — |
@@ -288,6 +292,11 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   Skeleton、Sequence sidecar 与 AnimMontage 三层资产；曲线/notify 真实时间与
   warp 窗口迁移目标。计划，非契约；当前行为仍以
   `contracts/animation-motion-warping.md`、`contracts/animation-asset-import.md` 为准。
+- [Valley Echo 角色运动复刻计划](plan/architecture/valley-echo-locomotion-replication-plan.md)：
+  Valley of the Ancient 的 Echo 地面步态状态机、方向起步/停止、跳跃落地、SpringArm
+  控制与一次性动作的资产导出和分阶段门禁。计划，非契约；当前运行时能力仍以
+  `contracts/animation-motion-features.md`、`contracts/animation-motion-warping.md`、
+  `contracts/animation-montage.md` 为准。
 - [原 ALS 计划](plan/architecture/als-csharp-animation-plan.md)：
   已由 GASP 计划取代，仅保留历史决策，不作为后续实施依据。
 

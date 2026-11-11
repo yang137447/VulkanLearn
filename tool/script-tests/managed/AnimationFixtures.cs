@@ -152,6 +152,8 @@ public sealed class MontageProbe : Blueprint
     {
         if (Mode is "montage" or "feedback" or "notify") StartMontage();
         else if (Mode == "montage-start") StartMontage(0.877f);
+        else if (Mode is "curve-current" or "curve-api")
+            animation.Play(animation.Montage(MontageId).ClipId, true, 1, true);
     }
 
     protected override void Tick(float dt)
@@ -184,6 +186,44 @@ public sealed class MontageProbe : Blueprint
                 try { animation.CurveValue(montage.ClipId, "distance_from_ledge", float.PositiveInfinity); }
                 catch (ArgumentOutOfRangeException) { caught++; }
                 Transform.Position = new(caught, 0, 0);
+                break;
+            }
+            case "curve-current":
+            {
+                var state = animation.State;
+                float current = animation.CurrentCurve("distance_from_ledge");
+                float explicitSample = animation.CurveValue(
+                    state.Clip, "distance_from_ledge", state.Time);
+                var snapshot = animation.CurveSnapshot(
+                    new[] { "distance_from_ledge", "disableleftfootik" });
+                Transform.Position = new(current, explicitSample, snapshot["distance_from_ledge"]);
+                Transform.Rotation = new(
+                    animation.HasCurrentCurve("distance_from_ledge") ? 1 : 0,
+                    snapshot.Count,
+                    state.Time);
+                break;
+            }
+            case "curve-api":
+            {
+                var names = animation.CurveNames(montage.ClipId);
+                bool hasCurve = animation.HasCurve(montage.ClipId, "DISTANCE_FROM_LEDGE");
+                bool hasMissing = animation.HasCurve(montage.ClipId, "missing_curve");
+                var snapshot = animation.CurveSnapshot(
+                    new[] { "distance_from_ledge", "disableleftfootik" });
+                string diagnostic = "";
+                try { animation.CurveValue(montage.ClipId, "missing_curve", 0); }
+                catch (ArgumentException error) { diagnostic = error.Message; }
+                int duplicateCaught = 0;
+                try
+                {
+                    animation.CurveSnapshot(
+                        new[] { "distance_from_ledge", "DISTANCE_FROM_LEDGE" });
+                }
+                catch (ArgumentException) { duplicateCaught++; }
+                Transform.Position = new(names.Count, hasCurve ? 1 : 0, hasMissing ? 1 : 0);
+                Transform.Rotation = new(snapshot.Count, duplicateCaught,
+                    diagnostic.Contains("Available curves", StringComparison.Ordinal) &&
+                    diagnostic.Contains("distance_from_ledge", StringComparison.Ordinal) ? 1 : 0);
                 break;
             }
             case "montage-info":
@@ -282,4 +322,27 @@ public sealed class MontageProbe : Blueprint
 
     private void StartMontage(float startTime = 0) =>
         animation.PlayMontage(MontageId, Targets(), startTime: startTime);
+}
+
+// 无 sidecar 片段的曲线查询面：已知 clip 必须返回空名字表/false，而不是伪造空曲线。
+public sealed class AnimationClipCurveProbe : Blueprint
+{
+    [Expose(InstanceEditable = true)] public string Clip { get; set; } =
+        "M_Neutral_Walk_Loop_F";
+    private AnimationPlayback animation = null!;
+
+    protected override void OnCreate() =>
+        animation = GetComponent<MeshComponent>("visual").Animation;
+
+    protected override void Tick(float dt)
+    {
+        var names = animation.CurveNames(Clip);
+        bool has = animation.HasCurve(Clip, "MoveData_Speed");
+        string message = "";
+        try { animation.CurveValue(Clip, "MoveData_Speed", 0); }
+        catch (ArgumentException error) { message = error.Message; }
+        bool noPublishedCurves = message.Contains(
+            "has no published Float curves", StringComparison.Ordinal);
+        Transform.Position = new(names.Count, has ? 1 : 0, noPublishedCurves ? 1 : 0);
+    }
 }

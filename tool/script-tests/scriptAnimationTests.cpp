@@ -2669,6 +2669,55 @@ TEST_F(ScriptAnimationTest, CurveValueRejectsMissingClipCurveAndNonFiniteTime)
     EXPECT_EQ(State()["position"][0].get<float>(), 4);
 }
 
+TEST_F(ScriptAnimationTest, CurrentCurveAndExplicitSnapshotUseTheSameStateClock)
+{
+    auto actor = Actor("owner", "ScriptFixtures.MontageProbe");
+    actor["properties"]["Mode"] = "curve-current";
+    Prepare(Json::array({actor}), true, true);
+    Play();
+    Tick();
+    ASSERT_FALSE(State()["failed"]);
+    const auto& position = State()["position"];
+    EXPECT_FLOAT_EQ(position[0].get<float>(), position[1].get<float>());
+    EXPECT_FLOAT_EQ(position[2].get<float>(), position[1].get<float>());
+    EXPECT_EQ(State()["rotation"][0].get<int>(), 1); // HasCurrentCurve
+    EXPECT_EQ(State()["rotation"][1].get<int>(), 2); // 只含显式请求的两条曲线
+}
+
+TEST_F(ScriptAnimationTest, CurveMetadataQueriesAndMissingDiagnosticAreExplicit)
+{
+    auto actor = Actor("owner", "ScriptFixtures.MontageProbe");
+    actor["properties"]["Mode"] = "curve-api";
+    Prepare(Json::array({actor}), true, true);
+    Play();
+    Tick();
+    ASSERT_FALSE(State()["failed"]);
+    const auto& position = State()["position"];
+    EXPECT_GE(position[0].get<int>(), 2); // Hurdle sidecar 的多条曲线都进入本地 catalog
+    EXPECT_EQ(position[1].get<int>(), 1); // 曲线名大小写不敏感
+    EXPECT_FLOAT_EQ(position[2].get<float>(), 0); // 缺失曲线不被当成存在
+    EXPECT_EQ(State()["rotation"][0].get<int>(), 2);
+    EXPECT_EQ(State()["rotation"][1].get<int>(), 1); // 重复名字拒绝
+    EXPECT_EQ(State()["rotation"][2].get<int>(), 1); // 诊断列出可用曲线
+}
+
+TEST_F(ScriptAnimationTest, KnownClipWithoutSidecarReportsNoPublishedCurves)
+{
+    auto player = FormalPlayer();
+    ASSERT_FALSE(player->Asset().clips.empty());
+    const std::string clip = player->Asset().clips.front().id;
+    auto actor = Actor("owner", "ScriptFixtures.AnimationClipCurveProbe");
+    actor["properties"]["Clip"] = clip;
+    Prepare(Json::array({actor}), true, false);
+    Play();
+    Tick();
+    ASSERT_FALSE(State()["failed"]);
+    const auto& position = State()["position"];
+    EXPECT_EQ(position[0].get<int>(), 0); // 已知 clip 但没有已发布曲线
+    EXPECT_FLOAT_EQ(position[1].get<float>(), 0);
+    EXPECT_FLOAT_EQ(position[2].get<float>(), 1); // 明确 no published Float curves 诊断
+}
+
 TEST_F(ScriptAnimationTest, MontageCatalogExposesSectionsNotifiesAndWindowsAndRejectsUnknownId)
 {
     auto actor = Actor("owner", "ScriptFixtures.MontageProbe");

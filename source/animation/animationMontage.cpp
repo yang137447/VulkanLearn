@@ -18,10 +18,12 @@ namespace
 constexpr size_t MaxSections = 64;
 constexpr size_t MaxNotifies = 64;
 constexpr size_t MaxWarpWindows = 8;
+constexpr size_t MaxSegments = 64;
 constexpr size_t MaxNameLength = 64;
 constexpr size_t MaxIdLength = 256;
 // Montage 时间同样是秒；上限只防止明显异常的资产拖垮导入，不参与播放语义。
 constexpr float MaxMontageLength = 600.0f;
+constexpr float MaxMontageRateScale = 4.0f;
 // 与 schema/导出工具一致的时间容差（秒）。
 constexpr double TimeTolerance = 1e-3;
 // 普通 notify 只校验起点在 [0,length]；UE 允许浮点序列化的末帧误差。
@@ -184,6 +186,26 @@ bool ReadBool(const nlohmann::json& json, std::string_view field,
         Fail(basePath, label, "must be a boolean");
     }
     return json.at(key).get<bool>();
+}
+
+float ReadOptionalFiniteNumber(const nlohmann::json& json, std::string_view field,
+    std::string_view basePath, float fallback, std::string_view fieldLabel = {})
+{
+    if (!json.contains(std::string(field)))
+    {
+        return fallback;
+    }
+    return ReadFiniteNumber(json, field, basePath, fieldLabel);
+}
+
+bool ReadOptionalBool(const nlohmann::json& json, std::string_view field,
+    std::string_view basePath, bool fallback, std::string_view fieldLabel = {})
+{
+    if (!json.contains(std::string(field)))
+    {
+        return fallback;
+    }
+    return ReadBool(json, field, basePath, fieldLabel);
 }
 
 template <size_t Count>
@@ -412,6 +434,144 @@ std::vector<MontageSection> ParseSections(const nlohmann::json& json, float leng
     return sections;
 }
 
+std::vector<MontageSegment> ParseSegments(const nlohmann::json& json, float length,
+    std::string_view basePath)
+{
+    if (!json.contains("segments"))
+    {
+        return {};
+    }
+    if (json.contains("sequence") || json.contains("sequenceBlake3"))
+    {
+        Fail(basePath, "segments",
+            "is mutually exclusive with top-level sequence/sequenceBlake3");
+    }
+    const auto& segmentsJson = json.at("segments");
+    if (!segmentsJson.is_array())
+    {
+        Fail(basePath, "segments", "must be an array");
+    }
+    if (segmentsJson.empty())
+    {
+        Fail(basePath, "segments", "must contain at least one segment");
+    }
+    if (segmentsJson.size() > MaxSegments)
+    {
+        Fail(basePath, "segments",
+            "exceeds " + std::to_string(MaxSegments) + " segments");
+    }
+
+    std::set<std::string> ids;
+    std::vector<MontageSegment> segments;
+    segments.reserve(segmentsJson.size());
+    double previousEnd = 0.0;
+    for (size_t index = 0; index < segmentsJson.size(); ++index)
+    {
+        const std::string prefix = "segments[" + std::to_string(index) + "]";
+        const auto& segmentJson = segmentsJson.at(index);
+        if (!segmentJson.is_object())
+        {
+            Fail(basePath, prefix, "must be an object");
+        }
+
+        MontageSegment segment;
+        segment.id = ReadOptionalString(segmentJson, "id", basePath, prefix + ".id");
+        if (segment.id.empty())
+        {
+            segment.id = "segment_" + std::to_string(index);
+        }
+        else if (segment.id.size() > MaxNameLength)
+        {
+            Fail(basePath, prefix + ".id",
+                "exceeds " + std::to_string(MaxNameLength) + " characters");
+        }
+        if (!ids.insert(segment.id).second)
+        {
+            Fail(basePath, prefix + ".id",
+                "duplicates segment id '" + segment.id + "'");
+        }
+
+        segment.sequencePath = ReadRequiredString(
+            segmentJson, "sequence", basePath, prefix + ".sequence");
+        if (segment.sequencePath.empty())
+        {
+            Fail(basePath, prefix + ".sequence", "must not be empty");
+        }
+        if (segmentJson.contains("sequenceBlake3"))
+        {
+            segment.sequenceDigest = ReadRequiredString(
+                segmentJson, "sequenceBlake3", basePath, prefix + ".sequenceBlake3");
+            if (!IsHexDigest(segment.sequenceDigest))
+            {
+                Fail(basePath, prefix + ".sequenceBlake3",
+                    "must be a 64-character hex BLAKE3 digest");
+            }
+        }
+
+        segment.startTime = ReadFiniteNumber(
+            segmentJson, "startTime", basePath, prefix + ".startTime");
+        segment.endTime = ReadFiniteNumber(
+            segmentJson, "endTime", basePath, prefix + ".endTime");
+        if (segment.startTime < 0)
+        {
+            Fail(basePath, prefix + ".startTime", "must be >= 0");
+        }
+        if (!(segment.endTime > segment.startTime))
+        {
+            Fail(basePath, prefix + ".endTime",
+                "must be greater than startTime=" +
+                std::to_string(segment.startTime));
+        }
+        if (segment.endTime > length + TimeTolerance)
+        {
+            Fail(basePath, prefix + ".endTime",
+                "must not exceed montage length " + std::to_string(length));
+        }
+        // 多段播放要求时间轴无空洞：缺口会让“当前 clip”没有定义，重叠会让根运动
+        // 和 notify 被消费两次。第一段必须从 0 开始，后续段必须接住前一段末尾。
+        if (std::abs(static_cast<double>(segment.startTime) - previousEnd) >
+            TimeTolerance)
+        {
+            Fail(basePath, prefix + ".startTime",
+                "must start at the previous segment end " +
+                std::to_string(previousEnd) + " (no gaps or overlaps)");
+        }
+        previousEnd = segment.endTime;
+
+        segment.clipStartTime = ReadOptionalFiniteNumber(
+            segmentJson, "clipStartTime", basePath, 0.0f, prefix + ".clipStartTime");
+        if (segment.clipStartTime < 0)
+        {
+            Fail(basePath, prefix + ".clipStartTime", "must be >= 0");
+        }
+        segment.clipEndTime = ReadOptionalFiniteNumber(
+            segmentJson, "clipEndTime", basePath, 0.0f, prefix + ".clipEndTime");
+        if (segment.clipEndTime != 0 && segment.clipEndTime <= segment.clipStartTime)
+        {
+            Fail(basePath, prefix + ".clipEndTime",
+                "must be greater than clipStartTime when declared");
+        }
+        segment.rateScale = ReadOptionalFiniteNumber(
+            segmentJson, "rateScale", basePath, 1.0f, prefix + ".rateScale");
+        if (!(segment.rateScale > 0) || segment.rateScale > MaxMontageRateScale)
+        {
+            Fail(basePath, prefix + ".rateScale",
+                "must be in (0," + std::to_string(MaxMontageRateScale) + "]");
+        }
+        segment.loop = ReadOptionalBool(
+            segmentJson, "loop", basePath, false, prefix + ".loop");
+        segments.push_back(std::move(segment));
+    }
+
+    if (std::abs(previousEnd - static_cast<double>(length)) > TimeTolerance)
+    {
+        Fail(basePath, "segments",
+            "must cover the complete montage timeline [0," +
+            std::to_string(length) + "]");
+    }
+    return segments;
+}
+
 std::vector<MontageNotify> ParseNotifies(const nlohmann::json& json, float length,
     std::vector<MontageWindow>& windows, std::string_view basePath)
 {
@@ -551,22 +711,6 @@ Montage ParseMontage(const nlohmann::json& json, std::string_view basePath)
             "exceeds " + std::to_string(MaxIdLength) + " characters");
     }
 
-    // 路径是唯一权威：Montage 不写 clip id 字段，clip id 由命中的 sidecar 派生。
-    montage.sequencePath = ReadRequiredString(json, "sequence", basePath);
-    if (montage.sequencePath.empty())
-    {
-        Fail(basePath, "sequence", "must not be empty");
-    }
-    if (json.contains("sequenceBlake3"))
-    {
-        montage.sequenceDigest = ReadRequiredString(json, "sequenceBlake3", basePath);
-        if (!IsHexDigest(montage.sequenceDigest))
-        {
-            Fail(basePath, "sequenceBlake3",
-                "must be a 64-character hex BLAKE3 digest");
-        }
-    }
-
     montage.slot = ReadName(json, "slot", basePath);
     montage.length = ReadFiniteNumber(json, "length", basePath);
     if (montage.length <= 0)
@@ -578,6 +722,33 @@ Montage ParseMontage(const nlohmann::json& json, std::string_view basePath)
         Fail(basePath, "length",
             "exceeds the " + std::to_string(static_cast<int>(MaxMontageLength)) +
             " second import budget");
+    }
+    montage.rateScale = ReadOptionalFiniteNumber(
+        json, "rateScale", basePath, 1.0f);
+    if (!(montage.rateScale > 0) || montage.rateScale > MaxMontageRateScale)
+    {
+        Fail(basePath, "rateScale",
+            "must be in (0," + std::to_string(MaxMontageRateScale) + "]");
+    }
+
+    montage.segments = ParseSegments(json, montage.length, basePath);
+    if (montage.segments.empty())
+    {
+        // 路径是唯一权威：单段 Montage 不写 clip id 字段，clip id 由命中的 sidecar 派生。
+        montage.sequencePath = ReadRequiredString(json, "sequence", basePath);
+        if (montage.sequencePath.empty())
+        {
+            Fail(basePath, "sequence", "must not be empty");
+        }
+        if (json.contains("sequenceBlake3"))
+        {
+            montage.sequenceDigest = ReadRequiredString(json, "sequenceBlake3", basePath);
+            if (!IsHexDigest(montage.sequenceDigest))
+            {
+                Fail(basePath, "sequenceBlake3",
+                    "must be a 64-character hex BLAKE3 digest");
+            }
+        }
     }
 
     montage.sections = ParseSections(json, montage.length, basePath);
@@ -595,21 +766,24 @@ Montage ParseMontage(const nlohmann::json& json, std::string_view basePath)
     return montage;
 }
 
-std::string BindMontage(const Montage& montage, const MontageImportContext& context,
-    std::string_view assetPath)
+namespace
 {
-    if (context.skeleton == nullptr || context.skeleton->id.empty())
-    {
-        Fail(assetPath, "skeleton",
-            "requires a loaded Skeleton asset for montage '" + montage.id + "'");
-    }
-    const SkeletonAsset& skeleton = *context.skeleton;
+struct BoundMontageClip
+{
+    const SequenceData* sequence = nullptr;
+    std::string clipId;
+};
 
+BoundMontageClip BindMontageClip(const Montage& montage, const MontageSegment& segment,
+    const MontageImportContext& context, const SkeletonAsset& skeleton,
+    std::string_view field, std::string_view assetPath)
+{
+    const std::string prefix = field.empty() ? std::string() : std::string(field) + ".";
     // sequence 路径必须按字符串命中本次已加载的 sidecar；不按 clip id 猜。
     const MontageSequenceBinding* binding = nullptr;
     for (const MontageSequenceBinding& candidate : context.sequences)
     {
-        if (candidate.path == montage.sequencePath)
+        if (candidate.path == segment.sequencePath)
         {
             binding = &candidate;
             break;
@@ -617,48 +791,75 @@ std::string BindMontage(const Montage& montage, const MontageImportContext& cont
     }
     if (binding == nullptr || binding->sequence == nullptr)
     {
-        Fail(assetPath, "sequence",
-            "path '" + montage.sequencePath +
+        Fail(assetPath, prefix + "sequence",
+            "path '" + segment.sequencePath +
             "' is not a loaded sequence sidecar of this mesh asset");
     }
     const SequenceData& sequence = *binding->sequence;
 
     if (sequence.skeletonId != skeleton.id)
     {
-        Fail(assetPath, "sequence",
+        Fail(assetPath, prefix + "sequence",
             "sidecar skeleton '" + sequence.skeletonId +
             "' does not match loaded skeleton '" + skeleton.id + "'");
     }
     if (!sequence.skeletonDigest.empty() && !skeleton.sourceDigest.empty() &&
         !EqualsIgnoreCase(sequence.skeletonDigest, skeleton.sourceDigest))
     {
-        Fail(assetPath, "sequence",
+        Fail(assetPath, prefix + "sequence",
             "sidecar skeletonBlake3 '" + sequence.skeletonDigest +
             "' does not match skeleton file digest '" + skeleton.sourceDigest + "'");
     }
 
-    if (!montage.sequenceDigest.empty())
+    if (!segment.sequenceDigest.empty())
     {
         if (binding->digest.empty())
         {
-            Fail(assetPath, "sequenceBlake3",
+            Fail(assetPath, prefix + "sequenceBlake3",
                 "declares a digest but the loaded sidecar has no digest to verify");
         }
-        if (!EqualsIgnoreCase(montage.sequenceDigest, binding->digest))
+        if (!EqualsIgnoreCase(segment.sequenceDigest, binding->digest))
         {
-            Fail(assetPath, "sequenceBlake3",
-                "digest '" + montage.sequenceDigest +
+            Fail(assetPath, prefix + "sequenceBlake3",
+                "digest '" + segment.sequenceDigest +
                 "' does not match sidecar digest '" + binding->digest + "'");
         }
     }
 
-    if (!skeleton.HasSlot(montage.slot))
+    if (std::find(context.clipIds.begin(), context.clipIds.end(), sequence.id) ==
+        context.clipIds.end())
     {
-        Fail(assetPath, "slot",
-            "'" + montage.slot + "' is not registered in skeleton '" +
-            skeleton.id + "' slots");
+        Fail(assetPath, prefix + "sequence",
+            "derived clip id '" + sequence.id +
+            "' is not declared in skinning.clips[]");
     }
 
+    if (!montage.segments.empty())
+    {
+        const float clipEnd = segment.clipEndTime > 0 ?
+            segment.clipEndTime : sequence.duration;
+        if (segment.clipStartTime < 0 || !(clipEnd > segment.clipStartTime) ||
+            clipEnd > sequence.duration + TimeTolerance)
+        {
+            Fail(assetPath, prefix + "clipEndTime",
+                "must describe a nonempty range inside sidecar duration " +
+                std::to_string(sequence.duration));
+        }
+        const double sourceEnd = static_cast<double>(segment.clipStartTime) +
+            static_cast<double>(segment.endTime - segment.startTime) *
+            static_cast<double>(segment.rateScale);
+        if (!segment.loop && sourceEnd > static_cast<double>(clipEnd) + TimeTolerance)
+        {
+            Fail(assetPath, prefix + "endTime",
+                "maps past the sequence clip end " + std::to_string(clipEnd));
+        }
+    }
+    return {&sequence, sequence.id};
+}
+
+void ValidateMontageBones(const Montage& montage, const SkeletonAsset& skeleton,
+    std::string_view assetPath)
+{
     for (size_t index = 0; index < montage.notifies.size(); ++index)
     {
         const MontageNotify& notify = montage.notifies[index];
@@ -673,16 +874,59 @@ std::string BindMontage(const Montage& montage, const MontageImportContext& cont
                 skeleton.id + "'");
         }
     }
+}
+}
 
-    // clip id 只从 sidecar 的 `sequence` 字段派生；它必须已在 SM skinning.clips[] 声明，
-    // 保证 Montage 播放目标与本次导入的片段一一对应。
-    if (std::find(context.clipIds.begin(), context.clipIds.end(), sequence.id) ==
-        context.clipIds.end())
+std::vector<std::string> BindMontageSegments(const Montage& montage,
+    const MontageImportContext& context, std::string_view assetPath)
+{
+    if (context.skeleton == nullptr || context.skeleton->id.empty())
     {
-        Fail(assetPath, "sequence",
-            "derived clip id '" + sequence.id +
-            "' is not declared in skinning.clips[]");
+        Fail(assetPath, "skeleton",
+            "requires a loaded Skeleton asset for montage '" + montage.id + "'");
     }
-    return sequence.id;
+    const SkeletonAsset& skeleton = *context.skeleton;
+
+    if (!skeleton.HasSlot(montage.slot))
+    {
+        Fail(assetPath, "slot",
+            "'" + montage.slot + "' is not registered in skeleton '" +
+            skeleton.id + "' slots");
+    }
+
+    ValidateMontageBones(montage, skeleton, assetPath);
+
+    std::vector<std::string> clipIds;
+    if (montage.segments.empty())
+    {
+        MontageSegment singleSegment;
+        singleSegment.sequencePath = montage.sequencePath;
+        singleSegment.sequenceDigest = montage.sequenceDigest;
+        clipIds.push_back(BindMontageClip(montage, singleSegment, context, skeleton,
+            "", assetPath).clipId);
+    }
+    else
+    {
+        clipIds.reserve(montage.segments.size());
+        for (size_t index = 0; index < montage.segments.size(); ++index)
+        {
+            clipIds.push_back(BindMontageClip(montage, montage.segments[index],
+                context, skeleton,
+                "segments[" + std::to_string(index) + "]", assetPath).clipId);
+        }
+    }
+    return clipIds;
+}
+
+std::string BindMontage(const Montage& montage, const MontageImportContext& context,
+    std::string_view assetPath)
+{
+    const std::vector<std::string> clipIds =
+        BindMontageSegments(montage, context, assetPath);
+    if (clipIds.empty())
+    {
+        Fail(assetPath, "segments", "must resolve at least one clip");
+    }
+    return clipIds.front();
 }
 }
