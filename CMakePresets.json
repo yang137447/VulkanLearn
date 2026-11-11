@@ -11,9 +11,14 @@
             "hidden": true,
             "generator": "MinGW Makefiles",
             "binaryDir": "${sourceDir}/build-vscode/${presetName}",
+            "environment": {
+                "CCACHE_BASEDIR": "${sourceDir}"
+            },
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g1 -DNDEBUG",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g1 -DNDEBUG",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": true,
                 "FETCHCONTENT_UPDATES_DISCONNECTED": true,
                 "VULKANLEARN_BUILD_TESTS": false,
@@ -46,6 +51,16 @@
             }
         },
         {
+            "name": "development-fast",
+            "displayName": "Development Fast",
+            "description": "Release-speed daily builds without debug symbols; use development for breakpoints.",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VULKANLEARN_BUILD_TESTS": false
+            }
+        },
+        {
             "name": "profile",
             "displayName": "Profile",
             "description": "Optimized profiling with CPU symbols, Tracy and NVTX, without Vulkan validation.",
@@ -66,6 +81,21 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false
             }
+        },
+        {
+            "name": "prebuilt-game",
+            "displayName": "Prebuilt Dependencies (game)",
+            "description": "Game-only Release build consuming the machine-wide dependency prefix. Set VULKANLEARN_DEPS_ROOT first.",
+            "inherits": "mingw-base",
+            "binaryDir": "${sourceDir}/build-prebuilt",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VULKANLEARN_ENABLE_EDITOR": false,
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false,
+                "VULKANLEARN_DEPS_MODE": "prebuilt",
+                "VULKANLEARN_DEPS_ROOT": "$env{VULKANLEARN_DEPS_ROOT}",
+                "FETCHCONTENT_FULLY_DISCONNECTED": true
+            }
         }
     ],
     "buildPresets": [
@@ -82,6 +112,12 @@
             "jobs": 4
         },
         {
+            "name": "development-fast",
+            "configurePreset": "development-fast",
+            "targets": ["main_editor"],
+            "jobs": 4
+        },
+        {
             "name": "profile",
             "configurePreset": "profile",
             "targets": ["main"],
@@ -91,6 +127,12 @@
             "name": "release",
             "configurePreset": "release",
             "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "prebuilt-game",
+            "configurePreset": "prebuilt-game",
+            "targets": ["main_game"],
             "jobs": 4
         }
     ]

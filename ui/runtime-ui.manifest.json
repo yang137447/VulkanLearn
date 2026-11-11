@@ -1,0 +1,9 @@
+{
+  "format": 1,
+  "description": "Runtime HUD closure shipped by --flavor game. Editor documents, widgets and icons are intentionally absent.",
+  "files": [
+    "runtime-hud.rml",
+    "runtime-hud.rcss",
+    "localization.json"
+  ]
+}

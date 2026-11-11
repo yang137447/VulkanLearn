@@ -34,6 +34,10 @@ public:
 
     void Initialize(const std::filesystem::path& shaderRoot);
 
+    // Explicit source-set filter for composition roots that must not build
+    // flavor-specific shader pairs. Names are glsl-root-relative stems.
+    void SetExcludedShaderNames(std::vector<std::string> names);
+
     VL::ShaderBuildStatistics StartCompile(
         const std::filesystem::path& shaderRoot,
         bool forceRebuild = false);
@@ -117,6 +121,7 @@ private:
 
     std::filesystem::path shaderRoot;
     std::filesystem::path glslRoot;
+    std::vector<std::string> excludedShaderNames;
     std::filesystem::path spirvRoot;
     std::string compilePolicy;
     VL::ShaderBuildManifestStore manifestStore;

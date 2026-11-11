@@ -857,7 +857,7 @@ OnReload 不得改变 World 根/空间组件值、启用/销毁状态、逻辑�
 Paused 下也立即显示新代逻辑组件的默认属性和句柄代际，不依赖下一次用户回调补发。
 
 SubsystemCollection 拥有 ScriptRuntimeSubsystem。候选 World 保存自己的
-作者声明与 RAII ScriptWorldContext。PrepareWorldLoad 中构造实例、
+作者声明与 RAII ScriptWorldContext。`WorldCandidatePreparer::Prepare()` 中构造实例、
 绑定属性、执行 OnCreate；类不存在、类型不匹配或 OnCreate 失败使候选加载失败，
 原生活动 World/图/资源不变。脚本是可信进程内代码，没有沙箱；
 静态字段、文件操作及脚本自行创建的线程不具备事务回滚语义。

@@ -60,17 +60,20 @@
 - 证据：一次"UI 半透明背景不与场景合成"的误判，其测量来源就是一张半截图；后续用受控实验证伪了该结论
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-11
 
-### [no-quit-path] `main.exe` 不会自行退出，也没有退出命令
+### [no-quit-path] `main.exe` 曾经没有退出路径，现在用 `--exit-after-frames` / `quit`
 
 - 适用场景：任何脚本化启动 `main.exe` 的流程（截图、手工核对、冒烟验证）
-- 失败表现：进程泄漏；`build\bin\main.exe` 被锁住，**下一次构建报 `Permission denied`**
-- 根因：应用没有退出路径 —— `source/debugConsole.cpp` 没有 `exit`/`quit` 命令（只有
-  debugview / tonemap / bloom / help / offline / loadworld / environment / screenshot /
-  camera / shaderreload / shadercache），`Quit` 只是 `UiAction`
-- 规避动作：启动后**必须自己终止进程**；等待截图落盘再 `Stop-Process`。
-  报告时区分"渲染证据"与"正常关闭流程证据"——强制终止**不构成** teardown 证据
-- 证据：本分支一次真实事故 —— 泄漏的进程存活约 25 分钟并锁住输出文件，使并发 agent 的构建失败
-- owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-11
+- 历史失败表现：进程泄漏；`build\bin\main.exe` 被锁住，**下一次构建报 `Permission denied`**
+- 旧根因：应用没有退出路径 —— `source/debugConsole.cpp` 没有 `exit`/`quit` 命令，
+  `Quit` 只是 `UiAction`
+- 当前行为（2026-11-10）：`--exit-after-frames <N>` 在 N 个完成帧后以退出码 0 结束；
+  控制台 `quit` 经 `CommandBus` 请求 EngineLoop 走既有 `Shutdown()` 路径。
+  两者都不依赖外部强制终止
+- 规避动作：优先用上述两个入口收尾；强制终止**不构成** teardown 证据，
+  报告时仍要区分"渲染证据"与"正常关闭流程证据"
+- 证据：本分支一次真实事故 —— 泄漏的进程存活约 25 分钟并锁住输出文件，使并发 agent 的构建失败；
+  退出入口由 `documents/plan/architecture/ue-runtime-editor-split-plan.md` P0 补齐
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-10
 
 ### [console-command-quoting] `--console-command` 的引号规则取决于调用方
 

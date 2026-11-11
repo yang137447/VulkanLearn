@@ -689,6 +689,11 @@ void ShaderCompiler::Initialize(const std::filesystem::path& initializeShaderRoo
     initialized = true;
 }
 
+void ShaderCompiler::SetExcludedShaderNames(std::vector<std::string> names)
+{
+    excludedShaderNames = std::move(names);
+}
+
 VL::ShaderBuildStatistics ShaderCompiler::StartCompile(
     const std::filesystem::path& startShaderRoot,
     bool forceRebuild)
@@ -733,8 +738,16 @@ VL::ShaderBuildStatistics ShaderCompiler::StartCompile(
         std::filesystem::path relative =
             std::filesystem::relative(entry.path(), glslRoot);
         relative.replace_extension();
+        const std::string shaderName = relative.generic_string();
+        if (std::find(
+                excludedShaderNames.begin(),
+                excludedShaderNames.end(),
+                shaderName) != excludedShaderNames.end())
+        {
+            continue;
+        }
         GraphicsSources& sources =
-            graphicsSources[relative.generic_string()];
+            graphicsSources[shaderName];
         if (extension == ".vert")
         {
             sources.vertex = entry.path();

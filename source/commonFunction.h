@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include "vulkanDebug.h"
+#include "vulkanManager.h"
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 constexpr uint32_t MAX_DESCRIPTOR_SETS = 4;
@@ -466,13 +467,21 @@ namespace CommonFunction
 
     inline vk::CommandBuffer BeginSingleTimeCommands(vk::Device& device, vk::CommandPool& commandPool)
     {
+        // A single-time pool is dedicated to uploads, but command buffers still
+        // borrow the parent pool for their lifetime. Serialize the whole
+        // begin..end sequence so concurrent uploads cannot trip validation.
+        GlobalVulkanSubmissionGate().LockSingleTimeQueue();
+        try
+        {
         vk::CommandBufferAllocateInfo allocInfo;
         allocInfo
             .setCommandPool(commandPool)
             .setLevel(vk::CommandBufferLevel::ePrimary)
             .setCommandBufferCount(1);
 
-        vk::CommandBuffer commandBuffer = device.allocateCommandBuffers(allocInfo)[0];
+        vk::CommandBuffer commandBuffer =
+            GlobalVulkanSubmissionGate().AllocateCommandBuffers(
+                device, allocInfo).front();
 
         vk::CommandBufferBeginInfo beginInfo;
         beginInfo
@@ -480,6 +489,12 @@ namespace CommonFunction
 
         commandBuffer.begin(beginInfo);
         return commandBuffer;
+        }
+        catch (...)
+        {
+            GlobalVulkanSubmissionGate().UnlockSingleTimeQueue();
+            throw;
+        }
     }
 
     inline void EndSingleTimeCommands(vk::Device& device, vk::CommandBuffer& commandBuffer, vk::Queue& graphicsQueue, vk::CommandPool& commandPool)
@@ -497,7 +512,8 @@ namespace CommonFunction
             submitInfo
                 .setCommandBuffers(commandBuffer);
 
-            graphicsQueue.submit(submitInfo, fence);
+            GlobalVulkanSubmissionGate().Submit(
+                graphicsQueue, submitInfo, fence);
             submitted = true;
             const vk::Result waitResult =
                 device.waitForFences(fence, true, UINT64_MAX);
@@ -509,8 +525,10 @@ namespace CommonFunction
 
             device.destroyFence(fence);
             fence = nullptr;
-            device.freeCommandBuffers(commandPool, commandBuffer);
+            GlobalVulkanSubmissionGate().FreeCommandBuffer(
+                device, commandPool, commandBuffer);
             commandBuffer = nullptr;
+            GlobalVulkanSubmissionGate().UnlockSingleTimeQueue();
         }
         catch (...)
         {
@@ -520,7 +538,7 @@ namespace CommonFunction
             {
                 try
                 {
-                    graphicsQueue.waitIdle();
+                    GlobalVulkanSubmissionGate().WaitIdle(device);
                 }
                 catch (...)
                 {
@@ -530,7 +548,8 @@ namespace CommonFunction
             {
                 try
                 {
-                    device.freeCommandBuffers(commandPool, commandBuffer);
+                    GlobalVulkanSubmissionGate().FreeCommandBuffer(
+                        device, commandPool, commandBuffer);
                 }
                 catch (...)
                 {
@@ -547,6 +566,7 @@ namespace CommonFunction
                 {
                 }
             }
+            GlobalVulkanSubmissionGate().UnlockSingleTimeQueue();
             throw;
         }
     }
@@ -563,8 +583,10 @@ namespace CommonFunction
 
         // 录制阶段发生异常时，command buffer 尚未提交，可以直接释放，
         // 避免 World candidate 失败后留下不可见的 command pool 资源。
-        device.freeCommandBuffers(commandPool, commandBuffer);
+        GlobalVulkanSubmissionGate().FreeCommandBuffer(
+            device, commandPool, commandBuffer);
         commandBuffer = nullptr;
+        GlobalVulkanSubmissionGate().UnlockSingleTimeQueue();
     }
 
     inline std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(vk::Device& device, vk::DeviceSize& size, vk::BufferUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")

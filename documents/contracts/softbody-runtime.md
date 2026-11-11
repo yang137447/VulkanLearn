@@ -34,11 +34,13 @@
 
 ## 资源与 World 数据
 
-`RendererResourceLoadCoordinator` 在候选资源包中加载 balloon 的材质实例，产生
-`SoftBodyObjectBuildPlan`。它只记录对象 TRS、软体参数、`materialKey` 和
-`materialInstanceKey`，不创建软体网格。
-
-`WorldBuilder` 把该计划转成 `WorldSoftBodyObject`。`World` 只保存作者参数与材质 key；
+`WorldLoader` 调用纯 `WorldGameplayPlanBuilder`，由它把 scene JSON 解析成
+`SoftBodyObjectBuildPlan`：对象 TRS、软体参数与作者材质路径
+`materialInstancePath`，不出现 renderer key 或 GPU 资源。
+`RendererResourceLoadCoordinator` 只解析该材质路径，返回
+`ResolvedMaterialBinding`（`materialKey` / `materialInstanceKey`）；
+`WorldBuilder` 合并 `WorldBuildPlan.gameplay` 与 `WorldAssemblyAssets` 后构造
+`WorldSoftBodyObject`。`World` 只保存作者参数与解析后的材质 key；
 `RubberShell` 粒子、动态网格和爆裂状态不进入 `World`。
 
 ## GT 运行时
@@ -53,8 +55,11 @@
 5. 添加 `WorldMeshObject`，复用场景解析出的 `materialKey`/`materialInstanceKey`；
 6. 后续 `WorldSnapshot` 通过普通 mesh draw 发布该对象。
 
-每帧 GT `Tick` 调用 `RubberShell::Step`，随后 `BuildRenderMesh` 并写入
-`RenderableObject::UpdateVertices`，同时更新 `WorldMeshObject` 局部 bounds。
+每帧 GT `Tick` 调用 `RubberShell::Step`，随后 `BuildRenderMesh` 并通过
+`RenderSystem::QueueDynamicVertices` 发布顶点（latest-wins）。RT 在录制前把队列
+应用到 `swapChainImageIndex % 3` 的 frame slot；`RenderableObject` 持有 3 组动态
+顶点缓冲，GT 不会写入仍被 in-flight 帧引用的槽。GT 同时更新
+`WorldMeshObject` 局部 bounds。
 
 ## 爆裂
 

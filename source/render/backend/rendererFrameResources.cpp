@@ -458,8 +458,6 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
     uint32_t swapChainImageIndex,
     MaterialInstance& materialInstance)
 {
-    const auto& parameters = materialInstance.GetParameters();
-
     std::shared_ptr<Material> baseMaterial = materialInstance.GetBaseMaterial().lock();
     if (!baseMaterial)
     {
@@ -478,16 +476,23 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         throw std::runtime_error("Material instance UBO is not initialized for this swapchain image.");
     }
 
+    // 一次加锁复制全部数值参数。预览提交只能整组替换，因此下面遍历的
+    // 是调用开始时那份不可变快照，不会与 GT 的 CommitNumericParameterValues
+    // 交错出撕裂的 map。
+    const MaterialInstanceNumericParameterValues parameterValues =
+        materialInstance.CaptureNumericParameterValues();
+    uint8_t* uboBase = static_cast<uint8_t*>(
+        materialInstance.GetUboMaterialInstanceMapped()[swapChainImageIndex]);
+
     for (size_t memberIndex = 0; memberIndex < uboBinding->memberNames.size(); ++memberIndex)
     {
         const std::string& memberName = uboBinding->memberNames[memberIndex];
-        auto paramIt = parameters.find(memberName);
-        if (paramIt == parameters.end())
+        const auto paramIt = parameterValues.find(memberName);
+        if (paramIt == parameterValues.end())
         {
             continue;
         }
 
-        const ParamMap& parameter = paramIt->second;
         if (memberIndex >= uboBinding->memberOffsets.size())
         {
             throw std::runtime_error("Material schema is missing a UBO member offset.");
@@ -495,29 +500,12 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         // 使用 schema 的 std140 offset，而不是把 CPU 參數尺寸連續相加。
         // 這保證 Base 與 ShadowDepth 共用同一份 MI UBO layout。
         const uint32_t offset = uboBinding->memberOffsets[memberIndex];
-        uint8_t* uboData =
-            static_cast<uint8_t*>(materialInstance.GetUboMaterialInstanceMapped()[swapChainImageIndex]) +
-            offset;
-        if (parameter.type == ParamType::Float)
-        {
-            const float value = materialInstance.GetParameter<float>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec2)
-        {
-            const Eigen::Vector2f value = materialInstance.GetParameter<Eigen::Vector2f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec3)
-        {
-            const Eigen::Vector3f value = materialInstance.GetParameter<Eigen::Vector3f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec4)
-        {
-            const Eigen::Vector4f value = materialInstance.GetParameter<Eigen::Vector4f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
+        std::visit(
+            [uboData = uboBase + offset](const auto& value)
+            {
+                std::memcpy(uboData, &value, sizeof(value));
+            },
+            paramIt->second);
     }
 }
 

@@ -15,8 +15,8 @@
 #include <RmlUi/Core/Input.h>
 
 #include "core/runtimeResult.h"
-#include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
+#include "ui/iEditorUiShell.h"
 #include "ui/rmlUiInterfaces.h"
 #include "ui/rmlUiRuntime.h"
 #include "ui/uiAction.h"
@@ -24,7 +24,7 @@
 #include "ui/uiRenderSnapshotQueue.h"
 #include "ui/uiUpdateScheduler.h"
 #include "ui/uiViewModelRefresh.h"
-#include "ui/uiViewModelSections.h"
+#include "ui/viewModel/runtimeUiSections.h"
 #include "ui/viewport/editorViewportGeometry.h"
 
 namespace Rml
@@ -40,26 +40,8 @@ namespace VL
 class CommandBus;
 class DiagnosticsSubsystem;
 class PlatformWindow;
-
-namespace Editor
-{
-    class MaterialInstanceEditorRuntime;
-    class SceneDocumentService;
-    class EditorJsonAssetLibrary;
-    class EditorThumbnailLibrary;
-namespace Selection
-{
+struct MaterialInstanceModelContext;
 struct MaterialInstanceSelection;
-}
-namespace Preview
-{
-class IMaterialInstancePreviewAdapter;
-}
-}
-
-namespace EditorUi
-{
-}
 
 // Describes UI assets, viewport, localization, fonts, and runtime feature switches.
 // RuntimeConfig supplies it; UiSubsystem owns the resulting widget contexts.
@@ -77,8 +59,9 @@ struct UiSubsystemDesc
     bool hotReload = true;
     bool developerUiEnabled = true;
     bool developerUiVisible = false;
-    // EngineLoop 注入 renderer-owned adapter；UiSubsystem 不拥有也不直接调用它。
-    Editor::Preview::IMaterialInstancePreviewAdapter* previewAdapter = nullptr;
+    // Editor-side preview adapter passed as an opaque init handle. Only
+    // uiSubsystem.cpp casts it, so this runtime header stays editor-free.
+    void* previewAdapter = nullptr;
 };
 
 struct UiSceneOption
@@ -95,11 +78,10 @@ struct UiSceneOption
     }
 };
 
-// GT 拥有运行时与编辑器 RML 文档；RT 只消费冻结的 draw snapshot。
+// GT 拥有运行时 RML 文档与唯一的 RmlUi context；编辑器文档由 EditorUiShell
+// 挂在同一个 context 上。RT 只消费冻结的 draw snapshot。
 // It publishes typed actions and immutable snapshots, but does not mutate renderer internals.
-class UiSubsystem : public EditorUi::IMaterialInstanceSceneSelectionSink,
-    public EditorUi::IEditorRuntimeActionSink,
-    public EditorUi::IEditorJsonAssetRequestSink
+class UiSubsystem : public IEditorUiRuntimeBridge
 {
 public:
     UiSubsystem();
@@ -132,24 +114,17 @@ public:
     void NotifyWorldLoadCompleted();
     // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
     void TickMaterialInstanceEditor();
-    Editor::SceneDocumentService* GetSceneDocuments() const;
-    Editor::MaterialInstanceEditorRuntime* GetEditorCommandRuntime() const
-    { return materialInstanceEditorRuntime.get(); }
-    Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const { return thumbnailLibrary.get(); }
-    bool CanRenderThumbnails() const
-    { return developerUiVisible && !sceneViewportInputActive && !editorPointerCaptured; }
+    bool CanRenderThumbnails() const;
     // 视口拾取只负责打开文档并记录导航来源，实际编辑仍经由 EditorCommand。
     bool SelectSceneObjectFromPick(
-        const Editor::Selection::MaterialInstanceSelection& selection);
+        const VL::MaterialInstanceSelection& selection);
     // MI 模型列表与大纲 actor 列表都是不可变数组的共享指针：同一份内容跨刷新复用，
     // 只有指针或选中态变化才提升大纲分节版本，避免每 100 ms 重挂面板 DOM。
-    void SetMaterialInstanceSceneModels(
-        std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> models);
-    void SetSceneActors(
-        std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors);
-    std::optional<Editor::Selection::MaterialInstanceModelContext>
+    void SetMaterialInstanceSceneModels(UiEditorSnapshotPayload models);
+    void SetSceneActors(UiEditorSnapshotPayload actors);
+    std::optional<VL::MaterialInstanceModelContext>
         ConsumeMaterialInstanceModelSelectionRequest();
-    std::optional<Editor::Selection::MaterialInstanceSelection>
+    std::optional<VL::MaterialInstanceSelection>
         ConsumeMaterialInstanceSelectionRequest();
     // 大纲选中非网格 actor 时要求清掉渲染端的 mesh 选中描边，避免出现
     // "大纲高亮灯光、视口还描着上一个网格" 的双选中态。
@@ -157,14 +132,49 @@ public:
     void ClearMaterialInstanceSceneSelection() noexcept;
 
     bool RequestModelSelection(
-        const Editor::Selection::MaterialInstanceModelContext& model) override;
+        const VL::MaterialInstanceModelContext& model);
     bool RequestMaterialSelection(
-        const Editor::Selection::MaterialInstanceSelection& selection) override;
-    bool RequestActorSelection(const std::string& actorIdentity) override;
+        const VL::MaterialInstanceSelection& selection);
+    bool RequestActorSelection(const std::string& actorIdentity);
     bool CancelBlueprintAssetDrag();
     void RequestRuntimeAction(UiAction action) override;
-    void RequestOpenJsonAsset(const std::string& assetPath) override;
-    void RequestRefreshAssetCatalog() override;
+    void RequestOpenJsonAsset(const std::string& assetPath);
+    void RequestRefreshAssetCatalog();
+
+    // Editor composition root registers its shell after the runtime context is
+    // created. Passing nullptr detaches/unloads editor documents before the
+    // runtime destroys the shared context.
+    RuntimeResult<void> SetEditorUiShell(IEditorUiShell* shell);
+    IEditorUiShell* editorUi() const noexcept { return editorUiShell; }
+
+    // IEditorUiRuntimeBridge: low-level services the editor shell borrows from
+    // the single runtime UI owner. The shell never owns RmlUi lifecycle.
+    bool ProcessRmlEvent(const PlatformEvent& event) override;
+    void ResetRmlInputState() override;
+    void TrackPointer(float x, float y) override
+    {
+        pointerX = x;
+        pointerY = y;
+    }
+    bool IsMouseButtonPressed(PlatformMouseButton button) const override
+    {
+        return rmlPressedMouseButtons.count(button) != 0;
+    }
+    bool HasPressedMouseButtons() const override
+    {
+        return !rmlPressedMouseButtons.empty();
+    }
+    bool IsKeyboardKeyPressed(PlatformKey key) const override
+    {
+        return rmlPressedKeyboardKeys.count(key) != 0;
+    }
+    void MarkPanelBuildMutation() override;
+    void BeginDocumentValidation() override;
+    bool EndDocumentValidation(std::string& outError) override;
+    void RecordSectionPublish(UiSectionId id) override;
+    void RecordPanelBuild() override;
+    void RecordRuntimeViewUpdate() override;
+    void ClearEditorUiShell(IEditorUiShell* shell) override;
 
     bool IsInitialized() const { return initialized; }
     bool IsDeveloperUiVisible() const { return developerUiVisible; }
@@ -225,6 +235,10 @@ public:
     UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return snapshotPublisher.Queue(); }
 
 private:
+    // 运行时分节存储在 .cpp；编辑器运行时/面板/资产库/缩略图库由
+    // IEditorUiShell 拥有，本头不暴露也不承担它们的析构。
+    struct Impl;
+
     void SetImmersiveView(bool enabled);
     using LocalizationTable = std::unordered_map<std::string, std::string>;
     using LocalizationDatabase = std::unordered_map<std::string, LocalizationTable>;
@@ -240,13 +254,10 @@ private:
 
     RuntimeResult<void> InitializeRmlUi();
     RuntimeResult<void> InitializeDataModel();
-    RuntimeResult<void> InitializeDeveloperUi();
-    RuntimeResult<void> InitializeMaterialInstanceEditor();
     RuntimeResult<void> LoadFonts();
     void LoadSceneOptions();
     RuntimeResult<LocalizationDatabase> LoadLocalizationCandidate() const;
     RuntimeResult<Rml::ElementDocument*> LoadDocumentCandidate();
-    RuntimeResult<Rml::ElementDocument*> LoadEditorDocumentCandidate();
     RuntimeResult<void> CommitInitialAssets();
     void CommitDocumentCandidate(
         Rml::ElementDocument& candidate,
@@ -262,19 +273,11 @@ private:
     // 返回 true 表示绑定值确实变化（已 DirtyVariable），调用方需要一次 RmlUi 更新。
     bool SyncWorldTextBinding();
     bool SyncGameplayTextBinding(const ScriptRuntimeView& scripts);
-    // 发布 UiSubsystem 拥有的三节（状态/资产/大纲）。只有内容变化才提升版本。
+    // 发布 UiSubsystem 拥有的状态节。资产/大纲由 EditorUiShell 发布。
     void PublishStatusSection(const UiViewModelFrameValues& frameValues);
-    void PublishAssetsSection();
-    void PublishSceneOutlinerSection();
-    void RecordSectionPublish(UiSectionId id) noexcept
-    {
-        ++refreshStats.sectionPublishes;
-        ++refreshStats.sectionPublishesById[static_cast<size_t>(id)];
-    }
     // 把本帧变化的分节写入投影（UiViewModelSnapshot）并做对应的绑定重脏。
     void ApplyChangedSections(UiSectionMask changed);
     void ApplyFrameValues(const UiViewModelFrameValues& frameValues);
-    void MarkSceneOutlinerDirty() noexcept { ++outlinerRevision; }
     // includeUiDocuments=false 时只发布 DrawDebug 叠层（沉浸模式仍显示调试图元）；
     // 仍会发布一份快照，从而清掉 RT 保留的上一帧工作区画面。
     void BuildAndPublishRenderSnapshot(bool includeUiDocuments);
@@ -286,6 +289,7 @@ private:
     void SetImmersiveDocumentStateIfRestored(const std::string& activeWorldPath);
     void RequestViewModelRefresh(
         UiSectionMask sections = UiSectionAll) noexcept
+        override
     {
         pendingSectionRefresh |= sections;
         // 事件声明了要重建的分节，就必然要走过一次 RmlUi 更新；即使版本比较
@@ -295,17 +299,14 @@ private:
     }
     // 面板的 Build 输入来自资产/大纲/脚本/状态四节；用户点击等面板本地交互也会
     // 请求一次构建，避免“数据没变但界面状态变了”的交互被门禁吞掉。
-    void RequestPanelBuild() noexcept
+    void RequestPanelBuild() noexcept override
     {
-        panelBuildRequested = true;
         uiUpdateScheduler.MarkMutation(UiMutationKind::PanelBuild);
     }
     std::unique_ptr<class DebugDrawLabels> debugDrawLabels;
-    void BuildDeveloperPanels();
     void UpdateInputOwnership();
 
     bool ProcessRuntimeUiEvent(const PlatformEvent& event);
-    bool ProcessDeveloperUiEvent(const PlatformEvent& event);
     bool PressRmlKey(Rml::Input::KeyIdentifier key, bool repeat, int modifiers = 0);
     bool ReleaseRmlKey(Rml::Input::KeyIdentifier key, int modifiers = 0);
     bool SetRmlAxisDirection(
@@ -321,49 +322,21 @@ private:
     PlatformWindow* window = nullptr;
     CommandBus* commandBus = nullptr;
     const DiagnosticsSubsystem* diagnostics = nullptr;
-    std::unique_ptr<Editor::MaterialInstanceEditorRuntime>
-        materialInstanceEditorRuntime;
-    std::unique_ptr<EditorUi::MaterialInstanceAssetEditorPanel>
-        materialInstanceEditorPanel;
-    std::unique_ptr<Editor::EditorJsonAssetLibrary> jsonAssetLibrary;
-    std::unique_ptr<Editor::EditorThumbnailLibrary> thumbnailLibrary;
-    std::optional<EditorUi::MaterialInstanceModelSnapshot>
-        selectedModelMaterials;
-    std::optional<uint32_t> selectedMaterialSlotIndex;
-    // 大纲/MI 模型列表都是不可变数组：只有内容或选中态变化才提升大纲节版本。
-    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>
-        sceneModels;
-    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>>
-        sceneActors;
-    // 分节存储是视图模型的唯一权威：九个节各自持有不可变载荷与版本。
-    UiViewModelSectionStore sectionStore;
+    std::unique_ptr<Impl> impl;
+    IEditorUiShell* editorUiShell = nullptr;
     // 已应用到面板/绑定的版本集合；ChangedFrom 产生本帧的脏集。
     UiSectionVersions appliedSectionVersions;
-    UiAssetsSection appliedAssets;
+    UiSectionVersions appliedEditorSectionVersions;
     UiPerformanceSection appliedPerformance;
-    // 大纲节版本源：actor/模型指针替换或选中态变化时推进；不引入第二份选择状态。
-    uint64_t outlinerRevision = 0;
     // 上一份离线节里的模式，用于判断本次发布是否真的发生了模式切换。
     bool lastPublishedOfflineMode = false;
-    // 面板本地交互（点击/滚轮/键盘）请求一次构建；不包含悬停移动。
-    bool panelBuildRequested = true;
     RefreshStats refreshStats;
     UiSectionMask pendingSectionRefresh = UiSectionAll;
     // RuntimeHud 档位的逐帧脚本文本；不覆盖编辑器投影里的类/反馈字段。
     ScriptRuntimeView hudScripts;
     UiViewModelBuildMode currentBuildMode = UiViewModelBuildMode::None;
-    // TickMaterialInstanceEditor 只在脚本节版本变化时把蓝图类转交给资产文档服务。
-    uint64_t blueprintClassesVersion = 0;
-    // 大纲选中态是稳定身份（"mesh|…"、"pointLight|…"），World 换代时清空。
-    std::string selectedActorIdentity;
-    bool pendingSceneSelectionClear = false;
-    std::optional<Editor::Selection::MaterialInstanceModelContext>
-        pendingMaterialInstanceModelSelection;
-    std::optional<Editor::Selection::MaterialInstanceSelection>
-        pendingMaterialInstanceSelection;
     Rml::Context* rmlContext = nullptr;
     Rml::ElementDocument* runtimeDocument = nullptr;
-    Rml::ElementDocument* editorDocument = nullptr;
     // 本子系统服务的窗口序号。它唯一的用途是给 RmlUi context 起唯一名字
     // （`Rml::CreateContext` 要求名字唯一），因此必须是稳定身份而不是指针值。
     // 多窗口接线时由创建方按窗口注册表填入。
@@ -405,9 +378,6 @@ private:
     bool immersiveLoadCompleted = false;
     float pointerX = 0.0f;
     float pointerY = 0.0f;
-    bool editorPointerCaptured = false;
-    // Viewport 捕获后不再用绝对光标位置决定输入归属，避免相对鼠标移出时误释放。
-    bool sceneViewportInputActive = false;
     bool gamepadConnected = false;
     bool rmlAxisLeftDown = false;
     bool rmlAxisRightDown = false;

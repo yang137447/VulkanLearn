@@ -4,10 +4,11 @@
 
 ## Status
 
-Current contract, 2026-10-12: RmlUi serves the minimal runtime HUD and the
-runtime-toggleable editor workspace. ImGui and its CMake option are removed.
-SDL3 remains the event/text-input boundary; VulkanLearn records the final
-overlay on the render thread.
+Current contract, 2026-11-11: RmlUi serves the minimal runtime HUD and the
+runtime-toggleable editor workspace from one `UiSubsystem`-owned context.
+Editor documents attach through `IEditorUiShell` in the editor module.
+ImGui and its CMake option are removed. SDL3 remains the event/text-input
+boundary; VulkanLearn records the final overlay on the render thread.
 
 `documents/plan/ui/game-ui-stack-plan.md` is historical adoption context.
 `documents/plan/ui/rmlui-editor-plan.md` separates the current migration baseline
@@ -510,10 +511,28 @@ There is no second UI-to-renderer mutation route.
 
 ## Threading And Ownership
 
-GT owns `UiSubsystem`, the RmlUi context, both documents, input arbitration,
-reload and view updates. When the update scheduler says the visible UI changed
-(or on a hidden frame), Update publishes one immutable snapshot through
-`UiRenderSnapshotQueue`, which retains only the newest.
+The runtime owns the only RmlUi runtime and context. `UiSubsystem` acquires the
+process-wide RmlUi runtime through `RmlUiRuntime::Acquire` (reference-counted;
+the actual `Rml::Initialise`/`Shutdown` pairing lives in `RmlUiRuntime`), creates
+the context, loads fonts and `runtime-hud.rml`, arbitrates input, calls every
+`Context::Update`, and publishes the render snapshot. `EditorUiShell` implements `IEditorUiShell`
+(`source/ui/iEditorUiShell.h`), attaches `editor-workspace.rml` and editor
+documents to that same context, and borrows event dispatch, panel rebuild
+requests, command queueing and refresh scheduling through
+`IEditorUiRuntimeBridge`. It never owns RmlUi initialization, the context or
+`Context::Update`.
+
+`EngineLoop` injects the editor host before runtime systems initialize; game
+builds inject `NullEditorHost`. `EditorHost` creates `EditorUiShell` and
+registers it with `UiSubsystem::SetEditorUiShell`; the shell unregisters itself
+when destroyed. Shutdown detaches editor documents before the runtime destroys
+the shared context, so editor-owned textures and document handles never outlive
+the interface that published them.
+
+GT owns `UiSubsystem`, the RmlUi context, runtime and editor documents, input
+arbitration, reload and view updates. When the update scheduler says the visible
+UI changed (or on a hidden frame), Update publishes one immutable snapshot
+through `UiRenderSnapshotQueue`, which retains only the newest.
 RT consumes that snapshot and otherwise keeps the last one it consumed. A
 skipped frame therefore leaves the previous immutable snapshot in place on both
 sides; the publisher also retains its identity. RT never traverses live documents
@@ -528,7 +547,11 @@ then destroys UI and renderer resources through their existing owners.
 
 ## Input
 
-Priority is global shortcuts, editor workspace, then game.
+`UiSubsystem::HandlePlatformEvent` owns dispatch order. Editor global shortcuts
+(currently Ctrl+S) run first when the workspace is visible, then runtime global
+shortcuts, then the editor workspace document, then the runtime HUD/game.
+`IEditorUiShell` reports whether it consumed the event; the runtime retains the
+single `Rml::Context` and never lets the editor shell dispatch RmlUi directly.
 Editor focus and modals consume only input events. Application lifecycle events
 such as `PlatformEventType::Quit` continue to EngineLoop, so the native window
 close button still exits while a panel has focus or a modal is open.

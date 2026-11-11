@@ -52,7 +52,11 @@ namespace
         std::ostringstream stream;
         stream << "#ifndef " << guardName << "\n";
         stream << "#define " << guardName << "\n\n";
-        stream << "// Generated from " << MaterialAssetUtils::ToGenericString(materialFilePath) << ".\n";
+        const auto shaderRoot = FindShaderGlslRoot(materialFilePath);
+        stream << "// Generated from "
+               << MaterialAssetUtils::ToGenericString(
+                      std::filesystem::relative(materialFilePath, shaderRoot))
+               << ".\n";
         stream << "// Do not edit by hand.\n\n";
         stream << "#include \"" << BuildShadingModelIncludePath(materialFilePath) << "\"\n\n";
         stream << "#ifndef MATERIAL_SHADING_MODEL\n";

@@ -1,5 +1,8 @@
 #include "render/resource/rendererThumbnailImages.h"
 
+#include <utility>
+#include <vector>
+
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
 
@@ -30,7 +33,12 @@ std::shared_ptr<const RendererGpuImageToken> RendererThumbnailImages::RecordCopy
     vk::CommandBuffer command, vk::Image source, uint32_t width, uint32_t height)
 {
     CollectUnused();
-    const auto token = std::make_shared<const RendererGpuImageToken>(nextId++, width, height);
+    uint64_t id = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        id = nextId++;
+    }
+    const auto token = std::make_shared<const RendererGpuImageToken>(id, width, height);
     auto image = std::make_shared<Image>(backend);
     const std::string name = "ThumbnailImage: " + std::to_string(token->id);
     // 拷贝保留 toneMapping 输出的 sRGB 字节；两种兼容 view 分别服务
@@ -52,7 +60,10 @@ std::shared_ptr<const RendererGpuImageToken> RendererThumbnailImages::RecordCopy
         vk::ImageAspectFlagBits::eColor, name + ":UNORM");
     image->sampler = backend.Create2DSampler(vk::Filter::eLinear,
         vk::SamplerAddressMode::eClampToEdge, false, name);
-    images.emplace(token->id, Entry{token, image});
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        images.emplace(token->id, Entry{token, image});
+    }
 
     vk::ImageMemoryBarrier barrier;
     barrier.setImage(image->image).setOldLayout(vk::ImageLayout::eUndefined)
@@ -80,6 +91,7 @@ std::shared_ptr<const RendererGpuImageToken> RendererThumbnailImages::RecordCopy
 
 vk::DescriptorImageInfo RendererThumbnailImages::GetDescriptor(uint64_t id, bool linearSampling) const
 {
+    std::lock_guard<std::mutex> lock(mutex);
     const auto& image = *images.at(id).image;
     return {image.sampler, linearSampling ? image.linearView : image.encodedView,
         vk::ImageLayout::eShaderReadOnlyOptimal};
@@ -87,15 +99,25 @@ vk::DescriptorImageInfo RendererThumbnailImages::GetDescriptor(uint64_t id, bool
 
 void RendererThumbnailImages::CollectUnused()
 {
-    for (auto it = images.begin(); it != images.end();)
+    std::vector<std::pair<uint64_t, std::shared_ptr<Image>>> retired;
     {
-        if (!it->second.token.expired()) { ++it; continue; }
+        std::lock_guard<std::mutex> lock(mutex);
+        for (auto it = images.begin(); it != images.end();)
+        {
+            if (!it->second.token.expired()) { ++it; continue; }
+            retired.emplace_back(it->first, std::move(it->second.image));
+            it = images.erase(it);
+        }
+    }
+
+    for (auto& [id, image] : retired)
+    {
         // UI 快照和待退休 descriptor 都固定 token；最后一个引用消失后，
         // 仍经过主帧 epoch，不能因 Refresh/LRU 淘汰直接销毁在途图像。
         ResourceRetireQueue::GetInstance().RetireShared(
-            "ThumbnailImage: " + std::to_string(it->first), 0,
-            ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(), std::move(it->second.image));
-        it = images.erase(it);
+            "ThumbnailImage: " + std::to_string(id), 0,
+            ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(),
+            std::move(image));
     }
 }
 

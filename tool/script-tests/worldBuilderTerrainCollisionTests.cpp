@@ -7,7 +7,7 @@
 #include "scene/sceneAssetTypes.h"
 #include "script/scriptPhysics.h"
 #include "world/loading/worldBuilder.h"
-#include "world/loading/worldLoader.h"
+#include "world/worldBuildPlan.h"
 #include "world/world.h"
 
 namespace
@@ -117,7 +117,7 @@ TEST(WorldBuilderTerrainCollision, BuildsOneInstancePerTerrainPlacement)
         ObjectPlan(2, "TerrainB", "terrain", TerrainPlan("terrain|TerrainB")));
 
     const auto result = VL::WorldBuilder().BuildFromLoadedScene(
-        1, buildPlan, 4);
+        1, buildPlan, VL::WorldAssemblyAssets{}, 4);
     ASSERT_TRUE(result.IsSuccess()) << result.Error().message;
     const auto& instances = result.Value()->GetTerrainCollisionInstances();
     ASSERT_EQ(instances.size(), 2u);
@@ -146,7 +146,7 @@ TEST(WorldBuilderTerrainCollision, NonPositiveScaleFailsWorldBuild)
         ObjectPlan(1, "TerrainA", "terrain", TerrainPlan("terrain|TerrainA")));
 
     const auto result = VL::WorldBuilder().BuildFromLoadedScene(
-        1, buildPlan, 4);
+        1, buildPlan, VL::WorldAssemblyAssets{}, 4);
     ASSERT_TRUE(result.IsFailure());
     EXPECT_EQ(result.Error().code, "TerrainCollision.NonPositiveScale");
 }
@@ -165,7 +165,8 @@ TEST(WorldBuilderTerrainCollision, WorldInstancesFeedPlayPhysicsWorld)
     buildPlan.sceneAssetPlan.objectPlans.push_back(
         ObjectPlan(1, "TerrainA", "terrain", TerrainPlan("terrain|TerrainA")));
 
-    const auto result = VL::WorldBuilder().BuildFromLoadedScene(1, buildPlan, 4);
+    const auto result = VL::WorldBuilder().BuildFromLoadedScene(
+        1, buildPlan, VL::WorldAssemblyAssets{}, 4);
     ASSERT_TRUE(result.IsSuccess()) << result.Error().message;
 
     // 与 ScriptRuntimeSubsystem::Control 的 Play 路径相同：World 的只读实例

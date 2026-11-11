@@ -35,9 +35,12 @@ solver 的材质变体”。profile 同时提供密度、摩擦/恢复、伤害�
 
 ## 资源与 World 数据
 
-`RendererResourceLoadCoordinator` 为 glassPane 加载材质实例，产生
-`GlassObjectBuildPlan`；`WorldBuilder` 把它转成 `WorldGlassObject`。`World` 只保存
-作者参数、TRS 和材质 key；完整板网格、碎片、Jolt body 和裂纹状态都在 GT 侧
+`WorldLoader` / `WorldGameplayPlanBuilder` 产生纯 `GlassObjectBuildPlan`
+（作者参数、TRS、`materialInstancePath`、可选
+`crackMaterialInstancePath`）；`RendererResourceLoadCoordinator` 只解析这些材质路径为
+`ResolvedMaterialBinding`；`WorldBuilder` 合并 `WorldBuildPlan.gameplay` 与
+`WorldAssemblyAssets` 后构造 `WorldGlassObject`。`World` 只保存作者参数、TRS 和
+解析后的材质 key；完整板网格、碎片、Jolt body 和裂纹状态都在 GT 侧
 `GlassRuntime` 内，不进入 `WorldSnapshot`。
 
 ## 完整板
@@ -139,7 +142,8 @@ attached 板片，就一定能被继续打掉。
 
 - 构造时按 `vertexCapacity/indexCapacity`（64 顶点 / 48 索引分档）一次分配
   host-visible 顶点与索引缓冲；
-- `UpdateDynamicMesh` 可整批替换拓扑，只要不超过容量；
+- `QueueDynamicMesh` 可整批替换拓扑，只要不超过容量；RT 在录制前把队列应用到
+  `swapChainImageIndex % 3` 的 frame slot，`RenderableObject` 持有 3 组缓冲；
 - 回收时对象先按 GPU epoch 进入 `pendingShardMeshes`，epoch 完成后回到
   `freeShardMeshes`，由新碎片复用，避免 100+ 片时反复创建/销毁 buffer；
 - 整板和箭矢仍使用普通 `RenderableObject`，不进入池。
