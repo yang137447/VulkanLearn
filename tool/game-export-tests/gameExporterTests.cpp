@@ -226,6 +226,10 @@ protected:
                                    {"surface", "M_glass_crack.surface.glsl"}}}});
         Write(options.projectRoot / "shader/glsl/M_glass_crack.vertex.glsl", "void main(){}");
         Write(options.projectRoot / "shader/glsl/M_glass_crack.surface.glsl", "vec3 surface(){}");
+        options.mingwRuntimeDirectory = root / "mingw/bin";
+        for (const auto* runtime :
+            {"libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"})
+            Write(options.mingwRuntimeDirectory / runtime, "mingw runtime");
         WriteGameShaderCache();
     }
 

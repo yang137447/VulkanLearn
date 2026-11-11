@@ -836,9 +836,33 @@ GameExportResult ExportGame(const GameExportOptions& options)
         {
             executable = SelectDevExecutable(binaries);
         }
-        files.Copy(executable, executable.filename());
-        for (const auto& dependency : CollectNativeGameDependencies(executable))
-            files.Copy(dependency, dependency.filename());
+    files.Copy(executable, executable.filename());
+    const std::vector<std::string> mingwRuntimeDlls = {
+        "libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"};
+    auto isMingwRuntime = [&mingwRuntimeDlls](const std::string& name)
+    {
+        for (const auto& runtime : mingwRuntimeDlls)
+            if (Lower(name) == Lower(runtime)) return true;
+        return false;
+    };
+    for (const auto& dependency : CollectNativeGameDependencies(executable))
+    {
+        if (isMingwRuntime(dependency.filename().string())) continue;
+        files.Copy(dependency, dependency.filename());
+    }
+    if (options.flavor == GameExportFlavor::Game)
+    {
+        if (options.mingwRuntimeDirectory.empty())
+            throw std::runtime_error(
+                "Game export requires --mingw-runtime-dir (or a CMake-built VL_MINGW_RUNTIME_DIR).");
+        for (const auto& runtime : mingwRuntimeDlls)
+        {
+            const auto source = options.mingwRuntimeDirectory / runtime;
+            if (!fs::is_regular_file(source))
+                throw std::runtime_error("Missing MinGW runtime DLL: " + source.string());
+            files.Copy(source, runtime);
+        }
+    }
         if (!gameFlavor)
         {
             files.Tree(project / "shader/glsl", "shader/glsl");
@@ -925,6 +949,10 @@ void VerifyGamePackage(const std::filesystem::path& packageDirectory)
     const auto marker = ReadJson(package / kBuildFlavorMarker);
     if (marker.value("editorEnabled", true) || marker.value("flavor", std::string()) != "game")
         throw std::runtime_error("Packaged vl_build_flavor.json is not a game build marker");
+    for (const auto* runtime :
+        {"libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"})
+        if (!fs::is_regular_file(package / runtime))
+            throw std::runtime_error(std::string("Packaged game is missing MinGW runtime DLL: ") + runtime);
 
     const Json graph = ReadJson(package / "config/renderGraphConfig.json");
     bool selectionMask = false;

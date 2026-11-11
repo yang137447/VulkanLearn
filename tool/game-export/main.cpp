@@ -23,6 +23,9 @@ int main(int argc, char** argv)
 #ifdef VL_EXPORT_DOTNET_ROOT
         options.dotnetRoot = VL_EXPORT_DOTNET_ROOT;
 #endif
+#ifdef VL_MINGW_RUNTIME_DIR
+        options.mingwRuntimeDirectory = VL_MINGW_RUNTIME_DIR;
+#endif
 #ifndef VL_EXPORT_CSHARP_ENABLED
         options.csharpEnabled = false;
 #endif
@@ -34,6 +37,7 @@ int main(int argc, char** argv)
                 std::cout << "vl_export_game --project-root <root> --initial-scene <resource-relative.json> "
                     "--output <new-directory> [--dynamic-assets <json-array-file>] "
                     "[--binary-directory <directory>] [--dotnet-root <directory>] "
+                    "[--mingw-runtime-dir <directory>] "
                     "[--flavor dev|game]\n"
                     "vl_export_game --verify-package <directory>\n";
                 return 0;
@@ -52,6 +56,7 @@ int main(int argc, char** argv)
             else if (argument == "--output") options.outputDirectory = value;
             else if (argument == "--binary-directory") options.binaryDirectory = value;
             else if (argument == "--dotnet-root") options.dotnetRoot = value;
+            else if (argument == "--mingw-runtime-dir") options.mingwRuntimeDirectory = value;
             else if (argument == "--flavor")
             {
                 if (value == "dev") options.flavor = VL::GameExportFlavor::Dev;

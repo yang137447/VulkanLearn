@@ -1,0 +1,21 @@
+{
+  "generatedBy": "tool/deps-stamp.ps1 -UpdateLock",
+  "lockSha256": "d851f232bc5188b9df32c59162d20e273bb36442e8471fff9f75541d8378b3f4",
+  "lockVersion": 1,
+  "manifest": {
+    "path": "ThirdParty/manifest.json",
+    "schema": "vulkanlearn-deps-manifest/v1",
+    "sha256": "840e5a8ecd06abffd6a0451415529dc57baf1cbef6bad77164a387c138e256a1"
+  },
+  "normalization": "UTF-8 without BOM; object keys sorted ordinal; arrays in declared order; 2-space indent; LF",
+  "optionSet": {
+    "project": "dependencies[].cmake.{declaredOptions,featureOptions,superbuildRequired}, sorted by name",
+    "sha256": "ab476b02b42350bb088130fbde60ed2b3c12fc6e6ec02af7233bc3caa6f8dd59"
+  },
+  "patches": {
+    "files": [],
+    "root": "ThirdParty/patches",
+    "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "schema": "vulkanlearn-deps-lock/v1"
+}

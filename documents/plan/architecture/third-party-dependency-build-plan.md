@@ -5,7 +5,8 @@
 - Type: build-infrastructure implementation plan (not a contract)
 - Created: 2026-11-11; revised after repository verification and independent review
 - Base: `codex/ue-runtime-editor-split` (`3b22f70`)
-- State: planned, not implemented
+- State: D0 and D1 implemented and committed (`23a922f`); D2 implemented as docs/scripts;
+  D3-D5 planned
 - Review: independent read-only review returned "approve with changes"; B1-B5 folded in
 - Related: `documents/plan/architecture/ue-runtime-editor-split-plan.md`,
   `documents/contracts/testing.md`, `CMakePresets.json`, `CMakeLists.txt`,
@@ -279,6 +280,10 @@ the fetch without the `if(TARGET Jolt) return()` guard and calls it again.
 
 One prefix per feature set: an animation-tools worktree cannot share the daily prefix.
 
+D2 implements the identity/input half of this stamp (toolchain, compiler, CRT, config,
+flags, feature options, `deps.lock` hashes). Installed artifact hashes are added in D3,
+once a prefix actually contains built libraries.
+
 ### Mode selection
 
 `VULKANLEARN_DEPS_MODE`:
@@ -321,6 +326,172 @@ tool\clean-project.ps1 -BuildDir build-vscode\development -Apply
 game-only builds; use the `debug` preset (`build`, tests ON) for editor/game tests, since
 `build-game` is game-only with tests OFF.
 
+## D2 Implementation: manifest, lock, stamp and GC
+
+State: implemented 2026-11-11 as documentation, JSON and PowerShell only. No `CMakeLists.txt`,
+`source/**` or `tool/game-export/**` change is part of D2.
+
+| Path | Role |
+|---|---|
+| `ThirdParty/manifest.json` | authoritative dependency inventory and option table |
+| `ThirdParty/deps.lock` | deterministic lock regenerated from the manifest and patch set |
+| `tool/deps-stamp.ps1` | computes, writes or checks `<prefix>/deps-stamp.json`; `-UpdateLock` regenerates the lock |
+| `tool/deps-gc.ps1` | dry-run-first prefix garbage collector |
+
+### Manifest schema (`vulkanlearn-deps-manifest/v1`)
+
+```json
+{
+  "schema": "vulkanlearn-deps-manifest/v1",
+  "manifestVersion": 1,
+  "updated": "YYYY-MM-DD",
+  "purpose": "one line",
+  "policy": {
+    "sourceKinds": ["vendored", "fetchcontent", "system"],
+    "prefixLayout": "D:\\YYBWorkSpace\\VulkanLearn-deps\\<toolchain-id>\\<config>",
+    "toolchainIdFormat": "win64-mingw-<gcc-version>-<crt>",
+    "lockFile": "ThirdParty/deps.lock",
+    "stampFile": "<prefix>/deps-stamp.json",
+    "manifestHashInPrefixPath": false
+  },
+  "superbuildScope": ["SDL3", "Assimp", "OpenEXR", "RmlUi", "FreeType", "Jolt"],
+  "featureOptions": [
+    { "name": "VULKANLEARN_BUILD_ANIMATION_TOOLS", "default": "OFF",
+      "affects": [{ "dependency": "Assimp", "options": { } }] }
+  ],
+  "dependencies": []
+}
+```
+
+Per dependency:
+
+```json
+{
+  "name": "SDL3",
+  "role": "heavy | header-only | small-static | prebuilt | optional-object | test-only",
+  "sourceKind": "vendored | fetchcontent | system",
+  "version": "upstream tag, commit or 1.3.250",
+  "revision": "tag or commit when sourceKind is fetchcontent",
+  "origin": { "type": "git | url", "url": "...", "tag": "...", "sha256": "...", "declaredBy": "path:line" },
+  "sourceDir": "extern/SDL3/SDL3 or <build>/_deps/<name>-src",
+  "path": "extern/... for vendored entries",
+  "wrapper": "the CMake file that declares it",
+  "targets": ["SDL3::SDL3"],
+  "linkType": "shared | static | interface | object | prebuilt-static | prebuilt-shared",
+  "superbuild": true,
+  "transitive": true,
+  "parent": "OpenEXR",
+  "contentTree": "git tree object id for vendored directories",
+  "artifacts": [{ "path": "...", "sha256": "...", "bytes": 0 }],
+  "patches": [],
+  "cmake": {
+    "declaredOptions": {},
+    "featureOptions": { "<VULKANLEARN_OPTION>": { "OFF": {}, "ON": {} } },
+    "resolvedOptions": {},
+    "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+    "superbuildRequired": {}
+  },
+  "notes": "why this entry exists or what is missing"
+}
+```
+
+Rules:
+
+- `declaredOptions` is what the repository's wrapper sets today. `resolvedOptions` is
+  captured evidence from `build-game/CMakeCache.txt`, not a second source of truth.
+  `superbuildRequired` is the D3 option table that must be forced when the dependency is
+  built as a root `ExternalProject`.
+- `featureOptions` records options that change the dependency's build, keyed by the
+  `VULKANLEARN_*` value. `VULKANLEARN_BUILD_ANIMATION_TOOLS` toggles Assimp's exporter set;
+  `VULKANLEARN_BUILD_TESTS` decides whether googletest exists at all.
+- Prebuilt committed artifacts (Shaderc, VulkanSDK, SPIRV-Reflect) have no usable upstream
+  version string. Their `artifacts[].sha256` is the pin, and `contentTree` pins the whole
+  vendored directory. MikkTSpace is pinned the same way.
+- `system` is a legal `sourceKind` for future non-Windows packages, but no entry uses it:
+  the current build is Windows-first and self-bootstrapping.
+- `ThirdParty/patches/` is empty today. Adding `patches/<dependency>/*.patch` changes the
+  lock automatically.
+
+### Option table location
+
+The authoritative option table is `ThirdParty/manifest.json ->
+dependencies[].cmake.{declaredOptions,featureOptions,superbuildRequired}`. The tables in
+the Tier 3 sections above are the review record and must not be edited independently.
+`tool/deps-stamp.ps1 -UpdateLock` hashes a projection of exactly those three maps, so an
+option edit without a lock update is a hard failure.
+
+### Lock schema (`vulkanlearn-deps-lock/v1`)
+
+`ThirdParty/deps.lock` is deterministic: no timestamps, keys sorted ordinal, arrays in
+declared order, UTF-8 without BOM, LF.
+
+```json
+{
+  "schema": "vulkanlearn-deps-lock/v1",
+  "lockVersion": 1,
+  "generatedBy": "tool/deps-stamp.ps1 -UpdateLock",
+  "normalization": "UTF-8 without BOM; object keys sorted ordinal; arrays in declared order; 2-space indent; LF",
+  "manifest": { "path": "ThirdParty/manifest.json", "schema": "...", "sha256": "..." },
+  "optionSet": { "project": "...", "sha256": "..." },
+  "patches": { "root": "ThirdParty/patches", "files": [], "sha256": "..." },
+  "lockSha256": "..."
+}
+```
+
+`lockSha256` covers every field except itself. The stamp consumes
+`manifest.sha256`, `optionSet.sha256`, `patches.sha256` and `lockSha256`; it does not
+consume the manifest path or file mtime. Reformatting the manifest does not change the
+hash; editing any value, option or patch does.
+
+### Stamp fields (`<prefix>/deps-stamp.json`, `vulkanlearn-deps-stamp/v1`)
+
+| Field | Content |
+|---|---|
+| `schema` | `vulkanlearn-deps-stamp/v1` |
+| `prefix` | resolved absolute prefix; informational, excluded from `identitySha256` so a moved prefix is still comparable |
+| `createdAt`, `lastUsed` | UTC ISO-8601; `lastUsed` is refreshed by a successful `-Check` unless `-NoTouch` |
+| `identity.platform` | `win64` or `win-arm64`, derived from the compiler target triple |
+| `identity.toolchainId` | `win64-mingw-<gcc-version>-<crt>` |
+| `identity.compiler` | `{id, version, path, target, crt}`; CRT is detected from `libstdc++-6.dll` imports (`api-ms-win-crt-*` or `msvcrt.dll`) with a `gcc -v` fallback |
+| `identity.generator`, `identity.cmakeVersion` | from `CMakeCache.txt` |
+| `identity.config` | `Debug`, `Release`, `RelWithDebInfo` or `MinSizeRel` |
+| `inputs.flags` | base and per-config `CMAKE_{C,CXX}_FLAGS`, `CMAKE_{EXE,SHARED,MODULE}_LINKER_FLAGS` |
+| `inputs.featureOptions` | every `manifest.featureOptions[].name` resolved from the cache, `<unset>` when absent |
+| `inputs.manifestSha256`, `optionSetSha256`, `patchSetSha256`, `lockSha256` | copied from `deps.lock` |
+| `identitySha256` | SHA-256 of the deterministic `{identity, inputs}` payload |
+
+`-Check` fails with exit 1 when the stamp is missing, internally inconsistent (a hand-edited
+field whose `identitySha256` no longer covers it), or differs from the current build tree.
+It prints field-by-field `stamp=`/`current=` differences. `-Write` creates the prefix
+directory and the stamp; `-UpdateLock` needs no build tree.
+
+The manifest hash must never appear in the prefix path: a manifest edit would orphan the
+entire prefix. The stamp is the only authority for "this prefix is current".
+
+### GC policy (`tool/deps-gc.ps1`)
+
+- Dry run by default; deletion requires `-Apply`.
+- `-DepsRoot` defaults to `D:\YYBWorkSpace\VulkanLearn-deps`. The root must exist, be an
+  absolute path, not a drive root, not shorter than 12 characters, and not inside the
+  repository. An empty root (no stamped prefixes) is a hard failure, not a no-op.
+- Only `<deps-root>/<toolchain-id>/<config>` directories are considered, and only when they
+  contain `deps-stamp.json`. Reparse points are skipped and never deleted. Every deletion
+  re-resolves the path and asserts it stays under the root.
+- Build trees are scanned for references: each worktree's `build*/CMakeCache.txt` and any
+  build-side `deps-stamp.json`. A prefix is never deleted while referenced. The check
+  accepts the full path or the `\<toolchain-id>\<config>` suffix, so a cache written through
+  an 8.3 path (`%TEMP%`) still matches a long-path stamp.
+- Hard keeps: the current toolchain's `Debug` and `Release` (`-KeepConfigs` overrides the
+  set), the most recently used config of that toolchain (normally the daily
+  `RelWithDebInfo` preset), plus every prefix of one previous toolchain. A stamp that is
+  missing, unreadable or does not match its own prefix is kept and reported as
+  `keep-invalid`.
+- Budget: 20 GB by default (`-BudgetGB`). Non-hard-kept prefixes are deleted least-recently
+  used first until the total fits. If the hard-kept set alone exceeds the budget, GC warns
+  and deletes nothing from that set.
+- After deleting the last config of a toolchain, the now-empty toolchain directory is
+  removed under the same safety checks.
+
 ### Acceptance
 
 - Delete a build directory, configure `prebuilt`, build: zero third-party compiles and no
@@ -339,7 +510,7 @@ game-only builds; use the `debug` preset (`build`, tests ON) for editor/game tes
 |---|---|---|---|
 | D0 | ccache launcher, `ASSIMP_BUILD_USE_CCACHE=OFF`, cache dir/size, hash-dir decision | `--zero-stats` then project rebuild: >90% hits, zero cleanups | remove preset keys |
 | D1 | `tool/clean-project.ps1` (object-level) | 283 project objects recompiled, zero dependency objects, no "No rule to make target" | delete script |
-| D2 | `ThirdParty/manifest.json` + stamp script + option table | stamp changes on flags/compiler/feature/manifest change | docs/script only |
+| D2 | `ThirdParty/manifest.json`, `ThirdParty/deps.lock`, `tool/deps-stamp.ps1`, `tool/deps-gc.ps1` | stamp mismatch on flags/compiler/feature/manifest change; GC refuses an empty root and a referenced prefix | docs/script only |
 | D3 | per-dependency superbuild (ExternalProject) for the six | `find_package(vl_deps)` imports all six with the alias table | stay on `source` mode |
 | D4 | `VULKANLEARN_DEPS_MODE` + per-dependency skip + runtime closure | `prebuilt` clean build offline; `main_game` runs without MinGW on `PATH` | `source` mode |
 | D5 | source cache for every fetched dependency; remove Jolt duplication; gate Tracy/NVTX | `source` mode configures offline from the cache | revert entries |

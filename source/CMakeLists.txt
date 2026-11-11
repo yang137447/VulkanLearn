@@ -53,10 +53,6 @@ endforeach()
 add_library(vl_runtime STATIC ${sources})
 target_include_directories(vl_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." OFF)
-option(VULKANLEARN_ENABLE_NVTX "Enable NVIDIA NVTX profiler markers." OFF)
-option(VULKANLEARN_ENABLE_VULKAN_VALIDATION "Enable Vulkan validation layer and debug markers." ON)
-
 function(vl_apply_runtime_options target)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(VULKANLEARN_ENABLE_TRACY)

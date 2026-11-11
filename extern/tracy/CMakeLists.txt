@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 
+if(NOT VULKANLEARN_ENABLE_TRACY)
+    message(STATUS "Tracy disabled; skipping source fetch")
+    return()
+endif()
+
 # Suppress warning about FetchContent_Populate
 if(POLICY CMP0169)
   cmake_policy(SET CMP0169 OLD)

@@ -22,6 +22,10 @@ option(VULKANLEARN_BUILD_ANIMATION_TOOLS
 
 option(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS "Build and host C# gameplay Blueprints (requires .NET 8 SDK)." OFF)
 
+option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." OFF)
+option(VULKANLEARN_ENABLE_NVTX "Enable NVIDIA NVTX profiler markers." OFF)
+option(VULKANLEARN_ENABLE_VULKAN_VALIDATION "Enable Vulkan validation layer and debug markers." ON)
+
 option(VULKANLEARN_ENABLE_EDITOR
     "Build editor libraries and the editor executable."
     ON)

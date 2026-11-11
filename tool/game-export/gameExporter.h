@@ -21,6 +21,9 @@ struct GameExportOptions
     std::filesystem::path binaryDirectory;
     std::filesystem::path outputDirectory;
     std::filesystem::path dotnetRoot;
+    // MinGW runtime DLL directory. Game flavor requires it; the CMake build
+    // supplies the compiler bin directory by default.
+    std::filesystem::path mingwRuntimeDirectory;
     std::string initialScene;
     GameExportFlavor flavor = GameExportFlavor::Dev;
     bool csharpEnabled = true;
