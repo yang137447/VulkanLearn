@@ -30,10 +30,10 @@ runtime 可以独立存在，editor 是构建在其上的附加层。
    path 等）为 key，通过服务/表格与 runtime 对象关联，而不是反向嵌入。
    粒子的模块栈、曲线、Flipbook 与发射器结构编辑 helper 已放在
    `source/editor/particles/**`；它们只操作作者 JSON，不属于 runtime。
-3. **只在必要时使用编译期 editor 字段。**
-   `source/core/editorBuild.h` 提供 `VL_WITH_EDITOR` 与 `VL_EDITOR_ONLY(...)`。
-   只有字段确实必须与某个 runtime 对象同生命周期、且仅在编辑器构建中需要时，
-   才把字段包在 `VL_EDITOR_ONLY` 中；优先使用独立 editor DTO。
+3. **runtime 结构不使用条件编译的 editor 字段。**
+   编辑器与运行时的区分由 CMake 目标所有权完成（`main_editor`/`vl_editor` 依赖
+   `vl_runtime`）；仓库不提供 `VL_WITH_EDITOR` / `VL_EDITOR_ONLY` 宏。
+   编辑器专用字段一律放到 `source/editor/**` 的独立 DTO 或服务中。
 4. **快照只发布 runtime 数据。**
    `WorldSnapshot`、`RenderScene`、GPU 结构不得携带编辑器草稿或 UI 状态。
    编辑器需要额外信息时，单独构建 editor snapshot，不扩大 runtime 快照。
@@ -52,17 +52,12 @@ runtime 可以独立存在，editor 是构建在其上的附加层。
 
 ## 构建边界
 
-- 编辑器可执行文件 `main` 定义 `VL_WITH_EDITOR=1`。
-- 编译编辑器实现的测试目标（`material_instance_editor_production_tests`、
-  `editor_ui_tests`）也定义同一个宏；任何包含 `VL_EDITOR_ONLY` 结构体的
-  runtime-only 目标必须保持宏为 0，避免布局不一致。
-- 纯运行时目标不定义该宏，`VL_EDITOR_ONLY` 展开为空。
-- 当前 `main` 仍是编辑器/运行时单体；完整 runtime-only target 拆分尚未完成，
-  但新代码必须按上述边界设计，避免继续扩大混合面。
+- 编辑器目标 `main_editor` 链接 `vl_editor`、`vl_editor_asset_core`；纯运行时目标
+  `main_game` 只链接 `vl_runtime`，两者不共享任何编译期编辑器宏。
 - 当前已从 `source/particles/**` 移出 `particleModuleEdit.h`、
   `particleCurveEdit.h`、`particleEmitterEdit.h`、`particleFlipbookEdit.h`；
   runtime loader 只消费展平后的 `ParticleEmitterAsset`。这些 editor headers
-  用 `static_assert(VL_WITH_EDITOR != 0)` 拒绝被 runtime-only 目标包含。
+  只放在 `source/editor/particles/**`，由 `vl_editor` 编译。
 - `tool/architecture-boundary-audit.ps1` 的 `Particle runtime excludes editor`
   规则会拒绝 `source/particles/**` 中的 `#include "editor/`；新增粒子运行时
   依赖必须通过纯数据接口，而不是回引编辑器实现。
@@ -87,4 +82,4 @@ runtime 可以独立存在，editor 是构建在其上的附加层。
 - 编辑器状态是否能用稳定 identity 外置，而不是嵌入 runtime 对象？
 - 是否把 authoring JSON、draft、history、selection、thumbnail 带进了
   `WorldSnapshot` / `RenderScene` / GPU 结构？
-- `VL_EDITOR_ONLY` 字段是否有明确的“无法外置”的理由？
+- 编辑器字段是否可以外置到 `source/editor/**` 的 DTO/服务？

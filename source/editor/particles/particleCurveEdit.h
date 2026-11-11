@@ -10,12 +10,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/editorBuild.h"
 #include "particles/particleCurve.h"
 #include "particles/particleLimits.h"
-
-static_assert(VL_WITH_EDITOR != 0,
-    "editor/particles/particleCurveEdit.h requires VL_WITH_EDITOR=1");
 
 namespace VL::ParticleCurveEdit
 {

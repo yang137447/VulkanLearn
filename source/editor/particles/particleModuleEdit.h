@@ -9,11 +9,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/editorBuild.h"
-
-static_assert(VL_WITH_EDITOR != 0,
-    "editor/particles/particleModuleEdit.h requires VL_WITH_EDITOR=1");
-
 namespace VL
 {
 

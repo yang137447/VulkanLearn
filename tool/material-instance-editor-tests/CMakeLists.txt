@@ -125,8 +125,7 @@ target_include_directories(material_instance_editor_tests
 
 target_compile_definitions(material_instance_editor_tests
     PRIVATE
-        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
-        VL_WITH_EDITOR=1)
+        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 target_link_libraries(material_instance_editor_tests
     PRIVATE
@@ -158,8 +157,7 @@ target_include_directories(material_instance_editor_landed_tests
 
 target_compile_definitions(material_instance_editor_landed_tests
     PRIVATE
-        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
-        VL_WITH_EDITOR=1)
+        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 target_link_libraries(material_instance_editor_landed_tests
     PRIVATE
@@ -233,8 +231,7 @@ target_include_directories(material_instance_editor_production_tests
 
 target_compile_definitions(material_instance_editor_production_tests
     PRIVATE
-        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
-        VL_WITH_EDITOR=1)
+        VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 target_compile_options(material_instance_editor_production_tests
     PRIVATE

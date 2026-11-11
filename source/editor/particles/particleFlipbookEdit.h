@@ -8,11 +8,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/editorBuild.h"
-
-static_assert(VL_WITH_EDITOR != 0,
-    "editor/particles/particleFlipbookEdit.h requires VL_WITH_EDITOR=1");
-
 namespace VL::ParticleFlipbookEdit
 {
 

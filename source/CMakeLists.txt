@@ -148,7 +148,6 @@ if(VULKANLEARN_ENABLE_EDITOR)
     add_library(vl_editor_asset_core STATIC ${editor_asset_core_sources})
     target_include_directories(vl_editor_asset_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(vl_editor_asset_core PUBLIC vl_runtime)
-    target_compile_definitions(vl_editor_asset_core PRIVATE VL_WITH_EDITOR=1)
     vl_apply_runtime_options(vl_editor_asset_core)
 
     file(GLOB_RECURSE editor_sources CONFIGURE_DEPENDS
@@ -184,7 +183,6 @@ if(VULKANLEARN_ENABLE_EDITOR)
     target_link_libraries(vl_editor
         PUBLIC vl_runtime vl_editor_asset_core
         PRIVATE vl_editor_widgets)
-    target_compile_definitions(vl_editor PRIVATE VL_WITH_EDITOR=1)
     vl_apply_runtime_options(vl_editor)
 
     add_executable(main_editor main_editor.cpp)
