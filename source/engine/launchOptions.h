@@ -50,6 +50,9 @@ struct LaunchOptions
     // 只约束渲染帧节拍，time.delta 与动画/脚本 tick 的 dt 仍随真实帧间隔变化；
     // ScriptRuntime 内部的固定 60 Hz 物理子步保持不变。
     int frameLimitHz = 0;
+    // 烟测/打包验收：完成 N 帧后以退出码 0 结束；0 = 不限制。
+    // --frame-limit 是节拍上限（Hz），不是帧数，两者互不替代。
+    int exitAfterFrames = 0;
     std::string initialSceneOverride;
     // 启动期控制台脚本：让 shading model showcase / debug 采集可以复现，
     // 不必依赖手敲交互控制台。命令文本与手输完全同一条解析路径。

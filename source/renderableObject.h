@@ -1,6 +1,11 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <cstdint>
 #include <vulkan/vulkan.hpp>
@@ -13,17 +18,96 @@
 #include "hair/tressfxGroupPaint.h"
 #include "hair/tressfxGroupBinding.h"
 #include "mesh/meshAssetTypes.h"
+#include "render/renderable/tressfxRenderable.h"
 
 struct MeshAssetImportResult;
 struct Vertex;
 namespace VL
 {
 class RendererBackendVulkan;
+
+// GT -> RT dynamic mesh handoff. Producers replace the latest value for a mesh
+// key; the render thread drains the map once per submitted frame. Keeping this
+// type free of Vulkan state lets the latest-wins semantics be unit tested
+// without a device.
+struct DynamicMeshUpdate
+{
+    std::vector<struct Vertex> vertices;
+    std::vector<uint32_t> indices;
+    bool replacesIndices = false;
+};
+
+class DynamicMeshUpdateQueue
+{
+public:
+    void QueueVertices(std::string meshKey, std::vector<struct Vertex> vertices)
+    {
+        DynamicMeshUpdate update;
+        update.vertices = std::move(vertices);
+        Queue(std::move(meshKey), std::move(update));
+    }
+
+    void QueueMesh(
+        std::string meshKey,
+        std::vector<struct Vertex> vertices,
+        std::vector<uint32_t> indices)
+    {
+        DynamicMeshUpdate update;
+        update.vertices = std::move(vertices);
+        update.indices = std::move(indices);
+        update.replacesIndices = true;
+        Queue(std::move(meshKey), std::move(update));
+    }
+
+    std::unordered_map<std::string, DynamicMeshUpdate> Drain()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        std::unordered_map<std::string, DynamicMeshUpdate> drained;
+        drained.swap(pending);
+        return drained;
+    }
+
+    // RT -> queue: keep an update that arrived before its mesh reached the
+    // rendered snapshot. A newer GT update already in the map wins.
+    void RequeueIfAbsent(std::string meshKey, DynamicMeshUpdate update)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        pending.emplace(std::move(meshKey), std::move(update));
+    }
+
+    bool Empty() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return pending.empty();
+    }
+
+    size_t PendingCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return pending.size();
+    }
+
+private:
+    void Queue(std::string meshKey, DynamicMeshUpdate update)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        pending[std::move(meshKey)] = std::move(update);
+    }
+
+    mutable std::mutex mutex;
+    std::unordered_map<std::string, DynamicMeshUpdate> pending;
+};
 }
 
 class RenderableObject
 {
 public:
+    // Dynamic meshes keep one host-visible buffer set per swapchain slot so a
+    // GT-produced update never writes memory that an in-flight frame still
+    // references. The render loop is bounded to two frames in flight, which is
+    // less than this slot count.
+    static constexpr uint32_t DynamicMeshFrameSlotCount = 3;
+
     RenderableObject(
         std::vector<struct Vertex> vertices,
         std::vector<uint32_t> indices,
@@ -48,7 +132,8 @@ public:
         const std::string& name = "");
     ~RenderableObject();
 
-    void Draw(vk::CommandBuffer& commandBuffer);
+    void Draw(vk::CommandBuffer& commandBuffer, uint32_t frameSlot);
+    void Draw(vk::CommandBuffer& commandBuffer) { Draw(commandBuffer, 0); }
     // 静态植被/石头批量实例。空列表等价于一个 identity 实例；矩阵按列主序
     // 写入 binding 1 的 InstanceVertex 流。params.x=windPhase, .y=lodBias,
     // .z=variant, .w=seed，留给后续风/植被系统消费。
@@ -56,10 +141,25 @@ public:
     uint32_t GetInstanceCount() const { return instanceCount; }
     // 固定拓扑软体每帧只更新顶点位置/法线；动态模式使用 host-visible 顶点缓冲。
     // 调用方必须保持顶点数量不变，拓扑变化时创建新的 RenderableObject。
-    void UpdateVertices(const std::vector<struct Vertex>& vertices);
+    void UpdateVertices(
+        const std::vector<struct Vertex>& vertices,
+        uint32_t frameSlot);
+    void UpdateVertices(const std::vector<struct Vertex>& vertices)
+    {
+        UpdateVertices(vertices, 0);
+    }
     // 固定容量对象的整批替换；拓扑可以变化，但不得超过容量。
     void UpdateDynamicMesh(const std::vector<struct Vertex>& vertices,
-        const std::vector<uint32_t>& indices);
+        const std::vector<uint32_t>& indices,
+        uint32_t frameSlot);
+    void UpdateDynamicMesh(const std::vector<struct Vertex>& vertices,
+        const std::vector<uint32_t>& indices)
+    {
+        UpdateDynamicMesh(vertices, indices, 0);
+    }
+    // 碎片池在对象确认不再被任何在途帧引用后调用；下一次更新会重新填充
+    // 全部槽位，避免复用对象带着上一片碎片的几何。
+    void ResetDynamicContentForReuse();
     size_t GetVertexCapacity() const { return vertexCapacity; }
     size_t GetIndexCapacity() const { return indexCapacity; }
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
@@ -322,9 +422,15 @@ private:
 
     void CreateVertexBuffer();
     void DestroyVertexBuffer();
+    void WriteDynamicVertexSlot(
+        uint32_t slot,
+        const std::vector<struct Vertex>& vertices);
 
     void CreateIndexBuffer();
     void DestroyIndexBuffer();
+    void WriteDynamicIndexSlot(
+        uint32_t slot,
+        const std::vector<uint32_t>& indices);
     void CreateInstanceBuffer();
     void DestroyInstanceBuffer();
     void CreateSkinInfluenceBuffer();
@@ -336,13 +442,8 @@ private:
     void DestroyTressfxBuffers();
 
     // 每个 frame-in-flight 槽一份 params UBO，避免主机写当前槽时覆盖仍在飞的上一帧参数。
-    struct TressfxParamsTarget
-    {
-        vk::Buffer buffer = nullptr;
-        vk::DeviceMemory memory = nullptr;
-        void* mapped = nullptr;
-        vk::DescriptorBufferInfo info;
-    };
+    // 缓冲槽布局定义在 render/renderable/tressfxRenderable.h，facade 仍持有权威数组。
+    using TressfxParamsTarget = VL::TressfxBufferTarget;
 
     std::string name;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
@@ -365,6 +466,20 @@ private:
     vk::Buffer indexBuffer = nullptr;
     vk::DeviceMemory indexBufferMemory = nullptr;
     vk::DescriptorBufferInfo indexBufferInfo;
+    std::array<vk::Buffer, DynamicMeshFrameSlotCount> dynamicVertexBuffers{};
+    std::array<vk::DeviceMemory, DynamicMeshFrameSlotCount>
+        dynamicVertexMemories{};
+    std::array<vk::DescriptorBufferInfo, DynamicMeshFrameSlotCount>
+        dynamicVertexBufferInfos{};
+    std::array<vk::Buffer, DynamicMeshFrameSlotCount> dynamicIndexBuffers{};
+    std::array<vk::DeviceMemory, DynamicMeshFrameSlotCount>
+        dynamicIndexMemories{};
+    std::array<vk::DescriptorBufferInfo, DynamicMeshFrameSlotCount>
+        dynamicIndexBufferInfos{};
+    std::array<uint32_t, DynamicMeshFrameSlotCount> dynamicIndexCounts{};
+    // RT-only after construction: true once every slot contains this mesh's
+    // content. Pooled fixed-capacity meshes reset it before reuse.
+    std::atomic<bool> dynamicContentInitialized{false};
     std::vector<struct InstanceVertex> instanceData;
     uint32_t instanceCount = 1;
     vk::Buffer instanceBuffer = nullptr;

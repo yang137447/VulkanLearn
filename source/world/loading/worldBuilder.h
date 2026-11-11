@@ -3,12 +3,11 @@
 #include <memory>
 
 #include "core/runtimeResult.h"
+#include "world/worldBuildPlan.h"
 #include "world/world.h"
 
 namespace VL
 {
-
-struct WorldBuildPlan;
 
 // Builds the active World from the validated WorldBuildPlan. Camera, light,
 // environment, mesh object runtime data and terrain collision placements are
@@ -20,6 +19,7 @@ public:
     RuntimeResult<std::shared_ptr<World>> BuildFromLoadedScene(
         uint64_t generation,
         const WorldBuildPlan& worldBuildPlan,
+        WorldAssemblyAssets assemblyAssets,
         uint32_t shadowCascadeCount) const;
 };
 

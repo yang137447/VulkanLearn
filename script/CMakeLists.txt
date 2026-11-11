@@ -2,36 +2,8 @@ add_library(vl_script_host STATIC "${PROJECT_SOURCE_DIR}/source/script/scriptHos
 target_include_directories(vl_script_host PUBLIC "${PROJECT_SOURCE_DIR}/source")
 target_link_libraries(vl_script_host PUBLIC Json)
 
-# Jolt 是 CPU 物理依赖，地形碰撞在 C# Blueprint 关闭时也要编译，因此不再放在
-# C# hosting 的 if() 里；只有 vl_script_host 的脚本物理仍按 C# 开关链接。
-include(FetchContent)
-# 函数隔离第三方编译选项；只编译 CPU 库，不引入样例、GPU 后端或另一套 Vulkan owner。
-function(vl_add_jolt_cpu)
-    set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
-    set(OVERRIDE_CXX_FLAGS OFF)
-    set(INTERPROCEDURAL_OPTIMIZATION OFF)
-    set(ENABLE_ALL_WARNINGS OFF)
-    set(ENABLE_INSTALL OFF)
-    set(JPH_BUILD_SHARED_LIBS OFF)
-    set(CPP_RTTI_ENABLED ON)
-    set(CPP_EXCEPTIONS_ENABLED ON)
-    set(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF)
-    set(PROFILER_IN_DEBUG_AND_RELEASE OFF)
-    set(ENABLE_OBJECT_STREAM OFF)
-    foreach(feature SSE4_1 SSE4_2 AVX AVX2 AVX512 LZCNT TZCNT F16C FMADD)
-        set(USE_${feature} OFF)
-    endforeach()
-    foreach(backend DX12 VK MTL CPU_COMPUTE)
-        set(JPH_USE_${backend} OFF)
-    endforeach()
-    FetchContent_Declare(vl_jolt
-        URL https://codeload.github.com/jrouwe/JoltPhysics/tar.gz/e77f175595e64cb44218cc9d9d56fc365ad0e36a
-        URL_HASH SHA256=1f32328fb763135de10a244568d6ccb2ed9b1e6593fafe6dc6db5b2719d330bd
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        SOURCE_SUBDIR Build)
-    FetchContent_MakeAvailable(vl_jolt)
-endfunction()
-vl_add_jolt_cpu()
+# Jolt is configured once by the root CMakeLists through
+# cmake/VulkanLearnJolt.cmake. This directory only consumes the target.
 
 if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
     if(NOT TARGET Jolt)

@@ -1,3 +1,6 @@
+# 本目标不消费资产核心，只内联一个 vl_runtime 也拥有的几何 TU
+# （ui/viewport/editorViewportGeometry.cpp）。P5 保持原样，避免为纯几何
+# 单元测试引入完整运行时/编辑器依赖。
 add_executable(editor_viewport_tests
     editorViewportGeometryTests.cpp
     editorViewportGridTests.cpp

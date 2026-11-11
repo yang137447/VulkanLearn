@@ -14,9 +14,7 @@
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
-#include "editor/ui/editorSceneActorTree.h"
-#include "editor/scene/editorSceneActorBuilder.h"
-#include "editor/service/sceneDocumentService.h"
+#include "engine/editorHost.h"
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeTestHooks.h"
 #include "input/inputSubsystem.h"
@@ -26,7 +24,8 @@
 #include "renderSystem.h"
 #include "sceneNode.h"
 #include "shader/build/atomicFile.h"
-#include "world/loading/worldTransitionCoordinator.h"
+#include "world/actorIdentity.h"
+#include "world/actorProperty.h"
 #include "world/world.h"
 #include "animation/skeletalPlayback.h"
 #include "script/scriptRuntime.h"
@@ -65,10 +64,9 @@ std::string FormatVector3(const Eigen::Vector3f& value)
 // 让命令分支只说类型语义，不重复 World 的表结构。返回 false 表示对象不在当前 World。
 bool ApplyActorVisibility(
     World& world,
-    const EditorUi::EditorSceneActorIdentity& identity,
+    const EditorSceneActorIdentity& identity,
     bool visible)
 {
-    using EditorUi::EditorSceneActorType;
     switch (identity.type)
     {
     case EditorSceneActorType::Mesh:
@@ -240,13 +238,12 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     CommandBus& commandBus,
     RenderSystem& renderSystem,
     WorldManager& worldManager,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments,
+    IEditorHost* editorHost,
     DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
@@ -261,14 +258,13 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             command,
             renderSystem,
             worldManager,
-            worldTransitionCoordinator,
             runtimeTestHooks,
             runtimeConfig,
             diagnostics,
             executionResult,
             input,
             scripts,
-            sceneDocuments,
+            editorHost,
             destructibleRuntimes,
             projectileRuntime);
     }
@@ -279,14 +275,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
     const RuntimeCommand& command,
     RenderSystem& renderSystem,
     WorldManager& worldManager,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
     RuntimeCommandExecutionResult& executionResult,
     InputSubsystem* input,
     ScriptRuntimeSubsystem* scripts,
-    Editor::SceneDocumentService* sceneDocuments,
+    IEditorHost* editorHost,
     DestructibleRuntimeRegistry* destructibleRuntimes,
     ProjectileRuntime* projectileRuntime) const
 {
@@ -296,7 +291,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
         // 整 World 重载会换掉 generation 和全部 actor，sweep 的起点/身份随即失效，
         // 因此在这里显式取消，避免它在新 World 上继续写同名对象。
         CancelMeshSweep(diagnostics);
-        ApplyLoadWorld(command, worldTransitionCoordinator, runtimeConfig, diagnostics, executionResult);
+        ApplyLoadWorld(command, runtimeConfig, diagnostics, executionResult);
         break;
     case RuntimeCommandType::RunShaderReloadTest:
         ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
@@ -649,15 +644,15 @@ void RuntimeCommandExecutor::ExecuteCommand(
         // 命令跨越 GT→执行边界只带稳定身份字符串，因此这里解析并核对对象是否仍在
         // 当前 World 里：旧场景 / 已改名 / 伪造身份都必须被拒绝并给出诊断，
         // 而不是静默改不到东西或套用到同名的新对象上。
-        EditorUi::EditorSceneActorIdentity identity;
-        if (!EditorUi::ParseSceneActorIdentity(command.stringValue, identity))
+        EditorSceneActorIdentity identity;
+        if (!ParseSceneActorIdentity(command.stringValue, identity))
         {
             diagnostics.ReportWarning(
                 "Actor visibility rejected because the identity is not a known actor: " +
                 command.stringValue);
             break;
         }
-        if (!EditorUi::SceneActorHasVisibilityToggle(identity.type))
+        if (!SceneActorHasVisibilityToggle(identity.type))
         {
             diagnostics.ReportWarning(
                 "Actor visibility rejected because this actor type has no visibility state: " +
@@ -691,7 +686,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
                 diagnostics.ReportWarning("Actor preview rejected: " + error);
             break;
         }
-        else if (sceneDocuments && !sceneDocuments->PrepareActorEdit(
+        else if (editorHost && !editorHost->PrepareActorEdit(
             activeWorld->GetScenePath(), command.actorProperty.identity, error))
         {
             // 文档身份必须先验证，避免 World 接受了修改却没有可保存的作者目标。
@@ -700,10 +695,8 @@ void RuntimeCommandExecutor::ExecuteCommand(
         {
             if (command.actorProperty.property == EditorActorProperty::CastShadows)
                 renderSystem.SetCsmSettings(activeWorld->GetCsmSettings());
-            if (sceneDocuments)
-                for (const auto& actor : BuildEditorSceneActors(*activeWorld))
-                    if (actor.identity == command.actorProperty.identity)
-                        sceneDocuments->RecordActorEdit(actor, command.actorProperty);
+            if (editorHost)
+                editorHost->RecordActorEdit(*activeWorld, command.actorProperty);
             break;
         }
         diagnostics.ReportWarning("Actor edit rejected: " + error);
@@ -961,6 +954,10 @@ void RuntimeCommandExecutor::ExecuteCommand(
         break;
     case RuntimeCommandType::PrintPerformanceJson:
         renderSystem.PrintPerformanceJson();
+        break;
+    case RuntimeCommandType::QuitApplication:
+        executionResult.quitRequested = true;
+        diagnostics.ReportInfo("Quit requested.");
         break;
     case RuntimeCommandType::RequestHairTrace:
         // 只校验值语义并登记；GPU buffer/文件由渲染线程在 Record 中创建，
@@ -1320,7 +1317,6 @@ void RuntimeCommandExecutor::CancelMeshSweep(
 
 void RuntimeCommandExecutor::ApplyLoadWorld(
     const RuntimeCommand& command,
-    WorldTransitionCoordinator& worldTransitionCoordinator,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
     RuntimeCommandExecutionResult& executionResult) const

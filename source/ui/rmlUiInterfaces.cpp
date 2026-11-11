@@ -360,7 +360,7 @@ void RmlUiRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
 }
 
 void RmlUiRenderInterface::PublishTexturePreview(
-    const std::shared_ptr<const EditorUi::EditorJsonDocumentSnapshot>& document)
+    const std::shared_ptr<const UiTexturePreviewDocument>& document)
 {
     for (auto it = previewSources.begin(); it != previewSources.end();)
         if (it->second.expired())
@@ -372,7 +372,7 @@ void RmlUiRenderInterface::PublishTexturePreview(
     if (lastPreviewDocument.lock() == document) return;
     lastPreviewDocument = document;
     if (document && document->texturePreview)
-        previewSources[EditorUi::EditorTexturePreviewSource(document->revision)] = document->texturePreview;
+        previewSources[UiTexturePreviewSource(document->revision)] = document->texturePreview;
 }
 
 Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
@@ -438,7 +438,7 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
 }
 
 void RmlUiRenderInterface::PublishThumbnails(
-    const std::shared_ptr<const EditorUi::EditorThumbnailSnapshot>& snapshot)
+    const std::shared_ptr<const UiThumbnailSnapshot>& snapshot)
 {
     // 旧发布者可能已释放；weak_ptr 过期和显式空快照都等于 nullptr，
     // 此时仍须撤销旧 source，不能把清理误判成同一份快照。

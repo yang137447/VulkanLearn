@@ -131,7 +131,7 @@ ResolvedDrawResources RequireResolvedDrawResources(
     }
 
     const RenderDrawPacket& drawPacket = renderScene.drawPackets[draw.drawPacketIndex];
-    std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject.lock();
+    std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject;
     if (!renderableObject)
     {
         throw std::runtime_error(
@@ -301,7 +301,10 @@ void RendererDrawExecutor::DrawShadowScene(
                 }
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
             }
         }
     }
@@ -399,7 +402,10 @@ void RendererDrawExecutor::DrawTerrainFeedbackScene(
                 context.services.UpdateObjectUBOForPass(
                     objectResources,
                     drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
             }
         }
     }
@@ -481,7 +487,9 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
             objectResources,
             drawPacket);
         drawResources.renderableObject->Draw(
-            commandBuffer);
+            commandBuffer,
+            context.swapChainImageIndex %
+                RenderableObject::DynamicMeshFrameSlotCount);
     }
 }
 
@@ -547,7 +555,10 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
             }
         }
     }

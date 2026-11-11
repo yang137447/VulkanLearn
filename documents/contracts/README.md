@@ -24,7 +24,7 @@
 
 ## 门禁规则怎么引用
 
-`tool/architecture-boundary-audit.ps1`（64 条命名规则）是**可执行的架构契约**。
+`tool/architecture-boundary-audit.ps1`（74 条命名规则）是**可执行的架构契约**。
 在契约或路由里引用规则时，写脚本里 `-RuleName` 的**字面值**，不要写概括或别名 ——
 `tool/validate-docs.py` 会逐字核对，概括会失败。规则正文不要抄进文档，那是会漂移的东西。
 

@@ -6,14 +6,14 @@
 namespace VL
 {
 class CommandBus;
-namespace Editor { class MaterialInstanceEditorRuntime; }
+class IEditorConsoleSink;
 }
 
 class DebugConsole
 {
 public:
     explicit DebugConsole(VL::CommandBus& commandBus,
-        VL::Editor::MaterialInstanceEditorRuntime* editorRuntime = nullptr);
+        VL::IEditorConsoleSink* editorConsoleSink = nullptr);
 
     void Initialize();
     void Update();
@@ -32,7 +32,7 @@ private:
 
     VL::CommandBus& commandBus;
     std::string currentLine;
-    // 仅借用 GT 文档 facade；Console 不执行资产服务，也不翻译为 RuntimeCommand。
-    VL::Editor::MaterialInstanceEditorRuntime* editorRuntime = nullptr;
+    // 仅借用编辑器控制台 seam；Console 不执行资产服务，也不翻译为 RuntimeCommand。
+    VL::IEditorConsoleSink* editorConsoleSink = nullptr;
     std::vector<uint64_t> pendingEditorResults;
 };

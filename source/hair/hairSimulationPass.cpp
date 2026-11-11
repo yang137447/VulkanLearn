@@ -300,7 +300,7 @@ SimulationOwnerMap CollectSimulationOwners(
             materialGroup.materialInstances)
             for (const VL::ResolvedDrawPacket& draw : instanceGroup.draws)
             {
-                const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                const std::shared_ptr<RenderableObject> object = draw.renderableObject;
                 // CPU/off 也保留正式 placement 身份，供实时命令的拒绝诊断使用。
                 if (object && object->IsTressfx())
                     owners[object.get()].Observe(renderScene.drawPackets[
@@ -1111,7 +1111,7 @@ void HairSimulationPass::RecordSkinning(vk::CommandBuffer commandBuffer,
         for (const ResolvedMaterialInstanceGroup& instanceGroup : materialGroup.materialInstances)
             for (const ResolvedDrawPacket& draw : instanceGroup.draws)
             {
-                const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                const std::shared_ptr<RenderableObject> object = draw.renderableObject;
                 if (!object || !object->UsesGpuHairSkinning() ||
                     !seen.insert(object.get()).second)
                     continue;
@@ -1197,7 +1197,7 @@ bool HairSimulationPass::HasWork(const VL::ResolvedRenderScene& scene,
         {
             for (const ResolvedDrawPacket& draw : instanceGroup.draws)
             {
-                const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                const std::shared_ptr<RenderableObject> object = draw.renderableObject;
                 if (object && object->UsesGpuHairSkinning())
                 {
                     const TressfxSkinningBinding& skinning =
@@ -1299,7 +1299,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         {
             for (const ResolvedDrawPacket& draw : instanceGroup.draws)
             {
-                std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                std::shared_ptr<RenderableObject> object = draw.renderableObject;
                 if (!object || !object->UsesGpuGuideSimulation())
                     continue;
                 // 同一对象可能因材质分组出现在多个 draw 中；重复 dispatch 会多步进一次。
@@ -1341,7 +1341,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                     for (const ResolvedDrawPacket& draw : instanceGroup.draws)
                     {
                         const std::shared_ptr<RenderableObject> object =
-                            draw.renderableObject.lock();
+                            draw.renderableObject;
                         if (object && object->IsTressfx() &&
                             owners.at(object.get()).MatchesCommandTarget(request.objectName) &&
                             !object->UsesGpuGuideSimulation())

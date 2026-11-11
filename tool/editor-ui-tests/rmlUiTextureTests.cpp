@@ -2,6 +2,7 @@
 
 #include <RmlUi/Core/Core.h>
 
+#include "editor/assets/editorJsonAssetTypes.h"
 #include "ui/rmlUiInterfaces.h"
 
 namespace
