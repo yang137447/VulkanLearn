@@ -1,0 +1,125 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+#include "particleStorageRO.glsl"
+
+// 与 source/particles/particleLightGpu.h、common/lighting.glsl 保持一致。
+struct ParticleLightGPU
+{
+    vec4 positionRadius;
+    vec4 colorIntensity;
+    vec4 shadowParams;
+    vec4 meta;
+};
+
+layout(std430, set = 0, binding = 2) buffer ParticleLightOutput
+{
+    uvec4 header;
+    ParticleLightGPU lights[];
+} particleLightOutput;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint capacity = uint(frame.particleLightParams.y + 0.5);
+    if (index >= capacity)
+    {
+        return;
+    }
+
+    Particle particle = particleBuffer.particles[index];
+    if (!IsParticleAlive(particle))
+    {
+        return;
+    }
+
+    float lifetime = max(particle.velocityLife.w, 1.0e-6);
+    float lifeT = clamp(particle.positionAge.w / lifetime, 0.0, 1.0);
+    // CPU 在无作者 colorKeys 时会填两个端点 key，因此曲线求值对现有资产
+    // 等价于 mix(colorStart, colorEnd, lifeT)，同时让逐粒子灯响应颜色曲线。
+    vec4 colorCurve = EvaluateColorCurve(lifeT);
+    float alpha = clamp(colorCurve.a * frame.colorTint.a, 0.0, 1.0);
+    // 逐寿命亮度/颜色曲线：key 打包在 particleLightBrightnessKeys[i].xy、
+    // 颜色乘数在 particleLightBrightnessColors[i].rgb，按 lifeT 找所在区间；
+    // 空表（count=0）亮度恒为 1、颜色乘数恒为白，等价于引入曲线前。
+    float brightness = 1.0;
+    vec3 brightnessColor = vec3(1.0);
+    uint brightnessCount = uint(
+        frame.particleLightBrightnessParams.x + 0.5);
+    if (brightnessCount > 0u)
+    {
+        uint last = min(brightnessCount, 8u) - 1u;
+        vec2 firstKey = frame.particleLightBrightnessKeys[0].xy;
+        vec2 lastKey = frame.particleLightBrightnessKeys[last].xy;
+        if (lifeT <= firstKey.x)
+        {
+            brightness = firstKey.y;
+            brightnessColor =
+                frame.particleLightBrightnessColors[0].rgb;
+        }
+        else if (lifeT >= lastKey.x)
+        {
+            brightness = lastKey.y;
+            brightnessColor =
+                frame.particleLightBrightnessColors[last].rgb;
+        }
+        else
+        {
+            brightness = lastKey.y;
+            brightnessColor =
+                frame.particleLightBrightnessColors[last].rgb;
+            for (uint keyIndex = 0u; keyIndex < last; ++keyIndex)
+            {
+                vec2 key0 = frame.particleLightBrightnessKeys[keyIndex].xy;
+                vec2 key1 =
+                    frame.particleLightBrightnessKeys[keyIndex + 1u].xy;
+                if (lifeT >= key0.x && lifeT <= key1.x)
+                {
+                    float span = max(key1.x - key0.x, 1.0e-6);
+                    float weight = (lifeT - key0.x) / span;
+                    brightness = mix(
+                        key0.y, key1.y, weight);
+                    brightnessColor = mix(
+                        frame.particleLightBrightnessColors[keyIndex].rgb,
+                        frame.particleLightBrightnessColors[keyIndex + 1u].rgb,
+                        weight);
+                    break;
+                }
+            }
+        }
+        brightness = max(brightness, 0.0);
+    }
+    float intensity =
+        frame.particleLightParams.z * (1.0 - lifeT) * alpha * brightness;
+    if (!(intensity > 0.0))
+    {
+        return;
+    }
+
+    vec3 color =
+        colorCurve.rgb * frame.colorTint.rgb * brightnessColor;
+    vec3 worldPosition = frame.shape.z > 0.5
+        ? (frame.localToWorld *
+            vec4(particle.positionAge.xyz, 1.0)).xyz
+        : particle.positionAge.xyz;
+
+    uint base = uint(frame.particleLightParams.x + 0.5);
+    uint slot = base + index;
+    if (slot >= 64u)
+    {
+        return;
+    }
+
+    particleLightOutput.lights[slot].positionRadius =
+        vec4(worldPosition, frame.particleLightParams.w);
+    // LightGPU 的点光/聚光约定：cd 在 GPU 上传边界乘 100^2，配合 cm 距离。
+    particleLightOutput.lights[slot].colorIntensity =
+        vec4(color, intensity * 10000.0);
+    particleLightOutput.lights[slot].shadowParams =
+        frame.particleLightShadowParams;
+    particleLightOutput.lights[slot].meta =
+        frame.particleLightIesParams;
+    atomicMax(particleLightOutput.header.x, slot + 1u);
+}

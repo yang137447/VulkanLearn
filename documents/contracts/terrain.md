@@ -82,7 +82,9 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - `layers` 可选：1..256 层。每层必有 `name`、`heightRange`、`slopeRange`；可选
   `noise`、`uvScale`、`uvRotation` 与 L1 新增的 `sourceResolution`（512/1024/2048，
   默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认中性 0.18）、`sourceSet`（0..255，
-  默认 0）、`flags`（0..65535，默认 0）。未知字段、越界值与非有限数都会被拒绝；
+  默认 0）、`flags`（0..65535，默认 0）、`displacementM`（非负有限数，位移峰峰值，
+  默认 0）、`hasHeight`（布尔，默认 false，表示该层是否有真实 16-bit 高度源）。
+  未知字段、越界值与非有限数都会被拒绝；
   旧 TR 不写新字段时行为与默认值不变。
 - 每层还可选 `key`（1..256 字符）：跨 TR 共享层的显式身份。缺省为
   `"<assetPath>#<name>"`；同一个 TR 内重复的 `key`（含同名导致的缺省 key
@@ -106,7 +108,8 @@ revision、源摘要冲突检查和原子保存，不是第二套文件编辑器
   `chunkResidencyDistances`、`pageOrigin`、`pageTilesPerSide`。
 - `layers` 既可按整表提交（增删/重排），也可用 `layerIndex` +
   `expectedLayerName` 定位单层后编辑 `name`/`key`/`heightRange`/`slopeRange`/
-  `noise`/`uvScale`/`uvRotation`/`sourceResolution`/`avgColor`/`sourceSet`/`flags`。
+  `noise`/`uvScale`/`uvRotation`/`sourceResolution`/`avgColor`/`sourceSet`/`flags`/
+  `displacementM`/`hasHeight`。
   层身份在写入前复核；草稿重排后旧索引不会静默写到另一层。
 - `validate`/`save` 复用正式 `TerrainAssetValidator`，并解析
   `heightmapPath` 与 `materialInstancePath`；后者必须是 `type:"materialInstance"`。
@@ -617,7 +620,8 @@ World 中摆放多次，只要对象名不同。
   几何法线/切线。有效页的 `invalidPage=0`，输出与原采样路径逐位一致。
 - `layerTable` 是 256×4 `RGBA32F` LUT：row0 height/slope、row1 noise/blendEdge/
   `uvScale`/`uvRotation`、row2 `pagesPerSide`/`pageTableBase`/`sourceSet`/`flags`、
-  row3 `avgColor`/reserved。mode 0 只消费 row1（v 坐标 `0.375`）的每层 UV 参数；
+  row3 `avgColor`/`displacementM`。mode 0 只消费 row1（v 坐标 `0.375`）的每层 UV 参数
+  与 row3.w（height blend 的米制换算）；
   L3 VT 路径还消费 row2 的 `pagesPerSide` 与 row3 的 `avgColor`（缺页 fallback），
   层权重来自 ID/权重图。
 - page table/ID/权重 atlas 和 layer table 都由 World 级共享资源提供；同一 World 内带 layer
@@ -695,15 +699,16 @@ L1 实现 CPU 数据与决策；L2 把层页真正送进 GPU；L3 让 shader 在
   - row0 = `heightMin / heightMax / slopeMin / slopeMax`
   - row1 = `noise / blendEdge(0.05) / uvScale / uvRotation(rad)`
   - row2 = `pagesPerSide(mip0) / pageTableBase / sourceSet / flags`
-  - row3 = `avgColor.r / avgColor.g / avgColor.b / reserved(0)`
+  - row3 = `avgColor.r / avgColor.g / avgColor.b / displacementM`
 - `pagesPerSide(mip0) = sourceResolution / 128`：512→4、1024→8、2048→16。
   `pageTableBase` 按层顺序累加每层总页数：512² 层 21 页、1K 层 85 页、2K 层 341 页。
   这些整数在 float32 的 24-bit 尾数内精确可表示（256 层 2K 共 87,296 项）。
 - `TerrainLayerTable::ReadLayer(image, layerId)` 是 CPU 往返 accessor；未使用层
   （`pagesPerSide == 0`）返回全零条目，`layerId >= 256` 抛 `std::out_of_range`。
-  `AreLayersIdentical` 现在也比较 `sourceResolution`、`avgColor`、`sourceSet`、`flags`。
+  `AreLayersIdentical` 现在也比较 `sourceResolution`、`avgColor`、`sourceSet`、`flags`、
+  `displacementM`、`hasHeight`。
 - 每层 mip 链固定按 128² 页切分：512 为 mip0..2（4/2/1 页/边，21 页），
-  1024 为 mip0..3（8/4/2/1，85 页），2048 为 mip0..4（16/8/4/2/1，341 页；
+  1024 为 mip0..3（8/4/2/1，85 页），2048 为 mip0..6（16/8/4/2/1，341 页；
   mip4 是 128² 尾页）。helper 在 `terrainAssetTypes.h`
   （`TerrainLayerMipCount` / `TerrainLayerPagesPerSide` / `TerrainLayerTotalPages`）。
 - `TerrainLayerPageManager`（`source/terrain/terrainLayerPageManager.*`）管理
@@ -916,7 +921,7 @@ L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime
   `avgColor`。这样逐帧收敛期间只是分辨率暂时偏低，不会整页变平均色。
 - `terrainlayerstats` 第二行区分 `feedbackHits`（本帧命中并续命的已驻留页）、
   `requested`（本帧尝试请求数，含失败/deferred）、`accepted`（其中成功数）、
-  `uploadedLast`、`pending` 与 mip0..4 的请求分布；第一行不再打印恒为 0 的
+  `uploadedLast`、`pending` 与 mip0..6 的请求分布；第一行不再打印恒为 0 的
   `hits`（那是 `RequestPage` 命中已驻留页的次数，调用方在请求前已过滤）。
   `terrainlayer capacity N` / `terrainlayer preload` 都由 Console 写 atomic/flag，
   渲染线程帧首消费。

@@ -2,13 +2,22 @@ add_library(vl_animation_assets STATIC
     animationAssets.cpp
     animationSkeleton.cpp
     animationSequenceData.cpp
+    animationSyncGroup.cpp
     animationMontage.cpp
     animationRetarget.cpp
     animationScriptData.cpp
     skeletalPlayback.cpp
+    skeletalPlaybackMovement.cpp
+    skeletalPlaybackNotify.cpp
+    skeletalPlaybackSkinning.cpp
+    skeletalPlaybackSync.cpp
+    skeletalPlaybackTimeline.cpp
     inertialization.cpp
     rootOffset.cpp
     footPlacement.cpp
+    slopeWarping.cpp
+    poseDriver.cpp
+    postProcess.cpp
     motionFeatures.cpp
     motionHistory.cpp
     motionDatabase.cpp

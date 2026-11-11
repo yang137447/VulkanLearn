@@ -16,6 +16,7 @@ class AssetDocumentService
 public:
     AssetDocumentService(std::filesystem::path root, EditorAssetDocumentKind kind);
     bool Open(const std::string& path, std::string& error);
+    bool Erase(const std::string& path);
     EditorCommandResult Execute(const EditorCommandEnvelope& command);
     std::vector<EditorUi::EditorModifiedDocumentSnapshot> ModifiedDocuments() const;
     std::vector<EditorAssetDocumentResultPayload> DocumentSnapshots() const;
@@ -47,6 +48,7 @@ protected:
         bool standardEdited = false;
         bool awaitingWorldLoad = false;
         BlueprintHistory blueprintHistory;
+        BlueprintHistory particleHistory;
     };
     std::string Normalize(const std::string& path) const;
     std::filesystem::path Resolve(const std::string& path) const;
@@ -66,5 +68,7 @@ private:
     static void TrimBlueprintHistory(BlueprintHistory& history, bool redo);
     static void PublishBlueprintDraft(Document& document, nlohmann::json candidate);
     void MoveBlueprintHistory(Document& document, const std::string& path, bool redo);
+    static void PublishParticleDraft(Document& document, nlohmann::json candidate);
+    void MoveParticleHistory(Document& document, const std::string& path, bool redo);
 };
 } // namespace VL::Editor

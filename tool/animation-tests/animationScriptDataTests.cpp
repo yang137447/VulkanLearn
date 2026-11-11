@@ -68,6 +68,22 @@ std::shared_ptr<SkeletalAsset> MakeAsset()
     return asset;
 }
 
+void AddClip(SkeletalAsset& asset, const std::string& id, float duration, float rootZ)
+{
+    Clip clip;
+    clip.id = id;
+    clip.raw.duration = duration;
+    clip.raw.tracks.resize(1);
+    clip.raw.tracks[0].translations = {{0, {0, 0, 0}}, {duration, {0, 0, rootZ}}};
+    clip.raw.tracks[0].rotations = {{0, ozz::math::Quaternion::identity()}};
+    clip.raw.tracks[0].scales = {{0, ozz::math::Float3::one()}};
+    ozz::animation::offline::AnimationBuilder animationBuilder;
+    clip.runtime = animationBuilder(clip.raw);
+    clip.sequence.id = id;
+    clip.sequence.duration = duration;
+    asset.clips.push_back(std::move(clip));
+}
+
 MontageWarp MakeWarp()
 {
     MontageWarp warp;
@@ -110,6 +126,34 @@ Montage ChainMontage(std::vector<MontageSection> sections,
     montage.sections = std::move(sections);
     montage.notifies = std::move(notifies);
     montage.windows.clear();
+    return montage;
+}
+
+Montage SegmentedMontage()
+{
+    Montage montage = MakeMontage();
+    montage.id = "AM_Segments";
+    montage.sequencePath.clear();
+    montage.length = 2.0f;
+    montage.sections = {{"Default", 0.0f, 2.0f, "", 0, ""}};
+    montage.notifies.clear();
+    montage.windows.clear();
+    montage.rateScale = 0.5f;
+    MontageSegment first;
+    first.id = "Start";
+    first.derivedClipId = "walk";
+    first.startTime = 0.0f;
+    first.endTime = 1.0f;
+    first.clipStartTime = 0.0f;
+    first.clipEndTime = 1.0f;
+    MontageSegment second;
+    second.id = "Loop";
+    second.derivedClipId = "run";
+    second.startTime = 1.0f;
+    second.endTime = 2.0f;
+    second.clipStartTime = 0.0f;
+    second.clipEndTime = 1.0f;
+    montage.segments = {first, second};
     return montage;
 }
 
@@ -158,12 +202,104 @@ TEST(AnimationScriptData, PublishesCurvesOnlyForClipsWithSidecarCurves)
     EXPECT_EQ(curve.at("values"), json::array({-75, 34.098678f, 90.908946f, 110}));
 }
 
+TEST(AnimationScriptData, PublishesPlayerBindingsAndSyncMarkers)
+{
+    auto asset = MakeAsset();
+    asset->clips[0].sequence.players = {{
+        "Locomotion", SyncRole::AlwaysLeader, SyncMethod::SyncGroup,
+        SyncGroupScope::Local, 0.2f, false}};
+    asset->clips[0].sequence.syncMarkers = {{"Foot_L", 0.5f}, {"Foot_R", 1.5f}};
+
+    const json catalog = BuildAnimationScriptAssets(*asset);
+    ASSERT_TRUE(catalog.at("players").contains("walk"));
+    const auto& player = catalog.at("players").at("walk").front();
+    EXPECT_EQ(player.at("syncGroup"), "Locomotion");
+    EXPECT_EQ(player.at("syncRole"), "AlwaysLeader");
+    EXPECT_EQ(player.at("syncMethod"), "SyncGroup");
+    EXPECT_EQ(player.at("syncGroupScope"), "Local");
+    EXPECT_FLOAT_EQ(player.at("startPosition").get<float>(), 0.2f);
+    EXPECT_FALSE(player.at("loop").get<bool>());
+    ASSERT_TRUE(catalog.at("syncMarkers").contains("walk"));
+    const auto& markers = catalog.at("syncMarkers").at("walk");
+    EXPECT_EQ(markers.at(0).at("name"), "Foot_L");
+    EXPECT_FLOAT_EQ(markers.at(1).at("time").get<float>(), 1.5f);
+}
+
+TEST(AnimationScriptData, TransitionToSyncedAlignsLoopPhaseAndMarker)
+{
+    auto asset = MakeAsset();
+    asset->clips[0].sequence.players = {{
+        "Locomotion", SyncRole::AlwaysFollower, SyncMethod::SyncGroup,
+        SyncGroupScope::Local, 0.0f, true}};
+    asset->clips[0].sequence.syncMarkers = {{"Foot_L", 0.5f}, {"Foot_R", 1.5f}};
+    SkeletalPlayback player(asset);
+    player.TransitionToSynced("walk", 0, true, 0, true, "Locomotion", 0.25f);
+
+    EXPECT_FLOAT_EQ(player.Time(), 0.5f);
+    EXPECT_EQ(player.SyncGroup(), "Locomotion");
+    EXPECT_FLOAT_EQ(player.SyncPhase(), 0.25f);
+    EXPECT_EQ(player.SyncMarkerName(), "Foot_L");
+    EXPECT_FLOAT_EQ(player.SyncMarkerAlpha(), 0.0f);
+}
+
+TEST(AnimationScriptData, SkeletalPlaybackSamplesExplicitAndCurrentCurveTime)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+
+    // 端点 clamp、键上精确值与大小写不敏感查找都由原生只读入口统一复用
+    // SampleFloatCurve；这里同时锁定显式时间与当前时钟快捷入口。
+    EXPECT_FLOAT_EQ(*player.SampleCurve("distance_from_ledge", -5.0f), -75.0f);
+    EXPECT_FLOAT_EQ(*player.SampleCurve("distance_from_ledge", 0.598017f), 34.098678f);
+    EXPECT_FLOAT_EQ(*player.SampleCurve("DISTANCE_FROM_LEDGE", 0.831335f), 90.908946f);
+    EXPECT_FLOAT_EQ(*player.SampleCurve("distance_from_ledge", 5.0f), 110.0f);
+
+    player.Seek(0.598017f);
+    EXPECT_FLOAT_EQ(*player.SampleCurve("distance_from_ledge"), 34.098678f);
+    player.Seek(0.831335f);
+    EXPECT_FLOAT_EQ(*player.SampleCurve("distance_from_ledge"), 90.908946f);
+}
+
+TEST(AnimationScriptData, SkeletalPlaybackCurveSamplingReportsMissingAndRejectsNonFiniteTime)
+{
+    auto asset = MakeAsset();
+    Clip plain;
+    plain.id = "plain";
+    plain.raw = asset->clips[0].raw;
+    ozz::animation::offline::AnimationBuilder builder;
+    plain.runtime = builder(plain.raw);
+    asset->clips.push_back(std::move(plain));
+    SkeletalPlayback player(asset);
+
+    EXPECT_FALSE(player.SampleCurve("missing", 0.5f).has_value());
+    EXPECT_THROW(player.SampleCurve("distance_from_ledge", std::nanf("")), std::invalid_argument);
+    EXPECT_THROW(player.SampleCurve(
+        "distance_from_ledge", std::numeric_limits<float>::infinity()), std::invalid_argument);
+
+    // 没有 sidecar 的片段不是错误：显式采样返回 nullopt，播放本身不受影响。
+    player.Select(1);
+    EXPECT_FALSE(player.SampleCurve("distance_from_ledge", 0.0f).has_value());
+    EXPECT_FALSE(player.SampleCurve("distance_from_ledge").has_value());
+}
+
 TEST(AnimationScriptData, SerializesMontageSectionsNotifiesAndWarpFields)
 {
     auto asset = MakeAsset();
     Montage montage = MakeMontage();
     // catalog 只做数据序列化，不执行链接校验：这里专门写非默认 link 字段验证 round-trip。
     montage.sections.front() = {"Default", 0, 1.5f, "Loop", 0.5f, "Absolute"};
+    montage.sourcePath = "Maps/Test/Animations/AM_Test.json";
+    montage.rateScale = 0.5f;
+    MontageSegment segment;
+    segment.id = "Loop";
+    segment.derivedClipId = "walk";
+    segment.sequencePath = "Maps/Test/walk.anim.json";
+    segment.startTime = 0;
+    segment.endTime = 1.5f;
+    segment.clipStartTime = 0;
+    segment.clipEndTime = 1.5f;
+    segment.loop = true;
+    montage.segments.push_back(segment);
     asset->montages.push_back(montage);
 
     const json catalog = BuildAnimationScriptAssets(*asset);
@@ -173,7 +309,13 @@ TEST(AnimationScriptData, SerializesMontageSectionsNotifiesAndWarpFields)
     EXPECT_EQ(montageJson.at("sequencePath"), "Maps/Test/walk.anim.json");
     EXPECT_EQ(montageJson.at("derivedClipId"), "walk");
     EXPECT_FLOAT_EQ(montageJson.at("length").get<float>(), 1.5f);
+    EXPECT_EQ(montageJson.at("path"), "Maps/Test/Animations/AM_Test.json");
+    EXPECT_FLOAT_EQ(montageJson.at("rateScale").get<float>(), 0.5f);
     EXPECT_EQ(montageJson.at("slot"), "DefaultSlot");
+    ASSERT_EQ(montageJson.at("segments").size(), 1u);
+    EXPECT_EQ(montageJson.at("segments")[0].at("segmentId"), "Loop");
+    EXPECT_FLOAT_EQ(montageJson.at("segments")[0].at("clipEndTime").get<float>(), 1.5f);
+    EXPECT_TRUE(montageJson.at("segments")[0].at("loop").get<bool>());
     ASSERT_EQ(montageJson.at("sections").size(), 1u);
     const auto& section = montageJson.at("sections").front();
     EXPECT_EQ(section.at("name"), "Default");
@@ -210,6 +352,8 @@ TEST(AnimationScriptData, SerializesFiredNotifyFields)
     fired.startTime = 0.25f;
     fired.duration = 0.5f;
     fired.interrupted = true;
+    fired.segmentIndex = 1;
+    fired.segmentId = "Loop";
 
     const json feedback = BuildAnimationNotifyFeedback({fired});
     ASSERT_EQ(feedback.size(), 1u);
@@ -222,6 +366,8 @@ TEST(AnimationScriptData, SerializesFiredNotifyFields)
     EXPECT_FLOAT_EQ(value.at("startTime").get<float>(), 0.25f);
     EXPECT_FLOAT_EQ(value.at("duration").get<float>(), 0.5f);
     EXPECT_TRUE(value.at("interrupted").get<bool>());
+    EXPECT_EQ(value.at("segmentIndex"), 1);
+    EXPECT_EQ(value.at("segmentId"), "Loop");
 }
 
 TEST(AnimationScriptData, BuildsWarpWindowsInNotifyOrderWithTargetsAndFlags)
@@ -847,5 +993,68 @@ TEST(AnimationScriptData, MontageBackwardLinkEndsActiveStatesInterrupted)
         if (event.name == "LoopState" && event.phase == "end")
             EXPECT_FLOAT_EQ(event.time, 1.0f);
     EXPECT_EQ(player.MontageSectionIndex(), 0u); // 第二遍在 A 段内
+}
+
+TEST(AnimationScriptData, SegmentedMontageSwitchesClipWithoutRestartingTimeline)
+{
+    auto asset = MakeAsset();
+    AddClip(*asset, "run", 2.0f, 400.0f);
+    Montage montage = SegmentedMontage();
+    montage.rateScale = 1.0f;
+    asset->montages.push_back(montage);
+
+    SkeletalPlayback player(asset);
+    PlayMontage(player, asset->montages[0], {}, false, 1, true);
+    EXPECT_FLOAT_EQ(player.Time(), 0.0f);
+    EXPECT_EQ(player.SelectedClipId(), "walk");
+    EXPECT_EQ(player.MontageSegmentId(), "Start");
+
+    player.Tick(1.2f);
+    EXPECT_NEAR(player.Time(), 1.2f, 1e-5f);
+    EXPECT_EQ(player.SelectedClipId(), "run");
+    EXPECT_EQ(player.MontageSegmentId(), "Loop");
+    // 0→1 取 walk 的 0→1（100 cm）+ 1→1.2 取 run 的 0→0.2（40 cm）。
+    EXPECT_NEAR(player.RootMotionDelta().z(), 140.0f, 0.01f);
+    EXPECT_EQ(player.MontageSegmentIndex(), 1u);
+}
+
+TEST(AnimationScriptData, SegmentedMontageRateScaleAndSectionSelfLoopRespectTimeline)
+{
+    auto asset = MakeAsset();
+    AddClip(*asset, "run", 2.0f, 400.0f);
+    Montage montage = SegmentedMontage();
+    montage.sections = {{"A", 0.0f, 1.0f, "B", 1.0f, "Absolute"},
+        {"B", 1.0f, 2.0f, "A", 0.0f, "Absolute"}};
+    asset->montages.push_back(montage);
+    SkeletalPlayback player(asset);
+    PlayMontage(player, asset->montages[0], {}, false, 1, true);
+    EXPECT_FLOAT_EQ(player.Rate(), 0.5f);
+
+    player.Tick(2.0f); // timeline 推进 1.0 s，进入 B/run。
+    EXPECT_NEAR(player.Time(), 1.0f, 1e-5f);
+    EXPECT_EQ(player.SelectedClipId(), "run");
+    EXPECT_EQ(player.MontageSectionIndex(), 1u);
+
+    player.Tick(2.0f); // timeline 2.0 -> B 回到 A，再走 0.0。
+    EXPECT_EQ(player.MontageSectionIndex(), 0u);
+    EXPECT_EQ(player.SelectedClipId(), "walk");
+}
+
+TEST(AnimationScriptData, SegmentedMontageMapsSidecarNotifiesToSegmentTimeline)
+{
+    auto asset = MakeAsset();
+    AddClip(*asset, "run", 2.0f, 400.0f);
+    asset->clips[1].sequence.notifies.push_back({"1", "MappedNotify", 0.5f, 0.0f});
+    Montage montage = SegmentedMontage();
+    montage.rateScale = 1.0f;
+    asset->montages.push_back(montage);
+    SkeletalPlayback player(asset);
+    PlayMontage(player, asset->montages[0], {}, false, 1, true);
+
+    player.Tick(1.6f);
+    ASSERT_EQ(player.FiredNotifies().size(), 1u);
+    EXPECT_EQ(player.FiredNotifies()[0].name, "MappedNotify");
+    EXPECT_NEAR(player.FiredNotifies()[0].time, 1.5f, 1e-5f);
+    EXPECT_EQ(player.FiredNotifies()[0].segmentId, "Loop");
 }
 }

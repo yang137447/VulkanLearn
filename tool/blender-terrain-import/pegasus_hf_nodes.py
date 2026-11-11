@@ -106,6 +106,8 @@ def build_noise():
          "把米换算成归一化层时使用的参考高度。"),
         ("Center Noise", "NodeSocketBool", True, None, None,
          "噪声以 0 为中心（±amp），对应 Houdini centernoise。"),
+        ("Mask", "NodeSocketFloat", 1.0, 0.0, 1.0,
+         "细节掩膜：0 时该处不叠加噪声，1 时保持全幅。"),
     ])
     p = core.params(group_input)
 
@@ -152,6 +154,8 @@ def build_noise():
                                     p["Height Scale"], (-400, 1080))
     normalized = core.math_node(tree, "MULTIPLY", centered_or_raw,
                                 amplitude_norm.outputs[0], (-400, 900))
+    masked = core.math_node(tree, "MULTIPLY", normalized.outputs[0],
+                            p["Mask"], (-250, 900))
 
     # 叠加到目标层
     # 层名直接用组参数的 socket（NodeSocketString 可以作为字段连接到 Name）
@@ -163,7 +167,7 @@ def build_noise():
     core.link(tree, layer_name, current.inputs["Name"])
 
     summed = core.math_node(tree, "ADD", current.outputs["Attribute"],
-                            normalized.outputs[0], (-200, 700))
+                            masked.outputs[0], (-200, 700))
 
     # 写回：层名由参数决定，用 Store Named Attribute 的几何输入接上游
     geometry = tree.nodes.new("GeometryNodeMeshToPoints")  # 占位，稍后替换

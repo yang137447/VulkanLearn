@@ -15,7 +15,8 @@
             "sampled",
             "present",
             "transferSrc",
-            "transferDst"
+            "transferDst",
+            "storage"
         ],
         "loadOpSupport": [
             "clear",
@@ -34,24 +35,48 @@
             "greaterOrEqual",
             "always"
         ],
+        "stencilCompareOpSupport": [
+            "never",
+            "less",
+            "equal",
+            "lessOrEqual",
+            "greater",
+            "notEqual",
+            "greaterOrEqual",
+            "always"
+        ],
+        "stencilOpSupport": [
+            "keep",
+            "zero",
+            "replace",
+            "incrementAndClamp",
+            "decrementAndClamp",
+            "invert",
+            "incrementAndWrap",
+            "decrementAndWrap"
+        ],
         "pipelineState": {
             "useVertexInput": "是否使用模型顶点输入。fullscreen/postprocess/sky 这类 pass 通常为 false。",
             "depthTestEnable": "是否开启深度测试。",
             "depthWriteEnable": "是否写入深度。",
-            "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
+            "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。",
+            "stencil": "可选硬件 stencil 状态。front/back 共用同一组值；未声明时 testEnable=false，旧 pass 状态不变。字段为 testEnable、writeMask、compareMask、reference、compareOp、failOp、depthFailOp、passOp。启用 stencil 的 pass 必须输出 D24_UNORM_S8_UINT 或 D32_SFLOAT_S8_UINT 附件。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、terrainFeedback；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、localShadow、geometry、terrainFeedback、decalStencil、decal、forwardOpaque、sky、sceneColorCopy、forwardTransparent、particleSoftDepth、particle、distortion、postProcess、editorGrid、autoExposure、volumetricFog、fogComposite；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
-            "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
-            "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。"
+            "type": "可选资源类型。默认 texture2D；CSM shadowMap 与 volumetricFog 使用 texture2DArray。",
+            "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。",
+            "clearColor": "可选四分量颜色清除值；未提供时沿用颜色附件默认灰底 0.2,0.2,0.2,1。"
         },
         "output": {
             "resource": "当前 pass 输出的逻辑资源名。",
             "layer": "可选输出数组层。默认 0；CSM shadowCascadeN 使用它选择 shadowMap 的目标层。",
             "loadOp": "attachment 开始时的加载策略。",
-            "storeOp": "attachment 结束时的保存策略。"
+            "storeOp": "attachment 结束时的保存策略。",
+            "stencilLoadOp": "带 stencil 分量附件的 stencil 加载策略；默认 dontCare。",
+            "stencilStoreOp": "带 stencil 分量附件的 stencil 保存策略；默认 dontCare。"
         }
     },
     "resources": [
@@ -70,6 +95,31 @@
             ]
         },
         {
+            "name": "localShadowMap",
+            "type": "texture2DArray",
+            "format": "D32_SFLOAT",
+            "widthSize": 1024,
+            "heightSize": 1024,
+            "arrayLayers": 8,
+            "usage": [
+                "depthStencilAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "volumetricFog",
+            "type": "texture2DArray",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.25,
+            "heightScale": 0.25,
+            "arrayLayers": 32,
+            "initialLayout": "shaderRead",
+            "usage": [
+                "storage",
+                "sampled"
+            ]
+        },
+        {
             "name": "swapChain",
             "format": "R8G8B8A8_SRGB",
             "widthScale": 1,
@@ -81,6 +131,16 @@
         },
         {
             "name": "sceneColor",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "sceneColorCopy",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1,
             "heightScale": 1,
@@ -163,6 +223,83 @@
         {
             "name": "gbufferF",
             "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferA",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferB",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferC",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferD",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferMask",
+            "format": "R8G8B8A8_UNORM",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "dbufferEmissive",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "distortion",
+            "format": "R16G16B16A16_SFLOAT",
+            "clearColor": [0.0, 0.0, 0.0, 0.0],
             "widthScale": 1,
             "heightScale": 1,
             "usage": [
@@ -328,6 +465,27 @@
                 "depthStencilAttachment",
                 "sampled"
             ]
+        },
+        {
+            "name": "particleSoftDepth",
+            "type": "texture2D",
+            "format": "R32_SFLOAT",
+            "widthScale": 0.5,
+            "heightScale": 0.5,
+            "initialLayout": "shaderRead",
+            "usage": [
+                "storage",
+                "sampled"
+            ]
+        },
+        {
+            "name": "decalStencil",
+            "format": "D24_UNORM_S8_UINT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "depthStencilAttachment"
+            ]
         }
     ],
     "passes": [
@@ -414,6 +572,180 @@
                     "storeOp": "store"
                 }
             ]
+        },
+        {
+            "name": "localShadow0",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 0,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow1",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 1,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow2",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 2,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow3",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 3,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow4",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 4,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow5",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 5,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow6",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 6,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "localShadow7",
+            "type": "localShadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "localShadowMap",
+                    "layer": 7,
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "lightCulling",
+            "type": "lightCulling",
+            "input": [],
+            "output": []
         },
         {
             "name": "geometry",
@@ -541,6 +873,103 @@
             ]
         },
         {
+            "name": "decalStencil",
+            "type": "decalStencil",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "always",
+                "stencil": {
+                    "testEnable": true,
+                    "writeMask": 1,
+                    "compareMask": 1,
+                    "reference": 1,
+                    "compareOp": "always",
+                    "failOp": "keep",
+                    "depthFailOp": "keep",
+                    "passOp": "replace"
+                }
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "decalStencil",
+                    "loadOp": "clear",
+                    "storeOp": "store",
+                    "stencilLoadOp": "clear",
+                    "stencilStoreOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "decals",
+            "type": "decal",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "always",
+                "stencil": {
+                    "testEnable": true,
+                    "writeMask": 0,
+                    "compareMask": 1,
+                    "reference": 0,
+                    "compareOp": "notEqual",
+                    "failOp": "keep",
+                    "depthFailOp": "keep",
+                    "passOp": "keep"
+                }
+            },
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "dbufferA",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferB",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferC",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferD",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferMask",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "decalStencil",
+                    "loadOp": "load",
+                    "storeOp": "store",
+                    "stencilLoadOp": "load",
+                    "stencilStoreOp": "dontCare"
+                }
+            ]
+        },
+        {
             "name": "deferredLighting",
             "type": "postProcess",
             "needCreateMaterial": true,
@@ -581,6 +1010,34 @@
                 },
                 {
                     "resource": "shadowMap"
+                },
+                {
+                    "resource": "dbufferA",
+                    "binding": 10
+                },
+                {
+                    "resource": "dbufferB",
+                    "binding": 11
+                },
+                {
+                    "resource": "dbufferC",
+                    "binding": 12
+                },
+                {
+                    "resource": "dbufferMask",
+                    "binding": 13
+                },
+                {
+                    "resource": "dbufferD",
+                    "binding": 14
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 15
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 16
                 }
             ],
             "output": [
@@ -605,6 +1062,34 @@
                 {
                     "resource": "shadowMap",
                     "binding": 0
+                },
+                {
+                    "resource": "dbufferA",
+                    "binding": 1
+                },
+                {
+                    "resource": "dbufferB",
+                    "binding": 2
+                },
+                {
+                    "resource": "dbufferC",
+                    "binding": 3
+                },
+                {
+                    "resource": "dbufferD",
+                    "binding": 4
+                },
+                {
+                    "resource": "dbufferMask",
+                    "binding": 5
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 6
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 7
                 }
             ],
             "output": [
@@ -651,6 +1136,31 @@
             ]
         },
         {
+            "name": "sceneColorCopyPass",
+            "type": "postProcess",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/Pass/MI_sceneColorCopy.json",
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sceneColor",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColorCopy",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "forwardTransparent",
             "type": "forwardTransparent",
             "needMsaa": false,
@@ -668,6 +1178,22 @@
                 {
                     "resource": "gbufferVelocity",
                     "binding": 1
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 6
+                },
+                {
+                    "resource": "dbufferEmissive",
+                    "binding": 7
+                },
+                {
+                    "resource": "sceneColorCopy",
+                    "binding": 8
+                },
+                {
+                    "resource": "gbufferA",
+                    "binding": 9
                 }
             ],
             "output": [
@@ -683,6 +1209,140 @@
                 },
                 {
                     "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "particleSoftDepth",
+            "type": "particleSoftDepth",
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "particleSoftDepth",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "particle",
+            "type": "particle",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                },
+                {
+                    "resource": "shadowMap",
+                    "binding": 1
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 2
+                },
+                {
+                    "resource": "particleSoftDepth",
+                    "binding": 3
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "particleDistortion",
+            "type": "distortion",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                },
+                {
+                    "resource": "particleSoftDepth",
+                    "binding": 3
+                }
+            ],
+            "output": [
+                {
+                    "resource": "distortion",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "volumetricFog",
+            "type": "volumetricFog",
+            "input": [
+                {
+                    "resource": "sceneDepth",
+                    "binding": 0
+                },
+                {
+                    "resource": "shadowMap",
+                    "binding": 1
+                },
+                {
+                    "resource": "localShadowMap",
+                    "binding": 2
+                }
+            ],
+            "output": [
+                {
+                    "resource": "volumetricFog",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "fogComposite",
+            "type": "fogComposite",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "volumetricFog",
+                    "binding": 0
+                },
+                {
+                    "resource": "sceneDepth",
+                    "binding": 1
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
                     "loadOp": "load",
                     "storeOp": "store"
                 }
@@ -749,6 +1409,10 @@
                 {
                     "resource": "autoExposure",
                     "binding": 1
+                },
+                {
+                    "resource": "distortion",
+                    "binding": 2
                 }
             ],
             "output": [
@@ -940,6 +1604,10 @@
                 {
                     "resource": "autoExposure",
                     "binding": 4
+                },
+                {
+                    "resource": "distortion",
+                    "binding": 5
                 }
             ],
             "output": [

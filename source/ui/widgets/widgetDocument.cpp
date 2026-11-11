@@ -97,8 +97,11 @@ void WidgetDocument::SetControlValue(const std::string& id, const std::string& v
     if (document == nullptr) return;
     Rml::Element* element = document->GetElementById(id);
     auto* control = dynamic_cast<Rml::ElementFormControl*>(element);
-    // 文本可处于未完成状态；只有非焦点控件才接收快照，不抢夺用户输入。
-    if (control == nullptr || document->GetContext()->GetFocusElement() == control) return;
+    // 文本输入可处于未完成状态；只有这类焦点控件才拒绝快照。
+    // select 的焦点只表示菜单归属，文档切换后仍必须接收新的选择状态。
+    if (control == nullptr) return;
+    if (document->GetContext()->GetFocusElement() == control &&
+        dynamic_cast<Rml::ElementFormControlInput*>(control) != nullptr) return;
     if (ReportsSameValue(element, control->GetValue(), value)) return;
     control->SetValue(value);
 }

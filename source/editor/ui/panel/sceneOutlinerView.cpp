@@ -68,7 +68,8 @@ void RefreshActorVisualization(const OutlinerViewContext& context)
             const auto& actor = actors[index];
             if (actor.type == EditorSceneActorType::Mesh ||
                 actor.type == EditorSceneActorType::Environment ||
-                actor.type == EditorSceneActorType::SceneWind)
+                actor.type == EditorSceneActorType::SceneWind ||
+                actor.type == EditorSceneActorType::Terrain)
                 continue;
             const bool selected = actor.identity == context.snapshot->selectedActorIdentity;
             if (selected && actor.visible)
@@ -134,7 +135,8 @@ void RefreshActorVisualization(const OutlinerViewContext& context)
         const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
             ? actor.camera.position
             : (actor.type == EditorSceneActorType::Script ||
-                actor.type == EditorSceneActorType::Terrain) ? actor.position : actor.light.position;
+                actor.type == EditorSceneActorType::Terrain ||
+                actor.type == EditorSceneActorType::ParticleSystem) ? actor.position : actor.light.position;
         const bool visible = actor.visible && view &&
             ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
         widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");

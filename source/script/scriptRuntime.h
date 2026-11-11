@@ -79,7 +79,18 @@ public:
     // 而隐藏的编辑器不会被迫承担完整视图模型的分配。
     ScriptRuntimeView HudView(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
+    bool IsPlaying() const { return state == ScriptPlayState::Playing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
+    // 粒子等 GPU 模拟消费的逻辑帧间隔：Pause=0，Playing 用已乘 timeScale 的
+    // time.delta，Editing/未加载脚本时回退到调用方的编辑器时间。
+    float ParticleDeltaOr(float fallback) const
+    {
+        return SelectParticleSimulationDelta(
+            state,
+            host != nullptr,
+            static_cast<float>(time.delta),
+            fallback);
+    }
     // 只有 Play 才创建 ScriptPhysicsWorld；编辑器/普通预览保持 false。
     bool HasPhysicsWorld() const;
     // 只读诊断：Play 中输出已创建的地形 heightfield body 数量与 placement。
@@ -107,6 +118,8 @@ private:
         const nlohmann::json& animationAssets = nlohmann::json::object());
     void AppendHudLines(ScriptRuntimeView& view, uint64_t generation) const;
     void Apply(World& world, const nlohmann::json& response);
+    void ApplyParticleCommands(World& world, const std::string& owner,
+        const nlohmann::json& commands);
     void CollectDiagnostics(const nlohmann::json& response, const World* world = nullptr);
     void StepPhysics(World& world, float dt, bool collectQueries = true);
     void RefreshPerformance(World& world, bool details = true);

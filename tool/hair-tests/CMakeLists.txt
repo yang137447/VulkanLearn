@@ -1,6 +1,6 @@
 add_executable(hair_asset_tests
     tfxLoaderTests.cpp tfxBoneLoaderTests.cpp strandGeometryTests.cpp tressfxImportTests.cpp tressfxDynamicsTests.cpp
-    tressfxSolverMathTests.cpp
+    tressfxSolverMathTests.cpp tressfxFollowBindingTests.cpp
     tressfxSourceScheduleTests.cpp
     tressfxSkinningTests.cpp
     tressfxSimulationHistoryTests.cpp

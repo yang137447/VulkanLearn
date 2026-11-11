@@ -1,0 +1,96 @@
+#version 450
+
+// 路线 B：把完整 groom 的 follow 发丝从模拟 guide 重建到同一个 current
+// positions buffer。模拟 guide 的 slot 在这里早退，位置由模拟 pass 写入；
+// follow 用来源 guide 的当前逐点 frame 旋转导入期 offset，因此静止时逐点
+// 还原作者造型。frame 规则必须与 source/hair/tressfxFollowBinding.cpp 一致。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+// 每根渲染 guide 的模拟来源；source == guide 表示它本身参与模拟。
+layout(set = 0, binding = 20, std430) readonly buffer FollowGuideIndex
+{
+    uint indices[];
+} followGuideIndex;
+
+// 逐点 offset，布局与 current positions 一致（xyz 有效）。
+layout(set = 0, binding = 21, std430) readonly buffer FollowOffsets
+{
+    vec4 offsets[];
+} followOffsets;
+
+// 每根渲染 guide 的参考轴（xyz 有效），来自其模拟来源 guide。
+layout(set = 0, binding = 22, std430) readonly buffer FollowFrameReferences
+{
+    vec4 references[];
+} followFrameReferences;
+
+vec3 TressfxFollowReference(vec3 tangent)
+{
+    vec3 axis = tangent;
+    float lengthSquared = dot(axis, axis);
+    axis = lengthSquared > 1.0e-20 ? axis * inversesqrt(lengthSquared) : vec3(0, -1, 0);
+    vec3 absolute = abs(axis);
+    if (absolute.x <= absolute.y && absolute.x <= absolute.z)
+        return vec3(1, 0, 0);
+    if (absolute.y <= absolute.z)
+        return vec3(0, 1, 0);
+    return vec3(0, 0, 1);
+}
+
+void TressfxFollowFrame(vec3 tangent, vec3 reference, out vec3 x, out vec3 y, out vec3 z)
+{
+    float lengthSquared = dot(tangent, tangent);
+    x = lengthSquared > 1.0e-20 ? tangent * inversesqrt(lengthSquared) : vec3(0, -1, 0);
+    y = reference - x * dot(reference, x);
+    if (dot(y, y) <= 1.0e-10)
+    {
+        vec3 fallback = TressfxFollowReference(x);
+        y = fallback - x * dot(fallback, x);
+    }
+    y = normalize(y);
+    z = normalize(cross(x, y));
+}
+
+vec3 TressfxFollowTangent(uint point, uint pointsPerGuide)
+{
+    uint local = point % pointsPerGuide;
+    if (local + 1u < pointsPerGuide)
+    {
+        vec3 tangent = currentPositions.positions[point + 1u].xyz -
+            currentPositions.positions[point].xyz;
+        if (dot(tangent, tangent) > 1.0e-20)
+            return tangent;
+    }
+    if (local > 0u)
+        return currentPositions.positions[point].xyz -
+            currentPositions.positions[point - 1u].xyz;
+    return vec3(0, -1, 0);
+}
+
+void main()
+{
+    uint point = gl_GlobalInvocationID.x;
+    if (point >= params.counts.z)
+        return;
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    uint guide = point / pointsPerGuide;
+    uint source = followGuideIndex.indices[guide];
+    if (source == guide)
+        return;
+    uint local = point % pointsPerGuide;
+    uint sourcePoint = source * pointsPerGuide + local;
+    vec3 reference = followFrameReferences.references[guide].xyz;
+    vec3 x, y, z;
+    TressfxFollowFrame(TressfxFollowTangent(sourcePoint, pointsPerGuide), reference, x, y, z);
+    vec4 offset = followOffsets.offsets[point];
+    vec3 position = currentPositions.positions[sourcePoint].xyz +
+        x * offset.x + y * offset.y + z * offset.z;
+    currentPositions.positions[point] = vec4(position, 1.0);
+}

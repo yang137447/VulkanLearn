@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "particles/particleDataChannel.h"
 #include "scene/sceneAssetTypes.h"
 
 namespace VL
@@ -43,6 +44,9 @@ struct WorldBuildPlan
     WorldGameplayPlans gameplay;
     // 场景地面世界 Y；editorGrid 参考网格跟随它，默认 0。
     float editorGridHeight = 0.0f;
+    // 场景级 typed Data Channels；加载后写入 World，供 `$Name` 替换、
+    // 材质绑定与 C# 读取共用同一份值。
+    ParticleDataChannelMap particleDataChannels;
 };
 
 // 渲染器对一个 gameplay 材质路径的解析结果。`materialKey` 由目标 pass、

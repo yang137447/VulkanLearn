@@ -20,7 +20,8 @@ struct WorldSnapshotBuildDesc
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
-    float simulationDeltaSeconds = 0.0f;
+    // 已乘脚本 timeScale 的逻辑帧间隔；Pause 时调用方传 0。
+    float simulationDeltaSeconds = 1.0f / 60.0f;
     float gameSimulationDeltaSeconds = 0.0f;
     float hairSimulationDeltaSeconds = 0.0f;
     int debugViewMode = 0;

@@ -220,6 +220,22 @@ TEST(TressfxSolverMath, GlobalShapeGateUsesRangeFractionAndStiffness)
     EXPECT_TRUE(TressfxGlobalShapePull(initial, temp, 1.0f).isZero());
 }
 
+TEST(TressfxSolverMath, GlobalShapePrecompensationCancelsGravityPerStep)
+{
+    const Eigen::Vector3f rest(0.0f, 10.0f, 0.0f);
+    const Eigen::Vector3f gravityPerStep(0.0f, -0.153125f, 0.0f);
+    const float stiffness = 0.25f;
+    // 先做 Verlet 的重力增量，再做 global shape；两步合并后应回到 rest。
+    const Eigen::Vector3f integrated = rest + gravityPerStep;
+    const Eigen::Vector3f pulled = TressfxGlobalShapePullPrecompensated(
+        rest, integrated, gravityPerStep, stiffness);
+    EXPECT_TRUE(pulled.isApprox(rest, 1.0e-5f));
+    // 无重力时退化为普通 global shape。
+    EXPECT_TRUE(TressfxGlobalShapePullPrecompensated(
+        rest, integrated, Eigen::Vector3f::Zero(), stiffness)
+        .isApprox(integrated + stiffness * (rest - integrated), 1.0e-6f));
+}
+
 TEST(TressfxSolverMath, VspBlendEndpointsAreUnchangedAndFullyTransformed)
 {
     const Eigen::Vector3f position(1.0f, 2.0f, 3.0f);

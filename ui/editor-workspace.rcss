@@ -1386,6 +1386,11 @@ body {
     border-color: #4b4b50;
     border-radius: 3px;
 }
+#viewport-camera-settings label {
+    font-size: 11px;
+    margin-right: 4px;
+    white-space: nowrap;
+}
 .viewport-tool {
     min-width: 0;
     min-height: 0;
@@ -1844,6 +1849,159 @@ body {
 #resource-preview-path { max-width: 90%; margin: 0; color: #92969d; text-align: center; word-break: break-all; }
 #resource-json-inspector { display: block; }
 #resource-json-fields { max-height: none; }
+#particle-editor { display: none; flex-direction: column; min-height: 0; }
+#particle-editor.visible { display: flex; }
+#particle-emitter-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom-width: 1px; border-bottom-color: #49494f;
+}
+#particle-emitter-row span { color: #aeb7b2; font-size: 11px; }
+#particle-emitter-row select { flex: 1; min-width: 0; }
+/* 结构按钮固定最小宽度并禁止收缩，select 仍吃掉剩余空间。 */
+#particle-emitter-row button {
+    flex-shrink: 0; min-width: 26px; padding: 3px 5px; font-size: 10px;
+    background-color: #3a3a40; border-width: 1px; border-color: #56565e;
+}
+#particle-emitter-row button:disabled { color: #6d746f; border-color: #3f3f46; }
+#particle-modules {
+    display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px;
+    border-bottom-width: 1px; border-bottom-color: #49494f;
+}
+#particle-modules button {
+    min-width: 0; padding: 4px 8px; font-size: 11px;
+    background-color: #3a3a40; border-width: 1px; border-color: #56565e;
+}
+#particle-modules button.active { background-color: #35594e; border-color: #62a58d; }
+#particle-fields {
+    display: flex; flex: 1; flex-direction: column; gap: 6px;
+    min-height: 0; overflow-y: auto; padding: 10px 12px;
+}
+.particle-field-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.particle-field-row span {
+    width: 44%; min-width: 0; color: #aeb7b2; font-size: 11px;
+    white-space: normal; word-break: break-all;
+}
+.particle-field-row input, .particle-field-row select { flex: 1; min-width: 0; }
+.particle-field-reset {
+    min-width: 44px;
+    padding: 2px 6px;
+    font-size: 10px;
+}
+.particle-system-summary { margin: 0 12px 8px; color: #8d948f; font-size: 10px; }
+#particle-status { margin: 0; padding: 0 12px 8px; }
+.particle-curve {
+    display: flex; flex-direction: column; gap: 6px;
+    box-sizing: border-box; width: 100%;
+    padding: 8px 0 6px;
+    border-top-width: 1px; border-top-color: #3f3f46;
+}
+.particle-curve-header {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.particle-curve-header span {
+    flex: 1; min-width: 0; color: #d6ddd9; font-size: 12px;
+}
+.particle-curve-header button {
+    flex-shrink: 0; padding: 2px 8px; font-size: 10px;
+    background-color: #3a3a40; border-width: 1px; border-color: #56565e;
+}
+.particle-curve-hint { margin: 0; color: #8d948f; font-size: 10px; }
+.particle-curve-track {
+    position: relative; box-sizing: border-box;
+    width: 100%; height: 16px;
+    overflow: hidden;
+    background-color: #222226;
+    border-width: 1px; border-color: #49494f;
+}
+.particle-curve-marker {
+    position: absolute; top: 2px;
+    box-sizing: border-box;
+    width: 8px; height: 10px; margin-left: -4px;
+    background-color: #62a58d;
+    border-width: 1px; border-color: #e7e7e9;
+}
+.particle-curve-swatches {
+    display: flex; box-sizing: border-box;
+    width: 100%; height: 22px;
+    background-color: #222226;
+    border-width: 1px; border-color: #49494f;
+}
+.particle-curve-swatch { flex: 1; min-width: 0; }
+.particle-curve-bars {
+    display: flex; align-items: flex-end; gap: 1px;
+    box-sizing: border-box; width: 100%; height: 52px;
+    padding: 2px;
+    background-color: #222226;
+    border-width: 1px; border-color: #49494f;
+}
+.particle-curve-bar {
+    flex: 1; min-width: 0;
+    background-color: #62a58d;
+}
+.particle-curve-key-row {
+    display: flex; align-items: center; gap: 3px; min-width: 0;
+}
+.particle-curve-key-label {
+    flex-shrink: 0; width: 40px; color: #aeb7b2; font-size: 10px;
+}
+.particle-curve-channel {
+    flex-shrink: 0; width: 8px; color: #8d948f; font-size: 9px;
+}
+.particle-curve-key-row input {
+    flex: 1; min-width: 0; padding: 2px 3px; font-size: 10px;
+}
+.particle-curve-key-row .particle-curve-remove {
+    flex-shrink: 0; padding: 2px 6px; font-size: 10px;
+    background-color: #3a3a40; border-width: 1px; border-color: #56565e;
+}
+.particle-flipbook-table {
+    display: flex; flex-direction: column; gap: 6px;
+    box-sizing: border-box; width: 100%; padding: 8px 0 6px;
+    border-top-width: 1px; border-top-color: #3f3f46;
+}
+.particle-flipbook-header {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+}
+.particle-flipbook-header span {
+    flex: 1; min-width: 0; color: #d6ddd9; font-size: 12px;
+}
+.particle-flipbook-header .particle-flipbook-count {
+    flex-shrink: 0; color: #8d948f; font-size: 10px;
+}
+.particle-flipbook-hint,
+.particle-flipbook-warning {
+    margin: 0; color: #8d948f; font-size: 10px;
+}
+.particle-flipbook-warning { color: #d8b66a; }
+.particle-flipbook-actions {
+    display: flex; flex-wrap: wrap; gap: 4px; min-width: 0;
+}
+.particle-flipbook-actions button {
+    flex-shrink: 0; padding: 2px 6px; font-size: 10px;
+    background-color: #3a3a40; border-width: 1px; border-color: #56565e;
+}
+.particle-flipbook-scroll {
+    box-sizing: border-box; width: 100%; max-height: 220px;
+    overflow-x: auto; overflow-y: auto;
+    background-color: #222226;
+    border-width: 1px; border-color: #49494f;
+}
+.particle-flipbook-row,
+.particle-flipbook-columns {
+    display: flex; align-items: center; gap: 4px;
+    box-sizing: border-box; min-width: 620px;
+    padding: 2px 4px;
+}
+.particle-flipbook-row span,
+.particle-flipbook-columns span {
+    flex-shrink: 0; width: 52px; color: #aeb7b2; font-size: 10px;
+}
+.particle-flipbook-row input {
+    flex: 1; min-width: 0; padding: 2px 4px; font-size: 10px;
+}
+.particle-flipbook-columns span {
+    color: #8d948f; font-size: 9px;
+}
 .dock-splitter {
     position: absolute;
     z-index: 2;
@@ -1888,7 +2046,7 @@ body {
     pointer-events: auto;
 }
 #editor-notice { flex: 1; min-width: 0; line-height: 23px; white-space: nowrap; overflow: hidden; font-size: 11px; }
-#close-dialog, #save-dialog {
+#close-dialog, #particle-revert-dialog, #save-dialog {
     display: none;
     position: absolute;
     top: 0;
@@ -1898,6 +2056,11 @@ body {
     background-color: #0000008c;
     pointer-events: auto;
     z-index: 50;
+}
+.browser-text-button {
+    min-width: 46px;
+    padding: 2px 6px;
+    font-size: 10px;
 }
 .dialog {
     position: absolute;

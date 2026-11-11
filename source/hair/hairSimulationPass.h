@@ -48,6 +48,7 @@ enum class GuideSimulationPass : uint32_t
     SdfClear,
     SdfSplat,
     SdfCollide,
+    FollowInterpolation,
     Count,
 };
 inline constexpr uint32_t GuideSimulationPassCount =
@@ -160,6 +161,11 @@ private:
         vk::Buffer boneWeights = nullptr;
         std::array<vk::Buffer, GuideSimulationParamBufferCount> skinningPalette{};
         std::array<vk::Buffer, GuideSimulationParamBufferCount> penetrationStats{};
+        // 路线 B：模拟索引与 follow 绑定（静态，创建一次）。
+        vk::Buffer simulationGuides = nullptr;
+        vk::Buffer followGuide = nullptr;
+        vk::Buffer followOffset = nullptr;
+        vk::Buffer followFrameRef = nullptr;
         // TressFX Guides.Frame 的计数镜像：每渲染帧 +1（含 reset 帧），同一帧的
         // 所有 substep 共用。运行时的风时间相位不再从这里取，而是来自
         // renderScene.windTimeSeconds（场景阵风）。

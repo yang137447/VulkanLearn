@@ -5,7 +5,7 @@
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`0254f5ba18506df367d62879c6b9ee7840bdf630`
+生成源 revision：`f1d1422a90daf2ae3882af7831de255fb83ca284`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
@@ -82,6 +82,7 @@
 | World loader runtime error code contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Renderer resource load runtime error code contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Pipeline Vulkan creation diagnostics | pattern must not match in a file | `source/pipeline/computePipeline.cpp`, `source/pipeline/graphicsPipeline.cpp`, `source/pipeline/graphicsPipelineBuilder.cpp`, `source/pipeline/pipelineLayoutBuilder.cpp` |
+| Particle runtime excludes editor | pattern must not match in a directory | `（全仓库源码树）` |
 | Pipeline Vulkan creation diagnostic context | pattern must match in a file | `（路径由脚本内条件生成）` |
 | World graph retire queue validation | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Architecture final validation script contract | pattern must match in a file | `（路径由脚本内条件生成）` |
@@ -90,7 +91,7 @@
 | Game executable link boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game executable link boundary | pattern must not match in a file | `source/main_game.cpp`, `source/engine/nullEditorHost.h`, `source/engine/nullEditorHost.cpp` |
 | Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
-| Runtime UI editor include boundary | pattern must not match in a file | `source/ui/uiSubsystem.h`, `source/ui/uiSubsystem.cpp`, `source/ui/iEditorUiShell.h`, `source/ui/rmlUiInterfaces.h`, `source/ui/rmlUiInterfaces.cpp`, `source/ui/uiAction.h` 等 9 项 |
+| Runtime UI editor include boundary | pattern must not match in a file | `source/ui/uiSubsystem.h`, `source/ui/uiSubsystem.cpp`, `source/ui/uiSubsystemDocuments.cpp`, `source/ui/uiSubsystemInput.cpp`, `source/ui/uiSubsystemActions.cpp`, `source/ui/uiSubsystemInternal.h` 等 13 项 |
 | Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game packaging manifest closure | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game packaging manifest closure | pattern must not match in a file | `（路径由脚本内条件生成）` |
@@ -100,4 +101,4 @@
 | Game shader cache closure | pattern must not match in a file | `（路径由脚本内条件生成）` |
 | Game shader cache closure | pattern must match in a file | `（路径由脚本内条件生成）` |
 
-共 90 条规则。
+共 91 条规则。

@@ -15,6 +15,136 @@ Houdini heightfield + masks
 > 路线是解出 Pegasus 原始 Houdini 工程的节点实现，在 Blender 几何节点里
 > 重建；见本文末尾的 **"Project Pegasus 原始工程解码"**。
 
+> **2026-11-09 更新。** 几何节点复刻已停止（`anisotropy` 1.03 vs Houdini
+> 1.28，属于结构差异而非参数差异）。当前出货路径是**直接接入 Houdini
+> 4 km 导出**，见下面「Pegasus 4 km 导出直连」。GN 代码保留为对照实现。
+
+## Pegasus 岛屿（当前正式资产，2026-11-10）
+
+正式资产不再用 `_ref4km`，而是直接采样 Pegasus 工程里的岛屿 landscape 缓存：
+
+```text
+SourceContent\Pegasus\Landscape\Landscape Heightfield Layers\
+  Pegasus_Landscape_Layers.bgeo.sc        height 2017², Layer0/1/2 = 高度偏移
+  Pegasus_Landscape_Later_1_Source.bgeo.sc 2016², mask/water/debris/sediment/bedrock
+```
+
+**不使用 UE 的 `T_Terrain_IDMAP.png`**。层权重由我们自己的
+`prepare_pegasus_4km.py` 从 Houdini 的体积派生（water/debris/sediment 深度、
+坡度百分位出岩石、`height<3 m` 出海面），需要改层语义时改 Houdini 导出或该
+脚本，而不是去解 UE 的 bitpack。当前 6 层：`Gravel Ground / Rock Face /
+River Water / Scree Debris / River Silt / Sea`。
+
+```powershell
+$py = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe"
+$res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLearnResources"
+
+# 1) hython 采样：2017² = 4032 m / 2.0 m，与源体积 1:1
+cmd /c "artifacts\run_hython.bat tool\houdini-terrain-import\export_pegasus_island.py -- --out D:\YYBWorkSpace\Pegasus\decoded\island2k --samples 2017"
+
+# 2) 单位换算 + 6 层权重 + manifest
+& $py tool\houdini-terrain-import\prepare_pegasus_4km.py `
+  --export-root D:\YYBWorkSpace\Pegasus\decoded\island2k `
+  --resource-root $res --output-relative Generated/HoudiniPegasusIsland
+
+# 3) 4×4 切片，每 tile 512（1.97 m）
+& $py tool\blender-terrain-import\split_pegasus_tiles.py `
+  --source-manifest "$res\Generated\HoudiniPegasusIsland\houdini_pegasus_import.json" `
+  --resource-root $res --output-root "$res\Generated\HoudiniPegasusIsland" `
+  --tile-grid 4 --tile-resolution 512 --heightmap-margin 1 `
+  --lod-levels 3 --lod-distances-m 1250 2500 --tile-size-m 1008 `
+  --page-tiles-per-side 8 --asset-prefix houdini_island_tile
+
+# 4) 合并场景（同时插入独立水面、把相机 near/far 调到 100 m / 60 km）
+& $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
+  --resource-root $res `
+  --tile-layout "$res\Generated\HoudiniPegasusIsland\tile_layout.json" `
+  --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" --verbose
+```
+
+实测（1280×720 development）：`gridResolution=512`、`chunkQuads=128`、
+`totalIfAllBytes≈793 MB`（含全部 LOD），俯视相机全部落在 LOD2 时
+`vertexBytes=45.9 MB`。
+
+## Pegasus 4 km 导出直连
+
+输入目录（仓库外，不入库）：
+
+```text
+D:\YYBWorkSpace\Pegasus\decoded\_ref4km\
+  manifest.json                     sizeM=4000, samples=1024, tileGrid=4
+  global\height_after_height.png    最终高度 -62.61..84.78 m
+  global\height_after_water.png     水深 0..1.535 m（22.9% texel 非零）
+  global\height_after_debris.png    碎屑厚度 0..1.048 m
+  global\height_after_sediment.png  沉积厚度 0..0.920 m
+  global\height_after_bedrock.png   基岩面高度
+```
+
+注意 `height_after_<name>` 是 Houdini heightfield 的**层名**：`water` /
+`debris` / `sediment` 是米制厚度，只有 `height` / `bedrock` 是高度。
+
+一键生成 4×4 资产：
+
+```powershell
+$py = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe"
+$res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLearnResources"
+
+# 1) 单位换算 + 权重归一化 + manifest
+& $py tool\houdini-terrain-import\prepare_pegasus_4km.py `
+  --export-root D:\YYBWorkSpace\Pegasus\decoded\_ref4km `
+  --resource-root $res `
+  --output-relative Generated/HoudiniPegasus4km
+
+# 2) 4x4 切片（复用 GN 路线已验证的脚本）
+& $py tool\blender-terrain-import\split_pegasus_tiles.py `
+  --source-manifest "$res\Generated\HoudiniPegasus4km\houdini_pegasus_import.json" `
+  --resource-root $res --output-root "$res\Generated\HoudiniPegasus4km" `
+  --tile-grid 4 --tile-resolution 256 --heightmap-margin 1 `
+  --lod-levels 3 --lod-distances-m 1250 2500 --tile-size-m 1000 `
+  --page-tiles-per-side 8 --asset-prefix houdini_pegasus_tile
+
+# 3) 16 tile 合并成场景
+& $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
+  --resource-root $res `
+  --tile-layout "$res\Generated\HoudiniPegasus4km\tile_layout.json" `
+  --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" `
+  --verbose
+```
+
+`--water-plane-mesh` 会在 16 个 terrain 之后插入 `SeaSurface`（默认 `y = 100 cm`），
+并把相机 `near_clip` 提到 100 m；两者都是必需项——10 cm near 在 4 km 处只有
+约 16 m 深度精度，水面会和地形逐像素 z-fight。平面网格由
+`tool\blender-terrain-import\make_water_plane.py --output $res\Generated\HoudiniPegasusIsland\Water\water_plane.obj`
+生成。
+
+输出：
+
+```text
+Generated\HoudiniPegasus4km\
+  Source\heightmap.png              # 归一化高度
+  Source\Layer_g_{base,rock,water,debris,sediment}.png
+  houdini_pegasus_4km_source.json   # 描述符（含原始导出来源）
+  houdini_pegasus_import.json       # prepare_pegasus_import 产出
+  tile_00..tile_15\ TR/MI/SC
+  SC_terrain_pegasus_4x4.json       # 合并场景
+```
+
+remap 规则（Houdini 官方曲线未导出，暂用分位数定标）：
+
+| 层 | 归一化 |
+| --- | --- |
+| `River Water` | `clamp(depth / 0.35, 0, 1)` |
+| `Scree Debris` | `clamp(depth / 0.25, 0, 1)` |
+| `River Silt` | `clamp(depth / 0.15, 0, 1)` |
+| `Rock Face` | 坡度的 `smoothstep(p90, p99)`（缓地形上绝对角度不触发） |
+| `Gravel Ground` | `1 − 其余四项`，再整体归一化 |
+
+`prepare_pegasus_import.py` 会检查掩膜逐 texel 求和 ≈ 255；实测 253.6。
+
+引擎验收（1280×720，Debug）：`globalLayers=5`、`visibleLayers=5`、
+`resident=776/1024`、`missPages=0`、`groups=256 chunks=338 meshDraws=256`。
+截图 `artifacts/houdini_ingest/houdini_far.png` 与 `houdini_top.png`。
+
 ## Project Pegasus 原始工程解码
 
 官方 Pegasus 工程（`$PEGASUSPROJECT` 指向的那套）已下载解包到仓库外的

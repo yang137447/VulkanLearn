@@ -59,7 +59,7 @@ host/shader 公式、单位与调度审计，以及
 ### 2.2 Console 命令能力表
 
 本轮先做源码盘点，随后补记了新增的 `mesh` 命令并实际运行引擎（§4.4）。
-以下命令来自 `source/debugConsole.cpp::ProcessCommand` 的实际分支，不臆造命令。
+以下命令来自 `source/debugConsoleProcessCommand.cpp::ProcessCommand` 的实际分支，不臆造命令。
 
 | 命令 | 现有用途 | 能否做 placement 平移/传送 | 能否做快速转头 | 能否做固定机位跟随 | 结论 |
 | --- | --- | --- | --- | --- | --- |
@@ -69,7 +69,7 @@ host/shader 公式、单位与调度审计，以及
 | `perf json` | 单行性能快照 | 否 | 否 | 否 | 采样快照，不是逐帧遥测 |
 | `gpustats` | 最近一次逐 pass GPU 表 | 否 | 否 | 否 | 聚合表 |
 | `loadworld` / `loadscene` | 整 World 重载 | **否**：会换 worldGeneration，全部历史重建 | 否 | 否 | 不能当作 placement teleport；它测的是重载而不是换基 |
-| `mesh transform` / `mesh offset` / `mesh sweep` | 显式改变 mesh 场景对象根 TRS：绝对 TRS、当前位移叠加、有限时长线性推进 | **是**：位置 cm、rotation 度（Y 为 yaw）；sweep 在 GT 每帧推进 | 否，只改 actor 根变换，不改骨骼 pose | 可配合固定机位 | 正常 Console 命令（`debugConsole.cpp:289`），复用 `World::SetMeshSceneObjectTransform`；`transform` 的 scale 固定为 1（非单位缩放 actor 会被重标定），`offset` 保留当前 rotation/scale；图片只证明可见性 |
+| `mesh transform` / `mesh offset` / `mesh sweep` | 显式改变 mesh 场景对象根 TRS：绝对 TRS、当前位移叠加、有限时长线性推进 | **是**：位置 cm、rotation 度（Y 为 yaw）；sweep 在 GT 每帧推进 | 否，只改 actor 根变换，不改骨骼 pose | 可配合固定机位 | 正常 Console 命令（`debugConsoleProcessCommand.cpp:268-272`），复用 `World::SetMeshSceneObjectTransform`；`transform` 的 scale 固定为 1（非单位缩放 actor 会被重标定），`offset` 保留当前 rotation/scale；图片只证明可见性 |
 | `previewmodel` | 把模型注入预览场景后重载 | 否 | 否 | 否 | 不改变当前 World 的 actor 轨迹 |
 | `injectinput`（action / down / up） | 注入 gameplay 动作 | 否 | 否 | 否 | 没有 actor transform 通道 |
 | `editor <JSON>` | 编辑器资产命令 | 否（资产文档，不是运行时 actor 路径） | 否 | 否 | `--no-dev-ui` 时 editor host 不可用 |
@@ -83,12 +83,12 @@ host/shader 公式、单位与调度审计，以及
   文档，`--no-dev-ui` 下不可用，因此**没有**复用它做 placement。
 - 新增的 `RuntimeCommandType::SetMeshPlacement`（`source/engine/runtimeCommand.h:43`）只带
   场景对象身份和 TRS/位移/时长，由 `RuntimeCommandExecutor::ApplyMeshPlacement`
-  （`source/engine/runtimeCommandExecutor.cpp:893`）在 GT 上直接调用
+  （`source/engine/runtimeCommandExecutor.cpp:119-264`）在 GT 上直接调用
   `World::SetMeshSceneObjectTransform`，不触碰编辑器文档，也不写资产。
 - `mesh offset` 需要读当前根 TRS，因此 `World` 新增只读
-  `GetMeshSceneObjectTransform`（`source/world/world.h:174`、`source/world/world.cpp:509`）；
+  `GetMeshSceneObjectTransform`（`source/world/world.h:572`、`source/world/world.cpp:802`）；
   scene TRS 是 actor 级的，读第一个 section 即可。
-- `mesh sweep`（`runtimeCommandExecutor.cpp:1032`）由执行器在每个 GT 帧推进一次，
+- `mesh sweep`（`runtimeCommandExecutor.cpp:266-303`）由执行器在每个 GT 帧推进一次，
   用 `steady_clock` 而不是帧计数算比例，因此 30/60/120 Hz 下位移速度一致；没有命令时
   没有每帧默认开销。同一 identity 的新 sweep 会替换旧 sweep，`loadworld` 会取消它。
 - `loadworld` 仍是整 World 替换，会重置 hair 历史/时钟，不能用于验证「同一 actor
@@ -368,14 +368,14 @@ hair trace <path> <frames> <guide-stride>
 ```
 
 - 参数校验：`path` 非空、`frames > 0`、`guide-stride > 0`；Console 侧与 GT 执行端
-  各校验一次（`source/debugConsole.cpp:403`、`source/engine/runtimeCommandExecutor.cpp:890`）。
+  各校验一次（`source/debugConsoleProcessCommand.cpp:445-447`、`source/engine/runtimeCommandExecutorExecuteCommand.cpp:1450-1460`）。
 - 只 trace 场景里第一个 GPU hair 对象；guide 取 `0, stride, 2*stride, ...`，最多
   `256` 根。样本只覆盖这个子集，不是全部约 4 万根 guide。
 - 请求路径：Console → `RuntimeCommandType::RequestHairTrace`
   （`source/engine/runtimeCommand.h:77`）→ GT 的 `RuntimeCommandExecutor`
-  → `RenderSystem::RequestHairTrace`（`source/renderSystem.cpp:1254`，互斥量保护）
+  → `RenderSystem::RequestHairTrace`（`source/renderSystem.cpp:408`，互斥量保护）
   → 渲染线程 `RecordHairSimulation` 转发给 `HairSimulationPass::BeginTrace`
-  （`source/renderSystem.cpp:3938`）。Console/GT 线程不访问 GPU、World 或文件句柄。
+  （`source/render/hair/hairRuntime.cpp:174-181`）。Console/GT 线程不访问 GPU、World 或文件句柄。
 
 数据流与同步：
 
@@ -393,15 +393,15 @@ HairSimulationPass::Record
 - 每个 frame-in-flight 槽一份 host-visible、host-coherent readback buffer
   （`eTransferDst`），大小 `selectedGuides * pointsPerGuide * 3 * 16`；另有一次性
   rest-length buffer。只在 trace 激活时分配/拷贝；未激活时 Record 只有一次
-  `trace.active` 分支（`source/hair/hairSimulationPass.cpp:985` 附近）。
+  `trace.active` 分支（`source/hair/hairSimulationPass.cpp:448-450` 附近）。
 - `vkCmdCopyBuffer` 需要源 buffer 带 `eTransferSrc`；该 usage 位加在
-  `CreateUploadedDeviceLocalStorageBuffer`（`source/renderableObject.cpp:24`），
+  `CreateUploadedDeviceLocalStorageBuffer`（`source/render/renderable/renderableMeshBuffers.cpp:21`），
   未激活 trace 时不产生拷贝或同步开销。
-- barrier 与拷贝集中在 `RecordTraceCopies`（`source/hair/hairSimulationPass.cpp:520`），
-  文件落盘在 `FlushTraceSlot`（`:472`），结束/汇总在 `FinishTraceInternal`（`:644`）。
+- barrier 与拷贝集中在 `RecordTraceCopies`（`source/hair/hairSimulationPassTrace.cpp:191-195`），
+  文件落盘在 `FlushTraceSlot`（`source/hair/hairSimulationPassTrace.cpp:140`），结束/汇总在 `FinishTraceInternal`（`source/hair/hairSimulationPassTrace.cpp:322`）。
 - 目标帧数达到后停止新拷贝；最后 1–2 个仍 pending 的 slot 在它们下一次复用或
   `RenderSystem::ShutdownRenderObject` 的 `FinishTrace(true)` 中冲刷
-  （`source/renderSystem.cpp:3625`，一次 queue idle）。正常 trace 只延迟到后面
+  （`source/renderSystem.cpp:1408-1413`，一次 queue idle）。正常 trace 只延迟到后面
   1–2 帧，不回读时没有额外等待。
 
 文件格式（小端，`source/hair/hairTraceFormat.h:61`）：

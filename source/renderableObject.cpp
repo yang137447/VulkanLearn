@@ -97,6 +97,15 @@ RenderableObject::RenderableObject(
             section.vertices.size() == pointCount * 2)
         {
             tressfxGuideCount = static_cast<uint32_t>(pointCount / pointsPerGuide);
+            tressfxHasFollowBinding =
+                !section.tressfxSimulationGuideIndices.empty();
+            tressfxSimulationGuideCount = tressfxHasFollowBinding
+                ? static_cast<uint32_t>(section.tressfxSimulationGuideIndices.size())
+                : tressfxGuideCount;
+            if (tressfxHasFollowBinding &&
+                tressfxSimulationConfig.backend != TressfxSimulationBackend::Gpu)
+                throw std::runtime_error(
+                    "TressFX follow binding requires the GPU backend: " + name);
             tressfxPointsPerGuide = section.tressfxPointsPerStrand;
             std::string groupError;
             if (!VL::Hair::ValidateTressfxGroupPreviewBinding(

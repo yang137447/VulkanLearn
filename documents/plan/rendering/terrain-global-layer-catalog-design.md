@@ -763,4 +763,3 @@ for (slot = 0; slot < 4; ++slot) {
 - `validate-docs.py` 通过；
 - 文档落地时把“已实现”的字段/位宽/预算写回 `contracts/terrain.md`，
   本文只保留“为什么”和“还没做”。
-

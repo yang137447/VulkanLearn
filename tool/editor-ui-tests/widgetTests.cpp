@@ -1034,6 +1034,7 @@ TEST_F(UiWidgetTest, OnlyRenderableActorTypesOfferAVisibilityToggle)
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::PointLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SpotLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SquareAreaLight));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::ParticleSystem));
     // 相机/环境/场景风/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Camera));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Environment));

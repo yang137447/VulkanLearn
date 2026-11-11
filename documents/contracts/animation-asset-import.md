@@ -53,6 +53,12 @@ ozz SkeletonBuilder 的输出顺序逐项与导入的深度优先索引核对。
 顶点；运行期只把盒子角点变换后求并集，不再逐顶点蒙皮。该数据的语义、保守性与
 未初始化时的回退路径见 [动画播放与 GPU 蒙皮](animation-runtime-skinning.md)。
 
+斜坡姿态修正不新增 SM/SK/sequence sidecar 字段。`SlopeWarpingSolver` 在运行时按
+关节名解析 `pelvis`、`foot_l`、`foot_r`；缺失时仅停用该后处理，不使资产导入失败。
+`weight`、`maxSlopeDegrees`、`pelvisHeightOffset`、`footCompensation`、
+`responseSpeed`、`maxPelvisOffset` 属于 C# 播放器/蓝图参数，由
+`AnimationPlayback.SetSlopeWarping(...)` 提交，不写入动画资产 schema。
+
 ## 片段采样
 
 片段保留原始 TRS 与根轨道，再由固定 ozz AnimationBuilder 构建压缩轨道。
@@ -71,7 +77,9 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
 
 ## 三层动画资产：加载顺序与校验
 
-骨骼 SM 的 `skinning` 引用三层数据资产：
+新骨骼网格统一命名为 `SKM_*.json`；`SM_*.json` 只用于非骨骼模型。仓库里仍有
+历史 `SM_*` 骨骼资产，触碰时再迁移，不能把旧名当作新约定。骨架使用 `SK_*.json`。
+骨骼 `SKM_` 的 `skinning` 引用三层数据资产：
 
 ```json
 "skinning": {
@@ -87,6 +95,30 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
   ]
 }
 ```
+
+Sequence sidecar 的同步元数据分两层，均由 `ParseSequence` 校验：
+
+```json
+"syncMarkers": [
+  { "name": "Foot_L", "time": 0.3293622 },
+  { "name": "Foot_R", "time": 0.8529410 }
+],
+"players": [
+  { "syncGroup": "Locomotion", "syncRole": "AlwaysFollower",
+    "syncMethod": "SyncGroup", "syncGroupScope": "Local",
+    "startPosition": 0.0, "loop": true }
+]
+```
+
+`syncMarkers` 是 Sequence 资产自身的脚步/事件标记，允许同名重复；`players` 是
+AnimBP Sequence Player 的绑定，保存 UE `EAnimGroupRole`/`EAnimSyncMethod` 的显式字符串、
+入口 `startPosition` 与循环开关。`syncGroup` 为空必须对应 `DoNotSync`，有组名时不能声明
+`DoNotSync`。一个 sequence 被多个 player 使用时允许最多 8 条绑定；运行时按组名选择。
+`syncMethod` 接受 `DoNotSync`/`SyncGroup`/`MarkerSync`/`Graph`；`Graph` 只保留数据，
+执行层明确返回 `sync-graph-not-executed`，不静默降级成 `SyncGroup`。
+`syncGroupScope` 只接受 `Local`/`Component`；字段缺省按 `Local` 解析，Echo 的 24 个
+`.anim.json` 已显式写出 `Local`，不从运行时猜默认值；非法值在导入期拒绝。
+`startPosition` 必须落在 `[0, duration]`，marker 时间必须非降且落在同一区间。
 
 需要把 GASP 动作复用到另一套角色骨架时，目标 SM 可以把动作源和显式重定向
 profile 成对声明：
@@ -184,11 +216,13 @@ RT，再从其 `sourceModel` 取得源模型，复用正式导入/重定向/蒙�
    两份 SK id、映射、root 和拓扑；profile 摘要及源 SM 的完整输入清单纳入目标身份。
 4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。sidecar 的
    `sequence` 字段必须等于 `clips[].id`；曲线名必须在 SK `curves` 注册、`tracks` 必须是 SK
-   关节；sidecar `duration` 与 FBX `raw.duration` 差 ≤`1e-5`。摘要与路径进入缓存键与
-   `sourceInputs`。侧车字段与采样语义以 `source/animation/animationSequenceData.h` 为准。
+   关节；sidecar `duration` 与 FBX `raw.duration` 差 ≤`1e-5`。`syncMarkers` 与 `players`
+   按上述结构校验；摘要与路径进入缓存键与 `sourceInputs`。侧车字段与采样语义以
+   `source/animation/animationSequenceData.h` 为准。
 5. **全部 clip 完成后才加载 Montage**：逐项读取（≤4 MiB）→ `ParseMontage` → 校验
-   `montage.id == skinning.montages[].id` → `BindMontage`（sidecar 路径命中、sidecar 的
-   SK id/摘要、可选 `sequenceBlake3`、slot、Bone 骨名、派生 clip id）。Montage 只引用
+   `montage.id == skinning.montages[].id` → `BindMontageSegments`（单 sequence 或逐段
+   sidecar 路径命中、sidecar 的 SK id/摘要、可选 `sequenceBlake3`、slot、Bone 骨名、
+   派生 clip id 与段源码区间）。Montage 只引用
    sidecar 路径，不复制曲线、不在导入期采样窗口。完整规则与播放入口见
    [动画 Montage：数据与播放](animation-montage.md)。
 6. **整份清单复核**：导入结束前对 `sourceInputs` 的每一项重新哈希并比对；任一源文件在
@@ -241,6 +275,10 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 由运行时 compute 写回该 section 自己的顶点法线。当前行为见
 [描边壳运行时法线平滑](outline-normal-smoothing.md)。
 
+骨骼导入不接受 `generateSmoothNormals`。源法线长度平方低于 `1e-6` 时，只有该顶点被至少一个
+非退化三角引用，才用相邻三角的面积加权法线替换并归一化；没有可用相邻三角仍拒绝资产。
+源网格完全没有法线流时，所有顶点都按同一规则生成。非退化源法线原样保留。
+
 旧 `|skinning=<root>` 段随 `skinning.root` 一起删除；无片段骨骼 SM 的最小规划键是
 `<modelDataPath>|skeleton=<SK path>`，普通动画资产再按序追加 clip 项。
 
@@ -256,6 +294,8 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 元数据保留 curves/notifies/syncMarkers/settings/rateScale 与原始 `.copy` 输入摘要；
 曲线时间/值长度、排序与有限值，以及 notify 时间/时长在工具边界检查。
 曲线端点外作者 key 原样保留。没有承诺曲线插值、事件执行、虚拟骨重建或 UE 蓝图等价。
+运行时只通过显式 `SampleFloatCurve`/`SkeletalPlayback::SampleCurve` 读取曲线；
+没有 sidecar 的片段返回缺失而不是空曲线，曲线不参与导入期姿态或自动 AnimBP 图执行。
 
 `compare_gasp_import.py` 使用固定 UE→VL 基底独立对照 UE RAW 数据。
 阈值为 0.1 cm、0.1 degree、0.00001 s，并检查元数据逐值保留和缺轨名单。
@@ -267,11 +307,11 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 根 GoogleTest 目标 `animation_preflight_tests` 中，`SkeletalImport`（30 项）覆盖
 手算轴向、父骨保留、九影响权重、MikkTSpace 展开、绑定姿态、缺轨、根位移、
 旋转/缩放和损坏资产拒绝；`AnimationSkeleton`（17 项）覆盖 SK 拓扑/槽位/曲线注册表、
-FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（14 项）
-覆盖 sidecar 帧信息/曲线/notify 与采样；`AnimationMontage`（24 项）覆盖 Montage 解析、
-跨文件绑定、缓存键与 `rotationMethod`；`AnimationScriptData`（30 项）覆盖 catalog/窗口
-装配/target 旋转/Static pose/section link/入口 `startTime`；`MotionWarping`（28 项）覆盖
-平移、旋转与 Static/Bone warp point；`NotifyPlayback`（11 项）覆盖 notify 执行。测试通过
+FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（16 项）
+覆盖 sidecar 帧信息/曲线/notify/sync marker/player 绑定与采样；`AnimationMontage`（27 项）覆盖 Montage 解析、
+跨文件绑定、多 segment/缓存键与 `rotationMethod`；`AnimationScriptData`（37 项）覆盖 catalog/窗口
+装配/target 旋转/Static pose/section link/段边界 clip 切换/入口 `startTime`/sync 元数据发布；`MotionWarping`（28 项）覆盖
+平移、旋转与 Static/Bone warp point；原生曲线采样；`NotifyPlayback`（11 项）覆盖 notify 执行。测试通过
 根 helper 注册，没有新增 runtime test 标志。
 
 `AnimationRetarget` 覆盖显式映射/骨架拓扑拒绝、不同 rest axes/骨长、未映射骨、

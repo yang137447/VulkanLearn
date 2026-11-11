@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
@@ -24,6 +25,9 @@ struct WorldCandidatePrepareOptions
 {
     bool offlineOnly = false;
     bool prerenderSkin = false;
+    // 粒子资产文档随场景一起解析；指针只在本帧候选构建期间有效。
+    const std::unordered_map<std::string, nlohmann::json>* particleDocuments =
+        nullptr;
 };
 
 // Prepares an inactive World candidate from a scene path. Renderer resource

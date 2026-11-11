@@ -680,8 +680,11 @@ nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
                     results.push_back(std::move(result));
                     continue;
                 }
-                result["blueprint"] = identity;
-                result["terrain"] = impl->terrainIdentities.count(hit.mBodyID2) != 0;
+                const auto terrain = impl->terrainIdentities.find(hit.mBodyID2);
+                if (terrain != impl->terrainIdentities.end())
+                    result["terrain"] = terrain->second;
+                else
+                    result["blueprint"] = identity;
                 result["point"] = VectorJson(from + direction * hit.mFraction);
                 const auto normal = hit.mPenetrationAxis.IsNearZero() ? -direction.Normalized() : -hit.mPenetrationAxis.Normalized();
                 result["normal"] = VectorJson(normal, 1);
@@ -702,8 +705,11 @@ nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
                 results.push_back(std::move(result));
                 continue;
             }
-            result["blueprint"] = identity;
-            result["terrain"] = impl->terrainIdentities.count(hit.mBodyID) != 0;
+            const auto terrain = impl->terrainIdentities.find(hit.mBodyID);
+            if (terrain != impl->terrainIdentities.end())
+                result["terrain"] = terrain->second;
+            else
+                result["blueprint"] = identity;
             result["point"] = VectorJson(point);
             // 从凸体内部出发时命中距离为零，并无唯一表面法线；统一返回逆射线方向，避免球心归一化零向量。
             const auto normal = hit.mFraction == 0 ? -direction.Normalized() :

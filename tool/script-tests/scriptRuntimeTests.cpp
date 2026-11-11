@@ -10,6 +10,7 @@
 #include "editor/scene/scriptBlueprintPlacement.h"
 #include <fstream>
 #include <chrono>
+#include <limits>
 
 namespace
 {
@@ -313,6 +314,263 @@ TEST(ScriptScene, RejectsUnsupportedComponents)
     EXPECT_THROW(ValidateScriptBlueprint(blueprint), std::invalid_argument);
 }
 
+TEST(ScriptScene, LocalLightShadowFieldsValidate)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60},
+        {"intensityUnit", "cd"},
+        {"intensity", 1},
+        {"color", {1, 1, 1}}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json point{
+        {"name", "Point"},
+        {"type", "pointLight"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"intensityUnit", "cd"},
+        {"intensity", 10},
+        {"color", {1, 1, 1}},
+        {"radius", 500},
+        {"shadow", {{"castShadows", true}, {"bias", 2.5}}}};
+    Json spot{
+        {"name", "Spot"},
+        {"type", "spotLight"},
+        {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}},
+        {"intensityUnit", "lm"},
+        {"intensity", 100},
+        {"color", {1, 1, 1}},
+        {"radius", 800},
+        {"cone_angle_outer", 35},
+        {"cone_angle_inner", 15}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Local light shadow fixture"},
+        {"objects", Json::array({camera, point, spot})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    // 缺省 shadow 表示不投影；空对象保持默认 bias。
+    scene["objects"][1].erase("shadow");
+    scene["objects"][2]["shadow"] = Json::object();
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1]["shadow"] = 7;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"castShadows", 1}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"bias", -0.1}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"bias", 1001}};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["shadow"] = {{"castShadows", true}, {"bias", 0}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+}
+
+TEST(ScriptScene, DecalComponentValidatesProjectionAndRanges)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json decal{
+        {"name", "GroundScorch"},
+        {"type", "decal"},
+        {"position", {0, 1, 0}},
+        {"rotation", {0, 0, -90}},
+        {"size", {20, 200, 200}},
+        {"color", {0.02, 0.01, 0.005}},
+        {"opacity", 0.8},
+        {"edgeSoftness", 0.3},
+        {"noiseStrength", 0.6},
+        {"sortOrder", 2}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Decal fixture"},
+        {"objects", Json::array({camera, decal})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1].erase("size");
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["size"] = {0, 200, 200};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["size"] = {20, 200, 200};
+    scene["objects"][1]["opacity"] = 1.1;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["opacity"] = 0.8;
+    scene["objects"][1]["sortOrder"] = 256;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["sortOrder"] = 2;
+    scene["objects"][1]["decalResponse"] = "roughnessNormal";
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    scene["objects"][1]["decalResponse"] = "baseColor";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["decalResponse"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["decalResponse"] = "colorNormalRoughness";
+    scene["objects"][1]["normalStrength"] = 1.1;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["normalStrength"] = 0.5;
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    scene["objects"][1]["emissive"] = {4, 2, 1};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    scene["objects"][1]["emissive"] = {65, 0, 0};
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["emissive"] = {4, 2, 1};
+    scene["objects"][1]["emissiveStrength"] = 1001;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["emissiveStrength"] = -1;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["emissiveStrength"] = 6;
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+    for (const char* field : {"albedoMap", "normalMap", "ormMap"})
+    {
+        scene["objects"][1][field] = "T_scorch_texture.json";
+        EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+        scene["objects"][1][field] = 7;
+        EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+        scene["objects"][1][field] = "";
+        EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+        scene["objects"][1].erase(field);
+    }
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+}
+
+TEST(ScriptScene, DecalResponseMapsToDBufferMask)
+{
+    uint32_t mask = 0;
+    EXPECT_EQ(DefaultDecalResponse(), 7u);
+    EXPECT_TRUE(TryParseDecalResponse("colorNormalRoughness", mask));
+    EXPECT_EQ(mask, DecalResponseColor | DecalResponseNormal |
+        DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("colorNormal", mask));
+    EXPECT_EQ(mask, DecalResponseColor | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("color", mask));
+    EXPECT_EQ(mask, DecalResponseColor);
+    EXPECT_TRUE(TryParseDecalResponse("normal", mask));
+    EXPECT_EQ(mask, DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("roughness", mask));
+    EXPECT_EQ(mask, DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("roughnessNormal", mask));
+    EXPECT_EQ(mask, DecalResponseRoughness | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("metallic", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic);
+    EXPECT_TRUE(TryParseDecalResponse("metallicNormal", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseNormal);
+    EXPECT_TRUE(TryParseDecalResponse("metallicRoughness", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseRoughness);
+    EXPECT_TRUE(TryParseDecalResponse("metallicRoughnessNormal", mask));
+    EXPECT_EQ(mask, DecalResponseMetallic | DecalResponseRoughness |
+        DecalResponseNormal);
+    EXPECT_FALSE(TryParseDecalResponse("ColorNormalRoughness", mask));
+}
+
+TEST(ScriptScene, PointLightPulseValidatesRanges)
+{
+    Json camera{
+        {"name", "Camera"},
+        {"type", "camera"},
+        {"position", {0, 0, 10}},
+        {"rotation", {0, 0, 0}},
+        {"scale", {1, 1, 1}},
+        {"near_clip", 1},
+        {"far_clip", 100},
+        {"fov", 60}};
+    camera["exposure"] = DescribeCameraExposure(CameraExposure{});
+    Json light{
+        {"name", "MuzzleFlashLight"},
+        {"type", "pointLight"},
+        {"position", {0, 1, 0}},
+        {"rotation", {0, 0, 0}},
+        {"color", {1.0, 0.8, 0.6}},
+        {"intensity", 25.0},
+        {"intensityUnit", "cd"},
+        {"pulse", {
+            {"period", 1.0},
+            {"duration", 0.08},
+            {"phase", 0.0},
+            {"peakIntensity", 250.0}}}};
+    Json scene{
+        {"worldUnit", "cm"},
+        {"description", "Point light pulse fixture"},
+        {"objects", Json::array({camera, light})}};
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    scene["objects"][1]["pulse"] = 3;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"] = {
+        {"period", 1.0},
+        {"duration", 0.08},
+        {"phase", 0.0},
+        {"peakIntensity", 250.0}};
+
+    scene["objects"][1]["pulse"]["period"] = 0.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["period"] = 1.0;
+    scene["objects"][1]["pulse"]["duration"] = 0.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["duration"] = 1.01;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["duration"] = 0.08;
+    scene["objects"][1]["pulse"]["phase"] =
+        std::numeric_limits<double>::infinity();
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["phase"] = 0.0;
+    scene["objects"][1]["pulse"]["peakIntensity"] = -1.0;
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["peakIntensity"] = 250.0;
+    scene["objects"][1]["pulse"].erase("period");
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["pulse"]["period"] = 1.0;
+    EXPECT_NO_THROW(ValidateSceneAssetJson(scene));
+
+    // pulse 只属于点光；方向光/聚光携带该字段会被拒绝，避免静默忽略。
+    scene["objects"][1]["type"] = "directionalLight";
+    scene["objects"][1]["intensityUnit"] = "lux";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+    scene["objects"][1]["type"] = "spotLight";
+    scene["objects"][1]["intensityUnit"] = "cd";
+    EXPECT_THROW(ValidateSceneAssetJson(scene), std::invalid_argument);
+}
+
+TEST(ScriptScene, PointLightPulseSurvivesSnapshot)
+{
+    World world(1, "Maps/Pulse/SC_Pulse.json");
+    PointLight light;
+    light.SetName("MuzzleFlashLight");
+    light.SetPulsePeriod(0.75f);
+    light.SetPulseDuration(0.05f);
+    light.SetPulsePhase(0.25f);
+    light.SetPulsePeakIntensity(120.0f);
+
+    const LightSnapshot snapshot =
+        BuildWorldPointLightSnapshot(world, "MuzzleFlashLight", light);
+    EXPECT_FLOAT_EQ(snapshot.pulsePeriod, 0.75f);
+    EXPECT_FLOAT_EQ(snapshot.pulseDuration, 0.05f);
+    EXPECT_FLOAT_EQ(snapshot.pulsePhase, 0.25f);
+    EXPECT_FLOAT_EQ(snapshot.pulsePeakIntensity, 120.0f);
+
+    DirectionalLight sun;
+    const LightSnapshot sunSnapshot =
+        BuildWorldDirectionalLightSnapshot(world, "Sun", sun);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePeriod, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulseDuration, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePhase, 0.0f);
+    EXPECT_FLOAT_EQ(sunSnapshot.pulsePeakIntensity, 0.0f);
+}
+
 TEST(ScriptScene, DistinctIdsCanShareDisplayName)
 {
     auto a = Blueprint("a"), b = Blueprint("b");
@@ -506,6 +764,37 @@ TEST_F(ScriptRuntimeTest, TransformPublishesIntoNewSnapshotWithoutChangingFrozen
     expected.SetTransform(Eigen::Vector3f::Zero(), Eigen::Vector3f(0, 90, 0), Eigen::Vector3f::Ones());
     EXPECT_TRUE(after.Value().meshDraws[0].model.isApprox(expected.GetModelMatrix(), 1e-5f));
     EXPECT_TRUE(before.Value().meshDraws[0].model.isApprox(Eigen::Matrix4f::Identity()));
+}
+
+TEST_F(ScriptRuntimeTest, DecalResponseAndNormalStrengthSurviveSnapshot)
+{
+    world->SetCamera(std::make_shared<Camera>());
+    WorldDecal decal;
+    decal.decalToWorld = Eigen::Matrix4f::Identity();
+    decal.responseMask =
+        DecalResponseColor | DecalResponseNormal;
+    decal.normalStrength = 0.72f;
+    decal.emissive = Eigen::Vector3f(4.0f, 2.0f, 1.0f);
+    decal.emissiveStrength = 6.0f;
+    decal.albedoMap = "T_scorch_albedo.json";
+    decal.normalMap = "T_scorch_normal.json";
+    decal.ormMap = "T_scorch_orm.json";
+    world->AddDecal("Scorch", decal);
+
+    WorldSnapshotBuilder builder;
+    const auto snapshot = builder.Build(*world, {});
+    ASSERT_TRUE(snapshot.IsSuccess());
+    ASSERT_EQ(snapshot.Value().decals.size(), 1u);
+    EXPECT_EQ(snapshot.Value().decals[0].responseMask,
+        DecalResponseColor | DecalResponseNormal);
+    EXPECT_FLOAT_EQ(snapshot.Value().decals[0].normalStrength, 0.72f);
+    EXPECT_EQ(snapshot.Value().decals[0].emissive,
+        Eigen::Vector3f(4.0f, 2.0f, 1.0f));
+    EXPECT_FLOAT_EQ(
+        snapshot.Value().decals[0].emissiveStrength, 6.0f);
+    EXPECT_EQ(snapshot.Value().decals[0].albedoMap, "T_scorch_albedo.json");
+    EXPECT_EQ(snapshot.Value().decals[0].normalMap, "T_scorch_normal.json");
+    EXPECT_EQ(snapshot.Value().decals[0].ormMap, "T_scorch_orm.json");
 }
 
 TEST_F(ScriptRuntimeTest, SnapshotFreezesScaledAndOrdinaryAnimationTimeSeparately)

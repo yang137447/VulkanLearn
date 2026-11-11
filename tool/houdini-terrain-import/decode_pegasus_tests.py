@@ -126,7 +126,7 @@ class DecodeTests(unittest.TestCase):
                      b"type = heightfield_noise\nmatchesdef = 1\n"),
              _member("hdaroot/heightfield_remap1.init",
                      b"type = heightfield_remap\nmatchesdef = 1\n"),
-             _member("hdaroot/heightfield_remap1.def", b"""sopflags sopflags = 
+             _member("hdaroot/heightfield_remap1.def", b"""sopflags sopflags =
 outputsNamed3
 {
 2 "output1"

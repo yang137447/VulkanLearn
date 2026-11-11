@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <fstream>
+#include <limits>
 #include "script/scriptBlueprintAsset.h"
 #include "script/scriptPhysics.h"
 #include "script/scriptRuntime.h"
@@ -85,6 +86,46 @@ TEST(ScriptScene, PhysicsRejectsInvalidShapesCoefficientsAndRootScale)
     EXPECT_THROW(ValidateScriptBlueprint(blueprint), std::invalid_argument);
     blueprint["physics"] = {{"shape", "sphere"}, {"radius", 10}};
     EXPECT_NO_THROW(ValidateScriptBlueprint(blueprint));
+}
+
+TEST(ScriptWorld, TypedParticleDataChannelsValidateCapacityAndRanges)
+{
+    World world(1, "typed-data");
+    for (size_t index = 0; index < kMaxParticleDataChannels; ++index)
+    {
+        ASSERT_TRUE(world.SetParticleDataChannel(
+            "channel" + std::to_string(index), static_cast<float>(index)));
+    }
+    EXPECT_EQ(world.GetParticleDataChannelCount(), kMaxParticleDataChannels);
+    EXPECT_FALSE(world.SetParticleDataChannel("overflow", 1.0f));
+    EXPECT_TRUE(world.SetParticleDataChannel("channel0", 7.0f));
+
+    EXPECT_TRUE(world.SetParticleDataChannel(
+        "channel0", ParticleDataChannelValue::MakeVec3(1, 2, 3)));
+    ParticleDataChannelValue value;
+    ASSERT_TRUE(world.GetParticleDataChannelValue("channel0", value));
+    EXPECT_EQ(value.type, ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(value.values[2], 3.0f);
+    float scalar = 0.0f;
+    EXPECT_FALSE(world.GetParticleDataChannel("channel0", scalar));
+
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "badVec", ParticleDataChannelValue::MakeVec3(
+            std::numeric_limits<float>::quiet_NaN(), 0, 0)));
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "hugeVec", ParticleDataChannelValue::MakeVec3(1.0e7f, 0, 0)));
+    ParticleDataChannelValue invalidBool =
+        ParticleDataChannelValue::MakeBool(true);
+    invalidBool.values[0] = 2.0f;
+    EXPECT_FALSE(world.SetParticleDataChannel("badBool", invalidBool));
+    ParticleDataChannelValue fractional =
+        ParticleDataChannelValue::MakeInt(1);
+    fractional.values[0] = 1.5f;
+    EXPECT_FALSE(world.SetParticleDataChannel("badInt", fractional));
+    EXPECT_FALSE(world.SetParticleDataChannel(
+        "badQuat", ParticleDataChannelValue::MakeQuat(
+            0, 0, 0, std::numeric_limits<float>::infinity())));
+    EXPECT_EQ(world.GetParticleDataChannelCount(), kMaxParticleDataChannels);
 }
 
 TEST(ScriptScene, CompoundAndMeshPhysicsValidateReferencesDimensionsAndScale)
@@ -294,6 +335,215 @@ TEST_F(ScriptGameplayTest, RuntimeComponentsCommitAfterCallbackReuseMeshesAndRes
     std::string error;
     ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Editing, error)) << error;
     EXPECT_FALSE(world->GetMeshObjects().count("__blueprint/owner/visual"));
+}
+
+TEST_F(ScriptGameplayTest, CSharpParticlesSpawnControlResetAndDestroy)
+{
+    Prepare(Json::array({
+        GameplayBlueprint("particles", "ScriptFixtures.ParticleProbeBlueprint")}));
+    Play();
+
+    ASSERT_EQ(world->GetParticleSystems().size(), 1u);
+    const WorldParticleSystem* particles =
+        world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_EQ(particles->assetPath,
+        "Maps/SC_particle_demo/PS_sparks.json");
+    EXPECT_TRUE(particles->visible);
+
+    // phase 0: visible/参数/emitter 覆盖在同一个 GT 命令批次内应用。
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_FALSE(particles->visible);
+    EXPECT_FLOAT_EQ(particles->runtime.spawnRateScale, 2.0f);
+    EXPECT_EQ(particles->runtime.colorTint,
+        Eigen::Vector4f(1.0f, 0.5f, 0.25f, 1.0f));
+    EXPECT_EQ(particles->runtime.enabledEmitterMask & 1u, 0u);
+
+    // phase 2: Reset 恢复参数默认值，但不改 visible。
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    EXPECT_FALSE(particles->visible);
+    EXPECT_FLOAT_EQ(particles->runtime.spawnRateScale, 1.0f);
+    EXPECT_EQ(particles->runtime.colorTint, Eigen::Vector4f::Ones());
+    EXPECT_NE(particles->runtime.enabledEmitterMask & 1u, 0u);
+
+    // phase 3: Destroy 从 native World 移除实例。
+    Tick();
+    EXPECT_EQ(world->FindParticleSystem("~particle.1"), nullptr);
+    EXPECT_TRUE(world->GetParticleSystems().empty());
+
+    ASSERT_TRUE(world->SetParticleEventCaptureInterest("manual", true));
+    std::string error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Editing, error)) << error;
+    EXPECT_FALSE(world->IsParticleEventCaptureActive());
+}
+
+TEST_F(ScriptGameplayTest, CSharpParticleEmitterBudgetAttachmentAndEvents)
+{
+    Prepare(Json::array({
+        GameplayBlueprint("api", "ScriptFixtures.ParticleApiBlueprint")}));
+    WorldMeshObject anchor;
+    anchor.sceneObjectIdentity = "mesh|Anchor";
+    anchor.model = Eigen::Matrix4f::Identity();
+    anchor.model(1, 3) = 100.0f;
+    world->AddMeshObject("Anchor", anchor);
+    Play();
+
+    Tick();
+    const WorldParticleSystem* particles =
+        world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    ASSERT_EQ(particles->emitterSlots.size(), 2u);
+    EXPECT_FALSE(particles->emitterSlots[0].asset.name.empty());
+    EXPECT_EQ(particles->emitterSlots[1].asset.name, "runtime.extra");
+    EXPECT_EQ(particles->emitterSlots[1].enabled, true);
+    EXPECT_EQ(particles->budget.maxTotalParticles, 512u);
+    EXPECT_FLOAT_EQ(particles->budget.emitterBudgetScale, 0.5f);
+    EXPECT_FLOAT_EQ(particles->userParameters.at("Wind"), 2.5f);
+    EXPECT_EQ(particles->attachment.targetKind, "mesh");
+    EXPECT_EQ(particles->attachment.targetName, "mesh|Anchor");
+    EXPECT_TRUE(world->IsParticleEventCaptureActive());
+
+    WorldSnapshotBuilder builder;
+    WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world->GetGeneration();
+    auto snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const ParticleSystemSnapshot& snapshot =
+        snapshotResult.Value().particleSystems.front();
+    EXPECT_TRUE(snapshot.attachment.resolved);
+    EXPECT_FLOAT_EQ(snapshot.model(1, 3), 125.0f);
+    EXPECT_EQ(snapshot.telemetry.activeEmitterCount, 2u);
+    EXPECT_EQ(snapshot.telemetry.enabledEmitterCount, 2u);
+    EXPECT_FALSE(snapshot.telemetry.available);
+    EXPECT_EQ(snapshot.budget.maxTotalParticles, 512u);
+    EXPECT_FLOAT_EQ(snapshot.budget.emitterBudgetScale, 0.5f);
+
+    EXPECT_TRUE(world->SetParticleSystemRendererTelemetry(
+        "~particle.1", 42, {10, 20}, 300));
+    snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const ParticleSystemSnapshot& fed =
+        snapshotResult.Value().particleSystems.front();
+    EXPECT_TRUE(fed.telemetry.available);
+    EXPECT_EQ(fed.telemetry.aliveParticles, 42u);
+    EXPECT_EQ(fed.telemetry.lastFrameBudget, 300u);
+    ASSERT_EQ(fed.telemetry.emitters.size(), 2u);
+    EXPECT_TRUE(fed.telemetry.emitters[0].aliveAvailable);
+    EXPECT_EQ(fed.telemetry.emitters[0].aliveParticles, 10u);
+    EXPECT_EQ(fed.telemetry.emitters[1].aliveParticles, 20u);
+
+    WorldParticleRuntimeEvent event;
+    event.systemName = "~particle.1";
+    event.emitterName = "runtime.extra";
+    event.kind = "collision";
+    event.time = 1.0f;
+    event.position = Eigen::Vector3f(1, 2, 3);
+    event.normal = Eigen::Vector3f(0, 1, 0);
+    ASSERT_TRUE(world->QueueParticleRuntimeEvent(event));
+
+    Tick();
+    particles = world->FindParticleSystem("~particle.1");
+    ASSERT_NE(particles, nullptr);
+    ASSERT_EQ(particles->emitterSlots.size(), 2u);
+    EXPECT_EQ(particles->emitterSlots[1].restartEpoch, 1u);
+    EXPECT_FALSE(particles->emitterSlots[1].enabled);
+    EXPECT_FALSE(State("api")["failed"].get<bool>());
+
+    Tick();
+    EXPECT_EQ(world->FindParticleSystem("~particle.1"), nullptr);
+    EXPECT_FALSE(world->IsParticleEventCaptureActive());
+    EXPECT_FALSE(State("api")["failed"].get<bool>());
+}
+
+TEST_F(ScriptGameplayTest, CSharpParticleDataChannelsRoundTripAndSurviveReload)
+{
+    ASSERT_TRUE(world->SetParticleDataChannel("Seed", 1.25f));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedDir", ParticleDataChannelValue::MakeVec3(1, 2, 3)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedCount", ParticleDataChannelValue::MakeInt(7)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedFlag", ParticleDataChannelValue::MakeBool(true)));
+    ASSERT_TRUE(world->SetParticleDataChannel(
+        "SeedRot", ParticleDataChannelValue::MakeQuat(0, 0, 0, 1)));
+    Prepare(Json::array({
+        GameplayBlueprint("data", "ScriptFixtures.ParticleDataBlueprint")}));
+    Play();
+
+    // BeginPlay 已经通过 start 请求收到 Seed，并把 Wind/Heat 写入 World。
+    float value = 0.0f;
+    ASSERT_TRUE(world->GetParticleDataChannel("Seed", value));
+    EXPECT_FLOAT_EQ(value, 1.25f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 2.5f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Heat", value));
+    EXPECT_FLOAT_EQ(value, -4.0f);
+
+    ParticleDataChannelValue typed;
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Direction", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(typed.values[0], 1.0f);
+    EXPECT_FLOAT_EQ(typed.values[2], 3.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Tiling", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Vec2);
+    EXPECT_FLOAT_EQ(typed.values[1], 5.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Count", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Int);
+    EXPECT_FLOAT_EQ(typed.values[0], 42.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Enabled", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Bool);
+    EXPECT_FLOAT_EQ(typed.values[0], 1.0f);
+    ASSERT_TRUE(world->GetParticleDataChannelValue("Rotation", typed));
+    EXPECT_EQ(typed.type, ParticleDataChannelType::Quat);
+    EXPECT_FLOAT_EQ(typed.values[3], 1.0f);
+
+    // 首个 tick 清除 Seed、覆盖 Wind；命令在 native 命令点同步应用。
+    Tick();
+    EXPECT_FALSE(world->GetParticleDataChannel("Seed", value));
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+
+    VL::WorldSnapshotBuilder builder;
+    VL::WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world->GetGeneration();
+    auto snapshotResult = builder.Build(*world, desc);
+    ASSERT_FALSE(snapshotResult.IsFailure());
+    const VL::WorldSnapshot& snapshot = snapshotResult.Value();
+    ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Wind"), 3.5f);
+    ASSERT_FLOAT_EQ(snapshot.particleDataChannels.at("Heat"), -4.0f);
+    EXPECT_FALSE(snapshot.particleDataChannels.count("Seed"));
+    ASSERT_EQ(snapshot.particleDataChannels.at("Direction").type,
+        ParticleDataChannelType::Vec3);
+    EXPECT_FLOAT_EQ(
+        snapshot.particleDataChannels.at("Direction").values[1], 2.0f);
+    ASSERT_EQ(snapshot.particleDataChannels.at("Count").type,
+        ParticleDataChannelType::Int);
+
+    // 热重载只交换脚本 owner；World 通道必须原样保留，托管镜像由
+    // migration snapshot 恢复，OnReload 能立即读到 3.5。
+    std::string error;
+    ASSERT_TRUE(runtime.ReloadAssembly(*world, error)) << error;
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+    EXPECT_FALSE(world->GetParticleDataChannel("Seed", value));
+    Tick();
+    Tick();
+    EXPECT_FALSE(State("data")["failed"].get<bool>());
+
+    // Stop 释放托管上下文，但不拥有 World 通道；下一 Play 的新上下文
+    // 通过 start 请求重新拿到同一份值，而不是从空表开始。
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Editing, error))
+        << error;
+    ASSERT_TRUE(world->GetParticleDataChannel("Wind", value));
+    EXPECT_FLOAT_EQ(value, 3.5f);
+    ASSERT_TRUE(world->GetParticleDataChannel("Heat", value));
+    EXPECT_FLOAT_EQ(value, -4.0f);
+    Play();
+    EXPECT_FALSE(State("data")["failed"].get<bool>());
 }
 
 TEST_F(ScriptGameplayTest, RuntimeComponentFailedCallbackDropsEntireStructureQueue)

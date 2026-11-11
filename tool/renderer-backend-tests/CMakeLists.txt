@@ -4,6 +4,31 @@ add_executable(vl_renderer_backend_tests
     scene_viewport_output_validation_test.cpp
     physical_lighting_test.cpp
     auto_exposure_test.cpp
+    decal_normal_blend_test.cpp
+    decal_stencil_graph_test.cpp
+    decal_emissive_test.cpp
+    glass_refraction_graph_test.cpp
+    particle_light_gpu_test.cpp
+    particle_light_brightness_test.cpp
+    particle_curve_tangent_test.cpp
+    particle_flipbook_timeline_test.cpp
+    particle_lod_render_test.cpp
+    particle_ribbon_history_test.cpp
+    particle_ribbon_global_sort_test.cpp
+    particle_soft_depth_test.cpp
+    particle_decal_gpu_test.cpp
+    particle_runtime_command_test.cpp
+    particle_scene_lighting_test.cpp
+    particle_mesh_shadow_test.cpp
+    particle_sprite_shadow_test.cpp
+    particle_mesh_material_test.cpp
+    particle_skeletal_dissolve_test.cpp
+    local_shadow_math_test.cpp
+    volumetric_fog_test.cpp
+    light_culling_test.cpp
+    pass_pipeline_contract_test.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/shadow/localShadowMath.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/lightCulling/lightCulling.cpp
     buffer_to_image_regions_test.cpp
     frame_epoch_ring_test.cpp
     resource_retire_queue_test.cpp
@@ -21,6 +46,7 @@ add_executable(vl_renderer_backend_tests
     skin_deform_test.cpp
     speedtree_wind_system_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompilerValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/shadow/shadowCasterCull.cpp
     ${PROJECT_SOURCE_DIR}/source/render/foliage/speedTreeWindSystem.cpp

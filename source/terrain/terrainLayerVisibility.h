@@ -187,8 +187,9 @@ struct TerrainLayerFeedbackHealth
 // atlas：常驻覆盖页用 CPU 镜像，非驻留页按需重建并缓存（地形内容静态）。
 //
 // mip 规则：覆盖页 feedback 的 priority 是“每页占多少屏幕像素”的对数压缩，
-// 越高表示越近，因此 >=192 取 mip0、>=128 取 mip1、>=64 取 mip2，否则 mip3；
-// 再按层自身 mip 链与源数组 mip 数 clamp。层页是平铺资产，选定 mip 后必须
+// 越高表示越近，因此 >=192 mip0、>=128 mip1、>=64 mip2、>=32 mip3、
+// >=16 mip4、>=8 mip5，否则 mip6；再按层自身 mip 链与源数组 mip 数 clamp。
+// 层页是平铺资产，选定 mip 后必须
 // 请求该 mip 的**全部**页，避免 shader 的 UV 采样落到未请求页。
 class TerrainLayerVisibilityResolver
 {

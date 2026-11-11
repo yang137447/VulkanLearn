@@ -123,6 +123,135 @@ project. The script never saves packages. Catch montage ids are not always
 `M_..._Catch_Cliff_high_stand`), so the clip is taken from the T3D reference
 rather than the filename; `import_gasp_montages.py` uses the same rule.
 
+## Echo Animation Export And Sync Audit
+
+`export_echo_assets.py` performs the read-only Echo mesh + 24 AnimSequence FBX
+export. `audit_echo_anim.py` additionally exports the AnimBP/AnimLayer T3D and
+the state enum; it never saves the UE package. `extract_echo_sync.py` parses the
+AnimBP T3D and writes every Sequence Player binding
+(`SyncGroup/Role/Method/SyncGroupScope/StartPosition/Loop`). When the T3D export has
+no scope field the extractor writes `Local`; the builder also defaults old metadata to
+`Local` so the runtime never guesses. Pass that JSON to the builder:
+
+```powershell
+py -3 tool/animation/extract_echo_sync.py `
+  --t3d <ARTIFACTS>/ue-echo-export/anim-audit/Echo_AnimBP.t3d `
+  --output <ARTIFACTS>/ue-echo-export/sync-metadata.json
+py -3 tool/animation/build_echo_assets.py `
+  --export <ARTIFACTS>/ue-echo-export/full `
+  --inspection <ARTIFACTS>/ue-echo-export/inspect/Echo2.json `
+  --sync-metadata <ARTIFACTS>/ue-echo-export/sync-metadata.json `
+  --resources ../VukanLearnResources --force
+```
+
+The builder writes `players` and `syncMarkers` into each `.anim.json`. The native
+`AnimationSyncGroupRegistry` performs leader election and continuous `SyncGroup`/
+`MarkerSync` correction; `TransitionToSynced` only supplies the first-frame phase.
+
+## Echo PoseDriver Export
+
+`extract_pose_driver.py` reads `Echo_PostProcess_AnimBP.t3d` (UTF-16LE), finds the
+9 unique `AnimGraphNode_PoseDriver` instances (the ubergraph copies are deduped),
+and emits `vl.anim-pose-driver.v1` with every RBF parameter and all 65 target
+transforms. UE node defaults that are not serialized in T3D are written explicitly:
+`distanceMethod=SwingAngle` (the `FAnimNode_PoseDriver` CDO, **not**
+`FRBFParams`' Euclidean), `twistAxis=X`, `weightThreshold=1e-4`,
+`OnlyNormalizeAboveOne`, `median 45/60`.
+
+```powershell
+py -3 tool/animation/extract_pose_driver.py `
+  --t3d <ARTIFACTS>/ue-echo-export/anim-audit/Echo_PostProcess_AnimBP.t3d `
+  --output ../VukanLearnResources/Maps/SC_valley_echo/Rig/EPD_EchoPostProcess.json
+py -3 -m unittest tool/animation/tests/test_extract_pose_driver.py
+```
+
+The native solver and its limits are documented in
+`documents/contracts/animation-pose-driver.md`. Re-run the extractor instead of
+hand-editing the JSON; output is byte-stable and LF-only.
+
+## Echo PostProcess (Twist) Export
+
+`extract_post_process.py` reads the ControlRig graph dump
+(`probe_ctrlrig_links3.py` → `ctrlrig-links3.json`) and reconstructs
+`Echo_Twist_CtrlRig`: `bind^-1 * current → ToSwingTwist → SetRotation` for the
+8 driver bones / 16 twist bones. It writes `vl.anim-post-process.v1` with the
+per-target weights (1.0 / 0.5) and the `invert` flag. With
+`--helpers helpers-graph.json` (`probe_helpers.py`) it additionally reconstructs
+`Echo_Helpers_CtrlRig`'s `Project To New Parent` chain (7 helpers, including the
+two-projection 0.5 blend on the skirt front root).
+
+```powershell
+py -3 tool/animation/extract_post_process.py `
+  --links <ARTIFACTS>/ue-echo-export/ctrlrig-links3.json `
+  --helpers <ARTIFACTS>/ue-echo-export/helpers-graph.json `
+  --output ../VukanLearnResources/Maps/SC_valley_echo/Rig/EPP_EchoPostProcess.json
+py -3 -m unittest discover -s tool/animation/tests -p "test_extract_post_process.py"
+```
+
+Semantics and limits: `documents/contracts/animation-post-process.md`.
+
+## Echo Bone Physics Export
+
+`extract_bone_physics.py` reads the four PhysicsAsset T3D exports under
+`artifacts/ue-echo-export/physics-t3d/` and writes `vl.bone-physics.v1`:
+Canister 5 bodies / 1 constraint, Pouch 2 / 1, ShoulderPad 2 / 1,
+Skirt 12 / 6. Body/constraint order comes from `SkeletalBodySetups(i)` and
+`ConstraintSetup(i)`, never from block order. Capsules keep raw UE centers and
+rotations; the quaternion uses UE's `FRotator::Quaternion()` formula.
+
+The exporter resolves the child as the simulated body and the parent as the
+kinematic body, moving each Pos/Axis frame with its body. `PA_Echo_Skirt`
+contains one authoring anomaly: `C_Skirt_A_Back1_Jnt` is kinematic, so its
+`UserConstraint` joins two kinematic bodies. That joint is kept (the asset
+count is six) and reported as a warning; `--strict` rejects it. Only capsules
+are accepted; box/sphere/convex shapes fail with the offending field name.
+
+```powershell
+py -3 tool/animation/extract_bone_physics.py
+py -3 -m unittest discover -s tool/animation/tests -p "test_extract_bone_physics.py"
+```
+
+## Echo Montage Export
+
+`audit_echo_montages.py` is the read-only UE 5.8 companion for Echo's three
+AnimMontages. It exports `VaultOver_Montage`, `ReachOut_Montage_RM` and
+`ReachOut_End_Montage` as T3D, reads the notify structs through
+`AnimationLibrary.get_animation_notify_events_for_track`, and optionally exports
+the referenced AnimSequence FBX. It never saves a package.
+
+The commandlet must enable the MotionWarping plugin, otherwise the T3D/Python
+data drops `NotifyStateClass` and every warp notify looks like an instant
+notify. `VaultOver_Montage` also references
+`/Game/AncientContent/Blueprints/Character/BP_NotifyState_ExitToLoco`; if that
+Blueprint is absent from the Echo-only copy, UE reports
+`NotifyStateClass=None` and the importer refuses to guess the kind. Copy that
+single BP into the disposable copy (the source project stays read-only) before
+exporting.
+
+```powershell
+$env:VL_ECHO_MONTAGE_OUTPUT  = "<ARTIFACTS>/ue-echo-export/montage-audit/ue-montage-audit.json"
+$env:VL_ECHO_MONTAGE_T3D_DIR = "<ARTIFACTS>/ue-echo-export/montage-audit/t3d"
+$env:VL_ECHO_MONTAGE_FBX_DIR = "<ARTIFACTS>/ue-echo-export/montage-audit/fbx"
+& "C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" `
+  "<ARTIFACTS>/ue-echo-export/VLEchoExport/VLEchoExport.uproject" `
+  "-run=PythonScript" "-script=<REPO>/tool/animation/audit_echo_montages.py" `
+  "-EnablePlugins=PythonScriptPlugin,EditorScriptingUtilities,MotionWarping" `
+  "-AllowCommandletRendering" "-RenderOffscreen" "-unattended" "-nosound" "-nop4" "-nosplash"
+
+py -3 tool/animation/import_echo_montages.py --continue-on-error
+```
+
+`import_echo_montages.py` writes `Maps/SC_valley_echo/Animations/AM_*.json` and
+prints the converted/skipped summary. All three assets are representable:
+`AM_VaultOver_Montage` (3 MotionWarping windows plus the
+`NotifyState_ExitToLoco_C` state), `AM_ReachOut_End_Montage`, and
+`AM_ReachOut_Montage_RM`. The last one emits `segments[]` for its two
+`AnimSegments` (`ReachOut_Start` + `ReachOut_Loop`), explicit
+`Default -> Loop -> Loop` links, and the asset-level `rateScale=0.5`.
+Single-sequence Montages keep the legacy `sequence` shape.
+The layer/post-process audit and the full consumption matrix live in
+`documents/rationale/echo-anim-layers-audit.md`.
+
 ## Sequence And Montage Export
 
 `export_gasp_ue_raw.py` (UE commandlet) produces the raw animation dump used by

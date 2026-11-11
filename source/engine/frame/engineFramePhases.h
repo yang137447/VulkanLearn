@@ -9,6 +9,7 @@
 #include "engine/script/engineScriptBuild.h"
 #include "engine/ui/engineUiActions.h"
 #include "engine/window/engineWindowLifecycle.h"
+#include "world/particleRuntimeBridge.h"
 #include "platform/platformEvent.h"
 
 class Controller;
@@ -31,6 +32,7 @@ class RuntimeValidationServices;
 class SubsystemCollection;
 class TerrainChunkStreamer;
 class UiSubsystem;
+class World;
 namespace Physics { class FractureImpactWorld; }
 namespace Physics { namespace Fracture { class FractureBudget; } }
 struct RuntimeCommandExecutionResult;
@@ -84,6 +86,9 @@ struct EngineFrameContext
     // 上一次推给 C# 的权威材质快照；相同则跳过托管调用。
     std::string* lastScriptMaterialState = nullptr;
     uint64_t* lastScriptMaterialStateWorldGeneration = nullptr;
+    ParticleEventPollClock* particleEventPollClock = nullptr;
+    double* particleEventTimeSeconds = nullptr;
+    std::function<void(World&)> pollParticleRuntimeBridge;
 
     EngineUiActionContext uiActions;
     EngineScriptBuildContext scriptBuild;

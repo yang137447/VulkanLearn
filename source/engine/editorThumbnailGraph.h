@@ -29,7 +29,16 @@ inline nlohmann::json BuildEditorThumbnailGraph(nlohmann::json graph)
     auto passes = nlohmann::json::array();
     for (auto pass : graph.at("passes"))
     {
-        if (pass.at("type") == "editorGrid" || pass.at("type") == "autoExposure") continue;
+        // 缩略图只验证单资产形状：去掉编辑器辅助网格、自动曝光、体积雾
+        // （雾需要 sceneDepth/局部阴影并且会改变资产原本的亮度）和
+        // tile 光照聚类（缩略图灯数极少，shader 的 enabled=0 回退足够）。
+        const std::string type = pass.at("type").get<std::string>();
+        if (type == "editorGrid" || type == "autoExposure" ||
+            type == "volumetricFog" || type == "fogComposite" ||
+            type == "lightCulling")
+        {
+            continue;
+        }
         pass["needMsaa"] = false;
         for (auto& output : pass.at("output"))
             if (output.at("resource") == "swapChain") output["resource"] = "thumbnailOutput";

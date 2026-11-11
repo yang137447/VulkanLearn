@@ -1,0 +1,45 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+#include "particleCommon.glsl"
+
+// sort init 不包含 particleStorageRW：这条 pass 对粒子池只读，
+// 对 pair 表只写，避免 compute pipeline 意外声明可写 particle buffer。
+layout(std430, set = 0, binding = 1) readonly buffer ParticleBuffer
+{
+    Particle particles[];
+} particleReadBuffer;
+
+layout(std430, set = 0, binding = 2) writeonly buffer SortPairs
+{
+    vec4 pairs[];
+} pairBuffer;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint capacity = uint(frame.sortParams.z);
+    if (index >= capacity)
+    {
+        return;
+    }
+
+    // 池内未使用的 padding 放在最远处，降序排序后自然沉到尾部。
+    if (index >= uint(frame.sortParams.y))
+    {
+        pairBuffer.pairs[index] = vec4(-3.402823466e38, 0.0, 0.0, 0.0);
+        return;
+    }
+
+    vec3 position = particleReadBuffer.particles[index].positionAge.xyz;
+    // localSpace 发射器的粒子池保存局部坐标；逐粒子透明排序仍必须用
+    // 世界中心，否则排序深度会与渲染位置不一致。
+    if (frame.shape.z > 0.5)
+    {
+        position = (frame.localToWorld * vec4(position, 1.0)).xyz;
+    }
+    // view 空间相机前方为负 z；取负后得到正的前向深度，降序即 back-to-front。
+    float depth = -(frame.view * vec4(position, 1.0)).z;
+    pairBuffer.pairs[index] = vec4(depth, float(index), 0.0, 0.0);
+}

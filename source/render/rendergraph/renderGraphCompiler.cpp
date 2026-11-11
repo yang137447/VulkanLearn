@@ -1,535 +1,16 @@
 #include "render/rendergraph/renderGraphCompiler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "terrain/terrainFeedback.h"
+#include "render/rendergraph/renderGraphCompilerInternal.h"
 
 namespace VL
 {
-namespace
-{
-
-enum class ResourcePreviousUse
-{
-    None,
-    Sampled,
-    Attachment,
-    Storage
-};
-
-RuntimeError MakeCompileError(
-    const std::string& code,
-    const std::string& message,
-    const std::string& sourceContext = {})
-{
-    return MakeRuntimeError(code, message, {}, sourceContext);
-}
-
-bool HasStringField(const nlohmann::json& node, const char* fieldName)
-{
-    return node.contains(fieldName) && node[fieldName].is_string();
-}
-
-bool IsSupportedFormat(const std::string& format)
-{
-    static const std::unordered_set<std::string> kSupportedFormats = {
-        "A2B10G10R10_UNORM_PACK32",
-        "R8G8B8A8_SRGB",
-        "R8G8B8A8_UNORM",
-        "R16G16B16A16_SFLOAT",
-        "R32_SFLOAT",
-        "D16_UNORM",
-        "D32_SFLOAT",
-        "D32_SFLOAT_S8_UINT",
-        "D24_UNORM_S8_UINT"
-    };
-    return kSupportedFormats.find(format) != kSupportedFormats.end();
-}
-
-bool IsSupportedResourceType(const std::string& type)
-{
-    return type == "texture2D" || type == "texture2DArray";
-}
-
-bool IsDepthFormatString(const std::string& format)
-{
-    return format == "D16_UNORM" ||
-        format == "D32_SFLOAT" ||
-        format == "D32_SFLOAT_S8_UINT" ||
-        format == "D24_UNORM_S8_UINT";
-}
-
-bool IsSupportedUsage(const std::string& usage)
-{
-    static const std::unordered_set<std::string> kSupportedUsages = {
-        "colorAttachment",
-        "depthStencilAttachment",
-        "sampled",
-        "present",
-        "transferSrc",
-        "transferDst",
-        "storage"
-    };
-    return kSupportedUsages.find(usage) != kSupportedUsages.end();
-}
-
-bool IsSupportedLoadOp(const std::string& loadOp)
-{
-    return loadOp == "clear" || loadOp == "load" || loadOp == "dontCare";
-}
-
-bool IsSupportedStoreOp(const std::string& storeOp)
-{
-    return storeOp == "store" || storeOp == "dontCare";
-}
-
-RuntimeResult<CompiledDepthCompareOp> CompileDepthCompareOp(
-    const nlohmann::json& stateNode,
-    const std::string& passName)
-{
-    if (!stateNode.contains("depthCompareOp"))
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(
-            CompiledDepthCompareOp::Less);
-    }
-    if (!stateNode["depthCompareOp"].is_string())
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidPipelineState",
-            "Render graph pass depthCompareOp must be a string.",
-            passName));
-    }
-
-    const std::string compareOp = stateNode["depthCompareOp"].get<std::string>();
-    if (compareOp == "less")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Less);
-    }
-    if (compareOp == "lessOrEqual")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::LessOrEqual);
-    }
-    if (compareOp == "equal")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Equal);
-    }
-    if (compareOp == "greater")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Greater);
-    }
-    if (compareOp == "greaterOrEqual")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::GreaterOrEqual);
-    }
-    if (compareOp == "always")
-    {
-        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Always);
-    }
-    return RuntimeResult<CompiledDepthCompareOp>::Failure(MakeCompileError(
-        "RenderGraphCompiler.InvalidPipelineState",
-        "Render graph pass depthCompareOp is unsupported.",
-        passName));
-}
-
-RuntimeResult<CompiledGraphicsPipelineState> CompilePipelineState(
-    const nlohmann::json& passNode,
-    const std::string& passName)
-{
-    CompiledGraphicsPipelineState pipelineState;
-    if (!passNode.contains("pipelineState"))
-    {
-        return RuntimeResult<CompiledGraphicsPipelineState>::Success(std::move(pipelineState));
-    }
-
-    const nlohmann::json& stateNode = passNode["pipelineState"];
-    if (!stateNode.is_object())
-    {
-        return RuntimeResult<CompiledGraphicsPipelineState>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidPipelineState",
-            "Render graph pass pipelineState must be an object.",
-            passName));
-    }
-
-    const char* boolFields[] = {
-        "useVertexInput",
-        "depthTestEnable",
-        "depthWriteEnable"
-    };
-    for (const char* fieldName : boolFields)
-    {
-        if (stateNode.contains(fieldName) && !stateNode[fieldName].is_boolean())
-        {
-            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidPipelineState",
-                "Render graph pass pipeline state field must be boolean: " +
-                    std::string(fieldName),
-                passName));
-        }
-    }
-    auto depthCompareResult = CompileDepthCompareOp(stateNode, passName);
-    if (depthCompareResult.IsFailure())
-    {
-        return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
-            depthCompareResult.Error());
-    }
-
-    pipelineState.useVertexInput =
-        stateNode.value("useVertexInput", pipelineState.useVertexInput);
-    pipelineState.depthTestEnable =
-        stateNode.value("depthTestEnable", pipelineState.depthTestEnable);
-    pipelineState.depthWriteEnable =
-        stateNode.value("depthWriteEnable", pipelineState.depthWriteEnable);
-    pipelineState.depthCompareOp = depthCompareResult.Value();
-    return RuntimeResult<CompiledGraphicsPipelineState>::Success(std::move(pipelineState));
-}
-
-RuntimeResult<void> CompileResourceSize(
-    const nlohmann::json& resourceNode,
-    CompiledRenderGraphResource& resource)
-{
-    if (resourceNode.contains("widthSize"))
-    {
-        if (!resourceNode["widthSize"].is_number())
-        {
-            return RuntimeResult<void>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidResourceSize",
-                "Render graph resource widthSize must be numeric.",
-                resource.name));
-        }
-        resource.hasFixedWidth = true;
-        resource.widthValue = resourceNode["widthSize"].get<float>();
-    }
-    else if (resourceNode.contains("widthScale"))
-    {
-        if (!resourceNode["widthScale"].is_number())
-        {
-            return RuntimeResult<void>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidResourceSize",
-                "Render graph resource widthScale must be numeric.",
-                resource.name));
-        }
-        resource.hasFixedWidth = false;
-        resource.widthValue = resourceNode["widthScale"].get<float>();
-    }
-    else
-    {
-        return RuntimeResult<void>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidResourceSize",
-            "Render graph resource must provide widthSize or widthScale.",
-            resource.name));
-    }
-
-    if (resourceNode.contains("heightSize"))
-    {
-        if (!resourceNode["heightSize"].is_number())
-        {
-            return RuntimeResult<void>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidResourceSize",
-                "Render graph resource heightSize must be numeric.",
-                resource.name));
-        }
-        resource.hasFixedHeight = true;
-        resource.heightValue = resourceNode["heightSize"].get<float>();
-    }
-    else if (resourceNode.contains("heightScale"))
-    {
-        if (!resourceNode["heightScale"].is_number())
-        {
-            return RuntimeResult<void>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidResourceSize",
-                "Render graph resource heightScale must be numeric.",
-                resource.name));
-        }
-        resource.hasFixedHeight = false;
-        resource.heightValue = resourceNode["heightScale"].get<float>();
-    }
-    else
-    {
-        return RuntimeResult<void>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidResourceSize",
-            "Render graph resource must provide heightSize or heightScale.",
-            resource.name));
-    }
-
-    if (resource.widthValue <= 0.0f || resource.heightValue <= 0.0f)
-    {
-        return RuntimeResult<void>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidResourceSize",
-            "Render graph resource size or scale must be positive.",
-            resource.name));
-    }
-
-    return RuntimeResult<void>::Success();
-}
-
-RuntimeResult<std::vector<std::string>> CompileUsageList(
-    const nlohmann::json& resourceNode,
-    const std::string& resourceName)
-{
-    if (!resourceNode.contains("usage") || !resourceNode["usage"].is_array())
-    {
-        return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidResourceUsage",
-            "Render graph resource must provide a usage array.",
-            resourceName));
-    }
-
-    std::vector<std::string> usageList;
-    for (const nlohmann::json& usageNode : resourceNode["usage"])
-    {
-        if (!usageNode.is_string())
-        {
-            return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidResourceUsage",
-                "Render graph resource usage entries must be strings.",
-                resourceName));
-        }
-        std::string usage = usageNode.get<std::string>();
-        if (!IsSupportedUsage(usage))
-        {
-            return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnsupportedResourceUsage",
-                "Render graph resource usage is not supported.",
-                resourceName + ":" + usage));
-        }
-        usageList.push_back(std::move(usage));
-    }
-    return RuntimeResult<std::vector<std::string>>::Success(std::move(usageList));
-}
-
-RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>> CompilePassInputs(
-    const nlohmann::json& passNode,
-    const std::string& passName,
-    const std::unordered_set<std::string>& resourceNames)
-{
-    if (!passNode.contains("input") || !passNode["input"].is_array())
-    {
-        return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidPassInput",
-            "Render graph pass must provide an input array.",
-            passName));
-    }
-
-    std::vector<CompiledRenderGraphPassInputDescriptor> inputs;
-    std::unordered_set<uint32_t> inputBindings;
-    uint32_t defaultBinding = 0;
-    for (const nlohmann::json& inputNode : passNode["input"])
-    {
-        if (!HasStringField(inputNode, "resource"))
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidPassInput",
-                "Render graph pass input must name a resource.",
-                passName));
-        }
-
-        const std::string resourceName = inputNode["resource"].get<std::string>();
-        const std::string source = inputNode.value(
-            "source",
-            std::string("renderGraph"));
-        if (source != "renderGraph" && source != "worldTexture")
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnsupportedInputSource",
-                "Render graph pass input source must be renderGraph or worldTexture.",
-                passName + ":" + resourceName));
-        }
-        if (source == "renderGraph" &&
-            resourceNames.find(resourceName) == resourceNames.end())
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnknownInputResource",
-                "Render graph pass input references a resource that is not declared.",
-                passName + ":" + resourceName));
-        }
-
-        CompiledRenderGraphPassInputDescriptor descriptor;
-        descriptor.resource = resourceName;
-        descriptor.source = source;
-        if (inputNode.contains("binding"))
-        {
-            if (!inputNode["binding"].is_number_unsigned())
-            {
-                return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                    "RenderGraphCompiler.InvalidPassInputBinding",
-                    "Render graph pass input binding must be an unsigned integer.",
-                    passName + ":" + resourceName));
-            }
-            descriptor.binding = inputNode["binding"].get<uint32_t>();
-        }
-        else
-        {
-            descriptor.binding = defaultBinding;
-        }
-
-        if (inputBindings.find(descriptor.binding) != inputBindings.end())
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.DuplicatePassInputBinding",
-                "Render graph pass input descriptor bindings must be unique.",
-                passName + ":" + resourceName + ":" + std::to_string(descriptor.binding)));
-        }
-
-        inputBindings.insert(descriptor.binding);
-        inputs.push_back(std::move(descriptor));
-        ++defaultBinding;
-    }
-    return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Success(std::move(inputs));
-}
-
-RuntimeResult<std::vector<CompiledRenderGraphPassOutput>> CompilePassOutputs(
-    const nlohmann::json& passNode,
-    const std::string& passName,
-    const std::unordered_set<std::string>& resourceNames,
-    const std::unordered_map<std::string, uint32_t>& resourceArrayLayers)
-{
-    if (!passNode.contains("output") || !passNode["output"].is_array())
-    {
-        return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-            "RenderGraphCompiler.InvalidPassOutput",
-            "Render graph pass must provide an output array.",
-            passName));
-    }
-
-    std::vector<CompiledRenderGraphPassOutput> outputs;
-    for (const nlohmann::json& outputNode : passNode["output"])
-    {
-        if (!HasStringField(outputNode, "resource"))
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidPassOutput",
-                "Render graph pass output must name a resource.",
-                passName));
-        }
-
-        CompiledRenderGraphPassOutput output;
-        output.resource = outputNode["resource"].get<std::string>();
-        if (resourceNames.find(output.resource) == resourceNames.end())
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnknownOutputResource",
-                "Render graph pass output references a resource that is not declared.",
-                passName + ":" + output.resource));
-        }
-        if (outputNode.contains("layer"))
-        {
-            if (!outputNode["layer"].is_number_unsigned())
-            {
-                return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                    "RenderGraphCompiler.InvalidPassOutputLayer",
-                    "Render graph pass output layer must be an unsigned integer.",
-                    passName + ":" + output.resource));
-            }
-            output.layer = outputNode["layer"].get<uint32_t>();
-        }
-        const auto layerCountIt = resourceArrayLayers.find(output.resource);
-        const uint32_t layerCount =
-            layerCountIt != resourceArrayLayers.end() ? layerCountIt->second : 1;
-        if (output.layer >= layerCount)
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.InvalidPassOutputLayer",
-                "Render graph pass output layer exceeds the resource arrayLayers.",
-                passName + ":" + output.resource + ":" + std::to_string(output.layer)));
-        }
-        output.loadOp = outputNode.value("loadOp", std::string("clear"));
-        output.storeOp = outputNode.value("storeOp", std::string("store"));
-        if (!IsSupportedLoadOp(output.loadOp))
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnsupportedLoadOp",
-                "Render graph pass output loadOp is not supported.",
-                passName + ":" + output.resource + ":" + output.loadOp));
-        }
-        if (!IsSupportedStoreOp(output.storeOp))
-        {
-            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
-                "RenderGraphCompiler.UnsupportedStoreOp",
-                "Render graph pass output storeOp is not supported.",
-                passName + ":" + output.resource + ":" + output.storeOp));
-        }
-        outputs.push_back(std::move(output));
-    }
-    return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Success(std::move(outputs));
-}
-
-void AddResourceAccess(
-    CompiledRenderGraphResourceUsagePlan& usagePlan,
-    const std::string& passName,
-    uint32_t passIndex,
-    CompiledRenderGraphAccessType accessType)
-{
-    CompiledRenderGraphResourceAccess access;
-    access.passName = passName;
-    access.passIndex = passIndex;
-    access.accessType = accessType;
-    usagePlan.accesses.push_back(std::move(access));
-
-    if (usagePlan.firstPassIndex < 0 ||
-        static_cast<int>(passIndex) < usagePlan.firstPassIndex)
-    {
-        usagePlan.firstPassIndex = static_cast<int>(passIndex);
-    }
-    if (usagePlan.lastPassIndex < 0 ||
-        static_cast<int>(passIndex) > usagePlan.lastPassIndex)
-    {
-        usagePlan.lastPassIndex = static_cast<int>(passIndex);
-    }
-}
-
-void AddBarrier(
-    CompiledRenderGraphPass& pass,
-    const std::string& resourceName,
-    CompiledRenderGraphBarrierType barrierType)
-{
-    CompiledRenderGraphBarrier barrier;
-    barrier.resource = resourceName;
-    barrier.type = barrierType;
-    pass.barriersBeforePass.push_back(std::move(barrier));
-}
-
-RuntimeResult<void> ValidateRequiredSingletonPassType(
-    const CompiledRenderGraph& compiledGraph,
-    RenderGraphPassType requiredType)
-{
-    size_t passCount = 0;
-    std::string passNames;
-    for (const CompiledRenderGraphPass& pass : compiledGraph.passes)
-    {
-        if (pass.type != requiredType)
-        {
-            continue;
-        }
-
-        if (!passNames.empty())
-        {
-            passNames += ", ";
-        }
-        passNames += pass.name;
-        ++passCount;
-    }
-
-    if (passCount == 1)
-    {
-        return RuntimeResult<void>::Success();
-    }
-
-    const std::string typeName(
-        RenderGraphPassTypeToString(requiredType));
-    return RuntimeResult<void>::Failure(MakeCompileError(
-        "RenderGraphCompiler.InvalidSingletonPassType",
-        "Render graph must contain exactly one pass of type '" +
-            typeName + "'.",
-        passNames.empty()
-            ? typeName + ":count=0"
-            : typeName + ":count=" +
-                std::to_string(passCount) +
-                ":passes=" + passNames));
-}
-
-} // namespace
+using namespace RenderGraphCompilerDetail;
 
 RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::json& renderGraphJson) const
 {
@@ -595,6 +76,30 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     resource.name));
             }
             resource.arrayLayers = resourceNode["arrayLayers"].get<uint32_t>();
+        }
+        if (resourceNode.contains("clearColor"))
+        {
+            const nlohmann::json& clearColor = resourceNode["clearColor"];
+            if (!clearColor.is_array() || clearColor.size() != 4)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidResourceClearColor",
+                    "Render graph resource clearColor must be a four-component array.",
+                    resource.name));
+            }
+            for (size_t component = 0; component < 4; ++component)
+            {
+                if (!clearColor[component].is_number() ||
+                    !std::isfinite(clearColor[component].get<double>()))
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidResourceClearColor",
+                        "Render graph resource clearColor components must be finite numbers.",
+                        resource.name));
+                }
+                resource.clearColor[component] =
+                    clearColor[component].get<float>();
+            }
         }
         if (resource.arrayLayers < 1)
         {
@@ -689,7 +194,11 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(outputResult.Error());
         }
-        if (outputResult.Value().empty())
+        // tile 光照聚类不写任何图资源（输出是帧拥有的 SSBO），是唯一允许
+        // 空 output 的 pass 类型；其余 pass 仍必须至少写一个资源。
+        const bool allowsEmptyOutput =
+            passNode.value("type", std::string()) == "lightCulling";
+        if (outputResult.Value().empty() && !allowsEmptyOutput)
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                 "RenderGraphCompiler.EmptyPassOutput",
@@ -716,6 +225,21 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 pass.name + ":" + passTypeName));
         }
         pass.type = *passType;
+        if (pass.type == RenderGraphPassType::LightCulling)
+        {
+            // 聚类只消费帧级 buffer（灯光/网格），不采样图资源，也不建
+            // VkRenderPass。任何 input/output/MSAA/material 都是作者错误。
+            if (!inputResult.Value().empty() ||
+                !outputResult.Value().empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidLightCulling",
+                    "LightCulling must not declare graph inputs/outputs, MSAA, or a pass material.",
+                    pass.name));
+            }
+        }
         if (pass.type == RenderGraphPassType::AutoExposure)
         {
             // 专用曝光节点不是通用 Compute authoring：一张 sceneColor 输入，
@@ -751,6 +275,127 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidAutoExposure", "AutoExposure scene color must be produced earlier in this graph.", pass.name));
         }
+        if (pass.type == RenderGraphPassType::VolumetricFog)
+        {
+            // 体积雾注入是专用 compute 节点：输出必须是初始化到 shaderRead
+            // 的 storage+sampled texture2DArray（每个数组层保存一个深度层），
+            // 且不参与 MSAA / pass material。
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 || inputs.empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog requires exactly one output, at least one input, and no MSAA/material.",
+                    pass.name));
+            }
+            const CompiledRenderGraphResource* target = nullptr;
+            for (const auto& resource : compiledGraph.resources)
+            {
+                if (resource.name == outputs[0].resource) target = &resource;
+            }
+            if (!target || target->type != "texture2DArray" ||
+                !target->initializeShaderRead || target->arrayLayers < 2 ||
+                std::find(target->usage.begin(), target->usage.end(), "storage") == target->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "sampled") == target->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog output must be an initialized storage+sampled texture2DArray with at least two layers.",
+                    pass.name));
+            }
+            bool hasSceneDepthInput = false;
+            for (const CompiledRenderGraphPassInputDescriptor& input : inputs)
+            {
+                if (input.source != "renderGraph")
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidVolumetricFog",
+                        "VolumetricFog inputs must be graph resources with explicit bindings.",
+                        pass.name));
+                }
+                hasSceneDepthInput = hasSceneDepthInput ||
+                    input.resource == "sceneDepth";
+            }
+            if (!hasSceneDepthInput)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidVolumetricFog",
+                    "VolumetricFog requires sceneDepth as an input.",
+                    pass.name));
+            }
+        }
+        if (pass.type == RenderGraphPassType::ParticleSoftDepth)
+        {
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 || inputs.empty() ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth requires exactly one output, at least one input, and no MSAA/material.",
+                    pass.name));
+            }
+            const CompiledRenderGraphResource* target = nullptr;
+            for (const auto& resource : compiledGraph.resources)
+            {
+                if (resource.name == outputs[0].resource) target = &resource;
+            }
+            if (!target || target->type != "texture2D" ||
+                target->format != "R32_SFLOAT" ||
+                !target->initializeShaderRead ||
+                std::find(target->usage.begin(), target->usage.end(), "storage") == target->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "sampled") == target->usage.end())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth output must be an initialized storage+sampled R32_SFLOAT texture2D.",
+                    pass.name));
+            }
+            bool hasSceneDepthInput = false;
+            for (const CompiledRenderGraphPassInputDescriptor& input : inputs)
+            {
+                if (input.source != "renderGraph")
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                        "RenderGraphCompiler.InvalidParticleSoftDepth",
+                        "ParticleSoftDepth inputs must be graph resources with explicit bindings.",
+                        pass.name));
+                }
+                hasSceneDepthInput = hasSceneDepthInput ||
+                    input.resource == "sceneDepth";
+            }
+            if (!hasSceneDepthInput)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidParticleSoftDepth",
+                    "ParticleSoftDepth requires sceneDepth as an input.",
+                    pass.name));
+            }
+        }
+        if (pass.type == RenderGraphPassType::FogComposite)
+        {
+            // 合成 pass 只允许写 sceneColor；fog volume 必须作为采样输入，
+            // 否则上一阶段的 storage 布局不会被转换回 shaderRead。
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (outputs.size() != 1 ||
+                outputs[0].resource != "sceneColor" ||
+                outputs[0].loadOp != "load" ||
+                inputs.size() != 2 ||
+                passNode.value("needMsaa", false) ||
+                passNode.value("needCreateMaterial", false))
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidFogComposite",
+                    "FogComposite requires fog volume + sceneDepth inputs and a single sceneColor LOAD output.",
+                    pass.name));
+            }
+        }
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
@@ -785,6 +430,55 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             }
         }
         pass.outputResources = std::move(outputResult.Value());
+
+        // 同一 pass 不能既把资源作为 sampled input，又把它作为 attachment。
+        // 典型错误是 decal 直接采样 sceneDepth 同时把它写回；这种反馈环在
+        // Vulkan 上是未定义行为，必须在编译期拒绝。
+        for (const std::string& inputResource : pass.inputResources)
+        {
+            for (const CompiledRenderGraphPassOutput& output :
+                 pass.outputResources)
+            {
+                if (inputResource == output.resource)
+                {
+                    return RuntimeResult<CompiledRenderGraph>::Failure(
+                        MakeCompileError(
+                            "RenderGraphCompiler.PassFeedbackLoop",
+                            "Render graph pass cannot sample and attach the "
+                            "same resource.",
+                            pass.name + ":" + inputResource));
+                }
+            }
+        }
+
+        // stencil test 只有在 pass 真正挂载带 stencil 分量的深度附件时
+        // 才有意义；否则 Vulkan 管线创建会失败或行为未定义。
+        if (pass.pipelineState.stencilTestEnable)
+        {
+            bool hasStencilAttachment = false;
+            for (const CompiledRenderGraphPassOutput& output :
+                 pass.outputResources)
+            {
+                const auto formatIt =
+                    resourceFormats.find(output.resource);
+                if (formatIt != resourceFormats.end() &&
+                    formatIt->second == "D24_UNORM_S8_UINT")
+                {
+                    hasStencilAttachment = true;
+                    break;
+                }
+            }
+            if (!hasStencilAttachment)
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(
+                    MakeCompileError(
+                        "RenderGraphCompiler.MissingStencilAttachment",
+                        "Render graph pass enables stencil test without a "
+                        "depth-stencil attachment.",
+                        pass.name));
+            }
+        }
+
         if (pass.type == RenderGraphPassType::TerrainFeedback)
         {
             // feedback 合同：1..4 个 worldTexture 输入（覆盖页 page table，
@@ -931,9 +625,15 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            if (pass.type == RenderGraphPassType::AutoExposure)
+            // 存储写 pass（AutoExposure / VolumetricFog）输出的是 storage image，
+            // 不参与 framebuffer attachment 布局；统一从 shaderRead 转到 GENERAL。
+            const bool isStorageWritePass =
+                pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::ParticleSoftDepth ||
+                pass.type == RenderGraphPassType::VolumetricFog;
+            if (isStorageWritePass)
                 AddBarrier(pass, output.resource, CompiledRenderGraphBarrierType::ShaderReadToStorage);
-            if (pass.type != RenderGraphPassType::AutoExposure && output.resource != "swapChain" &&
+            if (!isStorageWritePass && output.resource != "swapChain" &&
                 output.loadOp == "load" &&
                 previousResourceUses[output.resource] == ResourcePreviousUse::Sampled)
             {
@@ -941,6 +641,30 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     pass,
                     output.resource,
                     CompiledRenderGraphBarrierType::ShaderReadToAttachment);
+            }
+            else if (!isStorageWritePass &&
+                output.resource != "swapChain" &&
+                output.loadOp == "load" &&
+                previousResourceUses[output.resource] == ResourcePreviousUse::Attachment)
+            {
+                AddBarrier(
+                    pass,
+                    output.resource,
+                    CompiledRenderGraphBarrierType::AttachmentToAttachment);
+            }
+            else if (!isStorageWritePass &&
+                output.resource != "swapChain" &&
+                output.loadOp == "load" &&
+                previousResourceUses[output.resource] ==
+                    ResourcePreviousUse::None)
+            {
+                // 第一次写入就 LOAD：图像可能从未初始化。显式做
+                // UNDEFINED -> attachment，避免 loadOp=LOAD 与 initialLayout
+                // 不一致，也让后续没有生产者的切片处于合法布局。
+                AddBarrier(
+                    pass,
+                    output.resource,
+                    CompiledRenderGraphBarrierType::UndefinedToAttachment);
             }
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(output.resource)),
@@ -964,7 +688,11 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            previousResourceUses[output.resource] = pass.type == RenderGraphPassType::AutoExposure
+            const bool isStorageWritePass =
+                pass.type == RenderGraphPassType::AutoExposure ||
+                pass.type == RenderGraphPassType::ParticleSoftDepth ||
+                pass.type == RenderGraphPassType::VolumetricFog;
+            previousResourceUses[output.resource] = isStorageWritePass
                 ? ResourcePreviousUse::Storage : ResourcePreviousUse::Attachment;
         }
 
@@ -995,6 +723,67 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             if (use.accessType == CompiledRenderGraphAccessType::Write && use.passName != exposurePass->name)
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidAutoExposure", "Exposure output cannot have another writer.", output));
+    }
+
+    // 体积雾注入/合成各只允许一个：注入端按层写同一张图，合成端只做一次
+    // 相邻层插值；出现第二个节点会让 storage 写入互相覆盖。
+    const CompiledRenderGraphPass* fogInjectionPass = nullptr;
+    size_t fogInjectionIndex = 0;
+    const CompiledRenderGraphPass* fogCompositePass = nullptr;
+    size_t fogCompositeIndex = 0;
+    for (size_t passIndex = 0; passIndex < compiledGraph.passes.size(); ++passIndex)
+    {
+        const auto& pass = compiledGraph.passes[passIndex];
+        if (pass.type == RenderGraphPassType::VolumetricFog)
+        {
+            if (fogInjectionPass)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.DuplicateVolumetricFog",
+                    "Only one VolumetricFog pass per graph is supported.",
+                    pass.name));
+            fogInjectionPass = &pass;
+            fogInjectionIndex = passIndex;
+        }
+        if (pass.type == RenderGraphPassType::FogComposite)
+        {
+            if (fogCompositePass)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.DuplicateFogComposite",
+                    "Only one FogComposite pass per graph is supported.",
+                    pass.name));
+            fogCompositePass = &pass;
+            fogCompositeIndex = passIndex;
+        }
+    }
+    if ((fogInjectionPass == nullptr) != (fogCompositePass == nullptr))
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.IncompleteVolumetricFog",
+            "VolumetricFog and FogComposite must be declared together.",
+            fogInjectionPass ? fogInjectionPass->name : fogCompositePass->name));
+    }
+    if (fogInjectionPass && fogInjectionIndex > fogCompositeIndex)
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidVolumetricFogOrder",
+            "VolumetricFog must run before FogComposite.",
+            fogInjectionPass->name));
+    }
+    if (fogInjectionPass)
+    {
+        const std::string& fogResource =
+            fogInjectionPass->outputResources[0].resource;
+        if (std::find(
+                fogCompositePass->inputResources.begin(),
+                fogCompositePass->inputResources.end(),
+                fogResource) ==
+            fogCompositePass->inputResources.end())
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidVolumetricFogOrder",
+                "FogComposite must sample the VolumetricFog output.",
+                fogCompositePass->name));
+        }
     }
 
     auto geometryPassResult = ValidateRequiredSingletonPassType(

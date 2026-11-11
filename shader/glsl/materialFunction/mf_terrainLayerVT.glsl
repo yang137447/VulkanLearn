@@ -33,7 +33,7 @@ vec4 TerrainLayerCatalogRow(int layer, int row)
             (float(row) + 0.5) / 4.0));
 }
 
-// mip 0..4 各自一张页表。这里显式 if/else，避免动态索引 sampler 数组；
+// mip 0..6 各自一张页表。这里显式 if/else，避免动态索引 sampler 数组；
 // Vulkan/GLSL 不保证 sampler 数组支持非 uniform 动态索引。
 vec4 TerrainLayerPageTableFetch(int mip, ivec2 coord)
 {
@@ -45,7 +45,11 @@ vec4 TerrainLayerPageTableFetch(int mip, ivec2 coord)
         return texelFetch(layerPageTable2, coord, 0);
     if (mip == 3)
         return texelFetch(layerPageTable3, coord, 0);
-    return texelFetch(layerPageTable4, coord, 0);
+    if (mip == 4)
+        return texelFetch(layerPageTable4, coord, 0);
+    if (mip == 5)
+        return texelFetch(layerPageTable5, coord, 0);
+    return texelFetch(layerPageTable6, coord, 0);
 }
 
 ivec2 TerrainLayerPageTableSize(int mip)
@@ -58,7 +62,11 @@ ivec2 TerrainLayerPageTableSize(int mip)
         return textureSize(layerPageTable2, 0);
     if (mip == 3)
         return textureSize(layerPageTable3, 0);
-    return textureSize(layerPageTable4, 0);
+    if (mip == 4)
+        return textureSize(layerPageTable4, 0);
+    if (mip == 5)
+        return textureSize(layerPageTable5, 0);
+    return textureSize(layerPageTable6, 0);
 }
 
 TerrainLayerVTResult AccumulateTerrainLayerVT(
@@ -91,10 +99,13 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         // stride(mip) * 256（最大层数），因此 texel 总数 / 256 就是 CPU stride。
         const vec2 layerUv =
             TerrainLayerUvForSlot(context.texCoord, u_uvScale, uvRow);
-        const int autoMip = TerrainLayerMipForUv(
-            layerUv,
+        // 与 feedback pass 同一套 mip 公式（按全局 page UV），保证驻留页
+        // 正是这里要采样的页。
+        const int autoMip = TerrainLayerMipForPageUv(
+            context.texCoord1,
             pagesPerSide,
             maxMip,
+            u_pageTableSize,
             u_layerPageResolution,
             vec2(1.0));
         // L4e：`u_layerForceMip` 是 console 的调试覆盖（-1 = 自动）。
@@ -144,7 +155,8 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         {
             // 缺页必须用 catalog 的平均色，不能回落到 layer 0。
             albedoLayer = vec4(colorRow.rgb, 1.0);
-            pbrLayer = vec4(0.9, 0.0, 1.0, 0.0);
+            // ORM：AO=1、roughness=0.9、metallic=0。
+            pbrLayer = vec4(1.0, 0.9, 0.0, 0.0);
             normalLayer = worldNormal;
         }
         else
@@ -180,9 +192,9 @@ TerrainLayerVTResult AccumulateTerrainLayerVT(
         }
         albedoLayer.rgb =
             mix(albedoLayer.rgb, colorRow.rgb, coarseBlend);
-        // pbr 约定 x=roughness / y=metallic / z=AO；缺页的中性值是
-        // roughness 0.9、metallic 0、AO 1，与 L3 的无效页一致。
-        pbrLayer = mix(pbrLayer, vec4(0.9, 0.0, 1.0, 0.0), coarseBlend);
+        // pbr 是 ORM：x=AO / y=roughness / z=metallic；缺页的中性值是
+        // AO 1、roughness 0.9、metallic 0，与 L3 的无效页一致。
+        pbrLayer = mix(pbrLayer, vec4(1.0, 0.9, 0.0, 0.0), coarseBlend);
         const vec3 blendedNormal =
             mix(normalLayer, worldNormal, coarseBlend);
         normalLayer = dot(blendedNormal, blendedNormal) > 1.0e-8

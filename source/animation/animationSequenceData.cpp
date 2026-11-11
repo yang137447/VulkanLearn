@@ -18,6 +18,8 @@ constexpr size_t MaxCurves = 64;
 constexpr size_t MaxCurveKeys = 100000;
 constexpr size_t MaxNotifies = 4096;
 constexpr size_t MaxTracks = 4096;
+constexpr size_t MaxSyncMarkers = 256;
+constexpr size_t MaxPlayers = 8;
 constexpr size_t MaxNameLength = 64;
 constexpr float MinCurveTime = -1.0e3f;
 constexpr float MaxCurveTime = 1.0e3f;
@@ -469,6 +471,164 @@ void ValidateNotifies(
         sequence.notifies.push_back(std::move(notify));
     }
 }
+
+SyncRole ParseSyncRole(
+    std::string_view value, std::string_view basePath, const std::string& field)
+{
+    if (value == "CanBeLeader") return SyncRole::CanBeLeader;
+    if (value == "AlwaysFollower") return SyncRole::AlwaysFollower;
+    if (value == "AlwaysLeader") return SyncRole::AlwaysLeader;
+    if (value == "TransitionLeader") return SyncRole::TransitionLeader;
+    if (value == "TransitionFollower") return SyncRole::TransitionFollower;
+    if (value == "ExclusiveAlwaysLeader") return SyncRole::ExclusiveAlwaysLeader;
+    Fail(basePath, field, "has unknown UE sync role \"" + std::string(value) + "\"");
+}
+
+SyncMethod ParseSyncMethod(
+    std::string_view value, std::string_view basePath, const std::string& field)
+{
+    if (value == "DoNotSync") return SyncMethod::DoNotSync;
+    if (value == "SyncGroup") return SyncMethod::SyncGroup;
+    if (value == "MarkerSync") return SyncMethod::MarkerSync;
+    if (value == "Graph") return SyncMethod::Graph;
+    Fail(basePath, field, "has unknown UE sync method \"" + std::string(value) + "\"");
+}
+
+void ValidateSyncMarkers(
+    const nlohmann::json& json, SequenceData& sequence, std::string_view basePath)
+{
+    if (!json.contains("syncMarkers")) return;
+    const auto& markers = json.at("syncMarkers");
+    if (!markers.is_array())
+    {
+        Fail(basePath, "syncMarkers", "must be an array");
+    }
+    if (markers.size() > MaxSyncMarkers)
+    {
+        Fail(basePath, "syncMarkers",
+            "exceeds " + std::to_string(MaxSyncMarkers) + " entries");
+    }
+    const double latest = static_cast<double>(sequence.duration) + 1e-3;
+    sequence.syncMarkers.reserve(markers.size());
+    float previousTime = -std::numeric_limits<float>::infinity();
+    for (size_t index = 0; index < markers.size(); ++index)
+    {
+        const auto& marker = markers.at(index);
+        const std::string prefix = "syncMarkers[" + std::to_string(index) + "]";
+        if (!marker.is_object())
+        {
+            Fail(basePath, prefix, "must be an object");
+        }
+        for (const auto& field : marker.items())
+            if (field.key() != "name" && field.key() != "time")
+                Fail(basePath, prefix + "." + field.key(), "is not supported");
+        if (!marker.contains("name") || !marker.contains("time"))
+        {
+            Fail(basePath, prefix, "requires name and time");
+        }
+        SyncMarker value;
+        value.name = ReadName(marker.at("name"), prefix + ".name", basePath);
+        value.time = ReadFiniteNumber(marker, "time", basePath, prefix + ".time");
+        if (value.time < 0 || static_cast<double>(value.time) > latest)
+        {
+            Fail(basePath, prefix + ".time",
+                "must be within [0, sequence duration]");
+        }
+        if (value.time < previousTime)
+        {
+            Fail(basePath, prefix + ".time", "must be non-decreasing");
+        }
+        previousTime = value.time;
+        sequence.syncMarkers.push_back(std::move(value));
+    }
+}
+
+void ValidatePlayers(
+    const nlohmann::json& json, SequenceData& sequence, std::string_view basePath)
+{
+    if (!json.contains("players")) return;
+    const auto& players = json.at("players");
+    if (!players.is_array())
+    {
+        Fail(basePath, "players", "must be an array");
+    }
+    if (players.size() > MaxPlayers)
+    {
+        Fail(basePath, "players",
+            "exceeds " + std::to_string(MaxPlayers) + " entries");
+    }
+    sequence.players.reserve(players.size());
+    for (size_t index = 0; index < players.size(); ++index)
+    {
+        const auto& node = players.at(index);
+        const std::string prefix = "players[" + std::to_string(index) + "]";
+        if (!node.is_object())
+        {
+            Fail(basePath, prefix, "must be an object");
+        }
+        for (const auto& field : node.items())
+            if (field.key() != "syncGroup" && field.key() != "syncRole" &&
+                field.key() != "syncMethod" && field.key() != "startPosition" &&
+                field.key() != "syncGroupScope" && field.key() != "loop")
+                Fail(basePath, prefix + "." + field.key(), "is not supported");
+        if (!node.contains("syncGroup") || !node.at("syncGroup").is_string())
+        {
+            Fail(basePath, prefix + ".syncGroup", "must be a string");
+        }
+        PlayerBinding player;
+        player.syncGroup = node.at("syncGroup").get<std::string>();
+        if (player.syncGroup.size() > 128 ||
+            player.syncGroup.find('\0') != std::string::npos)
+        {
+            Fail(basePath, prefix + ".syncGroup", "is invalid");
+        }
+        if (node.contains("syncRole"))
+        {
+            if (!node.at("syncRole").is_string())
+                Fail(basePath, prefix + ".syncRole", "must be a string");
+            player.syncRole = ParseSyncRole(
+                node.at("syncRole").get<std::string>(), basePath, prefix + ".syncRole");
+        }
+        if (node.contains("syncMethod"))
+        {
+            if (!node.at("syncMethod").is_string())
+                Fail(basePath, prefix + ".syncMethod", "must be a string");
+            player.syncMethod = ParseSyncMethod(
+                node.at("syncMethod").get<std::string>(), basePath, prefix + ".syncMethod");
+        }
+        if (node.contains("syncGroupScope"))
+        {
+            if (!node.at("syncGroupScope").is_string())
+                Fail(basePath, prefix + ".syncGroupScope", "must be a string");
+            if (!ParseSyncGroupScope(node.at("syncGroupScope").get<std::string>(),
+                    player.syncGroupScope))
+                Fail(basePath, prefix + ".syncGroupScope",
+                    "must be Local or Component");
+        }
+        if (node.contains("startPosition"))
+        {
+            player.startPosition = ReadFiniteNumber(
+                node, "startPosition", basePath, prefix + ".startPosition");
+            if (player.startPosition < 0 ||
+                static_cast<double>(player.startPosition) >
+                    static_cast<double>(sequence.duration) + 1e-3)
+                Fail(basePath, prefix + ".startPosition",
+                    "must be within [0, sequence duration]");
+        }
+        if (node.contains("loop"))
+        {
+            if (!node.at("loop").is_boolean())
+                Fail(basePath, prefix + ".loop", "must be boolean");
+            player.loop = node.at("loop").get<bool>();
+        }
+        // 空组名必须对应 DoNotSync；有组名时不能声明 DoNotSync，避免运行时
+        // 把“显式不参与同步”和“组名拼写正确但被忽略”混为一谈。
+        if (player.syncGroup.empty() != (player.syncMethod == SyncMethod::DoNotSync))
+            Fail(basePath, prefix + ".syncMethod",
+                "must be DoNotSync exactly when syncGroup is empty");
+        sequence.players.push_back(std::move(player));
+    }
+}
 }
 
 SequenceData ParseSequence(const nlohmann::json& json, std::string_view basePath)
@@ -549,14 +709,8 @@ SequenceData ParseSequence(const nlohmann::json& json, std::string_view basePath
     ValidateFloatCurves(json, sequence, basePath);
     ValidateNotifies(json, sequence, basePath);
 
-    if (json.contains("syncMarkers"))
-    {
-        if (!json.at("syncMarkers").is_array())
-        {
-            Fail(basePath, "syncMarkers", "must be an array");
-        }
-        sequence.syncMarkersJson = json.at("syncMarkers").dump();
-    }
+    ValidateSyncMarkers(json, sequence, basePath);
+    ValidatePlayers(json, sequence, basePath);
     if (json.contains("source"))
     {
         if (!json.at("source").is_object())
@@ -567,6 +721,52 @@ SequenceData ParseSequence(const nlohmann::json& json, std::string_view basePath
     }
 
     return sequence;
+}
+
+const char* SyncRoleName(SyncRole role)
+{
+    switch (role)
+    {
+    case SyncRole::CanBeLeader: return "CanBeLeader";
+    case SyncRole::AlwaysFollower: return "AlwaysFollower";
+    case SyncRole::AlwaysLeader: return "AlwaysLeader";
+    case SyncRole::TransitionLeader: return "TransitionLeader";
+    case SyncRole::TransitionFollower: return "TransitionFollower";
+    case SyncRole::ExclusiveAlwaysLeader: return "ExclusiveAlwaysLeader";
+    }
+    return "CanBeLeader";
+}
+
+const char* SyncMethodName(SyncMethod method)
+{
+    switch (method)
+    {
+    case SyncMethod::DoNotSync: return "DoNotSync";
+    case SyncMethod::SyncGroup: return "SyncGroup";
+    case SyncMethod::MarkerSync: return "MarkerSync";
+    case SyncMethod::Graph: return "Graph";
+    }
+    return "DoNotSync";
+}
+
+const char* SyncGroupScopeName(SyncGroupScope scope)
+{
+    return scope == SyncGroupScope::Component ? "Component" : "Local";
+}
+
+bool ParseSyncGroupScope(std::string_view value, SyncGroupScope& scope)
+{
+    if (value == "Local")
+    {
+        scope = SyncGroupScope::Local;
+        return true;
+    }
+    if (value == "Component")
+    {
+        scope = SyncGroupScope::Component;
+        return true;
+    }
+    return false;
 }
 
 const FloatCurve* FindCurve(const SequenceData& sequence, std::string_view name)

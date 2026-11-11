@@ -1,0 +1,306 @@
+#version 450
+
+#include "../common/commonUbo.glsl"
+
+// 屏幕空间 tile 光照聚类。
+//
+// 每个 invocation 负责一个 16×16 tile，顺序追加：
+//   方向光（全部）→ 点光 → 聚光（各自按 SSBO 顺序）。
+// 单线程处理整个 tile，因此不需要原子操作，输出顺序完全确定；
+// 溢出只截断并累加到 header 计数，绝不越界写索引表。
+//
+// 输出缓冲不在 RenderGraph 里（它们是每 swapchain image 的帧资源），
+// 由 RendererFrameResources 持有；本 pass 只借用，尺寸与 tile 参数
+// 由 LightGridParams 传入。
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// 与 common/lighting.glsl 的 Light / UBOLight 逐字段一致。
+struct Light
+{
+    vec4 colorIntensity;
+    vec4 positionRadius;
+    vec4 directionPad;
+    vec4 coneAngleOuterInnerPadPad;
+    vec4 shadowParams;
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer UBOLight
+{
+    int directionalLightOffset;
+    int directionalLightCount;
+    int pointLightOffset;
+    int pointLightCount;
+    int spotLightOffset;
+    int spotLightCount;
+
+    Light lights[];
+} uboLight;
+
+// 与 source/render/lightCulling/lightCulling.h 的 LightGridParams 一致。
+layout(std140, set = 0, binding = 2) uniform LightGridParamsBlock
+{
+    // x = tileSize，y = tilesX，z = tilesY，w = maxLightsPerTile
+    uvec4 tileParams;
+    // x = enabled，y = renderWidth，z = renderHeight，w = reserved
+    uvec4 extentParams;
+    // x = pointLightOffset，y = pointLightCount，z = spotLightOffset，w = spotLightCount
+    uvec4 lightRanges;
+    uvec4 reservedParams;
+} gridParams;
+
+// header.x = 发生溢出的 tile 数；header.y = 被丢弃的灯索引总数。
+layout(std430, set = 0, binding = 3) buffer LightGridBuffer
+{
+    uvec4 header;
+    // x = count，y = overflow，z/w reserved
+    uvec4 tiles[];
+} lightGrid;
+
+layout(std430, set = 0, binding = 4) writeonly buffer LightIndexBuffer
+{
+    uint indices[];
+} lightIndexList;
+
+// 从投影矩阵反推相机裁剪面（cm）。
+// 当前 projection 已包含引擎的 NDC 变换（near→0、far→1），因此：
+//   near = P32 / P22
+//   far  = P32 / (P22 + 1)
+float ProjectionNearCm()
+{
+    float p22 = uboVP.projection[2][2];
+    float p32 = uboVP.projection[3][2];
+    float nearCm = p32 / p22;
+    return (p22 != 0.0 && !isnan(nearCm) && !isinf(nearCm) && nearCm > 0.0)
+        ? nearCm
+        : 0.0;
+}
+
+float ProjectionFarCm(float nearCm)
+{
+    float p22 = uboVP.projection[2][2];
+    float p32 = uboVP.projection[3][2];
+    float farCm = p32 / (p22 + 1.0);
+    return (!isnan(farCm) && !isinf(farCm) && farCm > nearCm)
+        ? farCm
+        : 0.0;
+}
+
+// 与 source/render/lightCulling/lightCulling.cpp 的
+// ComputeLightScreenBounds 保持同一套算术（含裁剪/保守分支）。
+bool ComputeLightScreenBounds(
+    vec3 centerWS,
+    float sphereRadius,
+    float nearCm,
+    float farCm,
+    out vec4 outPixelBounds)
+{
+    vec2 extent = vec2(
+        float(max(gridParams.extentParams.y, 1u)),
+        float(max(gridParams.extentParams.z, 1u)));
+    vec4 fullScreen = vec4(0.0, 0.0, extent);
+
+    vec3 centerView =
+        (uboVP.view * vec4(centerWS, 1.0)).xyz;
+    float viewDepth = -centerView.z;
+    float radius = max(sphereRadius, 0.0);
+    if (radius > 0.0)
+    {
+        if (nearCm > 0.0 && viewDepth + radius <= nearCm)
+        {
+            return false;
+        }
+        if (farCm > nearCm && viewDepth - radius > farCm)
+        {
+            return false;
+        }
+    }
+
+    // 半径 <= 0 表示作者未限制范围：保守覆盖全屏，避免误裁。
+    if (!(sphereRadius > 0.0))
+    {
+        outPixelBounds = fullScreen;
+        return true;
+    }
+
+    vec4 clip = uboVP.projection * vec4(centerView, 1.0);
+    if (!(clip.w > 1.0e-4))
+    {
+        outPixelBounds = fullScreen;
+        return true;
+    }
+    vec2 ndc = clip.xy / clip.w;
+    if (any(isnan(ndc)) || any(isinf(ndc)))
+    {
+        outPixelBounds = fullScreen;
+        return true;
+    }
+
+    vec2 centerPx = (ndc * 0.5 + 0.5) * extent;
+    float safeNear = max(nearCm, 1.0e-3);
+    float nearestDepth = max(viewDepth - radius, safeNear);
+    float scaleX = abs(uboVP.projection[0][0]);
+    float scaleY = abs(uboVP.projection[1][1]);
+    vec2 radiusPx = vec2(
+        radius * scaleX / nearestDepth * 0.5 * extent.x,
+        radius * scaleY / nearestDepth * 0.5 * extent.y);
+    radiusPx = clamp(
+        radiusPx,
+        vec2(0.0),
+        vec2(extent.x + extent.y));
+    outPixelBounds = vec4(
+        centerPx - radiusPx,
+        centerPx + radiusPx);
+    return true;
+}
+
+bool TileOverlapsBounds(
+    vec4 pixelBounds,
+    uint tileX,
+    uint tileY,
+    uint tileSize,
+    vec2 extent)
+{
+    float tileMinX = float(tileX * tileSize);
+    float tileMinY = float(tileY * tileSize);
+    float tileMaxX = min(tileMinX + float(tileSize), extent.x);
+    float tileMaxY = min(tileMinY + float(tileSize), extent.y);
+    return
+        pixelBounds.x < tileMaxX &&
+        pixelBounds.z > tileMinX &&
+        pixelBounds.y < tileMaxY &&
+        pixelBounds.w > tileMinY;
+}
+
+void AppendLight(uint lightIndex, uint capacity, inout uint count, inout uint overflow)
+{
+    if (count < capacity)
+    {
+        // tile 行内固定 stride；索引用绝对灯下标，fragment 端按 UBOLight
+        // 的三段 offset 反推类型，保证与 SSBO 打包顺序一致。
+        lightIndexList.indices[
+            gl_GlobalInvocationID.y * gridParams.tileParams.y * capacity +
+            gl_GlobalInvocationID.x * capacity +
+            count] = lightIndex;
+        ++count;
+    }
+    else
+    {
+        ++overflow;
+    }
+}
+
+void main()
+{
+    uint tileX = gl_GlobalInvocationID.x;
+    uint tileY = gl_GlobalInvocationID.y;
+    if (tileX >= gridParams.tileParams.y ||
+        tileY >= gridParams.tileParams.z)
+    {
+        return;
+    }
+    uint tileIndex =
+        tileY * gridParams.tileParams.y + tileX;
+    uint capacity = max(gridParams.tileParams.w, 1u);
+    uint count = 0;
+    uint overflow = 0;
+
+    float nearCm = ProjectionNearCm();
+    float farCm = ProjectionFarCm(nearCm);
+    vec2 extent = vec2(
+        float(max(gridParams.extentParams.y, 1u)),
+        float(max(gridParams.extentParams.z, 1u)));
+
+    // 方向光无条件进入所有 tile：屏幕投影对平行光没有意义，且漏掉方向光
+    // 会直接让整个场景变黑。
+    int dirOffset = uboLight.directionalLightOffset;
+    int dirEnd = dirOffset + max(uboLight.directionalLightCount, 0);
+    for (int index = dirOffset; index < dirEnd; ++index)
+    {
+        AppendLight(uint(index), capacity, count, overflow);
+    }
+
+    int pointOffset = uboLight.pointLightOffset;
+    int pointEnd = pointOffset + max(uboLight.pointLightCount, 0);
+    for (int index = pointOffset; index < pointEnd; ++index)
+    {
+        Light light = uboLight.lights[index];
+        if (light.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        vec4 pixelBounds;
+        if (!ComputeLightScreenBounds(
+                light.positionRadius.xyz,
+                light.positionRadius.w,
+                nearCm,
+                farCm,
+                pixelBounds))
+        {
+            continue;
+        }
+        if (TileOverlapsBounds(
+                pixelBounds,
+                tileX,
+                tileY,
+                gridParams.tileParams.x,
+                extent))
+        {
+            AppendLight(uint(index), capacity, count, overflow);
+        }
+    }
+
+    int spotOffset = uboLight.spotLightOffset;
+    int spotEnd = spotOffset + max(uboLight.spotLightCount, 0);
+    for (int index = spotOffset; index < spotEnd; ++index)
+    {
+        Light light = uboLight.lights[index];
+        if (light.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        vec3 forward = light.directionPad.xyz;
+        float forwardLength = length(forward);
+        float radius = light.positionRadius.w;
+        vec3 center = light.positionRadius.xyz;
+        float sphereRadius = 0.0;
+        if (radius > 0.0)
+        {
+            // 顶点 + 底面圆的最小包围球：覆盖整个锥体，比直接用半径更紧。
+            center += forward / max(forwardLength, 1.0e-6) * (0.5 * radius);
+            float halfHeight = 0.5 * radius;
+            float outer = clamp(light.coneAngleOuterInnerPadPad.x, 0.0, 1.5);
+            float baseRadius = radius * tan(outer);
+            sphereRadius = sqrt(
+                halfHeight * halfHeight +
+                baseRadius * baseRadius);
+        }
+        vec4 pixelBounds;
+        if (!ComputeLightScreenBounds(
+                center,
+                sphereRadius,
+                nearCm,
+                farCm,
+                pixelBounds))
+        {
+            continue;
+        }
+        if (TileOverlapsBounds(
+                pixelBounds,
+                tileX,
+                tileY,
+                gridParams.tileParams.x,
+                extent))
+        {
+            AppendLight(uint(index), capacity, count, overflow);
+        }
+    }
+
+    lightGrid.tiles[tileIndex] =
+        uvec4(count, overflow, 0u, 0u);
+    if (overflow > 0)
+    {
+        atomicAdd(lightGrid.header.x, 1u);
+        atomicAdd(lightGrid.header.y, overflow);
+    }
+}

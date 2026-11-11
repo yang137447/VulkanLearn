@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "hair/strandGeometry.h"
+#include "hair/tressfxFollowBinding.h"
 #include "hair/tressfxGroupBinding.h"
 #include "hair/tressfxRootCloud.h"
 
@@ -76,6 +77,38 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     ValidateStiffnessCurveLength("localShapeStiffness",
         request.buildPlan.tressfxSimulation.localShapeStiffness, asset.pointsPerStrand,
         request.buildPlan.meshAssetPath, request.buildPlan.modelDataPath);
+    // 路线 B：完整 groom 仍作为渲染发丝；只把 simulationGuideCount 根 guide
+    // 送入模拟，其余按最近模拟 guide 的逐点 rest frame 存 offset。0 表示关闭，
+    // 不生成任何额外数据，保持既有全 guide 模拟行为。
+    VL::Hair::TressfxFollowBinding followBinding;
+    if (request.buildPlan.tressfxSimulationGuideCount > 0)
+    {
+        if (request.buildPlan.tressfxSimulationGuideCount > asset.guideCount)
+            throw std::runtime_error(
+                "TressFX simulationGuideCount " +
+                std::to_string(request.buildPlan.tressfxSimulationGuideCount) +
+                " exceeds the .tfx guide count " + std::to_string(asset.guideCount) +
+                ": " + request.buildPlan.modelDataPath);
+        std::vector<Eigen::Vector3f> rootPositions;
+        std::vector<Eigen::Vector3f> restPositions;
+        rootPositions.reserve(asset.guideCount);
+        restPositions.reserve(asset.positions.size());
+        for (uint32_t guide = 0; guide < asset.guideCount; ++guide)
+        {
+            const size_t base = static_cast<size_t>(guide) * asset.pointsPerStrand;
+            const auto& root = asset.positions[base];
+            rootPositions.push_back(Eigen::Vector3f(root[0], root[1], root[2]));
+            for (uint32_t local = 0; local < asset.pointsPerStrand; ++local)
+            {
+                const auto& point = asset.positions[base + local];
+                restPositions.push_back(
+                    Eigen::Vector3f(point[0], point[1], point[2]));
+            }
+        }
+        followBinding = VL::Hair::BuildTressfxFollowBinding(rootPositions,
+            restPositions, asset.pointsPerStrand,
+            request.buildPlan.tressfxSimulationGuideCount);
+    }
     const auto& geometry = prepared.Value();
     // 共享 Vertex 较宽，导入预算单独限制派生流，避免合法 TFX 膨胀成数 GB 顶点。
     constexpr size_t MaxRibbonBytes = 512ull * 1024 * 1024;
@@ -139,6 +172,11 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     // 几何导入结果不保存 guide->group 映射。这里只校验声明上界，
     // 避免缓存一份“无法展开分组”的几何；展开在绑定阶段完成。
     section.tressfxGuideCount = asset.guideCount;
+    section.tressfxSimulationGuideIndices =
+        std::move(followBinding.simulationGuideIndices);
+    section.tressfxFollowGuideIndex = std::move(followBinding.followGuideIndex);
+    section.tressfxFollowOffset = std::move(followBinding.offsets);
+    section.tressfxGuideFrameRef = std::move(followBinding.frameReferences);
     VL::Hair::ValidateTressfxGuideGroups(GroupDeclarations(request.buildPlan),
         asset.guideCount,
         " (" + request.buildPlan.meshAssetPath + ", " + request.buildPlan.modelDataPath + ")");

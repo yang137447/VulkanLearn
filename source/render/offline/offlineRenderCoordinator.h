@@ -5,6 +5,7 @@
 #include <mutex>
 #include <thread>
 #include "render/offline/offlineSceneAdapter.h"
+#include "render/offline/offlineParticleCompositor.h"
 
 namespace VL
 {
@@ -12,6 +13,9 @@ struct OfflinePublishedResult
 {
     uint64_t taskGeneration = 0;
     std::shared_ptr<const Offline::FilmSnapshot> film;
+    // 与 film 同一冻结快照的 CPU 粒子合成层；几何 AOV 不被修改，
+    // 导出/显示由消费方按 transmittance 合成。
+    std::shared_ptr<const OfflineParticleOverlay> particles;
     nlohmann::json manifest;
 };
 
@@ -44,6 +48,7 @@ private:
         std::shared_ptr<const OfflineWorldAssets> assets;
         OfflineRenderSettings settings;
         std::chrono::steady_clock::time_point acceptedAt;
+        std::shared_ptr<const OfflineParticleOverlay> particles;
         nlohmann::json manifest;
     };
     void Run();

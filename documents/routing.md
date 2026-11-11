@@ -15,10 +15,11 @@
 | --- | --- | --- |
 | `CMakeLists.txt`、`source/CMakeLists.txt`、`source/main_editor.cpp`、`source/main_game.cpp`、`source/engine/application.*` | `contracts/vulkanlearn-architecture.html`、`contracts/testing.md` | Runtime editor target ownership、Game executable link boundary |
 | `source/engine/editorHost.h`、`source/engine/nullEditorHost.*`、`source/editor/editorHost.*` | `contracts/vulkanlearn-architecture.html` | Runtime editor target ownership、Game executable link boundary、Runtime UI editor include boundary |
-| `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem.*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
+| `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
-| `source/editor/**` | `contracts/ui-component-system.md` | — |
+| `source/editor/**` | `contracts/ui-component-system.md`、`contracts/editor-runtime-data-boundary.md` | — |
+| `script/VulkanLearn.Runtime/AnimationGraph*.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationBlueprint.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationGraph.cs`、`tool/script-tests/scriptLocomotionTests.cpp`、`tool/script-tests/managed/AnimationGraphFixtures.cs` | `contracts/animation-runtime-skinning.md`、`contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/ui/panel/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
 | `source/editor/service/material/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | Runtime editor target ownership |
 | `source/script/**`、`script/**`、`tool/script-tests/**`、`source/editor/scene/scriptBlueprintAuthoring.*` | `contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
@@ -31,7 +32,10 @@
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationScriptData.*`、`source/world/worldAnimation.cpp`、`source/script/scriptRuntime.cpp`、`tool/animation-tests/animationScriptDataTests.cpp`、`tool/animation-tests/notifyStateTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
-| `source/animation/skeletalPlayback.*`、`source/animation/footPlacement.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/animation/skeletalPlayback*`、`source/animation/animationSyncGroup.*`、`source/animation/footPlacement.*`、`source/animation/slopeWarping.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py`、`tool/animation-tests/animationSyncGroupTests.cpp`、`tool/animation-tests/slopeWarpingTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/animation/poseDriver.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_pose_driver.py`、`tool/animation-tests/poseDriverTests.cpp` | `contracts/animation-pose-driver.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
+| `source/animation/postProcess.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_post_process.py`、`tool/animation-tests/postProcessTests.cpp` | `contracts/animation-post-process.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
+| `source/physics/bonePhysics.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_bone_physics.py`、`tool/physics-runtime-tests/bonePhysicsTests.cpp` | `contracts/animation-bone-physics.md`、`contracts/animation-post-process.md`、`contracts/testing.md` | — |
 | `source/animation/motionWarping.*`、`source/script/scriptPhysics.cpp`、`script/VulkanLearn.Runtime/AnimationPlayback.cs`、`tool/animation-tests/motionWarpingTests.cpp` | `contracts/animation-motion-warping.md`、`contracts/animation-montage.md`、`contracts/testing.md` | — |
 | `source/animation/motionDatabase.*`、`source/animation/motionDebug.h`、`source/animation/motionFeatures.*`、`source/animation/motionHistory.*`、`source/animation/motionMatching.*`、`source/animation/motionRuntime.*`、`source/world/worldAnimation.cpp`、`tool/animation/motionDatabaseBuild.*`、`tool/animation/browse_motion_database.py`、`tool/animation/verify_gasp_motion_database.py`、`tool/animation/capture_gasp_p4.py`、`tool/animation/capture_gasp_p5.py`、`tool/animation-tests/motionDatabaseTests.cpp`、`tool/animation-tests/motionHistoryTests.cpp`、`tool/animation-tests/motionMatchingTests.cpp` | `contracts/animation-motion-features.md`、`contracts/testing.md` | — |
 | `source/animation/motionRuntimeDatabase.*` | `contracts/animation-asset-import.md`、`contracts/animation-motion-features.md`、`contracts/testing.md` | — |
@@ -62,7 +66,7 @@
 | `source/VertexDataStruct.h`、`source/mesh/vegetationAsset.*`、`source/render/resource/rendererMeshLoader.*`、`schema/scene.schema.json` | `contracts/vegetation-instancing.md` | — |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md`、`contracts/vulkanlearn-architecture.html` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer gameplay plan boundary、Renderer world loader include boundary、Renderer resource load runtime error code contract |
 | `source/render/outline/**`、`shader/glsl/outline/**` | `contracts/outline-normal-smoothing.md` | — |
-| `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
+| `source/renderGraph.h`、`source/renderGraph*.cpp` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
 | `source/render/frame/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | — |
@@ -76,11 +80,15 @@
 | `source/render/world/**` | `contracts/vulkanlearn-architecture.html`、`contracts/csharp-blueprint-runtime.md` | — |
 | `source/render/renderable/**` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
-| `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
+| `source/particles/**`、`shader/glsl/particle/**` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
+| `source/render/decal/**`、`shader/glsl/decal/**` | `contracts/decal-runtime.md` | — |
+| `source/shaderCompiler*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
+| `shader/glsl/M_glassRefraction.*`、`shader/glsl/M_glassRefraction.surface.glsl`、`config/renderGraphConfig.json` 的 `sceneColorCopy` / `forwardTransparent`、`tool/renderer-backend-tests/glass_refraction_graph_test.cpp` | `contracts/glass-refraction.md`、`contracts/vulkanlearn-architecture.html` | — |
 | 论文 case 验证：`tool/validation/**` | `rationale/shading-model-case-records.md`（证据归档）、`plan/rendering/shading-model-alignment-plan.md` | — |
+| 粒子特效验收：`tool/validation/particle/**` | `plan/rendering/niagara-effects-alignment-plan.md` | — |
 | `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]`、`[rmlui-shrink-to-fit-max-width]` 条 | — |
 | 改右键上下文菜单（`ui/editor-workspace.rml` 的 `#editor-context-menu`、面板的 `mouseup/button==1` 处理、菜单目标解析） | `contracts/ui-component-system.md` 的「右键上下文菜单」节 | — |
 | `source/render/editor/**`、`shader/glsl/pass/editorGrid.*`、`config/renderGraphConfig.json` 的 `editorGrid` pass | `contracts/material-mesh-pass-composition.md` 的「编辑器网格 pass」节 | — |
@@ -94,10 +102,24 @@
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
 | `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
+| `source/particles/particleRenderer*`、`source/particles/particleAsset*` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
+| `source/animation/skeletalPlayback*` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/renderGraph*`、`source/render/rendergraph/renderGraphCompiler*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
+| `source/render/backend/rendererBackendVulkan*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/ui/uiSubsystem*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
+| `source/shaderCompiler*` | `contracts/shader-build-cache.md` | — |
+| `source/engine/runtimeCommandExecutor*` | `contracts/debug-runtime-commands.md`、`contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop |
+| `source/debugConsole*` | `contracts/debug-runtime-commands.md` | — |
+| `source/hair/hairSimulationPass*` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md` | — |
+| `source/editor/runtime/materialInstanceEditorRuntime*` | `contracts/material-instance-editor.md`、`contracts/ui-component-system.md` | Runtime editor target ownership |
+| `source/editor/ui/panel/particlePanel*` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
+| `source/editor/ui/materialInstanceAssetEditorPanel*` | `contracts/ui-component-system.md`、`contracts/material-instance-editor.md` | Runtime editor target ownership |
+| `source/world/worldParticle*` | `contracts/particle-system.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/editor/command/editorCommandJsonCodec*` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md` | — |
 
 `extern/**` 是第三方依赖，除 `extern/BLAKE3` 的锁定说明外不在本表覆盖范围（见"未覆盖路径"）。
 
-warp 消费点：`skeletalPlayback.*` 在 GT tick 内调用原生窗口队列；C# 通过
+warp 消费点：`skeletalPlayback*` 在 GT tick 内调用原生窗口队列；C# 通过
 `PlayMontage(montage, targets)` 只提交 Montage id 与 target 世界位置，
 `worldAnimation.cpp` 解析 `targets` 后由 `animationScriptData.cpp` 按 Montage 资产窗口
 装配并回传 `warp`/`rootMotion`；`scriptPhysics.cpp` 在 Jolt 更新前用
@@ -290,6 +312,11 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   Skeleton、Sequence sidecar 与 AnimMontage 三层资产；曲线/notify 真实时间与
   warp 窗口迁移目标。计划，非契约；当前行为仍以
   `contracts/animation-motion-warping.md`、`contracts/animation-asset-import.md` 为准。
+- [Valley Echo 角色运动复刻计划](plan/architecture/valley-echo-locomotion-replication-plan.md)：
+  Valley of the Ancient 的 Echo 地面步态状态机、方向起步/停止、跳跃落地、SpringArm
+  控制与一次性动作的资产导出和分阶段门禁。计划，非契约；当前运行时能力仍以
+  `contracts/animation-motion-features.md`、`contracts/animation-motion-warping.md`、
+  `contracts/animation-montage.md` 为准。
 - [原 ALS 计划](plan/architecture/als-csharp-animation-plan.md)：
   已由 GASP 计划取代，仅保留历史决策，不作为后续实施依据。
 

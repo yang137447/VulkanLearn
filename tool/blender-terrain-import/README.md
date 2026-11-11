@@ -305,13 +305,122 @@ GN 的 `coast` 场，而不是把 taper 宽度无限调大。
 
 ```powershell
 py -3 tool\blender-terrain-import\build_pegasus_tiled.py `
-  --resource-root "$res" --verbose
+  --resource-root "$res" `
+  --output-relative Generated/BlenderPegasusGN_v2 `
+  --erodibility 1e-4 --verbose
 ```
+
+该脚本现在按实际出货链执行：
+
+```text
+build_pegasus_library_global.py --no-erosion
+  -> erode_pegasus_global.py
+  -> split_pegasus_tiles.py
+  -> assemble_pegasus_tiles.py
+```
+
+造型默认参数为 `noise 1050/900 + detail 600/200`，默认开启
+`--macro-island`（岛屿轮廓 + 山脊）。`--erodibility 1e-4` 是当前第一版
+可见侵蚀的视觉标定，也是 `build_pegasus_tiled.py` 的默认值；
+`erode_pegasus_global.py` 自身的 LEM 默认仍是 `3e-6`（在 500 m 级新山体上
+几乎不可见）。
+
+`--seed` 现在会写入两个 noise 实例（detail 自动用 `seed+37`）；旧资产在
+`VL_HF_Noise` 没接 `Seed` 时会固定使用 seed=0，并在中心留下 Perlin 放射
+特征。需要接近 4 km `_ref4km` 的低起伏基准时，用：
+
+```powershell
+py -3 tool\blender-terrain-import\build_pegasus_tiled.py `
+  --resource-root "$res" `
+  --output-relative Generated/BlenderPegasusGN_v1_rhythm_resampled `
+  --noise-amplitude 420 --noise-element 2200 `
+  --detail-amplitude 110 --detail-element 400 `
+  --rhythm-strength 1.0 --rhythm-element 1200 `
+  --noise-distortion 0 --seed 17 --no-macro-island `
+  --erodibility 5e-6 --chain pegasus --chain-k 1.0 `
+  --chain-resample --chain-warp --chain-detail-restore 1.0 `
+  --warp-seed 17 --verbose
+```
+
+`--rhythm-strength/--rhythm-element` 用低频 mask 控制 detail 的疏密带；
+`--chain-resample` 让 erode1/2 在 512、erode3/4 在 256 上跑，再升回 1024；
+`--chain-warp` 在两次分辨率切换处插入 domain warp。该组参数得到
+144.7 m / 27.8 m / 12.7° / 0.0171（含 detail restore 1.0），参考
+`_ref4km` after 为 147.7 m / 26.9 m / 11.9° / 0.0206。
+派生层按 Houdini remap 语义输出：`bedrock` 是侵蚀前 height 层，
+`debris/sediment` 是绝对米制后 0..1 clamp（不按峰值归一化）。
+`build_pegasus_tiled.py` 会把 `Scree Debris`/`River Silt` 追加到全局
+manifest，最终 TR/MI 为 6 层；本地 Megascans 只有 UE `.uasset`，本轮
+使用 KiteDemo `layer_05/layer_01` 占位。
+
+#### 河流阶段（`PE_heightfield_paths`）
+
+`water` 掩膜是水力侵蚀的水深层，**不是** authored 河流。飞马的河流在
+`sop_PE_heightfield_paths.2.0`（Linescape）里独立生成：waypoints →
+foreach × 10 的 `findshortestpath`（each-to-each）→
+smooth/polypath/fuse → sweep → `heightfield_project` →
+`heightfield_blur` → `remap1`（河岸环）/ `remap2`（河道核心）→
+`cutoutbyobject` 切河床。
+
+对应实现 `river_paths.py`，在**侵蚀之后**执行（paths HDA 消费的是侵蚀网络
+的输出；侵蚀前切河床会被下一轮侵蚀填平）：
+
+```powershell
+py -3 tool\blender-terrain-import\build_pegasus_tiled.py `
+  --resource-root "$res" `
+  --output-relative Generated/BlenderPegasusGN_v1_rhythm_river `
+  --noise-amplitude 420 --noise-element 2200 `
+  --detail-amplitude 110 --detail-element 400 `
+  --rhythm-strength 1.0 --rhythm-element 1200 `
+  --noise-distortion 0 --seed 17 --no-macro-island `
+  --erodibility 5e-6 --chain pegasus --chain-k 1.0 `
+  --chain-resample --chain-warp --chain-detail-restore 1.0 `
+  --river --river-width-m 110 --river-depth-m 6 --river-bank-m 160 `
+  --river-branches 3 --river-smooth 2 --verbose
+```
+
+流程变成：
+
+```text
+build_pegasus_library_global.py --no-erosion
+  -> erode_pegasus_global.py   # 四段侵蚀，输出 heightmap_gn.png
+  -> river_paths.py            # 投影 + 切河床 + 双层 mask
+  -> split_pegasus_tiles.py
+  -> assemble_pegasus_tiles.py
+```
+
+河流相关开关：
+
+| 开关 | 默认 | 作用 |
+|---|---:|---|
+| `--river/--no-river` | on | 是否执行河流阶段 |
+| `--river-width-m` | 110 | 谷底走廊宽度（切深按它分布） |
+| `--river-water-width-m` | width × 0.55 | 水面核心宽度 |
+| `--river-depth-m` | 6 | 河道中心切深 |
+| `--river-bank-m` | 160 | 高斯河岸过渡宽度 |
+| `--river-branches` | 3 | 自动支流数（Houdini 是 foreach × 10） |
+| `--river-smooth` | 2 | Chaikin 平滑次数 |
+| `--river-waypoints` | — | 自定义 `[[x,z],...]`（米）；省略时自动生成 |
+| `--water-texture-root` | `Generated/PegasusWater/Textures/Source` | 水面贴图目录 |
+
+输出三张关键图：
+
+- `Global/Source/heightmap_river.png`：切过河床的最终高度（送进切片）；
+- `Global/Source/mask_gn_river.png`：**河岸环** `corridor × (1 − channel)`；
+- `Global/Source/mask_gn_river_water.png`：**河道核心**，给水面材质。
+
+`_append_derived_layers` 会据此追加 `River Bank` 和 `River Water` 两层
+（TR/MI 从 6 层变 8 层）。水面贴图由
+`make_water_textures.py --output <res>\Generated\PegasusWater\Textures\Source`
+生成；本地没有可用的 Megascans 源图时，这是占位。
+
+注意：`M_terrain` 是 Opaque，`River Water` 只是低 roughness 的材质层，
+不是透明水体；要真正的水面反射/折射需要独立的 pass。
 
 输出：
 
 ```text
-Generated\BlenderPegasusGN\Tiles\
+Generated\BlenderPegasusGN_v2\
   Global\Source\heightmap_gn.png
   Global\Source\mask_gn_*.png
   tile_00..tile_15\Source\heightmap_gn_tile.png
@@ -320,8 +429,8 @@ Generated\BlenderPegasusGN\Tiles\
   SC_terrain_pegasus_4x4.json
 ```
 
-`--reuse-global` 跳过 4km 全局场重烘；`--split-only` 只生成 tile 输入与
-manifest，不跑 16 次资产转换。
+`--reuse-global` 跳过全局造型与侵蚀；`--skip-erode` 只跳过侵蚀；
+`--split-only` 只生成 tile 输入与 manifest，不跑 16 次资产转换。
 
 切分规则：
 
@@ -333,10 +442,15 @@ manifest，不跑 16 次资产转换。
   间距生成，所以相邻 tile 即使选择不同 LOD，边界顶点和法线仍一致。
 * `pageTilesPerSide=8`，16 个 tile 正好铺满 32×32 全局 VT 页表。
 * 所有 tile 共享同名 layer key、第一份 texture arrays 和同一套 camera/environment；
-  `terrainlayer stats` 显示 `globalLayers=5 sourceSets=1 dedupedLayers=75`。
+  当前 v2 资产为 4 层，`terrainlayer stats` 显示
+  `globalLayers=4 sourceSets=1 dedupedLayers=60`。
+* 合并场景默认相机为 3 km 高、6.4 km 远、`far_clip=12 km`；否则 500 m
+  级山体会把旧的 350 m 机位埋进地里。
 
 当前限制：跨 tile 的 LOD 选择各自独立，依赖边界缝合环保证水密；没有统一的
 邻接优先级或 HLOD。边界法线使用 heightmap overscan（`heightmapMargin=1`）。
+v2 画面仍有岛屿外围 0 高度方板（water 未接入材质）和山体内部均匀碎脊；
+下一步需要 macro landform/valley mask，而不是继续加噪声。
 
 ## 已知边界
 

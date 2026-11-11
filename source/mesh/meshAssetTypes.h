@@ -308,6 +308,11 @@ struct MeshAssetBuildPlan
     std::string modelCacheKey;
     // tressfx 描述符声明局部空间半径；静态 ribbon 不把逆质量当作宽度。
     float strandRadius = 0.0f;
+    // 顶层 simulationGuideCount：从 .tfx 的 guide 中抽稀出参与模拟的子集。
+    // 0 表示全部 guide 参与模拟（既有行为）；>0 时其余 guide 作为 follow，
+    // 由最近模拟 guide 的逐点 frame 重建。只影响 GPU 模拟调度与 follow 数据，
+    // 不改变 .tfx 文件、ribbon 顶点或渲染发丝数。
+    uint32_t tressfxSimulationGuideCount = 0;
     // TF simulationDefaults；不含皮肤绑定/碰撞，不能直接作为放置的最终配置。
     TressfxSimulationConfig tressfxSimulation;
     // TF groups[] 的已校验声明；空表示未声明分组（与缺省 groups 行为一致）。
@@ -363,6 +368,17 @@ struct MeshSection
     // .tfx 头里的 guide 数。分组绑定在导入后按它展开；几何导入缓存因此
     // 不保存任何 guide->group 映射。
     uint32_t tressfxGuideCount = 0;
+    // 参与模拟的 guide 原始索引（升序）；空 = 全部 guide 参与模拟。
+    std::vector<uint32_t> tressfxSimulationGuideIndices;
+    // 每根原始 guide 的模拟来源：自身（参与模拟）或最近模拟 guide 的原始索引。
+    // 空 = 每根 guide 都参与模拟。
+    std::vector<uint32_t> tressfxFollowGuideIndex;
+    // 逐点 offset，布局与顶点一致（guideCount * pointsPerStrand，xyz 有效）。
+    // offset 在来源 guide 的 rest frame 下表达；空 = 未启用 follow。
+    std::vector<Eigen::Vector4f> tressfxFollowOffset;
+    // 每根原始 guide 的 rest frame 参考轴（xyz 有效）；用于在运行时用与导入期
+    // 相同的规则重建逐点 frame。空 = 未启用 follow。
+    std::vector<Eigen::Vector4f> tressfxGuideFrameRef;
     std::vector<uint32_t> indices;
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;

@@ -440,7 +440,7 @@ void PrintLaunchUsage()
         << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
-        << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
+        << "  --console-command-delay <frames>    Frames before submitting launch commands; then one command per frame (default 60).\n"
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
         << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
         << "  --focus-window                      Request OS keyboard focus at startup (input automation).\n"

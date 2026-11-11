@@ -4,6 +4,8 @@
 
 #include "commonFunction.h"
 #include "sceneNode.h"
+#include "world/loading/worldLoader.h"
+#include "world/localLightShadowSettings.h"
 #include "world/worldBuildPlan.h"
 #include "world/loading/terrainCollisionInstances.h"
 #include "render/lighting/physicalLighting.h"
@@ -94,15 +96,31 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = ReadCanonicalLightIntensity(node);
-    const float radius = node.value("radius", 0.0f);
+    // 与 UE 的 Attenuation Radius 对齐：省略时给 10 m，而不是无限范围。
+    const float radius = node.value("radius", 1000.0f);
+    const LocalLightShadowSettings shadow =
+        ReadLocalLightShadowSettings(node, "pointLight|" + name);
 
     std::shared_ptr<PointLight> light = std::make_shared<PointLight>();
     light->SetName(name);
     light->SetColor(color);
     light->SetIntensity(intensity);
     light->SetRadius(radius);
+    light->SetCastShadows(shadow.castShadows);
+    light->SetShadowBias(shadow.bias);
     light->SetPosition(position);
     light->SetRotation(rotation);
+    if (node.contains("pulse"))
+    {
+        const nlohmann::json& pulse = node.at("pulse");
+        // 校验器要求 pulse 的四个子字段同时存在；这里直接取，避免绕过校验
+        // 的调用路径把缺失字段静默降级成“无脉冲”。
+        light->SetPulsePeriod(pulse.at("period").get<float>());
+        light->SetPulseDuration(pulse.at("duration").get<float>());
+        light->SetPulsePhase(pulse.at("phase").get<float>());
+        light->SetPulsePeakIntensity(
+            pulse.at("peakIntensity").get<float>());
+    }
     return light;
 }
 
@@ -113,12 +131,14 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = ReadCanonicalLightIntensity(node);
-    const float radius = node.value("radius", 0.0f);
+    const float radius = node.value("radius", 1000.0f);
     // 场景 JSON 使用角度制；GPU 的 acos 与锥角比较使用弧度制。
     const float coneAngleOuter =
         JsonParser::ParseValue<float>(node["cone_angle_outer"]) * M_PI / 180.0f;
     const float coneAngleInner =
         JsonParser::ParseValue<float>(node["cone_angle_inner"]) * M_PI / 180.0f;
+    const LocalLightShadowSettings shadow =
+        ReadLocalLightShadowSettings(node, "spotLight|" + name);
 
     std::shared_ptr<SpotLight> light = std::make_shared<SpotLight>();
     light->SetName(name);
@@ -129,6 +149,8 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     light->SetRotation(rotation);
     light->SetConeAngleOuter(coneAngleOuter);
     light->SetConeAngleInner(coneAngleInner);
+    light->SetCastShadows(shadow.castShadows);
+    light->SetShadowBias(shadow.bias);
     return light;
 }
 
@@ -154,8 +176,29 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node)
     environment.intensity = config.value("intensity", 1.0f);
     environment.hdrPath = config.value("hdrPath", std::string());
     environment.skyParameters = BuildSkyParameters(config);
+    // fog 缺失时保持 FogSettings 默认值（enabled=false），旧场景行为不变。
+    if (config.contains("fog"))
+    {
+        environment.fog = ParseFogSettingsJson(config.at("fog"));
+    }
 
     return environment;
+}
+
+Eigen::Matrix4f BuildParticleSystemModel(
+    const Eigen::Vector3f& position,
+    const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    Eigen::Matrix4f scaleMatrix = Eigen::Matrix4f::Identity();
+    scaleMatrix(0, 0) = scale.x();
+    scaleMatrix(1, 1) = scale.y();
+    scaleMatrix(2, 2) = scale.z();
+    Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+    translation.block<3, 1>(0, 3) = position;
+    return translation *
+        CommonFunction::RotationToMatrix(rotation) *
+        scaleMatrix;
 }
 
 void SetSkySunDirection(WorldEnvironment& environment, const Eigen::Vector3f& sceneToSunDirection)
@@ -322,6 +365,121 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             {
                 environment = BuildEnvironment(objectJson);
             }
+            else if (type == "decal")
+            {
+                WorldDecal decal;
+                decal.name = objectPlan.objectName;
+                decal.scenePosition =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["position"]);
+                decal.sceneRotation =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["rotation"]);
+                decal.sceneScale = objectJson.contains("scale")
+                    ? JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["scale"])
+                    : Eigen::Vector3f::Ones();
+                decal.size =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["size"]);
+                const Eigen::Vector3f halfExtent =
+                    decal.size.cwiseProduct(decal.sceneScale) * 0.5f;
+                Eigen::Matrix4f scale = Eigen::Matrix4f::Identity();
+                scale(0, 0) = halfExtent.x();
+                scale(1, 1) = halfExtent.y();
+                scale(2, 2) = halfExtent.z();
+                decal.decalToWorld =
+                    Eigen::Affine3f(Eigen::Translation3f(
+                        decal.scenePosition)).matrix() *
+                    CommonFunction::RotationToMatrix(
+                        decal.sceneRotation) *
+                    scale;
+                if (objectJson.contains("color"))
+                {
+                    const Eigen::Vector3f color =
+                        JsonParser::ParseValue<Eigen::Vector3f>(
+                            objectJson["color"]);
+                    decal.color =
+                        Eigen::Vector4f(color.x(), color.y(), color.z(), 1.0f);
+                }
+                decal.opacity = objectJson.value(
+                    "opacity", decal.opacity);
+                decal.edgeSoftness = objectJson.value(
+                    "edgeSoftness", decal.edgeSoftness);
+                decal.noiseStrength = objectJson.value(
+                    "noiseStrength", decal.noiseStrength);
+                decal.roughness = objectJson.value(
+                    "roughness", decal.roughness);
+                decal.metallic = objectJson.value(
+                    "metallic", decal.metallic);
+                decal.ambientOcclusion = objectJson.value(
+                    "ambientOcclusion", decal.ambientOcclusion);
+                if (objectJson.contains("emissive"))
+                {
+                    decal.emissive =
+                        JsonParser::ParseValue<Eigen::Vector3f>(
+                            objectJson["emissive"]);
+                }
+                decal.emissiveStrength = objectJson.value(
+                    "emissiveStrength", decal.emissiveStrength);
+                if (objectJson.contains("decalResponse"))
+                {
+                    const std::string response =
+                        objectJson.at("decalResponse").get<std::string>();
+                    if (!TryParseDecalResponse(
+                            response, decal.responseMask))
+                    {
+                        throw std::runtime_error(
+                            "Decal " + objectPlan.objectName +
+                            " has unknown decalResponse: " + response);
+                    }
+                }
+                decal.normalStrength = objectJson.value(
+                    "normalStrength", decal.normalStrength);
+                decal.albedoMap = objectJson.value(
+                    "albedoMap", decal.albedoMap);
+                decal.normalMap = objectJson.value(
+                    "normalMap", decal.normalMap);
+                decal.ormMap = objectJson.value(
+                    "ormMap", decal.ormMap);
+                decal.sortOrder = static_cast<uint32_t>(
+                    objectJson.value("sortOrder", 0));
+                world->AddDecal(
+                    objectPlan.objectName,
+                    std::move(decal));
+            }
+            else if (type == "particleSystem")
+            {
+                if (!objectPlan.particleAsset)
+                {
+                    throw std::runtime_error(
+                        "Particle system plan is missing its prepared asset: " +
+                        objectPlan.objectName);
+                }
+                WorldParticleSystem particleSystem;
+                particleSystem.name = objectPlan.objectName;
+                particleSystem.assetPath =
+                    objectJson.at("particlePath").get<std::string>();
+                particleSystem.asset = *objectPlan.particleAsset;
+                particleSystem.scenePosition =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["position"]);
+                particleSystem.sceneRotation =
+                    JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["rotation"]);
+                particleSystem.sceneScale = objectJson.contains("scale")
+                    ? JsonParser::ParseValue<Eigen::Vector3f>(
+                        objectJson["scale"])
+                    : Eigen::Vector3f::Ones();
+                particleSystem.model =
+                    BuildParticleSystemModel(
+                        particleSystem.scenePosition,
+                        particleSystem.sceneRotation,
+                        particleSystem.sceneScale);
+                world->AddParticleSystem(
+                    objectPlan.objectName,
+                    std::move(particleSystem));
+            }
             else if (type == "wind")
             {
                 wind = ReadSceneWind(objectJson);
@@ -361,6 +519,19 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         for (const WindResponseProfile& profile : assemblyAssets.windResponseProfiles)
         {
             world->AddWindResponseProfile(profile);
+        }
+
+        for (const auto& [name, value] :
+             worldBuildPlan.particleDataChannels)
+        {
+            if (!world->SetParticleDataChannel(name, value))
+            {
+                return RuntimeResult<std::shared_ptr<World>>::Failure(
+                    MakeRuntimeError(
+                        "WorldBuilder.ParticleDataChannelRejected",
+                        "Scene particle data channel was rejected: " + name,
+                        worldBuildPlan.scenePath));
+            }
         }
 
         for (const MeshObjectBuildPlan& meshObjectPlan : assemblyAssets.meshObjectPlans)

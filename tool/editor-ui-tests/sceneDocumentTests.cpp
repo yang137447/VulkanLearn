@@ -596,6 +596,39 @@ TEST_F(SceneDocumentTest, MeshTrsSavePreservesReferencesAndUnmanagedFields)
     EXPECT_EQ(mesh["custom"], "retained");
 }
 
+TEST_F(SceneDocumentTest, ParticleSystemTrsSavePreservesAssetPathAndUnmanagedFields)
+{
+    source["objects"].push_back({{"type", "particleSystem"}, {"name", "Smoke"},
+        {"particlePath", "Maps/SC_particle/Particles/PS_smoke.json"},
+        {"position", {1, 2, 3}}, {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+        {"custom", {{"recipe", "retained"}}}});
+    Write(source);
+    std::string error;
+    ASSERT_TRUE(service->Open(path.string(), error)) << error;
+
+    EditorSceneActorSnapshot actor;
+    actor.scenePath = path.string();
+    actor.identity = "particleSystem|Smoke";
+    actor.type = EditorSceneActorType::ParticleSystem;
+    actor.position = Eigen::Vector3f(10, 20, 30);
+    actor.rotation = Eigen::Vector3f(0, 45, 0);
+    actor.scale = Eigen::Vector3f(2, 3, 4);
+    Record(actor, EditorActorProperty::Position, 10);
+    Record(actor, EditorActorProperty::Rotation, 45, 1);
+    Record(actor, EditorActorProperty::Scale, 2);
+
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    Json expected = source;
+    expected["objects"][2]["position"] = {10, 20, 30};
+    expected["objects"][2]["rotation"] = {0, 45, 0};
+    expected["objects"][2]["scale"] = {2, 3, 4};
+    EXPECT_EQ(Read(), expected);
+    const auto particle = Read()["objects"][2];
+    EXPECT_EQ(particle["particlePath"], "Maps/SC_particle/Particles/PS_smoke.json");
+    EXPECT_EQ(particle["custom"], source["objects"][2]["custom"]);
+    EXPECT_FALSE(particle.contains("visible"));
+}
+
 TEST_F(SceneDocumentTest, CsmDefaultRevertClearsDirtyAndSaveRetainsOtherShadowSettings)
 {
     auto& light = source["objects"][1];

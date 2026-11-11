@@ -7,7 +7,10 @@
 #include <nlohmann/json.hpp>
 #include "render/camera/cameraExposure.h"
 #include "render/lighting/physicalLighting.h"
+#include "world/decalResponse.h"
 #include "world/environmentType.h"
+#include "world/localLightShadowSettings.h"
+#include "render/volumetricFog/volumetricFogSettings.h"
 #include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "physics/fracture/destructibleProfile.h"
@@ -22,6 +25,12 @@ inline void ValidateSceneEnvironmentJson(const nlohmann::json& object)
     if (object.contains("cubeSize") &&
         (!object.at("cubeSize").is_number_integer() || object.at("cubeSize").get<double>() <= 0))
         throw std::invalid_argument("Environment cubeSize must be a positive integer");
+    if (object.contains("fog"))
+    {
+        // 与 WorldBuilder 共用同一份解析/范围校验，避免校验器通过而运行时
+        // 才因参数越界失败。
+        (void)ParseFogSettingsJson(object.at("fog"));
+    }
     if (!object.contains("skyParameters")) return;
     const auto& sky = object.at("skyParameters");
     if (!sky.is_object()) throw std::invalid_argument("skyParameters must be object");
@@ -37,6 +46,30 @@ inline void ValidateSceneEnvironmentJson(const nlohmann::json& object)
         "groundGradientExponent", "sunHaloExponent", "sunHaloStrength"})
         if (!sky.contains(field) || !sky.at(field).is_number() || !std::isfinite(sky.at(field).get<float>()))
             throw std::invalid_argument(std::string("Sky requires finite number: ") + field);
+}
+
+// 点光脉冲是 CPU 端时间近似，不参与粒子求值；period/duration 决定窗口，
+// phase 平移窗口，peakIntensity 在窗口内叠加到基础 cd 上。
+inline void ValidatePointLightPulseJson(const nlohmann::json& object)
+{
+    if (!object.contains("pulse"))
+        return;
+    if (object.at("type").get<std::string>() != "pointLight")
+        throw std::invalid_argument("Only pointLight supports pulse");
+    const auto& pulse = object.at("pulse");
+    if (!pulse.is_object())
+        throw std::invalid_argument("pointLight pulse must be object");
+
+    constexpr double maximum = std::numeric_limits<float>::max();
+    const double period = ReadPhysicalNumber(pulse, "period", 0.0, maximum);
+    const double duration = ReadPhysicalNumber(pulse, "duration", 0.0, maximum);
+    (void)ReadPhysicalNumber(pulse, "phase", -maximum, maximum);
+    (void)ReadPhysicalNumber(pulse, "peakIntensity", 0.0, 1.0e12);
+    if (period <= 0.0)
+        throw std::invalid_argument("pointLight pulse period must be > 0");
+    if (duration <= 0.0 || duration > period)
+        throw std::invalid_argument(
+            "pointLight pulse duration must be > 0 and <= period");
 }
 
 inline void ValidateDestructibleProfileKey(
@@ -149,8 +182,115 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         if (type != "mesh" && type != "terrain" && type != "directionalLight" && type != "pointLight" &&
             type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
             type != "environment" && type != "blueprintInstance" && type != "wind" &&
-            type != "balloon" && type != "glassPane")
+            type != "balloon" && type != "glassPane" &&
+            type != "particleSystem" && type != "decal")
             throw std::invalid_argument("Unknown scene object type: " + type);
+        ValidatePointLightPulseJson(object);
+        if (type == "particleSystem")
+        {
+            if (!object.contains("particlePath") ||
+                !object.at("particlePath").is_string() ||
+                object.at("particlePath").get<std::string>().empty())
+            {
+                throw std::invalid_argument(
+                    "Particle system requires path: particlePath");
+            }
+        }
+        if (type == "decal")
+        {
+            if (!object.contains("size") || !object.at("size").is_array() ||
+                object.at("size").size() != 3)
+            {
+                throw std::invalid_argument(
+                    "Decal requires vec3: size");
+            }
+            for (const auto& component : object.at("size"))
+            {
+                if (!component.is_number() ||
+                    !std::isfinite(component.get<double>()))
+                    throw std::invalid_argument(
+                        "Decal size must contain finite numbers");
+                const float value = static_cast<float>(
+                    component.get<double>());
+                if (!std::isfinite(value) || value <= 0.0f ||
+                    value > 100000.0f)
+                    throw std::invalid_argument(
+                        "Decal size components must be in (0, 100000]");
+            }
+            for (const char* field : {"opacity", "edgeSoftness",
+                     "noiseStrength", "roughness", "metallic",
+                     "ambientOcclusion", "normalStrength"})
+            {
+                if (object.contains(field))
+                {
+                    const float value = static_cast<float>(
+                        ReadPhysicalNumber(object, field, 0.0, 1.0));
+                    if (value < 0.0f || value > 1.0f)
+                        throw std::invalid_argument(
+                            std::string("Decal ") + field +
+                            " must be in [0, 1]");
+                }
+            }
+            if (object.contains("emissive"))
+            {
+                const auto& emissive = object.at("emissive");
+                if (!emissive.is_array() || emissive.size() != 3)
+                    throw std::invalid_argument(
+                        "Decal emissive must be a vec3");
+                for (const auto& component : emissive)
+                {
+                    if (!component.is_number() ||
+                        !std::isfinite(component.get<double>()))
+                        throw std::invalid_argument(
+                            "Decal emissive must contain finite numbers");
+                    const float value = static_cast<float>(
+                        component.get<double>());
+                    if (!std::isfinite(value) || value < 0.0f ||
+                        value > 64.0f)
+                        throw std::invalid_argument(
+                            "Decal emissive components must be in [0, 64]");
+                }
+            }
+            if (object.contains("emissiveStrength"))
+            {
+                const float strength = static_cast<float>(
+                    ReadPhysicalNumber(
+                        object, "emissiveStrength", 0.0, 1000.0));
+                if (strength < 0.0f || strength > 1000.0f)
+                    throw std::invalid_argument(
+                        "Decal emissiveStrength must be in [0, 1000]");
+            }
+            if (object.contains("decalResponse"))
+            {
+                if (!object.at("decalResponse").is_string())
+                    throw std::invalid_argument(
+                        "Decal decalResponse must be string");
+                const std::string response =
+                    object.at("decalResponse").get<std::string>();
+                uint32_t mask = 0;
+                if (!TryParseDecalResponse(response, mask))
+                    throw std::invalid_argument(
+                        "Decal has unknown decalResponse: " + response);
+            }
+            for (const char* field : {"albedoMap", "normalMap", "ormMap"})
+            {
+                if (!object.contains(field))
+                    continue;
+                if (!object.at(field).is_string() ||
+                    object.at(field).get<std::string>().empty())
+                    throw std::invalid_argument(
+                        std::string("Decal ") + field +
+                        " must be a non-empty T_*.json texture asset path");
+            }
+            if (object.contains("sortOrder"))
+            {
+                if (!object.at("sortOrder").is_number_integer() ||
+                    object.at("sortOrder").get<int>() < 0 ||
+                    object.at("sortOrder").get<int>() > 255)
+                    throw std::invalid_argument(
+                        "Decal sortOrder must be an integer in [0, 255]");
+            }
+        }
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
             // wind 是全场景全局对象，没有位置与朝向；其字段由 ValidateSceneWindJson 单独收口。
@@ -298,6 +438,30 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         }
         if (type == "directionalLight" || type == "pointLight" ||
             type == "spotLight" || type == "squareAreaLight") ReadCanonicalLightIntensity(object);
+        if (type == "pointLight" || type == "spotLight")
+        {
+            // 局部阴影只对点光/聚光生效；解析与 WorldBuilder 共用同一份
+            // 字段规则，避免校验通过后加载期再静默降级。
+            (void)ReadLocalLightShadowSettings(object, type + "|" + name);
+            // 点光/聚光的衰减范围：省略时由 WorldBuilder 取 1000 cm；
+            // 作者一旦写出就必须是有限正数，0/负值会让灯变成无限范围。
+            if (object.contains("radius"))
+            {
+                if (!object.at("radius").is_number())
+                {
+                    throw std::invalid_argument(
+                        type + " radius must be a number");
+                }
+                const double radius =
+                    object.at("radius").get<double>();
+                if (!std::isfinite(radius) || radius <= 0.0 ||
+                    radius > 1000000.0)
+                {
+                    throw std::invalid_argument(
+                        type + " radius must be in (0, 1000000] cm");
+                }
+            }
+        }
         if (type == "camera")
         {
             hasCamera = true;

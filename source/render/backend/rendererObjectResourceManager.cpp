@@ -254,7 +254,11 @@ void UpdateObjectDescriptorSets(
                     resources.writeDescriptorSets[i].push_back(write);
                     continue;
                 }
-                update.source = RendererDescriptorUpdateSource::LightStorage;
+                update.source =
+                    (binding.set == GlobalSetIndex &&
+                     binding.binding == 4)
+                        ? RendererDescriptorUpdateSource::ParticleLightStorage
+                        : RendererDescriptorUpdateSource::LightStorage;
             }
             else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
             {

@@ -48,16 +48,21 @@ struct RuntimeValidationGraphicsShaderSnapshot
     std::weak_ptr<void> material;
     std::uintptr_t surfacePipeline = 0;
     std::uintptr_t shadowPipeline = 0;
+    std::uintptr_t localShadowPipeline = 0;
     std::string surfaceLogicalBuildId;
     std::string shadowLogicalBuildId;
+    std::string localShadowLogicalBuildId;
     std::string surfaceGeneration;
     std::string shadowGeneration;
+    std::string localShadowGeneration;
     std::string manifestDigest;
     std::string resolvedGeneration;
     std::string surfaceVertexDigest;
     std::string surfaceFragmentDigest;
     std::string shadowVertexDigest;
     std::string shadowFragmentDigest;
+    std::string localShadowVertexDigest;
+    std::string localShadowFragmentDigest;
 };
 
 struct RuntimeValidationManualShaderReloadResult

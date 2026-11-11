@@ -14,7 +14,10 @@ add_executable(editor_ui_tests
     sceneDocumentTests.cpp
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
+    particlePanelStringsTests.cpp
     modelPreviewCameraTests.cpp
+    particleWorldRuntimeTests.cpp
+    particleThumbnailTimingTests.cpp
     tressfxHairPreviewTests.cpp
     tressfxHairSimulationTests.cpp
     tressfxComponentUiTests.cpp
@@ -60,6 +63,10 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorRetargetPreview.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/retargetAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelActor.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelBuild.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelEvents.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelResource.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelBootstrap.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelActionRouter.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelChangeRouter.cpp"
@@ -67,6 +74,12 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneViewportController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairPanelController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairBrushController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelCurveController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelEmitterController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelFlipbookController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelMarkup.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelRefresh.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/materialEditorView.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/blueprintAssetView.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/actorMarkup.cpp"
@@ -81,8 +94,19 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecPayload.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecPrimitives.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecValidation.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetJsonHelpers.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetCollisionAssets.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetParseEmitter.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetValidateEmitter.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetParseEmitterModules.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetValidateEmitterModules.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAssetLoader.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
@@ -97,6 +121,8 @@ add_executable(editor_ui_tests
     # 测试必须证明"大纲身份"就是 World 认得的那个键。
     "${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/worldParticleRuntime.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/worldParticleSystem.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/actorIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/actorProperty.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
@@ -119,19 +145,30 @@ if(MINGW)
     # 主 RmlUi 套件的模板实例数已超过 MinGW 标准 COFF section 上限。
     set_source_files_properties(editorUiTests.cpp blueprintViewportInteractionTests.cpp
         "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelActor.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelBuild.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelEvents.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanelResource.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelActionRouter.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/editorPanelChangeRouter.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/terrainPanelController.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/sceneViewportController.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairPanelController.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/hairBrushController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelCurveController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelEmitterController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelFlipbookController.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelMarkup.cpp"
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/particlePanelRefresh.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/materialEditorView.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/panel/blueprintAssetView.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_compile_definitions(editor_ui_tests PRIVATE
-    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
+    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui"
+    VL_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 target_link_libraries(editor_ui_tests PRIVATE
     vl_editor_widgets vl_hair_assets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

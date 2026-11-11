@@ -176,6 +176,16 @@ struct EditorBlueprintCommandFeedback
     bool succeeded = false;
 };
 
+// 粒子修改/保存/回退等命令的 GT 终态确认；type 区分同路径上的不同命令。
+struct EditorParticleCommandFeedback
+{
+    uint64_t sequence = 0;
+    std::string assetPath;
+    EditorCommandType type = EditorCommandType::ModifyParticleDocument;
+    bool succeeded = false;
+    std::string message;
+};
+
 // Runtime 发布的只读资产视图；不依赖 UI 库，不携带文档或 GPU 对象指针。
 struct MaterialInstanceEditorSnapshot
 {
@@ -192,11 +202,13 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
     std::vector<EditorAssetDocumentResultPayload> blueprintDocuments;
+    std::vector<EditorAssetDocumentResultPayload> particleDocuments;
     std::vector<EditorAssetDocumentResultPayload> terrainDocuments;
     // 毛发视口读取独立 TressFX 草稿的 simulation 字段与 revision。与 blueprintDocuments
     // 同一投影方式：服务独占草稿，UI 只见只读快照。
     std::vector<EditorAssetDocumentResultPayload> tressfxDocuments;
     std::vector<EditorBlueprintCommandFeedback> blueprintCommandFeedback;
+    std::vector<EditorParticleCommandFeedback> particleCommandFeedback;
     std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;
     std::vector<MaterialInstanceModelSnapshot> sceneModels;

@@ -157,7 +157,12 @@ nlohmann::json InspectFbx(const std::filesystem::path& path)
     ReadNode(*scene->mRootNode, aiMatrix4x4(), -1, result["nodes"]);
     for (unsigned int index = 0; index < scene->mNumMeshes; ++index)
     {
-        result["meshes"].push_back(ReadMesh(*scene->mMeshes[index]));
+        Json mesh = ReadMesh(*scene->mMeshes[index]);
+        const unsigned int materialIndex = scene->mMeshes[index]->mMaterialIndex;
+        if (scene->mMaterials && materialIndex < scene->mNumMaterials)
+            mesh["materialName"] =
+                scene->mMaterials[materialIndex]->GetName().C_Str();
+        result["meshes"].push_back(std::move(mesh));
     }
     for (unsigned int index = 0; index < scene->mNumAnimations; ++index)
     {

@@ -51,6 +51,7 @@ public static partial class NativeBridge
             ExportCommand(ref update, blueprint.Handle.Id, "animationCommands", TakeAnimationCommands(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "materialCommands", TakeMaterialCommands(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "debugCommands", context.Services.TakeDebug(blueprint), complete);
+            ExportCommand(ref update, blueprint.Handle.Id, "particleCommands", context.Services.TakeParticles(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetRequests", context.Services.TakeAssets(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetCancels", context.Services.TakeAssetCancellations(blueprint), complete);
             ExportValue(baseline, ref update, blueprint.Handle.Id, "scriptComponents", ExportScriptComponents(instance), complete);

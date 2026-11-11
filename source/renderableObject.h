@@ -299,6 +299,28 @@ public:
         const std::vector<Eigen::Matrix4f>& jointMatrices, uint32_t frameSlot);
     uint32_t GetTressfxGuideCount() const { return tressfxGuideCount; }
     uint32_t GetTressfxPointsPerGuide() const { return tressfxPointsPerGuide; }
+    // 路线 B：实际参与模拟的 guide 数；无 follow 数据时等于完整 guide 数。
+    uint32_t GetTressfxSimulationGuideCount() const
+    {
+        return tressfxSimulationGuideCount;
+    }
+    bool HasTressfxFollowBinding() const { return tressfxHasFollowBinding; }
+    const vk::DescriptorBufferInfo& GetTressfxSimulationGuideInfo() const
+    {
+        return tressfxSimulationGuideInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxFollowGuideInfo() const
+    {
+        return tressfxFollowGuideInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxFollowOffsetInfo() const
+    {
+        return tressfxFollowOffsetInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxFollowFrameRefInfo() const
+    {
+        return tressfxFollowFrameRefInfo;
+    }
     const vk::DescriptorBufferInfo& GetTressfxPreviousPositionInfo() const
     {
         return tressfxPreviousPositionInfo;
@@ -511,6 +533,21 @@ private:
     vk::Buffer tressfxStrandLevelBuffer = nullptr;
     vk::DeviceMemory tressfxStrandLevelMemory = nullptr;
     vk::DescriptorBufferInfo tressfxStrandLevelInfo;
+    // 路线 B：模拟索引与 follow 绑定（静态，创建一次）。
+    uint32_t tressfxSimulationGuideCount = 0;
+    bool tressfxHasFollowBinding = false;
+    vk::Buffer tressfxSimulationGuideBuffer = nullptr;
+    vk::DeviceMemory tressfxSimulationGuideMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxSimulationGuideInfo;
+    vk::Buffer tressfxFollowGuideBuffer = nullptr;
+    vk::DeviceMemory tressfxFollowGuideMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxFollowGuideInfo;
+    vk::Buffer tressfxFollowOffsetBuffer = nullptr;
+    vk::DeviceMemory tressfxFollowOffsetMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxFollowOffsetInfo;
+    vk::Buffer tressfxFollowFrameRefBuffer = nullptr;
+    vk::DeviceMemory tressfxFollowFrameRefMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxFollowFrameRefInfo;
     vk::Buffer tressfxColliderBuffer = nullptr;
     vk::DeviceMemory tressfxColliderMemory = nullptr;
     vk::DescriptorBufferInfo tressfxColliderInfo;

@@ -200,17 +200,59 @@ void VulkanManager::CreateVkDevice()
 
     // depthClamp 和 samplerAnisotropy 是现有渲染路径的基础能力。双源混合是可选能力：
     // 支持时在逻辑设备上启用并走彩色透射，缺失时保留设备可用性并走标量 alpha 降级。
+    // drawIndirectCount 同样是可选能力：粒子 GPU culling 用它读取 GPU 写入的绘制数，
+    // 缺失时仍保留 CPU 固定参数的 indirect 绘制回退。
     const vk::PhysicalDeviceFeatures supportedFeatures =
         physicalDevices[kGpuIndex].getFeatures();
     dualSourceBlendEnabled =
         supportedFeatures.dualSrcBlend == VK_TRUE;
+    fragmentStoresAndAtomicsEnabled =
+        supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
+    independentBlendEnabled =
+        supportedFeatures.independentBlend == VK_TRUE;
+    // 粒子 overdraw 诊断在 fragment 中对 storage buffer 做原子累加；
+    // 当前没有第二套无原子 shader，因此在设备初始化时显式拒绝缺失能力。
+    if (!fragmentStoresAndAtomicsEnabled)
+    {
+        throw std::runtime_error(
+            "Vulkan device must support fragmentStoresAndAtomics for particle overdraw diagnostics.");
+    }
+    // DBuffer decal 的 attachment 0..2（straight-alpha）与 attachment 3
+    // （One/One mask）必须拥有不同 blend state，因此把 independentBlend
+    // 视为核心能力；缺失时必须在设备初始化处显式拒绝，而不是等
+    // pipeline 创建时产生 Vulkan 验证错误。
+    if (!independentBlendEnabled)
+    {
+        throw std::runtime_error(
+            "Vulkan device must support independentBlend for DBuffer decals.");
+    }
+    vk::PhysicalDeviceVulkan12Features supportedVulkan12Features;
+    vk::PhysicalDeviceFeatures2 supportedFeatures2;
+    supportedFeatures2
+        .setFeatures(supportedFeatures)
+        .setPNext(&supportedVulkan12Features);
+    physicalDevices[kGpuIndex].getFeatures2(&supportedFeatures2);
+    drawIndirectCountEnabled =
+        supportedVulkan12Features.drawIndirectCount == VK_TRUE;
 
     vk::PhysicalDeviceFeatures deviceFeatures;
     deviceFeatures
         .setDepthClamp(VK_TRUE)
         .setSamplerAnisotropy(VK_TRUE)
+        .setFragmentStoresAndAtomics(
+            fragmentStoresAndAtomicsEnabled ? VK_TRUE : VK_FALSE)
+        .setIndependentBlend(
+            independentBlendEnabled ? VK_TRUE : VK_FALSE)
         .setDualSrcBlend(
             dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
+    vk::PhysicalDeviceVulkan12Features deviceVulkan12Features;
+    deviceVulkan12Features
+        .setDrawIndirectCount(
+            drawIndirectCountEnabled ? VK_TRUE : VK_FALSE);
+    vk::PhysicalDeviceFeatures2 deviceFeatures2;
+    deviceFeatures2
+        .setFeatures(deviceFeatures)
+        .setPNext(&deviceVulkan12Features);
     
     vk::DeviceCreateInfo deviceCreateInfo;
     deviceCreateInfo
@@ -218,7 +260,8 @@ void VulkanManager::CreateVkDevice()
         .setPQueueCreateInfos(&deviceGraphicsQueueCreateInfo)
         .setEnabledExtensionCount(static_cast<uint32_t>(deviceExtensions.size()))
         .setPEnabledExtensionNames(deviceExtensions)
-        .setPEnabledFeatures(&deviceFeatures)
+        // Features2 的 pNext 链只在本函数栈上有效；createDevice 返回后不再保存。
+        .setPNext(&deviceFeatures2)
         .setEnabledLayerCount(0);
     
     device = physicalDevices[kGpuIndex].createDevice(deviceCreateInfo);

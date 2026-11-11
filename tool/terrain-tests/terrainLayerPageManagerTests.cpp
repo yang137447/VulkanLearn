@@ -578,7 +578,8 @@ TEST(TerrainLayerPageTableLayout, CapsWidthAndKeepsMixedResolutionIndicesUnique)
     EXPECT_EQ(mip4.width, 256u);
     EXPECT_EQ(mip4.height, 1u);
     EXPECT_EQ(mixed.VirtualPageTableSize(4), 256u);
-    EXPECT_THROW(mixed.PageTableLayoutForMip(5), std::out_of_range);
+    // MaxMipLevel 为 6；mip5/6 合法，7 才是越界。
+    EXPECT_THROW(mixed.PageTableLayoutForMip(7), std::out_of_range);
 }
 
 TEST(TerrainLayerPageTableEncoding, WritesPhysicalMipValidAndPriority)

@@ -169,6 +169,33 @@ TEST(Inertialization, PlaybackRetainsSingleClockPauseFiniteCompletionAndImmutabl
     EXPECT_FALSE(player.InertializationEnabled());
 }
 
+TEST(Inertialization, CompletedOneShotKeepsIncomingVelocityAtTransitionBoundary)
+{
+    const auto asset = CorrectionAsset();
+    SkeletalPlayback player(asset);
+    player.Play("source", false, 1, true);
+    // source 在 4s 内把 hip 局部 x 从 0 推到 40（末端速度 +10/s）。片段播完后 time 钳在
+    // rangeEnd、playing=false，裸的 PreviewPose 只会原地返回当前姿态；过渡必须回看取
+    // 片段自身的出帧速度，否则 offset 速度项归零、姿态速度整段被抵成目标速度。
+    player.Tick(4.0f);
+    ASSERT_TRUE(player.Completed());
+    player.SetInertializationEnabled(true);
+    player.TransitionTo("target", 0.3f, true, 0.4f);
+    // TransitionTo 只发布混合源；显示姿态要到下一 tick 才更新，第一次求值就是对 t=0 求值。
+    // 惯性化 offset 在 elapsed=0 处等于源/目标姿态差，所以首帧必须仍是源末帧 40，
+    // 而不是跳到目标 ~74。
+    player.Tick(0.0001f);
+    const float startX = player.Models()[1](0, 3);
+    EXPECT_NEAR(startX, 40.0f, 0.05f);
+    // 0.4s 窗口结束后必须精确落在目标姿态上（有限终点，不残留 offset）。
+    player.Tick(0.4f);
+    SkeletalPlayback reference(asset);
+    reference.Play("target", true, 1, true);
+    reference.Seek(0.3001f + 0.4f);
+    EXPECT_NEAR(player.Models()[1](0, 3), reference.Models()[1](0, 3), 0.05f);
+    EXPECT_FALSE(player.IsBlending());
+}
+
 TEST(VisualRootOffset, ActualStopAndHeadingVelocityChangesCreateBoundedLagAndRelease)
 {
     RootOffsetSolver solver;

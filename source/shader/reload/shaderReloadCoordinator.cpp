@@ -218,6 +218,23 @@ std::shared_ptr<Material> ResolveCurrentMaterial(
             "Shader reload Material Shadow generation changed while the batch was compiling: " +
             plan.materialKey);
     }
+    const auto& currentLocalShadow =
+        material->GetLocalShadowShaderArtifact();
+    if (currentLocalShadow.has_value() !=
+        plan.activeLocalShadowArtifact.has_value())
+    {
+        throw std::runtime_error(
+            "Shader reload Material LocalShadow route changed while the batch was compiling: " +
+            plan.materialKey);
+    }
+    if (currentLocalShadow &&
+        currentLocalShadow->artifactGenerationKey !=
+            plan.activeLocalShadowArtifact->artifactGenerationKey)
+    {
+        throw std::runtime_error(
+            "Shader reload Material LocalShadow generation changed while the batch was compiling: " +
+            plan.materialKey);
+    }
     return material;
 }
 
@@ -402,7 +419,23 @@ ShaderReloadPlan ShaderReloadCoordinator::CaptureGraphicsPlanInternal(
                     shadowRequest->logicalBuildId) != 0;
         }
 
-        if (!surfaceAffected && !shadowAffected)
+        std::optional<ShaderBuildRequest> localShadowRequest;
+        bool localShadowAffected = false;
+        if (recipe.localShadow)
+        {
+            localShadowRequest = BuildShaderRequest(
+                shaderCompiler,
+                recipe.localShadow->shader);
+            shaderCompiler.FreezeSourceSnapshot(*localShadowRequest);
+            localShadowAffected =
+                scope == ShaderReloadScope::All ||
+                affectedLogicalBuildIds.count(
+                    localShadowRequest->logicalBuildId) != 0;
+        }
+
+        if (!surfaceAffected &&
+            !shadowAffected &&
+            !localShadowAffected)
         {
             continue;
         }
@@ -417,6 +450,8 @@ ShaderReloadPlan ShaderReloadCoordinator::CaptureGraphicsPlanInternal(
             activeSurface;
         materialPlan.activeShadowArtifact =
             material->GetShadowShaderArtifact();
+        materialPlan.activeLocalShadowArtifact =
+            material->GetLocalShadowShaderArtifact();
 
         if (surfaceAffected)
         {
@@ -444,6 +479,23 @@ ShaderReloadPlan ShaderReloadCoordinator::CaptureGraphicsPlanInternal(
                     std::move(*shadowRequest),
                     recipe.shadow->shader,
                     *materialPlan.activeShadowArtifact);
+        }
+
+        if (localShadowAffected)
+        {
+            if (!materialPlan.activeLocalShadowArtifact)
+            {
+                throw std::runtime_error(
+                    "Material LocalShadow reload recipe has no active artifact: " +
+                    materialPlan.materialKey);
+            }
+            materialPlan.localShadowBuildIndex =
+                FindOrAddBuild(
+                    plan,
+                    buildIndices,
+                    std::move(*localShadowRequest),
+                    recipe.localShadow->shader,
+                    *materialPlan.activeLocalShadowArtifact);
         }
 
         plan.materials.push_back(
@@ -564,6 +616,8 @@ CompileGraphicsCandidates(
             materialPlan.activeSurfaceArtifact;
         candidate.shadowArtifact =
             materialPlan.activeShadowArtifact;
+        candidate.localShadowArtifact =
+            materialPlan.activeLocalShadowArtifact;
 
         if (materialPlan.surfaceBuildIndex)
         {
@@ -591,6 +645,19 @@ CompileGraphicsCandidates(
                     build.graphicsArtifact;
             }
         }
+        if (materialPlan.localShadowBuildIndex)
+        {
+            const ShaderReloadCandidateBuild& build =
+                batch.builds.at(
+                    *materialPlan.localShadowBuildIndex);
+            candidate.replaceLocalShadow =
+                build.sourceGenerationChanged;
+            if (candidate.replaceLocalShadow)
+            {
+                candidate.localShadowArtifact =
+                    build.graphicsArtifact;
+            }
+        }
 
         materialPlan.descriptorSchema.ValidateShaderBindings(
             candidate.surfaceArtifact.shaderBindings,
@@ -614,9 +681,28 @@ CompileGraphicsCandidates(
                     candidate.surfaceArtifact.shaderBindings,
                     nullptr);
         }
+        if (candidate.localShadowArtifact)
+        {
+            ValidateMaterialLocalShadowShaderBindings(
+                materialPlan.materialKey,
+                materialPlan.descriptorSchema,
+                candidate.surfaceArtifact.shaderBindings,
+                candidate.localShadowArtifact->shaderBindings);
+            // LocalShadow 可能扩展 Set 0/2 的 stage；activeShaderBindings
+            // 必须把三套 pass 的绑定一起合并，MI descriptor set 才同时
+            // 兼容 Surface/CSM/LocalShadow 三种 pipeline layout。
+            candidate.activeShaderBindings =
+                Material::BuildActiveShaderBindings(
+                    candidate.surfaceArtifact.shaderBindings,
+                    candidate.shadowArtifact
+                        ? &candidate.shadowArtifact->shaderBindings
+                        : nullptr,
+                    &candidate.localShadowArtifact->shaderBindings);
+        }
 
         if (candidate.replaceSurface ||
-            candidate.replaceShadow)
+            candidate.replaceShadow ||
+            candidate.replaceLocalShadow)
         {
             batch.materials.push_back(
                 std::move(candidate));
@@ -779,10 +865,14 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
             candidate.replaceSurface;
         pending.commit.replaceShadow =
             candidate.replaceShadow;
+        pending.commit.replaceLocalShadow =
+            candidate.replaceLocalShadow;
         pending.commit.surfaceArtifact =
             candidate.surfaceArtifact;
         pending.commit.shadowArtifact =
             candidate.shadowArtifact;
+        pending.commit.localShadowArtifact =
+            candidate.localShadowArtifact;
         pending.commit.activeShaderBindings =
             candidate.activeShaderBindings;
 
@@ -822,6 +912,27 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                     BuildMaterialShadowPipelineLayout(
                         candidate.plan.descriptorSchema,
                         candidate.surfaceArtifact.shaderBindings));
+            ++statistics.pipelinesCreated;
+        }
+
+        if (candidate.replaceLocalShadow)
+        {
+            Renderpass& localShadowPass =
+                ResolveCurrentPass(
+                    *candidate.plan.recipe.localShadow);
+            pending.commit.localShadowPipeline =
+                pipelineFactory.CreateGraphicsPipelineCandidate(
+                    graphicsCandidateState,
+                    &localShadowPass.renderPass,
+                    localShadowPass.pipelineContractKey,
+                    *candidate.localShadowArtifact,
+                    candidate.plan.recipe.localShadow->cullMode,
+                    candidate.plan.recipe.localShadow->blendMode,
+                    BuildMaterialLocalShadowPipelineLayout(
+                        candidate.plan.descriptorSchema,
+                        candidate.surfaceArtifact.shaderBindings,
+                        candidate.localShadowArtifact->shaderBindings,
+                        candidate.plan.materialKey));
             ++statistics.pipelinesCreated;
         }
         pendingCommits.push_back(
@@ -976,6 +1087,8 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                 pending.commit.replaceSurface ? 1u : 0u;
             maximumRetiredPipelineCount +=
                 pending.commit.replaceShadow ? 1u : 0u;
+            maximumRetiredPipelineCount +=
+                pending.commit.replaceLocalShadow ? 1u : 0u;
         }
         maximumRetiredPipelineCount +=
             pendingComputeCommits.size() * 2;
@@ -1021,6 +1134,23 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                 {
                     retirementResources.push_back({
                         "ShaderReload:Shadow:" +
+                            pending.material->GetMaterialKey(),
+                        currentWorldGeneration,
+                        lastUsedEpoch,
+                        std::static_pointer_cast<void>(
+                            oldPipeline)});
+                }
+            }
+            if (pending.commit.replaceLocalShadow)
+            {
+                const std::shared_ptr<PipelineBase>& oldPipeline =
+                    pending.material->GetLocalShadowPipeline();
+                if (oldPipeline &&
+                    preparedRetiredPipelines.insert(
+                        oldPipeline.get()).second)
+                {
+                    retirementResources.push_back({
+                        "ShaderReload:LocalShadow:" +
                             pending.material->GetMaterialKey(),
                         currentWorldGeneration,
                         lastUsedEpoch,

@@ -6,6 +6,7 @@
 // 并写入 LocalShape pass 需要的 SkinningQuat。即使 VSP 关闭也会执行。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSimGroupCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -47,9 +48,10 @@ layout(set = 0, binding = 15, std430) readonly buffer SkinningPalette
 
 void main()
 {
-    uint guide = gl_GlobalInvocationID.x;
-    if (guide >= params.counts.y)
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= TressfxSimulationGuideCount())
         return;
+    uint guide = TressfxSimulationGuide(slot);
 
     TressfxGroupSimulationValues group = TressfxGroupSimulation(guide);
     uint root = guide * TressfxPointsPerGuide();

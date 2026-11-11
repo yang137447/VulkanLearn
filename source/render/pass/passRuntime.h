@@ -13,8 +13,8 @@
 #include "render/frontend/renderScene.h"
 #include "render/shadow/shadowCasterCull.h"
 
-class MaterialInstance;
 class PipelineBase;
+class MaterialInstance;
 class RenderGraph;
 struct Renderpass;
 
@@ -45,6 +45,58 @@ public:
         const std::vector<LightSnapshot>& lights) = 0;
     virtual bool IsCsmEnabled() const = 0;
     virtual bool IsShadowCascadeActive(uint32_t cascadeIndex) const = 0;
+    // LocalShadow pass 由 RenderSystem 每帧选灯后激活。缩略图/离线等没有
+    // 局部阴影生产者的会话保持默认 false，仍需 begin/end 完成 layout 转换。
+    virtual bool IsLocalShadowActive(uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return false;
+    }
+    // 0 = 透视聚光，1 = 八面体点光。PassRuntime 用它决定一个 pass 内
+    // 录制一次还是八个象限各录制一次。
+    virtual uint32_t GetLocalShadowMode(uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return 0;
+    }
+    virtual void UpdateLocalShadowUBOForPass(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passWidth,
+        uint32_t passHeight,
+        uint32_t lightIndex,
+        uint32_t octant,
+        uint32_t mode)
+    {
+        (void)commandBuffer;
+        (void)passWidth;
+        (void)passHeight;
+        (void)lightIndex;
+        (void)octant;
+        (void)mode;
+    }
+    // mesh 粒子 caster 的 UBO 更新必须在 render pass 外进行：同一
+    // per-image UBO 要在一个 pass 内按 CSM 级联/八面体象限多次覆盖，
+    // 只能依赖有序的 vkCmdUpdateBuffer。Record 阶段只做管线/描述符/绘制。
+    virtual void PrepareParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        uint32_t octant)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+        (void)octant;
+    }
+    virtual void RecordParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+    }
     // 返回该级联实际用于渲染的 light view-projection；没有 CSM 的调用方返回 false。
     // 阴影 pass 用它构造与 shadow map 逐 texel 对齐的 caster 剔除体。
     virtual bool GetShadowCascadeLightViewProjection(
@@ -73,6 +125,51 @@ public:
         uint32_t)
     {
     }
+    // 粒子发射器资源归 RenderSystem/ParticleRenderer 所有；pass 只提供已开始的
+    // sceneColor 合成窗口和 sceneDepth 输入描述符集，避免在 RenderGraph 里
+    // 再建一套材质合同。
+    virtual void RecordParticlePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) = 0;
+    // 屏幕空间扰动与粒子共享 emitter 资源，但写独立的 distortion 缓冲；
+    // pass 只提供已清空的颜色窗口和 sceneDepth 输入描述符集。
+    virtual void RecordDistortionPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) = 0;
+    // 体积雾合成的 pipeline/descriptor 归 VolumetricFogRenderer 所有；
+    // pass 层只提供已开始的 sceneColor 窗口与 viewport。没有体积雾的会话
+    // （缩略图/离线）保持空录制。
+    virtual void RecordFogCompositePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+    }
+    // DecalRenderer 拥有 unit cube、实例 SSBO 与 decal pipeline；pass 仅提供
+    // 已开始的 DBuffer A/B/C/D + Mask 窗口和 sceneDepth 输入描述符集。
+    // 主渲染路径必须覆写；没有 DecalRenderer 的缩略图会话保持空录制，
+    // 其 decal pass 本身也是空录制，因此不需要 stencil mask。
+    virtual void RecordDecalStencilPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const RenderScene& renderScene)
+    {
+        (void)commandBuffer;
+        (void)renderPass;
+        (void)swapChainImageIndex;
+        (void)renderScene;
+    }
+    virtual void RecordDecalPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const RenderScene& renderScene) = 0;
 };
 
 struct PassRuntimeContext
@@ -101,11 +198,17 @@ public:
 
 private:
     void RecordShadowPass(PassRuntimeContext& context) const;
+    void RecordLocalShadowPass(PassRuntimeContext& context) const;
     void RecordGeometryPass(PassRuntimeContext& context) const;
     void RecordForwardOpaquePass(PassRuntimeContext& context) const;
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
     void RecordEditorGridPass(PassRuntimeContext& context) const;
+    void RecordParticlePass(PassRuntimeContext& context) const;
+    void RecordDistortionPass(PassRuntimeContext& context) const;
+    void RecordFogCompositePass(PassRuntimeContext& context) const;
+    void RecordDecalStencilPass(PassRuntimeContext& context) const;
+    void RecordDecalPass(PassRuntimeContext& context) const;
     void RecordTerrainFeedbackPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;

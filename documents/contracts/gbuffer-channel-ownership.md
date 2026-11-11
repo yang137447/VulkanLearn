@@ -62,7 +62,7 @@ SkinnedMesh 的 current/previous position 来源见
 
 | 附件 | 格式 | 尺寸 | 写入 pass | 读取 pass |
 | --- | --- | --- | --- | --- |
-| `gbufferA` | `A2B10G10R10_UNORM_PACK32` | 1x | geometry (`clear`) | deferredLighting |
+| `gbufferA` | `A2B10G10R10_UNORM_PACK32` | 1x | geometry (`clear`) | deferredLighting、forwardTransparent |
 | `gbufferB` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `gbufferC` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `gbufferD` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
@@ -71,13 +71,14 @@ SkinnedMesh 的 current/previous position 来源见
 | `gbufferF` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `sceneColorBase` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `sceneDepth` | `D32_SFLOAT` | 1x | geometry (`clear`) | deferredLighting、forwardOpaque (`load`)、sky、forwardTransparent |
-| `sceneColor` | `R16G16B16A16_SFLOAT` | 1x | deferredLighting (`clear`)、forwardOpaque/sky/forwardTransparent (`load`) | bloom、toneMapping |
+| `sceneColor` | `R16G16B16A16_SFLOAT` | 1x | deferredLighting (`clear`)、forwardOpaque/sky/forwardTransparent (`load`) | sceneColorCopyPass、bloom、toneMapping |
+| `sceneColorCopy` | `R16G16B16A16_SFLOAT` | 1x | sceneColorCopyPass (`clear`) | forwardTransparent |
 | `selectionMask` | `R8G8B8A8_UNORM` | 1x | forwardOpaque (`clear`)、forwardTransparent (`load`) | toneMapping |
 
 MSAA：`geometry` / `forwardOpaque` / `forwardTransparent` 都声明 `needMsaa: false`，
 因此 GBuffer 族附件是**单采样**的；`config/config.json -> msaa` 只作用于声明了 `needMsaa` 的 pass
-（判定点在 `source/renderGraph.cpp:1223`）。给 GBuffer pass 打开 MSAA 会同时改变附件数量与
-resolve 行为（`renderGraph.cpp:1411-1473`），属于本文档范围内的高风险改动。
+（判定点在 `source/renderGraphPassResources.cpp:607-668`）。给 GBuffer pass 打开 MSAA 会同时改变附件数量与
+resolve 行为（`renderGraphPassResources.cpp` 的 `CreateRenderResource`），属于本文档范围内的高风险改动。
 
 ## 3. ID 与 flag 的 4 + 4 bit 账本
 
@@ -329,4 +330,4 @@ Forward-only 模型不分配 GBuffer 附件，也不做 GBuffer `customData` 编
 - `shader/glsl/engine/passTemplate/base.frag.glsl`：附件上限、out 声明、Alpha Clip 与选中标记
 - `source/material/materialAssetUtils.h`：`ShadingModelID` 名称↔ID↔shader define 表
 - `source/materialInstanceValidator.cpp`：按模型的材质参数校验
-- `source/renderGraph.cpp`：MSAA/非 MSAA 附件与 resolve 构建
+- `source/renderGraph.cpp`、`source/renderGraphPassResources.cpp`：MSAA/非 MSAA 附件与 resolve 构建

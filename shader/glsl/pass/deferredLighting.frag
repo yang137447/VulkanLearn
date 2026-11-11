@@ -3,6 +3,7 @@
 #include "generate/M_deferredLightingParamter.glsl"
 #include "../engine/gbufferCodec.glsl"
 #include "../engine/deferredLighting.glsl"
+#include "../engine/decalComposite.glsl"
 #include "../engine/materialDebugView.glsl"
 
 layout(location = 0) in vec2 inUV;
@@ -23,6 +24,12 @@ layout(set = 3, binding = 5) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 6) uniform sampler2D gbufferF;
 layout(set = 3, binding = 7) uniform sampler2D sceneColorBase;
 layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
+layout(set = 3, binding = 10) uniform sampler2D dbufferA;
+layout(set = 3, binding = 11) uniform sampler2D dbufferB;
+layout(set = 3, binding = 12) uniform sampler2D dbufferC;
+layout(set = 3, binding = 13) uniform sampler2D dbufferMask;
+layout(set = 3, binding = 14) uniform sampler2D dbufferD;
+layout(set = 3, binding = 16) uniform sampler2D dbufferEmissive;
 GBufferData SampleGBuffer(vec2 uv)
 {
     GBufferData data;
@@ -41,14 +48,25 @@ void main()
 {
     GBufferData gbuffer = SampleGBuffer(inUV);
     MaterialSurface surface = DecodeGBufferSurface(gbuffer);
+    ApplyDecalDBuffer(
+        surface,
+        texture(dbufferA, inUV),
+        texture(dbufferB, inUV),
+        texture(dbufferC, inUV),
+        texture(dbufferD, inUV),
+        texture(dbufferMask, inUV));
 
     float deviceDepth = texture(sceneDepth, inUV).r;
     surface.worldPosition = ReconstructWorldPositionFromSceneDepth(inUV, deviceDepth);
 
     DeferredLightingResult lighting = ShadeDeferredSurfaceDetailed(
         surface,
-        shadowMap);
+        shadowMap,
+        localShadowMap);
     vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
+    // 自发光 decal 在直接/间接光之后附加，不能被 CSM/局部阴影或 IBL 调制。
+    finalColor.rgb += ResolveDecalEmissive(
+        texture(dbufferEmissive, inUV));
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
         lighting.shadowCascadeIndex,

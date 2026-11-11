@@ -17,7 +17,7 @@ struct ThumbnailRenderRequest
     std::string path;
     EditorUi::EditorAssetKind kind = EditorUi::EditorAssetKind::Mesh;
 };
-// 独立 CPU worker；可见集合替换有界队列，Mesh/MI 等待渲染时继续生成贴图。
+// 独立 CPU worker；可见集合替换有界队列，Mesh/MI/PS 等待渲染时继续生成贴图。
 // CPU/GPU 完成各占一槽，GT 每次只领取一个渲染请求；绝不加载 World 或调用 Vulkan。
 // GT 只提交路径并 Poll，不在 RmlUi 的 LoadTexture 回调中做文件 I/O。
 class EditorThumbnailLibrary

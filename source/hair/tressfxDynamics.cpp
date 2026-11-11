@@ -180,7 +180,8 @@ void GuideSimulation::IntegratePass(size_t guide, float timeStep, float decay)
                                  static_cast<uint32_t>(pointsPerGuide),
                                  guideConfig.globalShapeStiffness,
                                  guideConfig.globalShapeEffectiveRange)
-            ? TressfxGlobalShapePull(restPositions[point], integrated,
+            ? TressfxGlobalShapePullPrecompensated(restPositions[point], integrated,
+                  guideConfig.gravity * timeStepSquared,
                   guideConfig.globalShapeStiffness)
             : integrated;
     }

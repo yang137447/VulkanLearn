@@ -24,6 +24,7 @@
 namespace VL
 {
 using namespace RuntimeTestFixtures;
+
 std::string
 RuntimeTestHooks::CaptureWorldGraphRuntimeFingerprint(
     RuntimeValidationServices& validationServices,
@@ -1061,7 +1062,12 @@ void RuntimeTestHooks::UpdateWorldGraphTransactionTest(
                     beforeBackend.identityCounts)
             {
                 throw std::runtime_error(
-                    "successful resize did not replace graph GPU state with stable backend counts");
+                    "successful resize did not replace graph GPU state with stable backend counts: " +
+                    FormatBackendIdentityCounts(
+                        beforeBackend.identityCounts) +
+                    " -> " +
+                    FormatBackendIdentityCounts(
+                        afterBackend.identityCounts));
             }
             diagnostics.ReportInfo(
                 "World/graph transaction same-size resize passed: generation=" +

@@ -22,6 +22,8 @@ inline bool IsSupportedSceneObjectType(std::string_view type)
         type == "glassPane" ||
         type == "camera" ||
         type == "environment" ||
+        type == "decal" ||
+        type == "particleSystem" ||
         type == "wind";
 }
 

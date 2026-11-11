@@ -104,7 +104,7 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
     }
     else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Tressfx || kind == EditorAssetKind::Texture ||
         kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint ||
-        kind == EditorAssetKind::Retarget)
+        kind == EditorAssetKind::Retarget || kind == EditorAssetKind::ParticleSystem)
     {
         OpenResourceAsset(path, kind);
     }

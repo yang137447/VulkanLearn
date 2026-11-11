@@ -1,5 +1,6 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/panel/editorPanelInternalHelpers.h"
+#include "editor/ui/panel/particlePanelHelpers.h"
 #include "animation/motionDebug.h"
 #include "debug/drawDebug.h"
 
@@ -119,8 +120,10 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
     for (const auto& tab : resourceEditor.Tabs())
     {
         const auto* resource = ResourceDocument(tab.path);
+        const auto* particle = tab.kind == EditorAssetKind::ParticleSystem ? ParticleDocument(tab.path) : nullptr;
         const auto* terrain = tab.kind == EditorAssetKind::Terrain ? TerrainDocument(tab.path) : nullptr;
-        const bool dirty = (resource && resource->dirty) || (terrain && terrain->dirty);
+        const bool dirty = (resource && resource->dirty) || (particle && particle->dirty) ||
+            (terrain && terrain->dirty);
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
             std::filesystem::path(tab.path).filename().string() + (dirty ? " *" : ""),
             EditorAssetKindIcon(tab.kind), -1});
@@ -201,8 +204,34 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     if (document == nullptr) return;
     WidgetRefreshScope refresh(refreshingControls);
     RefreshDocumentTabs();
+    {
+        // 选择缓存只服务仍打开的粒子标签；关闭或替换文档时同步清理。
+        std::unordered_set<std::string> openParticlePaths;
+        for (const auto& tab : resourceEditor.Tabs())
+        {
+            if (tab.kind == EditorAssetKind::ParticleSystem)
+                openParticlePaths.insert(tab.path);
+        }
+        for (auto it = particleEmitterSelectionByPath.begin();
+             it != particleEmitterSelectionByPath.end();)
+        {
+            if (openParticlePaths.count(it->first) == 0)
+                it = particleEmitterSelectionByPath.erase(it);
+            else
+                ++it;
+        }
+        for (auto it = particleModuleByPath.begin();
+             it != particleModuleByPath.end();)
+        {
+            if (openParticlePaths.count(it->first) == 0)
+                it = particleModuleByPath.erase(it);
+            else
+                ++it;
+        }
+    }
     const auto* active = resourceEditor.ActiveTab();
     const bool blueprintAsset = active && active->kind == EditorAssetKind::Blueprint;
+    RefreshParticleEditorMarkup();
     const bool terrainAsset = active && active->kind == EditorAssetKind::Terrain;
     for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
         widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
@@ -290,7 +319,8 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     RefreshHairSimulationSection(isHair, hairBlocked);
     // Groups 是 TF 资产级作者数据；即使 skinned 预览被阻断，也仍然允许编辑/保存。
     RefreshHairGroupsSection(isHair, hairBlocked);
-    const bool previewReady = HasCurrentModelPreview() && !hairBlocked;
+    const bool previewReady =
+        (HasCurrentModelPreview() && !hairBlocked) || HasParticlePreview();
     const bool animated = isMesh && previewReady && runtimeView.animationWorldGeneration ==
         CurrentModelPreviewGeneration() && runtimeView.animationJointCount != 0;
     widgetDocument.SetProperty("resource-animation-tools", "display", animated ? "flex" : "none");
@@ -381,7 +411,9 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         : isMesh ? (isHair ? "Waiting for hair preview" : "Waiting for model preview")
         : active->snapshot && !active->snapshot->previewDiagnostic.empty()
             ? Text(active->snapshot->previewDiagnostic)
-            : "Preview unavailable: referenced data is not loaded.");
+            : active->kind == EditorAssetKind::ParticleSystem
+                ? "Loading particle preview..."
+                : "Preview unavailable: referenced data is not loaded.");
     auto* previewIcon = document->GetElementById("resource-preview-icon");
     const std::string icon = EditorAssetKindIcon(active->kind);
     if (previewIcon->GetAttribute<std::string>("src", "") != icon)
@@ -415,8 +447,15 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 void MaterialInstanceAssetEditorPanel::RefreshControls()
 {
     // File/Edit 菜单项与工具栏按钮共用同一份文档命令可用性。
+    const auto* activeTab = resourceEditor.ActiveTab();
+    const bool particleCommands =
+        activeTab != nullptr &&
+        activeTab->kind == EditorAssetKind::ParticleSystem &&
+        IsResourceEditorVisible();
     for (const char* id : DocumentCommandIds)
-        SetDisabled(id, !snapshot.activeDocument);
+        SetDisabled(id, particleCommands
+            ? !ParticlePanelDetail::ParticleMenuCommandAllowed(id)
+            : !snapshot.activeDocument);
     SetMarkup("editor-notice", Text(!docking.Notice().empty() ? docking.Notice() :
         localStatus.empty() ? snapshot.statusMessage : localStatus));
     if (!snapshot.activeDocument)
@@ -491,6 +530,7 @@ void MaterialInstanceAssetEditorPanel::RequestUndoRedo(bool redo)
         else SendTerrainBrushAction(operation, false);
         return;
     }
+    if (RequestParticleHistory(redo)) return;
     if (RequestBlueprintHistory(redo)) return;
     if (!runtimeActionSink || HasModal() || runtimeView.scripts.state != ScriptPlayState::Editing ||
         runtimeView.offlineMode || IsAssetEditorVisible() ||

@@ -5,6 +5,7 @@
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/shadow/localShadowMath.h"
 #include "renderableObject.h"
 #include "shaderReflect.h"
 #include "vulkanDebug.h"
@@ -38,6 +39,35 @@ struct SortedTransparentDraw
 std::string BuildResolvedDrawErrorPrefix(
     const char* passName,
     const ResolvedDrawPacket& draw);
+
+// 阴影 caster 剔除的公共例外：世界 AABB 不包含顶点阶段位移时不能剔除，
+// 否则会在 CSM/局部阴影里漏掉实际超出包围盒的影子。
+// - WPO 材质：顶点位移后的实际范围超出静态 AABB；
+// - SpeedTree：世界 bounds 不含风位移，剔除会裁掉摆动的枝叶影子。
+bool ShadowCasterSkipsCulling(
+    const Material& material,
+    const RenderDrawPacket& drawPacket)
+{
+    return material.GetMaterialFeatureKey().modifiesMeshPosition ||
+        !drawPacket.speedTreeWindProfileKey.empty();
+}
+
+// 局部阴影 caster 剔除：世界 AABB 已经包含当前 skin pose，直接与灯影响
+// 范围测试即可。
+bool LocalShadowCasterPassesCull(
+    const Material& material,
+    const RenderDrawPacket& drawPacket,
+    const LocalShadowCullVolume& volume)
+{
+    if (ShadowCasterSkipsCulling(material, drawPacket))
+    {
+        return true;
+    }
+    return IntersectsLocalShadowVolume(
+        drawPacket.worldBoundsMin,
+        drawPacket.worldBoundsMax,
+        volume);
+}
 
 struct TransparentDrawBackToFront
 {
@@ -316,6 +346,145 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
         context.swapChainImageIndex,
         context.renderScene.lights);
     DrawSurfaceScene("Geometry", SurfaceDrawDomain::Geometry, context);
+}
+
+void RendererDrawExecutor::DrawLocalShadowScene(
+    const PipelineBase& commonLocalShadowPipeline,
+    RendererDrawContext& context,
+    const LightSnapshot* light,
+    bool recordCasterStats) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    vk::Pipeline boundPipeline;
+    // 八面体点光的 8 个象限共用同一盏灯的剔除结果，因此体积在
+    // 本函数开头构建一次，所有 draw 复用。
+    const LocalShadowCullVolume cullVolume =
+        light != nullptr
+        ? BuildLocalShadowCullVolume(*light)
+        : LocalShadowCullVolume{};
+    const bool cullEnabled =
+        light != nullptr && cullVolume.radius > 0.0f;
+    uint32_t totalCasterCount = 0;
+    uint32_t drawnCasterCount = 0;
+
+    for (const ResolvedMaterialGroup& materialGroup :
+         context.resolvedRenderScene.materialGroups)
+    {
+        if (materialGroup.shadowCaster.kind ==
+            MaterialShadowCasterKind::None)
+        {
+            continue;
+        }
+
+        // LocalShadow 与 CSM 共用 ShadowCaster 路由，但材质侧只接受显式
+        // LocalShadow pipeline；没有专用管线的 WPO/alpha override 回退公共
+        // 管线，至少保留几何投影而不是直接丢 draw。
+        const bool usesMaterialLocalShadowPass =
+            materialGroup.shadowCaster.kind ==
+                MaterialShadowCasterKind::MaterialPass &&
+            materialGroup.material->GetLocalShadowPipeline() != nullptr;
+        const PipelineBase* localShadowPipeline =
+            usesMaterialLocalShadowPass
+            ? materialGroup.material->GetLocalShadowPipeline().get()
+            : &commonLocalShadowPipeline;
+
+        const std::string pipelineRegionName =
+            "LocalShadow Pipeline: " +
+            materialGroup.material->GetMaterialKey();
+        VulkanDebug::ScopedRegion pipelineRegion(
+            commandBuffer,
+            pipelineRegionName,
+            VulkanDebug::DebugCategory::ePipeline);
+        if (boundPipeline != localShadowPipeline->GetPipeline())
+        {
+            commandBuffer.bindPipeline(
+                localShadowPipeline->GetBindPoint(),
+                localShadowPipeline->GetPipeline());
+            boundPipeline = localShadowPipeline->GetPipeline();
+        }
+
+        for (const ResolvedMaterialInstanceGroup& materialInstanceGroup :
+             materialGroup.materialInstances)
+        {
+            if (usesMaterialLocalShadowPass)
+            {
+                context.services.UpdateMaterialInstanceUBOForPass(
+                    materialInstanceGroup.materialInstance);
+            }
+
+            for (const ResolvedDrawPacket& draw :
+                 materialInstanceGroup.draws)
+            {
+                ResolvedDrawResources drawResources =
+                    RequireResolvedDrawResources(
+                        "LocalShadow",
+                        draw,
+                        context.renderScene);
+                RendererObjectGpuResources& objectResources =
+                    *drawResources.objectResources;
+                const RenderDrawPacket& drawPacket =
+                    *drawResources.drawPacket;
+                ++totalCasterCount;
+                if (cullEnabled &&
+                    !LocalShadowCasterPassesCull(
+                        *materialGroup.material,
+                        drawPacket,
+                        cullVolume))
+                {
+                    continue;
+                }
+                ++drawnCasterCount;
+                VulkanDebug::ScopedRegion region(
+                    commandBuffer,
+                    drawPacket.debugName,
+                    VulkanDebug::DebugCategory::eObject);
+
+                if (usesMaterialLocalShadowPass)
+                {
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        objectResources.descriptorSets[
+                            context.swapChainImageIndex],
+                        nullptr);
+                }
+                else
+                {
+                    const auto& descriptorSets =
+                        objectResources.shadowDescriptorSets[
+                            context.swapChainImageIndex];
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        renderPass.GetDescriptorSets()[
+                            context.swapChainImageIndex][GlobalSetIndex],
+                        nullptr);
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        localShadowPipeline->GetPipelineLayout(),
+                        ObjectSetIndex,
+                        descriptorSets[ObjectSetIndex],
+                        nullptr);
+                }
+
+                context.services.UpdateObjectUBOForPass(
+                    objectResources,
+                    drawPacket);
+                drawResources.renderableObject->Draw(commandBuffer);
+            }
+        }
+    }
+
+    if (recordCasterStats && light != nullptr)
+    {
+        context.services.ReportLocalShadowCasterStats(
+            renderPass.localShadowIndex,
+            drawnCasterCount,
+            totalCasterCount);
+    }
 }
 
 void RendererDrawExecutor::DrawForwardOpaqueScene(

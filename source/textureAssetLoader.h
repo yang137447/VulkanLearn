@@ -16,6 +16,9 @@ struct TextureBindingLoadDesc
     HostImage::TextureSemantic semantic = HostImage::TextureSemantic::Color;
     TextureIO::LoadOptions::Transfer transfer = TextureIO::LoadOptions::Transfer::SRGB;
     bool generateMipmaps = true;
+    // 16-bit single-channel height array (terrain layer height).
+    bool sixteenBitHeight = false;
+    bool flipY = true;
     vk::Filter filter = vk::Filter::eLinear;
     vk::SamplerAddressMode wrapMode = vk::SamplerAddressMode::eRepeat;
 };

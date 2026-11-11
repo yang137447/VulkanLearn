@@ -26,6 +26,7 @@
 #include "ui/uiSubsystem.h"
 #include "ui/viewModel/runtimeUiSections.h"
 #include "engine/worldGraphTransactionCoordinator.h"
+#include "world/particleRuntimeBridge.h"
 #include "shader/reload/shaderReloadRuntime.h"
 #include "physics/fracture/fractureBudget.h"
 
@@ -55,6 +56,7 @@ class ProjectileRuntime;
 namespace Physics { class FractureImpactWorld; }
 class SubsystemCollection;
 class WorldCandidatePreparer;
+class World;
 enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
@@ -229,6 +231,11 @@ private:
     bool destructibleSessionActive = false;
     void TickBlueprintAssets();
     std::unique_ptr<BlueprintAssetLoadSession> blueprintAssetLoad;
+    // 粒子事件/遥测回读：只在 Play 且 C# 订阅存在时以 <=10 Hz 触发。
+    void PollParticleRuntimeBridge(World& world);
+    ParticleEventPollClock particleEventPollClock;
+    double particleEventTimeSeconds = 0.0;
+    bool particleEventDrainFailureReported = false;
     nlohmann::json blueprintAssetRequests = nlohmann::json::array();
     nlohmann::json activeBlueprintAssetRequests = nlohmann::json::array();
     std::map<std::string, std::unique_ptr<BlueprintAssetLoadSession>> loadedBlueprintAssets;

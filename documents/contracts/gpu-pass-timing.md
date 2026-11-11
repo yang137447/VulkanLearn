@@ -11,7 +11,7 @@
 - 启动参数 `--no-prerender-skin`（`source/engine/launchOptions.*`）：预蒙皮默认开启，用该关闭项回落到逐 pass 蒙皮；开启时每帧在
   `hairSimulation` 之后、pass 循环之前录制 `SkinDeformPass`，并在 GPU 表中新增
   `skinnedDeform` 一行。
-- 控制台命令 `gpustats`（`source/debugConsole.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
+- 控制台命令 `gpustats`（`source/debugConsoleProcessCommand.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
   排入 `CommandBus`，由 `RuntimeCommandExecutor` 在当前 GT tick 调用
   `RenderSystem::PrintGpuPassStats()`。它立即打印最近一次读回的窗口；没有可用样本时打印一行
   提示，并请求渲染线程在第一次读回后补打一张表。该命令无论 `--gpu-stats` 是否开启都会启用采集。

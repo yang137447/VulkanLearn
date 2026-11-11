@@ -12,6 +12,10 @@
 #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
 layout (set = 3, binding = 0) uniform sampler2DArrayShadow shadowMap;
 #endif
+// 局部光阴影图集是 forwardOpaque / forwardTransparent 的显式 pass 输入：
+// binding 6 接在 shadowMap(0) 与 forwardOpaque 的 DBuffer(1..5) 之后。
+// 透明 pass 不读 DBuffer，但仍共享同一 binding，保持两条 forward 布局一致。
+layout (set = 3, binding = 6) uniform sampler2DArrayShadow localShadowMap;
 
 
 
@@ -54,6 +58,7 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
     vec3 viewDir = normalize(uboVP.cameraPosition - surface.worldPosition);
 
     result.directLighting = CalculateDirectLighting(
+        localShadowMap,
         surface.worldNormal,
         surface.worldPosition,
         uboVP.cameraPosition,

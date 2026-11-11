@@ -1,8 +1,10 @@
 #include <cmath>
+#include <limits>
 
 #include <gtest/gtest.h>
 
 #include "render/camera/cameraExposure.h"
+#include "render/lighting/lightPulse.h"
 #include "render/lighting/physicalLighting.h"
 
 namespace VL
@@ -75,6 +77,48 @@ TEST(PhysicalLighting, CentimeterAttenuationPreservesTheSoftenedMeterKernel)
             (distanceCm * distanceCm + 1.0f);
         EXPECT_NEAR(actual, reference, reference * 1.0e-6f);
     }
+}
+
+TEST(LightPulse, CurveStartsAtOneAndFallsToZeroAtDuration)
+{
+    constexpr float period = 1.0f;
+    constexpr float duration = 0.2f;
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, period, duration, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.1f, period, duration, 0.0f), 0.25f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.2f, period, duration, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.5f, period, duration, 0.0f), 0.0f);
+}
+
+TEST(LightPulse, WrapsAcrossPeriodsAndAppliesPhase)
+{
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(1.0f, 1.0f, 0.2f, 0.0f), 1.0f);
+    // phase=0.5 把 0.2s 窗口移到周期中点：t=0.5 时回绕到窗口起点。
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.5f, 1.0f, 0.2f, 0.5f), 1.0f);
+    EXPECT_NEAR(EvaluateLightPulse(0.6f, 1.0f, 0.2f, 0.5f), 0.25f,
+        1.0e-6f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.8f, 1.0f, 0.2f, 0.5f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, 1.0f, 0.2f, 0.5f), 0.0f);
+    // 负时间按同一周期回绕，避免启动前/相位为负时产生负窗口。
+    EXPECT_NEAR(EvaluateLightPulse(-0.95f, 1.0f, 0.2f, 0.0f), 0.5625f,
+        1.0e-6f);
+}
+
+TEST(LightPulse, RejectsNonPositivePeriodOrDuration)
+{
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, 0.0f, 0.1f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, -1.0f, 0.1f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, 1.0f, 0.0f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, 1.0f, -0.1f, 0.0f), 0.0f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(
+        std::numeric_limits<float>::infinity(), 1.0f, 0.1f, 0.0f), 0.0f);
+}
+
+TEST(LightPulse, ClampsDurationToPeriod)
+{
+    // 作者层校验会拒绝 duration>period；helper 仍把超长窗口收敛到整周期，
+    // 避免未来其它调用路径产生跨周期重叠。
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.5f, 1.0f, 2.0f, 0.0f), 0.25f);
+    EXPECT_FLOAT_EQ(EvaluateLightPulse(0.0f, 1.0f, 2.0f, 0.0f), 1.0f);
 }
 
 TEST(CameraExposure, NeutralPlotExposurePreservesAuthoredColor)

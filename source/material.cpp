@@ -142,19 +142,54 @@ void Material::SetShadowPipeline(
     // 選中的 ShadowDepth shader 使用資源，但不強迫寫入 schema 中未使用的貼圖。
     activeShaderBindings = BuildActiveShaderBindings(
         surfaceShaderArtifact.shaderBindings,
-        &shaderArtifact.shaderBindings);
+        &shaderArtifact.shaderBindings,
+        localShadowShaderArtifact
+            ? &localShadowShaderArtifact->shaderBindings
+            : nullptr);
     shadowShaderArtifact = shaderArtifact;
     pipelineReloadRecipe.shadow = reloadRecipe;
 }
 
+void Material::SetLocalShadowPipeline(
+    std::shared_ptr<PipelineBase> pipeline,
+    const GraphicsShaderVariantArtifact& shaderArtifact,
+    const VL::MaterialGraphicsPassReloadRecipe& reloadRecipe)
+{
+    localShadowPipeline = std::move(pipeline);
+    if (!localShadowPipeline)
+    {
+        return;
+    }
+
+    // LocalShadow 的 Set 0/2 可能把 Surface 未使用的 stage 扩到 fragment，
+    // 因此它也必须并入 MI 的 active bindings，保证 descriptor set layout
+    // 与两个 pipeline layout 都兼容。
+    activeShaderBindings = BuildActiveShaderBindings(
+        surfaceShaderArtifact.shaderBindings,
+        shadowShaderArtifact
+            ? &shadowShaderArtifact->shaderBindings
+            : nullptr,
+        &shaderArtifact.shaderBindings);
+    localShadowShaderArtifact = shaderArtifact;
+    pipelineReloadRecipe.localShadow = reloadRecipe;
+}
+
 std::vector<ShaderBinding> Material::BuildActiveShaderBindings(
     const std::vector<ShaderBinding>& surfaceBindings,
-    const std::vector<ShaderBinding>* shadowBindings)
+    const std::vector<ShaderBinding>* shadowBindings,
+    const std::vector<ShaderBinding>* localShadowBindings)
 {
     std::vector<ShaderBinding> activeBindings = surfaceBindings;
     if (shadowBindings != nullptr)
     {
         for (const ShaderBinding& binding : *shadowBindings)
+        {
+            MergeActiveShaderBinding(activeBindings, binding);
+        }
+    }
+    if (localShadowBindings != nullptr)
+    {
+        for (const ShaderBinding& binding : *localShadowBindings)
         {
             MergeActiveShaderBinding(activeBindings, binding);
         }
@@ -180,10 +215,21 @@ void Material::ValidatePipelineReloadCommit(
         throw std::runtime_error(
             "Material pipeline reload commit does not match its Shadow recipe");
     }
+    if (pipelineReloadRecipe.localShadow.has_value() !=
+        commit.localShadowArtifact.has_value())
+    {
+        throw std::runtime_error(
+            "Material pipeline reload commit does not match its LocalShadow recipe");
+    }
     if (commit.replaceShadow && !commit.shadowPipeline)
     {
         throw std::runtime_error(
             "Material pipeline reload commit is missing its Shadow pipeline");
+    }
+    if (commit.replaceLocalShadow && !commit.localShadowPipeline)
+    {
+        throw std::runtime_error(
+            "Material pipeline reload commit is missing its LocalShadow pipeline");
     }
 }
 
@@ -201,8 +247,14 @@ VL::RetiredMaterialPipelines Material::CommitPipelineReload(
         retired.shadowPipeline = std::move(shadowPipeline);
         shadowPipeline = std::move(commit.shadowPipeline);
     }
+    if (commit.replaceLocalShadow)
+    {
+        retired.localShadowPipeline = std::move(localShadowPipeline);
+        localShadowPipeline = std::move(commit.localShadowPipeline);
+    }
     surfaceShaderArtifact = std::move(commit.surfaceArtifact);
     shadowShaderArtifact = std::move(commit.shadowArtifact);
+    localShadowShaderArtifact = std::move(commit.localShadowArtifact);
     activeShaderBindings = std::move(commit.activeShaderBindings);
     return retired;
 }

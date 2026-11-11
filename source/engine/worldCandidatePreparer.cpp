@@ -116,7 +116,15 @@ WorldCandidatePreparer::Prepare(
     }
 
     WorldLoader worldLoader;
-    auto worldBuildPlanResult = worldLoader.Load(scenePath, extraSceneObjects, sceneDocument);
+    const std::unordered_map<std::string, nlohmann::json> emptyParticleDocuments;
+    const auto& particleDocuments = options.particleDocuments
+        ? *options.particleDocuments
+        : emptyParticleDocuments;
+    auto worldBuildPlanResult = worldLoader.Load(
+        scenePath,
+        extraSceneObjects,
+        sceneDocument,
+        particleDocuments);
     if (worldBuildPlanResult.IsFailure())
     {
         return RuntimeResult<PreparedWorldTransition>::Failure(

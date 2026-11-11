@@ -419,7 +419,16 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
                         "Animation montage '" + montagePlan.path + "' id '" +
                         montage.id + "' does not match skinning.montages id '" +
                         montagePlan.id + "'");
-                montage.derivedClipId = BindMontage(montage, context, montagePlan.path);
+                const std::vector<std::string> clipIds =
+                    BindMontageSegments(montage, context, montagePlan.path);
+                if (clipIds.empty())
+                    throw std::runtime_error("Animation montage '" +
+                        montagePlan.path + "' resolved no playable clip");
+                montage.derivedClipId = clipIds.front();
+                for (size_t segment = 0;
+                     segment < montage.segments.size() && segment < clipIds.size();
+                     ++segment)
+                    montage.segments[segment].derivedClipId = clipIds[segment];
                 montage.sourcePath = montagePlan.path;
                 montage.sourceDigest = montageDigest;
                 montagePlan.digest = montageDigest;

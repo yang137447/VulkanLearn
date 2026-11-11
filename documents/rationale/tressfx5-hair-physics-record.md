@@ -469,10 +469,166 @@ SDF/胶囊最大穿透统计；新增 `tool/hair/analyze_placement_trace.py` 对
 `finiteCount=0`、segment max **9.75**、SDF/capsule 最大穿透
 **1.98/3.29 cm**。临时 SM/场景已删除；正式 Female 仍为空数组回退。
 
+### 10. SDF 碰撞的 Newton 投影与零风静止抖动（2026-11-10）
+
+为区分风力、碰撞与约束残差，使用正式 Female 场景、`animation pause` 和
+`hair set Female_hair_skinned windGain 0` 采集 300 帧 trace（40 guides、32 点）。
+注意：现场 `wind` 不是有效 live 字段，早期写成 `hair set ... wind 0 0 0` 会得到
+`unknown hair parameter`，因此那批“零风”数据实际仍带场景风，不能用于归因。
+
+**投影推导**
+
+目标是求 `d(x)=margin`。对三线性有符号距离场做 Newton 线性化：
+
+```text
+Δx = (margin - d(x)) * ∇d / |∇d|²
+```
+
+- 真实 SDF 满足 `|∇d|=1`，该式退化为源实现的
+  `normalize(∇d) * (margin - d)`。
+- 三线性插值会让 `|∇d|` 偏离 1。`|∇d|<1` 时 Newton 步会放大，因此分母取
+  `max(|∇d|², |∇d|)`：`|∇d|>=1` 用 Newton，`|∇d|<1` 退回 1-Lipschitz 的归一化
+  全量投影，不把步长放大。
+- 三线性线性化只在当前网格单元内有效，因此把 `|Δx|` 限制在一个 `cellSize` 内。
+
+这三个分支都来自距离场/插值的性质，没有经验松弛系数。早期尝试的固定 `0.35`
+只是诊断折中，未作为最终实现。
+
+**零风静止 A/B**（`windGain=0`，8 迭代，按 guide 发梢逐帧世界位移统计）
+
+| 配置 | 均值 cm/frame | 峰值 cm/frame | SDF 最大穿透 cm |
+| --- | ---: | ---: | ---: |
+| 无碰撞 | 0.0232 | 0.476 | — |
+| 仅胶囊 | 0.0205 | 0.771 | — |
+| 仅 SDF | 0.0220 | 2.560 | — |
+| 胶囊 + SDF，全量投影（两次） | 0.0333–0.0366 | 1.757–1.824 | 2.249–2.455 |
+| 胶囊 + SDF，经验 0.35（诊断，已否定） | 0.0220–0.0238 | 0.571–0.729 | 1.109–1.187 |
+| 胶囊 + SDF，无保护 Newton（已否定） | 0.0124 | 0.411 | 5.188 |
+| 胶囊 + SDF，安全 Newton（最终） | 0.0044–0.0053 | 0.133–0.242 | 1.140–1.143 |
+
+结论：
+
+- 固定 `0.35` 是经验调参，不能作为公式依据；已从实现和契约删除。
+- 无保护 Newton 的均值/峰值更低，但 `|∇d|→0` 时步长被放大，SDF 最大穿透升到
+  5.19 cm；因此不能直接使用裸 Newton。
+- 加上 1-Lipschitz 分支和单网格单元限制后，安全 Newton 的均值、峰值和 SDF
+  最大穿透都优于全量投影与经验 0.35，且没有需要标定的常数。
+- 胶囊-only 的峰值 0.771 cm/frame 说明胶囊解析投影仍有基础残差；后续若继续
+  细化，应做碰撞与长度约束的顺序/迭代 A/B，而不是继续调 SDF 系数。
+
+证据在 `artifacts/hair-static-*-20261110/rotation.bin`；脚本为一次性的外部
+trace 分析，不注册 CTest，也不把截图当作数值验收。
+
+同一轮另做了 90° Y 轴 placement 旋转、600 帧、`windGain=0` 的最终 trace：
+根点逐帧位移 0（严格跟随），旋转后首帧发梢世界位移均值 **2.98 cm**、最大
+**9.90 cm**，同帧刚性附着应为 **17.72/26.61 cm**，说明发梢保持世界惯性；
+8.5 s 后与刚性姿态的差降到 **3.92 cm**，窗口内 reset=0。证据在
+`artifacts/hair-rotation-final-newton-wg0-20261110/rotation.bin`。
+
+### 11. 2k guide + follow 绑定（导入层，2026-11-11）
+
+正式 Female 资产是 **40,334 根 guide / 1,290,688 点**，按 3A 常规 guide 预算
+（1–5k）高出 10–40 倍。按路线 B：完整 groom 仍作为渲染发丝，只把
+`simulationGuideCount` 根 guide 送入模拟，其余按最近模拟 guide 的逐点 frame
+存 offset。
+
+**选择覆盖**（原始发根到最近选中 guide 的距离）
+
+| 选法 | 均值 | p95 | 最大 |
+| --- | ---: | ---: | ---: |
+| 等步长 stride | 0.19 cm | 0.36 cm | 2.16 cm |
+| 随机 | 0.21 cm | 0.43 cm | 2.64 cm |
+| 最远点采样 FPS | 0.16 cm | 0.27 cm | 0.33 cm |
+
+FPS 无空洞；2,000 根足以覆盖。导入期一次 FPS 为 2,000 × 40,334 次距离计算，
+结果确定、可缓存。
+
+**绑定度量**（2,000 根模拟 guide；offset 为原始点到来源 guide 的逐点距离）
+
+| 候选数 K | 均值 | p95 | 最大 |
+| ---: | ---: | ---: | ---: |
+| 1（仅根点最近） | 3.14 cm | 10.56 cm | 34.33 cm |
+| 4 | 1.34 cm | 4.22 cm | 25.02 cm |
+| 8 | 0.93 cm | 2.53 cm | 22.17 cm |
+| 16 | **0.76 cm** | **1.73 cm** | 17.89 cm |
+
+只按根点最近会把长发绑到形状差很远的 guide；改为“根点最近 16 根中选整根
+rest 均方距离最小”后，p95 从 10.56 cm 降到 1.73 cm。剩余 17.89 cm 最大值
+是少数与所有候选都不相似的孤立发束，后续可用多 guide 加权或增加模拟 guide
+继续收敛。
+
+**静止还原**：用 `guidePos + frame * offset` 重建 40,334 根全部 1,290,688 点，
+相对作者 rest 的最大误差 **2.3e-05 cm**，即逐点无损。frame 由切线 + 每根
+guide 的参考轴构造；参考轴取与切线最不平行的世界轴，避免垂直/水平发丝退化。
+
+**运行时已接入**：模拟 pass 通过 simulation index SSBO 只 dispatch 2,000 根
+guide，7 个逐 guide/逐点 pass 按 slot 映射回原始索引；SdfCollide 之后新增
+`FollowInterpolation` pass，把 40,334 根 follow 逐点写回同一份位置 buffer，
+渲染发丝数与 ribbon 拓扑不变。GPU 日志为
+`guides=40334 points=1290688 simGuides=2000 passes=10`，validation error 0。
+
+同一场景、同一 240 帧延迟的截图对比（`Generated/Screenshots/hair-follow-2k.bmp`
+与 `hair-40k.bmp`）画面同构；逐像素 92.7% 完全一致，差异集中在头发区域。
+两次运行的动画相位受加载时间影响，像素差不能直接归因于 follow 近似；静态
+逐点还原已由上面的 2.3e-05 cm 误差单独证明。下一步的动态验收应在暂停/固定
+时间点或 trace 上做同帧比较。
+
+**仍未解决**：2k 模拟仍使用 `globalShapeEffectiveRange=0.346`、
+`globalShapeStiffness=1.0` 的旧配置，截图里头发仍会塌/炸。这是独立的物理
+保形问题（全范围 global shape + 重力预补偿），不与 follow 绑定混在一起验收。
+
+### 12. 全范围 global shape 与重力预补偿（2026-11-11）
+
+**问题**：`range=0.346` 只覆盖 32 点里的 11 点，其余 21 点没有位置目标。
+局部形状约束只保相邻段夹角；整条自由尾段绕边界点做刚体旋转时夹角不变，
+重力因此把尾段整段转下去。零风 CPU 参考解实测发梢平均下垂 8.99 cm、最大
+13.74 cm，根→梢角度变化最大 43.9°，段长拉伸 3.28×。
+
+**推导**：按实际更新顺序（先 Verlet 重力、再 global shape）求不动点。设作者
+造型为 `x`，单步重力增量为 `G = g·dt²`，global shape 比例为 `k`：
+
+```text
+x'  = x + G
+x'' = x' + k (target - x')
+```
+
+令 `x'' = x` 且速度为零：
+
+```text
+0 = (1-k) G + k (target - x)
+target = x - (1-k) G / k
+```
+
+连续弹簧模型给出 `-G/k`；离散顺序多出的 `(1-k)` 来自重力已经先写进 `x'`，
+不能省略。该目标让作者 rest 成为整条约束流水线的精确不动点：global shape
+抵消本步重力，local shape 与长度约束在 rest 处残差为零。
+
+`k` 不是经验刚度，而是回正时间 `τ` 的离散步长：
+
+```text
+k = 1 - exp(-dt / τ),  dt = 0.0125 s
+```
+
+本轮取 `τ=0.4 s → k=0.0308`；`range=1.0` 覆盖全部可动点。
+
+**验证**：
+
+- 新增 `TressfxSolverMath.GlobalShapePrecompensationCancelsGravityPerStep`
+  与 `TressfxDynamics.GravityPrecompensationKeepsAuthoredShape`，200 步后
+  可动点相对 rest 偏差 < 1e-3 cm。
+- 正式 Female、2k guide + 40k follow，同场景 240 帧截图：
+  `Generated/Screenshots/hair-40k.bmp`（旧配置）是覆盖面部的散乱发束；
+  `hair-precomp.bmp`（range=1.0、k=0.0308）恢复为完整长发轮廓。
+- 运行日志仍为 `simGuides=2000 passes=10`，validation error 0。
+
+**边界**：这一轮解决的是「静止/缓变时造型被重力拉塌」。风下最大偏移、
+发束整体性（clump/质心）、碰撞与长度约束的顺序/迭代仍分别验收；不能因为
+截图变好就声称全部物理问题结清。
+
 ### 下一步（本目标继续）
 
-1. 做绕 Y 旋转与 teleport 的 placement trace，并把过冲/衰减归因到具体
-   Verlet/历史换基项；平移已有数值结果，旋转/teleport 尚未做。
+1. 绕 Y 旋转 trace 已完成（2026-11-10，见上）；teleport 的过冲/衰减尚未
+   归因到具体 Verlet/历史换基项。平移已有数值结果。
 2. 用真实 `.tfxbone` 资产验收多骨路径；本地无该资产，当前只有合成夹具。
    CPU backend 的世界历史/独立 placement 状态仍缺。
 3. 决定 loop-wrap reset：原地循环的 wrap 目前会被 `!inPlace` 规则当成

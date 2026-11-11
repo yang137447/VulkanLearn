@@ -31,6 +31,8 @@ struct DetailsViewContext
     bool* refreshingControls = nullptr;
     bool viewingJson = false;
     bool resourceEditorVisible = false;
+    // 当前资源页是粒子文档：文档命令仍可用，但只开放粒子支持的那几项。
+    bool particleResourceActive = false;
     const std::string* localStatus = nullptr;
     std::function<std::string(const EditorSceneActorSnapshot&)> sceneLogicComponentsMarkup;
     std::function<void(const EditorSceneActorSnapshot*)> refreshActorValues;

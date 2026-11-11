@@ -56,10 +56,48 @@ namespace Panel
 using namespace Panel::Detail;
 using namespace HairPanelDetail;
 
-
 void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& element,
     const std::string& action, const Rml::Event* event)
 {
+    if (action == "particle-emitter")
+    {
+        try
+        {
+            panel.particleEmitterIndex = static_cast<size_t>(
+                std::stoul(ControlValue(element)));
+        }
+        catch (...)
+        {
+            return;
+        }
+        // 手动切换优先于尚未落到快照的结构结果。
+        panel.pendingParticleEmitterSelection.reset();
+        panel.pendingParticleEmitterSelectionPath.clear();
+        panel.particleFieldsMarkupCache.clear();
+        panel.RefreshResourceEditor();
+        return;
+    }
+    if (action == "particle-field")
+    {
+        panel.HandleParticleFieldEvent(element);
+        panel.RefreshResourceEditor();
+        return;
+    }
+    if (action == "particle-curve-key")
+    {
+        panel.HandleParticleCurveKeyEvent(element);
+        panel.RefreshResourceEditor();
+        return;
+    }
+    if (action == "particle-flipbook-duration" ||
+        action == "particle-flipbook-pivot" ||
+        action == "particle-flipbook-uv" ||
+        action == "particle-flipbook-rotation")
+    {
+        panel.HandleParticleFlipbookTableEdit(element);
+        panel.RefreshResourceEditor();
+        return;
+    }
     if (panel.terrainAssetEditor.HandleChange(element, action)) return;
     if (action == "terrain-layer-search")
     {
@@ -384,6 +422,26 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         if (action == "viewport-snap-move") panel.sceneMoveSnap = number;
         else if (action == "viewport-snap-rotate") panel.sceneRotateSnap = number;
         else panel.sceneScaleSnap = number;
+        panel.RefreshViewportToolbar();
+        return;
+    }
+    if (action == "camera-speed")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number) || number <= 0.0f)
+        {
+            panel.localStatus = "Camera speed must be finite and greater than zero.";
+            panel.RefreshViewportToolbar();
+            return;
+        }
+        panel.cameraMoveSpeed = number;
+        if (panel.runtimeActionSink != nullptr)
+        {
+            UiAction request;
+            request.type = UiActionType::SetCameraMoveSpeed;
+            request.floatValue = number;
+            panel.runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
         panel.RefreshViewportToolbar();
         return;
     }

@@ -121,6 +121,6 @@ shaderc=0, failed=0, elapsedMs=47.6
 - `source/shader/build/contentHash.*`：BLAKE3-256 封装与规范化字段流。
 - `source/shader/build/atomicFile.*`：同目录临时写、原子替换、按需重写。
 - `source/shader/build/shaderBuildManifest.*`：manifest 读写与反向依赖索引。
-- `source/shaderCompiler.*`：编译请求、依赖收集、缓存命中、原子提交。
+- `source/shaderCompiler*`：编译请求、依赖收集、缓存命中、原子提交。
 - `source/material/generator/materialParameterIncludeGenerator.*`：M_ include
   生成，内容不变时不重写。

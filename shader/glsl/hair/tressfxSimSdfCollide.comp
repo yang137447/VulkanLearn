@@ -17,6 +17,7 @@
 //   （见合同显式近似）。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSdfCommon.glsl"
+#include "tressfxSimGuideIndex.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -35,9 +36,10 @@ const float TressfxSdfGradientEpsilonSquared = 1.0e-12;
 
 void main()
 {
-    uint guide = gl_GlobalInvocationID.x;
-    if (guide >= params.counts.y)
+    uint slot = gl_GlobalInvocationID.x;
+    if (slot >= TressfxSimulationGuideCount())
         return;
+    uint guide = TressfxSimulationGuide(slot);
 
     const uint pointsPerGuide = TressfxPointsPerGuide();
     const uint root = guide * pointsPerGuide;
@@ -62,9 +64,20 @@ void main()
         if (!(dot(gradient, gradient) > TressfxSdfGradientEpsilonSquared))
             continue;
 
-        // 与参考 shader 相同的投影量：normalize(gradient) * (margin - distance)。
-        const vec3 normal = normalize(gradient);
-        position.xyz += normal * (margin - distance);
+        // 解 d(x)=margin 的 Newton 步：Δx=(margin-d)·∇d/|∇d|²。
+        // 真实 SDF 的 |∇d|=1；三线性插值会让 |∇d| 偏离 1：
+        // - |∇d|>=1 用 Newton（步长 <= margin-d，避免过冲）；
+        // - |∇d|<1 退回 1-Lipschitz 的 normalize(∇d)*(margin-d)，不放大步长。
+        // 最后把步长限制在一个网格单元内：三线性线性化只在当前单元有效。
+        const float gradientSquared = dot(gradient, gradient);
+        const float gradientLength = sqrt(gradientSquared);
+        const float stepDenominator = max(gradientSquared, gradientLength);
+        vec3 correction = gradient * ((margin - distance) / stepDenominator);
+        const float correctionLength = length(correction);
+        const float maxStep = sdf.originCell.w;
+        if (correctionLength > maxStep)
+            correction *= maxStep / correctionLength;
+        position.xyz += correction;
         currentPositions.positions[point] = position;
     }
 }

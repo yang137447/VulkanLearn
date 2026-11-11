@@ -13,6 +13,9 @@ list(FILTER sources EXCLUDE REGEX "/source/hair/")
 list(APPEND sources
     "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPassDescriptors.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPassTrace.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPassInternal.h"
     # 分组模拟解析依赖 TF 资产结构（含 Vulkan 顶点类型头），不能放进纯 CPU
     # 的 vl_hair_assets；模块测试单独编译同一份实现。
     "${CMAKE_CURRENT_SOURCE_DIR}/hair/tressfxGroupSimulation.cpp"
@@ -133,7 +136,13 @@ if(MINGW)
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/engineLoop.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/blueprintViewportPanel.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/materialInstanceAssetEditorPanel.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/materialInstanceAssetEditorPanelActor.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/materialInstanceAssetEditorPanelBuild.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/materialInstanceAssetEditorPanelEvents.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/materialInstanceAssetEditorPanelResource.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPassDescriptors.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPassTrace.cpp"
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 

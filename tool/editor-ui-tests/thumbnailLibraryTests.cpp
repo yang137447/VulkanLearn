@@ -272,6 +272,28 @@ TEST_F(ThumbnailLibraryTest, RenderRequestsPublishGpuImagesWithoutCpuPixelsOrDis
     EXPECT_FALSE(library->TakeRenderRequest());
 }
 
+TEST_F(ThumbnailLibraryTest, ParticleSystemUsesGpuRenderQueueInsteadOfCpuPreview)
+{
+    WriteTextFileAtomically(root / "PS_fire.json",
+        R"({"type":"particleSystem","emitters":[]})");
+    library->RequestVisible({"PS_fire.json"});
+    const auto request = WaitRender();
+    ASSERT_TRUE(request);
+    EXPECT_EQ(request->kind, EditorAssetKind::ParticleSystem);
+    EXPECT_EQ(request->path, "PS_fire.json");
+    // 粒子与 Mesh/MI 一样只排队路径，不能在 CPU worker 生成占位像素。
+    library->Poll();
+    EXPECT_TRUE(library->GetSnapshot()->entries.empty());
+    EXPECT_FALSE(std::filesystem::exists(root / "cache"));
+
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    library->CompleteRenderRequest(*request, image, {});
+    const auto thumbnail = Wait("PS_fire.json");
+    EXPECT_EQ(thumbnail.gpuImage, image);
+    EXPECT_FALSE(thumbnail.image);
+    EXPECT_TRUE(thumbnail.diagnostic.empty());
+}
+
 TEST_F(ThumbnailLibraryTest, PublishedSnapshotPinsGpuImageAcrossRefresh)
 {
     WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");

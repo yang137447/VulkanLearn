@@ -381,6 +381,17 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     const bool isOverriddenMaterialInstance =
         loadContext.materialInstanceOverrideJson.has_value() &&
         loadContext.materialInstanceOverridePath == materialInstanceKey;
+    // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
+    // 固定管线状态和缓存 key；在缓存命中分支之前构建，才能为共用同一 MI 的
+    // LocalShadow pass 补建它自己的管线。
+    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(
+        materialInstancePath,
+        renderPass.pipelineContractKey,
+        effectiveMaterialInstanceJson,
+        materialInstanceResolveResult.materialPath,
+        materialInstanceResolveResult.materialJson,
+        rendererBackend.SupportsDualSourceBlend(),
+        loadContext.prerenderSkin);
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
         cachedMaterialInstance != nullptr)
     {
@@ -394,18 +405,26 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                 "Material instance asset '" + materialInstanceKey +
                 "' was requested with an incompatible pass pipeline contract");
         }
+        if (renderPass.type != RenderGraphPassType::Shadow &&
+            !cachedBaseMaterial->GetLocalShadowPipeline())
+        {
+            MaterialShadowPipelineBuildResult localShadowBuildResult =
+                BuildMaterialLocalShadowPipeline(
+                    pipelineFactory,
+                    loadContext.renderGraph.FindCanonicalLocalShadowPass(),
+                    loadPlan,
+                    *cachedBaseMaterial,
+                    loadContext.graphicsCandidateState);
+            if (localShadowBuildResult.pipeline)
+            {
+                cachedBaseMaterial->SetLocalShadowPipeline(
+                    std::move(localShadowBuildResult.pipeline),
+                    localShadowBuildResult.shaderArtifact,
+                    localShadowBuildResult.reloadRecipe);
+            }
+        }
         return cachedMaterialInstance;
     }
-    // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
-    // 固定管线状态和缓存 key；后续步骤只消费结果，不重复解释 JSON。
-    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(
-        materialInstancePath,
-        renderPass.pipelineContractKey,
-        effectiveMaterialInstanceJson,
-        materialInstanceResolveResult.materialPath,
-        materialInstanceResolveResult.materialJson,
-        rendererBackend.SupportsDualSourceBlend(),
-        loadContext.prerenderSkin);
     // 所有连续透明输出都只能进入 forwardTransparent；写深度模式只改变该材质
     // pipeline 的 DepthWrite 状态，不允许借用 Geometry 的多 MRT 合同。
     if (IsTransparentRenderMode(loadPlan.shaderVariantKey.renderMode) &&
@@ -501,6 +520,28 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                     shadowBuildResult.shaderArtifact,
                     shadowBuildResult.reloadRecipe);
             }
+
+        }
+    }
+    // Material cache key 不包含 pass 名；M_shadow 会被 CSM 与 LocalShadow
+    // 共用，而它在 Shadow pass 创建时不会构建 LocalShadow 管线。因此这里
+    // 对缓存命中的材质也补建一次；已有管线时直接跳过。
+    if (renderPass.type != RenderGraphPassType::Shadow &&
+        !material->GetLocalShadowPipeline())
+    {
+        MaterialShadowPipelineBuildResult localShadowBuildResult =
+            BuildMaterialLocalShadowPipeline(
+                pipelineFactory,
+                loadContext.renderGraph.FindCanonicalLocalShadowPass(),
+                loadPlan,
+                *material,
+                loadContext.graphicsCandidateState);
+        if (localShadowBuildResult.pipeline)
+        {
+            material->SetLocalShadowPipeline(
+                std::move(localShadowBuildResult.pipeline),
+                localShadowBuildResult.shaderArtifact,
+                localShadowBuildResult.reloadRecipe);
         }
     }
     const auto& shaderParameters = effectiveMaterialInstanceJson["parameters"];

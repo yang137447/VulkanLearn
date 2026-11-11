@@ -224,6 +224,24 @@ EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
     return actor;
 }
 
+EditorSceneActorSnapshot BuildParticleActor(const World& world, const WorldParticleSystem& system)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::ParticleSystem;
+    actor.worldGeneration = world.GetGeneration();
+    actor.scenePath = world.GetScenePath();
+    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::ParticleSystem, system.name);
+    actor.displayName = system.name;
+    // 隐藏的粒子系统仍保留大纲行：作者需要能重新打开眼睛，隐藏不等于销毁。
+    actor.visible = system.visible;
+    actor.position = system.scenePosition;
+    actor.rotation = system.sceneRotation;
+    actor.scale = system.sceneScale;
+    actor.particleAssetPath = system.assetPath;
+    actor.particleEmitterCount = static_cast<uint32_t>(system.asset.emitters.size());
+    return actor;
+}
+
 } // namespace
 
 std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const World& world)
@@ -355,6 +373,19 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
         actors.push_back(BuildCameraActor(world, *world.GetCamera()));
 
     actors.push_back(BuildEnvironmentActor(world));
+
+    // unordered_map 的遍历顺序不稳定；大纲要求同一 World 的 actor 顺序可复现。
+    std::vector<const WorldParticleSystem*> particleSystems;
+    particleSystems.reserve(world.GetParticleSystems().size());
+    for (const auto& entry : world.GetParticleSystems())
+        particleSystems.push_back(&entry.second);
+    std::stable_sort(particleSystems.begin(), particleSystems.end(),
+        [](const WorldParticleSystem* left, const WorldParticleSystem* right)
+        {
+            return left->name < right->name;
+        });
+    for (const WorldParticleSystem* system : particleSystems)
+        actors.push_back(BuildParticleActor(world, *system));
 
     // 场景 JSON 没有作者标记，无法区分"没写 wind"与"写了零风"：默认零风
     //（强度 0 且阵风关闭）不产生一行空的 Scene Wind，有风时才发布这一行。

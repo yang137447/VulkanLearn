@@ -57,6 +57,28 @@ GraphicsPipelineLayoutDesc BuildMaterialSurfacePipelineLayout(
     layoutDesc.setBindings[MaterialSetIndex] =
         descriptorSchema.GetSetBindings();
 
+    // Set 0/2 是引擎拥有的逐对象/全局合同，可能被 Surface、ShadowDepth 与
+    // LocalShadow 的不同阶段共同消费。这里统一声明 Vertex|Fragment，
+    // 使同一批 MI descriptor set 能绑定到所有材质 pass，而不会因为某个
+    // pass 只在片元阶段新增 UBOGlobal 字段而出现 layout 不兼容。
+    for (const uint32_t engineSetIndex : {GlobalSetIndex, ObjectSetIndex})
+    {
+        layoutDesc.overrideSets[engineSetIndex] = true;
+        for (const ShaderBinding& reflectedBinding : reflectedShaderBindings)
+        {
+            if (reflectedBinding.set != engineSetIndex)
+            {
+                continue;
+            }
+            ShaderBinding engineBinding = reflectedBinding;
+            engineBinding.stageFlags |=
+                vk::ShaderStageFlagBits::eVertex |
+                vk::ShaderStageFlagBits::eFragment;
+            layoutDesc.setBindings[engineSetIndex].push_back(
+                std::move(engineBinding));
+        }
+    }
+
     // Set 3 的物理布局由 RenderGraph 输入集合决定，而不是由当前 shader
     // 反射出的“实际使用子集”决定。这样同一个 pass 下不同 renderMode /
     // macro 组合的材质变体都能复用该 pass 的 descriptor set，而不必各自一套布局。

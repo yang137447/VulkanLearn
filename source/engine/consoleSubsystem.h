@@ -27,8 +27,9 @@ public:
     void Update();
 
     // 启动参数携带的控制台脚本。首帧时环境贴图、CLUT 与 swapchain 内容都还没稳定，
-    // 立即执行 screenshot 只会采到无效画面，因此延迟 delayFrames 帧后再按原顺序
-    // 一次性提交。提交走 DebugConsole::SubmitCommandLine，与手输命令同一条解析路径。
+    // 立即执行 screenshot 只会采到无效画面，因此延迟 delayFrames 帧后按原顺序
+    // 每帧提交一条。命令之间可跨帧生效；提交走 DebugConsole::SubmitCommandLine，
+    // 与手输命令同一条解析路径。
     // 单条命令可用 "@<frame> " 前缀覆盖提交帧，便于在同一进程里做参数扫描/多距离截图。
     void QueueLaunchCommands(std::vector<std::string> lines, int delayFrames);
 

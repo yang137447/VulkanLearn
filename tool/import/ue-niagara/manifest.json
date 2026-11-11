@@ -1,0 +1,545 @@
+{
+  "engineVersion": "5.8.4-58902052+++UE5+Release-5.8",
+  "project": "D:/YYBWorkSpace/UnrealProject/effect",
+  "assets": [
+    {
+      "id": "DinoDragon",
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/SK_DinoDragon",
+      "kind": "skeletal",
+      "class": "SkeletalMesh",
+      "materials": [
+        {
+          "index": 0,
+          "slotName": "DINO",
+          "material": {
+            "name": "DINO",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO.DINO",
+            "class": "Material"
+          }
+        },
+        {
+          "index": 1,
+          "slotName": "EYES",
+          "material": {
+            "name": "EYES",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/EYES.EYES",
+            "class": "Material"
+          }
+        }
+      ],
+      "skeleton": {
+        "skeletonAsset": {
+          "name": "SK_DinoDragon_Skeleton",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/SK_DinoDragon_Skeleton.SK_DinoDragon_Skeleton",
+          "class": "Skeleton"
+        },
+        "bones": [],
+        "error": "BoneNode: Property 'Name' for attribute 'name' on 'BoneNode' is protected and cannot be read"
+      },
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/SkeletalMesh/DinoDragon/SK_DinoDragon.fbx",
+        "exported": true,
+        "size": 4251072,
+        "errors": []
+      }
+    },
+    {
+      "id": "Manny",
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Meshes/SKM_Manny_Simple",
+      "kind": "skeletal",
+      "class": "SkeletalMesh",
+      "materials": [
+        {
+          "index": 0,
+          "slotName": "M_HeadLegs",
+          "material": {
+            "name": "MI_Manny_01_New",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Manny/MI_Manny_01_New.MI_Manny_01_New",
+            "class": "MaterialInstanceConstant"
+          }
+        },
+        {
+          "index": 1,
+          "slotName": "M_Torso",
+          "material": {
+            "name": "MI_Manny_02_New",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Manny/MI_Manny_02_New.MI_Manny_02_New",
+            "class": "MaterialInstanceConstant"
+          }
+        }
+      ],
+      "skeleton": {
+        "skeletonAsset": {
+          "name": "SK_Mannequin",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Meshes/SK_Mannequin.SK_Mannequin",
+          "class": "Skeleton"
+        },
+        "bones": [],
+        "error": "BoneNode: Property 'Name' for attribute 'name' on 'BoneNode' is protected and cannot be read"
+      },
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/SkeletalMesh/Mannequins/SKM_Manny_Simple.fbx",
+        "exported": true,
+        "size": 2888352,
+        "errors": []
+      }
+    },
+    {
+      "id": "Quinn",
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Meshes/SKM_Quinn_Simple",
+      "kind": "skeletal",
+      "class": "SkeletalMesh",
+      "materials": [
+        {
+          "index": 0,
+          "slotName": "Quinn_01",
+          "material": {
+            "name": "MI_Quinn_01",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Quinn/MI_Quinn_01.MI_Quinn_01",
+            "class": "MaterialInstanceConstant"
+          }
+        },
+        {
+          "index": 1,
+          "slotName": "Quinn_02",
+          "material": {
+            "name": "MI_Quinn_02",
+            "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Quinn/MI_Quinn_02.MI_Quinn_02",
+            "class": "MaterialInstanceConstant"
+          }
+        }
+      ],
+      "skeleton": {
+        "skeletonAsset": {
+          "name": "SK_Mannequin",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Meshes/SK_Mannequin.SK_Mannequin",
+          "class": "Skeleton"
+        },
+        "bones": [],
+        "error": "BoneNode: Property 'Name' for attribute 'name' on 'BoneNode' is protected and cannot be read"
+      },
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/SkeletalMesh/Mannequins/SKM_Quinn_Simple.fbx",
+        "exported": true,
+        "size": 2672752,
+        "errors": []
+      }
+    },
+    {
+      "id": "ToyCow",
+      "uePath": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/SM_ToyCow",
+      "kind": "static",
+      "class": "StaticMesh",
+      "materials": [
+        {
+          "index": 0,
+          "slotName": "M_Toy_Cow",
+          "material": {
+            "name": "M_Toy_Cow",
+            "path": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Materials/M_Toy_Cow.M_Toy_Cow",
+            "class": "Material"
+          }
+        }
+      ],
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/StaticMesh/ToyCow/SM_ToyCow.fbx",
+        "exported": true,
+        "size": 186672,
+        "errors": []
+      }
+    },
+    {
+      "id": "Rifle",
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Mesh/SM_Rifle",
+      "kind": "static",
+      "class": "StaticMesh",
+      "materials": [
+        {
+          "index": 0,
+          "slotName": "lambert2",
+          "material": {
+            "name": "MI_Weapon_Rifle",
+            "path": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Materials/MI_Weapon_Rifle.MI_Weapon_Rifle",
+            "class": "MaterialInstanceConstant"
+          }
+        }
+      ],
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/StaticMesh/Rifle/SM_Rifle.fbx",
+        "exported": true,
+        "size": 464736,
+        "errors": []
+      }
+    }
+  ],
+  "materials": [
+    {
+      "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO",
+      "loaded": true,
+      "name": "DINO",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "DINO_A",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO_A.DINO_A",
+          "class": "Texture2D"
+        },
+        {
+          "name": "Dino_N",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/Dino_N.Dino_N",
+          "class": "Texture2D"
+        },
+        {
+          "name": "DINO_D",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO_D.DINO_D",
+          "class": "Texture2D"
+        }
+      ],
+      "scalars": [],
+      "vectors": [],
+      "sourceMaterial": {
+        "name": "DINO",
+        "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO.DINO",
+        "class": "Material"
+      }
+    },
+    {
+      "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Manny/MI_Manny_01_New",
+      "loaded": true,
+      "name": "MI_Manny_01_New",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Manny_01_BN",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_BN.T_Manny_01_BN",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Manny_01_D",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_D.T_Manny_01_D",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_UE_Logo_M",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Shared/T_UE_Logo_M.T_UE_Logo_M",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Manny_01_MRA",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_MRA.T_Manny_01_MRA",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D"
+        }
+      ],
+      "scalars": [],
+      "vectors": [],
+      "sourceMaterial": {
+        "name": "M_Mannequin",
+        "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/M_Mannequin.M_Mannequin",
+        "class": "Material"
+      }
+    },
+    {
+      "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/Quinn/MI_Quinn_01",
+      "loaded": true,
+      "name": "MI_Quinn_01",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Manny_01_BN",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_BN.T_Manny_01_BN",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Manny_01_D",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_D.T_Manny_01_D",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_UE_Logo_M",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Shared/T_UE_Logo_M.T_UE_Logo_M",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Manny_01_MRA",
+          "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_MRA.T_Manny_01_MRA",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D"
+        }
+      ],
+      "scalars": [],
+      "vectors": [],
+      "sourceMaterial": {
+        "name": "M_Mannequin",
+        "path": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Materials/M_Mannequin.M_Mannequin",
+        "class": "Material"
+      }
+    },
+    {
+      "path": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Materials/M_Toy_Cow",
+      "loaded": true,
+      "name": "M_Toy_Cow",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Toy_Cow_N",
+          "path": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Textures/T_Toy_Cow_N.T_Toy_Cow_N",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Toy_Cow_M",
+          "path": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Textures/T_Toy_Cow_M.T_Toy_Cow_M",
+          "class": "Texture2D"
+        }
+      ],
+      "scalars": [],
+      "vectors": [],
+      "sourceMaterial": {
+        "name": "M_Toy_Cow",
+        "path": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Materials/M_Toy_Cow.M_Toy_Cow",
+        "class": "Material"
+      }
+    },
+    {
+      "path": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Materials/MI_Weapon_Rifle",
+      "loaded": true,
+      "name": "MI_Weapon_Rifle",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Weapon_AORM",
+          "path": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_AORM.T_Weapon_AORM",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Weapon_N",
+          "path": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_N.T_Weapon_N",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Weapon_D",
+          "path": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_D.T_Weapon_D",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Weapon_Mask",
+          "path": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_Mask.T_Weapon_Mask",
+          "class": "Texture2D"
+        },
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D"
+        }
+      ],
+      "scalars": [],
+      "vectors": [],
+      "sourceMaterial": {
+        "name": "M_Weapon",
+        "path": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Materials/M_Weapon.M_Weapon",
+        "class": "Material"
+      }
+    }
+  ],
+  "textures": [
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO_A.DINO_A",
+      "name": "DINO_A",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/DINO_A.png",
+        "exported": true,
+        "size": 2213859,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/Dino_N.Dino_N",
+      "name": "Dino_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/Dino_N.png",
+        "exported": true,
+        "size": 3396015,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/DINO_D.DINO_D",
+      "name": "DINO_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/DINO_D.png",
+        "exported": true,
+        "size": 5505804,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/DinoDragon/Material/Eyeball.Eyeball",
+      "name": "Eyeball",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/Eyeball.png",
+        "exported": true,
+        "size": 5632,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_BN.T_Manny_01_BN",
+      "name": "T_Manny_01_BN",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Manny_01_BN.png",
+        "exported": true,
+        "size": 1605873,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_D.T_Manny_01_D",
+      "name": "T_Manny_01_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Manny_01_D.png",
+        "exported": true,
+        "size": 780431,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Shared/T_UE_Logo_M.T_UE_Logo_M",
+      "name": "T_UE_Logo_M",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_UE_Logo_M.png",
+        "exported": true,
+        "size": 79481,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/SkeletalMesh/Mannequins/Textures/Manny/T_Manny_01_MRA.T_Manny_01_MRA",
+      "name": "T_Manny_01_MRA",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Manny_01_MRA.png",
+        "exported": true,
+        "size": 780308,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+      "name": "T_Hermite2Noise_CenteredTiling",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Hermite2Noise_CenteredTiling.png",
+        "exported": true,
+        "size": 4970243,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Textures/T_Toy_Cow_N.T_Toy_Cow_N",
+      "name": "T_Toy_Cow_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Toy_Cow_N.png",
+        "exported": true,
+        "size": 698362,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/StaticMesh/ToyCow/Textures/T_Toy_Cow_M.T_Toy_Cow_M",
+      "name": "T_Toy_Cow_M",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Toy_Cow_M.png",
+        "exported": true,
+        "size": 153286,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_AORM.T_Weapon_AORM",
+      "name": "T_Weapon_AORM",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Weapon_AORM.png",
+        "exported": true,
+        "size": 5690,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_N.T_Weapon_N",
+      "name": "T_Weapon_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Weapon_N.png",
+        "exported": true,
+        "size": 5624,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_D.T_Weapon_D",
+      "name": "T_Weapon_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Weapon_D.png",
+        "exported": true,
+        "size": 5625,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Generic/Textures/T_Weapon_Mask.T_Weapon_Mask",
+      "name": "T_Weapon_Mask",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Weapon_Mask.png",
+        "exported": true,
+        "size": 6039,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Textures/T_Rifle_D",
+      "name": "T_Rifle_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Rifle_D.png",
+        "exported": true,
+        "size": 12209376,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Textures/T_Rifle_Combined_N",
+      "name": "T_Rifle_Combined_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Rifle_Combined_N.png",
+        "exported": true,
+        "size": 19019524,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Textures/T_Rifle_AORM",
+      "name": "T_Rifle_AORM",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Rifle_AORM.png",
+        "exported": true,
+        "size": 21458469,
+        "errors": []
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Weapons/Rifle/Textures/T_Rifle_Masks",
+      "name": "T_Rifle_Masks",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/T_Rifle_Masks.png",
+        "exported": true,
+        "size": 621847,
+        "errors": []
+      }
+    }
+  ],
+  "failures": []
+}

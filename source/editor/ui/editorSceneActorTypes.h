@@ -104,8 +104,8 @@ struct EditorSceneActorSnapshot
     // 展开状态的键，不是 DOM 索引，也不能当作 GPU 资源身份。
     std::string identity;
     std::string displayName;
-    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格与四类灯
-    // 真正有渲染侧可见性；相机/环境/场景风/风剖面固定为 true，也不显示眼睛控件。
+    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。网格/地形、四类灯
+    // 与粒子系统真正有渲染侧可见性；相机/环境/场景风固定为 true，也不显示眼睛控件。
     bool visible = true;
     // 只有 Mesh/Terrain 使用；其余类型为空。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
@@ -115,7 +115,7 @@ struct EditorSceneActorSnapshot
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;
-    // 作者根 TRS：网格取 scene JSON 根，节点取 SceneNode；旋转沿用 VL 的度制 XYZ。
+    // 作者根 TRS：网格与粒子系统取 scene JSON 根，节点取 SceneNode；旋转沿用 VL 的度制 XYZ。
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
     Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
     Eigen::Vector3f scale = Eigen::Vector3f::Ones();
@@ -143,6 +143,10 @@ struct EditorSceneActorSnapshot
     nlohmann::json scriptPhysics = nullptr;
     bool scriptSpawned = false;
     EditorSceneEnvironmentActor environment;
+    // 粒子系统只冻结展示所需的作者资产路径与发射器数量；模拟与 GPU 缓冲
+    // 仍归渲染器所有，UI 不持有 ParticleSystemAsset 或任何 GPU 句柄。
+    std::string particleAssetPath;
+    uint32_t particleEmitterCount = 0;
     // 场景级全局风对象。
     EditorSceneWorldWindActor worldWind;
 };

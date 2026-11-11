@@ -24,6 +24,10 @@ public:
         vk::SamplerAddressMode wrapMode = vk::SamplerAddressMode::eRepeat;
         // 数组纹理必须建 2D_ARRAY view；单图路径保持 false，避免把 2D 材质绑到数组 view。
         bool textureArray = false;
+        // 16-bit single-channel height sources keep R16_UNORM instead of RGBA8.
+        bool sixteenBitHeight = false;
+        // 材质纹理默认按历史合同翻转 V；全局世界对齐贴图必须保持烘焙朝向。
+        bool flipY = true;
         std::string debugName;
     };
 
@@ -64,9 +68,12 @@ public:
     {
         TextureIO::LoadOptions options;
         options.semantic = createDesc.semantic;
-        options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
+        options.flipY = createDesc.flipY
+            ? TextureIO::LoadOptions::FlipYMode::ForceOn
+            : TextureIO::LoadOptions::FlipYMode::ForceOff;
         options.transfer = createDesc.transfer;
-        options.forceChannels = 4;
+        options.forceSixteenBit = createDesc.sixteenBitHeight;
+        options.forceChannels = createDesc.sixteenBitHeight ? 1 : 4;
         return options;
     }
     // 压缩容器（DDS/KTX2 的 BC 块）不能在运行时按行翻转，朝向必须离线烘焙；

@@ -34,6 +34,17 @@ TEST(SceneObjectTypeSupport, AcceptsActorLevelForReturnFromAssetPreview)
     EXPECT_TRUE(HasSupportedSceneObjectTypes(scene));
 }
 
+TEST(SceneObjectTypeSupport, AcceptsDecalSceneObjects)
+{
+    const nlohmann::json scene = {
+        {"objects", {
+            {{"type", "decal"}},
+            {{"type", "camera"}}
+        }}
+    };
+    EXPECT_TRUE(HasSupportedSceneObjectTypes(scene));
+}
+
 TEST(SceneObjectTypeSupport, AcceptsTerrainScene)
 {
     EXPECT_TRUE(HasSupportedSceneObjectTypes(

@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "world/worldSnapshot.h"
+#include "particles/particleDataChannel.h"
 #include "world/sceneWindRuntime.h"
 
 namespace VL
@@ -64,11 +65,18 @@ struct RenderScene
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    // 逻辑模拟时间；粒子 compute 用它推进，Pause 时保持 0。
+    float simulationDeltaSeconds = 1.0f / 60.0f;
+    // World 级粒子数据通道的逐帧冻结副本；per-system userParameters
+    // 在运行时解析时覆盖同名通道。
+    ParticleDataChannelMap particleDataChannels;
     float hairSimulationDeltaSeconds = 0.0f;
     CameraSnapshot camera;
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;
     std::vector<LightSnapshot> lights;
+    std::vector<DecalSnapshot> decals;
+    std::vector<ParticleSystemSnapshot> particleSystems;
     EnvironmentSnapshot environment;
     // 本帧冻结的场景风作者目标。植被从原始目标出发，用自己的 CWindStateMgr
     // 语义缓动/阵风；头发读取下面的 resolvedWind。windTimeSeconds 由 RenderSystem

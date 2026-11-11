@@ -1,11 +1,14 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cstdint>
 #include <set>
 #include <string>
 #include <utility>
 
+#include "commonFunction.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
 #include "script/scriptScene.h"
@@ -53,6 +56,7 @@ void RetargetScriptMaterialInstance(
     mesh.materialInstanceKey = newKey;
 }
 
+// 负缩放是合法的镜像变换；只拒绝会让粒子 model 退化的零轴。
 bool ParseUint32(const std::string& text, size_t& position, uint32_t& value)
 {
     const size_t start = position;
@@ -613,6 +617,12 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     }
     meshObjects[std::move(name)] = std::move(object);
 }
+
+void World::AddDecal(std::string name, WorldDecal decal)
+{
+    decals[std::move(name)] = std::move(decal);
+}
+
 
 void World::AddSoftBodyObject(std::string name, WorldSoftBodyObject object)
 {

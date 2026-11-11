@@ -15,6 +15,7 @@
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
 | `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 90 条规则检查索引（81 个命名规则；生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
 | `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
+| `py -3 tool/validation/particle/particle_niagara_acceptance.py [--smoke] [--write-budget]` | 资源工作树与 UE 参考工程可访问；`--smoke` 需已构建 `main.exe` | 49 个 UE Niagara 目标的 README 映射、PS/gallery JSON、texture/mesh/MI 引用与 PS 静态指标；`--smoke` 逐 gallery headless 启动并采集 `Scene.LoadFailed`、VUID、粒子帧统计和 baseline+20% 性能预算 | 改 `Maps/SC_particle_ue_*`、`PS_*.json`、性能预算或增删 UE 特效后 |
 | `py -3 tool/validate_model_descriptors.py` | 资源工作树可访问 | 扫描正式 SM_/TF_ 描述符，共享无依赖 schema checker 支持同级引用、封闭字段与数值边界 | 改 model/TressFX schema 或正式描述符后 |
 | `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 81 个命名的架构边界规则（90 条检查；禁止词、cutover、运行时/编辑器所有权、游戏包闭包、生命周期句柄采用等） | 改 `source/**`、`source/CMakeLists.txt` 或游戏导出脚本后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
@@ -160,7 +161,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 724（723 后加 1 项 CPU 阶段表） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、HUD 卡片收缩与长 gameplay 换行、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认 |
+| `editor_ui_tests` | 当前全量（不写死计数；以 `--gtest_list_tests` 为准） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、HUD 卡片收缩与长 gameplay 换行、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认；粒子标签选择/模块持久化、结构按钮、曲线/Flipbook 表格、键盘 Delete/Alt+方向键/Ctrl+Z/Y 与输入框焦点隔离 |
 | `script_tests` | 当前注册 450（当前构建 list 实测；含 2 项成对原地动画预览及本批 2 项普通/游戏冻结时钟；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证及 TressFX 物理交互记录。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
 | `hair_asset_tests` | 254 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、`bendStiffness`/四角风/global shape/VSP 作者字段与 816-byte 参数打包、已删除 `fixedStep`/`maxSubsteps`/`windGust`/`windFrequency` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、物理阻力方向与段长无关性、四角锥形生成与 mixer 权重、阻尼系数直接指数、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验、胶囊 `bone` 解析/身份/缺骨错误、骨骼旋转移动端点/未绑定胶囊保持静态；`collision.mesh` 解析（path/cellSize/margin 范围、未知键、backend 限制、缓存身份、OBJ 顶点/多边形/负索引/行号错误、缺失代理）；有符号 SDF 网格 CPU 镜像（magnitude-first FloatFlip 编码、每帧变形域/退化 extent 钳制/固定 48..64 分辨率、clear+splat、三线性采样、中心差分梯度、退化梯度跳过、2 cm 内部点被推到表面外、0.5 cm 外部点只在 margin 内移动、盒/球/远点、蒙皮矩阵带动场）；代理权重转移（空间哈希最近点、等距下标确定性、归一化、全影响保留、超距拒绝、逐顶点 LBS 与单骨矩阵等价）；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；离线碰撞代理（规则立方体聚类与绕序、退化/重复三角形剔除、区域包含规则、输出字节确定性、开盒开放边、最小三角形下限）；新增 10 项复位计划/事件消费/缺失恢复/800B 参数、6 项相对 palette/冻结帧时钟、5 项世界历史换基/惯性（含 90 帧独立世界 Verlet oracle）、17 项源调度/阻尼/VSP/胶囊量纲、9 项原生 substep/reset 计划、12 项作者刚度曲线（解析/UBO/CPU/shader 语义）及 5 项 hair trace v3 文件往返/截断测试（含每帧 hairModel 与 SDF/胶囊穿透统计）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
@@ -171,7 +172,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 | `engine_launch_options_tests` | 12（已有 9 项，再加 3 项 `--present-mode`） | `--gpu-stats` 默认关闭/可接受/与既有参数组合；`--perf-jsonl` 默认关闭、路径必填、与 `--gpu-stats` 组合；`--present-mode` 默认 auto、四种值可解析、缺值/未知值拒绝；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
-| `material_instance_editor_production_tests` | 12 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成；独立 TressFX 草稿发布与保存反馈 |
+| `material_instance_editor_production_tests` | 当前全量（不写死计数；含粒子资产/编辑/历史/渲染辅助） | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成；粒子 loader/字段与结构编辑、曲线/Flipbook 编辑、文档历史、碰撞、包围球、剔除、LOD、纹理引用、排序 key 与图身份；独立 TressFX 草稿发布与保存反馈 |
 | `fracture_core_tests` | 73 | CPU 平面/球面破碎、橡皮膜、玻璃损伤、通用 `DestructibleProfile`、可注册 budget class、`PlateFracturePolicy` 支撑岛/阈值 |
 | `physics_runtime_tests` | 13 | Jolt 静态 proxy、投射物/attached/free shard/ground 的 role/contact/profile 事件、投射物生命周期与碎片落地 |
 | `audio_runtime_tests` | 21 | 32 voice、pan/距离/低通、WAV 解码边界、重采样/切片与混音 |
@@ -1079,6 +1080,14 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 
 ## 改动 → 验证
 
+屏幕空间玻璃折射的契约测试是 `GlassRefractionGraph.*`：
+`ctest --test-dir build -R '^GlassRefractionGraph\.' --output-on-failure`。
+它验证 `sceneColorCopy` 的格式/usage、copy pass 位于 `sky` 与
+`forwardTransparent` 之间、`forwardTransparent` 的 binding 8/9、
+`M_glassRefraction` 的 Unlit + `TransparentAlphaBlend` 路径，以及
+gallery MI 指向折射材质。画面验收运行 `SC_ue_impact_variants` headless
+screenshot；日志要求 `Scene.LoadFailed=0`、`VUID-` 0 次、stderr 为空。
+
 ### TressFX 物理交互入口
 
 复位/空间/时钟的验证分三类记账：
@@ -1955,3 +1964,229 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
   共享纹理数组与 layer key 生效。
 - `heightmapMargin=1` 让 mesh 边界法线读取本 tile 外的邻接样本；三级 LOD
   实跑报告 `drawnByLevel=1:49,2:207`，粗 LOD 的边界缝合环保持跨 tile 水密。
+
+## 2026-11-09 Pegasus 高度场对标与 v2 4×4 烘焙
+
+对当前 GN 4 km 高度图和 Houdini bg43 参考做了同网格对标，并把第一版造型
+参数、macro island/spine 以及实际出货链接进 producer。证据归档见
+[Pegasus 高度场对标记录](../rationale/pegasus-heightfield-comparison-record.md)。
+
+> **重要更正：** 下面的 502.5 m 参考是 **2 km bg43**
+> （`HoudiniPegasus`），不是 4 km 生产基准。4 km 基准
+> `Pegasus\decoded\_ref4km` 只有 147.7 m 高差、std 26.8 m、slope p95 11.7°；
+> 老 v1（123.7 m / 27.1 m / 12.0°）与它基本一致，v2 的 524.4 m 是相对
+> 4 km 基准的过冲。v2 只能算“2 km bg43 观感”标定，不能作为 4 km 出货结论。
+
+- 对标输入：`Generated/BlenderPegasusGN/Global/Source/heightmap_gn.png`
+  （1024²、4000 m、`heightScale=123.694 m`）与
+  `Generated/HoudiniPegasus/Source/heightmap.png`（4065²、2048.5 m、
+  `heightScale=512.707 m`）。
+- 对标结果（1024²，2 km bg43）：当前 123.7 m / std 27.1 m / slope p95
+  12.0° / curvature p95 0.0168；参考 502.5 m / 100.5 m / 64.4° / 0.298。
+  归一化 std 比 0.91×，但绝对高差 4.06×、`tan(slope p95)` 9.9×、
+  curvature 17.7×。归一化统计不能代替绝对量级验收。
+- 4 km 生产基准（`_ref4km/height_before_height.png`，1024²）：147.7 m /
+  26.8 m / 11.7° / 0.0169；老 v1 为 123.7 m / 27.1 m / 12.0° / 0.0180，
+  量级已对齐；v2 为 524.4 m / 144.1 m / 63.2° / 0.167，是 3.5× 过冲。
+- 参数扫描：`tune_g`（noise 1050/900 + detail 600/200 + macro island）
+  得到 524.4 m / 79.8 m / 67.6° / 0.285；加上 v2 侵蚀（`K=1e-4`）后
+  std=144.11 m。
+- 一键链修正：`build_pegasus_tiled.py` 现在调用
+  `build_pegasus_library_global.py` + `erode_pegasus_global.py` + split +
+  assemble；新资产输出 `Generated/BlenderPegasusGN_v2/`。
+- 场景相机：4×4 合并场景改为 3 km 高、6.4 km 远、`far_clip=12 km`；
+  默认 `SC_terrain_pegasus_4x4` 不再被新山体埋进地里。
+- 引擎加载（`Generated/BlenderPegasusGN_v2/SC_terrain_pegasus_4x4.json`，
+  1280×720）：`resident=841/1024`、`feedbackHits=825`、`missPages=0`、
+  `pending=0`；`terrainlayer` 为 `pageBudget=512`、`visibleLayers=4`、
+  `starvedFrames=0`；`terrainchunk` 为 `groups=256 chunks=256`、
+  远景 `drawnByLevel=2:256`。截图
+  `artifacts/v2/pegasus_v2.bmp`。
+- 回归：`terrain_tests` 294/294 通过；`py -3 tool\validate-docs.py` 通过；
+  修改的三个 Python producer 文件 `py_compile` 通过。
+- v2 的 `terrain parity` 未取得输出（当前 Debug 二进制的 console 没有打印
+  `TerrainParity`）；v1 的 CPU/GPU 页烘焙 parity 仍是
+  `idMismatchBytes=0 / weightMismatchBytes=0 / mismatchedTexels=0/16384`。
+- `terrain_erosion_tests` 7 项中 6 项通过；
+  `test_deposition_preserves_sediment_mass` 在
+  `21.0002 >= 21.0481` 处失败。该用例只跑 `terrain_erosion.py`，不经过本次
+  producer 改动，属于既有/环境敏感断言，本次没有修改。
+- 性能：当前 `build/` 为 Debug（`NDEBUG` 未定义），
+  `--perf-jsonl` 的 `fps≈10`、`gpuTotalMs≈0.52`、`submitPresent≈366–514 ms`
+  不能作为 Release/1080p 结论；Pegasus 4×4 的 1080p Release 与 Play 碰撞
+  验收仍未完成。
+- 画面已知限制：岛屿外围是 0 高度方板，water 掩膜尚未接入 `M_terrain`；
+  山体内部仍是较均匀的碎脊，缺少参考里的少数大山体和主河谷。下一步需要
+  macro landform/valley mask，而不是继续加噪声。
+- 阶段对比（Blender vs Houdini 4 km `_ref4km`，Houdini 数据用同一套
+  Blender hillshade/Cycles 渲染）：
+  `artifacts/stage_compare/S2_blender_v1_vs_houdini.png`、
+  `artifacts/stage_compare/S3_blender_v1_vs_houdini.png`、
+  `artifacts/stage_compare/S3_blender_v2_vs_houdini.png`、
+  `artifacts/stage_compare/S4_blender_v1_masks_vs_houdini.png`。
+- 中心放射伪影：`VL_HF_PegasusTerrain` 的 `VL_HF_Noise` 之前没有接 `Seed`，
+  两个 noise 实际都是 seed=0；`--seed` 只影响 macro island。已增加
+  `Noise Seed` / `Noise Distortion` 接线和 producer `--noise-distortion`，
+  detail 使用 `seed+37`。新候选
+  `Generated/BlenderPegasusGN_v1_seed17`（noise 360/2000 + detail 65/400、
+  seed 17、distortion 0、`K=3e-6`、无 macro island）得到
+  112.5 m / 21.0 m / 10.9° / 0.0173；参考 `_ref4km` 为
+  147.7 m / 26.8 m / 11.7° / 0.0169。中心固定放射特征消失，对比图
+  `artifacts/stage_compare/S2_blender_v1_seed17_vs_houdini.png`。
+  最终标定把 noise 调到 450/2200、detail 保持 65/400，得到
+  shape 149.1 m / 29.1 m / 12.5° / 0.0176、eroded
+  149.1 m / 29.2 m / 12.6° / 0.0190；资产
+  `Generated/BlenderPegasusGN_v1_calibrated/`，对比图
+  `artifacts/stage_compare/S2_blender_calibrated_vs_houdini.png`、
+  `S3_blender_calibrated_vs_houdini.png`。
+- `config/config.json` 的 `initScene` 已切到 calibrated 候选。
+- 疏密节奏候选 `Generated/BlenderPegasusGN_v1_rhythm`：`VL_HF_Noise` 增加
+  `Mask` 输入，preset 增加低频 `Rhythm` mask；参数
+  `noise 420/2200 + detail 110/400 + rhythm 1.0/1200`、seed 17、
+  distortion 0、无 macro island、`K=3e-6`。shape
+  144.7 m / 27.5 m / 12.9° / 0.0186，eroded 144.7 / 27.5 / 13.0° /
+  0.0200；参考 `_ref4km` 147.7 / 26.8 / 11.7° / 0.0169。对比图
+  `artifacts/rhythm/rhythm_final_compare.png`、
+  `artifacts/stage_compare/S2_blender_rhythm_vs_houdini.png`。
+  `config/config.json` 已切到 `v1_rhythm`。
+- 四段侵蚀候选 `Generated/BlenderPegasusGN_v1_rhythm_chain`：
+  `--erodibility 5e-6 --chain pegasus --chain-k 1.0`；chain
+  144.7 m / 27.5 m / 13.4° / 0.0227，参考 `_ref4km` after
+  147.7 / 26.9 / 11.9° / 0.0206。1e-4 会出现明显方向性条纹，3e-6
+  几乎不可见；5e-6 作为当前平衡点。对比图
+  `artifacts/stage_compare/S3_blender_rhythm_chain_vs_houdini.png`。
+  `config/config.json` 已切到 `v1_rhythm_chain`。
+- Houdini 分辨率链候选 `Generated/BlenderPegasusGN_v1_rhythm_resampled`：
+  `erode1/2 @512 → erode3/4 @256 + domain warp → upsample 1024`，
+  `--chain-resample --chain-warp`。结果 144.7 m / 28.0 m / 12.1° / 0.0094；
+  参考 after 147.7 / 26.9 / 11.9° / 0.0206。坡度对齐，curvature 偏低是
+  256→1024 升采样抹掉高频。对比图
+  `artifacts/chain_erode/chain_resampled_compare.png`、
+  `artifacts/stage_compare/S3_blender_rhythm_resampled_vs_houdini.png`。
+  `config/config.json` 已切到它。
+- S4 派生层按 Houdini remap 对齐：`bedrock` 改为侵蚀前 shape 的高度层
+  （不再是常量 1），`debris/sediment` 改为绝对米制后 0..1 clamp
+  （不再按峰值归一化）。最终 resampled 资产已重烘；对比图
+  `artifacts/stage_compare/S4_blender_rhythm_resampled_masks_vs_houdini.png`。
+  water/debris/sediment 的通道分布仍与 Houdini 有差异，材质尚未接入。
+- S4 材质层已接入：追加 `Scree Debris`（mask_gn_debris）和
+  `River Silt`（mask_gn_sediment），TR/MI 变为 6 层；本地 Megascans 仅
+  有 UE `.uasset`，本轮用 KiteDemo `layer_05/layer_01` 占位。
+- detail restore：`--chain-detail-restore 1.0` 把 resampled 链的
+  curvature 从 0.0094 拉回 0.0171；最终 144.7 / 27.8 / 12.7° / 0.0171，
+  参考 after 147.7 / 26.9 / 11.9° / 0.0206。最终资产
+  `Generated/BlenderPegasusGN_v1_rhythm_resampled/`（6 层），
+  对比图 `artifacts/chain_erode/restore_compare.png`、
+  `artifacts/stage_compare/S3_blender_final_rhythm_vs_houdini.png`。
+  water 材质、Megascans 源图导出、1080p Release 性能和碰撞仍未验。
+
+## 2026-11-09 Pegasus 河流阶段（PE_heightfield_paths）
+
+`tool/blender-terrain-import/river_paths.py` 把 Houdini Linescape 的
+「waypoint 路径 → 投影 → 切河床 → 双层 mask」搬到离线管线，插在侵蚀之后
+（paths HDA 消费侵蚀输出；侵蚀前切河床会被填平）。本轮重烘
+`Generated/BlenderPegasusGN_v1_rhythm_river/`：
+
+- 参数：noise 420/2200 + detail 110/400 + rhythm 1.0/1200、seed 17、
+  `K=5e-6`、`chain pegasus + resample + warp + detail restore 1.0`；
+  river `width 110 m / water core 60.5 m / depth 6 m / bank 160 m /
+  branches 3 / smooth 2`。
+- 高度：143.2 m / std 27.5 m / slope p95 12.3° / curvature p95 0.0153；
+  参考 `_ref4km` after 147.7 / 26.9 / 11.9° / 0.0206。
+- 覆盖：河道核心 mask > 0.5 占 3.62%，河岸环 7.71%；16 块 tile 的
+  `mask_gn_River Water_07.png` 均非空。
+- 层：TR/MI 追加 `River Bank` + `River Water`，共 **8 层**；
+  `_append_derived_layers` 只在 mask 存在时追加。
+- 引擎（1280×720，Debug，`--frame-limit 60`）：
+  `globalLayers=8 sourceSets=1 dedupedLayers=120`、
+  `visibleLayers=8 exactPages=8 starvedFrames=0`、
+  `resident=766/1024 feedbackHits=751 missPages=0 pending=0`、
+  `groups=256 chunks=256 meshDraws=256 drawnByLevel=1:62,2:194`。
+- 截图：`artifacts/river_stage/river_far.png`、
+  `artifacts/river_stage/river_close.png`；阶段对比
+  `artifacts/stage_compare/S5_blender_river_vs_houdini.png`、
+  `S5_river_masks_vs_houdini.png`。
+- 回归：`river_paths.py` / `build_pegasus_tiled.py` `py_compile` 通过。
+
+已知限制（写进 `documents/rationale/pitfalls.md`）：模糊 mask 必须归一化，
+8 邻域最短路会给出折线河，`M_terrain` 是 Opaque 所以「水面」不会是透明水体。
+河网密度仍低于 Houdini 的 10 轮 each-to-each；Megascans 仍是 KiteDemo 占位；
+1080p Release 性能与 Play 碰撞未复验。
+
+## 2026-11-09 Pegasus 路线切换：Houdini 导出直连
+
+> **2026-11-10 退役：** 本节测的是 `_ref4km`（`HFErodeExamples.hip` 放大到
+> 4 km 的示例，不是飞马岛）。`Generated/HoudiniPegasus4km/` 及
+> `SC_houdini_pegasus_4km_top/ground/veryclose` 已删除，下面只保留为历史证据；
+> 当前资产是 `Generated/HoudiniPegasusIsland/`。
+
+GN 复刻停止（`anisotropy` 1.03 vs Houdini 1.28），4 km 地形改为直接消费
+Houdini 导出。决定与数据映射见
+[路线切换记录](../rationale/pegasus-pipeline-pivot-houdini.md)。
+
+新增 `tool/houdini-terrain-import/prepare_pegasus_4km.py`：读取
+`Pegasus/decoded/_ref4km` 的 `height/water/debris/sediment/bedrock` 层，
+按 0.35 / 0.25 / 0.15 m 定标成权重，坡度 p90..p99 生成岩石权重，与兜底
+地表归一化后写 `Layer_g_*.png`，再调用既有 `prepare_pegasus_import.py`
+生成 manifest。
+
+实测：
+
+- `prepare_pegasus_import.py` 校验通过：1024×1024、5 层、
+  `sampledMaskSum=253.61`、`heightScaleCm=14739.28`、
+  `heightOffsetCm=-6261.47`；高度范围 −62.61..84.78 m。
+- 覆盖率（权重 > 0.5）：rock 3.46%、water 4.51%、debris 2.79%、
+  sediment 3.60%、base 83.66%。
+- 切片/合并复用原链路：16 tile、5 层 TR/MI、
+  `SC_terrain_pegasus_4x4.json`（19 objects）。
+- 引擎（1280×720，Debug，`--frame-limit 60`）：
+  `globalLayers=5 sourceSets=1 dedupedLayers=75`、
+  `visibleLayers=5 exactPages=5 starvedFrames=0`、
+  `resident=776/1024 feedbackHits=760 missPages=0 pending=0`、
+  `groups=256 chunks=338 meshDraws=256 drawnByLevel=1:63,2:193`。
+- 截图：`artifacts/houdini_ingest/houdini_far.png`、
+  `houdini_top.png`；层语义检查 `artifacts/houdini_ingest/houdini_layers.png`。
+
+`config/config.json` 现在指向
+`Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`（20 objects，
+含独立水面 `SeaSurface`）。下方 4 km 的驻留/帧率数字是在已退役的
+`HoudiniPegasus4km` 参考资产上测的，只作为历史证据，不代表当前资产。
+GN 资产 `Generated/BlenderPegasusGN_v1_rhythm_river/` 保留为对照，
+不再作为出货路径。
+
+### 构建类型对帧率的影响（2026-11-09 实测）
+
+同一份 `Generated/HoudiniPegasus4km/SC_terrain_pegasus_4x4.json`，
+1280×720、`--no-dev-ui`、`--frame-limit 240`：
+
+| 构建 | fps | cpuMs | submitPresent | worldSnapshot | GPU total | geometry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `build-vscode/development` | 180–240 | 4.2–5.6 | 2.9–3.7 ms | 0.86–1.2 ms | 0.9–1.1 ms | 0.5–0.7 ms |
+| `build`（Debug） | ~1.3 | ~750 | **503–742 ms** | 13–14 ms | 3.0–3.5 ms | 1.6–2.0 ms |
+
+差距几乎全部在 `submitPresent`（present/wait 路径），不是地形：
+`terrainFeedback` 两边都是 0.04–0.6 ms。**正常迭代用 development 构建，
+`build/` 只在查问题时用。** 证据：`artifacts/perf/develop.jsonl` /
+`artifacts/perf/debug.jsonl`。
+
+### 层 VT 的 mip 选择改为 page-UV 口径（2026-11-10）
+
+问题：feedback 用层的 `uvScale` 导数乘 `pagesPerSide × pageResolution` 选 mip，
+把“每个 repeat 的 texel 数”重复乘了一次 tiling 倍数，结果比正确值高 3–4 级；
+整片 4 km 只驻留 **5 个页**（每层 1 页），画面发糊，且远近都是同一 mip。
+
+修复：新增 `terrainLayerVTMath.glsl::TerrainLayerMipForPageUv`，用全局 page UV
+（`texCoord1`）的导数直接算“一个像素覆盖多少 mip0 页 texel”，再减去
+`log2(pageTableSize / pagesPerSide)` 的层页偏移。`pass/terrainFeedback.frag`
+（乘 screen/128 的 feedback 缩放）与 `mf_terrainLayerVT.glsl`（全分辨率）
+现在用同一套公式，驻留的页就是采样要用的页。
+
+实测（`Generated/HoudiniPegasus4km/`，development 构建，1280×720）：
+
+| 场景 | targetMips (0..6) | resident | budgetSets |
+|---|---|---:|---:|
+| 远景 `SC_terrain_pegasus_4x4.json` | `3789/11082/5387/657/0/0/0` | 425/512 | 20 |
+| 贴地 `SC_houdini_pegasus_4km_ground.json` | `10/556/913/442/0/0/0` | 425/512 | 20 |
+
+修复前两者都是单一 mip（远景全 mip3、驻留 5 页）。截图
+`artifacts/river_stage/river_far.png`（远景，细节恢复）。

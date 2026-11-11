@@ -30,7 +30,7 @@ Bone provider 的骨名、末帧偏移及根轨道都保持 source 语义，目�
 | 世界 target → Mesh/骨架模型空间 | `MotionWarpRuntime::Apply` | `source/animation/motionWarping.cpp:242-252,289-290` |
 | Bone provider 的 EndTime 骨骼偏移 | `MotionWarpRuntime::Apply` / `SampleBoneModelTransform` | `source/animation/motionWarping.cpp:294-304,190-198` |
 | Static provider 的 `Root(EndTime)*staticPose^-1` 平移偏移 | `MotionWarpRuntime::Apply` | `source/animation/motionWarping.cpp:312-326` |
-| 本 tick 平移结果 | `MotionWarpRuntime::Apply` → `rootMotionDelta` | `source/animation/skeletalPlayback.cpp:560-576` |
+| 本 tick 平移结果 | `MotionWarpRuntime::Apply` → `rootMotionDelta` | `source/animation/skeletalPlayback.cpp:203-221` |
 | 本 tick 旋转结果（yaw 增量） | `WarpedRootYawDelta` → `Apply(outYawDelta)` → `RootMotionYawDelta` | `source/animation/motionWarping.cpp:104-144,261-271`；`skeletalPlayback.cpp` |
 | 提交面：Montage id + target 位置 + 可选目标旋转 | C# `AnimationPlayback.PlayMontage` | `script/VulkanLearn.Runtime/AnimationPlayback.cs` |
 
@@ -38,7 +38,7 @@ Bone provider 的骨名、末帧偏移及根轨道都保持 source 语义，目�
 Actor 位置、渲染帧号或 tick 计数（`motionWarping.cpp:158-159`）。`DebugState` 用同一个
 `previousPosition` 给出 `waiting/active/done`（`motionWarping.cpp:124-136`）。
 `SkeletalPlayback::SetMotionWarpWindows` 整体替换当前实例的队列，`ClearMotionWarp`
-清空队列；两者都同时清空 `Warp` 读数（`skeletalPlayback.cpp:706-718`）。
+清空队列；两者都同时清空 `Warp` 读数（`source/animation/skeletalPlaybackMovement.cpp:286-296`）。
 `rootMotion`/`rootMotionTotal`/`rootMotionRemaining` 作为只读反馈发布
 （`worldAnimation.cpp` 的 `ScriptAnimationFeedback`），原生 warp 直接采样片段根轨道，
 不依赖这些 C# 反馈值。
@@ -133,12 +133,12 @@ out          = WrapYaw(thisFrame - totalYaw + rawYaw + extraYaw)
 （`RootTranslation`/`RootRotation`）；随后若窗口队列非空，就把这份模型空间位移、可视
 Mesh 矩阵、胶囊中心、骨架与 `actorYaw` 交给 `MotionWarpRuntime::Apply`，用返回值
 替换 `rootMotionDelta`、用 `outYawDelta` 替换 `rootMotionYawDelta`
-（`skeletalPlayback.cpp:560-576`）。返回的是本 tick 的完整模型空间根位移，不是增量修正；
+（`source/animation/skeletalPlayback.cpp:203-221`）。返回的是本 tick 的完整模型空间根位移，不是增量修正；
 四个 traversal 动作经 C# 转世界后交给 Jolt，C# 通过 `rootMotion`/`rootMotionYaw`
 反馈读取同一结果（`worldAnimation.cpp` 的 `ScriptAnimationFeedback`）。队列为空时保留
-原始根位移/根 yaw，并清空 `Warp` 读数（`skeletalPlayback.cpp:566-576`）。`Apply` 需要
+原始根位移/根 yaw，并清空 `Warp` 读数（`source/animation/skeletalPlayback.cpp:212-221`）。`Apply` 需要
 可视 Mesh 世界矩阵和胶囊中心；`Tick` 允许两者缺省，缺省时不调用 `Apply`，该 tick 保留
-原始根位移与根 yaw（`skeletalPlayback.cpp:564-572`）。
+原始根位移与根 yaw（`source/animation/skeletalPlayback.cpp:212-219`）。
 
 `Apply` 的求值顺序是：
 
@@ -173,7 +173,8 @@ Mesh 矩阵、胶囊中心、骨架与 `actorYaw` 交给 `MotionWarpRuntime::App
 `scale * shearXY * shearXZ`，shear 写矩阵第 0 列（`motionWarping.cpp:340-411`），再变换
 回原坐标系。它只做平移；旋转由独立的 `WarpedRootYawDelta` 写 yaw 通道。根 yaw 默认由
 播放器从原始根旋转发布；只要有窗口执行旋转 warp，`outYawDelta` 就替换为本 tick 的
-warp 结果（`skeletalPlayback.cpp` 的 `Tick`/`TickMontageSections`）。
+warp 结果（`skeletalPlayback.cpp` 的 `Tick` 与 `skeletalPlaybackMovement.cpp` 的
+`TickMontageSections`）。
 
 多 section Montage 的 `TickMontageSections` 会先累加各 sub-step 的根平移/yaw，再在 tick
 末尾调用一次 `Apply`（`previousTime → 最终 position`）。因此“同一 tick 内多次段跳变 +
@@ -391,7 +392,7 @@ stand、Climb walk、Hurdle(Auto) 各 2 次，8/8 grounded、无 ABORT/REJECT；
 | EndTime 之后的根位移作为 extra 加回 | `motionWarping.cpp:284-287,334-335` |
 | `subtractRemainingRootMotion` 从 target 扣除片段末尾剩余根位移 | `motionWarping.cpp:327-329`；`motionWarpingTests.cpp` |
 | 多窗口同 tick 激活时最后一个实际平移/旋转的窗口覆盖结果 | `motionWarping.cpp:252-337`；`motionWarpingTests.cpp` |
-| 本 tick `rootMotionDelta` 被 warp 返回值替换 | `skeletalPlayback.cpp` 的 `Tick`/`TickMontageSections` |
+| 本 tick `rootMotionDelta` 被 warp 返回值替换 | `skeletalPlayback.cpp` 的 `Tick`；`skeletalPlaybackMovement.cpp` 的 `TickMontageSections` |
 | 旋转只走 yaw 通道，target 世界朝向减 Actor yaw | `motionWarping.cpp:104-144`；`motionWarpingTests.cpp` |
 | 旋转与平移独立，平移 early-out 不跳过旋转 | `motionWarping.cpp:261-282`；`motionWarpingTests.cpp` |
 | 非 Slerp/缺目标旋转保持原始 yaw | `motionWarping.cpp:261-271`；`animationScriptData.cpp` |

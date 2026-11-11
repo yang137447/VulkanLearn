@@ -45,6 +45,8 @@
 | `shader-build-cache.md`、`shader-hot-reload.md`、`shader-structure-and-material-function.md` | shader 缓存、热重载、结构与材质函数 |
 | `material-mesh-pass-composition.md`、`csm-shadow-map-m1.md` | 材质求值/pass 组合与 CSM |
 | `environment-update-scheduler.md`、`texture-asset-json-v1.md`、`asset-organization.md` | 环境更新调度、贴图资产格式、资源组织 |
+| `particle-system.md` | Niagara 式 GPU 粒子资产、模拟、billboard pass 与当前边界 |
+| `glass-refraction.md` | sceneColorCopy + G-buffer 法线的屏幕空间玻璃折射、参数与边界 |
 | `vl-offline-rendering.md` | 离线渲染核心的所有权与边界 |
 | `scene-wind.md` | 场景全局风对象的 JSON 合同、World 风状态与风时间 tick |
 | `vegetation-instancing.md` | VEG 静态实例资产、实例顶点 ABI、instanced draw 与实例包围盒 |

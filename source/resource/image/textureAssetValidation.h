@@ -20,7 +20,8 @@ inline void ValidateTextureAssetJson(const nlohmann::json& asset)
             entry.key() != "sources" &&
             entry.key() != "displacementSources" &&
             entry.key() != "colorSpace" && entry.key() != "mipmaps" && entry.key() != "filter" &&
-            entry.key() != "wrapMode" && entry.key() != "channelsDescription")
+            entry.key() != "wrapMode" && entry.key() != "channelsDescription" &&
+            entry.key() != "bitDepth" && entry.key() != "flipY")
             throw std::invalid_argument("Unknown texture field: " + entry.key());
     for (const char* field : {"name", "colorSpace"})
         if (!asset.at(field).is_string() || asset.at(field).get<std::string>().empty())
@@ -72,6 +73,13 @@ inline void ValidateTextureAssetJson(const nlohmann::json& asset)
     }
     if (asset.contains("mipmaps") && !asset.at("mipmaps").is_boolean())
         throw std::invalid_argument("Texture mipmaps must be boolean");
+    if (asset.contains("bitDepth") &&
+        (!asset.at("bitDepth").is_number_integer() ||
+         (asset.at("bitDepth").get<int>() != 8 &&
+          asset.at("bitDepth").get<int>() != 16)))
+        throw std::invalid_argument("Texture bitDepth must be 8 or 16");
+    if (asset.contains("flipY") && !asset.at("flipY").is_boolean())
+        throw std::invalid_argument("Texture flipY must be boolean");
     if (asset.contains("channelsDescription"))
     {
         const auto& channels = asset.at("channelsDescription");

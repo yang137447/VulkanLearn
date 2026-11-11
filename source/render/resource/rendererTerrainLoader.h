@@ -156,7 +156,7 @@ struct TerrainStreamingState
     // layerForceMip 原子，渲染线程帧首把值写进这些实例；weak_ptr 不会让
     // MI 的生命周期越过 World 资源包。
     std::vector<std::weak_ptr<MaterialInstance>> layerVTMaterials;
-    // -1 = 自动 mip；0..4 = 强制目标 mip。Console 写、渲染线程读。
+    // -1 = 自动 mip；0..6 = 强制目标 mip。Console 写、渲染线程读。
     std::atomic<int32_t> layerForceMip{-1};
     // 渲染线程最后写入 M_terrain 的值，避免每帧重复 SetParameter。
     float lastAppliedLayerForceMip = -1.0f;

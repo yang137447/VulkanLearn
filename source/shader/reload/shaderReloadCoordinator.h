@@ -58,8 +58,10 @@ struct MaterialGraphicsReloadPlan
     MaterialDescriptorSchema descriptorSchema;
     GraphicsShaderVariantArtifact activeSurfaceArtifact;
     std::optional<GraphicsShaderVariantArtifact> activeShadowArtifact;
+    std::optional<GraphicsShaderVariantArtifact> activeLocalShadowArtifact;
     std::optional<size_t> surfaceBuildIndex;
     std::optional<size_t> shadowBuildIndex;
+    std::optional<size_t> localShadowBuildIndex;
 };
 
 struct ShaderReloadPlan
@@ -104,9 +106,11 @@ struct MaterialGraphicsReloadCandidate
     MaterialGraphicsReloadPlan plan;
     GraphicsShaderVariantArtifact surfaceArtifact;
     std::optional<GraphicsShaderVariantArtifact> shadowArtifact;
+    std::optional<GraphicsShaderVariantArtifact> localShadowArtifact;
     std::vector<ShaderBinding> activeShaderBindings;
     bool replaceSurface = false;
     bool replaceShadow = false;
+    bool replaceLocalShadow = false;
 };
 
 struct ShaderReloadCandidateBatch

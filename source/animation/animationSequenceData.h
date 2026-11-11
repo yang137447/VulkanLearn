@@ -34,6 +34,49 @@ struct SequenceNotify
     float EndTime() const { return time + duration; }
 };
 
+// Sequence 级同步标记。名称按作者原样保留（Echo 使用 Foot_L/Foot_R），
+// time 为秒、clip-local；允许同名标记按时间重复出现。
+struct SyncMarker
+{
+    std::string name;
+    float time = 0;
+};
+
+// UE EAnimGroupRole / EAnimSyncMethod 的显式镜像。AnimBP 的 Sequence Player
+// 拥有组、角色、起始位置和循环开关，不是 AnimSequence 自带属性。
+enum class SyncRole
+{
+    CanBeLeader,
+    AlwaysFollower,
+    AlwaysLeader,
+    TransitionLeader,
+    TransitionFollower,
+    ExclusiveAlwaysLeader
+};
+enum class SyncMethod
+{
+    DoNotSync,
+    SyncGroup,
+    MarkerSync,
+    Graph
+};
+// UE EAnimSyncGroupScope 的显式镜像。Local 只在一个播放器/组件内同步，
+// Component 允许同一 Actor 的网格组件共享一个组；默认 Local 与 Echo 资产一致。
+enum class SyncGroupScope
+{
+    Local,
+    Component
+};
+struct PlayerBinding
+{
+    std::string syncGroup;
+    SyncRole syncRole = SyncRole::CanBeLeader;
+    SyncMethod syncMethod = SyncMethod::DoNotSync;
+    SyncGroupScope syncGroupScope = SyncGroupScope::Local;
+    float startPosition = 0;
+    bool loop = true;
+};
+
 // Sequence sidecar 是曲线与序列级 notify 的唯一运行时来源；骨骼 TRS 仍由 FBX 承载。
 // 时间语义：秒、clip-local；duration 是片段时长，采样/notify 都用同一时间轴。
 struct SequenceData
@@ -56,8 +99,9 @@ struct SequenceData
     std::vector<std::string> tracks;
     std::vector<FloatCurve> curves;
     std::vector<SequenceNotify> notifies;
-    // syncMarkers / source 第一切片原样保留，不执行；dump 后的 JSON 文本。
-    std::string syncMarkersJson;
+    std::vector<SyncMarker> syncMarkers;
+    std::vector<PlayerBinding> players;
+    // source 第一切片原样保留；dump 后的 JSON 文本。
     std::string sourceJson;
     // sidecar 文件 BLAKE3-256 hex；由 loader 在读取文件字节后写入。
     std::string sourceDigest;
@@ -69,6 +113,12 @@ SequenceData ParseSequence(const nlohmann::json& json, std::string_view basePath
 // 曲线名查找大小写不敏感；缺失返回 nullptr。
 const FloatCurve* FindCurve(const SequenceData& sequence, std::string_view name);
 bool HasCurve(const SequenceData& sequence, std::string_view name);
+
+const char* SyncRoleName(SyncRole role);
+const char* SyncMethodName(SyncMethod method);
+const char* SyncGroupScopeName(SyncGroupScope scope);
+// 严格匹配 "Local"/"Component"；未知值返回 false，由导入器拒绝而不是猜默认值。
+bool ParseSyncGroupScope(std::string_view value, SyncGroupScope& scope);
 
 // 秒、clip-local、键间线性、区间外 clamp 到首/末值、单键为常量。
 // 该函数是 C# CurveValue 的参考实现：缺失曲线返回 nullopt，非有限时间抛 invalid_argument。

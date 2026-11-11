@@ -1,6 +1,10 @@
 #ifndef VL_PASS_TEMPLATE_SHADOW_DEPTH_VERT_GLSL
 #define VL_PASS_TEMPLATE_SHADOW_DEPTH_VERT_GLSL
 
+#ifndef VL_LOCAL_SHADOW
+#define VL_LOCAL_SHADOW 0
+#endif
+
 #include "../../common/commonUbo.glsl"
 #include "../../common/function.glsl"
 #include "../materialContext.glsl"
@@ -23,6 +27,11 @@ layout(location = 12) in vec4 inInstanceParams;
 
 #if MATERIAL_USES_OPACITY_MASK
 layout(location = 0) out MaterialVaryings v2f;
+#endif
+#if VL_LOCAL_SHADOW
+// 局部阴影必须拿到世界位置来写八面体方向深度；和 MaterialVaryings
+// 错开 location，保持 alpha-clip 路径的原有插值布局不变。
+layout(location = 8) out vec3 vLocalShadowWorldPos;
 #endif
 
 void main()
@@ -47,6 +56,10 @@ void main()
     mat4 modelMatrix = uboM.model * instanceModel;
     vec4 worldPosition = modelMatrix * vec4(vertex.localPosition, 1.0);
     gl_Position = uboVP.projection * uboVP.view * worldPosition;
+
+#if VL_LOCAL_SHADOW
+    vLocalShadowWorldPos = worldPosition.xyz;
+#endif
 
 #if MATERIAL_USES_OPACITY_MASK
     MaterialVertexOutput outputVertex;

@@ -1,0 +1,121 @@
+#include <cmath>
+#include <limits>
+
+#include <gtest/gtest.h>
+
+#include "particles/particleBurst.h"
+#include "particles/particleAttributeBindings.h"
+
+using namespace VL;
+
+TEST(ParticleBurst, ZeroIntervalNeverRetriggers)
+{
+    EXPECT_FALSE(ParticleBurstCycleCrossed(0.0f, 100.0f, 0.0f));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(0.0f, 100.0f, -1.0f));
+}
+
+TEST(ParticleBurst, CrossingIntoNextCycleRetriggers)
+{
+    // 2.5 秒周期：2.4 -> 2.6 跨过 cycle 1。
+    EXPECT_FALSE(ParticleBurstCycleCrossed(2.0f, 2.4f, 2.5f));
+    EXPECT_TRUE(ParticleBurstCycleCrossed(2.4f, 2.6f, 2.5f));
+    // 恰好落在周期边界也算跨越。
+    EXPECT_TRUE(ParticleBurstCycleCrossed(0.0f, 2.5f, 2.5f));
+    // 大 dt 跨过多个周期只触发一次整池重生。
+    EXPECT_TRUE(ParticleBurstCycleCrossed(0.1f, 12.1f, 2.5f));
+}
+
+TEST(ParticleBurst, StalledOrBackwardTimeDoesNotRetrigger)
+{
+    EXPECT_FALSE(ParticleBurstCycleCrossed(3.0f, 3.0f, 1.0f));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(4.0f, 3.9f, 1.0f));
+}
+
+TEST(ParticleBurst, NonFiniteInputsAreIgnored)
+{
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(ParticleBurstCycleCrossed(0.0f, 1.0f, nan));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(0.0f, 1.0f, inf));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(nan, 1.0f, 1.0f));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(0.0f, inf, 1.0f));
+}
+
+TEST(ParticleBurst, LongRunningTimeStillCrossesOnBoundary)
+{
+    // 用 double 做除法，3600 秒附近仍能识别出 1 秒周期的跨帧。
+    EXPECT_TRUE(ParticleBurstCycleCrossed(3599.9f, 3600.1f, 1.0f));
+    EXPECT_FALSE(ParticleBurstCycleCrossed(3600.1f, 3600.9f, 1.0f));
+}
+
+TEST(ParticleBurst, EffectiveCountAndDelayPhaseFollowAuthoringContract)
+{
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 0), 512u);
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 64), 64u);
+    EXPECT_EQ(EffectiveParticleBurstCount(512, 1024), 512u);
+
+    // delay + phase = 1.5 s：只跨过这个起点时触发一次。
+    EXPECT_FALSE(ParticleBurstDue(0.0f, 1.4f, 2.0f, 1.0f, 0.5f));
+    EXPECT_TRUE(ParticleBurstDue(1.4f, 1.6f, 2.0f, 1.0f, 0.5f));
+    EXPECT_FALSE(ParticleBurstDue(1.6f, 3.4f, 2.0f, 1.0f, 0.5f));
+    EXPECT_TRUE(ParticleBurstDue(3.4f, 3.6f, 2.0f, 1.0f, 0.5f));
+}
+
+TEST(ParticleBurst, SpawnPerUnitConvertsDistanceToRateAndRejectsInvalidInput)
+{
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 10.0f, 0.1f), 50.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.0f, 10.0f, 0.1f), 0.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 0.0f, 0.1f), 0.0f);
+    EXPECT_FLOAT_EQ(
+        ParticleSpawnPerUnitRate(0.5f, 10.0f, 0.0f), 0.0f);
+}
+
+TEST(ParticleBurst, AttributeBindingsOverrideScalarSpawnFieldsOnly)
+{
+    ParticleEmitterAsset emitter;
+    emitter.spawnRate = 10.0f;
+    emitter.spawnPerUnit = 0.1f;
+    emitter.burstCount = 20;
+    emitter.maxParticles = 100;
+    emitter.gravity = Eigen::Vector3f(0, -9.8f, 0);
+    emitter.wind = Eigen::Vector3f::Zero();
+    emitter.sizeStart = 10.0f;
+    emitter.sizeEnd = 20.0f;
+    emitter.opacity = 1.0f;
+    emitter.attributeBindings = {
+        {"spawnRate", "Rate"},
+        {"spawnPerUnit", "Travel"},
+        {"burstCount", "Burst"},
+        {"gravity", "Gravity"},
+        {"wind", "Wind"},
+        {"sizeStart", "SizeStart"},
+        {"sizeEnd", "SizeEnd"},
+        {"opacity", "Opacity"}};
+    ParticleDataChannelMap channels;
+    channels["Rate"] = ParticleDataChannelValue::MakeFloat(50.0f);
+    channels["Travel"] = ParticleDataChannelValue::MakeFloat(0.5f);
+    channels["Burst"] = ParticleDataChannelValue::MakeInt(64);
+    channels["Gravity"] = ParticleDataChannelValue::MakeVec3(0, -20, 0);
+    channels["Wind"] = ParticleDataChannelValue::MakeVec3(1, 2, 3);
+    channels["SizeStart"] = ParticleDataChannelValue::MakeFloat(30.0f);
+    channels["SizeEnd"] = ParticleDataChannelValue::MakeFloat(40.0f);
+    channels["Opacity"] = ParticleDataChannelValue::MakeFloat(0.25f);
+    const ParticleBoundSpawnAttributes bound =
+        BindParticleSpawnAttributes(emitter, channels);
+    EXPECT_FLOAT_EQ(bound.spawnRate, 50.0f);
+    EXPECT_FLOAT_EQ(bound.spawnPerUnit, 0.5f);
+    EXPECT_EQ(bound.burstCount, 64u);
+    EXPECT_TRUE(bound.gravity.isApprox(Eigen::Vector3f(0, -20, 0)));
+    EXPECT_TRUE(bound.wind.isApprox(Eigen::Vector3f(1, 2, 3)));
+    EXPECT_FLOAT_EQ(bound.sizeStart, 30.0f);
+    EXPECT_FLOAT_EQ(bound.sizeEnd, 40.0f);
+    EXPECT_FLOAT_EQ(bound.opacity, 0.25f);
+
+    channels["Rate"] = ParticleDataChannelValue::MakeVec3(1, 2, 3);
+    const ParticleBoundSpawnAttributes fallback =
+        BindParticleSpawnAttributes(emitter, channels);
+    EXPECT_FLOAT_EQ(fallback.spawnRate, 10.0f);
+}

@@ -10,6 +10,7 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "particles/particleAsset.h"
 #include "../terrain/terrainAssetTypes.h"
 #include "scene/placementBinding.h"
 
@@ -27,6 +28,8 @@ struct SceneAssetObjectPlan
     std::string objectName;
     std::string objectType;
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
+    // particleSystem 的 PS_*.json 在场景校验阶段冻结，WorldBuilder 不再重新读盘。
+    std::optional<VL::ParticleSystemAsset> particleAsset;
     // 地形对象在场景预检阶段完成 TR 解析与高度图解码；WorldBuilder 仍只消费
     // 渲染器派生的 MeshObjectBuildPlan，不引入第二个 World 地形类型。
     std::optional<VL::TerrainBuildPlan> terrainBuildPlan;

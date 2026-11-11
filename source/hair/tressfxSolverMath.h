@@ -290,6 +290,25 @@ inline Eigen::Vector3f TressfxGlobalShapePull(const Eigen::Vector3f& initialPos,
     return tempPos + stiffness * (initialPos - tempPos);
 }
 
+// 重力预补偿：按实际更新顺序（先 Verlet 重力，再 global shape）求不动点。
+//   x'  = x + g dt²
+//   x'' = x' + k (target - x')
+// 令 x'' = x 且速度为零：
+//   0 = (1-k) g dt² + k (target - x)
+//   target = x - (1-k) g dt² / k
+// 连续弹簧模型给出 -g/k；离散顺序多出的 (1-k) 项来自重力已经先写进 x'，
+// 不能省。调用方传入的 gravityPerStep 必须已是同一坐标空间下的 g*dt²（厘米）。
+inline Eigen::Vector3f TressfxGlobalShapePullPrecompensated(
+    const Eigen::Vector3f& initialPos, const Eigen::Vector3f& tempPos,
+    const Eigen::Vector3f& gravityPerStep, float stiffness)
+{
+    if (!(stiffness > 0.0f))
+        return tempPos;
+    const Eigen::Vector3f target = initialPos -
+        gravityPerStep * ((1.0f - stiffness) / stiffness);
+    return tempPos + stiffness * (target - tempPos);
+}
+
 // TressFX 的 VSPStiffness 是作者曲线（DECLARE_SCALAR_ARRAY 最多 64 项），
 // 第 i 项 = 曲线在 i/N 处的值（TressFXComponent.cpp:687-691）。authored 非空且
 // 覆盖 localPoint 时直接使用作者值；否则沿用从根前缀（1）到梢部（0）的线性
