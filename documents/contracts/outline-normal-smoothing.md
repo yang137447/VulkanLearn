@@ -72,18 +72,24 @@
 
 ## C 的材质来源与一致性
 
-C 的描边宽度、颜色、fade、bias 和材质参数与经典 `M_gunOutlineB` 变体完全一致：
+C 沿用经典 `M_gunOutlineB` 变体的宽度曲线、颜色和 fade，但为了让单层覆盖和
+A 的观感一致，材质状态做了两处显式调整：
 
 - `MI_gun_outline_C.json` 引用 `M_gunOutlineSmooth.json`；它是 `M_gunOutlineB.json`
-  的副本，参数、shader 和 render mode 相同，只把 `cullMode` 改成 `None`；
+  的副本，`cullMode` 改为 `Back`，`u_viewBias` 设为 3.0（与 A 的抓帧偏置一致），
+  `u_outlineColor.a` 设为 0.85；
+- `M_gunOutlineSmooth.surface.glsl` 与 A 一样乘 `gl_FrontFacing`；`cull Back`
+  在光栅化前已经剔掉背面，因此实际只画单层正面壳，不会前后两层 alpha 叠加；
 - 场景 C 的 `OutlineWidth` 为 1.0，与经典 B 变体相同；
-- `u_viewBias` 使用材质默认值 0，C 没有额外偏置。
 
 C 只比经典 B 变体多两件事：描边 section 的顶点法线被 compute 焊接平滑，以及本体 section
-在 GBuffer mask 中写 1。`cullMode = None` 是 mask 技术的一部分：`cull Front` 会把
-平滑后圆角外沿的部分三角当作正面剔掉，造成轮廓局部断续；`cull None` + 本体 mask
-才能保留完整外沿。`M_gunOutlineB` 仍保持自己的 `cull Front`；当前 demo 场景只保留
-A/C 两把枪，B 资产作为参考变体保留。
+在 GBuffer mask 中写 1。`cull Back` 只保留正面，本体 mask 再裁掉壳压在本体上的像素。
+这是单层 alpha 的当前选择；如果开放网格在某些角度只剩背面，该局部会直接消失，
+此时需要退回 `cull None + facing` 或改用 stencil 单层。`M_gunOutlineB` 仍保持自己的
+`cull Front`；
+当前 demo 场景保留
+A/C/D 三把枪，B 资产作为参考变体保留。D 使用与 C 相同的平滑法线和本体 mask，
+只把膨胀从物体空间换到投影后的屏幕空间，用于并排比较。
 
 ## 本体 mask：GBuffer 而不是 stencil buffer
 
@@ -120,6 +126,35 @@ A/C 两把枪，B 资产作为参考变体保留。
 
 这表示 compute 输出与 CPU 参考方向一致（最大误差来自定点累加/舍入），没有反法线。
 如果画面再出现局部缺边，应先检查壳的 cull/mask，而不是继续怀疑 compute 法线。
+
+## D：投影后常量像素膨胀
+
+D（`M_gunOutlineD` / `MI_gun_outline_D`）与 C 共享同一份 mesh、平滑法线、
+`outlineMaskSections`、`cull Back + gl_FrontFacing` 的单层正面路径和
+`0.85` 的 alpha；唯一的材质差异在顶点阶段：
+
+1. 先把顶点法线转到视空间，并去掉沿视线的分量，得到落在视平面上的膨胀方向；
+2. 用投影矩阵得到该方向的 NDC 方向；
+3. 按 `u_outlineScreenFraction`（半宽 / 视口高度）计算 NDC 偏移；
+4. 通过 `invProjection` 与 `invView` 把该偏移反算回 local 空间，写回
+   `localPosition`，这样仍复用现有 `base.vert` 的投影路径。
+
+它解决的是“物体空间固定宽度随距离衰减、随视线夹角变化”的问题；它不改变
+法线方向本身的正确性，因此硬角处的圆角/挤窄仍可能残留。`u_outlineScreenFraction`
+在 `MI_gun_outline_D.json` 里按 A/C 的实测像素宽度反算：
+
+```text
+w_target = (w_A + w_C) / 2
+k_shell  = w_D_current / (f_current * viewportHeight)
+f_new    = w_target / (k_shell * viewportHeight)
+         = f_current * w_target / w_D_current
+```
+
+2026-11-02 的 1280x720 demo 截图实测 `w_A≈1.93 px`、`w_C≈2.19 px`、
+`w_D(f=0.0075)≈2.33 px`，因此
+`f_D = 0.0075 * (1.93+2.19)/2 / 2.33 ≈ 0.0066`。这里的 `k_shell` 是壳的
+cull/mask/正面覆盖带来的有效覆盖率，不能直接用 `f = w_px / H` 代替。
+移动时 C 的宽度会按距离曲线变化，D 则保持屏幕像素宽度。
 
 ## 帧内位置与资源生命周期
 

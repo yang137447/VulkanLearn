@@ -7,7 +7,7 @@
     },
     "renderStates": {
         "renderMode": "TransparentAlphaBlend",
-        "cullMode": "None"
+        "cullMode": "Back"
     },
     "macros": {},
     "parameters": {
@@ -17,7 +17,7 @@
                 0.5,
                 0.5,
                 0.5,
-                1.0
+                0.85
             ],
             "description": "neutral tint; rgb is scaled by u_outlineColorScale",
             "channels": {
@@ -99,6 +99,15 @@
                 "max": 10000
             },
             "description": "distance fade in centimeters"
+        },
+        "u_viewBias": {
+            "type": "float",
+            "default": 3.0,
+            "range": {
+                "min": 0,
+                "max": 50
+            },
+            "description": "view-space depth push; 0 = same depth policy as C"
         }
     },
     "textures": {},

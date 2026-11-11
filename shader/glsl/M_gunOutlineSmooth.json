@@ -7,7 +7,7 @@
     },
     "renderStates": {
         "renderMode": "TransparentAlphaBlend",
-        "cullMode": "None"
+        "cullMode": "Back"
     },
     "macros": {},
     "parameters": {
@@ -17,7 +17,7 @@
                 0.5,
                 0.5,
                 0.5,
-                1.0
+                0.85
             ],
             "description": "neutral tint; rgb is scaled by u_outlineColorScale",
             "channels": {
@@ -111,7 +111,7 @@
         },
         "u_viewBias": {
             "type": "float",
-            "default": 0.0,
+            "default": 3.0,
             "range": {
                 "min": 0,
                 "max": 50
