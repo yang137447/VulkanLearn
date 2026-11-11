@@ -1232,7 +1232,7 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/renderGraph.cpp" `
+    -RelativePath "source/renderGraphPassResources.cpp" `
     -Patterns @(
         'RetiredRenderGraphImageResource',
         'RetiredRenderGraphPassResource',
@@ -1480,6 +1480,10 @@ Test-FilePatternsAbsent `
     -RelativePaths @(
         "source/ui/uiSubsystem.h",
         "source/ui/uiSubsystem.cpp",
+        "source/ui/uiSubsystemDocuments.cpp",
+        "source/ui/uiSubsystemInput.cpp",
+        "source/ui/uiSubsystemActions.cpp",
+        "source/ui/uiSubsystemInternal.h",
         "source/ui/iEditorUiShell.h",
         "source/ui/rmlUiInterfaces.h",
         "source/ui/rmlUiInterfaces.cpp",

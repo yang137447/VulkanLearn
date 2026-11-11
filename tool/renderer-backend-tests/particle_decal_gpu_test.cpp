@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -44,7 +46,7 @@ TEST(ParticleDecalGpu, GatherShaderWritesCompactBoundedRecords)
 TEST(ParticleDecalGpu, RendererDispatchesGatherAndPublishesReadback)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer, "particle/particleDecalGather"));
     EXPECT_TRUE(Contains(

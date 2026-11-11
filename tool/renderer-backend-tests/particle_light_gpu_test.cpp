@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "particles/particleLightGpu.h"
+#include "particleSourceTestUtils.h"
 
 namespace
 {
@@ -114,6 +115,8 @@ TEST(ParticleLightGpu, EmitComputeWritesHeaderAndCentimeterIntensity)
 TEST(ParticleLightGpu, RenderSystemUsesGpuPathInsteadOfCpuMirror)
 {
     const std::string source = ReadSource("source/renderSystem.cpp");
+    const std::string runtime =
+        ReadSource("source/render/particles/particleRenderRuntime.cpp");
     EXPECT_EQ(
         source.find("particleLightRuntime.Update"),
         std::string::npos);
@@ -124,7 +127,7 @@ TEST(ParticleLightGpu, RenderSystemUsesGpuPathInsteadOfCpuMirror)
         source.find("SetParticleLightBuffers"),
         std::string::npos);
     EXPECT_NE(
-        source.find("ClearParticleLightBuffer"),
+        runtime.find("ClearParticleLightBuffer"),
         std::string::npos);
 }
 
@@ -163,7 +166,7 @@ TEST(ParticleLightGpu, FrameResourcesOwnPerImageFixedBuffer)
         std::string::npos);
 
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(
         renderer.find("particle/particleLightEmit"),
         std::string::npos);

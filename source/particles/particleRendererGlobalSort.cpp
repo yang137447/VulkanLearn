@@ -3,6 +3,22 @@
 namespace VL
 {
 
+namespace
+{
+
+uint32_t GlobalSortCapacity(uint64_t desired)
+{
+    uint32_t capacity = kParticleSortMinimumCapacity;
+    while (capacity < desired &&
+           capacity < kParticleGlobalSortCapacity)
+    {
+        capacity <<= 1;
+    }
+    return capacity;
+}
+
+} // namespace
+
 void ParticleRenderer::DestroyGlobalSortPool()
 {
     // 全局池可能在上一帧仍被 GPU 引用；重建/销毁只发生在发射器集合或

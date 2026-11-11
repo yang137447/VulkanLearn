@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -271,7 +273,7 @@ TEST(ParticleSceneLighting, LightingStrengthBlendsAuthoredColor)
         "clamp(frame.billboardLightParams.z, 0.0, 1.0)"));
 
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer,
         "emitter.asset.billboardLightingStrength"));
@@ -280,7 +282,7 @@ TEST(ParticleSceneLighting, LightingStrengthBlendsAuthoredColor)
 TEST(ParticleSceneLighting, RendererWritesDescriptorBindingsSixToNine)
 {
     const std::string source =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(source, "void ParticleRenderer::SetSceneLightingResources"));
     EXPECT_TRUE(Contains(source, ".setDstBinding(6)"));
     EXPECT_TRUE(Contains(source, ".setDstBinding(7)"));
@@ -352,7 +354,7 @@ TEST(ParticleSceneLighting, BillboardMaterialLobesFlowThroughUboAndGlobalPool)
         "offsetof(FrameUniforms, particleLightBrightnessColors) == 8752"));
 
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(renderer, "uniforms.billboardLightParams2"));
     EXPECT_TRUE(Contains(renderer, "emitter.asset.billboardSpecular"));
     EXPECT_TRUE(Contains(renderer, "emitter.asset.billboardRoughness"));
@@ -416,7 +418,8 @@ TEST(ParticleSceneLighting, ForwardScatteringPeaksAtBacklightAndFadesForward)
 
 TEST(ParticleSceneLighting, RenderSystemSuppliesIblAndLightBuffers)
 {
-    const std::string source = ReadSource("source/renderSystem.cpp");
+    const std::string source =
+        ReadSource("source/render/particles/particleRenderRuntime.cpp");
     EXPECT_TRUE(Contains(source, "void RenderSystem::ConfigureParticleSceneLighting()"));
     EXPECT_TRUE(Contains(source, "\"prefilteredEnvironmentCube\""));
     EXPECT_TRUE(Contains(source, "\"brdfLut\""));
@@ -662,7 +665,7 @@ TEST(LocalShadowSampling, PassesDeclareExplicitLocalShadowBindings)
 TEST(LocalShadowSampling, ParticlePipelineLayoutsMatchPassSetInputs)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     // 全局池与共享图形管线都必须显式覆盖 set 3，否则未使用 CSM 的
     // beam/global 会因反射裁掉 binding 而与 pass descriptor set 不兼容。
     EXPECT_TRUE(Contains(renderer, "localShadowMap.binding = 2;"));

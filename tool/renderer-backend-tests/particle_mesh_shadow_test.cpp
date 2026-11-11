@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -132,8 +134,8 @@ TEST(ParticleMeshShadow, LocalSpaceAndSizeCurveShareVisibleAndShadowPath)
     EXPECT_NE(bone.find("ParticleMeshWorldCenter(particle)"),
         std::string::npos);
 
-    const std::string renderer = ReadSource(
-        "source/particles/particleRenderer.cpp");
+    const std::string renderer =
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(renderer.find("emitter.asset.meshUseSizeCurve ? 1.0f : 0.0f"),
         std::string::npos);
     EXPECT_NE(renderer.find("emitter.asset.meshSizeScale"),

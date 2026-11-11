@@ -128,29 +128,29 @@ VL 的 SSBO 存的是 **hair 模型局部坐标（厘米）**，渲染时 vertex
 | 重力/风 | 世界向量 | 世界生成后乘 `M₃⁻¹`（`source/hair/tressfxSimulationParams.h:85-98`） | 力/方向协变；点级精确 |
 | Reset | 三份=`InitialPos`（世界米），return（patch 8438-8444）；host 仍在该 substep 录制 VSP/LocalShape/LengthWind/SDF（`TressFXCoreSimulation.cpp:1137-1214`） | `motion.y` 分支三份=`initialPos`（局部），return（`tressfxSimIntegration.comp:50-59`）；随后 `continue`，不跑后续 pass | 三份历史的写入等价；reset 帧的**最终姿态**不同：源会再受一轮约束/风/碰撞，VL 停在纯 rest |
 | 暂停但 placement 变化 | 源无独立“rebase”；世界表示下位置自然不动 | `motion.z` 只换基三份并 return（`tressfxSimIntegration.comp:67-76`） | 表示坐标变、世界状态不变 |
-| 丢 pose | 源 `MeshObject` 无效时直接 return / 走 rest 路径 | 保留上次 `frameContext`；placement 变化时把缓存矩阵也乘 `H`（`source/hair/hairSimulationPass.cpp:660-668`） | 缓存、SSBO、shader 同步换基 |
+| 丢 pose | 源 `MeshObject` 无效时直接 return / 走 rest 路径 | 保留上次 `frameContext`；placement 变化时把缓存矩阵也乘 `H`（`source/hair/hairSimulationPass.cpp:468-476`） | 缓存、SSBO、shader 同步换基 |
 | 首帧 | 初值来自 rest→world 或 reset | `TressfxModelHistory` 未初始化时 `HasPlacementChange` 必为 false（`source/hair/tressfxFrameContext.h:66-77`） | 首帧不会把初始 placement 当移动 |
 | 时钟 | 源按组件 `TimeStep` | `TressfxFrameClock` 冻结 GT 帧（`source/hair/tressfxFrameContext.h:94-117`） | 语义独立，本轮不改 |
-| 提交顺序 | 源每轮 `bResetPositions` 在首轮后清除（`TressFXCoreSimulation.cpp:1135`） | Integration 录制后统一 `modelHistory.Commit`（`source/hair/hairSimulationPass.cpp:728`），Reset/rebase 也会走到 | Reset/rebase 正确提交 |
+| 提交顺序 | 源每轮 `bResetPositions` 在首轮后清除（`TressFXCoreSimulation.cpp:1135`） | Integration 录制后统一 `modelHistory.Commit`（`source/hair/hairSimulationPass.cpp:639`），Reset/rebase 也会走到 | Reset/rebase 正确提交 |
 
 实现中的关键点已逐项核对：
 
 - `modelHistory.Commit` 在 `Integration` 之后、`rebaseOnly`/`Reset` 的 `continue`
-  之前（`hairSimulationPass.cpp:725-732`、`:741-751`），所以三种分支都提交当前 model。
-- `Reset` 时 `historyToCurrentLocal = Identity`（`:657-659`），而 shader 在
+  之前（`hairSimulationPass.cpp:633-644`、`:437-444`），所以三种分支都提交当前 model。
+- `Reset` 时 `historyToCurrentLocal = Identity`（`:464-467`），而 shader 在
   `motion.y` 分支先于任何换基就写满三份并 return，故 Identity 与源语义一致。
-- `rebaseOnly` 不更新 collider/SDF，也不录制 collision/SDF pass（`:672`、`:711-714`、
-  `:731-732`）。恢复首帧会先 `UpdateTressfxFrameContext`，再在 `:672-694` 重写
-  capsule/SDF palette，`:711-714` 重建 SDF 域；因此不会拿暂停期的旧 collider 做碰撞。
-  若恢复首帧没有 pose，则 `:660-668` 已用同一 `H` 换基缓存矩阵，collider/SDF 仍与
+- `rebaseOnly` 不更新 collider/SDF，也不录制 collision/SDF pass（`:437-444`、`:600-624`、
+  `:633-644`）。恢复首帧会先 `UpdateTressfxFrameContext`，再在 `:477-551` 重写
+  capsule/SDF palette，`:600-624` 重建 SDF 域；因此不会拿暂停期的旧 collider 做碰撞。
+  若恢复首帧没有 pose，则 `:468-476` 已用同一 `H` 换基缓存矩阵，collider/SDF 仍与
   SSBO 同空间。
-- 丢 pose 时缓存 `skinningMatrix` 与 `jointMatrices` 都用 `H` 左乘（`:664-667`），
+- 丢 pose 时缓存 `skinningMatrix` 与 `jointMatrices` 都用 `H` 左乘（`:472-475`），
   与 shader 对三份位置的 `H` 和 `w=1` 换基（`tressfxSimIntegration.comp:65-66,71`）一致。
 - shader 三处换基都显式 `vec4(xyz, 1.0)`，`w` 只作为 movable 标记保留/写回
   （`tressfxSimIntegration.comp:54-57,65-79,94`），没有把 `w=0` 当齐次坐标。
 - 首帧 `lastModel=Identity` 不会触发换基：`HasPlacementChange` 先看 `initialized`
   （`tressfxFrameContext.h:66-68`）；首帧 SSBO 初值就是局部 rest
-  （`source/renderableObject.cpp:344-349`），随后首帧计划为 Reset（InitialState/FirstPose）。
+  （`source/render/renderable/tressfxRenderable.cpp:293-298`），随后首帧计划为 Reset（InitialState/FirstPose）。
 
 ## 4. 等价性推导与适用边界
 
@@ -206,7 +206,7 @@ M_t p_new = x_cur + Decay (x_cur - x_prev) + (M_t,3 M_t,3⁻¹) g_world dt²
   VL 不能声称与源在 scale 下等价。剪切还会让局部各向异性度量与世界不同。
 - **暂停 rebase**：只改表示坐标，不推进时钟、不递增 `simulationFrame`、不跑
   constraint/collision；`state.simulationFrame` 与 pose 身份都不提交
-  （`hairSimulationPass.cpp:729-732`）。恢复首帧重建 collider/SDF，见 §3。
+  （`hairSimulationPass.cpp:639-644`）。恢复首帧重建 collider/SDF，见 §3。
 - **Reset**：三份历史 = 当前 placement/skinning 的 rest，速度清零；`H` 不影响结果。
   源也是三份全写，不是只钉根点。但源 host 在 reset 的同一 substep 仍会继续录制
   VSP/LocalShape/LengthWind/SDF（`TressFXCoreSimulation.cpp:1137-1214`），下一
@@ -220,7 +220,7 @@ M_t p_new = x_cur + Decay (x_cur - x_prev) + (M_t,3 M_t,3⁻¹) g_world dt²
   Reset。若首帧同时缺 pose，则 `InitialPos = identity*rest`（即未蒙皮 rest），
   直到首次 pose 的 `FirstPose` Reset 才对齐骨骼目标——这是明确的边界，不是换基 bug。
 - **多实例共享 buffer**：`TressfxSimulationOwner` 只有看到不同 `sceneObjectIdentity`
-  才判冲突并禁用模拟（`hairSimulationPass.cpp:602-614`；`tressfxSimulationOwner.h:12-33`）。
+  才判冲突并禁用模拟（`hairSimulationPass.cpp:600-624`；`tressfxSimulationOwner.h:12-33`）。
   同一 identity 的两个 placement 若共享 RenderableObject、但 model 不同，现有检查
   无法区分，会按第一个 draw 的 model 换基；这是未解决风险。
 - **CPU 后端**：`GuideSimulation`（`source/hair/tressfxDynamics.cpp:83-113`）存局部
@@ -269,7 +269,7 @@ M_t p_new = x_cur + Decay (x_cur - x_prev) + (M_t,3 M_t,3⁻¹) g_world dt²
   placement 序列”的 solver 步骤，不构成 GPU 轨迹读回证据。
 - 多骨蒙皮：VL 用全骨架 `bindToPoseMatrices`，旧资产回退 per-section
   `matrices`；后者的未参与关节 inverseBind 可能退化为绝对 model 变换
-  （`hairSimulationPass.cpp:632-635` 注释），不能据此声称与源逐点一致。
+  （`hairSimulationPass.cpp:633-634` 注释），不能据此声称与源逐点一致。
 - SDF 代理：VL 的逐顶点 LBS transfer 依赖最近绑定姿态身体顶点（`tressfxProxySkinning.cpp`），
   与源导出的 `.tfxbone` 权重是否逐点一致未核实；域每帧重建、裁剪与源 sparse
   distance/direction 链表也不完全相同。

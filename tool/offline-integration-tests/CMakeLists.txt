@@ -30,6 +30,8 @@ add_executable(vl_offline_coordinator_tests
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetCollisionAssets.cpp
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetParseEmitter.cpp
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetValidateEmitter.cpp
+    ${CMAKE_SOURCE_DIR}/source/particles/particleAssetParseEmitterModules.cpp
+    ${CMAKE_SOURCE_DIR}/source/particles/particleAssetValidateEmitterModules.cpp
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetLoader.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/textureIO.cpp

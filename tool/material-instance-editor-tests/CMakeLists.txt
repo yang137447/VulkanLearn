@@ -66,6 +66,9 @@ else()
     set(VL_ASSET_CORE_BASIC_SOURCES
         "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecPayload.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecPrimitives.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodecValidation.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
@@ -211,6 +214,8 @@ add_executable(material_instance_editor_production_tests
     ${VL_ASSET_CORE_FULL_SOURCES}
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntimePreview.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntimeState.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleSkeletalPreflight.cpp"
 )
 target_sources(material_instance_editor_production_tests PRIVATE
@@ -219,6 +224,8 @@ target_sources(material_instance_editor_production_tests PRIVATE
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetCollisionAssets.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetParseEmitter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetValidateEmitter.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetParseEmitterModules.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetValidateEmitterModules.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetLoader.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleCpuEmitterRuntime.cpp"
@@ -262,6 +269,8 @@ add_executable(particle_mesh_collision_tests
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetCollisionAssets.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetParseEmitter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetValidateEmitter.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetParseEmitterModules.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetValidateEmitterModules.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetLoader.cpp")
 

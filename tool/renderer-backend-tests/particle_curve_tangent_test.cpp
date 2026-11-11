@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -79,7 +81,7 @@ TEST(ParticleCurveTangent, ShaderAndUboContract)
         "offsetof(FrameUniforms, curveInterpolationParams) == 9136"));
 
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer, "ParticleCurveTangentScale("));
     EXPECT_TRUE(Contains(

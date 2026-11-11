@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <cmath>
 #include <fstream>
 #include <sstream>
@@ -91,11 +93,8 @@ TEST(ParticleLightBrightness, EmitShaderImplementsSameCurve)
 
 TEST(ParticleLightBrightness, RendererUploadsPerKeyColorMultipliers)
 {
-    std::ifstream input(std::string(VL_TEST_SOURCE_ROOT) +
-        "/source/particles/particleRenderer.cpp");
-    std::ostringstream stream;
-    stream << input.rdbuf();
-    const std::string source = stream.str();
+    const std::string source =
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(source.find("uniforms.particleLightBrightnessColors[keyIndex]"),
         std::string::npos);
     EXPECT_NE(source.find("key.color.x()"), std::string::npos);

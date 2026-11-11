@@ -552,7 +552,7 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     else if (action == "particle-revert-cancel")
     {
         panel.pendingParticleRevertPath.clear();
-    }
+    }
     else if (action == "resource-tool")
     {
         panel.resourceTransformTool = element.GetAttribute<std::string>("data-tool", "select");
@@ -742,6 +742,28 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     else if (action == "revert")
     {
         if (const auto* tab = panel.resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::ParticleSystem &&
+            panel.IsResourceEditorVisible())
+        {
+            const auto* authored = panel.ParticleDocument(tab->path);
+            if (authored == nullptr) return;
+            if (panel.particleCommandAwaitingSnapshot ||
+                panel.particleHistoryCommandAwaitingSnapshot ||
+                !panel.pendingParticleChanges.empty())
+            {
+                panel.localStatus =
+                    "Apply pending particle edits before reverting.";
+                return;
+            }
+            if (authored->dirty)
+                panel.pendingParticleRevertPath = tab->path;
+            else
+                panel.SubmitParticleAssetCommand(
+                    EditorCommandType::RevertParticleDocument,
+                    tab->path);
+            return;
+        }
+        if (const auto* tab = panel.resourceEditor.ActiveTab(); tab &&
             tab->kind == EditorAssetKind::Terrain && panel.IsResourceEditorVisible())
         {
             const auto* terrain = panel.TerrainDocument(tab->path);
@@ -759,6 +781,23 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     }
     else if (action == "validate")
     {
+        if (const auto* tab = panel.resourceEditor.ActiveTab(); tab &&
+            tab->kind == EditorAssetKind::ParticleSystem &&
+            panel.IsResourceEditorVisible())
+        {
+            if (panel.particleCommandAwaitingSnapshot ||
+                panel.particleHistoryCommandAwaitingSnapshot ||
+                !panel.pendingParticleChanges.empty())
+            {
+                panel.localStatus =
+                    "Apply pending particle edits before validating.";
+                return;
+            }
+            panel.SubmitParticleAssetCommand(
+                EditorCommandType::ValidateParticleDocument,
+                tab->path);
+            return;
+        }
         if (!panel.pendingEdits.empty())
         {
             panel.QueueEdit("validate", {EditorCommandType::ValidateMaterialInstanceDocument,
@@ -897,6 +936,12 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
             panel.discardBlueprintCloseSubmitted = false;
             return;
         }
+        if (panel.pendingCloseKind == EditorAssetKind::ParticleSystem)
+        {
+            panel.discardParticleThenClose = true;
+            panel.discardParticleCloseSubmitted = false;
+            return;
+        }
         panel.CloseDocument(panel.pendingClosePath, EditorDirtyDocumentPolicy::DiscardChanges);
         panel.pendingClosePath.clear();
         panel.saveThenClose = false;
@@ -914,7 +959,9 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
             return;
         }
         // 非活动页先选中以获得权威 revision；保存失败时不能关闭文档。
-        if (!panel.snapshot.activeDocument || panel.snapshot.activeDocument->assetPath != panel.pendingClosePath)
+        if (panel.pendingCloseKind != EditorAssetKind::ParticleSystem &&
+            (!panel.snapshot.activeDocument ||
+             panel.snapshot.activeDocument->assetPath != panel.pendingClosePath))
         {
             EditorCommandEnvelope command;
             command.type = EditorCommandType::SelectMaterialInstanceDocument;

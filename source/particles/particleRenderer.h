@@ -46,6 +46,8 @@ class RendererBackendVulkan;
 namespace Animation { struct SkeletalAsset; }
 struct RenderScene;
 struct ParticleSystemSnapshot;
+struct ParticleBoundSpawnAttributes;
+struct ParticleEmitterCullingResult;
 
 // renderSystem 每帧把已构建的 CSM 数据推给粒子渲染器。粒子管线有独立的
 // set 0 UBO，不能直接读取 UBOGlobal，因此这里显式拷贝所需子集。
@@ -1324,6 +1326,47 @@ private:
         float lifetime = 0.0f;
     };
     std::vector<PendingParticleRequest> pendingParticleRequests;
+    void FillEmitterSimulationUniformsPrimary(
+        EmitterResources& emitter,
+        FrameUniforms& uniforms,
+        const RenderScene& renderScene,
+        const ParticleBoundSpawnAttributes& boundSpawnAttributes,
+        const ParticleEmitterCullingResult& culling,
+        const std::string& key,
+        float spawnPerUnitRate,
+        float simulationStepSeconds,
+        float viewportHeightPixels,
+        float curveTangentScale,
+        float& lodRenderScale);
+    void FillEmitterSimulationUniformsRendering(
+        EmitterResources& emitter,
+        FrameUniforms& uniforms,
+        const ParticleBoundSpawnAttributes& boundSpawnAttributes,
+        bool meshLightingEnabled,
+        bool billboardLightingEnabled,
+        const Eigen::Vector3f& lightDirection,
+        const Eigen::Vector3f& lightColor,
+        float curveTangentScale);
+    void FillEmitterSimulationUniformsAuxiliary(
+        EmitterResources& emitter,
+        FrameUniforms& uniforms,
+        const RenderScene& renderScene,
+        uint32_t simulationSteps);
+    void RecordEmitterClearAndCounters(
+        vk::CommandBuffer commandBuffer,
+        EmitterResources& emitter);
+    void RecordEmitterRuntimeRequests(
+        vk::CommandBuffer commandBuffer,
+        EmitterResources& emitter,
+        const std::vector<PendingParticleRequest>& runtimeRequests);
+    void RecordGlobalParticleSort(
+        vk::CommandBuffer commandBuffer,
+        uint32_t imageIndex,
+        const RenderScene& renderScene);
+    void BuildParticleDrawOrder(
+        uint32_t imageIndex,
+        const RenderScene& renderScene);
+    void CollectParticleFrameGpuStats();
     // per-swapchain-image，由 RendererFrameResources 持有；这里只保存引用。
     std::vector<vk::Buffer> particleLightBuffers;
     uint32_t particleLightBufferGeneration = 0;

@@ -3,6 +3,26 @@
 namespace VL
 {
 
+namespace
+{
+
+constexpr uint32_t kParticleSortMaximumCapacity = 4096;
+
+uint32_t SortedCapacity(uint32_t maxParticles)
+{
+    uint32_t capacity = kParticleSortMinimumCapacity;
+    const uint32_t desired =
+        std::max(maxParticles, kParticleSortMinimumCapacity);
+    while (capacity < desired &&
+           capacity < kParticleSortMaximumCapacity)
+    {
+        capacity <<= 1;
+    }
+    return capacity;
+}
+
+} // namespace
+
 void ParticleRenderer::CreateBuffers(EmitterResources& emitter)
 {
     emitter.sortCapacity = SortedCapacity(emitter.asset.maxParticles);

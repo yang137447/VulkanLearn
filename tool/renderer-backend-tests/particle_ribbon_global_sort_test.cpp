@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -89,7 +91,7 @@ TEST(ParticleRibbonGlobalSort, GeometryHeaderHasNoSamplerOrStorageBinding)
 TEST(ParticleRibbonGlobalSort, SynchronizeAllowsAlphaRibbonAndCountsQuads)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer, "const bool ribbon =\n            emitter.asset.renderMode == \"ribbon\";"));
     EXPECT_TRUE(Contains(

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -40,7 +42,7 @@ TEST(ParticleRuntimeCommandShader, SimulateBindsRequestBufferAtBindingNine)
 TEST(ParticleRuntimeCommandShader, RendererOwnsBoundedRequestQueue)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(renderer, "RequestParticleKill"));
     EXPECT_TRUE(Contains(renderer, "RequestParticleSpawnAt"));
     EXPECT_TRUE(Contains(renderer, "pendingParticleRequests"));
@@ -55,14 +57,16 @@ TEST(ParticleRuntimeCommandShader, RendererOwnsBoundedRequestQueue)
 TEST(ParticleRuntimeCommandShader, ConsoleAndExecutorExposeBothCommands)
 {
     const std::string console =
-        ReadSource("source/debugConsole.cpp");
+        ReadSource("source/debugConsole.cpp") +
+        ReadSource("source/debugConsoleProcessCommand.cpp");
     EXPECT_TRUE(Contains(console, "particlekill"));
     EXPECT_TRUE(Contains(console, "particlespawnat"));
     EXPECT_TRUE(Contains(console, "ValidateParticleKillRequest"));
     EXPECT_TRUE(Contains(console, "ValidateParticleSpawnAtRequest"));
 
     const std::string executor =
-        ReadSource("source/engine/runtimeCommandExecutor.cpp");
+        ReadSource("source/engine/runtimeCommandExecutor.cpp") +
+        ReadSource("source/engine/runtimeCommandExecutorExecuteCommand.cpp");
     EXPECT_TRUE(Contains(executor, "RuntimeCommandType::KillParticle"));
     EXPECT_TRUE(Contains(executor, "RuntimeCommandType::SpawnParticleAt"));
     EXPECT_TRUE(Contains(executor, "FindParticleEmitterIndex"));

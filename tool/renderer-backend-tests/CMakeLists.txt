@@ -46,6 +46,7 @@ add_executable(vl_renderer_backend_tests
     skin_deform_test.cpp
     speedtree_wind_system_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompilerValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
     ${PROJECT_SOURCE_DIR}/source/render/shadow/shadowCasterCull.cpp
     ${PROJECT_SOURCE_DIR}/source/render/foliage/speedTreeWindSystem.cpp

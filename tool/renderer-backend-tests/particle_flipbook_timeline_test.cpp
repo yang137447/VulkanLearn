@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -88,7 +90,7 @@ TEST(ParticleFlipbookTimeline, BillboardAndGatherApplyTimelineAdditively)
 TEST(ParticleFlipbookTimeline, RendererUploadsTimelineTables)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer, "uniforms.flipbookPivotKeys"));
     EXPECT_TRUE(Contains(

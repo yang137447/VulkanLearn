@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -112,7 +114,7 @@ TEST(ParticleSoftDepth, ParticleShadersBindSoftDepthAndKeepFallback)
 TEST(ParticleSoftDepth, DescriptorLayoutsExposeBindingThree)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(
         renderer, "MakeParticlePassSetBinding(3, \"softDepth\")"));
     EXPECT_TRUE(Contains(

@@ -3,6 +3,44 @@
 namespace VL
 {
 
+namespace
+{
+
+uint64_t BuildParticleDataChannelSignature(
+    const ParticleDataChannelMap& channels)
+{
+    std::vector<std::pair<std::string, std::string>> ordered;
+    ordered.reserve(channels.size());
+    for (const auto& [key, value] : channels)
+    {
+        ordered.emplace_back(key, value.ToTypedJson().dump());
+    }
+    std::sort(
+        ordered.begin(),
+        ordered.end(),
+        [](const auto& left, const auto& right)
+        {
+            return left.first < right.first;
+        });
+    uint64_t hash = 1469598103934665603ull;
+    for (const auto& [key, value] : ordered)
+    {
+        for (char character : key)
+        {
+            hash ^= static_cast<uint8_t>(character);
+            hash *= 1099511628211ull;
+        }
+        for (char character : value)
+        {
+            hash ^= static_cast<uint8_t>(character);
+            hash *= 1099511628211ull;
+        }
+    }
+    return hash;
+}
+
+} // namespace
+
 ParticleRenderer::~ParticleRenderer()
 {
     // 正常关闭走 Shutdown；若调用方绕过它，至少在同一 backend 仍有效时

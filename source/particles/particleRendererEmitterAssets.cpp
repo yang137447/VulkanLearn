@@ -3,6 +3,83 @@
 namespace VL
 {
 
+namespace
+{
+
+
+// 骨骼网格粒子资源构建期间使用的 CPU 蒙皮参考。palette/matrix 语义与
+// particleSkeletalSkin.glsl 完全一致：p = Σ w · (model_j · inverseBind_j) · p_bind。
+template <typename Section>
+void SkinParticleSkeletalSection(
+    Section& section,
+    const std::vector<Eigen::Matrix4f>& models)
+{
+    section.skinnedVertices = section.sourceVertices;
+    for (size_t vertexIndex = 0;
+         vertexIndex < section.sourceVertices.size();
+         ++vertexIndex)
+    {
+        Eigen::Matrix4f skin = Eigen::Matrix4f::Zero();
+        const uint32_t begin = section.influenceOffsets.at(vertexIndex);
+        const uint32_t end = section.influenceOffsets.at(vertexIndex + 1);
+        for (uint32_t index = begin; index < end; ++index)
+        {
+            const auto& influence = section.influences.at(index);
+            if (influence.joint >= models.size() ||
+                influence.joint >= section.inverseBinds.size())
+            {
+                continue;
+            }
+            skin += influence.weight *
+                models[influence.joint] *
+                section.inverseBinds[influence.joint];
+        }
+        Vertex& target = section.skinnedVertices[vertexIndex];
+        const Vertex& source = section.sourceVertices[vertexIndex];
+        target.position =
+            (skin * Eigen::Vector4f(
+                source.position.x(),
+                source.position.y(),
+                source.position.z(),
+                1.0f)).head<3>();
+        const Eigen::Matrix3f linear = skin.block<3, 3>(0, 0);
+        target.normal = (linear.inverse().transpose() * source.normal).normalized();
+        Eigen::Vector3f tangent = linear * source.tangent.head<3>();
+        tangent -= target.normal * target.normal.dot(tangent);
+        if (tangent.squaredNorm() > 1.0e-10f)
+        {
+            target.tangent.head<3>() = tangent.normalized();
+        }
+    }
+}
+
+ParticleMaterialParams LoadParticleMaterialInstance(
+    const std::string& path,
+    std::string& outError)
+{
+    ParticleMaterialParams params;
+    try
+    {
+        RequireValidParticleMeshPath(path, "materialInstancePath");
+        std::ifstream file(CommonFunction::Path(path));
+        if (!file.is_open())
+        {
+            outError = "file not found";
+            return params;
+        }
+        nlohmann::json json;
+        file >> json;
+        params = ParseParticleMaterialInstanceJson(json);
+    }
+    catch (const std::exception& exception)
+    {
+        outError = exception.what();
+    }
+    return params;
+}
+
+} // namespace
+
 void ParticleRenderer::CreateEmitter(
     const ParticleEmitterAsset& asset,
     const Eigen::Matrix4f& model,

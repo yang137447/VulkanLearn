@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -97,8 +99,8 @@ TEST(ParticleMeshMaterial, MissingMapsKeepNumericFallback)
 
 TEST(ParticleMeshMaterial, RendererOwnsMeshMaterialSet)
 {
-    const std::string renderer = ReadSource(
-        "source/particles/particleRenderer.cpp");
+    const std::string renderer =
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(renderer.find("BuildParticleMeshLayout"), std::string::npos);
     EXPECT_NE(renderer.find("\"albedoMap\""), std::string::npos);
     EXPECT_NE(renderer.find("\"normalMap\""), std::string::npos);
@@ -113,8 +115,8 @@ TEST(ParticleMeshMaterial, RendererOwnsMeshMaterialSet)
 
 TEST(ParticleMeshMaterial, StaticSectionsKeepPerSectionGeometryAndMaterial)
 {
-    const std::string renderer = ReadSource(
-        "source/particles/particleRenderer.cpp");
+    const std::string renderer =
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(renderer.find("useSectionPlans"), std::string::npos);
     EXPECT_NE(renderer.find("emitter.staticSections"), std::string::npos);
     EXPECT_NE(renderer.find("imported.sectionPlans[sectionIndex]"),

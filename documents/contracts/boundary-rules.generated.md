@@ -5,7 +5,7 @@
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`5a98d7b3862516c4c82ad4e1ec82d120c7780a32`
+生成源 revision：`f1d1422a90daf2ae3882af7831de255fb83ca284`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
@@ -91,7 +91,7 @@
 | Game executable link boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game executable link boundary | pattern must not match in a file | `source/main_game.cpp`, `source/engine/nullEditorHost.h`, `source/engine/nullEditorHost.cpp` |
 | Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
-| Runtime UI editor include boundary | pattern must not match in a file | `source/ui/uiSubsystem.h`, `source/ui/uiSubsystem.cpp`, `source/ui/iEditorUiShell.h`, `source/ui/rmlUiInterfaces.h`, `source/ui/rmlUiInterfaces.cpp`, `source/ui/uiAction.h` 等 9 项 |
+| Runtime UI editor include boundary | pattern must not match in a file | `source/ui/uiSubsystem.h`, `source/ui/uiSubsystem.cpp`, `source/ui/uiSubsystemDocuments.cpp`, `source/ui/uiSubsystemInput.cpp`, `source/ui/uiSubsystemActions.cpp`, `source/ui/uiSubsystemInternal.h` 等 13 项 |
 | Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game packaging manifest closure | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game packaging manifest closure | pattern must not match in a file | `（路径由脚本内条件生成）` |

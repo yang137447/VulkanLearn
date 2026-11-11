@@ -36,8 +36,8 @@
       "sources": [
         {
           "path": "source/ui/uiSubsystem.cpp",
-          "line": 469,
-          "end_line": 528,
+          "line": 197,
+          "end_line": 259,
           "label": "HandlePlatformEvent"
         }
       ]
@@ -50,8 +50,8 @@
       "sources": [
         {
           "path": "source/editor/ui/panel/sceneOutlinerView.cpp",
-          "line": 146,
-          "end_line": 216,
+          "line": 148,
+          "end_line": 217,
           "label": "RefreshOutliner"
         }
       ]
@@ -64,8 +64,9 @@
       "sources": [
         {
           "path": "source/editor/runtime/materialInstanceEditorRuntime.cpp",
-          "line": 474,
-          "label": "命令分发"
+          "line": 330,
+          "label": "命令分发",
+          "end_line": 557
         }
       ]
     },
@@ -77,8 +78,8 @@
       "sources": [
         {
           "path": "source/world/world.h",
-          "line": 117,
-          "end_line": 128,
+          "line": 464,
+          "end_line": 471,
           "label": "可见性写入接口"
         }
       ]
@@ -91,8 +92,8 @@
       "sources": [
         {
           "path": "source/renderSystem.cpp",
-          "line": 930,
-          "end_line": 951,
+          "line": 969,
+          "end_line": 1040,
           "label": "PublishSnapshotFromActiveWorld"
         }
       ]
@@ -267,7 +268,7 @@
       "items": [
         "两条路径都每帧发布快照：多线程走发布 + 提交帧，单线程直接 Render()",
         "因此可见性开关下一帧即上屏，不需要 World 事务",
-        "见 source/engine/frame/engineFramePhases.cpp:230 与 source/renderSystem.cpp:951"
+        "见 source/engine/frame/engineFramePhases.cpp:230 与 source/renderSystem.cpp:990"
       ]
     },
     {

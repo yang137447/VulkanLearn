@@ -93,7 +93,7 @@
 | UE 结构 | VL 现状 | 证据 |
 | --- | --- | --- |
 | Montage 的 `slot` | 只作为 SK `slots` 的注册校验值；播放时整身替换 clip，不做按槽混合 | `animationMontage.cpp` 的 `BindMontage`、`animationScriptData.cpp` 的 `PlayMontage` |
-| section / `nextSection` / `nextTime` / `linkMethod` | 可消费；同一 Montage 内链式推进 | `skeletalPlayback.cpp` 的 `TickMontageSections` |
+| section / `nextSection` / `nextTime` / `linkMethod` | 可消费；同一 Montage 内链式推进 | `skeletalPlaybackMovement.cpp` 的 `TickMontageSections` |
 | 普通 notify / notifyState | 可消费；BP notify 的**数据**保留为 notifyState，但 BP 逻辑不执行 | `notifyStateTests.cpp`、`animationScriptData.cpp` |
 | MotionWarping 窗口（provider `None`/`Bone`/`Static`） | 可消费；`None` 的目标位置由 `PlayMontage(targets)` 提交 | `animation-montage.md`、`motionWarpingTests.cpp` |
 | `LinkedAnimLayer` / `FullBodyLayer` | **不可消费**；VL 没有 linked anim layer 运行时，也没有 layer interface 资产 | 本文的 T3D 结构；`source/animation` 无 layer 类型 |

@@ -1,7 +1,8 @@
 # Editor / Runtime 数据边界
 
-> 状态：**当前契约**。本文件约束新增代码如何区分编辑器数据和运行时数据；
-> 现有单体 `main` 仍同时链接编辑器与运行时，迁移是渐进的，但新代码按本契约执行。
+> 状态：**当前契约**。runtime/editor 已按 CMake 目标拆分：
+> `main_game` 只链接 `vl_runtime`，`main_editor` 链接 `vl_editor` /
+> `vl_editor_asset_core`；新代码按本契约执行。
 
 ## 目标
 
@@ -39,8 +40,7 @@ runtime 可以独立存在，editor 是构建在其上的附加层。
    编辑器需要额外信息时，单独构建 editor snapshot，不扩大 runtime 快照。
 5. **新增的粒子 runtime 不包含 `source/editor/**`。**
    `source/particles/**` 不得 include 编辑器头文件；architecture audit 已强制
-   这一条。其它模块当前仍有单体依赖，见下文「迁移中的已知例外」；它们是
-   迁移债务，不得成为新增代码的先例。
+   这一条。其它 runtime 模块同样由 CMake 源过滤与 configure 期 include 门禁约束。
 6. **authoring JSON 不是 runtime 文档。**
    loader 在提交前把 JSON 冻结为 runtime 值。粒子 `ParticleSystemAsset`
    中的 `authoringJson` 只作为运行时 Data Channel / user parameter 重解析所需
@@ -62,18 +62,13 @@ runtime 可以独立存在，editor 是构建在其上的附加层。
   规则会拒绝 `source/particles/**` 中的 `#include "editor/`；新增粒子运行时
   依赖必须通过纯数据接口，而不是回引编辑器实现。
 
-## 迁移中的已知例外
+## 当前例外
 
-当前仍有以下 runtime/world 单元反向依赖编辑器实现，完整拆分属于后续工作：
-
-- `source/renderSystem.h` include editor selection/preview。
-- `source/engine/engineLoop.cpp`、`source/engine/runtimeCommandExecutor.cpp`
-  include editor scene/service/runtime。
-- `source/world/world.h` 仍持有 `editorCamera` / `editorViewEnabled` 状态。
-
-这些例外不改变本契约对新增粒子和后续新模块的要求：新代码不得继续扩大
-反向依赖；需要编辑器数据时，用稳定 runtime identity 在 `source/editor/**`
-建独立 DTO 或服务。
+运行时目标已由 CMake 源过滤和 configure 期 include 门禁守住；
+`source/world/world.h` 仍持有编辑器预览用的 `editorCamera` /
+`editorViewEnabled` 字段，这是当前唯一的 World 级编辑器状态例外。新增代码
+不得扩大该例外；需要编辑器数据时使用稳定 runtime identity，在
+`source/editor/**` 建独立 DTO 或服务。
 
 ## 评审清单
 

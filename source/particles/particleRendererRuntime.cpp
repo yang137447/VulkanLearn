@@ -3,6 +3,32 @@
 namespace VL
 {
 
+namespace
+{
+
+std::string BuildEmitterKey(
+    const ParticleSystemSnapshot& snapshot,
+    const ParticleEmitterAsset& emitter)
+{
+    // 场景对象名 + 资产路径 + 子发射器名：同一 PS 被多个场景对象引用时
+    // 各自拥有独立 GPU 池，资产内改名会自然换成新池而不是复用旧状态。
+    return BuildParticleEmitterKey(
+        snapshot.name, snapshot.assetPath, emitter.name);
+}
+
+Eigen::Matrix4f BuildEmitterModel(
+    const ParticleSystemSnapshot& snapshot,
+    const ParticleEmitterAsset& emitter)
+{
+    // localPosition 是场景对象局部空间偏移，必须先乘场景矩阵再进入 GPU，
+    // 这样粒子池、速度方向和软粒子深度都在同一个世界空间里。
+    Eigen::Matrix4f translation = Eigen::Matrix4f::Identity();
+    translation.block<3, 1>(0, 3) = emitter.localPosition;
+    return snapshot.model * translation;
+}
+
+} // namespace
+
 void ParticleRenderer::Synchronize(const RenderScene& renderScene)
 {
     if (!initialized)

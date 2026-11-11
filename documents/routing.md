@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | `CMakeLists.txt`、`source/CMakeLists.txt`、`source/main_editor.cpp`、`source/main_game.cpp`、`source/engine/application.*` | `contracts/vulkanlearn-architecture.html`、`contracts/testing.md` | Runtime editor target ownership、Game executable link boundary |
 | `source/engine/editorHost.h`、`source/engine/nullEditorHost.*`、`source/editor/editorHost.*` | `contracts/vulkanlearn-architecture.html` | Runtime editor target ownership、Game executable link boundary、Runtime UI editor include boundary |
-| `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem.*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
+| `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md`、`contracts/editor-runtime-data-boundary.md` | — |
@@ -65,7 +65,7 @@
 | `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
 | `source/VertexDataStruct.h`、`source/mesh/vegetationAsset.*`、`source/render/resource/rendererMeshLoader.*`、`schema/scene.schema.json` | `contracts/vegetation-instancing.md` | — |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md`、`contracts/vulkanlearn-architecture.html` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer gameplay plan boundary、Renderer world loader include boundary、Renderer resource load runtime error code contract |
-| `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
+| `source/renderGraph.h`、`source/renderGraph*.cpp` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
 | `source/render/frame/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | — |
@@ -81,7 +81,7 @@
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
 | `source/particles/**`、`shader/glsl/particle/**` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
 | `source/render/decal/**`、`shader/glsl/decal/**` | `contracts/decal-runtime.md` | — |
-| `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
+| `source/shaderCompiler*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
@@ -101,6 +101,20 @@
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
 | `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
+| `source/particles/particleRenderer*`、`source/particles/particleAsset*` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
+| `source/animation/skeletalPlayback*` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/renderGraph*`、`source/render/rendergraph/renderGraphCompiler*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
+| `source/render/backend/rendererBackendVulkan*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/ui/uiSubsystem*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
+| `source/shaderCompiler*` | `contracts/shader-build-cache.md` | — |
+| `source/engine/runtimeCommandExecutor*` | `contracts/debug-runtime-commands.md`、`contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop |
+| `source/debugConsole*` | `contracts/debug-runtime-commands.md` | — |
+| `source/hair/hairSimulationPass*` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md` | — |
+| `source/editor/runtime/materialInstanceEditorRuntime*` | `contracts/material-instance-editor.md`、`contracts/ui-component-system.md` | Runtime editor target ownership |
+| `source/editor/ui/panel/particlePanel*` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
+| `source/editor/ui/materialInstanceAssetEditorPanel*` | `contracts/ui-component-system.md`、`contracts/material-instance-editor.md` | Runtime editor target ownership |
+| `source/world/worldParticle*` | `contracts/particle-system.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/editor/command/editorCommandJsonCodec*` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md` | — |
 
 `extern/**` 是第三方依赖，除 `extern/BLAKE3` 的锁定说明外不在本表覆盖范围（见"未覆盖路径"）。
 

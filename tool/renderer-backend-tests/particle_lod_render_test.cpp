@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -35,7 +37,7 @@ TEST(ParticleLodRender, UboAndRendererContract)
     EXPECT_TRUE(Contains(common, "vec4 lodParams;"));
 
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_TRUE(Contains(renderer, "EffectiveParticleLod("));
     EXPECT_TRUE(Contains(renderer, "uniforms.lodParams"));
     EXPECT_TRUE(Contains(renderer, "lod.renderScale"));
@@ -92,12 +94,12 @@ TEST(ParticleLodRender, RenderScaleReachesEveryRenderPath)
 TEST(ParticleLodRender, AlphaStillOwnedByDistanceFade)
 {
     const std::string renderer =
-        ReadSource("source/particles/particleRenderer.cpp");
+        ParticleSourceTest::ReadParticleRendererSources();
     // LOD 只把 renderScale/blend 写入 lodParams；alpha 仍只乘
     // culling.opacityScale，不重复叠 LOD 或距离 fade。
     EXPECT_TRUE(Contains(
         renderer,
-        "emitter.asset.opacity * culling.opacityScale"));
+        "boundSpawnAttributes.opacity * culling.opacityScale"));
     EXPECT_TRUE(Contains(
         renderer,
         "lod.renderScale,\n            lod.blend,"));

@@ -3,6 +3,288 @@
 namespace VL
 {
 
+namespace
+{
+
+Renderpass* FindParticlePass(RenderGraph& graph)
+{
+    for (auto& [name, pass] : graph.GetRenderpasses())
+    {
+        (void)name;
+        if (pass.type == RenderGraphPassType::Particle)
+        {
+            return &pass;
+        }
+    }
+    return nullptr;
+}
+
+Renderpass* FindDistortionPass(RenderGraph& graph)
+{
+    for (auto& [name, pass] : graph.GetRenderpasses())
+    {
+        (void)name;
+        if (pass.type == RenderGraphPassType::Distortion)
+        {
+            return &pass;
+        }
+    }
+    return nullptr;
+}
+
+GraphicsPipelineLayoutDesc BuildParticleGlobalLayout()
+{
+    // particleGlobal.frag 明确不使用 CSM，编译器会把 shadowMap 从反射
+    // 结果中裁掉；但 particle pass 的 set 3 由图输入分配为
+    // sceneDepth + shadowMap + localShadowMap 三个 binding。显式覆盖 set 3，
+    // 保证 pipeline layout 与 render pass descriptor set 的布局兼容。
+    GraphicsPipelineLayoutDesc layout;
+    // 全局 alpha 池有自己的一套 set 0：0 UBO、1 gathered records、
+    // 2 sorted pairs、3 纹理数组、5 debug、6/7 两盏灯缓冲、8/9 IBL。
+    // 同样必须显式覆盖 6..9，否则未采样的 brdfLut 会被 glslang 裁掉，
+    // 导致 draw set 的写入越界。
+    layout.overrideSets[0] = true;
+    std::vector<ShaderBinding>& globalBindings = layout.setBindings[0];
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        0,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "ParticleFrame"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        1,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "GatheredBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        2,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eVertex,
+        "SortedPairs"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        3,
+        vk::DescriptorType::eCombinedImageSampler,
+        kParticleGlobalTextureSlots,
+        vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eFragment,
+        "particleTextures"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        5,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleDebug"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        6,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleSceneLightSSBO"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        7,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "ParticleLightSSBO"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        8,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "prefilteredEnvironmentCube"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        9,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "brdfLut"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        10,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        11,
+        vk::DescriptorType::eStorageBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightIndexBuffer"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        12,
+        vk::DescriptorType::eUniformBuffer,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "LightGridParamsBlock"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        13,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "translucencyVolume"));
+    globalBindings.push_back(MakeParticleLayoutBinding(
+        14,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        "iesLut"));
+    layout.overrideSets[PassSetIndex] = true;
+    ShaderBinding sceneDepth;
+    sceneDepth.set = PassSetIndex;
+    sceneDepth.binding = 0;
+    sceneDepth.type = vk::DescriptorType::eCombinedImageSampler;
+    sceneDepth.descriptorCount = 1;
+    sceneDepth.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    sceneDepth.name = "sceneDepth";
+    ShaderBinding shadowMap;
+    shadowMap.set = PassSetIndex;
+    shadowMap.binding = 1;
+    shadowMap.type = vk::DescriptorType::eCombinedImageSampler;
+    shadowMap.descriptorCount = 1;
+    shadowMap.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    shadowMap.name = "shadowMap";
+    // 全局池现在会采样局部光阴影（点光/聚光），必须与 pass 的第三个输入对齐。
+    ShaderBinding localShadowMap;
+    localShadowMap.set = PassSetIndex;
+    localShadowMap.binding = 2;
+    localShadowMap.type = vk::DescriptorType::eCombinedImageSampler;
+    localShadowMap.descriptorCount = 1;
+    localShadowMap.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    localShadowMap.name = "localShadowMap";
+    ShaderBinding softDepth;
+    softDepth.set = PassSetIndex;
+    softDepth.binding = 3;
+    softDepth.type = vk::DescriptorType::eCombinedImageSampler;
+    softDepth.descriptorCount = 1;
+    softDepth.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    softDepth.name = "softDepth";
+    layout.setBindings[PassSetIndex] = {
+        std::move(sceneDepth),
+        std::move(shadowMap),
+        std::move(localShadowMap),
+        std::move(softDepth)};
+    return layout;
+}
+
+// mesh 可见管线独占 set 1：材质 UBO + albedo/normal/ORM/emissive。
+// 其它粒子渲染模式继续使用不含 set 1 的共享 layout，避免无材质管线
+// 被要求绑定空材质描述符。
+GraphicsPipelineLayoutDesc BuildParticleMeshLayout()
+{
+    GraphicsPipelineLayoutDesc layout = BuildParticleSharedLayout();
+    layout.overrideSets[kParticleMaterialSetIndex] = true;
+    std::vector<ShaderBinding>& bindings =
+        layout.setBindings[kParticleMaterialSetIndex];
+    ShaderBinding materialUniform;
+    materialUniform.set = kParticleMaterialSetIndex;
+    materialUniform.binding = kParticleMaterialUniformBinding;
+    materialUniform.type = vk::DescriptorType::eUniformBuffer;
+    materialUniform.descriptorCount = 1;
+    materialUniform.stageFlags =
+        vk::ShaderStageFlagBits::eVertex |
+        vk::ShaderStageFlagBits::eFragment;
+    materialUniform.name = "ParticleMaterialUniform";
+    bindings.push_back(std::move(materialUniform));
+    const char* textureNames[] = {
+        "albedoMap",
+        "normalMap",
+        "ormMap",
+        "emissiveMap"};
+    for (uint32_t index = 0;
+         index < kParticleMaterialTextureCount;
+         ++index)
+    {
+        ShaderBinding texture;
+        texture.set = kParticleMaterialSetIndex;
+        texture.binding = kParticleMaterialAlbedoBinding + index;
+        texture.type = vk::DescriptorType::eCombinedImageSampler;
+        texture.descriptorCount = 1;
+        texture.stageFlags = vk::ShaderStageFlagBits::eFragment;
+        texture.name = textureNames[index];
+        bindings.push_back(std::move(texture));
+    }
+    return layout;
+}
+
+// 骨骼完整实例（mesh 模式 + 骨骼资产）额外独占 set 2：一个只读关节
+// palette SSBO。palette 按 swapchain image 写，顶点着色器读取当前姿态。
+GraphicsPipelineLayoutDesc BuildParticleSkeletalLayout()
+{
+    GraphicsPipelineLayoutDesc layout = BuildParticleMeshLayout();
+    layout.overrideSets[kParticleSkinSetIndex] = true;
+    std::vector<ShaderBinding>& bindings =
+        layout.setBindings[kParticleSkinSetIndex];
+    ShaderBinding palette;
+    palette.set = kParticleSkinSetIndex;
+    palette.binding = kParticleSkinPaletteBinding;
+    palette.type = vk::DescriptorType::eStorageBuffer;
+    palette.descriptorCount = 1;
+    palette.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    palette.name = "ParticleSkinPalette";
+    bindings.push_back(std::move(palette));
+    ShaderBinding influences;
+    influences.set = kParticleSkinSetIndex;
+    influences.binding = kParticleSkinInfluenceBinding;
+    influences.type = vk::DescriptorType::eStorageBuffer;
+    influences.descriptorCount = 1;
+    influences.stageFlags = vk::ShaderStageFlagBits::eVertex;
+    influences.name = "ParticleSkinInfluences";
+    bindings.push_back(std::move(influences));
+    return layout;
+}
+
+std::shared_ptr<Texture> CreateParticleSolidTexture(
+    RendererBackendVulkan& backend,
+    const std::array<uint8_t, 4>& rgba,
+    HostImage::PixelFormat pixelFormat,
+    HostImage::TextureSemantic semantic,
+    const char* debugName)
+{
+    HostImage image;
+    image.width = 1;
+    image.height = 1;
+    image.channels = 4;
+    image.format = pixelFormat;
+    image.semantic = semantic;
+    image.rowStrideBytes = 4;
+    image.data = {rgba[0], rgba[1], rgba[2], rgba[3]};
+    Texture::CreateDesc desc;
+    desc.semantic = semantic;
+    desc.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    desc.generateMipmaps = false;
+    desc.filter = vk::Filter::eLinear;
+    desc.wrapMode = vk::SamplerAddressMode::eClampToEdge;
+    desc.debugName = debugName;
+    return std::make_shared<Texture>(backend, image, desc);
+}
+
+ParticleRenderIdentity BuildParticleRenderIdentity(
+    const RenderGraph& graph,
+    const Renderpass& pass,
+    const Renderpass* distortionPass,
+    const RendererBackendVulkan& backend)
+{
+    ParticleRenderIdentity identity;
+    identity.ownerGeneration = graph.GetOwnerGeneration();
+    identity.particleRenderPass = reinterpret_cast<uintptr_t>(
+        static_cast<VkRenderPass>(pass.renderPass));
+    identity.distortionRenderPass = distortionPass != nullptr
+        ? reinterpret_cast<uintptr_t>(
+            static_cast<VkRenderPass>(distortionPass->renderPass))
+        : 0;
+    identity.swapchainImageCount = backend.GetSwapchainImageCount();
+    identity.passWidth = pass.width;
+    identity.passHeight = pass.height;
+    identity.pipelineContractKey =
+        pass.pipelineContractKey.GetNormalizedKey();
+    return identity;
+}
+
+} // namespace
+
 void ParticleRenderer::EnsureInitialized(
     PipelineFactory& factory,
     RendererBackendVulkan& renderer,

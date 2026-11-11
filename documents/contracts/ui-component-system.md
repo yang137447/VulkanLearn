@@ -756,7 +756,7 @@ Help→About 显示编辑器名称、RmlUi 说明和布局文件路径，打开�
 `.menu-root.open` 祖先，本弹层没有菜单栏父节点。
 
 **触发方式是 `mouseup` 且 `button == 1`**，不是 `contextmenu`：RmlUi 6.2 没有 `contextmenu`
-事件标识。按钮号来自 `ToRmlMouseButton`（`source/ui/uiSubsystem.cpp`），
+事件标识。按钮号来自 `ToRmlMouseButton`（`source/ui/uiSubsystemInput.cpp`），
 `PlatformMouseButton::Right → 1`，与 RmlUi 官方 SDL 后端一致。面板在捕获阶段监听
 `mouseup`，而 `EditorDockingController` 只在 `button == 0` 时开始拖动，因此右键不会干扰停靠。
 
@@ -989,7 +989,7 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
   而"完全不合成"应读回约 1.00。面板色块 `#ff00ff80` 读回 `rgb(189,15,189)`，
   与线性空间 50% 混合的解析值一致。
 - 编辑器模式下 `#hud` 被 `UiSubsystem` 显式设为 `display: none`
-  （`source/ui/uiSubsystem.cpp`，`developerUiVisible` 为真时），
+  （`source/ui/uiSubsystemDocuments.cpp`，`developerUiVisible` 为真时），
   因此 HUD 卡片（`#hud-panel`）的底色在编辑器工作区中不可见，这是有意行为而非样式失效。
   `#hud` 只承担定位、75% 宽度上限与裁剪，卡片底色与内边距在收缩盒 `#hud-panel` 上。
   验证 HUD 样式需要在 `ui.enabled` 且非 developer UI 的模式下进行。
@@ -1085,7 +1085,7 @@ CPU 测试里的菜单展开、子菜单悬停和面板隐藏都用真实 RmlUi 
 命名一律带 `ContextMenu` 是刻意的：早先有一个用例叫 `BrowserAssetRightClick...`，
 `--gtest_filter="*ContextMenu*"` 会**静默跳过它**，运行数看起来是绿的却少一个。
 
-**未覆盖的边界**：`uiSubsystem.cpp` 里把右键放行给编辑器文档的那 8 行没有自动化测试 ——
+**未覆盖的边界**：`uiSubsystemInput.cpp` 里把右键放行给编辑器文档的那 8 行没有自动化测试 ——
 `editor_ui_tests` 不编译 `UiSubsystem`（需要 Vulkan），面板侧由 `ViewportContextMenu*` 用真实
 RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构建与人工核对。
 弹层也**没有做窗口边界钳制**：在右下角右键可能让它部分移出窗口。

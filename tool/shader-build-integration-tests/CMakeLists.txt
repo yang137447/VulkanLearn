@@ -6,6 +6,9 @@ add_executable(shader_build_integration_tests
     ${PROJECT_SOURCE_DIR}/source/shader/build/shaderBuildManifest.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/shaderAbiSignature.cpp
     ${PROJECT_SOURCE_DIR}/source/shaderCompiler.cpp
+    ${PROJECT_SOURCE_DIR}/source/shaderCompilerApi.cpp
+    ${PROJECT_SOURCE_DIR}/source/shaderCompilerCommit.cpp
+    ${PROJECT_SOURCE_DIR}/source/shaderCompilerCache.cpp
     ${PROJECT_SOURCE_DIR}/source/shaderReflect.cpp
 )
 

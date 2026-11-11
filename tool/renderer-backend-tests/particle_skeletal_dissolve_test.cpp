@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "particleSourceTestUtils.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -75,8 +77,8 @@ TEST(ParticleSkeletalDissolve, PoseClockUsesPerImageKeysWithoutSkippingSimulatio
     EXPECT_NE(header.find(
         "std::vector<ParticleSkeletalPoseKey> skeletalPoseKeys"),
         std::string::npos);
-    const std::string renderer = ReadSource(
-        "source/particles/particleRenderer.cpp");
+    const std::string renderer =
+        ParticleSourceTest::ReadParticleRendererSources();
     EXPECT_NE(renderer.find("const bool poseUnchanged ="),
         std::string::npos);
     EXPECT_NE(renderer.find("emitter.skeletalPoseKeys[imageIndex] = poseKey"),
