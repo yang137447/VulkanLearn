@@ -5,10 +5,7 @@
 #include <cmath>
 #include <map>
 #include <set>
-#ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
 #include <Jolt/Jolt.h>
-#include <Jolt/RegisterTypes.h>
-#include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -32,11 +29,11 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
-#endif
+#include "physics/joltRegistration.h"
+#include "terrain/terrainCollision.h"
 
 namespace VL
 {
-#ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
 namespace
 {
 // 1/60 只是刚体积分子步，不再是 gameplay tick；角色时间轴完全由帧 dt 决定。
@@ -92,9 +89,17 @@ public:
     bool ShouldCollide(const JPH::BodyID& id) const override { return id != ignore; }
     bool ShouldCollideLocked(const JPH::Body& body) const override
     {
+        // cInvalidGroup/SubGroup 表示“未分组”，按全放行处理；否则移位会越界。
+        const JPH::CollisionGroup& group = body.GetCollisionGroup();
+        const uint32_t groupId = group.GetGroupID();
+        const uint32_t subGroupId = group.GetSubGroupID();
+        const bool groupAllowed = groupId == JPH::CollisionGroup::cInvalidGroup ||
+            (groupId < 32 && (mask & (1u << groupId)) != 0);
+        const bool layerAllowed = layer < 0 ||
+            subGroupId == JPH::CollisionGroup::cInvalidSubGroup ||
+            (layer < 32 && (subGroupId & (1u << layer)) != 0);
         return (includeTriggers || !body.IsSensor()) &&
-            (mask & (1u << body.GetCollisionGroup().GetGroupID())) != 0 &&
-            (layer < 0 || (body.GetCollisionGroup().GetSubGroupID() & (1u << layer)) != 0);
+            groupAllowed && layerAllowed;
     }
 };
 
@@ -127,7 +132,17 @@ struct ScriptPhysicsWorld::Impl
         uint32_t layer = 0, mask = 65535;
         std::string compoundSignature;
     };
-    Physics::JoltRegistrationToken registration;
+    // Jolt 的 Allocate() 依赖 RegisterDefaultAllocator() 写入的函数指针；
+    // TempAllocatorImpl 在成员初始化阶段就会分配，因此注册必须是第一个成员，
+    // 不能等到构造函数体。地形碰撞模块的独立 world 用同一守卫。
+    struct RegistrationGuard
+    {
+        RegistrationGuard()
+        {
+            Physics::EnsureJoltRegistered();
+        }
+    };
+    RegistrationGuard registration;
     JPH::BroadPhaseLayerInterfaceTable layers{2, 2};
     JPH::ObjectLayerPairFilterTable pairs{2};
     std::unique_ptr<JPH::ObjectVsBroadPhaseLayerFilterTable> broadphaseFilter;
@@ -135,6 +150,10 @@ struct ScriptPhysicsWorld::Impl
     // 物理任务同步执行在 GT；不把托管回调、JSON 或活动 World 暴露给 Jolt worker。
     JPH::JobSystemSingleThreaded jobs{JPH::cMaxPhysicsJobs};
     JPH::PhysicsSystem world;
+    // 地形 body 必须在 PhysicsSystem 之前销毁；声明在 world 之后即可依赖
+    // 逆序析构保证这一点。放置/替换只经由 SetTerrainCollisions。
+    std::vector<TerrainCollisionBody> terrainBodies;
+    std::map<JPH::BodyID, std::string> terrainIdentities;
     std::map<std::string, Body> bodies;
     std::map<JPH::BodyID, std::string> identities;
     JPH::Ref<ScriptCollisionGroupFilter> collisionGroups = new ScriptCollisionGroupFilter();
@@ -163,6 +182,10 @@ struct ScriptPhysicsWorld::Impl
     }
     ~Impl()
     {
+        // 静态地形不与脚本 body 建约束；先清空地形句柄，再移除脚本体，
+        // 让所有 TerrainCollisionBody::Reset 都发生在 PhysicsSystem 仍存活时。
+        terrainBodies.clear();
+        terrainIdentities.clear();
         for (auto& joint : joints) world.RemoveConstraint(joint.second.constraint);
         joints.clear();
         for (auto& body : bodies) Remove(body.second);
@@ -190,6 +213,23 @@ struct ScriptPhysicsWorld::Impl
             world.GetBodyInterface().RemoveBody(body.id);
             world.GetBodyInterface().DestroyBody(body.id);
         }
+    }
+    // 查询结果同时服务脚本实体与地形摆放；两者身份空间不同，未命中返回 false。
+    bool TryIdentity(JPH::BodyID id, std::string& out) const
+    {
+        const auto body = identities.find(id);
+        if (body != identities.end())
+        {
+            out = body->second;
+            return true;
+        }
+        const auto terrain = terrainIdentities.find(id);
+        if (terrain != terrainIdentities.end())
+        {
+            out = terrain->second;
+            return true;
+        }
+        return false;
     }
     void WakeAround(const Body& body)
     {
@@ -437,7 +477,10 @@ struct ScriptPhysicsWorld::Impl
                 settings, transform.GetTranslation(), collector, {}, {}, filter);
             for (const auto& hit : collector.mHits)
             {
-                const auto& otherId = identities.at(hit.mBodyID2);
+                const auto identity = identities.find(hit.mBodyID2);
+                // 地形静态 body 不是脚本实体；接触/触发对仍只发布蓝图身份。
+                if (identity == identities.end()) continue;
+                const auto& otherId = identity->second;
                 const auto& other = bodies.at(otherId);
                 if (!(other.mask & (1u << body.layer))) continue;
                 const bool trigger = body.trigger || other.trigger;
@@ -631,7 +674,14 @@ nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
             if (collector.HadHit())
             {
                 const auto& hit = collector.mHit;
-                result["blueprint"] = impl->identities.at(hit.mBodyID2);
+                std::string identity;
+                if (!impl->TryIdentity(hit.mBodyID2, identity))
+                {
+                    results.push_back(std::move(result));
+                    continue;
+                }
+                result["blueprint"] = identity;
+                result["terrain"] = impl->terrainIdentities.count(hit.mBodyID2) != 0;
                 result["point"] = VectorJson(from + direction * hit.mFraction);
                 const auto normal = hit.mPenetrationAxis.IsNearZero() ? -direction.Normalized() : -hit.mPenetrationAxis.Normalized();
                 result["normal"] = VectorJson(normal, 1);
@@ -646,7 +696,14 @@ nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
         {
             JPH::BodyLockRead lock(impl->world.GetBodyLockInterface(), hit.mBodyID);
             const auto point = ray.GetPointOnRay(hit.mFraction);
-            result["blueprint"] = impl->identities.at(hit.mBodyID);
+            std::string identity;
+            if (!impl->TryIdentity(hit.mBodyID, identity))
+            {
+                results.push_back(std::move(result));
+                continue;
+            }
+            result["blueprint"] = identity;
+            result["terrain"] = impl->terrainIdentities.count(hit.mBodyID) != 0;
             result["point"] = VectorJson(point);
             // 从凸体内部出发时命中距离为零，并无唯一表面法线；统一返回逆射线方向，避免球心归一化零向量。
             const auto normal = hit.mFraction == 0 ? -direction.Normalized() :
@@ -675,36 +732,58 @@ Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owne
     const JPH::RRayCast ray({from.x(), from.y(), from.z()}, {delta.x(), delta.y(), delta.z()});
     JPH::RayCastResult hit;
     if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return result;
-    const auto identity = impl->identities.find(hit.mBodyID);
-    if (identity == impl->identities.end()) return result;
-    const auto& support = impl->bodies.at(identity->second);
+    std::string identity;
+    if (!impl->TryIdentity(hit.mBodyID, identity)) return result;
+    const auto support = impl->bodies.find(identity);
     // 首次遮挡是移动支撑时明确拒绝，不能穿过它继续锁到下方静态地板。
     // 内部起点没有唯一接触法线，同样不伪造可站立面；坡度由动画 solver 决定。
-    if (support.motion != "static" || hit.mFraction <= 0) return result;
+    // 地形 body 不在 bodies 里，但同样是静态支撑。
+    if (hit.mFraction <= 0) return result;
+    if (support != impl->bodies.end() && support->second.motion != "static") return result;
     JPH::BodyLockRead lock(impl->world.GetBodyLockInterface(), hit.mBodyID);
     const auto point = ray.GetPointOnRay(hit.mFraction);
     const auto normal = lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
     result.hit = true;
     result.point = Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
     result.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
-    result.supportIdentity = identity->second;
+    result.supportIdentity = std::move(identity);
     return result;
 }
 void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector<Eigen::Vector3f>>& triangles)
 {
     impl->meshGeometry = triangles;
 }
-#else
-struct ScriptPhysicsWorld::Impl {};
-ScriptPhysicsWorld::ScriptPhysicsWorld() = default;
-ScriptPhysicsWorld::~ScriptPhysicsWorld() = default;
-void ScriptPhysicsWorld::Step(nlohmann::json&, const nlohmann::json&, float) {}
-void ScriptPhysicsWorld::StepInternal(nlohmann::json&, const nlohmann::json&, float, int) {}
-nlohmann::json ScriptPhysicsWorld::Contacts() const { return nlohmann::json::array(); }
-nlohmann::json ScriptPhysicsWorld::Triggers() const { return nlohmann::json::array(); }
-nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json&) const { return nlohmann::json::array(); }
-Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string&, const Eigen::Vector3f&,
-    const Eigen::Vector3f&) const { return {}; }
-void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector<Eigen::Vector3f>>&) {}
-#endif
+void ScriptPhysicsWorld::SetTerrainCollisions(
+    const std::vector<TerrainCollisionInstance>& instances)
+{
+    // 先完整创建新集合，再一次性替换：任一 terrain 创建失败时旧 body 仍然有效，
+    // 不会留下半套地形或悬空句柄。TerrainCollisionBody 的析构在 Impl 里早于
+    // PhysicsSystem，因此替换/Stop/World 换代都不会命中已销毁的 Jolt 世界。
+    std::vector<TerrainCollisionBody> bodies;
+    std::map<JPH::BodyID, std::string> identities;
+    bodies.reserve(instances.size());
+    for (const TerrainCollisionInstance& instance : instances)
+    {
+        TerrainCollisionBody body = CreateTerrainCollisionBody(
+            impl->world, instance.plan, instance.placement);
+        identities.emplace(JPH::BodyID(body.GetBodyIdValue()), instance.placementId);
+        bodies.push_back(std::move(body));
+    }
+    impl->terrainBodies = std::move(bodies);
+    impl->terrainIdentities = std::move(identities);
+}
+
+size_t ScriptPhysicsWorld::TerrainCollisionBodyCount() const
+{
+    return impl->terrainBodies.size();
+}
+
+std::vector<std::string> ScriptPhysicsWorld::TerrainCollisionPlacementIds() const
+{
+    std::vector<std::string> ids;
+    ids.reserve(impl->terrainBodies.size());
+    for (const auto& entry : impl->terrainIdentities)
+        ids.push_back(entry.second);
+    return ids;
+}
 } // namespace VL

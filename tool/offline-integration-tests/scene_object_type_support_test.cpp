@@ -34,9 +34,9 @@ TEST(SceneObjectTypeSupport, AcceptsActorLevelForReturnFromAssetPreview)
     EXPECT_TRUE(HasSupportedSceneObjectTypes(scene));
 }
 
-TEST(SceneObjectTypeSupport, RejectsEditorOnlyTerrain)
+TEST(SceneObjectTypeSupport, AcceptsTerrainScene)
 {
-    EXPECT_FALSE(HasSupportedSceneObjectTypes(
+    EXPECT_TRUE(HasSupportedSceneObjectTypes(
         {{"objects", {{{"type", "terrain"}}}}}));
 }
 

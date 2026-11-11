@@ -29,7 +29,7 @@ struct GraphicsPipelineBuildDesc
     vk::RenderPass& renderPass;
     vk::PipelineLayout& pipelineLayout;
     const std::vector<vk::PipelineShaderStageCreateInfo>& shaderStages;
-    const vk::VertexInputBindingDescription& vertexInputBindingDescription;
+    const std::vector<vk::VertexInputBindingDescription>& vertexInputBindingDescriptions;
     const std::vector<vk::VertexInputAttributeDescription>& vertexInputAttributeDescriptions;
     const std::string& pipelineName;
     vk::SampleCountFlagBits sampleCount;

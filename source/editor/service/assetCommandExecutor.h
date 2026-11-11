@@ -11,16 +11,19 @@ class AssetCommandExecutor
 public:
     AssetCommandExecutor(const std::filesystem::path& root, SceneDocumentService& scenes)
         : scenes(scenes), meshes(root, EditorAssetDocumentKind::Mesh),
-          textures(root, EditorAssetDocumentKind::Texture), blueprints(root, EditorAssetDocumentKind::Blueprint),
-          tressfx(root, EditorAssetDocumentKind::Tressfx) {}
+          textures(root, EditorAssetDocumentKind::Texture),
+          blueprints(root, EditorAssetDocumentKind::Blueprint),
+          tressfx(root, EditorAssetDocumentKind::Tressfx),
+          terrains(root, EditorAssetDocumentKind::Terrain) {}
     EditorCommandResult Execute(const EditorCommandEnvelope& command);
     std::vector<EditorUi::EditorModifiedDocumentSnapshot> ModifiedDocuments() const;
     AssetDocumentService& BlueprintDocuments() { return blueprints; }
+    AssetDocumentService& TerrainDocuments() { return terrains; }
     // 毛发视口需要读取独立 TressFX 草稿与 revision；只提供只读快照入口，
     // 仍由 AssetDocumentService 独占草稿与保存边界。
     AssetDocumentService& TressfxDocuments() { return tressfx; }
 private:
     SceneDocumentService& scenes;
-    AssetDocumentService meshes, textures, blueprints, tressfx;
+    AssetDocumentService meshes, textures, blueprints, tressfx, terrains;
 };
 } // namespace VL::Editor

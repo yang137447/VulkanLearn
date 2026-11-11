@@ -36,6 +36,9 @@ TEST(DockWorkspaceTest, DefaultLayoutHasUeRegionsAndOneContentRendererStack)
     EXPECT_EQ(workspace.FindStack("content"), workspace.FindStack("log"));
     EXPECT_EQ(workspace.FindStack("content"), workspace.FindStack("performance"));
     EXPECT_NE(workspace.FindStack("outliner"), workspace.FindStack("details"));
+    const auto& bottomTabs = workspace.State().nodes.at(workspace.FindStack("content")).tabs;
+    EXPECT_EQ(bottomTabs, (std::vector<std::string>{
+        "content", "renderer", "log", "performance", "terrain"}));
     EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("content")).active, "content");
 }
 
@@ -221,7 +224,8 @@ TEST(DockWorkspaceTest, LastRootTabCannotFloatOrDisappearIntoFloatingStack)
 {
     DockWorkspace workspace;
     // 仅 Viewport 留在主树；其他常驻面板均浮动。
-    for (const char* panel : {"outliner", "details", "content", "renderer", "log", "performance"})
+    for (const char* panel : {"outliner", "details", "content", "renderer", "log",
+        "performance", "terrain"})
         ASSERT_TRUE(workspace.Float(panel, {0.2f, 0.2f, 0.4f, 0.5f}));
     EXPECT_FALSE(workspace.Float("viewport", {0, 0, 0.5f, 0.5f}));
     EXPECT_FALSE(workspace.Dock("viewport", workspace.FindStack("details"), DockEdge::Center));
@@ -255,6 +259,12 @@ TEST_F(DockPersistenceTest, JsonRoundTripRetainsSplitRatioActiveTabAndFloatingPo
     ASSERT_TRUE(workspace.Float("details", {0.2f, 0.1f, 0.4f, 0.6f}));
     std::string error;
     ASSERT_TRUE(WriteWorkspaceLayout(path, workspace.State(), error)) << error;
+    {
+        std::string contents(static_cast<size_t>(std::filesystem::file_size(path)), '\0');
+        std::ifstream stream(path);
+        stream.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+        EXPECT_NE(contents.find("\"version\": 3"), std::string::npos);
+    }
     DockLayoutState restored;
     ASSERT_TRUE(ReadWorkspaceLayout(path, restored, error)) << error;
     DockWorkspace actual;
@@ -265,6 +275,81 @@ TEST_F(DockPersistenceTest, JsonRoundTripRetainsSplitRatioActiveTabAndFloatingPo
     ASSERT_EQ(actual.State().floating.size(), 1u);
     EXPECT_FLOAT_EQ(actual.State().floating[0].rect.y, 0.1f);
     ASSERT_TRUE(WriteWorkspaceLayout(path, actual.State(), error)) << error;
+}
+
+TEST_F(DockPersistenceTest, VersionTwoLayoutMigratesLandscapeIntoContentStack)
+{
+    std::ofstream stream(path, std::ios::trunc);
+    stream << R"({
+        "version": 2,
+        "root": {
+            "axis": "horizontal",
+            "ratio": 0.69,
+            "first": {
+                "axis": "vertical",
+                "ratio": 0.62,
+                "first": {"tabs": ["viewport"], "active": "viewport"},
+                "second": {"tabs": ["content", "renderer", "log"], "active": "renderer"}
+            },
+            "second": {"tabs": ["outliner"], "active": "outliner"}
+        },
+        "floating": [
+            {"stack": {"tabs": ["details"], "active": "details"}, "rect": [0.2, 0.1, 0.4, 0.5]}
+        ]
+    })";
+    stream.close();
+
+    DockLayoutState restored;
+    std::string error;
+    ASSERT_TRUE(ReadWorkspaceLayout(path, restored, error)) << error;
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.Restore(std::move(restored), error)) << error;
+
+    const uint32_t contentStack = workspace.FindStack("content");
+    ASSERT_NE(contentStack, 0u);
+    const auto& tabs = workspace.State().nodes.at(contentStack).tabs;
+    const auto log = std::find(tabs.begin(), tabs.end(), "log");
+    const auto terrain = std::find(tabs.begin(), tabs.end(), "terrain");
+    ASSERT_NE(log, tabs.end());
+    ASSERT_NE(terrain, tabs.end());
+    EXPECT_EQ(terrain, log + 1);
+    // 迁移只追加缺页，旧布局的活动标签、分栏比例和浮动位置保持不变。
+    EXPECT_EQ(workspace.State().nodes.at(contentStack).active, "renderer");
+    EXPECT_FLOAT_EQ(workspace.State().nodes.at(workspace.State().root).ratio, 0.69f);
+    ASSERT_EQ(workspace.State().floating.size(), 1u);
+    EXPECT_FLOAT_EQ(workspace.State().floating[0].rect.y, 0.1f);
+    EXPECT_TRUE(DockWorkspace::Validate(workspace.State(), error)) << error;
+}
+
+TEST_F(DockPersistenceTest, VersionThreeLayoutWithoutLandscapeIsRejected)
+{
+    std::ofstream stream(path, std::ios::trunc);
+    stream << R"({
+        "version": 3,
+        "root": {
+            "axis": "horizontal",
+            "ratio": 0.69,
+            "first": {
+                "axis": "vertical",
+                "ratio": 0.62,
+                "first": {"tabs": ["viewport"], "active": "viewport"},
+                "second": {"tabs": ["content", "renderer", "log"], "active": "content"}
+            },
+            "second": {
+                "axis": "vertical",
+                "ratio": 0.32,
+                "first": {"tabs": ["outliner"], "active": "outliner"},
+                "second": {"tabs": ["details"], "active": "details"}
+            }
+        },
+        "floating": []
+    })";
+    stream.close();
+
+    DockLayoutState output;
+    std::string error;
+    EXPECT_FALSE(ReadWorkspaceLayout(path, output, error));
+    EXPECT_FALSE(error.empty());
 }
 
 TEST_F(DockPersistenceTest, InvalidJsonNeverReplacesOutputState)
@@ -285,7 +370,8 @@ TEST_F(DockPersistenceTest, InvalidJsonNeverReplacesOutputState)
 void HideAllButViewport(EditorDockingController& docking)
 {
     docking.SetPersistencePath({});
-    for (const char* panel : {"outliner", "details", "content", "renderer", "log", "performance"})
+    for (const char* panel : {"outliner", "details", "content", "renderer", "log",
+        "performance", "terrain"})
         EXPECT_TRUE(docking.SetPanelVisible(panel, false)) << panel;
 }
 

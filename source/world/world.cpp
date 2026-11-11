@@ -1,7 +1,9 @@
 #include "world/world.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <set>
+#include <string>
 #include <utility>
 
 #include "sceneNode.h"
@@ -26,6 +28,65 @@ void CloneAnimation(WorldMeshObject& mesh,
     mesh.skinPose = player->Pose(mesh.skinSection);
     mesh.localBoundsMin = mesh.skinPose->boundsMin;
     mesh.localBoundsMax = mesh.skinPose->boundsMax;
+}
+
+bool ParseUint32(const std::string& text, size_t& position, uint32_t& value)
+{
+    const size_t start = position;
+    uint64_t parsed = 0;
+    while (position < text.size() &&
+        text[position] >= '0' && text[position] <= '9')
+    {
+        parsed = parsed * 10 +
+            static_cast<uint64_t>(text[position] - '0');
+        if (parsed > UINT32_MAX)
+            return false;
+        ++position;
+    }
+    if (position == start)
+        return false;
+    value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+// 解析 RendererTerrainLoader 生成的 chunk 对象名：
+// <sceneName>::chunk_<x>_<z>[::lodN]
+bool ParseTerrainChunkName(
+    const std::string& objectName,
+    uint32_t& chunkX,
+    uint32_t& chunkZ,
+    uint32_t& lodLevel,
+    bool& hasLodSuffix)
+{
+    static const std::string marker = "::chunk_";
+    const size_t markerPosition = objectName.rfind(marker);
+    if (markerPosition == std::string::npos)
+        return false;
+    size_t position = markerPosition + marker.size();
+    if (!ParseUint32(objectName, position, chunkX))
+        return false;
+    if (position >= objectName.size() || objectName[position] != '_')
+        return false;
+    ++position;
+    if (!ParseUint32(objectName, position, chunkZ))
+        return false;
+    if (position == objectName.size())
+    {
+        lodLevel = 0;
+        hasLodSuffix = false;
+        return true;
+    }
+
+    static const std::string lodMarker = "::lod";
+    if (objectName.compare(position, lodMarker.size(), lodMarker) != 0)
+        return false;
+    position += lodMarker.size();
+    if (!ParseUint32(objectName, position, lodLevel))
+        return false;
+    if (position != objectName.size())
+        return false;
+    hasLodSuffix = true;
+    return true;
 }
 }
 
@@ -536,12 +597,121 @@ void World::AddSquareAreaLight(std::string name, WorldSquareAreaLight light)
     squareAreaLights[std::move(name)] = std::move(light);
 }
 
+void World::AddTerrainCollisionInstance(TerrainCollisionInstance instance)
+{
+    terrainCollisionInstances.push_back(std::move(instance));
+}
+
+bool World::UpdateTerrainChunkBounds(
+    const std::string& placementId,
+    uint32_t chunkX,
+    uint32_t chunkZ,
+    uint32_t lodLevel,
+    const Eigen::Vector3f& localBoundsMin,
+    const Eigen::Vector3f& localBoundsMax)
+{
+    if (placementId.empty())
+        return false;
+
+    bool matched = false;
+    for (auto& entry : meshObjects)
+    {
+        WorldMeshObject& object = entry.second;
+        if (!object.isTerrain ||
+            object.terrainPlacementId != placementId)
+        {
+            continue;
+        }
+        uint32_t objectChunkX = 0;
+        uint32_t objectChunkZ = 0;
+        uint32_t objectLodLevel = 0;
+        bool hasLodSuffix = false;
+        if (!ParseTerrainChunkName(
+                entry.first,
+                objectChunkX,
+                objectChunkZ,
+                objectLodLevel,
+                hasLodSuffix))
+        {
+            continue;
+        }
+        if (objectChunkX != chunkX || objectChunkZ != chunkZ)
+            continue;
+        if (hasLodSuffix)
+        {
+            if (objectLodLevel != lodLevel)
+                continue;
+        }
+        else if (lodLevel != 0)
+        {
+            continue;
+        }
+
+        object.localBoundsMin = localBoundsMin;
+        object.localBoundsMax = localBoundsMax;
+        // 多层地形的距离选择共用 LOD0 chunk AABB；LOD0 更新时必须把同一
+        // lodGroupId 的所有级对象一起改，否则 snapshot 遍历到哪个对象就
+        // 用哪份旧边界，LOD 选择会依赖 unordered_map 顺序。
+        if (lodLevel == 0 && object.lodLevelCount > 1 &&
+            !object.lodGroupId.empty())
+        {
+            for (auto& groupEntry : meshObjects)
+            {
+                WorldMeshObject& groupObject = groupEntry.second;
+                if (groupObject.lodGroupId != object.lodGroupId) continue;
+                groupObject.lodGroupBoundsMin = localBoundsMin;
+                groupObject.lodGroupBoundsMax = localBoundsMax;
+            }
+        }
+        matched = true;
+    }
+    return matched;
+}
+
+bool World::UpdateTerrainPlacementHeightmap(
+    const std::string& placementId,
+    std::shared_ptr<const HostImage> heightmap)
+{
+    if (placementId.empty() || !heightmap)
+        return false;
+    bool matched = false;
+    for (TerrainCollisionInstance& instance : terrainCollisionInstances)
+    {
+        if (instance.placementId != placementId)
+            continue;
+        instance.plan.heightmap = heightmap;
+        matched = true;
+    }
+    return matched;
+}
+
+bool World::UpdateTerrainPlacementLayerPaint(
+    const std::string& placementId,
+    std::shared_ptr<const TerrainLayerPaintData> paint)
+{
+    if (placementId.empty())
+        return false;
+    bool matched = false;
+    for (TerrainCollisionInstance& instance : terrainCollisionInstances)
+    {
+        if (instance.placementId != placementId)
+            continue;
+        // 同一个 placementId 理论上只有一条记录，但保留逐条复制，
+        // 避免重复记录时第一条把 shared_ptr 移空。
+        instance.plan.layerPaint = paint;
+        matched = true;
+    }
+    return matched;
+}
+
 template <typename ApplyFn>
-bool World::ForEachMeshObjectInSceneObject(const std::string& sceneObjectIdentity, ApplyFn&& apply)
+bool World::ForEachMeshObjectInSceneObject(
+    const std::string& sceneObjectIdentity, bool terrain, ApplyFn&& apply)
 {
     bool matched = false;
     for (auto& entry : meshObjects)
     {
+        if (entry.second.isTerrain != terrain) continue;
         if (MeshSceneObjectIdentity(entry.second, entry.first) != sceneObjectIdentity) continue;
         apply(entry.second);
         matched = true;
@@ -554,16 +724,27 @@ bool World::SetMeshSceneObjectVisible(const std::string& sceneObjectIdentity, bo
     // 一次写全该场景对象的所有 section：大纲的一行代表整个 actor，
     // 只改命中 identity 的那一个 section 会留下"行说隐藏、画面还有一半"的不一致。
     return ForEachMeshObjectInSceneObject(
-        sceneObjectIdentity, [visible](WorldMeshObject& object) { object.visible = visible; });
+        sceneObjectIdentity, false,
+        [visible](WorldMeshObject& object) { object.visible = visible; });
+}
+
+bool World::SetTerrainSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible)
+{
+    // 地形在 World 中仍是 chunk mesh，但同名场景对象可能同时存在普通 mesh；
+    // 这里只命中 isTerrain 的 chunk，避免两类 actor 共享裸名字时互相串写。
+    return ForEachMeshObjectInSceneObject(
+        sceneObjectIdentity, true,
+        [visible](WorldMeshObject& object) { object.visible = visible; });
 }
 
 bool World::IsMeshSceneObjectVisible(const std::string& sceneObjectIdentity) const
 {
-    // 与 actor 行一致：部分 section 可见时整行按可见显示。
+    // 与普通 mesh actor 行一致：部分 section 可见时整行按可见显示；地形另行查询。
     return std::any_of(meshObjects.begin(), meshObjects.end(),
         [&sceneObjectIdentity](const auto& entry)
         {
-            return MeshSceneObjectIdentity(entry.second, entry.first) == sceneObjectIdentity &&
+            return !entry.second.isTerrain &&
+                MeshSceneObjectIdentity(entry.second, entry.first) == sceneObjectIdentity &&
                 entry.second.visible;
         });
 }
@@ -626,28 +807,53 @@ bool World::GetMeshSceneObjectTransform(const std::string& identity,
     return false;
 }
 
-bool World::SetMeshSceneObjectTransform(const std::string& identity,
+bool World::SetSceneObjectTransform(const std::string& identity, bool terrain,
     const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
     const Eigen::Vector3f& scale)
 {
     SceneNode nextRoot;
     nextRoot.SetTransform(position, rotation, scale);
-    bool matched = false;
-    for (auto& entry : meshObjects)
+    const bool matched = ForEachMeshObjectInSceneObject(identity, terrain,
+        [&](WorldMeshObject& object)
+        {
+            SceneNode previousRoot;
+            previousRoot.SetTransform(
+                object.scenePosition, object.sceneRotation, object.sceneScale);
+            // 不能用新根直接替换 model：section 的导入节点变换仍然属于该实例。
+            object.model = (nextRoot.GetModelMatrix() *
+                previousRoot.GetModelMatrix().inverse() * object.model).eval();
+            object.scenePosition = position;
+            object.sceneRotation = rotation;
+            object.sceneScale = scale;
+        });
+    if (matched && terrain)
     {
-        WorldMeshObject& object = entry.second;
-        if (MeshSceneObjectIdentity(object, entry.first) != identity) continue;
-        SceneNode previousRoot;
-        previousRoot.SetTransform(object.scenePosition, object.sceneRotation, object.sceneScale);
-        // 不能用新根直接替换 model：section 的导入节点变换仍然属于该实例。
-        object.model = (nextRoot.GetModelMatrix() *
-            previousRoot.GetModelMatrix().inverse() * object.model).eval();
-        object.scenePosition = position;
-        object.sceneRotation = rotation;
-        object.sceneScale = scale;
-        matched = true;
+        // 地形渲染 chunk 与 Jolt heightfield 共用作者 TRS；只改 mesh 的
+        // scenePosition 会让下一次 Play/雕刻会话继续使用旧碰撞摆放。
+        const std::string placementId = "terrain|" + identity;
+        for (TerrainCollisionInstance& instance : terrainCollisionInstances)
+            if (instance.placementId == placementId)
+            {
+                instance.placement.position = position;
+                instance.placement.rotation = rotation;
+                instance.placement.scale = scale;
+            }
     }
     return matched;
+}
+
+bool World::SetMeshSceneObjectTransform(const std::string& identity,
+    const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    return SetSceneObjectTransform(identity, false, position, rotation, scale);
+}
+
+bool World::SetTerrainSceneObjectTransform(const std::string& identity,
+    const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    return SetSceneObjectTransform(identity, true, position, rotation, scale);
 }
 
 } // namespace VL

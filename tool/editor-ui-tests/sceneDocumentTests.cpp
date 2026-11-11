@@ -106,6 +106,34 @@ TEST_F(SceneDocumentTest, PositionSavePreservesUntouchedFieldsAndOriginalNumeric
     EXPECT_TRUE(service->ModifiedDocuments().empty());
 }
 
+TEST_F(SceneDocumentTest, CompleteTransformCommitCreatesOneUndoAndPreviewDoesNotTouchTheDraft)
+{
+    auto actor = Point();
+    actor.position = Eigen::Vector3f(10, 20, 30);
+    actor.rotation = Eigen::Vector3f(5, 10, 15);
+    EditorActorPropertyEdit transform;
+    transform.worldGeneration = 1;
+    transform.identity = actor.identity;
+    transform.property = EditorActorProperty::Transform;
+    transform.transformPosition = {10, 20, 30};
+    transform.transformRotation = {5, 10, 15};
+    transform.transformScale = {1, 1, 1};
+    transform.preview = true;
+
+    // 预览只属于 live World；即使调用端误交到文档服务，也不得改草稿或历史。
+    service->RecordActorEdit(actor, transform);
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+    EXPECT_FALSE(service->CanUndo(path.string()));
+
+    transform.preview = false;
+    service->RecordActorEdit(actor, transform);
+    EXPECT_TRUE(service->CanUndo(path.string()));
+    std::string error;
+    ASSERT_TRUE(service->Undo(path.string(), false, error)) << error;
+    EXPECT_FALSE(service->CanUndo(path.string()));
+    EXPECT_TRUE(service->CanUndo(path.string(), true));
+}
+
 TEST_F(SceneDocumentTest, ScriptBlueprintCreateAndPropertySaveRetainPersistentIdentity)
 {
     Json actor{{"type", "blueprintInstance"}, {"id", "persistent-a"}, {"name", "Rotator"},

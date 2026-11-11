@@ -15,6 +15,9 @@ struct MaterialVertexInput
     vec4 localTangent;
     vec4 speedTreeWindBranch1;
     vec4 speedTreeWindBranch2;
+    // per-instance 参数：x=windPhase, y=lodBias, z=variant, w=seed。
+    // 当前静态实例只透传；后续自有风系统从这里取相位/种子。
+    vec4 instanceParams;
 };
 
 struct MaterialVertex
@@ -25,6 +28,7 @@ struct MaterialVertex
     vec2 texCoord;
     vec2 texCoord1;
     vec4 localTangent;
+    vec4 instanceParams;
 };
 
 MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
@@ -36,6 +40,7 @@ MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
     vertex.texCoord = vertexInput.texCoord;
     vertex.texCoord1 = vertexInput.texCoord1;
     vertex.localTangent = vertexInput.localTangent;
+    vertex.instanceParams = vertexInput.instanceParams;
     return vertex;
 }
 

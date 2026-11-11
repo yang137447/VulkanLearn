@@ -104,12 +104,12 @@ bool BuildRendererDescriptorWrite(
     {
         const RendererResourceCache& resourceCache =
             RequireRendererDescriptorResourceCache(*inputs.descriptorContext, "RendererDescriptorWriter");
-        const std::shared_ptr<Texture>* texture = resourceCache.GetGlobalTexture(update.resourceName);
-        if (texture == nullptr || *texture == nullptr)
+        const std::shared_ptr<Texture> texture = resourceCache.GetGlobalTexture(update.resourceName);
+        if (texture == nullptr)
         {
             return false;
         }
-        outWrite.setImageInfo((*texture)->GetDescriptorInfo());
+        outWrite.setImageInfo(texture->GetDescriptorInfo());
     }
     else if (update.source == RendererDescriptorUpdateSource::MaterialTexture)
     {

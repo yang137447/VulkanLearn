@@ -5,9 +5,9 @@
 #include <string_view>
 #include <cstdint>
 #include <nlohmann/json.hpp>
-#include "editor/scene/editorActorProperty.h"
 #include "debug/debugDrawControl.h"
 #include "hair/tressfxGroupPaint.h"
+#include "world/actorProperty.h"
 
 namespace VL
 {
@@ -99,6 +99,8 @@ enum class UiActionType
     RedoSceneEdit,
     CreateScriptBlueprintAsset,
     OpenScriptSource,
+    TerrainEdit,
+    TerrainPaint,
     Quit
 };
 
@@ -194,6 +196,51 @@ struct ModelPreviewTressfxBrushInput
     float ringRadiusWorld = 0.0f;
 };
 
+enum class TerrainBrushOperation
+{
+    BeginStroke,
+    ApplyBrush,
+    EndStroke,
+    CancelStroke,
+    Undo,
+    Redo,
+    SaveHeightmap,
+    SavePaint
+};
+
+struct TerrainBrushInput
+{
+    TerrainBrushOperation operation = TerrainBrushOperation::ApplyBrush;
+    uint64_t worldGeneration = 0;
+    std::string placementId;
+    float u = 0.0f;
+    float v = 0.0f;
+    float radiusUv = 0.0f;
+    float strength = 1.0f;
+    float falloff = 1.0f;
+    int mode = 0;
+    int shape = 0;
+};
+
+struct TerrainPaintInput
+{
+    TerrainBrushOperation operation = TerrainBrushOperation::ApplyBrush;
+    uint64_t worldGeneration = 0;
+    std::string placementId;
+    uint32_t layerIndex = 0;
+    float u = 0.0f;
+    float v = 0.0f;
+    float radiusUv = 0.0f;
+    float strength = 0.0f;
+    float falloff = 1.0f;
+    float opacity = 1.0f;
+    float flow = 1.0f;
+    float noise = 0.0f;
+    uint32_t noiseSeed = 0;
+    bool erase = false;
+    int shape = 0;
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
@@ -209,6 +256,8 @@ struct UiAction
     ModelPreviewTressfxGroupInput previewTressfxGroup;
     ModelPreviewTressfxGroupBindingInput previewTressfxGroupBinding;
     ModelPreviewTressfxBrushInput previewTressfxBrush;
+    TerrainBrushInput terrainBrush;
+    TerrainPaintInput terrainPaint;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;

@@ -2,6 +2,9 @@ add_library(vl_script_host STATIC "${PROJECT_SOURCE_DIR}/source/script/scriptHos
 target_include_directories(vl_script_host PUBLIC "${PROJECT_SOURCE_DIR}/source")
 target_link_libraries(vl_script_host PUBLIC Json)
 
+# Jolt is configured once by the root CMakeLists through
+# cmake/VulkanLearnJolt.cmake. This directory only consumes the target.
+
 if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
     if(NOT TARGET Jolt)
         message(FATAL_ERROR "Jolt target is missing; native Jolt setup must run before script/")
@@ -99,3 +102,7 @@ if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
         VL_SCRIPT_BUILD_CONFIGURATION="${VULKANLEARN_SCRIPT_CONFIGURATION}")
     target_compile_definitions(vl_script_host PRIVATE VL_DOTNET_ROOT="${dotnet_root}")
 endif()
+
+# 地形碰撞的 ScriptPhysicsWorld 实现不再依赖 C# hosting；Jolt 是核心 CPU 依赖，
+# 物理翻译单元在关闭 C# 时也要能编译和测试。
+target_link_libraries(vl_script_host PUBLIC Jolt)

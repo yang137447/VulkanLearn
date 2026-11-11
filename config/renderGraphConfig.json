@@ -41,7 +41,7 @@
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid、autoExposure、terrainFeedback；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -188,6 +188,65 @@
             "usage": [
                 "colorAttachment",
                 "sampled"
+            ]
+        },
+        {
+            "name": "terrainFeedback",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback0",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback1",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback2",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainLayerFeedback3",
+            "format": "R8G8B8A8_UNORM",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "colorAttachment",
+                "transferSrc"
+            ]
+        },
+        {
+            "name": "terrainFeedbackDepth",
+            "format": "D32_SFLOAT",
+            "widthSize": 128,
+            "heightSize": 128,
+            "usage": [
+                "depthStencilAttachment"
             ]
         },
         {
@@ -410,6 +469,72 @@
                 },
                 {
                     "resource": "sceneDepth",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "terrainFeedback",
+            "type": "terrainFeedback",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/Pass/MI_terrainFeedback.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "terrainPageTable",
+                    "source": "worldTexture",
+                    "binding": 0
+                },
+                {
+                    "resource": "terrainLayerCatalog",
+                    "source": "worldTexture",
+                    "binding": 1
+                },
+                {
+                    "resource": "terrainLayerIds",
+                    "source": "worldTexture",
+                    "binding": 2
+                },
+                {
+                    "resource": "terrainLayerWeights",
+                    "source": "worldTexture",
+                    "binding": 3
+                }
+            ],
+            "output": [
+                {
+                    "resource": "terrainFeedback",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback0",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback1",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback2",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainLayerFeedback3",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainFeedbackDepth",
                     "loadOp": "clear",
                     "storeOp": "store"
                 }

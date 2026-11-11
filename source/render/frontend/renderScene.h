@@ -26,6 +26,11 @@ struct RenderDrawPacket
     Eigen::Matrix3f speedTreeWorldToLocalDirection = Eigen::Matrix3f::Identity();
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
+    std::string speedTreeWindProfileKey;
+    // 显式地形标记：feedback pass 用 draw packet 层过滤，而不是遍历材质/名字。
+    bool terrainFeedbackEligible = false;
+    // 编辑器拾取身份：地形 chunk 仍是 mesh，但选中必须回写 terrain|name。
+    bool isTerrain = false;
     std::string windResponseProfileKey;
     // TressFX 分组预览值语义；渲染线程只写对象 UBO，不直接改 World。
     uint32_t tressfxPointsPerGuide = 0;

@@ -9,6 +9,7 @@
 #include "scene/validation/sceneAssetValidator.h"
 #include "commonFunction.h"
 #include "script/scriptBlueprintAsset.h"
+#include "world/loading/worldGameplayPlanBuilder.h"
 
 namespace VL
 {
@@ -109,6 +110,15 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
         buildPlan.sceneJson = ResolveScriptBlueprintScene(CommonFunction::GetResourcePath(), buildPlan.sceneJson, scenePath);
         buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(scenePath, buildPlan.sceneJson);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
+        // gameplay 计划只依赖已校验的场景数据；材质 key 由渲染器资源加载阶段
+        // 填充，WorldLoader 不再知道任何渲染类型。
+        auto gameplayPlans = WorldGameplayPlanBuilder().Build(
+            buildPlan.sceneAssetPlan, buildPlan.sceneJson, scenePath);
+        if (gameplayPlans.IsFailure())
+        {
+            return RuntimeResult<WorldBuildPlan>::Failure(gameplayPlans.Error());
+        }
+        buildPlan.gameplay = std::move(gameplayPlans.Value());
         return RuntimeResult<WorldBuildPlan>::Success(std::move(buildPlan));
     }
     catch (const std::exception& exception)

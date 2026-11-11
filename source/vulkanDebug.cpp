@@ -1,5 +1,6 @@
 #include "vulkanDebug.h"
 #include "commonFunction.h"
+#include <cstdlib>
 #include <iostream>
 
 PFN_vkCmdBeginDebugUtilsLabelEXT VulkanDebug::pfnCmdBeginDebugUtilsLabelEXT = nullptr;
@@ -9,8 +10,16 @@ PFN_vkSetDebugUtilsObjectNameEXT VulkanDebug::pfnSetDebugUtilsObjectNameEXT = nu
 void VulkanDebug::Init(vk::Instance instance)
 {
 #if !defined(NDEBUG)
-    pfnCmdBeginDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdBeginDebugUtilsLabelEXT"));
-    pfnCmdEndDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdEndDebugUtilsLabelEXT"));
+    // 逐 object/pipeline 的 debug label 是开发期诊断工具，不是渲染契约。
+    // Debug + 验证层下上千条 label 命令会显著拖慢 submission；保留环境开关
+    // 用于性能 A/B，默认仍开启，便于 RenderDoc/Nsight 捕获。
+    const char* disableRegions = std::getenv("VL_DISABLE_DEBUG_REGIONS");
+    if (disableRegions == nullptr || disableRegions[0] == '\0' ||
+        disableRegions[0] == '0')
+    {
+        pfnCmdBeginDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdBeginDebugUtilsLabelEXT"));
+        pfnCmdEndDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdEndDebugUtilsLabelEXT"));
+    }
     pfnSetDebugUtilsObjectNameEXT = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(instance.getProcAddr("vkSetDebugUtilsObjectNameEXT"));
 #endif
 }

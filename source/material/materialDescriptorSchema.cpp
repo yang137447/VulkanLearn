@@ -177,7 +177,14 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
     {
         MaterialTextureSchemaEntry texture;
         texture.name = name;
-        texture.glslType = "sampler2D";
+        // 数组绑定与单图使用同一 combined image sampler 描述符；GLSL 类型只影响
+        // 生成 include 的声明，必须与材质 JSON 显式声明保持一致。
+        texture.glslType = textureJson.value("type", std::string());
+        if (texture.glslType != "sampler2D" && texture.glslType != "sampler2DArray")
+        {
+            throw std::runtime_error(
+                "Material texture must declare sampler2D or sampler2DArray: " + name);
+        }
         texture.binding = textureBinding++;
         schema.textures.push_back(texture);
 

@@ -23,8 +23,7 @@ void RenderThread::Start(RenderSystem& renderSystem)
 
     this->renderSystem = &renderSystem;
     stopRequested = false;
-    frameRequested = false;
-    renderBusy = false;
+    frameBudget.Reset();
     fatalError.clear();
     worker = std::thread(&RenderThread::ThreadMain, this);
     running = true;
@@ -40,7 +39,9 @@ void RenderThread::Stop()
         }
 
         stopRequested = true;
-        frameRequested = false;
+        // Clear every outstanding request so WaitForFrameSlot/WaitUntilIdle
+        // cannot wait forever on a frame that will never be recorded.
+        frameBudget.Abort();
     }
 
     condition.notify_all();
@@ -52,32 +53,66 @@ void RenderThread::Stop()
     std::lock_guard<std::mutex> lock(mutex);
     running = false;
     renderSystem = nullptr;
-    renderBusy = false;
-    frameRequested = false;
+    frameBudget.Reset();
+}
+
+void RenderThread::WaitForFrameSlot()
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    while (running && fatalError.empty() && !frameBudget.CanPublish())
+    {
+        condition.wait(lock);
+    }
 }
 
 void RenderThread::SubmitFrame()
 {
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!running || !fatalError.empty())
+        if (!running || stopRequested || !fatalError.empty())
         {
             return;
         }
 
-        frameRequested = true;
+        frameBudget.Publish();
     }
 
-    condition.notify_one();
+    condition.notify_all();
 }
 
 void RenderThread::WaitUntilIdle()
 {
     std::unique_lock<std::mutex> lock(mutex);
-    while (running && (renderBusy || frameRequested))
+    while (running && !frameBudget.IsIdle())
     {
+        // A fatal render failure aborts the budget; a concurrent Stop() also
+        // clears running, so neither case can spin here.
         condition.wait(lock);
     }
+}
+
+size_t RenderThread::GetPendingFrameCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return frameBudget.GetPendingFrameCount();
+}
+
+bool RenderThread::IsFramePending() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return !frameBudget.IsIdle();
+}
+
+uint64_t RenderThread::GetRequestedFrameSerial() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return frameBudget.GetRequestedFrameSerial();
+}
+
+uint64_t RenderThread::GetCompletedFrameSerial() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return frameBudget.GetCompletedFrameSerial();
 }
 
 bool RenderThread::IsRunning() const
@@ -106,7 +141,7 @@ void RenderThread::ThreadMain()
     {
         {
             std::unique_lock<std::mutex> lock(mutex);
-            while (!stopRequested && !frameRequested)
+            while (!stopRequested && !frameBudget.HasPendingRequest())
             {
                 condition.wait(lock);
             }
@@ -116,8 +151,10 @@ void RenderThread::ThreadMain()
                 break;
             }
 
-            frameRequested = false;
-            renderBusy = true;
+            if (!frameBudget.BeginRender().has_value())
+            {
+                continue;
+            }
         }
 
         try
@@ -136,11 +173,13 @@ void RenderThread::ThreadMain()
 
         {
             std::lock_guard<std::mutex> lock(mutex);
-            renderBusy = false;
+            frameBudget.EndRender();
             if (!fatalError.empty())
             {
+                // Release every waiter even if a frame request arrived while
+                // the failing frame was still in flight.
                 stopRequested = true;
-                frameRequested = false;
+                frameBudget.Abort();
             }
         }
 
@@ -155,8 +194,7 @@ void RenderThread::ThreadMain()
 
     {
         std::lock_guard<std::mutex> lock(mutex);
-        renderBusy = false;
-        frameRequested = false;
+        frameBudget.Abort();
     }
     condition.notify_all();
 }

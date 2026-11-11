@@ -373,6 +373,11 @@
                     "minLength": 1,
                     "description": "可选的实例级 MI 路径，覆盖本对象全部 section 的材质，不修改 SM 槽位或导入缓存。"
                 },
+                "instancesPath": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选的 VEG_*.json 静态实例清单；与 modelPath 指向同一 SM，加载时合并为一个 instanced draw。"
+                },
                 "position": {
                     "$ref": "#/$defs/vec3"
                 },

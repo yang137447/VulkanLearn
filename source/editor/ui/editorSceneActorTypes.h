@@ -7,29 +7,19 @@
 
 #include <Eigen/Dense>
 
+#include "world/actorIdentity.h"
 #include "world/worldSnapshot.h"
 
+namespace VL { struct TerrainBuildPlan; }
 namespace VL::Hair { class TressfxRootCloud; }
 namespace VL::Hair { struct TressfxGroupBinding; }
 
 namespace VL::EditorUi
 {
 
-// 大纲 actor 的类型。Mesh..Environment 与 SceneWind 和场景 JSON 的对象 type 一一对应；
-// Script 只表达 World 里确实存在的蓝图实例状态。SpeedTree 每物种的响应曲线数据
-// 属于网格资产，不作为场景 actor 出现在大纲里。
-enum class EditorSceneActorType : uint8_t
-{
-    Mesh,
-    DirectionalLight,
-    PointLight,
-    SpotLight,
-    SquareAreaLight,
-    Camera,
-    Environment,
-    SceneWind,
-    Script
-};
+// 类型的权威定义在运行时 world/actorIdentity.h；编辑器 UI 继续以
+// EditorUi::EditorSceneActorType 的写法引用它。
+using VL::EditorSceneActorType;
 
 // 一个 mesh actor 的渲染子对象。World 的 meshObjects 按 section 展开，
 // 多 section 模型因此有多个条目共享同一个 sceneObjectIdentity。
@@ -117,8 +107,11 @@ struct EditorSceneActorSnapshot
     // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格与四类灯
     // 真正有渲染侧可见性；相机/环境/场景风/风剖面固定为 true，也不显示眼睛控件。
     bool visible = true;
-    // 只有 Mesh 使用；其余类型为空。
+    // 只有 Mesh/Terrain 使用；其余类型为空。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
+    // 仅 Terrain 使用：TR 资产路径与 World 加载期准备好的只读计划。
+    std::string terrainAssetPath;
+    std::shared_ptr<const TerrainBuildPlan> terrainPlan;
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;

@@ -17,6 +17,7 @@
 
 #include "editor/command/editorCommand.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/selection/materialInstanceSelection.h"
 #include "editor/service/materialInstanceDocumentService.h"
 #include "render/camera/cameraExposure.h"
 #include "support/fakeMaterialInstancePreviewAdapter.h"
@@ -27,6 +28,26 @@ namespace
 using Json = nlohmann::json;
 using namespace VL;
 using namespace VL::Editor;
+
+TEST(MaterialInstanceEditorProduction, TerrainPickAggregationCarriesTheEditorActorIdentity)
+{
+    RenderScene renderScene;
+    renderScene.worldGeneration = 5;
+    RenderDrawPacket packet;
+    packet.objectId = 9;
+    packet.sceneObjectIdentity = "Landscape";
+    packet.materialSlotIndex = 0;
+    packet.materialSlotName = "Terrain";
+    packet.materialInstance = {std::string("MI_ground"), 1};
+    packet.isTerrain = true;
+    renderScene.drawPackets.push_back(std::move(packet));
+
+    const auto model = VL::Editor::Selection::AggregateSceneModel(
+        renderScene, "Maps/SC_terrain/Terrains/TR_ground.json", 9, "Landscape");
+    EXPECT_EQ(model.actorIdentity, "terrain|Landscape");
+    ASSERT_EQ(model.materials.size(), 1u);
+    EXPECT_EQ(model.materials[0].materialInstancePath, "MI_ground");
+}
 
 #ifndef VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR
 #define VULKANLEARN_MATERIAL_EDITOR_FIXTURE_DIR "."

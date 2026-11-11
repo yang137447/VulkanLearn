@@ -10,6 +10,7 @@
 #include "debug/debugDrawControl.h"
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupPaint.h"
+#include "world/actorProperty.h"
 
 namespace VL
 {
@@ -74,6 +75,23 @@ enum class RuntimeCommandType
     SetScriptPlayState,
     InjectInput,
     ReportShaderCacheStatistics,
+    ReportTerrainFeedbackStatistics,
+    ReportTerrainStatistics,
+    ReportTerrainLayerStatistics,
+    ReportTerrainLodStatistics,
+    // 几何 chunk 驻留/显存基线：加载期创建的级与 chunk 数、顶点/索引字节、
+    // 当前帧实际出图数。只读诊断，不改渲染状态。
+    ReportTerrainChunkStatistics,
+    ReportTerrainCollisionStatistics,
+    // Console `terrain parity [tileX tileZ]`：同一覆盖页 CPU/GPU 烘焙逐 texel
+    // 比较；intValue = tileX * 32 + tileZ，渲染线程帧边界同步执行一次。
+    RunTerrainPageBakeParity,
+    SetTerrainResidentCapacity,
+    // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
+    SetTerrainLayerResidentCapacity,
+    RequestTerrainLayerPreload,
+    // L4e：强制目标 mip（-1 = 自动），只影响 mode 1，用于复现缺页回退。
+    SetTerrainLayerForceMip,
     // 打印最近一次读回的逐 pass GPU 计时表；未开启采集时同时启动采集。
     PrintGpuPassStats,
     // 打印与 Performance 页同源的单行 JSON；未开启采集时同时启动采集。
@@ -95,7 +113,9 @@ enum class RuntimeCommandType
     // RenderableObject 的 group id/颜色/参数表，不写资产。
     SetTressfxGroupBindingPreview,
     // 分组笔刷 ghost：值语义命令，渲染线程按对象名更新 host-visible preview buffer。
-    SetTressfxBrushPreview
+    SetTressfxBrushPreview,
+    // Console `quit`：只在 GT 命令点置位退出意图，由 EngineLoop 走既有 Shutdown 路径。
+    QuitApplication
 };
 
 enum class RuntimeShaderReloadScope

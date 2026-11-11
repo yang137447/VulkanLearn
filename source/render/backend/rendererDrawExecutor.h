@@ -59,6 +59,11 @@ public:
     void DrawGeometryScene(RendererDrawContext& context) const;
     void DrawForwardOpaqueScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;
+    // feedback pass 的 pipeline/pass descriptor 已由调用方绑定；这里只遍历
+    // 明确标记为 terrain 的 draw packet，逐对象绑定 Set 2 与 UBOModel。
+    void DrawTerrainFeedbackScene(
+        const PipelineBase& passPipeline,
+        RendererDrawContext& context) const;
 
 private:
     enum class SurfaceDrawDomain

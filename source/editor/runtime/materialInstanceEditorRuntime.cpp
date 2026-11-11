@@ -1445,6 +1445,7 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
     if (assetDocuments)
     {
         snapshot.blueprintDocuments = assetDocuments->BlueprintDocuments().DocumentSnapshots();
+        snapshot.terrainDocuments = assetDocuments->TerrainDocuments().DocumentSnapshots();
         snapshot.tressfxDocuments = assetDocuments->TressfxDocuments().DocumentSnapshots();
         const auto scenes = assetDocuments->ModifiedDocuments();
         // GT 作者适配器绕过命令执行修改 Scene 草稿；发布保存列表时必须同步总线版本，
@@ -1463,6 +1464,7 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
         command.type != EditorCommandType::SaveTressfxDocument &&
         command.type != EditorCommandType::SaveTextureDocument &&
         command.type != EditorCommandType::SaveBlueprintDocument &&
+        command.type != EditorCommandType::SaveTerrainDocument &&
         command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
     const auto path = GetEditorCommandAssetPath(command);
     if (!path) return;

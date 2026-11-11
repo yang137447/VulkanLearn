@@ -172,6 +172,32 @@ function Test-SourcePatternsAbsent {
     }
 }
 
+function Test-AsyncRenderLoopNoImmediateIdleWait {
+    param(
+        [System.Collections.Generic.List[string]]$Failures,
+        [string]$RuleName = "Bounded async render loop no immediate idle wait"
+    )
+
+    $relativePath = "source/engine/engineLoop.cpp"
+    $path = Resolve-RepoPath $relativePath
+    if (!(Test-Path -LiteralPath $path)) {
+        Add-Failure $Failures "${RuleName}: missing expected file '$relativePath'."
+        return
+    }
+
+    # The async branch publishes and returns to Tick. A per-frame
+    # WaitForRenderThreadIdle() directly after SubmitFrame() recreates the
+    # synchronous pipeline under a different name, so forbid the sequence while
+    # leaving the explicit mutation safe points in the same file untouched.
+    $text = Get-Content -LiteralPath $path -Raw
+    $pattern = 'renderThread->SubmitFrame\(\)\s*;\s*(?:\r?\n[^\r\n]*){0,3}\r?\n[^\r\n]*WaitForRenderThreadIdle\(\)'
+    $match = [regex]::Match($text, $pattern)
+    if ($match.Success) {
+        $line = ($text.Substring(0, $match.Index) -split "`n").Count
+        Add-Failure $Failures "${RuleName}: '${relativePath}:${line}' waits for the render thread immediately after SubmitFrame(); use WaitForRenderFrameSlot() before publishing instead."
+    }
+}
+
 function Test-VulkanManagerBoundary {
     param([System.Collections.Generic.List[string]]$Failures)
 
@@ -437,7 +463,9 @@ Test-FilePatternsAbsent `
         '\bDrawableObject\b',
         '\bGetCommandBufferBeginInfo\s*\(',
         '\bcommandBufferBeginInfo\b',
-        '\bsubmitInfo\b',
+        # A by-reference submit parameter is not a cached submit path; the old
+        # VulkanManager member (a stored vk::SubmitInfo) is what this forbids.
+        '\bvk::SubmitInfo\s+\w+\s*;',
         '\bpiplineStageFlags\b'
     ) `
     -RuleName "Removed VulkanManager cached submit path"
@@ -675,29 +703,127 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/render/resource/rendererResourceLoadCoordinator.h" `
+    -RelativePath "source/world/worldBuildPlan.h" `
     -Patterns @(
-        'struct RendererWorldResourceLoadResult',
-        'std::vector<MeshObjectBuildPlan> meshObjectPlans'
+        'struct WorldBuildPlan',
+        'WorldGameplayPlans gameplay;',
+        'struct WorldAssemblyAssets',
+        'std::unordered_map<std::string, ResolvedMaterialBinding> materialBindings;'
     ) `
-    -RuleName "Renderer resource load result contract"
+    -RuleName "World build plan pure data contract"
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/world/loading/worldLoader.h" `
+    -RelativePath "source/world/loading/worldGameplayPlanBuilder.h" `
     -Patterns @(
-        'std::vector<MeshObjectBuildPlan> meshObjectPlans'
+        'class WorldGameplayPlanBuilder',
+        'RuntimeResult<WorldGameplayPlans> Build\('
     ) `
-    -RuleName "World build plan mesh object contract"
+    -RuleName "World gameplay plan builder contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/render/resource/rendererResourceLoadCoordinator.h" `
+    -Patterns @(
+        'using RendererWorldResourceLoadResult = WorldAssemblyAssets',
+        'LoadRendererResources\(',
+        'const WorldBuildPlan& worldBuildPlan'
+    ) `
+    -RuleName "Renderer resource load result contract"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/render/resource/rendererResourceLoadCoordinator.cpp"
+    ) `
+    -Patterns @(
+        '\bsoftBodyObjectPlans\b',
+        '\bglassObjectPlans\b',
+        '\bprojectileSettings\b',
+        '\bSoftBodyObjectBuildPlan\b',
+        '\bGlassObjectBuildPlan\b',
+        '#include\s+"world/loading/worldLoader\.h"'
+    ) `
+    -RuleName "Renderer gameplay plan boundary"
+
+Test-DirectoryPatternsAbsent `
+    -Failures $failures `
+    -RelativeDirectory "source/render" `
+    -Patterns @(
+        '\bsoftBodyObjectPlans\b',
+        '\bglassObjectPlans\b',
+        '\bprojectileSettings\b',
+        '#include\s+"world/loading/worldLoader\.h"'
+    ) `
+    -RuleName "Renderer world loader include boundary"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/worldCandidatePreparer.h" `
+    -Patterns @(
+        'class WorldCandidatePreparer',
+        'RuntimeResult<PreparedWorldTransition> Prepare\('
+    ) `
+    -RuleName "World transaction engine ownership contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/preparedWorldTransition.h" `
+    -Patterns @(
+        'struct PreparedWorldTransition'
+    ) `
+    -RuleName "Prepared world transition contract"
+
+Test-PathsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/world/loading/worldTransitionCoordinator.h",
+        "source/world/loading/worldTransitionCoordinator.cpp",
+        "source/world/loading/worldGraphTransactionCoordinator.h",
+        "source/world/loading/worldGraphTransactionCoordinator.cpp"
+    ) `
+    -RuleName "World transaction ownership cutover"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/world/loading/worldBuilder.h" `
+    -Patterns @(
+        'const WorldBuildPlan& worldBuildPlan',
+        'WorldAssemblyAssets assemblyAssets'
+    ) `
+    -RuleName "WorldBuilder assembly assets contract"
 
 Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/world/loading/worldBuilder.cpp" `
     -Patterns @(
-        'worldBuildPlan\.meshObjectPlans',
+        'worldBuildPlan\.gameplay',
+        'assemblyAssets\.meshObjectPlans',
+        'WorldBuilder\.MaterialBindingMissing',
         'world->AddMeshObject\('
     ) `
     -RuleName "WorldBuilder mesh object plan consumption"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/engineLoop.cpp" `
+    -Patterns @(
+        'WaitForRenderFrameSlot\(\)',
+        'SetRendererMutationSafePoint\('
+    ) `
+    -RuleName "Bounded async render loop contract"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/frame/engineFramePhases.cpp" `
+    -Patterns @(
+        'renderThread->SubmitFrame\(\)'
+    ) `
+    -RuleName "Bounded async render loop submit contract"
+
+Test-AsyncRenderLoopNoImmediateIdleWait `
+    -Failures $failures `
+    -RuleName "Bounded async render loop no immediate idle wait"
 
 # Runtime validation hooks and feature tests must apply pressure through
 # CommandBus or the one explicit adapter. Only RuntimeValidationServices.cpp
@@ -710,7 +836,7 @@ Test-FilePatternsAbsent `
         "source/engine/runtimeTestHooks.cpp"
     ) `
     -Patterns @(
-        '#include\s+"world/loading/worldTransitionCoordinator\.h"',
+        '#include\s+"engine/worldCandidatePreparer\.h"',
         '#include\s+"renderSystem\.h"',
         '#include\s+"renderGraph\.h"',
         'RequestWorldLoad\(',
@@ -1082,11 +1208,18 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
-        'RecreateRendererForWindowResize',
+        'RecreateRendererForWindowResize'
+    ) `
+    -RuleName "Swapchain resize production lifecycle"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/window/engineWindowLifecycle.cpp" `
+    -Patterns @(
         'ReleaseSwapchainDependentResources',
         'RebuildSwapchainDependentResources'
     ) `
-    -RuleName "Swapchain resize production lifecycle"
+    -RuleName "Swapchain resize production lifecycle resources"
 
 Test-FilePatternsPresent `
     -Failures $failures `
@@ -1161,11 +1294,13 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/world/loading/worldTransitionCoordinator.cpp" `
+    -RelativePath "source/engine/worldCandidatePreparer.cpp" `
     -Patterns @(
         'ClassifyRendererResourceLoadError',
         'Material.LoadFailed',
         'Texture.LoadFailed',
+        'Mesh.LoadFailed',
+        'Hair.LoadFailed',
         'Shader.LoadFailed',
         'WorldTransition.LoadFailed'
     ) `
@@ -1215,6 +1350,241 @@ Test-FilePatternsPresent `
         'artifacts/architecture-validation'
     ) `
     -RuleName "Architecture final validation script contract"
+
+# Runtime/editor target ownership is declared once in CMake and enforced twice:
+# the runtime source glob filters editor paths, and a configure-time read rejects
+# editor-only includes before any target is linked.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "CMakeLists.txt" `
+    -Patterns @(
+        'option\(VULKANLEARN_ENABLE_EDITOR',
+        'option\(VULKANLEARN_BUILD_GAME',
+        'option\(VULKANLEARN_BUILD_LEGACY_MAIN',
+        'if\(NOT VULKANLEARN_ENABLE_EDITOR AND NOT VULKANLEARN_BUILD_GAME\)',
+        'VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF'
+    ) `
+    -RuleName "Runtime editor target ownership"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/CMakeLists.txt" `
+    -Patterns @(
+        'list\(FILTER sources EXCLUDE REGEX "/source/editor/"\)',
+        'list\(FILTER sources EXCLUDE REGEX "/source/render/editor/"\)',
+        'editorThumbnailRenderSession',
+        '/source/main\\\\.cpp',
+        '/source/main_editor',
+        '/source/main_game',
+        'file\(READ "\$\{runtime_source\}" runtime_source_text\)',
+        'message\(FATAL_ERROR',
+        'vl_runtime source',
+        'add_library\(vl_runtime STATIC \$\{sources\}\)',
+        'add_library\(vl_editor_asset_core STATIC \$\{editor_asset_core_sources\}\)',
+        'add_library\(vl_editor STATIC \$\{editor_sources\}\)',
+        'list\(FILTER editor_sources EXCLUDE REGEX "/source/editor/\(command|service|persistence\)/"\)',
+        'add_executable\(main_editor main_editor\.cpp\)',
+        'add_executable\(main_game main_game\.cpp\)'
+    ) `
+    -RuleName "Runtime editor target ownership"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/main_game.cpp" `
+    -Patterns @(
+        '#include "engine/nullEditorHost\.h"',
+        'std::make_unique<VL::NullEditorHost>\(\)'
+    ) `
+    -RuleName "Game executable link boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/main_game.cpp",
+        "source/engine/nullEditorHost.h",
+        "source/engine/nullEditorHost.cpp"
+    ) `
+    -Patterns @(
+        '#include "(editor|render/editor)/',
+        '\bEditorUi::',
+        '\bEditor::'
+    ) `
+    -RuleName "Game executable link boundary"
+
+foreach ($linkFile in @("source/CMakeLists.txt")) {
+    $linkPath = Resolve-RepoPath $linkFile
+    if (!(Test-Path -LiteralPath $linkPath)) {
+        Add-Failure $failures "Game executable link boundary: missing expected file '$linkFile'."
+        continue
+    }
+    $linkText = Get-Content -LiteralPath $linkPath -Raw
+    $mainGameStart = $linkText.IndexOf('add_executable(main_game main_game.cpp)')
+    if ($mainGameStart -lt 0) {
+        Add-Failure $failures "Game executable link boundary: main_game target block is missing."
+        continue
+    }
+    $mainGameBody = $linkText.Substring($mainGameStart)
+    if ($mainGameBody -notmatch 'target_link_libraries\(\s*main_game\s+PRIVATE\s+vl_runtime\s*\)') {
+        Add-Failure $failures "Game executable link boundary: main_game must link vl_runtime as its only library target."
+    }
+    if ($mainGameBody -match 'vl_editor') {
+        Add-Failure $failures "Game executable link boundary: main_game block references an editor target."
+    }
+
+    $mainEditorStart = $linkText.IndexOf('add_executable(main_editor main_editor.cpp)')
+    $mainEditorEnd = $linkText.IndexOf('if(VULKANLEARN_BUILD_GAME)')
+    if ($mainEditorStart -lt 0 -or $mainEditorEnd -le $mainEditorStart) {
+        Add-Failure $failures "Game executable link boundary: main_editor target block is missing."
+    }
+    else {
+        $mainEditorBody = $linkText.Substring($mainEditorStart, $mainEditorEnd - $mainEditorStart)
+        if ($mainEditorBody -notmatch 'target_link_libraries\(\s*main_editor\s+PRIVATE\s+vl_editor\s*\)') {
+            Add-Failure $failures "Game executable link boundary: main_editor must link vl_editor."
+        }
+    }
+
+    $runtimeLink = [regex]::Match(
+        $linkText,
+        'target_link_libraries\(\s*vl_runtime\s+PUBLIC(?<body>[^\)]*)\)')
+    if (!$runtimeLink.Success) {
+        Add-Failure $failures "Game executable link boundary: vl_runtime PUBLIC link block is missing."
+    }
+    elseif ($runtimeLink.Groups["body"].Value -match 'vl_editor') {
+        Add-Failure $failures "Game executable link boundary: vl_runtime link interface references an editor target."
+    }
+}
+
+# The runtime UI may hold only the editor shell interface. Editor documents,
+# panels and textures are attached by the editor module through this seam.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/ui/iEditorUiShell.h" `
+    -Patterns @(
+        'class IEditorUiShell',
+        'class IEditorUiRuntimeBridge',
+        'virtual void Shutdown\(\) = 0;',
+        'ClearEditorUiShell'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/ui/uiSubsystem.h",
+        "source/ui/uiSubsystem.cpp",
+        "source/ui/iEditorUiShell.h",
+        "source/ui/rmlUiInterfaces.h",
+        "source/ui/rmlUiInterfaces.cpp",
+        "source/ui/uiAction.h",
+        "source/ui/viewModel/runtimeUiSections.h",
+        "source/ui/uiExternalTexture.h",
+        "source/ui/uiRenderSnapshot.h"
+    ) `
+    -Patterns @(
+        '#include "(editor|render/editor)/',
+        '#include "ui/widgets/(editor|workspace)/',
+        '\bEditorUi::',
+        '\bEditor::'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/ui/uiSubsystem.h" `
+    -Patterns @(
+        'IEditorUiShell\* editorUiShell',
+        'SetEditorUiShell\(IEditorUiShell\* shell\)'
+    ) `
+    -RuleName "Runtime UI editor include boundary"
+
+# Game packaging is a closure, not a directory copy. The exporter must resolve
+# the runtime UI manifest, strip the editor graph, require the game flavor
+# marker, and ship gameplay default materials that no scene JSON names.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "ui/runtime-ui.manifest.json" `
+    -Patterns @(
+        '"format": 1',
+        '"runtime-hud\.rml"',
+        '"localization\.json"'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePath "ui/runtime-ui.manifest.json" `
+    -Patterns @(
+        '"editor-',
+        '"widgets/'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'kRuntimeUiManifest',
+        'kEditorUiManifest',
+        'CopyUiClosure',
+        'ValidateUiManifest',
+        'StripEditorGraphForGame',
+        'kGameBuildMarker',
+        'editorEnabled',
+        'MI_glass_crack\.json'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/validate-game-package.ps1" `
+    -Patterns @(
+        'runtime-ui\.manifest\.json',
+        'editor-ui\.manifest\.json',
+        'game-export-manifest\.json',
+        'vl_build_flavor\.json',
+        '--exit-after-frames',
+        'misses=0'
+    ) `
+    -RuleName "Game packaging manifest closure"
+
+# Shader packaging follows cache artifact identity, not guessed file kinds.
+# Every output role is copied, including debug SPV, because the cache/ABI
+# reflection path requires them.
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'shader/spv/shader-build-cache\.json',
+        'compilePolicy',
+        'configuration=Release;',
+        'MaterialGraphicsPair',
+        'materialSource',
+        'normalizedKey',
+        'shaderEvaluation',
+        'generatedAtStartup',
+        'for \(const auto& \[role, output\] : artifact\.at\("outputs"\)\.items\(\)\)'
+    ) `
+    -RuleName "Game shader cache closure"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'continue;[^\r\n]*debug(Vertex|Fragment|Compute)',
+        'if \(role == "debug'
+    ) `
+    -RuleName "Game shader cache closure"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/validate-game-package.ps1" `
+    -Patterns @(
+        'runtime-shader\.manifest\.json',
+        'retained shader output is missing',
+        '--verify-package',
+        'Shader cache miss'
+    ) `
+    -RuleName "Game shader cache closure"
 
 Test-VulkanManagerBoundary -Failures $failures
 Test-RendererBackendRawGetterBoundary -Failures $failures

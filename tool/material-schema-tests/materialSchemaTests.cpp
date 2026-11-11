@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -282,6 +284,185 @@ TEST(MaterialSchema, ChannelsValidation)
 TEST(MaterialSchema, ColorUsesVec4Layout)
 {
     TestColorUsesVec4Layout();
+}
+
+TEST(MaterialSchema, TextureArrayUsesSampler2DArrayBinding)
+{
+    auto material = BuildMaterialDefinition();
+    material["textures"]["layerAlbedo"] = {
+        {"type", "sampler2DArray"},
+        {"default", nullptr}};
+    MaterialAssetValidator::ValidateDefinition(
+        material,
+        "shader/glsl/M_schemaTest.json");
+    const VL::MaterialDescriptorSchema schema =
+        VL::MaterialDescriptorSchema::Build(
+            material,
+            "shader/glsl/M_schemaTest.json");
+
+    ASSERT_EQ(schema.GetTextures().size(), 1u);
+    EXPECT_EQ(schema.GetTextures().front().name, "layerAlbedo");
+    EXPECT_EQ(schema.GetTextures().front().glslType, "sampler2DArray");
+    const ShaderBinding* binding = schema.FindBinding(schema.GetTextures().front().binding);
+    ASSERT_NE(binding, nullptr);
+    EXPECT_EQ(binding->type, vk::DescriptorType::eCombinedImageSampler);
+    EXPECT_EQ(binding->descriptorCount, 1u);
+
+    material["textures"]["layerAlbedo"]["type"] = "samplerCube";
+    EXPECT_THROW(
+        MaterialAssetValidator::ValidateDefinition(
+            material,
+            "shader/glsl/M_schemaTest.json"),
+        std::exception);
+}
+
+TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
+{
+    const std::filesystem::path materialPath =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
+        "shader/glsl/M_terrain.json";
+    std::ifstream stream(materialPath);
+    ASSERT_TRUE(stream.is_open());
+    const nlohmann::json material = nlohmann::json::parse(stream);
+    MaterialAssetValidator::ValidateDefinition(
+        material,
+        "shader/glsl/M_terrain.json");
+    const VL::MaterialDescriptorSchema schema =
+        VL::MaterialDescriptorSchema::Build(
+            material,
+            "shader/glsl/M_terrain.json");
+
+    ASSERT_EQ(schema.GetTextures().size(), 15u);
+    bool sawLayerTable = false;
+    bool sawPageTable = false;
+    bool sawLayerIds = false;
+    bool sawLayerWeights = false;
+    bool sawLayerPageTable0 = false;
+    bool sawLayerPageTable4 = false;
+    bool sawLayerAlbedoAtlas = false;
+    bool sawLayerNormalAtlas = false;
+    bool sawLayerPbrAtlas = false;
+    for (const VL::MaterialTextureSchemaEntry& texture : schema.GetTextures())
+    {
+        if (texture.name == "layerTable")
+        {
+            sawLayerTable = true;
+            EXPECT_EQ(texture.glslType, "sampler2D");
+        }
+        else if (texture.name == "pageTable")
+        {
+            sawPageTable = true;
+            EXPECT_EQ(texture.glslType, "sampler2D");
+        }
+        else if (texture.name == "layerIds")
+        {
+            sawLayerIds = true;
+            EXPECT_EQ(texture.glslType, "sampler2D");
+        }
+        else if (texture.name == "layerWeights")
+        {
+            sawLayerWeights = true;
+            EXPECT_EQ(texture.glslType, "sampler2D");
+        }
+        else if (texture.name.rfind("layerPageTable", 0) == 0)
+        {
+            EXPECT_EQ(texture.glslType, "sampler2D");
+            if (texture.name == "layerPageTable0")
+                sawLayerPageTable0 = true;
+            if (texture.name == "layerPageTable4")
+                sawLayerPageTable4 = true;
+        }
+        else
+        {
+            EXPECT_EQ(texture.glslType, "sampler2DArray");
+            if (texture.name == "layerAlbedoAtlas")
+                sawLayerAlbedoAtlas = true;
+            if (texture.name == "layerNormalAtlas")
+                sawLayerNormalAtlas = true;
+            if (texture.name == "layerPbrAtlas")
+                sawLayerPbrAtlas = true;
+        }
+        const ShaderBinding* binding = schema.FindBinding(texture.binding);
+        ASSERT_NE(binding, nullptr);
+        EXPECT_EQ(binding->type, vk::DescriptorType::eCombinedImageSampler);
+        EXPECT_EQ(binding->descriptorCount, 1u);
+    }
+    EXPECT_TRUE(sawLayerTable);
+    EXPECT_TRUE(sawPageTable);
+    EXPECT_TRUE(sawLayerIds);
+    EXPECT_TRUE(sawLayerWeights);
+    EXPECT_TRUE(sawLayerPageTable0);
+    EXPECT_TRUE(sawLayerPageTable4);
+    EXPECT_TRUE(sawLayerAlbedoAtlas);
+    EXPECT_TRUE(sawLayerNormalAtlas);
+    EXPECT_TRUE(sawLayerPbrAtlas);
+
+    bool sawTerrainLayerMode = false;
+    bool sawLayerPageResolution = false;
+    bool sawLayerMaxMip = false;
+    bool sawLayerForceMip = false;
+    for (const VL::MaterialParameterSchemaEntry& parameter :
+         schema.GetParameters())
+    {
+        if (parameter.name == "u_terrainLayerMode")
+        {
+            sawTerrainLayerMode = true;
+            EXPECT_EQ(
+                material["parameters"]["u_terrainLayerMode"]["default"]
+                    .get<float>(),
+                0.0f);
+        }
+        if (parameter.name == "u_layerPageResolution")
+        {
+            sawLayerPageResolution = true;
+            EXPECT_EQ(
+                material["parameters"]["u_layerPageResolution"]["default"]
+                    .get<float>(),
+                128.0f);
+        }
+        if (parameter.name == "u_layerMaxMip")
+        {
+            sawLayerMaxMip = true;
+            EXPECT_EQ(
+                material["parameters"]["u_layerMaxMip"]["default"]
+                    .get<float>(),
+                4.0f);
+        }
+        if (parameter.name == "u_layerForceMip")
+        {
+            // L4e：默认必须是自动 mip；console 覆盖范围 -1..4。
+            sawLayerForceMip = true;
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["default"]
+                    .get<float>(),
+                -1.0f);
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["range"]["min"]
+                    .get<float>(),
+                -1.0f);
+            EXPECT_EQ(
+                material["parameters"]["u_layerForceMip"]["range"]["max"]
+                    .get<float>(),
+                4.0f);
+        }
+    }
+    EXPECT_TRUE(sawTerrainLayerMode);
+    EXPECT_TRUE(sawLayerPageResolution);
+    EXPECT_TRUE(sawLayerMaxMip);
+    EXPECT_TRUE(sawLayerForceMip);
+    // VT 纹理默认必须是可加载的占位资源，否则使用旧 MI（未覆盖新 binding）
+    // 时 ValidateInstanceValues 会因“shader 使用但 MI 未提供纹理”失败。
+    for (const char* textureName : {
+             "layerPageTable0",
+             "layerPageTable4",
+             "layerAlbedoAtlas",
+             "layerNormalAtlas",
+             "layerPbrAtlas"})
+    {
+        ASSERT_TRUE(material["textures"].contains(textureName));
+        EXPECT_FALSE(
+            material["textures"][textureName]["default"].is_null());
+    }
 }
 
 TEST(MaterialSchema, ParameterMetadataValidation)

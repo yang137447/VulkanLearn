@@ -195,7 +195,8 @@ void GraphicsPipeline::DestroyShader()
 
 void GraphicsPipeline::initVertexAttribute()
 {
-    vertexInputBindingDescription = VertexInfo::vertexInputBindingDescription;
+    vertexInputBindingDescriptions =
+        VertexInfo::vertexInputBindingDescriptions;
     
     vertexInputAttributeDescriptions.resize(VertexInfo::vertexInputAttributeDescriptions.size());
     vertexInputAttributeDescriptions = VertexInfo::vertexInputAttributeDescriptions;
@@ -212,7 +213,7 @@ void GraphicsPipeline::CreateGraphicsPipeline(
         renderPass,
         pipelineLayout,
         shaderStages,
-        vertexInputBindingDescription,
+        vertexInputBindingDescriptions,
         vertexInputAttributeDescriptions,
         shaderDisplayName,
         sampleCount,

@@ -9,13 +9,12 @@
 #include <utility>
 
 #include "engine/runtimeCommand.h"
-#include "editor/runtime/materialInstanceEditorRuntime.h"
-#include "editor/command/editorCommandJsonCodec.h"
+#include "engine/editorHost.h"
 #include "hair/hairConsoleCommand.h"
 #include "hair/tressfxLiveParams.h"
 
-DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
-    : commandBus(commandBus), editorRuntime(runtime)
+DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::IEditorConsoleSink* sink)
+    : commandBus(commandBus), editorConsoleSink(sink)
 {
 }
 
@@ -29,12 +28,16 @@ void DebugConsole::Update()
 {
     for (auto iterator = pendingEditorResults.begin(); iterator != pendingEditorResults.end();)
     {
-        const auto result = editorRuntime->GetCommandResult(*iterator);
-        if (result && VL::IsFinalEditorCommandStatus(result->status))
+        if (editorConsoleSink == nullptr)
         {
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(*result) << std::endl;
             iterator = pendingEditorResults.erase(iterator);
+            continue;
         }
+        bool isFinal = false;
+        const auto text = editorConsoleSink->PollResult(*iterator, isFinal);
+        if (text)
+            std::cout << *text << std::endl;
+        if (isFinal) iterator = pendingEditorResults.erase(iterator);
         else ++iterator;
     }
     while (_kbhit())
@@ -105,7 +108,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
 
     if (command == "editor")
     {
-        if (!editorRuntime)
+        if (editorConsoleSink == nullptr || !editorConsoleSink->IsAvailable())
         {
             std::cout << "Editor document host unavailable; enable --dev-ui or use vl_asset_edit." << std::endl;
             return;
@@ -114,9 +117,9 @@ void DebugConsole::ProcessCommand(const std::string& line)
         std::getline(commandStream, request);
         try
         {
-            const auto submitted = editorRuntime->SubmitJson(request);
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(submitted.result) << std::endl;
-            if (submitted.admission == VL::EditorCommandAdmission::Queued)
+            const auto submitted = editorConsoleSink->SubmitJson(request);
+            std::cout << submitted.text << std::endl;
+            if (submitted.queued)
                 pendingEditorResults.push_back(submitted.commandId);
         }
         catch (const std::exception& error) { std::cout << "Editor request rejected: " << error.what() << std::endl; }
@@ -503,6 +506,21 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "quit")
+    {
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << "Usage: quit" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::QuitApplication;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
+
     if (command == "offline")
     {
         std::string action;
@@ -861,6 +879,210 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "terrain")
+    {
+        // P3 可观测/验收入口：stats 只读快照；capacity 通过 atomic 排队到
+        // 渲染线程帧首生效，不在 Console 线程直接改 page manager。
+        std::string action;
+        if (!(commandStream >> action))
+        {
+            std::cout
+                << "Usage: terrain <stats|capacity N|parity [tileX tileZ]>"
+                << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.sourceText = line;
+        if (action == "stats")
+        {
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportTerrainStatistics;
+        }
+        else if (action == "capacity")
+        {
+            int capacity = 0;
+            if (!(commandStream >> capacity) || capacity <= 0)
+            {
+                std::cout
+                    << "Usage: terrain capacity <positive page count>"
+                    << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::SetTerrainResidentCapacity;
+            runtimeCommand.intValue = capacity;
+        }
+        else if (action == "parity")
+        {
+            int tileX = 0;
+            int tileZ = 0;
+            if (commandStream >> tileX)
+            {
+                if (!(commandStream >> tileZ))
+                    tileZ = 0;
+            }
+            if (tileX < 0 || tileX > 31 || tileZ < 0 || tileZ > 31)
+            {
+                std::cout
+                    << "Usage: terrain parity [tileX tileZ] (0..31)"
+                    << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::RunTerrainPageBakeParity;
+            runtimeCommand.intValue = tileX * 32 + tileZ;
+        }
+        else
+        {
+            std::cout
+                << "Usage: terrain <stats|capacity N|parity [tileX tileZ]>"
+                << std::endl;
+            return;
+        }
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainfeedback")
+    {
+        // P2 只读诊断：打印最近一次已完成 fence 的 feedback 页统计，
+        // 不触发驻留请求，也不进入 runtime test flag。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainFeedbackStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainlayerstats" || command == "terrainlayer")
+    {
+        // L2/L4a：stats 只读；capacity 排队层页预算；preload 是 feedback
+        // 驱动驻留的全量对照路径。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.sourceText = line;
+        if (command == "terrainlayer")
+        {
+            std::string action;
+            if (!(commandStream >> action))
+            {
+                std::cout
+                    << "Usage: terrainlayer <stats|capacity N|preload|forcemip N>"
+                    << std::endl;
+                return;
+            }
+            if (action == "stats")
+            {
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::ReportTerrainLayerStatistics;
+            }
+            else if (action == "preload")
+            {
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::RequestTerrainLayerPreload;
+            }
+            else if (action == "capacity")
+            {
+                int capacity = 0;
+                if (!(commandStream >> capacity) || capacity <= 0)
+                {
+                    std::cout
+                        << "Usage: terrainlayer capacity <positive page count>"
+                        << std::endl;
+                    return;
+                }
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::SetTerrainLayerResidentCapacity;
+                runtimeCommand.intValue = capacity;
+            }
+            else if (action == "forcemip")
+            {
+                // L4e：调试用目标 mip 覆盖。-1 恢复自动；0..4 强制，用于在
+                // 页尚未驻留时复现粗 mip 回退与 avgColor 渐变。
+                int forceMip = 0;
+                if (!(commandStream >> forceMip) ||
+                    forceMip < -1 || forceMip > 4)
+                {
+                    std::cout
+                        << "Usage: terrainlayer forcemip <-1|0..4>"
+                        << std::endl;
+                    return;
+                }
+                runtimeCommand.type =
+                    VL::RuntimeCommandType::SetTerrainLayerForceMip;
+                runtimeCommand.intValue = forceMip;
+            }
+            else
+            {
+                std::cout
+                    << "Usage: terrainlayer <stats|capacity N|preload|forcemip N>"
+                    << std::endl;
+                return;
+            }
+        }
+        else
+        {
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportTerrainLayerStatistics;
+        }
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainlod")
+    {
+        // 只读诊断：输出最近一帧每个 chunk LOD 组的选择级、相机距离和
+        // 累计切换次数；不排队任何渲染状态修改。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terrainlod stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainLodStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terrainchunk")
+    {
+        // 只读诊断：加载期几何 residency 的 chunk/顶点/索引字节基线，
+        // 叠加最近一帧的实际 draw 数与级分布。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terrainchunk stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainChunkStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "terraincollision")
+    {
+        // 只读诊断：输出 Play 中已创建的地形 heightfield body 与 placement；
+        // 非 Play 时明确报告没有物理世界。
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: terraincollision stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportTerrainCollisionStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -920,7 +1142,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom threshold <value> - set bloom threshold\n";
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
-    std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  loadworld <scene-path> - request scene load through the World transaction\n";
     std::cout << "  mesh transform <identity> <px> <py> <pz> [rx ry rz] - absolute placement (cm, degrees; scale=1)\n";
     std::cout << "  mesh offset <identity> <dx> <dy> <dz> - add a delta to the current placement\n";
     std::cout << "  mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds> - linear placement over GT frames\n";
@@ -942,8 +1164,21 @@ void DebugConsole::PrintHelp() const
     std::cout << "  injectinput <action> <down|up> - inject a gameplay action for automation (no OS focus required)\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
+    std::cout << "  terrain stats - report terrain residency/upload statistics\n";
+    std::cout << "  terrain parity [x z] - compare CPU/GPU bake for one page\n";
+    std::cout << "  terrain capacity N - set resident page budget for the active World\n";
+    std::cout << "  terrainfeedback - report completed terrain feedback page statistics (read-only)\n";
+    std::cout << "  terrainlayerstats - report layer-page atlas residency/format statistics\n";
+    std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
+    std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
+    std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
+    std::cout << "  terrainlayer forcemip N - force target layer mip (-1 auto, 0..4)\n";
+    std::cout << "  terraincollision stats - report play-mode terrain collision bodies\n";
+    std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
+    std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";
     std::cout << "  gpustats - print the latest per-pass GPU timing table (enables collection if needed)\n";
     std::cout << "  perf json - print one line of JSON with FPS, CPU frame ms, GPU total and per-pass ms\n";
+    std::cout << "  quit - request a clean application exit (exit code 0)\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

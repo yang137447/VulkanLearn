@@ -10,8 +10,8 @@
 #include <Eigen/Dense>
 
 #include "../mesh/loader/common/meshAssetLoader.h"
+#include "../terrain/terrainAssetTypes.h"
 #include "scene/placementBinding.h"
-#include "world/projectileSettings.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 namespace VL::Hair { struct TfxBoneAsset; }
@@ -27,6 +27,9 @@ struct SceneAssetObjectPlan
     std::string objectName;
     std::string objectType;
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
+    // 地形对象在场景预检阶段完成 TR 解析与高度图解码；WorldBuilder 仍只消费
+    // 渲染器派生的 MeshObjectBuildPlan，不引入第二个 World 地形类型。
+    std::optional<VL::TerrainBuildPlan> terrainBuildPlan;
     // Actor 根网格的派生声明；作者 JSON 不增加合成对象，正式 mesh loader 仍只读网格计划。
     std::optional<nlohmann::json> componentObject;
 };
@@ -77,6 +80,27 @@ struct MeshObjectBuildPlan
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
+    std::string speedTreeWindProfileKey;
+    // rendererTerrainLoader 显式写入：feedback pass 只绘制这些对象，
+    // 不能依赖材质名/资产路径猜测地形。
+    bool terrainFeedbackEligible = false;
+    // 地形几何 LOD 组：同一 chunk 的各 LOD 级共享该身份，空表示无 LOD 组。
+    // 快照构建器按组只输出一个网格，非地形/单级地形保持空组和旧行为。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
+    uint32_t lodLevelCount = 1;
+    // 该组（chunk）的切换距离（cm，升序）与 LOD0 局部 AABB；所有级共用，
+    // 保证距离计算不随当前级变化，避免选择反馈。
+    std::vector<float> lodDistancesCm;
+    Eigen::Vector3f lodGroupBoundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f lodGroupBoundsMax = Eigen::Vector3f::Zero();
+    // 地形在 World 中仍是 chunk mesh；独立 Terrain 身份只属于编辑器
+    // 展示/身份层，不引入第二套 World 地形类型。
+    bool isTerrain = false;
+    std::string terrainAssetPath;
+    // 一次场景摆放的身份（terrain|<objectName>）。同一 TR 可摆放多次，
+    // assetPath 不能作为 chunk 更新/碰撞回写的唯一键。
+    std::string terrainPlacementId;
     std::string windResponseProfileKey;
     // TressFX guide 中心线点数；顶点工厂用它从 gl_VertexIndex 反推 guideIndex。
     // 非头发对象为 0。
@@ -84,8 +108,9 @@ struct MeshObjectBuildPlan
     VL::PlacementBinding placementBinding;
 };
 
-// 运行时橡皮软体对象的纯数据计划。渲染资源加载阶段只加载材质并记录 key；
-// 实际 RubberShell 与动态 RenderableObject 由 GT 侧 SoftBodyRuntime 创建。
+// 运行时橡皮软体对象的纯作者数据计划。这里只保存场景 JSON 的
+// materialInstance 路径；实际 Material / MaterialInstance key 由渲染器资源
+// 加载阶段解析成 ResolvedMaterialBinding，RubberShell 由 GT 侧 SoftBodyRuntime 创建。
 struct SoftBodyObjectBuildPlan
 {
     std::string objectName;
@@ -103,12 +128,11 @@ struct SoftBodyObjectBuildPlan
     double burstStrain = 0.35;
     double restContraction = 0.75;
     uint64_t seed = 0;
-    std::string materialKey;
-    std::string materialInstanceKey;
+    std::string materialInstancePath;
 };
 
-// 运行时玻璃板的纯数据计划。完整板、碎片和二次碎裂都在运行时生成；
-// 这里只记录作者参数、TRS 和已解析的材质 key。
+// 运行时玻璃板的纯作者数据计划。完整板、碎片和二次碎裂都在运行时生成；
+// 这里只记录作者参数、TRS 与材质路径，渲染器解析 key，WorldBuilder 合并。
 struct GlassObjectBuildPlan
 {
     std::string objectName;
@@ -124,9 +148,7 @@ struct GlassObjectBuildPlan
     int siteCount = 32;
     uint64_t seed = 0;
     bool subfracture = true;
-    std::string materialKey;
-    std::string materialInstanceKey;
-    // 裂纹覆盖层专用深色 MI；为空时 cracked 只保留 debug 折线。
-    std::string crackMaterialKey;
-    std::string crackMaterialInstanceKey;
+    std::string materialInstancePath;
+    // 裂纹覆盖层专用深色 MI 路径；为空时 cracked 只保留 debug 折线。
+    std::string crackMaterialInstancePath;
 };

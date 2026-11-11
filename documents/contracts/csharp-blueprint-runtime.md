@@ -72,11 +72,13 @@ SDK 未进入 PATH 时使用 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.
 宿主优先显式使用该私有根；没有该子目录时使用配置期 SDK 根。
 程序和完整 managed 目录可一起搬移，C# 宿主不要求目标机器安装 SDK。
 完整游戏导出使用下文 `vl_export_game`，同时收集配置、资源、shader 与原生依赖 DLL。
-开启时同时下载并构建锁定的 Jolt 5.6.0 CPU 库（提交
+Jolt 5.6.0 CPU 库（提交
 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`，归档 SHA256 在
-`script/CMakeLists.txt`）。不构建 samples、GPU compute、毛发模拟、debug renderer
+`script/CMakeLists.txt`）现在无条件下载并构建，因为地形碰撞是核心 CPU 依赖；
+关闭 C# hosting 只停止查找 .NET SDK，不停止 Jolt。不构建 samples、GPU compute、毛发模拟、debug renderer
 或 profiler；x64 使用 SSE2 基线，不要求 AVX2。第三方编译选项隔离在子目录，
-不覆盖工程的 Debug/Release 配置。关闭时不获取 Jolt，不依赖 Bullet。
+不覆盖工程的 Debug/Release 配置。`ScriptPhysicsWorld` 的 Jolt 实现也随核心依赖
+无条件编译；Play 入口仍只在 C# hosting 开启时可用。不依赖 Bullet。
 
 `config/config.json` 的可选 `scripts` 对象包含 `enabled`、
 `runtimeDirectory`、`assembly`、`autoPlay`，两个路径相对项目根解析。
@@ -603,7 +605,9 @@ Spawn 模板不接受外部约束。销毁目标移除约束并唤醒相关刚�
 
 `Physics.Raycast(from, to, callback, includeTriggers: false)` 是异步有界线段查询。
 默认忽略所属 Blueprint 与 Trigger，返回最近命中的 BlueprintHandle、cm 点/距离和世界单位法线，
-未命中传 null。凸体内部起点的距离为零，法线约定为逆射线方向。
+未命中传 null。命中地形时 `Terrain` 为 placementId（`terrain|<name>`），
+`HasBlueprint` 为 false、`Blueprint` 为默认句柄；不会把地形伪装成蓝图。
+凸体内部起点的距离为零，法线约定为逆射线方向。
 Tick/BeginPlay 请求在物理之后、LateTick 之前交付；LateTick 请求在下一帧交付。
 回调仍走所属 Blueprint 的故障隔离与变换回滚边界；失败、Destroy 或 Stop 清理未交付请求。
 一个上下文最多 256 条未完成查询。
@@ -853,7 +857,7 @@ OnReload 不得改变 World 根/空间组件值、启用/销毁状态、逻辑�
 Paused 下也立即显示新代逻辑组件的默认属性和句柄代际，不依赖下一次用户回调补发。
 
 SubsystemCollection 拥有 ScriptRuntimeSubsystem。候选 World 保存自己的
-作者声明与 RAII ScriptWorldContext。PrepareWorldLoad 中构造实例、
+作者声明与 RAII ScriptWorldContext。`WorldCandidatePreparer::Prepare()` 中构造实例、
 绑定属性、执行 OnCreate；类不存在、类型不匹配或 OnCreate 失败使候选加载失败，
 原生活动 World/图/资源不变。脚本是可信进程内代码，没有沙箱；
 静态字段、文件操作及脚本自行创建的线程不具备事务回滚语义。

@@ -38,6 +38,7 @@ struct PresentTarget
     // 用它替代窗口尺寸作为请求尺寸。
     std::optional<vk::Extent2D> requestedExtent;
     uint32_t imageCount = 0;
+    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
     vk::SwapchainKHR swapChain;
     std::vector<vk::Image> images;
     std::vector<vk::ImageView> imageViews;

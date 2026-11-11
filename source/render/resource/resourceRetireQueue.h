@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -83,9 +84,14 @@ public:
     void CollectCompletedEpoch(uint64_t completedEpoch);
     void ForceReleaseAll();
 
-    uint64_t GetLastSubmittedEpoch() const { return lastSubmittedEpoch; }
-    uint64_t GetLastCompletedEpoch() const { return lastCompletedEpoch; }
-    size_t GetPendingCount() const { return pendingResources.size(); }
+    // Conservative floor for new retirements: GT may publish a snapshot that
+    // the render thread has not resolved yet, so resources referenced by it
+    // must not be retired at the real submitted epoch.
+    void SetPendingRenderFrames(size_t frames);
+
+    uint64_t GetLastSubmittedEpoch() const;
+    uint64_t GetLastCompletedEpoch() const;
+    size_t GetPendingCount() const;
     std::weak_ptr<void> FindPendingResourceForTest(
         std::string_view debugName,
         uint64_t ownerGeneration) const noexcept;
@@ -95,7 +101,9 @@ private:
 
     uint64_t lastSubmittedEpoch = 0;
     uint64_t lastCompletedEpoch = 0;
+    size_t pendingRenderFrames = 0;
     std::vector<RetiredResource> pendingResources;
+    mutable std::mutex mutex;
 };
 
 } // namespace VL

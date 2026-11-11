@@ -1,5 +1,6 @@
 #include "render/resource/rendererMeshLoader.h"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -174,6 +175,25 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     std::vector<MeshObjectBuildPlan>& meshObjectPlans = result.objectPlans;
     meshObjectPlans.reserve(modelResource.sections.size());
     std::unordered_set<std::string> usedObjectNames;
+    const VL::VegetationAsset* vegetation =
+        meshLoadRequest.vegetation.get();
+    const bool instanced =
+        vegetation != nullptr && !vegetation->instances.empty();
+    if (instanced && loadContext.offlineOnly)
+        throw std::runtime_error(
+            "Offline rendering does not support VEG instanced meshes: " +
+            meshLoadRequest.instancesPath);
+    const std::vector<InstanceVertex> vegetationInstances =
+        instanced ? VL::BuildVegetationInstanceVertices(*vegetation)
+                  : std::vector<InstanceVertex>{};
+    // 普通网格与实例化网格必须拥有不同的 renderable；同一 SM 可以被两种对象同时使用。
+    // 实例清单路径进入键，避免 SetInstances 把缓存对象的实例流串到另一个放置上。
+    const std::string instancingKey = instanced
+        ? "|instances=" +
+            std::filesystem::path(meshLoadRequest.instancesPath)
+                .lexically_normal()
+                .generic_string()
+        : std::string();
 
     // 组声明只用于绑定展开；几何/点云来自缓存，不随组编辑变化。
     std::vector<VL::Hair::TressfxGroupDeclaration> groupDeclarations;
@@ -223,7 +243,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         // 组名、区间和组数都不进入 renderable 键：GPU 颜色/参数表按预留容量
         // 原地更新。组编辑或保存后的组数变化复用同一个 RenderableObject。
         std::string renderableObjectKey = MakeRenderableObjectKey(
-            buildPlan.modelCacheKey + configurationKey, sectionIndex,
+            buildPlan.modelCacheKey + configurationKey + instancingKey,
+            sectionIndex,
             section.sectionName, meshObjectBaseName, perPlacementState);
         if (loadContext.offlineWorldAssets != nullptr)
         {
@@ -235,11 +256,11 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         std::shared_ptr<RenderableObject> renderableObject;
         if (!loadContext.offlineOnly)
         {
-        const std::shared_ptr<RenderableObject>* cachedRenderableObject =
+        const std::shared_ptr<RenderableObject> cachedRenderableObject =
             resourceCache.GetRenderableObject(renderableObjectKey);
-        if(cachedRenderableObject != nullptr && *cachedRenderableObject != nullptr)
+        if(cachedRenderableObject != nullptr)
         {
-            renderableObject = *cachedRenderableObject;
+            renderableObject = cachedRenderableObject;
             if (groupBinding)
             {
                 const std::string groupSimulationKey =
@@ -285,6 +306,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
             if (strandMaterial != (buildPlan.assetType == "tressfx"))
                 throw std::runtime_error("TressFX mesh and material vertex factory mismatch: " + materialPath);
         }
+        if (instanced)
+            renderableObject->SetInstances(vegetationInstances);
 
         std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)
@@ -319,6 +342,19 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         }
         meshObjectPlan.localBoundsMin.array() -= section.boundsPadding;
         meshObjectPlan.localBoundsMax.array() += section.boundsPadding;
+        if (instanced)
+        {
+            Eigen::Vector3f combinedMin;
+            Eigen::Vector3f combinedMax;
+            VL::AccumulateVegetationBounds(
+                *vegetation,
+                meshObjectPlan.localBoundsMin,
+                meshObjectPlan.localBoundsMax,
+                combinedMin,
+                combinedMax);
+            meshObjectPlan.localBoundsMin = combinedMin;
+            meshObjectPlan.localBoundsMax = combinedMax;
+        }
         meshObjectPlan.meshKey = renderableObjectKey;
         meshObjectPlan.tressfxPointsPerGuide =
             section.isTressfx ? section.tressfxPointsPerStrand : 0;

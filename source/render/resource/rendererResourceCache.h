@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +20,7 @@ namespace VL
 {
 
 class RendererObjectResourceEntry;
+struct TerrainStreamingState;
 struct WorldWind;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
@@ -36,6 +38,10 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+        // World-local 地形流式状态（page manager + GPU page/layer 资源）。
+        // 完整 World 候选拥有独立实例；扩展候选与 MI 预览只读共享同一实例；
+        // 候选失败时随 package 析构。
+        std::shared_ptr<TerrainStreamingState> terrainStreaming;
         // 动态资源身份随 package 传递；A 引入、B 复用的键在 B 最后释放时仍可回收。
         std::set<std::string> dynamicMeshes, dynamicMaterials, dynamicInstances, dynamicTextures;
 
@@ -61,8 +67,13 @@ public:
 
     RendererResourceCache(const RendererResourceCache&) = delete;
     RendererResourceCache& operator=(const RendererResourceCache&) = delete;
-    RendererResourceCache(RendererResourceCache&&) noexcept = default;
-    RendererResourceCache& operator=(RendererResourceCache&&) noexcept = default;
+    RendererResourceCache(RendererResourceCache&& other) noexcept;
+    RendererResourceCache& operator=(RendererResourceCache&& other) noexcept;
+
+    // Resolve 阶段持锁的 RAII 入口：递归锁允许后续 getter 在同一线程继续加锁，
+    // 但 map 在整段 resolve 期间不会被 GT 候选/扩展或 package 交换修改。
+    using RecursiveLock = std::unique_lock<std::recursive_mutex>;
+    RecursiveLock LockForFrame() const;
 
     void Clear();
 
@@ -85,7 +96,7 @@ public:
 
     // Keeps the currently active package alive without exposing mutable maps.
     ImmutableWorldLocalResourceRefs
-    CaptureActiveWorldLocalResources() const noexcept;
+    CaptureActiveWorldLocalResources() const;
 
     // 先固定 package shared_ptr，再校验 generation 并复制 MI；调用方不会
     // 持有 map 内部地址，因此 World package 交换或回收不会使预览目标悬空。
@@ -113,12 +124,12 @@ public:
     // Descriptor code still asks for global-set texture bindings. The binding
     // may point to a process-global texture such as BRDF LUT or a world-local
     // texture such as the active environment cubemap.
-    const std::shared_ptr<Texture>* GetGlobalTexture(std::string_view bindingName) const;
+    std::shared_ptr<Texture> GetGlobalTexture(std::string_view bindingName) const;
     bool HasGlobalTexture(std::string_view bindingName) const;
-    const std::shared_ptr<Texture>* GetWorldTexture(std::string_view bindingName) const;
+    std::shared_ptr<Texture> GetWorldTexture(std::string_view bindingName) const;
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
-    const std::shared_ptr<RenderableObject>* GetRenderableObject(std::string_view objectKey) const;
+    std::shared_ptr<RenderableObject> GetRenderableObject(std::string_view objectKey) const;
     // 运行时 spawn 的 per-placement 毛发在 actor 销毁后需要单独回收：从活动
     // World 包里摘除并返回对象，调用方按 GPU epoch 交给 ResourceRetireQueue。
     // 键不存在返回 nullptr。
@@ -133,18 +144,25 @@ public:
     void AdvanceTressfxSimulations(float deltaSeconds, const WorldWind& sceneWind);
 
     void BindMaterial(std::string materialKey, std::shared_ptr<Material> material);
-    const std::shared_ptr<Material>* GetMaterial(std::string_view materialKey) const;
+    std::shared_ptr<Material> GetMaterial(std::string_view materialKey) const;
 
     void BindMaterialInstance(std::string materialInstanceKey, std::shared_ptr<MaterialInstance> materialInstance);
     void RemoveMaterialInstance(std::string_view materialInstanceKey);
-    const std::shared_ptr<MaterialInstance>* GetMaterialInstance(std::string_view materialInstanceKey) const;
+    std::shared_ptr<MaterialInstance> GetMaterialInstance(std::string_view materialInstanceKey) const;
 
     void BindObjectResource(std::string objectName, std::shared_ptr<RendererObjectResourceEntry> objectResource);
-    const std::shared_ptr<RendererObjectResourceEntry>* GetObjectResource(std::string_view objectName) const;
+    // 摘除并返回逐对象 GPU 资源；调用方按 GPU epoch 交给 ResourceRetireQueue，
+    // 避免运行时 chunk 卸载后模型 UBO/descriptor 永久留在 World 包里。
+    std::shared_ptr<RendererObjectResourceEntry> TakeObjectResource(
+        std::string_view objectName);
+    std::shared_ptr<RendererObjectResourceEntry> GetObjectResource(std::string_view objectName) const;
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
-    const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
+    std::shared_ptr<Texture> GetTexture(std::string_view textureKey) const;
 
+    // 只对 candidate package 写入；提交后随 package 一起发布。
+    void BindTerrainStreaming(std::shared_ptr<TerrainStreamingState> streamingState);
+    std::shared_ptr<TerrainStreamingState> GetTerrainStreaming() const;
     // 进程级 .tfx 几何导入缓存。候选包共享同一个实例：组编辑/World 重建都不
     // 重新解析几何；条目只读且不持有 GPU 资源。
     TressfxGeometryCache& GetTressfxGeometryCache() const;
@@ -155,9 +173,12 @@ private:
         std::unordered_map<std::string, std::shared_ptr<Texture>>
             inheritedGlobalTextures,
         uint64_t ownerGeneration);
+    WorldLocalResourcePackageHandle DetachWorldLocalResourcesLocked();
+    void RetireWorldLocalResources(
+        WorldLocalResourcePackageHandle retiredPackage);
     WorldLocalResourcePackage& GetMutableWorldLocalResources();
-    void ClearWorldLocalResources();
 
+    mutable std::recursive_mutex mutex;
     std::unordered_map<std::string, std::shared_ptr<Texture>> globalTextures;
     WorldLocalResourcePackageHandle worldLocalResources;
     std::shared_ptr<TressfxGeometryCache> tressfxGeometryCache;

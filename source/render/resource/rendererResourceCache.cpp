@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "materialInstance.h"
 #include "renderableObject.h"
@@ -13,6 +14,10 @@
 
 namespace VL
 {
+namespace
+{
+
+} // namespace
 
 bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
 {
@@ -21,7 +26,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         materials.empty() &&
         materialInstances.empty() &&
         objectResources.empty() &&
-        textures.empty();
+        textures.empty() &&
+        terrainStreaming == nullptr;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -44,18 +50,55 @@ RendererResourceCache::RendererResourceCache(
     worldLocalResources->ownerGeneration = ownerGeneration;
 }
 
+RendererResourceCache::RendererResourceCache(RendererResourceCache&& other) noexcept
+{
+    std::lock_guard<std::recursive_mutex> lock(other.mutex);
+    globalTextures = std::move(other.globalTextures);
+    worldLocalResources = std::move(other.worldLocalResources);
+    tressfxGeometryCache = std::move(other.tressfxGeometryCache);
+    retireWorldLocalResourcesOnClear = other.retireWorldLocalResourcesOnClear;
+}
+
+RendererResourceCache& RendererResourceCache::operator=(RendererResourceCache&& other) noexcept
+{
+    if (this == &other)
+    {
+        return *this;
+    }
+
+    std::scoped_lock lock(mutex, other.mutex);
+    globalTextures = std::move(other.globalTextures);
+    worldLocalResources = std::move(other.worldLocalResources);
+    tressfxGeometryCache = std::move(other.tressfxGeometryCache);
+    retireWorldLocalResourcesOnClear = other.retireWorldLocalResourcesOnClear;
+    return *this;
+}
+
+RendererResourceCache::RecursiveLock RendererResourceCache::LockForFrame() const
+{
+    return RecursiveLock(mutex);
+}
+
 void RendererResourceCache::Clear()
 {
-    globalTextures.clear();
+    std::unordered_map<std::string, std::shared_ptr<Texture>> retiredGlobalTextures;
+    WorldLocalResourcePackageHandle retiredPackage;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        retiredGlobalTextures.swap(globalTextures);
+        retiredPackage = DetachWorldLocalResourcesLocked();
+    }
+    retiredGlobalTextures.clear();
+    RetireWorldLocalResources(std::move(retiredPackage));
     // Tressfx 几何缓存是进程级内容寻址缓存，候选包/缩略图会话共享同一实例。
     // 这里不能清空：任意一次缩略图 Reset/Clear 都会让主预览的组编辑缓存失效。
     // 条目在进程退出时随实例释放。
-    ClearWorldLocalResources();
 }
 
 RendererResourceCache RendererResourceCache::BeginCandidate(
     uint64_t ownerGeneration) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     RendererResourceCache candidate = RendererResourceCache(
         globalTextures,
         ownerGeneration);
@@ -66,6 +109,7 @@ RendererResourceCache RendererResourceCache::BeginCandidate(
 RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
     uint64_t ownerGeneration) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     RendererResourceCache candidate(
         globalTextures,
         ownerGeneration);
@@ -77,26 +121,35 @@ RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
     // Object descriptor layouts depend on the candidate Material. Reusing the
     // active entries would mutate live Vulkan state during prepare.
     candidate.worldLocalResources->objectResources.clear();
+    // MI 预览只替换材质/MI，不改地形页；继续持有 active World 的同一个
+    // TerrainStreamingState，提交后 feedback ring、页表和驻留状态才不会丢失。
+    // 若未来预览路径需要改页，必须显式创建新 state，不能在这里原地修改。
     return candidate;
 }
 
 RendererResourceCache::ImmutableWorldLocalResourceRefs
-RendererResourceCache::CaptureActiveWorldLocalResources() const noexcept
+RendererResourceCache::CaptureActiveWorldLocalResources() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     return worldLocalResources;
 }
 
 RendererResourceCache RendererResourceCache::BeginWorldExtensionCandidate(uint64_t ownerGeneration) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     RendererResourceCache candidate(globalTextures, ownerGeneration);
     candidate.tressfxGeometryCache = tressfxGeometryCache;
     candidate.worldLocalResources = std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
     candidate.worldLocalResources->ownerGeneration = ownerGeneration;
+    // Blueprint 扩展只新增 mesh/material/texture，不修改地形页；共享同一 state
+    // 可让提交后的新 package 继续拥有原 World 的驻留/GPU 页资源。任何未来
+    // 改地形页的扩展路径都必须改为创建新 state。
     return candidate;
 }
 
 void RendererResourceCache::TrackDynamicAdditions(ImmutableWorldLocalResourceRefs baseline)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto& package = GetMutableWorldLocalResources();
     for (const auto& pair : package.renderableObjects)
         if (!baseline->renderableObjects.count(pair.first)) package.dynamicMeshes.insert(pair.first);
@@ -149,6 +202,7 @@ void PruneDynamicMap(Map& resources, std::set<std::string>& dynamicKeys, const s
 RendererResourceCache RendererResourceCache::RebaseWorldExtensionCandidate(
     RendererResourceCache extension, ImmutableWorldLocalResourceRefs baseline) const
 {
+    std::scoped_lock lock(mutex, extension.mutex);
     if (worldLocalResources->ownerGeneration != baseline->ownerGeneration)
         throw std::runtime_error("Blueprint extension generation is stale");
     auto rebased = BeginWorldExtensionCandidate(baseline->ownerGeneration);
@@ -170,6 +224,7 @@ RendererResourceCache RendererResourceCache::RebaseWorldExtensionCandidate(
 void RendererResourceCache::PruneDynamicResources(const std::set<std::string>& meshes,
     const std::set<std::string>& materials, const std::set<std::string>& instances)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto& package = GetMutableWorldLocalResources();
     PruneDynamicMap(package.renderableObjects, package.dynamicMeshes, meshes);
     PruneDynamicMap(package.materials, package.dynamicMaterials, materials);
@@ -202,6 +257,7 @@ RendererResourceCache::CaptureMaterialInstanceForGeneration(
     uint64_t expectedOwnerGeneration,
     std::string_view normalizedMaterialInstancePath) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     // package 句柄先复制，随后 map 查找和 MI shared_ptr 复制都在同一份
     // World-local 快照上完成；generation 不匹配时不向调用方泄露旧对象。
     const ImmutableWorldLocalResourceRefs package = worldLocalResources;
@@ -228,6 +284,7 @@ RendererResourceCache::WorldLocalResourcePackageHandle
 RendererResourceCache::CommitCandidate(
     RendererResourceCache&& candidate) noexcept
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     globalTextures.swap(candidate.globalTextures);
     worldLocalResources.swap(candidate.worldLocalResources);
     return std::move(candidate.worldLocalResources);
@@ -236,6 +293,7 @@ RendererResourceCache::CommitCandidate(
 RendererResourceCache::WorldLocalResourcePackage&
 RendererResourceCache::GetMutableWorldLocalResources()
 {
+    // 调用方必须已经持有 mutex；所有公开入口和候选构造都在锁内调用这里。
     if (!worldLocalResources.unique())
     {
         worldLocalResources =
@@ -245,20 +303,18 @@ RendererResourceCache::GetMutableWorldLocalResources()
     return *worldLocalResources;
 }
 
-void RendererResourceCache::BeginWorldLocalResourceLoad(uint64_t ownerGeneration)
+RendererResourceCache::WorldLocalResourcePackageHandle
+RendererResourceCache::DetachWorldLocalResourcesLocked()
 {
-    ClearWorldLocalResources();
-    GetMutableWorldLocalResources().ownerGeneration = ownerGeneration;
-}
-
-void RendererResourceCache::ClearWorldLocalResources()
-{
-    WorldLocalResourcePackageHandle replacement =
-        std::make_shared<WorldLocalResourcePackage>();
     WorldLocalResourcePackageHandle retiredPackage =
         std::move(worldLocalResources);
-    worldLocalResources = std::move(replacement);
+    worldLocalResources = std::make_shared<WorldLocalResourcePackage>();
+    return retiredPackage;
+}
 
+void RendererResourceCache::RetireWorldLocalResources(
+    WorldLocalResourcePackageHandle retiredPackage)
+{
     if (!retireWorldLocalResourcesOnClear ||
         !retiredPackage ||
         retiredPackage->Empty())
@@ -268,8 +324,7 @@ void RendererResourceCache::ClearWorldLocalResources()
 
     ResourceRetireQueue& retireQueue = ResourceRetireQueue::GetInstance();
     const uint64_t lastUsedEpoch = retireQueue.GetLastSubmittedEpoch();
-    const uint64_t ownerGeneration =
-        retiredPackage->ownerGeneration;
+    const uint64_t ownerGeneration = retiredPackage->ownerGeneration;
     retireQueue.RetireShared(
         "WorldLocalResourcePackage",
         ownerGeneration,
@@ -278,10 +333,40 @@ void RendererResourceCache::ClearWorldLocalResources()
     retireQueue.CollectCompletedEpoch(retireQueue.GetLastCompletedEpoch());
 }
 
+void RendererResourceCache::BeginWorldLocalResourceLoad(uint64_t ownerGeneration)
+{
+    WorldLocalResourcePackageHandle retiredPackage;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        retiredPackage = DetachWorldLocalResourcesLocked();
+        worldLocalResources->ownerGeneration = ownerGeneration;
+    }
+    RetireWorldLocalResources(std::move(retiredPackage));
+}
+
 void RendererResourceCache::ShutdownSwapchainDependentWorldResources()
 {
-    for (auto& [objectName, objectResource] :
-         worldLocalResources->objectResources)
+    std::vector<std::shared_ptr<RendererObjectResourceEntry>> objectResources;
+    std::vector<std::shared_ptr<MaterialInstance>> materialInstances;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        objectResources.reserve(worldLocalResources->objectResources.size());
+        for (auto& [objectName, objectResource] :
+             worldLocalResources->objectResources)
+        {
+            (void)objectName;
+            objectResources.push_back(objectResource);
+        }
+        materialInstances.reserve(worldLocalResources->materialInstances.size());
+        for (auto& [materialKey, materialInstance] :
+             worldLocalResources->materialInstances)
+        {
+            (void)materialKey;
+            materialInstances.push_back(materialInstance);
+        }
+    }
+
+    for (auto& objectResource : objectResources)
     {
         if (objectResource)
         {
@@ -289,8 +374,7 @@ void RendererResourceCache::ShutdownSwapchainDependentWorldResources()
         }
     }
 
-    for (auto& [materialKey, materialInstance] :
-         worldLocalResources->materialInstances)
+    for (auto& materialInstance : materialInstances)
     {
         if (materialInstance)
         {
@@ -301,6 +385,7 @@ void RendererResourceCache::ShutdownSwapchainDependentWorldResources()
 
 void RendererResourceCache::BindGlobalTexture(std::string bindingName, std::shared_ptr<Texture> texture)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     if (!texture)
     {
         if (globalTextures.find(bindingName) !=
@@ -332,6 +417,7 @@ void RendererResourceCache::BindGlobalTexture(std::string bindingName, std::shar
 
 void RendererResourceCache::BindWorldTexture(std::string bindingName, std::shared_ptr<Texture> texture)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!texture)
@@ -344,20 +430,21 @@ void RendererResourceCache::BindWorldTexture(std::string bindingName, std::share
         std::move(texture);
 }
 
-const std::shared_ptr<Texture>* RendererResourceCache::GetGlobalTexture(std::string_view bindingName) const
+std::shared_ptr<Texture> RendererResourceCache::GetGlobalTexture(std::string_view bindingName) const
 {
-    auto textureIt = globalTextures.find(std::string(bindingName));
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    const std::string key(bindingName);
+    auto textureIt = globalTextures.find(key);
     if (textureIt != globalTextures.end())
     {
-        return &textureIt->second;
+        return textureIt->second;
     }
 
     textureIt =
-        worldLocalResources->worldTextures.find(
-            std::string(bindingName));
+        worldLocalResources->worldTextures.find(key);
     if (textureIt != worldLocalResources->worldTextures.end())
     {
-        return &textureIt->second;
+        return textureIt->second;
     }
 
     return nullptr;
@@ -365,18 +452,20 @@ const std::shared_ptr<Texture>* RendererResourceCache::GetGlobalTexture(std::str
 
 bool RendererResourceCache::HasGlobalTexture(std::string_view bindingName) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto textureIt = globalTextures.find(std::string(bindingName));
     return textureIt != globalTextures.end() && textureIt->second != nullptr;
 }
 
-const std::shared_ptr<Texture>* RendererResourceCache::GetWorldTexture(std::string_view bindingName) const
+std::shared_ptr<Texture> RendererResourceCache::GetWorldTexture(std::string_view bindingName) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto textureIt =
         worldLocalResources->worldTextures.find(
             std::string(bindingName));
     if (textureIt != worldLocalResources->worldTextures.end())
     {
-        return &textureIt->second;
+        return textureIt->second;
     }
 
     return nullptr;
@@ -387,6 +476,7 @@ void RendererResourceCache::BindRenderableObject(
     std::string objectKey,
     std::shared_ptr<RenderableObject> object)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!object)
@@ -399,15 +489,16 @@ void RendererResourceCache::BindRenderableObject(
         std::move(object);
 }
 
-const std::shared_ptr<RenderableObject>* RendererResourceCache::GetRenderableObject(
+std::shared_ptr<RenderableObject> RendererResourceCache::GetRenderableObject(
     std::string_view objectKey) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto objectIt =
         worldLocalResources->renderableObjects.find(
             std::string(objectKey));
     if (objectIt != worldLocalResources->renderableObjects.end())
     {
-        return &objectIt->second;
+        return objectIt->second;
     }
 
     return nullptr;
@@ -416,6 +507,7 @@ const std::shared_ptr<RenderableObject>* RendererResourceCache::GetRenderableObj
 std::shared_ptr<RenderableObject> RendererResourceCache::TakeRenderableObject(
     std::string_view objectKey)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources = GetMutableWorldLocalResources();
     auto objectIt = resources.renderableObjects.find(std::string(objectKey));
     if (objectIt == resources.renderableObjects.end())
@@ -428,6 +520,7 @@ std::shared_ptr<RenderableObject> RendererResourceCache::TakeRenderableObject(
 
 size_t RendererResourceCache::CountPlacementScopedRenderableObjects() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     if (!worldLocalResources)
         return 0;
     size_t count = 0;
@@ -440,17 +533,28 @@ size_t RendererResourceCache::CountPlacementScopedRenderableObjects() const
 void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds,
     const WorldWind& sceneWind)
 {
-    if (!worldLocalResources)
-        return;
+    std::vector<std::shared_ptr<RenderableObject>> renderableObjects;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        if (!worldLocalResources)
+            return;
+        renderableObjects.reserve(worldLocalResources->renderableObjects.size());
+        for (const auto& [key, object] : worldLocalResources->renderableObjects)
+        {
+            (void)key;
+            if (object)
+                renderableObjects.push_back(object);
+        }
+    }
     // 场景风作者目标 -> CPU 参考 solver 的向量（厘米/秒）。GT 不拥有渲染线程的
     // SceneWindRuntime，所以这里只取方向与强度，不复制缓动/阵风，也不另造时钟；
     // 强度为 0 时 direction * 0 即零向量，solver 走零风分支。GPU backend 完全不读这里。
     const Eigen::Vector3f sceneWindVelocityCmPerSec =
         sceneWind.direction * sceneWind.strength;
-    for (const auto& [key, object] : worldLocalResources->renderableObjects)
+    for (const auto& object : renderableObjects)
     {
         // GPU backend 由 HairSimulationPass 的 compute dispatch 推进，游戏线程不步进。
-        if (object && object->IsTressfx() && !object->UsesGpuGuideSimulation())
+        if (object->IsTressfx() && !object->UsesGpuGuideSimulation())
             object->AdvanceTressfxSimulation(
                 deltaSeconds, sceneWindVelocityCmPerSec);
     }
@@ -458,6 +562,7 @@ void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds,
 
 void RendererResourceCache::BindMaterial(std::string materialKey, std::shared_ptr<Material> material)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!material)
@@ -470,14 +575,15 @@ void RendererResourceCache::BindMaterial(std::string materialKey, std::shared_pt
         std::move(material);
 }
 
-const std::shared_ptr<Material>* RendererResourceCache::GetMaterial(std::string_view materialKey) const
+std::shared_ptr<Material> RendererResourceCache::GetMaterial(std::string_view materialKey) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto materialIt =
         worldLocalResources->materials.find(
             std::string(materialKey));
     if (materialIt != worldLocalResources->materials.end())
     {
-        return &materialIt->second;
+        return materialIt->second;
     }
 
     return nullptr;
@@ -487,6 +593,7 @@ void RendererResourceCache::BindMaterialInstance(
     std::string materialInstanceKey,
     std::shared_ptr<MaterialInstance> materialInstance)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!materialInstance)
@@ -504,20 +611,22 @@ void RendererResourceCache::BindMaterialInstance(
 void RendererResourceCache::RemoveMaterialInstance(
     std::string_view materialInstanceKey)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     GetMutableWorldLocalResources().materialInstances.erase(
         std::string(materialInstanceKey));
 }
 
-const std::shared_ptr<MaterialInstance>* RendererResourceCache::GetMaterialInstance(
+std::shared_ptr<MaterialInstance> RendererResourceCache::GetMaterialInstance(
     std::string_view materialInstanceKey) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto materialInstanceIt =
         worldLocalResources->materialInstances.find(
             std::string(materialInstanceKey));
     if (materialInstanceIt !=
         worldLocalResources->materialInstances.end())
     {
-        return &materialInstanceIt->second;
+        return materialInstanceIt->second;
     }
 
     return nullptr;
@@ -527,6 +636,7 @@ void RendererResourceCache::BindObjectResource(
     std::string objectName,
     std::shared_ptr<RendererObjectResourceEntry> objectResource)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!objectResource)
@@ -539,23 +649,39 @@ void RendererResourceCache::BindObjectResource(
         std::move(objectResource);
 }
 
-const std::shared_ptr<RendererObjectResourceEntry>* RendererResourceCache::GetObjectResource(
+std::shared_ptr<RendererObjectResourceEntry> RendererResourceCache::GetObjectResource(
     std::string_view objectName) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto objectResourceIt =
         worldLocalResources->objectResources.find(
             std::string(objectName));
     if (objectResourceIt !=
         worldLocalResources->objectResources.end())
     {
-        return &objectResourceIt->second;
+        return objectResourceIt->second;
     }
 
     return nullptr;
 }
 
+std::shared_ptr<RendererObjectResourceEntry>
+RendererResourceCache::TakeObjectResource(std::string_view objectName)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    WorldLocalResourcePackage& resources = GetMutableWorldLocalResources();
+    auto objectIt = resources.objectResources.find(std::string(objectName));
+    if (objectIt == resources.objectResources.end())
+        return nullptr;
+    std::shared_ptr<RendererObjectResourceEntry> object =
+        std::move(objectIt->second);
+    resources.objectResources.erase(objectIt);
+    return object;
+}
+
 void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<Texture> texture)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
     if (!texture)
@@ -570,22 +696,39 @@ void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<
 
 TressfxGeometryCache& RendererResourceCache::GetTressfxGeometryCache() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     // 所有实例（含候选包）共享同一份进程级缓存。
     return *tressfxGeometryCache;
 }
 
-const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_view textureKey) const
+std::shared_ptr<Texture> RendererResourceCache::GetTexture(std::string_view textureKey) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
     auto textureIt =
         worldLocalResources->textures.find(
             std::string(textureKey));
     if (textureIt != worldLocalResources->textures.end())
     {
-        return &textureIt->second;
+        return textureIt->second;
     }
 
     return nullptr;
 }
 
+void RendererResourceCache::BindTerrainStreaming(
+    std::shared_ptr<TerrainStreamingState> streamingState)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    GetMutableWorldLocalResources().terrainStreaming =
+        std::move(streamingState);
+}
+
+std::shared_ptr<TerrainStreamingState>
+RendererResourceCache::GetTerrainStreaming() const
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    if (!worldLocalResources) return nullptr;
+    return worldLocalResources->terrainStreaming;
+}
 
 } // namespace VL

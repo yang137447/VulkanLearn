@@ -33,6 +33,10 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     }
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
+    packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
+    packet.terrainFeedbackEligible =
+        drawSnapshot.terrainFeedbackEligible;
+    packet.isTerrain = drawSnapshot.isTerrain;
     packet.windResponseProfileKey = drawSnapshot.windResponseProfileKey;
     packet.tressfxPointsPerGuide = drawSnapshot.tressfxPointsPerGuide;
     packet.tressfxSelectedGroup = drawSnapshot.tressfxSelectedGroup;

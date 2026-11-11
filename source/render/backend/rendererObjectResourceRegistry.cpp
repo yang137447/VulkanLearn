@@ -77,11 +77,11 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 const RenderDrawPacket& drawPacket =
                     renderScene.drawPackets[draw.drawPacketIndex];
                 std::shared_ptr<RendererObjectResourceEntry> objectResourceEntry;
-                const std::shared_ptr<RendererObjectResourceEntry>* cachedEntry =
+                const std::shared_ptr<RendererObjectResourceEntry> cachedEntry =
                     resourceCache.GetObjectResource(drawPacket.debugName);
-                if (cachedEntry != nullptr && *cachedEntry != nullptr)
+                if (cachedEntry != nullptr)
                 {
-                    objectResourceEntry = *cachedEntry;
+                    objectResourceEntry = cachedEntry;
                     // 运行时 spawn 的骨骼网格可能先以“无 pose”帧创建对象资源包，
                     // 之后 pose 才到达。对象资源包的 Initialize 是一次性的（已初始化
                     // 就不再补 buffer），直接在旧包上补会破坏描述符布局，因此这里丢弃
@@ -108,7 +108,7 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 // 分配与随后 DrawShadowScene 使用的是同一份路由结果。
                 if (drawPacket.skinPose && !objectResourceEntry->GetResources().initialized)
                 {
-                    const auto renderable = draw.renderableObject.lock();
+                    const auto& renderable = draw.renderableObject;
                     if (!renderable || !renderable->GetSkinInfluenceInfo().buffer)
                         throw std::runtime_error("Skinned draw is missing its immutable influence stream");
                     auto& resources = objectResourceEntry->GetResources();
@@ -122,7 +122,7 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 }
                 if (!objectResourceEntry->GetResources().initialized)
                 {
-                    const auto renderable = draw.renderableObject.lock();
+                    const auto& renderable = draw.renderableObject;
                     if (renderable && renderable->IsTressfx())
                     {
                         objectResourceEntry->GetResources().tressfxPositions =

@@ -6,6 +6,11 @@ target_link_libraries(vl_game_export PUBLIC Json PRIVATE BLAKE3::blake3)
 
 add_executable(vl_export_game main.cpp)
 target_link_libraries(vl_export_game PRIVATE vl_game_export)
+if(MINGW)
+    get_filename_component(vl_mingw_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    target_compile_definitions(vl_export_game PRIVATE
+        VL_MINGW_RUNTIME_DIR="${vl_mingw_runtime_dir}")
+endif()
 if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
     get_filename_component(export_dotnet_root "${VULKANLEARN_DOTNET_EXECUTABLE}" DIRECTORY)
     target_compile_definitions(vl_export_game PRIVATE VL_EXPORT_CSHARP_ENABLED

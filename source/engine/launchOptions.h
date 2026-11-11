@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "render/rhi/presentMode.h"
+
 namespace VL
 {
 
@@ -39,12 +41,18 @@ struct LaunchOptions
     std::optional<std::string> perfJsonlPath;
     // 自动化输入验收：启动后主动抢占 OS 键盘焦点，仅显式 flag 生效。
     bool focusWindow = false;
+    // Auto keeps the existing mailbox-first policy. Immediate is the uncapped
+    // benchmark path; it may tear and depends on the surface supporting it.
+    PresentModePreference presentMode = PresentModePreference::Auto;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;
     // 帧率验收工具：0 = 不限速（默认行为完全不变），正整数表示渲染主循环的目标节拍。
     // 只约束渲染帧节拍，time.delta 与动画/脚本 tick 的 dt 仍随真实帧间隔变化；
     // ScriptRuntime 内部的固定 60 Hz 物理子步保持不变。
     int frameLimitHz = 0;
+    // 烟测/打包验收：完成 N 帧后以退出码 0 结束；0 = 不限制。
+    // --frame-limit 是节拍上限（Hz），不是帧数，两者互不替代。
+    int exitAfterFrames = 0;
     std::string initialSceneOverride;
     // 启动期控制台脚本：让 shading model showcase / debug 采集可以复现，
     // 不必依赖手敲交互控制台。命令文本与手输完全同一条解析路径。

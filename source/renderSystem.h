@@ -5,12 +5,14 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <utility>
 #include <nlohmann/json.hpp>
@@ -28,23 +30,34 @@
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
+#include "render/environment/environmentRuntime.h"
 #include "render/frontend/renderScene.h"
+#include "render/frame/renderWorldSnapshot.h"
+#include "render/frame/renderFrameRecorder.h"
 #include "render/frontend/rendererFrontend.h"
+#include "renderableObject.h"
 #include "render/resource/placementBindingResolver.h"
 #include "render/offline/offlineCameraMotionPolicy.h"
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
-#include "editor/selection/materialInstanceSelection.h"
+#include "render/frontend/scenePicking.h"
+#include "render/hair/hairRuntime.h"
 #include "render/pass/passRuntime.h"
-#include "render/editor/editorViewportGrid.h"
+#include "render/picking/renderPicking.h"
+#include "render/overlay/editorViewportOverlay.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/csmRuntime.h"
+#include "render/postprocess/postProcessControls.h"
+#include "render/terrain/terrainFeedbackRuntime.h"
+#include "terrain/terrainFeedback.h"
+#include "terrain/terrainLayerFeedback.h"
 #include "render/shadow/shadowCasterCull.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
-#include "editor/preview/materialInstancePreviewAdapter.h"
+#include "render/editorBridge/materialInstancePreviewAdapter.h"
 #include "hair/hairTraceFormat.h"
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupBinding.h"
@@ -58,8 +71,11 @@ namespace VL
 {
 class World;
 struct OfflineWorldAssets;
+struct TerrainStreamingState;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
+class MaterialInstancePreviewSession;
+class OfflineMaterialInstancePreviewSession;
 }
 
 namespace VL
@@ -88,7 +104,7 @@ struct PreparedRuntimeBinding
 // the snapshot mailbox.
 class RenderSystem
     : private VL::PassRuntimeServices
-    , private VL::Editor::Preview::IRendererMaterialInstancePreviewOwner
+    , private VL::IRendererMaterialInstancePreviewOwner
 {
 public:
     static RenderSystem& GetInstance()
@@ -108,6 +124,20 @@ public:
     // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
     // immediately; in workerThreadCount=2 RenderThread consumes it later.
     void PublishSnapshotFromActiveWorld();
+    // Dynamic mesh producers (softbody/glass) never write host-visible buffers
+    // on GT. They publish the latest content per mesh key; the render thread
+    // applies it to the swapchain frame slot before recording passes.
+    void QueueDynamicVertices(
+        std::string meshKey,
+        std::vector<struct Vertex> vertices);
+    void QueueDynamicMesh(
+        std::string meshKey,
+        std::vector<struct Vertex> vertices,
+        std::vector<uint32_t> indices);
+    size_t GetPendingDynamicMeshUpdateCountForTest() const
+    {
+        return dynamicMeshUpdateQueue.PendingCount();
+    }
     // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
     // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
     // frameDelta/gameDelta/hairDelta 是各自已夹取的模拟 delta；windDelta 是
@@ -133,6 +163,26 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 控制台只读诊断：打印最近一次已完成 feedback 回读的页统计。
+    // 不触发 RequestPage/Evict，也不改变 preload=true 的驻留行为。
+    void ReportTerrainFeedbackStatistics() const;
+    // P3 控制台：打印驻留/预算/淘汰/上传统计（渲染线程发布的快照）。
+    void ReportTerrainStatistics() const;
+    void ReportTerrainLayerStatistics() const;
+    // 运行时几何 LOD：读取最近一帧 WorldSnapshotBuilder 的组状态。
+    void ReportTerrainLodStatistics() const;
+    void ReportTerrainChunkStatistics() const;
+    // 预算命令由 GT 写 atomic，渲染线程帧首消费；不直接跨线程改 page manager。
+    void RequestTerrainResidentCapacity(uint32_t capacity);
+    // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。
+    void RequestTerrainLayerResidentCapacity(uint32_t capacity);
+    void RequestTerrainLayerPreload();
+    // L4e：调试用强制目标 mip（-1 = 自动，0..4 = 覆盖）。只影响 mode 1；
+    // 写入 streaming state 的 atomic，渲染线程帧首应用到 M_terrain/feedback。
+    void RequestTerrainLayerForceMip(int forceMip);
+    // 控制台 `terrain parity [tileX tileZ]`：渲染线程空闲时对同一页分别做
+    // CPU 与 GPU 烘焙并逐 texel 比较。调试入口，会同步等待一次 GPU。
+    void RequestTerrainPageBakeParity(int tileX, int tileZ);
     // 正常 Console `hair trace` 的 GT 侧入口：只记录值语义请求，由渲染线程在
     // RecordHairSimulation 中转发给 HairSimulationPass。GT 与渲染线程在
     // workerThreadCount=2 时并发，因此用互斥量保护这唯一一个待消费槽。
@@ -180,7 +230,7 @@ public:
     vk::Extent2D GetSceneRenderExtent() const;
     void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
     void SetCsmSettings(const VL::CsmSettings& settings);
-    const VL::CsmSettings& GetCsmSettings() const noexcept { return csmSettings; }
+    VL::CsmSettings GetCsmSettings() const;
     bool SetCsmCastShadows(bool enabled, std::string& outMessage);
     bool SetCsmDynamicShadowDistance(float distance, std::string& outMessage);
     bool SetCsmCascadeCount(uint32_t cascadeCount, std::string& outMessage);
@@ -198,26 +248,34 @@ public:
     void RefreshResolvedSceneAfterShaderReload();
     std::string GetResolvedShaderGenerationFingerprint() const;
     uint64_t GetActiveWorldGeneration() const noexcept;
-    std::optional<VL::Editor::Selection::MaterialInstanceSelection>
+    // 编辑器拾取/模型上下文只在开发者 UI 可见时需要；运行时 HUD 或
+    // --no-dev-ui 下跳过整份 picking RenderScene 的逐帧重建。
+    void SetPickingSceneEnabled(bool enabled) noexcept;
+    std::optional<VL::MaterialInstanceSelection>
     PickMaterialInstanceAt(
         float mouseX,
         float mouseY,
         uint32_t viewportWidth,
         uint32_t viewportHeight) const;
-    std::vector<VL::Editor::Selection::MaterialInstanceModelContext>
+    std::vector<VL::MaterialInstanceModelContext>
     GetMaterialInstanceModelContexts() const;
     void SetSelectedMaterialInstanceModel(
-        const VL::Editor::Selection::MaterialInstanceModelContext& model);
+        const VL::MaterialInstanceModelContext& model);
     void SetSelectedMaterialInstance(
-        const VL::Editor::Selection::MaterialInstanceSelection& selection);
+        const VL::MaterialInstanceSelection& selection);
     void ClearSelectedMaterialInstance() noexcept;
-    VL::Editor::Preview::IMaterialInstancePreviewAdapter&
+    VL::IMaterialInstancePreviewAdapter&
     GetMaterialInstancePreviewAdapter() noexcept
     {
         return materialInstancePreviewAdapter;
     }
-    std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
+    std::unique_ptr<VL::IMaterialInstancePreviewAdapter>
     CreateMaterialInstancePreviewAdapter();
+    // 编辑器注入的视口覆盖层；runtime 只持有裸指针，editor 负责生命周期。
+    void SetEditorViewportOverlay(VL::IEditorViewportOverlay* overlay) noexcept
+    {
+        editorViewportOverlay = overlay;
+    }
     VL::PreparedRuntimeBinding PrepareRuntimeBinding(
         std::shared_ptr<const VL::World> world,
         VL::RendererResourceCache& candidateCache,
@@ -226,20 +284,37 @@ public:
         bool prepareOffline = false);
     std::shared_ptr<const VL::OfflineWorldAssets>
     CaptureOfflineWorldAssets() const noexcept { return activeOfflineWorldAssets; }
-    bool IsOfflineMode() const noexcept { return offlineMode; }
-    void SetInitialOfflineMode(bool enabled) noexcept { offlineMode = enabled; }
+    bool IsOfflineMode() const noexcept { return offlineMode.load(std::memory_order_acquire); }
+    void SetInitialOfflineMode(bool enabled) noexcept
+    {
+        offlineMode.store(enabled, std::memory_order_release);
+    }
     // --prerender-skin：启动时固定，必须在加载初始 World 之前设置，因为材质
     // shader variant 与对象 GPU 资源都按它选择。
     void SetPrerenderSkinEnabled(bool enabled) noexcept { prerenderSkinEnabled = enabled; }
     bool IsPrerenderSkinEnabled() const noexcept { return prerenderSkinEnabled; }
     bool SetOfflineMode(bool enabled, std::string& message);
     bool SetOfflineSetting(const std::string& name, int value, std::string& message);
-    void SetOfflineAov(VL::OfflineAov aov) noexcept { offlineAov = aov; }
+    void SetOfflineAov(VL::OfflineAov aov) noexcept
+    {
+        offlineAov.store(aov, std::memory_order_release);
+    }
     bool SetOfflineExposure(float exposure, std::string& message);
     void ControlOfflineSession(int command);
     const VL::OfflineRenderSettings& GetOfflineSettings() const noexcept { return offlineSettings; }
-    VL::OfflineAov GetOfflineAov() const noexcept { return offlineAov; }
-    float GetOfflineExposure() const noexcept { return offlineExposure; }
+    VL::OfflineAov GetOfflineAov() const noexcept
+    {
+        return offlineAov.load(std::memory_order_acquire);
+    }
+    float GetOfflineExposure() const noexcept
+    {
+        return offlineExposure.load(std::memory_order_acquire);
+    }
+    // Structural renderer mutations still require RT to be idle. EngineLoop
+    // installs a callback that implements WaitForRenderThreadIdle(); without a
+    // render thread the call is a no-op.
+    void SetRendererMutationSafePoint(std::function<void()> safePoint);
+    void WaitForRendererMutationSafePoint();
     VL::Offline::SessionState GetOfflineState() const;
     std::string GetOfflineError() const;
     std::shared_ptr<const VL::OfflinePublishedResult> CaptureOfflineResult() const;
@@ -295,15 +370,15 @@ public:
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
-    int GetToneMappingMode() const { return toneMappingMode; }
+    int GetToneMappingMode() const { return postProcessControls.GetToneMappingMode(); }
     bool SetBloomStrength(float value, std::string& outMessage);
-    float GetBloomStrength() const { return bloomStrength; }
+    float GetBloomStrength() const { return postProcessControls.GetBloomStrength(); }
     bool SetBloomThreshold(float value, std::string& outMessage);
-    float GetBloomThreshold() const { return bloomThreshold; }
+    float GetBloomThreshold() const { return postProcessControls.GetBloomThreshold(); }
     bool SetBloomKnee(float value, std::string& outMessage);
-    float GetBloomKnee() const { return bloomKnee; }
+    float GetBloomKnee() const { return postProcessControls.GetBloomKnee(); }
     bool SetBloomClamp(float value, std::string& outMessage);
-    float GetBloomClamp() const { return bloomClamp; }
+    float GetBloomClamp() const { return postProcessControls.GetBloomClamp(); }
     // Rebinding the active World invalidates all CPU-side render views derived
     // from the previous World. The next Render() builds a fresh snapshot and
     // resolved scene from the new generation.
@@ -315,26 +390,26 @@ public:
         shaderReloadCoordinator = coordinator;
     }
 private:
-    class MaterialInstancePreviewSession;
-    class OfflineMaterialInstancePreviewSession;
+    friend class VL::MaterialInstancePreviewSession;
+    friend class VL::OfflineMaterialInstancePreviewSession;
 
     RenderSystem()
         : materialInstancePreviewAdapter(*this)
     {
     }
-    std::optional<VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+    std::optional<VL::MaterialInstancePreviewWorldIdentity>
     GetActiveWorldIdentity() const override;
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    VL::MaterialInstancePreviewAdapterResult
     CaptureMaterialInstancePreviewSession(
-        const VL::Editor::Preview::MaterialInstancePreviewAdapterCommand& command,
+        const VL::MaterialInstancePreviewAdapterCommand& command,
         std::shared_ptr<
-            VL::Editor::Preview::IRendererMaterialInstancePreviewSession>&
+            VL::IRendererMaterialInstancePreviewSession>&
             outSession) override;
-    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    VL::MaterialInstancePreviewAdapterResult
     CommitMaterialInstancePreviewDraft(
-        const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
-        const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
-        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override;
+        const VL::MaterialInstancePreviewWorldIdentity& world,
+        const VL::NormalizedMaterialInstancePath& materialInstancePath,
+        const VL::MaterialInstancePreviewDraft& draft) override;
     std::shared_ptr<const VL::OfflineWorldAssets>
     PrepareOfflineMaterialPreview(
         const std::string& materialInstancePath,
@@ -359,6 +434,9 @@ private:
     void PublishSnapshotFromActiveWorld(bool advanceSimulation);
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
+    // RT frame-start snapshot of the GT-owned CSM settings. Invalidates the
+    // RT shadow-cascade cache when the GT revision changed.
+    void SnapshotFrameCsmSettings();
     // 放置级（per-placement）网格：resolve 之前确保每个实例键都有独立
     // RenderableObject（从模板克隆、共享导入几何），并按 placementBinding 的 Kind
     // 交给通用 resolver 应用绑定。当前唯一 provider 是 GPU 毛发，但流程不含
@@ -416,72 +494,7 @@ private:
     // --gpu-stats 周期输出每级联 caster draw 的 before/after 计数。
     void LogShadowCasterCullStats() const;
 
-        // 用于使用boundingbox加速
-    std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
-        // 遍历场景物体，在lightspace确定 minZ 和 maxZ（每帧只投影一次，见下）
-    std::optional<std::pair<float, float>> ComputeCascadeLightSpaceZBounds(
-        const Eigen::Matrix3f& worldToShadowMatrix,
-        float minX,
-        float maxX,
-        float minY,
-        float maxY);
-    // caster 在光源空间的包围盒。投影只取决于光源朝向，同一帧的四个级联完全相同；
-    // 因此每帧投影一次缓存，逐级联只做 XY 过滤与 Z 合并，避免 N 级 × 全部 draw 的重复计算。
-    struct ShadowCasterLightSpaceBounds
-    {
-        float minX = 0.0f;
-        float maxX = 0.0f;
-        float minY = 0.0f;
-        float maxY = 0.0f;
-        float minZ = 0.0f;
-        float maxZ = 0.0f;
-    };
-    std::vector<ShadowCasterLightSpaceBounds> casterLightSpaceBounds;
-    bool casterLightSpaceBoundsValid = false;
-        // 将局部空间的aabb变换到世界空间
-    std::array<Eigen::Vector3f, 8> BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix) const;
-        // 计算某个空间下的aabb
-    void ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& corners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
-
-    // 阴影计算策略
-    enum class ShadowStrategy {
-        DynamicTightBox,    // 原始方案：最小面积矩形 (利用率高，闪烁)
-        StableBoundingSphere, // 基础稳定方案：外接球 (利用率低，极其稳定)
-        StableRectangular // 改良方案：稳定长方形 (利用率中，稳定)
-    };
-
-    struct ShadowProjectionParams {
-        Eigen::Matrix4f viewMatrix;
-        Eigen::Matrix4f projectionMatrix;
-        // 该级联接收面（相机 split）的光源空间 XY 范围，供 caster 预筛。
-        VL::ShadowCasterReceiverBounds casterReceiverBounds;
-    };
-
-    struct ShadowCascadeFrameData {
-        std::array<Eigen::Matrix4f, 4> view{};
-        std::array<Eigen::Matrix4f, 4> projection{};
-        std::array<Eigen::Matrix4f, 4> lightViewProj{};
-        // 逐级联接收面 XY 范围；与 lightViewProj 同帧同源。
-        std::array<VL::ShadowCasterReceiverBounds, 4> casterReceiverBounds{};
-        Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
-        std::array<Eigen::Vector4f, 4> bias{};
-        Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
-        uint64_t frameIndex = std::numeric_limits<uint64_t>::max();
-        uint64_t worldGeneration = 0;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        bool valid = false;
-    };
-
     void BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight);
-    ShadowProjectionParams CalculateShadowMatrixForCameraRange(
-        float splitNear,
-        float splitFar,
-        uint32_t passSizeWidth,
-        uint32_t passSizeHeight);
-    ShadowProjectionParams CalculateShadowMatrix_DynamicTight(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float sceneMaxZ, float sceneZRange);
-    ShadowProjectionParams CalculateShadowMatrix_StableSphere(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
-    ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
     
     // 环境IBL相关
     std::shared_ptr<Texture> GetActiveEnvironmentCube();
@@ -501,27 +514,32 @@ private:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
+    void ConsumeTerrainFeedback(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        uint64_t completedEpoch,
+        uint32_t frameIndex);
+    // L4e：把 console 的强制 mip 写进已登记的 M_terrain 实例；只在值或
+    // 实例集合变化时写，避免每帧改材质 UBO。
+    void ApplyTerrainLayerForceMip(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
+    // L4e：用相机本帧位移更新“前向移动”标志，驱动细一级 mip 预取。
+    void UpdateTerrainCameraPrefetch(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
+    void PrepareTerrainFeedbackPass(uint8_t frameTag);
+    void PublishTerrainStreamingStats(
+        const std::shared_ptr<VL::TerrainStreamingState>& streaming,
+        uint64_t completedEpoch);
+    void RunTerrainPageBakeParityIfRequested();
+
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
     float simulationDeltaSeconds = 0.0f;
     float gameSimulationDeltaSeconds = 0.0f;
     float hairSimulationDeltaSeconds = 0.0f;
-    bool hasSelectedDraw = false;
-    bool selectedAllMaterialSlots = false;
-    VL::RuntimeId selectedObjectId = 0;
-    uint32_t selectedMaterialSlotIndex = 0;
-    uint64_t selectedWorldGeneration = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
-    int toneMappingMode = 3;
-    float bloomStrength = 0.08f;
-    float bloomThreshold = 1.0f;
-    float bloomKnee = 0.5f;
-    float bloomClamp = 12.0f;
-    float exposureDeltaSeconds = 1.0f / 60.0f;
-    bool exposureClockInitialized = false;
-    std::chrono::steady_clock::time_point exposureLastFrameTime;
+    VL::PostProcessControls postProcessControls;
     bool hasRenderScene = false;
     // 风模拟时间。严格按固定 1/60 s 步长递增；不要把它当成帧时间。
     double currentWindTimeSeconds = 0.0;
@@ -536,51 +554,36 @@ private:
     WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
-    VL::CsmSettings csmSettings;
-    ShadowCascadeFrameData shadowCascadeFrameData;
+    VL::CsmRuntime csmRuntime;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;
+    VL::DynamicMeshUpdateQueue dynamicMeshUpdateQueue;
     VL::RendererFrontend rendererFrontend;
     VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
     VL::PassRuntime passRuntime;
-    // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
-    VL::EditorViewportGrid editorViewportGrid;
+    // 编辑器参考网格几何：只由 editorGrid pass 消费；runtime 不拥有实现。
+    VL::IEditorViewportOverlay* editorViewportOverlay = nullptr;
     VL::RenderScene currentRenderScene;
-    // 放置级 renderable 键 → 连续缺失帧数。只在 RT 访问；World 换代时清空
-    // （整包由 transaction 退休）。
-    std::unordered_map<std::string, int> placementAbsentFrames;
-    // 放置级 renderable 键 → debugName；退休日志需要对象身份，不能只报键。
-    std::unordered_map<std::string, std::string> placementObjectNames;
-    // 上一帧放置级 draw 数；只在变化时打一条日志，兼作 spawn/destroy 的存活计数。
-    size_t placementLiveCount = 0;
-    // 活动包里 placement-scoped renderable 数；变化时打一条，作为无泄漏核对。
-    size_t placementCacheCount = 0;
-    // Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后应回到 0。
-    size_t placementRuntimeCount = 0;
-    // 放置绑定解析结果的跨实例缓存，键见 MakePlacementBindingCacheKey。
-    VL::PlacementBindingCache placementBindingCache;
-    uint64_t placementWorldGeneration = 0;
+    VL::PlacementRenderableRuntime placementRuntime;
+    VL::RenderFrameRecorder frameRecorder;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;
     uint64_t submittedFrameSerial = 0;
     VL::ResolvedRenderScene currentResolvedRenderScene;
-    // 拾取只读 GT 发布快照时生成的副本，避免 worker render thread 更新
-    // currentRenderScene 时与鼠标事件并发读写同一对象。
-    VL::RenderScene pickingRenderScene;
-    bool hasPickingRenderScene = false;
+    VL::RenderPickingRuntime pickingRuntime;
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
-    bool offlineMode = false;
+    std::atomic<bool> offlineMode{false};
     bool prerenderSkinEnabled = false;
     VL::OfflineRenderSettings offlineSettings{0, 0, 32, 2, 1, 0};
-    VL::OfflineAov offlineAov = VL::OfflineAov::Combined;
-    float offlineExposure = 1.0f;
+    std::atomic<VL::OfflineAov> offlineAov{VL::OfflineAov::Combined};
+    std::atomic<float> offlineExposure{1.0f};
     std::unique_ptr<VL::OfflineRenderCoordinator> offlineCoordinator;
     VL::OfflineDisplayVulkan offlineDisplay;
     VL::WorldSnapshotPtr currentOfflineSnapshot;
     VL::OfflineCameraMotionPolicy offlineCameraMotionPolicy;
-    VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter
+    VL::RendererOwnedMaterialInstancePreviewAdapter
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     PipelineFactory* pipelineFactory = nullptr;
@@ -593,22 +596,20 @@ private:
         environmentIblBaker};
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
-    VL::EnvironmentGpuTimer environmentGpuTimer;
     // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
     VL::GpuPassTimer gpuPassTimer;
     // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。
     std::array<VL::ShadowCasterCullStats, VL::CsmSettings::MaxCascadeCount>
         frameShadowCasterCullStats{};
-    bool gpuPassStatsLoggingEnabled = false;
+    std::atomic<bool> gpuPassStatsLoggingEnabled{false};
     uint32_t shadowCasterCullStatsFramesSinceLog = 0;
-    VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
-    VL::EnvironmentUpdateState environmentUpdateState;
-    std::shared_ptr<Texture> environmentUpdateSourceCube;
-    mutable std::mutex environmentDiagnosticsMutex;
-    VL::EnvironmentUpdateDiagnostics environmentDiagnostics;
+    VL::EnvironmentRuntime environmentRuntime;
+    VL::TerrainFeedbackRuntime terrainFeedbackRuntime;
+    VL::HairRuntime hairRuntime;
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
     VL::UiViewportRect requestedSceneViewport;
     bool sceneViewportRequested = false;
+    mutable std::mutex sceneViewportMutex;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     std::string uiVertexShaderPath;
@@ -616,24 +617,10 @@ private:
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
     // 确保回读不会与仍在录制的 command buffer 交叉。
     std::optional<std::string> pendingScreenshotPath;
-    // hair trace 请求跨 GT/渲染线程；渲染线程每帧只取一次，取走后由
-    // HairSimulationPass 在 Record 中消费。未请求时只有一次加锁读取。
-    std::mutex hairTraceRequestMutex;
-    std::optional<VL::Hair::HairTraceRequest> pendingHairTraceRequest;
-    // 复位请求与 trace 同构：GT 只写这里，渲染线程每帧取走一次；未请求时
-    // 只有一次加锁读取。空字符串表示所有 GPU guide 对象。
-    std::mutex hairResetRequestMutex;
-    std::optional<std::string> pendingHairResetRequest;
-    // 实时参数覆盖：一帧可能有多条（滑杆拖动），用小队列而不是单槽；队列有界，
-    // 过期意图先丢弃，避免无渲染帧时无限累积。
-    std::mutex hairLiveParameterMutex;
-    std::vector<VL::Hair::HairLiveParameterRequest> pendingHairLiveParameters;
-    std::mutex tressfxBrushPreviewMutex;
-    std::vector<VL::Hair::TressfxBrushPreviewRequest> pendingTressfxBrushPreviews;
-    std::mutex tressfxGroupBindingPreviewMutex;
-    std::vector<VL::Hair::TressfxGroupBindingPreviewRequest>
-        pendingTressfxGroupBindingPreviews;
+    mutable std::mutex pendingScreenshotPathMutex;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;
+    std::mutex rendererMutationSafePointMutex;
+    std::function<void()> rendererMutationSafePoint;
 };

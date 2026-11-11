@@ -12,6 +12,7 @@
 #include "core/logStore.h"
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <set>
 #include <filesystem>
 #include "world/world.h"
@@ -207,6 +208,30 @@ void ScriptRuntimeSubsystem::Stop(World& world)
     performanceDetailElapsed = 0;
 }
 
+bool ScriptRuntimeSubsystem::HasPhysicsWorld() const
+{
+    return physics != nullptr;
+}
+
+void ScriptRuntimeSubsystem::ReportTerrainCollisionStatistics() const
+{
+    if (!physics)
+    {
+        std::cout
+            << "[TerrainCollision] No physics world (script is not playing)."
+            << std::endl;
+        return;
+    }
+    const std::vector<std::string> placements =
+        physics->TerrainCollisionPlacementIds();
+    std::cout
+        << "[TerrainCollision] bodies=" << physics->TerrainCollisionBodyCount()
+        << " placements=" << placements.size()
+        << std::endl;
+    for (const std::string& placement : placements)
+        std::cout << "[TerrainCollision] placement=" << placement << std::endl;
+}
+
 bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, std::string& error)
 {
     error.clear();
@@ -240,6 +265,9 @@ bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, st
                 world.SetScriptContext(std::move(context));
                 physics = std::make_shared<ScriptPhysicsWorld>();
                 physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
+                // Play 才创建地形静态体；编辑器预览不经过这里。创建失败会抛异常，
+                // 由外层 catch 回滚到 Editing，不留下半套物理世界。
+                physics->SetTerrainCollisions(world.GetTerrainCollisionInstances());
                 Apply(world, response);
                   world.TickScriptAnimations(0);
                 StepPhysics(world, 0);

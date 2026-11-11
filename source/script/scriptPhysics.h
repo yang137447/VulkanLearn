@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <map>
 #include <string>
@@ -7,6 +8,7 @@
 #include <Eigen/Core>
 #include <nlohmann/json.hpp>
 #include "animation/footPlacement.h"
+#include "terrain/terrainCollisionTypes.h"
 
 namespace VL
 {
@@ -26,6 +28,12 @@ public:
     Animation::FootGroundHit ProbeGround(const std::string& owner, const Eigen::Vector3f& origin,
         const Eigen::Vector3f& displacement) const override;
     void SetMeshGeometry(const std::map<std::string, std::vector<Eigen::Vector3f>>& triangles);
+    // Play 时把 World 的地形摆放一次性交进来：先销毁旧 body，再为每个 placement
+    // 创建静态 heightfield。重复调用是“替换”语义；空集合只清空。
+    // body 由本对象持有，析构/Stop 时一定早于 PhysicsSystem 销毁。
+    void SetTerrainCollisions(const std::vector<TerrainCollisionInstance>& instances);
+    size_t TerrainCollisionBodyCount() const;
+    std::vector<std::string> TerrainCollisionPlacementIds() const;
 private:
     void StepInternal(nlohmann::json& states, const nlohmann::json& declarations, float dt, int substeps);
     struct Impl;

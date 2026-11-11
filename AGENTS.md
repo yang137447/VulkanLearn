@@ -46,6 +46,10 @@ instead of stuffing everything into `README.md` or `AGENTS.md`.
 
 Current implemented areas include:
 
+- Runtime/editor target split: `main_editor`/`vl_editor`/`vl_editor_asset_core`
+  over `vl_runtime`, and runtime-only `main_game`; `source/CMakeLists.txt`
+  filters editor sources from `vl_runtime` and rejects editor includes at
+  configure time. See `documents/contracts/vulkanlearn-architecture.html`.
 - Optional Windows x64/.NET 8 C# Blueprint hosting, scene placement and Play/Pause/Stop;
   implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
 - Runtime fracture verticals: `balloon` soft-body burst and `glassPane` impact fracture
@@ -60,8 +64,18 @@ Current implemented areas include:
 - Vulkan device / swapchain initialization
 - Shader compilation and SPIR-V loading
 - Data-driven scene loading
+- CPU heightmap terrain runtime: `terrain` scene objects, TR asset preflight, chunked mesh generation,
+  material binding through the existing geometry pass; implemented subset and limits:
+  `documents/contracts/terrain.md`
 - Data-driven render graph loading
 - Material and material instance loading
+- BC7/BC5 block-compressed textures from DDS/KTX2 (offline mip chains; no runtime BC mip
+  generation or Basis/zstd supercompression); see `documents/contracts/texture-asset-json-v1.md`
+- Jolt heightfield terrain collision (`source/terrain/terrainCollision.*`,
+  `source/world/loading/terrainCollisionInstances.*`): WorldBuilder retains one plan+TRS per
+  `terrain` placement; every script Play creates static bodies in the existing
+  `ScriptPhysicsWorld`, and Stop/World replacement destroys them. Editor/preview loads create
+  no physics world
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
@@ -94,7 +108,7 @@ The codebase mixes engine experimentation and learning-oriented iteration. Prefe
 When onboarding to the repo, read in this order:
 
 1. `README.md`
-2. `source/main.cpp`
+2. `source/main_editor.cpp`, `source/main_game.cpp` and `source/engine/application.cpp`
 3. `source/commonFunction.h`
 4. `source/renderGraph.h` and `source/renderGraph.cpp`
 5. `source/scene/validation/sceneAssetValidator.*`, `source/world/loading/worldLoader.*` and `source/world/loading/worldBuilder.*` (scene asset validation and world build; the old monolithic `source/sceneLoader.cpp` no longer exists)
@@ -116,6 +130,9 @@ Start any source change from `documents/routing.md`. The design documents themse
 - `documents/plan/ui/rmlui-editor-plan.md`
   - completed RmlUi migration/docking/independent viewport versus future scene documents and asset workflows
 - `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/terrain.md`
+  - current CPU heightmap terrain runtime: TR schema, heightmap sampling, chunk mesh/normals,
+    scene object integration, material limit and explicit non-goals
 - `documents/contracts/material-param-authoring-and-reflection.md`
 - `documents/contracts/descriptor-imageinfo-management.md`
 - `documents/contracts/gbuffer-channel-ownership.md`
@@ -145,15 +162,63 @@ Configure:
 cmake -S . -B build -G "MinGW Makefiles"
 ```
 
+Configure fetches Jolt through `FetchContent` because terrain collision is a core CPU
+dependency. Offline builds must pre-populate `build/_deps/vl_jolt-src` or provide a reachable
+mirror; this is the only third-party download in the default configure path.
+
 Build:
 
 ```powershell
-cmake --build build -j
+cmake --build build --target main_editor main_game main -j 4
 ```
 
 Executable output:
 
-- `build/bin/main.exe`
+- `build/bin/main_editor.exe`: editor composition root, links `vl_editor` + `vl_runtime`
+- `build/bin/main_game.exe`: runtime-only composition root, links `vl_runtime` only
+- `build/bin/main.exe`: POST_BUILD copy of `main_editor.exe` for existing scripts
+
+Target graph and options:
+
+- `main_editor -> vl_editor -> vl_runtime`; `vl_editor` also links
+  `vl_editor_asset_core` and `vl_editor_widgets`
+- `main_game -> vl_runtime`; no `vl_runtime -> vl_editor` edge
+- `VULKANLEARN_ENABLE_EDITOR=OFF` builds only the game flavor
+  (`main_game`) and drops editor targets from the graph
+- `VULKANLEARN_BUILD_GAME=OFF` builds only editor targets
+- `VULKANLEARN_BUILD_LEGACY_MAIN=OFF` suppresses the `main.exe` copy
+- both flavor options `OFF` fails configure; at least one executable is required
+- editor sources stay under `source/editor/**`, `source/render/editor/**` and
+  editor-only engine/widget files but are compiled only by editor targets;
+  configure reads every `vl_runtime` source and rejects editor includes
+
+Runtime smoke:
+
+```powershell
+build\bin\main_editor.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 60
+build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 120 --worker-thread-count 2 --no-dev-ui
+```
+
+`--exit-after-frames <N>` exits with code 0 after `N` completed `Tick()` calls.
+`--frame-limit` is a 1..1000 Hz pacing cap, not a frame count. The console
+`quit` command requests the same clean shutdown path.
+
+Game-flavor packaging requires a Release game cache and the game binary:
+
+```powershell
+cmake --build build-game --target main_game vl_export_game -j 4
+build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
+build-game\bin\vl_export_game.exe --project-root . --flavor game `
+  --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `
+  --output artifacts/game-package
+powershell -NoProfile -ExecutionPolicy Bypass -File tool\validate-game-package.ps1 `
+  -PackagePath artifacts/game-package -VerifyTool build-game\bin\vl_export_game.exe
+```
+
+The exporter rejects `main.exe`, Debug shader caches and missing
+`vl_build_flavor.json`; it copies the runtime UI manifest closure, all cached
+SPV output roles (including debug reflection), MI-referenced `M_*.json` and
+`shaderEvaluation` sources, and the gameplay default `MI_glass_crack.json`.
 
 Typical runtime expectation:
 
@@ -170,19 +235,24 @@ Current local build context:
 
 ## Startup Flow
 
-The current startup sequence is split between `source/main.cpp` and
-`source/engine/engineLoop.cpp`:
+The current startup sequence is split between the entry point,
+`source/engine/application.cpp` and `source/engine/engineLoop.cpp`:
 
-1. Parse launch options and runtime test flags in `source/engine/launchOptions.cpp`
-2. Load `RuntimeConfig`
+1. `main_editor.cpp` or `main_game.cpp` calls `VL::RunApplication` with an
+   `IEditorHost` factory (`EditorHost` or `NullEditorHost`)
+2. Parse launch options and runtime test flags in `source/engine/launchOptions.cpp`
+3. Load `RuntimeConfig`
    - discover project root through `FileSystem`
    - read `config/config.json`
    - read `config/renderGraphConfig.json`
    - cache startup fields such as window size, `initScene`, `resourcePath`, and worker thread mode
-3. Initialize `PlatformApplication`
+4. Initialize `PlatformApplication`
    - initialize SDL and the Vulkan loader-facing platform layer
    - create the SDL Vulkan window and collect required Vulkan extensions
-4. Initialize `EngineLoop`
+5. Initialize `EngineLoop`
+   - store the injected editor host; a null factory falls back to `NullEditorHost`
+   - build the runtime render graph from `config/renderGraphConfig.json` and
+     remove the `editorGrid` pass when `IEditorHost::IsEditorFlavor()` is false
    - initialize input
    - generate material parameter includes
    - compile shaders from `shader/glsl/` into `shader/spv/`
@@ -191,20 +261,58 @@ The current startup sequence is split between `source/main.cpp` and
    - load the render graph from `RuntimeConfig::GetRenderGraphJson()`
    - initialize the `RenderSystem` resources required by World/Graph candidate preparation
    - load and publish the initial World through the same
-     `WorldTransitionCoordinator::PrepareWorldLoad()` +
+     `WorldCandidatePreparer::Prepare()` +
      `WorldGraphTransactionCoordinator` transaction used by runtime replacement
    - finalize initial-only render objects such as the UI overlay after the
      World/Graph transaction commits
-   - start the render thread only when `workerThreadCount == 2`
+   - start the render thread only when `workerThreadCount == 2`; the render loop is
+     bounded async, not a recording-only thread
    - initialize the console subsystem
-5. Queue launch-time runtime commands, if any
-6. Enter the update + render loop
+   - initialize the editor host through `EditorHostInit`; the host attaches
+     `EditorUiShell` to the single `UiSubsystem` context
+6. Queue launch-time runtime commands, if any
+7. Enter the update + render loop
 
 If a change affects boot behavior, verify it against this order.
+
+### Render Loop Concurrency
+
+`workerThreadCount == 1` is fully synchronous. `workerThreadCount == 2` runs the
+bounded async pipeline in `source/render/renderThread.*`:
+
+- At most one frame may be outstanding (`RenderFrameBudget::kMaxFramesAhead = 1`).
+  `SubmitFrame()` never waits; GT continues the rest of the tick and the next
+  simulation step while RT records, then `WaitForRenderFrameSlot()` blocks before
+  publishing the next snapshot if that frame has not finished. Do not add a
+  per-frame `WaitForRenderThreadIdle()` after `SubmitFrame()`.
+- The snapshot mailbox is latest-wins. If a pending snapshot is replaced, its
+  `hairSimulationDeltaSeconds` accumulates into the replacement, so dropped frames
+  cannot lose simulation time.
+- Structural renderer mutations stay at explicit safe points: swapchain resize,
+  render-graph reload, World/Graph transaction commit, shader reload, offline-mode
+  switch, material-instance preview commit, blueprint asset commit, terrain
+  paint/sculpt, and shutdown. Per-frame publishing and simulation must not call
+  `device.waitIdle()`.
+- `RendererResourceCache` getters, `ResourceRetireQueue`, `MaterialInstance`
+  parameter state, the thumbnail registry, and the Vulkan submission gate are
+  synchronized for concurrent GT/RT access. Resolved draws hold strong
+  `RenderableObject` references; retirement epochs must cover
+  published-but-not-yet-recorded snapshots.
+- Soft-body and glass dynamic meshes do not write host-visible buffers directly
+  from GT. They publish through `RenderSystem::QueueDynamicVertices` /
+  `QueueDynamicMesh`, and `RenderableObject` keeps three frame slots so an
+  in-flight frame never aliases the slot GT is writing.
 
 ## Important Directories
 
 - `source/`: engine and renderer source
+- `source/editor/**`, `source/render/editor/**`: editor-only sources; only
+  `vl_editor` compiles them (CMake ownership, not physical relocation)
+- `source/render/{frame,shadow,postprocess,environment,terrain,hair,picking,preview,world,renderable,resource/terrain}/`:
+  `RenderSystem`/`RenderableObject`/terrain-loader production modules
+- `source/engine/{frame,ui,script,window,perf}/`: `EngineLoop` production modules
+- `source/editor/ui/panel/`, `source/editor/service/material/`: decomposed editor
+  panel and material document service modules
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
@@ -212,12 +320,15 @@ If a change affects boot behavior, verify it against this order.
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
 - `<resourcePath>/Maps/SC_<scene-name>/Meshes/`: mesh description JSON and source model data
-- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON, **editor asset layer only** — no runtime terrain support exists
+- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON consumed by the runtime terrain loader;
+  geometry/LOD/collision limits are in `documents/contracts/terrain.md`
 - `<resourcePath>/Maps/SC_<scene-name>/Materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
+- `tool/game-export/`, `tool/validate-game-package.ps1`: game-flavor closure,
+  flavor marker validation and packaged `main_game.exe` smoke
 - `source/render/offline/core/`: pure CPU `vl_offline_core` shared by VL's offline session and root GoogleTest suites. The former independent paper-image CLI and its fixed-case loader are retired; do not rebuild a second scene/material authoring path. See `documents/contracts/vl-offline-rendering.md`.
 - Offline B-arm correctness: Eq. 3 dye multiplies the entire volume term. Eq. 15 Q uses coverage-weighted per-family mean projection plus uncovered-area NoV, not the old unweighted sum or Lambert pore fill. Keep Eval/Sample/Pdf on the same curve discretization, groom and yarn rotation settings. The former CLI's Table II presets and fixed images are historical evidence, not active VL defaults; see the archived `documents/plan/rendering/archive/offline-paper-renderer-standalone.md`. Root GTest owns the current numerical regression.
 - `tool/offline-core-tests/` and `tool/offline-integration-tests/`: root GoogleTest module suites; `tool/validation/offline/` contains external VL stress/export checks and the groom fixture generator, not engine runtime test flags.
@@ -259,12 +370,10 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 
 ### Resource naming patterns
 
-- `SM_*.json`: static mesh descriptor files. `SM_` is reserved for non-skeletal meshes;
-  new meshes with a `skinning` block must use `SKM_*.json` instead. Legacy `SM_*`
-  skeletal assets may still exist until they are touched and renamed
+- `SM_*.json`: mesh descriptor files
+- `TR_*.json`: terrain descriptor files (heightmap geometry + material instance; see `contracts/terrain.md`)
 - `SKM_*.json`: skeletal mesh descriptor files (mesh + `skinning.skeleton` / `skinning.clips`)
 - `SK_*.json`: skeleton descriptor files
-- `TR_*.json`: terrain descriptor files (**editor asset layer only**; no runtime terrain support)
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
@@ -314,20 +423,163 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `terrain` (TR heightmap mesh; CPU chunks rendered through the geometry pass)
 - `wind` (scene-global wind, at most one per scene; `direction`/`strength`/optional `gust`;
   no position/rotation; see `documents/contracts/scene-wind.md`)
 - `balloon` (runtime rubber soft body; current scope and limits are in `documents/contracts/softbody-runtime.md`; Jolt impact, convex-hull shards, shard-shard contact, neck anchoring, approximate Jolt-pose coupling and asset-backed audio with procedural fallback are connected; advanced spatial audio/material are not)
 - `glassPane` (runtime glass plate; current scope and limits are in `documents/contracts/glass-fracture-runtime.md`; impact-point radial fracture, Jolt convex-hull shards, attached plates, support islands, CCD projectiles, landing secondary fracture and asset-backed glass audio with procedural fallback are connected; transparent material is not)
 
-`terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
-accept it, the world loader/builder has no terrain path, and no terrain runtime
-code exists anywhere in `source/`. Terrain survives only in the editor's asset
-layer, where `Terrains/TR_*.json` is recognized as an `EditorAssetKind` and
-`objectType == "terrain"` participates in material-instance navigation
-resolution. Do not author a `terrain` scene object and do not reference
-`source/terrain.h` / `source/terrain.cpp` — those files never existed in this
-repository. Any task that appears to require terrain runtime support is a
-feature request, not a fix.
+`terrain` requires `terrainPath` and is preflighted by `TerrainAssetLoader::Prepare`, which decodes
+the heightmap before a World candidate is committed. Optional scene-object `pageOrigin` /
+`pageTilesPerSide` override the TR's virtual page region; each terrain object gets
+`placementId = terrain|<name>`, so the same TR may be placed several times in one World
+(empty `placementId` falls back to `assetPath`). The renderer expands it into chunk
+`MeshObjectBuildPlan`s; there is still no separate World terrain type. `M_terrain` implements Phase C2c + P3 streaming:
+up to 256 layers in the layer table; `TerrainPageManager` registers all terrains in a World into one
+32×32 global page table and 4096×4096 ID/weight atlases (top-4 per texel); terrain meshes carry global
+page coordinates in `texCoord1`, and the shader uses `texelFetch(pageTable)` then samples the atlases
+and three texture arrays. `TerrainLayerTable::BuildImage` packs a 256×4 RGBA32F LUT for
+per-layer metadata (row0 height/slope, row1 noise/blendEdge/uv, row2 pagesPerSide/pageTableBase/
+sourceSet/flags, row3 avgColor/reserved; the shader still reads only row1). The page table/atlases
+and layer table are World-level shared resources. Since S1 the catalog is built from a World-level
+`TerrainLayerRegistry` (`source/terrain/terrainLayerRegistry.*`): layer identity is `layer.key`
+(default `"<assetPath>#<name>"`), identical keys with identical parameters dedupe to one globalId,
+conflicting keys / duplicate keys inside one TR / more than 256 global layers fail at load. Assignment
+follows scene-object order × first appearance, so a single-TR World keeps `globalId == local index`
+and its catalog/ID images are byte-identical. `TerrainWeightMapBuilder` takes the placement's
+local→global map and writes globalId into the ID image and candidate lists; `TerrainPageManager`
+stores that map per registration. Each MI's `TR.layers.size()` is checked against its own bound
+arrays. S2 replaces the single source-texture triple with
+`TerrainLayerSourceSets = map<sourceSet, TerrainSourceSetRecord>` (`source/terrain/terrainLayerSources.h`):
+one set must always point at the same albedo/normal/pbr shared_ptrs, different sets may bind different
+arrays (and different `sourceResolution`), uploads pick the record by `layer.sourceSet` and the source
+slice through `layerSlices` (globalId → slice), and all sets still share one atlas so their three
+formats must match. `TerrainPageManager` has CPU-side resident/eviction/LRU/priority/refcount APIs.
+`terrainlayerstats` prints `globalLayers / sourceSets / dedupedLayers / capacity`. Multi-biome mode 0
+still indexes each MI's `sampler2DArray` by globalId, so mode 0 arrays must be laid out per globalId;
+mode 1 is not affected.
+Registration is keyed by `placementId`, not `assetPath`; all 32×32 physical atlas slots (1024) are
+allocatable — a missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry
+normal) directly in the shader, so no fallback page is reserved and a 32×32 single terrain
+registers. The World raises the resident capacity to cover every registered page (capped at 1024).
+`RegisterTerrain(preload=true)` records `preloadDeferredCount` and keeps going when capacity
+cannot evict. The renderer creates zero page table/atlas textures, then `BuildUploadBatch` /
+`RecordTerrainPageUploads` records the page-table and atlas subregion copies into one command
+buffer and commits dirty only after successful upload. Production streaming uses
+`RegisterTerrain(preload=false)`: each placement
+prefetches only a 2×2 center set, then `TerrainPageManager::ApplyFeedback` consumes the dedicated
+128×128 `terrainFeedback` pass (color + 128×128 depth, so only the nearest page wins) through a
+host-visible, frame-fence-gated readback ring
+(`source/terrain/terrainFeedback.*`, `source/render/resource/terrainFeedbackGpu.*`). Feedback hits
+advance `lastSeenEpoch` and `lastTouchedEpoch`; misses enter a cross-frame request queue (priority desc, deferred
+rotation), at most 8 `RequestPageAtEpoch` calls per frame. `TerrainUploadGpuRing`
+(`source/render/resource/rendererTerrainLoader.*`) has one preallocated staging slot per frame
+fence; at most 8 atlas pages are recorded into the main frame command buffer before scene passes,
+and `TerrainUploadTransaction` commits only after `SubmitFrame` succeeds. Eviction no longer clears
+the atlas: the physical slot is quarantined until
+`max(lastSeenEpoch, lastSubmittedEpoch) + framesInFlight + 1 <= completedEpoch`, then
+`ReclaimExpiredQuarantines` returns it to the immediately-allocatable pool. The effective CPU
+eviction window is `max(2, framesInFlight + 1)`. The default resident budget is 512 because the
+measured 32×32 wide-view working set is about 415 pages. `terrain stats` reports residency/eviction/upload
+counters (`requestHits` vs `feedbackHits` are distinct) and `terrain capacity N` queues a budget
+change consumed at frame start; lowering it only evicts pages outside the safety window and may
+temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
+in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
+Current limits: no dedicated low-resolution fallback page or temporal fade (the L4e path only
+blends a coarser mip toward `avgColor`), no frustum/tile-level prefetch (only forward-motion
+prefetch), and no terrain editing or per-chunk/edit-time collision rebuild. Runtime chunk
+streaming does unload out-of-window geometry.
+CPU geometry LOD/stitching generation, load-time chunk residency, runtime streaming and LOD
+selection are wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel,
+filter)`, TR `lodLevels`/`lodDistances`/`chunkResidencyDistances`) the loader computes chunk
+AABBs from the heightmap (`ComputeChunkBounds`), keeps only the (chunk, LOD) pairs inside the
+residency window (`TerrainChunkResidencyDistancesCm`, default `lodDistances × 1.1`, coarsest
+always resident) and generates those meshes. LOD>0 uses boundary stitching, with the boundary
+ring at `step=1` normals and coarse vertices blended toward them near the edge; there is no
+skirt. The load-time window comes from the scene JSON camera; `TerrainChunkStreamer` then
+consumes the render camera every frame, builds missing chunks on a worker thread, creates their
+GPU objects on the game thread, and retires chunks absent for two frames. `WorldSnapshotBuilder`
+picks one level per
+`lodGroupId = placementId|chunkX|chunkZ` from the camera's distance to the chunk world AABB with a
+10% hysteresis band; if the target level was never resident it falls back to the nearest coarser
+resident level (worst case coarsest) instead of leaving a hole. The snapshot is the single
+source for color, shadow, picking and MaterialInstance context; all levels of a group share one
+RuntimeId. `terrainlod stats` reports per-group level/distance/switch count and
+`terrainchunk stats` reports load-time geometry bytes, created/skipped chunks, per-level
+vertices/indices and the current frame's draws.
+`lodLevels=1` old assets still generate and bind LOD0 only, byte-identical to the legacy path.
+`source/terrain/terrainCollision.*` turns a `TerrainBuildPlan` plus placement into a static
+Jolt `HeightFieldShape` body in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression,
+Y*X*Z degrees rotation); `ScriptPhysicsWorld::SetTerrainCollisions` owns those RAII bodies and
+`ScriptRuntimeSubsystem` feeds the World's instances on every Play (cm/degree/scale validation
+happens at World build). `terraincollision stats` prints the Play-mode body count and placements;
+`source/physics/joltRegistration.*` is the shared process-wide Jolt registration, and
+`TerrainCollisionWorld` is only a test/offline fixture. `TerrainLayerPageManager`
+(`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
+RGBA32F page table per mip (width capped at 4096), and three 4096²/slice `sampler2DArray`
+atlases (no mip) are created World-locally and the per-layer tail pages are copied GPU→GPU
+at load. Page-table texels are `R=physicalPage/G=mip/B=valid/A=priority`; eviction emits an
+all-zero invalidation in the same upload batch. BC atlases cannot use `vkCmdClearColorImage`,
+so they are zeroed with a 16 KiB zero-page staging copy. L3 adds the optional shader path:
+`M_terrain` keeps `u_terrainLayerMode=0` sampling `layerAlbedo/Normal/Pbr` directly
+(byte-identical legacy path), while mode 1 resolves top-4 IDs through the catalog, per-mip
+page table (stride = page-table texel count / 256), physical page, and 4096² atlas with
+half-texel page inset; invalid entries use catalog row3 `avgColor`, never layer 0.
+`sourceResolution` must match the real square source extent; mode 0 only warns, mode 1
+fails at load. L4a drives mode 1 residency from the existing 128×128 coverage-page feedback:
+`TerrainLayerVisibilityResolver` (`source/terrain/terrainLayerVisibility.*`) turns each visible
+cover page's top-4 layers into (layer, mip, that mip's full page set), limited to 16
+`RequestPageAtEpoch` calls and 8 atlas-page uploads per frame through
+`TerrainLayerUploadGpuRing`. Only pages that the current frame's feedback actually hit are refreshed:
+pages of a visible layer that are not candidates use a short 16-epoch idle window, so residency
+tracks the visible working set instead of every historical mip; pages that leave view are evicted
+after a 180-epoch idle window plus the GPU safety window. `MipForPriority` has five levels
+(`>=192/>=128/>=64/>=32/else` → mip0..4) so 2K mip4 is reachable, and `TerrainLayerDesc::avgColor`
+defaults to neutral 0.18 instead of black. L4b adds a precise per-slot layer feedback on the same
+pass: four fixed 128×128 `R8G8B8A8_UNORM` attachments (`terrainLayerFeedback0..3`) encode
+`R=layerId, G=pageIndex, B=mip|valid, A=frameTag`, sharing the cover RT's D32 depth. The pass now
+takes 4 `worldTexture` inputs (page table, layer catalog, layer IDs, layer weights) and writes 5
+color outputs; `TerrainLayerFeedbackGpuRing` reads the four images back into one 64 KiB ring slot per
+frame, `SummarizeTerrainLayerFeedback` dedupes/stales them, and `ApplyExact` drives
+`RequestPageAtEpoch`/`MarkPageUsedAtEpoch`; layer UV/mip/page math lives in
+`shader/glsl/materialFunction/terrainLayerVTMath.glsl` and is shared by `mf_terrainLayerVT.glsl`
+and `pass/terrainFeedback.frag`. Exact feedback is the primary driver; L4a derivation is only the
+startup/backpressure fallback. `terrainlayerstats` reports layer residency/atlas format/bytes plus
+visibleLayers, `feedbackHits`, `exactSlots`/`exactPages`, `requested`/`accepted`, uploads, pending and
+the mip request distribution; `terrainlayer capacity N` and `terrainlayer preload` (full-preload
+comparison, disables idle eviction) are console-only.
+L4c adds coarser-mip prefetch on the same resolver: a missing target page also queues the
+`+1`/`+2` mip pages of the same UV region (`pageX >> level`), priority ×3/4 and ×1/2, clamped by the
+layer's maximum mip and the per-frame request budget; pages that are already resident do not expand.
+`terrainlayer stats` adds `fallbackSlots`, `fallbackPages`, `fallbackLevels` and `targetMips`. Shader-side
+`avgColor` fade-in is still **not** implemented — a missing target mip still hard-switches to the coarser
+page, or to `avgColor` when no coarser page exists.
+L4d adds starvation protection: when the exact layer feedback has fewer than
+`minValidFeedbackTexels` (default 1) valid texels — camera inside/clipped by terrain, or all
+cover pages missing — the resolver only bumps `starvedFrames`, never touches
+`lastSeenEpoch`/`lastTouchedEpoch`, and adds `starvationCreditEpochs`
+(`min(starvedFrames, starvationGraceFrames)`, default grace 480) to the idle window so the
+resident set is preserved. `ApplyTerrainLayerExactFeedback` then returns false so
+`RenderSystem` runs the L4a cover-page derivation in the same frame; recovery clears
+`starvedFrames`, advances `lastValidFeedbackEpoch` and decays the credit by
+`starvationCreditDecayPerFrame` (default 1). Past the grace window the credit is capped and the
+resident set decays at `starvationEvictionPagesPerFrame` (default 2) pages/frame, so a long
+feedback outage never locks memory. `terrainlayerstats` prints `starvedFrames` /
+`lastValidEpoch` / `usedCoverFallback` / `idleGrace`.
+L4e adds `u_layerForceMip` (-1 auto, 0..4 console override via
+`terrainlayer forcemip N`) on both `M_terrain` and `M_terrainFeedback`; the shader and
+feedback share `TerrainLayerTargetMip` in `terrainLayerVTMath.glsl`. When the sampled
+`usedMip` is coarser than the target, `TerrainLayerFallbackBlend` mixes albedo toward catalog
+`avgColor`, pbr toward the neutral value and normal toward the geometric normal at
+`0.2 × mip-gap` (cap 0.6, gap 0 unchanged). Camera forward motion above 5 cm/frame makes
+`TerrainLayerVisibilityResolver` prefetch the four finer-mip children of resident visible
+pages, at most 4 requests/frame, outside the feedback request budget but still through
+`RequestPageAtEpoch`. `terrainlayer stats` additionally prints `forceMip` / `prefetchMoving` /
+`prefetchPages` / `prefetchRequests` / `prefetchAccepted` / `fallbackBlendPages` /
+`avgColorPages`.
+CPU page baking is still
+synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
+`documents/contracts/terrain.md`.
 
 If adding a new type, update both loader logic and documentation.
 The historical `SC_scene01` `sunLight` object was migrated to
@@ -360,6 +612,8 @@ Be careful when changing these files or systems:
   - render pass attachment ordering, MSAA resolve behavior, framebuffer construction
 - `source/scene/validation/sceneAssetValidator.cpp` and `source/world/loading/worldLoader.cpp` / `worldBuilder.cpp`
   - scene JSON contract, per-object field validation, world build plan (the scene-data contract lives here)
+- `source/terrain/**` and `source/render/resource/rendererTerrainLoader.*`
+  - TR/heightmap preflight, vertex/index winding, chunk bounds/normals, and chunk resource keys
 - `source/renderSystem.cpp`
   - frame rendering flow and descriptor usage
 - `source/shaderCompiler.cpp` and `source/shader/build/*`
@@ -454,21 +708,18 @@ If asked to add or change a scene:
 
 If asked to add or change a terrain:
 
-Terrain has **no runtime implementation** in this repository. Do not look for
-`source/terrain.h` / `source/terrain.cpp`; they never existed here, and
-`SceneAssetValidator` rejects a `terrain` scene object. Only the editor asset
-layer knows about terrain:
+- read `documents/contracts/terrain.md` first
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
+- inspect `source/terrain/validation/terrainAssetValidator.h`, `terrainAssetLoader.*`,
+  `terrainHeightmap.*` and `terrainMeshBuilder.*`
+- inspect `source/render/resource/rendererTerrainLoader.*` and
+  `source/render/resource/rendererResourceLoadCoordinator.cpp`
+- inspect `source/scene/validation/sceneJsonValidator.h` and `sceneAssetValidator.cpp`
 
-- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json` (descriptor JSON,
-  recognized as `EditorAssetKind::Terrain` by `source/editor/assets/editorJsonAssetLibrary.cpp`)
-- inspect `source/editor/assets/editorJsonAssetTypes.{h,cpp}` and
-  `source/editor/service/materialInstanceDocumentService.cpp` for the
-  `objectType == "terrain"` navigation-resolution path
-- inspect `source/scene/validation/sceneAssetValidator.cpp` to confirm what the
-  runtime actually accepts before promising anything
-
-A request to render, load, or edit terrain geometry is a feature request, not a
-fix; scope it as such and say so rather than treating the missing files as a bug.
+Heightmap/TR/geometry changes are runtime changes; World-level collision integration, terrain
+editing and per-chunk collision rebuild are still feature requests, not fixes. CPU LOD/stitching
+generation, runtime chunk streaming, runtime LOD selection (`WorldSnapshotBuilder` + `terrainlod stats`) and the standalone
+Jolt heightfield collision module already exist; treat bugs in those paths as fixes.
 
 If asked to add or change a render pass:
 
@@ -486,7 +737,7 @@ If asked to add or change a material:
 
 If asked to debug startup failures:
 
-- inspect `source/main.cpp`
+- inspect `source/main_editor.cpp`/`source/main_game.cpp` and `source/engine/application.cpp`
 - inspect `source/commonFunction.h`
 - inspect `config/config.json`
 - confirm runtime working directory assumptions

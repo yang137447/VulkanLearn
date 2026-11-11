@@ -106,6 +106,91 @@ TEST(LaunchOptions, NoPrerenderSkinFlagFallsBackToPerPassSkinning)
     EXPECT_FALSE(options.prerenderSkin);
 }
 
+TEST(LaunchOptions, PresentModeDefaultsToAuto)
+{
+    const LaunchOptions options = Parse({"main.exe"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_EQ(options.presentMode, PresentModePreference::Auto);
+}
+
+TEST(LaunchOptions, PresentModeAcceptsEverySupportedValue)
+{
+    EXPECT_EQ(Parse({"main.exe", "--present-mode", "auto"}).presentMode,
+        PresentModePreference::Auto);
+    EXPECT_EQ(Parse({"main.exe", "--present-mode", "fifo"}).presentMode,
+        PresentModePreference::Fifo);
+    EXPECT_EQ(Parse({"main.exe", "--present-mode", "mailbox"}).presentMode,
+        PresentModePreference::Mailbox);
+    EXPECT_EQ(Parse({"main.exe", "--present-mode", "immediate"}).presentMode,
+        PresentModePreference::Immediate);
+}
+
+TEST(LaunchOptions, PresentModeRejectsMissingAndUnknownValues)
+{
+    const LaunchOptions missing = Parse({"main.exe", "--present-mode"});
+    EXPECT_FALSE(missing.errorMessage.empty());
+    EXPECT_NE(missing.errorMessage.find("--present-mode requires"),
+        std::string::npos);
+
+    const LaunchOptions unknown = Parse(
+        {"main.exe", "--present-mode", "vsync-off"});
+    EXPECT_FALSE(unknown.errorMessage.empty());
+    EXPECT_NE(unknown.errorMessage.find("--present-mode must be"),
+        std::string::npos);
+}
+
+TEST(LaunchOptions, ExitAfterFramesIsOffByDefault)
+{
+    const LaunchOptions options = Parse({"main.exe"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_EQ(options.exitAfterFrames, 0);
+}
+
+TEST(LaunchOptions, ExitAfterFramesAcceptsAPositiveCount)
+{
+    const LaunchOptions options = Parse(
+        {"main.exe", "--exit-after-frames", "300", "--frame-limit", "60"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_EQ(options.exitAfterFrames, 300);
+    // --frame-limit 是 Hz 节拍上限，不能被当成帧数。
+    EXPECT_EQ(options.frameLimitHz, 60);
+}
+
+TEST(LaunchOptions, ExitAfterFramesRequiresAPositiveCount)
+{
+    const LaunchOptions missing = Parse({"main.exe", "--exit-after-frames"});
+    EXPECT_FALSE(missing.errorMessage.empty());
+    EXPECT_NE(missing.errorMessage.find("--exit-after-frames requires a positive frame count"),
+        std::string::npos);
+    EXPECT_EQ(missing.exitAfterFrames, 0);
+
+    const LaunchOptions nextFlag = Parse(
+        {"main.exe", "--exit-after-frames", "--gpu-stats"});
+    EXPECT_FALSE(nextFlag.errorMessage.empty());
+    EXPECT_EQ(nextFlag.exitAfterFrames, 0);
+
+    for (const char* value : {"0", "-1", "abc", "300x"})
+    {
+        const LaunchOptions invalid =
+            Parse({"main.exe", "--exit-after-frames", value});
+        EXPECT_FALSE(invalid.errorMessage.empty()) << value;
+        EXPECT_NE(invalid.errorMessage.find(
+                      "--exit-after-frames count must be a positive integer"),
+            std::string::npos) << value;
+        EXPECT_EQ(invalid.exitAfterFrames, 0);
+    }
+}
+
+TEST(LaunchOptions, ExitAfterFramesRejectsRuntimeTestCombination)
+{
+    const LaunchOptions options = Parse(
+        {"main.exe", "--shader-reload-test", "--exit-after-tests",
+         "--exit-after-frames", "300"});
+    EXPECT_FALSE(options.errorMessage.empty());
+    EXPECT_NE(options.errorMessage.find("cannot be combined with --exit-after-tests"),
+        std::string::npos);
+}
+
 TEST(LaunchOptions, UnknownFlagsAreStillRejected)
 {
     const LaunchOptions options = Parse({"main.exe", "--gpu-stat"});

@@ -16,29 +16,62 @@
 #include "editor/ui/editorContentBrowserController.h"
 #include "editor/ui/editorJsonInspectorController.h"
 #include "editor/ui/editorResourceEditorController.h"
+#include "editor/ui/terrainAssetEditorController.h"
+#include "editor/terrain/terrainLayerPreview.h"
 #include "editor/ui/retargetAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorLogPanel.h"
 #include "editor/ui/editorPerformancePanel.h"
 #include "editor/ui/blueprintViewportInteraction.h"
+#include "editor/ui/terrainBrushInteraction.h"
 #include "editor/ui/tressfxHairPreview.h"
 #include "editor/ui/tressfxGroupEditor.h"
+#include "editor/ui/panel/editorPanelActionRouter.h"
+#include "editor/ui/panel/editorPanelBootstrap.h"
+#include "editor/ui/panel/sceneDetailsView.h"
+#include "editor/ui/panel/sceneOutlinerView.h"
 #include "hair/tressfxGroupPaint.h"
 #include "hair/tressfxSurfaceBrush.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
+#include "ui/widgets/editor/brushLibraryPanel.h"
 #include "ui/widgets/widgetDocument.h"
 
 namespace Rml
 {
 class Element;
 class ElementDocument;
+class Event;
 }
 
 namespace VL::Animation { struct MotionCandidate; }
 
 namespace VL::EditorUi
 {
+
+// Sculpt/Paint 各自保存一套笔刷参数；切换模式只切换视图，不把两套状态互相覆盖。
+struct TerrainSculptBrushState
+{
+    float radiusCm = 500.0f;
+    float strength = 0.1f;
+    float falloff = 1.0f;
+    int shape = 0;
+    std::string presetId = "soft-round";
+};
+
+struct TerrainPaintBrushState
+{
+    float radiusCm = 500.0f;
+    float hardness = 0.5f;
+    float opacity = 0.8f;
+    float flow = 0.8f;
+    // noise/noiseSeed 由当前 Paint 预设提供；手动改硬度/不透明度/流量时保留，
+    // 只有重新选择预设才会被该预设覆盖。
+    float noise = 0.0f;
+    uint32_t noiseSeed = 0;
+    int shape = 0;
+    std::string presetId = "soft-mask";
+};
 
 // 运行时控制仍走 UiAction，与资产文档命令保持不同的所有权和保存语义。
 class IEditorRuntimeActionSink
@@ -52,6 +85,8 @@ public:
 class MaterialInstanceAssetEditorPanel final : public Rml::EventListener
 {
 public:
+    using ContextMenuKind = Panel::ContextMenuKind;
+
     explicit MaterialInstanceAssetEditorPanel(IEditorCommandSink* commandSink = nullptr);
     ~MaterialInstanceAssetEditorPanel() override;
     static bool ValidateDocument(Rml::ElementDocument& document, std::string& error);
@@ -60,6 +95,11 @@ public:
     void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink);
     void SetRuntimeActionSink(IEditorRuntimeActionSink* sink);
     void SetJsonAssetRequestSink(IEditorJsonAssetRequestSink* sink) { jsonAssetRequestSink = sink; }
+    // 测试可注入假 provider；为空时层库使用进程内的 CPU 预览缓存。
+    void SetTerrainLayerPreviewProvider(VL::Editor::ITerrainLayerPreviewProvider* provider)
+    {
+        terrainLayerPreviewProvider = provider;
+    }
     void ShowMaterialDetails() { viewingJson = false; resourceEditorVisible = false; requestedJsonPath.clear(); activateMaterialDocument = true; }
     void ShowSceneDetails() { viewingJson = false; requestedJsonPath.clear(); activateMaterialDocument = false; }
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
@@ -85,9 +125,20 @@ public:
     bool IsAboutVisible() const { return aboutVisible; }
     // 分组展开状态是会话 UI 状态：不进入资产文档，也不随停靠布局保存。
     bool IsSectionExpanded(const std::string& key) const { return collapsedSections.count(key) == 0; }
-    // 变换工具与坐标系只是编辑器本地呈现状态，没有 gizmo 或 transform 编辑后端。
+    // 关卡视口工具、坐标系与吸附是同一份本地编辑状态，Gizmo 与 Details 共用。
     const std::string& ViewportTransformTool() const { return viewportTransformTool; }
     const std::string& ViewportTransformSpace() const { return viewportTransformSpace; }
+    const BlueprintViewportGizmo& SceneViewportGizmo() const { return sceneViewportGizmo; }
+    bool IsSceneGizmoDragging() const { return sceneGizmoDragging; }
+    bool IsTerrainSculptActive() const;
+    bool IsTerrainPaintMode() const { return landscapePaintMode; }
+    bool IsTerrainBrushStrokeActive() const { return terrainBrushStrokeActive; }
+    // 场景视口左键/移动的值语义入口；返回 true 表示这次事件已被 Landscape 手势消费。
+    bool ProcessTerrainSculptPointer(const std::string& type, int button,
+        float mouseX, float mouseY);
+    bool ProcessViewportShortcut(Rml::Event& event);
+    bool TerrainBrushRingVisible() const { return terrainBrushHit && landscapeToolActive; }
+    const Eigen::Vector2f& TerrainBrushUv() const { return terrainBrushUv; }
     const std::vector<std::string>& MenuLevelPaths() const { return menuLevelPaths; }
     bool IsResourceEditorVisible() const;
     bool IsMotionDebugViewport() const;
@@ -95,9 +146,12 @@ public:
     bool IsWorkspaceDragging() const { return docking.IsDragging(); }
     bool CancelBlueprintAssetDrag()
     {
-        const bool active = !actorDragPath.empty() || blueprintGizmoDragging;
+        const bool active = !actorDragPath.empty() || blueprintGizmoDragging ||
+            sceneGizmoDragging || terrainBrushStrokeActive;
         actorDragPath.clear();
         CancelBlueprintViewportDrag();
+        CancelSceneGizmoDrag();
+        CancelTerrainBrushStroke();
         return active;
     }
     size_t WorkspacePropertyWriteCount() const { return docking.PropertyWriteCount(); }
@@ -108,21 +162,45 @@ public:
         previewDragButton = textureDragButton = -1;
         actorDragPath.clear();
         CancelBlueprintViewportDrag();
+        CancelSceneGizmoDrag();
+        CancelTerrainBrushStroke();
+        ClearTerrainBrushHit();
     }
     bool HasModal() const { return !pendingClosePath.empty() || aboutVisible || saveDialogVisible; }
     void ProcessEvent(Rml::Event& event) override;
 
 private:
-    // 上下文菜单的目标类别。目标只用稳定地址表达（actor 稳定身份 / 资产完整路径）：
-    // 菜单条目要到下一次点击才执行，而快照下标只在当帧有效，用下标会指到另一个对象。
-    enum class ContextMenuKind
+    friend void Panel::HandlePanelClick(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action);
+    friend void Panel::HandlePanelChange(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action, const Rml::Event* event);
+
+    enum class TerrainPanelMode
     {
-        None,
-        Actor,
-        BrowserAsset,
-        BlueprintClass,
-        Viewport
+        Sculpt,
+        Paint,
+        Layers
     };
+    // 层库只挂载可见窗口；行/列是固定尺寸，因此窗口范围可稳定复用到签名缓存。
+    struct TerrainLayerWindowState
+    {
+        bool valid = false;
+        bool listView = false;
+        size_t filteredCount = 0;
+        int columns = 1;
+        int totalRows = 0;
+        int firstRow = 0;
+        int endRow = 0;
+        size_t firstIndex = 0;
+        size_t endIndex = 0;
+        float viewportWidth = 0.0f;
+        float viewportHeight = 0.0f;
+        float topSpacerHeight = 0.0f;
+        float bottomSpacerHeight = 0.0f;
+    };
+    Panel::OutlinerViewContext OutlinerView();
+    Panel::DetailsViewContext DetailsView();
+    Panel::EditorPanelBootstrapContext BootstrapContext();
     struct PendingEdit
     {
         std::string key;
@@ -135,11 +213,11 @@ private:
     void RefreshLists();
     void RefreshOutliner();
     void RebuildOutlinerRows(const std::vector<EditorSceneActorSnapshot>& actors);
-    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors) const;
-    EditorSceneActorWindow OutlinerWindow() const;
+    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors);
+    EditorSceneActorWindow OutlinerWindow();
     void MeasureOutlinerRowHeight();
-    std::string OutlinerMountedVisuals() const;
-    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
+    std::string OutlinerMountedVisuals();
+    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window);
     void RefreshDetails();
     void RefreshControls();
     void OpenSaveDialog(const std::string& path);
@@ -158,21 +236,60 @@ private:
     const EditorSceneActorSnapshot* PreviewWindActor() const;
     void SelectOutlinerActor(const EditorSceneActorSnapshot& actor);
     void RefreshWorkspace();
+    void RefreshTerrainSummary();
     void RefreshMenus();
     void RefreshLevelMenu();
     void RefreshViewportToolbar();
     void RefreshScriptControls();
+    void RefreshHistoryControls();
+    void RequestUndoRedo(bool redo);
+    bool IsTerrainHistoryContext() const;
     void RefreshMotionMatching();
     void RefreshMotionMatchingCandidate(size_t slot, const Animation::MotionCandidate* candidate);
     void RefreshMotionMatchingQuery();
     void RequestScriptEdit(UiActionType type, nlohmann::json payload = nlohmann::json::object());
     const EditorAssetDocumentResultPayload* BlueprintDocument(const std::string& path) const;
+    const EditorAssetDocumentResultPayload* TerrainDocument(const std::string& path) const;
     void RefreshBlueprintAssetEditor();
     void RefreshBlueprintPreview();
     void RefreshBlueprintViewport();
     bool ProcessBlueprintViewportInput(Rml::Event& event);
     void CancelBlueprintViewportDrag(bool restorePreview = true);
     void PublishBlueprintViewportPreview(bool reset = false);
+    bool ProcessSceneGizmoInput(Rml::Event& event);
+    void RefreshSceneGizmo();
+    void CancelSceneGizmoDrag(bool restore = true);
+    bool BeginSceneGizmoDrag(size_t axis, const Eigen::Vector2f& pixel,
+        const Eigen::Vector2f& offset);
+    bool UpdateSceneGizmoDrag(const Eigen::Vector2f& pixel);
+    void CommitSceneGizmoDrag();
+    UiAction SceneGizmoAction(bool preview) const;
+    bool BuildSelectedSceneGizmo();
+    void SynchronizeSceneGizmoSelection();
+    bool ActivateTerrainPaintMode();
+    void RefreshTerrainBrushLibrary();
+    void ApplyTerrainBrushPreset(const std::string& presetId);
+    void SynchronizeSculptBrushPresetId();
+    void SynchronizePaintBrushPresetId();
+    void RefreshTerrainBrushUi();
+    void RefreshTerrainSurfacePanel(const EditorSceneActorSnapshot* actor);
+    void RefreshTerrainLayerLibrary();
+    void RefreshTerrainLayerHoverPreview(const Rml::Vector2f& screenPoint,
+        const Rml::Element* target);
+    void HideTerrainLayerHoverPreview();
+    VL::Editor::TerrainLayerPreviewPaths TerrainPreviewPaths(
+        const TerrainAssetDesc& desc, size_t layerIndex);
+    void RefreshTerrainBrushRing();
+    void ClearTerrainBrushHit();
+    void UpdateTerrainBrushHit(float mouseX, float mouseY);
+    void CancelTerrainBrushStroke();
+    void EndTerrainBrushStroke();
+    void SendTerrainBrushAction(TerrainBrushOperation operation, bool includeBrush);
+    void SendTerrainPaintAction(TerrainBrushOperation operation, bool includeBrush);
+    float ActiveTerrainBrushRadiusCm() const;
+    float TerrainBrushRadiusUv() const;
+    const EditorSceneActorSnapshot* SelectedTerrainActor() const;
+    void SynchronizeTerrainBrushSelection();
     const EditorSceneActorSnapshot* BlueprintPreviewActor() const;
     const EditorSceneCameraActor* BlueprintPreviewCamera() const;
     bool BlueprintViewportEditable() const;
@@ -199,6 +316,55 @@ private:
     float blueprintMoveSnap = 10;
     float blueprintRotateSnap = 15;
     float blueprintScaleSnap = 0.1f;
+    // 关卡 Gizmo 冻结一次拖动的起始相机/吸附与原始 TRS；预览只写 live World，
+    // 释放时才以完整 Transform commit。取消必须回到这里的原始值。
+    BlueprintViewportGizmo sceneViewportGizmo;
+    BlueprintViewportGizmo sceneDragGizmo;
+    bool sceneGizmoDragging = false;
+    size_t sceneGizmoAxis = 0;
+    Eigen::Vector2f sceneGizmoStart = Eigen::Vector2f::Zero();
+    Eigen::Vector2f sceneGizmoOffset = Eigen::Vector2f::Zero();
+    uint64_t sceneGizmoGeneration = 0;
+    std::string sceneGizmoIdentity;
+    Eigen::Vector3f sceneGizmoPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneGizmoRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneGizmoScale = Eigen::Vector3f::Ones();
+    Eigen::Vector3f sceneGizmoOriginalPosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneGizmoOriginalRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneGizmoOriginalScale = Eigen::Vector3f::Ones();
+    bool sceneGizmoMarkupMounted = false;
+    bool sceneSnapEnabled = false;
+    float sceneMoveSnap = 10.0f;
+    float sceneRotateSnap = 5.0f;
+    float sceneScaleSnap = 0.1f;
+    // Landscape Sculpt 是纯 UI 本地状态；每个动作仍携带世界代数与 placementId，
+    // 由 EngineLoop 校验后转成 CPU session 操作。
+    bool landscapeToolActive = false;
+    bool landscapePaintMode = false;
+    bool landscapePaintErase = false;
+    TerrainPanelMode terrainPanelMode = TerrainPanelMode::Layers;
+    bool terrainLayerListView = false;
+    std::string terrainLayerSearch;
+    uint32_t terrainPaintLayer = 0;
+    VL::Editor::TerrainLayerPreviewCache terrainLayerPreviewCache;
+    VL::Editor::ITerrainLayerPreviewProvider* terrainLayerPreviewProvider = nullptr;
+    std::string terrainLayerHoverImageSource;
+    // 卡片 DOM 会因窗口/选中变化重建；记住当前悬停层与屏幕点，重建后在同一帧恢复预览。
+    bool terrainLayerHoverActive = false;
+    size_t terrainLayerHoverLayer = 0;
+    float terrainLayerHoverScreenX = 0.0f;
+    float terrainLayerHoverScreenY = 0.0f;
+    int terrainSculptMode = 0;
+    TerrainSculptBrushState terrainSculptBrush;
+    TerrainPaintBrushState terrainPaintBrush;
+    bool terrainBrushStrokeActive = false;
+    bool terrainBrushHit = false;
+    Eigen::Vector2f terrainBrushUv = Eigen::Vector2f::Zero();
+    Eigen::Vector2f terrainBrushPixel = Eigen::Vector2f::Zero();
+    Eigen::Vector3f terrainBrushWorldPoint = Eigen::Vector3f::Zero();
+    float terrainBrushRingRadiusPixels = 0.0f;
+    uint64_t terrainBrushGeneration = 0;
+    std::string terrainBrushPlacementId;
     void RequestBlueprintPreview();
     uint64_t CurrentBlueprintPreviewGeneration() const;
     uint64_t requestedBlueprintPreviewRevision = 0;
@@ -499,6 +665,7 @@ private:
     EditorJsonInspectorController jsonInspector;
     EditorJsonInspectorController resourceJsonInspector;
     EditorResourceEditorController resourceEditor;
+    TerrainAssetEditorController terrainAssetEditor;
     RetargetAssetEditorPanel retargetEditor;
     EditorLogPanel logPanel;
     // Performance 页只消费 MaterialInstanceEditorSnapshot.performance 的冻结副本。
@@ -575,6 +742,15 @@ private:
     uint64_t pendingRevision = 0;
     std::string detailsIdentity;
     std::string actorDetailsIdentity;
+    std::string terrainSummarySignature;
+    std::string terrainLayerLibrarySignature;
+    std::string terrainLayerSourceKey;
+    TerrainLayerWindowState terrainLayerWindow;
+    bool terrainLayerWindowDirty = true;
+    bool terrainLayerScrollResetPending = true;
+    float terrainLayerLastScrollTop = -1.0f;
+    UiWidgets::BrushLibraryPanel brushLibrary;
+    int brushLibraryCatalogDomain = -1;
     bool activateMaterialDocument = false;
     std::string localStatus;
     std::string pendingClosePath;

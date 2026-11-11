@@ -11,6 +11,7 @@
 #include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "physics/fracture/destructibleProfile.h"
+#include "terrain/terrainAssetTypes.h"
 
 namespace VL
 {
@@ -145,7 +146,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         if (!identities.insert(type + "|" + (type == "blueprintInstance"
             ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
-        if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
+        if (type != "mesh" && type != "terrain" && type != "directionalLight" && type != "pointLight" &&
             type != "spotLight" && type != "squareAreaLight" && type != "camera" &&
             type != "environment" && type != "blueprintInstance" && type != "wind" &&
             type != "balloon" && type != "glassPane")
@@ -155,7 +156,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
             // wind 是全场景全局对象，没有位置与朝向；其字段由 ValidateSceneWindJson 单独收口。
             const bool required = (std::string(field) == "position" && type != "environment" && type != "wind") ||
                 (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight" && type != "wind") ||
-                (std::string(field) == "scale" && (type == "mesh" || type == "camera" ||
+                (std::string(field) == "scale" && (type == "mesh" || type == "terrain" || type == "camera" ||
                     type == "blueprintInstance" || type == "balloon" || type == "glassPane")) ||
                 (std::string(field) == "normal" && type == "squareAreaLight");
             if (!required && !object.contains(field)) continue;
@@ -185,6 +186,58 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 if (!object.contains(field) || !object.at(field).is_string() ||
                     object.at(field).get<std::string>().empty())
                     throw std::invalid_argument(std::string("Mesh requires path: ") + field);
+            }
+            if (object.contains("instancesPath") &&
+                (!object.at("instancesPath").is_string() ||
+                 object.at("instancesPath").get<std::string>().empty()))
+            {
+                throw std::invalid_argument(
+                    "Mesh instancesPath must be a non-empty string");
+            }
+        }
+        if (type == "terrain")
+        {
+            if (!object.contains("terrainPath") || !object.at("terrainPath").is_string() ||
+                object.at("terrainPath").get<std::string>().empty())
+                throw std::invalid_argument("Terrain requires path: terrainPath");
+            int64_t originX = 0;
+            int64_t originY = 0;
+            bool hasOrigin = false;
+            if (object.contains("pageOrigin"))
+            {
+                const auto& origin = object.at("pageOrigin");
+                if (!origin.is_array() || origin.size() != 2 ||
+                    !origin[0].is_number_integer() || !origin[1].is_number_integer())
+                    throw std::invalid_argument("Terrain pageOrigin requires two integers");
+                originX = origin[0].get<int64_t>();
+                originY = origin[1].get<int64_t>();
+                if (originX < 0 || originY < 0 ||
+                    originX >= static_cast<int64_t>(TerrainPageTableSize) ||
+                    originY >= static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin must be within [0, " +
+                        std::to_string(TerrainPageTableSize - 1) + "]");
+                hasOrigin = true;
+            }
+            if (object.contains("pageTilesPerSide"))
+            {
+                const auto& tiles = object.at("pageTilesPerSide");
+                if (!tiles.is_number_integer())
+                    throw std::invalid_argument("Terrain pageTilesPerSide must be an integer");
+                const int64_t tilesPerSide = tiles.get<int64_t>();
+                if (tilesPerSide < 1 ||
+                    tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageTilesPerSide must be within [1, " +
+                        std::to_string(TerrainPageTableSize) + "]");
+                if (hasOrigin &&
+                    originX + tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin + pageTilesPerSide exceeds the global page table");
+                if (hasOrigin &&
+                    originY + tilesPerSide > static_cast<int64_t>(TerrainPageTableSize))
+                    throw std::invalid_argument(
+                        "Terrain pageOrigin + pageTilesPerSide exceeds the global page table");
             }
         }
         if (type == "balloon")

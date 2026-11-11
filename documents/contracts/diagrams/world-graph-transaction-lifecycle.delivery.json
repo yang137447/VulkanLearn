@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "receiptId": "b1ee740c-6ac8-4595-ac63-7deea40ad288",
+  "receiptId": "43a1bf49-4b1b-4676-93d2-e0caf57be54f",
   "status": "current",
   "command": "deliver",
   "type": "lifecycle",
-  "input": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.json",
-  "output": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.html",
+  "input": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\async-architecture\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.json",
+  "output": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\async-architecture\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.html",
   "specification": {
-    "sha256": "5b55d6abc40f36b9790498d36f57131a9e1258ee5d93355d4ba19d616cff3cda",
-    "bytes": 6942
+    "sha256": "44b6d64c06e08f44dddd223e18e0ab7bf26e3c64b9a69adc6004fac185d51974",
+    "bytes": 6173
   },
   "artifact": {
-    "sha256": "1fd5cdeb9144e4e3996594ef8f89a640781abcf34c97f699061e28adb8b03266",
-    "bytes": 766570
+    "sha256": "19b0935c6b4c11a370b569e03d200fd75fedad4d711a22b184ef10d1dc8bc14e",
+    "bytes": 841935
   }
 }

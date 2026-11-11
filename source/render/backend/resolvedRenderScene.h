@@ -23,7 +23,9 @@ class RendererObjectResourceEntry;
 struct ResolvedDrawPacket
 {
     size_t drawPacketIndex = 0;
-    std::weak_ptr<RenderableObject> renderableObject;
+    // 强引用保证 resolve 完成到录制之间，即使 GT 从 cache 摘除对象，
+    // 在途 draw 仍拥有完整的 CPU/GPU 资源生命周期。
+    std::shared_ptr<RenderableObject> renderableObject;
     std::shared_ptr<RendererObjectResourceEntry> objectResourceEntry;
 };
 

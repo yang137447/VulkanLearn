@@ -59,6 +59,8 @@ enum class EditorCommandType
     GetBlueprintDocument, GetBlueprintCapabilities, ModifyBlueprintDocument,
     ValidateBlueprintDocument, SaveBlueprintDocument, RevertBlueprintDocument, ReloadBlueprintDocument,
     UndoBlueprintDocument, RedoBlueprintDocument,
+    GetTerrainDocument, GetTerrainCapabilities, ModifyTerrainDocument,
+    ValidateTerrainDocument, SaveTerrainDocument, RevertTerrainDocument, ReloadTerrainDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,
@@ -231,10 +233,12 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
-enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, Tressfx };
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, Tressfx, Terrain };
 enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Undo, Redo };
-using EditorAssetFieldValue = std::variant<std::string, bool, double,
-    std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>, nlohmann::json>;
+using EditorAssetFieldValue = std::variant<std::string, bool, double, int64_t,
+    std::array<double, 2>, std::array<double, 3>, std::array<int64_t, 2>,
+    std::vector<std::string>, std::vector<double>,
+    std::map<std::string, std::string>, nlohmann::json>;
 
 // producer 提交完整作者值；对象身份与槽序号独立于字段，禁止任意 JSON Pointer 写入。
 struct EditorAssetFieldChange
@@ -245,6 +249,10 @@ struct EditorAssetFieldChange
     std::optional<std::string> expectedSlotName;
     bool reset = false;
     EditorAssetFieldValue value = std::string{};
+    // 地形层表身份：与 Mesh slot 一样，索引只用于定位，expectedLayerName
+    // 在写入前复核，避免草稿层表重排后把编辑写到另一层。
+    std::optional<uint32_t> layerIndex;
+    std::optional<std::string> expectedLayerName;
 };
 
 struct ModifyAssetDocumentPayload
@@ -419,6 +427,9 @@ struct EditorAssetDocumentResultPayload
     nlohmann::json diagnostics = nlohmann::json::array();
     std::string application = "save_and_reload";
     std::string validationLevel = "document_and_references";
+    // Terrain 页可直接交给 RmlUi stbi 解码的 heightmap 物理路径；空表示无预览
+    // （缺失引用、EXR 或非图片格式）。这不是资产身份，也不写回文档。
+    std::string heightmapPreviewPath;
 };
 
 using EditorCommandResultPayload = std::variant<

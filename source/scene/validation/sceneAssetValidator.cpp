@@ -1,6 +1,10 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "mesh/vegetationAsset.h"
+#include "terrain/terrainAssetLoader.h"
+#include "commonFunction.h"
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -30,6 +34,59 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         {
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
             MeshAssetLoader::PrepareTressfxPlacement(*objectPlan.meshLoadRequest, objectJson);
+            if (objectJson.contains("instancesPath"))
+            {
+                const std::string instancesPath =
+                    objectJson.at("instancesPath").get<std::string>();
+                const std::string normalizedInstancesPath =
+                    std::filesystem::path(instancesPath)
+                        .lexically_normal()
+                        .generic_string();
+                VL::VegetationAsset vegetation;
+                std::string error;
+                const std::filesystem::path resolved =
+                    CommonFunction::Path(instancesPath);
+                if (!VL::LoadVegetationAsset(resolved, vegetation, error))
+                    throw std::runtime_error(error);
+                if (!vegetation.meshPath.empty())
+                {
+                    const std::string declaredMesh =
+                        std::filesystem::path(
+                            CommonFunction::Path(vegetation.meshPath))
+                            .lexically_normal().string();
+                    const std::string sceneMesh =
+                        std::filesystem::path(
+                            CommonFunction::Path(
+                                objectJson.at("modelPath").get<std::string>()))
+                            .lexically_normal().string();
+                    if (declaredMesh != sceneMesh)
+                        throw std::runtime_error(
+                            "Vegetation mesh does not match scene modelPath: " +
+                            instancesPath);
+                }
+                objectPlan.meshLoadRequest->instancesPath =
+                    normalizedInstancesPath;
+                objectPlan.meshLoadRequest->vegetation =
+                    std::make_shared<const VL::VegetationAsset>(
+                        std::move(vegetation));
+            }
+        }
+        else if (objectPlan.objectType == "terrain")
+        {
+            objectPlan.terrainBuildPlan = VL::TerrainAssetLoader::Prepare(
+                objectJson.at("terrainPath").get<std::string>());
+            VL::TerrainBuildPlan& terrainPlan = *objectPlan.terrainBuildPlan;
+            // 场景对象身份（type|name）就是摆放身份：同一 TR 可以有多个不同名字的对象，
+            // 它们共享 assetPath，但页表注册与 chunk 资源必须彼此独立。
+            terrainPlan.placementId = objectPlan.objectType + "|" + objectPlan.objectName;
+            // 可选覆盖让同一 TR 的多处摆放占用不同虚拟页区域；未提供时保留 TR 原值。
+            if (objectJson.contains("pageOrigin"))
+                terrainPlan.desc.pageOrigin = Eigen::Vector2i(
+                    objectJson.at("pageOrigin")[0].get<int>(),
+                    objectJson.at("pageOrigin")[1].get<int>());
+            if (objectJson.contains("pageTilesPerSide"))
+                terrainPlan.desc.pageTilesPerSide =
+                    objectJson.at("pageTilesPerSide").get<uint32_t>();
         }
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))

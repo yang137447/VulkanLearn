@@ -1,8 +1,13 @@
 add_executable(texture_asset_tests
     textureAssetTests.cpp
+    textureArrayTests.cpp
+    blockCompressedContainerTests.cpp
+    blockCompressedGpuTests.cpp
     ${PROJECT_SOURCE_DIR}/source/textureAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp
     ${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/ddsTexture.cpp
+    ${PROJECT_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp
 )
 
 target_include_directories(texture_asset_tests

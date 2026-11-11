@@ -131,7 +131,7 @@ ResolvedDrawResources RequireResolvedDrawResources(
     }
 
     const RenderDrawPacket& drawPacket = renderScene.drawPackets[draw.drawPacketIndex];
-    std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject.lock();
+    std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject;
     if (!renderableObject)
     {
         throw std::runtime_error(
@@ -301,7 +301,10 @@ void RendererDrawExecutor::DrawShadowScene(
                 }
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
             }
         }
     }
@@ -332,6 +335,80 @@ void RendererDrawExecutor::DrawForwardTransparentScene(
         context.renderScene.lights);
     // Alpha、Additive 和 Thin Translucent 统一参与对象级后向前排序。
     DrawSortedTransparentScene(context);
+}
+
+void RendererDrawExecutor::DrawTerrainFeedbackScene(
+    const PipelineBase& passPipeline,
+    RendererDrawContext& context) const
+{
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+
+    for (const ResolvedMaterialGroup& materialGroup :
+         context.resolvedRenderScene.materialGroups)
+    {
+        for (const ResolvedMaterialInstanceGroup& materialInstanceGroup :
+             materialGroup.materialInstances)
+        {
+            for (const ResolvedDrawPacket& draw :
+                 materialInstanceGroup.draws)
+            {
+                if (draw.drawPacketIndex >=
+                    context.renderScene.drawPackets.size())
+                {
+                    throw std::runtime_error(
+                        BuildResolvedDrawErrorPrefix(
+                            "TerrainFeedback",
+                            draw) +
+                        "draw packet count is " +
+                        std::to_string(
+                            context.renderScene.drawPackets.size()) +
+                        ".");
+                }
+
+                const RenderDrawPacket& drawPacket =
+                    context.renderScene.drawPackets[
+                        draw.drawPacketIndex];
+                // 只按 rendererTerrainLoader 写入的显式标记筛选，不靠材质名猜测。
+                if (!drawPacket.terrainFeedbackEligible)
+                    continue;
+
+                ResolvedDrawResources drawResources =
+                    RequireResolvedDrawResources(
+                        "TerrainFeedback",
+                        draw,
+                        context.renderScene);
+                RendererObjectGpuResources& objectResources =
+                    *drawResources.objectResources;
+                const auto& objectSets =
+                    objectResources.descriptorSets[
+                        context.swapChainImageIndex];
+                if (ObjectSetIndex >= objectSets.size())
+                {
+                    throw std::runtime_error(
+                        "TerrainFeedback object descriptor set 2 is missing for '" +
+                        drawPacket.debugName + "'.");
+                }
+
+                VulkanDebug::ScopedRegion region(
+                    commandBuffer,
+                    drawPacket.debugName,
+                    VulkanDebug::DebugCategory::eObject);
+                commandBuffer.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics,
+                    passPipeline.GetPipelineLayout(),
+                    ObjectSetIndex,
+                    objectSets[ObjectSetIndex],
+                    nullptr);
+                context.services.UpdateObjectUBOForPass(
+                    objectResources,
+                    drawPacket);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
+            }
+        }
+    }
 }
 
 void RendererDrawExecutor::DrawSortedTransparentScene(
@@ -410,7 +487,9 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
             objectResources,
             drawPacket);
         drawResources.renderableObject->Draw(
-            commandBuffer);
+            commandBuffer,
+            context.swapChainImageIndex %
+                RenderableObject::DynamicMeshFrameSlotCount);
     }
 }
 
@@ -476,7 +555,10 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    context.swapChainImageIndex %
+                        RenderableObject::DynamicMeshFrameSlotCount);
             }
         }
     }

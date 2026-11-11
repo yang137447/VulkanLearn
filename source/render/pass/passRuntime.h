@@ -96,6 +96,7 @@ private:
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
     void RecordEditorGridPass(PassRuntimeContext& context) const;
+    void RecordTerrainFeedbackPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;
     void BeginConfiguredRenderPass(PassRuntimeContext& context) const;

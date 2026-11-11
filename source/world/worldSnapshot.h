@@ -68,6 +68,15 @@ struct MeshDrawSnapshot
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;
+    std::string speedTreeWindProfileKey;
+    bool terrainFeedbackEligible = false;
+    // 编辑器拾取需要区分地形 chunk 与普通 mesh；feedback 标志只覆盖
+    // 参与 VT 的地形，不能代替完整的 editor 地形身份。
+    bool isTerrain = false;
+    // 地形 LOD 组与当前级；非地形对象为空组。RuntimeId 对同一组的各级
+    // 保持一致，级切换不会让编辑器选择/描边丢失。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
     std::string windResponseProfileKey;
     // TressFX 顶点工厂/片元着色消费；非头发对象保持 0/-1/0。
     uint32_t tressfxPointsPerGuide = 0;

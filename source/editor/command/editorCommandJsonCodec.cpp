@@ -1523,12 +1523,17 @@ Json EncodeResultPayload(
             {"documentRevision", batch->documentRevision}};
     }
     if (const auto* asset = std::get_if<EditorAssetDocumentResultPayload>(&payload))
-        return Json{{"assetPath", asset->assetPath}, {"documentRevision", asset->documentRevision},
+    {
+        Json result{{"assetPath", asset->assetPath}, {"documentRevision", asset->documentRevision},
             {"dirty", asset->dirty}, {"sourceDigest", asset->sourceDigest}, {"document", asset->document},
             {"canUndo", asset->canUndo}, {"canRedo", asset->canRedo},
             {"capabilities", asset->capabilities}, {"changedFields", asset->changedFields},
             {"diagnostics", asset->diagnostics},
             {"application", asset->application}, {"validationLevel", asset->validationLevel}};
+        if (!asset->heightmapPreviewPath.empty())
+            result["heightmapPreviewPath"] = asset->heightmapPreviewPath;
+        return result;
+    }
     ThrowCodecError(
         EditorErrorCode::InvalidPayload,
         "EditorCommandResult.payload",
@@ -1548,7 +1553,7 @@ EditorCommandResultPayload DecodeResultPayload(
     {
         RequireAllowedFields(wire, {"assetPath", "documentRevision", "dirty", "sourceDigest",
             "document", "capabilities", "changedFields", "application", "validationLevel"},
-            {"diagnostics", "canUndo", "canRedo"},
+            {"diagnostics", "canUndo", "canRedo", "heightmapPreviewPath"},
             "EditorAssetDocumentResultPayload");
         EditorAssetDocumentResultPayload result;
         result.assetPath = ReadAssetPath(wire, "assetPath", "asset result");
@@ -1570,6 +1575,8 @@ EditorCommandResultPayload DecodeResultPayload(
         }
         result.application = ReadString(wire, "application", "asset result");
         result.validationLevel = ReadString(wire, "validationLevel", "asset result");
+        if (wire.contains("heightmapPreviewPath"))
+            result.heightmapPreviewPath = ReadString(wire, "heightmapPreviewPath", "asset result");
         return result;
     }
     if (ContainsField(wire, "dirty"))

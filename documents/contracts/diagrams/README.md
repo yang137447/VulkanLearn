@@ -25,12 +25,24 @@ archify 的 IR 拥有**拓扑事实**：组件身份、类型、owner、有向�
 `sources` 的文件是否存在、行号是否在范围内。仓库只存在于本地时（commit 未推送），
 证据按本地 git 对象校验，这是可接受的。
 
+证据读取的是 `meta.repository.revision` 指向的 **git 对象**，不是工作区。新增/移动
+源码后，必须先让该 revision 包含新路径（通常是把改动提交后把 revision 更新到新的
+`HEAD`），否则 `finalize` 会报 `repository-evidence/file-missing`。不要把未提交文件
+写进 `sources` 后手工改产物。
+
 ```powershell
 $cli = "$env:USERPROFILE\.dsh\profiles\web\node_modules\@tt-a1i\archify-dsh\skills\archify\bin\archify.mjs"
 node $cli finalize sequence  documents\contracts\diagrams\editor-frame-sequence.json `
      documents\contracts\diagrams\editor-frame-sequence.html --repo-root . --quality showcase --json
 node $cli finalize lifecycle documents\contracts\diagrams\world-graph-transaction-lifecycle.json `
      documents\contracts\diagrams\world-graph-transaction-lifecycle.html --repo-root . --quality showcase --json
+```
+
+如果上面的 profile 路径不存在，可把 npm 包安装到工作区忽略目录后运行同一入口：
+
+```powershell
+npm install --prefix .tmp/archify @tt-a1i/archify-dsh@1.1.0 --no-audit --no-fund
+$cli = ".tmp/archify/node_modules/@tt-a1i/archify-dsh/skills/archify/bin/archify.mjs"
 ```
 
 **非零退出永远不算成功。** 失败时读收据里的 `diagnostics[]`，按 subject 局部修复后重跑同一个

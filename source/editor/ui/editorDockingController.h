@@ -89,6 +89,7 @@ private:
     void PruneHiddenPanels();
     size_t VisiblePanelCount() const;
     std::vector<uint32_t> CollapsedStacks() const;
+    void EnsureTerrainPanelRoom();
 
     Rml::ElementDocument* document = nullptr;
     Rml::Element* restoreFocus = nullptr;

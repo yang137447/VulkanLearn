@@ -54,6 +54,11 @@ public:
 
     static std::optional<HostImage> Load(const std::filesystem::path& path);
     static std::optional<HostImage> Load(const std::filesystem::path& path, const LoadOptions& options);
+    // 复用单图解码和方向合同，按 sources 顺序组装 CPU 数组；任一层失败则抛出，不返回半成品。
+    // 只准备 mip 0；forceChannels 仅接受默认 RGBA 或显式 4，不接受 CPU mip 生成。
+    static HostImage LoadArray(
+        const std::vector<std::filesystem::path>& sources,
+        const LoadOptions& options);
     static bool Save(const std::filesystem::path& path, const HostImage& image);
     static bool Save(const std::filesystem::path& path, const HostImage& image, const SaveOptions& options);
 

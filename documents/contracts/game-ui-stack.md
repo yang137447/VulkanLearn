@@ -4,10 +4,11 @@
 
 ## Status
 
-Current contract, 2026-10-12: RmlUi serves the minimal runtime HUD and the
-runtime-toggleable editor workspace. ImGui and its CMake option are removed.
-SDL3 remains the event/text-input boundary; VulkanLearn records the final
-overlay on the render thread.
+Current contract, 2026-11-11: RmlUi serves the minimal runtime HUD and the
+runtime-toggleable editor workspace from one `UiSubsystem`-owned context.
+Editor documents attach through `IEditorUiShell` in the editor module.
+ImGui and its CMake option are removed. SDL3 remains the event/text-input
+boundary; VulkanLearn records the final overlay on the render thread.
 
 `documents/plan/ui/game-ui-stack-plan.md` is historical adoption context.
 `documents/plan/ui/rmlui-editor-plan.md` separates the current migration baseline
@@ -58,7 +59,8 @@ Destructive validation workflows remain console/launch operations, not buttons.
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
   (offline controls) / Log (Output and Scripts) / Performance (FPS, CPU frame ms,
-  GPU timed total and per-pass table) tabs; switching only changes presentation.
+  GPU timed total and per-pass table) / Landscape (terrain sculpt, paint and layer
+  library with an explicit empty state) tabs; switching only changes presentation.
 - Left/center: a scene Viewport image and game input.
 - Bottom edge: status bar.
 - Dirty-close modal: explicit Save/Discard/Cancel.
@@ -83,7 +85,9 @@ asset, or the class attribute for inline Blueprints. Both GT requests and formal
 loading enforce this permission. Blueprint tabs produce revision-gated `blueprint.*`
 document commands; they do not mutate scene instances or run managed callbacks.
 Scene history is unavailable in asset pages, offline mode or Play/Pause.
-Blueprint pages instead route Edit Undo/Redo to their own revision-gated document history.
+The top toolbar exposes global Undo/Redo/Save commands; Edit Undo/Redo and the toolbar
+share one context route (terrain brush stroke, then the active Blueprint document, then Scene).
+Blueprint pages therefore route Undo/Redo to their own revision-gated document history.
 Frozen per-path command completion feedback releases UI waiting state even when rejection leaves
 the document revision unchanged; history never writes files automatically.
 Level editing navigates an independent World-owned editor camera. The authored
@@ -155,9 +159,10 @@ not-yet-read-back window and a window with no valid sample show explicit waiting
 text and `n/a`/`--`, never fabricated zeros.
 The same snapshot feeds `perf json` and `--perf-jsonl`; see
 [gpu-pass-timing.md](gpu-pass-timing.md).
-The seven permanent dock panels include Log and Performance; version-1 saved layouts migrate by
-adding Log to the Content stack, and version-1/2 layouts also gain Performance there while
-retaining active tabs, ratios and hidden panels. Version-3 layouts require both panels.
+The eight permanent dock panels include Log, Performance and Landscape; version-1 saved
+layouts migrate by adding Log to the Content stack, and version-1/2 layouts also gain
+Performance and Landscape there while retaining active tabs, ratios, floating positions
+and hidden panels. Version-3 layouts require all eight panels.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
@@ -169,8 +174,9 @@ debounce for 350 ms; scalar defaults/permissions do not reload geometry. The pre
 does not create a managed context or simulate physics. Matching Blueprint identity and a
 new World generation gate image publication and camera input. Returning reloads the
 remembered level. BP drafts reach formal scene instances only after explicit save.
-The scene selector includes `blueprintInstance` levels and excludes editor-only `terrain`;
-type filtering does not replace formal scene or C# host validation.
+The scene selector includes `blueprintInstance` levels and levels containing `terrain`;
+excluding terrain would leave those levels visible in File/Content Browser but unloadable
+through `LoadWorld`. Type filtering does not replace formal scene or C# host validation.
 The Blueprint viewport supports mesh-component bounding-box picking and three-axis authoring gizmos.
 Translation follows parent axes, rotation edits local YXZ Euler components, and scale follows local axes.
 Dragging sends generation/revision-gated values to GT and continuously updates the real mesh/light
@@ -178,8 +184,35 @@ transforms without reloading the World; release submits one document edit and ca
 the preview baseline. Self supports root rotation/scale, and the toolbar supplies translation,
 angle and scale snapping. Camera, light and Scene components have pickable helper graphics;
 mesh hits take priority over Self collision wires. Right drag orbits and middle drag pans.
-Stale preview geometry or a changed viewport cancels editing. No node graph, world-space gizmo
-or level gizmo is provided.
+Stale preview geometry or a changed viewport cancels editing. No node graph is provided.
+The level viewport reuses the same three-axis gizmo math for Mesh, Terrain and Script actors:
+Move/Rotate/Scale edit the complete authored TRS, World/Local changes the axis basis, and the
+toolbar exposes 10 cm / 5 degree / 0.1 snapping defaults. Lights and Camera expose Move/Rotate,
+SquareAreaLight exposes Move only, and Environment/Wind actors expose no gizmo. Dragging writes
+live World preview values and commits exactly one scene-document history entry on release; Esc,
+focus loss, selection change and World replacement cancel the gesture and restore the original
+TRS. Q/W/E/R select the UE-style Select/Move/Rotate/Scale tools while focus is outside a
+text/dropdown control. There is no multi-select gizmo or rollback package for a commit-time
+document validation failure.
+
+The Landscape toolbar opens a Sculpt session on the selected Terrain actor. Raise/Lower/Smooth
+brushes use a UV radius converted from a cm input, strength and smooth falloff; the viewport shows
+a pointer-transparent brush ring derived from the frozen `TerrainPlan` heightmap and the editor
+camera ray. A left drag emits one BeginStroke, multiple ApplyBrush values and one EndStroke; Esc,
+focus loss, selection change or World replacement emits CancelStroke. EngineLoop owns the CPU
+`TerrainEditSession`, replaces dirty (chunk, LOD) renderable objects under stable resource keys,
+updates World chunk bounds and updates the collision heightmap snapshot for the next Play. Paint is
+available on layered Terrains through a separate `TerrainPaintSession`: layer selection and
+Erase edit a CPU weight/opacity override, then invalidate the placement's resident coverage pages
+at a render-idle boundary so the existing page manager re-bakes and uploads them. Sculpt can be
+written back to `.png` (16-bit), `.bmp` (24-bit) or `.exr` with `Write Heightmap`; Paint overrides
+remain session-only and are discarded by a World reload.
+
+Terrain `TR_*.json` tabs are editable AssetDocuments rather than read-only JSON: top-level
+geometry/LOD/page fields and the layer table use typed `terrain.modify` changes with revision
+gating, and Save/Revert/Reload go through `terrain.save`/`terrain.revert`/`terrain.reload`.
+The TR page previews PNG/JPG/BMP/TGA heightmaps through RmlUi; EXR is marked unavailable.
+Layer texture image previews are still not implemented.
 MI tabs request `PreviewMaterial`, using the formal preview ball with an instance-only
 material binding in `SC_model_preview`. The material image supplies the viewport rectangle
 and uses UI-owned, generation-guarded orbit/pan/zoom input, just like the model image.
@@ -478,10 +511,28 @@ There is no second UI-to-renderer mutation route.
 
 ## Threading And Ownership
 
-GT owns `UiSubsystem`, the RmlUi context, both documents, input arbitration,
-reload and view updates. When the update scheduler says the visible UI changed
-(or on a hidden frame), Update publishes one immutable snapshot through
-`UiRenderSnapshotQueue`, which retains only the newest.
+The runtime owns the only RmlUi runtime and context. `UiSubsystem` acquires the
+process-wide RmlUi runtime through `RmlUiRuntime::Acquire` (reference-counted;
+the actual `Rml::Initialise`/`Shutdown` pairing lives in `RmlUiRuntime`), creates
+the context, loads fonts and `runtime-hud.rml`, arbitrates input, calls every
+`Context::Update`, and publishes the render snapshot. `EditorUiShell` implements `IEditorUiShell`
+(`source/ui/iEditorUiShell.h`), attaches `editor-workspace.rml` and editor
+documents to that same context, and borrows event dispatch, panel rebuild
+requests, command queueing and refresh scheduling through
+`IEditorUiRuntimeBridge`. It never owns RmlUi initialization, the context or
+`Context::Update`.
+
+`EngineLoop` injects the editor host before runtime systems initialize; game
+builds inject `NullEditorHost`. `EditorHost` creates `EditorUiShell` and
+registers it with `UiSubsystem::SetEditorUiShell`; the shell unregisters itself
+when destroyed. Shutdown detaches editor documents before the runtime destroys
+the shared context, so editor-owned textures and document handles never outlive
+the interface that published them.
+
+GT owns `UiSubsystem`, the RmlUi context, runtime and editor documents, input
+arbitration, reload and view updates. When the update scheduler says the visible
+UI changed (or on a hidden frame), Update publishes one immutable snapshot
+through `UiRenderSnapshotQueue`, which retains only the newest.
 RT consumes that snapshot and otherwise keeps the last one it consumed. A
 skipped frame therefore leaves the previous immutable snapshot in place on both
 sides; the publisher also retains its identity. RT never traverses live documents
@@ -496,7 +547,11 @@ then destroys UI and renderer resources through their existing owners.
 
 ## Input
 
-Priority is global shortcuts, editor workspace, then game.
+`UiSubsystem::HandlePlatformEvent` owns dispatch order. Editor global shortcuts
+(currently Ctrl+S) run first when the workspace is visible, then runtime global
+shortcuts, then the editor workspace document, then the runtime HUD/game.
+`IEditorUiShell` reports whether it consumed the event; the runtime retains the
+single `Rml::Context` and never lets the editor shell dispatch RmlUi directly.
 Editor focus and modals consume only input events. Application lifecycle events
 such as `PlatformEventType::Quit` continue to EngineLoop, so the native window
 close button still exits while a panel has focus or a modal is open.
