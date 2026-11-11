@@ -81,6 +81,11 @@ No CI artifact registry, no vcpkg/Conan migration, no dependency blobs committed
   `VULKANLEARN_DEPS_SOURCE_CACHE` lets source mode configure with
   `FETCHCONTENT_FULLY_DISCONNECTED=ON`; the offline configure was verified.
 
+RelWithDebInfo correction: full `-g` produced a 2.3 GB `main_editor.exe` that Windows
+refuses to load. The development preset and the dependency superbuild now use `-g1`
+(line tables only); the resulting editor executable is ~245 MB and starts with a
+`PATH` limited to `System32`. Release, Debug and RelWithDebInfo prefixes all exist.
+
 ## Tier 1: ccache
 
 ### Verified current state
@@ -699,8 +704,10 @@ All three decisions were made on 2026-11-11:
    `libwinpthread-1.dll` are copied explicitly from the compiler bin directory and
    validated as part of the package. Do not static-link the runtime in this cycle.
 2. **Daily `development` stays `RelWithDebInfo`.** Add `CCACHE_BASEDIR` and
-   `-fdebug-prefix-map` so `-g` builds still share cache across worktrees. Add a
-   `development-fast` Release preset for speed-sensitive work; do not change the default.
+   `-fdebug-prefix-map` so debug builds still share cache across worktrees, and use
+   `-g1` instead of full `-g`: a full `-g` RelWithDebInfo link produced a 2.3 GB
+   `main_editor.exe` that Windows refuses to load. Add a `development-fast` Release
+   preset for speed-sensitive work; do not change the default.
 3. **Prefix GC:** keep the current toolchain's Debug + Release and one previous toolchain.
    Use a 20 GB budget and `lastUsed` stamps; `tool/deps-gc.ps1` is dry-run by default and
    only deletes prefixes not referenced by a build tree.

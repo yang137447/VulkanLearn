@@ -17,6 +17,8 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -g1 -DNDEBUG",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g1 -DNDEBUG",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": true,
                 "FETCHCONTENT_UPDATES_DISCONNECTED": true,
                 "VULKANLEARN_BUILD_TESTS": false,

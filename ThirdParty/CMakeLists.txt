@@ -77,6 +77,14 @@ if(VL_DEPS_CCACHE_EXECUTABLE)
         -DCMAKE_CXX_COMPILER_LAUNCHER=${VL_DEPS_CCACHE_EXECUTABLE})
 endif()
 
+if(VULKANLEARN_DEPS_CONFIG STREQUAL "RelWithDebInfo")
+    # -g produces multi-GB shared libraries and, for the engine, an
+    # unloadable >2 GB executable. Line tables are enough for daily debugging.
+    list(APPEND VL_DEPS_COMMON_ARGS
+        "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG"
+        "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG")
+endif()
+
 function(vl_deps_add name)
     set(options "")
     set(one_value_args SOURCE_DIR BINARY_DIR SOURCE_SUBDIR)

@@ -300,6 +300,14 @@ $configureArgs = @(
     ("-DVULKANLEARN_DEPS_SOURCES=" + $sourceRoot)
 ) + $featureArgs
 
+if ($Config -eq "RelWithDebInfo") {
+    # Keep line tables but avoid multi-GB dependency DLLs and the engine's
+    # >2 GB RelWithDebInfo executable.
+    $configureArgs += @(
+        "-DCMAKE_C_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG",
+        "-DCMAKE_CXX_FLAGS_RELWITHDEBINFO=-O2 -g1 -DNDEBUG")
+}
+
 Write-Host "build-deps: configuring"
 Invoke-Checked "cmake configure" { & cmake @configureArgs }
 
