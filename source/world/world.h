@@ -23,6 +23,8 @@
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
 #include "animation/motionRuntime.h"
+#include "animation/animationSyncGroup.h"
+#include "physics/bonePhysics.h"
 #include "debug/drawDebug.h"
 #include "hair/tressfxGroupPreviewState.h"
 #include <map>
@@ -385,8 +387,20 @@ private:
     Debug::DrawDebug debugDraw;
     std::map<std::string, Animation::MotionTrack> motionTracks;
     std::map<std::string, Animation::MotionRuntime> motionRuntimes;
+    // 每个 World 一份同步组注册表；每 tick 重建参与者并复用容量，不持有播放器
+    // 所有权，也不跨 World 换代保存旧指针。
+    Animation::AnimationSyncGroupRegistry syncGroupRegistry;
     // 缓存 key 含源路径、模型路径及实际导入输入身份；Stop 只清实例时钟/历史，保留不可变资源。
     std::map<std::string, std::shared_ptr<const Animation::MotionRuntimeDatabase>> motionDatabases;
+    // PoseDriver 资产与骨架解耦：同一份资产可按需绑定到任意兼容 SKM，按路径缓存摘要。
+    std::map<std::string, std::shared_ptr<const Animation::PoseDriverSet>> poseDriverSets;
+    // PostProcess（Twist/Helpers）资产同样按路径缓存，不与 SKM 绑定。
+    std::map<std::string, std::shared_ptr<const Animation::PostProcessAsset>> postProcessAssets;
+    // 骨骼物理：资产按路径缓存，solver 按 mesh identity 持有（Jolt 世界独立）。
+    std::map<std::string, std::shared_ptr<const Physics::BonePhysicsAsset>> bonePhysicsAssets;
+    std::map<std::string, std::shared_ptr<Physics::BonePhysicsSolver>> bonePhysicsSolvers;
+    // 只有 C# 请求时才把 21 个刚体描述塞进反馈，避免每帧无谓的 JSON 体积。
+    std::map<std::string, bool> bonePhysicsDebug;
     std::string motionResourceRoot;
 };
 

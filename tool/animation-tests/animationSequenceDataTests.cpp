@@ -144,9 +144,71 @@ TEST(AnimationSequenceData, ParsesFrameRateCurvesNotifiesAndRetainedData)
     ASSERT_EQ(sequence.notifies.size(), 1u);
     EXPECT_EQ(sequence.notifies[0].name, "Footstep Left");
     EXPECT_FLOAT_EQ(sequence.notifies[0].time, 0.25f);
-    EXPECT_EQ(sequence.syncMarkersJson, "[]");
+    EXPECT_TRUE(sequence.syncMarkers.empty());
+    EXPECT_TRUE(sequence.players.empty());
     EXPECT_FALSE(sequence.sourceJson.empty());
     EXPECT_TRUE(sequence.sourceDigest.empty());
+}
+
+TEST(AnimationSequenceData, ParsesStructuredSyncMarkersAndPlayerBindings)
+{
+    json source = MakeSequenceJson();
+    source["syncMarkers"] = json::array({
+        {{"name", "Foot_L"}, {"time", 0.1f}},
+        {{"name", "Foot_R"}, {"time", 0.6f}},
+        {{"name", "Foot_L"}, {"time", 1.2f}}});
+    source["players"] = json::array({
+        {{"syncGroup", "Locomotion"}, {"syncRole", "AlwaysLeader"},
+         {"syncMethod", "SyncGroup"}, {"syncGroupScope", "Component"},
+         {"startPosition", 0.2f}, {"loop", false}},
+        {{"syncGroup", ""}, {"syncRole", "CanBeLeader"},
+         {"syncMethod", "DoNotSync"}, {"startPosition", 0.0f}, {"loop", true}}});
+    const SequenceData sequence = ParseSequence(source, "Maps/Test/sync.anim.json");
+    ASSERT_EQ(sequence.syncMarkers.size(), 3u);
+    EXPECT_EQ(sequence.syncMarkers[0].name, "Foot_L");
+    EXPECT_FLOAT_EQ(sequence.syncMarkers[1].time, 0.6f);
+    ASSERT_EQ(sequence.players.size(), 2u);
+    EXPECT_EQ(sequence.players[0].syncGroup, "Locomotion");
+    EXPECT_EQ(sequence.players[0].syncRole, VL::Animation::SyncRole::AlwaysLeader);
+    EXPECT_EQ(sequence.players[0].syncMethod, VL::Animation::SyncMethod::SyncGroup);
+    EXPECT_EQ(sequence.players[0].syncGroupScope, VL::Animation::SyncGroupScope::Component);
+    EXPECT_FLOAT_EQ(sequence.players[0].startPosition, 0.2f);
+    EXPECT_FALSE(sequence.players[0].loop);
+    EXPECT_EQ(sequence.players[1].syncMethod, VL::Animation::SyncMethod::DoNotSync);
+    // 缺省 scope 必须显式落到 Local，而不是运行时再猜。
+    EXPECT_EQ(sequence.players[1].syncGroupScope, VL::Animation::SyncGroupScope::Local);
+}
+
+TEST(AnimationSequenceData, RejectsInvalidSyncGroupAndMarkerMetadata)
+{
+    json source = MakeSequenceJson();
+    source["players"] = json::array({
+        {{"syncGroup", "Locomotion"}, {"syncRole", "NotARole"},
+         {"syncMethod", "SyncGroup"}, {"startPosition", 0.0f}, {"loop", true}}});
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "walk.anim.json"); }).find("syncRole"),
+        std::string::npos);
+
+    source = MakeSequenceJson();
+    source["players"] = json::array({
+        {{"syncGroup", "Locomotion"}, {"syncRole", "CanBeLeader"},
+         {"syncMethod", "DoNotSync"}, {"startPosition", 0.0f}, {"loop", true}}});
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "walk.anim.json"); }).find("syncMethod"),
+        std::string::npos);
+
+    source = MakeSequenceJson();
+    source["players"] = json::array({
+        {{"syncGroup", "Locomotion"}, {"syncRole", "CanBeLeader"},
+         {"syncMethod", "SyncGroup"}, {"syncGroupScope", "Global"},
+         {"startPosition", 0.0f}, {"loop", true}}});
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "walk.anim.json"); }).find("syncGroupScope"),
+        std::string::npos);
+
+    source = MakeSequenceJson();
+    source["syncMarkers"] = json::array({
+        {{"name", "Foot_L"}, {"time", 0.7f}},
+        {{"name", "Foot_R"}, {"time", 0.2f}}});
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "walk.anim.json"); }).find("non-decreasing"),
+        std::string::npos);
 }
 
 TEST(AnimationSequenceData, RejectsWrongFormatAndNonPositiveDuration)

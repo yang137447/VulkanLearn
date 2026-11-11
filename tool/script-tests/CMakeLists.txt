@@ -7,6 +7,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     scriptMixedLoadTests.cpp
     scriptHudTests.cpp
     scriptDebugDrawTests.cpp
+    scriptLocomotionTests.cpp
     scriptTypeIdentityTests.cpp
     scriptSpringArmTests.cpp
     scriptLogicComponentTests.cpp

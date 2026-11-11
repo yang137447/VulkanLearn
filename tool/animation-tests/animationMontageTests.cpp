@@ -107,6 +107,7 @@ SequenceData MakeSequence()
 {
     SequenceData sequence;
     sequence.id = "M_Walk";
+    sequence.duration = 2.0f;
     sequence.skeletonId = "SK_Test";
     sequence.skeletonDigest = std::string(64, 'a');
     return sequence;
@@ -280,6 +281,101 @@ TEST(AnimationMontage, RetainsMultipleSectionsLinkMethodsStaticPoseAndNonLinearE
     const SequenceData sequence = MakeSequence();
     const MontageImportContext context = MakeContext(skeleton, sequence);
     EXPECT_EQ(BindMontage(montage, context, "Maps/Test/AM_Test.json"), "M_Walk");
+}
+
+TEST(AnimationMontage, ParsesMultiSegmentTimelineAndBindsEveryClip)
+{
+    json source = MakeMontageJson();
+    source.erase("sequence");
+    source.erase("sequenceBlake3");
+    source["rateScale"] = 0.5f;
+    source["segments"] = json::array({
+        {{"id", "Start"}, {"sequence", "Maps/Test/walk.anim.json"},
+         {"sequenceBlake3", std::string(64, 'a')},
+         {"startTime", 0.0f}, {"endTime", 1.0f},
+         {"clipStartTime", 0.0f}, {"clipEndTime", 1.0f},
+         {"rateScale", 1.0f}, {"loop", false}},
+        {{"id", "Loop"}, {"sequence", "Maps/Test/run.anim.json"},
+         {"sequenceBlake3", std::string(64, 'b')},
+         {"startTime", 1.0f}, {"endTime", 2.0f},
+         {"clipStartTime", 0.0f}, {"clipEndTime", 1.0f},
+         {"rateScale", 1.0f}, {"loop", false}}});
+
+    const Montage montage = ParseMontage(source, "Maps/Test/AM_Test.json");
+    EXPECT_FLOAT_EQ(montage.rateScale, 0.5f);
+    ASSERT_EQ(montage.segments.size(), 2u);
+    EXPECT_EQ(montage.segments[0].id, "Start");
+    EXPECT_EQ(montage.segments[1].sequencePath, "Maps/Test/run.anim.json");
+    EXPECT_FLOAT_EQ(montage.segments[1].clipEndTime, 1.0f);
+
+    SkeletonAsset skeleton = MakeSkeleton();
+    SequenceData walk = MakeSequence();
+    SequenceData run = MakeSequence();
+    run.id = "M_Run";
+    run.duration = 2.0f;
+    MontageImportContext context = MakeContext(skeleton, walk);
+    context.sequences.push_back({"Maps/Test/run.anim.json", &run, std::string(64, 'b')});
+    context.clipIds.push_back("M_Run");
+    const std::vector<std::string> clipIds =
+        BindMontageSegments(montage, context, "Maps/Test/AM_Test.json");
+    ASSERT_EQ(clipIds.size(), 2u);
+    EXPECT_EQ(clipIds[0], "M_Walk");
+    EXPECT_EQ(clipIds[1], "M_Run");
+}
+
+TEST(AnimationMontage, RejectsSegmentGapOverlapAndAmbiguousSingleSequence)
+{
+    json source = MakeMontageJson();
+    source.erase("sequence");
+    source.erase("sequenceBlake3");
+    source["segments"] = json::array({
+        {{"sequence", "Maps/Test/walk.anim.json"}, {"startTime", 0.0f},
+         {"endTime", 0.9f}},
+        {{"sequence", "Maps/Test/walk.anim.json"}, {"startTime", 1.0f},
+         {"endTime", 2.0f}}});
+    std::string message = ErrorOf([&] { ParseMontage(source, "AM_bad.json"); });
+    EXPECT_NE(message.find("segments[1].startTime"), std::string::npos);
+    EXPECT_NE(message.find("previous segment end"), std::string::npos);
+
+    source["segments"][1]["startTime"] = 0.8f;
+    message = ErrorOf([&] { ParseMontage(source, "AM_bad.json"); });
+    EXPECT_NE(message.find("segments[1].startTime"), std::string::npos);
+
+    source = MakeMontageJson();
+    source["segments"] = json::array({
+        {{"sequence", "Maps/Test/walk.anim.json"}, {"startTime", 0.0f},
+         {"endTime", 2.0f}}});
+    message = ErrorOf([&] { ParseMontage(source, "AM_bad.json"); });
+    EXPECT_NE(message.find("mutually exclusive"), std::string::npos);
+}
+
+TEST(AnimationMontage, RejectsSegmentThatMapsPastItsClipOrUnknownSidecar)
+{
+    json source = MakeMontageJson();
+    source.erase("sequence");
+    source.erase("sequenceBlake3");
+    source["segments"] = json::array({
+        {{"sequence", "Maps/Test/walk.anim.json"}, {"startTime", 0.0f},
+         {"endTime", 1.0f}, {"clipEndTime", 0.5f}},
+        {{"sequence", "Maps/Test/run.anim.json"}, {"startTime", 1.0f},
+         {"endTime", 2.0f}, {"clipEndTime", 1.0f}}});
+    const Montage montage = ParseMontage(source, "Maps/Test/AM_Test.json");
+    const SkeletonAsset skeleton = MakeSkeleton();
+    const SequenceData sequence = MakeSequence();
+    MontageImportContext context = MakeContext(skeleton, sequence);
+    context.clipIds = {"M_Walk"};
+    const std::string unknown = ErrorOf([&] {
+        BindMontageSegments(montage, context, "Maps/Test/AM_Test.json"); });
+    EXPECT_NE(unknown.find("segments[0].endTime"), std::string::npos);
+    EXPECT_NE(unknown.find("past the sequence clip end"), std::string::npos);
+
+    source["segments"][0].erase("clipEndTime");
+    Montage valid = ParseMontage(source, "Maps/Test/AM_Test.json");
+    context.sequences.clear();
+    const std::string missing = ErrorOf([&] {
+        BindMontageSegments(valid, context, "Maps/Test/AM_Test.json"); });
+    EXPECT_NE(missing.find("segments[0].sequence"), std::string::npos);
+    EXPECT_NE(missing.find("not a loaded sequence sidecar"), std::string::npos);
 }
 
 TEST(AnimationMontage, RotationMethodDefaultsToSlerpAndPreservesKnownValues)

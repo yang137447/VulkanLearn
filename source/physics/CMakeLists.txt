@@ -13,6 +13,8 @@ target_link_libraries(vl_fracture_core PUBLIC Eigen3)
 
 add_library(vl_physics_runtime STATIC
     runtime/joltRuntime.cpp
-    runtime/fractureImpactWorld.cpp)
+    bonePhysics.cpp
+    runtime/fractureImpactWorld.cpp
+    ../shader/build/contentHash.cpp)
 target_include_directories(vl_physics_runtime PUBLIC "${PROJECT_SOURCE_DIR}/source")
-target_link_libraries(vl_physics_runtime PUBLIC Eigen3 Jolt)
+target_link_libraries(vl_physics_runtime PUBLIC Eigen3 Jolt Json BLAKE3::blake3)

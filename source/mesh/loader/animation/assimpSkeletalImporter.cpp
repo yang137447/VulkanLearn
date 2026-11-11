@@ -174,7 +174,7 @@ Eigen::Vector3f Vector(const aiVector3D& value)
 SkinSection ReadSection(
     const aiMesh& source, const aiNode& owner, const aiScene& scene, const SkeletonMesh& mesh)
 {
-    if (!source.mVertices || !source.HasNormals() || !source.HasTextureCoords(0) ||
+    if (!source.mVertices || !source.HasTextureCoords(0) ||
         !source.HasBones() || source.mNumVertices > MaxVertices || source.mNumFaces > MaxVertices ||
         source.mNumBones > mesh.joints.size())
     {
@@ -236,6 +236,32 @@ SkinSection ReadSection(
     {
         throw std::runtime_error("Inverse bind does not reconstruct mesh model space");
     }
+    // UE 导出的隐藏/零面积区域可能带零长度法线。只用相邻三角的面积加权法线修复
+    // 这些退化顶点；非退化源法线保持不变，没有任何可用相邻三角时仍然拒绝资产。
+    std::vector<Eigen::Vector3f> generatedNormals(source.mNumVertices, Eigen::Vector3f::Zero());
+    for (unsigned faceIndex = 0; faceIndex < source.mNumFaces; ++faceIndex)
+    {
+        const auto& face = source.mFaces[faceIndex];
+        if (face.mNumIndices != 3)
+        {
+            throw std::runtime_error("Skeletal import requires triangulated source faces");
+        }
+        for (unsigned corner = 0; corner < 3; ++corner)
+        {
+            if (face.mIndices[corner] >= source.mNumVertices)
+            {
+                throw std::runtime_error("Invalid triangle index");
+            }
+        }
+        const Eigen::Vector3f p0 = Vector(source.mVertices[face.mIndices[0]]);
+        const Eigen::Vector3f p1 = Vector(source.mVertices[face.mIndices[1]]);
+        const Eigen::Vector3f p2 = Vector(source.mVertices[face.mIndices[2]]);
+        const Eigen::Vector3f faceNormal = (p1 - p0).cross(p2 - p0);
+        for (unsigned corner = 0; corner < 3; ++corner)
+        {
+            generatedNormals[face.mIndices[corner]] += faceNormal;
+        }
+    }
     for (unsigned vertexIndex = 0; vertexIndex < source.mNumVertices; ++vertexIndex)
     {
         const auto& influences = weights[vertexIndex];
@@ -250,11 +276,18 @@ SkinSection ReadSection(
         {
             throw std::runtime_error("Unweighted vertex or non-normalized source weights");
         }
-        const auto position = Vector(source.mVertices[vertexIndex]);
-        const auto normal = Vector(source.mNormals[vertexIndex]);
+        const Eigen::Vector3f position = Vector(source.mVertices[vertexIndex]);
+        Eigen::Vector3f normal = source.HasNormals()
+            ? Eigen::Vector3f(Vector(source.mNormals[vertexIndex]))
+            : Eigen::Vector3f::Zero();
         if (normal.squaredNorm() < 0.000001f)
         {
-            throw std::runtime_error("Degenerate source normal");
+            normal = generatedNormals[vertexIndex];
+            if (normal.squaredNorm() < 1e-12f)
+            {
+                throw std::runtime_error("Degenerate source normal without adjacent triangles");
+            }
+            normal.normalize();
         }
         // 颜色与两套 UV 保留源语义；不翻 V，也不拿 UV0 伪造 UV1。
         Vertex vertex(position, normal, Eigen::Vector4f::Ones(),

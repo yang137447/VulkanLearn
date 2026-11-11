@@ -120,6 +120,13 @@ RT 不读取脚本时钟或自动曝光墙钟；同一 World/frame 快照只领�
 
 `SkeletalPlayback::TransitionTo(clipId, seconds, loop, blendSeconds, inPlace=true)`
 接收搜索结果，目标片段/时间立即可读，目标速率固定为 1。
+`TransitionToSynced(..., syncGroup, syncPhase)` 在其上增加 UE SyncGroup 的入口对齐：仅当
+目标 sequence 的 `players` 声明了同名且可执行的组（`SyncGroup`/`MarkerSync`）时，才把
+`syncPhase`（`[0,1]`）映射为目标片段的 `phase * duration`；循环目标在 phase=1 时回绕到 0，
+非循环目标 clamp 到末帧前。未匹配到组时保持传入入口时间，不伪造同步。入口对齐只负责
+过渡第一帧；之后由 `AnimationSyncGroupRegistry` 每 tick 持续校正，见下节。
+当前片段通过 `SyncPhase()` 暴露 clip-local `time/duration`，
+`SyncMarkerName()`/`SyncMarkerAlpha()` 暴露最近 marker 及其区间进度。
 `SetRate(speed)` 只验证并改变 `(0,4]` 内的有限播放速率，不重采样或改变
 时刻、姿态、混合源和 discontinuity。目标时钟按速率推进，
 混合进度按 scaled delta 推进，不随目标速率缩放。
@@ -211,7 +218,9 @@ Pause/零 delta 冻结求值；自然 Completed 与显式暂停分开记录。
 
 `Animation.Match` 的 `inertialization=false` 保留线性交叉混合；
 启用后只影响后续非零时长过渡，硬切、直接 Play、Seek/Select 不保留旧偏移。
-过渡边界以显示姿态为源、1 ms 邻域采样估计两侧局部速度和角速度，
+过渡边界以显示姿态为源、1 ms 邻域采样估计两侧局部速度和角速度
+（源是一次性片段且已播完时，向前预览会被 clamp 在 `rangeEnd`、速度恒为 0，
+因此改回看同一片段 1 ms 的出帧速度，避免惯性化从零速度起步），
 在局部父空间构造平移、SO(3) 旋转与 log scale 偏移，
 用五次 Hermite 使起点匹配源位移/速度、终点值与速度精确归零。
 角速度经 SO(3) 左雅可比搬运，不直接相减；目标时钟仍唯一，不推进第二个动画时钟。
@@ -307,6 +316,56 @@ SkinnedMesh key 参与组合 shader 身份，并强制专用 ShadowDepth；
 palette 写入发生在对应 image fence 完成后，资源随现有对象包/GPU epoch 退休。
 
 
+## SyncGroup Registry（R1）
+
+`source/animation/animationSyncGroup.*` 提供纯 CPU、无 Vulkan/Jolt 依赖的
+`AnimationSyncGroupRegistry`。World 每个动画 tick 执行
+`BeginTick → AddNode → Resolve`，再把每个 `canApply` 节点的结果回写到唯一
+`SkeletalPlayback`；Registry 不拥有播放器、不采样姿态、不创建第二个姿态时钟。
+
+参与者 `SyncGroupNode` 携带 `identity/group/ownerKey/localKey/role/method/scope/weight/
+active/transitioning/time/range/rate/looping/markers`。分组键是 `group` 加 scope 键：
+
+- `SyncGroupScope::Local` 用组件身份（`localKey`）分区；Echo 资产显式写 `Local`。
+- `SyncGroupScope::Component` 用 Actor 身份（`ownerKey`）分区，让同一 Actor 的多个网格
+  组件共享一个组；它近似 UE linked instance，但 VL 仍只有每个组件一个姿态播放器。
+
+每 tick 每个组最多一个 leader，选举优先级固定为：
+
+1. 活跃的 `ExclusiveAlwaysLeader`（注册顺序最早者；其余独占节点退化为 `DoNotSync`）；
+2. 活跃的 `AlwaysLeader`；
+3. 混合窗口内活跃的 `TransitionLeader`；
+4. 活跃且 `weight > 0` 的 `CanBeLeader`，权重最大者胜出，同权重按注册顺序。
+
+`AlwaysFollower` 永不领导；`TransitionLeader` 在混合结束后转为 follower；
+`TransitionFollower` 在混合期间不参与组、结束后成为 follower；没有 leader 时 follower
+保留 `sync-no-leader` 诊断且不静默移动时间。`Graph` 方法保留数据但返回
+`sync-graph-not-executed`，不参与执行。
+
+两种执行方法：
+
+- `SyncGroup`：按 leader 的归一化时间 `(time-rangeStart)/rangeLength` 映射到 follower
+  区间；follower 速率 = `leaderRate * followerDuration / leaderDuration`，限制在
+  `[0.1, 4]`，越界由 `rateClamped` 标记。
+- `MarkerSync`：取 leader 当前最近的 marker 名称，在 leader/follower 各自找“最近两个
+  同名 marker”区间，用 leader 区间 alpha 映射 follower 时间；循环资产在末尾把首个同名
+  marker 平移一轮。leader 或 follower 缺同名 marker 时回退 `SyncGroup`，分别给
+  `sync-leader-marker-missing` / `sync-follower-marker-missing`，不静默漂移。
+
+对齐发生在 `SkeletalPlayback::Tick` 推进时间之前。只有相位跳变时递增 discontinuity，
+本帧根轨迹从对齐后的时刻算起，不会把跨相位差误算成根位移。过渡中的旧片段保留一份
+只读影子相位时钟（`syncSourceTime/Rate/Range/Looping`），用于在混合窗口内持续驱动
+follower；它不是第二个姿态/notify 播放器。混合结束、硬切、Stop、Seek、Select 都清空
+该影子时钟。影子节点只在 `IsBlending()` 为真时参与选举；非循环源片段播完后相位已
+clamp 在 `rangeEnd`，此时影子节点也必须退出选举，否则 `AlwaysLeader` 会把目标循环
+钉在末帧（表现为起步到循环的过渡窗口内“卡脚”）。
+
+Registry 的 `nodes/results/groups/memberOffsets/memberCursor` 在首 tick 后复用容量；
+模块测试断言 1000 tick 后 `NodeCapacity/ResultCapacity/GroupCapacity` 不变。反馈面是
+`syncActive/syncLeader/syncRole/syncMethod/syncEffectiveMethod/syncScope/syncDiagnostic`，
+C# 对应 `AnimationState` 的同名属性。
+
+
 ## 已提交历史
 
 previous palette/model 来自最近成功 SubmitFrame 的绘制，不来自最近一个 GT 快照。
@@ -318,15 +377,74 @@ GBuffer velocity 使用 previous skinned position；没有新增附件或改变�
 ## C# 片段控制
 
 `MeshComponent.Animation` 提供 `Clips`、`State`、`Play(clip, loop=true, rate=1, inPlace=true)`、
+`PlayTransition(clip, startTime, loop, blendSeconds, ..., syncGroup="", syncPhase=-1)`、
 `PlayMontage(montageId, targets, loop=false, rate=1, inPlace=true, startTime=0)`（两个重载：
 `Dictionary<string, Vector3>` 只提交位置，`Dictionary<string, WarpTarget>` 提交位置 +
 可选世界旋转；两者都有 `startTime` 入口秒）、`Montage(id)` 与
-`CurveValue(clipId, curveName, time)`。C# 只请求片段/Montage 与曲线采样，不持有骨骼姿态、
-第二份时钟、warp 窗口或旋转数学。
+`CurveValue(clipId, curveName, time)`、`CurrentCurve(name)`；曲线元数据/显式批量读取面为
+`CurveNames(clipId)`、`HasCurve(clipId, curveName)`、`HasCurrentCurve(name)` 与
+`CurveSnapshot(names)`。同步元数据读取面为
+`Players(clipId)`、`SyncMarkers(clipId)`、`StartPosition(clipId)`、`HasSyncGroup(clipId, group)`；
+反馈面为 `ActiveSyncGroup`、`SyncPhase`、`SyncMarker`、`SyncActive`、`SyncLeader`、
+`SyncRole`、`SyncMethod`、`SyncEffectiveMethod`、`SyncScope`、`SyncDiagnostic`。
+`Players()` 的 `AnimationPlayerInfo` 同时带 `SyncGroupScope`（缺省 `Local`）。
+C# 只请求片段/Montage 与曲线采样，不持有骨骼姿态、第二份时钟、warp 窗口或旋转数学。
+`LocomotionAnimationBlueprint` 在旧 `PlayMontage` 之上提供正式动作入口：
+`PlayAction(AssetId montage, targets=null, loop=false, rate=1, inPlace=true, startTime=0)`
+（另有 id / `Dictionary<string,Vector3>` 重载）与 `CancelAction()`。动作激活期间图仍可
+求值但宿主不提交 base clip；原生反馈 `State.Montage` 出现且 `Playing && !Completed` 后
+才进入完成判定，完成或取消后用动作前 base 反馈恢复当前 locomotion。这样同一帧的
+graph `LateTick` 不会用 base clip 覆盖刚提交的 Montage，也避免把上一次动作的陈旧
+`Montage + Completed` 反馈当成新动作立即结束。`MontageInfo` 暴露 `AssetPath`、
+`RateScale` 与 `Segments`；`AnimationState` 暴露 `MontageSegment`/`MontageSegmentId`。
 可用片段目录由正式加载/预加载的原生模型发布；动态资产准备成功后刷新目录。
 State 的片段、时间、时长、完成及播放标记来自原生反馈，在后续脚本回调前同步。
 请求要求当前线程、存活组件及活动 gameplay 回调；OnCreate/OnReload/EndPlay 拒绝。
 片段名与有限速率 `(0,4]` 在请求入口检查，回调异常回滚未交付请求。
+
+原生曲线读取入口是 `SkeletalPlayback::SampleCurve(name, time)` 与此基础上的
+当前时钟快捷入口 `SkeletalPlayback::SampleCurve(name)`。两者都只读当前
+`SkeletalPlayback` 所选片段的 Sequence sidecar：名称大小写不敏感，时间单位为秒且与
+`Time()` 同为 clip-local；未知曲线或没有 sidecar 的片段返回 `nullopt`，非有限时间抛
+`invalid_argument`。曲线不会进入逐帧 feedback，也不会因 `Tick` 自动求值。
+C# `CurveValue` 保持键间线性、区间外 clamp 与单键常量的同一语义；`CurveNames` 对
+已知但无曲线的片段返回空列表，未知片段仍报错；缺失曲线诊断列出可用曲线名，不把缺失
+当成 0。`CurveSnapshot(names)` 只采样调用方显式列出的 1..64 个名字，并拒绝重复名。
+曲线消费边界仍是只读采样：`ModifyCurve`、additive 曲线、曲线驱动 IK、
+AimOffset 与面部 RigLogic 执行均未实现。`FootPlacement` 是独立后处理，
+不读取这些 Float 曲线。Echo 的 `Echo_SlopeWarping_CtrlRig` 已由原生
+`SlopeWarpingSolver` 承接，但当前启用/权重来自 C# `SetSlopeWarping`，不读取
+T3D 里的 `DisableIK` 曲线。
+
+### 斜坡姿态修正（SlopeWarping）
+
+`source/animation/slopeWarping.*` 的 `SlopeWarpingSolver` 是 Echo
+`Echo_SlopeWarping_CtrlRig` 的正式原生替代。`SkeletalPlayback` 暴露
+`SetSlopeWarpingEnabled(bool)`、`SetSlopeWarpingParameters(const SlopeWarpingParameters&)`、
+`ApplySlopeWarping(component, grounded, owner, deltaSeconds, probe)`、
+`ResetSlopeWarping(reason)` 与只读 `SlopeWarping()`；C# 对应
+`AnimationPlayback.SetSlopeWarping(...)` 与 `State.SlopeWarping`。
+
+参数为 `weight`（0..1）、`maxSlopeDegrees`（0..<90，默认 45）、
+`pelvisHeightOffset`（cm）、`footCompensation`（0..2）、`responseSpeed`（1/s）、
+`maxPelvisOffset`（cm）。求解器先用于骨盆、失败再用双脚调用既有
+`GroundProbe`；无 support identity 或 normal 非法时 no-op。
+
+求解只写局部 TRS：角色局部 up 与 support normal 作最短轴对齐，角度先按
+`maxSlopeDegrees` clamp，再乘指数平滑权重；旋转绕 root 自身位置施加，不改变
+root translation。随后按双脚到支撑平面的最低有符号距离做脚部补偿，并叠加
+`pelvisHeightOffset`，两者合成沿世界空间的平移，转回组件局部后加到 root
+translation，幅度受 `maxPelvisOffset` 限制。`RootMotionDelta`、`RootMotionYaw`、
+Actor 位置、Jolt 胶囊和播放时钟均不参与修正。平地（≤0.5°）、离地、无支撑、
+权重 0、显式禁用、缺 `pelvis`/`foot_l`/`foot_r` 或时间步 >0.25s 时 solver
+保持 inactive 且不替换姿态；缺骨在构造期记录 `missing-joint:<name>`。
+
+姿态阶段顺序固定为 `ApplyVisualRoot` → `ApplySlopeWarping` → `ApplyFootPlacement`。
+斜坡结果保存在 `slopeWarpedLocals`，作为 FootPlacement 的求解源与 `preIkModels`
+输入；FootPlacement 关闭/复位时仍能回到斜坡后的 pre-IK 姿态。反馈字段为
+`enabled`、`active`、`slopeAngle`、`targetSlopeAngle`、`appliedSlopeAngle`、
+`weight`、`pelvisOffset`、`groundNormal`、`supportIdentity`、`reason`。
+当前实现是整身 root 对齐 + 高度补偿，不是 UE ControlRig 的逐骨/双足 IK 等价物。
 
 `State.RootMotion` 与 `State.RootMotionYaw` 是本 tick 的根运动反馈：平移来自片段根轨道，
 可被原生 MotionWarping 的 SkewWarp 平移改写；`RootMotionYaw` 默认是原始根 yaw，若当前
@@ -376,12 +494,15 @@ notifyState 是 `[time, time+duration)` 区间，进入触发 `begin`、离开�
 
 事件经原生 `FiredNotifies` 逐 tick 发布：`World::ScriptAnimationFeedback()` 把它转成
 feedback 的 `notifies[]`（`name/track/kind/phase/time/startTime/duration/interrupted`），
-并按播放器发布 `montage{id,length,range:[start,end]}`；C# 对应 `AnimationState.Notifies`、
-`State.Montage`、`State.MontageLength`、`State.MontageRange`。反馈在脚本 tick 之前发布，
+并按播放器发布 `montage{id,length,range:[start,end]}` 以及
+`syncGroup/syncPhase/syncMarker/syncMarkerAlpha/syncActive/syncLeader/syncRole/
+syncMethod/syncEffectiveMethod/syncScope/syncDiagnostic`；C# 对应 `AnimationState.Notifies`、
+`State.Montage`、`State.MontageLength`、`State.MontageRange` 及同名同步字段。反馈在脚本 tick 之前发布，
 因此 C# 读到的是上一动画 tick 的事件。Montage 的 sections/notify/catalog 与
 `PlayMontage` 入口见 [动画 Montage：数据与播放](animation-montage.md)；动画曲线通过
-catalog 键在 C# `CurveValue` 中线性采样，播放器不执行曲线（原生 `SampleFloatCurve`
-仍是同一规范的参考实现）。
+catalog 键在 C# `CurveValue`/`CurrentCurve` 中线性采样，播放器不自动执行曲线
+（原生 `SampleFloatCurve` 仍是同一规范的参考实现）。R3 的 AnimationGraph 条件可以
+显式读取这些采样值，但仍没有 UE AnimBP 的曲线图、曲线驱动骨骼或 Modify Curve 节点。
 
 `Match(database, allowedClips, actionLocked=false, matchSpeed=false, footPlacement=false,
 inertialization=false, rootOffset=false)` 提交正式数据库、业务允许片段、动作锁、
@@ -438,6 +559,75 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 转向缺陷的独立验收记录见 [P6 有界转向](../rationale/gasp-p6-bounded-turn-record.md)，
 动态接地与视觉修正的实测边界见
 [P6 动态质量记录](../rationale/gasp-p6-dynamic-quality-record.md)。
+
+## 数据驱动 AnimationGraph（R3）
+
+托管层新增 `AnimationGraphDefinition` / `AnimationGraphRuntime` /
+`AnimationGraphCondition`，只负责“本帧冻结输入 -> 目标片段与过渡意图”，不拥有骨骼、
+原生时钟或 Vulkan 资源。实际播放仍走 `AnimationPlayback.Play` /
+`PlayTransition`。
+
+### 图定义
+
+- `AnimationGraphDefinition`
+  - `Name`、`Version = "vl.anim-graph.v1"`、`RootStateMachine`
+  - `DirectionBranches[]`：`Name` + `[Minimum, Maximum]` 相对 yaw 区间；按声明顺序
+    匹配第一个包含该角度的分支
+  - `StateMachines[]`
+- `AnimationGraphStateMachine`
+  - `Name`、`EntryState`、可选 `DirectionCurve`
+  - `States[]`、`EntryTransitions[]`、`Transitions[]`
+  - `EntryTransitions` 只在进入状态机当帧检查；之后每帧检查 `Transitions`
+  - 每个状态机每帧最多迁移一次，`From = "*"` 表示任意当前状态
+- `AnimationGraphState`
+  - `Clip` 与 `SubStateMachine` 必须二选一；外层 Idle/Walk/Jog 通过子状态机表达
+    内层 entry/start/cycles/stop
+  - `Loop`、`Rate`、`SyncGroup`、`StartPosition`（-1 = 宿主读取 Sequence Player）、
+    `Mode = Grounded|Airborne`、`DirectionBranch`、`Interruptible`
+- `AnimationGraphTransition`
+  - `From`/`To`、`Condition`、`Priority`（数值越小越先检查，同优先级按声明顺序）、
+    `BlendSeconds`、`Inertialization`、`Crossfade`、`SyncGroup`、
+    `SyncPhaseFromSource`、`Tag`
+- `AnimationGraphCondition`
+  - 叶节点：`Always`、`Grounded`、`Airborne`、`Sitting`、`Speed`、`DesiredSpeed`、
+    `MaxSpeed`、`InputMagnitude`、`BackwardDot`、`Direction`、`RelativeYaw`、
+    `Curve`、`StateTime`、`StateCompleted`、`SyncMarker`、`EntryFromState`
+  - 组合节点：`All` / `Any` / `Not`
+  - 方向条件可指定 `DirectionCurve`；曲线缺失时使用未缩放的相对 yaw。曲线条件缺键
+    为 false，不把缺失当成 0
+
+### 求值与宿主
+
+- `AnimationGraphRuntime.Update(AnimationGraphInput)` 输出 `AnimationGraphDecision`：
+  外层/叶子状态、state path、mode、transition tag、clip、loop、direction branch、
+  blend、inertialization、syncGroup、syncPhase、startPosition、crossfade、changed、
+  leaf state time 与 completed。
+- 外层状态迁移先求值；迁移后重建内层 entry 栈，并在同一帧继续检查内层 entry，
+  因此 `Idle -> Walk` 可以直接选方向起步。外层 transition 拥有整个内层状态机的
+  交叉淡入；内层迁移只在没有外层迁移时接管 blend。
+- `AnimationGraphInput` 的输入包括接地/坐下、世界方向、速度、MaxSpeed、输入幅度、
+  当前 clip/time/duration/completed/playing、syncPhase/marker、曲线表与 clip
+  StartPosition 表。宿主每帧构造一次，不把图求值写回 World/GPU。
+- `LocomotionAnimationBlueprint` 是图宿主：保留原有 `[Expose]` 参数与
+  `SetLocomotionInput`，内部用 `AnimationGraphRuntime` 求值，再通过
+  `PlayClip`/`PlayTransition` 提交。`AnimationGraphRuntime` 的 `SyncPhaseFromSource`
+  先输出候选相位，宿主仍用 `HasSyncGroup` 校验目标 clip 是否真的声明了同名组。
+- `LocomotionAnimationGraph.Build(LocomotionGraphConfig)` 是可复用的 locomotion
+  图模板。Echo 的片段名、过渡时间和曲线名位于资源侧
+  `Maps/SC_valley_echo/Blueprints/EchoLocomotionGraph.cs`；角色蓝图不写 clip 字符串。
+
+### 校验与边界
+
+- `Validate()` 拒绝：重复状态机/状态/方向分支、未知 transition 目标或子状态机、
+  状态机嵌套环、从 Entry 不可达的状态、空 clip、非有限或越界阈值、非法 yaw 区间、
+  空条件组合、SyncPhase 缺少 SyncGroup，以及状态机/状态/transition/条件预算超限。
+  状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
+- 当前节点子集只覆盖 Echo 需要的 StateMachine + SequencePlayer 语义、
+  SyncGroup/MarkerSync 数据、曲线条件、Inertialization 标记与单层 pose 输出；
+  R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供，仍是整身
+  `DefaultSlot` 覆盖，不做骨骼 mask 分层。BlendSpace、AimOffset、TurnInPlace、Pivot、
+  LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的
+  原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
 
 ## 预览与调试
 

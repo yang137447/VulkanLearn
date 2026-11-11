@@ -1,18 +1,23 @@
 #pragma once
 
 #include "animationAssets.h"
+#include "animationSyncGroup.h"
 #include "animationRetarget.h"
 #include "animationMontage.h"
 #include "animationSkeleton.h"
 #include "motionWarping.h"
 #include "skinPose.h"
 #include "footPlacement.h"
+#include "slopeWarping.h"
+#include "poseDriver.h"
+#include "postProcess.h"
 #include "inertialization.h"
 #include "rootOffset.h"
 #include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <cstdint>
 
@@ -60,6 +65,9 @@ struct FiredNotify
     float startTime = 0;
     float duration = 0;
     bool interrupted = false;
+    // 多 AnimSegment Montage 的作者段；单 sequence/普通片段为空、0。
+    int segmentIndex = 0;
+    std::string segmentId;
 };
 
 // 调试读数：当前仍在区间内的 notifyState。endTime 是作者原值，可能越过播放范围末尾；
@@ -109,10 +117,16 @@ public:
     //     被跳过的区间，会在新段第一次扫描时补 end（时间记为扫描起点），不会卡死。
     void SetMontageSections(std::vector<MontageSection> sections,
         std::optional<float> entryStartTime = std::nullopt);
+    // 多 AnimSegment Montage 的时间轴映射。所有段必须已绑定 derivedClipId，
+    // 且 timeline 连续覆盖 [0,length]；安装后 selected 随段切换，但 Montage 时钟
+    // 不重置。空数组恢复单 sequence 播放。
+    void SetMontageSegments(std::vector<MontageSegment> segments, float length);
     // 当前 section 下标/名字；没有 section 链时下标为 0、名字为空。
     // 仅供诊断/测试，不参与时钟或姿态求值。
     size_t MontageSectionIndex() const { return montageSection; }
     std::string MontageSectionName() const;
+    size_t MontageSegmentIndex() const { return montageSegment; }
+    std::string MontageSegmentId() const;
     // 播放范围 [start,end]（秒、clip-local）。默认 0..clip duration；只影响播放长度、
     // 根位移积分与 notify 有效域，不改变姿态采样。end 超出片段时长 1e-3 以内按片段末尾
     // clamp，超出更多则拒绝；非 0 起点不移动当前时钟，调用方应随后 Seek(start) 对齐
@@ -137,6 +151,10 @@ public:
     // Motion Matching 只交付目标帧；原生拥有唯一目标时钟和有界交叉混合源。
     void TransitionTo(const std::string& clipId, float seconds, bool loop,
         float blendSeconds, bool inPlace = true);
+    // UE SyncGroup transition：目标剪辑必须声明同名 SyncGroup。syncPhase 是 [0,1]
+    // 的归一化时间；目标为循环片段时映射到 phase*duration，非循环时 clamp 到末帧前。
+    void TransitionToSynced(const std::string& clipId, float seconds, bool loop,
+        float blendSeconds, bool inPlace, const std::string& syncGroup, float syncPhase);
     // 只调节唯一目标时钟，不重采样或重启混合；混合时长仍按实际 delta 推进。
     void SetRate(float speed);
     // 模式只作用于后续过渡；切换不重采样当前姿态或重启唯一时钟。
@@ -156,12 +174,64 @@ public:
     void ApplyFootPlacement(const Eigen::Matrix4f& component, bool grounded,
         const std::string& owner, float deltaSeconds, const GroundProbe& probe);
     const FootPlacementState& FootPlacement() const;
+    // Echo_SlopeWarping_CtrlRig 的正式原生替代。与 FootPlacement 共用本地 TRS
+    // 姿态阶段，但只写视觉姿态：Actor 位置、胶囊与 rootMotionDelta 不变。
+    void SetSlopeWarpingEnabled(bool enabled);
+    bool SlopeWarpingEnabled() const;
+    void SetSlopeWarpingParameters(const SlopeWarpingParameters& parameters);
+    const SlopeWarpingParameters& SlopeWarpingSettings() const { return slopeWarpingSettings; }
+    void ResetSlopeWarping(const char* reason);
+    void ApplySlopeWarping(const Eigen::Matrix4f& component, bool grounded,
+        const std::string& owner, float deltaSeconds, const GroundProbe& probe);
+    const SlopeWarpingState& SlopeWarping() const;
+    // UE PostProcess AnimBP 的 PoseDriver/DriveCurves 阶段：读取本帧最终基础姿态
+    // （斜坡修正之后、足 IK 之前），产出只读命名曲线。曲线不改变姿态，也不写 Actor。
+    // 传 null 关闭；非法资产抛异常，调用方必须先在候选播放器上应用。
+    void SetPoseDriver(std::shared_ptr<const PoseDriverSet> set);
+    void ClearPoseDriver() { poseDriver.reset(); }
+    bool PoseDriverEnabled() const { return poseDriver != nullptr; }
+    const PoseDriverSet* PoseDriverAsset() const { return poseDriver ? poseDriver->Set().get() : nullptr; }
+    // 每帧按需求值一次；不缓存，避免与播放相位/斜坡修正的提交顺序耦合。
+    PoseDriverFrame SamplePoseDriver() const;
+    // UE PostProcess AnimBP 的 Twist/Helpers 阶段：当前实现 Echo_Twist_CtrlRig 的
+    // 正式原生替代（bind→current 相对旋转 → swing/twist → 写 twist 骨）。
+    // 在足 IK 之后、蒙皮快照之前执行；不改 Actor/Jolt，也不改 locomotion 时钟。
+    void SetPostProcess(std::shared_ptr<const PostProcessAsset> asset);
+    void ClearPostProcess() { postProcess.reset(); footPlacementLocals.clear(); }
+    bool PostProcessEnabled() const { return postProcess && postProcess->Valid(); }
+    // 避免成员函数名与类型名同名：类作用域内同名会遮蔽 PostProcessAsset 类型。
+    const PostProcessAsset* PostProcess() const
+    {
+        return postProcess ? postProcess->Asset().get() : nullptr;
+    }
+    const std::vector<PostProcessDiagnostic>& PostProcessDiagnostics() const
+    {
+        static const std::vector<PostProcessDiagnostic> none;
+        return postProcess ? postProcess->BindDiagnostics() : none;
+    }
+    void ApplyPostProcess(float deltaSeconds);
+    // 只用于反馈/验收：成功写入过姿态的累计帧数。
+    uint64_t PostProcessApplications() const { return postProcessApplications; }
+    const PostProcessApplyStats& PostProcessStats() const { return postProcessStats; }
+    // 骨骼物理桥：World 用外部 Jolt 求解器改写“最终姿态”。
+    // CopyPoseGlobals 取当前最终局部姿态的世界全局矩阵（cm，已乘 component）；
+    // ApplyPoseGlobals 把修改后的全局矩阵写回局部姿态并重新发布。
+    void CopyPoseGlobals(const Eigen::Matrix4f& component,
+        std::vector<Eigen::Matrix4f>& globals) const;
+    void ApplyPoseGlobals(const Eigen::Matrix4f& component,
+        const std::vector<Eigen::Matrix4f>& globals);
     std::shared_ptr<SkeletalPlayback> NewInstance() const;
     void SetPlaying(bool value) { playing = value; explicitlyPaused = !value; }
     bool IsPlaying() const { return playing; }
     bool IsExplicitlyPaused() const { return explicitlyPaused; }
     float Time() const { return time; }
     float Duration() const;
+    // 只读曲线采样：name 大小写不敏感，seconds 与 Time() 同为 clip-local 秒。
+    // 未知曲线（包括没有 sidecar 的片段）返回 nullopt；非有限时间抛 invalid_argument。
+    // 该入口不自动执行曲线、不写入反馈，也不把全部曲线复制到每帧快照。
+    std::optional<float> SampleCurve(std::string_view name, float seconds) const;
+    // 使用当前播放时钟的快捷入口；其余语义与显式时间重载一致。
+    std::optional<float> SampleCurve(std::string_view name) const;
     // 编辑器播放时间轴以当前播放范围为零点；原生 Time() 仍保持 clip-local 绝对时间，
     // 以便 notify、warp 与跨 section 链继续共用同一条资产时间轴。
     float PlaybackPosition() const
@@ -187,6 +257,53 @@ public:
     bool InPlace() const { return inPlace; }
     bool IsLooping() const { return looping; }
     float Rate() const { return rate; }
+    // 外部作者/调用方请求的速率；SyncGroup follower 的生效速率可能被时长比重算。
+    float RequestedRate() const { return requestedRate; }
+    // 当前片段名下的同步组相位（clip-local time / duration）；无组时仍可作诊断。
+    float SyncPhase() const;
+    const std::string& SyncGroup() const { return activeSyncGroup; }
+    // 最近一个已越过的 sync marker 与其到下一个 marker 的 alpha；无 marker 返回空。
+    const std::string& SyncMarkerName() const { return syncMarkerName; }
+    float SyncMarkerAlpha() const { return syncMarkerAlpha; }
+    // 当前片段的 Sequence Player 绑定；activeSyncGroup 非空时优先匹配同名组，
+    // 否则返回第一个可执行同步的绑定（DoNotSync 只作为回退诊断）。
+    const PlayerBinding* SyncBinding() const;
+    // 过渡源片段（blendSource）在混合期间保留一份只用于同步的影子相位时钟；
+    // 它不是第二个姿态播放器，也不参与采样/notify。
+    const PlayerBinding* SyncSourceBinding() const;
+    bool HasSyncSourceClock() const { return syncSourceValid; }
+    const std::vector<SyncMarker>* SyncSourceMarkers() const;
+    // 由 World 在唯一播放器 Tick 之前装配；identity/ownerKey/localKey 只被读取，
+    // source=true 时返回过渡源的只读影子节点（canApply=false）。
+    SyncGroupNode BuildSyncGroupNode(std::string_view identity, std::string_view ownerKey,
+        std::string_view localKey, bool source);
+    // 写回本 tick 的选举结果。follower 的时间/速率在 Tick 开头应用一次；
+    // leader/DoNotSync 只更新反馈，并以 requestedRate 继续推进。
+    void ApplySyncGroupResult(const SyncGroupNodeResult& result, std::string_view leaderIdentity);
+    bool SyncDecisionValid() const { return syncDecisionValid; }
+    bool SyncActive() const;
+    const std::string& SyncLeader() const { return syncLeader; }
+    SyncRole CurrentSyncRole() const { return syncDecision.role; }
+    SyncMethod CurrentSyncMethod() const { return syncDecision.effectiveMethod; }
+    SyncMethod CurrentSyncAuthoredMethod() const { return syncDecision.authoredMethod; }
+    SyncGroupScope CurrentSyncScope() const { return syncDecision.scope; }
+    const char* CurrentSyncRoleName() const { return VL::Animation::SyncRoleName(syncDecision.role); }
+    const char* CurrentSyncMethodName() const
+    {
+        return VL::Animation::SyncMethodName(syncDecision.effectiveMethod);
+    }
+    const char* CurrentSyncAuthoredMethodName() const
+    {
+        return VL::Animation::SyncMethodName(syncDecision.authoredMethod);
+    }
+    const char* CurrentSyncScopeName() const
+    {
+        return VL::Animation::SyncGroupScopeName(syncDecision.scope);
+    }
+    const char* SyncDiagnosticName() const
+    {
+        return VL::Animation::SyncGroupDiagnosticName(syncDecision.diagnostic);
+    }
     const SkeletalAsset& Asset() const { return *asset; }
     const std::vector<Eigen::Matrix4f>& Models() const { return *jointModels; }
     // MM 使用规范 post-blend 姿态；pre-IK 另含可选视觉根修正，不反馈给搜索。
@@ -205,8 +322,16 @@ private:
         std::string kind;
         float time = 0;
         float duration = 0;
+        int segmentIndex = 0;
+        std::string segmentId;
         float EndTime() const { return time + duration; }
         bool IsState() const { return kind == "notifyState" && duration > 0; }
+    };
+    struct MontageSample
+    {
+        size_t segment = 0;
+        size_t clip = 0;
+        float clipTime = 0;
     };
     std::vector<std::shared_ptr<const SkinPose>> Evaluate(
         const LocalPose& locals, uint64_t epoch,
@@ -229,6 +354,14 @@ private:
         bool interrupted);
     // 不改变 section 链的范围写入；公开 SetPlaybackRange 以及切段内部使用。
     void SetPlaybackRangeInternal(float start, float end);
+    // Montage 时间轴 -> 段/clip 本地时间的唯一换算入口。atEnd 用于段末采样：
+    // 时间恰好落在边界时优先上一段，避免无 remaining 的 tick 提前切 clip。
+    MontageSample SampleMontageTimeline(float timeline, bool atEnd = false) const;
+    float MontageSourceTime(const MontageSegment& segment, float timeline,
+        float clipDuration) const;
+    // 多段根轨迹按实际移动的子区间积分；跳段本身不计位移。
+    Eigen::Vector3f MontageRootDelta(float from, float to) const;
+    void ClearMontageSegments();
     // 当前 section 的 nextSection 目标下标；空/未命中返回 -1（未命中的拒绝发生在
     // PlayMontage 装配期，运行期只做防御性停止）。
     int MontageNextSectionIndex() const;
@@ -236,6 +369,14 @@ private:
     // 段末尾按链接切换范围；姿态只在推进结束后采样/发布一次。
     void TickMontageSections(float deltaSeconds, const Eigen::Matrix4f* meshTransform,
         const Eigen::Vector3f* actorPosition, float actorYaw);
+    // 多 AnimSegment 版本：section 边界仍是 Montage 时间轴边界，段边界只替换
+    // 正在采样的 clip；每段分别映射 warp 窗口与根轨迹。
+    void TickSegmentedMontage(float deltaSeconds, const Eigen::Matrix4f* meshTransform,
+        const Eigen::Vector3f* actorPosition, float actorYaw);
+    Eigen::Vector3f ApplySegmentedMontageWarp(const MontageSegment& segment,
+        const Clip& clip, float sourceFrom, float sourceTo,
+        const Eigen::Vector3f& rawDelta, const Eigen::Matrix4f& meshTransform,
+        const Eigen::Vector3f& actorPosition, float actorYaw, float& yawDelta) const;
     std::shared_ptr<const SkeletalAsset> asset;
     std::shared_ptr<const CompiledRetarget> compiledRetarget;
     std::vector<std::shared_ptr<const SkinPose>> poses;
@@ -249,6 +390,17 @@ private:
     std::optional<FootPlacementSolver> footPlacement;
     FootLockType footLockType = FootLockType::Auto;
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> footPlacementSource;
+    std::optional<SlopeWarpingSolver> slopeWarping;
+    SlopeWarpingParameters slopeWarpingSettings;
+    // 不可变求解器可在候选播放器之间廉价复制；资产身份随 solver 一起共享。
+    std::shared_ptr<const PoseDriverSolver> poseDriver;
+    std::shared_ptr<const PostProcessSolver> postProcess;
+    // 足 IK 后的局部姿态；PostProcess 必须基于它，否则 Evaluate 会把 IK 结果覆盖掉。
+    LocalPose footPlacementLocals;
+    uint64_t postProcessApplications = 0;
+    PostProcessApplyStats postProcessStats;
+    // 斜坡修正后的局部姿态（足 IK 前）；FootPlacement 以它为求解源。
+    LocalPose slopeWarpedLocals;
     LocalPose displayedLocals;
     // displayedLocals 是规范混合结果；visualLocals 独立保存根修正后、足 IK 前的求解源。
     LocalPose visualLocals;
@@ -269,6 +421,29 @@ private:
     bool looping = true;
     bool inPlace = false;
     float rate = 1;
+    float requestedRate = 1;
+    std::string activeSyncGroup;
+    std::string syncMarkerName;
+    float syncMarkerAlpha = 0;
+    // 过渡源影子时钟：只追踪相位/速率，混合结束或硬切时清空。
+    bool syncSourceValid = false;
+    size_t syncSourceSelected = 0;
+    float syncSourceTime = 0;
+    float syncSourceRangeStart = 0;
+    float syncSourceRangeEnd = 0;
+    float syncSourceRate = 1;
+    bool syncSourceLooping = true;
+    // 本 tick 的组决策与待应用对齐；都是值类型/单字符串，不建逐帧容器。
+    bool syncDecisionValid = false;
+    SyncGroupNodeResult syncDecision;
+    std::string syncLeader;
+    bool syncPendingValid = false;
+    bool syncPendingHasTime = false;
+    float syncPendingTime = 0;
+    float syncPendingRate = 1;
+    void ClearSyncSourceClock();
+    void AdvanceSyncSourceClock(float deltaSeconds);
+    void RefreshSyncMarker();
     uint64_t discontinuity = 0;
     uint64_t playbackIdentity = 0;
     // Montage notify 覆盖层；与 Sequence notifies 合并执行，切片段时清空。
@@ -293,6 +468,11 @@ private:
     // 在候选播放器上一起写入。
     std::vector<MontageSection> montageSections;
     size_t montageSection = 0;
+    // 多 AnimSegment 数据与已解析 clip 下标；与 section 链相互独立。
+    std::vector<MontageSegment> montageSegments;
+    std::vector<size_t> montageSegmentClips;
+    size_t montageSegment = 0;
+    float montageTimelineLength = 0;
 };
 
 // 与 shader 共用全部 CSR 权重的 CPU 参考；边界来自当前变形顶点，不沿用绑定姿态。

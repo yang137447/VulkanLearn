@@ -86,6 +86,14 @@ std::shared_ptr<SkeletalAsset> MakeAsset()
     asset->clips.push_back(MakeClip("b", 8, 90, 2));
     asset->clips.push_back(MakeClip("c", -8, -90, 1));
     asset->clips.push_back(MakeClip("root-trs", 0, 0, 1, true));
+    // 匀速位移片段：末段 hip.x 以 100 cm/s 前进，用于验证惯性化的出帧速度。
+    Clip travel = MakeClip("travel", -392, 0, 1);
+    travel.raw.tracks[1].translations = {{0, {-392, 10, 0}}, {4, {8, 10, 0}}};
+    ozz::animation::offline::AnimationBuilder travelBuilder;
+    travel.runtime = travelBuilder(travel.raw);
+    asset->clips.push_back(std::move(travel));
+    // 与 travel 末帧姿态重合、但速度为零的目标片段。
+    asset->clips.push_back(MakeClip("still", 8, 0, 1));
     return asset;
 }
 
@@ -154,6 +162,26 @@ TEST(SkeletalBlend, InterruptedBlendFreezesCurrentDisplayedPoseAsOnlySource)
         player.Tick(0.01f);
         EXPECT_EQ(player.Pose(0)->discontinuity, epoch);
     }
+}
+
+// 一次性片段播完那一帧 playing 已经是 false；惯性化不能把“播放器停住”误当成“姿态静止”。
+// 误测成零速度时整个过渡从零速度起步，只在切换瞬间表现为一次顿挫。
+TEST(SkeletalBlend, InertializationFromCompletedOneShotKeepsExitVelocity)
+{
+    SkeletalPlayback player(MakeAsset());
+    player.Play("travel", false, 1, true);
+    // Play 会把片段级 Inertialization 复位成 false；过渡请求是在 TransitionTo 之前设的。
+    player.SetInertializationEnabled(true);
+    player.Tick(4.0f);
+    ASSERT_FLOAT_EQ(player.Time(), 4.0f);
+    const float before = player.Models()[1](0, 3);
+    // 源片段末段 hip.x 速度 100 cm/s；目标片段 hip.x 恒为 8 且与末帧重合（位移偏移 0），
+    // 所以首帧位移只可能来自源片段速度。
+    player.TransitionTo("still", 0, true, 0.5f);
+    player.Tick(0.05f);
+    const float after = player.Models()[1](0, 3);
+    // 正确速度下 50 ms 约走 4.7 cm；速度被误测成 0 时位移恒为 0。
+    EXPECT_GT(after - before, 3.0f);
 }
 
 TEST(SkeletalBlend, PauseAndZeroDeltaFreezeBothNativeTimeAndBlend)

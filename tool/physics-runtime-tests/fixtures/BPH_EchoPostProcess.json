@@ -1,0 +1,1010 @@
+{
+  "format": "vl.bone-physics.v1",
+  "id": "BPH_EchoPostProcess",
+  "sources": [
+    {
+      "asset": "PA_Echo_Canister",
+      "blake3": "6c91f0389e0fbd1ab06be436b42b949755e3e87c721b640fb28953f1ff9cca5a"
+    },
+    {
+      "asset": "PA_Echo_Pouch",
+      "blake3": "3a97af399962157c4869c55087ee9988ee941f57d0294e9e2351c62dfbe14446"
+    },
+    {
+      "asset": "PA_Echo_ShoulderPad",
+      "blake3": "b87864041bab6f9b3238f32c6b2d0aaa496a9c5b35de914425bda2d2550fa23d"
+    },
+    {
+      "asset": "PA_Echo_Skirt",
+      "blake3": "789aed1e983104fb6c59f86bbd3d60d8f35c671bbf04319b7e452716e6df7e36"
+    }
+  ],
+  "sets": [
+    {
+      "name": "canister",
+      "asset": "PA_Echo_Canister",
+      "baseBone": "root",
+      "gravity": [
+        0.0,
+        -980.0,
+        0.0
+      ],
+      "bodies": [
+        {
+          "bone": "R_Canister_A_Joint1_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                -5.121658290081963e-07,
+                3.3938665422637205e-07,
+                -0.707106454140841,
+                0.707107108231836
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 30.0
+        },
+        {
+          "bone": "R_Canister_A_Joint2_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.050785,
+              "halfHeight": 5.5185805,
+              "center": [
+                1.923174,
+                0.520576,
+                -11.381891
+              ],
+              "rotation": [
+                -0.1254536741452228,
+                0.06251529098357887,
+                -0.7043363174978771,
+                0.6958904841210524
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 30.0
+        },
+        {
+          "bone": "pelvis",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 11.0,
+              "halfHeight": 5.5,
+              "center": [
+                -6.378555,
+                -0.979223,
+                5.3e-05
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "thigh_r",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 7.314577,
+              "halfHeight": 11.5599395,
+              "center": [
+                12.265706,
+                2.700963,
+                -1.306815
+              ],
+              "rotation": [
+                2.9002152512891394e-07,
+                0.7071067811864881,
+                -2.9002152512891394e-07,
+                0.7071067811864881
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "lowerarm_r",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 4.8125,
+              "halfHeight": 13.84375,
+              "center": [
+                -11.856914,
+                -1e-05,
+                -0.00057
+              ],
+              "rotation": [
+                -2.838508543854396e-07,
+                0.7071067811864906,
+                2.838508543854396e-07,
+                0.7071067811864906
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        }
+      ],
+      "constraints": [
+        {
+          "name": "R_Canister_A_Joint2_Jnt",
+          "child": "R_Canister_A_Joint2_Jnt",
+          "parent": "R_Canister_A_Joint1_Jnt",
+          "swing1": {
+            "limit": 30.0,
+            "motion": "locked"
+          },
+          "swing2": {
+            "limit": 20.0,
+            "motion": "limited"
+          },
+          "twist": {
+            "limit": 20.0,
+            "motion": "limited"
+          },
+          "stiffness": 0.0,
+          "damping": 0.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              -0.1305261483360383,
+              0.0,
+              0.9914448671512495
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pouch",
+      "asset": "PA_Echo_Pouch",
+      "baseBone": "root",
+      "gravity": [
+        0.0,
+        -980.0,
+        0.0
+      ],
+      "bodies": [
+        {
+          "bone": "R_LargePouch_A_Root_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 1.0,
+              "halfHeight": 0.5,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "R_LargePouch_A_Joint1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                4.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 0.0,
+          "angularDamping": 40.0
+        }
+      ],
+      "constraints": [
+        {
+          "name": "R_LargePouch_A_Joint1_Jnt",
+          "child": "R_LargePouch_A_Joint1_Jnt",
+          "parent": "R_LargePouch_A_Root_Jnt",
+          "swing1": {
+            "limit": 5.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 20.0,
+            "motion": "limited"
+          },
+          "twist": {
+            "limit": 1.0,
+            "motion": "locked"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              -0.1305261483360383,
+              0.0,
+              0.9914448671512495
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "shoulderPad",
+      "asset": "PA_Echo_ShoulderPad",
+      "baseBone": "root",
+      "gravity": [
+        0.0,
+        -980.0,
+        0.0
+      ],
+      "bodies": [
+        {
+          "bone": "clavicle_r",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "R_ShoulderPad_B_Root_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                -2.874664,
+                -0.000249,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 0.0,
+          "angularDamping": 40.0
+        }
+      ],
+      "constraints": [
+        {
+          "name": "UserConstraint",
+          "child": "R_ShoulderPad_B_Root_Jnt",
+          "parent": "clavicle_r",
+          "swing1": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "swing2": {
+            "limit": 15.0,
+            "motion": "limited"
+          },
+          "twist": {
+            "limit": 0.1,
+            "motion": "limited"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0014538849556369256,
+              0.13052510511734175,
+              0.00019187332283623085,
+              0.9914439199154286
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "skirt",
+      "asset": "PA_Echo_Skirt",
+      "baseBone": "root",
+      "gravity": [
+        0.0,
+        -980.0,
+        0.0
+      ],
+      "bodies": [
+        {
+          "bone": "L_Skirt_A_Back1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                2.5,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 2.0,
+          "angularDamping": 15.0
+        },
+        {
+          "bone": "C_Skirt_A_Back1_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                -2.5,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 2.0,
+          "angularDamping": 15.0
+        },
+        {
+          "bone": "R_Skirt_A_Back1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                -2.5,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 2.0,
+          "angularDamping": 15.0
+        },
+        {
+          "bone": "L_Skirt_A_Front1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                2.5,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 5.0,
+          "angularDamping": 25.0
+        },
+        {
+          "bone": "R_Skirt_A_Front1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                -2.56,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 5.0,
+          "angularDamping": 25.0
+        },
+        {
+          "bone": "C_Skirt_A_Front1_Jnt",
+          "type": "simulated",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 5.0,
+              "halfHeight": 2.5,
+              "center": [
+                -2.5,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                -0.7071067811865476,
+                0.0,
+                0.7071067811865476
+              ]
+            }
+          ],
+          "mass": 10.0,
+          "linearDamping": 5.0,
+          "angularDamping": 25.0
+        },
+        {
+          "bone": "L_Skirt_A_FrontRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.7071067318211799,
+                0.7071068305519118
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "L_Skirt_A_BackRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.7071067318211799,
+                0.7071068305519118
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "R_Skirt_A_FrontRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.7071067318211799,
+                0.7071068305519118
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "R_Skirt_A_BackRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.7071067318211799,
+                0.7071068305519118
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "C_Skirt_A_FrontRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                1.2341347202904674e-08,
+                -1.2341335786861386e-08,
+                -0.7071064541409222,
+                0.7071071082320214
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        },
+        {
+          "bone": "C_Skirt_A_BackRoot_Jnt",
+          "type": "kinematic",
+          "shapes": [
+            {
+              "type": "capsule",
+              "radius": 0.505,
+              "halfHeight": 0.2525,
+              "center": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                -0.7071067318211799,
+                0.7071068305519118
+              ]
+            }
+          ],
+          "mass": null,
+          "linearDamping": 0.0,
+          "angularDamping": 0.0
+        }
+      ],
+      "constraints": [
+        {
+          "name": "L_Skirt_A_Front1_Jnt",
+          "child": "L_Skirt_A_Front1_Jnt",
+          "parent": "L_Skirt_A_FrontRoot_Jnt",
+          "swing1": {
+            "limit": 15.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              5.3e-05,
+              -2.7e-05,
+              -8e-06
+            ],
+            "rotation": [
+              0.35355207992728527,
+              0.6123733798483929,
+              0.49999941529018727,
+              0.5000003551414912
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              3e-05,
+              -1e-06,
+              -1.6e-05
+            ],
+            "rotation": [
+              0.4304584740045927,
+              0.560986187136223,
+              0.560986187136223,
+              0.4304584740045927
+            ]
+          }
+        },
+        {
+          "name": "L_Skirt_A_Back1_Jnt",
+          "child": "L_Skirt_A_Back1_Jnt",
+          "parent": "L_Skirt_A_BackRoot_Jnt",
+          "swing1": {
+            "limit": 25.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              -1e-06,
+              3e-06,
+              -1.1e-05
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              -6e-06,
+              4.9e-05,
+              -0.014355
+            ],
+            "rotation": [
+              2.3877933889217208e-05,
+              0.0001080293384890853,
+              -0.16701530666422265,
+              0.9859542966585023
+            ]
+          }
+        },
+        {
+          "name": "R_Skirt_A_Front1_Jnt",
+          "child": "R_Skirt_A_Front1_Jnt",
+          "parent": "R_Skirt_A_FrontRoot_Jnt",
+          "swing1": {
+            "limit": 15.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              -4.999979999797503e-07,
+              5.000019999795e-07,
+              0.99999999999175,
+              4.000000249903001e-06
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              6.862413554376619e-08,
+              -4.952682393425533e-07,
+              -0.9905366750478004,
+              0.13724829829545543
+            ]
+          }
+        },
+        {
+          "name": "R_Skirt_A_Back1_Jnt",
+          "child": "R_Skirt_A_Back1_Jnt",
+          "parent": "R_Skirt_A_BackRoot_Jnt",
+          "swing1": {
+            "limit": 25.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 500.0,
+          "damping": 50.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              1.4999699864951285e-06,
+              -5.000899954958658e-07,
+              0.99999999819875,
+              6.000000042592499e-05
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              2.4649601932903066e-06,
+              -4.1710542944166203e-07,
+              0.9859836281955898,
+              0.16684209577924577
+            ]
+          }
+        },
+        {
+          "name": "UserConstraint",
+          "child": "C_Skirt_A_BackRoot_Jnt",
+          "parent": "C_Skirt_A_Back1_Jnt",
+          "swing1": {
+            "limit": 20.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 0.0,
+          "damping": 0.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.999999999998,
+              1.999999999988e-06
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              -0.9848080504247855,
+              0.17364649094794096
+            ]
+          }
+        },
+        {
+          "name": "UserConstraint_0",
+          "child": "C_Skirt_A_Front1_Jnt",
+          "parent": "C_Skirt_A_FrontRoot_Jnt",
+          "swing1": {
+            "limit": 15.0,
+            "motion": "limited"
+          },
+          "swing2": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "twist": {
+            "limit": 45.0,
+            "motion": "locked"
+          },
+          "stiffness": 0.0,
+          "damping": 0.0,
+          "childFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.9914444720199374,
+              0.1305291496222501
+            ]
+          },
+          "parentFrame": {
+            "position": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.999999999993875,
+              3.4999999999356877e-06
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

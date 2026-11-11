@@ -259,10 +259,25 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 
 ### Resource naming patterns
 
-- `SM_*.json`: mesh descriptor files
+- `SM_*.json`: static mesh descriptor files. `SM_` is reserved for non-skeletal meshes;
+  new meshes with a `skinning` block must use `SKM_*.json` instead. Legacy `SM_*`
+  skeletal assets may still exist until they are touched and renamed
+- `SKM_*.json`: skeletal mesh descriptor files (mesh + `skinning.skeleton` / `skinning.clips`)
+- `SK_*.json`: skeleton descriptor files
 - `TR_*.json`: terrain descriptor files (**editor asset layer only**; no runtime terrain support)
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
+
+### Static ground authoring
+
+- Large static surfaces (ground, plazas, platforms) must not be one mesh scaled up to cover the
+  whole area: UVs and texel density then stretch with distance and the surface reads as blurry.
+- When the model is too small, stitch it from multiple blocks at a sane per-block scale, with
+  edges aligned. Physics may still be a single simplified box.
+- Reference: `SC_valley_echo`'s floor visual is a 6x6 grid of 2000 cm `SM_cube` tiles while
+  collision stays one 12000x100x12000 cm box. Its material instance
+  (`Maps/SC_valley_echo/Materials/MI_echo_ground.json`) derives from the world-projected
+  `M_gaspGrid` shader, so grid lines keep a fixed cm size instead of stretching with the mesh.
 
 ### Scene JSON top-level fields
 

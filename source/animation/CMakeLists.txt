@@ -2,6 +2,7 @@ add_library(vl_animation_assets STATIC
     animationAssets.cpp
     animationSkeleton.cpp
     animationSequenceData.cpp
+    animationSyncGroup.cpp
     animationMontage.cpp
     animationRetarget.cpp
     animationScriptData.cpp
@@ -9,6 +10,9 @@ add_library(vl_animation_assets STATIC
     inertialization.cpp
     rootOffset.cpp
     footPlacement.cpp
+    slopeWarping.cpp
+    poseDriver.cpp
+    postProcess.cpp
     motionFeatures.cpp
     motionHistory.cpp
     motionDatabase.cpp

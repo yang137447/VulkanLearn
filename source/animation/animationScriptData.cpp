@@ -156,9 +156,52 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
     }
     result["curves"] = std::move(curves);
 
+    // Sync metadata 与 curves 一样按 clip 分开；没有同步组/标记的旧资产不发布
+    // 空结构。players 保留全部 Sequence Player 绑定，C# 按组名选择。
+    auto players = nlohmann::json::object();
+    auto syncMarkers = nlohmann::json::object();
+    for (const Clip& clip : animation.clips)
+    {
+        if (!clip.sequence.players.empty())
+        {
+            auto list = nlohmann::json::array();
+            for (const PlayerBinding& player : clip.sequence.players)
+                list.push_back({
+                    {"syncGroup", player.syncGroup},
+                    {"syncRole", SyncRoleName(player.syncRole)},
+                    {"syncMethod", SyncMethodName(player.syncMethod)},
+                    {"syncGroupScope", SyncGroupScopeName(player.syncGroupScope)},
+                    {"startPosition", player.startPosition},
+                    {"loop", player.loop},
+                });
+            players[clip.id] = std::move(list);
+        }
+        if (!clip.sequence.syncMarkers.empty())
+        {
+            auto list = nlohmann::json::array();
+            for (const SyncMarker& marker : clip.sequence.syncMarkers)
+                list.push_back({{"name", marker.name}, {"time", marker.time}});
+            syncMarkers[clip.id] = std::move(list);
+        }
+    }
+    result["players"] = std::move(players);
+    result["syncMarkers"] = std::move(syncMarkers);
+
     auto montages = nlohmann::json::array();
     for (const Montage& montage : animation.montages)
     {
+        auto segments = nlohmann::json::array();
+        for (size_t index = 0; index < montage.segments.size(); ++index)
+        {
+            const MontageSegment& segment = montage.segments[index];
+            segments.push_back({{"segmentId", segment.id}, {"index", index},
+                {"sequencePath", segment.sequencePath},
+                {"derivedClipId", segment.derivedClipId},
+                {"startTime", segment.startTime}, {"endTime", segment.endTime},
+                {"clipStartTime", segment.clipStartTime},
+                {"clipEndTime", segment.clipEndTime},
+                {"rateScale", segment.rateScale}, {"loop", segment.loop}});
+        }
         auto sections = nlohmann::json::array();
         for (const MontageSection& section : montage.sections)
             sections.push_back({{"name", section.name}, {"startTime", section.startTime},
@@ -187,8 +230,9 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
         }
         montages.push_back({{"id", montage.id}, {"sequencePath", montage.sequencePath},
             {"derivedClipId", montage.derivedClipId}, {"length", montage.length},
-            {"slot", montage.slot}, {"sections", std::move(sections)},
-            {"notifies", std::move(notifies)}});
+            {"path", montage.sourcePath}, {"rateScale", montage.rateScale},
+            {"slot", montage.slot}, {"segments", std::move(segments)},
+            {"sections", std::move(sections)}, {"notifies", std::move(notifies)}});
     }
     result["montages"] = std::move(montages);
     return result;
@@ -201,7 +245,8 @@ nlohmann::json BuildAnimationNotifyFeedback(const std::vector<FiredNotify>& noti
         result.push_back({{"name", notify.name}, {"track", notify.track},
             {"kind", notify.kind}, {"phase", notify.phase}, {"time", notify.time},
             {"startTime", notify.startTime}, {"duration", notify.duration},
-            {"interrupted", notify.interrupted}});
+            {"interrupted", notify.interrupted},
+            {"segmentIndex", notify.segmentIndex}, {"segmentId", notify.segmentId}});
     return result;
 }
 
@@ -278,36 +323,48 @@ void PlayMontage(SkeletalPlayback& player, const Montage& montage,
     if (!std::isfinite(rate) || rate <= 0 || rate > 4)
         throw std::invalid_argument("Animation montage '" + montage.id +
             "': rate must be in (0,4]");
+    // 顶层 RateScale 与调用方 rate 相乘；段级 rateScale 只缩放该段源码时间，
+    // 不改变 Montage 时间轴（section/notify 仍是作者时间）。
+    const float effectiveRate = rate * montage.rateScale;
+    if (!std::isfinite(effectiveRate) || effectiveRate <= 0 || effectiveRate > 4)
+        throw std::invalid_argument("Animation montage '" + montage.id +
+            "': asset rateScale produces a playback rate outside (0,4]");
     // 先完成所有校验与候选构造；任何拒绝都保持当前播放器（worldAnimation 也使用 candidate 模式）。
     std::vector<MotionWarpWindow> windows = BuildMontageWarpWindows(montage, targets);
-    if (montage.derivedClipId.empty())
+    const bool segmented = !montage.segments.empty();
+    const std::string firstClipId = segmented ?
+        montage.segments.front().derivedClipId : montage.derivedClipId;
+    if (firstClipId.empty())
         throw std::invalid_argument("Animation montage '" + montage.id +
             "' has no derived clip id; the Montage must be bound to a loaded sequence sidecar");
     const auto& clips = player.Asset().AnimationAsset().clips;
     const auto clip = std::find_if(clips.begin(), clips.end(),
-        [&](const Clip& value) { return value.id == montage.derivedClipId; });
+        [&](const Clip& value) { return value.id == firstClipId; });
     if (clip == clips.end())
         throw std::invalid_argument("Animation montage '" + montage.id +
-            "' requires the loaded clip '" + montage.derivedClipId + "'");
+            "' requires the loaded clip '" + firstClipId + "'");
     // Montage 的播放段必须由 sidecar 派生；没有 sidecar 的 clip 不能承载 Montage notify/曲线。
-    if (clip->sequence.id != montage.derivedClipId)
+    if (clip->sequence.id != firstClipId)
         throw std::invalid_argument("Animation montage '" + montage.id +
-            "' requires a sequence sidecar for clip '" + montage.derivedClipId + "'");
+            "' requires a sequence sidecar for clip '" + firstClipId + "'");
 
     // section 链在 Tick 中切换播放范围；装配期先证明每一段都落在已加载片段内，
     // 否则轨道内部会在播放中途被迫拒绝（Tick 不抛异常）。
     const bool chained = montage.sections.size() > 1 ||
-        !montage.sections.front().nextSection.empty();
+        !montage.sections.front().nextSection.empty() || segmented;
     if (chained)
     {
-        const float clipDuration = clip->runtime->duration();
-        for (const MontageSection& section : montage.sections)
+        if (!segmented)
         {
-            if (section.endTime > clipDuration + 1e-3f)
+            const float clipDuration = clip->runtime->duration();
+            for (const MontageSection& section : montage.sections)
             {
-                throw std::invalid_argument("Animation montage '" + montage.id +
-                    "' section '" + section.name + "' ends outside the loaded clip '" +
-                    montage.derivedClipId + "'");
+                if (section.endTime > clipDuration + 1e-3f)
+                {
+                    throw std::invalid_argument("Animation montage '" + montage.id +
+                        "' section '" + section.name + "' ends outside the loaded clip '" +
+                        montage.derivedClipId + "'");
+                }
             }
         }
     }
@@ -319,7 +376,8 @@ void PlayMontage(SkeletalPlayback& player, const Montage& montage,
     // 一次性播放留出至少 1 ms，否则装配出的范围会立刻完成。
     const MontageSection& firstSection = montage.sections.front();
     constexpr float MinEntryPlayback = 1e-3f;
-    const float entryEnd = std::min(firstSection.endTime, clip->runtime->duration());
+    const float entryEnd = segmented ? firstSection.endTime :
+        std::min(firstSection.endTime, clip->runtime->duration());
     float entryTime = firstSection.startTime;
     if (startTime > 0)
     {
@@ -344,7 +402,10 @@ void PlayMontage(SkeletalPlayback& player, const Montage& montage,
 
     SkeletalPlayback candidate(player);
     // Play→Select 会清理旧播放范围与旧 Montage 覆盖层；监听源必须在 Play 之后重新设置。
-    candidate.Play(montage.derivedClipId, false, rate, inPlace);
+    candidate.Play(firstClipId, false, effectiveRate, inPlace);
+    // 段映射必须在 section range 之前安装：range 上界随后使用 Montage 时间轴，
+    // 而不是第一个 segment 的 clip 时长。
+    if (segmented) candidate.SetMontageSegments(montage.segments, montage.length);
     // 入口时间只截短第一段的播放范围（取 max 兼容 section 0 不从 0 开始的老资产）；
     // 之后仍由 section 链推进。单段无链接保持原来的单段路径。
     if (chained) candidate.SetMontageSections(montage.sections, entryTime);
