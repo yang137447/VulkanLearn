@@ -6,7 +6,7 @@
 // （pass/terrainFeedback.frag）必须用同一份实现，否则 feedback 报告的
 // 页/mip 会和真正采样的页错位。CPU 参考实现是 terrain/terrainLayerVT.h。
 const int TERRAIN_VT_MAX_LAYERS = 256;
-const int TERRAIN_VT_MAX_MIP = 4;
+const int TERRAIN_VT_MAX_MIP = 6;
 
 struct TerrainLayerVTAddress
 {
@@ -72,7 +72,30 @@ int TerrainLayerMipForUv(
     return clamp(int(floor(lod + 0.5)), 0, maxMip);
 }
 
-// L4e：调试用强制目标 mip。forceMip < 0 表示按导数自动选择；0..4 直接
+// 按全局 page UV（texCoord1）选 mip：一个像素覆盖多少个 mip0 页 texel。
+// 与层的 uvScale、源图分辨率无关，feedback（128x128，乘 screen/128）和
+// M_terrain（全分辨率）用同一套公式，驻留与实际采样因此严格一致。
+int TerrainLayerMipForPageUv(
+    vec2 pageUv,
+    int pagesPerSide,
+    int maxMip,
+    float pageTableSize,
+    float pageResolution,
+    vec2 derivativeScale)
+{
+    const vec2 pageDdx = dFdx(pageUv) / max(derivativeScale.x, 1.0e-6);
+    const vec2 pageDdy = dFdy(pageUv) / max(derivativeScale.y, 1.0e-6);
+    // 一个 mip0 覆盖页 = 1/pageTableSize 的 page UV。
+    const float coverTexelsPerPixel =
+        max(length(pageDdx), length(pageDdy)) * pageTableSize * pageResolution;
+    const float coverLod = log2(max(coverTexelsPerPixel, 1.0e-8));
+    // 层页比覆盖页大 pageTableSize/pagesPerSide 倍，mip0 texel 也大同样的倍数。
+    const float layerBias =
+        log2(max(pageTableSize, 1.0) / float(max(pagesPerSide, 1)));
+    return clamp(int(floor(coverLod - layerBias + 0.5)), 0, maxMip);
+}
+
+// L4e：调试用强制目标 mip。forceMip < 0 表示按导数自动选择；0..6 直接
 // 覆盖自动结果，再按该层实际 mip 链 clamp。M_terrain 采样与 feedback pass
 // 必须用同一份覆盖规则，否则 feedback 报告的页和真正采样的页会错位。
 int TerrainLayerTargetMip(int autoMip, float forceMip, int maxMip)

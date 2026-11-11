@@ -11,7 +11,7 @@ namespace VL
 // 与覆盖页 feedback（terrainFeedback）并排存在。编码：
 //   R = layerId（0..255）
 //   G = pageIndex（pageY * side + pageX，0..255；2K mip0 正好 256 页）
-//   B = bit0..2 mip（0..4），bit7 = valid（1 表示本帧写入）
+//   B = bit0..2 mip（0..6），bit7 = valid（1 表示本帧写入）
 //   A = frameTag（(submittedEpoch % 255) + 1；0 表示未写入/无效）
 //
 // 与覆盖页 feedback 共用 frameTag/ring/epoch 规则，但语义不同：
@@ -28,7 +28,7 @@ constexpr uint32_t TerrainLayerFeedbackImageBytes =
 constexpr uint32_t TerrainLayerFeedbackBufferBytes =
     TerrainLayerFeedbackImageBytes * TerrainLayerFeedbackSlotCount;
 constexpr uint32_t TerrainLayerFeedbackMipMask = 0x07u;
-constexpr uint32_t TerrainLayerFeedbackMaxMip = 4;
+constexpr uint32_t TerrainLayerFeedbackMaxMip = 6;
 constexpr uint32_t TerrainLayerFeedbackMaxPageIndex = 255;
 constexpr uint8_t TerrainLayerFeedbackValidBit = 0x80u;
 

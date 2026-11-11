@@ -605,15 +605,36 @@ std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path, cons
     }
     else
     {
-        stbi_uc* pixels = stbi_load(pathString.c_str(), &width, &height, &channels, desiredChannels);
-        if (!pixels) return std::nullopt;
-        image.width = static_cast<uint32_t>(width);
-        image.height = static_cast<uint32_t>(height);
-        image.rowStrideBytes = image.width * image.GetPixelSize();
-        const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
-        image.data.resize(dataSize);
-        std::memcpy(image.data.data(), pixels, dataSize);
-        stbi_image_free(pixels);
+        // 16-bit height sources must not go through stbi_load: it silently
+        // truncates to 8 bits. Only the explicit height contract opts in.
+        if (options.forceSixteenBit && stbi_is_16_bit(pathString.c_str()))
+        {
+            stbi_us* pixels = stbi_load_16(
+                pathString.c_str(), &width, &height, &channels, 1);
+            if (!pixels) return std::nullopt;
+            image.width = static_cast<uint32_t>(width);
+            image.height = static_cast<uint32_t>(height);
+            image.channels = 1;
+            image.format = HostImage::PixelFormat::R16_UNORM;
+            image.rowStrideBytes = image.width * image.GetPixelSize();
+            const size_t dataSize =
+                static_cast<size_t>(image.rowStrideBytes) * image.height;
+            image.data.resize(dataSize);
+            std::memcpy(image.data.data(), pixels, dataSize);
+            stbi_image_free(pixels);
+        }
+        else
+        {
+            stbi_uc* pixels = stbi_load(pathString.c_str(), &width, &height, &channels, desiredChannels);
+            if (!pixels) return std::nullopt;
+            image.width = static_cast<uint32_t>(width);
+            image.height = static_cast<uint32_t>(height);
+            image.rowStrideBytes = image.width * image.GetPixelSize();
+            const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
+            image.data.resize(dataSize);
+            std::memcpy(image.data.data(), pixels, dataSize);
+            stbi_image_free(pixels);
+        }
     }
 
     if (ShouldFlipY(options.flipY))
@@ -635,7 +656,10 @@ HostImage TextureIO::LoadArray(
     if (sources.empty())
         throw std::invalid_argument("Texture array requires at least one source");
     // 现有文件解码器按 RGBA 格式写行跨度；不把不匹配的通道请求带入底层拷贝。
-    if ((options.forceChannels != 0 && options.forceChannels != 4) || options.genMipmaps)
+    const bool singleChannel16 =
+        options.forceSixteenBit && options.forceChannels == 1;
+    if ((options.forceChannels != 0 && options.forceChannels != 4 &&
+         !singleChannel16) || options.genMipmaps)
         throw std::invalid_argument("Texture array preparation requires RGBA mip 0");
 
     std::vector<HostImage> layers;

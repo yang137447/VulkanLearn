@@ -125,7 +125,8 @@ TEST(TerrainLayerFeedbackEncoding, RejectsOutOfRangeFields)
         std::out_of_range);
 
     texel.pageIndex = 0;
-    texel.mip = 5;
+    // 编码上限为 mip6；mip7 越界。
+    texel.mip = 7;
     EXPECT_THROW(
         VL::EncodeTerrainLayerFeedbackTexel(texel, buffer.data()),
         std::out_of_range);

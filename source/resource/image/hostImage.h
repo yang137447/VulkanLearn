@@ -19,6 +19,9 @@ struct HostImage
         R8_SRGB,
         RG8_SRGB,
         RGBA8_SRGB,
+        // 16-bit unsigned single channel: terrain heights keep native precision
+        // instead of being truncated to 8 bits by the PNG decode path.
+        R16_UNORM,
         R16_FLOAT,
         RG16_FLOAT,
         RGBA16_FLOAT,

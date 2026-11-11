@@ -109,7 +109,7 @@ TerrainLayerFeedbackFrameSummary SummarizeTerrainLayerFeedback(
             ++summary.invalidTexelCount;
             continue;
         }
-        // 编码只有 3 bit mip，但合法范围是 0..4；越界值会让 flat 索引
+        // 编码只有 3 bit mip，但合法范围是 0..6；越界值会让 flat 索引
         // 落到相邻 layer 槽位，必须在聚合前拒绝。
         if (texel.mip > TerrainLayerFeedbackMaxMip)
         {

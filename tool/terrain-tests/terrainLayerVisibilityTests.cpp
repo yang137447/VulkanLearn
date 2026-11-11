@@ -118,9 +118,18 @@ TEST(TerrainLayerVisibility, MapsCoverPagePriorityToMipLadder)
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(64), 2u);
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(63), 3u);
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(32), 3u);
-    // 2K 层 mip4 只有 1 页/层，远景必须能请求到，不能再停在上限 3。
+    // 2K 的 mip4 与 4K/8K 的尾页（mip5/6）都必须能请求到，不能停在 mip3。
     EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(31), 4u);
-    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(0), 4u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(0), 6u);
+}
+
+// 低优先级尾段继续细分：16..31 -> mip4，8..15 -> mip5，0..7 -> mip6。
+TEST(TerrainLayerVisibility, MapsLowPriorityTailToMipFourThroughSix)
+{
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(31), 4u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(15), 5u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(8), 5u);
+    EXPECT_EQ(VL::TerrainLayerVisibilityResolver::MipForPriority(7), 6u);
 }
 
 // 一个覆盖页有 top-4 层时，每个可见层都要请求该 mip 的**全部**页；未注册

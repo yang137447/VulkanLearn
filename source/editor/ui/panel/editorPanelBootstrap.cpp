@@ -113,6 +113,7 @@ bool ValidateEditorPanelDocument(Rml::ElementDocument& candidate, std::string& e
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
         "viewport-snap-enabled", "viewport-snap-move", "viewport-snap-rotate", "viewport-snap-scale",
+        "viewport-camera-speed",
         "viewport-gizmo-overlay", "viewport-gizmo-capture",
         "viewport-brush-ring", "viewport-brush-ring-center",
         "viewport-tool-landscape", "viewport-landscape-controls",

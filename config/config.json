@@ -4,7 +4,7 @@
     1280,
     720
   ],
-  "initScene": "Generated/BlenderPegasusGN/SC_terrain_pegasus_4x4.json",
+  "initScene": "Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json",
   "msaa": 2,
   "workerThreadCount": 2,
   "ui": {

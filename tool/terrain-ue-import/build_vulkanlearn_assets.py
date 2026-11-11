@@ -108,6 +108,9 @@ class LayerInput:
     noise: float
     uv_scale: float
     uv_rotation: float
+    # 层高度（米，峰峰值）与是否真有 16-bit 高度源；置换尚未启用时只记录。
+    displacement_m: float = 0.0
+    has_height: bool = False
 
 
 @dataclass(frozen=True)
@@ -929,6 +932,12 @@ def _build_layers(
             _fail(f"layer {name} uvScale must be positive")
         uv_rotation = _require_number(
             _first(record, "uvrotation", default=0.0), f"layer {name} uvRotation")
+        displacement_m = _require_number(
+            _first(record, "displacementm", default=0.0),
+            f"layer {name} displacementM")
+        if displacement_m < 0.0:
+            _fail(f"layer {name} displacementM must be non-negative")
+        has_height = bool(_first(record, "hasheight", default=False))
 
         layers.append(LayerInput(
             name=name,
@@ -942,6 +951,8 @@ def _build_layers(
             noise=_clean_float(noise),
             uv_scale=_clean_float(uv_scale),
             uv_rotation=_clean_float(uv_rotation),
+            displacement_m=_clean_float(displacement_m),
+            has_height=has_height,
         ))
 
     if weightmaps:
@@ -1492,6 +1503,8 @@ def _convert(
             "sourceResolution": extent,
             "avgColor": avg_color,
             "sourceSet": 0,
+            "displacementM": layer.displacement_m,
+            "hasHeight": layer.has_height,
         })
 
     albedo_json_path = _guard_output(
@@ -1500,17 +1513,41 @@ def _convert(
         output_root, textures_dir / "T_terrain_kitedemo_normal_array.json")
     pbr_json_path = _guard_output(
         output_root, textures_dir / "T_terrain_kitedemo_pbr_array.json")
+    height_json_path = _guard_output(
+        output_root, textures_dir / "T_terrain_kitedemo_height_array.json")
     albedo_json = _texture_json(
         "T_terrain_kitedemo_albedo_array", albedo_sources, "srgb")
     albedo_json["displacementSources"] = displacement_sources
+    # 16-bit 高度数组：运行时按层 ID 直接采 R16_UNORM，不进 VT 页表。
+    height_json = _texture_json(
+        "T_terrain_kitedemo_height_array", displacement_sources, "linear")
+    height_json["bitDepth"] = 16
     normal_json = _texture_json(
         "T_terrain_kitedemo_normal_array", normal_sources, "linear")
     pbr_json = _texture_json(
         "T_terrain_kitedemo_pbr_array", pbr_sources, "linear")
+    # 逐层权重数组：直接用切片顺序当层号，避免 top-4 ID 图的量化/取整。
+    # clamp 边界：tile 边缘不能采样到邻居 tile 的权重。
+    weight_sources = [
+        _asset_path(resource_root, layer.weightmap) for layer in spec.layers]
+    weights_json_path = _guard_output(
+        output_root, textures_dir / "T_terrain_kitedemo_weights_array.json")
+    weights_json = {
+        "name": "T_terrain_kitedemo_weights_array",
+        "type": "textureArray",
+        "sources": weight_sources,
+        "colorSpace": "linear",
+        "mipmaps": True,
+        "filter": "linear",
+        "wrapMode": "clamp",
+        "bitDepth": 16,
+    }
     for path, value in (
             (albedo_json_path, albedo_json),
             (normal_json_path, normal_json),
-            (pbr_json_path, pbr_json)):
+            (pbr_json_path, pbr_json),
+            (height_json_path, height_json),
+            (weights_json_path, weights_json)):
         if _write_json_atomic(path, value):
             changed_files += 1
         else:
@@ -1578,6 +1615,11 @@ def _convert(
     mi_parameters = {"u_uvScale": spec.material_uv_scale}
     if spec.terrain_layer_mode is not None:
         mi_parameters["u_terrainLayerMode"] = float(spec.terrain_layer_mode)
+    # 逐层权重数组可用时优先走它（连续权重，不做 top-4 ID 量化）。
+    layers_use_weight_maps = bool(spec.layers) and all(
+        layer.weightmap is not None for layer in spec.layers)
+    if layers_use_weight_maps:
+        mi_parameters["u_terrainWeightMapMode"] = 1.0
     mi_json = {
         "name": f"MI_terrain_{spec.asset_name}",
         "type": "materialInstance",
@@ -1591,6 +1633,8 @@ def _convert(
             "layerAlbedo": _asset_path(resource_root, albedo_json_path),
             "layerNormal": _asset_path(resource_root, normal_json_path),
             "layerPbr": _asset_path(resource_root, pbr_json_path),
+            "layerHeight": _asset_path(resource_root, height_json_path),
+            "layerWeightMaps": _asset_path(resource_root, weights_json_path),
         },
     }
     if _write_json_atomic(mi_path, mi_json):

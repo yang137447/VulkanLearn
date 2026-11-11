@@ -120,6 +120,7 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     SetControlValue("viewport-snap-move", Number(sceneMoveSnap));
     SetControlValue("viewport-snap-rotate", Number(sceneRotateSnap));
     SetControlValue("viewport-snap-scale", Number(sceneScaleSnap));
+    SetControlValue("viewport-camera-speed", Number(cameraMoveSpeed));
     // 菜单只映射已有 debug view，不复制渲染状态；勾选与标题以运行时快照为准。
     const char* modes[] = {"Lit", "Base Color", "Emissive", "World Normal",
         "Roughness", "Metallic", "Ambient Occlusion", "Shadow", "Direct Lighting",

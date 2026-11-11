@@ -419,8 +419,17 @@ bool WriteWorkspaceLayout(const std::filesystem::path& path, const DockLayoutSta
             if (!stream) throw std::runtime_error("Workspace write failed.");
         }
         // Windows rename 不覆盖已有文件；保留旧文件到发布成功，失败时可以回滚。
-        std::error_code cleanupError;
-        std::filesystem::remove(backup, cleanupError);
+        // remove() 对只读文件会失败，而旧备份可能被外部工具标成只读，
+        // 因此先清掉只读位再删，否则整个保存会以“Permission denied”失败。
+        const auto removeIfPresent = [](const std::filesystem::path& target) {
+            std::error_code errorCode;
+            if (!std::filesystem::exists(target, errorCode)) return;
+            std::filesystem::permissions(
+                target, std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::add, errorCode);
+            std::filesystem::remove(target, errorCode);
+        };
+        removeIfPresent(backup);
         const bool existed = std::filesystem::exists(path);
         if (existed) std::filesystem::rename(path, backup);
         try { std::filesystem::rename(temporary, path); }
@@ -429,7 +438,7 @@ bool WriteWorkspaceLayout(const std::filesystem::path& path, const DockLayoutSta
             if (existed) std::filesystem::rename(backup, path);
             throw;
         }
-        std::filesystem::remove(backup, cleanupError);
+        removeIfPresent(backup);
         error.clear();
         return true;
     }

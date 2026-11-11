@@ -17,6 +17,32 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-scene", type=Path)
     parser.add_argument("--skip-convert", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--water-plane-mesh",
+        help="SM_*.json path (relative to the resource root) for the SeaSurface "
+        "mesh; when omitted the merged scene has no independent water plane",
+    )
+    parser.add_argument(
+        "--water-plane-height-cm",
+        type=float,
+        default=100.0,
+        help="world Y offset of the water plane in cm (default 100 = 1 m above "
+        "sea level, so it never z-fights the terrain minimum)",
+    )
+    parser.add_argument(
+        "--camera-near-clip-cm",
+        type=float,
+        default=10000.0,
+        help="camera near clip in cm for merged scenes (default 10000; the old "
+        "10 cm near plane loses depth precision at 4 km and z-fights the sea)",
+    )
+    parser.add_argument(
+        "--camera-far-clip-cm",
+        type=float,
+        default=6000000.0,
+        help="camera far clip in cm for merged scenes (default 60 km so the "
+        "100 km sea plane reaches past the top of the frame)",
+    )
     return parser.parse_args()
 
 
@@ -56,6 +82,12 @@ def _rewrite_shared_textures(
     verbose: bool,
 ) -> None:
     shared: dict[str, str] = {}
+    # 全局（非平铺）图对所有 tile 相同：宏观色 + AO/湿度。打包脚本见
+    # tool/houdini-terrain-import/bake_global_maps.py。
+    global_textures = {
+        "globalColour": "Generated/HoudiniPegasusIsland/Global/T_global_colour.json",
+        "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
+    }
     for tile_index, tile in enumerate(tile_entries):
         output_root = resource_root / tile["outputRelative"]
         mi_path = output_root / f"MI_terrain_{tile['assetName']}.json"
@@ -76,10 +108,25 @@ def _rewrite_shared_textures(
                 if textures.get(key) != value:
                     textures[key] = value
                     changed = True
+            for key, value in global_textures.items():
+                if textures.get(key) != value:
+                    textures[key] = value
+                    changed = True
             if changed:
                 _write_json(mi_path, mi)
                 if verbose:
                     print(f"shared textures -> {mi_path}")
+        if tile_index == 0:
+            # 第一个 tile 也要写 global 图（它已经有 layer 表）。
+            changed = False
+            for key, value in global_textures.items():
+                if textures.get(key) != value:
+                    textures[key] = value
+                    changed = True
+            if changed:
+                _write_json(mi_path, mi)
+                if verbose:
+                    print(f"global textures -> {mi_path}")
 
 
 def main() -> int:
@@ -156,6 +203,36 @@ def main() -> int:
         if isinstance(obj, dict) and obj.get("type") != "terrain"
     ]
     merged_objects = [entry["terrain"] for entry in scenes] + merged_objects
+    if args.water_plane_mesh:
+        # 独立水面必须排在地形之后、灯光/相机之前，便于人读场景时保持地形块连续。
+        merged_objects.insert(
+            len(scenes),
+            {
+                "name": "SeaSurface",
+                "type": "mesh",
+                "modelPath": args.water_plane_mesh,
+                "position": [0.0, args.water_plane_height_cm, 0.0],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+            },
+        )
+    span_cm = float(layout.get("tileGrid", 4)) * float(
+        layout.get("tileSizeCm", 100000.0))
+    height_scale_cm = float(tiles[0]["manifest"].get("heightScale", 0.0))
+    height_scale_m = height_scale_cm / 100.0
+    for obj in merged_objects:
+        if obj.get("type") == "camera":
+            obj["near_clip"] = args.camera_near_clip_cm
+            if height_scale_m < 250.0:
+                obj["position"] = [0.0, span_cm * 0.25, span_cm * 0.8]
+                obj["rotation"] = [-15.0, 0.0, 0.0]
+            else:
+                obj["position"] = [0.0, span_cm * 0.75, span_cm * 1.6]
+                obj["rotation"] = [-25.0, 0.0, 0.0]
+            obj["far_clip"] = max(
+                float(obj.get("far_clip", 0.0)),
+                span_cm * 3.0,
+                args.camera_far_clip_cm)
     merged = {
         "name": "SC_terrain_pegasus_4x4",
         "type": "scene",

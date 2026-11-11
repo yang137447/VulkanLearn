@@ -997,14 +997,14 @@ void DebugConsole::ProcessCommand(const std::string& line)
             }
             else if (action == "forcemip")
             {
-                // L4e：调试用目标 mip 覆盖。-1 恢复自动；0..4 强制，用于在
+                // L4e：调试用目标 mip 覆盖。-1 恢复自动；0..6 强制，用于在
                 // 页尚未驻留时复现粗 mip 回退与 avgColor 渐变。
                 int forceMip = 0;
                 if (!(commandStream >> forceMip) ||
-                    forceMip < -1 || forceMip > 4)
+                    forceMip < -1 || forceMip > 6)
                 {
                     std::cout
-                        << "Usage: terrainlayer forcemip <-1|0..4>"
+                        << "Usage: terrainlayer forcemip <-1|0..6>"
                         << std::endl;
                     return;
                 }
@@ -1172,7 +1172,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
     std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
     std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
-    std::cout << "  terrainlayer forcemip N - force target layer mip (-1 auto, 0..4)\n";
+    std::cout << "  terrainlayer forcemip N - force target layer mip (-1 auto, 0..6)\n";
     std::cout << "  terraincollision stats - report play-mode terrain collision bodies\n";
     std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
     std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";

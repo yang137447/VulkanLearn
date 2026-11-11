@@ -160,6 +160,10 @@
                             <input id="viewport-snap-rotate" type="text" data-action="viewport-snap-rotate" value="5" size="4" style="width: 44px;" title="Rotate snap in degrees"/>
                             <input id="viewport-snap-scale" type="text" data-action="viewport-snap-scale" value="0.1" size="4" style="width: 44px;" title="Scale snap ratio"/>
                         </div>
+                        <div class="viewport-tool-group" id="viewport-camera-settings">
+                            <label for="viewport-camera-speed" title="Fly camera speed">Cam</label>
+                            <input id="viewport-camera-speed" type="text" data-action="camera-speed" value="1000" size="6" style="width: 64px;" title="Camera move speed in cm/s (1000 = 10 m/s)"/>
+                        </div>
                         <div class="viewport-tool-group" id="viewport-transform-space">
                             <button class="viewport-tool" id="viewport-space-world" data-action="viewport-space" data-space="world" title="World space - presentation only, the renderer does not read it">World</button>
                             <button class="viewport-tool" id="viewport-space-local" data-action="viewport-space" data-space="local" title="Local space - presentation only, the renderer does not read it">Local</button>

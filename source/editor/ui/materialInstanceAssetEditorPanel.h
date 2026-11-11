@@ -337,6 +337,9 @@ private:
     float sceneMoveSnap = 10.0f;
     float sceneRotateSnap = 5.0f;
     float sceneScaleSnap = 0.1f;
+    // Fly-camera speed in cm/s. The value lives here so the toolbar field can
+    // show it immediately; the engine owns the authoritative controller state.
+    float cameraMoveSpeed = 1000.0f;
     // Landscape Sculpt 是纯 UI 本地状态；每个动作仍携带世界代数与 placementId，
     // 由 EngineLoop 校验后转成 CPU session 操作。
     bool landscapeToolActive = false;

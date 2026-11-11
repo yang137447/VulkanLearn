@@ -332,7 +332,7 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
             material,
             "shader/glsl/M_terrain.json");
 
-    ASSERT_EQ(schema.GetTextures().size(), 15u);
+    ASSERT_EQ(schema.GetTextures().size(), 17u);
     bool sawLayerTable = false;
     bool sawPageTable = false;
     bool sawLayerIds = false;
@@ -426,11 +426,11 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
             EXPECT_EQ(
                 material["parameters"]["u_layerMaxMip"]["default"]
                     .get<float>(),
-                4.0f);
+                6.0f);
         }
         if (parameter.name == "u_layerForceMip")
         {
-            // L4e：默认必须是自动 mip；console 覆盖范围 -1..4。
+            // L4e：默认必须是自动 mip；console 覆盖范围 -1..6。
             sawLayerForceMip = true;
             EXPECT_EQ(
                 material["parameters"]["u_layerForceMip"]["default"]
@@ -443,7 +443,7 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
             EXPECT_EQ(
                 material["parameters"]["u_layerForceMip"]["range"]["max"]
                     .get<float>(),
-                4.0f);
+                6.0f);
         }
     }
     EXPECT_TRUE(sawTerrainLayerMode);

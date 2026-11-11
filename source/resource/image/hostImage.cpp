@@ -35,6 +35,7 @@ namespace
         case HostImage::PixelFormat::RGBA8_SRGB:
             return 4;
         case HostImage::PixelFormat::R16_FLOAT:
+        case HostImage::PixelFormat::R16_UNORM:
             return 2;
         case HostImage::PixelFormat::RG16_FLOAT:
             return 4;

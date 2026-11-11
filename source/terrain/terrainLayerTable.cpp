@@ -46,7 +46,7 @@ std::vector<TerrainLayerCatalogEntry> TerrainLayerTable::BuildEntries(
         entry.sourceSet = source.sourceSet;
         entry.flags = source.flags;
         entry.avgColor = source.avgColor;
-        entry.reserved = 0;
+        entry.displacementM = source.displacementM;
         entry.sourceResolution = source.sourceResolution;
         pageTableBase += TerrainLayerTotalPages(source.sourceResolution);
     }
@@ -93,7 +93,7 @@ HostImage TerrainLayerTable::BuildImage(const std::vector<TerrainLayerDesc>& lay
         pixels[row3 + 0] = entry.avgColor.x();
         pixels[row3 + 1] = entry.avgColor.y();
         pixels[row3 + 2] = entry.avgColor.z();
-        pixels[row3 + 3] = static_cast<float>(entry.reserved);
+        pixels[row3 + 3] = entry.displacementM;
     }
     return image;
 }
@@ -133,7 +133,7 @@ TerrainLayerCatalogEntry TerrainLayerTable::ReadLayer(
     entry.flags = static_cast<uint32_t>(std::lround(pixels[row2 + 3]));
     entry.avgColor = Eigen::Vector3f(
         pixels[row3 + 0], pixels[row3 + 1], pixels[row3 + 2]);
-    entry.reserved = static_cast<uint32_t>(std::lround(pixels[row3 + 3]));
+    entry.displacementM = pixels[row3 + 3];
     // pagesPerSide 是唯一能区分“已使用层”的字段（合法值 4/8/16）。
     entry.sourceResolution = entry.pagesPerSide * TerrainPageResolution;
     return entry;
@@ -159,6 +159,8 @@ bool TerrainLayerTable::AreLayersIdentical(
             a.sourceResolution != b.sourceResolution ||
             a.sourceSet != b.sourceSet ||
             a.flags != b.flags ||
+            a.hasHeight != b.hasHeight ||
+            std::abs(a.displacementM - b.displacementM) > 1.0e-6f ||
             (a.avgColor - b.avgColor).cwiseAbs().maxCoeff() > 1.0e-6f)
             return false;
     }

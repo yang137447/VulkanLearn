@@ -31,7 +31,9 @@ struct TerrainLayerCatalogEntry
     uint32_t flags = 0;
     // row3
     Eigen::Vector3f avgColor = Eigen::Vector3f::Zero();
-    uint32_t reserved = 0;
+    // row3.w：位移峰峰值（米）。height blend 用它把每层高度换算到米，
+    // 否则把每层归一化到 0..1 会让几乎平整的沙层和岩石同样起伏。
+    float displacementM = 0.0f;
     // CPU 侧推导值，不占用 catalog 通道。
     uint32_t sourceResolution = 0;
 };
@@ -40,7 +42,7 @@ struct TerrainLayerCatalogEntry
 // row0 = (heightMin, heightMax, slopeMin, slopeMax)
 // row1 = (noise, blendEdge, uvScale, uvRotationRadians)
 // row2 = (pagesPerSide(mip0), pageTableBase, sourceSet, flags)
-// row3 = (avgColor.r, avgColor.g, avgColor.b, reserved)
+// row3 = (avgColor.r, avgColor.g, avgColor.b, displacementM)
 // pageTableBase 按层顺序累加每层的总页数（512=21、1K=85、2K=341），
 // 是“每层一张扁平表”变体的基址；当前 shader 只读 row1，L2 才消费 row2/row3。
 class TerrainLayerTable

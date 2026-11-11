@@ -122,6 +122,9 @@ TextureBindingLoadDesc LoadTextureAssetDesc(std::string_view textureAssetPath)
     }
     loadDesc.transfer = ParseTextureColorSpace(textureAssetJson["colorSpace"].get<std::string>(), textureAssetPath);
     loadDesc.generateMipmaps = textureAssetJson.value("mipmaps", true);
+    loadDesc.sixteenBitHeight =
+        textureAssetJson.value("bitDepth", 8) == 16;
+    loadDesc.flipY = textureAssetJson.value("flipY", true);
     loadDesc.filter = ParseTextureFilter(textureAssetJson.value("filter", std::string("linear")), textureAssetPath);
     loadDesc.wrapMode = ParseTextureWrapMode(textureAssetJson.value("wrapMode", std::string("repeat")), textureAssetPath);
     return loadDesc;
@@ -137,6 +140,8 @@ Texture::CreateDesc ToTextureCreateDesc(const TextureBindingLoadDesc& loadDesc)
     createDesc.filter = loadDesc.filter;
     createDesc.wrapMode = loadDesc.wrapMode;
     createDesc.textureArray = loadDesc.textureArray;
+    createDesc.sixteenBitHeight = loadDesc.sixteenBitHeight;
+    createDesc.flipY = loadDesc.flipY;
     createDesc.debugName = loadDesc.assetPath;
     return createDesc;
 }
@@ -148,6 +153,8 @@ std::string BuildTextureCacheKey(const TextureBindingLoadDesc& loadDesc)
     stream
         << loadDesc.assetPath
         << "|type=" << (loadDesc.textureArray ? "textureArray" : "texture")
+        << "|bit16=" << (loadDesc.sixteenBitHeight ? 1 : 0)
+        << "|flipY=" << (loadDesc.flipY ? 1 : 0)
         << "|sources=";
     for (size_t index = 0; index < loadDesc.sources.size(); ++index)
     {

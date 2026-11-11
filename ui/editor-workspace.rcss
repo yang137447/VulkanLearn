@@ -1386,6 +1386,11 @@ body {
     border-color: #4b4b50;
     border-radius: 3px;
 }
+#viewport-camera-settings label {
+    font-size: 11px;
+    margin-right: 4px;
+    white-space: nowrap;
+}
 .viewport-tool {
     min-width: 0;
     min-height: 0;

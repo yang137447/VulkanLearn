@@ -55,10 +55,10 @@
         },
         "u_layerMaxMip": {
             "type": "float",
-            "default": 4.0,
+            "default": 6.0,
             "range": {
                 "min": 0.0,
-                "max": 4.0
+                "max": 6.0
             },
             "description": "maximum VT layer page-table mip, same value as M_terrain"
         },
@@ -67,7 +67,7 @@
             "default": -1.0,
             "range": {
                 "min": -1.0,
-                "max": 4.0
+                "max": 6.0
             },
             "description": "same forced target mip as M_terrain; must match or feedback reports pages the material will not sample"
         },

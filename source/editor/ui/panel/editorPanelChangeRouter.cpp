@@ -373,6 +373,26 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         panel.RefreshViewportToolbar();
         return;
     }
+    if (action == "camera-speed")
+    {
+        float number = 0.0f;
+        if (!ParseNumber(value, number) || number <= 0.0f)
+        {
+            panel.localStatus = "Camera speed must be finite and greater than zero.";
+            panel.RefreshViewportToolbar();
+            return;
+        }
+        panel.cameraMoveSpeed = number;
+        if (panel.runtimeActionSink != nullptr)
+        {
+            UiAction request;
+            request.type = UiActionType::SetCameraMoveSpeed;
+            request.floatValue = number;
+            panel.runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        panel.RefreshViewportToolbar();
+        return;
+    }
     if (action == "viewport-brush-radius" || action == "viewport-brush-strength" ||
         action == "viewport-brush-falloff")
     {

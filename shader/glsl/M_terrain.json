@@ -91,10 +91,10 @@
         },
         "u_layerMaxMip": {
             "type": "float",
-            "default": 4.0,
+            "default": 6.0,
             "range": {
                 "min": 0.0,
-                "max": 4.0
+                "max": 6.0
             },
             "description": "maximum VT layer page-table mip; per-layer effective max is derived from catalog pagesPerSide"
         },
@@ -103,9 +103,170 @@
             "default": -1.0,
             "range": {
                 "min": -1.0,
-                "max": 4.0
+                "max": 6.0
             },
-            "description": "-1 = auto mip from derivatives; 0..4 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+            "description": "-1 = auto mip from derivatives; 0..6 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+        },
+        "u_detailUvScale": {
+            "type": "float",
+            "default": 6.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "near-field detail sampling multiplier relative to the base layer UV"
+        },
+        "u_detailFadeStartM": {
+            "type": "float",
+            "default": 40.0,
+            "range": {
+                "min": 0.0,
+                "max": 5000.0
+            },
+            "description": "camera distance in meters where near-field detail starts fading out"
+        },
+        "u_detailFadeEndM": {
+            "type": "float",
+            "default": 160.0,
+            "range": {
+                "min": 1.0,
+                "max": 8000.0
+            },
+            "description": "camera distance in meters where near-field detail has fully faded out"
+        },
+        "u_detailStrength": {
+            "type": "float",
+            "default": 0.35,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "near-field detail albedo and normal blend strength"
+        },
+        "u_macroUvScale": {
+            "type": "float",
+            "default": 0.15,
+            "range": {
+                "min": 0.01,
+                "max": 1.0
+            },
+            "description": "macro variation sampling multiplier relative to the base layer UV; far below 1 for large-scale breakup"
+        },
+        "u_macroStrength": {
+            "type": "float",
+            "default": 0.25,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "macro albedo luma modulation strength used to suppress distant tiling"
+        },
+        "u_globalOriginCm": {
+            "type": "vec2",
+            "default": [
+                -201600.0,
+                -201600.0
+            ],
+            "channels": {
+                "x": {
+                    "name": "originX",
+                    "description": "world X of the global map's lower-left corner in cm",
+                    "range": {
+                        "min": -10000000.0,
+                        "max": 10000000.0
+                    }
+                },
+                "y": {
+                    "name": "originZ",
+                    "description": "world Z of the global map's lower-left corner in cm",
+                    "range": {
+                        "min": -10000000.0,
+                        "max": 10000000.0
+                    }
+                }
+            },
+            "description": "world-space origin of the non-tiling global colour/mask maps"
+        },
+        "u_globalSizeCm": {
+            "type": "float",
+            "default": 403200.0,
+            "range": {
+                "min": 1.0,
+                "max": 100000000.0
+            },
+            "description": "world-space side length covered by the global maps in cm"
+        },
+        "u_globalColourWeight": {
+            "type": "float",
+            "default": 0.55,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "how strongly the macro colour map tints the tiling albedo (hue only, brightness preserved)"
+        },
+        "u_globalColourWeightNear": {
+            "type": "float",
+            "default": 0.15,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "macro colour weight close to the camera; keeps tiling detail readable"
+        },
+        "u_globalFadeStartM": {
+            "type": "float",
+            "default": 40.0,
+            "range": {
+                "min": 0.0,
+                "max": 8000.0
+            },
+            "description": "camera distance in metres where the macro colour starts fading in"
+        },
+        "u_globalFadeEndM": {
+            "type": "float",
+            "default": 400.0,
+            "range": {
+                "min": 1.0,
+                "max": 20000.0
+            },
+            "description": "camera distance in metres where the macro colour reaches its full weight"
+        },
+        "u_globalAoStrength": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "multiplier for the global AO channel"
+        },
+        "u_globalWetnessStrength": {
+            "type": "float",
+            "default": 0.6,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "wetness influence on roughness and albedo darkening"
+        },
+        "u_heightBlendStrength": {
+            "type": "float",
+            "default": 3.0,
+            "range": {
+                "min": 0.0,
+                "max": 8.0
+            },
+            "description": "top-4 height-blend sharpening; 0 reproduces pure linear weights"
+        },
+        "u_terrainWeightMapMode": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "0 = top-4 IDs from the baked ID/weight atlas; 1 = continuous per-layer weight array"
         }
     },
     "textures": {
@@ -157,6 +318,14 @@
             "type": "sampler2D",
             "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         },
+        "layerPageTable5": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerPageTable6": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
         "layerAlbedoAtlas": {
             "type": "sampler2DArray",
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
@@ -166,6 +335,22 @@
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
         },
         "layerPbrAtlas": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "layerHeight": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "globalColour": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "globalMasks": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "layerWeightMaps": {
             "type": "sampler2DArray",
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
         }

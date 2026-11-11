@@ -360,13 +360,26 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             layer, "sourceSet", "Terrain layer " + assetPath, 0u, 0u, 255u));
         static_cast<void>(OptionalBoundedInteger(
             layer, "flags", "Terrain layer " + assetPath, 0u, 0u, 65535u));
+        if (layer.contains("displacementM"))
+        {
+            const auto& value = layer.at("displacementM");
+            if (!value.is_number() || !std::isfinite(value.get<double>()) ||
+                value.get<double>() < 0.0)
+                throw std::invalid_argument(
+                    "Terrain layer displacementM must be a non-negative number: " +
+                    assetPath);
+        }
+        if (layer.contains("hasHeight") && !layer.at("hasHeight").is_boolean())
+            throw std::invalid_argument(
+                "Terrain layer hasHeight must be a boolean: " + assetPath);
         for (const auto& entry : layer.items())
             if (entry.key() != "name" && entry.key() != "key" &&
                 entry.key() != "heightRange" &&
                 entry.key() != "slopeRange" && entry.key() != "noise" &&
                 entry.key() != "uvScale" && entry.key() != "uvRotation" &&
                 entry.key() != "sourceResolution" && entry.key() != "avgColor" &&
-                entry.key() != "sourceSet" && entry.key() != "flags")
+                entry.key() != "sourceSet" && entry.key() != "flags" &&
+                entry.key() != "displacementM" && entry.key() != "hasHeight")
                 throw std::invalid_argument(
                     "Unknown terrain layer field: " + entry.key() + " in " + assetPath);
     }

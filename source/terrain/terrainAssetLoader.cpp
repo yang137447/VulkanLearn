@@ -87,6 +87,8 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
                 layer.sourceResolution = layerJson.value("sourceResolution", 1024u);
                 layer.sourceSet = layerJson.value("sourceSet", 0u);
                 layer.flags = layerJson.value("flags", 0u);
+                layer.displacementM = layerJson.value("displacementM", 0.0f);
+                layer.hasHeight = layerJson.value("hasHeight", false);
                 if (layerJson.contains("avgColor"))
                 {
                     layer.avgColor = Eigen::Vector3f(

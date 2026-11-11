@@ -67,7 +67,8 @@ void RefreshActorVisualization(const OutlinerViewContext& context)
             const auto& actor = actors[index];
             if (actor.type == EditorSceneActorType::Mesh ||
                 actor.type == EditorSceneActorType::Environment ||
-                actor.type == EditorSceneActorType::SceneWind)
+                actor.type == EditorSceneActorType::SceneWind ||
+                actor.type == EditorSceneActorType::Terrain)
                 continue;
             const bool selected = actor.identity == context.snapshot->selectedActorIdentity;
             if (selected && actor.visible)

@@ -18,6 +18,54 @@
 参数迭代约 3 s。剩余工作集中在引擎内验收（M-B/M-C）、派生掩膜（M-D）与
 内容（M-E）。
 
+2026-11-09 的高度场对标修正了这个结论的“造型已足够”部分：当前资产的
+**绝对高差只有 Houdini 参考的约 1/4，坡度 p95 只有约 1/10，曲率 p95 只有约
+1/18**。归一化后的形状统计接近会掩盖这个问题。证据、参数扫描和第一版调参
+见 [Pegasus 高度场对标记录](../../rationale/pegasus-heightfield-comparison-record.md)。
+
+> **2026-11-09 更正：** 上面的 1/4 是相对 **2 km bg43**
+> （`HoudiniPegasus`，502.5 m 高差）得出的，不是 4 km 生产基准。
+> 4 km 基准是 `D:\YYBWorkSpace\Pegasus\decoded\_ref4km`：147.7 m 高差、
+> std 26.8 m、slope p95 11.7°。老 v1 为 123.7 m / 27.1 m / 12.0°，与 4 km
+> 基准基本一致；v2 为 524.4 m / 144.1 m / 63.2°，是相对 4 km 基准的过冲。
+> 继续做 4 km 生产时应以 `_ref4km` 为准，除非明确选择 2 km bg43 观感作为
+> 另一个目标。
+
+### 0.1 路线切换（2026-11-09）：改为 Houdini 导出直连
+
+GN 复刻已经做到统计量对齐（relief −3.0%、std +2.6%、slope +7%、
+curvature −14%），但 `anisotropy` 只有 **1.03**（Houdini 1.28），说明山脊/
+谷线缺少主方向；继续逼近等于在 Blender 里重写 Houdini 的 worleyFB 骨架、
+10 轮河道路径搜索和 `masknoise`/`distort` 中段。
+
+因此 4 km 地形改为：
+
+```text
+Houdini 导出（height + water/debris/sediment）
+  -> tool/houdini-terrain-import/prepare_pegasus_4km.py
+  -> tool/houdini-terrain-import/prepare_pegasus_import.py
+  -> split_pegasus_tiles.py -> assemble_pegasus_tiles.py
+```
+
+切片/LOD/VT/场景合并全部复用原链路。决定与数据映射见
+[路线切换记录](../../rationale/pegasus-pipeline-pivot-houdini.md)。
+
+> **2026-11-10 资产替换：** 当前出货资产是
+> `Generated/HoudiniPegasusIsland/`（16 tile、6 层、4032 m 见方）。
+> 早期的 `Generated/HoudiniPegasus4km/` 来自 `_ref4km`（见下方更正），
+> 连同它的 `SC_houdini_pegasus_4km_top/ground/veryclose` 观测场景一起退役删除，
+> 不再作为正式案例。
+
+下表 S2/S3/S3b 的“完成度”从此描述的是 **GN 对照实现**；出货地形的高度直接
+来自 Houdini，不再有复刻误差。
+
+> **2026-11-10 追加更正：** 当前 `_ref4km` 并不是飞马岛，而是
+> `tool/houdini-terrain-import/export_pegasus_4km.py` 把
+> `HFErodeExamples.hip` 的 1 km 侵蚀示例放大到 4 km 的结果（无海岸线、
+> 147.7 m 低起伏）。岛的真实数据在 UE `Pegasus_Demo.uproject` 的 Landscape
+> 和 `Pegasus_Landscape_Layers.bgeo.sc`。要先从 UE/Houdini 导出一份岛的
+> height + 层，才能做海岛形态；证据见对标记录 §0.1。
+
 ## 1. 目标与边界
 
 - 目标：一张 4 km × 4 km、1024² 源高度场，切成 4×4 个 1 km tile，
@@ -31,11 +79,14 @@
 | 阶段 | 内容 | 产物 | 状态 |
 |---|---|---|---|
 | S1 参考 | 解码 Houdini HDA 参数；导出 4 km 基准（erosion before/after + 4 层） | `decoded/_ref4km/global`、参数表 | ✅ 冻结 |
-| S2 造型 | heightfield → noise×2 → distort；输出密度与工作密度分离 | `heightmap_shape.png` + `heightmap_shape.json` | ✅ |
-| S3 水文 | 填洼 → 汇流 → 隐式 stream power → 坡面松弛 | `heightmap_gn.png`、`mask_gn_flow.png` | ✅ |
-| S4 派生层 | water / debris / sediment / bedrock 掩膜 | `mask_gn_*.png` | ⚠️ 仅 flow 来自解算器 |
-| S5 打包 | 4×4 切片（1 px margin）、TR/MI/SC、层纹理数组 | 16 × `tile_XX/`、`SC_terrain_pegasus_4x4.json` | ✅ |
-| S6 引擎验收 | 加载、接缝、VT 驻留、LOD、碰撞 | 可运行场景 + 截图/统计 | ⬜ |
+| **S0 Houdini 直连** | `prepare_pegasus_4km.py` 把高度 + 层权重归一化后切片 | `Generated/HoudiniPegasusIsland/` | ✅ **当前出货路径** |
+| S0b 4 km 参考 | 早期 `_ref4km` 放大示例（非飞马岛） | ~~`Generated/HoudiniPegasus4km/`~~ | ❌ 2026-11-10 退役删除 |
+| S2 造型（备用） | heightfield → noise×2 → distort | `heightmap_shape.png` | 🅿️ GN 对照实现，停止对齐 |
+| S3 水文（备用） | 填洼 → 汇流 → 隐式 stream power → 坡面松弛 | `heightmap_gn.png` | 🅿️ GN 对照实现 |
+| S3b 河流（备用） | 投影蜿蜒河道 → 切河床 → 双层 mask | `mask_gn_river*.png` | 🅿️ 无 Houdini 数据时的 fallback |
+| S4 派生层 | water / debris / sediment / bedrock 掩膜 | `Layer_g_*.png` | ✅ Houdini 层已接入（5 层） |
+| S5 打包 | 4×4 切片（1 px margin）、TR/MI/SC、层纹理数组 | 16 × `tile_XX/`、`SC_terrain_pegasus_4x4.json` | ✅ v2 一键链已接 |
+| S6 引擎验收 | 加载、接缝、VT 驻留、LOD、碰撞 | 可运行场景 + 截图/统计 | ⚠️ 加载/VT/LOD 通过，碰撞与 1080p Release 未验 |
 | S7 散布 | 散布点 → `VEG_*.json` → 实例化 | 树/石/草 | ⬜ |
 | S8 表现 | 层混合调色、风、远景 | 最终画面 | ⬜ |
 
@@ -44,7 +95,73 @@
 - 节点组 `VL_HF_PegasusTerrain`：`Heightfield → Noise ×2 → Distort`。
 - 输出密度（`Samples`，默认 1024）与工作密度（`Work Samples`，默认 512）分离；
   噪声/扭曲在输出密度评估，侵蚀在独立网络求解后把增量加回。
-- 当前统计：std 1.01×、slope_p95 1.01×、curv 0.80×（相对 Houdini 基准）。
+- 2026-11-09 复核：相对 **4 km `_ref4km`**，老 v1 为 123.7 m / 27.1 m /
+  12.0° / 0.0180，Houdini 为 147.7 m / 26.8 m / 11.7° / 0.0169，量级基本
+  对齐；相对 **2 km bg43**，当前 v1 只有 1/4 高差、1/10 坡度，但这不应直接
+  作为 4 km 生产目标。
+- v2 的 524.4 m / 144.1 m / 63.2° 匹配 2 km bg43，相对 4 km `_ref4km`
+  高差 3.5×、坡度约 5.3×，是过冲；不能直接作为 4 km 出货资产。
+- 2026-11-09 还修了一个 seed 接线问题：`VL_HF_Noise` 的 `Seed` 没进
+  preset，两个 noise 实际是 seed=0，导致中心固定放射亮脊；现在已接
+  `Noise Seed` / `Noise Distortion`，detail 使用 `seed+37`。候选
+  `Generated/BlenderPegasusGN_v1_seed17`（seed 17、distortion 0、
+  v1 高度量级）已经没有中心固定放射特征，下一步只需要补大尺度振幅。
+- 最终 4 km 标定：`noise 450/2200 + detail 65/400`、seed 17、distortion 0、
+  无 macro island、`K=3e-6`；shape 149.1 m / 29.1 m / 12.5° / 0.0176，
+  eroded 149.1 m / 29.2 m / 12.6° / 0.0190，参考 `_ref4km` 147.7 / 26.8 /
+  11.7° / 0.0169。资产
+  `Generated/BlenderPegasusGN_v1_calibrated/`，`config.json` 已切到它。
+- 疏密节奏第一版：`VL_HF_Noise` 加 `Mask`，preset 加低频 `Rhythm` mask；
+  候选 `Generated/BlenderPegasusGN_v1_rhythm`（noise 420/2200 + detail
+  110/400 + rhythm 1.0/1200）得到 shape 144.7 / 27.5 / 12.9° / 0.0186，
+  eroded 144.7 / 27.5 / 13.0° / 0.0200。对比图
+  `artifacts/rhythm/rhythm_final_compare.png`。`config.json` 已切到它。
+  这只是低频 mask 近似；真正的 Houdini 节奏还需要多段侵蚀链路。
+- 四段侵蚀第一版：在 rhythm 形状上跑 `--chain pegasus`，`K=5e-6`；
+  候选 `Generated/BlenderPegasusGN_v1_rhythm_chain` 得到
+  144.7 / 27.5 / 13.4° / 0.0227，参考 after 147.7 / 26.9 / 11.9° /
+  0.0206。`1e-4` 条纹过强、`3e-6` 不可见，5e-6 为当前平衡点。
+  `config.json` 已切到它；下一步在侵蚀间插入 `resample + masknoise +
+  distort2/3`。
+- 分辨率链已接入：`erode1/2 @512 → erode3/4 @256 + domain warp →
+  upsample 1024`（`--chain-resample --chain-warp`）。候选
+  `Generated/BlenderPegasusGN_v1_rhythm_resampled` 得到
+  144.7 / 28.0 / 12.1° / 0.0094，参考 after 147.7 / 26.9 / 11.9° /
+  0.0206。大尺度疏密/宽谷更接近 Houdini，但 256→1024 升采样让 curvature
+  偏低；下一步补 detail restore 或 masknoise 的高频回填。
+  `config.json` 已切到它。
+- S4 派生层已按 Houdini 语义修正：`bedrock` 是侵蚀前 height 层，
+  `debris/sediment` 是绝对米制后 0..1 clamp。对比图
+  `artifacts/stage_compare/S4_blender_rhythm_resampled_masks_vs_houdini.png`。
+  下一步把这些 mask 接进材质层，并按参考调整 water/debris/sediment 阈值。
+- S4 材质层已接入：`Scree Debris` + `River Silt` 追加到 TR/MI，最终 6 层；
+  本地 Megascans 只有 UE `.uasset`，先用 KiteDemo layer_05/layer_01 占位。
+  detail restore 1.0 把 resampled 链 curvature 从 0.0094 拉到 0.0171；
+  最终 144.7 / 27.8 / 12.7° / 0.0171。`config.json` 指向
+  `Generated/BlenderPegasusGN_v1_rhythm_resampled/`。
+  下一步：从 UE 导出 Megascans 源图替换占位、接 water 材质。
+- 当前 HF producer 缺少旧 `build_pegasus_gn.py` 的 `_island_envelope` /
+  `_island_spine`；没有它们时，噪声只能生成均匀碎脊，不能生成参考里的
+  主山体和岛屿轮廓。
+
+#### 关键节点与效果
+
+| 节点 | 作用 | 主要视觉结果 |
+|---|---|---|
+| `heightfield` + `heightfield_project` + `maskbyobject` / `maskshrink` / `maskblur` | 投影道路/河流曲线并生成走廊掩膜 | 主河谷、道路和谷底走廊，后续侵蚀不会抹掉 |
+| `heightfield_noise1`（worleyFB/hmfT，amp 200 / element 900） | 大尺度山体/山脊骨架 | 主山体、宽谷和岛屿的大形 |
+| `heightfield_noise2`（sparse，amp 90 / element 280） | 中尺度细节 | 次级山脊、支脉和中等起伏 |
+| `heightfield_distort1`（curl，amp 140 / element 800） | 扭曲采样坐标 | S 形山脊/谷线，去掉噪声团块感 |
+| `heightfield_remap1/2` + `heightfield_erode1/2` | 高度重映射 + 水力侵蚀 | 主沟谷、树枝状水系、V 形谷、沉积 |
+| `heightfield_resample1` + `masknoise1` + `distort2` | 改变分辨率、掩膜扰动、二次扭曲 | 打断尺度重复，增加中小尺度细节 |
+| `heightfield_remap3` + `heightfield_erode3` | 继续侵蚀 | 细沟、支沟、冲积扇和碎屑坡 |
+| `heightfield_resample2` + `masknoise2` + `distort3` + `heightfield_erode4` | 最后一轮细节/侵蚀 | 高频冲沟和最终表面粗糙度 |
+| `remap_bedrock` / `debris` / `water` / `sediment` | 派生掩膜 | 岩石露头、碎石坡、河床、沉积色 |
+| `blast_mask` + `attrib_unreal_material` | 导出层/属性 | 进入材质混合和散布 |
+
+结论：**大山体来自 `noise1` + macro island/spine，主河谷来自
+`heightfield_project` 和多轮侵蚀，冲沟/碎石坡来自后段 erode 与派生掩膜**。
+只调噪声振幅只能让统计量接近，不能补齐这些结构。
 
 ### S3 水文
 
@@ -57,6 +174,50 @@
 
 参数是物理量：`K [1/yr]`、`dt [yr]`、`steps`、`U [mm/kyr]`。当前默认
 `K=3e-6`、`dt=1000`、`steps=12`，得到 rms 0.080 m、max 2.02 m 的高度差。
+这个量级相对 500 m 级的参考地形几乎不可见；新造型烘焙后需要重新评估侵蚀量。
+
+### S3b 河流（PE_heightfield_paths）
+
+`water` 层是水力侵蚀的水深层，**不是**飞马的 authored 河流。河流在
+`sop_PE_heightfield_paths.2.0`（Linescape）里独立生成：
+
+```text
+waypoints -> foreach × 10 (findshortestpath each-to-each)
+          -> smooth / polypath / fuse -> sweep -> heightfield_project
+          -> heightfield_blur -> remap1(河岸环) / remap2(河道核心)
+          -> heightfield_cutoutbyobject 切河床
+          -> copylayer 写回 mask / road / slope 层
+```
+
+Blender 侧实现 `tool/blender-terrain-import/river_paths.py`，位置在**侵蚀之后**
+（Houdini 的 paths HDA 消费侵蚀输出，且自身只输出 mask；在侵蚀后切河床才
+不会把河道剖面抹平）：
+
+```text
+heightmap_shape.png -> erode_pegasus_global.py -> heightmap_gn.png
+  -> 正弦蜿蜒中心线 + 法线 ±45 m 谷底投影（authored waypoints 时退回 Dijkstra）
+  -> corridor(110 m + 160 m 模糊, 归一化) / channel(60.5 m, 归一化)
+  -> bank = corridor × (1 − channel)
+  -> heightmap_river.png / mask_gn_river.png / mask_gn_river_water.png
+  -> split -> assemble
+```
+
+当前结果（`Generated/BlenderPegasusGN_v1_rhythm_river/`）：
+
+| 项 | 值 |
+| --- | --- |
+| 河网 | 主河 + 3 条支流（Houdini 是 10 轮 each-to-each，密度更高） |
+| 切深 / 河宽 / 河岸 | 6 m / 110 m（水面核心 60.5 m）/ 160 m |
+| 覆盖率 | 河道核心 3.62%，河岸环 7.71% |
+| 材质层 | `River Bank` + `River Water`，TR/MI 共 **8 层** |
+| 高度统计 | 143.2 m / 27.5 m / 12.3° / 0.0153（参考 after 147.7 / 26.9 / 11.9° / 0.0206） |
+
+验收：`globalLayers=8`、`visibleLayers=8`、`starvedFrames=0`、
+`groups=256 chunks=256`；截图 `artifacts/river_stage/river_far.png` /
+`river_close.png`；对比图 `artifacts/stage_compare/S5_*.png`。
+
+已知差距：河网密度低于参考；`River Water` 只是 Opaque 材质层，没有透明/折射/
+反射；Megascans 仍是 KiteDemo 占位；河床是解析 V 形剖面而非几何切割。
 
 ### S4 派生层
 
@@ -68,6 +229,35 @@
 - `split_pegasus_tiles.py`：4×4、每块 256 + 1 px margin，写出
   `tile_layout.json` 与每块的 `Source/heightmap_gn_tile.png` / masks。
 - 资产身份：`TR_*.json` 的 `placementId = terrain|<name>`；layer key 跨 tile 一致。
+- 2026-11-09 复核：`build_pegasus_tiled.py` 已改为
+  HF producer `--no-erosion` →（可选）`river_paths.py` →
+  `erode_pegasus_global.py` → split → assemble，一键脚本与实际出货链路一致。
+  河流阶段的开关是 `--river/--no-river`、`--river-width-m`、
+  `--river-depth-m`、`--river-bank-m`、`--river-branches`、
+  `--river-waypoints`、`--water-texture-root`。
+
+### S2/S3 第一版调参（2026-11-09）
+
+```text
+NOISE_AMPLITUDE_M   = 1050
+NOISE_ELEMENT_M     = 900
+DETAIL_AMPLITUDE_M  = 600
+DETAIL_ELEMENT_M    = 200
+```
+
+在同一 1024² 造型阶段得到：高差 524.4 m、std 79.8 m、slope p95 67.6°、
+curvature p95 0.285（参考 502.5 m / 100.5 m / 64.4° / 0.298）。
+该组参数只解决“统计量”，还需要 macro island/spine 与后续多轮侵蚀解决形态。
+**注意：这组参数对齐的是 2 km bg43，不是 4 km `_ref4km`（147.7 m /
+26.8 m / 11.7°）；4 km 生产不能直接采用。**
+
+第一版 v2 资产已经落到 `Generated/BlenderPegasusGN_v2/`，一键链为
+`build_pegasus_tiled.py` → HF producer → `erode_pegasus_global.py` →
+split → assemble。当前使用 `--erodibility 1e-4` 做视觉标定（LEM 默认
+`3e-6` 在新山体上几乎不可见）。引擎证据见
+[Pegasus 高度场对标记录](../../rationale/pegasus-heightfield-comparison-record.md) §8。
+当前仍未解决：外围 0 高度方板没有水体/海面材质、山体内部缺少主山体/主河谷
+结构、Pegasus 4×4 尚未做碰撞与 1080p Release 性能验收。
 
 ## 3. 里程碑与验收
 
@@ -119,6 +309,20 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 - 水文：高度差 rms / max / 分位分布；解算器 `_self_test`（洼地违例、热力质量）。
 - 资产：切片边界逐样本相等；`terrainlayerstats` 的 `exactPages`/`requested`/`uploads`。
 - 性能：`--perf-jsonl` 时间序列 + `gpustats`；mailbox 默认。
+- **每做一个阶段都必须交付「产出效果 vs Houdini 对应阶段」的对比图**
+  （不是节点面板 vs 产出）。2026-11-09 之后产出直接来自 Houdini，对比对象
+  变成「引擎渲染 vs Houdini 导出」。规则：
+  1. 两边用同一套 hillshade（`terrain_metrics.hillshade`）或同一套 Cycles
+     设置渲染，差异只能来自数据；
+  2. Houdini 侧必须写清用的是哪个 reference（4 km 用
+     `decoded/_ref4km/global/*`；2 km bg43 只能作观感参考）；
+  3. 每张图标注阶段名、参数和统计量（relief/std/slope p95/curvature p95）。
+  当前示例：`artifacts/stage_compare/S2_blender_rhythm_vs_houdini.png`、
+  `S3_blender_final_rhythm_vs_houdini.png`、
+  `S4_blender_rhythm_resampled_masks_vs_houdini.png`、
+  `S5_blender_river_vs_houdini.png`（以上为 GN 对照期）、
+  `artifacts/houdini_ingest/houdini_ingest_compare.png`（切换后：Houdini
+  高度 / Houdini 水系 / 引擎同一数据）。
 
 ## 6. 开放问题
 
@@ -127,3 +331,105 @@ split_pegasus_tiles.py --source-manifest <...>\blender_gn_import.json ...
 3. 16 km 规模：是 4×4 个 4 km tile（16×16 = 256 个 1 km tile），
    还是先做单一 4 km。
 4. 碰撞：沿用 Jolt heightfield 的整块地形，还是按 chunk 分块。
+
+## 7. 后续接入路线（2026-11-10）
+
+4 km 地形已经走通「Houdini 导出 → 4×4 tile → 引擎」，VT mip 也按 page UV
+分层。剩下的是内容、性能和规模，按依赖顺序分四段。
+
+### A. 资产补全
+
+| 项 | 现状 | 下一步 | 验收 |
+| --- | --- | --- | --- |
+| 材质贴图 | `Scree Debris` / `River Silt` / `River Bank` / `River Water` 仍是 KiteDemo + 占位水面 | 从 UE 导出 Megascans PNG，替换 `prepare_pegasus_4km.py` 里的 `layer_XX` / `water_*` 路径后重跑 split | MI 贴图路径指向 Megascans，`terrainlayer stats` 无变化 |
+| 源分辨率 | 已按源体积原生 2017² 导出（4032 m → **2.0 m/sample**），`--tile-resolution 512` | —（已完成 2026-11-10） | 近景网格间距 1.97 m；`totalIfAllBytes≈793 MB`，俯视 LOD2 时 45.9 MB |
+| 水面 | 已改为独立水面网格 + `singleWaterLayer` pass（见 §8）；`River Water` / `Sea` 层降级为水下底色 | 后续做深度感知的吸收/岸边透明度 | 海面有菲涅尔与天空反射，海岸线不 z-fight |
+| 河岸/基岩 | `River Bank` 用 gravel 占位 | Megascans 碎石/岩壁；`bedrock` 高度层可再导出一张露头 mask | 层过渡无接缝 |
+
+> **层语义决定（2026-11-10）：** 不接入 UE 的 `T_Terrain_IDMAP.png`。地形层
+> 继续走我们自己的 6 层栈，权重由 `prepare_pegasus_4km.py` 从 Houdini 体积
+> 派生；需要更贴最终版时改的是 **Houdini 导出**（增加 mask/volume）或该脚本，
+> 不是解 UE 的 bitpack。`T_Pegasus_Landscape_Colour/AO` 只作为对齐参考。
+>
+> 贴图通道、16-bit 高度、AO 烘焙与全局图口径见
+> [地形贴图打包规范](terrain-texture-packing.md)。
+
+### B. 散布接入（`PE_Unreal_Instances`）
+
+Houdini 的散布 HDA 输出点属性与我们的 `VEG_*.json` 是 1:1 的：
+
+| Houdini 属性 | VEG 字段 | 说明 |
+| --- | --- | --- |
+| `P` | `position` | 米 → cm |
+| `orient` | `rotation` | `[x,y,z,w]`，需归一化 |
+| `scale` / `pscale` | `scale` | 统一缩放 |
+| `unreal_instance` | `variant` | 资产路径列表的索引 |
+| `N` | — | 可用于贴地校正 |
+| `unreal_foliage_attachment_*` | — | 暂不支持，先忽略 |
+
+步骤：
+
+1. Houdini 导出 `points.json`（`P/orient/scale/unreal_instance`）；
+2. 新增 `tool/houdini-terrain-import/build_houdini_vegetation.py`，把每个
+   `unreal_instance` 映射到 `SM_*.json` → `variant`，生成 `VEG_*.json`；
+3. 场景里挂 `mesh` 对象消费 VEG（现有 `CypressGrove` 路径已验证）；
+4. 校验：实例数、`meshDraws`、树贴地/尺寸、风相位。
+
+### C. 引擎验收
+
+| 项 | 命令/证据 | 通过标准 |
+| --- | --- | --- |
+| Play 碰撞 | `terraincollision stats` | Play 后 16 个 placement 都有 body，玩家不穿地 |
+| 1080p Release 性能 | `--perf-jsonl` + `gpustats` | 1080p ≥ 60 fps，`pageBudget` 不持续超限 |
+| VT 驻留 | `terrainlayer stats` | `targetMips` 分层、`fallbackSlots=0`、无持续 `pending` |
+| 远景 | 截图 + `terrainchunk stats` | 4 km 边界外无空洞，LOD 切换无跳变 |
+
+当前 1280×720 development 实测：远景 `targetMips=3789/11082/5387/657`、
+`resident=425/512`、GPU ~0.9 ms。1080p Release 需要把页预算与上传队列一起
+复测。
+
+### D. 规模化（16 km）
+
+当前 32×32 页表正好铺满 4 km（125 m/页），16 tile 已经是这张表的上限。
+16 km 需要：
+
+1. 多 Region 各自持有页表/atlas（或把页表扩到 128×128）；
+2. tile 数 16 → 256，`pageTilesPerSide` 相应下调；
+3. LOD 距离与 chunk residency 距离按 4× 重新标定。
+
+在这之前不建议先做 16 km——会把页表和流式的问题掩盖在规模里。
+
+## 8. 独立水面（`singleWaterLayer`，2026-11-10）
+
+水面不再由地形材质层冒充。地形里的 `River Water` / `Sea` 只保留成水下底色和湿痕，
+真正的水面是一张独立的平面 mesh，由专用 pass 绘制。
+
+### 8.1 组成
+
+| 层 | 文件 | 说明 |
+| --- | --- | --- |
+| pass | `config/renderGraphConfig.json` | 实例名 `singleWaterLayer`，`type` 仍是 `forwardTransparent`：`depthTest=true` / `depthWrite=false` / `sceneColor load` 正是水面需要的合同，C++ 侧零改动 |
+| 母材质 | `shader/glsl/M_water.json` + `.vertex/.surface.glsl` | `TransparentAlphaBlend`、`DefaultLit`；菲涅尔 + IBL 天空反射 + 世界空间解析涌浪 |
+| 材质实例 | `Common/Materials/MI_water.json` | 全部走 M_ 默认值；MI 不得重复声明与默认相同的参数（引擎会报 "redundantly repeats"） |
+| 网格 | `Generated/HoudiniPegasusIsland/Water/water_plane.obj` / `SM_water_plane.json` | 100 km 见方、cm 单位、`+Y` 法线、世界 CW 绕序（loader 会再翻一次） |
+| 场景对象 | 两个岛场景的 `SeaSurface` | `y = 100 cm`，即海平面抬高 1 m，避免与地形最低点共面 |
+
+生成器：`tool/blender-terrain-import/make_water_plane.py`（改尺寸/分段后重跑即可）。
+
+### 8.2 着色要点
+
+- 基色是吸收后的深色（`u_waterDeepColor`），不做"亮蓝塑料"式的浅色插值；
+- 掠射角靠**环境 IBL 镜面**给出天空反射，`u_waterSpecular = 0.25` 对应水的
+  F0 = 0.02（IOR 1.333）；
+- 法线只有三组解析正弦波的斜率累加（长涌浪 ~300/480 m、碎浪 ~85/34 m、细波
+  ~10/4 m），按相机距离分级淡出，另加几百米尺度的斑块调制打散规则条纹；
+- 本 pass 的深度附件同时是 depthTest 输入，**不能**再采样 `sceneDepth`，所以
+  暂时没有折射/厚度吸收，`u_waterOpacity` 默认 1.0。
+
+### 8.3 验收与已知限制
+
+- 1280×720 development：俯视与贴海两个视角都可见菲涅尔渐变、天空反射和涌浪；
+- 把相机 near 从 10 cm 提到 100 m 后，4 km 处的深度精度从 ~16 m 回到 ~1 cm，
+  水面/地形不再逐像素 z-fight；
+- 海岸线仍是 3.9 m 网格间距下的锯齿（256²/1 km tile），需要等源分辨率提升；
+- 岛的方形边界与"高台"外形来自 4 km Houdini 导出本身，不是水面造成的。

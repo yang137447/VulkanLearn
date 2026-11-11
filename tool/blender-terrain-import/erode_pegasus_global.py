@@ -107,6 +107,19 @@ def _parse_args() -> argparse.Namespace:
                              "依次求解，参数见 PEGASUS_PASSES")
     parser.add_argument("--chain-k", type=float, default=1.0,
                         help="四次链的 K 总倍率（相对 --erodibility）")
+    parser.add_argument(
+        "--chain-resample", action=argparse.BooleanOptionalAction, default=False,
+        help="四次链按 Houdini 分辨率：erode1/2 512，erode3/4 256，再升回输入分辨率")
+    parser.add_argument(
+        "--chain-warp", action=argparse.BooleanOptionalAction, default=True,
+        help="在 erode2 后和 erode4 前插入 domain warp（仅 chain-resample 生效）")
+    parser.add_argument(
+        "--chain-warp-mask", type=float, default=0.75,
+        help="domain warp 的低频 mask 强度 0..1")
+    parser.add_argument(
+        "--chain-detail-restore", type=float, default=0.0,
+        help="升采样后回填 shape 高频残差的比例 0..1")
+    parser.add_argument("--warp-seed", type=int, default=17)
     parser.add_argument("--m", type=float, default=0.5,
                         help="汇水面积指数（SPL 常用 0.5）")
     parser.add_argument("--n", type=float, default=1.0)
@@ -134,6 +147,62 @@ def _network_key(image: np.ndarray, cell: float, epsilon: float,
     digest.update(f"|{cell:.6f}|{epsilon:.6g}|{method}|{int(fill_sinks)}"
                   .encode("ascii"))
     return digest.hexdigest()
+
+
+def _resize_bilinear(values: np.ndarray, target: int) -> np.ndarray:
+    source = np.asarray(values, dtype=np.float64)
+    if source.shape == (target, target):
+        return source
+    rows, columns = source.shape
+    x = np.linspace(0.0, columns - 1.0, target)
+    y = np.linspace(0.0, rows - 1.0, target)
+    x0 = np.floor(x).astype(np.int64)
+    y0 = np.floor(y).astype(np.int64)
+    x1 = np.minimum(x0 + 1, columns - 1)
+    y1 = np.minimum(y0 + 1, rows - 1)
+    fx = x - x0
+    fy = y - y0
+    top = (source[y0[:, None], x0[None, :]] * (1.0 - fx)[None, :]
+           + source[y0[:, None], x1[None, :]] * fx[None, :])
+    bottom = (source[y1[:, None], x0[None, :]] * (1.0 - fx)[None, :]
+              + source[y1[:, None], x1[None, :]] * fx[None, :])
+    return top * (1.0 - fy)[:, None] + bottom * fy[:, None]
+
+
+def _smooth_field(shape: tuple[int, int], cell: float, element: float,
+                  rng: np.random.Generator) -> np.ndarray:
+    side = shape[0]
+    coarse = int(round(max(1.0, (side - 1) * cell / max(element, cell))))
+    coarse = min(side, max(2, coarse))
+    values = rng.random((coarse, coarse))
+    field = _resize_bilinear(values, side)
+    low, high = float(field.min()), float(field.max())
+    return (field - low) / max(high - low, 1e-9)
+
+
+def _warp_surface(surface: np.ndarray, cell: float, amplitude_m: float,
+                  element_m: float, rng: np.random.Generator,
+                  mask_strength: float) -> np.ndarray:
+    """Deterministic domain warp, approximating Houdini distort2/3."""
+    side = surface.shape[0]
+    dx_field = _smooth_field(surface.shape, cell, element_m, rng) * 2.0 - 1.0
+    dy_field = _smooth_field(surface.shape, cell, element_m, rng) * 2.0 - 1.0
+    mask_field = _smooth_field(surface.shape, cell, element_m * 2.0, rng)
+    mask = 1.0 - np.clip(mask_strength, 0.0, 1.0) * (1.0 - mask_field)
+    grid_y, grid_x = np.mgrid[0:side, 0:side]
+    dx = dx_field * (amplitude_m / max(cell, 1e-9)) * mask
+    dy = dy_field * (amplitude_m / max(cell, 1e-9)) * mask
+    sample_x = np.clip(grid_x + dx, 0.0, side - 1.0)
+    sample_y = np.clip(grid_y + dy, 0.0, side - 1.0)
+    x0 = np.floor(sample_x).astype(np.int64)
+    y0 = np.floor(sample_y).astype(np.int64)
+    x1 = np.minimum(x0 + 1, side - 1)
+    y1 = np.minimum(y0 + 1, side - 1)
+    fx = sample_x - x0
+    fy = sample_y - y0
+    top = (surface[y0, x0] * (1.0 - fx) + surface[y0, x1] * fx)
+    bottom = (surface[y1, x0] * (1.0 - fx) + surface[y1, x1] * fx)
+    return top * (1.0 - fy) + bottom * fy
 
 
 def main() -> int:
@@ -186,11 +255,11 @@ def main() -> int:
           f"U={args.uplift_mm_per_kyr:g} mm/kyr "
           f"-> total uplift {args.uplift_mm_per_kyr * 1e-3 * dt_years * steps / 1000:.2f} m")
 
-    def get_network(surface: np.ndarray, method: str,
+    def get_network(surface: np.ndarray, method: str, cell_m: float,
                     fill_sinks: bool) -> erosion.FlowNetwork:
         cache_path = None
         if args.cache_dir is not None:
-            key = _network_key(surface, cell, fill_epsilon, method, fill_sinks)
+            key = _network_key(surface, cell_m, fill_epsilon, method, fill_sinks)
             cache_path = args.cache_dir / f"network_{key}.npz"
             if cache_path.exists() and not args.force_network:
                 print(f"network cache hit {cache_path.name}")
@@ -198,14 +267,14 @@ def main() -> int:
             print(f"network cache miss {cache_path.name}")
         started = time.perf_counter()
         network = erosion.build_flow_network(
-            surface, cell, fill_epsilon, method, fill_sinks
+            surface, cell_m, fill_epsilon, method, fill_sinks
         )
         print(f"network built in {time.perf_counter() - started:.2f} s")
         if cache_path is not None:
             erosion.save_flow_network(network, cache_path)
         return network
 
-    def run_pass(surface: np.ndarray, method: str, k: float, *,
+    def run_pass(surface: np.ndarray, method: str, k: float, cell_m: float, *,
                  thermal_rate: float | None = None,
                  talus: float | None = None,
                  deposition: float = 0.0,
@@ -231,9 +300,9 @@ def main() -> int:
             thermal_rate=max(effective_thermal, 1.0e-6),
             talus_deg=(args.talus if talus is None else talus),
         )
-        network = get_network(surface, method, args.fill_sinks)
+        network = get_network(surface, method, cell_m, args.fill_sinks)
         result = erosion.erode(
-            surface, cell, params, diagnostics,
+            surface, cell_m, params, diagnostics,
             network=network, compute_final_flow=False,
             layers=layers,
         )
@@ -245,26 +314,90 @@ def main() -> int:
     layers: dict[str, np.ndarray] = {}
     build_start = time.perf_counter()
     if args.chain == "pegasus":
-        eroded = height
-        flow_area = None
-        for entry in PEGASUS_PASSES:
-            eroded, flow_area, _ = run_pass(
-                eroded, entry["flow"], k * entry["k"] * args.chain_k,
-                thermal_rate=args.thermal_rate * entry["thermal"],
-                talus=entry["talus"],
-                deposition=entry["deposition"],
-                label=f"{entry['name']} ({entry['houdini']})",
-            )
-        print(f"chain: {len(PEGASUS_PASSES)} passes done")
+        if args.chain_resample:
+            original_side = height.shape[0]
+            work_side = max(2, original_side // 2)
+            work = _resize_bilinear(height, work_side)
+            work_cell = args.size_m / max(work_side - 1, 1)
+            rng = np.random.default_rng(args.warp_seed)
+            flow_area = None
+            for entry in PEGASUS_PASSES[:2]:
+                work, flow_area, _ = run_pass(
+                    work, entry["flow"], k * entry["k"] * args.chain_k,
+                    work_cell,
+                    thermal_rate=args.thermal_rate * entry["thermal"],
+                    talus=entry["talus"],
+                    deposition=entry["deposition"],
+                    label=f"{entry['name']} ({entry['houdini']}) @{work_side}",
+                )
+            work_side = max(2, work_side // 2)
+            work = _resize_bilinear(work, work_side)
+            work_cell = args.size_m / max(work_side - 1, 1)
+            for name, values in list(layers.items()):
+                if values.shape != work.shape:
+                    layers[name] = _resize_bilinear(values, work_side)
+            if args.chain_warp:
+                work = _warp_surface(
+                    work, work_cell, 60.0, 1000.0, rng,
+                    args.chain_warp_mask)
+            for entry in PEGASUS_PASSES[2:3]:
+                work, flow_area, _ = run_pass(
+                    work, entry["flow"], k * entry["k"] * args.chain_k,
+                    work_cell,
+                    thermal_rate=args.thermal_rate * entry["thermal"],
+                    talus=entry["talus"],
+                    deposition=entry["deposition"],
+                    label=f"{entry['name']} ({entry['houdini']}) @{work_side}",
+                )
+            if args.chain_warp:
+                work = _warp_surface(
+                    work, work_cell, 6.0, 80.0, rng,
+                    args.chain_warp_mask)
+            for entry in PEGASUS_PASSES[3:]:
+                work, flow_area, _ = run_pass(
+                    work, entry["flow"], k * entry["k"] * args.chain_k,
+                    work_cell,
+                    thermal_rate=args.thermal_rate * entry["thermal"],
+                    talus=entry["talus"],
+                    deposition=entry["deposition"],
+                    label=f"{entry['name']} ({entry['houdini']}) @{work_side}",
+                )
+            eroded = _resize_bilinear(work, original_side)
+            if args.chain_detail_restore > 0.0:
+                smooth_side = max(2, original_side // 4)
+                smooth = _resize_bilinear(
+                    _resize_bilinear(height, smooth_side), original_side)
+                eroded = (eroded + args.chain_detail_restore
+                          * (height - smooth))
+            for name, values in list(layers.items()):
+                if values.shape != (original_side, original_side):
+                    layers[name] = _resize_bilinear(values, original_side)
+            if (flow_area is not None
+                    and flow_area.shape != (original_side, original_side)):
+                flow_area = _resize_bilinear(flow_area, original_side)
+            print("chain: 4 passes done (512/256 resample + domain warp)")
+        else:
+            eroded = height
+            flow_area = None
+            for entry in PEGASUS_PASSES:
+                eroded, flow_area, _ = run_pass(
+                    eroded, entry["flow"], k * entry["k"] * args.chain_k,
+                    cell,
+                    thermal_rate=args.thermal_rate * entry["thermal"],
+                    talus=entry["talus"],
+                    deposition=entry["deposition"],
+                    label=f"{entry['name']} ({entry['houdini']})",
+                )
+            print(f"chain: {len(PEGASUS_PASSES)} passes done")
     elif args.passes == "two":
-        coarse, _, _ = run_pass(height, "d8", args.coarse_k,
+        coarse, _, _ = run_pass(height, "d8", args.coarse_k, cell,
                                 deposition=args.deposition)
         print(f"pass 1 (d8 k={args.coarse_k:g}) done")
-        eroded, flow_area, _ = run_pass(coarse, "mfd", args.fine_k,
+        eroded, flow_area, _ = run_pass(coarse, "mfd", args.fine_k, cell,
                                         deposition=args.deposition)
         print(f"pass 2 (mfd k={args.fine_k:g}) done")
     else:
-        eroded, flow_area, _ = run_pass(height, args.flow_method, k,
+        eroded, flow_area, _ = run_pass(height, args.flow_method, k, cell,
                                         deposition=args.deposition)
     solve_seconds = time.perf_counter() - build_start
     print(f"erode {solve_seconds:.2f} s  steps={steps} passes={args.passes}")
@@ -308,25 +441,29 @@ def main() -> int:
           f"rms={np.sqrt((water_depth ** 2).mean()):.4f} "
           f"max={water_depth.max():.2f} m)")
 
-    # bedrock：Houdini 的 remap_bedrock 输出常量 1。
+    # bedrock：4 km 参考的 height_after_bedrock 是高度层（不是常量 1），
+    # 范围接近侵蚀前 shape；按 Houdini 的 layer 语义导出归一化高度。
+    bedrock_normalized = (height - low) / max(high - low, 1e-9)
     bedrock_path = output.parent / "mask_gn_bedrock.png"
-    write_gray16(bedrock_path, np.full(area_norm.shape, 65535, dtype=np.uint16))
+    write_gray16(bedrock_path,
+                 (np.clip(bedrock_normalized, 0.0, 1.0)
+                  * 65535.0).astype(np.uint16))
+    print("wrote mask_gn_bedrock.png (height layer)")
 
     # debris / sediment：来自求解器的沉积台账（--deposition > 0 才有）。
-    # debris = 累计沉积；sediment = 累计被带走（净侵蚀 - 沉积）。两者都以
-    # 各自最大值归一化到 0..1，供材质/散布当权重用。
+    # debris = 累计沉积；sediment = 累计被带走（净侵蚀 - 沉积）。
+    # Houdini 的 remap_debris/remap_sediment 是 0..1 clamp，不做按峰值归一化；
+    # 这里保持绝对米制后再 clamp，才能和参考的 max≈1 m 对齐。
     for name in ("debris", "sediment"):
         values = layers.get(name)
         if values is None:
             values = np.zeros_like(area_norm)
-        peak = float(values.max())
-        normalized_layer = values / peak if peak > 1e-9 else values
         write_gray16(output.parent / f"mask_gn_{name}.png",
-                     (np.clip(normalized_layer, 0.0, 1.0)
+                     (np.clip(values, 0.0, 1.0)
                       * 65535.0).astype(np.uint16))
         print(f"wrote mask_gn_{name}.png "
-              f"(rms={np.sqrt((values ** 2).mean()):.4f} max={peak:.4f} m)")
-    print("wrote mask_gn_bedrock.png (=1)")
+              f"(rms={np.sqrt((values ** 2).mean()):.4f} "
+              f"max={float(values.max()):.4f} m, clamped to 1)")
 
     print(f"total {time.perf_counter() - started:.2f} s")
     return 0

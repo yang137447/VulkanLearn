@@ -46,13 +46,16 @@ void TerrainLayerVisibilityResolver::Reset()
 
 uint32_t TerrainLayerVisibilityResolver::MipForPriority(uint8_t priority)
 {
-    // 五档阶梯：2K 层的 mip4 只有 1 页，成本很低，远景必须也能请求，
-    // 否则会永久停在 avgColor。
+    // 七档阶梯：尾页（2K 的 mip4、8K 的 mip6）只有 1 页，成本很低，
+    // 远景必须也能请求，否则会永久停在 avgColor。前四档阈值保持原值，
+    // 只在低优先级区间继续细分，避免改变现有 1K/2K 资产的回退行为。
     if (priority >= 192) return 0;
     if (priority >= 128) return 1;
     if (priority >= 64) return 2;
     if (priority >= 32) return 3;
-    return 4;
+    if (priority >= 16) return 4;
+    if (priority >= 8) return 5;
+    return 6;
 }
 
 uint32_t TerrainLayerVisibilityResolver::MaxMipForLayer(
