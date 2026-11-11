@@ -3,6 +3,14 @@ cmake_minimum_required(VERSION 3.24)
 project(vulkan_learn LANGUAGES C CXX)
 
 include(CTest)
+include(cmake/VulkanLearnCompilerCache.cmake)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Keep -g paths stable across worktrees; CCACHE_BASEDIR makes them relative.
+    add_compile_options(
+        "-fdebug-prefix-map=${CMAKE_SOURCE_DIR}=."
+        "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=.")
+endif()
 
 option(VULKANLEARN_BUILD_TESTS
     "Build VulkanLearn-owned unit and integration test executables."

@@ -11,6 +11,9 @@
             "hidden": true,
             "generator": "MinGW Makefiles",
             "binaryDir": "${sourceDir}/build-vscode/${presetName}",
+            "environment": {
+                "CCACHE_BASEDIR": "${sourceDir}"
+            },
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "gcc",
                 "CMAKE_CXX_COMPILER": "g++",
@@ -43,6 +46,16 @@
                 "CMAKE_BUILD_TYPE": "Debug",
                 "VULKANLEARN_BUILD_TESTS": true,
                 "VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION": true
+            }
+        },
+        {
+            "name": "development-fast",
+            "displayName": "Development Fast",
+            "description": "Release-speed daily builds without debug symbols; use development for breakpoints.",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VULKANLEARN_BUILD_TESTS": false
             }
         },
         {
@@ -79,6 +92,12 @@
             "name": "debug",
             "configurePreset": "debug",
             "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "development-fast",
+            "configurePreset": "development-fast",
+            "targets": ["main_editor"],
             "jobs": 4
         },
         {
