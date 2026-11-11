@@ -33,6 +33,7 @@
 | --- | --- | --- |
 | 编辑器 + 游戏 | `cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_BUILD_TESTS=ON` | `cmake --build build --target main_editor main_game main -j 4`；`main.exe` 是 `main_editor.exe` 的 POST_BUILD 副本，不二次编译 |
 | game-only Release | `cmake -S . -B build-game -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DVULKANLEARN_ENABLE_EDITOR=OFF` | `cmake --build build-game --target main_game -j 4`；`build-game/compile_commands.json` 中 `source/editor/` 条目数为 0；`linkLibs.rsp` 不含 `vl_editor`、`vl_editor_asset_core` |
+| game-only Release，prebuilt 依赖 | `tool\build-deps.ps1 -Config Release`，然后 `cmake -S . -B build-prebuilt -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DVULKANLEARN_DEPS_MODE=prebuilt -DVULKANLEARN_DEPS_ROOT=D:/YYBWorkSpace/VulkanLearn-deps -DFETCHCONTENT_FULLY_DISCONNECTED=ON -DVULKANLEARN_ENABLE_EDITOR=OFF -DVULKANLEARN_BUILD_TESTS=OFF` | `build-prebuilt/_deps` 只有 `vl_ozz-build`；`extern/` 不含六个重依赖；`cmake --build build-prebuilt --target main_game -j 4` 通过，stamp gate 输出 `deps-stamp: OK` |
 | 双 flavor 关闭 | `cmake -S . -B build-none -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_EDITOR=OFF -DVULKANLEARN_BUILD_GAME=OFF` | configure 退出码非 0，输出 `VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF` |
 
 `VULKANLEARN_BUILD_LEGACY_MAIN=OFF` 关闭 `main.exe` 兼容副本。构建 flavored
@@ -52,6 +53,23 @@ py -3 tool\validate-docs.py
 与编辑器专用入口；configure 阶段读取每个运行时源并拒绝编辑器头文件；`main_game`
 只链接 `vl_runtime`；运行时 UI 头不得包含编辑器实现；游戏包 UI manifest、
 shader cache 闭包与 debug SPV 保留。
+
+### 本机依赖前缀（prebuilt）
+
+六个重依赖（SDL3、Assimp、OpenEXR+Imath+OpenJPH、RmlUi、FreeType、Jolt）
+由 `ThirdParty/CMakeLists.txt` 一次性安装到
+`<VULKANLEARN_DEPS_ROOT>/<toolchain-id>/<config>`。`VULKANLEARN_DEPS_MODE=prebuilt`
+时根工程只 `find_package(vl_deps CONFIG)`，`extern/CMakeLists.txt` 跳过这六项；
+其余轻依赖仍按源码构建。前缀的 `bin/*.dll` 与 MinGW 运行时三件套在构建期复制到
+`bin/`，因此 smoke 不依赖 `PATH` 中的 MinGW。
+
+```powershell
+tool\build-deps.ps1 -Config Release -Jobs 4
+```
+
+前缀由 `<prefix>/deps-stamp.json` 标识；`vl_deps_stamp_check` 在每次构建
+`vl_runtime` 前用 `tool/deps-stamp.ps1 -Check` 复核 flags、feature options 与
+lock 哈希，不匹配时构建失败而不是静默使用旧库。
 
 ### 运行时烟测
 

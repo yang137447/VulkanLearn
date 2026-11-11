@@ -4,6 +4,7 @@ project(vulkan_learn LANGUAGES C CXX)
 
 include(CTest)
 include(cmake/VulkanLearnCompilerCache.cmake)
+include(cmake/VulkanLearnDepsCache.cmake)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     # Keep -g paths stable across worktrees; CCACHE_BASEDIR makes them relative.
@@ -38,6 +39,27 @@ option(VULKANLEARN_BUILD_LEGACY_MAIN
     "Copy main_editor.exe to main.exe for existing scripts."
     ON)
 
+set(VULKANLEARN_DEPS_MODE "source" CACHE STRING
+    "Third-party dependencies: 'source' builds extern/ in-tree, 'prebuilt' consumes the machine-wide prefix.")
+set_property(CACHE VULKANLEARN_DEPS_MODE PROPERTY STRINGS source prebuilt)
+set(VULKANLEARN_DEPS_ROOT "" CACHE PATH
+    "Machine-wide dependency root used by VULKANLEARN_DEPS_MODE=prebuilt.")
+set(VULKANLEARN_DEPS_PREBUILT "SDL3;Assimp;OpenEXR;RmlUi;FreeType;Jolt" CACHE STRING
+    "Heavy dependencies taken from the prebuilt prefix; the rest stay in-tree.")
+set(VULKANLEARN_DEPS_PREFIX "" CACHE PATH
+    "Resolved dependency prefix; normally computed from VULKANLEARN_DEPS_ROOT.")
+
+if(NOT VULKANLEARN_DEPS_MODE MATCHES "^(source|prebuilt)$")
+    message(FATAL_ERROR
+        "VULKANLEARN_DEPS_MODE must be 'source' or 'prebuilt'; got '${VULKANLEARN_DEPS_MODE}'.")
+endif()
+
+if(VULKANLEARN_DEPS_MODE STREQUAL "prebuilt")
+    set(VULKANLEARN_DEPS_SKIP "${VULKANLEARN_DEPS_PREBUILT}")
+else()
+    set(VULKANLEARN_DEPS_SKIP "")
+endif()
+
 if(NOT VULKANLEARN_ENABLE_EDITOR AND NOT VULKANLEARN_BUILD_GAME)
     message(FATAL_ERROR
         "VULKANLEARN_ENABLE_EDITOR and VULKANLEARN_BUILD_GAME cannot both be OFF; "
@@ -54,8 +76,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(Threads REQUIRED)
 
-include(cmake/VulkanLearnJolt.cmake)
-vl_add_jolt_cpu()
+if(VULKANLEARN_DEPS_MODE STREQUAL "prebuilt")
+    include(cmake/VulkanLearnDeps.cmake)
+    vl_deps_configure_prebuilt()
+endif()
+
+if(NOT "Jolt" IN_LIST VULKANLEARN_DEPS_SKIP)
+    include(cmake/VulkanLearnJolt.cmake)
+    vl_add_jolt_cpu()
+endif()
 
 add_subdirectory(extern)
 add_subdirectory(source/physics)
@@ -65,6 +94,9 @@ add_subdirectory(source/animation)
 add_subdirectory(source/debug)
 add_subdirectory(source/hair)
 add_subdirectory(source)
+if(TARGET vl_deps_stamp_check AND TARGET vl_runtime)
+    add_dependencies(vl_runtime vl_deps_stamp_check)
+endif()
 if(VULKANLEARN_ENABLE_EDITOR)
     add_subdirectory(tool/asset-edit)
 endif()

@@ -79,6 +79,21 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false
             }
+        },
+        {
+            "name": "prebuilt-game",
+            "displayName": "Prebuilt Dependencies (game)",
+            "description": "Game-only Release build consuming the machine-wide dependency prefix. Set VULKANLEARN_DEPS_ROOT first.",
+            "inherits": "mingw-base",
+            "binaryDir": "${sourceDir}/build-prebuilt",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VULKANLEARN_ENABLE_EDITOR": false,
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false,
+                "VULKANLEARN_DEPS_MODE": "prebuilt",
+                "VULKANLEARN_DEPS_ROOT": "$env{VULKANLEARN_DEPS_ROOT}",
+                "FETCHCONTENT_FULLY_DISCONNECTED": true
+            }
         }
     ],
     "buildPresets": [
@@ -110,6 +125,12 @@
             "name": "release",
             "configurePreset": "release",
             "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "prebuilt-game",
+            "configurePreset": "prebuilt-game",
+            "targets": ["main_game"],
             "jobs": 4
         }
     ]

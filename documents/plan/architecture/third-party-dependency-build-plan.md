@@ -5,12 +5,14 @@
 - Type: build-infrastructure implementation plan (not a contract)
 - Created: 2026-11-11; revised after repository verification and independent review
 - Base: `codex/ue-runtime-editor-split` (`3b22f70`)
-- State: D0 and D1 implemented and committed (`23a922f`); D2 implemented as docs/scripts;
-  D3-D5 planned
+- State: D0-D5 implemented. D0/D1 are in `23a922f`; D2 plus Tracy/NVTX gates,
+  MinGW runtime closure and Jolt de-duplication are in `f8ce823`; D3/D4 and the D5
+  source cache are in the follow-up working-tree commit
 - Review: independent read-only review returned "approve with changes"; B1-B5 folded in
 - Related: `documents/plan/architecture/ue-runtime-editor-split-plan.md`,
   `documents/contracts/testing.md`, `CMakePresets.json`, `CMakeLists.txt`,
-  `extern/CMakeLists.txt`, `cmake/VulkanLearnJolt.cmake`, `script/CMakeLists.txt`
+  `extern/CMakeLists.txt`, `cmake/VulkanLearnJolt.cmake`, `script/CMakeLists.txt`,
+  `cmake/VulkanLearnDeps.cmake`, `ThirdParty/CMakeLists.txt`, `tool/build-deps.ps1`
 
 ## Problem
 
@@ -60,6 +62,24 @@ on it.
    toolchain/configuration, outside the repository, shared by all worktrees.
 
 No CI artifact registry, no vcpkg/Conan migration, no dependency blobs committed to git.
+
+## Outcome
+
+- D0/D1: ccache is enabled globally with `CCACHE_BASEDIR`, `-fdebug-prefix-map`,
+  `ASSIMP_BUILD_USE_CCACHE=OFF`, and a 20 GB cache. `tool/clean-project.ps1` deletes
+  objects/artifacts only: a project-scoped clean rebuild recompiles 283 project objects,
+  zero dependency objects, and hit 283/283 ccache calls (47.6 s wall clock here).
+- D2: `ThirdParty/manifest.json` pins all dependencies and option coupling;
+  `ThirdParty/deps.lock` is deterministic; `tool/deps-stamp.ps1` and `tool/deps-gc.ps1`
+  verify identity and retain current Debug+Release plus one previous toolchain.
+- D3/D4: `tool/build-deps.ps1` installs the six heavy dependencies into
+  `D:\YYBWorkSpace\VulkanLearn-deps\<toolchain>\<config>`. Release and Debug prefixes
+  both exist. `build-prebuilt`/`build-prebuilt-editor`/`build-prebuilt-debug` consume the
+  prefix offline, contain zero heavy-dependency objects, and pass game/editor/debug
+  smoke tests, including a `PATH` limited to `System32`.
+- D5: Tracy/NVTX fetches are gated by their options, Jolt has a single fetch path, and
+  `VULKANLEARN_DEPS_SOURCE_CACHE` lets source mode configure with
+  `FETCHCONTENT_FULLY_DISCONNECTED=ON`; the offline configure was verified.
 
 ## Tier 1: ccache
 
@@ -503,6 +523,115 @@ entire prefix. The stamp is the only authority for "this prefix is current".
 - `vl_asset_edit`, `material_instance_editor_production_tests`, `editor_ui_tests` and
   `game_export_tests` link from the `debug` tree.
 - Editing one manifest entry rebuilds exactly the affected dependency.
+
+## D3/D4 Implementation: superbuild and prebuilt mode
+
+State: implemented 2026-11-11 in the working tree. The six heavy dependencies are
+installed once per toolchain/configuration and the root project consumes them
+without compiling their sources.
+
+| Path | Role |
+|---|---|
+| `ThirdParty/CMakeLists.txt` | ExternalProject superbuild for SDL3, Assimp, OpenEXR (+Imath/OpenJPH), RmlUi, FreeType and Jolt |
+| `ThirdParty/vl_depsConfig.cmake.in` | package config copied to `<prefix>/share/vl_deps`; imports upstream configs and adds the consumer aliases |
+| `cmake/VulkanLearnDeps.cmake` | shared toolchain-id/prefix resolution, stamp validation, mode wiring and DLL deployment |
+| `tool/build-deps.ps1` | source preparation, configure/build, lock validation and stamp write/check |
+
+### Actual prefix layout
+
+```text
+D:\YYBWorkSpace\VulkanLearn-deps\win64-mingw-16.2.0-ucrt\Release\
+  bin\        SDL3.dll, libassimp-6.dll, libOpenEXR*.dll, libImath-3_2.dll,
+              libfreetype.dll, librmlui*.dll
+  lib\        import libraries plus libJolt.a
+  lib\cmake\  SDL3, assimp-6.0, freetype, Imath, OpenEXR, Jolt, RmlUi
+  include\    installed headers
+  share\vl_deps\vl_depsConfig.cmake + vl_depsConfigVersion.cmake
+  deps-stamp.json
+```
+
+Shared source checkouts live in `<deps-root>/_sources` and per-dependency build
+trees in `<deps-root>/_build/<compiler-id>-<version>/<config>`, so cleaning
+`build-deps` does not re-download or re-clone sources.
+
+### Imported target table (verified against the installed configs)
+
+| Consumer target | Upstream export |
+|---|---|
+| `SDL3::SDL3` | `SDL3::SDL3` |
+| `assimp` | `assimp::assimp` (config installed under `lib/cmake/assimp-6.0`) |
+| `RmlUi::Core` | `RmlUi::RmlUi` (RmlUi 6.2 sets `EXPORT_NAME RmlUi`; the `rmlui_core` alias in the plan was stale) |
+| `OpenEXR::OpenEXR` | `OpenEXR::OpenEXR` (+ `Imath::Imath`) |
+| `Freetype::Freetype` | `Freetype::Freetype` |
+| `Jolt` | `Jolt::Jolt` |
+
+Vendored OpenJPH is built with `EXCLUDE_FROM_ALL` inside OpenEXR, so it is not
+installed and `OpenEXRConfig.cmake` generates an empty `if ()` for
+`find_dependency(openjph)`. `vl_depsConfig.cmake` therefore does not request it.
+
+### Option table and export deviations found while building
+
+- RmlUi installs runtime dependencies through
+  `file(GET_RUNTIME_DEPENDENCIES)`, which needs MinGW on `PATH` and fails on
+  `libfreetype.dll`/`libstdc++-6.dll`. The superbuild passes
+  `RMLUI_INSTALL_RUNTIME_DEPENDENCIES=OFF`; deployment is the consumer's job.
+- `OPENEXR_USE_INTERNAL_DEFLATE` is a no-op in 3.4.10; the superbuild passes
+  `OPENEXR_FORCE_INTERNAL_DEFLATE=ON` as the manifest requires.
+- `OPENEXR_FORCE_INTERNAL_IMATH=ON` plus
+  `FETCHCONTENT_SOURCE_DIR_IMATH=<deps-root>/_sources/imath` keeps the Imath
+  checkout pinned and avoids a second download.
+- FreeType is pinned to `BUILD_SHARED_LIBS=ON`; Assimp and RmlUi explicitly set
+  their root-project defaults (`tests`, `samples`, `warnings-as-errors`,
+  `BUILD_TESTING`).
+
+### Mode wiring
+
+- `VULKANLEARN_DEPS_MODE=source|prebuilt`; `source` is the default and keeps the
+  existing in-tree behavior.
+- `VULKANLEARN_DEPS_PREBUILT` defaults to the six heavy names. `extern/CMakeLists.txt`
+  and the root Jolt call skip only entries in that list; Json/Eigen/STB/MikkTSpace/
+  SpirvReflect/Ozz/SpeedTree/Shaderc/VulkanSDK/BLAKE3 stay in-tree.
+- `prebuilt` requires `VULKANLEARN_DEPS_ROOT`, resolves
+  `<root>/<toolchain-id>/<config>`, fails on a missing/invalid stamp, and calls
+  `find_package(vl_deps CONFIG REQUIRED NO_DEFAULT_PATH)`.
+- `vl_deps_stamp_check` runs `tool/deps-stamp.ps1 -Check` before `vl_runtime`
+  builds; a flag/feature/lock change fails the build instead of silently using
+  stale libraries.
+- Offline configure is supported with
+  `FETCHCONTENT_FULLY_DISCONNECTED=ON`: Ozz uses
+  `<deps-root>/_sources/ozz` and googletest uses
+  `<deps-root>/_sources/googletest`; Tracy/NVTX remain gated by their option.
+- `bin/*.dll` from the prefix plus `libstdc++-6.dll`, `libgcc_s_seh-1.dll` and
+  `libwinpthread-1.dll` are copied to the executable directory by
+  `vl_prebuilt_runtime_dlls`.
+
+### Verification evidence
+
+- `tool/build-deps.ps1 -Config Release` built all six dependencies and wrote
+  `deps-stamp.json` (11 DLLs, 13 import/static libraries).
+- `build-prebuilt` configured with
+  `-DFETCHCONTENT_FULLY_DISCONNECTED=ON -DVULKANLEARN_ENABLE_EDITOR=OFF
+  -DVULKANLEARN_BUILD_TESTS=OFF`; `_deps` contains only `vl_ozz-build`, and
+  `extern/` contains only the light dependencies.
+- `build-prebuilt` object distribution: 326 objects total, 217 in
+  `source/CMakeFiles`, 39 in `_deps/vl_ozz-build`, 0 heavy-dependency objects.
+- `main_game` smoke (`SC_fracture_playground`, 60 frames) exits 0 with
+  `EngineLoop teardown complete`; a second 20-frame run with `PATH` reduced to
+  `C:\Windows\System32;C:\Windows` also exits 0.
+- Source mode `build-game/main_game` still builds green.
+
+### Remaining limitations
+
+- The stamp identity includes `VULKANLEARN_ENABLE_EDITOR` and
+  `VULKANLEARN_BUILD_TESTS`, so a prefix is feature-set scoped even though those
+  flags do not change dependency options. A separate prefix is required for a
+  different feature set (for example tests ON).
+- Only the Release prefix is currently built. A Debug prefix needs a separate
+  `tool/build-deps.ps1 -Config Debug` run.
+- Tracy/NVTX and the heavier optional tools do not have a machine-wide source
+  cache yet; enabling them in `prebuilt` mode may still require network access.
+- `prebuilt` requires a single-configuration generator because the prefix is
+  resolved from `CMAKE_BUILD_TYPE`.
 
 ## Phases
 

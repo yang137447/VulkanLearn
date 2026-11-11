@@ -43,41 +43,6 @@
           }
         }
       ]
-    },
-    {
-      "name": "VULKANLEARN_BUILD_TESTS",
-      "default": "ON",
-      "affects": [
-        {
-          "dependency": "googletest",
-          "options": {
-            "INSTALL_GTEST": "OFF",
-            "BUILD_GMOCK": "OFF"
-          }
-        }
-      ]
-    },
-    {
-      "name": "VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS",
-      "default": "OFF",
-      "affects": [
-        {
-          "dependency": "Jolt",
-          "options": {},
-          "note": "No dependency option changes; vl_script_host additionally links Jolt. Requires a .NET 8 SDK, which is not part of the dependency prefix."
-        }
-      ]
-    },
-    {
-      "name": "VULKANLEARN_ENABLE_EDITOR",
-      "default": "ON",
-      "affects": [
-        {
-          "dependency": "SDL3",
-          "options": {},
-          "note": "No dependency option changes; selects the editor executable and editor libraries."
-        }
-      ]
     }
   ],
   "dependencies": [

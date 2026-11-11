@@ -25,6 +25,7 @@
 | `source/editor/service/**`、`source/editor/command/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
 | `tool/asset-edit/**` | `contracts/asset-modify-api.md`、`contracts/testing.md` | — |
 | `tool/game-export/**`、`tool/game-export-tests/**` | `contracts/csharp-blueprint-runtime.md`、`contracts/asset-organization.md`、`contracts/testing.md` | Game packaging manifest closure、Game shader cache closure |
+| `cmake/VulkanLearnDeps.cmake`、`ThirdParty/**`、`extern/CMakeLists.txt`、`tool/build-deps.ps1`、`tool/deps-stamp.ps1`、`tool/deps-gc.ps1`、`tool/clean-project.ps1` | `contracts/testing.md` | — |
 | `tool/validate-game-package.ps1`、`ui/runtime-ui.manifest.json` | `contracts/game-ui-stack.md`、`contracts/testing.md` | Game packaging manifest closure、Game shader cache closure |
 | `tool/animation/**`、`tool/animation-tests/**` | `contracts/animation-preflight-tools.md`、`contracts/testing.md` | — |
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |

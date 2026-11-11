@@ -75,6 +75,9 @@ function(vl_apply_executable_dependencies target)
     if(TARGET vl_gameplay)
         add_dependencies(${target} vl_gameplay)
     endif()
+    if(TARGET vl_prebuilt_runtime_dlls)
+        add_dependencies(${target} vl_prebuilt_runtime_dlls)
+    endif()
 endfunction()
 
 # 打包器只信任与二进制同目录的 flavor 标记。

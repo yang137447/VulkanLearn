@@ -1,11 +1,11 @@
 {
   "generatedBy": "tool/deps-stamp.ps1 -UpdateLock",
-  "lockSha256": "d851f232bc5188b9df32c59162d20e273bb36442e8471fff9f75541d8378b3f4",
+  "lockSha256": "587df4ccccb08bdcf25609caf5b375a102aae575a36c9254ab06d1c7aa92a67e",
   "lockVersion": 1,
   "manifest": {
     "path": "ThirdParty/manifest.json",
     "schema": "vulkanlearn-deps-manifest/v1",
-    "sha256": "840e5a8ecd06abffd6a0451415529dc57baf1cbef6bad77164a387c138e256a1"
+    "sha256": "a056ea36905dc58e78c3711dd0815fc1e9d1768af41c1a9e791712519aeb79e4"
   },
   "normalization": "UTF-8 without BOM; object keys sorted ordinal; arrays in declared order; 2-space indent; LF",
   "optionSet": {
