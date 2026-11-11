@@ -899,10 +899,10 @@ std::vector<std::string> BindMontageSegments(const Montage& montage,
     std::vector<std::string> clipIds;
     if (montage.segments.empty())
     {
-        MontageSegment legacy;
-        legacy.sequencePath = montage.sequencePath;
-        legacy.sequenceDigest = montage.sequenceDigest;
-        clipIds.push_back(BindMontageClip(montage, legacy, context, skeleton,
+        MontageSegment singleSegment;
+        singleSegment.sequencePath = montage.sequencePath;
+        singleSegment.sequenceDigest = montage.sequenceDigest;
+        clipIds.push_back(BindMontageClip(montage, singleSegment, context, skeleton,
             "", assetPath).clipId);
     }
     else
