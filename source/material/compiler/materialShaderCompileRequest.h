@@ -23,7 +23,9 @@ namespace VL
 enum class MaterialPass
 {
     Base,
-    ShadowDepth
+    ShadowDepth,
+    // 局部光阴影模板：与 ShadowDepth 共用材质求值，但片段写 gl_FragDepth。
+    LocalShadow
 };
 
 inline std::string MaterialPassToString(MaterialPass pass)
@@ -34,6 +36,8 @@ inline std::string MaterialPassToString(MaterialPass pass)
         return "Base";
     case MaterialPass::ShadowDepth:
         return "ShadowDepth";
+    case MaterialPass::LocalShadow:
+        return "LocalShadow";
     }
     throw std::runtime_error("Unknown MaterialPass");
 }

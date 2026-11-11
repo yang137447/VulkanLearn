@@ -123,6 +123,10 @@ Panel::DetailsViewContext MaterialInstanceAssetEditorPanel::DetailsView()
     context.refreshingControls = &refreshingControls;
     context.viewingJson = viewingJson;
     context.resourceEditorVisible = resourceEditorVisible;
+    const auto* activeResourceTab = resourceEditor.ActiveTab();
+    context.particleResourceActive = resourceEditorVisible &&
+        activeResourceTab != nullptr &&
+        activeResourceTab->kind == EditorAssetKind::ParticleSystem;
     context.localStatus = &localStatus;
     context.sceneLogicComponentsMarkup =
         [this](const EditorSceneActorSnapshot& actor) { return SceneLogicComponentsMarkup(actor); };
@@ -292,6 +296,13 @@ void MaterialInstanceAssetEditorPanel::RequestSave()
         OpenSaveDialog(tab->path);
         return;
     }
+    if (const auto* tab = resourceEditor.ActiveTab(); tab &&
+        tab->kind == EditorAssetKind::ParticleSystem &&
+        IsResourceEditorVisible())
+    {
+        OpenSaveDialog(tab->path);
+        return;
+    }
     OpenSaveDialog(snapshot.activeDocument && IsMaterialEditorVisible()
         ? snapshot.activeDocument->assetPath : std::string{});
 }
@@ -305,15 +316,19 @@ void MaterialInstanceAssetEditorPanel::OpenSaveDialog(const std::string& path)
 {
     if (HasModal()) return;
     if (snapshot.modifiedDocuments.empty() && pendingEdits.empty() && pendingBlueprintPath.empty() &&
+        pendingParticlePath.empty() &&
         (!snapshot.activeDocument || snapshot.activeDocument->status == EditorDocumentStatus::Clean))
     {
         localStatus = "No modified assets.";
         return;
     }
     // 先提交未完成 batch，再从下一轮权威快照取得新 revision；弹窗打开本身不保存。
-    saveAwaitingSnapshot = !pendingEdits.empty() || !pendingBlueprintPath.empty();
+    saveAwaitingSnapshot = !pendingEdits.empty() || !pendingBlueprintPath.empty() ||
+        !pendingParticleChanges.empty();
     FlushPendingEdits();
     FlushBlueprintAssetEdits();
+    FlushParticleAssetEdits();
+    FlushParticleAssetEdits();
     saveFilterPath = path;
     saveDialogVisible = true;
     saveChecked.clear();
@@ -411,7 +426,8 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
             ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Tressfx
             ? EditorCommandType::SaveTressfxDocument : row.kind == EditorAssetKind::Texture
             ? EditorCommandType::SaveTextureDocument : row.kind == EditorAssetKind::Blueprint
-            ? EditorCommandType::SaveBlueprintDocument : row.kind == EditorAssetKind::Terrain
+            ? EditorCommandType::SaveBlueprintDocument : row.kind == EditorAssetKind::ParticleSystem
+            ? EditorCommandType::SaveParticleDocument : row.kind == EditorAssetKind::Terrain
             ? EditorCommandType::SaveTerrainDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
         command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
@@ -430,6 +446,78 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     textureOptionsDirty = textureOptionsDirty || !SameTextureOptions(snapshot.textureAssets, value.textureAssets);
     const std::string previousDocument = snapshot.selectedDocumentPath;
     snapshot = value;
+    bool particleSettled = false;
+    bool particleSucceeded = false;
+    std::string particleMessage;
+    for (const auto& feedback : snapshot.particleCommandFeedback)
+    {
+        if (feedback.sequence <= particleCommandFeedbackSequence)
+            continue;
+        // 非在途命令的终态也要推进序号，避免旧 modify 结果误结算新批次。
+        particleCommandFeedbackSequence = feedback.sequence;
+        if (particleHistoryCommandAwaitingSnapshot &&
+            feedback.assetPath == particleHistoryCommandPath &&
+            (feedback.type == EditorCommandType::UndoParticleDocument ||
+             feedback.type == EditorCommandType::RedoParticleDocument))
+        {
+            particleHistoryCommandAwaitingSnapshot = false;
+            if (!feedback.succeeded)
+                localStatus = feedback.message.empty()
+                    ? "Particle history command rejected."
+                    : feedback.message;
+        }
+        if (!particleCommandAwaitingSnapshot ||
+            feedback.type !=
+                EditorCommandType::ModifyParticleDocument ||
+            feedback.assetPath != particleCommandPath)
+            continue;
+        particleSettled = true;
+        particleSucceeded = feedback.succeeded;
+        particleMessage = feedback.message;
+    }
+    if (particleCommandAwaitingSnapshot)
+    {
+        if (particleSettled)
+        {
+            particleCommandAwaitingSnapshot = false;
+            if (particleSucceeded)
+                inFlightParticleChanges.clear();
+            else
+            {
+                MergeParticleInFlightChanges();
+                localStatus = particleMessage.empty()
+                    ? "Particle edit rejected; changes kept for retry."
+                    : particleMessage;
+            }
+        }
+        else
+        {
+            // 反馈丢失或文档已消失时不能永久堵住后续编辑。
+            const auto* authored =
+                ParticleDocument(particleCommandPath);
+            if (authored == nullptr)
+            {
+                particleCommandAwaitingSnapshot = false;
+                inFlightParticleChanges.clear();
+            }
+            else if (authored->documentRevision >
+                particleCommandRevision)
+            {
+                // 服务已推进版本但没有可匹配的终态；重新排队等同值变更，
+                // 让用户输入保留下来而不是静默丢失。
+                particleCommandAwaitingSnapshot = false;
+                MergeParticleInFlightChanges();
+            }
+        }
+    }
+    if (particleHistoryCommandAwaitingSnapshot)
+    {
+        const auto* authored =
+            ParticleDocument(particleHistoryCommandPath);
+        if (authored == nullptr ||
+            authored->documentRevision > particleHistoryCommandRevision)
+            particleHistoryCommandAwaitingSnapshot = false;
+    }
     SynchronizeSceneGizmoSelection();
     SynchronizeTerrainBrushSelection();
     if (blueprintCommandAwaitingSnapshot)
@@ -527,6 +615,77 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
                 }
         }
     }
+    else if (discardParticleThenClose &&
+        pendingCloseKind == EditorAssetKind::ParticleSystem)
+    {
+        // 先等在途 modify 和尚未 flush 的字段落地，再按权威 revision 回退。
+        if (!particleCommandAwaitingSnapshot &&
+            !particleHistoryCommandAwaitingSnapshot &&
+            pendingParticleChanges.empty())
+        {
+            if (!discardParticleCloseSubmitted)
+            {
+                SubmitParticleAssetCommand(
+                    EditorCommandType::RevertParticleDocument,
+                    pendingClosePath);
+                discardParticleCloseSubmitted = true;
+            }
+            else
+            {
+                const auto* authored =
+                    ParticleDocument(pendingClosePath);
+                if (authored != nullptr && !authored->dirty)
+                {
+                    CloseDocument(pendingClosePath,
+                        EditorDirtyDocumentPolicy::RequireClean);
+                    pendingClosePath.clear();
+                }
+                // 拒绝时保留弹窗和标签，允许用户按新版本重试。
+                discardParticleThenClose =
+                    discardParticleCloseSubmitted = false;
+            }
+        }
+    }
+    else if (saveThenClose &&
+        pendingCloseKind == EditorAssetKind::ParticleSystem)
+    {
+        if (!saveCloseSubmitted)
+        {
+            if (!particleCommandAwaitingSnapshot &&
+                !particleHistoryCommandAwaitingSnapshot &&
+                pendingParticleChanges.empty())
+            {
+                saveStartedSequence = 0;
+                for (const auto& feedback : snapshot.saveFeedback)
+                    saveStartedSequence = std::max(
+                        saveStartedSequence, feedback.sequence);
+                SubmitParticleAssetCommand(
+                    EditorCommandType::SaveParticleDocument,
+                    pendingClosePath);
+                saveCloseSubmitted = true;
+            }
+        }
+        else
+        {
+            for (const auto& feedback : snapshot.saveFeedback)
+                if (feedback.assetPath == pendingClosePath &&
+                    feedback.sequence > saveStartedSequence)
+                {
+                    const auto* authored =
+                        ParticleDocument(pendingClosePath);
+                    if (feedback.succeeded && authored &&
+                        !authored->dirty)
+                    {
+                        CloseDocument(pendingClosePath,
+                            EditorDirtyDocumentPolicy::RequireClean);
+                        pendingClosePath.clear();
+                    }
+                    saveThenClose = false;
+                    saveCloseSubmitted = false;
+                    break;
+                }
+        }
+    }
     else if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
         snapshot.activeDocument->assetPath == pendingClosePath)
     {
@@ -566,6 +725,8 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     {
         widgetDocument.SetProperty("close-dialog", "display",
             pendingClosePath.empty() ? "none" : "block");
+        widgetDocument.SetProperty("particle-revert-dialog", "display",
+            pendingParticleRevertPath.empty() ? "none" : "block");
         widgetDocument.SetProperty("material-instance-details", "display", viewingJson ? "none" : "block");
         widgetDocument.SetProperty("json-inspector", "display", viewingJson ? "block" : "none");
         if (viewingJson)
@@ -576,11 +737,17 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
         RefreshResourceEditor();
         RefreshMaterialPreview();
         SetMarkup("close-document-name", Text(pendingClosePath));
+        SetMarkup("particle-revert-name",
+            Text(pendingParticleRevertPath));
         SetMarkup("close-document-status", Text(snapshot.statusMessage));
-        SetDisabled("close-save", saveThenClose || discardBlueprintThenClose);
+        SetDisabled("close-save", saveThenClose ||
+            discardBlueprintThenClose || discardParticleThenClose);
         SetDisabled("close-discard", discardBlueprintThenClose ||
-            (saveThenClose && (pendingCloseKind == EditorAssetKind::Blueprint ||
-                pendingCloseKind == EditorAssetKind::Tressfx)));
+            discardParticleThenClose ||
+            (saveThenClose &&
+             (pendingCloseKind == EditorAssetKind::Blueprint ||
+              pendingCloseKind == EditorAssetKind::ParticleSystem ||
+              pendingCloseKind == EditorAssetKind::Tressfx)));
     }
 }
 
@@ -892,6 +1059,7 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     const std::string& path, EditorAssetKind kind)
 {
     FlushBlueprintAssetEdits();
+    FlushParticleAssetEdits();
     if (!resourceEditor.Open(path, kind))
     {
         localStatus = "Too many resource editors are open.";
@@ -908,6 +1076,13 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     {
         EditorCommandEnvelope command;
         command.type = EditorCommandType::GetBlueprintDocument;
+        command.payload = MaterialInstanceAssetPathPayload{path};
+        Submit(std::move(command));
+    }
+    if (kind == EditorAssetKind::ParticleSystem)
+    {
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::GetParticleDocument;
         command.payload = MaterialInstanceAssetPathPayload{path};
         Submit(std::move(command));
     }
@@ -940,14 +1115,20 @@ void MaterialInstanceAssetEditorPanel::RequestCloseResource(const std::string& p
     {
         if (tab.path != path) continue;
         const auto* authored = ResourceDocument(path);
-        if ((authored && authored->dirty) || pendingBlueprintPath == path ||
+        const auto* particle = ParticleDocument(path);
+        if ((authored && authored->dirty) || (particle && particle->dirty) ||
+            pendingBlueprintPath == path || pendingParticlePath == path ||
+            (particleCommandPath == path && !inFlightParticleChanges.empty()) ||
             (hairSimulationPath == path && hairSimulationPendingSave))
         {
             FlushBlueprintAssetEdits();
+            FlushParticleAssetEdits();
             pendingClosePath = path;
             pendingCloseKind = tab.kind;
             saveThenClose = saveCloseSubmitted = false;
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
+            discardParticleThenClose =
+                discardParticleCloseSubmitted = false;
             return;
         }
         CloseResource(path);
@@ -1086,7 +1267,8 @@ void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& pa
     previewDragButton = -1;
     if (runtimeActionSink == nullptr) return;
     if (!runtimeView.activeWorldPath.empty() &&
-        std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json")
+        std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json" &&
+        std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_particle_preview.json")
         levelWorldPath = runtimeView.activeWorldPath;
     // 新的预览目标从零姿态开始；旋转只属于当前预览世界，不跨资产累积。
     if (requestedPreviewPath != path) hairRotation.Reset();
@@ -1119,7 +1301,8 @@ bool MaterialInstanceAssetEditorPanel::PrepareImmersiveView(std::string& levelTo
     levelToLoad.clear();
     if (HasModal()) return false;
     const bool previewWorld = !requestedPreviewPath.empty() ||
-        std::filesystem::path(runtimeView.activeWorldPath).filename() == "SC_model_preview.json";
+        std::filesystem::path(runtimeView.activeWorldPath).filename() == "SC_model_preview.json" ||
+        std::filesystem::path(runtimeView.activeWorldPath).filename() == "SC_particle_preview.json";
     if (previewWorld)
     {
         if (levelWorldPath.empty())
@@ -1410,6 +1593,19 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
 void MaterialInstanceAssetEditorPanel::CloseDocument(
     const std::string& path, EditorDirtyDocumentPolicy policy)
 {
+    if (ParticleDocument(path))
+    {
+        if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
+            SubmitParticleAssetCommand(
+                EditorCommandType::RevertParticleDocument, path);
+        SubmitParticleAssetCommand(
+            EditorCommandType::CloseParticleDocument, path);
+        resourceEditor.Close(path);
+        resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
+        RefreshResourceEditor();
+        if (!resourceEditorVisible) ReturnToLevel();
+        return;
+    }
     if (TressfxDocument(path))
     {
         if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
@@ -1576,6 +1772,11 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         return;
     }
     if (ProcessBlueprintAssetDrag(event)) return;
+    if (ProcessParticleKeyboard(event))
+    {
+        event.StopPropagation();
+        return;
+    }
     if (ProcessBlueprintViewportInput(event) || ProcessTexturePreviewInput(event) || ProcessModelPreviewInput(event))
     {
         event.StopPropagation();
@@ -1633,6 +1834,8 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     const std::string action = element->GetAttribute<std::string>("data-action", "");
     if (HasModal() && action != "close-save" && action != "close-discard" &&
         action != "close-cancel" && action != "about-close" &&
+        action != "particle-revert-confirm" &&
+        action != "particle-revert-cancel" &&
         action != "save-file" && action != "save-confirm" && action != "save-cancel" &&
         action != "save-select-all")
         return;

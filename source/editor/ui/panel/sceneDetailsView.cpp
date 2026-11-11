@@ -1,4 +1,5 @@
 #include "editor/ui/panel/sceneDetailsView.h"
+#include "editor/ui/panel/particlePanelHelpers.h"
 
 #include <algorithm>
 #include <cmath>
@@ -261,7 +262,8 @@ void RefreshDetailsView(const DetailsViewContext& context)
     if (context.viewingJson || context.resourceEditorVisible)
     {
         for (const char* id : DocumentCommandIds)
-            widgetDocument.SetDisabled(id, true);
+            widgetDocument.SetDisabled(id, !context.particleResourceActive ||
+                !ParticlePanelDetail::ParticleMenuCommandAllowed(id));
         widgetDocument.SetMarkup("editor-notice", Text(context.localStatus == nullptr
             ? std::string() : *context.localStatus));
         return;

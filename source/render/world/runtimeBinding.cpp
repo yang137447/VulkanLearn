@@ -133,6 +133,10 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
                 candidateGraph,
                 candidateLightBufferInfos);
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeLightCulling(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     if (prerenderSkinEnabled)
         candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
@@ -185,6 +189,10 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.renderScene.materialGroups);
     currentRenderScene.lights.swap(
         prepared.renderScene.lights);
+    currentRenderScene.decals.swap(
+        prepared.renderScene.decals);
+    currentRenderScene.particleSystems.swap(
+        prepared.renderScene.particleSystems);
     swap(
         currentRenderScene.environment,
         prepared.renderScene.environment);

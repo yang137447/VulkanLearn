@@ -45,6 +45,7 @@ public:
     const std::vector<ShaderBinding>& GetActiveShaderBindings() const { return activeShaderBindings; }
     const std::shared_ptr<PipelineBase>& GetRenderPipeline() const { return renderPipeline; }
     const std::shared_ptr<PipelineBase>& GetShadowPipeline() const { return shadowPipeline; }
+    const std::shared_ptr<PipelineBase>& GetLocalShadowPipeline() const { return localShadowPipeline; }
     const VL::MaterialPipelineReloadRecipe& GetPipelineReloadRecipe() const
     {
         return pipelineReloadRecipe;
@@ -57,10 +58,21 @@ public:
     {
         return shadowShaderArtifact;
     }
+    const std::optional<GraphicsShaderVariantArtifact>& GetLocalShadowShaderArtifact() const
+    {
+        return localShadowShaderArtifact;
+    }
     static std::vector<ShaderBinding> BuildActiveShaderBindings(
         const std::vector<ShaderBinding>& surfaceBindings,
-        const std::vector<ShaderBinding>* shadowBindings);
+        const std::vector<ShaderBinding>* shadowBindings,
+        const std::vector<ShaderBinding>* localShadowBindings = nullptr);
     void SetShadowPipeline(
+        std::shared_ptr<PipelineBase> pipeline,
+        const GraphicsShaderVariantArtifact& shaderArtifact,
+        const VL::MaterialGraphicsPassReloadRecipe& reloadRecipe);
+    // LocalShadow 使用独立 pass 变体；recipe 与 CSM Shadow 分开保存，
+    // 但提交仍走同一 MaterialPipelineReloadCommit 事务。
+    void SetLocalShadowPipeline(
         std::shared_ptr<PipelineBase> pipeline,
         const GraphicsShaderVariantArtifact& shaderArtifact,
         const VL::MaterialGraphicsPassReloadRecipe& reloadRecipe);
@@ -78,7 +90,9 @@ private:
     std::vector<ShaderBinding> activeShaderBindings;
     std::shared_ptr<PipelineBase> renderPipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
+    std::shared_ptr<PipelineBase> localShadowPipeline;
     VL::MaterialPipelineReloadRecipe pipelineReloadRecipe;
     GraphicsShaderVariantArtifact surfaceShaderArtifact;
     std::optional<GraphicsShaderVariantArtifact> shadowShaderArtifact;
+    std::optional<GraphicsShaderVariantArtifact> localShadowShaderArtifact;
 };

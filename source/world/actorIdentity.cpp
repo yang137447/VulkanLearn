@@ -20,6 +20,8 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
     {EditorSceneActorType::SceneWind, "wind", "Wind", "icons/wind.png"},
     {EditorSceneActorType::Terrain, "terrain", "Terrains", "icons/terrain.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
+    {EditorSceneActorType::ParticleSystem, "particleSystem", "Particle Systems",
+        "icons/particle.png"},
     {EditorSceneActorType::Script, "blueprintInstance", "Blueprint Instances", "icons/file-box.png"},
 };
 
@@ -86,6 +88,7 @@ bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
     case EditorSceneActorType::PointLight:
     case EditorSceneActorType::SpotLight:
     case EditorSceneActorType::SquareAreaLight:
+    case EditorSceneActorType::ParticleSystem:
         return true;
     // 相机 / 环境 / 风剖面 / 场景风没有渲染侧可见性；蓝图实例的可见性属于脚本状态
     //（destroyed），也没有逐 actor 的渲染开关命令。

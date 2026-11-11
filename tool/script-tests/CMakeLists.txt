@@ -22,6 +22,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/editor/scene/scriptBlueprintAuthoring.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
@@ -50,8 +51,10 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/engine/diagnosticsSubsystem.cpp")
 target_include_directories(script_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
 target_compile_definitions(script_tests PRIVATE
-    VL_SOURCE_DIR="${PROJECT_SOURCE_DIR}/source")
-# 足部质量与放置行为夹具超过 MinGW COFF section 上限；只放宽这些目标文件格式。
+    VL_SOURCE_DIR="${PROJECT_SOURCE_DIR}/source"
+    VL_WITH_EDITOR=1)
+# 足部质量、放置行为与动态足部质量夹具超过 MinGW COFF section/文件上限；
+# 只放宽这些目标文件格式。
 if(MINGW)
     set_source_files_properties(scriptAnimationTests.cpp scriptRuntimeTests.cpp
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
@@ -81,4 +84,6 @@ if(TARGET vl_gameplay)
     add_dependencies(vl_script_fixtures vl_gameplay)
     add_dependencies(script_tests vl_script_fixtures)
 endif()
-vulkanlearn_add_gtest(script_tests)
+# 粒子/C# 资源路径从项目根解析；ctest 默认工作目录在 build 子目录，
+# 会把 "../VukanLearnResources" 解析到错误位置。
+vulkanlearn_add_gtest(script_tests WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")

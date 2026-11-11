@@ -1,4 +1,6 @@
 #include "render/frame/renderFrameRecorder.h"
+#include "render/lightCulling/lightCullingRenderer.h"
+#include "render/volumetricFog/volumetricFogRenderer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -154,6 +156,20 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
     ubo.environmentIntensity = renderScene.environment.intensity;
     ubo.environmentType = renderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = renderScene.environment.skyParameters;
+    // 体积雾参数跟随冻结场景快照；enabled=0 时 compute 仍会写零值，
+    // 保证 fog texture 不含上一帧残留。
+    const VL::FogSettings& fog = renderScene.environment.fog;
+    const bool fogEnabled = VL::IsFogEnabled(fog);
+    ubo.fogParams0 = Eigen::Vector4f(
+        fog.density, fog.heightFalloff, fog.baseHeight, fog.anisotropy);
+    ubo.fogParams1 = Eigen::Vector4f(
+        fog.albedo.x(), fog.albedo.y(), fog.albedo.z(), fog.intensity);
+    ubo.fogParams2 = Eigen::Vector4f(
+        camera.clipNear,
+        camera.clipFar,
+        static_cast<float>(VL::kMaxVolumetricFogLayers),
+        fogEnabled ? 1.0f : 0.0f);
+    ubo.fogParams3 = Eigen::Vector4f::Zero();
     const float cameraExposureScale = VL::ExposureScale(camera.exposure);
     const bool autoExposureEnabled =
         camera.exposure.mode == VL::ExposureMode::Auto;
@@ -255,6 +271,11 @@ void RenderFrameRecorder::UpdateShadowGlobalUBO(
     ubo.environmentIntensity = renderScene.environment.intensity;
     ubo.environmentType = renderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = renderScene.environment.skyParameters;
+    // 阴影 pass 不消费体积雾；显式清零，避免把未初始化字段上传。
+    ubo.fogParams0 = Eigen::Vector4f::Zero();
+    ubo.fogParams1 = Eigen::Vector4f::Zero();
+    ubo.fogParams2 = Eigen::Vector4f::Zero();
+    ubo.fogParams3 = Eigen::Vector4f::Zero();
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
         Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
@@ -539,6 +560,9 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
         ctx.gpuTimer.BeginFrame(commandBuffer, frameIndex);
         ctx.advanceSceneWind();
+        // shadowSlice/shadowFar 必须在 geometry/forward 的 UploadLightsForPass
+        // 之前写回冻结快照；LocalShadow pass 也消费同一份选灯结果。
+        ctx.prepareLocalShadowLights();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
         ctx.updateGlobalUBO(commandBuffer);
@@ -675,6 +699,10 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         ctx.terrainRuntime.PrepareTerrainFeedbackPass(
             feedbackFrameTag, ctx.renderExtent);
 
+        // compute 必须在 particle pass 之前完成；这里录制的是本帧唯一一次
+        // 模拟推进，图形 pass 只消费其结果。
+        ctx.recordParticleSimulation(commandBuffer, frameIndex);
+
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
         {
@@ -718,6 +746,49 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                 ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
+            // 体积雾注入是独立 compute：没有 framebuffer，也不需要 pass material。
+            // 图屏障先把 fog texture2DArray 的全部层转到 GENERAL。
+            if (renderPass.type == VL::RenderGraphPassType::VolumetricFog)
+            {
+                PassBarrier::PrepareForPass(
+                    commandBuffer, renderGraph, passIndex, ctx.swapChainImageIndex);
+                const auto& volumetricFog = renderGraph.GetVolumetricFog();
+                if (volumetricFog)
+                {
+                    volumetricFog->Record(
+                        commandBuffer, ctx.swapChainImageIndex, renderPass);
+                }
+                continue;
+            }
+            if (renderPass.type ==
+                VL::RenderGraphPassType::ParticleSoftDepth)
+            {
+                PassBarrier::PrepareForPass(
+                    commandBuffer,
+                    renderGraph,
+                    passIndex,
+                    ctx.swapChainImageIndex);
+                ctx.recordParticleSoftDepth(commandBuffer, renderPass);
+                continue;
+            }
+            // tile 光照聚类：compute 只写帧拥有的 SSBO，没有 framebuffer。
+            // 本帧灯光必须先落入 SSBO——geometry/forward 里的
+            // UploadLightsForPass 发生在本 pass 之后，不能依赖它。
+            if (renderPass.type == VL::RenderGraphPassType::LightCulling)
+            {
+                ctx.passServices.UploadLightsForPass(
+                    ctx.swapChainImageIndex,
+                    ctx.renderScene.lights);
+                PassBarrier::PrepareForPass(
+                    commandBuffer, renderGraph, passIndex, ctx.swapChainImageIndex);
+                const auto& lightCulling = renderGraph.GetLightCulling();
+                if (lightCulling)
+                {
+                    lightCulling->Record(
+                        commandBuffer, ctx.swapChainImageIndex, renderPass);
+                }
+                continue;
+            }
             VL::PassRuntimeContext passContext{
                 commandBuffer,
                 renderPass,
@@ -758,6 +829,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                 ctx.logShadowCasterCullStats();
             }
         }
+        ctx.logLocalShadowCasterStatistics();
         }
 
         if (ctx.uiOverlayRenderer.IsInitialized() && ctx.currentUiSnapshot != nullptr)

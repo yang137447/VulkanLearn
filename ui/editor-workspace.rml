@@ -205,6 +205,7 @@
                         <option value="wind">Wind</option>
                         <option value="terrain">Terrains</option>
                         <option value="mesh">Meshes</option>
+                        <option value="particleSystem">Particle Systems</option>
                         <option value="blueprintInstance">Blueprint Instances</option>
                     </select>
                     <select id="outliner-sort" data-action="outliner-sort">
@@ -289,6 +290,7 @@
                         <option value="csharp">C# Blueprint Classes</option>
                         <option value="mesh">Meshes</option><option value="tressfx">TressFX</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
+                        <option value="particle">Particles</option>
                     </select>
                     <label class="browser-recursive-label"><input id="browser-recursive" type="checkbox" data-action="browser-recursive" checked="checked"/><span>Subfolders</span></label>
                     <select id="browser-sort" data-action="browser-sort">
@@ -581,6 +583,10 @@
                     <button id="blueprint-asset-revert" class="browser-icon" data-action="blueprint-asset-revert" title="Revert Blueprint Draft">
                         <img src="icons/refresh.png"/>
                     </button>
+                    <button id="particle-undo" class="browser-text-button" data-action="particle-undo" title="Undo Particle Edit">Undo</button>
+                    <button id="particle-redo" class="browser-text-button" data-action="particle-redo" title="Redo Particle Edit">Redo</button>
+                    <button id="particle-validate" class="browser-text-button" data-action="particle-validate" title="Validate Particle Asset">Validate</button>
+                    <button id="particle-revert" class="browser-text-button" data-action="particle-revert" title="Revert Particle Draft">Revert</button>
                     <button id="terrain-asset-save" class="browser-icon" data-action="terrain-asset-save" title="Save Terrain Asset">
                         <img src="icons/save.png"/>
                     </button>
@@ -722,6 +728,30 @@
                                 <p id="resource-motion-status"></p>
                                 <div id="resource-motion-values"></div>
                             </div>
+                            <div id="particle-editor">
+                                <div id="particle-emitter-row">
+                                    <span>Emitter</span>
+                                    <select id="particle-emitter-select" data-action="particle-emitter"></select>
+                                    <button id="particle-emitter-add" data-action="particle-emitter-add">+</button>
+                                    <button id="particle-emitter-remove" data-action="particle-emitter-remove">Del</button>
+                                    <button id="particle-emitter-up" data-action="particle-emitter-up">Up</button>
+                                    <button id="particle-emitter-down" data-action="particle-emitter-down">Down</button>
+                                </div>
+                                <div id="particle-modules">
+                                    <button id="particle-module-system" data-action="particle-module" data-module="system">System</button>
+                                    <button id="particle-module-emitter" data-action="particle-module" data-module="emitter">Emitter</button>
+                                    <button id="particle-module-shape" data-action="particle-module" data-module="shape">Shape</button>
+                                    <button id="particle-module-velocity" data-action="particle-module" data-module="velocity">Velocity</button>
+                                    <button id="particle-module-forces" data-action="particle-module" data-module="forces">Forces</button>
+                                    <button id="particle-module-collision" data-action="particle-module" data-module="collision">Collision</button>
+                                    <button id="particle-module-life" data-action="particle-module" data-module="life">Life</button>
+                                    <button id="particle-module-color" data-action="particle-module" data-module="color">Color</button>
+                                    <button id="particle-module-flipbook" data-action="particle-module" data-module="flipbook">Flipbook</button>
+                                    <button id="particle-module-curves" data-action="particle-module" data-module="curves">Curves</button>
+                                </div>
+                                <div id="particle-fields"></div>
+                                <p id="particle-status" class="notice"></p>
+                            </div>
                             <div id="resource-hair-simulation"></div>
                             <div id="resource-hair-groups"></div>
                             <div id="resource-json-inspector">
@@ -758,6 +788,18 @@
                     <button id="close-save" data-action="close-save">Save</button>
                     <button id="close-discard" data-action="close-discard">Discard</button>
                     <button data-action="close-cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="particle-revert-dialog">
+            <div class="dialog">
+                <h2>Revert Particle Asset</h2>
+                <p id="particle-revert-name"></p>
+                <p class="notice">Discard all unsaved changes in this particle document?</p>
+                <div class="command-row">
+                    <button id="particle-revert-confirm" data-action="particle-revert-confirm">Revert</button>
+                    <button data-action="particle-revert-cancel">Cancel</button>
                 </div>
             </div>
         </div>

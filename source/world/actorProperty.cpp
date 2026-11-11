@@ -196,6 +196,23 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
                     return Reject(error, "Rigid body scale must stay uniform; edit its authored vec3 together.");
         return world.SetScriptBlueprintTransform(identity.name, field, edit.component, edit.value);
     }
+    if (identity.type == EditorSceneActorType::ParticleSystem)
+    {
+        if (edit.property != P::Position && edit.property != P::Rotation && edit.property != P::Scale)
+            return Reject(error, "Particle system editing only supports Transform.");
+        const WorldParticleSystem* system = world.FindParticleSystem(identity.name);
+        if (system == nullptr) return Reject(error, "Particle system is not in the active World.");
+        Eigen::Vector3f position = system->scenePosition;
+        Eigen::Vector3f rotation = system->sceneRotation;
+        Eigen::Vector3f scale = system->sceneScale;
+        if (edit.property == P::Position) position[edit.component] = edit.value;
+        else if (edit.property == P::Rotation) rotation[edit.component] = edit.value;
+        else scale[edit.component] = edit.value;
+        // 与网格/Blueprint 同一约束：任一轴缩放到零会让粒子模型矩阵退化。
+        if ((scale.array().abs() < 1.0e-6f).any())
+            return Reject(error, "Particle system scale must be non-zero.");
+        return world.SetParticleSystemTransform(identity.name, position, rotation, scale);
+    }
     // 地形在 World 中仍是共享 sceneObjectIdentity 的 chunk mesh；编辑器 Terrain
     // 身份只改变大纲行类型。World 内部按 isTerrain 选择写入入口，避免同名
     // Mesh/Terrain 场景对象互相串写。

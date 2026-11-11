@@ -576,6 +576,11 @@ bool RendererBackendVulkan::SupportsDualSourceBlend() const
     return rhiDevice->IsDualSourceBlendEnabled();
 }
 
+bool RendererBackendVulkan::SupportsDrawIndirectCount() const
+{
+    return rhiDevice->IsDrawIndirectCountEnabled();
+}
+
 vk::QueryPool RendererBackendVulkan::CreateTimestampQueryPool(
     uint32_t queryCount,
     const std::string& debugName)
@@ -2264,6 +2269,8 @@ void RendererBackendVulkan::SubmitFrame(
         submitPlan.frameIndex,
         submitPlan.submittedEpoch);
     ResourceRetireQueue::GetInstance().MarkFrameSubmitted(submitPlan.submittedEpoch);
+    hasSubmittedFrame = true;
+    lastSubmittedFrameIndex = submitPlan.frameIndex;
 
     {
         PROFILE_SCOPE("Render:Present");
@@ -2277,6 +2284,26 @@ void RendererBackendVulkan::SubmitFrame(
             swapchainRecreateRequired.store(true, std::memory_order_release);
         }
     }
+}
+
+void RendererBackendVulkan::WaitForPreviousFrameFence(
+    uint32_t currentFrameIndex)
+{
+    if (!hasSubmittedFrame ||
+        lastSubmittedFrameIndex == currentFrameIndex)
+    {
+        return;
+    }
+    const uint32_t frameFenceCount =
+        rhiDevice->GetFrameFenceCount();
+    if (frameFenceCount == 0 ||
+        lastSubmittedFrameIndex >= frameFenceCount)
+    {
+        return;
+    }
+    const VulkanFrameSyncResources previous =
+        rhiDevice->GetFrameSyncResources(lastSubmittedFrameIndex);
+    rhiDevice->WaitForFence(previous.taskFinishedFence);
 }
 
 } // namespace VL

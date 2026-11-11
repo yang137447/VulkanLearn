@@ -187,6 +187,22 @@ private:
     {
         return dualSourceBlendEnabled;
     }
+    // GPU 粒子剔除只有在逻辑设备真正启用 drawIndirectCount 后才能调用
+    // vkCmdDraw*IndirectCount；物理设备宣称支持不等于本设备已启用。
+    inline bool IsDrawIndirectCountEnabled() const
+    {
+        return drawIndirectCountEnabled;
+    }
+    inline bool IsFragmentStoresAndAtomicsEnabled() const
+    {
+        return fragmentStoresAndAtomicsEnabled;
+    }
+    // DBuffer decal 的 mask 附件和颜色附件使用不同 blend state，
+    // 只有设备真正启用 independentBlend 才能创建这种 pipeline。
+    inline bool IsIndependentBlendEnabled() const
+    {
+        return independentBlendEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -246,6 +262,9 @@ private:
     uint32_t graphicsQueueTimestampValidBits = 0;
     // 记录逻辑设备实际启用的能力，而不是仅记录物理设备是否宣称支持。
     bool dualSourceBlendEnabled = false;
+    bool drawIndirectCountEnabled = false;
+    bool fragmentStoresAndAtomicsEnabled = false;
+    bool independentBlendEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

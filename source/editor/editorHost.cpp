@@ -26,6 +26,7 @@
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/editorThumbnailRenderSession.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/particlePreviewRequest.h"
 #include "engine/runtimeCommand.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeConfig.h"
@@ -302,6 +303,8 @@ bool EditorHost::ApplyUiAction(
         return true;
     case UiActionType::PreviewBlueprint:
     case UiActionType::PreviewMaterial:
+    case UiActionType::PreviewParticle:
+    case UiActionType::UpdateParticlePreview:
     case UiActionType::PreviewModel:
     case UiActionType::PreviewRetarget:
         return ApplyPreviewAction(action, world);
@@ -875,6 +878,20 @@ bool EditorHost::ApplyPreviewAction(const UiAction& action, World* world)
         command.type = RuntimeCommandType::LoadWorld;
         command.stringValue = ModelPreviewScenePath;
         command.extraSceneObjects = BuildMaterialPreviewObjects(action.stringValue);
+        break;
+    case UiActionType::PreviewParticle:
+        command.type = RuntimeCommandType::LoadWorld;
+        command.stringValue = ParticlePreviewScenePath;
+        command.extraSceneObjects =
+            BuildParticlePreviewObjects(action.stringValue);
+        command.particleDocumentPath = action.stringValue;
+        command.particleDocument = action.particleDocument;
+        break;
+    case UiActionType::UpdateParticlePreview:
+        command.type = RuntimeCommandType::UpdateParticlePreview;
+        command.stringValue = action.stringValue;
+        command.particleDocumentPath = action.stringValue;
+        command.particleDocument = action.particleDocument;
         break;
     case UiActionType::PreviewModel:
         command.type = RuntimeCommandType::LoadWorld;

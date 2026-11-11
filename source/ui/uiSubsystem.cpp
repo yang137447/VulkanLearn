@@ -145,6 +145,8 @@ UiSectionMask SectionsForUiAction(UiActionType type)
     case UiActionType::PreviewRetarget:
     case UiActionType::PreviewMaterial:
     case UiActionType::PreviewBlueprint:
+    case UiActionType::PreviewParticle:
+    case UiActionType::UpdateParticlePreview:
     case UiActionType::TransformBlueprintPreview:
         // World/预览换代：世界路径、相机、资产与大纲都可能整体替换。
         return UiSectionAll;

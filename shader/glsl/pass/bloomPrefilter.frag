@@ -12,21 +12,40 @@ layout(set = 1, binding = 0) uniform UBOMIParamters {
 
 layout(set = 3, binding = 0) uniform sampler2D inputColor;
 layout(set = 3, binding = 1) uniform sampler2D autoExposure;
+// 屏幕空间扰动：rg 是屏幕高度归一化的带符号偏移（1.0 = 一个屏幕高度）。
+layout(set = 3, binding = 2) uniform sampler2D distortion;
 
 float Luminance(vec3 color)
 {
     return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+vec2 DistortionSceneUv(vec2 uv, vec2 distortionOffset, vec2 sceneSize)
+{
+    // 把高度归一化偏移转成 UV：y 已是高度比例，x 还需除以宽高比，
+    // 这样横纵偏移对应的像素距离相同，且在任意视口比例下语义一致。
+    float aspect = sceneSize.x / max(sceneSize.y, 1.0);
+    return clamp(
+        uv + vec2(distortionOffset.x / aspect, distortionOffset.y),
+        vec2(0.0),
+        vec2(1.0));
+}
+
 void main()
 {
     ivec2 sizePx = textureSize(inputColor, 0);
     vec2 texel = 1.0 / vec2(sizePx);
+    // Bloom 必须从扭曲后的场景生成；这里与 toneMapping 使用同一映射公式，
+    // 但 toneMapping 只偏移最终 sceneColor，不会再次扭曲 Bloom。
+    vec2 sceneUV = DistortionSceneUv(
+        inUV,
+        texture(distortion, inUV).rg,
+        vec2(sizePx));
 
-    vec3 c0 = texture(inputColor, inUV + texel * vec2(-0.5, -0.5)).rgb;
-    vec3 c1 = texture(inputColor, inUV + texel * vec2( 0.5, -0.5)).rgb;
-    vec3 c2 = texture(inputColor, inUV + texel * vec2(-0.5,  0.5)).rgb;
-    vec3 c3 = texture(inputColor, inUV + texel * vec2( 0.5,  0.5)).rgb;
+    vec3 c0 = texture(inputColor, sceneUV + texel * vec2(-0.5, -0.5)).rgb;
+    vec3 c1 = texture(inputColor, sceneUV + texel * vec2( 0.5, -0.5)).rgb;
+    vec3 c2 = texture(inputColor, sceneUV + texel * vec2(-0.5,  0.5)).rgb;
+    vec3 c3 = texture(inputColor, sceneUV + texel * vec2( 0.5,  0.5)).rgb;
     vec3 color = 0.25 * (c0 + c1 + c2 + c3);
 
     float threshold = u_bloomPrefilterParams.x;

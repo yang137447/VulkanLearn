@@ -4,6 +4,9 @@
 #include "defines.glsl"
 #include "microfacetDistribution.glsl"
 #include "shadowFiltering.glsl"
+// 局部光阴影（八面体点光 / 透视聚光）。这里只引入纯函数；sampler 由各 pass
+// shader 按自己的 set 3 布局声明后作为参数传入。
+#include "localShadowSampling.glsl"
 
 struct Light{
     // CPU 上传时已将点光/聚光强度乘 100^2；方向光仍为 lux。
@@ -11,6 +14,9 @@ struct Light{
     vec4 positionRadius;
     vec4 directionPad;
     vec4 coneAngleOuterInnerPadPad;
+    // x = 局部阴影 slice（<0 无），y = 1 聚光 / 2 八面体点光，
+    // z = far cm，w = bias cm。
+    vec4 shadowParams;
 };
 // 这里用统一参数 + 分段储存的方式
 layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
@@ -24,164 +30,44 @@ layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
     Light lights[];
 } uboLight;
 
+// GPU per-particle light 输出。与普通场景灯 SSBO 分离：compute 每帧先清零，
+// 再由 particle/particleLightEmit.comp 写入；deferred/forward 共用这份读取。
+struct ParticleLightGPU
+{
+    vec4 positionRadius;  // xyz world cm, w radius cm
+    vec4 colorIntensity;  // xyz linear RGB, w cd * 100^2
+    vec4 shadowParams;    // x=slice, y=mode, z=far, w=bias
+    vec4 meta;            // x=IES profile, y=hasIes
+};
+
+layout(std430, set = 0, binding = 4) readonly buffer ParticleLightSSBO
+{
+    // x = high-water count, y = capacity, z/w reserved.
+    uvec4 header;
+    ParticleLightGPU lights[];
+} particleLightSSBO;
+
+// 屏幕空间 tile 光照列表。set 0 的 5/6/7 是材质/后处理路径专用；
+// 粒子图形管线使用自己的 set 0（10/11/12），因此共用头文件但绑定号不同。
+#define VL_LIGHT_GRID_BINDING 5
+#define VL_LIGHT_INDEX_BINDING 6
+#define VL_LIGHT_GRID_PARAMS_BINDING 7
+#include "lightGridSampling.glsl"
+
 layout(set = 0, binding = 2) uniform samplerCube prefilteredEnvironmentCube;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 
 // ShadowMap 属于“当前 pass 输入”，因此具体 binding 必须由 pass shader 自己声明。
 // 这样 common/lighting.glsl 不会偷偷占用 Set 3，deferredLighting 才能把 Set 3 用作 GBuffer 输入集合。
-int SelectShadowCascade(vec3 worldPos)
-{
-    vec4 viewPos = uboVP.view * vec4(worldPos, 1.0);
-    float viewDepth = -viewPos.z;
-    int activeCascadeCount = int(uboVP.csmParameters.z + 0.5);
-    for (int cascadeIndex = 0; cascadeIndex < 4; ++cascadeIndex)
-    {
-        if (cascadeIndex >= activeCascadeCount - 1 ||
-            viewDepth <= uboVP.cascadeSplits[cascadeIndex])
-        {
-            return cascadeIndex;
-        }
-    }
-    return activeCascadeCount - 1;
-}
+// CSM 采样函数抽到独立头文件：体积雾 compute 复用同一套级联选择/过渡/淡出
+// 公式，但不需要引入 lighting.glsl 的 IBL 采样器绑定。
+#include "csmShadowSampling.glsl"
 
 float ShadowCascadeDebugValue(int cascadeIndex)
 {
     float denominator =
         max(uboVP.csmParameters.z - 1.0, 1.0);
     return float(cascadeIndex) / denominator;
-}
-
-float SampleCsmCascade(
-    in sampler2DArrayShadow inputShadowMap,
-    vec3 worldPos,
-    float receiverSlope,
-    int cascadeIndex)
-{
-    vec4 lightViewProjPos =
-        uboVP.lightViewProj[cascadeIndex] *
-        vec4(worldPos, 1.0);
-    vec3 shadowNdc =
-        lightViewProjPos.xyz / lightViewProjPos.w;
-    vec2 shadowUv =
-        shadowNdc.xy * 0.5 + 0.5;
-    if (shadowUv.x < 0.0 || shadowUv.x > 1.0 ||
-        shadowUv.y < 0.0 || shadowUv.y > 1.0 ||
-        shadowNdc.z < 0.0 || shadowNdc.z > 1.0)
-    {
-        return 1.0;
-    }
-
-    vec4 biasParameters =
-        uboVP.shadowBias[cascadeIndex];
-    float receiverBias =
-        biasParameters.x *
-        (1.0 + biasParameters.y * receiverSlope);
-
-    // 阴影采样器使用 LESS_OR_EQUAL 比较。将接收者深度向光源方向偏移，可以减少
-    // 自阴影痤疮；Bias 过大则会让接触阴影与投射物分离，产生 Peter-panning。
-    float compareDepth =
-        shadowNdc.z - receiverBias;
-    return FilterShadowMap(
-        inputShadowMap,
-        shadowUv,
-        cascadeIndex,
-        compareDepth);
-}
-
-float CalculateCsmShadow(
-    in sampler2DArrayShadow inputShadowMap,
-    vec3 worldPos,
-    vec3 worldNormal,
-    out int cascadeIndex)
-{
-    cascadeIndex = 0;
-    int activeCascadeCount =
-        int(uboVP.csmParameters.z + 0.5);
-    if (activeCascadeCount <= 0)
-    {
-        return 1.0;
-    }
-
-    cascadeIndex = SelectShadowCascade(worldPos);
-    float viewDepth = -(uboVP.view * vec4(worldPos, 1.0)).z;
-    float shadowDistance = uboVP.csmParameters.w;
-    if (viewDepth > shadowDistance)
-    {
-        return 1.0;
-    }
-
-    // DirectionalLight.directionPad 保存的是光线传播方向（光源指向场景）。
-    // 这里取反得到表面指向光源的方向，用于计算接收面随法线夹角变化的 Bias。
-    vec3 surfaceToLight = normalize(
-        -uboLight.lights[
-            uboLight.directionalLightOffset]
-            .directionPad.xyz);
-
-    // 正对光源时 slope 为 0；接近掠射角或背光时 slope 趋近 1，需要更大的 Bias。
-    float receiverSlope =
-        1.0 -
-        max(
-            dot(
-                normalize(worldNormal),
-                surfaceToLight),
-            0.0);
-    float shadow = SampleCsmCascade(
-        inputShadowMap,
-        worldPos,
-        receiverSlope,
-        cascadeIndex);
-
-    // UE 风格 Cascade Transition Fraction：在当前级联末端同时采样下一层，
-    // 用深度区间平滑混合，避免级联分界处出现突变。
-    if (cascadeIndex + 1 < activeCascadeCount)
-    {
-        float splitNear =
-            cascadeIndex == 0
-                ? 0.0
-                : uboVP.cascadeSplits[
-                    cascadeIndex - 1];
-        float splitFar =
-            uboVP.cascadeSplits[cascadeIndex];
-        float transitionLength =
-            (splitFar - splitNear) *
-            uboVP.csmParameters.x;
-        if (transitionLength > 0.0)
-        {
-            float transitionWeight = smoothstep(
-                splitFar - transitionLength,
-                splitFar,
-                viewDepth);
-            float nextCascadeShadow = SampleCsmCascade(
-                inputShadowMap,
-                worldPos,
-                receiverSlope,
-                cascadeIndex + 1);
-            shadow = mix(
-                shadow,
-                nextCascadeShadow,
-                transitionWeight);
-        }
-    }
-
-    // UE 风格 Shadow Distance Fadeout Fraction：最后一段距离逐渐淡到全亮，
-    // 避免超过 Dynamic Shadow Distance 时阴影突然消失。
-    float fadeoutLength =
-        shadowDistance *
-        uboVP.csmParameters.y;
-    if (fadeoutLength > 0.0)
-    {
-        float fadeoutWeight = smoothstep(
-            shadowDistance - fadeoutLength,
-            shadowDistance,
-            viewDepth);
-        shadow = mix(
-            shadow,
-            1.0,
-            fadeoutWeight);
-    }
-
-    return shadow;
 }
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
@@ -837,7 +723,30 @@ vec3 CalculateClearCoatDirectionalLight(
         radiance);
 }
 
+// UE5 GetLocalLightAttenuation 的局部光半径窗：
+//   Window = saturate(1 - (d^2 / r^2)^2)^2
+// 目的不是替代 1/(d^2+1) 核函数，而是在作者半径处平滑收敛到 0，避免硬截断
+// 产生可见的光斑边界。radius <= 0 视为无限半径，保持旧行为。
+float EvaluateLocalLightRadiusWindow(
+    in float distanceCm,
+    in float radiusCm)
+{
+    if (radiusCm <= 0.0)
+    {
+        return 1.0;
+    }
+    float normalizedDistanceSq =
+        (distanceCm * distanceCm) / (radiusCm * radiusCm);
+    // GLSL 没有 HLSL 的 saturate，这里用 clamp 表达同一个 [0, 1] 截断。
+    float window = clamp(
+        1.0 - normalizedDistanceSq * normalizedDistanceSq,
+        0.0,
+        1.0);
+    return window * window;
+}
+
 LightingLobes CalculatePointLightLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -850,11 +759,27 @@ LightingLobes CalculatePointLightLobes(
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
     // 距离平方直接使用 cm^2；1 cm^2 等价于原先的 1e-4 m^2 近场软化项。
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    // 半径外的像素 attenuation 恒为 0；提前返回可以跳过 25-tap 阴影采样。
+    if (attenuation <= 0.0)
+    {
+        return CreateLightingLobes();
+    }
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
         pointLight.colorIntensity.xyz;
+    // 局部阴影只影响这一盏灯的 radiance；方向光仍由 CSM 单独处理。
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        pointLight.shadowParams,
+        pointLight.positionRadius.xyz,
+        pointLight.directionPad.xyz,
+        pointLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        normal_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
@@ -867,7 +792,52 @@ LightingLobes CalculatePointLightLobes(
         radiance);
 }
 
+// GPU 粒子灯复用点光公式，不进入 CPU 的 RenderScene::lights 列表。
+// count 是 high-water mark，空槽由零强度跳过，因此允许粒子死亡/截断留下空洞。
+LightingLobes CalculateParticleLightLobes(
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float specular)
+{
+    LightingLobes lighting = CreateLightingLobes();
+    uint count = min(particleLightSSBO.header.x, 64u);
+    for (uint index = 0u; index < count; ++index)
+    {
+        ParticleLightGPU source = particleLightSSBO.lights[index];
+        if (source.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        Light pointLight;
+        pointLight.colorIntensity = source.colorIntensity;
+        pointLight.positionRadius = source.positionRadius;
+        pointLight.directionPad = vec4(0.0);
+        pointLight.coneAngleOuterInnerPadPad = vec4(0.0);
+        // GPU 粒子灯不参与局部阴影（预算与收益都不划算）。
+        pointLight.shadowParams = vec4(-1.0);
+        LightingLobes lobes = CalculatePointLightLobes(
+            localShadowMap,
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            specular,
+            pointLight);
+        lighting.diffuse += lobes.diffuse;
+        lighting.specular += lobes.specular;
+    }
+    return lighting;
+}
+
 vec3 CalculateClearCoatPointLight(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -881,11 +851,25 @@ vec3 CalculateClearCoatPointLight(
 {
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, pointLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    if (attenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
         pointLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        pointLight.shadowParams,
+        pointLight.positionRadius.xyz,
+        pointLight.directionPad.xyz,
+        pointLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        topNormal_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -901,6 +885,7 @@ vec3 CalculateClearCoatPointLight(
 }
 
 vec3 CalculateClearCoatSpotLight(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -922,11 +907,26 @@ vec3 CalculateClearCoatSpotLight(
         spotLight.coneAngleOuterInnerPadPad.x,
         spotLightAngle);
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    float shadowedAttenuation = attenuation * angleIntensity;
+    if (shadowedAttenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
     vec3 radiance =
-        attenuation * angleIntensity *
+        shadowedAttenuation *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        spotLight.shadowParams,
+        spotLight.positionRadius.xyz,
+        spotLight.directionPad.xyz,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        topNormal_WS);
     return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
@@ -942,6 +942,7 @@ vec3 CalculateClearCoatSpotLight(
 }
 
 LightingLobes CalculateSpotLightLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -961,11 +962,26 @@ LightingLobes CalculateSpotLightLobes(
         spotLight.coneAngleOuterInnerPadPad.x,
         spotLightAngle);
     float distanceCm = length(lightOffset);
-    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(distanceCm, spotLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    float shadowedAttenuation = attenuation * angleIntensity;
+    if (shadowedAttenuation <= 0.0)
+    {
+        return CreateLightingLobes();
+    }
     vec3 radiance =
-        attenuation * angleIntensity *
+        shadowedAttenuation *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        spotLight.shadowParams,
+        spotLight.positionRadius.xyz,
+        spotLight.directionPad.xyz,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        normal_WS);
     return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
@@ -978,7 +994,65 @@ LightingLobes CalculateSpotLightLobes(
         radiance);
 }
 
+// 按绝对灯下标分派到方向光/点光/聚光公式。
+// 索引来自 tile 列表，语义与 UBOLight 的三段 offset 一致；
+// 越界索引一律跳过，避免损坏的 grid 缓冲造成 OOB。
+LightingLobes AccumulateSceneLightByIndex(
+    in int lightIndex,
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float specular)
+{
+    int lightCount =
+        uboLight.spotLightOffset + uboLight.spotLightCount;
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return CreateLightingLobes();
+    }
+    if (lightIndex < uboLight.pointLightOffset)
+    {
+        return CalculateDirectionalLightLobes(
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            specular,
+            uboLight.lights[lightIndex]);
+    }
+    if (lightIndex < uboLight.spotLightOffset)
+    {
+        return CalculatePointLightLobes(
+            localShadowMap,
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            specular,
+            uboLight.lights[lightIndex]);
+    }
+    return CalculateSpotLightLobes(
+        localShadowMap,
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        specular,
+        uboLight.lights[lightIndex]);
+}
+
 LightingLobes CalculateDirectLightingLobes(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -989,63 +1063,109 @@ LightingLobes CalculateDirectLightingLobes(
 {
     // 所有显式光源统一累积到同一组 lobe，DefaultLit 可直接相加，Thin 则保留分量。
     LightingLobes lighting = CreateLightingLobes();
-    int offset = uboLight.directionalLightOffset;
-    int end = offset + uboLight.directionalLightCount;
-    for (int i = offset; i < end; ++i)
+    if (LightGridEnabled())
     {
-        LightingLobes lightLobes =
-            CalculateDirectionalLightLobes(
-                normal_WS,
-                pixelPos_WS,
-                cameraPos_WS,
-                baseColor,
-                roughness,
-                metallic,
-                specular,
-                uboLight.lights[i]);
-        lighting.diffuse += lightLobes.diffuse;
-        lighting.specular += lightLobes.specular;
+        // tile 列表已经包含“方向光 + 命中该 tile 的点光/聚光”，因此这里
+        // 只遍历列表，不再按类型扫描整个 LightSSBO。gl_FragCoord 与 culling
+        // compute 使用同一套像素坐标；本函数只在 fragment 阶段调用。
+        uint tileIndex =
+            LightGridTileIndexFromFragCoord(gl_FragCoord.xy);
+        uint visibleLightCount =
+            LightGridVisibleLightCount(tileIndex);
+        for (uint slot = 0u; slot < visibleLightCount; ++slot)
+        {
+            int lightIndex = int(
+                LightGridLightIndex(tileIndex, slot));
+            LightingLobes lightLobes =
+                AccumulateSceneLightByIndex(
+                    lightIndex,
+                    localShadowMap,
+                    normal_WS,
+                    pixelPos_WS,
+                    cameraPos_WS,
+                    baseColor,
+                    roughness,
+                    metallic,
+                    specular);
+            lighting.diffuse += lightLobes.diffuse;
+            lighting.specular += lightLobes.specular;
+        }
     }
+    else
+    {
+        // 回退路径：没有聚类 pass（缩略图/自定义图）时保持原来的三段连续循环。
+        int offset = uboLight.directionalLightOffset;
+        int end = offset + uboLight.directionalLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            LightingLobes lightLobes =
+                CalculateDirectionalLightLobes(
+                    normal_WS,
+                    pixelPos_WS,
+                    cameraPos_WS,
+                    baseColor,
+                    roughness,
+                    metallic,
+                    specular,
+                    uboLight.lights[i]);
+            lighting.diffuse += lightLobes.diffuse;
+            lighting.specular += lightLobes.specular;
+        }
 
-    offset = uboLight.pointLightOffset;
-    end = offset + uboLight.pointLightCount;
-    for (int i = offset; i < end; ++i)
-    {
-        LightingLobes lightLobes =
-            CalculatePointLightLobes(
-                normal_WS,
-                pixelPos_WS,
-                cameraPos_WS,
-                baseColor,
-                roughness,
-                metallic,
-                specular,
-                uboLight.lights[i]);
-        lighting.diffuse += lightLobes.diffuse;
-        lighting.specular += lightLobes.specular;
-    }
+        offset = uboLight.pointLightOffset;
+        end = offset + uboLight.pointLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            LightingLobes lightLobes =
+                CalculatePointLightLobes(
+                    localShadowMap,
+                    normal_WS,
+                    pixelPos_WS,
+                    cameraPos_WS,
+                    baseColor,
+                    roughness,
+                    metallic,
+                    specular,
+                    uboLight.lights[i]);
+            lighting.diffuse += lightLobes.diffuse;
+            lighting.specular += lightLobes.specular;
+        }
 
-    offset = uboLight.spotLightOffset;
-    end = offset + uboLight.spotLightCount;
-    for (int i = offset; i < end; ++i)
-    {
-        LightingLobes lightLobes =
-            CalculateSpotLightLobes(
-                normal_WS,
-                pixelPos_WS,
-                cameraPos_WS,
-                baseColor,
-                roughness,
-                metallic,
-                specular,
-                uboLight.lights[i]);
-        lighting.diffuse += lightLobes.diffuse;
-        lighting.specular += lightLobes.specular;
+        offset = uboLight.spotLightOffset;
+        end = offset + uboLight.spotLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            LightingLobes lightLobes =
+                CalculateSpotLightLobes(
+                    localShadowMap,
+                    normal_WS,
+                    pixelPos_WS,
+                    cameraPos_WS,
+                    baseColor,
+                    roughness,
+                    metallic,
+                    specular,
+                    uboLight.lights[i]);
+            lighting.diffuse += lightLobes.diffuse;
+            lighting.specular += lightLobes.specular;
+        }
     }
+    LightingLobes particleLobes = CalculateParticleLightLobes(
+        localShadowMap,
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        specular);
+    lighting.diffuse += particleLobes.diffuse;
+    lighting.specular += particleLobes.specular;
     return lighting;
 }
 
 vec3 CalculateDirectLighting(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -1057,6 +1177,7 @@ vec3 CalculateDirectLighting(
 {
     // 直接光总入口：只聚合显式光源，不承担任何 IBL 或其他间接光职责。
     LightingLobes lobes = CalculateDirectLightingLobes(
+        localShadowMap,
         normal_WS,
         pixelPos_WS,
         cameraPos_WS,
@@ -1067,7 +1188,71 @@ vec3 CalculateDirectLighting(
     return lobes.diffuse + lobes.specular;
 }
 
+// Clear Coat 的按索引分派：只替换公式，灯集合仍来自同一份 tile 列表。
+vec3 AccumulateClearCoatLightByIndex(
+    in int lightIndex,
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness)
+{
+    int lightCount =
+        uboLight.spotLightOffset + uboLight.spotLightCount;
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return vec3(0.0);
+    }
+    if (lightIndex < uboLight.pointLightOffset)
+    {
+        return CalculateClearCoatDirectionalLight(
+            topNormal_WS,
+            bottomNormal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            clearCoatWeight,
+            clearCoatRoughness,
+            uboLight.lights[lightIndex]);
+    }
+    if (lightIndex < uboLight.spotLightOffset)
+    {
+        return CalculateClearCoatPointLight(
+            localShadowMap,
+            topNormal_WS,
+            bottomNormal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            clearCoatWeight,
+            clearCoatRoughness,
+            uboLight.lights[lightIndex]);
+    }
+    return CalculateClearCoatSpotLight(
+        localShadowMap,
+        topNormal_WS,
+        bottomNormal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        clearCoatRoughness,
+        uboLight.lights[lightIndex]);
+}
+
 vec3 CalculateClearCoatDirectLighting(
+    in sampler2DArrayShadow localShadowMap,
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -1079,55 +1264,85 @@ vec3 CalculateClearCoatDirectLighting(
     in float clearCoatRoughness)
 {
     vec3 lighting = vec3(0.0);
-    int offset = uboLight.directionalLightOffset;
-    int end = offset + uboLight.directionalLightCount;
-    for (int i = offset; i < end; ++i)
+    if (LightGridEnabled())
     {
-        lighting += CalculateClearCoatDirectionalLight(
-            topNormal_WS,
-            bottomNormal_WS,
-            pixelPos_WS,
-            cameraPos_WS,
-            baseColor,
-            roughness,
-            metallic,
-            clearCoatWeight,
-            clearCoatRoughness,
-            uboLight.lights[i]);
+        // 与 DefaultLit 同一份 tile 列表；Clear Coat 只替换 BRDF，不重新聚类。
+        uint tileIndex =
+            LightGridTileIndexFromFragCoord(gl_FragCoord.xy);
+        uint visibleLightCount =
+            LightGridVisibleLightCount(tileIndex);
+        for (uint slot = 0u; slot < visibleLightCount; ++slot)
+        {
+            int lightIndex = int(
+                LightGridLightIndex(tileIndex, slot));
+            lighting += AccumulateClearCoatLightByIndex(
+                lightIndex,
+                localShadowMap,
+                topNormal_WS,
+                bottomNormal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                clearCoatWeight,
+                clearCoatRoughness);
+        }
     }
-
-    offset = uboLight.pointLightOffset;
-    end = offset + uboLight.pointLightCount;
-    for (int i = offset; i < end; ++i)
+    else
     {
-        lighting += CalculateClearCoatPointLight(
-            topNormal_WS,
-            bottomNormal_WS,
-            pixelPos_WS,
-            cameraPos_WS,
-            baseColor,
-            roughness,
-            metallic,
-            clearCoatWeight,
-            clearCoatRoughness,
-            uboLight.lights[i]);
-    }
+        int offset = uboLight.directionalLightOffset;
+        int end = offset + uboLight.directionalLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            lighting += CalculateClearCoatDirectionalLight(
+                topNormal_WS,
+                bottomNormal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                clearCoatWeight,
+                clearCoatRoughness,
+                uboLight.lights[i]);
+        }
 
-    offset = uboLight.spotLightOffset;
-    end = offset + uboLight.spotLightCount;
-    for (int i = offset; i < end; ++i)
-    {
-        lighting += CalculateClearCoatSpotLight(
-            topNormal_WS,
-            bottomNormal_WS,
-            pixelPos_WS,
-            cameraPos_WS,
-            baseColor,
-            roughness,
-            metallic,
-            clearCoatWeight,
-            clearCoatRoughness,
-            uboLight.lights[i]);
+        offset = uboLight.pointLightOffset;
+        end = offset + uboLight.pointLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            lighting += CalculateClearCoatPointLight(
+                localShadowMap,
+                topNormal_WS,
+                bottomNormal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                clearCoatWeight,
+                clearCoatRoughness,
+                uboLight.lights[i]);
+        }
+
+        offset = uboLight.spotLightOffset;
+        end = offset + uboLight.spotLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            lighting += CalculateClearCoatSpotLight(
+                localShadowMap,
+                topNormal_WS,
+                bottomNormal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                clearCoatWeight,
+                clearCoatRoughness,
+                uboLight.lights[i]);
+        }
     }
     return lighting;
 }

@@ -18,6 +18,8 @@
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
 
+struct Renderpass;
+
 namespace VL
 {
 struct RenderScene;
@@ -76,6 +78,15 @@ struct RenderFrameRecorderContext
         captureOfflineResult;
     std::function<void()> logShadowCasterCullStats;
     std::function<void()> refreshRenderScene;
+    // 局部光阴影选灯必须在任何 UploadLightsForPass 之前完成。
+    std::function<void()> prepareLocalShadowLights;
+    // 粒子 graphic pass 的灯光/IBL descriptor；光照聚类网格换代时重建。
+    std::function<void()> configureParticleSceneLighting;
+    // 本帧唯一一次粒子模拟推进（compute + 排序）。
+    std::function<void(vk::CommandBuffer&, uint32_t)> recordParticleSimulation;
+    std::function<void(vk::CommandBuffer&, const Renderpass&)>
+        recordParticleSoftDepth;
+    std::function<void()> logLocalShadowCasterStatistics;
 };
 // Owns the per-frame CPU plumbing that does not depend on RenderSystem's
 // lifetime: dynamic-mesh queue drain, global/shadow UBO construction and the

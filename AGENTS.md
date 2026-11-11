@@ -79,6 +79,35 @@ Current implemented areas include:
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
+- GPU particle system: data-driven `PS_*.json` v1/v2 module stacks, compute simulation,
+  billboard/ribbon/mesh/beam/distortion rendering, GPU-count indirect draws, global alpha
+  sorting, events, runtime emitter/budget/user-parameter APIs and telemetry, plus
+  `renderMode: "light"` GPU per-particle point lights (reuse the simulate pool, dedicated
+  `particleLightEmit` compute, fixed 64-slot per-image SSBO, set 0 binding 4) and
+  `renderMode: "decal"` CPU particle decals (shared fixed-step/burst simulation, up to 64
+  total visible DBuffer decals); current schema, ownership and limits:
+  `documents/contracts/particle-system.md`
+- Particle graphics now opt into full scene lighting: billboard/ribbon receive all
+  directional/point/spot lights plus GPU particle lights and IBL through a particle-owned
+  set 0 binding 6..9 contract (wrapped Lambert, `billboardLightingStrength` blend),
+  while mesh particles use the complete DefaultLit path. Transparent ordering uses the
+  authoring `sortOrder` layer, and the global alpha pool is one draw item inside the same
+  depth order instead of being drawn last.
+- Decals now write a six-channel DBuffer including a premultiplied `dbufferEmissive`
+  (additive after lighting, feeds Bloom). Mesh particle materials read albedo/normal/ORM/
+  emissive textures through a dedicated set 1. Mesh, billboard and ribbon particles can
+  cast CSM and local-light shadows (`castShadows`, masked alpha for sprites). Local
+  point/spot shadows use one octahedral slice per light in a `D32` texture array with up
+  to eight selected lights, per-light caster culling and transactional shader reload.
+  `environment.fog` drives the quarter-resolution 32-layer volumetric fog/light-shaft
+  pass before Bloom.
+- BeforeLighting DBuffer decals: data-driven scene `decal` objects, unit-cube projection,
+  a dedicated `decalStencil` D24S8 pass (unit-cube bit0 union mask, stencil gate on the
+  decals pass; sceneDepth stays a sampled input so there is no feedback loop), sceneDepth
+  reconstruction, stable sort instances, DBuffer A/B/C/D + Mask composition,
+  DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM
+  fallback and GPU-side per-decal material descriptors (`albedoMap`/`normalMap`/`ormMap`,
+  no Material Graph); current scope and limits: `documents/contracts/decal-runtime.md`
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -96,7 +125,9 @@ falls back to DefaultLit. Deferred models additionally need GBuffer encode/decod
 Infrastructure that existed only
 to serve those models went with them: the four LUT-generator compute shaders (`clothLookupTables`,
 `eyeCausticLut`, `hairAzimuthalLut`, `subsurfaceLookupTables`), their C++ generators/loaders, the SSS blur and
-composition passes, and set 3 bindings 10..13. `deferredLighting` therefore writes `sceneColor` directly
+composition passes, and the LUT sampler slots that used to live at set 3 bindings 10..13. Those bindings are
+now occupied by the decal DBuffer inputs (10..14), so a rebuilt LUT model must allocate free slots instead.
+`deferredLighting` therefore writes `sceneColor` directly
 again (single output, `loadOp=clear`) and `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` is now a compile-time
 `#error`. Re-adding a deferred model that needs a LUT means adding the graph `input`, the pass material
 texture slot and the shader sampler declaration together, keeping binding order equal to the graph input order.
@@ -316,6 +347,9 @@ bounded async pipeline in `source/render/renderThread.*`:
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
+- `source/particles/`: `particleSystem` asset loading/validation, the GPU compute + billboard
+  runtime, the GPU per-particle light output path, the shared CPU decal emitter simulation,
+  and the retained CPU light reference runtime used only by module tests
 - `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
@@ -423,6 +457,15 @@ Scene JSON currently supports these `type` values:
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+- `particleSystem` (`particlePath` references a `PS_*.json`; a PS file may contain up to 16
+  `emitters[]`, each expanded into its own GPU emitter; current schema and limits are in
+  `documents/contracts/particle-system.md`)
+- `decal` (BeforeLighting DBuffer decal; current scope and limits are in
+  `documents/contracts/decal-runtime.md`; unit-cube projection, sceneDepth
+  reconstruction, DBuffer A/B/C/D + Mask composition, DecalResponse channel
+  masks, sampled albedo/normal/ORM textures (procedural FBM fallback) and
+  per-decal GPU material descriptors (`albedoMap`/`normalMap`/`ormMap`, no
+  Material Graph) are connected; stencil and non-deferred receivers are not)
 - `terrain` (TR heightmap mesh; CPU chunks rendered through the geometry pass)
 - `wind` (scene-global wind, at most one per scene; `direction`/`strength`/optional `gust`;
   no position/rotation; see `documents/contracts/scene-wind.md`)

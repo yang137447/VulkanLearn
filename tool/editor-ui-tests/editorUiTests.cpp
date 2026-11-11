@@ -9,6 +9,8 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <set>
+#include <variant>
 #include <vector>
 
 #include <RmlUi/Core/Context.h>
@@ -18,7 +20,9 @@
 #include <RmlUi/Core/ElementUtilities.h>
 #include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <RmlUi/Core/SystemInterface.h>
 
@@ -29,6 +33,7 @@
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/particlePreviewRequest.h"
 #include "engine/modelPreviewRotation.h"
 #include "input/mouseMotionBatch.h"
 #include "debug/drawDebug.h"
@@ -552,6 +557,40 @@ protected:
         Refresh();
         sink.commands.clear();
         runtimeSink.actions.clear();
+    }
+    void OpenParticleAsset(
+        const std::string& path,
+        nlohmann::json document,
+        nlohmann::json capabilities = nlohmann::json(),
+        bool clearRuntimeActions = true)
+    {
+        snapshot.activeDocument.reset();
+        snapshot.documentTabs.clear();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 5;
+        catalog->assets.push_back(
+            {path, EditorAssetKind::ParticleSystem, "Particle"});
+        snapshot.assetCatalog = catalog;
+        EditorAssetDocumentResultPayload payload;
+        payload.assetPath = path;
+        payload.documentRevision = 3;
+        payload.document = std::move(document);
+        payload.capabilities = capabilities.is_null()
+            ? nlohmann::json{
+                {"fields", nlohmann::json::array({
+                    nlohmann::json{{"field", "colorKeys"},
+                        {"type", "array"}},
+                    nlohmann::json{{"field", "sizeKeys"},
+                        {"type", "array"}}})}}
+            : std::move(capabilities);
+        snapshot.particleDocuments = {std::move(payload)};
+        Refresh();
+        auto* tile = BrowserItem(path);
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        Refresh();
+        sink.commands.clear();
+        if (clearRuntimeActions) runtimeSink.actions.clear();
     }
     void PublishBlueprintViewport()
     {
@@ -8549,6 +8588,28 @@ WorldSnapshot BuildVisibilityTestSnapshot(const World& world)
     return result.IsFailure() ? WorldSnapshot{} : std::move(result.Value());
 }
 
+TEST_F(EditorUiTest, WorldSnapshotCarriesParticleSimulationDelta)
+{
+    World world = MakeVisibilityTestWorld();
+    WorldSnapshotBuilder builder;
+    WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world.GetGeneration();
+    desc.simulationDeltaSeconds = 0.25f;
+
+    auto result = builder.Build(world, desc);
+    ASSERT_FALSE(result.IsFailure());
+    EXPECT_FLOAT_EQ(result.Value().simulationDeltaSeconds, 0.25f);
+
+    // 未显式写入时保持 1/60，首帧行为不变。
+    WorldSnapshotBuildDesc defaults;
+    defaults.worldGeneration = world.GetGeneration();
+    auto defaultResult = builder.Build(world, defaults);
+    ASSERT_FALSE(defaultResult.IsFailure());
+    EXPECT_FLOAT_EQ(
+        defaultResult.Value().simulationDeltaSeconds,
+        1.0f / 60.0f);
+}
+
 size_t CountLightSnapshots(const WorldSnapshot& snapshot, LightSnapshotType type)
 {
     size_t count = 0;
@@ -11111,6 +11172,2329 @@ TEST_F(EditorUiTest, RecursiveBlueprintControlsRemainInsideDetailsAtWindowSizes)
             EXPECT_LE(position.x + bounds.x, right + 1) << input->GetId();
         }
         EXPECT_TRUE(system.errors.empty()) << Errors();
+    }
+}
+
+TEST_F(EditorUiTest, ParticleCurvePanelAddsKeyAndSubmitsWholeArray)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_spark.json";
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 4;
+    catalog->assets.push_back(
+        {path, EditorAssetKind::ParticleSystem, "Spark"});
+    snapshot.assetCatalog = catalog;
+    EditorAssetDocumentResultPayload payload;
+    payload.assetPath = path;
+    payload.documentRevision = 3;
+    payload.document = Json{
+        {"name", "PS_spark"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"colorStart", {1.0, 0.5, 0.25, 1.0}},
+                {"colorEnd", {0.0, 0.0, 0.0, 0.0}},
+                {"size", {10.0, 2.0}}}
+        })}};
+    payload.capabilities = Json{
+        {"fields", Json::array({
+            Json{{"field", "colorKeys"}, {"type", "array"}},
+            Json{{"field", "sizeKeys"}, {"type", "array"}}})}};
+    snapshot.particleDocuments = {payload};
+    Refresh();
+
+    auto* tile = BrowserItem(path);
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+
+    Click("#particle-module-curves");
+    Refresh();
+    Rml::ElementList tracks;
+    document->QuerySelectorAll(tracks, ".particle-curve-track");
+    ASSERT_EQ(tracks.size(), 2u);
+    Rml::ElementList markers;
+    document->QuerySelectorAll(markers, ".particle-curve-marker");
+    EXPECT_EQ(markers.size(), 4u);
+
+    Click("[data-action=particle-curve-add][data-curve=colorKeys]");
+    context->Update();
+    Rml::ElementList afterAdd;
+    document->QuerySelectorAll(afterAdd, ".particle-curve-marker");
+    EXPECT_EQ(afterAdd.size(), 5u);
+
+    // 下一帧 Build 的 flush 序列提交整条 key 数组，保存动作不参与。
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& documentPayload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    EXPECT_EQ(documentPayload.assetPath, path);
+    ASSERT_EQ(documentPayload.changes.size(), 1u);
+    EXPECT_EQ(documentPayload.changes[0].field,
+        "emitters.0.colorKeys");
+    const auto* value = std::get_if<nlohmann::json>(
+        &documentPayload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_array());
+    EXPECT_EQ(value->size(), 3u);
+}
+
+TEST_F(EditorUiTest, ParticleUpgradeV2SubmitsVersionThenEmitterModules)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_upgrade.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_upgrade"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"spawnRate", 12.0},
+                {"gravity", {0.0, -980.0, 0.0}}}
+        })}});
+
+    // v1 文档在字段表单最上方提供升级入口；结构迁移必须把原有字段
+    // 收进模块，而不是丢失。
+    Click("[data-action=particle-upgrade-v2]");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    EXPECT_EQ(payload.assetPath, path);
+    ASSERT_EQ(payload.changes.size(), 2u);
+    EXPECT_EQ(payload.changes[0].field, "version");
+    const auto* version = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(version, nullptr);
+    EXPECT_DOUBLE_EQ(*version, 2.0);
+    EXPECT_EQ(payload.changes[1].field, "emitters");
+    const auto* emitters = std::get_if<nlohmann::json>(
+        &payload.changes[1].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 1u);
+    const auto& emitter = emitters->at(0);
+    ASSERT_TRUE(emitter.contains("modules"));
+    const auto& modules = emitter.at("modules");
+    ASSERT_TRUE(modules.is_array());
+    bool hasSpawn = false;
+    bool hasGravity = false;
+    for (const auto& module : modules)
+    {
+        if (module.value("type", std::string()) == "spawn.rate")
+        {
+            hasSpawn = true;
+            EXPECT_DOUBLE_EQ(module.at("fields").at("spawnRate")
+                .get<double>(), 12.0);
+        }
+        if (module.value("type", std::string()) == "forces.gravity")
+            hasGravity = true;
+    }
+    EXPECT_TRUE(hasSpawn);
+    EXPECT_TRUE(hasGravity);
+}
+
+TEST_F(EditorUiTest, ParticleModuleStackToggleTargetsClickedRow)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_stack.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_stack"},
+        {"type", "particleSystem"},
+        {"version", 2},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"modules", Json::array({
+                    Json{{"type", "emitter"},
+                        {"enabled", true},
+                        {"fields", Json::object()}},
+                    Json{{"type", "spawn.rate"},
+                        {"enabled", true},
+                        {"fields", {{"spawnRate", 10.0}}}}
+                })}}
+        })}});
+
+    // 第二行未被选中也必须切换第二行，而不是当前选中行。
+    Click("[data-action=particle-module-stack-toggle][data-index='1']");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters");
+    const auto* emitters = std::get_if<nlohmann::json>(
+        &payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 1u);
+    const auto& modules =
+        emitters->at(0).at("modules");
+    ASSERT_EQ(modules.size(), 2u);
+    EXPECT_TRUE(modules.at(0).value("enabled", true));
+    EXPECT_FALSE(modules.at(1).value("enabled", true));
+}
+
+TEST_F(EditorUiTest, ParticleCurveRemoveOfSingleKeyResetsField)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_single_key.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_single_key"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"colorKeys", Json::array({
+                    Json{{"time", 0.5f},
+                        {"color", {1.0, 0.5, 0.25, 1.0}}}
+                })},
+                {"colorStart", {1.0, 1.0, 1.0, 1.0}},
+                {"colorEnd", {0.0, 0.0, 0.0, 0.0}},
+                {"size", {10.0, 2.0}}}
+        })}});
+    Click("#particle-module-curves");
+    Refresh();
+
+    auto* remove = document->QuerySelector(
+        "[data-action=particle-curve-remove]"
+        "[data-curve=colorKeys][data-index='0']");
+    ASSERT_NE(remove, nullptr);
+    remove->DispatchEvent("click", {});
+    context->Update();
+
+    // 待提交 reset 让预览回到 colorStart/colorEnd 两个端点。
+    Rml::ElementList markers;
+    document->QuerySelectorAll(markers, ".particle-curve-marker");
+    EXPECT_EQ(markers.size(), 4u);
+
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& documentPayload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    EXPECT_EQ(documentPayload.assetPath, path);
+    ASSERT_EQ(documentPayload.changes.size(), 1u);
+    EXPECT_EQ(documentPayload.changes[0].field,
+        "emitters.0.colorKeys");
+    EXPECT_TRUE(documentPayload.changes[0].reset);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookTableShowsFramesAndSeedsDurationsOnEdit)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"flipbook", Json{{"columns", 4}, {"rows", 4},
+                    {"startFrame", 2}, {"endFrame", 5}}}}})}},
+        Json{{"fields", Json::array({
+            Json{{"field", "flipbook.frameDurations"}, {"type", "array"}},
+            Json{{"field", "flipbook.framePivots"}, {"type", "array"}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    Rml::ElementList rows;
+    document->QuerySelectorAll(rows, ".particle-flipbook-row");
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.flipbook.frameDurations']"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.flipbook.framePivots']"), nullptr);
+    auto* durationInput = document->QuerySelector(
+        "[data-action=particle-flipbook-duration][data-index='1']");
+    auto* pivotInput = document->QuerySelector(
+        "[data-action=particle-flipbook-pivot]"
+        "[data-index='1'][data-component='v']");
+    ASSERT_NE(durationInput, nullptr);
+    ASSERT_NE(pivotInput, nullptr);
+    auto* durationControl = dynamic_cast<Rml::ElementFormControlInput*>(
+        durationInput);
+    auto* pivotControl = dynamic_cast<Rml::ElementFormControlInput*>(
+        pivotInput);
+    ASSERT_NE(durationControl, nullptr);
+    ASSERT_NE(pivotControl, nullptr);
+    EXPECT_EQ(durationControl->GetValue(), "1");
+    EXPECT_EQ(pivotControl->GetValue(), "0.5");
+
+    durationControl->SetValue("3.5");
+    durationInput->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.flipbook.frameDurations");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+    const auto* durations = std::get_if<Json>(
+        &payload.changes[0].value);
+    ASSERT_NE(durations, nullptr);
+    ASSERT_EQ(durations->size(), 4u);
+    EXPECT_FLOAT_EQ(durations->at(0).get<float>(), 1.0f);
+    EXPECT_FLOAT_EQ(durations->at(1).get<float>(), 3.5f);
+    EXPECT_FLOAT_EQ(durations->at(2).get<float>(), 1.0f);
+    EXPECT_FLOAT_EQ(durations->at(3).get<float>(), 1.0f);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookPivotEditClampsAndSubmitsWholeTable)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_pivot.json";
+    Json emitter = Json{
+        {"name", "fire"},
+        {"flipbook", Json{
+            {"columns", 2}, {"rows", 2},
+            {"startFrame", 0}, {"endFrame", 3},
+            {"frameDurations", Json::array({1.0, 2.0, 3.0, 4.0})},
+            {"framePivots", Json::array({
+                Json::array({0.1, 0.2}),
+                Json::array({0.3, 0.4}),
+                Json::array({0.5, 0.6}),
+                Json::array({0.7, 0.8})})}}}};
+    Json assetDocument = Json{
+        {"name", "PS_flipbook_pivot"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({std::move(emitter)})}};
+    OpenParticleAsset(path, std::move(assetDocument));
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    auto* input = document->QuerySelector(
+        "[data-action=particle-flipbook-pivot]"
+        "[data-index='2'][data-component='u']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("1.4");
+    input->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.flipbook.framePivots");
+    const auto* pivots = std::get_if<Json>(
+        &payload.changes[0].value);
+    ASSERT_NE(pivots, nullptr);
+    ASSERT_EQ(pivots->size(), 4u);
+    EXPECT_FLOAT_EQ(pivots->at(0).at(0).get<float>(), 0.1f);
+    EXPECT_FLOAT_EQ(pivots->at(2).at(0).get<float>(), 1.0f);
+    EXPECT_FLOAT_EQ(pivots->at(2).at(1).get<float>(), 0.6f);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookSeedAndResetButtonsSubmitFieldChanges)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_actions.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_actions"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"flipbook", Json{{"columns", 2}, {"rows", 2},
+                    {"startFrame", 0}, {"endFrame", 3}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    Click("[data-action=particle-flipbook-seed-durations]");
+    Refresh();
+    const EditorCommandEnvelope* seed = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            seed = &command;
+    ASSERT_NE(seed, nullptr);
+    const auto& seedPayload =
+        std::get<ModifyAssetDocumentPayload>(seed->payload);
+    ASSERT_EQ(seedPayload.changes.size(), 1u);
+    EXPECT_EQ(seedPayload.changes[0].field,
+        "emitters.0.flipbook.frameDurations");
+    const auto* durations = std::get_if<Json>(
+        &seedPayload.changes[0].value);
+    ASSERT_NE(durations, nullptr);
+    ASSERT_EQ(durations->size(), 4u);
+    for (const Json& duration : *durations)
+        EXPECT_FLOAT_EQ(duration.get<float>(), 1.0f);
+
+    auto& authored = snapshot.particleDocuments[0];
+    authored.document["emitters"][0]["flipbook"]["frameDurations"] =
+        *durations;
+    ++authored.documentRevision;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::ModifyParticleDocument, true, "succeeded"});
+    Refresh();
+    sink.commands.clear();
+
+    Click("[data-action=particle-flipbook-reset-pivots]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& resetPayload =
+        std::get<ModifyAssetDocumentPayload>(
+            sink.commands[0].payload);
+    ASSERT_EQ(resetPayload.changes.size(), 1u);
+    EXPECT_EQ(resetPayload.changes[0].field,
+        "emitters.0.flipbook.framePivots");
+    EXPECT_TRUE(resetPayload.changes[0].reset);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookInvalidFrameRangeShowsHintWithoutRows)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_invalid.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_invalid"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"flipbook", Json{{"columns", 4}, {"rows", 4},
+                    {"startFrame", 5}, {"endFrame", 2}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    Rml::ElementList rows;
+    document->QuerySelectorAll(rows, ".particle-flipbook-row");
+    EXPECT_TRUE(rows.empty());
+    EXPECT_NE(document->QuerySelector(".particle-flipbook-warning"),
+        nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-duration]"), nullptr);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookUvRectEditSubmitsWholeTable)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_uv.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_uv"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"flipbook", Json{{"columns", 2}, {"rows", 2},
+                    {"startFrame", 0}, {"endFrame", 1}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.flipbook.frameUVs']"), nullptr);
+    auto* u0 = document->QuerySelector(
+        "[data-action=particle-flipbook-uv]"
+        "[data-index='0'][data-component='u0']");
+    auto* v1 = document->QuerySelector(
+        "[data-action=particle-flipbook-uv]"
+        "[data-index='1'][data-component='v1']");
+    ASSERT_NE(u0, nullptr);
+    ASSERT_NE(v1, nullptr);
+    auto* u0Control = dynamic_cast<Rml::ElementFormControlInput*>(u0);
+    auto* v1Control = dynamic_cast<Rml::ElementFormControlInput*>(v1);
+    ASSERT_NE(u0Control, nullptr);
+    ASSERT_NE(v1Control, nullptr);
+    EXPECT_EQ(u0Control->GetValue(), "0");
+    EXPECT_EQ(v1Control->GetValue(), "1");
+
+    u0Control->SetValue("0.25");
+    u0->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.flipbook.frameUVs");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+    const auto* uvs = std::get_if<Json>(
+        &payload.changes[0].value);
+    ASSERT_NE(uvs, nullptr);
+    ASSERT_EQ(uvs->size(), 2u);
+    EXPECT_FLOAT_EQ(uvs->at(0).at(0).get<float>(), 0.25f);
+    EXPECT_FLOAT_EQ(uvs->at(0).at(1).get<float>(), 0.0f);
+    EXPECT_FLOAT_EQ(uvs->at(0).at(2).get<float>(), 1.0f);
+    EXPECT_FLOAT_EQ(uvs->at(0).at(3).get<float>(), 1.0f);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookUvSeedAndResetButtons)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_uv_actions.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_uv_actions"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"flipbook", Json{{"columns", 2}, {"rows", 2},
+                    {"startFrame", 0}, {"endFrame", 3}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    ASSERT_NE(document->QuerySelector(
+        "[data-action=particle-flipbook-seed-uvs]"), nullptr);
+    Click("[data-action=particle-flipbook-seed-uvs]");
+    Refresh();
+    const EditorCommandEnvelope* seed = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            seed = &command;
+    ASSERT_NE(seed, nullptr);
+    const auto& seedPayload =
+        std::get<ModifyAssetDocumentPayload>(seed->payload);
+    ASSERT_EQ(seedPayload.changes.size(), 1u);
+    EXPECT_EQ(seedPayload.changes[0].field,
+        "emitters.0.flipbook.frameUVs");
+    const auto* uvs = std::get_if<Json>(
+        &seedPayload.changes[0].value);
+    ASSERT_NE(uvs, nullptr);
+    ASSERT_EQ(uvs->size(), 4u);
+    for (const Json& rect : *uvs)
+    {
+        ASSERT_EQ(rect.size(), 4u);
+        EXPECT_FLOAT_EQ(rect.at(0).get<float>(), 0.0f);
+        EXPECT_FLOAT_EQ(rect.at(1).get<float>(), 0.0f);
+        EXPECT_FLOAT_EQ(rect.at(2).get<float>(), 1.0f);
+        EXPECT_FLOAT_EQ(rect.at(3).get<float>(), 1.0f);
+    }
+
+    auto& authored = snapshot.particleDocuments[0];
+    authored.document["emitters"][0]["flipbook"]["frameUVs"] = *uvs;
+    ++authored.documentRevision;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::ModifyParticleDocument, true, "succeeded"});
+    Refresh();
+    sink.commands.clear();
+
+    Click("[data-action=particle-flipbook-reset-uvs]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& resetPayload =
+        std::get<ModifyAssetDocumentPayload>(
+            sink.commands[0].payload);
+    ASSERT_EQ(resetPayload.changes.size(), 1u);
+    EXPECT_EQ(resetPayload.changes[0].field,
+        "emitters.0.flipbook.frameUVs");
+    EXPECT_TRUE(resetPayload.changes[0].reset);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookUvColumnsHiddenBeyond64Frames)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_flipbook_uv_256.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_uv_256"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"flipbook", Json{{"columns", 16}, {"rows", 16},
+                    {"startFrame", 0}, {"endFrame", 255}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    Rml::ElementList rows;
+    document->QuerySelectorAll(rows, ".particle-flipbook-row");
+    ASSERT_EQ(rows.size(), 256u);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-uv]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-seed-uvs]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-reset-uvs]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-rotation]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-seed-rotations]"), nullptr);
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-flipbook-reset-rotations]"), nullptr);
+    // 时长/轴心仍然可编辑。
+    EXPECT_NE(document->QuerySelector(
+        "[data-action=particle-flipbook-duration]"), nullptr);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookRotationEditSubmitsWholeTable)
+{
+    using Json = nlohmann::json;
+    const std::string path =
+        "Maps/SC_test/PS_flipbook_rotation.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_rotation"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"flipbook", Json{{"columns", 2}, {"rows", 2},
+                    {"startFrame", 0}, {"endFrame", 2},
+                    {"frameRotations", Json::array({0.0, 30.0, -45.0})}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    EXPECT_EQ(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.flipbook.frameRotations']"), nullptr);
+    auto* input = document->QuerySelector(
+        "[data-action=particle-flipbook-rotation]"
+        "[data-index='1']");
+    ASSERT_NE(input, nullptr);
+    auto* control =
+        dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    EXPECT_EQ(control->GetValue(), "30");
+
+    control->SetValue("75.5");
+    input->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.flipbook.frameRotations");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+    const auto* rotations = std::get_if<Json>(
+        &payload.changes[0].value);
+    ASSERT_NE(rotations, nullptr);
+    ASSERT_EQ(rotations->size(), 3u);
+    EXPECT_FLOAT_EQ(rotations->at(0).get<float>(), 0.0f);
+    EXPECT_FLOAT_EQ(rotations->at(1).get<float>(), 75.5f);
+    EXPECT_FLOAT_EQ(rotations->at(2).get<float>(), -45.0f);
+}
+
+TEST_F(EditorUiTest, ParticleFlipbookRotationSeedAndResetButtons)
+{
+    using Json = nlohmann::json;
+    const std::string path =
+        "Maps/SC_test/PS_flipbook_rotation_actions.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_flipbook_rotation_actions"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"flipbook", Json{{"columns", 2}, {"rows", 2},
+                    {"startFrame", 0}, {"endFrame", 3}}}}})}});
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    ASSERT_NE(document->QuerySelector(
+        "[data-action=particle-flipbook-seed-rotations]"), nullptr);
+    Click("[data-action=particle-flipbook-seed-rotations]");
+    Refresh();
+    const EditorCommandEnvelope* seed = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            seed = &command;
+    ASSERT_NE(seed, nullptr);
+    const auto& seedPayload =
+        std::get<ModifyAssetDocumentPayload>(seed->payload);
+    ASSERT_EQ(seedPayload.changes.size(), 1u);
+    EXPECT_EQ(seedPayload.changes[0].field,
+        "emitters.0.flipbook.frameRotations");
+    const auto* rotations = std::get_if<Json>(
+        &seedPayload.changes[0].value);
+    ASSERT_NE(rotations, nullptr);
+    ASSERT_EQ(rotations->size(), 4u);
+    for (const Json& value : *rotations)
+        EXPECT_FLOAT_EQ(value.get<float>(), 0.0f);
+
+    auto& authored = snapshot.particleDocuments[0];
+    authored.document["emitters"][0]["flipbook"]["frameRotations"] =
+        *rotations;
+    ++authored.documentRevision;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::ModifyParticleDocument, true, "succeeded"});
+    Refresh();
+    sink.commands.clear();
+
+    Click("[data-action=particle-flipbook-reset-rotations]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& resetPayload =
+        std::get<ModifyAssetDocumentPayload>(
+            sink.commands[0].payload);
+    ASSERT_EQ(resetPayload.changes.size(), 1u);
+    EXPECT_EQ(resetPayload.changes[0].field,
+        "emitters.0.flipbook.frameRotations");
+    EXPECT_TRUE(resetPayload.changes[0].reset);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsBurstIntervalAndLodFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_burst_lod.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_burst_lod"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"burst", true},
+                {"burstInterval", 2.5},
+                {"spawnRate", 200.0},
+                {"lodDistance", 3000.0},
+                {"lodSpawnRateScale", 0.4},
+                {"lod", Json{{"tiers", Json::array({
+                    Json{{"distance", 1000.0},
+                        {"spawnRateScale", 0.6}},
+                    Json{{"distance", 3000.0},
+                        {"spawnRateScale", 0.25}}})}}}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "burstInterval"}, {"type", "number"}, {"unit", "s"}},
+            Json{{"field", "spawnRate"}, {"type", "number"}},
+            Json{{"field", "lodDistance"}, {"type", "number"}, {"unit", "cm"}},
+            Json{{"field", "lodSpawnRateScale"}, {"type", "number"}},
+            Json{{"field", "lod.tiers"}, {"type", "array"},
+                {"resettable", true}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    auto* burstInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.burstInterval']");
+    auto* distanceInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.lodDistance']");
+    auto* scaleInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.lodSpawnRateScale']");
+    auto* tiersInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.lod.tiers']");
+    ASSERT_NE(burstInput, nullptr);
+    ASSERT_NE(distanceInput, nullptr);
+    ASSERT_NE(scaleInput, nullptr);
+    ASSERT_NE(tiersInput, nullptr);
+    auto* burstControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(burstInput);
+    auto* distanceControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(distanceInput);
+    auto* scaleControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(scaleInput);
+    auto* tiersControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(tiersInput);
+    ASSERT_NE(burstControl, nullptr);
+    ASSERT_NE(distanceControl, nullptr);
+    ASSERT_NE(scaleControl, nullptr);
+    ASSERT_NE(tiersControl, nullptr);
+    EXPECT_EQ(burstControl->GetValue(), "2.5");
+    EXPECT_EQ(distanceControl->GetValue(), "3000.0");
+    EXPECT_EQ(scaleControl->GetValue(), "0.4");
+    const Json tiers = Json::parse(tiersControl->GetValue());
+    ASSERT_TRUE(tiers.is_array());
+    ASSERT_EQ(tiers.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        tiers.at(0).at("distance").get<float>(), 1000.0f);
+    EXPECT_FLOAT_EQ(
+        tiers.at(1).at("spawnRateScale").get<float>(), 0.25f);
+
+    burstControl->SetValue("4");
+    burstInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.burstInterval");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+    const auto* value = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_DOUBLE_EQ(*value, 4.0);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsBeamCurveAndArcFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_beam_fields.json";
+    Json assetDocument = Json::parse(R"json({
+        "name": "PS_beam_fields",
+        "type": "particleSystem",
+        "version": 2,
+        "emitters": [{
+            "name": "arc",
+            "modules": [{
+                "type": "renderer",
+                "enabled": true,
+                "fields": {
+                    "renderMode": "beam",
+                    "beam": {
+                        "count": 2,
+                        "colorKeys": [
+                            {"time": 0.0, "color": [2.0, 4.0, 8.0, 1.0]}
+                        ],
+                        "widthKeys": [
+                            {"time": 0.0, "width": 0.4}
+                        ],
+                        "arcs": [
+                            {"colorStart": [1.0, 0.7, 0.2],
+                             "widthScale": 0.8},
+                            {"colorStart": [0.2, 0.7, 1.0],
+                             "widthScale": 0.4}
+                        ]
+                    }
+                }
+            }]
+        }]
+    })json");
+    Json capabilities = Json::parse(R"json({
+        "fields": [
+            {"field": "beam.colorKeys", "type": "array",
+             "resettable": true},
+            {"field": "beam.widthKeys", "type": "array",
+             "resettable": true},
+            {"field": "beam.arcs", "type": "array",
+             "resettable": true}
+        ]
+    })json");
+    OpenParticleAsset(
+        path, std::move(assetDocument), std::move(capabilities));
+    Click("#particle-module-emitter");
+    Refresh();
+
+    auto* colorInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.colorKeys']");
+    auto* widthInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.widthKeys']");
+    auto* arcsInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.beam.arcs']");
+    ASSERT_NE(colorInput, nullptr);
+    ASSERT_NE(widthInput, nullptr);
+    ASSERT_NE(arcsInput, nullptr);
+    auto* colorControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(colorInput);
+    auto* widthControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(widthInput);
+    auto* arcsControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(arcsInput);
+    ASSERT_NE(colorControl, nullptr);
+    ASSERT_NE(widthControl, nullptr);
+    ASSERT_NE(arcsControl, nullptr);
+    const Json colorKeys = Json::parse(colorControl->GetValue());
+    ASSERT_EQ(colorKeys.size(), 1u);
+    EXPECT_FLOAT_EQ(
+        colorKeys.at(0).at("color").at(2).get<float>(), 8.0f);
+    const Json arcs = Json::parse(arcsControl->GetValue());
+    ASSERT_EQ(arcs.size(), 2u);
+    EXPECT_FLOAT_EQ(
+        arcs.at(1).at("widthScale").get<float>(), 0.4f);
+
+    widthControl->SetValue(R"([{"time":0.0,"width":0.25}])");
+    widthInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.beam.widthKeys");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "arc");
+    const auto* value = std::get_if<nlohmann::json>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    ASSERT_TRUE(value->is_array());
+    EXPECT_FLOAT_EQ(value->at(0).at("width").get<float>(), 0.25f);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsRotationFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_rotation.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_rotation"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"rotation", 15.0},
+                {"rotationSpeed", 30.0},
+                {"rotationRandom", true}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "rotation"}, {"type", "number"}, {"unit", "degrees"}},
+            Json{{"field", "rotationSpeed"}, {"type", "number"}, {"unit", "degrees/s"}},
+            Json{{"field", "rotationRandom"}, {"type", "boolean"}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    auto* rotationInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.rotation']");
+    auto* speedInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.rotationSpeed']");
+    auto* randomInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.rotationRandom']");
+    ASSERT_NE(rotationInput, nullptr);
+    ASSERT_NE(speedInput, nullptr);
+    ASSERT_NE(randomInput, nullptr);
+    auto* rotationControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(rotationInput);
+    auto* speedControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(speedInput);
+    auto* randomControl = dynamic_cast<Rml::ElementFormControlSelect*>(
+        randomInput);
+    ASSERT_NE(rotationControl, nullptr);
+    ASSERT_NE(speedControl, nullptr);
+    ASSERT_NE(randomControl, nullptr);
+    EXPECT_EQ(rotationControl->GetValue(), "15.0");
+    EXPECT_EQ(speedControl->GetValue(), "30.0");
+    EXPECT_EQ(randomControl->GetValue(), "true");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsBillboardLightingFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_billboard_lighting.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_billboard_lighting"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"billboardLighting", true},
+                {"billboardAmbient", 0.35},
+                {"billboardShadows", false}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "billboardLighting"}, {"type", "boolean"},
+                {"resettable", true}},
+            Json{{"field", "billboardAmbient"}, {"type", "number"},
+                {"resettable", true}, {"minimum", 0.0},
+                {"maximum", 1.0}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* lightingInput = query("emitters.0.billboardLighting");
+    auto* ambientInput = query("emitters.0.billboardAmbient");
+    ASSERT_NE(lightingInput, nullptr);
+    ASSERT_NE(ambientInput, nullptr);
+    auto* lightingControl = dynamic_cast<Rml::ElementFormControlSelect*>(
+        lightingInput);
+    auto* ambientControl = dynamic_cast<Rml::ElementFormControlInput*>(
+        ambientInput);
+    ASSERT_NE(lightingControl, nullptr);
+    ASSERT_NE(ambientControl, nullptr);
+    EXPECT_EQ(lightingControl->GetValue(), "true");
+    EXPECT_EQ(ambientControl->GetValue(), "0.35");
+
+    ambientControl->SetValue("0.7");
+    ambientInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.billboardAmbient");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "smoke");
+    const auto* value = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_DOUBLE_EQ(*value, 0.7);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsRibbonFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_ribbon.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_ribbon"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "spark"},
+                {"renderMode", "ribbon"},
+                {"ribbonWidth", 3.0},
+                {"ribbonSegments", 3},
+                {"ribbonFade", 0.8}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "renderMode"}, {"type", "string"}},
+            Json{{"field", "ribbonWidth"}, {"type", "number"}, {"unit", "cm"}},
+            Json{{"field", "ribbonSegments"}, {"type", "number"}},
+            Json{{"field", "ribbonFade"}, {"type", "number"}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* modeInput = query("emitters.0.renderMode");
+    auto* widthInput = query("emitters.0.ribbonWidth");
+    auto* segmentsInput = query("emitters.0.ribbonSegments");
+    auto* fadeInput = query("emitters.0.ribbonFade");
+    ASSERT_NE(modeInput, nullptr);
+    ASSERT_NE(widthInput, nullptr);
+    ASSERT_NE(segmentsInput, nullptr);
+    ASSERT_NE(fadeInput, nullptr);
+
+    const auto value = [](Rml::Element* element)
+    {
+        auto* control =
+            dynamic_cast<Rml::ElementFormControlInput*>(element);
+        return control ? control->GetValue() : std::string();
+    };
+    EXPECT_EQ(value(modeInput), "ribbon");
+    EXPECT_EQ(value(widthInput), "3.0");
+    EXPECT_EQ(value(segmentsInput), "3");
+    EXPECT_EQ(value(fadeInput), "0.8");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsMeshFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_mesh.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_mesh"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "debris"},
+                {"renderMode", "mesh"},
+                {"mesh", Json{
+                    {"path", "Common/Meshes/SM_cube.json"},
+                    {"scale", {2.0, 3.0, 4.0}},
+                    {"alignment", "velocity"}}}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "renderMode"}, {"type", "string"}},
+            Json{{"field", "mesh.path"}, {"type", "string"},
+                {"unit", "asset_path"}},
+            Json{{"field", "mesh.scale"}, {"type", "vec3"}},
+            Json{{"field", "mesh.alignment"}, {"type", "string"}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* pathInput = query("emitters.0.mesh.path");
+    auto* scaleInput = query("emitters.0.mesh.scale");
+    auto* alignmentInput = query("emitters.0.mesh.alignment");
+    ASSERT_NE(pathInput, nullptr);
+    ASSERT_NE(scaleInput, nullptr);
+    ASSERT_NE(alignmentInput, nullptr);
+
+    const auto value = [](Rml::Element* element)
+    {
+        auto* control =
+            dynamic_cast<Rml::ElementFormControlInput*>(element);
+        return control ? control->GetValue() : std::string();
+    };
+    EXPECT_EQ(value(pathInput), "Common/Meshes/SM_cube.json");
+    EXPECT_EQ(value(scaleInput), "[2.0,3.0,4.0]");
+    EXPECT_EQ(value(alignmentInput), "velocity");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsDecalFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_decal_fields.json";
+    const Json decal = Json{
+        {"size", {80.0, 320.0, 240.0}},
+        {"rotation", {0.0, 0.0, 90.0}},
+        {"color", {0.4, 0.2, 0.1}},
+        {"opacity", 0.7},
+        {"edgeSoftness", 0.35},
+        {"noiseStrength", 0.5},
+        {"roughness", 0.8},
+        {"metallic", 0.1},
+        {"ambientOcclusion", 0.6},
+        {"normalStrength", 0.4},
+        {"decalResponse", "metallicRoughnessNormal"},
+        {"sortOrder", 3}};
+    const Json emitter = Json{
+        {"name", "scorch"},
+        {"renderMode", "decal"},
+        {"decal", decal}};
+    Json emitters = Json::array();
+    emitters.push_back(emitter);
+    const Json assetDocument = Json{
+        {"name", "PS_decal_fields"},
+        {"type", "particleSystem"},
+        {"emitters", emitters}};
+    Json fieldList = Json::array();
+    fieldList.push_back(
+        Json{{"field", "renderMode"}, {"type", "string"}});
+    fieldList.push_back(
+        Json{{"field", "decal.size"}, {"type", "vec3"},
+            {"unit", "cm"}});
+    fieldList.push_back(
+        Json{{"field", "decal.opacity"}, {"type", "number"}});
+    fieldList.push_back(
+        Json{{"field", "decal.decalResponse"}, {"type", "string"}});
+    fieldList.push_back(
+        Json{{"field", "decal.sortOrder"}, {"type", "number"}});
+    const Json capabilities = Json{{"fields", fieldList}};
+    OpenParticleAsset(path, assetDocument, capabilities);
+    Click("#particle-module-emitter");
+    Refresh();
+
+    const auto query = [this](const char* field)
+    {
+        return document->QuerySelector(
+            std::string("[data-action=particle-field][data-field='") +
+            field + "']");
+    };
+    auto* sizeInput = query("emitters.0.decal.size");
+    auto* opacityInput = query("emitters.0.decal.opacity");
+    auto* responseInput = query("emitters.0.decal.decalResponse");
+    auto* sortInput = query("emitters.0.decal.sortOrder");
+    ASSERT_NE(sizeInput, nullptr);
+    ASSERT_NE(opacityInput, nullptr);
+    ASSERT_NE(responseInput, nullptr);
+    ASSERT_NE(sortInput, nullptr);
+
+    const auto value = [](Rml::Element* element)
+    {
+        auto* control =
+            dynamic_cast<Rml::ElementFormControlInput*>(element);
+        return control ? control->GetValue() : std::string();
+    };
+    EXPECT_EQ(value(sizeInput), "[80.0,320.0,240.0]");
+    EXPECT_EQ(value(opacityInput), "0.7");
+    EXPECT_EQ(value(responseInput), "metallicRoughnessNormal");
+    EXPECT_EQ(value(sortInput), "3");
+
+    auto* opacityControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(opacityInput);
+    ASSERT_NE(opacityControl, nullptr);
+    opacityControl->SetValue("0.45");
+    opacityInput->DispatchEvent("change", {});
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.decal.opacity");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "scorch");
+    const auto* number = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(number, nullptr);
+    EXPECT_DOUBLE_EQ(*number, 0.45);
+}
+
+nlohmann::json ParticleStructureDocument()
+{
+    using Json = nlohmann::json;
+    return Json{
+        {"name", "PS_campfire"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"maxParticles", 512},
+                {"spawnRate", 120.0},
+                {"position", {5.0, 0.0, 0.0}}},
+            Json{{"name", "smoke"},
+                {"maxParticles", 2048},
+                {"spawnRate", 30.0}}})}};
+}
+
+TEST_F(EditorUiTest, ParticleEmitterAddCopiesSelectionAndSubmitsArray)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_campfire.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+
+    Click("#particle-emitter-add");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    EXPECT_EQ(payload.assetPath, path);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters");
+    EXPECT_FALSE(payload.changes[0].reset);
+    const auto* emitters =
+        std::get_if<Json>(&payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 3u);
+    EXPECT_EQ(emitters->at(1).at("name"), "fire_copy");
+    EXPECT_EQ(emitters->at(1).at("maxParticles"), 512);
+    EXPECT_EQ(emitters->at(1).at("position"), Json({5.0, 0.0, 0.0}));
+    EXPECT_EQ(emitters->at(2).at("name"), "smoke");
+    // 选择跟随新插入的发射器。
+    ASSERT_NE(Control("particle-emitter-select"), nullptr);
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "1");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterStructureButtonsReorderAndRemove)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_campfire.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+
+    auto lastEmitters = [&]() -> Json
+    {
+        for (auto it = sink.commands.rbegin();
+             it != sink.commands.rend(); ++it)
+        {
+            if (it->type != EditorCommandType::ModifyParticleDocument)
+                continue;
+            const auto& payload =
+                std::get<ModifyAssetDocumentPayload>(it->payload);
+            if (payload.changes.size() != 1u) continue;
+            const auto* value =
+                std::get_if<Json>(&payload.changes[0].value);
+            if (value != nullptr && value->is_array()) return *value;
+        }
+        return Json();
+    };
+    auto apply = [&](const Json& emitters)
+    {
+        auto& document = snapshot.particleDocuments[0];
+        document.document["emitters"] = emitters;
+        ++document.documentRevision;
+        Refresh();
+        sink.commands.clear();
+    };
+
+    Click("#particle-emitter-add");
+    Refresh();
+    Json emitters = lastEmitters();
+    ASSERT_EQ(emitters.size(), 3u);
+    apply(emitters);
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "1");
+
+    Click("#particle-emitter-up");
+    Refresh();
+    emitters = lastEmitters();
+    ASSERT_EQ(emitters.size(), 3u);
+    EXPECT_EQ(emitters.at(0).at("name"), "fire_copy");
+    EXPECT_EQ(emitters.at(1).at("name"), "fire");
+    EXPECT_EQ(emitters.at(2).at("name"), "smoke");
+    apply(emitters);
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "0");
+
+    Click("#particle-emitter-down");
+    Refresh();
+    emitters = lastEmitters();
+    ASSERT_EQ(emitters.size(), 3u);
+    EXPECT_EQ(emitters.at(0).at("name"), "fire");
+    EXPECT_EQ(emitters.at(1).at("name"), "fire_copy");
+    apply(emitters);
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "1");
+
+    Click("#particle-emitter-remove");
+    Refresh();
+    emitters = lastEmitters();
+    ASSERT_EQ(emitters.size(), 2u);
+    EXPECT_EQ(emitters.at(0).at("name"), "fire");
+    EXPECT_EQ(emitters.at(1).at("name"), "smoke");
+    apply(emitters);
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "1");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterStructureButtonsRespectLimits)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_single.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_single"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({Json{{"name", "only"}}})}});
+
+    auto* add = document->GetElementById("particle-emitter-add");
+    auto* remove = document->GetElementById("particle-emitter-remove");
+    auto* up = document->GetElementById("particle-emitter-up");
+    auto* down = document->GetElementById("particle-emitter-down");
+    ASSERT_NE(add, nullptr);
+    ASSERT_NE(remove, nullptr);
+    ASSERT_NE(up, nullptr);
+    ASSERT_NE(down, nullptr);
+    EXPECT_FALSE(add->HasAttribute("disabled"));
+    EXPECT_TRUE(remove->HasAttribute("disabled"));
+    EXPECT_TRUE(up->HasAttribute("disabled"));
+    EXPECT_TRUE(down->HasAttribute("disabled"));
+
+    Json emitters = Json::array();
+    for (size_t index = 0; index < 16; ++index)
+        emitters.push_back(Json{{"name", "e" + std::to_string(index)}});
+    auto& documentSnapshot = snapshot.particleDocuments[0];
+    documentSnapshot.document["emitters"] = emitters;
+    ++documentSnapshot.documentRevision;
+    Refresh();
+
+    add = document->GetElementById("particle-emitter-add");
+    remove = document->GetElementById("particle-emitter-remove");
+    ASSERT_NE(add, nullptr);
+    ASSERT_NE(remove, nullptr);
+    EXPECT_TRUE(add->HasAttribute("disabled"));
+    EXPECT_FALSE(remove->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, ParticleEmitterStructureMergesPendingFieldEdits)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_merge.json";
+    OpenParticleAsset(path, ParticleStructureDocument(), Json{
+        {"fields", Json::array({
+            Json{{"field", "spawnRate"}, {"type", "number"}}})}});
+
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("300");
+    input->DispatchEvent("change", {});
+    context->Update();
+    // 字段草稿尚未 flush；结构编辑必须自己把它合并进整条数组。
+    for (const auto& command : sink.commands)
+        EXPECT_NE(command.type,
+            EditorCommandType::ModifyParticleDocument);
+
+    Click("#particle-emitter-add");
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters");
+    const auto* emitters =
+        std::get_if<Json>(&payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_EQ(emitters->size(), 3u);
+    EXPECT_EQ(emitters->at(0).at("spawnRate"), 300.0);
+    EXPECT_EQ(emitters->at(1).at("spawnRate"), 300.0);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterStructureCoalescesRapidAdds)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_campfire.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+
+    // 中间不 Refresh：第二次点击必须基于第一次尚未 flush 的数组继续新增。
+    Click("#particle-emitter-add");
+    Click("#particle-emitter-add");
+    Refresh();
+
+    std::vector<const EditorCommandEnvelope*> structureCommands;
+    for (const auto& command : sink.commands)
+    {
+        if (command.type != EditorCommandType::ModifyParticleDocument)
+            continue;
+        const auto& payload =
+            std::get<ModifyAssetDocumentPayload>(command.payload);
+        if (payload.changes.size() == 1u &&
+            payload.changes[0].field == "emitters")
+        {
+            structureCommands.push_back(&command);
+        }
+    }
+    ASSERT_EQ(structureCommands.size(), 1u);
+    const auto* emitters = std::get_if<Json>(
+        &std::get<ModifyAssetDocumentPayload>(
+            structureCommands[0]->payload).changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_EQ(emitters->size(), 4u);
+    EXPECT_EQ(emitters->at(0).at("name"), "fire");
+    EXPECT_EQ(emitters->at(1).at("name"), "fire_copy");
+    EXPECT_EQ(emitters->at(2).at("name"), "fire_copy_copy");
+    EXPECT_EQ(emitters->at(3).at("name"), "smoke");
+    std::set<std::string> names;
+    for (const auto& emitter : *emitters)
+        EXPECT_TRUE(names.insert(emitter.at("name").get<std::string>()).second);
+
+    // 模拟命令落地后的新快照：pending 选择应跟随第二次新增的发射器。
+    auto& documentSnapshot = snapshot.particleDocuments[0];
+    documentSnapshot.document["emitters"] = *emitters;
+    ++documentSnapshot.documentRevision;
+    Refresh();
+    EXPECT_EQ(Control("particle-emitter-select")->GetValue(), "2");
+}
+
+TEST_F(EditorUiTest, ParticleEmitterStructureFailureKeepsPendingFieldEdits)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_full.json";
+    Json emitters = Json::array();
+    for (size_t index = 0; index < 16; ++index)
+        emitters.push_back(Json{{"name", "e" + std::to_string(index)},
+            {"spawnRate", 120.0}});
+    OpenParticleAsset(path, Json{
+        {"name", "PS_full"},
+        {"type", "particleSystem"},
+        {"emitters", emitters}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "spawnRate"}, {"type", "number"}}})}});
+
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("300");
+    input->DispatchEvent("change", {});
+    context->Update();
+
+    auto* add = document->GetElementById("particle-emitter-add");
+    ASSERT_NE(add, nullptr);
+    EXPECT_TRUE(add->HasAttribute("disabled"));
+    Click("#particle-emitter-add");
+    // 失败路径不得丢弃尚未 flush 的字段草稿。
+    Refresh();
+
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& command = sink.commands[0];
+    ASSERT_EQ(command.type, EditorCommandType::ModifyParticleDocument);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(command.payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters.0.spawnRate");
+    const auto* value =
+        std::get_if<double>(&payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(*value, 300.0);
+}
+
+nlohmann::json ParticleFieldCapabilities(
+    const std::string& field = "spawnRate",
+    bool resettable = false)
+{
+    using Json = nlohmann::json;
+    const Json description{
+        {"field", field}, {"type", "number"}, {"resettable", resettable}};
+    return Json{
+        {"fields", Json::array()},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "fire"},
+                {"fields", Json::array({description})}},
+            Json{{"index", 1}, {"name", "smoke"},
+                {"fields", Json::array({description})}}})}};
+}
+
+TEST_F(EditorUiTest, ParticleCollisionModuleEditsNestedFields)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_collision.json";
+    Json fields = Json::array({
+        Json{{"field", "collision.type"},
+            {"type", "string"}, {"resettable", true}},
+        Json{{"field", "collision.bounce"},
+            {"type", "number"}, {"resettable", true}},
+        Json{{"field", "collision.friction"},
+            {"type", "number"}, {"resettable", true}},
+        Json{{"field", "collision.radius"},
+            {"type", "number"}, {"resettable", true}},
+        Json{{"field", "collision.killOnCollision"},
+            {"type", "boolean"}, {"resettable", true}},
+        Json{{"field", "collision.plane.normal"},
+            {"type", "vec3"}, {"resettable", true}},
+        Json{{"field", "collision.plane.offset"},
+            {"type", "number"}, {"resettable", true}},
+        Json{{"field", "collision.box.min"},
+            {"type", "vec3"}, {"resettable", true}},
+        Json{{"field", "collision.box.max"},
+            {"type", "vec3"}, {"resettable", true}}});
+    Json capabilities{
+        {"fields", Json::array()},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "sparks"},
+                {"fields", std::move(fields)}}})}};
+    Json assetDocument{
+        {"name", "PS_collision"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "sparks"},
+                {"collision", Json{
+                    {"type", "plane"},
+                    {"plane", Json{
+                        {"normal", {0.0, 1.0, 0.0}},
+                        {"offset", 0.0}}},
+                    {"bounce", 0.35},
+                    {"friction", 0.2},
+                    {"radius", 1.0},
+                    {"killOnCollision", false}}}}})}};
+    OpenParticleAsset(
+        path, std::move(assetDocument), std::move(capabilities));
+    Click("#particle-module-collision");
+    Refresh();
+
+    auto* normalInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.collision.plane.normal']");
+    auto* killInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.collision.killOnCollision']");
+    ASSERT_NE(normalInput, nullptr);
+    ASSERT_NE(killInput, nullptr);
+    auto* normalControl =
+        dynamic_cast<Rml::ElementFormControlInput*>(normalInput);
+    ASSERT_NE(normalControl, nullptr);
+    normalControl->SetValue("[0, 0, 1]");
+    normalInput->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.collision.plane.normal");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "sparks");
+    const auto* value = std::get_if<std::array<double, 3>>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_DOUBLE_EQ((*value)[2], 1.0);
+}
+
+TEST_F(EditorUiTest, ParticleCollisionModuleEditsCapsuleAndCcd)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_capsule.json";
+    Json fields = Json::array({
+        Json{{"field", "collision.type"},
+            {"type", "string"}, {"resettable", true}},
+        Json{{"field", "collision.ccd"},
+            {"type", "boolean"}, {"resettable", true}},
+        Json{{"field", "collision.capsule.a"},
+            {"type", "vec3"}, {"resettable", true}},
+        Json{{"field", "collision.capsule.b"},
+            {"type", "vec3"}, {"resettable", true}},
+        Json{{"field", "collision.capsule.radius"},
+            {"type", "number"}, {"resettable", true}}});
+    Json capabilities{
+        {"fields", Json::array()},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "smoke"},
+                {"fields", std::move(fields)}}})}};
+    Json assetDocument{
+        {"name", "PS_capsule"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "smoke"},
+                {"collision", Json{
+                    {"type", "capsule"},
+                    {"capsule", Json{
+                        {"a", {0.0, -10.0, 0.0}},
+                        {"b", {0.0, 10.0, 0.0}},
+                        {"radius", 20.0}}}}}}})}};
+    OpenParticleAsset(
+        path, std::move(assetDocument), std::move(capabilities));
+    Click("#particle-module-collision");
+    Refresh();
+
+    auto* ccdInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.collision.ccd']");
+    ASSERT_NE(ccdInput, nullptr);
+    auto* capsuleAInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.collision.capsule.a']");
+    ASSERT_NE(capsuleAInput, nullptr);
+    auto* radiusInput = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.collision.capsule.radius']");
+    ASSERT_NE(radiusInput, nullptr);
+    auto* radius = dynamic_cast<Rml::ElementFormControlInput*>(radiusInput);
+    ASSERT_NE(radius, nullptr);
+    radius->SetValue("30");
+    radiusInput->DispatchEvent("change", {});
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.collision.capsule.radius");
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "smoke");
+    const auto* value = std::get_if<double>(&payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(*value, 30.0);
+}
+
+TEST_F(EditorUiTest, ParticleEditRejectKeepsNewestPendingAndRetries)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_retry.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities());
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("300");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    ASSERT_EQ(sink.commands[0].type,
+        EditorCommandType::ModifyParticleDocument);
+    sink.commands.clear();
+
+    // 在途期间第二次编辑只能留在 pending，不能带着旧 revision 再提交。
+    control->SetValue("301");
+    input->DispatchEvent("change", {});
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::ModifyParticleDocument, false, "stale revision"});
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+
+    // 拒绝后应保留用户最后一次输入，并用当前 revision 重试。
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    ASSERT_EQ(sink.commands[0].type,
+        EditorCommandType::ModifyParticleDocument);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(
+        sink.commands[0].payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.spawnRate");
+    const auto* value = std::get_if<double>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(*value, 301.0);
+}
+
+TEST_F(EditorUiTest, ParticleEditSuccessClearsInFlight)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_success.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities());
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("300");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    sink.commands.clear();
+
+    auto& document = snapshot.particleDocuments[0];
+    document.document["emitters"][0]["spawnRate"] = 300.0;
+    ++document.documentRevision;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::ModifyParticleDocument, true, "succeeded"});
+    Refresh();
+    sink.commands.clear();
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ParticleFieldEditCarriesEmitterIdentity)
+{
+    const std::string path = "Maps/SC_test/PS_identity.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities());
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("300");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(
+        sink.commands[0].payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+}
+
+TEST_F(EditorUiTest, ParticlePreviewFirstOpenCarriesDraft)
+{
+    const std::string path = "Maps/SC_test/PS_live.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities(), false);
+
+    const UiAction* preview = nullptr;
+    for (const UiAction& action : runtimeSink.actions)
+        if (action.type == UiActionType::PreviewParticle)
+            preview = &action;
+    ASSERT_NE(preview, nullptr);
+    EXPECT_EQ(preview->stringValue, path);
+    ASSERT_TRUE(preview->particleDocument.is_object());
+    EXPECT_DOUBLE_EQ(preview->particleDocument.at("emitters").at(0)
+        .at("spawnRate").get<double>(), 120.0);
+}
+
+TEST_F(EditorUiTest, ParticlePreviewSameWorldUpdatesDraftInPlace)
+{
+    const std::string path = "Maps/SC_test/PS_live.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities());
+    UiViewModelSnapshot previewView;
+    previewView.activeWorldPath = ParticlePreviewScenePath;
+    panel->UpdateRuntimeView(previewView);
+    Refresh();
+    runtimeSink.actions.clear();
+
+    auto& authored = snapshot.particleDocuments[0];
+    authored.document["emitters"][0]["spawnRate"] = 301.0;
+    ++authored.documentRevision;
+    Refresh();
+
+    const UiAction* update = nullptr;
+    for (const UiAction& action : runtimeSink.actions)
+        if (action.type == UiActionType::UpdateParticlePreview)
+            update = &action;
+    ASSERT_NE(update, nullptr);
+    EXPECT_EQ(update->stringValue, path);
+    ASSERT_TRUE(update->particleDocument.is_object());
+    EXPECT_DOUBLE_EQ(update->particleDocument.at("emitters").at(0)
+        .at("spawnRate").get<double>(), 301.0);
+}
+
+TEST_F(EditorUiTest, UpdateParticleSystemAssetReplacesAllMatchingObjects)
+{
+    World world(77, "Maps/SC_test/SC_test.json");
+    WorldParticleSystem first;
+    first.name = "first";
+    first.assetPath = "Maps/SC_test/PS_shared.json";
+    first.asset.name = "old_first";
+    WorldParticleSystem second;
+    second.name = "second";
+    second.assetPath = "Maps/SC_test/PS_shared.json";
+    second.asset.name = "old_second";
+    WorldParticleSystem other;
+    other.name = "other";
+    other.assetPath = "Maps/SC_test/PS_other.json";
+    other.asset.name = "old_other";
+    world.AddParticleSystem("first", std::move(first));
+    world.AddParticleSystem("second", std::move(second));
+    world.AddParticleSystem("other", std::move(other));
+
+    ParticleSystemAsset draft;
+    draft.name = "new_shared";
+    EXPECT_EQ(world.UpdateParticleSystemAsset(
+        "Maps/SC_test/PS_shared.json", draft), 2u);
+    EXPECT_EQ(world.GetGeneration(), 77u);
+    EXPECT_EQ(world.GetParticleSystems().at("first").asset.name,
+        "new_shared");
+    EXPECT_EQ(world.GetParticleSystems().at("second").asset.name,
+        "new_shared");
+    EXPECT_EQ(world.GetParticleSystems().at("other").asset.name,
+        "old_other");
+    EXPECT_EQ(world.UpdateParticleSystemAsset(
+        "Maps/SC_test/PS_missing.json", draft), 0u);
+}
+
+TEST_F(EditorUiTest, ParticleSystemModuleEditsRootName)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_system.json";
+    OpenParticleAsset(path, ParticleStructureDocument(), Json{
+        {"fields", Json::array({
+            Json{{"field", "name"}, {"type", "string"}},
+            Json{{"field", "emitters"}, {"type", "array"}}})},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "fire"},
+                {"fields", Json::array({
+                    Json{{"field", "spawnRate"}, {"type", "number"}}})}},
+            Json{{"index", 1}, {"name", "smoke"},
+                {"fields", Json::array({
+                    Json{{"field", "spawnRate"}, {"type", "number"}}})}}})}});
+    Click("#particle-module-system");
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field][data-field='name']");
+    ASSERT_NE(input, nullptr);
+    auto* control = dynamic_cast<Rml::ElementFormControlInput*>(input);
+    ASSERT_NE(control, nullptr);
+    control->SetValue("PS_renamed");
+    input->DispatchEvent("change", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(
+        sink.commands[0].payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "name");
+    EXPECT_FALSE(payload.changes[0].expectedEmitterName.has_value());
+    const auto* value = std::get_if<std::string>(
+        &payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(*value, "PS_renamed");
+}
+
+TEST_F(EditorUiTest, ParticleResettableFieldShowsResetAndSubmitsReset)
+{
+    const std::string path = "Maps/SC_test/PS_reset.json";
+    OpenParticleAsset(path, nlohmann::json{
+        {"name", "PS_reset"}, {"type", "particleSystem"},
+        {"emitters", nlohmann::json::array({
+            nlohmann::json{{"name", "fire"},
+                {"texture", "T_fire.png"}, {"maxParticles", 512}}})}},
+        ParticleFieldCapabilities("texture", true));
+    Click("#particle-module-flipbook");
+    auto* reset = document->QuerySelector(
+        "[data-action=particle-field-reset]"
+        "[data-field='emitters.0.texture']");
+    ASSERT_NE(reset, nullptr);
+    EXPECT_FALSE(reset->HasAttribute("disabled"));
+    Click("[data-action=particle-field-reset]"
+        "[data-field='emitters.0.texture']");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(
+        sink.commands[0].payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters.0.texture");
+    EXPECT_TRUE(payload.changes[0].reset);
+    ASSERT_TRUE(payload.changes[0].expectedEmitterName.has_value());
+    EXPECT_EQ(*payload.changes[0].expectedEmitterName, "fire");
+}
+
+TEST_F(EditorUiTest, ParticleDirtyCloseDiscardsThenCloses)
+{
+    const std::string path = "Maps/SC_test/PS_close.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    auto& authored = snapshot.particleDocuments[0];
+    authored.dirty = true;
+    authored.documentRevision = 4;
+    snapshot.modifiedDocuments.push_back(
+        {path, EditorAssetKind::ParticleSystem, 4});
+    Refresh();
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab")
+        ->GetInnerRML().find("*"), std::string::npos);
+    Click(".workspace-resource-tab.selected .tab-close");
+    EXPECT_TRUE(panel->HasModal());
+    Click("#close-discard");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::RevertParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 4);
+
+    snapshot.particleDocuments[0].dirty = false;
+    snapshot.particleDocuments[0].documentRevision = 5;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::RevertParticleDocument, true, "reverted"});
+    Refresh();
+    ASSERT_GE(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().type,
+        EditorCommandType::CloseParticleDocument);
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, ParticleDirtyRevertRequiresConfirmation)
+{
+    const std::string path = "Maps/SC_test/PS_revert.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    snapshot.particleDocuments[0].dirty = true;
+    snapshot.particleDocuments[0].documentRevision = 4;
+    Refresh();
+    Click("#particle-revert");
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("[data-action=particle-revert-cancel]");
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#particle-revert");
+    Click("#particle-revert-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::RevertParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 4);
+    EXPECT_FALSE(panel->HasModal());
+}
+
+TEST_F(EditorUiTest, ParticleDirtyCloseSavesThenCloses)
+{
+    const std::string path = "Maps/SC_test/PS_close_save.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    snapshot.particleDocuments[0].dirty = true;
+    snapshot.particleDocuments[0].documentRevision = 4;
+    Refresh();
+    Click(".workspace-resource-tab.selected .tab-close");
+    Click("#close-save");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::SaveParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 4);
+
+    snapshot.particleDocuments[0].dirty = false;
+    snapshot.particleDocuments[0].documentRevision = 5;
+    snapshot.saveFeedback.push_back({1, path, true, "saved"});
+    Refresh();
+    ASSERT_GE(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().type,
+        EditorCommandType::CloseParticleDocument);
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, ParticleValidateAndRevertRouteToActiveResource)
+{
+    const std::string path = "Maps/SC_test/PS_route.json";
+    OpenParticleAsset(path, ParticleStructureDocument(),
+        ParticleFieldCapabilities());
+    // 同时打开 MI 文档时，粒子标签上的 Validate/Revert 不能误操作 MI。
+    snapshot.activeDocument = MaterialInstanceDocumentSnapshot{};
+    snapshot.activeDocument->assetPath = "MI_other.json";
+    snapshot.activeDocument->revision = 9;
+    Refresh();
+    ASSERT_NE(document->GetElementById("particle-validate"), nullptr);
+    EXPECT_FALSE(document->GetElementById("particle-validate")
+        ->HasAttribute("disabled"));
+    Click("#particle-validate");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::ValidateParticleDocument);
+    sink.commands.clear();
+    Click("#particle-revert");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::RevertParticleDocument);
+    sink.commands.clear();
+    Click("#menu-edit-validate");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::ValidateParticleDocument);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(
+        sink.commands[0].payload).assetPath, path);
+}
+
+TEST_F(EditorUiTest, ParticleUndoRedoButtonsAndMenuRouteToParticleHistory)
+{
+    const std::string path = "Maps/SC_test/PS_history_route.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    snapshot.particleDocuments[0].canUndo = true;
+    snapshot.particleDocuments[0].canRedo = true;
+    snapshot.particleDocuments[0].documentRevision = 3;
+    // 同时打开 MI 时，粒子标签的 Undo/Redo 不能被 Scene/MI 路由抢走。
+    snapshot.activeDocument = MaterialInstanceDocumentSnapshot{};
+    snapshot.activeDocument->assetPath = "MI_other.json";
+    snapshot.activeDocument->revision = 9;
+    Refresh();
+
+    ASSERT_NE(document->GetElementById("particle-undo"), nullptr);
+    EXPECT_FALSE(document->GetElementById("particle-undo")
+        ->HasAttribute("disabled"));
+    Click("#particle-undo");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::UndoParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 3u);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(
+        sink.commands[0].payload).assetPath, path);
+
+    sink.commands.clear();
+    snapshot.particleDocuments[0].documentRevision = 4;
+    snapshot.particleDocuments[0].canUndo = false;
+    snapshot.particleDocuments[0].canRedo = true;
+    snapshot.particleCommandFeedback.push_back({1, path,
+        EditorCommandType::UndoParticleDocument, true, "undone"});
+    Refresh();
+    Click("#particle-redo");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::RedoParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 4u);
+
+    sink.commands.clear();
+    snapshot.particleDocuments[0].documentRevision = 5;
+    snapshot.particleDocuments[0].canUndo = true;
+    snapshot.particleDocuments[0].canRedo = false;
+    snapshot.particleCommandFeedback.push_back({2, path,
+        EditorCommandType::RedoParticleDocument, true, "redone"});
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("menu-edit-undo")
+        ->HasAttribute("disabled"));
+    Click("#menu-edit-undo");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::UndoParticleDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 5u);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterModuleShowsLocalSpaceAndEffectiveFixedBounds)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_space_bounds.json";
+    const Json fields = Json::array({
+        Json{{"field", "localSpace"}, {"type", "boolean"}},
+        Json{{"field", "useFixedBounds"}, {"type", "boolean"}},
+        Json{{"field", "fixedBounds.center"}, {"type", "vec3"}},
+        Json{{"field", "fixedBounds.extent"}, {"type", "vec3"}}});
+    OpenParticleAsset(path, Json{
+        {"name", "PS_space_bounds"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"},
+                {"localSpace", true},
+                {"fixedBounds", Json{
+                    {"center", {10.0, -20.0, 30.0}},
+                    {"extent", {40.0, 50.0, 60.0}}}}}
+        })}
+    }, Json{
+        {"fields", fields},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "fire"}, {"fields", fields}}
+        })}
+    });
+    Click("#particle-module-emitter");
+    Refresh();
+
+    auto* localSpace = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->QuerySelector(
+            "[data-action=particle-field]"
+            "[data-field='emitters.0.localSpace']"));
+    auto* fixedBounds = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->QuerySelector(
+            "[data-action=particle-field]"
+            "[data-field='emitters.0.useFixedBounds']"));
+    ASSERT_NE(localSpace, nullptr);
+    ASSERT_NE(fixedBounds, nullptr);
+    EXPECT_EQ(localSpace->GetValue(), "true");
+    // fixedBounds 存在但 useFixedBounds 省略时显示自动启用的生效值。
+    EXPECT_EQ(fixedBounds->GetValue(), "true");
+    EXPECT_NE(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.fixedBounds.center']"), nullptr);
+    EXPECT_NE(document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.fixedBounds.extent']"), nullptr);
+
+    fixedBounds->SetSelection(0);
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field,
+        "emitters.0.useFixedBounds");
+    const auto* value =
+        std::get_if<bool>(&payload.changes[0].value);
+    ASSERT_NE(value, nullptr);
+    EXPECT_FALSE(*value);
+}
+
+TEST_F(EditorUiTest, ParticleEmitterAndModuleSelectionPersistPerDocument)
+{
+    using Json = nlohmann::json;
+    const std::string pathA = "Maps/SC_test/PS_persist_a.json";
+    const std::string pathB = "Maps/SC_test/PS_persist_b.json";
+    auto makeDocument = [](const std::string& name)
+    {
+        return Json{
+            {"name", name},
+            {"type", "particleSystem"},
+            {"emitters", Json::array({
+                Json{{"name", "fire"}, {"maxParticles", 128}},
+                Json{{"name", "smoke"}, {"maxParticles", 256}}})}};
+    };
+    auto makePayload = [&](const std::string& path,
+        const std::string& name)
+    {
+        EditorAssetDocumentResultPayload payload;
+        payload.assetPath = path;
+        payload.documentRevision = 3;
+        payload.document = makeDocument(name);
+        payload.capabilities = Json{
+            {"fields", Json::array({
+                Json{{"field", "colorKeys"}, {"type", "array"}},
+                Json{{"field", "sizeKeys"}, {"type", "array"}}})}};
+        return payload;
+    };
+
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 7;
+    catalog->assets.push_back({pathA, EditorAssetKind::ParticleSystem, "A"});
+    catalog->assets.push_back({pathB, EditorAssetKind::ParticleSystem, "B"});
+    snapshot.assetCatalog = catalog;
+    snapshot.particleDocuments = {
+        makePayload(pathA, "PS_persist_a"),
+        makePayload(pathB, "PS_persist_b")};
+    Refresh();
+    for (const std::string& path : {pathA, pathB})
+    {
+        auto* tile = BrowserItem(path);
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+
+    auto activate = [&](const std::string& path)
+    {
+        Rml::ElementList tabs;
+        document->QuerySelectorAll(tabs, ".workspace-resource-tab");
+        const std::string label =
+            std::filesystem::path(path).filename().string();
+        for (auto* tab : tabs)
+        {
+            if (tab->GetInnerRML().find(label) == std::string::npos)
+                continue;
+            tab->DispatchEvent("click", {});
+            Refresh();
+            return;
+        }
+        FAIL() << "Missing resource tab for " << path;
+    };
+    auto emitterValue = [&]()
+    {
+        auto* control = dynamic_cast<Rml::ElementFormControl*>(
+            Control("particle-emitter-select"));
+        return control == nullptr ? std::string() : control->GetValue();
+    };
+
+    activate(pathA);
+    SelectOption("particle-emitter-select", "1");
+    Click("#particle-module-curves");
+    Refresh();
+    EXPECT_EQ(emitterValue(), "1");
+    EXPECT_TRUE(document->GetElementById("particle-module-curves")
+        ->IsClassSet("active"));
+
+    activate(pathB);
+    EXPECT_EQ(emitterValue(), "0");
+    EXPECT_TRUE(document->GetElementById("particle-module-emitter")
+        ->IsClassSet("active"));
+    SelectOption("particle-emitter-select", "1");
+    Click("#particle-module-flipbook");
+    Refresh();
+
+    activate(pathA);
+    EXPECT_EQ(emitterValue(), "1");
+    EXPECT_TRUE(document->GetElementById("particle-module-curves")
+        ->IsClassSet("active"));
+    activate(pathB);
+    EXPECT_EQ(emitterValue(), "1");
+    EXPECT_TRUE(document->GetElementById("particle-module-flipbook")
+        ->IsClassSet("active"));
+
+    // 关闭后缓存必须清理：重新打开同一文档回到默认选择与模块。
+    activate(pathA);
+    Click(".workspace-resource-tab.selected .tab-close");
+    Refresh();
+    auto* reopened = BrowserItem(pathA);
+    ASSERT_NE(reopened, nullptr);
+    reopened->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_EQ(emitterValue(), "0");
+    EXPECT_TRUE(document->GetElementById("particle-module-emitter")
+        ->IsClassSet("active"));
+}
+
+TEST_F(EditorUiTest, ParticleKeyboardDeleteRemovesSelectedEmitter)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_keyboard_delete.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    auto dispatchKey = [&](int key, bool ctrl, bool alt)
+    {
+        Rml::Dictionary parameters;
+        parameters["key_identifier"] = key;
+        parameters["ctrl_key"] = ctrl ? 1 : 0;
+        parameters["alt_key"] = alt ? 1 : 0;
+        document->DispatchEvent("keydown", parameters);
+    };
+
+    sink.commands.clear();
+    dispatchKey(Rml::Input::KI_DELETE, false, false);
+    Refresh();
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    EXPECT_EQ(payload.changes[0].field, "emitters");
+    const auto* emitters =
+        std::get_if<Json>(&payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 1u);
+    EXPECT_EQ(emitters->at(0).at("name"), "smoke");
+}
+
+TEST_F(EditorUiTest, ParticleKeyboardAltArrowsReorderSelectedEmitter)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_keyboard_move.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    Rml::Dictionary parameters;
+    parameters["key_identifier"] =
+        static_cast<int>(Rml::Input::KI_DOWN);
+    parameters["ctrl_key"] = 0;
+    parameters["alt_key"] = 1;
+    sink.commands.clear();
+    document->DispatchEvent("keydown", parameters);
+    Refresh();
+
+    const EditorCommandEnvelope* modify = nullptr;
+    for (const auto& command : sink.commands)
+        if (command.type == EditorCommandType::ModifyParticleDocument)
+            modify = &command;
+    ASSERT_NE(modify, nullptr);
+    const auto& payload =
+        std::get<ModifyAssetDocumentPayload>(modify->payload);
+    ASSERT_EQ(payload.changes.size(), 1u);
+    const auto* emitters =
+        std::get_if<Json>(&payload.changes[0].value);
+    ASSERT_NE(emitters, nullptr);
+    ASSERT_TRUE(emitters->is_array());
+    ASSERT_EQ(emitters->size(), 2u);
+    EXPECT_EQ(emitters->at(0).at("name"), "smoke");
+    EXPECT_EQ(emitters->at(1).at("name"), "fire");
+}
+
+TEST_F(EditorUiTest, ParticleKeyboardCtrlZRequestsUndo)
+{
+    const std::string path = "Maps/SC_test/PS_keyboard_undo.json";
+    OpenParticleAsset(path, ParticleStructureDocument());
+    snapshot.particleDocuments[0].canUndo = true;
+    Refresh();
+    Rml::Dictionary parameters;
+    parameters["key_identifier"] = static_cast<int>(Rml::Input::KI_Z);
+    parameters["ctrl_key"] = 1;
+    parameters["alt_key"] = 0;
+    sink.commands.clear();
+    document->DispatchEvent("keydown", parameters);
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type,
+        EditorCommandType::UndoParticleDocument);
+}
+
+TEST_F(EditorUiTest, ParticleKeyboardDoesNotRemoveEmitterFromFocusedTextInput)
+{
+    using Json = nlohmann::json;
+    const std::string path = "Maps/SC_test/PS_keyboard_input.json";
+    OpenParticleAsset(path, Json{
+        {"name", "PS_keyboard_input"},
+        {"type", "particleSystem"},
+        {"emitters", Json::array({
+            Json{{"name", "fire"}, {"spawnRate", 10.0}},
+            Json{{"name", "smoke"}, {"spawnRate", 20.0}}})}}, Json{
+        {"fields", Json::array({
+            Json{{"field", "spawnRate"}, {"type", "number"}}})},
+        {"emitters", Json::array({
+            Json{{"index", 0}, {"name", "fire"},
+                {"fields", Json::array({
+                    Json{{"field", "spawnRate"}, {"type", "number"}}})}}})}});
+    Click("#particle-module-emitter");
+    Refresh();
+    auto* input = document->QuerySelector(
+        "[data-action=particle-field]"
+        "[data-field='emitters.0.spawnRate']");
+    ASSERT_NE(input, nullptr);
+    sink.commands.clear();
+    Rml::Dictionary parameters;
+    parameters["key_identifier"] =
+        static_cast<int>(Rml::Input::KI_DELETE);
+    input->DispatchEvent("keydown", parameters);
+    Refresh();
+    // 输入框保留原生 Delete 文本编辑；键盘层不能把它升级成结构删除。
+    for (const auto& command : sink.commands)
+    {
+        if (command.type != EditorCommandType::ModifyParticleDocument)
+            continue;
+        const auto& payload =
+            std::get<ModifyAssetDocumentPayload>(command.payload);
+        for (const auto& change : payload.changes)
+            EXPECT_NE(change.field, "emitters");
     }
 }
 

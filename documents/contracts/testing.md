@@ -15,6 +15,7 @@
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
 | `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 90 条规则检查索引（81 个命名规则；生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
 | `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
+| `py -3 tool/validation/particle/particle_niagara_acceptance.py [--smoke] [--write-budget]` | 资源工作树与 UE 参考工程可访问；`--smoke` 需已构建 `main.exe` | 49 个 UE Niagara 目标的 README 映射、PS/gallery JSON、texture/mesh/MI 引用与 PS 静态指标；`--smoke` 逐 gallery headless 启动并采集 `Scene.LoadFailed`、VUID、粒子帧统计和 baseline+20% 性能预算 | 改 `Maps/SC_particle_ue_*`、`PS_*.json`、性能预算或增删 UE 特效后 |
 | `py -3 tool/validate_model_descriptors.py` | 资源工作树可访问 | 扫描正式 SM_/TF_ 描述符，共享无依赖 schema checker 支持同级引用、封闭字段与数值边界 | 改 model/TressFX schema 或正式描述符后 |
 | `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 81 个命名的架构边界规则（90 条检查；禁止词、cutover、运行时/编辑器所有权、游戏包闭包、生命周期句柄采用等） | 改 `source/**`、`source/CMakeLists.txt` 或游戏导出脚本后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
@@ -160,7 +161,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 724（723 后加 1 项 CPU 阶段表） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、HUD 卡片收缩与长 gameplay 换行、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认 |
+| `editor_ui_tests` | 当前全量（不写死计数；以 `--gtest_list_tests` 为准） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、HUD 卡片收缩与长 gameplay 换行、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认；粒子标签选择/模块持久化、结构按钮、曲线/Flipbook 表格、键盘 Delete/Alt+方向键/Ctrl+Z/Y 与输入框焦点隔离 |
 | `script_tests` | 当前注册 450（当前构建 list 实测；含 2 项成对原地动画预览及本批 2 项普通/游戏冻结时钟；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证及 TressFX 物理交互记录。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
 | `hair_asset_tests` | 254 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、`bendStiffness`/四角风/global shape/VSP 作者字段与 816-byte 参数打包、已删除 `fixedStep`/`maxSubsteps`/`windGust`/`windFrequency` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、物理阻力方向与段长无关性、四角锥形生成与 mixer 权重、阻尼系数直接指数、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验、胶囊 `bone` 解析/身份/缺骨错误、骨骼旋转移动端点/未绑定胶囊保持静态；`collision.mesh` 解析（path/cellSize/margin 范围、未知键、backend 限制、缓存身份、OBJ 顶点/多边形/负索引/行号错误、缺失代理）；有符号 SDF 网格 CPU 镜像（magnitude-first FloatFlip 编码、每帧变形域/退化 extent 钳制/固定 48..64 分辨率、clear+splat、三线性采样、中心差分梯度、退化梯度跳过、2 cm 内部点被推到表面外、0.5 cm 外部点只在 margin 内移动、盒/球/远点、蒙皮矩阵带动场）；代理权重转移（空间哈希最近点、等距下标确定性、归一化、全影响保留、超距拒绝、逐顶点 LBS 与单骨矩阵等价）；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；离线碰撞代理（规则立方体聚类与绕序、退化/重复三角形剔除、区域包含规则、输出字节确定性、开盒开放边、最小三角形下限）；新增 10 项复位计划/事件消费/缺失恢复/800B 参数、6 项相对 palette/冻结帧时钟、5 项世界历史换基/惯性（含 90 帧独立世界 Verlet oracle）、17 项源调度/阻尼/VSP/胶囊量纲、9 项原生 substep/reset 计划、12 项作者刚度曲线（解析/UBO/CPU/shader 语义）及 5 项 hair trace v3 文件往返/截断测试（含每帧 hairModel 与 SDF/胶囊穿透统计）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
@@ -171,7 +172,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 | `engine_launch_options_tests` | 12（已有 9 项，再加 3 项 `--present-mode`） | `--gpu-stats` 默认关闭/可接受/与既有参数组合；`--perf-jsonl` 默认关闭、路径必填、与 `--gpu-stats` 组合；`--present-mode` 默认 auto、四种值可解析、缺值/未知值拒绝；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
-| `material_instance_editor_production_tests` | 12 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成；独立 TressFX 草稿发布与保存反馈 |
+| `material_instance_editor_production_tests` | 当前全量（不写死计数；含粒子资产/编辑/历史/渲染辅助） | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成；粒子 loader/字段与结构编辑、曲线/Flipbook 编辑、文档历史、碰撞、包围球、剔除、LOD、纹理引用、排序 key 与图身份；独立 TressFX 草稿发布与保存反馈 |
 | `fracture_core_tests` | 73 | CPU 平面/球面破碎、橡皮膜、玻璃损伤、通用 `DestructibleProfile`、可注册 budget class、`PlateFracturePolicy` 支撑岛/阈值 |
 | `physics_runtime_tests` | 13 | Jolt 静态 proxy、投射物/attached/free shard/ground 的 role/contact/profile 事件、投射物生命周期与碎片落地 |
 | `audio_runtime_tests` | 21 | 32 voice、pan/距离/低通、WAV 解码边界、重采样/切片与混音 |
@@ -1078,6 +1079,14 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 脚本在 CTest 处停止，后续三个 Vulkan 事务测试未在此次提交前检查中执行。
 
 ## 改动 → 验证
+
+屏幕空间玻璃折射的契约测试是 `GlassRefractionGraph.*`：
+`ctest --test-dir build -R '^GlassRefractionGraph\.' --output-on-failure`。
+它验证 `sceneColorCopy` 的格式/usage、copy pass 位于 `sky` 与
+`forwardTransparent` 之间、`forwardTransparent` 的 binding 8/9、
+`M_glassRefraction` 的 Unlit + `TransparentAlphaBlend` 路径，以及
+gallery MI 指向折射材质。画面验收运行 `SC_ue_impact_variants` headless
+screenshot；日志要求 `Scene.LoadFailed=0`、`VUID-` 0 次、stderr 为空。
 
 ### TressFX 物理交互入口
 

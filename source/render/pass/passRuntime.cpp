@@ -53,6 +53,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Shadow:
         RecordShadowPass(context);
         return;
+    case RenderGraphPassType::LocalShadow:
+        RecordLocalShadowPass(context);
+        return;
     case RenderGraphPassType::Geometry:
         RecordGeometryPass(context);
         return;
@@ -68,11 +71,30 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::EditorGrid:
         RecordEditorGridPass(context);
         return;
+    case RenderGraphPassType::Particle:
+        RecordParticlePass(context);
+        return;
+    case RenderGraphPassType::Distortion:
+        RecordDistortionPass(context);
+        return;
+    case RenderGraphPassType::FogComposite:
+        RecordFogCompositePass(context);
+        return;
+    case RenderGraphPassType::DecalStencil:
+        RecordDecalStencilPass(context);
+        return;
+    case RenderGraphPassType::Decal:
+        RecordDecalPass(context);
+        return;
     case RenderGraphPassType::TerrainFeedback:
         RecordTerrainFeedbackPass(context);
         return;
     case RenderGraphPassType::Unknown:
     case RenderGraphPassType::AutoExposure:
+    case RenderGraphPassType::ParticleSoftDepth:
+    // LightCulling 由 RenderSystem 直接录制（它不经过 pass material，
+    // 且需要先上传本帧灯光）；走到这里说明调用路径错误。
+    case RenderGraphPassType::LightCulling:
         break;
     }
 
@@ -83,6 +105,18 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
         std::string(
             RenderGraphPassTypeToString(
                 context.renderPass.type)));
+}
+
+void PassRuntime::RecordFogCompositePass(PassRuntimeContext& context) const
+{
+    // 合成是纯全屏 pass：pipeline/descriptor 由 VolumetricFogRenderer 绑定，
+    // 这里只负责 render pass 的 begin/end 与 viewport/scissor 设置。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordFogCompositePass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
 }
 
 void PassRuntime::PreparePassResources(PassRuntimeContext& context) const
@@ -171,6 +205,11 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         renderPass.width,
         renderPass.height,
         renderPass.shadowCascadeIndex);
+    context.services.PrepareParticleShadowCasters(
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        0);
     BeginConfiguredRenderPass(context);
 
     // 与刚刚上传的 cascade UBO 使用同一份 light view-projection。拿不到或矩阵
@@ -213,6 +252,10 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         drawContext.shadowCasterCullStats = &casterCullStats;
     }
     drawExecutor.DrawShadowScene(commonOpaquePipeline, drawContext);
+    context.services.RecordParticleShadowCasters(
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex);
 
     if (context.shadowCasterCullStats != nullptr)
     {
@@ -220,6 +263,107 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     }
 
     commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordLocalShadowPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    const uint32_t lightIndex = renderPass.localShadowIndex;
+
+    // 未激活的层仍要 begin/end：render graph 依赖这个 pass 把
+    // localShadowMap 从上一状态转换到 depth attachment，后续采样才合法。
+    if (!context.services.IsLocalShadowActive(lightIndex))
+    {
+        BeginConfiguredRenderPass(context);
+        commandBuffer.endRenderPass();
+        return;
+    }
+
+    std::shared_ptr<MaterialInstance> passMaterialInstance =
+        renderPass.materialInstance.lock();
+    if (!passMaterialInstance)
+    {
+        throw std::runtime_error(
+            "LocalShadow pass '" + renderPass.name +
+            "' has no common opaque pass material instance");
+    }
+    std::shared_ptr<Material> baseMaterial =
+        passMaterialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial || !baseMaterial->GetLocalShadowPipeline())
+    {
+        throw std::runtime_error(
+            "LocalShadow pass '" + renderPass.name +
+            "' common opaque material has no LocalShadow pipeline");
+    }
+
+    const PipelineBase& commonLocalShadowPipeline =
+        *baseMaterial->GetLocalShadowPipeline();
+    const uint32_t mode =
+        context.services.GetLocalShadowMode(lightIndex);
+    const uint32_t drawCount = mode == 1 ? 8u : 1u;
+    // caster 剔除只依赖灯的冻结参数；点光 8 象限共用同一体积。
+    // 没有服务的缩略图/离线会话返回 nullptr，此时退回全量绘制。
+    const LightSnapshot* localShadowLight =
+        context.services.GetLocalShadowLight(lightIndex);
+
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+
+    for (uint32_t octant = 0; octant < drawCount; ++octant)
+    {
+        context.services.UpdateLocalShadowUBOForPass(
+            commandBuffer,
+            renderPass.width,
+            renderPass.height,
+            lightIndex,
+            octant,
+            mode);
+        context.services.PrepareParticleShadowCasters(
+            commandBuffer,
+            renderPass,
+            context.swapChainImageIndex,
+            octant);
+        BeginConfiguredRenderPass(context);
+        if (octant == 0)
+        {
+            // loadOp=load 是 pass 合同要求的 layout/load 语义；每个灯开始时
+            // 用 clearAttachments 清空当前 slice，后续象限必须保留已写深度。
+            vk::ClearAttachment attachment;
+            attachment
+                .setAspectMask(vk::ImageAspectFlagBits::eDepth)
+                .setColorAttachment(0)
+                .setClearValue(vk::ClearValue().setDepthStencil(
+                    vk::ClearDepthStencilValue{ 1.0f, 0 }));
+            vk::ClearRect clearRect;
+            clearRect
+                .setRect(vk::Rect2D(
+                    vk::Offset2D(0, 0),
+                    vk::Extent2D(renderPass.width, renderPass.height)))
+                .setBaseArrayLayer(0)
+                .setLayerCount(1);
+            commandBuffer.clearAttachments(attachment, clearRect);
+        }
+
+        drawExecutor.DrawLocalShadowScene(
+            commonLocalShadowPipeline,
+            drawContext,
+            localShadowLight,
+            // 只在第一个象限/聚光唯一一次上报，避免 8 象限重复计数。
+            octant == 0);
+        context.services.RecordParticleShadowCasters(
+            commandBuffer,
+            renderPass,
+            context.swapChainImageIndex);
+        commandBuffer.endRenderPass();
+    }
 }
 
 void PassRuntime::RecordGeometryPass(PassRuntimeContext& context) const
@@ -313,6 +457,59 @@ void PassRuntime::RecordEditorGridPass(PassRuntimeContext& context) const
     }
 
     context.services.DrawEditorGridGeometry(context.commandBuffer);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordParticlePass(
+    PassRuntimeContext& context) const
+{
+    // 粒子与透明表面同属合成阶段：load 已有 sceneColor，sceneDepth 通过
+    // set 3 作为只读输入；pass 本身不挂深度附件，避免采样/写入反馈环。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordParticlePass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDistortionPass(
+    PassRuntimeContext& context) const
+{
+    // 扰动 pass 只写 distortion 附件；sceneDepth 通过 set 3 只读采样。
+    // 不绑定 sceneColor，避免同一帧内同时把它作为附件与采样源。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDistortionPass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDecalPass(
+    PassRuntimeContext& context) const
+{
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDecalPass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex,
+        context.renderScene);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordDecalStencilPass(
+    PassRuntimeContext& context) const
+{
+    // mask pass 只有一个 D24S8 深度/stencil 附件，不采样 sceneDepth。
+    // 它与后续 decals pass 分离，避免 decal shader 采样 sceneDepth 时
+    // 同一 pass 又把 depth 当 attachment。
+    BeginConfiguredRenderPass(context);
+    context.services.RecordDecalStencilPass(
+        context.commandBuffer,
+        context.renderPass,
+        context.swapChainImageIndex,
+        context.renderScene);
     context.commandBuffer.endRenderPass();
 }
 

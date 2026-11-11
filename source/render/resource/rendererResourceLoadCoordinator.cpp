@@ -736,6 +736,18 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             // Actor 声明归脚本上下文；它的网格已有独立派生计划，不能再次按声明加载。
             continue;
         }
+        else if (type == "particleSystem")
+        {
+            // 粒子资产已由 SceneAssetValidator 冻结；GPU 池和管线由
+            // ParticleRenderer 按 RenderScene 管理，这里不创建材质/网格资源。
+            continue;
+        }
+        else if (type == "decal")
+        {
+            // Decal 的参数与 unit cube 几何由 DecalRenderer 直接消费；
+            // 这条资源准备路径不创建材质/网格。
+            continue;
+        }
         else if (type == "directionalLight" ||
                  type == "pointLight" ||
                  type == "spotLight" ||

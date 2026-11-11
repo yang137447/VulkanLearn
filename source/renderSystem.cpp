@@ -524,11 +524,34 @@ void RenderSystem::RebuildSwapchainDependentResources()
     if (!offlineMode)
     {
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+        renderGraph.InitializeVolumetricFog(
+            *pipelineFactory, *rendererBackend, descriptorContext);
+        renderGraph.InitializeLightCulling(
+            *pipelineFactory, *rendererBackend, descriptorContext);
         renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
         if (prerenderSkinEnabled)
             renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
+        // ShutdownFrameResources 会释放粒子管线、默认纹理和发射器池；
+        // resize 的同一事务内必须把它们恢复到新 render pass/swapchain 上，
+        // 否则下一帧之前 backend 资源计数不稳定，旧 render pass 也可能被
+        // 已销毁的粒子 pipeline 引用。
+        particleRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            renderGraph);
+        // resize 后 frameResources 已换新 buffer；light 发射器描述符必须在
+        // 同一个事务里重新指向新输出，不能等下一帧。
+        particleRenderer.SetParticleLightBuffers(
+            frameResources.GetParticleLightBufferHandles());
+        ConfigureParticleSceneLighting();
+        particleRenderer.Synchronize(currentRenderScene);
+        decalRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            renderGraph);
+        decalRenderer.Synchronize(currentRenderScene);
     }
     offlineDisplay.Initialize(*rendererBackend);
     if (offlineCoordinator) offlineCoordinator->Restart();
@@ -554,6 +577,10 @@ void RenderSystem::RebuildRenderGraphDependentResources()
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    renderGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
+    renderGraph.InitializeLightCulling(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     if (prerenderSkinEnabled)
         renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
@@ -566,6 +593,13 @@ void RenderSystem::RefreshResolvedSceneAfterShaderReload()
     if (hasRenderScene && !offlineMode)
     {
         BuildResolvedRenderScene();
+    }
+    if (!offlineMode && rendererBackend != nullptr)
+    {
+        // 粒子管线没有注册成 shader reload participant；reload 提交后丢弃
+        // 旧 artifact，下一次 Render 的 EnsureInitialized/Synchronize 重建。
+        particleRenderer.InvalidatePipelines(*rendererBackend);
+        decalRenderer.InvalidatePipelines(*rendererBackend);
     }
 }
 
@@ -589,6 +623,10 @@ void RenderSystem::PrepareRenderGraphReload(
                 candidateGraph,
                 GetLightBufferInfo());
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeVolumetricFog(
+        *pipelineFactory, *rendererBackend, descriptorContext);
+    candidateGraph.InitializeLightCulling(
+        *pipelineFactory, *rendererBackend, descriptorContext);
     candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     if (prerenderSkinEnabled)
         candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
@@ -781,7 +819,8 @@ void RenderSystem::UploadLightsForPass(
     uint32_t swapChainImageIndex,
     const std::vector<VL::LightSnapshot>& lights)
 {
-    frameResources.UpdateLightBuffer(swapChainImageIndex, lights);
+    frameResources.UpdateLightBuffer(
+        swapChainImageIndex, lights, animationTimeSeconds);
 }
 
 bool RenderSystem::IsCsmEnabled() const
@@ -962,7 +1001,7 @@ void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
     // 领取一次 delta，避免组合 Render 或重复发布用新 frameIndex 重放旧时间。
     if (advanceSimulation)
     {
-        buildDesc.simulationDeltaSeconds = simulationDeltaSeconds;
+        buildDesc.simulationDeltaSeconds = pendingSimulationDeltaSeconds;
         buildDesc.gameSimulationDeltaSeconds = gameSimulationDeltaSeconds;
         buildDesc.hairSimulationDeltaSeconds = hairSimulationDeltaSeconds;
     }
@@ -1090,6 +1129,51 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         throw std::runtime_error("RenderSystem has no RenderScene to render");
     }
 
+    if (!offlineMode)
+    {
+        // World 事务提交路径会直接设置 initializedRenderWorldGeneration，
+        // 因此粒子同步不能只挂在 generation 变化的初始化分支上；这里按冻结
+        // RenderScene 做幂等同步，新增/移除发射器才创建或销毁 GPU 池。
+        particleRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            RenderGraph::GetInstance());
+        // light 发射器复用 GPU 模拟池；emit compute 的输出使用固定 64 槽
+        // per-image SSBO。buffer 必须在 Synchronize 创建发射器描述符前提供。
+        particleRenderer.SetParticleLightBuffers(
+            frameResources.GetParticleLightBufferHandles());
+        ConfigureParticleSceneLighting();
+        particleRenderer.Synchronize(currentRenderScene);
+        // particle decal 同样消费 resolved assets（userParameters/Data
+        // Channels）。必须先重建动态 decal 列表，再让 DecalRenderer
+        // 按冻结列表同步纹理集；实例 SSBO 固定 64 槽，不做逐帧扩容。
+        particleDecalRuntime.Synchronize(
+            currentRenderScene,
+            particleRenderer.GetResolvedSystemAssets(),
+            particleRenderer.GetDecalGpuInstances());
+        particleDecalRuntime.Update(
+            currentRenderScene,
+            VL::kMaxDecalInstances,
+            particleRenderer.GetDecalGpuInstances());
+        if (frameResources.EnsureLightCapacity(
+                currentRenderScene.lights.size(),
+                *rendererBackend))
+        {
+            // 仅场景静态灯使用这份 SSBO；GPU 粒子灯走独立固定容量缓冲，
+            // 不会触发这里的扩容。异常容量增长时仍需先到 device idle。
+            rendererBackend->WaitIdle();
+            RenderGraph::GetInstance().RefreshRuntimeDescriptors(
+                *rendererBackend,
+                BuildRendererDescriptorContext());
+        }
+        decalRenderer.EnsureInitialized(
+            *pipelineFactory,
+            *rendererBackend,
+            RenderGraph::GetInstance());
+        // 贴图集按冻结 RenderScene 幂等同步：新增/移除 decal 或贴图路径
+        // 变化时才创建/退休纹理，不能等到 pass 录制阶段再加载。
+        decalRenderer.Synchronize(currentRenderScene);
+    }
     RecordAndSubmitCurrentRenderScene();
 }
 
@@ -1210,6 +1294,17 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         [this] { return CaptureOfflineResult(); },
         [this] { LogShadowCasterCullStats(); },
         [this] { RefreshRenderSceneFromActiveWorld(); },
+        [this] { PrepareLocalShadowLights(); },
+        [this] { ConfigureParticleSceneLighting(); },
+        [this](vk::CommandBuffer& commandBuffer, uint32_t frameIndex)
+        {
+            RenderParticleSimulation(commandBuffer, frameIndex);
+        },
+        [this](vk::CommandBuffer& commandBuffer, const Renderpass& renderPass)
+        {
+            RecordParticleSoftDepthPass(commandBuffer, renderPass);
+        },
+        [this] { LogLocalShadowCasterStatistics(); },
     };
     frameRecorder.RecordAndSubmitCurrentRenderScene(context);
 }
@@ -1239,6 +1334,14 @@ RenderSystem::BuildRendererDescriptorContext(
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
     descriptorContext.lightBufferInfos =
         &lightBufferInfos;
+    descriptorContext.particleLightBufferInfos =
+        &frameResources.GetParticleLightBufferInfos();
+    descriptorContext.lightGridBufferInfos =
+        &frameResources.GetLightGridBufferInfos();
+    descriptorContext.lightIndexBufferInfos =
+        &frameResources.GetLightIndexBufferInfos();
+    descriptorContext.lightGridParamBufferInfos =
+        &frameResources.GetLightGridParamBufferInfos();
     descriptorContext.resourceCache =
         &resourceCache;
     Renderpass* canonicalShadowPass =
@@ -1333,6 +1436,17 @@ void RenderSystem::InitializeFrameResources()
 
     frameResources.Initialize(*rendererBackend);
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    // tile 聚类缓冲随主颜色目标尺寸重建；这里先按当前图取一次，
+    // 运行时若图分辨率变化会在帧首再次校验。
+    const vk::Extent2D sceneColorExtent =
+        RenderGraph::GetInstance().GetSceneColorExtent();
+    if (sceneColorExtent.width != 0 && sceneColorExtent.height != 0)
+    {
+        frameResources.EnsureLightCullingGrid(
+            sceneColorExtent.width,
+            sceneColorExtent.height,
+            *rendererBackend);
+    }
     proceduralSkyCubeGenerator.Initialize(
         *pipelineFactory,
         *rendererBackend);
@@ -1352,6 +1466,7 @@ void RenderSystem::InitializeFrameResources()
         shaderReloadCoordinator->RegisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentRuntime.Initialize(*rendererBackend);
+    particleGpuTimer.Initialize(*rendererBackend);
     // query pool 在首次采集时才创建；--gpu-stats 关闭时这里只记录能力快照。
     gpuPassTimer.Initialize(*rendererBackend, MAX_FRAMES_IN_FLIGHT);
 }
@@ -1366,6 +1481,8 @@ void RenderSystem::ShutdownFrameResources()
     // 先销毁统计 query pool，再释放 swapchain 相关帧资源。
     gpuPassTimer.Shutdown(*rendererBackend);
     environmentRuntime.Shutdown(*rendererBackend);
+    particleGpuTimer.Shutdown(*rendererBackend);
+    decalRenderer.Shutdown(*rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->UnregisterComputeParticipant(
@@ -1380,6 +1497,7 @@ void RenderSystem::ShutdownFrameResources()
     environmentIblBaker.Shutdown(*rendererBackend);
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
     environmentRuntime.ResetPendingWork();
+    particleRenderer.Shutdown(*rendererBackend);
     
     frameResources.Shutdown(*rendererBackend);
 }

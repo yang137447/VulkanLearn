@@ -91,6 +91,62 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
                 .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
         }
     }
+    else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::DecalColor)
+    {
+        for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+        {
+            attachmentState
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eZero)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setColorWriteMask(
+                    vk::ColorComponentFlagBits::eR |
+                    vk::ColorComponentFlagBits::eG |
+                    vk::ColorComponentFlagBits::eB);
+        }
+    }
+    else if (desc.pipelineStateDesc.blendMode ==
+        GraphicsPipelineBlendMode::DecalDBuffer)
+    {
+        if (desc.colorAttachmentCount < 6)
+        {
+            throw std::runtime_error(
+                "Decal DBuffer blending requires 6 color attachments");
+        }
+
+        // DBuffer A/B/C/D 存 RGB + 覆盖率：src.rgb 由 src.a 预乘，
+        // alpha 以 over 形式累积，供合成端恢复覆盖率。
+        for (size_t attachmentIndex = 0; attachmentIndex < 4;
+             ++attachmentIndex)
+        {
+            pipelineColorBlendAttachmentStates[attachmentIndex]
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+        }
+
+        // DBufferMask 每个通道是 0/1 响应位；One/One 让重叠 decal
+        // 的同类响应按“或”累积，合成端再做 saturate。
+        pipelineColorBlendAttachmentStates[4]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eOne)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+
+        // DBufferEmissive 的 RGB 在 shader 里已乘过 coverage，因此颜色用
+        // One/OneMinusSrcAlpha 预乘 over；alpha 继续按覆盖率 over 累积。
+        pipelineColorBlendAttachmentStates[5]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+    }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
     {
         // 双源混合只占用 location 0；selectionMask 等普通输出可以追加在
@@ -122,6 +178,8 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     }
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
+    // 逐附件不同的 blend state 由设备特性 independentBlend 控制，
+    // VulkanManager 在逻辑设备创建时启用；结构体本身没有开关字段。
     pipelineColorBlendStateCreateInfo
         .setAttachments(pipelineColorBlendAttachmentStates)
         .setLogicOpEnable(false)
@@ -151,6 +209,16 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
         .setScissorCount(1)
         .setPScissors(&scissor);
 
+    vk::StencilOpState stencilOpState;
+    stencilOpState
+        .setFailOp(desc.pipelineStateDesc.stencilFailOp)
+        .setPassOp(desc.pipelineStateDesc.stencilPassOp)
+        .setDepthFailOp(desc.pipelineStateDesc.stencilDepthFailOp)
+        .setCompareOp(desc.pipelineStateDesc.stencilCompareOp)
+        .setCompareMask(desc.pipelineStateDesc.stencilCompareMask)
+        .setWriteMask(desc.pipelineStateDesc.stencilWriteMask)
+        .setReference(desc.pipelineStateDesc.stencilReference);
+
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo;
     pipelineDepthStencilStateCreateInfo
         .setDepthTestEnable(desc.pipelineStateDesc.bDepthTestEnable)
@@ -159,9 +227,9 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
         .setDepthBoundsTestEnable(false)
         .setMinDepthBounds(0.0f)
         .setMaxDepthBounds(1.0f)
-        .setStencilTestEnable(false)
-        .setBack(vk::StencilOpState())
-        .setFront(vk::StencilOpState());
+        .setStencilTestEnable(desc.pipelineStateDesc.bStencilTestEnable)
+        .setBack(stencilOpState)
+        .setFront(stencilOpState);
 
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo

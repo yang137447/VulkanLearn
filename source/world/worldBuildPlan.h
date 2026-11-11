@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "particles/particleDataChannel.h"
 #include "scene/sceneAssetTypes.h"
 
 namespace VL
@@ -41,6 +42,9 @@ struct WorldBuildPlan
     nlohmann::json authoredSceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
     WorldGameplayPlans gameplay;
+    // 场景级 typed Data Channels；加载后写入 World，供 `$Name` 替换、
+    // 材质绑定与 C# 读取共用同一份值。
+    ParticleDataChannelMap particleDataChannels;
 };
 
 // 渲染器对一个 gameplay 材质路径的解析结果。`materialKey` 由目标 pass、

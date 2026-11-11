@@ -15,6 +15,8 @@ add_executable(editor_ui_tests
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
+    particleWorldRuntimeTests.cpp
+    particleThumbnailTimingTests.cpp
     tressfxHairPreviewTests.cpp
     tressfxHairSimulationTests.cpp
     tressfxComponentUiTests.cpp
@@ -83,6 +85,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/particles/particleAsset.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
@@ -131,7 +134,8 @@ if(MINGW)
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_compile_definitions(editor_ui_tests PRIVATE
-    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
+    VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui"
+    VL_WITH_EDITOR=1)
 target_link_libraries(editor_ui_tests PRIVATE
     vl_editor_widgets vl_hair_assets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

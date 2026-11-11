@@ -96,6 +96,7 @@ const char* KindFilter(EditorAssetKind kind)
     case EditorAssetKind::Texture: return "texture";
     case EditorAssetKind::Terrain: return "terrain";
     case EditorAssetKind::Blueprint: return "blueprint";
+    case EditorAssetKind::ParticleSystem: return "particle";
     case EditorAssetKind::Retarget: return "retarget";
     }
     return "";
@@ -103,7 +104,8 @@ const char* KindFilter(EditorAssetKind kind)
 
 bool ValidFilter(const std::string& value)
 {
-    for (const char* filter : {"all", "material", "mesh", "tressfx", "scene", "texture", "terrain", "blueprint", "retarget", "csharp"})
+    for (const char* filter : {"all", "material", "mesh", "tressfx", "scene", "texture", "terrain",
+             "particle", "blueprint", "retarget", "csharp"})
         if (value == filter) return true;
     return false;
 }
@@ -275,7 +277,8 @@ bool EditorContentBrowserController::ReadDirtyOverlay(
         const auto found = catalog.find(asset.first);
         if (asset.second && found != catalog.end() &&
             (found->second.kind == EditorAssetKind::MaterialInstance ||
-             found->second.kind == EditorAssetKind::Scene))
+             found->second.kind == EditorAssetKind::Scene ||
+             found->second.kind == EditorAssetKind::ParticleSystem))
             dirtyPaths.insert(asset.first);
     }
     return true;
@@ -651,7 +654,8 @@ std::vector<std::string> EditorContentBrowserController::VisibleThumbnailPaths()
     for (const auto& node : visibleNodes)
         if (!node.entry->folder && (node.entry->kind == EditorAssetKind::Texture ||
             node.entry->kind == EditorAssetKind::Mesh || node.entry->kind == EditorAssetKind::Tressfx ||
-            node.entry->kind == EditorAssetKind::MaterialInstance))
+            node.entry->kind == EditorAssetKind::MaterialInstance ||
+            node.entry->kind == EditorAssetKind::ParticleSystem))
             paths.push_back(node.entry->path);
     return paths;
 }

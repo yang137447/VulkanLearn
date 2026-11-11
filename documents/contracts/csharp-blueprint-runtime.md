@@ -1,6 +1,6 @@
 # C# Blueprint Runtime
 
-状态：当前契约，2026-10-18。对应 `source/script/`、`script/`、
+状态：当前契约，2026-11-01。对应 `source/script/`、`script/`、
 `source/editor/scene/scriptBlueprintAuthoring.cpp` 与 GoogleTest `script_tests`。
 覆盖蓝图作者、游戏逻辑、物理、编译重载、动态资源和导出；完整目标及历史见
 [开发计划](../plan/architecture/csharp-actor-runtime-plan.md)。
@@ -627,6 +627,95 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 角色有原生 capsule 查询代理，参与射线与 Trigger；重力只在角色的每帧物理推进中积分。
 出生或传送在完整 body 集合同步后刷新支撑查询；移走/删除根体会唤醒旧位置附近的休眠体。
 
+## Particle Systems
+
+`Blueprint.Particles` 是 Play 上下文内的粒子实例服务，只在所属 Blueprint 的 live GT
+回调中可用；OnCreate、工作线程、其它 Blueprint 及旧上下文调用都会拒绝。
+
+- `Particles.Spawn(assetPath, position, rotation?, scale?)` 返回本上下文的
+  `ParticleSystem`。省略 rotation/scale 时分别使用零旋转与单位缩放；TRS 必须有限，
+  且缩放各轴绝对值不小于 `1e-6`。C# 侧只做值校验并把 `spawn` 命令加入
+  `particleCommands`，此时尚未读取资产。
+- `Particles.Find(id)` 返回本 Blueprint live 表中的实例或 null；
+  `Particles.DestroyAll()` 销毁本 Blueprint 当前仍存活的实例。
+- `ParticleSystem` 暴露 `Handle`/`Id`/`IsAlive`，以及 `Destroy()`、
+  `SetVisible(bool)`、`SetSpawnRateScale(float)`、`SetColorTint(Vector4)`、
+  `SetEmitterEnabled(int, bool)`、`ResetOverrides()`。
+- 发射器级 API：`SpawnEmitter(sourceIndex, name?)` 返回
+  `ParticleEmitterHandle(Context,SystemId,Id,StableIndex)`；`DestroyEmitter` /
+  `RestartEmitter` / `SetEmitterEnabled(handle,bool)` 使用该句柄或
+  `EmitterHandles` 中的稳定 id。native 槽位只追加不重排，destroy 是 tombstone；
+  `StableIndex` 在 native 遥测回来前是 `uint.MaxValue`，之后由
+  `particleTelemetry.emitters[].index` 回填。单实例最多 16 个发射器。
+- 预算与参数：`SetEmitterBudget(maxTotalParticles, emitterBudgetScale)`，
+  `SetUserParameter(key, value)` / `ClearUserParameter(key)`。预算 scale 为
+  `[0,16]`，`maxTotalParticles` 上限 `1_000_000`；用户参数 key 为 `1..64`
+  UTF-8 字节且不含 NUL，最多 64 个，value 有限且 `|v| <= 1e6`。
+- 全局数据通道：`Particles.Data` 暴露 `Set(name, float)`、`Set(name, ParticleDataChannelValue)`、
+  `Clear(name)`、`Get(name)`（只读标量通道，缺失或非标量返回 null）和
+  `TryGet(name, out value)`，以及按类型读写的便捷方法：`Float`/`Int`/`Bool`/
+  `Vector2`/`Vector3`/`Vector4`/`Quaternion` 写入，`GetFloat`/`GetInt`/`GetBool`/
+  `GetVector2`/`GetVector3`/`GetVector4`/`GetQuaternion` 读取。`ParticleDataChannelValue`
+  携带 `ParticleDataChannelType`（`Float/Vec2/Vec3/Vec4/Int/Bool/Quat`）与一个
+  `Vector4` 分量载体，`Quat` 是 `(x,y,z,w)`。它写入当前 active
+  World 的全局表，不属于任何粒子实例，也不改变 `SetUserParameter` 的逐实例
+  语义；key 为 `1..64` UTF-8 字节且不含 NUL，所有分量有限且 `|v| <= 1e6`（`Int`
+  必须整数值、`Bool` 只接受 0/1），全局最多 64 项。类型不匹配的读取返回 null，
+  `Set` 已存在且类型不同的通道会整体替换该通道。`Set`/`Clear` 经所属 owner 校验后进入 `particleCommands`，同一帧内
+  `Get` 立即看到本地写入；native 在 Play 开始的 `start` 请求中下发一次，并在每个
+  `tick` 请求中继续下发 `particleDataChannels` 冻结副本。`Clear` 对不存在的 key
+  幂等返回，Console 的缺失 key clear 仍报“未找到”。Stop/Destroy 的 EndPlay 回调仍可读取
+  托管镜像；Stop/release 在回调结束后清空整个托管镜像，单个 owner 清理不清空其他
+  Blueprint 共享的全局镜像，World 通道始终保留；热重载通过 migration snapshot 恢复镜像，
+  `OnReload` 可立即读取。
+  渲染器在 v2 `$Name` 重解析时以数据通道为基底、逐实例用户参数覆盖同名项；
+  作者资产仍需声明同名默认 `userParameters`，未知引用仍在加载期拒绝。只有标量通道
+  参与 `$Name` 替换。粒子资产的 `materialBindings` 可直接把任意类型通道接到
+  材质/精灵参数，见 `particle-system.md` 的 `materialBindings`。
+- 附着：`AttachTo(targetKind, targetName, component?, localPosition?,
+  localRotation?, localScale?)` 与 `Detach()`。`targetKind` 为 `mesh` 或
+  `component`；局部 TRS 省略时为零/单位值。目标不存在仍接受命令，但 telemetry
+  的 `attachment.resolved` 为 false，粒子保持作者 TRS。
+- 遥测：`Telemetry` 是最近一帧 native 快照，`TelemetryChanged` 在更新时触发。
+  计数字段由 World 维护；`AliveAvailable=false` 表示渲染器尚未回填 alive，
+  此时 `AliveParticles`/`LastFrameBudget` 不可当作 0；`VisibleEmitterCount` 在实例
+  隐藏时为 0；逐 emitter 的 `MaxParticles` 是作者池上限，`BudgetedMaxParticles`
+  是预算缩放/截断后的上限，`RestartEpoch` 用于检测 native 重启请求。
+- 事件：`Subscribe(Action<ParticleEvent>)` 返回可释放订阅；事件类型为
+  `Spawn`/`Death`/`Collision`，携带 system id、emitter id、时间、位置与法线。
+  native 在 GT 把事件写入下一帧 `particleEvents`，C# 只在 tick 回调线程分发；
+  队列最多 256 条，每上下文最多 256 个订阅。Destroy/EndPlay 会清理该 owner 的
+  订阅。首个订阅会向 native 发 `events=true`，最后一个订阅移除会发
+  `events=false`；只有兴趣存在时 EngineLoop 才以最多 10 Hz 进入 GPU 事件
+  回读安全点。热重载保留实例/发射器 id、`NextParticle`/`NextParticleEmitter` 和 pending
+  结构状态，但托管委托不可序列化，`OnReload` 必须重新 `Subscribe`。
+- `IsAlive` 只读取当前上下文的本地 live 表。`Destroy()`/`DestroyAll()` 被本地接受后
+  句柄立即变为不存活，不向原生 World 查询；旧上下文、外部 owner 或已销毁实例的
+  handle 在 `IsAlive` 中返回 false，在其它操作中被拒绝。
+- 没有 `Restart`。需要重启时执行 `Destroy()` 后再 `Spawn()`。
+
+`particleCommands` 是逐帧一次性批处理：服务在回调中累积命令，native GT 在命令点消费并
+清空，同值新命令不会被状态去重。每批最多 256 条普通命令；`RemoveOwner` 生成的清理命令
+不受该预算限制。原生 `ScriptRuntimeSubsystem::ApplyParticleCommands` 对 `Spawn` 同步调用
+`ParticleAssetLoader::Prepare` 校验资源。托管调用已返回的句柄不代表资产加载成功：
+路径、JSON 或资产校验失败会抛出 `Script.InvalidParticleSpawn`，本帧 Tick 捕获后以
+`StopContext` 诊断停止该 Play 上下文。
+
+新增命令 shape：`spawnEmitter`（`source`、可选 `emitter` 名）、
+`destroyEmitter`/`restartEmitter`（`emitter` id）、`emitter`（`index` 或
+`emitter` id 加 `enabled`）、`budget`（`maxTotal`、`emitterScale`）、
+`userParam`/`clearUserParam`（`key`，可选 `value`）、`attach`（`targetKind`、
+`targetName`、可选 `component` 与局部 TRS）、`detach`、`data`/`clearData`
+（`key`，可选 `value`）。字段缺失、类型错误、越界或 owner 不匹配仍按统一
+路径抛出 `Script.InvalidParticleCommand`；`data` 命令不带粒子实例 id。
+
+`SetSpawnRateScale` 只接受有限的 `[0,16]`；`SetColorTint` 要求 RGB 在 `[0,16]`、
+alpha 在 `[0,1]` 且全部有限；`SetEmitterEnabled` 的 index 为 `[0,15]`。
+这些方法与 console `particleparam` 使用同一组 World setter 和校验边界。
+C# spawn 的实例 ID 由当前上下文生成 `~particle.<n>`，不写入作者 Scene。
+Blueprint Destroy、故障隔离或 EndPlay 触发的 owner 清理会为仍在 live 表中的实例
+补发 `destroy`；整体上下文 Release 是独立边界，不经过该补发路径。
+
 ## 输入、计时器与 Blueprint 通信
 
 `config/config.json` 可选 `gameplayInput` 配置由启动时 SDL 一次解析键名：
@@ -883,7 +972,7 @@ Vector2 与 MoveForward/MoveRight/MoveUp 轴、下述 Time 值、
 回调内 Log.Debug/Info/Warning/Error、Destroy，Components/GetComponent、SceneComponent.Parent/WorldMatrix、
 BlueprintWorld 的 Spawn/Destroy/IsAlive 与可选 Body。Destroy 停止后续回调、
 结束播放并隐藏组件网格；实例槽位保留到上下文释放，Stop 恢复作者实例。
-计时器、跨 Blueprint 查找/消息、组件与动态资产见上节。
+粒子 Play 期实例见 `Particles` 小节；计时器、跨 Blueprint 查找/消息、组件与动态资产见上节。
 
 ### 时间与性能快照
 

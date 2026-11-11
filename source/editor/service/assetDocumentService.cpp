@@ -2,7 +2,11 @@
 
 #include <fstream>
 #include <cctype>
+#include <functional>
 #include "editor/command/strictJson.h"
+#include "particles/particleAsset.h"
+#include "particles/particleMeshReference.h"
+#include "particles/particleTextureReference.h"
 #include "mesh/validation/meshAssetValidator.h"
 #include "resource/image/textureAssetValidation.h"
 #include "scene/validation/sceneJsonValidator.h"
@@ -70,21 +74,25 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
         (kind == K::Tressfx && type != "tressfx") ||
         (kind == K::Texture && type != "texture") ||
         (kind == K::Blueprint && type != "blueprint") ||
-        (kind == K::Terrain && type != "terrain"))
+        (kind == K::Terrain && type != "terrain") ||
+        (kind == K::ParticleSystem && type != "particleSystem"))
         throw std::invalid_argument("Wrong asset type: " + path);
     const auto filename = std::filesystem::path(path).filename().string();
     std::string foldedFilename = filename;
     for (char& character : foldedFilename)
         character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-    if (kind == K::Scene && foldedFilename == "sc_model_preview.json")
+    if (kind == K::Scene &&
+        (foldedFilename == "sc_model_preview.json" ||
+         foldedFilename == "sc_particle_preview.json"))
         throw std::invalid_argument("Preview scenes are not editable asset documents");
     if (kind == K::Tressfx && filename.rfind("TF_", 0) != 0)
         throw std::invalid_argument("TressFX descriptors require TF_*.json names; 请将旧 SM_ 毛发资产改为 TF_ 前缀");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
         (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
         (kind == K::Blueprint && filename.rfind("BP_", 0) != 0) ||
-        (kind == K::Terrain && foldedFilename.rfind("tr_", 0) != 0))
-        throw std::invalid_argument("Mesh/TressFX/Texture/Blueprint/Terrain descriptors require SM_/TF_/T_/BP_/TR_ JSON names");
+        (kind == K::Terrain && foldedFilename.rfind("tr_", 0) != 0) ||
+        (kind == K::ParticleSystem && filename.rfind("PS_", 0) != 0))
+        throw std::invalid_argument("Mesh/TressFX/Texture/Blueprint/Terrain/Particle descriptors require SM_/TF_/T_/BP_/TR_/PS_ JSON names");
 }
 
 void ValidateLegacyScene(const Json& scene)
@@ -106,6 +114,135 @@ void ValidateLegacyScene(const Json& scene)
                 fov <= 0 || fov >= 179 || nearClip <= 0 || farClip <= nearClip)
                 throw std::invalid_argument("Invalid camera projection");
         }
+    }
+}
+
+void ValidateParticleDocumentTextures(
+    const Json& candidate,
+    const std::filesystem::path& resourceRoot)
+{
+    const bool hasEmitterArray =
+        candidate.contains("emitters") &&
+        candidate.at("emitters").is_array();
+    if (hasEmitterArray)
+    {
+        const Json& emitters = candidate.at("emitters");
+        for (size_t index = 0; index < emitters.size(); ++index)
+        {
+            const Json& emitter = emitters.at(index);
+            if (!emitter.is_object() || !emitter.contains("texture") ||
+                !emitter.at("texture").is_string() ||
+                emitter.at("texture").get<std::string>().empty())
+            {
+                continue;
+            }
+            (void)ValidateParticleTextureReference(
+                resourceRoot,
+                emitter.at("texture").get<std::string>(),
+                "emitters[" + std::to_string(index) + "].texture");
+        }
+        return;
+    }
+    if (candidate.contains("texture") &&
+        candidate.at("texture").is_string() &&
+        !candidate.at("texture").get<std::string>().empty())
+    {
+        (void)ValidateParticleTextureReference(
+            resourceRoot,
+            candidate.at("texture").get<std::string>(),
+            "texture");
+    }
+}
+
+void ValidateParticleDocumentMeshes(
+    const Json& candidate,
+    const std::filesystem::path& resourceRoot)
+{
+    // v1 emitter、v2 module fields 和根对象都可能持有 collision 对象；
+    // 递归检查两种碰撞资源路径，避免编辑器接受项目根回退文件而运行时拒绝。
+    std::function<void(const Json&)> validateCollisionReferences =
+        [&](const Json& value)
+    {
+        if (value.is_object())
+        {
+            const auto collision = value.find("collision");
+            if (collision != value.end() && collision->is_object())
+            {
+                const std::string type =
+                    collision->value("type", std::string("none"));
+                const char* pathField = type == "sdf"
+                    ? "sdf"
+                    : (type == "mesh" ? "mesh" : nullptr);
+                if (pathField != nullptr)
+                {
+                    const auto pathObject =
+                        collision->find(pathField);
+                    if (pathObject != collision->end() &&
+                        pathObject->is_object())
+                    {
+                        const auto path = pathObject->find("path");
+                        if (path != pathObject->end() &&
+                            path->is_string() &&
+                            !path->get<std::string>().empty())
+                        {
+                            (void)ValidateParticleMeshReference(
+                                resourceRoot,
+                                path->get<std::string>(),
+                                std::string("collision.") + pathField +
+                                    ".path");
+                        }
+                    }
+                }
+            }
+            for (auto child = value.begin(); child != value.end(); ++child)
+            {
+                validateCollisionReferences(child.value());
+            }
+        }
+        else if (value.is_array())
+        {
+            for (const Json& child : value)
+            {
+                validateCollisionReferences(child);
+            }
+        }
+    };
+    validateCollisionReferences(candidate);
+
+    const bool hasEmitterArray =
+        candidate.contains("emitters") &&
+        candidate.at("emitters").is_array();
+    if (hasEmitterArray)
+    {
+        const Json& emitters = candidate.at("emitters");
+        for (size_t index = 0; index < emitters.size(); ++index)
+        {
+            const Json& emitter = emitters.at(index);
+            if (!emitter.is_object() || !emitter.contains("mesh") ||
+                !emitter.at("mesh").is_object() ||
+                !emitter.at("mesh").contains("path") ||
+                !emitter.at("mesh").at("path").is_string() ||
+                emitter.at("mesh").at("path").get<std::string>().empty())
+            {
+                continue;
+            }
+            (void)ValidateParticleMeshReference(
+                resourceRoot,
+                emitter.at("mesh").at("path").get<std::string>(),
+                "emitters[" + std::to_string(index) + "].mesh.path");
+        }
+        return;
+    }
+    if (candidate.contains("mesh") &&
+        candidate.at("mesh").is_object() &&
+        candidate.at("mesh").contains("path") &&
+        candidate.at("mesh").at("path").is_string() &&
+        !candidate.at("mesh").at("path").get<std::string>().empty())
+    {
+        (void)ValidateParticleMeshReference(
+            resourceRoot,
+            candidate.at("mesh").at("path").get<std::string>(),
+            "mesh.path");
     }
 }
 } // namespace
@@ -170,6 +307,17 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         if (kind == K::Scene) ValidateLegacyScene(document.baseline);
         else if (kind == K::Mesh || kind == K::Tressfx) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
         else if (kind == K::Blueprint) ValidateScriptBlueprintAsset(document.baseline);
+        else if (kind == K::ParticleSystem)
+        {
+            ValidateParticleDocumentTextures(
+                document.baseline,
+                resourceRoot);
+            ValidateParticleDocumentMeshes(
+                document.baseline,
+                resourceRoot);
+            (void)ParticleAssetLoader::ParseJson(
+                document.baseline, key, resourceRoot);
+        }
         else if (kind == K::Terrain)
         {
             // 与 capabilities 的 document_and_references 声明一致：打开时就
@@ -186,6 +334,18 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         return true;
     }
     catch (const std::exception& exception) { error = exception.what(); return false; }
+}
+
+bool AssetDocumentService::Erase(const std::string& path)
+{
+    try
+    {
+        return documents.erase(Normalize(path)) != 0;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
 }
 
 void AssetDocumentService::Validate(const Json& candidate, const std::string& path) const
@@ -271,6 +431,13 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         throw std::invalid_argument("Invalid Actor component reference type");
                 }
         }
+    }
+    else if (kind == K::ParticleSystem)
+    {
+        ValidateParticleDocumentTextures(candidate, resourceRoot);
+        ValidateParticleDocumentMeshes(candidate, resourceRoot);
+        (void)ParticleAssetLoader::ParseJson(
+            candidate, path, resourceRoot);
     }
     else if (kind == K::Mesh || kind == K::Tressfx)
     {
@@ -410,6 +577,42 @@ void AssetDocumentService::MoveBlueprintHistory(Document& document, const std::s
     document.blueprintHistory = std::move(history);
 }
 
+void AssetDocumentService::PublishParticleDraft(Document& document, Json candidate)
+{
+    if (candidate == document.draft) return;
+    // 与 Blueprint 共用同一有界历史预算；粒子结构编辑也是一次 modify，
+    // 因此整个 emitters 数组可作为一个原子步骤撤销。
+    auto history = document.particleHistory;
+    for (const auto& entry : history.redo) history.bytes -= entry.bytes;
+    history.redo.clear();
+    const auto bytes = document.draft.dump().size();
+    history.undo.push_back({document.draft, bytes});
+    history.bytes += bytes;
+    TrimBlueprintHistory(history, false);
+    PublishDraft(document, std::move(candidate));
+    document.particleHistory = std::move(history);
+}
+
+void AssetDocumentService::MoveParticleHistory(Document& document, const std::string& path, bool redo)
+{
+    const auto& currentSource = redo ? document.particleHistory.redo : document.particleHistory.undo;
+    if (currentSource.empty()) throw std::invalid_argument("No Particle edit available");
+    auto candidate = currentSource.back().value;
+    // 历史候选仍需通过完整粒子校验，尤其是纹理引用和发射器名称。
+    Validate(candidate, path);
+    auto history = document.particleHistory;
+    auto& source = redo ? history.redo : history.undo;
+    auto& destination = redo ? history.undo : history.redo;
+    history.bytes -= source.back().bytes;
+    source.pop_back();
+    const auto bytes = document.draft.dump().size();
+    destination.push_back({document.draft, bytes});
+    history.bytes += bytes;
+    TrimBlueprintHistory(history, redo);
+    PublishDraft(document, std::move(candidate));
+    document.particleHistory = std::move(history);
+}
+
 EditorAssetDocumentResultPayload AssetDocumentService::Describe(const std::string& path, const Document& document) const
 {
     EditorAssetDocumentResultPayload result;
@@ -417,8 +620,12 @@ EditorAssetDocumentResultPayload AssetDocumentService::Describe(const std::strin
     result.documentRevision = document.revision;
     result.dirty = document.draft != document.baseline;
     result.sourceDigest = document.digest.ToHex();
-    result.canUndo = kind == K::Blueprint && !document.blueprintHistory.undo.empty();
-    result.canRedo = kind == K::Blueprint && !document.blueprintHistory.redo.empty();
+    const auto& history = kind == K::ParticleSystem
+        ? document.particleHistory : document.blueprintHistory;
+    result.canUndo = (kind == K::Blueprint || kind == K::ParticleSystem) &&
+        !history.undo.empty();
+    result.canRedo = (kind == K::Blueprint || kind == K::ParticleSystem) &&
+        !history.redo.empty();
     result.document = ProjectEditableAsset(kind, document.draft);
     result.capabilities = DescribeAssetCapabilities(kind, document.draft);
     if (kind == K::Terrain && document.draft.contains("heightmapPath") &&
@@ -456,6 +663,7 @@ void AssetDocumentService::DescribeFailure(const std::string& path, const Docume
             if (change.objectIdentity) target["objectIdentity"] = *change.objectIdentity;
             if (change.slotIndex) target["slotIndex"] = *change.slotIndex;
             if (change.expectedSlotName) target["expectedSlotName"] = *change.expectedSlotName;
+            if (change.expectedEmitterName) target["expectedEmitterName"] = *change.expectedEmitterName;
             if (change.layerIndex) target["layerIndex"] = *change.layerIndex;
             if (change.expectedLayerName) target["expectedLayerName"] = *change.expectedLayerName;
             targets.push_back(std::move(target));
@@ -523,6 +731,7 @@ EditorCommandResult AssetDocumentService::Execute(const EditorCommandEnvelope& c
             if (candidate != document.draft)
             {
                 if (kind == K::Blueprint) PublishBlueprintDraft(document, std::move(candidate));
+                else if (kind == K::ParticleSystem) PublishParticleDraft(document, std::move(candidate));
                 else PublishDraft(document, std::move(candidate));
                 document.standardEdited = true;
                 if (kind == K::Scene) document.replayViaDraft = document.awaitingWorldLoad = true;
@@ -531,11 +740,17 @@ EditorCommandResult AssetDocumentService::Execute(const EditorCommandEnvelope& c
         }
         else if (operation == O::Validate) Validate(document.draft, key);
         else if (operation == O::Undo || operation == O::Redo)
-            MoveBlueprintHistory(document, key, operation == O::Redo);
+        {
+            if (kind == K::ParticleSystem)
+                MoveParticleHistory(document, key, operation == O::Redo);
+            else
+                MoveBlueprintHistory(document, key, operation == O::Redo);
+        }
         else if (operation == O::Revert)
         {
             PublishDraft(document, document.baseline);
             document.blueprintHistory = {};
+            document.particleHistory = {};
             document.edits.clear();
             document.replayViaDraft = kind == K::Scene;
             document.awaitingWorldLoad = kind == K::Scene;
@@ -562,6 +777,25 @@ EditorCommandResult AssetDocumentService::Execute(const EditorCommandEnvelope& c
             candidate.revision = nextRevision;
             candidate.awaitingWorldLoad = kind == K::Scene;
             document = std::move(candidate);
+        }
+        else if (operation == O::Close)
+        {
+            if (document.draft != document.baseline)
+            {
+                result.errorCode = EditorErrorCode::DocumentDirty;
+                result.message =
+                    "Close requires a clean document";
+                return result;
+            }
+            auto description = Describe(key, document);
+            documents.erase(key);
+            result.status = EditorCommandStatus::Succeeded;
+            result.documentRevision = description.documentRevision;
+            result.payload = std::move(description);
+            result.message =
+                std::string(GetEditorCommandName(command.type)) +
+                " succeeded";
+            return result;
         }
         else if (operation == O::Save)
         {
@@ -628,8 +862,10 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetDocumentService::Modi
             result.push_back({entry.first, kind == K::Scene ? EditorUi::EditorAssetKind::Scene :
                 kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh :
                 kind == K::Tressfx ? EditorUi::EditorAssetKind::Tressfx : kind == K::Blueprint ?
-                EditorUi::EditorAssetKind::Blueprint : kind == K::Terrain ?
-                EditorUi::EditorAssetKind::Terrain : EditorUi::EditorAssetKind::Texture,
+                EditorUi::EditorAssetKind::Blueprint :
+                kind == K::ParticleSystem ? EditorUi::EditorAssetKind::ParticleSystem :
+                kind == K::Terrain ? EditorUi::EditorAssetKind::Terrain :
+                EditorUi::EditorAssetKind::Texture,
                 entry.second.revision, entry.second.status, entry.second.message});
     return result;
 }

@@ -1,17 +1,65 @@
 #include "debugConsole.h"
 #include "engine/modelPreviewRequest.h"
 
+#include <algorithm>
 #include <conio.h>
 #include <cctype>
 #include <cmath>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 #include "engine/runtimeCommand.h"
 #include "engine/editorHost.h"
 #include "hair/hairConsoleCommand.h"
 #include "hair/tressfxLiveParams.h"
+#include "particles/particleDump.h"
+#include "particles/particleRuntimeCommand.h"
+#include "world/world.h"
+
+namespace
+{
+
+bool ParseConsoleFloat(const std::string& token, float& outValue)
+{
+    try
+    {
+        size_t consumed = 0;
+        const float value = std::stof(token, &consumed);
+        if (consumed != token.size())
+        {
+            return false;
+        }
+        outValue = value;
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
+bool ParseConsoleInt(const std::string& token, int& outValue)
+{
+    try
+    {
+        size_t consumed = 0;
+        const int value = std::stoi(token, &consumed);
+        if (consumed != token.size())
+        {
+            return false;
+        }
+        outValue = value;
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
+} // namespace
 
 DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::IEditorConsoleSink* sink)
     : commandBus(commandBus), editorConsoleSink(sink)
@@ -736,6 +784,794 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "particledump")
+    {
+        std::string fileName = "particles.json";
+        std::string token;
+        long long maxPerEmitter = VL::kParticleDumpDefaultDetails;
+        if (commandStream >> token)
+        {
+            fileName = token;
+            if (commandStream >> token)
+            {
+                try
+                {
+                    size_t consumed = 0;
+                    maxPerEmitter = std::stoll(token, &consumed);
+                    if (consumed != token.size())
+                    {
+                        throw std::invalid_argument("trailing characters");
+                    }
+                }
+                catch (const std::exception&)
+                {
+                    std::cout
+                        << "Usage: particledump [file.json] [maxPerEmitter]"
+                        << std::endl;
+                    return;
+                }
+                std::string extra;
+                if (commandStream >> extra)
+                {
+                    std::cout
+                        << "Usage: particledump [file.json] [maxPerEmitter]"
+                        << std::endl;
+                    return;
+                }
+            }
+        }
+        maxPerEmitter = std::clamp(
+            maxPerEmitter,
+            0LL,
+            static_cast<long long>(VL::kParticleDumpMaxDetails));
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::DumpParticles;
+        runtimeCommand.stringValue = std::move(fileName);
+        runtimeCommand.intValue = static_cast<int>(maxPerEmitter);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle dump queued: " << runtimeCommand.stringValue
+            << " (max " << maxPerEmitter << " particles/emitter)"
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlestats")
+    {
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << "Usage: particlestats" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportParticleStats;
+        runtimeCommand.sourceText = line;
+        std::cout << "Particle stats queued." << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlespawn")
+    {
+        std::string name;
+        std::string assetPath;
+        if (!(commandStream >> name >> assetPath))
+        {
+            std::cout
+                << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                << std::endl;
+            return;
+        }
+
+        Eigen::Vector3f position = Eigen::Vector3f::Zero();
+        float x = 0.0f;
+        if (commandStream >> x)
+        {
+            if (!(commandStream >> position.y() >> position.z()))
+            {
+                std::cout
+                    << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                    << std::endl;
+                return;
+            }
+            position.x() = x;
+        }
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout
+                << "Usage: particlespawn <name> <PS_asset_path> [x y z]"
+                << std::endl;
+            return;
+        }
+
+        std::string validationError;
+        if (!VL::ValidateParticleSpawnRequest(
+                name,
+                assetPath,
+                position,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SpawnParticleSystem;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.secondaryStringValue = assetPath;
+        runtimeCommand.particleSpawnPosition = position;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle spawn queued: " << name << " -> " << assetPath
+            << " at (" << position.x() << ", " << position.y() << ", "
+            << position.z() << ")" << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particledestroy")
+    {
+        std::string name;
+        std::string extra;
+        if (!(commandStream >> name) || (commandStream >> extra))
+        {
+            std::cout << "Usage: particledestroy <name>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::DestroyParticleSystem;
+        runtimeCommand.stringValue = std::move(name);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle destroy queued: " << runtimeCommand.stringValue
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlerestart")
+    {
+        std::string name;
+        std::string extra;
+        if (!(commandStream >> name) || (commandStream >> extra))
+        {
+            std::cout << "Usage: particlerestart <name>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::RestartParticleSystem;
+        runtimeCommand.stringValue = std::move(name);
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle restart queued: " << runtimeCommand.stringValue
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlekill")
+    {
+        std::string systemName;
+        std::string emitterName;
+        std::string indexToken;
+        std::string extra;
+        if (!(commandStream >> systemName >> emitterName >> indexToken) ||
+            (commandStream >> extra))
+        {
+            std::cout
+                << "Usage: particlekill <system> <emitter> <particleIndex>"
+                << std::endl;
+            return;
+        }
+        int particleIndex = -1;
+        if (!ParseConsoleInt(indexToken, particleIndex))
+        {
+            std::cout
+                << "Usage: particlekill <system> <emitter> <particleIndex>"
+                << std::endl;
+            return;
+        }
+        std::string validationError;
+        if (!VL::ValidateParticleKillRequest(
+                systemName, emitterName, particleIndex,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::KillParticle;
+        runtimeCommand.stringValue = std::move(systemName);
+        runtimeCommand.particleEmitterName = std::move(emitterName);
+        runtimeCommand.intValue = particleIndex;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle kill queued: " << runtimeCommand.stringValue
+            << "." << runtimeCommand.particleEmitterName
+            << " slot=" << particleIndex << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlespawnat")
+    {
+        const char* usage =
+            "Usage: particlespawnat <system> <emitter> <x> <y> <z> "
+            "[lifetime]";
+        std::string systemName;
+        std::string emitterName;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        if (!(commandStream >> systemName >> emitterName >> x >> y >> z))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        float lifetime = 0.0f;
+        std::string lifetimeToken;
+        if (commandStream >> lifetimeToken)
+        {
+            if (!ParseConsoleFloat(lifetimeToken, lifetime))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            std::string extra;
+            if (commandStream >> extra)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+        }
+        const Eigen::Vector3f position(x, y, z);
+        std::string validationError;
+        if (!VL::ValidateParticleSpawnAtRequest(
+                systemName, emitterName, position, lifetime,
+                validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SpawnParticleAt;
+        runtimeCommand.stringValue = std::move(systemName);
+        runtimeCommand.particleEmitterName = std::move(emitterName);
+        runtimeCommand.particleSpawnPosition = position;
+        runtimeCommand.floatValue = lifetime;
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle spawn-at queued: " << runtimeCommand.stringValue
+            << "." << runtimeCommand.particleEmitterName
+            << " at (" << x << ", " << y << ", " << z << ")"
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particleparam")
+    {
+        const char* usage =
+            "Usage: particleparam <name> spawnRateScale <scale> | "
+            "colorTint <r> <g> <b> <a> | emitter <index> <0|1> | reset";
+
+        std::string name;
+        std::string parameter;
+        if (!(commandStream >> name >> parameter))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        std::vector<std::string> arguments;
+        std::string token;
+        while (commandStream >> token)
+        {
+            arguments.push_back(token);
+        }
+
+        std::string validationError;
+        if (!VL::ValidateParticleParameterName(parameter, validationError))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleSystemParameter;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.secondaryStringValue = parameter;
+
+        if (parameter == "spawnRateScale")
+        {
+            float scale = 0.0f;
+            if (arguments.size() != 1 ||
+                !ParseConsoleFloat(arguments[0], scale))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleSpawnRateScale(scale, validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.floatValue = scale;
+        }
+        else if (parameter == "colorTint")
+        {
+            if (arguments.size() != 4)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            Eigen::Vector4f colorTint = Eigen::Vector4f::Ones();
+            if (!ParseConsoleFloat(arguments[0], colorTint.x()) ||
+                !ParseConsoleFloat(arguments[1], colorTint.y()) ||
+                !ParseConsoleFloat(arguments[2], colorTint.z()) ||
+                !ParseConsoleFloat(arguments[3], colorTint.w()))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleColorTint(colorTint, validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.particleColorTint = colorTint;
+        }
+        else if (parameter == "emitter")
+        {
+            int index = 0;
+            int enabled = 0;
+            if (arguments.size() != 2 ||
+                !ParseConsoleInt(arguments[0], index) ||
+                !ParseConsoleInt(arguments[1], enabled))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (index < 0)
+            {
+                std::cout
+                    << "Particle emitter index must be non-negative."
+                    << std::endl;
+                return;
+            }
+            if (!VL::ValidateParticleEmitterIndex(
+                    static_cast<uint32_t>(index),
+                    validationError) ||
+                !VL::ValidateParticleEmitterEnabledValue(
+                    enabled,
+                    validationError))
+            {
+                std::cout << validationError << std::endl;
+                return;
+            }
+            runtimeCommand.intValue = index;
+            runtimeCommand.intValue2 = enabled;
+        }
+        else
+        {
+            if (!arguments.empty())
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+        }
+
+        runtimeCommand.sourceText = line;
+        std::cout
+            << "Particle parameter queued: " << name << " " << parameter
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particleemitter")
+    {
+        const char* usage =
+            "Usage: particleemitter <system> spawn <sourceIndex> [name] | "
+            "destroy <index|name> | restart <index|name> | "
+            "enable <index|name> <0|1>";
+        std::string systemName;
+        std::string operation;
+        if (!(commandStream >> systemName >> operation))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.stringValue = systemName;
+        runtimeCommand.sourceText = line;
+        if (operation == "spawn")
+        {
+            int sourceIndex = 0;
+            if (!(commandStream >> sourceIndex) || sourceIndex < 0)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            std::string name;
+            commandStream >> name;
+            std::string extra;
+            if (commandStream >> extra)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::SpawnParticleEmitter;
+            runtimeCommand.intValue = sourceIndex;
+            runtimeCommand.particleEmitterName = std::move(name);
+            std::cout << "Particle emitter spawn queued: "
+                << systemName << " source=" << sourceIndex << std::endl;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+
+        if (operation != "destroy" && operation != "restart" &&
+            operation != "enable")
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        std::string identity;
+        if (!(commandStream >> identity))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        int index = 0;
+        if (ParseConsoleInt(identity, index))
+        {
+            if (index < 0)
+            {
+                std::cout
+                    << "Particle emitter index must be non-negative."
+                    << std::endl;
+                return;
+            }
+            runtimeCommand.intValue = index;
+        }
+        else
+        {
+            runtimeCommand.intValue = -1;
+            runtimeCommand.particleEmitterName = identity;
+        }
+
+        if (operation == "enable")
+        {
+            int enabled = 0;
+            if (!(commandStream >> enabled) ||
+                (enabled != 0 && enabled != 1))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            runtimeCommand.type =
+                VL::RuntimeCommandType::SetParticleSystemParameter;
+            runtimeCommand.secondaryStringValue = "emitter";
+            runtimeCommand.intValue2 = enabled;
+        }
+        else
+        {
+            runtimeCommand.type = operation == "destroy"
+                ? VL::RuntimeCommandType::DestroyParticleEmitter
+                : VL::RuntimeCommandType::RestartParticleEmitter;
+        }
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        std::cout << "Particle emitter " << operation
+            << " queued: " << systemName << " " << identity << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particlebudget")
+    {
+        const char* usage =
+            "Usage: particlebudget <system|world> <maxTotal> <emitterScale>";
+        std::string name;
+        int maxTotal = 0;
+        float emitterScale = 1.0f;
+        std::string maxToken;
+        std::string scaleToken;
+        if (!(commandStream >> name >> maxToken >> scaleToken) ||
+            !ParseConsoleInt(maxToken, maxTotal))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        if (maxTotal < 0 || maxTotal > 1000000)
+        {
+            std::cout
+                << "Particle total budget must be in [0, 1000000]."
+                << std::endl;
+            return;
+        }
+        if (!ParseConsoleFloat(scaleToken, emitterScale) ||
+            !std::isfinite(emitterScale) ||
+            emitterScale < 0.0f || emitterScale > 16.0f)
+        {
+            std::cout
+                << "Particle emitter budget scale must be finite in [0, 16]."
+                << std::endl;
+            return;
+        }
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleSystemBudget;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.intValue = maxTotal;
+        runtimeCommand.floatValue = emitterScale;
+        runtimeCommand.sourceText = line;
+        std::cout << "Particle budget queued: " << name
+            << " maxTotal=" << maxTotal
+            << " emitterScale=" << emitterScale << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particleuser")
+    {
+        const char* usage =
+            "Usage: particleuser <system> <key> <value> | "
+            "particleuser <system> clear <key>";
+        std::string name;
+        std::string first;
+        if (!(commandStream >> name >> first))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleSystemUserParameter;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.sourceText = line;
+        if (first == "clear")
+        {
+            std::string key;
+            std::string extra;
+            if (!(commandStream >> key) || (commandStream >> extra))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            runtimeCommand.intValue2 = 1;
+            runtimeCommand.particleUserParameterName = std::move(key);
+        }
+        else
+        {
+            float value = 0.0f;
+            std::string extra;
+            if (!ParseConsoleFloat(first, value) ||
+                !std::isfinite(value) || std::abs(value) > 1.0e6f ||
+                (commandStream >> extra))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            runtimeCommand.particleUserParameterName = first;
+            runtimeCommand.floatValue = value;
+        }
+        if (runtimeCommand.particleUserParameterName.empty() ||
+            runtimeCommand.particleUserParameterName.size() > 64)
+        {
+            std::cout
+                << "Particle user parameter key requires 1..64 characters."
+                << std::endl;
+            return;
+        }
+        std::cout << "Particle user parameter queued: " << name
+            << " " << runtimeCommand.particleUserParameterName << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particledata")
+    {
+        const char* usage =
+            "Usage: particledata <name> <value> | "
+            "particledata <name> vec2 <x> <y> | "
+            "particledata <name> vec3 <x> <y> <z> | "
+            "particledata <name> vec4 <x> <y> <z> <w> | "
+            "particledata <name> quat <x> <y> <z> <w> | "
+            "particledata <name> bool <true|false> | "
+            "particledata <name> int <value> | "
+            "particledata <name> clear | particledata";
+        std::string name;
+        if (!(commandStream >> name))
+        {
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type =
+                VL::RuntimeCommandType::ReportParticleDataChannels;
+            runtimeCommand.sourceText = line;
+            std::cout << "Particle data channels queued for dump."
+                << std::endl;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        std::string validationError;
+        if (!VL::ValidateParticleDataChannelName(
+                name, validationError))
+        {
+            std::cout << validationError << std::endl;
+            return;
+        }
+        std::vector<std::string> arguments;
+        for (std::string token; commandStream >> token;)
+            arguments.push_back(std::move(token));
+        if (arguments.empty())
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleDataChannel;
+        runtimeCommand.particleDataChannelName = name;
+        runtimeCommand.sourceText = line;
+        if (arguments.size() == 1 && arguments[0] == "clear")
+        {
+            runtimeCommand.particleDataChannelClear = true;
+            std::cout << "Particle data channel clear queued: "
+                << name << std::endl;
+        }
+        else
+        {
+            VL::ParticleDataChannelValue value;
+            if (!VL::ParseParticleDataChannelText(
+                    arguments, value, validationError))
+            {
+                std::cout << validationError << std::endl;
+                std::cout << usage << std::endl;
+                return;
+            }
+            runtimeCommand.particleDataChannelValue = value;
+            runtimeCommand.particleDataChannelTyped = true;
+            if (value.type == VL::ParticleDataChannelType::Float)
+                runtimeCommand.floatValue = value.values[0];
+            std::cout << "Particle data channel set queued: "
+                << name << "=" << value.ToJson().dump() << std::endl;
+        }
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particleattach")
+    {
+        const char* usage =
+            "Usage: particleattach <system> mesh <target> "
+            "[x y z [rx ry rz [sx sy sz]]] | "
+            "particleattach <system> component <blueprint> <component> "
+            "[x y z [rx ry rz [sx sy sz]]] | "
+            "particleattach <system> detach";
+        std::string name;
+        std::string kind;
+        if (!(commandStream >> name >> kind))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::SetParticleSystemAttachment;
+        runtimeCommand.stringValue = name;
+        runtimeCommand.sourceText = line;
+        if (kind == "detach")
+        {
+            runtimeCommand.secondaryStringValue = "detach";
+            std::string extra;
+            if (commandStream >> extra)
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            std::cout << "Particle detach queued: " << name << std::endl;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        if (kind != "mesh" && kind != "component")
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        runtimeCommand.secondaryStringValue = kind;
+        if (!(commandStream >> runtimeCommand.particleAttachmentTarget))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        if (kind == "component" &&
+            !(commandStream >> runtimeCommand.particleAttachmentComponent))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        std::vector<std::string> values;
+        std::string token;
+        while (commandStream >> token) values.push_back(token);
+        if (!values.empty() && values.size() != 3 &&
+            values.size() != 6 && values.size() != 9)
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+        for (size_t index = 0; index < values.size(); ++index)
+        {
+            float value = 0.0f;
+            if (!ParseConsoleFloat(values[index], value))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+            if (index < 3) runtimeCommand.particleAttachmentPosition[index] = value;
+            else if (index < 6) runtimeCommand.particleAttachmentRotation[index - 3] = value;
+            else runtimeCommand.particleAttachmentScale[index - 6] = value;
+        }
+        if (!runtimeCommand.particleAttachmentScale.allFinite() ||
+            std::abs(runtimeCommand.particleAttachmentScale.x()) < 1.0e-6f ||
+            std::abs(runtimeCommand.particleAttachmentScale.y()) < 1.0e-6f ||
+            std::abs(runtimeCommand.particleAttachmentScale.z()) < 1.0e-6f)
+        {
+            std::cout
+                << "Particle attachment scale axes must have absolute value >= 1e-6."
+                << std::endl;
+            return;
+        }
+        std::cout << "Particle attachment queued: " << name
+            << " -> " << kind << ":" << runtimeCommand.particleAttachmentTarget
+            << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "particletelemetry")
+    {
+        std::string name;
+        std::string extra;
+        if ((commandStream >> name) && (commandStream >> extra))
+        {
+            std::cout << "Usage: particletelemetry [system]" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportParticleTelemetry;
+        runtimeCommand.stringValue = std::move(name);
+        runtimeCommand.sourceText = line;
+        std::cout << "Particle telemetry queued." << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "camera")
     {
         std::string mode;
@@ -1152,6 +1988,20 @@ void DebugConsole::PrintHelp() const
     std::cout << "  offline <on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export>\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  screenshot [file.bmp] - capture the presented swapchain image\n";
+    std::cout << "  particledump [file.json] [maxPerEmitter] - read back GPU particle pools into Generated/ParticleDumps\n";
+    std::cout << "  particlestats - print last frame particle emitter/draw/sort budget plus particle pass GPU ms\n";
+    std::cout << "  particlespawn <name> <PS_asset_path> [x y z] - add a particle system instance to the active World\n";
+    std::cout << "  particledestroy <name> - remove a particle system instance from the active World\n";
+    std::cout << "  particlerestart <name> - reset one particle system instance (simulation time, prewarm, cull)\n";
+    std::cout << "  particlekill <system> <emitter> <particleIndex> - clear one stable GPU particle slot\n";
+    std::cout << "  particlespawnat <system> <emitter> <x> <y> <z> [lifetime] - spawn one GPU particle at a world position\n";
+    std::cout << "  particleparam <name> <spawnRateScale <scale>|colorTint <r> <g> <b> <a>|emitter <index> <0|1>|reset> - runtime-only particle overrides\n";
+    std::cout << "  particleemitter <system> <spawn <sourceIndex> [name]|destroy <index|name>|restart <index|name>|enable <index|name> <0|1>> - emitter lifecycle\n";
+    std::cout << "  particlebudget <system|world> <maxTotal> <emitterScale> - runtime particle budget\n";
+    std::cout << "  particleuser <system> [<key> <value>|clear <key>] - runtime named user parameter\n";
+    std::cout << "  particledata <name> <value> | <name> vec2/vec3/vec4/quat/bool/int ... | <name> clear | particledata - World-global typed particle data channel\n";
+    std::cout << "  particleattach <system> <mesh <target>|component <blueprint> <component>|detach> [x y z [rx ry rz [sx sy sz]]] - attach to scene object/component\n";
+    std::cout << "  particletelemetry [system] - print CPU-authored counts and renderer-fed alive/budget data\n";
     std::cout << "  softbody impact <balloon-name> [speed] - launch a Jolt sphere at a soft body\n";
     std::cout << "  glass impact <pane-name> [speed] - launch a Jolt sphere at a glass pane\n";
     std::cout << "  shoot - fire a visible arrow from the render camera\n";

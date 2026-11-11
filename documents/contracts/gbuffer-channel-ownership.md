@@ -62,7 +62,7 @@ SkinnedMesh 的 current/previous position 来源见
 
 | 附件 | 格式 | 尺寸 | 写入 pass | 读取 pass |
 | --- | --- | --- | --- | --- |
-| `gbufferA` | `A2B10G10R10_UNORM_PACK32` | 1x | geometry (`clear`) | deferredLighting |
+| `gbufferA` | `A2B10G10R10_UNORM_PACK32` | 1x | geometry (`clear`) | deferredLighting、forwardTransparent |
 | `gbufferB` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `gbufferC` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `gbufferD` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
@@ -71,7 +71,8 @@ SkinnedMesh 的 current/previous position 来源见
 | `gbufferF` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `sceneColorBase` | `R16G16B16A16_SFLOAT` | 1x | geometry (`clear`) | deferredLighting |
 | `sceneDepth` | `D32_SFLOAT` | 1x | geometry (`clear`) | deferredLighting、forwardOpaque (`load`)、sky、forwardTransparent |
-| `sceneColor` | `R16G16B16A16_SFLOAT` | 1x | deferredLighting (`clear`)、forwardOpaque/sky/forwardTransparent (`load`) | bloom、toneMapping |
+| `sceneColor` | `R16G16B16A16_SFLOAT` | 1x | deferredLighting (`clear`)、forwardOpaque/sky/forwardTransparent (`load`) | sceneColorCopyPass、bloom、toneMapping |
+| `sceneColorCopy` | `R16G16B16A16_SFLOAT` | 1x | sceneColorCopyPass (`clear`) | forwardTransparent |
 | `selectionMask` | `R8G8B8A8_UNORM` | 1x | forwardOpaque (`clear`)、forwardTransparent (`load`) | toneMapping |
 
 MSAA：`geometry` / `forwardOpaque` / `forwardTransparent` 都声明 `needMsaa: false`，

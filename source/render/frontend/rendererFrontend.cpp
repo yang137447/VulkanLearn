@@ -122,9 +122,15 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     RenderScene renderScene;
     renderScene.worldGeneration = snapshot.worldGeneration;
     renderScene.frameIndex = snapshot.frameIndex;
+    renderScene.simulationDeltaSeconds =
+        snapshot.simulationDeltaSeconds;
+    renderScene.particleDataChannels =
+        snapshot.particleDataChannels;
     renderScene.hairSimulationDeltaSeconds = snapshot.hairSimulationDeltaSeconds;
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
+    renderScene.decals = snapshot.decals;
+    renderScene.particleSystems = snapshot.particleSystems;
     renderScene.environment = snapshot.environment;
     renderScene.wind = snapshot.wind;
     // 非实时消费者（编辑器缩略图/离线预检）不会经过 RenderSystem 的

@@ -153,6 +153,7 @@ public abstract partial class Blueprint
     public BlueprintEvents Events { get; internal set; } = new();
     public BlueprintPhysics Physics { get; internal set; } = new();
     public BlueprintAssets Assets { get; internal set; } = new();
+    public ParticleSystems Particles { get; internal set; } = new();
     protected virtual void OnCreate() { }
     protected virtual void BeginPlay() { }
     protected virtual void Tick(float deltaTime) { }

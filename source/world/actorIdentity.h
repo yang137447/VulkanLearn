@@ -8,8 +8,8 @@ namespace VL
 {
 
 // 大纲 actor 的类型。Mesh..Environment 与 SceneWind 和场景 JSON 的对象 type 一一对应；
-// Script 只表达 World 里确实存在的蓝图实例状态。SpeedTree 每物种的响应曲线数据
-// 属于网格资产，不作为场景 actor 出现在大纲里。
+// ParticleSystem 与 Terrain 同样是场景对象；Script 只表达 World 里确实存在的蓝图
+// 实例状态。SpeedTree 每物种的响应曲线数据属于网格资产，不作为场景 actor 出现在大纲里。
 enum class EditorSceneActorType : uint8_t
 {
     Mesh,
@@ -19,9 +19,10 @@ enum class EditorSceneActorType : uint8_t
     SquareAreaLight,
     Camera,
     Environment,
+    ParticleSystem,
+    Terrain,
     SceneWind,
-    Script,
-    Terrain
+    Script
 };
 
 // 类型规范表，不决定 actor 排列顺序，不生成大纲分组。
@@ -56,8 +57,9 @@ struct EditorSceneActorIdentity
 
 bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
 
-// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境、场景风与风剖面
-// 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
+// 可见性开关只覆盖渲染路径真正持有的对象：网格/地形、四类灯与粒子系统。
+// 相机、环境、场景风与 Blueprint 没有逐 actor 的渲染侧可见性状态，因此不为它们
+// 显示一个点了没有效果的眼睛。
 bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
 } // namespace VL

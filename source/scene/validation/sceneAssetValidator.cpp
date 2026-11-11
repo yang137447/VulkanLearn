@@ -1,5 +1,6 @@
 #include "sceneAssetValidator.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "particles/particleAssetOverride.h"
 #include "mesh/vegetationAsset.h"
 #include "terrain/terrainAssetLoader.h"
 #include "commonFunction.h"
@@ -10,7 +11,9 @@
 
 SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
     std::string_view scenePath,
-    const nlohmann::json& sceneJson)
+    const nlohmann::json& sceneJson,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments)
 {
     try { VL::ValidateSceneAssetJson(sceneJson); }
     catch (const std::exception& error)
@@ -70,6 +73,15 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
                     std::make_shared<const VL::VegetationAsset>(
                         std::move(vegetation));
             }
+        }
+        else if (objectPlan.objectType == "particleSystem")
+        {
+            const std::string particlePath =
+                objectJson.at("particlePath").get<std::string>();
+            objectPlan.particleAsset = VL::PrepareParticleAssetWithOverride(
+                particlePath,
+                particleDocuments,
+                std::filesystem::path(CommonFunction::GetResourcePath()));
         }
         else if (objectPlan.objectType == "terrain")
         {

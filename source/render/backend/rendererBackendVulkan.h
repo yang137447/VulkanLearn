@@ -135,6 +135,9 @@ public:
     bool SupportsTimestampQueries();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
+    // particle GPU culling 的 indirect-count 路径必须以此为准；false 时
+    // 使用 CPU 固定参数的 indirect 绘制并保留相同语义。
+    bool SupportsDrawIndirectCount() const;
     vk::QueryPool CreateTimestampQueryPool(
         uint32_t queryCount,
         const std::string& debugName);
@@ -373,6 +376,9 @@ public:
     void DestroyFramebuffers(std::vector<RHIFramebufferHandle>& framebufferHandles);
     RendererFrameContext BeginFrame(uint32_t currentFrame);
     void SubmitFrame(const RendererFrameContext& frameContext, uint32_t currentFrame);
+    // 粒子池跨帧连续，但 per-emitter/global buffer 仍按场景共享；有粒子模拟时
+    // 等待上一提交的 frame fence，避免两个在飞帧同时改写同一段池。
+    void WaitForPreviousFrameFence(uint32_t currentFrameIndex);
     // 帧同步环槽数。feedback/upload ring 必须与它对齐，不能各自猜测
     // MAX_FRAMES_IN_FLIGHT，否则 swapchain 重建后可能跨槽复用。
     uint32_t GetFrameFenceCount() const;
@@ -417,6 +423,8 @@ private:
     std::unique_ptr<RendererThumbnailImages> thumbnailImages;
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
+    bool hasSubmittedFrame = false;
+    uint32_t lastSubmittedFrameIndex = 0;
     std::atomic<bool> swapchainRecreateRequired{false};
     // Protects the raw-handle -> RHI-handle maps plus image debug names/extents.
     // Never held across RHI map lookups or Vulkan API calls.

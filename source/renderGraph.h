@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -41,6 +42,7 @@ struct RenderResource
     uint32_t width;
     uint32_t height;
     uint32_t arrayLayers = 1;
+    std::array<float, 4> clearColor = {0.2f, 0.2f, 0.2f, 1.0f};
 };
 
 class MaterialInstance;
@@ -49,6 +51,9 @@ namespace VL
 {
 class RendererBackendVulkan;
 class AutoExposureCompute;
+class VolumetricFogRenderer;
+class LightCullingRenderer;
+struct RendererDescriptorContext;
 namespace Hair
 {
 class HairSimulationPass;
@@ -90,6 +95,9 @@ struct Renderpass
     std::string name;
     VL::RenderGraphPassType type = VL::RenderGraphPassType::Unknown;
     uint32_t shadowCascadeIndex = 0;
+    // LocalShadow pass 只写 localShadowMap 的一个数组层；该值同时是
+    // RenderSystem 本帧选灯列表中的 lightIndex。
+    uint32_t localShadowIndex = 0;
     VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
     std::vector<vk::ClearValue> clearValues;
@@ -111,6 +119,9 @@ struct Renderpass
     std::unordered_map<std::string, uint32_t> outputLayers;
     std::unordered_map<std::string, vk::AttachmentLoadOp> outputLoadOps;
     std::unordered_map<std::string, vk::AttachmentStoreOp> outputStoreOps;
+    // 仅带 stencil 分量的深度资源使用；颜色附件保持 dontCare。
+    std::unordered_map<std::string, vk::AttachmentLoadOp> outputStencilLoadOps;
+    std::unordered_map<std::string, vk::AttachmentStoreOp> outputStencilStoreOps;
     // pass 输入描述符集, 统一使用Set3。inputDescriptorImageInfos 按 binding 下标保存，
     // binding 关系来自 CompiledRenderGraph，而不是运行时的输入数组顺序推断。
     vk::DescriptorPool descriptorPool;
@@ -191,10 +202,36 @@ public:
     // 返回构图阶段已经校验过的第一条 Shadow pass；当前图没有 Shadow pass
     // 时返回 nullptr。调用方不得跨 RenderGraph shutdown/reload 保存该指针。
     Renderpass* FindCanonicalShadowPass();
+    // 返回第一条 LocalShadow pass，作为材质 LocalShadow pipeline 的创建模板；
+    // 当前图没有局部阴影时不返回错误，调用方按“无局部阴影”处理。
+    Renderpass* FindCanonicalLocalShadowPass();
     const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     void InitializeAutoExposure(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
     const std::shared_ptr<VL::AutoExposureCompute>& GetAutoExposure() const noexcept { return autoExposure; }
+    // 体积雾注入/合成 owner。没有 volumetricFog/fogComposite pass 的自定义图
+    // 不会创建它；调用方必须按空指针处理。
+    void InitializeVolumetricFog(
+        PipelineFactory& factory,
+        VL::RendererBackendVulkan& backend,
+        const VL::RendererDescriptorContext& descriptorContext);
+    const std::shared_ptr<VL::VolumetricFogRenderer>& GetVolumetricFog() const noexcept
+    {
+        return volumetricFog;
+    }
+    // 屏幕空间 tile 光照聚类 owner。自定义图可能没有 lightCulling pass，
+    // 此时返回空指针，光照 shader 走 UBOLight 的连续回退分支。
+    void InitializeLightCulling(
+        PipelineFactory& factory,
+        VL::RendererBackendVulkan& backend,
+        const VL::RendererDescriptorContext& descriptorContext);
+    const std::shared_ptr<VL::LightCullingRenderer>& GetLightCulling() const noexcept
+    {
+        return lightCulling;
+    }
+    // 主颜色目标（sceneColor）的解析尺寸。tile 聚类与帧资源缓冲都以它为准，
+    // 避免把编辑器视口矩形或 swapchain 尺寸混用。
+    vk::Extent2D GetSceneColorExtent() const noexcept;
     // TressFX GPU guide 模拟 pass 与 AutoExposure 同生命周期：候选图创建，SwapState 移交，
     // Shutdown 按 GPU epoch 退休，避免旧模型 pipeline 悬空。
     void InitializeHairSimulation(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
@@ -245,6 +282,7 @@ private:
         const VL::CompiledRenderGraphPass& passDesc,
         VL::RendererBackendVulkan& rendererBackend);
     void ValidateAndResolveCanonicalShadowPass();
+    void ValidateAndResolveCanonicalLocalShadowPass();
     void DestroyRenderpass(
         Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
@@ -278,6 +316,8 @@ private:
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::shared_ptr<VL::AutoExposureCompute> autoExposure;
+    std::shared_ptr<VL::VolumetricFogRenderer> volumetricFog;
+    std::shared_ptr<VL::LightCullingRenderer> lightCulling;
     std::shared_ptr<VL::Hair::HairSimulationPass> hairSimulation;
     std::shared_ptr<VL::Skinning::SkinDeformPass> skinDeform;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
@@ -286,6 +326,7 @@ private:
     std::vector<std::string> renderpassesOrdered;
     std::unordered_map<std::string, Renderpass> renderpasses;
     std::string canonicalShadowPassName;
+    std::string canonicalLocalShadowPassName;
     VL::CompiledRenderGraph compiledFrameGraph;
     nlohmann::json sourceJson;
     VL::RendererDescriptorPlanCache descriptorPlanCache;

@@ -100,6 +100,18 @@ std::string BuildLightRuntimeKey(const World& world, const std::string& lightNam
     return world.GetScenePath() + "|light|" + lightName;
 }
 
+std::string BuildDecalRuntimeKey(const World& world, const std::string& decalName)
+{
+    return world.GetScenePath() + "|decal|" + decalName;
+}
+
+std::string BuildParticleRuntimeKey(
+    const World& world,
+    const std::string& particleSystemName)
+{
+    return world.GetScenePath() + "|particle|" + particleSystemName;
+}
+
 // 取位图里最高的置位级；空位图返回 TerrainMaxLodLevels（表示“没有任何级”）。
 uint32_t HighestResidentLevel(uint32_t mask)
 {
@@ -194,6 +206,12 @@ LightSnapshot BuildPointLightSnapshot(
     snapshot.intensity = light.GetIntensity();
     snapshot.position = light.GetPosition();
     snapshot.radius = light.GetRadius();
+    snapshot.pulsePeriod = light.GetPulsePeriod();
+    snapshot.pulseDuration = light.GetPulseDuration();
+    snapshot.pulsePhase = light.GetPulsePhase();
+    snapshot.pulsePeakIntensity = light.GetPulsePeakIntensity();
+    snapshot.castShadows = light.GetCastShadows();
+    snapshot.shadowBias = light.GetShadowBias();
     return snapshot;
 }
 
@@ -213,6 +231,8 @@ LightSnapshot BuildSpotLightSnapshot(
     snapshot.worldToLight = CommonFunction::RotationToMatrix(light.GetRotation()).block<3, 3>(0, 0).transpose();
     snapshot.coneAngleOuter = light.GetConeAngleOuter();
     snapshot.coneAngleInner = light.GetConeAngleInner();
+    snapshot.castShadows = light.GetCastShadows();
+    snapshot.shadowBias = light.GetShadowBias();
     return snapshot;
 }
 
@@ -243,6 +263,8 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
     snapshot.intensity = environment.type == EnvironmentType::None
         ? 0.0f : environment.intensity * desc.environmentIntensity;
     snapshot.skyParameters = environment.skyParameters;
+    // 体积雾是渲染期效果，不随全局环境强度缩放；由 fog.intensity 单独控制。
+    snapshot.fog = environment.fog;
 
     if (environment.type == EnvironmentType::Hdri && !environment.hdrPath.empty())
     {
@@ -332,6 +354,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     WorldSnapshot snapshot;
     snapshot.worldGeneration = world.GetGeneration();
     snapshot.frameIndex = desc.frameIndex;
+    snapshot.simulationDeltaSeconds = desc.simulationDeltaSeconds;
     snapshot.hairSimulationDeltaSeconds = desc.hairSimulationDeltaSeconds;
     snapshot.debugViewMode = desc.debugViewMode;
 
@@ -614,6 +637,68 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         frozen.lightId = StableRuntimeId(BuildLightRuntimeKey(world, identity));
         snapshot.lights.push_back(std::move(frozen));
     }
+
+    snapshot.decals.reserve(world.GetDecals().size());
+    for (const auto& [name, decal] : world.GetDecals())
+    {
+        if (!decal.visible) continue;
+        DecalSnapshot decalSnapshot;
+        decalSnapshot.decalId =
+            StableRuntimeId(BuildDecalRuntimeKey(world, name));
+        decalSnapshot.name = name;
+        decalSnapshot.decalToWorld = decal.decalToWorld;
+        decalSnapshot.color = decal.color;
+        decalSnapshot.opacity = decal.opacity;
+        decalSnapshot.edgeSoftness = decal.edgeSoftness;
+        decalSnapshot.noiseStrength = decal.noiseStrength;
+        decalSnapshot.randomSeed = decal.randomSeed;
+        decalSnapshot.roughness = decal.roughness;
+        decalSnapshot.metallic = decal.metallic;
+        decalSnapshot.ambientOcclusion = decal.ambientOcclusion;
+        decalSnapshot.emissive = decal.emissive;
+        decalSnapshot.emissiveStrength = decal.emissiveStrength;
+        decalSnapshot.responseMask = decal.responseMask;
+        decalSnapshot.normalStrength = decal.normalStrength;
+        decalSnapshot.albedoMap = decal.albedoMap;
+        decalSnapshot.normalMap = decal.normalMap;
+        decalSnapshot.ormMap = decal.ormMap;
+        decalSnapshot.sortOrder = decal.sortOrder;
+        decalSnapshot.visible = decal.visible;
+        snapshot.decals.push_back(std::move(decalSnapshot));
+    }
+
+    snapshot.particleSystems.reserve(
+        world.GetParticleSystems().size());
+    for (const auto& [name, particleSystem] :
+         world.GetParticleSystems())
+    {
+        ParticleSystemSnapshot snapshotSystem;
+        snapshotSystem.particleSystemId =
+            StableRuntimeId(BuildParticleRuntimeKey(world, name));
+        snapshotSystem.name = name;
+        snapshotSystem.assetPath = particleSystem.assetPath;
+        snapshotSystem.asset = particleSystem.asset;
+        bool attachmentResolved = true;
+        snapshotSystem.model =
+            world.ResolveParticleSystemModel(
+                particleSystem, attachmentResolved);
+        snapshotSystem.visible = particleSystem.visible;
+        snapshotSystem.runtime = particleSystem.runtime;
+        snapshotSystem.budget =
+            world.GetEffectiveParticleBudget(name);
+        snapshotSystem.telemetry = particleSystem.telemetry;
+        snapshotSystem.telemetry.budgetedCapacity =
+            snapshotSystem.budget.effectiveCapacity;
+        snapshotSystem.userParameters = particleSystem.userParameters;
+        snapshotSystem.attachment = particleSystem.attachment;
+        snapshotSystem.attachment.resolved = attachmentResolved;
+        snapshot.particleSystems.push_back(
+            std::move(snapshotSystem));
+    }
+
+    // 数据通道是 World 级状态，快照必须拿走独立副本；渲染线程不得读取
+    // 可变 World，也不能在下一帧被 Console/C# 写入时看到半更新内容。
+    snapshot.particleDataChannels = world.GetParticleDataChannels();
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);
     // 风是场景全局状态：冻结进快照后，头发/离线消费者看到的是同一代 World 的风，

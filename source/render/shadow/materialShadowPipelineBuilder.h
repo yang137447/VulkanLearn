@@ -6,6 +6,7 @@
 // common opaque shadow pipelines and ShadowCaster routing remain outside this file.
 
 #include <memory>
+#include <vector>
 
 #include "material/materialPipelineReload.h"
 #include "pipeline/graphicsPipelineLayoutDesc.h"
@@ -39,6 +40,16 @@ MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     const Material& material,
     PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
 
+// 构建局部阴影专用管线：点光/聚光共享 ShadowDepth 模板，但片段阶段写
+// gl_FragDepth（八面体方向长度或透视 z）。普通不透明材质返回空，由公共
+// shadowLocal 管线绘制；WPO/alpha 材质使用 composed LocalShadow 变体。
+MaterialShadowPipelineBuildResult BuildMaterialLocalShadowPipeline(
+    PipelineFactory& pipelineFactory,
+    Renderpass* canonicalLocalShadowPass,
+    const MaterialInstanceBuildPlan& loadPlan,
+    const Material& material,
+    PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
+
 void ValidateMaterialShadowShaderBindings(
     const std::string& materialName,
     const MaterialDescriptorSchema& materialDescriptorSchema,
@@ -48,5 +59,19 @@ void ValidateMaterialShadowShaderBindings(
 GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
     const MaterialDescriptorSchema& materialDescriptorSchema,
     const std::vector<ShaderBinding>& surfaceBindings);
+
+// LocalShadow 在 Surface/Shadow 的 Set 0/2 基础上还要合并 LocalShadow
+// shader 实际反射到的 stage；热重载重建必须与初次创建使用同一 layout。
+void ValidateMaterialLocalShadowShaderBindings(
+    const std::string& materialName,
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings);
+
+GraphicsPipelineLayoutDesc BuildMaterialLocalShadowPipelineLayout(
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& localShadowBindings,
+    const std::string& materialName);
 
 } // namespace VL

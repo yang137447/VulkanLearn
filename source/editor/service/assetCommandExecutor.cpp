@@ -11,6 +11,7 @@ EditorCommandResult AssetCommandExecutor::Execute(const EditorCommandEnvelope& c
     if (kind == EditorAssetDocumentKind::Texture) return textures.Execute(command);
     if (kind == EditorAssetDocumentKind::Blueprint) return blueprints.Execute(command);
     if (kind == EditorAssetDocumentKind::Terrain) return terrains.Execute(command);
+    if (kind == EditorAssetDocumentKind::ParticleSystem) return particles.Execute(command);
     EditorCommandResult result;
     result.commandId = command.commandId;
     result.status = EditorCommandStatus::Rejected;
@@ -27,6 +28,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetCommandExecutor::Modi
     result.insert(result.end(), textureDocuments.begin(), textureDocuments.end());
     const auto blueprintDocuments = blueprints.ModifiedDocuments();
     result.insert(result.end(), blueprintDocuments.begin(), blueprintDocuments.end());
+    const auto particleDocuments = particles.ModifiedDocuments();
+    result.insert(result.end(), particleDocuments.begin(), particleDocuments.end());
     const auto terrainDocuments = terrains.ModifiedDocuments();
     result.insert(result.end(), terrainDocuments.begin(), terrainDocuments.end());
     const auto tressfxDocuments = tressfx.ModifiedDocuments();

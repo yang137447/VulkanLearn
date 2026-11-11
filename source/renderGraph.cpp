@@ -12,6 +12,9 @@
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/camera/autoExposureCompute.h"
+#include "render/backend/rendererDescriptorContext.h"
+#include "render/volumetricFog/volumetricFogRenderer.h"
+#include "render/lightCulling/lightCullingRenderer.h"
 #include "hair/hairSimulationPass.h"
 #include "render/skinning/skinDeformPass.h"
 #include "texture.h"
@@ -95,6 +98,56 @@ vk::CompareOp GetDepthCompareOp(VL::CompiledDepthCompareOp compareOp)
         return vk::CompareOp::eAlways;
     }
     throw std::runtime_error("Compiled render graph contains an unknown depthCompareOp");
+}
+
+vk::CompareOp GetStencilCompareOp(VL::CompiledStencilCompareOp compareOp)
+{
+    switch (compareOp)
+    {
+    case VL::CompiledStencilCompareOp::Never:
+        return vk::CompareOp::eNever;
+    case VL::CompiledStencilCompareOp::Less:
+        return vk::CompareOp::eLess;
+    case VL::CompiledStencilCompareOp::Equal:
+        return vk::CompareOp::eEqual;
+    case VL::CompiledStencilCompareOp::LessOrEqual:
+        return vk::CompareOp::eLessOrEqual;
+    case VL::CompiledStencilCompareOp::Greater:
+        return vk::CompareOp::eGreater;
+    case VL::CompiledStencilCompareOp::NotEqual:
+        return vk::CompareOp::eNotEqual;
+    case VL::CompiledStencilCompareOp::GreaterOrEqual:
+        return vk::CompareOp::eGreaterOrEqual;
+    case VL::CompiledStencilCompareOp::Always:
+        return vk::CompareOp::eAlways;
+    }
+    throw std::runtime_error(
+        "Compiled render graph contains an unknown stencilCompareOp");
+}
+
+vk::StencilOp GetStencilOp(VL::CompiledStencilOp stencilOp)
+{
+    switch (stencilOp)
+    {
+    case VL::CompiledStencilOp::Keep:
+        return vk::StencilOp::eKeep;
+    case VL::CompiledStencilOp::Zero:
+        return vk::StencilOp::eZero;
+    case VL::CompiledStencilOp::Replace:
+        return vk::StencilOp::eReplace;
+    case VL::CompiledStencilOp::IncrementAndClamp:
+        return vk::StencilOp::eIncrementAndClamp;
+    case VL::CompiledStencilOp::DecrementAndClamp:
+        return vk::StencilOp::eDecrementAndClamp;
+    case VL::CompiledStencilOp::Invert:
+        return vk::StencilOp::eInvert;
+    case VL::CompiledStencilOp::IncrementAndWrap:
+        return vk::StencilOp::eIncrementAndWrap;
+    case VL::CompiledStencilOp::DecrementAndWrap:
+        return vk::StencilOp::eDecrementAndWrap;
+    }
+    throw std::runtime_error(
+        "Compiled render graph contains an unknown stencil operation");
 }
 
 bool HasRenderResourceHandles(const RenderResource& resource)
@@ -659,6 +712,8 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
 {
     resourcesMsaa.swap(other.resourcesMsaa);
     autoExposure.swap(other.autoExposure);
+    volumetricFog.swap(other.volumetricFog);
+    lightCulling.swap(other.lightCulling);
     hairSimulation.swap(other.hairSimulation);
     skinDeform.swap(other.skinDeform);
     resourcesResolve.swap(other.resourcesResolve);
@@ -666,6 +721,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
     renderpassesOrdered.swap(other.renderpassesOrdered);
     renderpasses.swap(other.renderpasses);
     canonicalShadowPassName.swap(other.canonicalShadowPassName);
+    canonicalLocalShadowPassName.swap(other.canonicalLocalShadowPassName);
     using std::swap;
     swap(ownerGeneration, other.ownerGeneration);
     compiledFrameGraph.resources.swap(
@@ -724,6 +780,38 @@ void RenderGraph::Shutdown(
     skinDeform.reset();
     hairSimulation.reset();
     autoExposure.reset();
+    if (volumetricFog)
+    {
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+        {
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            retireQueue.RetireShared(
+                "VolumetricFog:Graph", ownerGeneration,
+                retireQueue.GetLastSubmittedEpoch(),
+                std::move(volumetricFog));
+        }
+        else
+        {
+            volumetricFog->Shutdown(rendererBackend);
+            volumetricFog.reset();
+        }
+    }
+    if (lightCulling)
+    {
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+        {
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            retireQueue.RetireShared(
+                "LightCulling:Graph", ownerGeneration,
+                retireQueue.GetLastSubmittedEpoch(),
+                std::move(lightCulling));
+        }
+        else
+        {
+            lightCulling->Shutdown(rendererBackend);
+            lightCulling.reset();
+        }
+    }
     for(auto& [name, renderpass] : renderpasses)
     {
         DestroyRenderpass(renderpass, rendererBackend, releaseMode);
@@ -756,6 +844,7 @@ void RenderGraph::Shutdown(
     renderpasses.clear();
     renderpassesOrdered.clear();
     canonicalShadowPassName.clear();
+    canonicalLocalShadowPassName.clear();
     descriptorPlanCache.Clear();
     ownerGeneration = 0;
 }
@@ -791,6 +880,7 @@ void RenderGraph::LoadRenderGraph(
 
             // 先建立msaa资源
             if (name != "shadowMap" &&
+                name != "localShadowMap" &&
                 std::find(resourceDesc.usage.begin(), resourceDesc.usage.end(), "storage") == resourceDesc.usage.end())
             {
                 std::vector<RenderResource>& msaaResources =
@@ -835,6 +925,7 @@ void RenderGraph::LoadRenderGraph(
             renderpass = CreateRenderpass(passDesc, rendererBackend);
         }
         ValidateAndResolveCanonicalShadowPass();
+        ValidateAndResolveCanonicalLocalShadowPass();
     }
     catch (...)
     {
@@ -877,6 +968,15 @@ Renderpass* RenderGraph::FindCanonicalShadowPass()
         return nullptr;
     }
     return &renderpasses.at(canonicalShadowPassName);
+}
+
+Renderpass* RenderGraph::FindCanonicalLocalShadowPass()
+{
+    if (canonicalLocalShadowPassName.empty())
+    {
+        return nullptr;
+    }
+    return &renderpasses.at(canonicalLocalShadowPassName);
 }
 
 Renderpass& RenderGraph::RequireUniquePass(
@@ -964,6 +1064,51 @@ void RenderGraph::ValidateAndResolveCanonicalShadowPass()
     }
 }
 
+void RenderGraph::ValidateAndResolveCanonicalLocalShadowPass()
+{
+    canonicalLocalShadowPassName.clear();
+    const Renderpass* canonicalLocalShadowPass = nullptr;
+    std::string canonicalLocalShadowMaterialPath;
+
+    // 所有局部阴影层必须共享同一管线合同和公共材质，才能复用同一套
+    // LocalShadow pipeline/描述符布局；layer 的连续性由编译期 output.layer 保证。
+    for (const std::string& passName : renderpassesOrdered)
+    {
+        const Renderpass& renderpass = renderpasses.at(passName);
+        if (renderpass.type !=
+            VL::RenderGraphPassType::LocalShadow)
+        {
+            continue;
+        }
+
+        const std::string materialPath =
+            MaterialAssetUtils::NormalizeAssetPath(renderpass.materialInstancePath);
+        if (canonicalLocalShadowPass == nullptr)
+        {
+            canonicalLocalShadowPass = &renderpass;
+            canonicalLocalShadowPassName = passName;
+            canonicalLocalShadowMaterialPath = materialPath;
+            continue;
+        }
+
+        if (renderpass.pipelineContractKey !=
+            canonicalLocalShadowPass->pipelineContractKey)
+        {
+            throw std::runtime_error(
+                "LocalShadow pass '" + renderpass.name +
+                "' is not pipeline-compatible with canonical local shadow pass '" +
+                canonicalLocalShadowPass->name + "'");
+        }
+        if (materialPath != canonicalLocalShadowMaterialPath)
+        {
+            throw std::runtime_error(
+                "LocalShadow pass '" + renderpass.name +
+                "' must use the canonical local shadow material instance path '" +
+                canonicalLocalShadowMaterialPath + "'");
+        }
+    }
+}
+
 void RenderGraph::InitializeAutoExposure(PipelineFactory& factory,
     VL::RendererBackendVulkan& backend)
 {
@@ -976,6 +1121,74 @@ void RenderGraph::InitializeAutoExposure(PipelineFactory& factory,
         autoExposure = std::move(candidate);
         return;
     }
+}
+
+void RenderGraph::InitializeVolumetricFog(
+    PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend,
+    const VL::RendererDescriptorContext& descriptorContext)
+{
+    if (volumetricFog)
+    {
+        return;
+    }
+    // 没有 fog 节点的自定义图不创建 owner；调用方按空指针处理。
+    bool hasInjectionPass = false;
+    for (const auto& pass : compiledFrameGraph.passes)
+    {
+        if (pass.type == VL::RenderGraphPassType::VolumetricFog)
+        {
+            hasInjectionPass = true;
+            break;
+        }
+    }
+    if (!hasInjectionPass)
+    {
+        return;
+    }
+    auto candidate = std::make_shared<VL::VolumetricFogRenderer>();
+    candidate->Initialize(factory, backend, *this, descriptorContext);
+    volumetricFog = std::move(candidate);
+}
+
+void RenderGraph::InitializeLightCulling(
+    PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend,
+    const VL::RendererDescriptorContext& descriptorContext)
+{
+    if (lightCulling)
+    {
+        return;
+    }
+    // 没有聚类节点的自定义图不创建 owner；shader 的 enabled=0 回退分支
+    // 保证行为与引入聚类前一致。
+    bool hasCullingPass = false;
+    for (const auto& pass : compiledFrameGraph.passes)
+    {
+        if (pass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            hasCullingPass = true;
+            break;
+        }
+    }
+    if (!hasCullingPass)
+    {
+        return;
+    }
+    auto candidate = std::make_shared<VL::LightCullingRenderer>();
+    candidate->Initialize(factory, backend, *this, descriptorContext);
+    lightCulling = std::move(candidate);
+}
+
+vk::Extent2D RenderGraph::GetSceneColorExtent() const noexcept
+{
+    const auto found = resourcesResolve.find("sceneColor");
+    if (found == resourcesResolve.end() || found->second.empty())
+    {
+        return vk::Extent2D(0, 0);
+    }
+    const RenderResource& resource = found->second.front();
+    return vk::Extent2D(resource.width, resource.height);
 }
 
 void RenderGraph::InitializeHairSimulation(PipelineFactory& factory,
@@ -1006,7 +1219,15 @@ void RenderGraph::RenderInitialize(
     for (const std::string& passName : renderpassesOrdered)
     {
         Renderpass& renderpass = renderpasses.at(passName);
-        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
+        // 专用 compute / 自带 pipeline 的 pass 不经过 Material pass 描述符。
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth ||
+            renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
+            renderpass.type == VL::RenderGraphPassType::FogComposite ||
+            renderpass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            continue;
+        }
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
@@ -1044,9 +1265,28 @@ void RenderGraph::RefreshRuntimeDescriptors(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
 {
+    // 体积雾不走 pass material 描述符刷新，但同样依赖每 image 的
+    // global/light/particle-light buffer；World 换代后必须一起更新。
+    if (volumetricFog)
+    {
+        volumetricFog->RefreshDescriptors(
+            rendererBackend, descriptorContext);
+    }
+    if (lightCulling)
+    {
+        lightCulling->RefreshDescriptors(
+            rendererBackend, descriptorContext);
+    }
     for (auto& [passName, renderpass] : renderpasses)
     {
-        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure ||
+            renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth ||
+            renderpass.type == VL::RenderGraphPassType::VolumetricFog ||
+            renderpass.type == VL::RenderGraphPassType::FogComposite ||
+            renderpass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            continue;
+        }
         // World-local 纹理替换会同时改变缓存的 image view/sampler 与写入计划。
         // 必须先重建 pass-input 快照，避免刷新时把待退休的 world-local 纹理写回活动 descriptor。
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
@@ -1158,6 +1398,7 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.type = resourceDesc.type;
         resource.arrayLayers =
             resourceDesc.arrayLayers;
+        resource.clearColor = resourceDesc.clearColor;
         resource.format = formatOverride == vk::Format::eUndefined
             ? GetFormat(resourceDesc.format) : formatOverride;
 
@@ -1226,18 +1467,30 @@ RenderResource RenderGraph::CreateRenderResource(
                 1,
                 resource.format,
                 vk::ImageLayout::eUndefined,
-                vk::ImageLayout::eShaderReadOnlyOptimal);
+                vk::ImageLayout::eShaderReadOnlyOptimal,
+                0,
+                resource.arrayLayers);
         }
         resource.imageHandle =
             rendererBackend.GetImageHandle(
                 resource.image);
-        vk::ImageAspectFlagBits aspect =
-            vk::ImageAspectFlagBits::eColor;
-        if (bIsDepthFormat)
-        {
-            aspect =
-                vk::ImageAspectFlagBits::eDepth;
-        }
+        // shader 采样视图只取 depth aspect；带 stencil 的 framebuffer
+        // attachment 视图必须同时包含 stencil，否则 stencil test 写入
+        // 不会真正作用到该资源。
+        const vk::ImageAspectFlagBits shaderAspect = bIsDepthFormat
+            ? vk::ImageAspectFlagBits::eDepth
+            : vk::ImageAspectFlagBits::eColor;
+        // 现有 backend 接口用单个 ImageAspectFlagBits 接收 aspect；combined
+        // depth-stencil 需要位掩码，Vulkan-Hpp 的 Flags 构造会保留该位组合。
+        const vk::ImageAspectFlagBits attachmentAspect =
+            bIsDepthFormat &&
+                CommonFunction::HasStencilComponent(resource.format)
+            ? static_cast<vk::ImageAspectFlagBits>(
+                  static_cast<uint32_t>(
+                      vk::ImageAspectFlagBits::eDepth) |
+                  static_cast<uint32_t>(
+                      vk::ImageAspectFlagBits::eStencil))
+            : shaderAspect;
         const vk::ImageViewType imageViewType =
             resource.type == "texture2DArray"
                 ? vk::ImageViewType::e2DArray
@@ -1247,7 +1500,7 @@ RenderResource RenderGraph::CreateRenderResource(
                 resource.image,
                 imageViewType,
                 resource.format,
-                aspect,
+                shaderAspect,
                 0,
                 1,
                 0,
@@ -1269,7 +1522,7 @@ RenderResource RenderGraph::CreateRenderResource(
             resource.image,
             vk::ImageViewType::e2D,
             resource.format,
-            aspect,
+            attachmentAspect,
             0,
             1,
             layer,
@@ -1283,7 +1536,8 @@ RenderResource RenderGraph::CreateRenderResource(
         }
 
         resource.sampler = bIsDepthFormat
-            ? (resource.name == "shadowMap"
+            ? ((resource.name == "shadowMap" ||
+                resource.name == "localShadowMap")
                 ? rendererBackend
                       .CreateDepthCompareSampler(
                           "Sampler: " +
@@ -1372,6 +1626,9 @@ Renderpass RenderGraph::CreateRenderpass(
         const bool bIsShadowPass =
             renderpass.type ==
             VL::RenderGraphPassType::Shadow;
+        const bool bIsLocalShadowPass =
+            renderpass.type ==
+            VL::RenderGraphPassType::LocalShadow;
         const bool bUseMsaa = passDesc.needMsaa;
         renderpass.pipelineContractKey.useVertexInput =
             passDesc.pipelineState.useVertexInput;
@@ -1381,7 +1638,26 @@ Renderpass RenderGraph::CreateRenderpass(
             passDesc.pipelineState.depthWriteEnable;
         renderpass.pipelineContractKey.depthCompareOp =
             GetDepthCompareOp(passDesc.pipelineState.depthCompareOp);
-        renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
+        renderpass.pipelineContractKey.stencilTestEnable =
+            passDesc.pipelineState.stencilTestEnable;
+        renderpass.pipelineContractKey.stencilWriteMask =
+            passDesc.pipelineState.stencilWriteMask;
+        renderpass.pipelineContractKey.stencilCompareMask =
+            passDesc.pipelineState.stencilCompareMask;
+        renderpass.pipelineContractKey.stencilReference =
+            passDesc.pipelineState.stencilReference;
+        renderpass.pipelineContractKey.stencilCompareOp =
+            GetStencilCompareOp(
+                passDesc.pipelineState.stencilCompareOp);
+        renderpass.pipelineContractKey.stencilFailOp =
+            GetStencilOp(passDesc.pipelineState.stencilFailOp);
+        renderpass.pipelineContractKey.stencilPassOp =
+            GetStencilOp(passDesc.pipelineState.stencilPassOp);
+        renderpass.pipelineContractKey.stencilDepthFailOp =
+            GetStencilOp(
+                passDesc.pipelineState.stencilDepthFailOp);
+        renderpass.pipelineContractKey.isShadowPass =
+            bIsShadowPass || bIsLocalShadowPass;
 
         renderpass.inputResources = passDesc.inputResources;
         renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
@@ -1395,9 +1671,17 @@ Renderpass RenderGraph::CreateRenderpass(
                 GetAttachmentLoadOp(output.loadOp);
             renderpass.outputStoreOps[resourceName] =
                 GetAttachmentStoreOp(output.storeOp);
+            renderpass.outputStencilLoadOps[resourceName] =
+                GetAttachmentLoadOp(output.stencilLoadOp);
+            renderpass.outputStencilStoreOps[resourceName] =
+                GetAttachmentStoreOp(output.stencilStoreOp);
             if (bIsShadowPass)
             {
                 renderpass.shadowCascadeIndex = output.layer;
+            }
+            if (bIsLocalShadowPass)
+            {
+                renderpass.localShadowIndex = output.layer;
             }
         }
         // 当前游戏图没有 swapChain 的 MSAA 源附件，不能把单采样 Viewport
@@ -1413,6 +1697,40 @@ Renderpass RenderGraph::CreateRenderpass(
         {
             renderpass.width = 1;
             renderpass.height = 1;
+            return renderpass;
+        }
+        // 体积雾注入是 compute 节点：输出只有 storage usage，不能生成
+        // framebuffer；尺寸直接取雾 texture2DArray 的分辨率。
+        if (renderpass.type == VL::RenderGraphPassType::VolumetricFog)
+        {
+            const auto& fogResources =
+                resourcesResolve.at(renderpass.outputResources.at(0));
+            renderpass.width = fogResources.at(0).width;
+            renderpass.height = fogResources.at(0).height;
+            return renderpass;
+        }
+        if (renderpass.type == VL::RenderGraphPassType::ParticleSoftDepth)
+        {
+            const auto& softDepthResources =
+                resourcesResolve.at(renderpass.outputResources.at(0));
+            renderpass.width = softDepthResources.at(0).width;
+            renderpass.height = softDepthResources.at(0).height;
+            return renderpass;
+        }
+        // tile 光照聚类是纯 compute 节点：不创建 VkRenderPass/framebuffer，
+        // 尺寸取主颜色目标，保证与光照 shader 的 gl_FragCoord 一致。
+        if (renderpass.type == VL::RenderGraphPassType::LightCulling)
+        {
+            const auto colorIt = resourcesResolve.find("sceneColor");
+            if (colorIt == resourcesResolve.end() ||
+                colorIt->second.empty())
+            {
+                throw std::runtime_error(
+                    "LightCulling pass requires a sceneColor render target: " +
+                    renderpass.name);
+            }
+            renderpass.width = colorIt->second[0].width;
+            renderpass.height = colorIt->second[0].height;
             return renderpass;
         }
         MaybeFailRenderPassCreation();
@@ -1438,6 +1756,13 @@ Renderpass RenderGraph::CreateRenderpass(
                 resourcesResolve.at("shadowMap")[0].width;
             renderpass.height =
                 resourcesResolve.at("shadowMap")[0].height;
+        }
+        else if (bIsLocalShadowPass)
+        {
+            renderpass.width =
+                resourcesResolve.at("localShadowMap")[0].width;
+            renderpass.height =
+                resourcesResolve.at("localShadowMap")[0].height;
         }
         else
         {
@@ -1740,16 +2065,30 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
             .setSamples(sampleCount)
             .setLoadOp(renderpass.outputLoadOps.at(depthName))
             .setStoreOp(renderpass.outputStoreOps.at(depthName))
-            .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
-            .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(renderpass.outputLoadOps.at(depthName) == vk::AttachmentLoadOp::eLoad ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined)
+            .setStencilLoadOp(
+                renderpass.outputStencilLoadOps.at(depthName))
+            .setStencilStoreOp(
+                renderpass.outputStencilStoreOps.at(depthName))
+            .setInitialLayout(
+                (renderpass.outputLoadOps.at(depthName) ==
+                     vk::AttachmentLoadOp::eLoad ||
+                 renderpass.outputStencilLoadOps.at(depthName) ==
+                     vk::AttachmentLoadOp::eLoad)
+                    ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+                    : vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
         
         attachmentDescriptions.push_back(depthStencilAttachmentDescription);
 
         depthAttachmentReference.setAttachment(attachmentDescriptions.size() - 1);
         depthAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
-        depthAttachmentReference.setAspectMask(vk::ImageAspectFlagBits::eDepth);
+        vk::ImageAspectFlags depthAspect =
+            vk::ImageAspectFlagBits::eDepth;
+        if (CommonFunction::HasStencilComponent(depthFormat))
+        {
+            depthAspect |= vk::ImageAspectFlagBits::eStencil;
+        }
+        depthAttachmentReference.setAspectMask(depthAspect);
 
         if (bUseMsaa)
         {
@@ -2049,6 +2388,14 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     {
         return vk::Format::eD32Sfloat;
     }
+    else if (formatStr == "D16_UNORM")
+    {
+        return vk::Format::eD16Unorm;
+    }
+    else if (formatStr == "D24_UNORM_S8_UINT")
+    {
+        return vk::Format::eD24UnormS8Uint;
+    }
     else if (formatStr == "R8G8B8A8_UNORM")
     {
         return vk::Format::eR8G8B8A8Unorm;
@@ -2144,8 +2491,8 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     bool bUseMsaa)
 {
     std::vector<vk::ClearValue> clearValues;
-    vk::ClearValue clearColor;
-    clearColor.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
+    const std::array<float, 4> defaultClearColor{
+        0.2f, 0.2f, 0.2f, 1.0f};
     vk::ClearValue clearDepth;
     clearDepth.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
     // 总览：清除值顺序需与 RenderPass attachments 顺序一致
@@ -2157,6 +2504,26 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     {
         if (IsDepthResource(resourceName)) continue;
 
+        // 每个颜色附件独立取 clearColor，不能复用上一个附件的值：
+        // DBuffer 等资源用零清除，普通场景颜色仍用默认灰色。
+        std::array<float, 4> color = defaultClearColor;
+        const auto msaaIt = resourcesMsaa.find(resourceName);
+        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
+        {
+            color = msaaIt->second[0].clearColor;
+        }
+        else
+        {
+            // 单采样输出只存在于 resolve 表；缺失时回退默认清除色。
+            const auto resolveIt = resourcesResolve.find(resourceName);
+            if (resolveIt != resourcesResolve.end() &&
+                !resolveIt->second.empty())
+            {
+                color = resolveIt->second[0].clearColor;
+            }
+        }
+        vk::ClearValue clearColor;
+        clearColor.setColor(vk::ClearColorValue(color));
         // MSAA / Main Attachment
         clearValues.push_back(clearColor);
     }
@@ -2167,7 +2534,16 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
         for (const auto& resourceName : outputResources)
         {
             if (IsDepthResource(resourceName)) continue;
-            
+
+            std::array<float, 4> color = defaultClearColor;
+            const auto resolveIt = resourcesResolve.find(resourceName);
+            if (resolveIt != resourcesResolve.end() &&
+                !resolveIt->second.empty())
+            {
+                color = resolveIt->second[0].clearColor;
+            }
+            vk::ClearValue clearColor;
+            clearColor.setColor(vk::ClearColorValue(color));
             clearValues.push_back(clearColor);
         }
     }

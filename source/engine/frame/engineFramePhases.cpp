@@ -110,6 +110,10 @@ void RunEngineUpdatePhase(
         scripts.Tick(world, simulationDelta,
             subsystems.GetInputSubsystem().GetActionState(),
             subsystems.GetDiagnosticsSubsystem());
+        // 粒子模拟跟随脚本时钟：Pause 冻结，Playing 使用 timeScale 后的 delta，
+        // Editing 保持编辑器时间。必须在 Tick 之后、发布快照之前写入。
+        RenderSystem::GetInstance().SetPendingSimulationDelta(
+            scripts.ParticleDeltaOr(simulationDelta));
     }
     {
         // 可破坏物会话跟着 Play/Editing 状态切换；先恢复作者场景再步进共享冲击世界。
@@ -550,6 +554,28 @@ void TickEngineFrame(EngineFrameContext& context)
     }
 
     RunEngineRenderSubmitPhase(context);
+
+    // 事件回读放在 Render 之后：GPU 事件缓冲来自刚提交的帧，且分线程模式
+    // 已在上面的 WaitForRenderThreadIdle 归还所有权。10 Hz 节流只在 Play
+    // 且有 C# 粒子订阅时生效，避免普通帧进入 WaitIdle。
+    if (const auto& particleWorld =
+            subsystems.GetWorldManager().GetActiveWorld())
+    {
+        const bool playing = subsystems.GetScriptRuntime().IsPlaying();
+        if (playing)
+            *context.particleEventTimeSeconds += simulationDelta;
+        else
+            *context.particleEventTimeSeconds = 0.0;
+        const bool interested = particleWorld->IsParticleEventCaptureActive();
+        if (context.particleEventPollClock->Consume(
+                deltaTime, playing, interested))
+            context.pollParticleRuntimeBridge(*particleWorld);
+    }
+    else
+    {
+        context.particleEventPollClock->Reset();
+        *context.particleEventTimeSeconds = 0.0;
+    }
 
     // CPU 阶段测量到渲染段结束为止：FPS 标题、JSONL 与调试绘制收尾留在 other。
     // 冻结样本立即并入 GpuPassTimer 持有的唯一快照，随后 perf json/JSONL 与

@@ -184,5 +184,6 @@ TEST(WorldBuilderTerrainCollision, WorldInstancesFeedPlayPhysicsWorld)
     ASSERT_EQ(hits.size(), 1u);
     ASSERT_TRUE(hits[0].contains("point")) << hits[0].dump();
     EXPECT_NEAR(hits[0].at("point")[1].get<float>(), 600.0f, 0.5f);
-    EXPECT_EQ(hits[0].at("blueprint").get<std::string>(), "terrain|TerrainA");
+    EXPECT_FALSE(hits[0].contains("blueprint"));
+    EXPECT_EQ(hits[0].at("terrain").get<std::string>(), "terrain|TerrainA");
 }

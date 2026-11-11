@@ -441,6 +441,118 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     }
     else if (action == "resource-texture-fit") { panel.ResetTextureView(); panel.RefreshResourceEditor(); }
     else if (action == "resource-reload") panel.RequestResourceReload();
+    else if (action == "particle-curve-add")
+    {
+        panel.HandleParticleCurveAdd(element.GetAttribute<std::string>(
+            "data-curve", "colorKeys"));
+        panel.RefreshResourceEditor();
+    }
+    else if (action == "particle-curve-remove")
+    {
+        const int index = element.GetAttribute<int>(
+            "data-index", -1);
+        if (index >= 0)
+            panel.HandleParticleCurveRemove(
+                element.GetAttribute<std::string>(
+                    "data-curve", "colorKeys"),
+                static_cast<size_t>(index));
+        panel.RefreshResourceEditor();
+    }
+    else if (action == "particle-flipbook-seed-durations" ||
+        action == "particle-flipbook-uniform-pivots" ||
+        action == "particle-flipbook-reset-durations" ||
+        action == "particle-flipbook-reset-pivots" ||
+        action == "particle-flipbook-seed-uvs" ||
+        action == "particle-flipbook-reset-uvs" ||
+        action == "particle-flipbook-seed-rotations" ||
+        action == "particle-flipbook-reset-rotations")
+    {
+        panel.HandleParticleFlipbookTableAction(action);
+        panel.RefreshResourceEditor();
+    }
+    else if (action == "particle-module")
+    {
+        panel.particleModule = element.GetAttribute<std::string>(
+            "data-module", "emitter");
+        panel.RefreshResourceEditor();
+    }
+    else if (action == "particle-upgrade-v2" ||
+        action == "particle-module-stack-select" ||
+        action == "particle-module-stack-add" ||
+        action == "particle-module-stack-remove" ||
+        action == "particle-module-stack-up" ||
+        action == "particle-module-stack-down" ||
+        action == "particle-module-stack-toggle")
+    {
+        panel.HandleParticleModuleStack(action, element);
+    }
+    else if (action == "particle-emitter-add" ||
+        action == "particle-emitter-remove" ||
+        action == "particle-emitter-up" ||
+        action == "particle-emitter-down")
+    {
+        panel.HandleParticleEmitterStructure(action);
+    }
+    else if (action == "particle-field-reset")
+    {
+        panel.HandleParticleFieldReset(element);
+    }
+    else if (action == "particle-undo" || action == "particle-redo")
+    {
+        panel.RequestParticleHistory(action == "particle-redo");
+        panel.RefreshResourceEditor();
+    }
+    else if (action == "particle-validate")
+    {
+        const auto* active = panel.resourceEditor.ActiveTab();
+        if (active == nullptr ||
+            active->kind != EditorAssetKind::ParticleSystem)
+            return;
+        if (panel.particleCommandAwaitingSnapshot ||
+            panel.particleHistoryCommandAwaitingSnapshot ||
+            !panel.pendingParticleChanges.empty())
+        {
+            panel.localStatus =
+                "Apply pending particle edits before validating.";
+            return;
+        }
+        panel.SubmitParticleAssetCommand(
+            EditorCommandType::ValidateParticleDocument,
+            active->path);
+    }
+    else if (action == "particle-revert")
+    {
+        const auto* active = panel.resourceEditor.ActiveTab();
+        const auto* authored = active
+            ? panel.ParticleDocument(active->path) : nullptr;
+        if (authored == nullptr) return;
+        if (panel.particleCommandAwaitingSnapshot ||
+            panel.particleHistoryCommandAwaitingSnapshot ||
+            !panel.pendingParticleChanges.empty())
+        {
+            panel.localStatus =
+                "Apply pending particle edits before reverting.";
+            return;
+        }
+        if (authored->dirty)
+            panel.pendingParticleRevertPath = active->path;
+        else
+            panel.SubmitParticleAssetCommand(
+                EditorCommandType::RevertParticleDocument,
+                active->path);
+    }
+    else if (action == "particle-revert-confirm")
+    {
+        if (panel.pendingParticleRevertPath.empty()) return;
+        panel.SubmitParticleAssetCommand(
+            EditorCommandType::RevertParticleDocument,
+            panel.pendingParticleRevertPath);
+        panel.pendingParticleRevertPath.clear();
+    }
+    else if (action == "particle-revert-cancel")
+    {
+        panel.pendingParticleRevertPath.clear();
+    }
     else if (action == "resource-tool")
     {
         panel.resourceTransformTool = element.GetAttribute<std::string>("data-tool", "select");

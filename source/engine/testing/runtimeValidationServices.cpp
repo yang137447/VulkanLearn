@@ -535,12 +535,16 @@ RuntimeValidationServices::CaptureGraphicsShaderSnapshot() const
     const GraphicsShaderVariantArtifact& surface =
         material->GetSurfaceShaderArtifact();
     const auto& shadow = material->GetShadowShaderArtifact();
+    const auto& localShadow =
+        material->GetLocalShadowShaderArtifact();
     if (!material->GetRenderPipeline() ||
         !material->GetShadowPipeline() ||
-        !shadow)
+        !material->GetLocalShadowPipeline() ||
+        !shadow ||
+        !localShadow)
     {
         throw std::runtime_error(
-            "Shader reload runtime test requires live Surface and Shadow pipelines");
+            "Shader reload runtime test requires live Surface, Shadow and LocalShadow pipelines");
     }
 
     snapshot.surfacePipeline =
@@ -549,12 +553,19 @@ RuntimeValidationServices::CaptureGraphicsShaderSnapshot() const
     snapshot.shadowPipeline =
         reinterpret_cast<std::uintptr_t>(
             material->GetShadowPipeline().get());
+    snapshot.localShadowPipeline =
+        reinterpret_cast<std::uintptr_t>(
+            material->GetLocalShadowPipeline().get());
     snapshot.surfaceLogicalBuildId = surface.logicalBuildId;
     snapshot.shadowLogicalBuildId = shadow->logicalBuildId;
+    snapshot.localShadowLogicalBuildId =
+        localShadow->logicalBuildId;
     snapshot.surfaceGeneration =
         surface.artifactGenerationKey;
     snapshot.shadowGeneration =
         shadow->artifactGenerationKey;
+    snapshot.localShadowGeneration =
+        localShadow->artifactGenerationKey;
     snapshot.surfaceVertexDigest =
         HashFileIfPresent(surface.vertexSpvPath);
     snapshot.surfaceFragmentDigest =
@@ -563,6 +574,10 @@ RuntimeValidationServices::CaptureGraphicsShaderSnapshot() const
         HashFileIfPresent(shadow->vertexSpvPath);
     snapshot.shadowFragmentDigest =
         HashFileIfPresent(shadow->fragmentSpvPath);
+    snapshot.localShadowVertexDigest =
+        HashFileIfPresent(localShadow->vertexSpvPath);
+    snapshot.localShadowFragmentDigest =
+        HashFileIfPresent(localShadow->fragmentSpvPath);
     snapshot.manifestDigest = HashFileIfPresent(
         engineLoop->shaderCompiler->GetShaderRoot() /
         "spv" /

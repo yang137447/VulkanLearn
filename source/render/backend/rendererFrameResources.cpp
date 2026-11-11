@@ -19,7 +19,11 @@
 #include "render/foliage/speedTreeWindTransform.h"
 #include "render/frontend/renderScene.h"
 #include "render/lighting/physicalLighting.h"
+#include "render/lighting/lightPulse.h"
+#include "render/lightCulling/lightCulling.h"
+#include "render/shadow/localShadowMath.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "particles/particleLightGpu.h"
 #include "shaderReflect.h"
 #include "hair/tressfxGroupPreviewState.h"
 
@@ -140,6 +144,39 @@ void RetireFrameBufferSet(
         std::move(retiredBufferSet));
 }
 
+// CreatePerSwapchainBufferSet 总是 Map 每个 image 的内存，因此只能用于
+// host-visible 缓冲。tile grid/index 是 GPU 写、GPU 读，必须 device-local；
+// 这里自己拼一个同构的 Buffer（不保留 buffersMapped）。
+Buffer CreateDeviceLocalPerSwapchainSet(
+    RendererBackendVulkan& rendererBackend,
+    vk::DeviceSize bufferSize,
+    vk::BufferUsageFlags usage,
+    const std::string& debugName)
+{
+    Buffer bufferSet;
+    const uint32_t imageCount =
+        rendererBackend.GetSwapchainImageCount();
+    bufferSet.bufferSize = static_cast<uint32_t>(bufferSize);
+    bufferSet.buffers.resize(imageCount);
+    bufferSet.bufferMemories.resize(imageCount);
+    bufferSet.buffersMapped.assign(imageCount, nullptr);
+    for (uint32_t imageIndex = 0;
+         imageIndex < imageCount;
+         ++imageIndex)
+    {
+        std::tie(
+            bufferSet.buffers[imageIndex],
+            bufferSet.bufferMemories[imageIndex]) =
+            rendererBackend.CreateBuffer(
+                bufferSize,
+                usage,
+                vk::MemoryPropertyFlagBits::eDeviceLocal,
+                debugName + ":" + std::to_string(imageIndex));
+    }
+    rendererBackend.SetupDescriptorBufferInfos(bufferSet);
+    return bufferSet;
+}
+
 LightGPU BuildLightGPU(const LightSnapshot& light)
 {
     // 只有点光/聚光使用厘米距离平方衰减；方向光的 lux 不乘长度因子。
@@ -168,6 +205,18 @@ LightGPU BuildLightGPU(const LightSnapshot& light)
         light.coneAngleInner,
         0.0f,
         0.0f);
+    const bool shadowSelected =
+        light.castShadows &&
+        light.shadowSlice < kMaxLocalShadowLights;
+    gpuLight.shadowParams = Eigen::Vector4f(
+        shadowSelected
+            ? static_cast<float>(light.shadowSlice)
+            : -1.0f,
+        light.type == LightSnapshotType::Spot
+            ? 1.0f
+            : (light.type == LightSnapshotType::Point ? 2.0f : 0.0f),
+        light.shadowFar,
+        light.shadowBias);
     return gpuLight;
 }
 
@@ -256,7 +305,27 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
     {
         std::memset(mappedBuffer, 0, sizeof(UBOGlobal));
     }
+
+    // GPU particle light 输出按 swapchain image 分槽，避免在飞帧竞争。
+    // 容量固定 64，不随发射器数量扩容，也不触发 descriptor 热刷新。
+    rendererBackend.CreatePerSwapchainBufferSet(
+        particleLightBuffer,
+        ParticleLightSSBOSize(),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        memoryPropertyFlags,
+        "SSBO_ParticleLight");
+    for (void* mappedBuffer : particleLightBuffer.buffersMapped)
+    {
+        if (mappedBuffer != nullptr)
+        {
+            std::memset(mappedBuffer, 0, ParticleLightSSBOSize());
+        }
+    }
     initialized = true;
+    // 默认 1×1：在聚类 pass 尚未录制（缩略图/自定义图/离线）时也保证
+    // descriptor 合法，且 params.enabled=0 让光照回退到旧的三段循环。
+    EnsureLightCullingGrid(1, 1, rendererBackend);
 }
 
 void RendererFrameResources::Shutdown(RendererBackendVulkan& rendererBackend)
@@ -267,8 +336,104 @@ void RendererFrameResources::Shutdown(RendererBackendVulkan& rendererBackend)
     }
 
     DestroyLightBuffer(rendererBackend);
+    if (particleLightBuffer.HasResources())
+    {
+        rendererBackend.DestroyBufferSet(particleLightBuffer);
+    }
+    if (lightGridBuffer.HasResources())
+    {
+        rendererBackend.DestroyBufferSet(lightGridBuffer);
+    }
+    if (lightIndexBuffer.HasResources())
+    {
+        rendererBackend.DestroyBufferSet(lightIndexBuffer);
+    }
+    if (lightGridParamBuffer.HasResources())
+    {
+        rendererBackend.DestroyBufferSet(lightGridParamBuffer);
+    }
     rendererBackend.DestroyBufferSet(globalUniformBuffer);
+    lightCullingRenderWidth = 0;
+    lightCullingRenderHeight = 0;
+    lightCullingTilesX = 0;
+    lightCullingTilesY = 0;
     initialized = false;
+}
+
+bool RendererFrameResources::EnsureLightCullingGrid(
+    uint32_t renderWidth,
+    uint32_t renderHeight,
+    RendererBackendVulkan& rendererBackend)
+{
+    if (!initialized)
+    {
+        throw std::runtime_error(
+            "RendererFrameResources must be initialized before creating the light grid.");
+    }
+    const uint32_t width = std::max(renderWidth, 1u);
+    const uint32_t height = std::max(renderHeight, 1u);
+    uint32_t tilesX = 0;
+    uint32_t tilesY = 0;
+    ComputeLightTileGrid(width, height, tilesX, tilesY);
+    if (lightGridBuffer.HasResources() &&
+        lightIndexBuffer.HasResources() &&
+        lightGridParamBuffer.HasResources() &&
+        lightCullingTilesX == tilesX &&
+        lightCullingTilesY == tilesY)
+    {
+        return false;
+    }
+
+    const uint32_t tileCount = tilesX * tilesY;
+    // 旧缓冲可能仍被在飞帧的 descriptor 引用；统一走 epoch 退休。
+    RetireFrameBufferSet(
+        rendererBackend, lightGridBuffer, "FrameLocalLightGrid");
+    RetireFrameBufferSet(
+        rendererBackend, lightIndexBuffer, "FrameLocalLightIndex");
+    RetireFrameBufferSet(
+        rendererBackend, lightGridParamBuffer, "FrameLocalLightGridParams");
+
+    lightGridBuffer = CreateDeviceLocalPerSwapchainSet(
+        rendererBackend,
+        LightGridBytes(tileCount),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        "SSBO_LightGrid");
+    lightIndexBuffer = CreateDeviceLocalPerSwapchainSet(
+        rendererBackend,
+        LightIndexListBytes(tileCount),
+        vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        "SSBO_LightIndex");
+    // params 必须可写默认值：未录制聚类时 enabled 必须确定是 0。
+    rendererBackend.CreatePerSwapchainBufferSet(
+        lightGridParamBuffer,
+        sizeof(LightGridParams),
+        vk::BufferUsageFlagBits::eUniformBuffer |
+            vk::BufferUsageFlagBits::eStorageBuffer |
+            vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent,
+        "UBO_LightGridParams");
+    for (void* mappedBuffer : lightGridParamBuffer.buffersMapped)
+    {
+        if (mappedBuffer != nullptr)
+        {
+            LightGridParams params{};
+            params.tilesX = tilesX;
+            params.tilesY = tilesY;
+            params.renderWidth = width;
+            params.renderHeight = height;
+            params.enabled = 0;
+            std::memcpy(mappedBuffer, &params, sizeof(params));
+        }
+    }
+
+    lightCullingRenderWidth = width;
+    lightCullingRenderHeight = height;
+    lightCullingTilesX = tilesX;
+    lightCullingTilesY = tilesY;
+    return true;
 }
 
 bool RendererFrameResources::EnsureLightCapacity(
@@ -389,7 +554,8 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
 
 void RendererFrameResources::UpdateLightBuffer(
     uint32_t swapChainImageIndex,
-    const std::vector<LightSnapshot>& lights)
+    const std::vector<LightSnapshot>& lights,
+    float timeSeconds)
 {
     if (lights.size() > maxLightCount)
     {
@@ -417,7 +583,16 @@ void RendererFrameResources::UpdateLightBuffer(
         }
         else if (light.type == LightSnapshotType::Point)
         {
-            pointLightGPUs.push_back(BuildLightGPU(light));
+            // 脉冲是点光的 CPU 近似：只修改上传副本，冻结的 LightSnapshot
+            // 仍保留作者基础值，避免逐帧上传污染场景状态。
+            LightSnapshot pulsed = light;
+            pulsed.intensity = light.intensity +
+                light.pulsePeakIntensity * EvaluateLightPulse(
+                    timeSeconds,
+                    light.pulsePeriod,
+                    light.pulseDuration,
+                    light.pulsePhase);
+            pointLightGPUs.push_back(BuildLightGPU(pulsed));
         }
         else if (light.type == LightSnapshotType::Spot)
         {
@@ -600,6 +775,52 @@ const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetGlobalUn
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetLightBufferInfos() const
 {
     return lightBuffer.bufferInfos;
+}
+
+const std::vector<vk::DescriptorBufferInfo>&
+RendererFrameResources::GetParticleLightBufferInfos() const
+{
+    return particleLightBuffer.bufferInfos;
+}
+
+void RendererFrameResources::ClearParticleLightBuffer(
+    vk::CommandBuffer commandBuffer,
+    uint32_t swapChainImageIndex)
+{
+    if (!initialized ||
+        swapChainImageIndex >= particleLightBuffer.buffersMapped.size())
+    {
+        throw std::runtime_error(
+            "RendererFrameResources particle light SSBO is not initialized "
+            "for this swapchain image.");
+    }
+    void* mapped =
+        particleLightBuffer.buffersMapped[swapChainImageIndex];
+    if (mapped == nullptr)
+    {
+        throw std::runtime_error(
+            "RendererFrameResources particle light SSBO is not mapped.");
+    }
+    std::memset(mapped, 0, ParticleLightSSBOSize());
+    ParticleLightSSBOHeader header;
+    std::memcpy(mapped, &header, sizeof(header));
+
+    // 同一 image 的 fence 已在 BeginFrame 等待，host 写入不再与上一帧
+    // compute/fragment 竞争；这里只发布 host write -> shader read/write。
+    vk::MemoryBarrier hostToShader;
+    hostToShader
+        .setSrcAccessMask(vk::AccessFlagBits::eHostWrite)
+        .setDstAccessMask(
+            vk::AccessFlagBits::eShaderRead |
+            vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eHost,
+        vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+        {},
+        hostToShader,
+        nullptr,
+        nullptr);
 }
 
 void RendererFrameResources::CreateLightBuffer(

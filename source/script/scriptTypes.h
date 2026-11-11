@@ -45,4 +45,23 @@ struct ScriptTimeState
     double startup = 0, play = 0, unscaledPlay = 0;
     uint64_t frame = 0;
 };
+
+// 粒子等 GPU 模拟消费的逻辑帧间隔。Pause 冻结，Playing 使用已乘 timeScale
+// 的脚本 delta，Editing/未加载脚本时回退到编辑器时间。
+inline float SelectParticleSimulationDelta(
+    ScriptPlayState state,
+    bool hasHost,
+    float scaledDelta,
+    float fallback)
+{
+    if (state == ScriptPlayState::Paused)
+    {
+        return 0.0f;
+    }
+    if (state == ScriptPlayState::Playing && hasHost)
+    {
+        return scaledDelta;
+    }
+    return fallback;
+}
 }

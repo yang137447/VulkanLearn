@@ -83,6 +83,25 @@ void PassBarrier::ApplyCompiledBarrierPlan(
             // 如果资源刚被某个 pass 采样过，并且当前 pass 又要 load 它继续写/测，就需要在 beginRenderPass 前显式转回。
             TransitionShaderReadToAttachment(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex);
         }
+        else if (barrier.type == VL::CompiledRenderGraphBarrierType::AttachmentToAttachment)
+        {
+            // 两个连续 pass 都 LOAD 同一个 color attachment；layout 不变，
+            // 但仍需要把前一 pass 的 color write 变成后一 pass 的 read/write。
+            TransitionAttachmentToAttachment(
+                commandBuffer,
+                renderGraph,
+                barrier.resource,
+                swapChainImageIndex);
+        }
+        else if (barrier.type ==
+            VL::CompiledRenderGraphBarrierType::UndefinedToAttachment)
+        {
+            TransitionUndefinedToAttachment(
+                commandBuffer,
+                renderGraph,
+                barrier.resource,
+                swapChainImageIndex);
+        }
         else if (barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage ||
             barrier.type == VL::CompiledRenderGraphBarrierType::StorageToShaderRead)
         {
@@ -90,6 +109,124 @@ void PassBarrier::ApplyCompiledBarrierPlan(
                 barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage);
         }
     }
+}
+
+void PassBarrier::TransitionUndefinedToAttachment(
+    vk::CommandBuffer& commandBuffer,
+    const RenderGraph& renderGraph,
+    const std::string& resourceName,
+    uint32_t swapChainImageIndex)
+{
+    const auto& resolveMap = renderGraph.GetResourcesResolve();
+    auto resourceIt = resolveMap.find(resourceName);
+    if (resourceIt == resolveMap.end())
+    {
+        return;
+    }
+
+    const auto& resource = resourceIt->second[swapChainImageIndex];
+    const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
+    vk::ImageAspectFlags aspectMask =
+        bIsDepth ? vk::ImageAspectFlagBits::eDepth
+                 : vk::ImageAspectFlagBits::eColor;
+    if (bIsDepth && CommonFunction::HasStencilComponent(resource.format))
+    {
+        aspectMask |= vk::ImageAspectFlagBits::eStencil;
+    }
+
+    vk::ImageMemoryBarrier imageBarrier;
+    imageBarrier
+        .setImage(resource.image)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::eUndefined)
+        .setNewLayout(
+            bIsDepth
+            ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+            : vk::ImageLayout::eColorAttachmentOptimal)
+        .setSrcAccessMask({})
+        .setDstAccessMask(
+            bIsDepth
+            ? (vk::AccessFlagBits::eDepthStencilAttachmentRead |
+               vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+            : (vk::AccessFlagBits::eColorAttachmentRead |
+               vk::AccessFlagBits::eColorAttachmentWrite))
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            aspectMask,
+            0,
+            1,
+            0,
+            resource.arrayLayers));
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        bIsDepth
+            ? (vk::PipelineStageFlagBits::eEarlyFragmentTests |
+               vk::PipelineStageFlagBits::eLateFragmentTests)
+            : vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::DependencyFlags(),
+        nullptr,
+        nullptr,
+        imageBarrier);
+}
+
+void PassBarrier::TransitionAttachmentToAttachment(
+    vk::CommandBuffer& commandBuffer,
+    const RenderGraph& renderGraph,
+    const std::string& resourceName,
+    uint32_t swapChainImageIndex)
+{
+    const auto& resolveMap = renderGraph.GetResourcesResolve();
+    auto resourceIt = resolveMap.find(resourceName);
+    if (resourceIt == resolveMap.end())
+        return;
+    const auto& resource = resourceIt->second.at(swapChainImageIndex);
+    const bool isDepth = CommonFunction::IsDepthFormat(resource.format);
+    vk::ImageAspectFlags aspectMask =
+        isDepth ? vk::ImageAspectFlagBits::eDepth
+                : vk::ImageAspectFlagBits::eColor;
+    if (isDepth && CommonFunction::HasStencilComponent(resource.format))
+        aspectMask |= vk::ImageAspectFlagBits::eStencil;
+    const vk::ImageLayout attachmentLayout =
+        isDepth
+        ? vk::ImageLayout::eDepthStencilAttachmentOptimal
+        : vk::ImageLayout::eColorAttachmentOptimal;
+    const vk::AccessFlags srcAccess =
+        isDepth
+        ? (vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+        : (vk::AccessFlagBits::eColorAttachmentWrite);
+    const vk::AccessFlags dstAccess =
+        isDepth
+        ? (vk::AccessFlagBits::eDepthStencilAttachmentRead |
+            vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+        : (vk::AccessFlagBits::eColorAttachmentRead |
+            vk::AccessFlagBits::eColorAttachmentWrite);
+    const vk::PipelineStageFlags stage =
+        isDepth
+        ? vk::PipelineStageFlagBits::eEarlyFragmentTests
+        : vk::PipelineStageFlagBits::eColorAttachmentOutput;
+
+    vk::ImageMemoryBarrier barrier;
+    barrier
+        .setImage(resource.image)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(attachmentLayout)
+        .setNewLayout(attachmentLayout)
+        .setSrcAccessMask(srcAccess)
+        .setDstAccessMask(dstAccess)
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            aspectMask,
+            0,
+            1,
+            0,
+            resource.arrayLayers));
+    commandBuffer.pipelineBarrier(
+        stage,
+        stage,
+        {},
+        nullptr,
+        nullptr,
+        barrier);
 }
 
 void PassBarrier::TransitionAttachmentToShaderRead(
@@ -213,7 +350,10 @@ void PassBarrier::TransitionStorage(vk::CommandBuffer& commandBuffer,
     const auto& resource = graph.GetResourcesResolve().at(resourceName).at(imageIndex);
     vk::ImageMemoryBarrier barrier;
     barrier.setImage(resource.image)
-        .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1))
+        // 体积雾把 texture2DArray 的每个数组层都当独立深度层写入/采样；
+        // 只转换 layer 0 会让其余层停留在 GENERAL，触发 imageLayout-00344。
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            vk::ImageAspectFlagBits::eColor, 0, 1, 0, resource.arrayLayers))
         .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
         .setOldLayout(toStorage ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral)
         .setNewLayout(toStorage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal)

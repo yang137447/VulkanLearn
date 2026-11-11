@@ -8,6 +8,7 @@
 #include "render/backend/rendererObjectGpuResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/frontend/renderScene.h"
+#include "render/shadow/localShadowMath.h"
 #include "render/shadow/shadowCasterCull.h"
 
 class MaterialInstance;
@@ -32,6 +33,42 @@ public:
     virtual void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
+    // 局部阴影 caster 剔除与低频统计。默认实现关闭剔除，供缩略图/
+    // 离线等没有局部阴影生产者的会话复用。
+    virtual const LightSnapshot* GetLocalShadowLight(
+        uint32_t localShadowIndex) const
+    {
+        (void)localShadowIndex;
+        return nullptr;
+    }
+    virtual void ReportLocalShadowCasterStats(
+        uint32_t localShadowIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters)
+    {
+        (void)localShadowIndex;
+        (void)drawnCasters;
+        (void)totalCasters;
+    }
+    // CSM 逐级剔除：由 RenderSystem 从本帧冻结的 lightViewProj 提取视锥平面。
+    // 返回 false 表示该级没有可用矩阵（CSM 关闭 / 缩略图会话），调用方保持全量绘制。
+    virtual bool GetShadowCascadeFrustumPlanes(
+        uint32_t cascadeIndex,
+        ShadowFrustumPlanes& outPlanes) const
+    {
+        (void)cascadeIndex;
+        (void)outPlanes;
+        return false;
+    }
+    virtual void ReportShadowCascadeCasterStats(
+        uint32_t cascadeIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters)
+    {
+        (void)cascadeIndex;
+        (void)drawnCasters;
+        (void)totalCasters;
+    }
 };
 
 struct RendererDrawContext
@@ -56,6 +93,13 @@ class RendererDrawExecutor
 public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
+    // light 为空表示调用方没有可用的冻结灯数据；此时不做剔除，保持旧的全量绘制。
+    // recordCasterStats 只在点光首个象限/聚光唯一一次为 true，避免重复统计。
+    void DrawLocalShadowScene(
+        const PipelineBase& commonLocalShadowPipeline,
+        RendererDrawContext& context,
+        const LightSnapshot* light,
+        bool recordCasterStats) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
     void DrawForwardOpaqueScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;

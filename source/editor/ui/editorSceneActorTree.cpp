@@ -325,6 +325,14 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
                         std::to_string(section.materialSlotIndex) + ")"));
         }
         break;
+    case EditorSceneActorType::ParticleSystem:
+        // 资产路径与发射器数量足以让作者确认当前 actor 绑定的 PS_*.json；
+        // 逐发射器参数仍由粒子资产编辑器维护，不在这里复制一份可编辑状态。
+        AddField(fields, "actor-field-particle-asset", "Asset",
+            EmptyFallback(actor.particleAssetPath));
+        AddField(fields, "actor-field-particle-emitters", "Emitters",
+            std::to_string(actor.particleEmitterCount));
+        break;
     case EditorSceneActorType::DirectionalLight:
     case EditorSceneActorType::PointLight:
     case EditorSceneActorType::SpotLight:
@@ -396,7 +404,8 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
         fields.push_back({P::Rotation, "Rotation (deg)", actor.rotation, 3});
     if (actor.type == EditorSceneActorType::Mesh ||
         actor.type == EditorSceneActorType::Terrain ||
-        actor.type == EditorSceneActorType::Script)
+        actor.type == EditorSceneActorType::Script ||
+        actor.type == EditorSceneActorType::ParticleSystem)
     {
         fields.push_back({P::Scale, "Scale", actor.scale, 3});
         return fields;

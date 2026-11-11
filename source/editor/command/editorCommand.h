@@ -61,6 +61,10 @@ enum class EditorCommandType
     UndoBlueprintDocument, RedoBlueprintDocument,
     GetTerrainDocument, GetTerrainCapabilities, ModifyTerrainDocument,
     ValidateTerrainDocument, SaveTerrainDocument, RevertTerrainDocument, ReloadTerrainDocument,
+    GetParticleDocument, GetParticleCapabilities, ModifyParticleDocument,
+    ValidateParticleDocument, SaveParticleDocument, RevertParticleDocument, ReloadParticleDocument,
+    CloseParticleDocument,
+    UndoParticleDocument, RedoParticleDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,
@@ -233,8 +237,8 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
-enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, Tressfx, Terrain };
-enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Undo, Redo };
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint, Tressfx, Terrain, ParticleSystem };
+enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Close, Undo, Redo };
 using EditorAssetFieldValue = std::variant<std::string, bool, double, int64_t,
     std::array<double, 2>, std::array<double, 3>, std::array<int64_t, 2>,
     std::vector<std::string>, std::vector<double>,
@@ -247,6 +251,7 @@ struct EditorAssetFieldChange
     std::optional<std::string> objectIdentity;
     std::optional<uint32_t> slotIndex;
     std::optional<std::string> expectedSlotName;
+    std::optional<std::string> expectedEmitterName;
     bool reset = false;
     EditorAssetFieldValue value = std::string{};
     // 地形层表身份：与 Mesh slot 一样，索引只用于定位，expectedLayerName

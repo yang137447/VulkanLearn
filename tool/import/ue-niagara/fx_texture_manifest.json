@@ -1,0 +1,5091 @@
+{
+  "engineVersion": "5.8.4-58902052+++UE5+Release-5.8",
+  "project": "D:/YYBWorkSpace/UnrealProject/effect",
+  "materials": [
+    {
+      "name": "M_Footprint_Decal",
+      "path": "/Game/NiagaraExamples/FX_Footstep/Materials/M_Footprint_Decal.M_Footprint_Decal",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Footprint_Mask2",
+          "path": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Mask2.T_Footprint_Mask2",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        },
+        {
+          "name": "T_Footprint_Normals",
+          "path": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Normals.T_Footprint_Normals",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_Pickup_Flare",
+      "path": "/Game/NiagaraExamples/FX_PickUp/MI_Pickup_Flare.MI_Pickup_Flare",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Pickup_Sparkles",
+      "path": "/Game/NiagaraExamples/FX_PickUp/MI_Pickup_Sparkles.MI_Pickup_Sparkles",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Pickup_Sphere",
+      "path": "/Game/NiagaraExamples/FX_PickUp/MI_Pickup_Sphere.MI_Pickup_Sphere",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Flipbook_Pyro_Muzzle",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Materials/Instances/MI_Flipbook_Pyro_Muzzle.MI_Flipbook_Pyro_Muzzle",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Flipbook_Smoke_Muzzle",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Materials/Instances/MI_Flipbook_Smoke_Muzzle.MI_Flipbook_Smoke_Muzzle",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_MuzzleFlash_Sphere",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Materials/Instances/MI_MuzzleFlash_Sphere.MI_MuzzleFlash_Sphere",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Stylized_Sparkes",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Materials/Instances/MI_Stylized_Sparkes.MI_Stylized_Sparkes",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "M_MuzzleFlash_Distortion",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Materials/M_MuzzleFlash_Distortion.M_MuzzleFlash_Distortion",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "water_n",
+          "path": "/Engine/Functions/Engine_MaterialFunctions02/ExampleContent/Textures/water_n.water_n",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_BulletShell_FX",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/MI_BulletShell_FX.MI_BulletShell_FX",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_BulletShell",
+          "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell.T_BulletShell",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        },
+        {
+          "name": "T_BulletShell_NM",
+          "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell_NM.T_BulletShell_NM",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_BulletShell_FX",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/M_BulletShell_FX.M_BulletShell_FX",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_BulletShell",
+          "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell.T_BulletShell",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        },
+        {
+          "name": "T_BulletShell_NM",
+          "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell_NM.T_BulletShell_NM",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_Glass_Blue",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_Glass_Blue.MI_Glass_Blue",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Glass_Green",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_Glass_Green.MI_Glass_Green",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Grid_Gravel",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_Grid_Gravel.MI_Grid_Gravel",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Knot_Wood",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_Knot_Wood.MI_Knot_Wood",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_LandscapeGrid",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_LandscapeGrid.MI_LandscapeGrid",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_LandscapeGrid_Target",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_LandscapeGrid_Target.MI_LandscapeGrid_Target",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_ProcGrid",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_ProcGrid.MI_ProcGrid",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_ProcGrid_Range",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_ProcGrid_Range.MI_ProcGrid_Range",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_RangeFloorDirt",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_RangeFloorDirt.MI_RangeFloorDirt",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_RangeFloorFire",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_RangeFloorFire.MI_RangeFloorFire",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_RangeFloorStylized",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MI_RangeFloorStylized.MI_RangeFloorStylized",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "M_GalleryTextMaterialTranslucent",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_GalleryTextMaterialTranslucent.M_GalleryTextMaterialTranslucent",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Gallery_Text_Outline_Opaque",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Gallery_Text_Outline_Opaque.M_Gallery_Text_Outline_Opaque",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Glass",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Glass.M_Glass",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_HelpStand_BG",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_HelpStand_BG.M_HelpStand_BG",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_GrungySurface_slnneipc_4K_MR",
+          "path": "/Game/NiagaraExamples/Gallery/DemoPlatform/Textures/T_GrungySurface_slnneipc_4K_MR.T_GrungySurface_slnneipc_4K_MR",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_HelpStand_Emissive",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_HelpStand_Emissive.M_HelpStand_Emissive",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_GrungySurface_slnneipc_4K_MR",
+          "path": "/Game/NiagaraExamples/Gallery/DemoPlatform/Textures/T_GrungySurface_slnneipc_4K_MR.T_GrungySurface_slnneipc_4K_MR",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_HelpStand_Metal",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_HelpStand_Metal.M_HelpStand_Metal",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_GrungySurface_slnneipc_4K_MR",
+          "path": "/Game/NiagaraExamples/Gallery/DemoPlatform/Textures/T_GrungySurface_slnneipc_4K_MR.T_GrungySurface_slnneipc_4K_MR",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_Lava",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Lava.M_Lava",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_LightFixture",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_LightFixture.M_LightFixture",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_LightFixtureBlack",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_LightFixtureBlack.M_LightFixtureBlack",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_LightFixtureWhite",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_LightFixtureWhite.M_LightFixtureWhite",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "M_ProcGrid",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_ProcGrid.M_ProcGrid",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_QuixelAsset_Simple",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_QuixelAsset_Simple.M_QuixelAsset_Simple",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "DR"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normal"
+        }
+      ]
+    },
+    {
+      "name": "M_QuixelDecal_Simple",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_QuixelDecal_Simple.M_QuixelDecal_Simple",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "DefaultDiffuse",
+          "path": "/Bridge/MSPresets/MSVTTextures/DefaultDiffuse.DefaultDiffuse",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Albedo"
+        },
+        {
+          "name": "Placeholder_Normal",
+          "path": "/Bridge/MSPresets/MSVTTextures/Placeholder_Normal.Placeholder_Normal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normal"
+        }
+      ]
+    },
+    {
+      "name": "M_RangeFloor",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_RangeFloor.M_RangeFloor",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Target_Concrete",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Target_Concrete.M_Target_Concrete",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Target_Glass",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Target_Glass.M_Target_Glass",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Target_Gravel",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Target_Gravel.M_Target_Gravel",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Target_Metal",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Target_Metal.M_Target_Metal",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Target_Wood",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/M_Target_Wood.M_Target_Wood",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_MannequinTarget_Concrete",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MannequinTarget/M_MannequinTarget_Concrete.M_MannequinTarget_Concrete",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_MannequinTarget_Glass",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MannequinTarget/M_MannequinTarget_Glass.M_MannequinTarget_Glass",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_MannequinTarget_Metal",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MannequinTarget/M_MannequinTarget_Metal.M_MannequinTarget_Metal",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_MannequinTarget_Wood",
+      "path": "/Game/NiagaraExamples/Gallery/Materials/MannequinTarget/M_MannequinTarget_Wood.M_MannequinTarget_Wood",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "MI_BasicSprite",
+      "path": "/Game/NiagaraExamples/Materials/MI_BasicSprite.MI_BasicSprite",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_BasicSprite_Masked",
+      "path": "/Game/NiagaraExamples/Materials/MI_BasicSprite_Masked.MI_BasicSprite_Masked",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_BasicSprite_Translucent",
+      "path": "/Game/NiagaraExamples/Materials/MI_BasicSprite_Translucent.MI_BasicSprite_Translucent",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Boundary_TechGrid",
+      "path": "/Game/NiagaraExamples/Materials/MI_Boundary_TechGrid.MI_Boundary_TechGrid",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_BubbleSprite",
+      "path": "/Game/NiagaraExamples/Materials/MI_BubbleSprite.MI_BubbleSprite",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_BulletHole",
+      "path": "/Game/NiagaraExamples/Materials/MI_BulletHole.MI_BulletHole",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BulletHole",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Texture"
+        },
+        {
+          "name": "BulletHole_Normals",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Normal Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_BulletHole_Glass",
+      "path": "/Game/NiagaraExamples/Materials/MI_BulletHole_Glass.MI_BulletHole_Glass",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BulletHole",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Texture"
+        },
+        {
+          "name": "BulletHole_Normals",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Normal Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Distortion",
+      "path": "/Game/NiagaraExamples/Materials/MI_Distortion.MI_Distortion",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_ExplosionBurst_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_ExplosionBurst_8x8.MI_ExplosionBurst_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_ExplosionFlare",
+      "path": "/Game/NiagaraExamples/Materials/MI_ExplosionFlare.MI_ExplosionFlare",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_ExplosionRoil_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_ExplosionRoil_8x8.MI_ExplosionRoil_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_ExplosionWide_8x16",
+      "path": "/Game/NiagaraExamples/Materials/MI_ExplosionWide_8x16.MI_ExplosionWide_8x16",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Explosion_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_8x8.MI_Explosion_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Explosion_Decal",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_Decal.MI_Explosion_Decal",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "ExplosionDecalMasks",
+          "path": "/Game/NiagaraExamples/Textures/Decals/ExplosionDecalMasks.ExplosionDecalMasks",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Decal SubUV"
+        }
+      ]
+    },
+    {
+      "name": "MI_Explosion_Decal_Frame0",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_Decal_Frame0.MI_Explosion_Decal_Frame0",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Explosion_Decal_Frame1",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_Decal_Frame1.MI_Explosion_Decal_Frame1",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Explosion_Decal_Frame2",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_Decal_Frame2.MI_Explosion_Decal_Frame2",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Explosion_Decal_Frame3",
+      "path": "/Game/NiagaraExamples/Materials/MI_Explosion_Decal_Frame3.MI_Explosion_Decal_Frame3",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_FireBall_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_FireBall_8x8.MI_FireBall_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_FireRoil_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_FireRoil_8x8.MI_FireRoil_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Fireworks",
+      "path": "/Game/NiagaraExamples/Materials/MI_Fireworks.MI_Fireworks",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Flames",
+      "path": "/Game/NiagaraExamples/Materials/MI_Flames.MI_Flames",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flame Shape Texture"
+        },
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Flames_ExportVelocity",
+      "path": "/Game/NiagaraExamples/Materials/MI_Flames_ExportVelocity.MI_Flames_ExportVelocity",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flame Shape Texture"
+        },
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Flare",
+      "path": "/Game/NiagaraExamples/Materials/MI_Flare.MI_Flare",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Flare_TeslaCoil",
+      "path": "/Game/NiagaraExamples/Materials/MI_Flare_TeslaCoil.MI_Flare_TeslaCoil",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_GlassShard",
+      "path": "/Game/NiagaraExamples/Materials/MI_GlassShard.MI_GlassShard",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_ImpactFlash",
+      "path": "/Game/NiagaraExamples/Materials/MI_ImpactFlash.MI_ImpactFlash",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_Marker_Target",
+      "path": "/Game/NiagaraExamples/Materials/MI_Marker_Target.MI_Marker_Target",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Mesh_Overlay_TeslaCoil",
+      "path": "/Game/NiagaraExamples/Materials/MI_Mesh_Overlay_TeslaCoil.MI_Mesh_Overlay_TeslaCoil",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Mesh_Overlay_TeslaCoil_Player",
+      "path": "/Game/NiagaraExamples/Materials/MI_Mesh_Overlay_TeslaCoil_Player.MI_Mesh_Overlay_TeslaCoil_Player",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_Overlay_Player_Buff",
+      "path": "/Game/NiagaraExamples/Materials/MI_Overlay_Player_Buff.MI_Overlay_Player_Buff",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Overlay_Player_DeBuff",
+      "path": "/Game/NiagaraExamples/Materials/MI_Overlay_Player_DeBuff.MI_Overlay_Player_DeBuff",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Overlay_Weapon_Buff",
+      "path": "/Game/NiagaraExamples/Materials/MI_Overlay_Weapon_Buff.MI_Overlay_Weapon_Buff",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Overlay_Weapon_DeBuff",
+      "path": "/Game/NiagaraExamples/Materials/MI_Overlay_Weapon_DeBuff.MI_Overlay_Weapon_DeBuff",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Pebbles",
+      "path": "/Game/NiagaraExamples/Materials/MI_Pebbles.MI_Pebbles",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_RocketFlareCore",
+      "path": "/Game/NiagaraExamples/Materials/MI_RocketFlareCore.MI_RocketFlareCore",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_RocketTrail_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_RocketTrail_8x8.MI_RocketTrail_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SimpleDebris",
+      "path": "/Game/NiagaraExamples/Materials/MI_SimpleDebris.MI_SimpleDebris",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_SimpleDebris_Translucent",
+      "path": "/Game/NiagaraExamples/Materials/MI_SimpleDebris_Translucent.MI_SimpleDebris_Translucent",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_SimpleGlassShards",
+      "path": "/Game/NiagaraExamples/Materials/MI_SimpleGlassShards.MI_SimpleGlassShards",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "MI_SimpleProjectile",
+      "path": "/Game/NiagaraExamples/Materials/MI_SimpleProjectile.MI_SimpleProjectile",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_SmokePuffLight_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokePuffLight_8x8.MI_SmokePuffLight_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokePuffLight_8x8_Emissive",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokePuffLight_8x8_Emissive.MI_SmokePuffLight_8x8_Emissive",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokePuffLight_8x8_Emissive_Tesla",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokePuffLight_8x8_Emissive_Tesla.MI_SmokePuffLight_8x8_Emissive_Tesla",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokePuffLight_Impact",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokePuffLight_Impact.MI_SmokePuffLight_Impact",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokePuff_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokePuff_8x8.MI_SmokePuff_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokeRoil_8x8",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokeRoil_8x8.MI_SmokeRoil_8x8",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokeTrail_2x16",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokeTrail_2x16.MI_SmokeTrail_2x16",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_SmokeWispy_8x8_Emissive",
+      "path": "/Game/NiagaraExamples/Materials/MI_SmokeWispy_8x8_Emissive.MI_SmokeWispy_8x8_Emissive",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Sparks",
+      "path": "/Game/NiagaraExamples/Materials/MI_Sparks.MI_Sparks",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "MI_TestSprite",
+      "path": "/Game/NiagaraExamples/Materials/MI_TestSprite.MI_TestSprite",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_Tracer",
+      "path": "/Game/NiagaraExamples/Materials/MI_Tracer.MI_Tracer",
+      "class": "MaterialInstanceConstant",
+      "textures": [
+        {
+          "name": "SphereRenderHeightMap",
+          "path": "/Engine/Functions/Engine_MaterialFunctions02/ExampleContent/Textures/SphereRenderHeightMap.SphereRenderHeightMap",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        },
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "MI_TracerRibbon",
+      "path": "/Game/NiagaraExamples/Materials/MI_TracerRibbon.MI_TracerRibbon",
+      "class": "MaterialInstanceConstant",
+      "textures": []
+    },
+    {
+      "name": "M_BakerBackgroundColor",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BakerBackgroundColor.M_BakerBackgroundColor",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_BasicSprite",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BasicSprite.M_BasicSprite",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_BrightCore",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BrightCore.M_BrightCore",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_BubbleSprite",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BubbleSprite.M_BubbleSprite",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_BulletHole",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BulletHole.M_BulletHole",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "BulletHole",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Texture"
+        },
+        {
+          "name": "BulletHole_Normals",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Normal Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_BulletHole_Glass",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_BulletHole_Glass.M_BulletHole_Glass",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "BulletHole",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Texture"
+        },
+        {
+          "name": "BulletHole_Normals",
+          "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Bullet Hole Normal Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Decal_Boundary",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Decal_Boundary.M_Decal_Boundary",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Decal_Glow",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Decal_Glow.M_Decal_Glow",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Decal_SubUV",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Decal_SubUV.M_Decal_SubUV",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "ExplosionDecalMasks",
+          "path": "/Game/NiagaraExamples/Textures/Decals/ExplosionDecalMasks.ExplosionDecalMasks",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Decal SubUV"
+        }
+      ]
+    },
+    {
+      "name": "M_Distortion",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Distortion.M_Distortion",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Energy",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Energy.M_Energy",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Plasma_Wisps",
+          "path": "/Game/NiagaraExamples/Textures/Sprites/T_Plasma_Wisps.T_Plasma_Wisps",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_Flames",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Flames.M_Flames",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flame Shape Texture"
+        },
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_FlamesCard",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_FlamesCard.M_FlamesCard",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Distortion Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Flare",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Flare.M_Flare",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "LensFlare_01",
+          "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flare Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_FogBankCard",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_FogBankCard.M_FogBankCard",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_FogBank_Seed0_NNOO",
+          "path": "/Game/NiagaraExamples/FX_Fog/T_FogBank_Seed0_NNOO.T_FogBank_Seed0_NNOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normal/AO/Opacity Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_FresnelGlow",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_FresnelGlow.M_FresnelGlow",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_GlassShard",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_GlassShard.M_GlassShard",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Glow_Capsule",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Glow_Capsule.M_Glow_Capsule",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_Mesh_Add",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Mesh_Add.M_Mesh_Add",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Mesh_Overlay",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Mesh_Overlay.M_Mesh_Overlay",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Flicker Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Pebbles",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Pebbles.M_Pebbles",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Quixel_Simple",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Quixel_Simple.M_Quixel_Simple",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "DefaultTexture",
+          "path": "/Engine/EngineResources/DefaultTexture.DefaultTexture",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              128,
+              128
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "DR"
+        }
+      ]
+    },
+    {
+      "name": "M_Ribbon_Arc",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Ribbon_Arc.M_Ribbon_Arc",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_SimpleAdditive",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_SimpleAdditive.M_SimpleAdditive",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_SimpleDebris",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_SimpleDebris.M_SimpleDebris",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Hermite2Noise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_SimpleOpaque",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_SimpleOpaque.M_SimpleOpaque",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_SmokeAndFire_Sprites",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_SmokeAndFire_Sprites.M_SmokeAndFire_Sprites",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_SmokeAndFire_Sprites_Backup",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_SmokeAndFire_Sprites_Backup.M_SmokeAndFire_Sprites_Backup",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "BaseEOO",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Emission/Occlusion/Opacity Texture"
+        },
+        {
+          "name": "BaseNormal",
+          "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Normals Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_Sparks",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Sparks.M_Sparks",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Tracer",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Tracer.M_Tracer",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "SphereRenderHeightMap",
+          "path": "/Engine/Functions/Engine_MaterialFunctions02/ExampleContent/Textures/SphereRenderHeightMap.SphereRenderHeightMap",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        },
+        {
+          "name": "T_HermiteNoise_CenteredTiling",
+          "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": "Noise Texture"
+        }
+      ]
+    },
+    {
+      "name": "M_TracerRibbon",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_TracerRibbon.M_TracerRibbon",
+      "class": "Material",
+      "textures": []
+    },
+    {
+      "name": "M_Turbulent_SmokeSubUV",
+      "path": "/Game/NiagaraExamples/Materials/MasterMaterials/M_Turbulent_SmokeSubUV.M_Turbulent_SmokeSubUV",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "T_Plasma_Wisps",
+          "path": "/Game/NiagaraExamples/Textures/Sprites/T_Plasma_Wisps.T_Plasma_Wisps",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "False",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    },
+    {
+      "name": "M_SubUV_Utilities",
+      "path": "/Game/NiagaraExamples/Materials/Reference/M_SubUV_Utilities.M_SubUV_Utilities",
+      "class": "Material",
+      "textures": [
+        {
+          "name": "NumberGrid",
+          "path": "/Game/NiagaraExamples/Materials/Reference/NumberGrid.NumberGrid",
+          "class": "Texture2D",
+          "metadata": {
+            "size": [
+              32,
+              32
+            ],
+            "srgb": "True",
+            "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+            "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+            "sourceFormat": null,
+            "sourceValid": null
+          },
+          "parameter": ""
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "name": "DefaultDiffuse",
+      "path": "/Bridge/MSPresets/MSVTTextures/DefaultDiffuse.DefaultDiffuse",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Albedo"
+    },
+    {
+      "name": "Placeholder_Normal",
+      "path": "/Bridge/MSPresets/MSVTTextures/Placeholder_Normal.Placeholder_Normal",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Normal"
+    },
+    {
+      "name": "DefaultTexture",
+      "path": "/Engine/EngineResources/DefaultTexture.DefaultTexture",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          128,
+          128
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "DR"
+    },
+    {
+      "name": "SphereRenderHeightMap",
+      "path": "/Engine/Functions/Engine_MaterialFunctions02/ExampleContent/Textures/SphereRenderHeightMap.SphereRenderHeightMap",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "water_n",
+      "path": "/Engine/Functions/Engine_MaterialFunctions02/ExampleContent/Textures/water_n.water_n",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Distortion Texture"
+    },
+    {
+      "name": "T_FogBank_Seed0_NNOO",
+      "path": "/Game/NiagaraExamples/FX_Fog/T_FogBank_Seed0_NNOO.T_FogBank_Seed0_NNOO",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Normal/AO/Opacity Texture"
+    },
+    {
+      "name": "Arrow_RGB",
+      "path": "/Game/NiagaraExamples/FX_Footstep/Textures/Arrow_RGB.Arrow_RGB",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Footprint_Mask",
+      "path": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Mask.T_Footprint_Mask",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Footprint_Mask2",
+      "path": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Mask2.T_Footprint_Mask2",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_Footprint_Normals",
+      "path": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Normals.T_Footprint_Normals",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_BulletShell",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell.T_BulletShell",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_BulletShell_NM",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell_NM.T_BulletShell_NM",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_MuzzleFlash",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash.T_MuzzleFlash",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_MuzzleFlash_Side",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Side.T_MuzzleFlash_Side",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_MuzzleFlash_Sphere",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Sphere.T_MuzzleFlash_Sphere",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ThinSmoke_FX",
+      "path": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_ThinSmoke_FX.T_ThinSmoke_FX",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_GrungySurface_slnneipc_4K_MR",
+      "path": "/Game/NiagaraExamples/Gallery/DemoPlatform/Textures/T_GrungySurface_slnneipc_4K_MR.T_GrungySurface_slnneipc_4K_MR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_xbnefjm_2K_B",
+      "path": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_B.T_xbnefjm_2K_B",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_xbnefjm_2K_N",
+      "path": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_N.T_xbnefjm_2K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_xbnefjm_2K_ORM",
+      "path": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_ORM.T_xbnefjm_2K_ORM",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_MannequinTarget",
+      "path": "/Game/NiagaraExamples/Gallery/Textures/T_MannequinTarget.T_MannequinTarget",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "NumberGrid",
+      "path": "/Game/NiagaraExamples/Materials/Reference/NumberGrid.NumberGrid",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_BrokenConcreteSlab_tmclbcpiw_1K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_BrokenConcreteSlab_tmclbcpiw_1K_DpR.T_BrokenConcreteSlab_tmclbcpiw_1K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Broken_Concrete_Slab_tmclbcpiw_1K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_D.T_Broken_Concrete_Slab_tmclbcpiw_1K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Broken_Concrete_Slab_tmclbcpiw_1K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_N.T_Broken_Concrete_Slab_tmclbcpiw_1K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_BrokenConcreteSlab_tmjgderjw_1K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_BrokenConcreteSlab_tmjgderjw_1K_DpR.T_BrokenConcreteSlab_tmjgderjw_1K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Broken_Concrete_Slab_tmjgderjw_1K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_D.T_Broken_Concrete_Slab_tmjgderjw_1K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Broken_Concrete_Slab_tmjgderjw_1K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_N.T_Broken_Concrete_Slab_tmjgderjw_1K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ConcreteRubble_uc1iccejw_1K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_ConcreteRubble_uc1iccejw_1K_DpR.T_ConcreteRubble_uc1iccejw_1K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1iccejw_1K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_D.T_Concrete_Rubble_uc1iccejw_1K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1iccejw_1K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_N.T_Concrete_Rubble_uc1iccejw_1K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ConcreteRubble_uc1jagbjw_1K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_ConcreteRubble_uc1jagbjw_1K_DpR.T_ConcreteRubble_uc1jagbjw_1K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1jagbjw_1K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_D.T_Concrete_Rubble_uc1jagbjw_1K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1jagbjw_1K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_N.T_Concrete_Rubble_uc1jagbjw_1K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ConcreteRubble_uc1jagnjw_1K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_ConcreteRubble_uc1jagnjw_1K_DpR.T_ConcreteRubble_uc1jagnjw_1K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1jagnjw_1K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_D.T_Concrete_Rubble_uc1jagnjw_1K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Concrete_Rubble_uc1jagnjw_1K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_N.T_Concrete_Rubble_uc1jagnjw_1K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Rock_shopk_2K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_D.T_Rock_shopk_2K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Rock_shopk_2K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_DpR.T_Rock_shopk_2K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Rock_shopk_2K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_N.T_Rock_shopk_2K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_TreeDebris_wjtuagls_2K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_TreeDebris_wjtuagls_2K_DpR.T_TreeDebris_wjtuagls_2K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Tree_Debris_wjtuagls_2K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_D.T_Tree_Debris_wjtuagls_2K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Tree_Debris_wjtuagls_2K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_N.T_Tree_Debris_wjtuagls_2K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_WoodDebris_vb2mfeliw_2K_DpR",
+      "path": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_WoodDebris_vb2mfeliw_2K_DpR.T_WoodDebris_vb2mfeliw_2K_DpR",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Wood_Debris_vb2mfeliw_2K_D",
+      "path": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_D.T_Wood_Debris_vb2mfeliw_2K_D",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Wood_Debris_vb2mfeliw_2K_N",
+      "path": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_N.T_Wood_Debris_vb2mfeliw_2K_N",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "BulletHole",
+      "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Bullet Hole Texture"
+    },
+    {
+      "name": "BulletHole_Normals",
+      "path": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Bullet Hole Normal Texture"
+    },
+    {
+      "name": "ExplosionDecalMasks",
+      "path": "/Game/NiagaraExamples/Textures/Decals/ExplosionDecalMasks.ExplosionDecalMasks",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Decal SubUV"
+    },
+    {
+      "name": "LensFlare_01",
+      "path": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Flare Texture"
+    },
+    {
+      "name": "T_AlligatorNoise_CenteredTiling",
+      "path": "/Game/NiagaraExamples/Textures/Noise/T_AlligatorNoise_CenteredTiling.T_AlligatorNoise_CenteredTiling",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Hermite2Noise_CenteredTiling",
+      "path": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_HermiteNoise_CenteredTiling",
+      "path": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Noise Texture"
+    },
+    {
+      "name": "T_SparseConvolutionNoise_CenteredTiling",
+      "path": "/Game/NiagaraExamples/Textures/Noise/T_SparseConvolutionNoise_CenteredTiling.T_SparseConvolutionNoise_CenteredTiling",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionBurst_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionBurst_EOO_Loop.T_ExplosionBurst_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionBurst_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionBurst_Normals_Loop.T_ExplosionBurst_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionRoil_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionRoil_EOO_Loop.T_ExplosionRoil_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionRoil_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionRoil_Normals_Loop.T_ExplosionRoil_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionWide_EOO",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionWide_EOO.T_ExplosionWide_EOO",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_ExplosionWide_Normals",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionWide_Normals.T_ExplosionWide_Normals",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Explosion_EOO",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_Explosion_EOO.T_Explosion_EOO",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Explosion_Normals",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_Explosion_Normals.T_Explosion_Normals",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_FireBall_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_FireBall_EOO_Loop.T_FireBall_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_FireBall_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_FireBall_Normals_Loop.T_FireBall_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_FireRoil_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_FireRoil_EOO_Loop.T_FireRoil_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_FireRoil_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_FireRoil_Normals_Loop.T_FireRoil_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Plasma_Wisps",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_Plasma_Wisps.T_Plasma_Wisps",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": ""
+    },
+    {
+      "name": "T_SmokePuffLight_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuffLight_EOO_Loop.T_SmokePuffLight_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokePuffLight_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuffLight_Normals_Loop.T_SmokePuffLight_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokePuff_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuff_EOO_Loop.T_SmokePuff_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokePuff_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuff_Normals_Loop.T_SmokePuff_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokeRoil_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeRoil_EOO_Loop.T_SmokeRoil_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokeRoil_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeRoil_Normals_Loop.T_SmokeRoil_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokeTrail_EOO_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeTrail_EOO_Loop.T_SmokeTrail_EOO_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_SmokeTrail_Normals_Loop",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeTrail_Normals_Loop.T_SmokeTrail_Normals_Loop",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Smoke_Wispy",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_Smoke_Wispy.T_Smoke_Wispy",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "T_Smoke_Wispy_Normals",
+      "path": "/Game/NiagaraExamples/Textures/Sprites/T_Smoke_Wispy_Normals.T_Smoke_Wispy_Normals",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_EFFECTS: 13>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "BaseEOO",
+      "path": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "DR"
+    },
+    {
+      "name": "BaseNormal",
+      "path": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "parameter": "Normal"
+    },
+    {
+      "name": "CutoutMask",
+      "path": "/Game/NiagaraExamples/Textures/Utils/CutoutMask.CutoutMask",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_ALPHA: 8>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "CutoutMask_8x8",
+      "path": "/Game/NiagaraExamples/Textures/Utils/CutoutMask_8x8.CutoutMask_8x8",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_ALPHA: 8>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "NumberGrid",
+      "path": "/Game/NiagaraExamples/Textures/Utils/NumberGrid.NumberGrid",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "NumberGrid_BandW",
+      "path": "/Game/NiagaraExamples/Textures/Utils/NumberGrid_BandW.NumberGrid_BandW",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    },
+    {
+      "name": "RedGradient",
+      "path": "/Game/NiagaraExamples/Textures/Utils/RedGradient.RedGradient",
+      "class": "Texture2D",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      }
+    }
+  ],
+  "exports": [
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Footstep/Textures/Arrow_RGB.Arrow_RGB",
+      "name": "Arrow_RGB",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Footstep/Textures/Arrow_RGB/Arrow_RGB.png",
+        "exported": true,
+        "size": 13389,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Mask.T_Footprint_Mask",
+      "name": "T_Footprint_Mask",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Footstep/Textures/T_Footprint_Mask/T_Footprint_Mask.png",
+        "exported": true,
+        "size": 26441,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Mask2.T_Footprint_Mask2",
+      "name": "T_Footprint_Mask2",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Footstep/Textures/T_Footprint_Mask2/T_Footprint_Mask2.png",
+        "exported": true,
+        "size": 15885,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Footstep/Textures/T_Footprint_Normals.T_Footprint_Normals",
+      "name": "T_Footprint_Normals",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Footstep/Textures/T_Footprint_Normals/T_Footprint_Normals.exr",
+        "exported": true,
+        "size": 264933,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell.T_BulletShell",
+      "name": "T_BulletShell",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell/T_BulletShell.png",
+        "exported": true,
+        "size": 192469,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell_NM.T_BulletShell_NM",
+      "name": "T_BulletShell_NM",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Meshes/T_BulletShell_NM/T_BulletShell_NM.png",
+        "exported": true,
+        "size": 375354,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash.T_MuzzleFlash",
+      "name": "T_MuzzleFlash",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash/T_MuzzleFlash.png",
+        "exported": true,
+        "size": 3389373,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Side.T_MuzzleFlash_Side",
+      "name": "T_MuzzleFlash_Side",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Side/T_MuzzleFlash_Side.png",
+        "exported": true,
+        "size": 1286054,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Sphere.T_MuzzleFlash_Sphere",
+      "name": "T_MuzzleFlash_Sphere",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Textures/T_MuzzleFlash_Sphere/T_MuzzleFlash_Sphere.png",
+        "exported": true,
+        "size": 1546019,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/FX_Weapons/MuzzleFlashes/Textures/T_ThinSmoke_FX.T_ThinSmoke_FX",
+      "name": "T_ThinSmoke_FX",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/FX_Weapons/MuzzleFlashes/Textures/T_ThinSmoke_FX/T_ThinSmoke_FX.png",
+        "exported": true,
+        "size": 6129777,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/DemoPlatform/Textures/T_GrungySurface_slnneipc_4K_MR.T_GrungySurface_slnneipc_4K_MR",
+      "name": "T_GrungySurface_slnneipc_4K_MR",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_MASKS: 2>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_B.T_xbnefjm_2K_B",
+      "name": "T_xbnefjm_2K_B",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_B/T_xbnefjm_2K_B.png",
+        "exported": true,
+        "size": 9676336,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_N.T_xbnefjm_2K_N",
+      "name": "T_xbnefjm_2K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_N/T_xbnefjm_2K_N.png",
+        "exported": true,
+        "size": 13293993,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_ORM.T_xbnefjm_2K_ORM",
+      "name": "T_xbnefjm_2K_ORM",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Gallery/Megascans/Surfaces/Gravel_Ground_xbnefjm/Medium/xbnefjm_tier_2/Textures/T_xbnefjm_2K_ORM/T_xbnefjm_2K_ORM.png",
+        "exported": true,
+        "size": 8587155,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Gallery/Textures/T_MannequinTarget.T_MannequinTarget",
+      "name": "T_MannequinTarget",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Materials/Reference/NumberGrid.NumberGrid",
+      "name": "NumberGrid",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_BrokenConcreteSlab_tmclbcpiw_1K_DpR.T_BrokenConcreteSlab_tmclbcpiw_1K_DpR",
+      "name": "T_BrokenConcreteSlab_tmclbcpiw_1K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_BrokenConcreteSlab_tmclbcpiw_1K_DpR/T_BrokenConcreteSlab_tmclbcpiw_1K_DpR.exr",
+        "exported": true,
+        "size": 308685,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_D.T_Broken_Concrete_Slab_tmclbcpiw_1K_D",
+      "name": "T_Broken_Concrete_Slab_tmclbcpiw_1K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_D/T_Broken_Concrete_Slab_tmclbcpiw_1K_D.exr",
+        "exported": true,
+        "size": 984368,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_N.T_Broken_Concrete_Slab_tmclbcpiw_1K_N",
+      "name": "T_Broken_Concrete_Slab_tmclbcpiw_1K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmclbcpiw/T_Broken_Concrete_Slab_tmclbcpiw_1K_N/T_Broken_Concrete_Slab_tmclbcpiw_1K_N.exr",
+        "exported": true,
+        "size": 924334,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_BrokenConcreteSlab_tmjgderjw_1K_DpR.T_BrokenConcreteSlab_tmjgderjw_1K_DpR",
+      "name": "T_BrokenConcreteSlab_tmjgderjw_1K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_BrokenConcreteSlab_tmjgderjw_1K_DpR/T_BrokenConcreteSlab_tmjgderjw_1K_DpR.exr",
+        "exported": true,
+        "size": 361590,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_D.T_Broken_Concrete_Slab_tmjgderjw_1K_D",
+      "name": "T_Broken_Concrete_Slab_tmjgderjw_1K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_D/T_Broken_Concrete_Slab_tmjgderjw_1K_D.exr",
+        "exported": true,
+        "size": 945553,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_N.T_Broken_Concrete_Slab_tmjgderjw_1K_N",
+      "name": "T_Broken_Concrete_Slab_tmjgderjw_1K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Broken_Concrete_Slab_tmjgderjw/T_Broken_Concrete_Slab_tmjgderjw_1K_N/T_Broken_Concrete_Slab_tmjgderjw_1K_N.exr",
+        "exported": true,
+        "size": 924393,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_ConcreteRubble_uc1iccejw_1K_DpR.T_ConcreteRubble_uc1iccejw_1K_DpR",
+      "name": "T_ConcreteRubble_uc1iccejw_1K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1iccejw/T_ConcreteRubble_uc1iccejw_1K_DpR/T_ConcreteRubble_uc1iccejw_1K_DpR.exr",
+        "exported": true,
+        "size": 374227,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_D.T_Concrete_Rubble_uc1iccejw_1K_D",
+      "name": "T_Concrete_Rubble_uc1iccejw_1K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_D/T_Concrete_Rubble_uc1iccejw_1K_D.exr",
+        "exported": true,
+        "size": 1024506,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_N.T_Concrete_Rubble_uc1iccejw_1K_N",
+      "name": "T_Concrete_Rubble_uc1iccejw_1K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1iccejw/T_Concrete_Rubble_uc1iccejw_1K_N/T_Concrete_Rubble_uc1iccejw_1K_N.exr",
+        "exported": true,
+        "size": 910753,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_ConcreteRubble_uc1jagbjw_1K_DpR.T_ConcreteRubble_uc1jagbjw_1K_DpR",
+      "name": "T_ConcreteRubble_uc1jagbjw_1K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagbjw/T_ConcreteRubble_uc1jagbjw_1K_DpR/T_ConcreteRubble_uc1jagbjw_1K_DpR.exr",
+        "exported": true,
+        "size": 363370,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_D.T_Concrete_Rubble_uc1jagbjw_1K_D",
+      "name": "T_Concrete_Rubble_uc1jagbjw_1K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_D/T_Concrete_Rubble_uc1jagbjw_1K_D.exr",
+        "exported": true,
+        "size": 990308,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_N.T_Concrete_Rubble_uc1jagbjw_1K_N",
+      "name": "T_Concrete_Rubble_uc1jagbjw_1K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagbjw/T_Concrete_Rubble_uc1jagbjw_1K_N/T_Concrete_Rubble_uc1jagbjw_1K_N.exr",
+        "exported": true,
+        "size": 926467,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_ConcreteRubble_uc1jagnjw_1K_DpR.T_ConcreteRubble_uc1jagnjw_1K_DpR",
+      "name": "T_ConcreteRubble_uc1jagnjw_1K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagnjw/T_ConcreteRubble_uc1jagnjw_1K_DpR/T_ConcreteRubble_uc1jagnjw_1K_DpR.exr",
+        "exported": true,
+        "size": 349324,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_D.T_Concrete_Rubble_uc1jagnjw_1K_D",
+      "name": "T_Concrete_Rubble_uc1jagnjw_1K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_D/T_Concrete_Rubble_uc1jagnjw_1K_D.exr",
+        "exported": true,
+        "size": 1004475,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_N.T_Concrete_Rubble_uc1jagnjw_1K_N",
+      "name": "T_Concrete_Rubble_uc1jagnjw_1K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Concrete_Rubble_uc1jagnjw/T_Concrete_Rubble_uc1jagnjw_1K_N/T_Concrete_Rubble_uc1jagnjw_1K_N.exr",
+        "exported": true,
+        "size": 874553,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_D.T_Rock_shopk_2K_D",
+      "name": "T_Rock_shopk_2K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Rock_shopk/T_Rock_shopk_2K_D/T_Rock_shopk_2K_D.exr",
+        "exported": true,
+        "size": 1108303,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_DpR.T_Rock_shopk_2K_DpR",
+      "name": "T_Rock_shopk_2K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Rock_shopk/T_Rock_shopk_2K_DpR/T_Rock_shopk_2K_DpR.exr",
+        "exported": true,
+        "size": 437869,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Rock_shopk/T_Rock_shopk_2K_N.T_Rock_shopk_2K_N",
+      "name": "T_Rock_shopk_2K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Rock_shopk/T_Rock_shopk_2K_N/T_Rock_shopk_2K_N.exr",
+        "exported": true,
+        "size": 912322,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_TreeDebris_wjtuagls_2K_DpR.T_TreeDebris_wjtuagls_2K_DpR",
+      "name": "T_TreeDebris_wjtuagls_2K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Tree_Debris_wjtuagls/T_TreeDebris_wjtuagls_2K_DpR/T_TreeDebris_wjtuagls_2K_DpR.exr",
+        "exported": true,
+        "size": 414978,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_D.T_Tree_Debris_wjtuagls_2K_D",
+      "name": "T_Tree_Debris_wjtuagls_2K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_D/T_Tree_Debris_wjtuagls_2K_D.exr",
+        "exported": true,
+        "size": 1207309,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_N.T_Tree_Debris_wjtuagls_2K_N",
+      "name": "T_Tree_Debris_wjtuagls_2K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Tree_Debris_wjtuagls/T_Tree_Debris_wjtuagls_2K_N/T_Tree_Debris_wjtuagls_2K_N.exr",
+        "exported": true,
+        "size": 1023998,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_WoodDebris_vb2mfeliw_2K_DpR.T_WoodDebris_vb2mfeliw_2K_DpR",
+      "name": "T_WoodDebris_vb2mfeliw_2K_DpR",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Wood_Debris_vb2mfeliw/T_WoodDebris_vb2mfeliw_2K_DpR/T_WoodDebris_vb2mfeliw_2K_DpR.exr",
+        "exported": true,
+        "size": 342231,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_D.T_Wood_Debris_vb2mfeliw_2K_D",
+      "name": "T_Wood_Debris_vb2mfeliw_2K_D",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_D/T_Wood_Debris_vb2mfeliw_2K_D.exr",
+        "exported": true,
+        "size": 1101186,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_N.T_Wood_Debris_vb2mfeliw_2K_N",
+      "name": "T_Wood_Debris_vb2mfeliw_2K_N",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/StaticMesh/Wood_Debris_vb2mfeliw/T_Wood_Debris_vb2mfeliw_2K_N/T_Wood_Debris_vb2mfeliw_2K_N.exr",
+        "exported": true,
+        "size": 941499,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Decals/BulletHole.BulletHole",
+      "name": "BulletHole",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Decals/BulletHole/BulletHole.png",
+        "exported": true,
+        "size": 58490,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Decals/BulletHole_Normals.BulletHole_Normals",
+      "name": "BulletHole_Normals",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Decals/BulletHole_Normals/BulletHole_Normals.exr",
+        "exported": true,
+        "size": 123186,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Decals/ExplosionDecalMasks.ExplosionDecalMasks",
+      "name": "ExplosionDecalMasks",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Decals/ExplosionDecalMasks/ExplosionDecalMasks.png",
+        "exported": true,
+        "size": 2076059,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Flares/LensFlare_01.LensFlare_01",
+      "name": "LensFlare_01",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Flares/LensFlare_01/LensFlare_01.png",
+        "exported": true,
+        "size": 134721,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Noise/T_AlligatorNoise_CenteredTiling.T_AlligatorNoise_CenteredTiling",
+      "name": "T_AlligatorNoise_CenteredTiling",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Noise/T_AlligatorNoise_CenteredTiling/T_AlligatorNoise_CenteredTiling.png",
+        "exported": true,
+        "size": 3374120,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Noise/T_Hermite2Noise_CenteredTiling.T_Hermite2Noise_CenteredTiling",
+      "name": "T_Hermite2Noise_CenteredTiling",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Noise/T_Hermite2Noise_CenteredTiling/T_Hermite2Noise_CenteredTiling.png",
+        "exported": true,
+        "size": 4970243,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Noise/T_HermiteNoise_CenteredTiling.T_HermiteNoise_CenteredTiling",
+      "name": "T_HermiteNoise_CenteredTiling",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Noise/T_HermiteNoise_CenteredTiling/T_HermiteNoise_CenteredTiling.png",
+        "exported": true,
+        "size": 3710517,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Noise/T_SparseConvolutionNoise_CenteredTiling.T_SparseConvolutionNoise_CenteredTiling",
+      "name": "T_SparseConvolutionNoise_CenteredTiling",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Noise/T_SparseConvolutionNoise_CenteredTiling/T_SparseConvolutionNoise_CenteredTiling.png",
+        "exported": true,
+        "size": 4345234,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionBurst_EOO_Loop.T_ExplosionBurst_EOO_Loop",
+      "name": "T_ExplosionBurst_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_ExplosionBurst_EOO_Loop/T_ExplosionBurst_EOO_Loop.exr",
+        "exported": true,
+        "size": 7244389,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionBurst_Normals_Loop.T_ExplosionBurst_Normals_Loop",
+      "name": "T_ExplosionBurst_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_ExplosionBurst_Normals_Loop/T_ExplosionBurst_Normals_Loop.exr",
+        "exported": true,
+        "size": 3672818,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionRoil_EOO_Loop.T_ExplosionRoil_EOO_Loop",
+      "name": "T_ExplosionRoil_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_ExplosionRoil_EOO_Loop/T_ExplosionRoil_EOO_Loop.exr",
+        "exported": true,
+        "size": 6292698,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionRoil_Normals_Loop.T_ExplosionRoil_Normals_Loop",
+      "name": "T_ExplosionRoil_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_ExplosionRoil_Normals_Loop/T_ExplosionRoil_Normals_Loop.exr",
+        "exported": true,
+        "size": 6864694,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionWide_EOO.T_ExplosionWide_EOO",
+      "name": "T_ExplosionWide_EOO",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "8K source skipped to avoid >4 GiB export"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_ExplosionWide_Normals.T_ExplosionWide_Normals",
+      "name": "T_ExplosionWide_Normals",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "8K source skipped to avoid >4 GiB export"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_Explosion_EOO.T_Explosion_EOO",
+      "name": "T_Explosion_EOO",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_Explosion_EOO/T_Explosion_EOO.exr",
+        "exported": true,
+        "size": 8734588,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_Explosion_Normals.T_Explosion_Normals",
+      "name": "T_Explosion_Normals",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_Explosion_Normals/T_Explosion_Normals.exr",
+        "exported": true,
+        "size": 23648477,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_FireBall_EOO_Loop.T_FireBall_EOO_Loop",
+      "name": "T_FireBall_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_FireBall_EOO_Loop/T_FireBall_EOO_Loop.exr",
+        "exported": true,
+        "size": 5724302,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_FireBall_Normals_Loop.T_FireBall_Normals_Loop",
+      "name": "T_FireBall_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_FireBall_Normals_Loop/T_FireBall_Normals_Loop.exr",
+        "exported": true,
+        "size": 6719927,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_FireRoil_EOO_Loop.T_FireRoil_EOO_Loop",
+      "name": "T_FireRoil_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_FireRoil_EOO_Loop/T_FireRoil_EOO_Loop.exr",
+        "exported": true,
+        "size": 5895891,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_FireRoil_Normals_Loop.T_FireRoil_Normals_Loop",
+      "name": "T_FireRoil_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_FireRoil_Normals_Loop/T_FireRoil_Normals_Loop.exr",
+        "exported": true,
+        "size": 6764719,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_Plasma_Wisps.T_Plasma_Wisps",
+      "name": "T_Plasma_Wisps",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_Plasma_Wisps/T_Plasma_Wisps.png",
+        "exported": true,
+        "size": 8908219,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuffLight_EOO_Loop.T_SmokePuffLight_EOO_Loop",
+      "name": "T_SmokePuffLight_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokePuffLight_EOO_Loop/T_SmokePuffLight_EOO_Loop.exr",
+        "exported": true,
+        "size": 4872310,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuffLight_Normals_Loop.T_SmokePuffLight_Normals_Loop",
+      "name": "T_SmokePuffLight_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokePuffLight_Normals_Loop/T_SmokePuffLight_Normals_Loop.exr",
+        "exported": true,
+        "size": 6446267,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuff_EOO_Loop.T_SmokePuff_EOO_Loop",
+      "name": "T_SmokePuff_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokePuff_EOO_Loop/T_SmokePuff_EOO_Loop.exr",
+        "exported": true,
+        "size": 4067693,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokePuff_Normals_Loop.T_SmokePuff_Normals_Loop",
+      "name": "T_SmokePuff_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokePuff_Normals_Loop/T_SmokePuff_Normals_Loop.exr",
+        "exported": true,
+        "size": 5885663,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeRoil_EOO_Loop.T_SmokeRoil_EOO_Loop",
+      "name": "T_SmokeRoil_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokeRoil_EOO_Loop/T_SmokeRoil_EOO_Loop.exr",
+        "exported": true,
+        "size": 4218255,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeRoil_Normals_Loop.T_SmokeRoil_Normals_Loop",
+      "name": "T_SmokeRoil_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokeRoil_Normals_Loop/T_SmokeRoil_Normals_Loop.exr",
+        "exported": true,
+        "size": 5126976,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeTrail_EOO_Loop.T_SmokeTrail_EOO_Loop",
+      "name": "T_SmokeTrail_EOO_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokeTrail_EOO_Loop/T_SmokeTrail_EOO_Loop.exr",
+        "exported": true,
+        "size": 7988621,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_SmokeTrail_Normals_Loop.T_SmokeTrail_Normals_Loop",
+      "name": "T_SmokeTrail_Normals_Loop",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_SmokeTrail_Normals_Loop/T_SmokeTrail_Normals_Loop.exr",
+        "exported": true,
+        "size": 8603453,
+        "errors": [],
+        "format": "exr"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_Smoke_Wispy.T_Smoke_Wispy",
+      "name": "T_Smoke_Wispy",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_Smoke_Wispy/T_Smoke_Wispy.png",
+        "exported": true,
+        "size": 7275277,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Sprites/T_Smoke_Wispy_Normals.T_Smoke_Wispy_Normals",
+      "name": "T_Smoke_Wispy_Normals",
+      "export": {
+        "path": "Common/Source/UE/NiagaraExamples/Textures/FX/Textures/Sprites/T_Smoke_Wispy_Normals/T_Smoke_Wispy_Normals.png",
+        "exported": true,
+        "size": 5755754,
+        "errors": [],
+        "format": "png"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/BaseEOO.BaseEOO",
+      "name": "BaseEOO",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/BaseNormal.BaseNormal",
+      "name": "BaseNormal",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_NORMALMAP: 1>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD_NORMAL_MAP: 1>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/CutoutMask.CutoutMask",
+      "name": "CutoutMask",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_ALPHA: 8>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/CutoutMask_8x8.CutoutMask_8x8",
+      "name": "CutoutMask_8x8",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "False",
+        "compression": "<TextureCompressionSettings.TC_ALPHA: 8>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/NumberGrid.NumberGrid",
+      "name": "NumberGrid",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/NumberGrid_BandW.NumberGrid_BandW",
+      "name": "NumberGrid_BandW",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    },
+    {
+      "uePath": "/Game/NiagaraExamples/Textures/Utils/RedGradient.RedGradient",
+      "name": "RedGradient",
+      "metadata": {
+        "size": [
+          32,
+          32
+        ],
+        "srgb": "True",
+        "compression": "<TextureCompressionSettings.TC_DEFAULT: 0>",
+        "lodGroup": "<TextureGroup.TEXTUREGROUP_WORLD: 0>",
+        "sourceFormat": null,
+        "sourceValid": null
+      },
+      "export": {
+        "exported": false,
+        "skipped": true,
+        "reason": "override skip"
+      }
+    }
+  ],
+  "failures": []
+}

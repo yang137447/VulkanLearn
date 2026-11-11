@@ -8,6 +8,7 @@
 #include "engine/script/engineScriptBuild.h"
 #include "engine/ui/engineUiActions.h"
 #include "engine/window/engineWindowLifecycle.h"
+#include "world/particleRuntimeBridge.h"
 #include "platform/platformEvent.h"
 
 class Controller;
@@ -30,6 +31,7 @@ class RuntimeValidationServices;
 class SubsystemCollection;
 class TerrainChunkStreamer;
 class UiSubsystem;
+class World;
 namespace Physics { class FractureImpactWorld; }
 namespace Physics { namespace Fracture { class FractureBudget; } }
 struct RuntimeCommandExecutionResult;
@@ -79,6 +81,9 @@ struct EngineFrameContext
     bool* shouldClose = nullptr;
     int* exitCode = nullptr;
     const bool* exitAfterRuntimeTests = nullptr;
+    ParticleEventPollClock* particleEventPollClock = nullptr;
+    double* particleEventTimeSeconds = nullptr;
+    std::function<void(World&)> pollParticleRuntimeBridge;
 
     EngineUiActionContext uiActions;
     EngineScriptBuildContext scriptBuild;

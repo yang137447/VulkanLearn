@@ -43,8 +43,11 @@ Spot angles are half-angles in degrees in JSON and radians
 in the GPU snapshot. The inner cone is fully lit, the outer cone is zero, and
 the transition is smooth.
 
-The current `radius` field remains a legacy scene field because it is not yet
-consumed by the real-time evaluator. It is not a physical attenuation control.
+Point and spot `radius` is now consumed by the real-time evaluator as a UE-style
+local-light window: the existing `1 / (d^2 + 1)` core is multiplied by
+`clamp(1 - (d^2 / r^2)^2, 0, 1)^2`. `radius <= 0` means an unbounded light and
+keeps the pre-window behavior. It is an artist attenuation window, not a
+photometric quantity.
 
 Optional C# Blueprint light components accept only canonical units: directional
 `lux`, point/spot `cd`. They share the existing snapshot and GPU conversion
@@ -52,6 +55,196 @@ boundary. Their cone half-angles use degrees in authoring/C# and radians in
 snapshots; parent scale affects position, not intensity or cone angles.
 Component directional lights do not replace the authored primary CSM sun.
 See [C# Blueprint runtime](csharp-blueprint-runtime.md) for fields and lifetime rules.
+
+## Static Point Light Pulse
+
+`pointLight` may declare an optional periodic pulse:
+
+```json
+{
+    "type": "pointLight",
+    "intensity": 25.0,
+    "pulse": {
+        "period": 1.0,
+        "duration": 0.08,
+        "phase": 0.0,
+        "peakIntensity": 250.0
+    }
+}
+```
+
+`period`, `duration`, `phase`, and `peakIntensity` are required when `pulse`
+exists. `period` and `duration` are seconds with `period > 0` and
+`0 < duration <= period`; `phase` is a finite second offset and may be
+negative; `peakIntensity` is additive candela and must be in
+`[0, 1e12]`. Only `pointLight` accepts `pulse`; other light types reject the
+field instead of silently ignoring it.
+
+The CPU evaluates the pulse from renderer animation time:
+
+```text
+local = wrap(time + phase, period)
+factor = local < duration ? (1 - local / duration)^2 : 0
+effectiveIntensity = baseIntensity + peakIntensity * factor
+```
+
+`baseIntensity` is always present, so the light remains at its authored level
+between pulses. The curve starts at the full peak and decays smoothly to zero
+at the pulse boundary. The factor is evaluated at the GPU-upload boundary and
+only the upload copy is modified; the frozen `LightSnapshot` keeps the authored
+base intensity. The point/spot candela-to-centimeter conversion runs after the
+effective intensity is computed.
+
+Time comes from `RenderSystem::animationTimeSeconds`, advanced by the same
+clamped frame delta used for exposure. It is wall-clock render time, not
+simulation particle time: the pulse continues while Play is paused and has no
+particle birth/death readback. Use `pulse` for a static scene light that must
+flash without a particle system; for effects with a Niagara Light Renderer use
+the GPU particle light path below. Editor thumbnails upload static lights with
+time 0.
+
+## GPU Particle Lights
+
+A particle emitter with `renderMode: "light"` owns a normal GPU particle pool
+(at most 64 particles), advanced by the shared `particleSimulate` compute with
+the same fixed-step, burst, shape, gravity/drag, color tint and deterministic
+random rules as other emitters. A dedicated `particleLightEmit` compute then
+reads the live particles and writes point lights into a separate per-swapchain
+`ParticleLightSSBO`; `RenderSystem` no longer calls `ParticleLightRuntime`:
+
+```json
+{
+    "name": "muzzle_light",
+    "modules": [
+        { "type": "emitter", "fields": {
+            "maxParticles": 2,
+            "renderMode": "light",
+            "light": { "intensity": 300.0, "radius": 700.0 }
+        } }
+    ]
+}
+```
+
+`light.intensity` is candela and `light.radius` is centimeters; both must be
+finite and positive. `maxParticles` is capped at 64 per light emitter. All light
+emitters share one fixed 64-slot output buffer per swapchain image; slots are
+assigned in stable emitter-key order (first-fit), so overflow truncation does
+not depend on map iteration order. The shader color/alpha comes from
+`EvaluateColorCurve(lifeT)` (author `colorKeys` when present, otherwise the
+`colorStart`/`colorEnd` endpoints), multiplied by the instance color tint;
+alpha fades intensity, and the final scalar is
+`light.intensity * (1 - lifeT) * alpha`. The GPU emits
+`intensity * 100^2` to match the existing `LightGPU` centimeter-distance
+convention.
+
+The output buffer has a `uvec4 header` (`count` high-water mark, capacity 64)
+followed by 32-byte `ParticleLightGPU` entries. The buffer is cleared on the
+host every frame after the image fence and before simulation; `particleLightEmit`
+writes `atomicMax(header.count, slot + 1)` and unique per-particle slots.
+Deferred and forward lighting read the same buffer through set 0 binding 4 and
+merge it into the existing point-light loop; there is no second copy in
+`RenderScene::lights`. GPU particle lights do not cast shadows; scene point/spot
+lights can (see Local Light Shadows). Limits: no light textures; the
+offline particle compositor still skips light
+emitters. Editor particle thumbnails use the same GPU path when their session
+sets the light buffer. See [particle system](particle-system.md) §Light for the
+full authoring and shape contract.
+
+## Local Light Shadows
+
+Scene `pointLight` and `spotLight` objects may declare
+`"shadow": { "castShadows": true, "bias": 2.0 }` or the shorthand
+`"shadow": true` (`bias` is centimeters and optional; the default is 2 cm, and
+`castShadows` defaults to false). `radius` is the attenuation range in
+centimeters: it defaults to 1000 cm (10 m), must be finite and `> 0`, and the
+shader window `clamp(1 - (d^2/r^2)^2, 0, 1)^2` makes the light contribute only
+inside that range. Up to eight
+shadow-casting local lights are selected per frame by a stable importance key
+(camera distance, radius, intensity, then `lightId`). Each selected light owns
+one slice of `localShadowMap`, a `D32_SFLOAT` `texture2DArray` with 1024²
+slices, so point and spot lights share one atlas type. Local shadow draws are
+culled per light: point lights skip casters whose world AABB does not reach the
+light radius, and spot lights additionally test the cone; WPO/SpeedTree casters
+skip this culling because their authored bounds do not include deformation.
+Mesh particle emitters with `castShadows: true` are additional casters in both
+the local atlas and CSM; sprite/ribbon particles do not cast.
+`LocalShadow` material pipelines are part of the same transactional shader
+reload commit as Surface/Shadow:
+
+- Spot: a standard perspective view-projection from the light position,
+  direction, outer cone angle (`fov = 2 * coneOuter`), near 1 cm and far = the
+  light radius. The shader reconstructs the same matrices from the GPU light
+  record and samples with 3×3 PCF.
+  The receiver applies a normal offset plus a slope-scaled depth bias
+  (`bias * clamp(1 + 1.5*tanθ, 1, 4)`, capped at 4× the authored bias) and
+  uses 5×5 PCF; true PCSS is not implemented because the atlas is bound as a
+  comparison sampler only. CSM shadow passes cull drawers per cascade with the
+  cascade frustum planes (WPO/SpeedTree keep full submission).
+- Point: one octahedral slice. Rendering uses eight quadrant passes with
+  per-octant world-space projection matrices; the fragment shader rejects
+  fragments outside the current octant and writes
+  `gl_FragDepth = distance / far`. Sampling encodes the pixel-to-light
+  direction with the standard octahedral map and folds PCF taps back across the
+  diamond/square seams.
+
+The shader uses set 3 bindings owned by the consuming pass: deferred lighting
+binding 15, forward opaque/transparent binding 6, particle binding 2. CSM stays
+on its existing `shadowMap` array; a point/spot light without an assigned slice
+reports full visibility. GPU particle lights never allocate a local shadow
+slice.
+
+## Volumetric Fog
+
+`environment.fog` enables a height-fog / in-scattering pass:
+
+```json
+"fog": {
+    "enabled": true,
+    "density": 0.0003,
+    "heightFalloff": 0.35,
+    "baseHeight": 0.0,
+    "albedo": [0.75, 0.82, 1.0],
+    "anisotropy": 0.4,
+    "intensity": 1.0
+}
+```
+
+`density` and `heightFalloff` are per meter; `baseHeight` is centimeters.
+The pass order is `particle → particleDistortion → volumetricFog →
+fogComposite → editorGrid → autoExposure → bloomPrefilter`. The fog volume is
+a quarter-resolution `RGBA16F` `texture2DArray` with 32 exponentially spaced
+depth layers. Each layer integrates only the previous segment, so the cost is
+O(layers) per froxel; directional light is shadowed by CSM, point/spot by the
+local shadow atlas, and GPU particle lights contribute without shadows.
+`fogComposite` samples the two neighboring layers by pixel view depth and
+composites with premultiplied over into `sceneColor` before Bloom, so Bloom
+and auto exposure see the fogged color.
+
+Limits: no temporal denoising (there is no TAA), no froxel light list (all
+in-range lights are iterated per froxel), and the offline render path does not
+record the fog pass. Fog brightness follows the physical light intensity, so
+bright flash lights need very low `density` values (about `0.0001`/m).
+
+## Light Culling
+
+A `lightCulling` compute pass runs after the local shadow passes and before
+geometry. It builds a 16×16 screen-tile list for scene directional/point/spot
+lights (particle lights stay on their independent SSBO):
+
+- `lightGrid`: `uvec4 header` (overflow tile/light counters) plus one
+  `uvec4(count, overflow, 0, 0)` per tile.
+- `lightIndices`: fixed `tiles × 64` `uint` slots; overflow truncates in a
+  deterministic order and only increments counters.
+- `lightGridParams`: tile size, tile counts, render extent, light intervals and
+  an `enabled` flag.
+
+Directional lights enter every tile; point lights use a screen-projected sphere
+plus view-depth interval; spot lights use the cone's minimal bounding sphere.
+The lighting shaders read the tile list when `enabled != 0`, otherwise they
+fall back to the existing contiguous header loops. Material/post set 0 uses
+bindings 5/6/7; particle set 0 uses 10/11/12. The culling pass itself is not
+registered as a shader-reload participant yet, and a tile is capped at 64
+entries (no dynamic growth).
 
 ## Camera Exposure
 
@@ -185,8 +378,9 @@ On October 9, 2026, the resource scenes under
 - Omitted legacy CSM distances are materialized as 30000 cm (formerly the
   300-world-unit default). Bias controls are normalized depth/slope factors,
   not world lengths; they are not multiplied by 100.
-- The unused legacy `radius` field was removed from migrated point and spot
-  lights. It must not be interpreted as a physical attenuation radius.
+- The migrated point and spot lights omit `radius`, which now means an unbounded
+  artist window (`radius <= 0`). It must not be interpreted as a physical
+  attenuation radius.
 
 `SC_scene01` was migrated from the historical `sunLight` form to a loadable
 `directionalLight` with `lux` intensity, centimeter-space transforms, and the
@@ -234,6 +428,9 @@ value; `toneMapping` exposes only the raw scene color and then combines it
 with that Bloom value, so Bloom is not exposed twice. The prefilter
 parameter's `w` channel is runtime-owned exposure, not an artist control;
 neutral default 1 preserves neutral-exposure paper plots.
+`bloomDownsample` uses a 2x2 Karis average (`1 / (1 + luma)`) instead of a fixed
+3x3 kernel: fireflies from sparks/arcs no longer dominate the lowest mip, while
+the normalized weights keep the overall exposure level stable.
 
 These are explicit project-authored migration baselines, not recovered
 photometric measurements or paper-scene lighting. Absolute HDRI luminance

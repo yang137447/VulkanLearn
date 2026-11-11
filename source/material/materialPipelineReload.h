@@ -57,16 +57,23 @@ struct MaterialPipelineReloadRecipe
 {
     MaterialGraphicsPassReloadRecipe surface;
     std::optional<MaterialGraphicsPassReloadRecipe> shadow;
+    // 局部阴影是独立 pass 变体；与 CSM Shadow 共用同一事务提交，
+    // 但不共享 pipeline/layout，避免把 fragment gl_FragDepth 变体
+    // 误用到普通 shadow pass。
+    std::optional<MaterialGraphicsPassReloadRecipe> localShadow;
 };
 
 struct MaterialPipelineReloadCommit
 {
     bool replaceSurface = false;
     bool replaceShadow = false;
+    bool replaceLocalShadow = false;
     std::shared_ptr<PipelineBase> surfacePipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
+    std::shared_ptr<PipelineBase> localShadowPipeline;
     GraphicsShaderVariantArtifact surfaceArtifact;
     std::optional<GraphicsShaderVariantArtifact> shadowArtifact;
+    std::optional<GraphicsShaderVariantArtifact> localShadowArtifact;
     std::vector<ShaderBinding> activeShaderBindings;
 };
 
@@ -74,6 +81,7 @@ struct RetiredMaterialPipelines
 {
     std::shared_ptr<PipelineBase> surfacePipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
+    std::shared_ptr<PipelineBase> localShadowPipeline;
 };
 
 } // namespace VL

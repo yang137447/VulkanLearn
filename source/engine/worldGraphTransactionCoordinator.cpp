@@ -188,7 +188,9 @@ WorldGraphTransactionCoordinator::Execute(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch* materialDefinitionReload,
     const nlohmann::json& extraSceneObjects,
-    const nlohmann::json& sceneDocument)
+    const nlohmann::json& sceneDocument,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments)
 {
     try
     {
@@ -204,6 +206,7 @@ WorldGraphTransactionCoordinator::Execute(
             RenderSystem::GetInstance().IsOfflineMode();
         prepareOptions.prerenderSkin =
             RenderSystem::GetInstance().IsPrerenderSkinEnabled();
+        prepareOptions.particleDocuments = &particleDocuments;
         auto preparedWorldResult =
             worldCandidatePreparer.Prepare(
                 scenePath,

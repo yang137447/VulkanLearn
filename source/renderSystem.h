@@ -30,6 +30,7 @@
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
+#include "render/particles/particleGpuTimer.h"
 #include "render/environment/environmentRuntime.h"
 #include "render/frontend/renderScene.h"
 #include "render/frame/renderWorldSnapshot.h"
@@ -48,6 +49,11 @@
 #include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldWind.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/localShadowMath.h"
+#include "particles/particleFrameStats.h"
+#include "particles/particleDecalRuntime.h"
+#include "particles/particleRenderer.h"
+#include "render/decal/decalRenderer.h"
 #include "render/shadow/csmRuntime.h"
 #include "render/postprocess/postProcessControls.h"
 #include "render/terrain/terrainFeedbackRuntime.h"
@@ -163,6 +169,39 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 调试回读：先停住可选的渲染线程并等待设备空闲，再把当前发射器池
+    // 回读到 CPU。输出固定落在 <resourceRoot>/Generated/ParticleDumps/。
+    bool DumpParticles(
+        const std::string& fileName,
+        uint32_t maxPerEmitter,
+        std::string& outMessage);
+    // 调试快照：先让出渲染线程，再按值拷贝上一帧的 CPU 侧粒子预算。
+    // 不等待设备空闲、不读取 GPU，也不是 GPU 计时。
+    VL::ParticleFrameStats GetParticleFrameStats() const;
+    // 运行时 restart：只重置该场景对象名下发射器的模拟时间/预热/清池/剔除
+    // 状态；不重新加载 PS 资产，也不重建纹理或 GPU 池。
+    void RestartParticleSystems(const std::string& sceneObjectName);
+    // 粒子级运行时命令：解析到具体 emitter 的 GPU 池后，由下一次
+    // RecordSimulation 在稳定槽位上执行 kill / spawn。
+    bool KillParticle(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        uint32_t particleIndex,
+        std::string& outMessage);
+    bool SpawnParticleAt(
+        const std::string& sceneObjectName,
+        const std::string& emitterName,
+        const Eigen::Vector3f& worldPosition,
+        float lifetimeSeconds,
+        std::string& outMessage);
+    // 事件回读：调用方需处于安全点；内部会等待设备空闲，然后把每个
+    // 发射器的 bounded 事件记录复制到 CPU。供脚本/调试层消费。
+    bool DrainParticleEvents(
+        uint32_t maxPerEmitter,
+        std::vector<VL::ParticleEventBatch>& outBatches,
+        std::string& outError);
+    // 由 EngineLoop 在 scripts.Tick 之后写入；快照构建与粒子模拟只消费它。
+    void SetPendingSimulationDelta(float seconds);
     // 控制台只读诊断：打印最近一次已完成 feedback 回读的页统计。
     // 不触发 RequestPage/Evict，也不改变 preload=true 的驻留行为。
     void ReportTerrainFeedbackStatistics() const;
@@ -225,6 +264,11 @@ public:
     // --perf-jsonl 需要时间序列，即使没有 --gpu-stats 也开启采集。
     void EnableGpuPassCollection() { gpuPassTimer.RequestCollection(); }
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
+    void SetResourceRoot(std::string root) { resourceRoot = std::move(root); }
+    void SetRenderThreadIdleCallback(std::function<void()> callback)
+    {
+        renderThreadIdleCallback = std::move(callback);
+    }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
     vk::Extent2D GetSceneRenderExtent() const;
@@ -447,6 +491,7 @@ private:
     // 摘除并交给 ResourceRetireQueue；与其它资源共用同一套 cache/epoch 回收。
     void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
+    void ConfigureParticleSceneLighting();
     void RecordAndSubmitCurrentRenderScene();
     void AdvanceSceneWind();
     void AdvanceSceneWindTick();
@@ -470,6 +515,22 @@ private:
         uint32_t passWidth,
         uint32_t passHeight,
         uint32_t cascadeIndex) override;
+    void UpdateLocalShadowUBOForPass(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passWidth,
+        uint32_t passHeight,
+        uint32_t lightIndex,
+        uint32_t octant,
+        uint32_t mode) override;
+    void PrepareParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        uint32_t octant) override;
+    void RecordParticleShadowCasters(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
     void UpdateMaterialInstanceUBOForPass(
         const std::shared_ptr<MaterialInstance>& materialInstance) override;
     void UpdateObjectUBOForPass(
@@ -480,6 +541,21 @@ private:
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
+    bool IsLocalShadowActive(uint32_t localShadowIndex) const override;
+    uint32_t GetLocalShadowMode(uint32_t localShadowIndex) const override;
+    const VL::LightSnapshot* GetLocalShadowLight(
+        uint32_t localShadowIndex) const override;
+    void ReportLocalShadowCasterStats(
+        uint32_t localShadowIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters) override;
+    bool GetShadowCascadeFrustumPlanes(
+        uint32_t cascadeIndex,
+        VL::ShadowFrustumPlanes& outPlanes) const override;
+    void ReportShadowCascadeCasterStats(
+        uint32_t cascadeIndex,
+        uint32_t drawnCasters,
+        uint32_t totalCasters) override;
     bool GetShadowCascadeLightViewProjection(
         uint32_t cascadeIndex,
         Eigen::Matrix4f& outLightViewProjection) const override;
@@ -487,6 +563,36 @@ private:
         uint32_t cascadeIndex,
         VL::ShadowCasterReceiverBounds& outBounds) const override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
+    void RecordParticlePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
+    // 本帧唯一的粒子模拟推进：帧录制里在 pass 循环之前调用一次。
+    void RenderParticleSimulation(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t frameIndex);
+    // 半分辨率软粒子深度过滤；由 PassRuntime 之外的主循环直接录制。
+    void RecordParticleSoftDepthPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass);
+    void RecordDistortionPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
+    void RecordFogCompositePass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex) override;
+    void RecordDecalStencilPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const VL::RenderScene& renderScene) override;
+    void RecordDecalPass(
+        vk::CommandBuffer& commandBuffer,
+        const Renderpass& renderPass,
+        uint32_t swapChainImageIndex,
+        const VL::RenderScene& renderScene) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
@@ -495,6 +601,11 @@ private:
     void LogShadowCasterCullStats() const;
 
     void BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight);
+    // 每帧在 UploadLightsForPass 之前运行：写回 shadowSlice/shadowFar，
+    // 并把前 kMaxLocalShadowLights 盏灯冻结给 LocalShadow pass 使用。
+    void PrepareLocalShadowLights();
+    // 只做低频日志，避免每帧刷新控制台；由 pass 录制完成后的帧尾调用。
+    void LogLocalShadowCasterStatistics();
     
     // 环境IBL相关
     std::shared_ptr<Texture> GetActiveEnvironmentCube();
@@ -540,6 +651,10 @@ private:
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     VL::PostProcessControls postProcessControls;
+    // 渲染线程单调时钟；点光脉冲与曝光共用同一帧间隔，Pause 时仍推进。
+    float animationTimeSeconds = 0.0f;
+    // 最近一次逻辑模拟帧间隔，默认 1/60 保持首帧行为不变。
+    float pendingSimulationDeltaSeconds = 1.0f / 60.0f;
     bool hasRenderScene = false;
     // 风模拟时间。严格按固定 1/60 s 步长递增；不要把它当成帧时间。
     double currentWindTimeSeconds = 0.0;
@@ -554,6 +669,19 @@ private:
     WindResponseProfileSet windResponseProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
+    // 索引即 localShadow pass 的数组层；未激活的层不参与 UBO 上传。
+    std::vector<VL::LightSnapshot> activeLocalShadowLights;
+    // 本帧每层实际录制/候选的 caster 数；PrepareLocalShadowLights 清零，
+    // pass 录制时填充，帧尾按低频输出。
+    std::array<uint32_t, VL::kMaxLocalShadowLights>
+        localShadowDrawnCasters{};
+    std::array<uint32_t, VL::kMaxLocalShadowLights>
+        localShadowTotalCasters{};
+    // CSM 逐级 caster 统计；与局部阴影分开，便于确认级联剔除是否生效。
+    std::array<uint32_t, VL::CsmSettings::MaxCascadeCount>
+        shadowCascadeDrawnCasters{};
+    std::array<uint32_t, VL::CsmSettings::MaxCascadeCount>
+        shadowCascadeTotalCasters{};
     VL::CsmRuntime csmRuntime;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
@@ -564,6 +692,9 @@ private:
     VL::PassRuntime passRuntime;
     // 编辑器参考网格几何：只由 editorGrid pass 消费；runtime 不拥有实现。
     VL::IEditorViewportOverlay* editorViewportOverlay = nullptr;
+    VL::ParticleRenderer particleRenderer;
+    VL::ParticleDecalRuntime particleDecalRuntime;
+    VL::DecalRenderer decalRenderer;
     VL::RenderScene currentRenderScene;
     VL::PlacementRenderableRuntime placementRuntime;
     VL::RenderFrameRecorder frameRecorder;
@@ -586,6 +717,9 @@ private:
     VL::RendererOwnedMaterialInstancePreviewAdapter
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
+    std::string resourceRoot;
+    // EngineLoop 注入；RenderSystem 不拥有渲染线程，只借用其停靠点。
+    std::function<void()> renderThreadIdleCallback;
     PipelineFactory* pipelineFactory = nullptr;
     VL::AutoExposureReloadParticipant exposureHistogramReloadParticipant{0};
     VL::AutoExposureReloadParticipant exposureAdaptReloadParticipant{1};
@@ -596,6 +730,9 @@ private:
         environmentIblBaker};
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
+    // particle graphics pass 的 GPU timestamp；与 environment timer 各自持有
+    // 独立 query pool，避免 pass 跳过时互相覆盖槽位。
+    VL::ParticleGpuTimer particleGpuTimer;
     // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
     VL::GpuPassTimer gpuPassTimer;
     // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。

@@ -62,7 +62,13 @@ public:
         const UBOGlobal& uboGlobal);
     void UpdateLightBuffer(
         uint32_t swapChainImageIndex,
-        const std::vector<LightSnapshot>& lights);
+        const std::vector<LightSnapshot>& lights,
+        float timeSeconds = 0.0f);
+    // GPU per-particle light 输出：在每帧 BeginFrame 之后、粒子 simulate
+    // 之前清零；host-visible 内存已由 image fence 保护。
+    void ClearParticleLightBuffer(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapChainImageIndex);
     // 使用 MaterialInstance::CaptureNumericParameterValues() 的单次不可变快照
     // 写 UBO；调用期间 GT 的材质预览提交不会改变本次写入的参数集合。
     void UpdateMaterialInstanceUniformBuffer(
@@ -81,9 +87,48 @@ public:
         RendererObjectGpuResources& objectResources,
         const RenderDrawPacket& drawPacket);
 
+    // 屏幕空间 tile 光照聚类的输出缓冲。尺寸跟随渲染目标（sceneColor），
+    // resize 或自定义图改变分辨率时重建；返回 true 表示 descriptor 必须刷新。
+    bool EnsureLightCullingGrid(
+        uint32_t renderWidth,
+        uint32_t renderHeight,
+        RendererBackendVulkan& rendererBackend);
+
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetParticleLightBufferInfos() const;
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightGridBufferInfos() const
+    {
+        return lightGridBuffer.bufferInfos;
+    }
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightIndexBufferInfos() const
+    {
+        return lightIndexBuffer.bufferInfos;
+    }
+    const std::vector<vk::DescriptorBufferInfo>&
+        GetLightGridParamBufferInfos() const
+    {
+        return lightGridParamBuffer.bufferInfos;
+    }
+    const std::vector<vk::Buffer>&
+        GetParticleLightBufferHandles() const noexcept
+    {
+        return particleLightBuffer.buffers;
+    }
     size_t GetLightCapacity() const { return maxLightCount; }
+    bool HasLightCullingGrid() const
+    {
+        return lightGridBuffer.HasResources() &&
+            lightIndexBuffer.HasResources() &&
+            lightGridParamBuffer.HasResources();
+    }
+    uint32_t GetLightCullingTilesX() const { return lightCullingTilesX; }
+    uint32_t GetLightCullingTilesY() const { return lightCullingTilesY; }
+    uint32_t GetLightCullingRenderWidth() const { return lightCullingRenderWidth; }
+    uint32_t GetLightCullingRenderHeight() const { return lightCullingRenderHeight; }
     const std::vector<RHIBufferHandle>&
         GetLightBufferHandlesForTest() const noexcept
     {
@@ -104,6 +149,15 @@ private:
 
     Buffer globalUniformBuffer;
     Buffer lightBuffer;
+    Buffer particleLightBuffer;
+    // grid: header + tiles；indices: tiles × maxLightsPerTile；params: std140 块。
+    Buffer lightGridBuffer;
+    Buffer lightIndexBuffer;
+    Buffer lightGridParamBuffer;
+    uint32_t lightCullingRenderWidth = 0;
+    uint32_t lightCullingRenderHeight = 0;
+    uint32_t lightCullingTilesX = 0;
+    uint32_t lightCullingTilesY = 0;
     size_t maxLightCount = 0;
     bool initialized = false;
 };

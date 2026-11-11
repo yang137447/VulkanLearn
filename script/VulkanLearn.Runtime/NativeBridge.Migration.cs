@@ -46,12 +46,17 @@ public static partial class NativeBridge
     {
         // 边界后排队的结构请求和消息仍属于旧代，不能在换代时静默丢弃。
         if (context.Commands.Count != 0 || context.ComponentCommands.Count != 0 ||
-            context.LogicComponentCommands.Count != 0 || context.Services.HasPendingEvents)
+            context.LogicComponentCommands.Count != 0 || context.Services.HasPendingEvents ||
+            context.Services.HasPendingParticles)
             throw new InvalidOperationException("Finish pending World structure commands and events before live reload.");
         return new
         {
             nextBlueprint = context.NextBlueprint,
             nextComponent = context.NextComponent,
+            nextParticle = context.NextParticle,
+            nextParticleEmitter = context.NextParticleEmitter,
+            particleDataChannels = context.Services.ParticleDataChannelSnapshot()
+                .ToDictionary(p => p.Key, p => p.Value.ToPayload(), StringComparer.Ordinal),
             contacts = context.Contacts.OrderBy(p => p.Item1, StringComparer.Ordinal)
                 .ThenBy(p => p.Item2, StringComparer.Ordinal).Select(p => new[] { p.Item1, p.Item2 }).ToArray(),
             triggers = context.Triggers.OrderBy(p => p.Item1, StringComparer.Ordinal)
@@ -66,6 +71,8 @@ public static partial class NativeBridge
                 i.Failed,
                 enabled = i.Blueprint.Enabled,
                 destroyed = i.Blueprint.PendingDestroy,
+                particles = context.Services.ParticleIds(i.Blueprint),
+                particleEmitters = context.Services.ParticleEmitterIds(i.Blueprint),
                 properties = CaptureProperties(i.Blueprint),
                 springArms = i.Blueprint.Components.OfType<SpringArmComponent>().Select(CaptureSpringArmHistory).ToArray(),
                 components = i.LogicComponents.Select(c => new
@@ -89,6 +96,23 @@ public static partial class NativeBridge
             throw new InvalidOperationException("Migration instance identities differ.");
         context.NextBlueprint = snapshot.GetProperty("nextBlueprint").GetUInt64();
         context.NextComponent = Math.Max(context.NextComponent, snapshot.GetProperty("nextComponent").GetUInt64());
+        if (snapshot.TryGetProperty("nextParticle", out var nextParticle))
+            context.NextParticle = Math.Max(context.NextParticle, nextParticle.GetUInt64());
+        if (snapshot.TryGetProperty("nextParticleEmitter", out var nextParticleEmitter))
+            context.NextParticleEmitter = Math.Max(
+                context.NextParticleEmitter, nextParticleEmitter.GetUInt64());
+        if (snapshot.TryGetProperty("particleDataChannels", out var particleDataChannels))
+            context.Services.RestoreParticleDataChannels(
+                particleDataChannels.EnumerateObject()
+                    .Where(p => ParticleDataChannelValue.TryParse(p.Value, out _))
+                    .ToDictionary(
+                        p => p.Name,
+                        p =>
+                        {
+                            ParticleDataChannelValue.TryParse(p.Value, out var value);
+                            return value;
+                        },
+                        StringComparer.Ordinal));
         var runtimeStates = snapshot.GetProperty("states").EnumerateArray()
             .ToDictionary(n => n.GetProperty("id").GetString()!, StringComparer.Ordinal);
         foreach (var instance in context.Instances)
@@ -98,6 +122,15 @@ public static partial class NativeBridge
                 source.GetProperty("type").GetString() != blueprint.GetType().FullName)
                 throw new InvalidOperationException("Migration Blueprint identity or type differs.");
             RestoreRuntimeValues(instance, runtimeStates[blueprint.Handle.Id]);
+            if (source.TryGetProperty("particles", out var particles))
+                context.Services.RestoreParticles(blueprint,
+                    particles.EnumerateArray().Select(p => p.GetString()!));
+            if (source.TryGetProperty("particleEmitters", out var particleEmitters))
+                context.Services.RestoreParticleEmitters(blueprint,
+                    particleEmitters.EnumerateObject().ToDictionary(
+                        p => p.Name,
+                        p => p.Value.EnumerateArray().Select(e => e.GetString()!).ToArray(),
+                        StringComparer.Ordinal));
             RestoreProperties(blueprint, source.GetProperty("properties"));
             foreach (var arm in source.GetProperty("springArms").EnumerateArray()) RestoreSpringArmHistory(blueprint, arm);
             instance.Started = source.GetProperty("Started").GetBoolean();
@@ -147,7 +180,8 @@ public static partial class NativeBridge
                     ReloadScriptComponent(context, instance, component.Value);
             ValidateBlueprint(instance.Blueprint, instance.Blueprint.Transform.Scale);
         }
-        if (context.Commands.Count != 0 || context.ComponentCommands.Count != 0 || context.LogicComponentCommands.Count != 0)
+        if (context.Commands.Count != 0 || context.ComponentCommands.Count != 0 ||
+            context.LogicComponentCommands.Count != 0 || context.Services.HasPendingParticles)
             throw new InvalidOperationException("OnReload cannot change World structure.");
         if (!ReferenceEquals(restoredCamera, context.ActiveCamera))
             throw new InvalidOperationException("OnReload cannot change the active camera.");

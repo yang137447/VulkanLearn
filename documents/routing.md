@@ -18,7 +18,7 @@
 | `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem.*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
-| `source/editor/**` | `contracts/ui-component-system.md` | — |
+| `source/editor/**` | `contracts/ui-component-system.md`、`contracts/editor-runtime-data-boundary.md` | — |
 | `script/VulkanLearn.Runtime/AnimationGraph*.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationBlueprint.cs`、`script/VulkanLearn.Runtime/LocomotionAnimationGraph.cs`、`tool/script-tests/scriptLocomotionTests.cpp`、`tool/script-tests/managed/AnimationGraphFixtures.cs` | `contracts/animation-runtime-skinning.md`、`contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/ui/panel/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
 | `source/editor/service/material/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | Runtime editor target ownership |
@@ -79,11 +79,15 @@
 | `source/render/world/**` | `contracts/vulkanlearn-architecture.html`、`contracts/csharp-blueprint-runtime.md` | — |
 | `source/render/renderable/**` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
+| `source/particles/**`、`shader/glsl/particle/**` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
+| `source/render/decal/**`、`shader/glsl/decal/**` | `contracts/decal-runtime.md` | — |
 | `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
+| `shader/glsl/M_glassRefraction.*`、`shader/glsl/M_glassRefraction.surface.glsl`、`config/renderGraphConfig.json` 的 `sceneColorCopy` / `forwardTransparent`、`tool/renderer-backend-tests/glass_refraction_graph_test.cpp` | `contracts/glass-refraction.md`、`contracts/vulkanlearn-architecture.html` | — |
 | 论文 case 验证：`tool/validation/**` | `rationale/shading-model-case-records.md`（证据归档）、`plan/rendering/shading-model-alignment-plan.md` | — |
+| 粒子特效验收：`tool/validation/particle/**` | `plan/rendering/niagara-effects-alignment-plan.md` | — |
 | `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]`、`[rmlui-shrink-to-fit-max-width]` 条 | — |
 | 改右键上下文菜单（`ui/editor-workspace.rml` 的 `#editor-context-menu`、面板的 `mouseup/button==1` 处理、菜单目标解析） | `contracts/ui-component-system.md` 的「右键上下文菜单」节 | — |
 | `source/render/editor/**`、`shader/glsl/pass/editorGrid.*`、`config/renderGraphConfig.json` 的 `editorGrid` pass | `contracts/material-mesh-pass-composition.md` 的「编辑器网格 pass」节 | — |

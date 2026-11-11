@@ -9,6 +9,7 @@
 #include "scene/validation/sceneAssetValidator.h"
 #include "commonFunction.h"
 #include "script/scriptBlueprintAsset.h"
+#include "world/world.h"
 #include "world/loading/worldGameplayPlanBuilder.h"
 
 namespace VL
@@ -74,7 +75,9 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(const std::string& scenePath) co
 RuntimeResult<WorldBuildPlan> WorldLoader::Load(
     const std::string& scenePath,
     const nlohmann::json& extraObjects,
-    const nlohmann::json& sceneDocument) const
+    const nlohmann::json& sceneDocument,
+    const std::unordered_map<std::string, nlohmann::json>&
+        particleDocuments) const
 {
     try
     {
@@ -108,8 +111,46 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
         buildPlan.authoredSceneJson = buildPlan.sceneJson;
         // 资产只在隔离准备中解析一次；网格计划与托管实例消费完全相同的有效声明。
         buildPlan.sceneJson = ResolveScriptBlueprintScene(CommonFunction::GetResourcePath(), buildPlan.sceneJson, scenePath);
-        buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(scenePath, buildPlan.sceneJson);
+        buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(
+            scenePath, buildPlan.sceneJson, particleDocuments);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
+        // 场景级 typed Data Channel：value 语法与 Console/C# 共用
+        // ParticleDataChannelValue::ParseJson，类型不再退化为 float map。
+        if (buildPlan.sceneJson.contains("particleDataChannels"))
+        {
+            const nlohmann::json& channels =
+                buildPlan.sceneJson.at("particleDataChannels");
+            if (!channels.is_object())
+            {
+                throw std::runtime_error(
+                    "Scene particleDataChannels must be an object");
+            }
+            if (channels.size() > kMaxParticleDataChannels)
+            {
+                throw std::runtime_error(
+                    "Scene particleDataChannels exceeds 64 entries");
+            }
+            for (auto channel = channels.begin();
+                 channel != channels.end(); ++channel)
+            {
+                std::string error;
+                if (!ValidateParticleDataChannelName(channel.key(), error))
+                {
+                    throw std::runtime_error(
+                        "Scene particleDataChannels: " + error);
+                }
+                ParticleDataChannelValue value;
+                if (!ParticleDataChannelValue::ParseJson(
+                        channel.value(), value, error))
+                {
+                    throw std::runtime_error(
+                        "Scene particleDataChannels['" + channel.key() +
+                        "']: " + error);
+                }
+                buildPlan.particleDataChannels.emplace(
+                    channel.key(), value);
+            }
+        }
         // gameplay 计划只依赖已校验的场景数据；材质 key 由渲染器资源加载阶段
         // 填充，WorldLoader 不再知道任何渲染类型。
         auto gameplayPlans = WorldGameplayPlanBuilder().Build(

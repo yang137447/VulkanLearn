@@ -1319,6 +1319,14 @@ Test-FilePatternsAbsent `
     ) `
     -RuleName "Pipeline Vulkan creation diagnostics"
 
+Test-DirectoryPatternsAbsent `
+    -Failures $failures `
+    -RelativeDirectory "source/particles" `
+    -Patterns @(
+        '#include\s+"editor/'
+    ) `
+    -RuleName "Particle runtime excludes editor"
+
 Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/pipeline/vulkanPipelineDiagnostics.h" `

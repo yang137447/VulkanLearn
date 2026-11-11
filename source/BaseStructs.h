@@ -90,6 +90,20 @@ struct alignas(16) UBOGlobal
     int environmentType = 0;
     alignas(16) std::array<Eigen::Vector4f, 9> environmentSH{};
     SkyParametersGPU skyParameters;
+    // 局部光阴影（八面体点光 / 透视聚光）。xyz = 灯位置 cm，w = far cm。
+    Eigen::Vector4f localShadowLightPos = Eigen::Vector4f::Zero();
+    // x = mode（0 = 透视/hardware depth，1 = 八面体），y = 八面体象限 0..7，
+    // z = 接收面 bias cm，w 保留。
+    Eigen::Vector4f localShadowParams = Eigen::Vector4f::Zero();
+    // 体积雾参数，字段含义见 shader/glsl/common/uboGlobalFields.glsl。
+    // x=density(1/m) y=heightFalloff(1/m) z=baseHeight(cm) w=anisotropy
+    Eigen::Vector4f fogParams0 = Eigen::Vector4f::Zero();
+    // rgb=albedo，w=intensity
+    Eigen::Vector4f fogParams1 = Eigen::Vector4f::Zero();
+    // x=near(cm) y=far(cm) z=layerCount w=enabled
+    Eigen::Vector4f fogParams2 = Eigen::Vector4f::Zero();
+    // 预留
+    Eigen::Vector4f fogParams3 = Eigen::Vector4f::Zero();
 };
 
 static_assert(offsetof(SkyParametersGPU, sunDirectionIntensity) == 0, "SkyParametersGPU sunDirectionIntensity must match GLSL std140 layout");
@@ -109,6 +123,12 @@ static_assert(offsetof(UBOGlobal, environmentIntensity) == 816, "UBOGlobal envir
 static_assert(offsetof(UBOGlobal, environmentType) == 820, "UBOGlobal environmentType must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, environmentSH) == 832, "UBOGlobal environmentSH must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) == 976, "UBOGlobal skyParameters must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, localShadowLightPos) == 1088, "UBOGlobal localShadowLightPos must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, localShadowParams) == 1104, "UBOGlobal localShadowParams must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, fogParams0) == 1120, "UBOGlobal fogParams0 must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, fogParams1) == 1136, "UBOGlobal fogParams1 must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, fogParams2) == 1152, "UBOGlobal fogParams2 must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, fogParams3) == 1168, "UBOGlobal fogParams3 must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunDirectionIntensity) == 976, "UBOGlobal sunDirectionIntensity must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunColorAngularRadius) == 992, "UBOGlobal sunColorAngularRadius must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, zenithColor) == 1008, "UBOGlobal zenithColor must match GLSL std140 layout");
@@ -152,4 +172,7 @@ struct alignas(16) LightGPU
     Eigen::Vector4f positionRadius;
     Eigen::Vector4f directionPad;
     Eigen::Vector4f coneAngleOuterInnerPadPad;
+    // x = 局部阴影 slice（<0 表示无阴影），y = 1 聚光 / 2 八面体点光，
+    // z = far cm，w = 接收面 bias cm。
+    Eigen::Vector4f shadowParams = Eigen::Vector4f(-1.0f, 0.0f, 0.0f, 0.0f);
 };
