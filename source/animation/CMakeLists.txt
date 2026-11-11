@@ -7,6 +7,11 @@ add_library(vl_animation_assets STATIC
     animationRetarget.cpp
     animationScriptData.cpp
     skeletalPlayback.cpp
+    skeletalPlaybackMovement.cpp
+    skeletalPlaybackNotify.cpp
+    skeletalPlaybackSkinning.cpp
+    skeletalPlaybackSync.cpp
+    skeletalPlaybackTimeline.cpp
     inertialization.cpp
     rootOffset.cpp
     footPlacement.cpp

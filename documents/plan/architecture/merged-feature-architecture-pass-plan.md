@@ -68,12 +68,41 @@ be fixed by moving the whole function; decomposing their bodies is a separate ph
 | A1 | Remove `core/editorBuild.h`, includes/static_asserts and `VL_WITH_EDITOR` definitions | done `33f4948`; editor/game build and smoke |
 | A2a | Mechanical split of `particleRenderer.cpp`: init/pipelines, emitter load, buffers, descriptors, shadow/distortion/soft-depth, global sort | new files <= 1,500; particle smoke |
 | A2b | Decompose `RecordSimulation` | function <= 1,500 or documented exception; particle smoke |
-| A3a | Mechanical split of `particleAsset.cpp`; promote anonymous helpers to an internal header; update all 5 explicit test source lists | new files <= 1,500; asset tests |
-| A3b | Decompose `ValidateEmitter` | function <= 1,500 or documented exception |
+| A3a | Mechanical split of `particleAsset.cpp`; promote shared anonymous helpers to an internal header; update all 5 explicit test source lists | new files <= 1,500 except the two recorded exceptions below; asset tests |
+| A3b | Decompose `ValidateEmitter` **and** `ParseEmitter` | function <= 1,500 or documented exception |
 | A4 | Split `skeletalPlayback.cpp` by sampling/montage timeline, notify, sync group, movement/foot/slope/postprocess, pose/skinning; one owner for `nextPlaybackIdentity` | new files <= 1,500; animation tests |
 | A5 | Fix/re-link `editor_ui_tests` (missing particle panel TU), add action/data string snapshots, then split `particlePanelController.cpp` | tests actually build and pass |
 | A6 | Per-file slices: `renderGraph`, `rendererBackendVulkan`, `uiSubsystem`, `shaderCompiler`, `editorCommandJsonCodec`, `materialInstanceAssetEditorPanel`, `world`, `renderGraphCompiler`, `hairSimulationPass`; defer `runtimeCommandExecutor`/`debugConsole` body decomposition to A6b | per-slice build/tests/smoke |
 | A7 | Docs, AGENTS/routing, boundary rules, diagram JSON, final gates | `validate-docs`, boundary audit, rule index; no `archify` dependency |
+
+### A3a Split Record
+
+`source/particles/particleAsset.cpp` (4,161 non-empty lines) is replaced by one internal
+header plus six translation units. Moved ranges are character-identical to the original
+file; only namespace/`using` scaffolding and one duplicated default argument were changed.
+
+| File | Total lines | Contents |
+|---|---:|---|
+| `particleAssetInternal.h` | 106 | shared declarations for the cross-TU helpers |
+| `particleAssetJsonHelpers.cpp` | 381 | `ReadVec2/3/4(+Tangent)`, `ReadFinite*`, `ReadCountField`, `ReadIntField`, `ReadFrameIndex`, `NormalizeParticleCollisionPlaneNormal`, `SubstituteParticleUserParameters` |
+| `particleAssetCollisionAssets.cpp` | 149 | `BuildParticleCollisionSourceIdentity`, `LoadParticleSdfAsset`, `LoadParticleCollisionMeshAsset` |
+| `particleAssetParseEmitter.cpp` | 1,696 | `ParseEmitter` (documented exception, see below) |
+| `particleAssetValidateEmitter.cpp` | 1,638 | `RequireFinite`, `ValidateEmitter` (documented exception, see below) |
+| `particleAssetModuleSchema.cpp` | 177 | v2 module types, `MergeParticleModuleFields`, `FlattenParticleEmitterV2`, `ParseParticleUserParameters` |
+| `particleAssetLoader.cpp` | 249 | `ParticleAssetLoader::Prepare/ParseJson/Validate` |
+
+Documented exceptions:
+
+- `ValidateEmitter` — 1,604 non-empty lines in one function; A3b owns its body.
+- `ParseEmitter` — 1,657 non-empty lines in one function. The earlier baseline missed it
+  (it listed only four oversized functions), so it also exceeds 1,500. A3a is code motion
+  only; decomposing this body is A3b work now that A3b covers both parsers.
+
+No helper has a second definition: `Read*`/`Normalize*` are defined once in
+`particleAssetJsonHelpers.cpp`, the collision loaders once in
+`particleAssetCollisionAssets.cpp`, and `RequireFinite` stays file-local inside the
+validation TU. Only the symbols another TU calls are declared in
+`particleAssetInternal.h`.
 
 ## Acceptance
 

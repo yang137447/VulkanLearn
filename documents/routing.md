@@ -32,7 +32,7 @@
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationScriptData.*`、`source/world/worldAnimation.cpp`、`source/script/scriptRuntime.cpp`、`tool/animation-tests/animationScriptDataTests.cpp`、`tool/animation-tests/notifyStateTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
-| `source/animation/skeletalPlayback.*`、`source/animation/animationSyncGroup.*`、`source/animation/footPlacement.*`、`source/animation/slopeWarping.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py`、`tool/animation-tests/animationSyncGroupTests.cpp`、`tool/animation-tests/slopeWarpingTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
+| `source/animation/skeletalPlayback*`、`source/animation/animationSyncGroup.*`、`source/animation/footPlacement.*`、`source/animation/slopeWarping.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py`、`tool/animation-tests/animationSyncGroupTests.cpp`、`tool/animation-tests/slopeWarpingTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
 | `source/animation/poseDriver.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_pose_driver.py`、`tool/animation-tests/poseDriverTests.cpp` | `contracts/animation-pose-driver.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
 | `source/animation/postProcess.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_post_process.py`、`tool/animation-tests/postProcessTests.cpp` | `contracts/animation-post-process.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
 | `source/physics/bonePhysics.*`、`source/world/worldAnimation.cpp`、`tool/animation/extract_bone_physics.py`、`tool/physics-runtime-tests/bonePhysicsTests.cpp` | `contracts/animation-bone-physics.md`、`contracts/animation-post-process.md`、`contracts/testing.md` | — |
@@ -104,7 +104,7 @@
 
 `extern/**` 是第三方依赖，除 `extern/BLAKE3` 的锁定说明外不在本表覆盖范围（见"未覆盖路径"）。
 
-warp 消费点：`skeletalPlayback.*` 在 GT tick 内调用原生窗口队列；C# 通过
+warp 消费点：`skeletalPlayback*` 在 GT tick 内调用原生窗口队列；C# 通过
 `PlayMontage(montage, targets)` 只提交 Montage id 与 target 世界位置，
 `worldAnimation.cpp` 解析 `targets` 后由 `animationScriptData.cpp` 按 Montage 资产窗口
 装配并回传 `warp`/`rootMotion`；`scriptPhysics.cpp` 在 Jolt 更新前用

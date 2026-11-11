@@ -21,7 +21,7 @@
 | 持有导入后的 Montage 数据 | `SkeletalAsset::montages` | `source/animation/skeletalPlayback.h` |
 | 按 id 或资源相对路径查找（不改变所有权） | `SkeletalAsset::FindMontage` | `source/animation/skeletalPlayback.cpp` |
 | 执行校验、section/warp 装配、catalog 资产段与 notify feedback | `animationScriptData.*` | `source/animation/animationScriptData.h`、`animationScriptData.cpp` |
-| section 链推进、播放范围切换、notify 扫描 | `SkeletalPlayback::TickMontageSections` / `SetMontageSections` | `source/animation/skeletalPlayback.cpp` |
+| section 链推进、播放范围切换、notify 扫描 | `SkeletalPlayback::TickMontageSections` / `SetMontageSections` | `source/animation/skeletalPlaybackMovement.cpp`、`source/animation/skeletalPlaybackTimeline.cpp` |
 | 按 modelPath 发布 catalog/feedback、接收 `playMontage` 请求 | `World::ScriptAnimationAssets` / `ApplyScriptAnimationRequests` | `source/world/worldAnimation.cpp` |
 | C# 提交面：`PlayMontage`（位置 / `WarpTarget` 两个重载）、`Montage`/`CurveValue`、`State.Notifies`/`State.Montage` | `AnimationPlayback` | `script/VulkanLearn.Runtime/AnimationPlayback.cs` |
 
@@ -529,4 +529,5 @@ C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `
 
 数据层解析与绑定以 `source/animation/animationMontage.*` 为准；播放入口、section 推进与
 拒绝矩阵以 `source/animation/animationScriptData.cpp`、`source/animation/skeletalPlayback.cpp`、
+`source/animation/skeletalPlaybackMovement.cpp`、`source/animation/skeletalPlaybackTimeline.cpp`、
 `source/world/worldAnimation.cpp` 与 `script/VulkanLearn.Runtime/AnimationPlayback.cs` 为准。
