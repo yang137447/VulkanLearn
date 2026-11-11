@@ -5,7 +5,16 @@ namespace VulkanLearn;
 public readonly record struct TimerHandle(ulong Context, ulong Id);
 public readonly record struct SubscriptionHandle(ulong Context, ulong Id);
 public readonly record struct GameEvent(BlueprintHandle Sender, string Name, string Payload);
-public readonly record struct RaycastHit(BlueprintHandle Blueprint, Vector3 Point, Vector3 Normal, float Distance);
+public readonly record struct RaycastHit(
+    BlueprintHandle Blueprint,
+    Vector3 Point,
+    Vector3 Normal,
+    float Distance,
+    // 命中地形时不伪装成蓝图；Terrain 是 placementId（terrain|<name>）。
+    string? Terrain = null)
+{
+    public bool HasBlueprint => !string.IsNullOrEmpty(Blueprint.Id);
+}
 
 // 所有服务属于一个 Blueprint/Play 上下文；只有 live GT 回调可操作，失败回调撤销服务注册和消息。
 public sealed class BlueprintTimers

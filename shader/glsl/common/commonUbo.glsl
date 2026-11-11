@@ -10,6 +10,7 @@ layout(std140, set = 2, binding = 0) uniform UBOModel{
     mat4 previousModel;
     #include "uboSpeedTreeWindFields.glsl"
     vec4 selectionData;
+    vec4 outlineData;
 } uboM;
 
 #endif

@@ -24,7 +24,10 @@ void FreezeOfflineMaterialTextures(OfflineWorldAssets& assets,
         ValidateTextureAssetReference(slot, reference,
             effectiveMaterial.at("material").get<std::string>());
         const auto desc = LoadTextureAssetDesc(reference);
-        const std::string extension = std::filesystem::path(desc.source).extension().string();
+        if (desc.textureArray)
+            throw std::runtime_error("Offline groom/color slots do not accept texture arrays: " + reference);
+        const std::string& source = desc.sources.front();
+        const std::string extension = std::filesystem::path(source).extension().string();
         if (groom &&
             (extension != ".pfm" ||
              desc.transfer != TextureIO::LoadOptions::Transfer::Linear ||
@@ -42,12 +45,12 @@ void FreezeOfflineMaterialTextures(OfflineWorldAssets& assets,
             desc.transfer != TextureIO::LoadOptions::Transfer::Linear)
             throw std::runtime_error("HDR/EXR offline texture must be linear: " + reference);
         const auto descriptorPath = std::filesystem::path(CommonFunction::Path(reference));
-        const auto sourcePath = std::filesystem::path(CommonFunction::Path(desc.source));
+        const auto sourcePath = std::filesystem::path(CommonFunction::Path(source));
         std::ifstream file(sourcePath, std::ios::binary);
-        if (!file) throw std::runtime_error("Cannot open offline image: " + desc.source);
+        if (!file) throw std::runtime_error("Cannot open offline image: " + source);
         auto bytes = std::make_shared<const std::string>(
             std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
-        if (file.bad()) throw std::runtime_error("Cannot read offline image: " + desc.source);
+        if (file.bad()) throw std::runtime_error("Cannot read offline image: " + source);
         const std::string descriptorDigest = ContentHasher::HashFile(descriptorPath).ToHex();
         const std::string sourceDigest = ContentHasher::HashString(*bytes).ToHex();
         if (groom)

@@ -110,7 +110,16 @@ TextureBindingLoadDesc LoadTextureAssetDesc(std::string_view textureAssetPath)
 
     TextureBindingLoadDesc loadDesc;
     loadDesc.assetPath = textureAssetPath;
-    loadDesc.source = textureAssetJson["source"].get<std::string>();
+    loadDesc.textureArray = textureAssetJson.at("type").get<std::string>() == "textureArray";
+    if (loadDesc.textureArray)
+    {
+        for (const auto& source : textureAssetJson.at("sources"))
+            loadDesc.sources.push_back(source.get<std::string>());
+    }
+    else
+    {
+        loadDesc.sources.push_back(textureAssetJson.at("source").get<std::string>());
+    }
     loadDesc.transfer = ParseTextureColorSpace(textureAssetJson["colorSpace"].get<std::string>(), textureAssetPath);
     loadDesc.generateMipmaps = textureAssetJson.value("mipmaps", true);
     loadDesc.filter = ParseTextureFilter(textureAssetJson.value("filter", std::string("linear")), textureAssetPath);
@@ -127,6 +136,7 @@ Texture::CreateDesc ToTextureCreateDesc(const TextureBindingLoadDesc& loadDesc)
     createDesc.generateMipmaps = loadDesc.generateMipmaps;
     createDesc.filter = loadDesc.filter;
     createDesc.wrapMode = loadDesc.wrapMode;
+    createDesc.textureArray = loadDesc.textureArray;
     createDesc.debugName = loadDesc.assetPath;
     return createDesc;
 }
@@ -137,7 +147,14 @@ std::string BuildTextureCacheKey(const TextureBindingLoadDesc& loadDesc)
     std::ostringstream stream;
     stream
         << loadDesc.assetPath
-        << "|source=" << loadDesc.source
+        << "|type=" << (loadDesc.textureArray ? "textureArray" : "texture")
+        << "|sources=";
+    for (size_t index = 0; index < loadDesc.sources.size(); ++index)
+    {
+        if (index != 0) stream << ",";
+        stream << loadDesc.sources[index];
+    }
+    stream
         << "|semantic=" << static_cast<int>(loadDesc.semantic)
         << "|transfer=" << static_cast<int>(loadDesc.transfer)
         << "|mipmaps=" << loadDesc.generateMipmaps

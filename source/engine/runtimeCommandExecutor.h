@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -16,12 +17,13 @@ namespace VL
 {
 
 class DiagnosticsSubsystem;
+class IEditorHost;
 class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
-class WorldTransitionCoordinator;
+class DestructibleRuntimeRegistry;
+class ProjectileRuntime;
 class ScriptRuntimeSubsystem;
-namespace Editor { class SceneDocumentService; }
 
 struct RuntimeCommandExecutionResult
 {
@@ -50,6 +52,13 @@ struct RuntimeCommandExecutionResult
     RuntimeShaderReloadScope shaderReloadScope =
         RuntimeShaderReloadScope::Changed;
     bool shaderCacheStatisticsRequested = false;
+    bool terrainFeedbackStatisticsRequested = false;
+    bool terrainStatisticsRequested = false;
+    bool terrainLayerStatisticsRequested = false;
+    bool terrainLodStatisticsRequested = false;
+    bool terrainChunkStatisticsRequested = false;
+    bool terrainCollisionStatisticsRequested = false;
+    bool quitRequested = false;
     std::optional<OfflineModeCommandFeedback> offlineUiModeFeedback;
 };
 
@@ -66,27 +75,48 @@ public:
         CommandBus& commandBus,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         InputSubsystem* input = nullptr,
         ScriptRuntimeSubsystem* scripts = nullptr,
-        Editor::SceneDocumentService* sceneDocuments = nullptr) const;
+        IEditorHost* editorHost = nullptr,
+        DestructibleRuntimeRegistry* destructibleRuntimes = nullptr,
+        ProjectileRuntime* projectileRuntime = nullptr) const;
 
 private:
+    // `mesh sweep` 的每帧状态：显式命令启动，GT 每帧调用 ExecuteQueuedCommands 时
+    // 推进一次，到时或 actor 消失就停。它不是每帧默认行为，只有命令能激活。
+    // 用 steady_clock 而不是帧计数，避免 30/60/120 Hz 下位移速度不同。
+    struct MeshSweepState
+    {
+        bool active = false;
+        std::string identity;
+        std::string secondIdentity;
+        Eigen::Vector3f startPosition = Eigen::Vector3f::Zero();
+        Eigen::Vector3f secondStartPosition = Eigen::Vector3f::Zero();
+        Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
+        Eigen::Vector3f secondRotation = Eigen::Vector3f::Zero();
+        Eigen::Vector3f scale = Eigen::Vector3f::Ones();
+        Eigen::Vector3f secondScale = Eigen::Vector3f::Ones();
+        Eigen::Vector3f delta = Eigen::Vector3f::Zero();
+        float seconds = 0.0f;
+        std::chrono::steady_clock::time_point started;
+    };
+
     void ExecuteCommand(
         const RuntimeCommand& command,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult,
         InputSubsystem* input,
         ScriptRuntimeSubsystem* scripts,
-        Editor::SceneDocumentService* sceneDocuments) const;
+        IEditorHost* editorHost,
+        DestructibleRuntimeRegistry* destructibleRuntimes,
+        ProjectileRuntime* projectileRuntime) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
@@ -105,7 +135,6 @@ private:
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(
         const RuntimeCommand& command,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult) const;
@@ -122,6 +151,18 @@ private:
         RenderSystem& renderSystem,
         WorldManager& worldManager,
         const DiagnosticsSubsystem& diagnostics) const;
+    // placement 命令执行端：只有这里写 World 的 mesh 根 TRS，也只在 GT 命令边界调用。
+    void ApplyMeshPlacement(
+        const RuntimeCommand& command,
+        WorldManager& worldManager,
+        const DiagnosticsSubsystem& diagnostics) const;
+    // 每个 GT 帧推进一次已激活的 sweep；未激活时零开销。
+    void TickMeshSweep(
+        WorldManager& worldManager,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void CancelMeshSweep(const DiagnosticsSubsystem& diagnostics) const;
+
+    mutable MeshSweepState meshSweep;
 };
 
 } // namespace VL

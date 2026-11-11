@@ -24,7 +24,7 @@
 
 ## 门禁规则怎么引用
 
-`tool/architecture-boundary-audit.ps1`（64 条命名规则）是**可执行的架构契约**。
+`tool/architecture-boundary-audit.ps1`（74 条命名规则）是**可执行的架构契约**。
 在契约或路由里引用规则时，写脚本里 `-RuleName` 的**字面值**，不要写概括或别名 ——
 `tool/validate-docs.py` 会逐字核对，概括会失败。规则正文不要抄进文档，那是会漂移的东西。
 
@@ -46,5 +46,13 @@
 | `material-mesh-pass-composition.md`、`csm-shadow-map-m1.md` | 材质求值/pass 组合与 CSM |
 | `environment-update-scheduler.md`、`texture-asset-json-v1.md`、`asset-organization.md` | 环境更新调度、贴图资产格式、资源组织 |
 | `vl-offline-rendering.md` | 离线渲染核心的所有权与边界 |
+| `scene-wind.md` | 场景全局风对象的 JSON 合同、World 风状态与风时间 tick |
+| `vegetation-instancing.md` | VEG 静态实例资产、实例顶点 ABI、instanced draw 与实例包围盒 |
+| `fracture-core.md` | 纯 CPU 平面/球面破碎、橡皮膜软壳、碎片挤出与体积校验 |
+| `fracture-budget.md` | 可注册 budget class、全场景预算账本、回收优先级与材质降级 |
+| `softbody-runtime.md` | `balloon` 场景对象、GT 橡皮软体、动态网格发布与爆裂软片 |
+| `glass-fracture-runtime.md` | `glassPane` 场景对象、径向裂纹/局部破碎、Jolt 凸包、支撑岛与二次碎裂 |
+| `projectile-shooting-runtime.md` | 共享冲击世界、role/contact/profile 事件、可见箭矢与试玩关卡 |
+| `audio-runtime.md` | 32 voice 全局预算、块混音、等功率 pan、距离衰减与距离低通；WAV 资产加载、重采样与程序化回退 |
 | `debug-runtime-commands.md` | 控制台调试命令 |
 | `diagrams/` | 架构图的 IR 源与产物，见其 `README.md` |

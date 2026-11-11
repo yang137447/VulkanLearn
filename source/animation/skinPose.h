@@ -11,6 +11,12 @@ namespace VL::Animation
 struct SkinPose
 {
     std::vector<Eigen::Matrix4f> matrices;
+    // 与 section 无关的全局 bind→pose：models[joint] * inverse(restModel[joint])。
+    // matrices 是逐 section 的 models[joint] * inverseBind[joint]；section 没有
+    // 引用的关节会保留单位 inverseBind，其值退化为绝对 model 矩阵，不能跨
+    // section 使用。TressFX 代理权重可能引用多个 body section 的关节，因此
+    // 碰撞/胶囊使用这份全骨架矩阵。仅当 BuildSkinPose 收到 joints 时填充。
+    std::vector<Eigen::Matrix4f> bindToPoseMatrices;
     Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
     uint64_t discontinuity = 0;

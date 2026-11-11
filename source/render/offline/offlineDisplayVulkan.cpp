@@ -142,11 +142,11 @@ void OfflineDisplayVulkan::CreatePipeline()
         state.bDepthTestEnable = false;
         state.bDepthWriteEnable = false;
         state.cullMode = vk::CullModeFlagBits::eNone;
-        const vk::VertexInputBindingDescription binding;
+        const std::vector<vk::VertexInputBindingDescription> bindings;
         const std::vector<vk::VertexInputAttributeDescription> attributes;
         const std::string name = "Offline display";
         GraphicsPipelineBuildDesc desc{
-            renderPass, pipelineLayout, stages, binding, attributes, name,
+            renderPass, pipelineLayout, stages, bindings, attributes, name,
             vk::SampleCountFlagBits::e1, 1, state, false};
         const auto result = backend->BuildGraphicsPipeline(desc);
         pipeline = result.graphicsPipeline;

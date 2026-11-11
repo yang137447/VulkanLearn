@@ -68,12 +68,12 @@ namespace
         return {value.x(), value.y(), value.z()};
     }
 
-    nlohmann::json ToJson(const SpeedTreeWindCurve& curve)
+    nlohmann::json ToJson(const WindResponseCurve& curve)
     {
         return nlohmann::json(curve.values);
     }
 
-    nlohmann::json ToJson(const SpeedTreeWindBranchConfig& branch)
+    nlohmann::json ToJson(const WindResponseLayer& branch)
     {
         return {
             {"bend", ToJson(branch.bend)},
@@ -84,7 +84,7 @@ namespace
             {"independence", branch.independence}};
     }
 
-    nlohmann::json ToJson(const SpeedTreeWindRippleConfig& ripple)
+    nlohmann::json ToJson(const WindResponseRipple& ripple)
     {
         return {
             {"planar", ToJson(ripple.planar)},
@@ -95,7 +95,7 @@ namespace
             {"independence", ripple.independence}};
     }
 
-    nlohmann::json ToJson(const SpeedTreeWindConfig& wind)
+    nlohmann::json ToJson(const WindResponse& wind)
     {
         return {
             {"common", {
@@ -851,7 +851,7 @@ namespace
     }
 
     void CopySdkBranchConfig(
-        const SpeedTreeWindBranchConfig& source,
+        const WindResponseLayer& source,
         SpeedTree::SConfigRuntimeSdk::SBranchWindLevel& target)
     {
         for (size_t i = 0; i < 20; ++i)
@@ -865,9 +865,9 @@ namespace
         target.m_fIndependence = source.independence;
     }
 
-    SpeedTreeWindConfig MakeValidationConfig()
+    WindResponse MakeValidationConfig()
     {
-        SpeedTreeWindConfig config;
+        WindResponse config;
         config.common.strengthResponse = 1.7f;
         config.common.directionResponse = 2.3f;
         config.common.gustFrequency = 0.0f;
@@ -918,7 +918,7 @@ namespace
     }
 
     SpeedTree::SConfigRuntimeSdk MakeSdkConfig(
-        const SpeedTreeWindConfig& source,
+        const WindResponse& source,
         const Vec3& sourceBoundsMin,
         const Vec3& sourceBoundsMax)
     {
@@ -2135,11 +2135,11 @@ namespace
     }
 
     void ValidateGustDisableReset(
-        const SpeedTreeWindConfig& sourceConfig,
+        const WindResponse& sourceConfig,
         const Vec3& sourceBoundsMin,
         const Vec3& sourceBoundsMax)
     {
-        SpeedTreeWindConfig config = sourceConfig;
+        WindResponse config = sourceConfig;
         config.common.gustFrequency = 0.0f;
         config.common.gustStrengthMin = 0.4f;
         config.common.gustStrengthMax = 0.4f;
@@ -2164,11 +2164,11 @@ namespace
     }
 
     void ValidateQuaternionDirectionResponse(
-        const SpeedTreeWindConfig& sourceConfig,
+        const WindResponse& sourceConfig,
         const Vec3& sourceBoundsMin,
         const Vec3& sourceBoundsMax)
     {
-        SpeedTreeWindConfig config = sourceConfig;
+        WindResponse config = sourceConfig;
         config.common.directionResponse = 2.0f;
         config.common.gustFrequency = 0.0f;
 
@@ -2237,26 +2237,26 @@ namespace
     }
 
     void ValidateMultipleWindProfiles(
-        const SpeedTreeWindConfig& oakConfig,
+        const WindResponse& oakConfig,
         const Vec3& sourceBoundsMin,
         const Vec3& sourceBoundsMax)
     {
-        SpeedTreeWindProfile oakProfile;
+        WindResponseProfile oakProfile;
         oakProfile.key = "oak";
         oakProfile.config = oakConfig;
         oakProfile.sourceBoundsMin = sourceBoundsMin;
         oakProfile.sourceBoundsMax = sourceBoundsMax;
 
-        SpeedTreeWindProfile secondProfile = oakProfile;
+        WindResponseProfile secondProfile = oakProfile;
         secondProfile.key = "second-species";
         secondProfile.config.branch1StretchLimit += 3.0f;
         secondProfile.sourceBoundsMax.x() += 5.0f;
 
-        std::unordered_map<std::string, SpeedTreeWindProfile> profiles;
+        std::unordered_map<std::string, WindResponseProfile> profiles;
         profiles.emplace(oakProfile.key, oakProfile);
         profiles.emplace(secondProfile.key, secondProfile);
 
-        SpeedTreeWindProfileSet profileSet;
+        WindResponseProfileSet profileSet;
         profileSet.Configure(profiles);
         if (profileSet.GetProfileCount() != 2 ||
             profileSet.FindGpuState("missing") != nullptr ||
@@ -2405,7 +2405,7 @@ int RunSpeedTreeWindValidation(int argc, char** argv)
         }
         PrintConnectivitySummary(source.modelResource);
 
-        const SpeedTreeWindConfig& validationConfig =
+        const WindResponse& validationConfig =
             source.modelResource.speedTreeWind;
         ValidateObjectLocalWindDirectionTransform();
         ValidateQuaternionDirectionResponse(

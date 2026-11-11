@@ -17,6 +17,7 @@
 #include <RmlUi/Core/Event.h>
 
 #include "ui/widgets/text/textWidgets.h"
+#include "ui/widgets/navigation/tabWidgets.h"
 
 namespace VL::EditorUi
 {
@@ -33,6 +34,8 @@ std::string BodyId(const std::string& panel)
     if (panel == "details") return "editor-inspector";
     if (panel == "content") return "content-browser-page";
     if (panel == "log") return "log-page";
+    if (panel == "terrain") return "terrain-page";
+    if (panel == "performance") return "performance-page";
     if (panel.rfind("resource:material:", 0) == 0) return "material-editor";
     if (panel == "resource" || DockWorkspace::IsResourceDocumentPanel(panel))
         return "resource-editor";
@@ -46,6 +49,8 @@ std::string TabId(const std::string& panel)
     if (panel == "details") return "workspace-details-tab";
     if (panel == "content") return "workspace-content-tab";
     if (panel == "log") return "workspace-log-tab";
+    if (panel == "terrain") return "workspace-terrain-tab";
+    if (panel == "performance") return "workspace-performance-tab";
     if (panel == "resource") return "workspace-resource-tab";
     if (DockWorkspace::IsResourceDocumentPanel(panel))
         return "workspace-resource-tab-" + panel.substr(9);
@@ -65,6 +70,8 @@ std::string BaseTabMarkup(const std::string& panel)
     if (panel == "content") return "<span>Content Browser</span>";
     if (panel == "renderer") return "<span>Renderer</span>";
     if (panel == "log") return "<span>Log</span>";
+    if (panel == "terrain") return "<span>Landscape</span>";
+    if (panel == "performance") return "<span>Performance</span>";
     return "<img id=\"workspace-resource-icon\" src=\"icons/file-box.png\"/>"
         "<span id=\"workspace-resource-label\">Asset Editor</span>";
 }
@@ -76,12 +83,9 @@ std::string ResourceTabMarkup(const EditorDockResourceTab& tab)
     const std::string label = tab.label.empty()
         ? std::filesystem::path(tab.path).filename().string()
         : tab.label;
-    std::string markup = "<img class=\"resource-tab-icon\" src=\"" + Text(tab.icon) +
-        "\"/><span class=\"resource-tab-label\">" + Text(label) + "</span>";
-    if (tab.documentIndex >= 0)
-        markup += "<span class=\"tab-close\" data-action=\"close\" data-index=\"" +
-            std::to_string(tab.documentIndex) + "\" title=\"Close Material Instance\">x</span>";
-    return markup;
+    const size_t index = tab.documentIndex >= 0 ? static_cast<size_t>(tab.documentIndex) : 0;
+    return DocumentTabContent(label, {"workspace-tab", index, 0, tab.panel},
+        {"close", index, 0, tab.panel}, false, tab.icon);
 }
 
 // 每个标签的内容都在这里生成，且**永不产出空标签**：resource 文档面板若在 resourceTabs
@@ -277,10 +281,11 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
         const Json data = Json::parse(stream);
         // "hidden" 是可选字段：旧文件没有它时表示没有任何面板被隐藏。
         if (!data.is_object() || (data.size() != 3 && data.size() != 4) ||
-            (data.at("version") != 1 && data.at("version") != 2) ||
+            (data.at("version") != 1 && data.at("version") != 2 && data.at("version") != 3) ||
             !data.at("floating").is_array() ||
             data.at("floating").size() > 32)
             throw std::runtime_error("Unsupported workspace format.");
+        const int version = data.at("version").get<int>();
         std::vector<std::string> candidateHidden;
         if (data.contains("hidden"))
         {
@@ -327,8 +332,8 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
             candidate.nodes.at(viewportStack).tabs.push_back("resource");
         NormalizeResourcePanels(candidate);
         // v1 缺少 Log 时仅向 Content 标签组追加，不改旧分栏比例、活动页或隐藏状态。
-        // v2 要求 Log 已存在；损坏的新布局不能借迁移静默补齐缺失面板。
-        if (data.at("version") == 1)
+        // v2/v3 要求 Log 已存在；损坏的新布局不能借迁移静默补齐缺失面板。
+        if (version == 1)
         {
             bool hasLog = false;
             uint32_t contentStack = 0;
@@ -342,6 +347,36 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
                 }
             }
             if (!hasLog && contentStack != 0) candidate.nodes.at(contentStack).tabs.push_back("log");
+        }
+        // v1/v2 没有 Landscape 常驻页：只向 Content 组追加，保留旧分栏比例、活动页和浮动状态。
+        // v3 不迁移，缺页由 DockWorkspace::Validate 按完整常驻面板集合严格拒绝。
+        if (version < 3)
+        {
+            bool hasTerrain = false;
+            bool hasPerformance = false;
+            uint32_t contentStack = 0;
+            uint32_t firstStack = 0;
+            for (const auto& item : candidate.nodes)
+            {
+                if (item.second.IsSplit()) continue;
+                if (firstStack == 0) firstStack = item.first;
+                for (const auto& panel : item.second.tabs)
+                {
+                    if (panel == "content") contentStack = item.first;
+                    if (panel == "terrain") hasTerrain = true;
+                    if (panel == "performance") hasPerformance = true;
+                }
+            }
+            if (!hasTerrain)
+            {
+                const uint32_t target = contentStack != 0 ? contentStack : firstStack;
+                if (target != 0) candidate.nodes.at(target).tabs.push_back("terrain");
+            }
+            if (!hasPerformance)
+            {
+                const uint32_t target = contentStack != 0 ? contentStack : firstStack;
+                if (target != 0) candidate.nodes.at(target).tabs.push_back("performance");
+            }
         }
         if (HidesEveryPanel(candidate, candidateHidden))
             throw std::runtime_error("Workspace hides every panel.");
@@ -370,7 +405,7 @@ bool WriteWorkspaceLayout(const std::filesystem::path& path, const DockLayoutSta
         for (const auto& item : persisted.floating)
             floating.push_back({{"stack", EncodeNode(persisted, item.node)},
                 {"rect", {item.rect.x, item.rect.y, item.rect.width, item.rect.height}}});
-        Json data{{"version", 2}, {"root", EncodeNode(persisted, persisted.root)}, {"floating", floating}};
+        Json data{{"version", 3}, {"root", EncodeNode(persisted, persisted.root)}, {"floating", floating}};
         // 只在确实有隐藏面板时写字段，旧读取方仍能解析没有该键的文件。
         if (hidden != nullptr && !hidden->empty()) data["hidden"] = *hidden;
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
@@ -650,12 +685,11 @@ void EditorDockingController::RebuildShell()
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
     {
-        resourceMarkup += "<button id=\"" + TabId(tab.panel) +
+        resourceMarkup += "<div id=\"" + TabId(tab.panel) +
             "\" data-workspace-panel=\"" + Text(tab.panel) +
-            "\" title=\"" + Text(tab.path) + "\" class=\"workspace-asset-tab " +
-            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">";
-        resourceMarkup += "<img src=\"" + Text(tab.icon) +
-            "\"/><span>" + Text(tab.label) + "</span></button>";
+            "\" title=\"" + Text(tab.path) + "\" class=\"document-tab workspace-asset-tab " +
+            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">" +
+            ResourceTabMarkup(tab) + "</div>";
     }
     document->GetElementById("dock-dynamic-tabs")->SetInnerRML(resourceMarkup);
     std::string markup;
@@ -703,15 +737,33 @@ void EditorDockingController::RebuildShell()
     structureDirty = false;
 }
 
+uint32_t EditorDockingController::ExpandedAssetStack() const
+{
+    for (const auto& tab : resourceTabs)
+        if (tab.panel == activeWorkspacePanel && IsPanelVisible(tab.panel))
+        {
+            const uint32_t stack = workspace.FindStack(tab.panel);
+            if (stack && workspace.State().nodes.at(stack).active == tab.panel) return stack;
+        }
+    return 0;
+}
+
 void EditorDockingController::ApplyGeometry()
 {
     const std::vector<uint32_t> collapsed = CollapsedStacks();
-    geometry = workspace.Layout(Bounds(), collapsed);
+    const uint32_t expanded = ExpandedAssetStack();
+    geometry = workspace.Layout(Bounds(), collapsed, expanded);
     // 整组隐藏的标签组不进入几何，也不渲染成空灰框；重新显示时由下一次 Sync 放回原位。
     for (const auto& item : workspace.State().nodes)
     {
-        if (item.second.IsSplit()) continue;
-        const bool folded = std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
+        if (item.second.IsSplit())
+        {
+            widgets.SetProperty("dock-split-" + std::to_string(item.first),
+                "display", expanded ? "none" : "block");
+            continue;
+        }
+        const bool folded = expanded ? item.first != expanded :
+            std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
         widgets.SetProperty("dock-stack-" + std::to_string(item.first), "display", folded ? "none" : "flex");
     }
     int floatingZ = 5;
@@ -741,13 +793,15 @@ void EditorDockingController::ApplyGeometry()
 void EditorDockingController::ApplyTabs()
 {
     std::unordered_map<std::string, bool> bodyActive;
+    const uint32_t expanded = ExpandedAssetStack();
     for (const auto& item : workspace.State().nodes)
     {
         if (item.second.IsSplit()) continue;
         for (const auto& panel : item.second.tabs)
         {
             const bool visible = IsPanelVisible(panel);
-            const bool active = visible && item.second.active == panel;
+            const bool active = visible && item.second.active == panel &&
+                (expanded == 0 || expanded == item.first);
             const std::string bodyId = BodyId(panel);
             bodyActive[bodyId] = bodyActive[bodyId] || active;
             widgets.SetClass(TabId(panel), "selected", active);
@@ -854,14 +908,68 @@ std::string EditorDockingController::ConsumeActivatedPanel()
     return result;
 }
 
+namespace
+{
+
+bool SubtreeContainsPanel(
+    const UiWidgets::DockLayoutState& state,
+    uint32_t nodeId,
+    const std::string& panel)
+{
+    const auto found = state.nodes.find(nodeId);
+    if (found == state.nodes.end()) return false;
+    if (!found->second.IsSplit())
+        return std::find(found->second.tabs.begin(), found->second.tabs.end(), panel) !=
+            found->second.tabs.end();
+    return SubtreeContainsPanel(state, found->second.first, panel) ||
+        SubtreeContainsPanel(state, found->second.second, panel);
+}
+
+} // namespace
+
+void EditorDockingController::EnsureTerrainPanelRoom()
+{
+    if (!document) return;
+    // Landscape 是内容型面板，220px 默认底栏放不下笔刷库和层库；首次切到该页时
+    // 把包含它的垂直分栏扩到约 300px。用户之后仍可自由拖动分隔条。
+    for (const auto& splitter : geometry.splitters)
+    {
+        const auto found = workspace.State().nodes.find(splitter.node);
+        if (found == workspace.State().nodes.end() || found->second.IsSplit() == false)
+            continue;
+        const auto& node = found->second;
+        if (node.axis != UiWidgets::DockAxis::Vertical) continue;
+        if (!SubtreeContainsPanel(workspace.State(), node.first, "viewport") ||
+            !SubtreeContainsPanel(workspace.State(), node.second, "terrain"))
+            continue;
+        const float currentBottom =
+            splitter.parentRect.height - node.ratio * splitter.parentRect.height;
+        if (currentBottom >= 260.0f) return;
+        const float firstExtent =
+            std::max(0.0f, splitter.parentRect.height - 300.0f);
+        if (workspace.ResizeSplit(splitter.node, firstExtent, splitter.parentRect))
+        {
+            structureDirty = true;
+            savePending = true;
+        }
+        return;
+    }
+}
+
 void EditorDockingController::Activate(const std::string& panel)
 {
     // 隐藏面板不接受激活：同组若还有可见标签，激活权必须留在可见的那一个上。
     if (!IsPanelVisible(panel)) return;
     if (workspace.Activate(panel))
     {
+        activeWorkspacePanel = panel;
         savePending = true;
-        if (document != nullptr) ApplyTabs();
+        if (document != nullptr)
+        {
+            ApplyGeometry();
+            ApplyTabs();
+        }
+        if (panel == "terrain") EnsureTerrainPanelRoom();
     }
 }
 
@@ -872,9 +980,19 @@ std::string EditorDockingController::ResourcePathForPanel(const std::string& pan
     return {};
 }
 
+std::string EditorDockingController::PanelAfterClose(const std::string& panel) const
+{
+    if (!IsPanelActive(panel)) return {};
+    std::vector<std::string> eligible;
+    for (const auto& tab : resourceTabs)
+        if (IsPanelVisible(tab.panel)) eligible.push_back(tab.panel);
+    return workspace.TabAfterClose(panel, eligible, "viewport");
+}
+
 void EditorDockingController::Reset()
 {
     CancelDrag();
+    activeWorkspacePanel = "viewport";
     workspace.Reset();
     std::vector<std::string> panels;
     for (const auto& tab : resourceTabs) panels.push_back(tab.panel);
@@ -1049,6 +1167,14 @@ UiViewportRect EditorDockingController::GetSceneViewportRect() const
     auto* image = document->GetElementById("material-preview-image");
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("resource-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+        image = document->GetElementById("retarget-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+    {
+        auto* retargetSurface = document->GetElementById("retarget-preview-surface");
+        if (retargetSurface != nullptr && retargetSurface->IsVisible(true))
+            image = retargetSurface;
+    }
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("blueprint-asset-preview-surface");
     if (image == nullptr || !image->IsVisible(true))

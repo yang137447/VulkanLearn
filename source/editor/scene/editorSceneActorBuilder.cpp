@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,8 +12,10 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "world/worldWind.h"
 #include "script/scriptScene.h"
 #include "script/scriptComponents.h"
+#include "terrain/terrainAssetTypes.h"
 
 namespace VL
 {
@@ -22,8 +25,9 @@ namespace
 using EditorUi::EditorSceneActorSnapshot;
 using EditorUi::EditorSceneActorType;
 
-// 一个场景对象（sceneObjectIdentity）聚合出的 mesh actor：section 按 World meshObjects
-// 的键（对象名）排序，保证多 section 模型的行顺序不依赖 unordered_map 的遍历顺序。
+// 一个场景对象（sceneObjectIdentity）聚合出的 mesh/terrain actor：section 按 World
+// meshObjects 的键（对象名）排序，保证多 section 模型的行顺序不依赖 unordered_map
+// 的遍历顺序。
 struct MeshActorGroup
 {
     std::string sceneObjectIdentity;
@@ -35,13 +39,17 @@ std::string SceneObjectIdentity(const WorldMeshObject& object, const std::string
     return MeshSceneObjectIdentity(object, objectName);
 }
 
-std::vector<MeshActorGroup> CollectMeshGroups(const World& world)
+std::vector<MeshActorGroup> CollectMeshGroups(const World& world, bool terrain)
 {
     std::map<std::string, MeshActorGroup> sorted;
     for (const auto& entry : world.GetMeshObjects())
     {
-        MeshActorGroup& group = sorted[SceneObjectIdentity(entry.second, entry.first)];
-        group.sceneObjectIdentity = SceneObjectIdentity(entry.second, entry.first);
+        // 地形在 World 中仍是 chunk mesh；isTerrain 只决定编辑器 actor 归组，
+        // 避免同一场景对象同时产生 Mesh 与 Terrain 两行。
+        if (entry.second.isTerrain != terrain) continue;
+        const std::string identity = SceneObjectIdentity(entry.second, entry.first);
+        MeshActorGroup& group = sorted[identity];
+        group.sceneObjectIdentity = identity;
         group.sections.push_back({entry.first, &entry.second});
     }
 
@@ -56,13 +64,14 @@ std::vector<MeshActorGroup> CollectMeshGroups(const World& world)
     return groups;
 }
 
-EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup& group)
+EditorSceneActorSnapshot BuildMeshLikeActor(
+    const World& world, const MeshActorGroup& group, EditorSceneActorType type)
 {
     EditorSceneActorSnapshot actor;
-    actor.type = EditorSceneActorType::Mesh;
+    actor.type = type;
     actor.worldGeneration = world.GetGeneration();
     actor.scenePath = world.GetScenePath();
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::Mesh, group.sceneObjectIdentity);
+    actor.identity = EditorUi::SceneActorIdentity(type, group.sceneObjectIdentity);
     actor.displayName = group.sceneObjectIdentity;
     actor.sceneObjectIdentity = group.sceneObjectIdentity;
     if (!group.sections.empty())
@@ -70,6 +79,8 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         actor.position = group.sections.front().second->scenePosition;
         actor.rotation = group.sections.front().second->sceneRotation;
         actor.scale = group.sections.front().second->sceneScale;
+        if (type == EditorSceneActorType::Terrain)
+            actor.terrainAssetPath = group.sections.front().second->terrainAssetPath;
     }
     actor.sections.reserve(group.sections.size());
     for (const auto& entry : group.sections)
@@ -77,24 +88,50 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         const WorldMeshObject& object = *entry.second;
         EditorUi::EditorSceneMeshSectionSnapshot section;
         section.objectName = entry.first;
-        // RuntimeId 必须由 WorldObjectRuntimeId 派生：它是选择描边命中 draw packet 的唯一依据。
-        section.objectId = WorldObjectRuntimeId(world, entry.first);
+        // RuntimeId 必须与快照 draw packet 同源：地形 LOD 组的各级共享
+        // lodGroupId 派生的 id，级切换不会让编辑器描边失配。
+        section.objectId = WorldMeshObjectRuntimeId(world, entry.first, object);
         section.meshKey = object.meshKey;
         section.materialKey = object.materialKey;
         section.materialInstancePath = object.materialInstanceKey;
         section.materialSlotIndex = object.materialSlotIndex;
         section.materialSlotName = object.materialSlotName;
-        section.windProfileKey = object.speedTreeWindProfileKey;
+        section.tressfxRootCloud = object.tressfxRootCloud;
+        section.tressfxGroupBinding = object.tressfxGroupBinding;
+        section.tressfxGroupConfigs = object.tressfxGroupConfigs;
+        section.tressfxRootLocalToWorld = object.model;
         actor.sections.push_back(std::move(section));
     }
     // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
-    // 与渲染快照仍画出这些 section 的事实一致。写入端
-    // （World::SetMeshSceneObjectVisible）按同一身份一次写全所有 section，
-    // 因此这个"任一可见"的读数在点击之后与整行状态必然一致。
+    // 与渲染快照仍画出这些 section 的事实一致。写入端按 isTerrain 选择
+    // SetMeshSceneObjectVisible 或 SetTerrainSceneObjectVisible，并一次写全
+    // 同类型的所有 section，因此这个"任一可见"读数在点击后与整行状态一致。
     actor.visible = std::any_of(group.sections.begin(), group.sections.end(),
         [](const auto& entry) { return entry.second->visible; });
     // 模型级 id 取排序后的第一个 section：选择时整模型高亮走的是同一个 RuntimeId。
     actor.meshObjectId = actor.sections.empty() ? 0 : actor.sections.front().objectId;
+    return actor;
+}
+
+EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup& group)
+{
+    return BuildMeshLikeActor(world, group, EditorSceneActorType::Mesh);
+}
+
+EditorSceneActorSnapshot BuildTerrainActor(const World& world, const MeshActorGroup& group)
+{
+    EditorSceneActorSnapshot actor =
+        BuildMeshLikeActor(world, group, EditorSceneActorType::Terrain);
+    // placementId 与大纲稳定身份同源：terrain|<scene object name>。同一 TR 多次
+    // 摆放时不能按 assetPath 选错计划，因此这里只按 placementId 匹配。
+    for (const TerrainCollisionInstance& instance : world.GetTerrainCollisionInstances())
+        if (instance.placementId == actor.identity)
+        {
+            actor.terrainPlan = std::make_shared<const TerrainBuildPlan>(instance.plan);
+            if (actor.terrainAssetPath.empty())
+                actor.terrainAssetPath = instance.plan.desc.assetPath;
+            break;
+        }
     return actor;
 }
 
@@ -166,35 +203,24 @@ EditorSceneActorSnapshot BuildEnvironmentActor(const World& world)
     return actor;
 }
 
-EditorSceneActorSnapshot BuildWindActor(const World& world, const SpeedTreeWindProfile& profile)
+EditorSceneActorSnapshot BuildSceneWindActor(const World& world)
 {
-    const SpeedTreeWindConfig& config = profile.config;
+    const WorldWind& wind = world.GetWind();
     EditorSceneActorSnapshot actor;
-    actor.type = EditorSceneActorType::WindProfile;
+    actor.type = EditorSceneActorType::SceneWind;
     actor.worldGeneration = world.GetGeneration();
     actor.scenePath = world.GetScenePath();
-    actor.displayName = profile.key;
-    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::WindProfile, profile.key);
-    actor.wind.key = profile.key;
-    actor.wind.sourceBoundsMin = profile.sourceBoundsMin;
-    actor.wind.sourceBoundsMax = profile.sourceBoundsMax;
-    actor.wind.strengthResponse = config.common.strengthResponse;
-    actor.wind.directionResponse = config.common.directionResponse;
-    actor.wind.gustFrequency = config.common.gustFrequency;
-    actor.wind.gustStrengthMin = config.common.gustStrengthMin;
-    actor.wind.gustStrengthMax = config.common.gustStrengthMax;
-    actor.wind.gustDurationMin = config.common.gustDurationMin;
-    actor.wind.gustDurationMax = config.common.gustDurationMax;
-    actor.wind.gustRiseScalar = config.common.gustRiseScalar;
-    actor.wind.gustFallScalar = config.common.gustFallScalar;
-    actor.wind.sharedStartHeight = config.sharedStartHeight;
-    actor.wind.branch1StretchLimit = config.branch1StretchLimit;
-    actor.wind.branch2StretchLimit = config.branch2StretchLimit;
-    actor.wind.doShared = config.doShared;
-    actor.wind.doBranch1 = config.doBranch1;
-    actor.wind.doBranch2 = config.doBranch2;
-    actor.wind.doRipple = config.doRipple;
-    actor.wind.doShimmer = config.doShimmer;
+    // 身份使用场景 JSON 的作者 name；全场景至多一个 wind 对象，名字唯一即可稳定定位。
+    actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::SceneWind, wind.name);
+    actor.displayName = wind.name;
+    // 场景风是全局状态，没有渲染侧可见性开关。
+    actor.visible = true;
+    actor.worldWind.direction = wind.direction;
+    actor.worldWind.strengthCmPerSec = wind.strength;
+    actor.worldWind.gustEnabled = wind.gust.enabled;
+    actor.worldWind.gustAmplitude = wind.gust.amplitude;
+    actor.worldWind.gustFrequency = wind.gust.frequency;
+    actor.worldWind.gustTurbulence = wind.gust.turbulence;
     return actor;
 }
 
@@ -204,9 +230,12 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
 {
     std::vector<EditorSceneActorSnapshot> actors;
 
-    for (const MeshActorGroup& group : CollectMeshGroups(world))
+    for (const MeshActorGroup& group : CollectMeshGroups(world, false))
         if (group.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
             actors.push_back(BuildMeshActor(world, group));
+    for (const MeshActorGroup& group : CollectMeshGroups(world, true))
+        if (group.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
+            actors.push_back(BuildTerrainActor(world, group));
 
     auto declarations = world.GetScriptBlueprints();
     for (const auto& state : world.GetScriptBlueprintStates())
@@ -327,8 +356,12 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
 
     actors.push_back(BuildEnvironmentActor(world));
 
-    for (const auto& entry : world.GetSpeedTreeWindProfiles())
-        actors.push_back(BuildWindActor(world, entry.second));
+    // 场景 JSON 没有作者标记，无法区分"没写 wind"与"写了零风"：默认零风
+    //（强度 0 且阵风关闭）不产生一行空的 Scene Wind，有风时才发布这一行。
+    const WorldWind& worldWind = world.GetWind();
+    // 作者显式写了零风也要保留行，否则把强度拖到 0 后 actor 消失、无法再调回来。
+    if (worldWind.authored)
+        actors.push_back(BuildSceneWindActor(world));
 
     return actors;
 }

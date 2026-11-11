@@ -17,7 +17,7 @@
 
 #include "core/runtimeResult.h"
 #include "shader/reload/shaderReloadRuntime.h"
-#include "world/loading/worldGraphTransactionCoordinator.h"
+#include "engine/worldGraphTransactionCoordinator.h"
 #include "world/worldManager.h"
 
 namespace VL

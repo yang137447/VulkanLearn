@@ -4,10 +4,13 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include "render/rhi/presentMode.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -74,6 +77,9 @@ struct RendererFrameContext
     uint32_t frameIndex = 0;
     uint32_t swapchainImageIndex = 0;
     uint32_t swapchainImageCount = 0;
+    // 本帧 BeginFrame 等到该 frameIndex 的 fence 后，从 ring 中取出的上一提交 epoch；
+    // 0 表示该槽没有待消费的旧 epoch。streaming 用它判断 feedback/上传槽是否可复用。
+    uint64_t completedEpoch = 0;
     vk::CommandBuffer commandBuffer;
     bool ready = false;
 };
@@ -87,7 +93,10 @@ public:
     RendererBackendVulkan();
     ~RendererBackendVulkan();
 
-    void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
+    void Initialize(
+        std::vector<const char*>& instanceExtensions,
+        SDL_Window* window,
+        VL::PresentModePreference presentMode);
     void WaitIdle();
     RendererBackendResourceIdentityCounts
         CaptureResourceIdentityCounts() const noexcept;
@@ -123,6 +132,7 @@ public:
     bool CompleteSwapchainScreenshot(std::string& outError);
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    bool SupportsTimestampQueries();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
     vk::QueryPool CreateTimestampQueryPool(
@@ -130,6 +140,10 @@ public:
         const std::string& debugName);
     void DestroyQueryPool(vk::QueryPool& queryPool);
     void ReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
+    bool TryReadTimestampQueryPair(
         vk::QueryPool queryPool,
         uint32_t firstQuery,
         std::array<uint64_t, 2>& timestamps);
@@ -147,7 +161,17 @@ public:
         vk::DeviceSize bufferSize,
         vk::BufferUsageFlags usage,
         vk::MemoryPropertyFlags memoryPropertyFlags,
-        const std::string& debugNamePrefix);
+        const std::string& debugNamePrefix,
+        bool mapMemory = true);
+    // 单个 buffer 的资源包，供不需要逐 swapchain 分槽的 device-local 输出使用；
+    // handle/raw/info 的存放方式与 CreatePerSwapchainBufferSet 一致。
+    void CreateBufferSet(
+        Buffer& bufferSet,
+        vk::DeviceSize bufferSize,
+        vk::BufferUsageFlags usage,
+        vk::MemoryPropertyFlags memoryPropertyFlags,
+        const std::string& debugName,
+        bool mapMemory = true);
     void DestroyBufferSet(Buffer& bufferSet);
     void SetupDescriptorBufferInfos(Buffer& bufferSet);
     std::pair<vk::Image, vk::DeviceMemory> CreateImage(
@@ -169,13 +193,18 @@ public:
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout);
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     vk::ImageView Create2DImageView(
         vk::Image image,
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageAspectFlags aspectMask,
         const std::string& debugName);
+    // 创建时记录尺寸：Texture 不保存 extent，L2 源层切页要按真实 mip 尺寸
+    // 裁剪 copy region。未知 image 返回 {0,0}。
+    vk::Extent2D GetImageExtent(vk::Image image) const;
     vk::ImageView CreateImageView(
         vk::Image image,
         vk::ImageViewType viewType,
@@ -220,7 +249,71 @@ public:
         vk::Buffer buffer,
         vk::Image image,
         uint32_t width,
-        uint32_t height);
+        uint32_t height,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0,
+        uint32_t bufferRowLength = 0);
+    // 子区域上传入口；校验与 region 语义由 CommonFunction::CopyBufferToImageRegion 统一负责。
+    void CopyBufferToImageRegion(
+        vk::Buffer buffer,
+        vk::Image image,
+        vk::DeviceSize bufferOffset,
+        uint32_t bufferRowLength,
+        uint32_t imageOffsetX,
+        uint32_t imageOffsetY,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevel,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0);
+    // 批量版本：把所有 region 合并为一次 submit，适合一帧内写入多页 atlas。
+    // 调用方仍负责 image 的 layout transition 与 staging buffer 的存活期。
+    void CopyBufferToImageRegions(
+        vk::Buffer buffer,
+        vk::Image image,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // record-only 版本：由调用方持有主帧 command buffer，本层只做 handle 转发。
+    void RecordTransitionImageLayout(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        uint32_t mipLevels,
+        vk::Format format,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyBufferToImageRegions(
+        vk::CommandBuffer commandBuffer,
+        vk::Buffer buffer,
+        vk::Image image,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // 层 atlas 上传：空数组纹理 clear 与源纹理 -> atlas 的 GPU 切页。
+    void RecordClearColorImage(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        vk::ImageLayout layout,
+        vk::ClearColorValue clearValue,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyImageRegions(
+        vk::CommandBuffer commandBuffer,
+        vk::Image source,
+        vk::Image destination,
+        const std::vector<vk::ImageCopy>& regions);
+    void CopyImageRegions(
+        vk::Image source,
+        vk::Image destination,
+        const std::vector<vk::ImageCopy>& regions);
+    void RecordCopyImageToBuffer(
+        vk::CommandBuffer commandBuffer,
+        vk::Image image,
+        vk::Buffer buffer,
+        uint32_t width,
+        uint32_t height,
+        bool flipY = false,
+        vk::DeviceSize rowBytes = 0);
     void CopyImageToBuffer(
         vk::Image image,
         vk::Buffer buffer,
@@ -232,7 +325,9 @@ public:
         vk::Image image,
         uint32_t width,
         uint32_t height,
-        uint32_t mipLevels);
+        uint32_t mipLevels,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     RHIImageHandle GetImageHandle(vk::Image image) const;
     RHIImageViewHandle GetImageViewHandle(vk::ImageView imageView) const;
     RHISamplerHandle GetSamplerHandle(vk::Sampler sampler) const;
@@ -278,6 +373,9 @@ public:
     void DestroyFramebuffers(std::vector<RHIFramebufferHandle>& framebufferHandles);
     RendererFrameContext BeginFrame(uint32_t currentFrame);
     void SubmitFrame(const RendererFrameContext& frameContext, uint32_t currentFrame);
+    // 帧同步环槽数。feedback/upload ring 必须与它对齐，不能各自猜测
+    // MAX_FRAMES_IN_FLIGHT，否则 swapchain 重建后可能跨槽复用。
+    uint32_t GetFrameFenceCount() const;
 
 private:
     RHIBufferHandle RequireBufferHandle(vk::Buffer buffer) const;
@@ -320,11 +418,15 @@ private:
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
     std::atomic<bool> swapchainRecreateRequired{false};
+    // Protects the raw-handle -> RHI-handle maps plus image debug names/extents.
+    // Never held across RHI map lookups or Vulkan API calls.
+    mutable std::shared_mutex resourceMapMutex;
     std::unordered_map<VkBuffer, RHIBufferHandle> bufferHandlesByBuffer;
     std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;
     std::unordered_map<VkImage, RHIImageHandle> imageHandlesByImage;
     std::unordered_map<VkDeviceMemory, RHIImageHandle> imageHandlesByMemory;
     std::unordered_map<VkImage, std::string> imageDebugNamesByImage;
+    std::unordered_map<VkImage, vk::Extent2D> imageExtentsByImage;
     std::unordered_map<VkImageView, RHIImageViewHandle> imageViewHandlesByImageView;
     std::unordered_map<VkImageView, std::string> imageViewDebugNamesByImageView;
     std::unordered_map<VkSampler, RHISamplerHandle> samplerHandlesBySampler;

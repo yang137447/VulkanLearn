@@ -120,9 +120,6 @@ struct UiViewModelSnapshot
     double environmentShGpuMs = 0.0;
     double environmentPrefilterGpuMs = 0.0;
     double environmentCommitGpuMs = 0.0;
-    float speedTreeStrength = 0.35f;
-    bool speedTreeGustingEnabled = true;
-    uint32_t speedTreeWindProfileCount = 0;
     bool developerUiVisible = false;
     // 编辑器参考网格是显示偏好；Play/Pause 只关闭绘制，不禁用或忘记这个值。
     bool editorGridVisible = true;

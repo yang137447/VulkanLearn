@@ -61,6 +61,8 @@
             <button id="script-compile" class="browser-icon" data-action="script-compile" title="Compile C# and reload"><img src="icons/blueprint.png"/></button>
             <label id="script-time-label" for="script-time-scale" title="Time Scale">Time</label>
             <input id="script-time-scale" type="text" value="1" data-action="script-time-scale" title="Time Scale (0-100)"/>
+            <button id="workspace-undo" data-action="workspace-undo" title="Undo (Ctrl+Z)"><img src="icons/arrow-left.png"/></button>
+            <button id="workspace-redo" data-action="workspace-redo" title="Redo (Ctrl+Shift+Z)"><img src="icons/arrow-right.png"/></button>
             <button id="workspace-save" data-action="save-all" title="Save Modified Assets"><img src="icons/save.png"/></button>
             <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
             <button data-action="immersive-view" title="Immersive Mode">Immersive Mode</button>
@@ -77,6 +79,8 @@
                 <button id="workspace-content-tab" data-workspace-panel="content" data-action="workspace-content">Content Browser</button>
                 <button id="workspace-renderer-tab" data-workspace-panel="renderer" data-action="workspace-renderer">Renderer</button>
                 <button id="workspace-log-tab" data-workspace-panel="log">Log</button>
+                <button id="workspace-performance-tab" data-workspace-panel="performance">Performance</button>
+                <button id="workspace-terrain-tab" data-workspace-panel="terrain">Landscape</button>
                 <button id="workspace-resource-tab" data-workspace-panel="resource" title="Asset Editor">
                     <img id="workspace-resource-icon" src="icons/file-box.png"/>
                     <span id="workspace-resource-label">Asset Editor</span>
@@ -86,6 +90,9 @@
                     <div id="viewport-actor-overlay">
                         <div id="viewport-actor-lines"></div>
                         <div id="viewport-actor-icons"></div>
+                        <div id="viewport-gizmo-overlay"></div>
+                        <div id="viewport-gizmo-capture"></div>
+                        <div id="viewport-brush-ring"><img id="viewport-brush-ring-image" src="icons/brush-ring.png"/><div id="viewport-brush-ring-center"></div></div>
                     </div>
                     <!-- 角落坐标轴指示器：纯 UI 叠层，不参与场景渲染图，也不参与深度。
                          它表达的是**相机当前朝向**（三根杆由相机正交基投影而来），
@@ -148,9 +155,23 @@
                             <button class="viewport-tool" id="viewport-tool-rotate" data-action="viewport-tool" data-tool="rotate" title="Rotate mode - viewport gizmo is unavailable">Rotate</button>
                             <button class="viewport-tool" id="viewport-tool-scale" data-action="viewport-tool" data-tool="scale" title="Scale mode - viewport gizmo is unavailable">Scale</button>
                         </div>
+                        <div class="viewport-tool-group" id="viewport-snap-settings">
+                            <label class="motion-debug-toggle"><input id="viewport-snap-enabled" type="checkbox" data-action="viewport-snap-enabled"/><span>Snap</span></label>
+                            <input id="viewport-snap-move" type="text" data-action="viewport-snap-move" value="10" size="4" style="width: 44px;" title="Move snap in centimeters"/>
+                            <input id="viewport-snap-rotate" type="text" data-action="viewport-snap-rotate" value="5" size="4" style="width: 44px;" title="Rotate snap in degrees"/>
+                            <input id="viewport-snap-scale" type="text" data-action="viewport-snap-scale" value="0.1" size="4" style="width: 44px;" title="Scale snap ratio"/>
+                        </div>
                         <div class="viewport-tool-group" id="viewport-transform-space">
                             <button class="viewport-tool" id="viewport-space-world" data-action="viewport-space" data-space="world" title="World space - presentation only, the renderer does not read it">World</button>
                             <button class="viewport-tool" id="viewport-space-local" data-action="viewport-space" data-space="local" title="Local space - presentation only, the renderer does not read it">Local</button>
+                        </div>
+                        <div class="viewport-tool-group" id="viewport-landscape-tools">
+                            <button class="viewport-tool" id="viewport-tool-landscape" data-action="viewport-tool-landscape" title="Landscape Sculpt tool">Landscape</button>
+                        </div>
+                        <div class="viewport-tool-group" id="viewport-landscape-controls">
+                            <button class="viewport-tool" id="viewport-landscape-sculpt" data-action="viewport-landscape-sculpt" title="Sculpt height">Sculpt</button>
+                            <button class="viewport-tool" id="viewport-landscape-paint" data-action="viewport-landscape-paint" title="Paint terrain layer weights">Paint</button>
+                            <button class="viewport-tool" id="viewport-landscape-write" data-action="viewport-landscape-write" title="Write terrain source data to disk">Write Heightmap</button>
                         </div>
                         <div class="viewport-tool-group menu-root" id="menu-view">
                           <button class="menu-title" id="viewport-view-title" data-action="menu-open" data-menu="view">Lit v</button>
@@ -178,7 +199,8 @@
                         <option value="pointLight">Point Lights</option>
                         <option value="spotLight">Spot Lights</option><option value="squareAreaLight">Square Area Lights</option>
                         <option value="camera">Cameras</option><option value="environment">Environments</option>
-                        <option value="windProfile">SpeedTree Wind Profiles</option>
+                        <option value="wind">Wind</option>
+                        <option value="terrain">Terrains</option>
                         <option value="mesh">Meshes</option>
                         <option value="blueprintInstance">Blueprint Instances</option>
                     </select>
@@ -260,8 +282,9 @@
                     <select id="browser-type" data-action="browser-type">
                         <option value="all">All Assets</option><option value="material">Materials</option>
                         <option value="blueprint">Blueprints</option>
+                        <option value="retarget">Retargets</option>
                         <option value="csharp">C# Blueprint Classes</option>
-                        <option value="mesh">Meshes</option><option value="scene">Levels</option>
+                        <option value="mesh">Meshes</option><option value="tressfx">TressFX</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
                     </select>
                     <label class="browser-recursive-label"><input id="browser-recursive" type="checkbox" data-action="browser-recursive" checked="checked"/><span>Subfolders</span></label>
@@ -349,12 +372,159 @@
                     <div id="log-scripts-rows"></div>
                 </div>
             </div>
+            <div id="performance-page" class="dock-panel">
+                <!-- Performance 页只消费 EngineLoop 冻结的 CPU+GPU 快照；
+                     数字与 perf json/JSONL 共用同一序列化规则。 -->
+                <div class="performance-summary">
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">FPS</span>
+                        <span id="performance-fps" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">CPU frame</span>
+                        <span id="performance-cpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">GPU timed total</span>
+                        <span id="performance-gpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                </div>
+                <div id="performance-status" class="performance-status">Waiting for GPU samples...</div>
+                <!-- CPU 阶段表与 GPU pass 表共用行/条形样式，但用独立标题和表头分开；
+                     other 是派生行，保证各行之和与摘要里的 CPU frame 对得上。 -->
+                <div class="performance-section-title">CPU stages (game thread)</div>
+                <div id="performance-cpu-status" class="performance-status">Waiting for CPU samples...</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Stage</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% CPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-cpu-stages" class="performance-passes performance-cpu-stages"></div>
+                <div class="performance-section-title">GPU passes</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Pass</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% GPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-passes" class="performance-passes"></div>
+            </div>
+            <div id="terrain-page" class="dock-panel">
+                <div class="terrain-panel-header">
+                    <div class="terrain-panel-title-row">
+                        <h3>Landscape</h3>
+                        <div class="terrain-mode-group">
+                            <button class="terrain-mode" id="terrain-mode-sculpt" data-action="terrain-mode-sculpt" title="Sculpt terrain height">Sculpt</button>
+                            <button class="terrain-mode" id="terrain-mode-paint" data-action="terrain-mode-paint" title="Paint terrain layer weights">Paint</button>
+                            <button class="terrain-mode" id="terrain-mode-layers" data-action="terrain-mode-layers" title="Browse terrain layers">Layers</button>
+                        </div>
+                    </div>
+                    <div id="terrain-panel-filter-row" class="terrain-panel-filter-row">
+                        <input id="terrain-layer-search" type="text" data-action="terrain-layer-search" value="" placeholder="Search layers" title="Filter by layer name, key, or source set"/>
+                        <div class="terrain-layer-view-toggle">
+                            <button id="terrain-layer-view-grid" data-action="terrain-layer-view-grid" title="Show layer cards">Grid</button>
+                            <button id="terrain-layer-view-list" data-action="terrain-layer-view-list" title="Show compact layer rows">List</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="terrain-page-body">
+                    <div id="terrain-empty">
+                        <div class="terrain-empty-title">Select a Landscape actor to edit terrain.</div>
+                        <div class="terrain-empty-note">Choose a Terrain actor in the Scene Outliner or the viewport.</div>
+                    </div>
+                    <div id="terrain-summary">
+                        <div id="terrain-workspace">
+                            <div id="terrain-brush-column">
+                                <div class="terrain-brush-title">Brush</div>
+                                <div id="terrain-brush-library-title" class="terrain-brush-library-title">Sculpt Brushes</div>
+                                <div id="terrain-brush-library"></div>
+                                <div id="viewport-brush-settings">
+                                    <div id="terrain-sculpt-settings">
+                                        <div class="terrain-brush-mode-row">
+                                            <button class="viewport-tool terrain-brush-mode" id="viewport-brush-mode-0" data-action="viewport-brush-mode" data-mode="0" title="Raise terrain">Raise</button>
+                                            <button class="viewport-tool terrain-brush-mode" id="viewport-brush-mode-1" data-action="viewport-brush-mode" data-mode="1" title="Lower terrain">Lower</button>
+                                            <button class="viewport-tool terrain-brush-mode" id="viewport-brush-mode-2" data-action="viewport-brush-mode" data-mode="2" title="Smooth terrain">Smooth</button>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Radius</label>
+                                            <input id="viewport-brush-radius" type="text" data-action="viewport-brush-radius" value="500" title="Sculpt brush radius in centimeters"/>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Strength</label>
+                                            <input id="viewport-brush-strength" type="text" data-action="viewport-brush-strength" value="0.1" title="Normalized height increment"/>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Falloff</label>
+                                            <input id="viewport-brush-falloff" type="text" data-action="viewport-brush-falloff" value="1" title="0 hard edge, 1 smooth edge"/>
+                                        </div>
+                                    </div>
+                                    <div id="viewport-paint-settings">
+                                        <div class="terrain-brush-mode-row">
+                                            <button class="viewport-tool terrain-brush-mode" id="viewport-paint-mode" data-action="viewport-paint-mode" title="Paint the selected layer">Paint</button>
+                                            <button class="viewport-tool terrain-brush-mode" id="viewport-paint-erase" data-action="viewport-paint-erase" title="Erase paint and reveal procedural weights">Erase</button>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Radius</label>
+                                            <input id="terrain-paint-radius" type="text" data-action="terrain-paint-radius" value="500" title="Paint brush radius in centimeters"/>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Hardness</label>
+                                            <input id="terrain-paint-hardness" type="text" data-action="terrain-paint-hardness" value="0.5" title="0 soft edge, 1 hard edge"/>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Opacity</label>
+                                            <input id="terrain-paint-opacity" type="text" data-action="terrain-paint-opacity" value="0.8" title="Paint opacity"/>
+                                        </div>
+                                        <div class="terrain-brush-field">
+                                            <label>Flow</label>
+                                            <input id="terrain-paint-flow" type="text" data-action="terrain-paint-flow" value="0.8" title="Paint flow"/>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="terrain-surface-panel">
+                                <div class="terrain-layer-library-header">
+                                    <span>Surface</span>
+                                </div>
+                                <div id="terrain-surface-body">
+                                    <div class="terrain-surface-row"><span class="terrain-surface-label">Size</span><span id="terrain-surface-size" class="terrain-surface-value"></span></div>
+                                    <div class="terrain-surface-row"><span class="terrain-surface-label">Height Scale</span><span id="terrain-surface-height-scale" class="terrain-surface-value"></span></div>
+                                    <div class="terrain-surface-row"><span class="terrain-surface-label">Layers</span><span id="terrain-surface-layer-count" class="terrain-surface-value"></span></div>
+                                    <div class="terrain-surface-row"><span class="terrain-surface-label">Chunks</span><span id="terrain-surface-chunk-count" class="terrain-surface-value"></span></div>
+                                    <div class="terrain-surface-row"><span class="terrain-surface-label">Sections</span><span id="terrain-surface-section-count" class="terrain-surface-value"></span></div>
+                                </div>
+                            </div>
+                            <div id="terrain-layer-library">
+                                <div class="terrain-layer-library-header">
+                                    <span>Layer Library</span>
+                                    <span id="terrain-layer-visible-count"></span>
+                                </div>
+                                <div id="terrain-layer-scroll">
+                                    <div id="terrain-layer-top-spacer" class="terrain-layer-spacer"></div>
+                                    <div id="terrain-layer-cards" class="terrain-layer-grid"></div>
+                                    <div id="terrain-layer-bottom-spacer" class="terrain-layer-spacer"></div>
+                                    <div id="terrain-layer-empty"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="terrain-layer-status"></div>
+                    </div>
+                </div>
+                <div id="terrain-layer-hover-preview">
+                    <img id="terrain-layer-hover-image"/>
+                    <div class="terrain-hover-grid-line terrain-hover-grid-v0"></div>
+                    <div class="terrain-hover-grid-line terrain-hover-grid-v1"></div>
+                    <div class="terrain-hover-grid-line terrain-hover-grid-v2"></div>
+                    <div class="terrain-hover-grid-line terrain-hover-grid-h0"></div>
+                    <div class="terrain-hover-grid-line terrain-hover-grid-h1"></div>
+                </div>
+            </div>
             <div id="material-editor" class="dock-panel">
                 <div class="material-editor-toolbar">
                     <button id="material-frame" class="browser-icon" data-action="material-frame" title="Frame Preview Ball">
                         <img src="icons/camera.png"/><span class="browser-tooltip">Frame Preview Ball</span>
                     </button>
-                    <h3 id="document-title">Material Instance</h3>
                     <div class="toolbar-spacer"></div>
                     <button id="material-save" data-action="save" title="Save Material Instance">Save</button>
                     <button id="apply-preview" data-action="apply-preview">Apply Preview</button>
@@ -363,7 +533,10 @@
                 <div id="material-editor-body">
                     <div id="material-preview-surface">
                         <img id="material-preview-image" src="vl://scene-viewport"/>
-                        <p id="material-preview-status" class="muted"></p>
+                        <div class="asset-viewport-info">
+                            <h3 id="document-title">Material Instance</h3>
+                            <p id="material-preview-status" class="notice"></p>
+                        </div>
                     </div>
                     <div id="material-properties" class="inspector-body">
                     <p id="document-status" class="muted"></p>
@@ -389,6 +562,12 @@
                         <button id="resource-space-world" class="viewport-tool" data-action="resource-space" data-space="world" title="World space">World</button>
                         <button id="resource-space-local" class="viewport-tool" data-action="resource-space" data-space="local" title="Local space">Local</button>
                     </div>
+                    <div id="resource-hair-tools">
+                        <button id="resource-hair-reset" class="browser-icon" data-action="hair-reset" title="Reset hair simulation">
+                            <img src="icons/refresh.png"/><span class="browser-tooltip">Reset Hair</span>
+                        </button>
+                        <span>Left-drag rotates the model</span>
+                    </div>
                     <div class="toolbar-spacer"></div>
                     <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
                         <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
@@ -399,27 +578,127 @@
                     <button id="blueprint-asset-revert" class="browser-icon" data-action="blueprint-asset-revert" title="Revert Blueprint Draft">
                         <img src="icons/refresh.png"/>
                     </button>
-                    <button id="resource-close" class="browser-icon" data-action="resource-close" title="Close Asset">
-                        <img src="icons/arrow-left.png"/><span class="browser-tooltip">Close Asset</span>
+                    <button id="terrain-asset-save" class="browser-icon" data-action="terrain-asset-save" title="Save Terrain Asset">
+                        <img src="icons/save.png"/>
+                    </button>
+                    <button id="terrain-asset-revert" class="browser-icon" data-action="terrain-asset-revert" title="Revert Terrain Draft">
+                        <img src="icons/refresh.png"/>
                     </button>
                 </div>
                 <div id="resource-editor-body">
                     <div id="blueprint-asset-editor"></div>
-                    <div id="resource-preview-panel">
-                        <div class="resource-panel-heading">
-                            <h2 id="resource-preview-title"></h2>
-                            <span id="resource-preview-kind"></span>
+                    <div id="terrain-asset-editor"></div>
+                    <div id="retarget-asset-editor">
+                        <div class="retarget-toolbar retarget-mode-toolbar">
+                            <div class="viewport-tool-group">
+                                <button id="retarget-animation" class="viewport-tool" data-action="retarget-animation">Animation</button>
+                                <button id="retarget-reference" class="viewport-tool" data-action="retarget-reference">Reference Pose</button>
+                            </div>
                         </div>
+                        <div id="retarget-editor-workspace">
+                        <div id="retarget-hierarchy-panel">
+                            <div class="retarget-panel-title">Hierarchy</div>
+                            <div class="retarget-hierarchy-tools">
+                                <button id="retarget-hierarchy-source" class="viewport-tool" data-action="retarget-hierarchy-source">Source</button>
+                                <button id="retarget-hierarchy-target" class="viewport-tool" data-action="retarget-hierarchy-target">Target</button>
+                            </div>
+                            <div id="retarget-hierarchy"></div>
+                        </div>
+                        <div id="retarget-center">
+                        <div id="retarget-animation-workspace">
+                            <div id="retarget-preview-surface">
+                                <img id="retarget-preview-image" src="vl://scene-viewport"/>
+                                <div class="asset-viewport-info">
+                                    <h2 id="retarget-title">Retarget</h2>
+                                    <p id="retarget-identity"></p>
+                                    <p id="retarget-status"></p>
+                                    <p id="retarget-animation-status"></p>
+                                    <p id="retarget-preview-status" class="notice">Loading animation preview...</p>
+                                </div>
+                                <div id="retarget-animation-labels"><span class="retarget-source">Source</span><span class="retarget-target">Target</span></div>
+                            </div>
+                            <div id="retarget-animation-tools">
+                                <button id="retarget-animation-play" class="browser-icon" data-action="animation-play" title="Play both models"><img src="icons/play.png"/></button>
+                                <button id="retarget-animation-pause" class="browser-icon" data-action="animation-pause" title="Pause both models"><img src="icons/pause.png"/></button>
+                                <input id="retarget-animation-time" type="range" min="0" max="1" step="0.001" value="0" data-action="animation-time" title="Animation time"/>
+                                <button id="retarget-animation-frame" class="browser-icon" data-action="resource-frame" title="Frame both models"><img src="icons/camera.png"/></button>
+                            </div>
+                        </div>
+                        <div id="retarget-reference-toolbar" class="retarget-toolbar">
+                            <div class="viewport-tool-group">
+                                <button id="retarget-bind" class="viewport-tool" data-action="retarget-bind" title="Original skeleton bind poses">Bind</button>
+                                <button id="retarget-calibrated" class="viewport-tool" data-action="retarget-calibrated" title="Reference poses used by runtime retargeting">Calibrated</button>
+                            </div>
+                            <div class="viewport-tool-group">
+                                <button id="retarget-front" class="viewport-tool" data-action="retarget-front" title="XY projection, looking along -Z">Front</button>
+                                <button id="retarget-side" class="viewport-tool" data-action="retarget-side" title="ZY projection, looking along -X">Side</button>
+                                <button id="retarget-top" class="viewport-tool" data-action="retarget-top" title="XZ projection, looking along -Y">Top</button>
+                            </div>
+                            <select id="retarget-anchor" data-action="retarget-anchor" title="Translate both skeletons to this mapped joint; original bone lengths are preserved"></select>
+                        </div>
+                        <div id="retarget-reference-workspace" class="retarget-workspace">
+                            <div class="retarget-visual">
+                                <div id="retarget-legend">
+                                    <span class="retarget-source">Source</span><span class="retarget-target">Target</span><span>cm / Y-up</span>
+                                    <button id="retarget-focus" class="browser-icon" data-action="retarget-focus" title="Focus selected joint pair"><img src="icons/camera.png"/></button>
+                                    <button id="retarget-fit" class="browser-icon" data-action="retarget-fit" title="Fit both skeletons"><img src="icons/refresh.png"/></button>
+                                    <input id="retarget-zoom" type="range" min="1" max="6" step="0.1" value="1" data-action="retarget-zoom" title="Reference view zoom"/>
+                                    <label class="retarget-all-label" title="Include unmapped helper, IK, eye and finger branches"><input id="retarget-all-bones" type="checkbox" data-action="retarget-all-bones"/><span>All bones</span></label>
+                                </div>
+                                <div id="retarget-surface">
+                                    <div id="retarget-lines"></div>
+                                    <div class="asset-viewport-info">
+                                        <h2 id="retarget-reference-title">Retarget</h2>
+                                        <p id="retarget-reference-identity"></p>
+                                        <p id="retarget-reference-status"></p>
+                                        <p id="retarget-selection"></p>
+                                        <p id="retarget-measurement"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        </div>
+                        <div id="retarget-sidebar">
+                            <div class="retarget-panel-title">Details</div>
+                            <div id="retarget-details"></div>
+                            <div class="retarget-mapping">
+                                <div class="retarget-panel-title">Bone Mapping</div>
+                                <div class="retarget-table-heading"><span>Source / Target</span><span title="Position difference after translation at the anchor, without height scaling">Delta cm</span><span title="Direction difference from the nearest common mapped ancestor; not joint-axis rotation">Chain deg</span></div>
+                                <div id="retarget-mappings"></div>
+                                <div class="json-pager">
+                                    <button id="retarget-prev" class="browser-icon" data-action="retarget-prev" title="Previous mappings"><img src="icons/arrow-left.png"/></button>
+                                    <span id="retarget-page"></span>
+                                    <button id="retarget-next" class="browser-icon" data-action="retarget-next" title="Next mappings"><img src="icons/arrow-right.png"/></button>
+                                </div>
+                            </div>
+                            <div id="retarget-asset-browser">
+                                <div class="retarget-panel-title">Asset Browser</div>
+                                <select id="retarget-animation-clip" data-action="animation-clip" title="Source animation"></select>
+                                <div id="retarget-animation-assets"></div>
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+                    <div id="resource-preview-panel">
                         <div id="resource-animation-tools">
                             <button id="resource-animation-play" class="browser-icon" data-action="animation-play" title="Play animation"><img src="icons/play.png"/></button>
                             <button id="resource-animation-pause" class="browser-icon" data-action="animation-pause" title="Pause animation"><img src="icons/pause.png"/></button>
                             <select id="resource-animation-clip" data-action="animation-clip"></select>
                             <input id="resource-animation-time" type="range" min="0" max="1" step="0.001" value="0" data-action="animation-time"/>
-                            <span id="resource-animation-status"></span>
                         </div>
                         <div id="resource-preview-surface">
                             <img id="resource-preview-image" src="vl://scene-viewport"/>
+                            <div id="hair-group-legend-overlay"></div>
+                            <div id="hair-brush-overlay">
+                                <div id="hair-brush-hud"></div>
+                                <div id="hair-brush-ring"></div>
+                            </div>
                             <img id="resource-texture-image"/>
+                            <div class="asset-viewport-info">
+                                <h2 id="resource-preview-title"></h2>
+                                <p id="resource-preview-kind"></p>
+                                <p id="resource-animation-status"></p>
+                            </div>
                             <img id="resource-preview-icon" src="icons/mesh.png"/>
                             <h3 id="resource-preview-status"></h3>
                             <p id="resource-preview-path"></p>
@@ -440,6 +719,8 @@
                                 <p id="resource-motion-status"></p>
                                 <div id="resource-motion-values"></div>
                             </div>
+                            <div id="resource-hair-simulation"></div>
+                            <div id="resource-hair-groups"></div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

@@ -14,6 +14,8 @@
 #include "baseStructs.h"
 #include "environmentType.h"
 #include "render/camera/cameraExposure.h"
+#include "scene/placementBinding.h"
+#include "world/worldWind.h"
 
 namespace VL
 {
@@ -54,6 +56,9 @@ struct MeshDrawSnapshot
     bool selected = false;
     std::string debugName;
     std::string sceneObjectIdentity;
+    // 与本帧姿态/placement 一起冻结。普通动画使用 GT 帧时钟，蓝图组件
+    // 使用脚本倍率时钟；绑定它的发丝必须继承源对象的时钟。
+    float simulationDeltaSeconds = 0.0f;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
@@ -67,6 +72,24 @@ struct MeshDrawSnapshot
     std::string materialInstanceParentKey;
     std::string speedTreeWindProfileKey;
     bool writesOutlineMask = false;
+    bool terrainFeedbackEligible = false;
+    // 编辑器拾取需要区分地形 chunk 与普通 mesh；feedback 标志只覆盖
+    // 参与 VT 的地形，不能代替完整的 editor 地形身份。
+    bool isTerrain = false;
+    // 地形 LOD 组与当前级；非地形对象为空组。RuntimeId 对同一组的各级
+    // 保持一致，级切换不会让编辑器选择/描边丢失。
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
+    std::string windResponseProfileKey;
+    // TressFX 顶点工厂/片元着色消费；非头发对象保持 0/-1/0。
+    uint32_t tressfxPointsPerGuide = 0;
+    int32_t tressfxSelectedGroup = -1;
+    uint32_t tressfxGroupFlags = 0;
+    // 放置级网格：mesh.key 已是本实例键，模板键指向仍在缓存里的模板
+    // RenderableObject；渲染线程在 resolve 前据此克隆独立对象，并按 placementBinding
+    // 的 Kind 解析绑定。普通共享对象两个字段为空。
+    std::string placementTemplateMeshKey;
+    PlacementBinding placementBinding;
 };
 
 enum class LightSnapshotType
@@ -110,11 +133,20 @@ struct WorldSnapshot
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    // 没有骨骼来源的发丝使用场景时间：Editing 正常预览，Play 随倍率，
+    // Pause 为零。骨骼绑定发丝改用源 draw 的 simulationDeltaSeconds。
+    float hairSimulationDeltaSeconds = 0.0f;
     CameraSnapshot camera;
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;
     EnvironmentSnapshot environment;
+    // 场景全局风与相机/环境同属一帧冻结状态。头发在 GPU 侧逐对象读取它，
+    // 不再从资产 simulationDefaults.wind 取风；植被用的风时间由 RenderSystem
+    // 在自己的渲染帧时钟上另行附加，不进入这份 GT 快照。
+    WorldWind wind;
     int debugViewMode = 0;
+    // 场景地面世界 Y；editorGrid pass 用它把参考网格对齐到地面。
+    float editorGridHeight = 0.0f;
 };
 
 using WorldSnapshotPtr = std::shared_ptr<const WorldSnapshot>;

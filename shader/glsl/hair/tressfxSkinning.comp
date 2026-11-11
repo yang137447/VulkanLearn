@@ -1,0 +1,59 @@
+#version 450
+
+// 关闭动力学的挂载仍逐帧消费骨架：沿用 Integration 的 InitialPos/LBS，
+// 但对整根发丝求值，既不积分也不分配/写入 previous、solver 或碰撞资源。
+// rest 与 palette 都是 hair 局部厘米坐标；图形 VF 仍以当前 hairModel 绘制。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) writeonly buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 4, std430) readonly buffer RestPositions
+{
+    vec4 positions[];
+} restPositions;
+
+struct GpuStrandBones
+{
+    uvec4 indices;
+    vec4 weights;
+};
+layout(set = 0, binding = 14, std430) readonly buffer BoneWeights
+{
+    GpuStrandBones bones[];
+} boneWeights;
+layout(set = 0, binding = 15, std430) readonly buffer SkinningPalette
+{
+    mat4 matrices[];
+} skinningPalette;
+
+void main()
+{
+    uint point = gl_GlobalInvocationID.x;
+    if (point >= params.counts.z)
+        return;
+
+    vec4 rest = vec4(restPositions.positions[point].xyz, 1.0);
+    vec3 position;
+    if ((uint(params.motion.w) & 4u) == 0u)
+    {
+        position = (params.skinning * rest).xyz;
+    }
+    else
+    {
+        GpuStrandBones influence =
+            boneWeights.bones[point / TressfxPointsPerGuide()];
+        mat4 weighted =
+            skinningPalette.matrices[influence.indices.x] * influence.weights.x +
+            skinningPalette.matrices[influence.indices.y] * influence.weights.y +
+            skinningPalette.matrices[influence.indices.z] * influence.weights.z +
+            skinningPalette.matrices[influence.indices.w] * influence.weights.w;
+        position = (weighted * rest).xyz;
+    }
+    // current.w 仅供动力学表示 movable；关闭模拟时整根都由骨架驱动。
+    currentPositions.positions[point] = vec4(position, 0.0);
+}

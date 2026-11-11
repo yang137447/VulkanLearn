@@ -2,7 +2,9 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -115,6 +117,7 @@ public:
     template<typename T>
     T GetParameter(const std::string& parameterName) const
     {
+        std::shared_lock<std::shared_mutex> lock(stateMutex);
         auto it = parameters.find(parameterName);
         if (it == parameters.end())
             throw std::runtime_error("Parameter not found: " + parameterName);
@@ -145,7 +148,11 @@ public:
             static_assert(!sizeof(T), "Unsupported MaterialInstance parameter type");
         }
     }
-    const std::unordered_map<std::string, ParamMap>& GetParameters() const { return parameters; }
+    // 返回值是副本：RT 不能在锁外持有内部 map 的引用。
+    std::unordered_map<std::string, ParamMap> GetParameters() const;
+    // 单次加锁复制全部数值参数，供 RT 以一份不可变快照写 UBO。
+    MaterialInstanceNumericParameterValues
+    CaptureNumericParameterValues() const;
     // 检查参数是否存在
     bool HasParameter(const std::string& parameterName) const;
     //设置纹理
@@ -180,13 +187,18 @@ public:
     // material instance and its CPU parameters stay alive.
     void ShutdownRenderResources();
 private:
+    // 调用方必须已持有 stateMutex（独占或共享）。
     void ClearParameterValues(const std::string& parameterName);
+    MaterialInstanceNumericParameterValues
+    CaptureNumericParameterValuesLocked() const;
     void CreateUniformBuffers();
     void DestroyUniformBuffers();
     void SetupDescriptors();
 
     std::string materialInstanceName;
     std::weak_ptr<Material> baseMaterial;
+    // 数值参数、纹理绑定与预览提交共用一把锁；锁从不包裹 Vulkan 调用。
+    mutable std::shared_mutex stateMutex;
     std::unordered_map<std::string, ParamMap> parameters;
     std::unordered_map<std::string, float> floatParameters;
     std::unordered_map<std::string, Eigen::Vector2f> vec2Parameters;

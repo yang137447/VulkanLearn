@@ -51,7 +51,7 @@ SpringArm 显示从臂根到静态臂端的连接线；子组件局部 TRS 相�
 
 默认布局向 UE 编辑器靠拢：顶部标题行最左侧是 File / Edit / Window / Help 菜单栏，
 标题右侧保留原有命令按钮，右上 Scene Outliner，右下 Details，
-中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
+中央/左侧独立 Viewport，底部 Content Browser / Renderer / Log / Landscape 标签页，最底部状态栏。
 Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央独立资产页。
 每个打开的 MI 对应一个紧邻 Viewport 的停靠标签，显示文件名、脏标记和关闭按钮；
 重复打开复用文档，关闭沿用保存/丢弃/取消确认，切回关卡后普通快照刷新不会抢回材质页。
@@ -72,6 +72,8 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
 布局保存至用户目录，支持跨启动恢复和 Reset Layout；不支持独立操作系统窗口。
+底部常驻标签组默认按 Content Browser、Renderer、Log、Landscape 排列，Landscape 位于 Log 右侧；
+P0 只显示选中地形摘要或显式空状态，不包含笔刷库、层网格或预览控件。
 工具条的 Immersive Mode 与 F11 切换窗口内沉浸模式（F1 兼容）：隐藏编辑器与 HUD，
 不退出程序、不新建窗口、不改变系统全屏。模型页进入时先恢复记住的关卡，
 事务失败或无可返回关卡时保持编辑器可见；退出沉浸模式恢复原停靠布局。
@@ -84,7 +86,8 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
 当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
-Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
+Mesh、Texture 双击后进入资源标签页，右侧为只读 JSON Details；Terrain 双击进入
+可编辑 TR 资产页（顶层字段 + layers 表），保存/回退走标准资产命令；
 Actor 使用同一资源标签容器中的专用配置表单。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
 骨骼 SM 复用模型资源标签，按冻结快照显示播放/暂停、片段选择和时间 slider；
@@ -109,14 +112,16 @@ Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/B
 单击只改变浏览选择；双击 MI 提交原有打开命令并激活中央材质文档页，保持可编辑，
 双击 Scene 复用 `UiActionType::LoadWorld` 请求切换 World，并同步打开只读 JSON inspector；
 Scene 仍请求 World 切换并使用主工作区 JSON inspector；Mesh、Texture、Terrain
-使用资源编辑器标签页。资源标签支持重复打开去重、切换、关闭、返回 World 和重新读取 JSON。
+使用资源编辑器标签页。Terrain 标签页是标准 TR 资产编辑页（顶层字段 + 层表），
+其余资源标签仍以 JSON/预览为主。资源标签支持重复打开去重、切换、关闭、返回 World 和重新读取 JSON。
 目录与搜索不提交业务命令；贴图、实时模型与材质实例网格有真实缩略图，场景仍是类型占位。
 Viewport 使用 RenderGraph 拥有的离屏场景纹理，完整 UV 显示，不拷贝或裁剪 swapchain。
 GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺寸跟随面板逻辑尺寸。
 关卡左键拾取只更新对象描边、大纲选择与 Details，不创建或激活 MI 文档，不切换预览 World。
 鼠标相对捕获已请求或已启用时不执行左键拾取；材质文档由材质槽或资源浏览器显式打开。
-视口左上角叠加工具条；其中只有 view mode 有渲染后端，变换工具与坐标系只是呈现状态，
-详细边界见“停靠与视口契约”。
+视口左上角叠加工具条；view mode、变换工具、变换坐标系与吸附都有真实后端。
+关卡视口的 Move/Rotate/Scale 工具驱动三轴 gizmo，World/Local 切换 gizmo 轴朝向，
+吸附步长在工具条内可编辑（默认 10 cm / 5° / 0.1）。详细边界见“停靠与视口契约”。
 视口左上视图模式下拉菜单提供 Lit、Unlit（既有 Base Color 调试映射）和禁用的 Wireframe。
 Buffer Visualization 子菜单恢复 Base Color、Emissive、World Normal、Roughness、Metallic、AO、
 Shadow、Direct Lighting、Indirect Diffuse/Specular、Shadow Cascade Index、Shading Model，
@@ -148,7 +153,7 @@ Lit 直接返回正常光照，避免只在最终合成切换而材质仍输出 
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
-| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、扁平 World actor 列表、类型化数值编辑、可见性、灯光/相机辅助图示及场景/MI 保存确认 | 场景对象增删、gizmo |
+| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、扁平 World actor 列表、类型化数值编辑、可见性、灯光/相机辅助图示、关卡三轴变换 gizmo、World/Local 与吸附、场景/MI 保存确认 | 场景对象增删、多选、重命名 |
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
@@ -195,20 +200,25 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 当前确认缺席的能力集中列在此处，供下一轮直接引用，不再逐条重新推导：
 
-- gizmo 只在蓝图组件预览页提供；除 C# Blueprint 外，没有通用场景对象增/删/复制/改名；
-  Transform 可在 Details 数值编辑。
-- `Edit` 的 Undo/Redo 按活动页作用于 Scene 或 BP；没有跨资产历史或文件操作撤销。
+- 关卡视口与蓝图组件预览页都提供三轴 gizmo。关卡 gizmo 覆盖 Mesh/Terrain/Script 的完整
+  Location/Rotation/Scale、灯光与 Camera 的 Move/Rotate（两者没有 authored scale），
+  SquareAreaLight 只有 Move；Environment 与 SpeedTree 风剖面没有 gizmo。
+  Transform 仍可在 Details 数值编辑；除 C# Blueprint 外，没有通用场景对象增/删/复制/改名。
+- 顶部工具条的 Undo/Redo 与 `Edit` 菜单共用同一套上下文路由：优先地形笔刷历史，
+  其次活动 Blueprint 文档，最后 Scene；没有跨资产历史或文件操作撤销。
 - 逐 actor 可见性只有**运行时**语义：开关不写进场景 JSON，`SceneAssetValidator`
   不认识它，也没有 `SaveVisibilityToScene` 之类的动作；重新加载场景后所有 actor
   都是可见的。Transform/灯光/相机参数编辑形成独立场景草稿，确认后写回场景资产。
-- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时；
-  场景选择器排除 terrain、接受 actor，资产浏览器只有 Terrain JSON 元数据。
+- 地形对象：运行时已支持 terrain 场景对象（场景资产计划、chunk mesh、页表/流式与
+  碰撞实例）；场景选择器接受含 terrain 的关卡。编辑器 Outliner 以 Terrain actor
+  呈现同一批 chunk，Details 显示 TR 资产路径，World 中仍复用 chunk mesh 而不额外
+  引入第二个地形对象。资产浏览器提供可编辑 TR 页；Landscape Sculpt 的边界见上。
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
   模型树与 Sources 树也仍整棵挂载。
 - 大纲仍是单选：没有多选、没有 Actor 拖放/重父级；C# Actor 改名通过 Details。
 - 贴图、实时模型与材质实例网格有缓存缩略图，场景没有真实缩略图，也没有纹理逐像素读数；Mesh 预览目前复用中性场景视口，
   模型标签通过 `resource-preview-image` 显示当前 renderer-owned 离屏图像。
-  工具条变换按钮目前仅切换本地状态，不提供 gizmo；模型信息 Details 中
+  模型预览标签的工具条变换按钮仅切换本地状态，不提供模型预览 gizmo；模型信息 Details 中
   `Metadata ready` 仅表示 JSON 已读取，不表示模型渲染成功。发布后按模型所有 section 的世界包围盒自动取景。
   图像内左/右键拖动环绕、中键平移、滚轮缩放；双击图像或相机按钮重新取景。
   导航只修改预览相机，不写资产；动作带 World generation，切换/重载模型重新取景，失焦取消拖动。
@@ -218,8 +228,9 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 - 没有原生多窗口，没有 IME。
 - 场景仍按 swapchain 全尺寸渲染，UI 以完整 UV 采样，不是按停靠尺寸渲染。
 - 材质实例的纹理覆盖只在保存 JSON 后生效，不做 live descriptor 替换。
-- 视口工具条的变换工具与坐标系没有渲染后端；view mode 里的 Wireframe 没有
-  wireframe 光栅模式，也没有对应的 debug view，因此按钮保持禁用。
+- 关卡视口的变换工具与坐标系已接入 gizmo；资源编辑器里的模型预览标签仍只有本地高亮，
+  没有模型预览 gizmo。view mode 里的 Wireframe 没有 wireframe 光栅模式，也没有对应的
+  debug view，因此按钮保持禁用。
 
 ## 目录与依赖
 
@@ -227,6 +238,7 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 ```text
 widgets/
+    editor/
     text/
     input/
     layout/
@@ -280,6 +292,54 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 文档的生命周期、业务事件监听、revision、batch、保存、关闭决策和预览仍由业务宿主负责。
 RT 只消费 UiRenderSnapshot，不访问组件、document、selection sink 或 asset session。
 
+## Brush Library 组件
+
+`source/ui/widgets/editor/brushLibraryPanel.*` 是 `vl_ui_widgets` 里的数据视图组件，
+只链接 RmlUi::Core，不包含 World、资产、EditorCommand 或 Vulkan 依赖。
+`BrushLibraryEntry` 只携带 `id`、`name`、`category`、`shape`、`falloff`、`radiusCm`
+和 `strength`；`shape`/`falloff` 是业务方定义的整数标签，组件不解释它们的地形语义。
+
+组件在宿主元素内生成搜索框 `#brush-library-search`、分类下拉
+`#brush-library-category`、卡片容器 `#brush-library-cards` 和空状态
+`#brush-library-empty`。卡片动作是 `brush-library-select`，稳定身份在
+`data-brush-id`；选中卡片带 `selected` class。2D stamp 预览只用嵌套 `div`
+和 `border-radius`，不依赖渐变或外部图片，形状与 falloff 同时进入卡片和 stamp
+的 RCSS class。默认分类是 `All`，其余分类按条目首次出现顺序生成。
+
+组件不注册事件监听器，也不提交命令。宿主负责读取控件值并调用
+`SetQuery` / `SetCategory`，再调用 `Build`；宿主也负责把
+`brush-library-select` 解析成自己的业务状态。`Build` 对条目、查询、选中 id
+和有效分类做签名缓存，相同状态不重写卡片 DOM；搜索框在获得焦点时保留用户输入。
+
+Landscape 面板（`#terrain-brush-library`）把笔刷预设放在左列工具参数之上。
+Sculpt 与 Paint 是两套独立领域，共用 `BrushProfile`/`BrushSampler`，但目录、
+选中 id 和参数状态都不共享：
+
+- Sculpt（`Editor::SculptBrushProfiles()`，标题 `Sculpt Brushes`）：
+  `soft-round`、`hard-round`、`wide-soft`、`square`；
+- Paint（`Editor::PaintBrushProfiles()`，标题 `Paint Brushes`）：
+  `soft-mask`、`hard-mask`、`spray`、`square-mask`。
+
+id 由 `BrushProfileId(profile)` 从名称稳定派生；同一领域内名称/id 唯一。
+Paint 预设额外携带 `hardness`/`opacity`/`flow`，`BrushProfile::strength` 固定为
+1.0，并由 `BrushProfile::noise`/`noiseSeed` 提供 Spray 参数。宿主把
+`TerrainPaintInput` 的 `opacity`、`flow`、`noise`、`noiseSeed` 作为独立字段发送，
+不再把 opacity 与 flow 合成 strength（见 `terrain.md`）。选择预设会同时复制
+Spray 的 noise/seed；手动修改 Hardness/Opacity/Flow 保留当前 noise/seed，
+只有重选预设才覆盖。
+选择预设只改当前领域的半径、硬度/不透明度/流量或强度/falloff 以及
+Circle/Square 形状，不切换 Raise/Lower/Smooth/Paint/Erase 工具。
+当前地形 Sculpt falloff 权重映射是：
+Smooth = 1.0、Linear = 0.6、Constant = 0.0、Lut = 1.0（Lut 尚未进入地形几何采样，
+暂用平滑权重，保证预设参数实际生效）。
+
+每个领域各自保存 `TerrainSculptBrushState` / `TerrainPaintBrushState`，切换
+Sculpt/Paint 只切换视图与目录，不把一套参数写进另一套；切回时恢复该领域上次的
+选中预设和数值。手动编辑当前领域的任一参数后，只有与领域目录精确匹配时才保留
+预设高亮，否则清空 `presetId` 进入 Custom 状态；重选预设恢复全部参数。
+没有 Terrain 选中或处于 Layers 模式时整个笔刷列隐藏，层库显示
+“Select a Landscape actor to browse layers.”，不展示伪造层数据。
+
 ## 世界 actor 树契约
 
 Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 `outliner`）
@@ -331,10 +391,12 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   与 Content Browser 的计数同一语义，与折叠状态和挂载窗口无关。
 - **选中态与可见性原地刷新**：只改已挂载行的 class、眼睛图标及提示，
   不因第一次点击销毁目标 DOM；真实指针双击因此能跨过选中快照刷新后继续取景。
-- **选择路由**：mesh actor 继续走 `RequestModelSelection`，材质槽继续走
-  `RequestMaterialSelection`（MI 文档、Material Slots 与视口描边行为不变）；
-  非网格 actor 走新的 `RequestActorSelection(稳定身份)`，同时要求 EngineLoop 清掉
-  渲染端 mesh 描边，保证大纲高亮与视口描边不会同时指向两个对象。
+- **选择路由**：mesh 与 Terrain actor 都走 `RequestModelSelection`，材质槽走
+  `RequestMaterialSelection`（MI 文档、Material Slots 与视口描边行为不变）。
+  Terrain 通过 `MaterialInstanceModelContext::actorIdentity` 保留 `terrain|name`，
+  渲染侧刷新不得把它回落成 `mesh|name`。相机、环境、风剖面等非网格 actor
+  走 `RequestActorSelection(稳定身份)`，同时要求 EngineLoop 清掉渲染端 mesh 描边，
+  保证大纲高亮与视口描边不会同时指向两个对象。
 - **Details**：`#actor-details-content` 中的可折叠分组以选中 actor 名称为标题。
   网格编辑根 Location/Rotation/Scale，节点灯光编辑 Location/Rotation/线性 RGB/强度；
   spot 编辑 inner/outer 半锥角，面光编辑位置/法线/边长/辐亮度；相机编辑位置/旋转/FOV/近远面。
@@ -351,7 +413,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   主方向光强度与 CSM castShadows 控件也使用带 World generation 的 actor 命令。网格根 TRS 从 mesh build plan 保存，
   新旧根矩阵的差应用于所有 section，保留子矩阵和负缩放。已接受的编辑记录到 GT
   `SceneDocumentService` 草稿，编辑本身不写资产；没有撤销系统。
-- **逐 actor 可见性（第 6 轮新增，第 7 轮修正为整 actor 语义）**：网格与四类灯的 actor 行在行尾有一个眼睛开关
+- **逐 actor 可见性（第 6 轮新增，第 7 轮修正为整 actor 语义）**：网格、地形与四类灯的 actor 行在行尾有一个眼睛开关
   （`data-action="outliner-visible"`），点击只提交一条
   `UiActionType::SetActorVisible`（`stringValue` = 稳定身份，`intValue` = 0/1），
   经 EngineLoop → `RuntimeCommandType::SetActorVisible` →
@@ -361,6 +423,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   - **状态归属与渲染过滤**：可见性是 World 拥有的运行时游戏状态
     （`WorldMeshObject::visible`、`SceneNode::visible`、
     `WorldSquareAreaLight::visible`），由 `World::SetMeshSceneObjectVisible` /
+    `World::SetTerrainSceneObjectVisible` /
     `SetLightVisible` / `SetSquareAreaLightVisible` 写入；对象不在当前 World 时
     返回 false，执行端给出人类可读诊断而不是静默忽略。
     过滤发生在 `WorldSnapshotBuilder::Build()`——不可见的网格与灯光**不进入**
@@ -436,7 +499,8 @@ GT runtime 合并所有已打开的脏 MI 与场景文档到 `modifiedDocuments`
 不依赖当前活动标签。场景对象修改标在所属 Scene 文件，而不是模型或材质文件上；
 观察相机移动、临时可见性与 `SC_model_preview` 不产生可保存的场景草稿。
 Content Browser 的星号原地更新；右键脏资产的 `Save...` 只列被右键的完整路径。
-File→Save 与顶部保存图标打开同一个 `Save Content` 弹窗，默认勾选全部修改文件，
+顶部工具条把 Undo/Redo/Save 作为全局命令并列提供；Undo/Redo 只做上下文路由，
+不新增第二套历史栈。File→Save 与顶部保存图标打开同一个 `Save Content` 弹窗，默认勾选全部修改文件，
 可逐项取消、Select All、Save Selected 或 Cancel；MI 页 Save / Ctrl+S 在材质页只列活动 MI，
 其他页面的 Ctrl+S 列全部修改文件。无修改时不打开弹窗。
 
@@ -616,10 +680,11 @@ JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数�
 失败保留旧文件。Window→Reset Layout 清空隐藏集合；Window→Restore Saved Layout
 重新读取该文件，DOM 重排延后到下一次 GT refresh。
 
-当前六个固定面板是 Viewport、Outliner、Details、Content、Renderer、Log；
-Log 默认与 Content/Renderer 同组。布局 JSON 写 `version: 2`，仍沿用上面的文件名；
-读取 version 1 时把缺少的 Log 追加到 Content 组，保留已有激活标签、比例和隐藏集合。
-version 2 必须包含完整六面板，不能用迁移掩盖缺失面板的损坏布局。
+当前七个固定面板是 Viewport、Outliner、Details、Content、Renderer、Log、Landscape；
+Content/Renderer/Log/Landscape 默认同组，Landscape 紧邻 Log。布局 JSON 写 `version: 3`，
+仍沿用上面的文件名；读取 version 1 时把缺少的 Log 追加到 Content 组，v1/v2 都把缺少的
+Landscape 追加到 Content 组（无 Content 时用第一个叶标签组），保留已有激活标签、比例、
+隐藏集合和浮动位置。version 3 必须包含完整七面板，不能用迁移掩盖缺失面板的损坏布局。
 
 ### Log 面板
 
@@ -694,16 +759,120 @@ GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像�
 完整渲染与 resize 契约见 `game-ui-stack.md`。
 
 视口工具条 `#viewport-toolbar` 叠在场景图像左上角，分三组：
-变换工具、变换坐标系、view mode。只有 view mode 有真实后端，
-映射到既有 `UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色）。
-关卡变换工具与坐标系**只是编辑器本地呈现状态**：该关卡工具条没有 gizmo，
-工具条不驱动 Details 的数值变换，切换它们只改变高亮，不提交任何 UiAction 或资产命令，
-按钮提示文字明确写出这一点。Wireframe 没有 wireframe 光栅模式，
+变换工具、变换坐标系、view mode。view mode 映射到既有
+`UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色）。
+变换工具驱动关卡 gizmo：Select 不绘制手柄，Move/Rotate/Scale 分别编辑完整
+Location/Rotation/Scale；World/Local 决定三条轴用世界轴还是 actor 自身旋转后的局部轴。
+吸附开关与 Move/Rotate/Scale 步长是面板状态，默认 10 cm / 5° / 0.1，可在工具条内编辑。
+Wireframe 没有 wireframe 光栅模式，
 `debug.*` 表里也没有对应的 debug view，因此按钮常驻禁用并带说明，
 没有拿最接近的调试视图冒充。view mode 的高亮来自冻结的运行时快照
 `debugViewMode`，不是面板自己的第二份状态；运行时处于工具条之外的调试视图时
 Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
 `IsSceneViewportElement` 排除工具条与灯光/相机图标，否则点击按钮会同时驱动相机与拾取。
+
+### 关卡变换 gizmo
+
+关卡 gizmo 与蓝图组件预览页共用 `BuildBlueprintViewportGizmo` /
+`HitBlueprintViewportGizmo` / `DragBlueprintViewportGizmo` /
+`SnapBlueprintViewportValue` 的数学，不维护第二套轴投影与拖动求解。
+
+- 手柄命中是**视口图像像素距离**测试，不依赖 DOM 命中；手柄线段槽位
+  `pointer-events: none`，否则左键会在 gizmo 测试前被场景拾取或相机输入截走。
+- 拖动期间只把完整 TRS 作为 `EditorActorProperty::Transform` 的 `preview=true`
+  写入 live World；不进入 Scene 草稿、不产生历史。释放时 `preview=false` 提交同一
+  完整 TRS，`SceneDocumentService` 只记录一笔历史。Esc、焦点丢失、选择变化、
+  资产页切换或 World 换代取消拖动并预览原始 TRS 还原。
+- Mesh/Terrain/Script 一次写完整 TRS；灯光与 Camera 写位置与 authored rotation，
+  但不会写 scale。SquareAreaLight 只支持 Move，因为它的作者数据没有 rotation/scale。
+  Environment 与 SpeedTree 风剖面不显示 gizmo。
+- 刚体 Script actor 的 Scale 与蓝图编辑器同一规则，只接受统一缩放。
+- gizmo 的预览是 live World 状态，不是场景文档草稿；如果提交阶段文档校验失败，
+  当前命令没有携带回滚包，live World 可能保留预览 TRS，直到下一次场景刷新或成功编辑。
+- 关卡视口支持 UE 风格 Q/W/E/R：Q=Select、W=Move、E=Rotate、R=Scale。
+  焦点在文本/下拉控件时快捷键不生效；没有多选或局部轴切换热键。
+
+### Landscape 与 TR 资产页
+
+Landscape 停靠页提供 `Sculpt / Paint / Layers` 模式、层搜索和 Grid/List 切换。
+没有 Terrain 选中时显示 “Select a Landscape actor to edit terrain.”；选中后
+Sculpt/Paint 左侧为约 220px 的笔刷列，Layers 隐藏整个笔刷列并让层库占满宽度。
+右侧随模式切换：
+
+- Sculpt：紧凑 `Surface` 面板（size、heightScale、layer count、chunk count、
+  section count），不显示层卡；层搜索/Grid-List 也隐藏；
+- Paint：完整层库（搜索、Grid/List、层卡与选中态）；
+- Layers：同一完整层库占满宽度。
+
+Sculpt 参数是 Raise/Lower/Smooth、Radius(cm)、Strength、Falloff；Paint 参数是
+Paint/Erase、Radius(cm)、Hardness、Opacity、Flow。两组控件各有稳定 id
+（`viewport-brush-*` 与 `terrain-paint-*`），只显示当前模式那一组。
+本切片尚未实现伪造的图层绘制百分比。
+
+层卡直接来自选中 Terrain actor 的冻结 `terrainPlan->desc.layers`：名称、key、高度/坡度范围、
+uvScale、sourceSet 与 avgColor 都不在 UI 侧复制或推导。Grid 卡为 `144×116`，显示
+84px 球体缩略图；List 行显示 28px 球体缩略图。有完整 source-set 时使用 CPU 生成的
+`96×96` PNG 球体，否则退回 `avgColor`（线性转 sRGB）的程序化球体；无有效平均色时
+使用层 key/name 的稳定哈希生成低饱和色。真实图像外的 alpha 保持透明，卡片不再保留
+方形底色。源解析链为 MI `textures.layerAlbedo/layerNormal/layerPbr` → 三张
+`textureArray.sources[同 sourceSet 的局部 slice]`，以及 `layerAlbedo` 组可选的
+`displacementSources[同一 slice]`；albedo 提供 base color，normal map 扰动球面法线，
+pbr 的 R/G/B 分别为 roughness/metallic/AO。GPU 不参与预览，PBR 只使用 CPU 的
+Lambert + GGX、固定 key light 与 ambient。displacement 主路径是
+`displacementSources` 的 16-bit grayscale（`stbi_load_16` + `/65535`），用于法线梯度
+和轮廓半径扰动；只有旧组没有该字段时才退回 pbr.a 或 albedo 亮度。声明了字段但
+当前 slice 缺失/损坏时不显示图像，不会静默降级到 8-bit 或 pbr.a。位移只改变预览，
+不写 TR 或运行时高度。`M_pbr`、缺少任一阵列或源缺失/损坏时不显示图像；CPU 缓存、
+四源路径/大小/时间、预览参数和着色版本共同决定 cache key，原子写盘由
+`terrainLayerPreview` 负责，UI 不触碰 Vulkan 或运行时数组。
+点击卡片只设置 Paint 目标并更新选中样式和底栏；Sculpt 模式下不会静默切换工具。
+搜索按名称、key、source set 过滤并显示可见/总数；无匹配时显示显式空消息。Grid/List
+各自按固定尺寸窗口挂载：Grid 卡宽 144px + 6px 间距 = 150px 单元格、行高
+116px + 6px = 122px，列数由滚动视口宽度决定；List 单列、行高 38px。窗口上下至少保留
+一行 overscan，前后 spacer 维持完整过滤层数的
+滚动范围；可见层数不超过 12 时全部挂载且 spacer 为 0。搜索和 Grid/List 切换会把
+scrollTop 重置为 0，选择层只重建窗口内卡片的选中态、不改变滚动位置。当前仍无真实
+GPU 层纹理预览。
+
+每张卡片悬浮时在面板内显示无边框、无文字、无按钮的 `160×112` 平面预览：有 source-set
+三源时显示 3×3 repeat tiled 的 CPU PBR 图片（16-bit displacement 参与法线/轮廓扰动），
+图片后面保留 avgColor 底色；没有平面路径时
+隐藏图片、只保留底色。三条竖线/两条横线网格叠加在上层，预览仍轻微旋转/缩放，
+`pointer-events: none`，离开卡片或进入其它面板即隐藏。预览位置由未投影鼠标坐标减去
+`#terrain-page` 内容偏移得到，并按旋转后的外接盒留边钳制在面板内。
+
+关卡视口工具条只保留 `Landscape / Sculpt / Paint / Write Heightmap|Write Paint`；
+笔刷参数与 Paint 目标选择已经移入 Landscape 页，视口不再有第二行笔刷工具条或 layer 下拉。
+`Sculpt` 激活时视口按钮仍驱动同一份工具状态；`Paint` 在有 `layers` 的地形上启用，
+写入按钮改显 Write Paint；
+带层地形不支持 Sculpt（明确拒绝），在 Paint 与 Sculpt 之间切换会先取消当前手势。
+Undo/Redo 统一走顶部全局命令。视口工具条与面板模式在 `RefreshTerrainBrushUi` 后同步；
+面板的 Layers 模式只切换视图，不改变当前 Sculpt/Paint 工具。
+
+- 视口上用一个 `#viewport-brush-ring` 叠层显示笔刷足迹；Circle 使用现有 PNG 圆环，
+  Square 时同一节点加 `square` class，隐藏圆环图片并以 1px `#f4d35e` 方框描边，宽高
+  仍按当前笔刷半径像素更新；形状来自 Sculpt/Paint 各自域内的 `shape` 状态。圆环位置来自
+  `EditorSceneActorSnapshot::terrainPlan`（World 碰撞实例携带的只读高度图）与
+  观察相机的 ray→heightfield 命中，`pointer-events: none`，离开地形/视口或关闭
+  工具时隐藏。Landscape 激活时关卡 gizmo 隐藏，左键手势只属于 Sculpt/Paint。
+- Sculpt 只在 `ScriptPlayState::Editing` 且非 offline 时激活；Play/Stop 会取消
+  本地手势，EngineLoop 销毁 CPU session。带 `layers` 的地形当前明确拒绝 Sculpt，
+  因为 Sculpt 只重建几何；layer weight 改由 Paint 的覆盖层页失效路径处理。
+- 一次拖动在 UI 侧只发一个 `BeginStroke`、若干 `ApplyBrush` 和一个 `EndStroke`；
+  Esc/焦点丢失/选择或 World 换代发 `CancelStroke`。UI 只携带值语义
+  （worldGeneration、placementId、UV、半径、强度、falloff、mode），
+  EngineLoop 在 authoring 边界创建/推进 `TerrainEditSession` 并重建 GPU 网格。
+- Paint 用独立 `TerrainPaintSession` 与 `TerrainLayerPaintData`；一次拖动同样只发
+  Begin/Apply/End（Esc 为 Cancel），提交时在 render thread idle 边界更新
+  `TerrainPageManager` 的 plan 副本并失效该 placement 的已驻留覆盖页，由 feedback
+  重新烘焙/上传。`Write Heightmap` 只保存 Sculpt 快照（`.png` 8-bit、`.bmp` 24-bit、
+  `.exr`），不保存 Paint 覆盖，也不自动重载 World；`Write Paint` 走既有 terrain
+  paint 动作写会话覆盖。两者都不是全局 Save。
+- Terrain 资源标签页把 `TR_*.json` 作为 AssetDocument 编辑：顶层字段、LOD/page
+  字段、layers 表和逐层字段；字段解析/错误在工作区内显示，保存/回退走
+  `terrain.save` / `terrain.revert`。TR 页对 PNG/JPG/BMP/TGA heightmap 显示
+  RmlUi 预览，EXR 标记 unavailable；当前没有层纹理图像预览。Sculpt 高度图可
+  显式写回源文件，Paint 覆盖仍是会话内状态，重新加载关卡会丢弃。
 
 ### Actor 可视化与观察相机
 
@@ -822,7 +991,7 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
 actor 树用例已改为：跨类型统一排序、不生成类型文件夹、过滤计数不包含材质槽，
 搜索的 ASCII 折叠与 UTF-8 多字节名称、类型过滤取值与 `SceneActorGroupSpecs()` 同源、
 空状态区分“没有 World”与“没有匹配”、
-mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `RequestActorSelection`、
+mesh/Terrain actor 与材质槽仍走既有 MI 选择路径且保留 actorIdentity、非网格 actor 走 `RequestActorSelection`、
 无 MI 文档时 Details 展示选中 actor、只读字段按行刷新且节点身份稳定、
 主方向光的两个可编辑控件（含同值不发命令、非有限数与非区间值拒绝）、
 以及 Details 强度控件使用 0..150000 lux 物理单位区间的回归守卫。
@@ -857,7 +1026,8 @@ Detach 期间 Build 不触碰文档且重新 Attach 后重挂一次）。
 跨刷新真实指针双击和滚动保持。`UiColorTransform` 验证 UI gamma 与预乘边界。
 `jsonAssetLibraryTests.cpp` 覆盖分类、任意层级 data 省略、输入上限、路径边界、
 worker 代际、共享快照及空闲 Poll 不重读；`editorUiTests.cpp` 覆盖只读打开路由、
-64 行分页和转义，以及菜单栏的展开/互斥/关闭、Scene Undo/Redo 门禁、
+64 行分页和转义，以及菜单栏的展开/互斥/关闭、全局 Undo/Redo 的
+地形/Blueprint/Scene 上下文路由与门禁、
 菜单与工具栏共用可用性、Open Level 的 `LoadWorld` 请求、Window 勾选同步、
 About 模态，和视口工具条的分组单选、view mode 的 debug mode 映射、
 工具条命中不进入场景、静止帧不重复写 class。
@@ -893,7 +1063,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorPerformancePanelTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|EditorRetargetPreview|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

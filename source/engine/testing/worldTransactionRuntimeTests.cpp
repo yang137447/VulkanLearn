@@ -378,6 +378,11 @@ void RuntimeTestHooks::UpdateWorldGraphTransactionTest(
         if (worldGraphTransactionTestPhase ==
             WorldGraphTransactionTestPhase::WaitRetireDrain)
         {
+            // The render thread may still hold the pre-commit resolved scene
+            // until it consumes a snapshot published after the transaction.
+            // Join it before treating a drained queue as "everything expired".
+            validationServices.WaitForRenderThreadIdle();
+
             ResourceRetireQueue& retireQueue =
                 ResourceRetireQueue::GetInstance();
             const size_t pending =
@@ -393,26 +398,62 @@ void RuntimeTestHooks::UpdateWorldGraphTransactionTest(
                     throw std::runtime_error(
                         "successful transactions did not enqueue epoch-retired packages");
                 }
-                if (!worldGraphTransactionTestOldWorld.expired() ||
+
+                const bool oldOwnersAlive =
+                    !worldGraphTransactionTestOldWorld.expired() ||
                     !worldGraphTransactionTestOldWorldPackage.expired() ||
                     !worldGraphTransactionTestOldGraphPackage.expired() ||
                     !worldGraphTransactionTestGraphReloadPackage.expired() ||
                     !worldGraphTransactionTestOldLightBuffer.expired() ||
                     !worldGraphTransactionTestOldMaterial.expired() ||
                     !worldGraphTransactionTestOldMaterialInstance.expired() ||
-                    !worldGraphTransactionTestOldObjectResources.expired())
+                    !worldGraphTransactionTestOldObjectResources.expired();
+
+                std::string trackedAliveDetail;
+                if (!oldOwnersAlive)
                 {
-                    throw std::runtime_error(
-                        "retire queue drained while an old World/resource/graph owner remained live");
-                }
-                for (const std::weak_ptr<void>& retired :
-                     worldGraphTransactionTestResourcesExpectedToExpire)
-                {
-                    if (!retired.expired())
+                    for (size_t trackedIndex = 0;
+                         trackedIndex <
+                             worldGraphTransactionTestResourcesExpectedToExpire.size();
+                         ++trackedIndex)
                     {
-                        throw std::runtime_error(
-                            "retire queue drained while a tracked transaction resource remained live");
+                        if (!worldGraphTransactionTestResourcesExpectedToExpire[
+                                 trackedIndex].expired())
+                        {
+                            const std::shared_ptr<void> stillAlive =
+                                worldGraphTransactionTestResourcesExpectedToExpire[
+                                    trackedIndex].lock();
+                            trackedAliveDetail =
+                                "tracked resource index=" +
+                                std::to_string(trackedIndex) + "/" +
+                                std::to_string(
+                                    worldGraphTransactionTestResourcesExpectedToExpire
+                                        .size()) +
+                                ", useCount=" +
+                                std::to_string(stillAlive.use_count());
+                            break;
+                        }
                     }
+                }
+
+                if (oldOwnersAlive || !trackedAliveDetail.empty())
+                {
+                    // A post-commit snapshot may not have been consumed yet.
+                    // Defer within the existing drain budget instead of
+                    // relaxing the lifetime requirement.
+                    --worldGraphTransactionTestRetireDrainFramesRemaining;
+                    if (worldGraphTransactionTestRetireDrainFramesRemaining <= 0)
+                    {
+                        if (oldOwnersAlive)
+                        {
+                            throw std::runtime_error(
+                                "retire queue drained while an old World/resource/graph owner remained live");
+                        }
+                        throw std::runtime_error(
+                            "retire queue drained while a tracked transaction resource remained live: " +
+                            trackedAliveDetail);
+                    }
+                    return;
                 }
 
                 const std::shared_ptr<void> retainedTexture =

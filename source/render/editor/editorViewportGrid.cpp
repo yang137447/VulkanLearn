@@ -38,15 +38,32 @@ void EditorViewportGrid::EnsureCreated(RendererBackendVulkan& rendererBackend)
     rendererBackend.UnmapMemory(vertexMemory);
 
     vertexCount = static_cast<uint32_t>(vertices.size());
+
+    const InstanceVertex identity;
+    const vk::DeviceSize instanceSize = sizeof(InstanceVertex);
+    const std::pair<vk::Buffer, vk::DeviceMemory> instanceCreated =
+        rendererBackend.CreateBuffer(
+            instanceSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "EditorViewportGridInstances");
+    instanceBuffer = instanceCreated.first;
+    instanceMemory = instanceCreated.second;
+    void* instanceMapped =
+        rendererBackend.MapMemory(instanceMemory, instanceSize);
+    std::memcpy(instanceMapped, &identity, sizeof(InstanceVertex));
+    rendererBackend.UnmapMemory(instanceMemory);
 }
 
-void EditorViewportGrid::Bind(vk::CommandBuffer& commandBuffer) const
+void EditorViewportGrid::Bind(vk::CommandBuffer& commandBuffer)
 {
-    const vk::DeviceSize offset = 0;
-    commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &offset);
+    const vk::Buffer buffers[2] = {vertexBuffer, instanceBuffer};
+    const vk::DeviceSize offsets[2] = {0, 0};
+    commandBuffer.bindVertexBuffers(0, 2, buffers, offsets);
 }
 
-void EditorViewportGrid::Draw(vk::CommandBuffer& commandBuffer) const
+void EditorViewportGrid::Draw(vk::CommandBuffer& commandBuffer)
 {
     commandBuffer.draw(vertexCount, 1, 0, 0);
 }
@@ -59,8 +76,11 @@ void EditorViewportGrid::Shutdown(RendererBackendVulkan& rendererBackend)
     }
 
     rendererBackend.DestroyBuffer(vertexBuffer, vertexMemory);
+    rendererBackend.DestroyBuffer(instanceBuffer, instanceMemory);
     vertexBuffer = nullptr;
     vertexMemory = nullptr;
+    instanceBuffer = nullptr;
+    instanceMemory = nullptr;
     vertexCount = 0;
 }
 

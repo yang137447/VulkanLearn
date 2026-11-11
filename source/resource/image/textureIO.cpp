@@ -1,5 +1,7 @@
 #include "textureIO.h"
 
+#include "compressedTextureDecoder.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -11,6 +13,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -19,6 +22,63 @@
 
 namespace
 {
+    std::vector<uint8_t> ReadWholeFile(const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream.is_open())
+            throw std::runtime_error("Failed to open texture file: " + path.string());
+        stream.seekg(0, std::ios::end);
+        const std::streamoff length = stream.tellg();
+        if (length < 0)
+            throw std::runtime_error("Failed to read texture file size: " + path.string());
+        stream.seekg(0, std::ios::beg);
+        std::vector<uint8_t> bytes(static_cast<size_t>(length));
+        if (!bytes.empty())
+            stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!stream)
+            throw std::runtime_error("Failed to read texture file: " + path.string());
+        return bytes;
+    }
+
+    HostImage DecodeCompressedContainer(
+        const void* data,
+        size_t size,
+        const std::string& sourceLabel,
+        HostImage::TextureSemantic semantic,
+        TextureIO::LoadOptions::Transfer transfer)
+    {
+        const bool srgb = transfer == TextureIO::LoadOptions::Transfer::SRGB;
+        try
+        {
+            if (CompressedTextureDecoder::MatchesKtx2(data, size))
+                return CompressedTextureDecoder::DecodeKtx2(data, size, semantic, srgb);
+            if (CompressedTextureDecoder::MatchesDds(data, size))
+                return CompressedTextureDecoder::DecodeDds(data, size, semantic, srgb);
+        }
+        catch (const std::exception& error)
+        {
+            throw std::runtime_error(sourceLabel + ": " + error.what());
+        }
+        throw std::runtime_error(sourceLabel + ": not a DDS or KTX2 container");
+    }
+
+    // BC 块只能在离线编码时完成 V 方向翻转；运行时翻转会破坏块内行顺序，
+    // 因此这里直接拒绝 ForceOn，要求资产管线预先烘焙引擎朝向。
+    void RejectCompressedRowFlip(
+        const HostImage& image,
+        TextureIO::LoadOptions::FlipYMode flipY,
+        const std::string& sourceLabel)
+    {
+        if (HostImage::IsBlockCompressed(image.format) &&
+            flipY == TextureIO::LoadOptions::FlipYMode::ForceOn)
+        {
+            throw std::runtime_error(
+                sourceLabel +
+                ": block-compressed textures cannot be vertically flipped at runtime; "
+                "bake the engine V orientation offline or load with FlipYMode::ForceOff");
+        }
+    }
+
     bool ShouldFlipY(TextureIO::LoadOptions::FlipYMode mode)
     {
         return mode == TextureIO::LoadOptions::FlipYMode::ForceOn;
@@ -329,12 +389,187 @@ namespace
 
         return true;
     }
+
+    uint32_t PngCrc32(const uint8_t* data, size_t size)
+    {
+        uint32_t crc = 0xFFFFFFFFu;
+        for (size_t index = 0; index < size; ++index)
+        {
+            crc ^= data[index];
+            for (uint32_t bit = 0; bit < 8; ++bit)
+                crc = (crc >> 1u) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+        return ~crc;
+    }
+
+    void AppendBigEndian32(std::vector<uint8_t>& output, uint32_t value)
+    {
+        output.push_back(static_cast<uint8_t>((value >> 24u) & 0xFFu));
+        output.push_back(static_cast<uint8_t>((value >> 16u) & 0xFFu));
+        output.push_back(static_cast<uint8_t>((value >> 8u) & 0xFFu));
+        output.push_back(static_cast<uint8_t>(value & 0xFFu));
+    }
+
+    void AppendPngChunk(
+        std::vector<uint8_t>& output,
+        const char* type,
+        const uint8_t* data,
+        size_t size)
+    {
+        AppendBigEndian32(output, static_cast<uint32_t>(size));
+        const size_t typeOffset = output.size();
+        output.insert(output.end(), type, type + 4);
+        if (size > 0)
+            output.insert(output.end(), data, data + size);
+        const uint32_t crc = PngCrc32(
+            output.data() + typeOffset, output.size() - typeOffset);
+        AppendBigEndian32(output, crc);
+    }
+
+    // 预览 PNG 不需要压缩率；用 zlib stored block 可避免给编辑器引入额外压缩依赖。
+    void AppendStoredZlibStream(std::vector<uint8_t>& output, const std::vector<uint8_t>& raw)
+    {
+        output.push_back(0x78);
+        output.push_back(0x01);
+        size_t offset = 0;
+        while (offset < raw.size())
+        {
+            const size_t chunk = std::min<size_t>(65535u, raw.size() - offset);
+            const bool finalBlock = offset + chunk == raw.size();
+            output.push_back(finalBlock ? 0x01 : 0x00);
+            const uint16_t length = static_cast<uint16_t>(chunk);
+            const uint16_t inverse = static_cast<uint16_t>(~length);
+            output.push_back(static_cast<uint8_t>(length & 0xFFu));
+            output.push_back(static_cast<uint8_t>((length >> 8u) & 0xFFu));
+            output.push_back(static_cast<uint8_t>(inverse & 0xFFu));
+            output.push_back(static_cast<uint8_t>((inverse >> 8u) & 0xFFu));
+            output.insert(output.end(), raw.begin() + offset, raw.begin() + offset + chunk);
+            offset += chunk;
+        }
+
+        uint32_t first = 1;
+        uint32_t second = 0;
+        for (const uint8_t byte : raw)
+        {
+            first = (first + byte) % 65521u;
+            second = (second + first) % 65521u;
+        }
+        AppendBigEndian32(output, (second << 16u) | first);
+    }
+
+    bool EncodePng(const HostImage& image, std::vector<uint8_t>& output)
+    {
+        if (image.width == 0 || image.height == 0 ||
+            image.arrayLayers != 1 || image.mipLevels != 1)
+        {
+            return false;
+        }
+
+        uint32_t channels = 0;
+        uint8_t colorType = 0;
+        switch (image.format)
+        {
+        case HostImage::PixelFormat::R8_UNORM:
+        case HostImage::PixelFormat::R8_SRGB:
+            channels = 1;
+            colorType = 0;
+            break;
+        case HostImage::PixelFormat::RG8_UNORM:
+        case HostImage::PixelFormat::RG8_SRGB:
+            channels = 2;
+            colorType = 4;
+            break;
+        case HostImage::PixelFormat::RGBA8_UNORM:
+        case HostImage::PixelFormat::RGBA8_SRGB:
+            channels = 4;
+            colorType = 6;
+            break;
+        default:
+            return false;
+        }
+
+        const size_t packedRowBytes = static_cast<size_t>(image.width) * channels;
+        const size_t rowStride = image.rowStrideBytes > 0 ?
+            image.rowStrideBytes : packedRowBytes;
+        if (rowStride < packedRowBytes ||
+            image.data.size() < rowStride * image.height)
+        {
+            return false;
+        }
+
+        std::vector<uint8_t> raw;
+        raw.reserve((packedRowBytes + 1) * image.height);
+        const uint8_t* pixels = image.data.data();
+        for (uint32_t y = 0; y < image.height; ++y)
+        {
+            raw.push_back(0);
+            const uint8_t* row = pixels + static_cast<size_t>(y) * rowStride;
+            raw.insert(raw.end(), row, row + packedRowBytes);
+        }
+
+        output.clear();
+        static constexpr uint8_t Signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+        output.insert(output.end(), Signature, Signature + sizeof(Signature));
+
+        uint8_t header[13] = {};
+        const uint32_t bigWidth = image.width;
+        const uint32_t bigHeight = image.height;
+        header[0] = static_cast<uint8_t>(bigWidth >> 24u);
+        header[1] = static_cast<uint8_t>(bigWidth >> 16u);
+        header[2] = static_cast<uint8_t>(bigWidth >> 8u);
+        header[3] = static_cast<uint8_t>(bigWidth);
+        header[4] = static_cast<uint8_t>(bigHeight >> 24u);
+        header[5] = static_cast<uint8_t>(bigHeight >> 16u);
+        header[6] = static_cast<uint8_t>(bigHeight >> 8u);
+        header[7] = static_cast<uint8_t>(bigHeight);
+        header[8] = 8;
+        header[9] = colorType;
+        AppendPngChunk(output, "IHDR", header, sizeof(header));
+
+        std::vector<uint8_t> compressed;
+        AppendStoredZlibStream(compressed, raw);
+        AppendPngChunk(output, "IDAT", compressed.data(), compressed.size());
+        AppendPngChunk(output, "IEND", nullptr, 0);
+        return true;
+    }
+
+    bool SavePng(const std::filesystem::path& outputPath, const HostImage& image)
+    {
+        std::vector<uint8_t> bytes;
+        if (!EncodePng(image, bytes))
+            return false;
+        std::filesystem::path parentPath = outputPath.parent_path();
+        if (!parentPath.empty())
+            std::filesystem::create_directories(parentPath);
+        std::ofstream stream(outputPath, std::ios::binary | std::ios::trunc);
+        if (!stream.is_open())
+            return false;
+        stream.write(
+            reinterpret_cast<const char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+        return static_cast<bool>(stream);
+    }
 }
 
 std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path, const LoadOptions& options)
 {
     const std::string pathString = path.string();
     const auto fileFormat = FileFormatFromPath(path);
+
+    // DDS/KTX2 只走块压缩容器解码；stb 不支持这两类容器。
+    if (fileFormat == FileFormat::Dds || fileFormat == FileFormat::Ktx2)
+    {
+        const std::vector<uint8_t> bytes = ReadWholeFile(path);
+        HostImage image = DecodeCompressedContainer(
+            bytes.data(),
+            bytes.size(),
+            pathString,
+            options.semantic,
+            options.transfer);
+        RejectCompressedRowFlip(image, options.flipY, pathString);
+        return image;
+    }
+
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -393,13 +628,51 @@ std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path)
     return Load(path, LoadOptions());
 }
 
+HostImage TextureIO::LoadArray(
+    const std::vector<std::filesystem::path>& sources,
+    const LoadOptions& options)
+{
+    if (sources.empty())
+        throw std::invalid_argument("Texture array requires at least one source");
+    // 现有文件解码器按 RGBA 格式写行跨度；不把不匹配的通道请求带入底层拷贝。
+    if ((options.forceChannels != 0 && options.forceChannels != 4) || options.genMipmaps)
+        throw std::invalid_argument("Texture array preparation requires RGBA mip 0");
+
+    std::vector<HostImage> layers;
+    layers.reserve(sources.size());
+    for (size_t index = 0; index < sources.size(); ++index)
+    {
+        try
+        {
+            auto layer = Load(sources[index], options);
+            if (!layer)
+                throw std::runtime_error("Image decoder returned no pixels");
+            layers.push_back(std::move(*layer));
+        }
+        catch (const std::exception& error)
+        {
+            throw std::runtime_error(
+                "Texture array layer " + std::to_string(index) + " (" + sources[index].string() +
+                "): " + error.what());
+        }
+    }
+    return HostImage::CombineArrayLayers(std::move(layers));
+}
+
 bool TextureIO::Save(const std::filesystem::path& path, const HostImage& image, const SaveOptions& options)
 {
+    // 单图导出没有数组容器，拒绝静默只写第 0 层。
+    if (image.arrayLayers != 1 || image.mipLevels != 1)
+        return false;
     const FileFormat format = options.format == FileFormat::Png &&
         path.has_extension() ? FileFormatFromPath(path) : options.format;
     if (format == FileFormat::Exr)
     {
         return SaveExrHalf(path, image, options.exrWriteRGOnly);
+    }
+    if (format == FileFormat::Png)
+    {
+        return SavePng(path, image);
     }
     return false;
 }
@@ -412,6 +685,25 @@ bool TextureIO::Save(const std::filesystem::path& path, const HostImage& image)
 std::optional<HostImage> TextureIO::LoadFromMemory(const void* data, size_t size, const LoadOptions& options)
 {
     const std::optional<FileFormat>& formatHint = options.formatHint;
+
+    const bool compressedHint = formatHint.has_value() &&
+        (*formatHint == FileFormat::Dds || *formatHint == FileFormat::Ktx2);
+    // 显式给了非压缩 hint 时以 hint 为准；没有 hint 时按魔数识别容器。
+    if (compressedHint ||
+        (!formatHint.has_value() &&
+         (CompressedTextureDecoder::MatchesDds(data, size) ||
+          CompressedTextureDecoder::MatchesKtx2(data, size))))
+    {
+        HostImage image = DecodeCompressedContainer(
+            data,
+            size,
+            "texture memory",
+            options.semantic,
+            options.transfer);
+        RejectCompressedRowFlip(image, options.flipY, "texture memory");
+        return image;
+    }
+
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -478,6 +770,13 @@ std::optional<HostImage> TextureIO::LoadFromMemory(const void* data, size_t size
 
 std::vector<uint8_t> TextureIO::SaveToMemory(const HostImage& image, const SaveOptions& options)
 {
+    if (options.format == FileFormat::Png)
+    {
+        std::vector<uint8_t> output;
+        if (EncodePng(image, output))
+            return output;
+        return {};
+    }
     std::vector<uint8_t> output;
     const std::filesystem::path tempPath = std::filesystem::temp_directory_path() / "textureio_temp_output.exr";
     if (Save(tempPath, image, options))

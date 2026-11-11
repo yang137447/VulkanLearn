@@ -161,7 +161,12 @@ SkeletalAsset
 | SM `skinning.montages[]` | Montage 清单 `{id, path}` 与顺序 | 决定加载哪些 Montage、缓存键顺序；`id` 必须与 JSON 的 `montage` 相等 |
 
 Montage 只是数据层：`SkeletalAsset::montages` 按值持有这些结构，`FindMontage(idOrPath)`
-支持按 id 或 `sourcePath` 查找。资源侧已提交 **19 个** `Maps/SC_gasp/Animations/AM_*.json`
+支持按 id 或 `sourcePath` 查找。retarget 目标通过 `AnimationAsset()` 从 sourceModel
+查找 Montage/derived clip、构建 catalog 和执行 notify；Montage 的 SK/sidecar 绑定仍属于
+source asset，不按目标骨名重新绑定。目标只接收 retarget 后的姿态；字段与拒绝规则见
+[动画资产导入](animation-asset-import.md)。
+
+资源侧已提交 **19 个** `Maps/SC_gasp/Animations/AM_*.json`
 共 36,839 B：10 个 traversal（资源 `ebd7059`，46 条 notify、21 个 warp）+
 9 个 Catch（资源 `3574a3a`，46 条 notify、12 个 warp），合计 188 条 notify、33 个窗口；
 traversal 那批复制到 `tool/animation-tests/fixtures/montages/` 作为模块测试夹具。

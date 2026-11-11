@@ -1,6 +1,7 @@
 #include "ui/widgets/widgetDocument.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <utility>
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -48,6 +49,24 @@ void WidgetDocument::SetMarkup(const std::string& id, std::string markup)
     if (cached != markupCache.end() && cached->second == markup) return;
     if (auto* element = document->GetElementById(id))
     {
+        // 诊断：markup 必须只承载结构。若调用方把实时值拼进 markup，替换会销毁
+        // 正在拖动的滑块/正在输入的文本；焦点在这里给出明确信号。
+        if (auto* focus = document->GetContext()->GetFocusElement())
+        {
+            bool focusedInside = false;
+            for (Rml::Element* ancestor = focus; ancestor != nullptr;
+                ancestor = ancestor->GetParentNode())
+            {
+                if (ancestor == element)
+                {
+                    focusedInside = true;
+                    break;
+                }
+            }
+            if (focusedInside)
+                std::fprintf(stderr,
+                    "[WidgetDocument] SetMarkup replaced focused subtree: %s\n", id.c_str());
+        }
         InvalidateDescendants(*element);
         // RmlUi 将 option 移到内部 widget；替换 DOM 不会自动清理旧选项。
         if (auto* selector = dynamic_cast<Rml::ElementFormControlSelect*>(element))

@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <nlohmann/json.hpp>
+#include "hair/tressfxBehavior.h"
 
 namespace VL
 {
@@ -18,6 +19,31 @@ inline std::string ScriptComponentId(const nlohmann::json& component) { return c
 inline bool IsScriptLight(const std::string& type)
 {
     return type == "pointLight" || type == "spotLight" || type == "directionalLight";
+}
+
+// tressfx 组件在场景加载侧就是一个 mesh 对象（一个 guide section、一个材质槽），
+// 组件类型只多出“父级绑定”语义；模板、同步与变换处理和 mesh 组件共用同一路径。
+inline bool IsScriptMeshComponent(const std::string& type)
+{
+    return type == "mesh" || type == "tressfx";
+}
+
+// 最近的 mesh 祖先组件；没有则 nullptr。tressfx 组件的绑定来源（源角色与骨架）
+// 就是它。组件树已由 ValidateScriptComponents 收口，这里不再做环检测。
+inline const nlohmann::json* ScriptComponentMeshAncestor(
+    const nlohmann::json& components, const nlohmann::json& component)
+{
+    auto ancestor = component.value("parent", "");
+    while (!ancestor.empty())
+    {
+        const nlohmann::json* found = nullptr;
+        for (const auto& node : components)
+            if (ScriptComponentId(node) == ancestor) { found = &node; break; }
+        if (found == nullptr) return nullptr;
+        if (found->value("type", "") == "mesh") return found;
+        ancestor = found->value("parent", "");
+    }
+    return nullptr;
 }
 
 inline bool IsScriptLightNumber(const std::string& field)
@@ -48,7 +74,7 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
     {
         if (!component.is_object()) throw std::invalid_argument("Component requires object");
         const auto type = component.value("type", "");
-        if (type != "mesh" && type != "scene" && type != "camera" && type != "springArm" && !IsScriptLight(type))
+        if (!IsScriptMeshComponent(type) && type != "scene" && type != "camera" && type != "springArm" && !IsScriptLight(type))
             throw std::invalid_argument("Unsupported component type");
         const auto id = ScriptComponentId(component);
         if (id.empty() || id.find_first_of("/\\|\0", 0, 4) != std::string::npos ||
@@ -59,6 +85,9 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
             if (field.key() != "id" && field.key() != "parent" && field.key() != "type" &&
                 field.key() != "position" && field.key() != "rotation" && field.key() != "scale" && field.key() != "collision" &&
                 !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride")) &&
+                !(type == "tressfx" && (field.key() == "modelPath" || field.key() == "rootBone" ||
+                    field.key() == "weights" || field.key() == "simulation" ||
+                    field.key() == "hairCollision" || field.key() == "materialOverride")) &&
                 !(type == "camera" && (field.key() == "fov" || field.key() == "near_clip" ||
                     field.key() == "far_clip" || field.key() == "autoActivate" || field.key() == "priority")) &&
                 !(type == "springArm" && (field.key() == "targetArmLength" || field.key() == "socketOffset" ||
@@ -85,6 +114,33 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
                 if (!component.contains(field) || !component.at(field).is_string() ||
                     component.at(field).get<std::string>().empty())
                     throw std::invalid_argument("Mesh component requires non-empty asset paths");
+        if (type == "tressfx")
+        {
+            nlohmann::json behavior = nlohmann::json::object();
+            if (component.contains("simulation")) behavior["simulation"] = component.at("simulation");
+            if (component.contains("hairCollision")) behavior["hairCollision"] = component.at("hairCollision");
+            if (component.contains("rootBone"))
+                behavior["skinning"] = {{"rootBone", component.at("rootBone")}};
+            try { Hair::ReadTressfxPlacementBehavior(behavior, id); }
+            catch (const std::exception& error) { throw std::invalid_argument(error.what()); }
+            // 毛发组件必须自带 tressfx 描述符；父级（源角色）由组件树决定，不再
+            // 通过描述符里的场景对象名写死。
+            if (!component.contains("modelPath") || !component.at("modelPath").is_string() ||
+                component.at("modelPath").get<std::string>().empty())
+                throw std::invalid_argument("TressFX component requires a non-empty modelPath");
+            if (!component.contains("rootBone") || !component.at("rootBone").is_string() ||
+                component.at("rootBone").get<std::string>().empty())
+                throw std::invalid_argument("TressFX component rootBone requires a non-empty string");
+            if (component.contains("weights"))
+            {
+                const auto& weights = component.at("weights");
+                const std::string value = weights.is_string()
+                    ? weights.get<std::string>() : std::string();
+                if (value != "auto" && value != "rootBone" && value != "mesh")
+                    throw std::invalid_argument(
+                        "TressFX component weights must be auto/rootBone/mesh");
+            }
+        }
         if (type == "camera")
         {
             for (const char* field : {"fov", "near_clip", "far_clip"})
@@ -179,6 +235,14 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
             id = parent->second;
         }
     }
+    // tressfx 组件的绑定来源是最近的 mesh 祖先：没有它就没有源角色骨架与 SkinPose，
+    // 这里在组件树拓扑收口时就拒绝，不等加载期才报“找不到源对象”。
+    for (const auto& component : components)
+        if (component.value("type", "") == "tressfx" &&
+            ScriptComponentMeshAncestor(components, component) == nullptr)
+            throw std::invalid_argument(
+                "TressFX component \"" + ScriptComponentId(component) +
+                "\" requires a mesh component ancestor");
 }
 
 inline void ValidateScriptPhysics(const nlohmann::json& physics)
@@ -496,5 +560,42 @@ inline Eigen::Quaternionf ScriptComponentRotation(const nlohmann::json& blueprin
 inline std::string ScriptMeshIdentity(const std::string& blueprintId, const nlohmann::json& component)
 {
     return "__blueprint/" + blueprintId + (component.contains("id") ? "/" + ScriptComponentId(component) : "");
+}
+
+// 组件网格模板键。tressfx 的绑定来源是父组件身份，跨 actor 不能共享模板，
+// 否则两个角色的毛发会错误复用同一份绑定；mesh 组件保持原有键不变。
+inline std::string ScriptComponentMeshTemplateKey(
+    const nlohmann::json& blueprint, const nlohmann::json& component)
+{
+    std::string key = component.at("modelPath").get<std::string>() + "\n" +
+        component.value("materialOverride", "");
+    if (component.value("type", "") == "tressfx")
+    {
+        const nlohmann::json* ancestor =
+            ScriptComponentMeshAncestor(blueprint.at("components"), component);
+        key += "\n@" + (ancestor == nullptr ? std::string() :
+            ScriptMeshIdentity(blueprint.at("id").get<std::string>(), *ancestor));
+        for (const char* field : {"simulation", "hairCollision", "rootBone", "weights"})
+            if (component.contains(field)) key += "\n" + std::string(field) + "=" + component.at(field).dump();
+    }
+    return key;
+}
+
+// 组件结构签名项。tressfx 追加绑定来源，改父组件会触发重建而不是静默复用源角色。
+inline nlohmann::json ScriptComponentMeshStructureEntry(
+    const nlohmann::json& blueprint, const nlohmann::json& component)
+{
+    nlohmann::json entry = {ScriptComponentId(component), component.at("modelPath"),
+        component.value("materialOverride", "")};
+    if (component.value("type", "") == "tressfx")
+    {
+        const nlohmann::json* ancestor =
+            ScriptComponentMeshAncestor(blueprint.at("components"), component);
+        entry.push_back(ancestor == nullptr ? std::string() :
+            ScriptMeshIdentity(blueprint.at("id").get<std::string>(), *ancestor));
+        for (const char* field : {"simulation", "hairCollision", "rootBone", "weights"})
+            entry.push_back(component.value(field, nlohmann::json()));
+    }
+    return entry;
 }
 } // namespace VL

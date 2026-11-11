@@ -29,6 +29,38 @@ screenshot debug_view.bmp
 
 截图是显式调试操作，因此只在请求发生的帧执行一次 `WaitIdle`；正常帧路径不增加同步开销。
 
+## Soft Body
+
+```text
+softbody impact <balloon-name> [speed-cm-per-second]
+```
+
+向当前 World 中指定 balloon 发射一个 Jolt 动态球体。默认速度 800 cm/s，速度必须是
+`(0, 100000]` 内的有限值。投射物与 balloon 静态 proxy 接触后产生冲击事件，
+`SoftBodyRuntime` 触发运行时球面 Voronoi 破裂并播放资产优先爆裂音（缺失回退程序化）。未知或已破裂的
+balloon 只报告 warning，不修改 World。
+
+## Glass Pane
+
+```text
+glass impact <pane-name> [speed-cm-per-second]
+```
+
+从板面法线方向向当前 World 中指定 `glassPane` 发射一个 Jolt 动态球体（半径 3 cm、
+质量 0.3 kg，LinearCast 连续碰撞）。默认速度 800 cm/s，速度必须是 `(0, 100000]`
+内的有限值。投射物与静态板代理接触后，`GlassRuntime` 在命中点生成运行时平面
+Voronoi 碎片并播放资产优先玻璃破碎音（缺失回退程序化）。未知或已破碎的 pane 只报告 warning。
+
+## Projectile
+
+```text
+shoot
+```
+
+从渲染相机前向发射一支可见箭（3500 cm/s，0.15 s 冷却）。它与鼠标左键走同一个
+`ProjectileRuntime::Fire` 路径，用于自动化截图和脚本化验证；没有可复用材质或
+相机不可用时只报告 warning。
+
 ## Animation
 
 ```text
@@ -132,6 +164,17 @@ demo 缺省或 `overlay` 为穿透显示；`depth` 对全部示例形状启用�
 带空格的身份用双引号；owner `*` 恢复全部。clear 保留过滤设置。
 Console 解析只排队类型化控制值，执行、预算与生命周期见 [公共 DrawDebug](debug-draw.md)。
 
+## Quit
+
+```text
+quit
+```
+
+Console 把退出请求翻译为 `RuntimeCommandType::QuitApplication` 投递到 `CommandBus`；
+EngineLoop 在 GT 命令点消费后设置 `shouldClose` 与 `exitCode = 0`，随后由 `main.cpp`
+调用既有的 `EngineLoop::Shutdown()` 与 `PlatformApplication::Shutdown()`。
+它不直接跨线程写 `shouldClose`，也不等同于 UI 的 `Quit` action。
+
 ## 启动参数排队命令
 
 自动化采集（例如论文 case showcase 截图）不需要手敲控制台，可以直接在启动参数里排队：
@@ -139,6 +182,7 @@ Console 解析只排队类型化控制值，执行、预算与生命周期见 [�
 ```text
 --console-command "<line>"          可重复，按命令行顺序提交
 --console-command-delay <frames>    默认 60，提交前等待的帧数
+--exit-after-frames <N>             N（>= 1）个完成帧后以退出码 0 结束进程
 ```
 
 单条命令可以加 `@<frame> ` 前缀覆盖提交帧，其它命令仍使用 `--console-command-delay`：
@@ -160,6 +204,10 @@ Console 解析只排队类型化控制值，执行、预算与生命周期见 [�
 命令经 `DebugConsole::SubmitCommandLine()` 提交，与交互输入走同一条 `ProcessCommand` 解析路径，
 因此脚本命令和手输命令的校验、日志完全一致。延迟是必需的：第 1 帧时环境贴图、CLUT 与
 swapchain 内容都还没稳定，立即截图只会得到无效画面。
+
+`--exit-after-frames` 在 `EngineLoop::Run()` 的帧末计数，达到 N 后走正常退出路径；
+它不是 `--frame-limit`（后者是 1..1000 Hz 的渲染节拍上限，不是帧数），也不能与
+`--exit-after-tests` 组合（runtime test 自带退出条件）。
 
 两个自动化注意事项：启动进程时**不要把窗口最小化**（client area 失效会导致 swapchain
 out-of-date，渲染线程以 `presentKHR: ErrorOutOfDateKHR` 退出，延迟帧走不到）；用

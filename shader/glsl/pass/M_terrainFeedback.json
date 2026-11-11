@@ -1,0 +1,103 @@
+{
+    "name": "M_terrainFeedback",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_pageTableSize": {
+            "type": "float",
+            "default": 32.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "must match TerrainPageManager::PageTableSize; feedback page coords are 5+5 bits"
+        },
+        "u_frameTag": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 1.0,
+                "max": 255.0
+            },
+            "description": "8-bit submitted-epoch tag written into feedback alpha; 0 is reserved for invalid"
+        },
+        "u_pageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "must match TerrainPageManager::PageResolution; used for the same half-texel page inset as M_terrain"
+        },
+        "u_uvScale": {
+            "type": "float",
+            "default": 64.0,
+            "range": {
+                "min": 0.1,
+                "max": 1024.0
+            },
+            "description": "M_terrain u_uvScale; the layer feedback must reproduce the same layer UV as the material"
+        },
+        "u_layerPageResolution": {
+            "type": "float",
+            "default": 128.0,
+            "range": {
+                "min": 16.0,
+                "max": 512.0
+            },
+            "description": "VT layer page resolution; must match TerrainLayerPageManager::PageResolution"
+        },
+        "u_layerMaxMip": {
+            "type": "float",
+            "default": 4.0,
+            "range": {
+                "min": 0.0,
+                "max": 4.0
+            },
+            "description": "maximum VT layer page-table mip, same value as M_terrain"
+        },
+        "u_layerForceMip": {
+            "type": "float",
+            "default": -1.0,
+            "range": {
+                "min": -1.0,
+                "max": 4.0
+            },
+            "description": "same forced target mip as M_terrain; must match or feedback reports pages the material will not sample"
+        },
+        "u_layerFeedbackEnabled": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "1 when the active World uses layer mode 1 and the 4 layer attachments carry L4b feedback; 0 keeps them invalid"
+        },
+        "u_feedbackScaleX": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0.1,
+                "max": 64.0
+            },
+            "description": "screen width / 128; converts this 128x128 pass's derivatives to main-view derivatives so the requested mip matches M_terrain"
+        },
+        "u_feedbackScaleY": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0.1,
+                "max": 64.0
+            },
+            "description": "screen height / 128; paired with u_feedbackScaleX"
+        }
+    },
+    "textures": {}
+}

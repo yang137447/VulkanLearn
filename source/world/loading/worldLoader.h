@@ -1,27 +1,14 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "core/runtimeResult.h"
-#include "scene/sceneAssetTypes.h"
+#include "world/worldBuildPlan.h"
 
 namespace VL
 {
-
-struct WorldBuildPlan
-{
-    std::string scenePath;
-    nlohmann::json sceneJson;
-    nlohmann::json authoredSceneJson;
-    SceneAssetBuildPlan sceneAssetPlan;
-    std::vector<MeshObjectBuildPlan> meshObjectPlans;
-    std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
-    // 场景地面世界 Y；editorGrid 参考网格跟随它，默认 0。
-    float editorGridHeight = 0.0f;
-};
 
 // IO and validation stage for loading a World. It produces a pure build plan;
 // runtime object creation belongs to WorldBuilder or renderer resource loaders.

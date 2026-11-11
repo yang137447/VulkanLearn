@@ -362,12 +362,15 @@ void MaterialAssetValidator::ValidateDefinition(
 
     for (const auto& [textureName, textureJson] : materialJson["textures"].items())
     {
+        const std::string textureType = textureJson.is_object()
+            ? textureJson.value("type", std::string())
+            : std::string();
         if (!textureJson.is_object() ||
-            textureJson.value("type", std::string()) != "sampler2D" ||
+            (textureType != "sampler2D" && textureType != "sampler2DArray") ||
             !textureJson.contains("default"))
         {
             throw std::runtime_error(
-                "Material texture must be sampler2D and contain default: " + textureName +
+                "Material texture must be sampler2D or sampler2DArray and contain default: " + textureName +
                 " in " + std::string(materialPath));
         }
     }

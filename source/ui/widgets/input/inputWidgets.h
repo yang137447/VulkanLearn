@@ -12,6 +12,7 @@ struct WidgetAction
     std::string name;
     size_t index = 0;
     uint32_t component = 0;
+    std::string key;
 };
 
 enum class ButtonStyle { Command, ListItem, TabClose, TreeToggle };

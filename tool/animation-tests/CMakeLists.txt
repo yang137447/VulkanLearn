@@ -2,6 +2,7 @@ add_executable(animation_preflight_tests
     ozzDependencyProbeTests.cpp
     skeletalImportTests.cpp
     animationSkeletonTests.cpp
+    animationRetargetTests.cpp
     animationSequenceDataTests.cpp
     animationMontageTests.cpp
     animationScriptDataTests.cpp

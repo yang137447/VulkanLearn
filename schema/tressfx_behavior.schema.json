@@ -1,0 +1,295 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://vulkanlearn.local/schema/tressfx_behavior.schema.json",
+    "$defs": {
+        "tressfxSimulationValues": {
+            "type": "object",
+            "description": "tressfx guide 模拟作者参数，单位沿用项目世界契约：位置为厘米，加速度为厘米/秒²。",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "false 时不创建 solver 或模拟历史；放置绑定仍可执行 GPU 骨骼跟随。"
+                },
+                "gravity": {
+                    "type": "array",
+                    "description": "重力加速度 xyz，单位厘米/秒²。",
+                    "items": {
+                        "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "wind": {
+                    "type": "array",
+                    "description": "单个作者风向量：方向归一化后作为风锥轴，长度作为 TressFX WindMagnitude 力标量，不是物理风速。运行时按 TressFX SetWind 展开成四路锥形风（绕 Y/Z 各 ±40°），每路乘 wM = |wind| * (sin(simFrame*0.001)^2 + 0.5)。",
+                    "items": {
+                        "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "damping": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "TressFX 的 DampingCoeff，直接用于积分 exp(-damping*dt*60)，不是保留比例。默认 0.035，常用 0..0.07（UE UI 范围），字段本身仍是 [0,1]。"
+                },
+                "iterations": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16,
+                    "description": "LengthConstraintsWind pass 的长度约束迭代次数；GPU 在一次 dispatch 内展开，上限 16 避免异常值触发 TDR。"
+                },
+                "rootFixedPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 32,
+                    "description": "每根 guide 从根部起固定的点数（TressFX 的 NumVerticesFromRootNoSimulation）；逆质量 <= 0 的点也不可移动。"
+                },
+                "maxDt": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 0.016,
+                    "description": "兼容字段，单位秒；资产校验仍限制在 (0,0.016]。GPU 原生调度与 GuideSimulation::StepFrame 不再读取它（按帧增量执行 0/1/2 个固定 0.0125 秒 substep），只有旧的 GuideSimulation::Step(dt) 变量步长入口仍把它当作 dt 上限。"
+                },
+                "bendStiffness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "映射到 LocalShape pass 的逐顶点 Stiffness 标量；pass 内按 TressFX 公式再乘 0.5。0 关闭局部形状约束。未提供 localShapeStiffness 时整条 strand 使用该标量。"
+                },
+                "localShapeStiffness": {
+                    "type": "array",
+                    "description": "可选作者逐顶点 LocalShape Stiffness，长度必须等于该 guide 资产的 pointsPerStrand（4/8/16/32/64）；第 i 项对应源曲线在 i/N 处的采样值。加载期按源 TressFXComponent.cpp:710 对 >0.95 的值 clamp 到 0.95 并输出记录；省略时回退到 bendStiffness 标量。",
+                    "items": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 64
+                },
+                "globalShapeStiffness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "TressFX Integration 的 global shape 强度：把可移动点拉向 InitialPos（蒙皮/静止位置）。0 关闭，既有资产保持原外观。"
+                },
+                "globalShapeEffectiveRange": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "global shape 作用范围，按每根 strand 顶点数的比例；local < range * pointsPerGuide 的点才受约束。0 关闭。"
+                },
+                "vspCoefficient": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "TressFX VelocityShockPropagation 基础系数；0 表示关闭（Host 不录制 VSP dispatch）。"
+                },
+                "vspAccelThresholdMax": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 10000000,
+                    "description": "VSP 二阶位置差幅值阈值，单位厘米，未除 dt²；第二个点的 |new - 2*old + old_old| 严格超过该值时强制系数 1，等于阈值不触发。默认 140，对应源默认 1.4 米；显式作者值原样保留。"
+                },
+                "vspStiffness": {
+                    "type": "array",
+                    "description": "可选作者逐顶点 VSPStiffness，长度必须等于该 guide 资产的 pointsPerStrand（4/8/16/32/64）；第 i 项对应源曲线在 i/N 处的采样值。只在 VspCoeff < 0.9 时参与。省略时回退到根前缀(1)到梢部(0)的线性近似。",
+                    "items": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 64
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": [
+                        "cpu",
+                        "gpu"
+                    ],
+                    "description": "cpu 为游戏线程参考 solver；gpu 为 compute dispatch，CPU 不写位置 buffer。"
+                }
+            },
+            "additionalProperties": false
+        },
+        "tressfxSkinning": {
+            "type": "object",
+            "description": "把发丝根点从 rest pin 改为跟随场景内源角色的骨骼。source 是同一场景的 mesh 对象名，rootBone 是该对象目标骨架的关节名；根点写入 current = previous = M * rest，其余点仍按原约束求解。",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "源角色场景对象名。场景 JSON 的独立毛发必需；由蓝图 tressfx 组件挂载时由父 mesh 组件提供，可省略。两者都没有时加载期硬错误。"
+                },
+                "rootBone": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "源角色目标骨架（SK）的关节名，大小写敏感；找不到时加载期硬错误。"
+                },
+                "boneWeights": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选 .tfxbone 路径（资源仓库相对路径）。导入期解析骨名/权重并映射到目标骨架；非空时运行期用逐 strand 多骨权重替代单根骨 InitialPos。"
+                },
+                "weights": {
+                    "type": "string",
+                    "enum": [
+                        "rootBone",
+                        "mesh"
+                    ],
+                    "description": "根点权重来源。rootBone（缺省）保持历史单根骨；mesh 在加载期从绑定姿态源角色网格派生逐 strand 多骨权重：每个 guide 根点复制最近身体顶点的完整影响列表并归一化，个别根超距回退 rootBone。与 boneWeights 互斥。由蓝图 tressfx 组件挂载且未写本字段时等价于 mesh（显式 boneWeights 除外）。"
+                }
+            },
+            "required": [
+                "rootBone"
+            ],
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "weights": {
+                                "const": "mesh"
+                            }
+                        },
+                        "required": [
+                            "weights"
+                        ]
+                    },
+                    "then": {
+                        "not": {
+                            "required": [
+                                "boneWeights"
+                            ]
+                        }
+                    }
+                }
+            ],
+            "additionalProperties": false
+        },
+        "tressfxHairCollision": {
+            "type": "object",
+            "description": "tressfx guide 的碰撞作者：解析胶囊 + 可选的低模碰撞网格（运行期逐帧重建距离场）。位置/半径/网格坐标使用资产局部空间厘米。",
+            "properties": {
+                "capsules": {
+                    "type": "array",
+                    "description": "按顺序应用的胶囊；a == b 表示球。空数组等价于无胶囊碰撞。",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "a": {
+                                "type": "array",
+                                "description": "胶囊起点 xyz，资产局部空间厘米。",
+                                "items": {
+                                    "type": "number"
+                                },
+                                "minItems": 3,
+                                "maxItems": 3
+                            },
+                            "b": {
+                                "type": "array",
+                                "description": "胶囊终点 xyz，资产局部空间厘米。",
+                                "items": {
+                                    "type": "number"
+                                },
+                                "minItems": 3,
+                                "maxItems": 3
+                            },
+                            "radius": {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "description": "胶囊半径，厘米。"
+                            },
+                            "bone": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "可选的目标骨架关节名；给出时运行期按该关节的 bind→pose 矩阵变换 a/b（radius 不缩放）。缺省保持绑定空间静态；需要放置 skinning 且 GPU backend。"
+                            }
+                        },
+                        "required": [
+                            "a",
+                            "b",
+                            "radius"
+                        ],
+                        "additionalProperties": false
+                    }
+                },
+                "mesh": {
+                    "type": "object",
+                    "description": "GPU 逐帧重建的碰撞距离场：低模代理 OBJ 与代理表面要保持的最小距离。缺省时只有胶囊碰撞。同时有放置 skinning 时代理逐顶点权重从绑定姿态身体最近顶点转移并归一化；没有 skinning 时回退到根骨单矩阵。",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "资源根相对的碰撞代理 OBJ 路径；解析为三角形汤后进入模型缓存身份。"
+                        },
+                        "cellSize": {
+                            "type": "number",
+                            "exclusiveMinimum": 0.2,
+                            "maximum": 4,
+                            "default": 1,
+                            "description": "绑定姿态目标格距，厘米；创建时解析成固定的 48..64 分辨率，实际每帧格距 = 域边长/分辨率且随代理包围盒变化。范围 (0.2, 4]。"
+                        },
+                        "margin": {
+                            "type": "number",
+                            "minimum": 0.05,
+                            "maximum": 4,
+                            "default": 1,
+                            "description": "发丝点与代理表面的最小距离，厘米；距离小于它时沿距离场梯度投影到该距离，范围 [0.05, 4]。"
+                        }
+                    },
+                    "required": [
+                        "path"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "tressfxSimulation": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "enum": [
+                        "inherit",
+                        "off",
+                        "on"
+                    ]
+                },
+                "overrides": {
+                    "allOf": [
+                        {
+                            "$ref": "#/$defs/tressfxSimulationValues"
+                        },
+                        {
+                            "not": {
+                                "required": [
+                                    "enabled"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "tressfxPlacement": {
+            "type": "object",
+            "properties": {
+                "simulation": {
+                    "$ref": "#/$defs/tressfxSimulation"
+                },
+                "skinning": {
+                    "$ref": "#/$defs/tressfxSkinning"
+                },
+                "hairCollision": {
+                    "$ref": "#/$defs/tressfxHairCollision"
+                }
+            },
+            "additionalProperties": false
+        }
+    }
+}

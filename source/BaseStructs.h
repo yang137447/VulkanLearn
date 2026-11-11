@@ -129,11 +129,14 @@ struct alignas(16) UBOModel
     SpeedTreeWindStateGPU speedTreeWind;
     // x=1 表示该 DrawPacket 是当前编辑器选中的可见子模型。
     Eigen::Vector4f selectionData = Eigen::Vector4f::Zero();
+    // x=1 表示该绘制在 GBuffer velocity.w 写描边本体 mask；y/z/w 预留。
+    Eigen::Vector4f outlineData = Eigen::Vector4f::Zero();
 };
 
 static_assert(offsetof(UBOModel, speedTreeWind) == 128, "UBOModel speedTreeWind must match GLSL std140 layout");
 static_assert(offsetof(UBOModel, selectionData) == 336, "UBOModel selectionData must match GLSL std140 layout");
-static_assert(sizeof(UBOModel) == 352, "UBOModel size must match the GLSL std140 block");
+static_assert(offsetof(UBOModel, outlineData) == 352, "UBOModel outlineData must match GLSL std140 layout");
+static_assert(sizeof(UBOModel) == 368, "UBOModel size must match the GLSL std140 block");
 
 struct alignas(4) LightSSBOHeader
 {

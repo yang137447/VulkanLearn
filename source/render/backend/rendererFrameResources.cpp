@@ -21,6 +21,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "shaderReflect.h"
+#include "hair/tressfxGroupPreviewState.h"
 
 namespace VL
 {
@@ -457,8 +458,6 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
     uint32_t swapChainImageIndex,
     MaterialInstance& materialInstance)
 {
-    const auto& parameters = materialInstance.GetParameters();
-
     std::shared_ptr<Material> baseMaterial = materialInstance.GetBaseMaterial().lock();
     if (!baseMaterial)
     {
@@ -477,16 +476,23 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         throw std::runtime_error("Material instance UBO is not initialized for this swapchain image.");
     }
 
+    // 一次加锁复制全部数值参数。预览提交只能整组替换，因此下面遍历的
+    // 是调用开始时那份不可变快照，不会与 GT 的 CommitNumericParameterValues
+    // 交错出撕裂的 map。
+    const MaterialInstanceNumericParameterValues parameterValues =
+        materialInstance.CaptureNumericParameterValues();
+    uint8_t* uboBase = static_cast<uint8_t*>(
+        materialInstance.GetUboMaterialInstanceMapped()[swapChainImageIndex]);
+
     for (size_t memberIndex = 0; memberIndex < uboBinding->memberNames.size(); ++memberIndex)
     {
         const std::string& memberName = uboBinding->memberNames[memberIndex];
-        auto paramIt = parameters.find(memberName);
-        if (paramIt == parameters.end())
+        const auto paramIt = parameterValues.find(memberName);
+        if (paramIt == parameterValues.end())
         {
             continue;
         }
 
-        const ParamMap& parameter = paramIt->second;
         if (memberIndex >= uboBinding->memberOffsets.size())
         {
             throw std::runtime_error("Material schema is missing a UBO member offset.");
@@ -494,37 +500,51 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         // 使用 schema 的 std140 offset，而不是把 CPU 參數尺寸連續相加。
         // 這保證 Base 與 ShadowDepth 共用同一份 MI UBO layout。
         const uint32_t offset = uboBinding->memberOffsets[memberIndex];
-        uint8_t* uboData =
-            static_cast<uint8_t*>(materialInstance.GetUboMaterialInstanceMapped()[swapChainImageIndex]) +
-            offset;
-        if (parameter.type == ParamType::Float)
-        {
-            const float value = materialInstance.GetParameter<float>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec2)
-        {
-            const Eigen::Vector2f value = materialInstance.GetParameter<Eigen::Vector2f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec3)
-        {
-            const Eigen::Vector3f value = materialInstance.GetParameter<Eigen::Vector3f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
-        else if (parameter.type == ParamType::Vec4)
-        {
-            const Eigen::Vector4f value = materialInstance.GetParameter<Eigen::Vector4f>(memberName);
-            std::memcpy(uboData, &value, parameter.size);
-        }
+        std::visit(
+            [uboData = uboBase + offset](const auto& value)
+            {
+                std::memcpy(uboData, &value, sizeof(value));
+            },
+            paramIt->second);
     }
+}
+
+void RendererFrameResources::WriteObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    if (!drawPacket.skinPose)
+        return;
+
+    const auto& current = *drawPacket.skinPose;
+    const auto& previous = objectResources.submittedSkin.Previous(current);
+    if (current.matrices.size() != objectResources.skinJointCount ||
+        previous.matrices.size() != current.matrices.size())
+        throw std::runtime_error("Skin palette size changed without resource preparation");
+    auto* bytes = static_cast<unsigned char*>(
+        objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
+    for (size_t i = 0; i < current.matrices.size(); ++i)
+    {
+        std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
+        std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
+    }
+}
+
+void RendererFrameResources::UpdateObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
 }
 
 void RendererFrameResources::UpdateObjectUniformBuffer(
     uint32_t swapChainImageIndex,
     RendererObjectGpuResources& objectResources,
     const RenderDrawPacket& drawPacket,
-    const SpeedTreeWindStateGPU* speedTreeWindState)
+    const SpeedTreeWindStateGPU* speedTreeWindState,
+    bool uploadSkinPalette)
 {
     if (swapChainImageIndex >= objectResources.objectUniformBuffer.buffersMapped.size())
     {
@@ -537,18 +557,11 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
     if (drawPacket.skinPose)
     {
         const auto& current = *drawPacket.skinPose;
-        const auto& previous = objectResources.submittedSkin.Previous(current);
-        if (current.matrices.size() != objectResources.skinJointCount ||
-            previous.matrices.size() != current.matrices.size())
-            throw std::runtime_error("Skin palette size changed without resource preparation");
         ubo.previousModel = objectResources.submittedSkin.PreviousModel(current, drawPacket.model);
-        auto* bytes = static_cast<unsigned char*>(
-            objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
-        for (size_t i = 0; i < current.matrices.size(); ++i)
-        {
-            std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
-            std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
-        }
+        // GPU 预蒙皮路径在帧前已经写完整份 palette，draw 内再写一遍没有收益；
+        // 关闭预蒙皮时保持原路径，仍然逐 draw 上传。
+        if (uploadSkinPalette)
+            WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
     }
     if (speedTreeWindState != nullptr)
     {
@@ -559,7 +572,22 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
                 speedTreeWindState->windVector.head<3>());
     }
     ubo.selectionData.x() = drawPacket.selected ? 1.0f : 0.0f;
-    ubo.selectionData.y() = drawPacket.writesOutlineMask ? 1.0f : 0.0f;
+    // y/z/w 已被 TressFX 分组预览占用；描边本体 mask 使用独立 vec4。
+    ubo.outlineData.x() = drawPacket.writesOutlineMask ? 1.0f : 0.0f;
+    // 头发分组预览：y=pointsPerGuide（顶点工厂反推 guideIndex），
+    // z=selectedGroup（-1 无选中），w=preview flags（bit0 colors / bit1 solo）。
+    ubo.selectionData.y() = static_cast<float>(drawPacket.tressfxPointsPerGuide);
+    ubo.selectionData.z() = static_cast<float>(drawPacket.tressfxSelectedGroup);
+    // brush 目标组始终等于当前选中组（UI 只允许给选中组上笔刷），因此沿用
+    // selectionData.z；不要在 float 的 w 里打包组号，组号较大时会丢精度。
+    uint32_t packedFlags = drawPacket.tressfxGroupFlags;
+    if (objectResources.tressfxBrushActive)
+    {
+        packedFlags |= VL::TressfxGroupPreviewBrushActive;
+        if (objectResources.tressfxBrushRemoveMode)
+            packedFlags |= VL::TressfxGroupPreviewBrushRemove;
+    }
+    ubo.selectionData.w() = static_cast<float>(packedFlags);
     std::memcpy(
         objectResources.objectUniformBuffer.buffersMapped[swapChainImageIndex],
         &ubo,

@@ -1,4 +1,6 @@
 #pragma once
+#include <filesystem>
+#include <memory>
 #include <vulkan/vulkan.hpp>
 #include <string>
 #include "render/rhi/rhiResourceHandles.h"
@@ -20,8 +22,28 @@ public:
         bool generateMipmaps = true;
         vk::Filter filter = vk::Filter::eLinear;
         vk::SamplerAddressMode wrapMode = vk::SamplerAddressMode::eRepeat;
+        // 数组纹理必须建 2D_ARRAY view；单图路径保持 false，避免把 2D 材质绑到数组 view。
+        bool textureArray = false;
         std::string debugName;
     };
+
+    // 无 CPU 像素的数组纹理：用于层 atlas 这类先分配、后按页 GPU 写入的资源。
+    // 创建后内容是未定义的，调用方必须自行 clear 或填满。
+    struct EmptyArrayDesc
+    {
+        uint32_t width = 1;
+        uint32_t height = 1;
+        uint32_t arrayLayers = 1;
+        vk::Format format = vk::Format::eR8G8B8A8Unorm;
+        vk::Filter filter = vk::Filter::eLinear;
+        vk::SamplerAddressMode wrapMode =
+            vk::SamplerAddressMode::eClampToEdge;
+        std::string debugName;
+    };
+
+    static std::shared_ptr<Texture> CreateEmptyArray(
+        VL::RendererBackendVulkan& rendererBackend,
+        const EmptyArrayDesc& desc);
 
     Texture(VL::RendererBackendVulkan& rendererBackend, const std::string& texturePath);
     Texture(
@@ -47,6 +69,11 @@ public:
         options.forceChannels = 4;
         return options;
     }
+    // 压缩容器（DDS/KTX2 的 BC 块）不能在运行时按行翻转，朝向必须离线烘焙；
+    // 因此文件型入口对这类源显式退回 ForceOff，其余源保持统一的 V 翻转合同。
+    static TextureIO::LoadOptions MaterialLoadOptionsForPath(
+        const CreateDesc& createDesc,
+        const std::filesystem::path& sourcePath);
     Texture(
         VL::RendererBackendVulkan& rendererBackend,
         vk::Image image,
@@ -54,7 +81,8 @@ public:
         vk::ImageView imageView,
         vk::Sampler sampler,
         uint32_t mipLevels,
-        vk::Format format);
+        vk::Format format,
+        uint32_t arrayLayers = 1);
     ~Texture();
     inline vk::Image getImage() const { return image; }
     inline vk::DeviceMemory getImageMemory() const { return imageMemory; }
@@ -64,6 +92,7 @@ public:
     inline VL::RHIImageViewHandle GetImageViewHandle() const { return imageViewHandle; }
     inline VL::RHISamplerHandle GetSamplerHandle() const { return samplerHandle; }
     inline uint32_t getMipLevels() const { return mipLevels; }
+    inline uint32_t GetArrayLayers() const { return arrayLayers; }
     inline vk::Format GetFormat() const { return format; }
     inline const vk::DescriptorImageInfo& GetDescriptorInfo() const { return descriptorInfo; }
 private:
@@ -82,6 +111,7 @@ private:
     vk::ImageView imageView = nullptr;
     vk::Sampler sampler = nullptr;
     uint32_t mipLevels = 1;
+    uint32_t arrayLayers = 1;
     vk::Format format = vk::Format::eUndefined;
     vk::DescriptorImageInfo descriptorInfo;
     VL::RendererBackendVulkan* rendererBackend = nullptr;

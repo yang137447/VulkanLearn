@@ -183,16 +183,16 @@ Renderpass& ResolveCurrentPass(
 std::shared_ptr<Material> ResolveCurrentMaterial(
     const MaterialGraphicsReloadPlan& plan)
 {
-    const std::shared_ptr<Material>* material =
+    const std::shared_ptr<Material> material =
         RendererResourceCache::GetInstance().GetMaterial(
             plan.materialKey);
-    if (material == nullptr || !*material)
+    if (material == nullptr)
     {
         throw std::runtime_error(
             "Shader reload Material is no longer live: " +
             plan.materialKey);
     }
-    if ((*material)->GetSurfaceShaderArtifact()
+    if (material->GetSurfaceShaderArtifact()
             .artifactGenerationKey !=
         plan.activeSurfaceArtifact.artifactGenerationKey)
     {
@@ -202,7 +202,7 @@ std::shared_ptr<Material> ResolveCurrentMaterial(
     }
 
     const auto& currentShadow =
-        (*material)->GetShadowShaderArtifact();
+        material->GetShadowShaderArtifact();
     if (currentShadow.has_value() !=
         plan.activeShadowArtifact.has_value())
     {
@@ -218,7 +218,7 @@ std::shared_ptr<Material> ResolveCurrentMaterial(
             "Shader reload Material Shadow generation changed while the batch was compiling: " +
             plan.materialKey);
     }
-    return *material;
+    return material;
 }
 
 size_t FindOrAddBuild(

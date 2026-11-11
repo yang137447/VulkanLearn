@@ -166,6 +166,40 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--gpu-stats")
+        {
+            options.gpuStats = true;
+            continue;
+        }
+
+        if (argument == "--prerender-skin")
+        {
+            options.prerenderSkin = true;
+            continue;
+        }
+
+        if (argument == "--no-prerender-skin")
+        {
+            // 预蒙皮默认开，保留关闭项以便回落到逐 pass 蒙皮做 A/B 与问题定位。
+            options.prerenderSkin = false;
+            continue;
+        }
+
+        if (argument == "--perf-jsonl")
+        {
+            // 路径是必需值：缺少路径或把下一个 flag 当路径都必须报错，
+            // 否则时间序列会被静默写到错误位置或根本不写。
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]) ||
+                std::string(argv[i + 1]).empty())
+            {
+                options.errorMessage =
+                    "--perf-jsonl requires a file path.";
+                return options;
+            }
+            options.perfJsonlPath = std::string(argv[++i]);
+            continue;
+        }
+
         if (argument == "--exit-after-tests")
         {
             options.exitAfterTests = true;
@@ -223,6 +257,53 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
                 return options;
             }
             options.frameLimitHz = frameLimitHz;
+            continue;
+        }
+
+        if (argument == "--exit-after-frames")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--exit-after-frames requires a positive frame count.";
+                return options;
+            }
+
+            int exitAfterFrames = 0;
+            const std::string frameCountText = argv[++i];
+            if (!TryParsePositiveInt(frameCountText, exitAfterFrames))
+            {
+                options.errorMessage =
+                    "--exit-after-frames count must be a positive integer.";
+                return options;
+            }
+            options.exitAfterFrames = exitAfterFrames;
+            continue;
+        }
+
+        if (argument == "--present-mode")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--present-mode requires auto, fifo, mailbox, or immediate.";
+                return options;
+            }
+            const std::string mode = argv[++i];
+            if (mode == "auto")
+                options.presentMode = PresentModePreference::Auto;
+            else if (mode == "fifo")
+                options.presentMode = PresentModePreference::Fifo;
+            else if (mode == "mailbox")
+                options.presentMode = PresentModePreference::Mailbox;
+            else if (mode == "immediate")
+                options.presentMode = PresentModePreference::Immediate;
+            else
+            {
+                options.errorMessage =
+                    "--present-mode must be auto, fifo, mailbox, or immediate.";
+                return options;
+            }
             continue;
         }
 
@@ -322,6 +403,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     {
         options.errorMessage = "--exit-after-tests requires --shader-reload-test, --shader-compute-reload-test, or --world-graph-transaction-test.";
     }
+    if (options.exitAfterFrames > 0 && options.exitAfterTests)
+    {
+        options.errorMessage =
+            "--exit-after-frames cannot be combined with --exit-after-tests; runtime tests already define their own exit condition.";
+    }
     return options;
 }
 
@@ -335,6 +421,11 @@ void PrintLaunchUsage()
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
+        << "       main.exe [--exit-after-frames <count>]\n"
+        << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
+        << "       main.exe [--gpu-stats]\n"
+        << "       main.exe [--prerender-skin]\n"
+        << "       main.exe [--perf-jsonl <path>]\n"
         << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
         << "  --shader-reload-test                Run the graphics shader hot-reload rollback matrix.\n"
@@ -342,7 +433,12 @@ void PrintLaunchUsage()
         << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
-        << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
+        << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged; this is a rate cap, not a frame count).\n"
+        << "  --exit-after-frames <count>         Exit with code 0 after <count> completed frames (>= 1).\n"
+        << "  --present-mode <mode>               Swapchain present mode: auto, fifo, mailbox, immediate (default auto = mailbox-first).\n"
+        << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
+        << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
+        << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"

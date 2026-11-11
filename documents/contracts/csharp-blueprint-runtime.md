@@ -72,11 +72,13 @@ SDK 未进入 PATH 时使用 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.
 宿主优先显式使用该私有根；没有该子目录时使用配置期 SDK 根。
 程序和完整 managed 目录可一起搬移，C# 宿主不要求目标机器安装 SDK。
 完整游戏导出使用下文 `vl_export_game`，同时收集配置、资源、shader 与原生依赖 DLL。
-开启时同时下载并构建锁定的 Jolt 5.6.0 CPU 库（提交
+Jolt 5.6.0 CPU 库（提交
 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`，归档 SHA256 在
-`script/CMakeLists.txt`）。不构建 samples、GPU compute、毛发模拟、debug renderer
+`script/CMakeLists.txt`）现在无条件下载并构建，因为地形碰撞是核心 CPU 依赖；
+关闭 C# hosting 只停止查找 .NET SDK，不停止 Jolt。不构建 samples、GPU compute、毛发模拟、debug renderer
 或 profiler；x64 使用 SSE2 基线，不要求 AVX2。第三方编译选项隔离在子目录，
-不覆盖工程的 Debug/Release 配置。关闭时不获取 Jolt，不依赖 Bullet。
+不覆盖工程的 Debug/Release 配置。`ScriptPhysicsWorld` 的 Jolt 实现也随核心依赖
+无条件编译；Play 入口仍只在 C# hosting 开启时可用。不依赖 Bullet。
 
 `config/config.json` 的可选 `scripts` 对象包含 `enabled`、
 `runtimeDirectory`、`assembly`、`autoPlay`，两个路径相对项目根解析。
@@ -145,9 +147,42 @@ Generated/Runtime/ScriptBuilds，不覆盖活动程序集。
 `id` 在同一场景唯一，禁止 `/`、`\`、`|`、NUL；显示名称不用于脚本身份。
 TRS 必填，位置厘米、旋转角度，缩放非零。`enabled` 缺省 true，
 `properties` 必填，接受下文列出的命名类型值。`components` 可省略或为空，最多 128 个
-`scene`/`mesh`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
+`scene`/`mesh`/`tressfx`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
 组件，空串表示挂在 Blueprint 根。拒绝重复 ID、缺失父级与环。局部 position/rotation/scale
 可省略，默认零/零/一；mesh 另带 modelPath 与可选 materialOverride。
+tressfx 组件另带 `modelPath`（必须是 `type: "tressfx"` 的毛发描述符，正式资产使用 `TF_*.json`）、
+必填的非空 `rootBone`、可选 `weights`（`auto`/`rootBone`/`mesh`）与 `materialOverride`，
+并且必须有 `mesh` 祖先组件。`simulation` 接受 `mode: inherit|off|on` 和稀疏
+`overrides`；未覆写的值来自 TF 的 `simulationDefaults`。角色专用的胶囊与代理写在
+`hairCollision`，不写进 TF，也不进入 Jolt 的组件 `collision`。
+它展开成场景 `mesh` 对象，把放置行为归一到 `tressfx` 对象；源身份由最近的 mesh
+祖先生成，不猜骨名。不写作者 JSON、不生成临时描述符；网格模板键包含父组件身份
+和行为，跨 actor 不共享可变状态。
+tressfx 组件的局部 TRS 必须是单位阵（与父 mesh 同一对象空间），否则加载期拒绝。
+
+蓝图资产页的组件添加入口额外提供 `TressFX`；Scene 侧通用组件面板不提供，因为它没有
+“挂在哪个角色上”的上下文。添加时父级自动取当前选中组件向上最近的 `mesh` 组件，
+父级下拉只列 mesh；没有 mesh 祖先或 `modelPath` 为空时拒绝添加并给出提示，不生成
+加载期必然失败的组件。Details 暴露 `Hair Asset`、`Root Bone`、`Root Weights`
+（`auto`/`rootBone`/`mesh`，缺省 `auto`），并编辑模拟模式与逐字段覆盖；删除某个
+override 恢复继承，不把显示用的默认值写成覆盖。局部 TRS 与图元碰撞控件不显示，写入也被
+忽略；tressfx 组件不进入 `componentInstanceEditable`，所以 Scene 实例不能覆写它的字段。
+Scene/关卡 Details 里这三个字段以只读值呈现，并提示“在蓝图资产里编辑”；事件处理层
+同样拒绝来自关卡侧的 `modelPath`/`rootBone`/`weights` 写入，不存在“看起来能改、实际被
+丢弃”的假编辑。
+
+tressfx 组件的展开在蓝图资产预览、关卡放置和正式加载中是**同一条链**（预览把组件塞进
+一个内联 `blueprintInstance` 后走同一个 World 加载事务），不存在“仅供预览的静态特例”。
+毛发 draw 不要求模拟推进。有效配置关闭模拟且绑定骨架时，GPU 用独立的全丝
+skinning pass 从 rest 与当前 pose 更新所有点；零 delta 仍更新姿态。该路径不分配
+求解历史或 SDF buffer；无绑定且关闭模拟时保持静态中心线。
+
+运行时 `Spawn` 的蓝图演员同样成立：克隆时重写放置级绑定身份并建立该演员的组件网格模板，
+渲染侧为本帧未知的 placement 键创建独立的 renderable（模拟状态、params UBO 与绑定各一份），
+销毁或资产释放时按 placement 作用域退休。具体日志与计数见
+[tressfx-asset-import.md](tressfx-asset-import.md) 的「运行时实例化」。
+Console `script <play|pause|stop>` 调用与编辑器 Play 按钮相同的 `ScriptRuntime::Control`，
+供无 GUI 烟测/自动化驱动蓝图生命周期；它不是 runtime test flag。
 父链完整矩阵参与合成，保留非均匀缩放导致的 shear，不做 TRS 分解。
 显式 ID 的 mesh 身份为 `__blueprint/<actor-id>/<component-id>`；
 旧无 ID 单根 mesh 保留 `__blueprint/<id>` 身份。由正式 mesh loader 导入资源和材质；
@@ -575,7 +610,9 @@ Spawn 模板不接受外部约束。销毁目标移除约束并唤醒相关刚�
 
 `Physics.Raycast(from, to, callback, includeTriggers: false)` 是异步有界线段查询。
 默认忽略所属 Blueprint 与 Trigger，返回最近命中的 BlueprintHandle、cm 点/距离和世界单位法线，
-未命中传 null。凸体内部起点的距离为零，法线约定为逆射线方向。
+未命中传 null。命中地形时 `Terrain` 为 placementId（`terrain|<name>`），
+`HasBlueprint` 为 false、`Blueprint` 为默认句柄；不会把地形伪装成蓝图。
+凸体内部起点的距离为零，法线约定为逆射线方向。
 Tick/BeginPlay 请求在物理之后、LateTick 之前交付；LateTick 请求在下一帧交付。
 回调仍走所属 Blueprint 的故障隔离与变换回滚边界；失败、Destroy 或 Stop 清理未交付请求。
 一个上下文最多 256 条未完成查询。
@@ -850,7 +887,7 @@ OnReload 不得改变 World 根/空间组件值、启用/销毁状态、逻辑�
 Paused 下也立即显示新代逻辑组件的默认属性和句柄代际，不依赖下一次用户回调补发。
 
 SubsystemCollection 拥有 ScriptRuntimeSubsystem。候选 World 保存自己的
-作者声明与 RAII ScriptWorldContext。PrepareWorldLoad 中构造实例、
+作者声明与 RAII ScriptWorldContext。`WorldCandidatePreparer::Prepare()` 中构造实例、
 绑定属性、执行 OnCreate；类不存在、类型不匹配或 OnCreate 失败使候选加载失败，
 原生活动 World/图/资源不变。脚本是可信进程内代码，没有沙箱；
 静态字段、文件操作及脚本自行创建的线程不具备事务回滚语义。

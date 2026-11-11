@@ -204,6 +204,37 @@ bounds. This is acceptable for the current small scenes. If larger scenes make
 this visible in CPU profiling, precompute light-space draw bounds once per
 shadow frame and reuse them across cascades.
 
+## Per-Cascade Caster Culling
+
+Each active `shadowCascadeN` pass builds its own caster cull volume at record
+time from the same `lightViewProj` it uploads to the shadow UBO and renders
+with. `PassRuntime::RecordShadowPass` obtains that matrix through
+`PassRuntimeServices::GetShadowCascadeLightViewProjection`;
+`ShadowCasterCullFrustum` extracts the six Vulkan clip-space planes
+(`x/y ∈ [-w, w]`, `z ∈ [0, w]`) and tests the draw packet's world-space AABB.
+The pass structure, material-group order, and pipeline/descriptor binding are
+unchanged; a culled draw is skipped without touching them.
+
+Culling uses the current `RenderDrawPacket::worldBoundsMin/Max`. For skinned
+meshes those bounds come from the current `SkinPose` — the World animation
+update replaces the object's local bounds with the posed bounds — never the
+bind pose. TressFX and SpeedTree use their asset bounds.
+
+A second exact directional-light prefilter compares the caster's light-space XY
+AABB with the camera split's light-space XY AABB (`ShadowCasterReceiverBounds`).
+A directional-light ray preserves light-space XY, so disjoint XY ranges cannot
+produce a shadow in that cascade; this is tighter than the fitted orthographic
+frustum and still conservative.
+
+Keep-on-doubt rules: an invalid or non-finite light matrix, non-finite bounds,
+`min > max`, plane tangency, or separation smaller than the 0.05 cm padding
+keeps the draw. Only an AABB entirely outside a plane, or strictly disjoint in
+receiver light-space XY, is skipped. A pass whose draws are all culled still
+begins and ends the render pass and clears/stores its shadow-map layer.
+
+Caster world bounds still drive the light-space Z fit described in Light-Space
+Coverage; per-cascade culling does not replace or weaken that fit.
+
 Debug views:
 
 - `debugview 7`: final shadow factor

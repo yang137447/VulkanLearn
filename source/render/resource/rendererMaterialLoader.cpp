@@ -1,6 +1,7 @@
 #include "render/resource/rendererMaterialLoader.h"
 
 #include <fstream>
+#include <filesystem>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -375,16 +376,16 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         MaterialInstanceValidator::ResolveSurfacePipelineContractKey(
             renderPass.pipelineContractKey,
             effectiveRenderMode);
-    const std::shared_ptr<MaterialInstance>* cachedMaterialInstance =
+    const std::shared_ptr<MaterialInstance> cachedMaterialInstance =
         resourceCache.GetMaterialInstance(materialInstanceKey);
     const bool isOverriddenMaterialInstance =
         loadContext.materialInstanceOverrideJson.has_value() &&
         loadContext.materialInstanceOverridePath == materialInstanceKey;
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
-        cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
+        cachedMaterialInstance != nullptr)
     {
         std::shared_ptr<Material> cachedBaseMaterial =
-            (*cachedMaterialInstance)->GetBaseMaterial().lock();
+            cachedMaterialInstance->GetBaseMaterial().lock();
         if (!cachedBaseMaterial ||
             cachedBaseMaterial->GetPassPipelineContractKey() !=
                 effectiveSurfacePipelineContractKey)
@@ -393,7 +394,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                 "Material instance asset '" + materialInstanceKey +
                 "' was requested with an incompatible pass pipeline contract");
         }
-        return *cachedMaterialInstance;
+        return cachedMaterialInstance;
     }
     // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
     // 固定管线状态和缓存 key；后续步骤只消费结果，不重复解释 JSON。
@@ -403,7 +404,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         effectiveMaterialInstanceJson,
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
-        rendererBackend.SupportsDualSourceBlend());
+        rendererBackend.SupportsDualSourceBlend(),
+        loadContext.prerenderSkin);
     // 所有连续透明输出都只能进入 forwardTransparent；写深度模式只改变该材质
     // pipeline 的 DepthWrite 状态，不允许借用 Geometry 的多 MRT 合同。
     if (IsTransparentRenderMode(loadPlan.shaderVariantKey.renderMode) &&
@@ -459,10 +461,10 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         }
     }
     std::shared_ptr<Material> material;
-    const std::shared_ptr<Material>* cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
-    if(cachedMaterial != nullptr && *cachedMaterial != nullptr)
+    const std::shared_ptr<Material> cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
+    if(cachedMaterial != nullptr)
     {
-        material = *cachedMaterial;
+        material = cachedMaterial;
     }
     else
     {
@@ -529,17 +531,38 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         const TextureBindingLoadDesc textureLoadDesc = LoadTextureAssetDesc(textureAssetPath);
         const std::string textureCacheKey = BuildTextureCacheKey(textureLoadDesc);
         std::shared_ptr<Texture> texture;
-        const std::shared_ptr<Texture>* cachedTexture = resourceCache.GetTexture(textureCacheKey);
-        if(cachedTexture != nullptr && *cachedTexture != nullptr)
+        const std::shared_ptr<Texture> cachedTexture = resourceCache.GetTexture(textureCacheKey);
+        if(cachedTexture != nullptr)
         {
-            texture = *cachedTexture;
+            texture = cachedTexture;
         }
         else
         {
-            texture = std::make_shared<Texture>(
-                rendererBackend,
-                textureLoadDesc.source,
-                ToTextureCreateDesc(textureLoadDesc));
+            const Texture::CreateDesc createDesc = ToTextureCreateDesc(textureLoadDesc);
+            if (textureLoadDesc.textureArray)
+            {
+                // 数组走 CPU 逐层解码；层序必须与材质 JSON 的 sources 顺序完全一致。
+                std::vector<std::filesystem::path> sources;
+                sources.reserve(textureLoadDesc.sources.size());
+                for (const std::string& source : textureLoadDesc.sources)
+                    sources.push_back(CommonFunction::Path(source));
+                // 数组的 V 方向策略按首层容器判定；混用 BC 与 LDR 源会被
+                // CombineArrayLayers 的格式一致性检查拒绝。
+                const HostImage image = TextureIO::LoadArray(
+                    sources,
+                    Texture::MaterialLoadOptionsForPath(createDesc, sources.front()));
+                texture = std::make_shared<Texture>(
+                    rendererBackend,
+                    image,
+                    createDesc);
+            }
+            else
+            {
+                texture = std::make_shared<Texture>(
+                    rendererBackend,
+                    textureLoadDesc.sources.front(),
+                    createDesc);
+            }
             resourceCache.BindTexture(textureCacheKey, texture);
         }
         materialInstance->SetTexture(

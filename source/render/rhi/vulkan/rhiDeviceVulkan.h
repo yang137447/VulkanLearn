@@ -2,12 +2,15 @@
 
 #include <array>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
+
+#include "render/rhi/presentMode.h"
 
 #include "baseStructs.h"
 #include "presentTarget.h"
@@ -89,7 +92,10 @@ struct VulkanSwapchainImageSyncResources
 class RHIDeviceVulkan
 {
 public:
-    void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
+    void Initialize(
+        std::vector<const char*>& instanceExtensions,
+        SDL_Window* window,
+        VL::PresentModePreference presentMode);
     bool IsInitialized() const { return initialized; }
 
     void WaitIdle();
@@ -132,7 +138,7 @@ public:
         RHIBufferHandle source,
         RHIBufferHandle destination,
         vk::DeviceSize size);
-    const VulkanBufferResource& GetVulkanBufferResource(RHIBufferHandle bufferHandle) const;
+    VulkanBufferResource GetVulkanBufferResource(RHIBufferHandle bufferHandle) const;
 
     RHIImageHandle CreateImage(
         uint32_t width,
@@ -153,7 +159,9 @@ public:
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageLayout oldLayout,
-        vk::ImageLayout newLayout);
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     RHIImageViewHandle Create2DImageView(
         RHIImageHandle imageHandle,
         uint32_t mipLevels,
@@ -180,7 +188,7 @@ public:
         vk::Format format,
         const std::string& debugName);
     void DestroyImageView(RHIImageViewHandle imageViewHandle);
-    const VulkanImageViewResource& GetVulkanImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    VulkanImageViewResource GetVulkanImageViewResource(RHIImageViewHandle imageViewHandle) const;
     RHIImageViewHandle RegisterImageView(vk::ImageView imageView);
 
     RHISamplerHandle Create2DSampler(const std::string& debugName);
@@ -192,7 +200,7 @@ public:
     RHISamplerHandle CreateSampler(const vk::SamplerCreateInfo& createInfo, const std::string& debugName);
     RHISamplerHandle CreateCubeSampler(float maxLod, const std::string& debugName);
     void DestroySampler(RHISamplerHandle samplerHandle);
-    const VulkanSamplerResource& GetVulkanSamplerResource(RHISamplerHandle samplerHandle) const;
+    VulkanSamplerResource GetVulkanSamplerResource(RHISamplerHandle samplerHandle) const;
     RHISamplerHandle RegisterSampler(vk::Sampler sampler);
     RHISamplerHandle CreateDepthSampler(const std::string& debugName);
     RHISamplerHandle CreateDepthCompareSampler(const std::string& debugName);
@@ -204,7 +212,73 @@ public:
         RHIBufferHandle bufferHandle,
         RHIImageHandle imageHandle,
         uint32_t width,
-        uint32_t height);
+        uint32_t height,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0,
+        uint32_t bufferRowLength = 0);
+    // 只更新目标 image 的一个子矩形，用于 terrain atlas 这类整图已存在的增量写页。
+    // 调用方负责把 image 预置为 eTransferDstOptimal。
+    void CopyBufferToImageRegion(
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        vk::DeviceSize bufferOffset,
+        uint32_t bufferRowLength,
+        uint32_t imageOffsetX,
+        uint32_t imageOffsetY,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevel,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1,
+        vk::DeviceSize layerBytes = 0);
+    // 批量版本：同一 buffer/image 上的多个 region 合并成一次 submit；
+    // region 语义与校验规则完全由 CommonFunction::CopyBufferToImageRegions 负责。
+    void CopyBufferToImageRegions(
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // record-only 版本：只把 transition/copy 写入调用方提供的 command buffer，
+    // 不 submit、不 wait；用于主帧内批量写入 terrain 页表/atlas。
+    void RecordTransitionImageLayout(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        uint32_t mipLevels,
+        vk::Format format,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyBufferToImageRegions(
+        vk::CommandBuffer commandBuffer,
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
+        const std::vector<vk::BufferImageCopy>& regions);
+    // 层 atlas：record-only clear 与 image->image 子区域切页。
+    void RecordClearColorImage(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        vk::ImageLayout layout,
+        vk::ClearColorValue clearValue,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
+    void RecordCopyImageRegions(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle sourceHandle,
+        RHIImageHandle destinationHandle,
+        const std::vector<vk::ImageCopy>& regions);
+    void CopyImageRegions(
+        RHIImageHandle sourceHandle,
+        RHIImageHandle destinationHandle,
+        const std::vector<vk::ImageCopy>& regions);
+    void RecordCopyImageToBuffer(
+        vk::CommandBuffer commandBuffer,
+        RHIImageHandle imageHandle,
+        RHIBufferHandle bufferHandle,
+        uint32_t width,
+        uint32_t height,
+        bool flipY = false,
+        vk::DeviceSize rowBytes = 0);
     void CopyImageToBuffer(
         RHIImageHandle imageHandle,
         RHIBufferHandle bufferHandle,
@@ -216,18 +290,20 @@ public:
         RHIImageHandle imageHandle,
         uint32_t width,
         uint32_t height,
-        uint32_t mipLevels);
+        uint32_t mipLevels,
+        uint32_t baseArrayLayer = 0,
+        uint32_t layerCount = 1);
     void DestroyImageResource(
         RHIImageHandle imageHandle,
         RHIImageViewHandle imageViewHandle,
         RHISamplerHandle samplerHandle);
-    const VulkanImageResource& GetVulkanImageResource(RHIImageHandle imageHandle) const;
+    VulkanImageResource GetVulkanImageResource(RHIImageHandle imageHandle) const;
 
     RHIDescriptorSetLayoutHandle CreateDescriptorSetLayout(
         const vk::DescriptorSetLayoutCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyDescriptorSetLayout(RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle);
-    const VulkanDescriptorSetLayoutResource& GetVulkanDescriptorSetLayoutResource(
+    VulkanDescriptorSetLayoutResource GetVulkanDescriptorSetLayoutResource(
         RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
     RHIDescriptorSetLayoutHandle RegisterDescriptorSetLayout(
         vk::DescriptorSetLayout descriptorSetLayout,
@@ -237,7 +313,7 @@ public:
         const vk::DescriptorPoolCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyDescriptorPool(RHIDescriptorPoolHandle descriptorPoolHandle);
-    const VulkanDescriptorPoolResource& GetVulkanDescriptorPoolResource(
+    VulkanDescriptorPoolResource GetVulkanDescriptorPoolResource(
         RHIDescriptorPoolHandle descriptorPoolHandle) const;
     std::vector<RHIDescriptorSetHandle> AllocateDescriptorSets(
         RHIDescriptorPoolHandle descriptorPoolHandle,
@@ -245,7 +321,7 @@ public:
     void FreeDescriptorSet(
         RHIDescriptorPoolHandle descriptorPoolHandle,
         RHIDescriptorSetHandle descriptorSetHandle);
-    const VulkanDescriptorSetResource& GetVulkanDescriptorSetResource(
+    VulkanDescriptorSetResource GetVulkanDescriptorSetResource(
         RHIDescriptorSetHandle descriptorSetHandle) const;
     void UpdateDescriptorSets(const std::vector<RHIDescriptorWrite>& writeDescriptorSets);
     void SetDescriptorSetDebugName(
@@ -255,17 +331,24 @@ public:
         const vk::RenderPassCreateInfo2& createInfo,
         const std::string& debugName);
     void DestroyRenderPass(RHIRenderPassHandle renderPassHandle);
-    const VulkanRenderPassResource& GetVulkanRenderPassResource(
+    VulkanRenderPassResource GetVulkanRenderPassResource(
         RHIRenderPassHandle renderPassHandle) const;
     RHIFramebufferHandle CreateFramebuffer(
         RHIRenderPassHandle renderPassHandle,
         const vk::FramebufferCreateInfo& createInfo,
         const std::string& debugName);
     void DestroyFramebuffer(RHIFramebufferHandle framebufferHandle);
-    const VulkanFramebufferResource& GetVulkanFramebufferResource(
+    VulkanFramebufferResource GetVulkanFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    // 统计功能只依赖能力查询，不向调用方暴露物理设备。
+    bool SupportsTimestampQueries();
+    // 非阻塞读取：命令已经随 fence 完成时返回 true；VK_NOT_READY 返回 false。
+    bool TryReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
     // 向上暴露逻辑设备已启用的双源混合能力，供材质 variant 与 pipeline 同步降级。
     bool IsDualSourceBlendEnabled() const;
     vk::QueryPool CreateTimestampQueryPool(
@@ -284,6 +367,7 @@ private:
     vk::PhysicalDevice& GetPhysicalDevice();
     vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
     vk::CommandPool& GetCommandPool();
+    vk::CommandPool& GetSingleTimeCommandPool();
     vk::Queue& GetGraphicsQueue();
     // 呈现目标的入口。取代原来的无参 GetSwapchain()：后端要的不是"那个 swapchain"，
     // 而是"这个后端负责的呈现目标"，后者才带得动第二个窗口。
@@ -292,21 +376,24 @@ private:
     std::vector<vk::Fence>& GetTaskFinishedFences();
     std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
 
-    const VulkanBufferResource& RequireBufferResource(RHIBufferHandle bufferHandle) const;
-    const VulkanImageResource& RequireImageResource(RHIImageHandle imageHandle) const;
-    const VulkanImageViewResource& RequireImageViewResource(RHIImageViewHandle imageViewHandle) const;
-    const VulkanSamplerResource& RequireSamplerResource(RHISamplerHandle samplerHandle) const;
-    const VulkanDescriptorSetLayoutResource& RequireDescriptorSetLayoutResource(
+    VulkanBufferResource RequireBufferResource(RHIBufferHandle bufferHandle) const;
+    VulkanImageResource RequireImageResource(RHIImageHandle imageHandle) const;
+    VulkanImageViewResource RequireImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    VulkanSamplerResource RequireSamplerResource(RHISamplerHandle samplerHandle) const;
+    VulkanDescriptorSetLayoutResource RequireDescriptorSetLayoutResource(
         RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
-    const VulkanDescriptorPoolResource& RequireDescriptorPoolResource(
+    VulkanDescriptorPoolResource RequireDescriptorPoolResource(
         RHIDescriptorPoolHandle descriptorPoolHandle) const;
-    const VulkanDescriptorSetResource& RequireDescriptorSetResource(
+    VulkanDescriptorSetResource RequireDescriptorSetResource(
         RHIDescriptorSetHandle descriptorSetHandle) const;
-    const VulkanRenderPassResource& RequireRenderPassResource(
+    VulkanRenderPassResource RequireRenderPassResource(
         RHIRenderPassHandle renderPassHandle) const;
-    const VulkanFramebufferResource& RequireFramebufferResource(
+    VulkanFramebufferResource RequireFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
 
+    // Covers every CPU-side handle map below. Vulkan API calls stay outside
+    // this lock; lookup copies the small handle record under a shared lock.
+    mutable std::shared_mutex resourceMapMutex;
     bool initialized = false;
     uint64_t nextBufferId = 1;
     std::unordered_map<uint64_t, VulkanBufferResource> buffers;

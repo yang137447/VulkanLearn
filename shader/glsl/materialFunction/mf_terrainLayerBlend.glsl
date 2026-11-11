@@ -1,0 +1,183 @@
+#ifndef VL_MATERIAL_FUNCTION_TERRAIN_LAYER_BLEND_GLSL
+#define VL_MATERIAL_FUNCTION_TERRAIN_LAYER_BLEND_GLSL
+
+#include "../engine/materialContext.glsl"
+#include "../engine/materialInputs.glsl"
+#include "mf_normal.glsl"
+#include "mf_terrainLayerVT.glsl"
+
+// Phase B：每 texel 的 top-4 由 CPU 烘焙的 ID/权重图给出，shader 不再遍历全局层表。
+// layerTable 只保留每层 UV 参数；后续 VT/SSBO 版本沿用同一 ID/权重语义。
+const int TERRAIN_MAX_LAYERS = 256;
+
+vec4 TerrainLayerExtra(int layer)
+{
+    // catalog 现在是 256x4：row0 高度/坡度、row1 noise/blendEdge/uvScale/
+    // uvRotation、row2 页数/页表基址、row3 平均色。这里只取 row1 的
+    // texel 中心 (1 + 0.5) / 4 = 0.375；nearest + 无 mip，不会跨行。
+    return texture(
+        layerTable,
+        vec2((float(layer) + 0.5) / float(TERRAIN_MAX_LAYERS), 0.375));
+}
+
+MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
+{
+    MaterialInputs inputs = CreateDefaultMaterialInputs();
+    const vec3 worldNormal = normalize(context.worldNormal);
+    const int pageTableSize = int(u_pageTableSize);
+    // 页索引保持原表达式；全局 UV 恰为 1.0 时 floor 会得到 size，clamp 回最后一页。
+    const vec2 rawPageUv = context.texCoord1 * u_pageTableSize;
+    const ivec2 tile = clamp(
+        ivec2(floor(rawPageUv)),
+        ivec2(0),
+        ivec2(pageTableSize - 1));
+    vec4 page = texelFetch(pageTable, tile, 0);
+    // 缺页掩码在 remap 前保存；有效页走与原 shader 完全相同的采样路径，
+    // 缺页只在最终输出处替换成中性表面，避免分支改变纹理采样/隐式 LOD。
+    const float invalidPage = page.a < 0.5 ? 1.0 : 0.0;
+    // 专用 fallback 物理页（页表最后一页）：只用于保持采样路径完整，
+    // 绝不回退到另一个地形的 page 0；最终输出由 invalidPage 替换为中性表面。
+    if (page.a < 0.5)
+        page = vec4(float(pageTableSize - 1) / 255.0, float(pageTableSize - 1) / 255.0, 0.0, 1.0);
+    const ivec2 pageCoord = ivec2(round(page.xy * 255.0));
+    vec2 localUv = fract(rawPageUv);
+    // 权重图使用线性过滤；内缩半 texel 防止跨 page 采样。
+    localUv = clamp(
+        localUv,
+        vec2(0.5 / u_pageResolution),
+        vec2(1.0 - 0.5 / u_pageResolution));
+    // 全局 UV 恰为 1.0 时 fract 回绕到 0，会采样最后一页的第一列；
+    // 用 step 选择该页最后一列。非边界片元的 localUv 与旧版逐位相同，
+    // 因此隐式 LOD/导数也不变。
+    localUv = mix(
+        localUv,
+        vec2(1.0 - 0.5 / u_pageResolution),
+        step(vec2(float(pageTableSize)), rawPageUv));
+    const float atlasResolution = u_pageTableSize * u_pageResolution;
+    const vec2 atlasUv =
+        (vec2(pageCoord) * u_pageResolution + localUv * u_pageResolution) /
+        atlasResolution;
+    const ivec4 topIds = ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
+    vec4 topWeights = texture(layerWeights, atlasUv);
+    float weightSum = topWeights.x + topWeights.y + topWeights.z + topWeights.w;
+    if (weightSum < 1.0e-4)
+    {
+        topWeights = vec4(1.0, 0.0, 0.0, 0.0);
+        weightSum = 1.0;
+    }
+    topWeights /= weightSum;
+    int ids[4] = int[4](topIds.x, topIds.y, topIds.z, topIds.w);
+    float weights[4] = float[4](topWeights.x, topWeights.y, topWeights.z, topWeights.w);
+
+    vec4 albedo = vec4(0.0);
+    vec4 pbr = vec4(0.0);
+    vec3 blendedNormal = vec3(0.0);
+    float vtDebugPage = 0.0;
+    float vtDebugMip = 0.0;
+    if (u_terrainLayerMode > 0.5)
+    {
+        // L3：VT 路径。top-4 层号/权重仍由覆盖页给出；像素改走
+        // catalog -> 每 mip 页表 -> 物理页 -> atlas。mode 0 不进入此分支。
+        const TerrainLayerVTResult vt = AccumulateTerrainLayerVT(
+            context,
+            topIds,
+            topWeights,
+            worldNormal);
+        albedo = vt.albedo;
+        pbr = vt.pbr;
+        blendedNormal = vt.normalWorld;
+        vtDebugPage = vt.debugPhysicalPage;
+        vtDebugMip = vt.debugMip;
+    }
+    else
+    {
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const int layer = ids[slot];
+            const vec4 extra = TerrainLayerExtra(layer);
+            const float angle = extra.w;
+            const mat2 rotation = mat2(cos(angle), sin(angle), -sin(angle), cos(angle));
+            const vec2 uv = rotation * (context.texCoord * u_uvScale * extra.z);
+            const vec3 layerUv = vec3(uv, float(layer));
+            albedo += texture(layerAlbedo, layerUv) * weights[slot];
+            pbr += texture(layerPbr, layerUv) * weights[slot];
+            const vec3 normalTS = texture(layerNormal, layerUv).xyz * 2.0 - 1.0;
+            blendedNormal += TransformMaterialNormalToWorld(context, normalTS) * weights[slot];
+        }
+    }
+
+    if (u_debugMode > 2.5)
+    {
+        inputs.baseColor = vec3(0.0);
+        inputs.emissiveColor = albedo.rgb;
+        inputs.roughness = 1.0;
+        inputs.metallic = 0.0;
+        inputs.ambientOcclusion = 1.0;
+        inputs.normal = worldNormal;
+        inputs.tangent = context.worldTangent;
+        return inputs;
+    }
+    if (u_debugMode > 0.5 && u_debugMode < 1.5)
+    {
+        inputs.baseColor = vec3(0.0);
+        inputs.emissiveColor = vec3(weights[0], weights[1], weights[2]);
+        inputs.roughness = 1.0;
+        inputs.metallic = 0.0;
+        inputs.ambientOcclusion = 1.0;
+        inputs.normal = worldNormal;
+        inputs.tangent = context.worldTangent;
+        return inputs;
+    }
+    if (u_debugMode > 4.5)
+    {
+        // 5 = VT mip（0..4）。mode 0 没有页表 mip，输出 0。
+        inputs.baseColor = vec3(0.0);
+        inputs.emissiveColor = vec3(vtDebugMip / float(TERRAIN_VT_MAX_MIP));
+        inputs.roughness = 1.0;
+        inputs.metallic = 0.0;
+        inputs.ambientOcclusion = 1.0;
+        inputs.normal = worldNormal;
+        inputs.tangent = context.worldTangent;
+        return inputs;
+    }
+    if (u_debugMode > 3.5)
+    {
+        // 4 = VT 物理页号（按 L2 默认 1023 个可用槽位归一化）。
+        inputs.baseColor = vec3(0.0);
+        inputs.emissiveColor = vec3(vtDebugPage / 1023.0);
+        inputs.roughness = 1.0;
+        inputs.metallic = 0.0;
+        inputs.ambientOcclusion = 1.0;
+        inputs.normal = worldNormal;
+        inputs.tangent = context.worldTangent;
+        return inputs;
+    }
+    if (u_debugMode >= 1.5)
+    {
+        inputs.baseColor = vec3(0.0);
+        inputs.emissiveColor = vec3(
+            float(topIds.x),
+            float(topIds.y),
+            float(topIds.z)) / float(TERRAIN_MAX_LAYERS - 1);
+        inputs.roughness = 1.0;
+        inputs.metallic = 0.0;
+        inputs.ambientOcclusion = 1.0;
+        inputs.normal = worldNormal;
+        inputs.tangent = context.worldTangent;
+        return inputs;
+    }
+
+    // 缺页输出中性表面（0.18 灰、roughness 0.9、几何法线）；有效页的
+    // invalidPage=0，mix 的尾项严格为 0，输出与原值逐位一致。
+    inputs.baseColor = mix(albedo.rgb, vec3(0.18), invalidPage);
+    inputs.roughness = mix(pbr.r, 0.9, invalidPage);
+    inputs.metallic = mix(pbr.g, 0.0, invalidPage);
+    inputs.ambientOcclusion = mix(pbr.b, 1.0, invalidPage);
+    inputs.opacity = 1.0;
+    inputs.opacityMask = 1.0;
+    inputs.normal = normalize(mix(blendedNormal, worldNormal, invalidPage));
+    inputs.tangent = OrthonormalizeMaterialTangent(inputs.normal, context.worldTangent);
+    return inputs;
+}
+
+#endif

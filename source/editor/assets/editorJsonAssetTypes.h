@@ -1,16 +1,18 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include "render/resource/rendererGpuImageToken.h"
+#include "ui/uiExternalTexture.h"
 
 namespace VL::EditorUi
 {
 
-enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain, Blueprint };
+enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain, Blueprint, Retarget, Tressfx };
 enum class EditorJsonValueKind : uint8_t { Object, Array, String, Number, Boolean, Null };
 
 // 资源 worker 发布的不可变 JSON 元数据；UI 只借用共享快照，不加载引用的 data 或 GPU 资源。
@@ -21,6 +23,12 @@ struct EditorJsonAssetEntry
     std::string name;
     std::string description;
     std::string diagnostic;
+    // 顶层 type 原值；目录按它区分 mesh/speedtree/tressfx，而不是文件名前缀。
+    std::string type;
+    // tressfx 描述符声明了 simulation.skinning：毛发视口不预览它，由蓝图组件承载。
+    bool tressfxSkinning = false;
+    // tressfx 的 .tfx guide 数；0 表示未知或不可用（文件缺失/头损坏/非 tressfx）。
+    uint32_t tressfxGuideCount = 0;
 };
 
 struct EditorJsonAssetCatalogSnapshot
@@ -42,33 +50,48 @@ struct EditorJsonField
 };
 
 // worker 生成的有界 RGB 预览；像素为显示用 sRGB RGBA8（alpha 恒为 255）。
-// 不持有 GPU 资源，不把法线/参数图的 alpha 当透明度。
-struct EditorTexturePreview
-{
-    uint32_t sourceWidth = 0, sourceHeight = 0;
-    uint32_t width = 0, height = 0;
-    std::vector<uint8_t> pixels;
-};
+// 不持有 GPU 资源，不把法线/参数图的 alpha 当透明度。类型由运行时 UI 的
+// 中性外部纹理契约定义，编辑器只保留旧名字。
+using EditorTexturePreview = UiTexturePreviewImage;
 
-struct EditorThumbnail
-{
-    std::string source;
-    std::string diagnostic;
-    std::shared_ptr<const EditorTexturePreview> image;
-    bool diskCacheHit = false;
-    std::shared_ptr<const RendererGpuImageToken> gpuImage;
-};
+using EditorThumbnail = UiThumbnail;
 
 // 只发布当前可见窗口；错误也是已完成状态，直到显式刷新才重试。
-struct EditorThumbnailSnapshot
+using EditorThumbnailSnapshot = UiThumbnailSnapshot;
+
+// worker 从正式 SK 与 retarget 求值后冻结的作者参考姿态，不拥有 FBX、播放器或 World。
+// bind/reference 均为厘米、Y-up 模型空间；局部轴供检查手腕等仅看骨段位置无法发现的扭转。
+struct EditorRetargetJoint
 {
-    uint64_t revision = 0;
-    std::unordered_map<std::string, EditorThumbnail> entries;
+    std::string name;
+    int parent = -1;
+    std::array<float, 3> bindPosition{}, referencePosition{};
+    std::array<std::array<float, 3>, 3> bindAxes{}, referenceAxes{};
 };
 
-struct EditorJsonDocumentSnapshot
+struct EditorRetargetMapping
 {
-    uint64_t revision = 0;
+    int source = -1, target = -1;
+    // 只有两边的祖先都落在同一映射时才比较骨段，跨链映射不伪造角误差。
+    int ancestor = -1;
+};
+
+struct EditorRetargetPreview
+{
+    std::string sourceSkeleton, targetSkeleton;
+    std::string sourcePose, targetPose;
+    std::string targetModelPath;
+    std::vector<EditorRetargetJoint> source, target;
+    std::vector<EditorRetargetMapping> mappings;
+    size_t sourceOffsets = 0, targetOffsets = 0;
+    size_t defaultAnchor = 0;
+};
+
+// UiTexturePreviewDocument 是运行时 Rml 渲染接口需要的视图面：revision +
+// texturePreview。继承让 shared_ptr<const EditorJsonDocumentSnapshot> 能直接
+// 按同一对象发布给 overlay，同时不把编辑器字段带进运行时头。
+struct EditorJsonDocumentSnapshot : UiTexturePreviewDocument
+{
     std::string assetPath;
     EditorAssetKind kind = EditorAssetKind::MaterialInstance;
     std::string name;
@@ -78,12 +101,18 @@ struct EditorJsonDocumentSnapshot
     std::string textureSource;
     std::string textureColorSpace;
     std::string previewDiagnostic;
-    std::shared_ptr<const EditorTexturePreview> texturePreview;
+    std::shared_ptr<const EditorRetargetPreview> retargetPreview;
+    // 与目录条目同源的顶层 type / tressfx skinning 摘要；工作线程一次解析后冻结，
+    // UI 不再读文件判断“这是不是毛发、要不要挡预览”。
+    std::string type;
+    bool tressfxSkinning = false;
+    // 与目录条目同源的 guide 数，供 Groups 编辑器校验 end <= guideCount。
+    uint32_t tressfxGuideCount = 0;
 };
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)
 {
-    return "vl://texture-preview/" + std::to_string(revision);
+    return UiTexturePreviewSource(revision);
 }
 
 // RmlUi 回调仅发出查看/刷新意图；文件读取和发布由 GT facade 与独立 worker 承担。

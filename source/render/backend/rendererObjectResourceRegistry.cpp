@@ -1,5 +1,6 @@
 #include "render/backend/rendererObjectResourceRegistry.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "materialInstance.h"
@@ -73,7 +74,8 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
     const RendererDescriptorContext& descriptorContext,
     const RenderScene& renderScene,
     ResolvedRenderScene& resolvedRenderScene,
-    RendererResourceCache& resourceCache) const
+    RendererResourceCache& resourceCache,
+    bool prerenderSkin) const
 {
     for (ResolvedMaterialGroup& materialGroup : resolvedRenderScene.materialGroups)
     {
@@ -91,11 +93,25 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 const RenderDrawPacket& drawPacket =
                     renderScene.drawPackets[draw.drawPacketIndex];
                 std::shared_ptr<RendererObjectResourceEntry> objectResourceEntry;
-                const std::shared_ptr<RendererObjectResourceEntry>* cachedEntry =
+                const std::shared_ptr<RendererObjectResourceEntry> cachedEntry =
                     resourceCache.GetObjectResource(drawPacket.debugName);
-                if (cachedEntry != nullptr && *cachedEntry != nullptr)
+                if (cachedEntry != nullptr)
                 {
-                    objectResourceEntry = *cachedEntry;
+                    objectResourceEntry = cachedEntry;
+                    // 运行时 spawn 的骨骼网格可能先以“无 pose”帧创建对象资源包，
+                    // 之后 pose 才到达。对象资源包的 Initialize 是一次性的（已初始化
+                    // 就不再补 buffer），直接在旧包上补会破坏描述符布局，因此这里丢弃
+                    // 旧包、按带 pre-deform 的路径重建。旧包只被上一帧 resolved scene
+                    // 引用，重建发生在本帧 resolve 之后、录制之前。
+                    const auto& existingResources = objectResourceEntry->GetResources();
+                    if (drawPacket.skinPose && existingResources.initialized &&
+                        existingResources.skinDeformVertexCount == 0)
+                    {
+                        objectResourceEntry = std::make_shared<RendererObjectResourceEntry>(
+                            drawPacket.debugName);
+                        resourceCache.BindObjectResource(
+                            drawPacket.debugName, objectResourceEntry);
+                    }
                 }
                 else
                 {
@@ -108,18 +124,53 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                 // 分配与随后 DrawShadowScene 使用的是同一份路由结果。
                 if (drawPacket.skinPose && !objectResourceEntry->GetResources().initialized)
                 {
-                    const auto renderable = draw.renderableObject.lock();
+                    const auto& renderable = draw.renderableObject;
                     if (!renderable || !renderable->GetSkinInfluenceInfo().buffer)
                         throw std::runtime_error("Skinned draw is missing its immutable influence stream");
                     auto& resources = objectResourceEntry->GetResources();
                     resources.skinJointCount = drawPacket.skinPose->matrices.size();
                     resources.skinInfluences = renderable->GetSkinInfluenceInfo();
+                    // GPU 预蒙皮的对象级输入：compute 直接读同一份顶点流，输出
+                    // 按 gl_VertexIndex 寻址，因此顶点数必须在这里冻结。
+                    resources.prerenderSkin = prerenderSkin;
+                    resources.skinDeformVertexCount = renderable->GetVertexCount();
+                    resources.skinSourceVertices = renderable->GetVertexBufferInfo();
                 }
-                objectResourceEntry->Initialize(
-                    rendererBackend,
-                    descriptorContext,
-                    *materialInstanceGroup.materialInstance,
-                    materialGroup.shadowCaster.kind);
+                if (!objectResourceEntry->GetResources().initialized)
+                {
+                    const auto& renderable = draw.renderableObject;
+                    if (renderable && renderable->IsTressfx())
+                    {
+                        objectResourceEntry->GetResources().tressfxPositions =
+                            renderable->GetTressfxPositionInfo();
+                        objectResourceEntry->GetResources().tressfxGuideGroupIds =
+                            renderable->GetTressfxGuideGroupIdInfo();
+                        objectResourceEntry->GetResources().tressfxGuideGroupColors =
+                            renderable->GetTressfxGuideGroupColorInfo();
+                        const uint32_t slots = std::max(
+                            1u, rendererBackend.GetSwapchainImageCount());
+                        auto& brushWeights =
+                            objectResourceEntry->GetResources().tressfxBrushWeights;
+                        brushWeights.resize(slots);
+                        for (uint32_t slot = 0; slot < slots; ++slot)
+                            brushWeights[slot] =
+                                renderable->GetTressfxBrushWeightInfo(slot);
+                    }
+                }
+                try
+                {
+                    objectResourceEntry->Initialize(
+                        rendererBackend,
+                        descriptorContext,
+                        *materialInstanceGroup.materialInstance,
+                        materialGroup.shadowCaster.kind);
+                }
+                catch (const std::exception& error)
+                {
+                    // 对象资源包初始化错误默认没有对象身份，排查 spawn/动态对象时必须带上。
+                    throw std::runtime_error(std::string(error.what()) +
+                        " object=" + drawPacket.debugName);
+                }
                 draw.objectResourceEntry = objectResourceEntry;
             }
         }

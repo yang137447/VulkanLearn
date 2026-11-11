@@ -72,6 +72,7 @@ MaterialInstance::~MaterialInstance()
 }
 void MaterialInstance::SetParameter(const std::string& parameterName, const float& value)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     ClearParameterValues(parameterName);
     parameters.insert_or_assign(parameterName, ParamMap(ParamType::Float));
     floatParameters[parameterName] = value;
@@ -79,6 +80,7 @@ void MaterialInstance::SetParameter(const std::string& parameterName, const floa
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector2f& value)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     ClearParameterValues(parameterName);
     parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec2));
     vec2Parameters[parameterName] = value;
@@ -86,6 +88,7 @@ void MaterialInstance::SetParameter(const std::string& parameterName, const Eige
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector3f& value)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     ClearParameterValues(parameterName);
     parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec3));
     vec3Parameters[parameterName] = value;
@@ -93,6 +96,7 @@ void MaterialInstance::SetParameter(const std::string& parameterName, const Eige
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector4f& value)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     ClearParameterValues(parameterName);
     parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec4));
     vec4Parameters[parameterName] = value;
@@ -101,6 +105,8 @@ void MaterialInstance::SetParameter(const std::string& parameterName, const Eige
 void MaterialInstance::CommitNumericParameterValues(
     const MaterialInstanceNumericParameterValues& parameterValues)
 {
+    // 校验、暂存与交换全程独占，读者只能看到提交前或提交后的完整一组值。
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     for (const auto& [parameterName, value] : parameterValues)
     {
         const auto parameterIt = parameters.find(parameterName);
@@ -163,6 +169,7 @@ void MaterialInstance::CommitNumericParameterValues(
 
 bool MaterialInstance::HasParameter(const std::string& parameterName) const
 {
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
     return parameters.find(parameterName) != parameters.end();
 }
 
@@ -176,6 +183,7 @@ void MaterialInstance::ClearParameterValues(const std::string& parameterName)
 
 void MaterialInstance::SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     textures[textureName] = texture;
     textureBindingIdentities.erase(textureName);
 }
@@ -186,6 +194,7 @@ void MaterialInstance::SetTexture(
     std::optional<std::string> textureAssetIdentity,
     std::optional<std::string> textureCacheIdentity)
 {
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
     textures[textureName] = texture;
     if (textureAssetIdentity)
     {
@@ -199,6 +208,7 @@ void MaterialInstance::SetTexture(
 
 std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
 {
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
     auto it = textures.find(textureName);
     if (it != textures.end())
     {
@@ -209,30 +219,65 @@ std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& texture
 
 bool MaterialInstance::HasTexture(const std::string& textureName) const
 {
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
     return textures.find(textureName) != textures.end();
 }
 
-MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
+std::unordered_map<std::string, ParamMap>
+MaterialInstance::GetParameters() const
 {
-    MaterialInstanceStateSnapshot::ParameterMap parameterValues;
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
+    return parameters;
+}
+
+MaterialInstanceNumericParameterValues
+MaterialInstance::CaptureNumericParameterValues() const
+{
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
+    return CaptureNumericParameterValuesLocked();
+}
+
+MaterialInstanceNumericParameterValues
+MaterialInstance::CaptureNumericParameterValuesLocked() const
+{
+    MaterialInstanceNumericParameterValues parameterValues;
     for (const auto& [parameterName, parameter] : parameters)
     {
         switch (parameter.type)
         {
         case ParamType::Float:
-            parameterValues.emplace(parameterName, floatParameters.at(parameterName));
+            parameterValues.emplace(
+                parameterName,
+                floatParameters.at(parameterName));
             break;
         case ParamType::Vec2:
-            parameterValues.emplace(parameterName, vec2Parameters.at(parameterName));
+            parameterValues.emplace(
+                parameterName,
+                vec2Parameters.at(parameterName));
             break;
         case ParamType::Vec3:
-            parameterValues.emplace(parameterName, vec3Parameters.at(parameterName));
+            parameterValues.emplace(
+                parameterName,
+                vec3Parameters.at(parameterName));
             break;
         case ParamType::Vec4:
-            parameterValues.emplace(parameterName, vec4Parameters.at(parameterName));
+            parameterValues.emplace(
+                parameterName,
+                vec4Parameters.at(parameterName));
             break;
         }
     }
+    return parameterValues;
+}
+
+MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
+{
+    const std::string normalizedIdentity =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstanceName);
+
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
+    MaterialInstanceStateSnapshot::ParameterMap parameterValues =
+        CaptureNumericParameterValuesLocked();
 
     MaterialInstanceStateSnapshot::TextureMap textureBindings;
     for (const auto& [textureName, texture] : textures)
@@ -257,7 +302,7 @@ MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
     }
 
     return MaterialInstanceStateSnapshot(
-        MaterialAssetUtils::NormalizeAssetPath(materialInstanceName),
+        normalizedIdentity,
         std::move(parameterValues),
         std::move(textureBindings));
 }
@@ -279,6 +324,7 @@ std::shared_ptr<MaterialInstance> MaterialInstance::Clone(std::string name) cons
 
 const vk::DescriptorImageInfo& MaterialInstance::GetTextureDescriptorInfo(const std::string& textureName) const
 {
+    std::shared_lock<std::shared_mutex> lock(stateMutex);
     auto it = textures.find(textureName);
     if (it == textures.end() || it->second == nullptr)
     {

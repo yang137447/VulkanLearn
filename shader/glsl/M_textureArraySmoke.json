@@ -1,0 +1,31 @@
+{
+    "name": "M_textureArraySmoke",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_layer": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 1.0
+            },
+            "description": "texture array layer index used by the smoke material; 0 = first source, 1 = second source"
+        }
+    },
+    "textures": {
+        "layerMap": {
+            "type": "sampler2DArray",
+            "default": null
+        }
+    },
+    "shaderEvaluation": {
+        "vertex": "M_textureArraySmoke.vertex.glsl",
+        "surface": "M_textureArraySmoke.surface.glsl"
+    }
+}

@@ -1,6 +1,8 @@
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 
 #include <algorithm>
+#include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 
@@ -44,8 +46,10 @@ void RequireFrameSyncIndex(const char* resourceName, uint32_t index, size_t size
 
 void RHIDeviceVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
-    SDL_Window* window)
+    SDL_Window* window,
+    VL::PresentModePreference presentMode)
 {
+    VulkanManager::GetInstance().SetPresentModePreference(presentMode);
     VulkanManager::GetInstance().Init(instanceExtensions, window);
     initialized = true;
 }
@@ -57,7 +61,7 @@ void RHIDeviceVulkan::WaitIdle()
         return;
     }
 
-    GetDevice().waitIdle();
+    VulkanManager::GetInstance().GetSubmissionGate().WaitIdle(GetDevice());
 }
 
 void RHIDeviceVulkan::RecreateSwapchain(VL::PresentTarget& target, int width, int height)
@@ -110,7 +114,8 @@ void RHIDeviceVulkan::SubmitToGraphicsQueue(
     const vk::SubmitInfo& submitInfo,
     vk::Fence signalFence)
 {
-    GetGraphicsQueue().submit(submitInfo, signalFence);
+    VulkanManager::GetInstance().GetSubmissionGate().Submit(
+        GetGraphicsQueue(), submitInfo, signalFence);
 }
 
 SwapchainFrameResult RHIDeviceVulkan::PresentSwapchainImage(
@@ -127,7 +132,9 @@ SwapchainFrameResult RHIDeviceVulkan::PresentSwapchainImage(
 
     try
     {
-        return ClassifySwapchainFrameResult(GetGraphicsQueue().presentKHR(presentInfo));
+        return ClassifySwapchainFrameResult(
+            VulkanManager::GetInstance().GetSubmissionGate().Present(
+                GetGraphicsQueue(), presentInfo));
     }
     catch (const vk::OutOfDateKHRError&)
     {
@@ -148,6 +155,13 @@ float RHIDeviceVulkan::GetTimestampPeriodNanoseconds()
 uint32_t RHIDeviceVulkan::GetGraphicsTimestampValidBits()
 {
     return VulkanManager::GetInstance().GetGraphicsQueueTimestampValidBits();
+}
+
+bool RHIDeviceVulkan::SupportsTimestampQueries()
+{
+    // timestampComputeAndGraphics 决定 graphics/compute 队列能否写 timestamp；
+    // 具体队列的 timestampValidBits 仍由 GetGraphicsTimestampValidBits 单独校验。
+    return GetPhysicalDevice().getProperties().limits.timestampComputeAndGraphics != 0;
 }
 
 bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
@@ -214,6 +228,32 @@ void RHIDeviceVulkan::ReadTimestampQueryPair(
     }
 }
 
+bool RHIDeviceVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    // 刻意不传 VK_QUERY_RESULT_WAIT_BIT：统计路径绝不允许阻塞渲染线程。
+    const VkResult result = vkGetQueryPoolResults(
+        static_cast<VkDevice>(GetDevice()),
+        static_cast<VkQueryPool>(queryPool),
+        firstQuery,
+        static_cast<uint32_t>(timestamps.size()),
+        sizeof(timestamps),
+        timestamps.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY)
+    {
+        return false;
+    }
+    if (result != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to read Vulkan timestamp query results.");
+    }
+    return true;
+}
+
 vk::PhysicalDevice& RHIDeviceVulkan::GetPhysicalDevice()
 {
     return VulkanManager::GetInstance().GetPhysicalDevice();
@@ -232,6 +272,11 @@ vk::Queue& RHIDeviceVulkan::GetGraphicsQueue()
 vk::CommandPool& RHIDeviceVulkan::GetCommandPool()
 {
     return VulkanManager::GetInstance().GetCommandPool();
+}
+
+vk::CommandPool& RHIDeviceVulkan::GetSingleTimeCommandPool()
+{
+    return VulkanManager::GetInstance().GetSingleTimeCommandPool();
 }
 
 // 目标 0 = 主窗口。多窗口接线时这里改为按后端所属窗口解析，而调用点无需再变 ——
@@ -342,20 +387,23 @@ RHIBufferHandle RHIDeviceVulkan::CreateBuffer(
         debugName);
 
     RHIBufferHandle handle;
-    handle.id = nextBufferId++;
-    buffers.emplace(handle.id, VulkanBufferResource{ buffer, memory });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextBufferId++;
+        buffers.emplace(handle.id, VulkanBufferResource{ buffer, memory });
+    }
     return handle;
 }
 
 void* RHIDeviceVulkan::MapBufferMemory(RHIBufferHandle bufferHandle, vk::DeviceSize size)
 {
-    const VulkanBufferResource& resource = RequireBufferResource(bufferHandle);
+    const VulkanBufferResource resource = RequireBufferResource(bufferHandle);
     return GetDevice().mapMemory(resource.memory, 0, size);
 }
 
 void RHIDeviceVulkan::UnmapBufferMemory(RHIBufferHandle bufferHandle)
 {
-    const VulkanBufferResource& resource = RequireBufferResource(bufferHandle);
+    const VulkanBufferResource resource = RequireBufferResource(bufferHandle);
     GetDevice().unmapMemory(resource.memory);
 }
 
@@ -366,23 +414,27 @@ void RHIDeviceVulkan::DestroyBuffer(RHIBufferHandle bufferHandle)
         return;
     }
 
-    auto resourceIt = buffers.find(bufferHandle.id);
-    if (resourceIt == buffers.end())
+    VulkanBufferResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = buffers.find(bufferHandle.id);
+        if (resourceIt == buffers.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        buffers.erase(resourceIt);
     }
 
     vk::Device& device = GetDevice();
-    if (resourceIt->second.buffer)
+    if (resource.buffer)
     {
-        device.destroyBuffer(resourceIt->second.buffer);
+        device.destroyBuffer(resource.buffer);
     }
-    if (resourceIt->second.memory)
+    if (resource.memory)
     {
-        device.freeMemory(resourceIt->second.memory);
+        device.freeMemory(resource.memory);
     }
-
-    buffers.erase(resourceIt);
 }
 
 void RHIDeviceVulkan::CopyBufferToBuffer(
@@ -390,29 +442,30 @@ void RHIDeviceVulkan::CopyBufferToBuffer(
     RHIBufferHandle destination,
     vk::DeviceSize size)
 {
-    const VulkanBufferResource& sourceResource = RequireBufferResource(source);
-    const VulkanBufferResource& destinationResource = RequireBufferResource(destination);
+    const VulkanBufferResource sourceResource = RequireBufferResource(source);
+    const VulkanBufferResource destinationResource = RequireBufferResource(destination);
     vk::Buffer sourceBuffer = sourceResource.buffer;
     vk::Buffer destinationBuffer = destinationResource.buffer;
     vk::DeviceSize copySize = size;
     CommonFunction::CopyBufferToBuffer(
         GetDevice(),
         GetGraphicsQueue(),
-        GetCommandPool(),
+        GetSingleTimeCommandPool(),
         sourceBuffer,
         destinationBuffer,
         copySize);
 }
 
-const VulkanBufferResource& RHIDeviceVulkan::GetVulkanBufferResource(
+VulkanBufferResource RHIDeviceVulkan::GetVulkanBufferResource(
     RHIBufferHandle bufferHandle) const
 {
     return RequireBufferResource(bufferHandle);
 }
 
-const VulkanBufferResource& RHIDeviceVulkan::RequireBufferResource(
+VulkanBufferResource RHIDeviceVulkan::RequireBufferResource(
     RHIBufferHandle bufferHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = buffers.find(bufferHandle.id);
     if (!bufferHandle.IsValid() || resourceIt == buffers.end())
     {
@@ -447,8 +500,11 @@ RHIImageHandle RHIDeviceVulkan::CreateImage(
         debugName);
 
     RHIImageHandle handle;
-    handle.id = nextImageId++;
-    images.emplace(handle.id, VulkanImageResource{ image, memory });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextImageId++;
+        images.emplace(handle.id, VulkanImageResource{ image, memory });
+    }
     return handle;
 }
 
@@ -483,8 +539,11 @@ RHIImageHandle RHIDeviceVulkan::CreateImage(
     }
 
     RHIImageHandle handle;
-    handle.id = nextImageId++;
-    images.emplace(handle.id, VulkanImageResource{ image, imageMemory });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextImageId++;
+        images.emplace(handle.id, VulkanImageResource{ image, imageMemory });
+    }
     return handle;
 }
 
@@ -493,9 +552,11 @@ void RHIDeviceVulkan::TransitionImageLayout(
     uint32_t mipLevels,
     vk::Format format,
     vk::ImageLayout oldLayout,
-    vk::ImageLayout newLayout)
+    vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     vk::Format transitionFormat = format;
     CommonFunction::TransitionImageLayout(
@@ -503,10 +564,12 @@ void RHIDeviceVulkan::TransitionImageLayout(
         mipLevels,
         transitionFormat,
         GetDevice(),
-        GetCommandPool(),
+        GetSingleTimeCommandPool(),
         GetGraphicsQueue(),
         oldLayout,
-        newLayout);
+        newLayout,
+        baseArrayLayer,
+        layerCount);
 }
 
 RHIImageViewHandle RHIDeviceVulkan::Create2DImageView(
@@ -516,7 +579,7 @@ RHIImageViewHandle RHIDeviceVulkan::Create2DImageView(
     vk::ImageAspectFlags aspectMask,
     const std::string& debugName)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     vk::Format imageFormat = format;
     vk::ImageView imageView = CommonFunction::Create2DImageView(
@@ -540,7 +603,7 @@ RHIImageViewHandle RHIDeviceVulkan::CreateImageView(
     uint32_t layerCount,
     const std::string& debugName)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     vk::Format imageFormat = format;
     vk::ImageView imageView = CommonFunction::CreateImageViewBase(
@@ -563,7 +626,7 @@ RHIImageViewHandle RHIDeviceVulkan::CreateCubeImageView(
     vk::Format format,
     const std::string& debugName)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     vk::Format imageFormat = format;
     vk::ImageView imageView = CommonFunction::CreateCubeImageView(
@@ -580,7 +643,7 @@ RHIImageViewHandle RHIDeviceVulkan::CreateCubeStorageImageView(
     vk::Format format,
     const std::string& debugName)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     vk::Format imageFormat = format;
     vk::ImageView imageView = CommonFunction::CreateCubeStorageImageView(
@@ -598,20 +661,25 @@ void RHIDeviceVulkan::DestroyImageView(RHIImageViewHandle imageViewHandle)
         return;
     }
 
-    auto resourceIt = imageViews.find(imageViewHandle.id);
-    if (resourceIt == imageViews.end())
+    VulkanImageViewResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = imageViews.find(imageViewHandle.id);
+        if (resourceIt == imageViews.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        imageViews.erase(resourceIt);
     }
 
-    if (resourceIt->second.imageView)
+    if (resource.imageView)
     {
-        GetDevice().destroyImageView(resourceIt->second.imageView);
+        GetDevice().destroyImageView(resource.imageView);
     }
-    imageViews.erase(resourceIt);
 }
 
-const VulkanImageViewResource& RHIDeviceVulkan::GetVulkanImageViewResource(
+VulkanImageViewResource RHIDeviceVulkan::GetVulkanImageViewResource(
     RHIImageViewHandle imageViewHandle) const
 {
     return RequireImageViewResource(imageViewHandle);
@@ -620,8 +688,11 @@ const VulkanImageViewResource& RHIDeviceVulkan::GetVulkanImageViewResource(
 RHIImageViewHandle RHIDeviceVulkan::RegisterImageView(vk::ImageView imageView)
 {
     RHIImageViewHandle handle;
-    handle.id = nextImageViewId++;
-    imageViews.emplace(handle.id, VulkanImageViewResource{ imageView });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextImageViewId++;
+        imageViews.emplace(handle.id, VulkanImageViewResource{ imageView });
+    }
     return handle;
 }
 
@@ -673,20 +744,25 @@ void RHIDeviceVulkan::DestroySampler(RHISamplerHandle samplerHandle)
         return;
     }
 
-    auto resourceIt = samplers.find(samplerHandle.id);
-    if (resourceIt == samplers.end())
+    VulkanSamplerResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = samplers.find(samplerHandle.id);
+        if (resourceIt == samplers.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        samplers.erase(resourceIt);
     }
 
-    if (resourceIt->second.sampler)
+    if (resource.sampler)
     {
-        GetDevice().destroySampler(resourceIt->second.sampler);
+        GetDevice().destroySampler(resource.sampler);
     }
-    samplers.erase(resourceIt);
 }
 
-const VulkanSamplerResource& RHIDeviceVulkan::GetVulkanSamplerResource(
+VulkanSamplerResource RHIDeviceVulkan::GetVulkanSamplerResource(
     RHISamplerHandle samplerHandle) const
 {
     return RequireSamplerResource(samplerHandle);
@@ -695,8 +771,11 @@ const VulkanSamplerResource& RHIDeviceVulkan::GetVulkanSamplerResource(
 RHISamplerHandle RHIDeviceVulkan::RegisterSampler(vk::Sampler sampler)
 {
     RHISamplerHandle handle;
-    handle.id = nextSamplerId++;
-    samplers.emplace(handle.id, VulkanSamplerResource{ sampler });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextSamplerId++;
+        samplers.emplace(handle.id, VulkanSamplerResource{ sampler });
+    }
     return handle;
 }
 
@@ -722,7 +801,7 @@ vk::CommandBuffer RHIDeviceVulkan::BeginSingleTimeCommands()
 {
     return CommonFunction::BeginSingleTimeCommands(
         GetDevice(),
-        GetCommandPool());
+        GetSingleTimeCommandPool());
 }
 
 void RHIDeviceVulkan::EndSingleTimeCommands(vk::CommandBuffer& commandBuffer)
@@ -731,7 +810,7 @@ void RHIDeviceVulkan::EndSingleTimeCommands(vk::CommandBuffer& commandBuffer)
         GetDevice(),
         commandBuffer,
         GetGraphicsQueue(),
-        GetCommandPool());
+        GetSingleTimeCommandPool());
 }
 
 void RHIDeviceVulkan::AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer)
@@ -739,27 +818,200 @@ void RHIDeviceVulkan::AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer)
     CommonFunction::AbortSingleTimeCommands(
         GetDevice(),
         commandBuffer,
-        GetCommandPool());
+        GetSingleTimeCommandPool());
 }
 
 void RHIDeviceVulkan::CopyBufferToImage(
     RHIBufferHandle bufferHandle,
     RHIImageHandle imageHandle,
     uint32_t width,
-    uint32_t height)
+    uint32_t height,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes,
+    uint32_t bufferRowLength)
 {
-    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
-    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
     vk::Buffer buffer = bufferResource.buffer;
     vk::Image image = imageResource.image;
     CommonFunction::CopyBufferToImage(
         GetDevice(),
         GetGraphicsQueue(),
-        GetCommandPool(),
+        GetSingleTimeCommandPool(),
         buffer,
         image,
         width,
-        height);
+        height,
+        false,
+        0,
+        baseArrayLayer,
+        layerCount,
+        layerBytes,
+        bufferRowLength);
+}
+
+void RHIDeviceVulkan::CopyBufferToImageRegion(
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    vk::DeviceSize bufferOffset,
+    uint32_t bufferRowLength,
+    uint32_t imageOffsetX,
+    uint32_t imageOffsetY,
+    uint32_t width,
+    uint32_t height,
+    uint32_t mipLevel,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount,
+    vk::DeviceSize layerBytes)
+{
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    vk::Buffer buffer = bufferResource.buffer;
+    vk::Image image = imageResource.image;
+    CommonFunction::CopyBufferToImageRegion(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetSingleTimeCommandPool(),
+        buffer,
+        image,
+        bufferOffset,
+        bufferRowLength,
+        imageOffsetX,
+        imageOffsetY,
+        width,
+        height,
+        mipLevel,
+        baseArrayLayer,
+        layerCount,
+        layerBytes);
+}
+
+void RHIDeviceVulkan::CopyBufferToImageRegions(
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    vk::Buffer buffer = bufferResource.buffer;
+    vk::Image image = imageResource.image;
+    CommonFunction::CopyBufferToImageRegions(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetSingleTimeCommandPool(),
+        buffer,
+        image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordTransitionImageLayout(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    uint32_t mipLevels,
+    vk::Format format,
+    vk::ImageLayout oldLayout,
+    vk::ImageLayout newLayout,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordTransitionImageLayout(
+        commandBuffer,
+        imageResource.image,
+        mipLevels,
+        format,
+        oldLayout,
+        newLayout,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RHIDeviceVulkan::RecordCopyBufferToImageRegions(
+    vk::CommandBuffer commandBuffer,
+    RHIBufferHandle bufferHandle,
+    RHIImageHandle imageHandle,
+    const std::vector<vk::BufferImageCopy>& regions)
+{
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordCopyBufferToImageRegions(
+        commandBuffer,
+        bufferResource.buffer,
+        imageResource.image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordClearColorImage(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    vk::ImageLayout layout,
+    vk::ClearColorValue clearValue,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
+{
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    CommonFunction::RecordClearColorImage(
+        commandBuffer,
+        imageResource.image,
+        layout,
+        clearValue,
+        baseArrayLayer,
+        layerCount);
+}
+
+void RHIDeviceVulkan::RecordCopyImageRegions(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle sourceHandle,
+    RHIImageHandle destinationHandle,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    const VulkanImageResource source = RequireImageResource(sourceHandle);
+    const VulkanImageResource destination =
+        RequireImageResource(destinationHandle);
+    CommonFunction::RecordCopyImageRegions(
+        commandBuffer,
+        source.image,
+        destination.image,
+        regions);
+}
+
+void RHIDeviceVulkan::CopyImageRegions(
+    RHIImageHandle sourceHandle,
+    RHIImageHandle destinationHandle,
+    const std::vector<vk::ImageCopy>& regions)
+{
+    const VulkanImageResource source = RequireImageResource(sourceHandle);
+    const VulkanImageResource destination =
+        RequireImageResource(destinationHandle);
+    CommonFunction::CopyImageRegions(
+        GetDevice(),
+        GetGraphicsQueue(),
+        GetSingleTimeCommandPool(),
+        source.image,
+        destination.image,
+        regions);
+}
+
+void RHIDeviceVulkan::RecordCopyImageToBuffer(
+    vk::CommandBuffer commandBuffer,
+    RHIImageHandle imageHandle,
+    RHIBufferHandle bufferHandle,
+    uint32_t width,
+    uint32_t height,
+    bool flipY,
+    vk::DeviceSize rowBytes)
+{
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
+    CommonFunction::RecordCopyImageToBuffer(
+        commandBuffer,
+        imageResource.image,
+        bufferResource.buffer,
+        width,
+        height,
+        flipY,
+        rowBytes);
 }
 
 void RHIDeviceVulkan::CopyImageToBuffer(
@@ -770,14 +1022,14 @@ void RHIDeviceVulkan::CopyImageToBuffer(
     bool flipY,
     vk::DeviceSize rowBytes)
 {
-    const VulkanImageResource& imageResource = RequireImageResource(imageHandle);
-    const VulkanBufferResource& bufferResource = RequireBufferResource(bufferHandle);
+    const VulkanImageResource imageResource = RequireImageResource(imageHandle);
+    const VulkanBufferResource bufferResource = RequireBufferResource(bufferHandle);
     vk::Image image = imageResource.image;
     vk::Buffer buffer = bufferResource.buffer;
     CommonFunction::CopyImageToBuffer(
         GetDevice(),
         GetGraphicsQueue(),
-        GetCommandPool(),
+        GetSingleTimeCommandPool(),
         image,
         buffer,
         width,
@@ -790,18 +1042,22 @@ void RHIDeviceVulkan::GenerateMipmaps(
     RHIImageHandle imageHandle,
     uint32_t width,
     uint32_t height,
-    uint32_t mipLevels)
+    uint32_t mipLevels,
+    uint32_t baseArrayLayer,
+    uint32_t layerCount)
 {
-    const VulkanImageResource& resource = RequireImageResource(imageHandle);
+    const VulkanImageResource resource = RequireImageResource(imageHandle);
     vk::Image image = resource.image;
     CommonFunction::GenerateMipmaps(
         GetDevice(),
         GetGraphicsQueue(),
-        GetCommandPool(),
+        GetSingleTimeCommandPool(),
         image,
         width,
         height,
-        mipLevels);
+        mipLevels,
+        baseArrayLayer,
+        layerCount);
 }
 
 void RHIDeviceVulkan::DestroyImageResource(
@@ -814,36 +1070,62 @@ void RHIDeviceVulkan::DestroyImageResource(
         return;
     }
 
-    auto resourceIt = images.find(imageHandle.id);
-    if (resourceIt == images.end())
+    VulkanImageResource imageResource{};
+    VulkanImageViewResource imageViewResource{};
+    VulkanSamplerResource samplerResource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = images.find(imageHandle.id);
+        if (resourceIt == images.end())
+        {
+            return;
+        }
+        imageResource = resourceIt->second;
+        images.erase(resourceIt);
+
+        auto imageViewIt = imageViews.find(imageViewHandle.id);
+        if (imageViewHandle.IsValid() && imageViewIt != imageViews.end())
+        {
+            imageViewResource = imageViewIt->second;
+            imageViews.erase(imageViewIt);
+        }
+        auto samplerIt = samplers.find(samplerHandle.id);
+        if (samplerHandle.IsValid() && samplerIt != samplers.end())
+        {
+            samplerResource = samplerIt->second;
+            samplers.erase(samplerIt);
+        }
     }
 
     vk::Device& device = GetDevice();
-    DestroyImageView(imageViewHandle);
-    DestroySampler(samplerHandle);
-    if (resourceIt->second.image)
+    if (imageViewResource.imageView)
     {
-        device.destroyImage(resourceIt->second.image);
+        device.destroyImageView(imageViewResource.imageView);
     }
-    if (resourceIt->second.memory)
+    if (samplerResource.sampler)
     {
-        device.freeMemory(resourceIt->second.memory);
+        device.destroySampler(samplerResource.sampler);
     }
-
-    images.erase(resourceIt);
+    if (imageResource.image)
+    {
+        device.destroyImage(imageResource.image);
+    }
+    if (imageResource.memory)
+    {
+        device.freeMemory(imageResource.memory);
+    }
 }
 
-const VulkanImageResource& RHIDeviceVulkan::GetVulkanImageResource(
+VulkanImageResource RHIDeviceVulkan::GetVulkanImageResource(
     RHIImageHandle imageHandle) const
 {
     return RequireImageResource(imageHandle);
 }
 
-const VulkanImageResource& RHIDeviceVulkan::RequireImageResource(
+VulkanImageResource RHIDeviceVulkan::RequireImageResource(
     RHIImageHandle imageHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = images.find(imageHandle.id);
     if (!imageHandle.IsValid() || resourceIt == images.end())
     {
@@ -853,9 +1135,10 @@ const VulkanImageResource& RHIDeviceVulkan::RequireImageResource(
     return resourceIt->second;
 }
 
-const VulkanImageViewResource& RHIDeviceVulkan::RequireImageViewResource(
+VulkanImageViewResource RHIDeviceVulkan::RequireImageViewResource(
     RHIImageViewHandle imageViewHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = imageViews.find(imageViewHandle.id);
     if (!imageViewHandle.IsValid() || resourceIt == imageViews.end())
     {
@@ -865,9 +1148,10 @@ const VulkanImageViewResource& RHIDeviceVulkan::RequireImageViewResource(
     return resourceIt->second;
 }
 
-const VulkanSamplerResource& RHIDeviceVulkan::RequireSamplerResource(
+VulkanSamplerResource RHIDeviceVulkan::RequireSamplerResource(
     RHISamplerHandle samplerHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = samplers.find(samplerHandle.id);
     if (!samplerHandle.IsValid() || resourceIt == samplers.end())
     {
@@ -877,9 +1161,10 @@ const VulkanSamplerResource& RHIDeviceVulkan::RequireSamplerResource(
     return resourceIt->second;
 }
 
-const VulkanDescriptorSetLayoutResource& RHIDeviceVulkan::RequireDescriptorSetLayoutResource(
+VulkanDescriptorSetLayoutResource RHIDeviceVulkan::RequireDescriptorSetLayoutResource(
     RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = descriptorSetLayouts.find(descriptorSetLayoutHandle.id);
     if (!descriptorSetLayoutHandle.IsValid() || resourceIt == descriptorSetLayouts.end())
     {
@@ -890,9 +1175,10 @@ const VulkanDescriptorSetLayoutResource& RHIDeviceVulkan::RequireDescriptorSetLa
     return resourceIt->second;
 }
 
-const VulkanDescriptorPoolResource& RHIDeviceVulkan::RequireDescriptorPoolResource(
+VulkanDescriptorPoolResource RHIDeviceVulkan::RequireDescriptorPoolResource(
     RHIDescriptorPoolHandle descriptorPoolHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = descriptorPools.find(descriptorPoolHandle.id);
     if (!descriptorPoolHandle.IsValid() || resourceIt == descriptorPools.end())
     {
@@ -903,9 +1189,10 @@ const VulkanDescriptorPoolResource& RHIDeviceVulkan::RequireDescriptorPoolResour
     return resourceIt->second;
 }
 
-const VulkanDescriptorSetResource& RHIDeviceVulkan::RequireDescriptorSetResource(
+VulkanDescriptorSetResource RHIDeviceVulkan::RequireDescriptorSetResource(
     RHIDescriptorSetHandle descriptorSetHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = descriptorSets.find(descriptorSetHandle.id);
     if (!descriptorSetHandle.IsValid() || resourceIt == descriptorSets.end())
     {
@@ -946,20 +1233,25 @@ void RHIDeviceVulkan::DestroyDescriptorSetLayout(
         return;
     }
 
-    auto resourceIt = descriptorSetLayouts.find(descriptorSetLayoutHandle.id);
-    if (resourceIt == descriptorSetLayouts.end())
+    VulkanDescriptorSetLayoutResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = descriptorSetLayouts.find(descriptorSetLayoutHandle.id);
+        if (resourceIt == descriptorSetLayouts.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        descriptorSetLayouts.erase(resourceIt);
     }
 
-    if (resourceIt->second.ownsResource && resourceIt->second.descriptorSetLayout)
+    if (resource.ownsResource && resource.descriptorSetLayout)
     {
-        GetDevice().destroyDescriptorSetLayout(resourceIt->second.descriptorSetLayout, nullptr);
+        GetDevice().destroyDescriptorSetLayout(resource.descriptorSetLayout, nullptr);
     }
-    descriptorSetLayouts.erase(resourceIt);
 }
 
-const VulkanDescriptorSetLayoutResource& RHIDeviceVulkan::GetVulkanDescriptorSetLayoutResource(
+VulkanDescriptorSetLayoutResource RHIDeviceVulkan::GetVulkanDescriptorSetLayoutResource(
     RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const
 {
     return RequireDescriptorSetLayoutResource(descriptorSetLayoutHandle);
@@ -970,10 +1262,13 @@ RHIDescriptorSetLayoutHandle RHIDeviceVulkan::RegisterDescriptorSetLayout(
     bool ownsResource)
 {
     RHIDescriptorSetLayoutHandle handle;
-    handle.id = nextDescriptorSetLayoutId++;
-    descriptorSetLayouts.emplace(
-        handle.id,
-        VulkanDescriptorSetLayoutResource{ descriptorSetLayout, ownsResource });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextDescriptorSetLayoutId++;
+        descriptorSetLayouts.emplace(
+            handle.id,
+            VulkanDescriptorSetLayoutResource{ descriptorSetLayout, ownsResource });
+    }
     return handle;
 }
 
@@ -994,8 +1289,11 @@ RHIDescriptorPoolHandle RHIDeviceVulkan::CreateDescriptorPool(
         vk::ObjectType::eDescriptorPool,
         debugName);
     RHIDescriptorPoolHandle handle;
-    handle.id = nextDescriptorPoolId++;
-    descriptorPools.emplace(handle.id, VulkanDescriptorPoolResource{ descriptorPool });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextDescriptorPoolId++;
+        descriptorPools.emplace(handle.id, VulkanDescriptorPoolResource{ descriptorPool });
+    }
     return handle;
 }
 
@@ -1006,32 +1304,37 @@ void RHIDeviceVulkan::DestroyDescriptorPool(RHIDescriptorPoolHandle descriptorPo
         return;
     }
 
-    auto resourceIt = descriptorPools.find(descriptorPoolHandle.id);
-    if (resourceIt == descriptorPools.end())
+    VulkanDescriptorPoolResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = descriptorPools.find(descriptorPoolHandle.id);
+        if (resourceIt == descriptorPools.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        descriptorPools.erase(resourceIt);
+
+        for (auto setIt = descriptorSets.begin(); setIt != descriptorSets.end();)
+        {
+            if (setIt->second.descriptorPoolHandle.id == descriptorPoolHandle.id)
+            {
+                setIt = descriptorSets.erase(setIt);
+            }
+            else
+            {
+                ++setIt;
+            }
+        }
     }
 
-    if (resourceIt->second.descriptorPool)
+    if (resource.descriptorPool)
     {
-        GetDevice().destroyDescriptorPool(resourceIt->second.descriptorPool, nullptr);
+        GetDevice().destroyDescriptorPool(resource.descriptorPool, nullptr);
     }
-
-    for (auto setIt = descriptorSets.begin(); setIt != descriptorSets.end();)
-    {
-        if (setIt->second.descriptorPoolHandle.id == descriptorPoolHandle.id)
-        {
-            setIt = descriptorSets.erase(setIt);
-        }
-        else
-        {
-            ++setIt;
-        }
-    }
-    descriptorPools.erase(resourceIt);
 }
 
-const VulkanDescriptorPoolResource& RHIDeviceVulkan::GetVulkanDescriptorPoolResource(
+VulkanDescriptorPoolResource RHIDeviceVulkan::GetVulkanDescriptorPoolResource(
     RHIDescriptorPoolHandle descriptorPoolHandle) const
 {
     return RequireDescriptorPoolResource(descriptorPoolHandle);
@@ -1047,7 +1350,7 @@ std::vector<RHIDescriptorSetHandle> RHIDeviceVulkan::AllocateDescriptorSets(
         return descriptorSetHandles;
     }
 
-    const VulkanDescriptorPoolResource& descriptorPoolResource =
+    const VulkanDescriptorPoolResource descriptorPoolResource =
         RequireDescriptorPoolResource(descriptorPoolHandle);
     std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     descriptorSetLayouts.reserve(descriptorSetLayoutHandles.size());
@@ -1072,14 +1375,17 @@ std::vector<RHIDescriptorSetHandle> RHIDeviceVulkan::AllocateDescriptorSets(
     }
 
     descriptorSetHandles.reserve(allocatedDescriptorSets.size());
-    for (vk::DescriptorSet descriptorSet : allocatedDescriptorSets)
     {
-        RHIDescriptorSetHandle descriptorSetHandle;
-        descriptorSetHandle.id = nextDescriptorSetId++;
-        descriptorSets.emplace(
-            descriptorSetHandle.id,
-            VulkanDescriptorSetResource{ descriptorSet, descriptorPoolHandle });
-        descriptorSetHandles.push_back(descriptorSetHandle);
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        for (vk::DescriptorSet descriptorSet : allocatedDescriptorSets)
+        {
+            RHIDescriptorSetHandle descriptorSetHandle;
+            descriptorSetHandle.id = nextDescriptorSetId++;
+            descriptorSets.emplace(
+                descriptorSetHandle.id,
+                VulkanDescriptorSetResource{ descriptorSet, descriptorPoolHandle });
+            descriptorSetHandles.push_back(descriptorSetHandle);
+        }
     }
     return descriptorSetHandles;
 }
@@ -1093,25 +1399,33 @@ void RHIDeviceVulkan::FreeDescriptorSet(
         return;
     }
 
-    auto setIt = descriptorSets.find(descriptorSetHandle.id);
-    if (setIt == descriptorSets.end())
+    VulkanDescriptorSetResource descriptorSetResource{};
     {
-        return;
+        std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto setIt = descriptorSets.find(descriptorSetHandle.id);
+        if (setIt == descriptorSets.end())
+        {
+            return;
+        }
+        descriptorSetResource = setIt->second;
     }
 
-    const VulkanDescriptorPoolResource& descriptorPoolResource =
+    const VulkanDescriptorPoolResource descriptorPoolResource =
         RequireDescriptorPoolResource(descriptorPoolHandle);
-    if (descriptorPoolResource.descriptorPool && setIt->second.descriptorSet)
+    if (descriptorPoolResource.descriptorPool && descriptorSetResource.descriptorSet)
     {
         GetDevice().freeDescriptorSets(
             descriptorPoolResource.descriptorPool,
             1,
-            &setIt->second.descriptorSet);
+            &descriptorSetResource.descriptorSet);
     }
-    descriptorSets.erase(setIt);
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        descriptorSets.erase(descriptorSetHandle.id);
+    }
 }
 
-const VulkanDescriptorSetResource& RHIDeviceVulkan::GetVulkanDescriptorSetResource(
+VulkanDescriptorSetResource RHIDeviceVulkan::GetVulkanDescriptorSetResource(
     RHIDescriptorSetHandle descriptorSetHandle) const
 {
     return RequireDescriptorSetResource(descriptorSetHandle);
@@ -1181,7 +1495,7 @@ void RHIDeviceVulkan::SetDescriptorSetDebugName(
         return;
     }
 
-    const VulkanDescriptorSetResource& descriptorSetResource =
+    const VulkanDescriptorSetResource descriptorSetResource =
         RequireDescriptorSetResource(descriptorSetHandle);
     if (!descriptorSetResource.descriptorSet)
     {
@@ -1195,9 +1509,10 @@ void RHIDeviceVulkan::SetDescriptorSetDebugName(
         debugName);
 }
 
-const VulkanRenderPassResource& RHIDeviceVulkan::RequireRenderPassResource(
+VulkanRenderPassResource RHIDeviceVulkan::RequireRenderPassResource(
     RHIRenderPassHandle renderPassHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = renderPasses.find(renderPassHandle.id);
     if (!renderPassHandle.IsValid() || resourceIt == renderPasses.end())
     {
@@ -1207,9 +1522,10 @@ const VulkanRenderPassResource& RHIDeviceVulkan::RequireRenderPassResource(
     return resourceIt->second;
 }
 
-const VulkanFramebufferResource& RHIDeviceVulkan::RequireFramebufferResource(
+VulkanFramebufferResource RHIDeviceVulkan::RequireFramebufferResource(
     RHIFramebufferHandle framebufferHandle) const
 {
+    std::shared_lock<std::shared_mutex> lock(resourceMapMutex);
     auto resourceIt = framebuffers.find(framebufferHandle.id);
     if (!framebufferHandle.IsValid() || resourceIt == framebuffers.end())
     {
@@ -1235,8 +1551,11 @@ RHIRenderPassHandle RHIDeviceVulkan::CreateRenderPass(
         vk::ObjectType::eRenderPass,
         debugName);
     RHIRenderPassHandle handle;
-    handle.id = nextRenderPassId++;
-    renderPasses.emplace(handle.id, VulkanRenderPassResource{ renderPass });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextRenderPassId++;
+        renderPasses.emplace(handle.id, VulkanRenderPassResource{ renderPass });
+    }
     return handle;
 }
 
@@ -1247,20 +1566,25 @@ void RHIDeviceVulkan::DestroyRenderPass(RHIRenderPassHandle renderPassHandle)
         return;
     }
 
-    auto resourceIt = renderPasses.find(renderPassHandle.id);
-    if (resourceIt == renderPasses.end())
+    VulkanRenderPassResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = renderPasses.find(renderPassHandle.id);
+        if (resourceIt == renderPasses.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        renderPasses.erase(resourceIt);
     }
 
-    if (resourceIt->second.renderPass)
+    if (resource.renderPass)
     {
-        GetDevice().destroyRenderPass(resourceIt->second.renderPass);
+        GetDevice().destroyRenderPass(resource.renderPass);
     }
-    renderPasses.erase(resourceIt);
 }
 
-const VulkanRenderPassResource& RHIDeviceVulkan::GetVulkanRenderPassResource(
+VulkanRenderPassResource RHIDeviceVulkan::GetVulkanRenderPassResource(
     RHIRenderPassHandle renderPassHandle) const
 {
     return RequireRenderPassResource(renderPassHandle);
@@ -1285,8 +1609,11 @@ RHIFramebufferHandle RHIDeviceVulkan::CreateFramebuffer(
         vk::ObjectType::eFramebuffer,
         debugName);
     RHIFramebufferHandle handle;
-    handle.id = nextFramebufferId++;
-    framebuffers.emplace(handle.id, VulkanFramebufferResource{ framebuffer });
+    {
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        handle.id = nextFramebufferId++;
+        framebuffers.emplace(handle.id, VulkanFramebufferResource{ framebuffer });
+    }
     return handle;
 }
 
@@ -1297,20 +1624,25 @@ void RHIDeviceVulkan::DestroyFramebuffer(RHIFramebufferHandle framebufferHandle)
         return;
     }
 
-    auto resourceIt = framebuffers.find(framebufferHandle.id);
-    if (resourceIt == framebuffers.end())
+    VulkanFramebufferResource resource{};
     {
-        return;
+        std::unique_lock<std::shared_mutex> lock(resourceMapMutex);
+        auto resourceIt = framebuffers.find(framebufferHandle.id);
+        if (resourceIt == framebuffers.end())
+        {
+            return;
+        }
+        resource = resourceIt->second;
+        framebuffers.erase(resourceIt);
     }
 
-    if (resourceIt->second.framebuffer)
+    if (resource.framebuffer)
     {
-        GetDevice().destroyFramebuffer(resourceIt->second.framebuffer);
+        GetDevice().destroyFramebuffer(resource.framebuffer);
     }
-    framebuffers.erase(resourceIt);
 }
 
-const VulkanFramebufferResource& RHIDeviceVulkan::GetVulkanFramebufferResource(
+VulkanFramebufferResource RHIDeviceVulkan::GetVulkanFramebufferResource(
     RHIFramebufferHandle framebufferHandle) const
 {
     return RequireFramebufferResource(framebufferHandle);

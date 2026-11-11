@@ -11,6 +11,7 @@
 #include <RmlUi/Core/SystemInterface.h>
 
 #include "ui/widgets/input/inputWidgets.h"
+#include "ui/widgets/editor/brushLibraryPanel.h"
 #include "ui/widgets/layout/layoutWidgets.h"
 #include "ui/widgets/navigation/tabWidgets.h"
 #include "ui/widgets/property/propertyWidgets.h"
@@ -198,6 +199,160 @@ protected:
     Rml::ElementDocument* document = nullptr;
     std::unique_ptr<VL::EditorUi::MaterialInstanceAssetEditorPanel> panel;
 };
+
+class BrushLibraryPanelTest : public testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        Rml::SetSystemInterface(&system);
+        Rml::SetRenderInterface(&renderer);
+        ASSERT_TRUE(Rml::Initialise());
+        if (!std::filesystem::exists("C:/Windows/Fonts/segoeui.ttf"))
+            GTEST_SKIP() << "Segoe UI is unavailable.";
+        ASSERT_TRUE(Rml::LoadFontFace("C:/Windows/Fonts/segoeui.ttf"));
+        context = Rml::CreateContext("brush-library-test", {420, 480});
+        ASSERT_NE(context, nullptr);
+        document = context->LoadDocumentFromMemory(
+            "<rml><head><title>Brush Library</title>"
+            "<style>body { font-family: \"Segoe UI\"; }</style></head>"
+            "<body><div id=\"host\"></div></body></rml>");
+        ASSERT_NE(document, nullptr);
+        document->Show();
+        context->Update();
+        std::string error;
+        ASSERT_TRUE(library.Attach(*document, "host", error)) << error;
+    }
+
+    void TearDown() override
+    {
+        library.Detach();
+        if (context != nullptr) Rml::RemoveContext(context->GetName());
+        Rml::Shutdown();
+        Rml::SetRenderInterface(nullptr);
+        Rml::SetSystemInterface(nullptr);
+    }
+
+    void Build()
+    {
+        library.Build();
+        context->Update();
+        ASSERT_TRUE(system.errors.empty()) << system.errors;
+    }
+
+    static std::vector<BrushLibraryEntry> Entries()
+    {
+        return {
+            {"soft-round", "Soft Round", "Basic", 0, 0, 500.0f, 0.1f},
+            {"hard-round", "Hard Round", "Basic", 0, 2, 300.0f, 0.2f},
+            {"square", "Square", "Basic", 1, 1, 400.0f, 0.15f},
+            {"detail", "Detail", "Detail", 2, 3, 120.0f, 0.05f}
+        };
+    }
+
+    Rml::Element* Card(const std::string& id) const
+    {
+        return document->QuerySelector("[data-action=brush-library-select][data-brush-id=" + id + "]");
+    }
+
+    size_t CardCount() const
+    {
+        Rml::ElementList cards;
+        document->GetElementById("brush-library-cards")
+            ->QuerySelectorAll(cards, ".brush-library-card");
+        return cards.size();
+    }
+
+    WidgetTestSystem system;
+    WidgetTestRenderer renderer;
+    Rml::Context* context = nullptr;
+    Rml::ElementDocument* document = nullptr;
+    VL::UiWidgets::BrushLibraryPanel library;
+};
+
+TEST_F(BrushLibraryPanelTest, CardsCarrySelectionShapeFalloffAndStableDom)
+{
+    library.SetEntries(Entries());
+    library.SetSelectedId("hard-round");
+    Build();
+
+    EXPECT_EQ(CardCount(), 4u);
+    ASSERT_NE(Card("hard-round"), nullptr);
+    EXPECT_TRUE(Card("hard-round")->IsClassSet("selected"));
+    EXPECT_FALSE(Card("soft-round")->IsClassSet("selected"));
+    EXPECT_EQ(Card("hard-round")->GetAttribute<std::string>("data-action", ""),
+        "brush-library-select");
+
+    auto* square = Card("square");
+    ASSERT_NE(square, nullptr);
+    EXPECT_TRUE(square->IsClassSet("brush-library-stamp-square"));
+    EXPECT_TRUE(square->IsClassSet("brush-library-stamp-falloff-linear"));
+    auto* squareStamp = square->QuerySelector(".brush-library-stamp");
+    ASSERT_NE(squareStamp, nullptr);
+    EXPECT_TRUE(squareStamp->IsClassSet("brush-library-stamp-square"));
+    EXPECT_TRUE(squareStamp->IsClassSet("brush-library-stamp-falloff-linear"));
+    EXPECT_NE(squareStamp->QuerySelector(".brush-library-stamp-ring"), nullptr);
+    EXPECT_NE(squareStamp->QuerySelector(".brush-library-stamp-core"), nullptr);
+
+    auto* hard = Card("hard-round");
+    EXPECT_TRUE(hard->IsClassSet("brush-library-stamp-circle"));
+    EXPECT_TRUE(hard->IsClassSet("brush-library-stamp-falloff-constant"));
+    EXPECT_NE(hard->GetInnerRML().find("300 cm / Circle"), std::string::npos);
+
+    auto* cards = document->GetElementById("brush-library-cards");
+    const int children = cards->GetNumChildren();
+    auto* first = Card("soft-round");
+    for (int frame = 0; frame < 8; ++frame) Build();
+    EXPECT_EQ(cards->GetNumChildren(), children);
+    EXPECT_EQ(Card("soft-round"), first);
+}
+
+TEST_F(BrushLibraryPanelTest, SearchCategoryAndEmptyStateFilterCards)
+{
+    library.SetEntries(Entries());
+    Build();
+    EXPECT_EQ(CardCount(), 4u);
+
+    library.SetQuery("hard");
+    Build();
+    ASSERT_EQ(CardCount(), 1u);
+    EXPECT_NE(Card("hard-round"), nullptr);
+    EXPECT_EQ(Card("soft-round"), nullptr);
+
+    library.SetCategory("Detail");
+    Build();
+    EXPECT_EQ(CardCount(), 0u);
+    auto* category = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->GetElementById("brush-library-category"));
+    ASSERT_NE(category, nullptr);
+    EXPECT_EQ(category->GetValue(), "Detail");
+    auto* empty = document->GetElementById("brush-library-empty");
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->IsVisible(false));
+    EXPECT_EQ(empty->GetInnerRML(), "No brushes match the current filter.");
+
+    library.SetQuery("");
+    Build();
+    ASSERT_EQ(CardCount(), 1u);
+    EXPECT_NE(Card("detail"), nullptr);
+
+    library.SetCategory("All");
+    Build();
+    EXPECT_EQ(CardCount(), 4u);
+    EXPECT_EQ(category->GetValue(), "All");
+    EXPECT_FALSE(empty->IsVisible(false));
+}
+
+TEST_F(BrushLibraryPanelTest, EmptyEntriesProduceAnExplicitEmptyState)
+{
+    library.SetEntries({});
+    Build();
+    EXPECT_EQ(CardCount(), 0u);
+    auto* empty = document->GetElementById("brush-library-empty");
+    ASSERT_NE(empty, nullptr);
+    EXPECT_TRUE(empty->IsVisible(false));
+    EXPECT_EQ(empty->GetInnerRML(), "No brushes are available.");
+}
 
 TEST_F(UiWidgetTest, LabelsCannotInjectElementsOrAttributes)
 {
@@ -470,9 +625,17 @@ TEST_F(UiWidgetTest, TreeRowCarriesIndependentToggleAndSelectionAddresses)
 
 TEST_F(UiWidgetTest, DocumentTabSeparatesActivationFromClosing)
 {
-    Show(DocumentTab("Document", {"activate", 2}, {"close", 2}, true));
-    ASSERT_NE(document->QuerySelector(".document-tab .selected"), nullptr);
-    EXPECT_NE(document->QuerySelector(".tab-close[data-action=close]"), nullptr);
+    Show(DocumentTab("Document <draft>", {"activate", 2, 0, "doc:\"first\""},
+        {"close", 2, 0, "doc:\"first\""}, true, "icons/mesh.png"));
+    auto* activate = document->QuerySelector(".document-tab .selected");
+    auto* close = document->QuerySelector(".tab-close[data-action=close]");
+    ASSERT_NE(activate, nullptr);
+    ASSERT_NE(close, nullptr);
+    EXPECT_EQ(activate->GetParentNode(), close->GetParentNode());
+    EXPECT_EQ(close->GetAttribute<std::string>("data-key", ""), "doc:\"first\"");
+    EXPECT_EQ(activate->GetAttribute<std::string>("data-key", ""), "doc:\"first\"");
+    EXPECT_EQ(activate->QuerySelector("img")->GetAttribute<std::string>("src", ""), "icons/mesh.png");
+    EXPECT_EQ(document->QuerySelector("draft"), nullptr);
 }
 
 TEST_F(UiWidgetTest, TreeRowIconAndRowClassStayInsideTheSelectionButton)
@@ -743,8 +906,12 @@ TEST_F(UiWidgetTest, ActorListHasOneRootRowPerActorAcrossAllTypes)
         EXPECT_FALSE(row.expanded);
         EXPECT_EQ(row.label, actors[row.actorIndex].displayName);
     }
+    // 分组数随 Terrain 增加后，固定 118px 不再是完整窗口；用刚好容纳全部行的
+    // 逻辑高度验证“每个 actor 一行”，而不是把旧 9 组时的巧合固定下来。
+    const float height = static_cast<float>(rows.size()) *
+        SceneActorRowHeightFallback + 1.0f;
     const auto window = ComputeSceneActorWindow(
-        rows.size(), 118.0f, 0.0f, SceneActorRowHeightFallback);
+        rows.size(), height, 0.0f, SceneActorRowHeightFallback);
     EXPECT_EQ(window.begin, 0u);
     EXPECT_EQ(window.end, rows.size());
     EXPECT_FLOAT_EQ(window.top, 0.0f);
@@ -835,6 +1002,7 @@ TEST_F(UiWidgetTest, SceneActorIdentityRoundTripsThroughItsParsedForm)
 {
     // 身份是跨 GT→执行边界的唯一对象引用，因此必须与 SceneActorIdentity() 对称。
     for (const EditorSceneActorType type : {EditorSceneActorType::Mesh,
+             EditorSceneActorType::Terrain,
              EditorSceneActorType::DirectionalLight, EditorSceneActorType::PointLight,
              EditorSceneActorType::SpotLight, EditorSceneActorType::SquareAreaLight})
     {
@@ -861,14 +1029,15 @@ TEST_F(UiWidgetTest, SceneActorIdentityRoundTripsThroughItsParsedForm)
 TEST_F(UiWidgetTest, OnlyRenderableActorTypesOfferAVisibilityToggle)
 {
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::Mesh));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::Terrain));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::DirectionalLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::PointLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SpotLight));
     EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SquareAreaLight));
-    // 相机/环境/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
+    // 相机/环境/场景风/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Camera));
     EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Environment));
-    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::WindProfile));
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::SceneWind));
 }
 } // namespace SceneActorTreeTests
 
