@@ -13,8 +13,8 @@
 #include "render/frontend/renderScene.h"
 #include "render/shadow/shadowCasterCull.h"
 
-class MaterialInstance;
 class PipelineBase;
+class MaterialInstance;
 class RenderGraph;
 struct Renderpass;
 

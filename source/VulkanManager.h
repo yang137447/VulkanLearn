@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <vulkan/vulkan.hpp>
 #include <vector>
 #include <optional>
@@ -13,6 +14,118 @@ struct SDL_Window;
 namespace VL
 {
 class RHIDeviceVulkan;
+}
+
+// Serializes the only operations that may not overlap between the game thread's
+// one-time uploads and the render thread's frame submission. Command recording
+// and fence waits deliberately stay outside these locks.
+class VulkanSubmissionGate
+{
+public:
+    void Submit(vk::Queue queue, const vk::SubmitInfo& submitInfo, vk::Fence signalFence)
+    {
+        std::lock_guard<std::mutex> lock(submitMutex);
+        queue.submit(submitInfo, signalFence);
+    }
+
+    vk::Result Present(vk::Queue queue, const vk::PresentInfoKHR& presentInfo)
+    {
+        std::lock_guard<std::mutex> lock(submitMutex);
+        return queue.presentKHR(presentInfo);
+    }
+
+    void WaitIdle(vk::Device device)
+    {
+        std::lock_guard<std::mutex> lock(submitMutex);
+        device.waitIdle();
+    }
+
+    std::vector<vk::CommandBuffer> AllocateCommandBuffers(
+        vk::Device device,
+        const vk::CommandBufferAllocateInfo& allocateInfo)
+    {
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
+        std::vector<vk::CommandBuffer> commandBuffers(allocateInfo.commandBufferCount);
+        device.allocateCommandBuffers(&allocateInfo, commandBuffers.data());
+        return commandBuffers;
+    }
+
+    void FreeCommandBuffer(
+        vk::Device device,
+        vk::CommandPool commandPool,
+        vk::CommandBuffer commandBuffer)
+    {
+        if (!commandBuffer)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
+        device.freeCommandBuffers(commandPool, 1, &commandBuffer);
+    }
+
+    void FreeCommandBuffers(
+        vk::Device device,
+        vk::CommandPool commandPool,
+        std::vector<vk::CommandBuffer>& commandBuffers)
+    {
+        if (commandBuffers.empty())
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
+        device.freeCommandBuffers(
+            commandPool,
+            static_cast<uint32_t>(commandBuffers.size()),
+            commandBuffers.data());
+        commandBuffers.clear();
+    }
+
+    vk::CommandPool CreateCommandPool(
+        vk::Device device,
+        const vk::CommandPoolCreateInfo& createInfo)
+    {
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
+        return device.createCommandPool(createInfo);
+    }
+
+    void DestroyCommandPool(vk::Device device, vk::CommandPool& commandPool)
+    {
+        if (!commandPool)
+        {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(commandPoolMutex);
+        device.destroyCommandPool(commandPool);
+        commandPool = nullptr;
+    }
+
+    // Single-time uploads use their own pool so command-buffer allocation/free
+    // never races with frame command buffers allocated from the shared pool.
+    // A full begin..end sequence must be serialized because validation treats
+    // every command buffer as touching its parent pool.
+    void LockSingleTimeQueue()
+    {
+        singleTimeMutex.lock();
+    }
+
+    void UnlockSingleTimeQueue()
+    {
+        singleTimeMutex.unlock();
+    }
+
+private:
+    std::mutex submitMutex;
+    std::mutex commandPoolMutex;
+    std::mutex singleTimeMutex;
+};
+
+inline VulkanSubmissionGate& GlobalVulkanSubmissionGate()
+{
+    static VulkanSubmissionGate gate;
+    return gate;
 }
 
 class VulkanManager
@@ -53,7 +166,12 @@ private:
     inline vk::PhysicalDevice& GetPhysicalDevice() { return physicalDevices[kGpuIndex]; }
     inline vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties() { return gpuMemoryProperties; }
     inline vk::CommandPool& GetCommandPool() { return commandPool; }
+    inline vk::CommandPool& GetSingleTimeCommandPool() { return singleTimeCommandPool; }
     inline vk::Queue& GetGraphicsQueue() { return graphicsQueue; }
+    inline VulkanSubmissionGate& GetSubmissionGate()
+    {
+        return GlobalVulkanSubmissionGate();
+    }
     inline std::vector<vk::Fence>& GetTaskFinishedFences() { return taskFinishedFences; }
     // 帧级的 acquire 信号量：按 MAX_FRAMES_IN_FLIGHT 分配，跨目标共享，因此不随呈现目标走。
     inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
@@ -155,6 +273,9 @@ private:
     // 因此它的生命周期与设备一致，不随任何窗口的 swapchain 重建而销毁。
     // 每图像的主命令缓冲不在这里，而在各自的 PresentTarget 里。
     vk::CommandPool commandPool;
+    // 一次性上传专用池：与帧命令缓冲分离，避免 free/allocate 与 RT 录制
+    // 争用同一个 VkCommandPool 的外部同步。
+    vk::CommandPool singleTimeCommandPool;
 
     // 每窗口一套呈现状态。多窗口接入前只有目标 0；`Init` 创建它。
     std::vector<VL::PresentTarget> presentTargets;

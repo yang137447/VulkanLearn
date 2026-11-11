@@ -376,7 +376,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         MaterialInstanceValidator::ResolveSurfacePipelineContractKey(
             renderPass.pipelineContractKey,
             effectiveRenderMode);
-    const std::shared_ptr<MaterialInstance>* cachedMaterialInstance =
+    const std::shared_ptr<MaterialInstance> cachedMaterialInstance =
         resourceCache.GetMaterialInstance(materialInstanceKey);
     const bool isOverriddenMaterialInstance =
         loadContext.materialInstanceOverrideJson.has_value() &&
@@ -393,10 +393,10 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         rendererBackend.SupportsDualSourceBlend(),
         loadContext.prerenderSkin);
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
-        cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
+        cachedMaterialInstance != nullptr)
     {
         std::shared_ptr<Material> cachedBaseMaterial =
-            (*cachedMaterialInstance)->GetBaseMaterial().lock();
+            cachedMaterialInstance->GetBaseMaterial().lock();
         if (!cachedBaseMaterial ||
             cachedBaseMaterial->GetPassPipelineContractKey() !=
                 effectiveSurfacePipelineContractKey)
@@ -423,7 +423,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                     localShadowBuildResult.reloadRecipe);
             }
         }
-        return *cachedMaterialInstance;
+        return cachedMaterialInstance;
     }
     // 所有连续透明输出都只能进入 forwardTransparent；写深度模式只改变该材质
     // pipeline 的 DepthWrite 状态，不允许借用 Geometry 的多 MRT 合同。
@@ -480,10 +480,10 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         }
     }
     std::shared_ptr<Material> material;
-    const std::shared_ptr<Material>* cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
-    if(cachedMaterial != nullptr && *cachedMaterial != nullptr)
+    const std::shared_ptr<Material> cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
+    if(cachedMaterial != nullptr)
     {
-        material = *cachedMaterial;
+        material = cachedMaterial;
     }
     else
     {
@@ -572,10 +572,10 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         const TextureBindingLoadDesc textureLoadDesc = LoadTextureAssetDesc(textureAssetPath);
         const std::string textureCacheKey = BuildTextureCacheKey(textureLoadDesc);
         std::shared_ptr<Texture> texture;
-        const std::shared_ptr<Texture>* cachedTexture = resourceCache.GetTexture(textureCacheKey);
-        if(cachedTexture != nullptr && *cachedTexture != nullptr)
+        const std::shared_ptr<Texture> cachedTexture = resourceCache.GetTexture(textureCacheKey);
+        if(cachedTexture != nullptr)
         {
-            texture = *cachedTexture;
+            texture = cachedTexture;
         }
         else
         {

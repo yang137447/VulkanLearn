@@ -1,0 +1,96 @@
+# Companion CMake package for the VulkanLearn machine-wide dependency prefix.
+# This file is copied to <prefix>/share/vl_deps/vl_depsConfig.cmake.
+
+get_filename_component(VL_DEPS_PREFIX
+    "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+
+if(NOT EXISTS "${VL_DEPS_PREFIX}/deps-stamp.json")
+    message(FATAL_ERROR
+        "vl_deps: missing dependency stamp in ${VL_DEPS_PREFIX}. "
+        "Run tool/build-deps.ps1.")
+endif()
+
+list(PREPEND CMAKE_PREFIX_PATH "${VL_DEPS_PREFIX}")
+
+include(CMakeFindDependencyMacro)
+
+if(NOT DEFINED VL_DEPS_REQUESTED)
+    set(VL_DEPS_REQUESTED "SDL3;Assimp;OpenEXR;RmlUi;FreeType;Jolt")
+endif()
+
+if("SDL3" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(SDL3 CONFIG)
+endif()
+if("FreeType" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(freetype CONFIG)
+endif()
+if("Assimp" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(assimp CONFIG)
+endif()
+if("OpenEXR" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(Imath CONFIG)
+    find_dependency(OpenEXR CONFIG)
+endif()
+if("Jolt" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(Jolt CONFIG)
+endif()
+if("RmlUi" IN_LIST VL_DEPS_REQUESTED)
+    find_dependency(RmlUi CONFIG)
+endif()
+
+# The root project links upstream names; provide the consumer aliases that
+# the stock installs do not export.
+if("Assimp" IN_LIST VL_DEPS_REQUESTED AND
+    NOT TARGET assimp AND TARGET assimp::assimp)
+    add_library(assimp INTERFACE IMPORTED GLOBAL)
+    set_target_properties(assimp PROPERTIES
+        INTERFACE_LINK_LIBRARIES assimp::assimp)
+endif()
+
+if("Jolt" IN_LIST VL_DEPS_REQUESTED AND
+    NOT TARGET Jolt AND TARGET Jolt::Jolt)
+    add_library(Jolt INTERFACE IMPORTED GLOBAL)
+    set_target_properties(Jolt PROPERTIES
+        INTERFACE_LINK_LIBRARIES Jolt::Jolt)
+endif()
+
+if("RmlUi" IN_LIST VL_DEPS_REQUESTED AND NOT TARGET RmlUi::Core)
+    if(TARGET RmlUi::RmlUi)
+        add_library(RmlUi::Core INTERFACE IMPORTED GLOBAL)
+        set_target_properties(RmlUi::Core PROPERTIES
+            INTERFACE_LINK_LIBRARIES RmlUi::RmlUi)
+    elseif(TARGET RmlUi::rmlui_core)
+        add_library(RmlUi::Core INTERFACE IMPORTED GLOBAL)
+        set_target_properties(RmlUi::Core PROPERTIES
+            INTERFACE_LINK_LIBRARIES RmlUi::rmlui_core)
+    endif()
+endif()
+
+set(vl_deps_expected_targets "")
+foreach(vl_deps_requested IN LISTS VL_DEPS_REQUESTED)
+    if(vl_deps_requested STREQUAL "SDL3")
+        list(APPEND vl_deps_expected_targets SDL3::SDL3)
+    elseif(vl_deps_requested STREQUAL "Assimp")
+        list(APPEND vl_deps_expected_targets assimp)
+    elseif(vl_deps_requested STREQUAL "OpenEXR")
+        list(APPEND vl_deps_expected_targets OpenEXR::OpenEXR)
+    elseif(vl_deps_requested STREQUAL "RmlUi")
+        list(APPEND vl_deps_expected_targets RmlUi::Core)
+    elseif(vl_deps_requested STREQUAL "FreeType")
+        list(APPEND vl_deps_expected_targets Freetype::Freetype)
+    elseif(vl_deps_requested STREQUAL "Jolt")
+        list(APPEND vl_deps_expected_targets Jolt)
+    endif()
+endforeach()
+
+foreach(vl_deps_required_target
+        IN LISTS vl_deps_expected_targets)
+    if(NOT TARGET ${vl_deps_required_target})
+        message(FATAL_ERROR
+            "vl_deps: required imported target '${vl_deps_required_target}' is missing "
+            "from ${VL_DEPS_PREFIX}.")
+    endif()
+endforeach()
+unset(vl_deps_required_target)
+unset(vl_deps_requested)
+unset(vl_deps_expected_targets)

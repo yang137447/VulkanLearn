@@ -260,6 +260,27 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--exit-after-frames")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--exit-after-frames requires a positive frame count.";
+                return options;
+            }
+
+            int exitAfterFrames = 0;
+            const std::string frameCountText = argv[++i];
+            if (!TryParsePositiveInt(frameCountText, exitAfterFrames))
+            {
+                options.errorMessage =
+                    "--exit-after-frames count must be a positive integer.";
+                return options;
+            }
+            options.exitAfterFrames = exitAfterFrames;
+            continue;
+        }
+
         if (argument == "--present-mode")
         {
             if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
@@ -382,6 +403,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     {
         options.errorMessage = "--exit-after-tests requires --shader-reload-test, --shader-compute-reload-test, or --world-graph-transaction-test.";
     }
+    if (options.exitAfterFrames > 0 && options.exitAfterTests)
+    {
+        options.errorMessage =
+            "--exit-after-frames cannot be combined with --exit-after-tests; runtime tests already define their own exit condition.";
+    }
     return options;
 }
 
@@ -395,6 +421,7 @@ void PrintLaunchUsage()
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
+        << "       main.exe [--exit-after-frames <count>]\n"
         << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
         << "       main.exe [--gpu-stats]\n"
         << "       main.exe [--prerender-skin]\n"
@@ -406,7 +433,8 @@ void PrintLaunchUsage()
         << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
-        << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
+        << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged; this is a rate cap, not a frame count).\n"
+        << "  --exit-after-frames <count>         Exit with code 0 after <count> completed frames (>= 1).\n"
         << "  --present-mode <mode>               Swapchain present mode: auto, fifo, mailbox, immediate (default auto = mailbox-first).\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
         << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"

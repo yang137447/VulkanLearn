@@ -13,13 +13,20 @@
 
 | 源码路径 | 必读文档 | 守护门禁（逐字 `-RuleName`） |
 | --- | --- | --- |
+| `CMakeLists.txt`、`source/CMakeLists.txt`、`source/main_editor.cpp`、`source/main_game.cpp`、`source/engine/application.*` | `contracts/vulkanlearn-architecture.html`、`contracts/testing.md` | Runtime editor target ownership、Game executable link boundary |
+| `source/engine/editorHost.h`、`source/engine/nullEditorHost.*`、`source/editor/editorHost.*` | `contracts/vulkanlearn-architecture.html` | Runtime editor target ownership、Game executable link boundary、Runtime UI editor include boundary |
+| `source/ui/iEditorUiShell.h`、`source/editor/ui/editorUiShell.*`、`source/ui/uiSubsystem.*` | `contracts/game-ui-stack.md` | Runtime UI editor include boundary |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md`、`contracts/editor-runtime-data-boundary.md` | — |
+| `source/editor/ui/panel/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | Runtime editor target ownership |
+| `source/editor/service/material/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | Runtime editor target ownership |
 | `source/script/**`、`script/**`、`tool/script-tests/**`、`source/editor/scene/scriptBlueprintAuthoring.*` | `contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/service/**`、`source/editor/command/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
 | `tool/asset-edit/**` | `contracts/asset-modify-api.md`、`contracts/testing.md` | — |
-| `tool/game-export/**`、`tool/game-export-tests/**` | `contracts/csharp-blueprint-runtime.md`、`contracts/asset-organization.md`、`contracts/testing.md` | — |
+| `tool/game-export/**`、`tool/game-export-tests/**` | `contracts/csharp-blueprint-runtime.md`、`contracts/asset-organization.md`、`contracts/testing.md` | Game packaging manifest closure、Game shader cache closure |
+| `cmake/VulkanLearnDeps.cmake`、`ThirdParty/**`、`extern/CMakeLists.txt`、`tool/build-deps.ps1`、`tool/deps-stamp.ps1`、`tool/deps-gc.ps1`、`tool/clean-project.ps1` | `contracts/testing.md` | — |
+| `tool/validate-game-package.ps1`、`ui/runtime-ui.manifest.json` | `contracts/game-ui-stack.md`、`contracts/testing.md` | Game packaging manifest closure、Game shader cache closure |
 | `tool/animation/**`、`tool/animation-tests/**` | `contracts/animation-preflight-tools.md`、`contracts/testing.md` | — |
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
@@ -49,14 +56,24 @@
 | `source/audio/**` | `contracts/audio-runtime.md`、`contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md` | — |
 | `tool/physics-runtime-tests/**` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/testing.md` | — |
 | `source/ui/sceneObjectTypeSupport.h` | `contracts/softbody-runtime.md`、`contracts/glass-fracture-runtime.md`、`contracts/game-ui-stack.md` | — |
-| `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
+| `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan pure data contract、World gameplay plan builder contract、WorldBuilder assembly assets contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
 | `source/renderableObject.*` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
 | `source/VertexDataStruct.h`、`source/mesh/vegetationAsset.*`、`source/render/resource/rendererMeshLoader.*`、`schema/scene.schema.json` | `contracts/vegetation-instancing.md` | — |
-| `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
+| `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md`、`contracts/vulkanlearn-architecture.html` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer gameplay plan boundary、Renderer world loader include boundary、Renderer resource load runtime error code contract |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
+| `source/render/frame/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | — |
+| `source/render/shadow/**` | `contracts/vulkanlearn-architecture.html`、`contracts/csm-shadow-map-m1.md` | — |
+| `source/render/postprocess/**` | `contracts/vulkanlearn-architecture.html` | — |
+| `source/render/environment/**` | `contracts/vulkanlearn-architecture.html`、`contracts/environment-update-scheduler.md` | — |
+| `source/render/terrain/**`、`source/render/resource/terrain/**` | `contracts/terrain.md`、`contracts/vulkanlearn-architecture.html`、`contracts/testing.md` | — |
+| `source/render/hair/**` | `contracts/tressfx-asset-import.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/render/picking/**` | `contracts/vulkanlearn-architecture.html`、`contracts/material-instance-editor.md` | — |
+| `source/render/preview/**` | `contracts/material-instance-editor.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/render/world/**` | `contracts/vulkanlearn-architecture.html`、`contracts/csharp-blueprint-runtime.md` | — |
+| `source/render/renderable/**` | `contracts/vulkanlearn-architecture.html`、`contracts/vegetation-instancing.md` | — |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
 | `source/particles/**`、`shader/glsl/particle/**` | `contracts/particle-system.md`、`contracts/editor-runtime-data-boundary.md` | Particle runtime excludes editor |
 | `source/render/decal/**`、`shader/glsl/decal/**` | `contracts/decal-runtime.md` | — |
@@ -73,7 +90,10 @@
 | `source/editor/ui/editorViewportAxisIndicator.h`、`#viewport-axis-indicator` 叠层 | `contracts/ui-component-system.md` 的「角落坐标轴指示器」节 | — |
 | `source/pipeline/**` | `contracts/vulkanlearn-architecture.html` | Pipeline Vulkan creation diagnostics、Pipeline Vulkan creation diagnostic context |
 | `source/commonFunction.h` | `contracts/coding-guidelines.md` | CommonFunction depth helper cleanup、Source comment clarity |
-| `source/engine/**` | `contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
+| `source/engine/**` | `contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract、World transaction engine ownership contract、Prepared world transition contract、World transaction ownership cutover、Bounded async render loop contract、Bounded async render loop no immediate idle wait |
+| `source/engine/frame/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Bounded async render loop contract、Bounded async render loop submit contract、Bounded async render loop no immediate idle wait |
+| `source/engine/window/**` | `contracts/vulkanlearn-architecture.html` | Swapchain resize production lifecycle resources、Render graph reload production lifecycle |
+| `source/engine/ui/**`、`source/engine/script/**`、`source/engine/perf/**` | `contracts/vulkanlearn-architecture.html`、`contracts/game-ui-stack.md`、`contracts/testing.md` | — |
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
 | `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
@@ -108,7 +128,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | `contracts/shader-structure-and-material-function.md` | 改 Shader Structure、Material Inputs/Function 组合或 Shading Model 边界时 |
 | `contracts/vegetation-instancing.md` | 改 `VEG_*.json`、静态实例顶点 ABI、instanced draw 或实例包围盒时 |
 | `contracts/testing.md` | 改测试入口、测试目标或新增测试时 |
-| `contracts/boundary-rules.generated.md` | 想知道 64 条边界规则各是什么、作用于哪些路径时（**生成物，勿手工编辑**） |
+| `contracts/boundary-rules.generated.md` | 想知道 90 条边界规则各是什么、作用于哪些路径时（**生成物，勿手工编辑**） |
 | `contracts/README.md` | 想知道契约层的写作与校验约定时 |
 | `contracts/diagrams/README.md` | 改架构图、或改图所描述的那条链路时 |
 
@@ -120,14 +140,14 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 | 源码路径 | 必读图源 | 图说明什么 |
 | --- | --- | --- |
 | `source/engine/engineLoop.cpp`、`source/ui/uiSubsystem.cpp` | `contracts/diagrams/editor-frame-sequence.json` | 一帧内从平台事件到上屏的顺序：UI 输入独占、GT 稳定帧边界、快照发布、可见性收口 |
-| `source/world/loading/world*.cpp`、`source/world/loading/worldGraphTransactionCoordinator.cpp` | `contracts/diagrams/world-graph-transaction-lifecycle.json` | World/RenderGraph 事务：隔离准备、提交前校验、无抛提交、GPU epoch 退休 |
+| `source/world/loading/world*.cpp`、`source/engine/worldGraphTransactionCoordinator.cpp` | `contracts/diagrams/world-graph-transaction-lifecycle.json` | World/RenderGraph 事务：隔离准备、提交前校验、无抛提交、GPU epoch 退休 |
 
 `py -3 tool/validate-docs.py` 会检查每张图都能从本表到达，且它引用的源码证据仍然成立
 （路径存在、行号在文件范围内）—— 图与代码漂移时门禁失败，而不是让人以为图还是对的。
 
 ## 门禁规则
 
-`tool/architecture-boundary-audit.ps1` 定义代码**不得违反什么**：64 条命名规则，由
+`tool/architecture-boundary-audit.ps1` 定义代码**不得违反什么**：90 条规则检查（81 个命名规则），由
 `tool/architecture-final-validation.ps1` 调用。
 
 - **规则清单不在本文件里。** 它是生成物：

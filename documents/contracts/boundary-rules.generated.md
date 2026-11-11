@@ -5,7 +5,7 @@
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`0b3401d72befb9fa6f1399126591c017c6ca6331`
+生成源 revision：`5a98d7b3862516c4c82ad4e1ec82d120c7780a32`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
@@ -30,9 +30,19 @@
 | SceneObject wrapper file cutover | path must not exist | `source/sceneObject.h`, `source/sceneObject.cpp` |
 | Renderer cache mesh binding cutover | pattern must not match anywhere in source | `（全仓库源码树）` |
 | Mesh object build plan contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World build plan pure data contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World gameplay plan builder contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Renderer resource load result contract | pattern must match in a file | `（路径由脚本内条件生成）` |
-| World build plan mesh object contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Renderer gameplay plan boundary | pattern must not match in a file | `source/render/resource/rendererResourceLoadCoordinator.cpp` |
+| Renderer world loader include boundary | pattern must not match in a directory | `（全仓库源码树）` |
+| World transaction engine ownership contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Prepared world transition contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| World transaction ownership cutover | path must not exist | `source/world/loading/worldTransitionCoordinator.h`, `source/world/loading/worldTransitionCoordinator.cpp`, `source/world/loading/worldGraphTransactionCoordinator.h`, `source/world/loading/worldGraphTransactionCoordinator.cpp` |
+| WorldBuilder assembly assets contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 | WorldBuilder mesh object plan consumption | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Bounded async render loop contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Bounded async render loop submit contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Bounded async render loop no immediate idle wait | Test-AsyncRenderLoopNoImmediateIdleWait | `（路径由脚本内条件生成）` |
 | Runtime test hook command boundary | pattern must not match in a file | `source/engine/runtimeTestHooks.h`, `source/engine/runtimeTestHooks.cpp` |
 | Redundant Vulkan device abstraction cutover | path must not exist | `source/render/rhi/rhiDevice.h` |
 | Vulkan device boundary concrete-only contract | pattern must not match in a file | `source/render/rhi/vulkan/rhiDeviceVulkan.h` |
@@ -62,6 +72,7 @@
 | Launch runtime tests use CommandBus | pattern must not match in a file | `source/engine/launchOptions.cpp` |
 | Runtime test state stays out of EngineLoop | pattern must not match in a file | `source/engine/engineLoop.cpp` |
 | Swapchain resize production lifecycle | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Swapchain resize production lifecycle resources | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Render graph reload production lifecycle | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Render graph resource retire ownership | pattern must match in a file | `（路径由脚本内条件生成）` |
 | World reload failure state machine validation | pattern must match in a file | `（路径由脚本内条件生成）` |
@@ -75,5 +86,19 @@
 | Pipeline Vulkan creation diagnostic context | pattern must match in a file | `（路径由脚本内条件生成）` |
 | World graph retire queue validation | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Architecture final validation script contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Runtime editor target ownership | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Runtime editor target ownership | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game executable link boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game executable link boundary | pattern must not match in a file | `source/main_game.cpp`, `source/engine/nullEditorHost.h`, `source/engine/nullEditorHost.cpp` |
+| Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Runtime UI editor include boundary | pattern must not match in a file | `source/ui/uiSubsystem.h`, `source/ui/uiSubsystem.cpp`, `source/ui/iEditorUiShell.h`, `source/ui/rmlUiInterfaces.h`, `source/ui/rmlUiInterfaces.cpp`, `source/ui/uiAction.h` 等 9 项 |
+| Runtime UI editor include boundary | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game packaging manifest closure | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game packaging manifest closure | pattern must not match in a file | `（路径由脚本内条件生成）` |
+| Game packaging manifest closure | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game packaging manifest closure | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game shader cache closure | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Game shader cache closure | pattern must not match in a file | `（路径由脚本内条件生成）` |
+| Game shader cache closure | pattern must match in a file | `（路径由脚本内条件生成）` |
 
-共 66 条规则。
+共 91 条规则。

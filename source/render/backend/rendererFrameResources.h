@@ -69,6 +69,8 @@ public:
     void ClearParticleLightBuffer(
         vk::CommandBuffer commandBuffer,
         uint32_t swapChainImageIndex);
+    // 使用 MaterialInstance::CaptureNumericParameterValues() 的单次不可变快照
+    // 写 UBO；调用期间 GT 的材质预览提交不会改变本次写入的参数集合。
     void UpdateMaterialInstanceUniformBuffer(
         uint32_t swapChainImageIndex,
         MaterialInstance& materialInstance);

@@ -54,9 +54,12 @@ profile 是选择破坏策略和音频的主键，role/contact 只描述结构�
 准星是一个屏幕空间大小的 debug draw 点，位于相机前向 450 cm，Overlay 深度，
 不依赖场景网格或 UI 文档。
 
-场景通过顶层 `projectile` 配置速度、半径、质量、冷却和材质实例；缺少
-`projectile` 时投射物运行时只报告 warning，不创建箭矢。`SC_fracture_playground`
-显式配置为 `Common/Materials/MI_pbr_preview.json`。
+场景通过顶层 `projectile` 配置速度、半径、质量、冷却和材质实例。`WorldLoader` 调用
+`WorldGameplayPlanBuilder` 把它解析成纯 `ProjectileBuildPlan`（只保存
+`materialInstancePath` 与弹道参数）；`RendererResourceLoadCoordinator` 只解析该材质
+路径，`WorldBuilder` 再写入运行时的 `ProjectileSettings`。缺少 `projectile` 时
+投射物运行时只报告 warning，不创建箭矢。`SC_fracture_playground` 显式配置为
+`Common/Materials/MI_pbr_preview.json`。
 
 ## 输入
 

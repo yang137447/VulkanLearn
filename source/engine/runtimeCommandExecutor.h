@@ -18,14 +18,13 @@ namespace VL
 {
 
 class DiagnosticsSubsystem;
+class IEditorHost;
 class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
 class DestructibleRuntimeRegistry;
 class ProjectileRuntime;
-class WorldTransitionCoordinator;
 class ScriptRuntimeSubsystem;
-namespace Editor { class SceneDocumentService; }
 
 struct RuntimeCommandExecutionResult
 {
@@ -63,6 +62,7 @@ struct RuntimeCommandExecutionResult
     bool terrainLodStatisticsRequested = false;
     bool terrainChunkStatisticsRequested = false;
     bool terrainCollisionStatisticsRequested = false;
+    bool quitRequested = false;
     std::optional<OfflineModeCommandFeedback> offlineUiModeFeedback;
 };
 
@@ -79,13 +79,12 @@ public:
         CommandBus& commandBus,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         InputSubsystem* input = nullptr,
         ScriptRuntimeSubsystem* scripts = nullptr,
-        Editor::SceneDocumentService* sceneDocuments = nullptr,
+        IEditorHost* editorHost = nullptr,
         DestructibleRuntimeRegistry* destructibleRuntimes = nullptr,
         ProjectileRuntime* projectileRuntime = nullptr) const;
 
@@ -113,14 +112,13 @@ private:
         const RuntimeCommand& command,
         RenderSystem& renderSystem,
         WorldManager& worldManager,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult,
         InputSubsystem* input,
         ScriptRuntimeSubsystem* scripts,
-        Editor::SceneDocumentService* sceneDocuments,
+        IEditorHost* editorHost,
         DestructibleRuntimeRegistry* destructibleRuntimes,
         ProjectileRuntime* projectileRuntime) const;
     void ApplyShaderReloadTest(
@@ -141,7 +139,6 @@ private:
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(
         const RuntimeCommand& command,
-        WorldTransitionCoordinator& worldTransitionCoordinator,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult) const;

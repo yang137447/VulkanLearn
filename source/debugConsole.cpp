@@ -11,8 +11,7 @@
 #include <utility>
 
 #include "engine/runtimeCommand.h"
-#include "editor/runtime/materialInstanceEditorRuntime.h"
-#include "editor/command/editorCommandJsonCodec.h"
+#include "engine/editorHost.h"
 #include "hair/hairConsoleCommand.h"
 #include "hair/tressfxLiveParams.h"
 #include "particles/particleDump.h"
@@ -62,8 +61,8 @@ bool ParseConsoleInt(const std::string& token, int& outValue)
 
 } // namespace
 
-DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
-    : commandBus(commandBus), editorRuntime(runtime)
+DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::IEditorConsoleSink* sink)
+    : commandBus(commandBus), editorConsoleSink(sink)
 {
 }
 
@@ -77,12 +76,16 @@ void DebugConsole::Update()
 {
     for (auto iterator = pendingEditorResults.begin(); iterator != pendingEditorResults.end();)
     {
-        const auto result = editorRuntime->GetCommandResult(*iterator);
-        if (result && VL::IsFinalEditorCommandStatus(result->status))
+        if (editorConsoleSink == nullptr)
         {
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(*result) << std::endl;
             iterator = pendingEditorResults.erase(iterator);
+            continue;
         }
+        bool isFinal = false;
+        const auto text = editorConsoleSink->PollResult(*iterator, isFinal);
+        if (text)
+            std::cout << *text << std::endl;
+        if (isFinal) iterator = pendingEditorResults.erase(iterator);
         else ++iterator;
     }
     while (_kbhit())
@@ -153,7 +156,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
 
     if (command == "editor")
     {
-        if (!editorRuntime)
+        if (editorConsoleSink == nullptr || !editorConsoleSink->IsAvailable())
         {
             std::cout << "Editor document host unavailable; enable --dev-ui or use vl_asset_edit." << std::endl;
             return;
@@ -162,9 +165,9 @@ void DebugConsole::ProcessCommand(const std::string& line)
         std::getline(commandStream, request);
         try
         {
-            const auto submitted = editorRuntime->SubmitJson(request);
-            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(submitted.result) << std::endl;
-            if (submitted.admission == VL::EditorCommandAdmission::Queued)
+            const auto submitted = editorConsoleSink->SubmitJson(request);
+            std::cout << submitted.text << std::endl;
+            if (submitted.queued)
                 pendingEditorResults.push_back(submitted.commandId);
         }
         catch (const std::exception& error) { std::cout << "Editor request rejected: " << error.what() << std::endl; }
@@ -548,6 +551,21 @@ void DebugConsole::ProcessCommand(const std::string& line)
     if (command == "help")
     {
         PrintHelp();
+        return;
+    }
+
+    if (command == "quit")
+    {
+        std::string extra;
+        if (commandStream >> extra)
+        {
+            std::cout << "Usage: quit" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::QuitApplication;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
         return;
     }
 
@@ -1960,7 +1978,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom threshold <value> - set bloom threshold\n";
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
-    std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  loadworld <scene-path> - request scene load through the World transaction\n";
     std::cout << "  mesh transform <identity> <px> <py> <pz> [rx ry rz] - absolute placement (cm, degrees; scale=1)\n";
     std::cout << "  mesh offset <identity> <dx> <dy> <dz> - add a delta to the current placement\n";
     std::cout << "  mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds> - linear placement over GT frames\n";
@@ -2010,6 +2028,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";
     std::cout << "  gpustats - print the latest per-pass GPU timing table (enables collection if needed)\n";
     std::cout << "  perf json - print one line of JSON with FPS, CPU frame ms, GPU total and per-pass ms\n";
+    std::cout << "  quit - request a clean application exit (exit code 0)\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

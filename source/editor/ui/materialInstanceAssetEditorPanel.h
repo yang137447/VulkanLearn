@@ -27,6 +27,10 @@
 #include "editor/ui/terrainBrushInteraction.h"
 #include "editor/ui/tressfxHairPreview.h"
 #include "editor/ui/tressfxGroupEditor.h"
+#include "editor/ui/panel/editorPanelActionRouter.h"
+#include "editor/ui/panel/editorPanelBootstrap.h"
+#include "editor/ui/panel/sceneDetailsView.h"
+#include "editor/ui/panel/sceneOutlinerView.h"
 #include "hair/tressfxGroupPaint.h"
 #include "hair/tressfxSurfaceBrush.h"
 #include "ui/uiAction.h"
@@ -38,6 +42,7 @@ namespace Rml
 {
 class Element;
 class ElementDocument;
+class Event;
 }
 
 namespace VL::Animation { struct MotionCandidate; }
@@ -81,6 +86,8 @@ public:
 class MaterialInstanceAssetEditorPanel final : public Rml::EventListener
 {
 public:
+    using ContextMenuKind = Panel::ContextMenuKind;
+
     explicit MaterialInstanceAssetEditorPanel(IEditorCommandSink* commandSink = nullptr);
     ~MaterialInstanceAssetEditorPanel() override;
     static bool ValidateDocument(Rml::ElementDocument& document, std::string& error);
@@ -164,6 +171,11 @@ public:
     void ProcessEvent(Rml::Event& event) override;
 
 private:
+    friend void Panel::HandlePanelClick(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action);
+    friend void Panel::HandlePanelChange(MaterialInstanceAssetEditorPanel& panel,
+        Rml::Element& element, const std::string& action, const Rml::Event* event);
+
     enum class TerrainPanelMode
     {
         Sculpt,
@@ -187,16 +199,9 @@ private:
         float topSpacerHeight = 0.0f;
         float bottomSpacerHeight = 0.0f;
     };
-    // 上下文菜单的目标类别。目标只用稳定地址表达（actor 稳定身份 / 资产完整路径）：
-    // 菜单条目要到下一次点击才执行，而快照下标只在当帧有效，用下标会指到另一个对象。
-    enum class ContextMenuKind
-    {
-        None,
-        Actor,
-        BrowserAsset,
-        BlueprintClass,
-        Viewport
-    };
+    Panel::OutlinerViewContext OutlinerView();
+    Panel::DetailsViewContext DetailsView();
+    Panel::EditorPanelBootstrapContext BootstrapContext();
     struct PendingEdit
     {
         std::string key;
@@ -209,11 +214,11 @@ private:
     void RefreshLists();
     void RefreshOutliner();
     void RebuildOutlinerRows(const std::vector<EditorSceneActorSnapshot>& actors);
-    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors) const;
-    EditorSceneActorWindow OutlinerWindow() const;
+    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors);
+    EditorSceneActorWindow OutlinerWindow();
     void MeasureOutlinerRowHeight();
-    std::string OutlinerMountedVisuals() const;
-    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
+    std::string OutlinerMountedVisuals();
+    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window);
     void RefreshDetails();
     void RefreshControls();
     void OpenSaveDialog(const std::string& path);
@@ -383,6 +388,8 @@ private:
     const EditorAssetDocumentResultPayload* ParticleDocument(const std::string& path) const;
     bool RequestParticleHistory(bool redo);
     void RefreshParticleHistoryControls();
+    // 粒子资源页的可见性、发射器选择与字段区；只投影冻结快照，不持有副本。
+    void RefreshParticleEditorMarkup();
     void QueueParticleAssetDraft(EditorAssetFieldChange change);
     void FlushParticleAssetEdits();
     void SubmitParticleAssetCommand(EditorCommandType type, const std::string& path);

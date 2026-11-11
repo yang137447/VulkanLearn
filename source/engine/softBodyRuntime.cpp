@@ -13,6 +13,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderableObject.h"
+#include "renderSystem.h"
 #include "sceneNode.h"
 #include "vertexDataStruct.h"
 
@@ -507,13 +508,9 @@ void SoftBodyRuntime::UpdateSoftMesh(
     const Physics::Softbody::RubberShell& shell)
 {
     const Physics::Softbody::SoftBodyRenderMesh renderMesh = shell.BuildRenderMesh();
-    const auto* object = RendererResourceCache::GetInstance().GetRenderableObject(meshKey);
-    if (object == nullptr || !*object)
-    {
-        diagnostics.ReportWarning("SoftBody mesh is not resident: " + meshKey);
-        return;
-    }
-    (*object)->UpdateVertices(BuildSoftBodyVertices(renderMesh));
+    // GT 只发布语义数据；渲染线程在本帧 swapchain slot 上写入顶点缓冲。
+    RenderSystem::GetInstance().QueueDynamicVertices(
+        meshKey, BuildSoftBodyVertices(renderMesh));
     Eigen::Vector3f minimum, maximum;
     ComputeBounds(renderMesh, minimum, maximum);
     world.SetMeshObjectLocalBounds(meshObjectName, minimum, maximum);
@@ -819,8 +816,8 @@ void SoftBodyRuntime::RemoveMeshObject(
     world.RemoveMeshObject(meshObjectName);
     RendererResourceCache& cache = RendererResourceCache::GetInstance();
     std::shared_ptr<RenderableObject> retired;
-    const auto* cached = cache.GetRenderableObject(meshKey);
-    if (cached != nullptr && *cached) retired = *cached;
+    const auto cached = cache.GetRenderableObject(meshKey);
+    if (cached != nullptr) retired = cached;
     cache.BindRenderableObject(meshKey, {});
     if (retired)
     {

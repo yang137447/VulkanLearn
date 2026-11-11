@@ -11,6 +11,7 @@
 #include "particles/particleDataChannel.h"
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupPaint.h"
+#include "world/actorProperty.h"
 
 namespace VL
 {
@@ -152,7 +153,9 @@ enum class RuntimeCommandType
     // RenderableObject 的 group id/颜色/参数表，不写资产。
     SetTressfxGroupBindingPreview,
     // 分组笔刷 ghost：值语义命令，渲染线程按对象名更新 host-visible preview buffer。
-    SetTressfxBrushPreview
+    SetTressfxBrushPreview,
+    // Console `quit`：只在 GT 命令点置位退出意图，由 EngineLoop 走既有 Shutdown 路径。
+    QuitApplication
 };
 
 enum class RuntimeShaderReloadScope

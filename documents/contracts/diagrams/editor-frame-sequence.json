@@ -21,9 +21,9 @@
       "sublabel": "SDL3 轮询",
       "sources": [
         {
-          "path": "source/engine/engineLoop.cpp",
-          "line": 944,
-          "end_line": 949,
+          "path": "source/engine/ui/engineUiActions.cpp",
+          "line": 476,
+          "end_line": 481,
           "label": "PollEvents"
         }
       ]
@@ -36,7 +36,8 @@
       "sources": [
         {
           "path": "source/ui/uiSubsystem.cpp",
-          "line": 359,
+          "line": 469,
+          "end_line": 528,
           "label": "HandlePlatformEvent"
         }
       ]
@@ -48,8 +49,9 @@
       "sublabel": "停靠 / 大纲 / Details",
       "sources": [
         {
-          "path": "source/editor/ui/materialInstanceAssetEditorPanel.cpp",
-          "line": 741,
+          "path": "source/editor/ui/panel/sceneOutlinerView.cpp",
+          "line": 146,
+          "end_line": 216,
           "label": "RefreshOutliner"
         }
       ]
@@ -89,8 +91,8 @@
       "sources": [
         {
           "path": "source/renderSystem.cpp",
-          "line": 2835,
-          "end_line": 2839,
+          "line": 930,
+          "end_line": 951,
           "label": "PublishSnapshotFromActiveWorld"
         }
       ]
@@ -103,7 +105,8 @@
       "sources": [
         {
           "path": "source/ui/uiOverlayRendererVulkan.cpp",
-          "line": 378,
+          "line": 389,
+          "end_line": 396,
           "label": "UI 覆盖层 render pass"
         }
       ]
@@ -264,7 +267,7 @@
       "items": [
         "两条路径都每帧发布快照：多线程走发布 + 提交帧，单线程直接 Render()",
         "因此可见性开关下一帧即上屏，不需要 World 事务",
-        "见 source/engine/engineLoop.cpp:575 与 source/renderSystem.cpp:2835"
+        "见 source/engine/frame/engineFramePhases.cpp:230 与 source/renderSystem.cpp:951"
       ]
     },
     {

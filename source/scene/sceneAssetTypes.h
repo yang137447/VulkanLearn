@@ -13,7 +13,6 @@
 #include "particles/particleAsset.h"
 #include "../terrain/terrainAssetTypes.h"
 #include "scene/placementBinding.h"
-#include "world/projectileSettings.h"
 
 namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
 namespace VL::Hair { struct TfxBoneAsset; }
@@ -112,8 +111,9 @@ struct MeshObjectBuildPlan
     VL::PlacementBinding placementBinding;
 };
 
-// 运行时橡皮软体对象的纯数据计划。渲染资源加载阶段只加载材质并记录 key；
-// 实际 RubberShell 与动态 RenderableObject 由 GT 侧 SoftBodyRuntime 创建。
+// 运行时橡皮软体对象的纯作者数据计划。这里只保存场景 JSON 的
+// materialInstance 路径；实际 Material / MaterialInstance key 由渲染器资源
+// 加载阶段解析成 ResolvedMaterialBinding，RubberShell 由 GT 侧 SoftBodyRuntime 创建。
 struct SoftBodyObjectBuildPlan
 {
     std::string objectName;
@@ -131,12 +131,11 @@ struct SoftBodyObjectBuildPlan
     double burstStrain = 0.35;
     double restContraction = 0.75;
     uint64_t seed = 0;
-    std::string materialKey;
-    std::string materialInstanceKey;
+    std::string materialInstancePath;
 };
 
-// 运行时玻璃板的纯数据计划。完整板、碎片和二次碎裂都在运行时生成；
-// 这里只记录作者参数、TRS 和已解析的材质 key。
+// 运行时玻璃板的纯作者数据计划。完整板、碎片和二次碎裂都在运行时生成；
+// 这里只记录作者参数、TRS 与材质路径，渲染器解析 key，WorldBuilder 合并。
 struct GlassObjectBuildPlan
 {
     std::string objectName;
@@ -152,9 +151,7 @@ struct GlassObjectBuildPlan
     int siteCount = 32;
     uint64_t seed = 0;
     bool subfracture = true;
-    std::string materialKey;
-    std::string materialInstanceKey;
-    // 裂纹覆盖层专用深色 MI；为空时 cracked 只保留 debug 折线。
-    std::string crackMaterialKey;
-    std::string crackMaterialInstanceKey;
+    std::string materialInstancePath;
+    // 裂纹覆盖层专用深色 MI 路径；为空时 cracked 只保留 debug 折线。
+    std::string crackMaterialInstancePath;
 };

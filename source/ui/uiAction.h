@@ -5,9 +5,9 @@
 #include <string_view>
 #include <cstdint>
 #include <nlohmann/json.hpp>
-#include "editor/scene/editorActorProperty.h"
 #include "debug/debugDrawControl.h"
 #include "hair/tressfxGroupPaint.h"
+#include "world/actorProperty.h"
 
 namespace VL
 {

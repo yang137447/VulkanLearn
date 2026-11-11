@@ -445,9 +445,9 @@ void Renderpass::SetupDescriptors(
                         "Renderpass external input is missing a resource cache: " +
                         name + ":" + inputResource);
                 }
-                const std::shared_ptr<Texture>* texture =
+                const std::shared_ptr<Texture> texture =
                     descriptorContext.resourceCache->GetWorldTexture(inputResource);
-                if (texture == nullptr || *texture == nullptr)
+                if (texture == nullptr)
                 {
                     throw std::runtime_error(
                         "Renderpass external worldTexture is not active: " +
@@ -459,7 +459,7 @@ void Renderpass::SetupDescriptors(
                         inputDescriptor.binding + 1);
                 }
                 inputDescriptorImageInfos[imageIndex][inputDescriptor.binding] =
-                    (*texture)->GetDescriptorInfo();
+                    texture->GetDescriptorInfo();
                 continue;
             }
             

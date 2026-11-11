@@ -6,6 +6,7 @@
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
 #include "world/localLightShadowSettings.h"
+#include "world/worldBuildPlan.h"
 #include "world/loading/terrainCollisionInstances.h"
 #include "render/lighting/physicalLighting.h"
 
@@ -244,11 +245,53 @@ void AddSpotLightIfFirst(World& world, std::shared_ptr<SpotLight> light)
     }
 }
 
+const ResolvedMaterialBinding* FindMaterialBinding(
+    const WorldAssemblyAssets& assemblyAssets,
+    const std::string& materialInstancePath)
+{
+    if (materialInstancePath.empty())
+        return nullptr;
+    const auto found = assemblyAssets.materialBindings.find(
+        materialInstancePath);
+    return found == assemblyAssets.materialBindings.end()
+        ? nullptr
+        : &found->second;
+}
+
+RuntimeResult<ProjectileSettings> BuildProjectileSettings(
+    const WorldBuildPlan& worldBuildPlan,
+    const WorldAssemblyAssets& assemblyAssets)
+{
+    ProjectileSettings settings;
+    if (!worldBuildPlan.gameplay.projectile.has_value())
+        return RuntimeResult<ProjectileSettings>::Success(std::move(settings));
+
+    const ProjectileBuildPlan& plan = *worldBuildPlan.gameplay.projectile;
+    const ResolvedMaterialBinding* binding =
+        FindMaterialBinding(assemblyAssets, plan.materialInstancePath);
+    if (binding == nullptr)
+    {
+        return RuntimeResult<ProjectileSettings>::Failure(MakeRuntimeError(
+            "WorldBuilder.MaterialBindingMissing",
+            "Projectile material binding is missing: " + plan.materialInstancePath,
+            worldBuildPlan.scenePath,
+            "<projectile>"));
+    }
+    settings.materialKey = binding->materialKey;
+    settings.materialInstanceKey = binding->materialInstanceKey;
+    settings.speedCmPerSecond = plan.speedCmPerSecond;
+    settings.radiusCm = plan.radiusCm;
+    settings.massKg = plan.massKg;
+    settings.cooldownSeconds = plan.cooldownSeconds;
+    return RuntimeResult<ProjectileSettings>::Success(std::move(settings));
+}
+
 } // namespace
 
 RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
     uint64_t generation,
     const WorldBuildPlan& worldBuildPlan,
+    WorldAssemblyAssets assemblyAssets,
     uint32_t shadowCascadeCount) const
 {
     try
@@ -259,7 +302,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         world->SetNativeGameplay(
             worldBuildPlan.sceneJson.value("runtimeMode", "authoring") ==
             "gameplay");
-        world->SetProjectileSettings(worldBuildPlan.projectileSettings);
+        auto projectileSettings =
+            BuildProjectileSettings(worldBuildPlan, assemblyAssets);
+        if (projectileSettings.IsFailure())
+            return RuntimeResult<std::shared_ptr<World>>::Failure(
+                projectileSettings.Error());
+        world->SetProjectileSettings(std::move(projectileSettings.Value()));
 
         WorldEnvironment environment;
         // 风缺省为无风；场景有 wind 对象时由校验器保证最多一个。
@@ -467,7 +515,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         world->SetWind(wind);
         world->SetCsmSettings(std::move(csmSettings));
 
-        for (const WindResponseProfile& profile : worldBuildPlan.windResponseProfiles)
+        for (const WindResponseProfile& profile : assemblyAssets.windResponseProfiles)
         {
             world->AddWindResponseProfile(profile);
         }
@@ -485,7 +533,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             }
         }
 
-        for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
+        for (const MeshObjectBuildPlan& meshObjectPlan : assemblyAssets.meshObjectPlans)
         {
             WorldMeshObject object;
             object.animation = meshObjectPlan.animation;
@@ -526,8 +574,21 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 
-        for (const SoftBodyObjectBuildPlan& softBodyPlan : worldBuildPlan.softBodyObjectPlans)
+        for (const SoftBodyObjectBuildPlan& softBodyPlan :
+             worldBuildPlan.gameplay.softBodyObjectPlans)
         {
+            const ResolvedMaterialBinding* binding =
+                FindMaterialBinding(assemblyAssets, softBodyPlan.materialInstancePath);
+            if (binding == nullptr)
+            {
+                return RuntimeResult<std::shared_ptr<World>>::Failure(
+                    MakeRuntimeError(
+                        "WorldBuilder.MaterialBindingMissing",
+                        "Soft body material binding is missing: " +
+                            softBodyPlan.materialInstancePath,
+                        worldBuildPlan.scenePath,
+                        softBodyPlan.objectName));
+            }
             WorldSoftBodyObject object;
             object.name = softBodyPlan.objectName;
             object.profileKey = softBodyPlan.profileKey;
@@ -543,13 +604,26 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.burstStrain = softBodyPlan.burstStrain;
             object.restContraction = softBodyPlan.restContraction;
             object.seed = softBodyPlan.seed;
-            object.materialKey = softBodyPlan.materialKey;
-            object.materialInstanceKey = softBodyPlan.materialInstanceKey;
+            object.materialKey = binding->materialKey;
+            object.materialInstanceKey = binding->materialInstanceKey;
             world->AddSoftBodyObject(softBodyPlan.objectName, std::move(object));
         }
 
-        for (const GlassObjectBuildPlan& glassPlan : worldBuildPlan.glassObjectPlans)
+        for (const GlassObjectBuildPlan& glassPlan :
+             worldBuildPlan.gameplay.glassObjectPlans)
         {
+            const ResolvedMaterialBinding* binding =
+                FindMaterialBinding(assemblyAssets, glassPlan.materialInstancePath);
+            if (binding == nullptr)
+            {
+                return RuntimeResult<std::shared_ptr<World>>::Failure(
+                    MakeRuntimeError(
+                        "WorldBuilder.MaterialBindingMissing",
+                        "Glass pane material binding is missing: " +
+                            glassPlan.materialInstancePath,
+                        worldBuildPlan.scenePath,
+                        glassPlan.objectName));
+            }
             WorldGlassObject object;
             object.name = glassPlan.objectName;
             object.profileKey = glassPlan.profileKey;
@@ -563,10 +637,17 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.siteCount = glassPlan.siteCount;
             object.seed = glassPlan.seed;
             object.subfracture = glassPlan.subfracture;
-            object.materialKey = glassPlan.materialKey;
-            object.materialInstanceKey = glassPlan.materialInstanceKey;
-            object.crackMaterialKey = glassPlan.crackMaterialKey;
-            object.crackMaterialInstanceKey = glassPlan.crackMaterialInstanceKey;
+            object.materialKey = binding->materialKey;
+            object.materialInstanceKey = binding->materialInstanceKey;
+            // 裂纹 MI 是可选绑定；缺失时保持空 key，cracked 只画 debug 折线。
+            if (const ResolvedMaterialBinding* crackBinding =
+                    FindMaterialBinding(
+                        assemblyAssets, glassPlan.crackMaterialInstancePath))
+            {
+                object.crackMaterialKey = crackBinding->materialKey;
+                object.crackMaterialInstanceKey =
+                    crackBinding->materialInstanceKey;
+            }
             world->AddGlassObject(glassPlan.objectName, std::move(object));
         }
 

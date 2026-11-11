@@ -56,14 +56,14 @@ void EditorViewportGrid::EnsureCreated(RendererBackendVulkan& rendererBackend)
     rendererBackend.UnmapMemory(instanceMemory);
 }
 
-void EditorViewportGrid::Bind(vk::CommandBuffer& commandBuffer) const
+void EditorViewportGrid::Bind(vk::CommandBuffer& commandBuffer)
 {
     const vk::Buffer buffers[2] = {vertexBuffer, instanceBuffer};
     const vk::DeviceSize offsets[2] = {0, 0};
     commandBuffer.bindVertexBuffers(0, 2, buffers, offsets);
 }
 
-void EditorViewportGrid::Draw(vk::CommandBuffer& commandBuffer) const
+void EditorViewportGrid::Draw(vk::CommandBuffer& commandBuffer)
 {
     commandBuffer.draw(vertexCount, 1, 0, 0);
 }

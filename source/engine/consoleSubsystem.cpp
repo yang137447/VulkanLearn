@@ -12,9 +12,9 @@ ConsoleSubsystem::ConsoleSubsystem() = default;
 ConsoleSubsystem::~ConsoleSubsystem() = default;
 
 RuntimeResult<void> ConsoleSubsystem::Initialize(CommandBus& commandBus,
-    Editor::MaterialInstanceEditorRuntime* editorRuntime)
+    IEditorConsoleSink* editorConsoleSink)
 {
-    debugConsole = std::make_unique<DebugConsole>(commandBus, editorRuntime);
+    debugConsole = std::make_unique<DebugConsole>(commandBus, editorConsoleSink);
     debugConsole->Initialize();
     return RuntimeResult<void>::Success();
 }

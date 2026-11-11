@@ -821,11 +821,11 @@ RuntimeValidationServices::FindPendingRetiredResource(
 std::uintptr_t RuntimeValidationServices::GetWorldTextureIdentity(
     const std::string& key) const
 {
-    const std::shared_ptr<Texture>* texture =
+    const std::shared_ptr<Texture> texture =
         RendererResourceCache::GetInstance()
             .GetWorldTexture(key);
-    return texture != nullptr && *texture
-        ? reinterpret_cast<std::uintptr_t>(texture->get())
+    return texture != nullptr
+        ? reinterpret_cast<std::uintptr_t>(texture.get())
         : 0;
 }
 
@@ -1041,13 +1041,13 @@ RuntimeValidationServices::CaptureWorldGraphRuntimeFingerprint(
         engineLoop->pipelineFactory
             ->CaptureIdentityFingerprintForTest(
                 includeFrameLifecycleDiagnostics) << ";";
-    const std::shared_ptr<Texture>* brdfLut =
+    const std::shared_ptr<Texture> brdfLut =
         RendererResourceCache::GetInstance()
             .GetGlobalTexture("brdfLut");
     stream << "cache.global.brdfLut=" <<
         reinterpret_cast<std::uintptr_t>(
-            brdfLut != nullptr && *brdfLut
-                ? brdfLut->get()
+            brdfLut != nullptr
+                ? brdfLut.get()
                 : nullptr) << ";";
     if (includeFrameLifecycleDiagnostics &&
         engineLoop->rendererBackend)
@@ -1063,17 +1063,9 @@ RuntimeValidationServices::CaptureWorldGraphRuntimeFingerprint(
                 "=" << backendCounts[index] << ";";
         }
     }
-    if (includeFrameLifecycleDiagnostics)
-    {
-        ResourceRetireQueue& retireQueue =
-            ResourceRetireQueue::GetInstance();
-        stream << "retire.pending=" <<
-            retireQueue.GetPendingCount() << ";";
-        stream << "retire.submitted=" <<
-            retireQueue.GetLastSubmittedEpoch() << ";";
-        stream << "retire.completed=" <<
-            retireQueue.GetLastCompletedEpoch() << ";";
-    }
+    // Retire-queue counters advance on every async frame and are not resource
+    // identity. Including them made rollback equality checks fail whenever the
+    // render thread submitted a frame between two captures.
 
     const std::shared_ptr<Material> material =
         FindShaderReloadTestMaterial();

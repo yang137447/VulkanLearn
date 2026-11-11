@@ -1,0 +1,800 @@
+{
+  "schema": "vulkanlearn-deps-manifest/v1",
+  "manifestVersion": 1,
+  "updated": "2026-11-11",
+  "purpose": "Machine-wide third-party dependency prefix for VulkanLearn (single-machine, no CI registry).",
+  "policy": {
+    "sourceKinds": [
+      "vendored",
+      "fetchcontent",
+      "system"
+    ],
+    "prefixLayout": "D:\\YYBWorkSpace\\VulkanLearn-deps\\<toolchain-id>\\<config>",
+    "toolchainIdFormat": "win64-mingw-<gcc-version>-<crt>",
+    "lockFile": "ThirdParty/deps.lock",
+    "stampFile": "<prefix>/deps-stamp.json",
+    "manifestHashInPrefixPath": false,
+    "notes": [
+      "The prefix stamp consumes ThirdParty/deps.lock (manifest hash, option-set hash, patch-set hash), not the manifest path.",
+      "Do not embed the manifest hash in the prefix path; a path hash orphans the prefix on every manifest edit.",
+      "resolvedOptions is evidence captured from build-game/CMakeCache.txt on 2026-11-11; it is not a second source of truth.",
+      "superbuildRequired records the option table D3 must force when the dependency is built as a root ExternalProject."
+    ]
+  },
+  "superbuildScope": [
+    "SDL3",
+    "Assimp",
+    "OpenEXR",
+    "RmlUi",
+    "FreeType",
+    "Jolt"
+  ],
+  "featureOptions": [
+    {
+      "name": "VULKANLEARN_BUILD_ANIMATION_TOOLS",
+      "default": "OFF",
+      "affects": [
+        {
+          "dependency": "Assimp",
+          "options": {
+            "ASSIMP_NO_EXPORT": "OFF",
+            "ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT": "OFF",
+            "ASSIMP_BUILD_FBX_EXPORTER": "ON"
+          }
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "SDL3",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "release-3.2.22",
+      "revision": "release-3.2.22",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/libsdl-org/SDL.git",
+        "tag": "release-3.2.22"
+      },
+      "sourceDir": "extern/SDL3/SDL3",
+      "wrapper": "extern/SDL3/CMakeLists.txt",
+      "targets": [
+        "SDL3::SDL3"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {
+          "SDL_SHARED": "ON",
+          "SDL_STATIC": "OFF",
+          "SDL_TESTS": "OFF",
+          "SDL_TEST_LIBRARY": "ON",
+          "SDL_INSTALL": "OFF",
+          "SDL_CCACHE": "OFF"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "SDL_INSTALL": "ON",
+          "SDL_TESTS": "OFF",
+          "SDL_TEST_LIBRARY": "OFF",
+          "SDL_SHARED": "ON",
+          "SDL_STATIC": "OFF"
+        }
+      },
+      "notes": "SDL_INSTALL defaults to SDL3_MAINPROJECT, i.e. OFF as a subproject; the superbuild must set it explicitly."
+    },
+    {
+      "name": "Assimp",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "v6.0.2",
+      "revision": "v6.0.2",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/assimp/assimp.git",
+        "tag": "v6.0.2"
+      },
+      "sourceDir": "extern/Assimp/Assimp",
+      "wrapper": "extern/Assimp/CMakeLists.txt",
+      "targets": [
+        "assimp"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "ASSIMP_BUILD_USE_CCACHE": "OFF",
+          "ASSIMP_BUILD_TESTS": "OFF",
+          "ASSIMP_BUILD_SAMPLES": "OFF",
+          "ASSIMP_BUILD_ASSIMP_TOOLS": "OFF",
+          "ASSIMP_WARNINGS_AS_ERRORS": "OFF"
+        },
+        "featureOptions": {
+          "VULKANLEARN_BUILD_ANIMATION_TOOLS": {
+            "OFF": {
+              "ASSIMP_NO_EXPORT": "ON"
+            },
+            "ON": {
+              "ASSIMP_NO_EXPORT": "OFF",
+              "ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT": "OFF",
+              "ASSIMP_BUILD_FBX_EXPORTER": "ON"
+            }
+          }
+        },
+        "resolvedOptions": {
+          "ASSIMP_BUILD_TESTS": "OFF",
+          "ASSIMP_BUILD_SAMPLES": "OFF",
+          "ASSIMP_BUILD_ASSIMP_TOOLS": "OFF",
+          "ASSIMP_NO_EXPORT": "ON",
+          "ASSIMP_BUILD_USE_CCACHE": "OFF",
+          "ASSIMP_WARNINGS_AS_ERRORS": "OFF",
+          "ASSIMP_INSTALL": "ON",
+          "ASSIMP_BUILD_ZLIB": "ON",
+          "ASSIMP_BUILD_DRACO": "OFF",
+          "BUILD_SHARED_LIBS": "ON"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "ASSIMP_BUILD_TESTS": "OFF",
+          "ASSIMP_WARNINGS_AS_ERRORS": "OFF",
+          "ASSIMP_NO_EXPORT": "ON",
+          "ASSIMP_BUILD_ASSIMP_TOOLS": "OFF",
+          "ASSIMP_BUILD_SAMPLES": "OFF",
+          "ASSIMP_BUILD_USE_CCACHE": "OFF"
+        }
+      },
+      "bundled": [
+        {
+          "name": "zlib",
+          "version": "1.2.13",
+          "path": "extern/Assimp/Assimp/contrib/zlib"
+        },
+        {
+          "name": "draco",
+          "version": "unversioned (Assimp 6.0.2 contrib)",
+          "path": "extern/Assimp/Assimp/contrib/draco",
+          "note": "Assimp builds with ASSIMP_BUILD_DRACO=OFF in this repository."
+        }
+      ],
+      "notes": "ASSIMP_BUILD_USE_CCACHE=OFF is required because the upstream option installs global RULE_LAUNCH_COMPILE/LINK properties that wrap links and ar in ccache."
+    },
+    {
+      "name": "RmlUi",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "6.2",
+      "revision": "6.2",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/mikke89/RmlUi.git",
+        "tag": "6.2"
+      },
+      "sourceDir": "extern/RmlUi/RmlUi",
+      "wrapper": "extern/RmlUi/CMakeLists.txt",
+      "targets": [
+        "RmlUi::Core"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "RMLUI_SAMPLES": "OFF",
+          "RMLUI_LUA_BINDINGS": "OFF",
+          "RMLUI_LOTTIE_PLUGIN": "OFF",
+          "RMLUI_SVG_PLUGIN": "OFF",
+          "RMLUI_HARFBUZZ_SAMPLE": "OFF",
+          "RMLUI_PRECOMPILED_HEADERS": "OFF",
+          "RMLUI_WARNINGS_AS_ERRORS": "OFF",
+          "RMLUI_FONT_ENGINE": "freetype"
+        },
+        "resolvedOptions": {
+          "RMLUI_SAMPLES": "OFF",
+          "RMLUI_PRECOMPILED_HEADERS": "OFF",
+          "RMLUI_FONT_ENGINE": "freetype",
+          "BUILD_SHARED_LIBS": "ON"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "BUILD_TESTING": "OFF",
+          "RMLUI_SAMPLES": "OFF",
+          "RMLUI_PRECOMPILED_HEADERS": "OFF",
+          "RMLUI_FONT_ENGINE": "freetype"
+        }
+      },
+      "notes": "The export set is only installed when RmlUi is the root project. BUILD_TESTING must be OFF: the root default ON reaches a FATAL_ERROR. Upstream exports RmlUi::rmlui_core; vl_depsConfig.cmake must alias RmlUi::Core."
+    },
+    {
+      "name": "FreeType",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "VER-2-13-3",
+      "revision": "VER-2-13-3",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/freetype/freetype.git",
+        "tag": "VER-2-13-3"
+      },
+      "sourceDir": "extern/FreeType/freetype",
+      "wrapper": "extern/FreeType/CMakeLists.txt",
+      "targets": [
+        "Freetype::Freetype"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "FT_DISABLE_BZIP2": "ON",
+          "FT_DISABLE_BROTLI": "ON",
+          "FT_DISABLE_HARFBUZZ": "ON",
+          "FT_DISABLE_PNG": "ON",
+          "FT_DISABLE_ZLIB": "ON"
+        },
+        "resolvedOptions": {
+          "FT_DISABLE_BZIP2": "ON",
+          "FT_DISABLE_BROTLI": "ON",
+          "FT_DISABLE_HARFBUZZ": "ON",
+          "FT_DISABLE_PNG": "ON",
+          "FT_DISABLE_ZLIB": "ON",
+          "BUILD_SHARED_LIBS": "ON"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "BUILD_SHARED_LIBS": "ON",
+          "FT_DISABLE_BZIP2": "ON",
+          "FT_DISABLE_BROTLI": "ON",
+          "FT_DISABLE_HARFBUZZ": "ON",
+          "FT_DISABLE_PNG": "ON",
+          "FT_DISABLE_ZLIB": "ON"
+        }
+      },
+      "notes": "FreeType is shared today only because Assimp sets BUILD_SHARED_LIBS=ON before it is added. A root FreeType build would produce libfreetype.a, so the superbuild must pin BUILD_SHARED_LIBS=ON explicitly."
+    },
+    {
+      "name": "OpenEXR",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "v3.4.10",
+      "revision": "v3.4.10",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/AcademySoftwareFoundation/openexr.git",
+        "tag": "v3.4.10"
+      },
+      "sourceDir": "build-game/_deps/openexr-src",
+      "wrapper": "extern/OpenEXR/CMakeLists.txt",
+      "targets": [
+        "OpenEXR::OpenEXR"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "BUILD_TESTING": "OFF",
+          "OPENEXR_BUILD_TOOLS": "OFF",
+          "OPENEXR_INSTALL_TOOLS": "OFF",
+          "OPENEXR_INSTALL_DEVELOPER_TOOLS": "OFF",
+          "OPENEXR_BUILD_EXAMPLES": "OFF",
+          "OPENEXR_BUILD_PYTHON": "OFF",
+          "OPENEXR_FORCE_INTERNAL_IMATH": "ON",
+          "OPENEXR_USE_INTERNAL_DEFLATE": "ON",
+          "OPENEXR_FORCE_INTERNAL_OPENJPH": "ON"
+        },
+        "resolvedOptions": {
+          "BUILD_TESTING": "OFF",
+          "OPENEXR_BUILD_TOOLS": "OFF",
+          "OPENEXR_BUILD_EXAMPLES": "OFF",
+          "OPENEXR_BUILD_PYTHON": "OFF",
+          "OPENEXR_FORCE_INTERNAL_IMATH": "ON",
+          "OPENEXR_FORCE_INTERNAL_OPENJPH": "ON",
+          "OPENEXR_FORCE_INTERNAL_DEFLATE": "OFF",
+          "OPENEXR_USE_TBB": "OFF",
+          "BUILD_SHARED_LIBS": "ON"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "OPENEXR_FORCE_INTERNAL_IMATH": "ON",
+          "OPENEXR_FORCE_INTERNAL_OPENJPH": "ON",
+          "OPENEXR_FORCE_INTERNAL_DEFLATE": "ON",
+          "OPENEXR_USE_TBB": "OFF",
+          "BUILD_TESTING": "OFF",
+          "OPENEXR_BUILD_TOOLS": "OFF",
+          "OPENEXR_BUILD_EXAMPLES": "OFF",
+          "OPENEXR_BUILD_PYTHON": "OFF"
+        }
+      },
+      "notes": "OPENEXR_USE_INTERNAL_DEFLATE is a no-op in 3.4.10 (OpenEXRSetup.cmake sets it internally from OPENEXR_FORCE_INTERNAL_DEFLATE). The resolved cache value is OPENEXR_FORCE_INTERNAL_DEFLATE=OFF, so libdeflate may be resolved externally today. D3 must pass the FORCE_* option.",
+      "sourceDirNote": "The wrapper does not pin SOURCE_DIR, so OpenEXR lands in <build>/_deps/openexr-src."
+    },
+    {
+      "name": "Imath",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "v3.2.2",
+      "revision": "v3.2.2",
+      "transitive": true,
+      "parent": "OpenEXR",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/AcademySoftwareFoundation/Imath.git",
+        "tag": "v3.2.2",
+        "declaredBy": "build-game/_deps/openexr-src/cmake/OpenEXRSetup.cmake:318-336"
+      },
+      "sourceDir": "<build>/_deps/imath-src",
+      "targets": [
+        "Imath::Imath"
+      ],
+      "linkType": "shared",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "OPENEXR_FORCE_INTERNAL_IMATH": "ON"
+        },
+        "resolvedOptions": {
+          "IMATH_INSTALL": "ON",
+          "IMATH_CXX_STANDARD": "17",
+          "IMATH_HALF_USE_LOOKUP_TABLE": "ON"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "IMATH_INSTALL": "ON"
+        }
+      },
+      "notes": "This tree pins FETCHCONTENT_SOURCE_DIR_IMATH to build/_deps/imath-src, so build-game already depends on another build directory surviving. D3 must pass Imath_DIR explicitly, and D5 must move the source into the machine-wide cache."
+    },
+    {
+      "name": "OpenJPH",
+      "role": "heavy",
+      "sourceKind": "vendored",
+      "version": "0.26.3",
+      "transitive": true,
+      "parent": "OpenEXR",
+      "path": "build-game/_deps/openexr-src/external/OpenJPH",
+      "linkType": "static",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "OPENEXR_FORCE_INTERNAL_OPENJPH": "ON"
+        },
+        "resolvedOptions": {},
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "OPENEXR_FORCE_INTERNAL_OPENJPH": "ON"
+        }
+      },
+      "notes": "Vendored inside the OpenEXR tarball. Version read from external/OpenJPH/src/core/openjph/ojph_version.h."
+    },
+    {
+      "name": "libdeflate",
+      "role": "heavy",
+      "sourceKind": "vendored",
+      "version": "v1.25",
+      "transitive": true,
+      "parent": "OpenEXR",
+      "path": "build-game/_deps/openexr-src/external/deflate",
+      "linkType": "static",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "OPENEXR_FORCE_INTERNAL_DEFLATE": "ON"
+        },
+        "resolvedOptions": {
+          "OPENEXR_FORCE_INTERNAL_DEFLATE": "OFF"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)",
+        "superbuildRequired": {
+          "OPENEXR_FORCE_INTERNAL_DEFLATE": "ON"
+        }
+      },
+      "notes": "Vendored inside the OpenEXR tarball; version read from external/current_deflate_version."
+    },
+    {
+      "name": "Jolt",
+      "role": "heavy",
+      "sourceKind": "fetchcontent",
+      "version": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+      "revision": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+      "origin": {
+        "type": "url",
+        "url": "https://codeload.github.com/jrouwe/JoltPhysics/tar.gz/e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+        "sha256": "1f32328fb763135de10a244568d6ccb2ed9b1e6593fafe6dc6db5b2719d330bd"
+      },
+      "sourceDir": "<build>/_deps/vl_jolt-src",
+      "wrapper": "cmake/VulkanLearnJolt.cmake",
+      "duplicateWrapper": "script/CMakeLists.txt",
+      "targets": [
+        "Jolt"
+      ],
+      "linkType": "static",
+      "superbuild": true,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "OVERRIDE_CXX_FLAGS": "OFF",
+          "INTERPROCEDURAL_OPTIMIZATION": "OFF",
+          "ENABLE_ALL_WARNINGS": "OFF",
+          "ENABLE_INSTALL": "OFF",
+          "JPH_BUILD_SHARED_LIBS": "OFF",
+          "CPP_RTTI_ENABLED": "ON",
+          "CPP_EXCEPTIONS_ENABLED": "ON",
+          "DEBUG_RENDERER_IN_DEBUG_AND_RELEASE": "OFF",
+          "PROFILER_IN_DEBUG_AND_RELEASE": "OFF",
+          "ENABLE_OBJECT_STREAM": "OFF",
+          "USE_SSE4_1": "OFF",
+          "USE_SSE4_2": "OFF",
+          "USE_AVX": "OFF",
+          "USE_AVX2": "OFF",
+          "USE_AVX512": "OFF",
+          "USE_LZCNT": "OFF",
+          "USE_TZCNT": "OFF",
+          "USE_F16C": "OFF",
+          "USE_FMADD": "OFF",
+          "JPH_USE_DX12": "OFF",
+          "JPH_USE_VK": "OFF",
+          "JPH_USE_MTL": "OFF",
+          "JPH_USE_CPU_COMPUTE": "OFF"
+        },
+        "resolvedOptions": {},
+        "resolvedFrom": "not cached: the function-scoped sets are shadowed by the FetchContent subdirectory",
+        "superbuildRequired": {
+          "ENABLE_INSTALL": "ON",
+          "JPH_BUILD_SHARED_LIBS": "OFF",
+          "CPP_RTTI_ENABLED": "ON",
+          "CPP_EXCEPTIONS_ENABLED": "ON"
+        }
+      },
+      "notes": "At the D2 baseline Jolt is fetched twice: root CMakeLists.txt and script/CMakeLists.txt both declare vl_jolt (the second copy lacks the if(TARGET Jolt) guard); D5 removes the duplicate. ENABLE_INSTALL is currently OFF, so a superbuild must parameterize it."
+    },
+    {
+      "name": "Json",
+      "role": "header-only",
+      "sourceKind": "vendored",
+      "version": "3.12.0",
+      "path": "extern/Json",
+      "contentTree": "7b3f3f76cc7760f91f3d622a2f482fea09e112af",
+      "targets": [
+        "Json"
+      ],
+      "linkType": "interface",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Version read from extern/Json/include/nlohmann/json.hpp line 3."
+    },
+    {
+      "name": "Eigen3",
+      "role": "header-only",
+      "sourceKind": "vendored",
+      "version": "3.4.0",
+      "path": "extern/Eigen3",
+      "contentTree": "82f5eecdcb93841f5392880e8f9566b8bf945eaa",
+      "targets": [
+        "Eigen3"
+      ],
+      "linkType": "interface",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Version read from extern/Eigen3/Eigen/src/Core/util/Macros.h."
+    },
+    {
+      "name": "STB",
+      "role": "header-only",
+      "sourceKind": "vendored",
+      "version": "2.30",
+      "path": "extern/STB",
+      "contentTree": "d203e28e1b53f439346f4f57bcc164bda3299c66",
+      "targets": [
+        "stb_image"
+      ],
+      "linkType": "interface",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Only stb_image.h is consumed; version from its banner."
+    },
+    {
+      "name": "MikkTSpace",
+      "role": "small-static",
+      "sourceKind": "vendored",
+      "version": "unversioned",
+      "path": "extern/MikkTSpace",
+      "contentTree": "8ac47345c4ae8db77ec10ec67aaacd6957a281e8",
+      "artifacts": [
+        {
+          "path": "extern/MikkTSpace/mikktspace.cpp",
+          "sha256": "29c011c84b72ab9fe4c1407a3f654e5473c9e4e4b77e641c44e2ed58ab550864",
+          "bytes": 59458
+        }
+      ],
+      "targets": [
+        "MikkTSpace"
+      ],
+      "linkType": "static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "No upstream version metadata in the vendored tree; content hash pins it."
+    },
+    {
+      "name": "SPIRV-Reflect",
+      "role": "prebuilt",
+      "sourceKind": "vendored",
+      "version": "unversioned",
+      "path": "extern/Spirv-Reflect",
+      "contentTree": "954ce73aba9980f291805728b8a5653d8e3ad850",
+      "artifacts": [
+        {
+          "path": "extern/Spirv-Reflect/lib/libspirv-reflect-static.a",
+          "sha256": "23f52f96f0ba618ed4d51a85e5595cf6326f58302ce0f6335a391b56328c69ee",
+          "bytes": 69536
+        }
+      ],
+      "targets": [
+        "Spirv_Reflect"
+      ],
+      "linkType": "prebuilt-static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Committed prebuilt MinGW static library; no version string in the header beyond the 1.0 history note."
+    },
+    {
+      "name": "Tracy",
+      "role": "optional-object",
+      "sourceKind": "fetchcontent",
+      "version": "v0.13.1",
+      "revision": "v0.13.1",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/wolfpld/tracy.git",
+        "tag": "v0.13.1"
+      },
+      "sourceDir": "extern/tracy/tracy",
+      "wrapper": "extern/tracy/CMakeLists.txt",
+      "targets": [
+        "Tracy::TracyClient"
+      ],
+      "linkType": "object",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "TRACY_ENABLE": "compile-definition",
+          "TRACY_NO_SYSTEM_TRACING": "compile-definition"
+        },
+        "resolvedOptions": {}
+      },
+      "notes": "At the D2 baseline populate is unconditional (FetchContent_Populate); D4 gates it for zero-network prebuilt mode."
+    },
+    {
+      "name": "NVTX",
+      "role": "header-only",
+      "sourceKind": "fetchcontent",
+      "version": "v3.4.0",
+      "revision": "v3.4.0",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/NVIDIA/NVTX.git",
+        "tag": "v3.4.0"
+      },
+      "sourceDir": "extern/nvtx/nvtx",
+      "wrapper": "extern/nvtx/CMakeLists.txt",
+      "targets": [
+        "NVTX::nvtx"
+      ],
+      "linkType": "interface",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "At the D2 baseline populate is unconditional; D4 gates it for zero-network prebuilt mode."
+    },
+    {
+      "name": "Ozz",
+      "role": "small-static",
+      "sourceKind": "fetchcontent",
+      "version": "6cbdc790123aa4731d82e255df187b3a8a808256",
+      "revision": "6cbdc790123aa4731d82e255df187b3a8a808256",
+      "origin": {
+        "type": "url",
+        "url": "https://github.com/guillaumeblanc/ozz-animation/archive/6cbdc790123aa4731d82e255df187b3a8a808256.tar.gz",
+        "sha256": "ef52ed59de92cfbe352417683a254a4fdcab2dffd92967df680f5194bdd8332a"
+      },
+      "sourceDir": "<build>/_deps/vl_ozz-src",
+      "wrapper": "extern/OzzAnimation/CMakeLists.txt",
+      "targets": [
+        "ozz_animation"
+      ],
+      "linkType": "static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "BUILD_SHARED_LIBS": "OFF",
+          "ozz_build_tools": "OFF",
+          "ozz_build_samples": "OFF",
+          "ozz_build_howtos": "OFF",
+          "ozz_build_tests": "OFF",
+          "ozz_build_data": "OFF",
+          "ozz_build_postfix": "OFF"
+        },
+        "resolvedOptions": {
+          "ozz_build_tools": "OFF"
+        },
+        "resolvedFrom": "build-game/CMakeCache.txt (Release, 2026-11-11)"
+      }
+    },
+    {
+      "name": "Shaderc",
+      "role": "prebuilt",
+      "sourceKind": "vendored",
+      "version": "unversioned",
+      "path": "extern/Shaderc",
+      "contentTree": "ea7747f918056abf1a3be11198ad22eb577a4808",
+      "artifacts": [
+        {
+          "path": "extern/Shaderc/bin/libshaderc_shared.dll",
+          "sha256": "8472fb0bd957db6c72ded41edd702793bd4392ff12b8021e29bc5d56270b5768",
+          "bytes": 9607623
+        },
+        {
+          "path": "extern/Shaderc/lib/libshaderc_combined.a",
+          "sha256": "931a7bf9eeb5a666fcea6c0b6b467c3470616e958fe603194c0ec78c94f2e14d",
+          "bytes": 195858
+        }
+      ],
+      "targets": [
+        "Vulkan::shaderc_combined"
+      ],
+      "linkType": "prebuilt-shared",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "SHADERC_DLL": "extern/Shaderc/bin/libshaderc_shared.dll"
+        },
+        "resolvedOptions": {}
+      },
+      "notes": "Committed binaries expose no version resource or shaderc_version string; content hashes are the pin. CMakeLists2.txt (unused) declares glslang b0ada80, SPIRV-Headers 204cd13 and SPIRV-Tools, but the committed DLL was not built by the current build."
+    },
+    {
+      "name": "VulkanSDK",
+      "role": "prebuilt",
+      "sourceKind": "vendored",
+      "version": "1.3.250",
+      "versionEvidence": "extern/VulkanSDK/include/vulkan/vulkan_core.h: VK_HEADER_VERSION 250",
+      "path": "extern/VulkanSDK",
+      "contentTree": "2341808b04253ef14145513f04e5e99e90aca6e4",
+      "artifacts": [
+        {
+          "path": "extern/VulkanSDK/lib/Win32/vulkan-1.lib",
+          "sha256": "aade1d76b0bcb69342ead675fe74cd97254fb63ea3d22925684abe297952fb32",
+          "bytes": 61414
+        }
+      ],
+      "targets": [
+        "Vulkan::Vulkan"
+      ],
+      "linkType": "prebuilt-static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Headers and the MinGW import library are committed; the runtime vulkan-1.dll comes from the driver."
+    },
+    {
+      "name": "BLAKE3",
+      "role": "small-static",
+      "sourceKind": "vendored",
+      "version": "1.8.6",
+      "revision": "77b257eee7da5cd608eaf6be8343d3a4c9776af2",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/BLAKE3-team/BLAKE3",
+        "tag": "1.8.6",
+        "commit": "77b257eee7da5cd608eaf6be8343d3a4c9776af2",
+        "declaredBy": "extern/BLAKE3/UPSTREAM.md"
+      },
+      "path": "extern/BLAKE3",
+      "contentTree": "d7e59a4d43a8dc1cafbadbe64280c7ae43abdc96",
+      "targets": [
+        "BLAKE3::blake3"
+      ],
+      "linkType": "static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "BLAKE3_NO_SSE2": "compile-definition",
+          "BLAKE3_NO_SSE41": "compile-definition",
+          "BLAKE3_NO_AVX2": "compile-definition",
+          "BLAKE3_NO_AVX512": "compile-definition"
+        },
+        "resolvedOptions": {}
+      },
+      "notes": "Portable C path only; SIMD and assembly sources are not imported."
+    },
+    {
+      "name": "googletest",
+      "role": "test-only",
+      "sourceKind": "fetchcontent",
+      "version": "v1.15.2",
+      "revision": "v1.15.2",
+      "origin": {
+        "type": "git",
+        "url": "https://github.com/google/googletest.git",
+        "tag": "v1.15.2"
+      },
+      "sourceDir": "<build>/_deps/googletest-src",
+      "wrapper": "CMakeLists.txt:99-108",
+      "targets": [
+        "GTest::gtest_main"
+      ],
+      "linkType": "static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {
+          "INSTALL_GTEST": "OFF",
+          "BUILD_GMOCK": "OFF"
+        },
+        "resolvedOptions": {},
+        "featureOptions": {
+          "VULKANLEARN_BUILD_TESTS": {
+            "OFF": "not fetched",
+            "ON": "FetchContent_MakeAvailable"
+          }
+        }
+      },
+      "notes": "Fetched only when VULKANLEARN_BUILD_TESTS=ON; the prefix feature set therefore includes VULKANLEARN_BUILD_TESTS."
+    },
+    {
+      "name": "SpeedTreeParser",
+      "role": "small-static",
+      "sourceKind": "vendored",
+      "version": "repo-local",
+      "path": "extern/SpeedTreeParser",
+      "contentTree": "489ac38c46efe9319210157035b0e4d60dfab3ec",
+      "targets": [
+        "SpeedTreeParserCore"
+      ],
+      "linkType": "static",
+      "superbuild": false,
+      "patches": [],
+      "cmake": {
+        "declaredOptions": {},
+        "resolvedOptions": {}
+      },
+      "notes": "Repository-local parser, not an upstream package; listed so the dependency inventory is complete."
+    }
+  ]
+}

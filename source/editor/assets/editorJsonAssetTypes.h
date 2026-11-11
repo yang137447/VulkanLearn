@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include "render/resource/rendererGpuImageToken.h"
+#include "ui/uiExternalTexture.h"
 
 namespace VL::EditorUi
 {
@@ -59,29 +60,14 @@ struct EditorJsonField
 };
 
 // worker 生成的有界 RGB 预览；像素为显示用 sRGB RGBA8（alpha 恒为 255）。
-// 不持有 GPU 资源，不把法线/参数图的 alpha 当透明度。
-struct EditorTexturePreview
-{
-    uint32_t sourceWidth = 0, sourceHeight = 0;
-    uint32_t width = 0, height = 0;
-    std::vector<uint8_t> pixels;
-};
+// 不持有 GPU 资源，不把法线/参数图的 alpha 当透明度。类型由运行时 UI 的
+// 中性外部纹理契约定义，编辑器只保留旧名字。
+using EditorTexturePreview = UiTexturePreviewImage;
 
-struct EditorThumbnail
-{
-    std::string source;
-    std::string diagnostic;
-    std::shared_ptr<const EditorTexturePreview> image;
-    bool diskCacheHit = false;
-    std::shared_ptr<const RendererGpuImageToken> gpuImage;
-};
+using EditorThumbnail = UiThumbnail;
 
 // 只发布当前可见窗口；错误也是已完成状态，直到显式刷新才重试。
-struct EditorThumbnailSnapshot
-{
-    uint64_t revision = 0;
-    std::unordered_map<std::string, EditorThumbnail> entries;
-};
+using EditorThumbnailSnapshot = UiThumbnailSnapshot;
 
 // worker 从正式 SK 与 retarget 求值后冻结的作者参考姿态，不拥有 FBX、播放器或 World。
 // bind/reference 均为厘米、Y-up 模型空间；局部轴供检查手腕等仅看骨段位置无法发现的扭转。
@@ -111,9 +97,11 @@ struct EditorRetargetPreview
     size_t defaultAnchor = 0;
 };
 
-struct EditorJsonDocumentSnapshot
+// UiTexturePreviewDocument 是运行时 Rml 渲染接口需要的视图面：revision +
+// texturePreview。继承让 shared_ptr<const EditorJsonDocumentSnapshot> 能直接
+// 按同一对象发布给 overlay，同时不把编辑器字段带进运行时头。
+struct EditorJsonDocumentSnapshot : UiTexturePreviewDocument
 {
-    uint64_t revision = 0;
     std::string assetPath;
     EditorAssetKind kind = EditorAssetKind::MaterialInstance;
     std::string name;
@@ -123,7 +111,6 @@ struct EditorJsonDocumentSnapshot
     std::string textureSource;
     std::string textureColorSpace;
     std::string previewDiagnostic;
-    std::shared_ptr<const EditorTexturePreview> texturePreview;
     std::shared_ptr<const EditorRetargetPreview> retargetPreview;
     // 与目录条目同源的顶层 type / tressfx skinning 摘要；工作线程一次解析后冻结，
     // UI 不再读文件判断“这是不是毛发、要不要挡预览”。
@@ -135,7 +122,7 @@ struct EditorJsonDocumentSnapshot
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)
 {
-    return "vl://texture-preview/" + std::to_string(revision);
+    return UiTexturePreviewSource(revision);
 }
 
 // RmlUi 回调仅发出查看/刷新意图；文件读取和发布由 GT facade 与独立 worker 承担。

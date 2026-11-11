@@ -1,7 +1,6 @@
 #include "ui/uiSubsystem.h"
 #include "ui/debugDrawOverlay.h"
 #include "ui/gameplayHudView.h"
-#include "ui/editorPointerPolicy.h"
 
 #include <algorithm>
 #include <cctype>
@@ -26,12 +25,6 @@
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeCommand.h"
 #include "core/renderSession.h"
-#include "editor/selection/materialInstanceSelection.h"
-#include "editor/runtime/materialInstanceEditorRuntime.h"
-#include "editor/assets/editorJsonAssetLibrary.h"
-#include "editor/assets/editorThumbnailLibrary.h"
-#include "editor/ui/materialInstanceAssetEditorPanel.h"
-#include "editor/ui/editorSceneActorTree.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 #include "ui/sceneObjectTypeSupport.h"
@@ -152,6 +145,8 @@ UiSectionMask SectionsForUiAction(UiActionType type)
     case UiActionType::PreviewRetarget:
     case UiActionType::PreviewMaterial:
     case UiActionType::PreviewBlueprint:
+    case UiActionType::PreviewParticle:
+    case UiActionType::UpdateParticlePreview:
     case UiActionType::TransformBlueprintPreview:
         // World/预览换代：世界路径、相机、资产与大纲都可能整体替换。
         return UiSectionAll;
@@ -316,7 +311,17 @@ uint64_t GetFileFingerprint(const std::filesystem::directory_entry& entry)
 
 } // namespace
 
-UiSubsystem::UiSubsystem() = default;
+// 运行时 UI 的分节存储。编辑器资产/大纲节由 EditorUiShell 自己发布，
+// 这里只保留不依赖编辑器载荷的运行时聚合。
+struct UiSubsystem::Impl final
+{
+    UiRuntimeSectionStore sectionStore;
+};
+
+UiSubsystem::UiSubsystem()
+    : impl(std::make_unique<Impl>())
+{
+}
 
 UiSubsystem::~UiSubsystem()
 {
@@ -388,21 +393,6 @@ RuntimeResult<void> UiSubsystem::Initialize(
         return assetResult;
     }
 
-    RuntimeResult<void> developerResult = InitializeDeveloperUi();
-    if (developerResult.IsFailure())
-    {
-        Shutdown();
-        return developerResult;
-    }
-
-    RuntimeResult<void> materialEditorResult =
-        InitializeMaterialInstanceEditor();
-    if (materialEditorResult.IsFailure())
-    {
-        diagnostics->ReportWarning(
-            FormatRuntimeError(materialEditorResult.Error()));
-    }
-
     initialized = true;
     UpdateInputOwnership();
     diagnostics->ReportInfo(
@@ -413,6 +403,9 @@ RuntimeResult<void> UiSubsystem::Initialize(
 
 void UiSubsystem::Shutdown()
 {
+    // 编辑器文档必须先于共享 RmlUi context 卸载；shell 只 detach 文档，
+    // 不调用 Rml::Shutdown。
+    SetEditorUiShell(nullptr);
     debugDrawLabels.reset();
     snapshotPublisher.Clear();
     uiUpdateScheduler = UiUpdateScheduler{};
@@ -422,17 +415,6 @@ void UiSubsystem::Shutdown()
         ResetRuntimeInputState();
     }
 
-
-    materialInstanceEditorPanel.reset();
-    jsonAssetLibrary.reset();
-    thumbnailLibrary.reset();
-    materialInstanceEditorRuntime.reset();
-
-    if (rmlContext != nullptr && editorDocument != nullptr)
-    {
-        rmlContext->UnloadDocument(editorDocument);
-        editorDocument = nullptr;
-    }
     if (rmlContext != nullptr && runtimeDocument != nullptr)
     {
         rmlContext->UnloadDocument(runtimeDocument);
@@ -467,19 +449,13 @@ void UiSubsystem::Shutdown()
     pendingSectionRefresh = UiSectionAll;
     currentBuildMode = UiViewModelBuildMode::None;
     // 重新初始化后必须从“没有发布过任何分节”开始，否则旧版本会被误认为已应用。
-    sectionStore = UiViewModelSectionStore{};
+    impl->sectionStore = UiRuntimeSectionStore{};
     appliedSectionVersions = UiSectionVersions{};
-    appliedAssets = UiAssetsSection{};
+    appliedEditorSectionVersions = UiSectionVersions{};
     appliedPerformance = UiPerformanceSection{};
     lastPublishedOfflineMode = false;
-    outlinerRevision = 0;
-    panelBuildRequested = true;
     refreshStats = {};
     hudScripts = ScriptRuntimeView{};
-    blueprintClassesVersion = 0;
-    sceneActors.reset();
-    sceneModels.reset();
-    editorPointerCaptured = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
     rmlPressedKeyboardKeys.clear();
@@ -497,6 +473,15 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
     if (!initialized)
     {
         return false;
+    }
+
+    if (event.type == PlatformEventType::MouseMove ||
+        event.type == PlatformEventType::MouseButtonDown ||
+        event.type == PlatformEventType::MouseButtonUp ||
+        event.type == PlatformEventType::MouseWheel)
+    {
+        pointerX = event.mouseX;
+        pointerY = event.mouseY;
     }
 
     if (event.type == PlatformEventType::WindowResized)
@@ -525,15 +510,22 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         return false;
     }
 
+    bool consumed = false;
+    if (editorUiShell != nullptr && developerUiVisible &&
+        editorUiShell->HandleGlobalShortcut(event, consumed) && consumed)
+    {
+        return true;
+    }
+
     if (HandleGlobalShortcut(event))
     {
         return true;
     }
 
-    bool consumed = false;
-    if (!consumed && developerUiVisible)
+    if (editorUiShell != nullptr && developerUiVisible)
     {
-        consumed = ProcessDeveloperUiEvent(event);
+        consumed = false;
+        editorUiShell->HandlePlatformEvent(event, consumed);
     }
 
     UpdateInputOwnership();
@@ -562,7 +554,6 @@ void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
         // 隐藏期间没有分节发布：重新可见的第一帧由引擎的全部节重建覆盖。
         // 调度器记住“隐藏”，使该帧必然被判定为 surfaceChanged。
         uiUpdateScheduler.MarkHidden();
-        panelBuildRequested = true;
         BuildAndPublishRenderSnapshot(false);
         UpdateInputOwnership();
         return;
@@ -617,55 +608,43 @@ void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
     PublishStatusSection(frameValues);
     if (editorSnapshotDue)
     {
-        PublishAssetsSection();
-        PublishSceneOutlinerSection();
         if (sections.scripts &&
-            sectionStore.PublishScripts(std::move(*sections.scripts), sections.scriptsRevision))
+            impl->sectionStore.PublishScripts(std::move(*sections.scripts), sections.scriptsRevision))
             RecordSectionPublish(UiSectionId::Scripts);
         if (sections.animation &&
-            sectionStore.PublishAnimation(std::move(*sections.animation)))
+            impl->sectionStore.PublishAnimation(std::move(*sections.animation)))
             RecordSectionPublish(UiSectionId::Animation);
         if (sections.performance &&
-            sectionStore.PublishPerformance(std::move(*sections.performance)))
+            impl->sectionStore.PublishPerformance(std::move(*sections.performance)))
             RecordSectionPublish(UiSectionId::Performance);
         if (sections.viewportCamera &&
-            sectionStore.PublishViewportCamera(std::move(*sections.viewportCamera)))
+            impl->sectionStore.PublishViewportCamera(std::move(*sections.viewportCamera)))
             RecordSectionPublish(UiSectionId::ViewportCamera);
         if (sections.environmentLighting &&
-            sectionStore.PublishEnvironmentLighting(std::move(*sections.environmentLighting)))
+            impl->sectionStore.PublishEnvironmentLighting(std::move(*sections.environmentLighting)))
             RecordSectionPublish(UiSectionId::EnvironmentLighting);
         if (sections.offline &&
-            sectionStore.PublishOffline(std::move(*sections.offline)))
+            impl->sectionStore.PublishOffline(std::move(*sections.offline)))
             RecordSectionPublish(UiSectionId::Offline);
     }
 
-    const UiSectionVersions versions = sectionStore.Versions();
-    const UiSectionMask changed = versions.ChangedFrom(appliedSectionVersions);
+    const UiSectionVersions versions = impl->sectionStore.Versions();
+    UiSectionMask changed = versions.ChangedFrom(appliedSectionVersions);
     ApplyChangedSections(changed);
     appliedSectionVersions = versions;
 
-    // 面板 Build 只由资产/大纲/脚本/状态四节驱动；Performance 页自己按 5 Hz
-    // 取样，不触发整份面板重建。面板本地交互另置 panelBuildRequested。
-    const bool panelDue = (changed & UiDeveloperPanelSectionMask) != 0 ||
-        (panelBuildRequested && editorSnapshotDue);
-    const bool runtimeViewDue = (changed & UiRuntimeViewSectionMask) != 0 || panelDue;
-    if (panelDue)
+    // 编辑器分节/面板由 shell 自己发布和构建；这里只合并版本，让一次
+    // 面板/Dom 改动同样强制本帧 RmlUi 更新与快照发布。
+    if (editorUiShell != nullptr)
     {
-        panelBuildRequested = false;
-        BuildDeveloperPanels();
-    }
-    if (runtimeViewDue && materialInstanceEditorPanel != nullptr)
-    {
-        materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
-        ++refreshStats.runtimeViewUpdates;
-    }
-    if (editorSnapshotDue && materialInstanceEditorPanel != nullptr)
-    {
-        // 性能节每个到期窗口都有新样本，但只进入性能页/日志脚本页自己的取样器。
-        materialInstanceEditorPanel->UpdatePerformance(
-            appliedPerformance.performance);
-        materialInstanceEditorPanel->UpdateScriptPerformance(
-            appliedPerformance.scriptPerformance);
+        editorUiShell->UpdateSections(
+            lastViewModel,
+            appliedPerformance,
+            editorSnapshotDue,
+            changed);
+        const UiSectionVersions editorVersions = editorUiShell->Versions();
+        changed |= editorVersions.ChangedFrom(appliedEditorSectionVersions);
+        appliedEditorSectionVersions = editorVersions;
     }
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
@@ -710,7 +689,7 @@ void UiSubsystem::ApplyFrameValues(const UiViewModelFrameValues& frameValues)
 
 void UiSubsystem::ApplyChangedSections(UiSectionMask changed)
 {
-    const UiViewModelSections& published = sectionStore.Sections();
+    const UiRuntimeViewModelSections& published = impl->sectionStore.Sections();
     if ((changed & UiSectionBit(UiSectionId::Scripts)) != 0)
     {
         lastViewModel.scripts = published.scripts.data->scripts;
@@ -808,10 +787,6 @@ void UiSubsystem::ApplyChangedSections(UiSectionMask changed)
         // 这里只保存冻结值，不触发面板 Build。
         appliedPerformance = *published.performance.data;
     }
-    if ((changed & UiSectionBit(UiSectionId::Assets)) != 0)
-    {
-        appliedAssets = *published.assets.data;
-    }
     if ((changed & UiSectionBit(UiSectionId::Status)) != 0)
     {
         const UiStatusSection& status = *published.status.data;
@@ -857,62 +832,9 @@ void UiSubsystem::PublishStatusSection(const UiViewModelFrameValues& frameValues
     status.hotReloadStatus = hotReloadStatus;
     status.developerUiVisible = developerUiVisible;
     status.activeWorldPath = frameValues.activeWorldPath;
-    if (sectionStore.PublishStatus(std::move(status)))
+    if (impl->sectionStore.PublishStatus(std::move(status)))
     {
         RecordSectionPublish(UiSectionId::Status);
-    }
-}
-
-void UiSubsystem::PublishAssetsSection()
-{
-    if (thumbnailLibrary != nullptr)
-    {
-        // 暂停/轮询与面板是否重建无关：缩略图必须在静止帧继续推进，
-        // 只是不触发整份面板 DOM 刷新。
-        thumbnailLibrary->SetPaused(!developerUiVisible || sceneViewportInputActive ||
-            editorPointerCaptured);
-        thumbnailLibrary->Poll();
-    }
-    UiAssetsSection assets;
-    // 三个库都返回按 revision 缓存的不可变快照；同一 revision 得到同一个 shared_ptr，
-    // 因此“N 次构建无变化”只发布一次。
-    assets.logs = ProcessLog().Freeze();
-    if (jsonAssetLibrary != nullptr)
-    {
-        assets.assetCatalog = jsonAssetLibrary->GetCatalog();
-        assets.jsonDocument = jsonAssetLibrary->GetDocument();
-        assets.assetCatalogLoading = jsonAssetLibrary->IsCatalogLoading();
-        assets.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
-    }
-    if (thumbnailLibrary != nullptr)
-    {
-        assets.thumbnails = thumbnailLibrary->GetSnapshot();
-    }
-    if (sectionStore.PublishAssets(std::move(assets)))
-    {
-        RecordSectionPublish(UiSectionId::Assets);
-        const UiAssetsSection& published = *sectionStore.Sections().assets.data;
-        rmlRenderInterface.PublishThumbnails(published.thumbnails);
-        rmlRenderInterface.PublishTexturePreview(published.jsonDocument);
-    }
-}
-
-void UiSubsystem::PublishSceneOutlinerSection()
-{
-    static const std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>>
-        EmptyActors = std::make_shared<const std::vector<EditorUi::EditorSceneActorSnapshot>>();
-    static const std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>
-        EmptyModels = std::make_shared<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>();
-    UiSceneOutlinerSection payload;
-    payload.actors = sceneActors != nullptr ? sceneActors : EmptyActors;
-    payload.models = sceneModels != nullptr ? sceneModels : EmptyModels;
-    payload.selectedActorIdentity = selectedActorIdentity;
-    payload.selectedModel = selectedModelMaterials;
-    payload.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
-    // 版本源是 outlinerRevision：只有指针替换或选中态变化才推进。
-    if (sectionStore.PublishSceneOutliner(std::move(payload), outlinerRevision))
-    {
-        RecordSectionPublish(UiSectionId::SceneOutliner);
     }
 }
 
@@ -948,21 +870,14 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
     {
         rmlContext->SetDimensions(Rml::Vector2i(static_cast<int>(width), static_cast<int>(height)));
     }
+    if (editorUiShell != nullptr)
+        editorUiShell->Resize(width, height);
 }
 
 bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 {
-    if (!developerUiVisible || editorDocument == nullptr ||
-        !std::isfinite(mouseX) || !std::isfinite(mouseY) ||
-        mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
-        materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
-        materialInstanceEditorPanel->IsWorkspaceDragging() ||
-        !ContainsViewportPoint(sceneViewportRect, mouseX, mouseY))
-    {
-        return false;
-    }
-    const Rml::Element* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(mouseX, mouseY));
-    return materialInstanceEditorPanel->IsSceneViewportElement(hit);
+    return developerUiVisible && editorUiShell != nullptr &&
+        editorUiShell->IsScenePickTarget(mouseX, mouseY);
 }
 
 void UiSubsystem::ApplyAction(const UiAction& action)
@@ -981,8 +896,8 @@ void UiSubsystem::ApplyAction(const UiAction& action)
                 immersiveLoadCompleted = false;
             }
             else if (!developerUiVisible) SetImmersiveView(false);
-            else if (materialInstanceEditorPanel != nullptr &&
-                materialInstanceEditorPanel->PrepareImmersiveView(immersiveLevelPath))
+            else if (editorUiShell != nullptr &&
+                editorUiShell->PrepareImmersiveView(immersiveLevelPath))
             {
                 if (immersiveLevelPath.empty()) SetImmersiveView(true);
                 else
@@ -1020,7 +935,6 @@ void UiSubsystem::SetImmersiveView(bool enabled)
     // 退出沉浸模式的第一帧必须立即恢复完整工作区，不能等待节拍窗口。
     RequestViewModelRefresh();
     ResetRuntimeInputState();
-    editorPointerCaptured = false;
     ApplyDocumentState();
 }
 
@@ -1033,22 +947,8 @@ void UiSubsystem::NotifyWorldChanged(
     // 分节版本可能碰巧相同（同名对象/空场景），但面板的 World 相关内容已经失效，
     // 仍要强制一次 RmlUi 更新与快照重发。
     uiUpdateScheduler.MarkMutation(UiMutationKind::WorldChange);
-    selectedModelMaterials.reset();
-    selectedMaterialSlotIndex.reset();
-    sceneModels.reset();
-    // 大纲行名可能在新 World 里重名，身份不做跨代复用。
-    sceneActors.reset();
-    selectedActorIdentity.clear();
-    MarkSceneOutlinerDirty();
-    pendingSceneSelectionClear = false;
-    pendingMaterialInstanceModelSelection.reset();
-    pendingMaterialInstanceSelection.reset();
-    if (materialInstanceEditorRuntime != nullptr)
-    {
-        materialInstanceEditorRuntime->NotifyWorldChanged(
-            worldPath,
-            generation);
-    }
+    if (editorUiShell != nullptr)
+        editorUiShell->NotifyWorldChanged(worldPath, generation);
 }
 
 void UiSubsystem::NotifyWorldLoadCompleted()
@@ -1065,265 +965,100 @@ void UiSubsystem::NotifyWorldLoadCompleted()
 
 void UiSubsystem::TickMaterialInstanceEditor()
 {
-    if (!initialized || materialInstanceEditorRuntime == nullptr)
-    {
+    if (!initialized || editorUiShell == nullptr)
         return;
-    }
-    // 蓝图类 JSON 只在脚本节版本变化时转交；静止帧不重复复制整份类表。
-    const uint64_t scriptsVersion = appliedSectionVersions.Version(UiSectionId::Scripts);
-    if (blueprintClassesVersion != scriptsVersion)
-    {
-        blueprintClassesVersion = scriptsVersion;
-        materialInstanceEditorRuntime->SetBlueprintClasses(lastViewModel.scripts.classes);
-        materialInstanceEditorRuntime->SetBlueprintComponentClasses(
-            lastViewModel.scripts.componentClasses);
-    }
-    // 命令执行会改变草稿/历史/预览与命令回馈，下一帧只强制受影响的节。
-    if (materialInstanceEditorRuntime->Tick())
-    {
-        RequestViewModelRefresh(UiSectionBit(UiSectionId::Scripts) |
-            UiSectionBit(UiSectionId::Assets) |
-            UiSectionBit(UiSectionId::SceneOutliner));
-        RequestPanelBuild();
-    }
-    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
+    editorUiShell->Tick(
+        lastViewModel.deltaTimeSeconds,
+        lastViewModel,
+        appliedSectionVersions.Version(UiSectionId::Scripts));
 }
 
 bool UiSubsystem::SelectSceneObjectFromPick(
-    const Editor::Selection::MaterialInstanceSelection& selection)
+    const MaterialInstanceSelection& selection)
 {
-    if (!developerUiEnabled || materialInstanceEditorRuntime == nullptr)
-    {
-        return false;
-    }
-
-    // 选中态是用户直接反馈：只强制大纲节，下一帧立即生效。
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
-    // 关卡拾取只发布对象/槽位选择，不创建 MI 文档或请求预览 World。
-    // 打开材质必须来自材质槽或资产浏览器的显式操作。
-    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowSceneDetails();
-    pendingMaterialInstanceSelection.reset();
-    pendingMaterialInstanceModelSelection.reset();
-
-    EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
-    modelSnapshot.worldGeneration = selection.modelContext.worldGeneration;
-    modelSnapshot.scenePath = selection.modelContext.scenePath;
-    modelSnapshot.objectId = selection.modelContext.objectId;
-    modelSnapshot.displayName = selection.modelContext.displayName;
-    modelSnapshot.objectIdentity = selection.modelContext.objectIdentity;
-    modelSnapshot.actorIdentity = selection.modelContext.actorIdentity;
-    modelSnapshot.materials.reserve(selection.modelContext.materials.size());
-    for (const Editor::Selection::MaterialInstanceModelMaterial& material :
-         selection.modelContext.materials)
-    {
-        EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
-        materialSnapshot.objectId = material.objectId;
-        materialSnapshot.materialSlotIndex = material.materialSlotIndex;
-        materialSnapshot.materialSlotName = material.materialSlotName;
-        materialSnapshot.materialInstancePath = material.materialInstancePath;
-        modelSnapshot.materials.push_back(
-            std::move(materialSnapshot));
-    }
-    selectedModelMaterials = std::move(modelSnapshot);
-    selectedMaterialSlotIndex = selection.materialSlotIndex;
-    // 视口拾取与大纲行共用同一份选中态：拾取到的网格在大纲里也要高亮。
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
-    if (selection.objectIdentity.rfind("__blueprint/", 0) == 0)
-    {
-        const auto id = selection.objectIdentity.substr(std::string_view("__blueprint/").size());
-        selectedActorIdentity = "blueprintInstance|" + id.substr(0, id.find('/'));
-    }
-    pendingSceneSelectionClear = false;
-    MarkSceneOutlinerDirty();
-    return true;
+    return developerUiEnabled && editorUiShell != nullptr &&
+        editorUiShell->SelectSceneObjectFromPick(selection);
 }
 
-void UiSubsystem::SetMaterialInstanceSceneModels(
-    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> models)
+void UiSubsystem::SetMaterialInstanceSceneModels(UiEditorSnapshotPayload payload)
 {
-    if (sceneModels == models)
-    {
-        return;
-    }
-    sceneModels = std::move(models);
-    MarkSceneOutlinerDirty();
-    if (!selectedModelMaterials.has_value() || sceneModels == nullptr)
-    {
-        return;
-    }
-
-    const auto selected = std::find_if(
-        sceneModels->begin(),
-        sceneModels->end(),
-        [this](const EditorUi::MaterialInstanceModelSnapshot& model)
-        {
-            return selectedModelMaterials->objectId != 0 &&
-                model.objectId == selectedModelMaterials->objectId &&
-                model.worldGeneration == selectedModelMaterials->worldGeneration;
-        });
-    if (selected == sceneModels->end())
-    {
-        selectedModelMaterials.reset();
-        selectedMaterialSlotIndex.reset();
-        return;
-    }
-    selectedModelMaterials = *selected;
+    if (editorUiShell != nullptr)
+        editorUiShell->SetMaterialInstanceSceneModels(std::move(payload));
 }
 
 // 大纲快照按内容替换：同一份数组的 shared_ptr 跨刷新复用，选择态按稳定身份保留，
 // 身份消失时清空，防止把旧 World 的选择静默套到同名新对象上。
-void UiSubsystem::SetSceneActors(
-    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors)
+void UiSubsystem::SetSceneActors(UiEditorSnapshotPayload payload)
 {
-    if (sceneActors == actors)
-    {
-        return;
-    }
-    sceneActors = std::move(actors);
-    MarkSceneOutlinerDirty();
-    if (selectedActorIdentity.empty() || sceneActors == nullptr) return;
-
-    const auto& list = *sceneActors;
-    const bool stillPresent = std::any_of(
-        list.begin(),
-        list.end(),
-        [this](const EditorUi::EditorSceneActorSnapshot& actor)
-        {
-            return actor.identity == selectedActorIdentity;
-        });
-    if (stillPresent) return;
-    selectedActorIdentity.clear();
-    selectedModelMaterials.reset();
-    selectedMaterialSlotIndex.reset();
+    if (editorUiShell != nullptr)
+        editorUiShell->SetSceneActors(std::move(payload));
 }
 
-std::optional<Editor::Selection::MaterialInstanceModelContext>
+std::optional<MaterialInstanceModelContext>
 UiSubsystem::ConsumeMaterialInstanceModelSelectionRequest()
 {
-    std::optional<Editor::Selection::MaterialInstanceModelContext> result =
-        std::move(pendingMaterialInstanceModelSelection);
-    pendingMaterialInstanceModelSelection.reset();
-    return result;
+    return editorUiShell != nullptr
+        ? editorUiShell->ConsumeMaterialInstanceModelSelectionRequest()
+        : std::nullopt;
 }
 
-std::optional<Editor::Selection::MaterialInstanceSelection>
+std::optional<MaterialInstanceSelection>
 UiSubsystem::ConsumeMaterialInstanceSelectionRequest()
 {
-    std::optional<Editor::Selection::MaterialInstanceSelection> result =
-        std::move(pendingMaterialInstanceSelection);
-    pendingMaterialInstanceSelection.reset();
-    return result;
+    return editorUiShell != nullptr
+        ? editorUiShell->ConsumeMaterialInstanceSelectionRequest()
+        : std::nullopt;
 }
 
 bool UiSubsystem::ConsumeSceneSelectionClearRequest()
 {
     // 与 selection 请求同帧消费一次：EngineLoop 据此清掉渲染端描边。
-    const bool pending = pendingSceneSelectionClear;
-    pendingSceneSelectionClear = false;
-    return pending;
+    return editorUiShell != nullptr &&
+        editorUiShell->ConsumeSceneSelectionClearRequest();
 }
 
 void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
 {
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
-    selectedModelMaterials.reset();
-    selectedMaterialSlotIndex.reset();
-    selectedActorIdentity.clear();
-    MarkSceneOutlinerDirty();
-    pendingSceneSelectionClear = false;
-    pendingMaterialInstanceModelSelection.reset();
-    pendingMaterialInstanceSelection.reset();
+    if (editorUiShell != nullptr)
+        editorUiShell->ClearMaterialInstanceSceneSelection();
 }
 
 bool UiSubsystem::RequestModelSelection(
-    const Editor::Selection::MaterialInstanceModelContext& model)
+    const MaterialInstanceModelContext& model)
 {
-    if (!developerUiEnabled || model.worldGeneration == 0 ||
-        model.objectId == 0 || model.objectIdentity.empty())
-    {
-        return false;
-    }
-
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
-    EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
-    modelSnapshot.worldGeneration = model.worldGeneration;
-    modelSnapshot.scenePath = model.scenePath;
-    modelSnapshot.objectId = model.objectId;
-    modelSnapshot.displayName = model.displayName;
-    modelSnapshot.objectIdentity = model.objectIdentity;
-    modelSnapshot.actorIdentity = model.actorIdentity;
-    modelSnapshot.materials.reserve(model.materials.size());
-    for (const Editor::Selection::MaterialInstanceModelMaterial& material : model.materials)
-    {
-        EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
-        materialSnapshot.objectId = material.objectId;
-        materialSnapshot.materialSlotIndex = material.materialSlotIndex;
-        materialSnapshot.materialSlotName = material.materialSlotName;
-        materialSnapshot.materialInstancePath = material.materialInstancePath;
-        modelSnapshot.materials.push_back(std::move(materialSnapshot));
-    }
-    selectedModelMaterials = std::move(modelSnapshot);
-    selectedMaterialSlotIndex.reset();
-    pendingMaterialInstanceSelection.reset();
-    pendingMaterialInstanceModelSelection = model;
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
-    pendingSceneSelectionClear = false;
-    MarkSceneOutlinerDirty();
-    return true;
+    return developerUiEnabled && editorUiShell != nullptr &&
+        editorUiShell->RequestModelSelection(model);
 }
 
 bool UiSubsystem::RequestMaterialSelection(
-    const Editor::Selection::MaterialInstanceSelection& selection)
+    const MaterialInstanceSelection& selection)
 {
-    if (!developerUiEnabled || selection.worldGeneration == 0 ||
-        selection.objectId == 0 || selection.objectIdentity.empty() ||
-        selection.materialInstancePath.empty())
-    {
-        return false;
-    }
-
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
-    selectedMaterialSlotIndex = selection.materialSlotIndex;
-    pendingMaterialInstanceModelSelection.reset();
-    pendingMaterialInstanceSelection = selection;
-    selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
-    pendingSceneSelectionClear = false;
-    MarkSceneOutlinerDirty();
-    return true;
+    return developerUiEnabled && editorUiShell != nullptr &&
+        editorUiShell->RequestMaterialSelection(selection);
 }
 
 bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
 {
-    if (!developerUiEnabled || actorIdentity.empty())
-    {
-        return false;
-    }
-
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
-    // 非网格 actor 没有 MI 文档：清掉编辑器侧的材质槽选择，并要求 EngineLoop
-    // 清掉渲染端的 mesh 描边，让大纲高亮与视口描边保持同一个选中对象。
-    selectedModelMaterials.reset();
-    selectedMaterialSlotIndex.reset();
-    pendingMaterialInstanceModelSelection.reset();
-    pendingMaterialInstanceSelection.reset();
-    selectedActorIdentity = actorIdentity;
-    pendingSceneSelectionClear = true;
-    MarkSceneOutlinerDirty();
-    return true;
+    return developerUiEnabled && editorUiShell != nullptr &&
+        editorUiShell->RequestActorSelection(actorIdentity);
 }
 
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
 {
     if (!initialized) return false;
-    if (materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorPanel->IsAssetEditorVisible())
+    if (editorUiShell != nullptr && editorUiShell->IsAssetEditorVisible())
         return false;
     // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；
     // 相对鼠标移动期间 SDL 的绝对坐标可能落在 Viewport 外。
-    return !developerUiVisible || sceneViewportInputActive;
+    return !developerUiVisible ||
+        (editorUiShell != nullptr && editorUiShell->IsSceneViewportInputActive());
+}
+
+bool UiSubsystem::CanRenderThumbnails() const
+{
+    return developerUiVisible && editorUiShell != nullptr &&
+        !editorUiShell->IsSceneViewportInputActive() &&
+        !editorUiShell->IsPointerCaptured();
 }
 
 bool UiSubsystem::ShouldGameReceiveKeyboard() const
@@ -1400,92 +1135,6 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
 
     dataModelHandle = constructor.GetModelHandle();
     return RuntimeResult<void>::Success();
-}
-
-RuntimeResult<void> UiSubsystem::InitializeDeveloperUi()
-{
-    if (!developerUiEnabled) return RuntimeResult<void>::Success();
-    auto candidate = LoadEditorDocumentCandidate();
-    if (candidate.IsFailure()) return RuntimeResult<void>::Failure(candidate.Error());
-    editorDocument = candidate.Value();
-    ApplyDocumentState();
-    return RuntimeResult<void>::Success();
-}
-
-RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
-{
-    materialInstanceEditorPanel.reset();
-    materialInstanceEditorRuntime.reset();
-    jsonAssetLibrary.reset();
-    thumbnailLibrary.reset();
-
-    if (!developerUiEnabled)
-    {
-        return RuntimeResult<void>::Success();
-    }
-
-    std::filesystem::path resourceRoot;
-    if (!desc.sceneRoot.empty())
-    {
-        resourceRoot = desc.sceneRoot.parent_path();
-    }
-
-    std::filesystem::path projectRoot;
-    if (!desc.assetRoot.empty())
-    {
-        projectRoot = desc.assetRoot.parent_path();
-    }
-
-    auto runtime = std::make_unique<Editor::MaterialInstanceEditorRuntime>();
-    RuntimeResult<void> result = runtime->Initialize(
-        Editor::MaterialInstanceEditorRuntime::Config{
-            std::move(resourceRoot),
-            std::move(projectRoot),
-            256,
-            desc.previewAdapter});
-    if (result.IsFailure())
-    {
-        return result;
-    }
-
-    materialInstanceEditorRuntime = std::move(runtime);
-    materialInstanceEditorPanel =
-        std::make_unique<EditorUi::MaterialInstanceAssetEditorPanel>(
-            materialInstanceEditorRuntime.get());
-    materialInstanceEditorPanel->SetSceneSelectionSink(this);
-    materialInstanceEditorPanel->SetRuntimeActionSink(this);
-    std::string error;
-    jsonAssetLibrary = std::make_unique<Editor::EditorJsonAssetLibrary>();
-    if (!jsonAssetLibrary->Initialize(desc.sceneRoot.parent_path(), error))
-        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.AssetLibraryInvalid", error));
-    thumbnailLibrary = std::make_unique<Editor::EditorThumbnailLibrary>();
-    if (!thumbnailLibrary->Initialize(desc.sceneRoot.parent_path(),
-        desc.assetRoot.parent_path() / ".cache" / "editor-thumbnails", error))
-        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.ThumbnailLibraryInvalid", error));
-    materialInstanceEditorPanel->SetJsonAssetRequestSink(this);
-    if (!materialInstanceEditorPanel->Attach(*editorDocument, error))
-        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.EditorDocumentInvalid", error));
-    return RuntimeResult<void>::Success();
-}
-
-RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadEditorDocumentCandidate()
-{
-    const auto path = desc.assetRoot / "editor-workspace.rml";
-    rmlSystemInterface.BeginCandidateValidation();
-    // RmlUi 的 URL 基路径解析要求正斜杠；原生 Windows 路径会丢失 img 的相对目录。
-    Rml::ElementDocument* candidate = rmlContext->LoadDocument(path.generic_string());
-    std::string error;
-    const bool parsed = rmlSystemInterface.EndCandidateValidation(error);
-    const bool valid = candidate != nullptr && parsed &&
-        EditorUi::MaterialInstanceAssetEditorPanel::ValidateDocument(*candidate, error);
-    if (!valid)
-    {
-        if (candidate != nullptr) rmlContext->UnloadDocument(candidate);
-        return RuntimeResult<Rml::ElementDocument*>::Failure(MakeRuntimeError(
-            "UiSubsystem.EditorDocumentInvalid",
-            error.empty() ? "Editor workspace could not be loaded." : error, path.string()));
-    }
-    return RuntimeResult<Rml::ElementDocument*>::Success(candidate);
 }
 
 RuntimeResult<void> UiSubsystem::LoadFonts()
@@ -1796,17 +1445,8 @@ void UiSubsystem::ApplyDocumentState()
     uiUpdateScheduler.MarkMutation(UiMutationKind::DocumentVisibility);
     if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
         hud->SetProperty("display", developerUiVisible || immersiveView ? "none" : "block");
-    if (editorDocument != nullptr)
-    {
-        if (developerUiVisible)
-        {
-            editorDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
-            // Hide 会将焦点交还运行时文档并将其置顶；无焦点 Show 不恢复层级。
-            // 显式置顶才能避免透明运行时根节点挡住鼠标，同时不抢走游戏键盘焦点。
-            editorDocument->PullToFront();
-        }
-        else editorDocument->Hide();
-    }
+    if (editorUiShell != nullptr)
+        editorUiShell->SetVisible(developerUiVisible);
 
 }
 
@@ -1840,10 +1480,9 @@ void UiSubsystem::TryHotReload()
         return;
     }
 
-    Rml::ElementDocument* editorCandidate = nullptr;
-    if (developerUiEnabled)
+    if (developerUiEnabled && editorUiShell != nullptr)
     {
-        auto editorResult = LoadEditorDocumentCandidate();
+        auto editorResult = editorUiShell->ReloadDocument();
         if (editorResult.IsFailure())
         {
             rmlContext->UnloadDocument(documentResult.Value());
@@ -1851,18 +1490,7 @@ void UiSubsystem::TryHotReload()
             diagnostics->ReportRuntimeError("UI hot reload rejected", editorResult.Error());
             return;
         }
-        editorCandidate = editorResult.Value();
-    }
-    // 两个文档都通过解析与结构校验才替换；失败候选不改变最后有效工作区。
-    if (editorCandidate != nullptr)
-    {
         ResetRuntimeInputState();
-        if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->Detach();
-        rmlContext->UnloadDocument(editorDocument);
-        editorDocument = editorCandidate;
-        std::string error;
-        if (materialInstanceEditorPanel != nullptr)
-            materialInstanceEditorPanel->Attach(*editorDocument, error);
     }
     CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
     assetFingerprint = std::move(candidateFingerprint);
@@ -1937,8 +1565,12 @@ void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
     snapshot->viewportHeight = desc.viewportHeight;
     // 隐藏帧不能保留场景视口：RT 只应看到（可选的）DrawDebug 叠层。
     snapshot->sceneViewportEnabled = includeUiDocuments && IsSceneViewportEnabled();
-    snapshot->sceneViewportRect = snapshot->sceneViewportEnabled && materialInstanceEditorPanel != nullptr
-        ? ClipViewportRect(materialInstanceEditorPanel->GetSceneViewportRect(), desc.viewportWidth, desc.viewportHeight)
+    snapshot->sceneViewportRect = snapshot->sceneViewportEnabled &&
+        editorUiShell != nullptr
+        ? ClipViewportRect(
+            editorUiShell->GetSceneViewportRect(),
+            desc.viewportWidth,
+            desc.viewportHeight)
         : UiViewportRect{
         0,
         0,
@@ -1991,8 +1623,7 @@ bool UiSubsystem::IsDebugDrawOverlayVisible() const
     {
         return true;
     }
-    return materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorPanel->IsMotionDebugViewport();
+    return editorUiShell != nullptr && editorUiShell->IsMotionDebugViewport();
 }
 
 bool UiSubsystem::IsDebugDrawOverlayAnimating() const
@@ -2010,46 +1641,6 @@ bool UiSubsystem::IsDebugDrawOverlayAnimating() const
     return lastPublishedHadDebugOverlay;
 }
 
-void UiSubsystem::BuildDeveloperPanels()
-{
-    PROFILE_SCOPE("UI.BuildPanels");
-    if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
-    ++refreshStats.panelBuilds;
-    // Build 会重写面板 DOM/绑定：本轮必须有一次 RmlUi 更新与快照重发。
-    uiUpdateScheduler.MarkMutation(UiMutationKind::PanelBuild);
-    static const UiSceneOutlinerSection EmptyOutliner;
-    const UiSceneOutlinerSection& outliner =
-        sectionStore.Sections().sceneOutliner.data != nullptr
-        ? *sectionStore.Sections().sceneOutliner.data
-        : EmptyOutliner;
-    // 面板只消费已发布的分节载荷：日志/目录/文档/缩略图来自资产节，
-    // actor/模型/选中态来自大纲节；不再在 Build 内轮询或冻结这些数据。
-    EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
-    snapshot.logs = appliedAssets.logs;
-    snapshot.assetCatalog = appliedAssets.assetCatalog;
-    snapshot.jsonDocument = appliedAssets.jsonDocument;
-    snapshot.assetCatalogLoading = appliedAssets.assetCatalogLoading;
-    snapshot.jsonDocumentLoading = appliedAssets.jsonDocumentLoading;
-    snapshot.thumbnails = appliedAssets.thumbnails;
-    snapshot.sceneModels = outliner.models != nullptr
-        ? *outliner.models
-        : std::vector<EditorUi::MaterialInstanceModelSnapshot>{};
-    snapshot.sceneActors = outliner.actors;
-    snapshot.selectedActorIdentity = outliner.selectedActorIdentity;
-    snapshot.selectedModel = outliner.selectedModel;
-    snapshot.selectedMaterialSlotIndex = outliner.selectedMaterialSlotIndex;
-    snapshot.performance = appliedPerformance.performance;
-    materialInstanceEditorPanel->Build(snapshot);
-    if (thumbnailLibrary != nullptr)
-        thumbnailLibrary->RequestVisible(developerUiVisible ?
-            materialInstanceEditorPanel->VisibleThumbnailPaths() : std::vector<std::string>{});
-}
-
-Editor::SceneDocumentService* UiSubsystem::GetSceneDocuments() const
-{
-    return materialInstanceEditorRuntime ? materialInstanceEditorRuntime->SceneDocuments() : nullptr;
-}
-
 void UiSubsystem::UpdateInputOwnership()
 {
     inputOwnership.mode = developerUiVisible ? UiInputMode::GameAndUi : UiInputMode::GameOnly;
@@ -2058,21 +1649,22 @@ void UiSubsystem::UpdateInputOwnership()
     inputOwnership.controllerOwner = UiInputOwner::Game;
     inputOwnership.textInputOwner = UiInputOwner::None;
 
-    if (developerUiVisible && editorDocument != nullptr)
+    if (developerUiVisible && editorUiShell != nullptr)
     {
-        const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
-            materialInstanceEditorPanel->IsAssetEditorVisible();
-        if (resourceEditor) sceneViewportInputActive = false;
+        if (editorUiShell->IsAssetEditorVisible())
+            editorUiShell->SetSceneViewportInputActive(false);
+        const bool sceneViewportInputActive =
+            editorUiShell->IsSceneViewportInputActive();
         const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
         const auto* focus = rmlContext->GetFocusElement();
-        const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
-        const bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
-        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
-            materialInstanceEditorPanel->IsSceneViewportElement(hit);
-        const bool dragging = materialInstanceEditorPanel != nullptr &&
-            materialInstanceEditorPanel->IsWorkspaceDragging();
-        if (!sceneViewportInputActive && (modal || dragging || editorPointerCaptured ||
-            (hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit))
+        const bool modal = editorUiShell->HasModal();
+        const bool editorFocus = editorUiShell->IsEditorDocumentElement(focus);
+        const bool sceneHit = editorUiShell->IsSceneViewportElement(hit);
+        const bool dragging = editorUiShell->IsWorkspaceDragging();
+        if (!sceneViewportInputActive &&
+            (modal || dragging || editorUiShell->IsPointerCaptured() ||
+             (hit != nullptr && editorUiShell->IsEditorDocumentElement(hit) &&
+              !sceneHit))
             )
             inputOwnership.pointerOwner = UiInputOwner::DeveloperUi;
         if (modal || (!sceneViewportInputActive && editorFocus))
@@ -2174,7 +1766,13 @@ bool UiSubsystem::ProcessRmlGamepadAxisEvent(const PlatformEvent& event)
 
 void UiSubsystem::ResetRuntimeInputState()
 {
-    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->CancelWorkspaceDrag();
+    if (editorUiShell != nullptr)
+        editorUiShell->CancelTransientInteraction();
+    ResetRmlInputState();
+}
+
+void UiSubsystem::ResetRmlInputState()
+{
     if (rmlContext != nullptr)
     {
         // 释放按键/鼠标并离开：hover/pressed 状态已变化，下一帧必须更新。
@@ -2203,8 +1801,6 @@ void UiSubsystem::ResetRuntimeInputState()
     rmlAxisRightDown = false;
     rmlAxisUpDown = false;
     rmlAxisDownDown = false;
-    editorPointerCaptured = false;
-    sceneViewportInputActive = false;
 }
 
 void UiSubsystem::ResetRmlGamepadInputState()
@@ -2350,120 +1946,21 @@ bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
     return !propagates;
 }
 
-bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
-{
-    if (editorDocument == nullptr) return false;
-    const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
-    const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorPanel->IsAssetEditorVisible();
-    if (resourceEditor) sceneViewportInputActive = false;
-    const Rml::Element* focus = rmlContext->GetFocusElement();
-    bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
-    switch (event.type)
-    {
-    case PlatformEventType::MouseMove:
-    case PlatformEventType::MouseButtonDown:
-    case PlatformEventType::MouseButtonUp:
-    case PlatformEventType::MouseWheel:
-    {
-        // 点击/滚轮可能改变面板本地状态（标签、展开、滚动目标），请求下一帧
-        // 构建一次；悬停移动不请求，避免鼠标移动导致面板重建。
-        if (event.type != PlatformEventType::MouseMove)
-        {
-            RequestPanelBuild();
-        }
-        pointerX = event.mouseX;
-        pointerY = event.mouseY;
-        const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
-        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
-            materialInstanceEditorPanel->IsSceneViewportElement(hit);
-        const bool editorHit = hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit;
-        if (ShouldReleaseScenePointerForEditor(event.type, editorHit))
-            sceneViewportInputActive = false;
-        const bool captured = editorPointerCaptured ||
-            (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
-        if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
-        {
-            // 右键在运行时输入里没有任何绑定：相机看的是相对鼠标增量，拾取只认左键。
-            // 视口命中的右键因此交给编辑器文档，右键上下文菜单才有 RmlUi 事件与坐标；
-            // 返回 true 表示这次右键已被编辑器消费，同一事件不再走场景输入。
-            if (event.mouseButton == PlatformMouseButton::Right)
-            {
-                ProcessRuntimeUiEvent(event);
-                return true;
-            }
-            // 图像属于 editor DOM，但内部场景输入归游戏；不让点击把焦点交给文档根节点。
-            if (event.type == PlatformEventType::MouseButtonDown)
-            {
-                sceneViewportInputActive = true;
-                if (editorFocus) rmlContext->GetFocusElement()->Blur();
-            }
-            if (event.type == PlatformEventType::MouseMove) ProcessRuntimeUiEvent(event);
-            return false;
-        }
-        if (event.type == PlatformEventType::MouseButtonDown)
-        {
-            sceneViewportInputActive = false;
-            editorPointerCaptured = captured || editorHit || modal;
-            if (!editorHit && !modal && editorFocus)
-                rmlContext->GetFocusElement()->Blur();
-        }
-        const bool consumed = ProcessRuntimeUiEvent(event);
-        if (event.type == PlatformEventType::MouseButtonUp && rmlPressedMouseButtons.empty())
-            editorPointerCaptured = false;
-        return consumed || editorHit || captured || modal;
-    }
-    case PlatformEventType::MouseLeave:
-        if (materialInstanceEditorPanel) materialInstanceEditorPanel->CancelModelPreviewDrag();
-        return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
-    case PlatformEventType::KeyUp:
-        RequestPanelBuild();
-        if (rmlPressedKeyboardKeys.count(event.key) != 0)
-            return ProcessRuntimeUiEvent(event) || editorFocus || modal;
-        return false;
-    case PlatformEventType::KeyDown:
-    case PlatformEventType::TextInput:
-    case PlatformEventType::TextEditing:
-    case PlatformEventType::GamepadButtonDown:
-    case PlatformEventType::GamepadButtonUp:
-        RequestPanelBuild();
-        if (editorFocus || modal)
-        {
-            ProcessRuntimeUiEvent(event);
-            return true;
-        }
-        return false;
-    case PlatformEventType::GamepadAxisMotion:
-        // 摇杆轴是连续输入：只转发给 RmlUi 做导航，不请求面板重建。
-        if (editorFocus || modal)
-        {
-            ProcessRuntimeUiEvent(event);
-            return true;
-        }
-        return false;
-    default:
-        // 焦点与模态只独占输入；Quit 等生命周期事件必须继续交给 EngineLoop。
-        return false;
-    }
-}
-
 void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
 {
-    // 打开 JSON 只改变资产/文档节，不牵动脚本或大纲。
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::Assets));
-    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
+    if (editorUiShell != nullptr)
+        editorUiShell->RequestOpenJsonAsset(path);
 }
 
 bool UiSubsystem::CancelBlueprintAssetDrag()
 {
-    return materialInstanceEditorPanel && materialInstanceEditorPanel->CancelBlueprintAssetDrag();
+    return editorUiShell != nullptr && editorUiShell->CancelBlueprintAssetDrag();
 }
 
 void UiSubsystem::RequestRefreshAssetCatalog()
 {
-    RequestViewModelRefresh(UiSectionBit(UiSectionId::Assets));
-    if (thumbnailLibrary != nullptr) thumbnailLibrary->Refresh();
-    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
+    if (editorUiShell != nullptr)
+        editorUiShell->RequestRefreshAssetCatalog();
 }
 
 void UiSubsystem::RequestRuntimeAction(UiAction action)
@@ -2508,13 +2005,6 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
 {
     if (event.type == PlatformEventType::KeyDown && !event.repeat)
     {
-        if (event.control && event.key == PlatformKey::S && developerUiVisible &&
-            materialInstanceEditorPanel != nullptr &&
-            !materialInstanceEditorPanel->HasModal())
-        {
-            materialInstanceEditorPanel->RequestSave();
-            return true;
-        }
         if ((event.key == PlatformKey::F11 || event.key == PlatformKey::F1) && developerUiEnabled)
         {
             UiAction action;
@@ -2525,6 +2015,96 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
     }
 
     return false;
+}
+
+RuntimeResult<void> UiSubsystem::SetEditorUiShell(IEditorUiShell* shell)
+{
+    if (editorUiShell == shell)
+        return RuntimeResult<void>::Success();
+
+    if (editorUiShell != nullptr)
+        editorUiShell->Shutdown();
+    editorUiShell = nullptr;
+    // A replacement shell restarts its section counters at zero; never carry the
+    // previous shell's applied versions across the detach/attach boundary.
+    appliedEditorSectionVersions = UiSectionVersions{};
+
+    if (shell == nullptr)
+    {
+        UpdateInputOwnership();
+        return RuntimeResult<void>::Success();
+    }
+    if (rmlContext == nullptr)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "UiSubsystem.EditorShellWithoutContext",
+            "Editor UI shell requires an initialized runtime UI context."));
+    }
+
+    UiEditorShellInit init;
+    init.context = rmlContext;
+    init.renderInterface = &rmlRenderInterface;
+    init.bridge = this;
+    init.diagnostics = diagnostics;
+    init.assetRoot = desc.assetRoot;
+    init.sceneRoot = desc.sceneRoot;
+    init.previewAdapter = desc.previewAdapter;
+    init.enabled = developerUiEnabled;
+    init.visible = developerUiVisible;
+
+    RuntimeResult<void> result = shell->Initialize(init);
+    if (result.IsFailure())
+        return result;
+
+    editorUiShell = shell;
+    editorUiShell->Resize(desc.viewportWidth, desc.viewportHeight);
+    UpdateInputOwnership();
+    return RuntimeResult<void>::Success();
+}
+
+bool UiSubsystem::ProcessRmlEvent(const PlatformEvent& event)
+{
+    return ProcessRuntimeUiEvent(event);
+}
+
+void UiSubsystem::MarkPanelBuildMutation()
+{
+    uiUpdateScheduler.MarkMutation(UiMutationKind::PanelBuild);
+}
+
+void UiSubsystem::BeginDocumentValidation()
+{
+    rmlSystemInterface.BeginCandidateValidation();
+}
+
+bool UiSubsystem::EndDocumentValidation(std::string& outError)
+{
+    return rmlSystemInterface.EndCandidateValidation(outError);
+}
+
+void UiSubsystem::RecordSectionPublish(UiSectionId id)
+{
+    ++refreshStats.sectionPublishes;
+    ++refreshStats.sectionPublishesById[static_cast<size_t>(id)];
+}
+
+void UiSubsystem::RecordPanelBuild()
+{
+    ++refreshStats.panelBuilds;
+}
+
+void UiSubsystem::RecordRuntimeViewUpdate()
+{
+    ++refreshStats.runtimeViewUpdates;
+}
+
+void UiSubsystem::ClearEditorUiShell(IEditorUiShell* shell)
+{
+    if (editorUiShell != shell)
+        return;
+    editorUiShell = nullptr;
+    appliedEditorSectionVersions = UiSectionVersions{};
+    UpdateInputOwnership();
 }
 
 void UiSubsystem::QueueAction(UiAction action)

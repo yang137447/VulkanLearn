@@ -256,11 +256,11 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         std::shared_ptr<RenderableObject> renderableObject;
         if (!loadContext.offlineOnly)
         {
-        const std::shared_ptr<RenderableObject>* cachedRenderableObject =
+        const std::shared_ptr<RenderableObject> cachedRenderableObject =
             resourceCache.GetRenderableObject(renderableObjectKey);
-        if(cachedRenderableObject != nullptr && *cachedRenderableObject != nullptr)
+        if(cachedRenderableObject != nullptr)
         {
-            renderableObject = *cachedRenderableObject;
+            renderableObject = cachedRenderableObject;
             if (groupBinding)
             {
                 const std::string groupSimulationKey =

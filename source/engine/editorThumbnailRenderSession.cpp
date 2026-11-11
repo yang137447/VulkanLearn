@@ -62,6 +62,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     EnvironmentIblBaker ibl;
     ParticleRenderer particleRenderer;
     WorldBuildPlan plan;
+    WorldAssemblyAssets assemblyAssets;
     RendererMeshLoadResult materialPreviewMesh;
     EditorThumbnailJob<EditorThumbnailPreparationResult> preparation;
     std::optional<EditorThumbnailPreparationResult> preparedAsset;
@@ -99,6 +100,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         resolved = {};
         scene = {};
         plan = {};
+        assemblyAssets = {};
         preparedAsset.reset();
         cache = baseCache->BeginActiveWorldCandidate(0);
         graphics = baseGraphics;
@@ -182,7 +184,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 // 同一会话的材质缩略图只换 MI；固定球的导入、切线、包围盒与 GPU 几何只准备一次。
                 // 基底只保留不可变 renderable，不保留本次 MI、贴图或对象 descriptor。
                 for (const auto& object : loaded.objectPlans)
-                    baseCache->BindRenderableObject(object.meshKey, *cache.GetRenderableObject(object.meshKey));
+                    baseCache->BindRenderableObject(object.meshKey, cache.GetRenderableObject(object.meshKey));
                 materialPreviewMesh = loaded;
             }
             preparedAsset.reset();
@@ -262,7 +264,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
 
     void ConfigureScene()
     {
-        auto world = Require(WorldBuilder().BuildFromLoadedScene(1, plan, 4));
+        auto world = Require(WorldBuilder().BuildFromLoadedScene(
+            1, plan, assemblyAssets, 4));
         // 粒子预览使用 SC_particle_preview 自带相机；ModelPreviewCamera 只认识
         // SC_model_preview 的模型包围盒，不能套到固定粒子预览场景上。
         if (!particleAssetThumbnail)
@@ -306,20 +309,19 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             // 缩略图与主渲染共用同一套粒子光照合同：场景灯/粒子灯按 image
             // 取各自的 SSBO，IBL 用本会话已烘焙的预过滤 cubemap。
             vk::DescriptorImageInfo environmentCubeDescriptor{};
-            const std::shared_ptr<Texture>* prefilteredEnvironment =
+            const std::shared_ptr<Texture> prefilteredEnvironment =
                 cache.GetGlobalTexture("prefilteredEnvironmentCube");
-            if (prefilteredEnvironment != nullptr &&
-                *prefilteredEnvironment != nullptr)
+            if (prefilteredEnvironment != nullptr)
             {
                 environmentCubeDescriptor =
-                    (*prefilteredEnvironment)->GetDescriptorInfo();
+                    prefilteredEnvironment->GetDescriptorInfo();
             }
             vk::DescriptorImageInfo brdfLutDescriptor{};
-            const std::shared_ptr<Texture>* brdfLut =
+            const std::shared_ptr<Texture> brdfLut =
                 cache.GetGlobalTexture("brdfLut");
-            if (brdfLut != nullptr && *brdfLut != nullptr)
+            if (brdfLut != nullptr)
             {
-                brdfLutDescriptor = (*brdfLut)->GetDescriptorInfo();
+                brdfLutDescriptor = brdfLut->GetDescriptorInfo();
             }
             particleRenderer.SetSceneLightingResources(
                 frames.GetLightBufferInfos(),
@@ -454,8 +456,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             auto command = backend.BeginSingleTimeCommands();
             try
             {
-                if (mip == 0) ibl.RecordSphericalHarmonics(command, *cube, 0);
-                ibl.RecordPrefilterMip(command, *cube, 0, mip++);
+                if (mip == 0) ibl.RecordSphericalHarmonics(command, cube, 0);
+                ibl.RecordPrefilterMip(command, cube, 0, mip++);
                 if (mip == ibl.GetPrefilterMipCount()) { ibl.RecordCommit(command); ++stage; objectIndex = 0; }
                 backend.EndSingleTimeCommands(command);
             }
@@ -479,8 +481,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 RendererMeshLoadResult loaded;
                 if (!LoadPreviewMesh(plan.sceneJson.at("objects").at(object.objectIndex),
                     *object.meshLoadRequest, context, loaded)) break;
-                plan.meshObjectPlans.insert(plan.meshObjectPlans.end(), loaded.objectPlans.begin(), loaded.objectPlans.end());
-                if (loaded.windResponseProfile) plan.windResponseProfiles.push_back(*loaded.windResponseProfile);
+                assemblyAssets.meshObjectPlans.insert(assemblyAssets.meshObjectPlans.end(), loaded.objectPlans.begin(), loaded.objectPlans.end());
+                if (loaded.windResponseProfile) assemblyAssets.windResponseProfiles.push_back(*loaded.windResponseProfile);
                 ++objectIndex;
             }
             else ++stage;

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -425,6 +426,9 @@ private:
     bool hasSubmittedFrame = false;
     uint32_t lastSubmittedFrameIndex = 0;
     std::atomic<bool> swapchainRecreateRequired{false};
+    // Protects the raw-handle -> RHI-handle maps plus image debug names/extents.
+    // Never held across RHI map lookups or Vulkan API calls.
+    mutable std::shared_mutex resourceMapMutex;
     std::unordered_map<VkBuffer, RHIBufferHandle> bufferHandlesByBuffer;
     std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;
     std::unordered_map<VkImage, RHIImageHandle> imageHandlesByImage;

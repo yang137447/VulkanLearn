@@ -10,51 +10,28 @@
 #include "editor/ui/editorSceneActorTypes.h"
 #include "editor/ui/materialInstanceEditorView.h"
 #include "editor/scene/editorActorProperty.h"
+#include "world/actorIdentity.h"
 
 namespace VL::EditorUi
 {
 
-// 类型规范表，不决定 actor 排列顺序，不生成大纲分组。
-// key 同时是类型过滤器的取值和详情分组的键后缀；icon 是资产相对路径，
-// 只是类型图示，不代表缩略图。
-struct EditorSceneActorGroupSpec
-{
-    EditorSceneActorType type = EditorSceneActorType::Mesh;
-    const char* key = "";
-    const char* title = "";
-    const char* icon = "";
-};
-
-const std::vector<EditorSceneActorGroupSpec>& SceneActorGroupSpecs();
-const EditorSceneActorGroupSpec* FindSceneActorGroupSpec(EditorSceneActorType type);
-const EditorSceneActorGroupSpec* FindSceneActorGroupSpecByKey(const std::string& key);
-const char* SceneActorGroupTitle(EditorSceneActorType type);
-const char* SceneActorGroupIcon(EditorSceneActorType type);
+// 身份/类型表由运行时 world/actorIdentity.h 持有；这里保留原有的
+// EditorUi:: 限定写法，编辑器调用点不变。
+using VL::EditorSceneActorGroupSpec;
+using VL::EditorSceneActorIdentity;
+using VL::FindSceneActorGroupSpec;
+using VL::FindSceneActorGroupSpecByKey;
+using VL::ParseSceneActorIdentity;
+using VL::SceneActorGroupIcon;
+using VL::SceneActorGroupSpecs;
+using VL::SceneActorGroupTitle;
+using VL::SceneActorHasVisibilityToggle;
+using VL::SceneActorIdentity;
 
 // 大纲列表以 shared_ptr<const ...> 进入面板快照（与资产目录同一约定）：
 // 逐帧不深拷贝 actor 数组；列表尚未发布时返回共享的空列表。
 using EditorSceneActorList = std::vector<EditorSceneActorSnapshot>;
 const EditorSceneActorList& SceneActorList(const std::shared_ptr<const EditorSceneActorList>& actors);
-
-// 稳定 actor 身份：mesh 用场景对象名，其余类型用各自的 World 名字（灯光名、场景名等）。
-// 场景风全场景至多一个且没有名字，用固定名字 "scene"（身份即 "wind|scene"）。
-std::string SceneActorIdentity(EditorSceneActorType type, const std::string& name);
-
-// 稳定身份的逆解析：分隔符之前是分组键（= 场景对象 type），之后是对象名。
-// 执行边界用它把 UI 传来的身份还原成类型与名字，再交给 World 的可见性写入端；
-// 名字本身可以含 '|'，因此只按第一个分隔符切分。
-struct EditorSceneActorIdentity
-{
-    EditorSceneActorType type = EditorSceneActorType::Mesh;
-    std::string name;
-};
-
-bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
-
-// 可见性开关只覆盖渲染路径真正持有的对象：网格/地形、四类灯与粒子系统。
-// 相机、环境、场景风与 Blueprint 没有逐 actor 的渲染侧可见性状态，
-// 因此不为它们显示一个点了没有效果的眼睛。
-bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
 // actor 与槽行共用一个窗口化行下标空间；actor 行带 sceneActors 里的下标，
 // 槽行（展开的 mesh actor 的材质槽）带动作分量下标与选中比较用的 World 槽号。
