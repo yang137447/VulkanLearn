@@ -119,6 +119,15 @@ revision、源摘要冲突检查和原子保存，不是第二套文件编辑器
   `terrain.save`，重读走 `terrain.reload`。TR 资产页仍不显示层纹理预览；Landscape
   层库的 source-set 预览见下一节。关闭标签不会
   提交草稿，重新打开同一路径仍会看到服务里的未保存草稿。
+- Terrain 标签页的 **Terrain Material** 区块显示 TR 的
+  `materialInstancePath`，并通过 `material.open` 打开对应 MI。活动 MI 正是该
+  TR 的材质时，区块直接显示 `u_uvScale` 并用 `material.set_parameter` 提交；
+  草稿、revision、批量合并和保存仍由 MI 文档服务拥有，不进入 `terrain.modify`。
+  没有活动 MI 时只提供打开入口，不在 TR 里写第二份全局 tiling。多 tile 资产由
+  生成器输出一份共享 MI，所有 tile TR 引用同一路径，因此调整一次即作用于整片地形。
+- Landscape 面板也显示同样的 **Terrain Material** 区块：优先使用选中的 terrain
+  actor，未选中时回退到场景里第一个 terrain placement；`Global UV Tiling`
+  输入框只在对应 MI 已打开时可编辑，并复用同一 MI 草稿路径。
 
 ### Landscape 层库 source-set 预览
 
@@ -824,6 +833,8 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
   在注册第一个 layer-table 地形时把该值写进 `TerrainStreamingState::layerUvScale`
   并打印 `[TerrainLayer] u_uvScale=<v> resolved from M_terrain instance (<TR>)`；
   同一 World 内所有 layer-VT 地形必须给出相同的值，否则加载期直接抛错。
+  多 tile Pegasus 资产共享同一份 MI（`MI_terrain_pegasus_island.json`），
+  不再为每个 tile 复制 `u_uvScale`。
   `terrainFeedback` pass 的材质实例**不是**权威来源：`RenderSystem` 每帧把
   `layerUvScale` 推给 pass 材质，因此 `MI_terrainFeedback.json` 里不要重复写
   `u_uvScale`（写了也不生效，只会造成两个来源的错觉）。

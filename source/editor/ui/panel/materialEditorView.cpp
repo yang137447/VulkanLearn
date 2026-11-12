@@ -288,7 +288,8 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
             : std::filesystem::path(active->path).filename().string()));
         SetMarkup("resource-preview-kind", "Terrain");
         SetMarkup("resource-preview-path", Text(active->path));
-        terrainAssetEditor.Build(terrain, active->loading);
+        terrainAssetEditor.Build(terrain, active->loading,
+            snapshot.activeDocument ? &*snapshot.activeDocument : nullptr);
         return;
     }
     terrainAssetEditor.Build(nullptr, false);

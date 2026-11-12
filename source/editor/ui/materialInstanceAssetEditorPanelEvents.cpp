@@ -365,6 +365,24 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
                 }
             }
         }
+        else if (event.GetType() == "dblclick" && action == "terrain-layer-select")
+        {
+            // 双击同一颗球在展开/收起之间切换；单击只做当前层选择。
+            const int rawIndex = element->GetAttribute<int>("data-index", -1);
+            if (rawIndex >= 0)
+            {
+                const uint32_t index = static_cast<uint32_t>(rawIndex);
+                if (terrainLayerDetailsOpen && terrainLayerDetailsLayer == index)
+                    terrainLayerDetailsOpen = false;
+                else
+                {
+                    terrainPaintLayer = index;
+                    terrainLayerDetailsLayer = index;
+                    terrainLayerDetailsOpen = true;
+                }
+                RefreshTerrainLayerLibrary();
+            }
+        }
         // 条目派发完成后才收起菜单：动作本身不读取"菜单是否打开"这个状态。
         // 禁用条目在上面就已返回，因此菜单保持打开（与菜单栏的禁用条目一致）。
         if (event.GetType() == "click" && IsInsideContextMenu(element)) CloseContextMenu();

@@ -162,6 +162,11 @@ public:
         const std::shared_ptr<Texture>& texture,
         std::optional<std::string> textureAssetIdentity,
         std::optional<std::string> textureCacheIdentity);
+    // 运行时生成的地形页/层资源替换同名占位纹理时保留作者资产 identity，
+    // 数值预览仍能证明这些槽位没有改贴图。
+    void SetTextureKeepingIdentity(
+        const std::string& textureName,
+        const std::shared_ptr<Texture>& texture);
     //获取纹理
     std::shared_ptr<Texture> GetTexture(const std::string& textureName) const;
     //检查纹理是否存在

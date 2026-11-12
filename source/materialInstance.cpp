@@ -188,6 +188,14 @@ void MaterialInstance::SetTexture(const std::string& textureName, const std::sha
     textureBindingIdentities.erase(textureName);
 }
 
+void MaterialInstance::SetTextureKeepingIdentity(
+    const std::string& textureName,
+    const std::shared_ptr<Texture>& texture)
+{
+    std::unique_lock<std::shared_mutex> lock(stateMutex);
+    textures[textureName] = texture;
+}
+
 void MaterialInstance::SetTexture(
     const std::string& textureName,
     const std::shared_ptr<Texture>& texture,

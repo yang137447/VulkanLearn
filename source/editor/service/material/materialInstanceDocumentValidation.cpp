@@ -2,6 +2,7 @@
 
 #include "editor/service/materialInstanceDocumentService.h"
 #include "material/validation/materialAssetValidator.h"
+#include "resource/image/textureAssetValidation.h"
 
 #include <array>
 #include <cmath>
@@ -188,37 +189,53 @@ void MaterialInstanceDocumentService::ValidateTextureReference(
     }
 
     const Json textureJson = ReadJsonFile(texturePath);
-    if (!textureJson.is_object() ||
-        textureJson.value("type", std::string()) != "texture")
-    {
-        ThrowServiceError(
-            EditorErrorCode::InvalidTextureAssetReference,
-            "texture asset has invalid type: " + normalized);
-    }
-    const std::string source =
-        ReadStringField(textureJson, "source", normalized);
     try
     {
-        const std::string normalizedSource =
-            NormalizeRelativePath(source);
-        if (config.validateTextureSources)
-        {
-            static_cast<void>(ResolveResourceFile(normalizedSource));
-        }
-    }
-    catch (const ServiceError& exception)
-    {
-        ThrowServiceError(
-            EditorErrorCode::InvalidTextureAssetReference,
-            "texture source is not available for " + normalized + ": " +
-                std::string(exception.what()));
+        ValidateTextureAssetJson(textureJson);
     }
     catch (const std::exception& exception)
     {
         ThrowServiceError(
             EditorErrorCode::InvalidTextureAssetReference,
-            "texture source is invalid for " + normalized + ": " +
-                exception.what());
+            "texture asset has invalid type: " + normalized + " (" +
+                exception.what() + ")");
+    }
+    // 材质槽同时接受单图和 textureArray；terrain 层图集使用的就是后者。
+    std::vector<std::string> sources;
+    if (textureJson.value("type", std::string()) == "textureArray")
+    {
+        for (const Json& source : textureJson.at("sources"))
+            sources.push_back(source.get<std::string>());
+    }
+    else
+    {
+        sources.push_back(ReadStringField(textureJson, "source", normalized));
+    }
+    for (const std::string& source : sources)
+    {
+        try
+        {
+            const std::string normalizedSource =
+                NormalizeRelativePath(source);
+            if (config.validateTextureSources)
+            {
+                static_cast<void>(ResolveResourceFile(normalizedSource));
+            }
+        }
+        catch (const ServiceError& exception)
+        {
+            ThrowServiceError(
+                EditorErrorCode::InvalidTextureAssetReference,
+                "texture source is not available for " + normalized + ": " +
+                    std::string(exception.what()));
+        }
+        catch (const std::exception& exception)
+        {
+            ThrowServiceError(
+                EditorErrorCode::InvalidTextureAssetReference,
+                "texture source is invalid for " + normalized + ": " +
+                    exception.what());
+        }
     }
 }
 void MaterialInstanceDocumentService::ValidateWorkingState(

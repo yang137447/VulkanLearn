@@ -58,6 +58,28 @@ public:
     std::vector<EditorCommandEnvelope> commands;
 };
 
+class CapturingMaterialEditSink : public ITerrainMaterialEditSink
+{
+public:
+    struct Call
+    {
+        std::string materialInstancePath;
+        std::string parameter;
+        float value = 0.0f;
+    };
+
+    bool QueueMaterialFloat(
+        const std::string& materialInstancePath,
+        const std::string& parameter,
+        float value) override
+    {
+        calls.push_back({materialInstancePath, parameter, value});
+        return true;
+    }
+
+    std::vector<Call> calls;
+};
+
 class TerrainAssetEditorTest : public testing::Test
 {
 protected:
@@ -75,6 +97,7 @@ protected:
         ASSERT_NE(document, nullptr);
         document->Show();
         controller.SetCommandSink(&sink);
+        controller.SetMaterialEditSink(&materialSink);
         std::string error;
         ASSERT_TRUE(controller.Attach(*document, error)) << error;
         authored = Payload();
@@ -124,6 +147,7 @@ protected:
     Rml::Context* context = nullptr;
     Rml::ElementDocument* document = nullptr;
     CapturingSink sink;
+    CapturingMaterialEditSink materialSink;
     TerrainAssetEditorController controller;
     EditorAssetDocumentResultPayload authored;
 };
@@ -226,6 +250,59 @@ TEST_F(TerrainAssetEditorTest, AddLayerAvoidsExistingNamesAfterMiddleRemoval)
     const auto layers = std::get<Json>(payload.changes[0].value);
     ASSERT_EQ(layers.size(), 3u);
     EXPECT_EQ(layers[2]["name"], "Layer_4");
+}
+
+TEST_F(TerrainAssetEditorTest, TerrainMaterialButtonOpensAssignedMaterialInstance)
+{
+    auto* open = Find("terrain-material-open");
+    ASSERT_NE(open, nullptr);
+    ASSERT_TRUE(controller.HandleClick(*open, "terrain-material-open"));
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& command = sink.commands[0];
+    EXPECT_EQ(command.type, EditorCommandType::OpenMaterialInstanceAsset);
+    const auto& payload = std::get<OpenMaterialInstanceAssetPayload>(
+        command.payload);
+    EXPECT_EQ(payload.assetPath, "Maps/MI_test.json");
+}
+
+TEST_F(TerrainAssetEditorTest, ActiveTerrainMaterialEditsGlobalTilingThroughMaterialSink)
+{
+    MaterialInstanceDocumentSnapshot material;
+    material.assetPath = "Maps/MI_test.json";
+    material.revision = 7;
+    EditorParameterSnapshot tiling;
+    tiling.name = "u_uvScale";
+    tiling.type = EditorParameterType::Float;
+    tiling.effectiveValue.type = EditorParameterType::Float;
+    tiling.effectiveValue.values[0] = 4.0f;
+    material.parameters.push_back(tiling);
+
+    controller.Build(&authored, false, &material);
+    context->Update();
+
+    auto* input = dynamic_cast<Rml::ElementFormControl*>(
+        Find("terrain-material-u_uvScale"));
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetValue(), "4");
+    input->SetValue("8.5");
+    ASSERT_TRUE(controller.HandleChange(*input, "terrain-material-parameter"));
+
+    ASSERT_TRUE(sink.commands.empty());
+    ASSERT_EQ(materialSink.calls.size(), 1u);
+    EXPECT_EQ(materialSink.calls[0].materialInstancePath, "Maps/MI_test.json");
+    EXPECT_EQ(materialSink.calls[0].parameter, "u_uvScale");
+    EXPECT_FLOAT_EQ(materialSink.calls[0].value, 8.5f);
+}
+
+TEST_F(TerrainAssetEditorTest, TerrainMaterialTilingRequiresAnOpenMaterial)
+{
+    auto* open = Find("terrain-material-open");
+    ASSERT_NE(open, nullptr);
+    ASSERT_TRUE(controller.HandleClick(*open, "terrain-material-open"));
+    sink.commands.clear();
+
+    auto* input = Find("terrain-material-u_uvScale");
+    EXPECT_EQ(input, nullptr);
 }
 
 } // namespace

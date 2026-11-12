@@ -424,10 +424,20 @@ Generated\BlenderPegasusGN_v2\
   Global\Source\heightmap_gn.png
   Global\Source\mask_gn_*.png
   tile_00..tile_15\Source\heightmap_gn_tile.png
-  tile_00..tile_15\TR_*.json / MI_*.json
+  tile_00..tile_15\TR_*.json
+  MI_terrain_pegasus_island.json
   tile_layout.json
   SC_terrain_pegasus_4x4.json
 ```
+
+`assemble_pegasus_tiles.py` 只输出一份共享地形 MI，所有 tile TR 的
+`materialInstancePath` 指向它；`u_uvScale`、detail/macro 参数因此只需在一个
+材质实例里调整。旧的 per-tile `MI_*.json` 会在重新装配时删除。
+
+合并场景默认还会放置 `Maps/SC_gasp/Blueprints/BP_gasp_character.json`
+（`GASP Player`，状态机角色），用于地形跑图验收；这要求 C# Blueprint 构建。
+用 `--character-blueprint ""` 可以关闭角色，用 `--character-position X Y Z`
+覆盖出生点（cm）。
 
 `--reuse-global` 跳过全局造型与侵蚀；`--skip-erode` 只跳过侵蚀；
 `--split-only` 只生成 tile 输入与 manifest，不跑 16 次资产转换。

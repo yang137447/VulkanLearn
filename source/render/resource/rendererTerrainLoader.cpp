@@ -208,16 +208,20 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             materialInstance->SetParameter(
                 "u_pageResolution",
                 static_cast<float>(TerrainPageManager::PageResolution));
-        materialInstance->SetTexture("layerTable", streamingState.layerResources.layerTable);
+        materialInstance->SetTextureKeepingIdentity(
+            "layerTable", streamingState.layerResources.layerTable);
         if (!streamingState.pageResources.pageTable ||
             !streamingState.pageResources.layerIds ||
             !streamingState.pageResources.layerWeights)
         {
             throw std::runtime_error("Terrain page resources are not initialized");
         }
-        materialInstance->SetTexture("pageTable", streamingState.pageResources.pageTable);
-        materialInstance->SetTexture("layerIds", streamingState.pageResources.layerIds);
-        materialInstance->SetTexture("layerWeights", streamingState.pageResources.layerWeights);
+        materialInstance->SetTextureKeepingIdentity(
+            "pageTable", streamingState.pageResources.pageTable);
+        materialInstance->SetTextureKeepingIdentity(
+            "layerIds", streamingState.pageResources.layerIds);
+        materialInstance->SetTextureKeepingIdentity(
+            "layerWeights", streamingState.pageResources.layerWeights);
         // L3：每 mip 一张页表 + 三张 atlas；mode 0 不使用，但 descriptor
         // 仍必须是合法纹理，因此统一绑定 L2 创建的共享资源。
         for (uint32_t mip = 0;

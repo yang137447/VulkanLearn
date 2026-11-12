@@ -59,6 +59,7 @@ cmd /c "artifacts\run_hython.bat tool\houdini-terrain-import\export_pegasus_isla
 & $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
   --resource-root $res `
   --tile-layout "$res\Generated\HoudiniPegasusIsland\tile_layout.json" `
+  --shared-material-name MI_terrain_pegasus_island `
   --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" --verbose
 ```
 
@@ -107,6 +108,7 @@ $res = "D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees\terrain-openworld\VukanLear
 & $py tool\blender-terrain-import\assemble_pegasus_tiles.py `
   --resource-root $res `
   --tile-layout "$res\Generated\HoudiniPegasus4km\tile_layout.json" `
+  --shared-material-name MI_terrain_pegasus_island `
   --water-plane-mesh "Generated/HoudiniPegasusIsland/Water/SM_water_plane.json" `
   --verbose
 ```
@@ -125,9 +127,13 @@ Generated\HoudiniPegasus4km\
   Source\Layer_g_{base,rock,water,debris,sediment}.png
   houdini_pegasus_4km_source.json   # 描述符（含原始导出来源）
   houdini_pegasus_import.json       # prepare_pegasus_import 产出
-  tile_00..tile_15\ TR/MI/SC
+  tile_00..tile_15\ TR/SC
+  MI_terrain_pegasus_island.json    # 所有 tile 共享的地形材质实例
   SC_terrain_pegasus_4x4.json       # 合并场景
 ```
+
+合并场景默认放置 `GASP Player`（`Maps/SC_gasp/Blueprints/BP_gasp_character.json`），
+用于地形跑图；该角色需要启用 C# Blueprint 构建。
 
 remap 规则（Houdini 官方曲线未导出，暂用分位数定标）：
 

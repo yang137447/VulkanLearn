@@ -166,6 +166,18 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
         panelAfterMaterialClose.clear();
         activateMaterialDocument = false;
         if (closingMaterialActive) ActivateWorkspacePanel(next);
+        // 预览 World 不会自己消失；最后一份材质关闭时必须显式回到关卡。
+        const bool previewWorld =
+            std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+                "SC_model_preview.json" ||
+            std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+                "SC_particle_preview.json";
+        if (snapshot.documentTabs.empty() && resourceEditor.Tabs().empty() &&
+            previewWorld)
+        {
+            requestedPreviewMaterial = false;
+            ReturnToLevel();
+        }
     }
     else if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
         !snapshot.selectedDocumentPath.empty())

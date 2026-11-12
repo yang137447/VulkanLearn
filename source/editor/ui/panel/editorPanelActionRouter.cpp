@@ -61,6 +61,50 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     const std::string& action)
 {
     if (panel.terrainAssetEditor.HandleClick(element, action)) return;
+    if (action == "terrain-material-open")
+    {
+        const std::string path = panel.TerrainMaterialPath();
+        if (path.empty()) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::OpenMaterialInstanceAsset;
+        command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
+        panel.Submit(std::move(command));
+        panel.localStatus = "Opening terrain material: " + path;
+        return;
+    }
+    if (action == "terrain-asset-open")
+    {
+        const std::string path = panel.TerrainAssetPath();
+        if (path.empty()) return;
+        panel.OpenResourceAsset(path, EditorAssetKind::Terrain);
+        panel.localStatus = "Opening terrain asset: " + path;
+        return;
+    }
+    if (action == "terrain-layer-details-close")
+    {
+        panel.terrainLayerDetailsOpen = false;
+        panel.RefreshTerrainLayerLibrary();
+        return;
+    }
+    if (action == "terrain-layer-save")
+    {
+        const std::string path = panel.TerrainAssetPath();
+        if (path.empty()) return;
+        const auto* terrain = panel.TerrainDocument(path);
+        if (terrain == nullptr)
+        {
+            panel.localStatus = "Terrain asset is still loading.";
+            return;
+        }
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SaveTerrainDocument;
+        command.expectedDocumentRevision = terrain->documentRevision;
+        command.payload = MaterialInstanceAssetPathPayload{path};
+        panel.Submit(std::move(command));
+        panel.localStatus =
+            "Saved terrain asset. Reload the scene to rebuild terrain.";
+        return;
+    }
     if (action == "terrain-asset-save" || action == "terrain-asset-revert")
     {
         const auto* tab = panel.resourceEditor.ActiveTab();
@@ -626,10 +670,12 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
     }
     else if (action == "terrain-layer-select")
     {
-        const EditorSceneActorSnapshot* actor = panel.SelectedTerrainActor();
+        // 层库在未显式选中地形时会回退到第一个 placement，点击也必须走同一来源。
+        const EditorSceneActorSnapshot* actor = panel.TerrainMaterialActor();
         const size_t count = actor == nullptr ? 0 : actor->terrainPlan->desc.layers.size();
-        const size_t index = element.GetAttribute<size_t>("data-index", count);
-        if (index < count)
+        // RmlUi 没有 size_t 的属性转换；用 int 读取，否则所有卡片都落到默认层。
+        const int index = element.GetAttribute<int>("data-index", -1);
+        if (index >= 0 && static_cast<size_t>(index) < count)
         {
             panel.terrainPaintLayer = static_cast<uint32_t>(index);
             panel.RefreshTerrainLayerLibrary();

@@ -43,6 +43,25 @@ def _parse_args() -> argparse.Namespace:
         help="camera far clip in cm for merged scenes (default 60 km so the "
         "100 km sea plane reaches past the top of the frame)",
     )
+    parser.add_argument(
+        "--shared-material-name",
+        default="MI_terrain_pegasus_island",
+        help="shared terrain MI basename (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--character-blueprint",
+        default="Maps/SC_valley_echo/Blueprints/BP_echo_character.json",
+        help="C# player character blueprint placed in the merged scene; "
+        "empty disables the character",
+    )
+    parser.add_argument(
+        "--character-position",
+        type=float,
+        nargs=3,
+        default=[5000.0, 18660.9, 25000.0],
+        metavar=("X", "Y", "Z"),
+        help="character spawn position in cm",
+    )
     return parser.parse_args()
 
 
@@ -76,57 +95,59 @@ def _load_converter():
     return module
 
 
-def _rewrite_shared_textures(
+def _rewrite_shared_material(
     resource_root: Path,
     tile_entries: list[dict[str, Any]],
+    shared_material_name: str,
     verbose: bool,
 ) -> None:
-    shared: dict[str, str] = {}
+    if Path(shared_material_name).name != shared_material_name:
+        raise RuntimeError(
+            "--shared-material-name must be a basename without path separators")
+    first_output = Path(tile_entries[0]["outputRelative"])
+    shared_relative = (
+        first_output.parent / f"{shared_material_name}.json").as_posix()
+    shared_path = resource_root / shared_relative
+
     # 全局（非平铺）图对所有 tile 相同：宏观色 + AO/湿度。打包脚本见
     # tool/houdini-terrain-import/bake_global_maps.py。
     global_textures = {
         "globalColour": "Generated/HoudiniPegasusIsland/Global/T_global_colour.json",
         "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
     }
-    for tile_index, tile in enumerate(tile_entries):
+    first = tile_entries[0]
+    first_root = resource_root / first["outputRelative"]
+    first_mi_path = first_root / f"MI_terrain_{first['assetName']}.json"
+    # --skip-convert 复用已转换 tile 时，per-tile MI 已被上一次装配删除；
+    # 此时以现有共享 MI 为基底，保证重跑幂等。
+    source_mi_path = first_mi_path if first_mi_path.is_file() else shared_path
+    shared_mi = _load_json(source_mi_path)
+    textures = shared_mi.get("textures")
+    if not isinstance(textures, dict):
+        raise RuntimeError(f"MI has no textures object: {source_mi_path}")
+    for key in ("layerTable", "layerIds", "layerWeights", "pageTable",
+                "layerAlbedo", "layerNormal", "layerPbr"):
+        value = textures.get(key)
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(f"MI is missing texture {key}: {source_mi_path}")
+    textures.update(global_textures)
+    shared_mi["name"] = shared_material_name
+    _write_json(shared_path, shared_mi)
+    if verbose:
+        print(f"shared terrain material -> {shared_path}")
+
+    for tile in tile_entries:
         output_root = resource_root / tile["outputRelative"]
-        mi_path = output_root / f"MI_terrain_{tile['assetName']}.json"
-        mi = _load_json(mi_path)
-        textures = mi.get("textures")
-        if not isinstance(textures, dict):
-            raise RuntimeError(f"MI has no textures object: {mi_path}")
-        if tile_index == 0:
-            for key in ("layerTable", "layerIds", "layerWeights", "pageTable",
-                        "layerAlbedo", "layerNormal", "layerPbr"):
-                value = textures.get(key)
-                if not isinstance(value, str) or not value:
-                    raise RuntimeError(f"MI is missing texture {key}: {mi_path}")
-                shared[key] = value
-        else:
-            changed = False
-            for key, value in shared.items():
-                if textures.get(key) != value:
-                    textures[key] = value
-                    changed = True
-            for key, value in global_textures.items():
-                if textures.get(key) != value:
-                    textures[key] = value
-                    changed = True
-            if changed:
-                _write_json(mi_path, mi)
-                if verbose:
-                    print(f"shared textures -> {mi_path}")
-        if tile_index == 0:
-            # 第一个 tile 也要写 global 图（它已经有 layer 表）。
-            changed = False
-            for key, value in global_textures.items():
-                if textures.get(key) != value:
-                    textures[key] = value
-                    changed = True
-            if changed:
-                _write_json(mi_path, mi)
-                if verbose:
-                    print(f"global textures -> {mi_path}")
+        tr_path = output_root / f"TR_terrain_{tile['assetName']}.json"
+        tr = _load_json(tr_path)
+        if tr.get("materialInstancePath") != shared_relative:
+            tr["materialInstancePath"] = shared_relative
+            _write_json(tr_path, tr)
+            if verbose:
+                print(f"terrain material -> {shared_relative}: {tr_path}")
+        per_tile_mi = output_root / f"MI_terrain_{tile['assetName']}.json"
+        if per_tile_mi.is_file():
+            per_tile_mi.unlink()
 
 
 def main() -> int:
@@ -173,7 +194,8 @@ def main() -> int:
                 args.verbose,
             )
 
-    _rewrite_shared_textures(resource_root, tiles, args.verbose)
+    _rewrite_shared_material(
+        resource_root, tiles, args.shared_material_name, args.verbose)
 
     scenes: list[dict[str, Any]] = []
     for tile in tiles:
@@ -203,6 +225,20 @@ def main() -> int:
         if isinstance(obj, dict) and obj.get("type") != "terrain"
     ]
     merged_objects = [entry["terrain"] for entry in scenes] + merged_objects
+    if args.character_blueprint:
+        merged_objects.insert(
+            len(scenes),
+            {
+                "name": "Echo Player",
+                "type": "blueprintInstance",
+                "id": "echo",
+                "blueprintPath": args.character_blueprint,
+                "position": [float(value) for value in args.character_position],
+                "rotation": [0.0, 0.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "properties": {},
+            },
+        )
     if args.water_plane_mesh:
         # 独立水面必须排在地形之后、灯光/相机之前，便于人读场景时保持地形块连续。
         merged_objects.insert(
@@ -239,7 +275,7 @@ def main() -> int:
         "description": (
             "Pegasus PCG 4x4 地形切片：一张 4km 全局高度/河网/层权重场切成 "
             "16 个 1km tile，共享边界采样、layer key、纹理数组与 32x32 VT 页表；"
-            "用于复刻飞马 PCG 地形的离线验收，不参与论文数值验证。"
+            "场景内放置 Echo 状态机角色用于地形跑图验收，不参与论文数值验证。"
         ),
         "worldUnit": "cm",
         "objects": merged_objects,
