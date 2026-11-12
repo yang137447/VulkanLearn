@@ -680,6 +680,42 @@ The following issues are already present in the codebase and should be treated a
 
 Do not “clean up” these areas casually. If you touch them, explain the behavioral impact.
 
+## Worktree Isolation For C# Blueprints
+
+C# blueprint builds are scoped by `resourcePath`, not by Git branch. The build service never
+inspects the current branch.
+
+- Every `.cs` under `<resourcePath>/Common` and `<resourcePath>/Maps` enters one `Gameplay.dll`;
+  there is no per-map or per-blueprint assembly.
+- CMake generates `<resourcePath>/Generated/Runtime/CSharp/Gameplay.csproj`, whose
+  `ProjectReference` points at the `script/VulkanLearn.Runtime/VulkanLearn.Runtime.csproj`
+  of whichever worktree ran configure last.
+- Runtime compile candidates go to
+  `<resourcePath>/Generated/Runtime/ScriptBuilds/<session>`.
+
+A worktree that changes C# blueprint code or assets must therefore have its own resources
+worktree and its own build directory:
+
+- code: `...\VulkanLearn-worktrees\<topic>\VulkanLearn` on `codex/<topic>`
+- assets: `...\VulkanLearn-worktrees\<topic>\VukanLearnResources` on
+  `codex/<topic>-assets`
+
+Do not point `config/config.json -> resourcePath` at the shared master
+`D:\YYBWorkSpace\GitHub\VulkanLearnResources`, including through a junction. Sharing it means
+all worktrees compile the same blueprint source set, each configure rewrites the same
+`Gameplay.csproj` and can leave another worktree referencing the wrong branch's Runtime API
+project, and branch-local blueprint edits leak into every other worktree. Separate
+`build/bin/managed` directories still keep `Gameplay.dll` apart, and a running process only
+swaps its own in-memory assembly generation; the hazard is the shared source root and
+generated project, not the loaded assembly.
+
+Before blueprint work, verify the resource root is not a junction/shared checkout:
+
+```powershell
+(Get-Item <workspace>\VukanLearnResources).Target
+git -C <workspace>\VukanLearnResources status --short --branch
+```
+
 ## Editing Guidance
 
 When making changes:
