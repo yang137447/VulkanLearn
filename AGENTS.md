@@ -700,6 +700,12 @@ worktree and its own build directory:
 - assets: `...\VulkanLearn-worktrees\<topic>\VukanLearnResources` on
   `codex/<topic>-assets`
 
+Treat each resources worktree as an independent branch. Merge a topic's assets into the
+resources master only when the matching code change lands, and merge resources master back
+into a topic only when that topic deliberately needs the new baseline. Do not bulk-reset or
+bulk-distribute resources master across unrelated topic worktrees; doing so overwrites
+branch-local assets and defeats the isolation this layout exists to provide.
+
 Do not point `config/config.json -> resourcePath` at the shared master
 `D:\YYBWorkSpace\GitHub\VulkanLearnResources`, including through a junction. Sharing it means
 all worktrees compile the same blueprint source set, each configure rewrites the same
