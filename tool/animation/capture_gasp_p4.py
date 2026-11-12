@@ -50,7 +50,7 @@ def main():
     bridge = runtime / "VulkanLearn.Runtime.dll"
     project = output / "Capture.csproj"
     project.write_text(
-        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework>'
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework>'
         '<Nullable>enable</Nullable><AssemblyName>GaspP4Capture</AssemblyName></PropertyGroup>'
         f'<ItemGroup><Reference Include="VulkanLearn.Runtime"><HintPath>{html.escape(str(bridge))}'
         '</HintPath><Private>false</Private></Reference></ItemGroup></Project>', encoding="utf-8")

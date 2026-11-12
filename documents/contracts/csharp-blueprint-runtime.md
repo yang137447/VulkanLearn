@@ -1,6 +1,6 @@
 # C# Blueprint Runtime
 
-状态：当前契约，2026-11-01。对应 `source/script/`、`script/`、
+状态：当前契约，2026-11-12。对应 `source/script/`、`script/`、
 `source/editor/scene/scriptBlueprintAuthoring.cpp` 与 GoogleTest `script_tests`。
 覆盖蓝图作者、游戏逻辑、物理、编译重载、动态资源和导出；完整目标及历史见
 [开发计划](../plan/architecture/csharp-actor-runtime-plan.md)。
@@ -54,7 +54,7 @@ Blueprint/Component 的 `DebugDraw` 服务提供点、线、折线、箭头、�
 
 ## 构建与配置
 
-Windows x64、MinGW 和 .NET 8 SDK：
+Windows x64、MinGW 和 .NET 11 SDK：
 
 ```powershell
 cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON
@@ -67,7 +67,7 @@ SDK 未进入 PATH 时使用 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.
 构建输出在 `build/bin/managed`：桥接、Gameplay DLL/PDB/runtimeconfig 与 hostfxr。
 托管配置跟随原生构建：Debug 使用 Debug，其余配置使用 Release。
 缺省路径优先取当前可执行文件旁的 `managed`，开发环境才回退到构建期输出路径。
-`cmake --build build --target vl_script_package` 额外复制 SDK 随附的 .NET 8
+`cmake --build build --target vl_script_package` 额外复制 SDK 随附的 .NET 11
 `shared/Microsoft.NETCore.App` 与 `host/fxr` 到 `managed/dotnet`。
 宿主优先显式使用该私有根；没有该子目录时使用配置期 SDK 根。
 程序和完整 managed 目录可一起搬移，C# 宿主不要求目标机器安装 SDK。
@@ -883,7 +883,7 @@ Common 和 Maps 都按引用闭包复制，另扫描 shader JSON 的默认贴图
 配置改为包内相对 resources/managed 路径，关闭开发 UI 与 UI 热重载；
 启用脚本的包开启 `scripts.autoPlay`。
 输出包含 shader 源码/缓存、UI、递归 PE imports/delay imports 的 x64 原生 DLL、
-桥接/Gameplay 与私有 .NET 8 runtime/hostfxr；不要求目标机器安装 SDK。
+桥接/Gameplay 与私有 .NET 11 runtime/hostfxr；不要求目标机器安装 SDK。
 `--binary-directory` 指定构建输出，`--dotnet-root` 可指定运行时根。
 缺少依赖或所需私有运行时拒绝导出；引用闭包含 BP/实例却关闭 scripts 时同样拒绝，
 不会发布不可执行的游戏配置。

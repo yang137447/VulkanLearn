@@ -50,7 +50,7 @@ Current implemented areas include:
   over `vl_runtime`, and runtime-only `main_game`; `source/CMakeLists.txt`
   filters editor sources from `vl_runtime` and rejects editor includes at
   configure time. See `documents/contracts/vulkanlearn-architecture.html`.
-- Optional Windows x64/.NET 8 C# Blueprint hosting, scene placement and Play/Pause/Stop;
+- Optional Windows x64/.NET 11 C# Blueprint hosting, scene placement and Play/Pause/Stop;
   implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
 - Runtime fracture verticals: `balloon` soft-body burst and `glassPane` impact fracture
   with Jolt shards, secondary glass split, support islands, asset-backed WAV audio

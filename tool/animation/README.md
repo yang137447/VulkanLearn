@@ -488,7 +488,7 @@ Space, velocity, loop extension, history and prediction limits are specified in
   --dotnet artifacts/dotnet-sdk/dotnet.exe
 ```
 
-Capture requires a .NET 8 SDK (a runtime-only PATH dotnet is insufficient),
+Capture requires a .NET 11 SDK (a runtime-only PATH dotnet is insufficient),
 numpy/Pillow and a C# enabled build. The local regular CPython installation above
 supports these packages; the free-threaded `py -3` environment currently cannot import numpy.
 The isolated fixture runs circular C# input through Jolt, captures one/two-thread overlays,
@@ -561,7 +561,7 @@ variable render frame timing can change sampled results, so these screenshots
 do not establish frame-rate-independent selection determinism. The pure native
 module tests own exact cost and stable-tie validation.
 
-Requires Windows console injection, Pillow, a .NET 8 SDK and matching native/
+Requires Windows console injection, Pillow, a .NET 11 SDK and matching native/
 managed binaries. The injector runs in an isolated helper process because
 AttachConsole changes standard-handle state. No source UE files or formal Maps
 assets are written. Config bytes are restored in `finally`, and every owned

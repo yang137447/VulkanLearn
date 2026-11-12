@@ -77,7 +77,7 @@ def capture_csharp(root, output, build, dotnet):
     runtime = build / "bin/managed"
     project = output / "Capture.csproj"
     project.write_text(
-        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework>'
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net11.0</TargetFramework>'
         '<AssemblyName>DrawDebugCapture</AssemblyName></PropertyGroup>'
         '<ItemGroup><Reference Include="VulkanLearn.Runtime"><HintPath>'
         f'{html.escape(str(runtime / "VulkanLearn.Runtime.dll"))}'
