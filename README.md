@@ -123,7 +123,7 @@ build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_
 
 ### C# 蓝图 游戏逻辑
 
-Windows x64 安装 .NET 8 SDK 后开启：
+Windows x64 安装 .NET 11 SDK 后开启：
 
 ```powershell
 cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON
@@ -165,7 +165,7 @@ Compound/静态三角网格、碰撞过滤、Fixed/Hinge 约束、接触/Trigger
 请求和租约支持取消/释放，Stop 清理播放期间的结构修改。
 Editing 时 BP JSON 内容变化自动走 World 事务重载，播放时延后至 Stop。
 构建配置决定托管 Debug/Release；`cmake --build build --target vl_script_package`
-把私有 .NET 8 运行时放入 `build/bin/managed/dotnet`，随程序及 managed 目录搬移。
+把私有 .NET 11 运行时放入 `build/bin/managed/dotnet`，随程序及 managed 目录搬移。
 开发包（dev flavor）可直接导出到一个尚不存在的目录：
 
 ```powershell
@@ -187,7 +187,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tool\validate-game-package.p
   -PackagePath artifacts/game-package -VerifyTool build-game\bin\vl_export_game.exe
 ```
 
-导出器收集场景资产、shader cache 闭包、运行时 UI manifest、原生 DLL、Gameplay 与私有 .NET 8，
+导出器收集场景资产、shader cache 闭包、运行时 UI manifest、原生 DLL、Gameplay 与私有 .NET 11，
 写入 `game-export-manifest.json`，关闭编辑器并自动 Play；`main_game.exe` 可从任意工作目录启动。
 游戏包校验还会启动包内 `main_game.exe`，要求 `misses=0` 且无编辑器 UI/shader 泄漏。
 运行时拼接出的额外 BP/资产路径需用 `--dynamic-assets assets.json` 显式列入，
