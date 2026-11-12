@@ -102,8 +102,8 @@ protected:
         for (const auto& name : {"VulkanLearn.Runtime.dll", "VulkanLearn.Runtime.runtimeconfig.json", "Gameplay.dll", "hostfxr.dll"})
             Write(options.binaryDirectory / "managed" / name, "{}");
         options.dotnetRoot = root / "dotnet";
-        Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/8.0.20/coreclr.dll", "runtime");
-        Write(options.dotnetRoot / "host/fxr/8.0.20/hostfxr.dll", "host");
+        Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/11.0.20/coreclr.dll", "runtime");
+        Write(options.dotnetRoot / "host/fxr/11.0.20/hostfxr.dll", "host");
     }
 
     Json ShaderArtifact(const std::string& kind, const std::string& normalizedKey,
@@ -387,12 +387,12 @@ TEST_F(GameExportTest, ManifestDigestsEveryPublishedPayloadFile)
 TEST_F(GameExportTest, ManagedExportIncludesActualPrivateRuntimeAndUsesRelativeSettings)
 {
     EnableManaged();
-    Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/8.0.9/coreclr.dll", "older");
-    Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/8.0.20/coreclr.dll", "newer");
-    Write(options.dotnetRoot / "host/fxr/8.0.20/hostfxr.dll", "host");
+    Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/11.0.9/coreclr.dll", "older");
+    Write(options.dotnetRoot / "shared/Microsoft.NETCore.App/11.0.20/coreclr.dll", "newer");
+    Write(options.dotnetRoot / "host/fxr/11.0.20/hostfxr.dll", "host");
     VL::ExportGame(options);
-    EXPECT_TRUE(fs::exists(options.outputDirectory / "managed/dotnet/shared/Microsoft.NETCore.App/8.0.20/coreclr.dll"));
-    EXPECT_FALSE(fs::exists(options.outputDirectory / "managed/dotnet/shared/Microsoft.NETCore.App/8.0.9"));
+    EXPECT_TRUE(fs::exists(options.outputDirectory / "managed/dotnet/shared/Microsoft.NETCore.App/11.0.20/coreclr.dll"));
+    EXPECT_FALSE(fs::exists(options.outputDirectory / "managed/dotnet/shared/Microsoft.NETCore.App/11.0.9"));
     const auto scripts = ReadJson(options.outputDirectory / "config/config.json").at("scripts");
     EXPECT_TRUE(scripts.at("autoPlay"));
     EXPECT_EQ(scripts.at("runtimeDirectory"), "managed");

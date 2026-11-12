@@ -418,7 +418,7 @@ TEST_F(ScriptBuildTest, BridgeSourceChangesRequireRestartBeforeLaunchingBuild)
 TEST_F(ScriptBuildTest, ShutdownCancelsOnlyOwnedCompilerAndJoinsWorker)
 {
     Write("Gameplay/Gameplay.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>"
-        "<TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+        "<TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>");
     Write("Gameplay/Test.cs", "public class Test {}");
     VL::ScriptBuildService service;
     service.Configure(VL_SCRIPT_DOTNET_EXECUTABLE, root / "Gameplay/Gameplay.csproj",
@@ -435,7 +435,7 @@ TEST_F(ScriptBuildTest, ShutdownCancelsOnlyOwnedCompilerAndJoinsWorker)
 TEST_F(ScriptBuildTest, CompilerFailurePublishesSourceLocationAndPreservesBridge)
 {
     Write("Gameplay/Gameplay.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>"
-        "<TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+        "<TargetFramework>net11.0</TargetFramework></PropertyGroup></Project>");
     Write("Gameplay/Broken.cs", "public class Broken { invalid syntax here; }");
     VL::ScriptBuildService service;
     service.Configure(VL_SCRIPT_DOTNET_EXECUTABLE, root / "Gameplay/Gameplay.csproj",

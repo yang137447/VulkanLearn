@@ -298,7 +298,7 @@ fs::path SelectVersion(const fs::path& directory, const std::string& prefix)
             if (entry.is_directory() && entry.path().filename().string().rfind(prefix, 0) == 0)
                 candidates.push_back(entry.path());
     if (candidates.empty()) throw std::runtime_error("Missing private .NET runtime under " + directory.string());
-    // 版本的每一段按数字比较，避免 8.0.9 胜过 8.0.20。
+    // 版本的每一段按数字比较，避免 11.0.9 胜过 11.0.20。
     std::map<std::vector<unsigned long>, fs::path> versions;
     for (const auto& path : candidates)
     {
@@ -349,8 +349,8 @@ void ManagedRuntime(ExportFiles& files, Json& config, const GameExportOptions& o
         files.Copy(managed / required, fs::path("managed") / required);
     files.Copy(assembly, fs::path("managed") / assembly.filename());
     auto dotnet = fs::is_directory(managed / "dotnet") ? managed / "dotnet" : options.dotnetRoot;
-    const auto runtime = SelectVersion(dotnet / "shared" / "Microsoft.NETCore.App", "8.");
-    const auto fxr = SelectVersion(dotnet / "host" / "fxr", "8.");
+    const auto runtime = SelectVersion(dotnet / "shared" / "Microsoft.NETCore.App", "11.");
+    const auto fxr = SelectVersion(dotnet / "host" / "fxr", "11.");
     files.Tree(runtime, fs::path("managed/dotnet/shared/Microsoft.NETCore.App") / runtime.filename());
     files.Tree(fxr, fs::path("managed/dotnet/host/fxr") / fxr.filename());
     config["scripts"] = {{"enabled", true}, {"autoPlay", true}, {"runtimeDirectory", "managed"},
