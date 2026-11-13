@@ -871,6 +871,28 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
 - mode 1 的加载期只请求每层尾页（与 mode 0 相同的初始集合），随后由覆盖页
   feedback 逐帧请求；`terrainlayer preload` 仍可显式请求每层每个 mip 的全部页，
   作为与 L3 全量预取基线对照的调试路径。
+- `u_terrainWeightMapMode=1` 采的是 MI 绑定的单块地形 `layerWeightMaps`
+  （`sampler2DArray`，slice 顺序 = 该 TR 的 local layer 顺序），它是**单地形**
+  特性。一个 MI 被多个 terrain placement 共享时，所有 tile 都会采到同一份
+  掩码：图案逐 tile 重复、掩码边界在错误位置出现硬边。加载期按
+  **`layerWeightMaps` 纹理身份**记录使用它的 placement，超过一个直接抛错并
+  列出 placement 与 MI 路径（多个 placement 即使使用不同的 MI 文件，只要指向
+  同一份权重数组同样会失败；单个 placement 使用 mode 1 仍然合法）。
+  多 tile World 必须显式把该参数设为 0 走 World 级页表权重，或为每个
+  placement 生成各自的 MI **且各自绑定不同的 `layerWeightMaps`**。
+  mode 1 还要求 `layerWeightMaps` 的 slice 数等于 TR 层数、且
+  `heightmapMargin == 1`（当前权重 UV 公式固定内缩一个 margin texel）；不满足
+  时加载期直接失败。
+- 作者导出的层掩码通常是近二值的（0↔1 在 1–2 texel 内完成）。导出侧应按
+  目标世界尺度羽化（515² 覆盖 1 km 时 4–8 texel ≈ 8–16 m），再写入
+  `paintPath`/`layerWeightMaps`；`tool/terrain-houdini/houdini_weightmap_export.py`
+  提供按层序 over 剔除 + 羽化 + 归一化 + VLP1/PNG 输出。运行时不再提供
+  等价羽化（shader 侧 LOD 兜底会随视角变化，不能替代资产级羽化）。
+  该工具的 PNG 是**全局分辨率**的预处理图，不按 tile 切分也没有 margin；
+  作为 mode 1 的 per-tile 数组使用前必须另做带 margin 的切分，或直接用它的
+  VLP1 输出（`paintPath`）。批量迁移已有 per-tile mask 时用
+  `feather_tile_paints.py`：它先拼接全局场再羽化/归一化/切分，避免逐 tile
+  独立模糊在 tile 边界引入接缝。
 
 ## 层页 feedback 驱动驻留（L4a）
 

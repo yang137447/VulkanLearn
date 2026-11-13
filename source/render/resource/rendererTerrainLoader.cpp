@@ -125,6 +125,61 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const bool vtRequested =
             materialInstance->HasParameter("u_terrainLayerMode") &&
             materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
+        // mode 1 的逐层权重数组属于单块地形。按纹理身份记录使用它的摆放，
+        // 等 World 全部地形加载完再判定是否被共享；共享时不能静默采同一份掩码。
+        if (materialInstance->HasParameter("u_terrainWeightMapMode") &&
+            materialInstance->GetParameter<float>("u_terrainWeightMapMode") > 0.5f)
+        {
+            const std::shared_ptr<Texture> weightMaps =
+                materialInstance->GetTexture("layerWeightMaps");
+            if (!weightMaps)
+            {
+                throw std::runtime_error(
+                    "Terrain u_terrainWeightMapMode=1 requires a bound "
+                    "layerWeightMaps texture: " + plan.desc.materialInstancePath);
+            }
+            if (weightMaps->GetArrayLayers() !=
+                static_cast<uint32_t>(plan.desc.layers.size()))
+            {
+                throw std::runtime_error(
+                    "Terrain layerWeightMaps slice count " +
+                    std::to_string(weightMaps->GetArrayLayers()) +
+                    " does not match TR layer count " +
+                    std::to_string(plan.desc.layers.size()) + ": " +
+                    plan.desc.materialInstancePath);
+            }
+            if (plan.desc.heightmapMargin != 1)
+            {
+                throw std::runtime_error(
+                    "Terrain u_terrainWeightMapMode=1 expects heightmapMargin=1 "
+                    "(the weight-map UV formula reserves one margin texel): " +
+                    plan.desc.materialInstancePath);
+            }
+            const std::string placementId = TerrainPlacementIdentity(plan);
+            auto binding = std::find_if(
+                streamingState.weightMapBindings.begin(),
+                streamingState.weightMapBindings.end(),
+                [&weightMaps](
+                    const TerrainStreamingState::TerrainWeightMapBinding& entry)
+                {
+                    return entry.layerWeightMaps == weightMaps;
+                });
+            if (binding == streamingState.weightMapBindings.end())
+            {
+                TerrainStreamingState::TerrainWeightMapBinding entry;
+                entry.layerWeightMaps = weightMaps;
+                entry.materialPath = plan.desc.materialInstancePath;
+                entry.placements.push_back(placementId);
+                streamingState.weightMapBindings.push_back(std::move(entry));
+            }
+            else if (std::find(
+                         binding->placements.begin(),
+                         binding->placements.end(),
+                         placementId) == binding->placements.end())
+            {
+                binding->placements.push_back(placementId);
+            }
+        }
         // S1/S2：按 layer.sourceSet 分组登记源数组；同一 set 共享同一组
         // shared_ptr，不同 set 允许不同数组但共享同一组 atlas。
         // mode 0 直接用 globalId 作为数组 slice，因此必须显式校验全局 ID

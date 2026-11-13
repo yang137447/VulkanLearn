@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -156,6 +157,16 @@ struct TerrainStreamingState
     // layerForceMip 原子，渲染线程帧首把值写进这些实例；weak_ptr 不会让
     // MI 的生命周期越过 World 资源包。
     std::vector<std::weak_ptr<MaterialInstance>> layerVTMaterials;
+    // 多地形 World 守卫：u_terrainWeightMapMode=1 采样的是 MI 自带的单块
+    // 地形权重数组。按 **layerWeightMaps 纹理**分组（复制 MI 但指向同一份
+    // 权重数组仍会逐 tile 重复），记录使用它的 placement；超过一个直接失败。
+    struct TerrainWeightMapBinding
+    {
+        std::shared_ptr<Texture> layerWeightMaps;
+        std::string materialPath;
+        std::vector<std::string> placements;
+    };
+    std::vector<TerrainWeightMapBinding> weightMapBindings;
     // -1 = 自动 mip；0..6 = 强制目标 mip。Console 写、渲染线程读。
     std::atomic<int32_t> layerForceMip{-1};
     // 渲染线程最后写入 M_terrain 的值，避免每帧重复 SetParameter。
