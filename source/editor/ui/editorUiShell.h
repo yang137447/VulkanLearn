@@ -95,6 +95,8 @@ public:
     bool IsSceneViewportElement(const Rml::Element* element) const override;
     bool IsSceneViewportInputActive() const override;
     void SetSceneViewportInputActive(bool active) override;
+    bool RequestFrameSelectedActor() override;
+    void SetGameFocusCaptured(bool captured) override;
     bool IsPointerCaptured() const override;
     void CancelTransientInteraction() override;
 

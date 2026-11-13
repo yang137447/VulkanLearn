@@ -229,6 +229,10 @@ public:
     }
     bool IsScenePickTarget(float mouseX, float mouseY) const;
     bool ShouldUseRelativeMouseModeForGame() const;
+    // UE PIE 对齐：Playing 时即使开发者 UI 可见也捕获鼠标，除非打开了资产编辑器。
+    bool ShouldUseRelativeMouseModeForPie(bool playing) const;
+    void SetGameFocusCaptured(bool captured);
+    bool RequestFrameSelectedActor();
     bool ShouldGameReceiveKeyboard() const;
     bool ShouldGameReceivePointer() const;
     const UiInputOwnershipSnapshot& GetInputOwnership() const { return inputOwnership; }

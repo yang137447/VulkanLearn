@@ -774,10 +774,31 @@ bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
     if (!initialized) return false;
     if (editorUiShell != nullptr && editorUiShell->IsAssetEditorVisible())
         return false;
-    // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；
+    // 点击 Viewport / RMB 观察 / Play 都会建立捕获，不能再用绝对光标位置反向取消；
     // 相对鼠标移动期间 SDL 的绝对坐标可能落在 Viewport 外。
     return !developerUiVisible ||
         (editorUiShell != nullptr && editorUiShell->IsSceneViewportInputActive());
+}
+
+bool UiSubsystem::ShouldUseRelativeMouseModeForPie(bool playing) const
+{
+    if (!initialized) return false;
+    if (editorUiShell != nullptr && editorUiShell->IsAssetEditorVisible())
+        return false;
+    if (playing) return true;
+    return ShouldUseRelativeMouseModeForGame();
+}
+
+void UiSubsystem::SetGameFocusCaptured(bool captured)
+{
+    if (!initialized || editorUiShell == nullptr) return;
+    editorUiShell->SetGameFocusCaptured(captured);
+}
+
+bool UiSubsystem::RequestFrameSelectedActor()
+{
+    if (!initialized || editorUiShell == nullptr) return false;
+    return editorUiShell->RequestFrameSelectedActor();
 }
 
 bool UiSubsystem::CanRenderThumbnails() const

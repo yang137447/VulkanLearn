@@ -522,6 +522,7 @@ bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event
 {
     if (event.GetType() != "keydown" || document == nullptr ||
         IsAssetEditorVisible() || HasModal()) return false;
+    if (gameFocusCaptured) return false;
     auto* focus = document->GetContext()->GetFocusElement();
     if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
     const int key = event.GetParameter<int>("key_identifier", 0);
@@ -543,6 +544,24 @@ bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event
     viewportTransformTool = tool;
     RefreshViewportToolbar();
     RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::FrameSelectedActor()
+{
+    if (document == nullptr || HasModal() || IsAssetEditorVisible() ||
+        runtimeActionSink == nullptr ||
+        runtimeView.scripts.state != ScriptPlayState::Editing)
+        return false;
+    Rml::Element* focus = document->GetContext()->GetFocusElement();
+    if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr) return false;
+    UiAction request;
+    request.type = UiActionType::FrameEditorActor;
+    request.actorProperty.worldGeneration = actor->worldGeneration;
+    request.actorProperty.identity = actor->identity;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
     return true;
 }
 

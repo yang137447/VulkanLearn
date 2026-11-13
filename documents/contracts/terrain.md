@@ -643,6 +643,10 @@ World 中摆放多次，只要对象名不同。
   默认 128；`u_debugMode`：
   `0` 正常着色，`1` top-4 权重，`2` top-4 层号，`3` 混合 albedo，
   `4` VT 物理页号，`5` VT mip（4/5 在 mode 0 下输出 0）。
+- 全局（世界对齐）图：`globalColour`（sRGB，2048²，覆盖 `u_globalOriginCm/u_globalSizeCm`）
+  只按相机距离混入 albedo：`mix(near, far, smoothstep(u_globalFadeStartM, u_globalFadeEndM))`，
+  并乘 1.5 补偿烘焙遮蔽；`globalMasks`（linear，R=AO、G=wetness）在末端乘 AO，并按
+  wetness 压暗 albedo、把 roughness 拉向 0.08。二者都是 clamp 采样，出界拉伸边缘，不平铺。
 - 当前地形只支持 realtime 渲染；offline-only 渲染遇到 terrain 直接失败。
 - 地形碰撞已接入 World/Play：`WorldBuilder` 为每个 terrain placement 保留 plan+TRS，
   脚本 Play 在既有 `ScriptPhysicsWorld` 里创建静态 heightfield；编辑器/普通预览

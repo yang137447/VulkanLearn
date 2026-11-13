@@ -39,6 +39,9 @@ public:
     void SetRelativeMouseModeRequested(bool requested);
     void SetRelativeMouseModeAllowed(bool allowed);
     void ToggleRelativeMouseModeRequest();
+    // Play/Pause 进入时请求相对鼠标，回到编辑态时释放；返回是否发生状态切换。
+    // 捕获后用户可用 Shift+F1 临时释放，不会在下一帧被重新抢回。
+    bool SetPlayActive(bool active);
     bool IsRelativeMouseModeRequested() const { return relativeMouseModeRequested; }
     bool IsRelativeMouseModeEnabled() const { return relativeMouseModeEnabled; }
     void SetGameKeyboardEnabled(bool enabled) { gameKeyboardEnabled = enabled; }
@@ -53,12 +56,13 @@ private:
     std::map<std::string, int> gameplayScancodes;
     std::set<std::string> injectedActions;
     std::map<std::string, bool> injectedPrevious;
-    // UI visibility may suspend capture without overwriting the player's Esc preference.
+    // UI visibility may suspend capture without overwriting the requested state.
     // 默认不请求捕获：启动后光标保持自由，鼠标移动不会带动渲染视窗。
-    // 需要相机环绕/飞行时按 Esc 显式开启捕获。
+    // 编辑器视角由按住 RMB 请求，Play 由 SetPlayActive 请求。
     bool relativeMouseModeRequested = false;
     bool relativeMouseModeAllowed = false;
     bool relativeMouseModeEnabled = false;
+    bool playActive = false;
     bool gameKeyboardEnabled = true;
     bool gamePointerEnabled = true;
 };

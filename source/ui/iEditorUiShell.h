@@ -166,6 +166,11 @@ public:
     virtual bool IsSceneViewportElement(const Rml::Element* element) const = 0;
     virtual bool IsSceneViewportInputActive() const = 0;
     virtual void SetSceneViewportInputActive(bool active) = 0;
+    // UE 的 F：把编辑器相机聚焦到选中 Actor；文本输入聚焦时不消费。
+    virtual bool RequestFrameSelectedActor() = 0;
+    // Game/PIE owns the mouse and keyboard (RMB look or Play): editor
+    // viewport shortcuts must not consume W/E/R/Q/F while captured.
+    virtual void SetGameFocusCaptured(bool captured) = 0;
     virtual bool IsPointerCaptured() const = 0;
     virtual void CancelTransientInteraction() = 0;
 };

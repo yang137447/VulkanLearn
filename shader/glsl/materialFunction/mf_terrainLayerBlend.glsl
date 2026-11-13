@@ -304,7 +304,8 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         u_globalColourWeightNear, u_globalColourWeight, macroFade);
     albedo.rgb = mix(albedo.rgb, macroColour * 1.5, macroWeight);
 
-    if (u_debugMode > 2.5)
+    // 3 只输出 blended albedo；4/5 仍需落到各自的 page/mip 调试分支。
+    if (u_debugMode > 2.5 && u_debugMode < 3.5)
     {
         inputs.baseColor = vec3(0.0);
         inputs.emissiveColor = albedo.rgb;

@@ -440,6 +440,14 @@ void UpdateEngineUiInputPolicy(const EngineUiActionContext& context)
             world->GetViewTarget().lock(), world->GetGeneration());
     }
     auto& inputSubsystem = subsystems.GetInputSubsystem();
+    // UE PIE 对齐：进入 Play 立即捕获鼠标/键盘；Stop 释放。
+    const bool inPlay = !subsystems.GetScriptRuntime().IsEditing();
+    if (inputSubsystem.SetPlayActive(inPlay) && inPlay)
+    {
+        subsystems.GetDiagnosticsSubsystem().ReportInfo(
+            "Play started: mouse captured (Esc stops play, Shift+F1 releases)",
+            "Script");
+    }
     if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
     {
         inputSubsystem.SetGameKeyboardEnabled(true);
@@ -449,7 +457,9 @@ void UpdateEngineUiInputPolicy(const EngineUiActionContext& context)
         return;
     }
 
-    const bool relativeAllowed = uiSubsystem->ShouldUseRelativeMouseModeForGame();
+    const bool relativeAllowed =
+        uiSubsystem->ShouldUseRelativeMouseModeForPie(
+            inPlay);
     const bool constrainToViewport =
         inputSubsystem.IsRelativeMouseModeRequested() &&
         uiSubsystem->IsDeveloperUiVisible() &&
@@ -470,6 +480,7 @@ void UpdateEngineUiInputPolicy(const EngineUiActionContext& context)
     inputSubsystem.SetGameKeyboardEnabled(uiSubsystem->ShouldGameReceiveKeyboard());
     inputSubsystem.SetGamePointerEnabled(uiSubsystem->ShouldGameReceivePointer());
     inputSubsystem.SetRelativeMouseModeAllowed(relativeAllowed);
+    uiSubsystem->SetGameFocusCaptured(inputSubsystem.IsRelativeMouseModeEnabled());
 }
 
 void PumpEnginePlatformEvents(
@@ -492,37 +503,94 @@ void PumpEnginePlatformEvents(
         CoalesceRelativeMouseMotion(platformEvents);
     for (const PlatformEvent& event : platformEvents)
     {
-        if ((event.type == PlatformEventType::KeyDown ||
-             event.type == PlatformEventType::KeyUp) &&
-            event.key == PlatformKey::Escape)
+        if (event.key == PlatformKey::Escape)
         {
-            if (event.type == PlatformEventType::KeyDown && !event.repeat)
+            // 引擎只在真正处理了 Esc 时吞掉 keydown；其余情况交给编辑器 UI，
+            // 否则 gizmo / 蓝图视口 / hair 表单的 Esc 取消永远收不到。
+            // keyup 一律放行：被吞的 keydown 不会进入 RmlUi 按下集合，keyup 自然成为空操作。
+            if (event.type == PlatformEventType::KeyDown && event.repeat)
+            {
+                continue;
+            }
+            else if (event.type == PlatformEventType::KeyDown)
             {
                 // Esc 优先取消资产放置，避免同一次按键又请求游戏相对鼠标捕获。
-                if (uiSubsystem && uiSubsystem->CancelBlueprintAssetDrag()) continue;
+                if (uiSubsystem && uiSubsystem->CancelBlueprintAssetDrag())
+                    continue;
+                auto& scripts = subsystems.GetScriptRuntime();
+                const auto& world = subsystems.GetWorldManager().GetActiveWorld();
                 auto& inputSubsystem = subsystems.GetInputSubsystem();
-                inputSubsystem.ToggleRelativeMouseModeRequest();
-                const bool captureRequested =
-                    inputSubsystem.IsRelativeMouseModeRequested();
-                std::string message;
-                if (!captureRequested)
+                // UE PIE 对齐：Esc 停止 Play 并把鼠标还给编辑器，而不是切换捕获。
+                if (!scripts.IsEditing() && world)
                 {
-                    message = "Mouse capture disabled";
+                    std::string error;
+                    scripts.Control(*world, ScriptPlayState::Editing, error);
+                    if (editorHost) editorHost->ResetAuthoringSessions();
+                    scripts.SetFeedback(error);
+                    inputSubsystem.SetRelativeMouseModeRequested(false);
+                    if (error.empty())
+                        subsystems.GetDiagnosticsSubsystem().ReportInfo(
+                            "Play stopped (Esc)", "Script");
+                    else
+                        subsystems.GetDiagnosticsSubsystem().ReportWarning(
+                            error, "Script");
+                    continue;
                 }
-                else if (inputSubsystem.IsRelativeMouseModeEnabled())
+                if (inputSubsystem.IsRelativeMouseModeRequested())
                 {
-                    message = "Mouse capture enabled";
+                    inputSubsystem.SetRelativeMouseModeRequested(false);
+                    subsystems.GetDiagnosticsSubsystem().ReportInfo(
+                        "Mouse capture released (Esc)");
+                    continue;
                 }
-                else
-                {
-                    message =
-                        "Mouse capture requested "
-                        "(suspended while UI owns the pointer)";
-                }
-                message += " (press Esc to toggle)";
-                subsystems.GetDiagnosticsSubsystem().ReportInfo(message);
             }
+        }
+        // UE PIE 的 Shift+F1：在 Play 中临时把鼠标/键盘焦点交还编辑器。
+        if (event.type == PlatformEventType::KeyDown && !event.repeat &&
+            event.key == PlatformKey::F1 && event.shift &&
+            !subsystems.GetScriptRuntime().IsEditing())
+        {
+            auto& inputSubsystem = subsystems.GetInputSubsystem();
+            inputSubsystem.ToggleRelativeMouseModeRequest();
+            subsystems.GetDiagnosticsSubsystem().ReportInfo(
+                inputSubsystem.IsRelativeMouseModeRequested()
+                    ? "Game focus captured (Shift+F1)"
+                    : "Game focus released (Shift+F1)");
             continue;
+        }
+        // UE 的 F：编辑态聚焦选中 Actor；捕获期间或文本输入聚焦时让位给游戏/控件。
+        if (event.type == PlatformEventType::KeyDown && !event.repeat &&
+            event.key == PlatformKey::F && !event.control && !event.alt &&
+            !event.shift && subsystems.GetScriptRuntime().IsEditing() &&
+            !subsystems.GetInputSubsystem().IsRelativeMouseModeEnabled() &&
+            uiSubsystem != nullptr && uiSubsystem->RequestFrameSelectedActor())
+        {
+            continue;
+        }
+        // UE 视口导航：视口内按住右键进入观察/飞行，松开右键把光标还给编辑器。
+        if ((event.type == PlatformEventType::MouseButtonDown ||
+             event.type == PlatformEventType::MouseButtonUp) &&
+            event.mouseButton == PlatformMouseButton::Right &&
+            subsystems.GetScriptRuntime().IsEditing())
+        {
+            auto& inputSubsystem = subsystems.GetInputSubsystem();
+            if (event.type == PlatformEventType::MouseButtonDown &&
+                uiSubsystem != nullptr &&
+                uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))
+            {
+                inputSubsystem.SetRelativeMouseModeRequested(true);
+                subsystems.GetDiagnosticsSubsystem().ReportInfo(
+                    "Viewport look captured (release RMB to return the cursor)");
+                continue;
+            }
+            if (event.type == PlatformEventType::MouseButtonUp &&
+                inputSubsystem.IsRelativeMouseModeRequested())
+            {
+                inputSubsystem.SetRelativeMouseModeRequested(false);
+                subsystems.GetDiagnosticsSubsystem().ReportInfo(
+                    "Viewport look released");
+                continue;
+            }
         }
 
         if (event.type == PlatformEventType::MouseButtonDown &&

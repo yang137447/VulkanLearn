@@ -18,10 +18,11 @@ RuntimeResult<void> InputSubsystem::Initialize(PlatformWindow& window)
 
     this->window = &window;
     // 启动默认释放鼠标捕获：光标留在桌面，避免鼠标划动意外旋转/平移视窗。
-    // Esc 仍然是显式开关（ToggleRelativeMouseModeRequest），需要自由视角时再开启。
+    // 编辑器视角由按住 RMB 请求，Play 由 SetPlayActive 请求。
     relativeMouseModeRequested = false;
     relativeMouseModeAllowed = false;
     relativeMouseModeEnabled = false;
+    playActive = false;
     gameKeyboardEnabled = true;
     gamePointerEnabled = true;
     this->window->SetRelativeMouseMode(false);
@@ -122,6 +123,14 @@ void InputSubsystem::SetRelativeMouseModeAllowed(bool allowed)
 void InputSubsystem::ToggleRelativeMouseModeRequest()
 {
     SetRelativeMouseModeRequested(!relativeMouseModeRequested);
+}
+
+bool InputSubsystem::SetPlayActive(bool active)
+{
+    if (playActive == active) return false;
+    playActive = active;
+    SetRelativeMouseModeRequested(active);
+    return true;
 }
 
 void InputSubsystem::ApplyRelativeMouseMode()

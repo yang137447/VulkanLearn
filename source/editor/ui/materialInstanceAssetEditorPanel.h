@@ -96,6 +96,10 @@ public:
     void Detach();
     void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink);
     void SetRuntimeActionSink(IEditorRuntimeActionSink* sink);
+    // Game/PIE/RMB-look 捕获期间编辑器视口快捷键让位给游戏输入。
+    void SetGameFocusCaptured(bool captured) { gameFocusCaptured = captured; }
+    // UE 的 F：聚焦选中 Actor；文本输入获得焦点时不消费该键。
+    bool FrameSelectedActor();
     bool QueueMaterialFloat(
         const std::string& materialInstancePath,
         const std::string& parameter,
@@ -364,6 +368,7 @@ private:
     bool terrainLayerDetailsOpen = false;
     uint32_t terrainLayerDetailsLayer = 0;
     std::string terrainLayerSelectionSignature;
+    bool gameFocusCaptured = false;
     VL::Editor::TerrainLayerPreviewCache terrainLayerPreviewCache;
     VL::Editor::ITerrainLayerPreviewProvider* terrainLayerPreviewProvider = nullptr;
     std::string terrainLayerHoverImageSource;
