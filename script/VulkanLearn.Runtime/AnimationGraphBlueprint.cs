@@ -24,6 +24,8 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private string lastSlotMask = "";
     private float lastSlotAlpha = 1;
     private bool cachedPoseSubmitted;
+    private bool cachedPoseBranchesSubmitted;
+    private readonly Dictionary<string, float> cachedPoseBranchAxes = new(StringComparer.Ordinal);
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
     public AnimationGraphRuntime GraphRuntime
@@ -78,8 +80,38 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     protected void EvaluateGraph(in AnimationGraphInput input)
     {
         EnsureGraphPrepared();
+        SubmitCachedPoseBranches();
+        SubmitCachedPoseBranchAxes(input.PlanarSpeed);
         decision = runtime!.Update(input);
         SubmitDecision(decision);
+    }
+
+    // 命名分支只在图就绪后提交一次；轴值按平面速度逐帧下发（变化才发）。
+    private void SubmitCachedPoseBranches()
+    {
+        if (cachedPoseBranchesSubmitted || Graph.CachedPoseBranches.Count == 0) return;
+        var definitions = Graph.CachedPoseBranches.Select(branch =>
+            new CachedPoseBranchDefinition(branch.Name,
+                branch.BlendSamples.Count > 0
+                    ? branch.BlendSamples
+                        .Select(sample => new CachedPoseBranchSample(sample.Clip, sample.Threshold))
+                        .ToArray()
+                    : new[] { new CachedPoseBranchSample(branch.Clip, 0) },
+                branch.Rate, branch.Loop)).ToArray();
+        Animation.SetCachedPoseBranches(definitions);
+        cachedPoseBranchesSubmitted = true;
+    }
+
+    private void SubmitCachedPoseBranchAxes(float axis)
+    {
+        foreach (var branch in Graph.CachedPoseBranches)
+        {
+            if (branch.BlendSamples.Count <= 1) continue;
+            if (cachedPoseBranchAxes.TryGetValue(branch.Name, out float last) &&
+                MathF.Abs(last - axis) < 1e-4f) continue;
+            Animation.SetCachedPoseBranchAxis(branch.Name, axis);
+            cachedPoseBranchAxes[branch.Name] = axis;
+        }
     }
 
     protected virtual void SubmitDecision(in AnimationGraphDecision next)

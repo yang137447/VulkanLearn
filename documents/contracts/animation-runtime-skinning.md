@@ -741,8 +741,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - 曲线：每帧 `FrameCurves()` 汇总基础片段（BlendSpace 按 A/B 权重）与 additive
   片段（× alpha）的同名曲线值；反馈 `curves = { name: value }`（跳过 0 值、最多
   64 个键）。layered/slot 曲线不参与，曲线本身不驱动骨骼或图条件。
-- `Slot`：只作为图级元数据输出（`AnimationGraphDecision.Slot`）。VL 的整身
-  montage 仍由宿主 `PlayAction`/`PlayMontage` 承担，不支持 UE 的骨骼 mask 插槽。
+- `Slot`：图级单槽位；声明 `SlotMask`/`SlotAlpha` 时 montage 以骨骼 mask 叠加，
+  未声明时仍是整身覆盖。详见下方 Masked Slot Montage 契约。
 - `LayeredBoneBlend`：原生 `SetLayeredPose(clip, alpha, loop, mask)` 在
   base → additive 之后按 mask 混合 overlay：命中关节权重为 `alpha`，未命中关节
   保持 base；旋转用 slerp、平移/缩放线性。overlay 有独立时钟（rate 1、loop 或
@@ -752,6 +752,22 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - 批量命令：`animationCommands` 新增 `additive`（`enabled`/`clip`/`alpha`/`loop`）
   与 `cachedPose`（`enabled`/`capture`/`name`）候选；反馈发布
   `additive = { active, clip, alpha }` 与 `cachedPose = { active, name }`。
+
+#### 命名 Pose 分支（同帧缓存）
+
+- `AnimationGraphDefinition.CachedPoseBranches[]`：每个分支有唯一 `Name`，来源三选一：
+  `Clip`、`BlendSamples`（2..3 sample）或 `BlendSpace`（在 `ResolveBlendSpaces`
+  时展开为 samples），另有 `Rate`（(0,4]）与 `Loop`。数量上限 16。
+- 原生在每个 `Tick` **主状态采样之前**推进各分支自己的时钟并求值，结果进入
+  同帧缓存；`UseCachedPose(name)` 优先读同帧分支结果，没有分支时才回退到
+  `CaptureCachedPose` 的上一帧快照。分支不推进主片段时钟，也不产生根位移/notify。
+- blend 分支使用 `SetCachedPoseBranchAxis(name, value)` 下发轴值；权重按
+  EaseInOut 成形并按 5/s 平滑（每个分支独立缓存），片段对规则与运行期
+  BlendSpace 一致（2 sample 固定首 sample 为 A；3 sample 固定中间 sample 为 A）。
+- 分支是图级预计算：`Play`/`Select`/`Stop` 不会清空分支；替换/清空分支列表会
+  清空同帧缓存。
+- 限制：不是任意 DAG（没有逐节点图、没有多个消费者各自加不同 modifier）；
+  分支只产出 pose，不含 additive/layer/slot/notify/根位移；消费方再叠加这些层。
 - 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
   根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
   MeshSpace/RotationOffset 只处理旋转，不处理平移/缩放增量。

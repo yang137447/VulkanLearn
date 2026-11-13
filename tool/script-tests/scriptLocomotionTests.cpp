@@ -425,7 +425,14 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     // 1048576 layer on conduit, 2097152 layer alpha without clip,
     // 4194304 duplicate layer mask bone.
     // 8388608 adds a slot mask without a slot name.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 16252927.0f, 0.001f);
+    // 16777216 duplicate branch name, 33554432 branch clip+samples,
+    // 67108864 unresolved branch blend space, 134217728 too many branch samples.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 267911167.0f, 0.001f);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
 }
 
 TEST_F(ScriptLocomotionTest, PoseGraphReportsCachedPoseAdditiveAndSlot)

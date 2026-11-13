@@ -416,7 +416,8 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
             mode == "configureBonePhysics" || mode == "blendSpace" ||
-            mode == "additive" || mode == "layeredPose" || mode == "cachedPose";
+            mode == "additive" || mode == "layeredPose" || mode == "cachedPose" ||
+            mode == "cachedPoseBranches" || mode == "cachedPoseBranchAxis";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -765,6 +766,44 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 candidate.CaptureCachedPose(name);
             else
                 candidate.UseCachedPose(name);
+        }
+        else if (request.value("mode", std::string()) == "cachedPoseBranches")
+        {
+            // 图级命名分支：clip 或 1D blend，每 Tick 先于主状态求值。
+            if (!request.contains("branches") || !request.at("branches").is_array())
+                throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+            std::vector<Animation::SkeletalPlayback::CachedPoseBranch> branches;
+            for (const auto& node : request.at("branches"))
+            {
+                if (!node.is_object() || !node.contains("name") || !node["name"].is_string() ||
+                    !node.contains("samples") || !node["samples"].is_array() ||
+                    !node.contains("rate") || !node["rate"].is_number() ||
+                    !node.contains("loop") || !node["loop"].is_boolean())
+                    throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                Animation::SkeletalPlayback::CachedPoseBranch branch;
+                branch.name = node["name"].get<std::string>();
+                branch.rate = node["rate"].get<float>();
+                branch.loop = node["loop"].get<bool>();
+                for (const auto& sample : node["samples"])
+                {
+                    if (!sample.is_object() || !sample.contains("clip") ||
+                        !sample["clip"].is_string() || !sample.contains("threshold") ||
+                        !sample["threshold"].is_number())
+                        throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                    branch.samples.push_back({sample["clip"].get<std::string>(),
+                        sample["threshold"].get<float>()});
+                }
+                branches.push_back(std::move(branch));
+            }
+            candidate.SetCachedPoseBranches(std::move(branches));
+        }
+        else if (request.value("mode", std::string()) == "cachedPoseBranchAxis")
+        {
+            if (!request.contains("name") || !request["name"].is_string() ||
+                !request.contains("value") || !request["value"].is_number())
+                throw std::invalid_argument("Script.InvalidCachedPoseBranchAxisRequest");
+            candidate.SetCachedPoseBranchAxis(
+                request["name"].get<std::string>(), request["value"].get<float>());
         }
         else if (request.value("mode", std::string()) == "layeredPose")
         {

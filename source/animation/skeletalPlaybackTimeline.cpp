@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -489,7 +490,9 @@ void SkeletalPlayback::UseCachedPose(const std::string& name)
 {
     if (name.empty() || name.size() > 128)
         throw std::invalid_argument("Cached pose name is invalid");
-    if (cachedPoses.find(name) == cachedPoses.end())
+    const bool isBranch = std::any_of(cachedPoseBranches.begin(), cachedPoseBranches.end(),
+        [&](const CachedPoseBranchState& branch) { return branch.definition.name == name; });
+    if (!isBranch && cachedPoses.find(name) == cachedPoses.end())
         throw std::invalid_argument("Unknown cached pose: " + name);
     useCachedPoseName = name;
     useCachedPoseActive = true;
@@ -499,6 +502,61 @@ void SkeletalPlayback::ClearCachedPose()
 {
     useCachedPoseActive = false;
     useCachedPoseName.clear();
+}
+
+void SkeletalPlayback::SetCachedPoseBranches(std::vector<CachedPoseBranch> branches)
+{
+    const auto& animation = asset->AnimationAsset();
+    std::vector<CachedPoseBranchState> next;
+    next.reserve(branches.size());
+    std::set<std::string> names;
+    for (CachedPoseBranch& branch : branches)
+    {
+        if (branch.name.empty() || branch.name.size() > 128)
+            throw std::invalid_argument("Cached pose branch name is invalid");
+        if (!names.insert(branch.name).second)
+            throw std::invalid_argument("Duplicate cached pose branch: " + branch.name);
+        if (branch.samples.empty() || branch.samples.size() > 3)
+            throw std::invalid_argument(
+                "Cached pose branch requires 1..3 samples: " + branch.name);
+        if (!std::isfinite(branch.rate) || branch.rate <= 0 || branch.rate > 4)
+            throw std::invalid_argument("Cached pose branch rate is invalid: " + branch.name);
+        CachedPoseBranchState state;
+        state.definition = std::move(branch);
+        for (const CachedPoseBranchSample& sample : state.definition.samples)
+        {
+            size_t index = 0;
+            while (index < animation.clips.size() && animation.clips[index].id != sample.clip)
+                ++index;
+            if (index == animation.clips.size())
+                throw std::invalid_argument(
+                    "Unknown cached pose branch clip: " + sample.clip);
+            state.clipIndices.push_back(index);
+        }
+        for (size_t index = 1; index < state.definition.samples.size(); ++index)
+            if (!(state.definition.samples[index].threshold >
+                state.definition.samples[index - 1].threshold))
+                throw std::invalid_argument(
+                    "Cached pose branch thresholds must increase: " + state.definition.name);
+        next.push_back(std::move(state));
+    }
+    cachedPoseBranches = std::move(next);
+    frameCachedPoses.clear();
+}
+
+void SkeletalPlayback::ClearCachedPoseBranches()
+{
+    cachedPoseBranches.clear();
+    frameCachedPoses.clear();
+}
+
+void SkeletalPlayback::SetCachedPoseBranchAxis(const std::string& name, float value)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose branch name is invalid");
+    if (!std::isfinite(value))
+        throw std::invalid_argument("Cached pose branch axis must be finite");
+    cachedPoseBranchAxes[name] = value;
 }
 
 LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const

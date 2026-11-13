@@ -85,11 +85,33 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(2097152, LayerAlphaWithoutClip());
         mask |= Catch(4194304, LayerMaskDuplicate());
         mask |= Catch(8388608, SlotMaskWithoutSlot());
+        mask |= Catch(16777216, CachedPoseBranchDuplicate());
+        mask |= Catch(33554432, CachedPoseBranchWithClipAndSamples());
+        mask |= Catch(67108864, CachedPoseBranchUnresolvedAsset());
+        mask |= Catch(134217728, CachedPoseBranchTooManySamples());
         mask |= Catch(4096, ConduitWithClip());
         mask |= Catch(8192, EntryRuleOnContentState());
         mask |= Catch(16384, EntryConduitWithoutFlag());
         // 合法图必须通过；否则 rejection 夹具会把“全都拒绝”误判成正确。
         _ = ValidGraph().Validate();
+        // 分支的 BlendSpace 与状态的 BlendSpace 必须一起解析，且清除资产名。
+        var spaces = new Dictionary<string, AnimationBlendSpaceDefinition>
+        {
+            ["BS_Test"] = new("BS_Test", 5, "EaseInOut", new[]
+            {
+                new AnimationBlendSpaceSample("Clip_A", 0),
+                new AnimationBlendSpaceSample("Clip_B", 100)
+            })
+        };
+        var resolved = BranchGraph(new[]
+        {
+            new AnimationGraphCachedPoseBranch { Name = "Loco", BlendSpace = "BS_Test" }
+        }, "BS_Test").ResolveBlendSpaces(spaces);
+        _ = resolved.Validate();
+        Transform.Rotation = new(
+            resolved.CachedPoseBranches[0].BlendSamples.Count == 2 ? 1 : 0,
+            resolved.CachedPoseBranches[0].BlendSpace.Length == 0 ? 1 : 0,
+            resolved.StateMachines[0].States[0].BlendSamples.Count == 2 ? 1 : 0);
         Transform.Position = new(mask, 0, 0);
     }
 
@@ -318,6 +340,65 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
             }
         }
     };
+
+    private static AnimationGraphDefinition BranchGraph(
+        IReadOnlyList<AnimationGraphCachedPoseBranch> branches, string stateBlendSpace = "") => new()
+    {
+        Name = "BranchProbe", RootStateMachine = "Root",
+        CachedPoseBranches = branches,
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    stateBlendSpace.Length > 0
+                        ? new AnimationGraphState { Name = "A", BlendSpace = stateBlendSpace }
+                        : new AnimationGraphState { Name = "A", Clip = "Clip_A" }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition CachedPoseBranchDuplicate() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch { Name = "Loco", Clip = "Clip_A" },
+        new AnimationGraphCachedPoseBranch { Name = "Loco", Clip = "Clip_B" }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchWithClipAndSamples() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch
+        {
+            Name = "Loco", Clip = "Clip_A",
+            BlendSamples = new[]
+            {
+                new AnimationGraphBlendSample("Clip_A", 0),
+                new AnimationGraphBlendSample("Clip_B", 100)
+            }
+        }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchUnresolvedAsset() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch { Name = "Loco", BlendSpace = "BS_Test" }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchTooManySamples() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch
+        {
+            Name = "Loco",
+            BlendSamples = new[]
+            {
+                new AnimationGraphBlendSample("Clip_A", 0),
+                new AnimationGraphBlendSample("Clip_B", 100),
+                new AnimationGraphBlendSample("Clip_C", 200),
+                new AnimationGraphBlendSample("Clip_D", 300)
+            }
+        }
+    });
 
     private static AnimationGraphDefinition AdditiveOnConduit() => new()
     {

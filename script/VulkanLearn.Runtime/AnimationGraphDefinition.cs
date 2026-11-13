@@ -534,6 +534,77 @@ public sealed class AnimationGraphStateMachine
     }
 }
 
+// 图级命名 pose 分支：每帧先于主状态求值，UseCachedPose 同帧读取。
+// Clip 与 BlendSamples/BlendSpace 三选一；BlendSpace 在 ResolveBlendSpaces 时展开。
+public sealed class AnimationGraphCachedPoseBranch
+{
+    public string Name { get; init; } = "";
+    public string Clip { get; init; } = "";
+    public string BlendSpace { get; init; } = "";
+    public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
+        Array.Empty<AnimationGraphBlendSample>();
+    public float Rate { get; init; } = 1;
+    public bool Loop { get; init; } = true;
+
+    internal void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length != Name.Length ||
+            Name.Length > 128 || Name.Contains('\0'))
+            throw new InvalidOperationException("Cached pose branch name is invalid.");
+        bool hasClip = !string.IsNullOrWhiteSpace(Clip);
+        bool hasAsset = !string.IsNullOrWhiteSpace(BlendSpace);
+        bool hasSamples = BlendSamples is { Count: > 0 };
+        int declarations = (hasClip ? 1 : 0) + (hasAsset ? 1 : 0) + (hasSamples ? 1 : 0);
+        if (declarations != 1)
+            throw new InvalidOperationException(
+                $"Cached pose branch '{Name}' must declare exactly one of " +
+                "Clip, BlendSpace or BlendSamples.");
+        if (!float.IsFinite(Rate) || Rate <= 0 || Rate > 4)
+            throw new InvalidOperationException($"Cached pose branch '{Name}' rate is invalid.");
+        if (hasClip)
+        {
+            if (Clip.Trim().Length != Clip.Length || Clip.Length > 128 || Clip.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{Name}' clip is invalid.");
+            return;
+        }
+        if (hasAsset)
+            throw new InvalidOperationException(
+                $"Cached pose branch '{Name}' blend space '{BlendSpace}' was not resolved; " +
+                "call ResolveBlendSpaces before Validate.");
+        if (BlendSamples.Count is < 2 or > 3)
+            throw new InvalidOperationException(
+                $"Cached pose branch '{Name}' requires 2..3 blend samples.");
+        float previous = float.NegativeInfinity;
+        var clips = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sample in BlendSamples)
+        {
+            if (string.IsNullOrWhiteSpace(sample.Clip) ||
+                sample.Clip.Trim().Length != sample.Clip.Length)
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{Name}' has an invalid sample clip.");
+            if (!float.IsFinite(sample.Threshold) || sample.Threshold <= previous)
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{Name}' thresholds must be finite and increasing.");
+            previous = sample.Threshold;
+            if (!clips.Add(sample.Clip))
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{Name}' has duplicate sample clip '{sample.Clip}'.");
+        }
+    }
+
+    internal AnimationGraphCachedPoseBranch WithBlendSamples(
+        IReadOnlyList<AnimationGraphBlendSample> samples) => new()
+    {
+        Name = Name,
+        Clip = Clip,
+        BlendSpace = "",
+        BlendSamples = samples,
+        Rate = Rate,
+        Loop = Loop
+    };
+}
+
 public sealed class AnimationGraphDefinition
 {
     public const int MaximumStateMachines = 32;
@@ -549,6 +620,8 @@ public sealed class AnimationGraphDefinition
     public string RootStateMachine { get; init; } = "";
     // UE SaveCachedPose（根图）：非空时宿主每帧在提交后保存最终姿态。
     public string SaveCachedPose { get; init; } = "";
+    public IReadOnlyList<AnimationGraphCachedPoseBranch> CachedPoseBranches { get; init; } =
+        Array.Empty<AnimationGraphCachedPoseBranch>();
     public IReadOnlyList<AnimationGraphDirectionBranch> DirectionBranches { get; init; } =
         Array.Empty<AnimationGraphDirectionBranch>();
     public IReadOnlyList<AnimationGraphStateMachine> StateMachines { get; init; } =
@@ -560,9 +633,11 @@ public sealed class AnimationGraphDefinition
     {
         ArgumentNullException.ThrowIfNull(blendSpaces);
         if (StateMachines is null) return this;
-        bool any = false;
+        bool any = CachedPoseBranches is not null &&
+            CachedPoseBranches.Any(branch => !string.IsNullOrWhiteSpace(branch.BlendSpace));
         foreach (var machine in StateMachines)
         {
+            if (any) break;
             if (machine?.States is null) continue;
             foreach (var state in machine.States)
                 if (state is not null && !string.IsNullOrWhiteSpace(state.BlendSpace)) { any = true; break; }
@@ -606,12 +681,30 @@ public sealed class AnimationGraphDefinition
                 Transitions = machine.Transitions
             };
         }
+        var branches = new AnimationGraphCachedPoseBranch[CachedPoseBranches?.Count ?? 0];
+        for (int index = 0; index < branches.Length; ++index)
+        {
+            var branch = CachedPoseBranches![index];
+            if (string.IsNullOrWhiteSpace(branch.BlendSpace))
+            {
+                branches[index] = branch;
+                continue;
+            }
+            if (!blendSpaces.TryGetValue(branch.BlendSpace, out var space))
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{branch.Name}' references unknown blend space " +
+                    $"'{branch.BlendSpace}'.");
+            branches[index] = branch.WithBlendSamples(space.Samples
+                .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold))
+                .ToArray());
+        }
         return new AnimationGraphDefinition
         {
             Name = Name,
             Version = Version,
             RootStateMachine = RootStateMachine,
             SaveCachedPose = SaveCachedPose,
+            CachedPoseBranches = branches,
             DirectionBranches = DirectionBranches,
             StateMachines = machines
         };
@@ -628,6 +721,19 @@ public sealed class AnimationGraphDefinition
             throw new InvalidOperationException("Animation graph cached pose name is invalid.");
         if (StateMachines is null || DirectionBranches is null)
             throw new InvalidOperationException("Animation graph collections cannot be null.");
+        if (CachedPoseBranches is null || CachedPoseBranches.Count > 16)
+            throw new InvalidOperationException("Animation graph cached pose branch budget exceeded.");
+        var cachedBranchNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var branch in CachedPoseBranches)
+        {
+            if (branch is null)
+                throw new InvalidOperationException(
+                    "Animation graph has a null cached pose branch.");
+            branch.Validate();
+            if (!cachedBranchNames.Add(branch.Name))
+                throw new InvalidOperationException(
+                    $"Animation graph has duplicate cached pose branch '{branch.Name}'.");
+        }
         if (StateMachines.Count == 0 || StateMachines.Count > MaximumStateMachines)
             throw new InvalidOperationException("Animation graph state machine budget exceeded.");
         if (DirectionBranches.Count > MaximumDirectionBranches)

@@ -219,6 +219,23 @@ public:
     void CaptureCachedPose(const std::string& name);
     void UseCachedPose(const std::string& name);
     void ClearCachedPose();
+    // 命名 pose 分支：每 Tick 在主状态采样之前求值，结果进入同帧缓存，
+    // UseCachedPose 优先读取它；不是任意 DAG，只支持 clip 或 1D blend 分支。
+    struct CachedPoseBranchSample
+    {
+        std::string clip;
+        float threshold = 0;
+    };
+    struct CachedPoseBranch
+    {
+        std::string name;
+        std::vector<CachedPoseBranchSample> samples;
+        float rate = 1;
+        bool loop = true;
+    };
+    void SetCachedPoseBranches(std::vector<CachedPoseBranch> branches);
+    void ClearCachedPoseBranches();
+    void SetCachedPoseBranchAxis(const std::string& name, float value);
     bool CachedPoseActive() const { return useCachedPoseActive; }
     std::string CachedPoseName() const { return useCachedPoseActive ? useCachedPoseName : std::string(); }
     // 只调节唯一目标时钟，不重采样或重启混合；混合时长仍按实际 delta 推进。
@@ -514,10 +531,22 @@ private:
     std::vector<uint8_t> slotNotifyActive;
     std::unordered_map<std::string, float> frameCurves;
     std::map<std::string, LocalPose> cachedPoses;
+    struct CachedPoseBranchState
+    {
+        CachedPoseBranch definition;
+        std::vector<size_t> clipIndices;
+        float time = 0;
+        float weight = 0;
+        bool weightValid = false;
+    };
+    std::vector<CachedPoseBranchState> cachedPoseBranches;
+    std::unordered_map<std::string, float> cachedPoseBranchAxes;
+    std::unordered_map<std::string, LocalPose> frameCachedPoses;
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
     // 缓存姿态以快照为 Base：不推进片段时钟，也不产生根位移/notify。
     void TickCachedPose(float deltaSeconds);
+    void EvaluateCachedPoseBranches(float deltaSeconds);
     void AdvanceAdditiveClock(float deltaSeconds);
     LocalPose ApplyAdditive(LocalPose locals) const;
     void RebuildFrameCurves(float baseTime, float blendTime);

@@ -411,6 +411,67 @@ TEST(SkeletalCachedPose, CaptureDuringCachedPoseDoesNotAccumulateAdditive)
     EXPECT_NEAR(scale, 2.0f, 1e-3f);
 }
 
+TEST(SkeletalCachedPose, BranchIsEvaluatedInTheSameFrame)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetCachedPoseBranches({
+        {"Branch", {{"b", 0.0f}}, 1.0f, true}
+    });
+    player.UseCachedPose("Branch");
+    player.Tick(0.25f);
+    // 分支与主状态同一帧求值：主状态读到的就是 b 在 0.25 s 的姿态。
+    SkeletalPlayback direct(asset);
+    direct.Play("b", true, 1, true);
+    direct.Tick(0.25f);
+    for (size_t joint = 0; joint < direct.Models().size(); ++joint)
+        EXPECT_TRUE(direct.Models()[joint].isApprox(player.Models()[joint], 1e-4f));
+    // 分支不推进主片段时钟。
+    EXPECT_FLOAT_EQ(player.Time(), 0.5f);
+}
+
+TEST(SkeletalCachedPose, BlendBranchUsesAxisAndWeight)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    player.Play("c", true, 1, true);
+    player.SetCachedPoseBranches({
+        {"Loco", {{"a", 0.0f}, {"b", 100.0f}}, 1.0f, true}
+    });
+    player.SetCachedPoseBranchAxis("Loco", 50.0f);
+    player.UseCachedPose("Loco");
+    player.Tick(0.0f);
+    // a 的 hip x=3、b 的 hip x=11；轴 50 取中点。
+    EXPECT_NEAR(player.Models()[1](0, 3), 7.0f, 1e-2f);
+    const float scale = player.Models()[1].block<3, 3>(0, 0).col(0).norm();
+    EXPECT_NEAR(scale, 1.5f, 1e-2f);
+}
+
+TEST(SkeletalCachedPose, BranchRejectsInvalidAndFallsBackToSnapshot)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.CaptureCachedPose("Snap");
+    EXPECT_ANY_THROW(player.SetCachedPoseBranches({
+        {"x", {{"missing", 0.0f}}, 1.0f, true}}));
+    EXPECT_ANY_THROW(player.SetCachedPoseBranches({
+        {"x", {{"a", 100.0f}, {"b", 50.0f}}, 1.0f, true}}));
+    EXPECT_ANY_THROW(player.SetCachedPoseBranches({
+        {"x", {{"a", 0.0f}}, 1.0f, true},
+        {"x", {{"b", 0.0f}}, 1.0f, true}}));
+    // 清空分支后仍能回退到上一帧快照。
+    player.SetCachedPoseBranches({
+        {"Loco", {{"b", 0.0f}}, 1.0f, true}});
+    player.ClearCachedPoseBranches();
+    player.UseCachedPose("Snap");
+    player.Tick(1.0f / 60);
+    EXPECT_TRUE(player.CachedPoseActive());
+}
+
 // 只有 foot 轨道不同：用于验证 mask 分层只改命中关节。
 Clip MakeFootClip(const std::string& id, float footZ)
 {

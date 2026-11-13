@@ -103,6 +103,8 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         throw std::invalid_argument("Playback delta must be finite and nonnegative");
     rootMotionDelta.setZero();
     rootMotionYawDelta = 0;
+    // 分支是图级预计算：先于主状态采样求值，UseCachedPose 才能在同一帧读到。
+    EvaluateCachedPoseBranches(deltaSeconds);
     if (useCachedPoseActive)
     {
         TickCachedPose(deltaSeconds);
@@ -440,17 +442,103 @@ LocalPose SkeletalPlayback::ApplySlotMontage(LocalPose locals) const
         asset->mesh.joints.size());
 }
 
+namespace
+{
+float BranchSmoothstep(float axis, float from, float to)
+{
+    const float span = to - from;
+    const float alpha = span > 0 ? std::clamp((axis - from) / span, 0.0f, 1.0f) : 0.0f;
+    return alpha * alpha * (3 - 2 * alpha);
+}
+}
+
+void SkeletalPlayback::EvaluateCachedPoseBranches(float deltaSeconds)
+{
+    frameCachedPoses.clear();
+    const auto& clips = asset->AnimationAsset().clips;
+    for (CachedPoseBranchState& branch : cachedPoseBranches)
+    {
+        const auto& definition = branch.definition;
+        if (branch.clipIndices.empty()) continue;
+        const size_t baseIndex = definition.samples.size() >= 3 ? 1 : 0;
+        const auto& baseClip = clips.at(branch.clipIndices[baseIndex]);
+        const float baseDuration = baseClip.runtime ? baseClip.runtime->duration() : 0.0f;
+        if (baseDuration <= 0) continue;
+        if (deltaSeconds > 0)
+        {
+            branch.time += deltaSeconds * definition.rate;
+            if (definition.loop)
+                branch.time = std::fmod(branch.time, baseDuration);
+            else
+                branch.time = std::min(branch.time, std::max(0.0f, baseDuration - 1e-4f));
+        }
+        const auto axisEntry = cachedPoseBranchAxes.find(definition.name);
+        const float axis = axisEntry != cachedPoseBranchAxes.end() ? axisEntry->second : 0.0f;
+        size_t first = baseIndex;
+        size_t second = baseIndex;
+        float target = 0;
+        if (definition.samples.size() == 1)
+            first = second = 0;
+        else if (baseIndex == 0)
+        {
+            first = 0;
+            second = 1;
+            target = BranchSmoothstep(axis,
+                definition.samples[0].threshold, definition.samples[1].threshold);
+        }
+        else if (axis <= definition.samples[1].threshold)
+        {
+            first = 1;
+            second = 0;
+            target = 1 - BranchSmoothstep(axis,
+                definition.samples[0].threshold, definition.samples[1].threshold);
+        }
+        else
+        {
+            first = 1;
+            second = 2;
+            target = BranchSmoothstep(axis,
+                definition.samples[1].threshold, definition.samples[2].threshold);
+        }
+        if (!branch.weightValid)
+        {
+            branch.weight = target;
+            branch.weightValid = true;
+        }
+        else
+        {
+            const float step = 5 * std::max(0.0f, deltaSeconds);
+            branch.weight = std::clamp(target, branch.weight - step, branch.weight + step);
+        }
+        LocalPose pose = Sample(branch.clipIndices[first], branch.time);
+        if (first != second && branch.weight > 0)
+        {
+            const auto& otherClip = clips.at(branch.clipIndices[second]);
+            const float otherDuration = otherClip.runtime ? otherClip.runtime->duration() : 0.0f;
+            const float phase = std::clamp(branch.time / baseDuration, 0.0f, 1.0f);
+            float otherTime = phase * otherDuration;
+            if (!definition.loop)
+                otherTime = std::min(otherTime, std::max(0.0f, otherDuration - 1e-4f));
+            LocalPose other = Sample(branch.clipIndices[second], otherTime);
+            if (branch.weight >= 1.0f) pose = std::move(other);
+            else pose = Crossfade(pose, std::move(other), branch.weight, asset->mesh);
+        }
+        frameCachedPoses[definition.name] = std::move(pose);
+    }
+}
+
 void SkeletalPlayback::TickCachedPose(float deltaSeconds)
 {
     firedNotifies = std::move(pendingNotifies);
     pendingNotifies.clear();
+    const auto frame = frameCachedPoses.find(useCachedPoseName);
     const auto found = cachedPoses.find(useCachedPoseName);
-    if (found == cachedPoses.end())
+    if (frame == frameCachedPoses.end() && found == cachedPoses.end())
         throw std::runtime_error("Cached pose disappeared: " + useCachedPoseName);
     AdvanceAdditiveClock(deltaSeconds);
     AdvanceLayerClock(deltaSeconds);
     AdvanceSlotMontageClock(deltaSeconds);
-    auto locals = found->second;
+    auto locals = frame != frameCachedPoses.end() ? frame->second : found->second;
     locals = ApplyAdditive(std::move(locals));
     locals = ApplyLayered(std::move(locals));
     locals = ApplySlotMontage(std::move(locals));

@@ -114,6 +114,11 @@ internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha
     public static readonly LayeredPoseCommand Disabled =
         new(false, "", 0, false, Array.Empty<string>());
 }
+// 图级命名 pose 分支：每帧在主状态之前求值，UseCachedPose 同帧读取。
+public readonly record struct CachedPoseBranchSample(string Clip, float Threshold);
+public sealed record CachedPoseBranchDefinition(string Name,
+    IReadOnlyList<CachedPoseBranchSample> Samples, float Rate, bool Loop);
+internal sealed record CachedPoseBranchesCommand(CachedPoseBranchDefinition[] Branches);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -152,6 +157,8 @@ public sealed class AnimationPlayback
     internal BlendSpaceCommand? PendingBlendSpace;
     internal AdditiveCommand? PendingAdditive;
     internal CachedPoseCommand? PendingCachedPose;
+    internal CachedPoseBranchesCommand? PendingCachedPoseBranches;
+    internal readonly Dictionary<string, float> PendingCachedPoseAxes = new(StringComparer.Ordinal);
     internal LayeredPoseCommand? PendingLayeredPose;
     internal string[] MontageSlotMask = [];
     internal float MontageSlotAlpha = 1;
@@ -379,6 +386,46 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         PendingCachedPose = CachedPoseCommand.Disabled;
+    }
+
+    // 命名分支配置只在变化时提交一次；轴值每帧由图宿主下发。
+    public void SetCachedPoseBranches(IReadOnlyList<CachedPoseBranchDefinition> branches)
+    {
+        CheckRequest();
+        ArgumentNullException.ThrowIfNull(branches);
+        if (branches.Count > 16)
+            throw new ArgumentException("Cached pose branch budget exceeded.", nameof(branches));
+        foreach (var branch in branches)
+        {
+            if (string.IsNullOrWhiteSpace(branch.Name) || branch.Name.Length > 128 ||
+                branch.Name.Contains('\0'))
+                throw new ArgumentException("Cached pose branch name is invalid.", nameof(branches));
+            if (branch.Samples is null || branch.Samples.Count is < 1 or > 3)
+                throw new ArgumentException("Cached pose branch requires 1..3 samples.", nameof(branches));
+            if (!float.IsFinite(branch.Rate) || branch.Rate <= 0 || branch.Rate > 4)
+                throw new ArgumentException("Cached pose branch rate is invalid.", nameof(branches));
+            foreach (var sample in branch.Samples)
+                if (string.IsNullOrWhiteSpace(sample.Clip) ||
+                    !ClipIds.Contains(sample.Clip, StringComparer.Ordinal))
+                    throw new ArgumentException($"Unknown cached pose branch clip: {sample.Clip}.",
+                        nameof(branches));
+        }
+        PendingCachedPoseBranches = new(branches.ToArray());
+    }
+
+    public void ClearCachedPoseBranches()
+    {
+        CheckRequest();
+        PendingCachedPoseBranches = new(Array.Empty<CachedPoseBranchDefinition>());
+    }
+
+    public void SetCachedPoseBranchAxis(string name, float value)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose branch name is invalid.", nameof(name));
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+        PendingCachedPoseAxes[name] = value;
     }
 
     // LayeredBoneBlend：mask 为空表示全身；未知骨骼名由原生拒绝。
@@ -1194,6 +1241,25 @@ public static partial class NativeBridge
                     alpha = additive.Alpha, loop = additive.Loop });
                 mesh.Animation.PendingAdditive = null;
             }
+            // 分支注册必须先于 UseCachedPose：同一 batch 里 use 会校验名字是否存在。
+            if (mesh.Animation.PendingCachedPoseBranches is { } cachedBranches)
+            {
+                commands.Add(new { component = mesh.Id, mode = "cachedPoseBranches",
+                    branches = cachedBranches.Branches.Select(branch => new
+                    {
+                        name = branch.Name,
+                        samples = branch.Samples.Select(sample => new
+                        {
+                            clip = sample.Clip, threshold = sample.Threshold
+                        }).ToArray(),
+                        rate = branch.Rate, loop = branch.Loop
+                    }).ToArray() });
+                mesh.Animation.PendingCachedPoseBranches = null;
+            }
+            foreach (var axis in mesh.Animation.PendingCachedPoseAxes.ToArray())
+                commands.Add(new { component = mesh.Id, mode = "cachedPoseBranchAxis",
+                    name = axis.Key, value = axis.Value });
+            mesh.Animation.PendingCachedPoseAxes.Clear();
             if (mesh.Animation.PendingCachedPose is { } cachedPose)
             {
                 commands.Add(new { component = mesh.Id, mode = "cachedPose",

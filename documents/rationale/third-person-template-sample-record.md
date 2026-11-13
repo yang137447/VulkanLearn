@@ -60,6 +60,9 @@ Maps/SC_third_person/
   `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
   使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
   行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
+- `CachedPoseBranches`：每帧先于主状态求值的命名分支（clip 或 1D blend），
+  `UseCachedPose` 优先读同帧结果；Third Person 的 `Locomotion` 分支引用
+  `BS_MM_WalkRun`，Land 读取本帧 Walk/Run 姿态再叠加 `MM_Land` additive。
 - `LayeredBoneBlend`：原生 base → additive → layer 顺序，按骨骼 mask 逐关节
   混合 overlay（空 mask 全身、未知骨骼拒绝）；官方模板未使用分层，本轮只补
   通用能力与测试。
@@ -124,7 +127,7 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：375/375 通过，覆盖片段骨骼子集导入、
+- `animation_preflight_tests`：378/378 通过，覆盖片段骨骼子集导入、
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
   `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
   masked overlay/完成语义。
