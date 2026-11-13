@@ -894,6 +894,48 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
   `feather_tile_paints.py`：它先拼接全局场再羽化/归一化/切分，避免逐 tile
   独立模糊在 tile 边界引入接缝。
 
+## VLP2 sidecar
+
+VLP2 是 VLP1 paint 文件旁边的离线校验 sidecar，**不改变 VLP1 二进制格式**：
+对每个 `tile_XX/Source/*_paint.vlpaint`，同目录生成
+`<paint>.meta.json`。当前 sidecar 由工具写出并由离线脚本校验；运行时尚未
+消费 sidecar，加载期仍只读取 VLP1 本体。
+
+字段固定为：
+
+| 字段 | 内容 |
+| --- | --- |
+| `version` | `2` |
+| `kind` | `"terrainLayerWeights"` |
+| `tileX` / `tileY` | tile 序号按 `row = idx // grid`、`col = idx % grid` 推出 |
+| `tileGrid` | 方形 tile 网格边长 |
+| `width` / `height` / `layerCount` | 必须等于 VLP1 头部声明 |
+| `layerKeys` | 与 TR `layers[].key`（缺省 `assetPath#name`）顺序完全一致 |
+| `featherTexels` | 记录写入时使用的羽化宽度 |
+| `contentSha256` | `.vlpaint` 文件字节的 SHA-256 |
+
+工具入口：
+
+- `python tool/terrain-houdini/paint_manifest.py write <Generated/<terrain-set>> [--feather 4]`
+  重写该 tile set 的全部 manifest。
+- `python tool/terrain-houdini/paint_manifest.py validate <Generated/<terrain-set>>`
+  检查 manifest 存在且 `version`/`kind` 正确；`width`/`height`/`layerCount`
+  与 VLP1 头一致；`layerKeys` 与 TR 层 key 列表完全一致（顺序敏感）；
+  `contentSha256` 与文件实际 SHA-256 一致；逐 texel 层权和与 1 的误差
+  `<= 1e-3`；同 row 相邻列、同 col 相邻行的 tile 边界列/行逐层最大差
+  `< 0.01`；每层相邻 texel 梯度 `> 0.5` 的像素占比 `< 0.5%`（脚本报告
+  实际数值）；同时检查 `tileX`/`tileY`/`tileGrid` 与每 tile 唯一
+  `*_paint.vlpaint`，tile 目录必须是连续方阵。任一失败以非零状态退出并
+  列出 tile/layer。
+- `feather_tile_paints.py` 在写完每个 VLP1 后调用同一写入函数。
+- `houdini_weightmap_export.py` 的 VLP1 输出也会写 sidecar；它没有 TR，
+  `layerKeys` 暂时是该次导出的输出层名。fresh 导出后仍需用
+  `paint_manifest.py write` 按 TR 重写，`validate` 才按 TR 契约检查。
+
+与 mode 1 的关系：`paintPath`/VLP1 是 World 级 VT 的权重来源；MI 的
+`layerWeightMaps`（`u_terrainWeightMapMode=1`）仍是**单 placement** 纹理，
+每个 placement 必须绑定各自独立的权重数组，不能因为 sidecar 存在而共享。
+
 ## 层页 feedback 驱动驻留（L4a）
 
 L4a 复用 P2/P3 的 128×128 覆盖页 feedback，不再新增 pass 或 runtime test flag。

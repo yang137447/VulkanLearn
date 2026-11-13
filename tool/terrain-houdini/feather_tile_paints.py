@@ -26,6 +26,9 @@ import types
 import numpy
 from PIL import Image
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import paint_manifest
+
 
 def load_core():
     fake = types.ModuleType("hou")
@@ -187,6 +190,9 @@ def main(argv=None):
             print("skip tile_%02d (already feathered; use --force)" % index)
             continue
         core["write_vlpaint"](destination, stack)
+        paint_manifest.write_manifest_for_tile(
+            os.path.dirname(source_dir), destination, args.feather
+        )
         print(
             "tile_%02d layers=%d res=%d feather=%.1f sum=%.4f"
             % (index, stack.shape[0], args.resolution, args.feather,

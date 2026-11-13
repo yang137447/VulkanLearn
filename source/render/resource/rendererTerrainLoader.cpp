@@ -1,6 +1,5 @@
 #include "render/resource/rendererTerrainLoader.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -156,29 +155,8 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                     plan.desc.materialInstancePath);
             }
             const std::string placementId = TerrainPlacementIdentity(plan);
-            auto binding = std::find_if(
-                streamingState.weightMapBindings.begin(),
-                streamingState.weightMapBindings.end(),
-                [&weightMaps](
-                    const TerrainStreamingState::TerrainWeightMapBinding& entry)
-                {
-                    return entry.layerWeightMaps == weightMaps;
-                });
-            if (binding == streamingState.weightMapBindings.end())
-            {
-                TerrainStreamingState::TerrainWeightMapBinding entry;
-                entry.layerWeightMaps = weightMaps;
-                entry.materialPath = plan.desc.materialInstancePath;
-                entry.placements.push_back(placementId);
-                streamingState.weightMapBindings.push_back(std::move(entry));
-            }
-            else if (std::find(
-                         binding->placements.begin(),
-                         binding->placements.end(),
-                         placementId) == binding->placements.end())
-            {
-                binding->placements.push_back(placementId);
-            }
+            streamingState.weightMapBindings.Record(
+                weightMaps.get(), plan.desc.materialInstancePath, placementId);
         }
         // S1/S2：按 layer.sourceSet 分组登记源数组；同一 set 共享同一组
         // shared_ptr，不同 set 允许不同数组但共享同一组 atlas。

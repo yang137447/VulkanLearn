@@ -40,6 +40,8 @@ continuous.  Blur radius is in source texels; with a 2016^2 map over 4032 m
 one texel is 2 m, i.e. a 4-texel feather is an 8 m transition.
 """
 
+import hashlib
+import json
 import math
 import os
 import struct
@@ -439,6 +441,42 @@ def write_vlpaint(path, weights):
         handle.write(alpha)
 
 
+def write_vlpaint_manifest(path, weights, names, grid, tile_x, tile_y, feather):
+    """Write the VLP2 sidecar for a fresh export.
+
+    A fresh Houdini export has no TR, so ``layerKeys`` is the exporter's output
+    layer name.  Run ``paint_manifest.py write`` afterwards to replace it with
+    the TR ``layers[].key`` order before validating the tile set.
+    """
+    count, height, width = weights.shape
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(1 << 20)
+            if not block:
+                break
+            digest.update(block)
+    document = {
+        "version": 2,
+        "kind": "terrainLayerWeights",
+        "tileX": int(tile_x),
+        "tileY": int(tile_y),
+        "tileGrid": int(grid),
+        "width": int(width),
+        "height": int(height),
+        "layerCount": int(count),
+        "layerKeys": [str(name) for name in names],
+        "featherTexels": float(feather),
+        "contentSha256": digest.hexdigest(),
+    }
+    manifest_path = path + ".meta.json"
+    temporary = manifest_path + ".tmp"
+    with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(document, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(temporary, manifest_path)
+
+
 def resample(array, size):
     source_h, source_w = array.shape
     if size <= 0 or (source_h == size and source_w == size):
@@ -514,6 +552,15 @@ def main():
                 output_dir, "%s_tile_%d_%d.vlpaint" % (vlpaint_prefix, tile_x, tile_y)
             )
             write_vlpaint(path, tile)
+            write_vlpaint_manifest(
+                path,
+                tile,
+                names,
+                grid,
+                tile_x,
+                tile_y,
+                float(value(node, "feather_texels")),
+            )
             print("[weightmap] wrote", path)
 
     node.parm("export").set(0)

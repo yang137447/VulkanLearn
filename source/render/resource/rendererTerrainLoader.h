@@ -19,6 +19,7 @@
 #include "terrain/terrainLayerSources.h"
 #include "terrain/terrainLayerVisibility.h"
 #include "terrain/terrainPageManager.h"
+#include "terrain/terrainWeightMapBinding.h"
 #include "render/resource/terrain/terrainAtlasGpu.h"
 #include "render/resource/terrain/terrainLayerPageUpload.h"
 #include "render/resource/terrain/terrainPageUpload.h"
@@ -160,13 +161,7 @@ struct TerrainStreamingState
     // 多地形 World 守卫：u_terrainWeightMapMode=1 采样的是 MI 自带的单块
     // 地形权重数组。按 **layerWeightMaps 纹理**分组（复制 MI 但指向同一份
     // 权重数组仍会逐 tile 重复），记录使用它的 placement；超过一个直接失败。
-    struct TerrainWeightMapBinding
-    {
-        std::shared_ptr<Texture> layerWeightMaps;
-        std::string materialPath;
-        std::vector<std::string> placements;
-    };
-    std::vector<TerrainWeightMapBinding> weightMapBindings;
+    TerrainWeightMapBindingTracker weightMapBindings;
     // -1 = 自动 mip；0..6 = 强制目标 mip。Console 写、渲染线程读。
     std::atomic<int32_t> layerForceMip{-1};
     // 渲染线程最后写入 M_terrain 的值，避免每帧重复 SetParameter。

@@ -14,6 +14,7 @@ add_executable(terrain_tests
     terrainLayerMipBudgetTests.cpp
     terrainLayerStreamingQualityTests.cpp
 terrainLayerRegistryTests.cpp
+    terrainWeightMapBindingTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
     terrainChunkResidencyTests.cpp
@@ -38,6 +39,7 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainChunkResidency.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPageManager.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMapBinding.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp

@@ -778,27 +778,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     // 每块地形都有自己的层权重量；一个 MI 被多个 placement 共享时，
     // u_terrainWeightMapMode=1 会让所有 tile 采同一份掩码（表现为同一图案
     // 逐 tile 重复、掩码边界变成硬边）。这里直接失败，而不是静默采错。
-    for (const TerrainStreamingState::TerrainWeightMapBinding& binding :
-         terrainStreaming->weightMapBindings)
-    {
-        if (binding.placements.size() <= 1)
-            continue;
-        std::string placements;
-        for (const std::string& placement : binding.placements)
-        {
-            if (!placements.empty())
-                placements += ", ";
-            placements += placement;
-        }
-        throw std::runtime_error(
-            "Terrain u_terrainWeightMapMode=1 requires one material instance per "
-            "terrain placement; layerWeightMaps of '" +
-            binding.materialPath + "' is shared by " +
-            std::to_string(binding.placements.size()) + " placements (" +
-            placements +
-            "). Use the world page-table weights (remove "
-            "u_terrainWeightMapMode) or give every placement its own MI.");
-    }
+    const std::string weightMapError =
+        terrainStreaming->weightMapBindings.SharedBindingError();
+    if (!weightMapError.empty())
+        throw std::runtime_error(weightMapError);
 
     if (hasTerrainLayers && !terrainStreaming->layerSources.empty())
     {
