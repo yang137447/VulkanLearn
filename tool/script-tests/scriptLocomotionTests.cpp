@@ -418,8 +418,23 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     // 1 duplicate, 2 unknown target, 4 nested cycle, 8 unreachable, 16 empty clip,
     // 32 invalid threshold, 64 budget, 128 unknown state alias source,
     // 256 blend sample count, 512 unsorted blend thresholds, 1024 duplicate blend clip,
-    // 2048 unsupported blend axis.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 4095.0f, 0.001f);
+    // 2048 unsupported blend axis, 4096 conduit with clip, 8192 entry rule on
+    // content state, 16384 entry conduit without AllowConduitEntryStates.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 32767.0f, 0.001f);
+}
+
+TEST_F(ScriptLocomotionTest, ConduitResolvesSameFrameAndFallsBackWhenBlocked)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphConduitProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
 }
 
 TEST_F(ScriptLocomotionTest, StateAliasAndVerticalSpeedDriveSharedTransition)

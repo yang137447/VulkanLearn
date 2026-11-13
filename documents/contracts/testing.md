@@ -398,6 +398,9 @@ inPlace 与冻结姿态所有权。`SkeletalBlendSpace` 验证 BlendSpace1D 的�
 `FormalGaspControllerPublishesNativeSelectionsForGroundedAndAirborneActions`
 实际执行资源侧 `Gasp.CharacterBlueprint` 并记录原生选帧，区别于旧的
 `LegacyLocomotion*` 直接选片段夹具；动作类别曾出现不证明长时间稳态或碰墙策略。
+`ScriptLocomotionTest` 验证图级 State Alias、`VerticalSpeed`、BlendSpace1D 的
+sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链、环与入口 conduit；
+它只证明图决策，不证明资源侧姿态观感。
 
 `EditorUiTest.MotionMatching*` 验证同代查询/代价、Selected/Continue/前五名、
 文字转义、固定槽位、展开状态的暂停静默、隐藏条件、短视口滚动/输入隔离和单行摘要；

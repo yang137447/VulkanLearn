@@ -576,15 +576,19 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `StateMachines[]`
 - `AnimationGraphStateMachine`
   - `Name`、`EntryState`、可选 `DirectionCurve`
-  - `States[]`、`Aliases[]`、`EntryTransitions[]`、`Transitions[]`
+  - `States[]`、`Aliases[]`、`EntryTransitions[]`、`Transitions[]`、
+    `AllowConduitEntryStates`（默认 false；EntryState 是 conduit 时必须显式开启）
   - `Aliases[]` 是 UE State Alias 的等价物：每个 alias 声明一组来源状态（或
     `Global = true`）；transition 的 `From` 可以写 alias 名，求值时按当前状态是否
     属于该 alias 展开。alias 不是可进入状态，必须只出现在 `From`
   - `EntryTransitions` 只在进入状态机当帧检查；之后每帧检查 `Transitions`
   - 每个状态机每帧最多迁移一次，`From = "*"` 表示任意当前状态
 - `AnimationGraphState`
-  - `Clip`、`SubStateMachine` 与 `BlendSamples` 必须三选一；外层 Idle/Walk/Jog 通过
+  - `Clip`、`SubStateMachine`、`BlendSamples` 与 `Conduit` 必须四选一；外层 Idle/Walk/Jog 通过
     子状态机表达内层 entry/start/cycles/stop
+  - `Conduit = true` 表示 UE 的无姿态过路状态；`EntryRule`（仅 conduit 可用，null =
+    恒真）决定这次是否允许借它转移。conduit 不能声明 clip/blend/子状态机，也不能
+    覆盖 rate、start position、sync group 或 direction branch
   - `BlendSamples[]`（`Clip` + `Threshold`）表示 1D BlendSpace；`BlendAxis` 目前只接受
     `Speed`（取 `AnimationGraphInput.PlanarSpeed`），2..3 个 sample，阈值有限且严格递增，
     sample 片段不得重复（成对原生混合见下方 BlendSpace1D）
@@ -608,7 +612,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - `AnimationGraphRuntime.Update(AnimationGraphInput)` 输出 `AnimationGraphDecision`：
   外层/叶子状态、state path、mode、transition tag、clip、loop、direction branch、
   blend、inertialization、syncGroup、syncPhase、startPosition、crossfade、changed、
-  leaf state time 与 completed；BlendSpace 状态额外输出 `BlendClip` 与 `BlendWeight`。
+  leaf state time 与 completed；BlendSpace 状态额外输出 `BlendClip` 与 `BlendWeight`，
+  经过 conduit 时额外输出按顺序排列的 `ConduitPath`。
 - 外层状态迁移先求值；迁移后重建内层 entry 栈，并在同一帧继续检查内层 entry，
   因此 `Idle -> Walk` 可以直接选方向起步。外层 transition 拥有整个内层状态机的
   交叉淡入；内层迁移只在没有外层迁移时接管 blend。
@@ -655,6 +660,26 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   `play`/`transitionTo`（或单独更新权重），字段为 `enabled`/`clipA`/`clipB`/`weight`；
   原生反馈在 `blendSpace = { active, clip, weight }` 中发布。
 
+### Conduit
+
+- Conduit 是没有姿态的过路状态：它可以被转移指向，但不会成为最终叶子片段。
+- 求值按 `Priority`（同优先级按声明顺序）尝试当前状态的转移；目标若是 conduit，
+  同一帧用该 conduit 的出边继续递归，直到落到内容状态。最终生效的是
+  “conduit → 内容状态”那条 transition 的 `BlendSeconds`/`Inertialization`/
+  `SyncGroup`/`Tag`，经过的 conduit 名按顺序进入 `ConduitPath`。
+- `EntryRule` 为 false 时，这条 conduit 路径整体不可用：runtime 继续尝试源状态的
+  下一条转移；conduit 之间允许多级串联。
+- 单次求值最多跟随 16 个 conduit，且同一条求值路径不会重复访问同一个 conduit；
+  conduit 成环在定义期合法，运行时由 visited 集合截断，找不到内容状态就保持原状态。
+- `EntryState` 是 conduit 时，状态机必须设置 `AllowConduitEntryStates = true`，
+  否则定义校验失败。允许时进入状态机当帧就会跟随 conduit；若没有可用出边，
+  该帧停在该 conduit 上（`Clip` 为空，宿主不提交新片段），下一帧继续求值。
+- 限制：conduit 不产生 notify/根位移，也不参与 BlendSpace 轴；不支持 UE 的
+  `FAnimationPotentialTransition` 事件链与 conduit 专属过渡时长覆盖。
+- conduit 没有自己的时钟：`EntryRule` 里使用 `StateTime`/`StateCompleted` 时取的是
+  所在状态机当前状态的时间；经由入口 conduit 落地的内容状态，其
+  `EntryFromState` 记录的是 conduit 名，而不是状态机的入口来源。
+
 ### 校验与边界
 
 - `Validate()` 拒绝：重复状态机/状态/方向分支、未知 transition 目标或子状态机、
@@ -663,7 +688,7 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
 - 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
   SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与
-  单层 pose 输出与 1D BlendSpace；Conduit 仍未实现；
+  单层 pose 输出、1D BlendSpace 与 Conduit；
   R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供，仍是整身
   `DefaultSlot` 覆盖，不做骨骼 mask 分层。AimOffset、TurnInPlace、Pivot、
   LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的

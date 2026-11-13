@@ -40,7 +40,7 @@ public sealed class AnimationGraphState
     public const int MaximumBlendSamples = 3;
 
     public string Name { get; init; } = "";
-    // Clip、SubStateMachine 与 BlendSamples 必须三选一。
+    // Clip、SubStateMachine、BlendSamples 与 Conduit 必须四选一。
     public string Clip { get; init; } = "";
     public bool Loop { get; init; } = true;
     public float Rate { get; init; } = 1;
@@ -53,6 +53,10 @@ public sealed class AnimationGraphState
     public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
+    // UE Conduit：无姿态的过路状态，只能作为转移目标；进入后同一帧继续求值它的出边。
+    // EntryRule 为 null 表示无条件；只有 Conduit 可以声明入口规则。
+    public bool Conduit { get; init; }
+    public AnimationGraphCondition? EntryRule { get; init; }
     // 供宿主把叶子状态映射回语义（Echo 的 Forward/Left90...）；runtime 不解释名称。
     public string DirectionBranch { get; init; } = "";
     // 一次性起步/停步片段被新外层状态打断时，runtime 允许直接进入目标叶子。
@@ -67,11 +71,29 @@ public sealed class AnimationGraphState
         bool hasClip = !string.IsNullOrWhiteSpace(Clip);
         bool hasMachine = !string.IsNullOrWhiteSpace(SubStateMachine);
         bool hasBlend = BlendSamples is { Count: > 0 };
-        int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0);
+        int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0) +
+            (Conduit ? 1 : 0);
         if (declarations != 1)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' must declare exactly one of " +
-                "Clip, SubStateMachine or BlendSamples.");
+                "Clip, SubStateMachine, BlendSamples or Conduit.");
+        if (Conduit)
+        {
+            EntryRule?.Validate();
+            if (!float.IsFinite(Rate) || Rate != 1 || StartPosition != -1 ||
+                SyncGroup is null || SyncGroup.Length > 0)
+                throw new InvalidOperationException(
+                    $"Animation graph conduit '{Name}' cannot override rate, start position or sync group.");
+            if (DirectionBranch is null || DirectionBranch.Length > 0)
+                throw new InvalidOperationException(
+                    $"Animation graph conduit '{Name}' cannot declare a direction branch.");
+        }
+        else
+        {
+            if (EntryRule is not null)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' declares an entry rule without being a conduit.");
+        }
         if (hasBlend)
         {
             ValidateBlendSamples();
@@ -204,6 +226,8 @@ public sealed class AnimationGraphStateMachine
     public string EntryState { get; init; } = "";
     // 内层步态用它选择方向曲线；空串表示直接使用相对 yaw。
     public string DirectionCurve { get; init; } = "";
+    // UE bAllowConduitEntryStates：EntryState 是 conduit 时是否允许进入并跟随它。
+    public bool AllowConduitEntryStates { get; init; }
     public IReadOnlyList<AnimationGraphState> States { get; init; } = Array.Empty<AnimationGraphState>();
     public IReadOnlyList<AnimationGraphStateAlias> Aliases { get; init; } =
         Array.Empty<AnimationGraphStateAlias>();
@@ -274,6 +298,10 @@ public sealed class AnimationGraphStateMachine
         if (string.IsNullOrWhiteSpace(EntryState) || !byName.ContainsKey(EntryState))
             throw new InvalidOperationException(
                 $"Animation graph state machine '{Name}' entry state '{EntryState}' is unknown.");
+        if (byName[EntryState].Conduit && !AllowConduitEntryStates)
+            throw new InvalidOperationException(
+                $"Animation graph state machine '{Name}' entry state '{EntryState}' is a conduit; " +
+                "enable AllowConduitEntryStates to follow it.");
         ValidateTransitions(byName, aliases, EntryTransitions, "entry");
         ValidateTransitions(byName, aliases, Transitions, "transition");
         ValidateReachability(byName, aliases);

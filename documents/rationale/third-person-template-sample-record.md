@@ -51,6 +51,11 @@ Maps/SC_third_person/
 - `AnimationGraphStateAlias`：UE State Alias 的共享转移来源集合；
   `AnimationGraphRuntime.SelectTransition` 按 alias 展开。
 - `VerticalSpeed`：状态机条件叶节点，用于区分起跳（`> 0`）与自由落体（`<= 0`）。
+- `Conduit`：UE `bIsAConduit` 的无姿态过路状态，带 `EntryRule`；目标为 conduit 时
+  同一帧递归它的出边，visited 防环，最终采用“conduit → 内容状态”那条 transition
+  的混合参数。状态机新增 `AllowConduitEntryStates`。实现依据 UE 5.8
+  `AnimNode_StateMachine.cpp` 的 `FindValidTransition`（入口规则、visited 状态缓存、
+  同帧递归与 `SetStateInternal` 的 conduit 入口约束）。
 - `ThirdPersonLocomotionGraph`：两层状态机；`Idle` 与 `Walk / Run`
   BlendSpace1D（Speed 轴 0 = Walk_InPlace、230 = Walk、500 = Run），以及
   `Jump`/`Fall Loop`/`Land`，共享 `To Falling` / `To Land` alias。
@@ -95,28 +100,22 @@ UE 基准来自只读 T3D 导出
 
 - `animation_preflight_tests`：360/360 通过，覆盖片段骨骼子集导入与
   `SkeletalBlendSpace` 相位/端点/夹紧。
-- `script_tests`：509 通过；20 个 `ScriptBuildTest` 在工程根创建
-  `vl-build-*` 目录时被本机沙箱拒绝，与本改动无关。
-  `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows` 本轮通过，
-  但曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：31/31 通过，覆盖
+  alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
+  与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）；校验 mask 扩展到 32767。
+- 整套 `script_tests`：510 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+  `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
+  `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
+  后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，
   指向 2026-11-11 的 `382cc46 valley echo: ... bone physics WIP`
   （`skeletalPlayback.cpp` +999 行）带来的主干不稳定项，不是本次 Third Person 改动。
-- `ScriptLocomotionTest.*`（含 alias/VerticalSpeed/BlendSpace 用例）30/30 通过；
-  `py -3 tool\validate-docs.py` 通过。
+- `py -3 tool\validate-docs.py` 通过。
 - 测试写盘注意：本机沙箱只允许原生产物写入主工作区，因此整套 `script_tests`
   需把 `config.json -> resourcePath` 临时指向主工作区内的资源副本，并把
   `TEMP`/`TMP` 指到同一工作区；资源工作树本身对原生进程只读。
-
-BlendSpace1D 升级后的证据（同一 Release 构建）：
-
-- `animation_preflight_tests`：360/360 通过，其中 `SkeletalBlendSpace.*` 3 个用例
-  覆盖相位对齐（A 4 s / B 2 s 时 B 采样 `phase*duration`）、端点权重 0/1 与
-  单片段逐元素一致、权重夹紧、A 不匹配拒绝、`TransitionTo` 清除混合源。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：30/30 通过，新增
-  `BlendSpaceSelectsClipsAndWeightsOnSpeedAxis` 覆盖 230/365/500 的片段与权重、
-  端点、三 sample 区间选择与 0.1 s 权重重插值；校验 mask 扩展到 4095。
-- 整套 `script_tests`：509 通过；失败集合与上一节相同（20 个沙箱写盘 + 1 个
-  主干 WIP 回归），没有新增失败。
+  `FormalGasp*` 用例还会通过编译期脚本资源根读取
+  `Generated/MotionMatching` 缓存，缓存缺失时会因写入被拒而整组失败，
+  验收前需先把缓存复制到工作树的对应目录。
 - 运行时输入注入曾暴露一个既有崩溃：Play 尚未建立 action 表时
   `InputSubsystem::UpdateActionState` 对 `operator[]` 产生的 null 调用 `value()`；
   现在缺失节点会补成 `{held,pressed,released}` 完整形状，注入不再终止进程。
@@ -126,6 +125,6 @@ BlendSpace1D 升级后的证据（同一 Release 构建）：
 - `Walk / Run` 已改为原生 BlendSpace1D（Walk 230 ↔ Run 500，按平面速度轴），
   相位同步、权重夹紧、端点稳定与权重 5/s 插值均已实现；1D 之外仍不支持
   BlendSpace2D、每 sample 播放速率或 per-sample 同步组。
-- 未实现 Conduit、上半身骨骼 mask 分层、AimOffset、TurnInPlace、Pivot、
+- 未实现上半身骨骼 mask 分层、AimOffset、TurnInPlace、Pivot、
   完整 camera mode stack、ControlRig 逐骨/双足 IK。
 - 当前 Manny 材质为中性 PBR，不宣称与 UE 成片材质等价。

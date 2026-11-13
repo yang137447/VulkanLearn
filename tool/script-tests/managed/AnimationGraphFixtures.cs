@@ -77,6 +77,9 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(512, BlendUnsortedThresholds());
         mask |= Catch(1024, BlendDuplicateClip());
         mask |= Catch(2048, BlendUnknownAxis());
+        mask |= Catch(4096, ConduitWithClip());
+        mask |= Catch(8192, EntryRuleOnContentState());
+        mask |= Catch(16384, EntryConduitWithoutFlag());
         // 合法图必须通过；否则 rejection 夹具会把“全都拒绝”误判成正确。
         _ = ValidGraph().Validate();
         Transform.Position = new(mask, 0, 0);
@@ -303,6 +306,58 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
             {
                 Name = "Root", EntryState = "A",
                 States = new[] { new AnimationGraphState { Name = "A", BlendSamples = samples } }
+            }
+        }
+    };
+
+    // Conduit 是“无姿态过路状态”，不能同时声明 clip。
+    private static AnimationGraphDefinition ConduitWithClip() => new()
+    {
+        Name = "ConduitWithClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A", Conduit = true } }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition EntryRuleOnContentState() => new()
+    {
+        Name = "EntryRuleOnContentState", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        EntryRule = AnimationGraphCondition.Always
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition EntryConduitWithoutFlag() => new()
+    {
+        Name = "EntryConduitWithoutFlag", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "K",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "K", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[] { SimpleTransition("K", "C") }
             }
         }
     };
@@ -695,4 +750,182 @@ public sealed class AnimationGraphRateProbeBlueprint : Blueprint
         "Jump_Idle_Land" => 2,
         _ => 6.6666665f
     };
+}
+
+// Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。
+public sealed class AnimationGraphConduitProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var chain = new AnimationGraphRuntime(BuildChainGraph(blockedRule: false));
+        chain.Update(Input(0));
+        var landed = chain.Update(Input(10));
+
+        var blocked = new AnimationGraphRuntime(BuildChainGraph(blockedRule: true));
+        blocked.Update(Input(0));
+        var fellBack = blocked.Update(Input(10));
+
+        var chained = new AnimationGraphRuntime(BuildChain2Graph());
+        chained.Update(Input(0));
+        var chainLanded = chained.Update(Input(10));
+
+        var cycle = new AnimationGraphRuntime(BuildCycleGraph());
+        cycle.Update(Input(0));
+        var stuck = cycle.Update(Input(10));
+
+        var entry = new AnimationGraphRuntime(BuildEntryConduitGraph(hasPath: true));
+        var entryFirst = entry.Update(Input(10));
+
+        var unresolved = new AnimationGraphRuntime(BuildEntryConduitGraph(hasPath: false));
+        var unresolvedFirst = unresolved.Update(Input(10));
+
+        Transform.Position = new(
+            landed.State == "C" && PathIs(landed, "K") ? 1 : 0,
+            fellBack.State == "B" ? 1 : 0,
+            chainLanded.State == "C" && PathIs(chainLanded, "K1", "K2") ? 1 : 0);
+        Transform.Rotation = new(
+            stuck.State == "A" ? 1 : 0,
+            MathF.Abs(landed.BlendSeconds - 0.35f) < 1e-4f ? 1 : 0,
+            entryFirst.State == "C" ? 1 : 0);
+        Transform.Scale = new(
+            Flag(unresolvedFirst.State == "K" && unresolvedFirst.Clip.Length == 0),
+            Flag(landed.ConduitPath is { Count: 1 }),
+            Flag(entryFirst.Changed));
+    }
+
+    // A -> K(conduit) -> C；K 的入口规则失败时回落到 A -> B。
+    private static AnimationGraphDefinition BuildChainGraph(bool blockedRule) => new()
+    {
+        Name = blockedRule ? "ConduitBlocked" : "ConduitChain",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState
+                    {
+                        Name = "K",
+                        Conduit = true,
+                        EntryRule = blockedRule
+                            ? AnimationGraphCondition.Speed(1000, AnimationGraphComparison.GreaterThan)
+                            : AnimationGraphCondition.Always
+                    },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        0, 0.9f),
+                    Transition("K", "C", AnimationGraphCondition.Always, 0, 0.35f),
+                    Transition("A", "B", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        10, 0.1f)
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildChain2Graph() => new()
+    {
+        Name = "ConduitChain2",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "K1", Conduit = true },
+                    new AnimationGraphState { Name = "K2", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K1", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        0, 0),
+                    Transition("K1", "K2", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K2", "C", AnimationGraphCondition.Always, 0, 0)
+                }
+            }
+        }
+    };
+
+    // K1 与 K2 成环且没有内容出口：visited 必须终止求值，源状态保持 A。
+    private static AnimationGraphDefinition BuildCycleGraph() => new()
+    {
+        Name = "ConduitCycle",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "K1", Conduit = true },
+                    new AnimationGraphState { Name = "K2", Conduit = true }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K1", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K1", "K2", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K2", "K1", AnimationGraphCondition.Always, 0, 0)
+                }
+            }
+        }
+    };
+
+    // EntryState 就是 conduit：允许跟随且无可用出边时停在该 conduit，不输出片段。
+    private static AnimationGraphDefinition BuildEntryConduitGraph(bool hasPath) => new()
+    {
+        Name = hasPath ? "ConduitEntryPath" : "ConduitEntryStuck",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "K", AllowConduitEntryStates = true,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "K", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    Transition("K", "C", hasPath
+                        ? AnimationGraphCondition.Always
+                        : AnimationGraphCondition.Speed(1000, AnimationGraphComparison.GreaterThan), 0, 0)
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphTransition Transition(string from, string to,
+        AnimationGraphCondition condition, int priority, float blend) => new()
+    {
+        From = from, To = to, Condition = condition, Priority = priority, BlendSeconds = blend
+    };
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static bool PathIs(in AnimationGraphDecision decision, params string[] names)
+    {
+        var path = decision.ConduitPath;
+        if (path is null || path.Count != names.Length) return false;
+        for (int index = 0; index < names.Length; ++index)
+            if (!string.Equals(path[index], names[index], StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    // 失败值不能是 0：宿主会拒绝零缩放，0 会让整条状态输出失败。
+    private static float Flag(bool ok) => ok ? 1 : 2;
 }
